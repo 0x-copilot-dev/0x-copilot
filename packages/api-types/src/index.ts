@@ -1,5 +1,18 @@
 export { ADAPTER_ALLOWLIST, type AdapterAllowlist } from "./adapterAllowlist";
 
+// Branded ID types — used in approval payloads + responses (P1-A re-scoped,
+// cross-audit §2.1). Imported here so they are in scope for the approval
+// types declared in this file; the canonical declaration site is
+// `./brands.ts` and the public re-export is the `export type { ... } from
+// "./brands"` block near the end of this file.
+import type {
+  ApprovalId,
+  ConversationId,
+  RunId,
+  TenantId,
+  UserId,
+} from "./brands";
+
 export type McpTransport = "http" | "sse" | "stdio";
 export type McpAuthMode = "none" | "oauth2" | "api_key" | "service_account";
 export type McpAuthState =
@@ -357,12 +370,28 @@ export const RUNTIME_ACTIVITY_KINDS = [
 // user and never reaches the LangGraph harness. Status "forwarded" is a
 // terminal state for the parent row in a chain; resume hangs off the
 // child's eventual approve/reject.
-export type ApprovalDecision = "approved" | "rejected" | "forwarded";
-export type ApprovalStatus = "pending" | "approved" | "rejected" | "forwarded";
+//
+// P1-A re-scoped — "suggest_edit" decision/status. Like "forwarded" it is
+// API-edge: it resolves the current pending row, creates a new pending
+// child row carrying the approver's edited payload, and re-emits
+// `approval_requested` for the originator. The LangGraph harness is NOT
+// resumed — the run remains in `waiting_for_approval` until the child
+// reaches `approved` / `rejected`.
+export type ApprovalDecision =
+  | "approved"
+  | "rejected"
+  | "forwarded"
+  | "suggest_edit";
+export type ApprovalStatus =
+  | "pending"
+  | "approved"
+  | "rejected"
+  | "forwarded"
+  | "suggest_edit";
 
 export interface ApprovalForwardTarget {
   kind: "workspace_user";
-  user_id: string;
+  user_id: UserId;
 }
 
 // PR 4.4.6.2 — structured consent-card payload for `approval_kind == "mcp_tool"`.
@@ -1390,23 +1419,30 @@ export interface RuntimeEventReplayResponse {
 
 export interface ApprovalDecisionRequest {
   decision: ApprovalDecision;
-  decided_by_user_id: string;
+  decided_by_user_id: UserId;
   reason?: string | null;
   answer?: string | null;
   // PR 1.4 — required when `decision === "forwarded"`; rejected by the
   // server otherwise. Self-forward is rejected via 422.
   forward_to?: ApprovalForwardTarget | null;
+  // P1-A re-scoped — required when `decision === "suggest_edit"`; rejected
+  // by the server otherwise. Empty objects are rejected too. The keys are
+  // the tool-call argument names the approver edited.
+  edited_payload?: Record<string, unknown> | null;
 }
 
 export interface ApprovalDecisionResponse {
-  approval_id: string;
-  run_id: string;
+  approval_id: ApprovalId;
+  run_id: RunId;
   status: ApprovalStatus;
   decided_at: string;
   // PR 1.4 — populated only for "forwarded" responses so the FE can
   // render "Waiting on @marcus" without an extra fetch.
-  forwarded_to_user_id?: string | null;
-  child_approval_id?: string | null;
+  forwarded_to_user_id?: UserId | null;
+  // PR 1.4 / P1-A re-scoped — populated for "forwarded" AND "suggest_edit"
+  // responses; the child row's id is the newly-created pending approval
+  // the originator now sees.
+  child_approval_id?: ApprovalId | null;
   // PR 4.4.6.4 — non-null only when status === "approved" AND the
   // original request was tagged reversible="yes". ISO 8601. The FE
   // uses this to drive the 60s undo countdown on the receipt.
@@ -1415,26 +1451,30 @@ export interface ApprovalDecisionResponse {
 
 // PR 4.4.6.4 — result of a successful (or repeat) undo request.
 export interface ApprovalUndoResponse {
-  approval_id: string;
-  run_id: string;
+  approval_id: ApprovalId;
+  run_id: RunId;
   undo_requested_at: string;
   undo_expires_at: string;
 }
 
 // PR 1.4.1 Gap #6 — recipient inbox row.
 export interface AssignedApproval {
-  approval_id: string;
-  conversation_id: string;
-  run_id: string;
+  approval_id: ApprovalId;
+  conversation_id: ConversationId;
+  run_id: RunId;
   approval_kind: string;
   status: ApprovalStatus;
-  chain_parent_approval_id?: string | null;
-  forwarded_by_user_id?: string | null;
+  chain_parent_approval_id?: ApprovalId | null;
+  forwarded_by_user_id?: UserId | null;
   forwarded_at?: string | null;
   action_summary: string;
   risk_class?: string | null;
   expires_at?: string | null;
   created_at: string;
+  // P1-A re-scoped — non-null only on rows produced by a SUGGEST_EDIT
+  // decision so the originator can render a diff vs the original
+  // arguments without a second fetch.
+  edited_payload?: Record<string, unknown> | null;
 }
 
 export interface AssignedApprovalsResponse {
@@ -1465,7 +1505,7 @@ export interface QuestionOption {
 }
 
 export interface ApprovalRequestedPayload {
-  approval_id: string;
+  approval_id: ApprovalId;
   approval_kind?: "mcp_tool" | "ask_a_question" | string;
   server_id?: string;
   server_name?: string;
@@ -1479,6 +1519,12 @@ export interface ApprovalRequestedPayload {
   reason?: string;
   status?: string;
   source_tool_call_id?: string;
+  // P1-A re-scoped — set on the child approval emitted after a
+  // SUGGEST_EDIT decision; carries the approver's edited tool-call
+  // arguments so the originator's FE can diff vs the original.
+  edited_payload?: Record<string, unknown>;
+  edited_by_user_id?: UserId;
+  chain_parent_approval_id?: ApprovalId;
   // ask_a_question-specific fields. Present only when approval_kind is
   // "ask_a_question". `options` is widened to a structured shape; bare-string
   // entries from older callers are coerced server-side to `{label}`.
@@ -1661,7 +1707,7 @@ export interface PresentationUpdatedPayload {
 }
 
 export interface ApprovalResolvedPayload {
-  approval_id: string;
+  approval_id: ApprovalId;
   approval_kind?: "mcp_tool" | "ask_a_question" | string;
   // Wire-level status. For approval_kind=ask_a_question this is "answered" or
   // "skipped" (not "approved"/"rejected") so the UI does not have to render a
@@ -1669,12 +1715,16 @@ export interface ApprovalResolvedPayload {
   // PR 1.4 — "forwarded" is the parent's terminal status when it gets
   // forwarded to a second workspace user; the FE pairs this with a
   // following `approval_forwarded` event to render the inline pill.
+  // P1-A re-scoped — "suggest_edit" is the parent's terminal status when
+  // an approver suggests edits; the FE pairs this with a following
+  // `approval_requested` event for the child row carrying `edited_payload`.
   status?:
     | "approved"
     | "rejected"
     | "answered"
     | "skipped"
     | "forwarded"
+    | "suggest_edit"
     | string;
   decision?: ApprovalDecision;
   message?: string;
@@ -1686,11 +1736,11 @@ export interface ApprovalResolvedPayload {
 // the original in-thread approval card into a "Waiting on @marcus" pill
 // in one step.
 export interface ApprovalForwardedPayload {
-  approval_id: string; // child approval (the new pending row)
-  chain_parent_approval_id: string; // original (now resolved with status=forwarded)
+  approval_id: ApprovalId; // child approval (the new pending row)
+  chain_parent_approval_id: ApprovalId; // original (now resolved with status=forwarded)
   approval_kind?: "mcp_tool" | "ask_a_question" | string;
-  forwarded_by_user_id: string;
-  forwarded_to_user_id: string;
+  forwarded_by_user_id: UserId;
+  forwarded_to_user_id: UserId;
   forwarded_at: string;
   action_summary?: string;
   status?: "waiting" | string;
@@ -1702,9 +1752,9 @@ export interface ApprovalForwardedPayload {
 // within the 60s reversibility window. Same audit metadata round-trips
 // here so run-stream subscribers don't need a follow-up fetch.
 export interface ApprovalUndoRequestedPayload {
-  approval_id: string;
+  approval_id: ApprovalId;
   approval_kind?: "mcp_tool" | string;
-  decided_by_user_id: string;
+  decided_by_user_id: UserId;
   undo_requested_at: string;
   undo_expires_at: string;
   [key: string]: unknown;
