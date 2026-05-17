@@ -15,6 +15,7 @@ import {
   type CompletedMcpAuthAction,
 } from "../features/chat/mcpAuthAction";
 import { useConnectors } from "../features/connectors/useConnectors";
+import { HomeRoute } from "../features/home/HomeRoute";
 // PR 4.1 — hydrate user profile + preferences once at the shell so the
 // Appearance attributes (data-density, data-reduce-motion, theme/accent)
 // apply on chat too, not only when Settings is open.
@@ -85,7 +86,6 @@ import {
   ChatShell,
   ConnectorsDestination,
   DocumentPresenceSignal,
-  HomeDestination,
   InboxDestination,
   KeyValueStoreProvider,
   LibraryDestination,
@@ -114,14 +114,15 @@ import {
   type PortBundle,
 } from "../ports";
 
-// Map every non-chats destination slug to the placeholder component
-// shipped with the chat-surface package. Chats has a dedicated host
-// component (ChatScreen) below — adding it here would only confuse the
+// Map every non-chats, non-home destination slug to the placeholder
+// component shipped with the chat-surface package. Chats has a
+// dedicated host component (`ChatScreen`) below; Home has a
+// feature-level data binder (`HomeRoute`) that mounts the package
+// component itself — adding either here would only confuse the
 // renderer.
 const NON_CHATS_DESTINATIONS: Readonly<
-  Record<Exclude<ShellDestinationSlug, "chats">, () => ReactElement>
+  Record<Exclude<ShellDestinationSlug, "chats" | "home">, () => ReactElement>
 > = {
-  home: HomeDestination,
   agents: AgentsDestination,
   library: LibraryDestination,
   inbox: InboxDestination,
@@ -571,6 +572,26 @@ function EnterpriseSearchApp({
         oauthStatus={oauthStatus}
         completedMcpAuthAction={completedMcpAuthAction}
       />
+    );
+  } else if (route.destination === "home") {
+    // Phase 2 P2-C — Home gets a feature-level data binder
+    // (`HomeRoute`) that owns the `/v1/home` fetch, the
+    // per-user `home.activity_window_hours` KV setting, and
+    // the `/v1/home/stream` SSE subscription. The presentational
+    // `<HomeDestination>` (and its sibling `<HomePanel>` in the
+    // ContextPanel slot — landed by P2-B1) renders inside.
+    // TODO(merge): once P2-B1's <HomePanel> is exported from
+    // `@enterprise-search/chat-surface`, mount it via ChatShell's
+    // ContextPanel slot.
+    body = (
+      <section
+        data-testid="destination-outlet"
+        data-destination="home"
+        style={{ height: "100%", overflow: "auto" }}
+        aria-label="home destination"
+      >
+        <HomeRoute identity={identity} />
+      </section>
     );
   } else {
     // Every other destination renders the package-shipped component.
