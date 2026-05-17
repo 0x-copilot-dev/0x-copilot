@@ -1,12 +1,12 @@
 # Desktop App Architecture (macOS + Windows)
 
-Status: **proposal — substrate pending Phase S spike** · Owner: TBD · Last updated: 2026-05-17
+Status: **proposal — substrate decided (custom Electron)** · Owner: TBD · Last updated: 2026-05-17
 
 This document specifies the architecture for the Mac and Windows desktop client of the Atlas / enterprise-search product. It is the **architecture spec** (what we're building and why); the [Desktop App PRD](../plan/desktop/PRD.md) is the execution plan (phases, agents, orchestration). Read this first, then the PRD.
 
 This doc supersedes the prior fork-based draft (dated 2026-05-14). The prior `desktop-app-rollout.md` is replaced by the PRD and will be removed in Phase 0.
 
-Working substrate recommendation: **custom Electron** (one `BrowserWindow` mounting `packages/chat-surface`). The decision is empirically validated in [Phase S](../plan/desktop/PRD.md#phase-s--substrate-spike-sub-phases-s0--s1--s2) before anything else builds.
+Substrate: **custom Electron** (one `BrowserWindow` mounting `packages/chat-surface`). Validated by Phase S of the PRD on 2026-05-17; see [phase-0.5/S2-decision.md](../plan/desktop/phase-0.5/S2-decision.md) for the full reasoning. Phase 1's `electron-shell` agent builds `apps/desktop/` from scratch against the Phase 4 contract; spike code does not land on main.
 
 Related architecture docs:
 
@@ -45,11 +45,11 @@ Related architecture docs:
 | **Simple & elegant**       | Thin Electron shell (main + preload + renderer). No fork, no patches, no rebase pipeline, no webview-RPC protocol version. Each port has the smallest API.                                                                                                                                                           |
 | **Single source of truth** | Routing lives in `chat-surface` only. Keybindings in one registry. The artifact URI scheme is parsed in one module imported by both ends. The Transport contract is the only way the renderer talks to the backend. The adapter contract is the only way the host talks to any renderer (tier-1, tier-2, or tier-3). |
 
-## 3. Substrate decision (pending Phase S)
+## 3. Substrate decision (resolved 2026-05-17)
 
-The substrate options were custom Electron, VS Code marketplace extension, and Code – OSS fork. After iterating on the design and applying the four principles to its actual primitives (not by analogy to Cursor / Claude Code), the working recommendation is **custom Electron + `packages/chat-surface` mounted in a single `BrowserWindow`**.
+The substrate options were custom Electron, VS Code marketplace extension, and Code – OSS fork. After iterating on the design and applying the four principles to its actual primitives (not by analogy to Cursor / Claude Code), the working recommendation was **custom Electron + `packages/chat-surface` mounted in a single `BrowserWindow`**.
 
-The decision is **empirically validated by Phase S** of the PRD before anything else builds. Both Electron and a VS Code extension variant are built around the same shared renderer code (`packages/surface-renderers/email`) and the substrate cost is measured (LOC, build complexity, dev experience, visual fidelity, security boundary). Whichever wins commits the spec.
+The decision was **empirically validated by Phase S** of the PRD. Both Electron (S1-B) and a VS Code marketplace extension (S1-A) variant were built around the same shared renderer code (`packages/surface-renderers/email`); substrate cost was measured side-by-side (LOC, build complexity, dev experience, visual fidelity, security boundary). Custom Electron won on single source of truth, simple & elegant, and forward-fit for tier-2 dynamic-adapter loading. Full data: [phase-0.5/S2-decision.md](../plan/desktop/phase-0.5/S2-decision.md).
 
 Reasoning summary (full chain in [project-desktop-substrate-direction](../../.claude/projects/-Users-parthpahwa-Documents-work-enterprise-search/memory/project_desktop_substrate_direction.md)):
 

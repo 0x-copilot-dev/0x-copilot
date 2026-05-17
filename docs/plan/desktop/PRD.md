@@ -10,7 +10,7 @@ This is the **master plan**. Every subagent reads it top to bottom before produc
 
 ## 0. TL;DR
 
-The substrate decision (custom Electron vs VS Code extension vs Code – OSS fork) is **deferred to an empirical spike** that runs before any other work. See **§5 Phase S** for the spike protocol. The rest of this PRD is written assuming the working recommendation — custom Electron + `packages/chat-surface` mounted in a single `BrowserWindow` — and will be revised in place if the spike outcome differs.
+The substrate decision is **custom Electron + `packages/chat-surface` mounted in a single `BrowserWindow`**, validated empirically by Phase S (sub-phases S0 spike-prep, S1-A VS Code extension variant, S1-B Electron variant, S2 decision). Full reasoning in [docs/plan/desktop/phase-0.5/S2-decision.md](phase-0.5/S2-decision.md). Both spike variants are preserved on `desktop/phase-S-spike-{vscode,electron}` branches for history; neither variant's `apps/` directory was merged to main. Phase 1's `electron-shell` agent builds `apps/desktop/` from scratch against the Phase 4 contract.
 
 This PRD describes the **full 1.0 product**, not an MVP cut. All three renderer tiers, full auth, signing/notarization, auto-update, telemetry, crash reporting, and the agent-generated-adapter pipeline with server-side registry all ship as part of 1.0. Phases are an _engineering_ sequence (what to build in what order so each phase builds on a working base), not a release cut.
 
@@ -425,7 +425,7 @@ This split lets us sandbox tier-2 trivially (no privileged objects to leak — s
 
 ## 4. Decision register
 
-**Pending Phase S outcome:** D1, D7, D8, D11, D13, D14 all assume custom Electron. If the spike concludes that a VS Code extension or Code – OSS fork is the better fit, these flip and the spec is amended in place.
+**Phase S outcome (resolved 2026-05-17):** D1 (custom Electron) is confirmed. D7, D8, D11, D13 are no longer contingent. D14 (renderer-owned snapshot for swimlane scrub) was not exercised by the spike and carries forward to Phase 4 unchanged. Full reasoning in [phase-0.5/S2-decision.md](phase-0.5/S2-decision.md).
 
 | #   | Decision                      | Choice                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                    | Rationale                                                                                                                                                                                                                                                              | Rejected                                                                                                                                                                                                                                                                           |
 | --- | ----------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
@@ -464,9 +464,13 @@ This split lets us sandbox tier-2 trivially (no privileged objects to leak — s
 
 Each phase below names its parallel agents. Inside a phase, agents run concurrently. Between phases, orchestrator merges the integration branch to main before launching the next phase.
 
-**Phase S runs before Phase 0** and gates all subsequent work.
+**Phase S is complete** (2026-05-17). Custom Electron chosen; both variant branches preserved for history. Phase 0 launches next.
 
-### Phase S — Substrate spike (sub-phases S0 → S1 → S2)
+### Phase S — Substrate spike (sub-phases S0 → S1 → S2) — COMPLETE
+
+Outcome: custom Electron. See [phase-0.5/S2-decision.md](phase-0.5/S2-decision.md) for the full comparison + reasoning. Sub-PRDs from each variant are in [phase-0.5/](phase-0.5/) for reference.
+
+The original sub-phase descriptions follow for historical reference.
 
 Goal: pick the substrate empirically. Build the **same minimal surface** (Email composer with inline diff approval, driven by a deterministic mocked MCP `Gmail.draft.create` event stream) in two host substrates. Compare on substrate LOC, build complexity, dev experience, and visual fidelity.
 
