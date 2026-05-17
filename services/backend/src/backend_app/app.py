@@ -307,6 +307,9 @@ def create_app(
     email_dispatcher: EmailDispatcherPort | None = None,
     magic_link_globally_enabled: bool = True,
     magic_link_base_url: str = "http://localhost:5173",
+    adapter_registry_service: object | None = None,
+    adapter_registry_store: object | None = None,
+    adapter_source_storage: object | None = None,
 ) -> FastAPI:
     if configure_logging_on_create:
         configure_logging()
@@ -1248,6 +1251,44 @@ def create_app(
     register_health_routes(app)
     # Dev IdP (W0.1) — env-gated; no-op in production.
     register_dev_idp_routes(app)
+
+    # Phase 7A — tier-2 adapter registry. Source bytes go through a
+    # ``SourceStorage`` port (filesystem in dev, S3 injectable in prod).
+    from backend_app.adapter_registry import (
+        AdapterRegistryService,
+        InMemoryAdapterRegistryStore,
+        LocalFilesystemSourceStorage,
+        SourceStorage,
+        register_adapter_registry_routes,
+    )
+    from backend_app.adapter_registry.store import AdapterRegistryStore
+
+    if adapter_registry_service is not None:
+        resolved_registry_service = adapter_registry_service
+    else:
+        resolved_registry_store: AdapterRegistryStore = (
+            adapter_registry_store
+            if adapter_registry_store is not None
+            else InMemoryAdapterRegistryStore()
+        )  # type: ignore[assignment]
+        resolved_source_storage: SourceStorage = (
+            adapter_source_storage
+            if adapter_source_storage is not None
+            else LocalFilesystemSourceStorage(
+                os.environ.get(
+                    "ADAPTER_REGISTRY_DATA_DIR",
+                    "/tmp/atlas-adapter-registry",
+                )
+            )
+        )  # type: ignore[assignment]
+        resolved_registry_service = AdapterRegistryService(
+            store=resolved_registry_store,
+            source_storage=resolved_source_storage,
+        )
+    register_adapter_registry_routes(
+        app,
+        service=resolved_registry_service,  # type: ignore[arg-type]
+    )
 
     return app
 
