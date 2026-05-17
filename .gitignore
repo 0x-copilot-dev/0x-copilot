@@ -5,3 +5,9 @@ dist/
 __pycache__/
 .venv/
 .env
+<<<<<<< Updated upstream
+.claude/
+=======
+.claude/
+.cursor/
+>>>>>>> Stashed changes
