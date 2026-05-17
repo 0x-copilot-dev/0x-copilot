@@ -5,9 +5,7 @@ dist/
 __pycache__/
 .venv/
 .env
-<<<<<<< Updated upstream
-.claude/
-=======
 .claude/
 .cursor/
->>>>>>> Stashed changes
+*.egg-info/
+build/
