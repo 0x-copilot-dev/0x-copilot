@@ -15,3 +15,33 @@ export {
   type ShellDestination,
   type ShellDestinationSlug,
 } from "./destinations";
+
+// === Phase 0.5 shared primitives ===
+export {
+  PageHeader,
+  type PageHeaderPrimaryAction,
+  type PageHeaderProps,
+} from "./PageHeader";
+export {
+  FilterTabs,
+  type FilterTabOption,
+  type FilterTabsProps,
+} from "./FilterTabs";
+export {
+  StatusPill,
+  type StatusPillProps,
+  type StatusTone,
+} from "./StatusPill";
+export {
+  EmptyState,
+  type EmptyStateAction,
+  type EmptyStateProps,
+} from "./EmptyState";
+export { CardGrid, type CardGridProps } from "./CardGrid";
+export { DocList } from "./DocList";
+export {
+  ActivityList,
+  type ActivityListProps,
+  type ActivityRow,
+} from "./ActivityList";
+// === end Phase 0.5 ===

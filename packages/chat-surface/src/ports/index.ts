@@ -14,3 +14,14 @@ export type { ArtifactRoute, NavigateOptions, Router } from "./Router";
 export type { KeyValueStore } from "./KeyValueStore";
 export type { PresenceSignal, PresenceState } from "./PresenceSignal";
 export type { SurfaceEvent, SurfaceHandle, SurfaceHost } from "./SurfaceHost";
+
+// === Phase 0.5 shared primitives — additional substrate ports ===
+export type { BadgePort } from "./BadgePort";
+export type { NotificationPort, NotifyPayload } from "./NotificationPort";
+export type {
+  FilePickerOptions,
+  FilePickerPort,
+  FilePickerSelection,
+} from "./FilePickerPort";
+export type { ClipboardPort } from "./ClipboardPort";
+// === end Phase 0.5 ===
