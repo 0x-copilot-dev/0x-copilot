@@ -3,6 +3,7 @@ import { beforeEach, describe, expect, it } from "vitest";
 import { DEFAULT_SETTINGS_SECTION } from "../features/settings/sections";
 
 import { HashRouter, migrateLegacySettingsPath } from "./HashRouter";
+import { ROOT_DESTINATION } from "./routes";
 
 function setLocation(path: string, hash: string): void {
   // jsdom mutates location through history. replaceState avoids triggering
@@ -47,7 +48,10 @@ describe("HashRouter", () => {
   it("derives current() from the URL", () => {
     setLocation("/", "");
     const router = new HashRouter();
-    expect(router.current()).toEqual({ screen: "chat" });
+    expect(router.current()).toEqual({
+      screen: "chat",
+      destination: ROOT_DESTINATION,
+    });
 
     setLocation("/settings", "#connectors");
     expect(router.current()).toEqual({
@@ -57,6 +61,40 @@ describe("HashRouter", () => {
 
     setLocation("/share/tok_123", "");
     expect(router.current()).toEqual({ screen: "share", token: "tok_123" });
+  });
+
+  it("maps /<destination> to the matching chat route for each known slug", () => {
+    setLocation("/", "");
+    const router = new HashRouter();
+    const cases: ReadonlyArray<readonly [string, string]> = [
+      ["/home", "home"],
+      ["/chats", "chats"],
+      ["/inbox", "inbox"],
+      ["/todos", "todos"],
+      ["/projects", "projects"],
+      ["/library", "library"],
+      ["/agents", "agents"],
+      ["/tools", "tools"],
+      ["/connectors", "connectors"],
+      ["/team", "team"],
+      ["/memory", "memory"],
+    ];
+    for (const [path, destination] of cases) {
+      setLocation(path, "");
+      expect(router.current()).toEqual({
+        screen: "chat",
+        destination,
+      });
+    }
+  });
+
+  it("falls back to the root destination for unknown top-level paths", () => {
+    setLocation("/not-a-real-destination", "");
+    const router = new HashRouter();
+    expect(router.current()).toEqual({
+      screen: "chat",
+      destination: ROOT_DESTINATION,
+    });
   });
 
   it("falls back to default settings section when no hash is present", () => {
@@ -75,6 +113,29 @@ describe("HashRouter", () => {
       screen: "settings",
       section: DEFAULT_SETTINGS_SECTION,
     });
+  });
+
+  it("navigate({ screen: 'chat', destination }) writes the destination path", () => {
+    setLocation("/", "");
+    const router = new HashRouter();
+    const seen: Array<unknown> = [];
+    const unsubscribe = router.subscribe((route) => seen.push(route));
+
+    router.navigate({ screen: "chat", destination: "inbox" });
+
+    expect(window.location.pathname).toBe("/inbox");
+    expect(window.location.hash).toBe("");
+    expect(seen).toEqual([{ screen: "chat", destination: "inbox" }]);
+
+    unsubscribe();
+  });
+
+  it("collapses the root destination back to '/' on navigate", () => {
+    setLocation("/inbox", "");
+    const router = new HashRouter();
+    router.navigate({ screen: "chat", destination: ROOT_DESTINATION });
+    expect(window.location.pathname).toBe("/");
+    expect(window.location.hash).toBe("");
   });
 
   it("navigate() pushes a new history entry and notifies subscribers", () => {

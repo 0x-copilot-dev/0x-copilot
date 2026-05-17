@@ -4,20 +4,31 @@ import { describe, expect, it, vi } from "vitest";
 import { RightRail } from "./RightRail";
 
 describe("RightRail", () => {
-  it("renders the Atlas conversation header and placeholder list when open", () => {
+  it("renders the Atlas conversation header and a neutral empty state when open with no children", () => {
     render(<RightRail open={true} onToggle={() => {}} />);
     expect(
       screen.getByRole("complementary", { name: "Atlas conversation" }),
     ).toBeInTheDocument();
-    const list = screen.getByTestId("right-rail-placeholder-list");
-    expect(list.children).toHaveLength(3);
+    // No more hardcoded "Placeholder message 1/2/3" — the rail shows a
+    // neutral empty state until the host pipes in real content.
+    expect(screen.queryByText(/Placeholder message/i)).not.toBeInTheDocument();
+    expect(screen.getByTestId("right-rail-empty")).toBeInTheDocument();
   });
 
-  it("hides the placeholder list when closed", () => {
+  it("renders host-supplied children inside the body", () => {
+    render(
+      <RightRail open={true} onToggle={() => {}}>
+        <div data-testid="rail-child">live thread</div>
+      </RightRail>,
+    );
+    expect(screen.getByTestId("rail-child")).toBeInTheDocument();
+    expect(screen.queryByTestId("right-rail-empty")).not.toBeInTheDocument();
+  });
+
+  it("hides the body when closed", () => {
     render(<RightRail open={false} onToggle={() => {}} />);
-    expect(
-      screen.queryByTestId("right-rail-placeholder-list"),
-    ).not.toBeInTheDocument();
+    expect(screen.queryByTestId("right-rail-body")).not.toBeInTheDocument();
+    expect(screen.queryByTestId("right-rail-empty")).not.toBeInTheDocument();
   });
 
   it("renders the toggle button in both states", () => {
@@ -39,5 +50,14 @@ describe("RightRail", () => {
     render(<RightRail open={true} onToggle={onToggle} />);
     fireEvent.click(screen.getByTestId("right-rail-toggle"));
     expect(onToggle).toHaveBeenCalledTimes(1);
+  });
+
+  it("re-labels the rail when the host passes a title", () => {
+    render(
+      <RightRail open={true} onToggle={() => {}} title="Approvals queue" />,
+    );
+    expect(
+      screen.getByRole("complementary", { name: "Approvals queue" }),
+    ).toBeInTheDocument();
   });
 });

@@ -1,6 +1,6 @@
 // Order matches the 11 top-level destinations in project_atlas_product_model.
-// AppRail / ContextPanel / DestinationOutlet all read from this constant —
-// single source of truth.
+// AppRail / Topbar / ChatShell all read from this constant — single source
+// of truth for the slug ↔ label mapping.
 
 export type ShellDestinationSlug =
   | "home"

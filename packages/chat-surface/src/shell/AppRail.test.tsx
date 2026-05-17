@@ -1,48 +1,12 @@
-import { act, fireEvent, render, screen, within } from "@testing-library/react";
+import { fireEvent, render, screen, within } from "@testing-library/react";
 import { describe, expect, it, vi } from "vitest";
 
-import { RouterProvider } from "../providers/RouterProvider";
-import type { ArtifactRoute, Router } from "../routing/router";
-
 import { AppRail } from "./AppRail";
-import { SHELL_DESTINATIONS } from "./destinations";
-
-function makeRouter(initial: ArtifactRoute | null): Router<ArtifactRoute> & {
-  __set(r: ArtifactRoute): void;
-} {
-  let current: ArtifactRoute | null = initial;
-  const subscribers = new Set<(r: ArtifactRoute) => void>();
-  const navigate = vi.fn((r: ArtifactRoute) => {
-    current = r;
-    for (const s of subscribers) s(r);
-  });
-  return {
-    current(): ArtifactRoute {
-      if (current === null) {
-        throw new Error("no route");
-      }
-      return current;
-    },
-    navigate,
-    subscribe(handler) {
-      subscribers.add(handler);
-      return () => subscribers.delete(handler);
-    },
-    __set(r: ArtifactRoute) {
-      current = r;
-      for (const s of subscribers) s(r);
-    },
-  };
-}
+import { SHELL_DESTINATIONS, type ShellDestinationSlug } from "./destinations";
 
 describe("AppRail", () => {
   it("renders 11 destination buttons in order", () => {
-    const router = makeRouter(null);
-    render(
-      <RouterProvider router={router}>
-        <AppRail />
-      </RouterProvider>,
-    );
+    render(<AppRail activeDestination="home" onNavigate={() => {}} />);
     const nav = screen.getByRole("navigation", { name: /atlas destinations/i });
     const buttons = within(nav).getAllByRole("button");
     expect(buttons).toHaveLength(11);
@@ -50,40 +14,35 @@ describe("AppRail", () => {
     expect(slugs).toEqual(SHELL_DESTINATIONS.map((d) => d.slug));
   });
 
-  it("clicking the chats button calls router.navigate with a chat route", () => {
-    const router = makeRouter(null);
-    render(
-      <RouterProvider router={router}>
-        <AppRail />
-      </RouterProvider>,
-    );
+  it("clicking a destination button calls onNavigate with that slug", () => {
+    const onNavigate = vi.fn<(slug: ShellDestinationSlug) => void>();
+    render(<AppRail activeDestination="home" onNavigate={onNavigate} />);
     fireEvent.click(screen.getByRole("button", { name: "Chats" }));
-    expect(router.navigate).toHaveBeenCalledWith({
-      kind: "chat",
-      conversationId: "",
-    });
-  });
+    expect(onNavigate).toHaveBeenCalledWith("chats");
 
-  it("clicking a destination without a route shape is a navigate-noop", () => {
-    const router = makeRouter(null);
-    render(
-      <RouterProvider router={router}>
-        <AppRail />
-      </RouterProvider>,
-    );
-    fireEvent.click(screen.getByRole("button", { name: "Home" }));
     fireEvent.click(screen.getByRole("button", { name: "Inbox" }));
-    fireEvent.click(screen.getByRole("button", { name: "Memory" }));
-    expect(router.navigate).not.toHaveBeenCalled();
+    expect(onNavigate).toHaveBeenCalledWith("inbox");
+
+    fireEvent.click(screen.getByRole("button", { name: "Home" }));
+    expect(onNavigate).toHaveBeenCalledWith("home");
+
+    expect(onNavigate).toHaveBeenCalledTimes(3);
   });
 
-  it("marks the destination matching the current route as aria-current=page", () => {
-    const router = makeRouter({ kind: "chat", conversationId: "c-1" });
-    render(
-      <RouterProvider router={router}>
-        <AppRail />
-      </RouterProvider>,
-    );
+  it("every destination is independently navigable (not just chats)", () => {
+    const onNavigate = vi.fn<(slug: ShellDestinationSlug) => void>();
+    render(<AppRail activeDestination="home" onNavigate={onNavigate} />);
+    // Regression: prior implementation made every non-chats button a
+    // navigation no-op. Each slug must fire.
+    for (const d of SHELL_DESTINATIONS) {
+      fireEvent.click(screen.getByRole("button", { name: d.label }));
+      expect(onNavigate).toHaveBeenLastCalledWith(d.slug);
+    }
+    expect(onNavigate).toHaveBeenCalledTimes(SHELL_DESTINATIONS.length);
+  });
+
+  it("marks the active destination with aria-current=page", () => {
+    render(<AppRail activeDestination="chats" onNavigate={() => {}} />);
     const chats = screen.getByRole("button", { name: "Chats" });
     expect(chats).toHaveAttribute("aria-current", "page");
     expect(chats).toHaveAttribute("data-state", "active");
@@ -91,33 +50,15 @@ describe("AppRail", () => {
     expect(home).not.toHaveAttribute("aria-current");
   });
 
-  it("falls back to home when the current route maps to no destination", () => {
-    const router = makeRouter(null);
-    render(
-      <RouterProvider router={router}>
-        <AppRail />
-      </RouterProvider>,
-    );
-    expect(screen.getByRole("button", { name: "Home" })).toHaveAttribute(
-      "aria-current",
-      "page",
-    );
-  });
-
-  it("updates the active highlight when the router publishes a new route", () => {
-    const router = makeRouter({ kind: "chat", conversationId: "" });
-    render(
-      <RouterProvider router={router}>
-        <AppRail />
-      </RouterProvider>,
+  it("changing the activeDestination prop moves the active highlight", () => {
+    const { rerender } = render(
+      <AppRail activeDestination="chats" onNavigate={() => {}} />,
     );
     expect(screen.getByRole("button", { name: "Chats" })).toHaveAttribute(
       "aria-current",
       "page",
     );
-    act(() => {
-      router.__set({ kind: "mcp", serverId: "srv-1" });
-    });
+    rerender(<AppRail activeDestination="connectors" onNavigate={() => {}} />);
     expect(screen.getByRole("button", { name: "Connectors" })).toHaveAttribute(
       "aria-current",
       "page",
