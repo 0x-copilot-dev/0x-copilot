@@ -25,12 +25,15 @@ CREATE TABLE IF NOT EXISTS usage_budgets (
     status              TEXT NOT NULL CHECK (status IN ('active','disabled')),
     created_at          TIMESTAMPTZ NOT NULL,
     updated_at          TIMESTAMPTZ NOT NULL,
-    created_by_user_id  TEXT NOT NULL,
-    -- COALESCE → '<org>' so the unique index treats org-scope rows as a
-    -- single user_id slot per (org, scope, period). Postgres requires
-    -- the expression to be deterministic, which COALESCE on a constant is.
-    UNIQUE (org_id, COALESCE(user_id, '<org>'), scope, period)
+    created_by_user_id  TEXT NOT NULL
 );
+
+-- COALESCE → '<org>' so the unique index treats org-scope rows as a
+-- single user_id slot per (org, scope, period). The UNIQUE table-constraint
+-- form (UNIQUE (cols)) only accepts plain column names, so this expression
+-- has to live in a CREATE UNIQUE INDEX statement.
+CREATE UNIQUE INDEX IF NOT EXISTS uq_usage_budgets_scope
+    ON usage_budgets (org_id, COALESCE(user_id, '<org>'), scope, period);
 
 CREATE INDEX IF NOT EXISTS idx_usage_budgets_org_status
     ON usage_budgets (org_id, status);

@@ -20,12 +20,14 @@ CREATE TABLE IF NOT EXISTS runtime_tool_budgets (
     max_input_tokens_per_run    INTEGER,
     enforcement                 TEXT NOT NULL CHECK (enforcement IN ('soft','hard')),
     created_at                  TIMESTAMPTZ NOT NULL,
-    updated_at                  TIMESTAMPTZ NOT NULL,
-    -- Postgres requires the unique-index expression to be deterministic.
-    -- COALESCE on a constant is — and the global-row sentinel '<global>'
-    -- collapses NULL org_ids into a single distinct slot per tool_name.
-    UNIQUE (COALESCE(org_id, '<global>'), tool_name)
+    updated_at                  TIMESTAMPTZ NOT NULL
 );
+
+-- The global-row sentinel '<global>' collapses NULL org_ids into a single
+-- distinct slot per tool_name. UNIQUE table-constraint syntax doesn't
+-- accept expressions, so the collapse has to live in a UNIQUE INDEX.
+CREATE UNIQUE INDEX IF NOT EXISTS uq_runtime_tool_budgets_scope
+    ON runtime_tool_budgets (COALESCE(org_id, '<global>'), tool_name);
 
 CREATE INDEX IF NOT EXISTS idx_runtime_tool_budgets_org
     ON runtime_tool_budgets (org_id);

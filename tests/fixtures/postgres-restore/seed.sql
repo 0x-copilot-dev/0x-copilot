@@ -108,22 +108,23 @@ INSERT INTO agent_conversations (
      'active', now(), now(), '{}'::jsonb)
 ON CONFLICT (id) DO NOTHING;
 
+-- agent_messages.run_id has a FK to agent_runs(id) (added in 0001 via
+-- ALTER TABLE), and agent_runs.user_message_id has a FK to
+-- agent_messages(id). Seed in three phases so neither FK is violated:
+--   1. user messages (run_id NULL — these are the run starters)
+--   2. agent_runs (referencing the user messages above)
+--   3. assistant messages (run_id now resolvable)
+
 INSERT INTO agent_messages (
     id, conversation_id, org_id, run_id, role, content_text, content_format,
     content_json, attachments_json, metadata_json,
     status, created_at
 ) VALUES
-    ('msg_drill_a_user',      'cnv_drill_a', 'org_drill_a', NULL,
+    ('msg_drill_a_user', 'cnv_drill_a', 'org_drill_a', NULL,
      'user', 'hello from drill a', 'text', '[]'::jsonb, '[]'::jsonb, '{}'::jsonb,
      'created', now()),
-    ('msg_drill_a_assistant', 'cnv_drill_a', 'org_drill_a', 'run_drill_a',
-     'assistant', 'reply from drill a', 'text', '[]'::jsonb, '[]'::jsonb, '{}'::jsonb,
-     'created', now()),
-    ('msg_drill_b_user',      'cnv_drill_b', 'org_drill_b', NULL,
+    ('msg_drill_b_user', 'cnv_drill_b', 'org_drill_b', NULL,
      'user', 'hello from drill b', 'text', '[]'::jsonb, '[]'::jsonb, '{}'::jsonb,
-     'created', now()),
-    ('msg_drill_b_assistant', 'cnv_drill_b', 'org_drill_b', 'run_drill_b',
-     'assistant', 'reply from drill b', 'text', '[]'::jsonb, '[]'::jsonb, '{}'::jsonb,
      'created', now())
 ON CONFLICT (id) DO NOTHING;
 
@@ -138,6 +139,19 @@ INSERT INTO agent_runs (
     ('run_drill_b', 'cnv_drill_b', 'org_drill_b', 'usr_drill_b_admin', 'msg_drill_b_user',
      'trc_drill_b', 'completed', 'anthropic', 'claude-sonnet-4-6',
      now(), now(), now())
+ON CONFLICT (id) DO NOTHING;
+
+INSERT INTO agent_messages (
+    id, conversation_id, org_id, run_id, role, content_text, content_format,
+    content_json, attachments_json, metadata_json,
+    status, created_at
+) VALUES
+    ('msg_drill_a_assistant', 'cnv_drill_a', 'org_drill_a', 'run_drill_a',
+     'assistant', 'reply from drill a', 'text', '[]'::jsonb, '[]'::jsonb, '{}'::jsonb,
+     'created', now()),
+    ('msg_drill_b_assistant', 'cnv_drill_b', 'org_drill_b', 'run_drill_b',
+     'assistant', 'reply from drill b', 'text', '[]'::jsonb, '[]'::jsonb, '{}'::jsonb,
+     'created', now())
 ON CONFLICT (id) DO NOTHING;
 
 INSERT INTO runtime_events (
