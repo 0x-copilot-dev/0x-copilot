@@ -89,9 +89,7 @@ jobs:
           file: ${{ matrix.dockerfile }}
           push: true
           # Always re-resolve and pull base image tags so newly published security
-          # patches in upstream :latest-style tags don't get masked by a cached layer.
-          # Without this, the Trivy CRITICAL gate flips red as soon as a CVE for an
-          # older base digest enters the DB, even though the upstream tag is patched.
+          # patches in upstream tags reach the published image promptly.
           pull: true
           tags: ${{ steps.meta.outputs.tags }}
           labels: ${{ steps.meta.outputs.labels }}
@@ -121,19 +119,12 @@ jobs:
           cosign sign --yes \
             "ghcr.io/${{ steps.lc.outputs.owner }}/${{ matrix.image_name }}@${{ steps.build.outputs.digest }}"
 
-      # Debug: print the actual CRITICAL fixed CVEs in human-readable form so the
-      # workflow log explains why the gate below fails. Non-blocking — gate is below.
-      - name: Trivy CRITICAL findings (table, debug)
-        if: always()
-        uses: aquasecurity/trivy-action@ed142fd0673e97e23eac54620cfb913e5ce36c25 # v0.36.0
-        with:
-          image-ref: ghcr.io/${{ steps.lc.outputs.owner }}/${{ matrix.image_name }}@${{ steps.build.outputs.digest }}
-          format: table
-          severity: CRITICAL
-          exit-code: "0"
-          ignore-unfixed: true
-
       # Gating scan: any CRITICAL fixable vulnerability fails the build.
+      # limit-severities-for-sarif: true is required for the severity filter to apply
+      # to trivy's exit code in SARIF mode. Without it, the action passes
+      # --severity UNKNOWN,LOW,MEDIUM,HIGH,CRITICAL to trivy so the SARIF is
+      # comprehensive, and exit-code: 1 then trips on *any* severity finding —
+      # turning what looks like a CRITICAL gate into an any-severity gate.
       - name: Run Trivy vulnerability scanner (CRITICAL gate)
         uses: aquasecurity/trivy-action@ed142fd0673e97e23eac54620cfb913e5ce36c25 # v0.36.0
         with:
@@ -143,6 +134,7 @@ jobs:
           severity: CRITICAL
           exit-code: "1"
           ignore-unfixed: true
+          limit-severities-for-sarif: true
 
       # Triage scan: HIGH findings surface in the Security tab but do not block release.
       - name: Run Trivy vulnerability scanner (HIGH triage)
