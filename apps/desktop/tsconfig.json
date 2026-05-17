@@ -3,11 +3,15 @@
   "compilerOptions": {
     "composite": false,
     "outDir": "./out",
-    "jsx": "react-jsx"
+    "jsx": "react-jsx",
+    "types": ["node"],
+    "esModuleInterop": true,
+    "skipLibCheck": true
   },
   "files": [],
   "include": [
     "main/**/*.ts",
+    "main/**/*.tsx",
     "preload/**/*.ts",
     "renderer/**/*.tsx",
     "renderer/**/*.ts"
