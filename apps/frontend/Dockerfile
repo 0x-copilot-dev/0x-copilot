@@ -25,7 +25,7 @@ COPY apps/frontend/src ./apps/frontend/src
 RUN npm ci
 RUN npm run build --workspace @enterprise-search/frontend
 
-FROM nginx:1.29-alpine
+FROM nginx:1.31-alpine
 
 COPY apps/frontend/nginx.conf /etc/nginx/conf.d/default.conf
 COPY --from=build /repo/apps/frontend/dist /usr/share/nginx/html
