@@ -87,28 +87,28 @@ wires the real components at merge time.
 
 ## Functional requirements
 
-- [ ] FR-1: `ThreadCanvas` renders a CSS grid with two rows
+- [x] FR-1: `ThreadCanvas` renders a CSS grid with two rows
       (`1fr auto` — canvas body on top, swimlane slot on bottom) and two
       columns (`1fr 360px` — canvas on left, TcChat slot on right). The
       bottom row spans both columns. The two slot regions render with
       `data-testid="swimlanes-slot"` and `data-testid="tc-chat-slot"` so
       orchestrator-merge wiring (2C / 2D) lands in clearly-marked holes.
-- [ ] FR-2: `ThreadCanvas` accepts `{ conversationId: string }` plus the
+- [x] FR-2: `ThreadCanvas` accepts `{ conversationId: string }` plus the
       tab list and active URI as props (so 2A owns the tab state). The
       canvas body renders `TcTabs` on top and `TcSurfaceMount` directly
       below; `TcSurfaceMount` receives the active URI.
-- [ ] FR-3: `TcTabs` renders a horizontal scrolling strip of tabs. Each
+- [x] FR-3: `TcTabs` renders a horizontal scrolling strip of tabs. Each
       tab is keyboard-reachable (`tabIndex={0}`, role="tab", Enter/Space
       activates). The active tab carries `aria-current="page"` and a
       visual treatment. Clicking the tab calls `onActivate(uri)`;
       clicking the close button calls `onClose(uri)` and does NOT
       activate the tab (event stopPropagation). Close button is rendered
       only for non-pinned tabs.
-- [ ] FR-4: `TcTabs` overflows horizontally (`overflow-x: auto`), so a
+- [x] FR-4: `TcTabs` overflows horizontally (`overflow-x: auto`), so a
       large number of tabs scrolls rather than wrapping. The active tab
       indicator is a 2 px bottom border in the lime accent; the rest of
       the tab is muted text on the dark surface.
-- [ ] FR-5: `TcSurfaceMount` reads `resolveAdapter(uri)` (existing). When
+- [x] FR-5: `TcSurfaceMount` reads `resolveAdapter(uri)` (existing). When
       the registry returns null, render a placeholder card with
       `data-testid="surface-placeholder"` and a "No renderer registered"
       message that includes the scheme. (Tier-3 `GenericStructuredDiff`
@@ -116,15 +116,15 @@ wires the real components at merge time.
       registry returns it for any URI, so this placeholder is unreachable
       after Phase 4. Until then, this is the visible state when no
       adapter is registered.)
-- [ ] FR-6: `TcSurfaceMount` accepts optional `onApprove?: () => void`,
+- [x] FR-6: `TcSurfaceMount` accepts optional `onApprove?: () => void`,
       `onReject?: () => void`, and `pendingDiff?: unknown | null` props.
       The host-owned Approve / Reject buttons render OUTSIDE the
       adapter's output (D28: adapter is pure render, host owns action
       chrome). The buttons only render when `pendingDiff` is non-null.
-- [ ] FR-7: Preserve existing Phase 0-A behavior: error boundary on
+- [x] FR-7: Preserve existing Phase 0-A behavior: error boundary on
       adapter render, 100 ms render-budget timer, warning logs on throw
       or timeout, fallback to the placeholder on either condition.
-- [ ] FR-8: Public exports: append a delimited Phase 2-B block in
+- [x] FR-8: Public exports: append a delimited Phase 2-B block in
       `packages/chat-surface/src/thread-canvas/index.ts` re-exporting
       `ThreadCanvas`, `TcTabs`, `ThreadCanvasProps`, `TcTabsProps`,
       `TcTab`. Existing `TcInlineDiff`, `TcSurfaceMount` exports stay.

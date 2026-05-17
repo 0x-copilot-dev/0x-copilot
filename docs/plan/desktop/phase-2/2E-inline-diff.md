@@ -62,38 +62,38 @@ namespace so the bundler can tree-shake it from production builds.
 
 ## Functional requirements
 
-- [ ] FR-1 — `nextInlineDiffState(current, event)` is a pure function with
+- [x] FR-1 — `nextInlineDiffState(current, event)` is a pure function with
       no React imports. The full transition table: - `idle` + `'stream_start'` → `streaming` - `streaming` + `'stream_end'` → `pending` - `streaming` + `'cancel'` → `idle` - `pending` + `'approve'` → `accepted` - `pending` + `'reject'` → `rejected` - `accepted` + `'reset'` → `idle` - `rejected` + `'reset'` → `idle`
       Every other `(current, event)` pair throws
       `InvalidInlineDiffTransitionError` with a message naming both.
-- [ ] FR-2 — `InlineDiffEvent` is exported as the union type
+- [x] FR-2 — `InlineDiffEvent` is exported as the union type
       `'stream_start' | 'stream_end' | 'cancel' | 'approve' | 'reject' | 'reset'`.
-- [ ] FR-3 — `InvalidInlineDiffTransitionError` is exported as a value
+- [x] FR-3 — `InvalidInlineDiffTransitionError` is exported as a value
       (subclass of `Error`) so hosts can `instanceof`-check it.
-- [ ] FR-4 — `useInlineDiffReducer(initial?)` is a React hook that returns
+- [x] FR-4 — `useInlineDiffReducer(initial?)` is a React hook that returns
       `{ state: InlineDiffState; dispatch: (event: InlineDiffEvent) => void }`.
       Default initial state is `'idle'`. `dispatch` delegates to
       `nextInlineDiffState`; illegal transitions therefore throw inside the
       reducer. The hook does no I/O (no fetch / window / etc.) — it is a
       pure local state machine.
-- [ ] FR-5 — `TcInlineDiff` accepts new optional props
+- [x] FR-5 — `TcInlineDiff` accepts new optional props
       `onSuggestChanges?: () => void` and `suggestLabel?: string`. When
       `onSuggestChanges` is provided AND the state is `'pending'`, a third
       button renders alongside Approve / Reject, labeled `suggestLabel`
       (default `"Suggest changes"`). When `onSuggestChanges` is omitted,
       no suggest button renders (backward-compatible).
-- [ ] FR-6 — Provenance pill: when `provenance` prop is non-empty, a small
+- [x] FR-6 — Provenance pill: when `provenance` prop is non-empty, a small
       pill renders in the header row with the provenance label and a small
       colored dot whose color matches the state accent. (Backward-compatible:
       the existing test only asserts the text content, not chrome.)
-- [ ] FR-7 — `TcInlineDiff.fixtures.tsx` exports
+- [x] FR-7 — `TcInlineDiff.fixtures.tsx` exports
       `inlineDiffFixtures: readonly { label: string; props: TcInlineDiffProps }[]`
       covering at minimum: idle, streaming (indeterminate), streaming
       (determinate 64%), pending (no provenance), pending (with provenance),
       pending (with onSuggestChanges), accepted, rejected. This is a dev-only
       data export and is re-exported as `__dev__inlineDiffFixtures` from the
       thread-canvas barrel.
-- [ ] FR-8 — `thread-canvas/index.ts` keeps its pre-existing exports and
+- [x] FR-8 — `thread-canvas/index.ts` keeps its pre-existing exports and
       adds a delimited `// === Phase 2-E inline-diff state-machine ===`
       block that re-exports `nextInlineDiffState`,
       `useInlineDiffReducer`, `InvalidInlineDiffTransitionError`, and the

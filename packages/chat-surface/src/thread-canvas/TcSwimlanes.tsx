@@ -4,7 +4,6 @@ import {
   useMemo,
   useRef,
   useState,
-  type CSSProperties,
   type KeyboardEvent,
   type MouseEvent,
   type ReactNode,
@@ -17,6 +16,8 @@ import {
 
 import { useKeyValueStore } from "../providers/KeyValueStoreProvider";
 import { useTransport } from "../providers/TransportProvider";
+import { swimlaneStyles } from "./TcSwimlanes.styles";
+import { TcSwimlanesTransportControls } from "./TcSwimlanesTransportControls";
 
 export type Playhead = "now" | { readonly at: number };
 
@@ -36,17 +37,6 @@ interface Bead {
 
 const SYSTEM_LANE = "system";
 const PLAY_INTERVAL_MS = 500;
-
-const PALETTE = {
-  lime: "#c2ff5a",
-  limeShadow: "rgba(194, 255, 90, 0.18)",
-  cardBg: "#181a1c",
-  cardBorder: "#2a2d31",
-  laneBg: "#1f2225",
-  textHi: "#f4f5f6",
-  textLo: "#9aa0a6",
-  pinned: "#f5c542",
-} as const;
 
 function laneFromEvent(event: RuntimeEventEnvelope): string {
   const candidate = event.payload?.["surface_uri"];
@@ -396,81 +386,30 @@ export function TcSwimlanes(props: TcSwimlanesProps): ReactNode {
       data-playhead={playhead === "now" ? "now" : "scrubbed"}
       tabIndex={0}
       onKeyDown={handleKeyDown}
-      style={containerStyle}
+      style={swimlaneStyles.container}
     >
-      <div role="toolbar" aria-label="Timeline controls" style={toolbarStyle}>
-        <button
-          type="button"
-          onClick={() => step(-1)}
-          disabled={!hasBeads}
-          data-testid="tc-swimlanes-back"
-          style={buttonStyle}
-          aria-label="Step back"
-        >
-          {"<"}
-        </button>
-        <button
-          type="button"
-          onClick={togglePlay}
-          disabled={!hasBeads}
-          data-testid="tc-swimlanes-play"
-          style={buttonStyle}
-          aria-label={isPlaying ? "Pause" : "Play"}
-        >
-          {isPlaying ? "Pause" : "Play"}
-        </button>
-        <button
-          type="button"
-          onClick={() => step(1)}
-          disabled={!hasBeads}
-          data-testid="tc-swimlanes-forward"
-          style={buttonStyle}
-          aria-label="Step forward"
-        >
-          {">"}
-        </button>
-        {isOffNow ? (
-          <button
-            type="button"
-            onClick={snapToNow}
-            data-testid="tc-swimlanes-snap-now"
-            style={buttonStyle}
-          >
-            Snap to now
-          </button>
-        ) : null}
-        {isOffNow ? (
-          <>
-            <button
-              type="button"
-              onClick={handleBranch}
-              data-testid="tc-swimlanes-branch"
-              style={primaryButtonStyle}
-            >
-              Branch from here
-            </button>
-            <button
-              type="button"
-              onClick={handleRestore}
-              data-testid="tc-swimlanes-restore"
-              style={primaryButtonStyle}
-            >
-              Restore this state
-            </button>
-          </>
-        ) : null}
-      </div>
+      <TcSwimlanesTransportControls
+        hasBeads={hasBeads}
+        isPlaying={isPlaying}
+        isOffNow={isOffNow}
+        onStepBack={() => step(-1)}
+        onTogglePlay={togglePlay}
+        onStepForward={() => step(1)}
+        onSnapToNow={snapToNow}
+        onBranch={handleBranch}
+        onRestore={handleRestore}
+      />
 
       {!hasBeads ? (
         <div
           role="status"
           data-testid="tc-swimlanes-empty"
-          style={emptyStateStyle}
+          style={swimlaneStyles.emptyState}
         >
           Listening for run events…
         </div>
       ) : (
-        <div style={lanesContainerStyle}>
+        <div style={swimlaneStyles.lanesContainer}>
           {lanes.map((lane) => {
             const laneBeads = sortedBeads.filter((bead) => bead.lane === lane);
             return (
@@ -478,12 +417,12 @@ export function TcSwimlanes(props: TcSwimlanesProps): ReactNode {
                 key={lane}
                 data-testid={`tc-swimlanes-lane-${lane}`}
                 data-lane={lane}
-                style={laneRowStyle}
+                style={swimlaneStyles.laneRow}
               >
-                <div style={laneLabelStyle}>{lane}</div>
+                <div style={swimlaneStyles.laneLabel}>{lane}</div>
                 <div
                   data-testid={`tc-swimlanes-lane-track-${lane}`}
-                  style={laneTrackStyle}
+                  style={swimlaneStyles.laneTrack}
                   onClick={handleLaneClick}
                   role="presentation"
                 >
@@ -496,7 +435,7 @@ export function TcSwimlanes(props: TcSwimlanesProps): ReactNode {
                         data-testid={`tc-swimlanes-bead-${bead.id}`}
                         data-bead-id={bead.id}
                         data-pinned={isPinned ? "true" : "false"}
-                        style={beadStyle(leftPercent, isPinned)}
+                        style={swimlaneStyles.bead(leftPercent, isPinned)}
                       >
                         <button
                           type="button"
@@ -505,7 +444,7 @@ export function TcSwimlanes(props: TcSwimlanesProps): ReactNode {
                             handleBeadClick(bead);
                           }}
                           data-testid={`tc-swimlanes-bead-select-${bead.id}`}
-                          style={beadButtonStyle}
+                          style={swimlaneStyles.beadButton}
                           aria-label={`Bead ${bead.title}`}
                           title={bead.title}
                         />
@@ -518,7 +457,7 @@ export function TcSwimlanes(props: TcSwimlanesProps): ReactNode {
                           data-testid={`tc-swimlanes-bead-pin-${bead.id}`}
                           aria-pressed={isPinned}
                           aria-label={isPinned ? "Unpin bead" : "Pin bead"}
-                          style={pinButtonStyle(isPinned)}
+                          style={swimlaneStyles.pinButton(isPinned)}
                         >
                           {isPinned ? "*" : "+"}
                         </button>
@@ -527,7 +466,7 @@ export function TcSwimlanes(props: TcSwimlanesProps): ReactNode {
                   })}
                   <div
                     data-testid="tc-swimlanes-playhead"
-                    style={playheadStyle(playheadLeftPercent)}
+                    style={swimlaneStyles.playhead(playheadLeftPercent)}
                   />
                 </div>
               </div>
@@ -538,125 +477,3 @@ export function TcSwimlanes(props: TcSwimlanesProps): ReactNode {
     </div>
   );
 }
-
-const containerStyle: CSSProperties = {
-  background: PALETTE.cardBg,
-  border: `1px solid ${PALETTE.cardBorder}`,
-  borderRadius: 10,
-  padding: 12,
-  color: PALETTE.textHi,
-  display: "flex",
-  flexDirection: "column",
-  gap: 10,
-  fontFamily:
-    "ui-sans-serif, system-ui, -apple-system, 'Segoe UI', Roboto, sans-serif",
-  outline: "none",
-};
-
-const toolbarStyle: CSSProperties = {
-  display: "flex",
-  gap: 8,
-  alignItems: "center",
-  flexWrap: "wrap",
-};
-
-const buttonStyle: CSSProperties = {
-  background: "transparent",
-  color: PALETTE.textHi,
-  border: `1px solid ${PALETTE.cardBorder}`,
-  borderRadius: 6,
-  padding: "4px 10px",
-  fontSize: 12,
-  cursor: "pointer",
-};
-
-const primaryButtonStyle: CSSProperties = {
-  background: PALETTE.lime,
-  color: PALETTE.cardBg,
-  border: "none",
-  borderRadius: 6,
-  padding: "4px 10px",
-  fontSize: 12,
-  fontWeight: 600,
-  cursor: "pointer",
-};
-
-const emptyStateStyle: CSSProperties = {
-  color: PALETTE.textLo,
-  fontSize: 12,
-  padding: 12,
-};
-
-const lanesContainerStyle: CSSProperties = {
-  display: "flex",
-  flexDirection: "column",
-  gap: 6,
-};
-
-const laneRowStyle: CSSProperties = {
-  display: "flex",
-  alignItems: "center",
-  gap: 8,
-};
-
-const laneLabelStyle: CSSProperties = {
-  width: 96,
-  fontSize: 11,
-  color: PALETTE.textLo,
-  textTransform: "lowercase",
-};
-
-const laneTrackStyle: CSSProperties = {
-  position: "relative",
-  flex: 1,
-  height: 28,
-  background: PALETTE.laneBg,
-  borderRadius: 6,
-  cursor: "pointer",
-};
-
-const beadStyle = (leftPercent: number, isPinned: boolean): CSSProperties => ({
-  position: "absolute",
-  left: `${leftPercent}%`,
-  top: "50%",
-  transform: "translate(-50%, -50%)",
-  display: "flex",
-  alignItems: "center",
-  gap: 2,
-  background: isPinned ? PALETTE.pinned : PALETTE.lime,
-  borderRadius: 999,
-  padding: "2px 4px",
-  boxShadow: `0 0 8px ${PALETTE.limeShadow}`,
-});
-
-const beadButtonStyle: CSSProperties = {
-  width: 10,
-  height: 10,
-  borderRadius: 999,
-  border: "none",
-  background: "transparent",
-  cursor: "pointer",
-};
-
-const pinButtonStyle = (isPinned: boolean): CSSProperties => ({
-  background: isPinned ? PALETTE.cardBg : "transparent",
-  color: isPinned ? PALETTE.pinned : PALETTE.cardBg,
-  border: "none",
-  borderRadius: 999,
-  cursor: "pointer",
-  fontSize: 9,
-  lineHeight: 1,
-  padding: 0,
-  width: 12,
-  height: 12,
-});
-
-const playheadStyle = (leftPercent: number): CSSProperties => ({
-  position: "absolute",
-  left: `${leftPercent}%`,
-  top: 0,
-  bottom: 0,
-  width: 2,
-  background: PALETTE.lime,
-  pointerEvents: "none",
-});

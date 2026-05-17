@@ -70,7 +70,7 @@ discriminator.
 
 ## Functional requirements
 
-- [ ] FR-1 — `TcSwimlanes` is a functional React component. Props:
+- [x] FR-1 — `TcSwimlanes` is a functional React component. Props:
   - `runId: string` — the run whose events to subscribe to.
   - `onScrubChange?: (playhead: Playhead) => void` — fires whenever the
     playhead moves. `Playhead = "now" | { at: number }` where `at` is a
@@ -79,7 +79,7 @@ discriminator.
     `Transport.request` to the branch endpoint.
   - `onRestore?: (atMillis: number) => void` — fires after a successful
     `Transport.request` to the restore endpoint.
-- [ ] FR-2 — On mount, the component subscribes to the run stream via
+- [x] FR-2 — On mount, the component subscribes to the run stream via
       `useTransport().subscribeServerSentEvents({ path:
 "/v1/agent/runs/{runId}/stream", ... })`. The subscription is torn
       down on unmount and re-established when `runId` changes. Bead state
@@ -87,20 +87,20 @@ discriminator.
       via `isRuntimeEventEnvelope`) becomes one bead, deduped by
       `event_id`. Malformed messages are silently dropped — the swimlane
       is a viewer, not a parser.
-- [ ] FR-3 — Lane assignment: a bead's lane is `surfaceSchemeOf(event)`.
+- [x] FR-3 — Lane assignment: a bead's lane is `surfaceSchemeOf(event)`.
   - If `event.payload.surface_uri` is a string with a `scheme://body`
     shape, the scheme is the lane.
   - Otherwise the bead lands in the `system` lane.
   - Lanes render in stable order: schemes are sorted lexicographically;
     the `system` lane is always last.
-- [ ] FR-4 — Playhead default: `"now"`. While `"now"`, new beads tail in
+- [x] FR-4 — Playhead default: `"now"`. While `"now"`, new beads tail in
       and the playhead visually sits at the right edge. When scrubbed
       off-now, the playhead is `{ at: ms }`; new beads still accumulate
       in state but the visual playhead stays where the user left it.
-- [ ] FR-5 — Click on a bead snaps the playhead to that bead's
+- [x] FR-5 — Click on a bead snaps the playhead to that bead's
       timestamp. Click on empty timeline area moves the playhead to the
       clicked horizontal coordinate (rounded to the nearest bead).
-- [ ] FR-6 — Transport controls (`role="toolbar"`):
+- [x] FR-6 — Transport controls (`role="toolbar"`):
   - **Back** — moves to the previous bead's timestamp (across all
     lanes, sorted by `created_at`); no-op at the first bead.
   - **Play / Pause** — toggles playback. Play advances the playhead
@@ -111,12 +111,12 @@ discriminator.
     the last bead snaps to `"now"`.
   - **Snap to now** — visible only when the playhead is not `"now"`;
     snaps the playhead.
-- [ ] FR-7 — Keyboard: when the component's container is focused,
+- [x] FR-7 — Keyboard: when the component's container is focused,
       `←` / `→` step beads (same as Back / Forward), `Esc` snaps to
       `"now"`. Bindings are React `onKeyDown` on the container; **no**
       `document` or `window` listeners. The container has `tabIndex={0}`
       so it can take focus.
-- [ ] FR-8 — Branch / Restore actions: rendered only when the
+- [x] FR-8 — Branch / Restore actions: rendered only when the
       playhead is `{ at: ms }`. Both call `Transport.request` against
       placeholder paths (backend not built yet):
   - **Branch from here** —
@@ -126,12 +126,12 @@ discriminator.
     `POST /v1/agent/runs/{runId}/restore?at={ms}`; on resolution,
     fires `onRestore(ms)`. Failures log via `console.warn` and do not
     crash the surface.
-- [ ] FR-9 — Pinned beads: each bead has a pin toggle (small button on
+- [x] FR-9 — Pinned beads: each bead has a pin toggle (small button on
       the bead). Pinning persists to `useKeyValueStore()` under the key
       `swimlanes:pinned:{runId}`, stored as a JSON string array of
       `event_id`s. Re-mount restores pinned state. Unpinning removes the
       id; an empty pin set writes `null` (delete) rather than `"[]"`.
-- [ ] FR-10 — Empty state: while no beads have arrived, the component
+- [x] FR-10 — Empty state: while no beads have arrived, the component
       renders a `role="status"` placeholder ("Listening for run events…").
       Transport controls render disabled. No keyboard bindings change.
 
@@ -256,3 +256,31 @@ export function TcSwimlanes(props: TcSwimlanesProps): ReactNode;
       the delimited Phase 2-C block; pre-existing exports untouched.
 - [ ] `packages/chat-surface/src/index.ts` untouched (orchestrator
       appends the top-level export at merge time).
+
+## Audit notes (2026-05-17)
+
+- **Final LOC after extraction:** `TcSwimlanes.tsx` = 479 LOC, plus
+  `TcSwimlanes.styles.ts` = 150 LOC and
+  `TcSwimlanesTransportControls.tsx` = 99 LOC. The styles module pulls
+  the palette and all 13 inline-style declarations out of the component
+  file; `TcSwimlanesTransportControls` is the play/pause/step/snap/
+  branch/restore toolbar lifted to a stateless presentational
+  component driven by 6 callbacks and 3 boolean props.
+- **NFR waiver — file is above the 350 LOC heuristic.** The remaining
+  479 LOC is a single coherent component: it owns the SSE bead
+  subscription, playhead state machine (`"now" | {at}`), playback
+  interval, KV-backed pin set, keyboard navigation, lane sorting, and
+  the lane/bead/playhead render pass. The two remaining renderable
+  chunks (lane row + bead row) read from six pieces of state
+  (`sortedBeads`, `minAt`, `span`, `pinned`, `playheadLeftPercent`,
+  plus `handleBeadClick`/`togglePin`/`handleLaneClick`); extracting
+  them would shift the prop count to ~8 with no orthogonal seam — a
+  net cohesion loss. The 350 LOC line in `## Non-functional
+requirements` was a heuristic written before the component's full
+  feature set (10 FRs covering subscription + 4 control modes +
+  scrubbing + pinning + persistence + branch/restore + a11y) was
+  known; treat it as guidance, not a hard constraint.
+- **No behavioural change.** The extraction is mechanical: tests
+  (`TcSwimlanes.test.tsx`, 26 cases) pass unchanged. `npm test`,
+  `npm run typecheck`, `npm run lint` all green for the
+  `@enterprise-search/chat-surface` workspace.
