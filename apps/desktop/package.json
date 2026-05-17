@@ -17,6 +17,7 @@
     "clean": "rm -rf out dist"
   },
   "dependencies": {
+    "@enterprise-search/api-types": "0.1.0",
     "@enterprise-search/chat-surface": "0.1.0",
     "@enterprise-search/chat-transport": "0.1.0",
     "@enterprise-search/surface-renderers": "0.1.0",

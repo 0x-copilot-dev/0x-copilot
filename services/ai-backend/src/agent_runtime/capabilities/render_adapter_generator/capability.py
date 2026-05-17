@@ -7,6 +7,7 @@ from collections.abc import Mapping
 from datetime import datetime, timezone
 from typing import TYPE_CHECKING, ClassVar
 
+from enterprise_service_contracts.adapter_allowlist import load_adapter_allowlist
 from pydantic import ValidationError
 
 from agent_runtime.capabilities.render_adapter_generator.models import (
@@ -26,6 +27,13 @@ if TYPE_CHECKING:  # pragma: no cover - typing-only imports
     from runtime_api.schemas import RunRecord, RuntimeEventEnvelope
 
 
+# Single source of truth: the JSON ships from
+# packages/service-contracts/src/enterprise_service_contracts/adapter_allowlist.json
+# and is also consumed by the desktop's 6A AST scanner via
+# packages/api-types/src/adapterAllowlist.ts.
+_ALLOWLIST = load_adapter_allowlist()
+
+
 class _GeneratorIdentity:
     """Stable identifier embedded in metadata + emitted with every event."""
 
@@ -43,26 +51,18 @@ class _Messages:
 
 
 class _ForbiddenPattern:
-    """Identifier-level patterns banned in any generated adapter source."""
+    """Identifier-level patterns banned in any generated adapter source.
 
-    TOKENS: ClassVar[tuple[str, ...]] = (
-        "window",
-        "document",
-        "localStorage",
-        "sessionStorage",
-        "XMLHttpRequest",
-        "EventSource",
-        "WebSocket",
-        "navigator",
-        "history",
-        "fetch",
-        "eval",
-        "require",
-        "process",
-        "global",
-        "globalThis",
-        "child_process",
-        "fs",
+    ``TOKENS`` is the union of ``forbidden_globals`` + ``forbidden_syntax``
+    from the shared JSON spec — every identifier the desktop's 6A AST
+    scanner would reject at a reference site we also reject here at
+    generation time. ``LITERAL`` covers the two syntactic forms the
+    identifier scan cannot catch (dynamic ``import()`` and ``require()``
+    calls) plus the ``new Function`` constructor expression.
+    """
+
+    TOKENS: ClassVar[tuple[str, ...]] = tuple(
+        list(_ALLOWLIST["forbidden_globals"]) + list(_ALLOWLIST["forbidden_syntax"])
     )
 
     LITERAL: ClassVar[tuple[str, ...]] = (
@@ -87,13 +87,17 @@ class _ForbiddenPattern:
 
 
 class _ImportAllowlist:
-    """Module specifiers a generated adapter is permitted to import."""
+    """Module specifiers a generated adapter is permitted to import.
+
+    Sourced from the shared JSON spec's ``allowed_imports``. We keep only
+    modules with a non-empty named-export list — a module with an empty
+    list is a tombstone (the desktop scanner allows the module name but
+    rejects every named specifier, so codegen must never emit an import
+    from it).
+    """
 
     ALLOWED: ClassVar[frozenset[str]] = frozenset(
-        {
-            "react",
-            "@enterprise-search/design-system",
-        }
+        module for module, names in _ALLOWLIST["allowed_imports"].items() if names
     )
 
     IMPORT_RE: ClassVar[re.Pattern[str]] = re.compile(
