@@ -98,12 +98,21 @@ import {
   ToolsDestination,
   WebSecretStorage,
   useKeyValueStore,
+  type ArtifactRoute,
   type ShellDestinationSlug,
 } from "@enterprise-search/chat-surface";
 import { getAppTransport } from "../api/transport";
 import { HashRouter, migrateLegacySettingsPath } from "./HashRouter";
 import { ROOT_DESTINATION, type AppRoute } from "./routes";
 import { errorMessage } from "../utils/errors";
+import {
+  PortProvider,
+  WebBadgePort,
+  WebClipboardPort,
+  WebFilePickerPort,
+  WebNotificationPort,
+  type PortBundle,
+} from "../ports";
 
 // Map every non-chats destination slug to the placeholder component
 // shipped with the chat-surface package. Chats has a dedicated host
@@ -311,6 +320,33 @@ function EnterpriseSearchApp({
   // useState; reads through globalThis.document each call so jsdom and
   // the real DOM both work.
   const [presenceSignal] = useState(() => new DocumentPresenceSignal());
+  // PortProvider — substrate-agnostic injection point for the four
+  // Phase 0.5 substrate ports (Badge, Notification, FilePicker,
+  // Clipboard). The web implementations are deliberately thin wrappers
+  // around the browser API; the desktop substrate will swap in native
+  // implementations at this same provider without any consumer change
+  // (cross-audit §5.4). NotificationPort's click-target navigation goes
+  // through the Router constructed above — same instance shared between
+  // ChatShell and the port.
+  const [ports] = useState<PortBundle>(() => ({
+    badge: new WebBadgePort(),
+    notification: new WebNotificationPort({
+      navigate: (artifactRoute: ArtifactRoute) => {
+        // Lift the substrate-portable ArtifactRoute into the host's
+        // wider AppRoute union. Today only `chat` and `conversation`
+        // map cleanly — the rest are no-ops until the destinations
+        // they reference register their own resolvers + routes.
+        if (
+          artifactRoute.kind === "chat" ||
+          artifactRoute.kind === "conversation"
+        ) {
+          router.navigate({ screen: "chat", destination: ROOT_DESTINATION });
+        }
+      },
+    }),
+    filePicker: new WebFilePickerPort(),
+    clipboard: new WebClipboardPort(),
+  }));
   const [route, setRoute] = useState<AppRoute>(() => {
     // PR 4.3 — One-shot migration of legacy ``/settings/<section>`` URLs
     // into the hashed form. Runs at most once per session because the
@@ -565,21 +601,23 @@ function EnterpriseSearchApp({
   // pane shows the fallback, matching how users expect a route transition
   // to behave in a shell-style app.
   return (
-    <ChatShell
-      transport={getAppTransport()}
-      router={router}
-      keyValueStore={keyValueStore}
-      presenceSignal={presenceSignal}
-      activeDestination={activeDestination}
-      onNavigate={handleRailNavigate}
-      onOpenSettings={() =>
-        router.navigate({
-          screen: "settings",
-          section: DEFAULT_SETTINGS_SECTION,
-        })
-      }
-    >
-      <Suspense fallback={<RouteLoadingFallback />}>{body}</Suspense>
-    </ChatShell>
+    <PortProvider ports={ports}>
+      <ChatShell
+        transport={getAppTransport()}
+        router={router}
+        keyValueStore={keyValueStore}
+        presenceSignal={presenceSignal}
+        activeDestination={activeDestination}
+        onNavigate={handleRailNavigate}
+        onOpenSettings={() =>
+          router.navigate({
+            screen: "settings",
+            section: DEFAULT_SETTINGS_SECTION,
+          })
+        }
+      >
+        <Suspense fallback={<RouteLoadingFallback />}>{body}</Suspense>
+      </ChatShell>
+    </PortProvider>
   );
 }
