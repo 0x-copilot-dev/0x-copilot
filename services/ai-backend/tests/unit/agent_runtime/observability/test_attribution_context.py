@@ -104,7 +104,13 @@ class TestPurposeEnum:
     def test_value_count_pinned(self) -> None:
         # Adding a Purpose requires a deliberate test update + parent
         # PRD §6.2 review — they shape rollup tables and FE filters.
-        assert len(Purpose) == 5
+        # P3-A2 added TODO_EXTRACTION for the post-run extractor worker.
+        assert len(Purpose) == 6
+
+    def test_todo_extraction_purpose_present(self) -> None:
+        # P3-A2 — the extractor worker job persists usage rows with this
+        # purpose so cross-audit §5.5's "single tracker" invariant holds.
+        assert Purpose.TODO_EXTRACTION == "todo_extraction"
 
 
 class TestUsageAttributionContextConstruction:

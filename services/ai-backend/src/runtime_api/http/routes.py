@@ -1426,6 +1426,30 @@ class UsageApiRouter:
         return router
 
 
+class TodoExtractionsApiRouter:
+    """Build the ``/v1`` router carrying the todo-extractions routes (P3-A2).
+
+    Three endpoints — list pending, accept, reject. Lives in its own
+    router so the wire shape stays free of the ``/v1/agent`` prefix
+    (per todos-prd §4.3). The router-level scope guard is the same
+    ``runtime:use`` every other authenticated v1 surface uses; the
+    actual owner check happens inside the service.
+    """
+
+    @classmethod
+    def create_router(cls) -> APIRouter:
+        """Return a router mounting ``/v1/todo-extractions/*``."""
+        from runtime_api.http.todo_extractions import register_todo_extractions_routes
+
+        router = APIRouter(
+            prefix="/v1",
+            tags=["todo-extractions"],
+            dependencies=[Depends(RequireScopes(RUNTIME_USE))],
+        )
+        register_todo_extractions_routes(router)
+        return router
+
+
 class BudgetApiRoutes:
     """Admin CRUD + per-user remaining-headroom endpoints for B7 budgets.
 

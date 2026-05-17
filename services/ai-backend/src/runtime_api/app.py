@@ -56,6 +56,7 @@ from runtime_api.http.routes import (
     BudgetApiRouter,
     InternalRuntimeApiRouter,
     RuntimeApiRouter,
+    TodoExtractionsApiRouter,
     UsageApiRouter,
 )
 from runtime_api.rbac import public_route
@@ -195,6 +196,8 @@ class RuntimeApiAppFactory:
         app.include_router(RuntimeApiRouter.create_router())
         app.include_router(UsageApiRouter.create_router())
         app.include_router(BudgetApiRouter.create_router())
+        # P3-A2 — todo extraction proposals (list/accept/reject).
+        app.include_router(TodoExtractionsApiRouter.create_router())
         app.include_router(RetentionAdminRouter.create_router())
         app.include_router(RetentionMemberRouter.create_router())
         app.include_router(InternalRuntimeApiRouter.create_router())

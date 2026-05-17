@@ -47,6 +47,15 @@ class Purpose(StrEnum):
     """``summarization.py`` path. The cost of context-window squeeze
     after long conversations. Wired into the recorder in 01c."""
 
+    TODO_EXTRACTION = "todo_extraction"
+    """Post-run extractor job that scans a completed conversation for
+    actionable items and emits proposals (see ``runtime_worker/jobs/
+    todo_extractor.py``). The LLM call routes through the canonical
+    :func:`build_chat_model` so the existing :class:`UsageRecorder`
+    captures token usage with this purpose tag — no separate tracker
+    is created. Out of band of the main loop's Purpose.derive precedence
+    (extractor jobs construct their context explicitly with this value)."""
+
     @classmethod
     def derive(
         cls,

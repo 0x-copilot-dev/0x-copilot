@@ -65,6 +65,10 @@ from agent_runtime.persistence.records.telemetry import (
     UsageDailySubagentRow,
     UsageDailyUserRow,
 )
+from agent_runtime.persistence.records.todo_extractions import (
+    TodoExtractionRecord,
+    TodoExtractionState,
+)
 from agent_runtime.persistence.records.tool_budgets import (
     ToolBudgetEnforcement,
     ToolBudgetRecord,
@@ -136,6 +140,8 @@ __all__ = [
     "BudgetStatus",
     "BudgetWithState",
     "ChargeOutcome",
+    "TodoExtractionRecord",
+    "TodoExtractionState",
     "ToolBudgetEnforcement",
     "ToolBudgetRecord",
     "ToolOrdinalBindingRecord",

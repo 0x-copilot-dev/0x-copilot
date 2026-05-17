@@ -14,6 +14,8 @@ from agent_runtime.persistence.records import (
     ShareRecord,
     SourceAggregate,
     SubagentSnapshot,
+    TodoExtractionRecord,
+    TodoExtractionState,
     ToolOrdinalBindingRecord,
 )
 
@@ -343,3 +345,44 @@ class ShareStorePort(Protocol):
         self, *, org_id: str, share_id: str, now: datetime
     ) -> ShareRecord | None:
         """Stamp ``revoked_at``. Idempotent (returns the row either way)."""
+
+
+@runtime_checkable
+class TodoExtractionStorePort(Protocol):
+    """Persistence boundary for todo-extraction proposals (P3-A2).
+
+    Proposals are durable from the moment the worker job persists them: the
+    accept/reject path mutates a stored row rather than re-running the LLM.
+    Every read is tenant-first (``org_id`` ordered ahead of ``owner_user_id``
+    in indices and predicates) so accidental cross-tenant queries fail the
+    index path.
+    """
+
+    async def insert_many(
+        self, records: Sequence[TodoExtractionRecord]
+    ) -> Sequence[TodoExtractionRecord]:
+        """Persist a batch of proposals atomically. Empty input is a no-op."""
+
+    async def get_by_id(
+        self, *, org_id: str, extraction_id: str
+    ) -> TodoExtractionRecord | None:
+        """Return one proposal within the tenant scope, or ``None``."""
+
+    async def list_pending(
+        self,
+        *,
+        org_id: str,
+        owner_user_id: str,
+        limit: int,
+    ) -> Sequence[TodoExtractionRecord]:
+        """Return the caller's pending proposals, newest-first."""
+
+    async def update_state(
+        self,
+        *,
+        org_id: str,
+        extraction_id: str,
+        state: TodoExtractionState,
+        resolved_at: datetime,
+    ) -> TodoExtractionRecord | None:
+        """Transition a proposal out of ``pending``. ``None`` if missing."""
