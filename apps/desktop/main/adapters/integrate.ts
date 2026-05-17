@@ -1,9 +1,11 @@
 import { astAllowlistScan, type AstViolation } from "./ast-allowlist";
 import {
   setDefaultAstAllowlistChecker,
+  setDefaultSmokeRenderExecutor,
   type AstAllowlistChecker,
   type ViolationKind,
 } from "./quality-gate";
+import { MainProcessSmokeRenderExecutor } from "./smoke-render-executor";
 
 const KIND_BY_6A: Record<string, ViolationKind> = {
   import: "import",
@@ -35,4 +37,11 @@ const realAstAllowlistChecker: AstAllowlistChecker = {
 
 export function wireQualityGateForTier2(): void {
   setDefaultAstAllowlistChecker(realAstAllowlistChecker);
+}
+
+// Phase 6C — wires 6D's smoke-render gate to a main-process executor backed
+// by 6A's vm sandbox. Live render preemption is the Tier2Loader Web
+// Worker's job; install-time smoke render uses a measured timer.
+export function wireSmokeRenderExecutorForTier2(): void {
+  setDefaultSmokeRenderExecutor(new MainProcessSmokeRenderExecutor());
 }

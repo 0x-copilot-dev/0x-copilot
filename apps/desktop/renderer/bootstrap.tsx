@@ -16,11 +16,26 @@ import { registerAll as registerSurfaceRenderers } from "@enterprise-search/surf
 
 import { DesktopPlaceholder } from "./DesktopPlaceholder";
 import { DEFAULT_WORKSPACE_ID, SignInGate } from "./SignInGate";
+import { Tier2Bridge } from "./Tier2Bridge";
 
 import "../preload/window-bridge-types";
 
 registerGenericStructuredDiff();
 registerSurfaceRenderers();
+
+// Phase 6C tier-2 lifecycle: listen for install/uninstall/mark-broken
+// pushes from main and forward live boundary errors back. The bridge is
+// idempotent — re-mounts under StrictMode receive the same handlers.
+let tier2BridgeAttached = false;
+function attachTier2BridgeOnce(): void {
+  if (tier2BridgeAttached) return;
+  if (typeof window === "undefined") return;
+  const win = window as unknown as { bridge?: unknown };
+  if (!win.bridge) return;
+  new Tier2Bridge({ bridge: window.bridge }).attach();
+  tier2BridgeAttached = true;
+}
+attachTier2BridgeOnce();
 
 const DESKTOP_CAPABILITIES = {
   substrate: "desktop-webview" as const,

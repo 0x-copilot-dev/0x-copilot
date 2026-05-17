@@ -9,9 +9,11 @@ import {
   CHANNELS,
   EmptyParamsSchema,
   IpcValidationError,
+  Tier2BoundaryErrorPayloadSchema,
   TransportRequestParamsSchema,
   TransportSubscribeParamsSchema,
   TransportUnsubscribeParamsSchema,
+  type Tier2BoundaryErrorPayload,
 } from "./schemas";
 
 export interface AuthHandlers {
@@ -47,10 +49,15 @@ function parseOrThrow<T>(
   return result.data;
 }
 
+export interface Tier2InboundDispatcher {
+  onBoundaryError(payload: Tier2BoundaryErrorPayload): void;
+}
+
 export interface RegisterHandlersDeps {
   readonly ipcMain: IpcMain;
   readonly bridge: TransportBridge;
   readonly auth?: AuthHandlers;
+  readonly tier2?: Tier2InboundDispatcher;
   readonly logger?: IpcLogger;
 }
 
@@ -171,6 +178,22 @@ export function registerIpcHandlers(deps: RegisterHandlersDeps): () => void {
     });
   }
 
+  const tier2 = deps.tier2;
+  if (tier2) {
+    ipcMain.handle(
+      CHANNELS.tier2BoundaryError,
+      async (_event, raw: unknown) => {
+        const params = parseOrThrow(
+          CHANNELS.tier2BoundaryError,
+          Tier2BoundaryErrorPayloadSchema,
+          raw,
+        );
+        tier2.onBoundaryError(params);
+        return { ok: true as const };
+      },
+    );
+  }
+
   return () => {
     const channels: string[] = [
       CHANNELS.transportRequest,
@@ -185,6 +208,9 @@ export function registerIpcHandlers(deps: RegisterHandlersDeps): () => void {
         CHANNELS.authSignOut,
         CHANNELS.authRefresh,
       );
+    }
+    if (tier2) {
+      channels.push(CHANNELS.tier2BoundaryError);
     }
     for (const channel of channels) {
       ipcMain.removeHandler(channel);
