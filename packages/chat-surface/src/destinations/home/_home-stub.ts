@@ -26,15 +26,9 @@ import type {
 export type HomeTimeOfDay = "morning" | "afternoon" | "evening" | "late";
 /** Alias used by P2-B1's shell code. */
 export type TimeOfDay = HomeTimeOfDay;
-/** Alias used by some test fixtures. */
+/** Alias used by some test fixtures + the api-types canonical. */
 export type TimeSegment = "morning" | "afternoon" | "evening";
 
-/**
- * Greeting block. The `user_first_name` field is optional — when both the
- * IdP `given_name` and the first-token of IdP `name` are missing the backend
- * MUST omit it, and the frontend renders the no-name fallback
- * `"Good {time_of_day}."` (cross-audit §9.5 Q5: email local-part is NOT used).
- */
 export interface HomeGreeting {
   readonly time_of_day: HomeTimeOfDay;
   readonly user_first_name?: string;
@@ -67,6 +61,8 @@ export type HomeRecentRunStatus =
   | "queued";
 /** Alias used by P2-B1's shell code. */
 export type RecentRunStatus = HomeRecentRunStatus;
+/** Alias used by some api-types-style imports. */
+export type HomeRunStatus = HomeRecentRunStatus;
 
 export interface RecentRunSummary {
   readonly run_id: RunId;
@@ -91,7 +87,7 @@ export interface FavoriteToolSummary {
 /** Alias used by P2-B3's FavoriteTools section. */
 export type HomeFavoriteTool = FavoriteToolSummary;
 
-// ---- §4.3 Agent activity (rich discriminated union — P2-B1's convention) ---
+// ---- §4.3 Agent activity (rich discriminated union — P2-B1's convention) --
 
 export type AgentActivityKind =
   | "drafted_artifact"
@@ -186,9 +182,7 @@ export type AgentActivityEntry =
 /** Alias used by P2-B2's ActivityFeed section. Same shape as
  *  AgentActivityEntryBase (the union's common fields). */
 export type HomeActivityRow = AgentActivityEntryBase;
-
-/** P2-B3 imports HomeActivityKind for kind-mapping tables; alias to
- *  AgentActivityKind. */
+/** P2-B3 imports HomeActivityKind for kind-mapping tables. */
 export type HomeActivityKind = AgentActivityKind;
 
 // ---- §4.4 Todos -----------------------------------------------------------
@@ -254,12 +248,6 @@ export interface QuickAction {
 
 // ---- §4.1 Top-level payload ----------------------------------------------
 
-/**
- * Top-level payload consumed by chat-surface's HomeDestination. RICHER
- * than the backend wire (canonical at `@enterprise-search/api-types`
- * `HomeResponse`); the host (`apps/frontend/HomeRoute`) bridges between
- * the two shapes. Wave 3+ may collapse to one.
- */
 export interface HomePayload {
   readonly greeting: HomeGreeting;
   readonly agent_activity: SectionResult<ReadonlyArray<AgentActivityEntry>>;
@@ -277,8 +265,4 @@ export interface HomePayload {
   readonly cached_at: string;
 }
 
-/** Alias used by P2-B2's section task brief. Same shape as HomePayload. */
 export type HomeResponse = HomePayload;
-
-/** Alias used by P2-B1 in some signatures. */
-export type HomeRunStatus = HomeRecentRunStatus;
