@@ -17,6 +17,7 @@ import {
   type AttachmentAdapter,
   type CompleteAttachment,
   type ComposerHandle,
+  type PendingAttachment,
 } from "./Composer";
 
 function makeTransport(
@@ -841,6 +842,594 @@ describe("Composer", () => {
       const payload = onSubmit.mock.calls[0][0];
       expect(payload.text).toBe("");
       expect(payload.attachments).toHaveLength(1);
+    });
+  });
+
+  /* --- Phase 1.6 Gap 1: ComposerHandle.appendText / addAttachment / submit --- */
+
+  describe("ComposerHandle extras (appendText / addAttachment / submit)", () => {
+    it("appendText inserts at the caret when the textarea is focused", () => {
+      const ref = createRef<ComposerHandle>();
+      render(
+        withTransport(
+          makeTransport(),
+          <Composer onSend={() => {}} ref={ref} />,
+        ),
+      );
+      const ta = screen.getByTestId("composer-textarea") as HTMLTextAreaElement;
+      ref.current?.setText("hello world");
+      ta.focus();
+      ta.setSelectionRange(5, 5);
+      ref.current?.appendText("!");
+      /* flushSync makes the DOM value visible without awaiting a render. */
+      expect(ta.value).toBe("hello! world");
+    });
+
+    it("appendText appends with a newline when the textarea is not focused", () => {
+      const ref = createRef<ComposerHandle>();
+      render(
+        withTransport(
+          makeTransport(),
+          <Composer onSend={() => {}} ref={ref} />,
+        ),
+      );
+      const ta = screen.getByTestId("composer-textarea") as HTMLTextAreaElement;
+      ref.current?.setText("first line");
+      /* No focus → the runtime-composer behaviour of "append on a new
+       * line" kicks in. */
+      ref.current?.appendText("second line");
+      expect(ta.value).toBe("first line\nsecond line");
+    });
+
+    it("appendText writes the input directly when the buffer is empty", () => {
+      const ref = createRef<ComposerHandle>();
+      render(
+        withTransport(
+          makeTransport(),
+          <Composer onSend={() => {}} ref={ref} />,
+        ),
+      );
+      const ta = screen.getByTestId("composer-textarea") as HTMLTextAreaElement;
+      ref.current?.appendText("kickoff");
+      expect(ta.value).toBe("kickoff");
+    });
+
+    it("addAttachment routes through the adapter and renders a pill", async () => {
+      const ref = createRef<ComposerHandle>();
+      const added: File[] = [];
+      const adapter: AttachmentAdapter = {
+        async add(file: File): Promise<CompleteAttachment> {
+          added.push(file);
+          return {
+            id: "h-1",
+            name: file.name,
+            size: file.size,
+            type: file.type,
+          };
+        },
+        remove(): void {},
+      };
+      render(
+        withTransport(
+          makeTransport(),
+          <Composer onSend={() => {}} ref={ref} attachmentAdapter={adapter} />,
+        ),
+      );
+      const file = new File(["x"], "from-handle.txt", { type: "text/plain" });
+      await ref.current?.addAttachment(file);
+      expect(added).toHaveLength(1);
+      expect(
+        await screen.findByTestId("composer-attachment-h-1"),
+      ).toBeInTheDocument();
+    });
+
+    it("addAttachment is a no-op when no adapter is wired", async () => {
+      const ref = createRef<ComposerHandle>();
+      render(
+        withTransport(
+          makeTransport(),
+          <Composer onSend={() => {}} ref={ref} />,
+        ),
+      );
+      const file = new File(["x"], "ignored.txt", { type: "text/plain" });
+      /* Should resolve cleanly and not render a pill. */
+      await ref.current?.addAttachment(file);
+      expect(
+        screen.queryByTestId("composer-attachments"),
+      ).not.toBeInTheDocument();
+    });
+
+    it("submit() drives the same path as Enter (onSubmit + clear)", () => {
+      const ref = createRef<ComposerHandle>();
+      const onSubmit = vi.fn();
+      render(
+        withTransport(
+          makeTransport(),
+          <Composer onSubmit={onSubmit} ref={ref} />,
+        ),
+      );
+      const ta = screen.getByTestId("composer-textarea") as HTMLTextAreaElement;
+      ref.current?.setText("ship it");
+      ref.current?.submit();
+      expect(onSubmit).toHaveBeenCalledTimes(1);
+      expect(onSubmit.mock.calls[0][0].text).toBe("ship it");
+      expect(ta.value).toBe("");
+    });
+
+    it("submit() honours disabled / running guards", () => {
+      const ref = createRef<ComposerHandle>();
+      const onSubmit = vi.fn();
+      const { rerender } = render(
+        withTransport(
+          makeTransport(),
+          <Composer onSubmit={onSubmit} ref={ref} disabled={true} />,
+        ),
+      );
+      ref.current?.setText("blocked");
+      ref.current?.submit();
+      expect(onSubmit).not.toHaveBeenCalled();
+      rerender(
+        withTransport(
+          makeTransport(),
+          <Composer onSubmit={onSubmit} ref={ref} running={true} />,
+        ),
+      );
+      ref.current?.submit();
+      expect(onSubmit).not.toHaveBeenCalled();
+    });
+
+    it("submit() no-ops with no text and no attachments", () => {
+      const ref = createRef<ComposerHandle>();
+      const onSubmit = vi.fn();
+      render(
+        withTransport(
+          makeTransport(),
+          <Composer onSubmit={onSubmit} ref={ref} />,
+        ),
+      );
+      ref.current?.submit();
+      expect(onSubmit).not.toHaveBeenCalled();
+    });
+  });
+
+  /* --- Phase 1.6 Gap 2: bottomBarRender / hintRender / onInputKeyDown --- */
+
+  describe("bottomBarRender / hintRender / onInputKeyDown slots", () => {
+    it("bottomBarRender REPLACES the built-in toolbar when provided", () => {
+      render(
+        withTransport(
+          makeTransport(),
+          <Composer
+            onSend={() => {}}
+            bottomBarRender={() => (
+              <div data-testid="host-bottombar">host actions</div>
+            )}
+          />,
+        ),
+      );
+      expect(screen.getByTestId("composer-bottombar-slot")).toBeInTheDocument();
+      expect(screen.getByTestId("host-bottombar")).toBeInTheDocument();
+      /* Built-in toolbar buttons must not render alongside the slot. */
+      expect(
+        screen.queryByTestId("composer-tools-toggle"),
+      ).not.toBeInTheDocument();
+      expect(
+        screen.queryByTestId("composer-model-toggle"),
+      ).not.toBeInTheDocument();
+      expect(screen.queryByTestId("composer-send")).not.toBeInTheDocument();
+      expect(screen.queryByTestId("composer-mic")).not.toBeInTheDocument();
+      expect(screen.queryByTestId("composer-attach")).not.toBeInTheDocument();
+    });
+
+    it("bottomBarRender receives a live ComposerSlotCtx", () => {
+      const ctxSeen: {
+        text: string;
+        running: boolean;
+        attachmentsCount: number;
+      }[] = [];
+      render(
+        withTransport(
+          makeTransport(),
+          <Composer
+            onSend={() => {}}
+            running={true}
+            bottomBarRender={(ctx) => {
+              ctxSeen.push({
+                text: ctx.text,
+                running: ctx.running,
+                attachmentsCount: ctx.attachmentsCount,
+              });
+              return <div data-testid="host-bottombar" />;
+            }}
+          />,
+        ),
+      );
+      const ta = screen.getByTestId("composer-textarea") as HTMLTextAreaElement;
+      fireEvent.change(ta, { target: { value: "hi" } });
+      /* Last render's ctx should reflect the typed text + running flag. */
+      const last = ctxSeen[ctxSeen.length - 1];
+      expect(last.text).toBe("hi");
+      expect(last.running).toBe(true);
+      expect(last.attachmentsCount).toBe(0);
+    });
+
+    it("hintRender REPLACES the built-in hint row when provided", () => {
+      render(
+        withTransport(
+          makeTransport(),
+          <Composer
+            onSend={() => {}}
+            hintRender={() => <div data-testid="host-hint">custom hint</div>}
+          />,
+        ),
+      );
+      expect(screen.getByTestId("composer-hint-slot")).toBeInTheDocument();
+      expect(screen.getByTestId("host-hint")).toBeInTheDocument();
+      /* Built-in hint row must not render alongside. */
+      expect(screen.queryByTestId("composer-hint")).not.toBeInTheDocument();
+    });
+
+    it("onInputKeyDown intercepts keys and prevents default handling when it returns true", () => {
+      const onSend = vi.fn();
+      const onInputKeyDown = vi.fn((e: KeyboardEvent) => {
+        if (e.key === "Enter") return true;
+        return false;
+      });
+      render(
+        withTransport(
+          makeTransport(),
+          <Composer onSend={onSend} onInputKeyDown={onInputKeyDown as never} />,
+        ),
+      );
+      const ta = screen.getByTestId("composer-textarea") as HTMLTextAreaElement;
+      fireEvent.change(ta, { target: { value: "hi" } });
+      fireEvent.keyDown(ta, { key: "Enter" });
+      expect(onInputKeyDown).toHaveBeenCalled();
+      /* Composer's default send did not run because the interceptor
+       * returned true. */
+      expect(onSend).not.toHaveBeenCalled();
+    });
+
+    it("onInputKeyDown passes through when it returns undefined / false", () => {
+      const onSend = vi.fn();
+      const onInputKeyDown = vi.fn(() => false);
+      render(
+        withTransport(
+          makeTransport(),
+          <Composer onSend={onSend} onInputKeyDown={onInputKeyDown as never} />,
+        ),
+      );
+      const ta = screen.getByTestId("composer-textarea") as HTMLTextAreaElement;
+      fireEvent.change(ta, { target: { value: "hi" } });
+      fireEvent.keyDown(ta, { key: "Enter" });
+      expect(onInputKeyDown).toHaveBeenCalled();
+      expect(onSend).toHaveBeenCalledWith("hi");
+    });
+  });
+
+  /* --- Phase 1.6 Gap 3: two-stage AttachmentAdapter --- */
+
+  describe("AttachmentAdapter two-stage (add → pending, send → complete)", () => {
+    it("renders a pill for a PendingAttachment returned by add()", async () => {
+      const adapter: AttachmentAdapter = {
+        async add(file: File): Promise<PendingAttachment> {
+          return {
+            id: "p-1",
+            name: file.name,
+            size: file.size,
+            type: file.type,
+            status: { type: "pending" },
+          };
+        },
+        async send(pending) {
+          return {
+            id: pending.id,
+            name: pending.name,
+            size: pending.size,
+            type: pending.type,
+            content: [{ type: "file", filename: pending.name }],
+          };
+        },
+        async remove(): Promise<void> {},
+      };
+      render(
+        withTransport(
+          makeTransport(),
+          <Composer onSubmit={() => {}} attachmentAdapter={adapter} />,
+        ),
+      );
+      const composer = screen.getByTestId("composer");
+      const file = new File(["x"], "pending.txt", { type: "text/plain" });
+      fireEvent.drop(composer, {
+        dataTransfer: {
+          files: {
+            length: 1,
+            item: (i: number) => (i === 0 ? file : null),
+            0: file,
+          },
+          types: ["Files"],
+        },
+      });
+      expect(
+        await screen.findByTestId("composer-attachment-p-1"),
+      ).toBeInTheDocument();
+    });
+
+    it("calls send() on submit to upgrade pending → complete and ships the content", async () => {
+      const onSubmit = vi.fn();
+      const sent: PendingAttachment[] = [];
+      const adapter: AttachmentAdapter = {
+        async add(file: File): Promise<PendingAttachment> {
+          return {
+            id: "p-2",
+            name: file.name,
+            size: file.size,
+            type: file.type,
+            status: { type: "pending" },
+          };
+        },
+        async send(pending: PendingAttachment): Promise<CompleteAttachment> {
+          sent.push(pending);
+          return {
+            id: pending.id,
+            name: pending.name,
+            size: pending.size,
+            type: pending.type,
+            content: [
+              { type: "file", filename: pending.name, data: "blob:abc" },
+            ],
+          };
+        },
+        async remove(): Promise<void> {},
+      };
+      render(
+        withTransport(
+          makeTransport(),
+          <Composer onSubmit={onSubmit} attachmentAdapter={adapter} />,
+        ),
+      );
+      const composer = screen.getByTestId("composer");
+      const file = new File(["x"], "doc.txt", { type: "text/plain" });
+      fireEvent.drop(composer, {
+        dataTransfer: {
+          files: {
+            length: 1,
+            item: (i: number) => (i === 0 ? file : null),
+            0: file,
+          },
+          types: ["Files"],
+        },
+      });
+      await screen.findByTestId("composer-attachment-p-2");
+      const ta = screen.getByTestId("composer-textarea") as HTMLTextAreaElement;
+      fireEvent.change(ta, { target: { value: "send it" } });
+      fireEvent.keyDown(ta, { key: "Enter" });
+      await waitFor(() => expect(onSubmit).toHaveBeenCalledTimes(1));
+      expect(sent).toHaveLength(1);
+      const payload = onSubmit.mock.calls[0][0];
+      expect(payload.text).toBe("send it");
+      expect(payload.attachments).toHaveLength(1);
+      expect(payload.attachments[0].id).toBe("p-2");
+      expect(payload.attachments[0].content).toEqual([
+        { type: "file", filename: "doc.txt", data: "blob:abc" },
+      ]);
+    });
+
+    it("accepts Promise<void> from remove() (runtime adapter shape)", async () => {
+      const removed: string[] = [];
+      const adapter: AttachmentAdapter = {
+        async add(file: File): Promise<CompleteAttachment> {
+          return {
+            id: "rm-1",
+            name: file.name,
+            size: file.size,
+            type: file.type,
+          };
+        },
+        async remove(id: string): Promise<void> {
+          removed.push(id);
+        },
+      };
+      render(
+        withTransport(
+          makeTransport(),
+          <Composer onSend={() => {}} attachmentAdapter={adapter} />,
+        ),
+      );
+      const composer = screen.getByTestId("composer");
+      fireEvent.drop(composer, {
+        dataTransfer: {
+          files: {
+            length: 1,
+            item: () => new File(["x"], "rm.txt", { type: "text/plain" }),
+            0: new File(["x"], "rm.txt", { type: "text/plain" }),
+          },
+          types: ["Files"],
+        },
+      });
+      await screen.findByTestId("composer-attachment-rm-1");
+      fireEvent.click(screen.getByTestId("composer-attachment-remove-rm-1"));
+      expect(removed).toEqual(["rm-1"]);
+    });
+  });
+
+  /* --- Phase 1.6 Gap 4: plus button + file picker wiring --- */
+
+  describe("Plus button opens a file picker via the adapter", () => {
+    it("clicking + opens the hidden file input and addFile routes through the adapter", async () => {
+      const added: File[] = [];
+      const adapter: AttachmentAdapter = {
+        async add(file: File): Promise<CompleteAttachment> {
+          added.push(file);
+          return {
+            id: "plus-1",
+            name: file.name,
+            size: file.size,
+            type: file.type,
+          };
+        },
+        remove(): void {},
+      };
+      render(
+        withTransport(
+          makeTransport(),
+          <Composer onSend={() => {}} attachmentAdapter={adapter} />,
+        ),
+      );
+      /* The hidden file input is rendered only when an adapter is wired. */
+      const input = screen.getByTestId(
+        "composer-file-input",
+      ) as HTMLInputElement;
+      expect(input).toBeInTheDocument();
+      /* jsdom doesn't open a real file dialog when input.click() is
+       * invoked, but it does dispatch a click event. Use the onChange
+       * surface to simulate the user picking files. */
+      const file = new File(["x"], "picked.txt", { type: "text/plain" });
+      Object.defineProperty(input, "files", {
+        value: {
+          length: 1,
+          item: (i: number): File | null => (i === 0 ? file : null),
+          0: file,
+        },
+        configurable: true,
+      });
+      fireEvent.change(input);
+      expect(added).toHaveLength(1);
+      expect(added[0].name).toBe("picked.txt");
+      expect(
+        await screen.findByTestId("composer-attachment-plus-1"),
+      ).toBeInTheDocument();
+    });
+
+    it("file input is NOT rendered when no adapter is wired (back-compat)", () => {
+      render(withTransport(makeTransport(), <Composer onSend={() => {}} />));
+      expect(
+        screen.queryByTestId("composer-file-input"),
+      ).not.toBeInTheDocument();
+    });
+  });
+
+  /* --- Phase 1.6 Gap 5: minRows / maxRows --- */
+
+  describe("minRows / maxRows control the textarea height envelope", () => {
+    it("renders the textarea with the minRows row count by default (2)", () => {
+      render(withTransport(makeTransport(), <Composer onSend={() => {}} />));
+      const ta = screen.getByTestId("composer-textarea") as HTMLTextAreaElement;
+      expect(ta.rows).toBe(2);
+    });
+
+    it("respects a caller-supplied minRows", () => {
+      render(
+        withTransport(
+          makeTransport(),
+          <Composer onSend={() => {}} minRows={1} />,
+        ),
+      );
+      const ta = screen.getByTestId("composer-textarea") as HTMLTextAreaElement;
+      expect(ta.rows).toBe(1);
+    });
+
+    it("applies a max-height that grows with maxRows", () => {
+      const { rerender } = render(
+        withTransport(
+          makeTransport(),
+          <Composer onSend={() => {}} maxRows={3} />,
+        ),
+      );
+      const small = (
+        screen.getByTestId("composer-textarea") as HTMLTextAreaElement
+      ).style.maxHeight;
+      rerender(
+        withTransport(
+          makeTransport(),
+          <Composer onSend={() => {}} maxRows={12} />,
+        ),
+      );
+      const large = (
+        screen.getByTestId("composer-textarea") as HTMLTextAreaElement
+      ).style.maxHeight;
+      /* The exact pixel value is implementation detail; assert "bigger". */
+      expect(parseInt(large, 10)).toBeGreaterThan(parseInt(small, 10));
+    });
+  });
+
+  /* --- Phase 1.6 Gap 6: className + data-* attributes --- */
+
+  describe("className + data-* attribute hooks for CSS parity", () => {
+    it("passes through className to the root container", () => {
+      render(
+        withTransport(
+          makeTransport(),
+          <Composer onSend={() => {}} className="aui-composer custom-x" />,
+        ),
+      );
+      const root = screen.getByTestId("composer");
+      expect(root).toHaveClass("aui-composer");
+      expect(root).toHaveClass("custom-x");
+    });
+
+    it("flips data-running on the root when a run is active", () => {
+      const { rerender } = render(
+        withTransport(makeTransport(), <Composer onSend={() => {}} />),
+      );
+      expect(screen.getByTestId("composer")).not.toHaveAttribute(
+        "data-running",
+      );
+      rerender(
+        withTransport(
+          makeTransport(),
+          <Composer onSend={() => {}} running={true} />,
+        ),
+      );
+      expect(screen.getByTestId("composer")).toHaveAttribute(
+        "data-running",
+        "true",
+      );
+    });
+
+    it("flips data-focused when the textarea gains focus", () => {
+      render(withTransport(makeTransport(), <Composer onSend={() => {}} />));
+      const root = screen.getByTestId("composer");
+      const ta = screen.getByTestId("composer-textarea");
+      expect(root).not.toHaveAttribute("data-focused");
+      fireEvent.focus(ta);
+      expect(root).toHaveAttribute("data-focused", "true");
+    });
+
+    it("flips data-has-topbar when topBarSlot is present", () => {
+      render(
+        withTransport(
+          makeTransport(),
+          <Composer
+            onSend={() => {}}
+            topBarSlot={<span data-testid="x">x</span>}
+          />,
+        ),
+      );
+      expect(screen.getByTestId("composer")).toHaveAttribute(
+        "data-has-topbar",
+        "true",
+      );
+    });
+
+    it("flips data-has-topbar when hasTopBarContent is true (caller's other chips)", () => {
+      render(
+        withTransport(
+          makeTransport(),
+          <Composer onSend={() => {}} hasTopBarContent={true} />,
+        ),
+      );
+      expect(screen.getByTestId("composer")).toHaveAttribute(
+        "data-has-topbar",
+        "true",
+      );
+    });
+
+    it("data-has-topbar is absent when nothing is shown above the textarea", () => {
+      render(withTransport(makeTransport(), <Composer onSend={() => {}} />));
+      expect(screen.getByTestId("composer")).not.toHaveAttribute(
+        "data-has-topbar",
+      );
     });
   });
 });

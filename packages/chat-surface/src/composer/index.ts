@@ -4,8 +4,11 @@ export {
   type ComposerHandle,
   type ComposerMode,
   type ComposerSubmitPayload,
+  type ComposerSlotCtx,
   type AttachmentAdapter,
+  type AttachmentContentPart,
   type CompleteAttachment,
+  type PendingAttachment,
 } from "./Composer";
 export {
   ToolPicker,
