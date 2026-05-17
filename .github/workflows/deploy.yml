@@ -159,7 +159,7 @@ jobs:
         # Adjust per cloud: gcp uses google-github-actions/auth, azure uses azure/login.
         # The role/principal trust is configured in the tenant's cloud IdP per
         # docs/ci-cd/multi-tenant-deploy.md "OIDC trust convention".
-        uses: aws-actions/configure-aws-credentials@5579c002bb4778aa43395ef1df492868a9a1c83f # v4.0.2
+        uses: aws-actions/configure-aws-credentials@e3dd6a429d7300a6a4c196c26e071d42e0343502 # v4.0.2
         if: vars.TENANT_CLOUD == 'aws' || vars.TENANT_CLOUD == ''
         with:
           role-to-assume: ${{ secrets.TENANT_DEPLOY_ROLE_ARN }}
