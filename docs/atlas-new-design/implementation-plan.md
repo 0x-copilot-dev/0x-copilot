@@ -112,7 +112,35 @@ Phase 0.5 (shared primitives) and Phase 0.6 (token-usage tracking) are independe
 | -------------------- | ---------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ | ------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ | --------------------------------------------------------------------- |
 | **TU-1 Token Usage** | `worktree-agent-token-usage` | SHIPPED: `tools/check_llm_provider_imports.py` (238 lines, AST guard), `tools/test_check_llm_provider_imports.py` (190 lines, 12 self-tests incl. planted-violation E2E), `.pre-commit-config.yaml` (extend) | none    | CI guard locking the single-integration-point invariant: every LLM call must route through `services/ai-backend/.../deep_agent_builder.py::build_chat_model`. 403 files in real tree pass today. | 12/12 guard self-tests + real-tree scan + pre-commit hook integration |
 
-### Phase 1 — Chats thread canvas + composer migration + right rail tabs
+### Phase 1 (✅ SHIPPED 2026-05-18) and Phase 2 (✅ SHIPPED 2026-05-18) — overview
+
+**Phase 1 — Chats** landed via 6 parallel sub-agents + orchestrator merge surgery (commits `51e3568` P1-A re-scoped backend + `7eaa90c` api-types brand pass + `a2d8ce4` P1-B WIP base + `976d517` P1-B1 Composer + `3ad457e` P1-B2 ThreadCanvas + `bba859d` P1-B3 RightRail + `3eec34a`/`89604f8`/`ad7e7fb` P1-C frontend + `8849f10` merge surgery).
+
+- P1-A original agent correctly refused to parallel-build (existing approval system in ai-backend; chats-canvas-prd §4.5 says "no new wire"). Re-scoped to 4 narrow deltas + branding pass.
+- P1-B timed out at 18 min; split into 3 narrow continuations (B1 composer, B2 threadcanvas, B3 rightrail) — established the 5-9-agents-per-phase pattern.
+- P1-C escalated on the composer-delete — chat-surface Composer surface is structurally smaller than runtime composer's (5 gaps); see Phase 1.6.
+
+**Phase 2 — Home** landed via 6 parallel sub-agents + orchestrator merge surgery (commits `6886195` P2-A1 + `70a112e` P2-A2 + `4cee7a4` P2-B1 + `ba4d372` P2-B2 + `2bef60f` P2-B3 + `029910f` P2-C + `5aca35d` merge surgery).
+
+- P2-A1 original timed out at 600s with zero commits (over-scoped real cross-service data joins). Re-scoped: ship wire + machinery; stub the 6 cross-service sections; greeting is real.
+- 3 parallel chat-surface agents (B1/B2/B3) each created their own `_home-stub.ts` with subtly different field-name conventions. Merged into a unified transitional adapter exporting both rich (P2-B1's `AgentActivityEntry` union) and row (P2-B2's `HomeActivityRow`) vocabularies, plus P2-B3's distinct `HomeFocusItem`/`HomeUpcomingMeeting` shapes. chat-surface UI consumes the rich shape; api-types/backend ships the lean shape; apps/frontend bridges. Wave 3+ may collapse.
+
+**Audit gate (2026-05-18 post-Phase-2):**
+
+- chat-surface: 634/634 tests pass (up from 560 SP-1 baseline)
+- ai-backend: 1825 pass, backend: 606 pass + 32 new Home, frontend: 831 pass
+- DRY invariants: zero `__brand:` in chat-surface, single `formatRelativeTime`
+- TU-1 CI guard: 409 files clean
+- 2 transitional adapters in place (\_approvals-stub.ts, \_home-stub.ts) — documented; Wave 3+ refactor
+
+**Deferred gaps for Phase 3+ to address (not bugs):**
+
+- 6 Home sections have stub data — real data unlocks when downstream destinations land (Phase 3 Todos, Phase 4 Inbox approvals, Phase 5 Routines, Phase 8 Tools, connector destinations). Each stub has a TODO with its unlock phase.
+- Phase 1.6 composer surface-completion task fires after Phase 5
+
+---
+
+### Phase 1 — Chats thread canvas + composer migration + right rail tabs (✅ SHIPPED)
 
 Sub-PRD: [destinations/chats-canvas-prd.md](destinations/chats-canvas-prd.md). 10 open product questions resolved by orchestrator (audit §2 + sub-PRD-author recommendations) — see §3 below.
 
