@@ -1,8 +1,9 @@
-"""Inbox destination (Phase 4) — CRUD + ACL + state machine + audit + SSE.
+"""Inbox destination (Phase 4) — CRUD + ACL + state machine + audit + SSE + producer.
 
 Public surface: ``GET /v1/inbox``, ``GET /v1/inbox/{id}``,
 ``PATCH /v1/inbox/{id}``, ``POST /v1/inbox/bulk``,
-``GET /v1/inbox/unread_count``, and ``GET /v1/inbox/stream`` (SSE).
+``GET /v1/inbox/unread_count``, ``GET /v1/inbox/stream`` (SSE), and
+``POST /internal/v1/inbox/items`` (service-token producer endpoint).
 Identity is the verified session caller; tenant isolation is enforced
 at every store call.
 
@@ -41,10 +42,19 @@ SSE (P4-A3):
   without replay. 30s heartbeats. P4-A1's mutation handlers and P4-A2's
   producer publish to ``app.state.inbox_activity_bus`` (set by
   ``register_inbox_sse_routes``).
+
+Producer (P4-A2):
+
+* ``POST /internal/v1/inbox/items`` is the service-token-gated producer
+  endpoint that ai-backend posts to when an approval-fallback (or other
+  agent event) needs to land a durable inbox row. Idempotent on
+  ``(producer_id, external_ref)``. Wired through the canonical
+  ``InboxService`` for shared ACL + audit.
 """
 
 from __future__ import annotations
 
+from backend_app.inbox.internal_routes import register_inbox_internal_routes
 from backend_app.inbox.routes import register_inbox_routes
 from backend_app.inbox.service import InboxService
 from backend_app.inbox.sse import register_inbox_sse_routes
@@ -63,6 +73,7 @@ __all__ = [
     "InboxItemRecord",
     "InboxService",
     "InboxStore",
+    "register_inbox_internal_routes",
     "register_inbox_routes",
     "register_inbox_sse_routes",
 ]
