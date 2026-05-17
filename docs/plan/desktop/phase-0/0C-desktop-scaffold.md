@@ -20,7 +20,7 @@ Treat this scaffold like a typed empty interface: the shape is load-bearing (PRD
 
 - `apps/desktop/package.json` (NEW)
 - `apps/desktop/tsconfig.json` (NEW)
-- `apps/desktop/eslint.config.js` (NEW — placeholder, no boundary rules yet)
+- `apps/desktop/eslint.config.mjs` (NEW — placeholder, no boundary rules yet)
 - `apps/desktop/.gitignore` (NEW)
 - `apps/desktop/README.md` (NEW — short pointer to PRD)
 - `docs/plan/desktop/phase-0/0C-desktop-scaffold.md` (this file)
@@ -37,8 +37,8 @@ Treat this scaffold like a typed empty interface: the shape is load-bearing (PRD
 ## Functional requirements
 
 - [x] FR-1: `apps/desktop/package.json` declares `@enterprise-search/desktop` as a private npm workspace member; lists workspace `dependencies` on `chat-surface`, `chat-transport`, `surface-renderers`; lists `react`, `react-dom`, `zod` as runtime deps; lists `electron`, `electron-builder`, `esbuild`, `typescript`, `vitest`, `@types/node`, eslint toolchain as devDependencies — versions pinned exactly per sibling workspaces.
-- [x] FR-2: `apps/desktop/tsconfig.json` extends `tsconfig.base.json`, sets `outDir` to `./out` to match `"main": "./out/main/index.js"` from package.json, sets `jsx: react-jsx` (already in base — kept implicit), and declares the Phase 1 directory layout in `include` so Phase 1 files compile immediately when authored.
-- [x] FR-3: `apps/desktop/eslint.config.js` exists and is a runnable placeholder that wires `@typescript-eslint/parser` + browser/node globals against the Phase 1 directory layout. The main/preload/renderer boundary rules (banning `Transport`/`fetch` in renderer-only files, etc.) are deferred to Phase 1, which knows the real file layout.
+- [x] FR-2: `apps/desktop/tsconfig.json` extends `tsconfig.base.json`, sets `outDir` to `./out` to match `"main": "./out/main/index.js"` from package.json, sets `jsx: react-jsx` (already in base — kept explicit for grep-ability), and declares the Phase 1 directory layout in `include` so Phase 1 files compile immediately when authored. Carries `"files": []` alongside `include` so `tsc --noEmit` does not emit TS18003 (`no inputs were found`) until Phase 1 lands its first source file — once a file matching the `include` glob exists, the union of `files` and `include` resolves to that file and typecheck still runs.
+- [x] FR-3: `apps/desktop/eslint.config.mjs` exists and is a runnable placeholder that wires `@typescript-eslint/parser` + browser/node globals against the Phase 1 directory layout. The main/preload/renderer boundary rules (banning `Transport`/`fetch` in renderer-only files, etc.) are deferred to Phase 1, which knows the real file layout. (Filename uses `.mjs` rather than `.js` because the package deliberately does not declare `"type": "module"` — see Open question 2.)
 - [x] FR-4: `npm install` at the repo root succeeds and registers `@enterprise-search/desktop` in `package-lock.json`.
 - [x] FR-5: `npm run typecheck --workspace @enterprise-search/desktop` exits 0 (no TS files to check is a valid pass).
 - [x] FR-6: `npm run typecheck` at the repo root (all workspaces) still exits 0.
@@ -115,6 +115,6 @@ Repo standard (PRD §6 and ad-hoc audit of sibling `packages/*/package.json`) is
 ## Notes for orchestrator review
 
 - Open question (2) — `"type": "module"` deferral — is the only non-trivial implicit decision. Phase 1A's PRD should call out which module system it picks per process role (main / preload / renderer) and update `package.json` if it adds `"type": "module"`.
-- `apps/desktop/eslint.config.js` is intentionally a thin parser-globals placeholder. The renderer/main/preload boundary lint rules (no `fetch`/`Transport` in main, no `node:*` in renderer, etc.) belong to Phase 1A because they require knowing the actual file layout. If a 0-A foundation agent's chat-surface ESLint rule lands first and a reusable boundary helper emerges, Phase 1A may import from it rather than re-define.
+- `apps/desktop/eslint.config.mjs` is intentionally a thin parser-globals placeholder. The renderer/main/preload boundary lint rules (no `fetch`/`Transport` in main, no `node:*` in renderer, etc.) belong to Phase 1A because they require knowing the actual file layout. If a 0-A foundation agent's chat-surface ESLint rule lands first and a reusable boundary helper emerges, Phase 1A may import from it rather than re-define.
 - Root `tsconfig.base.json` was inspected: no `paths` block, so adding a `@enterprise-search/desktop` path mapping is not needed. npm workspaces handles module resolution and TS resolves through `node_modules` symlinks. If a later phase adds explicit `paths` for any workspace, `apps/desktop` should be added at that point.
 - Root `package.json` `workspaces` array is `["apps/*", "packages/*"]` — no edit needed; the new package is picked up automatically.

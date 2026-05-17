@@ -1,0 +1,15 @@
+{
+  "extends": "../../tsconfig.base.json",
+  "compilerOptions": {
+    "composite": false,
+    "outDir": "./out",
+    "jsx": "react-jsx"
+  },
+  "files": [],
+  "include": [
+    "main/**/*.ts",
+    "preload/**/*.ts",
+    "renderer/**/*.tsx",
+    "renderer/**/*.ts"
+  ]
+}
