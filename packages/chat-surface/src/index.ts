@@ -151,3 +151,9 @@ export * from "./ports";
 // === Phase 1-B chat-shell-layout ===
 export { AppRail, ContextPanel, Topbar, RightRail } from "./shell";
 // === end Phase 1-B ===
+
+// === Phase 1-D routing-palette ===
+export { HashRouter } from "./routing/HashRouter";
+export { ROUTE_TABLE, type RouteEntry } from "./routing/route-table";
+export { CommandPalette } from "./palette";
+// === end Phase 1-D ===
