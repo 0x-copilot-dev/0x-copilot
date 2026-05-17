@@ -7,7 +7,21 @@ export {
   type ContextPanelSearch,
 } from "./ContextPanel";
 export { Topbar, TOPBAR_HEIGHT, type TopbarProps } from "./Topbar";
-export { RightRail, RIGHT_RAIL_WIDTH, type RightRailProps } from "./RightRail";
+export {
+  RightRail,
+  RIGHT_RAIL_WIDTH,
+  type RightRailProps,
+  type RightRailTabId,
+} from "./RightRail";
+export {
+  ActivityTabContent,
+  type ActivityTabContentProps,
+} from "./ActivityTabContent";
+export {
+  ApprovalsTabContent,
+  type ApprovalsTabContentProps,
+  type ApprovalsFilter,
+} from "./ApprovalsTabContent";
 export { ChatShell, type ChatShellProps } from "./ChatShell";
 export {
   DEFAULT_SHELL_DESTINATION,
