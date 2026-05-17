@@ -362,10 +362,21 @@ export {
 } from "./destinations/home";
 export {
   InboxDestination,
-  type InboxFilter,
+  InboxPanel,
+  bucketInbox,
+  type InboxDestinationProps,
   type InboxItem,
   type InboxItemKind,
-  type InboxPayload,
+  type InboxItemPriority,
+  type InboxItemStatus,
+  type InboxPanelCounts,
+  type InboxPanelFilterSlug,
+  type InboxPanelProps,
+  type InboxSectionKey,
+  type InboxSender,
+  type InboxSenderKind,
+  type InboxSystemOrigin,
+  type RenderDetailSlot,
 } from "./destinations/inbox";
 export {
   TodosDestination,
