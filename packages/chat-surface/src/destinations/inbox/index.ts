@@ -62,35 +62,41 @@ export type {
   InboxSenderKind,
   InboxSystemOrigin,
 } from "./InboxDestination";
-
 // ===========================================================================
 // ItemRef resolver registration (cross-audit §3.3)
 // ===========================================================================
-//
-// Guarded with `hasItemRefResolver` to keep test environments — which
-// may import the module in multiple realms / vitest workers — from
-// throwing `ItemRefResolverAlreadyRegistered`. The host's richer
-// resolver (with denormalized subject + read state) replaces this
-// later with `{ replace: true }`.
-//
-// Phase-4 minimal resolver: route target is the workspace surface for
-// the inbox-item id. P4-B2/P4-C own the route-extension work — adding
-// an `{ kind: "inbox-detail", inboxItemId }` variant to ArtifactRoute
-// and re-registering with `{ replace: true }`. Until then we route to
-// the existing workspace destination so the link is at least
-// clickable, not dead.
 
 if (!hasItemRefResolver("inbox_item")) {
   registerItemRefResolver("inbox_item", async (id: InboxItemId) => ({
     label: "Inbox item",
     icon: null,
-    // P4-B2 will introduce a dedicated `{ kind: "inbox-detail",
-    // inboxItemId }` route variant and re-register with
-    // `{ replace: true }`. Until then route to the workspace surface
-    // keyed by the inbox item id — stable, non-null, clickable
-    // fallback so `<ItemLink>` doesn't degrade to the deleted chip
-    // path.
     route: { kind: "workspace", workspaceId: id as unknown as string },
     breadcrumb: "Inbox",
   }));
 }
+
+// ===========================================================================
+// Detail / reply / snooze re-exports (P4-B2)
+// ===========================================================================
+
+export {
+  InboxDetail,
+  type InboxDetailItem,
+  type InboxDetailItemKind,
+  type InboxDetailStatus,
+  type InboxDetailPriority,
+  type InboxDetailSender,
+  type InboxDetailBodyState,
+  type InboxDetailProps,
+} from "./InboxDetail";
+export {
+  InboxReply,
+  type InboxReplyPayload,
+  type InboxReplyProps,
+  type InboxReplyRouting,
+} from "./inbox-reply";
+export {
+  SnoozePicker,
+  type SnoozePickerProps,
+  type SnoozePresetSlug,
+} from "./snooze-picker";
