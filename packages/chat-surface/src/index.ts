@@ -154,6 +154,17 @@ export {
 } from "./surfaces";
 // === end Phase 4-B ===
 
+// === Phase 6-A tier-2 loader ===
+export {
+  Tier2Loader,
+  type Tier2LoaderProps,
+  type Tier2WorkerLike,
+  type Tier2WorkerRequest,
+  type Tier2WorkerResponse,
+  type Tier2JsonElement,
+} from "./surfaces/Tier2Loader";
+// === end Phase 6-A ===
+
 // === Phase 0-B ports facade ===
 export * from "./ports";
 // === end Phase 0-B ===

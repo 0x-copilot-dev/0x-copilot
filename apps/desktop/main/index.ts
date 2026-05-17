@@ -15,6 +15,7 @@ import {
   registerAppProtocolHandler,
   registerAppProtocolPrivilege,
 } from "./app-protocol";
+import { wireQualityGateForTier2 } from "./adapters/integrate";
 import { AuthService, type AuthMode } from "./auth";
 import { startCrashReporter } from "./crash-reporter";
 import { registerDeepLinks } from "./deep-links";
@@ -32,6 +33,7 @@ let teardownIpcHandlers: (() => void) | null = null;
 void app.whenReady().then(() => {
   startCrashReporter();
   registerDeepLinks();
+  wireQualityGateForTier2();
 
   const rendererDir = join(__dirname, "..", "renderer");
   registerAppProtocolHandler(rendererDir, session.defaultSession);
