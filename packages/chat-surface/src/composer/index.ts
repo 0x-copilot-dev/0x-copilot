@@ -1,4 +1,12 @@
-export { Composer, type ComposerProps } from "./Composer";
+export {
+  Composer,
+  type ComposerProps,
+  type ComposerHandle,
+  type ComposerMode,
+  type ComposerSubmitPayload,
+  type AttachmentAdapter,
+  type CompleteAttachment,
+} from "./Composer";
 export {
   ToolPicker,
   type ToolPickerProps,

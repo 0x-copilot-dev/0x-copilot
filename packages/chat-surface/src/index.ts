@@ -227,6 +227,11 @@ export {
 export {
   Composer,
   type ComposerProps,
+  type ComposerHandle,
+  type ComposerMode,
+  type ComposerSubmitPayload,
+  type AttachmentAdapter,
+  type CompleteAttachment,
   ToolPicker,
   type ToolPickerProps,
   type ToolDescriptor,

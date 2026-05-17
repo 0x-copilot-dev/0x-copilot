@@ -12,7 +12,12 @@ import type {
 } from "@enterprise-search/chat-transport";
 
 import { TransportProvider } from "../providers/TransportProvider";
-import { Composer, type ComposerHandle } from "./Composer";
+import {
+  Composer,
+  type AttachmentAdapter,
+  type CompleteAttachment,
+  type ComposerHandle,
+} from "./Composer";
 
 function makeTransport(
   resolver: (req: TypedRequest) => Promise<unknown> = () =>
@@ -312,9 +317,12 @@ describe("Composer", () => {
         ),
       );
       const ta = screen.getByTestId("composer-textarea") as HTMLTextAreaElement;
-      expect(document.activeElement).not.toBe(ta);
+      /* Member access on `globalThis.document` is the chat-surface
+       * convention for honest substrate touchpoints — see eslint.config.js
+       * BOUNDARY_MESSAGE_GLOBALS for the rule rationale. */
+      expect(globalThis.document.activeElement).not.toBe(ta);
       ref.current?.focus();
-      expect(document.activeElement).toBe(ta);
+      expect(globalThis.document.activeElement).toBe(ta);
     });
   });
 
@@ -521,6 +529,318 @@ describe("Composer", () => {
       fireEvent.change(ta, { target: { value: "/summarize today" } });
       fireEvent.keyDown(ta, { key: "Enter" });
       expect(onSend).toHaveBeenCalledWith("/summarize today");
+    });
+  });
+
+  /* --- Phase 1 P1-B1 Delta 2: attachmentAdapter + drag-and-drop --- */
+
+  describe("attachmentAdapter + drag-and-drop", () => {
+    /** Build a fake File without depending on jsdom's File constructor
+     * intricacies — use Blob + name shim that satisfies File-shape uses
+     * (the Composer only reads .name, .size, .type via the adapter). */
+    function makeFile(
+      name: string,
+      content: string,
+      type: string = "text/plain",
+    ): File {
+      return new File([content], name, { type });
+    }
+
+    function makeAdapter(): {
+      adapter: AttachmentAdapter;
+      added: File[];
+      removed: string[];
+    } {
+      const added: File[] = [];
+      const removed: string[] = [];
+      let n = 0;
+      const adapter: AttachmentAdapter = {
+        async add(file: File): Promise<CompleteAttachment> {
+          added.push(file);
+          n += 1;
+          return {
+            id: `att-${n}`,
+            name: file.name,
+            size: file.size,
+            type: file.type,
+          };
+        },
+        remove(id: string): void {
+          removed.push(id);
+        },
+      };
+      return { adapter, added, removed };
+    }
+
+    function dropFiles(target: Element, files: File[]): void {
+      /* jsdom doesn't synthesize FileList; build a minimal duck-typed
+       * stand-in that the Composer only ever reads via .length / .item(i). */
+      const fileList: Record<string | number, unknown> = {
+        length: files.length,
+        item: (i: number): File | null => files[i] ?? null,
+      };
+      files.forEach((f, i) => {
+        fileList[i] = f;
+      });
+      const dataTransfer = {
+        files: fileList as unknown as FileList,
+        types: ["Files"],
+      };
+      fireEvent.dragEnter(target, { dataTransfer });
+      fireEvent.dragOver(target, { dataTransfer });
+      fireEvent.drop(target, { dataTransfer });
+    }
+
+    it("renders a pill for each dropped file via the adapter", async () => {
+      const { adapter, added } = makeAdapter();
+      render(
+        withTransport(
+          makeTransport(),
+          <Composer onSend={() => {}} attachmentAdapter={adapter} />,
+        ),
+      );
+      const composer = screen.getByTestId("composer");
+      const file = makeFile("notes.txt", "hello attachments");
+      dropFiles(composer, [file]);
+      expect(added).toHaveLength(1);
+      const pill = await screen.findByTestId("composer-attachment-att-1");
+      expect(pill).toHaveTextContent(/notes\.txt/);
+    });
+
+    it("removing a pill removes it from the DOM and calls adapter.remove", async () => {
+      const { adapter, removed } = makeAdapter();
+      render(
+        withTransport(
+          makeTransport(),
+          <Composer onSend={() => {}} attachmentAdapter={adapter} />,
+        ),
+      );
+      const composer = screen.getByTestId("composer");
+      dropFiles(composer, [makeFile("a.txt", "x")]);
+      const pill = await screen.findByTestId("composer-attachment-att-1");
+      const removeBtn = screen.getByTestId("composer-attachment-remove-att-1");
+      fireEvent.click(removeBtn);
+      expect(pill).not.toBeInTheDocument();
+      expect(removed).toEqual(["att-1"]);
+    });
+
+    it("is a no-op (and does not throw) when no adapter is wired", () => {
+      render(withTransport(makeTransport(), <Composer onSend={() => {}} />));
+      const composer = screen.getByTestId("composer");
+      /* Should not throw, and no attachment strip should appear. */
+      dropFiles(composer, [makeFile("ignored.txt", "x")]);
+      expect(
+        screen.queryByTestId("composer-attachments"),
+      ).not.toBeInTheDocument();
+    });
+
+    it("appends multiple drops cumulatively", async () => {
+      const { adapter } = makeAdapter();
+      render(
+        withTransport(
+          makeTransport(),
+          <Composer onSend={() => {}} attachmentAdapter={adapter} />,
+        ),
+      );
+      const composer = screen.getByTestId("composer");
+      dropFiles(composer, [makeFile("a.txt", "x")]);
+      await screen.findByTestId("composer-attachment-att-1");
+      dropFiles(composer, [makeFile("b.txt", "yy")]);
+      await screen.findByTestId("composer-attachment-att-2");
+      expect(
+        screen.getByTestId("composer-attachment-att-1"),
+      ).toBeInTheDocument();
+      expect(
+        screen.getByTestId("composer-attachment-att-2"),
+      ).toBeInTheDocument();
+    });
+
+    it("does not render the attachment strip when there are no attachments", () => {
+      const { adapter } = makeAdapter();
+      render(
+        withTransport(
+          makeTransport(),
+          <Composer onSend={() => {}} attachmentAdapter={adapter} />,
+        ),
+      );
+      expect(
+        screen.queryByTestId("composer-attachments"),
+      ).not.toBeInTheDocument();
+    });
+  });
+
+  /* --- Phase 1 P1-B1 Delta 3: onSubmit (payload form) + onSend backward compat --- */
+
+  describe("onSubmit (payload form) + onSend backward compat", () => {
+    it("fires onSubmit with {text, attachments} when wired", async () => {
+      const onSubmit = vi.fn();
+      const adapter: AttachmentAdapter = {
+        async add(file: File): Promise<CompleteAttachment> {
+          return {
+            id: "x1",
+            name: file.name,
+            size: file.size,
+            type: file.type,
+          };
+        },
+        remove(): void {},
+      };
+      render(
+        withTransport(
+          makeTransport(),
+          <Composer onSubmit={onSubmit} attachmentAdapter={adapter} />,
+        ),
+      );
+      const composer = screen.getByTestId("composer");
+      const file = new File(["abc"], "draft.md", { type: "text/markdown" });
+      fireEvent.dragEnter(composer, {
+        dataTransfer: {
+          files: {
+            length: 1,
+            item: (i: number) => (i === 0 ? file : null),
+            0: file,
+          },
+          types: ["Files"],
+        },
+      });
+      fireEvent.drop(composer, {
+        dataTransfer: {
+          files: {
+            length: 1,
+            item: (i: number) => (i === 0 ? file : null),
+            0: file,
+          },
+          types: ["Files"],
+        },
+      });
+      await screen.findByTestId("composer-attachment-x1");
+      const ta = screen.getByTestId("composer-textarea") as HTMLTextAreaElement;
+      fireEvent.change(ta, { target: { value: "ship it" } });
+      fireEvent.keyDown(ta, { key: "Enter" });
+      expect(onSubmit).toHaveBeenCalledTimes(1);
+      const payload = onSubmit.mock.calls[0][0];
+      expect(payload.text).toBe("ship it");
+      expect(payload.attachments).toHaveLength(1);
+      expect(payload.attachments[0].id).toBe("x1");
+      expect(payload.attachments[0].name).toBe("draft.md");
+    });
+
+    it("fires onSubmit with empty attachments when no adapter is wired", () => {
+      const onSubmit = vi.fn();
+      render(withTransport(makeTransport(), <Composer onSubmit={onSubmit} />));
+      const ta = screen.getByTestId("composer-textarea") as HTMLTextAreaElement;
+      fireEvent.change(ta, { target: { value: "hi" } });
+      fireEvent.keyDown(ta, { key: "Enter" });
+      expect(onSubmit).toHaveBeenCalledWith({ text: "hi", attachments: [] });
+    });
+
+    it("falls back to onSend when only onSend is supplied (existing call sites)", () => {
+      const onSend = vi.fn();
+      render(withTransport(makeTransport(), <Composer onSend={onSend} />));
+      const ta = screen.getByTestId("composer-textarea") as HTMLTextAreaElement;
+      fireEvent.change(ta, { target: { value: "legacy path" } });
+      fireEvent.keyDown(ta, { key: "Enter" });
+      expect(onSend).toHaveBeenCalledWith("legacy path");
+    });
+
+    it("prefers onSubmit when both onSubmit and onSend are supplied", () => {
+      const onSend = vi.fn();
+      const onSubmit = vi.fn();
+      render(
+        withTransport(
+          makeTransport(),
+          <Composer onSend={onSend} onSubmit={onSubmit} />,
+        ),
+      );
+      const ta = screen.getByTestId("composer-textarea") as HTMLTextAreaElement;
+      fireEvent.change(ta, { target: { value: "both" } });
+      fireEvent.keyDown(ta, { key: "Enter" });
+      expect(onSubmit).toHaveBeenCalledTimes(1);
+      expect(onSend).not.toHaveBeenCalled();
+    });
+
+    it("clears attachments on submit", async () => {
+      const onSubmit = vi.fn();
+      const adapter: AttachmentAdapter = {
+        async add(file: File): Promise<CompleteAttachment> {
+          return {
+            id: "z1",
+            name: file.name,
+            size: file.size,
+            type: file.type,
+          };
+        },
+        remove(): void {},
+      };
+      render(
+        withTransport(
+          makeTransport(),
+          <Composer onSubmit={onSubmit} attachmentAdapter={adapter} />,
+        ),
+      );
+      const composer = screen.getByTestId("composer");
+      const file = new File(["x"], "f.txt", { type: "text/plain" });
+      fireEvent.drop(composer, {
+        dataTransfer: {
+          files: {
+            length: 1,
+            item: (i: number) => (i === 0 ? file : null),
+            0: file,
+          },
+          types: ["Files"],
+        },
+      });
+      await screen.findByTestId("composer-attachment-z1");
+      const ta = screen.getByTestId("composer-textarea") as HTMLTextAreaElement;
+      fireEvent.change(ta, { target: { value: "send" } });
+      fireEvent.keyDown(ta, { key: "Enter" });
+      await waitFor(() =>
+        expect(
+          screen.queryByTestId("composer-attachment-z1"),
+        ).not.toBeInTheDocument(),
+      );
+    });
+
+    it("permits send with attachments only (no text) via onSubmit", async () => {
+      const onSubmit = vi.fn();
+      const adapter: AttachmentAdapter = {
+        async add(file: File): Promise<CompleteAttachment> {
+          return {
+            id: "only-att",
+            name: file.name,
+            size: file.size,
+            type: file.type,
+          };
+        },
+        remove(): void {},
+      };
+      render(
+        withTransport(
+          makeTransport(),
+          <Composer onSubmit={onSubmit} attachmentAdapter={adapter} />,
+        ),
+      );
+      const composer = screen.getByTestId("composer");
+      const file = new File(["x"], "only.txt", { type: "text/plain" });
+      fireEvent.drop(composer, {
+        dataTransfer: {
+          files: {
+            length: 1,
+            item: (i: number) => (i === 0 ? file : null),
+            0: file,
+          },
+          types: ["Files"],
+        },
+      });
+      await screen.findByTestId("composer-attachment-only-att");
+      /* Send button should be enabled because attachments are present. */
+      const send = screen.getByTestId("composer-send");
+      expect(send).not.toBeDisabled();
+      fireEvent.click(send);
+      expect(onSubmit).toHaveBeenCalledTimes(1);
+      const payload = onSubmit.mock.calls[0][0];
+      expect(payload.text).toBe("");
+      expect(payload.attachments).toHaveLength(1);
     });
   });
 });

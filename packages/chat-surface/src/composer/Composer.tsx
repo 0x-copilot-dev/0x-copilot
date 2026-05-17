@@ -6,11 +6,13 @@ import {
   useRef,
   useState,
   type CSSProperties,
+  type DragEvent,
   type ForwardedRef,
   type KeyboardEvent,
   type ReactElement,
   type ReactNode,
 } from "react";
+import { flushSync } from "react-dom";
 
 import { MentionPopover, type MentionCandidate } from "./MentionPopover";
 import { ModelPicker, type Depth } from "./ModelPicker";
@@ -47,6 +49,54 @@ import { ToolPicker } from "./ToolPicker";
 export type ComposerMode = "compose" | "edit";
 
 /**
+ * A resolved attachment owned by the host. The Composer renders pills + a
+ * remove button keyed by `id`; the host owns the actual storage (upload,
+ * persistence, content-addressable blob, etc.) via {@link AttachmentAdapter}.
+ *
+ * Kept intentionally minimal — the file's *content* never enters the
+ * Composer's render path (and must never be logged). Name + size + mime are
+ * the only display-side metadata.
+ */
+export interface CompleteAttachment {
+  readonly id: string;
+  readonly name: string;
+  readonly size: number;
+  readonly type: string;
+  /** Host-defined opaque handle (upload result, blob ref, …). */
+  readonly handle?: unknown;
+}
+
+/**
+ * Host adapter for attachments. Reconciles P1-C's audit gap between the
+ * frontend's legacy runtime composer (which had drag-and-drop + an
+ * AttachmentAdapter) and the chat-surface Composer (which had neither).
+ *
+ * Contract:
+ * - `add(file)` resolves with a {@link CompleteAttachment} once the host has
+ *   accepted/uploaded the file. The Composer awaits it before showing a pill.
+ * - `remove(id)` is fire-and-forget; the Composer drops the pill optimistically
+ *   and the host cleans up its side.
+ *
+ * If no adapter is supplied, drag-and-drop is a no-op (existing call sites
+ * see no change).
+ */
+export interface AttachmentAdapter {
+  add(file: File): Promise<CompleteAttachment>;
+  remove(id: string): void;
+}
+
+/**
+ * Submission payload — text + the current attachment set. Replaces the older
+ * `onSend(text: string)` signature for hosts that care about attachments;
+ * `onSend` is preserved for backward compatibility (see
+ * {@link ComposerProps.onSubmit} / {@link ComposerProps.onSend}).
+ */
+export interface ComposerSubmitPayload {
+  readonly text: string;
+  readonly attachments: ReadonlyArray<CompleteAttachment>;
+}
+
+/**
  * Imperative handle exposed via `forwardRef`. Hosts that need to drive the
  * composer programmatically (skill picker writing into the textarea, "Insert
  * citation here" actions, …) call methods on this. The data model stays
@@ -60,7 +110,28 @@ export interface ComposerHandle {
 }
 
 export interface ComposerProps {
-  readonly onSend: (text: string) => void;
+  /**
+   * Text-only send handler (backward-compat surface). Prefer
+   * {@link ComposerProps.onSubmit} for new call sites — it carries
+   * attachments. If both are supplied, `onSubmit` wins and `onSend` is
+   * ignored. At least one of them must be wired or send will silently no-op.
+   */
+  readonly onSend?: (text: string) => void;
+  /**
+   * Submit handler with the full payload (text + attachments). Preferred
+   * over {@link ComposerProps.onSend}. Reconciles P1-C's audit gap with the
+   * old runtime composer.
+   */
+  readonly onSubmit?: (payload: ComposerSubmitPayload) => void;
+  /**
+   * Host-owned attachment adapter. When supplied, drag-and-drop on the
+   * composer body and the attach button become live — each dropped file is
+   * handed to `add(file)` and the resolved {@link CompleteAttachment} is
+   * rendered as a removable pill. Without an adapter, drag-and-drop is
+   * inert (the Composer still accepts dragenter/dragover so the page
+   * default-handler doesn't open the file in a new tab).
+   */
+  readonly attachmentAdapter?: AttachmentAdapter;
   readonly onCancel?: () => void;
   readonly running?: boolean;
   readonly disabled?: boolean;
@@ -116,6 +187,8 @@ function ComposerInner(
 ): ReactElement {
   const {
     onSend,
+    onSubmit,
+    attachmentAdapter,
     onCancel,
     running = false,
     disabled = false,
@@ -141,12 +214,26 @@ function ComposerInner(
   const [toolPickerOpen, setToolPickerOpen] = useState(false);
   const [modelPickerOpen, setModelPickerOpen] = useState(false);
   const [mention, setMention] = useState<MentionTriggerState | null>(null);
+  const [attachments, setAttachments] = useState<
+    ReadonlyArray<CompleteAttachment>
+  >([]);
+  /* Tracks "a file is being dragged over the composer" for visual affordance
+   * and so the page's default handler (which would otherwise navigate to the
+   * file) is consistently suppressed. */
+  const [isDragOver, setIsDragOver] = useState(false);
   const textareaRef = useRef<HTMLTextAreaElement>(null);
 
   /* Imperative handle for hosts that need to write into the composer
    * programmatically (skill-picker workspace pane, citation injector, …).
    * The data model stays inside the component; the handle is the
-   * cross-cutting affordance — see chats-canvas-prd §15 ComposerHandle row. */
+   * cross-cutting affordance — see chats-canvas-prd §15 ComposerHandle row.
+   *
+   * `setText` / `clear` wrap their state updates in `flushSync` so the
+   * controlled <textarea>'s DOM `value` is observable to callers in the
+   * same synchronous tick. This matters for hosts (and tests) that read
+   * `textareaRef.value` immediately after `ref.current.setText(…)` without
+   * awaiting a render — without flushSync, React batches the update and the
+   * textarea still reads as empty. */
   useImperativeHandle(
     ref,
     () => ({
@@ -154,11 +241,15 @@ function ComposerInner(
         textareaRef.current?.focus();
       },
       clear: (): void => {
-        setText("");
-        setMention(null);
+        flushSync(() => {
+          setText("");
+          setMention(null);
+        });
       },
       setText: (next: string): void => {
-        setText(next);
+        flushSync(() => {
+          setText(next);
+        });
       },
       getText: (): string => text,
     }),
@@ -222,7 +313,12 @@ function ComposerInner(
 
   const send = (): void => {
     const trimmed = text.trim();
-    if (trimmed.length === 0 || disabled || running) {
+    /* In compose mode we need either text *or* attachments to submit. Edit
+     * mode still requires text (you can't "save" an empty edit). */
+    const hasContent = isEdit
+      ? trimmed.length > 0
+      : trimmed.length > 0 || attachments.length > 0;
+    if (!hasContent || disabled || running) {
       return;
     }
     /* "/skill ..." submissions exit through onSkillCommand if the host
@@ -244,9 +340,17 @@ function ComposerInner(
       setMention(null);
       return;
     }
-    onSend(trimmed);
+    /* Prefer onSubmit (the payload form). Fall through to onSend only
+     * when onSubmit is absent — call sites can migrate gradually and we
+     * never invoke both for one submission. */
+    if (onSubmit !== undefined) {
+      onSubmit({ text: trimmed, attachments });
+    } else if (onSend !== undefined) {
+      onSend(trimmed);
+    }
     setText("");
     setMention(null);
+    setAttachments([]);
   };
 
   const handleKeyDown = (event: KeyboardEvent<HTMLTextAreaElement>): void => {
@@ -297,7 +401,85 @@ function ComposerInner(
     );
   };
 
-  const canSend = text.trim().length > 0 && !disabled && !running;
+  /* --- Attachment drag-and-drop (P1-B1 Delta 2) ---
+   *
+   * Drag-and-drop is purely additive. Existing call sites that don't pass
+   * an `attachmentAdapter` see the same composer they always did; we still
+   * suppress the page's default drop handler so the browser doesn't
+   * navigate to the dropped file, but no attachment state is touched. */
+  const handleDragOver = (event: DragEvent<HTMLDivElement>): void => {
+    if (disabled || isEdit) {
+      return;
+    }
+    /* Only react to file drags — text/element drags pass through. */
+    const types = event.dataTransfer?.types;
+    const isFileDrag =
+      types !== undefined &&
+      Array.from(types as unknown as Iterable<string>).includes("Files");
+    if (!isFileDrag) {
+      return;
+    }
+    event.preventDefault();
+    event.stopPropagation();
+    if (!isDragOver) {
+      setIsDragOver(true);
+    }
+  };
+
+  const handleDragLeave = (event: DragEvent<HTMLDivElement>): void => {
+    /* Fire only when the cursor exits the container (not its children). */
+    if (event.currentTarget.contains(event.relatedTarget as Node | null)) {
+      return;
+    }
+    setIsDragOver(false);
+  };
+
+  const handleDrop = (event: DragEvent<HTMLDivElement>): void => {
+    if (disabled || isEdit) {
+      return;
+    }
+    const files = event.dataTransfer?.files;
+    if (!files || files.length === 0) {
+      return;
+    }
+    event.preventDefault();
+    event.stopPropagation();
+    setIsDragOver(false);
+    if (attachmentAdapter === undefined) {
+      return;
+    }
+    /* Resolve each file independently; one failure doesn't block the rest.
+     * Errors are swallowed here on purpose — host adapters own user-facing
+     * error surfaces (toast, banner, etc.) and the Composer must not leak
+     * file paths or contents to the console. */
+    for (let i = 0; i < files.length; i += 1) {
+      const file = files.item(i);
+      if (file === null) {
+        continue;
+      }
+      attachmentAdapter
+        .add(file)
+        .then((attachment) => {
+          setAttachments((prev) => [...prev, attachment]);
+        })
+        .catch(() => {
+          /* Intentional no-op — see comment above. */
+        });
+    }
+  };
+
+  const removeAttachment = (id: string): void => {
+    setAttachments((prev) => prev.filter((a) => a.id !== id));
+    attachmentAdapter?.remove(id);
+  };
+
+  /* Send enables when there's text *or* (in compose mode) an attachment.
+   * Edit mode keeps the text-required rule — "save" on an empty edit makes
+   * no semantic sense. */
+  const hasSubmissionContent = isEdit
+    ? text.trim().length > 0
+    : text.trim().length > 0 || attachments.length > 0;
+  const canSend = hasSubmissionContent && !disabled && !running;
   const modelLabel = labelForModel(model);
   const depthLabel = labelForDepth(depth);
 
@@ -306,12 +488,54 @@ function ComposerInner(
       data-testid="composer"
       data-running={running ? "true" : undefined}
       data-mode={mode}
-      style={containerStyle}
+      data-drag-over={isDragOver ? "true" : undefined}
+      style={
+        isDragOver
+          ? { ...containerStyle, ...containerDragOverStyle }
+          : containerStyle
+      }
       aria-disabled={disabled}
+      onDragEnter={handleDragOver}
+      onDragOver={handleDragOver}
+      onDragLeave={handleDragLeave}
+      onDrop={handleDrop}
     >
       {topBarSlot !== undefined ? (
         <div data-testid="composer-topbar-slot" style={topBarSlotStyle}>
           {topBarSlot}
+        </div>
+      ) : null}
+      {attachments.length > 0 ? (
+        <div
+          data-testid="composer-attachments"
+          style={attachmentStripStyle}
+          aria-label="Attachments"
+        >
+          {attachments.map((attachment) => (
+            <span
+              key={attachment.id}
+              data-testid={`composer-attachment-${attachment.id}`}
+              data-attachment-id={attachment.id}
+              style={attachmentPillStyle}
+              title={`${attachment.name} (${formatBytes(attachment.size)})`}
+            >
+              <PaperclipIcon />
+              <span style={attachmentPillNameStyle}>{attachment.name}</span>
+              <span style={attachmentPillSizeStyle} aria-hidden="true">
+                {formatBytes(attachment.size)}
+              </span>
+              <button
+                type="button"
+                onClick={() => removeAttachment(attachment.id)}
+                aria-label={`Remove ${attachment.name}`}
+                title="Remove"
+                data-testid={`composer-attachment-remove-${attachment.id}`}
+                style={attachmentPillRemoveStyle}
+              >
+                <CloseIcon />
+              </button>
+            </span>
+          ))}
         </div>
       ) : null}
       <textarea
@@ -636,6 +860,63 @@ function StopIcon(): ReactNode {
   );
 }
 
+function PaperclipIcon(): ReactNode {
+  return (
+    <svg
+      width="1em"
+      height="1em"
+      viewBox="0 0 16 16"
+      fill="none"
+      stroke="currentColor"
+      strokeWidth="1.5"
+      strokeLinecap="round"
+      strokeLinejoin="round"
+      aria-hidden="true"
+    >
+      <path d="M10.5 3.5 5 9a2 2 0 1 0 2.83 2.83l6-6a3.5 3.5 0 0 0-4.95-4.95L3 6.76" />
+    </svg>
+  );
+}
+
+function CloseIcon(): ReactNode {
+  return (
+    <svg
+      width="1em"
+      height="1em"
+      viewBox="0 0 16 16"
+      fill="none"
+      stroke="currentColor"
+      strokeWidth="1.5"
+      strokeLinecap="round"
+      aria-hidden="true"
+    >
+      <path d="m4 4 8 8M12 4l-8 8" />
+    </svg>
+  );
+}
+
+/**
+ * Human-readable size string for an attachment pill. Plain math so we stay
+ * dependency-free. Sizes ≥ 1 KiB are rendered with one decimal; smaller
+ * are rendered as bytes. We never log this — it's display-only.
+ */
+function formatBytes(bytes: number): string {
+  if (!Number.isFinite(bytes) || bytes < 0) {
+    return "";
+  }
+  if (bytes < 1024) {
+    return `${bytes} B`;
+  }
+  const units = ["KB", "MB", "GB", "TB"];
+  let value = bytes / 1024;
+  let i = 0;
+  while (value >= 1024 && i < units.length - 1) {
+    value /= 1024;
+    i += 1;
+  }
+  return `${value.toFixed(1)} ${units[i]}`;
+}
+
 const MAX_TEXTAREA_HEIGHT_PX = 220;
 const MIN_TEXTAREA_HEIGHT_PX = 56; // ≈ 2 rows of 14px text at 1.5 line-height
 
@@ -838,4 +1119,60 @@ const kbdStyle: CSSProperties = {
 
 const popoverHostStyle: CSSProperties = {
   marginTop: 4,
+};
+
+const containerDragOverStyle: CSSProperties = {
+  /* Subtle drag-target affordance — token-driven, no hard-coded colors. */
+  borderColor: "var(--color-accent)",
+  background: "var(--color-surface-muted)",
+};
+
+const attachmentStripStyle: CSSProperties = {
+  display: "flex",
+  flexWrap: "wrap",
+  gap: 6,
+  paddingBottom: 2,
+};
+
+const attachmentPillStyle: CSSProperties = {
+  display: "inline-flex",
+  alignItems: "center",
+  gap: 6,
+  height: 24,
+  padding: "0 4px 0 8px",
+  background: "var(--color-surface-muted)",
+  border: "1px solid var(--color-border)",
+  color: "var(--color-text-muted)",
+  borderRadius: 999,
+  fontSize: 12,
+  maxWidth: 240,
+};
+
+const attachmentPillNameStyle: CSSProperties = {
+  whiteSpace: "nowrap",
+  overflow: "hidden",
+  textOverflow: "ellipsis",
+  minWidth: 0,
+};
+
+const attachmentPillSizeStyle: CSSProperties = {
+  color: "var(--color-text-subtle)",
+  fontSize: 10.5,
+  flexShrink: 0,
+};
+
+const attachmentPillRemoveStyle: CSSProperties = {
+  display: "inline-flex",
+  alignItems: "center",
+  justifyContent: "center",
+  width: 18,
+  height: 18,
+  background: "transparent",
+  color: "var(--color-text-muted)",
+  border: "none",
+  borderRadius: "50%",
+  padding: 0,
+  cursor: "pointer",
+  fontSize: 11,
+  flexShrink: 0,
 };
