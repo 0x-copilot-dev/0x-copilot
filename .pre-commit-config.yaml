@@ -104,3 +104,20 @@ repos:
         language: system
         pass_filenames: false
         files: ^services/ai-backend/src/.*\.py$
+
+      - id: check-llm-provider-imports
+        name: forbid direct LLM provider SDK imports outside the runtime entry point
+        description: |
+          TU-1 single-tracker invariant: every LLM provider invocation in the
+          monorepo must funnel through the canonical
+          ``build_chat_model`` / ``init_chat_model`` path in
+          ``deep_agent_builder.py``, so the existing ``UsageRecorder`` boundary
+          captures token usage and cost on every call. The AST walker flags any
+          direct import of ``anthropic`` / ``openai`` / ``google.generativeai``
+          / ``langchain_anthropic`` / ``langchain_openai`` / ``langchain_google_*``
+          outside that path. Add a per-line
+          ``# allow-direct-llm-import: <reason>`` marker for one-off exceptions.
+        entry: python tools/check_llm_provider_imports.py
+        language: system
+        pass_filenames: false
+        files: ^services/(ai-backend|backend|backend-facade)/src/.*\.py$
