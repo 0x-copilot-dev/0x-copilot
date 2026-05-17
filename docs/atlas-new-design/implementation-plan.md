@@ -186,6 +186,30 @@ Sub-PRD: pending (`a4c565a71d8cc3725` agent still running). When it lands:
 | **P5-A backend**                 | `worktree-agent-phase5-routines-backend` | `packages/api-types/src/routines.ts` (NEW), `services/backend/src/backend_app/routines/`, facade proxy, `services/ai-backend/src/runtime_worker/jobs/routine_scheduler.py` (cron-claim worker), `services/backend/src/backend_app/app.py` extend (merge AFTER P4-A)                                                                           | SP-1, P1-A, P4-A | Routine CRUD; scheduler; trigger validation; webhook secret rotation; permission intersection at fire-time |
 | **P5-B chat-surface + frontend** | `worktree-agent-phase5-routines-surface` | `packages/chat-surface/src/destinations/routines/` (NEW: RoutinesDestination, RoutinesPanel, RoutineEditor, RoutineDetail), `packages/chat-surface/src/shell/destinations.ts` (extend ShellDestinationSlug to include `"routines"` as the 12th slug — merge BEFORE any other Phase-5 work), `apps/frontend/src/app/App.tsx` extend, all tests | SP-1, P5-A       | Routines UI; cron editor; trigger management; tabs (Connectors/Behavior/Permissions)                       |
 
+### Phases 3 + 4 — audit gate (2026-05-18)
+
+Phase 3 (Todos) and Phase 4 (Inbox) both landed via parallel sub-agents. All gates green:
+
+- **Phase 3 Todos** (7 commits): ai-backend 1871, backend 643, chat-surface 716, frontend 853. Zero merge conflicts on cherry-pick.
+- **Phase 4 Inbox** (6 commits + 1 stalled): ai-backend 1895, backend 717, chat-surface 760, frontend 882. Two `__init__.py` merge conflicts resolved cleanly; one `InboxStream*` type-naming reconciliation (different from PR-1.4.1's approval-pulse `InboxEventType` to avoid collision).
+
+**Deferred follow-ups (logged here; NOT blocking Phase 5+ dispatch):**
+
+1. **P3-A1 `/internal/v1/todos/series/materialize-due` endpoint** — P3-A3's recurrence materializer worker posts to this endpoint with `(now: ISO) → {materialized, skipped_duplicates, series_processed}`. P3-A1 shipped the schema + service but NOT this handler. Wire-up follow-up; until landed, the materializer worker has no consumer.
+2. **P4-A1 + P4-A2 publish to `app.state.inbox_activity_bus`** — P4-A3's SSE stream exists and heartbeats correctly but won't emit `item_added`/`item_updated` until the mutation handlers (P4-A1 service.py) + producer (P4-A2 internal_routes.py) call `bus.publish(...)`. ~5 lines per site. Test-functional today; production-functional after.
+3. **Delete `services/backend/src/backend_app/inbox/_local_store.py`** — P4-A2's local stub is now redundant since P4-A1's canonical `InboxStore` is on main. Rewire `internal_routes.py` imports to `from backend_app.inbox.store import InboxStore, InMemoryInboxStore`. Remove `_local_store.py`. Mechanical.
+4. **Phase 4.5: Inbox 960px responsive breakpoint** — P4-B3 agent stalled with zero progress. Replan: split into 2 narrow agents (CSS container-query + useInboxLayout hook). Defer until post-Wave-2 (not blocking destinations).
+
+**Invariants preserved post-Phase-4:**
+
+- DRY: zero `__brand:` in chat-surface; single `formatRelativeTime`
+- TU-1 CI guard: 432 files clean
+- Transitional adapters (`_approvals-stub.ts`, `_home-stub.ts`, `_todos-stub.ts`, `_inbox-stub.ts`) all documented as permanent chat-surface adapter shapes; Wave 3+ may collapse
+
+Ready for Phase 5 Routines dispatch (8-agent parallel per replan).
+
+---
+
 ### Phase 1.6 — chat-surface Composer surface-completion (deferred from P1-C; tech-debt)
 
 Phase 1.5 (composer-delete cleanup) escalated 2026-05-18: the chat-surface Composer is structurally different from the frontend's runtime composer (opinionated toolbar vs headless render-prop slots), not just API-incompatible. P1-B added some additive props (mode, attachmentAdapter, onSubmit, forwardRef, topBarSlot, inlineActions) but didn't close the surface to allow a regression-free delete.
