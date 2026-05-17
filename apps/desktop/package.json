@@ -2,14 +2,19 @@
   "name": "@enterprise-search/desktop",
   "version": "0.1.0",
   "private": true,
-  "description": "Electron desktop client for the Atlas / enterprise-search product. Scaffold only — implementation in Phase 1.",
+  "description": "Electron desktop client for the Atlas / enterprise-search product.",
   "main": "./out/main/index.js",
   "scripts": {
     "typecheck": "tsc -p tsconfig.json --noEmit",
     "lint": "eslint .",
     "test": "vitest run",
-    "build": "echo 'Phase 1 will implement build' && exit 0",
-    "dev": "echo 'Phase 1 will implement dev' && exit 0"
+    "compile": "node esbuild.config.mjs",
+    "copy:renderer-assets": "node -e \"require('node:fs').mkdirSync('out/renderer',{recursive:true}); require('node:fs').copyFileSync('renderer/index.html','out/renderer/index.html')\"",
+    "build": "npm run compile",
+    "dev": "npm run build && ELECTRON_RUN_AS_NODE= electron .",
+    "desktop:dev": "npm run dev",
+    "package": "npm run build && electron-builder --dir",
+    "clean": "rm -rf out dist"
   },
   "dependencies": {
     "@enterprise-search/chat-surface": "0.1.0",
@@ -20,13 +25,19 @@
     "zod": "3.25.76"
   },
   "devDependencies": {
+    "@testing-library/jest-dom": "6.9.1",
+    "@testing-library/react": "16.3.2",
     "@types/node": "25.8.0",
+    "@types/react": "19.2.14",
+    "@types/react-dom": "19.2.3",
     "@typescript-eslint/parser": "8.59.3",
+    "@vitejs/plugin-react": "6.0.2",
     "electron": "42.1.0",
     "electron-builder": "26.8.1",
     "esbuild": "0.28.0",
     "eslint": "9.39.4",
     "globals": "15.15.0",
+    "jsdom": "29.1.1",
     "typescript": "6.0.3",
     "vitest": "4.1.6"
   }
