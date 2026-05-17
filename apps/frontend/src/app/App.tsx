@@ -139,7 +139,10 @@ import {
 // themselves — adding any of them here would only confuse the renderer.
 const NON_CHATS_DESTINATIONS: Readonly<
   Record<
-    Exclude<ShellDestinationSlug, "chats" | "home" | "todos" | "inbox">,
+    Exclude<
+      ShellDestinationSlug,
+      "chats" | "home" | "todos" | "inbox" | "routines"
+    >,
     () => ReactElement
   >
 > = {
