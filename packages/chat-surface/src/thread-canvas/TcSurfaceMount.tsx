@@ -9,10 +9,13 @@ import {
 
 import type { Transport } from "@enterprise-search/chat-transport";
 
+import { TIER3_SCHEME } from "../surfaces/SaaSRendererAdapter";
 import { resolveAdapter } from "../surfaces/SurfaceRegistry";
 import type { SaaSRendererAdapter } from "../surfaces/SaaSRendererAdapter";
+import type { PendingDiff } from "../surfaces/types";
 
 const RENDER_BUDGET_MS = 100;
+const TIER3_URI = `${TIER3_SCHEME}://`;
 
 type Clock = () => number;
 
@@ -23,17 +26,26 @@ const defaultClock: Clock =
 
 let activeClock: Clock = defaultClock;
 
-// Test-only seam. The render-budget timer measures wall-clock time around
-// adapter.renderCurrent, and we cannot mock performance.now globally
-// without React's internals consuming our mocked values. Production code
-// never calls this.
+// Test-only seam. React renders are synchronous, so the budget is a
+// wall-clock measurement around the adapter call rather than a preemptive
+// timeout. Tier-2 in Phase 6 moves to a Worker for real preemption (D29).
 export function __setRenderBudgetClockForTests(clock: Clock | null): void {
   activeClock = clock ?? defaultClock;
+}
+
+export interface PendingDiffHandle<TDiff = unknown> {
+  readonly diff: TDiff;
+  readonly meta: PendingDiff;
 }
 
 export interface TcSurfaceMountProps {
   readonly uri: string;
   readonly transport: Transport;
+  readonly state?: unknown;
+  readonly pendingDiff?: PendingDiffHandle | null;
+  readonly onApprove?: (diffId: string) => void;
+  readonly onReject?: (diffId: string) => void;
+  readonly onSuggestChanges?: (diffId: string) => void;
 }
 
 interface AdapterBoundaryProps {
@@ -101,61 +113,217 @@ function schemeOf(uri: string): string {
   return idx > 0 ? uri.slice(0, idx) : "";
 }
 
-function renderAdapterSafely(
+interface SyncRenderResult {
+  readonly node: ReactElement | null;
+  readonly timedOut: boolean;
+  readonly threw: boolean;
+}
+
+function callAdapter(
   adapter: SaaSRendererAdapter,
-  fallback: ReactElement,
-): { node: ReactElement; timedOut: boolean; threw: boolean } {
+  state: unknown,
+  pendingDiff: PendingDiffHandle | null | undefined,
+): SyncRenderResult {
   const start = activeClock();
   try {
-    const element = adapter.renderCurrent({});
+    const element = pendingDiff
+      ? adapter.renderDiff(pendingDiff.diff)
+      : adapter.renderCurrent(state ?? {});
     const elapsed = activeClock() - start;
     if (elapsed > RENDER_BUDGET_MS) {
-      return { node: fallback, timedOut: true, threw: false };
+      return { node: null, timedOut: true, threw: false };
     }
     return { node: element, timedOut: false, threw: false };
   } catch {
-    return { node: fallback, timedOut: false, threw: true };
+    return { node: null, timedOut: false, threw: true };
   }
 }
 
+interface HostControlsProps {
+  readonly diffId: string;
+  readonly onApprove?: (diffId: string) => void;
+  readonly onReject?: (diffId: string) => void;
+  readonly onSuggestChanges?: (diffId: string) => void;
+}
+
+function HostControls(props: HostControlsProps): ReactElement {
+  const { diffId, onApprove, onReject, onSuggestChanges } = props;
+  const handleApprove = (): void => onApprove?.(diffId);
+  const handleReject = (): void => onReject?.(diffId);
+  const handleSuggest = (): void => onSuggestChanges?.(diffId);
+  return (
+    <div
+      role="group"
+      aria-label="Pending diff actions"
+      data-testid="tc-surface-mount-controls"
+      style={controlsRowStyle}
+    >
+      <button
+        type="button"
+        onClick={handleReject}
+        data-testid="tc-surface-mount-reject"
+        style={secondaryButtonStyle}
+      >
+        Reject
+      </button>
+      <button
+        type="button"
+        onClick={handleSuggest}
+        data-testid="tc-surface-mount-suggest"
+        style={secondaryButtonStyle}
+      >
+        Suggest changes
+      </button>
+      <button
+        type="button"
+        onClick={handleApprove}
+        data-testid="tc-surface-mount-approve"
+        style={primaryButtonStyle}
+      >
+        Approve
+      </button>
+    </div>
+  );
+}
+
 export function TcSurfaceMount(props: TcSurfaceMountProps): ReactElement {
-  const { uri } = props;
+  const { uri, state, pendingDiff, onApprove, onReject, onSuggestChanges } =
+    props;
   const scheme = useMemo(() => schemeOf(uri), [uri]);
-  const adapter = useMemo(() => resolveAdapter(uri), [uri]);
-  const fallback = <FallbackEmpty scheme={scheme} />;
+  const primary = useMemo(() => resolveAdapter(uri), [uri]);
+  // Probe the wildcard bucket directly. Per PRD §3.4 tier-3 "Always works"
+  // — its matches() returns true universally — so passing the wildcard
+  // sentinel URI is equivalent to passing the original URI for the
+  // contractual tier-3 adapter.
+  const tier3 = useMemo(() => resolveAdapter(TIER3_URI), []);
+  const placeholder = <FallbackEmpty scheme={scheme} />;
 
-  if (!adapter) {
-    return fallback;
+  let chosenNode: ReactElement | null = null;
+  let chosenLabel: "primary" | "tier3" | "placeholder" = "placeholder";
+  let primaryFailure: "throw" | "timeout" | null = null;
+  let tier3Failure: "throw" | "timeout" | null = null;
+
+  if (primary) {
+    const primaryRender = callAdapter(primary, state, pendingDiff);
+    if (primaryRender.node !== null) {
+      chosenNode = primaryRender.node;
+      chosenLabel = "primary";
+    } else {
+      primaryFailure = primaryRender.timedOut ? "timeout" : "throw";
+    }
   }
 
-  const { node, timedOut, threw } = renderAdapterSafely(adapter, fallback);
-  if (timedOut) {
+  if (chosenNode === null && tier3 && tier3 !== primary) {
+    const tier3Render = callAdapter(tier3, state, pendingDiff);
+    if (tier3Render.node !== null) {
+      chosenNode = tier3Render.node;
+      chosenLabel = "tier3";
+    } else {
+      tier3Failure = tier3Render.timedOut ? "timeout" : "throw";
+    }
+  }
+
+  if (primary && primaryFailure) {
     console.warn(
-      `TcSurfaceMount: adapter for scheme "${adapter.scheme}" exceeded ${RENDER_BUDGET_MS}ms render budget; falling back.`,
-    );
-  } else if (threw) {
-    console.warn(
-      `TcSurfaceMount: adapter for scheme "${adapter.scheme}" threw during renderCurrent; falling back.`,
+      `TcSurfaceMount: adapter for scheme "${primary.scheme}" ${
+        primaryFailure === "timeout"
+          ? `exceeded ${RENDER_BUDGET_MS}ms render budget`
+          : "threw during render"
+      }; falling back${tier3 && tier3 !== primary ? " to tier-3" : ""}.`,
     );
   }
+  if (tier3Failure) {
+    console.warn(
+      `TcSurfaceMount: tier-3 adapter ${
+        tier3Failure === "timeout"
+          ? `exceeded ${RENDER_BUDGET_MS}ms render budget`
+          : "threw during render"
+      }; falling back to placeholder.`,
+    );
+  }
+
+  const errored = chosenNode === null;
+  const renderedChild = chosenNode ?? placeholder;
 
   const handleBoundaryError = (error: unknown): void => {
     console.warn(
-      `TcSurfaceMount: adapter for scheme "${adapter.scheme}" threw during commit; falling back.`,
+      `TcSurfaceMount: ${chosenLabel} adapter for scheme "${
+        scheme || "(unknown)"
+      }" threw during commit; falling back.`,
       error,
     );
   };
 
+  const showControls = Boolean(pendingDiff);
+
   return (
-    <AdapterBoundary
-      onError={handleBoundaryError}
-      fallback={fallback}
-      errored={timedOut || threw}
+    <div
+      data-testid="tc-surface-mount"
+      data-tier={chosenLabel}
+      style={rootStyle}
     >
-      {node}
-    </AdapterBoundary>
+      <div style={contentStyle}>
+        <AdapterBoundary
+          onError={handleBoundaryError}
+          fallback={placeholder}
+          errored={errored}
+        >
+          {renderedChild}
+        </AdapterBoundary>
+      </div>
+      {showControls && pendingDiff ? (
+        <HostControls
+          diffId={pendingDiff.meta.diffId}
+          onApprove={onApprove}
+          onReject={onReject}
+          onSuggestChanges={onSuggestChanges}
+        />
+      ) : null}
+    </div>
   );
 }
+
+const rootStyle: CSSProperties = {
+  display: "flex",
+  flexDirection: "column",
+  gap: 12,
+  width: "100%",
+};
+
+const contentStyle: CSSProperties = {
+  display: "flex",
+  flexDirection: "column",
+  minHeight: 0,
+};
+
+const controlsRowStyle: CSSProperties = {
+  display: "flex",
+  gap: 8,
+  justifyContent: "flex-end",
+  paddingTop: 4,
+};
+
+const primaryButtonStyle: CSSProperties = {
+  background: "#c2ff5a",
+  color: "#101113",
+  border: "none",
+  borderRadius: 8,
+  padding: "8px 14px",
+  fontSize: 12,
+  fontWeight: 600,
+  cursor: "pointer",
+};
+
+const secondaryButtonStyle: CSSProperties = {
+  background: "transparent",
+  color: "#f4f5f6",
+  border: "1px solid #2a2d31",
+  borderRadius: 8,
+  padding: "8px 14px",
+  fontSize: 12,
+  fontWeight: 600,
+  cursor: "pointer",
+};
 
 const fallbackStyle: CSSProperties = {
   padding: 16,

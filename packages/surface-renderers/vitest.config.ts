@@ -8,5 +8,6 @@ export default defineConfig({
     setupFiles: ["./src/test/setup.ts"],
     globals: false,
     css: false,
+    exclude: ["**/__lint-negatives__/**", "**/node_modules/**", "**/dist/**"],
   },
 });
