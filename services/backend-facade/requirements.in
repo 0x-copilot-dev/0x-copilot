@@ -13,4 +13,4 @@ opentelemetry-instrumentation-fastapi==0.62b1
 opentelemetry-instrumentation-httpx==0.62b1
 # Required by SAML ACS endpoint (A5) which parses the IdP's form-encoded
 # SAMLResponse POST. Same dep starlette suggests when form parsing is used.
-python-multipart==0.0.20
+python-multipart==0.0.28
