@@ -18,6 +18,15 @@ export {
 } from "./TcSwimlanes";
 // === end Phase 2-C ===
 
+// === Phase 2-D tc-chat ===
+export { TcChat, type TcChatProps } from "./TcChat";
+export {
+  SwimlaneScrubProvider,
+  useSwimlaneScrub,
+  type SwimlaneScrubState,
+} from "./SwimlaneScrubContext";
+// === end Phase 2-D ===
+
 // === Phase 2-E inline-diff state-machine ===
 export {
   nextInlineDiffState,
