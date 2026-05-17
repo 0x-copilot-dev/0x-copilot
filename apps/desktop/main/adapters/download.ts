@@ -98,11 +98,12 @@ export async function runDownloadOnStart(
 
   for (const candidate of list.value.adapters) {
     if (!isValidCandidate(candidate)) {
+      const raw = candidate as { scheme?: string; version?: number } | null;
       rejected += 1;
       deps.auditLog.emit({
         kind: "adapter.download.rejected",
-        scheme: candidate?.scheme ?? "<unknown>",
-        version: candidate?.version ?? -1,
+        scheme: raw?.scheme ?? "<unknown>",
+        version: raw?.version ?? -1,
         reason: "invalid_payload",
       });
       continue;
