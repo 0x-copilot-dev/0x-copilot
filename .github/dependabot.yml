@@ -76,6 +76,15 @@ updates:
         update-types:
           - minor
           - patch
+    ignore:
+      # marshmallow 4 is unreachable while we depend on langchain-community
+      # (it pulls in dataclasses-json==0.6.7, which hard-pins marshmallow<4).
+      # No newer dataclasses-json exists. Re-enable when langchain-community
+      # ships a release that uses a marshmallow-4-compatible
+      # dataclasses-json.
+      - dependency-name: marshmallow
+        update-types:
+          - version-update:semver-major
     reviewers:
       - enterprise-search/ai-runtime-owners
       - enterprise-search/security-reviewers
