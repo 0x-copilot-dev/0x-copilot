@@ -176,6 +176,29 @@ export {
 } from "./thread-canvas";
 // === end Phase 2-C ===
 
+// === Phase 2-D tc-chat ===
+export {
+  TcChat,
+  type TcChatProps,
+  SwimlaneScrubProvider,
+  useSwimlaneScrub,
+  type SwimlaneScrubState,
+} from "./thread-canvas";
+export {
+  Composer,
+  type ComposerProps,
+  ToolPicker,
+  type ToolPickerProps,
+  type ToolDescriptor,
+  ModelPicker,
+  type ModelPickerProps,
+  type ModelDescriptor,
+  MentionPopover,
+  type MentionPopoverProps,
+  type MentionCandidate,
+} from "./composer";
+// === end Phase 2-D ===
+
 // === Phase 2-E inline-diff state-machine ===
 export {
   nextInlineDiffState,
