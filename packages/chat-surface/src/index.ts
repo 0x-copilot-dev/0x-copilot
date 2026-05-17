@@ -369,9 +369,19 @@ export {
 } from "./destinations/inbox";
 export {
   TodosDestination,
+  TodosPanel,
+  bucketTodos,
   type Todo,
-  type TodoStatusFilter,
+  type TodoExtraction,
+  type TodoPriority,
+  type TodoSectionKey,
+  type TodoSource,
+  type TodosDestinationProps,
+  type TodosFilterSlug,
+  type TodosPanelProps,
   type TodosPayload,
+  type TodosProjectChip,
+  type TodosSavedFilter,
 } from "./destinations/todos";
 export { ProjectsDestination, type Project } from "./destinations/projects";
 export {
