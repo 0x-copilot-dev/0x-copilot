@@ -52,8 +52,14 @@ function withTransport(transport: Transport, children: ReactNode): ReactNode {
 }
 
 const SAMPLE_TOOLS: ReadonlyArray<ToolDescriptor> = [
-  { name: "gmail.draft.create", label: "Gmail draft" },
-  { name: "sheets.cell.set", label: "Set cell", description: "Mutate a cell" },
+  { name: "gmail.draft.create", label: "Gmail draft", kind: "mcp" },
+  {
+    name: "sheets.cell.set",
+    label: "Set cell",
+    description: "Mutate a cell",
+    kind: "mcp",
+  },
+  { name: "research", label: "Research", kind: "skill" },
 ];
 
 describe("ToolPicker", () => {
@@ -205,43 +211,9 @@ describe("ToolPicker", () => {
   });
 
   /* Unified Tools popover (chat1.md L805-820): "skills + MCPs combined
-   * in a single popover, sectioned". Tools without an explicit `kind`
-   * fall into the MCPs section — the historical contract of
-   * /v1/mcp/tools. */
-  it("renders Skills and MCPs sections when both kinds are present", async () => {
-    const { transport } = makeTransport(() =>
-      Promise.resolve({
-        tools: [
-          { name: "summarize", label: "Summarize", kind: "skill" },
-          { name: "gmail.draft.create", label: "Gmail draft", kind: "mcp" },
-        ],
-      }),
-    );
-    render(
-      withTransport(
-        transport,
-        <ToolPicker
-          open={true}
-          selectedTools={[]}
-          onToggle={() => {}}
-          onClose={() => {}}
-        />,
-      ),
-    );
-    await waitFor(() => {
-      expect(
-        screen.getByTestId("tool-picker-section-skills"),
-      ).toBeInTheDocument();
-    });
-    expect(screen.getByTestId("tool-picker-section-mcps")).toBeInTheDocument();
-    expect(screen.getByText("Summarize")).toBeInTheDocument();
-    expect(screen.getByText("Gmail draft")).toBeInTheDocument();
-  });
-
-  it("hides the Skills section when no skill-kind tools are returned", async () => {
-    /* Historical /v1/mcp/tools responses had no `kind` — those rows
-     * land in MCPs and Skills should be absent rather than render an
-     * empty section heading. */
+   * in a single popover, sectioned". `kind` is required at the api-types
+   * boundary; the backend's ToolCatalog tags each row at aggregation. */
+  it("partitions entries into Skills and MCPs sections by kind", async () => {
     const { transport } = makeTransport(() =>
       Promise.resolve({ tools: SAMPLE_TOOLS }),
     );
@@ -256,11 +228,41 @@ describe("ToolPicker", () => {
         />,
       ),
     );
-    await screen.findByText("Gmail draft");
+    const skillsSection = await screen.findByTestId(
+      "tool-picker-section-skill",
+    );
+    const mcpsSection = screen.getByTestId("tool-picker-section-mcp");
+    expect(skillsSection).toHaveTextContent("Skills");
+    expect(skillsSection).toHaveTextContent("Research");
+    expect(skillsSection).not.toHaveTextContent("Gmail draft");
+    expect(mcpsSection).toHaveTextContent("MCPs");
+    expect(mcpsSection).toHaveTextContent("Gmail draft");
+    expect(mcpsSection).toHaveTextContent("Set cell");
+    expect(mcpsSection).not.toHaveTextContent("Research");
+  });
+
+  it("hides the Skills section when no skill entries are present", async () => {
+    const onlyMcps: ReadonlyArray<ToolDescriptor> = [
+      { name: "gmail.draft.create", label: "Gmail draft", kind: "mcp" },
+    ];
+    const { transport } = makeTransport(() =>
+      Promise.resolve({ tools: onlyMcps }),
+    );
+    render(
+      withTransport(
+        transport,
+        <ToolPicker
+          open={true}
+          selectedTools={[]}
+          onToggle={() => {}}
+          onClose={() => {}}
+        />,
+      ),
+    );
+    await screen.findByTestId("tool-picker-section-mcp");
     expect(
-      screen.queryByTestId("tool-picker-section-skills"),
+      screen.queryByTestId("tool-picker-section-skill"),
     ).not.toBeInTheDocument();
-    expect(screen.getByTestId("tool-picker-section-mcps")).toBeInTheDocument();
   });
 
   it("does not refetch when re-opened after a successful first load", async () => {

@@ -7,6 +7,12 @@ import {
 } from "react";
 import { createPortal } from "react-dom";
 
+import type {
+  ToolDescriptor,
+  ToolKind,
+  ToolListResponse,
+} from "@enterprise-search/api-types";
+
 import { useTransport } from "../providers/TransportProvider";
 
 /* Unified Tools popover.
@@ -15,20 +21,13 @@ import { useTransport } from "../providers/TransportProvider";
  * single popover, sectioned)". One popover, two sections. The trigger
  * button in the composer is also a single button — see Composer.tsx.
  *
- * Wire shape: the transport returns a flat list at /v1/mcp/tools. Each
- * descriptor optionally carries a `kind` ("skill" | "mcp"). Older
- * responses without `kind` fall into the MCPs section (the historical
- * meaning of /v1/mcp/tools). When the backend ships a skills bundle
- * with kind="skill" the same UI lights up — no breaking change. */
+ * Wire shape: the transport returns ToolListResponse at /v1/mcp/tools.
+ * Each ToolDescriptor carries kind: "skill" | "mcp" — the discriminator
+ * the backend tags at aggregation time (services/backend ToolCatalog).
+ * Single source of truth: ToolDescriptor + ToolKind live in api-types;
+ * this file re-exports them as a convenience but never redefines. */
 
-export type ToolKind = "skill" | "mcp";
-
-export interface ToolDescriptor {
-  readonly name: string;
-  readonly label: string;
-  readonly description?: string;
-  readonly kind?: ToolKind;
-}
+export type { ToolDescriptor, ToolKind } from "@enterprise-search/api-types";
 
 export interface ToolPickerProps {
   readonly open: boolean;
@@ -43,10 +42,6 @@ type LoadState =
   | { readonly status: "loading" }
   | { readonly status: "ready"; readonly tools: ReadonlyArray<ToolDescriptor> }
   | { readonly status: "error" };
-
-interface ToolListResponse {
-  readonly tools?: ReadonlyArray<ToolDescriptor>;
-}
 
 export function ToolPicker(props: ToolPickerProps): ReactNode {
   const { open, selectedTools, onToggle, onClose, portalTarget } = props;
@@ -151,48 +146,47 @@ function ToolPickerBody(props: BodyProps): ReactNode {
       </div>
     );
   }
-  /* Partition by kind. Anything without `kind` goes to MCPs — that's
-   * the historical contract of /v1/mcp/tools. Skills only appear when
-   * the server explicitly tags them. */
+  /* Partition by kind. The backend's ToolCatalog always tags `kind`
+   * (skill | mcp) at aggregation — single source of truth lives in
+   * api-types. Empty sections auto-hide so the popover stays clean. */
   const skills = state.tools.filter((t) => t.kind === "skill");
-  const mcps = state.tools.filter((t) => t.kind !== "skill");
+  const mcps = state.tools.filter((t) => t.kind === "mcp");
 
   return (
     <div style={sectionedListStyle}>
-      {skills.length > 0 ? (
-        <ToolSection
-          title="Skills"
-          tools={skills}
-          selectedTools={selectedTools}
-          onToggle={onToggle}
-          testId="tool-picker-section-skills"
-        />
-      ) : null}
-      {mcps.length > 0 ? (
-        <ToolSection
-          title="MCPs"
-          tools={mcps}
-          selectedTools={selectedTools}
-          onToggle={onToggle}
-          testId="tool-picker-section-mcps"
-        />
-      ) : null}
+      <ToolSection
+        kind="skill"
+        title="Skills"
+        tools={skills}
+        selectedTools={selectedTools}
+        onToggle={onToggle}
+      />
+      <ToolSection
+        kind="mcp"
+        title="MCPs"
+        tools={mcps}
+        selectedTools={selectedTools}
+        onToggle={onToggle}
+      />
     </div>
   );
 }
 
 interface SectionProps {
+  readonly kind: ToolKind;
   readonly title: string;
   readonly tools: ReadonlyArray<ToolDescriptor>;
   readonly selectedTools: ReadonlyArray<string>;
   readonly onToggle: (name: string) => void;
-  readonly testId: string;
 }
 
 function ToolSection(props: SectionProps): ReactNode {
-  const { title, tools, selectedTools, onToggle, testId } = props;
+  const { kind, title, tools, selectedTools, onToggle } = props;
+  if (tools.length === 0) {
+    return null;
+  }
   return (
-    <div data-testid={testId} style={sectionStyle}>
+    <section data-testid={`tool-picker-section-${kind}`} style={sectionStyle}>
       <div style={sectionHeaderStyle}>{title}</div>
       <ul style={listStyle}>
         {tools.map((t) => {
@@ -221,7 +215,7 @@ function ToolSection(props: SectionProps): ReactNode {
           );
         })}
       </ul>
-    </div>
+    </section>
   );
 }
 

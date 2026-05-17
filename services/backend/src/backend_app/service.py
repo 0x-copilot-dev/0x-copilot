@@ -52,6 +52,9 @@ from backend_app.contracts import (
     SkillRecord,
     SkillResponse,
     SkillSourceType,
+    ToolKind,
+    ToolListEntry,
+    ToolListResponse,
     UpdateMcpServerRequest,
     UpdateSkillRequest,
     TokenEnvelope,
@@ -1183,6 +1186,65 @@ class SkillRegistryService:
             pool = PostgresConnectionPool.shared(database_url)
             return PostgresSkillStore(pool=pool)
         return InMemorySkillStore()
+
+
+class ToolCatalogService:
+    """Aggregates user-installed skills and registered MCP servers into the
+    sectioned listing the composer Tools popover renders.
+
+    The two underlying stores own their own access checks (caller-supplied
+    org/user are normalized to the verified identity by the route layer).
+    This service does not own a store of its own — it is a thin projection
+    that tags each row with a :class:`ToolKind` discriminator so the
+    frontend's Skills / MCPs partition has a single source of truth.
+
+    Only **invocable** entries are returned: enabled skills, and MCP servers
+    that are enabled and authenticated. Listing an unauthenticated MCP here
+    would put a row in the composer the agent can't actually use; install
+    and connect flows live elsewhere (``/v1/mcp/catalog``, the connector
+    popover).
+    """
+
+    def __init__(
+        self,
+        *,
+        mcp_service: McpRegistryService,
+        skill_service: SkillRegistryService,
+    ) -> None:
+        self._mcp = mcp_service
+        self._skills = skill_service
+
+    def list_tools(self, *, org_id: str, user_id: str) -> ToolListResponse:
+        # Route through ``list_internal_cards`` on each registry so the
+        # invariants those methods own (preloaded skill seeding, enabled
+        # filter on skills) are preserved instead of duplicated here.
+        skill_cards = self._skills.list_internal_cards(
+            org_id=org_id, user_id=user_id
+        ).skills
+        skill_entries = [
+            ToolListEntry(
+                name=card.name,
+                label=card.display_name,
+                description=card.description or None,
+                kind=ToolKind.SKILL,
+            )
+            for card in skill_cards
+        ]
+        mcp_entries = [
+            ToolListEntry(
+                name=record.server_id,
+                label=record.display_name,
+                description=record.description or None,
+                kind=ToolKind.MCP,
+            )
+            for record in self._mcp.store.list_servers(org_id=org_id, user_id=user_id)
+            if record.enabled and record.auth_state == McpAuthState.AUTHENTICATED
+        ]
+        # Stable order: skills first (the popover renders them on top), then
+        # MCPs. Within each kind, sort by label for deterministic UX.
+        skill_entries.sort(key=lambda e: e.label.casefold())
+        mcp_entries.sort(key=lambda e: e.label.casefold())
+        return ToolListResponse(tools=tuple(skill_entries + mcp_entries))
 
 
 class SkillMarkdownParser:

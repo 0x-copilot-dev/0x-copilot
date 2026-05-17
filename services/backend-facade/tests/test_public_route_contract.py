@@ -13,6 +13,7 @@ def test_openapi_includes_core_product_paths() -> None:
     required = (
         "/v1/session",
         "/v1/mcp/servers",
+        "/v1/mcp/tools",
         "/v1/agent/conversations",
         "/v1/agent/runs",
         "/v1/agent/models",
