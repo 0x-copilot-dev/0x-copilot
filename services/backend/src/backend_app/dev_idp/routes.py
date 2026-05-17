@@ -17,7 +17,7 @@ import os
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
-from fastapi import APIRouter, FastAPI, HTTPException, Request, status
+from fastapi import APIRouter, Depends, FastAPI, HTTPException, Request, status
 from pydantic import BaseModel, Field
 
 from backend_app.contracts import OrganizationRecord, UserRecord
@@ -28,6 +28,7 @@ from backend_app.dev_idp.personas import (
     PersonaDirectory,
     PersonaLoader,
 )
+from backend_app.identity.rbac import public_route
 from backend_app.identity.store import IdentityStore
 
 
@@ -89,7 +90,16 @@ def _summarise(directory: PersonaDirectory, persona: DevPersona) -> DevPersonaSu
 
 
 def _build_router(loader: PersonaLoader) -> APIRouter:
-    router = APIRouter(prefix="/v1/dev", tags=["dev-idp"])
+    # Dev-only IdP. The whole router is only registered when
+    # BACKEND_ENVIRONMENT=development; both routes are intentionally
+    # unauthenticated (the mint endpoint *is* the auth bootstrap), so we
+    # declare publicness explicitly at the router level for the A10
+    # default-deny scope check.
+    router = APIRouter(
+        prefix="/v1/dev",
+        tags=["dev-idp"],
+        dependencies=[Depends(public_route())],
+    )
 
     @router.get("/personas", response_model=DevPersonaListResponse)
     def list_personas() -> DevPersonaListResponse:

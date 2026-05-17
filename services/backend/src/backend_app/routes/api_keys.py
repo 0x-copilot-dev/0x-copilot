@@ -38,7 +38,7 @@ from backend_app.api_keys.auth import (
 from backend_app.api_keys.store import ApiKeyRow, ApiKeyStore
 from backend_app.auth import BackendServiceAuthenticator
 from backend_app.contracts import IdentityAuditEventRecord
-from backend_app.identity.rbac import RequireScopes
+from backend_app.identity.rbac import RequireScopes, public_route
 from backend_app.identity.store import IdentityStore
 
 
@@ -506,6 +506,11 @@ def register_api_key_routes(
     @app.post(
         "/internal/v1/auth/api-keys/verify",
         response_model=VerifyApiKeyResponse,
+        # A10 default-deny: the bearer being verified IS the auth here, so
+        # the route can't gate on a session scope. Mark public to declare
+        # the intent explicitly; the service-token guard inside the body
+        # still keeps this off the public surface.
+        dependencies=[Depends(public_route())],
     )
     def verify_api_key(
         request: Request,
