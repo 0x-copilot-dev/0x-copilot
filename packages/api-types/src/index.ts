@@ -276,7 +276,8 @@ export type RuntimeApiEventType =
   | "subagent_fleet_started"
   | "subagent_fleet_finished"
   | "subagent_paused"
-  | "subagent_resumed";
+  | "subagent_resumed"
+  | "adapter_generated";
 
 export const RUNTIME_EVENT_SOURCES = [
   "main_agent",
@@ -332,6 +333,7 @@ export const RUNTIME_API_EVENT_TYPES = [
   "subagent_fleet_finished",
   "subagent_paused",
   "subagent_resumed",
+  "adapter_generated",
 ] as const satisfies readonly RuntimeApiEventType[];
 
 export const RUNTIME_ACTIVITY_KINDS = [
@@ -1748,6 +1750,12 @@ export interface RuntimeEventPayloadByType {
    * `task_id == parent_task_id == supervisor_call_id`. */
   subagent_paused: SubagentPausedPayload;
   subagent_resumed: SubagentResumedPayload;
+  /** Phase 6B — emitted when the tier-2 render-adapter generator produces
+   * a complete `SaaSRendererAdapter` source string. The desktop's tier-2
+   * lifecycle (6C) subscribes via SSE, persists `adapter_source` to
+   * `{userData}/adapters/{scheme}-v{schema_version}.js`, and hands it to
+   * the local quality gate (6D). */
+  adapter_generated: AdapterGeneratedPayload;
 }
 
 export interface CompressionNotePayload {
@@ -1804,6 +1812,27 @@ export interface SubagentResumedPayload {
   approval_id?: string;
   /** The event_id of the resolution event for cross-linking. */
   source_event_id?: string | null;
+}
+
+/** Phase 6B — constrained layout templates the agent code-gen capability
+ *  is permitted to emit. Mirrors `LayoutTemplate` in
+ *  `services/ai-backend/.../render_adapter_generator/models.py`. */
+export type AdapterLayoutTemplate =
+  | "form"
+  | "table"
+  | "kanban"
+  | "definition-list";
+
+/** Phase 6B — payload of the `adapter_generated` run event. Carries the
+ *  complete TypeScript source for one tier-2 `SaaSRendererAdapter` that
+ *  the desktop persists and installs through its tier-2 lifecycle. */
+export interface AdapterGeneratedPayload {
+  scheme: string;
+  layout: AdapterLayoutTemplate;
+  schema_version: number;
+  adapter_source: string;
+  generated_at: string;
+  generator_model: string;
 }
 
 // PR 1.3 — Workspace-pane Draft artifact contracts. Mirrors
