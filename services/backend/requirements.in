@@ -1,15 +1,15 @@
 # Top-level runtime + test deps for services/backend. Regenerate lock:
 #   cd services/backend && .venv/bin/pip-compile --generate-hashes --resolver=backtracking requirements.in -o requirements.txt
-cryptography>=44.0.0
+cryptography==47.0.0
 fastapi==0.136.1
 # PR 8.3 — UploadFile / multipart parsing on the avatar route.
-python-multipart>=0.0.20
+python-multipart==0.0.28
 httpx==0.28.1
 psycopg[binary]==3.3.3
-psycopg_pool>=3.2.0
+psycopg_pool==3.3.1
 pydantic==2.13.3
 python-dotenv==1.2.2
-PyYAML>=6.0
+PyYAML==6.0.3
 uvicorn==0.46.0
 pytest==9.0.3
 opentelemetry-api==1.41.1
@@ -20,7 +20,7 @@ opentelemetry-instrumentation-httpx==0.62b1
 opentelemetry-instrumentation-psycopg==0.62b1
 yoyo-migrations==9.0.0
 argon2-cffi==23.1.0
-pyjwt[crypto]==2.9.0
+pyjwt[crypto]==2.12.0
 pyotp==2.9.0
 webauthn==2.3.0
 # SAML 2.0 SSO (A5). Wraps OneLogin's python3-saml. Requires xmlsec1 system
