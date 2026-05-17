@@ -427,74 +427,52 @@ Destinations call `usePort("badge")` / `usePort("notification")` etc. Never `if 
 
 ### 5.5 Token-usage tracking — every LLM call is accounted and traceable
 
-**Requirement (new, system-level):** every LLM call made by Atlas — from a chat run, a todo-extraction, a routine fire, a memory-retrieval, anything — must:
+**Requirement (system-level):** every LLM call made by Atlas — from a chat run, a todo-extraction, a routine fire, a memory-retrieval, anything — must be tagged, recorded, and queryable. Tenant-isolated. PII-free. Single integration point so attribution is uniform across phases.
 
-1. **Tag itself with a source**: `source: { kind, id }` where `kind ∈ ItemKind` (cross-audit §1.1) and `id` is the canonical entity ID. Example tags: `{ kind: "run", id: <run_id> }`, `{ kind: "todo_extraction", id: <extraction_id> }`, `{ kind: "routine", id: <routine_id> }`, `{ kind: "memory_retrieval", id: <retrieval_id> }`.
+**Status (2026-05-17):** the canonical implementation **already exists** in `services/ai-backend/`. Phase 0.6 ships the missing CI guard that locks the single-integration-point invariant; Phase 3 and Phase 5 extend the existing `Purpose` enum rather than introducing a parallel `(source_kind, source_id)` shape. **Do not build a parallel `llm_token_usage` table in `services/backend/`** — `runtime_run_usage` + `runtime_model_call_usage` in `services/ai-backend/` are the single source of truth.
 
-2. **Record usage**: a `token_usage` row per LLM call (or per-streamed-completion in the streaming case) in a new Postgres table `llm_token_usage` in `services/backend`:
+**The existing TU-1 implementation** (audited 2026-05-17 by Phase 0.6 agent; all paths verified):
 
-   ```sql
-   CREATE TABLE llm_token_usage (
-     id              BIGSERIAL PRIMARY KEY,
-     tenant_id       UUID NOT NULL,
-     user_id         UUID,                          -- nullable for system-triggered calls
-     source_kind     TEXT NOT NULL,                 -- ItemKind value
-     source_id       TEXT NOT NULL,                 -- entity id
-     model           TEXT NOT NULL,                 -- e.g. "claude-opus-4-7"
-     provider        TEXT NOT NULL,                 -- "anthropic" | "openai" | "google"
-     input_tokens    INTEGER NOT NULL DEFAULT 0,
-     output_tokens   INTEGER NOT NULL DEFAULT 0,
-     cached_tokens   INTEGER NOT NULL DEFAULT 0,
-     cost_usd_micro  BIGINT  NOT NULL DEFAULT 0,    -- micro-USD; computed via per-model pricing table
-     started_at      TIMESTAMPTZ NOT NULL,
-     completed_at    TIMESTAMPTZ NOT NULL,
-     request_id      TEXT NOT NULL                  -- OTel trace_id correlation
-   );
-   CREATE INDEX llm_token_usage_tenant_ts ON llm_token_usage (tenant_id, started_at DESC);
-   CREATE INDEX llm_token_usage_source ON llm_token_usage (tenant_id, source_kind, source_id);
-   CREATE INDEX llm_token_usage_user ON llm_token_usage (tenant_id, user_id, started_at DESC) WHERE user_id IS NOT NULL;
-   ```
+| Concern                                        | Existing implementation                                                                                                                                                                                                                                                                                                                                                                                                                   |
+| ---------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Single integration point                       | `services/ai-backend/src/agent_runtime/execution/deep_agent_builder.py` → `build_chat_model` → `langchain.chat_models.init_chat_model`. Every provider invocation routes here.                                                                                                                                                                                                                                                            |
+| Single tracker boundary                        | `services/ai-backend/src/agent_runtime/observability/usage_recorder.py` — `UsageRecorder` protocol with `PostgresUsageRecorder`, `InMemoryUsageRecorder`, `NullUsageRecorder`, `SummarizationUsageRecorder` implementations.                                                                                                                                                                                                              |
+| Storage                                        | Two tables in `services/ai-backend/` Postgres: `runtime_run_usage` (per-run rollup, migration `0004`) and `runtime_model_call_usage` (per-call detail, migration `0005`). Both carry all 7 token kinds (`input`, `output`, `cached_input`, `cache_creation_input`, etc.), `cost_micro_usd`, `pricing_id`, `pricing_version`, plus `org_id` + `user_id` + `conversation_id` + `run_id` + `trace_id` dimensions and `org_id`-first indices. |
+| Attribution dimensions                         | `RuntimeModelCallUsageRecord` carries `run_id`, `conversation_id`, `task_id`, `subagent_id`, `connector_slug`, **`purpose`** (the attribution discriminator), `originating_tool_call_id`, `originating_tool_name`.                                                                                                                                                                                                                        |
+| `Purpose` enum (the attribution discriminator) | `services/ai-backend/src/agent_runtime/observability/attribution.py` — `Purpose: StrEnum` with `MAIN`, `TOOL_PLANNING`, `TOOL_INTERPRETATION`, `SUBAGENT_WORK`, `CONTEXT_COMPRESSION`. Deterministically derived per call via `Purpose.derive()`. Cross-component aggregation already works: `GROUP BY purpose`.                                                                                                                          |
+| Pricing                                        | `services/ai-backend/src/agent_runtime/pricing/` — `CostCalculator` with banker's rounding, `ModelPricingCatalog` with time-keyed lookup + LRU cache, LiteLLM-sourced seeds, versioned `ModelPricingRecord`. Auditable via `pricing/seeds/` + `pricing/litellm_source.py`.                                                                                                                                                                |
+| Per-provider extraction                        | `services/ai-backend/src/agent_runtime/observability/token_usage.py` — `NormalizedTokenUsage` + per-provider extractors (`OpenAIProviderTokenUsageExtractor`, `AnthropicProviderTokenUsageExtractor`, `GeminiProviderTokenUsageExtractor`) + LCD fallback + dispatch registry.                                                                                                                                                            |
+| Query API                                      | `services/ai-backend/src/runtime_api/http/routes.py` mounts at `/v1/usage`: `/me`, `/me/conversations`, `/runs/{run_id}`, `/conversations/{conversation_id}`, `/org`, `/org/subagents`, `/org/purpose`. RBAC enforced; tenant-first filtering. Proxied through `services/backend-facade/src/backend_facade/app.py`.                                                                                                                       |
+| TypeScript contract                            | `packages/api-types/src/index.ts` — `UsageMeResponse`, `UsageOrgResponse`, `UsageOrgSubagentsResponse`, `UsageOrgPurposeResponse`, `RunUsageBreakdown`, `ConversationUsageResponse`, `UsagePeriod`, all row types.                                                                                                                                                                                                                        |
+| Tests                                          | `services/ai-backend/tests/unit/runtime_api/test_usage_routes.py` + `tests/unit/agent_runtime/observability/`.                                                                                                                                                                                                                                                                                                                            |
 
-3. **Be queryable** via `/v1/usage`:
+**What Phase 0.6 shipped (commit `4939186`):**
 
-   ```
-   GET /v1/usage?from=<iso>&to=<iso>&group_by=source_kind|user_id|model|day
-   → { rows: [{ group, input_tokens, output_tokens, cached_tokens, cost_usd_micro, call_count }, …], totals: {...} }
-   ```
+- `tools/check_llm_provider_imports.py` — AST-based pre-commit guard that flags any direct import of `anthropic`, `openai`, `google.generativeai`, `google.genai`, `langchain_anthropic`, `langchain_openai`, `langchain_google_genai`, `langchain_google_vertexai` outside `deep_agent_builder.py`. Inline `# allow-direct-llm-import: <reason>` marker exempts justified one-offs.
+- `tools/test_check_llm_provider_imports.py` — 12 self-tests including planted-violation end-to-end + baseline that real tree passes (403 files).
+- `.pre-commit-config.yaml` — wires the guard scoped to `services/(ai-backend|backend|backend-facade)/src/.*\.py$`.
 
-   - Owner-only by default; tenant admins see all-users rollup.
-   - Drill-down: `/v1/usage/sources?source_kind=todo_extraction&from=…&to=…` returns per-extraction rows.
+This locks the single-integration-point invariant going forward. Any future LLM call MUST route through `build_chat_model`; the existing `UsageRecorder` captures the row.
 
-4. **Be enforced at a single integration point**: all model invocation in `services/ai-backend` (and any other service making LLM calls — backend's todo-extractor, routine pipeline) goes through `agent_runtime/observability/llm_call_tracker.py` (NEW). It wraps every provider client call:
+**Phase 3 / Phase 5 attribution rule (binding):**
 
-   ```python
-   async with track_llm_call(source=Source(kind="todo_extraction", id=extraction_id),
-                              model=cfg.model,
-                              request_id=ctx.request_id) as tracker:
-       response = await provider.invoke(...)
-       tracker.record(response.usage)
-   ```
+Out-of-run LLM calls (todo-extraction, routine fires that wrap a run, memory retrieval) attribute via the **existing `Purpose` enum**, not a new `(source_kind, source_id)` shape. Phase 3 P3-A extends `Purpose` with `TODO_EXTRACTION`; Phase 5 P5-A wraps every routine fire as a regular ai-backend run with `run.source = { kind: "routine", routine_id }` so `runtime_model_call_usage` rows already attribute correctly (run_id → routine via the run's source). Aggregating "what did Todos extraction cost this month" becomes `WHERE purpose = 'todo_extraction' AND org_id = $1` against `runtime_model_call_usage`.
 
-   Direct provider client calls outside `track_llm_call` are an ESLint-equivalent CI failure for Python (pre-commit hook or test).
+**Why this is the right call (staff-engineer-grade):**
 
-5. **Owner & ship in Phase 0.6 — Token Usage Tracking** (NEW prerequisite, runs in parallel with Phase 0.5 Shared Primitives):
-   - `services/backend/src/backend_app/usage/` (NEW route module + Postgres schema)
-   - `services/backend-facade/src/backend_facade/usage_routes.py` (NEW)
-   - `packages/api-types/src/usage.ts` (NEW)
-   - `services/ai-backend/src/agent_runtime/observability/llm_call_tracker.py` (NEW; wraps every provider call)
-   - Migration: instrument the existing run pipeline's LLM calls to flow through the tracker (single integration point in `deep_agent_builder.py`)
-   - CI guard: import-graph check that no provider SDK is imported outside `llm_call_tracker.py`
-   - Tests: every existing run-test asserts that one or more `llm_token_usage` rows land per run; cross-tenant isolation; per-source query correctness; cost computation per pricing table
+- **DRY:** the existing infrastructure is complete; building a parallel `services/backend/usage/` would duplicate a working system.
+- **Single source of truth:** all usage queries hit `runtime_run_usage` / `runtime_model_call_usage`. No two-table reconciliation, no eventual-consistency between services for billing data.
+- **Service boundary respected:** usage lives next to runs/messages/events in `ai-backend`. Pushing it into `backend` would force ai-backend to write to backend's table over HTTP per LLM call — adding hop latency and a failure mode the current direct write does not have.
+- **No-op delta for Phases 1, 2, 4:** they call `build_chat_model` like every other LLM site; `UsageRecorder` already captures.
 
-6. **Tenant isolation**: every query filters `tenant_id` first.
+**Mandatory consumers:** Phase 3 Todos extraction (via new `Purpose.TODO_EXTRACTION`), Phase 5 Routines runs (via `run.source.kind = "routine"`), Phase 1 Chats runs (existing path; no work needed), Phase 6 Library indexing (when it lands; new Purpose value), Phase 11 Memory retrieval (when it lands; new Purpose value), and any future LLM-calling code path.
 
-7. **PII**: NEVER record message content. Only token counts + source IDs.
+**Tenant isolation, PII, retention:** all enforced by the existing implementation (queries are `org_id`-first; rows carry token counts + dimensions only, no message content; retention is configured at the Postgres level matching the audit-window policy).
 
-8. **Retention**: token-usage rows retained 730 days (audit + billing window). Hard-deleted in tenant-level GDPR-delete.
+**Follow-up TODOs (deferred, not blocking):**
 
-**Consumers (mandatory):** Phase 3 Todos extraction, Phase 5 Routines runs, Phase 1 Chats runs (existing path, instrumented in 0.6), Phase 6 Library indexing (when it lands), Phase 11 Memory retrieval (when it lands), and any future LLM-calling code path.
-
-**Dispatch:** Phase 0.6 is a single agent (see implementation-plan.md §2 for the new row). It runs in parallel with Phase 0.5 Shared Primitives. Neither has a Phase 1+ dependency, so destinations gate on `Phase 0.5 AND Phase 0.6 both merged`.
+- Anthropic prompt-caching: `NormalizedTokenUsage` separates `cached_input_tokens` (cache-read) from `cache_creation_input_tokens` (cache-write), but `CostCalculator.compute` currently bills cached at one rate and folds `cache_creation_input_tokens` into gross `input_tokens` (full rate). If Anthropic exposes a distinct cache-write rate column, add a third pricing column.
+- Dynamic-import bypass of the CI guard (`importlib`) is not caught by AST scan. Acceptable; reviewers ask "why?".
 
 ---
 
@@ -599,3 +577,28 @@ See [implementation-plan.md](implementation-plan.md) §3 (Phase 2) for the full 
 - **Q8 SSE drop-off** — exponential backoff range explicitly **1s → 30s**. No "paused" indicator surfaced to the user. Affects P2-B chat-surface SSE reconnect logic.
 
 Q7 quick-action customization: "do whatever is easy" — interpreted as **server-driven defaults only in Phase 2**; admin endpoint deferred to Wave 5+. Sub-PRD recommendation aligns; no deviation.
+
+### 9.7 Phase 5 Routines — all 14 questions resolved (2026-05-17)
+
+Decisions are binding for P5-A backend + P5-B chat-surface. Sub-PRD `destinations/routines-prd.md` §16 enumerates the questions; this section records the resolution.
+
+| #   | Question                                        | Decision                                                                                                                                                                               |
+| --- | ----------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| 1   | Code-routines (repo + env / executor + sandbox) | **Wire shape lands now (forwards-compatible); executor + sandbox deferred to Wave 6**. Yes we will implement it; the Wave/Phase terminology is loose — Phase 6 = Wave 6.               |
+| 2   | Manual run-now ACL                              | **Default owner-only; override field `permissions.manual_fire = "owner" \| "project_members" \| "tenant"`**                                                                            |
+| 3   | Library page output mode                        | **`new_per_fire` with date stamp ("Daily briefing — 2026-05-17") default; `update_same` opt-in**                                                                                       |
+| 4   | Permission shrinkage at fire time               | **Auto-pause + Inbox CTA + manual resume**; do NOT auto-edit-down                                                                                                                      |
+| 5   | Auto-resume on permission restoration           | **NO** — avoid post-vacation re-auth surprise fires                                                                                                                                    |
+| 6   | Webhook security beyond rotating secret + IP    | **HMAC-of-payload signature as next add (next-best after secret + allowlist)**; mTLS deferred to Wave 5+. Wire shape lands now: `X-Atlas-Routine-Signature: hmac-sha256=<hex>` header. |
+| 7   | Missed-fire policy default                      | **`fire_once` (catch-up exactly once on resume; skip backlog)**. Per-routine override `missed_fire_policy: "fire_once" \| "fire_all" \| "skip"` is in the wire either way.             |
+| 8   | Routine quotas per tenant                       | **100 active routines per USER** (not per tenant). Manual-fires + webhook-fires quotas TBD with Phase 5 P5-A (default 500/day/user, 100k webhook-fires/day/tenant).                    |
+| 9   | Atlas-proposed cron suggestions                 | **Phase 5/6 — wire signal capture now, UX in Phase 6**                                                                                                                                 |
+| 10  | Auto-extracted "Make this a routine?" CTA       | **Phase 6**                                                                                                                                                                            |
+| 11  | Snapshot vs live agent reference at fire time   | **Live re-resolve at fire time; explicit `agent_version_pin` field forwards-compatible for users who want pinned**                                                                     |
+| 12  | Admin force-reassign owner / force-pause        | **Out of scope** (deferred indefinitely; revisit if compliance auditor flags)                                                                                                          |
+| 13  | Routine forking / templates                     | **Wave 5+** (no change from sub-PRD)                                                                                                                                                   |
+| 14  | Tenant + per-user default notification prefs    | **Per-routine controls land in wire (§3.9); Settings UI for tenant/user defaults punted to Wave 6**                                                                                    |
+
+**Token-usage attribution for Routines (cross-ref §5.5):** every routine fire is wrapped as a regular ai-backend run with `run.source = { kind: "routine", routine_id }`. Existing `runtime_model_call_usage` rows attribute correctly via the run dimension; no parallel token-usage path. Aggregating "what did this routine cost this month" becomes `WHERE run.source.routine_id = $1 AND org_id = $2`.
+
+**Code-routines wire-shape preservation (deviation note, Q1):** the user explicitly confirmed implementation in a future wave, NOT cancellation. P5-A's `packages/api-types/src/routines.ts` MUST include the forwards-compatible `code?: { repo_ref: ItemRef, env_ref: ItemRef, entry: string }` field on the routine wire shape, even though the executor + sandbox land in Wave 6. Schema gates this field behind a feature flag at the backend; the wire shape is stable.
