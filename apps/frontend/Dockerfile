@@ -10,6 +10,12 @@ COPY packages/api-types/src ./packages/api-types/src
 COPY packages/design-system/package.json ./packages/design-system/package.json
 COPY packages/design-system/tsconfig.json ./packages/design-system/tsconfig.json
 COPY packages/design-system/src ./packages/design-system/src
+COPY packages/chat-transport/package.json ./packages/chat-transport/package.json
+COPY packages/chat-transport/tsconfig.json ./packages/chat-transport/tsconfig.json
+COPY packages/chat-transport/src ./packages/chat-transport/src
+COPY packages/chat-surface/package.json ./packages/chat-surface/package.json
+COPY packages/chat-surface/tsconfig.json ./packages/chat-surface/tsconfig.json
+COPY packages/chat-surface/src ./packages/chat-surface/src
 COPY apps/frontend/package.json ./apps/frontend/package.json
 COPY apps/frontend/tsconfig.json ./apps/frontend/tsconfig.json
 COPY apps/frontend/vite.config.ts ./apps/frontend/vite.config.ts
