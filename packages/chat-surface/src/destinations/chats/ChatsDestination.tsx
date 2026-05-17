@@ -2,8 +2,10 @@ import { useState, type CSSProperties, type ReactElement } from "react";
 
 import { ChatsSidebar } from "./ChatsSidebar";
 
-const CANVAS_BACKGROUND = "#11141B";
-const TEXT_SECONDARY = "#7E8492";
+// Design tokens (see packages/design-system/src/styles.css). Settings →
+// Appearance theme/accent changes flow through via the var(--color-…) refs.
+const CANVAS_BACKGROUND = "var(--color-bg)";
+const TEXT_SECONDARY = "var(--color-text-muted)";
 
 export function ChatsDestination(): ReactElement {
   const [fullscreen, setFullscreen] = useState(false);

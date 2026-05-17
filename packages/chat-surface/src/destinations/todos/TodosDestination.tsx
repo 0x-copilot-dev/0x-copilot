@@ -60,15 +60,19 @@ const FILTERS: ReadonlyArray<FilterDescriptor> = [
   },
 ];
 
-const APP_BACKGROUND = "#0F1218";
-const PANEL_BACKGROUND = "#131722";
-const PANEL_BORDER = "#22252E";
-const PANEL_BORDER_STRONG = "#2C3140";
-const TEXT_PRIMARY = "#E4E5E9";
-const TEXT_SECONDARY = "#7E8492";
-const TEXT_FAINT = "#5A606E";
-const ACCENT = "#7B9BFF";
-const DANGER = "#E26A6A";
+// Design tokens (see packages/design-system/src/styles.css). Names are kept
+// for readability at use-sites; values are CSS variables so Settings →
+// Appearance theme/accent changes flow through automatically.
+const APP_BACKGROUND = "var(--color-bg)";
+const PANEL_BACKGROUND = "var(--color-surface)";
+const PANEL_BORDER = "var(--color-border)";
+const PANEL_BORDER_STRONG = "var(--color-border-strong)";
+const TEXT_PRIMARY = "var(--color-text)";
+const TEXT_SECONDARY = "var(--color-text-muted)";
+const TEXT_FAINT = "var(--color-text-subtle)";
+const ACCENT = "var(--color-accent)";
+const DANGER = "var(--color-danger)";
+const SKELETON_FILL = "var(--color-surface-muted)";
 
 const SKELETON_ROW_COUNT = 4;
 
@@ -112,7 +116,7 @@ function SkeletonRow({ index }: { index: number }): ReactElement {
     opacity: 0.7,
   };
   const bar: CSSProperties = {
-    backgroundColor: "#1A1E2A",
+    backgroundColor: SKELETON_FILL,
     borderRadius: 4,
     height: 12,
   };
@@ -128,7 +132,7 @@ function SkeletonRow({ index }: { index: number }): ReactElement {
           width: 18,
           height: 18,
           borderRadius: 4,
-          backgroundColor: "#1A1E2A",
+          backgroundColor: SKELETON_FILL,
         }}
       />
       <div

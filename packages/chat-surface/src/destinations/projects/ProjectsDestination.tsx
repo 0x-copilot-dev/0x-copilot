@@ -34,16 +34,21 @@ type ViewState =
   | { readonly kind: "error"; readonly message: string }
   | { readonly kind: "ready"; readonly projects: ReadonlyArray<Project> };
 
-const APP_BACKGROUND = "#0F1218";
-const PANEL_BACKGROUND = "#131722";
-const PANEL_BORDER = "#22252E";
-const PANEL_BORDER_STRONG = "#2C3140";
-const TEXT_PRIMARY = "#E4E5E9";
-const TEXT_SECONDARY = "#7E8492";
-const TEXT_FAINT = "#5A606E";
-const ACCENT = "#7B9BFF";
-const DANGER = "#E26A6A";
-const SKELETON_FILL = "#1A1E2A";
+// Design tokens (see packages/design-system/src/styles.css). Names are kept
+// for readability at use-sites; values are CSS variables so Settings →
+// Appearance theme/accent changes flow through automatically.
+const APP_BACKGROUND = "var(--color-bg)";
+const PANEL_BACKGROUND = "var(--color-surface)";
+const PANEL_BORDER = "var(--color-border)";
+const PANEL_BORDER_STRONG = "var(--color-border-strong)";
+const TEXT_PRIMARY = "var(--color-text)";
+const TEXT_SECONDARY = "var(--color-text-muted)";
+const TEXT_FAINT = "var(--color-text-subtle)";
+const ACCENT = "var(--color-accent)";
+const ACCENT_CONTRAST = "var(--color-accent-contrast)";
+const DANGER = "var(--color-danger)";
+const SKELETON_FILL = "var(--color-surface-muted)";
+const AVATAR_BG = "var(--color-border-strong)";
 
 const SKELETON_CARD_COUNT = 6;
 
@@ -85,7 +90,7 @@ function ProjectAvatar({
     borderRadius: "50%",
     overflow: "hidden",
     flexShrink: 0,
-    backgroundColor: "#2A2F3E",
+    backgroundColor: AVATAR_BG,
     color: TEXT_PRIMARY,
     display: "flex",
     alignItems: "center",
@@ -312,7 +317,7 @@ function NewProjectControl({
     borderRadius: 8,
     border: "none",
     backgroundColor: ACCENT,
-    color: "#0B0C10",
+    color: ACCENT_CONTRAST,
     fontSize: 13,
     fontWeight: 600,
     cursor: "pointer",

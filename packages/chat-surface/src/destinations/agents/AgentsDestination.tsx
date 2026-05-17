@@ -18,15 +18,18 @@ import { useRouter } from "../../providers/RouterProvider";
 import { useTransport } from "../../providers/TransportProvider";
 import type { ArtifactRoute } from "../../routing/router";
 
-const BACKGROUND = "#11141B";
-const SURFACE = "#16181F";
-const BORDER = "#22252E";
-const TEXT_PRIMARY = "#E4E5E9";
-const TEXT_SECONDARY = "#7E8492";
-const HEADER_BG = "#191C24";
-const HEADER_TEXT = "#9CA1AE";
-const ROW_HOVER = "#1B1F28";
-const ACTIVE_HIGHLIGHT = "#7B9BFF";
+// Design tokens (see packages/design-system/src/styles.css). Names are kept
+// for readability at use-sites; values are CSS variables so Settings →
+// Appearance theme/accent changes flow through automatically.
+const BACKGROUND = "var(--color-bg)";
+const SURFACE = "var(--color-bg-elevated)";
+const BORDER = "var(--color-border)";
+const TEXT_PRIMARY = "var(--color-text)";
+const TEXT_SECONDARY = "var(--color-text-muted)";
+const HEADER_BG = "var(--color-bg-elevated)";
+const HEADER_TEXT = "var(--color-text-muted)";
+const ROW_HOVER = "var(--color-surface-muted)";
+const ACTIVE_HIGHLIGHT = "var(--color-accent)";
 
 export interface AgentRunRow {
   readonly run_id: string;

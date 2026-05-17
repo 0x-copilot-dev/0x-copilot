@@ -11,14 +11,20 @@ import { useTransport } from "../../providers/TransportProvider";
 import type { ArtifactRoute } from "../../routing/router";
 
 const PANEL_WIDTH = 256;
-const BACKGROUND = "#0E1015";
-const BORDER = "#22252E";
-const TEXT_PRIMARY = "#E4E5E9";
-const TEXT_SECONDARY = "#7E8492";
-const TEXT_TERTIARY = "#5A6070";
-const ACCENT = "#7B9BFF";
-const ACTIVE_TINT = "rgba(123, 155, 255, 0.08)";
-const SEARCH_BACKGROUND = "#16181F";
+// Design tokens (see packages/design-system/src/styles.css). Names are kept
+// for readability at use-sites; values are CSS variables so Settings →
+// Appearance theme/accent changes flow through automatically.
+const BACKGROUND = "var(--color-bg)";
+const BORDER = "var(--color-border)";
+const TEXT_PRIMARY = "var(--color-text)";
+const TEXT_SECONDARY = "var(--color-text-muted)";
+const TEXT_TERTIARY = "var(--color-text-subtle)";
+const ACCENT = "var(--color-accent)";
+// Subtle accent tint for fullscreen/active rows — mirrors the design-system
+// .ui-status-pill pattern (color-mix against transparent).
+const ACTIVE_TINT = "color-mix(in srgb, var(--color-accent) 8%, transparent)";
+const SEARCH_BACKGROUND = "var(--color-bg-elevated)";
+const ERROR_TEXT = "var(--color-danger)";
 
 interface ChatsProjectThread {
   readonly id: string;
@@ -365,7 +371,7 @@ export function ChatsSidebar({
         <div
           role="alert"
           data-testid="chats-sidebar-error"
-          style={{ padding: 12, color: "#E97070", fontSize: 12 }}
+          style={{ padding: 12, color: ERROR_TEXT, fontSize: 12 }}
         >
           {data.message}
         </div>
