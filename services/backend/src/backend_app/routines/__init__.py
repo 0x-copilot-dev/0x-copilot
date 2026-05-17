@@ -1,10 +1,17 @@
-"""Routines destination (Phase 5 P5-A1) — CRUD + ACL + state machine + quota + audit.
+"""Routines destination (Phase 5) — CRUD + ACL + state machine + quota + audit + webhook ingest.
 
-Public surface: ``GET /v1/routines``, ``GET /v1/routines/{id}``,
-``POST /v1/routines``, ``PATCH /v1/routines/{id}``,
-``DELETE /v1/routines/{id}``, and ``POST /v1/routines/{id}/run``
-(manual fire). Identity is the verified session caller; tenant
-isolation is enforced at every store call.
+Public surface:
+
+* CRUD (P5-A1): ``GET /v1/routines``, ``GET /v1/routines/{id}``,
+  ``POST /v1/routines``, ``PATCH /v1/routines/{id}``,
+  ``DELETE /v1/routines/{id}``, ``POST /v1/routines/{id}/run``.
+* Webhook ingest (P5-A3): ``POST /v1/webhook/routines/{trigger_id}``
+  (public; auth IS the secret + HMAC), ``POST /v1/routines/triggers/
+  {trigger_id}/rotate-secret`` and ``GET /v1/routines/triggers/
+  {trigger_id}/webhook/secret`` (owner-only).
+
+Identity is the verified session caller; tenant isolation is enforced
+at every store call.
 
 Wire shape is canonical at ``packages/api-types/src/routines.ts``;
 the Python mirrors live in ``routines.routes``. Routes wire ACL +
@@ -31,31 +38,25 @@ State machine (api-types/src/routines.ts):
                             │                │
     (any) ──reset──▶ draft  ◀────────────────┘
 
-Errored routines must be reset to draft (so the owner edits the
-definition) before re-activating. Invalid moves return 409.
+Errored routines must be reset to draft before re-activating.
+Invalid moves return 409.
 
-Quota (cross-audit §9.7 Q8): 100 ACTIVE routines per USER (not per
-tenant). Enforced at create + at any state-machine transition
-ending in active.
+Quota (cross-audit §9.7 Q8): 100 ACTIVE routines per USER.
 
-Routine fires (P5-A1 metadata):
+Webhook (cross-audit §2.4 + §9.7 Q6):
 
-* ``routine_fires`` table records each manual / scheduler / webhook
-  fire's metadata; the actual run record lives in ai-backend via
-  ``run.source.kind = "routine"`` (cross-audit §9.7 token-usage).
-* ``POST /v1/routines/{id}/run`` writes the fire row + audit and
-  returns ``{fire_id, run_id}``. The downstream run handoff is
-  P5-A2's deliverable (run-coordinator).
+* Per-trigger rotating secret with 7-day grace, optional CIDR
+  allowlist, HMAC-of-payload signature.
+* Audit on every hit (success + failed-auth) with
+  ``context = { trigger_id, source_ip, auth_method, reason? }``.
 
 Sub-PRDs landing in sibling Phase 5 waves:
 
 * P5-A2 — scheduler (claim-queue, cron resolution, missed-fire
   catch-up) + run-coordinator (ai-backend handoff).
-* P5-A3 — webhook ingest router (separate auth-shape; ``X-Atlas-
-  Routine-Secret`` header + IP allowlist + HMAC-of-payload).
 * P5-A4 — permission intersection at fire time (auto-pause +
   Inbox CTA on shrinkage).
-* P5-B1/B2/B3 — chat-surface destination, editor, panel.
+* P5-B1/B2/B3 — chat-surface destination, editor, detail.
 * P5-C — frontend wiring.
 """
 
@@ -80,10 +81,21 @@ from backend_app.routines.store import (
     RoutineRecord,
     RoutinesStore,
 )
+from backend_app.routines.webhook import (
+    InMemoryRoutineWebhookStore,
+    RoutineWebhookSecret,
+    RoutineWebhookStore,
+    RoutineWebhookValidator,
+    WebhookAuthFailure,
+    WebhookAuthResult,
+    WebhookValidationError,
+)
+from backend_app.routines.webhook_routes import register_routines_webhook_routes
 
 __all__ = [
     "ACTIVE_ROUTINES_PER_USER_LIMIT",
     "InMemoryProjectMembershipAdapter",
+    "InMemoryRoutineWebhookStore",
     "InMemoryRoutinesStore",
     "ProjectMembershipPort",
     "RoutineAuditRecord",
@@ -94,7 +106,14 @@ __all__ = [
     "RoutineNotFound",
     "RoutineQuotaExceeded",
     "RoutineRecord",
+    "RoutineWebhookSecret",
+    "RoutineWebhookStore",
+    "RoutineWebhookValidator",
     "RoutinesService",
     "RoutinesStore",
+    "WebhookAuthFailure",
+    "WebhookAuthResult",
+    "WebhookValidationError",
     "register_routines_routes",
+    "register_routines_webhook_routes",
 ]

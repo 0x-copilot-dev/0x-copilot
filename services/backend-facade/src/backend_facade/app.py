@@ -24,6 +24,7 @@ from backend_facade.routines_routes import register_routines_routes
 from backend_facade.todos_routes import register_todos_routes
 from backend_facade.http_client import HttpClientPool, http_client
 from backend_facade.me_routes import register_me_routes
+from backend_facade.routines_webhook_routes import register_routines_webhook_routes
 from backend_facade.scim_routes import register_scim_routes
 from backend_facade.workspace_routes import register_workspace_routes
 from backend_facade.deployment_profile import (
@@ -123,6 +124,10 @@ def create_app(
     register_routines_routes(app)
     register_todos_routes(app)
     register_me_routes(app)
+    # Routines webhook ingest (P5-A3). Mounted on its own module so the
+    # secret + HMAC auth shape can never accidentally collide with the
+    # bearer-auth path used by every other facade route.
+    register_routines_webhook_routes(app)
     register_scim_routes(app)
     register_workspace_routes(app)
 
