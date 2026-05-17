@@ -29,6 +29,12 @@ export interface TransportBridgeOptions {
   // attaches the per-(workspace_id, server) bearer from safeStorage before
   // making the outbound request (D24 / PRD §6.7).
   readonly transport?: Transport;
+  // Async bearer provider invoked per outbound request. Returns null when
+  // the user is not signed in. The returned bearer is attached as
+  // `Authorization: Bearer <token>` on the request before it leaves main.
+  // Bearers never cross IPC back into the renderer — that's the whole
+  // point of the gate (PRD §6.7).
+  readonly bearerProvider?: () => Promise<string | null>;
 }
 
 // Main-process counterpart to the renderer's IpcTransport. Holds the actual
@@ -38,14 +44,26 @@ export interface TransportBridgeOptions {
 export class TransportBridge {
   readonly #transport: Transport;
   readonly #emit: StreamEventEmitter;
+  readonly #bearerProvider: (() => Promise<string | null>) | null;
   readonly #subscriptions = new Map<string, SubscriptionHandle>();
 
   constructor(emit: StreamEventEmitter, options: TransportBridgeOptions = {}) {
     this.#transport = options.transport ?? new MockTransport();
     this.#emit = emit;
+    this.#bearerProvider = options.bearerProvider ?? null;
   }
 
   async request<T>(req: TypedRequest): Promise<T> {
+    if (this.#bearerProvider !== null) {
+      const bearer = await this.#bearerProvider();
+      if (bearer !== null) {
+        const headers = {
+          ...(req.headers ?? {}),
+          authorization: `Bearer ${bearer}`,
+        };
+        return this.#transport.request<T>({ ...req, headers });
+      }
+    }
     return this.#transport.request<T>(req);
   }
 

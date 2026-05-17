@@ -1,8 +1,11 @@
 import type { IpcMain, IpcMainInvokeEvent } from "electron";
 import type { z } from "zod";
 
+import type { RendererSession } from "@enterprise-search/chat-transport";
+
 import type { TransportBridge } from "../transport-bridge";
 import {
+  AuthWorkspaceParamsSchema,
   CHANNELS,
   EmptyParamsSchema,
   IpcValidationError,
@@ -10,6 +13,13 @@ import {
   TransportSubscribeParamsSchema,
   TransportUnsubscribeParamsSchema,
 } from "./schemas";
+
+export interface AuthHandlers {
+  signIn(workspaceId: string): Promise<RendererSession>;
+  signOut(workspaceId: string): Promise<void>;
+  getSession(workspaceId: string): Promise<RendererSession | null>;
+  refresh(workspaceId: string): Promise<RendererSession | null>;
+}
 
 export interface IpcLogger {
   info(message: string, context?: Record<string, unknown>): void;
@@ -40,6 +50,7 @@ function parseOrThrow<T>(
 export interface RegisterHandlersDeps {
   readonly ipcMain: IpcMain;
   readonly bridge: TransportBridge;
+  readonly auth?: AuthHandlers;
   readonly logger?: IpcLogger;
 }
 
@@ -120,13 +131,62 @@ export function registerIpcHandlers(deps: RegisterHandlersDeps): () => void {
     },
   );
 
+  const auth = deps.auth;
+  if (auth) {
+    ipcMain.handle(CHANNELS.authGetSession, async (_event, raw: unknown) => {
+      const params = parseOrThrow(
+        CHANNELS.authGetSession,
+        AuthWorkspaceParamsSchema,
+        raw,
+      );
+      return auth.getSession(params.workspaceId);
+    });
+
+    ipcMain.handle(CHANNELS.authSignIn, async (_event, raw: unknown) => {
+      const params = parseOrThrow(
+        CHANNELS.authSignIn,
+        AuthWorkspaceParamsSchema,
+        raw,
+      );
+      return auth.signIn(params.workspaceId);
+    });
+
+    ipcMain.handle(CHANNELS.authSignOut, async (_event, raw: unknown) => {
+      const params = parseOrThrow(
+        CHANNELS.authSignOut,
+        AuthWorkspaceParamsSchema,
+        raw,
+      );
+      await auth.signOut(params.workspaceId);
+      return { ok: true as const };
+    });
+
+    ipcMain.handle(CHANNELS.authRefresh, async (_event, raw: unknown) => {
+      const params = parseOrThrow(
+        CHANNELS.authRefresh,
+        AuthWorkspaceParamsSchema,
+        raw,
+      );
+      return auth.refresh(params.workspaceId);
+    });
+  }
+
   return () => {
-    for (const channel of [
+    const channels: string[] = [
       CHANNELS.transportRequest,
       CHANNELS.transportSubscribe,
       CHANNELS.transportUnsubscribe,
       CHANNELS.transportSessionSnapshot,
-    ]) {
+    ];
+    if (auth) {
+      channels.push(
+        CHANNELS.authGetSession,
+        CHANNELS.authSignIn,
+        CHANNELS.authSignOut,
+        CHANNELS.authRefresh,
+      );
+    }
+    for (const channel of channels) {
       ipcMain.removeHandler(channel);
     }
     bridge.closeAll();

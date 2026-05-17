@@ -1,21 +1,23 @@
-import { useMemo } from "react";
+import { StrictMode, useMemo, type ReactElement } from "react";
 import { createRoot } from "react-dom/client";
 
-import { ChatShell } from "@enterprise-search/chat-surface";
-import { IpcTransport } from "@enterprise-search/chat-transport";
+import {
+  ChatShell,
+  DocumentPresenceSignal,
+  HashRouter,
+  LocalStorageKeyValueStore,
+} from "@enterprise-search/chat-surface";
+import {
+  IpcTransport,
+  type RendererSession,
+} from "@enterprise-search/chat-transport";
 
 import { DesktopPlaceholder } from "./DesktopPlaceholder";
-import { MemoryKeyValueStore } from "./MemoryKeyValueStore";
-import { StubPresenceSignal } from "./StubPresenceSignal";
-import { StubRouter } from "./StubRouter";
+import { DEFAULT_WORKSPACE_ID, SignInGate } from "./SignInGate";
 
 import "../preload/window-bridge-types";
 
-// Phase 1 anonymous bootstrap. Phase 5 wires the real OIDC flow + per-
-// (workspace_id, server) safeStorage; this object becomes the cached
-// snapshot the renderer holds after sign-in completes (PRD D24, §6.7).
-const PHASE1_BOOTSTRAP_SESSION = { bearer: null } as const;
-const PHASE1_BOOTSTRAP_CAPABILITIES = {
+const DESKTOP_CAPABILITIES = {
   substrate: "desktop-webview" as const,
   nativeSecretStorage: true,
   fileSystemAccess: false,
@@ -23,29 +25,50 @@ const PHASE1_BOOTSTRAP_CAPABILITIES = {
   openExternal: false,
 };
 
-// No <StrictMode> wrapper — see PRD §S2 friction note 5 and the sub-PRD
-// Open question 4. The spike-prep EmailRenderer's hasMounted ref
-// interacts badly with StrictMode's effect double-invoke; Phase 4-a is
-// the renderer-side cleanup. Re-enable here after that lands.
-export function App(): React.ReactElement {
+export function App(): ReactElement {
+  const router = useMemo(() => new HashRouter(), []);
+  const keyValueStore = useMemo(() => new LocalStorageKeyValueStore(), []);
+  const presenceSignal = useMemo(() => new DocumentPresenceSignal(), []);
+  return (
+    <SignInGate bridge={window.bridge} workspaceId={DEFAULT_WORKSPACE_ID}>
+      {(session) => (
+        <ChatShellForSession
+          session={session}
+          router={router}
+          keyValueStore={keyValueStore}
+          presenceSignal={presenceSignal}
+        />
+      )}
+    </SignInGate>
+  );
+}
+
+interface ChatShellForSessionProps {
+  readonly session: RendererSession;
+  readonly router: HashRouter;
+  readonly keyValueStore: LocalStorageKeyValueStore;
+  readonly presenceSignal: DocumentPresenceSignal;
+}
+
+function ChatShellForSession(props: ChatShellForSessionProps): ReactElement {
   const transport = useMemo(
     () =>
       new IpcTransport({
         bridge: window.bridge,
-        bootstrapSession: PHASE1_BOOTSTRAP_SESSION,
-        bootstrapCapabilities: PHASE1_BOOTSTRAP_CAPABILITIES,
+        bootstrapSession: { bearer: null },
+        bootstrapCapabilities: DESKTOP_CAPABILITIES,
       }),
-    [],
+    // The Transport contract's session is bearer-shaped. The actual bearer
+    // is attached in main on every outbound HTTP request (PRD §6.7 / D24).
+    // The renderer holds an opaque "session for workspace X" handle only.
+    [props.session.workspaceId],
   );
-  const router = useMemo(() => new StubRouter(), []);
-  const keyValueStore = useMemo(() => new MemoryKeyValueStore(), []);
-  const presenceSignal = useMemo(() => new StubPresenceSignal(), []);
   return (
     <ChatShell
       transport={transport}
-      router={router}
-      keyValueStore={keyValueStore}
-      presenceSignal={presenceSignal}
+      router={props.router}
+      keyValueStore={props.keyValueStore}
+      presenceSignal={props.presenceSignal}
     >
       <DesktopPlaceholder />
     </ChatShell>
@@ -54,18 +77,16 @@ export function App(): React.ReactElement {
 
 export function mountApp(container: HTMLElement): () => void {
   const root = createRoot(container);
-  root.render(<App />);
+  root.render(
+    <StrictMode>
+      <App />
+    </StrictMode>,
+  );
   return () => {
     root.unmount();
   };
 }
 
-// Auto-mount when bundled as the renderer entrypoint (out/renderer/
-// bootstrap.js loaded by index.html). Tests import { App, mountApp }
-// directly; the auto-mount block runs against the live document only,
-// so tests that construct their own container are unaffected because
-// they never call this module's top level with a #root element present
-// (the jsdom default document has no #root).
 const autoMountTarget =
   typeof document === "undefined" ? null : document.getElementById("root");
 if (autoMountTarget !== null) {

@@ -363,3 +363,120 @@ describe("TransportBridge default — MockTransport when no transport supplied",
     expect(snap.capabilities.substrate).toBe("web");
   });
 });
+
+describe("auth.* channels", () => {
+  function setupWithAuth() {
+    const ipcMain = makeFakeIpcMain();
+    const transport = new FakeTransport();
+    const bridge = new TransportBridge(() => undefined, { transport });
+    type RS = {
+      workspaceId: string;
+      expiresAt: number;
+      displayName: string | null;
+      email: string | null;
+    };
+    const auth = {
+      signIn: vi.fn(
+        async (workspaceId: string): Promise<RS> => ({
+          workspaceId,
+          expiresAt: Date.now() + 60_000,
+          displayName: "Sarah",
+          email: "sarah@acme.test",
+        }),
+      ),
+      signOut: vi.fn(async (_workspaceId: string): Promise<void> => {}),
+      getSession: vi.fn(
+        async (_workspaceId: string): Promise<RS | null> => null,
+      ),
+      refresh: vi.fn(async (_workspaceId: string): Promise<RS | null> => null),
+    };
+    const teardown = registerIpcHandlers({
+      ipcMain: ipcMain as unknown as Parameters<
+        typeof registerIpcHandlers
+      >[0]["ipcMain"],
+      bridge,
+      auth,
+    });
+    return { ipcMain, auth, teardown };
+  }
+
+  it("registers all four auth channels", () => {
+    const { ipcMain } = setupWithAuth();
+    expect(ipcMain.has(CHANNELS.authSignIn)).toBe(true);
+    expect(ipcMain.has(CHANNELS.authSignOut)).toBe(true);
+    expect(ipcMain.has(CHANNELS.authRefresh)).toBe(true);
+    expect(ipcMain.has(CHANNELS.authGetSession)).toBe(true);
+  });
+
+  it("auth.sign-in forwards the workspaceId and returns the RendererSession", async () => {
+    const { ipcMain, auth } = setupWithAuth();
+    const res = (await ipcMain.invoke(CHANNELS.authSignIn, 1, {
+      workspaceId: "org_acme",
+    })) as { workspaceId: string };
+    expect(res.workspaceId).toBe("org_acme");
+    expect(auth.signIn).toHaveBeenCalledWith("org_acme");
+  });
+
+  it("auth.sign-out forwards the workspaceId and returns ok", async () => {
+    const { ipcMain, auth } = setupWithAuth();
+    const res = await ipcMain.invoke(CHANNELS.authSignOut, 1, {
+      workspaceId: "org_acme",
+    });
+    expect(res).toEqual({ ok: true });
+    expect(auth.signOut).toHaveBeenCalledWith("org_acme");
+  });
+
+  it("auth.refresh forwards the workspaceId", async () => {
+    const { ipcMain, auth } = setupWithAuth();
+    await ipcMain.invoke(CHANNELS.authRefresh, 1, { workspaceId: "org_acme" });
+    expect(auth.refresh).toHaveBeenCalledWith("org_acme");
+  });
+
+  it("auth.get-session forwards the workspaceId", async () => {
+    const { ipcMain, auth } = setupWithAuth();
+    await ipcMain.invoke(CHANNELS.authGetSession, 1, {
+      workspaceId: "org_acme",
+    });
+    expect(auth.getSession).toHaveBeenCalledWith("org_acme");
+  });
+
+  it("rejects auth payloads without a workspaceId", async () => {
+    const { ipcMain } = setupWithAuth();
+    await expect(
+      ipcMain.invoke(CHANNELS.authSignIn, 1, {}),
+    ).rejects.toBeInstanceOf(IpcValidationError);
+  });
+
+  it("teardown removes auth handlers when an auth service was provided", () => {
+    const { ipcMain, teardown } = setupWithAuth();
+    teardown();
+    expect(ipcMain.has(CHANNELS.authSignIn)).toBe(false);
+    expect(ipcMain.has(CHANNELS.authSignOut)).toBe(false);
+    expect(ipcMain.has(CHANNELS.authRefresh)).toBe(false);
+    expect(ipcMain.has(CHANNELS.authGetSession)).toBe(false);
+  });
+});
+
+describe("TransportBridge bearerProvider", () => {
+  it("attaches Authorization: Bearer header to outbound requests", async () => {
+    const transport = new FakeTransport();
+    const bridge = new TransportBridge(() => undefined, {
+      transport,
+      bearerProvider: async () => "tok-1",
+    });
+    await bridge.request({ method: "GET", path: "/foo" });
+    expect(transport.requestCalls[0].headers?.authorization).toBe(
+      "Bearer tok-1",
+    );
+  });
+
+  it("makes a no-auth request when the provider returns null", async () => {
+    const transport = new FakeTransport();
+    const bridge = new TransportBridge(() => undefined, {
+      transport,
+      bearerProvider: async () => null,
+    });
+    await bridge.request({ method: "GET", path: "/foo" });
+    expect(transport.requestCalls[0].headers?.authorization).toBeUndefined();
+  });
+});
