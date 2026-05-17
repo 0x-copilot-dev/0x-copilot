@@ -193,14 +193,59 @@ export {
   ChatsSidebar,
   type ChatsSidebarProps,
 } from "./destinations/chats";
-export { HomeDestination } from "./destinations/home";
-export { InboxDestination } from "./destinations/inbox";
-export { TodosDestination } from "./destinations/todos";
-export { ProjectsDestination } from "./destinations/projects";
-export { LibraryDestination } from "./destinations/library";
-export { AgentsDestination } from "./destinations/agents";
+export {
+  HomeDestination,
+  type ConversationId,
+  type FavoriteTool,
+  type HomePayload,
+  type PinnedChat,
+  type RecentRun,
+  type RecentRunStatus,
+  type RunId,
+  type SkillId,
+} from "./destinations/home";
+export {
+  InboxDestination,
+  type InboxFilter,
+  type InboxItem,
+  type InboxItemId,
+  type InboxItemKind,
+  type InboxPayload,
+} from "./destinations/inbox";
+export {
+  TodosDestination,
+  type Todo,
+  type TodoId,
+  type TodoStatusFilter,
+  type TodosPayload,
+} from "./destinations/todos";
+export {
+  ProjectsDestination,
+  type Project,
+  type ProjectId,
+} from "./destinations/projects";
+export {
+  LibraryDestination,
+  type LibraryItem,
+  type LibraryItemId,
+  type LibraryItemKind,
+} from "./destinations/library";
+export { AgentsDestination, type AgentRunRow } from "./destinations/agents";
 export { ToolsDestination } from "./destinations/tools";
-export { ConnectorsDestination } from "./destinations/connectors";
-export { TeamDestination } from "./destinations/team";
-export { MemoryDestination } from "./destinations/memory";
+export {
+  ConnectorsDestination,
+  type McpServerRow,
+} from "./destinations/connectors";
+export {
+  TeamDestination,
+  type Member,
+  type MemberRole,
+  type TeamDestinationProps,
+} from "./destinations/team";
+export {
+  MemoryDestination,
+  type Memory,
+  type MemoryDestinationProps,
+  type MemoryType,
+} from "./destinations/memory";
 // === end Phase 2-A / 3 destinations ===
