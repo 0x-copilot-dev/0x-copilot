@@ -129,14 +129,11 @@ async def test_backend_mcp_provider_does_not_filter_remote_oauth_scopes(
         ),
     ]
     calls: list[dict[str, object]] = []
-    monkeypatch.setattr(
-        "agent_runtime.capabilities.mcp.backend_provider.httpx.AsyncClient",
-        lambda timeout: FakeAsyncClient(responses, calls),
-    )
     provider = BackendMcpProvider(
         backend_url="http://backend.local",
         runtime_context=runtime_context_admin,
         auth_redirect_uri="http://localhost/callback",
+        http_client=FakeAsyncClient(responses, calls),
     )
 
     cards = await provider.list_server_cards()
@@ -179,14 +176,11 @@ async def test_backend_mcp_provider_resolves_stable_name_before_auth_start(
         ),
     ]
     calls: list[dict[str, object]] = []
-    monkeypatch.setattr(
-        "agent_runtime.capabilities.mcp.backend_provider.httpx.AsyncClient",
-        lambda timeout: FakeAsyncClient(responses, calls),
-    )
     provider = BackendMcpProvider(
         backend_url="http://backend.local",
         runtime_context=runtime_context_admin,
         auth_redirect_uri="http://localhost/callback",
+        http_client=FakeAsyncClient(responses, calls),
     )
 
     session = await provider.create_auth_session(
@@ -236,10 +230,6 @@ def test_backend_mcp_client_loads_tools_through_json_rpc_proxy(
         ),
     ]
 
-    monkeypatch.setattr(
-        "agent_runtime.capabilities.mcp.backend_provider.httpx.AsyncClient",
-        lambda timeout: FakeAsyncClient(responses, calls),
-    )
     card = McpServerCard(
         server_id="server_123",
         name="clickup",
@@ -255,6 +245,7 @@ def test_backend_mcp_client_loads_tools_through_json_rpc_proxy(
         backend_url="http://backend.local",
         runtime_context=runtime_context_admin,
         card=card,
+        http_client=FakeAsyncClient(responses, calls),
     )
 
     tools = asyncio.run(client.list_tools())
@@ -293,10 +284,6 @@ def test_backend_mcp_client_treats_missing_resources_as_empty(
         ),
     ]
 
-    monkeypatch.setattr(
-        "agent_runtime.capabilities.mcp.backend_provider.httpx.AsyncClient",
-        lambda timeout: FakeAsyncClient(responses, calls),
-    )
     card = McpServerCard(
         server_id="server_123",
         name="clickup",
@@ -312,6 +299,7 @@ def test_backend_mcp_client_treats_missing_resources_as_empty(
         backend_url="http://backend.local",
         runtime_context=runtime_context_admin,
         card=card,
+        http_client=FakeAsyncClient(responses, calls),
     )
 
     resources = asyncio.run(client.list_resources())
@@ -350,10 +338,6 @@ def test_backend_mcp_client_calls_tool_through_json_rpc_proxy(
         ),
     ]
 
-    monkeypatch.setattr(
-        "agent_runtime.capabilities.mcp.backend_provider.httpx.AsyncClient",
-        lambda timeout: FakeAsyncClient(responses, calls),
-    )
     card = McpServerCard(
         server_id="server_123",
         name="clickup",
@@ -369,6 +353,7 @@ def test_backend_mcp_client_calls_tool_through_json_rpc_proxy(
         backend_url="http://backend.local",
         runtime_context=runtime_context_admin,
         card=card,
+        http_client=FakeAsyncClient(responses, calls),
     )
 
     output = asyncio.run(

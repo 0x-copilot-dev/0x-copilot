@@ -179,7 +179,9 @@ class TestPostgresEventBusUnsubscribe:
 
 
 class TestSettingsBackendSelection:
-    def test_default_backend_is_in_memory(self) -> None:
+    def test_dev_env_example_pins_in_memory(self) -> None:
+        """Dev's env_example explicitly chooses single-process; verify it flows."""
+
         from agent_runtime.settings import RuntimeSettings
 
         settings = RuntimeSettings.load(
@@ -188,7 +190,60 @@ class TestSettingsBackendSelection:
                 "RUNTIME_DEFAULT_MODEL": "gpt-5.4-mini",
             }
         )
+        # env_example pins this; the resolver passes it through unchanged.
         assert settings.execution.event_bus_backend == "in_memory"
+        assert settings.resolved_event_bus_backend() == "in_memory"
+
+    def test_loader_default_without_env_example_is_auto(self, tmp_path) -> None:
+        """Prod ships no env_example; the loader default must be ``auto``."""
+
+        from agent_runtime.settings import RuntimeSettings
+
+        missing = tmp_path / "no-env-example"
+        settings = RuntimeSettings.load(
+            template_file=missing,
+            env_file=missing,
+            environ={
+                "RUNTIME_DEFAULT_PROVIDER": "openai",
+                "RUNTIME_DEFAULT_MODEL": "gpt-5.4-mini",
+            },
+        )
+        assert settings.execution.event_bus_backend == "auto"
+
+    def test_auto_resolves_to_postgres_when_database_url_set(self, tmp_path) -> None:
+        """The whole point of the change — prod auto-picks postgres."""
+
+        from agent_runtime.settings import RuntimeSettings
+
+        missing = tmp_path / "no-env-example"
+        settings = RuntimeSettings.load(
+            template_file=missing,
+            env_file=missing,
+            environ={
+                "RUNTIME_DEFAULT_PROVIDER": "openai",
+                "RUNTIME_DEFAULT_MODEL": "gpt-5.4-mini",
+                "DATABASE_URL": "postgresql://localhost/x",
+            },
+        )
+        assert settings.execution.event_bus_backend == "auto"
+        assert settings.resolved_event_bus_backend() == "postgres"
+
+    def test_auto_resolves_to_in_memory_without_database_url(self, tmp_path) -> None:
+        """No DATABASE_URL → fall back to in_memory rather than crashing."""
+
+        from agent_runtime.settings import RuntimeSettings
+
+        missing = tmp_path / "no-env-example"
+        settings = RuntimeSettings.load(
+            template_file=missing,
+            env_file=missing,
+            environ={
+                "RUNTIME_DEFAULT_PROVIDER": "openai",
+                "RUNTIME_DEFAULT_MODEL": "gpt-5.4-mini",
+            },
+        )
+        assert settings.execution.event_bus_backend == "auto"
+        assert settings.resolved_event_bus_backend() == "in_memory"
 
     def test_postgres_backend_selected_via_env(self) -> None:
         from agent_runtime.settings import RuntimeSettings
@@ -201,6 +256,8 @@ class TestSettingsBackendSelection:
             }
         )
         assert settings.execution.event_bus_backend == "postgres"
+        # Explicit values pass through the resolver unchanged.
+        assert settings.resolved_event_bus_backend() == "postgres"
 
     def test_factory_threads_notify_after_append_to_in_memory_adapter(
         self,

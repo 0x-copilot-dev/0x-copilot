@@ -106,7 +106,7 @@ class RuntimeAdapterFactory:
         # NOTIFY after every event append so the API process's listener wakes
         # the SSE handler cross-process.  The in-memory bus uses asyncio.Condition
         # and does not need an explicit notification.
-        notify_after_append = settings.execution.event_bus_backend.lower() == "postgres"
+        notify_after_append = settings.resolved_event_bus_backend() == "postgres"
         # ``in_memory`` is the legacy alias for ``in_memory_async`` — both
         # route to the async-native InMemoryRuntimeApiStore.
         if backend in {"in_memory_async", "in_memory"}:

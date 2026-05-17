@@ -15,6 +15,7 @@ from enterprise_service_contracts.headers import (
 import httpx
 from pydantic import Field, ValidationError
 
+from agent_runtime.capabilities.http_pool import BackendHttpPool
 from agent_runtime.execution.contracts import (
     AgentRuntimeContext,
     RuntimeContract,
@@ -68,23 +69,33 @@ class SkillProvider(Protocol):
 
 @dataclass(frozen=True)
 class BackendSkillProvider:
-    """Skill provider that reads authorized Skills from the core backend."""
+    """Skill provider that reads authorized Skills from the core backend.
+
+    ``http_client`` defaults to the process-shared :class:`BackendHttpPool`
+    so Skill list + bundle loads share a TLS connection with the rest of
+    the runtime's backend traffic.
+    """
 
     backend_url: str
     runtime_context: AgentRuntimeContext
     timeout_seconds: float = 10
+    http_client: httpx.AsyncClient = field(
+        default_factory=BackendHttpPool.get,
+        repr=False,
+        compare=False,
+    )
 
     async def list_skill_cards(self) -> tuple[VirtualSkillCard, ...]:
         """Fetch compact Skill cards for the runtime context from the backend."""
-        async with httpx.AsyncClient(timeout=self.timeout_seconds) as client:
-            response = await client.get(
-                f"{self.backend_url.rstrip('/')}/internal/v1/skills/cards",
-                params={
-                    "org_id": self.runtime_context.org_id,
-                    "user_id": self.runtime_context.user_id,
-                },
-                headers=BackendSkillServiceAuth.headers(self.runtime_context),
-            )
+        response = await self.http_client.get(
+            f"{self.backend_url.rstrip('/')}/internal/v1/skills/cards",
+            params={
+                "org_id": self.runtime_context.org_id,
+                "user_id": self.runtime_context.user_id,
+            },
+            headers=BackendSkillServiceAuth.headers(self.runtime_context),
+            timeout=self.timeout_seconds,
+        )
         response.raise_for_status()
         payload = response.json()
         return tuple(
@@ -93,15 +104,15 @@ class BackendSkillProvider:
 
     async def load_skill_by_name(self, name: str) -> VirtualSkillBundle:
         """Fetch the full Skill bundle by stable name from the backend."""
-        async with httpx.AsyncClient(timeout=self.timeout_seconds) as client:
-            response = await client.get(
-                f"{self.backend_url.rstrip('/')}/internal/v1/skills/by-name/{name}",
-                params={
-                    "org_id": self.runtime_context.org_id,
-                    "user_id": self.runtime_context.user_id,
-                },
-                headers=BackendSkillServiceAuth.headers(self.runtime_context),
-            )
+        response = await self.http_client.get(
+            f"{self.backend_url.rstrip('/')}/internal/v1/skills/by-name/{name}",
+            params={
+                "org_id": self.runtime_context.org_id,
+                "user_id": self.runtime_context.user_id,
+            },
+            headers=BackendSkillServiceAuth.headers(self.runtime_context),
+            timeout=self.timeout_seconds,
+        )
         response.raise_for_status()
         return VirtualSkillBundle.model_validate(response.json())
 

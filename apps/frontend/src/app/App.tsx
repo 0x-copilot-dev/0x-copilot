@@ -1,7 +1,7 @@
 import { ThemeProvider } from "@enterprise-search/design-system";
 import type { McpServer } from "@enterprise-search/api-types";
 import type { ReactElement } from "react";
-import { useEffect, useState } from "react";
+import { Suspense, lazy, useEffect, useState } from "react";
 import "@enterprise-search/design-system/styles.css";
 import "streamdown/styles.css";
 import "../styles.css";
@@ -9,10 +9,6 @@ import { decideApproval } from "../api/agentApi";
 import type { RequestIdentity } from "../api/config";
 import { completeMcpOAuth } from "../api/mcpApi";
 import { AuthProvider, useAuth } from "../features/auth/AuthContext";
-import { LoginScreen } from "../features/auth/LoginScreen";
-import { MfaPrompt } from "../features/auth/MfaPrompt";
-import { ChatScreen } from "../features/chat/ChatScreen";
-import { ShareScreen } from "../features/share/ShareScreen";
 import {
   clearPendingMcpAuthAction,
   readPendingMcpAuthAction,
@@ -26,8 +22,58 @@ import { AppearanceProvider } from "../features/appearance/AppearanceContext";
 import { UserPreferencesProvider } from "../features/me/UserPreferencesContext";
 import { useUserProfile } from "../features/me/useUserProfile";
 import { UserProfileProvider } from "../features/me/UserProfileContext";
-import { SettingsScreen } from "../features/settings/SettingsScreen";
 import { useSkills } from "../features/skills/useSkills";
+
+// Route-level code splitting. Each screen is its own Vite chunk so the
+// main bundle only carries the chrome + auth-gate decision tree; the
+// specific screen for the current URL loads on demand.
+//
+// Common cases:
+//   - Signed-in user on /            → ChatScreen chunk only.
+//   - Signed-out user on /login      → LoginScreen chunk only.
+//   - Settings deep link             → SettingsScreen + ChatScreen chunks
+//     (ChatScreen is the back-target so we let the user warm it as they
+//     decide what to do; if cold load times start to hurt, we can flip
+//     this to "fetch ChatScreen only on first navigate away from settings").
+//
+// `.then(m => ({ default: m.X }))` adapts named exports to React.lazy's
+// default-export contract. Touching this list = adding/removing screens
+// only; do not import the named symbol directly anywhere else here, or
+// the chunking falls back to the main bundle.
+const LoginScreen = lazy(() =>
+  import("../features/auth/LoginScreen").then((m) => ({
+    default: m.LoginScreen,
+  })),
+);
+const MfaPrompt = lazy(() =>
+  import("../features/auth/MfaPrompt").then((m) => ({ default: m.MfaPrompt })),
+);
+const ChatScreen = lazy(() =>
+  import("../features/chat/ChatScreen").then((m) => ({
+    default: m.ChatScreen,
+  })),
+);
+const ShareScreen = lazy(() =>
+  import("../features/share/ShareScreen").then((m) => ({
+    default: m.ShareScreen,
+  })),
+);
+const SettingsScreen = lazy(() =>
+  import("../features/settings/SettingsScreen").then((m) => ({
+    default: m.SettingsScreen,
+  })),
+);
+
+// Single fallback used whenever a route chunk is in flight. Matches the
+// existing AuthGate "Loading session…" spinner shape so the user does
+// not see two different placeholders during sign-in + first-route load.
+function RouteLoadingFallback(): ReactElement {
+  return (
+    <main className="app-loading">
+      <p>Loading…</p>
+    </main>
+  );
+}
 import {
   ChatShell,
   DocumentPresenceSignal,
@@ -104,7 +150,11 @@ function AuthGate(): ReactElement {
   }
 
   if (auth.status === "mfa_pending") {
-    return <MfaPrompt rpId={window.location.hostname} />;
+    return (
+      <Suspense fallback={<RouteLoadingFallback />}>
+        <MfaPrompt rpId={window.location.hostname} />
+      </Suspense>
+    );
   }
 
   // PR 5.1 — magic-link callback URL routes through LoginScreen even
@@ -127,15 +177,17 @@ function AuthGate(): ReactElement {
             {auth.error}
           </p>
         )}
-        <LoginScreen
-          defaultOrgId={DEFAULT_ORG_ID}
-          returnTo={
-            window.location.pathname === "/login" ||
-            window.location.pathname === "/auth/magic-link/callback"
-              ? undefined
-              : window.location.pathname + window.location.search
-          }
-        />
+        <Suspense fallback={<RouteLoadingFallback />}>
+          <LoginScreen
+            defaultOrgId={DEFAULT_ORG_ID}
+            returnTo={
+              window.location.pathname === "/login" ||
+              window.location.pathname === "/auth/magic-link/callback"
+                ? undefined
+                : window.location.pathname + window.location.search
+            }
+          />
+        </Suspense>
       </>
     );
   }
@@ -372,6 +424,11 @@ function EnterpriseSearchApp({
   // Transport, Router, and KeyValueStore via hooks instead of singletons
   // or window globals. The transport is a stable module singleton; the
   // router and the KV store are local instances stable across renders.
+  //
+  // Suspense wraps `body` (not ChatShell) so the rails/topbar chrome
+  // stay visible while a route chunk is in flight — only the centre
+  // pane shows the fallback, matching how users expect a route transition
+  // to behave in a shell-style app.
   return (
     <ChatShell
       transport={getAppTransport()}
@@ -379,7 +436,7 @@ function EnterpriseSearchApp({
       keyValueStore={keyValueStore}
       presenceSignal={presenceSignal}
     >
-      {body}
+      <Suspense fallback={<RouteLoadingFallback />}>{body}</Suspense>
     </ChatShell>
   );
 }

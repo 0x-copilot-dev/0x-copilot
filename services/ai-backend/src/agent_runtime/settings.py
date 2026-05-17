@@ -113,9 +113,11 @@ class RuntimeExecutionSettings(RuntimeContract):
     # Hard cap on chunks per coalesce batch — forces a flush even if the
     # window has not expired, preventing unbounded buffer growth.
     delta_coalesce_max_chunks: int = Field(default=64, ge=1, le=1024)
-    # SSE event bus backend. ``in_memory`` is the single-process default;
-    # ``postgres`` enables ``LISTEN/NOTIFY`` for cross-process worker → API wakeups.
-    event_bus_backend: str = "in_memory"
+    # SSE event bus backend. ``auto`` (the default) resolves to ``postgres``
+    # when ``DATABASE_URL`` is configured and ``in_memory`` otherwise — see
+    # ``RuntimeSettings.resolved_event_bus_backend``. Explicit values
+    # (``in_memory`` | ``postgres``) skip the resolver and pass through.
+    event_bus_backend: str = "auto"
 
 
 class RuntimeStoreSettings(RuntimeContract):
@@ -199,6 +201,31 @@ class RuntimeSettings(BaseSettings):
         if provider in {"google", "gemini"}:
             return self.gemini
         raise ValueError(f"Unsupported model provider: {provider}")
+
+    def resolved_event_bus_backend(self) -> str:
+        """Resolve the SSE event bus to ``"postgres"`` or ``"in_memory"``.
+
+        ``auto`` (the default) picks ``postgres`` when ``DATABASE_URL`` is
+        configured and ``in_memory`` otherwise. Explicit values pass through.
+
+        Why this matters: API and worker run in separate processes in prod.
+        ``InMemoryEventBus`` only delivers within one process, so a separate
+        worker's ``notify_sync`` never wakes the API's SSE handler — the
+        2-second poll fallback becomes the actual delivery mechanism (~1s
+        p50 latency). ``PostgresEventBus`` uses ``LISTEN/NOTIFY`` for
+        sub-50ms cross-process wakeups. The right default in prod is
+        "postgres when postgres is available," not "in_memory with a
+        2-second floor."
+
+        Both ``RuntimeAdapterFactory`` (notify_after_append flag) and
+        ``RuntimeApiAppFactory.default_event_bus`` (bus construction) read
+        this; keep the selection in one place so they cannot disagree.
+        """
+
+        explicit = self.execution.event_bus_backend.lower()
+        if explicit == "auto":
+            return "postgres" if self.store.database_url else "in_memory"
+        return explicit
 
     @classmethod
     def configure_sdk_environment(cls, settings: "RuntimeSettings") -> None:
@@ -291,7 +318,7 @@ class RuntimeSettings(BaseSettings):
                 in _truthy,
                 delta_coalesce_window_ms=int(_s(v, E.DELTA_COALESCE_WINDOW_MS, "0")),
                 delta_coalesce_max_chunks=int(_s(v, E.DELTA_COALESCE_MAX_CHUNKS, "64")),
-                event_bus_backend=_s(v, E.EVENT_BUS_BACKEND, "in_memory").lower(),
+                event_bus_backend=_s(v, E.EVENT_BUS_BACKEND, "auto").lower(),
             ),
             store=RuntimeStoreSettings(
                 backend=_s(v, E.STORE_BACKEND, "in_memory").lower(),

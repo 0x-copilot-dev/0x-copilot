@@ -36,10 +36,13 @@ RUNTIME_EVENT_WRITE_CONSOLIDATED=true
 # (default; ships dark). Recommended 50 once measured on staging.
 RUNTIME_DELTA_COALESCE_WINDOW_MS=0
 RUNTIME_DELTA_COALESCE_MAX_CHUNKS=64
-# P2 — SSE event-bus backend. in_memory (default) is single-process; flip
-# to postgres to enable cross-process LISTEN/NOTIFY wakeups (drops SSE
-# delivery latency from ~1s to ~50ms in multi-process deploys; needs
-# DATABASE_URL configured).
+# P2 — SSE event-bus backend. Default is ``auto`` (resolves to ``postgres``
+# when DATABASE_URL is configured, else ``in_memory``). Dev pins
+# ``in_memory`` here because dev typically runs API + worker in one
+# process (RUNTIME_START_IN_PROCESS_WORKER=true) and DATABASE_URL may
+# point at Postgres without us wanting LISTEN/NOTIFY overhead. Prod
+# leaves this unset → ``auto`` → ``postgres`` once DATABASE_URL is
+# present (drops SSE delivery latency from ~1s to ~50ms).
 RUNTIME_EVENT_BUS_BACKEND=in_memory
 # P7 PR2 — switch the citation projector to one batched
 # `sources_ingested` event per tool result (vs. N `source_ingested`

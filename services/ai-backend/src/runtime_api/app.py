@@ -119,6 +119,13 @@ class RuntimeApiAppFactory:
                 # clients before the listener disconnects.
                 await cls.stop_event_bus(app)
                 await cls.close_async_store(app)
+                # Close the pooled backend HTTP client last so any in-flight
+                # final-shutdown requests (audit drains, etc.) still have
+                # a connection. Idempotent — if nothing ever opened it,
+                # this is a no-op.
+                from agent_runtime.capabilities.http_pool import BackendHttpPool
+
+                await BackendHttpPool.aclose()
 
         app = FastAPI(title="Agent Runtime API", version="1", lifespan=lifespan)
         app.add_middleware(RequestContextMiddleware)
@@ -601,10 +608,14 @@ class RuntimeApiAppFactory:
         :meth:`start_event_bus` / :meth:`stop_event_bus` in the lifespan.
         """
 
-        backend = settings.execution.event_bus_backend.lower()
+        backend = settings.resolved_event_bus_backend()
         if backend == "postgres":
             database_url = settings.store.database_url
             if not database_url:
+                # Defense-in-depth: the resolver only returns "postgres" when
+                # DATABASE_URL is set OR when the user explicitly chose
+                # "postgres". The explicit-without-DATABASE_URL case still
+                # needs the actionable error.
                 raise ValueError(
                     "RUNTIME_EVENT_BUS_BACKEND=postgres requires DATABASE_URL "
                     "to be configured."

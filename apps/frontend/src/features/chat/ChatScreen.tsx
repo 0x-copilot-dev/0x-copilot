@@ -153,6 +153,33 @@ type SubmitMessageOptions = {
   optimisticMessageId?: string;
 };
 
+// SSE reconnect backoff. First failure keeps the original ~750ms feel so
+// transient blips recover snappily; subsequent failures double up to a 30s
+// ceiling. Full-jitter (random_between(0, computed)) avoids a thundering-
+// herd reconnect if many tabs lose the stream simultaneously — the
+// AWS-recommended pattern.
+//
+// Reset point: handleEvent zeroes `reconnectAttemptsRef` when a healthy
+// event arrives, so once delivery resumes the next failure starts over
+// from BASE rather than continuing from the high end of the curve.
+const RECONNECT_BASE_MS = 750;
+const RECONNECT_MAX_MS = 30_000;
+
+export function computeReconnectDelayMs(
+  attempts: number,
+  random: () => number = Math.random,
+): number {
+  if (attempts <= 1) return RECONNECT_BASE_MS;
+  const exponential = Math.min(
+    RECONNECT_BASE_MS * 2 ** (attempts - 1),
+    RECONNECT_MAX_MS,
+  );
+  // Full jitter: spread retries across [0, exponential]. Guard with a
+  // floor of BASE so we never schedule a near-zero retry that creates
+  // a tight loop on a permanently-broken stream.
+  return Math.max(RECONNECT_BASE_MS, Math.floor(random() * exponential));
+}
+
 export function ChatScreen({
   connectors,
   skills,
@@ -203,6 +230,11 @@ export function ChatScreen({
   const streamRef = useRef<AgentEventStream | null>(null);
   const latestSequenceRef = useRef(0);
   const reconnectTimeoutRef = useRef<number | null>(null);
+  // Tracks consecutive reconnect failures so the next delay grows
+  // exponentially. Reset to 0 inside handleEvent the moment a healthy
+  // event arrives — that's the proof the stream is delivering again, so
+  // any subsequent failure should retry quickly, not wait minutes.
+  const reconnectAttemptsRef = useRef(0);
   const activeRunUserMessageIdsRef = useRef<Map<string, string>>(new Map());
   const pendingApprovalDecisionsRef = useRef<Set<string>>(new Set());
   const latestReplaySequenceByRunRef = useRef<Map<string, number>>(new Map());
@@ -470,6 +502,9 @@ export function ChatScreen({
         latestSequenceRef.current,
         event.sequence_no,
       );
+      // Stream is delivering — any failure after this should start the
+      // backoff curve over rather than continuing from a high attempt count.
+      reconnectAttemptsRef.current = 0;
       setItems((current) =>
         withAssistantParent(
           applyRuntimeEvent(current, event),
@@ -525,13 +560,15 @@ export function ChatScreen({
           streamRef.current?.close();
           streamRef.current = null;
           setStatus("Stream paused. Reconnecting...");
+          reconnectAttemptsRef.current += 1;
+          const delay = computeReconnectDelayMs(reconnectAttemptsRef.current);
           reconnectTimeoutRef.current = window.setTimeout(() => {
             startEventStream(
               runId,
               latestSequenceRef.current,
               conversationIdForRun,
             );
-          }, 750);
+          }, delay);
         },
         onProtocolError: (error) => {
           setStatus(error.message);
