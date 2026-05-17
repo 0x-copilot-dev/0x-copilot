@@ -127,3 +127,19 @@ export type {
   TextMessagePart,
   TextMessagePartProps,
 } from "./messages/types";
+
+// === Phase 0-A adapter contract ===
+export type {
+  SaaSRendererAdapter,
+  SaaSRendererAdapterMetadata,
+  SaaSRendererAdapterOrigin,
+} from "./surfaces";
+export {
+  TIER3_SCHEME,
+  markBroken,
+  registerAdapter,
+  resolveAdapter,
+  unregisterAdapter,
+} from "./surfaces";
+export { TcSurfaceMount, type TcSurfaceMountProps } from "./thread-canvas";
+// === end Phase 0-A ===

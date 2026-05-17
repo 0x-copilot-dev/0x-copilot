@@ -8,10 +8,11 @@ export interface PendingDiff {
   readonly regionAnchorId: string;
 }
 
-// Spike-shape: parents can pass an activeDiff directly so variant agents
-// have a simple way to drive the renderer from outside. Production
-// renderers (Phase 4) subscribe to the transport's event stream and
-// derive activeDiff internally.
+/**
+ * @deprecated Use {@link import('./SaaSRendererAdapter').SaaSRendererAdapter}.
+ * The legacy spike-prep shape mixes transport and approval into the
+ * renderer; PRD D28 mandates pure render only. Removed in Phase 4-a.
+ */
 export interface SurfaceRendererProps {
   readonly uri: string;
   readonly transport: Transport;
