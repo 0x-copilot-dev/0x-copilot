@@ -103,6 +103,12 @@ from backend_app.observability import (
 )
 from backend_app.dev_idp import register_dev_idp_routes
 from backend_app.home import register_home_routes
+from backend_app.todos import (
+    InMemoryTodosStore,
+    TodosService,
+    TodosStore,
+    register_todos_routes,
+)
 from backend_app.routes.audit_export import register_audit_export_routes
 from backend_app.routes.audit_list import register_audit_list_routes
 from backend_app.routes.billing import register_billing_routes
@@ -317,6 +323,7 @@ def create_app(
     adapter_registry_service: object | None = None,
     adapter_registry_store: object | None = None,
     adapter_source_storage: object | None = None,
+    todos_store: TodosStore | None = None,
 ) -> FastAPI:
     if configure_logging_on_create:
         configure_logging()
@@ -1294,6 +1301,20 @@ def create_app(
         me_store=resolved_me_store,
         identity_store=resolved_identity_store,
     )
+
+    # Phase 3 — Todos destination. Owner-only writes; project-member
+    # reads; admin compliance reads — all enforced in ``TodosService``.
+    # The store defaults to in-memory; production deploys inject the
+    # Postgres adapter via ``todos_store=`` (out of scope for P3-A1
+    # but the wiring shape is stable).
+    resolved_todos_store: TodosStore = todos_store or InMemoryTodosStore()  # type: ignore[assignment]
+    app.state.todos_store = resolved_todos_store
+    todos_service = TodosService(
+        store=resolved_todos_store,
+        identity_store=resolved_identity_store,
+    )
+    app.state.todos_service = todos_service
+    register_todos_routes(app, service=todos_service)
 
     # Phase 7A — tier-2 adapter registry. Source bytes go through a
     # ``SourceStorage`` port (filesystem in dev, S3 injectable in prod).

@@ -19,6 +19,7 @@ from backend_facade.adapter_review_routes import register_adapter_review_routes
 from backend_facade.audit_routes import register_audit_routes
 from backend_facade.auth_routes import register_auth_routes
 from backend_facade.home_routes import register_home_routes
+from backend_facade.todos_routes import register_todos_routes
 from backend_facade.http_client import HttpClientPool, http_client
 from backend_facade.me_routes import register_me_routes
 from backend_facade.scim_routes import register_scim_routes
@@ -116,6 +117,7 @@ def create_app(
     register_audit_routes(app)
     register_auth_routes(app)
     register_home_routes(app)
+    register_todos_routes(app)
     register_me_routes(app)
     register_scim_routes(app)
     register_workspace_routes(app)

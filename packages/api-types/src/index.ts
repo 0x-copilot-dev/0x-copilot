@@ -3437,3 +3437,25 @@ export interface HomeActivityEvent {
   readonly created_at: string;
 }
 // === end Phase 2 Home ===
+
+// === Phase 3 Todos destination ===
+// Canonical CRUD + extraction provenance + recurrence + one-level
+// subtasks wire shape. Cross-audit §1.1 (ItemRef link payloads), §1.3
+// (project-scoped ACL), §1.5 (multi-value OR filter axes), §9.6
+// (Phase 3 deviations). Single declaration site: ./todos.ts.
+export type {
+  BulkTodoAction,
+  BulkUpdateTodosRequest,
+  BulkUpdateTodosResponse,
+  CreateTodoRequest,
+  Todo,
+  TodoListResponse,
+  TodoPriority,
+  TodoRecurrence,
+  TodoRecurrenceRule,
+  TodoSource,
+  TodoSourceKind,
+  TodoStatus,
+  UpdateTodoRequest,
+} from "./todos";
+// === end Phase 3 Todos ===
