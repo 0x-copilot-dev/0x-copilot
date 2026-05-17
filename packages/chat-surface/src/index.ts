@@ -143,3 +143,7 @@ export {
 } from "./surfaces";
 export { TcSurfaceMount, type TcSurfaceMountProps } from "./thread-canvas";
 // === end Phase 0-A ===
+
+// === Phase 0-B ports facade ===
+export * from "./ports";
+// === end Phase 0-B ===
