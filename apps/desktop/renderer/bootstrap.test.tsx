@@ -9,12 +9,9 @@ describe("renderer bootstrap", () => {
   let unmount: (() => void) | null = null;
 
   beforeEach(() => {
-    // jsdom has no preload-injected window.bridge. Stub a noop so
-    // IpcTransport's constructor (which installs a stream-event listener
-    // at construction time) can wire up cleanly.
     (window as unknown as { bridge: unknown }).bridge = {
       ipc: {
-        invoke: () => Promise.resolve(),
+        invoke: () => Promise.resolve(null),
         on: () => () => undefined,
       },
     };
@@ -33,13 +30,57 @@ describe("renderer bootstrap", () => {
     delete (window as unknown as { bridge?: unknown }).bridge;
   });
 
-  it("mounts <ChatShell /> with the desktop placeholder visible", () => {
+  it("mounts the sign-in gate while no session is present", async () => {
     container = document.createElement("div");
     container.id = "root";
     document.body.appendChild(container);
 
-    act(() => {
+    await act(async () => {
       unmount = mountApp(container as HTMLElement);
+    });
+
+    // jsdom's microtasks have run by now; the initial getSession resolved
+    // to null, so we should be on the anon screen.
+    await act(async () => {
+      await Promise.resolve();
+    });
+
+    const gate = container.querySelector("[data-testid='sign-in-gate']");
+    expect(gate).not.toBeNull();
+    const button = container.querySelector(
+      "[data-testid='sign-in-button']",
+    ) as HTMLButtonElement | null;
+    expect(button).not.toBeNull();
+  });
+
+  it("mounts ChatShell with the desktop placeholder once a session is present", async () => {
+    (window as unknown as { bridge: unknown }).bridge = {
+      ipc: {
+        invoke: (channel: string) => {
+          if (channel === "auth.get-session") {
+            return Promise.resolve({
+              workspaceId: "org_acme",
+              expiresAt: Date.now() + 60_000,
+              displayName: "Sarah",
+              email: "sarah@acme.test",
+            });
+          }
+          return Promise.resolve(null);
+        },
+        on: () => () => undefined,
+      },
+    };
+
+    container = document.createElement("div");
+    container.id = "root";
+    document.body.appendChild(container);
+
+    await act(async () => {
+      unmount = mountApp(container as HTMLElement);
+    });
+
+    await act(async () => {
+      await Promise.resolve();
     });
 
     const placeholder = container.querySelector(

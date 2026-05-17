@@ -12,6 +12,14 @@ export const CHANNELS = {
   // bootstrap values handed at IpcTransport construction.
   transportSessionSnapshot: "transport.session-snapshot",
   streamEvent: "transport.stream-event",
+  // Phase 5 auth channels. Bearer tokens NEVER cross the IPC boundary —
+  // these channels only return a renderer-safe view (workspace + display
+  // claims) and the actual bearer is attached in main when the transport
+  // makes its outbound HTTP call. See PRD §6.7 / D24.
+  authGetSession: "auth.get-session",
+  authSignIn: "auth.sign-in",
+  authSignOut: "auth.sign-out",
+  authRefresh: "auth.refresh",
 } as const;
 
 export type ChannelName = (typeof CHANNELS)[keyof typeof CHANNELS];
@@ -62,6 +70,23 @@ export type TransportUnsubscribeParams = z.infer<
 >;
 
 export const EmptyParamsSchema = z.object({}).strict();
+
+export const AuthWorkspaceParamsSchema = z
+  .object({
+    workspaceId: z.string().min(1).max(256),
+  })
+  .strict();
+export type AuthWorkspaceParams = z.infer<typeof AuthWorkspaceParamsSchema>;
+
+export const RendererSessionSchema = z
+  .object({
+    workspaceId: z.string().min(1),
+    expiresAt: z.number(),
+    displayName: z.string().nullable(),
+    email: z.string().nullable(),
+  })
+  .strict();
+export type RendererSession = z.infer<typeof RendererSessionSchema>;
 
 export const StreamEventKindSchema = z.enum([
   "open",
