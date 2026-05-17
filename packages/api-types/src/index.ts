@@ -3496,3 +3496,34 @@ export interface InboxStreamEnvelope {
   readonly created_at: string;
 }
 // === end Phase 4 Inbox ===
+
+// === Phase 5 Routines destination ===
+// Canonical CRUD + state-machine + trigger array wire shape. Cross-audit
+// §1.1 (ItemRef-typed code-routine refs), §1.3 (project-scoped ACL —
+// owner writes, project-member reads, admin compliance reads,
+// 404-not-403), §1.5 (multi-value OR filter axes), §2.1 (branded ids:
+// RoutineId / AgentId), §2.4 (webhook trigger_id; rotating secret +
+// IP allowlist live in the internal contract), §9.7 (14 binding
+// decisions — manual_fire ACL override, no auto-resume, fire_once
+// missed-fire default, 100 active routines per USER, agent_version_pin
+// optional, code-routines wire shape now / executor in Wave 6). Single
+// declaration site: ./routines.ts.
+export type {
+  CreateRoutineRequest,
+  Routine,
+  RoutineCodeRef,
+  RoutineCronTrigger,
+  RoutineEventTrigger,
+  RoutineListResponse,
+  RoutineManualFireScope,
+  RoutineMissedFirePolicy,
+  RoutinePauseReason,
+  RoutinePermissions,
+  RoutineStatus,
+  RoutineTrigger,
+  RoutineTriggerKind,
+  RoutineWebhookTrigger,
+  RunRoutineResponse,
+  UpdateRoutineRequest,
+} from "./routines";
+// === end Phase 5 Routines ===

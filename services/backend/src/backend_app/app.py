@@ -109,6 +109,12 @@ from backend_app.inbox import (
     InboxStore,
     register_inbox_routes,
 )
+from backend_app.routines import (
+    InMemoryRoutinesStore,
+    RoutinesService,
+    RoutinesStore,
+    register_routines_routes,
+)
 from backend_app.todos import (
     InMemoryTodosStore,
     TodosService,
@@ -331,6 +337,7 @@ def create_app(
     adapter_source_storage: object | None = None,
     todos_store: TodosStore | None = None,
     inbox_store: InboxStore | None = None,
+    routines_store: RoutinesStore | None = None,
 ) -> FastAPI:
     if configure_logging_on_create:
         configure_logging()
@@ -1337,6 +1344,23 @@ def create_app(
     )
     app.state.inbox_service = inbox_service
     register_inbox_routes(app, service=inbox_service)
+
+    # Phase 5 — Routines destination. Owner-only writes; project-member
+    # reads; admin compliance reads — all enforced in ``RoutinesService``.
+    # Per-USER quota (100 active) enforced at create + state transitions
+    # per cross-audit §9.7 Q8. The store defaults to in-memory;
+    # production deploys inject the Postgres adapter via
+    # ``routines_store=`` (out of scope for P5-A1 but the wiring shape
+    # is stable). Scheduler + webhook ingest + permission intersection
+    # land in P5-A2/A3/A4.
+    resolved_routines_store: RoutinesStore = routines_store or InMemoryRoutinesStore()  # type: ignore[assignment]
+    app.state.routines_store = resolved_routines_store
+    routines_service = RoutinesService(
+        store=resolved_routines_store,
+        identity_store=resolved_identity_store,
+    )
+    app.state.routines_service = routines_service
+    register_routines_routes(app, service=routines_service)
 
     # Phase 7A — tier-2 adapter registry. Source bytes go through a
     # ``SourceStorage`` port (filesystem in dev, S3 injectable in prod).
