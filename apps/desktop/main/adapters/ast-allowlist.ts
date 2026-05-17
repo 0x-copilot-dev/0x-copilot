@@ -1,10 +1,16 @@
 import { parse } from "@typescript-eslint/parser";
 
+import { ADAPTER_ALLOWLIST } from "@enterprise-search/api-types";
+
 // PRD §9.5 Q2 + D28/D29. The single source of truth for what a tier-2
-// adapter is allowed to import. `Tier2Loader` reconciliation + the in-worker
-// safety scan (Phase 6C) both consume this list. Adding a name here is a
-// security decision; do not add anything that mutates the DOM, opens a
-// network connection, persists state, or reaches back to the host.
+// adapter is allowed to import lives in
+// `packages/service-contracts/src/enterprise_service_contracts/adapter_allowlist.json`
+// (loaded here via `@enterprise-search/api-types`). The same JSON feeds the
+// AI backend's 6B `AdapterAllowlistAuditor`, so drift between codegen and
+// the desktop's load-time scanner is structurally prevented. Adding a name
+// to the JSON is a security decision; do not add anything that mutates the
+// DOM, opens a network connection, persists state, or reaches back to the
+// host.
 //
 // `react`: explicitly NO `useEffect` / `useLayoutEffect` (side effects —
 // D28 forbids); explicitly NO `useRef` (mutable cross-render storage,
@@ -12,53 +18,14 @@ import { parse } from "@typescript-eslint/parser";
 // `@enterprise-search/design-system`: explicitly NO `ThemeProvider`,
 // `useTheme`, `Menu`, `Popover*` — each touches `document` / `window` /
 // `localStorage` or owns layout context that an adapter must not own.
-export const ALLOWED_IMPORTS = {
-  react: ["createElement", "Fragment", "useState"],
-  "react-dom": [],
-  "@enterprise-search/design-system": [
-    "Button",
-    "Badge",
-    "Card",
-    "TextInput",
-    "Select",
-    "Switch",
-    "Toggle",
-    "Field",
-    "IconButton",
-    "StatusPill",
-    "AppIcon",
-    "HarnessRow",
-    "StatusLine",
-    "ConnectorChip",
-    "classNames",
-  ],
-} as const;
+export const ALLOWED_IMPORTS: Readonly<Record<string, readonly string[]>> =
+  ADAPTER_ALLOWLIST.allowed_imports;
 
-export type AllowedImportSource = keyof typeof ALLOWED_IMPORTS;
+export type AllowedImportSource = string;
 
-const FORBIDDEN_GLOBALS = new Set<string>([
-  "process",
-  "global",
-  "globalThis",
-  "child_process",
-  "fs",
-  "net",
-  "http",
-  "https",
-  "crypto",
-  "path",
-  "os",
-  "window",
-  "document",
-  "fetch",
-  "XMLHttpRequest",
-  "WebSocket",
-  "EventSource",
-  "Buffer",
-  "setImmediate",
-  "clearImmediate",
-  "require",
-]);
+const FORBIDDEN_GLOBALS: ReadonlySet<string> = new Set<string>(
+  ADAPTER_ALLOWLIST.forbidden_globals,
+);
 
 export interface AstViolation {
   readonly line: number;
