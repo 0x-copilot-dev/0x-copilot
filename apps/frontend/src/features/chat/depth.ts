@@ -17,12 +17,6 @@ export const THINKING_DEPTHS: readonly ThinkingDepth[] = [
   "deep",
 ];
 
-const EFFORT_BY_DEPTH: Record<ThinkingDepth, "low" | "medium" | "high"> = {
-  fast: "low",
-  balanced: "medium",
-  deep: "high",
-};
-
 const DEPTH_LABEL: Record<ThinkingDepth, string> = {
   fast: "Fast",
   balanced: "Balanced",
@@ -78,42 +72,10 @@ export function modelSupportsDepth(model: ModelCatalogModel | null): boolean {
   return Boolean(model.supports_reasoning) || model.reasoning != null;
 }
 
-/**
- * Layer a depth selection onto a `ModelSelection`-shaped object. Only
- * mutates the `reasoning` field; everything else flows through unchanged.
- *
- * Returns the input as-is when:
- * - depth is undefined,
- * - the existing reasoning shape declares `enabled: false`,
- * - the model does not support reasoning at all.
- *
- * Otherwise returns a new object with `reasoning.effort` overridden.
- * The original `reasoning.summary` and any other fields are preserved.
- */
-export function applyDepth<
-  T extends { reasoning?: Record<string, unknown> | null },
->(selection: T, depth: ThinkingDepth | undefined): T {
-  if (depth === undefined) {
-    return selection;
-  }
-  const reasoning = selection.reasoning ?? null;
-  // Respect an explicit opt-out — if the catalog row sets enabled=false we
-  // honour it. Anything else (null, missing, enabled=true, or unset)
-  // becomes an `enabled: true` block with our effort.
-  if (
-    reasoning &&
-    typeof reasoning === "object" &&
-    "enabled" in reasoning &&
-    reasoning.enabled === false
-  ) {
-    return selection;
-  }
-  return {
-    ...selection,
-    reasoning: {
-      ...(reasoning ?? {}),
-      enabled: true,
-      effort: EFFORT_BY_DEPTH[depth],
-    },
-  };
-}
+// Phase 1 (chats-canvas-prd §16): the `applyDepth(model, depth)` helper
+// was a workaround from before `CreateRunRequest.reasoning_depth` landed
+// as a top-level wire field. It baked depth into the model selection's
+// `reasoning.effort` slot at the frontend. Depth now flows at the wire
+// level (see `apps/frontend/src/api/agentApi.ts:createRun()`), so the
+// helper has no callers. Removed deliberately — keep the single source
+// of truth at the wire field.

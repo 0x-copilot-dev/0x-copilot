@@ -28,6 +28,7 @@ import type {
   MessageListResponse,
   ModelCatalogResponse,
   ModelSelectionRequest,
+  ReasoningDepth,
   RecipientPreview,
   RetentionEffectiveResponse,
   RuntimeEventEnvelope,
@@ -392,6 +393,14 @@ export function createRun(
   identity: RequestIdentity,
   options: {
     model?: ModelSelectionRequest | null;
+    /**
+     * Phase 1 (chats-canvas-prd §4.1 + §16) — top-level reasoning_depth
+     * on the wire. Replaces the legacy `applyDepth(model, depth)` hack
+     * that baked depth into the model selection's `reasoning.effort`
+     * field. `null` or omitted means "use the runtime default" (no
+     * regression vs. pre-depth behaviour).
+     */
+    reasoningDepth?: ReasoningDepth | null;
     content?: CreateRunRequest["content"];
     attachments?: CreateRunRequest["attachments"];
     quote?: Record<string, unknown>;
@@ -407,6 +416,7 @@ export function createRun(
     user_id: identity.userId,
     user_input: userInput,
     model: options.model,
+    reasoning_depth: options.reasoningDepth ?? null,
     content: options.content,
     attachments: options.attachments,
     quote: options.quote,

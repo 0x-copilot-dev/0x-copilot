@@ -1,7 +1,6 @@
 import type { ModelCatalogModel } from "@enterprise-search/api-types";
 import { describe, expect, it } from "vitest";
 import {
-  applyDepth,
   depthLabel,
   depthLabelForModel,
   isThinkingDepth,
@@ -18,11 +17,6 @@ const reasoningModel: ModelCatalogModel = {
   supports_streaming: true,
   supports_reasoning: true,
   reasoning: { enabled: true, effort: "medium" },
-};
-
-const optedOutModel: ModelCatalogModel = {
-  ...reasoningModel,
-  reasoning: { enabled: false },
 };
 
 const noReasoningModel: ModelCatalogModel = {
@@ -66,48 +60,10 @@ describe("modelSupportsDepth", () => {
   });
 });
 
-describe("applyDepth", () => {
-  it("is a no-op when depth is undefined", () => {
-    const sel = { provider: "openai", reasoning: { enabled: true } };
-    expect(applyDepth(sel, undefined)).toBe(sel);
-  });
-
-  it("preserves opt-out when reasoning.enabled === false", () => {
-    const sel = { reasoning: optedOutModel.reasoning };
-    expect(applyDepth(sel, "deep")).toBe(sel);
-  });
-
-  it("maps fast → low / balanced → medium / deep → high", () => {
-    expect(applyDepth({ reasoning: null }, "fast")).toEqual({
-      reasoning: { enabled: true, effort: "low" },
-    });
-    expect(applyDepth({ reasoning: null }, "balanced")).toEqual({
-      reasoning: { enabled: true, effort: "medium" },
-    });
-    expect(applyDepth({ reasoning: null }, "deep")).toEqual({
-      reasoning: { enabled: true, effort: "high" },
-    });
-  });
-
-  it("preserves unrelated reasoning fields", () => {
-    const sel = {
-      reasoning: { enabled: true, summary: "auto", custom: "x" },
-    };
-    expect(applyDepth(sel, "deep").reasoning).toMatchObject({
-      enabled: true,
-      effort: "high",
-      summary: "auto",
-      custom: "x",
-    });
-  });
-
-  it("preserves other selection fields", () => {
-    const sel = { provider: "openai", model_name: "gpt-5.4", reasoning: null };
-    const next = applyDepth(sel, "fast");
-    expect(next.provider).toBe("openai");
-    expect(next.model_name).toBe("gpt-5.4");
-  });
-});
+// applyDepth was removed in Phase 1 P1-C (chats-canvas-prd §16) — depth
+// now flows as a top-level `reasoning_depth` wire field on
+// CreateRunRequest. The wire-level contract is tested in
+// `apps/frontend/src/api/agentApi.depth.test.ts`.
 
 describe("depthLabelForModel (PR 3.5 / G3)", () => {
   it("falls back to the default label when the model has no reasoning hint", () => {

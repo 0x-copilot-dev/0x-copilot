@@ -59,7 +59,6 @@ import { Topbar } from "./components/shell";
 import { SharePopover } from "../share/SharePopover";
 import {
   DEFAULT_THINKING_DEPTH,
-  applyDepth,
   isThinkingDepth,
   modelSupportsDepth,
   type ThinkingDepth,
@@ -105,7 +104,13 @@ import { useWorkspacePaneAutoOpenSignal } from "./components/workspace/useWorksp
 import {
   scrollChatToCitation,
   scrollChatToEvent,
+  useKeyValueStore,
 } from "@enterprise-search/chat-surface";
+import {
+  readDepth as readDepthKv,
+  writeConversationDepth,
+  writeDefaultDepth,
+} from "./chatDepthKv";
 import { SourcePreviewProvider } from "./components/citations/SourcePreview";
 import { SubagentFleetProvider } from "./components/subagents/SubagentFleetContext";
 import { listSources } from "../../api/agentApi";
@@ -218,14 +223,41 @@ export function ChatScreen({
   const [initialHistoryLoaded, setInitialHistoryLoaded] = useState(false);
   const [historyError, setHistoryError] = useState<string | null>(null);
   const [selectedModelId, setSelectedModelId] = useState(demoModels[0].id);
-  // PR 2.1 — thinking depth maps onto reasoning.effort via applyDepth.
-  // Persisted across reloads; ignored when the active model doesn't
-  // support reasoning. Mid-run depth changes never affect the active
-  // run — the worker reads the frozen ModelConfig from runtime_context.
-  const [depth, setDepth] = useLocalStorageState<ThinkingDepth>(
+  // Phase 1 P1-C (chats-canvas-prd §16) — thinking depth rides as a
+  // top-level `reasoning_depth` field on `CreateRunRequest`. Persisted
+  // across reloads via the existing localStorage key for backwards-
+  // compatibility; the per-conversation / per-user KV persistence
+  // shipped alongside (see `chatDepthKv.ts`). Mid-run depth changes
+  // never affect the active run — the worker reads the frozen
+  // ModelConfig from runtime_context.
+  const [depthLocal, setDepthLocal] = useLocalStorageState<ThinkingDepth>(
     "atlas:thinking-depth",
     DEFAULT_THINKING_DEPTH,
     isThinkingDepth,
+  );
+  // KeyValueStore-backed depth persistence (chats-canvas-prd §16).
+  // Resolution: per-conversation → per-user default → null (runtime
+  // default). We keep `depthLocal` as the active in-render value so the
+  // UI never blocks on KV reads, and sync it from KV on mount /
+  // conversation switch. Writes go to both the legacy localStorage key
+  // (via setDepthLocal) AND the KV store so the substrate-portable path
+  // is always populated.
+  const kvStore = useKeyValueStore();
+  const depth = depthLocal;
+  const setDepth = useCallback(
+    (next: ThinkingDepth): void => {
+      setDepthLocal(next);
+      // Persist per-user default unconditionally; per-conversation when
+      // a conversation is active. P1-B's Composer extras will surface
+      // an explicit per-conv vs. per-user picker — for P1-C, "the user
+      // changed depth" implies "make it the per-user default and the
+      // current conversation's pick".
+      writeDefaultDepth(kvStore, next);
+      if (conversationId !== null) {
+        writeConversationDepth(kvStore, conversationId, next);
+      }
+    },
+    [conversationId, kvStore, setDepthLocal],
   );
   const streamRef = useRef<AgentEventStream | null>(null);
   const latestSequenceRef = useRef(0);
@@ -295,6 +327,21 @@ export function ChatScreen({
   useEffect(() => {
     setSelectedComposerSkills([]);
   }, [conversationId]);
+
+  // Phase 1 P1-C (chats-canvas-prd §16) — on conversation switch, pull
+  // the effective depth from KV (per-conversation → per-user default).
+  // Falls back to the legacy localStorage value (already in `depthLocal`
+  // via useLocalStorageState) when neither KV key is set, so existing
+  // installs don't reset to balanced on first load after this lands.
+  // Intentionally re-runs only on conversation switch — kvStore is
+  // provider-owned (stable identity); setDepthLocal is reference-stable
+  // from useState.
+  useEffect(() => {
+    const fromKv = readDepthKv(kvStore, conversationId);
+    if (fromKv !== null) {
+      setDepthLocal(fromKv);
+    }
+  }, [conversationId, kvStore, setDepthLocal]);
 
   const suggestedServers = useMemo(
     () =>
@@ -865,10 +912,12 @@ export function ChatScreen({
           runtimeUserInput,
           identity,
           {
-            model: applyDepth(
-              modelSelectionForId(demoModels, selectedModelId),
-              depth,
-            ),
+            // chats-canvas-prd §16 — depth rides as a top-level
+            // `reasoning_depth` field on the wire; the model selection
+            // is unchanged. The `applyDepth(model, depth)` hack was a
+            // workaround from before the wire field landed.
+            model: modelSelectionForId(demoModels, selectedModelId),
+            reasoningDepth: depth,
             attachments,
             content,
             quote,
@@ -1583,10 +1632,9 @@ export function ChatScreen({
           REGENERATE_PREVIOUS_RESPONSE_PROMPT,
         identity,
         {
-          model: applyDepth(
-            modelSelectionForId(demoModels, selectedModelId),
-            depth,
-          ),
+          // chats-canvas-prd §16 — depth as top-level `reasoning_depth`.
+          model: modelSelectionForId(demoModels, selectedModelId),
+          reasoningDepth: depth,
           parentMessageId,
           sourceMessageId,
           regenerateFromMessageId: sourceMessageId ?? parentMessageId,
