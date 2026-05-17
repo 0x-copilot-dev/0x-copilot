@@ -8,14 +8,14 @@ version = "0.1.0"
 description = "Core product backend for Enterprise Search"
 requires-python = ">=3.13"
 dependencies = [
-  "cryptography>=44.0.0",
+  "cryptography==47.0.0",
   "fastapi==0.136.1",
   "httpx==0.28.1",
   "psycopg[binary]==3.3.3",
-  "psycopg_pool>=3.2.0",
+  "psycopg_pool==3.3.1",
   "pydantic==2.13.3",
   "python-dotenv==1.2.2",
-  "pyyaml>=6.0.1",
+  "pyyaml==6.0.3",
   "uvicorn==0.46.0",
   "opentelemetry-api==1.41.1",
   "opentelemetry-sdk==1.41.1",
