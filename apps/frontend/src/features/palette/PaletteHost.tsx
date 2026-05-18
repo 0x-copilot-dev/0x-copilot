@@ -1,34 +1,30 @@
-// PaletteHost — web-substrate adapter for the ⌘K palette
-// (sub-PRD §7.3 / §7.5).
+// PaletteHost — web-substrate adapter for the global ⌘K palette.
 //
 // Wires:
 //   * a `PaletteSearchPort` implementation that calls
 //     `paletteApi.search` through the facade;
-//   * the chat-surface `<CommandPalette>` shell (which already owns
-//     ⌘K / Esc / ↑↓ / Enter keyboard handling — sub-PRD §7.3 keyboard
-//     contract).
-//
-// Until the P12-B3 chat-surface palette revamp lands, the search port is
-// pre-flighted once on mount (and re-fetched on identity change) and the
-// hits are passed as `extraEntries` to the existing `<CommandPalette>`.
-// When the chat-surface palette gains real search-as-you-type wiring,
-// PaletteHost will hand the port through instead of pre-loading.
+//   * the canonical chat-surface `<CommandPalette>` (P12-B3) — host owns
+//     the `open` state and the ⌘K / Esc hotkey via
+//     `useCommandPaletteHotkey`.
 //
 // MUST be mounted exactly once at the App.tsx root so the ⌘K hotkey is
 // global and the underlying CommandPalette renders one modal scrim per
 // page.
 
-import { useEffect, useMemo, useState, type ReactElement } from "react";
+import { useCallback, useMemo, useState, type ReactElement } from "react";
 
-import { CommandPalette } from "@enterprise-search/chat-surface";
+import {
+  CommandPalette,
+  useCommandPaletteHotkey,
+} from "@enterprise-search/chat-surface";
 import type {
+  PaletteHit,
   PaletteSearchRequest,
   PaletteSearchResponse,
 } from "@enterprise-search/api-types";
 
 import type { RequestIdentity } from "../../api/config";
 import { searchPalette } from "../../api/paletteApi";
-import { paletteHitsToEntries, type CommandPaletteEntry } from "./adapters";
 import type { PaletteSearchPort } from "./paletteSearchPort";
 
 interface PaletteHostProps {
@@ -50,40 +46,67 @@ export function createWebPaletteSearchPort(
   };
 }
 
+/**
+ * Default starter actions shown when the input is empty. The host
+ * owns these — chat-surface renders them; the server is consulted
+ * once the user types.
+ */
+const STARTER_ACTIONS: ReadonlyArray<PaletteHit> = [
+  {
+    id: "starter_search_team",
+    kind: "navigation",
+    title: "Search the team",
+    subtitle: "Find a person, role, or owner",
+    route: "/team",
+    score: 1,
+  },
+  {
+    id: "starter_open_todos",
+    kind: "navigation",
+    title: "Open my todos",
+    subtitle: "Today, overdue, and upcoming",
+    route: "/todos",
+    score: 1,
+  },
+  {
+    id: "starter_new_chat",
+    kind: "action",
+    title: "Start a chat",
+    subtitle: "Open the composer on a fresh conversation",
+    action_token: "start_new_chat",
+    score: 1,
+  },
+  {
+    id: "starter_open_settings",
+    kind: "navigation",
+    title: "Open settings",
+    subtitle: "Notifications, security, profile",
+    route: "/settings",
+    score: 1,
+  },
+];
+
 export function PaletteHost({ identity }: PaletteHostProps): ReactElement {
-  const [hits, setHits] = useState<ReadonlyArray<CommandPaletteEntry>>([]);
+  const [open, setOpen] = useState(false);
 
   const port = useMemo<PaletteSearchPort>(
     () => createWebPaletteSearchPort(identity),
     [identity],
   );
 
-  // Pre-flight an empty-query search so the palette shows server-ranked
-  // suggestions the moment the user opens it (sub-PRD §3.3 — empty `q`
-  // is allowed; the server returns its default "no-query" hits). Re-runs
-  // whenever the active identity changes.
-  useEffect(() => {
-    let cancelled = false;
-    port
-      .search({ q: "", limit: 25 })
-      .then((res) => {
-        if (cancelled) return;
-        setHits(paletteHitsToEntries(res.hits));
-      })
-      .catch(() => {
-        // Palette is best-effort — a 503 / network blip should not
-        // crash the host. The user still gets the chat-surface default
-        // entries (destinations + chats).
-        if (!cancelled) setHits([]);
-      });
-    return () => {
-      cancelled = true;
-    };
-  }, [port]);
+  const handleOpen = useCallback(() => setOpen(true), []);
+  const handleClose = useCallback(() => setOpen(false), []);
+
+  useCommandPaletteHotkey({ onOpen: handleOpen });
 
   return (
-    <div data-testid="palette-host" data-hit-count={hits.length}>
-      <CommandPalette extraEntries={hits} />
+    <div data-testid="palette-host" data-palette-open={open ? "true" : "false"}>
+      <CommandPalette
+        open={open}
+        onRequestClose={handleClose}
+        searchPort={port}
+        starterActions={STARTER_ACTIONS}
+      />
     </div>
   );
 }

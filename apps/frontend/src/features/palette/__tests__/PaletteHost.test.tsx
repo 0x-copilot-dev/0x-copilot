@@ -1,4 +1,4 @@
-import { render, waitFor } from "@testing-library/react";
+import { render } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { ReactElement, ReactNode } from "react";
 
@@ -82,9 +82,7 @@ describe("PaletteHost", () => {
   });
   afterEach(() => vi.clearAllMocks());
 
-  it("pre-flights an empty-query search on mount and renders the host", async () => {
-    paletteApiMocks.searchPalette.mockResolvedValueOnce(fixtureResponse());
-
+  it("mounts with the palette closed and does NOT pre-flight a search", () => {
     const { getByTestId } = render(
       <StubRouterProvider>
         <PaletteHost identity={IDENTITY} />
@@ -92,34 +90,11 @@ describe("PaletteHost", () => {
     );
 
     expect(getByTestId("palette-host")).toBeDefined();
-    await waitFor(() => {
-      expect(paletteApiMocks.searchPalette).toHaveBeenCalledWith(IDENTITY, {
-        q: "",
-        limit: 25,
-      });
-    });
-    await waitFor(() => {
-      expect(getByTestId("palette-host").getAttribute("data-hit-count")).toBe(
-        "1",
-      );
-    });
-  });
-
-  it("recovers from a 503 by rendering with zero extra entries", async () => {
-    paletteApiMocks.searchPalette.mockRejectedValueOnce(
-      new Error("palette unavailable"),
+    expect(getByTestId("palette-host").getAttribute("data-palette-open")).toBe(
+      "false",
     );
-
-    const { getByTestId } = render(
-      <StubRouterProvider>
-        <PaletteHost identity={IDENTITY} />
-      </StubRouterProvider>,
-    );
-
-    await waitFor(() => {
-      expect(getByTestId("palette-host").getAttribute("data-hit-count")).toBe(
-        "0",
-      );
-    });
+    // Canonical CommandPalette is search-on-open + debounced — the host
+    // never calls the port at mount time.
+    expect(paletteApiMocks.searchPalette).not.toHaveBeenCalled();
   });
 });
