@@ -166,6 +166,20 @@ from backend_app.library import (
     register_library_routes,
     register_library_search_routes,
 )
+from backend_app.library.index_jobs import (
+    InMemoryLibraryIndexJobsStore,
+    LibraryIndexJobsStore,
+)
+from backend_app.memory import (
+    InMemoryMemoryStore,
+    InMemoryMemorySearchIndex,
+    MemoryIndexer,
+    MemorySearchEngine,
+    MemoryService,
+    MemoryStore,
+    register_memory_routes,
+    register_memory_sse_routes,
+)
 from backend_app.projects.template_routes import register_template_routes
 from backend_app.projects.templates import (
     InMemoryProjectTemplatesStore,
@@ -402,6 +416,8 @@ def create_app(
     library_store: LibraryStore | None = None,
     library_blob_store: object | None = None,
     library_row_store: object | None = None,
+    library_index_jobs_store: LibraryIndexJobsStore | None = None,
+    memory_store: MemoryStore | None = None,
     agents_store: AgentsStore | None = None,
     tools_store: ToolsStore | None = None,
     liveness_service: LivenessService | None = None,
@@ -1643,6 +1659,43 @@ def create_app(
     register_library_search_routes(app, engine=library_search_engine)
 
     register_library_routes(app, service=library_service)
+
+    # =====================================================================
+    # Phase 12 P12-A3 — Memory destination (CRUD + proposals + search + SSE).
+    #
+    # Memory embeddings RIDE the existing Library queue:
+    # ``library_index_jobs`` rows with ``target_kind="memory"``. There is
+    # intentionally NO ``memory_embeddings`` table — sub-PRD §5.1 DRY.
+    # =====================================================================
+    resolved_index_jobs_store: LibraryIndexJobsStore = (
+        library_index_jobs_store or InMemoryLibraryIndexJobsStore()
+    )
+    app.state.library_index_jobs_store = resolved_index_jobs_store
+    resolved_memory_store: MemoryStore = memory_store or InMemoryMemoryStore()  # type: ignore[assignment]
+    app.state.memory_store = resolved_memory_store
+    # SSE bus must be on app.state BEFORE the service is constructed so
+    # the service can publish through it.
+    register_memory_sse_routes(app)
+    memory_service = MemoryService(
+        store=resolved_memory_store,
+        membership_port=projects_service._membership_port,  # noqa: SLF001 — canonical port reuse
+        activity_bus=app.state.memory_activity_bus,
+        indexer=MemoryIndexer(jobs_store=resolved_index_jobs_store),
+    )
+    app.state.memory_service = memory_service
+    # Hybrid search engine — in-memory BM25 + no-op embeddings (the
+    # production composer wires a real ``EmbeddingsClientPort`` that
+    # calls ai-backend ``/internal/v1/llm/embed`` with the
+    # ``Purpose.MEMORY_RETRIEVAL`` tag).
+    memory_search_engine = MemorySearchEngine(
+        store=resolved_memory_store,
+        index=InMemoryMemorySearchIndex(store=resolved_memory_store),
+        membership_port=projects_service._membership_port,  # noqa: SLF001
+    )
+    app.state.memory_search_engine = memory_search_engine
+    register_memory_routes(
+        app, service=memory_service, search_engine=memory_search_engine
+    )
 
     # =====================================================================
     # Phase 8 P8-A1 — Agents destination CRUD.
