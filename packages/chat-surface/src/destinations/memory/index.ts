@@ -1,6 +1,1 @@
-export {
-  MemoryDestination,
-  type Memory,
-  type MemoryDestinationProps,
-  type MemoryType,
-} from "./MemoryDestination";
+export { MemoryDestination } from "./MemoryDestination";

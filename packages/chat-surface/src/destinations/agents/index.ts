@@ -1,1 +1,1 @@
-export { AgentsDestination, type AgentRunRow } from "./AgentsDestination";
+export { AgentsDestination } from "./AgentsDestination";

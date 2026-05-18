@@ -29,7 +29,6 @@ export {
   type ShellDestination,
   type ShellDestinationSlug,
 } from "./destinations";
-
 // === Phase 0.5 shared primitives ===
 export {
   PageHeader,
@@ -59,3 +58,10 @@ export {
   type ActivityRow,
 } from "./ActivityList";
 // === end Phase 0.5 ===
+
+// === W0 placeholder for not-yet-built destinations ===
+export {
+  DestinationPlaceholder,
+  type DestinationPlaceholderBridge,
+  type DestinationPlaceholderProps,
+} from "./DestinationPlaceholder";

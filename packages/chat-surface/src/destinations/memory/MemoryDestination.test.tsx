@@ -6,245 +6,97 @@ import type {
   TransportCapabilities,
   TypedRequest,
 } from "@enterprise-search/chat-transport";
-import { render, screen, waitFor, within } from "@testing-library/react";
-import userEvent from "@testing-library/user-event";
+import { fireEvent, render, screen } from "@testing-library/react";
 import { describe, expect, it, vi } from "vitest";
 
+import { RouterProvider } from "../../providers/RouterProvider";
 import { TransportProvider } from "../../providers/TransportProvider";
-import {
-  MemoryDestination,
-  type Memory,
-  type MemoryType,
-} from "./MemoryDestination";
+import type { NavigateOptions, Router } from "../../routing/router";
 
-const CAPS: TransportCapabilities = {
-  substrate: "web",
-  nativeSecretStorage: false,
-  fileSystemAccess: false,
-  clipboardWrite: false,
-  openExternal: false,
-};
+import { MemoryDestination } from "./MemoryDestination";
 
-const SESSION: Session = { bearer: null };
+// Wave-0 MemoryDestination is the dignified placeholder. It must
+// not hit the backend — the previous fetch to /v1/memory 404'd
+// (Phase 11 work).
 
-interface CallLog {
-  readonly path: string;
-  readonly type: MemoryType | undefined;
-}
+type AnyRoute = unknown;
 
-function makeTransport(
-  handler: (type: MemoryType | undefined) => Promise<unknown>,
-): { readonly transport: Transport; readonly calls: CallLog[] } {
-  const calls: CallLog[] = [];
-  const transport: Transport = {
-    request: <TRes,>(req: TypedRequest): Promise<TRes> => {
-      const type =
-        typeof req.query?.type === "string"
-          ? (req.query.type as MemoryType)
-          : undefined;
-      calls.push({ path: req.path, type });
-      return handler(type).then((v) => v as TRes);
-    },
-    subscribeServerSentEvents: (
-      _opts: SseSubscribeOptions,
-    ): SseSubscription => ({
-      close: () => undefined,
-    }),
-    getSession: () => SESSION,
-    capabilities: () => CAPS,
-  };
-  return { transport, calls };
-}
-
-function memoryFixture(over: Partial<Memory> = {}): Memory {
+function makeRouter(): Router<AnyRoute> & {
+  readonly navigate: ReturnType<typeof vi.fn>;
+} {
+  const navigate = vi.fn<(route: AnyRoute, opts?: NavigateOptions) => void>();
   return {
-    id: "mem_1",
-    type: "user",
-    title: "Prefers TypeScript over Python",
-    description: "Sarah codes mostly in TypeScript on the desktop app.",
-    lastUpdatedIso: new Date(Date.now() - 1000 * 60 * 60).toISOString(),
-    pinned: false,
-    ...over,
+    current(): AnyRoute {
+      return { screen: "chat", destination: "memory" } as AnyRoute;
+    },
+    navigate,
+    subscribe: () => () => {},
   };
 }
 
-describe("MemoryDestination", () => {
-  it("renders a loading skeleton before the user tab resolves", () => {
-    const { transport } = makeTransport(() => new Promise(() => undefined));
-    render(
-      <TransportProvider transport={transport}>
-        <MemoryDestination />
-      </TransportProvider>,
-    );
-    expect(screen.getByTestId("memory-loading")).toBeInTheDocument();
-  });
-
-  it("renders memory cards sorted with pinned first", async () => {
-    const { transport } = makeTransport(async (type) => {
-      if (type !== "user") return { memories: [] };
+function makeTransport(): {
+  readonly transport: Transport;
+  readonly requests: ReadonlyArray<TypedRequest>;
+} {
+  const requests: TypedRequest[] = [];
+  const transport: Transport = {
+    request<TRes>(req: TypedRequest): Promise<TRes> {
+      requests.push(req);
+      return Promise.reject(
+        new Error("MemoryDestination must not fetch"),
+      ) as Promise<TRes>;
+    },
+    subscribeServerSentEvents(_opts: SseSubscribeOptions): SseSubscription {
+      return { close: () => undefined };
+    },
+    getSession(): Session {
+      return { bearer: null };
+    },
+    capabilities(): TransportCapabilities {
       return {
-        memories: [
-          memoryFixture({ id: "a", title: "Alpha", pinned: false }),
-          memoryFixture({ id: "b", title: "Bravo", pinned: true }),
-          memoryFixture({ id: "c", title: "Charlie", pinned: false }),
-        ],
+        substrate: "web",
+        nativeSecretStorage: false,
+        fileSystemAccess: false,
+        clipboardWrite: false,
+        openExternal: false,
       };
-    });
-    render(
-      <TransportProvider transport={transport}>
-        <MemoryDestination />
-      </TransportProvider>,
-    );
-    const list = await screen.findByTestId("memory-list");
-    const titles = within(list)
-      .getAllByRole("heading", { level: 2 })
-      .map((h) => h.textContent);
-    expect(titles).toEqual(["Bravo", "Alpha", "Charlie"]);
-  });
+    },
+  };
+  return { transport, requests };
+}
 
-  it("renders the empty-state card when no memories exist", async () => {
-    const { transport } = makeTransport(async () => ({ memories: [] }));
-    render(
-      <TransportProvider transport={transport}>
+function renderMemory() {
+  const { transport, requests } = makeTransport();
+  const router = makeRouter();
+  render(
+    <TransportProvider transport={transport}>
+      <RouterProvider router={router}>
         <MemoryDestination />
-      </TransportProvider>,
-    );
-    expect(await screen.findByTestId("memory-empty")).toBeInTheDocument();
-  });
+      </RouterProvider>
+    </TransportProvider>,
+  );
+  return { requests, router };
+}
 
-  it("renders an error sentinel when the transport rejects", async () => {
-    const { transport } = makeTransport(async () => {
-      throw new Error("memory service down");
-    });
-    render(
-      <TransportProvider transport={transport}>
-        <MemoryDestination />
-      </TransportProvider>,
-    );
-    const errorCard = await screen.findByTestId("memory-error");
-    expect(errorCard).toHaveTextContent("memory service down");
-  });
-
-  it("filters memories by the search query", async () => {
-    const user = userEvent.setup();
-    const { transport } = makeTransport(async () => ({
-      memories: [
-        memoryFixture({
-          id: "1",
-          title: "TypeScript preferred",
-          description: "",
-        }),
-        memoryFixture({ id: "2", title: "Python only", description: "" }),
-      ],
-    }));
-    render(
-      <TransportProvider transport={transport}>
-        <MemoryDestination />
-      </TransportProvider>,
-    );
-    await screen.findByTestId("memory-list");
-    const search = screen.getByLabelText("Search memories");
-    await user.type(search, "python");
-    const list = screen.getByTestId("memory-list");
-    const titles = within(list)
-      .getAllByRole("heading", { level: 2 })
-      .map((h) => h.textContent);
-    expect(titles).toEqual(["Python only"]);
-  });
-
-  it("shows a no-match card when the search excludes every memory", async () => {
-    const user = userEvent.setup();
-    const { transport } = makeTransport(async () => ({
-      memories: [memoryFixture({ title: "TypeScript", description: "lang" })],
-    }));
-    render(
-      <TransportProvider transport={transport}>
-        <MemoryDestination />
-      </TransportProvider>,
-    );
-    await screen.findByTestId("memory-list");
-    await user.type(screen.getByLabelText("Search memories"), "rust");
+describe("MemoryDestination (Wave-0 placeholder)", () => {
+  it("renders the placeholder and never calls the transport", () => {
+    const { requests } = renderMemory();
+    expect(screen.getByTestId("destination-placeholder")).toBeInTheDocument();
     expect(
-      await screen.findByTestId("memory-empty-search"),
-    ).toBeInTheDocument();
+      screen.getByTestId("destination-placeholder-title"),
+    ).toHaveTextContent("What the agent remembers");
+    expect(
+      screen.getByTestId("destination-placeholder-phase"),
+    ).toHaveTextContent("Coming in Phase 11");
+    expect(requests).toHaveLength(0);
   });
 
-  it("fetches a different type when a different tab is selected", async () => {
-    const user = userEvent.setup();
-    const { transport, calls } = makeTransport(async (type) => ({
-      memories: [
-        memoryFixture({
-          id: `id-${type}`,
-          type: type ?? "user",
-          title: `t-${type}`,
-        }),
-      ],
-    }));
-    render(
-      <TransportProvider transport={transport}>
-        <MemoryDestination />
-      </TransportProvider>,
-    );
-    await screen.findByTestId("memory-list");
-    expect(calls.map((c) => c.type)).toEqual(["user"]);
-
-    await user.click(screen.getByRole("tab", { name: /project memories/i }));
-    await waitFor(() => {
-      expect(calls.map((c) => c.type)).toEqual(["user", "project"]);
+  it("navigates via the host's chat destination route when a bridge is clicked", () => {
+    const { router } = renderMemory();
+    fireEvent.click(screen.getByTestId("destination-placeholder-bridge-team"));
+    expect(router.navigate).toHaveBeenCalledWith({
+      screen: "chat",
+      destination: "team",
     });
-    expect(screen.getByText("t-project")).toBeInTheDocument();
-
-    await user.click(screen.getByRole("tab", { name: /reference memories/i }));
-    await waitFor(() => {
-      expect(calls.map((c) => c.type)).toEqual([
-        "user",
-        "project",
-        "reference",
-      ]);
-    });
-  });
-
-  it("does not refetch when switching back to a cached tab", async () => {
-    const user = userEvent.setup();
-    const { transport, calls } = makeTransport(async (type) => ({
-      memories: [
-        memoryFixture({
-          id: `id-${type}`,
-          type: type ?? "user",
-          title: `t-${type}`,
-        }),
-      ],
-    }));
-    render(
-      <TransportProvider transport={transport}>
-        <MemoryDestination />
-      </TransportProvider>,
-    );
-    await screen.findByTestId("memory-list");
-
-    await user.click(screen.getByRole("tab", { name: /project memories/i }));
-    await waitFor(() => expect(calls.length).toBe(2));
-
-    await user.click(screen.getByRole("tab", { name: /user memories/i }));
-    expect(calls.length).toBe(2);
-  });
-
-  it("invokes onTogglePin and onDelete when the row actions are clicked", async () => {
-    const user = userEvent.setup();
-    const onTogglePin = vi.fn();
-    const onDelete = vi.fn();
-    const { transport } = makeTransport(async () => ({
-      memories: [memoryFixture({ pinned: false })],
-    }));
-    render(
-      <TransportProvider transport={transport}>
-        <MemoryDestination onTogglePin={onTogglePin} onDelete={onDelete} />
-      </TransportProvider>,
-    );
-    await screen.findByTestId("memory-list");
-    await user.click(screen.getByRole("button", { name: /pin memory/i }));
-    expect(onTogglePin).toHaveBeenCalledTimes(1);
-    await user.click(screen.getByRole("button", { name: /delete memory/i }));
-    expect(onDelete).toHaveBeenCalledTimes(1);
   });
 });

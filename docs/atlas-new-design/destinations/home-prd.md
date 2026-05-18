@@ -1,9 +1,9 @@
-# Home — sub-PRD (Phase 2)
+# Home — sub-PRD (Phase 9)
 
-**Status:** draft (2026-05-17)
-**Owner:** parth (orchestrator) — sub-PRD by the Phase 2 dispatch agent
+**Status:** draft (2026-05-18)
+**Owner:** parth (orchestrator) — sub-PRD by the Phase 9 dispatch agent
 **Parents:** [PRD.md](../PRD.md) · [destinations-master-prd.md](../destinations-master-prd.md) (§3 enterprise checklist, §4 shared primitives, §5.1 Home)
-**Design source of truth:** `/tmp/atlas-design/enterprise-search-template/project/dest-home.jsx` (HomeMain + HomePanel), `os-app.jsx:140-147` (how they mount side-by-side), `os-data.jsx` (cross-destination shapes), `chats/chat1.md:104` (the activity-feed copy intent).
+**Supersedes:** Phase 2 home-prd.md (this file is the rewrite — see §1.5 for redesign rationale and what changed).
 
 ---
 
@@ -11,46 +11,96 @@
 
 ### 1.1 What Home is
 
-Home is the **morning briefing** — the first surface the user sees when they open Atlas. Not a landing page, not a dashboard, not a chat. It answers one question:
+Home is the **morning briefing** — the first surface the user sees when they open Atlas. It answers four questions, in order of urgency:
 
-> _What happened while I was away, and what should I pick up?_
+1. **Does anything need me right now?** (approvals waiting, runs that failed, overdue items)
+2. **What happened while I was away?** (runs completed, threads updated, items shipped — past-tense, scannable)
+3. **What's coming up today?** (meetings, scheduled routines, todos due today — one merged timeline)
+4. **Where do I pick up?** (in-flight projects with recent activity)
 
-Atlas operates across the user's SaaS surfaces between sessions (drafts emails, queries Salesforce, watches incidents, summarizes meetings, surfaces risks). Most of that work is **agent-initiated** — Atlas or a scheduled subagent decided it was worth doing. Home is where that work surfaces in summarized form so the user can decide which thread to step back into first.
+Atlas operates across the user's SaaS surfaces between sessions (drafts emails, queries data, watches incidents, summarizes meetings). Most of that work is **agent-initiated**. Home is where that work surfaces in summarized form so the user can decide which thread to step back into first.
 
-Home is **read-only**. No compose affordance on Home itself; every action drills into another destination. Home is the index, not the workbench.
+Home is **read-only**. No compose affordance, no inline mutations. Every action drills into another destination. Home is the index, not the workbench.
 
-### 1.2 Who it's for
+### 1.2 The 5-second test
 
-Every Atlas user, every day. Not gated by role, plan, or tenant maturity. A brand-new tenant with zero chats / agents / todos still sees Home — with an empty-state (§12) that teaches them how to start.
+A returning user lands on Home. **In under 5 seconds**, without scrolling, they can answer: "Do I need to do anything right now?" If yes, they click into it. If no, they continue scanning the briefing.
 
-### 1.3 Success state
+If the user has to scan 6 widgets before knowing whether triage is required, the design has failed. The triage strip exists exactly to compress this scan to a single horizontal glance.
 
-In under 15 seconds, the user can: (1) read the greeting (confirms personalization works), (2) scan agent activity (what happened overnight), (3) identify the one thing that matters first, (4) drill in. A failed Home is one where the user opens it and has to navigate elsewhere to find their bearings — the acceptance bar is: a returning user knows their next action before they scroll.
+### 1.3 Who it's for
 
-### 1.4 What Home is not
+Every Atlas user, every day. Not gated by role, plan, or tenant maturity. A brand-new tenant with zero data still sees Home — but with a **welcome state** (§14.4), not a six-empty-card graveyard.
 
-- Not infinite scroll — activity feed is bounded (last 24h, 15 entries max).
-- Not customizable — section order fixed in Wave 2; personalization is data-driven, not layout-driven.
-- Not a write surface — new-chat is a panel quick-action that opens chats.
-- Not real-time chat — SSE updates are kind-level events, not token streams.
+### 1.4 What Home is NOT
+
+- **Not a dashboard.** No charts, no sparklines, no "agent activity over time." Atlas is an agent workspace, not BI.
+- **Not a chat launcher.** Chat is the right rail of the workspace, not the center of Home. No bottom-of-page composer.
+- **Not a tool catalog.** Favorite tools belong in Tools; pinned chats belong in the chats sidebar — Home is neither.
+- **Not infinite scroll.** Bounded counts per section. Drill-in to see more.
+- **Not customizable layout.** Section order is fixed in Phase 9; personalization is data-driven, not chrome-driven.
+- **Not a write surface.** Pinning, approving, completing, starring all happen on the source destination. (Inline approve from the LiveActivityRail is a possible Phase 11+ addition, not Phase 9.)
+
+### 1.5 What changed from Phase 2 (rewrite rationale)
+
+The Phase 2 home-prd.md specified a 7-section model: `agent_activity, pinned_chats, recent_runs, favorite_tools, todays_focus, upcoming_meetings, starred_projects`. The route + backend stubs shipped, but the live experience in dev (no seed data) reveals two structural problems:
+
+1. **Empty-six-cards graveyard.** Every section returned `{status:"ok", data:[]}`. Six skeletons, then six "Nothing here yet" placeholders. The user can't tell what Home is _for_ from looking at it.
+2. **Section list assembled from "what data do we have" instead of "what story does Home tell."** Pinned chats and favorite tools are _one click away_ in the sidebar / Tools destination — surfacing them again on Home is duplicate navigation, not signal. Recent runs as a standalone list competes with the activity feed for the same eye-real-estate. The today widgets (focus / meetings / routines) fragment one mental model ("what's on my plate today") into three side-by-side cards.
+
+Phase 9 reframes Home around the four questions in §1.1 and re-cuts the section list accordingly:
+
+| Phase 2 section     | Phase 9 fate                                                                                           |
+| ------------------- | ------------------------------------------------------------------------------------------------------ |
+| `agent_activity`    | **Demoted** — moved from top-of-page to **LiveActivityRail** (right-side or bottom-strip subordinate)  |
+| `pinned_chats`      | **Dropped** — chats sidebar already surfaces pinned chats one click away                               |
+| `recent_runs`       | **Subsumed** — completed runs now appear in the **WhatsNewDigest** alongside other past-tense activity |
+| `favorite_tools`    | **Dropped** — belongs in Tools destination                                                             |
+| `todays_focus`      | **Merged** — todos due today are entries in the **TodayTimeline**                                      |
+| `upcoming_meetings` | **Merged** — calendar entries are TodayTimeline entries                                                |
+| `starred_projects`  | **Replaced** — `InFlightStrip` shows projects with _recent activity_ (signal), not stars (preference)  |
+
+And Phase 9 **adds** three new sections that the Phase 2 model did not have:
+
+- **TriageStrip** (top of page, above the fold) — one-line "Does anything need me?" answer
+- **TodayTimeline** — chronological merge of meetings + routine fires + todos due + scheduled runs
+- **WhatsNewDigest** — past-tense "since last visit" cutoff, scannable list, bounded
+
+Phase 9 also addresses two operational gaps:
+
+- **Dev seed runner** (§7) — `dev_seed.yaml` keyed by persona slug, primes real persistence at startup so Home demos with density.
+- **Facade SSE proxy fix** (§8) — the current 404 on `/v1/home/stream` (facade only proxies `/v1/home`, not the stream).
+
+### 1.6 Success state
+
+A Sarah Chen opens Atlas at 9:14 AM. In one viewport she sees:
+
+- "Good morning, Sarah. Monday, May 18"
+- `⚠ 3 approvals waiting · ⚠ 1 run failed · • 2 due today` — three clickable chips
+- TodayTimeline: 4 entries between 9:30 and 16:00
+- WhatsNewDigest: "Since 5:42 PM yesterday" — 3 completed runs, 1 failure, 1 routine fire
+- InFlightStrip: 2 projects, last activity timestamps
+- LiveActivityRail (right side): 4 most recent agent activities streaming in
+
+She knows in under 5 seconds whether she needs to triage or can keep scanning. **That is the bar.**
 
 ---
 
 ## 2. Source-of-truth map
 
-Per [destinations-master-prd.md §2.2](../destinations-master-prd.md#22-single-source-of-truth-per-destination), exactly one canonical file exists for each concern. **A second copy is a bug.**
+Per [destinations-master-prd.md §2.2](../destinations-master-prd.md#22-single-source-of-truth-per-destination), exactly one canonical file exists per concern. A second copy is a bug.
 
-| Concern                             | Canonical path                                                                        | Status                                                                                                                                                     |
-| ----------------------------------- | ------------------------------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| Public wire types (`HomePayload` …) | `packages/api-types/src/home.ts` _(NEW file — relocates the type from a destination)_ | The current minimal type lives inside `HomeDestination.tsx:44-48`; Impl-A creates `home.ts` and re-exports through `index.ts`.                             |
-| Home main view                      | `packages/chat-surface/src/destinations/home/HomeDestination.tsx`                     | Exists — Impl-B rewrites to the full 7-section layout. The current 3-card implementation (pinned/runs/favorites) is the seed.                              |
-| Home context panel                  | `packages/chat-surface/src/destinations/home/HomePanel.tsx` _(NEW)_                   | Impl-B creates. Exported from `destinations/home/index.ts`.                                                                                                |
-| Home sub-components (per §3.1)      | `packages/chat-surface/src/destinations/home/sections/{SectionName}.tsx` _(NEW)_      | Each of the 7 main sections + 2 panel sections is its own file. Co-located in a `sections/` subdir so the destination root stays a thin composition layer. |
-| Backend route module                | `services/backend/src/backend_app/home/` _(NEW module)_                               | `home/route.py` (FastAPI router), `home/aggregator.py` (fan-out logic), `home/types.py` (Pydantic models), `__init__.py`, `tests/`.                        |
-| Facade proxy                        | `services/backend-facade/src/backend_facade/home_routes.py` _(NEW)_                   | Thin pass-through: GET `/v1/home`, GET `/v1/home/stream` (SSE).                                                                                            |
-| Sub-PRD (this doc)                  | `docs/atlas-new-design/destinations/home-prd.md`                                      | This file.                                                                                                                                                 |
-
-**Convention:** the destination folder mirrors the master pattern. The 9 other destinations follow the same layout — `{slug}/{Slug}Destination.tsx`, `{slug}/{Slug}Panel.tsx`, `{slug}/sections/*.tsx`, `{slug}/index.ts` re-exports.
+| Concern                             | Canonical path                                                                                         | Status                                                                                                                                                                                                                                                                                                   |
+| ----------------------------------- | ------------------------------------------------------------------------------------------------------ | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Public wire types (`HomePayload` …) | `packages/api-types/src/home.ts`                                                                       | EXISTS (Phase 2 created). Phase 9 rewrites — see §4.                                                                                                                                                                                                                                                     |
+| Home main view                      | `packages/chat-surface/src/destinations/home/HomeDestination.tsx`                                      | EXISTS. Phase 9 rewrites to the 5-section layout (TriageStrip + TodayTimeline + WhatsNewDigest + InFlightStrip + welcome-state branch).                                                                                                                                                                  |
+| Home context panel                  | `packages/chat-surface/src/destinations/home/HomePanel.tsx`                                            | EXISTS. Phase 9 keeps HomePanel for Quick Actions only; drops StarredProjectsSection (replaced by InFlightStrip in main).                                                                                                                                                                                |
+| Live activity rail                  | `packages/chat-surface/src/destinations/home/sections/LiveActivityRail.tsx` _(NEW)_                    | New. Right-side or bottom-strip subordinate rail. Hosts the SSE stream.                                                                                                                                                                                                                                  |
+| Home sub-sections (per §3.1)        | `packages/chat-surface/src/destinations/home/sections/{SectionName}.tsx`                               | Phase 2 has `Home{Greeting,PinnedChatsGrid,RecentRunsList,FavoriteToolsList,TodaysFocusList,UpcomingMeetingsList,AgentActivityFeed}`. Phase 9 replaces with `HomeGreeting, TriageStrip, TodayTimeline, WhatsNewDigest, InFlightStrip, LiveActivityRail`. Old files **deleted** (no parallel components). |
+| Backend route module                | `services/backend/src/backend_app/home/`                                                               | EXISTS. Phase 9 rewrites `aggregator.py` and `types.py`; adds composers `triage.py`, `timeline.py`, `whats_new.py`, `in_flight.py`; keeps `sse.py`, `route.py`, `cache.py`.                                                                                                                              |
+| Facade proxy                        | `services/backend-facade/src/backend_facade/home_routes.py`                                            | EXISTS for `/v1/home`. Phase 9 **adds** `/v1/home/stream` SSE proxy (the 404 bug).                                                                                                                                                                                                                       |
+| Dev seed runner                     | `services/backend/dev_seed.yaml` _(NEW)_ + `services/backend/src/backend_app/dev_seed/` _(NEW module)_ | New. Mirrors `dev_personas.yaml` + `dev_idp/personas.py` pattern.                                                                                                                                                                                                                                        |
+| Sub-PRD (this doc)                  | `docs/atlas-new-design/destinations/home-prd.md`                                                       | This file.                                                                                                                                                                                                                                                                                               |
 
 ---
 
@@ -58,134 +108,213 @@ Per [destinations-master-prd.md §2.2](../destinations-master-prd.md#22-single-s
 
 ### 3.1 HomeDestination component tree
 
-The main view is a vertical stack of seven sections. **Every section is its own component** so it can render its own loading/empty/error sub-state independently (§3.5 partial-failure resilience). Order is fixed and matches the design (`dest-home.jsx:106-216`).
-
 ```
-<HomeDestination>                                 // root, owns useTransport + state machine
-  <HomeGreeting />                                // §3.1.1
-  <HomeAgentActivityFeed />                       // §3.1.2  ← live-updated via SSE
-  <HomePinnedChatsGrid />                         // §3.1.3
-  <HomeRecentRunsList />                          // §3.1.4
-  <HomeFavoriteToolsList />                       // §3.1.5
-  <HomeTodaysFocusList />                         // §3.1.6
-  <HomeUpcomingMeetingsList />                    // §3.1.7  ← conditional on calendar connector
+<HomeDestination>                                  // root, owns transport + state machine
+  <HomeGreeting />                                 // §3.1.1
+  <TriageStrip />                                  // §3.1.2 — always rendered if data present; otherwise green "All clear"
+  <TodayTimeline />                                // §3.1.3 — collapsed if empty
+  <WhatsNewDigest />                               // §3.1.4 — collapsed if empty
+  <InFlightStrip />                                // §3.1.5 — collapsed if empty
+  <LiveActivityRail />                             // §3.1.6 — subordinate; right rail (≥1024px) or bottom strip (<1024px)
 </HomeDestination>
 ```
 
-Each sub-section is a thin wrapper around master-PRD shared primitives:
+Each section is its own component so it owns loading / empty / error sub-state independently (§14.5 partial-failure resilience). Sections use the master-PRD shared primitives:
 
-- `<CardGrid>` for pinned chats (master §4.1)
-- `<DocList>` for recent runs, favorite tools, todays focus, upcoming meetings
-- `<ActivityList>` for agent activity (the only specially-styled list — see §3.1.2)
-- `<StatusPill>` for run statuses and activity-feed kind badges (master §4.2)
-- `<ItemLink kind=…>` for every cross-destination click-through (master §4.3)
-- `<EmptyState>` for per-section empty (master §4.1)
-- `formatRelativeTime(iso)` from `packages/chat-surface/src/util/time.ts` (master §4.4 — hoisted from current `HomeDestination.tsx:70-85`)
+- `<PageHeader>` for the greeting block
+- `<StatusPill>` for triage chips (master §4.2)
+- `<ItemLink>` for every cross-destination click-through (master §4.3)
+- `<EmptyState>` only for the **whole-page first-run welcome** (§14.4); per-section empty does NOT render — sections collapse instead
+- `formatRelativeTime(iso)` from `packages/chat-surface/src/util/time.ts`
 
-**§3.1.1 HomeGreeting** — `<h1>Good {time_of_day}, {user_first_name}.</h1>` + sub-line `{N} agents working · {M} need you · {tenant-local date}`. `time_of_day` is **server-computed against tenant timezone** (consistent text across substrates). Counts come from the same `HomePayload`, no separate fetch.
+#### §3.1.1 HomeGreeting
 
-**§3.1.2 HomeAgentActivityFeed** — `role="list"` of `AgentActivityEntry` cards (last 24h, agent-initiated, capped 15). Discriminated by `kind` (§4.3) for kind-specific copy/icon/tone. Click → `<ItemLink>` to the originating target. Live-updated via SSE (§3.5).
+`<h1>Good {time_of_day}, {user_first_name}.</h1>` + sub-line `{tenant_local_date}`.
 
-Copy benchmark from `chats/chat1.md:104`:
+- `time_of_day` is **server-computed against the tenant timezone** (consistent across substrates).
+- `user_first_name` source priority: IdP `given_name` → IdP `name` first token → email local-part capitalized → omit name entirely (`"Good morning."` is acceptable).
+- No agent-counts subline (Phase 2 had `agents_working_count` / `needs_you_count` — moved to TriageStrip).
 
-> _"Atlas drafted a 4-page brief, cross-referenced last 6 months of email + call transcripts, and surfaced 3 risk signals worth raising. Two follow-up emails are queued and waiting on your sign-off."_
+#### §3.1.2 TriageStrip
 
-Kind-specific narration is **backend-composed** from structured fields. Frontend never builds sentences from primitives — keeps copy in one place for later localization.
+A **single horizontal strip** of clickable chips. Above the fold, always. The visual centerpiece of the 5-second test.
 
-**§3.1.3 HomePinnedChatsGrid** — `<CardGrid>` of up to 8 `PinnedChatSummary`. Click → `<ItemLink kind="chat">`. Same as today's `PinnedCard` (`HomeDestination.tsx:237-295`), tokenized to design-system vars (current hex is a Wave 1 leftover Impl-B fixes).
+Logic:
 
-**§3.1.4 HomeRecentRunsList** — Up to 8 `RecentRunSummary`. Status uses `<StatusPill tone=…>`. Same as today's `RecentRunCard` (`HomeDestination.tsx:297-359`), tokenized.
+| Condition                | Chip rendered             | Chip color | Click target                                     |
+| ------------------------ | ------------------------- | ---------- | ------------------------------------------------ |
+| `approvals_waiting > 0`  | `⚠ N approval(s) waiting` | red        | `inbox?filter=approvals`                         |
+| `runs_failed_24h > 0`    | `⚠ N failed run(s)`       | red        | `runs?status=failed&window=24h` (or `inbox?...`) |
+| `todos_overdue > 0`      | `⚠ N overdue`             | red        | `todos?filter=overdue`                           |
+| `todos_due_today > 0`    | `• N due today`           | amber      | `todos?filter=due_today`                         |
+| All four counts are zero | `✓ All clear`             | green      | (non-interactive — affirmation, not a CTA)       |
 
-**§3.1.5 HomeFavoriteToolsList** — Up to 8 `FavoriteToolSummary`. Click → tools destination. Same as today's `FavoriteCard` (`HomeDestination.tsx:361-411`).
+If all four counts are zero **and** the user has had non-zero data in the prior 7 days, render the "All clear" affirmation. If the user has never had data (truly fresh persona), suppress TriageStrip entirely and rely on the welcome-state branch (§14.4).
 
-**§3.1.6 HomeTodaysFocusList** — Top 3 `TodoSummary` due today (or carried-over-overdue). Row: read-only checkbox (toggling redirects to todos destination), text, source-attribution chip (chat/user/agent — see `data.jsx:118-228`).
+Counts come from the same `HomePayload.triage_counts` — no separate fetch.
 
-**§3.1.7 HomeUpcomingMeetingsList** — Next 3 `MeetingSummary` today. Renders only when at least one calendar connector is connected; otherwise the section is replaced with a connect-CTA (§12, Q4).
+#### §3.1.3 TodayTimeline
+
+A **single chronological list** of every "thing on my plate today" — meetings, routine fires, todos due today, scheduled runs. Merged into one mental model.
+
+Each row:
+
+```
+09:30 · Standup                            (Calendar)
+11:00 · Q3 metrics digest                  (Routine fires)
+14:00 · Review PR #482                     (Todo · due)
+16:00 · 1:1 with Marcus                    (Calendar)
+```
+
+- Sorted by `when_iso` ascending.
+- Status decoration: `in_progress` (now bar), `overdue` (red caret), `completed` (strike-through). `upcoming` is the default.
+- Click → `ItemRef` to the source destination (calendar opens external `conferencing_url` in new tab; routine opens routines destination; todo opens todos destination).
+- Cap: 8 entries. If more, render "+N more today →" link to a filtered destination view (which destination depends on user intent — drops to `todos?filter=today` by default).
+- **Section collapses entirely if `today_timeline.data` is empty** (zero meetings, zero todos due, zero routines firing). No "Nothing on your list" placeholder.
+
+#### §3.1.4 WhatsNewDigest
+
+Past-tense activity since the user's last Home visit.
+
+Header: `WHAT'S NEW · since {formatRelativeTime(since_iso)}`
+
+Each row uses the kind-discriminated copy from `AgentActivityEntry` (§4.3):
+
+```
+✓ dispatcher · synced 3 Jira tickets       2h ago
+✓ launch-prep · summary posted in #team    11h ago
+✗ q3-rollup · failed (auth expired)        12h ago
+```
+
+- Cap: 7 entries. Older entries reachable via the LiveActivityRail's "See all activity →" footer link, which deep-links to `inbox?filter=agent_activity&window=since_last_visit`.
+- Section collapses entirely if `whats_new.data` is empty.
+- Tone glyph (`✓` / `✗` / `⚠`) carries the `tone` field from the entry; never sole carrier of meaning (paired with kind icon + text).
+
+#### §3.1.5 InFlightStrip
+
+Projects with **recent activity** (last 7 days). Not "starred" — _active_. Up to 3 rows:
+
+```
+📁 Launch prep · 4 open · last edit 11h ago
+📁 Q3 planning · 2 open · last edit 1d ago
+```
+
+- Sort: `last_activity_at desc`.
+- `open_item_count` = open chats + open approvals + open todos in the project.
+- Click → projects destination at `/projects/<id>`.
+- Section collapses entirely if `in_flight_projects.data` is empty.
+
+#### §3.1.6 LiveActivityRail
+
+The SSE-driven activity feed. **Subordinate** placement:
+
+- ≥1024px viewport: right-side rail (~240px wide), borderless / low-contrast typography, no card chrome.
+- <1024px viewport: collapsed by default to a bottom strip with "Show live activity" toggle.
+
+Entries are `AgentActivityEntry` (same discriminator system as Phase 2 §4.3). Rail caps at 15 most-recent; older entries scroll off (older history reachable via "See all →").
+
+This is the "background hum" surface. Most users will glance at it occasionally; the primary signal lives in TriageStrip + WhatsNewDigest.
+
+Live updates: `useHomeActivityStream` hook prepends incoming SSE entries. New entries fade-in (60ms, respects `prefers-reduced-motion`).
 
 ### 3.2 HomePanel component tree
 
-The context panel (224px column, per PRD.md §6) is a two-section stack matching `dest-home.jsx:53-94`:
-
 ```
 <HomePanel>
-  <HomeStarredProjectsSection />     // §3.2.1
-  <HomeQuickActionsSection />        // §3.2.2
+  <HomeQuickActionsSection />
 </HomePanel>
 ```
 
-**§3.2.1 HomeStarredProjectsSection** — `<ContextPanel.Section title="Starred projects">` with up to 6 `StarredProjectSummary` rows, each `<ItemLink kind="project">` with the project's emoji + color hue (see `data.jsx:75-115`). Empty: "No starred projects yet" + "Browse projects →" link.
+Phase 9 keeps QuickActions and **drops** StarredProjectsSection (replaced by InFlightStrip in main). HomePanel is now a single section — defensible because Quick Actions is server-driven and lives separately from the main briefing's narrative.
 
-**§3.2.2 HomeQuickActionsSection** — `<ContextPanel.Section title="Quick start">` with server-driven `QuickAction[]` (§4.6). Each is a button; click navigates per `target.kind` (structured `ItemRef`, never a URL string). Server-driven so plan tier / admin role / tenant-custom actions can adjust without UI deploy.
+If product later wants to drop HomePanel entirely (collapse Quick Actions into the main TriageStrip area), this is a one-file change.
 
-Default seed list (baked into Wave 2 code; admin endpoint to mutate is Wave 5+):
+### 3.3 Backend `/v1/home` composition
 
-| `id`              | Label             | `target.kind`   | Notes                         |
-| ----------------- | ----------------- | --------------- | ----------------------------- |
-| `new_chat`        | New chat          | `chat_new`      | Fresh thread in chats         |
-| `new_todo`        | New todo          | `todos_new`     | Todos with inline-add focused |
-| `onboard_api`     | Onboard an API    | `tools_onboard` | Tools onboarding wizard       |
-| `build_agent`     | Build an agent    | `agent_new`     | Agents build wizard           |
-| `invite_teammate` | Invite a teammate | `team_invite`   | Team invite flow              |
+Same shape as Phase 2: single endpoint `GET /v1/home` → `HomePayload`. Lives in `services/backend/src/backend_app/home/`. Handler flow:
 
-### 3.3 Backend `/v1/home` aggregation
-
-Single endpoint: `GET /v1/home` → `HomePayload` (§4.1). Lives in `services/backend/src/backend_app/home/`. Handler flow:
-
-1. Resolve `tenant_id` + `user_id` from verified bearer (never from body/query).
-2. Cache check (§3.4) — return fresh cached payload if available.
+1. Resolve `tenant_id` + `user_id` from verified bearer (never from body / query).
+2. Cache check (§3.5) — return fresh cached payload if available.
 3. Else **parallel fan-out** (`asyncio.gather(..., return_exceptions=True)`):
-   - chats (backend) → `pinned_chats`
-   - ai-backend (HTTP) → `recent_runs`, `agent_activity` (filtered §5.2)
-   - tools (backend `user_skills` + MCP catalog) → `favorite_tools`
-   - todos (backend) → `todays_focus`
-   - projects (backend) → `starred_projects`
-   - connectors (backend) → calendar-connected? → `upcoming_meetings` (or `null`)
-   - quick-actions config (backend, server-driven) → `quick_actions`
-4. Compose `HomePayload`, write to cache, return.
+   - greeting composer (resolves IdP claim + tenant timezone)
+   - triage composer (queries: pending approvals, failed runs 24h, overdue todos, todos due today)
+   - timeline composer (queries: today's calendar entries, today's routine fires, todos due today, scheduled runs)
+   - whats_new composer (queries: runtime events since last visit, filtered noteworthy)
+   - in_flight composer (queries: projects with activity in last 7d)
+   - quick_actions composer (server config + role filter)
+4. Read `previous_visit_at` (used as `since_iso` for whats_new), then update `users.home_last_visit_at = now`.
+5. Compose `HomePayload`, write to cache, return.
 
-**Parallelism rule.** One slow upstream does not block others. Each section carries `ok | error | unavailable` status; the response always has the complete shape — per-section errors are signaled in the payload, not via top-level 5xx (§12.6).
+**Parallelism rule.** One slow upstream does not block others. Each section carries `ok | error | unavailable` status; the response always has the complete shape — per-section errors are signaled in the payload, not via top-level 5xx.
 
-**Facade.** `services/backend-facade/src/backend_facade/home_routes.py` is a thin pass-through to `backend:8100/v1/home`. The facade does **not** compose — backend has direct DB access to most upstreams; routing composition through the facade would be N additional HTTP hops. Facade owns auth + tenant pinning + `x-enterprise-org-id`/`x-enterprise-user-id` header injection, then forwards.
+**Facade.** Thin pass-through (§8). Facade does **not** compose — backend has direct DB access; routing composition through the facade would be N additional HTTP hops.
 
-**ai-backend interop.** Backend queries ai-backend over HTTP for run records and noteworthy runtime events (ai-backend owns those tables): `GET ai-backend:8000/internal/v1/runs?owner_user_id=...&limit=8&order=started_at desc` + `GET .../events?since=24h&kinds=...`. One HTTP hop per upstream; facade doesn't see this.
+**ai-backend interop.** Backend queries ai-backend over HTTP for run records and runtime events: `GET ai-backend:8000/internal/v1/runs?owner_user_id=...` + `GET .../events?since=...&kinds=...`. One HTTP hop per upstream; facade doesn't see this.
 
-### 3.4 Caching
+### 3.4 Composer modules (file-level breakdown)
 
-**Key:** `home:v1:{tenant_id}:{user_id}` (Redis in prod; in-memory `lru_cache` in dev). **Value:** serialized `HomePayload` + `cached_at`. **TTL:** 5min (master §5.1 default). **SWR:** stale request returns stale payload + triggers async refresh; next request (≥1s later) gets fresh. Headers: `Cache-Control: max-age=0, stale-while-revalidate=300` + `X-Atlas-Cached-At`.
+`services/backend/src/backend_app/home/`:
 
-**Invalidation triggers** (drop cache key for the affected user):
+- `__init__.py`
+- `route.py` — FastAPI router (`/v1/home`, registration only)
+- `aggregator.py` — fan-out orchestration (`compose_home_payload()`)
+- `types.py` — Pydantic mirrors of the TS types in §4
+- `composers/`
+  - `greeting.py` — `compose_greeting(identity, tenant) -> HomeGreeting`
+  - `triage.py` — `compose_triage_counts(identity) -> TriageCounts`
+  - `timeline.py` — `compose_today_timeline(identity) -> SectionResult[TimelineEntry]`
+  - `whats_new.py` — `compose_whats_new(identity, since_iso) -> WhatsNewSection`
+  - `in_flight.py` — `compose_in_flight_projects(identity) -> SectionResult[InFlightProject]`
+  - `quick_actions.py` — `compose_quick_actions(identity) -> tuple[QuickAction, ...]`
+- `sse.py` — SSE stream handler (reused from Phase 2; emits `home_activity` events filtered per §5.2)
+- `cache.py` — Redis adapter (in-memory fallback for dev)
+- `last_visit.py` — `read_and_advance_last_visit(user_id) -> previous_iso` (single-source-of-truth for visit cutoff)
 
-| Trigger                                         | Reason                               |
-| ----------------------------------------------- | ------------------------------------ |
-| Run completion (ai-backend) for `owner_user_id` | Recent runs + agent activity changed |
-| Chat pinned / unpinned                          | Pinned chats changed                 |
-| Tool starred / unstarred                        | Favorite tools changed               |
-| Todo created / completed / deleted              | Today's focus changed                |
-| Project starred / unstarred                     | Starred projects changed             |
-| Calendar connector connected / disconnected     | Upcoming meetings shape changed      |
-| Admin updates quick-actions config              | Whole-tenant invalidate (broadcast)  |
+Each composer is **independently testable**: it takes `(identity, *deps)` and returns a typed section result. Aggregator wires composers + handles partial failure.
 
-Invalidation is **best-effort** — TTL bounds staleness on misses. The cache is not the audit log; correctness lives in the source tables.
+### 3.5 Caching
 
-### 3.5 Real-time updates (SSE)
+Identical to Phase 2:
 
-When on Home, the frontend opens `GET /v1/home/stream`. The stream emits **`home_activity`** events (SSE event name) whose `data` is a JSON-serialized `AgentActivityEntry` (§4.3) — when noteworthy agent activity (§5.2 filter rule) lands for `(tenant_id, user_id)`. Frontend prepends to `<HomeAgentActivityFeed>`, capped at 15-most-recent (older scroll off).
+- **Key:** `home:v1:{tenant_id}:{user_id}` (Redis prod; in-memory `lru_cache` dev)
+- **TTL:** 5 min
+- **SWR:** stale serves immediately + async refresh
+- **Headers:** `Cache-Control: max-age=0, stale-while-revalidate=300`, `X-Atlas-Cached-At`
 
-**Only the activity feed is live.** Other sections re-fetch on next Home open or TTL expiry — pinning is rare, agent activity is the high-frequency surface.
+**Invalidation triggers** (drop cache key for affected user):
 
-**Auth + lifecycle.** Same bearer as `/v1/home`. Stream closes on: navigate away (`AbortController`), 30min idle (reconnects on interaction), backend graceful shutdown (exponential backoff reconnect).
+| Trigger                                         | Reason                                 |
+| ----------------------------------------------- | -------------------------------------- |
+| Run completion (ai-backend) for `owner_user_id` | WhatsNewDigest + triage counts changed |
+| Approval enqueued / resolved                    | TriageStrip approvals_waiting changed  |
+| Todo created / completed / deleted              | TodayTimeline + triage counts changed  |
+| Project activity                                | InFlightStrip changed                  |
+| Routine scheduled / fired                       | TodayTimeline changed                  |
+| Calendar connector connected / disconnected     | TodayTimeline meetings shape changed   |
 
-**Backend reuse.** The home backend subscribes to ai-backend's existing `RuntimeEventEnvelope` pipeline (the `sequence_no` model from root CLAUDE.md "Streaming model") and forwards only entries passing the §5.2 filter. No new event bus.
+Invalidation is best-effort — TTL bounds staleness on misses.
 
-### 3.6 Routing
+**`since_iso` semantics interact with caching.** The `read_and_advance_last_visit` mutation happens at request-time, not cache-time — so a cache hit serves the stored `since_iso` from when the payload was composed. A user who reloads Home twice within 5 min sees the same `since_iso` both times (stale). **This is intentional** — a 5-min cache window is well below the meaningful resolution of "since when" for a morning briefing. The TTL bounds the staleness; the user's actual visit cadence is captured at fresh-fetch time.
 
-Home renders at `route.destination === "home"` with **no `view` / `id`** — bounded to a single page. Shell mounts `<HomePanel>` into the ContextPanel slot, `<HomeDestination>` into main (mirrors `os-app.jsx:140-147`). Click-throughs go through `<ItemLink>` (master §4.3) which calls the `Router<TRoute>` port — no `window.location` access from a destination, keeping Home substrate-agnostic.
+### 3.6 Real-time updates (SSE)
+
+When on Home, frontend opens `GET /v1/home/stream`. Stream emits `home_activity` SSE events whose `data` is a JSON-serialized `AgentActivityEntry` — when noteworthy agent activity (§5.2 filter) lands for `(tenant_id, user_id)`. Frontend prepends to the **LiveActivityRail**, capped at 15.
+
+**Only the LiveActivityRail is live.** Other sections (Triage, Timeline, WhatsNew, InFlight) re-fetch on next Home open or TTL expiry. SSE is for ambient awareness, not state mutation.
+
+**Auth + lifecycle.** Same bearer as `/v1/home`. Stream closes on: navigate away (`AbortController`), 30 min idle (reconnects on interaction), backend graceful shutdown (exponential backoff 1s → 30s, silent — no "paused" indicator).
+
+**Backend reuse.** Subscribes to ai-backend's existing `RuntimeEventEnvelope` pipeline; forwards only entries passing §5.2 filter. No new event bus.
+
+### 3.7 Routing
+
+Home renders at `route.destination === "home"` with no `view` / `id`. Shell mounts `<HomePanel>` into ContextPanel slot, `<HomeDestination>` into main. Click-throughs use `<ItemLink>` (substrate-agnostic `Router<TRoute>` port).
 
 ---
 
 ## 4. Wire contracts
 
-All types are TypeScript-canonical (per [packages/api-types/CLAUDE.md](../../../packages/api-types/CLAUDE.md)). The Python equivalents in `services/backend/src/backend_app/home/types.py` are Pydantic models matching field-for-field. **The TypeScript file is the source of truth — Python mirrors.**
+All types TypeScript-canonical. Python equivalents in `home/types.py` are Pydantic mirrors. **TS file is source of truth.**
 
 ### 4.1 `HomePayload`
 
@@ -193,104 +322,140 @@ All types are TypeScript-canonical (per [packages/api-types/CLAUDE.md](../../../
 // packages/api-types/src/home.ts
 
 import type { ConversationId, RunId, SkillId } from "./index";
+import type { ItemRef } from "./index"; // cross-destination polymorphic link
 
 export type TimeOfDay = "morning" | "afternoon" | "evening" | "late";
 
 export interface HomeGreeting {
-  readonly time_of_day: TimeOfDay; // server-computed against tenant timezone
-  readonly user_first_name: string; // from IdP claim; falls back to email-local-part if absent (see §16)
-  readonly tenant_local_date: string; // ISO date `YYYY-MM-DD`, formatted in tenant timezone
-  readonly tenant_local_iso: string; // ISO datetime, for client-side relative formatting if needed
-  readonly agents_working_count: number; // sum of active personal + scheduled agents
-  readonly needs_you_count: number; // pending approvals + inbox-decision items
+  readonly time_of_day: TimeOfDay;
+  readonly user_first_name: string | null; // null = caller chose to omit / unavailable
+  readonly tenant_local_date: string; // ISO `YYYY-MM-DD`
+  readonly tenant_local_iso: string; // full ISO datetime, tenant timezone
+}
+
+export interface TriageCounts {
+  readonly approvals_waiting: number;
+  readonly runs_failed_24h: number;
+  readonly todos_overdue: number;
+  readonly todos_due_today: number;
 }
 
 export type SectionStatus = "ok" | "error" | "unavailable";
 
-/** Per-section result. The payload always carries the full shape; `status: "error"`
- *  signals the consumer to render a per-section retry instead of the section's data. */
 export interface SectionResult<T> {
   readonly status: SectionStatus;
   readonly data: ReadonlyArray<T>;
-  readonly error_message?: string; // only set when status="error"; user-readable
+  readonly error_message?: string;
+}
+
+export interface WhatsNewSection {
+  readonly status: SectionStatus;
+  readonly since_iso: string; // when the user previously visited Home
+  readonly data: ReadonlyArray<AgentActivityEntry>;
+  readonly error_message?: string;
 }
 
 export interface HomePayload {
   readonly greeting: HomeGreeting;
-  readonly agent_activity: SectionResult<AgentActivityEntry>;
-  readonly pinned_chats: SectionResult<PinnedChatSummary>;
-  readonly recent_runs: SectionResult<RecentRunSummary>;
-  readonly favorite_tools: SectionResult<FavoriteToolSummary>;
-  readonly todays_focus: SectionResult<TodoSummary>;
-  readonly upcoming_meetings: SectionResult<MeetingSummary> | null; // null = no calendar connector
-  readonly starred_projects: SectionResult<StarredProjectSummary>; // for HomePanel
-  readonly quick_actions: ReadonlyArray<QuickAction>; // server-driven, never paginated
-  readonly cached_at: string; // ISO; mirrors X-Atlas-Cached-At header
+  readonly triage: TriageCounts;
+  readonly today_timeline: SectionResult<TimelineEntry>;
+  readonly whats_new: WhatsNewSection;
+  readonly in_flight_projects: SectionResult<InFlightProject>;
+  readonly live_activity: SectionResult<AgentActivityEntry>; // initial backfill for the rail
+  readonly quick_actions: ReadonlyArray<QuickAction>;
+  readonly cached_at: string; // ISO; mirrors X-Atlas-Cached-At
+  readonly is_first_run: boolean; // true iff every section is empty AND user has no historical data
 }
 ```
 
-### 4.2 Reused sub-types (extended from `index.ts`)
+### 4.2 `TimelineEntry` — discriminated union
 
-`PinnedChat`, `RecentRun`, `FavoriteTool` already exist in `HomeDestination.tsx:17-48`. Impl-A **moves** them to `home.ts`, **extends** each with a `summary` field that backend writes, and re-exports from `index.ts` so existing consumers don't break:
+Merges meetings, routines, todos, runs into one chronological list. The discriminator is `kind`; UI dispatches on `kind` for icon + subtitle.
 
 ```typescript
-export interface PinnedChatSummary {
-  readonly conversation_id: ConversationId;
+export type TimelineEntryKind =
+  | "meeting"
+  | "routine_fire"
+  | "todo_due"
+  | "run_scheduled";
+
+export type TimelineEntryStatus =
+  | "upcoming"
+  | "in_progress"
+  | "completed"
+  | "overdue"
+  | "missed";
+
+export interface TimelineEntryBase {
+  readonly id: string;
+  readonly kind: TimelineEntryKind;
+  readonly when_iso: string; // when this happens / happened / is due
   readonly title: string;
-  readonly subtitle?: string;
-  readonly last_message_at: string; // ISO
-  readonly unread_message_count: number; // 0 when the user has seen all
-  readonly project_id?: string; // for the project badge (mirrors data.jsx:t-launch.project)
+  readonly subtitle?: string; // backend-composed: "Calendar", "Routine fires", "Due", "Run scheduled"
+  readonly status: TimelineEntryStatus;
+  readonly target: ItemRef;
 }
 
-export type RecentRunStatus =
-  | "running"
-  | "succeeded"
-  | "failed"
-  | "cancelled"
-  | "queued";
-
-export interface RecentRunSummary {
-  readonly run_id: RunId;
-  readonly title: string;
-  readonly status: RecentRunStatus;
-  readonly started_at: string; // ISO
-  readonly completed_at?: string; // ISO — only when terminal
-  readonly conversation_id?: ConversationId; // present if run is inside a chat
+export interface MeetingTimelineEntry extends TimelineEntryBase {
+  readonly kind: "meeting";
+  readonly end_iso: string;
+  readonly attendee_count: number;
+  readonly is_organizer: boolean;
+  readonly conferencing_url?: string;
+  readonly source_connector: "google_calendar" | "microsoft_calendar" | "other";
 }
 
-export interface FavoriteToolSummary {
-  readonly skill_id: SkillId;
-  readonly name: string;
-  readonly subtitle?: string;
-  readonly tool_kind: "skill" | "mcp" | "api" | "builtin"; // matches Wave 2 /v1/mcp/tools kind tag
-  readonly last_used_at?: string;
+export interface RoutineFireTimelineEntry extends TimelineEntryBase {
+  readonly kind: "routine_fire";
+  readonly routine_id: string;
+  readonly trigger_kind: "scheduled" | "event_driven" | "manual";
 }
+
+export interface TodoDueTimelineEntry extends TimelineEntryBase {
+  readonly kind: "todo_due";
+  readonly todo_id: string;
+  readonly priority: "low" | "med" | "high";
+  readonly is_overdue: boolean;
+  readonly source_kind: "user" | "chat" | "agent";
+}
+
+export interface RunScheduledTimelineEntry extends TimelineEntryBase {
+  readonly kind: "run_scheduled";
+  readonly run_id?: RunId; // present if already started
+  readonly agent_id: string;
+  readonly agent_name: string;
+}
+
+export type TimelineEntry =
+  | MeetingTimelineEntry
+  | RoutineFireTimelineEntry
+  | TodoDueTimelineEntry
+  | RunScheduledTimelineEntry;
 ```
 
-### 4.3 `AgentActivityEntry` — discriminated union
+### 4.3 `AgentActivityEntry` — discriminated union (preserved from Phase 2)
 
-The activity feed is heterogeneous. UI must dispatch on `kind` to render kind-specific copy / icon / tone. **Never** render based on substring matches against `summary`.
+The kind taxonomy and discriminator pattern is preserved. UI dispatches on `kind` to render kind-specific copy / icon / tone. **Never** substring-match `summary`.
 
 ```typescript
 export type AgentActivityKind =
-  | "drafted_artifact" // Atlas drafted a doc/email/slide/sheet
-  | "sent_message" // Atlas (with approval) sent a message externally
-  | "queued_approval" // a pending approval landed in inbox
-  | "risk_signal" // a watcher subagent flagged something
-  | "completed_run" // a scheduled / background run finished
-  | "failed_run" // a run failed (tool-failure etc.)
-  | "extracted_todos" // a meeting-recap / chat-followup agent filed todos
-  | "ingested_dataset"; // a connector sync completed
+  | "drafted_artifact"
+  | "sent_message"
+  | "queued_approval"
+  | "risk_signal"
+  | "completed_run"
+  | "failed_run"
+  | "extracted_todos"
+  | "ingested_dataset";
 
 export interface AgentActivityEntryBase {
-  readonly id: string; // stable; used as React key + telemetry id
+  readonly id: string;
   readonly kind: AgentActivityKind;
-  readonly agent_id: string; // the agent that did it
-  readonly agent_name: string; // denormalized so frontend doesn't refetch
-  readonly summary: string; // user-readable, backend-composed
-  readonly created_at: string; // ISO
-  readonly target: ItemRef; // the click-through target (§4.6)
+  readonly agent_id: string;
+  readonly agent_name: string;
+  readonly summary: string; // backend-composed
+  readonly created_at: string;
+  readonly target: ItemRef;
   readonly tone: "neutral" | "positive" | "warning" | "alert";
 }
 
@@ -310,7 +475,7 @@ export interface DraftedArtifactActivity extends AgentActivityEntryBase {
 export interface SentMessageActivity extends AgentActivityEntryBase {
   readonly kind: "sent_message";
   readonly surface: "email" | "slack" | "comment" | "salesforce" | "other";
-  readonly recipient_display: string; // "to acme-legal@..." or "to #launch-aurora"
+  readonly recipient_display: string;
 }
 
 export interface QueuedApprovalActivity extends AgentActivityEntryBase {
@@ -323,7 +488,7 @@ export interface QueuedApprovalActivity extends AgentActivityEntryBase {
 export interface RiskSignalActivity extends AgentActivityEntryBase {
   readonly kind: "risk_signal";
   readonly severity: "low" | "med" | "high";
-  readonly signal_summary: string; // shorter than `summary`; for the badge chip
+  readonly signal_summary: string;
 }
 
 export interface CompletedRunActivity extends AgentActivityEntryBase {
@@ -336,8 +501,8 @@ export interface CompletedRunActivity extends AgentActivityEntryBase {
 export interface FailedRunActivity extends AgentActivityEntryBase {
   readonly kind: "failed_run";
   readonly run_id: RunId;
-  readonly failure_reason_code: string; // structured; e.g. "mcp_token_expired"
-  readonly failure_reason_message: string; // user-readable
+  readonly failure_reason_code: string;
+  readonly failure_reason_message: string;
   readonly recoverable: boolean;
 }
 
@@ -364,490 +529,784 @@ export type AgentActivityEntry =
   | IngestedDatasetActivity;
 ```
 
-Backend composes `summary` per-kind from the structured fields. Example for `drafted_artifact`:
+Backend composes `summary` per kind so localization later wraps one function, not a UI templating maze.
 
-> _"Atlas drafted a {word_count}-word {artifact_kind} — {artifact_title}."_
-
-This keeps copy in one place (the backend composer) so localization later wraps one function, not a UI templating maze.
-
-### 4.4 `TodoSummary`
+### 4.4 `InFlightProject`
 
 ```typescript
-export type TodoSourceKind = "user" | "chat" | "agent";
-export type TodoPriority = "low" | "med" | "high";
-
-export interface TodoSummary {
-  readonly todo_id: string;
-  readonly text: string;
-  readonly priority: TodoPriority;
-  readonly due_iso?: string; // ISO; undefined = no due date
-  readonly is_overdue: boolean; // server-computed against now
-  readonly source_kind: TodoSourceKind;
-  readonly source_label?: string; // "from chat 'Q1 launch'", "from meeting recap"
-  readonly project_id?: string;
-}
-```
-
-The home backend picks top-3 by composite score: `(overdue desc, priority desc, due_iso asc, created_at desc)`. The full ordering is the todos destination's concern.
-
-### 4.5 `MeetingSummary`
-
-```typescript
-export type MeetingConnectorKind =
-  | "google_calendar"
-  | "microsoft_calendar"
-  | "other";
-
-export interface MeetingSummary {
-  readonly meeting_id: string; // connector-side id; opaque to frontend
-  readonly title: string;
-  readonly start_iso: string; // ISO; in tenant timezone for display
-  readonly end_iso: string;
-  readonly attendee_count: number;
-  readonly is_organizer: boolean;
-  readonly conferencing_url?: string; // direct-launch link if available
-  readonly source_connector: MeetingConnectorKind;
-}
-```
-
-Section returns `null` (not `SectionResult<MeetingSummary>`) when no calendar connector is connected — the UI replaces the section with a CTA row (§13).
-
-### 4.6 `StarredProjectSummary` + `QuickAction` + `ItemRef`
-
-```typescript
-export interface StarredProjectSummary {
+export interface InFlightProject {
   readonly project_id: string;
   readonly name: string;
   readonly icon_emoji: string;
   readonly color_hue: number; // 0-359; design tokens consume as oklch hue
-  readonly active_thread_count: number;
+  readonly open_item_count: number; // open chats + open approvals + open todos in project
   readonly last_activity_at: string;
 }
-
-/** Server-driven so admins can re-order / hide actions without a UI deploy. */
-export interface QuickAction {
-  readonly id: string;
-  readonly label: string; // user-visible
-  readonly icon_name: string; // matches Icon registry; backend allowlist
-  readonly target: ItemRef;
-  readonly is_admin_only?: boolean; // hidden for non-admins
-}
-
-/** Polymorphic cross-destination link. Resolved by the ItemLink registry
- *  (master §4.3). Backend emits these so the wire contract carries intent,
- *  not URL strings. */
-export type ItemRef =
-  | { readonly kind: "chat"; readonly conversation_id: ConversationId }
-  | { readonly kind: "chat_new" }
-  | { readonly kind: "run"; readonly run_id: RunId }
-  | { readonly kind: "inbox_item"; readonly inbox_item_id: string }
-  | { readonly kind: "todo"; readonly todo_id: string }
-  | { readonly kind: "todos_new" }
-  | { readonly kind: "agent"; readonly agent_id: string }
-  | { readonly kind: "agent_new" }
-  | { readonly kind: "tool"; readonly skill_id: SkillId }
-  | { readonly kind: "tools_onboard" }
-  | { readonly kind: "project"; readonly project_id: string }
-  | { readonly kind: "meeting_external"; readonly url: string }
-  | { readonly kind: "team_invite" }
-  | { readonly kind: "library_dataset"; readonly dataset_id: string };
 ```
 
-`ItemRef` is shared with future destinations — Inbox / Todos / Activity all emit it. Lives in `packages/api-types/src/index.ts` (not `home.ts`) since it's cross-destination.
+### 4.5 `QuickAction` (preserved from Phase 2)
 
-### 4.7 Cache-related headers
+Server-driven so admin role / plan tier / tenant overrides can adjust without UI deploy.
 
-| Header                   | Direction | Meaning                                                           |
-| ------------------------ | --------- | ----------------------------------------------------------------- |
-| `X-Atlas-Cached-At`      | response  | ISO timestamp of when the cached payload was composed             |
-| `Cache-Control`          | response  | `max-age=0, stale-while-revalidate=300`                           |
-| `X-Atlas-Section-Errors` | response  | comma-separated list of section keys that failed (telemetry-only) |
+```typescript
+export interface QuickAction {
+  readonly id: string;
+  readonly label: string;
+  readonly icon_name: string; // matches Icon registry; backend allowlist
+  readonly target: ItemRef;
+  readonly is_admin_only?: boolean; // hidden for non-admins server-side
+}
+```
+
+Default seed list (baked into Phase 9 code; admin endpoint to mutate is Wave 5+):
+
+| `id`              | Label              | `target.kind`   |
+| ----------------- | ------------------ | --------------- |
+| `new_chat`        | New chat           | `chat_new`      |
+| `new_todo`        | New todo           | `todos_new`     |
+| `new_routine`     | Schedule a routine | `routine_new`   |
+| `onboard_tool`    | Connect a tool     | `tools_onboard` |
+| `invite_teammate` | Invite a teammate  | `team_invite`   |
+
+### 4.6 `ItemRef` (preserved from Phase 2)
+
+Lives in `packages/api-types/src/index.ts` (not `home.ts`) since cross-destination.
+
+Phase 9 **adds** two new variants to support TimelineEntry click-throughs:
+
+```typescript
+// Added to existing ItemRef union:
+| { readonly kind: "routine"; readonly routine_id: string }
+| { readonly kind: "routine_new" }
+```
+
+### 4.7 Response headers
+
+| Header                   | Direction | Meaning                                                   |
+| ------------------------ | --------- | --------------------------------------------------------- |
+| `X-Atlas-Cached-At`      | response  | ISO timestamp the cached payload was composed             |
+| `Cache-Control`          | response  | `max-age=0, stale-while-revalidate=300`                   |
+| `X-Atlas-Section-Errors` | response  | comma-separated section keys that failed (telemetry-only) |
 
 ---
 
 ## 5. Storage + retention
 
-### 5.1 No new tables
+### 5.1 Tables read by composers
 
-Home is **aggregation-only**. It reads from existing tables. No `home_*` table exists or will exist.
+Home is aggregation-only. **No `home_*` table is created** — except one tiny addition for visit cutoff (§5.2).
 
-| Section           | Reads from                                                                                                                                                                                                                                              |
-| ----------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| greeting          | `users` (first_name from IdP claim), `tenants` (timezone)                                                                                                                                                                                               |
-| agent_activity    | `ai-backend`: `runtime_events` filtered by §5.2                                                                                                                                                                                                         |
-| pinned_chats      | `conversations` + `conversation_pins` (in backend; the pin table exists today via `/v1/me/preferences` or equivalent — Impl-A confirms; if absent, Impl-A spec'd a `conversation_pins` migration as part of the chat-destination Wave, not Wave 2 Home) |
-| recent_runs       | `ai-backend`: `runs` filtered by `owner_user_id`                                                                                                                                                                                                        |
-| favorite_tools    | `user_skills` (favorites bit) + `mcp_servers` star projection                                                                                                                                                                                           |
-| todays_focus      | `todos` (created by phase 3 — see §5.5)                                                                                                                                                                                                                 |
-| upcoming_meetings | calendar connector via the connector framework                                                                                                                                                                                                          |
-| starred_projects  | `projects` + `project_user_stars` (created by phase 5 — see §5.5)                                                                                                                                                                                       |
-| quick_actions     | static config table `home_quick_actions_config` (single row per tenant, optional overrides; defaults baked into code)                                                                                                                                   |
+| Section                      | Reads from                                                                                                            |
+| ---------------------------- | --------------------------------------------------------------------------------------------------------------------- |
+| greeting                     | `users.first_name` (from IdP claim) + `tenants.timezone`                                                              |
+| triage.approvals_waiting     | `inbox_items` where `status = waiting AND kind = approval` (or equivalent in approvals table)                         |
+| triage.runs_failed_24h       | `ai-backend.runs` where `status = failed AND completed_at > now - 24h AND owner_user_id = caller`                     |
+| triage.todos_overdue         | `todos` where `is_overdue = true AND owner_user_id = caller AND status = open`                                        |
+| triage.todos_due_today       | `todos` where `due_iso ∈ today_in_tenant_tz AND status = open AND owner_user_id = caller`                             |
+| today_timeline.meeting       | `connector_calendar_events` (Google / MS calendar, via connector framework) where `start_iso ∈ today_in_tenant_tz`    |
+| today_timeline.routine_fire  | `routines` joined with `routine_fires` where `fire_at ∈ today_in_tenant_tz AND user can see routine`                  |
+| today_timeline.todo_due      | same as `triage.todos_due_today` (joined into timeline shape)                                                         |
+| today_timeline.run_scheduled | `ai-backend.runs` where `scheduled_for ∈ today OR (status = running AND owner_user_id = caller)`                      |
+| whats_new                    | `ai-backend.runtime_events` filtered by §5.3, bounded by `since_iso = users.home_last_visit_at`                       |
+| in_flight_projects           | `projects` with `last_activity_at > now - 7d AND user is project_member`, joined with project counts                  |
+| live_activity                | `ai-backend.runtime_events` filtered by §5.3, last 24h, capped 15                                                     |
+| quick_actions                | static config table `home_quick_actions_config` (single row per tenant, optional overrides; defaults baked into code) |
 
-### 5.2 Agent-activity filter rule
+### 5.2 `users.home_last_visit_at`
 
-The activity feed reads ai-backend's event pipeline (same pipeline that powers chats timeline/right-rail). The home backend applies a **noteworthiness filter** — a runtime event lands in `agent_activity` iff ALL of:
+**One new column** on `users`: `home_last_visit_at TIMESTAMPTZ NULL`. Read + UPDATE inside `last_visit.py`. Used as `since_iso` for `whats_new`.
 
-- happened within last 24h
+Migration:
+
+```sql
+ALTER TABLE users ADD COLUMN IF NOT EXISTS home_last_visit_at TIMESTAMPTZ NULL;
+```
+
+Idempotency: `IF NOT EXISTS` so seed runner can also create the row implicitly via persona seeding without a separate alter.
+
+First-time visit (NULL): `since_iso` falls back to `now - 24h` so the WhatsNewDigest renders the last 24h of activity for a brand-new account.
+
+### 5.3 Agent-activity filter rule (preserved from Phase 2)
+
+A runtime event lands in `whats_new` or `live_activity` iff ALL of:
+
 - `event.tenant_id == caller.tenant_id` (server-enforced)
 - `event.owner_user_id == caller.user_id` OR emitted by an agent shared with caller
-- `event.kind` is one of: `drafted_artifact`, `sent_message`, `queued_approval`, `risk_signal`, `completed_run`, `failed_run`, `extracted_todos`, `ingested_dataset`
-- **agent-initiated** (`event.source` is `agent` or `scheduled_run`; never `user` — typing isn't noteworthy)
-- **not** a subagent internal event (we want the parent's framing, not subagent token-stream noise)
+- `event.kind` ∈ {drafted_artifact, sent_message, queued_approval, risk_signal, completed_run, failed_run, extracted_todos, ingested_dataset}
+- **agent-initiated** (`event.source` is `agent` or `scheduled_run`; never `user`)
+- **not** a subagent internal event
 
-The agent-initiated rule is the most load-bearing — without it, the feed becomes a transcript of the user typing. 24h window is the master-PRD §5.1 default (Q1 — Wave 4+ might make it per-user). **Cap:** 15 entries; rest silently dropped (deep-link via "See all activity →" — §8.3).
-
-### 5.3 Per-user view
-
-**No per-user materialized table.** Composition at request-time, cached 5min. Rationale: write-amplification of a materialized view across activity tables is worse than read-amplification of a 7-upstream parallel fan-out cached 5min.
+For `whats_new`: bounded by `created_at > since_iso`; cap 7 entries.
+For `live_activity`: bounded by `created_at > now - 24h`; cap 15.
 
 ### 5.4 Retention
 
-Home stores nothing — retention reduces to cache lifetime: 5min TTL. On tenant or user hard-delete, the cache key is purged as part of the cascade (tenant-delete worker walks registered cache prefixes; Impl-A confirms / adds Home's registration). Upstream retention (runs / events / todos / …) is each owning destination's concern; Home inherits — if they soft-delete, Home's next refresh stops surfacing.
+Home stores nothing — retention = cache TTL (5 min). On tenant or user hard-delete: cache key purged in cascade; `users.home_last_visit_at` deleted with the row. Upstream retention (runs / events / todos / approvals / projects) is each owning destination's concern.
 
 ### 5.5 Cross-phase coupling
 
-`todays_focus` (Phase 3) and `starred_projects` (Phase 5) depend on tables not yet shipped. Home Phase 2 returns `SectionResult{ status: "unavailable", data: [], error_message: "Todos coming in Phase 3" }` for those; frontend renders graceful "coming soon" — not an error. When the underlying destination ships, the aggregator picks it up — no Home redeploy.
+Composers depend on tables owned by other phases:
+
+| Composer dep                | Phase   | If table absent                                 |
+| --------------------------- | ------- | ----------------------------------------------- |
+| `todos`                     | Phase 3 | Composers return `status: "unavailable"`        |
+| `inbox_items`               | Phase 4 | Composers return `status: "unavailable"`        |
+| `routines`                  | Phase 5 | Composers return `status: "unavailable"`        |
+| `projects`                  | Phase 6 | Composers return `status: "unavailable"`        |
+| `connector_calendar_events` | Phase ? | Timeline meeting branch returns empty; no error |
+
+Frontend renders `unavailable` sections as collapsed (same as empty) — no "coming soon" placeholder.
 
 ---
 
 ## 6. Audit
 
-**Home is read-only — no audit on Home reads.** `GET /v1/home` and `GET /v1/home/stream` write **no** audit rows (master §3.2 applies to state-changing ops; auditing tab-refresh churn yields no forensic value). Telemetry (§11) captures opens for product analytics — telemetry ≠ audit.
+**Home is read-only — no audit on Home reads.** `GET /v1/home` and `GET /v1/home/stream` write no audit rows. Click-throughs are audited at their destination.
 
-**Click-throughs are audited at their destination.** Activity-entry click into a run → runs/chats audits. Inbox-item open → inbox audits. Meeting `conferencing_url` → external link, not audited by Home. **Impl-A acceptance check:** confirm chats / runs / inbox / tools already audit `open` events; file gaps separately if any are missing (not a Home blocker).
-
-**Quick-actions config changes ARE audited.** When a future admin endpoint `PATCH /v1/admin/home/quick-actions` lands (Wave 5+ admin surfaces), it writes via `packages/audit-chain` with `(tenant_id, actor_user_id, action="quick_actions.update", target_kind="home_quick_actions_config", before_state, after_state, ts, request_id)`. Wave 2 ships only the default config baked into code; the audited write path is the upgrade path.
+Quick-actions config changes (future `PATCH /v1/admin/home/quick-actions`) ARE audited via `packages/audit-chain` with `(tenant_id, actor_user_id, action="quick_actions.update", before_state, after_state, ts, request_id)`. Wave 2 ships only defaults; the audited write path is the upgrade path.
 
 ---
 
-## 7. Authorization
+## 7. Dev seed runner (NEW — single source of truth for dev data density)
 
-**§7.1 Tenant isolation.** `tenant_id` is derived from the verified bearer's claims **server-side** — never read from body / query / header (per root CLAUDE.md untrusted-input rule). Every fan-out passes the resolved `(tenant_id, user_id)` explicitly; downstream services re-verify at their boundary. **Required test (§17.3):** two-tenant, two-user setup — `user_b` calling `/v1/home` sees none of `user_a`'s data, and response is 200 (not 403).
+### 7.1 Goal
 
-**§7.2 Per-user scope.** Within a tenant, `/v1/home` returns only items the caller has read access to:
+Make Home **demoable** for dev personas. A fresh `make dev` against an empty database must yield a Sarah whose Home shows triage chips, a today timeline, a whats-new digest, in-flight projects, and live activity.
 
-- Pinned chats: chats the user is a participant in or granted access to.
-- Recent runs: runs where `owner_user_id == caller.user_id` (until multiplayer threads — PRD.md §13 #3).
-- Agent activity: emitted on user's behalf or by agents shared with them.
-- Favorite tools / starred projects: per-user state.
-- Today's focus: user's todos.
-- Upcoming meetings: meetings the user is invited to.
+**Substrate principle.** The seed writes through the **production** store interfaces — `create_chat`, `create_todo`, `create_project`, `record_run`, `enqueue_approval`. The composers don't branch on `BACKEND_ENVIRONMENT` — production code paths are untouched. Substitution at the data layer, not the composer layer.
+
+### 7.2 `dev_seed.yaml`
+
+Lives at `services/backend/dev_seed.yaml`. Keyed by persona slug. Loaded only when `BACKEND_ENVIRONMENT=development` (same gate as `dev_personas.yaml`).
+
+```yaml
+# Loaded only when BACKEND_ENVIRONMENT=development.
+# Edit and save — /v1/dev/seed/refresh reloads on file mtime change.
+
+personas:
+  sarah_acme:
+    chats:
+      - slug: q3-planning
+        title: "Q3 planning sync"
+        last_message_offset: -2h # relative to now
+        is_pinned: true
+      - slug: launch-prep-thread
+        title: "Launch prep — risks review"
+        last_message_offset: -11h
+        project_slug: launch-prep
+      - slug: marcus-1on1
+        title: "1:1 prep — Marcus"
+        last_message_offset: -1d
+
+    todos:
+      - slug: review-pr-482
+        text: "Review PR #482 (auth middleware)"
+        due_offset: +5h # today, mid-afternoon
+        priority: high
+        source_kind: agent
+        project_slug: launch-prep
+      - slug: write-recap
+        text: "Write Monday recap"
+        due_offset: +7h
+        priority: med
+      - slug: legal-review # OVERDUE
+        text: "Sign off on legal review draft"
+        due_offset: -1d
+        priority: high
+
+    projects:
+      - slug: launch-prep
+        name: "Launch prep"
+        icon_emoji: "🚀"
+        color_hue: 220
+      - slug: q3-planning-project
+        name: "Q3 planning"
+        icon_emoji: "📊"
+        color_hue: 160
+
+    routines:
+      - slug: morning-digest
+        name: "Morning digest"
+        fire_offset: +2h # fires at 11am-ish today
+        trigger_kind: scheduled
+
+    runs:
+      - slug: dispatcher-yesterday
+        agent: dispatcher
+        status: succeeded
+        started_offset: -14h
+        completed_offset: -13h45m
+        artifacts_produced: 3
+      - slug: launch-prep-summary
+        agent: summarizer
+        status: succeeded
+        started_offset: -11h30m
+        completed_offset: -11h
+      - slug: q3-rollup-failed # for the triage failed_run chip
+        agent: rollup
+        status: failed
+        started_offset: -12h30m
+        completed_offset: -12h
+        failure_reason_code: mcp_token_expired
+        failure_reason_message: "Salesforce token expired"
+
+    approvals:
+      - slug: send-email-acme-legal
+        kind: approval
+        priority: med
+        offset: -3h
+        agent: outreach
+        summary: "Approve sending follow-up to acme-legal@…"
+      - slug: edit-jira-ticket
+        kind: approval
+        priority: high
+        offset: -2h
+        agent: dispatcher
+        summary: "Approve editing JIRA AC-482 status to 'In review'"
+      - slug: review-doc-1
+        kind: review
+        priority: low
+        offset: -6h
+        agent: drafter
+        summary: "Review draft brief — Q3 GTM"
+
+  marcus_admin:
+    # Minimal seed — admin persona, less data density to validate role gating
+    chats: []
+    todos:
+      - slug: review-team-perms
+        text: "Review team permission audit"
+        due_offset: +2h
+        priority: med
+    approvals: []
+```
+
+### 7.3 `DevSeedRunner` class
+
+`services/backend/src/backend_app/dev_seed/runner.py`:
+
+```python
+class DevSeedRunner:
+    """Loads dev_seed.yaml and writes through production store interfaces.
+
+    Mirrors PersonaLoader: filesystem-backed, mtime-keyed reloads, single
+    instance per process. Idempotent — re-running on restart is a no-op
+    because every write is upsert-keyed on a deterministic ID derived
+    from (persona_slug, item_slug).
+    """
+
+    def __init__(
+        self,
+        path: Path,
+        *,
+        chat_store: ChatStore,
+        todo_store: TodoStore,
+        project_store: ProjectStore,
+        routine_store: RoutineStore,
+        run_recorder: RunRecorder,
+        approval_queue: ApprovalQueue,
+        persona_loader: PersonaLoader,
+    ) -> None: ...
+
+    def seed(self) -> SeedReport:
+        """Idempotent — safe to call on every startup.
+
+        Returns a report enumerating: items_created, items_skipped (already exist),
+        items_failed (with reason). Failure of one item does not abort the run.
+        """
+```
+
+**Deterministic IDs.** `chat_id = f"chat_seed_{persona_slug}_{chat_slug}"`. Upserting on this ID means restart re-runs are no-ops; editing `dev_seed.yaml` and reloading creates new items but leaves existing ones intact (unless slug changes, which deletes-and-recreates).
+
+**Relative timestamps.** `last_message_offset: -2h` resolved at seed time against `now`. Re-running every startup means the relative times stay fresh — Sarah's morning never has yesterday's timestamps reading "5 days ago."
+
+### 7.4 Startup hook
+
+`services/backend/src/backend_app/app.py` startup event:
+
+```python
+@app.on_event("startup")
+async def maybe_run_dev_seed() -> None:
+    environment = os.environ.get("BACKEND_ENVIRONMENT", "").strip().lower()
+    if environment != "development":
+        return
+    seed_path = Path(__file__).parent.parent.parent / "dev_seed.yaml"
+    if not seed_path.exists():
+        return
+    runner = DevSeedRunner(seed_path, ...)  # DI of real store handles
+    report = runner.seed()
+    logger.info("dev_seed", extra={"created": report.items_created, ...})
+```
+
+**Fail open.** If the seed file is malformed or a store throws, log + continue. The application starts even with a broken seed — broken seed must not block development.
+
+### 7.5 Dev refresh endpoint
+
+`POST /v1/dev/seed/refresh` — mounted only when `BACKEND_ENVIRONMENT=development` (same gate as `/v1/dev/identity/mint`). Re-loads `dev_seed.yaml` and re-seeds. Returns the `SeedReport`. Use case: edit YAML, refresh without restarting the server.
+
+### 7.6 Idempotency contract
+
+Every store the seed runner writes to must support **upsert by deterministic ID**. If a store today only supports `create_*` with auto-generated IDs, the seed runner is blocked on that store adding `upsert_by_id` (or accepting a caller-provided ID).
+
+Per-store status (Phase 9 must verify and unblock where needed):
+
+| Store           | Upsert support | Phase 9 action                                                          |
+| --------------- | -------------- | ----------------------------------------------------------------------- |
+| `ChatStore`     | TBD            | Verify; add `upsert_by_id` if missing (small store change)              |
+| `TodoStore`     | TBD            | Verify                                                                  |
+| `ProjectStore`  | YES (Phase 6)  | Already supports caller-provided `project_id`                           |
+| `RoutineStore`  | TBD            | Verify                                                                  |
+| `RunRecorder`   | TBD            | Runs are in ai-backend, not backend — seed runner calls ai-backend HTTP |
+| `ApprovalQueue` | TBD            | Verify                                                                  |
+
+Stores that don't yet support upsert get a small companion patch in their owning module — Phase 9 absorbs that work (called out per agent in §17).
+
+### 7.7 Anti-goals
+
+- **No fake fixtures in production code paths.** Composers don't read fixtures; they read stores. The seed lives in the store.
+- **No "if dev, use fixture" branches** in `compose_*()` functions.
+- **No fixture data in tests.** The seed runner is a dev convenience, not a test seed. Tests use unit-test fakes / `InMemoryStore`.
+- **No marketing demo data** (no synthetic "Acme Q4 launch" content beyond the minimal density needed for Home to render meaningfully).
+
+---
+
+## 8. Facade SSE proxy fix (the current 404)
+
+### 8.1 The bug
+
+`services/backend-facade/src/backend_facade/home_routes.py` registers `GET /v1/home` only. The backend has `/v1/home/stream` registered at `services/backend/src/backend_app/home/sse.py`. The facade does not proxy the stream — every SSE reconnect from the frontend hits a 404 at the Vite proxy → facade boundary.
+
+Console reproduction: `GET http://127.0.0.1:5173/v1/home/stream?... 404 (Not Found)`.
+
+### 8.2 The fix
+
+Add a streaming proxy in `home_routes.py`:
+
+```python
+@app.get("/v1/home/stream")
+async def stream_home(request: Request) -> StreamingResponse:
+    identity = FacadeAuthenticator.authenticate_request(request)
+    return await forward_sse(
+        app,
+        "/v1/home/stream",
+        target="backend",
+        params=identity.scoped_params(),
+        identity=identity,
+        heartbeat_seconds=30,
+    )
+```
+
+`forward_sse` is the same helper used by ai-backend's run-stream proxy (already exists at `backend_facade/app.py` per Phase 0-B SSE work; if it doesn't, Phase 9 adds it alongside `forward_json` — single helper, used by all SSE proxies).
+
+### 8.3 Test
+
+`services/backend-facade/tests/test_home_routes.py::test_stream_proxies_to_backend`:
+
+- mock backend SSE response
+- call `GET /v1/home/stream` against facade
+- assert response is `text/event-stream`, identity headers forwarded, query params scoped
+
+---
+
+## 9. Authorization
+
+**§9.1 Tenant isolation.** `tenant_id` from verified bearer's claims **server-side**. Every fan-out passes resolved `(tenant_id, user_id)` explicitly; downstream services re-verify. Cross-tenant header injection ignored.
+
+**§9.2 Per-user scope.** Each composer enforces ACL at the upstream's query layer:
+
+- triage.approvals_waiting → only approvals targeted at this user
+- triage.runs_failed_24h → only `owner_user_id == caller`
+- triage.todos\_\* → only `owner_user_id == caller`
+- timeline.meetings → only meetings the user is invited to
+- timeline.routines → only routines the user owns or is a member of
+- whats_new / live_activity → §5.3 filter (`owner_user_id == caller` OR agent shared with caller)
+- in_flight_projects → only projects the user is `project_member` of
 
 ACL enforcement is at each upstream's query layer; the aggregator does not duplicate ACL logic.
 
-**§7.3 Role.** Home is not role-gated — every authenticated user gets a Home. Only role-aware element is `QuickAction.is_admin_only` (e.g., `invite_teammate` when SSO-provisioning is enabled). Backend omits actions from the array when the user lacks the role; frontend never evaluates `is_admin_only`.
+**§9.3 Role.** Home is not role-gated — every authenticated user gets a Home. Only role-aware element is `QuickAction.is_admin_only`. Backend omits actions from the array when the user lacks the role; frontend never evaluates `is_admin_only`.
 
-**§7.4 Guests.** Per PRD.md §13 #3, multiplayer / external-collaborator support is undecided. Until then, **guests do not see Home** — they land directly in the chat / project they were invited to. Router enforces (out of scope for this sub-PRD; called out so Impl-B doesn't accidentally route guests here).
-
----
-
-## 8. Pagination + search
-
-**§8.1 No pagination.** Home is bounded-small. Caps: `agent_activity` 15, `pinned_chats` 8, `recent_runs` 8, `favorite_tools` 8, `todays_focus` 3, `upcoming_meetings` 3, `starred_projects` 6, `quick_actions` ~8. Total payload ≤ ~50 entries. One round-trip, no `?after=` cursors.
-
-**§8.2 No search.** Search is ⌘K palette (Wave 6 per PRD.md §12). Home links to other destinations for full views.
-
-**§8.3 "See all" deep-link endpoints.** Each section's header has a "See all" affordance opening the destination with a filter pre-applied:
-
-| Section           | Target endpoint                                                              |
-| ----------------- | ---------------------------------------------------------------------------- |
-| agent_activity    | `GET /v1/inbox?filter[from_kind]=agent&filter[window]=24h` (Inbox — Phase 4) |
-| pinned_chats      | `GET /v1/conversations?filter[pinned]=true`                                  |
-| recent_runs       | `GET /v1/agent/runs?owner_user_id=<caller>&limit=…`                          |
-| favorite_tools    | `GET /v1/mcp/tools?filter[starred]=true` (Tools — Phase 8)                   |
-| todays_focus      | `GET /v1/todos?filter[when]=today` (Phase 3)                                 |
-| upcoming_meetings | `GET /v1/connectors/{calendar_id}` (Connectors — Phase 9)                    |
-| starred_projects  | `GET /v1/projects?filter[starred]=true` (Phase 5)                            |
-
-For not-yet-shipped destinations, the link renders disabled with tooltip "Coming in Phase N" — same graceful-degradation pattern as §5.5.
+**§9.4 Guests.** Per [PRD.md §13 #3](../PRD.md), multiplayer / guest support is undecided. Until then, guests do not see Home — Router enforces.
 
 ---
 
-## 9. Accessibility
+## 10. Pagination + search
 
-Home satisfies master PRD §3.6 WCAG 2.1 AA:
+**§10.1 No pagination.** Home is bounded-small. Caps: triage chips ≤ 4, today_timeline ≤ 8, whats_new ≤ 7, in_flight_projects ≤ 3, live_activity ≤ 15, quick_actions ~5. Total payload ≤ ~50 entries.
 
-- **Semantic structure.** `<main aria-label="Home destination">`; greeting is `<h1>`; each of the 7 main sections + 2 panel sections has an `<h2>`. Activity feed is `<ul role="list">` with each entry as `<li>` — single screen-reader announcement per entry (summary + tone + target).
-- **Focus.** All interactives are `<button>` or `<a>`; visible focus ring via `--ring-color`. Tab order top-down, left-to-right. `Enter` and `Space` activate cards.
-- **Color is never sole carrier.** Run status pills carry color + label; status dot is `aria-hidden`. Activity-feed tone pairs with kind-specific icon + textual severity in summary. Unread-count is number + label, not a colored dot alone.
-- **Reduced motion.** SSE fade-in (60ms) and skeleton shimmer respect `prefers-reduced-motion: reduce`.
-- **Live announcements.** Activity feed is `aria-live="polite"` + `aria-relevant="additions"`. New SSE entry announces `{agent_name} {summary}`; older entries do not re-announce.
-- **High-contrast theme** covers Home automatically via design-system tokens — Impl-B uses `var(--color-*)`, never literal hex (current `HomeDestination.tsx:55-66` has Wave 1 hex leftovers Impl-B tokenizes).
-- **Tests.** `axe-core` clean on every state (§17.6).
+**§10.2 No search.** Search is ⌘K palette (Wave 6).
+
+**§10.3 "See all" deep-link endpoints.**
+
+| Section            | Target                                                                       |
+| ------------------ | ---------------------------------------------------------------------------- |
+| triage.approvals   | `inbox?filter=approvals`                                                     |
+| triage.runs_failed | `runs?status=failed&window=24h`                                              |
+| triage.todos\_\*   | `todos?filter=overdue` / `todos?filter=due_today`                            |
+| today_timeline     | `todos?filter=today` (default — primary intent is "what's left to do today") |
+| whats_new          | `inbox?filter=agent_activity&since=<since_iso>`                              |
+| in_flight_projects | `projects?filter=in_flight`                                                  |
+| live_activity      | `inbox?filter=agent_activity&window=24h`                                     |
+
+For not-yet-shipped destinations, link renders disabled with tooltip "Coming in Phase N."
 
 ---
 
-## 10. Performance
+## 11. Accessibility
+
+Per master PRD §3.6 (WCAG 2.1 AA):
+
+- **Semantic structure.** `<main aria-label="Home destination">`; greeting is `<h1>`; TriageStrip is `<nav aria-label="Triage">` with `<button>` chips; sections each have `<h2>`. LiveActivityRail is `<aside aria-label="Live agent activity">`.
+- **Focus.** All interactives are `<button>` or `<a>`; visible focus ring via `--ring-color`. Tab order top-down. `Enter` and `Space` activate.
+- **Color is never sole carrier.** Triage chips pair color (red/amber/green) with text + icon. Timeline status uses icon + label. WhatsNew tone glyphs pair with kind icon + text.
+- **Reduced motion.** SSE fade-in (60ms) respects `prefers-reduced-motion: reduce`.
+- **Live announcements.** LiveActivityRail is `aria-live="polite"` + `aria-relevant="additions"`. New entry announces `{agent_name} {summary}`; older entries do not re-announce.
+- **Tests.** `axe-core` clean on every state (§18.5).
+
+---
+
+## 12. Performance
 
 Master §3.7 targets: **LCP < 2.5s** cold, **INP < 200ms**, **CLS < 0.05**.
 
-- **LCP element is the greeting `<h1>`**, not a section card — greeting renders the instant the payload arrives, sections may still hydrate. Layout-locked min-heights on each section prevent shift:
+- **LCP element is the greeting + TriageStrip together** (one row). Renders the instant the payload arrives. Layout-locked min-heights:
+
   ```typescript
   const SECTION_MIN_HEIGHTS = {
-    greeting: 96,
-    activity_feed: 320,
-    pinned_chats: 200,
-    recent_runs: 200,
-    favorite_tools: 200,
-    todays_focus: 160,
-    upcoming_meetings: 160,
+    greeting_with_triage: 96,
+    today_timeline: 200,
+    whats_new: 200,
+    in_flight: 96,
+    live_activity_rail: 320,
   };
   ```
-  (Heights cross-referenced against `dest-home.jsx` rendered sizes.)
-- **Initial fetch is one round-trip.** `GET /v1/home` returns the full payload. SSE stream opens **after** payload resolves; never blocks LCP.
-- **Re-renders.** Shell does not re-mount on Home navigation (master §3.7). Within Home, sections are `React.memo`'d by their payload slice — an SSE update to `agent_activity` re-renders only the feed.
-- **SSE lifecycle.** `useEffect` cleanup with `AbortController` cancels on unmount; no leaked listeners. One stream per tab.
-- **Backend budget.** `/v1/home` p95 < 400ms warm (cache hit) / < 1500ms cold (parallel 7-upstream fan-out incl. cross-service ai-backend call). `/v1/home/stream` keepalive ping every 30s; memory cost bounded by concurrent-home-user count.
+
+- **Initial fetch is one round-trip.** `GET /v1/home` returns full payload. SSE stream opens **after** payload resolves; never blocks LCP.
+- **Re-renders.** Shell does not re-mount on Home navigation. Within Home, sections are `React.memo`'d by their payload slice.
+- **SSE lifecycle.** `useEffect` cleanup with `AbortController` cancels on unmount; one stream per tab.
+- **Backend budget.** `/v1/home` p95 < 400ms warm (cache hit) / < 1500ms cold (parallel 6-composer fan-out). `/v1/home/stream` 30s keepalive ping; memory cost bounded by concurrent-home-user count.
 
 ---
 
-## 11. Telemetry
+## 13. Telemetry
 
-Per master PRD §3.8 — every user-meaningful action emits an OpenTelemetry span. **All IDs SHA-256 hashed with per-tenant salt; names / bodies / summaries / document titles never enter span attributes.**
+Per master §3.8 — every user-meaningful action emits an OTel span. **All IDs SHA-256 hashed with per-tenant salt.**
 
-### 11.1 Spans
+### 13.1 Spans
 
-| Span name                 | Key attributes                                                                  | When                                             |
-| ------------------------- | ------------------------------------------------------------------------------- | ------------------------------------------------ |
-| `home.open`               | `cached`, `cache_age_ms`                                                        | `HomeDestination` mount                          |
-| `home.section_view`       | `section`, `entry_count`, `section_status`                                      | Per section, on render (incl. per-section error) |
-| `home.activity_open`      | `kind`, `agent_id_hash`, `target.kind`, `tone`                                  | Click on activity-feed entry                     |
-| `home.pinned_chat_open`   | `conversation_id_hash`                                                          | Click on pinned-chat card                        |
-| `home.recent_run_open`    | `run_id_hash`, `status`                                                         | Click on recent-run card                         |
-| `home.favorite_tool_open` | `skill_id_hash`, `tool_kind`                                                    | Click on favorite-tool                           |
-| `home.todo_open`          | `priority`, `is_overdue`, `source_kind`                                         | Click on today's-focus item                      |
-| `home.meeting_open`       | `source_connector`, `is_organizer`                                              | Click on upcoming meeting (opens external URL)   |
-| `home.quick_action`       | `action_id`                                                                     | Click on a quick action                          |
-| `home.section_retry`      | `section`                                                                       | Section retry after partial-failure              |
-| `home.sse_connect`        | —                                                                               | SSE opens                                        |
-| `home.sse_disconnect`     | `reason` (`navigated_away` / `idle_timeout` / `server_close` / `network_error`) | SSE closes                                       |
-| `home.sse_event_received` | `kind` (sampled 1/10)                                                           | Each SSE event                                   |
+| Span name                 | Key attributes                                            | When                                |
+| ------------------------- | --------------------------------------------------------- | ----------------------------------- |
+| `home.open`               | `cached`, `cache_age_ms`, `is_first_run`                  | HomeDestination mount               |
+| `home.section_view`       | `section`, `entry_count`, `section_status`                | Per section, on render              |
+| `home.triage_chip_click`  | `chip_kind` (approval / failed_run / overdue / due_today) | TriageStrip chip click              |
+| `home.timeline_open`      | `kind`, `status`                                          | TodayTimeline row click             |
+| `home.whats_new_open`     | `kind`, `tone`                                            | WhatsNewDigest row click            |
+| `home.in_flight_open`     | `project_id_hash`                                         | InFlightStrip row click             |
+| `home.live_activity_open` | `kind`, `agent_id_hash`                                   | LiveActivityRail entry click        |
+| `home.quick_action`       | `action_id`                                               | Quick action click                  |
+| `home.section_retry`      | `section`                                                 | Section retry after partial-failure |
+| `home.sse_connect`        | —                                                         | SSE opens                           |
+| `home.sse_disconnect`     | `reason`                                                  | SSE closes                          |
+| `home.sse_event_received` | `kind` (sampled 1/10)                                     | Each SSE event                      |
 
 Every span carries `tenant_id` + `user_id_hash` + `destination="home"` by default.
 
-### 11.2 Backend logs
+### 13.2 Backend logs
 
-Structured logs (with `request_id` correlation) on: cache hit/miss/refresh, each upstream fan-out (latency + status), per-section failure, SSE backpressure (per-user event buffer fills).
-
-### 11.3 Analytics queries
-
-(Document the "why" behind the span shape — not part of the contract.) Open frequency by tenant; click-through distribution across sections (informs Q6 section order); active-SSE % (does live feed get used?); per-kind CTR (does `risk_signal` warrant different visual weight than `drafted_artifact`?).
+Structured logs (with `request_id` correlation) on: cache hit/miss/refresh, each composer fan-out (latency + status), per-section failure, SSE backpressure, **dev seed runner reports** (created / skipped / failed counts).
 
 ---
 
-## 12. States
+## 14. States
 
-Per master PRD §3.10. Every state designed + tested.
+Per master §3.10. Every state designed + tested.
 
-**§12.1 Loading.** Skeleton sections in their final positions (no `display:none`→`block` flip). `aria-hidden="true"` during load; announcement comes via `aria-live` when content arrives.
+**§14.1 Loading.** Skeleton sections in their final positions. `aria-hidden="true"` during load; announcement comes via `aria-live` when content arrives.
 
-**§12.2 Ready.** All sections populated. Each section with zero entries renders its empty-state (§12.3) — consistent layout is the value.
+**§14.2 Ready (returning user with data).** Greeting + TriageStrip + populated sections per data availability. Empty sections **collapse** (no placeholder). The whole "did you visit?" cutoff text in WhatsNewDigest reflects `since_iso`.
 
-**§12.3 Empty (per-section)**
+**§14.3 Time-of-day variants.**
 
-| Section           | Copy                                                             | CTA                           |
-| ----------------- | ---------------------------------------------------------------- | ----------------------------- |
-| agent_activity    | "Nothing's happened yet today. Atlas activity will appear here." | —                             |
-| pinned_chats      | "Pin a chat to keep it here."                                    | "Open chats →" (`chat_new`)   |
-| recent_runs       | "Recent runs will appear here as Atlas works."                   | —                             |
-| favorite_tools    | "Star a tool to bookmark it."                                    | "Browse tools →" (Phase 8)    |
-| todays_focus      | "Nothing on your list for today. Want to plan?"                  | "Open todos →" (Phase 3)      |
-| upcoming_meetings | "No meetings today." (when connector connected)                  | —                             |
-| starred_projects  | "Star a project to keep it here."                                | "Browse projects →" (Phase 5) |
+| Time          | Greeting         | Today timeline behavior                                                    |
+| ------------- | ---------------- | -------------------------------------------------------------------------- |
+| morning       | "Good morning"   | All today entries upcoming                                                 |
+| afternoon     | "Good afternoon" | Past entries strike-through; "Up next" sub-header before first upcoming    |
+| evening       | "Good evening"   | "Today" shifts to past-tense for completed; "Tomorrow preview" row appears |
+| late (>22:00) | "Working late?"  | "Tomorrow preview" promoted above "Today (today)"                          |
 
-**§12.4 Empty (whole-Home, new tenant).** Every section empty → full-bleed: `🌱 Welcome to Atlas. Start a chat to see Atlas work for you.` + `[ New chat ]` button (always) + `[ Take a 2-min tour ]` (rendered only when tour-content registry is populated; in Wave 2 it isn't — see Q2).
+The tomorrow-preview is a separate `tomorrow_preview: SectionResult<TimelineEntry>` field on `HomePayload`. Empty unless `time_of_day === "evening" | "late"`.
 
-**§12.5 Error (whole-Home).** Backend 5xx → single `<ErrorPanel>` matching today's `HomeDestination.tsx:133-183`: title + message + retry. 401 from expired bearer triggers existing dev-IdP auto-mint flow first.
+**§14.4 Empty (first-run / fresh persona).**
 
-**§12.6 Partial failure (load-bearing UX).** One section errors, others render normally. The errored section shows a section-local card: `⚠ Couldn't load {section}. Other sections are unaffected. [↻ Retry section]`. "Retry section" calls `GET /v1/home?refresh_section={name}` — query-param hint, not a separate endpoint; backend bypasses cache for that one section.
+When `is_first_run === true` (every section empty AND user has no historical data), replace the whole briefing with a welcome card:
 
-**§12.7 Offline.** `navigator.onLine === false` (or transport network error): read last successful `HomePayload` from `KeyValueStore` (the substrate-agnostic port from commit `0f29624`; key `home:last_payload:v1`, one payload per user, written on every successful response). Render with banner: `Offline — showing your last morning. (cached at {relative time})`. Click-throughs requiring network are muted; auto-retry on `online` event.
+```
+Welcome to Atlas.
+Atlas works across your tools while you focus.
 
-**§12.8 Stale (`cached_at` > 5min).** SWR served stale before refresh landed → small hint above the feed: `↻ Showing last refresh from 6 minutes ago — refreshing now.` Wave 2 keeps it simple: frontend re-fires `/v1/home` on mount when stale.
+[💬 New chat]  [📋 Schedule a routine]  [🔌 Connect a tool]
+```
 
----
+TriageStrip, TodayTimeline, WhatsNewDigest, InFlightStrip, LiveActivityRail are all suppressed. HomePanel's QuickActions still renders (the welcome buttons are essentially horizontal QuickActions).
 
-## 13. Cross-destination references
+Backend computes `is_first_run` as:
 
-**Home only links out.** Every clickable item navigates to another destination via the shared `<ItemLink>` registry (master §4.3) — no bespoke navigation in Home.
+```
+triage all zero
+AND today_timeline.data empty
+AND whats_new.data empty
+AND in_flight_projects.data empty
+AND user has zero historical chats / runs / todos
+```
 
-| Home section      | Resolves to                                                              | Mechanism                                       |
-| ----------------- | ------------------------------------------------------------------------ | ----------------------------------------------- |
-| agent_activity    | Polymorphic `ItemRef` (runs, inbox, todos, agents, datasets, …)          | `<ItemLink>` registry                           |
-| pinned_chats      | chats destination                                                        | `<ItemLink kind="chat">`                        |
-| recent_runs       | runs surface (ai-backend, via facade)                                    | `<ItemLink kind="run">`                         |
-| favorite_tools    | tools destination                                                        | `<ItemLink kind="tool">`                        |
-| todays_focus      | todos destination                                                        | `<ItemLink kind="todo">`                        |
-| upcoming_meetings | external `conferencing_url`                                              | `<a target="_blank" rel="noopener noreferrer">` |
-| starred_projects  | projects destination                                                     | `<ItemLink kind="project">`                     |
-| quick_actions     | `chat_new` / `todos_new` / `tools_onboard` / `agent_new` / `team_invite` | `<ItemLink>` registry                           |
+Frontend trusts the boolean; doesn't re-derive.
 
-**Delete cascade — implicit, source-of-truth-driven.** Home is a view; underlying destinations are the source of truth. When a chat is deleted: `conversations` row dropped → Home cache invalidated (§3.4 trigger) → next refresh, the chat is absent from `pinned_chats`. Same pattern for every section. A separate "Home cascade" worker would be the bug.
+**§14.5 Partial failure.** One section errors, others render. The errored section shows a section-local card: `⚠ Couldn't load {section}. [↻ Retry]`. Retry calls `GET /v1/home?refresh_section={name}`.
 
-**Stale-entry resilience.** If a `recent_runs` entry's run was deleted within the 5min TTL, clicking it would 404 at the runs destination — handled there ("Run not found"), not in Home. `<ItemLink>` routes to the destination's not-found state; Home does not pre-validate references on cache read (would defeat caching).
+**§14.6 Whole-Home error.** Backend 5xx → single `<ErrorPanel>` with retry. 401 from expired bearer triggers existing dev-IdP auto-mint flow first.
 
----
+**§14.7 Offline.** `navigator.onLine === false` (or transport network error): read last successful `HomePayload` from `KeyValueStore` (key `home:last_payload:v1`, one payload per user). Render with banner: `Offline — showing your last briefing. (cached at {relative time})`. Click-throughs requiring network are muted; auto-retry on `online` event.
 
-## 14. Desktop substrate caveats
-
-**None.** Home is plain React + transport call + SSE. No file picker, no native notifications, no OS clipboard. Every cross-destination link goes through `<ItemLink>` which uses the substrate-agnostic `Router<TRoute>` port (per [PRD.md §2.1](../PRD.md) and the ports work in `packages/chat-surface/src/ports/`).
-
-For `meeting_external` links (calendar `conferencing_url`), the `<a>` element opens in a new window in browser substrate; in desktop substrate, the host's URL-handler port intercepts and opens in the OS default browser. This is handled by the existing ports facade — Home does not special-case substrate.
+**§14.8 Stale (`cached_at` > 5min).** SWR served stale before refresh landed → small hint above WhatsNewDigest: `↻ Refreshing…`.
 
 ---
 
-## 15. Implementation phasing
+## 15. Cross-destination references
 
-Two parallel impl agents. **They do not collide on files** — Impl-A owns Python + TypeScript types; Impl-B owns React. The TypeScript types are committed by Impl-A first (since Impl-B consumes them).
+**Home only links out.** Every clickable item navigates via `<ItemLink>` (master §4.3) — no bespoke navigation.
 
-### 15.1 Impl-A (api-types + backend + facade + tests)
+| Home element                | Resolves to                                   | Mechanism                                       |
+| --------------------------- | --------------------------------------------- | ----------------------------------------------- |
+| TriageStrip approval chip   | inbox?filter=approvals                        | `<ItemLink kind="inbox_filter">`                |
+| TriageStrip failed-run chip | runs?status=failed&window=24h                 | `<ItemLink kind="runs_filter">` (Phase 7+)      |
+| TriageStrip todo chips      | todos?filter=overdue / todos?filter=due_today | `<ItemLink kind="todos_filter">`                |
+| TodayTimeline meeting       | external `conferencing_url`                   | `<a target="_blank" rel="noopener noreferrer">` |
+| TodayTimeline routine       | routines/<id>                                 | `<ItemLink kind="routine">`                     |
+| TodayTimeline todo          | todos/<id>                                    | `<ItemLink kind="todo">`                        |
+| TodayTimeline run           | runs/<id>                                     | `<ItemLink kind="run">`                         |
+| WhatsNewDigest entry        | polymorphic `ItemRef` per entry kind          | `<ItemLink>` registry                           |
+| InFlightStrip row           | projects/<id>                                 | `<ItemLink kind="project">`                     |
+| LiveActivityRail entry      | polymorphic `ItemRef`                         | `<ItemLink>` registry                           |
+| QuickAction                 | per `target` field                            | `<ItemLink>` registry                           |
 
-**Branch:** `worktree-agent-phase2-home-impl-a`
+**Delete cascade — implicit, source-of-truth-driven.** Home is a view; underlying destinations are the source of truth. Cache invalidation (§3.5) handles propagation.
 
-**Owned files (NEW unless noted EDIT):**
-
-- `packages/api-types/src/home.ts` — types per §4
-- `packages/api-types/src/index.ts` — EDIT: re-export from `./home`
-- `services/backend/src/backend_app/home/{__init__.py, route.py, aggregator.py, types.py, sse.py, cache.py}` — FastAPI router, fan-out composition, Pydantic mirrors, SSE filter/forwarder, Redis cache adapter (in-memory fallback for dev)
-- `services/backend/src/backend_app/app.py` — EDIT: register the home router
-- `services/backend/tests/{unit,integration}/home/` — per §17.2-§17.4
-- `services/backend-facade/src/backend_facade/home_routes.py` — thin pass-through (`GET /v1/home`, `GET /v1/home/stream`)
-- `services/backend-facade/src/backend_facade/app.py` — EDIT: wire the router
-- `services/backend-facade/tests/test_home_routes.py` — forwarding correctness
-
-**Test headlines:** aggregator composition, section-status branches, activity filter, tenant isolation, partial-failure, cache hit/miss/SWR, invalidation triggers, SSE filter, facade pass-through. Full plan: §17.2-§17.4.
-
-### 15.2 Impl-B (frontend)
-
-**Branch:** `worktree-agent-phase2-home-impl-b`
-
-**Owned files (NEW unless noted EDIT):**
-
-- `packages/chat-surface/src/destinations/home/HomeDestination.tsx` — EDIT: full rewrite to 7-section layout
-- `packages/chat-surface/src/destinations/home/HomePanel.tsx`
-- `packages/chat-surface/src/destinations/home/sections/{HomeGreeting, HomeAgentActivityFeed, HomePinnedChatsGrid, HomeRecentRunsList, HomeFavoriteToolsList, HomeTodaysFocusList, HomeUpcomingMeetingsList, HomeStarredProjectsSection, HomeQuickActionsSection}.tsx`
-- `packages/chat-surface/src/destinations/home/sse-stream.ts` — `useHomeActivityStream` hook
-- `packages/chat-surface/src/destinations/home/index.ts` — EDIT: re-export both
-- `packages/chat-surface/src/util/time.ts` — `formatRelativeTime` hoisted from current `HomeDestination.tsx:70-85` (master §4.4)
-- `packages/chat-surface/src/destinations/home/{HomeDestination.test.tsx (EDIT), HomePanel.test.tsx}`
-- `apps/frontend/src/app/App.tsx` — EDIT: wire HomePanel into ContextPanel slot when `destination="home"`
-
-**Test headlines:** per-state rendering, `<ItemLink>`-only navigation, SSE hook lifecycle, axe-core clean on every state, typical-morning E2E, performance budget, preserved `data-testid` markers. Full plan: §17.1, §17.5-§17.7.
-
-### 15.3 File boundaries + merge order
-
-- **Impl-A NEVER touches** `packages/chat-surface/`. **Impl-B NEVER touches** `services/*` or `packages/api-types/`. Both touch `docs/` only to file a contract-bug back to the orchestrator (STOP + report; do not resume until orchestrator merges the doc fix).
-- **Merge order:** Impl-A first (types + backend + facade), Impl-B second (consumes the new types). Orchestrator runs `make test` + per-service suites, browser-verifies Home, updates master PRD §5.1 to mark resolved open questions.
+**Stale-entry resilience.** Clicking a deleted item routes to the destination's not-found state; Home does not pre-validate references on cache read.
 
 ---
 
-## 16. Open questions for product (parth)
+## 16. Desktop substrate caveats
 
-Each has a recommended default — adopt the default unless product disagrees.
-
-**Q1 — Activity window length.** Is "last 24h" right? User-configurable?
-→ **Default 24h, not user-configurable in Wave 2.** Configurable adds a settings surface for marginal value; revisit when telemetry (§11) shows "See all activity" click-through rate.
-
-**Q2 — New-tenant empty-state.** Guided tour or just empty + CTA?
-→ **Empty page with "New chat" CTA + optional "Take a 2-min tour" link** (rendered only if a tour-content registry is populated; in Wave 2 it isn't, so the link is omitted). Heavyweight onboarding overlay is a separate product surface.
-
-**Q3 — Today's focus — automatic or user-pinned?**
-→ **Automatic in Wave 2.** Server-side composite score `(overdue desc, priority desc, due asc, recency desc)`. Pinning needs a mutation surface — defer to Wave 4+.
-
-**Q4 — Upcoming meetings — what if no calendar connector?**
-→ **Replace the section with a one-row CTA: "Connect a calendar to see today's meetings →"** linking to connectors. With a connector but zero meetings, show "No meetings today." The CTA doubles as empty-state and upsell.
-
-**Q5 — Greeting personalization — source for first name?**
-→ **Source priority:** (1) IdP claim `given_name`, (2) IdP `name` first token, (3) email local-part capitalized. Falling through: drop the name (`"Good morning."` is fine). Never "User" / "Atlas user".
-
-**Q6 — Default section order — fixed or per-user reorder?**
-→ **Fixed in Wave 2** (activity → pinned → runs → favorites → focus → meetings). Per-user reorder is Wave 4+. Telemetry (§11) tells us if the order is right.
-
-**Q7 — Quick-action set tenant customization — admin UI now?**
-→ **Wave 2 ships server-driven defaults, no admin UI.** Admin UI (`PATCH /v1/admin/home/quick-actions`) is Wave 5+ when admin surfaces are first-class. Server-driven shape (§4.6) makes this a pure delivery problem later.
-
-**Q8 — SSE drop-off — silent retry or "paused" indicator?**
-→ **Silent retry with exponential backoff (1s → 30s).** "Paused" badge adds anxiety; mobile-network blips are common. User can refresh manually if they sense staleness.
+**None.** Home is plain React + transport call + SSE. No file picker, no native notifications, no OS clipboard. Cross-destination links use the substrate-agnostic `Router<TRoute>` port. External meeting links (`conferencing_url`) open via the existing URL-handler port — no Home special-casing.
 
 ---
 
-## 17. Test plan
+## 17. Implementation phasing — 8 narrow agents
 
-### 17.1 Frontend unit tests (`packages/chat-surface/`)
+Phase 9 splits into **8 narrow parallel agents**. Each ≤30 min, ≤1000 LOC. Two of them (P9-A6 facade, P9-A7 seed) are independent and can ship first.
 
-- Greeting renders for each `time_of_day`; first-name pulled from payload.
-- AgentActivityFeed dispatches by `kind` to kind-specific copy/icon/tone (every kind in §4.3 covered).
-- AgentActivityFeed is `<ul role="list">` with `aria-live="polite"` + `aria-relevant="additions"`.
-- SSE hook: subscribes on mount, unsubscribes on unmount, appends events to top, caps at 15.
-- Each section's empty state renders the §12.3 copy + CTA; whole-Home empty (§12.4) renders when every section is empty.
-- Whole-Home error renders `<ErrorPanel>` with retry (§12.5); partial-error state — one section in error, others ready (§12.6).
-- Section retry button calls `?refresh_section=<name>`; offline state reads from `KeyValueStore` + banner (§12.7); stale-state hint when `cached_at` > 5min (§12.8).
-- Skeleton heights match `SECTION_MIN_HEIGHTS`; CLS < 0.05 on data resolve.
-- Every click-through goes through `<ItemLink>` — no direct `window.location` or `router.navigate` calls in section components.
-- HomePanel renders both sections; quick-action click dispatches via `<ItemLink>`.
-- Existing `data-testid` markers preserved (`home-destination`, `home-section-pinned`, …).
+**Worktree discipline (repeat for every agent prompt):**
 
-### 17.2 Backend unit tests (`services/backend/tests/unit/home/`)
+- Stay inside `.claude/worktrees/<id>/`. Branch BEFORE first change. Never write to or commit on the main repo path.
+- After merge: `git worktree remove -f -f` + `git branch -d` + `git branch -D worktree-agent-<id>`.
 
-- Aggregator composes payload from all-ok upstreams; marks section `error` on one upstream throw; marks `unavailable` for not-yet-shipped destinations (§5.5).
-- Greeting `time_of_day` matches tenant timezone (not server-tz, not client-tz); first-name source-priority (Q5).
-- Activity filter (§5.2): excludes user-initiated events, subagent internal events, events outside 24h; caps at 15.
-- Today's focus picks top-3 by composite score (§4.4).
-- Upcoming meetings returns `null` when no calendar connector (Q4).
-- Quick actions filter strips `is_admin_only` for non-admins (§7.3).
-- Section caps enforced server-side (§8.1).
+### Backend track
 
-### 17.3 Backend integration tests (`services/backend/tests/integration/home/`)
+**P9-A1 — `api-types` HomePayload v2 contract**
+
+- Branch: `worktree-agent-phase9-api-types`
+- Files: `packages/api-types/src/home.ts` (rewrite), `packages/api-types/src/index.ts` (extend `ItemRef` with `routine` / `routine_new` variants)
+- Deliverable: full TS contract per §4. Re-export from `index.ts`. Zero changes to existing consumers other than removed types (`PinnedChatSummary`, `RecentRunSummary`, `FavoriteToolSummary`, `StarredProjectSummary`, `MeetingSummary` — replaced by `TimelineEntry` discriminator).
+- Test: `npm run typecheck --workspace @enterprise-search/api-types` clean.
+
+**P9-A2 — backend `triage` + `last_visit` modules**
+
+- Branch: `worktree-agent-phase9-backend-triage`
+- Files: `services/backend/src/backend_app/home/composers/triage.py`, `services/backend/src/backend_app/home/last_visit.py`, migration for `users.home_last_visit_at`.
+- Deliverable: `compose_triage_counts(identity) -> TriageCounts`, `read_and_advance_last_visit(user_id) -> previous_iso`. Composer queries the 4 sources (approvals, runs, todos×2) in parallel via `asyncio.gather`.
+- Tests: unit tests for each query, mutation idempotency, NULL-first-visit fallback to `now - 24h`.
+
+**P9-A3 — backend `timeline` composer**
+
+- Branch: `worktree-agent-phase9-backend-timeline`
+- Files: `services/backend/src/backend_app/home/composers/timeline.py`, mirrors in `home/types.py`.
+- Deliverable: `compose_today_timeline(identity) -> SectionResult[TimelineEntry]`. Queries 4 upstreams (calendar, routines, todos, runs) in parallel; merges into single sorted list; emits discriminated entries per §4.2.
+- Tests: per-kind composition; sort order; today-bounded; tenant timezone correct.
+
+**P9-A4 — backend `whats_new` + `in_flight` composers + aggregator rewrite**
+
+- Branch: `worktree-agent-phase9-backend-whats-new`
+- Files: `services/backend/src/backend_app/home/composers/whats_new.py`, `composers/in_flight.py`, `aggregator.py` (rewrite), `types.py` (final shape per §4.1), `route.py` (registration uses new aggregator).
+- Deliverable: `compose_whats_new(identity, since_iso) -> WhatsNewSection`, `compose_in_flight_projects(identity) -> SectionResult[InFlightProject]`. Aggregator orchestrates ALL composers (greeting, triage, timeline, whats_new, in_flight, live_activity, quick_actions) in parallel; computes `is_first_run`.
+- Tests: aggregator partial-failure (one composer raises, others render); `is_first_run` logic; `since_iso` propagation.
+
+**P9-A5 — facade `/v1/home/stream` SSE proxy**
+
+- Branch: `worktree-agent-phase9-facade-sse`
+- Files: `services/backend-facade/src/backend_facade/home_routes.py` (add stream route), `services/backend-facade/tests/test_home_routes.py` (add proxy test). If `forward_sse` helper doesn't exist alongside `forward_json`, add it in `backend_facade/app.py`.
+- Deliverable: `GET /v1/home/stream` proxies to backend with verified identity in scoped params + service-token headers; passes through `text/event-stream`.
+- Tests: per §8.3.
+
+**P9-A6 — dev seed runner**
+
+- Branch: `worktree-agent-phase9-dev-seed`
+- Files: `services/backend/dev_seed.yaml` (NEW), `services/backend/src/backend_app/dev_seed/__init__.py`, `dev_seed/runner.py`, `dev_seed/schema.py` (Pydantic models for the YAML), `app.py` (startup hook), `dev_idp/routes.py` (mount `POST /v1/dev/seed/refresh`). If any store lacks `upsert_by_id`, add it as part of this agent's scope (mention in PR description).
+- Deliverable: per §7. Seed runs on dev startup; `POST /v1/dev/seed/refresh` re-runs.
+- Tests: load + parse `dev_seed.yaml`; idempotent re-seed; malformed-yaml fails open (logs, doesn't crash startup); per-persona seed correctness.
+
+### Frontend track
+
+**P9-B1 — `HomeDestination` rewrite + `TriageStrip` + `TodayTimeline`**
+
+- Branch: `worktree-agent-phase9-frontend-main`
+- Files: `packages/chat-surface/src/destinations/home/HomeDestination.tsx` (rewrite), `sections/HomeGreeting.tsx` (rewrite — drop counts subline), `sections/TriageStrip.tsx` (NEW), `sections/TodayTimeline.tsx` (NEW), `sections/timeline-entry-renderer.tsx` (NEW — kind-discriminator dispatch). **Delete** `sections/HomePinnedChatsGrid.tsx`, `HomeRecentRunsList.tsx`, `HomeFavoriteToolsList.tsx`, `HomeTodaysFocusList.tsx`, `HomeUpcomingMeetingsList.tsx`.
+- Deliverable: Per §3.1.1-3.1.3. Empty-collapse logic. First-run welcome branch.
+- Tests: per-state rendering (loading / ready / partial-error / first-run / offline); kind-discriminator dispatch; ItemLink-only navigation.
+
+**P9-B2 — `WhatsNewDigest` + `InFlightStrip` + `LiveActivityRail` + SSE hook + HomePanel cleanup**
+
+- Branch: `worktree-agent-phase9-frontend-rail`
+- Files: `sections/WhatsNewDigest.tsx` (NEW), `sections/InFlightStrip.tsx` (NEW), `sections/LiveActivityRail.tsx` (NEW — replaces old `HomeAgentActivityFeed.tsx`), `sse-stream.ts` (rewrite to feed the rail, not the top-of-page), `HomePanel.tsx` (drop `HomeStarredProjectsSection`; keep `HomeQuickActionsSection`), `destinations/home/index.ts` (re-export update). **Delete** `sections/HomeAgentActivityFeed.tsx`, `sections/HomeStarredProjectsSection.tsx`.
+- Deliverable: Per §3.1.4-3.1.6 + §3.2. SSE hook prepends to rail, capped 15. Responsive: rail right-side ≥1024px, collapsible bottom strip <1024px.
+- Tests: per-state rendering; SSE hook subscribe/unsubscribe; rail responsive behavior; quick-action click → `ItemLink`.
+
+### Merge order
+
+1. **P9-A1** (api-types) → blocks everything else
+2. **P9-A2, A3, A4, A5, A6** run in parallel after A1 → backend + facade + seed
+3. **P9-B1, B2** run in parallel after A1 → frontend
+4. Orchestrator audit + test before merge: per-service suites green; `make test` cross-service green; browser-verify Home with the dev seed.
+
+### File boundaries
+
+- Backend agents never touch `packages/chat-surface/`.
+- Frontend agents never touch `services/*`.
+- All agents may touch `docs/` only to file a contract bug back to the orchestrator (STOP + report; do not resume until orchestrator fixes the doc).
+
+---
+
+## 18. Test plan
+
+### 18.1 Frontend unit (`packages/chat-surface/`)
+
+- HomeGreeting renders for each `time_of_day`; first-name pulled from payload; null name → omits gracefully.
+- TriageStrip: each chip variant renders with correct text + ItemLink target; all-zero + historical-data renders "All clear"; all-zero + first-run suppresses entirely.
+- TodayTimeline: per-kind dispatch (meeting / routine / todo / run); sort order; "+N more" link when >8; collapses when empty.
+- WhatsNewDigest: per-kind dispatch (8 activity kinds); `since_iso` header; collapses when empty.
+- InFlightStrip: rows with counts + last-activity; collapses when empty.
+- LiveActivityRail: SSE hook subscribes on mount, unsubscribes on unmount, prepends events, caps 15; `aria-live="polite"`; responsive (right-side ≥1024px / bottom-strip <1024px).
+- First-run welcome state renders when `is_first_run === true`.
+- Whole-Home error renders `<ErrorPanel>` with retry.
+- Partial-error: one section in error, others ready; section retry button calls `?refresh_section=<name>`.
+- Offline: reads from `KeyValueStore` + banner.
+- Skeleton heights match `SECTION_MIN_HEIGHTS`; CLS < 0.05.
+- Every click-through goes through `<ItemLink>` — no `window.location` or `router.navigate` calls in section components.
+
+### 18.2 Backend unit (`services/backend/tests/unit/home/`)
+
+- `compose_greeting`: `time_of_day` against tenant tz (not server tz); first-name source priority (IdP given_name → name first token → email local → null).
+- `compose_triage_counts`: each of 4 queries; tenant isolation; per-user scope; partial failure (one query throws → status="error" for that field? or whole composer status? — composer aggregates 4 queries, returns 4 numeric counts; one query failure logs + uses 0 + sets a section warning header — assert via `X-Atlas-Section-Errors`).
+- `compose_today_timeline`: per-kind composition; merge sort; today-bounded by tenant tz; sub-query failure → partial section status.
+- `compose_whats_new`: §5.3 filter; `since_iso` bounding; cap 7; first-visit NULL → falls back to `now - 24h`.
+- `compose_in_flight_projects`: `last_activity_at > now-7d`; project_member scope; cap 3.
+- `aggregator.compose_home_payload`: all-ok → full shape; one composer throws → partial; all composers throw → still 200 with every section in error; `is_first_run` computed correctly.
+- `read_and_advance_last_visit`: returns previous value; advances to now; concurrent-call safety (assert via lock or row-version test).
+- Quick actions filter strips `is_admin_only` for non-admins.
+
+### 18.3 Backend integration (`services/backend/tests/integration/home/`)
 
 - `GET /v1/home` returns 200 with full shape.
-- **Tenant isolation** (§7.1 hard requirement): two users in different tenants, neither sees the other's data; cross-tenant header injection ignored.
-- Cache: hit returns cached payload + `X-Atlas-Cached-At`; miss fan-outs and caches; SWR serves stale + async refreshes.
-- Invalidation triggers (§3.4): writing a pinned chat / completing a todo / starring a tool drops the cache key.
-- `?refresh_section=recent_runs` bypasses cache for one section only.
-- **Partial-failure** (§12.6): one upstream errors → 200 with `status: "error"` for that section; all upstreams error → still 200 with every section in error (NOT 5xx — preserves offline-fallback).
+- **Tenant isolation hard requirement:** two users in different tenants, neither sees the other's data; cross-tenant header injection ignored.
+- Cache hit returns `X-Atlas-Cached-At`; miss fan-outs and caches; SWR serves stale + async refreshes.
+- Invalidation triggers (§3.5): writing each trigger source drops the cache key.
+- `?refresh_section=triage` bypasses cache for one composer only.
+- **Partial failure:** one composer errors → 200 with `status: "error"` for that section; all composers error → 200 with every section in error (NOT 5xx — preserves offline fallback).
 - Backend itself down: 5xx; facade forwards 5xx transparently.
 
-### 17.4 SSE integration tests
+### 18.4 SSE integration
 
-- `/v1/home/stream` opens with valid bearer; rejects invalid bearer.
-- Stream emits agent events; filters out user-initiated, other tenants', other users' agent-private events (§5.2).
-- 30s keepalive ping; disconnect on auth revocation.
+- `/v1/home/stream` opens with valid bearer; rejects invalid.
+- Stream emits agent events; filters per §5.3.
+- 30s keepalive; disconnect on auth revocation.
+- **Facade proxy (§8.3):** facade forwards SSE; identity headers scoped; query params passed through.
 
-### 17.5 Frontend integration — typical morning flow
+### 18.5 Dev seed runner tests
 
-MSW-mocked. Open Home → assert greeting + 7 main sections + panel both sections render → SSE delivers one event after 500ms → assert event appears at top of feed → click a recent run → assert route transitions → navigate back → assert no second `GET /v1/home` (cache hit).
+- Loads `dev_seed.yaml` and seeds Sarah's data; restart re-runs no-op.
+- Malformed YAML logs error + startup succeeds (fail open).
+- `POST /v1/dev/seed/refresh` re-loads file + re-seeds.
+- Per-persona role gating (admin seed differs from employee seed if configured).
+- Each store's `upsert_by_id` is exercised; assert idempotency.
 
-### 17.6 a11y + performance
+### 18.6 Frontend integration — typical morning flow
 
-- `axe-core` zero violations on loading / ready / empty-per-section / whole-empty / error / partial-error / offline.
-- Lighthouse budget: LCP < 2.5s, INP < 200ms, CLS < 0.05 (master §3.7).
-- `React.Profiler` assert: navigating to Home and back to chats does not re-mount the shell.
+MSW-mocked. Open Home → assert greeting + triage chips + today timeline + whats new + in-flight rows + live rail render. Click triage chip → assert route transition. Click timeline meeting → assert external link opens. SSE event delivered after 500ms → assert it lands at top of LiveActivityRail. Navigate back → assert cache hit (no second `GET /v1/home`).
+
+### 18.7 a11y + performance
+
+- `axe-core` zero violations on loading / ready / partial-error / first-run / offline / error.
+- Lighthouse budget: LCP < 2.5s, INP < 200ms, CLS < 0.05.
+- `React.Profiler`: navigating Home ↔ chats does not re-mount the shell.
 
 ---
 
-## 18. Anti-goals for this phase
+## 19. Anti-goals for this phase
 
-Explicitly OUT OF SCOPE — flagged so subagents don't drift.
+Explicitly OUT OF SCOPE.
 
-- **No write operations from Home.** No pinning, completing, starring, approving from Home — every action drills into the source destination. (Inline approve/dismiss on activity cards is Wave 4+.)
-- **No section-order customization** (Q6 — Wave 4+).
-- **No per-user activity-window length** (Q1 — Wave 4+).
-- **No third-party feed widgets** (LinkedIn / Twitter / RSS / news). Strictly first-party data.
-- **No marketing copy / upsells.** Empty-state and connector-CTA are the only "upsells" and live where the missing data would.
+- **No write operations from Home.** No pinning, completing, starring, approving from Home — every action drills into the source destination.
+- **No per-user section reorder** (Wave 4+).
+- **No per-user "today" window length** (always tenant-local calendar day).
+- **No third-party feed widgets** (LinkedIn / Twitter / RSS / news).
+- **No marketing copy / upsells.** Empty-state and connector-CTA are the only "upsells" and live where missing data would.
 - **No global search bar on Home** (search is ⌘K — Wave 6).
-- **No "messages from Atlas team" surface** (lives in profile menu / settings).
+- **No "messages from Atlas team" surface.**
 - **No analytics dashboards** — Home is a briefing, not a metrics page.
-- **No drag-and-drop section reordering** (Wave 4+).
+- **No drag-and-drop reordering.**
 - **No background polling** — live updates are SSE-driven only.
-- **No localStorage for the activity feed.** Only `KeyValueStore` (substrate-agnostic port), only for the last `HomePayload` offline-fallback. Per-section caches do not live in the browser.
+- **No localStorage for the activity rail.** Only `KeyValueStore` for offline-fallback of last `HomePayload`.
+- **No inline approve / dismiss on the LiveActivityRail.** Approvals route to inbox. (Phase 11+ may inline.)
+- **No fixture-data branches in production composers.** The seed lives in the store. (§7.7)
 
 ---
 
-## 19. References
+## 20. Open questions for product (parth)
+
+Each has a recommended default. Adopt unless product disagrees.
+
+**Q1 — "All clear" affirmation: render or suppress?**
+→ **Render when user has historical data; suppress when truly fresh.** A returning user benefits from positive confirmation that triage is empty (vs the absence of red — ambiguous). A first-run user already sees the welcome card; affirmation is redundant.
+
+**Q2 — Tomorrow preview threshold.**
+→ **Appear after 17:00 tenant-local time.** Earlier feels premature; later (e.g., 22:00) misses end-of-day planners.
+
+**Q3 — InFlightStrip "in flight" definition.**
+→ **`last_activity_at > now - 7d`.** Shorter (24h / 3d) excludes long-horizon projects; longer (14d / 30d) makes "in flight" meaningless. 7d aligns with weekly cadence.
+
+**Q4 — WhatsNewDigest cap (7) vs LiveActivityRail cap (15).**
+→ **Keep distinct.** Digest is past-tense summary (low cap = high signal); Rail is ambient stream (higher cap = more peripheral visibility).
+
+**Q5 — First-run welcome — show one CTA or three?**
+→ **Three: New chat / Schedule a routine / Connect a tool.** New chat alone is too thin a first step; three covers most user intents. Keep buttons large + touch-friendly.
+
+**Q6 — Dev seed reload on save: filesystem watcher or explicit refresh endpoint?**
+→ **Explicit `POST /v1/dev/seed/refresh`.** Filesystem watchers are flaky across substrates (macOS / WSL / Docker volumes). The dev endpoint is also useful for resetting state between manual test runs.
+
+**Q7 — Greeting "Working late?" copy at 22:00+.**
+→ **Ship as default.** Light personality consistent with Atlas's voice. If product wants neutral copy, easy single-string swap.
+
+**Q8 — Welcome-state CTA buttons — `<ItemLink>` or `<button onClick>`?**
+→ **`<ItemLink kind="chat_new">`-style.** Same substrate-agnostic Router port everything else uses. No special case.
+
+---
+
+## 21. References
 
 - [PRD.md](../PRD.md) — workspace shell + composer + thread canvas foundation
 - [destinations-master-prd.md](../destinations-master-prd.md) — §3 enterprise checklist · §4 shared primitives · §5.1 Home
-- Design source: `/tmp/atlas-design/enterprise-search-template/project/dest-home.jsx` (HomeMain L98-218, HomePanel L53-94) · `os-app.jsx:140-147` (mount shape) · `os-data.jsx` (cross-destination data shapes) · `data.jsx` (todos source-attribution) · `chats/chat1.md:104` (activity-feed copy intent)
-- Current code: `packages/chat-surface/src/destinations/home/HomeDestination.tsx` (3-section seed) · `packages/api-types/src/index.ts` (where the current `HomePayload` would live — Impl-A relocates)
+- Phase 2 home-prd.md — historical version (this file is the rewrite; Phase 2 retained in git history only)
+- Current code: `packages/chat-surface/src/destinations/home/HomeDestination.tsx` (the 3-section seed Phase 2 left behind, to be fully replaced by P9-B1/B2)
+- Backend: `services/backend/src/backend_app/home/` (Phase 2 route + stubs; Phase 9 rewrites composers + aggregator)
+- Facade: `services/backend-facade/src/backend_facade/home_routes.py` (Phase 2 `/v1/home` proxy; Phase 9 adds stream proxy)
+- Dev IdP pattern (mirrored for seed runner): `services/backend/dev_personas.yaml` + `services/backend/src/backend_app/dev_idp/personas.py`
 - Service guides: [services/backend/CLAUDE.md](../../../services/backend/CLAUDE.md) · [services/backend-facade/CLAUDE.md](../../../services/backend-facade/CLAUDE.md) · [packages/api-types/CLAUDE.md](../../../packages/api-types/CLAUDE.md)
-- Compliance: root [CLAUDE.md](../../../CLAUDE.md) §Compliance Reviews

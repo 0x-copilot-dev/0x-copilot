@@ -209,43 +209,29 @@ The subagent's first job in its phase is **to write the sub-PRD**, get it review
 
 ### 5.1 Home (`/home`)
 
-**User job:** the morning-briefing screen. The first thing the user sees when they open Atlas. Answers "what happened overnight, what's queued, what should I do today."
+**User job:** the morning-briefing screen. The first thing the user sees when they open Atlas. Answers four questions, in order of urgency: (1) Does anything need me right now? (2) What happened while I was away? (3) What's coming up today? (4) Where do I pick up?
 
-**Reference designs:**
+> **Canonical sub-PRD:** [`destinations/home-prd.md`](destinations/home-prd.md) (Phase 9 rewrite — supersedes the Phase 2 7-section model).
 
-- `/tmp/atlas-design/enterprise-search-template/project/dest-home.jsx`
-- The agent-activity feed copy: "Atlas drafted a 4-page brief, cross-referenced last 6 months of email + call transcripts, and surfaced 3 risk signals worth raising. Two follow-up emails are queued and waiting on your sign-off." (chat1.md line 104)
+**Screens (Phase 9 redesign):**
 
-**Screens:**
-
-- Main: greeting (`Good <time-of-day>, <user>. What are we shipping today?`), agent-activity feed (cards), pinned chats grid, recent runs, favorite tools, today's focus (top 3 todos), upcoming meetings (if calendar connector connected).
-- Panel: starred projects shortcuts; quick actions (New chat / New todo / Onboard an API / Build an agent / Invite a teammate).
+- Main, top→bottom: greeting + TriageStrip ("⚠ N approvals · ⚠ N failed runs · • N due today" or "✓ All clear") → TodayTimeline (merged meetings + routines firing + todos due + scheduled runs, chronological) → WhatsNewDigest (past-tense, since last visit) → InFlightStrip (projects with activity in last 7d) → LiveActivityRail (SSE feed, right-rail ≥1024px or bottom-strip <1024px, **subordinate** placement).
+- Panel: QuickActions only (New chat / New todo / Schedule a routine / Connect a tool / Invite a teammate). Phase 2's StarredProjects panel section is dropped — InFlightStrip in main replaces it.
+- Empty sections **collapse** (no per-section "Nothing here yet" placeholder). A truly-fresh persona renders a welcome card with three CTAs instead of the briefing.
 
 **Wire (api-types):**
 
-- `HomePayload` = `{ greeting, agent_activity, pinned_chats, recent_runs, favorite_tools, todays_focus, upcoming_meetings, quick_actions }`. Each sub-field has its own type. Cursor pagination not needed for Home (everything is fixed-small).
-- Existing `HomePayload` already covers `pinned`, `recent_runs`, `favorites`. The sub-PRD extends it.
+`HomePayload = { greeting, triage, today_timeline, whats_new, in_flight_projects, live_activity, quick_actions, cached_at, is_first_run }`. TimelineEntry and AgentActivityEntry are discriminated unions (per home-prd.md §4). Phase 2's separate `pinned_chats`, `recent_runs`, `favorite_tools`, `starred_projects` fields are **removed** — chats and tools live in their own destinations + sidebar, runs are subsumed by `whats_new` / `live_activity`.
 
-**Storage (backend):** Home is **aggregation-only** — it reads from other destinations' tables. No new tables.
+**Storage (backend):** Home is aggregation-only — no `home_*` table. **One** small column added: `users.home_last_visit_at` for the `since_iso` cutoff used by `whats_new`.
+
+**Dev seed:** Phase 9 adds `services/backend/dev_seed.yaml` + `DevSeedRunner` (mirrors `dev_personas.yaml` + `PersonaLoader`). Writes through production store interfaces; idempotent on restart. Composers never branch on `BACKEND_ENVIRONMENT`.
 
 **Audit:** not applicable (read-only).
 
-**Cross-destination references:**
-
-- Pinned chats → chats destination
-- Recent runs → ai-backend run records (via facade)
-- Favorite tools → tools destination
-- Today's focus → todos destination
-- Upcoming meetings → connectors (calendar)
-- Agent activity → agents destination + ai-backend events
+**Cross-destination references:** TriageStrip chips → inbox / runs / todos filters · TodayTimeline → calendar external / routines / todos / runs · WhatsNewDigest → polymorphic `ItemRef` per kind · InFlightStrip → projects · LiveActivityRail → polymorphic `ItemRef` · QuickActions → `chat_new` / `todos_new` / `routine_new` / `tools_onboard` / `team_invite`.
 
 **Desktop caveats:** none.
-
-**Open questions for the sub-PRD:**
-
-- What's the time window for "overnight" activity? (Default: last 24h, configurable per user.)
-- Does Home cache, and for how long? (Recommend: stale-while-revalidate, 5min TTL.)
-- Does Home update in real-time as runs land? (Recommend: yes, subscribe to run-event stream when on Home.)
 
 ---
 

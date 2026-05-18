@@ -6,50 +6,49 @@ import type {
   TransportCapabilities,
   TypedRequest,
 } from "@enterprise-search/chat-transport";
-import { act, fireEvent, render, screen } from "@testing-library/react";
+import { fireEvent, render, screen } from "@testing-library/react";
 import { describe, expect, it, vi } from "vitest";
 
 import { RouterProvider } from "../../providers/RouterProvider";
 import { TransportProvider } from "../../providers/TransportProvider";
-import type {
-  ArtifactRoute,
-  NavigateOptions,
-  Router,
-} from "../../routing/router";
+import type { NavigateOptions, Router } from "../../routing/router";
 
-import type { LibraryItemId } from "@enterprise-search/api-types";
+import { LibraryDestination } from "./LibraryDestination";
 
-import { LibraryDestination, type LibraryItem } from "./LibraryDestination";
+// Wave-0 LibraryDestination is the dignified placeholder. It must
+// not hit the backend — the previous fetch to /v1/library?kind=adapter
+// 404'd (Phase 7 work). These tests pin the no-fetch contract and
+// the placeholder copy.
 
-interface DeferredTransport {
-  readonly transport: Transport;
-  resolve(response: unknown): void;
-  reject(err: Error): void;
-  reset(): void;
-  readonly calls: ReadonlyArray<TypedRequest>;
+type AnyRoute = unknown;
+
+function makeRouter(): Router<AnyRoute> & {
+  readonly navigate: ReturnType<typeof vi.fn>;
+} {
+  const navigate = vi.fn<(route: AnyRoute, opts?: NavigateOptions) => void>();
+  return {
+    current(): AnyRoute {
+      return { screen: "chat", destination: "library" } as AnyRoute;
+    },
+    navigate,
+    subscribe: () => () => {},
+  };
 }
 
-function makeDeferredTransport(): DeferredTransport {
-  let resolver: ((value: unknown) => void) | null = null;
-  let rejecter: ((err: Error) => void) | null = null;
-  const calls: TypedRequest[] = [];
-
-  function newPromise(): Promise<unknown> {
-    return new Promise<unknown>((resolve, reject) => {
-      resolver = resolve;
-      rejecter = reject;
-    });
-  }
-
-  let pending: Promise<unknown> = newPromise();
-
+function makeTransport(): {
+  readonly transport: Transport;
+  readonly requests: ReadonlyArray<TypedRequest>;
+} {
+  const requests: TypedRequest[] = [];
   const transport: Transport = {
     request<TRes>(req: TypedRequest): Promise<TRes> {
-      calls.push(req);
-      return pending as Promise<TRes>;
+      requests.push(req);
+      return Promise.reject(
+        new Error("LibraryDestination must not fetch"),
+      ) as Promise<TRes>;
     },
     subscribeServerSentEvents(_opts: SseSubscribeOptions): SseSubscription {
-      return { close: () => {} };
+      return { close: () => undefined };
     },
     getSession(): Session {
       return { bearer: null };
@@ -64,180 +63,52 @@ function makeDeferredTransport(): DeferredTransport {
       };
     },
   };
-
-  return {
-    transport,
-    resolve(response) {
-      resolver?.(response);
-    },
-    reject(err) {
-      rejecter?.(err);
-    },
-    reset() {
-      pending = newPromise();
-    },
-    get calls(): ReadonlyArray<TypedRequest> {
-      return calls;
-    },
-  };
+  return { transport, requests };
 }
 
-function makeRouter(): Router<ArtifactRoute> & {
-  readonly navigate: ReturnType<typeof vi.fn>;
-} {
-  const navigate =
-    vi.fn<(route: ArtifactRoute, opts?: NavigateOptions) => void>();
-  return {
-    current(): ArtifactRoute {
-      return { kind: "workspace", workspaceId: "current" };
-    },
-    navigate,
-    subscribe: () => () => {},
-  };
+function renderLibrary() {
+  const { transport, requests } = makeTransport();
+  const router = makeRouter();
+  render(
+    <TransportProvider transport={transport}>
+      <RouterProvider router={router}>
+        <LibraryDestination />
+      </RouterProvider>
+    </TransportProvider>,
+  );
+  return { requests, router };
 }
 
-const ADAPTERS: ReadonlyArray<LibraryItem> = [
-  {
-    id: "adapter-1" as LibraryItemId,
-    kind: "adapter",
-    title: "Salesforce Opportunity v3",
-    modifiedAt: new Date(Date.now() - 2 * 60_000).toISOString(),
-    subtitle: "sf-opp://",
-  },
-  {
-    id: "adapter-2" as LibraryItemId,
-    kind: "adapter",
-    title: "Linear Issue v1",
-    modifiedAt: new Date(Date.now() - 24 * 3_600_000).toISOString(),
-    subtitle: "linear-issue://",
-  },
-];
-
-const RESULTS: ReadonlyArray<LibraryItem> = [
-  {
-    id: "result-1" as LibraryItemId,
-    kind: "result",
-    title: "ARR by segment Q3",
-    modifiedAt: new Date(Date.now() - 4 * 3_600_000).toISOString(),
-  },
-];
-
-function renderLibrary(deferred: DeferredTransport, router = makeRouter()) {
-  return {
-    router,
-    ...render(
-      <TransportProvider transport={deferred.transport}>
-        <RouterProvider router={router}>
-          <LibraryDestination />
-        </RouterProvider>
-      </TransportProvider>,
-    ),
-  };
-}
-
-describe("LibraryDestination", () => {
-  it("renders skeleton rows while the initial request is pending", () => {
-    const deferred = makeDeferredTransport();
-    renderLibrary(deferred);
-    const list = screen.getByTestId("library-list");
-    expect(list).toHaveAttribute("data-state", "loading");
-    expect(screen.getAllByTestId("library-skeleton-row")).toHaveLength(4);
-    expect(deferred.calls).toHaveLength(1);
-    expect(deferred.calls[0]).toEqual({
-      method: "GET",
-      path: "/v1/library",
-      query: { kind: "adapter" },
-    });
+describe("LibraryDestination (Wave-0 placeholder)", () => {
+  it("renders the placeholder and never calls the transport", () => {
+    const { requests } = renderLibrary();
+    expect(screen.getByTestId("destination-placeholder")).toBeInTheDocument();
+    expect(
+      screen.getByTestId("destination-placeholder-title"),
+    ).toHaveTextContent("Your knowledge library");
+    expect(
+      screen.getByTestId("destination-placeholder-phase"),
+    ).toHaveTextContent("Coming in Phase 7");
+    expect(requests).toHaveLength(0);
   });
 
-  it("renders item rows when the request resolves with data", async () => {
-    const deferred = makeDeferredTransport();
-    renderLibrary(deferred);
-    await act(async () => {
-      deferred.resolve({ items: ADAPTERS });
-      await Promise.resolve();
-    });
-    const items = screen.getAllByTestId("library-item");
-    expect(items).toHaveLength(2);
-    expect(screen.getByText("Salesforce Opportunity v3")).toBeInTheDocument();
-    expect(screen.getByText("Linear Issue v1")).toBeInTheDocument();
+  it("does not render the old Adapters/Results/Knowledge tab bar", () => {
+    renderLibrary();
+    expect(screen.queryByTestId("library-tab-adapter")).not.toBeInTheDocument();
+    expect(screen.queryByTestId("library-tab-result")).not.toBeInTheDocument();
+    expect(
+      screen.queryByTestId("library-tab-knowledge"),
+    ).not.toBeInTheDocument();
   });
 
-  it("renders an empty state with per-tab copy when results are empty", async () => {
-    const deferred = makeDeferredTransport();
-    renderLibrary(deferred);
-    await act(async () => {
-      deferred.resolve({ items: [] });
-      await Promise.resolve();
-    });
-    const empty = screen.getByTestId("library-empty");
-    expect(empty).toBeInTheDocument();
-    expect(screen.getByText("No saved adapters")).toBeInTheDocument();
-  });
-
-  it("renders the error panel and retries on click", async () => {
-    const deferred = makeDeferredTransport();
-    renderLibrary(deferred);
-    await act(async () => {
-      deferred.reject(new Error("library unavailable"));
-      await Promise.resolve();
-    });
-    expect(screen.getByTestId("library-error")).toBeInTheDocument();
-    expect(screen.getByText("library unavailable")).toBeInTheDocument();
-
-    deferred.reset();
-    fireEvent.click(screen.getByTestId("library-retry"));
-    expect(screen.getByTestId("library-list")).toHaveAttribute(
-      "data-state",
-      "loading",
-    );
-    await act(async () => {
-      deferred.resolve({ items: ADAPTERS });
-      await Promise.resolve();
-    });
-    expect(screen.getAllByTestId("library-item")).toHaveLength(2);
-  });
-
-  it("switching tabs re-issues the request with the new kind", async () => {
-    const deferred = makeDeferredTransport();
-    renderLibrary(deferred);
-    await act(async () => {
-      deferred.resolve({ items: ADAPTERS });
-      await Promise.resolve();
-    });
-    deferred.reset();
-    fireEvent.click(screen.getByTestId("library-tab-result"));
-    expect(screen.getByTestId("library-list")).toHaveAttribute(
-      "data-state",
-      "loading",
-    );
-    const lastCall = deferred.calls[deferred.calls.length - 1]!;
-    expect(lastCall).toEqual({
-      method: "GET",
-      path: "/v1/library",
-      query: { kind: "result" },
-    });
-    await act(async () => {
-      deferred.resolve({ items: RESULTS });
-      await Promise.resolve();
-    });
-    expect(screen.getAllByTestId("library-item")).toHaveLength(1);
-    expect(screen.getByText("ARR by segment Q3")).toBeInTheDocument();
-  });
-
-  it("clicking Open routes via the router with a workspace placeholder", async () => {
-    const deferred = makeDeferredTransport();
-    const { router } = renderLibrary(deferred);
-    await act(async () => {
-      deferred.resolve({ items: ADAPTERS });
-      await Promise.resolve();
-    });
+  it("navigates via the host's chat destination route when a bridge is clicked", () => {
+    const { router } = renderLibrary();
     fireEvent.click(
-      screen.getByRole("button", { name: /open salesforce opportunity v3/i }),
+      screen.getByTestId("destination-placeholder-bridge-connectors"),
     );
     expect(router.navigate).toHaveBeenCalledWith({
-      kind: "workspace",
-      workspaceId: "adapter-1",
+      screen: "chat",
+      destination: "connectors",
     });
   });
 });

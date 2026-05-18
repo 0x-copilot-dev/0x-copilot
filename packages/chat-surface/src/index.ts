@@ -180,12 +180,15 @@ export {
   RIGHT_RAIL_WIDTH,
   TOPBAR_HEIGHT,
   DEFAULT_SHELL_DESTINATION,
+  DestinationPlaceholder,
   SHELL_DESTINATIONS,
   type AppRailProps,
   type ChatShellProps,
   type ContextPanelPrimaryAction,
   type ContextPanelProps,
   type ContextPanelSearch,
+  type DestinationPlaceholderBridge,
+  type DestinationPlaceholderProps,
   type ShellDestination,
   type ShellDestinationSlug,
   type TopbarProps,
@@ -415,12 +418,8 @@ export {
   type ProjectsPanelProps,
   type RenderProjectDetailSlot,
 } from "./destinations/projects";
-export {
-  LibraryDestination,
-  type LibraryItem,
-  type LibraryItemKind,
-} from "./destinations/library";
-export { AgentsDestination, type AgentRunRow } from "./destinations/agents";
+export { LibraryDestination } from "./destinations/library";
+export { AgentsDestination } from "./destinations/agents";
 export { ToolsDestination } from "./destinations/tools";
 export {
   ConnectorsDestination,
@@ -432,12 +431,7 @@ export {
   type MemberRole,
   type TeamDestinationProps,
 } from "./destinations/team";
-export {
-  MemoryDestination,
-  type Memory,
-  type MemoryDestinationProps,
-  type MemoryType,
-} from "./destinations/memory";
+export { MemoryDestination } from "./destinations/memory";
 // === end Phase 2-A / 3 destinations ===
 
 // === Phase 5 — Routines (12th destination) ===
