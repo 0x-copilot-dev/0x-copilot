@@ -549,7 +549,14 @@ p {
   display: grid;
   font-size: var(--font-size-md);
   grid-template-columns: 16rem minmax(0, 1fr);
-  height: 100dvh;
+  /* The workspace is mounted INSIDE ChatShell's main-column grid row
+   * (height = `1fr` of `${TOPBAR_HEIGHT}px 1fr`), so its parent is
+   * already constrained to `100dvh - 44px`. Setting `height: 100dvh`
+   * on the workspace overflows that row by exactly the topbar height
+   * (44px), pushing the composer's bottom edge off-screen and forcing
+   * page scroll. `height: 100%` fills the parent row correctly. */
+  height: 100%;
+  min-height: 0;
   overflow: hidden;
 }
 
