@@ -229,6 +229,12 @@ from backend_app.routes.scim import register_scim_routes
 from backend_app.routes.sessions import register_session_routes
 from backend_app.routes.siem import register_siem_admin_routes
 from backend_app.routes.workspace import register_workspace_routes
+from backend_app.settings import (
+    InMemorySettingsStore,
+    SettingsService,
+    SettingsStore,
+    register_settings_routes,
+)
 from backend_app.team import (
     InMemoryTeamStore,
     StoreBackedAssetCounts,
@@ -434,6 +440,7 @@ def create_app(
     memory_store: MemoryStore | None = None,
     agents_store: AgentsStore | None = None,
     tools_store: ToolsStore | None = None,
+    settings_store: SettingsStore | None = None,
     liveness_service: LivenessService | None = None,
     palette_store: PaletteStorePort | None = None,
 ) -> FastAPI:
@@ -1332,6 +1339,20 @@ def create_app(
         app,
         privacy_store=resolved_privacy_store,
         identity_store=resolved_identity_store,
+    )
+    # Phase 12 P12-A6 — Settings module (per-user notification defaults +
+    # workspace notification defaults + webhook security defaults). The
+    # store layer reuses ``user_preferences`` (migration 0018) for the
+    # user namespace so Phase 2 ``home.activity_window_hours`` + P9-A2
+    # ``home.last_visit_iso`` are preserved by deep-merge.
+    resolved_settings_store: SettingsStore = settings_store or InMemorySettingsStore()
+    app.state.settings_store = resolved_settings_store
+    register_settings_routes(
+        app,
+        service=SettingsService(
+            store=resolved_settings_store,
+            identity_store=resolved_identity_store,
+        ),
     )
     # PR 8.0.5 — single aggregate runtime-policies route consumed by
     # ai-backend at run start. Composes the same two stores above into
