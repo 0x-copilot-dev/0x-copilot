@@ -36,7 +36,7 @@ Audit rows are append-only.
 from __future__ import annotations
 
 from datetime import datetime, timezone
-from typing import Any, Iterable
+from typing import Any, Iterable, Protocol, runtime_checkable
 
 from backend_app.identity.store import IdentityStore
 from backend_app.projects.acl import (
@@ -49,6 +49,67 @@ from backend_app.routines.store import (
     RoutineRecord,
     RoutinesStore,
 )
+
+
+# ---------------------------------------------------------------------------
+# P6.5-A2 — project connector-allowlist inheritance at routine create.
+#
+# The lookup is in-process (same Python service owns both Projects and
+# Routines), so we model it as a small ``Protocol`` rather than an HTTP
+# port. The default :class:`_NullProjectAllowlistLookup` returns
+# ``None`` so test/dev environments that haven't wired the Projects
+# destination still construct the service cleanly — routines created
+# in those environments fall through to "no inheritance" (existing
+# behavior).
+#
+# Cross-tenant guard: implementations MUST scope by ``tenant_id`` and
+# return ``None`` for projects that don't exist in the caller's tenant.
+# The default adapter at wiring time bridges to
+# :class:`ProjectsService.get_project` which enforces the canonical
+# 404-not-403 ACL (tenant + project-member or admin). Returning
+# ``None`` from a missing / forbidden project mirrors the conversation
+# resolver — never fail the routine create on a bad project id.
+# ---------------------------------------------------------------------------
+
+
+@runtime_checkable
+class ProjectAllowlistLookup(Protocol):
+    """In-process lookup for a project's ``default_connector_allowlist``.
+
+    Implementations must return ``None`` (never raise) when the project
+    is missing for the tenant, the caller lacks read rights, or the
+    column / value is not set — the service degrades to "no project
+    inheritance" rather than refusing the create.
+    """
+
+    def fetch_connector_allowlist(
+        self,
+        *,
+        tenant_id: str,
+        caller_user_id: str,
+        project_id: str,
+    ) -> tuple[str, ...] | None:
+        """Return the project's allowlist (possibly empty), or ``None``."""
+
+
+class _NullProjectAllowlistLookup:
+    """No-op lookup that always returns ``None``.
+
+    Used as the default when the Projects destination is not wired into
+    the routines service (tests, early-phase deployments). The routine
+    create flow falls through to "no inheritance" — the existing
+    pre-§5.4 behavior.
+    """
+
+    def fetch_connector_allowlist(
+        self,
+        *,
+        tenant_id: str,
+        caller_user_id: str,
+        project_id: str,
+    ) -> tuple[str, ...] | None:
+        """Return ``None`` unconditionally."""
+        return None
 
 
 def _now() -> datetime:
@@ -136,6 +197,7 @@ class RoutinesService:
         store: RoutinesStore,
         identity_store: IdentityStore,
         project_membership: "ProjectMembershipPort | None" = None,
+        project_allowlist_lookup: ProjectAllowlistLookup | None = None,
         active_quota_per_user: int = ACTIVE_ROUTINES_PER_USER_LIMIT,
     ) -> None:
         self._store = store
@@ -145,6 +207,15 @@ class RoutinesService:
         # to a no-member adapter — owner-only behaviour until the
         # Projects destination lands and registers a real adapter.
         self._project_membership = project_membership or _NoMemberProjectAdapter()
+        # P6.5-A2 — project ``default_connector_allowlist`` lookup. The
+        # default no-op returns ``None`` so deployments / tests that
+        # haven't wired the Projects destination still see the existing
+        # (no-inheritance) behavior. App wiring bridges this to
+        # ``ProjectsService.get_project`` so the lookup honours the
+        # canonical 404-not-403 ACL and never crosses tenants.
+        self._project_allowlist_lookup: ProjectAllowlistLookup = (
+            project_allowlist_lookup or _NullProjectAllowlistLookup()
+        )
         self._active_quota = active_quota_per_user
 
     # -- reads ---------------------------------------------------------
@@ -250,7 +321,20 @@ class RoutinesService:
         get the quota gate immediately. Body validation enforces the
         wire-shape invariants (manual_fire scope, trigger kinds,
         missed_fire_policy enum) before the row lands.
+
+        P6.5-A2 — when ``project_id`` is set AND the caller did NOT
+        pass an explicit ``connectors_scope`` key (key absent OR value
+        is ``None``), the service inherits the project's
+        ``default_connector_allowlist`` per PRD §5.4. The caller's
+        explicit scope (including an explicit empty ``{}``) always wins.
         """
+
+        # PRD §5.4: "Only when the caller did not pass an explicit
+        # connectors list." Track key presence BEFORE validation
+        # collapses missing/None into ``{}``.
+        caller_passed_explicit_scope = (
+            "connectors_scope" in payload and payload["connectors_scope"] is not None
+        )
 
         validated = self._validate_create_payload(payload)
         status = validated.get("status", "draft")
@@ -269,6 +353,36 @@ class RoutinesService:
                     f"active_routine_quota_exceeded:{self._active_quota}"
                 )
 
+        # P6.5-A2 — project allowlist inheritance. Only fires when:
+        #   * a project_id is set on the routine, AND
+        #   * the caller did NOT pass connectors_scope explicitly, AND
+        #   * the project has a non-``None`` ``default_connector_allowlist``.
+        # Empty allowlist (``()``) materializes to ``{}`` — explicit
+        # denial (PRD §5.4). The lookup returns ``None`` for missing /
+        # cross-tenant projects so a bad id never blocks create — we
+        # just fall through to the no-inheritance path.
+        #
+        # The materialized scope ends up on the stored row's
+        # ``connectors_scope``; the audit ``after_state`` carries it
+        # downstream, so we don't need a separate inheritance flag here
+        # — the audit consumers reconstruct "what was applied" from
+        # the row dump.
+        connectors_scope: dict[str, Any] = dict(
+            validated.get("connectors_scope", {}) or {}
+        )
+        project_id_value = validated.get("project_id")
+        if not caller_passed_explicit_scope and project_id_value is not None:
+            allowlist = self._project_allowlist_lookup.fetch_connector_allowlist(
+                tenant_id=tenant_id,
+                caller_user_id=caller_user_id,
+                project_id=project_id_value,
+            )
+            if allowlist is not None:
+                # Each slug → active with no extra scope strings. The
+                # fire-time permission intersection (P5-A4) gates the
+                # actual run; this layer only seeds the policy.
+                connectors_scope = {slug: [] for slug in allowlist}
+
         record = RoutineRecord(
             tenant_id=tenant_id,
             owner_user_id=caller_user_id,
@@ -278,7 +392,7 @@ class RoutinesService:
             agent_id=validated["agent_id"],
             agent_version_pin=validated.get("agent_version_pin"),
             triggers=list(validated.get("triggers", [])),
-            connectors_scope=dict(validated.get("connectors_scope", {})),
+            connectors_scope=connectors_scope,
             behavior=dict(validated.get("behavior", {})),
             permissions=dict(validated["permissions"]),
             code=validated.get("code"),

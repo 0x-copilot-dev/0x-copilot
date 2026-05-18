@@ -29,6 +29,10 @@ from agent_runtime.api.suggestible_connectors_resolver import (
     NullSuggestibleConnectorsResolver,
     SuggestibleConnectorsResolver,
 )
+from agent_runtime.api.project_resolver import (
+    NullProjectResolver,
+    ProjectResolverPort,
+)
 from agent_runtime.api.user_policies_resolver import (
     NullUserPoliciesResolver,
     UserPoliciesResolver,
@@ -83,6 +87,7 @@ class RuntimeApiAppFactory:
         notification_dispatcher: NotificationDispatcher | None = None,
         user_policies_resolver: UserPoliciesResolver | None = None,
         suggestible_connectors_resolver: SuggestibleConnectorsResolver | None = None,
+        project_resolver: ProjectResolverPort | None = None,
         configure_logging_on_create: bool = True,
         configure_telemetry_on_create: bool = True,
         deployment: DeploymentProfile | None = None,
@@ -152,6 +157,7 @@ class RuntimeApiAppFactory:
             notification_dispatcher=notification_dispatcher,
             user_policies_resolver=user_policies_resolver,
             suggestible_connectors_resolver=suggestible_connectors_resolver,
+            project_resolver=project_resolver,
             app=app,
         )
 
@@ -228,6 +234,7 @@ class RuntimeApiAppFactory:
         notification_dispatcher: NotificationDispatcher | None,
         user_policies_resolver: UserPoliciesResolver | None,
         suggestible_connectors_resolver: SuggestibleConnectorsResolver | None,
+        project_resolver: ProjectResolverPort | None,
         app: FastAPI,
     ) -> tuple:
         """Wire coordinators from the supplied ports or from env settings.
@@ -313,6 +320,16 @@ class RuntimeApiAppFactory:
         _user_policies_resolver: UserPoliciesResolver = (
             user_policies_resolver or NullUserPoliciesResolver()
         )
+        # P6.5-A2 — project ``default_connector_allowlist`` resolver.
+        # Tests pass an explicit fake; production wires the HTTP impl
+        # via the factory once the deployment configures
+        # ``BACKEND_BASE_URL`` + ``ENTERPRISE_SERVICE_TOKEN``. The
+        # :class:`NullProjectResolver` default is fail-open: conversation
+        # create falls through to workspace defaults when the lane is
+        # not configured.
+        _project_resolver: ProjectResolverPort = (
+            project_resolver or NullProjectResolver()
+        )
 
         # Build the shared event producer.
         _event_producer = RuntimeEventProducer(
@@ -343,6 +360,7 @@ class RuntimeApiAppFactory:
             persistence=_ports.persistence,
             settings=_settings,
             run_coordinator=_run,
+            project_resolver=_project_resolver,
         )
         _cqs = ConversationQueryService(
             persistence=_ports.persistence,

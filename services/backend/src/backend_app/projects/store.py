@@ -88,10 +88,19 @@ class ProjectRecord(BaseModel):
     updated_at: datetime = Field(default_factory=_now)
     deleted_at: datetime | None = None
     # Phase 6.5 §5 — connector inheritance for new chats / routines.
-    # ``None`` = inherit owner defaults; ``[]`` = explicit deny;
-    # ``["salesforce", ...]`` = allowlist of ConnectorSlug values. The
-    # field travels as kinds (not ConnectorIds) so a re-grant doesn't
-    # invalidate the rule.
+    # Three semantics:
+    # * ``None`` — no project default; chats/routines inherit owner's
+    #   workspace default at create time (Phase 1 behavior).
+    # * ``[]`` — explicit deny: no connectors allowed in this project;
+    #   materialize step seeds an empty connector map and stops.
+    # * ``["salesforce", ...]`` — allowlist of ConnectorSlug values;
+    #   each slug becomes an active entry on the new chat/routine at
+    #   create time.
+    #
+    # JSONB on disk (forward-compatible with a richer {slug, scope}
+    # shape later). List shape matches api-types/projects.ts wire
+    # contract; consumers (P6.5-A2 routine inheritance) coerce as
+    # needed for in-memory dedup.
     default_connector_allowlist: list[str] | None = None
 
 

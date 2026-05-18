@@ -13,6 +13,10 @@ from starlette import status
 
 from agent_runtime.api.constants import Messages
 from agent_runtime.api.ports import PersistencePort
+from agent_runtime.api.project_resolver import (
+    NullProjectResolver,
+    ProjectResolverPort,
+)
 from agent_runtime.execution.contracts import RuntimeErrorCode
 from agent_runtime.settings import RuntimeSettings
 from runtime_api.http.errors import RuntimeApiError
@@ -109,23 +113,49 @@ class ConversationCoordinator:
         persistence: PersistencePort,
         settings: RuntimeSettings,
         run_coordinator: object,  # RunCoordinator — typed as object to break import cycle
+        project_resolver: ProjectResolverPort | None = None,
     ) -> None:
         self._persistence = persistence
         self._settings = settings
         self._run_coordinator = run_coordinator
+        # P6.5-A2 — owner of the project ``default_connector_allowlist``
+        # inheritance hook at conversation create. Defaults to a no-op
+        # resolver so tests / dev environments that don't wire the
+        # trusted backend lane still construct the coordinator cleanly.
+        self._project_resolver: ProjectResolverPort = (
+            project_resolver or NullProjectResolver()
+        )
 
     async def create_conversation(
         self, request: CreateConversationRequest
     ) -> ConversationResponse:
-        """Create a conversation and seed workspace default connectors if none are set.
+        """Create a conversation and seed connector defaults per the inheritance ladder.
 
-        Idempotent when the request carries an idempotency key: a duplicate call
-        returns the existing record rather than inserting a new row.
+        Inheritance ladder (PRD §5.4 + workspace defaults):
+
+        1. **Caller-explicit wins.** If the request carries a non-``None``
+           ``enabled_connectors`` map (including an explicit ``{}``), the
+           coordinator writes that map verbatim and skips both project
+           and workspace seeding — the user's composer choice is
+           authoritative.
+        2. **Project allowlist.** If ``project_id`` is set and the
+           project's ``default_connector_allowlist`` is non-``None`` (a
+           tuple — possibly empty), the coordinator materializes the
+           allowlist as ``enabled_connectors`` (each slug → active with
+           no extra scopes). Empty tuple → empty map (explicit denial).
+        3. **Workspace defaults.** Falls through to
+           :meth:`_seed_default_connectors_if_needed` for the existing
+           Phase 1 behavior — owner-wide defaults seed the chat.
+
+        Idempotent when the request carries an idempotency key: a
+        duplicate call returns the existing record rather than inserting
+        a new row.
         """
 
         conversation = await self._persistence.create_conversation(request)
-        seeded = await self._seed_default_connectors_if_needed(
-            conversation=conversation
+        seeded, inherited_from_project = await self._apply_connector_inheritance(
+            conversation=conversation,
+            request=request,
         )
         await self._persistence.write_audit_log(
             event_type="conversation_created",
@@ -135,6 +165,14 @@ class ConversationCoordinator:
                 "resource_type": "conversation",
                 "resource_id": seeded.conversation_id,
                 "outcome": "success",
+                # PRD §10.3 audit context: did this chat inherit its
+                # connectors from the project default? Ops dashboards
+                # answer "what fraction of chats inherit project
+                # defaults vs. user-chosen?" from this flag.
+                "context": {
+                    "project_id": request.project_id,
+                    "inherited_from_project_default": inherited_from_project,
+                },
             },
         )
         return seeded.to_response()
@@ -520,6 +558,93 @@ class ConversationCoordinator:
                 reason="conversation_deleted",
             ),
         )
+
+    async def _apply_connector_inheritance(
+        self,
+        *,
+        conversation: ConversationRecord,
+        request: CreateConversationRequest,
+    ) -> tuple[ConversationRecord, bool]:
+        """Resolve the connector-inheritance ladder for a freshly created conversation.
+
+        Returns ``(conversation_record, inherited_from_project_default)``
+        so the caller can stamp the audit row's
+        ``context.inherited_from_project_default`` flag.
+
+        Order of precedence (PRD §5.4):
+
+        1. **Caller-explicit map** (``request.enabled_connectors`` is not
+           ``None``) — write verbatim; both project and workspace
+           seeding are skipped. ``inherited_from_project_default`` is
+           ``False``.
+        2. **Project allowlist** (``project_id`` set and the project's
+           ``default_connector_allowlist`` resolves to a tuple — empty
+           or non-empty). Empty tuple → write an empty map (explicit
+           denial; PRD §5.4). Non-empty → materialize each slug as an
+           active entry. ``inherited_from_project_default`` is ``True``.
+        3. **Workspace defaults fall-through** — existing Phase 1
+           behavior; the workspace's ``default_connectors`` map seeds
+           the chat. ``inherited_from_project_default`` is ``False``.
+        """
+
+        # Rule 1: caller-explicit wins. ``None`` means "not passed" —
+        # eligible for inheritance. ``{}`` means "explicit empty" —
+        # caller wins and we skip both project and workspace seeding.
+        if request.enabled_connectors is not None:
+            if not request.enabled_connectors:
+                return conversation, False
+            now = datetime.now(timezone.utc)
+            updated = await self._persistence.update_conversation_connectors(
+                org_id=conversation.org_id,
+                user_id=conversation.user_id,
+                conversation_id=conversation.conversation_id,
+                scopes_patch=dict(request.enabled_connectors),
+                now=now,
+            )
+            return updated or conversation, False
+
+        # Rule 2: project allowlist. Only consulted when ``project_id``
+        # is set. The resolver returns ``None`` on every failure mode
+        # (network, non-2xx, missing column, unknown project) so a bad
+        # project id never blocks create — we just fall through to
+        # workspace defaults.
+        if request.project_id is not None:
+            allowlist = await self._project_resolver.fetch_connector_allowlist(
+                org_id=conversation.org_id,
+                user_id=conversation.user_id,
+                project_id=request.project_id,
+            )
+            if allowlist is not None:
+                # Materialize: each slug → active with no extra scopes.
+                # An empty allowlist materializes to an empty map; the
+                # PRD's "explicit denial" reading means we still stamp
+                # ``inherited_from_project_default=True`` so audit
+                # consumers can answer "what fraction of chats inherited
+                # from the project default?" — including the empty case.
+                materialized: dict[str, tuple[str, ...] | None] = {
+                    slug: () for slug in allowlist
+                }
+                if not materialized:
+                    # No write needed — the conversation already has an
+                    # empty enabled_connectors map; we keep the record
+                    # as-is. The flag still reads True because the
+                    # project's policy was consulted and applied.
+                    return conversation, True
+                now = datetime.now(timezone.utc)
+                updated = await self._persistence.update_conversation_connectors(
+                    org_id=conversation.org_id,
+                    user_id=conversation.user_id,
+                    conversation_id=conversation.conversation_id,
+                    scopes_patch=materialized,
+                    now=now,
+                )
+                return updated or conversation, True
+
+        # Rule 3: workspace-defaults fall-through (existing behavior).
+        seeded = await self._seed_default_connectors_if_needed(
+            conversation=conversation
+        )
+        return seeded, False
 
     async def _seed_default_connectors_if_needed(
         self, *, conversation: ConversationRecord

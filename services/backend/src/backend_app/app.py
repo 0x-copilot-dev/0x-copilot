@@ -1453,6 +1453,63 @@ def create_app(
         templates_store=resolved_templates_store,
     )
 
+    # P6.5-A2 — bridge the Projects destination's
+    # ``default_connector_allowlist`` into the Routines service so
+    # routine create can inherit it (PRD §5.4). We install AFTER both
+    # services exist; the bridge calls ``projects_service.get_project``
+    # so the 404-not-403 ACL gate still applies (cross-tenant /
+    # forbidden / missing projects collapse to ``None`` — the routine
+    # service treats that as "no inheritance" and falls through to the
+    # pre-§5.4 behavior).
+    from backend_app.routines.service import ProjectAllowlistLookup
+
+    class _RoutineProjectAllowlistBridge:
+        """In-process bridge from RoutinesService → ProjectsService.
+
+        Never raises — ACL denials and missing projects collapse to
+        ``None``, matching the routine-service contract that bad
+        project ids must never block create.
+        """
+
+        def __init__(self, projects: ProjectsService) -> None:
+            self._projects = projects
+
+        def fetch_connector_allowlist(
+            self,
+            *,
+            tenant_id: str,
+            caller_user_id: str,
+            project_id: str,
+        ) -> tuple[str, ...] | None:
+            """Return the project's allowlist via the canonical ACL gate."""
+            try:
+                record, _, _, _ = self._projects.get_project(
+                    tenant_id=tenant_id,
+                    caller_user_id=caller_user_id,
+                    # Owner / member / admin all satisfy read; the
+                    # service-layer ACL is the source of truth. We pass
+                    # an empty role tuple — the projects service checks
+                    # owner / membership first; admin roles never reach
+                    # this bridge because the routine create is for the
+                    # caller's own tenant scope.
+                    caller_roles=(),
+                    project_id=project_id,
+                )
+            except Exception:
+                # ProjectNotFound / ProjectForbidden / unexpected — fall
+                # through to "no inheritance". The PRD's hard rule is
+                # that the inheritance hook is best-effort; the caller's
+                # routine still lands.
+                return None
+            return record.default_connector_allowlist
+
+    routines_service._project_allowlist_lookup = _RoutineProjectAllowlistBridge(  # type: ignore[attr-defined]
+        projects_service
+    )
+    # Quiet the unused-import warning when the Protocol is only used
+    # for documentation purposes above.
+    _ = ProjectAllowlistLookup
+
     # Phase 7A — tier-2 adapter registry. Source bytes go through a
     # ``SourceStorage`` port (filesystem in dev, S3 injectable in prod).
     from backend_app.adapter_registry import (

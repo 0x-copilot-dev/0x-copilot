@@ -55,6 +55,22 @@ class CreateConversationRequest(RuntimeContract):
     title: str | None = None
     metadata: JsonObject = Field(default_factory=dict)
     idempotency_key: str | None = None
+    # P6.5-A2 — when the caller files this conversation under a project
+    # and does NOT pass an explicit ``enabled_connectors`` map, the
+    # coordinator inherits the project's ``default_connector_allowlist``
+    # (per projects-extensions-prd §5.4). Optional; absent on every
+    # non-project chat. NOT validated against an existing project here
+    # — the resolver tolerates missing / cross-tenant projects by
+    # returning ``None`` so create never fails on a bad id.
+    project_id: str | None = None
+    # P6.5-A2 — explicit connector scopes passed by the caller. When
+    # non-``None`` (including ``{}`` for "explicit empty"), the project
+    # allowlist inheritance is skipped — caller wins (PRD §5.4 rule:
+    # "Only when the caller did not pass an explicit connectors list").
+    # The seed-from-workspace-defaults path also short-circuits when
+    # this map is set, matching the existing
+    # ``conversation.enabled_connectors`` semantics.
+    enabled_connectors: ConversationConnectorScopes | None = None
 
     @field_validator(Keys.Field.ORG_ID, Keys.Field.USER_ID, Keys.Field.ASSISTANT_ID)
     @classmethod
@@ -70,6 +86,24 @@ class CreateConversationRequest(RuntimeContract):
     @classmethod
     def _normalize_idempotency_key(cls, value: object) -> str | None:
         return ValueNormalizer.normalize_optional_id(value, Keys.Field.IDEMPOTENCY_KEY)
+
+    @field_validator("project_id", mode="before")
+    @classmethod
+    def _normalize_project_id(cls, value: object) -> str | None:
+        return ValueNormalizer.normalize_optional_id(value, "project_id")
+
+    @field_validator(_Fields.ENABLED_CONNECTORS, mode="before")
+    @classmethod
+    def _coerce_enabled_connectors(
+        cls, value: object
+    ) -> ConversationConnectorScopes | None:
+        # ``None`` (the default) means "caller did not pass an explicit
+        # map"; the coordinator interprets that as eligible for project
+        # / workspace inheritance. A passed-in ``{}`` is treated as
+        # "explicit empty" — caller wins.
+        if value is None:
+            return None
+        return ConnectorScopeValidator.coerce(value)
 
     @field_validator(Keys.Field.METADATA, mode="before")
     @classmethod
