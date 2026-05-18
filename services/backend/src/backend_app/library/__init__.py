@@ -68,6 +68,17 @@ from backend_app.library.index_jobs import (
     LibraryIndexJobsStore,
 )
 from backend_app.library.routes import register_library_routes
+from backend_app.library.search import (
+    EmbeddingsClientPort,
+    InMemoryLibrarySearchIndex,
+    LibrarySearchIndex,
+    NoopEmbeddingsClient,
+    NoopRerankClient,
+    RerankClientPort,
+    SearchEngine,
+    rrf_fuse,
+)
+from backend_app.library.search_routes import register_library_search_routes
 from backend_app.library.service import (
     LibraryConflict,
     LibraryForbidden,
@@ -92,9 +103,11 @@ __all__ = [
     "DEFAULT_EMBEDDING_MODEL_ID",
     "DEFAULT_FILE_MAX_BYTES",
     "EmbeddingRow",
+    "EmbeddingsClientPort",
     "EmbeddingsStore",
     "InMemoryEmbeddingsStore",
     "InMemoryLibraryIndexJobsStore",
+    "InMemoryLibrarySearchIndex",
     "InMemoryLibraryStore",
     "IndexJobClaim",
     "LibraryAuditRecord",
@@ -107,8 +120,13 @@ __all__ = [
     "LibraryInvalidRequest",
     "LibraryNotFound",
     "LibraryPageRecord",
+    "LibrarySearchIndex",
     "LibraryService",
     "LibraryStore",
+    "NoopEmbeddingsClient",
+    "NoopRerankClient",
+    "RerankClientPort",
+    "SearchEngine",
     "BlobMeta",
     "BlobMimeNotAllowedError",
     "BlobNotFoundError",
@@ -127,4 +145,6 @@ __all__ = [
     "compute_content_hash",
     "extract_text",
     "register_library_routes",
+    "register_library_search_routes",
+    "rrf_fuse",
 ]

@@ -136,10 +136,13 @@ from backend_app.projects import (
     register_projects_routes,
 )
 from backend_app.library import (
+    InMemoryLibrarySearchIndex,
     InMemoryLibraryStore,
     LibraryService,
     LibraryStore,
+    SearchEngine,
     register_library_routes,
+    register_library_search_routes,
 )
 from backend_app.projects.template_routes import register_template_routes
 from backend_app.projects.templates import (
@@ -1545,6 +1548,24 @@ def create_app(
         membership_port=projects_service._membership_port,  # noqa: SLF001 — canonical port reuse
     )
     app.state.library_service = library_service
+
+    # P7.5-A4 — hybrid search. Wired with the in-memory BM25 index and
+    # the no-op embeddings + rerank clients; the production composer
+    # injects HTTP-backed clients onto ai-backend's
+    # ``/internal/v1/llm/embed`` + ``/internal/v1/llm/rerank`` once
+    # P7.5-A1 lands them.
+    # Search routes MUST register before the catch-all CRUD route
+    # ``/v1/library/{item_id}`` — otherwise ``/v1/library/search`` is
+    # captured as an item_id lookup. FastAPI matches routes in the
+    # order they were declared.
+    library_search_engine = SearchEngine(
+        store=resolved_library_store,
+        index=InMemoryLibrarySearchIndex(store=resolved_library_store),
+        membership_port=projects_service._membership_port,  # noqa: SLF001
+    )
+    app.state.library_search_engine = library_search_engine
+    register_library_search_routes(app, engine=library_search_engine)
+
     register_library_routes(app, service=library_service)
 
     # =====================================================================

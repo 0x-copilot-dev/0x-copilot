@@ -1,7 +1,7 @@
 """Public ``/v1/library`` facade — thin proxy onto ``services/backend``.
 
-Single source of truth is the backend; this module is a five-route
-forwarder for the Phase 7 P7-A1 surface:
+Single source of truth is the backend; this module forwards the Phase 7
+P7-A1 CRUD surface plus the P7.5-A4 hybrid search routes:
 
 1. Authenticates the caller via :class:`FacadeAuthenticator`.
 2. Forwards the request to ``backend`` with the verified identity in
@@ -33,8 +33,11 @@ Out of scope of P7-A1 (other agents own these):
 
 from __future__ import annotations
 
+from collections.abc import AsyncIterator
+
 import httpx
-from fastapi import FastAPI, HTTPException, Request, Response, status
+from fastapi import FastAPI, Header, HTTPException, Request, Response, status
+from fastapi.responses import StreamingResponse
 
 from backend_facade.auth import FacadeAuthenticator
 from backend_facade.http_client import http_client
@@ -126,6 +129,83 @@ def register_library_routes(app: FastAPI) -> None:
             timeout=15,
         )
         return _coerce_object_or_raise(response)
+
+    @app.get("/v1/library/search")
+    async def search_library(request: Request) -> dict[str, object]:
+        backend_url = _settings_for(app).backend_url
+        client = http_client(app)
+        identity = await FacadeAuthenticator.verify_with_touch(
+            request, backend_url=backend_url, http_client=client
+        )
+        forwarded_params: list[tuple[str, str]] = [
+            ("org_id", identity.org_id),
+            ("user_id", identity.user_id),
+        ]
+        for key, value in request.query_params.multi_items():
+            if key in {"org_id", "user_id"}:
+                continue
+            forwarded_params.append((key, value))
+        response = await client.get(
+            f"{backend_url}/v1/library/search",
+            params=forwarded_params,
+            headers=FacadeAuthenticator.service_headers(identity),
+            timeout=30,
+        )
+        return _coerce_object_or_raise(response)
+
+    @app.get("/v1/library/search/stream")
+    async def search_library_stream(
+        request: Request,
+        last_event_id: str | None = Header(default=None, alias="Last-Event-ID"),
+    ) -> StreamingResponse:
+        # Pass-through SSE proxy. Mirrors the inbox stream pattern — we
+        # never buffer; bytes ride the wire as the upstream wrote them
+        # so the SSE framing (event:/id:/data:) stays byte-for-byte.
+        backend_url = _settings_for(app).backend_url
+        client = http_client(app)
+        identity = await FacadeAuthenticator.verify_with_touch(
+            request, backend_url=backend_url, http_client=client
+        )
+        forwarded_params: list[tuple[str, str]] = [
+            ("org_id", identity.org_id),
+            ("user_id", identity.user_id),
+        ]
+        for key, value in request.query_params.multi_items():
+            if key in {"org_id", "user_id"}:
+                continue
+            forwarded_params.append((key, value))
+        outbound_headers = dict(FacadeAuthenticator.service_headers(identity))
+        if last_event_id is not None:
+            outbound_headers["Last-Event-ID"] = last_event_id
+        upstream = await client.send(
+            client.build_request(
+                "GET",
+                f"{backend_url}/v1/library/search/stream",
+                params=forwarded_params,
+                headers=outbound_headers,
+                timeout=None,
+            ),
+            stream=True,
+        )
+        if upstream.status_code >= 400:
+            await upstream.aread()
+            await upstream.aclose()
+            _raise_for_upstream(upstream)
+
+        async def event_stream() -> AsyncIterator[bytes]:
+            try:
+                async for chunk in upstream.aiter_bytes():
+                    if await request.is_disconnected():
+                        break
+                    yield chunk
+            finally:
+                await upstream.aclose()
+
+        return StreamingResponse(
+            event_stream(),
+            media_type="text/event-stream",
+            headers={"X-Accel-Buffering": "no", "Cache-Control": "no-store"},
+        )
 
     @app.delete(
         "/v1/library/{item_id}",

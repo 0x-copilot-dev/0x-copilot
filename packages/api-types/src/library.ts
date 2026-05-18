@@ -32,6 +32,7 @@ import type {
   TenantId,
   UserId,
 } from "./brands";
+import type { ItemRef } from "./refs";
 
 // ---------------------------------------------------------------------------
 // Primitive enums
@@ -259,6 +260,106 @@ export interface LibraryPageCreateRequest {
    * route, not this public one.
    */
   readonly source?: LibrarySource;
+}
+
+// ---------------------------------------------------------------------------
+// Hybrid search — P7.5-A4 (BM25 + pgvector + RRF + optional re-rank).
+// Source: docs/atlas-new-design/destinations/library-prd.md §6
+// (retrieval pipeline). Cross-audit §5.2 (SSE convention: Last-Event-ID
+// resume + 30s heartbeat) for the streaming variant.
+// ---------------------------------------------------------------------------
+
+/**
+ * Which leg of the pipeline produced hits.
+ *
+ * - `bm25_only` — vector leg returned nothing (no embeddings configured
+ *   for this tenant, or no embedded rows match);
+ * - `vector_only` — BM25 returned nothing (rare; mostly a degenerate
+ *   query case);
+ * - `hybrid` — both legs contributed at least one hit, RRF fused them.
+ */
+export type LibrarySearchStrategy = "bm25_only" | "vector_only" | "hybrid";
+
+/** Where the BM25 leg's match landed — drives the small "Matched in: …"
+ *  chip under the snippet (library-prd §6.2). */
+export type LibrarySearchMatchedIn = "title" | "content" | "tag";
+
+/**
+ * One hit. `ref` is the canonical cross-destination ItemRef so any
+ * `<ItemLink>` resolver can navigate to the item; the denormalized
+ * `title` / `project_id` / `owner_user_id` / `updated_at` fields are
+ * a server-stamped snapshot for first-paint rendering (cross-audit
+ * §1.1: display fields are never trusted, source of truth is the ref).
+ */
+export interface LibrarySearchHit {
+  readonly ref: ItemRef;
+  readonly score: number;
+  readonly excerpt: string;
+  readonly matched_in: LibrarySearchMatchedIn;
+  readonly kind: LibraryItemKind;
+  readonly title: string;
+  readonly project_id: ProjectId | null;
+  readonly owner_user_id: UserId;
+  readonly updated_at: string;
+}
+
+/** One-shot search response — `GET /v1/library/search`. */
+export interface LibrarySearchResponse {
+  readonly hits: ReadonlyArray<LibrarySearchHit>;
+  /** Total readable hits, post-ACL — useful for "showing X of Y". */
+  readonly total: number;
+  /** Wall-clock pipeline time at the route layer. */
+  readonly took_ms: number;
+  readonly strategy: LibrarySearchStrategy;
+}
+
+/**
+ * One envelope on the SSE stream for `GET /v1/library/search/stream`.
+ * Mirrors the four ordered events emitted by the server (cross-audit
+ * §5.2 — `event:` lines are the discriminator). Heartbeats are
+ * `: keepalive\n\n` SSE comment frames (no event/data); EventSource
+ * silently ignores them.
+ */
+export type LibrarySearchStreamEnvelope =
+  | LibrarySearchLegEnvelope
+  | LibrarySearchRerankedEnvelope
+  | LibrarySearchCompleteEnvelope
+  | LibrarySearchErrorEnvelope;
+
+interface LibrarySearchLegEnvelopeBase {
+  readonly correlation_id: string;
+  readonly hit_count: number;
+  readonly hits: ReadonlyArray<{
+    readonly ref: ItemRef;
+    readonly score: number;
+  }>;
+  readonly elapsed_ms: number;
+}
+
+/** `event: library.search_bm25_result` / `event: library.search_vector_result`. */
+export interface LibrarySearchLegEnvelope extends LibrarySearchLegEnvelopeBase {
+  readonly leg: "bm25" | "vector";
+}
+
+/** `event: library.search_reranked`. */
+export interface LibrarySearchRerankedEnvelope extends LibrarySearchLegEnvelopeBase {
+  readonly leg: "reranked";
+}
+
+/** `event: library.search_complete`. Carries the final hit list. */
+export interface LibrarySearchCompleteEnvelope {
+  readonly correlation_id: string;
+  readonly hits: ReadonlyArray<LibrarySearchHit>;
+  readonly total: number;
+  readonly took_ms: number;
+  readonly strategy: LibrarySearchStrategy;
+  readonly emitted_at: string;
+}
+
+/** `event: library.search_error` — server-side pipeline failure. */
+export interface LibrarySearchErrorEnvelope {
+  readonly correlation_id: string;
+  readonly code: "library_search_failed";
 }
 
 /**
