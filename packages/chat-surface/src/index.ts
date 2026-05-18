@@ -567,3 +567,23 @@ export {
   type TriggerId,
 } from "./destinations/routines";
 // === end Phase 5 ===
+
+// === Phase 12 — Settings pages (NOT a destination) ===
+export {
+  NotificationsPage,
+  NOTIFICATION_DESTINATION_ROWS,
+  WebhookSecurityPage,
+  MAX_SECRET_AGE_DAY_VALUES,
+  clampMaxSecretAgeDays,
+  ProfilePage,
+  QuietHoursEditor,
+  validateQuietHoursWindow,
+  type DestinationRowDescriptor,
+  type NotificationsPageProps,
+  type NotificationsPageTabSlug,
+  type ProfilePagePerson,
+  type ProfilePageProps,
+  type QuietHoursEditorProps,
+  type WebhookSecurityPageProps,
+} from "./settings";
+// === end Phase 12 Settings ===
