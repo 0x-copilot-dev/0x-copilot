@@ -33,7 +33,7 @@ Audit rows are append-only; bulk actions stamp a shared
 from __future__ import annotations
 
 from datetime import datetime, timezone
-from typing import Iterable
+from typing import Any, Iterable
 
 from backend_app.identity.store import IdentityStore
 from backend_app.inbox.store import (
@@ -42,6 +42,7 @@ from backend_app.inbox.store import (
     InboxItemRecord,
     InboxStore,
 )
+from backend_app.inbox.sse import InboxActivityBus, InboxEventType
 from backend_app.projects.acl import (
     ProjectMembershipPort,
     _NoMemberProjectAdapter,
@@ -65,6 +66,10 @@ _VALID_KINDS = frozenset(
         "agent_question",
         "share_invite",
         "system_announcement",
+        # ``system`` is the producer-surface generic system-origin kind
+        # (inbox-prd §4.5); kept in the canonical allowlist so producer
+        # + CRUD share one source of truth instead of diverging.
+        "system",
     }
 )
 _VALID_STATES = frozenset({"unread", "read", "snoozed", "dismissed"})
@@ -101,6 +106,7 @@ class InboxService:
         store: InboxStore,
         identity_store: IdentityStore,
         project_membership: "ProjectMembershipPort | None" = None,
+        activity_bus: "InboxActivityBus | None" = None,
     ) -> None:
         self._store = store
         self._identity = identity_store
@@ -109,6 +115,19 @@ class InboxService:
         # to a no-member adapter — recipient-only behaviour until the
         # Projects destination lands and registers a real adapter.
         self._project_membership = project_membership or _NoMemberProjectAdapter()
+        # Activity bus is optional — tests/dev wiring may pass ``None`` and
+        # the publish helpers become no-ops. Production wiring (see
+        # ``backend_app.app.create_app``) sets this to the bus stashed on
+        # ``app.state.inbox_activity_bus`` by ``register_inbox_sse_routes``
+        # so mutations stream out as ``item_added`` / ``item_updated``
+        # frames to the SSE subscribers.
+        self._activity_bus = activity_bus
+
+    @property
+    def activity_bus(self) -> "InboxActivityBus | None":
+        """Expose the configured bus so async route handlers can publish."""
+
+        return self._activity_bus
 
     # -- reads ---------------------------------------------------------
 
@@ -346,14 +365,19 @@ class InboxService:
         ids: tuple[str, ...],
         correlation_id: str,
         payload: dict | None = None,
-    ) -> int:
+    ) -> tuple[int, tuple[InboxItemRecord, ...]]:
         """Apply ``action`` across multiple inbox items.
 
         Best-effort: ids the caller cannot write are silently skipped
         (the bulk shouldn't 404 if one row dropped out mid-flight). The
-        return value counts only rows actually mutated; SIEM
-        reconstruction uses the shared ``correlation_id`` stamped on
-        every audit row written by this method.
+        return value is ``(affected_count, updated_records)`` — the
+        records are exposed so the route layer can fan out one SSE
+        ``item_updated`` per mutated row (each row may belong to a
+        different bus channel in the cross-recipient bulk paths a future
+        admin tool would surface, though P4-A1 already gates the bulk to
+        recipient-owned rows). SIEM reconstruction uses the shared
+        ``correlation_id`` stamped on every audit row written by this
+        method.
         """
 
         if action not in {"mark_read", "mark_unread", "dismiss", "snooze"}:
@@ -378,7 +402,7 @@ class InboxService:
                 raise InboxInvalidRequest("snoozed_until_required")
             patch = {"state": "snoozed", "snoozed_until": snoozed_until}
 
-        affected = 0
+        updated: list[InboxItemRecord] = []
         for item_id in ids:
             record = self._store.get_item(tenant_id=tenant_id, item_id=item_id)
             if record is None or record.owner_user_id != caller_user_id:
@@ -386,7 +410,7 @@ class InboxService:
                 # their existence in the response. cross-audit §1.3.
                 continue
             try:
-                self.update_item(
+                mutated = self.update_item(
                     tenant_id=tenant_id,
                     caller_user_id=caller_user_id,
                     caller_roles=caller_roles,
@@ -396,8 +420,83 @@ class InboxService:
                 )
             except (InboxInvalidRequest, InboxForbidden, InboxNotFound):
                 continue
-            affected += 1
-        return affected
+            updated.append(mutated)
+        return len(updated), tuple(updated)
+
+    # -- streaming (publish on the activity bus) -----------------------
+
+    async def publish_event(
+        self,
+        *,
+        record: InboxItemRecord,
+        event_type: InboxEventType,
+    ) -> None:
+        """Publish an ``item_added`` / ``item_updated`` event on the bus.
+
+        Called by the route layer *after* the service mutation returns —
+        i.e. after the durable write (``with self._store.transaction():``)
+        has committed and the audit row landed. Publishing post-commit
+        means a rollback never leaks a "phantom" stream event.
+
+        Tenant isolation: the channel key is ``(record.tenant_id,
+        record.owner_user_id)`` — the bus's ``list_after`` filter only
+        returns events that match. A cross-tenant subscriber never sees
+        another tenant's frames (inbox-prd §7.1).
+
+        PII discipline (brief rule 3 + inbox-prd §6): the payload carries
+        the wire-safe :func:`to_event_payload` view — ``body_ref`` (the
+        opaque pointer) but never ``body_markdown`` content. The
+        subject/title is included because the FE renders it in the rail;
+        if a tenant policy demands redaction, the audit-export layer
+        handles it the same way it redacts audit ``after_state``.
+
+        No-op when the bus is not configured (tests, or a deployment
+        that has the destination wired without the SSE adapter).
+        """
+
+        bus = self._activity_bus
+        if bus is None:
+            return
+        await bus.publish(
+            org_id=record.tenant_id,
+            user_id=record.owner_user_id,
+            event_type=event_type,
+            item=self.to_event_payload(record),
+        )
+
+    @staticmethod
+    def to_event_payload(record: InboxItemRecord) -> dict[str, Any]:
+        """Project an :class:`InboxItemRecord` into the SSE wire shape.
+
+        Mirrors ``packages/api-types::InboxItem`` (and by extension the
+        ``InboxStreamEnvelope.item`` field). Body bytes are deliberately
+        omitted — only ``body_ref`` (the opaque pointer) ships, and the
+        FE lazy-loads bytes via ``GET /v1/inbox/{id}`` on detail mount.
+        The route layer's :func:`_to_wire` produces the same JSON shape;
+        keeping the projection here means the bus payload and the REST
+        wire shape can never drift (single source of truth).
+        """
+
+        return {
+            "id": record.id,
+            "tenant_id": record.tenant_id,
+            "owner_user_id": record.owner_user_id,
+            "project_id": record.project_id,
+            "kind": record.kind,
+            "title": record.title,
+            "body_ref": record.body_ref,
+            "links": list(record.links),
+            "sender": dict(record.sender),
+            "state": record.state,
+            "received_at": record.received_at.isoformat(),
+            "read_at": record.read_at.isoformat() if record.read_at else None,
+            "snoozed_until": (
+                record.snoozed_until.isoformat() if record.snoozed_until else None
+            ),
+            "dismissed_at": (
+                record.dismissed_at.isoformat() if record.dismissed_at else None
+            ),
+        }
 
     # -- helpers -------------------------------------------------------
 

@@ -215,7 +215,7 @@ def register_inbox_routes(app: FastAPI, *, service: InboxService) -> None:
         response_model=InboxItemResponseModel,
         dependencies=[Depends(RequireScopes(RUNTIME_USE))],
     )
-    def update_inbox_item(
+    async def update_inbox_item(
         request: Request,
         item_id: str,
         payload: UpdateInboxItemRequest,
@@ -246,6 +246,13 @@ def register_inbox_routes(app: FastAPI, *, service: InboxService) -> None:
             raise HTTPException(
                 status.HTTP_400_BAD_REQUEST, str(exc) or "invalid_request"
             ) from exc
+        # Post-commit publish on the SSE bus. ``update_item`` returned the
+        # canonical record, which means ``with store.transaction():``
+        # exited cleanly *and* the audit row landed — only now is it safe
+        # to stream the change out to subscribers. The bus.publish is a
+        # no-op when the destination is wired without the SSE adapter
+        # (tests, dev configurations that disable streaming).
+        await service.publish_event(record=record, event_type="item_updated")
         return _to_wire(record)
 
     @app.post(
@@ -253,7 +260,7 @@ def register_inbox_routes(app: FastAPI, *, service: InboxService) -> None:
         response_model=BulkUpdateInboxItemsResponseModel,
         dependencies=[Depends(RequireScopes(RUNTIME_USE))],
     )
-    def bulk_update_inbox(
+    async def bulk_update_inbox(
         request: Request,
         payload: BulkUpdateInboxItemsRequest,
         org_id: str = Query(..., min_length=1),
@@ -263,7 +270,7 @@ def register_inbox_routes(app: FastAPI, *, service: InboxService) -> None:
             request, org_id=org_id, user_id=user_id
         )
         try:
-            affected = service.bulk_update(
+            affected, updated = service.bulk_update(
                 tenant_id=identity.org_id,
                 caller_user_id=identity.user_id,
                 caller_roles=identity.roles,
@@ -276,6 +283,14 @@ def register_inbox_routes(app: FastAPI, *, service: InboxService) -> None:
             raise HTTPException(
                 status.HTTP_400_BAD_REQUEST, str(exc) or "invalid_request"
             ) from exc
+        # One ``item_updated`` per mutated row — post-commit, audit row
+        # already landed (the single-row ``update_item`` did the
+        # transaction). Same tenant-scoped channel discipline as the PATCH
+        # path. We publish serially rather than via ``asyncio.gather`` so
+        # the per-channel sequence_no is deterministic (the bus increments
+        # the cursor on each await).
+        for record in updated:
+            await service.publish_event(record=record, event_type="item_updated")
         return BulkUpdateInboxItemsResponseModel(
             affected=affected, correlation_id=payload.correlation_id
         )

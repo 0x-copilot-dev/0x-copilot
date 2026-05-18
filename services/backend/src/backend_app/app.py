@@ -1361,17 +1361,21 @@ def create_app(
     # ``inbox_bodies`` so list queries never pay for body bytes.
     resolved_inbox_store: InboxStore = inbox_store or InMemoryInboxStore()  # type: ignore[assignment]
     app.state.inbox_store = resolved_inbox_store
+    # SSE routes register first so the activity bus is on
+    # ``app.state.inbox_activity_bus`` before we construct the service —
+    # the service captures the bus by reference so PATCH / bulk / producer
+    # publish (``item_added`` / ``item_updated``) flow to subscribers.
+    register_inbox_sse_routes(app)
     inbox_service = InboxService(
         store=resolved_inbox_store,
         identity_store=resolved_identity_store,
+        activity_bus=app.state.inbox_activity_bus,
     )
     app.state.inbox_service = inbox_service
     register_inbox_routes(app, service=inbox_service)
-    # Phase 4 P4-A3 — SSE stream + Phase 4 P4-A2 — internal producer endpoint.
-    # The SSE handler stashes the activity bus on app.state.inbox_activity_bus
-    # so mutation handlers + producer can publish to it. Bus.publish wiring
-    # at mutation/producer call sites is a follow-up.
-    register_inbox_sse_routes(app)
+    # Phase 4 P4-A2 — internal producer endpoint. Resolves the canonical
+    # ``InboxService`` off ``app.state.inbox_service``, so the producer
+    # surface shares ACL + audit + SSE publish with the PATCH path.
     register_inbox_internal_routes(app)
 
     # Phase 5 — Routines destination. Owner-only writes; project-member

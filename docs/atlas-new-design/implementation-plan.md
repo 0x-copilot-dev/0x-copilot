@@ -196,8 +196,8 @@ Phase 3 (Todos) and Phase 4 (Inbox) both landed via parallel sub-agents. All gat
 **Deferred follow-ups (logged here; NOT blocking Phase 5+ dispatch):**
 
 1. **P3-A1 `/internal/v1/todos/series/materialize-due` endpoint** — P3-A3's recurrence materializer worker posts to this endpoint with `(now: ISO) → {materialized, skipped_duplicates, series_processed}`. P3-A1 shipped the schema + service but NOT this handler. Wire-up follow-up; until landed, the materializer worker has no consumer.
-2. **P4-A1 + P4-A2 publish to `app.state.inbox_activity_bus`** — P4-A3's SSE stream exists and heartbeats correctly but won't emit `item_added`/`item_updated` until the mutation handlers (P4-A1 service.py) + producer (P4-A2 internal_routes.py) call `bus.publish(...)`. ~5 lines per site. Test-functional today; production-functional after.
-3. **Delete `services/backend/src/backend_app/inbox/_local_store.py`** — P4-A2's local stub is now redundant since P4-A1's canonical `InboxStore` is on main. Rewire `internal_routes.py` imports to `from backend_app.inbox.store import InboxStore, InMemoryInboxStore`. Remove `_local_store.py`. Mechanical.
+2. ~~**P4-A1 + P4-A2 publish to `app.state.inbox_activity_bus`**~~ **— LANDED (DW-1)**. PATCH `/v1/inbox/{id}`, bulk `/v1/inbox/bulk`, and producer `POST /internal/v1/inbox/items` all publish `item_added`/`item_updated` post-commit via `InboxService.publish_event`. Channel key is the recipient's `(tenant_id, owner_user_id)`; payload omits body bytes (body_ref only). Test: `services/backend/tests/test_inbox_sse_publish.py`.
+3. ~~**Delete `services/backend/src/backend_app/inbox/_local_store.py`**~~ **— LANDED (DW-1)**. The producer route now resolves the canonical `InboxService` off `app.state.inbox_service` and writes through `insert_item_with_body`; the stub + the `find_by_external_ref` helper consolidate against `store.items`.
 4. **Phase 4.5: Inbox 960px responsive breakpoint** — P4-B3 agent stalled with zero progress. Replan: split into 2 narrow agents (CSS container-query + useInboxLayout hook). Defer until post-Wave-2 (not blocking destinations).
 
 **Invariants preserved post-Phase-4:**

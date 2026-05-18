@@ -21,10 +21,16 @@ when the JSON body omits one (defensive default).
 Audit: every insert writes one ``inbox.item_created`` row. ``actor_user_id``
 is the service-token caller's ``x-enterprise-user-id`` (the agent's owner).
 
-Parallel-wave coordination: this module uses the local store stub at
-``backend_app.inbox._local_store`` until P4-A1's canonical store lands;
-the orchestrator rewires the imports at merge. The route surface is
-stable so callers don't need to change.
+Streaming: a successful insert publishes one ``item_added`` frame on the
+SSE bus (``app.state.inbox_activity_bus``) so the recipient's open
+``GET /v1/inbox/stream`` connections see the new row without a poll. The
+publish runs *after* the canonical :class:`InboxService` write returns,
+so a rollback never leaks a phantom event (brief rule 1).
+
+Wiring: the route resolves the canonical ``InboxService`` off
+``app.state.inbox_service`` (set by ``backend_app.app.create_app``). The
+service composes the canonical ``InboxStore`` + audit + bus, so the
+producer surface stays presentation-only and DRY against the PATCH path.
 """
 
 from __future__ import annotations
@@ -35,28 +41,18 @@ from fastapi import Depends, FastAPI, HTTPException, Request, status
 from pydantic import BaseModel, ConfigDict, Field
 
 from backend_app.auth import BackendServiceAuthenticator
-from backend_app.inbox._local_store import (
-    InboxAuditRecord,
-    InboxBodyRecord,
-    InboxItemRecord,
-    InMemoryInboxStore,
+from backend_app.inbox.service import (
+    InboxInvalidRequest,
+    InboxService,
+    _VALID_KINDS as _CANONICAL_VALID_KINDS,
 )
+from backend_app.inbox.store import InboxItemRecord
 
 
-# Producer payload's ``kind`` field is allowlisted server-side per
-# inbox-prd §4.5 + §4.4. Keep this in sync with P4-A1's allowlist; the
-# orchestrator merges to one source of truth.
-_VALID_KINDS = frozenset(
-    {
-        "approval_request",
-        "mention",
-        "error",
-        "agent_question",
-        "share_invite",
-        "system_announcement",
-        "system",
-    }
-)
+# Re-export the canonical allowlist so the producer pre-check and the
+# service write share one source of truth (inbox-prd §4.5 + §4.4). A
+# mismatch would let the route accept a kind the service then rejects.
+_VALID_KINDS = _CANONICAL_VALID_KINDS
 
 
 # ---------------------------------------------------------------------------
@@ -116,20 +112,22 @@ class CreateInternalInboxItemResponse(BaseModel):
 # ---------------------------------------------------------------------------
 
 
-def _store_for(request: Request) -> InMemoryInboxStore:
-    """Resolve the configured inbox store off ``app.state``.
+def _service_for(request: Request) -> InboxService:
+    """Resolve the canonical :class:`InboxService` off ``app.state``.
 
-    Tests + production wiring both attach the store as
-    ``app.state.inbox_store``. Absent → 503 so deployments missing the
-    wiring fail loudly rather than silently dropping inbox writes.
+    The service composes the canonical ``InboxStore`` + identity store +
+    activity bus — the producer route delegates to it so ACL, audit, and
+    SSE-publish stay in one place (DRY with the PATCH path). Absent the
+    service → 503 so misconfigured deployments fail loudly rather than
+    silently dropping inbox writes.
     """
-    store: InMemoryInboxStore | None = getattr(request.app.state, "inbox_store", None)
-    if store is None:
+    service: InboxService | None = getattr(request.app.state, "inbox_service", None)
+    if service is None:
         raise HTTPException(
             status.HTTP_503_SERVICE_UNAVAILABLE,
-            "inbox store not configured",
+            "inbox service not configured",
         )
-    return store
+    return service
 
 
 def _build_sender(payload: CreateInternalInboxItemRequest) -> dict[str, Any]:
@@ -179,10 +177,10 @@ def register_inbox_internal_routes(app: FastAPI) -> None:
         response_model=CreateInternalInboxItemResponse,
         status_code=status.HTTP_201_CREATED,
     )
-    def create_inbox_item(
+    async def create_inbox_item(
         payload: CreateInternalInboxItemRequest,
         request: Request,
-        store: InMemoryInboxStore = Depends(_store_for),
+        service: InboxService = Depends(_service_for),
     ) -> CreateInternalInboxItemResponse:
         # Service-token verification + identity headers (raises 401 / 503
         # when env is misconfigured). The ``internal_scoped_identity`` path
@@ -200,7 +198,7 @@ def register_inbox_internal_routes(app: FastAPI) -> None:
         # PII discipline (inbox-prd §6 + brief rule 5): the route never
         # logs subject / preview / body. The audit row captures the
         # after_state by id, not by content — content is redacted at the
-        # audit-export layer by P4-A1's redaction config.
+        # audit-export layer by the canonical service's redaction config.
 
         external_ref = (
             payload.external_ref
@@ -212,67 +210,63 @@ def register_inbox_internal_routes(app: FastAPI) -> None:
             raise HTTPException(status.HTTP_400_BAD_REQUEST, "invalid_kind")
 
         # §7.4 idempotency: a retry returns the existing row.
+        store = service._store  # noqa: SLF001 — same package, intentional reach.
+        deduped_record: InboxItemRecord | None = None
         if external_ref is not None and payload.producer_id is not None:
-            existing = store.find_by_external_ref(
+            existing = _find_by_external_ref(
+                store,
                 tenant_id=identity.org_id,
                 producer_id=payload.producer_id,
                 external_ref=external_ref,
             )
             if existing is not None:
-                return CreateInternalInboxItemResponse(
-                    id=existing.id,
-                    tenant_id=existing.tenant_id,
-                    recipient_user_id=existing.owner_user_id,
-                    kind=existing.kind,
-                    state=existing.state,
-                    external_ref=existing.external_ref,
-                    producer_id=existing.producer_id,
-                    deduped=True,
-                )
+                deduped_record = existing
+
+        if deduped_record is not None:
+            # Dedupe path: no insert, no audit row, no SSE event — the
+            # original ``item_added`` already fired on the first POST.
+            return CreateInternalInboxItemResponse(
+                id=deduped_record.id,
+                tenant_id=deduped_record.tenant_id,
+                recipient_user_id=deduped_record.owner_user_id,
+                kind=deduped_record.kind,
+                state=deduped_record.state,
+                external_ref=deduped_record.external_ref,
+                producer_id=deduped_record.producer_id,
+                deduped=True,
+            )
 
         sender = _build_sender(payload)
         links = _build_links(payload)
 
-        with store.transaction():
-            body_record = store.insert_body(
-                InboxBodyRecord(
-                    tenant_id=identity.org_id,
-                    body_markdown=payload.body,
-                )
+        # Delegate the durable write + audit row to the canonical
+        # service. Validation errors (invalid kind / empty title) raise
+        # InboxInvalidRequest → 400; service writes the
+        # ``inbox.item_created`` audit row inside the same transaction
+        # and returns the persisted record.
+        try:
+            record = service.insert_item_with_body(
+                tenant_id=identity.org_id,
+                owner_user_id=payload.recipient_user_id,
+                kind=payload.kind,
+                title=payload.subject,
+                sender=sender,
+                links=links,
+                project_id=payload.project_id,
+                body_markdown=payload.body,
+                producer_id=payload.producer_id,
+                external_ref=external_ref,
+                actor_user_id=identity.user_id,
             )
-            record = store.insert_item(
-                InboxItemRecord(
-                    tenant_id=identity.org_id,
-                    owner_user_id=payload.recipient_user_id,
-                    kind=payload.kind,
-                    title=payload.subject,
-                    sender=sender,
-                    links=links,
-                    body_ref=body_record.body_ref,
-                    project_id=payload.project_id,
-                    producer_id=payload.producer_id,
-                    external_ref=external_ref,
-                )
-            )
-            store.append_audit(
-                InboxAuditRecord(
-                    tenant_id=identity.org_id,
-                    # ``actor_user_id`` for producer writes is the agent's
-                    # owner per inbox-prd §6.1 — the verified service-token
-                    # caller's user_id header, not the recipient.
-                    actor_user_id=identity.user_id,
-                    action="inbox.item_created",
-                    target_id=record.id,
-                    after_state={
-                        "id": record.id,
-                        "owner_user_id": record.owner_user_id,
-                        "kind": record.kind,
-                        "state": record.state,
-                        "producer_id": record.producer_id,
-                        "external_ref": record.external_ref,
-                    },
-                )
-            )
+        except InboxInvalidRequest as exc:
+            raise HTTPException(
+                status.HTTP_400_BAD_REQUEST, str(exc) or "invalid_request"
+            ) from exc
+
+        # Post-commit publish. ``insert_item_with_body`` returned, so the
+        # transaction committed and the audit row landed — only now is it
+        # safe to stream the change out to subscribers. brief rule 1.
+        await service.publish_event(record=record, event_type="item_added")
 
         return CreateInternalInboxItemResponse(
             id=record.id,
@@ -284,6 +278,35 @@ def register_inbox_internal_routes(app: FastAPI) -> None:
             producer_id=record.producer_id,
             deduped=False,
         )
+
+
+def _find_by_external_ref(
+    store: Any,
+    *,
+    tenant_id: str,
+    producer_id: str,
+    external_ref: str,
+) -> InboxItemRecord | None:
+    """Idempotency lookup against the canonical store.
+
+    The canonical Protocol doesn't define ``find_by_external_ref`` (it's
+    a producer-specific concern). The in-memory adapter exposes raw
+    ``items`` dict scanning; the postgres adapter will land its own
+    optimised method (UNIQUE-index lookup) and this helper rewires to
+    that method at merge.
+    """
+
+    items = getattr(store, "items", None)
+    if not isinstance(items, dict):
+        return None
+    for record in items.values():
+        if (
+            getattr(record, "tenant_id", None) == tenant_id
+            and getattr(record, "producer_id", None) == producer_id
+            and getattr(record, "external_ref", None) == external_ref
+        ):
+            return record  # type: ignore[return-value]
+    return None
 
 
 __all__ = [

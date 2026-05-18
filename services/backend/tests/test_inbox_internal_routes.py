@@ -12,8 +12,8 @@ Coverage:
   user (the agent's owner), not the recipient.
 * Invalid kind → 400.
 
-The inbox store is wired locally per the parallel-wave coordination plan;
-P4-A1's orchestrator rewires the store at merge.
+The route delegates to the canonical :class:`InboxService` for the durable
+write + audit row; the store is the canonical in-memory adapter.
 """
 
 from __future__ import annotations
@@ -26,8 +26,10 @@ from enterprise_service_contracts.headers import (
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
-from backend_app.inbox._local_store import InMemoryInboxStore
+from backend_app.identity.store import InMemoryIdentityStore
 from backend_app.inbox.internal_routes import register_inbox_internal_routes
+from backend_app.inbox.service import InboxService
+from backend_app.inbox.store import InMemoryInboxStore
 
 
 # ---------------------------------------------------------------------------
@@ -36,16 +38,20 @@ from backend_app.inbox.internal_routes import register_inbox_internal_routes
 
 
 def _client() -> tuple[TestClient, InMemoryInboxStore]:
-    """Build a minimal FastAPI app with the internal route + local store.
+    """Build a minimal FastAPI app with the internal route + canonical service.
 
     Avoids the full ``create_app`` so the test runs without the rest of
-    the backend's wiring (sessions, identity, etc.) — P4-A1's CRUD route
-    test exercises that integration; this test scope is the internal
-    producer surface only.
+    the backend's wiring (sessions, identity, etc.) — the CRUD route test
+    exercises that integration; this test scope is the internal producer
+    surface only.
     """
     app = FastAPI()
     store = InMemoryInboxStore()
     app.state.inbox_store = store
+    app.state.inbox_service = InboxService(
+        store=store,
+        identity_store=InMemoryIdentityStore(),
+    )
     register_inbox_internal_routes(app)
     return TestClient(app), store
 
