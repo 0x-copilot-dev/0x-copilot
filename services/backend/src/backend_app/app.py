@@ -367,6 +367,8 @@ def create_app(
     projects_store: ProjectsStore | None = None,
     project_templates_store: ProjectTemplatesStore | None = None,
     library_store: LibraryStore | None = None,
+    library_blob_store: object | None = None,
+    library_row_store: object | None = None,
     liveness_service: LivenessService | None = None,
 ) -> FastAPI:
     if configure_logging_on_create:
@@ -1581,6 +1583,36 @@ def create_app(
     register_adapter_registry_routes(
         app,
         service=resolved_registry_service,  # type: ignore[arg-type]
+    )
+
+    # P7-A2 — Library blob storage (signed-URL upload/download). Bytes
+    # never proxy through the API; the route layer only ever returns
+    # signed URLs that the caller redeems directly against the storage
+    # adapter. Dev uses ``LocalDiskBlobStore`` (HMAC-signed localhost
+    # URLs); production injects ``S3BlobStore`` via the keyword. Row
+    # metadata uses the in-memory adapter here; P7-A1 swaps in the
+    # Postgres-backed adapter at merge.
+    from backend_app.library.blob_store import LocalDiskBlobStore
+    from backend_app.library.upload_routes import (
+        InMemoryLibraryRowStore,
+        register_library_blob_routes,
+    )
+
+    resolved_blob_store = library_blob_store or LocalDiskBlobStore(
+        data_dir=os.environ.get(
+            "LIBRARY_BLOB_DATA_DIR",
+            "/tmp/atlas-library-blobs",
+        ),
+        base_url=os.environ.get(
+            "LIBRARY_BLOB_BASE_URL",
+            "http://localhost:8100",
+        ),
+    )
+    resolved_row_store = library_row_store or InMemoryLibraryRowStore()
+    register_library_blob_routes(
+        app,
+        blob_store=resolved_blob_store,  # type: ignore[arg-type]
+        row_store=resolved_row_store,  # type: ignore[arg-type]
     )
 
     return app

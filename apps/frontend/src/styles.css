@@ -1412,7 +1412,12 @@ p {
   display: flex;
   flex-direction: column;
   gap: var(--space-lg);
-  margin: 12vh auto 0;
+  /* Push the welcome (greeting + 4 suggestion cards) to the BOTTOM of
+   * the thread viewport so it sits adjacent to the composer in the
+   * empty state, not floating in the middle of a 600px void. The
+   * top-`auto` consumes leftover flex space; the small bottom margin
+   * keeps a breathing gap above the composer. */
+  margin: auto auto var(--space-md);
   max-width: var(--chat-content-width);
   padding: 0 var(--space-md);
   width: 100%;
@@ -2034,6 +2039,16 @@ p {
   padding: 0;
 }
 
+/* Visual divider between the accent-icon cluster (+ / connectors / mic)
+ * and the setting-pill cluster (Model · Depth). Renders as a small
+ * left-margin gap so the eye groups by intent rather than scanning a
+ * uniform-gap strip of mixed shapes. Empty span, aria-hidden. */
+.aui-composer-tools-spacer {
+  display: inline-block;
+  flex-shrink: 0;
+  width: var(--space-sm);
+}
+
 .aui-plus-menu-root {
   display: inline-flex;
   position: relative;
@@ -2213,18 +2228,22 @@ p {
     background 120ms ease;
 }
 
-.aui-send-button:hover:not([disabled]) {
-  background: var(--color-surface-muted);
-  color: var(--color-text);
+.aui-send-button:hover:not([disabled]):not(.aui-send-button--stop) {
+  background: color-mix(in srgb, var(--color-accent) 88%, white);
+  color: var(--color-accent-contrast, white);
+  border-color: var(--color-accent);
 }
 
+/* Primary-action treatment for the enabled send button (Phase 9 composer
+ * redesign). Filled accent fill so the eye locates the action before any
+ * other element in the toolbar — visual hierarchy was the #1 critique of
+ * the prior pass. The "quiet send / loud run-state" intent from the old
+ * design is preserved by the cancel/stop variant below (still tinted, not
+ * filled), which signals "running is the expected state, not emergency". */
 .aui-send-button:not([disabled]):not(.aui-send-button--stop) {
-  color: var(--color-text);
-  border-color: color-mix(
-    in oklab,
-    var(--color-accent) 35%,
-    var(--color-border)
-  );
+  background: var(--color-accent);
+  color: var(--color-accent-contrast, white);
+  border-color: var(--color-accent);
 }
 
 .aui-send-button[disabled] {

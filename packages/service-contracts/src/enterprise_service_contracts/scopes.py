@@ -49,6 +49,15 @@ SKILLS_WRITE: Final = "skills:write"
 """Create / update / delete user-owned and org-owned skills."""
 
 
+# -- Library (files + datasets) ----------------------------------------------
+
+LIBRARY_READ: Final = "library:read"
+"""List + download files / datasets the caller owns inside their tenant."""
+
+LIBRARY_WRITE: Final = "library:write"
+"""Upload, finalize, and delete files / datasets the caller owns."""
+
+
 # -- Admin --------------------------------------------------------------
 
 ADMIN_USERS: Final = "admin:users"
@@ -92,6 +101,8 @@ ALL_SCOPES: frozenset[str] = frozenset(
         CONNECTORS_AUTH,
         SKILLS_READ,
         SKILLS_WRITE,
+        LIBRARY_READ,
+        LIBRARY_WRITE,
         ADMIN_USERS,
         ADMIN_IDP,
         ADMIN_AUDIT_EXPORT,
@@ -114,6 +125,8 @@ __all__ = [
     "ALL_SCOPES",
     "AUDIT_READ",
     "CONNECTORS_AUTH",
+    "LIBRARY_READ",
+    "LIBRARY_WRITE",
     "MCP_READ",
     "MCP_WRITE",
     "MFA_PENDING",

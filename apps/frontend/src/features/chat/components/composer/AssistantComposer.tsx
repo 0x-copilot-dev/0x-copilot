@@ -128,7 +128,10 @@ export const AssistantComposer = forwardRef<
     onRemoveSkill,
     onClearSkills,
     connectorsTrigger,
-    activeModelLabel,
+    // activeModelLabel is still typed on the prop surface (callers haven't
+    // been migrated) but the composer no longer surfaces it — the model
+    // name lives in <ModelPill> only (Phase 9 dedup).
+    activeModelLabel: _activeModelLabel,
     models,
     selectedModel,
     onModelChange,
@@ -328,7 +331,7 @@ export const AssistantComposer = forwardRef<
       disabled={disabled}
       running={running}
       attachmentAdapter={bridgedAttachmentAdapter}
-      placeholder="Ask Atlas to find, summarize, or draft something for your team…"
+      placeholder="Type a message…"
       minRows={1}
       maxRows={5}
       onSubmit={(payload) => {
@@ -376,12 +379,7 @@ export const AssistantComposer = forwardRef<
           </div>
         ) : null
       }
-      bottomBarRender={({
-        text,
-        running: isRunning,
-        attachmentsCount,
-        focused,
-      }) => (
+      bottomBarRender={({ text, running: isRunning, attachmentsCount }) => (
         <div className="aui-composer-action-wrapper">
           <div className="aui-composer-tools">
             <div className="aui-plus-menu-root" ref={menuRef}>
@@ -449,6 +447,11 @@ export const AssistantComposer = forwardRef<
                 <path d="M12 18v3" />
               </svg>
             </button>
+            {/* Visual divider between the accent-icon cluster (+ / connectors
+             * / mic) and the setting-pill cluster (Model · Depth). Gives the
+             * toolbar visual rhythm so the eye groups controls by intent
+             * instead of scanning a uniform-gap strip. */}
+            <span className="aui-composer-tools-spacer" aria-hidden="true" />
             {models && selectedModel !== undefined && onModelChange ? (
               <ModelPill
                 models={models}
@@ -467,11 +470,10 @@ export const AssistantComposer = forwardRef<
             ) : null}
           </div>
           <div className="aui-composer-action-wrapper__right">
-            {focused ? (
-              <span className="aui-composer-focus-meta" aria-hidden="true">
-                {activeModelLabel ?? "Atlas"} · Sources cited inline
-              </span>
-            ) : null}
+            {/* Phase 9 composer cleanup: dropped the focus-meta line — the
+             * model name was already shown in <ModelPill> above, and the
+             * "Sources cited inline" mode flag lives in the hint row.
+             * Keeping it here was duplicate signal for the same surface. */}
             <AssistantComposerSendButton
               text={text}
               attachmentsCount={attachmentsCount}
@@ -513,9 +515,10 @@ export const AssistantComposer = forwardRef<
             <kbd>/</kbd> skills
           </span>
           <span className="aui-composer__hint-grow" />
-          <span className="aui-composer__hint-meta">
-            {activeModelLabel ?? "Atlas"} · Sources cited inline
-          </span>
+          {/* Trailing meta: just the mode flag. Model name lives in the
+           * ModelPill above (one source of truth); duplicating it here was
+           * visual noise and made the hint row look busy. */}
+          <span className="aui-composer__hint-meta">Sources cited inline</span>
         </div>
       )}
     />
