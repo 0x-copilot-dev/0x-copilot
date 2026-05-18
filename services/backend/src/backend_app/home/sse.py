@@ -127,8 +127,27 @@ class Constants:
 # ---------------------------------------------------------------------------
 
 
-HomeActivityEventType = Literal["activity_added", "activity_updated", "heartbeat"]
-"""Closed enum mirroring the TS contract. ``heartbeat`` exists on the
+HomeActivityEventType = Literal[
+    # Phase 2 legacy — kept for backward compat with the FE's existing
+    # ``home_activity`` listener. ``activity_added`` / ``activity_updated``
+    # remain the canonical "noteworthy agent activity" envelope.
+    "activity_added",
+    "activity_updated",
+    "heartbeat",
+    # Phase 9 morning-briefing envelopes (home-prd §3.6 + sub-PRD). Each
+    # corresponds to a section that re-fetches when its kind fires:
+    # * ``triage_updated``      — TriageCounts shape changed
+    # * ``timeline_appended``   — TodayTimeline gained a new entry
+    # * ``whats_new_appended``  — WhatsNewDigest gained a new row
+    # * ``activity_appended``   — LiveActivityRail row (alias for the
+    #                             legacy ``activity_added`` so a Phase 9
+    #                             FE can listen on a single kind name)
+    "triage_updated",
+    "timeline_appended",
+    "whats_new_appended",
+    "activity_appended",
+]
+"""Closed enum mirroring the wire contract. ``heartbeat`` exists on the
 wire only as a synthetic frame for tests; the production keepalive uses
 an SSE comment (no event/data) so EventSource doesn't fire ``onmessage``.
 """
@@ -228,7 +247,21 @@ class InMemoryHomeActivityBus:
         a malformed publish never reaches the SSE wire.
         """
 
-        if event_type in ("activity_added", "activity_updated") and row is None:
+        # Validation rules per kind:
+        # * activity_added / activity_updated / activity_appended /
+        #   timeline_appended / whats_new_appended — ``row`` REQUIRED
+        #   (carries the section payload).
+        # * triage_updated — ``row`` OPTIONAL (clients re-fetch
+        #   /v1/home; the envelope is just a re-fetch trigger).
+        # * heartbeat — ``row`` MUST be None.
+        _ROW_REQUIRED = (
+            "activity_added",
+            "activity_updated",
+            "activity_appended",
+            "timeline_appended",
+            "whats_new_appended",
+        )
+        if event_type in _ROW_REQUIRED and row is None:
             raise ValueError(
                 f"row is required for event_type={event_type!r}; got None."
             )

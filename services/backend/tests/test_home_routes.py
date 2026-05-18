@@ -1,16 +1,12 @@
-"""Tests for ``GET /v1/home`` — Home destination aggregator (Phase 2).
+"""Tests for ``GET /v1/home`` — Phase 9 Home aggregator.
 
 Owner-only, tenant-first. Identity comes from query params in the
 TestClient setup (no ``ENTERPRISE_SERVICE_TOKEN`` set), matching the
 existing me/* test conventions.
 
-Coverage:
-
-* Happy path returns HomeResponse with the documented shape.
-* All sections wrap in SectionResult with a valid status.
-* ``home.activity_window_hours`` KV preference is read (default 24).
-* Caller-supplied ``user_id`` cannot cross tenants — the response
-  identity always reflects the verified caller.
+The wire shape under test mirrors ``packages/api-types/src/home.ts``
+``HomePayload`` exactly — snake_case at the wire, every section
+``SectionResult``-shaped (or the sibling ``WhatsNewSection`` shape).
 """
 
 from __future__ import annotations
@@ -68,60 +64,79 @@ def _params() -> dict[str, str]:
     return {"org_id": "org_acme", "user_id": "usr_sarah"}
 
 
-class TestGetHome:
-    def test_happy_path_returns_full_shape(self) -> None:
-        client, _identity, _me = _client()
+class TestGetHomeShape:
+    def test_returns_full_phase9_shape(self) -> None:
+        client, _i, _m = _client()
         response = client.get("/v1/home", params=_params())
         assert response.status_code == 200, response.text
         body = response.json()
 
-        # Greeting block — name is derived from "Sarah Chen", first token.
-        assert body["greeting"]["display_name"] == "Sarah"
-        assert body["greeting"]["time_segment"] in _VALID_TIME_SEGMENTS
-
-        # Every section is present and SectionResult-shaped.
-        for section in (
-            "activity",
-            "pinned_chats",
-            "recent_runs",
-            "favorite_tools",
-            "todays_focus",
-            "upcoming_meetings",
+        # ---- Top-level keys mirror HomePayload ----
+        for key in (
+            "greeting",
+            "triage",
+            "today_timeline",
+            "whats_new",
+            "in_flight_projects",
+            "live_activity",
+            "quick_actions",
+            "cached_at",
+            "is_first_run",
         ):
-            assert section in body, f"missing section: {section}"
-            entry = body[section]
-            assert entry["status"] in _VALID_STATUSES, (
-                f"bad status for {section}: {entry['status']}"
-            )
+            assert key in body, f"missing top-level key: {key}"
 
-    def test_stub_sections_return_empty_arrays(self) -> None:
+        # ---- Greeting (Phase 9: tenant_local_* present) ----
+        greeting = body["greeting"]
+        assert greeting["display_name"] == "Sarah"
+        assert greeting["time_segment"] in _VALID_TIME_SEGMENTS
+        # snake_case wire shape — Phase 9 additions
+        assert isinstance(greeting["tenant_local_date"], str)
+        assert greeting["tenant_local_date"].count("-") == 2  # YYYY-MM-DD
+        assert isinstance(greeting["tenant_local_iso"], str)
+        assert "T" in greeting["tenant_local_iso"]
+
+        # ---- Triage (flat, four int fields) ----
+        triage = body["triage"]
+        for field in (
+            "approvals_waiting",
+            "runs_failed_24h",
+            "todos_overdue",
+            "todos_due_today",
+        ):
+            assert field in triage
+            assert isinstance(triage[field], int)
+
+        # ---- SectionResult-shaped sections ----
+        for section_name in ("today_timeline", "in_flight_projects", "live_activity"):
+            entry = body[section_name]
+            assert entry["status"] in _VALID_STATUSES, f"{section_name}: {entry}"
+
+        # ---- WhatsNewSection carries since_iso ----
+        whats_new = body["whats_new"]
+        assert whats_new["status"] in _VALID_STATUSES
+        assert isinstance(whats_new["since_iso"], str)
+        assert "T" in whats_new["since_iso"]
+
+        # ---- Quick actions is a list (never wrapped) ----
+        assert isinstance(body["quick_actions"], list)
+        assert len(body["quick_actions"]) >= 1
+
+        # ---- Top-level metadata ----
+        assert isinstance(body["cached_at"], str)
+        assert isinstance(body["is_first_run"], bool)
+
+
+class TestEmptyState:
+    def test_is_first_run_true_for_fresh_user(self) -> None:
+        """Brand-new user with no data → is_first_run=true."""
+
         client, _i, _m = _client()
         body = client.get("/v1/home", params=_params()).json()
+        assert body["is_first_run"] is True
 
-        # Stubs that ship as status=ok with empty data.
-        for section in (
-            "activity",
-            "pinned_chats",
-            "recent_runs",
-            "favorite_tools",
-            "todays_focus",
-        ):
-            entry = body[section]
-            assert entry["status"] == "ok", f"{section} not ok: {entry}"
-            assert entry["data"] == [], f"{section} not empty: {entry['data']}"
 
-    def test_upcoming_meetings_is_unavailable_until_connector_lands(self) -> None:
-        """Drives the FE 'Connect a calendar' CTA — must be a stable code."""
-
-        client, _i, _m = _client()
-        body = client.get("/v1/home", params=_params()).json()
-        meetings = body["upcoming_meetings"]
-        assert meetings["status"] == "unavailable"
-        assert meetings["error"] == "no_calendar_connector"
-
+class TestUserNotFound:
     def test_404_when_user_missing(self) -> None:
-        """Owner-only: the verified identity must resolve to an actual user."""
-
         identity = InMemoryIdentityStore()
         identity.create_organization(
             OrganizationRecord(org_id="org_acme", display_name="Acme", slug="acme")
@@ -130,29 +145,92 @@ class TestGetHome:
         response = client.get("/v1/home", params=_params())
         assert response.status_code == 404
 
-    def test_reads_activity_window_hours_preference(self) -> None:
-        """The KV pref under ``preferences.home.activity_window_hours``
-        is read on every request. Until the activity composer wires
-        the value, the integration is verified by exercising the read
-        path (the value flows but is unused). We assert no crash and a
-        200 — the read is the contract.
+    def test_tenant_isolation_caller_cannot_read_other_user(self) -> None:
+        client, _i, _m = _client()
+        response = client.get(
+            "/v1/home", params={"org_id": "org_acme", "user_id": "usr_eve"}
+        )
+        assert response.status_code == 404
+
+
+class TestLastVisitAdvance:
+    def test_second_call_observes_first_cutoff(self) -> None:
+        """``users.home_last_visit_at`` is advanced atomically — the
+        second visit's ``since_iso`` is the first visit's ``cached_at``.
         """
 
+        client, _i, _m = _client()
+        first = client.get("/v1/home", params=_params()).json()
+        second = client.get("/v1/home", params=_params()).json()
+        # First visit's since_iso falls back to now-24h (no prior
+        # cutoff). Second visit's since_iso is the first visit's
+        # cached_at (within a small drift — both come from
+        # datetime.now(UTC) in the same process). The invariant we
+        # really care about: second.since_iso > first.since_iso.
+        assert second["whats_new"]["since_iso"] > first["whats_new"]["since_iso"]
+
+    def test_first_visit_since_iso_is_24h_lookback(self) -> None:
+        """No prior cutoff → since_iso falls back to ~ now-24h."""
+
+        client, _i, _m = _client()
+        body = client.get("/v1/home", params=_params()).json()
+        since = datetime.fromisoformat(
+            body["whats_new"]["since_iso"].replace("Z", "+00:00")
+        )
+        now = datetime.now(timezone.utc)
+        delta = (now - since).total_seconds()
+        # Allow a couple of seconds of clock drift in either direction.
+        assert 23 * 3600 <= delta <= 25 * 3600
+
+
+class TestTenantTimezone:
+    def test_tenant_local_date_uses_profile_timezone(self) -> None:
+        """When the caller's profile carries a timezone, the greeting's
+        tenant_local_* fields are rendered in that timezone."""
+
+        from backend_app.identity.me_store import UserProfileRecord
+
         me = InMemoryMeStore()
-        me.upsert_preferences(
-            UserPreferencesRecord(
+        me.upsert_profile(
+            UserProfileRecord(
                 user_id="usr_sarah",
                 org_id="org_acme",
-                preferences={"home": {"activity_window_hours": 48}},
+                timezone="America/Los_Angeles",
             )
         )
         client, _i, _m = _client(me_store=me)
-        response = client.get("/v1/home", params=_params())
-        assert response.status_code == 200
+        body = client.get("/v1/home", params=_params()).json()
+        # We don't pin the exact time (the test runs at wall-clock), but
+        # the format must be a valid full ISO string in *some* offset
+        # other than +00:00 (LA is UTC-7 / -8 year-round).
+        iso = body["greeting"]["tenant_local_iso"]
+        assert "+00:00" not in iso  # not UTC
+        assert iso.endswith(("-07:00", "-08:00"))
 
-    def test_activity_window_out_of_range_falls_back_to_default(self) -> None:
-        """Garbage / out-of-range pref values must not crash the route."""
 
+class TestQuickActionsAdminFilter:
+    def test_non_admin_caller_does_not_see_admin_only_tile(self) -> None:
+        client, _i, _m = _client()
+        body = client.get("/v1/home", params=_params()).json()
+        ids = {action["id"] for action in body["quick_actions"]}
+        # team_invite is admin-only; the dev-fallback caller has no
+        # role headers so the tile is filtered.
+        assert "qa_team_invite" not in ids
+        assert {
+            "qa_chat_new",
+            "qa_todo_new",
+            "qa_routine_new",
+            "qa_tools_onboard",
+        } <= ids
+
+
+class TestActivityWindowPrefStillRead:
+    """Preserves the Phase 2 contract: the activity-window pref is
+    read from the JSONB prefs blob without crashing the route. Phase 9
+    composers don't use it yet, but the read path must survive a
+    garbage value so future composers can wire it without a regression."""
+
+    def test_garbage_pref_does_not_crash(self) -> None:
         me = InMemoryMeStore()
         me.upsert_preferences(
             UserPreferencesRecord(
@@ -164,20 +242,3 @@ class TestGetHome:
         client, _i, _m = _client(me_store=me)
         response = client.get("/v1/home", params=_params())
         assert response.status_code == 200
-
-    def test_tenant_isolation_caller_cannot_read_other_user(self) -> None:
-        """Caller-supplied user_id is only allowed when it matches the
-        verified caller. With ENTERPRISE_SERVICE_TOKEN unset (dev
-        fallback) the params *are* the identity — but the seeded
-        identity store only has one user, so requesting a different
-        user_id 404s on the user lookup rather than crossing tenants."""
-
-        client, _i, _m = _client()
-        response = client.get(
-            "/v1/home",
-            params={"org_id": "org_acme", "user_id": "usr_eve"},
-        )
-        # The route resolves identity from the params (dev fallback),
-        # then looks up the user; absent → 404. The point is no data
-        # for the seeded user leaks into the response.
-        assert response.status_code == 404

@@ -495,6 +495,74 @@ class TestLastEventIdResolver:
 # ---------------------------------------------------------------------------
 
 
+class TestPhase9EnvelopeKinds:
+    """Phase 9 adds four event kinds to the home SSE stream:
+    ``triage_updated`` / ``timeline_appended`` / ``whats_new_appended`` /
+    ``activity_appended``. Validation:
+
+    * Row-carrying kinds (``timeline_appended`` / ``whats_new_appended`` /
+      ``activity_appended``) require ``row``.
+    * ``triage_updated`` is a re-fetch hint and accepts ``row=None``.
+    * Heartbeat semantics unchanged.
+    """
+
+    def test_triage_updated_accepts_none_row(self) -> None:
+        bus = InMemoryHomeActivityBus()
+
+        async def exercise() -> HomeActivityEventEnvelope:
+            return await bus.publish(
+                org_id="org_a",
+                user_id="usr_1",
+                event_type="triage_updated",
+                row=None,
+            )
+
+        envelope = asyncio.run(exercise())
+        assert envelope.event_type == "triage_updated"
+        assert envelope.row is None
+        assert envelope.sequence_no == 1
+
+    def test_timeline_appended_requires_row(self) -> None:
+        bus = InMemoryHomeActivityBus()
+        with pytest.raises(ValueError, match="row is required"):
+            asyncio.run(
+                bus.publish(
+                    org_id="org_a",
+                    user_id="usr_1",
+                    event_type="timeline_appended",
+                    row=None,
+                )
+            )
+
+    def test_whats_new_appended_requires_row(self) -> None:
+        bus = InMemoryHomeActivityBus()
+        with pytest.raises(ValueError, match="row is required"):
+            asyncio.run(
+                bus.publish(
+                    org_id="org_a",
+                    user_id="usr_1",
+                    event_type="whats_new_appended",
+                    row=None,
+                )
+            )
+
+    def test_activity_appended_alias_round_trips(self) -> None:
+        bus = InMemoryHomeActivityBus()
+
+        async def exercise() -> HomeActivityEventEnvelope:
+            return await bus.publish(
+                org_id="org_a",
+                user_id="usr_1",
+                event_type="activity_appended",
+                row=_row("act_x"),
+            )
+
+        envelope = asyncio.run(exercise())
+        assert envelope.event_type == "activity_appended"
+        assert envelope.row is not None
+        assert envelope.row["id"] == "act_x"
+
+
 class TestRouteRegistration:
     def test_register_attaches_path(self) -> None:
         app = FastAPI()

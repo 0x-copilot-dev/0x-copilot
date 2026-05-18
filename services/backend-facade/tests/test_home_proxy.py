@@ -60,16 +60,32 @@ def _clear_touch_cache() -> None:
 
 
 _HOME_BODY = {
-    "greeting": {"display_name": "Sarah", "time_segment": "morning"},
-    "activity": {"status": "ok", "data": []},
-    "pinned_chats": {"status": "ok", "data": []},
-    "recent_runs": {"status": "ok", "data": []},
-    "favorite_tools": {"status": "ok", "data": []},
-    "todays_focus": {"status": "ok", "data": []},
-    "upcoming_meetings": {
-        "status": "unavailable",
-        "error": "no_calendar_connector",
+    # Phase 9 HomePayload shape from packages/api-types/src/home.ts.
+    # The facade is a pass-through proxy — this body is whatever the
+    # backend serves; the test asserts it survives the proxy verbatim.
+    "greeting": {
+        "display_name": "Sarah",
+        "time_segment": "morning",
+        "tenant_local_date": "2026-05-18",
+        "tenant_local_iso": "2026-05-18T09:00:00+00:00",
     },
+    "triage": {
+        "approvals_waiting": 0,
+        "runs_failed_24h": 0,
+        "todos_overdue": 0,
+        "todos_due_today": 0,
+    },
+    "today_timeline": {"status": "ok", "data": []},
+    "whats_new": {
+        "status": "ok",
+        "since_iso": "2026-05-17T09:00:00+00:00",
+        "data": [],
+    },
+    "in_flight_projects": {"status": "ok", "data": []},
+    "live_activity": {"status": "ok", "data": []},
+    "quick_actions": [],
+    "cached_at": "2026-05-18T09:00:00+00:00",
+    "is_first_run": True,
 }
 
 
@@ -145,6 +161,29 @@ class TestGetHomeProxy:
         )
         response = client.get("/v1/home")
         assert response.status_code == 401
+
+    def test_stream_route_is_registered(self) -> None:
+        """``GET /v1/home/stream`` must be mounted on the facade.
+
+        Pass-through SSE proxies are sensitive to wire framing — the
+        canonical drive-the-stream test lives at the backend layer; we
+        smoke that the facade has the route at all so a regression in
+        wiring is caught here.
+        """
+
+        from starlette.routing import Route
+
+        app = create_app(FacadeSettings(backend_url="http://backend.local"))
+        match = next(
+            (
+                route
+                for route in app.routes
+                if isinstance(route, Route) and route.path == "/v1/home/stream"
+            ),
+            None,
+        )
+        assert match is not None, "/v1/home/stream not registered on facade"
+        assert "GET" in match.methods
 
     def test_upstream_4xx_propagates(self, monkeypatch) -> None:
         class _FakeAsyncClient:

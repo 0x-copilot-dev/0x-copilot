@@ -102,7 +102,7 @@ from backend_app.observability import (
     emit_access_log,
 )
 from backend_app.dev_idp import register_dev_idp_routes
-from backend_app.home import register_home_routes
+from backend_app.home import register_home_routes, register_home_sse_routes
 from backend_app.inbox import (
     InMemoryInboxStore,
     InboxService,
@@ -1346,14 +1346,19 @@ def create_app(
     register_health_routes(app)
     # Dev IdP (W0.1) — env-gated; no-op in production.
     register_dev_idp_routes(app)
-    # Phase 2 — Home destination aggregator. Tenant-first, owner-only,
-    # SectionResult-wrapped. Greeting is real; every other section is a
-    # stub today (see backend_app/home/service.py TODOs).
+    # Phase 9 — Home destination aggregator (morning-briefing model).
+    # Tenant-first, owner-only. Sections read inbox/todos/projects
+    # stores off ``app.state`` lazily, so the registration order here
+    # does not need to follow the per-section store wiring below.
     register_home_routes(
         app,
         me_store=resolved_me_store,
         identity_store=resolved_identity_store,
     )
+    # ``GET /v1/home/stream`` — Phase 9 §3.6 LiveActivityRail feed.
+    # Sets ``app.state.home_activity_bus`` (in-memory, dev-tier) which
+    # the aggregator also reads off the same slot.
+    register_home_sse_routes(app)
 
     # Phase 3 — Todos destination. Owner-only writes; project-member
     # reads; admin compliance reads — all enforced in ``TodosService``.
