@@ -2118,10 +2118,16 @@ export interface SkillListResponse {
  * `kind` discriminator is the single source of truth the UI uses to split
  * the popover into its Skills and MCPs sections — without it, the Skills
  * section is empty and skills and MCPs render in one undifferentiated list.
+ *
+ * NB: this surface is the popover-only aggregator, NOT the canonical Tools
+ * destination (Phase 10). The canonical `Tool` / `ToolKind` /
+ * `ToolListResponse` shapes live in `./tools.ts`; this legacy shape was
+ * renamed to `ComposerTool*` so the Phase 10 wire shape can claim the
+ * unqualified names.
  */
-export type ToolKind = "skill" | "mcp";
+export type ComposerToolKind = "skill" | "mcp";
 
-export interface ToolDescriptor {
+export interface ComposerToolDescriptor {
   /** Stable id used as the selection key and React list key. */
   name: string;
   /** Human-readable name rendered as the row label. */
@@ -2132,11 +2138,11 @@ export interface ToolDescriptor {
    * Whether this descriptor came from the user's installed skill bundles or
    * from a registered MCP server. Drives the Skills / MCPs section split.
    */
-  kind: ToolKind;
+  kind: ComposerToolKind;
 }
 
-export interface ToolListResponse {
-  tools: ToolDescriptor[];
+export interface ComposerToolListResponse {
+  tools: ComposerToolDescriptor[];
 }
 
 // PR 1.5 — Workspace pane data feeds.
@@ -3643,3 +3649,40 @@ export type {
   LibrarySourceKind,
 } from "./library";
 // === end Phase 7 Library ===
+
+// === Phase 10 Tools destination ===
+// Canonical catalog + onboarding + audit-lens wire shape (mcp / openapi /
+// builtin / code / skill kinds in one row). Cross-audit §1.1 (ItemRef
+// branch "tool" already in the union), §1.3 (project-scoped ACL —
+// owner-or-admin writes, project-member or owner reads, 404-not-403),
+// §1.4 (audit context), §1.5 (multi-value OR filter axes), §2.1 (branded
+// ToolId), §5.2 (SSE convention), §5.5 (TU-1 single-tracker invariant —
+// usage projection over runtime_tool_invocations, never a parallel
+// tracker). P10-A2 ships the backend catalog module + routes; P10-A3
+// lands the code-routine sandbox executor; P10-A4 wires the facade.
+// Single declaration site: ./tools.ts.
+export type {
+  CreateToolRequest,
+  TestToolCallRequest,
+  TestToolCallResponse,
+  Tool,
+  ToolCodeRef,
+  ToolDetailResponse,
+  ToolInvocation,
+  ToolInvocationCallerKind,
+  ToolInvocationErrorKind,
+  ToolInvocationListResponse,
+  ToolKind,
+  ToolListResponse,
+  ToolScope,
+  ToolSkillPageRef,
+  ToolStatus,
+  ToolStreamEnvelope,
+  ToolStreamEventType,
+  ToolTransport,
+  ToolTransportKind,
+  ToolUsageProjection,
+  ToolUsageResponse,
+  UpdateToolRequest,
+} from "./tools";
+// === end Phase 10 Tools ===

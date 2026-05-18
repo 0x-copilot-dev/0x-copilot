@@ -12,7 +12,7 @@ import type {
 } from "@enterprise-search/chat-transport";
 
 import { TransportProvider } from "../providers/TransportProvider";
-import { ToolPicker, type ToolDescriptor } from "./ToolPicker";
+import { ToolPicker, type ComposerToolDescriptor } from "./ToolPicker";
 
 interface StubRecord {
   readonly calls: TypedRequest[];
@@ -51,7 +51,7 @@ function withTransport(transport: Transport, children: ReactNode): ReactNode {
   );
 }
 
-const SAMPLE_TOOLS: ReadonlyArray<ToolDescriptor> = [
+const SAMPLE_TOOLS: ReadonlyArray<ComposerToolDescriptor> = [
   { name: "gmail.draft.create", label: "Gmail draft", kind: "mcp" },
   {
     name: "sheets.cell.set",
@@ -242,7 +242,7 @@ describe("ToolPicker", () => {
   });
 
   it("hides the Skills section when no skill entries are present", async () => {
-    const onlyMcps: ReadonlyArray<ToolDescriptor> = [
+    const onlyMcps: ReadonlyArray<ComposerToolDescriptor> = [
       { name: "gmail.draft.create", label: "Gmail draft", kind: "mcp" },
     ];
     const { transport } = makeTransport(() =>

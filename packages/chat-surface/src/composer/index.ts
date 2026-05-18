@@ -13,8 +13,8 @@ export {
 export {
   ToolPicker,
   type ToolPickerProps,
-  type ToolDescriptor,
-  type ToolKind,
+  type ComposerToolDescriptor,
+  type ComposerToolKind,
 } from "./ToolPicker";
 export {
   ModelPicker,

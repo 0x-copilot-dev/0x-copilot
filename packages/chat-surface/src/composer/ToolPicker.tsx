@@ -8,9 +8,9 @@ import {
 import { createPortal } from "react-dom";
 
 import type {
-  ToolDescriptor,
-  ToolKind,
-  ToolListResponse,
+  ComposerToolDescriptor,
+  ComposerToolKind,
+  ComposerToolListResponse,
 } from "@enterprise-search/api-types";
 
 import { useTransport } from "../providers/TransportProvider";
@@ -21,13 +21,21 @@ import { useTransport } from "../providers/TransportProvider";
  * single popover, sectioned)". One popover, two sections. The trigger
  * button in the composer is also a single button — see Composer.tsx.
  *
- * Wire shape: the transport returns ToolListResponse at /v1/mcp/tools.
- * Each ToolDescriptor carries kind: "skill" | "mcp" — the discriminator
- * the backend tags at aggregation time (services/backend ToolCatalog).
- * Single source of truth: ToolDescriptor + ToolKind live in api-types;
- * this file re-exports them as a convenience but never redefines. */
+ * Wire shape: the transport returns ComposerToolListResponse at
+ * /v1/mcp/tools. Each ComposerToolDescriptor carries kind: "skill" | "mcp"
+ * — the discriminator the backend tags at aggregation time
+ * (services/backend ToolCatalog). Single source of truth:
+ * ComposerToolDescriptor + ComposerToolKind live in api-types; this file
+ * re-exports them as a convenience but never redefines.
+ *
+ * The unqualified `Tool` / `ToolKind` / `ToolListResponse` names belong to
+ * the Phase 10 Tools destination canonical wire shape (`api-types/tools.ts`).
+ */
 
-export type { ToolDescriptor, ToolKind } from "@enterprise-search/api-types";
+export type {
+  ComposerToolDescriptor,
+  ComposerToolKind,
+} from "@enterprise-search/api-types";
 
 export interface ToolPickerProps {
   readonly open: boolean;
@@ -40,7 +48,7 @@ export interface ToolPickerProps {
 type LoadState =
   | { readonly status: "idle" }
   | { readonly status: "loading" }
-  | { readonly status: "ready"; readonly tools: ReadonlyArray<ToolDescriptor> }
+  | { readonly status: "ready"; readonly tools: ReadonlyArray<ComposerToolDescriptor> }
   | { readonly status: "error" };
 
 export function ToolPicker(props: ToolPickerProps): ReactNode {
@@ -57,7 +65,7 @@ export function ToolPicker(props: ToolPickerProps): ReactNode {
     let cancelled = false;
     setState({ status: "loading" });
     transport
-      .request<ToolListResponse>({
+      .request<ComposerToolListResponse>({
         method: "GET",
         path: "/v1/mcp/tools",
       })
@@ -173,9 +181,9 @@ function ToolPickerBody(props: BodyProps): ReactNode {
 }
 
 interface SectionProps {
-  readonly kind: ToolKind;
+  readonly kind: ComposerToolKind;
   readonly title: string;
-  readonly tools: ReadonlyArray<ToolDescriptor>;
+  readonly tools: ReadonlyArray<ComposerToolDescriptor>;
   readonly selectedTools: ReadonlyArray<string>;
   readonly onToggle: (name: string) => void;
 }

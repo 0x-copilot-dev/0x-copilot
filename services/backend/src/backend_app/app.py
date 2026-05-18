@@ -129,6 +129,14 @@ from backend_app.agents import (
     InMemoryAgentsStore,
     register_agents_routes,
 )
+from backend_app.tools import (
+    InMemoryToolsStore,
+    ToolsService,
+    ToolsStore,
+    register_tool_internal_routes,
+    register_tool_routes,
+    register_tool_sse_routes,
+)
 from backend_app.projects import (
     InMemoryProjectsStore,
     ProjectsService,
@@ -379,6 +387,7 @@ def create_app(
     library_blob_store: object | None = None,
     library_row_store: object | None = None,
     agents_store: AgentsStore | None = None,
+    tools_store: ToolsStore | None = None,
     liveness_service: LivenessService | None = None,
 ) -> FastAPI:
     if configure_logging_on_create:
@@ -1579,6 +1588,26 @@ def create_app(
     )
     app.state.agents_service = agents_service
     register_agents_routes(app, service=agents_service)
+
+    # =====================================================================
+    # Phase 10 P10-A2 — Tools destination (catalog CRUD + ACL + audit).
+    # =====================================================================
+    # The canonical project-membership port is shared with Library /
+    # Projects / Routines / Inbox so the ACL gate stays single-sourced.
+    # P10-A3 lands the code-routine sandbox executor (test-call returns
+    # 501 until then); P10-A4 lands the facade pass-through.
+    resolved_tools_store: ToolsStore = tools_store or InMemoryToolsStore()  # type: ignore[assignment]
+    app.state.tools_store = resolved_tools_store
+    # SSE routes register first so the activity bus is on
+    # ``app.state.tools_activity_bus`` before service is constructed.
+    register_tool_sse_routes(app)
+    tools_service = ToolsService(
+        store=resolved_tools_store,
+        membership_port=projects_service._membership_port,  # noqa: SLF001 — canonical port reuse
+    )
+    app.state.tools_service = tools_service
+    register_tool_routes(app, service=tools_service)
+    register_tool_internal_routes(app, service=tools_service)
 
     # Phase 7A — tier-2 adapter registry. Source bytes go through a
     # ``SourceStorage`` port (filesystem in dev, S3 injectable in prod).
