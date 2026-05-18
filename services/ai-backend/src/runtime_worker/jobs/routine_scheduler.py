@@ -39,13 +39,18 @@ import asyncio
 import logging
 import os
 from datetime import datetime, timedelta, timezone
-from typing import Protocol, runtime_checkable
+from typing import ClassVar, Protocol, runtime_checkable
 
 from pydantic import BaseModel, ConfigDict, Field
 
 from agent_runtime.api.routine_backend_client import (
     RoutineBackendClient,
     RoutineFireClaim,
+)
+from agent_runtime.api.routine_permission_check import RoutinePermissionContext
+from runtime_worker.jobs.routine_pre_fire_gate import (
+    RoutinePreFireGate,
+    RoutineToPauseSummary,
 )
 
 
@@ -87,6 +92,17 @@ class FireStatus:
 
     QUEUED = "queued"
     SKIPPED = "skipped"
+
+
+class SkipReason:
+    """Stable wire values for ``routine_fires.skip_reason``.
+
+    Used by callers (auditors / dashboards) to bucket skips. Keep enum-y
+    string literals here so callers reference them by name, never inline.
+    """
+
+    POLICY_SKIP_BACKLOG = "policy:skip_backlog"
+    PERMISSION_INTERSECTION_FAILED = "permission_intersection_failed"
 
 
 # ---------------------------------------------------------------------------
@@ -365,6 +381,58 @@ class NullRoutineRunSubmitter:
 
 
 # ---------------------------------------------------------------------------
+# Pre-fire permission context resolution — port
+# ---------------------------------------------------------------------------
+
+
+class ResolvedRoutinePermissionInput(BaseModel):
+    """Bundle of inputs the pre-fire gate consumes for one claim.
+
+    Returned by ``RoutinePermissionContextResolver`` and handed straight to
+    :meth:`RoutinePreFireGate.evaluate`. The resolver implementation
+    (wired in production by the runtime container) is the only place that
+    knows how to look up the routine's declared / required scopes, the
+    owner's current grants, the project's grants, and the disconnected
+    connector list -- the scheduler stays free of that knowledge.
+    """
+
+    model_config = ConfigDict(frozen=True)
+    routine: RoutineToPauseSummary
+    permission_context: RoutinePermissionContext
+
+
+@runtime_checkable
+class RoutinePermissionContextResolver(Protocol):
+    """Port for the scheduler -> permission-context lookup.
+
+    A successful resolve returns the inputs the pre-fire gate needs. A
+    ``None`` return signals "could not resolve this claim's context"
+    (e.g. owner record missing). The scheduler treats ``None`` the same
+    as a gate miss (do NOT submit; do NOT advance) and records the fire
+    with skip_reason ``permission_intersection_failed``.
+    """
+
+    async def resolve(
+        self, *, claim: RoutineFireClaim
+    ) -> ResolvedRoutinePermissionInput | None:
+        """Build the routine summary + permission context for one claim."""
+
+
+class NullRoutinePermissionContextResolver:
+    """No-op resolver used in tests where the pre-fire gate is disabled.
+
+    Returns ``None`` for every claim so behaviour matches "gate not wired".
+    Production wiring MUST inject a real resolver -- this is a safety
+    fallback only.
+    """
+
+    async def resolve(
+        self, *, claim: RoutineFireClaim
+    ) -> ResolvedRoutinePermissionInput | None:
+        return None
+
+
+# ---------------------------------------------------------------------------
 # Worker loop
 # ---------------------------------------------------------------------------
 
@@ -409,6 +477,7 @@ class TickOutcome(BaseModel):
     skipped: int = Field(default=0, ge=0)
     duplicate: int = Field(default=0, ge=0)
     advance_failures: int = Field(default=0, ge=0)
+    auto_paused: int = Field(default=0, ge=0)
 
 
 class RoutineSchedulerLoop:
@@ -441,6 +510,8 @@ class RoutineSchedulerLoop:
         tick_seconds: float | None = None,
         batch_limit: int | None = None,
         clock: object | None = None,
+        pre_fire_gate: RoutinePreFireGate | None = None,
+        permission_resolver: RoutinePermissionContextResolver | None = None,
     ) -> None:
         self._client = client
         self._submitter = run_submitter or NullRoutineRunSubmitter()
@@ -458,6 +529,13 @@ class RoutineSchedulerLoop:
             else RoutineSchedulerEnv.env_int(_Env.BATCH_LIMIT, _Env.DEFAULT_BATCH_LIMIT)
         )
         self._clock = clock or (lambda: datetime.now(timezone.utc))
+        # Pre-fire gate: both ports must be wired together (gate + resolver)
+        # or neither. When unwired, the loop runs the legacy submit path --
+        # used by tests that exercise pure scheduling / cron behaviour.
+        self._pre_fire_gate = pre_fire_gate
+        self._permission_resolver = (
+            permission_resolver or NullRoutinePermissionContextResolver()
+        )
         self._stop = asyncio.Event()
         self._task: asyncio.Task[None] | None = None
 
@@ -494,7 +572,7 @@ class RoutineSchedulerLoop:
     # ---- per-tick driver --------------------------------------------------
 
     async def tick_once(self) -> TickOutcome:
-        """Run one claim → fire/skip → advance pass."""
+        """Run one claim → pre-fire gate → fire/skip → advance pass."""
         now = self._now()
         outcome = await self._client.claim_due_routines(
             now=now, limit=self._batch_limit
@@ -503,6 +581,7 @@ class RoutineSchedulerLoop:
         skipped = 0
         duplicate = 0
         advance_failures = 0
+        auto_paused = 0
         for claim in outcome.claims:
             decision = self._decide(claim=claim, now=now)
             if decision.action == _Action.SKIP:
@@ -522,9 +601,30 @@ class RoutineSchedulerLoop:
                 if not advance_ok:
                     advance_failures += 1
                 continue
-            # FIRE path. Build a submit request and hand it to the run
-            # pipeline. The pipeline is responsible for live agent re-
-            # resolution at fire time (cross-audit §9.7 Q11).
+            # FIRE path. First, pass through the pre-fire permission gate
+            # (routines-prd §7.4). On a permission miss the gate drives
+            # the auto-pause cascade (pause -> inbox -> audit) and we
+            # MUST NOT submit a run.
+            gate_outcome = await self._evaluate_pre_fire_gate(claim=claim)
+            if gate_outcome == _PreFireOutcome.PAUSED:
+                auto_paused += 1
+                # Record an explicit skip row so the routine's fire
+                # history reflects the slot we acknowledged + refused to
+                # fire. Do NOT advance: the routine is now paused, so the
+                # backend won't claim it again until the owner resumes;
+                # leaving ``next_fire_at`` untouched keeps the resume flow
+                # deterministic.
+                fire_result = await self._client.record_fire(
+                    claim=claim,
+                    run_id="",
+                    status=FireStatus.SKIPPED,
+                    skip_reason=SkipReason.PERMISSION_INTERSECTION_FAILED,
+                )
+                if fire_result.duplicate:
+                    duplicate += 1
+                continue
+            # gate_outcome is ALLOWED or SKIPPED (gate not wired); proceed
+            # to submit.
             request = RoutineRunRequest(
                 routine_id=claim.routine_id,
                 tenant_id=claim.tenant_id,
@@ -583,6 +683,7 @@ class RoutineSchedulerLoop:
                     "skipped": skipped,
                     "duplicate": duplicate,
                     "advance_failures": advance_failures,
+                    "auto_paused": auto_paused,
                 }
             },
         )
@@ -591,7 +692,76 @@ class RoutineSchedulerLoop:
             skipped=skipped,
             duplicate=duplicate,
             advance_failures=advance_failures,
+            auto_paused=auto_paused,
         )
+
+    async def _evaluate_pre_fire_gate(self, *, claim: RoutineFireClaim) -> str:
+        """Run the pre-fire permission gate for one claim.
+
+        Returns:
+            ``_PreFireOutcome.SKIPPED`` -- gate not wired; legacy submit path.
+            ``_PreFireOutcome.ALLOWED`` -- gate evaluated, fire allowed.
+            ``_PreFireOutcome.PAUSED``  -- gate evaluated, auto-pause cascade
+            executed (pause + inbox + audit); caller MUST NOT submit a run.
+
+        The gate's own ports (pause / inbox / audit) are responsible for
+        their own idempotency on retry. The scheduler treats a resolver
+        ``None`` the same as a gate miss so a transient resolver outage
+        cannot silently fire a routine without the permission check.
+        """
+        if self._pre_fire_gate is None:
+            return _PreFireOutcome.SKIPPED
+        try:
+            resolved = await self._permission_resolver.resolve(claim=claim)
+        except Exception:
+            _LOGGER.warning(
+                "routine_scheduler.permission_resolver_failed",
+                extra={
+                    "metadata": {
+                        "routine_id": claim.routine_id,
+                        "tenant_id": claim.tenant_id,
+                    }
+                },
+                exc_info=True,
+            )
+            return _PreFireOutcome.PAUSED
+        if resolved is None:
+            # No context available -- treat as a hard pause so we never
+            # fire a routine whose permission state we couldn't verify.
+            _LOGGER.warning(
+                "routine_scheduler.permission_context_unresolved",
+                extra={
+                    "metadata": {
+                        "routine_id": claim.routine_id,
+                        "tenant_id": claim.tenant_id,
+                    }
+                },
+            )
+            return _PreFireOutcome.PAUSED
+        try:
+            decision = await self._pre_fire_gate.evaluate(
+                routine=resolved.routine,
+                permission_context=resolved.permission_context,
+            )
+        except Exception:
+            _LOGGER.warning(
+                "routine_scheduler.pre_fire_gate_failed",
+                extra={
+                    "metadata": {
+                        "routine_id": claim.routine_id,
+                        "tenant_id": claim.tenant_id,
+                    }
+                },
+                exc_info=True,
+            )
+            # Gate failures must NOT silently allow a fire -- treat as a
+            # hard pause (the auto-pause side effects already ran, or
+            # they didn't and the routine will be re-evaluated next tick
+            # once the gate recovers; either way we refuse to fire now).
+            return _PreFireOutcome.PAUSED
+        if decision.allow_fire:
+            return _PreFireOutcome.ALLOWED
+        return _PreFireOutcome.PAUSED
 
     # ---- fire-vs-skip decision -------------------------------------------
 
@@ -616,7 +786,9 @@ class RoutineSchedulerLoop:
             return _Decision(action=_Action.FIRE, reason=None)
         if policy == MissedFirePolicy.SKIP:
             if is_backlogged:
-                return _Decision(action=_Action.SKIP, reason="policy:skip_backlog")
+                return _Decision(
+                    action=_Action.SKIP, reason=SkipReason.POLICY_SKIP_BACKLOG
+                )
             return _Decision(action=_Action.FIRE, reason=None)
         # Default: fire_once — current slot fires; backlog claims (older
         # slots that may surface) are skipped by the backend's claim
@@ -703,15 +875,33 @@ class _Decision(BaseModel):
     reason: str | None = None
 
 
+class _PreFireOutcome:
+    """Outcome of the pre-fire permission gate for one claim.
+
+    Three distinct states because the scheduler's branching must
+    differentiate "no gate wired" (SKIPPED -- fall through to legacy
+    submit) from "gate said no" (PAUSED -- record skip + no advance) from
+    "gate said yes" (ALLOWED -- submit).
+    """
+
+    SKIPPED: ClassVar[str] = "skipped"
+    ALLOWED: ClassVar[str] = "allowed"
+    PAUSED: ClassVar[str] = "paused"
+
+
 __all__ = [
     "CronSpecError",
     "CronSpecEvaluator",
     "FireStatus",
     "MissedFirePolicy",
+    "NullRoutinePermissionContextResolver",
     "NullRoutineRunSubmitter",
+    "ResolvedRoutinePermissionInput",
+    "RoutinePermissionContextResolver",
     "RoutineRunRequest",
     "RoutineRunSubmitter",
     "RoutineSchedulerEnv",
     "RoutineSchedulerLoop",
+    "SkipReason",
     "TickOutcome",
 ]
