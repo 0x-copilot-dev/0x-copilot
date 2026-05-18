@@ -15,10 +15,12 @@ import { useMyProfile } from "../../../auth/useMyProfile";
 import { AssistantMessage } from "../messages/AssistantMessage";
 import { UserEditComposer } from "../messages/UserEditComposer";
 import { UserMessage } from "../messages/UserMessage";
-import { PlainText } from "@enterprise-search/chat-surface";
+import {
+  PlainText,
+  type ComposerHandle,
+} from "@enterprise-search/chat-surface";
 import { firstNameFromDisplayName } from "../../utils/greeting";
 import {
-  Composer,
   Message,
   MessageParts,
   ThreadEmpty,
@@ -26,7 +28,6 @@ import {
   ThreadRoot,
   ThreadScrollToBottom,
   ThreadViewport,
-  type ComposerHandle,
 } from "../../runtime";
 import type {
   AttachmentAdapter,
@@ -34,11 +35,6 @@ import type {
   ThreadMessageLike,
 } from "../../runtime/types";
 import { ThreadWelcome } from "./ThreadWelcome";
-
-// `Composer` is referenced in the type signature for the forwarded ref
-// but the value isn't used directly here. Suppress the no-unused-import
-// hint without changing the surface.
-void Composer;
 
 export interface ThreadBodyHandle {
   composerHandle: ComposerHandle | null;

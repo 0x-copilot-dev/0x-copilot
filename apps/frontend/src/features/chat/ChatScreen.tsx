@@ -20,8 +20,8 @@ import {
   AtlasImageAttachmentAdapter,
   AtlasTextAttachmentAdapter,
   AtlasWebSpeechDictationAdapter,
-  type ComposerHandle,
 } from "./runtime";
+import type { ComposerHandle } from "@enterprise-search/chat-surface";
 import type { ReactElement } from "react";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {

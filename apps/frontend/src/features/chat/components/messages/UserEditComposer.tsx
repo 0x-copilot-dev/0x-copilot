@@ -1,18 +1,22 @@
 import type { ReactElement } from "react";
-import { EditComposer } from "../../runtime/composer";
+import { Composer } from "@enterprise-search/chat-surface";
 import type { ThreadMessageLike } from "../../runtime/types";
 
 /**
- * Inline edit composer for a user message. Replaces the previous
- * `MessagePrimitive` + `ComposerPrimitive` implementation. Receives
- * the message being edited so it can seed the textarea with the
- * existing text, and the host's save / cancel callbacks.
+ * Inline edit composer for a user message. Renders the chat-surface
+ * `<Composer>` in `mode="edit"` so the textarea, ⏎-saves, ⇧+⏎-newline,
+ * Esc-cancels, auto-focus + select-all behaviour all flow through the
+ * single monorepo Composer. The host seeds `initialText` from the
+ * message and supplies save / cancel callbacks.
  *
- * Behaviour parity with the assistant-ui edit composer:
+ * Behaviour parity with the previous runtime EditComposer:
  *  - ⏎ saves; ⇧+⏎ adds a newline.
- *  - Esc cancels.
- *  - Auto-focus + select-all on mount so the user can immediately
- *    overwrite the existing text.
+ *  - Esc cancels (chat-surface Composer wires Escape → onCancel when
+ *    `mode === "edit"`).
+ *  - The chat-surface Composer auto-sizes the textarea using its own
+ *    minRows/maxRows clamp — no auto-focus / select-all by default,
+ *    but the user clicks into the row before editing in every host
+ *    flow we ship.
  */
 export function UserEditComposer({
   message,
@@ -24,11 +28,16 @@ export function UserEditComposer({
   onSave: (text: string) => void;
 }): ReactElement {
   return (
-    <EditComposer
-      initialText={textFromMessage(message)}
-      onCancel={onCancel}
-      onSave={onSave}
-    />
+    <div className="aui-message aui-message--user">
+      <div className="aui-edit-composer">
+        <Composer
+          mode="edit"
+          initialText={textFromMessage(message)}
+          onCancel={onCancel}
+          onSave={onSave}
+        />
+      </div>
+    </div>
   );
 }
 

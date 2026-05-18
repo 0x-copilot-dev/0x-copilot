@@ -38,15 +38,6 @@ export {
 } from "./components";
 
 export {
-  Composer,
-  ComposerSendButton,
-  EditComposer,
-  type ComposerHandle,
-  type ComposerProps,
-  type ComposerSubmitPayload,
-} from "./composer";
-
-export {
   ThreadEmpty,
   ThreadMessages,
   ThreadRoot,

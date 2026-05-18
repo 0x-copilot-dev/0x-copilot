@@ -4,10 +4,18 @@ import type {
   Skill,
 } from "@enterprise-search/api-types";
 import {
+  Composer,
+  type AttachmentAdapter as ChatSurfaceAttachmentAdapter,
+  type ComposerHandle,
+  type CompleteAttachment as ChatSurfaceCompleteAttachment,
+  type PendingAttachment as ChatSurfacePendingAttachment,
+} from "@enterprise-search/chat-surface";
+import {
   forwardRef,
   useEffect,
   useCallback,
   useLayoutEffect,
+  useMemo,
   useRef,
   useState,
   type CSSProperties,
@@ -21,27 +29,33 @@ import {
   mcpServerInstructionPrompt,
   skillInstructionPrompt,
 } from "../../prompts";
-import {
-  Composer,
-  ComposerSendButton,
-  type ComposerHandle,
-} from "../../runtime/composer";
-import type { AttachmentAdapter } from "../../runtime/types";
+import type {
+  Attachment,
+  AttachmentAdapter,
+  CompleteAttachment,
+  PendingAttachment,
+} from "../../runtime/types";
 import { ModelPill } from "../shell/ModelPill";
 import { ThinkingDepthControl } from "../shell/ThinkingDepthControl";
-import { AttachmentPill } from "./AttachmentPill";
 import { ComposerPlusMenu, type ComposerMenuView } from "./ComposerPlusMenu";
 import { fileAttachmentAccept } from "./fileAttachmentAccept";
 
 export type DetailsPanelKind = "context" | "usage";
 
 /**
- * Atlas composer. Replaces the previous `ComposerPrimitive` + `AuiIf` +
- * `unstable_useMentionAdapter` + `unstable_useSlashCommandAdapter`
- * implementation with a self-owned `<Composer>` from
- * `runtime/composer`. `@` remains plain text; `/` opens the skills
- * workspace tab when typed into an empty composer, while skill insertion
- * still flows through the workspace-pane skills tab and the `+` plus-menu.
+ * Atlas composer. Wraps the single monorepo
+ * `@enterprise-search/chat-surface` `<Composer>` with the Atlas-specific
+ * `aui-*`-classed bottom bar (plus-menu, connectors trigger, mic, model
+ * pill, depth control, send/stop) plus the selected-skills top-bar
+ * pills. The chat-surface Composer owns text state, attachments, and
+ * the imperative handle (setText/appendText/addAttachment/submit).
+ * `@` stays plain text; `/` on an empty composer opens the skills
+ * workspace pane (host-owned via onInputKeyDown).
+ *
+ * Runtime `AttachmentAdapter`s ({@link AtlasCompositeAttachmentAdapter}
+ * et al.) flow through unchanged — `bridgedAttachmentAdapter` adapts
+ * their `add({file})` / `remove(attachment)` / `send(pending)` two-stage
+ * shape to chat-surface's `add(file)` / `remove(id)` / `send(pending)`.
  *
  * The host (`ChatScreen`) forwards a `composerRef` so it can write to
  * the textarea imperatively (skill insertion path, post-OAuth resume
@@ -229,31 +243,119 @@ export const AssistantComposer = forwardRef<
     [onOpenSkillsPanel, showSlashCue],
   );
 
+  // Bridge the runtime two-stage AttachmentAdapter to the chat-surface
+  // Composer's adapter shape. The runtime adapter family takes
+  // `add({ file })` / `remove(attachment)` and never stamps a `size`
+  // on the attachment; the chat-surface Composer expects `add(file)`,
+  // `remove(id)`, and reads `size` for the pill render. We translate
+  // here so the runtime adapters (image/text/file/composite) keep
+  // working unchanged. An id→runtime-attachment registry keeps the
+  // chat-surface remove call routable back to the right runtime
+  // adapter (composite dispatches on the file's MIME type, so it
+  // needs the original attachment).
+  const adapterRegistryRef = useRef<Map<string, Attachment>>(new Map());
+  const bridgedAttachmentAdapter = useMemo<
+    ChatSurfaceAttachmentAdapter | undefined
+  >(() => {
+    if (!attachmentAdapter) return undefined;
+    const runtime: AttachmentAdapter = attachmentAdapter;
+    const registry = adapterRegistryRef.current;
+    return {
+      async add(file: File): Promise<ChatSurfacePendingAttachment> {
+        const pending = await runtime.add({ file });
+        registry.set(pending.id, pending);
+        return {
+          id: pending.id,
+          name: pending.name,
+          // `pending.contentType` is only populated by some adapters;
+          // fall back to the file's MIME type so the chat-surface pill
+          // still renders a sensible label.
+          type: pending.contentType ?? file.type ?? pending.type,
+          size: file.size,
+          // The chat-surface "pending" status union is narrower than the
+          // runtime's `requires-action | running`; both map to "pending"
+          // for the chat-surface pill — the runtime adapter is the one
+          // that knows how to finalise.
+          status: { type: "pending" },
+          handle: pending,
+        };
+      },
+      async send(
+        pendingShim: ChatSurfacePendingAttachment,
+      ): Promise<ChatSurfaceCompleteAttachment> {
+        const runtimePending = registry.get(pendingShim.id) as
+          | PendingAttachment
+          | undefined;
+        if (!runtimePending) {
+          throw new Error(
+            `No runtime attachment registered for id ${pendingShim.id}`,
+          );
+        }
+        const completed = await runtime.send(runtimePending);
+        registry.set(completed.id, completed);
+        // Forward the runtime CompleteAttachment verbatim plus the
+        // chat-surface display fields. `onSubmit` downstream reads it
+        // as a runtime CompleteAttachment (id/type/name/contentType/
+        // content/file); we preserve every runtime field so the
+        // run-create pipeline can build its `attachments[]` body.
+        // chat-surface's CompleteAttachment is a structural superset
+        // (adds size + optional handle); the only TS gap is the
+        // `AttachmentContentPart` element shape (runtime: strict union;
+        // chat-surface: `{type; [k]: unknown}`), so we widen via
+        // `unknown` at the slot boundary.
+        const bridged = {
+          ...completed,
+          size: pendingShim.size,
+          handle: completed,
+          status: { type: "complete" as const },
+        };
+        return bridged as unknown as ChatSurfaceCompleteAttachment;
+      },
+      async remove(id: string): Promise<void> {
+        const attachment = registry.get(id);
+        registry.delete(id);
+        if (attachment) {
+          await runtime.remove(attachment);
+        }
+      },
+    };
+  }, [attachmentAdapter]);
+
   return (
     <Composer
       ref={setComposerRef}
       className="aui-composer"
       disabled={disabled}
       running={running}
-      attachmentAdapter={attachmentAdapter}
+      attachmentAdapter={bridgedAttachmentAdapter}
       placeholder="Ask Atlas to find, summarize, or draft something for your team…"
       minRows={1}
       maxRows={5}
-      onSubmit={async (payload) => {
+      onSubmit={(payload) => {
         const skillInstructions = selectedSkills.map((skill) =>
           skillInstructionPrompt(skill.display_name),
         );
         const text = [...skillInstructions, payload.text]
           .filter((part) => part.trim().length > 0)
           .join("\n\n");
-        await onSubmit({ text, attachments: payload.attachments });
-        onClearSkills?.();
+        // The bridged adapter returns chat-surface CompleteAttachments
+        // that ALSO carry the runtime fields (id/type/name/contentType/
+        // content[]); the host's onSubmit reads them as runtime
+        // CompleteAttachments downstream. Cast through unknown rather
+        // than spreading so the structural superset stays intact.
+        void Promise.resolve(
+          onSubmit({
+            text,
+            attachments:
+              payload.attachments as unknown as ReadonlyArray<unknown>,
+          }),
+        ).then(() => onClearSkills?.());
       }}
       onCancel={onCancel}
       onInputKeyDown={handleInputKeyDown}
       hasTopBarContent={selectedSkills.length > 0}
-      topBar={({ attachments, onRemove }) =>
-        attachments.length > 0 || selectedSkills.length > 0 ? (
+      topBarSlot={
+        selectedSkills.length > 0 ? (
           <div className="aui-composer-attachments">
             {selectedSkills.map((skill) => (
               <span key={skill.skill_id} className="aui-skill-pill">
@@ -271,17 +373,15 @@ export const AssistantComposer = forwardRef<
                 ) : null}
               </span>
             ))}
-            {attachments.map((attachment) => (
-              <AttachmentPill
-                key={attachment.id}
-                attachment={attachment}
-                onRemove={() => onRemove(attachment.id)}
-              />
-            ))}
           </div>
         ) : null
       }
-      bottomBar={({ text, running: isRunning, attachmentsCount, focused }) => (
+      bottomBarRender={({
+        text,
+        running: isRunning,
+        attachmentsCount,
+        focused,
+      }) => (
         <div className="aui-composer-action-wrapper">
           <div className="aui-composer-tools">
             <div className="aui-plus-menu-root" ref={menuRef}>
@@ -372,22 +472,13 @@ export const AssistantComposer = forwardRef<
                 {activeModelLabel ?? "Atlas"} · Sources cited inline
               </span>
             ) : null}
-            <ComposerSendButton
+            <AssistantComposerSendButton
               text={text}
               attachmentsCount={attachmentsCount}
               running={isRunning}
               disabled={disabled}
-              onSend={() => void composerRef.current?.submit()}
+              onSend={() => composerRef.current?.submit()}
               onCancel={onCancel}
-              className="aui-send-button aui-composer-send"
-              stopClassName="aui-send-button aui-send-button--stop"
-              sendIcon="↑"
-              stopIcon={
-                <span
-                  className="aui-send-button__stop-icon"
-                  aria-hidden="true"
-                />
-              }
             />
           </div>
           {slashCueVisible ? (
@@ -404,11 +495,11 @@ export const AssistantComposer = forwardRef<
           ) : null}
         </div>
       )}
-      // Hint row is stateless info — render it unconditionally. Do
-      // NOT gate on `running` (or any other run-state flag); hiding
-      // shortcuts mid-flight makes the composer look broken. See
-      // apps/frontend/CLAUDE.md → "Composer hint row".
-      hint={
+      hintRender={() => (
+        // Hint row is stateless info — render it unconditionally. Do
+        // NOT gate on `running` (or any other run-state flag); hiding
+        // shortcuts mid-flight makes the composer look broken. See
+        // apps/frontend/CLAUDE.md → "Composer hint row".
         <div className="aui-composer__hint" aria-hidden="false">
           <span>
             <kbd>↵</kbd> send
@@ -426,10 +517,61 @@ export const AssistantComposer = forwardRef<
             {activeModelLabel ?? "Atlas"} · Sources cited inline
           </span>
         </div>
-      }
+      )}
     />
   );
 });
+
+/**
+ * Atlas send / stop button. Renders the Stop control while a run is
+ * in flight; otherwise a Send control disabled when the composer is
+ * empty (no text AND no staged attachments). Replaces the previous
+ * runtime-composer `<ComposerSendButton>` — same shape, kept inline
+ * because no other call site needs it.
+ */
+function AssistantComposerSendButton({
+  text,
+  attachmentsCount,
+  running,
+  disabled,
+  onSend,
+  onCancel,
+}: {
+  text: string;
+  attachmentsCount: number;
+  running: boolean;
+  disabled?: boolean;
+  onSend: () => void;
+  onCancel?: () => void;
+}): ReactElement {
+  if (running) {
+    return (
+      <button
+        type="button"
+        className="aui-send-button aui-send-button--stop"
+        aria-label="Stop response"
+        data-tooltip="Stop response"
+        onClick={() => onCancel?.()}
+      >
+        <span className="aui-send-button__stop-icon" aria-hidden="true" />
+      </button>
+    );
+  }
+  const sendDisabled =
+    disabled || (text.trim().length === 0 && attachmentsCount === 0);
+  return (
+    <button
+      type="button"
+      className="aui-send-button aui-composer-send"
+      aria-label="Send message"
+      data-tooltip="Send message"
+      disabled={sendDisabled}
+      onClick={onSend}
+    >
+      ↑
+    </button>
+  );
+}
 
 /**
  * Portal + fixed-position wrapper for the `+` plus-menu popup.
