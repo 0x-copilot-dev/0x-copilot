@@ -1,261 +1,281 @@
+// ProjectsDestination shell tests (P6-B1).
+//
+// Covers: loading skeleton, error/unavailable empty states, ready state
+// rendering (status pill + counts + ItemLink), filter tab interaction,
+// row actions (archive / activate / star / unstar), render-detail slot.
+
 import type {
-  Session,
-  SseSubscribeOptions,
-  SseSubscription,
-  Transport,
-  TransportCapabilities,
-  TypedRequest,
-} from "@enterprise-search/chat-transport";
-import { act, fireEvent, render, screen } from "@testing-library/react";
-import userEvent from "@testing-library/user-event";
+  ProjectId,
+  SectionResult,
+  TenantId,
+  UserId,
+} from "@enterprise-search/api-types";
+import { fireEvent, render, screen } from "@testing-library/react";
 import { describe, expect, it, vi } from "vitest";
 
 import { RouterProvider } from "../../providers/RouterProvider";
-import { TransportProvider } from "../../providers/TransportProvider";
-import type {
-  ArtifactRoute,
-  NavigateOptions,
-  Router,
-} from "../../routing/router";
+import type { ArtifactRoute, Router } from "../../routing/router";
 
-import type { ProjectId } from "@enterprise-search/api-types";
+// Importing the destination's index registers kind `"project"` so
+// the `<ItemLink kind="project">` on each card resolves without
+// throwing.
+import "./index";
 
-import { ProjectsDestination, type Project } from "./ProjectsDestination";
+// TODO(merge): rewire to "@enterprise-search/api-types"
+import type { ProjectSummary } from "./_projects-stub";
 
-interface DeferredTransport {
-  readonly transport: Transport;
-  resolve(response: unknown): void;
-  reject(err: Error): void;
-  reset(): void;
-  readonly calls: ReadonlyArray<TypedRequest>;
-}
+import {
+  ProjectsDestination,
+  type ProjectsDestinationProps,
+} from "./ProjectsDestination";
 
-function makeDeferredTransport(initial?: unknown): DeferredTransport {
-  let resolver: ((value: unknown) => void) | null = null;
-  let rejecter: ((err: Error) => void) | null = null;
-  const calls: TypedRequest[] = [];
+// ===========================================================================
+// Helpers
+// ===========================================================================
 
-  function newPromise(): Promise<unknown> {
-    return new Promise<unknown>((resolve, reject) => {
-      resolver = resolve;
-      rejecter = reject;
-    });
-  }
-
-  let pending: Promise<unknown> = newPromise();
-
-  const transport: Transport = {
-    request<TRes>(req: TypedRequest): Promise<TRes> {
-      calls.push(req);
-      return pending as Promise<TRes>;
-    },
-    subscribeServerSentEvents(_opts: SseSubscribeOptions): SseSubscription {
-      return { close: () => {} };
-    },
-    getSession(): Session {
-      return { bearer: null };
-    },
-    capabilities(): TransportCapabilities {
-      return {
-        substrate: "web",
-        nativeSecretStorage: false,
-        fileSystemAccess: false,
-        clipboardWrite: false,
-        openExternal: false,
-      };
-    },
-  };
-
-  if (initial !== undefined) {
-    Promise.resolve().then(() => resolver?.(initial));
-  }
-
-  return {
-    transport,
-    resolve(response) {
-      resolver?.(response);
-    },
-    reject(err) {
-      rejecter?.(err);
-    },
-    reset() {
-      pending = newPromise();
-    },
-    get calls(): ReadonlyArray<TypedRequest> {
-      return calls;
-    },
-  };
-}
+const asProjectId = (s: string): ProjectId => s as unknown as ProjectId;
+const asTenantId = (s: string): TenantId => s as unknown as TenantId;
+const asUserId = (s: string): UserId => s as unknown as UserId;
 
 function makeRouter(): Router<ArtifactRoute> & {
-  readonly navigate: ReturnType<typeof vi.fn>;
+  navigate: ReturnType<typeof vi.fn>;
 } {
-  const navigate =
-    vi.fn<(route: ArtifactRoute, opts?: NavigateOptions) => void>();
+  let current: ArtifactRoute | null = null;
+  const subscribers = new Set<(r: ArtifactRoute) => void>();
+  const navigate = vi.fn((r: ArtifactRoute) => {
+    current = r;
+    for (const s of subscribers) s(r);
+  });
   return {
     current(): ArtifactRoute {
-      return { kind: "workspace", workspaceId: "current" };
+      if (current === null) throw new Error("no route");
+      return current;
     },
     navigate,
-    subscribe: () => () => {},
+    subscribe(handler) {
+      subscribers.add(handler);
+      return () => subscribers.delete(handler);
+    },
   };
 }
 
-const SAMPLE: ReadonlyArray<Project> = [
-  {
-    id: "proj-1" as ProjectId,
-    name: "Q4 sales push",
-    lastActivityAt: new Date(Date.now() - 5 * 60_000).toISOString(),
-    chatCount: 12,
-    ownerName: "Sarah Chen",
-  },
-  {
-    id: "proj-2" as ProjectId,
-    name: "Onboarding redesign",
-    lastActivityAt: new Date(Date.now() - 3 * 3_600_000).toISOString(),
-    chatCount: 1,
-    ownerName: "Marcus Wells",
-    ownerAvatarUrl: "https://example.com/marcus.png",
-  },
-];
+function renderDest(props: ProjectsDestinationProps = {}): void {
+  const router = makeRouter();
+  render(
+    <RouterProvider router={router}>
+      <ProjectsDestination {...props} />
+    </RouterProvider>,
+  );
+}
 
-function renderProjects(deferred: DeferredTransport, router = makeRouter()) {
+// ===========================================================================
+// Fixtures
+// ===========================================================================
+
+const NOW = Date.parse("2026-05-17T12:00:00.000Z");
+
+function ok<T>(data: T): SectionResult<T> {
+  return { status: "ok", data };
+}
+
+function makeProject(over: Partial<ProjectSummary>): ProjectSummary {
   return {
-    router,
-    ...render(
-      <TransportProvider transport={deferred.transport}>
-        <RouterProvider router={router}>
-          <ProjectsDestination />
-        </RouterProvider>
-      </TransportProvider>,
-    ),
+    id: asProjectId("proj_default"),
+    tenant_id: asTenantId("tenant_1"),
+    name: "Default project",
+    description: "",
+    icon_emoji: "📁",
+    color_hue: 180,
+    status: "active",
+    owner_user_id: asUserId("usr_alice"),
+    owner_display_name: "Alice",
+    viewer_role: "owner",
+    viewer_starred: false,
+    counts: {
+      chats: 0,
+      todos_open: 0,
+      todos_done: 0,
+      inbox_items: 0,
+      library_items: 0,
+      routines_active: 0,
+      members: 1,
+    },
+    last_activity_at: null,
+    updated_at: "2026-05-15T10:00:00.000Z",
+    ...over,
   };
 }
 
-async function flushMicrotasks(): Promise<void> {
-  await act(async () => {
-    await Promise.resolve();
-    await Promise.resolve();
-  });
-}
+const ACME = makeProject({
+  id: asProjectId("proj_acme"),
+  name: "Acme renewal",
+  description: "Push the Q4 renewal across the line.",
+  status: "active",
+  viewer_starred: true,
+  counts: {
+    chats: 12,
+    todos_open: 4,
+    todos_done: 2,
+    inbox_items: 1,
+    library_items: 7,
+    routines_active: 2,
+    members: 5,
+  },
+  last_activity_at: "2026-05-17T09:30:00.000Z",
+});
+const ONBOARDING = makeProject({
+  id: asProjectId("proj_onboard"),
+  name: "Onboarding redesign",
+  status: "active",
+  viewer_starred: false,
+});
+const ARCHIVED = makeProject({
+  id: asProjectId("proj_old"),
+  name: "Q1 launch",
+  status: "archived",
+  viewer_starred: false,
+});
+
+// ===========================================================================
+// Tests
+// ===========================================================================
 
 describe("ProjectsDestination", () => {
-  it("renders a skeleton grid while the projects request is pending", () => {
-    const deferred = makeDeferredTransport();
-    renderProjects(deferred);
-    const grid = screen.getByTestId("projects-grid");
-    expect(grid).toHaveAttribute("data-state", "loading");
+  it("renders the loading skeleton when items is null", () => {
+    renderDest({ items: null });
+    const root = screen.getByTestId("projects-destination");
+    expect(root).toHaveAttribute("data-state", "loading");
     expect(screen.getAllByTestId("projects-skeleton-card")).toHaveLength(6);
-    expect(deferred.calls).toHaveLength(1);
-    expect(deferred.calls[0]).toEqual({
-      method: "GET",
-      path: "/v1/projects",
-    });
   });
 
-  it("renders project cards when the request resolves with data", async () => {
-    const deferred = makeDeferredTransport();
-    renderProjects(deferred);
-    await act(async () => {
-      deferred.resolve({ projects: SAMPLE });
-      await Promise.resolve();
+  it("renders the error empty-state with retry when items.status is error", () => {
+    const onRetry = vi.fn();
+    renderDest({
+      items: { status: "error", error: "network down" },
+      onRetry,
     });
-    const cards = screen.getAllByTestId("project-card");
-    expect(cards).toHaveLength(2);
-    expect(screen.getByText("Q4 sales push")).toBeInTheDocument();
-    expect(screen.getByText("Onboarding redesign")).toBeInTheDocument();
-    expect(screen.getByText("12 chats")).toBeInTheDocument();
-    expect(screen.getByText("1 chat")).toBeInTheDocument();
-    expect(screen.getByText("SC")).toBeInTheDocument();
-  });
-
-  it("clicking a card navigates via the router with a workspace route", async () => {
-    const deferred = makeDeferredTransport();
-    const { router } = renderProjects(deferred);
-    await act(async () => {
-      deferred.resolve({ projects: SAMPLE });
-      await Promise.resolve();
-    });
-    fireEvent.click(screen.getByRole("button", { name: /q4 sales push/i }));
-    expect(router.navigate).toHaveBeenCalledWith({
-      kind: "workspace",
-      workspaceId: "proj-1",
-    });
-  });
-
-  it("renders the empty state when the request resolves with no projects", async () => {
-    const deferred = makeDeferredTransport();
-    renderProjects(deferred);
-    await act(async () => {
-      deferred.resolve({ projects: [] });
-      await Promise.resolve();
-    });
-    expect(screen.getByTestId("projects-empty")).toBeInTheDocument();
-    expect(screen.getByText("No projects yet")).toBeInTheDocument();
-    expect(screen.getByTestId("projects-new-trigger")).toBeInTheDocument();
-  });
-
-  it("renders the error panel when the request rejects and retries on click", async () => {
-    const deferred = makeDeferredTransport();
-    renderProjects(deferred);
-    await act(async () => {
-      deferred.reject(new Error("network down"));
-      await Promise.resolve();
-    });
-    const errorPanel = screen.getByTestId("projects-error");
-    expect(errorPanel).toBeInTheDocument();
-    expect(screen.getByText("network down")).toBeInTheDocument();
-
-    deferred.reset();
-    fireEvent.click(screen.getByTestId("projects-retry"));
-    expect(screen.getByTestId("projects-grid")).toHaveAttribute(
+    expect(screen.getByTestId("projects-destination")).toHaveAttribute(
       "data-state",
-      "loading",
+      "error",
     );
-    await act(async () => {
-      deferred.resolve({ projects: SAMPLE });
-      await Promise.resolve();
-    });
-    expect(screen.getAllByTestId("project-card")).toHaveLength(2);
+    expect(screen.getByText("Could not load projects")).toBeInTheDocument();
+    expect(screen.getByText("network down")).toBeInTheDocument();
+    fireEvent.click(screen.getByTestId("empty-state-action"));
+    expect(onRetry).toHaveBeenCalledTimes(1);
   });
 
-  it("creates a new project via Transport and prepends it to the list", async () => {
-    const deferred = makeDeferredTransport();
-    renderProjects(deferred);
-    await act(async () => {
-      deferred.resolve({ projects: SAMPLE });
-      await Promise.resolve();
+  it("renders the unavailable empty-state when items.status is unavailable", () => {
+    renderDest({
+      items: { status: "unavailable", error: "feature flag off" },
     });
-    deferred.reset();
+    expect(screen.getByTestId("projects-destination")).toHaveAttribute(
+      "data-state",
+      "unavailable",
+    );
+    expect(screen.getByText("Projects unavailable")).toBeInTheDocument();
+  });
 
-    const user = userEvent.setup();
-    await user.click(screen.getByTestId("projects-new-trigger"));
-    const input = screen.getByTestId("projects-new-input");
-    await user.type(input, "New initiative");
-    await user.click(screen.getByTestId("projects-new-submit"));
+  it("renders the empty state when ready with no projects", () => {
+    const onCreateProject = vi.fn();
+    renderDest({ items: ok([]), onCreateProject });
+    expect(screen.getByText("No projects yet")).toBeInTheDocument();
+    fireEvent.click(screen.getByTestId("empty-state-action"));
+    expect(onCreateProject).toHaveBeenCalledTimes(1);
+  });
 
-    const created: Project = {
-      id: "proj-new" as ProjectId,
-      name: "New initiative",
-      lastActivityAt: new Date().toISOString(),
-      chatCount: 0,
-      ownerName: "Sarah Chen",
-    };
-    await act(async () => {
-      deferred.resolve(created);
-      await Promise.resolve();
-    });
-    await flushMicrotasks();
-
+  it("renders one CardGrid card per project in the ready state", () => {
+    renderDest({ items: ok([ACME, ONBOARDING, ARCHIVED]), now: NOW });
+    expect(screen.getByTestId("projects-destination")).toHaveAttribute(
+      "data-state",
+      "ready",
+    );
     const cards = screen.getAllByTestId("project-card");
     expect(cards).toHaveLength(3);
-    expect(cards[0]!.getAttribute("data-project-id")).toBe("proj-new");
+    expect(cards[0]!.getAttribute("data-project-id")).toBe("proj_acme");
+    expect(
+      screen.getByText("Push the Q4 renewal across the line."),
+    ).toBeInTheDocument();
+    expect(screen.getByTestId("card-grid")).toBeInTheDocument();
+  });
 
-    const lastCall = deferred.calls[deferred.calls.length - 1]!;
-    expect(lastCall).toEqual({
-      method: "POST",
-      path: "/v1/projects",
-      body: { name: "New initiative" },
+  it("renders the status filter chips and fires onFilterChange on click", () => {
+    const onFilterChange = vi.fn();
+    renderDest({
+      items: ok([ACME, ONBOARDING, ARCHIVED]),
+      filter: "all",
+      onFilterChange,
+      counts: { all: 3, active: 2, archived: 1, starred: 1 },
     });
+    for (const slug of ["all", "active", "archived", "starred"]) {
+      expect(screen.getByTestId(`filter-tab-${slug}`)).toBeInTheDocument();
+    }
+    fireEvent.click(screen.getByTestId("filter-tab-starred"));
+    expect(onFilterChange).toHaveBeenCalledWith("starred");
+  });
+
+  it("shows the New project primary action when onCreateProject is supplied", () => {
+    const onCreateProject = vi.fn();
+    renderDest({ items: ok([ACME]), onCreateProject });
+    fireEvent.click(screen.getByTestId("page-header-primary-action"));
+    expect(onCreateProject).toHaveBeenCalledTimes(1);
+  });
+
+  it("calls onArchiveProject when the Archive action is clicked on an active card", () => {
+    const onArchiveProject = vi.fn();
+    renderDest({ items: ok([ACME]), onArchiveProject });
+    fireEvent.click(screen.getByTestId("project-card-archive"));
+    expect(onArchiveProject).toHaveBeenCalledWith(ACME.id);
+  });
+
+  it("calls onActivateProject when the Activate action is clicked on an archived card", () => {
+    const onActivateProject = vi.fn();
+    renderDest({ items: ok([ARCHIVED]), onActivateProject });
+    fireEvent.click(screen.getByTestId("project-card-activate"));
+    expect(onActivateProject).toHaveBeenCalledWith(ARCHIVED.id);
+  });
+
+  it("calls onStarProject when the star button is clicked on an unstarred card", () => {
+    const onStarProject = vi.fn();
+    renderDest({ items: ok([ONBOARDING]), onStarProject });
+    fireEvent.click(screen.getByTestId("project-card-star"));
+    expect(onStarProject).toHaveBeenCalledWith(ONBOARDING.id);
+  });
+
+  it("calls onUnstarProject when the unstar button is clicked on a starred card", () => {
+    const onUnstarProject = vi.fn();
+    renderDest({ items: ok([ACME]), onUnstarProject });
+    fireEvent.click(screen.getByTestId("project-card-unstar"));
+    expect(onUnstarProject).toHaveBeenCalledWith(ACME.id);
+  });
+
+  it("renders the detail slot when renderDetail + focusedProjectId are supplied", () => {
+    const renderDetail = vi.fn(({ projectId }) => (
+      <div data-testid="my-detail">{projectId}</div>
+    ));
+    renderDest({
+      items: ok([ACME, ONBOARDING]),
+      renderDetail,
+      focusedProjectId: ACME.id,
+    });
+    expect(screen.getByTestId("projects-detail-slot")).toBeInTheDocument();
+    expect(screen.getByTestId("my-detail")).toHaveTextContent("proj_acme");
+    // List body is suppressed while the detail slot is mounted.
+    expect(screen.queryByTestId("project-card")).not.toBeInTheDocument();
+  });
+
+  it("calls onCloseDetail when the slot invokes onClose", () => {
+    const onCloseDetail = vi.fn();
+    renderDest({
+      items: ok([ACME]),
+      renderDetail: ({ onClose }) => (
+        <button type="button" data-testid="close-detail" onClick={onClose}>
+          close
+        </button>
+      ),
+      focusedProjectId: ACME.id,
+      onCloseDetail,
+    });
+    fireEvent.click(screen.getByTestId("close-detail"));
+    expect(onCloseDetail).toHaveBeenCalledTimes(1);
   });
 });

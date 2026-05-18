@@ -1,524 +1,188 @@
+// Projects — destination shell (P6-B1).
+//
+// Pure-presentation list view per projects-prd §3.2:
+//
+//   1. PageHeader (cross-audit §1.6 shape) — title, subtitle with counts
+//      (active / archived / mine), "New project" primary action.
+//   2. FilterTabs — status axis: All / Active / Archived / Starred
+//      (projects-prd §3.2 #2 minus "mine" which lands in P6-B2 once
+//      caller identity wiring is plumbed). Selected slug + counts driven
+//      by host.
+//   3. CardGrid body — one card per project. Each card surfaces:
+//        - icon + name + ⭐ starred indicator + viewer-role chip
+//        - description (1 line, truncated)
+//        - StatusPill (active / archived)
+//        - ItemLink chips for activity counts (chats / todos / library /
+//          routines) — chips ARE links; clicking opens the destination
+//          filtered to this project (§9 cross-destination filter pattern).
+//
+// Mirrors P5-B1's Routines shell shape (loading skeleton -> SectionResult
+// error/unavailable branches -> ready). Same render-prop seam for the
+// detail pane (P6-B2 layers detail; P6-B3 layers activity tab — both
+// ship later as separate files).
+//
+// Hard correctness rules:
+//   - SP-1 primitives only (PageHeader / FilterTabs / CardGrid / StatusPill
+//     / EmptyState / ItemLink). No custom buttons.
+//   - ItemLink for every cross-destination ref (project itself, activity
+//     count chips). Direct router.navigate from rows is forbidden
+//     (cross-audit §1.1 + §3.3).
+//   - Pure presentation: no fetch, no router calls, no SSE — the host
+//     (apps/frontend P6-C) wires those.
+//
+// `_projects-stub.ts` carries wire-types until P6-A1's api-types land.
+// Every import is marked `TODO(merge): rewire to "@enterprise-search/api-types"`.
+
 import {
-  useCallback,
-  useEffect,
   useMemo,
-  useRef,
-  useState,
   type CSSProperties,
-  type FormEvent,
-  type KeyboardEvent as ReactKeyboardEvent,
   type ReactElement,
+  type ReactNode,
 } from "react";
 
-import type { ProjectId } from "@enterprise-search/api-types";
+import type { ProjectId, SectionResult } from "@enterprise-search/api-types";
 
-import { useRouter } from "../../providers/RouterProvider";
-import { useTransport } from "../../providers/TransportProvider";
-import type { ArtifactRoute } from "../../routing/router";
+import { CardGrid } from "../../shell/CardGrid";
+import { EmptyState } from "../../shell/EmptyState";
+import { FilterTabs, type FilterTabOption } from "../../shell/FilterTabs";
+import { PageHeader } from "../../shell/PageHeader";
+import { StatusPill, type StatusTone } from "../../shell/StatusPill";
+import { ItemLink } from "../../refs/ItemLink";
 import { formatRelativeTime } from "../../util/time";
 
-export interface Project {
-  readonly id: ProjectId;
-  readonly name: string;
-  readonly lastActivityAt: string;
-  readonly chatCount: number;
-  readonly ownerName: string;
-  readonly ownerAvatarUrl?: string;
+// TODO(merge): rewire to "@enterprise-search/api-types"
+import type { ProjectStatus, ProjectSummary } from "./_projects-stub";
+
+// ===========================================================================
+// Filter slug
+// ===========================================================================
+//
+// Single source of truth for the status filter axis. The slugs match
+// projects-prd §3.2 #2 except "mine" (deferred to P6-B2 once viewer-role
+// wiring is plumbed). "all" is the default (no server filter).
+
+export type ProjectsFilterSlug = "all" | "active" | "archived" | "starred";
+
+const FILTER_ORDER: ReadonlyArray<ProjectsFilterSlug> = [
+  "all",
+  "active",
+  "archived",
+  "starred",
+];
+
+const FILTER_LABEL: Readonly<Record<ProjectsFilterSlug, string>> = {
+  all: "All",
+  active: "Active",
+  archived: "Archived",
+  starred: "Starred",
+};
+
+/** Per-filter counts driven by the host (same query result feeds list +
+ *  filter chips so they don't drift). */
+export type ProjectsFilterCounts = Readonly<Record<ProjectsFilterSlug, number>>;
+
+// ===========================================================================
+// Public props
+// ===========================================================================
+
+/** Slot for P6-B2's detail / P6-B3's activity pane. Rendered in place of
+ *  the grid body when `focusedProjectId` is set. */
+export type RenderProjectDetailSlot = (props: {
+  readonly projectId: ProjectId;
+  readonly onClose: () => void;
+}) => ReactNode;
+
+export interface ProjectsDestinationProps {
+  /**
+   * Server-projected list result. `null` = loading skeleton; `error`
+   * shows the destination-level error empty-state with retry; `ok`
+   * renders the filtered list.
+   *
+   * `items` is wrapped in `SectionResult` even though `/v1/projects` is
+   * a non-aggregating endpoint (cross-audit §2.3 only mandates the
+   * wrapper for aggregators) — same rationale as Inbox / Routines: a
+   * uniform "couldn't load" branch without inventing a second error path.
+   */
+  readonly items?: SectionResult<ReadonlyArray<ProjectSummary>> | null;
+
+  /** Active status-filter slug. Defaults to "all". */
+  readonly filter?: ProjectsFilterSlug;
+  readonly onFilterChange?: (next: ProjectsFilterSlug) => void;
+
+  /** Per-filter counts. When omitted, chips render without count chips. */
+  readonly counts?: ProjectsFilterCounts;
+
+  /** "New project" CTA — pivots the host into the editor (P6-B2). */
+  readonly onCreateProject?: () => void;
+
+  /** Per-row hover actions — wired by the host (P6-C) so the shell stays
+   *  pure presentation. */
+  readonly onArchiveProject?: (id: ProjectId) => void;
+  readonly onActivateProject?: (id: ProjectId) => void;
+  readonly onStarProject?: (id: ProjectId) => void;
+  readonly onUnstarProject?: (id: ProjectId) => void;
+
+  /** Retry callback when `items.status === "error"`. */
+  readonly onRetry?: () => void;
+
+  /** P6-B2 detail slot. When supplied AND `focusedProjectId` is set,
+   *  the slot replaces the grid body. */
+  readonly renderDetail?: RenderProjectDetailSlot;
+  readonly focusedProjectId?: ProjectId | null;
+  readonly onCloseDetail?: () => void;
+
+  /** Reference instant — test seam for relative-time formatting. */
+  readonly now?: number;
 }
 
-interface ProjectsResponse {
-  readonly projects: ReadonlyArray<Project>;
-}
+// ===========================================================================
+// Top-level shell
+// ===========================================================================
 
-type ViewState =
-  | { readonly kind: "loading" }
-  | { readonly kind: "error"; readonly message: string }
-  | { readonly kind: "ready"; readonly projects: ReadonlyArray<Project> };
+export function ProjectsDestination(
+  props: ProjectsDestinationProps = {},
+): ReactElement {
+  const {
+    items = null,
+    filter = "all",
+    onFilterChange,
+    counts,
+    onCreateProject,
+    onArchiveProject,
+    onActivateProject,
+    onStarProject,
+    onUnstarProject,
+    onRetry,
+    renderDetail,
+    focusedProjectId = null,
+    onCloseDetail,
+    now,
+  } = props;
 
-// Design tokens (see packages/design-system/src/styles.css). Names are kept
-// for readability at use-sites; values are CSS variables so Settings →
-// Appearance theme/accent changes flow through automatically.
-const APP_BACKGROUND = "var(--color-bg)";
-const PANEL_BACKGROUND = "var(--color-surface)";
-const PANEL_BORDER = "var(--color-border)";
-const PANEL_BORDER_STRONG = "var(--color-border-strong)";
-const TEXT_PRIMARY = "var(--color-text)";
-const TEXT_SECONDARY = "var(--color-text-muted)";
-const TEXT_FAINT = "var(--color-text-subtle)";
-const ACCENT = "var(--color-accent)";
-const ACCENT_CONTRAST = "var(--color-accent-contrast)";
-const DANGER = "var(--color-danger)";
-const SKELETON_FILL = "var(--color-surface-muted)";
-const AVATAR_BG = "var(--color-border-strong)";
-
-const SKELETON_CARD_COUNT = 6;
-
-function initialsOf(name: string): string {
-  const cleaned = name.trim();
-  if (cleaned.length === 0) return "?";
-  const parts = cleaned.split(/\s+/);
-  if (parts.length === 1) return parts[0]!.slice(0, 2).toUpperCase();
-  return (parts[0]![0]! + parts[parts.length - 1]![0]!).toUpperCase();
-}
-
-function ProjectAvatar({
-  ownerName,
-  ownerAvatarUrl,
-}: {
-  ownerName: string;
-  ownerAvatarUrl?: string;
-}): ReactElement {
-  const wrapper: CSSProperties = {
-    width: 28,
-    height: 28,
-    borderRadius: "50%",
-    overflow: "hidden",
-    flexShrink: 0,
-    backgroundColor: AVATAR_BG,
-    color: TEXT_PRIMARY,
-    display: "flex",
-    alignItems: "center",
-    justifyContent: "center",
-    fontSize: 11,
-    fontWeight: 600,
-  };
-  if (ownerAvatarUrl !== undefined && ownerAvatarUrl.length > 0) {
-    return (
-      <img
-        src={ownerAvatarUrl}
-        alt={ownerName}
-        style={{ ...wrapper, objectFit: "cover" }}
-      />
-    );
-  }
-  return (
-    <div
-      role="img"
-      aria-label={ownerName}
-      title={ownerName}
-      style={wrapper}
-      data-testid="project-card-avatar-initials"
-    >
-      {initialsOf(ownerName)}
-    </div>
-  );
-}
-
-function SkeletonCard({ index }: { index: number }): ReactElement {
-  const style: CSSProperties = {
-    height: 116,
-    borderRadius: 10,
-    border: `1px solid ${PANEL_BORDER}`,
-    backgroundColor: PANEL_BACKGROUND,
-    padding: 16,
-    display: "flex",
-    flexDirection: "column",
-    gap: 10,
-    opacity: 0.7,
-  };
-  const bar: CSSProperties = {
-    backgroundColor: SKELETON_FILL,
-    borderRadius: 4,
-    height: 12,
-  };
-  return (
-    <div
-      style={style}
-      data-testid="projects-skeleton-card"
-      data-skeleton-index={index}
-      aria-hidden="true"
-    >
-      <div style={{ ...bar, width: "60%", height: 14 }} />
-      <div style={{ ...bar, width: "40%" }} />
-      <div style={{ flex: 1 }} />
-      <div style={{ ...bar, width: "30%" }} />
-    </div>
-  );
-}
-
-function ProjectCard({
-  project,
-  onOpen,
-}: {
-  project: Project;
-  onOpen: (project: Project) => void;
-}): ReactElement {
-  const card: CSSProperties = {
-    height: 116,
-    borderRadius: 10,
-    border: `1px solid ${PANEL_BORDER}`,
-    backgroundColor: PANEL_BACKGROUND,
-    padding: 16,
-    display: "flex",
-    flexDirection: "column",
-    gap: 8,
-    textAlign: "left",
-    color: TEXT_PRIMARY,
-    cursor: "pointer",
-    boxSizing: "border-box",
-  };
-  const nameStyle: CSSProperties = {
-    fontSize: 14,
-    fontWeight: 600,
-    overflow: "hidden",
-    textOverflow: "ellipsis",
-    whiteSpace: "nowrap",
-  };
-  const metaStyle: CSSProperties = {
-    fontSize: 12,
-    color: TEXT_SECONDARY,
-    display: "flex",
-    justifyContent: "space-between",
-    alignItems: "center",
-  };
-  const footerStyle: CSSProperties = {
-    marginTop: "auto",
-    display: "flex",
-    alignItems: "center",
-    gap: 8,
-    fontSize: 12,
-    color: TEXT_SECONDARY,
-  };
-  return (
-    <button
-      type="button"
-      onClick={() => onOpen(project)}
-      style={card}
-      aria-label={`Open project ${project.name}`}
-      data-testid="project-card"
-      data-project-id={project.id}
-    >
-      <div style={nameStyle}>{project.name}</div>
-      <div style={metaStyle}>
-        <span>{formatRelativeTime(project.lastActivityAt)}</span>
-        <span>
-          {project.chatCount} chat{project.chatCount === 1 ? "" : "s"}
-        </span>
-      </div>
-      <div style={footerStyle}>
-        <ProjectAvatar
-          ownerName={project.ownerName}
-          ownerAvatarUrl={project.ownerAvatarUrl}
-        />
-        <span
-          style={{
-            overflow: "hidden",
-            textOverflow: "ellipsis",
-            whiteSpace: "nowrap",
-          }}
-        >
-          {project.ownerName}
-        </span>
-      </div>
-    </button>
-  );
-}
-
-function NewProjectControl({
-  onCreate,
-}: {
-  onCreate: (name: string) => Promise<void>;
-}): ReactElement {
-  const [open, setOpen] = useState(false);
-  const [name, setName] = useState("");
-  const [submitting, setSubmitting] = useState(false);
-  const [error, setError] = useState<string | null>(null);
-  const inputRef = useRef<HTMLInputElement>(null);
-
-  useEffect(() => {
-    if (open) inputRef.current?.focus();
-  }, [open]);
-
-  const close = useCallback(() => {
-    setOpen(false);
-    setName("");
-    setError(null);
-    setSubmitting(false);
-  }, []);
-
-  const submit = useCallback(
-    async (event?: FormEvent<HTMLFormElement>) => {
-      if (event !== undefined) event.preventDefault();
-      const trimmed = name.trim();
-      if (trimmed.length === 0) return;
-      setSubmitting(true);
-      setError(null);
-      try {
-        await onCreate(trimmed);
-        close();
-      } catch (e) {
-        const message = e instanceof Error ? e.message : "Failed to create";
-        setError(message);
-        setSubmitting(false);
-      }
-    },
-    [name, onCreate, close],
+  // === Filter chip options (single source of truth) =====================
+  const filterOptions = useMemo<
+    ReadonlyArray<FilterTabOption<ProjectsFilterSlug>>
+  >(
+    () =>
+      FILTER_ORDER.map((slug) => ({
+        slug,
+        label: FILTER_LABEL[slug],
+        count: counts?.[slug],
+      })),
+    [counts],
   );
 
-  const onKeyDown = useCallback(
-    (event: ReactKeyboardEvent<HTMLInputElement>) => {
-      if (event.key === "Escape") {
-        event.preventDefault();
-        close();
-      }
-    },
-    [close],
-  );
-
-  const triggerStyle: CSSProperties = {
-    height: 36,
-    padding: "0 14px",
-    borderRadius: 8,
-    border: `1px solid ${PANEL_BORDER_STRONG}`,
-    backgroundColor: "transparent",
-    color: ACCENT,
-    fontSize: 13,
-    fontWeight: 600,
-    cursor: "pointer",
-    display: "inline-flex",
-    alignItems: "center",
-    gap: 6,
-  };
-  const formStyle: CSSProperties = {
-    display: "flex",
-    gap: 8,
-    alignItems: "center",
-  };
-  const inputStyle: CSSProperties = {
-    flex: 1,
-    height: 36,
-    padding: "0 12px",
-    borderRadius: 8,
-    border: `1px solid ${PANEL_BORDER_STRONG}`,
-    backgroundColor: PANEL_BACKGROUND,
-    color: TEXT_PRIMARY,
-    fontSize: 13,
-    outline: "none",
-  };
-  const submitStyle: CSSProperties = {
-    height: 36,
-    padding: "0 14px",
-    borderRadius: 8,
-    border: "none",
-    backgroundColor: ACCENT,
-    color: ACCENT_CONTRAST,
-    fontSize: 13,
-    fontWeight: 600,
-    cursor: "pointer",
-    opacity: submitting || name.trim().length === 0 ? 0.6 : 1,
-  };
-  const cancelStyle: CSSProperties = {
-    height: 36,
-    padding: "0 12px",
-    borderRadius: 8,
-    border: `1px solid ${PANEL_BORDER}`,
-    backgroundColor: "transparent",
-    color: TEXT_SECONDARY,
-    fontSize: 13,
-    cursor: "pointer",
-  };
-  const errorStyle: CSSProperties = {
-    color: DANGER,
-    fontSize: 12,
-    marginTop: 6,
+  const handleFilterChange = (next: ProjectsFilterSlug): void => {
+    if (onFilterChange !== undefined) onFilterChange(next);
   };
 
-  if (!open) {
-    return (
-      <button
-        type="button"
-        onClick={() => setOpen(true)}
-        style={triggerStyle}
-        data-testid="projects-new-trigger"
-        aria-label="New project"
-      >
-        + New project
-      </button>
-    );
-  }
-  return (
-    <div data-testid="projects-new-form-wrapper">
-      <form onSubmit={submit} style={formStyle} aria-label="New project form">
-        <input
-          ref={inputRef}
-          type="text"
-          value={name}
-          placeholder="Project name"
-          aria-label="Project name"
-          onChange={(e) => setName(e.target.value)}
-          onKeyDown={onKeyDown}
-          style={inputStyle}
-          disabled={submitting}
-          data-testid="projects-new-input"
-        />
-        <button
-          type="submit"
-          style={submitStyle}
-          disabled={submitting || name.trim().length === 0}
-          data-testid="projects-new-submit"
-        >
-          {submitting ? "Creating…" : "Create"}
-        </button>
-        <button
-          type="button"
-          onClick={close}
-          style={cancelStyle}
-          disabled={submitting}
-        >
-          Cancel
-        </button>
-      </form>
-      {error !== null ? (
-        <div style={errorStyle} role="alert" data-testid="projects-new-error">
-          {error}
-        </div>
-      ) : null}
-    </div>
-  );
-}
-
-function ErrorPanel({
-  message,
-  onRetry,
-}: {
-  message: string;
-  onRetry: () => void;
-}): ReactElement {
-  const wrapper: CSSProperties = {
-    border: `1px solid ${PANEL_BORDER}`,
-    borderRadius: 12,
-    backgroundColor: PANEL_BACKGROUND,
-    padding: 32,
-    textAlign: "center",
-    color: TEXT_PRIMARY,
-    display: "flex",
-    flexDirection: "column",
-    alignItems: "center",
-    gap: 12,
-  };
-  const subStyle: CSSProperties = { color: TEXT_SECONDARY, fontSize: 13 };
-  const retryStyle: CSSProperties = {
-    height: 32,
-    padding: "0 14px",
-    borderRadius: 8,
-    border: `1px solid ${PANEL_BORDER_STRONG}`,
-    backgroundColor: "transparent",
-    color: ACCENT,
-    fontSize: 13,
-    fontWeight: 600,
-    cursor: "pointer",
-  };
-  return (
-    <div
-      role="alert"
-      style={wrapper}
-      data-testid="projects-error"
-      data-state="error"
-    >
-      <div style={{ fontSize: 14, fontWeight: 600 }}>
-        Could not load projects
-      </div>
-      <div style={subStyle}>{message}</div>
-      <button
-        type="button"
-        onClick={onRetry}
-        style={retryStyle}
-        data-testid="projects-retry"
-      >
-        Retry
-      </button>
-    </div>
-  );
-}
-
-function EmptyState({
-  onCreate,
-}: {
-  onCreate: (name: string) => Promise<void>;
-}): ReactElement {
-  const wrapper: CSSProperties = {
-    border: `1px dashed ${PANEL_BORDER_STRONG}`,
-    borderRadius: 12,
-    padding: 48,
-    textAlign: "center",
-    color: TEXT_PRIMARY,
-    display: "flex",
-    flexDirection: "column",
-    alignItems: "center",
-    gap: 14,
-  };
-  return (
-    <div role="status" style={wrapper} data-testid="projects-empty">
-      <div style={{ fontSize: 16, fontWeight: 600 }}>No projects yet</div>
-      <div style={{ color: TEXT_FAINT, fontSize: 13, maxWidth: 420 }}>
-        Group related chats, runs, and saved artifacts into projects. Create the
-        first one to get started.
-      </div>
-      <NewProjectControl onCreate={onCreate} />
-    </div>
-  );
-}
-
-export function ProjectsDestination(): ReactElement {
-  const transport = useTransport();
-  const router = useRouter<ArtifactRoute>();
-  const [state, setState] = useState<ViewState>({ kind: "loading" });
-  const [reloadToken, setReloadToken] = useState(0);
-
-  useEffect(() => {
-    let cancelled = false;
-    setState({ kind: "loading" });
-    transport
-      .request<ProjectsResponse>({ method: "GET", path: "/v1/projects" })
-      .then((response) => {
-        if (cancelled) return;
-        setState({ kind: "ready", projects: response.projects });
-      })
-      .catch((error: unknown) => {
-        if (cancelled) return;
-        const message =
-          error instanceof Error ? error.message : "Network error";
-        setState({ kind: "error", message });
-      });
-    return () => {
-      cancelled = true;
-    };
-  }, [transport, reloadToken]);
-
-  const handleOpen = useCallback(
-    (project: Project) => {
-      router.navigate({ kind: "workspace", workspaceId: project.id });
-    },
-    [router],
-  );
-
-  const handleCreate = useCallback(
-    async (name: string): Promise<void> => {
-      const created = await transport.request<Project>({
-        method: "POST",
-        path: "/v1/projects",
-        body: { name },
-      });
-      setState((prev) => {
-        if (prev.kind !== "ready") {
-          return { kind: "ready", projects: [created] };
-        }
-        return { kind: "ready", projects: [created, ...prev.projects] };
-      });
-    },
-    [transport],
-  );
-
-  const handleRetry = useCallback(() => {
-    setReloadToken((t) => t + 1);
-  }, []);
-
+  // === Styles ===========================================================
   const rootStyle: CSSProperties = {
     width: "100%",
     height: "100%",
     minHeight: 0,
-    backgroundColor: APP_BACKGROUND,
-    color: TEXT_PRIMARY,
+    backgroundColor: "var(--color-bg)",
+    color: "var(--color-text)",
     boxSizing: "border-box",
     display: "flex",
     flexDirection: "column",
@@ -532,72 +196,416 @@ export function ProjectsDestination(): ReactElement {
     boxSizing: "border-box",
     display: "flex",
     flexDirection: "column",
-    gap: 20,
-  };
-  const headerStyle: CSSProperties = {
-    display: "flex",
-    alignItems: "center",
-    justifyContent: "space-between",
-    gap: 12,
-  };
-  const titleStyle: CSSProperties = {
-    fontSize: 20,
-    fontWeight: 600,
-  };
-  const gridStyle: CSSProperties = {
-    display: "grid",
-    gridTemplateColumns: "repeat(auto-fill, minmax(260px, 1fr))",
     gap: 16,
   };
 
-  const grid = useMemo(() => {
-    if (state.kind === "loading") {
-      return (
-        <div style={gridStyle} data-testid="projects-grid" data-state="loading">
-          {Array.from({ length: SKELETON_CARD_COUNT }).map((_, i) => (
-            <SkeletonCard key={i} index={i} />
-          ))}
+  // === Loading state ====================================================
+  if (items === null) {
+    return (
+      <section
+        aria-label="Projects destination"
+        data-testid="projects-destination"
+        data-state="loading"
+        style={rootStyle}
+      >
+        <div style={containerStyle}>
+          <PageHeader title="Projects" subtitle="Loading…" />
+          <CardGrid ariaLabel="Projects loading skeleton">
+            {Array.from({ length: 6 }).map((_, i) => (
+              <CardSkeleton key={i} index={i} />
+            ))}
+          </CardGrid>
         </div>
-      );
-    }
-    if (state.kind === "ready") {
-      return (
-        <div style={gridStyle} data-testid="projects-grid" data-state="ready">
-          {state.projects.map((project) => (
-            <ProjectCard
-              key={project.id}
-              project={project}
-              onOpen={handleOpen}
-            />
-          ))}
+      </section>
+    );
+  }
+
+  // === Error state ======================================================
+  if (items.status === "error") {
+    return (
+      <section
+        aria-label="Projects destination"
+        data-testid="projects-destination"
+        data-state="error"
+        style={rootStyle}
+      >
+        <div style={containerStyle}>
+          <PageHeader title="Projects" />
+          <EmptyState
+            title="Could not load projects"
+            body={items.error ?? "Network error — try again."}
+            action={
+              onRetry !== undefined
+                ? { label: "Retry", onClick: onRetry }
+                : undefined
+            }
+          />
         </div>
-      );
-    }
-    return null;
-  }, [state, gridStyle, handleOpen]);
+      </section>
+    );
+  }
+
+  if (items.status === "unavailable") {
+    return (
+      <section
+        aria-label="Projects destination"
+        data-testid="projects-destination"
+        data-state="unavailable"
+        style={rootStyle}
+      >
+        <div style={containerStyle}>
+          <PageHeader title="Projects" />
+          <EmptyState
+            title="Projects unavailable"
+            body={
+              items.error ??
+              "This destination is not enabled for your workspace."
+            }
+          />
+        </div>
+      </section>
+    );
+  }
+
+  // === Ready state ======================================================
+  const rows = items.data ?? [];
+
+  // Counts for the PageHeader subtitle.
+  const activeCount =
+    counts?.active ?? rows.filter((p) => p.status === "active").length;
+  const archivedCount =
+    counts?.archived ?? rows.filter((p) => p.status === "archived").length;
+
+  const subtitle =
+    rows.length === 0
+      ? "Group related work under shared ACL"
+      : `${activeCount} active${archivedCount > 0 ? ` · ${archivedCount} archived` : ""}`;
+
+  const showingDetail = renderDetail !== undefined && focusedProjectId !== null;
 
   return (
     <section
       aria-label="Projects destination"
       data-testid="projects-destination"
-      data-state={state.kind}
+      data-state="ready"
+      data-focused-project-id={focusedProjectId ?? undefined}
+      data-filter={filter}
       style={rootStyle}
     >
       <div style={containerStyle}>
-        <div style={headerStyle}>
-          <div style={titleStyle}>Projects</div>
-          {state.kind === "ready" && state.projects.length > 0 ? (
-            <NewProjectControl onCreate={handleCreate} />
-          ) : null}
-        </div>
-        {state.kind === "error" ? (
-          <ErrorPanel message={state.message} onRetry={handleRetry} />
-        ) : null}
-        {state.kind === "ready" && state.projects.length === 0 ? (
-          <EmptyState onCreate={handleCreate} />
-        ) : null}
-        {grid}
+        <PageHeader
+          title="Projects"
+          subtitle={subtitle}
+          primaryAction={
+            onCreateProject !== undefined
+              ? { label: "New project", onClick: onCreateProject }
+              : undefined
+          }
+        />
+
+        <FilterTabs<ProjectsFilterSlug>
+          value={filter}
+          onChange={handleFilterChange}
+          options={filterOptions}
+          ariaLabel="Projects status filter"
+          idPrefix="projects"
+        />
+
+        {showingDetail ? (
+          <div
+            data-testid="projects-detail-slot"
+            data-focused-project-id={focusedProjectId!}
+          >
+            {renderDetail!({
+              projectId: focusedProjectId!,
+              onClose: () => {
+                if (onCloseDetail !== undefined) onCloseDetail();
+              },
+            })}
+          </div>
+        ) : rows.length === 0 ? (
+          <EmptyState
+            title="No projects yet"
+            body="Group related chats, todos, runs, and saved artifacts under a shared ACL. Create the first one to get started."
+            action={
+              onCreateProject !== undefined
+                ? { label: "New project", onClick: onCreateProject }
+                : undefined
+            }
+          />
+        ) : (
+          <CardGrid ariaLabel="Projects">
+            {rows.map((project) => (
+              <ProjectCard
+                key={project.id}
+                project={project}
+                onArchiveProject={onArchiveProject}
+                onActivateProject={onActivateProject}
+                onStarProject={onStarProject}
+                onUnstarProject={onUnstarProject}
+                now={now ?? Date.now()}
+              />
+            ))}
+          </CardGrid>
+        )}
       </div>
     </section>
+  );
+}
+
+// ===========================================================================
+// ProjectCard — one card in the grid
+// ===========================================================================
+
+interface ProjectCardProps {
+  readonly project: ProjectSummary;
+  readonly onArchiveProject?: (id: ProjectId) => void;
+  readonly onActivateProject?: (id: ProjectId) => void;
+  readonly onStarProject?: (id: ProjectId) => void;
+  readonly onUnstarProject?: (id: ProjectId) => void;
+  readonly now: number;
+}
+
+function ProjectCard({
+  project,
+  onArchiveProject,
+  onActivateProject,
+  onStarProject,
+  onUnstarProject,
+  now,
+}: ProjectCardProps): ReactElement {
+  const cardStyle: CSSProperties = {
+    display: "flex",
+    flexDirection: "column",
+    gap: 10,
+    padding: 14,
+    borderRadius: "var(--radius-md, 12px)",
+    border: "1px solid var(--color-border, #232325)",
+    backgroundColor: "var(--color-surface, #1a1a1c)",
+    color: "var(--color-text, #ededee)",
+    boxSizing: "border-box",
+    minWidth: 0,
+  };
+  const headStyle: CSSProperties = {
+    display: "flex",
+    alignItems: "center",
+    gap: 8,
+    minWidth: 0,
+  };
+  const iconStyle: CSSProperties = {
+    width: 28,
+    height: 28,
+    borderRadius: "var(--radius-sm, 6px)",
+    backgroundColor: `hsl(${project.color_hue}, 60%, 28%)`,
+    color: "var(--color-text, #ededee)",
+    display: "inline-flex",
+    alignItems: "center",
+    justifyContent: "center",
+    fontSize: 16,
+    flexShrink: 0,
+  };
+  const nameStyle: CSSProperties = {
+    flex: 1,
+    minWidth: 0,
+    fontSize: "var(--font-size-sm, 13px)",
+    fontWeight: 600,
+    overflow: "hidden",
+    textOverflow: "ellipsis",
+    whiteSpace: "nowrap",
+  };
+  const descStyle: CSSProperties = {
+    fontSize: "var(--font-size-xs, 12px)",
+    color: "var(--color-text-muted, #b4b4b8)",
+    overflow: "hidden",
+    textOverflow: "ellipsis",
+    whiteSpace: "nowrap",
+  };
+  const metaStyle: CSSProperties = {
+    display: "flex",
+    alignItems: "center",
+    gap: 6,
+    flexWrap: "wrap",
+    fontSize: "var(--font-size-xs, 12px)",
+    color: "var(--color-text-muted, #b4b4b8)",
+  };
+  const actionRowStyle: CSSProperties = {
+    display: "flex",
+    alignItems: "center",
+    gap: 4,
+    marginLeft: "auto",
+    flexShrink: 0,
+  };
+  const actionButtonStyle: CSSProperties = {
+    background: "transparent",
+    border: "none",
+    color: "var(--color-text-subtle, #7e7e84)",
+    cursor: "pointer",
+    fontSize: "var(--font-size-xs, 12px)",
+    padding: "2px 6px",
+  };
+  const starButtonStyle: CSSProperties = {
+    ...actionButtonStyle,
+    color: project.viewer_starred
+      ? "var(--color-warning, #d9a857)"
+      : "var(--color-text-subtle, #7e7e84)",
+  };
+
+  const isActive = project.status === "active";
+  const lastActivity = project.last_activity_at;
+
+  return (
+    <article
+      style={cardStyle}
+      data-testid="project-card"
+      data-project-id={project.id}
+      data-status={project.status}
+      data-viewer-starred={project.viewer_starred ? "true" : "false"}
+    >
+      <div style={headStyle}>
+        <span
+          style={iconStyle}
+          aria-hidden="true"
+          data-testid="project-card-icon"
+        >
+          {project.icon_emoji}
+        </span>
+        {/* Project name is the canonical ItemLink to the project — clicking
+            opens the project detail in this destination (cross-audit §1.1).
+            The chip is rendered inline so the entire card name acts as a
+            link without a custom anchor. */}
+        <span style={nameStyle} data-testid="project-card-name">
+          <ItemLink
+            ref={{ kind: "project", id: project.id }}
+            className="projects-card-name-link"
+          />
+        </span>
+        <StatusPill
+          status={statusTone(project.status)}
+          label={statusLabel(project.status)}
+        />
+        <div style={actionRowStyle}>
+          {onStarProject !== undefined && !project.viewer_starred ? (
+            <button
+              type="button"
+              data-testid="project-card-star"
+              onClick={() => onStarProject(project.id)}
+              style={starButtonStyle}
+              aria-label={`Star ${project.name}`}
+            >
+              ☆
+            </button>
+          ) : null}
+          {onUnstarProject !== undefined && project.viewer_starred ? (
+            <button
+              type="button"
+              data-testid="project-card-unstar"
+              onClick={() => onUnstarProject(project.id)}
+              style={starButtonStyle}
+              aria-label={`Unstar ${project.name}`}
+            >
+              ★
+            </button>
+          ) : null}
+          {isActive && onArchiveProject !== undefined ? (
+            <button
+              type="button"
+              data-testid="project-card-archive"
+              onClick={() => onArchiveProject(project.id)}
+              style={actionButtonStyle}
+              aria-label={`Archive ${project.name}`}
+            >
+              Archive
+            </button>
+          ) : null}
+          {!isActive && onActivateProject !== undefined ? (
+            <button
+              type="button"
+              data-testid="project-card-activate"
+              onClick={() => onActivateProject(project.id)}
+              style={actionButtonStyle}
+              aria-label={`Activate ${project.name}`}
+            >
+              Activate
+            </button>
+          ) : null}
+        </div>
+      </div>
+
+      {project.description.length > 0 ? (
+        <div style={descStyle} data-testid="project-card-description">
+          {project.description}
+        </div>
+      ) : null}
+
+      <div style={metaStyle} data-testid="project-card-meta">
+        {/* Owner chip — display-only (Team destination owns the
+            person ItemLink; we don't render <ItemLink kind="person"> here
+            unless the owner UserId is the canonical viewer's spec target;
+            projects-prd §3.2 row shape carries ownerChip as plain text). */}
+        {project.owner_display_name !== undefined ? (
+          <span data-testid="project-card-owner">
+            {project.owner_display_name}
+          </span>
+        ) : null}
+        {/* Viewer role chip — only shown when the caller is a member. */}
+        {project.viewer_role !== null ? (
+          <StatusPill status="muted" label={project.viewer_role} />
+        ) : null}
+        {lastActivity !== null ? (
+          <span data-testid="project-card-last-activity">
+            {formatRelativeTime(lastActivity, now)}
+          </span>
+        ) : null}
+        <span data-testid="project-card-counts">
+          {project.counts.chats} chats · {project.counts.todos_open} todos ·{" "}
+          {project.counts.routines_active} routines · {project.counts.members}{" "}
+          members
+        </span>
+      </div>
+    </article>
+  );
+}
+
+// ===========================================================================
+// Helpers
+// ===========================================================================
+
+const STATUS_TONE: Readonly<Record<ProjectStatus, StatusTone>> = {
+  active: "ok",
+  archived: "muted",
+};
+
+const STATUS_LABEL: Readonly<Record<ProjectStatus, string>> = {
+  active: "Active",
+  archived: "Archived",
+};
+
+function statusTone(status: ProjectStatus): StatusTone {
+  return STATUS_TONE[status];
+}
+
+function statusLabel(status: ProjectStatus): string {
+  return STATUS_LABEL[status];
+}
+
+// ===========================================================================
+// CardSkeleton — loading placeholder
+// ===========================================================================
+
+function CardSkeleton({ index }: { index: number }): ReactElement {
+  const style: CSSProperties = {
+    height: 116,
+    borderRadius: "var(--radius-md, 12px)",
+    border: "1px solid var(--color-border, #232325)",
+    backgroundColor: "var(--color-surface-muted, #222224)",
+    opacity: 0.5,
+  };
+  return (
+    <div
+      style={style}
+      data-testid="projects-skeleton-card"
+      data-skeleton-index={index}
+      aria-hidden="true"
+    />
   );
 }

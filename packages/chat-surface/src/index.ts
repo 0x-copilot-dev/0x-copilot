@@ -397,7 +397,24 @@ export {
   type TodosProjectChip,
   type TodosSavedFilter,
 } from "./destinations/todos";
-export { ProjectsDestination, type Project } from "./destinations/projects";
+export {
+  ProjectFilterChip,
+  ProjectsDestination,
+  ProjectsPanel,
+  type ProjectActivityCounts,
+  type ProjectColorHue,
+  type ProjectFilterChipOption,
+  type ProjectFilterChipProps,
+  type ProjectIconEmoji,
+  type ProjectRole,
+  type ProjectStatus,
+  type ProjectSummary,
+  type ProjectsDestinationProps,
+  type ProjectsFilterCounts,
+  type ProjectsFilterSlug,
+  type ProjectsPanelProps,
+  type RenderProjectDetailSlot,
+} from "./destinations/projects";
 export {
   LibraryDestination,
   type LibraryItem,
