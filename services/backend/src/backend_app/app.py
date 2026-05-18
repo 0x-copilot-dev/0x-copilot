@@ -123,6 +123,12 @@ from backend_app.todos import (
     TodosStore,
     register_todos_routes,
 )
+from backend_app.agents import (
+    AgentsService,
+    AgentsStore,
+    InMemoryAgentsStore,
+    register_agents_routes,
+)
 from backend_app.projects import (
     InMemoryProjectsStore,
     ProjectsService,
@@ -369,6 +375,7 @@ def create_app(
     library_store: LibraryStore | None = None,
     library_blob_store: object | None = None,
     library_row_store: object | None = None,
+    agents_store: AgentsStore | None = None,
     liveness_service: LivenessService | None = None,
 ) -> FastAPI:
     if configure_logging_on_create:
@@ -1526,26 +1533,26 @@ def create_app(
     # =====================================================================
     # Phase 7 P7-A1 — Library destination (metadata + CRUD).
     # =====================================================================
-    # Three storage kinds (files / pages / datasets) share one
-    # destination. P7-A1 ships metadata + CRUD + canonical wire
-    # contract; blob handling is P7-A2's territory and search is
-    # P7-A3's. Project-scoped reads route through the same canonical
-    # ProjectMembershipPort the projects service uses — DRY against
-    # backend_app.projects.acl. Owner-only writes; 404-not-403 for
-    # non-readers.
     resolved_library_store: LibraryStore = library_store or InMemoryLibraryStore()  # type: ignore[assignment]
     app.state.library_store = resolved_library_store
-    # Reuse the canonical membership port already constructed inside
-    # ``projects_service`` so the Library destination resolves project
-    # membership via the SAME predicate the Projects routes use. A
-    # second membership query would be a violation of cross-audit §1.3
-    # binding 2026-05-17.
     library_service = LibraryService(
         store=resolved_library_store,
         membership_port=projects_service._membership_port,  # noqa: SLF001 — canonical port reuse
     )
     app.state.library_service = library_service
     register_library_routes(app, service=library_service)
+
+    # =====================================================================
+    # Phase 8 P8-A1 — Agents destination CRUD.
+    # =====================================================================
+    resolved_agents_store: AgentsStore = agents_store or InMemoryAgentsStore()  # type: ignore[assignment]
+    app.state.agents_store = resolved_agents_store
+    agents_service = AgentsService(
+        store=resolved_agents_store,
+        identity_store=resolved_identity_store,
+    )
+    app.state.agents_service = agents_service
+    register_agents_routes(app, service=agents_service)
 
     # Phase 7A — tier-2 adapter registry. Source bytes go through a
     # ``SourceStorage`` port (filesystem in dev, S3 injectable in prod).
