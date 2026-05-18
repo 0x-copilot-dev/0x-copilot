@@ -27,6 +27,7 @@ from backend_facade.liveness_routes import register_liveness_routes
 from backend_facade.projects_routes import register_projects_routes
 from backend_facade.routines_routes import register_routines_routes
 from backend_facade.todos_routes import register_todos_routes
+from backend_facade.tool_routes import register_tool_routes
 from backend_facade.http_client import HttpClientPool, http_client
 from backend_facade.me_routes import register_me_routes
 from backend_facade.routines_webhook_routes import register_routines_webhook_routes
@@ -133,6 +134,7 @@ def create_app(
     register_liveness_routes(app)
     register_routines_routes(app)
     register_todos_routes(app)
+    register_tool_routes(app)
     register_me_routes(app)
     # Routines webhook ingest (P5-A3). Mounted on its own module so the
     # secret + HMAC auth shape can never accidentally collide with the
