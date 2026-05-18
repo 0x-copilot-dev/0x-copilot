@@ -27,6 +27,7 @@ import { TodosRoute } from "../features/todos/TodosRoute";
 // placeholder".
 import { ProjectsRoute } from "../features/projects/ProjectsRoute";
 import { LibraryRoute } from "../features/library/LibraryRoute";
+import { AgentsRoute } from "../features/agents/AgentsRoute";
 // PR 4.1 — hydrate user profile + preferences once at the shell so the
 // Appearance attributes (data-density, data-reduce-motion, theme/accent)
 // apply on chat too, not only when Settings is open.
@@ -117,7 +118,6 @@ function RouteLoadingFallback(): ReactElement {
   );
 }
 import {
-  AgentsDestination,
   ChatShell,
   ConnectorsDestination,
   DocumentPresenceSignal,
@@ -150,21 +150,27 @@ import {
 // Map every destination slug WITHOUT a host-side feature-binder to the
 // placeholder component shipped with the chat-surface package. Chats has
 // a dedicated host component (`ChatScreen`); Home, Todos, Inbox,
-// Routines, Projects, and Library have feature-level data binders
-// (`HomeRoute` / `TodosRoute` / `InboxRoute` / `RoutinesRoute` /
-// `ProjectsRoute` / `LibraryRoute`) that own their fetch + SSE wiring —
-// adding any of them here would shadow the binder and lose the SSE /
-// upload / autosave behaviour.
+// Routines, Projects, Library, and Agents have feature-level data
+// binders (`HomeRoute` / `TodosRoute` / `InboxRoute` / `RoutinesRoute`
+// / `ProjectsRoute` / `LibraryRoute` / `AgentsRoute`) that own their
+// fetch + SSE wiring — adding any of them here would shadow the
+// binder and lose the SSE / upload / autosave behaviour.
 const NON_CHATS_DESTINATIONS: Readonly<
   Record<
     Exclude<
       ShellDestinationSlug,
-      "chats" | "home" | "todos" | "inbox" | "routines" | "projects" | "library"
+      | "chats"
+      | "home"
+      | "todos"
+      | "inbox"
+      | "routines"
+      | "projects"
+      | "library"
+      | "agents"
     >,
     () => ReactElement
   >
 > = {
-  agents: AgentsDestination,
   tools: ToolsDestination,
   connectors: ConnectorsDestination,
   team: TeamDestination,
@@ -230,18 +236,9 @@ if (!hasItemRefResolver("project")) {
   }));
 }
 
-// ItemRef resolver registration (cross-audit §3.3) for the three
-// Library kinds — `"library_file"`, `"library_page"`,
-// `"library_dataset"`. P7-C — the Library destination owns these
-// kinds; when a chat / activity / search-hit surface emits an
-// `<ItemLink kind="library_file" id={...} />`, the link resolves to
-// the Library destination's detail surface. Today the destination
-// has no per-item detail route (`/library/<id>` lands in a later
-// wave), so we return `route: null` — `<ItemLink>` falls back to
-// the breadcrumb. Same `hasItemRefResolver` guard pattern as the
-// `"todo"` / `"inbox_item"` / `"project"` registrations above so
-// cross-realm vitest imports don't throw
-// `ItemRefResolverAlreadyRegistered`.
+// ItemRef resolver registration (cross-audit §3.3) for Library + Agents
+// kinds. Each destination's route lands in a follow-up wave; today the
+// resolvers return route:null so `<ItemLink>` falls back to breadcrumb.
 if (!hasItemRefResolver("library_file")) {
   registerItemRefResolver("library_file", async (_id) => ({
     label: "File",
@@ -264,6 +261,14 @@ if (!hasItemRefResolver("library_dataset")) {
     icon: null,
     route: null,
     breadcrumb: "Library",
+  }));
+}
+if (!hasItemRefResolver("agent")) {
+  registerItemRefResolver("agent", async (_id) => ({
+    label: "Agent",
+    icon: null,
+    route: null,
+    breadcrumb: "Agents",
   }));
 }
 
@@ -810,12 +815,6 @@ function EnterpriseSearchApp({
       </section>
     );
   } else if (route.destination === "library") {
-    // P7-C — Library destination dispatch. The route owns the 3-stage
-    // upload handshake (grant → PUT signed URL → finalize), the page
-    // autosave loop, and the library SSE channel (sub-PRD §4.2). Bytes
-    // flow DIRECT to the signed URL — never proxied through the
-    // facade. The chat-surface `<LibraryDestination>` placeholder is
-    // no longer mounted here.
     body = (
       <section
         data-testid="destination-outlet"
@@ -824,6 +823,17 @@ function EnterpriseSearchApp({
         aria-label="library destination"
       >
         <LibraryRoute identity={identity} />
+      </section>
+    );
+  } else if (route.destination === "agents") {
+    body = (
+      <section
+        data-testid="destination-outlet"
+        data-destination="agents"
+        style={{ height: "100%", overflow: "auto" }}
+        aria-label="agents destination"
+      >
+        <AgentsRoute identity={identity} />
       </section>
     );
   } else {
