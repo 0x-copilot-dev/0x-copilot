@@ -362,6 +362,12 @@ export const AssistantComposer = forwardRef<
       onCancel={onCancel}
       onInputKeyDown={handleInputKeyDown}
       hasTopBarContent={selectedSkills.length > 0}
+      // Pass `undefined` (not `null`) when there's no topbar content —
+      // chat-surface's Composer.tsx checks `topBarSlot !== undefined`
+      // for the `data-has-topbar` flag, which the AUI CSS reads to
+      // lift `--composer-shell-height` from 11rem → 13rem. `null` would
+      // (incorrectly) trip that check and add ~32px of dead space below
+      // the hint row in the empty state.
       topBarSlot={
         selectedSkills.length > 0 ? (
           <div className="aui-composer-attachments">
@@ -382,7 +388,7 @@ export const AssistantComposer = forwardRef<
               </span>
             ))}
           </div>
-        ) : null
+        ) : undefined
       }
       bottomBarRender={({ text, running: isRunning, attachmentsCount }) => (
         <div className="aui-composer-action-wrapper">
