@@ -332,8 +332,13 @@ export const AssistantComposer = forwardRef<
       running={running}
       attachmentAdapter={bridgedAttachmentAdapter}
       placeholder="Type a message…"
-      minRows={1}
-      maxRows={5}
+      // Phase 9 composer redesign: empty composer was a single-row sliver
+      // — felt skeletal next to the welcome cards. 3 rows is the size the
+      // user identified as "what it should look like" (matches the focused
+      // / multi-line state from earlier screenshots). maxRows lifted to 8
+      // so multi-line drafts have headroom before internal scroll kicks in.
+      minRows={3}
+      maxRows={8}
       onSubmit={(payload) => {
         const skillInstructions = selectedSkills.map((skill) =>
           skillInstructionPrompt(skill.display_name),

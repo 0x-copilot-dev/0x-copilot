@@ -1879,8 +1879,13 @@ p {
 .aui-composer {
   --composer-padding: 0.5rem;
   --composer-radius: 1.5rem;
-  --composer-shell-height: 8.7rem;
-  --composer-input-height: 2.7rem;
+  /* Phase 9 composer redesign: base shell sized for a 3-row textarea
+   * (matches minRows={3} in AssistantComposer). Switched from fixed
+   * `height` to `min-height` so the container GROWS when the textarea
+   * auto-expands past 3 rows — previously the fixed height + overflow:
+   * hidden clipped the textarea and pushed the toolbar/hint past the
+   * workspace bottom (the "why do I need to scroll?" bug). */
+  --composer-shell-height: 11rem;
   background: var(--color-bg);
   border: 1px solid var(--color-border);
   border-radius: var(--composer-radius);
@@ -1891,8 +1896,11 @@ p {
   margin: var(--space-lg) auto 0;
   max-width: var(--chat-content-width);
   box-sizing: border-box;
-  height: var(--composer-shell-height);
-  overflow: hidden;
+  min-height: var(--composer-shell-height);
+  /* No `overflow: hidden` — the textarea owns its own internal scroll
+   * (Composer.tsx sets overflow-y: auto on the <textarea>) once it
+   * exceeds maxRows. Letting the shell grow naturally avoids clipping
+   * chrome below the visible viewport. */
   padding: var(--composer-padding);
   position: relative;
   transition:
@@ -1901,16 +1909,12 @@ p {
   width: 100%;
 }
 
-.aui-composer[data-focused="true"] {
-  --composer-input-height: 5.15rem;
-}
-
+/* data-focused no longer needs a separate input-height — the textarea
+ * auto-sizes via Composer.tsx's useLayoutEffect, and removing the
+ * hint row (max-height:0 below) is what gives back visual breath when
+ * the user is actively typing. */
 .aui-composer[data-has-topbar="true"] {
-  --composer-shell-height: 10.6rem;
-}
-
-.aui-composer[data-focused="true"][data-has-topbar="true"] {
-  --composer-input-height: 4.25rem;
+  --composer-shell-height: 13rem;
 }
 
 .aui-composer[data-focused="true"] .atlas-depth {
