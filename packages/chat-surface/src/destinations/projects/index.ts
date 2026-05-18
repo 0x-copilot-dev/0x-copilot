@@ -79,7 +79,7 @@ export {
 } from "./transfer-ownership-dialog";
 
 // ===========================================================================
-// Phase 6.5 extensions (project editor + templates)
+// Phase 6.5 extensions (project editor + templates + archive-blocked UI)
 // ===========================================================================
 
 export {
@@ -117,6 +117,14 @@ export {
   type ForkFromTemplateDialogProps,
   type ForkFromTemplateSnapshotSummary,
 } from "./fork-from-template-dialog";
+
+export {
+  ArchiveBlockedDialog,
+  type ArchiveBlockedDialogProps,
+  type LivenessDetail,
+  type LivenessDetailSource,
+  type LivenessReport,
+} from "./archive-blocked-dialog";
 
 // Wire-type re-exports (forwarded from `_projects-stub.ts`; the
 // orchestrator rewires the stub to `@enterprise-search/api-types` at
