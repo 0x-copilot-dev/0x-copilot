@@ -3527,3 +3527,34 @@ export type {
   UpdateRoutineRequest,
 } from "./routines";
 // === end Phase 5 Routines ===
+
+// === Phase 6 Projects destination ===
+// Canonical CRUD + member management + ownership transfer + activity-stream
+// wire shape. Cross-audit §1.1 (ItemRef incl. kind="project"), §1.3 (project-
+// scoped ACL master rule — Projects ships the canonical resolver and every
+// destination with project_id consumes it), §1.4 (audit context carries
+// project_id), §1.5 (multi-value OR filter axes), §2.1 (branded ProjectId).
+// Single declaration site: ./projects.ts.
+export type {
+  AddMemberRequest,
+  ChangeRoleRequest,
+  CreateProjectRequest,
+  Project,
+  ProjectActivity,
+  ProjectActivityCounts,
+  ProjectActivityListResponse,
+  ProjectColorHue,
+  ProjectIconEmoji,
+  ProjectListResponse,
+  ProjectMembership,
+  ProjectMembershipListResponse,
+  ProjectRole,
+  ProjectStatus,
+  ProjectStreamEnvelope,
+  ProjectStreamEventType,
+  ProjectSummary,
+  RemoveMemberRequest,
+  TransferOwnershipRequest,
+  UpdateProjectRequest,
+} from "./projects";
+// === end Phase 6 Projects ===

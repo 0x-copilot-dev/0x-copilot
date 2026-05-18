@@ -123,6 +123,12 @@ from backend_app.todos import (
     TodosStore,
     register_todos_routes,
 )
+from backend_app.projects import (
+    InMemoryProjectsStore,
+    ProjectsService,
+    ProjectsStore,
+    register_projects_routes,
+)
 from backend_app.routes.audit_export import register_audit_export_routes
 from backend_app.routes.audit_list import register_audit_list_routes
 from backend_app.routes.billing import register_billing_routes
@@ -340,6 +346,7 @@ def create_app(
     todos_store: TodosStore | None = None,
     inbox_store: InboxStore | None = None,
     routines_store: RoutinesStore | None = None,
+    projects_store: ProjectsStore | None = None,
 ) -> FastAPI:
     if configure_logging_on_create:
         configure_logging()
@@ -1369,6 +1376,23 @@ def create_app(
     )
     app.state.routines_service = routines_service
     register_routines_routes(app, service=routines_service)
+
+    # Phase 6 — Projects destination. The canonical project-scoped ACL
+    # predicate lives in ``backend_app.projects.acl`` and is consumed
+    # by every destination carrying ``project_id`` (Todos / Inbox /
+    # Routines / Library / Memory / Chats) per cross-audit §1.3 master
+    # rule. Owner-only writes; project-member reads; admin compliance
+    # reads — 404-not-403 for non-readers. Ownership transfer is atomic
+    # (PARTIAL UNIQUE on owner-row preserved across the demote-promote
+    # swap). Admin force-transfer ships per projects-prd §12 Q1.
+    resolved_projects_store: ProjectsStore = projects_store or InMemoryProjectsStore()  # type: ignore[assignment]
+    app.state.projects_store = resolved_projects_store
+    projects_service = ProjectsService(
+        store=resolved_projects_store,
+        identity_store=resolved_identity_store,
+    )
+    app.state.projects_service = projects_service
+    register_projects_routes(app, service=projects_service)
 
     # Phase 7A — tier-2 adapter registry. Source bytes go through a
     # ``SourceStorage`` port (filesystem in dev, S3 injectable in prod).

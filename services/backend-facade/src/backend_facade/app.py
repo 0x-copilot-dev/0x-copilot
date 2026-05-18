@@ -21,6 +21,7 @@ from backend_facade.auth_routes import register_auth_routes
 from backend_facade.home_routes import register_home_routes
 from backend_facade.inbox_routes import register_inbox_routes
 from backend_facade.inbox_stream_routes import register_inbox_stream_routes
+from backend_facade.projects_routes import register_projects_routes
 from backend_facade.routines_routes import register_routines_routes
 from backend_facade.todos_routes import register_todos_routes
 from backend_facade.http_client import HttpClientPool, http_client
@@ -123,6 +124,7 @@ def create_app(
     register_home_routes(app)
     register_inbox_routes(app)
     register_inbox_stream_routes(app)
+    register_projects_routes(app)
     register_routines_routes(app)
     register_todos_routes(app)
     register_me_routes(app)
