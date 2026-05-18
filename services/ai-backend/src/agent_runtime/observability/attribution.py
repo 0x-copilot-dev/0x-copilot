@@ -73,6 +73,41 @@ class Purpose(StrEnum):
     Out of band of the main loop's Purpose.derive precedence (indexing
     callers construct context explicitly)."""
 
+    PALETTE_RANKING = "palette_ranking"
+    """Online embedding call made by the ⌘K palette search (team-memory-
+    cmdk-prd §4.3 / §3.3). Routed through the canonical
+    :func:`build_embeddings_model` so the existing :class:`UsageRecorder`
+    captures token usage — no separate tracker. Out of band of the
+    main loop's Purpose.derive precedence (palette callers construct
+    context explicitly)."""
+
+    MEMORY_RETRIEVAL = "memory_retrieval"
+    """Online embedding call made by the Memory destination at chat /
+    run start (team-memory-cmdk-prd §2.2 / §4.2). Reuses Library's
+    pgvector infra with ``target_kind="memory"``. Routed through the
+    canonical :func:`build_embeddings_model` so the existing
+    :class:`UsageRecorder` captures token usage — no separate tracker.
+    Out of band of the main loop's Purpose.derive precedence."""
+
+    MEMORY_INDEXING = "memory_indexing"
+    """Offline embedding-worker call that vectorises Memory items on
+    create / edit (team-memory-cmdk-prd §4.2: "re-embeds in background").
+    Routed through the canonical :func:`build_embeddings_model` so the
+    existing :class:`UsageRecorder` captures token usage — no separate
+    tracker. Out of band of the main loop's Purpose.derive precedence."""
+
+    MEMORY_EXTRACTION = "memory_extraction"
+    """Post-run extractor job that scans a completed conversation for
+    memory / routine / atlas-cron proposals and emits structured
+    proposals (team-memory-cmdk-prd §9). Mirrors the Todos
+    ``TODO_EXTRACTION`` pattern; the LLM call routes through the
+    canonical :func:`build_chat_model` so the existing
+    :class:`UsageRecorder` captures token usage with this purpose tag —
+    no separate tracker. Cost-capped per run at the call site (sub-PRD
+    §9 — $0.001 default budget). Out of band of the main loop's
+    Purpose.derive precedence (extractor jobs construct their context
+    explicitly with this value)."""
+
     @classmethod
     def derive(
         cls,

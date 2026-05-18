@@ -1,16 +1,19 @@
-"""Tests for the P7.5 Library purpose additions to the :class:`Purpose` enum.
+"""Tests for the P7.5 Library + P12 Palette/Memory purpose additions.
 
-Two-part contract per the P7.5 spec (cross-audit §5.5):
+Two-part contract per the P7.5 + P12 specs (cross-audit §5.5):
 
-1. Both ``LIBRARY_RETRIEVAL`` and ``LIBRARY_INDEXING`` are valid
-   :class:`Purpose` enum values with their canonical string values.
-2. A :class:`UsageAttributionContext` constructed with either of the
-   new purposes round-trips through the recorder boundary without
-   tripping the existing subagent/tool-interpretation invariants —
-   i.e. Library calls do not require ``subagent_slug`` or
+1. ``LIBRARY_RETRIEVAL`` / ``LIBRARY_INDEXING`` (P7.5-A1) and
+   ``PALETTE_RANKING`` / ``MEMORY_RETRIEVAL`` / ``MEMORY_INDEXING`` /
+   ``MEMORY_EXTRACTION`` (P12-A4/A5) are valid :class:`Purpose` enum
+   values with their canonical string values.
+2. A :class:`UsageAttributionContext` constructed with any of the new
+   purposes round-trips through the recorder boundary without tripping
+   the existing subagent/tool-interpretation invariants — i.e. these
+   system-initiated calls do not require ``subagent_slug`` or
    ``originating_tool_call_id``. This is the precise contract the
-   embed endpoint relies on, mirroring how ``TODO_EXTRACTION`` slots
-   into the same enum without extending the validator.
+   embed / extractor endpoints rely on, mirroring how
+   ``TODO_EXTRACTION`` slots into the same enum without extending the
+   validator.
 """
 
 from __future__ import annotations
@@ -36,6 +39,18 @@ class TestLibraryPurposeEnumValues:
     def test_library_indexing_value(self) -> None:
         assert Purpose.LIBRARY_INDEXING.value == "library_indexing"
 
+    def test_palette_ranking_value(self) -> None:
+        assert Purpose.PALETTE_RANKING.value == "palette_ranking"
+
+    def test_memory_retrieval_value(self) -> None:
+        assert Purpose.MEMORY_RETRIEVAL.value == "memory_retrieval"
+
+    def test_memory_indexing_value(self) -> None:
+        assert Purpose.MEMORY_INDEXING.value == "memory_indexing"
+
+    def test_memory_extraction_value(self) -> None:
+        assert Purpose.MEMORY_EXTRACTION.value == "memory_extraction"
+
     def test_library_purposes_distinct_from_existing(self) -> None:
         existing = {
             Purpose.MAIN,
@@ -47,20 +62,32 @@ class TestLibraryPurposeEnumValues:
         }
         assert Purpose.LIBRARY_RETRIEVAL not in existing
         assert Purpose.LIBRARY_INDEXING not in existing
+        assert Purpose.PALETTE_RANKING not in existing
+        assert Purpose.MEMORY_RETRIEVAL not in existing
+        assert Purpose.MEMORY_INDEXING not in existing
+        assert Purpose.MEMORY_EXTRACTION not in existing
 
 
 class TestLibraryAttributionContextInvariants:
-    """Library purposes bypass the subagent / tool-interpretation invariants."""
+    """Library / palette / memory purposes bypass the subagent / tool-interpretation invariants."""
 
     @pytest.mark.parametrize(
         "purpose",
-        [Purpose.LIBRARY_RETRIEVAL, Purpose.LIBRARY_INDEXING],
+        [
+            Purpose.LIBRARY_RETRIEVAL,
+            Purpose.LIBRARY_INDEXING,
+            Purpose.PALETTE_RANKING,
+            Purpose.MEMORY_RETRIEVAL,
+            Purpose.MEMORY_INDEXING,
+            Purpose.MEMORY_EXTRACTION,
+        ],
     )
     def test_constructs_without_subagent_or_tool_signals(
         self, purpose: Purpose
     ) -> None:
         # Neither subagent_slug nor originating_tool_call_id required:
-        # Library calls are system-initiated, not tool-interpretation.
+        # Library / Palette / Memory calls are system-initiated, not
+        # tool-interpretation.
         context = UsageAttributionContext(
             org_id="org_1",
             user_id="user_1",
@@ -75,13 +102,17 @@ class TestLibraryAttributionContextInvariants:
 
 
 class TestRecorderWritesLibraryPurpose:
-    """The existing recorder boundary accepts Library purpose rows."""
+    """The existing recorder boundary accepts the new purpose rows."""
 
     @pytest.mark.parametrize(
         ("purpose", "expected_column_value"),
         [
             (Purpose.LIBRARY_RETRIEVAL, "library_retrieval"),
             (Purpose.LIBRARY_INDEXING, "library_indexing"),
+            (Purpose.PALETTE_RANKING, "palette_ranking"),
+            (Purpose.MEMORY_RETRIEVAL, "memory_retrieval"),
+            (Purpose.MEMORY_INDEXING, "memory_indexing"),
+            (Purpose.MEMORY_EXTRACTION, "memory_extraction"),
         ],
     )
     async def test_record_call_persists_purpose_column(

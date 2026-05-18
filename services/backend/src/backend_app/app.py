@@ -180,6 +180,13 @@ from backend_app.memory import (
     register_memory_routes,
     register_memory_sse_routes,
 )
+from backend_app.palette import (
+    InMemoryPaletteStore,
+    PaletteRefreshDispatcher,
+    PaletteService,
+    PaletteStorePort,
+    register_palette_routes,
+)
 from backend_app.projects.template_routes import register_template_routes
 from backend_app.projects.templates import (
     InMemoryProjectTemplatesStore,
@@ -428,6 +435,7 @@ def create_app(
     agents_store: AgentsStore | None = None,
     tools_store: ToolsStore | None = None,
     liveness_service: LivenessService | None = None,
+    palette_store: PaletteStorePort | None = None,
 ) -> FastAPI:
     if configure_logging_on_create:
         configure_logging()
@@ -1735,6 +1743,27 @@ def create_app(
     app.state.tools_service = tools_service
     register_tool_routes(app, service=tools_service)
     register_tool_internal_routes(app, service=tools_service)
+
+    # =====================================================================
+    # Phase 12 P12-A4 — ⌘K palette destination.
+    # =====================================================================
+    # One denormalized ``palette_index`` shared across destinations,
+    # written through the canonical :class:`PaletteRefreshDispatcher`
+    # (refresh.py). v1 wires the in-memory store + dispatcher; the
+    # destinations consume the dispatcher reference via
+    # ``app.state.palette_dispatcher`` so their service-layer write
+    # paths can broadcast inserts / updates / soft-deletes without
+    # touching the palette store directly.
+    resolved_palette_store: PaletteStorePort = palette_store or InMemoryPaletteStore()
+    app.state.palette_store = resolved_palette_store
+    palette_dispatcher = PaletteRefreshDispatcher(store=resolved_palette_store)
+    app.state.palette_dispatcher = palette_dispatcher
+    palette_service = PaletteService(
+        store=resolved_palette_store,
+        membership_port=projects_service._membership_port,  # noqa: SLF001 — canonical port reuse
+    )
+    app.state.palette_service = palette_service
+    register_palette_routes(app, service=palette_service)
 
     # Phase 7A — tier-2 adapter registry. Source bytes go through a
     # ``SourceStorage`` port (filesystem in dev, S3 injectable in prod).

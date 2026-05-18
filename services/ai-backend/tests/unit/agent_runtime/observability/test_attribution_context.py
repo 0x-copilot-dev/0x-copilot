@@ -108,7 +108,11 @@ class TestPurposeEnum:
         # P7.5-A1 added LIBRARY_RETRIEVAL + LIBRARY_INDEXING for the
         # Library hybrid retrieval / offline embedding worker paths
         # (sub-PRD library §6.5 / §6.6; cross-audit §5.5 single-tracker).
-        assert len(Purpose) == 8
+        # P12-A4/A5 added PALETTE_RANKING, MEMORY_RETRIEVAL,
+        # MEMORY_INDEXING, MEMORY_EXTRACTION for the ⌘K palette + Memory
+        # destination + post-run proposal extractor (team-memory-cmdk-prd
+        # §3.3 / §4.2 / §4.3 / §9).
+        assert len(Purpose) == 12
 
     def test_todo_extraction_purpose_present(self) -> None:
         # P3-A2 — the extractor worker job persists usage rows with this
