@@ -22,6 +22,8 @@ from agent_runtime.api.presentation_templates import (
     ToolTemplateRenderer,
     _ErrorMessage,
 )
+from agent_runtime.capabilities.mcp.constants import Values as McpValues
+from agent_runtime.capabilities.mcp.dispatcher import McpDispatcherUnwrap
 from agent_runtime.capabilities.middleware.display_metadata import (
     agent_display_from_payload,
 )
@@ -63,9 +65,11 @@ class PresentationGenerator:
     # MCP tool calls flow through a single dispatcher tool. The runtime
     # emits events with ``payload.tool_name`` set to the dispatcher's name,
     # but the actual MCP tool name lives nested inside ``payload.args``.
-    # Pin the dispatcher name so the resolution chain knows when to extract
-    # the inner name rather than look up the dispatcher itself.
-    _MCP_DISPATCHER_TOOL_NAME = "call_mcp_tool"
+    # The unwrap logic itself lives in :class:`McpDispatcherUnwrap` so the
+    # event projector and this generator can't drift; we still need the
+    # constant locally for :meth:`_effective_template_payload`, which has
+    # to recognise the dispatcher shape to flatten the inner arguments.
+    _MCP_DISPATCHER_TOOL_NAME = McpValues.ToolName.CALL_MCP_TOOL
 
     _RESULT_EVENT_TYPES = frozenset(
         {
@@ -142,7 +146,7 @@ class PresentationGenerator:
         return envelope
 
     def _resolve_tool_template(self, payload: JsonObject) -> ToolDisplayTemplate | None:
-        name = self._effective_tool_name(payload)
+        name = McpDispatcherUnwrap.effective_tool_name(payload)
         if name is None:
             return None
         # Instance-level injection (used by tests) wins over the per-run
@@ -159,32 +163,6 @@ class PresentationGenerator:
                 "Tool display lookup failed for %s", name, exc_info=True
             )
             return None
-
-    @classmethod
-    def _effective_tool_name(cls, payload: JsonObject) -> str | None:
-        """Return the tool name the lookup should resolve against.
-
-        For all events except the MCP dispatcher this is just
-        ``payload.tool_name``. When the event is a ``call_mcp_tool``
-        dispatcher invocation the actual MCP tool name lives inside
-        ``payload.args.tool_name``; we extract it so the synthesised MCP template
-        resolves correctly rather than looking up the dispatcher itself (which
-        has no meaningful display copy of its own).
-        """
-
-        tool_name = payload.get("tool_name")
-        if not isinstance(tool_name, str) or not tool_name.strip():
-            return None
-        name = tool_name.strip()
-        if name != cls._MCP_DISPATCHER_TOOL_NAME:
-            return name
-        args = payload.get("args")
-        if not isinstance(args, Mapping):
-            return name
-        inner = args.get("tool_name")
-        if not isinstance(inner, str) or not inner.strip():
-            return name
-        return inner.strip()
 
     @staticmethod
     def _apply_tier3_override(

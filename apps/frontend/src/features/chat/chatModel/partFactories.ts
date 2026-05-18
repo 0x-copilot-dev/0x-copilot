@@ -47,6 +47,17 @@ export function toolPart(
   if (summary) {
     args.summary = summary;
   }
+  // Plumb the backend-projected display title through so renderers can
+  // surface it verbatim (`apps/frontend/CLAUDE.md`: "Use the backend's
+  // projected display_title / summary / status fields. Do not derive
+  // activity types from event-name prefixes on the client."). The
+  // projector unwraps the MCP dispatcher (e.g. ``"Calling list_issues"``),
+  // so the renderer never has to recompute the title from raw args.
+  const displayTitle =
+    event.display_title ?? stringValue(existingArgs.display_title);
+  if (displayTitle) {
+    args.display_title = displayTitle;
+  }
   const presentation = preferredPresentation(
     presentationFromValue(existingArgs.presentation),
     event.presentation ?? null,

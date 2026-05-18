@@ -23,6 +23,13 @@ from agent_runtime.execution.contracts import (
     StreamEventType,
 )
 from agent_runtime.api.constants import Keys, Messages, Values
+
+# Lazy import: ``McpDispatcherUnwrap`` lives under ``agent_runtime.capabilities.mcp``,
+# whose package ``__init__`` eagerly imports the MCP middleware. That middleware
+# imports back through ``runtime_api.schemas`` (via the citation tooling), so a
+# top-level import here triggers a circular load during ``agent_runtime`` init.
+# ``_display_title_for`` resolves the helper at call time when both modules are
+# fully initialised.
 from agent_runtime.observability.redactor import JsonObjectCoercer
 from agent_runtime.validation import ValueNormalizer
 from runtime_api.schemas.common import (
@@ -361,7 +368,14 @@ class RuntimeEventPresentationProjector:
         )
         if configured is not None:
             return configured
-        tool_name = cls._text(payload.get(Keys.Field.TOOL_NAME))
+        # Use the dispatcher-unwrap helper so ``call_mcp_tool`` events render
+        # their inner tool name (e.g. ``"list_issues"``) instead of the raw
+        # dispatcher name. For non-dispatcher events the helper just returns
+        # ``payload.tool_name`` verbatim. Imported lazily (see module docstring
+        # at top) to avoid a circular import during ``agent_runtime`` init.
+        from agent_runtime.capabilities.mcp.dispatcher import McpDispatcherUnwrap
+
+        tool_name = McpDispatcherUnwrap.effective_tool_name(payload)
         if event_type is RuntimeApiEventType.TOOL_CALL_STARTED:
             if tool_name is None:
                 return Messages.Event.TOOL_CALL
