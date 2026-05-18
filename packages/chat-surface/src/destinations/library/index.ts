@@ -117,3 +117,42 @@ if (!hasItemRefResolver("library_dataset")) {
     breadcrumb: "Library",
   }));
 }
+
+// === P7-B2 detail + preview + page editor ===
+export {
+  LibraryDetailView,
+  type LibraryDetailViewProps,
+  type LibraryDetailItem,
+  type LibraryDetailItemId,
+  type LibraryDetailKind,
+  type LibraryDetailIndexStatus,
+  type LibraryDetailSource,
+  type LibraryDetailSourceKind,
+  type LibraryDetailProjectChip,
+  type LibraryDetailAuditEntry,
+  type LibraryDetailCrossRefs,
+  type LibraryFileDetailItem,
+  type LibraryPageDetailItem,
+  type LibraryDatasetDetailItem,
+} from "./LibraryDetailView";
+export {
+  FilePreview,
+  type FilePreviewProps,
+  type FilePreviewState,
+  type FilePreviewKind,
+} from "./preview/FilePreview";
+export { PagePreview, type PagePreviewProps } from "./preview/PagePreview";
+export {
+  DatasetPreview,
+  type DatasetPreviewProps,
+  type DatasetPreviewState,
+  type DatasetColumnSpec,
+  type DatasetColumnType,
+  type DatasetRow,
+} from "./preview/DatasetPreview";
+export {
+  PageEditor,
+  type PageEditorProps,
+  type PageEditorSaveStatus,
+  type PageEditorView,
+} from "./PageEditor";
