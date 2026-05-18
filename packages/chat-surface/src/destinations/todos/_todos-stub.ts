@@ -23,8 +23,14 @@ import type {
   ItemRef,
   ProjectId,
   RunId,
+  TodoExtractionId,
   TodoId,
+  TodoSeriesId,
 } from "@enterprise-search/api-types";
+
+// Re-exports — let `import { TodoSeriesId } from "../_todos-stub"` keep
+// working without an island-wide churn pass. Canonical site is api-types.
+export type { TodoExtractionId, TodoSeriesId };
 
 // ---- §4.1 Primitive enums --------------------------------------------------
 
@@ -47,9 +53,6 @@ export type TodoSource =
     };
 
 // ---- §11.1 Recurrence -----------------------------------------------------
-
-/** Branded series id. The orchestrator's canonical site is api-types. */
-export type TodoSeriesId = string & { readonly __brand: "TodoSeriesId" };
 
 /** Recurrence rule attached to a *parent* todo (top-level only — recurring
  *  subtasks are out of scope per implementation-plan §11.2). */
@@ -95,10 +98,6 @@ export interface Todo {
 }
 
 // ---- §3.7 Extractions ------------------------------------------------------
-
-export type TodoExtractionId = string & {
-  readonly __brand: "TodoExtractionId";
-};
 
 export interface TodoExtractionProposal {
   readonly text: string;

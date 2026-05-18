@@ -8,12 +8,9 @@
 //
 // SCOPE: presentation-only. No transport, no router, no service calls.
 
-/**
- * Branded id — keeps Agent ids distinct from Run ids, Skill ids, etc. in
- * the type system. Same pattern as `ConversationId` / `RunId` in
- * `destinations/home`.
- */
-export type AgentId = string & { readonly __brand: "AgentId" };
+// AgentId — canonical brand from api-types (SP-1 single source of truth).
+import type { AgentId } from "@enterprise-search/api-types";
+export type { AgentId };
 
 /**
  * Where the agent came from — drives the gallery's filter tabs and

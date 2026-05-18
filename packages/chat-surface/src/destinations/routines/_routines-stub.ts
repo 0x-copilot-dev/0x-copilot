@@ -29,14 +29,15 @@ import type {
 } from "@enterprise-search/api-types";
 import type { ItemRef } from "@enterprise-search/api-types";
 
-// ---- §4.1 brand-shaped trigger ids (local to the stub; the canonical
-// `packages/api-types/src/brands.ts` already owns `RoutineId` — only
-// `TriggerId` is new to P5). Keeping the brand definition here lets the
-// shell compile before P5-A1's api-types module lands; the orchestrator
-// hoists this to `brands.ts` at merge time.
+// ---- §4.1 brand-shaped trigger ids
+//
+// `TriggerId` is owned canonically by `@enterprise-search/api-types`
+// (`packages/api-types/src/brands.ts`). Re-exported here so existing
+// imports `from "../_routines-stub"` keep working without a churn pass.
 
 /** Stable identifier for a single trigger row inside a routine. */
-export type TriggerId = string & { readonly __brand: "TriggerId" };
+import type { TriggerId } from "@enterprise-search/api-types";
+export type { TriggerId };
 
 // ---- §3 / §4.1 enums ------------------------------------------------------
 

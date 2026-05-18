@@ -35,7 +35,7 @@ import {
   type ReactNode,
 } from "react";
 
-import type { ProjectId } from "@enterprise-search/api-types";
+import type { ConnectorSlug, ProjectId } from "@enterprise-search/api-types";
 
 import { EmptyState } from "../../shell/EmptyState";
 import { FilterTabs, type FilterTabOption } from "../../shell/FilterTabs";
@@ -58,13 +58,10 @@ const DANGER = "var(--color-danger)";
 
 // ── Public types ─────────────────────────────────────────────────────
 
-/** Connector kind. Owned canonically by `@enterprise-search/api-types`
- *  once Phase 6.5 lands its api-types extension (projects-extensions-prd
- *  §5.1); a local alias keeps the UI compiling in the meantime.
- *  TODO(merge): import `ConnectorSlug` from "@enterprise-search/api-types". */
-export type ProjectEditorConnectorSlug = string & {
-  readonly __brand: "ConnectorSlug";
-};
+/** Connector kind — canonical site is `@enterprise-search/api-types`
+ *  (`packages/api-types/src/projects.ts`). Kept as a presentation alias
+ *  so existing `ProjectEditorConnectorSlug` imports still resolve. */
+export type ProjectEditorConnectorSlug = ConnectorSlug;
 
 /** Tri-mode for the connector allowlist editor (§5.3). */
 export type ProjectConnectorAllowlistMode = "inherit" | "none" | "allowlist";

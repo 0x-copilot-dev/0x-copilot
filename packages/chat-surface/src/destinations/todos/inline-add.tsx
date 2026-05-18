@@ -8,13 +8,12 @@ import {
   type KeyboardEvent,
   type ReactElement,
 } from "react";
+import type { ProjectId } from "@enterprise-search/api-types";
 
-// Stub branded types — these mirror the canonical wire shapes in
-// `docs/atlas-new-design/destinations/todos-prd.md` §4.1. The P3 backend
-// work (P3-A1/A2) will publish them via `@enterprise-search/api-types`;
-// until then this component owns the contract locally so the chat-surface
-// package compiles standalone. Same pattern as Home's destination stub.
-export type ProjectId = string & { readonly __brand: "ProjectId" };
+// Branded ids — canonical site is `@enterprise-search/api-types`
+// (`packages/api-types/src/brands.ts`). Re-export keeps existing
+// `from "../inline-add"` imports working without a churn pass.
+export type { ProjectId };
 export type TodoPriority = "low" | "med" | "high";
 
 export interface TodoQuickAddInput {

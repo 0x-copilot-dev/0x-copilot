@@ -22,6 +22,8 @@ import {
   type ReactNode,
 } from "react";
 
+import type { ProjectTemplateId } from "@enterprise-search/api-types";
+
 import { CardGrid } from "../../shell/CardGrid";
 import { EmptyState } from "../../shell/EmptyState";
 import { FilterTabs, type FilterTabOption } from "../../shell/FilterTabs";
@@ -41,12 +43,11 @@ const DANGER = "var(--color-danger)";
 
 // ── Public types ─────────────────────────────────────────────────────
 
-/** Branded id local to chat-surface until api-types lands the canonical
- *  Phase 6.5 brand (projects-extensions-prd §7.2).
- *  TODO(merge): import `ProjectTemplateId` from "@enterprise-search/api-types". */
-export type ProjectTemplateId = string & {
-  readonly __brand: "ProjectTemplateId";
-};
+/** Canonical brand from `@enterprise-search/api-types/brands.ts`
+ *  (projects-extensions-prd §7.2). Re-exported so existing
+ *  `import { ProjectTemplateId } from "..."/TemplateGallery"` keep
+ *  working without a churn pass. */
+export type { ProjectTemplateId };
 
 /** Card-level view-model for a project template. Subset of §7.2's full
  *  `ProjectTemplate` shape — only fields the gallery card needs. */

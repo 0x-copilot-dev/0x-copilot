@@ -73,3 +73,17 @@ export type LibraryEntityId = LibraryFileId | LibraryPageId | LibraryDatasetId;
  * is rewritten — likely one of those three replaces this alias.
  */
 export type LibraryItemId = string & { readonly __brand: "LibraryItemId" };
+
+// P5 Routines — webhook trigger id (per-trigger; one routine can have many).
+export type TriggerId = string & { readonly __brand: "TriggerId" };
+
+// P3 Todos — recurring series id (links all materialized instances).
+export type TodoSeriesId = string & { readonly __brand: "TodoSeriesId" };
+
+// P6.5 Projects — template id (saved project shape for cloning).
+export type ProjectTemplateId = string & {
+  readonly __brand: "ProjectTemplateId";
+};
+
+// ConnectorSlug already lives in ./projects.ts (P6.5) — single source of
+// truth, kept there for now. Could be hoisted in a future cleanup.

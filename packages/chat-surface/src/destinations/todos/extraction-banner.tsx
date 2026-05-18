@@ -1,13 +1,10 @@
 import { useCallback, type CSSProperties, type ReactElement } from "react";
+import type { TodoExtractionId } from "@enterprise-search/api-types";
 
-// Stub branded types — mirror canonical wire shapes in
-// `docs/atlas-new-design/destinations/todos-prd.md` §4.1. The P3 backend
-// work (P3-A2 extractor publisher) will publish them via
-// `@enterprise-search/api-types`; until then this component owns the
-// contract locally so the chat-surface package compiles standalone.
-export type TodoExtractionId = string & {
-  readonly __brand: "TodoExtractionId";
-};
+// Canonical brand site is `@enterprise-search/api-types/brands.ts`
+// (P3-A2 extractor publisher writes the wire shape). Re-exported so
+// existing `from "../extraction-banner"` imports keep working.
+export type { TodoExtractionId };
 export type TodoPriority = "low" | "med" | "high";
 
 export interface ProposedTodo {
