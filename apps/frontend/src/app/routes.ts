@@ -28,6 +28,19 @@ export type AppRoute =
   | {
       readonly screen: "admin-adapter-review-detail";
       readonly candidateId: string;
+    }
+  // Phase 6.5 — Project Templates gallery + editor (sub-PRD
+  // `docs/atlas-new-design/destinations/projects-extensions-prd.md` §7.6).
+  // Modelled as its own top-level screen (not a chat-surface
+  // `ShellDestinationSlug`) because §7.6 + §12 Q1 explicitly note this is
+  // NOT a top-level rail destination; the gallery is reached from the
+  // Projects destination's `[Save as template]` / `[Manage templates]`
+  // CTAs. Modelling it as a screen keeps the destination union owned by
+  // the chat-surface package and free of host-app-only routes.
+  | { readonly screen: "project-templates-gallery" }
+  | {
+      readonly screen: "project-templates-editor";
+      readonly templateId: string;
     };
 
 /** The destination `/` maps to. Chats is the legacy landing page. */

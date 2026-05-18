@@ -95,6 +95,15 @@ const RoutinesRoute = lazy(() =>
     default: m.RoutinesRoute,
   })),
 );
+// P6.5-C2 — Project Templates gallery (sub-PRD §7.6). Top-level screen
+// (not a destination slug — §7.6 + §12 Q1: not on the rail), code-split
+// so the templates UI costs the main bundle nothing until the user
+// navigates to it via the Projects destination's [Manage templates] CTA.
+const TemplateGalleryRoute = lazy(() =>
+  import("../features/project-templates/TemplateGalleryRoute").then((m) => ({
+    default: m.TemplateGalleryRoute,
+  })),
+);
 
 // Single fallback used whenever a route chunk is in flight. Matches the
 // existing AuthGate "Loading session…" spinner shape so the user does
@@ -625,6 +634,48 @@ function EnterpriseSearchApp({
           router.navigate({ screen: "settings", section })
         }
       />
+    );
+  } else if (
+    route.screen === "project-templates-gallery" ||
+    route.screen === "project-templates-editor"
+  ) {
+    // P6.5-C2 — Project Templates gallery. The editor route shape lands
+    // in a follow-up wave; today the editor URL renders the gallery so
+    // the deep link resolves rather than 404ing on a copy-paste / share.
+    // Fork success on the gallery navigates to the new project's chat
+    // surface (the project detail view).
+    body = (
+      <section
+        data-testid="destination-outlet"
+        data-destination="project-templates"
+        style={{ height: "100%", overflow: "auto" }}
+        aria-label="project-templates screen"
+      >
+        <TemplateGalleryRoute
+          identity={identity}
+          onForked={(projectId) => {
+            // Navigate the user to the newly-forked project. v1 routes
+            // by destination (Projects rail) — when project-detail
+            // routing lands, replace this with a per-project deep link.
+            router.navigate(
+              { screen: "chat", destination: "projects" },
+              { replace: true },
+            );
+            // Stash the new id so the Projects route can highlight it
+            // on next paint without crashing pre-detail-surface clients.
+            try {
+              window.sessionStorage.setItem(
+                "enterprise.project-templates.lastForkedId",
+                projectId,
+              );
+            } catch {
+              // sessionStorage may be unavailable (privacy mode); the
+              // navigation is the user-observable behaviour — the hint
+              // is best-effort only.
+            }
+          }}
+        />
+      </section>
     );
   } else if (route.screen === "share") {
     body = (

@@ -129,6 +129,28 @@ function routeFromLocation(): AppRoute {
     }
     return { screen: "admin-adapter-review-queue" };
   }
+  // Phase 6.5 — Project Templates gallery + editor (sub-PRD §7.6).
+  // `/project-templates`           → gallery
+  // `/project-templates/<id>/edit` → editor for a specific template
+  // `/project-templates/<id>`      → falls back to the gallery (the editor
+  //                                  is the only detail surface today; the
+  //                                  PRD does not specify a read-only
+  //                                  detail page).
+  if (path === "/project-templates") {
+    return { screen: "project-templates-gallery" };
+  }
+  if (path.startsWith("/project-templates/")) {
+    const rest = path.slice("/project-templates/".length);
+    if (rest.endsWith("/edit")) {
+      const templateId = decodeURIComponent(
+        rest.slice(0, rest.length - "/edit".length),
+      );
+      if (templateId) {
+        return { screen: "project-templates-editor", templateId };
+      }
+    }
+    return { screen: "project-templates-gallery" };
+  }
   if (path === "/") {
     return { screen: "chat", destination: ROOT_DESTINATION };
   }
@@ -161,6 +183,15 @@ function pathForRoute(route: AppRoute): { path: string; hash: string } {
   if (route.screen === "admin-adapter-review-detail") {
     return {
       path: `/admin/adapter-review/${encodeURIComponent(route.candidateId)}`,
+      hash: "",
+    };
+  }
+  if (route.screen === "project-templates-gallery") {
+    return { path: "/project-templates", hash: "" };
+  }
+  if (route.screen === "project-templates-editor") {
+    return {
+      path: `/project-templates/${encodeURIComponent(route.templateId)}/edit`,
       hash: "",
     };
   }
