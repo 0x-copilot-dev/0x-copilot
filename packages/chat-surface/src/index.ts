@@ -553,7 +553,34 @@ export {
   type TeamPanelProps,
   type TeamSortSlug,
 } from "./destinations/team";
-export { MemoryDestination } from "./destinations/memory";
+// === Phase 12 P12-B2 — Memory destination (presentation layer) ===
+// MemoryDestination is the 13th destination's shell. The data binder
+// (host) lands in P12-C2; until then App.tsx mounts the shell with no
+// `items` prop and the destination renders an unwired-state explanation.
+export {
+  MemoryDestination,
+  MemoryPanel,
+  MemoryDetailView,
+  MemoryEditor,
+  MemoryProposalToast,
+  MemoryProposalToastStack,
+  MemoryProposalCard,
+  type MemoryDestinationProps,
+  type MemoryDetailTabSlug,
+  type MemoryDetailViewProps,
+  type MemoryEditorProps,
+  type MemoryEditorSavePayload,
+  type MemoryKindFilterCounts,
+  type MemoryKindFilterSlug,
+  type MemoryPanelProps,
+  type MemoryPanelTagChip,
+  type MemoryProposalCardProps,
+  type MemoryProposalToastProps,
+  type MemoryProposalToastStackProps,
+  type MemoryScopeFilterSlug,
+  type RenderMemoryDetailSlot,
+} from "./destinations/memory";
+// === end Phase 12 Memory ===
 // === end Phase 2-A / 3 destinations ===
 
 // === Phase 5 — Routines (12th destination) ===
