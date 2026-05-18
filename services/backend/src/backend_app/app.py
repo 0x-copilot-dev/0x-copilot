@@ -222,6 +222,13 @@ from backend_app.routes.scim import register_scim_routes
 from backend_app.routes.sessions import register_session_routes
 from backend_app.routes.siem import register_siem_admin_routes
 from backend_app.routes.workspace import register_workspace_routes
+from backend_app.team import (
+    InMemoryTeamStore,
+    StoreBackedAssetCounts,
+    TeamService,
+    register_team_routes,
+    register_team_sse_routes,
+)
 from backend_app.token_vault import TokenVault, TokenVaultFactory
 from backend_app.service import (
     DeployAuditService,
@@ -1796,6 +1803,33 @@ def create_app(
         blob_store=resolved_blob_store,  # type: ignore[arg-type]
         row_store=resolved_row_store,  # type: ignore[arg-type]
     )
+
+    # Phase 12 — Team destination (read projection over existing
+    # ``users`` + ``organization_members`` + ``role_assignments``).
+    # Composes the canonical IdentityStore + InvitationsService; uses
+    # the in-memory presence KV (sub-PRD §5.2 — production injects a
+    # Redis-backed adapter via the same Protocol). Asset counts
+    # delegate to the agents + projects stores wired above.
+    #
+    # SSE registers first so ``app.state.team_activity_bus`` is
+    # available when the routes publish on PATCH role / POST offboard.
+    register_team_sse_routes(app)
+    team_store = InMemoryTeamStore(
+        identity_store=resolved_identity_store,
+        asset_counts=StoreBackedAssetCounts(
+            agents_store=resolved_agents_store,
+            projects_store=resolved_projects_store,
+        ),
+    )
+    app.state.team_store = team_store
+    team_service = TeamService(
+        store=team_store,
+        identity_store=resolved_identity_store,
+        invitations_service=resolved_invitations_service,
+        projects_service=projects_service,
+    )
+    app.state.team_service = team_service
+    register_team_routes(app, service=team_service)
 
     return app
 
