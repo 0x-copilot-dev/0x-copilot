@@ -224,3 +224,185 @@ CREATE INDEX IF NOT EXISTS library_audit_tenant_ts_idx
 
 CREATE INDEX IF NOT EXISTS library_audit_target_idx
     ON library_audit_events (tenant_id, target_id, ts DESC);
+
+
+-- =========================================================================
+-- Retrieval pipeline (Phase 7.5 P7.5-A2) — embeddings + index queue +
+-- generated tsvector columns. Adds to the metadata tables defined above;
+-- does NOT modify the existing column set.
+--
+-- Source: docs/atlas-new-design/destinations/library-prd.md §5.1 / §5.2
+-- (tsvector + GIN + pgvector IVFFLAT) and §6.2 / §6.3 / §6.5 (claim
+-- loop + chunking + model_id pinning).
+-- =========================================================================
+
+-- pgvector extension. Idempotent — production deploy may have pre-created
+-- it under a different schema. The CREATE EXTENSION IF NOT EXISTS form
+-- is the standard escape.
+CREATE EXTENSION IF NOT EXISTS vector;
+
+
+-- =========================================================================
+-- tsvector columns for BM25 keyword retrieval (library-prd §5.1).
+--
+-- Generated columns are deterministic + maintained by Postgres on every
+-- row write. The expression mirrors the spec verbatim. For files +
+-- datasets, ``name`` + ``tags`` are the only indexed text fields
+-- (text-extraction output for files lands in the embeddings table —
+-- not on the metadata row, to keep the metadata row small).
+-- =========================================================================
+
+ALTER TABLE library_files
+    ADD COLUMN IF NOT EXISTS tsv tsvector
+    GENERATED ALWAYS AS (
+        to_tsvector(
+            'simple',
+            coalesce(name, '') || ' ' || coalesce(array_to_string(tags, ' '), '')
+        )
+    ) STORED;
+
+CREATE INDEX IF NOT EXISTS library_files_tsv_idx
+    ON library_files USING GIN (tsv);
+
+ALTER TABLE library_pages
+    ADD COLUMN IF NOT EXISTS tsv tsvector
+    GENERATED ALWAYS AS (
+        to_tsvector(
+            'simple',
+            coalesce(title, '')
+            || ' '
+            || substring(coalesce(markdown, ''), 1, 2048)
+            || ' '
+            || coalesce(array_to_string(tags, ' '), '')
+        )
+    ) STORED;
+
+CREATE INDEX IF NOT EXISTS library_pages_tsv_idx
+    ON library_pages USING GIN (tsv);
+
+ALTER TABLE library_datasets
+    ADD COLUMN IF NOT EXISTS tsv tsvector
+    GENERATED ALWAYS AS (
+        to_tsvector(
+            'simple',
+            coalesce(name, '')
+            || ' '
+            || coalesce(description, '')
+            || ' '
+            || coalesce(array_to_string(tags, ' '), '')
+        )
+    ) STORED;
+
+CREATE INDEX IF NOT EXISTS library_datasets_tsv_idx
+    ON library_datasets USING GIN (tsv);
+
+
+-- =========================================================================
+-- library_embeddings — one row per chunk.
+--
+-- ``embedding`` is a pgvector vector(1536); model + dimension are pinned
+-- per ``model_id`` so rows from different models are co-stored but
+-- queried per model (library-prd §6.5). Tenant + model_id pre-filter
+-- keeps recall scoped before the IVFFLAT probe.
+--
+-- The ``chunk_text`` is stored for two reasons:
+--   1. Re-rank input — the cross-encoder step (§6.1) needs the source
+--      text without a second extraction pass.
+--   2. Explainability — the search response carries a snippet so the
+--      UI can render evidence next to the score.
+-- ``chunk_text`` is capped at 4 KB (CHECK enforced) per §5.1.
+-- =========================================================================
+
+CREATE TABLE IF NOT EXISTS library_embeddings (
+    id                    uuid PRIMARY KEY,
+    tenant_id             uuid NOT NULL,
+    target_kind           text NOT NULL,  -- file | page | dataset
+    target_id             uuid NOT NULL,
+    chunk_ordinal         int NOT NULL,
+    chunk_text            text NOT NULL CHECK (octet_length(chunk_text) <= 4096),
+    embedding             vector(1536) NOT NULL,
+    -- ``model_id`` is the embedding-model identifier, e.g.
+    -- ``text-embedding-3-small`` (library-prd §6.5). Re-embedding under
+    -- a new model writes new rows; the old rows stay until cleanup so
+    -- search remains available during migration.
+    model_id              text NOT NULL,
+    created_at            timestamptz NOT NULL DEFAULT now(),
+    -- Idempotency: at most one row per (target, ordinal, model). The
+    -- indexer uses ``ON CONFLICT (...) DO UPDATE`` to make re-runs
+    -- safe; tenant_id is the leading axis on every read path.
+    CONSTRAINT library_embeddings_target_unique
+        UNIQUE (tenant_id, target_kind, target_id, chunk_ordinal, model_id)
+);
+
+-- IVFFLAT vector index on cosine distance. Pre-filtering on (tenant_id,
+-- model_id) is the responsibility of the query layer (library-prd §6.5);
+-- this index itself is unindexed on those columns. Lists=100 is a
+-- reasonable Phase-7.5 default; tenants beyond ~1M chunks may want to
+-- bump this — out of scope here (Wave 8+ tuning).
+CREATE INDEX IF NOT EXISTS library_embeddings_vector_idx
+    ON library_embeddings
+    USING ivfflat (embedding vector_cosine_ops)
+    WITH (lists = 100);
+
+-- Reverse-lookup: "what chunks exist for this target?" — used by the
+-- re-embed path (delete-then-insert when model_id changes) and by the
+-- cascade on soft/hard delete.
+CREATE INDEX IF NOT EXISTS library_embeddings_target_idx
+    ON library_embeddings (tenant_id, target_kind, target_id, chunk_ordinal);
+
+
+-- =========================================================================
+-- library_index_jobs — claim-pattern queue for the indexer worker.
+--
+-- One row per indexing request. Mirrors the Routines scheduler claim
+-- shape: ``status='pending'`` is the work queue; the worker selects
+-- with ``FOR UPDATE SKIP LOCKED`` and sets ``status='indexing'`` +
+-- ``claim_expires_at = now() + CLAIM_TTL_SECONDS``. On success ->
+-- ``status='indexed'``; on retryable failure -> attempts++ + backoff;
+-- on hard failure (attempts >= max_attempts) -> ``status='failed'``.
+--
+-- Idempotency: there is at most one PENDING job per (tenant, target,
+-- target_id) — re-enqueues coalesce via the partial UNIQUE index. We
+-- explicitly allow multiple terminal (indexed/failed) rows so the
+-- audit history of re-index passes survives.
+-- =========================================================================
+
+CREATE TABLE IF NOT EXISTS library_index_jobs (
+    id                    uuid PRIMARY KEY,
+    tenant_id             uuid NOT NULL,
+    target_kind           text NOT NULL,  -- file | page | dataset
+    target_id             uuid NOT NULL,
+    -- status ∈ {pending, indexing, indexed, failed}.
+    status                text NOT NULL DEFAULT 'pending',
+    attempts              int NOT NULL DEFAULT 0,
+    max_attempts          int NOT NULL DEFAULT 3,
+    last_error            text NULL,
+    -- ``content_hash`` lets the worker skip re-embedding when the row's
+    -- text hasn't changed — only set after the first successful index.
+    content_hash          text NULL,
+    -- ``model_id`` is the model the row was last embedded with; null
+    -- until first success. On model_id change the indexer re-embeds.
+    model_id              text NULL,
+    claim_expires_at      timestamptz NULL,
+    next_run_at           timestamptz NOT NULL DEFAULT now(),
+    created_at            timestamptz NOT NULL DEFAULT now(),
+    updated_at            timestamptz NOT NULL DEFAULT now()
+);
+
+-- Worker poll: cheapest possible "find the next due pending job" walk.
+CREATE INDEX IF NOT EXISTS library_index_jobs_pending_idx
+    ON library_index_jobs (tenant_id, next_run_at)
+    WHERE status = 'pending';
+
+-- Stuck-claim reaper: find jobs whose claim has expired (worker crashed
+-- before flipping status back). The scheduler resets them to pending.
+CREATE INDEX IF NOT EXISTS library_index_jobs_stuck_idx
+    ON library_index_jobs (claim_expires_at)
+    WHERE status = 'indexing';
+
+-- Idempotent enqueue: a tenant has at most one in-flight (pending OR
+-- indexing) job per (target). Re-enqueues from the service layer
+-- collapse via ``ON CONFLICT DO UPDATE next_run_at = now()``.
+CREATE UNIQUE INDEX IF NOT EXISTS library_index_jobs_inflight_unique
+    ON library_index_jobs (tenant_id, target_kind, target_id)
+    WHERE status IN ('pending', 'indexing');

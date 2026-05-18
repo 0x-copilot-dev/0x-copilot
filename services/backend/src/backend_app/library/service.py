@@ -45,8 +45,9 @@ PII / sensitive content:
 from __future__ import annotations
 
 import hashlib
+import logging
 from datetime import datetime, timezone
-from typing import Any, Iterable
+from typing import Any, Callable, Iterable
 from uuid import uuid4
 
 from backend_app.library.store import (
@@ -61,6 +62,16 @@ from backend_app.projects.acl import (
     ProjectMembershipPort,
     is_member,
 )
+
+
+_LOGGER = logging.getLogger(__name__)
+
+
+# Callback the service uses to enqueue an indexing job after every state
+# change. Lives behind a callable so the service does not depend on the
+# indexer's queue store directly (the wiring composer injects both halves
+# at app startup). ``target_kind`` ∈ {"file", "page", "dataset"}.
+EnqueueIndexJob = Callable[[str, str, str], None]  # tenant, kind, target_id
 
 
 def _now() -> datetime:
@@ -125,9 +136,16 @@ class LibraryService:
         *,
         store: LibraryStore,
         membership_port: ProjectMembershipPort,
+        enqueue_index_job: EnqueueIndexJob | None = None,
     ) -> None:
         self._store = store
         self._membership = membership_port
+        # Optional retrieval-pipeline hook (P7.5-A2). When wired, every
+        # state change enqueues a job onto ``library_index_jobs`` so the
+        # background indexer can re-extract + re-embed. When unwired
+        # (legacy tests, no-indexer deployments), CRUD continues to work
+        # without raising.
+        self._enqueue_index_job = enqueue_index_job
 
     # =================================================================
     # Reads
@@ -254,6 +272,7 @@ class LibraryService:
                     },
                 )
             )
+        self._safe_enqueue(stored)
         return stored
 
     # =================================================================
@@ -315,6 +334,13 @@ class LibraryService:
                     },
                 )
             )
+        # Only enqueue when a content-relevant field changed. Tag-only
+        # edits do not change the indexable text on files / datasets;
+        # for pages the markdown is the only content axis (title is
+        # part of the chunk-1 header so we treat a title edit as
+        # content-changing too).
+        if _patch_changes_indexable_content(stored, validated):
+            self._safe_enqueue(stored)
         return stored
 
     # =================================================================
@@ -359,6 +385,11 @@ class LibraryService:
                     },
                 )
             )
+        # Soft-delete cascades to embeddings: the indexer's claim
+        # handler detects ``deleted_at IS NOT NULL`` and drops the
+        # ``library_embeddings`` rows for this target. Enqueue a job
+        # so the cascade runs even on a quiet system.
+        self._safe_enqueue(existing)
 
     # =================================================================
     # Helpers
@@ -395,6 +426,25 @@ class LibraryService:
         if isinstance(record, LibraryPageRecord):
             return self._store.update_page(record)
         return self._store.update_dataset(record)
+
+    def _safe_enqueue(self, record: LibraryItemRecord) -> None:
+        """Fire-and-forget enqueue.
+
+        Indexing is a downstream optimisation — any failure in the
+        enqueue path must not roll back the user's write. We log and
+        carry on; the retention/sweeper passes pick up stragglers.
+        """
+
+        if self._enqueue_index_job is None:
+            return
+        try:
+            self._enqueue_index_job(
+                record.tenant_id,
+                _kind_short(record),
+                record.id,
+            )
+        except Exception:  # pragma: no cover — defensive
+            _LOGGER.warning("library_indexer.enqueue_failed", exc_info=True)
 
     def _can_read(
         self,
@@ -567,6 +617,36 @@ def _validate_source(source: Any) -> None:
     kind = source.get("kind")
     if kind not in _VALID_SOURCE_KINDS:
         raise LibraryInvalidRequest("source_kind_invalid")
+
+
+def _kind_short(record: LibraryItemRecord) -> str:
+    """Indexer queue uses the short kind name (``file`` / ``page`` /
+    ``dataset``) — distinct from the audit ``target_kind`` which uses
+    the ``library_<kind>`` form."""
+
+    if isinstance(record, LibraryFileRecord):
+        return "file"
+    if isinstance(record, LibraryPageRecord):
+        return "page"
+    return "dataset"
+
+
+# Patch fields that change the indexable text. Tag-only edits do not
+# trigger re-embedding because the embedding model never sees the
+# tags column (tags live in the tsvector, not in the embedding chunk).
+_CONTENT_FIELDS_PAGE: frozenset[str] = frozenset({"markdown", "title"})
+_CONTENT_FIELDS_FILE: frozenset[str] = frozenset({"name"})
+_CONTENT_FIELDS_DATASET: frozenset[str] = frozenset({"name", "description"})
+
+
+def _patch_changes_indexable_content(
+    record: LibraryItemRecord, patch: dict[str, Any]
+) -> bool:
+    if isinstance(record, LibraryPageRecord):
+        return bool(_CONTENT_FIELDS_PAGE.intersection(patch))
+    if isinstance(record, LibraryFileRecord):
+        return bool(_CONTENT_FIELDS_FILE.intersection(patch))
+    return bool(_CONTENT_FIELDS_DATASET.intersection(patch))
 
 
 def _target_kind_for(record: LibraryItemRecord) -> str:

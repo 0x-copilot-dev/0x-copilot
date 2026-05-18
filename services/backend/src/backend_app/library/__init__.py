@@ -49,6 +49,24 @@ from backend_app.library.blob_store import (
     SignedDownloadUrl,
     SignedUploadGrant,
 )
+from backend_app.library.embeddings import (
+    DEFAULT_EMBEDDING_DIMENSIONS,
+    DEFAULT_EMBEDDING_MODEL_ID,
+    Chunk,
+    EmbeddingRow,
+    EmbeddingsStore,
+    InMemoryEmbeddingsStore,
+    build_embedding_rows,
+    chunk_text,
+    compute_content_hash,
+    extract_text,
+)
+from backend_app.library.index_jobs import (
+    InMemoryLibraryIndexJobsStore,
+    IndexJobClaim,
+    LibraryIndexJobRecord,
+    LibraryIndexJobsStore,
+)
 from backend_app.library.routes import register_library_routes
 from backend_app.library.service import (
     LibraryConflict,
@@ -67,15 +85,25 @@ from backend_app.library.store import (
 )
 
 __all__ = [
+    "Chunk",
     "DATASET_MIME_SIZE_LIMITS",
     "DEFAULT_DATASET_MAX_BYTES",
+    "DEFAULT_EMBEDDING_DIMENSIONS",
+    "DEFAULT_EMBEDDING_MODEL_ID",
     "DEFAULT_FILE_MAX_BYTES",
+    "EmbeddingRow",
+    "EmbeddingsStore",
+    "InMemoryEmbeddingsStore",
+    "InMemoryLibraryIndexJobsStore",
     "InMemoryLibraryStore",
+    "IndexJobClaim",
     "LibraryAuditRecord",
     "LibraryConflict",
     "LibraryDatasetRecord",
     "LibraryFileRecord",
     "LibraryForbidden",
+    "LibraryIndexJobRecord",
+    "LibraryIndexJobsStore",
     "LibraryInvalidRequest",
     "LibraryNotFound",
     "LibraryPageRecord",
@@ -94,5 +122,9 @@ __all__ = [
     "SIGNED_URL_MAX_TTL_SECONDS",
     "SignedDownloadUrl",
     "SignedUploadGrant",
+    "build_embedding_rows",
+    "chunk_text",
+    "compute_content_hash",
+    "extract_text",
     "register_library_routes",
 ]
