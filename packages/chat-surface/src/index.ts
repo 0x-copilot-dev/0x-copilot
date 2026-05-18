@@ -348,23 +348,8 @@ export {
 export {
   HomeDestination,
   HomePanel,
-  type AgentActivityEntry,
-  type AgentActivityKind,
-  type FavoriteToolSummary,
   type HomeDestinationProps,
-  type HomeGreeting,
   type HomePanelProps,
-  type HomePayload,
-  type HomeResponse,
-  type HomeSectionKey,
-  type MeetingSummary,
-  type PinnedChatSummary,
-  type QuickAction,
-  type RecentRunStatus,
-  type RecentRunSummary,
-  type StarredProjectSummary,
-  type TimeOfDay,
-  type TodoSummary,
 } from "./destinations/home";
 export {
   InboxDestination,

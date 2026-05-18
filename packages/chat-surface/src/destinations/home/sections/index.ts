@@ -1,11 +1,18 @@
-// Section-component barrel for the Home destination. P2-B1's
-// `HomeDestination` imports from here so each section file stays the
-// canonical home for its presentation logic.
+// Section-component barrel for the Home destination (Phase 9 rewrite).
 //
-// TODO(merge): once api-types/src/home.ts ships and `_home-stub.ts` is
-// removed, this barrel keeps its shape — only the underlying type imports
-// shift.
+// Each section file is the canonical home for its presentation logic.
+// `<HomeDestination>` composes these in fixed §3.1 order.
 
-export { ActivityFeed, type ActivityFeedProps } from "./ActivityFeed";
-export { Greeting, type GreetingProps } from "./Greeting";
-export { PinnedChats, type PinnedChatsProps } from "./PinnedChats";
+export { HomeGreeting, type HomeGreetingProps } from "./HomeGreeting";
+export { TriageStrip, type TriageStripProps } from "./TriageStrip";
+export { TodayTimeline, type TodayTimelineProps } from "./TodayTimeline";
+export { WhatsNewDigest, type WhatsNewDigestProps } from "./WhatsNewDigest";
+export { InFlightStrip, type InFlightStripProps } from "./InFlightStrip";
+export {
+  LiveActivityRail,
+  type LiveActivityRailProps,
+} from "./LiveActivityRail";
+export {
+  HomeQuickActionsSection,
+  type HomeQuickActionsSectionProps,
+} from "./HomeQuickActionsSection";

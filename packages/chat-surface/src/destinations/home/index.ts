@@ -1,21 +1,18 @@
 // Home destination — public surface + ItemRef resolver registration.
 //
+// Phase 9 rewrite (sub-PRD home-prd.md §3.1 / §3.2). The Phase 2 rich
+// section vocabulary (PinnedChat / RecentRun / FavoriteTool / TodoSummary
+// / MeetingSummary / StarredProject) is retired in this destination.
+// Wire-types are sourced directly from `@enterprise-search/api-types`
+// (no per-destination stub) so contract drift cannot creep in.
+//
 // Per cross-audit §1.1 + §3.3, each destination registers its kind on
-// package import. Home owns the resolvers for kinds the Home payload
-// surfaces in the agent-activity feed (sub-PRD §4.3): `chat`, `run`,
-// `subagent`, and `tool_result`. Other kinds (`todo`, `inbox_item`,
-// `meeting_external`, `project`, `library_dataset`, …) register at
-// their own destination's package landing.
-//
-// The resolvers here are *minimal* — they return display labels +
-// `ArtifactRoute`s the Atlas shell already understands. Richer
-// resolvers (with breadcrumb + denormalized icons) ship per-destination
-// later; cross-audit §3.3 requires the registry to be populated before
-// any `<ItemLink>` render, not that every kind have a polished resolver.
-//
-// Branded IDs (ConversationId / RunId / etc.) live in
-// `@enterprise-search/api-types` — chat-surface's top-level `index.ts`
-// re-exports them from the canonical declaration site.
+// package import. Home owns the resolvers for kinds the Phase 9 payload
+// surfaces: `chat` (live activity), `run` (live activity), `subagent`
+// + `tool_result` (live activity click-through). Other kinds the
+// Phase 9 surfaces use but OTHER destinations own (`meeting_external`,
+// `routine`, `project`, `todo`, `approval`, `inbox_item`) register at
+// their owning destination's package landing.
 
 import {
   hasItemRefResolver,
@@ -32,29 +29,6 @@ import { HomePanel, type HomePanelProps } from "./HomePanel";
 export { HomeDestination, type HomeDestinationProps };
 export { HomePanel, type HomePanelProps };
 
-// Wire-type re-exports (forwarded from `_home-stub.ts`; the orchestrator
-// rewires the stub to `@enterprise-search/api-types` at merge — see
-// `_home-stub.ts` header).
-//
-// TODO(merge): rewire to "@enterprise-search/api-types"
-export type {
-  AgentActivityEntry,
-  AgentActivityKind,
-  FavoriteToolSummary,
-  HomeGreeting,
-  HomePayload,
-  HomeResponse,
-  HomeSectionKey,
-  MeetingSummary,
-  PinnedChatSummary,
-  QuickAction,
-  RecentRunStatus,
-  RecentRunSummary,
-  StarredProjectSummary,
-  TimeOfDay,
-  TodoSummary,
-} from "./HomeDestination";
-
 // ===========================================================================
 // ItemRef resolver registration (cross-audit §3.3)
 // ===========================================================================
@@ -65,14 +39,9 @@ export type {
 // `ItemRefResolverAlreadyRegistered`. The owning destination later
 // upgrades with `{ replace: true }` when it ships a richer resolver.
 
-// `chat` — the activity feed and pinned-chats grid both surface chats.
+// `chat` — WhatsNewDigest + LiveActivityRail surface chats.
 if (!hasItemRefResolver("chat")) {
   registerItemRefResolver("chat", async (id) => ({
-    // Display label: best-effort fallback used by `<ItemLink>` before
-    // the owning destination registers a richer resolver. Phase 2 ships
-    // only the route binding; chats destination Phase 1 may later
-    // replace this with a label that pulls the conversation title from
-    // its store.
     label: "Chat",
     icon: null,
     route: { kind: "chat", conversationId: id as unknown as string },
@@ -80,7 +49,7 @@ if (!hasItemRefResolver("chat")) {
   }));
 }
 
-// `run` — recent runs + completed/failed_run activity entries.
+// `run` — runs surfaced in live activity + timeline `run_scheduled`.
 if (!hasItemRefResolver("run")) {
   registerItemRefResolver("run", async (id) => ({
     label: "Run",
@@ -90,13 +59,8 @@ if (!hasItemRefResolver("run")) {
   }));
 }
 
-// `subagent` — surface deep-dive into a specific subagent within a run.
-// `ArtifactRoute.subagent` requires both `runId` + `subagentId`; the
-// registry only carries `subagentId`, so the chats destination's
-// richer resolver (which can correlate the parent run from its store)
-// replaces this later. Until then, return `route: null` so `<ItemLink>`
-// renders the graceful "deleted subagent" chip rather than a dead-link
-// link.
+// `subagent` — placeholder; chats destination ships a richer resolver
+// that correlates the parent run.
 if (!hasItemRefResolver("subagent")) {
   registerItemRefResolver("subagent", async (_id) => ({
     label: "Subagent",
@@ -106,10 +70,8 @@ if (!hasItemRefResolver("subagent")) {
   }));
 }
 
-// `tool_result` — completed-run activity entries link out to the
-// tool-result detail surface for inspection. Same caveat as `subagent`:
-// the chats destination later registers a richer resolver that maps
-// `tool_result` → (runId, stepId).
+// `tool_result` — placeholder; chats destination ships the richer
+// (runId, stepId) resolver.
 if (!hasItemRefResolver("tool_result")) {
   registerItemRefResolver("tool_result", async (_id) => ({
     label: "Tool result",
