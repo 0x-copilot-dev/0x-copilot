@@ -28,6 +28,13 @@ import { TodosRoute } from "../features/todos/TodosRoute";
 import { ProjectsRoute } from "../features/projects/ProjectsRoute";
 import { LibraryRoute } from "../features/library/LibraryRoute";
 import { AgentsRoute } from "../features/agents/AgentsRoute";
+// PR P11-C — Connectors destination data binder + sub-route gateway.
+// `ConnectorsGateway` owns the in-destination routing between the list
+// (/connectors), the detail (/connectors/<id>), and the webhooks
+// sub-route (/connectors/webhooks). Sub-routes ride on local state
+// because HashRouter only models top-level `/<destination>` slugs
+// today; lifting them into the URL is a follow-up.
+import { ConnectorsGateway } from "../features/connectors/ConnectorsGateway";
 // PR 4.1 — hydrate user profile + preferences once at the shell so the
 // Appearance attributes (data-density, data-reduce-motion, theme/accent)
 // apply on chat too, not only when Settings is open.
@@ -119,7 +126,6 @@ function RouteLoadingFallback(): ReactElement {
 }
 import {
   ChatShell,
-  ConnectorsDestination,
   DocumentPresenceSignal,
   KeyValueStoreProvider,
   LocalStorageKeyValueStore,
@@ -167,12 +173,12 @@ const NON_CHATS_DESTINATIONS: Readonly<
       | "projects"
       | "library"
       | "agents"
+      | "connectors"
     >,
     () => ReactElement
   >
 > = {
   tools: ToolsDestination,
-  connectors: ConnectorsDestination,
   team: TeamDestination,
   memory: MemoryDestination,
 };
@@ -834,6 +840,23 @@ function EnterpriseSearchApp({
         aria-label="agents destination"
       >
         <AgentsRoute identity={identity} />
+      </section>
+    );
+  } else if (route.destination === "connectors") {
+    // PR P11-C — Connectors destination dispatch. ConnectorsGateway
+    // owns the in-destination routing between the list, the detail,
+    // and the webhooks sub-route. The chat-surface
+    // `<ConnectorsDestination>` placeholder is no longer mounted here;
+    // the gateway hosts a fully-bound `<ConnectorsRoute>` that consumes
+    // the same destination component internally.
+    body = (
+      <section
+        data-testid="destination-outlet"
+        data-destination="connectors"
+        style={{ height: "100%", overflow: "auto" }}
+        aria-label="connectors destination"
+      >
+        <ConnectorsGateway identity={identity} isAdmin={isAdmin} />
       </section>
     );
   } else {
