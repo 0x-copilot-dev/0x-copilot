@@ -28,6 +28,10 @@ from datetime import datetime, timezone
 from typing import Iterable
 
 from backend_app.identity.store import IdentityStore
+from backend_app.projects.acl import (
+    ProjectMembershipPort,
+    _NoMemberProjectAdapter,
+)
 from backend_app.todos.store import (
     TodoAuditRecord,
     TodoRecord,
@@ -510,73 +514,7 @@ class TodosService:
         )
 
 
-# ---------------------------------------------------------------------------
-# Project membership port (Projects destination is Phase 6+; no real
-# adapter ships yet).
-# ---------------------------------------------------------------------------
-
-
-class ProjectMembershipPort:
-    """Adapter contract for project-membership lookups.
-
-    The Projects destination (Phase 6+) will register a real adapter
-    backed by a ``project_members`` table; until then the in-memory
-    no-member adapter keeps todos owner-only, which matches the
-    Phase-3 reality (no project-creation surface exists yet).
-    """
-
-    def is_project_member(
-        self, *, tenant_id: str, project_id: str, user_id: str
-    ) -> bool:  # pragma: no cover - protocol
-        raise NotImplementedError
-
-    def list_projects_for_user(
-        self, *, tenant_id: str, user_id: str
-    ) -> tuple[str, ...]:  # pragma: no cover - protocol
-        raise NotImplementedError
-
-
-class _NoMemberProjectAdapter:
-    """Default adapter: no project memberships exist."""
-
-    def is_project_member(
-        self, *, tenant_id: str, project_id: str, user_id: str
-    ) -> bool:
-        return False
-
-    def list_projects_for_user(
-        self, *, tenant_id: str, user_id: str
-    ) -> tuple[str, ...]:
-        return ()
-
-
-class InMemoryProjectMembershipAdapter:
-    """Test-only adapter so the ACL tests can simulate project membership."""
-
-    def __init__(self, memberships: dict[tuple[str, str], set[str]]) -> None:
-        # Key: (tenant_id, project_id) -> set of user_ids that are members.
-        self._memberships = memberships
-
-    def is_project_member(
-        self, *, tenant_id: str, project_id: str, user_id: str
-    ) -> bool:
-        members = self._memberships.get((tenant_id, project_id), set())
-        return user_id in members
-
-    def list_projects_for_user(
-        self, *, tenant_id: str, user_id: str
-    ) -> tuple[str, ...]:
-        projects = [
-            project_id
-            for (tid, project_id), members in self._memberships.items()
-            if tid == tenant_id and user_id in members
-        ]
-        return tuple(projects)
-
-
 __all__ = [
-    "InMemoryProjectMembershipAdapter",
-    "ProjectMembershipPort",
     "TodoForbidden",
     "TodoInvalidRequest",
     "TodoNotFound",

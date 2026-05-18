@@ -31,7 +31,8 @@ from fastapi.testclient import TestClient
 from backend_app.app import create_app
 from backend_app.contracts import OrganizationRecord, UserRecord
 from backend_app.identity.store import InMemoryIdentityStore
-from backend_app.todos.service import InMemoryProjectMembershipAdapter, TodosService
+from backend_app.projects.acl import InMemoryProjectMembershipAdapter
+from backend_app.todos.service import TodosService
 from backend_app.todos.store import InMemoryTodosStore
 
 

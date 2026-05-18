@@ -39,6 +39,10 @@ from datetime import datetime, timezone
 from typing import Any, Iterable
 
 from backend_app.identity.store import IdentityStore
+from backend_app.projects.acl import (
+    ProjectMembershipPort,
+    _NoMemberProjectAdapter,
+)
 from backend_app.routines.store import (
     RoutineAuditRecord,
     RoutineFireRecord,
@@ -723,69 +727,6 @@ class RoutinesService:
 
 
 # ---------------------------------------------------------------------------
-# Project membership port (Projects destination is Phase 6+; no real
-# adapter ships yet).
-# ---------------------------------------------------------------------------
-
-
-class ProjectMembershipPort:
-    """Adapter contract for project-membership lookups.
-
-    Shared shape with todos + inbox; the Projects destination (Phase
-    6+) will register one canonical adapter that every surface
-    consumes.
-    """
-
-    def is_project_member(
-        self, *, tenant_id: str, project_id: str, user_id: str
-    ) -> bool:  # pragma: no cover - protocol
-        raise NotImplementedError
-
-    def list_projects_for_user(
-        self, *, tenant_id: str, user_id: str
-    ) -> tuple[str, ...]:  # pragma: no cover - protocol
-        raise NotImplementedError
-
-
-class _NoMemberProjectAdapter:
-    """Default adapter: no project memberships exist."""
-
-    def is_project_member(
-        self, *, tenant_id: str, project_id: str, user_id: str
-    ) -> bool:
-        return False
-
-    def list_projects_for_user(
-        self, *, tenant_id: str, user_id: str
-    ) -> tuple[str, ...]:
-        return ()
-
-
-class InMemoryProjectMembershipAdapter:
-    """Test-only adapter so the ACL tests can simulate project membership."""
-
-    def __init__(self, memberships: dict[tuple[str, str], set[str]]) -> None:
-        # Key: (tenant_id, project_id) -> set of user_ids that are members.
-        self._memberships = memberships
-
-    def is_project_member(
-        self, *, tenant_id: str, project_id: str, user_id: str
-    ) -> bool:
-        members = self._memberships.get((tenant_id, project_id), set())
-        return user_id in members
-
-    def list_projects_for_user(
-        self, *, tenant_id: str, user_id: str
-    ) -> tuple[str, ...]:
-        projects = [
-            project_id
-            for (tid, project_id), members in self._memberships.items()
-            if tid == tenant_id and user_id in members
-        ]
-        return tuple(projects)
-
-
-# ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------
 
@@ -831,8 +772,6 @@ def _action_for_transition(before: str, after: str) -> str:
 
 __all__ = [
     "ACTIVE_ROUTINES_PER_USER_LIMIT",
-    "InMemoryProjectMembershipAdapter",
-    "ProjectMembershipPort",
     "RoutineForbidden",
     "RoutineInvalidRequest",
     "RoutineInvalidTransition",

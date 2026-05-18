@@ -34,10 +34,8 @@ from fastapi.testclient import TestClient
 from backend_app.app import create_app
 from backend_app.contracts import OrganizationRecord, UserRecord
 from backend_app.identity.store import InMemoryIdentityStore
-from backend_app.routines.service import (
-    InMemoryProjectMembershipAdapter,
-    RoutinesService,
-)
+from backend_app.projects.acl import InMemoryProjectMembershipAdapter
+from backend_app.routines.service import RoutinesService
 from backend_app.routines.store import InMemoryRoutinesStore
 
 

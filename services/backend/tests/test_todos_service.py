@@ -138,7 +138,7 @@ class TestAuditInvariants:
         )
         # Bob is a project member (simulated by injecting a non-default
         # adapter), so he can READ but not WRITE.
-        from backend_app.todos.service import InMemoryProjectMembershipAdapter
+        from backend_app.projects.acl import InMemoryProjectMembershipAdapter
 
         service_member = TodosService(
             store=service._store,  # type: ignore[attr-defined]

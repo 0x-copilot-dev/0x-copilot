@@ -42,6 +42,10 @@ from backend_app.inbox.store import (
     InboxItemRecord,
     InboxStore,
 )
+from backend_app.projects.acl import (
+    ProjectMembershipPort,
+    _NoMemberProjectAdapter,
+)
 
 
 def _now() -> datetime:
@@ -486,69 +490,6 @@ class InboxService:
 
 
 # ---------------------------------------------------------------------------
-# Project membership port (Projects destination is Phase 6+; no real
-# adapter ships yet).
-# ---------------------------------------------------------------------------
-
-
-class ProjectMembershipPort:
-    """Adapter contract for project-membership lookups.
-
-    Shared shape with todos (see ``backend_app/todos/service.py``); the
-    Projects destination (Phase 6+) will register one canonical adapter
-    that both surfaces consume.
-    """
-
-    def is_project_member(
-        self, *, tenant_id: str, project_id: str, user_id: str
-    ) -> bool:  # pragma: no cover - protocol
-        raise NotImplementedError
-
-    def list_projects_for_user(
-        self, *, tenant_id: str, user_id: str
-    ) -> tuple[str, ...]:  # pragma: no cover - protocol
-        raise NotImplementedError
-
-
-class _NoMemberProjectAdapter:
-    """Default adapter: no project memberships exist."""
-
-    def is_project_member(
-        self, *, tenant_id: str, project_id: str, user_id: str
-    ) -> bool:
-        return False
-
-    def list_projects_for_user(
-        self, *, tenant_id: str, user_id: str
-    ) -> tuple[str, ...]:
-        return ()
-
-
-class InMemoryProjectMembershipAdapter:
-    """Test-only adapter so the ACL tests can simulate project membership."""
-
-    def __init__(self, memberships: dict[tuple[str, str], set[str]]) -> None:
-        # Key: (tenant_id, project_id) -> set of user_ids that are members.
-        self._memberships = memberships
-
-    def is_project_member(
-        self, *, tenant_id: str, project_id: str, user_id: str
-    ) -> bool:
-        members = self._memberships.get((tenant_id, project_id), set())
-        return user_id in members
-
-    def list_projects_for_user(
-        self, *, tenant_id: str, user_id: str
-    ) -> tuple[str, ...]:
-        projects = [
-            project_id
-            for (tid, project_id), members in self._memberships.items()
-            if tid == tenant_id and user_id in members
-        ]
-        return tuple(projects)
-
-
-# ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------
 
@@ -579,10 +520,8 @@ def _safe_dump(record: InboxItemRecord) -> dict:
 
 
 __all__ = [
-    "InMemoryProjectMembershipAdapter",
     "InboxForbidden",
     "InboxInvalidRequest",
     "InboxNotFound",
     "InboxService",
-    "ProjectMembershipPort",
 ]

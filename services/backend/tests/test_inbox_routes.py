@@ -34,11 +34,9 @@ from fastapi.testclient import TestClient
 from backend_app.app import create_app
 from backend_app.contracts import OrganizationRecord, UserRecord
 from backend_app.identity.store import InMemoryIdentityStore
-from backend_app.inbox.service import (
-    InMemoryProjectMembershipAdapter,
-    InboxService,
-)
+from backend_app.inbox.service import InboxService
 from backend_app.inbox.store import InMemoryInboxStore
+from backend_app.projects.acl import InMemoryProjectMembershipAdapter
 
 
 def _seeded_identity() -> InMemoryIdentityStore:

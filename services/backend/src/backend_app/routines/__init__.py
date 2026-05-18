@@ -65,8 +65,6 @@ from __future__ import annotations
 from backend_app.routines.routes import register_routines_routes
 from backend_app.routines.service import (
     ACTIVE_ROUTINES_PER_USER_LIMIT,
-    InMemoryProjectMembershipAdapter,
-    ProjectMembershipPort,
     RoutineForbidden,
     RoutineInvalidRequest,
     RoutineInvalidTransition,
@@ -94,10 +92,8 @@ from backend_app.routines.webhook_routes import register_routines_webhook_routes
 
 __all__ = [
     "ACTIVE_ROUTINES_PER_USER_LIMIT",
-    "InMemoryProjectMembershipAdapter",
     "InMemoryRoutineWebhookStore",
     "InMemoryRoutinesStore",
-    "ProjectMembershipPort",
     "RoutineAuditRecord",
     "RoutineFireRecord",
     "RoutineForbidden",
