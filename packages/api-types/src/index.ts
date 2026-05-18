@@ -8,6 +8,7 @@ export { ADAPTER_ALLOWLIST, type AdapterAllowlist } from "./adapterAllowlist";
 import type {
   ApprovalId,
   ConversationId,
+  ProjectId,
   RunId,
   TenantId,
   UserId,
@@ -456,6 +457,25 @@ export interface CreateConversationRequest {
   title?: string | null;
   metadata?: Record<string, unknown>;
   idempotency_key?: string | null;
+  /**
+   * Phase 6.5 §4 (Projects extensions, P6.5-C1) — when the user creates
+   * a chat while on a `/projects/<id>` route (or any subroute), the
+   * frontend populates this field so the new conversation is filed
+   * under the project. `null` (or omitted) keeps the chat Unfiled,
+   * matching the Phase 1 default.
+   *
+   * The composer's `[Filed under: ▾]` chip is the user-visible override
+   * — the chip's selected value is what the request sends; the route is
+   * the default, not a hard binding (compliance: untrusted-input rule).
+   *
+   * Backend wiring lands with P6.5-A2 (ai-backend conversation hook).
+   * Until A2 lands the field is intentionally omitted from the wire
+   * payload when the resolved value is `null` (the Phase 1 default
+   * shape is preserved bit-for-bit). The frontend only sends
+   * `project_id` when a non-null value is resolved — see
+   * `apps/frontend/src/api/agentApi.ts::createConversation`.
+   */
+  project_id?: ProjectId | null;
 }
 
 export interface Conversation {

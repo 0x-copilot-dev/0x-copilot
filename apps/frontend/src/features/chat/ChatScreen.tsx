@@ -5,6 +5,7 @@ import type {
   CreateRunRequest,
   Message,
   ModelCatalogModel,
+  ProjectId,
   RuntimeEventEnvelope,
   Skill,
   SubagentEntry,
@@ -145,6 +146,7 @@ import {
   type CompletedMcpAuthAction,
 } from "./mcpAuthAction";
 import { deriveRunUiState, isRunUiEvent } from "./chatRunState";
+import { useChatProjectContext } from "./useChatProjectContext";
 import { hasPendingAction } from "./chatModel/status";
 import { useAuth } from "../auth/AuthContext";
 import { usePinnedConversations } from "./sidebar/usePinnedConversations";
@@ -193,6 +195,7 @@ export function ChatScreen({
   identity,
   oauthStatus,
   completedMcpAuthAction,
+  routeProjectId = null,
 }: {
   connectors: ConnectorState;
   skills: SkillState;
@@ -200,6 +203,18 @@ export function ChatScreen({
   identity: RequestIdentity;
   oauthStatus: string | null;
   completedMcpAuthAction: CompletedMcpAuthAction | null;
+  /**
+   * Phase 6.5 §4 (P6.5-C1) — the project_id implied by the current
+   * route. `null` for `/chats` and other non-project routes. App.tsx
+   * resolves this from the `AppRoute` shape and threads it down; the
+   * `useChatProjectContext` hook combines it with the user's
+   * `[Filed under: ▾]` chip override to produce the value that
+   * `createConversation()` actually sends.
+   *
+   * Defaults to `null` so existing call sites that have not been
+   * updated to route-aware dispatch keep the Phase 1 Unfiled default.
+   */
+  routeProjectId?: ProjectId | null;
 }): ReactElement {
   // PR 3.5 (closes PR 2.2 G4) — UserCard's WorkspacePicker forwards a
   // chosen orgId up through Sidebar → AssistantThreadList → here. We hand
@@ -209,6 +224,15 @@ export function ChatScreen({
   // PR F3 — sidebar pin / unpin (localStorage; backend gains a typed
   // metadata.pinned column in a future PR).
   const pinned = usePinnedConversations(auth.identity?.user_id ?? null);
+  // Phase 6.5 §4 (P6.5-C1) — context-aware chat creation. The hook
+  // combines the route-supplied `routeProjectId` with the composer's
+  // `[Filed under: ▾]` chip override into a single resolved value that
+  // the next `createConversation()` call passes through to the wire.
+  // The chip itself lives in the composer footer (rendered separately;
+  // not yet wired in this file — see P6.5-C1 follow-up). The hook is
+  // the single source of truth; consumers must NOT derive project_id
+  // anywhere else.
+  const chatProject = useChatProjectContext(routeProjectId);
   const [conversationId, setConversationId] = useState<string | null>(null);
   const [conversations, setConversations] = useState<Conversation[]>([]);
   const [items, setItems] = useState<ChatItem[]>([]);
@@ -883,8 +907,14 @@ export function ChatScreen({
       try {
         if (targetConversationId === null) {
           setStatus("Creating chat...");
+          // P6.5-C1 — the resolved project context (route default OR
+          // chip override) rides through to the wire. `null` keeps the
+          // Phase 1 Unfiled shape; agentApi omits the field on null
+          // so we don't break older servers that lack the P6.5-A2
+          // schema bump (extra="forbid").
           const conversation = await createConversation(identity, {
             title: titleFromPrompt(text),
+            projectId: chatProject.projectId,
           });
           targetConversationId = conversation.conversation_id;
           setConversationId(targetConversationId);
@@ -965,6 +995,7 @@ export function ChatScreen({
     },
     [
       activeRunId,
+      chatProject.projectId,
       conversationId,
       depth,
       identity,

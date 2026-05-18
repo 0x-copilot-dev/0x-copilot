@@ -28,6 +28,7 @@ import type {
   MessageListResponse,
   ModelCatalogResponse,
   ModelSelectionRequest,
+  ProjectId,
   ReasoningDepth,
   RecipientPreview,
   RetentionEffectiveResponse,
@@ -95,6 +96,17 @@ export function createConversation(
     title?: string | null;
     idempotencyKey?: string | null;
     metadata?: Record<string, unknown>;
+    /**
+     * Phase 6.5 §4 (P6.5-C1) — context-aware chat creation. When the
+     * user is on a `/projects/<id>` route (or override-set), the
+     * caller resolves the id and passes it here so the new chat lands
+     * filed under the project. `null` / `undefined` preserves the
+     * Phase 1 "Unfiled" default and OMITS the field from the wire
+     * payload — keeping the request shape identical until the
+     * server-side hook (P6.5-A2) lands. Only a non-null `projectId`
+     * causes the field to be sent.
+     */
+    projectId?: ProjectId | null;
   } = {},
 ): Promise<Conversation> {
   const payload: CreateConversationRequest = {
@@ -105,6 +117,17 @@ export function createConversation(
   };
   if (options.idempotencyKey !== undefined) {
     payload.idempotency_key = options.idempotencyKey;
+  }
+  // Only attach project_id when the caller resolved a concrete value.
+  // Omitting the field for the Unfiled case keeps the Phase 1 payload
+  // shape byte-identical (defence-in-depth against the backend's
+  // `extra="forbid"` policy until the P6.5-A2 schema lands).
+  if (
+    options.projectId !== undefined &&
+    options.projectId !== null &&
+    options.projectId !== ""
+  ) {
+    payload.project_id = options.projectId;
   }
   return httpPost<Conversation>("/v1/agent/conversations", payload);
 }
