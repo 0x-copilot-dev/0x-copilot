@@ -1,0 +1,55 @@
+# Connectors destination — available-to-install catalog (Phase 11).
+#
+# The slugs below are the canonical Atlas-vetted SaaS sources the
+# destination renders on the "Available" tab. Each row is a config-file
+# entry per connectors-prd §10 Q4 (Recommend: YAML in Phase 11; remote
+# registry in Wave 13).
+#
+# Distinct from `mcp_catalog.DEFAULT_CATALOG` (which seeds MCP connector
+# servers for the chat composer popover): this list is the destination's
+# higher-level catalog of "things Atlas knows about" — Gmail, Slack,
+# Salesforce, GitHub, Drive, Notion, Outlook, Google Calendar. New entries
+# only need a slug + display name + short description.
+#
+# Fields:
+#   slug          — canonical short identifier (matches `ConnectorSlug`)
+#   display_name  — what the FE renders on the card
+#   description   — short marketing copy (one line)
+#   icon_hint     — optional; FE maps to a built-in icon registry
+#
+# When a tenant installs a connector its `seed:<slug>` is the stable id
+# the existing MCP registration path produces.
+
+entries:
+  - slug: gmail
+    display_name: Gmail
+    description: Read and triage mail.
+    icon_hint: gmail
+  - slug: gcal
+    display_name: Google Calendar
+    description: Meetings, agendas, and availability.
+    icon_hint: gcal
+  - slug: slack
+    display_name: Slack
+    description: Channels, DMs, and threads.
+    icon_hint: slack
+  - slug: salesforce
+    display_name: Salesforce
+    description: Accounts, contacts, and pipeline.
+    icon_hint: salesforce
+  - slug: github
+    display_name: GitHub
+    description: Repos, issues, and pull requests.
+    icon_hint: github
+  - slug: gdrive
+    display_name: Google Drive
+    description: Files, folders, and Docs.
+    icon_hint: gdrive
+  - slug: notion
+    display_name: Notion
+    description: Workspace pages and databases.
+    icon_hint: notion
+  - slug: outlook
+    display_name: Outlook
+    description: Mail and calendar.
+    icon_hint: outlook

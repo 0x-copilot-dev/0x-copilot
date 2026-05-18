@@ -1,0 +1,327 @@
+// Connectors destination (Phase 11) — canonical wire contract.
+//
+// Source: docs/atlas-new-design/destinations/connectors-prd.md §3.1 (data
+// shape) + §4 (endpoints) + §5 (storage) + §6 (ACL + audit).
+//
+// A Connector is an authenticated bridge to an external SaaS source
+// (Gmail, Slack, Salesforce, etc.). The new wire shape is a denormalized
+// READ MODEL over the existing MCP registration + token vault path — no
+// parallel write registry. See connectors-prd §3.2.
+//
+// Wire-only file: no business logic, no HTTP client, no view models. The
+// server is the source of truth; this package mirrors the public payloads
+// exactly as the facade serves them.
+//
+// Canonical types reused from elsewhere (DO NOT re-declare):
+// * `ConnectorSlug` — single declaration site in ./projects.ts.
+// * `ConnectorId` — branded ID in ./brands.ts.
+// * `TriggerId` — branded ID in ./brands.ts (reused as `Webhook.id`).
+// * `ItemRef` (kind="connector"/"agent"/"tool"/"project"/"routine") — ./refs.ts.
+
+import type { ConnectorId, TenantId, TriggerId, UserId } from "./brands";
+import type { ItemRef } from "./refs";
+import type { ConnectorSlug } from "./projects";
+
+// ---------------------------------------------------------------------------
+// Status taxonomy (connectors-prd §1.6)
+// ---------------------------------------------------------------------------
+
+/**
+ * Connector lifecycle status.
+ *
+ * * `connected`    — token valid; last read within window.
+ * * `disconnected` — user revoked; token wiped; row preserved.
+ * * `error`        — provider returned 401/403 on last refresh; needs
+ *                    reconnect (user action).
+ * * `expired`      — refresh token expired; needs full re-auth.
+ *
+ * State transitions are server-driven from the token-refresh worker; the
+ * UI displays. Mutating writes (disconnect, scope patch) drive the
+ * remaining transitions through the routes in §4.
+ */
+export type ConnectorStatus =
+  | "connected"
+  | "disconnected"
+  | "error"
+  | "expired";
+
+// ---------------------------------------------------------------------------
+// Scope — the OAuth scopes a user granted, per slug, per connection.
+// ---------------------------------------------------------------------------
+
+/**
+ * One OAuth scope on a connector. Provider-specific scope strings (e.g.
+ * `gmail.readonly`) carry along a human-readable description sourced from
+ * the catalog file at backend bootstrap — the frontend does not interpret
+ * scope strings, only renders them.
+ */
+export interface ConnectorScopeEntry {
+  readonly scope: string;
+  readonly granted: boolean;
+  readonly description: string;
+}
+
+// ---------------------------------------------------------------------------
+// Connector — the destination's primary row (denormalized read model)
+// ---------------------------------------------------------------------------
+
+/**
+ * One connected (or once-connected) SaaS source.
+ *
+ * Storage is a denormalized view over `mcp_servers` + `token_vault`
+ * metadata (connectors-prd §3.2 / §5.1). The wire field set is stable
+ * across the in-memory + Postgres backends. `tenant_id` rides every row
+ * so the resolver can call `is_member(tenant, project, user)` without
+ * caller-supplied trust.
+ *
+ * `last_sync_at` is updated by the existing tool-invocation pipeline
+ * (Phase 10 wires `runtime_tool_invocations` → `last_sync_at` on touch)
+ * and is `null` for newly-installed connectors that have not yet seen a
+ * tool call.
+ */
+export interface Connector {
+  readonly id: ConnectorId;
+  readonly tenant_id: TenantId;
+  readonly slug: ConnectorSlug;
+  readonly display_name: string;
+  readonly description: string;
+  readonly status: ConnectorStatus;
+  readonly status_reason?: string;
+  readonly owner_user_id: UserId;
+  /**
+   * Scopes granted by the user, per the most recent OAuth round-trip.
+   * Provider-dependent string values; the catalog file (loaded at
+   * backend bootstrap, see `services/backend/src/backend_app/connectors/
+   * catalog.yaml`) supplies the description.
+   */
+  readonly scopes: ReadonlyArray<ConnectorScopeEntry>;
+  readonly last_sync_at: string | null;
+  readonly last_error_at?: string;
+  readonly created_at: string;
+  readonly updated_at: string;
+}
+
+// ---------------------------------------------------------------------------
+// Catalog entry — slugs Atlas knows about but the caller has not installed
+// ---------------------------------------------------------------------------
+
+/**
+ * One available-to-install slug. Wire shape is intentionally minimal: the
+ * detail view fetches the rest after the user picks a card to install.
+ *
+ * `icon_hint` is a hint string the FE may map to a built-in icon registry
+ * (e.g. `"gmail"`, `"slack"`); when absent the FE renders a letter
+ * glyph.
+ */
+export interface ConnectorCatalogEntry {
+  readonly slug: ConnectorSlug;
+  readonly display_name: string;
+  readonly description: string;
+  readonly icon_hint?: string;
+}
+
+// ---------------------------------------------------------------------------
+// List response
+// ---------------------------------------------------------------------------
+
+/**
+ * `GET /v1/connectors` response. `connectors` is the installed set the
+ * caller can read; `available` is the not-yet-installed catalog.
+ *
+ * Cursor pagination follows the home/inbox/routines convention: an opaque
+ * `next_cursor` string. `null` when the page is the last.
+ */
+export interface ConnectorListResponse {
+  readonly connectors: ReadonlyArray<Connector>;
+  readonly available: ReadonlyArray<ConnectorCatalogEntry>;
+  readonly next_cursor: string | null;
+}
+
+// ---------------------------------------------------------------------------
+// Detail response — the connector + consumer projection
+// ---------------------------------------------------------------------------
+
+/**
+ * The "Used by" projection rendered on the connector detail page. Each
+ * entry is an `ItemRef` so the FE's `<ItemLink>` registry can resolve
+ * label/icon hints. `chats_with_grant` is a count only (privacy: per-chat
+ * fan-out lives behind admin-only audit), not a list.
+ */
+export interface ConnectorConsumers {
+  readonly agents: ReadonlyArray<ItemRef>;
+  readonly tools: ReadonlyArray<ItemRef>;
+  readonly projects: ReadonlyArray<ItemRef>;
+  readonly chats_with_grant: number;
+}
+
+/**
+ * `GET /v1/connectors/{id}` response.
+ */
+export interface ConnectorDetailResponse {
+  readonly connector: Connector;
+  readonly consumers: ConnectorConsumers;
+}
+
+// ---------------------------------------------------------------------------
+// Mutating-route request / response shapes
+// ---------------------------------------------------------------------------
+
+/**
+ * `POST /v1/connectors/{slug}/start-oauth` response.
+ *
+ * Sends the user to `authorization_url`; the server records the matching
+ * `state` against the started session. Reuses the existing MCP OAuth
+ * round-trip (connectors-prd §4.3 alias).
+ */
+export interface StartConnectorOAuthResponse {
+  readonly authorization_url: string;
+  readonly state: string;
+}
+
+/**
+ * `POST /v1/connectors/oauth-callback` request body. Aliases the existing
+ * MCP OAuth callback path. Returns the newly-created `Connector`.
+ */
+export interface ConnectorOAuthCallbackRequest {
+  readonly code: string;
+  readonly state: string;
+}
+
+/**
+ * `PATCH /v1/connectors/{id}/scopes` request body. The server compares
+ * `scopes` against the currently-granted set and triggers a re-OAuth flow
+ * (response is `202 { reauth_url }`).
+ */
+export interface PatchConnectorScopesRequest {
+  readonly scopes: ReadonlyArray<ConnectorScopeEntry>;
+}
+
+/**
+ * `PATCH /v1/connectors/{id}/scopes` response. `202 Accepted` — the
+ * server is requesting a re-OAuth round-trip to confirm the new scope
+ * set. Atlas does not unilaterally shrink scopes without provider
+ * confirmation.
+ */
+export interface PatchConnectorScopesResponse {
+  readonly reauth_url: string;
+  readonly state: string;
+}
+
+/**
+ * `POST /v1/connectors/{id}/refresh` response — the freshly-refreshed
+ * connector row (status flips to `connected` on success; `error` on
+ * provider 4xx).
+ */
+export interface RefreshConnectorResponse {
+  readonly connector: Connector;
+}
+
+/**
+ * `POST /v1/connectors/{id}/disconnect` response — the disconnected row
+ * (status flips to `disconnected`; token wiped through the existing
+ * `TokenVault` path; consumers preserved with a needs-reconnect hint
+ * rendered on the FE).
+ */
+export interface DisconnectConnectorResponse {
+  readonly connector: Connector;
+}
+
+// ---------------------------------------------------------------------------
+// Audit-log read projection (connectors-prd §4.8)
+// ---------------------------------------------------------------------------
+
+/**
+ * One row in the read-audit log. Wire shape is a flat projection over
+ * `runtime_tool_invocations` (joined to tools whose `transport.connector_ref`
+ * points at this connector) and `connector_read_events`.
+ *
+ * `caller` is an `ItemRef` so the FE renders deep links into the original
+ * run / agent / routine.
+ */
+export interface ConnectorAuditEntry {
+  readonly id: string;
+  readonly connector_id: ConnectorId;
+  readonly tenant_id: TenantId;
+  readonly ts: string;
+  readonly caller: ItemRef;
+  readonly endpoint: string;
+  readonly bytes_read: number | null;
+  readonly status: "ok" | "error" | "auth_required";
+  readonly status_detail?: string;
+}
+
+/**
+ * `GET /v1/connectors/{id}/audit` response. Cursor pagination is opaque;
+ * the FE renders `<ActivityList>` over the rows.
+ */
+export interface ConnectorAuditResponse {
+  readonly entries: ReadonlyArray<ConnectorAuditEntry>;
+  readonly next_cursor: string | null;
+}
+
+// ---------------------------------------------------------------------------
+// Webhook — connectors-prd §3.1 / §4.10 / §9 (HMAC management UX)
+// ---------------------------------------------------------------------------
+
+/**
+ * Routines §9.7 Q6 HMAC-of-payload signature lands here. The wire shape
+ * is locked at Phase 11; the management UI (Phase 11 sub-PRD §7) is the
+ * destination home for webhook lifecycle. Routine `triggers[].webhook`
+ * references this row by `id`.
+ *
+ * The secret is NEVER on the wire. The wizard's copy-once reveal returns
+ * the secret in the create / rotate responses only; subsequent reads
+ * never carry it.
+ */
+export interface Webhook {
+  readonly id: TriggerId;
+  readonly tenant_id: TenantId;
+  readonly url: string;
+  readonly secret_strategy: "rotating" | "static";
+  readonly hmac_algo: "hmac-sha256";
+  readonly ip_allowlist: ReadonlyArray<string>;
+  readonly status: "active" | "paused";
+  readonly last_fire_at: string | null;
+  readonly last_status_code?: number;
+  readonly routine_ref?: ItemRef;
+  readonly created_at: string;
+  readonly rotates_at: string | null;
+}
+
+// ---------------------------------------------------------------------------
+// SSE — `GET /v1/connectors/stream` (connectors-prd §4.9)
+// ---------------------------------------------------------------------------
+
+/**
+ * Connector SSE event types.
+ *
+ * * `connector.created`         — new row inserted (post-OAuth completion).
+ * * `connector.status_changed`  — status transition (e.g. connected →
+ *                                 error after a 401 refresh).
+ * * `connector.scope_changed`   — scope set was added to or shrunk via
+ *                                 re-OAuth.
+ * * `connector.error_threshold` — N consecutive errors crossed the
+ *                                 tenant-policy threshold; FE renders the
+ *                                 "needs reconnect" badge prominently.
+ * * `heartbeat`                 — keepalive comment frame on the SSE
+ *                                 wire; not a real event.
+ */
+export type ConnectorStreamEventType =
+  | "connector.created"
+  | "connector.status_changed"
+  | "connector.scope_changed"
+  | "connector.error_threshold"
+  | "heartbeat";
+
+/**
+ * SSE envelope mirroring the inbox / home / project streams. Monotonic
+ * `sequence_no` per `(tenant_id, user_id)` channel; reconnect via
+ * `Last-Event-ID`.
+ */
+export interface ConnectorStreamEnvelope {
+  readonly event_id: string;
+  readonly sequence_no: number;
+  readonly event_type: ConnectorStreamEventType;
+  readonly connector?: Connector;
+  readonly created_at: string;
+}

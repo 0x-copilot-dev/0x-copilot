@@ -3686,3 +3686,34 @@ export type {
   UpdateToolRequest,
 } from "./tools";
 // === end Phase 10 Tools ===
+
+// === Phase 11 Connectors destination ===
+// Canonical wire shape for the Connectors destination: list / detail /
+// scope / disconnect / refresh / audit / SSE + the Webhook management
+// surface (Routines §9.7 Q6 HMAC-of-payload UX). Cross-audit §1.1 (ItemRef
+// kind="connector"), §1.6 (status taxonomy), §5.2 (SSE convention). The
+// storage is a denormalized read model over the existing MCP registration
+// + token vault path — see connectors-prd §3.2 (no parallel registry).
+// `ConnectorSlug` is re-exported from ./projects.ts (canonical site).
+// Single declaration site: ./connectors.ts.
+export type {
+  Connector,
+  ConnectorAuditEntry,
+  ConnectorAuditResponse,
+  ConnectorCatalogEntry,
+  ConnectorConsumers,
+  ConnectorDetailResponse,
+  ConnectorListResponse,
+  ConnectorOAuthCallbackRequest,
+  ConnectorScopeEntry,
+  ConnectorStatus,
+  ConnectorStreamEnvelope,
+  ConnectorStreamEventType,
+  DisconnectConnectorResponse,
+  PatchConnectorScopesRequest,
+  PatchConnectorScopesResponse,
+  RefreshConnectorResponse,
+  StartConnectorOAuthResponse,
+  Webhook,
+} from "./connectors";
+// === end Phase 11 Connectors ===

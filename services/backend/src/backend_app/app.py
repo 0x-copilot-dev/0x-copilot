@@ -117,6 +117,14 @@ from backend_app.routines import (
     RoutinesStore,
     register_routines_routes,
 )
+from backend_app.connectors import (
+    ConnectorsService,
+    ConnectorsStore,
+    InMemoryConnectorsStore,
+    load_catalog,
+    register_connector_routes,
+    register_connector_sse_routes,
+)
 from backend_app.todos import (
     InMemoryTodosStore,
     TodosService,
@@ -381,6 +389,7 @@ def create_app(
     todos_store: TodosStore | None = None,
     inbox_store: InboxStore | None = None,
     routines_store: RoutinesStore | None = None,
+    connectors_store: ConnectorsStore | None = None,
     projects_store: ProjectsStore | None = None,
     project_templates_store: ProjectTemplatesStore | None = None,
     library_store: LibraryStore | None = None,
@@ -1427,6 +1436,34 @@ def create_app(
     )
     app.state.routines_service = routines_service
     register_routines_routes(app, service=routines_service)
+
+    # Phase 11 — Connectors destination. The destination is a
+    # denormalized READ MODEL over the existing MCP registration +
+    # token vault path (connectors-prd §3.2). Writes flow through the
+    # existing ``McpRegistryService`` / ``TokenVault``; the
+    # ``ConnectorsService`` is the substitution point that emits
+    # destination-level audit rows + projects the consumer view. SSE
+    # registers first so the activity bus is on
+    # ``app.state.connector_activity_bus`` before the service is
+    # constructed. The catalog (Atlas-vetted SaaS slugs) is loaded once
+    # from the package-local ``catalog.yaml``; a soft-fail wraps the
+    # load so a missing file degrades to an empty Available tab rather
+    # than a boot crash.
+    resolved_connectors_store: ConnectorsStore = (
+        connectors_store or InMemoryConnectorsStore()  # type: ignore[assignment]
+    )
+    app.state.connectors_store = resolved_connectors_store
+    try:
+        connector_catalog = load_catalog()
+    except Exception:
+        connector_catalog = ()
+    register_connector_sse_routes(app)
+    connectors_service = ConnectorsService(
+        store=resolved_connectors_store,
+        catalog=connector_catalog,
+    )
+    app.state.connectors_service = connectors_service
+    register_connector_routes(app, service=connectors_service)
 
     # Phase 6 — Projects destination. The canonical project-scoped ACL
     # predicate lives in ``backend_app.projects.acl`` and is consumed
