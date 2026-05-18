@@ -65,3 +65,16 @@ export {
   type DestinationPlaceholderBridge,
   type DestinationPlaceholderProps,
 } from "./DestinationPlaceholder";
+
+// === Phase 12 — global ⌘K command palette ===
+export { CommandPalette, type CommandPaletteProps } from "./CommandPalette";
+export {
+  CommandPaletteTrigger,
+  type CommandPaletteTriggerProps,
+} from "./CommandPaletteTrigger";
+export { PaletteHitRow, type PaletteHitRowProps } from "./PaletteHitRow";
+export {
+  useCommandPaletteHotkey,
+  type UseCommandPaletteHotkeyOptions,
+} from "./useCommandPaletteHotkey";
+// === end Phase 12 ===

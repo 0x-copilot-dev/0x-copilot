@@ -25,3 +25,7 @@ export type {
 } from "./FilePickerPort";
 export type { ClipboardPort } from "./ClipboardPort";
 // === end Phase 0.5 ===
+
+// === Phase 12 — palette search port ===
+export type { PaletteSearchPort } from "./PaletteSearchPort";
+// === end Phase 12 ===

@@ -198,8 +198,26 @@ export {
 // === Phase 1-D routing-palette ===
 export { HashRouter } from "./routing/HashRouter";
 export { ROUTE_TABLE, type RouteEntry } from "./routing/route-table";
-export { CommandPalette } from "./palette";
+// Phase-1 placeholder palette (route-jumper). Phase 12 supersedes it
+// with the substrate-shared palette in `./shell`; we keep the older
+// component exported under a distinct name so any in-tree consumer
+// can migrate without a flag day.
+export { CommandPalette as RouteJumpPalette } from "./palette";
 // === end Phase 1-D ===
+
+// === Phase 12 — substrate-shared global ⌘K palette ===
+export {
+  CommandPalette,
+  CommandPaletteTrigger,
+  PaletteHitRow,
+  useCommandPaletteHotkey,
+  type CommandPaletteProps,
+  type CommandPaletteTriggerProps,
+  type PaletteHitRowProps,
+  type UseCommandPaletteHotkeyOptions,
+} from "./shell";
+export type { PaletteSearchPort } from "./ports/PaletteSearchPort";
+// === end Phase 12 ===
 
 // === Phase 2-B thread-canvas ===
 export {
