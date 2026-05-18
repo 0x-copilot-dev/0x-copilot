@@ -1,195 +1,449 @@
-import type { Skill } from "@enterprise-search/api-types";
-import type {
-  Session,
-  SseSubscribeOptions,
-  SseSubscription,
-  Transport,
-  TransportCapabilities,
-  TypedRequest,
-} from "@enterprise-search/chat-transport";
-import {
-  act,
-  fireEvent,
-  render,
-  screen,
-  waitFor,
-} from "@testing-library/react";
+// ToolsDestination + ToolCard + ToolsPanel — unit tests (P10-B1).
+//
+// Covers the catalog shell, filter axis, kind narrow, search debounce
+// callback, empty / onboarding tile path, sort selector, card chip
+// structure, status-tone mapping, panel filters, and ARIA wiring per
+// the scope brief.
+
+import { fireEvent, render, screen, within } from "@testing-library/react";
 import { describe, expect, it, vi } from "vitest";
 
-import { RouterProvider } from "../../providers/RouterProvider";
-import { TransportProvider } from "../../providers/TransportProvider";
-import type { ArtifactRoute, Router } from "../../routing/router";
+import type {
+  Tool,
+  ToolId,
+  ToolStatus,
+  TenantId,
+  UserId,
+} from "@enterprise-search/api-types";
 
+import { ToolCard } from "./ToolCard";
 import { ToolsDestination } from "./ToolsDestination";
+import { ToolsPanel } from "./ToolsPanel";
+import { statusTone, type ToolKind, type ToolScope } from "./_tools-stub";
 
-type RequestHandler = (req: TypedRequest) => Promise<unknown>;
+// ===========================================================================
+// Fixtures
+// ===========================================================================
 
-function makeTransport(handler: RequestHandler): Transport {
+interface MakeToolOverrides {
+  readonly id?: string;
+  readonly name?: string;
+  readonly description?: string;
+  readonly kind?: ToolKind;
+  readonly scope?: ToolScope;
+  readonly status?: ToolStatus;
+  readonly owner_user_id?: string;
+  readonly calls_30d?: number;
+  readonly last_used_at?: string | null;
+  readonly tags?: ReadonlyArray<string>;
+  readonly created_at?: string;
+}
+
+function makeTool(overrides: MakeToolOverrides = {}): Tool {
+  // Use the `in` operator (not `??`) so callers can explicitly pass
+  // `last_used_at: null` and override the default ISO timestamp.
+  const lastUsed: string | null =
+    "last_used_at" in overrides
+      ? (overrides.last_used_at ?? null)
+      : "2026-05-15T00:00:00Z";
   return {
-    async request<TRes>(req: TypedRequest): Promise<TRes> {
-      return (await handler(req)) as TRes;
+    id: (overrides.id ?? "tool_1") as ToolId,
+    tenant_id: "tnt_1" as TenantId,
+    name: overrides.name ?? "Search Web",
+    description: overrides.description ?? "Search the web with Bing.",
+    kind: overrides.kind ?? "builtin",
+    scope: overrides.scope ?? "read",
+    status: overrides.status ?? "enabled",
+    args_schema: { type: "object" },
+    returns_schema: { type: "object" },
+    transport: { kind: "in_process", executor: "web_search" },
+    owner_user_id: (overrides.owner_user_id ?? "user_owner") as UserId,
+    tags: overrides.tags ?? [],
+    usage: {
+      calls_24h: 0,
+      calls_30d: overrides.calls_30d ?? 12,
+      p50_latency_ms_30d: 120,
+      success_rate_30d: 0.98,
+      last_used_at: lastUsed,
     },
-    subscribeServerSentEvents(_opts: SseSubscribeOptions): SseSubscription {
-      return { close: () => undefined };
-    },
-    getSession(): Session {
-      return { bearer: null };
-    },
-    capabilities(): TransportCapabilities {
-      return {
-        substrate: "web",
-        nativeSecretStorage: false,
-        fileSystemAccess: false,
-        clipboardWrite: false,
-        openExternal: false,
-      };
-    },
+    created_at: overrides.created_at ?? "2026-04-01T00:00:00Z",
+    updated_at: "2026-05-15T00:00:00Z",
   };
 }
 
-function makeRouter(): Router<ArtifactRoute> {
-  let current: ArtifactRoute | null = null;
-  const subs = new Set<(r: ArtifactRoute) => void>();
-  return {
-    current(): ArtifactRoute {
-      if (current === null) throw new Error("no route");
-      return current;
-    },
-    navigate: vi.fn((r: ArtifactRoute) => {
-      current = r;
-      for (const s of subs) s(r);
-    }),
-    subscribe(handler) {
-      subs.add(handler);
-      return () => subs.delete(handler);
-    },
-  };
-}
-
-function makeSkill(overrides: Partial<Skill>): Skill {
-  return {
-    skill_id: overrides.skill_id ?? "sk-1",
-    name: overrides.name ?? "summarize",
-    display_name: overrides.display_name ?? "Summarize",
-    description: overrides.description ?? "Summarize a document concisely.",
-    markdown: overrides.markdown ?? "",
-    virtual_path: overrides.virtual_path ?? "summarize.md",
-    enabled: overrides.enabled ?? true,
-    scope: overrides.scope ?? "user",
-    source_type: overrides.source_type ?? "user",
-    version: overrides.version ?? 1,
-    allowed_tools: overrides.allowed_tools ?? [],
-    compatibility: overrides.compatibility ?? [],
-    metadata: overrides.metadata ?? {},
-    created_at: overrides.created_at ?? "2026-05-01T00:00:00Z",
-    updated_at: overrides.updated_at ?? "2026-05-15T00:00:00Z",
-  };
-}
-
-const SAMPLE_SKILLS: readonly Skill[] = [
-  makeSkill({ skill_id: "sk-1", display_name: "Summarize", enabled: true }),
-  makeSkill({
-    skill_id: "sk-2",
-    name: "draft-email",
-    display_name: "Draft email",
-    description: "Draft outbound email from notes.",
-    enabled: false,
+const SAMPLE: ReadonlyArray<Tool> = [
+  makeTool({
+    id: "tool_a",
+    name: "Search Web",
+    kind: "builtin",
+    scope: "read",
+    status: "enabled",
+    owner_user_id: "user_me",
+    calls_30d: 80,
+    last_used_at: "2026-05-17T08:00:00Z",
+  }),
+  makeTool({
+    id: "tool_b",
+    name: "Send Slack message",
+    kind: "mcp",
+    scope: "write",
+    status: "enabled",
+    owner_user_id: "user_other",
+    calls_30d: 20,
+    last_used_at: "2026-05-10T08:00:00Z",
+  }),
+  makeTool({
+    id: "tool_c",
+    name: "Pending OpenAPI",
+    kind: "openapi",
+    scope: "both",
+    status: "pending_review",
+    owner_user_id: "user_me",
+    calls_30d: 0,
+    last_used_at: null,
+  }),
+  makeTool({
+    id: "tool_d",
+    name: "My Custom Routine",
+    kind: "code",
+    scope: "read",
+    status: "disabled",
+    owner_user_id: "user_me",
+    calls_30d: 4,
+    last_used_at: "2026-04-01T00:00:00Z",
+  }),
+  makeTool({
+    id: "tool_e",
+    name: "Summarize skill",
+    kind: "skill",
+    scope: "read",
+    status: "error",
+    owner_user_id: "user_other",
+    calls_30d: 1,
+    last_used_at: "2026-05-01T00:00:00Z",
   }),
 ];
 
-function renderWith(handler: RequestHandler): {
-  router: Router<ArtifactRoute>;
-} {
-  const router = makeRouter();
-  render(
-    <TransportProvider transport={makeTransport(handler)}>
-      <RouterProvider router={router}>
-        <ToolsDestination />
-      </RouterProvider>
-    </TransportProvider>,
-  );
-  return { router };
-}
+// ===========================================================================
+// ToolCard
+// ===========================================================================
+
+describe("ToolCard", () => {
+  it("renders the name, kind chip, scope chip, status pill, and 30d calls", () => {
+    render(<ToolCard tool={makeTool({ name: "Search Web", calls_30d: 42 })} />);
+    expect(screen.getByTestId("tool-card-name")).toHaveTextContent(
+      "Search Web",
+    );
+    expect(screen.getByTestId("tool-card-kind")).toHaveAttribute(
+      "data-tool-kind",
+      "builtin",
+    );
+    expect(screen.getByTestId("tool-card-scope")).toHaveAttribute(
+      "data-tool-scope",
+      "read",
+    );
+    expect(screen.getByTestId("tool-card-calls")).toHaveTextContent("42 calls");
+    expect(screen.getByTestId("status-pill")).toHaveAttribute(
+      "data-status",
+      "ok",
+    );
+  });
+
+  it("maps each ToolStatus to the correct StatusPill tone", () => {
+    expect(statusTone("enabled")).toBe("ok");
+    expect(statusTone("error")).toBe("error");
+    expect(statusTone("pending_review")).toBe("warning");
+    expect(statusTone("disabled")).toBe("muted");
+  });
+
+  it("renders the status pill with the warning tone for pending_review", () => {
+    render(<ToolCard tool={makeTool({ status: "pending_review" })} />);
+    expect(screen.getByTestId("status-pill")).toHaveAttribute(
+      "data-status",
+      "warning",
+    );
+  });
+
+  it("fires onOpen when the card is clicked", () => {
+    const onOpen = vi.fn();
+    const tool = makeTool({ id: "tool_open" });
+    render(<ToolCard tool={tool} onOpen={onOpen} />);
+    fireEvent.click(screen.getByTestId("tool-card"));
+    expect(onOpen).toHaveBeenCalledTimes(1);
+    expect(onOpen).toHaveBeenCalledWith(tool);
+  });
+
+  it("renders 'never' for last-used when usage.last_used_at is null", () => {
+    render(<ToolCard tool={makeTool({ last_used_at: null })} />);
+    expect(screen.getByTestId("tool-card-last-used")).toHaveTextContent(
+      "never",
+    );
+  });
+});
+
+// ===========================================================================
+// ToolsDestination — render + ARIA
+// ===========================================================================
 
 describe("ToolsDestination", () => {
-  it("renders the skeleton while the initial request is in flight", async () => {
-    let resolve!: (v: { skills: readonly Skill[] }) => void;
-    const pending = new Promise<{ skills: readonly Skill[] }>((r) => {
-      resolve = r;
-    });
-    renderWith(() => pending);
-    expect(screen.getAllByTestId("tools-skeleton-card").length).toBeGreaterThan(
-      0,
+  it("renders the PageHeader, filter tabs, and search bar", () => {
+    render(<ToolsDestination tools={SAMPLE} currentUserId="user_me" />);
+    expect(screen.getByTestId("page-header-title")).toHaveTextContent("Tools");
+    expect(screen.getByTestId("filter-tabs")).toBeInTheDocument();
+    expect(screen.getByTestId("tools-search")).toBeInTheDocument();
+    expect(screen.getByTestId("tools-sort")).toBeInTheDocument();
+  });
+
+  it("wraps the filter tablist in <nav aria-label='Tools filter'>", () => {
+    render(<ToolsDestination tools={SAMPLE} currentUserId="user_me" />);
+    const nav = screen.getByRole("navigation", { name: "Tools filter" });
+    expect(nav).toBeInTheDocument();
+    expect(within(nav).getByTestId("filter-tabs")).toBeInTheDocument();
+  });
+
+  it("renders the grid as <region aria-label='Tools catalog'> when not empty", () => {
+    render(<ToolsDestination tools={SAMPLE} currentUserId="user_me" />);
+    // Default "My" filter (currentUserId=user_me) + status=enabled → 1 tool
+    const region = screen.getByRole("region", { name: "Tools catalog" });
+    expect(region).toBeInTheDocument();
+    expect(within(region).getAllByTestId("tool-card")).toHaveLength(1);
+  });
+
+  // ---- Filter axis narrowing -------------------------------------------
+
+  it("My (with currentUserId) shows owned + enabled tools only", () => {
+    render(<ToolsDestination tools={SAMPLE} currentUserId="user_me" />);
+    const cards = screen.getAllByTestId("tool-card");
+    // user_me owns tool_a (enabled), tool_c (pending_review), tool_d (disabled)
+    // Only tool_a is enabled → 1 card.
+    expect(cards).toHaveLength(1);
+    expect(cards[0]).toHaveAttribute("data-tool-id", "tool_a");
+  });
+
+  it("Installed shows every tool with status=enabled", () => {
+    render(<ToolsDestination tools={SAMPLE} currentUserId="user_me" />);
+    fireEvent.click(screen.getByTestId("filter-tab-installed"));
+    const cards = screen.getAllByTestId("tool-card");
+    expect(cards.map((c) => c.getAttribute("data-tool-id")).sort()).toEqual([
+      "tool_a",
+      "tool_b",
+    ]);
+  });
+
+  it("Available shows every tool whose status is NOT enabled", () => {
+    render(<ToolsDestination tools={SAMPLE} currentUserId="user_me" />);
+    fireEvent.click(screen.getByTestId("filter-tab-available"));
+    const cards = screen.getAllByTestId("tool-card");
+    expect(cards.map((c) => c.getAttribute("data-tool-id")).sort()).toEqual([
+      "tool_c",
+      "tool_d",
+      "tool_e",
+    ]);
+  });
+
+  it("Custom narrows to kind=code or kind=skill", () => {
+    render(<ToolsDestination tools={SAMPLE} currentUserId="user_me" />);
+    fireEvent.click(screen.getByTestId("filter-tab-custom"));
+    const cards = screen.getAllByTestId("tool-card");
+    expect(cards.map((c) => c.getAttribute("data-tool-id")).sort()).toEqual([
+      "tool_d",
+      "tool_e",
+    ]);
+  });
+
+  // ---- By kind pill row ------------------------------------------------
+
+  it("By kind reveals the kind-pill row and narrows the catalog", () => {
+    render(<ToolsDestination tools={SAMPLE} currentUserId="user_me" />);
+    fireEvent.click(screen.getByTestId("filter-tab-by_kind"));
+    expect(screen.getByTestId("tools-kind-row")).toBeInTheDocument();
+    expect(screen.getByTestId("tools-kind-chip-mcp")).toBeInTheDocument();
+    expect(screen.getByTestId("tools-kind-chip-openapi")).toBeInTheDocument();
+    expect(screen.getByTestId("tools-kind-chip-builtin")).toBeInTheDocument();
+    expect(screen.getByTestId("tools-kind-chip-code")).toBeInTheDocument();
+    expect(screen.getByTestId("tools-kind-chip-skill")).toBeInTheDocument();
+    // All 5 sample tools when no kind chip is pressed.
+    expect(screen.getAllByTestId("tool-card")).toHaveLength(5);
+
+    fireEvent.click(screen.getByTestId("tools-kind-chip-mcp"));
+    const cards = screen.getAllByTestId("tool-card");
+    expect(cards).toHaveLength(1);
+    expect(cards[0]).toHaveAttribute("data-tool-kind", "mcp");
+  });
+
+  it("hides the kind-pill row when the filter is not by_kind", () => {
+    render(<ToolsDestination tools={SAMPLE} currentUserId="user_me" />);
+    expect(screen.queryByTestId("tools-kind-row")).toBeNull();
+  });
+
+  // ---- Search ----------------------------------------------------------
+
+  it("search input invokes onSearchChange with each keystroke", () => {
+    const onSearchChange = vi.fn();
+    render(
+      <ToolsDestination
+        tools={SAMPLE}
+        currentUserId="user_me"
+        onSearchChange={onSearchChange}
+      />,
     );
-    await act(async () => {
-      resolve({ skills: [] });
-      await pending;
+    fireEvent.change(screen.getByTestId("tools-search"), {
+      target: { value: "slack" },
     });
+    expect(onSearchChange).toHaveBeenCalledWith("slack");
   });
 
-  it("renders skill cards once the request resolves", async () => {
-    renderWith(async () => ({ skills: SAMPLE_SKILLS }));
-    await waitFor(() => {
-      expect(screen.getAllByTestId("tools-card")).toHaveLength(2);
+  it("search narrows results case-insensitively over name + description + tags", () => {
+    render(<ToolsDestination tools={SAMPLE} currentUserId="user_me" />);
+    fireEvent.click(screen.getByTestId("filter-tab-installed"));
+    fireEvent.change(screen.getByTestId("tools-search"), {
+      target: { value: "SLACK" },
     });
-    expect(screen.getByText("Summarize")).toBeInTheDocument();
-    expect(screen.getByText("Draft email")).toBeInTheDocument();
+    const cards = screen.getAllByTestId("tool-card");
+    expect(cards).toHaveLength(1);
+    expect(cards[0]).toHaveAttribute("data-tool-id", "tool_b");
   });
 
-  it("renders Install for disabled skills and Manage for enabled skills", async () => {
-    renderWith(async () => ({ skills: SAMPLE_SKILLS }));
-    await waitFor(() => {
-      expect(screen.getAllByTestId("tools-card")).toHaveLength(2);
+  // ---- Sort ------------------------------------------------------------
+
+  it("changing sort updates the visible order (calls_30d desc)", () => {
+    render(<ToolsDestination tools={SAMPLE} currentUserId="user_me" />);
+    fireEvent.click(screen.getByTestId("filter-tab-installed"));
+    fireEvent.change(screen.getByTestId("tools-sort"), {
+      target: { value: "calls_30d_desc" },
     });
-    expect(screen.getByTestId("tools-install")).toBeInTheDocument();
-    expect(screen.getByTestId("tools-manage")).toBeInTheDocument();
+    const cards = screen.getAllByTestId("tool-card");
+    // tool_a (80 calls) should precede tool_b (20 calls).
+    expect(cards[0]).toHaveAttribute("data-tool-id", "tool_a");
+    expect(cards[1]).toHaveAttribute("data-tool-id", "tool_b");
   });
 
-  it("renders the empty state when the skills list is empty", async () => {
-    renderWith(async () => ({ skills: [] }));
-    await waitFor(() => {
-      expect(screen.getByTestId("tools-empty")).toBeInTheDocument();
-    });
-    expect(screen.queryByTestId("tools-card")).toBeNull();
+  it("the sort select exposes exactly the four allowlisted sorts", () => {
+    render(<ToolsDestination tools={SAMPLE} currentUserId="user_me" />);
+    const select = screen.getByTestId("tools-sort") as HTMLSelectElement;
+    const values = Array.from(select.options).map((o) => o.value);
+    expect(values).toEqual([
+      "name_asc",
+      "calls_30d_desc",
+      "last_used_desc",
+      "created_at_desc",
+    ]);
   });
 
-  it("renders the error state and recovers on retry", async () => {
-    let calls = 0;
-    renderWith(async () => {
-      calls += 1;
-      if (calls === 1) throw new Error("upstream 500");
-      return { skills: SAMPLE_SKILLS };
-    });
-    await waitFor(() => {
-      expect(screen.getByTestId("tools-error")).toBeInTheDocument();
-    });
-    expect(screen.getByText("upstream 500")).toBeInTheDocument();
-    fireEvent.click(screen.getByTestId("tools-retry"));
-    await waitFor(() => {
-      expect(screen.getAllByTestId("tools-card")).toHaveLength(2);
-    });
-    expect(calls).toBe(2);
+  // ---- Empty + onboarding tiles ----------------------------------------
+
+  it("renders the 4-tile EmptyState when the tools list is empty", () => {
+    render(<ToolsDestination tools={[]} />);
+    expect(screen.getByTestId("empty-state")).toBeInTheDocument();
+    expect(screen.getByTestId("tools-onboard-tiles")).toBeInTheDocument();
+    expect(screen.getByTestId("tools-onboard-tile-mcp")).toBeInTheDocument();
+    expect(
+      screen.getByTestId("tools-onboard-tile-openapi"),
+    ).toBeInTheDocument();
+    expect(screen.getByTestId("tools-onboard-tile-code")).toBeInTheDocument();
+    expect(screen.getByTestId("tools-onboard-tile-skill")).toBeInTheDocument();
   });
 
-  it("clicking a card navigates with {kind:'skill', skillId}", async () => {
-    const { router } = renderWith(async () => ({ skills: SAMPLE_SKILLS }));
-    await waitFor(() => {
-      expect(screen.getAllByTestId("tools-card")).toHaveLength(2);
-    });
-    const card = screen.getAllByTestId("tools-card")[0];
-    fireEvent.click(card);
-    expect(router.navigate).toHaveBeenCalledWith({
-      kind: "skill",
-      skillId: "sk-1",
-    });
+  it("clicking an onboarding tile fires onOnboard(kind)", () => {
+    const onOnboard = vi.fn();
+    render(<ToolsDestination tools={[]} onOnboard={onOnboard} />);
+    fireEvent.click(screen.getByTestId("tools-onboard-tile-code"));
+    expect(onOnboard).toHaveBeenCalledWith("code");
   });
 
-  it("clicking the Manage button does not also navigate", async () => {
-    const { router } = renderWith(async () => ({ skills: SAMPLE_SKILLS }));
-    await waitFor(() => {
-      expect(screen.getAllByTestId("tools-card")).toHaveLength(2);
-    });
-    fireEvent.click(screen.getByTestId("tools-manage"));
-    expect(router.navigate).not.toHaveBeenCalled();
+  it("renders the 'No tools match' empty state when tools are present but filter narrows to zero", () => {
+    render(
+      <ToolsDestination
+        tools={[
+          makeTool({ id: "tool_xx", kind: "builtin", status: "enabled" }),
+        ]}
+        currentUserId="user_other"
+      />,
+    );
+    // Default filter is "my" + user_other doesn't own tool_xx → 0 visible.
+    fireEvent.click(screen.getByTestId("filter-tab-custom"));
+    expect(screen.getByText("No tools match")).toBeInTheDocument();
+    expect(screen.queryByTestId("tools-onboard-tiles")).toBeNull();
+  });
+
+  // ---- Open callback ---------------------------------------------------
+
+  it("clicking a tool card fires onOpenTool", () => {
+    const onOpenTool = vi.fn();
+    render(
+      <ToolsDestination
+        tools={SAMPLE}
+        currentUserId="user_me"
+        onOpenTool={onOpenTool}
+      />,
+    );
+    fireEvent.click(screen.getAllByTestId("tool-card")[0]);
+    expect(onOpenTool).toHaveBeenCalledTimes(1);
+  });
+
+  // ---- Primary action --------------------------------------------------
+
+  it("clicking the PageHeader Onboard primary action fires onOnboard()", () => {
+    const onOnboard = vi.fn();
+    render(<ToolsDestination tools={SAMPLE} onOnboard={onOnboard} />);
+    fireEvent.click(screen.getByTestId("page-header-primary-action"));
+    expect(onOnboard).toHaveBeenCalledTimes(1);
+    expect(onOnboard).toHaveBeenCalledWith(); // no kind for the header CTA
+  });
+});
+
+// ===========================================================================
+// ToolsPanel
+// ===========================================================================
+
+describe("ToolsPanel", () => {
+  it("renders the kind / scope / status sections with All chips", () => {
+    render(<ToolsPanel />);
+    expect(screen.getByTestId("tools-panel")).toBeInTheDocument();
+    expect(screen.getByTestId("tools-panel-section-kind")).toBeInTheDocument();
+    expect(screen.getByTestId("tools-panel-section-scope")).toBeInTheDocument();
+    expect(
+      screen.getByTestId("tools-panel-section-status"),
+    ).toBeInTheDocument();
+    expect(screen.getByTestId("tools-panel-kind-all")).toBeInTheDocument();
+    expect(screen.getByTestId("tools-panel-scope-all")).toBeInTheDocument();
+    expect(screen.getByTestId("tools-panel-status-all")).toBeInTheDocument();
+  });
+
+  it("each kind has a chip; clicking fires onKindFilterChange", () => {
+    const onKindFilterChange = vi.fn();
+    render(<ToolsPanel onKindFilterChange={onKindFilterChange} />);
+    fireEvent.click(screen.getByTestId("tools-panel-kind-mcp"));
+    expect(onKindFilterChange).toHaveBeenCalledWith("mcp");
+  });
+
+  it("clicking an active kind chip clears the filter (toggle)", () => {
+    const onKindFilterChange = vi.fn();
+    render(
+      <ToolsPanel kindFilter="mcp" onKindFilterChange={onKindFilterChange} />,
+    );
+    fireEvent.click(screen.getByTestId("tools-panel-kind-mcp"));
+    expect(onKindFilterChange).toHaveBeenCalledWith(null);
+  });
+
+  it("scope chips fire onScopeFilterChange", () => {
+    const onScopeFilterChange = vi.fn();
+    render(<ToolsPanel onScopeFilterChange={onScopeFilterChange} />);
+    fireEvent.click(screen.getByTestId("tools-panel-scope-write"));
+    expect(onScopeFilterChange).toHaveBeenCalledWith("write");
+  });
+
+  it("status chips fire onStatusFilterChange", () => {
+    const onStatusFilterChange = vi.fn();
+    render(<ToolsPanel onStatusFilterChange={onStatusFilterChange} />);
+    fireEvent.click(screen.getByTestId("tools-panel-status-error"));
+    expect(onStatusFilterChange).toHaveBeenCalledWith("error");
+  });
+
+  it("onboard CTA renders only when callback provided", () => {
+    const { rerender } = render(<ToolsPanel />);
+    expect(screen.queryByText("Onboard tool")).toBeNull();
+    rerender(<ToolsPanel onOnboard={() => undefined} />);
+    expect(screen.getByText("Onboard tool")).toBeInTheDocument();
   });
 });
