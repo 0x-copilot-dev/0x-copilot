@@ -1,400 +1,403 @@
-import { AppIcon, Badge, Button, Card } from "@enterprise-search/design-system";
+// TeamDestination — P12-B1
+//
+// Source: team-memory-cmdk-prd.md §7.1. Catalog shell:
+//
+//   <PageHeader title="Team">
+//   <FilterTabs>  (All / Admins / Members / Guests — by role)
+//   <search input + sort-by>
+//   <CardGrid>  of <PersonCard>
+//
+// Pure presentation. No transport, no router. The host supplies the
+// `people` array (sub-PRD §3.1) and wires invite / open / sort callbacks.
+//
+// Filter axis: `role`. Sort: `display_name:asc | last_seen:desc |
+// joined_at:desc` (sub-PRD §3.1 TeamListSort, narrowed to the three the
+// UI surfaces). The search input owns local state — host receives the
+// debounced value via `onSearchChange` if it wants to push the search
+// through the wire's `filter[q]` axis. Otherwise the destination filters
+// in-memory.
+
 import {
-  useEffect,
+  useMemo,
   useState,
   type CSSProperties,
-  type KeyboardEvent,
   type ReactElement,
 } from "react";
 
-import { useRouter } from "../../providers/RouterProvider";
-import { useTransport } from "../../providers/TransportProvider";
-import type { ArtifactRoute } from "../../routing/router";
+import type { Person, TeamRole } from "@enterprise-search/api-types";
 
-export type MemberRole = "owner" | "admin" | "member" | "guest";
+import { CardGrid } from "../../shell/CardGrid";
+import { EmptyState } from "../../shell/EmptyState";
+import { FilterTabs, type FilterTabOption } from "../../shell/FilterTabs";
+import { PageHeader } from "../../shell/PageHeader";
 
-export interface Member {
-  readonly id: string;
-  readonly name: string;
-  readonly email: string;
-  readonly role: MemberRole;
-  readonly lastActiveIso: string;
-  readonly workspaceId: string;
-  readonly avatarColor?: string;
+import { PersonCard } from "./PersonCard";
+
+// ---------------------------------------------------------------------------
+// Filter & sort vocabulary — destination-local, not mirrored in api-types.
+// (Wire-axis `role` accepts the bare TeamRole; this slug union is the
+// FilterTabs vocabulary which adds an "all" pseudo-slug.)
+// ---------------------------------------------------------------------------
+
+export type TeamFilterSlug = "all" | "admins" | "members" | "guests";
+
+export type TeamSortSlug =
+  | "display_name:asc"
+  | "last_seen:desc"
+  | "joined_at:desc";
+
+const FILTER_ORDER: ReadonlyArray<TeamFilterSlug> = [
+  "all",
+  "admins",
+  "members",
+  "guests",
+];
+
+const FILTER_LABEL: Readonly<Record<TeamFilterSlug, string>> = {
+  all: "All",
+  admins: "Admins",
+  members: "Members",
+  guests: "Guests",
+};
+
+const SORT_ORDER: ReadonlyArray<TeamSortSlug> = [
+  "display_name:asc",
+  "last_seen:desc",
+  "joined_at:desc",
+];
+
+const SORT_LABEL: Readonly<Record<TeamSortSlug, string>> = {
+  "display_name:asc": "Name",
+  "last_seen:desc": "Recently active",
+  "joined_at:desc": "Recently joined",
+};
+
+export interface TeamFilterCounts {
+  readonly all?: number;
+  readonly admins?: number;
+  readonly members?: number;
+  readonly guests?: number;
 }
 
 export interface TeamDestinationProps {
+  /**
+   * Team listing rows. `null` while loading; empty array means no
+   * people. Omitting the prop is equivalent to passing an empty array —
+   * exercises the empty-state path so the host can mount the destination
+   * before the data-binder phase wires the wire fetch.
+   */
+  readonly people?: ReadonlyArray<Person> | null;
+  /** Controlled filter slug. Defaults to "all" internally. */
+  readonly filter?: TeamFilterSlug;
+  readonly onFilterChange?: (next: TeamFilterSlug) => void;
+  /** Optional counts; omitted when host doesn't precompute. */
+  readonly counts?: TeamFilterCounts;
+  /** Controlled sort slug. Defaults to "display_name:asc" internally. */
+  readonly sort?: TeamSortSlug;
+  readonly onSortChange?: (next: TeamSortSlug) => void;
+  /** Search string. Controlled. Defaults to "" internally. */
+  readonly search?: string;
+  readonly onSearchChange?: (next: string) => void;
+  /** Invite CTA — host wires the modal. */
   readonly onInvite?: () => void;
+  /** Person open → host wires the detail route. */
+  readonly onOpenPerson?: (person: Person) => void;
+  /** Whether the viewer can invite (admin only — sub-PRD §6.1). */
+  readonly canInvite?: boolean;
 }
 
-interface MembersResponse {
-  readonly members: readonly Member[];
+export function TeamDestination(
+  props: TeamDestinationProps = {},
+): ReactElement {
+  const {
+    people = [],
+    filter: controlledFilter,
+    onFilterChange,
+    counts,
+    sort: controlledSort,
+    onSortChange,
+    search: controlledSearch,
+    onSearchChange,
+    onInvite,
+    onOpenPerson,
+    canInvite = true,
+  } = props;
+
+  const [internalFilter, setInternalFilter] = useState<TeamFilterSlug>("all");
+  const [internalSort, setInternalSort] =
+    useState<TeamSortSlug>("display_name:asc");
+  const [internalSearch, setInternalSearch] = useState("");
+
+  const filter = controlledFilter ?? internalFilter;
+  const sort = controlledSort ?? internalSort;
+  const search = controlledSearch ?? internalSearch;
+
+  const handleFilterChange = (next: TeamFilterSlug): void => {
+    if (onFilterChange !== undefined) onFilterChange(next);
+    else setInternalFilter(next);
+  };
+
+  const handleSortChange = (next: TeamSortSlug): void => {
+    if (onSortChange !== undefined) onSortChange(next);
+    else setInternalSort(next);
+  };
+
+  const handleSearchChange = (next: string): void => {
+    if (onSearchChange !== undefined) onSearchChange(next);
+    else setInternalSearch(next);
+  };
+
+  const filterOptions: ReadonlyArray<FilterTabOption<TeamFilterSlug>> =
+    FILTER_ORDER.map((slug) => ({
+      slug,
+      label: FILTER_LABEL[slug],
+      count: counts?.[slug],
+    }));
+
+  const visible = useMemo<ReadonlyArray<Person> | null>(() => {
+    if (people === null) return null;
+    const byRole = applyRoleFilter(people, filter);
+    const bySearch = applySearch(byRole, search);
+    return applySort(bySearch, sort);
+  }, [people, filter, search, sort]);
+
+  return (
+    <section
+      data-component="team-destination"
+      data-testid="team-destination"
+      aria-label="Team destination"
+      style={containerStyle}
+    >
+      <div style={headerWrapStyle}>
+        <PageHeader
+          title="Team"
+          subtitle="Workspace members, roles, and presence."
+          primaryAction={
+            canInvite && onInvite !== undefined
+              ? { label: "Invite", onClick: onInvite }
+              : undefined
+          }
+        />
+      </div>
+
+      <div style={filterRowStyle}>
+        <FilterTabs<TeamFilterSlug>
+          value={filter}
+          onChange={handleFilterChange}
+          options={filterOptions}
+          ariaLabel="Team filter (role)"
+          idPrefix="team-filter"
+        />
+      </div>
+
+      <div style={toolbarStyle} data-testid="team-toolbar">
+        <input
+          type="search"
+          value={search}
+          onChange={(e) => handleSearchChange(e.target.value)}
+          placeholder="Search by name or email"
+          style={searchInputStyle}
+          data-testid="team-search"
+          aria-label="Search team"
+        />
+        <label style={sortLabelStyle}>
+          <span style={sortLabelTextStyle}>Sort</span>
+          <select
+            value={sort}
+            onChange={(e) => handleSortChange(e.target.value as TeamSortSlug)}
+            style={sortSelectStyle}
+            data-testid="team-sort"
+            aria-label="Sort team"
+          >
+            {SORT_ORDER.map((slug) => (
+              <option key={slug} value={slug}>
+                {SORT_LABEL[slug]}
+              </option>
+            ))}
+          </select>
+        </label>
+      </div>
+
+      <div style={bodyStyle} data-testid="team-body">
+        {visible === null ? (
+          <div data-testid="team-loading" style={loadingStyle}>
+            Loading team…
+          </div>
+        ) : visible.length === 0 ? (
+          <EmptyState
+            title={search.trim() === "" ? "No teammates yet" : "No matches"}
+            body={
+              search.trim() === ""
+                ? "Invite teammates to collaborate in this workspace."
+                : "Try a different search or filter."
+            }
+            action={
+              canInvite && onInvite !== undefined && search.trim() === ""
+                ? { label: "Invite teammate", onClick: onInvite }
+                : undefined
+            }
+          />
+        ) : (
+          <CardGrid minCardWidth={260} gap={12} ariaLabel="Team members">
+            {visible.map((person) => (
+              <PersonCard
+                key={person.id}
+                person={person}
+                onOpen={onOpenPerson}
+              />
+            ))}
+          </CardGrid>
+        )}
+      </div>
+    </section>
+  );
 }
 
-type FetchState =
-  | { readonly status: "loading" }
-  | { readonly status: "error"; readonly message: string }
-  | { readonly status: "ready"; readonly members: readonly Member[] };
+// ---------------------------------------------------------------------------
+// Pure transforms (exported for tests)
+// ---------------------------------------------------------------------------
 
-const ROLE_LABEL: Record<MemberRole, string> = {
-  owner: "Owner",
-  admin: "Admin",
-  member: "Member",
-  guest: "Guest",
-};
+const ROLE_BUCKETS: Readonly<Record<TeamFilterSlug, ReadonlyArray<TeamRole>>> =
+  {
+    all: ["owner", "admin", "member", "guest"],
+    // Sub-PRD §7.1 reads "Admins" as the conceptual bucket that includes
+    // owner + admin (an owner is an admin with the demote-protected flag).
+    admins: ["owner", "admin"],
+    members: ["member"],
+    guests: ["guest"],
+  };
 
-const ROLE_TONE: Record<
-  MemberRole,
-  "neutral" | "success" | "warning" | "danger" | "accent"
-> = {
-  owner: "accent",
-  admin: "success",
-  member: "neutral",
-  guest: "warning",
-};
+export function applyRoleFilter(
+  people: ReadonlyArray<Person>,
+  filter: TeamFilterSlug,
+): ReadonlyArray<Person> {
+  const allowed = ROLE_BUCKETS[filter];
+  if (filter === "all") return people;
+  return people.filter((p) => allowed.includes(p.role));
+}
 
-// Design tokens (see packages/design-system/src/styles.css). Names are kept
-// for readability at use-sites; values are CSS variables so Settings →
-// Appearance theme/accent changes flow through automatically.
-const PANEL_BG = "var(--color-bg)";
-const PANEL_BORDER = "var(--color-border)";
-const TEXT_PRIMARY = "var(--color-text)";
-const TEXT_SECONDARY = "var(--color-text-muted)";
-const HEADER_CELL_BG = "var(--color-bg-elevated)";
-const SKELETON_FILL = "var(--color-surface-muted)";
-// Subtle accent tint for row hover — mirrors design-system .ui-status-pill
-// pattern (color-mix against transparent). Kept off the accent variable so
-// theme/accent rotation flows through unchanged.
-const ROW_HOVER = "color-mix(in srgb, var(--color-accent) 8%, transparent)";
+export function applySearch(
+  people: ReadonlyArray<Person>,
+  search: string,
+): ReadonlyArray<Person> {
+  const q = search.trim().toLowerCase();
+  if (q.length === 0) return people;
+  return people.filter(
+    (p) =>
+      p.display_name.toLowerCase().includes(q) ||
+      p.email.toLowerCase().includes(q),
+  );
+}
 
-const rootStyle: CSSProperties = {
+export function applySort(
+  people: ReadonlyArray<Person>,
+  sort: TeamSortSlug,
+): ReadonlyArray<Person> {
+  const copy = [...people];
+  switch (sort) {
+    case "display_name:asc":
+      copy.sort((a, b) =>
+        a.display_name.localeCompare(b.display_name, undefined, {
+          sensitivity: "base",
+        }),
+      );
+      break;
+    case "last_seen:desc":
+      copy.sort((a, b) => {
+        // null last_seen_at sinks to the bottom.
+        const ta =
+          a.last_seen_at === null ? -Infinity : Date.parse(a.last_seen_at);
+        const tb =
+          b.last_seen_at === null ? -Infinity : Date.parse(b.last_seen_at);
+        return tb - ta;
+      });
+      break;
+    case "joined_at:desc":
+      copy.sort((a, b) => Date.parse(b.joined_at) - Date.parse(a.joined_at));
+      break;
+  }
+  return copy;
+}
+
+// ---------------------------------------------------------------------------
+// Styles
+// ---------------------------------------------------------------------------
+
+const containerStyle: CSSProperties = {
   display: "flex",
   flexDirection: "column",
+  width: "100%",
   height: "100%",
-  overflow: "hidden",
-  background: PANEL_BG,
-  color: TEXT_PRIMARY,
+  minHeight: 0,
+  background: "var(--color-bg, #131316)",
+  color: "var(--color-text, #ededee)",
+  boxSizing: "border-box",
 };
 
-const headerStyle: CSSProperties = {
+const headerWrapStyle: CSSProperties = {
+  padding: "16px 20px 0",
+};
+
+const filterRowStyle: CSSProperties = {
+  padding: "12px 20px 0",
+};
+
+const toolbarStyle: CSSProperties = {
   display: "flex",
   alignItems: "center",
   justifyContent: "space-between",
-  padding: "1rem 1.5rem",
-  borderBottom: `1px solid ${PANEL_BORDER}`,
-  flex: "0 0 auto",
+  gap: 12,
+  padding: "12px 20px",
 };
 
-const titleStyle: CSSProperties = {
-  margin: 0,
-  fontSize: "var(--font-size-xl, 1.25rem)",
-  fontWeight: "var(--font-weight-semibold, 600)",
-  color: TEXT_PRIMARY,
+const searchInputStyle: CSSProperties = {
+  flex: 1,
+  height: 32,
+  padding: "0 10px",
+  borderRadius: "var(--radius-sm, 6px)",
+  border: "1px solid var(--color-border, #232325)",
+  background: "var(--color-bg-elevated, #18181b)",
+  color: "var(--color-text, #ededee)",
+  fontSize: "var(--font-size-sm, 13px)",
+  outline: "none",
+  minWidth: 0,
 };
 
-const subtitleStyle: CSSProperties = {
-  marginTop: "0.25rem",
-  fontSize: "var(--font-size-sm, 0.875rem)",
-  color: TEXT_SECONDARY,
+const sortLabelStyle: CSSProperties = {
+  display: "inline-flex",
+  alignItems: "center",
+  gap: 6,
+  flexShrink: 0,
+};
+
+const sortLabelTextStyle: CSSProperties = {
+  fontSize: "var(--font-size-xs, 12px)",
+  fontWeight: 600,
+  color: "var(--color-text-muted, #b4b4b8)",
+  textTransform: "uppercase",
+  letterSpacing: 0.4,
+};
+
+const sortSelectStyle: CSSProperties = {
+  height: 32,
+  padding: "0 8px",
+  borderRadius: "var(--radius-sm, 6px)",
+  border: "1px solid var(--color-border, #232325)",
+  background: "var(--color-bg-elevated, #18181b)",
+  color: "var(--color-text, #ededee)",
+  fontSize: "var(--font-size-sm, 13px)",
 };
 
 const bodyStyle: CSSProperties = {
-  flex: "1 1 auto",
-  overflowY: "auto",
-  padding: "1.5rem",
+  flex: 1,
+  minHeight: 0,
+  overflow: "auto",
+  padding: "0 20px 20px",
 };
 
-const tableStyle: CSSProperties = {
-  width: "100%",
-  borderCollapse: "separate",
-  borderSpacing: 0,
-  border: `1px solid ${PANEL_BORDER}`,
-  borderRadius: "0.5rem",
-  overflow: "hidden",
-};
-
-const theadCellStyle: CSSProperties = {
-  textAlign: "left",
-  padding: "0.625rem 0.875rem",
-  background: HEADER_CELL_BG,
-  borderBottom: `1px solid ${PANEL_BORDER}`,
-  fontSize: "var(--font-size-xs, 0.75rem)",
-  fontWeight: "var(--font-weight-medium, 500)",
-  color: TEXT_SECONDARY,
-  textTransform: "uppercase",
-  letterSpacing: "0.05em",
-};
-
-const tbodyCellStyle: CSSProperties = {
-  padding: "0.75rem 0.875rem",
-  borderBottom: `1px solid ${PANEL_BORDER}`,
-  fontSize: "var(--font-size-sm, 0.875rem)",
-  color: TEXT_PRIMARY,
-  verticalAlign: "middle",
-};
-
-const nameCellStyle: CSSProperties = {
-  ...tbodyCellStyle,
-  display: "flex",
-  alignItems: "center",
-  gap: "0.625rem",
-};
-
-const memberEmailStyle: CSSProperties = {
-  color: TEXT_SECONDARY,
-};
-
-const lastActiveStyle: CSSProperties = {
-  color: TEXT_SECONDARY,
-  fontSize: "var(--font-size-xs, 0.75rem)",
-};
-
-const skeletonRowStyle: CSSProperties = {
-  display: "flex",
-  alignItems: "center",
-  gap: "0.625rem",
-  padding: "0.75rem 0.875rem",
-  borderBottom: `1px solid ${PANEL_BORDER}`,
-};
-
-const skeletonBoxStyle: CSSProperties = {
-  background: SKELETON_FILL,
-  borderRadius: "0.25rem",
-  height: "0.75rem",
-};
-
-const emptyCardStyle: CSSProperties = {
+const loadingStyle: CSSProperties = {
+  padding: 24,
   textAlign: "center",
-  padding: "2rem",
+  color: "var(--color-text-muted, #b4b4b8)",
+  fontSize: "var(--font-size-sm, 13px)",
 };
-
-export function TeamDestination(props?: TeamDestinationProps): ReactElement {
-  const transport = useTransport();
-  const router = useRouter<ArtifactRoute>();
-  const [state, setState] = useState<FetchState>({ status: "loading" });
-
-  useEffect(() => {
-    const controller = new AbortController();
-    let cancelled = false;
-    transport
-      .request<MembersResponse>({
-        method: "GET",
-        path: "/v1/workspace/members",
-        signal: controller.signal,
-      })
-      .then((res) => {
-        if (cancelled) return;
-        setState({ status: "ready", members: res.members ?? [] });
-      })
-      .catch((err: unknown) => {
-        if (cancelled) return;
-        const message =
-          err instanceof Error ? err.message : "Failed to load members";
-        setState({ status: "error", message });
-      });
-    return () => {
-      cancelled = true;
-      controller.abort();
-    };
-  }, [transport]);
-
-  const handleInvite = (): void => {
-    props?.onInvite?.();
-  };
-
-  const handleRowActivate = (member: Member): void => {
-    router.navigate({ kind: "workspace", workspaceId: member.workspaceId });
-  };
-
-  const handleRowKeyDown = (
-    event: KeyboardEvent<HTMLTableRowElement>,
-    member: Member,
-  ): void => {
-    if (event.key === "Enter" || event.key === " ") {
-      event.preventDefault();
-      handleRowActivate(member);
-    }
-  };
-
-  return (
-    <div style={rootStyle} data-testid="team-destination">
-      <header style={headerStyle}>
-        <div>
-          <h1 style={titleStyle}>Team</h1>
-          <div style={subtitleStyle}>Workspace members and roles</div>
-        </div>
-        <Button variant="primary" size="md" onClick={handleInvite}>
-          Invite
-        </Button>
-      </header>
-      <div style={bodyStyle}>
-        {renderBody(state, handleRowActivate, handleRowKeyDown)}
-      </div>
-    </div>
-  );
-}
-
-function renderBody(
-  state: FetchState,
-  onActivate: (member: Member) => void,
-  onKeyDown: (
-    event: KeyboardEvent<HTMLTableRowElement>,
-    member: Member,
-  ) => void,
-): ReactElement {
-  if (state.status === "loading") {
-    return renderSkeleton();
-  }
-  if (state.status === "error") {
-    return (
-      <Card tone="danger" data-testid="team-error">
-        Failed to load workspace members: {state.message}
-      </Card>
-    );
-  }
-  if (state.members.length === 0) {
-    return (
-      <Card tone="muted" data-testid="team-empty" style={emptyCardStyle}>
-        <div
-          style={{
-            fontSize: "var(--font-size-md, 1rem)",
-            fontWeight: "var(--font-weight-medium, 500)",
-            marginBottom: "0.25rem",
-          }}
-        >
-          No members yet
-        </div>
-        <div
-          style={{
-            color: TEXT_SECONDARY,
-            fontSize: "var(--font-size-sm, 0.875rem)",
-          }}
-        >
-          Invite teammates to collaborate in this workspace.
-        </div>
-      </Card>
-    );
-  }
-  return (
-    <table style={tableStyle} data-testid="team-table">
-      <thead>
-        <tr>
-          <th style={theadCellStyle} scope="col">
-            Member
-          </th>
-          <th style={theadCellStyle} scope="col">
-            Role
-          </th>
-          <th style={theadCellStyle} scope="col">
-            Last active
-          </th>
-        </tr>
-      </thead>
-      <tbody>
-        {state.members.map((member) => (
-          <tr
-            key={member.id}
-            role="button"
-            tabIndex={0}
-            aria-label={`Open workspace for ${member.name}`}
-            onClick={() => onActivate(member)}
-            onKeyDown={(event) => onKeyDown(event, member)}
-            style={{ cursor: "pointer" }}
-            onMouseEnter={(event) => {
-              event.currentTarget.style.background = ROW_HOVER;
-            }}
-            onMouseLeave={(event) => {
-              event.currentTarget.style.background = "transparent";
-            }}
-          >
-            <td style={nameCellStyle}>
-              <AppIcon name={member.name} color={member.avatarColor} />
-              <div style={{ display: "flex", flexDirection: "column" }}>
-                <span>{member.name}</span>
-                <span style={memberEmailStyle}>{member.email}</span>
-              </div>
-            </td>
-            <td style={tbodyCellStyle}>
-              <Badge tone={ROLE_TONE[member.role]}>
-                {ROLE_LABEL[member.role]}
-              </Badge>
-            </td>
-            <td style={tbodyCellStyle}>
-              <span style={lastActiveStyle}>
-                {formatRelative(member.lastActiveIso)}
-              </span>
-            </td>
-          </tr>
-        ))}
-      </tbody>
-    </table>
-  );
-}
-
-function renderSkeleton(): ReactElement {
-  return (
-    <div
-      style={{
-        border: `1px solid ${PANEL_BORDER}`,
-        borderRadius: "0.5rem",
-        overflow: "hidden",
-      }}
-      data-testid="team-loading"
-    >
-      {[0, 1, 2, 3].map((i) => (
-        <div key={i} style={skeletonRowStyle}>
-          <div
-            style={{
-              ...skeletonBoxStyle,
-              width: "2rem",
-              height: "2rem",
-              borderRadius: "999px",
-            }}
-            aria-hidden="true"
-          />
-          <div
-            style={{
-              flex: 1,
-              display: "flex",
-              flexDirection: "column",
-              gap: "0.375rem",
-            }}
-          >
-            <div
-              style={{ ...skeletonBoxStyle, width: "40%" }}
-              aria-hidden="true"
-            />
-            <div
-              style={{ ...skeletonBoxStyle, width: "60%" }}
-              aria-hidden="true"
-            />
-          </div>
-          <div
-            style={{ ...skeletonBoxStyle, width: "4rem" }}
-            aria-hidden="true"
-          />
-        </div>
-      ))}
-    </div>
-  );
-}
-
-function formatRelative(iso: string): string {
-  const t = Date.parse(iso);
-  if (Number.isNaN(t)) return "—";
-  const deltaMs = Date.now() - t;
-  if (deltaMs < 0) return "just now";
-  const minutes = Math.floor(deltaMs / 60000);
-  if (minutes < 1) return "just now";
-  if (minutes < 60) return `${minutes}m ago`;
-  const hours = Math.floor(minutes / 60);
-  if (hours < 24) return `${hours}h ago`;
-  const days = Math.floor(hours / 24);
-  if (days < 7) return `${days}d ago`;
-  const weeks = Math.floor(days / 7);
-  if (weeks < 4) return `${weeks}w ago`;
-  const months = Math.floor(days / 30);
-  if (months < 12) return `${months}mo ago`;
-  const years = Math.floor(days / 365);
-  return `${years}y ago`;
-}

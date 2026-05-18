@@ -529,10 +529,29 @@ export type {
   WebhookCreateWizardRequest,
 } from "./destinations/connectors";
 export {
+  applyRoleFilter,
+  applySearch,
+  applySort,
+  OffboardingWizard,
+  PersonCard,
+  PersonDetailView,
   TeamDestination,
-  type Member,
-  type MemberRole,
+  TeamInviteWizard,
+  TeamPanel,
+  type OffboardingAsset,
+  type OffboardingWizardProps,
+  type PersonCardProps,
+  type PersonDetailTabId,
+  type PersonDetailViewProps,
+  type PresenceFilterCounts,
+  type PresenceFilterSlug,
   type TeamDestinationProps,
+  type TeamFilterCounts,
+  type TeamFilterSlug,
+  type TeamInviteWizardProps,
+  type TeamInviteWizardResult,
+  type TeamPanelProps,
+  type TeamSortSlug,
 } from "./destinations/team";
 export { MemoryDestination } from "./destinations/memory";
 // === end Phase 2-A / 3 destinations ===
