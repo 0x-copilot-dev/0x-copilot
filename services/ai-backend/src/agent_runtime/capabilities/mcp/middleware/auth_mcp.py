@@ -13,6 +13,7 @@ from langgraph.types import interrupt as langgraph_interrupt
 from agent_runtime.execution.contracts import AgentRuntimeContext, RuntimeContract
 from agent_runtime.capabilities.mcp.cards import McpLoadErrorCode, McpLoadResult
 from agent_runtime.capabilities.mcp.constants import Keys, Messages, Values
+from agent_runtime.capabilities.mcp.discovery_cache import McpDiscoveryCache
 
 
 class McpAuthSessionCreator(Protocol):
@@ -46,11 +47,20 @@ class AuthMcpInput(RuntimeContract):
 
 @dataclass(frozen=True)
 class AuthMcpTool:
-    """Small adapter that can be wrapped by LangChain tool primitives."""
+    """Small adapter that can be wrapped by LangChain tool primitives.
+
+    When ``cache`` is wired, a successful auth grant busts any cached
+    discovery entries for the same ``(server_name, user_id)`` — new
+    scopes can yield different tool visibility, so the model must see
+    a fresh ``LoadedMcpServer`` on the next ``load_mcp_server`` call.
+    ``org_id`` is left wildcard because the re-auth event is scoped to
+    the user, not the org.
+    """
 
     auth_session_creator: McpAuthSessionCreator
     runtime_context: AgentRuntimeContext
     interrupt_handler: Callable[[dict[str, Any]], object] = langgraph_interrupt
+    cache: McpDiscoveryCache | None = None
     name: str = Values.ToolName.AUTH_MCP
     description: str = Messages.Middleware.AUTH_MCP_TOOL_DESCRIPTION
 
@@ -82,7 +92,16 @@ class AuthMcpTool:
             "message": f"Authenticate {session.display_name} to continue using this MCP server.",
         }
         resume = self.interrupt_handler(payload)
-        return self._resume_result(session, resume)
+        result = self._resume_result(session, resume)
+        if result.get("ok") and self.cache is not None:
+            # New scopes can change tool visibility; bust matching
+            # discovery entries so the next ``load_mcp_server`` reflects
+            # the freshly granted authorisation.
+            await self.cache.invalidate(
+                server_name=session.server_name,
+                user_id=self.runtime_context.user_id,
+            )
+        return result
 
     async def __call__(
         self, raw_input: AuthMcpInput | Mapping[str, Any] | str

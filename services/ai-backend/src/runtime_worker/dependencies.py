@@ -9,6 +9,7 @@ from agent_runtime.capabilities.citation_capturing_tool import (
     CitationCapturingRegistry,
 )
 from agent_runtime.capabilities.mcp.backend_provider import BackendMcpProvider
+from agent_runtime.capabilities.mcp.discovery_cache import McpDiscoveryCache
 from agent_runtime.capabilities.mcp.registry import DynamicMcpRegistry
 from agent_runtime.capabilities.skills.sources import SkillSource, SkillSourceConfig
 from agent_runtime.capabilities.skills.virtual import (
@@ -98,11 +99,23 @@ class EmptySubagentCatalog:
 
 
 class DefaultRuntimeDependenciesFactory:
-    """Build minimal runtime dependencies for worker-driven invocation."""
+    """Build minimal runtime dependencies for worker-driven invocation.
 
-    def __init__(self, settings: RuntimeSettings | None = None) -> None:
+    The ``mcp_discovery_cache`` is one instance per worker process — passed
+    through ``RuntimeDependencies`` to the runtime factory, which threads it
+    into :class:`McpLoader` and :class:`AuthMcpTool`. When ``None``, the
+    loader runs the live network path on every call (pre-cache behaviour).
+    """
+
+    def __init__(
+        self,
+        settings: RuntimeSettings | None = None,
+        *,
+        mcp_discovery_cache: McpDiscoveryCache | None = None,
+    ) -> None:
         """Load runtime settings; falls back to ``RuntimeSettings.load()`` when ``settings`` is ``None``."""
         self.settings = settings or RuntimeSettings.load()
+        self.mcp_discovery_cache = mcp_discovery_cache
 
     def __call__(self, _context: AgentRuntimeContext) -> RuntimeDependencies:
         """Build and return the full ``RuntimeDependencies`` graph for a worker run.
@@ -125,6 +138,45 @@ class DefaultRuntimeDependenciesFactory:
             skill_registry=self._skill_registry(_context),
             memory_backend_factory=ScopedMemoryBackendFactory(),
             subagent_catalog=EmptySubagentCatalog(),
+            mcp_discovery_cache=self.mcp_discovery_cache,
+        )
+
+    @classmethod
+    def build_default_discovery_cache(cls) -> McpDiscoveryCache:
+        """Build a :class:`McpDiscoveryCache` configured from env vars.
+
+        Reads ``RUNTIME_MCP_DISCOVERY_CACHE_TTL_SECONDS`` (default 900) and
+        ``RUNTIME_MCP_DISCOVERY_CACHE_MAX_ENTRIES`` (default 1000). Used by
+        the worker process entrypoint so each worker gets its own cache.
+        """
+
+        import os
+
+        def _positive_float(env_name: str, default: float) -> float:
+            raw = os.environ.get(env_name, "").strip()
+            if not raw:
+                return default
+            try:
+                parsed = float(raw)
+            except ValueError:
+                return default
+            return parsed if parsed > 0 else default
+
+        def _positive_int(env_name: str, default: int) -> int:
+            raw = os.environ.get(env_name, "").strip()
+            if not raw:
+                return default
+            try:
+                parsed = int(raw)
+            except ValueError:
+                return default
+            return parsed if parsed > 0 else default
+
+        return McpDiscoveryCache(
+            ttl_seconds=_positive_float(
+                "RUNTIME_MCP_DISCOVERY_CACHE_TTL_SECONDS", 900.0
+            ),
+            max_entries=_positive_int("RUNTIME_MCP_DISCOVERY_CACHE_MAX_ENTRIES", 1000),
         )
 
     def _skill_source_config(self) -> SkillSourceConfig:

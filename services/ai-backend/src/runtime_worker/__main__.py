@@ -9,6 +9,7 @@ from agent_runtime.observability.otel import TelemetryBootstrap
 from agent_runtime.pricing import PricingRefreshLoop, PricingRefreshLoopEnv
 from agent_runtime.settings import RuntimeSettings
 from runtime_adapters.factory import RuntimeAdapterFactory
+from runtime_worker.dependencies import DefaultRuntimeDependenciesFactory
 from runtime_worker.loop import RuntimeWorker
 from agent_runtime.observability.db_statement_metrics import (
     DbStatementMetricsCollector,
@@ -50,6 +51,14 @@ class RuntimeWorkerEntrypoint:
         statement_collector: DbStatementMetricsCollector | None = None
         pricing_refresh_loop: PricingRefreshLoop | None = None
         try:
+            # One MCP discovery cache per worker process — shared by every
+            # run/approval handler this worker spins up. API and worker run
+            # as separate processes in production; each builds its own
+            # cache (per-process warm-up trade-off documented in the cache
+            # docstring).
+            mcp_discovery_cache = (
+                DefaultRuntimeDependenciesFactory.build_default_discovery_cache()
+            )
             worker = RuntimeWorker(
                 persistence=async_ports.persistence,
                 event_store=async_ports.event_store,
@@ -60,6 +69,7 @@ class RuntimeWorkerEntrypoint:
                 conversation_tool_ordinal_store=(
                     async_ports.conversation_tool_ordinal_store
                 ),
+                mcp_discovery_cache=mcp_discovery_cache,
             )
             logger.info(
                 "worker_started",

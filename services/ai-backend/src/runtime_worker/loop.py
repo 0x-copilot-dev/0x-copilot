@@ -61,6 +61,7 @@ class RuntimeWorker:
         conversation_tool_ordinal_store: (
             "ConversationToolOrdinalStorePort | None"
         ) = None,
+        mcp_discovery_cache: object | None = None,
     ) -> None:
         self.persistence: PersistencePort = persistence
         self.event_store: EventStorePort = event_store
@@ -81,6 +82,10 @@ class RuntimeWorker:
         self.conversation_tool_ordinal_store: ConversationToolOrdinalStorePort = (
             conversation_tool_ordinal_store or InMemoryConversationToolOrdinalStore()
         )
+        # Process-wide MCP discovery cache (when wired). Forwarded into the
+        # default run / approval handler dependencies factories so every
+        # ``McpLoader`` built for a run in this process shares one cache.
+        self.mcp_discovery_cache = mcp_discovery_cache
         self.run_handler = run_handler or RuntimeRunHandler(
             persistence=self.persistence,
             event_store=self.event_store,
@@ -89,6 +94,7 @@ class RuntimeWorker:
             citation_store=citation_store,
             draft_store=draft_store,
             conversation_tool_ordinal_store=self.conversation_tool_ordinal_store,
+            mcp_discovery_cache=mcp_discovery_cache,
         )
         self.cancel_handler = cancel_handler or RuntimeCancelHandler(
             persistence=self.persistence,
@@ -101,6 +107,7 @@ class RuntimeWorker:
             on_event_appended=on_event_appended,
             draft_store=draft_store,
             conversation_tool_ordinal_store=self.conversation_tool_ordinal_store,
+            mcp_discovery_cache=mcp_discovery_cache,
         )
         self._semaphore = asyncio.Semaphore(self.settings.execution.max_parallel_runs)
         self.logger = logging.getLogger("runtime_worker")

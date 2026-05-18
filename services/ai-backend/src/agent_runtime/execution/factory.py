@@ -193,6 +193,7 @@ async def _assemble_harness(
             mcp_registry=runtime_dependencies.mcp_registry,
             skill_registry=runtime_dependencies.skill_registry,
             prior_tool_result_loader=runtime_dependencies.prior_tool_result_loader,
+            mcp_discovery_cache=runtime_dependencies.mcp_discovery_cache,
             runtime_context=runtime_context,
         )
         model_instructions = _instructions_with_suggested_connectors(
@@ -264,6 +265,7 @@ def _model_visible_tools(
     mcp_registry: object,
     skill_registry: object | None,
     prior_tool_result_loader: object | None,
+    mcp_discovery_cache: object | None,
     runtime_context: AgentRuntimeContext,
 ) -> tuple[object, ...]:
     model_tools = list(tools)
@@ -276,8 +278,20 @@ def _model_visible_tools(
         and callable(getattr(skill_registry, "load_skill_by_name", None)),
         include_mcp_discovery=True,
     )
+    # The cache is constructed at lifespan startup (API) or worker dependency
+    # wiring (worker) and threaded through via ``RuntimeDependencies``. We
+    # accept ``object | None`` here so test fakes can pass ``None`` without
+    # importing the cache type, but the loader and auth tool require the
+    # concrete ``McpDiscoveryCache`` to opt in.
+    from agent_runtime.capabilities.mcp.discovery_cache import McpDiscoveryCache
+
+    typed_discovery_cache: McpDiscoveryCache | None = (
+        mcp_discovery_cache
+        if isinstance(mcp_discovery_cache, McpDiscoveryCache)
+        else None
+    )
     if callable(getattr(mcp_registry, "resolve_server", None)):
-        loader = McpLoader(mcp_registry)  # type: ignore[arg-type]
+        loader = McpLoader(mcp_registry, cache=typed_discovery_cache)  # type: ignore[arg-type]
         model_tools.append(
             _structured_tool(
                 LoadMcpServerTool(
@@ -304,6 +318,7 @@ def _model_visible_tools(
                 AuthMcpTool(
                     auth_session_creator=auth_session_creator,
                     runtime_context=runtime_context,
+                    cache=typed_discovery_cache,
                 ),
                 AuthMcpInput,
             )

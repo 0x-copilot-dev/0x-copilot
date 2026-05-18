@@ -107,12 +107,19 @@ class RuntimeApprovalHandler:
         conversation_tool_ordinal_store: (
             ConversationToolOrdinalStorePort | None
         ) = None,
+        mcp_discovery_cache: object | None = None,
     ) -> None:
         self.persistence: PersistencePort = persistence
         self.event_store: EventStorePort = event_store
         self.settings = settings or RuntimeSettings.load()
-        self.dependencies_factory = (
-            dependencies_factory or DefaultRuntimeDependenciesFactory(self.settings)
+        # Same pattern as ``RuntimeRunHandler``: caller-supplied factory wins
+        # (tests inject their own); otherwise the default factory threads the
+        # process-wide MCP discovery cache through ``RuntimeDependencies``.
+        self.dependencies_factory = dependencies_factory or (
+            DefaultRuntimeDependenciesFactory(
+                self.settings,
+                mcp_discovery_cache=mcp_discovery_cache,  # type: ignore[arg-type]
+            )
         )
         self.agent_factory = agent_factory
         self.runtime_resumer = runtime_resumer

@@ -103,6 +103,13 @@ class RuntimeApiAppFactory:
         @asynccontextmanager
         async def lifespan(app: FastAPI) -> AsyncIterator[None]:
             await cls.open_async_store(app)
+            # Build the MCP discovery cache singleton for this process so
+            # the runtime API and any in-process worker share one cache.
+            # In production the worker is a separate process and builds
+            # its own — see ``runtime_worker.dependencies``. Must be
+            # constructed BEFORE the in-process worker starts so worker
+            # runs see the same cache as request-served runs.
+            cls.build_mcp_discovery_cache(app)
             # P2 — start the cross-process LISTEN/NOTIFY bus task if the
             # Postgres backend is configured. Must run after the store is
             # open (the bus borrows the same DATABASE_URL) and before the
@@ -662,6 +669,52 @@ class RuntimeApiAppFactory:
         await stop()
 
     @classmethod
+    def build_mcp_discovery_cache(cls, app: FastAPI) -> None:
+        """Construct the per-process MCP discovery cache and stash it on app state.
+
+        Reads:
+          - ``RUNTIME_MCP_DISCOVERY_CACHE_TTL_SECONDS`` (default 900)
+          - ``RUNTIME_MCP_DISCOVERY_CACHE_MAX_ENTRIES`` (default 1000)
+
+        The cache is then consumed by the runtime factory through
+        ``RuntimeDependencies.mcp_discovery_cache`` — the in-process
+        worker (when enabled) reaches the cache via the same path. A
+        separate worker process builds its own cache; that trade-off is
+        explicit in the cache docstring.
+        """
+
+        import os
+
+        from agent_runtime.capabilities.mcp.discovery_cache import McpDiscoveryCache
+
+        def _positive_float(env_name: str, default: float) -> float:
+            raw = os.environ.get(env_name, "").strip()
+            if not raw:
+                return default
+            try:
+                parsed = float(raw)
+            except ValueError:
+                return default
+            return parsed if parsed > 0 else default
+
+        def _positive_int(env_name: str, default: int) -> int:
+            raw = os.environ.get(env_name, "").strip()
+            if not raw:
+                return default
+            try:
+                parsed = int(raw)
+            except ValueError:
+                return default
+            return parsed if parsed > 0 else default
+
+        ttl_seconds = _positive_float("RUNTIME_MCP_DISCOVERY_CACHE_TTL_SECONDS", 900.0)
+        max_entries = _positive_int("RUNTIME_MCP_DISCOVERY_CACHE_MAX_ENTRIES", 1000)
+        app.state.mcp_discovery_cache = McpDiscoveryCache(
+            ttl_seconds=ttl_seconds,
+            max_entries=max_entries,
+        )
+
+    @classmethod
     async def open_async_store(cls, app: FastAPI) -> None:
         """Open + migrate the async store on startup if one was configured."""
 
@@ -708,6 +761,7 @@ class RuntimeApiAppFactory:
             conversation_tool_ordinal_store=getattr(
                 ports, "conversation_tool_ordinal_store", None
             ),
+            mcp_discovery_cache=getattr(app.state, "mcp_discovery_cache", None),
         )
         app.state.runtime_in_process_worker = worker
         app.state.runtime_in_process_worker_task = asyncio.create_task(
