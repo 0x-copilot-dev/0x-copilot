@@ -1,4 +1,4 @@
-// Public surface for the Agents destination (P8-B1).
+// Public surface for the Agents destination (P8-B1 + P8-B2 + P8-B3).
 //
 // Three building blocks:
 //   - AgentsDestination — gallery + header + search + filter tabs
@@ -92,3 +92,28 @@ export function resolveAgentItemRef(
     route: { kind: "agent", agentId: stub.id },
   };
 }
+
+// === P8-B2 detail + editor + fork dialog + version history ===
+export {
+  AgentEditor,
+  AGENT_EDITOR_DEFAULTS,
+  type AgentAutonomy,
+  type AgentEditorModelDefault,
+  type AgentEditorPermissions,
+  type AgentEditorProps,
+  type AgentEditorSaveState,
+  type AgentEditorTabId,
+  type AgentEditorValue,
+  type AgentReasoningDepth,
+} from "./AgentEditor";
+export {
+  AgentDetailView,
+  type AgentDetailViewModel,
+  type AgentDetailViewProps,
+} from "./AgentDetailView";
+export { ForkDialog, type ForkDialogProps } from "./ForkDialog";
+export {
+  VersionHistoryTab,
+  type AgentVersionRow,
+  type VersionHistoryTabProps,
+} from "./VersionHistoryTab";
