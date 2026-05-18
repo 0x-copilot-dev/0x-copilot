@@ -12,10 +12,7 @@ import type {
   ReactElement,
 } from "react";
 
-import type {
-  Webhook,
-  WebhookStatus,
-} from "@enterprise-search/api-types/src/connectors";
+import type { Webhook, WebhookStatus } from "@enterprise-search/api-types";
 
 import { StatusPill, type StatusTone } from "../../../shell/StatusPill";
 import { formatRelativeTime } from "../../../util/time";

@@ -337,6 +337,41 @@ export interface WebhookTestFireResponse {
   readonly error?: string;
 }
 
+/**
+ * Body of `POST /v1/connectors/webhooks`. Server fills defaults for
+ * everything the caller omits — strategy + algo + IP allowlist + status
+ * come from tenant-policy defaults when the wizard does not override.
+ */
+export interface CreateWebhookRequest {
+  readonly url: string;
+  readonly secret_strategy?: WebhookSecretStrategy;
+  readonly hmac_algo?: WebhookHmacAlgo;
+  readonly ip_allowlist?: ReadonlyArray<string>;
+  /** Caller-supplied secret. Required when `secret_strategy === "static"`
+   *  (the server generates one for `"rotating"`). */
+  readonly secret_plaintext?: string;
+}
+
+/**
+ * Body of `PATCH /v1/connectors/webhooks/{id}`. Every field optional;
+ * unset fields are left unchanged server-side.
+ */
+export interface PatchWebhookRequest {
+  readonly url?: string;
+  readonly ip_allowlist?: ReadonlyArray<string>;
+  readonly status?: WebhookStatus;
+}
+
+/**
+ * Body of `POST /v1/connectors/webhooks/{id}/test-fire`. Empty in v1 —
+ * the server constructs the payload deterministically from the webhook's
+ * registration so receivers can hardcode-match.
+ */
+export interface TestFireWebhookRequest {
+  /** Reserved for forward-compat; ignored server-side in v1. */
+  readonly note?: string;
+}
+
 // ---------------------------------------------------------------------------
 // SSE — `GET /v1/connectors/stream` (connectors-prd §4.9)
 // ---------------------------------------------------------------------------

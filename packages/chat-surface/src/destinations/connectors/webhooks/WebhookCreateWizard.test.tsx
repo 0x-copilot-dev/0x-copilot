@@ -12,7 +12,7 @@ import type { TenantId, TriggerId } from "@enterprise-search/api-types";
 import type {
   Webhook,
   WebhookCreateResponse,
-} from "@enterprise-search/api-types/src/connectors";
+} from "@enterprise-search/api-types";
 
 import {
   WEBHOOK_VERIFICATION_SNIPPET,

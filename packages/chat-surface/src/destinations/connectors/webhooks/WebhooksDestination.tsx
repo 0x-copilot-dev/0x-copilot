@@ -11,7 +11,7 @@
 import { type CSSProperties, type ReactElement } from "react";
 
 import type { SectionResult, TriggerId } from "@enterprise-search/api-types";
-import type { Webhook } from "@enterprise-search/api-types/src/connectors";
+import type { Webhook } from "@enterprise-search/api-types";
 
 import { DocList } from "../../../shell/DocList";
 import { EmptyState } from "../../../shell/EmptyState";

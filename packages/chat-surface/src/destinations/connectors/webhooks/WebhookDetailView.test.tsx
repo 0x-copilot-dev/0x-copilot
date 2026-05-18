@@ -7,7 +7,7 @@ import type { TenantId, TriggerId } from "@enterprise-search/api-types";
 import type {
   Webhook,
   WebhookRotateResponse,
-} from "@enterprise-search/api-types/src/connectors";
+} from "@enterprise-search/api-types";
 
 import { WebhookDetailView } from "./WebhookDetailView";
 

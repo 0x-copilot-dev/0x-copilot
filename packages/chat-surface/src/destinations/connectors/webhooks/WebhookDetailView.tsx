@@ -23,7 +23,7 @@ import type {
   Webhook,
   WebhookRotateResponse,
   WebhookTestFireResponse,
-} from "@enterprise-search/api-types/src/connectors";
+} from "@enterprise-search/api-types";
 
 import { StatusPill, type StatusTone } from "../../../shell/StatusPill";
 import { formatRelativeTime } from "../../../util/time";

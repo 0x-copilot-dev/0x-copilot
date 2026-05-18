@@ -17,17 +17,17 @@
 // fetch returns the redacted `Webhook` shape. Callers MUST surface the
 // plaintext through a copy-once reveal and never persist it.
 
-import type { Webhook } from "@enterprise-search/api-types";
-
 import type {
   CreateWebhookRequest,
   PatchWebhookRequest,
   TestFireWebhookRequest,
+  Webhook,
   WebhookCreateResponse,
   WebhookListResponse,
   WebhookRotateResponse,
   WebhookTestFireResponse,
-} from "./_connectors-stub";
+} from "@enterprise-search/api-types";
+
 import type { RequestIdentity } from "./config";
 import { httpDelete, httpGet, httpPatchQuery, httpPostQuery } from "./http";
 

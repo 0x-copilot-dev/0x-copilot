@@ -29,7 +29,7 @@ import type {
   WebhookCreateResponse,
   WebhookHmacAlgo,
   WebhookSecretStrategy,
-} from "@enterprise-search/api-types/src/connectors";
+} from "@enterprise-search/api-types";
 
 import { useStepMachine } from "../../tools/onboarding/useStepMachine";
 
