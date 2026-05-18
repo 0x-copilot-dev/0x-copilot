@@ -19,6 +19,7 @@ from backend_facade.adapter_review_routes import register_adapter_review_routes
 from backend_facade.agents_routes import register_agents_routes
 from backend_facade.audit_routes import register_audit_routes
 from backend_facade.auth_routes import register_auth_routes
+from backend_facade.connector_routes import register_connector_routes
 from backend_facade.home_routes import register_home_routes
 from backend_facade.inbox_routes import register_inbox_routes
 from backend_facade.inbox_stream_routes import register_inbox_stream_routes
@@ -32,6 +33,7 @@ from backend_facade.settings_routes import register_settings_routes
 from backend_facade.team_routes import register_team_routes
 from backend_facade.todos_routes import register_todos_routes
 from backend_facade.tool_routes import register_tool_routes
+from backend_facade.webhook_routes import register_webhook_routes
 from backend_facade.http_client import HttpClientPool, http_client
 from backend_facade.me_routes import register_me_routes
 from backend_facade.routines_webhook_routes import register_routines_webhook_routes
@@ -130,6 +132,11 @@ def create_app(
     register_agents_routes(app)
     register_audit_routes(app)
     register_auth_routes(app)
+    # Webhook routes BEFORE connector routes so the literal
+    # `/v1/connectors/webhooks` path wins FastAPI's registration-order
+    # matcher over `/v1/connectors/{connector_id}`.
+    register_webhook_routes(app)
+    register_connector_routes(app)
     register_home_routes(app)
     register_inbox_routes(app)
     register_inbox_stream_routes(app)

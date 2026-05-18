@@ -1522,7 +1522,6 @@ def create_app(
         catalog=connector_catalog,
     )
     app.state.connectors_service = connectors_service
-    register_connector_routes(app, service=connectors_service)
 
     # Phase 11 P11-A3 — Connectors destination webhook manager.
     # Webhooks are tenant-admin OR routine-owner per connectors-prd
@@ -1534,6 +1533,10 @@ def create_app(
     # off ``app.state.webhooks_service`` for explicit tick() calls.
     # HMAC algorithm + header names live as constants in
     # ``backend_app.webhooks.signer`` (single source of truth).
+    #
+    # MUST register BEFORE ``register_connector_routes`` so the literal
+    # path ``/v1/connectors/webhooks`` wins FastAPI's registration-order
+    # matcher over the path-param route ``/v1/connectors/{connector_id}``.
     resolved_webhooks_store: WebhooksStore = (
         webhooks_store or InMemoryWebhooksStore()  # type: ignore[assignment]
     )
@@ -1546,6 +1549,8 @@ def create_app(
         )
         app.state.webhooks_service = webhooks_service
         register_webhook_routes(app, service=webhooks_service)
+
+    register_connector_routes(app, service=connectors_service)
 
     # Phase 6 — Projects destination. The canonical project-scoped ACL
     # predicate lives in ``backend_app.projects.acl`` and is consumed
