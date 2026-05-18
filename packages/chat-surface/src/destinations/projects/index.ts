@@ -78,6 +78,46 @@ export {
   type TransferOwnershipDialogProps,
 } from "./transfer-ownership-dialog";
 
+// ===========================================================================
+// Phase 6.5 extensions (project editor + templates)
+// ===========================================================================
+
+export {
+  ProjectEditor,
+  type ProjectEditorProps,
+  type ProjectEditorTabId,
+  type ProjectEditorValue,
+  type ProjectEditorSavePayload,
+  type ProjectEditorConnectorOption,
+  type ProjectEditorConnectorSlug,
+  type ProjectConnectorAllowlistMode,
+} from "./ProjectEditor";
+
+export {
+  TemplateGallery,
+  type TemplateGalleryProps,
+  type TemplateGalleryFilterSlug,
+  type TemplateGalleryFilterCounts,
+  type ProjectTemplateCard,
+  type ProjectTemplateId,
+} from "./TemplateGallery";
+
+export {
+  TemplateEditor,
+  type TemplateEditorProps,
+  type TemplateEditorValue,
+  type TemplateEditorSavePayload,
+  type TemplateEditorSnapshot,
+  type TemplateEditorSeededTodo,
+  type TemplateEditorSeededRoutine,
+} from "./TemplateEditor";
+
+export {
+  ForkFromTemplateDialog,
+  type ForkFromTemplateDialogProps,
+  type ForkFromTemplateSnapshotSummary,
+} from "./fork-from-template-dialog";
+
 // Wire-type re-exports (forwarded from `_projects-stub.ts`; the
 // orchestrator rewires the stub to `@enterprise-search/api-types` at
 // merge time — see `_projects-stub.ts` header).
