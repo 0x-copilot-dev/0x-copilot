@@ -21,7 +21,7 @@
 // itself never crosses the wire.
 
 import type { ItemKind, ItemRef } from "./refs";
-import type { ProjectId, TenantId, UserId } from "./brands";
+import type { AgentId, ProjectId, TenantId, UserId } from "./brands";
 
 // ---------------------------------------------------------------------------
 // Phase 6.5 §5 — Connector inheritance.
@@ -152,6 +152,22 @@ export interface Project {
    * project member.
    */
   readonly default_connector_allowlist?: ReadonlyArray<ConnectorSlug> | null;
+  /**
+   * Phase 8 §1.5 / §8 — default Agent for new chats created under this
+   * project. `null` (or absent) means "no project default; the chat
+   * composer falls back to the user's workspace default agent". When
+   * set, new chats pre-fill `Conversation.agent_id = default_agent_id`
+   * at create time; an explicit picker on the composer overrides
+   * per-chat (agents-prd §1.5 U5). Owner-only writable; readable by
+   * every project member. Applies the same create-time inheritance
+   * pattern as `default_connector_allowlist` (projects-prd §12 Q3
+   * resolution).
+   *
+   * If the referenced agent is uninstalled or disabled at chat-create
+   * time, the pre-fill is skipped (agents-prd §4.6 cascade); the field
+   * is preserved on the project so re-install restores the behavior.
+   */
+  readonly default_agent_id?: AgentId | null;
 }
 
 // ---------------------------------------------------------------------------
