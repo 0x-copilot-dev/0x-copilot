@@ -1,7 +1,7 @@
 // Connectors destination (Phase 11) — canonical wire contract.
 //
 // Source: docs/atlas-new-design/destinations/connectors-prd.md §3.1 (data
-// shape) + §4 (endpoints) + §5 (storage) + §6 (ACL + audit).
+// shape) + §4 (endpoints) + §5 (storage) + §6 (ACL + audit) + §9 (HMAC).
 //
 // A Connector is an authenticated bridge to an external SaaS source
 // (Gmail, Slack, Salesforce, etc.). The new wire shape is a denormalized
@@ -17,10 +17,16 @@
 // * `ConnectorId` — branded ID in ./brands.ts.
 // * `TriggerId` — branded ID in ./brands.ts (reused as `Webhook.id`).
 // * `ItemRef` (kind="connector"/"agent"/"tool"/"project"/"routine") — ./refs.ts.
+//
+// HMAC algorithm + header names + skew window live as constants in
+// `services/backend/src/backend_app/webhooks/signer.py` — single source
+// of truth on the server side. The frontend wizard reads them off the
+// receiver-verification snippet rendered by the API; no client-side
+// constant duplication.
 
 import type { ConnectorId, TenantId, TriggerId, UserId } from "./brands";
-import type { ItemRef } from "./refs";
 import type { ConnectorSlug } from "./projects";
+import type { ItemRef } from "./refs";
 
 // ---------------------------------------------------------------------------
 // Status taxonomy (connectors-prd §1.6)
@@ -262,30 +268,73 @@ export interface ConnectorAuditResponse {
 // ---------------------------------------------------------------------------
 // Webhook — connectors-prd §3.1 / §4.10 / §9 (HMAC management UX)
 // ---------------------------------------------------------------------------
+//
+// Routines §9.7 Q6 HMAC-of-payload signature lands here. The wire shape
+// is locked at Phase 11; the management UI (Phase 11 sub-PRD §7) is the
+// destination home for webhook lifecycle. Routine `triggers[].webhook`
+// references this row by `id`.
+//
+// The secret is NEVER on the wire. The wizard's copy-once reveal returns
+// the secret in the create / rotate responses only; subsequent reads
+// never carry it.
 
-/**
- * Routines §9.7 Q6 HMAC-of-payload signature lands here. The wire shape
- * is locked at Phase 11; the management UI (Phase 11 sub-PRD §7) is the
- * destination home for webhook lifecycle. Routine `triggers[].webhook`
- * references this row by `id`.
- *
- * The secret is NEVER on the wire. The wizard's copy-once reveal returns
- * the secret in the create / rotate responses only; subsequent reads
- * never carry it.
- */
+export type WebhookSecretStrategy = "rotating" | "static";
+
+/** Only `hmac-sha256` is supported in v1 (connectors-prd §3.1). */
+export type WebhookHmacAlgo = "hmac-sha256";
+
+export type WebhookStatus = "active" | "paused";
+
 export interface Webhook {
   readonly id: TriggerId;
   readonly tenant_id: TenantId;
   readonly url: string;
-  readonly secret_strategy: "rotating" | "static";
-  readonly hmac_algo: "hmac-sha256";
+  readonly secret_strategy: WebhookSecretStrategy;
+  readonly hmac_algo: WebhookHmacAlgo;
+  /** CIDR strings; empty array means "no restriction". */
   readonly ip_allowlist: ReadonlyArray<string>;
-  readonly status: "active" | "paused";
+  readonly status: WebhookStatus;
   readonly last_fire_at: string | null;
   readonly last_status_code?: number;
+  /** Linkback to the routine that registered the webhook. */
   readonly routine_ref?: ItemRef;
   readonly created_at: string;
   readonly rotates_at: string | null;
+}
+
+/** Create / rotate response envelopes — the plaintext secret is
+ *  surfaced EXACTLY ONCE via these shapes (copy-once reveal).
+ *  Subsequent GETs return the redacted `Webhook` without a plaintext
+ *  channel. */
+export interface WebhookCreateResponse {
+  readonly webhook: Webhook;
+  readonly secret_plaintext: string;
+}
+
+export interface WebhookRotateResponse {
+  readonly webhook: Webhook;
+  readonly secret_plaintext: string;
+  /** Previous secret remains valid for the 14-day grace window
+   *  (connectors-prd §9.2) so receivers can roll without a hard
+   *  cutover. Null when there's no grace (first rotation or after the
+   *  previous expiry has already elapsed). */
+  readonly grace_secret_plaintext: string | null;
+}
+
+export interface WebhookListResponse {
+  readonly items: ReadonlyArray<Webhook>;
+  readonly next_cursor: string | null;
+}
+
+export interface WebhookTestFireResponse {
+  /** Upstream HTTP status; null when the request never completed
+   *  (timeout / DNS / connection refused). */
+  readonly response_status: number | null;
+  readonly response_ok: boolean;
+  /** Error class name on transport failure (httpx-side), otherwise
+   *  absent. Stable enough for the wizard to switch UI states; not
+   *  guaranteed to be a stable contract for programmatic consumers. */
+  readonly error?: string;
 }
 
 // ---------------------------------------------------------------------------

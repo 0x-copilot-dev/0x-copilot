@@ -125,6 +125,12 @@ from backend_app.connectors import (
     register_connector_routes,
     register_connector_sse_routes,
 )
+from backend_app.webhooks import (
+    InMemoryWebhooksStore,
+    WebhooksService,
+    WebhooksStore,
+    register_webhook_routes,
+)
 from backend_app.todos import (
     InMemoryTodosStore,
     TodosService,
@@ -390,6 +396,7 @@ def create_app(
     inbox_store: InboxStore | None = None,
     routines_store: RoutinesStore | None = None,
     connectors_store: ConnectorsStore | None = None,
+    webhooks_store: WebhooksStore | None = None,
     projects_store: ProjectsStore | None = None,
     project_templates_store: ProjectTemplatesStore | None = None,
     library_store: LibraryStore | None = None,
@@ -1464,6 +1471,29 @@ def create_app(
     )
     app.state.connectors_service = connectors_service
     register_connector_routes(app, service=connectors_service)
+
+    # Phase 11 P11-A3 — Connectors destination webhook manager.
+    # Webhooks are tenant-admin OR routine-owner per connectors-prd
+    # §6.1. The service composes the existing TokenVault adapter
+    # (DRY: same encryption-at-rest path as MCP OAuth tokens + the
+    # Phase 5 inbound routine webhook secret). The rotation worker
+    # lifecycle is NOT started here — it's a separate process in
+    # production; tests + dev surface the ``WebhookRotationWorker``
+    # off ``app.state.webhooks_service`` for explicit tick() calls.
+    # HMAC algorithm + header names live as constants in
+    # ``backend_app.webhooks.signer`` (single source of truth).
+    resolved_webhooks_store: WebhooksStore = (
+        webhooks_store or InMemoryWebhooksStore()  # type: ignore[assignment]
+    )
+    app.state.webhooks_store = resolved_webhooks_store
+    webhooks_vault = getattr(app.state, "token_vault", None)
+    if webhooks_vault is not None:
+        webhooks_service = WebhooksService(
+            store=resolved_webhooks_store,
+            token_vault=webhooks_vault,
+        )
+        app.state.webhooks_service = webhooks_service
+        register_webhook_routes(app, service=webhooks_service)
 
     # Phase 6 — Projects destination. The canonical project-scoped ACL
     # predicate lives in ``backend_app.projects.acl`` and is consumed
