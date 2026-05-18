@@ -32,7 +32,7 @@ import {
 } from "./ProjectFilterChip";
 
 // ===========================================================================
-// Re-exports
+// Re-exports (P6-B1 shell + P6-B2 detail + P6-A1 wire types)
 // ===========================================================================
 
 export {
@@ -51,6 +51,33 @@ export {
   type ProjectFilterChipProps,
 };
 
+export {
+  ProjectDetailView,
+  type ProjectDetail,
+  type ProjectDetailViewProps,
+  type ProjectDetailTabId,
+  type ProjectStatus,
+} from "./ProjectDetailView";
+
+export {
+  ProjectMembersTab,
+  type ProjectMembersTabProps,
+  type ProjectMember,
+  type ProjectMemberRole,
+} from "./ProjectMembersTab";
+
+export {
+  ProjectActivityTab,
+  type ProjectActivityTabProps,
+  type ProjectActivity,
+  type ProjectActivityItemRef,
+} from "./ProjectActivityTab";
+
+export {
+  TransferOwnershipDialog,
+  type TransferOwnershipDialogProps,
+} from "./transfer-ownership-dialog";
+
 // Wire-type re-exports (forwarded from `_projects-stub.ts`; the
 // orchestrator rewires the stub to `@enterprise-search/api-types` at
 // merge time — see `_projects-stub.ts` header).
@@ -61,7 +88,6 @@ export type {
   ProjectColorHue,
   ProjectIconEmoji,
   ProjectRole,
-  ProjectStatus,
   ProjectSummary,
 } from "./_projects-stub";
 
