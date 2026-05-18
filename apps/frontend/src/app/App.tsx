@@ -35,6 +35,20 @@ import { AgentsRoute } from "../features/agents/AgentsRoute";
 // because HashRouter only models top-level `/<destination>` slugs
 // today; lifting them into the URL is a follow-up.
 import { ConnectorsGateway } from "../features/connectors/ConnectorsGateway";
+// P12-C — Team + Memory destination gateways. The chat-surface
+// `<TeamDestination>` / `<MemoryDestination>` exports were Wave-0
+// stubs; the gateways here own fetch + SSE + the in-destination
+// sub-routes (`/team/<id>`, `/memory/<id>`, `/memory/proposals`).
+import { TeamGateway } from "../features/team/TeamGateway";
+import { MemoryGateway } from "../features/memory/MemoryGateway";
+// P12-C — ⌘K palette host adapter (sub-PRD §7.3 / §7.5). Mounted once
+// at the App root so the ⌘K hotkey is global and there is a single
+// CommandPalette instance across every page.
+import { PaletteHost } from "../features/palette/PaletteHost";
+// P12-C — new Phase 12 settings pages (`/settings/notification-defaults`,
+// `/settings/security/webhooks`). Lives in its own screen kind so the
+// legacy `SettingsScreen` shell is untouched.
+import { SettingsGateway } from "../features/settings/SettingsGateway";
 // PR 4.1 — hydrate user profile + preferences once at the shell so the
 // Appearance attributes (data-density, data-reduce-motion, theme/accent)
 // apply on chat too, not only when Settings is open.
@@ -129,9 +143,7 @@ import {
   DocumentPresenceSignal,
   KeyValueStoreProvider,
   LocalStorageKeyValueStore,
-  MemoryDestination,
   SecretStorageProvider,
-  TeamDestination,
   ToolsDestination,
   WebSecretStorage,
   registerItemRefResolver,
@@ -174,13 +186,17 @@ const NON_CHATS_DESTINATIONS: Readonly<
       | "library"
       | "agents"
       | "connectors"
+      // P12-C — Team + Memory now have host-side gateways
+      // (TeamGateway / MemoryGateway) that own fetch + SSE + the
+      // in-destination sub-routes. The chat-surface Wave-0 stubs are
+      // no longer mounted here.
+      | "team"
+      | "memory"
     >,
     () => ReactElement
   >
 > = {
   tools: ToolsDestination,
-  team: TeamDestination,
-  memory: MemoryDestination,
 };
 
 // ItemRef resolver registration (cross-audit §3.3) for the `"todo"`
@@ -615,6 +631,23 @@ function EnterpriseSearchApp({
   const activeDestination: ShellDestinationSlug =
     route.screen === "chat" ? route.destination : ROOT_DESTINATION;
 
+  // P12-C — round-trip a destination sub-path through the URL when the
+  // gateway switches in-destination panes. Today only Team and Memory
+  // consume sub-paths; other gateways still pass `null`. Replace history
+  // (not push) so the back button skips over intra-destination
+  // transitions — mirrors the legacy settings hash migration.
+  function handleSubPathChange(
+    destination: ShellDestinationSlug,
+    subPath: string | null,
+  ): void {
+    if (route.screen !== "chat" || route.destination !== destination) return;
+    if ((route.subPath ?? null) === subPath) return;
+    router.navigate(
+      { screen: "chat", destination, subPath },
+      { replace: true },
+    );
+  }
+
   const handleRailNavigate = (slug: ShellDestinationSlug): void => {
     router.navigate({ screen: "chat", destination: slug });
   };
@@ -680,6 +713,19 @@ function EnterpriseSearchApp({
         }
         onSectionChange={(section) =>
           router.navigate({ screen: "settings", section })
+        }
+      />
+    );
+  } else if (route.screen === "settings-p12") {
+    // P12-C — Phase 12 settings pages
+    // (`/settings/notification-defaults`, `/settings/security/webhooks`).
+    body = (
+      <SettingsGateway
+        identity={identity}
+        isAdmin={isAdmin}
+        subPath={route.subPath}
+        onBackToChat={() =>
+          router.navigate({ screen: "chat", destination: ROOT_DESTINATION })
         }
       />
     );
@@ -859,6 +905,42 @@ function EnterpriseSearchApp({
         <ConnectorsGateway identity={identity} isAdmin={isAdmin} />
       </section>
     );
+  } else if (route.destination === "team") {
+    // P12-C — Team destination dispatch. TeamGateway owns the list
+    // (`/team`) ↔ detail (`/team/<id>`) routing; the chat-surface
+    // Wave-0 `<TeamDestination>` placeholder is no longer mounted.
+    body = (
+      <section
+        data-testid="destination-outlet"
+        data-destination="team"
+        style={{ height: "100%", overflow: "auto" }}
+        aria-label="team destination"
+      >
+        <TeamGateway
+          identity={identity}
+          initialPersonId={route.subPath ?? null}
+          onSubPathChange={(sub) => handleSubPathChange("team", sub)}
+        />
+      </section>
+    );
+  } else if (route.destination === "memory") {
+    // P12-C — Memory destination dispatch. MemoryGateway owns the
+    // list (`/memory`), detail (`/memory/<id>`), and proposals queue
+    // (`/memory/proposals`) routing.
+    body = (
+      <section
+        data-testid="destination-outlet"
+        data-destination="memory"
+        style={{ height: "100%", overflow: "auto" }}
+        aria-label="memory destination"
+      >
+        <MemoryGateway
+          identity={identity}
+          initialSubPath={route.subPath ?? null}
+          onSubPathChange={(sub) => handleSubPathChange("memory", sub)}
+        />
+      </section>
+    );
   } else {
     // Every other destination renders the package-shipped component.
     // These are placeholder surfaces today; wiring real data fetchers
@@ -904,6 +986,13 @@ function EnterpriseSearchApp({
         }
       >
         <Suspense fallback={<RouteLoadingFallback />}>{body}</Suspense>
+        {/*
+          P12-C — ⌘K palette host. Mounted once at the App root so the
+          hotkey is global and every page renders one CommandPalette
+          modal. The host owns the PaletteSearchPort that calls
+          `/v1/palette/search` through the facade (sub-PRD §7.3).
+        */}
+        <PaletteHost identity={identity} />
       </ChatShell>
     </PortProvider>
   );

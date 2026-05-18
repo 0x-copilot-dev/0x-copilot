@@ -81,9 +81,13 @@ describe("HashRouter", () => {
     ];
     for (const [path, destination] of cases) {
       setLocation(path, "");
+      // P12-C — destination routes now carry an optional `subPath` field
+      // for in-destination URL slugs (`/team/<id>`, `/memory/<id>`,
+      // `/memory/proposals`). Bare destinations parse to `subPath: null`.
       expect(router.current()).toEqual({
         screen: "chat",
         destination,
+        subPath: null,
       });
     }
   });
@@ -254,5 +258,78 @@ describe("HashRouter", () => {
     expect(window.location.pathname).toBe(
       "/admin/adapter-review/cand%2Fwith-slash",
     );
+  });
+
+  // P12-C — Team + Memory in-destination sub-paths.
+  it("parses /team/<id> into a chat route with subPath", () => {
+    setLocation("/team/user_alice", "");
+    const router = new HashRouter();
+    expect(router.current()).toEqual({
+      screen: "chat",
+      destination: "team",
+      subPath: "user_alice",
+    });
+  });
+
+  it("parses /memory/<id> into a chat route with subPath", () => {
+    setLocation("/memory/mem_42", "");
+    const router = new HashRouter();
+    expect(router.current()).toEqual({
+      screen: "chat",
+      destination: "memory",
+      subPath: "mem_42",
+    });
+  });
+
+  it("parses /memory/proposals into a chat route with subPath='proposals'", () => {
+    setLocation("/memory/proposals", "");
+    const router = new HashRouter();
+    expect(router.current()).toEqual({
+      screen: "chat",
+      destination: "memory",
+      subPath: "proposals",
+    });
+  });
+
+  it("round-trips a destination subPath through navigate()", () => {
+    setLocation("/", "");
+    const router = new HashRouter();
+    router.navigate({
+      screen: "chat",
+      destination: "team",
+      subPath: "user_alice",
+    });
+    expect(window.location.pathname).toBe("/team/user_alice");
+  });
+
+  // P12-C — Phase 12 settings pages.
+  it("parses /settings/security/webhooks into settings-p12", () => {
+    setLocation("/settings/security/webhooks", "");
+    const router = new HashRouter();
+    expect(router.current()).toEqual({
+      screen: "settings-p12",
+      subPath: "security-webhooks",
+    });
+  });
+
+  it("parses /settings/notification-defaults into settings-p12", () => {
+    setLocation("/settings/notification-defaults", "");
+    const router = new HashRouter();
+    expect(router.current()).toEqual({
+      screen: "settings-p12",
+      subPath: "notification-defaults",
+    });
+  });
+
+  it("round-trips settings-p12 routes through navigate()", () => {
+    setLocation("/", "");
+    const router = new HashRouter();
+    router.navigate({ screen: "settings-p12", subPath: "security-webhooks" });
+    expect(window.location.pathname).toBe("/settings/security/webhooks");
+    router.navigate({
+      screen: "settings-p12",
+      subPath: "notification-defaults",
+    });
+    expect(window.location.pathname).toBe("/settings/notification-defaults");
   });
 });

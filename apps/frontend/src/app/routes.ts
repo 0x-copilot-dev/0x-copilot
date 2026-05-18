@@ -13,9 +13,29 @@ import type { SettingsSection } from "../features/settings/SettingsScreen";
 // projects / library / agents / tools / connectors / team / memory)
 // without expanding the screen union. `/` is the legacy entry point and
 // maps to the chats destination (the original web app surface).
+// P12-C — `subPath` is an optional in-destination URL slug. Today only
+// the Team and Memory destinations consume it (`/team/<id>` and
+// `/memory/<id>` / `/memory/proposals` — sub-PRD
+// `team-memory-cmdk-prd.md` §7.1 / §7.2); every other destination
+// renders the same view regardless of `subPath`, so the field is
+// `null`/absent for them. The discriminator stays on `destination` so
+// existing routing code keeps its narrowing.
 export type AppRoute =
-  | { readonly screen: "chat"; readonly destination: ShellDestinationSlug }
+  | {
+      readonly screen: "chat";
+      readonly destination: ShellDestinationSlug;
+      readonly subPath?: string | null;
+    }
   | { readonly screen: "settings"; readonly section: SettingsSection }
+  // P12-C — Phase 12 settings pages (`/settings/notification-defaults`,
+  // `/settings/security/webhooks`, `/settings/profile`). The new pages
+  // live behind a dedicated screen kind so the legacy `SettingsScreen`
+  // (which owns `/settings#<section>`) keeps its shape — sub-PRD §7.4
+  // is a polish surface off the profile menu, not a destination.
+  | {
+      readonly screen: "settings-p12";
+      readonly subPath: "notification-defaults" | "security-webhooks";
+    }
   // PR 6.1/6.2 — recipient view of a shared conversation. The token is the
   // access grant; AuthGate still requires a logged-in session because v1
   // keeps shares same-org-only.

@@ -93,6 +93,19 @@ function routeFromLocation(): AppRoute {
     }
     return { screen: "settings", section: DEFAULT_SETTINGS_SECTION };
   }
+  // P12-C — new Phase 12 settings pages (sub-PRD
+  // `team-memory-cmdk-prd.md` §7.4 / §4.4). These slugs land on the
+  // dedicated `settings-p12` screen so the legacy `SettingsScreen`
+  // shell (and its `/settings#<section>` hash form) is unaffected.
+  // `/settings/security/webhooks` carries a slash inside the path so it
+  // must match before the generic `/settings/<section>` legacy
+  // migration branch below.
+  if (path === "/settings/security/webhooks") {
+    return { screen: "settings-p12", subPath: "security-webhooks" };
+  }
+  if (path === "/settings/notification-defaults") {
+    return { screen: "settings-p12", subPath: "notification-defaults" };
+  }
   // Legacy /settings/<section> falls through here only briefly between
   // the migrator's replaceState and React's first paint. Treat it the
   // same as the modern hash form so the first paint is correct even if
@@ -154,12 +167,25 @@ function routeFromLocation(): AppRoute {
   if (path === "/") {
     return { screen: "chat", destination: ROOT_DESTINATION };
   }
-  // /<destination> for the 11 known slugs. Unknown paths fall through
-  // to the root destination so /typo behaves like a 404 → chats rather
-  // than crashing the route union.
-  const segment = decodeURIComponent(path.replace(/^\//, ""));
-  if (isShellDestinationSlug(segment)) {
-    return { screen: "chat", destination: segment };
+  // /<destination>[/<subPath>] for the known destination slugs. P12-C —
+  // Team + Memory destinations carry an in-destination subPath in the
+  // URL today (`/team/<id>`, `/memory/<id>`, `/memory/proposals`);
+  // other destinations ignore the trailing segment. Unknown paths fall
+  // through to the root destination so /typo behaves like a 404 → chats
+  // rather than crashing the route union.
+  const segments = path.replace(/^\//, "").split("/");
+  const head = decodeURIComponent(segments[0] ?? "");
+  if (isShellDestinationSlug(head)) {
+    const rest = segments
+      .slice(1)
+      .map((s) => decodeURIComponent(s))
+      .filter((s) => s.length > 0)
+      .join("/");
+    return {
+      screen: "chat",
+      destination: head,
+      subPath: rest.length > 0 ? rest : null,
+    };
   }
   return { screen: "chat", destination: ROOT_DESTINATION };
 }
@@ -168,11 +194,28 @@ function pathForRoute(route: AppRoute): { path: string; hash: string } {
   if (route.screen === "chat") {
     // Round-trip the root destination as `/` so external bookmarks /
     // copy-paste keep the legacy entry URL. Every other destination
-    // lives at `/<slug>`.
+    // lives at `/<slug>` and may carry an in-destination subPath
+    // (P12-C — `/team/<id>`, `/memory/<id>`, `/memory/proposals`).
     if (route.destination === ROOT_DESTINATION) {
       return { path: "/", hash: "" };
     }
-    return { path: `/${route.destination}`, hash: "" };
+    const sub = route.subPath ?? null;
+    if (sub === null || sub.length === 0) {
+      return { path: `/${route.destination}`, hash: "" };
+    }
+    // Preserve the structural `/` so `proposals` and `<id>` and even
+    // path-like ids round-trip without double-encoding the separator.
+    const encoded = sub
+      .split("/")
+      .map((s) => encodeURIComponent(s))
+      .join("/");
+    return { path: `/${route.destination}/${encoded}`, hash: "" };
+  }
+  if (route.screen === "settings-p12") {
+    if (route.subPath === "security-webhooks") {
+      return { path: "/settings/security/webhooks", hash: "" };
+    }
+    return { path: "/settings/notification-defaults", hash: "" };
   }
   if (route.screen === "share") {
     return { path: `/share/${encodeURIComponent(route.token)}`, hash: "" };
