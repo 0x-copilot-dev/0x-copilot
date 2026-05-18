@@ -16,6 +16,14 @@
 -- Projects — one row per project.
 -- ---------------------------------------------------------------------------
 
+-- ---------------------------------------------------------------------------
+-- Phase 6.5 §5 — ``default_connector_allowlist`` JSONB column added below.
+-- ``NULL`` = inherit owner defaults; ``[]`` = explicit deny;
+-- ``["salesforce", "gmail", ...]`` = allowlist of ConnectorSlug kinds.
+-- JSONB (not text[]) so we can extend to ``{slug, scope}`` later without
+-- a column rewrite (projects-extensions §5.2).
+-- ---------------------------------------------------------------------------
+
 CREATE TABLE IF NOT EXISTS projects (
     id                  TEXT         PRIMARY KEY,
     tenant_id           TEXT         NOT NULL REFERENCES organizations(org_id) ON DELETE CASCADE,
@@ -44,6 +52,8 @@ CREATE TABLE IF NOT EXISTS projects (
     -- Soft-delete marker; cleanup job in projects/jobs hard-deletes
     -- after the 30-day retention window (projects-prd §5.3).
     deleted_at          TIMESTAMPTZ,
+    -- Phase 6.5 §5.2 — connector inheritance.
+    default_connector_allowlist  JSONB DEFAULT NULL,
     CONSTRAINT projects_archived_at_invariant CHECK (
         (status = 'archived'   AND archived_at IS NOT NULL)
         OR
@@ -290,6 +300,49 @@ CREATE POLICY project_audit_tenant_isolation ON project_audit_events
 
 
 -- ---------------------------------------------------------------------------
+-- Phase 6.5 §7.7 — Project templates. Tenant-scoped, soft-deleted, with
+-- an immutable snapshot blob. Forking is a COPY (no FK back to template).
+-- ---------------------------------------------------------------------------
+
+CREATE TABLE IF NOT EXISTS project_templates (
+    id                  TEXT         PRIMARY KEY,
+    tenant_id           TEXT         NOT NULL REFERENCES organizations(org_id) ON DELETE CASCADE,
+    owner_user_id       TEXT         NOT NULL REFERENCES users(user_id) ON DELETE RESTRICT,
+    name                TEXT         NOT NULL CHECK (char_length(name) BETWEEN 1 AND 80),
+    description         TEXT         NOT NULL DEFAULT '' CHECK (char_length(description) <= 200),
+    snapshot            JSONB        NOT NULL,
+    -- LOOSE FK: keep the template even when the source project is hard-
+    -- deleted (templates outlive their source per §7.2).
+    source_project_id   TEXT         NULL,
+    created_at          TIMESTAMPTZ  NOT NULL DEFAULT NOW(),
+    updated_at          TIMESTAMPTZ  NOT NULL DEFAULT NOW(),
+    deleted_at          TIMESTAMPTZ
+);
+
+CREATE INDEX IF NOT EXISTS project_templates_tenant_idx
+    ON project_templates (tenant_id, created_at DESC)
+    WHERE deleted_at IS NULL;
+
+CREATE INDEX IF NOT EXISTS project_templates_owner_idx
+    ON project_templates (tenant_id, owner_user_id, created_at DESC)
+    WHERE deleted_at IS NULL;
+
+CREATE INDEX IF NOT EXISTS project_templates_search_idx
+    ON project_templates
+    USING GIN (to_tsvector('simple', name || ' ' || description))
+    WHERE deleted_at IS NULL;
+
+ALTER TABLE project_templates ENABLE ROW LEVEL SECURITY;
+
+CREATE POLICY project_templates_tenant_isolation ON project_templates
+    USING (
+        tenant_id = current_setting('app.current_org_id', true)
+        OR current_setting('app.role', true) = 'admin'
+    )
+    WITH CHECK (tenant_id = current_setting('app.current_org_id', true));
+
+
+-- ---------------------------------------------------------------------------
 -- Grants — same idiom as the routines / todos / inbox schema files.
 -- ---------------------------------------------------------------------------
 
@@ -302,6 +355,7 @@ BEGIN
         EXECUTE 'GRANT SELECT, INSERT, UPDATE, DELETE ON project_activity TO enterprise_app';
         EXECUTE 'GRANT SELECT, INSERT, UPDATE, DELETE ON project_activity_counts TO enterprise_app';
         EXECUTE 'GRANT SELECT, INSERT ON project_audit_events TO enterprise_app';
+        EXECUTE 'GRANT SELECT, INSERT, UPDATE, DELETE ON project_templates TO enterprise_app';
     END IF;
 END
 $$;

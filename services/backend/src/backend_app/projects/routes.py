@@ -44,6 +44,11 @@ from backend_app.projects.store import (
     ProjectRecord,
 )
 
+try:
+    from backend_app.liveness.service import LivenessService  # noqa: F401
+except Exception:  # pragma: no cover — circular guard
+    LivenessService = None  # type: ignore[assignment]
+
 
 # ---------------------------------------------------------------------------
 # Request / response models (Python mirrors of api-types/src/projects.ts)
@@ -57,6 +62,8 @@ class CreateProjectRequestModel(BaseModel):
     description: str | None = None
     icon_emoji: str
     color_hue: int
+    # Phase 6.5 §5 — optional on create.
+    default_connector_allowlist: list[str] | None = None
 
 
 class UpdateProjectRequestModel(BaseModel):
@@ -67,6 +74,9 @@ class UpdateProjectRequestModel(BaseModel):
     icon_emoji: str | None = None
     color_hue: int | None = None
     status: str | None = None
+    # Phase 6.5 §5.3 — owner-only edit; null clears (= inherit owner default),
+    # [] = explicit deny, [...] = allowlist of connector kinds.
+    default_connector_allowlist: list[str] | None = None
 
 
 class AddMemberRequestModel(BaseModel):
@@ -128,6 +138,8 @@ class ProjectResponseModel(BaseModel):
     counts: ProjectCountsModel
     viewer_role: str | None = None
     viewer_starred: bool = False
+    # Phase 6.5 §5 — connector allowlist (null = inherit owner default).
+    default_connector_allowlist: list[str] | None = None
 
 
 class ProjectListResponseModel(BaseModel):
@@ -156,8 +168,20 @@ class ProjectMembershipListResponseModel(BaseModel):
 # ---------------------------------------------------------------------------
 
 
-def register_projects_routes(app: FastAPI, *, service: ProjectsService) -> None:
-    """Attach ``/v1/projects`` routes to ``app``."""
+def register_projects_routes(
+    app: FastAPI,
+    *,
+    service: ProjectsService,
+    liveness_service: "LivenessService | None" = None,
+) -> None:
+    """Attach ``/v1/projects`` routes to ``app``.
+
+    ``liveness_service`` is the optional Phase 6.5 §3 aggregator used by
+    the archive endpoint (§6.1). When provided, ``DELETE /v1/projects/{id}``
+    pre-checks liveness and returns 409 with the full ``LivenessReport``
+    body if the project has live work. When omitted (legacy tests), the
+    archive endpoint behaves as Phase 6 shipped (soft-delete + 204).
+    """
 
     @app.get(
         "/v1/projects",
@@ -334,10 +358,9 @@ def register_projects_routes(app: FastAPI, *, service: ProjectsService) -> None:
 
     @app.delete(
         "/v1/projects/{project_id}",
-        status_code=status.HTTP_204_NO_CONTENT,
         dependencies=[Depends(RequireScopes(RUNTIME_USE))],
     )
-    def delete_project(
+    async def delete_project(
         request: Request,
         project_id: str,
         org_id: str = Query(..., min_length=1),
@@ -346,6 +369,26 @@ def register_projects_routes(app: FastAPI, *, service: ProjectsService) -> None:
         identity = BackendServiceAuthenticator.scoped_identity(
             request, org_id=org_id, user_id=user_id
         )
+        # Phase 6.5 §6.1 — pre-check liveness. If any source reports the
+        # project as alive, return 409 with the full LivenessReport body
+        # so the FE archive modal can render the inline detail.
+        if liveness_service is not None:
+            report = await liveness_service.is_project_alive(
+                tenant_id=identity.org_id,
+                project_id=project_id,
+            )
+            if report.is_alive:
+                raise HTTPException(
+                    status.HTTP_409_CONFLICT,
+                    {
+                        "error": "project_archive_blocked_live_work",
+                        "message": (
+                            "Cannot archive project with active runs / "
+                            "routines / approvals / inbox items."
+                        ),
+                        "liveness": report.model_dump(),
+                    },
+                )
         try:
             service.delete_project(
                 tenant_id=identity.org_id,
@@ -741,6 +784,9 @@ def _to_wire(
         ),
         viewer_role=viewer_role,
         viewer_starred=viewer_starred,
+        default_connector_allowlist=getattr(
+            record, "default_connector_allowlist", None
+        ),
     )
 
 

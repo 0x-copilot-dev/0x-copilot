@@ -366,6 +366,7 @@ class ProjectsService:
             icon_emoji=validated.get("icon_emoji", "📁"),
             color_hue=int(validated.get("color_hue", 210)),
             status="active",
+            default_connector_allowlist=validated.get("default_connector_allowlist"),
         )
 
         # The owner-membership row + project row are written in one
@@ -1110,12 +1111,19 @@ class ProjectsService:
         hue = payload.get("color_hue", 210)
         if not isinstance(hue, int) or not (_HUE_MIN <= hue <= _HUE_MAX):
             raise ProjectInvalidRequest("color_hue_invalid")
-        return {
+        result: dict[str, Any] = {
             "name": name,
             "description": description,
             "icon_emoji": icon or "📁",
             "color_hue": hue,
         }
+        # Phase 6.5 §5.1 — optional allowlist on create.
+        if "default_connector_allowlist" in payload:
+            allowlist = payload["default_connector_allowlist"]
+            result["default_connector_allowlist"] = _validate_connector_allowlist(
+                allowlist
+            )
+        return result
 
     def _validate_patch_payload(
         self, existing: ProjectRecord, patch: dict[str, Any]
@@ -1157,6 +1165,11 @@ class ProjectsService:
             if status not in _VALID_STATUSES:
                 raise ProjectInvalidRequest("status_invalid")
             updates["status"] = status
+        # Phase 6.5 §5.3 — owner-only allowlist edit.
+        if "default_connector_allowlist" in patch:
+            updates["default_connector_allowlist"] = _validate_connector_allowlist(
+                patch["default_connector_allowlist"]
+            )
         return updates
 
 
@@ -1167,6 +1180,38 @@ class ProjectsService:
 
 def _is_admin(caller_roles: Iterable[str]) -> bool:
     return any(role in _ADMIN_ROLES for role in caller_roles)
+
+
+# Phase 6.5 §5 — caps on the allowlist payload. Connector slugs are
+# kinds ("salesforce", "gmail"); we cap the count to keep the row small
+# and reject obvious garbage. We deliberately accept ANY string slug
+# without an enum check — the catalog of valid kinds lives in
+# ``services/backend/.../mcp_catalog`` and changing it should not require
+# a code change here.
+_CONNECTOR_ALLOWLIST_MAX = 64
+_CONNECTOR_SLUG_MAX = 64
+
+
+def _validate_connector_allowlist(value: Any) -> list[str] | None:
+    if value is None:
+        return None
+    if not isinstance(value, list):
+        raise ProjectInvalidRequest("default_connector_allowlist_invalid")
+    if len(value) > _CONNECTOR_ALLOWLIST_MAX:
+        raise ProjectInvalidRequest("default_connector_allowlist_too_long")
+    cleaned: list[str] = []
+    seen: set[str] = set()
+    for item in value:
+        if not isinstance(item, str):
+            raise ProjectInvalidRequest("default_connector_allowlist_invalid_entry")
+        slug = item.strip().lower()
+        if not slug or len(slug) > _CONNECTOR_SLUG_MAX:
+            raise ProjectInvalidRequest("default_connector_allowlist_invalid_entry")
+        if slug in seen:
+            continue
+        seen.add(slug)
+        cleaned.append(slug)
+    return cleaned
 
 
 def _action_for_transition(before: str, after: str) -> str:

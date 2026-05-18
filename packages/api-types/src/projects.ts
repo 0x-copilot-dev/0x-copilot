@@ -24,6 +24,17 @@ import type { ItemKind, ItemRef } from "./refs";
 import type { ProjectId, TenantId, UserId } from "./brands";
 
 // ---------------------------------------------------------------------------
+// Phase 6.5 §5 — Connector inheritance.
+// ---------------------------------------------------------------------------
+
+/**
+ * Connector "kind" — `"salesforce"`, `"gmail"`, etc. Distinct from
+ * `ConnectorId` (a specific OAuth grant). Allowlists travel as kinds so
+ * a re-grant does not invalidate the rule.
+ */
+export type ConnectorSlug = string;
+
+// ---------------------------------------------------------------------------
 // Primitive enums
 // ---------------------------------------------------------------------------
 
@@ -133,6 +144,125 @@ export interface Project {
    */
   readonly viewer_role: ProjectRole | null;
   readonly viewer_starred: boolean;
+  /**
+   * Phase 6.5 §5 — connector allowlist for new chats / routines created
+   * with this project's id. `null` (or absent) means "inherit owner
+   * defaults at create time"; `[]` is explicit deny; `[...]` is the
+   * allowlist of connector kinds. Owner-only field; readable by every
+   * project member.
+   */
+  readonly default_connector_allowlist?: ReadonlyArray<ConnectorSlug> | null;
+}
+
+// ---------------------------------------------------------------------------
+// Phase 6.5 §3 — Liveness aggregator wire shape (returned embedded in
+// the 409 archive response body; never exposed standalone to the FE).
+// ---------------------------------------------------------------------------
+
+export type LivenessDetailSource =
+  | "ai_backend.runs"
+  | "ai_backend.approvals"
+  | "backend.routines"
+  | "backend.inbox";
+
+export interface LivenessDetail {
+  readonly source: LivenessDetailSource;
+  readonly count: number;
+  readonly is_alive: boolean;
+  readonly error: string | null;
+  readonly fetched_at: string;
+}
+
+export interface LivenessReport {
+  readonly project_id: ProjectId;
+  readonly tenant_id: TenantId;
+  readonly is_alive: boolean;
+  readonly active_runs: number;
+  readonly pending_approvals: number;
+  readonly active_routines: number;
+  readonly in_flight_inbox: number;
+  readonly details: ReadonlyArray<LivenessDetail>;
+  readonly computed_at: string;
+  readonly cache_hit: boolean;
+}
+
+/**
+ * 409 body shape returned by `DELETE /v1/projects/{id}` when the
+ * pre-archive liveness check finds the project alive (§6.1).
+ */
+export interface ProjectArchiveBlockedResponse {
+  readonly error: "project_archive_blocked_live_work";
+  readonly message: string;
+  readonly liveness: LivenessReport;
+}
+
+// ---------------------------------------------------------------------------
+// Phase 6.5 §7 — Project templates.
+// ---------------------------------------------------------------------------
+
+export interface ProjectTemplateSeededTodo {
+  readonly text: string;
+  readonly priority: "low" | "normal" | "high" | null;
+  readonly relative_due_days: number | null;
+  readonly labels: ReadonlyArray<string>;
+}
+
+export interface ProjectTemplateSeededRoutine {
+  readonly name: string;
+  readonly description: string;
+  readonly instructions_template: string;
+  readonly triggers: ReadonlyArray<{
+    readonly kind: "schedule" | "manual";
+    readonly cron?: string;
+    readonly tz?: string;
+  }>;
+}
+
+export interface ProjectTemplateSnapshot {
+  readonly default_member_user_ids: ReadonlyArray<UserId>;
+  readonly default_connector_allowlist: ReadonlyArray<ConnectorSlug> | null;
+  readonly color_hue: number | null;
+  readonly icon_emoji: string | null;
+  readonly seeded_todos: ReadonlyArray<ProjectTemplateSeededTodo>;
+  readonly seeded_routines: ReadonlyArray<ProjectTemplateSeededRoutine>;
+}
+
+export interface ProjectTemplate {
+  readonly id: string;
+  readonly tenant_id: TenantId;
+  readonly owner_user_id: UserId;
+  readonly name: string;
+  readonly description: string;
+  readonly snapshot: ProjectTemplateSnapshot;
+  readonly source_project_id: ProjectId | null;
+  readonly created_at: string;
+  readonly updated_at: string;
+}
+
+export interface ProjectTemplateListResponse {
+  readonly items: ReadonlyArray<ProjectTemplate>;
+  readonly next_cursor: string | null;
+}
+
+export interface SaveAsTemplateRequest {
+  readonly name: string;
+  readonly description?: string;
+  readonly seeded_todos?: ReadonlyArray<ProjectTemplateSeededTodo>;
+  readonly seeded_routines?: ReadonlyArray<ProjectTemplateSeededRoutine>;
+}
+
+export interface ForkProjectTemplateRequest {
+  readonly name: string;
+  readonly description?: string;
+  readonly color_hue?: number;
+  readonly icon_emoji?: string;
+  readonly member_overrides?: ReadonlyArray<UserId>;
+  readonly connector_overrides?: ReadonlyArray<ConnectorSlug>;
+}
+
+export interface UpdateProjectTemplateRequest {
+  readonly name?: string;
+  readonly description?: string;
 }
 
 /**

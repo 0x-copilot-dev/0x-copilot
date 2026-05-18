@@ -129,6 +129,18 @@ from backend_app.projects import (
     ProjectsStore,
     register_projects_routes,
 )
+from backend_app.projects.template_routes import register_template_routes
+from backend_app.projects.templates import (
+    InMemoryProjectTemplatesStore,
+    ProjectTemplatesStore,
+)
+from backend_app.liveness import (
+    AiBackendLivenessClient,
+    InboxLivenessReader,
+    LivenessService,
+    RoutinesLivenessReader,
+    register_liveness_routes,
+)
 from backend_app.routes.audit_export import register_audit_export_routes
 from backend_app.routes.audit_list import register_audit_list_routes
 from backend_app.routes.billing import register_billing_routes
@@ -347,6 +359,8 @@ def create_app(
     inbox_store: InboxStore | None = None,
     routines_store: RoutinesStore | None = None,
     projects_store: ProjectsStore | None = None,
+    project_templates_store: ProjectTemplatesStore | None = None,
+    liveness_service: LivenessService | None = None,
 ) -> FastAPI:
     if configure_logging_on_create:
         configure_logging()
@@ -1392,7 +1406,52 @@ def create_app(
         identity_store=resolved_identity_store,
     )
     app.state.projects_service = projects_service
-    register_projects_routes(app, service=projects_service)
+
+    # Phase 6.5 §3 — Liveness orchestrator. Single source of truth for
+    # "is anything running for project X?". Read-only, 2s TTL, partial-
+    # failure-tolerant. Consumed by archive (§6) + routine pre-fire
+    # (§3.5) + connector revoke (§3.5) + template fork (§7.3). When
+    # callers don't inject a service we build the default — wired against
+    # the in-process routines + inbox stores, with the ai-backend client
+    # pointed at the ai-backend URL (defaults to the local dev port).
+    resolved_liveness_service: LivenessService | None = liveness_service
+    if resolved_liveness_service is None:
+        ai_backend_url = os.environ.get(
+            "AI_BACKEND_URL", "http://127.0.0.1:8000"
+        ).rstrip("/")
+        service_token = os.environ.get("ENTERPRISE_SERVICE_TOKEN", "").strip()
+        if service_token:
+            ai_client = AiBackendLivenessClient(
+                base_url=ai_backend_url,
+                service_token=service_token,
+            )
+            resolved_liveness_service = LivenessService(
+                ai_backend_client=ai_client,
+                routines_reader=RoutinesLivenessReader(
+                    routines_store=resolved_routines_store
+                ),
+                inbox_reader=InboxLivenessReader(inbox_store=resolved_inbox_store),
+            )
+    app.state.liveness_service = resolved_liveness_service
+    if resolved_liveness_service is not None:
+        register_liveness_routes(app, service=resolved_liveness_service)
+    register_projects_routes(
+        app,
+        service=projects_service,
+        liveness_service=resolved_liveness_service,
+    )
+
+    # Phase 6.5 §7 — Project templates. Tenant-wide read, owner-writes,
+    # caller-owns-fork. Atomic fork via the shared transaction context.
+    resolved_templates_store: ProjectTemplatesStore = (
+        project_templates_store or InMemoryProjectTemplatesStore()  # type: ignore[assignment]
+    )
+    app.state.project_templates_store = resolved_templates_store
+    register_template_routes(
+        app,
+        projects_service=projects_service,
+        templates_store=resolved_templates_store,
+    )
 
     # Phase 7A — tier-2 adapter registry. Source bytes go through a
     # ``SourceStorage`` port (filesystem in dev, S3 injectable in prod).

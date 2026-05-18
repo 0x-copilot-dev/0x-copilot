@@ -34,12 +34,18 @@ The routes:
 
 from __future__ import annotations
 
+import json
+
 import httpx
 from fastapi import FastAPI, HTTPException, Request, Response, status
 
 from backend_facade.auth import FacadeAuthenticator
 from backend_facade.http_client import http_client
 from backend_facade.settings import FacadeSettings
+
+
+def _encode_json(payload: object) -> bytes:
+    return json.dumps(payload).encode("utf-8")
 
 
 def register_projects_routes(app: FastAPI) -> None:
@@ -117,7 +123,7 @@ def register_projects_routes(app: FastAPI) -> None:
         )
         return _coerce_object_or_raise(response)
 
-    @app.delete("/v1/projects/{project_id}", status_code=status.HTTP_204_NO_CONTENT)
+    @app.delete("/v1/projects/{project_id}")
     async def delete_project(request: Request, project_id: str) -> Response:
         backend_url = _settings_for(app).backend_url
         client = http_client(app)
@@ -130,6 +136,30 @@ def register_projects_routes(app: FastAPI) -> None:
             headers=FacadeAuthenticator.service_headers(identity),
             timeout=15,
         )
+        # Phase 6.5 §6 — 409 carries the full LivenessReport body that
+        # the FE archive-modal renders. Pass it through verbatim so the
+        # body shape on the wire is the one declared in
+        # packages/api-types/src/projects.ts (ProjectArchiveBlockedResponse).
+        if response.status_code == status.HTTP_409_CONFLICT:
+            try:
+                payload = response.json()
+            except ValueError:
+                payload = {"error": "conflict"}
+            # FastAPI wraps HTTPException.detail in {"detail": ...}; the
+            # upstream already wraps the 409 body in its own ``detail``
+            # field (HTTPException default). Unwrap one layer so the
+            # FE sees the canonical shape.
+            if (
+                isinstance(payload, dict)
+                and "detail" in payload
+                and isinstance(payload["detail"], dict)
+            ):
+                payload = payload["detail"]
+            return Response(
+                content=_encode_json(payload),
+                status_code=status.HTTP_409_CONFLICT,
+                media_type="application/json",
+            )
         if response.status_code >= 400:
             _raise_for_upstream(response)
         return Response(status_code=status.HTTP_204_NO_CONTENT)
@@ -317,6 +347,123 @@ def register_projects_routes(app: FastAPI) -> None:
             f"{backend_url}/v1/projects/{project_id}/unstar",
             params={"org_id": identity.org_id, "user_id": identity.user_id},
             json={},
+            headers=FacadeAuthenticator.service_headers(identity),
+            timeout=15,
+        )
+        if response.status_code >= 400:
+            _raise_for_upstream(response)
+        return Response(status_code=status.HTTP_204_NO_CONTENT)
+
+    # -- Phase 6.5 §7 — project templates ------------------------------
+
+    @app.post(
+        "/v1/projects/{project_id}/save-as-template",
+        status_code=status.HTTP_201_CREATED,
+    )
+    async def save_as_template(request: Request, project_id: str) -> dict[str, object]:
+        backend_url = _settings_for(app).backend_url
+        client = http_client(app)
+        identity = await FacadeAuthenticator.verify_with_touch(
+            request, backend_url=backend_url, http_client=client
+        )
+        body = await _safe_json(request)
+        response = await client.post(
+            f"{backend_url}/v1/projects/{project_id}/save-as-template",
+            params={"org_id": identity.org_id, "user_id": identity.user_id},
+            json=body,
+            headers=FacadeAuthenticator.service_headers(identity),
+            timeout=15,
+        )
+        return _coerce_object_or_raise(response)
+
+    @app.get("/v1/project-templates")
+    async def list_templates(request: Request) -> dict[str, object]:
+        backend_url = _settings_for(app).backend_url
+        client = http_client(app)
+        identity = await FacadeAuthenticator.verify_with_touch(
+            request, backend_url=backend_url, http_client=client
+        )
+        forwarded_params: list[tuple[str, str]] = [
+            ("org_id", identity.org_id),
+            ("user_id", identity.user_id),
+        ]
+        for key, value in request.query_params.multi_items():
+            if key in {"org_id", "user_id"}:
+                continue
+            forwarded_params.append((key, value))
+        response = await client.get(
+            f"{backend_url}/v1/project-templates",
+            params=forwarded_params,
+            headers=FacadeAuthenticator.service_headers(identity),
+            timeout=15,
+        )
+        return _coerce_object_or_raise(response)
+
+    @app.get("/v1/project-templates/{template_id}")
+    async def get_template(request: Request, template_id: str) -> dict[str, object]:
+        backend_url = _settings_for(app).backend_url
+        client = http_client(app)
+        identity = await FacadeAuthenticator.verify_with_touch(
+            request, backend_url=backend_url, http_client=client
+        )
+        response = await client.get(
+            f"{backend_url}/v1/project-templates/{template_id}",
+            params={"org_id": identity.org_id, "user_id": identity.user_id},
+            headers=FacadeAuthenticator.service_headers(identity),
+            timeout=15,
+        )
+        return _coerce_object_or_raise(response)
+
+    @app.post(
+        "/v1/project-templates/{template_id}/fork",
+        status_code=status.HTTP_201_CREATED,
+    )
+    async def fork_template(request: Request, template_id: str) -> dict[str, object]:
+        backend_url = _settings_for(app).backend_url
+        client = http_client(app)
+        identity = await FacadeAuthenticator.verify_with_touch(
+            request, backend_url=backend_url, http_client=client
+        )
+        body = await _safe_json(request)
+        response = await client.post(
+            f"{backend_url}/v1/project-templates/{template_id}/fork",
+            params={"org_id": identity.org_id, "user_id": identity.user_id},
+            json=body,
+            headers=FacadeAuthenticator.service_headers(identity),
+            timeout=15,
+        )
+        return _coerce_object_or_raise(response)
+
+    @app.patch("/v1/project-templates/{template_id}")
+    async def update_template(request: Request, template_id: str) -> dict[str, object]:
+        backend_url = _settings_for(app).backend_url
+        client = http_client(app)
+        identity = await FacadeAuthenticator.verify_with_touch(
+            request, backend_url=backend_url, http_client=client
+        )
+        body = await _safe_json(request)
+        response = await client.patch(
+            f"{backend_url}/v1/project-templates/{template_id}",
+            params={"org_id": identity.org_id, "user_id": identity.user_id},
+            json=body,
+            headers=FacadeAuthenticator.service_headers(identity),
+            timeout=15,
+        )
+        return _coerce_object_or_raise(response)
+
+    @app.delete(
+        "/v1/project-templates/{template_id}",
+        status_code=status.HTTP_204_NO_CONTENT,
+    )
+    async def delete_template(request: Request, template_id: str) -> Response:
+        backend_url = _settings_for(app).backend_url
+        client = http_client(app)
+        identity = await FacadeAuthenticator.verify_with_touch(
+            request, backend_url=backend_url, http_client=client
+        )
+        response = await client.delete(
+            f"{backend_url}/v1/project-templates/{template_id}",
+            params={"org_id": identity.org_id, "user_id": identity.user_id},
             headers=FacadeAuthenticator.service_headers(identity),
             timeout=15,
         )

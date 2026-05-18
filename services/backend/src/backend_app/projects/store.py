@@ -87,6 +87,12 @@ class ProjectRecord(BaseModel):
     created_at: datetime = Field(default_factory=_now)
     updated_at: datetime = Field(default_factory=_now)
     deleted_at: datetime | None = None
+    # Phase 6.5 §5 — connector inheritance for new chats / routines.
+    # ``None`` = inherit owner defaults; ``[]`` = explicit deny;
+    # ``["salesforce", ...]`` = allowlist of ConnectorSlug values. The
+    # field travels as kinds (not ConnectorIds) so a re-grant doesn't
+    # invalidate the rule.
+    default_connector_allowlist: list[str] | None = None
 
 
 class ProjectMembershipRecord(BaseModel):
