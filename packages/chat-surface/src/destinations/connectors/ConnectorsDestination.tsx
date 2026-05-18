@@ -1,404 +1,456 @@
-import type { McpAuthState, McpServer } from "@enterprise-search/api-types";
+// Connectors destination shell (P11-B).
+//
+// Source: connectors-prd §7 + cross-audit §1.6.
+//
+// Composition:
+//   1. <PageHeader> — title + "Connect a connector" primary CTA.
+//   2. <FilterTabs> — three slugs (Connected / Available / Custom) per
+//      §U1 + §7.2. "Custom" is the user-installed-not-from-catalog
+//      bucket; v1 leaves it empty but the slug stays so the wire shape
+//      is stable.
+//   3. Body: <CardGrid> of <ConnectorCard>s (Connected) OR catalog
+//      entries (Available) OR an <EmptyState> for Custom.
+//
+// Pure presentation: no fetch, no router, no SSE. The host (apps/
+// frontend P11-C) wires those.
+
 import {
-  AppIcon,
-  Badge,
-  Button,
-  TextInput,
-} from "@enterprise-search/design-system";
-import {
-  useEffect,
   useMemo,
-  useState,
   type CSSProperties,
-  type KeyboardEvent,
-  type MouseEvent,
+  type KeyboardEvent as ReactKeyboardEvent,
   type ReactElement,
+  type ReactNode,
 } from "react";
 
-import { useRouter } from "../../providers/RouterProvider";
-import { useTransport } from "../../providers/TransportProvider";
-import type { ArtifactRoute } from "../../routing/router";
+import type {
+  Connector,
+  ConnectorCatalogEntry,
+  ConnectorId,
+  ConnectorSlug,
+  SectionResult,
+} from "@enterprise-search/api-types";
 
-// Design tokens (see packages/design-system/src/styles.css). Names are kept
-// for readability at use-sites; values are CSS variables so Settings →
-// Appearance theme/accent changes flow through automatically.
-const BACKGROUND = "var(--color-bg)";
-const BORDER = "var(--color-border)";
-const TEXT_PRIMARY = "var(--color-text)";
-const TEXT_SECONDARY = "var(--color-text-muted)";
-const HEADER_BG = "var(--color-bg-elevated)";
+import { CardGrid } from "../../shell/CardGrid";
+import { EmptyState } from "../../shell/EmptyState";
+import { FilterTabs, type FilterTabOption } from "../../shell/FilterTabs";
+import { PageHeader } from "../../shell/PageHeader";
 
-export interface McpServerRow extends McpServer {
-  readonly tool_count?: number;
-  readonly last_used_at?: string | null;
+import { ConnectorCard } from "./ConnectorCard";
+
+export type ConnectorsFilterSlug = "connected" | "available" | "custom";
+
+const FILTER_ORDER: ReadonlyArray<ConnectorsFilterSlug> = [
+  "connected",
+  "available",
+  "custom",
+];
+
+const FILTER_LABEL: Readonly<Record<ConnectorsFilterSlug, string>> = {
+  connected: "Connected",
+  available: "Available",
+  custom: "Custom",
+};
+
+export type ConnectorsFilterCounts = Readonly<
+  Record<ConnectorsFilterSlug, number>
+>;
+
+export interface ConnectorsDestinationProps {
+  /**
+   * Server-projected list payload. `null` = loading skeleton; the
+   * SectionResult wrapper lets the destination render a uniform error
+   * branch even though `/v1/connectors` is a non-aggregating endpoint
+   * (mirrors Routines + Inbox rationale).
+   */
+  readonly items?: SectionResult<{
+    readonly connectors: ReadonlyArray<Connector>;
+    readonly available: ReadonlyArray<ConnectorCatalogEntry>;
+  }> | null;
+
+  /** Active filter slug. Defaults to "connected". */
+  readonly filter?: ConnectorsFilterSlug;
+  readonly onFilterChange?: (next: ConnectorsFilterSlug) => void;
+
+  /** Per-tab counts (chip on each FilterTab). */
+  readonly counts?: ConnectorsFilterCounts;
+
+  /** Primary CTA — pivots the host into the connect flow. */
+  readonly onConnect?: () => void;
+
+  /** Card click — host wires to `router.navigate({kind:"connector",id})`
+   *  via the ItemLink registry. */
+  readonly onOpenConnector?: (id: ConnectorId) => void;
+  /** Catalog card click — host opens the install flow for the slug. */
+  readonly onOpenCatalogEntry?: (slug: ConnectorSlug) => void;
+
+  /** Inline reconnect from a Connected card whose status is `error` or
+   *  `expired`. Host kicks off the re-OAuth flow. */
+  readonly onReconnect?: (id: ConnectorId) => void;
+
+  /** Retry callback when items.status === "error". */
+  readonly onRetry?: () => void;
+
+  /** Test seam for relative-time formatting. */
+  readonly now?: number;
+
+  /** Host-provided icon resolver — keeps the shell free of the design-
+   *  system's brand-glyph catalog while letting the host wire whichever
+   *  source it prefers. */
+  readonly renderIcon?: (slug: ConnectorSlug) => ReactNode;
 }
 
-interface McpServerListResponse {
-  readonly servers: readonly McpServerRow[];
-}
+export function ConnectorsDestination(
+  props: ConnectorsDestinationProps = {},
+): ReactElement {
+  const {
+    items = null,
+    filter = "connected",
+    onFilterChange,
+    counts,
+    onConnect,
+    onOpenConnector,
+    onOpenCatalogEntry,
+    onReconnect,
+    onRetry,
+    now,
+    renderIcon,
+  } = props;
 
-type FetchState =
-  | { readonly kind: "loading" }
-  | { readonly kind: "error"; readonly message: string }
-  | { readonly kind: "ready"; readonly servers: readonly McpServerRow[] };
+  const filterOptions = useMemo<
+    ReadonlyArray<FilterTabOption<ConnectorsFilterSlug>>
+  >(
+    () =>
+      FILTER_ORDER.map((slug) => ({
+        slug,
+        label: FILTER_LABEL[slug],
+        count: counts?.[slug],
+      })),
+    [counts],
+  );
 
-type BadgeTone = "neutral" | "success" | "warning" | "danger" | "accent";
-
-interface AuthStatusView {
-  readonly label: string;
-  readonly tone: BadgeTone;
-  readonly affordance:
-    | "connect"
-    | "reauthorize"
-    | "pending"
-    | "disconnect-only";
-}
-
-function authStatusView(state: McpAuthState): AuthStatusView {
-  if (state === "authenticated")
-    return { label: "Connected", tone: "success", affordance: "reauthorize" };
-  if (state === "auth_pending")
-    return { label: "Authorizing", tone: "warning", affordance: "pending" };
-  if (state === "auth_failed")
-    return { label: "Expired", tone: "danger", affordance: "connect" };
-  if (state === "unauthenticated")
-    return { label: "Needs auth", tone: "warning", affordance: "connect" };
-  if (state === "auth_skipped")
-    return {
-      label: "Auth skipped",
-      tone: "neutral",
-      affordance: "disconnect-only",
-    };
-  return {
-    label: "Auth unsupported",
-    tone: "neutral",
-    affordance: "disconnect-only",
-  };
-}
-
-function formatLastUsed(value: string | null | undefined): string {
-  if (value === null || value === undefined || value === "") return "Never";
-  const parsed = Date.parse(value);
-  if (Number.isNaN(parsed)) return "—";
-  const diff = Date.now() - parsed;
-  if (diff < 60_000) return "just now";
-  if (diff < 3_600_000) return `${Math.floor(diff / 60_000)}m ago`;
-  if (diff < 86_400_000) return `${Math.floor(diff / 3_600_000)}h ago`;
-  const days = Math.floor(diff / 86_400_000);
-  if (days < 30) return `${days}d ago`;
-  return value.slice(0, 10);
-}
-
-export function ConnectorsDestination(): ReactElement {
-  const transport = useTransport();
-  const router = useRouter<ArtifactRoute>();
-
-  const [search, setSearch] = useState("");
-  const [fetchTick, setFetchTick] = useState(0);
-  const [state, setState] = useState<FetchState>({ kind: "loading" });
-
-  useEffect(() => {
-    let cancelled = false;
-    setState({ kind: "loading" });
-    transport
-      .request<McpServerListResponse>({
-        method: "GET",
-        path: "/v1/mcp/servers",
-      })
-      .then((res) => {
-        if (cancelled) return;
-        setState({ kind: "ready", servers: res.servers });
-      })
-      .catch((err: unknown) => {
-        if (cancelled) return;
-        const message =
-          err instanceof Error ? err.message : "Failed to load connectors.";
-        setState({ kind: "error", message });
-      });
-    return () => {
-      cancelled = true;
-    };
-  }, [transport, fetchTick]);
-
-  const filtered = useMemo(() => {
-    if (state.kind !== "ready") return [];
-    const needle = search.trim().toLowerCase();
-    if (needle === "") return state.servers;
-    return state.servers.filter((s) => {
-      const haystack = `${s.display_name} ${s.name}`.toLowerCase();
-      return haystack.includes(needle);
-    });
-  }, [state, search]);
-
-  const handleCardClick = (serverId: string): void => {
-    router.navigate({ kind: "mcp", serverId });
-  };
-
-  const handleKeyActivate = (
-    e: KeyboardEvent<HTMLDivElement>,
-    serverId: string,
-  ): void => {
-    if (e.key === "Enter" || e.key === " ") {
-      e.preventDefault();
-      handleCardClick(serverId);
-    }
-  };
-
-  const stopCardPropagation = (e: MouseEvent<HTMLButtonElement>): void => {
-    e.stopPropagation();
-  };
-
-  const containerStyle: CSSProperties = {
-    width: "100%",
-    height: "100%",
-    minHeight: 0,
-    display: "flex",
-    flexDirection: "column",
-    backgroundColor: BACKGROUND,
-    color: TEXT_PRIMARY,
-    boxSizing: "border-box",
-  };
-  const filterBarStyle: CSSProperties = {
-    position: "sticky",
-    top: 0,
-    zIndex: 2,
-    display: "flex",
-    gap: 12,
-    padding: "12px 16px",
-    backgroundColor: BACKGROUND,
-    borderBottom: `1px solid ${BORDER}`,
-    alignItems: "center",
-  };
-  const bodyStyle: CSSProperties = {
-    flex: 1,
-    minHeight: 0,
-    overflow: "auto",
-    padding: 16,
-  };
-  const gridStyle: CSSProperties = {
-    display: "grid",
-    gridTemplateColumns: "repeat(auto-fill, minmax(320px, 1fr))",
-    gap: 12,
-  };
-  const cardStyle: CSSProperties = {
-    padding: 16,
-    backgroundColor: HEADER_BG,
-    border: `1px solid ${BORDER}`,
-    borderRadius: 8,
-    display: "flex",
-    flexDirection: "column",
-    gap: 10,
-    cursor: "pointer",
-    minHeight: 132,
-  };
-  const headerRowStyle: CSSProperties = {
-    display: "flex",
-    alignItems: "center",
-    gap: 10,
-  };
-  const nameStyle: CSSProperties = {
-    fontSize: 14,
-    fontWeight: 600,
-    color: TEXT_PRIMARY,
-    margin: 0,
-    flex: 1,
-    overflow: "hidden",
-    textOverflow: "ellipsis",
-    whiteSpace: "nowrap",
-  };
-  const metaStyle: CSSProperties = {
-    display: "flex",
-    justifyContent: "space-between",
-    alignItems: "center",
-    fontSize: 12,
-    color: TEXT_SECONDARY,
-  };
-  const actionsStyle: CSSProperties = {
-    display: "flex",
-    gap: 8,
-  };
-  const emptyStyle: CSSProperties = {
-    padding: 24,
-    color: TEXT_SECONDARY,
-    fontSize: 13,
+  const handleFilterChange = (next: ConnectorsFilterSlug): void => {
+    if (onFilterChange !== undefined) onFilterChange(next);
   };
 
   return (
     <section
+      role="region"
+      aria-label="Connectors"
       data-component="connectors-destination"
-      aria-label="Connectors destination"
-      style={containerStyle}
+      style={rootStyle}
     >
-      <div style={filterBarStyle} data-testid="connectors-filter-bar">
-        <TextInput
-          aria-label="Search connectors"
-          data-testid="connectors-search"
-          placeholder="Search connectors"
-          value={search}
-          onChange={(e) => setSearch(e.target.value)}
+      <div style={innerStyle}>
+        <PageHeader
+          title="Connectors"
+          subtitle="Authenticated bridges to your SaaS sources."
+          primaryAction={
+            onConnect !== undefined
+              ? { label: "Connect a connector", onClick: onConnect }
+              : undefined
+          }
         />
-      </div>
-      <div style={bodyStyle} data-testid="connectors-body">
-        {state.kind === "loading" ? (
-          <div style={gridStyle} data-testid="connectors-skeleton">
-            {[0, 1, 2, 3, 4, 5].map((i) => (
-              <div
-                key={i}
-                data-testid="connectors-skeleton-card"
-                style={{ ...cardStyle, cursor: "default" }}
-              >
-                <span
-                  style={{
-                    display: "inline-block",
-                    width: "55%",
-                    height: 12,
-                    borderRadius: 4,
-                    backgroundColor: BORDER,
-                  }}
-                  aria-hidden="true"
-                />
-                <span
-                  style={{
-                    display: "inline-block",
-                    width: "30%",
-                    height: 10,
-                    borderRadius: 4,
-                    backgroundColor: BORDER,
-                  }}
-                  aria-hidden="true"
-                />
-                <span
-                  style={{
-                    display: "inline-block",
-                    width: "70%",
-                    height: 10,
-                    borderRadius: 4,
-                    backgroundColor: BORDER,
-                  }}
-                  aria-hidden="true"
-                />
-              </div>
-            ))}
-          </div>
-        ) : state.kind === "error" ? (
-          <div
-            data-testid="connectors-error"
-            style={{
-              padding: 24,
-              display: "flex",
-              gap: 12,
-              alignItems: "center",
-              color: TEXT_PRIMARY,
-            }}
-          >
-            <span>{state.message}</span>
-            <Button
-              variant="secondary"
-              size="sm"
-              onClick={() => setFetchTick((n) => n + 1)}
-              data-testid="connectors-retry"
-            >
-              Retry
-            </Button>
-          </div>
-        ) : filtered.length === 0 ? (
-          <div data-testid="connectors-empty" style={emptyStyle}>
-            {state.servers.length === 0
-              ? "No connectors yet."
-              : "No connectors match your search."}
-          </div>
-        ) : (
-          <div style={gridStyle} role="list" aria-label="Connectors">
-            {filtered.map((server) => {
-              const view = authStatusView(server.auth_state);
-              const toolCount = server.tool_count ?? 0;
-              return (
-                <div
-                  key={server.server_id}
-                  role="listitem"
-                  tabIndex={0}
-                  data-testid="connectors-card"
-                  data-server-id={server.server_id}
-                  data-auth-state={server.auth_state}
-                  onClick={() => handleCardClick(server.server_id)}
-                  onKeyDown={(e) => handleKeyActivate(e, server.server_id)}
-                  style={cardStyle}
-                >
-                  <div style={headerRowStyle}>
-                    <AppIcon
-                      name={server.name}
-                      color={server.brand_color ?? undefined}
-                      logoUrl={server.logo_url}
-                    />
-                    <h3 style={nameStyle}>
-                      {server.display_name || server.name}
-                    </h3>
-                    <Badge tone={view.tone}>{view.label}</Badge>
-                  </div>
-                  <div style={metaStyle}>
-                    <span>
-                      {toolCount} {toolCount === 1 ? "tool" : "tools"}
-                    </span>
-                    <span>Last used {formatLastUsed(server.last_used_at)}</span>
-                  </div>
-                  <div style={actionsStyle}>
-                    {view.affordance === "connect" ? (
-                      <Button
-                        variant="primary"
-                        size="sm"
-                        data-testid="connectors-connect"
-                        onClick={stopCardPropagation}
-                      >
-                        Connect
-                      </Button>
-                    ) : null}
-                    {view.affordance === "pending" ? (
-                      <Button
-                        variant="secondary"
-                        size="sm"
-                        disabled
-                        data-testid="connectors-pending"
-                      >
-                        Authorizing…
-                      </Button>
-                    ) : null}
-                    {view.affordance === "reauthorize" ? (
-                      <>
-                        <Button
-                          variant="secondary"
-                          size="sm"
-                          data-testid="connectors-reauthorize"
-                          onClick={stopCardPropagation}
-                        >
-                          Reauthorize
-                        </Button>
-                        <Button
-                          variant="ghost"
-                          size="sm"
-                          data-testid="connectors-disconnect"
-                          onClick={stopCardPropagation}
-                        >
-                          Disconnect
-                        </Button>
-                      </>
-                    ) : null}
-                    {view.affordance === "disconnect-only" ? (
-                      <Button
-                        variant="ghost"
-                        size="sm"
-                        data-testid="connectors-disconnect"
-                        onClick={stopCardPropagation}
-                      >
-                        Disconnect
-                      </Button>
-                    ) : null}
-                  </div>
-                </div>
-              );
-            })}
-          </div>
-        )}
+        <FilterTabs<ConnectorsFilterSlug>
+          value={filter}
+          onChange={handleFilterChange}
+          options={filterOptions}
+          ariaLabel="Connectors filter"
+          idPrefix="connectors-filter"
+        />
+        <div
+          id={`connectors-filter-panel-${filter}`}
+          role="tabpanel"
+          aria-labelledby={`connectors-filter-tab-${filter}`}
+          style={bodyStyle}
+          data-testid="connectors-body"
+        >
+          {renderBody({
+            items,
+            filter,
+            onRetry,
+            onConnect,
+            onOpenConnector,
+            onOpenCatalogEntry,
+            onReconnect,
+            now,
+            renderIcon,
+          })}
+        </div>
       </div>
     </section>
   );
+}
+
+interface BodyArgs {
+  readonly items: ConnectorsDestinationProps["items"];
+  readonly filter: ConnectorsFilterSlug;
+  readonly onRetry: ConnectorsDestinationProps["onRetry"];
+  readonly onConnect: ConnectorsDestinationProps["onConnect"];
+  readonly onOpenConnector: ConnectorsDestinationProps["onOpenConnector"];
+  readonly onOpenCatalogEntry: ConnectorsDestinationProps["onOpenCatalogEntry"];
+  readonly onReconnect: ConnectorsDestinationProps["onReconnect"];
+  readonly now: ConnectorsDestinationProps["now"];
+  readonly renderIcon: ConnectorsDestinationProps["renderIcon"];
+}
+
+function renderBody(args: BodyArgs): ReactElement {
+  const {
+    items,
+    filter,
+    onRetry,
+    onConnect,
+    onOpenConnector,
+    onOpenCatalogEntry,
+    onReconnect,
+    now,
+    renderIcon,
+  } = args;
+
+  if (items === null || items === undefined) {
+    return <SkeletonGrid />;
+  }
+  if (items.status === "error" || items.status === "unavailable") {
+    return (
+      <EmptyState
+        title={
+          items.status === "unavailable"
+            ? "Connectors unavailable"
+            : "Couldn't load connectors"
+        }
+        body={items.error ?? undefined}
+        action={
+          onRetry !== undefined
+            ? { label: "Retry", onClick: onRetry }
+            : undefined
+        }
+      />
+    );
+  }
+  const data = items.data ?? { connectors: [], available: [] };
+
+  if (filter === "custom") {
+    return (
+      <EmptyState
+        title="No custom connectors yet"
+        body="Custom OAuth connectors land here once Atlas supports user-installed bundles."
+      />
+    );
+  }
+
+  if (filter === "available") {
+    if (data.available.length === 0) {
+      return (
+        <EmptyState
+          title="No more catalog entries"
+          body="You've installed every connector Atlas currently knows about."
+        />
+      );
+    }
+    return (
+      <CardGrid ariaLabel="Available connectors">
+        {data.available.map((entry) => (
+          <CatalogCard
+            key={entry.slug}
+            entry={entry}
+            icon={renderIcon !== undefined ? renderIcon(entry.slug) : undefined}
+            onClick={
+              onOpenCatalogEntry !== undefined
+                ? () => onOpenCatalogEntry(entry.slug)
+                : undefined
+            }
+          />
+        ))}
+      </CardGrid>
+    );
+  }
+
+  // filter === "connected"
+  if (data.connectors.length === 0) {
+    return (
+      <EmptyState
+        title="Connect your first SaaS source"
+        body="Authorize Gmail, Slack, Salesforce, or any other connector to bring real data into Atlas."
+        action={
+          onConnect !== undefined
+            ? { label: "Connect a connector", onClick: onConnect }
+            : undefined
+        }
+      />
+    );
+  }
+  return (
+    <CardGrid ariaLabel="Connected connectors">
+      {data.connectors.map((c) => {
+        const needsReconnect = c.status === "error" || c.status === "expired";
+        return (
+          <ConnectorCard
+            key={c.id}
+            id={c.id}
+            displayName={c.display_name}
+            description={c.description}
+            status={c.status}
+            lastSyncIso={c.last_sync_at}
+            icon={renderIcon !== undefined ? renderIcon(c.slug) : undefined}
+            now={now}
+            onClick={
+              onOpenConnector !== undefined
+                ? () => onOpenConnector(c.id)
+                : undefined
+            }
+            action={
+              needsReconnect && onReconnect !== undefined
+                ? { label: "Reconnect", onClick: () => onReconnect(c.id) }
+                : undefined
+            }
+          />
+        );
+      })}
+    </CardGrid>
+  );
+}
+
+// --- Available-catalog card (lightweight; no status pill) ----------------
+
+interface CatalogCardProps {
+  readonly entry: ConnectorCatalogEntry;
+  readonly icon?: ReactNode;
+  readonly onClick?: () => void;
+}
+
+function CatalogCard({ entry, icon, onClick }: CatalogCardProps): ReactElement {
+  const handleKey = (e: ReactKeyboardEvent<HTMLDivElement>): void => {
+    if (onClick === undefined) return;
+    if (e.key === "Enter" || e.key === " ") {
+      e.preventDefault();
+      onClick();
+    }
+  };
+  return (
+    <div
+      role="listitem"
+      tabIndex={onClick !== undefined ? 0 : -1}
+      data-testid="connector-catalog-card"
+      data-slug={entry.slug}
+      onClick={onClick}
+      onKeyDown={onClick !== undefined ? handleKey : undefined}
+      style={catalogCardStyle}
+      aria-label={`${entry.display_name} — available to connect`}
+    >
+      <div style={catalogHeaderStyle}>
+        {icon !== undefined ? <span aria-hidden="true">{icon}</span> : null}
+        <h3 style={catalogTitleStyle}>{entry.display_name}</h3>
+      </div>
+      <p style={catalogBodyStyle}>{entry.description}</p>
+      <div style={catalogFooterStyle}>
+        <span>Available</span>
+      </div>
+    </div>
+  );
+}
+
+// --- Skeleton --------------------------------------------------------------
+
+function SkeletonGrid(): ReactElement {
+  return (
+    <CardGrid ariaLabel="Loading connectors">
+      {[0, 1, 2, 3, 4, 5].map((i) => (
+        <div
+          key={i}
+          data-testid="connectors-skeleton-card"
+          style={skeletonCardStyle}
+        >
+          <span style={skeletonBarStyle(60)} aria-hidden="true" />
+          <span style={skeletonBarStyle(40)} aria-hidden="true" />
+          <span style={skeletonBarStyle(75)} aria-hidden="true" />
+        </div>
+      ))}
+    </CardGrid>
+  );
+}
+
+// === Styles ==============================================================
+
+const rootStyle: CSSProperties = {
+  width: "100%",
+  height: "100%",
+  minHeight: 0,
+  background: "var(--color-bg, #131316)",
+  color: "var(--color-text, #ededee)",
+  boxSizing: "border-box",
+  display: "flex",
+  flexDirection: "column",
+  overflow: "auto",
+};
+
+const innerStyle: CSSProperties = {
+  width: "100%",
+  maxWidth: 1080,
+  margin: "0 auto",
+  padding: "16px 20px 32px",
+  boxSizing: "border-box",
+  display: "flex",
+  flexDirection: "column",
+  gap: 12,
+};
+
+const bodyStyle: CSSProperties = {
+  flex: 1,
+  minHeight: 0,
+  padding: "8px 0",
+};
+
+const catalogCardStyle: CSSProperties = {
+  padding: 14,
+  background: "var(--color-bg-elevated, #18181b)",
+  border: "1px solid var(--color-border, #232325)",
+  borderRadius: "var(--radius-md, 12px)",
+  display: "flex",
+  flexDirection: "column",
+  gap: 8,
+  cursor: "pointer",
+  minHeight: 120,
+};
+
+const catalogHeaderStyle: CSSProperties = {
+  display: "flex",
+  alignItems: "center",
+  gap: 10,
+};
+
+const catalogTitleStyle: CSSProperties = {
+  fontSize: "var(--font-size-md, 14px)",
+  fontWeight: 600,
+  margin: 0,
+};
+
+const catalogBodyStyle: CSSProperties = {
+  margin: 0,
+  fontSize: "var(--font-size-sm, 13px)",
+  color: "var(--color-text-muted, #b4b4b8)",
+};
+
+const catalogFooterStyle: CSSProperties = {
+  marginTop: "auto",
+  fontSize: "var(--font-size-xs, 12px)",
+  color: "var(--color-text-subtle, #7e7e84)",
+};
+
+const skeletonCardStyle: CSSProperties = {
+  padding: 14,
+  background: "var(--color-bg-elevated, #18181b)",
+  border: "1px solid var(--color-border, #232325)",
+  borderRadius: "var(--radius-md, 12px)",
+  display: "flex",
+  flexDirection: "column",
+  gap: 10,
+  minHeight: 120,
+};
+
+function skeletonBarStyle(widthPercent: number): CSSProperties {
+  return {
+    display: "inline-block",
+    width: `${widthPercent}%`,
+    height: 10,
+    borderRadius: 4,
+    background: "var(--color-border, #232325)",
+  };
 }

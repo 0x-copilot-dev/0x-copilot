@@ -478,8 +478,15 @@ export {
   type ToolsSortSlug,
 } from "./destinations/tools";
 export {
+  ConnectorCard,
   ConnectorsDestination,
-  type McpServerRow,
+  ConnectorsPanel,
+  RevealOnce,
+} from "./destinations/connectors";
+export type {
+  ConnectorsDestinationProps,
+  ConnectorsFilterCounts,
+  ConnectorsFilterSlug,
 } from "./destinations/connectors";
 export {
   TeamDestination,
