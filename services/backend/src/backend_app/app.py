@@ -107,7 +107,9 @@ from backend_app.inbox import (
     InMemoryInboxStore,
     InboxService,
     InboxStore,
+    register_inbox_internal_routes,
     register_inbox_routes,
+    register_inbox_sse_routes,
 )
 from backend_app.routines import (
     InMemoryRoutinesStore,
@@ -1344,6 +1346,12 @@ def create_app(
     )
     app.state.inbox_service = inbox_service
     register_inbox_routes(app, service=inbox_service)
+    # Phase 4 P4-A3 — SSE stream + Phase 4 P4-A2 — internal producer endpoint.
+    # The SSE handler stashes the activity bus on app.state.inbox_activity_bus
+    # so mutation handlers + producer can publish to it. Bus.publish wiring
+    # at mutation/producer call sites is a follow-up.
+    register_inbox_sse_routes(app)
+    register_inbox_internal_routes(app)
 
     # Phase 5 — Routines destination. Owner-only writes; project-member
     # reads; admin compliance reads — all enforced in ``RoutinesService``.
