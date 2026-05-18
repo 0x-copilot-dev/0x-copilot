@@ -25,6 +25,7 @@ class Keys:
         ACCESS_POLICY = "access_policy"
         ALLOWED_ORG_IDS = "allowed_org_ids"
         ALLOWED_USER_IDS = "allowed_user_ids"
+        ARGS = "args"
         ARGUMENTS = "arguments"
         AUTH_MODE = "auth_mode"
         AUTH_STATE = "auth_state"
@@ -42,8 +43,11 @@ class Keys:
         LOCAL_TOOL_NAMES = "local_tool_names"
         MIME_TYPE = "mime_type"
         NAME = "name"
+        OUTPUT = "output"
         OUTPUT_SHAPE = "output_shape"
         ORG_ID = "org_id"
+        PARAMETERS = "parameters"
+        PARAMS = "params"
         READ_ONLY = "read_only"
         REDIRECT_URI = "redirect_uri"
         REQUIRED_SCOPES = "required_scopes"
@@ -94,6 +98,15 @@ class Keys:
         REQUIRED = "required"
         TYPE = "type"
 
+    class Content:
+        """Field names used in MCP tool-call response envelopes."""
+
+        CONTENT = "content"
+        IS_ERROR = "isError"
+        OUTPUT = "output"
+        TEXT = "text"
+        TYPE = "type"
+
 
 class Values:
     """Stable string values exposed by MCP contracts and tests."""
@@ -128,6 +141,7 @@ class Values:
         LOAD_BUDGET_EXCEEDED = "load_budget_exceeded"
         LOCAL_TOOL_COLLISION = "local_tool_collision"
         MALFORMED_DESCRIPTOR = "malformed_descriptor"
+        MCP_PROTOCOL_ERROR = "mcp_protocol_error"
         PERMISSION_DENIED = "permission_denied"
         SERVER_DISABLED = "server_disabled"
         SERVER_UNHEALTHY = "server_unhealthy"
@@ -157,6 +171,11 @@ class Values:
 
         OBJECT = "object"
         STRING = "string"
+
+    class ContentType:
+        """Content-block ``type`` string values used in MCP responses."""
+
+        TEXT = "text"
 
     class JsonRpc:
         """JSON-RPC protocol version constant."""
@@ -304,6 +323,10 @@ class Messages:
             "The MCP server returned a tool name that collides with a local tool."
         )
         LOCAL_TOOL_NAMES_INVALID = "MCP local tool names are invalid."
+        PROTOCOL_ERROR = "The MCP server reported an error for this tool call."
+        PROTOCOL_ERROR_FALLBACK = (
+            "The MCP server returned an error without a readable message."
+        )
         RESOURCE_BUDGET_EXCEEDED = (
             "The MCP server returned too many resources to load safely."
         )

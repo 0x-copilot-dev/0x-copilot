@@ -34,7 +34,9 @@ AUTH_MCP_TOOL_DESCRIPTION = (
 
 CALL_MCP_TOOL_DESCRIPTION = (
     "Call a tool from an MCP server after load_mcp_server has returned that "
-    "server's validated tool descriptors."
+    "server's validated tool descriptors. "
+    "Pass tool inputs as a JSON object in the `arguments` field "
+    "(not `parameters`)."
 )
 
 LOAD_MCP_SERVER_TOOL_DESCRIPTION = (

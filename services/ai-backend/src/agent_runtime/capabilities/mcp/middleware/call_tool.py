@@ -31,6 +31,7 @@ from agent_runtime.capabilities.mcp.loader import McpLoader
 from agent_runtime.capabilities.mcp.middleware.cite_mcp import (
     CitationProjectingMcpMiddleware,
 )
+from agent_runtime.capabilities.mcp.outcomes import McpToolCallOutcome
 from agent_runtime.capabilities.mcp.permissions import McpPermissionPolicy
 from agent_runtime.capabilities.mcp.registry import DynamicMcpRegistry
 from agent_runtime.execution.contracts import AgentRuntimeContext
@@ -136,6 +137,21 @@ class CallMcpTool:
             tool_call_id=self.runtime_context.trace_id,
             result=output,
         )
+
+        # Classify protocol-level failures per the MCP spec: a successful HTTP
+        # response carrying ``isError: true`` is a failure, not a "completed"
+        # result. Preserve the full ``output`` envelope on the failure result so
+        # the model can read the inner error text and self-correct.
+        if McpToolCallOutcome.is_protocol_error(output):
+            return McpToolCallResult.fail(
+                McpLoadErrorCode.MCP_PROTOCOL_ERROR,
+                McpToolCallOutcome.extract_error_text(output),
+                retryable=False,
+                server_name=parsed_input.server_name,
+                tool_name=parsed_input.tool_name,
+                correlation_id=self.runtime_context.trace_id,
+                output=output,
+            ).model_dump(mode="json", exclude_none=True)
 
         # Allocate a conversation-scoped ordinal bound to tool_call_id so the
         # citation resolver can stamp source_tool_call_id on citation_made events.

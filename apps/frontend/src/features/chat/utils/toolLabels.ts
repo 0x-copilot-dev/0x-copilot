@@ -166,45 +166,15 @@ export function inlineToolTitle(
   return displayName;
 }
 
-export function inlineMcpToolTitle(
-  toolName: string,
-  requestedTool: string | null,
-  displayName: string | null,
-  status: string,
-): string {
-  if (toolName === "load_mcp_server") {
-    return displayName ? `Load ${displayName} tools` : "Load connector tools";
-  }
-  if (toolName === "auth_mcp") {
-    return displayName ? `Connect ${displayName}` : "Connect connector";
-  }
-  const action = toolActionName(requestedTool ?? toolName);
-  const connector = displayName ?? "connector";
-  if (status === "running") {
-    return `${capitalize(action)} ${connector}`;
-  }
-  return `${capitalizePastTense(action)} ${connector}`;
-}
-
-export function mcpToolSummary(
-  toolName: string,
-  status: string,
-  serverName: string | null,
-  requestedTool: string | null,
-): string {
-  const connector = serverName ? humanizeIdentifier(serverName) : "connector";
-  const action = toolActionName(requestedTool ?? toolName);
-  if (status === "running") {
-    if (toolName === "load_mcp_server") {
-      return `Loading available tools from ${connector}.`;
-    }
-    return `${capitalize(action)} ${connector}.`;
-  }
-  if (status === "requires-action") {
-    return `Review ${connector} ${action} before it runs.`;
-  }
-  return `${connector} action completed.`;
-}
+// ``inlineMcpToolTitle`` and ``mcpToolSummary`` used to live here. They
+// recomputed the MCP tool title / summary on the client from raw args,
+// duplicating logic the backend already owns in
+// ``RuntimeEventPresentationProjector._display_title_for`` (which now
+// unwraps the dispatcher via ``McpDispatcherUnwrap``). The client-side
+// derivation produced ``"Action connector"`` at ``tool_call_started``
+// time because the inner args hadn't streamed yet. ``McpTool.tsx`` now
+// consumes the projected ``display_title`` / ``summary`` directly — see
+// the comment block at the top of that file for the project invariant.
 
 export function toolStatusLabel(status: string, isError?: boolean): string {
   if (isError) {
@@ -481,21 +451,4 @@ export function emptyResultLabel(toolName?: string): string {
     return "No files found";
   }
   return "No results";
-}
-
-function capitalize(value: string): string {
-  return value.charAt(0).toUpperCase() + value.slice(1);
-}
-
-function capitalizePastTense(value: string): string {
-  if (value === "search") {
-    return "Searched";
-  }
-  if (value === "read") {
-    return "Read";
-  }
-  if (value === "modify") {
-    return "Updated";
-  }
-  return "Ran";
 }
