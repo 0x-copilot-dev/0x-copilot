@@ -117,3 +117,13 @@ export {
   type AgentVersionRow,
   type VersionHistoryTabProps,
 } from "./VersionHistoryTab";
+
+// === P8-B3 usage chart ===
+export {
+  AgentUsageChart,
+  formatCostMicroUsd,
+  type AgentUsageBucket,
+  type AgentUsageChartProps,
+  type AgentUsagePeriod,
+  type AgentUsageResponse,
+} from "./AgentUsageChart";
