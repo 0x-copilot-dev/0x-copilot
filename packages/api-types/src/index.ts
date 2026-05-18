@@ -3591,3 +3591,31 @@ export type {
   UpdateProjectTemplateRequest,
 } from "./projects";
 // === end Phase 6 Projects ===
+
+// === Phase 7 Library destination ===
+// Canonical CRUD + kind-agnostic LibraryItem wire shape (file / page /
+// dataset). Cross-audit §1.1 (ItemRef-resolvable source refs), §1.3
+// (project-scoped ACL — owner writes, project-member reads, admin
+// compliance reads, 404-not-403), §1.5 (multi-value OR filter axes),
+// §2.1 (branded ids: LibraryFileId / LibraryPageId / LibraryDatasetId).
+// Single declaration site: ./library.ts. P7-A1 ships the CRUD wire; the
+// signed-URL upload + dataset ingest + search + preview/download
+// payloads land additively in P7-A2 / P7-A3.
+export type {
+  LibraryDataset,
+  LibraryDatasetColumnSpec,
+  LibraryDatasetColumnType,
+  LibraryDatasetFormat,
+  LibraryFile,
+  LibraryFileKind,
+  LibraryIndexStatus,
+  LibraryItem,
+  LibraryItemKind,
+  LibraryItemPatchRequest,
+  LibraryListResponse,
+  LibraryPage,
+  LibraryPageCreateRequest,
+  LibrarySource,
+  LibrarySourceKind,
+} from "./library";
+// === end Phase 7 Library ===

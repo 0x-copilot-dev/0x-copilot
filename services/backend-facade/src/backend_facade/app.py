@@ -21,6 +21,7 @@ from backend_facade.auth_routes import register_auth_routes
 from backend_facade.home_routes import register_home_routes
 from backend_facade.inbox_routes import register_inbox_routes
 from backend_facade.inbox_stream_routes import register_inbox_stream_routes
+from backend_facade.library_routes import register_library_routes
 from backend_facade.liveness_routes import register_liveness_routes
 from backend_facade.projects_routes import register_projects_routes
 from backend_facade.routines_routes import register_routines_routes
@@ -125,6 +126,7 @@ def create_app(
     register_home_routes(app)
     register_inbox_routes(app)
     register_inbox_stream_routes(app)
+    register_library_routes(app)
     register_projects_routes(app)
     register_liveness_routes(app)
     register_routines_routes(app)
