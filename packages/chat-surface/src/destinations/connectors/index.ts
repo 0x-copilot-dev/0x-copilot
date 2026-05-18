@@ -5,5 +5,35 @@ export type {
   ConnectorsFilterSlug,
 } from "./ConnectorsDestination";
 export { ConnectorCard } from "./ConnectorCard";
+export type { ConnectorCardProps } from "./ConnectorCard";
 export { ConnectorsPanel } from "./ConnectorsPanel";
+export type { ConnectorsPanelProps } from "./ConnectorsPanel";
 export { RevealOnce } from "./RevealOnce";
+export type { RevealOnceProps } from "./RevealOnce";
+
+export { ConnectorDetailView } from "./ConnectorDetailView";
+export type {
+  ConnectorDetailViewProps,
+  ConnectorDetailTabId,
+} from "./ConnectorDetailView";
+export { ScopeReviewTab } from "./ScopeReviewTab";
+export type { ScopeReviewTabProps } from "./ScopeReviewTab";
+export { ConsumersTab } from "./ConsumersTab";
+export type { ConsumersTabProps } from "./ConsumersTab";
+export { ReadAuditTab } from "./ReadAuditTab";
+export type { ReadAuditTabProps } from "./ReadAuditTab";
+
+export {
+  WebhooksDestination,
+  WebhookCard,
+  WebhookDetailView,
+  WebhookCreateWizard,
+  WEBHOOK_VERIFICATION_SNIPPET,
+} from "./webhooks";
+export type {
+  WebhooksDestinationProps,
+  WebhookCardProps,
+  WebhookDetailViewProps,
+  WebhookCreateWizardProps,
+  WebhookCreateWizardRequest,
+} from "./webhooks";
