@@ -2,7 +2,7 @@ import { fireEvent, render, screen } from "@testing-library/react";
 import { describe, expect, it, vi } from "vitest";
 
 import { ProjectDetailView, type ProjectDetail } from "./ProjectDetailView";
-import type { ProjectId } from "./ProjectsDestination";
+import type { ProjectId } from "@enterprise-search/api-types";
 
 const PROJECT: ProjectDetail = {
   id: "proj-1" as ProjectId,

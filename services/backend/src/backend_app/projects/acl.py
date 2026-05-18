@@ -95,6 +95,41 @@ class ProjectMembershipPort(Protocol):
 
 
 # ---------------------------------------------------------------------------
+# No-member adapter (the safe default when consumers don't supply one).
+# When this adapter is consulted, no project membership exists — every
+# `is_member` query returns False and `list_projects_for_user` returns
+# an empty tuple. Used by inbox/todos/routines when their host doesn't
+# inject a real ProjectMembershipPort (e.g. tests that don't exercise
+# project-scoped paths). Consumers in P6-A2 import this name.
+# ---------------------------------------------------------------------------
+
+
+class _NoMemberProjectAdapter:
+    """No-op ProjectMembershipPort — every query returns "not a member"."""
+
+    def is_member(self, *, tenant_id: str, project_id: str, user_id: str) -> bool:
+        return False
+
+    def is_project_member(
+        self, *, tenant_id: str, project_id: str, user_id: str
+    ) -> bool:
+        """Legacy alias used by inbox/todos/routines before P6-A1 landed
+        `is_member` as the canonical name. Kept for compatibility while
+        consumers migrate."""
+        return False
+
+    def member_role(
+        self, *, tenant_id: str, project_id: str, user_id: str
+    ) -> ProjectRole | None:
+        return None
+
+    def list_projects_for_user(
+        self, *, tenant_id: str, user_id: str
+    ) -> tuple[str, ...]:
+        return ()
+
+
+# ---------------------------------------------------------------------------
 # In-memory adapter (tests + dev default)
 # ---------------------------------------------------------------------------
 
@@ -110,9 +145,23 @@ class InMemoryProjectMembershipAdapter:
     """
 
     # Key: (tenant_id, project_id) -> {user_id: role}.
+    # Also accepts the legacy `set[user_id]` shape from P6-A2's stub (where
+    # roles were not yet tracked); set values are normalized to dicts with
+    # default role "editor" so legacy tests + new role-aware tests both pass.
     memberships: dict[tuple[str, str], dict[str, ProjectRole]] = field(
         default_factory=dict
     )
+
+    def __post_init__(self) -> None:
+        # Normalize legacy `set` values → role-keyed dicts so test fixtures
+        # that pass `{user_id, ...}` (P6-A2 shape) still work.
+        normalized: dict[tuple[str, str], dict[str, ProjectRole]] = {}
+        for key, value in self.memberships.items():
+            if isinstance(value, set):
+                normalized[key] = {uid: "editor" for uid in value}
+            else:
+                normalized[key] = value
+        self.memberships = normalized
 
     # -- write affordances (test-only) --------------------------------
 

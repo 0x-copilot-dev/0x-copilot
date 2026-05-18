@@ -257,7 +257,11 @@ def register_projects_routes(app: FastAPI) -> None:
         )
         return _coerce_object_or_raise(response)
 
-    @app.post("/v1/admin/projects/{project_id}/force-transfer")
+    # Phase 6 product decision (user override 2026-05-18): admin force-transfer
+    # deferred — backend route is no longer registered, so this facade proxy
+    # would 404 anyway. Code preserved as commented decorator for future revive.
+    #
+    # @app.post("/v1/admin/projects/{project_id}/force-transfer")
     async def force_transfer_ownership(
         request: Request, project_id: str
     ) -> dict[str, object]:

@@ -26,6 +26,8 @@ params (the dev fallback). Admin-role tests inject the service token
 
 from __future__ import annotations
 
+import pytest
+
 from enterprise_service_contracts.headers import (
     ORG_HEADER,
     ROLES_HEADER,
@@ -741,6 +743,9 @@ class TestTransfer:
         ids = {r.user_id for r in rows}
         assert ids == {"usr_bob"}  # Sarah removed entirely
 
+    @pytest.mark.skip(
+        reason="Admin force-transfer endpoint deferred per user override 2026-05-18 (security review pending)"
+    )
     def test_admin_force_transfer(self) -> None:
         """Tenant admin force-transfer bypasses the current-owner check."""
 
@@ -789,6 +794,9 @@ class TestTransfer:
         finally:
             os.environ.pop("ENTERPRISE_SERVICE_TOKEN", None)
 
+    @pytest.mark.skip(
+        reason="Admin force-transfer endpoint deferred per user override 2026-05-18 (security review pending)"
+    )
     def test_force_transfer_non_admin_rejected(self) -> None:
         """Non-admin caller on the admin force-transfer endpoint → 403."""
 

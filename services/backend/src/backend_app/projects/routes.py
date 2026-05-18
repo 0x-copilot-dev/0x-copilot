@@ -584,11 +584,18 @@ def register_projects_routes(app: FastAPI, *, service: ProjectsService) -> None:
         counts = ProjectActivityCounts(tenant_id=identity.org_id, project_id=record.id)
         return _to_wire(record, viewer_role, False, counts)
 
-    @app.post(
-        "/v1/admin/projects/{project_id}/force-transfer",
-        response_model=ProjectResponseModel,
-        dependencies=[Depends(RequireScopes(RUNTIME_USE))],
-    )
+    # Phase 6 product decision (user override 2026-05-18): admin force-transfer
+    # is DEFERRED — flagged as a security hazard. Route registration commented
+    # out below; service layer keeps `force_transfer_ownership` for future use
+    # (e.g., a per-tenant SAML-claim-based admin path). To re-enable, uncomment
+    # the @app.post decorator. Calls to `/v1/admin/projects/{id}/force-transfer`
+    # return 404 today.
+    #
+    # @app.post(
+    #     "/v1/admin/projects/{project_id}/force-transfer",
+    #     response_model=ProjectResponseModel,
+    #     dependencies=[Depends(RequireScopes(RUNTIME_USE))],
+    # )
     def force_transfer_ownership(
         request: Request,
         project_id: str,
@@ -596,8 +603,8 @@ def register_projects_routes(app: FastAPI, *, service: ProjectsService) -> None:
         org_id: str = Query(..., min_length=1),
         user_id: str = Query(..., min_length=1),
     ) -> ProjectResponseModel:
-        """Admin force-transfer per projects-prd §12 Q1 (orchestrator-
-        approved). Caller MUST be a tenant admin; non-admins 403."""
+        """Admin force-transfer (DEFERRED 2026-05-18; route unregistered).
+        Caller MUST be a tenant admin; non-admins 403."""
 
         identity = BackendServiceAuthenticator.scoped_identity(
             request, org_id=org_id, user_id=user_id

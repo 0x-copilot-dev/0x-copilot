@@ -33,7 +33,7 @@ import {
   type ProjectMemberRole,
 } from "./ProjectMembersTab";
 
-import type { ProjectId } from "./ProjectsDestination";
+import type { ProjectId } from "@enterprise-search/api-types";
 
 // Tokens (match ProjectsDestination.tsx)
 const APP_BACKGROUND = "var(--color-bg)";
