@@ -1414,10 +1414,12 @@ p {
   gap: var(--space-lg);
   /* Push the welcome (greeting + 4 suggestion cards) to the BOTTOM of
    * the thread viewport so it sits adjacent to the composer in the
-   * empty state, not floating in the middle of a 600px void. The
-   * top-`auto` consumes leftover flex space; the small bottom margin
-   * keeps a breathing gap above the composer. */
-  margin: auto auto var(--space-md);
+   * empty state — no 600px void above. `margin-top: auto` consumes
+   * leftover flex space; `margin-bottom: 0` keeps the cards touching
+   * the viewport's bottom padding so the only gap above the composer
+   * is the viewport+footer padding itself (not an extra welcome margin
+   * on top of that). */
+  margin: auto auto 0;
   max-width: var(--chat-content-width);
   padding: 0 var(--space-md);
   width: 100%;
@@ -2040,13 +2042,17 @@ p {
 }
 
 /* Visual divider between the accent-icon cluster (+ / connectors / mic)
- * and the setting-pill cluster (Model · Depth). Renders as a small
- * left-margin gap so the eye groups by intent rather than scanning a
- * uniform-gap strip of mixed shapes. Empty span, aria-hidden. */
+ * and the setting-pill cluster (Model · Depth). Renders as a thin
+ * vertical hairline plus breathing room on either side so the eye
+ * actually groups by intent rather than scanning a uniform-gap strip.
+ * Empty span, aria-hidden. */
 .aui-composer-tools-spacer {
+  background: color-mix(in srgb, var(--color-border) 70%, transparent);
   display: inline-block;
   flex-shrink: 0;
-  width: var(--space-sm);
+  height: 1.2rem;
+  margin: 0 var(--space-xs);
+  width: 1px;
 }
 
 .aui-plus-menu-root {
@@ -2207,12 +2213,18 @@ p {
   color: var(--color-text-muted);
 }
 
+/* Base: even when DISABLED (empty composer) the send button shows an
+ * accent-tinted fill so the eye still locates it as "the action."
+ * Previously it was transparent-bg + opacity:0.5 which made the button
+ * indistinguishable from the icon-only tray — the user reading an empty
+ * composer couldn't tell where the primary action was. Now disabled = a
+ * faint accent-tinted ghost; enabled = full accent. */
 .aui-send-button {
   align-items: center;
-  background: transparent;
-  border: 1px solid var(--color-border);
+  background: color-mix(in srgb, var(--color-accent) 18%, transparent);
+  border: 1px solid color-mix(in srgb, var(--color-accent) 35%, transparent);
   border-radius: var(--radius-md);
-  color: var(--color-text-muted);
+  color: color-mix(in srgb, var(--color-accent) 75%, var(--color-text-subtle));
   cursor: pointer;
   display: inline-flex;
   font: inherit;
@@ -2235,11 +2247,11 @@ p {
 }
 
 /* Primary-action treatment for the enabled send button (Phase 9 composer
- * redesign). Filled accent fill so the eye locates the action before any
- * other element in the toolbar — visual hierarchy was the #1 critique of
- * the prior pass. The "quiet send / loud run-state" intent from the old
- * design is preserved by the cancel/stop variant below (still tinted, not
- * filled), which signals "running is the expected state, not emergency". */
+ * redesign). Filled accent so the eye locates the action before any
+ * other element in the toolbar. The "quiet send / loud run-state" intent
+ * from the old design is preserved by the cancel/stop variant below
+ * (still tinted, not filled), which signals "running is the expected
+ * state, not emergency". */
 .aui-send-button:not([disabled]):not(.aui-send-button--stop) {
   background: var(--color-accent);
   color: var(--color-accent-contrast, white);
@@ -2248,7 +2260,9 @@ p {
 
 .aui-send-button[disabled] {
   cursor: not-allowed;
-  opacity: 0.5;
+  /* Subtle dimming — the tinted base already signals "not ready"; full
+   * opacity 0.5 would push it back into invisibility. */
+  opacity: 0.85;
 }
 
 /* Stop = same circle, icon flips to a square. The design uses a quiet
