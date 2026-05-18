@@ -41,7 +41,10 @@ class TestAsyncFactoryParallelism:
     ) -> None:
         import threading
 
-        barrier = threading.Barrier(5, timeout=2.0)
+        # Wide timeout to avoid flakes under CI load — parallelism is the
+        # contract under test; absolute latency is not. 10s is well within
+        # the asyncio-to-thread / thread-pool worst-case stall budget.
+        barrier = threading.Barrier(5, timeout=10.0)
 
         def _gated(value: object) -> object:
             barrier.wait()

@@ -80,12 +80,13 @@ def register_adapter_registry_routes(app: FastAPI) -> None:
     async def admin_list_candidates(request: Request) -> dict[str, object]:
         identity = FacadeAuthenticator.authenticate_request(request)
         params = dict(identity.scoped_params())
-        forwarded_status = request.query_params.get("status")
-        if forwarded_status:
-            params["status"] = forwarded_status
-        forwarded_limit = request.query_params.get("limit")
-        if forwarded_limit:
-            params["limit"] = forwarded_limit
+        # Allowlist of forwarded read filters (cross-audit §1.5).
+        # Anything else (e.g. ``org_id=hacker``) is dropped — identity
+        # rides the service-token headers, never the query.
+        for key in ("status", "layout", "scheme", "cursor", "limit"):
+            value = request.query_params.get(key)
+            if value:
+                params[key] = value
         response = await forward_json(
             app,
             "GET",

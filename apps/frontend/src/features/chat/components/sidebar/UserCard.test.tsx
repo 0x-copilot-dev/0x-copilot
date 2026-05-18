@@ -30,20 +30,28 @@ vi.mock("../../../auth/AuthContext", () => ({
   useAuth: () => mockUseAuth(),
 }));
 
-vi.mock("@enterprise-search/design-system", () => ({
-  AppIcon: ({ name }: { name: string }) => (
-    <span data-testid="appicon">{name}</span>
-  ),
-  Menu: ({
-    open,
-    children,
-  }: {
-    open: boolean;
-    children: ReactNode;
-    [key: string]: unknown;
-  }): ReactElement | null =>
-    open ? <div data-testid="user-menu">{children}</div> : null,
-}));
+// Partial mock — override AppIcon + Menu with test-friendly stubs, keep
+// the rest of the design-system surface (Button, Badge, etc.) for the
+// transitive imports the test pulls in via chat-surface's Tier2Loader.
+vi.mock("@enterprise-search/design-system", async (importOriginal) => {
+  const actual =
+    await importOriginal<typeof import("@enterprise-search/design-system")>();
+  return {
+    ...actual,
+    AppIcon: ({ name }: { name: string }) => (
+      <span data-testid="appicon">{name}</span>
+    ),
+    Menu: ({
+      open,
+      children,
+    }: {
+      open: boolean;
+      children: ReactNode;
+      [key: string]: unknown;
+    }): ReactElement | null =>
+      open ? <div data-testid="user-menu">{children}</div> : null,
+  };
+});
 
 import { UserCard } from "./UserCard";
 import { UserProfileProvider } from "../../../me/UserProfileContext";
