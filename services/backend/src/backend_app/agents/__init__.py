@@ -1,33 +1,47 @@
-"""Agents destination (Phase 8 P8-A1) — CRUD + ACL + canonical wire contract.
+"""Agents destination (Phase 8) — CRUD + versions + installs + usage aggregation.
 
-This package owns the data model for the Agents app-store surface. P8-A1
-ships the CRUD + ACL + tenant-isolated read/write paths; the operational
-endpoints land in adjacent sub-PRDs:
+Slices land in parallel; each owns its own module under this package.
 
-  * P8-A2 — version snapshots (POST /v1/agents/<id>/versions + GET list).
-  * P8-A3 — install / uninstall / disable + per-user override layer.
-  * P8-A4 — usage aggregation (read-only projection over the existing
-    ``runtime_model_call_usage`` tracker in ai-backend).
-  * P8-A5 — api-types deltas across-the-board (index.ts re-exports +
-    cross-destination type touches).
+* **P8-A1** — ``store.py`` + ``service.py`` + ``routes.py``: catalog CRUD,
+  ACL, owner-only writes, 404-not-403, slug uniqueness, soft-delete.
+* **P8-A2** — ``versions.py``: immutable agent_version snapshots used by
+  Routines §9.7 Q11's ``agent_version_pin`` field. Idempotent on
+  ``(agent_id, state_hash)``. No PATCH/DELETE (405).
+* **P8-A3** — ``installs.py``: per-user install + override layer with
+  the fork-vs-overlay rule (instruction edits force ``duplicate()``;
+  only model + permissions tweaks live in overrides). Narrow
+  :class:`AgentSourcePort` protocol decouples from P8-A1's store.
+* **P8-A4** — ai-backend ``agent_usage.py``: read-only aggregation over
+  the existing ``runtime_model_call_usage`` tracker (no new tracker,
+  no parallel table — preserves cross-audit §5.5 single-tracker invariant).
+* **P8-A5** — api-types deltas (Project.default_agent_id cross-cut).
 
 Authorization (agents-prd §6.2 + cross-audit §1.3 binding):
 
-  * ``system`` + ``community`` agents — readable by every tenant member;
-    PATCH rejected with 409 ``agent_origin_immutable`` (must duplicate
-    first; see P8-A2 §4.10).
-  * ``custom`` agents — owner-only writes; tenant members who installed
-    the agent get read access; non-owners non-installers see 404 (cross-
-    audit §1.3 master rule: existence not leaked).
-  * Admins (tenant role ``admin`` / ``owner``) get a compliance read on
-    every row, audited at the route layer.
+* ``system`` + ``community`` agents — readable tenant-wide; PATCH on
+  origin immutability returns 409.
+* ``custom`` agents — owner-only writes; installer reads; non-owner
+  non-installer sees 404 (existence-not-leaked).
+* Admins get compliance read on every row, audited.
 
-Wire shape is canonical at ``packages/api-types/src/agents.ts``; the
-Python mirrors live in ``agents.routes``.
+Wire shape is canonical at ``packages/api-types/src/agents.ts``.
 """
 
 from __future__ import annotations
 
+from backend_app.agents.installs import (
+    AgentCatalogRecord,
+    AgentInstallOverrides,
+    AgentInstallRow,
+    AgentInstallStore,
+    AgentSourcePort,
+    DuplicateAgentResult,
+    InMemoryAgentInstallStore,
+    InMemoryAgentSource,
+    OverridesValidationError,
+    register_agent_install_routes,
+    validate_overrides,
+)
 from backend_app.agents.routes import register_agents_routes
 from backend_app.agents.service import (
     AgentConflict,
@@ -45,18 +59,28 @@ from backend_app.agents.store import (
     InMemoryAgentsStore,
 )
 
-
 __all__ = [
     "AgentAuditRecord",
+    "AgentCatalogRecord",
     "AgentConflict",
     "AgentForbidden",
+    "AgentInstallOverrides",
     "AgentInstallRecord",
+    "AgentInstallRow",
+    "AgentInstallStore",
     "AgentInvalidRequest",
     "AgentNotFound",
     "AgentRecord",
+    "AgentSourcePort",
     "AgentVersionRecord",
     "AgentsService",
     "AgentsStore",
+    "DuplicateAgentResult",
+    "InMemoryAgentInstallStore",
+    "InMemoryAgentSource",
     "InMemoryAgentsStore",
+    "OverridesValidationError",
+    "register_agent_install_routes",
     "register_agents_routes",
+    "validate_overrides",
 ]
