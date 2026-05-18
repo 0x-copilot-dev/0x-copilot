@@ -105,7 +105,10 @@ class TestPurposeEnum:
         # Adding a Purpose requires a deliberate test update + parent
         # PRD §6.2 review — they shape rollup tables and FE filters.
         # P3-A2 added TODO_EXTRACTION for the post-run extractor worker.
-        assert len(Purpose) == 6
+        # P7.5-A1 added LIBRARY_RETRIEVAL + LIBRARY_INDEXING for the
+        # Library hybrid retrieval / offline embedding worker paths
+        # (sub-PRD library §6.5 / §6.6; cross-audit §5.5 single-tracker).
+        assert len(Purpose) == 8
 
     def test_todo_extraction_purpose_present(self) -> None:
         # P3-A2 — the extractor worker job persists usage rows with this

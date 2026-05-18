@@ -57,6 +57,7 @@ from runtime_api.http.retention_routes import (
     RetentionMemberRouter,
 )
 from runtime_api.http.agent_usage import AgentUsageApiRouter
+from runtime_api.http.llm_embed_routes import LlmEmbedApiRouter
 from runtime_api.http.routes import (
     BudgetApiRouter,
     InternalRuntimeApiRouter,
@@ -211,6 +212,10 @@ class RuntimeApiAppFactory:
         app.include_router(RetentionAdminRouter.create_router())
         app.include_router(RetentionMemberRouter.create_router())
         app.include_router(InternalRuntimeApiRouter.create_router())
+        # P7.5-A1 — internal LLM-embedding endpoint for Library
+        # indexing / retrieval. Service-token gated; TU-1 invariant
+        # preserved (all writes go through the canonical UsageRecorder).
+        app.include_router(LlmEmbedApiRouter.create_router())
         app.add_exception_handler(
             RuntimeApiError, RuntimeApiErrorMapper.handle_runtime_api_error
         )

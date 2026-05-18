@@ -56,6 +56,23 @@ class Purpose(StrEnum):
     is created. Out of band of the main loop's Purpose.derive precedence
     (extractor jobs construct their context explicitly with this value)."""
 
+    LIBRARY_RETRIEVAL = "library_retrieval"
+    """Online cross-encoder / embedding call made by Library hybrid
+    retrieval at query time (sub-PRD §6.1). Routed through the
+    canonical :func:`build_chat_model` / :func:`build_embeddings_model`
+    entry so the existing :class:`UsageRecorder` captures token usage —
+    no separate tracker. Out of band of the main loop's Purpose.derive
+    precedence (Library callers construct context explicitly)."""
+
+    LIBRARY_INDEXING = "library_indexing"
+    """Offline embedding-worker call that vectorises Library chunks
+    (sub-PRD §6.5 / §6.6 — "the only LLM call path for Library
+    indexing"). Routed through the canonical
+    :func:`build_embeddings_model` entry so the existing
+    :class:`UsageRecorder` captures token usage — no separate tracker.
+    Out of band of the main loop's Purpose.derive precedence (indexing
+    callers construct context explicitly)."""
+
     @classmethod
     def derive(
         cls,

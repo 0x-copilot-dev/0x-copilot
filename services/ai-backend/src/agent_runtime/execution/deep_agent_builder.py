@@ -8,6 +8,8 @@ from typing import Protocol, runtime_checkable
 
 from deepagents import HarnessProfile, create_deep_agent, register_harness_profile
 from langchain.chat_models import init_chat_model
+from langchain.embeddings import init_embeddings
+from langchain_core.embeddings import Embeddings
 from langchain_core.language_models import BaseChatModel
 
 from agent_runtime.execution.contracts import (
@@ -260,6 +262,39 @@ def build_chat_model(
     return init_chat_model(
         model_config.model_name,
         model_provider=_langchain_model_provider(model_config.provider),
+        **kwargs,
+    )
+
+
+def build_embeddings_model(
+    *,
+    provider: str,
+    model_name: str,
+    extra_kwargs: Mapping[str, object] | None = None,
+) -> Embeddings:
+    """Create the LangChain embeddings model for Library retrieval/indexing.
+
+    Companion to :func:`build_chat_model` — keeps the TU-1 invariant that
+    every LLM provider client funnels through this single bootstrap file.
+    Callers (e.g. ``/internal/v1/llm/embed``, the indexer worker) must
+    construct the resulting handle here so the CI guard
+    (``tools/check_llm_provider_imports.py``) does not flag a direct
+    provider SDK import elsewhere.
+
+    The function deliberately takes ``provider`` and ``model_name`` as
+    bare values rather than a :class:`ModelConfig` because the
+    embedding model contract is much narrower than the chat-model one
+    (no temperature, no reasoning, no streaming, no thinking budget).
+    Provider-specific kwargs (e.g. ``api_key``, ``dimensions``) flow
+    through ``extra_kwargs``.
+    """
+
+    kwargs: dict[str, object] = {}
+    if extra_kwargs:
+        kwargs.update(extra_kwargs)
+    return init_embeddings(
+        model=model_name,
+        provider=_langchain_model_provider(provider),
         **kwargs,
     )
 
