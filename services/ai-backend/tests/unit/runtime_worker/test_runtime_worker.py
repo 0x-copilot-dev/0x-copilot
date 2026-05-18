@@ -1699,6 +1699,22 @@ async def test_runtime_worker_resolves_mcp_auth_action_and_completes_run() -> No
             },
         )
     )
+    # PR #43 — single-action interrupts are 1-item batches; seed the batch
+    # so the handler's atomic transition gate proceeds.
+    from agent_runtime.persistence.records import (  # noqa: PLC0415
+        ApprovalBatchItemRecord as _BatchItem,
+        ApprovalBatchRecord as _BatchRec,
+        ApprovalBatchSpec as _BatchSpec,
+    )
+
+    await store.insert_approval_batch(
+        spec=_BatchSpec.build(
+            batch=_BatchRec(batch_id=approval_id, run_id=run.run_id, org_id=run.org_id),
+            items=[
+                _BatchItem(item_id=approval_id, batch_id=approval_id, index=0),
+            ],
+        )
+    )
     run_coordinator, conv_coordinator, approval_coordinator, event_producer = (
         _make_coordinators(store, settings)
     )
@@ -2342,14 +2358,29 @@ async def test_runtime_worker_persists_mcp_approval_requests_and_waits() -> None
 
     assert processed == 1
     assert store.runs[run_id].status == AgentRunStatus.WAITING_FOR_APPROVAL
+    # PR #43 — the per-item approval_id always follows ``<batch_id>:<index>``;
+    # there is no N=1 special case any more.
     approval = await store.get_approval_request(
         org_id="org_123",
-        approval_id="approval_mcp_123",
+        approval_id="approval_mcp_123:0",
     )
     assert approval is not None
     assert approval.metadata["approval_kind"] == "mcp_tool"
     assert approval.metadata["tool_name"] == "list_tasks"
     assert approval.metadata["native_interrupt_id"] == "approval_mcp_123"
+    # The ApprovalBatch was created in the same fan-out step.
+    batch = await store.get_approval_batch(
+        org_id="org_123",
+        batch_id="approval_mcp_123",
+    )
+    assert batch is not None
+    items = await store.list_items_for_batch(
+        org_id="org_123",
+        batch_id="approval_mcp_123",
+    )
+    assert len(items) == 1
+    assert items[0].index == 0
+    assert items[0].item_id == "approval_mcp_123:0"
 
 
 async def test_runtime_worker_projects_native_mcp_interrupt_to_card_event() -> None:
@@ -2430,11 +2461,14 @@ async def test_runtime_worker_projects_native_mcp_interrupt_to_card_event() -> N
         if event.event_type == "approval_requested"
     ]
     assert len(approval_events) == 1
-    assert approval_events[0].payload["approval_id"] == "approval_native_123"
+    # PR #43 — per-item approval_id always follows ``<batch_id>:<index>``.
+    assert approval_events[0].payload["approval_id"] == "approval_native_123:0"
     assert approval_events[0].payload["tool_name"] == "clickup_filter_tasks"
+    assert approval_events[0].payload["batch_id"] == "approval_native_123"
+    assert approval_events[0].payload["batch_index"] == 0
     approval = await store.get_approval_request(
         org_id="org_123",
-        approval_id="approval_native_123",
+        approval_id="approval_native_123:0",
     )
     assert approval is not None
     assert approval.metadata["native_interrupt_id"] == "approval_native_123"

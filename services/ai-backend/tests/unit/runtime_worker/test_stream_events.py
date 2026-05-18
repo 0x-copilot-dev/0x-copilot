@@ -280,12 +280,17 @@ def test_native_mcp_interrupt_payloads_project_to_approval() -> None:
         {
             "api_event_type": "approval_requested",
             "event_type": "approval_requested",
-            "approval_id": "interrupt_123",
-            "action_id": "interrupt_123",
+            # PR #43 — N=1 and N=N follow the same code path. The old
+            # bare-interrupt_id special case for single-action interrupts is
+            # gone; every item id now follows ``<batch_id>:<index>``.
+            "approval_id": "interrupt_123:0",
+            "action_id": "interrupt_123:0",
             "approval_kind": "mcp_tool",
             "native_interrupt_id": "interrupt_123",
             "action_index": 0,
             "action_count": 1,
+            "batch_id": "interrupt_123",
+            "batch_index": 0,
             "server_name": "mcp_clickup_com",
             "display_name": "ClickUp",
             "tool_name": "list_tasks",

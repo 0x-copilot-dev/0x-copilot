@@ -11,6 +11,11 @@ from agent_runtime.api.constants import Keys, Values as ApiValues
 from agent_runtime.api.events import RuntimeEventProducer
 from agent_runtime.capabilities.mcp.constants import Values as McpValues
 from agent_runtime.execution.contracts import StreamEventSource
+from agent_runtime.persistence.records import (
+    ApprovalBatchItemRecord,
+    ApprovalBatchRecord,
+    ApprovalBatchSpec,
+)
 from runtime_api.schemas import (
     ApprovalRequestRecord,
     RunRecord,
@@ -62,6 +67,13 @@ class _Fields:
     GRANT_OPTIONS = "grant_options"
     ACTION_INDEX = "action_index"
     ACTION_COUNT = "action_count"
+    # PR #43 — ApprovalBatch projection. Each ``approval_requested`` event
+    # carries the typed ``batch_id`` + ``batch_index`` so the frontend can
+    # group the per-item cards by batch (and a future PR can add an
+    # "approve all" affordance). Backward-compatible: existing FE handlers
+    # ignore unknown keys.
+    BATCH_ID = "batch_id"
+    BATCH_INDEX = "batch_index"
     # Persisted on the approval record's metadata so the resolution handler
     # can detect subagent-scoped pauses without rescanning the event log.
     # Mirrors the envelope-level field.
@@ -176,6 +188,14 @@ class StreamOrchestrator:
         )
 
         native_payloads = self.native_interrupt_payloads(run, data)
+        # PR #43 — Insert the ApprovalBatch + N items atomically BEFORE emitting
+        # any per-item ``approval_requested`` event. The batch is the lock
+        # target for the worker's resume gate; per-item rows + per-item events
+        # carry batch_id/batch_index so the resume handler can read the batch
+        # state.
+        await self._insert_approval_batch_for_payloads(
+            run=run, payloads=native_payloads
+        )
         for payload in native_payloads:
             event_type = StreamMessageParser.api_event_type(payload)
             if event_type is None:
@@ -201,7 +221,20 @@ class StreamOrchestrator:
         if native_payloads:
             return
 
-        for payload in StreamMessageParser.explicit_api_payloads(data):
+        explicit_payloads = tuple(StreamMessageParser.explicit_api_payloads(data))
+        # Explicit (non-native) approval payloads also belong to a batch — they
+        # are emitted by tools that produce their own approval cards (e.g. the
+        # draft-send tool). Each such payload is its own 1-item batch with
+        # batch_id == approval_id. Stamping batch_id/batch_index here before
+        # the per-item event keeps the projection consistent for the FE.
+        stamped_explicit = tuple(
+            self._stamp_batch_fields_on_explicit_payload(payload)
+            for payload in explicit_payloads
+        )
+        await self._insert_approval_batch_for_payloads(
+            run=run, payloads=stamped_explicit
+        )
+        for payload in stamped_explicit:
             event_type = StreamMessageParser.api_event_type(payload)
             if event_type is None:
                 continue
@@ -359,6 +392,120 @@ class StreamOrchestrator:
             )
         )
 
+    async def _insert_approval_batch_for_payloads(
+        self,
+        *,
+        run: RunRecord,
+        payloads: Sequence[Mapping[str, object]],
+    ) -> None:
+        """Group ``approval_requested`` payloads by ``batch_id`` and insert each ApprovalBatch atomically.
+
+        Called once per stream chunk, BEFORE any per-item event is emitted.
+        ``mcp_auth_required`` payloads also produce a batch (size 1) so the
+        resume gate logic is uniform across approval kinds.
+
+        Idempotent on ``batch_id`` — a stream replay that re-projects the same
+        interrupt is a no-op at the persistence layer.
+        """
+        by_batch: dict[str, list[Mapping[str, object]]] = {}
+        for payload in payloads:
+            event_type = StreamMessageParser.api_event_type(payload)
+            if event_type not in {
+                RuntimeApiEventType.APPROVAL_REQUESTED,
+                RuntimeApiEventType.MCP_AUTH_REQUIRED,
+            }:
+                continue
+            batch_id = StreamTextHelper.extract(payload.get(_Fields.BATCH_ID))
+            if batch_id is None:
+                continue
+            by_batch.setdefault(batch_id, []).append(payload)
+
+        for batch_id, items_for_batch in by_batch.items():
+            # Items are emitted in interrupt order, but sort defensively so the
+            # spec validator's ``0..N-1 contiguous`` check passes regardless of
+            # caller ordering.
+            ordered = sorted(
+                items_for_batch,
+                key=lambda payload: self._coerce_batch_index(
+                    payload.get(_Fields.BATCH_INDEX)
+                ),
+            )
+            item_records: list[ApprovalBatchItemRecord] = []
+            for payload in ordered:
+                item_id = StreamTextHelper.extract(payload.get(Keys.Field.APPROVAL_ID))
+                if item_id is None:
+                    return
+                item_records.append(
+                    ApprovalBatchItemRecord(
+                        item_id=item_id,
+                        batch_id=batch_id,
+                        index=self._coerce_batch_index(
+                            payload.get(_Fields.BATCH_INDEX)
+                        ),
+                    )
+                )
+            batch = ApprovalBatchRecord(
+                batch_id=batch_id,
+                run_id=run.run_id,
+                org_id=run.org_id,
+            )
+            try:
+                spec = ApprovalBatchSpec.build(batch=batch, items=item_records)
+            except ValueError:
+                # Should not happen — payloads come from
+                # ``native_tool_approval_payloads`` which assigns contiguous
+                # indices. Defensive guard so a malformed payload never blocks
+                # the per-item event emit (the FE still renders the cards).
+                _logger.exception(
+                    "ApprovalBatchSpec.build failed; skipping batch insert",
+                    extra={"batch_id": batch_id, "run_id": run.run_id},
+                )
+                continue
+            await self.event_producer.persistence.insert_approval_batch(spec=spec)
+
+    @staticmethod
+    def _coerce_batch_index(value: object) -> int:
+        """Coerce a payload's ``batch_index`` value to an int, defaulting to 0.
+
+        Defensive against payloads that round-tripped through JSON serialisers
+        where an int became a string. The fan-out always emits ints; this is
+        purely a safety belt for replay paths.
+        """
+        if isinstance(value, bool):
+            # ``bool`` is a subclass of int but should never be a batch index.
+            return 0
+        if isinstance(value, int):
+            return value
+        if isinstance(value, str):
+            try:
+                return int(value)
+            except ValueError:
+                return 0
+        return 0
+
+    @classmethod
+    def _stamp_batch_fields_on_explicit_payload(
+        cls,
+        payload: Mapping[str, object],
+    ) -> dict[str, object]:
+        """Ensure an explicit approval payload carries ``batch_id`` and ``batch_index``.
+
+        Explicit (non-native) approval payloads come from tools that emit their
+        own approval cards (e.g. ``draft_send``). They are always single-item
+        batches; ``batch_id == approval_id`` and ``batch_index == 0``. Stamping
+        the fields here keeps every ``approval_requested`` event uniformly
+        shaped so the FE can group by batch_id without branching on source.
+        """
+        normalized: dict[str, object] = dict(payload)
+        if _Fields.BATCH_ID not in normalized:
+            approval_id = StreamTextHelper.extract(
+                normalized.get(Keys.Field.APPROVAL_ID)
+            ) or StreamTextHelper.extract(normalized.get(_Fields.ACTION_ID))
+            if approval_id is not None:
+                normalized[_Fields.BATCH_ID] = approval_id
+        normalized.setdefault(_Fields.BATCH_INDEX, 0)
+        return normalized
+
     async def append_native_interrupt_events(
         self,
         *,
@@ -368,7 +515,10 @@ class StreamOrchestrator:
         """Emit events for each native LangGraph interrupt in ``value``; returns ``True`` if any were emitted."""
         namespace = StreamNamespace(())
         did_append = False
-        for payload in self.native_interrupt_payloads(run, value):
+        payloads = self.native_interrupt_payloads(run, value)
+        # PR #43 — same batch-insertion contract as ``append_activity_events``.
+        await self._insert_approval_batch_for_payloads(run=run, payloads=payloads)
+        for payload in payloads:
             event_type = StreamMessageParser.api_event_type(payload)
             if event_type is None:
                 continue
@@ -556,6 +706,11 @@ class StreamOrchestrator:
         )
         normalized.setdefault(Keys.Field.APPROVAL_ID, interrupt_id)
         normalized.setdefault(Keys.Field.APPROVAL_KIND, "mcp_auth")
+        # PR #43 — single-action interrupts still belong to a batch of size 1.
+        # batch_id is the interrupt_id, batch_index is 0. The same projection
+        # rule applies as for multi-action MCP tool batches.
+        normalized.setdefault(_Fields.BATCH_ID, interrupt_id)
+        normalized.setdefault(_Fields.BATCH_INDEX, 0)
         return normalized
 
     @classmethod
@@ -589,6 +744,10 @@ class StreamOrchestrator:
         )
         normalized.setdefault(Keys.Field.APPROVAL_ID, interrupt_id)
         normalized[Keys.Field.APPROVAL_KIND] = ApiValues.ApprovalKind.ASK_A_QUESTION
+        # PR #43 — ask_a_question is a single-action interrupt; the batch has
+        # one item with index 0.
+        normalized.setdefault(_Fields.BATCH_ID, interrupt_id)
+        normalized.setdefault(_Fields.BATCH_INDEX, 0)
         return normalized
 
     @classmethod
@@ -633,9 +792,14 @@ class StreamOrchestrator:
             display_name = cls._connector_display_name(server_name)
             action_label = cls._connector_action_name(tool_name)
             read_only = cls._connector_action_is_read_only(tool_name)
-            approval_id = (
-                interrupt_id if len(action_requests) == 1 else f"{interrupt_id}:{index}"
-            )
+            # PR #43 — ApprovalBatch projection.
+            #
+            # The item_id format is the SAME for every batch size: a
+            # ``<batch_id>:<index>`` suffix. The old N==1 special case
+            # ("use the bare interrupt_id when there is only one action")
+            # hid the batch identity in a string and caused the multi-tool
+            # resume crash — N=1 and N=N now follow the same code path.
+            approval_id = f"{interrupt_id}:{index}"
             allowed_decisions = review_configs.get(action_name, ())
             risk_level = "low" if read_only else "medium"
             structured = cls._mcp_approval_structured(
@@ -656,6 +820,11 @@ class StreamOrchestrator:
                     _Fields.NATIVE_INTERRUPT_ID: interrupt_id,
                     _Fields.ACTION_INDEX: index,
                     _Fields.ACTION_COUNT: len(action_requests),
+                    # PR #43 — typed batch membership. The batch_id is the
+                    # interrupt_id (1:1 with a LangGraph interrupt); the index
+                    # is the typed position inside action_requests.
+                    _Fields.BATCH_ID: interrupt_id,
+                    _Fields.BATCH_INDEX: index,
                     _Fields.SERVER_NAME: server_name,
                     _Fields.DISPLAY_NAME: display_name,
                     _Fields.TOOL_NAME: tool_name,

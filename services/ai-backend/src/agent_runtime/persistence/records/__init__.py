@@ -1,5 +1,14 @@
 """Durable persistence records grouped by aggregate."""
 
+from agent_runtime.persistence.records.approval_batches import (
+    ApprovalBatchItemRecord,
+    ApprovalBatchRecord,
+    ApprovalBatchSpec,
+    ApprovalBatchStatus,
+    BatchItemDecision,
+    BatchOutcomeStatus,
+    BatchTransitionOutcome,
+)
 from agent_runtime.persistence.records.approvals import PersistenceApprovalRequestRecord
 from agent_runtime.persistence.records.audit import AuditLogRecord
 from agent_runtime.persistence.records.budgets import (
@@ -110,6 +119,13 @@ __all__ = [
     "AsyncTaskRecord",
     "SubagentResultRecord",
     "ToolInvocationRecord",
+    "ApprovalBatchItemRecord",
+    "ApprovalBatchRecord",
+    "ApprovalBatchSpec",
+    "ApprovalBatchStatus",
+    "BatchItemDecision",
+    "BatchOutcomeStatus",
+    "BatchTransitionOutcome",
     "PersistenceApprovalRequestRecord",
     "CompressionEventRecord",
     "CapabilitySnapshotRecord",

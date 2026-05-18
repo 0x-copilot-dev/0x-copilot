@@ -33,6 +33,13 @@ from agent_runtime.persistence.encryption import (
 from agent_runtime.persistence.pool_metrics import PoolMetrics
 from enterprise_audit_chain import AuditChainSigner
 from agent_runtime.persistence.records import (
+    ApprovalBatchItemRecord,
+    ApprovalBatchRecord,
+    ApprovalBatchSpec,
+    ApprovalBatchStatus,
+    BatchItemDecision,
+    BatchOutcomeStatus,
+    BatchTransitionOutcome,
     BudgetEnforcement,
     BudgetPeriod,
     BudgetRecord,
@@ -77,6 +84,7 @@ from runtime_adapters.base import (
 from runtime_api.http.errors import RuntimeApiError
 from runtime_api.schemas import (
     AgentRunStatus,
+    ApprovalDecision,
     ApprovalDecisionRecord,
     ApprovalRequestRecord,
     ConversationRecord,
@@ -1618,6 +1626,307 @@ class PostgresRuntimeApiStore:
             )
             or 0,
         )
+
+    # ------------------------------------------------------------------
+    # ApprovalBatch — first-class entity (PR #43).
+    #
+    # The batch row is the lock target for the atomic "record decision +
+    # maybe flip to RESUMING" primitive. ``SELECT ... FOR UPDATE`` on the
+    # batch row inside a single transaction with the item update and the
+    # conditional status flip guarantees exactly-once ``PENDING -> RESUMING``
+    # under concurrent decision callers.
+    # ------------------------------------------------------------------
+
+    async def insert_approval_batch(
+        self,
+        *,
+        spec: ApprovalBatchSpec,
+    ) -> ApprovalBatchRecord:
+        """Insert one batch row plus its ordered items in a single transaction.
+
+        Idempotent on ``batch_id``: a retry returns the previously-persisted
+        batch unchanged.
+        """
+
+        async with self._tenant_connection(org_id=spec.batch.org_id) as conn:
+            async with conn.transaction():
+                cur = await conn.execute(
+                    """
+                    INSERT INTO runtime_approval_batches (
+                        id, run_id, org_id, status, created_at, expires_at, metadata
+                    )
+                    VALUES (%s, %s, %s, %s, %s, %s, %s)
+                    ON CONFLICT (id) DO NOTHING
+                    RETURNING id
+                    """,
+                    (
+                        spec.batch.batch_id,
+                        spec.batch.run_id,
+                        spec.batch.org_id,
+                        spec.batch.status.value,
+                        spec.batch.created_at,
+                        spec.batch.expires_at,
+                        Jsonb(dict(spec.batch.metadata)),
+                    ),
+                )
+                inserted = await cur.fetchone()
+                if inserted is None:
+                    # Lost the race; return the existing row so the caller
+                    # sees a consistent shape.
+                    return (
+                        await self._fetch_approval_batch(
+                            conn=conn,
+                            org_id=spec.batch.org_id,
+                            batch_id=spec.batch.batch_id,
+                        )
+                        or spec.batch
+                    )
+                for item in spec.items:
+                    await conn.execute(
+                        """
+                        INSERT INTO runtime_approval_batch_items (
+                            id, batch_id, item_index, decision
+                        )
+                        VALUES (%s, %s, %s, %s)
+                        ON CONFLICT (id) DO NOTHING
+                        """,
+                        (
+                            item.item_id,
+                            item.batch_id,
+                            item.index,
+                            item.decision.value if item.decision is not None else None,
+                        ),
+                    )
+        return spec.batch
+
+    async def get_approval_batch(
+        self,
+        *,
+        org_id: str,
+        batch_id: str,
+    ) -> ApprovalBatchRecord | None:
+        """Return one batch scoped by org, or ``None``."""
+
+        async with self._tenant_connection(org_id=org_id) as conn:
+            return await self._fetch_approval_batch(
+                conn=conn, org_id=org_id, batch_id=batch_id
+            )
+
+    @staticmethod
+    async def _fetch_approval_batch(
+        *,
+        conn,
+        org_id: str,
+        batch_id: str,  # type: ignore[no-untyped-def]
+    ) -> ApprovalBatchRecord | None:
+        """Read one batch row inside an open connection."""
+        cur = await conn.execute(
+            """
+            SELECT id, run_id, org_id, status, created_at, expires_at, metadata
+            FROM runtime_approval_batches
+            WHERE id = %s AND org_id = %s
+            """,
+            (batch_id, org_id),
+        )
+        row = await cur.fetchone()
+        if row is None:
+            return None
+        return PostgresRuntimeApiStore._approval_batch_record_from_row(row)
+
+    @staticmethod
+    def _approval_batch_record_from_row(row) -> ApprovalBatchRecord:  # type: ignore[no-untyped-def]
+        """Project a runtime_approval_batches row into the typed record."""
+        return ApprovalBatchRecord(
+            batch_id=row["id"],
+            run_id=row["run_id"],
+            org_id=row["org_id"],
+            status=ApprovalBatchStatus(row["status"]),
+            created_at=row["created_at"],
+            expires_at=row["expires_at"],
+            metadata=row["metadata"] or {},
+        )
+
+    @staticmethod
+    def _approval_batch_item_record_from_row(row) -> ApprovalBatchItemRecord:  # type: ignore[no-untyped-def]
+        """Project a runtime_approval_batch_items row into the typed record."""
+        decision_value = row["decision"]
+        decision = (
+            BatchItemDecision(decision_value) if decision_value is not None else None
+        )
+        return ApprovalBatchItemRecord(
+            item_id=row["id"],
+            batch_id=row["batch_id"],
+            index=row["item_index"],
+            decision=decision,
+        )
+
+    async def get_approval_batch_item(
+        self,
+        *,
+        org_id: str,
+        item_id: str,
+    ) -> ApprovalBatchItemRecord | None:
+        """Return one item joined to its batch's org scope, or ``None``."""
+
+        async with self._tenant_connection(org_id=org_id) as conn:
+            cur = await conn.execute(
+                """
+                SELECT i.id, i.batch_id, i.item_index, i.decision
+                FROM runtime_approval_batch_items i
+                JOIN runtime_approval_batches b ON b.id = i.batch_id
+                WHERE i.id = %s AND b.org_id = %s
+                """,
+                (item_id, org_id),
+            )
+            row = await cur.fetchone()
+        if row is None:
+            return None
+        return self._approval_batch_item_record_from_row(row)
+
+    async def list_items_for_batch(
+        self,
+        *,
+        org_id: str,
+        batch_id: str,
+    ) -> tuple[ApprovalBatchItemRecord, ...]:
+        """Return every item belonging to ``batch_id`` in ``item_index`` order."""
+
+        async with self._tenant_connection(org_id=org_id) as conn:
+            cur = await conn.execute(
+                """
+                SELECT i.id, i.batch_id, i.item_index, i.decision
+                FROM runtime_approval_batch_items i
+                JOIN runtime_approval_batches b ON b.id = i.batch_id
+                WHERE i.batch_id = %s AND b.org_id = %s
+                ORDER BY i.item_index ASC
+                """,
+                (batch_id, org_id),
+            )
+            rows = await cur.fetchall()
+        return tuple(self._approval_batch_item_record_from_row(row) for row in rows)
+
+    async def record_item_decision_and_maybe_lock_batch(
+        self,
+        *,
+        org_id: str,
+        item_id: str,
+        decision: ApprovalDecision,
+    ) -> BatchTransitionOutcome:
+        """Atomic: record the item decision; flip the batch if newly complete.
+
+        Single transaction; ``SELECT ... FOR UPDATE`` on the batch row inside
+        the transaction ensures exactly-one concurrent caller can flip
+        ``PENDING -> RESUMING``.
+        """
+
+        async with self._tenant_connection(org_id=org_id) as conn:
+            async with conn.transaction():
+                # Step 1 — locate the item and its parent batch_id.
+                cur = await conn.execute(
+                    """
+                    SELECT i.id, i.batch_id, i.item_index
+                    FROM runtime_approval_batch_items i
+                    JOIN runtime_approval_batches b ON b.id = i.batch_id
+                    WHERE i.id = %s AND b.org_id = %s
+                    """,
+                    (item_id, org_id),
+                )
+                item_row = await cur.fetchone()
+                if item_row is None:
+                    return BatchTransitionOutcome(status=BatchOutcomeStatus.LOST_RACE)
+                batch_id = item_row["batch_id"]
+                # Step 2 — SELECT ... FOR UPDATE on the batch row. Serialises
+                # concurrent record_item_decision callers for the same batch.
+                cur = await conn.execute(
+                    """
+                    SELECT id, run_id, org_id, status, created_at, expires_at, metadata
+                    FROM runtime_approval_batches
+                    WHERE id = %s AND org_id = %s
+                    FOR UPDATE
+                    """,
+                    (batch_id, org_id),
+                )
+                batch_row = await cur.fetchone()
+                if batch_row is None:
+                    return BatchTransitionOutcome(status=BatchOutcomeStatus.LOST_RACE)
+                batch = self._approval_batch_record_from_row(batch_row)
+                if batch.status is not ApprovalBatchStatus.PENDING:
+                    return BatchTransitionOutcome(status=BatchOutcomeStatus.LOST_RACE)
+                # Step 3 — write the item decision (idempotent on item_id).
+                await conn.execute(
+                    """
+                    UPDATE runtime_approval_batch_items
+                    SET decision = %s
+                    WHERE id = %s
+                    """,
+                    (decision.value, item_id),
+                )
+                # Step 4 — re-read every sibling in index order to test
+                # completeness.
+                cur = await conn.execute(
+                    """
+                    SELECT id, batch_id, item_index, decision
+                    FROM runtime_approval_batch_items
+                    WHERE batch_id = %s
+                    ORDER BY item_index ASC
+                    """,
+                    (batch_id,),
+                )
+                rows = await cur.fetchall()
+                items = tuple(
+                    self._approval_batch_item_record_from_row(row) for row in rows
+                )
+                if any(item.decision is None for item in items):
+                    return BatchTransitionOutcome(
+                        status=BatchOutcomeStatus.BATCH_INCOMPLETE
+                    )
+                # Step 5 — flip PENDING -> RESUMING in the same transaction.
+                await conn.execute(
+                    """
+                    UPDATE runtime_approval_batches
+                    SET status = %s
+                    WHERE id = %s AND org_id = %s AND status = %s
+                    """,
+                    (
+                        ApprovalBatchStatus.RESUMING.value,
+                        batch_id,
+                        org_id,
+                        ApprovalBatchStatus.PENDING.value,
+                    ),
+                )
+                resuming = batch.model_copy(
+                    update={"status": ApprovalBatchStatus.RESUMING}
+                )
+                return BatchTransitionOutcome(
+                    status=BatchOutcomeStatus.READY_TO_RESUME,
+                    batch=resuming,
+                    items=items,
+                )
+
+    async def mark_approval_batch_resolved(
+        self,
+        *,
+        org_id: str,
+        batch_id: str,
+    ) -> None:
+        """Stamp ``RESUMING -> RESOLVED``; idempotent for terminal statuses."""
+
+        async with self._tenant_connection(org_id=org_id) as conn:
+            await conn.execute(
+                """
+                UPDATE runtime_approval_batches
+                SET status = %s
+                WHERE id = %s AND org_id = %s
+                  AND status NOT IN (%s, %s)
+                """,
+                (
+                    ApprovalBatchStatus.RESOLVED.value,
+                    batch_id,
+                    org_id,
+                    ApprovalBatchStatus.RESOLVED.value,
+                    ApprovalBatchStatus.EXPIRED.value,
+                ),
+            )
 
     async def write_audit_log(
         self, *, event_type: str, record: dict[str, object]

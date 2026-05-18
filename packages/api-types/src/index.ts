@@ -1467,6 +1467,14 @@ export interface QuestionOption {
 export interface ApprovalRequestedPayload {
   approval_id: string;
   approval_kind?: "mcp_tool" | "ask_a_question" | string;
+  // PR #43 — ApprovalBatch projection. The batch_id is 1:1 with a single
+  // LangGraph interrupt; batch_index is the typed position within the
+  // interrupt's action_requests list. For single-action interrupts the
+  // batch has size 1 and batch_index is 0. Optional so existing FE
+  // handlers (which don't read batch metadata) keep working; a future
+  // PR can group cards by batch_id and add an "approve all" affordance.
+  batch_id?: string;
+  batch_index?: number;
   server_id?: string;
   server_name?: string;
   display_name?: string;
@@ -1663,6 +1671,11 @@ export interface PresentationUpdatedPayload {
 export interface ApprovalResolvedPayload {
   approval_id: string;
   approval_kind?: "mcp_tool" | "ask_a_question" | string;
+  // PR #43 — mirrors ``ApprovalRequestedPayload.batch_id`` / ``batch_index``
+  // so a client tracking by batch can correlate a resolve event back to the
+  // requesting batch without parsing the approval_id string.
+  batch_id?: string;
+  batch_index?: number;
   // Wire-level status. For approval_kind=ask_a_question this is "answered" or
   // "skipped" (not "approved"/"rejected") so the UI does not have to render a
   // permission-flavored badge for a question card.

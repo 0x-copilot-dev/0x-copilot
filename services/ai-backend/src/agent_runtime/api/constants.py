@@ -19,6 +19,11 @@ class Keys:
         API_EVENT_TYPE = "api_event_type"
         APPROVAL_ID = "approval_id"
         APPROVAL_KIND = "approval_kind"
+        # PR #43 — ApprovalBatch fields projected onto every approval_requested
+        # and approval_resolved event so the FE can group cards by batch and
+        # a future PR can add an "approve all" affordance.
+        BATCH_ID = "batch_id"
+        BATCH_INDEX = "batch_index"
         # Two-stage approval forwarding bookkeeping fields.
         ACTION_SUMMARY = "action_summary"
         CHAIN_PARENT_APPROVAL_ID = "chain_parent_approval_id"
