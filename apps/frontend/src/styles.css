@@ -1309,7 +1309,14 @@ p {
   grid-template-rows: auto minmax(0, 1fr);
   min-width: 0;
   overflow: hidden;
-  padding: 0 var(--space-lg) var(--space-lg);
+  /* Bottom padding zeroed (Phase 9 composer pass): the chat-panel
+   * wrapped a 16px gap below the thread-root + composer, which is what
+   * the user kept reporting as "too much empty space at the bottom".
+   * The demo-frame inside still has its own border + rounded corner —
+   * it now sits flush with the workspace bottom edge, the way the
+   * sidebar already does. Left/right padding kept so the chat column
+   * doesn't kiss the sidebar border. */
+  padding: 0 var(--space-lg) 0;
 }
 
 .aui-chat-header {
