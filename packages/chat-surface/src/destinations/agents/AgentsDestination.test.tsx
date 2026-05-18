@@ -1,114 +1,164 @@
-import type {
-  Session,
-  SseSubscribeOptions,
-  SseSubscription,
-  Transport,
-  TransportCapabilities,
-  TypedRequest,
-} from "@enterprise-search/chat-transport";
-import { fireEvent, render, screen } from "@testing-library/react";
+import { fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { describe, expect, it, vi } from "vitest";
 
-import { RouterProvider } from "../../providers/RouterProvider";
-import { TransportProvider } from "../../providers/TransportProvider";
-import type { NavigateOptions, Router } from "../../routing/router";
-
 import { AgentsDestination } from "./AgentsDestination";
+import { type AgentId, type AgentStub } from "./_agents-stub";
 
-// Wave-0 AgentsDestination is the dignified placeholder. It must not
-// hit the backend — the previous "loading → 405 → Retry" loop was the
-// regression we're fixing. These tests pin both contracts:
-//   1. zero transport.request calls
-//   2. the placeholder copy + bridges are correct and clickable.
+const INSTALLED: AgentStub = {
+  id: "a-installed" as AgentId,
+  name: "Email Drafter",
+  description: "Drafts replies in your tone.",
+  origin: "installed",
+  costTier: "free",
+  skills: ["email-draft"],
+  installed: true,
+};
+const AVAILABLE: AgentStub = {
+  id: "a-available" as AgentId,
+  name: "Slides Builder",
+  description: "Turns a Doc into a presentation.",
+  origin: "available",
+  costTier: "medium",
+  skills: ["slides"],
+  installed: false,
+};
+const CUSTOM: AgentStub = {
+  id: "a-custom" as AgentId,
+  name: "My Tinkerer",
+  description: "Hand-built agent.",
+  origin: "custom",
+  costTier: "high",
+  skills: ["sheets"],
+  installed: true,
+};
 
-type AnyRoute = unknown;
-
-function makeRouter(): Router<AnyRoute> & {
-  readonly navigate: ReturnType<typeof vi.fn>;
-} {
-  const navigate = vi.fn<(route: AnyRoute, opts?: NavigateOptions) => void>();
-  return {
-    current(): AnyRoute {
-      return { screen: "chat", destination: "agents" } as AnyRoute;
-    },
-    navigate,
-    subscribe: () => () => {},
-  };
-}
-
-function makeTransport(): {
-  readonly transport: Transport;
-  readonly requests: ReadonlyArray<TypedRequest>;
-} {
-  const requests: TypedRequest[] = [];
-  const transport: Transport = {
-    request<TRes>(req: TypedRequest): Promise<TRes> {
-      requests.push(req);
-      return Promise.reject(
-        new Error("AgentsDestination must not fetch"),
-      ) as Promise<TRes>;
-    },
-    subscribeServerSentEvents(_opts: SseSubscribeOptions): SseSubscription {
-      return { close: () => undefined };
-    },
-    getSession(): Session {
-      return { bearer: null };
-    },
-    capabilities(): TransportCapabilities {
-      return {
-        substrate: "web",
-        nativeSecretStorage: false,
-        fileSystemAccess: false,
-        clipboardWrite: false,
-        openExternal: false,
-      };
-    },
-  };
-  return { transport, requests };
-}
-
-function renderAgents() {
-  const { transport, requests } = makeTransport();
-  const router = makeRouter();
-  render(
-    <TransportProvider transport={transport}>
-      <RouterProvider router={router}>
-        <AgentsDestination />
-      </RouterProvider>
-    </TransportProvider>,
-  );
-  return { requests, router };
-}
-
-describe("AgentsDestination (Wave-0 placeholder)", () => {
-  it("renders the placeholder and never calls the transport", () => {
-    const { requests } = renderAgents();
-    expect(screen.getByTestId("destination-placeholder")).toBeInTheDocument();
-    expect(
-      screen.getByTestId("destination-placeholder-title"),
-    ).toHaveTextContent("Manage your agents");
-    expect(
-      screen.getByTestId("destination-placeholder-phase"),
-    ).toHaveTextContent("Coming in Phase 8");
-    expect(requests).toHaveLength(0);
+describe("AgentsDestination", () => {
+  it("renders the page header with title and Create custom agent CTA", () => {
+    render(<AgentsDestination />);
+    expect(screen.getByTestId("agents-destination")).toBeInTheDocument();
+    expect(screen.getByTestId("agents-header")).toHaveTextContent("Agents");
+    expect(screen.getByTestId("agents-create-cta")).toBeInTheDocument();
   });
 
-  it("exposes bridges to home and chats", () => {
-    renderAgents();
-    expect(
-      screen.getByTestId("destination-placeholder-bridge-home"),
-    ).toHaveTextContent(/recent agent activity in Home/i);
-    expect(
-      screen.getByTestId("destination-placeholder-bridge-chats"),
-    ).toHaveTextContent(/past runs in your Chats/i);
+  it("renders 3-4 starter recommendations when My agents has nothing installed", () => {
+    render(<AgentsDestination agents={[]} />);
+    expect(screen.getByTestId("agents-starters")).toBeInTheDocument();
+    const cards = screen.getAllByTestId("agent-card");
+    expect(cards.length).toBeGreaterThanOrEqual(3);
+    expect(cards.length).toBeLessThanOrEqual(4);
   });
 
-  it("navigates via the host's chat destination route when a bridge is clicked", () => {
-    const { router } = renderAgents();
-    fireEvent.click(screen.getByTestId("destination-placeholder-bridge-home"));
-    expect(router.navigate).toHaveBeenCalledWith({
-      screen: "chat",
-      destination: "home",
+  it("does not render starters once at least one agent is installed", () => {
+    render(<AgentsDestination agents={[INSTALLED, AVAILABLE]} />);
+    expect(screen.queryByTestId("agents-starters")).toBeNull();
+    // My agents tab → only installed
+    expect(screen.getAllByTestId("agent-card")).toHaveLength(1);
+  });
+
+  it("switching to Available shows only non-installed agents", () => {
+    render(<AgentsDestination agents={[INSTALLED, AVAILABLE, CUSTOM]} />);
+    fireEvent.click(screen.getByTestId("agents-tab-available"));
+    const cards = screen.getAllByTestId("agent-card");
+    expect(cards).toHaveLength(1);
+    expect(cards[0].getAttribute("data-agent-id")).toBe(AVAILABLE.id);
+  });
+
+  it("switching to Custom shows only custom-origin agents", () => {
+    render(<AgentsDestination agents={[INSTALLED, AVAILABLE, CUSTOM]} />);
+    fireEvent.click(screen.getByTestId("agents-tab-custom"));
+    const cards = screen.getAllByTestId("agent-card");
+    expect(cards).toHaveLength(1);
+    expect(cards[0].getAttribute("data-agent-id")).toBe(CUSTOM.id);
+  });
+
+  it("search filters by name and description (case-insensitive)", () => {
+    render(<AgentsDestination agents={[INSTALLED, AVAILABLE, CUSTOM]} />);
+    // Switch to "installed" to see both installed agents (so the search has
+    // something to narrow).
+    fireEvent.click(screen.getByTestId("agents-tab-installed"));
+    expect(screen.getAllByTestId("agent-card")).toHaveLength(2);
+    fireEvent.change(screen.getByTestId("agents-search"), {
+      target: { value: "TINKERER" },
     });
+    const cards = screen.getAllByTestId("agent-card");
+    expect(cards).toHaveLength(1);
+    expect(cards[0].getAttribute("data-agent-id")).toBe(CUSTOM.id);
+  });
+
+  it("renders the empty state when no agents match", () => {
+    render(<AgentsDestination agents={[INSTALLED]} />);
+    fireEvent.click(screen.getByTestId("agents-tab-installed"));
+    fireEvent.change(screen.getByTestId("agents-search"), {
+      target: { value: "nonexistent-agent" },
+    });
+    expect(screen.getByTestId("agents-empty")).toBeInTheDocument();
+  });
+
+  it("Create custom agent CTA fires the callback", () => {
+    const onCreateCustom = vi.fn();
+    render(<AgentsDestination onCreateCustom={onCreateCustom} />);
+    fireEvent.click(screen.getByTestId("agents-create-cta"));
+    expect(onCreateCustom).toHaveBeenCalledTimes(1);
+  });
+
+  it("clicking install on a card fires onToggleInstall with that agent", () => {
+    const onToggleInstall = vi.fn();
+    render(
+      <AgentsDestination
+        agents={[INSTALLED, AVAILABLE]}
+        onToggleInstall={onToggleInstall}
+      />,
+    );
+    fireEvent.click(screen.getByTestId("agents-tab-available"));
+    fireEvent.click(screen.getByTestId("agent-card-install"));
+    expect(onToggleInstall).toHaveBeenCalledWith(
+      expect.objectContaining({ id: AVAILABLE.id }),
+    );
+  });
+
+  it("clicking a starter install fires onToggleInstall with the starter", () => {
+    const onToggleInstall = vi.fn();
+    render(<AgentsDestination agents={[]} onToggleInstall={onToggleInstall} />);
+    // First starter card's install button.
+    const buttons = screen.getAllByTestId("agent-card-install");
+    fireEvent.click(buttons[0]);
+    expect(onToggleInstall).toHaveBeenCalledTimes(1);
+    expect(onToggleInstall.mock.calls[0][0].installed).toBe(false);
+  });
+
+  it("clicking a card body fires onViewDetails (not onToggleInstall)", () => {
+    const onViewDetails = vi.fn();
+    const onToggleInstall = vi.fn();
+    render(
+      <AgentsDestination
+        agents={[INSTALLED]}
+        onViewDetails={onViewDetails}
+        onToggleInstall={onToggleInstall}
+      />,
+    );
+    fireEvent.click(screen.getByTestId("agent-card"));
+    expect(onViewDetails).toHaveBeenCalledWith(
+      expect.objectContaining({ id: INSTALLED.id }),
+    );
+    expect(onToggleInstall).not.toHaveBeenCalled();
+  });
+
+  it("auto-focuses the search input on mount", async () => {
+    render(<AgentsDestination />);
+    await waitFor(() => {
+      expect(document.activeElement).toBe(screen.getByTestId("agents-search"));
+    });
+  });
+
+  it("renders all 5 filter tabs with correct active state", () => {
+    render(<AgentsDestination />);
+    expect(screen.getByTestId("agents-tab-my")).toHaveAttribute(
+      "data-active",
+      "true",
+    );
+    expect(screen.getByTestId("agents-tab-installed")).toBeInTheDocument();
+    expect(screen.getByTestId("agents-tab-available")).toBeInTheDocument();
+    expect(screen.getByTestId("agents-tab-custom")).toBeInTheDocument();
+    expect(screen.getByTestId("agents-tab-by_skill")).toBeInTheDocument();
   });
 });

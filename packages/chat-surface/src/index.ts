@@ -444,7 +444,27 @@ export {
   type SaveToLibraryDefaultKind,
   type SaveToLibrarySource,
 } from "./destinations/library";
-export { AgentsDestination } from "./destinations/agents";
+export {
+  AgentCard,
+  AgentsDestination,
+  AgentsPanel,
+  AGENTS_PANEL_WIDTH,
+  AGENT_COST_LABELS,
+  AGENT_FILTER_LABELS,
+  STARTER_RECOMMENDATIONS,
+  filterAgents,
+  resolveAgentItemRef,
+  searchAgents,
+  type AgentCardProps,
+  type AgentCostTier,
+  type AgentFilter,
+  type AgentItemDisplay,
+  type AgentItemRef,
+  type AgentOrigin,
+  type AgentStub,
+  type AgentsDestinationProps,
+  type AgentsPanelProps,
+} from "./destinations/agents";
 export { ToolsDestination } from "./destinations/tools";
 export {
   ConnectorsDestination,
