@@ -255,18 +255,9 @@ export function HomeRoute({ identity }: HomeRouteProps): ReactElement {
   }
 
   // Loading + ready both render <HomeDestination> + <HomePanel>; the
-  // shells render their own skeleton when `payload` is null.
-  //
-  // TODO(merge — chat-surface P9-B): the v2 chat-surface ships
-  // `HomeDestinationProps` / `HomePanelProps` with a `payload: HomePayload
-  // | null` prop and an `onRetrySection` callback. On `main` today the
-  // chat-surface Phase 2 shell still uses the legacy `homeResponse` prop
-  // backed by `_home-stub.ts` — `passPayload(...)` below routes through
-  // both prop names so the route compiles against either generation;
-  // the orchestrator can drop the legacy spread once P9-B merges.
-  const payload: HomePayload | null =
+  // shells render their own skeleton when `homeResponse` is null.
+  const homeResponse: HomePayload | null =
     state.kind === "ready" ? state.payload : null;
-  const shellProps = passPayload(payload);
 
   return (
     <>
@@ -276,27 +267,15 @@ export function HomeRoute({ identity }: HomeRouteProps): ReactElement {
         data-state={state.kind}
         style={{ height: "100%", width: "100%", overflow: "auto" }}
       >
-        <HomeDestination {...shellProps} />
+        <HomeDestination homeResponse={homeResponse} />
       </section>
       <section
         aria-label="Home context panel"
         data-testid="home-context-panel"
         style={{ display: "contents" }}
       >
-        <HomePanel {...shellProps} />
+        <HomePanel homeResponse={homeResponse} />
       </section>
     </>
   );
-}
-
-/**
- * Compatibility bridge — spreads both `payload` (Phase 9 v2 prop name,
- * assumed for chat-surface P9-B) and `homeResponse` (Phase 2 legacy prop
- * name, still on `main` today). The unused name is ignored by the
- * destination it doesn't apply to. Cast through `Record<string,
- * unknown>` because the two generations have different `HomePayload`
- * shapes — the merge orchestrator drops the legacy name once P9-B lands.
- */
-function passPayload(payload: HomePayload | null): Record<string, unknown> {
-  return { payload, homeResponse: payload };
 }

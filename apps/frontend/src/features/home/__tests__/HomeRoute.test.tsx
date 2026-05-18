@@ -162,10 +162,9 @@ describe("HomeRoute (Phase 9 v2)", () => {
     expect(screen.getByTestId("home-panel-stub")).toBeInTheDocument();
 
     // V2 prop hand-off: route ships the full `HomePayload` to both
-    // shells (the orchestrator drops the legacy `homeResponse` mirror at
-    // merge once chat-surface P9-B lands).
-    expect(homeDestinationProps.current?.payload).toBe(payload);
-    expect(homePanelProps.current?.payload).toBe(payload);
+    // shells via the chat-surface P9-B prop name `homeResponse`.
+    expect(homeDestinationProps.current?.homeResponse).toBe(payload);
+    expect(homePanelProps.current?.homeResponse).toBe(payload);
 
     expect(homeApiMocks.fetchHome).toHaveBeenCalledWith(IDENTITY);
   });
@@ -186,7 +185,7 @@ describe("HomeRoute (Phase 9 v2)", () => {
 
     expect(capture.callCount()).toBe(1);
     expect(
-      (homeDestinationProps.current?.payload as HomePayload).triage,
+      (homeDestinationProps.current?.homeResponse as HomePayload).triage,
     ).toEqual({
       approvals_waiting: 1,
       runs_failed_24h: 0,
@@ -210,7 +209,7 @@ describe("HomeRoute (Phase 9 v2)", () => {
       });
     });
 
-    const merged = homeDestinationProps.current?.payload as HomePayload;
+    const merged = homeDestinationProps.current?.homeResponse as HomePayload;
     expect(merged.triage).toEqual({
       approvals_waiting: 3,
       runs_failed_24h: 1,
