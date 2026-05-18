@@ -3418,25 +3418,37 @@ export type {
 export type { ItemKind, ItemRef, ItemRefSnapshot, SectionResult } from "./refs";
 // === end Phase 0.5 ===
 
-// === Phase 2 Home destination ===
-// Morning-briefing aggregator response. Wire shape is canonical; section
-// composers may ship as stubs until their upstream destinations land.
+// === Phase 9 Home destination ===
+// Morning-briefing aggregator response. Phase 9 redesign supersedes the
+// Phase 2 7-section model: HomePinnedChat, HomeRecentRun, HomeFavoriteTool,
+// HomeFocusItem, HomeUpcomingMeeting, HomeRunStatus, HomeResponse are
+// retired. Section composers may ship as stubs until their upstream
+// destinations land; the wire shape is stable from day one.
 export type {
   HomeActivityKind,
   HomeActivityRow,
-  HomeFavoriteTool,
-  HomeFocusItem,
   HomeGreeting,
-  HomePinnedChat,
-  HomeRecentRun,
-  HomeResponse,
-  HomeUpcomingMeeting,
-  HomeRunStatus,
+  HomePayload,
+  InFlightProject,
+  MeetingTimelineEntry,
+  QuickAction,
+  QuickActionTarget,
+  QuickActionTargetKind,
+  RoutineFireTimelineEntry,
+  RunScheduledTimelineEntry,
+  TimelineEntry,
+  TimelineEntryBase,
+  TimelineEntryKind,
+  TimelineEntryStatus,
   TimeSegment,
+  TodoDueTimelineEntry,
+  TriageCounts,
+  WhatsNewSection,
 } from "./home";
 
-// === Phase 2 Home SSE event envelope ===
-// Live-updated activity feed. Mirrors the existing run-event SSE pattern:
+// === Phase 9 Home SSE event envelope ===
+// Live-updated activity feed for the LiveActivityRail. Mirrors the
+// existing run-event SSE pattern:
 // monotonic ``sequence_no`` per ``(org_id, user_id)`` channel; ``id:`` SSE
 // field carries the sequence so browsers replay via ``Last-Event-ID`` header.
 // Server also accepts ``?after_sequence=N`` query fallback.
@@ -3459,7 +3471,7 @@ export interface HomeActivityEvent {
   readonly row?: _HomeActivityRow;
   readonly created_at: string;
 }
-// === end Phase 2 Home ===
+// === end Phase 9 Home ===
 
 // === Phase 3 Todos destination ===
 // Canonical CRUD + extraction provenance + recurrence + one-level
