@@ -1351,9 +1351,14 @@ p {
 .aui-thread-footer {
   flex-shrink: 0;
   background: var(--color-bg);
+  /* Tightened bottom padding (Phase 9 composer pass): the gap below
+   * the hint row was stacking three paddings (hint internal + composer
+   * outer + footer bottom) into ~31px of dead space. Trimmed footer
+   * bottom from `var(--space-md)` to `var(--space-xs)` so the composer
+   * sits closer to the workspace edge. */
   padding: var(--space-sm)
     max(var(--space-xl), calc((100% - var(--chat-content-width)) / 2))
-    var(--space-md);
+    var(--space-xs);
 }
 
 .aui-planning-indicator {
@@ -2171,9 +2176,13 @@ p {
   font-weight: var(--font-weight-regular);
   gap: 0.5rem;
   line-height: var(--line-height-tight);
-  max-height: 2.25rem;
+  /* Tightened vertical padding (Phase 9): 0.45rem top/bottom was
+   * adding ~14px on top of the composer + footer paddings below. The
+   * hint is auxiliary info — 0.3rem reads as a footer-strip without
+   * crowding the kbd glyphs. */
+  max-height: 2rem;
   overflow: hidden;
-  padding: 0.45rem 0.75rem;
+  padding: 0.3rem 0.75rem 0.25rem;
   transition:
     border-color 160ms ease,
     max-height 160ms ease,
