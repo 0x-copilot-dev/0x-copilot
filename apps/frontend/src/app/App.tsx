@@ -18,6 +18,14 @@ import { useConnectors } from "../features/connectors/useConnectors";
 import { HomeRoute } from "../features/home/HomeRoute";
 import { InboxRoute } from "../features/inbox/InboxRoute";
 import { TodosRoute } from "../features/todos/TodosRoute";
+// PR P6-C — Projects destination data binder. Eager-loaded (vs the lazy
+// destination chunks below) because it follows the same feature-binder
+// pattern as HomeRoute / InboxRoute / TodosRoute and is needed at the
+// shell's destination dispatch — keeping it eager mirrors how those
+// routes are mounted today, which is the single source of truth for
+// "destination owned by a host-side data binder vs the chat-surface
+// placeholder".
+import { ProjectsRoute } from "../features/projects/ProjectsRoute";
 // PR 4.1 — hydrate user profile + preferences once at the shell so the
 // Appearance attributes (data-density, data-reduce-motion, theme/accent)
 // apply on chat too, not only when Settings is open.
@@ -107,7 +115,6 @@ import {
   LibraryDestination,
   LocalStorageKeyValueStore,
   MemoryDestination,
-  ProjectsDestination,
   SecretStorageProvider,
   TeamDestination,
   ToolsDestination,
@@ -131,17 +138,18 @@ import {
   type PortBundle,
 } from "../ports";
 
-// Map every non-chats, non-home, non-todos, non-inbox destination slug
-// to the placeholder component shipped with the chat-surface package.
-// Chats has a dedicated host component (`ChatScreen`) below; Home,
-// Todos, and Inbox have feature-level data binders (`HomeRoute` /
-// `TodosRoute` / `InboxRoute`) that mount the package component
-// themselves — adding any of them here would only confuse the renderer.
+// Map every destination slug WITHOUT a host-side feature-binder to the
+// placeholder component shipped with the chat-surface package. Chats has
+// a dedicated host component (`ChatScreen`); Home, Todos, Inbox,
+// Routines, and Projects have feature-level data binders (`HomeRoute` /
+// `TodosRoute` / `InboxRoute` / `RoutinesRoute` / `ProjectsRoute`) that
+// own their fetch + SSE wiring — adding any of them here would shadow
+// the binder and lose the SSE membership / activity behaviour.
 const NON_CHATS_DESTINATIONS: Readonly<
   Record<
     Exclude<
       ShellDestinationSlug,
-      "chats" | "home" | "todos" | "inbox" | "routines"
+      "chats" | "home" | "todos" | "inbox" | "routines" | "projects"
     >,
     () => ReactElement
   >
@@ -149,7 +157,6 @@ const NON_CHATS_DESTINATIONS: Readonly<
   agents: AgentsDestination,
   library: LibraryDestination,
   tools: ToolsDestination,
-  projects: ProjectsDestination,
   connectors: ConnectorsDestination,
   team: TeamDestination,
   memory: MemoryDestination,
@@ -191,6 +198,26 @@ if (!hasItemRefResolver("inbox_item")) {
     icon: null,
     route: null,
     breadcrumb: "Inbox",
+  }));
+}
+
+// ItemRef resolver registration (cross-audit §3.3) for the `"project"`
+// kind. P6-C — the Projects destination owns this kind; when a
+// cross-destination activity surface (chat / inbox / todos / routines
+// activity) surfaces an `<ItemLink kind="project" id={...} />`, the
+// link resolves to the Projects workspace. The route here uses the
+// chat-surface `ArtifactRoute` `workspace` shape so navigating an
+// ItemLink lands inside the project's workspace pane (sub-PRD §3.4 —
+// the `/projects/<id>` detail surface). Same `hasItemRefResolver`
+// guard pattern as the `"todo"` / `"inbox_item"` registrations above
+// so cross-realm vitest imports don't throw
+// `ItemRefResolverAlreadyRegistered`.
+if (!hasItemRefResolver("project")) {
+  registerItemRefResolver("project", async (id) => ({
+    label: "Project",
+    icon: null,
+    route: { kind: "workspace", workspaceId: id as unknown as string },
+    breadcrumb: "Projects",
   }));
 }
 
@@ -678,6 +705,20 @@ function EnterpriseSearchApp({
         aria-label="routines destination"
       >
         <RoutinesRoute identity={identity} />
+      </section>
+    );
+  } else if (route.destination === "projects") {
+    // P6-C — Projects destination dispatch. The route owns its own
+    // fetch + SSE membership stream (sub-PRD §3.8); the chat-surface
+    // `<ProjectsDestination>` placeholder is no longer mounted here.
+    body = (
+      <section
+        data-testid="destination-outlet"
+        data-destination="projects"
+        style={{ height: "100%", overflow: "auto" }}
+        aria-label="projects destination"
+      >
+        <ProjectsRoute identity={identity} />
       </section>
     );
   } else {
