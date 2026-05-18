@@ -56,6 +56,7 @@ from runtime_api.http.retention_routes import (
     RetentionAdminRouter,
     RetentionMemberRouter,
 )
+from runtime_api.http.agent_usage import AgentUsageApiRouter
 from runtime_api.http.routes import (
     BudgetApiRouter,
     InternalRuntimeApiRouter,
@@ -201,6 +202,9 @@ class RuntimeApiAppFactory:
 
         app.include_router(RuntimeApiRouter.create_router())
         app.include_router(UsageApiRouter.create_router())
+        # P8-A4 — per-agent usage aggregation (read-only over the canonical
+        # ``runtime_model_call_usage`` tracker; cross-audit §5.5 invariant).
+        app.include_router(AgentUsageApiRouter.create_router())
         app.include_router(BudgetApiRouter.create_router())
         # P3-A2 — todo extraction proposals (list/accept/reject).
         app.include_router(TodoExtractionsApiRouter.create_router())

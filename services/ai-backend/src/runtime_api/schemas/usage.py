@@ -208,6 +208,34 @@ class UsageOrgPurposeResponse(RuntimeContract):
     cold_start_fallback: bool = False
 
 
+class AgentUsageResponse(RuntimeContract):
+    """Response shape for ``GET /v1/usage/org/agent/{agent_id}`` (P8-A4).
+
+    Read-only projection over the existing ``runtime_model_call_usage``
+    table joined by ``run_id`` to the run records carrying ``agent_id``
+    on ``runtime_context.trace_metadata.agent_id``. Per cross-audit
+    §5.5, this endpoint must not write to any usage table and must not
+    introduce a parallel tracker — every figure here is summed from
+    the canonical per-LLM-call rows.
+
+    ``cost_breakdown_by_purpose`` maps the ``Purpose`` StrEnum string
+    value (``main`` / ``tool_planning`` / ``tool_interpretation`` /
+    ``subagent_work`` / ``context_compression``) to the summed
+    micro-USD cost for that bucket. Models without a priced row in
+    ``model_pricing`` contribute ``0`` (their cost is ``NULL`` in
+    the per-call rows).
+    """
+
+    agent_id: str
+    period: UsagePeriodWindow
+    currency: Literal["USD"] = "USD"
+    run_count: NonNegativeInt = 0
+    token_in: NonNegativeInt = 0
+    token_out: NonNegativeInt = 0
+    cost_usd_micro: int = 0
+    cost_breakdown_by_purpose: dict[str, int] = Field(default_factory=dict)
+
+
 class RunUsageBreakdown(RuntimeContract):
     """Response shape for ``GET /v1/usage/runs/{run_id}``.
 

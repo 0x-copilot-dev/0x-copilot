@@ -129,6 +129,7 @@ class Keys:
         USAGE_ORG = "usage_org"
         USAGE_ORG_SUBAGENTS = "usage_org_subagents"
         USAGE_ORG_PURPOSE = "usage_org_purpose"
+        USAGE_ORG_AGENT = "usage_org_agent"
         # Budget endpoints.
         BUDGETS_LIST = "budgets_list"
         BUDGETS_CREATE = "budgets_create"

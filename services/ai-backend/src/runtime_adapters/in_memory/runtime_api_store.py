@@ -1332,6 +1332,39 @@ class InMemoryRuntimeApiStore:
             )
         )
 
+    async def list_run_ids_for_agent(
+        self,
+        *,
+        org_id: str,
+        agent_id: str,
+        start: datetime,
+        end: datetime,
+    ) -> Sequence[str]:
+        """Return run IDs whose runtime context attributes the run to ``agent_id``.
+
+        Strictly tenant-scoped (``org_id`` filter applied first) and
+        windowed on ``created_at``. Reads ``agent_id`` off the existing
+        ``RunRecord.runtime_context.trace_metadata`` JSON field — no new
+        column, no new write path.
+        """
+
+        if not agent_id:
+            return ()
+        matches: list[tuple[datetime, str]] = []
+        for run in self.runs.values():
+            if run.org_id != org_id:
+                continue
+            if not (start <= run.created_at <= end):
+                continue
+            trace_metadata = getattr(run.runtime_context, "trace_metadata", None)
+            if not isinstance(trace_metadata, dict):
+                continue
+            run_agent_id = trace_metadata.get("agent_id")
+            if run_agent_id == agent_id:
+                matches.append((run.created_at, run.run_id))
+        matches.sort(key=lambda entry: entry[0], reverse=True)
+        return tuple(run_id for _, run_id in matches)
+
     async def list_audit_log_events(
         self,
         *,

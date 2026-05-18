@@ -2626,6 +2626,36 @@ class PostgresRuntimeApiStore:
             rows = await cur.fetchall()
         return tuple(self._model_call_record(r) for r in rows)
 
+    async def list_run_ids_for_agent(
+        self,
+        *,
+        org_id: str,
+        agent_id: str,
+        start: datetime,
+        end: datetime,
+    ) -> Sequence[str]:
+        """Return run IDs whose ``runtime_context_json -> 'trace_metadata' -> 'agent_id'`` matches.
+
+        Read-only. Tenant-scoped via ``_tenant_connection`` (RLS-enforced).
+        ``agent_id`` lives inside the existing ``runtime_context_json``
+        JSONB column under ``trace_metadata.agent_id`` — no new column,
+        no parallel store, no new tracker (cross-audit §5.5).
+        """
+
+        if not agent_id:
+            return ()
+        sql = """
+            SELECT id FROM agent_runs
+             WHERE org_id = %s
+               AND created_at BETWEEN %s AND %s
+               AND runtime_context_json #>> '{trace_metadata,agent_id}' = %s
+             ORDER BY created_at DESC
+        """
+        async with self._tenant_connection(org_id=org_id) as conn:
+            cur = await conn.execute(sql, (org_id, start, end, agent_id))
+            rows = await cur.fetchall()
+        return tuple(str(row["id"]) for row in rows)
+
     @reader
     async def list_audit_log_events(
         self,

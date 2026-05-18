@@ -502,6 +502,28 @@ class PersistencePort(Protocol):
         cross-tenant read, matching ``query_run_usage_for_range``.
         """
 
+    async def list_run_ids_for_agent(
+        self,
+        *,
+        org_id: str,
+        agent_id: str,
+        start: datetime,
+        end: datetime,
+    ) -> Sequence[str]:
+        """Return run IDs whose runtime context attributes the run to ``agent_id``.
+
+        Read-only projection. The ``agent_id`` is sourced from
+        ``runtime_context.trace_metadata['agent_id']`` (a JsonObject
+        already persisted on every run). Strict tenant scoping is
+        enforced — runs from other orgs are never returned. The
+        ``[start, end]`` window filters on ``created_at`` so callers
+        can bound the live-scan cost. Used by
+        ``/v1/usage/org/agent/{agent_id}`` (P8-A4) to aggregate against
+        the canonical ``runtime_model_call_usage`` table — no new
+        tracker, no parallel store (cross-audit §5.5 single-tracker
+        invariant).
+        """
+
     async def list_audit_log_events(
         self,
         *,
