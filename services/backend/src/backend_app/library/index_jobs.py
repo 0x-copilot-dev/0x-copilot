@@ -37,7 +37,12 @@ def _job_id() -> str:
 
 
 IndexJobStatusLiteral = Literal["pending", "indexing", "indexed", "failed"]
-IndexJobTargetKindLiteral = Literal["file", "page", "dataset"]
+IndexJobTargetKindLiteral = Literal["file", "page", "dataset", "memory"]
+# ``memory`` is P12-A3 (team-memory-cmdk-prd §3.2 / §5.1). Memory rows ride
+# the same ``library_embeddings`` table with ``target_kind="memory"`` —
+# there is intentionally no parallel ``memory_embeddings`` table (DRY per
+# the sub-PRD §5.1). The indexer worker handles file/page/dataset today;
+# the memory-aware extractor lands alongside Memory's own indexer.
 
 
 # ---------------------------------------------------------------------------
