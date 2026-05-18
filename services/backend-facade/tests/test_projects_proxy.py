@@ -395,6 +395,9 @@ class TestProjectsProxy:
         assert call["url"].endswith("/v1/projects/prj_1/transfer")
         assert call["json"]["new_owner_user_id"] == "usr_bob"
 
+    @pytest.mark.skip(
+        reason="Admin force-transfer endpoint deferred per user override 2026-05-18 (security review pending)"
+    )
     def test_force_transfer_proxies(self, monkeypatch) -> None:
         captured: list[dict[str, object]] = []
 
