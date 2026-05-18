@@ -602,3 +602,48 @@ Decisions are binding for P5-A backend + P5-B chat-surface. Sub-PRD `destination
 **Token-usage attribution for Routines (cross-ref §5.5):** every routine fire is wrapped as a regular ai-backend run with `run.source = { kind: "routine", routine_id }`. Existing `runtime_model_call_usage` rows attribute correctly via the run dimension; no parallel token-usage path. Aggregating "what did this routine cost this month" becomes `WHERE run.source.routine_id = $1 AND org_id = $2`.
 
 **Code-routines wire-shape preservation (deviation note, Q1):** the user explicitly confirmed implementation in a future wave, NOT cancellation. P5-A's `packages/api-types/src/routines.ts` MUST include the forwards-compatible `code?: { repo_ref: ItemRef, env_ref: ItemRef, entry: string }` field on the routine wire shape, even though the executor + sandbox land in Wave 6. Schema gates this field behind a feature flag at the backend; the wire shape is stable.
+
+### 9.8 Phase 6 Projects — 9 questions resolved (2026-05-17)
+
+Decisions binding for P6-A (backend) + P6-B (chat-surface) + P6.5 (extensions). Sub-PRD `destinations/projects-prd.md` and `destinations/projects-extensions-prd.md` enumerate the questions; this section records the **user's explicit overrides** to the sub-PRD recommendations.
+
+| #   | Question                                                                     | Decision                                                                                                                                                                                                                                                                                                       |
+| --- | ---------------------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| 1   | Admin-level project ownership transfer / forced reassignment on deactivation | **Deferred indefinitely.** User reasoning verbatim: "Wtf is admin force-transfer endpoint? That seems so naive and security hazard to me." Tenant admin actions affecting per-user product state require explicit audit + approval flow; not in scope until W6+ compliance review surfaces a real requirement. |
+| 2   | Inheritance for "in-progress" chats not filed under a project                | **No inference.** Existing chats are NOT retroactively assigned to projects. A chat acquires a project only when the user explicitly files it under one. Sub-PRD's "infer from connector-overlap" recommendation rejected.                                                                                     |
+| 3   | Inheritance scope for `default_connector_allowlist`                          | **Create-time inheritance only.** New routines / chats filed under a project inherit at create-time; subsequent project allowlist edits do NOT cascade (per-artifact override wins). Single source of truth: the project's allowlist + the artifact's override snapshot.                                       |
+| 4   | Archive a project that has running chats / routines                          | **Cannot archive while anything is running.** Implementation rule: **one orchestrator (single source of truth)** owns the "is anything live?" check across chats + runs + routines; the archive endpoint queries that one source. Sub-PRD's "soft archive + warn" rejected.                                    |
+| 5   | Editor role                                                                  | **In scope — `viewer` / `editor` / `owner` triad lands now.** Per-user role on `project_members`; ACL helper `is_project_member(user, project, min_role)` is the single canonical check.                                                                                                                       |
+| 6   | Templates / forking                                                          | **In scope now (Phase 6.5).** A project can be saved as a template and forked. `project_templates` table + `POST /v1/project-templates/{id}/fork`. Brand: `ProjectTemplateId`.                                                                                                                                 |
+| 7   | Storage layout question (sub-PRD §6.x)                                       | **Out of scope.** Whatever P6-A1 (already landed) chose stands.                                                                                                                                                                                                                                                |
+| 8   | (sub-PRD-specific implementation detail)                                     | **Out of scope.**                                                                                                                                                                                                                                                                                              |
+| 9   | (sub-PRD-specific implementation detail)                                     | **No strong preference — ship what's simplest.**                                                                                                                                                                                                                                                               |
+
+**Single-orchestrator note (Q4 implementation):** the "is anything live?" check is a service call to the `ai-backend` `runtime_api` (it owns `runs` + `conversations` lifecycle) — `backend` does NOT keep a parallel projection. P6 archive endpoint is `services/backend-facade/.../projects.py::archive` which:
+
+1. Asks `backend` for project metadata + permission check
+2. Asks `ai-backend` `/internal/v1/runs?project_id=...&status=running` for live runs
+3. Asks `backend` for active routines under the project
+4. Refuses with 409 + JSON body listing the blockers if any are live.
+
+This preserves the boundary (no cross-service DB reads) while keeping the source of truth single per fact.
+
+### 9.9 Phase 7 Library — sub-PRD recommendations accepted as binding (2026-05-17)
+
+The user delegated Phase 7 question resolution to the orchestrator ("Make the best choices and finish"). All 12 open sub-PRD questions in `destinations/library-prd.md` §15 resolved by accepting the sub-PRD's stated recommendations. Notable:
+
+- **Save-to-Library popover** is the universal entry point (every destination's overflow menu); no per-destination duplication of the picker UI.
+- **Three-stage upload** (grant → PUT signed URL → finalize) is the only path that puts bytes on disk; bytes never proxy through the API. Mirrors the audited pattern in cross-audit §3.6.
+- **Page editor** is markdown-first with WYSIWYG-on-rendering; no rich-text editor in P7. Reuses the chat composer's markdown rendering.
+- **Retrieval (BM25 + pgvector + RRF + embeddings)** deferred to **Phase 7.5** (P7-A3 stalled mid-implementation). The wire shape is forward-compatible: `GET /v1/library/search?q=...` returns `LibrarySearchHit[]` with score + scope_metadata; Phase 7.5 just plugs in the real scorer.
+- **`Purpose.LIBRARY_RETRIEVAL` and `Purpose.LIBRARY_INDEXING`** extend the runtime tracker (§5.5) — Phase 7.5 wires the embedding model through the canonical `build_chat_model` path. TU-1 invariant preserved.
+
+### 9.10 Phase 8 Agents — sub-PRD recommendations accepted as binding (2026-05-17)
+
+Same orchestrator-delegated resolution as §9.9. All 9 open sub-PRD questions in `destinations/agents-prd.md` resolved by accepting the sub-PRD's stated recommendations. Notable:
+
+- **Agent versioning** is **immutable-snapshot per published version** + `current_version_id` pointer. Edits create a new version; running invocations pin to their resolved version_id at run start. Matches the cross-audit §5.3 "snapshot-pin" rule already used by Routines (Q11).
+- **Fork** copies the full agent shape (instructions, tool grants, MCP install refs, skills) but generates a new `agent_id` + clears `current_version_id` so the fork starts as draft.
+- **Agent usage chart** is a **READ-ONLY aggregation** over `runtime_run_usage` + `runtime_model_call_usage` (§5.5) — no parallel usage tracker.
+- **Gallery filter axes** are App-Store-shaped (My / Installed / Available / Custom / By skill); cross-audit §1.5 FilterTabs primitive handles the rendering.
+- **Editor permission model**: only the owner (creator) edits a custom agent today; workspace-level admin edits + multi-author editing deferred to Wave 6.
