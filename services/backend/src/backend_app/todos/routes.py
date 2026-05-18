@@ -18,6 +18,7 @@ empty axes.
 
 from __future__ import annotations
 
+from datetime import datetime, timezone
 from typing import Any
 
 from enterprise_service_contracts.scopes import RUNTIME_USE
@@ -112,6 +113,30 @@ class BulkUpdateTodosResponseModel(BaseModel):
     model_config = ConfigDict(extra="forbid")
     affected: int
     correlation_id: str
+
+
+class MaterializeDueSeriesRequest(BaseModel):
+    """Body for ``POST /internal/v1/todos/series/materialize-due``.
+
+    ``now`` is the materializer's wall clock — an ISO-8601 instant. The
+    worker (``todo_recurrence_materializer``) injects ``datetime.now(UTC)``
+    on each tick; tests inject a fixed instant for deterministic claim
+    behaviour.
+    """
+
+    model_config = ConfigDict(extra="forbid")
+
+    now: str = Field(min_length=1)
+
+
+class MaterializeDueSeriesResponse(BaseModel):
+    """Response shape consumed by ``MaterializeOutcome`` on the worker."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    materialized: int = Field(ge=0)
+    skipped_duplicates: int = Field(ge=0)
+    series_processed: int = Field(ge=0)
 
 
 # ---------------------------------------------------------------------------
@@ -301,10 +326,69 @@ def register_todos_routes(app: FastAPI, *, service: TodosService) -> None:
             affected=affected, correlation_id=payload.correlation_id
         )
 
+    @app.post(
+        "/internal/v1/todos/series/materialize-due",
+        response_model=MaterializeDueSeriesResponse,
+    )
+    def materialize_due_series(
+        request: Request,
+        payload: MaterializeDueSeriesRequest,
+    ) -> MaterializeDueSeriesResponse:
+        """System-level recurrence materialization tick.
+
+        Called only by the ai-backend ``todo_recurrence_materializer``
+        worker. Service-token gated (``internal_scoped_identity`` raises
+        401 in production without ``x-enterprise-service-token`` +
+        ``x-enterprise-org-id`` + ``x-enterprise-user-id``). The verified
+        identity is recorded for audit ("actor=system" producer), but
+        materialised rows derive ``tenant_id`` + ``owner_user_id`` from
+        the per-series record — caller-supplied identity cannot influence
+        which tenant gets a new Todo.
+        """
+
+        # Gate: service-token + identity headers required. We do NOT
+        # use this org/user to pick a tenant — the rows are written
+        # under each series's stored tenant_id (see service comments).
+        BackendServiceAuthenticator.internal_scoped_identity(
+            request,
+            org_id="system",
+            user_id="system",
+        )
+
+        try:
+            now = _parse_iso_instant(payload.now)
+        except ValueError as exc:
+            raise HTTPException(status.HTTP_400_BAD_REQUEST, "invalid_now_iso") from exc
+
+        outcome = service.materialize_due_series(now=now)
+        return MaterializeDueSeriesResponse(
+            materialized=outcome.materialized,
+            skipped_duplicates=outcome.skipped_duplicates,
+            series_processed=outcome.series_processed,
+        )
+
 
 # ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------
+
+
+def _parse_iso_instant(raw: str) -> datetime:
+    """Parse an ISO-8601 instant, coercing naive to UTC.
+
+    Accepts both ``...Z`` and ``+00:00`` zone suffixes. Naive datetimes
+    are treated as UTC (the worker always sends UTC; this keeps
+    deterministic-test setups simple). Raises ``ValueError`` on any
+    other shape so callers can surface 400.
+    """
+
+    cleaned = raw.strip()
+    if cleaned.endswith("Z"):
+        cleaned = cleaned[:-1] + "+00:00"
+    parsed = datetime.fromisoformat(cleaned)
+    if parsed.tzinfo is None:
+        parsed = parsed.replace(tzinfo=timezone.utc)
+    return parsed.astimezone(timezone.utc)
 
 
 def _parse_repeatable_filter(request: Request, axis: str) -> tuple[str, ...]:
@@ -346,6 +430,8 @@ __all__ = [
     "BulkUpdateTodosRequest",
     "BulkUpdateTodosResponseModel",
     "CreateTodoRequest",
+    "MaterializeDueSeriesRequest",
+    "MaterializeDueSeriesResponse",
     "TodoListResponseModel",
     "TodoResponseModel",
     "UpdateTodoRequest",

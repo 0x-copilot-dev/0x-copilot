@@ -203,6 +203,37 @@ class TodosStore(Protocol):
         self, *, tenant_id: str, series_id: str
     ) -> TodoSeriesRecord | None: ...
 
+    def claim_due_series(self, *, now: datetime) -> tuple[TodoSeriesRecord, ...]:
+        """Return every active (not-ended) series — eligibility is
+        decided in the service layer using the rule evaluator.
+
+        Postgres adapter implements with ``SELECT ... FOR UPDATE SKIP
+        LOCKED`` on ``todo_series`` (filtered by ``ends_at IS NULL OR
+        ends_at > now``) so concurrent materializer workers never both
+        claim the same row. The in-memory adapter is single-process —
+        it simulates the same atomic-claim semantics by returning a
+        snapshot tuple the service iterates.
+        """
+
+    def find_todo_by_series_due(
+        self, *, tenant_id: str, series_id: str, due: str
+    ) -> TodoRecord | None:
+        """Look up an existing materialised row by ``(series_id, due)``.
+
+        Backs the partial UNIQUE index ``todo_series_dedup`` (schema.sql).
+        Used by the materializer to count ``skipped_duplicates`` without
+        racing a UNIQUE-constraint violation.
+        """
+
+    def update_series_last_materialized(
+        self, *, series_id: str, last_materialized_due: datetime
+    ) -> TodoSeriesRecord | None:
+        """Advance ``last_materialized_due`` on a series row.
+
+        Returns the updated record; ``None`` when the series no longer
+        exists (tenant deletion racing the materializer).
+        """
+
 
 # ---------------------------------------------------------------------------
 # In-memory adapter
@@ -378,6 +409,42 @@ class InMemoryTodosStore:
         if record is None or record.tenant_id != tenant_id:
             return None
         return record
+
+    def claim_due_series(self, *, now: datetime) -> tuple[TodoSeriesRecord, ...]:
+        # Single-process snapshot. Production postgres adapter applies
+        # ``FOR UPDATE SKIP LOCKED`` here; the in-memory adapter has no
+        # concurrency to model so a sorted snapshot is sufficient.
+        candidates = [
+            series
+            for series in self.series.values()
+            if series.ends_at is None or series.ends_at > now
+        ]
+        candidates.sort(key=lambda s: (s.tenant_id, s.id))
+        return tuple(candidates)
+
+    def find_todo_by_series_due(
+        self, *, tenant_id: str, series_id: str, due: str
+    ) -> TodoRecord | None:
+        for record in self.todos.values():
+            if record.tenant_id != tenant_id:
+                continue
+            if record.deleted_at is not None:
+                continue
+            if record.series_id == series_id and record.due == due:
+                return record
+        return None
+
+    def update_series_last_materialized(
+        self, *, series_id: str, last_materialized_due: datetime
+    ) -> TodoSeriesRecord | None:
+        existing = self.series.get(series_id)
+        if existing is None:
+            return None
+        updated = existing.model_copy(
+            update={"last_materialized_due": last_materialized_due}
+        )
+        self.series[series_id] = updated
+        return updated
 
 
 # ---------------------------------------------------------------------------
