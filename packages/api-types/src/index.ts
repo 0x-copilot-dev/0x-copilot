@@ -3727,3 +3727,97 @@ export type {
   WebhookTestFireResponse,
 } from "./connectors";
 // === end Phase 11 Connectors ===
+
+// === Phase 12 Team destination ===
+// Wire shape for the Team destination: list / detail / invite / role /
+// offboarding + presence SSE. Built on the existing `users` +
+// `tenant_memberships` tables (no new identity). Cross-audit §1.1
+// (ItemRef kind="person" already in the canonical union), §1.3
+// (`is_project_member` ACL for admin recent-activity filter), §1.5
+// (multi-value OR filter axes), §5.2 (SSE convention). Single
+// declaration site: ./team.ts.
+export type {
+  InviteRequest,
+  OffboardingReassignment,
+  OffboardingRequest,
+  Person,
+  PersonActivityEntry,
+  PersonActivityFilterAxis,
+  PersonDetailResponse,
+  Presence,
+  TeamListFilterAxis,
+  TeamListResponse,
+  TeamListSort,
+  TeamRole,
+  TeamStreamEnvelope,
+  TeamStreamEventType,
+  UpdateTeamRoleRequest,
+} from "./team";
+// === end Phase 12 Team ===
+
+// === Phase 12 Memory destination ===
+// Wire shape for the Memory destination: CRUD + proposals (auto-extraction
+// accept/reject) + hybrid search + SSE. Embeddings reuse
+// `library_embeddings` with `target_kind = "memory"` (no parallel vector
+// table — sub-PRD §5.1). Cross-audit §1.1 (ItemRef kind="memory" already
+// in the canonical union), §1.3 (project-scoped ACL via optional
+// `project_id`), §1.5 (multi-value OR filter axes), §5.2 (SSE
+// convention). Single declaration site: ./memory.ts.
+export type {
+  AcceptMemoryProposalRequest,
+  CreateMemoryRequest,
+  MemoryCreator,
+  MemoryCreatorKind,
+  MemoryItem,
+  MemoryKind,
+  MemoryListFilterAxis,
+  MemoryListResponse,
+  MemoryListSort,
+  MemoryProposal,
+  MemoryProposalDecisionStatus,
+  MemoryProposalListResponse,
+  MemoryScope,
+  MemorySearchHit,
+  MemorySearchResponse,
+  MemoryStreamEnvelope,
+  MemoryStreamEventType,
+  UpdateMemoryRequest,
+} from "./memory";
+// === end Phase 12 Memory ===
+
+// === Phase 12 ⌘K Palette ===
+// Wire shape for the global command palette: single search endpoint +
+// flat hit list with `kind` discriminator (navigation / entity / action
+// / command). The palette is substrate-shared — same payload drives
+// web, Mac, Windows; the host wires a `PaletteSearchPort` per substrate.
+// Cross-audit §1.1 (ItemRef as the `entity` target). Single declaration
+// site: ./palette.ts.
+export type {
+  PaletteHit,
+  PaletteHitKind,
+  PaletteSearchContext,
+  PaletteSearchRequest,
+  PaletteSearchResponse,
+} from "./palette";
+// === end Phase 12 ⌘K Palette ===
+
+// === Phase 12 Settings (notifications + webhook security) ===
+// Settings JSONB-blob wire shapes. Settings is NOT a destination per
+// master PRD §3.5 — it lives off the profile menu. The three namespaces
+// Phase 12 lands: per-user notification defaults, admin workspace
+// notification defaults, admin workspace webhook security defaults
+// (Routines §9.7 Q6 HMAC-of-payload UX + max-secret-age policy).
+// Settings storage reuses the existing `tenant_settings` / `user_settings`
+// JSONB pattern (sub-PRD §5.2 — no parallel table). Single declaration
+// site: ./settings.ts.
+export type {
+  NotificationDefaults,
+  NotificationQuietHoursBlob,
+  PerDestinationToggle,
+  UpdateNotificationDefaultsRequest,
+  UpdateWebhookSecurityDefaultsRequest,
+  UpdateWorkspaceNotificationDefaultsRequest,
+  WebhookSecurityDefaults,
+  WorkspaceNotificationDefaults,
+} from "./settings";
+// === end Phase 12 Settings ===
