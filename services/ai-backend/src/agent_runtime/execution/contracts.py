@@ -504,6 +504,13 @@ class RuntimeDependencies(RuntimeContract):
     # the `/drafts/` prefix to it so the agent's existing `write_file` /
     # `edit_file` tools produce Workspace-pane drafts without a new tool.
     drafts_backend: object | None = None
+    # Optional process-wide TTL cache for MCP discovery (the
+    # ``connect + list_tools + list_resources`` round-trips on
+    # ``McpLoader.load_server``). When ``None`` the loader behaves
+    # exactly as before. Constructed at FastAPI lifespan startup and
+    # at worker dependency wiring; one instance per process (API and
+    # worker run in separate processes and each gets its own cache).
+    mcp_discovery_cache: object | None = None
 
     @field_validator(
         "tool_registry",

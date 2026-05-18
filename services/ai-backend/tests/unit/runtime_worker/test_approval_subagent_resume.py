@@ -16,6 +16,11 @@ import os
 os.environ.setdefault("OPENAI_API_KEY", "sk-test-resume")
 
 from agent_runtime.execution.contracts import AgentRuntimeContext
+from agent_runtime.persistence.records import (
+    ApprovalBatchItemRecord,
+    ApprovalBatchRecord,
+    ApprovalBatchSpec,
+)
 from runtime_adapters.in_memory.runtime_api_store import InMemoryRuntimeApiStore
 from runtime_api.schemas import (
     AgentRunStatus,
@@ -103,6 +108,24 @@ async def _seed_run_and_subagent_approval(store: InMemoryRuntimeApiStore) -> Non
                 # whenever the interrupt fired inside a subagent.
                 "parent_task_id": _PARENT_TASK_ID,
             },
+        )
+    )
+    # PR #43 — seed the 1-item ApprovalBatch so the handler's atomic
+    # transition gate completes and proceeds to the resume path.
+    await store.insert_approval_batch(
+        spec=ApprovalBatchSpec.build(
+            batch=ApprovalBatchRecord(
+                batch_id=_APPROVAL_ID,
+                run_id=_RUN_ID,
+                org_id=_ORG_ID,
+            ),
+            items=[
+                ApprovalBatchItemRecord(
+                    item_id=_APPROVAL_ID,
+                    batch_id=_APPROVAL_ID,
+                    index=0,
+                ),
+            ],
         )
     )
 

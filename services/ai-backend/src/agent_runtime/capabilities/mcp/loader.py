@@ -36,6 +36,10 @@ from agent_runtime.capabilities.mcp.client import (
     RawMcpConnectionMetadata,
 )
 from agent_runtime.capabilities.mcp.constants import Defaults, Keys, Messages
+from agent_runtime.capabilities.mcp.discovery_cache import (
+    McpDiscoveryCache,
+    McpDiscoveryCacheKey,
+)
 from agent_runtime.capabilities.mcp.permissions import McpPermissionPolicy
 from agent_runtime.capabilities.mcp.registry import (
     DynamicMcpRegistry,
@@ -50,15 +54,37 @@ SUPPORTED_TRANSPORTS = frozenset(
 
 @dataclass(frozen=True)
 class McpLoader:
-    """Connects to a selected MCP server and validates discovered descriptors."""
+    """Connects to a selected MCP server and validates discovered descriptors.
+
+    When ``cache`` is supplied, successful loads are memoized by
+    ``(server_name, org_id, user_id)`` so subsequent turns skip the
+    ``connect + list_tools + list_resources`` round-trips. Permission and
+    transport checks always run on the live runtime context — they are
+    never cached. Failure results are not cached either, so a transient
+    upstream issue can recover on the next call.
+    """
 
     registry: DynamicMcpRegistry
     timeout_seconds: float = Defaults.TIMEOUT_SECONDS
     max_tool_descriptors: int = Defaults.MAX_TOOL_DESCRIPTORS
     max_resource_descriptors: int = Defaults.MAX_RESOURCE_DESCRIPTORS
+    cache: McpDiscoveryCache | None = None
 
     async def load_server(self, request: McpLoadRequest) -> McpLoadResult:
-        """Load a selected MCP server while rechecking permissions and validation."""
+        """Load a selected MCP server while rechecking permissions and validation.
+
+        When a cache is wired, the heavy network path
+        (``connect + list_tools + list_resources`` + validation) runs
+        through ``cache.get_or_load``, which provides:
+          - fast-path read of a fresh memoized record,
+          - per-key async lock so concurrent first-callers don't all hit
+            the network (thundering-herd protection),
+          - on-miss populate after a successful load.
+
+        Permission and transport checks always run uncached on the live
+        runtime context so a freshly revoked scope or downed transport
+        cannot serve cached descriptors.
+        """
 
         runtime_context = request.runtime_context
         resolution = await self.registry.resolve_server(request.server_name)
@@ -82,6 +108,61 @@ class McpLoader:
                 server_name=card.name,
                 correlation_id=runtime_context.trace_id,
             )
+
+        if self.cache is None:
+            # No-cache path matches pre-cache behaviour exactly.
+            return await self._load_uncached(request, resolution)
+
+        cache_key = McpDiscoveryCacheKey(
+            server_name=card.name,
+            org_id=runtime_context.org_id,
+            user_id=runtime_context.user_id,
+        )
+        # The captured-result pattern lets us surface a typed
+        # ``McpLoadResult`` failure (e.g. timeout) to the caller while
+        # signalling "do not cache" to ``get_or_load`` via the ``None``
+        # return — failure results are not memoized.
+        captured_result: dict[str, McpLoadResult] = {}
+
+        async def _load() -> LoadedMcpServer | None:
+            result = await self._load_uncached(request, resolution)
+            captured_result["value"] = result
+            return result.loaded_server if result.succeeded else None
+
+        cached_record = await self.cache.get_or_load(cache_key, _load)
+        if "value" in captured_result:
+            # Network path ran — return whatever the live load produced
+            # (success or typed failure) so failure semantics are
+            # preserved end-to-end.
+            return captured_result["value"]
+        if cached_record is not None:
+            return McpLoadResult.ok(cached_record)
+        # Defensive: ``get_or_load`` should never return ``None`` without
+        # ``_load`` having run. Surface a generic failure so the model
+        # still sees a typed result rather than an exception.
+        return McpLoadResult.fail(
+            McpLoadErrorCode.CONNECTION_FAILED,
+            Messages.Loader.LOAD_FAILED,
+            retryable=True,
+            server_name=card.name,
+            correlation_id=runtime_context.trace_id,
+        )
+
+    async def _load_uncached(
+        self,
+        request: McpLoadRequest,
+        resolution: RegisteredMcpServer,
+    ) -> McpLoadResult:
+        """Run the live discovery path: ``connect + list_tools + list_resources`` + validation.
+
+        Permission and transport checks happen in ``load_server`` before
+        this is reached; this helper assumes the card is already
+        authorised. Returns a typed ``McpLoadResult`` for every outcome
+        so the caller can route success/failure uniformly.
+        """
+
+        runtime_context = request.runtime_context
+        card = resolution.card
 
         try:
             client = resolution.provider.create_client(card)

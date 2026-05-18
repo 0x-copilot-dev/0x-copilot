@@ -3,6 +3,11 @@
 from __future__ import annotations
 
 
+from agent_runtime.persistence.records import (
+    ApprovalBatchItemRecord,
+    ApprovalBatchRecord,
+    ApprovalBatchSpec,
+)
 from runtime_adapters.in_memory.runtime_api_store import InMemoryRuntimeApiStore
 from runtime_api.schemas import (
     AgentRunStatus,
@@ -75,6 +80,25 @@ async def _seed_run_and_approval(store: InMemoryRuntimeApiStore) -> None:
                 "native_interrupt_id": _Values.APPROVAL_ID,
                 "question": "Where would you like to travel?",
             },
+        )
+    )
+    # PR #43 — ask_a_question is a single-action interrupt; seed its 1-item
+    # batch so the handler's atomic transition gate completes on the only
+    # item and the resume proceeds.
+    await store.insert_approval_batch(
+        spec=ApprovalBatchSpec.build(
+            batch=ApprovalBatchRecord(
+                batch_id=_Values.APPROVAL_ID,
+                run_id=_Values.RUN_ID,
+                org_id=_Values.ORG_ID,
+            ),
+            items=[
+                ApprovalBatchItemRecord(
+                    item_id=_Values.APPROVAL_ID,
+                    batch_id=_Values.APPROVAL_ID,
+                    index=0,
+                ),
+            ],
         )
     )
 

@@ -506,6 +506,7 @@ class RuntimeEventPresentationProjector:
             Keys.Field.APPROVAL_ID,
             "action_id",
             Keys.Field.APPROVAL_KIND,
+            Keys.Field.BATCH_ID,
             Keys.Field.SERVER_ID,
             Keys.Field.SERVER_NAME,
             "display_name",
@@ -532,6 +533,11 @@ class RuntimeEventPresentationProjector:
         requires_pre = payload.get("requires_pre_registered_client")
         if isinstance(requires_pre, bool):
             safe_payload["requires_pre_registered_client"] = requires_pre
+        # PR #43 — preserve typed batch_index through projection so the FE
+        # receives it alongside batch_id on every approval-style event.
+        batch_index = payload.get(Keys.Field.BATCH_INDEX)
+        if isinstance(batch_index, int) and not isinstance(batch_index, bool):
+            safe_payload[Keys.Field.BATCH_INDEX] = batch_index
         return safe_payload
 
     @classmethod
@@ -653,6 +659,7 @@ class RuntimeEventPresentationProjector:
             # link + the editing user; both are short opaque ids.
             Keys.Field.CHAIN_PARENT_APPROVAL_ID,
             "edited_by_user_id",
+            Keys.Field.BATCH_ID,
             Keys.Field.SERVER_ID,
             Keys.Field.SERVER_NAME,
             "display_name",
@@ -666,6 +673,11 @@ class RuntimeEventPresentationProjector:
             value = cls._text(payload.get(key))
             if value is not None:
                 safe_payload[key] = value
+        # PR #43 — batch_index is a typed int, not a string; preserve it
+        # through the projection so the FE receives the typed shape.
+        batch_index = payload.get(Keys.Field.BATCH_INDEX)
+        if isinstance(batch_index, int) and not isinstance(batch_index, bool):
+            safe_payload[Keys.Field.BATCH_INDEX] = batch_index
         read_only = payload.get("read_only")
         if isinstance(read_only, bool):
             safe_payload["read_only"] = read_only
@@ -724,6 +736,7 @@ class RuntimeEventPresentationProjector:
         for key in (
             Keys.Field.APPROVAL_ID,
             Keys.Field.APPROVAL_KIND,
+            Keys.Field.BATCH_ID,
             Keys.Payload.MESSAGE,
             Keys.Field.STATUS,
             Keys.Field.SOURCE_TOOL_CALL_ID,
@@ -734,6 +747,10 @@ class RuntimeEventPresentationProjector:
             value = cls._text(payload.get(key))
             if value is not None:
                 safe_payload[key] = value
+        # PR #43 — typed batch_index preserved through projection.
+        batch_index = payload.get(Keys.Field.BATCH_INDEX)
+        if isinstance(batch_index, int) and not isinstance(batch_index, bool):
+            safe_payload[Keys.Field.BATCH_INDEX] = batch_index
         options = payload.get("options")
         if isinstance(options, list | tuple):
             safe_payload["options"] = cls._safe_question_options(options)

@@ -32,6 +32,11 @@ from agent_runtime.capabilities.mcp.client import (
     McpTimeoutError,
     McpUnsupportedMethodError,
 )
+from agent_runtime.capabilities.mcp.discovery_cache import (
+    McpDiscoveryCache,
+    McpDiscoveryCacheKey,
+    McpDiscoveryCacheStats,
+)
 from agent_runtime.capabilities.mcp.loader import McpLoader
 from agent_runtime.capabilities.mcp.middleware.auth_mcp import AuthMcpTool
 from agent_runtime.capabilities.mcp.middleware.call_tool import CallMcpTool
@@ -53,6 +58,9 @@ __all__ = [
     "McpClientFactory",
     "McpConnectionError",
     "McpConnectionMetadata",
+    "McpDiscoveryCache",
+    "McpDiscoveryCacheKey",
+    "McpDiscoveryCacheStats",
     "McpLoadError",
     "McpLoadErrorCode",
     "McpLoadRequest",

@@ -14,6 +14,10 @@ from datetime import datetime
 from typing import Protocol, runtime_checkable
 
 from agent_runtime.persistence.records import (
+    ApprovalBatchItemRecord,
+    ApprovalBatchRecord,
+    ApprovalBatchSpec,
+    BatchTransitionOutcome,
     BudgetRecord,
     BudgetReservationRecord,
     BudgetWithState,
@@ -39,6 +43,7 @@ from agent_runtime.persistence.records import (
 )
 from runtime_api.schemas import (
     AgentRunStatus,
+    ApprovalDecision,
     ApprovalDecisionRecord,
     ApprovalRequestRecord,
     ConversationRecord,
@@ -239,6 +244,100 @@ class PersistencePort(Protocol):
         approval_id: str,
     ) -> ApprovalRequestRecord | None:
         """Return a pending or resolved approval request."""
+
+    # ------------------------------------------------------------------
+    # ApprovalBatch — first-class entity 1:1 with a LangGraph interrupt.
+    #
+    # The batch is the unit of resumption (LangGraph requires N decisions
+    # aligned to N action_requests). Items are the user-visible cards but
+    # are not the resume gate. ``record_item_decision_and_maybe_lock_batch``
+    # is the single atomic primitive that records one item's decision and,
+    # if it completes the batch, takes the resume lock — implementations
+    # MUST guarantee exactly-once ``PENDING -> RESUMING`` per batch under
+    # concurrent callers.
+    # ------------------------------------------------------------------
+
+    async def insert_approval_batch(
+        self,
+        *,
+        spec: ApprovalBatchSpec,
+    ) -> ApprovalBatchRecord:
+        """Insert one ``ApprovalBatchRecord`` plus its ordered item rows atomically.
+
+        Idempotent on ``batch_id``: a retry returns the previously-persisted
+        batch unchanged. Items must already be validated via
+        :meth:`ApprovalBatchSpec.build` so indices form ``0..N-1``.
+        """
+
+    async def get_approval_batch(
+        self,
+        *,
+        org_id: str,
+        batch_id: str,
+    ) -> ApprovalBatchRecord | None:
+        """Return one ``ApprovalBatchRecord`` scoped by org, or ``None``."""
+
+    async def get_approval_batch_item(
+        self,
+        *,
+        org_id: str,
+        item_id: str,
+    ) -> ApprovalBatchItemRecord | None:
+        """Return one ``ApprovalBatchItemRecord`` scoped by org, or ``None``."""
+
+    async def list_items_for_batch(
+        self,
+        *,
+        org_id: str,
+        batch_id: str,
+    ) -> tuple[ApprovalBatchItemRecord, ...]:
+        """Return every item belonging to ``batch_id`` in ``index`` order."""
+
+    async def record_item_decision_and_maybe_lock_batch(
+        self,
+        *,
+        org_id: str,
+        item_id: str,
+        decision: ApprovalDecision,
+    ) -> BatchTransitionOutcome:
+        """Atomically write one item's decision and try to take the batch resume lock.
+
+        Semantics (under one transactional lock per batch_id):
+
+        1. Look up the item by ``(org_id, item_id)``. If missing, return
+           ``LOST_RACE`` (treated like any other "no-op" path).
+        2. Look up the parent batch. If its ``status`` is anything other than
+           ``PENDING``, return ``LOST_RACE`` (another worker already resumed,
+           the run was cancelled, or the sweeper expired the batch).
+        3. Write ``decision`` onto the item. This is idempotent — re-recording
+           the same decision is safe.
+        4. Re-read all sibling items. If every item now has a non-null
+           ``decision``, flip the batch ``PENDING -> RESUMING`` in the same
+           transaction and return ``READY_TO_RESUME`` populated with the
+           loaded batch + items. Otherwise return ``BATCH_INCOMPLETE``.
+
+        Implementations:
+        - Postgres: ``SELECT ... FOR UPDATE`` on the batch row inside one
+          transaction with the item write and the conditional status flip.
+        - In-memory: an ``asyncio.Lock`` per ``batch_id``, held across the
+          read-modify-write.
+
+        Both implementations return ``BatchTransitionOutcome`` so the caller
+        is backend-agnostic.
+        """
+
+    async def mark_approval_batch_resolved(
+        self,
+        *,
+        org_id: str,
+        batch_id: str,
+    ) -> None:
+        """Stamp ``RESUMING -> RESOLVED`` once the resume completes (or fails).
+
+        Idempotent: a batch already in ``RESOLVED`` or ``EXPIRED`` is left
+        untouched. Used by the handler in its ``finally`` so a crashed
+        resume does not leave a batch wedged in ``RESUMING``.
+        """
 
     async def list_assigned_approvals(
         self,

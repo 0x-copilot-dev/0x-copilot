@@ -348,20 +348,30 @@ class ApprovalCoordinator:
             run_id=record.run_id,
         )
         approval_kind = approval.metadata.get(Keys.Field.APPROVAL_KIND)
+        # PR #43 — project batch_id / batch_index from the approval metadata
+        # onto the resolved event so the FE can correlate the resolve back
+        # to its requesting batch without parsing the approval_id string.
+        resolved_payload: dict[str, object] = {
+            Keys.Field.APPROVAL_ID: record.approval_id,
+            Keys.Field.APPROVAL_KIND: approval_kind,
+            Keys.Field.STATUS: self._wire_status_for(
+                approval_kind=approval_kind,
+                record_status=record.status.value,
+            ),
+            Keys.Payload.MESSAGE: Messages.Event.APPROVAL_RESOLVED,
+            Keys.Field.DECISION: record.status.value,
+        }
+        batch_id = approval.metadata.get(Keys.Field.BATCH_ID)
+        if isinstance(batch_id, str) and batch_id:
+            resolved_payload[Keys.Field.BATCH_ID] = batch_id
+        batch_index = approval.metadata.get(Keys.Field.BATCH_INDEX)
+        if isinstance(batch_index, int) and not isinstance(batch_index, bool):
+            resolved_payload[Keys.Field.BATCH_INDEX] = batch_index
         await self._event_producer.append_api_event(
             run=run,
             source=StreamEventSource.RUNTIME,
             event_type=RuntimeApiEventType.APPROVAL_RESOLVED,
-            payload={
-                Keys.Field.APPROVAL_ID: record.approval_id,
-                Keys.Field.APPROVAL_KIND: approval_kind,
-                Keys.Field.STATUS: self._wire_status_for(
-                    approval_kind=approval_kind,
-                    record_status=record.status.value,
-                ),
-                Keys.Payload.MESSAGE: Messages.Event.APPROVAL_RESOLVED,
-                Keys.Field.DECISION: record.status.value,
-            },
+            payload=resolved_payload,
         )
         await self._queue.enqueue_approval_resolved(
             RuntimeApprovalResolvedCommand(

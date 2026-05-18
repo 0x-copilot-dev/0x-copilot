@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 from collections.abc import Sequence
 from datetime import datetime, timezone
 from typing import Any
@@ -13,6 +14,13 @@ from agent_runtime.execution.contracts import RuntimeErrorCode
 from agent_runtime.persistence.constants import Values as PersistenceValues
 from enterprise_audit_chain import AuditChainSigner
 from agent_runtime.persistence.records import (
+    ApprovalBatchItemRecord,
+    ApprovalBatchRecord,
+    ApprovalBatchSpec,
+    ApprovalBatchStatus,
+    BatchItemDecision,
+    BatchOutcomeStatus,
+    BatchTransitionOutcome,
     BudgetEnforcement,
     BudgetRecord,
     BudgetReservationRecord,
@@ -44,6 +52,7 @@ from runtime_adapters.base import (
 from runtime_api.http.errors import RuntimeApiError
 from runtime_api.schemas import (
     AgentRunStatus,
+    ApprovalDecision,
     ApprovalDecisionRecord,
     ApprovalRequestRecord,
     ConversationStatus,
@@ -83,6 +92,14 @@ class InMemoryRuntimeApiStore:
         self.runs: dict[str, RunRecord] = {}
         self.approval_requests: dict[str, ApprovalRequestRecord] = {}
         self.approval_decisions: dict[str, ApprovalDecisionRecord] = {}
+        # ApprovalBatch storage (PR #43). Keyed by batch_id; items are keyed
+        # by item_id but include batch_id so the per-batch view is one filter.
+        # Each batch has its own ``asyncio.Lock`` so the atomic
+        # read-modify-write inside ``record_item_decision_and_maybe_lock_batch``
+        # cannot interleave with concurrent decisions on the same batch.
+        self.approval_batches: dict[str, ApprovalBatchRecord] = {}
+        self.approval_batch_items: dict[str, ApprovalBatchItemRecord] = {}
+        self._approval_batch_locks: dict[str, asyncio.Lock] = {}
         self.events_by_run: dict[str, list[RuntimeEventEnvelope]] = {}
         self.run_commands: list[RuntimeRunCommand] = []
         self.cancel_commands: list[RuntimeCancelCommand] = []
@@ -723,6 +740,173 @@ class InMemoryRuntimeApiStore:
         if approval is None or approval.org_id != org_id:
             return None
         return approval
+
+    # ------------------------------------------------------------------
+    # ApprovalBatch — first-class entity (PR #43).
+    #
+    # Atomic semantics are enforced by a per-batch ``asyncio.Lock`` so the
+    # in-memory adapter matches the Postgres "SELECT ... FOR UPDATE on the
+    # batch row" contract: only one coroutine can flip ``PENDING -> RESUMING``
+    # for a given batch.
+    # ------------------------------------------------------------------
+
+    def _approval_batch_lock(self, batch_id: str) -> asyncio.Lock:
+        """Lazily create and return the per-batch ``asyncio.Lock``.
+
+        Locks live for the process lifetime — there is at most one per batch
+        and the dev/test footprint is bounded by the test fixture set.
+        """
+        lock = self._approval_batch_locks.get(batch_id)
+        if lock is None:
+            lock = asyncio.Lock()
+            self._approval_batch_locks[batch_id] = lock
+        return lock
+
+    async def insert_approval_batch(
+        self,
+        *,
+        spec: ApprovalBatchSpec,
+    ) -> ApprovalBatchRecord:
+        """Insert one batch and its ordered items. Idempotent on ``batch_id``."""
+
+        existing = self.approval_batches.get(spec.batch.batch_id)
+        if existing is not None:
+            return existing
+        self.approval_batches[spec.batch.batch_id] = spec.batch
+        for item in spec.items:
+            self.approval_batch_items[item.item_id] = item
+        return spec.batch
+
+    async def get_approval_batch(
+        self,
+        *,
+        org_id: str,
+        batch_id: str,
+    ) -> ApprovalBatchRecord | None:
+        """Return a batch row scoped to org, or ``None``."""
+
+        batch = self.approval_batches.get(batch_id)
+        if batch is None or batch.org_id != org_id:
+            return None
+        return batch
+
+    async def get_approval_batch_item(
+        self,
+        *,
+        org_id: str,
+        item_id: str,
+    ) -> ApprovalBatchItemRecord | None:
+        """Return an item row scoped to org, or ``None``."""
+
+        item = self.approval_batch_items.get(item_id)
+        if item is None:
+            return None
+        batch = self.approval_batches.get(item.batch_id)
+        if batch is None or batch.org_id != org_id:
+            return None
+        return item
+
+    async def list_items_for_batch(
+        self,
+        *,
+        org_id: str,
+        batch_id: str,
+    ) -> tuple[ApprovalBatchItemRecord, ...]:
+        """Return every item belonging to ``batch_id`` in ``index`` order."""
+
+        batch = self.approval_batches.get(batch_id)
+        if batch is None or batch.org_id != org_id:
+            return ()
+        items = [
+            item
+            for item in self.approval_batch_items.values()
+            if item.batch_id == batch_id
+        ]
+        items.sort(key=lambda record: record.index)
+        return tuple(items)
+
+    async def record_item_decision_and_maybe_lock_batch(
+        self,
+        *,
+        org_id: str,
+        item_id: str,
+        decision: ApprovalDecision,
+    ) -> BatchTransitionOutcome:
+        """Atomic: record the item decision; flip the batch if it just completed.
+
+        Exactly-one ``PENDING -> RESUMING`` per batch is enforced by the
+        per-batch ``asyncio.Lock``. Concurrent callers serialise here; the
+        first to find every item resolved wins ``READY_TO_RESUME``, the others
+        return ``LOST_RACE`` because the batch is no longer ``PENDING``.
+        """
+
+        item = self.approval_batch_items.get(item_id)
+        if item is None:
+            return BatchTransitionOutcome(status=BatchOutcomeStatus.LOST_RACE)
+        batch_id = item.batch_id
+        batch = self.approval_batches.get(batch_id)
+        if batch is None or batch.org_id != org_id:
+            return BatchTransitionOutcome(status=BatchOutcomeStatus.LOST_RACE)
+
+        async with self._approval_batch_lock(batch_id):
+            # Re-read inside the lock; the batch may have moved past PENDING
+            # while we waited for the lock.
+            current_batch = self.approval_batches.get(batch_id)
+            if current_batch is None:
+                return BatchTransitionOutcome(status=BatchOutcomeStatus.LOST_RACE)
+            if current_batch.status is not ApprovalBatchStatus.PENDING:
+                return BatchTransitionOutcome(status=BatchOutcomeStatus.LOST_RACE)
+            # Write the decision. Idempotent: re-recording the same decision
+            # produces an equivalent row. Pydantic models are frozen so we
+            # rebuild the record.
+            current_item = self.approval_batch_items[item_id]
+            # ApprovalDecision and BatchItemDecision share string values; the
+            # records layer owns its own enum to keep itself import-cycle
+            # free, but the cross-layer mapping is a no-op string round-trip.
+            batch_decision = BatchItemDecision(decision.value)
+            updated_item = current_item.model_copy(update={"decision": batch_decision})
+            self.approval_batch_items[item_id] = updated_item
+            # Read every sibling in index order.
+            siblings = [
+                row
+                for row in self.approval_batch_items.values()
+                if row.batch_id == batch_id
+            ]
+            siblings.sort(key=lambda record: record.index)
+            if any(sibling.decision is None for sibling in siblings):
+                return BatchTransitionOutcome(
+                    status=BatchOutcomeStatus.BATCH_INCOMPLETE
+                )
+            # Every item is resolved — flip PENDING -> RESUMING.
+            resuming = current_batch.model_copy(
+                update={"status": ApprovalBatchStatus.RESUMING}
+            )
+            self.approval_batches[batch_id] = resuming
+            return BatchTransitionOutcome(
+                status=BatchOutcomeStatus.READY_TO_RESUME,
+                batch=resuming,
+                items=tuple(siblings),
+            )
+
+    async def mark_approval_batch_resolved(
+        self,
+        *,
+        org_id: str,
+        batch_id: str,
+    ) -> None:
+        """Stamp ``RESUMING -> RESOLVED``; idempotent for terminal statuses."""
+
+        batch = self.approval_batches.get(batch_id)
+        if batch is None or batch.org_id != org_id:
+            return
+        if batch.status in {
+            ApprovalBatchStatus.RESOLVED,
+            ApprovalBatchStatus.EXPIRED,
+        }:
+            return
+        self.approval_batches[batch_id] = batch.model_copy(
+            update={"status": ApprovalBatchStatus.RESOLVED}
+        )
 
     async def list_assigned_approvals(
         self,

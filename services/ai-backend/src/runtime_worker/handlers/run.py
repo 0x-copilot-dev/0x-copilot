@@ -160,12 +160,20 @@ class RuntimeRunHandler:
             ConversationToolOrdinalStorePort | None
         ) = None,
         usage_recorder: UsageRecorder | None = None,
+        mcp_discovery_cache: object | None = None,
     ) -> None:
         self.persistence: PersistencePort = persistence
         self.event_store: EventStorePort = event_store
         self.settings = settings or RuntimeSettings.load()
-        self.dependencies_factory = (
-            dependencies_factory or DefaultRuntimeDependenciesFactory(self.settings)
+        # When the caller supplies a ``dependencies_factory`` we trust it
+        # entirely (tests). Otherwise the default factory threads the cache
+        # through ``RuntimeDependencies.mcp_discovery_cache`` so the runtime
+        # factory wires it into ``McpLoader`` and ``AuthMcpTool``.
+        self.dependencies_factory = dependencies_factory or (
+            DefaultRuntimeDependenciesFactory(
+                self.settings,
+                mcp_discovery_cache=mcp_discovery_cache,  # type: ignore[arg-type]
+            )
         )
         self.agent_factory = agent_factory
         self.runtime_invoker = runtime_invoker

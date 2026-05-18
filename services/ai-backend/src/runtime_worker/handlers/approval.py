@@ -37,6 +37,10 @@ from agent_runtime.execution.providers.citation_pipeline import CitationStreamPi
 from agent_runtime.execution.runtime import astream_runtime_resume
 from agent_runtime.persistence import with_optimistic_retry
 from agent_runtime.persistence.ports import ConversationToolOrdinalStorePort
+from agent_runtime.persistence.records import (
+    BatchOutcomeStatus,
+    BatchTransitionOutcome,
+)
 from agent_runtime.settings import RuntimeSettings
 from runtime_api.schemas import (
     AgentRunStatus,
@@ -107,12 +111,19 @@ class RuntimeApprovalHandler:
         conversation_tool_ordinal_store: (
             ConversationToolOrdinalStorePort | None
         ) = None,
+        mcp_discovery_cache: object | None = None,
     ) -> None:
         self.persistence: PersistencePort = persistence
         self.event_store: EventStorePort = event_store
         self.settings = settings or RuntimeSettings.load()
-        self.dependencies_factory = (
-            dependencies_factory or DefaultRuntimeDependenciesFactory(self.settings)
+        # Same pattern as ``RuntimeRunHandler``: caller-supplied factory wins
+        # (tests inject their own); otherwise the default factory threads the
+        # process-wide MCP discovery cache through ``RuntimeDependencies``.
+        self.dependencies_factory = dependencies_factory or (
+            DefaultRuntimeDependenciesFactory(
+                self.settings,
+                mcp_discovery_cache=mcp_discovery_cache,  # type: ignore[arg-type]
+            )
         )
         self.agent_factory = agent_factory
         self.runtime_resumer = runtime_resumer
@@ -199,10 +210,42 @@ class RuntimeApprovalHandler:
         ):
             return
 
-        # The user's answer flows back to the agent via the LangGraph resume value
-        # (persisted as part of the tool-result event). It is NOT appended as a USER
-        # message — that would render a stray bubble disconnected from the question card.
-        resume = self._resume_payload(command, metadata)
+        # PR #43 — ApprovalBatch is the resume gate, not the per-item approval.
+        #
+        # Multi-tool-call interrupts (N >= 2 ``action_requests`` from one
+        # LangGraph interrupt) fan out into N ``approval_requested`` events
+        # backed by N ``ApprovalBatchItem`` rows in one ``ApprovalBatch``.
+        # The graph cannot resume until every item is resolved — resuming
+        # with a partial ``decisions[]`` raises ``ValueError`` inside the
+        # HITL middleware and crashes the run.
+        #
+        # The atomic primitive ``record_item_decision_and_maybe_lock_batch``
+        # records this item's decision and, if it just completed the batch,
+        # flips ``PENDING -> RESUMING`` under a transactional lock. Exactly
+        # one concurrent caller wins ``READY_TO_RESUME``; the others get
+        # ``LOST_RACE`` and no-op. ``BATCH_INCOMPLETE`` means siblings are
+        # still pending — the handler stops here and the run stays
+        # ``WAITING_FOR_APPROVAL``.
+        outcome = await self.persistence.record_item_decision_and_maybe_lock_batch(
+            org_id=command.org_id,
+            item_id=command.approval_id,
+            decision=command.decision,
+        )
+        if outcome.status is BatchOutcomeStatus.BATCH_INCOMPLETE:
+            # Other items in the same interrupt are still unresolved; the run
+            # stays paused on the same WAITING_FOR_APPROVAL state until the
+            # last item resolves and another invocation of this handler wins
+            # READY_TO_RESUME.
+            return
+        if outcome.status is BatchOutcomeStatus.LOST_RACE:
+            # Another worker already drove the resume (or the batch is no
+            # longer PENDING). Idempotent no-op.
+            return
+
+        # READY_TO_RESUME: this caller owns the resume. Build the resume value
+        # from the aligned per-item decisions so LangGraph sees N decisions
+        # for N action_requests.
+        resume = self._resume_payload(command, metadata, outcome=outcome)
         running = await with_optimistic_retry(
             lambda: self.persistence.update_run_status(
                 run_id=run.run_id,
@@ -285,6 +328,14 @@ class RuntimeApprovalHandler:
             ConversationOrdinalAllocator.unbind(allocator_token)
             ToolDisplayLookupContext.unbind(display_token)
             McpDisplayRegistryContext.unbind(mcp_display_token)
+            # PR #43 — stamp ``RESUMING -> RESOLVED`` on the batch row so a
+            # subsequent crash + retry on the same batch does not double-resume.
+            # Idempotent for terminal statuses (RESOLVED / EXPIRED).
+            if outcome.batch is not None:
+                await self.persistence.mark_approval_batch_resolved(
+                    org_id=command.org_id,
+                    batch_id=outcome.batch.batch_id,
+                )
 
     # Paired with the ``SUBAGENT_PAUSED`` emit; if ``approval.metadata`` carries
     # ``parent_task_id`` the same task_id is reused in the resume signal so the
@@ -436,8 +487,20 @@ class RuntimeApprovalHandler:
         cls,
         command: RuntimeApprovalResolvedCommand,
         metadata: Mapping[str, object],
+        *,
+        outcome: BatchTransitionOutcome | None = None,
     ) -> dict[str, object]:
-        """Build the LangGraph resume value dict appropriate for the approval kind."""
+        """Build the LangGraph resume value dict appropriate for the approval kind.
+
+        For MCP tool batches, the resume payload contains the aligned per-item
+        ``decisions`` list (N entries for an N-action interrupt). N=1 and N=N
+        follow the same code path — the substitution principle that pinned the
+        fix.
+
+        For ``mcp_auth`` and ``ask_a_question`` (single-action interrupts), the
+        resume shape is unchanged from before — those harness paths consume a
+        flat ``{approval_id, decision[, answer]}`` dict.
+        """
         approval_kind = StreamTextHelper.extract(
             metadata.get(cls._Fields.APPROVAL_KIND)
         )
@@ -454,6 +517,26 @@ class RuntimeApprovalHandler:
                 cls._Fields.APPROVAL_ID: command.approval_id,
                 cls._Fields.DECISION: decision,
                 cls._Fields.ANSWER: command.answer,
+            }
+        # MCP tool path. With ``outcome`` populated (the production path) we
+        # project the actual per-item decisions in interrupt order so a mixed
+        # approve/reject N=5 batch sends LangGraph the literal mix and not 5
+        # copies of the last decision. Without ``outcome`` (legacy / test
+        # fixtures that bypass the batch primitive) we fall back to the
+        # 1-element single-decision shape so older tests still pass.
+        if outcome is not None and outcome.status is BatchOutcomeStatus.READY_TO_RESUME:
+            # ``decisions_in_order`` returns ``BatchItemDecision`` (records-
+            # layer enum). Compare by string value so the runtime API enum
+            # ``ApprovalDecision`` and the persistence enum stay decoupled.
+            return {
+                cls._Fields.DECISIONS: [
+                    {
+                        cls._Fields.TYPE: "approve"
+                        if item_decision.value == ApprovalDecision.APPROVED.value
+                        else "reject",
+                    }
+                    for item_decision in outcome.decisions_in_order()
+                ]
             }
         return {
             cls._Fields.DECISIONS: [
