@@ -418,7 +418,32 @@ export {
   type ProjectsPanelProps,
   type RenderProjectDetailSlot,
 } from "./destinations/projects";
-export { LibraryDestination } from "./destinations/library";
+export {
+  LibraryDestination,
+  type LibraryDestinationProps,
+  LibraryPanel,
+  type LibraryPanelProps,
+  type LibrarySourceFilterCounts,
+  type LibrarySourceFilterSlug,
+  SaveToLibraryPopover,
+  type SaveToLibraryPopoverProps,
+  type SaveToLibrarySubmit,
+  type LibraryDatasetSummary,
+  type LibraryFileKind,
+  type LibraryFileSummary,
+  type LibraryIndexStatus,
+  type LibraryItemKind,
+  type LibraryItemSummary,
+  type LibraryKindFilterCounts,
+  type LibraryKindFilterSlug,
+  type LibraryPageSummary,
+  type LibrarySortSlug,
+  type LibrarySource,
+  type LibrarySourceKind,
+  type LibraryViewMode,
+  type SaveToLibraryDefaultKind,
+  type SaveToLibrarySource,
+} from "./destinations/library";
 export { AgentsDestination } from "./destinations/agents";
 export { ToolsDestination } from "./destinations/tools";
 export {
