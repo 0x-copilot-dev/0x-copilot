@@ -33,6 +33,14 @@ SUPPORTED_RESOURCE_URI_SCHEMES = frozenset(
     {Values.UriScheme.HTTPS, Values.UriScheme.MCP, Values.UriScheme.URN}
 )
 
+# Alias keys some LLMs emit instead of the canonical ``arguments`` key when
+# invoking the generic ``call_mcp_tool`` dispatcher. Each alias is expected to
+# carry a JSON object of tool inputs; non-mapping values fall back to the flat
+# folder so a malformed alias never silently corrupts the call.
+_ARGUMENT_ALIASES: frozenset[str] = frozenset(
+    {Keys.Field.PARAMETERS, Keys.Field.PARAMS, Keys.Field.ARGS}
+)
+
 
 class McpTransport(StrEnum):
     """MCP transports supported by the AI backend boundary."""
@@ -99,6 +107,7 @@ class McpLoadErrorCode(StrEnum):
     DUPLICATE_DESCRIPTOR_NAME = Values.ErrorCode.DUPLICATE_DESCRIPTOR_NAME
     LOCAL_TOOL_COLLISION = Values.ErrorCode.LOCAL_TOOL_COLLISION
     LOAD_BUDGET_EXCEEDED = Values.ErrorCode.LOAD_BUDGET_EXCEEDED
+    MCP_PROTOCOL_ERROR = Values.ErrorCode.MCP_PROTOCOL_ERROR
 
 
 class McpWarningCode(StrEnum):
@@ -228,30 +237,77 @@ class McpToolCallRequest(RuntimeContract):
 
     @model_validator(mode="before")
     @classmethod
-    def _collect_misplaced_arguments(cls, value: object) -> object:
-        """Fold unknown top-level keys into ``arguments`` so flat LangGraph calls are accepted."""
+    def _normalize_argument_shape(cls, value: object) -> object:
+        """Normalize three accepted input shapes into one canonical shape.
+
+        Accepts:
+          (a) canonical: ``{server_name, tool_name, arguments: {...}}``
+          (b) aliased wrap: ``{server_name, tool_name, parameters: {...}}``
+              (also ``params``, ``args``)
+          (c) flat: ``{server_name, tool_name, ...inline keys}``
+
+        Precedence is (a) > (b) > (c): when ``arguments`` is set it is
+        authoritative; otherwise a single alias key carrying a dict is treated
+        as ``arguments``; remaining unknown top-level keys are folded as
+        flat-call arguments. On key collision, canonical/aliased values always
+        win over flat extras.
+        """
         if not isinstance(value, Mapping):
             return value
-        known_keys = {
+        canonical_keys = {
             Keys.Field.SERVER_NAME,
             Keys.Field.TOOL_NAME,
             Keys.Field.ARGUMENTS,
             Keys.Field.TOOL_CALL_ID,
         }
-        extra_arguments = {
-            str(key): item for key, item in value.items() if str(key) not in known_keys
-        }
-        if not extra_arguments:
-            return value
+
         raw_arguments = value.get(Keys.Field.ARGUMENTS)
-        arguments = raw_arguments if isinstance(raw_arguments, Mapping) else {}
+        canonical_args: dict[str, Any] = (
+            dict(raw_arguments) if isinstance(raw_arguments, Mapping) else {}
+        )
+        canonical_present = isinstance(raw_arguments, Mapping)
+
+        aliased_args: dict[str, Any] = {}
+        consumed_aliases: set[str] = set()
+        if canonical_present:
+            # Canonical (a) is authoritative; aliased payloads are ignored
+            # entirely so we don't double-fold them into ``arguments``.
+            consumed_aliases.update(
+                alias for alias in _ARGUMENT_ALIASES if alias in value
+            )
+        else:
+            dict_aliases = [
+                alias
+                for alias in _ARGUMENT_ALIASES
+                if isinstance(value.get(alias), Mapping)
+            ]
+            if len(dict_aliases) == 1:
+                alias = dict_aliases[0]
+                aliased_args = dict(value[alias])
+                consumed_aliases.add(alias)
+
+        # Anything outside canonical-known keys and consumed aliases is folded
+        # as a flat-call extra. Non-dict alias values fall through here when no
+        # single dict-alias was picked, so a malformed alias (e.g.,
+        # ``parameters: "string"``) doesn't crash.
+        flat_extras = {
+            str(key): item
+            for key, item in value.items()
+            if str(key) not in canonical_keys and str(key) not in consumed_aliases
+        }
+
+        if not (canonical_present or consumed_aliases or flat_extras):
+            return value
+
+        merged_arguments: dict[str, Any] = {
+            **flat_extras,
+            **aliased_args,
+            **canonical_args,
+        }
         return {
             Keys.Field.SERVER_NAME: value.get(Keys.Field.SERVER_NAME),
             Keys.Field.TOOL_NAME: value.get(Keys.Field.TOOL_NAME),
-            Keys.Field.ARGUMENTS: {
-                **extra_arguments,
-                **dict(arguments),
-            },
+            Keys.Field.ARGUMENTS: merged_arguments,
             Keys.Field.TOOL_CALL_ID: value.get(Keys.Field.TOOL_CALL_ID, ""),
         }
 
@@ -473,9 +529,14 @@ class McpToolCallResult(RuntimeContract):
     error: McpLoadError | None = None
 
     @model_validator(mode="after")
-    def _require_exactly_one_outcome(self) -> "McpToolCallResult":
-        """Enforce that exactly one of ``output`` or ``error`` is set."""
-        if (self.output is None) == (self.error is None):
+    def _require_one_outcome(self) -> "McpToolCallResult":
+        """Enforce that at least one of ``output`` or ``error`` is set.
+
+        Success carries ``output`` with ``error`` unset. Failure carries
+        ``error``; ``output`` may also be set so a protocol-level failure can
+        preserve the upstream MCP envelope as evidence for the model.
+        """
+        if self.output is None and self.error is None:
             raise ValueError(Messages.Validation.EXACTLY_ONE_LOAD_OUTCOME)
         return self
 
@@ -504,11 +565,18 @@ class McpToolCallResult(RuntimeContract):
         server_name: str | None = None,
         tool_name: str | None = None,
         correlation_id: str | None = None,
+        output: Mapping[str, Any] | None = None,
     ) -> "McpToolCallResult":
-        """Return a failure result with a typed ``McpLoadError``."""
+        """Return a failure result with a typed ``McpLoadError``.
+
+        ``output`` lets a protocol-level failure preserve the full MCP response
+        envelope on the failure result so the model can read the underlying
+        error text and self-correct rather than retry the same bad input.
+        """
         return cls(
             server_name=server_name,
             tool_name=tool_name,
+            output=dict(output) if output is not None else None,
             error=McpLoadError(
                 code=code,
                 safe_message=safe_message,
