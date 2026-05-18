@@ -1,8 +1,10 @@
-// InboxDestination shell tests (P4-B1).
+// InboxDestination shell tests (P4-B1 + P4-B3 responsive layout).
 //
 // Covers: loading skeleton, error/unavailable empty states, section
 // bucketing (unread / snoozed / read (last 7d) / dismissed),
-// dismissed-section collapse, bulk-select toolbar, render-detail slot.
+// dismissed-section collapse, bulk-select toolbar, render-detail slot,
+// and the 960px container-width breakpoint that swaps between
+// two-pane (list + detail) and single-pane (list OR detail).
 
 import type {
   AgentId,
@@ -13,8 +15,8 @@ import type {
   SectionResult,
   UserId,
 } from "@enterprise-search/api-types";
-import { fireEvent, render, screen } from "@testing-library/react";
-import { describe, expect, it, vi } from "vitest";
+import { act, fireEvent, render, screen } from "@testing-library/react";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { RouterProvider } from "../../providers/RouterProvider";
 import type { ArtifactRoute, Router } from "../../routing/router";
@@ -70,6 +72,80 @@ function renderInbox(props: InboxDestinationProps = {}): void {
       <InboxDestination {...props} />
     </RouterProvider>,
   );
+}
+
+// ---------------------------------------------------------------------------
+// ResizeObserver shim
+// ---------------------------------------------------------------------------
+//
+// jsdom doesn't ship `ResizeObserver`. The responsive layout hook reads
+// it; tests that exercise the breakpoint install a manual shim that lets
+// them drive the observed width directly. Default-fallback tests don't
+// install the shim — the hook keeps the wide SSR default and behaves
+// like a wide-screen render, which is the correct user-facing default.
+
+type ResizeObserverShim = {
+  callback: ResizeObserverCallback;
+  target: Element | null;
+};
+
+let activeObservers: ResizeObserverShim[] = [];
+
+function installResizeObserverShim(): void {
+  activeObservers = [];
+  class TestResizeObserver implements ResizeObserver {
+    private readonly entry: ResizeObserverShim;
+    constructor(cb: ResizeObserverCallback) {
+      this.entry = { callback: cb, target: null };
+      activeObservers.push(this.entry);
+    }
+    observe(target: Element): void {
+      this.entry.target = target;
+    }
+    unobserve(): void {
+      this.entry.target = null;
+    }
+    disconnect(): void {
+      this.entry.target = null;
+      activeObservers = activeObservers.filter((o) => o !== this.entry);
+    }
+  }
+  (
+    globalThis as unknown as { ResizeObserver: typeof ResizeObserver }
+  ).ResizeObserver = TestResizeObserver as unknown as typeof ResizeObserver;
+}
+
+function uninstallResizeObserverShim(): void {
+  activeObservers = [];
+  delete (globalThis as unknown as { ResizeObserver?: unknown }).ResizeObserver;
+}
+
+function fireContainerWidth(widthPx: number): void {
+  act(() => {
+    for (const o of activeObservers) {
+      if (o.target === null) continue;
+      // Build a spec-compliant entry: inlineSize is the only field the
+      // hook reads; contentRect.width is the legacy fallback.
+      const entry: ResizeObserverEntry = {
+        target: o.target,
+        contentRect: { width: widthPx } as DOMRectReadOnly,
+        borderBoxSize: [
+          { inlineSize: widthPx, blockSize: 0 } as ResizeObserverSize,
+        ],
+        contentBoxSize: [
+          { inlineSize: widthPx, blockSize: 0 } as ResizeObserverSize,
+        ],
+        devicePixelContentBoxSize: [
+          { inlineSize: widthPx, blockSize: 0 } as ResizeObserverSize,
+        ],
+      };
+      o.callback(
+        [entry],
+        // The hook ignores the second argument; cast keeps TS quiet.
+        {} as ResizeObserver,
+      );
+    }
+  });
 }
 
 // ===========================================================================
@@ -355,7 +431,10 @@ describe("InboxDestination", () => {
     expect(badges).toHaveTextContent(/7 unread/i);
   });
 
-  it("renders the detail slot in place of the list body when focusedItemId is set", () => {
+  it("renders the detail slot alongside the list at the default (wide) container width", () => {
+    // No ResizeObserver shim installed here: the hook's SSR-default
+    // width is `INBOX_BREAKPOINT_PX`, which is `two-pane`. The list and
+    // detail render side by side.
     const onCloseDetail = vi.fn();
     const slotArgs: Array<{ itemId: InboxItemId; onClose: () => void }> = [];
     const renderDetail = (props: {
@@ -374,12 +453,17 @@ describe("InboxDestination", () => {
       renderDetail,
     });
 
-    // Detail slot renders; list body does NOT.
+    // Two-pane: both list AND detail render.
     expect(screen.getByTestId("inbox-detail-slot")).toBeInTheDocument();
     expect(screen.getByTestId("fake-detail")).toBeInTheDocument();
-    expect(screen.queryByTestId("inbox-sections")).toBeNull();
+    expect(screen.getByTestId("inbox-sections")).toBeInTheDocument();
+    expect(screen.getByTestId("inbox-two-pane")).toBeInTheDocument();
+    expect(screen.getByTestId("inbox-destination")).toHaveAttribute(
+      "data-pane-mode",
+      "two-pane",
+    );
 
-    // Slot received the close callback.
+    // Slot received a close callback that forwards to onCloseDetail.
     expect(slotArgs.length).toBeGreaterThan(0);
     const first = slotArgs[0];
     expect(first).toBeDefined();
@@ -466,5 +550,162 @@ describe("InboxDestination", () => {
     // Verifying via the absence of any router error is enough; the
     // render itself implicitly asserts.
     expect(screen.getByTestId("inbox-row")).toBeInTheDocument();
+  });
+
+  // =========================================================================
+  // P4-B3 — responsive 960px breakpoint
+  // =========================================================================
+  //
+  // Cross-audit §9.2: single-pane swap below 960px (list <-> detail);
+  // two-pane above. The hook observes the destination container via
+  // ResizeObserver (no JS window listeners). Tests install a manual
+  // shim and drive the observed width directly — no layout / paint
+  // required, so the assertions are deterministic in jsdom.
+
+  describe("responsive layout (960px breakpoint)", () => {
+    beforeEach(() => {
+      installResizeObserverShim();
+    });
+    afterEach(() => {
+      uninstallResizeObserverShim();
+    });
+
+    it("renders single-pane-list (list only, no detail) below 960px without focus", () => {
+      const renderDetail = vi.fn(() => <div data-testid="fake-detail">D</div>);
+      renderInbox({
+        items: ok<ReadonlyArray<InboxItem>>([ITEM_UNREAD]),
+        now: NOW,
+        renderDetail,
+        // No focusedItemId — list-only regardless of mode.
+      });
+      fireContainerWidth(800);
+
+      const root = screen.getByTestId("inbox-destination");
+      expect(root).toHaveAttribute("data-pane-mode", "single-pane-list");
+      expect(screen.getByTestId("inbox-sections")).toBeInTheDocument();
+      expect(screen.queryByTestId("inbox-detail-slot")).toBeNull();
+      expect(screen.queryByTestId("inbox-two-pane")).toBeNull();
+      expect(renderDetail).not.toHaveBeenCalled();
+    });
+
+    it("renders single-pane-detail (detail only, list hidden) below 960px with focus", () => {
+      const onCloseDetail = vi.fn();
+      const renderDetail = vi.fn(() => <div data-testid="fake-detail">D</div>);
+      renderInbox({
+        items: ok<ReadonlyArray<InboxItem>>([ITEM_UNREAD]),
+        now: NOW,
+        focusedItemId: asInboxId("inbox_unread"),
+        onCloseDetail,
+        renderDetail,
+      });
+      fireContainerWidth(640);
+
+      const root = screen.getByTestId("inbox-destination");
+      expect(root).toHaveAttribute("data-pane-mode", "single-pane-detail");
+      expect(screen.getByTestId("inbox-detail-slot")).toBeInTheDocument();
+      expect(screen.queryByTestId("inbox-sections")).toBeNull();
+      expect(screen.queryByTestId("inbox-two-pane")).toBeNull();
+    });
+
+    it("renders two-pane (list + detail) at exactly 960px with focus", () => {
+      // Boundary: 960 is two-pane (>= threshold). 959 is single-pane.
+      const renderDetail = vi.fn(() => <div data-testid="fake-detail">D</div>);
+      renderInbox({
+        items: ok<ReadonlyArray<InboxItem>>([ITEM_UNREAD]),
+        now: NOW,
+        focusedItemId: asInboxId("inbox_unread"),
+        renderDetail,
+      });
+      fireContainerWidth(960);
+
+      expect(screen.getByTestId("inbox-destination")).toHaveAttribute(
+        "data-pane-mode",
+        "two-pane",
+      );
+      expect(screen.getByTestId("inbox-two-pane")).toBeInTheDocument();
+      expect(screen.getByTestId("inbox-list-pane")).toBeInTheDocument();
+      expect(screen.getByTestId("inbox-detail-pane")).toBeInTheDocument();
+      expect(screen.getByTestId("inbox-sections")).toBeInTheDocument();
+      expect(screen.getByTestId("inbox-detail-slot")).toBeInTheDocument();
+    });
+
+    it("swaps live from two-pane to single-pane when the container shrinks past 960", () => {
+      const renderDetail = vi.fn(() => <div data-testid="fake-detail">D</div>);
+      renderInbox({
+        items: ok<ReadonlyArray<InboxItem>>([ITEM_UNREAD]),
+        now: NOW,
+        focusedItemId: asInboxId("inbox_unread"),
+        renderDetail,
+      });
+
+      fireContainerWidth(1200);
+      expect(screen.getByTestId("inbox-destination")).toHaveAttribute(
+        "data-pane-mode",
+        "two-pane",
+      );
+      expect(screen.getByTestId("inbox-sections")).toBeInTheDocument();
+
+      fireContainerWidth(800);
+      expect(screen.getByTestId("inbox-destination")).toHaveAttribute(
+        "data-pane-mode",
+        "single-pane-detail",
+      );
+      expect(screen.queryByTestId("inbox-sections")).toBeNull();
+      expect(screen.getByTestId("inbox-detail-slot")).toBeInTheDocument();
+
+      // Grow back: returns to two-pane and the list reappears.
+      fireContainerWidth(1100);
+      expect(screen.getByTestId("inbox-destination")).toHaveAttribute(
+        "data-pane-mode",
+        "two-pane",
+      );
+      expect(screen.getByTestId("inbox-sections")).toBeInTheDocument();
+    });
+
+    it("uses ResizeObserver, NOT a window resize listener", () => {
+      // Hard correctness rule from the brief: no JS window listeners.
+      // We spy on `addEventListener` on the global object and confirm
+      // the hook does not register a `resize` handler. Accessing the
+      // browser global through `globalThis` keeps the chat-surface
+      // package substrate-agnostic per the no-`window` lint rule.
+      const global = globalThis as unknown as {
+        addEventListener: typeof addEventListener;
+      };
+      const addSpy = vi.spyOn(global, "addEventListener");
+      try {
+        renderInbox({
+          items: ok<ReadonlyArray<InboxItem>>([ITEM_UNREAD]),
+          now: NOW,
+        });
+        fireContainerWidth(1000);
+
+        const resizeRegistrations = addSpy.mock.calls.filter(
+          (args) => args[0] === "resize",
+        );
+        expect(resizeRegistrations).toHaveLength(0);
+      } finally {
+        addSpy.mockRestore();
+      }
+    });
+
+    it("forwards detail-slot onClose to onCloseDetail (single primitive across modes)", () => {
+      const onCloseDetail = vi.fn();
+      const renderDetail = vi.fn(
+        ({ onClose }: { itemId: InboxItemId; onClose: () => void }) => (
+          <button data-testid="fake-detail-close" onClick={onClose} />
+        ),
+      );
+      renderInbox({
+        items: ok<ReadonlyArray<InboxItem>>([ITEM_UNREAD]),
+        now: NOW,
+        focusedItemId: asInboxId("inbox_unread"),
+        renderDetail,
+        onCloseDetail,
+      });
+      fireContainerWidth(600);
+
+      fireEvent.click(screen.getByTestId("fake-detail-close"));
+      expect(onCloseDetail).toHaveBeenCalledTimes(1);
+    });
   });
 });

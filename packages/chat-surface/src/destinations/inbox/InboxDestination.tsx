@@ -30,6 +30,7 @@
 import {
   useCallback,
   useMemo,
+  useRef,
   useState,
   type CSSProperties,
   type ReactElement,
@@ -44,6 +45,11 @@ import { PageHeader } from "../../shell/PageHeader";
 import { StatusPill, type StatusTone } from "../../shell/StatusPill";
 import { ItemLink } from "../../refs/ItemLink";
 import { formatRelativeTime } from "../../util/time";
+import {
+  INBOX_BREAKPOINT_PX,
+  useInboxLayout,
+  type InboxLayoutMode,
+} from "./useInboxLayout";
 
 // TODO(merge): rewire to "@enterprise-search/api-types"
 import {
@@ -184,6 +190,24 @@ export function InboxDestination(
     initialDismissedCollapsed = true,
   } = props;
 
+  // === Responsive layout (P4-B3) =========================================
+  //
+  // Container-bound 960px breakpoint per cross-audit §9.2. We observe
+  // the destination root with ResizeObserver (no JS window listeners
+  // per the hard rule) and derive a pane-mode:
+  //   - two-pane            : list + detail side-by-side (>= 960px)
+  //   - single-pane-list    : list only        (< 960px, no focus)
+  //   - single-pane-detail  : detail only      (< 960px, focused)
+  // The detail-slot precedence (list vs detail) for single-pane mode
+  // lives in the JSX below; two-pane keeps the existing slot-or-list
+  // semantics but renders the list alongside instead of replacing it.
+  const rootRef = useRef<HTMLElement | null>(null);
+  const layout = useInboxLayout({
+    containerRef: rootRef,
+    focusedItemId,
+    onCloseDetail,
+  });
+
   // === Bulk-select state ================================================
   const [selectedIds, setSelectedIds] = useState<ReadonlySet<InboxItemId>>(
     () => new Set<InboxItemId>(),
@@ -216,6 +240,12 @@ export function InboxDestination(
   );
 
   // === Styles ===========================================================
+  // `containerType: "inline-size"` establishes the destination root as a
+  // container-query container even though the show/hide decision is
+  // driven by `useInboxLayout` (ResizeObserver). Authoring CSS that
+  // tweaks chrome below the breakpoint (e.g. spacing) can use
+  // `@container (max-width: 960px)` against this same anchor without
+  // adding a second source of truth for the threshold.
   const rootStyle: CSSProperties = {
     width: "100%",
     height: "100%",
@@ -226,10 +256,14 @@ export function InboxDestination(
     display: "flex",
     flexDirection: "column",
     overflow: "auto",
+    containerType: "inline-size",
   };
+  // Container max-width widens for the two-pane split (list + detail
+  // side by side); narrow modes keep the original list width so single
+  // pane reads at the same line-length as the list-only layout.
   const containerStyle: CSSProperties = {
     width: "100%",
-    maxWidth: 920, // matches todos shell; P4-B3 widens for split-pane.
+    maxWidth: layout.mode === "two-pane" ? 1280 : 920,
     margin: "0 auto",
     padding: "24px 28px 96px", // bottom pad so the bulk bar doesn't cover content.
     boxSizing: "border-box",
@@ -242,14 +276,39 @@ export function InboxDestination(
     flexDirection: "column",
     gap: 20,
   };
+  // Two-pane body: list on the left flexes; detail on the right takes
+  // a fixed-ish width. `minWidth: 0` keeps flex children from blowing
+  // out when their content has long words / `white-space: nowrap` rows.
+  const twoPaneBodyStyle: CSSProperties = {
+    display: "flex",
+    flexDirection: "row",
+    gap: 24,
+    alignItems: "flex-start",
+    minWidth: 0,
+  };
+  const listColumnStyle: CSSProperties = {
+    flex: 1,
+    minWidth: 0,
+    display: "flex",
+    flexDirection: "column",
+    gap: 16,
+  };
+  const detailColumnStyle: CSSProperties = {
+    flex: "0 0 420px",
+    minWidth: 0,
+    position: "sticky",
+    top: 24,
+  };
 
   // === Loading state ====================================================
   if (items === null) {
     return (
       <section
+        ref={rootRef}
         aria-label="Inbox destination"
         data-testid="inbox-destination"
         data-state="loading"
+        data-pane-mode={layout.mode}
         style={rootStyle}
       >
         <div style={containerStyle}>
@@ -273,9 +332,11 @@ export function InboxDestination(
   if (items.status === "error") {
     return (
       <section
+        ref={rootRef}
         aria-label="Inbox destination"
         data-testid="inbox-destination"
         data-state="error"
+        data-pane-mode={layout.mode}
         style={rootStyle}
       >
         <div style={containerStyle}>
@@ -297,9 +358,11 @@ export function InboxDestination(
   if (items.status === "unavailable") {
     return (
       <section
+        ref={rootRef}
         aria-label="Inbox destination"
         data-testid="inbox-destination"
         data-state="unavailable"
+        data-pane-mode={layout.mode}
         style={rootStyle}
       >
         <div style={containerStyle}>
@@ -316,14 +379,19 @@ export function InboxDestination(
     );
   }
 
-  // === Detail-pane render-prop seam (P4-B2 slot) ========================
+  // === Detail-pane render-prop seam (P4-B2 + P4-B3) =====================
   //
-  // When the host supplies `renderDetail` and a focused id, the slot
-  // replaces the list body. P4-B3 will style a side-by-side layout via
-  // the responsive breakpoint without touching this file. The shell
-  // still owns the PageHeader + unread badge so the chrome is
-  // consistent.
-  const showingDetail = renderDetail !== undefined && focusedItemId !== null;
+  // When the host supplies `renderDetail` and a focused id:
+  //   - two-pane (>= 960px): list + detail render side by side.
+  //   - single-pane-detail (< 960px): detail replaces the list body.
+  //   - single-pane-list (< 960px, no focus): list only.
+  // When no detail slot is supplied (or no focus), the destination
+  // renders list-only at any width.
+  const hasDetail = renderDetail !== undefined && focusedItemId !== null;
+  // In `single-pane-detail` the detail replaces the list body. In
+  // `two-pane` they coexist. In `single-pane-list` (no focus) the list
+  // is the only content.
+  const detailReplacesList = hasDetail && layout.mode === "single-pane-detail";
 
   // === Ready state ======================================================
 
@@ -342,68 +410,102 @@ export function InboxDestination(
       <StatusPill status="info" label={`${computedUnread} unread`} />
     ) : undefined;
 
+  // List body — extracted so we can render it in either the list-only
+  // slot (single-pane / two-pane no-focus / pre-B2 callers) or the
+  // left column of the two-pane split. Identical markup in both, just
+  // wrapped differently — keeps the bucketing, collapse, selection,
+  // and a11y invariants in one place.
+  const listBody: ReactNode = !hasAnyItems ? (
+    <EmptyState
+      title="Inbox zero"
+      body="Nothing addressed to you right now. Mentions, approvals routed cross-thread, and connector errors will land here."
+    />
+  ) : (
+    <div
+      style={sectionGridStyle}
+      data-testid="inbox-sections"
+      data-state="ready"
+    >
+      {SECTION_ORDER.map((sectionKey) => {
+        const rows = buckets.get(sectionKey) ?? [];
+        if (rows.length === 0) return null;
+
+        const collapsed = sectionKey === "dismissed" && dismissedCollapsed;
+        return (
+          <Section
+            key={sectionKey}
+            sectionKey={sectionKey}
+            rows={rows}
+            selectedIds={selectedIds}
+            toggleSelected={toggleSelected}
+            onMarkRead={onMarkRead}
+            onSnooze={onSnooze}
+            onDismiss={onDismiss}
+            collapsed={collapsed}
+            onToggleCollapsed={
+              sectionKey === "dismissed"
+                ? () => setDismissedCollapsed((v) => !v)
+                : undefined
+            }
+            now={now ?? Date.now()}
+          />
+        );
+      })}
+    </div>
+  );
+
+  // Detail slot — host's renderDetail wrapped so the close handler
+  // bridges through `useInboxLayout` (same primitive used by the
+  // back-to-list affordance below the breakpoint).
+  const detailBody: ReactNode = hasDetail ? (
+    <div
+      data-testid="inbox-detail-slot"
+      data-focused-item-id={focusedItemId!}
+      data-pane-mode={layout.mode}
+    >
+      {renderDetail!({
+        itemId: focusedItemId!,
+        onClose: layout.onShowList,
+      })}
+    </div>
+  ) : null;
+
   return (
     <section
+      ref={rootRef}
       aria-label="Inbox destination"
       data-testid="inbox-destination"
       data-state="ready"
       data-selection-count={selectedCount}
       data-focused-item-id={focusedItemId ?? undefined}
+      data-pane-mode={layout.mode}
       style={rootStyle}
     >
       <div style={containerStyle}>
         <PageHeader title="Inbox" subtitle={subtitle} badges={badges} />
 
-        {showingDetail ? (
-          <div
-            data-testid="inbox-detail-slot"
-            data-focused-item-id={focusedItemId!}
-          >
-            {renderDetail!({
-              itemId: focusedItemId!,
-              onClose: () => {
-                if (onCloseDetail !== undefined) onCloseDetail();
-              },
-            })}
+        {layout.mode === "two-pane" && hasDetail ? (
+          // Two-pane split (>= 960px): list on the left, detail on the
+          // right. Both render together so the user sees context while
+          // they read; matches Gmail / Linear / Notion (cross-audit §9.2).
+          <div data-testid="inbox-two-pane" style={twoPaneBodyStyle}>
+            <div style={listColumnStyle} data-testid="inbox-list-pane">
+              {listBody}
+            </div>
+            <div style={detailColumnStyle} data-testid="inbox-detail-pane">
+              {detailBody}
+            </div>
           </div>
-        ) : !hasAnyItems ? (
-          <EmptyState
-            title="Inbox zero"
-            body="Nothing addressed to you right now. Mentions, approvals routed cross-thread, and connector errors will land here."
-          />
+        ) : detailReplacesList ? (
+          // Single-pane-detail (< 960px, focused): detail replaces the
+          // list body. The slot's onClose forwards to layout.onShowList
+          // so callers can implement "back to list" without re-deriving
+          // the breakpoint.
+          detailBody
         ) : (
-          <div
-            style={sectionGridStyle}
-            data-testid="inbox-sections"
-            data-state="ready"
-          >
-            {SECTION_ORDER.map((sectionKey) => {
-              const rows = buckets.get(sectionKey) ?? [];
-              if (rows.length === 0) return null;
-
-              const collapsed =
-                sectionKey === "dismissed" && dismissedCollapsed;
-              return (
-                <Section
-                  key={sectionKey}
-                  sectionKey={sectionKey}
-                  rows={rows}
-                  selectedIds={selectedIds}
-                  toggleSelected={toggleSelected}
-                  onMarkRead={onMarkRead}
-                  onSnooze={onSnooze}
-                  onDismiss={onDismiss}
-                  collapsed={collapsed}
-                  onToggleCollapsed={
-                    sectionKey === "dismissed"
-                      ? () => setDismissedCollapsed((v) => !v)
-                      : undefined
-                  }
-                  now={now ?? Date.now()}
-                />
-              );
-            })}
-          </div>
+          // List-only: single-pane-list, or two-pane with no focus, or
+          // any state where no detail slot was supplied.
+          listBody
         )}
       </div>
 
@@ -420,6 +522,17 @@ export function InboxDestination(
     </section>
   );
 }
+
+// ===========================================================================
+// Public layout re-exports (P4-B3)
+// ===========================================================================
+//
+// Re-export the layout hook + the breakpoint constant from the
+// destination module so callers do not need to know about the
+// `useInboxLayout.tsx` file path. The destination module is the public
+// surface for everything inbox-shell.
+export { useInboxLayout, INBOX_BREAKPOINT_PX };
+export type { InboxLayoutMode };
 
 // ===========================================================================
 // Section — one bucket render (heading + rows)

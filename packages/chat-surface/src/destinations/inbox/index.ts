@@ -100,3 +100,15 @@ export {
   type SnoozePickerProps,
   type SnoozePresetSlug,
 } from "./snooze-picker";
+
+// ===========================================================================
+// Responsive layout (P4-B3) — re-exports
+// ===========================================================================
+
+export {
+  useInboxLayout,
+  INBOX_BREAKPOINT_PX,
+  type InboxLayoutMode,
+  type InboxLayoutState,
+  type UseInboxLayoutOptions,
+} from "./useInboxLayout";
