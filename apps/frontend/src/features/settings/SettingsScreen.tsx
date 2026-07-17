@@ -32,6 +32,8 @@ import { ApiKeys } from "./sections/ApiKeys";
 // PR 8.1 — AI & DATA group sections.
 import { ModelAndBehavior } from "./sections/ModelAndBehavior";
 import { PrivacyAndData } from "./sections/PrivacyAndData";
+// BYOK — per-user model provider keys.
+import { ProviderKeys } from "./sections/ProviderKeys";
 import { useWorkspaceDefaults } from "./useWorkspaceDefaults";
 // PR 8.1 — WORKSPACE group sections.
 import { AuditLogSettings } from "./AuditLogSettings";
@@ -76,6 +78,9 @@ export type SettingsSection =
   | "audit-log"
   // PR 8.1 — AI & DATA group (agent behavior + sources).
   | "model-and-behavior"
+  // BYOK — per-user model provider keys. Distinct from "api-keys"
+  // (Account group), which are Atlas bearer tokens.
+  | "provider-keys"
   | "connectors"
   | "skills"
   | "privacy-data"
@@ -162,6 +167,12 @@ const railSections: ReadonlyArray<RailEntry> = [
     id: "model-and-behavior",
     label: "Model & behavior",
     icon: "spark",
+  },
+  {
+    kind: "section",
+    id: "provider-keys",
+    label: "Provider keys",
+    icon: "key",
   },
   {
     kind: "section",
@@ -319,6 +330,7 @@ export function SettingsScreen({
           {activeSection === "model-and-behavior" ? (
             <ModelAndBehavior workspaceDefaults={workspaceDefaults} />
           ) : null}
+          {activeSection === "provider-keys" ? <ProviderKeys /> : null}
           {activeSection === "connectors" ? (
             <ConnectorsSettings connectors={connectors} />
           ) : null}
