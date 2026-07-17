@@ -61,6 +61,9 @@ class _EnvFields:
     OPENAI_API_KEY = "OPENAI_API_KEY"
     ANTHROPIC_API_KEY = "ANTHROPIC_API_KEY"
     GOOGLE_API_KEY = "GOOGLE_API_KEY"
+    # OpenRouter (OpenAI-wire-compatible gateway) deployment fallback key.
+    # Per-user BYOK keys are the primary path and take precedence.
+    OPENROUTER_API_KEY = "OPENROUTER_API_KEY"
     DEFAULT_REASONING_ENABLED = "RUNTIME_DEFAULT_REASONING_ENABLED"
     DEFAULT_REASONING_EFFORT = "RUNTIME_DEFAULT_REASONING_EFFORT"
     DEFAULT_REASONING_SUMMARY = "RUNTIME_DEFAULT_REASONING_SUMMARY"
@@ -162,6 +165,7 @@ class RuntimeSettings(BaseSettings):
     openai: ProviderSettings = Field(default_factory=ProviderSettings)
     anthropic: ProviderSettings = Field(default_factory=ProviderSettings)
     gemini: ProviderSettings = Field(default_factory=ProviderSettings)
+    openrouter: ProviderSettings = Field(default_factory=ProviderSettings)
 
     @classmethod
     def load(
@@ -200,6 +204,8 @@ class RuntimeSettings(BaseSettings):
             return self.anthropic
         if provider in {"google", "gemini"}:
             return self.gemini
+        if provider == "openrouter":
+            return self.openrouter
         raise ValueError(f"Unsupported model provider: {provider}")
 
     def resolved_event_bus_backend(self) -> str:
@@ -238,6 +244,11 @@ class RuntimeSettings(BaseSettings):
             _EnvFields.OPENAI_API_KEY: settings.openai,
             _EnvFields.ANTHROPIC_API_KEY: settings.anthropic,
             _EnvFields.GOOGLE_API_KEY: settings.gemini,
+            # OpenRouter's fallback key is passed explicitly to the OpenAI
+            # client in ``build_chat_model`` (base_url is openrouter.ai, so
+            # it must NOT read OPENAI_API_KEY); exporting it here lets that
+            # code read the deployment key from the environment.
+            _EnvFields.OPENROUTER_API_KEY: settings.openrouter,
         }
         for key, provider in mapping.items():
             if provider.api_key is not None:
@@ -339,6 +350,7 @@ class RuntimeSettings(BaseSettings):
             openai=ProviderSettings(api_key=_o(v, E.OPENAI_API_KEY)),
             anthropic=ProviderSettings(api_key=_o(v, E.ANTHROPIC_API_KEY)),
             gemini=ProviderSettings(api_key=_o(v, E.GOOGLE_API_KEY)),
+            openrouter=ProviderSettings(api_key=_o(v, E.OPENROUTER_API_KEY)),
         )
 
     @classmethod

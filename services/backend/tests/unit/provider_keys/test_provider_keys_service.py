@@ -27,6 +27,7 @@ _USER = "usr_sarah"
 _OPENAI_KEY = "sk-test-openai-0000000000000000001234"
 _ANTHROPIC_KEY = "sk-ant-test-000000000000000000000-abcd"
 _GOOGLE_KEY = "AIzaTest-00000000000000000000005678"
+_OPENROUTER_KEY = "sk-or-v1-test000000000000000000009876"
 _UNKNOWN_PLAUSIBLE_KEY = "byok-plausible-key-000000000000-zzzz"
 
 
@@ -107,6 +108,17 @@ class TestDecryptedKeys:
         service, _store, _identity = _service()
         assert service.decrypted_keys(org_id=_ORG, user_id=_USER) == {}
 
+    def test_openrouter_key_flows_under_openrouter_slug(self) -> None:
+        service, _store, _identity = _service()
+        service.set_key(
+            org_id=_ORG,
+            user_id=_USER,
+            provider=ProviderName.OPENROUTER,
+            api_key=_OPENROUTER_KEY,
+        )
+        keys = service.decrypted_keys(org_id=_ORG, user_id=_USER)
+        assert keys == {"openrouter": _OPENROUTER_KEY}
+
 
 class TestValidation:
     def test_rejects_too_short(self) -> None:
@@ -143,6 +155,20 @@ class TestValidation:
         with pytest.raises(ProviderKeyFormatError, match="api_key_provider_mismatch"):
             validate_api_key_format(provider=ProviderName.GOOGLE, api_key=_OPENAI_KEY)
 
+    def test_rejects_openrouter_prefix_for_openai(self) -> None:
+        # ``sk-or-`` is detected as OpenRouter (longer prefix wins over ``sk-``),
+        # so it must not validate as an OpenAI key.
+        with pytest.raises(ProviderKeyFormatError, match="api_key_provider_mismatch"):
+            validate_api_key_format(
+                provider=ProviderName.OPENAI, api_key=_OPENROUTER_KEY
+            )
+
+    def test_rejects_openai_prefix_for_openrouter(self) -> None:
+        with pytest.raises(ProviderKeyFormatError, match="api_key_provider_mismatch"):
+            validate_api_key_format(
+                provider=ProviderName.OPENROUTER, api_key=_OPENAI_KEY
+            )
+
     def test_accepts_matching_prefixes(self) -> None:
         assert (
             validate_api_key_format(provider=ProviderName.OPENAI, api_key=_OPENAI_KEY)
@@ -157,6 +183,12 @@ class TestValidation:
         assert (
             validate_api_key_format(provider=ProviderName.GOOGLE, api_key=_GOOGLE_KEY)
             == _GOOGLE_KEY
+        )
+        assert (
+            validate_api_key_format(
+                provider=ProviderName.OPENROUTER, api_key=_OPENROUTER_KEY
+            )
+            == _OPENROUTER_KEY
         )
 
     def test_accepts_unknown_but_plausible_prefix(self) -> None:

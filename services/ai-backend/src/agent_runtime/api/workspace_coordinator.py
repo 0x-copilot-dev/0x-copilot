@@ -214,67 +214,14 @@ class WorkspaceCoordinator:
                 http_status=status.HTTP_422_UNPROCESSABLE_CONTENT,
                 retryable=False,
             ) from exc
-        # Build the catalog inline rather than calling ConversationQueryService.list_models
-        # to avoid a circular import between the two coordinator modules.
-        from agent_runtime.api.conversation_query_service import _display_model_name
-        from runtime_api.schemas import ModelCatalogItem
+        # Validate against the same catalog the picker exposes (single source
+        # in ``ModelCatalog``) so the admin default stays within the selectable
+        # set. Imported lazily to keep module import order flexible.
+        from agent_runtime.api.model_catalog import ModelCatalog
 
-        default = self._settings.default_model
-        configured = {
-            "openai": self._settings.openai.is_configured,
-            "anthropic": self._settings.anthropic.is_configured,
-            "gemini": self._settings.gemini.is_configured,
-        }
-        models = [
-            ModelCatalogItem(
-                id=default.model_name,
-                provider=default.provider,
-                model_name=default.model_name,
-                name=_display_model_name(default.model_name),
-                description="Runtime default model",
-                configured=configured.get(default.provider, False),
-                supports_streaming=default.supports_streaming,
-                supports_reasoning=default.reasoning is not None,
-                reasoning=default.reasoning.model_dump(mode="json")
-                if default.reasoning is not None
-                else None,
-            ),
-            ModelCatalogItem(
-                id="gpt-5.4-mini",
-                provider="openai",
-                model_name="gpt-5.4-mini",
-                name="GPT-5.4 Mini",
-                description="Compact OpenAI model",
-                configured=configured["openai"],
-                supports_streaming=True,
-                supports_attachments=True,
-                supports_reasoning=True,
-                reasoning={"enabled": True, "effort": "medium", "summary": "auto"},
-            ),
-            ModelCatalogItem(
-                id="claude-opus-4-7",
-                provider="anthropic",
-                model_name="claude-opus-4-7",
-                name="Claude Opus 4.7",
-                description="Anthropic reasoning model",
-                configured=configured["anthropic"],
-                supports_streaming=True,
-                supports_reasoning=True,
-            ),
-            ModelCatalogItem(
-                id="gemini-2.5-pro",
-                provider="gemini",
-                model_name="gemini-2.5-pro",
-                name="Gemini 2.5 Pro",
-                description="Google long-context model",
-                configured=configured["gemini"],
-                supports_streaming=True,
-                supports_attachments=True,
-            ),
-        ]
-        unique_models = {model.id: model for model in models}
-        catalog_ids = set(unique_models.keys())
-        catalog_names = {m.model_name for m in unique_models.values()}
+        catalog = ModelCatalog.build(self._settings)
+        catalog_ids = {item.id for item in catalog}
+        catalog_names = {item.model_name for item in catalog}
         # Accept both the canonical id and the model_name so callers using
         # either form of the identifier pass validation.
         if (

@@ -104,6 +104,7 @@ export const ThreadBody = forwardRef<
     models?: Array<ModelCatalogModel & { disabled?: boolean }>;
     selectedModel?: string;
     onModelChange?: (id: string) => void;
+    onAddCustomModel?: (slug: string) => void;
     depth?: ThinkingDepth;
     onDepthChange?: (depth: ThinkingDepth) => void;
     depthVisible?: boolean;
@@ -154,6 +155,7 @@ export const ThreadBody = forwardRef<
     models,
     selectedModel,
     onModelChange,
+    onAddCustomModel,
     depth,
     onDepthChange,
     depthVisible,
@@ -274,6 +276,7 @@ export const ThreadBody = forwardRef<
           models={models}
           selectedModel={selectedModel}
           onModelChange={onModelChange}
+          onAddCustomModel={onAddCustomModel}
           depth={depth}
           onDepthChange={onDepthChange}
           depthVisible={depthVisible}

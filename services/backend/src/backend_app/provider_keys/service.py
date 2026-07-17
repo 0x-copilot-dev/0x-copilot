@@ -36,10 +36,12 @@ _MIN_PLAUSIBLE_LENGTH = 20
 _MAX_KEY_LENGTH = 512
 _HINT_CHARS = 4
 
-# Ordered longest-prefix-first so ``sk-ant-`` wins over ``sk-`` when
-# detecting which provider a pasted key most likely belongs to.
+# Ordered longest-prefix-first so ``sk-ant-`` and ``sk-or-`` win over the
+# bare ``sk-`` (OpenAI) when detecting which provider a pasted key most
+# likely belongs to. OpenRouter keys are ``sk-or-v1-…``.
 _KNOWN_PREFIXES: tuple[tuple[ProviderName, str], ...] = (
     (ProviderName.ANTHROPIC, "sk-ant-"),
+    (ProviderName.OPENROUTER, "sk-or-"),
     (ProviderName.OPENAI, "sk-"),
     (ProviderName.GOOGLE, "AIza"),
 )

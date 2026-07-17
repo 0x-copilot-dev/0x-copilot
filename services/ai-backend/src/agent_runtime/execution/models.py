@@ -123,6 +123,9 @@ class ModelConfigResolver:
             "google": "gemini",
             "google-genai": "gemini",
             "openai": "openai",
+            # OpenAI-wire-compatible gateway; resolves to the OpenAI client
+            # with a fixed base_url (see execution/openai_compat.py).
+            "openrouter": "openrouter",
         }
         if normalized not in aliases:
             raise AgentRuntimeError(
@@ -143,4 +146,9 @@ class ModelConfigResolver:
             return "anthropic"
         if normalized.startswith("gemini"):
             return "gemini"
+        # OpenRouter slugs are ``vendor/model`` (e.g. ``anthropic/claude-…``);
+        # native provider model names never contain ``/``. This is only a
+        # fallback — the composer sends ``provider="openrouter"`` explicitly.
+        if "/" in model_name:
+            return "openrouter"
         return None

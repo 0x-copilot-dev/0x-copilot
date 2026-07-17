@@ -9,6 +9,7 @@ state; returns typed Pydantic responses for HTTP routes and the SSE adapter.
 from __future__ import annotations
 
 from agent_runtime.api.constants import Messages, Values
+from agent_runtime.api.model_catalog import ModelCatalog
 from agent_runtime.api.ports import EventStorePort, PersistencePort
 from agent_runtime.api.usage_service import ConversationContextBuilder
 from agent_runtime.execution.contracts import RuntimeErrorCode
@@ -22,25 +23,11 @@ from runtime_api.schemas import (
     ConversationListResponse,
     ConversationResponse,
     MessageListResponse,
-    ModelCatalogItem,
     ModelCatalogResponse,
     RunStatusResponse,
     RuntimeEventReplayResponse,
 )
 from starlette import status
-
-
-def _display_model_name(model_name: str) -> str:
-    """Convert a slug-style model name to a human-readable label.
-
-    "gpt" is forced to uppercase; everything else is title-cased. Underscores
-    are normalised to hyphens before splitting so ``claude_opus`` and
-    ``claude-opus`` produce identical output.
-    """
-    parts = model_name.replace("_", "-").split("-")
-    return " ".join(
-        part.upper() if part in {"gpt"} else part.capitalize() for part in parts
-    )
 
 
 class ConversationQueryService:
@@ -82,65 +69,12 @@ class ConversationQueryService:
         guard against accidental double-registration of the default model.
         """
 
-        default = self._settings.default_model
-        configured = {
-            "openai": self._settings.openai.is_configured,
-            "anthropic": self._settings.anthropic.is_configured,
-            "gemini": self._settings.gemini.is_configured,
-        }
-        models = [
-            ModelCatalogItem(
-                id=default.model_name,
-                provider=default.provider,
-                model_name=default.model_name,
-                name=_display_model_name(default.model_name),
-                description="Runtime default model",
-                configured=configured.get(default.provider, False),
-                supports_streaming=default.supports_streaming,
-                supports_reasoning=default.reasoning is not None,
-                reasoning=default.reasoning.model_dump(mode="json")
-                if default.reasoning is not None
-                else None,
-            ),
-            ModelCatalogItem(
-                id="gpt-5.4-mini",
-                provider="openai",
-                model_name="gpt-5.4-mini",
-                name="GPT-5.4 Mini",
-                description="Compact OpenAI model",
-                configured=configured["openai"],
-                supports_streaming=True,
-                supports_attachments=True,
-                supports_reasoning=True,
-                reasoning={"enabled": True, "effort": "medium", "summary": "auto"},
-            ),
-            ModelCatalogItem(
-                id="claude-opus-4-7",
-                provider="anthropic",
-                model_name="claude-opus-4-7",
-                name="Claude Opus 4.7",
-                description="Anthropic reasoning model",
-                configured=configured["anthropic"],
-                supports_streaming=True,
-                supports_reasoning=True,
-            ),
-            ModelCatalogItem(
-                id="gemini-2.5-pro",
-                provider="gemini",
-                model_name="gemini-2.5-pro",
-                name="Gemini 2.5 Pro",
-                description="Google long-context model",
-                configured=configured["gemini"],
-                supports_streaming=True,
-                supports_attachments=True,
-            ),
-        ]
-        # Deduplicate by id — the default model may coincide with one of the
-        # hardcoded entries, and inserting it first means the hardcoded richer
-        # metadata (supports_attachments etc.) wins in the final dict.
-        unique_models = {model.id: model for model in models}
+        catalog = ModelCatalog.build(self._settings)
+        # Deduplicate by id — the default model may coincide with a curated
+        # entry; later (richer) definitions win, matching the prior behaviour.
+        unique_models = {item.id: item for item in catalog}
         return ModelCatalogResponse(
-            default_model_id=default.model_name,
+            default_model_id=self._settings.default_model.model_name,
             models=tuple(unique_models.values()),
         )
 

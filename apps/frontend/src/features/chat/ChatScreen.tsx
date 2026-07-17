@@ -248,6 +248,37 @@ export function ChatScreen({
   const [initialHistoryLoaded, setInitialHistoryLoaded] = useState(false);
   const [historyError, setHistoryError] = useState<string | null>(null);
   const [selectedModelId, setSelectedModelId] = useState(demoModels[0].id);
+  // User-entered OpenRouter slugs from the picker's "Custom model" field.
+  // Merged with the curated `demoModels` so both the picker and
+  // `modelSelectionForId` resolve them (provider "openrouter").
+  const [customModels, setCustomModels] = useState<
+    Array<ModelCatalogModel & { disabled?: boolean }>
+  >([]);
+  const allModels = useMemo(
+    () => [...demoModels, ...customModels],
+    [customModels],
+  );
+  const handleAddCustomModel = useCallback((slug: string) => {
+    const trimmed = slug.trim();
+    if (!trimmed) return;
+    setCustomModels((prev) =>
+      prev.some((model) => model.id === trimmed)
+        ? prev
+        : [
+            ...prev,
+            {
+              id: trimmed,
+              provider: "openrouter",
+              model_name: trimmed,
+              name: trimmed,
+              description: "Custom OpenRouter model",
+              configured: true,
+              supports_streaming: true,
+            },
+          ],
+    );
+    setSelectedModelId(trimmed);
+  }, []);
   // Phase 1 P1-C (chats-canvas-prd §16) — thinking depth rides as a
   // top-level `reasoning_depth` field on `CreateRunRequest`. Persisted
   // across reloads via the existing localStorage key for backwards-
@@ -947,7 +978,7 @@ export function ChatScreen({
             // `reasoning_depth` field on the wire; the model selection
             // is unchanged. The `applyDepth(model, depth)` hack was a
             // workaround from before the wire field landed.
-            model: modelSelectionForId(demoModels, selectedModelId),
+            model: modelSelectionForId(allModels, selectedModelId),
             reasoningDepth: depth,
             attachments,
             content,
@@ -1001,6 +1032,7 @@ export function ChatScreen({
       identity,
       items,
       refreshConversations,
+      allModels,
       selectedModelId,
       startEventStream,
     ],
@@ -1643,8 +1675,8 @@ export function ChatScreen({
     ],
   );
   const selectedModel = useMemo(
-    () => demoModels.find((model) => model.id === selectedModelId) ?? null,
-    [selectedModelId],
+    () => allModels.find((model) => model.id === selectedModelId) ?? null,
+    [allModels, selectedModelId],
   );
   const depthVisible = modelSupportsDepth(selectedModel);
 
@@ -1665,7 +1697,7 @@ export function ChatScreen({
         identity,
         {
           // chats-canvas-prd §16 — depth as top-level `reasoning_depth`.
-          model: modelSelectionForId(demoModels, selectedModelId),
+          model: modelSelectionForId(allModels, selectedModelId),
           reasoningDepth: depth,
           parentMessageId,
           sourceMessageId,
@@ -1686,6 +1718,7 @@ export function ChatScreen({
       depth,
       identity,
       items,
+      allModels,
       selectedModelId,
       startEventStream,
     ],
@@ -1906,7 +1939,7 @@ export function ChatScreen({
                   onTogglePanel={() => paneState.toggle()}
                   usagePct={null}
                   onOpenUsage={() => setDetailsPanel("usage")}
-                  models={demoModels}
+                  models={allModels}
                   selectedModel={selectedModelId}
                   onModelChange={setSelectedModelId}
                   depth={depth}
@@ -1998,9 +2031,10 @@ export function ChatScreen({
                       </span>
                     }
                     activeModelLabel={selectedModel?.name}
-                    models={demoModels}
+                    models={allModels}
                     selectedModel={selectedModelId}
                     onModelChange={setSelectedModelId}
+                    onAddCustomModel={handleAddCustomModel}
                     depth={depth}
                     onDepthChange={setDepth}
                     depthVisible={depthVisible}
@@ -2567,6 +2601,65 @@ const demoModels: Array<ModelCatalogModel & { disabled?: boolean }> = [
     description: "Groq-hosted Qwen model",
     configured: false,
     disabled: true,
+  },
+  // OpenRouter (BYOK) — a curated starting set. Availability is per-user
+  // (add a key in Settings → Provider keys), so these stay selectable; a
+  // keyless run is guided to Settings by the backend credential gate. The
+  // picker's "Custom OpenRouter model" field covers any other vendor/model
+  // slug. Mirrors ModelCatalog.OPENROUTER_MODELS in the ai-backend.
+  {
+    id: "openai/gpt-4o",
+    provider: "openrouter",
+    model_name: "openai/gpt-4o",
+    name: "GPT-4o (OpenRouter)",
+    description: "OpenAI GPT-4o via OpenRouter",
+    configured: true,
+    supports_streaming: true,
+  },
+  {
+    id: "anthropic/claude-3.7-sonnet",
+    provider: "openrouter",
+    model_name: "anthropic/claude-3.7-sonnet",
+    name: "Claude 3.7 Sonnet (OpenRouter)",
+    description: "Anthropic Claude via OpenRouter",
+    configured: true,
+    supports_streaming: true,
+  },
+  {
+    id: "google/gemini-2.0-flash-001",
+    provider: "openrouter",
+    model_name: "google/gemini-2.0-flash-001",
+    name: "Gemini 2.0 Flash (OpenRouter)",
+    description: "Google Gemini via OpenRouter",
+    configured: true,
+    supports_streaming: true,
+  },
+  {
+    id: "meta-llama/llama-3.3-70b-instruct",
+    provider: "openrouter",
+    model_name: "meta-llama/llama-3.3-70b-instruct",
+    name: "Llama 3.3 70B (OpenRouter)",
+    description: "Meta open model via OpenRouter",
+    configured: true,
+    supports_streaming: true,
+  },
+  {
+    id: "deepseek/deepseek-chat",
+    provider: "openrouter",
+    model_name: "deepseek/deepseek-chat",
+    name: "DeepSeek Chat (OpenRouter)",
+    description: "DeepSeek via OpenRouter",
+    configured: true,
+    supports_streaming: true,
+  },
+  {
+    id: "qwen/qwen-2.5-72b-instruct",
+    provider: "openrouter",
+    model_name: "qwen/qwen-2.5-72b-instruct",
+    name: "Qwen2.5 72B (OpenRouter)",
+    description: "Qwen open model via OpenRouter",
+    configured: true,
+    supports_streaming: true,
   },
 ];
 

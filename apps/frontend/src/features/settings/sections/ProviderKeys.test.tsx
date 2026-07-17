@@ -86,6 +86,33 @@ describe("ProviderKeys", () => {
     const openaiInput = screen.getByPlaceholderText("sk-…") as HTMLInputElement;
     expect(openaiInput.type).toBe("password");
     expect(screen.getByPlaceholderText("AIza…")).toBeTruthy();
+    // OpenRouter row is present with its own placeholder.
+    expect(screen.getByPlaceholderText("sk-or-v1-…")).toBeTruthy();
+  });
+
+  it("saves an OpenRouter key via PUT to the openrouter provider", async () => {
+    mockList.mockResolvedValue({ keys: [] });
+    mockPut.mockResolvedValue({
+      provider: "openrouter",
+      key_hint: "…9876",
+      updated_at: "2026-07-17T09:00:00Z",
+    });
+    render(<ProviderKeys />);
+
+    const input = await screen.findByPlaceholderText("sk-or-v1-…");
+    expect((input as HTMLInputElement).type).toBe("password");
+    fireEvent.change(input, {
+      target: { value: "sk-or-v1-unit-test-placeholder-not-real" },
+    });
+    fireEvent.click(
+      screen.getByRole("button", { name: /save openrouter key/i }),
+    );
+
+    await waitFor(() => {
+      expect(mockPut).toHaveBeenCalledWith("openrouter", {
+        api_key: "sk-or-v1-unit-test-placeholder-not-real",
+      });
+    });
   });
 
   it("saves a drafted key via PUT and flips the row to saved state", async () => {

@@ -7,6 +7,13 @@ export interface ModelPillProps {
   value: string;
   onChange: (modelId: string) => void;
   disabled?: boolean;
+  /**
+   * When provided, renders a "Custom OpenRouter model" input at the foot of
+   * the menu. The submitted `vendor/model` slug is handed back so the
+   * container can register it as a selectable model and select it. Omitted
+   * where custom slugs don't apply.
+   */
+  onAddCustom?: (slug: string) => void;
 }
 
 /**
@@ -19,8 +26,10 @@ export function ModelPill({
   value,
   onChange,
   disabled,
+  onAddCustom,
 }: ModelPillProps): ReactElement {
   const [open, setOpen] = useState(false);
+  const [customSlug, setCustomSlug] = useState("");
   const buttonRef = useRef<HTMLButtonElement>(null);
   const selected =
     models.find((model) => model.id === value) ?? models[0] ?? null;
@@ -107,6 +116,45 @@ export function ModelPill({
             </button>
           );
         })}
+        {onAddCustom ? (
+          <form
+            className="atlas-model-pill__custom"
+            onSubmit={(event) => {
+              event.preventDefault();
+              const slug = customSlug.trim();
+              if (!slug) return;
+              onAddCustom(slug);
+              setCustomSlug("");
+              setOpen(false);
+            }}
+          >
+            <label
+              className="atlas-model-pill__custom-label"
+              htmlFor="atlas-model-pill-custom"
+            >
+              Custom OpenRouter model
+            </label>
+            <div className="atlas-model-pill__custom-row">
+              <input
+                id="atlas-model-pill-custom"
+                type="text"
+                className="atlas-model-pill__custom-input"
+                placeholder="vendor/model — e.g. anthropic/claude-3.7-sonnet"
+                value={customSlug}
+                spellCheck={false}
+                autoComplete="off"
+                onChange={(event) => setCustomSlug(event.target.value)}
+              />
+              <button
+                type="submit"
+                className="atlas-model-pill__custom-add"
+                disabled={!customSlug.trim()}
+              >
+                Add
+              </button>
+            </div>
+          </form>
+        ) : null}
       </Menu>
     </div>
   );

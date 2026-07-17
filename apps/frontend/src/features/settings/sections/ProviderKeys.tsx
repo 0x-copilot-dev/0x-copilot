@@ -37,6 +37,7 @@ const PROVIDERS: readonly ProviderRowSpec[] = [
   { provider: "openai", label: "OpenAI", placeholder: "sk-…" },
   { provider: "anthropic", label: "Anthropic", placeholder: "sk-ant-…" },
   { provider: "google", label: "Google Gemini", placeholder: "AIza…" },
+  { provider: "openrouter", label: "OpenRouter", placeholder: "sk-or-v1-…" },
 ];
 
 export function ProviderKeys(): ReactElement {
