@@ -14,13 +14,7 @@
 
 ## Install (desktop)
 
-Install the `copilot` CLI — one command, no DMG, no installer, no admin rights:
-
-```bash
-curl -fsSL https://0xcopilot.tech/install | bash
-```
-
-Already have Node 20+ or Bun? Install it directly:
+Install the `copilot` CLI with npm or Bun — no DMG, no installer, no admin rights:
 
 ```bash
 npm install -g @0x-copilot/cli   # or: bun add -g @0x-copilot/cli
@@ -32,11 +26,11 @@ Then, anywhere:
 copilot
 ```
 
-The first run stages a pinned, checksum-verified local runtime (Python + PostgreSQL + the app's services) and opens the app; every run after is instant. Because the runtime is fetched by your package manager rather than a browser, **macOS Gatekeeper and Windows SmartScreen never flag it** — no "unidentified developer" click-through — and on macOS the bundled binaries are ad-hoc signed at install time so they run on Apple Silicon without an Apple Developer certificate. macOS (Apple Silicon + Intel) and Windows x64. Full setup docs: [0xcopilot.tech/docs](https://0xcopilot.tech/docs) · CLI internals: [tools/cli](tools/cli).
+The first run stages a pinned, checksum-verified local runtime (Python + PostgreSQL + the app's services) and opens the app; every run after is instant. Because the runtime is fetched by your package manager rather than a browser, **macOS Gatekeeper and Windows SmartScreen never flag it** — no "unidentified developer" click-through — and on macOS the bundled binaries are ad-hoc signed at install time so they run on Apple Silicon without an Apple Developer certificate. macOS (Apple Silicon + Intel) and Windows x64. CLI internals: [tools/cli](tools/cli).
 
 ### Quickstart
 
-1. **Install & run** — `curl -fsSL https://0xcopilot.tech/install | bash`, then `copilot`. First run shows a boot screen while it stages and starts the embedded services.
+1. **Install & run** — `npm install -g @0x-copilot/cli`, then `copilot`. First run shows a boot screen while it stages and starts the embedded services.
 2. **Sign in** — **Connect a wallet** (MetaMask, Rabby, or any [EIP-6963](https://eips.ethereum.org/EIPS/eip-6963) wallet; chains: Ethereum 1, Base 8453, Arbitrum One 42161, Robinhood Chain 4663) or **Continue with Google**.
 3. **Add a model key** — **Settings → AI & data → Provider keys** and paste your **OpenAI**, **Anthropic**, or **Google Gemini** key (encrypted at rest, used only for your runs).
 

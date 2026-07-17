@@ -19,35 +19,23 @@ const X = "https://x.com/Copilot0x";
       <span class="pill"><span class="dot"></span> Terminal install · no DMG · no admin</span>
       <h1>Run 0xCopilot from <em>your terminal.</em></h1>
       <p class="sub">
-        One command installs the <code>copilot</code> CLI. The first time you
+        Install the <code>copilot</code> CLI with npm or Bun. The first time you
         run it, it stages a self-contained local runtime and opens the app.
         Works on <b>macOS and Windows.</b>
       </p>
-      <pre class="cmd"><span class="p">$</span> <b>curl -fsSL https://0xcopilot.tech/install | bash</b></pre>
+      <pre class="cmd"><span class="c"># Node 20+ or Bun</span>
+<span class="p">$</span> <b>npm install -g @0x-copilot/cli</b>
+<span class="c"># …or: bun add -g @0x-copilot/cli</span>
+
+<span class="p">$</span> <b>copilot</b></pre>
+      <p class="note">
+        Also available as <code>0xcopilot</code> if <code>copilot</code>
+        collides with something already on your <code>PATH</code>.
+      </p>
     </div>
   </header>
 
   <section class="sec" style="border-top:none;padding-top:8px">
-    <div class="wrap">
-      <p class="kick">Already have Node or Bun?</p>
-      <h2>Install it directly.</h2>
-      <pre class="cmd"><span class="c"># with npm</span>
-<span class="p">$</span> <b>npm install -g @0x-copilot/cli</b>
-
-<span class="c"># …or bun</span>
-<span class="p">$</span> <b>bun add -g @0x-copilot/cli</b>
-
-<span class="c"># then, anywhere</span>
-<span class="p">$</span> <b>copilot</b></pre>
-      <p class="note">
-        Needs Node.js 20+ or Bun. The command is also available as
-        <code>0xcopilot</code> if <code>copilot</code> collides with something
-        already on your <code>PATH</code>.
-      </p>
-    </div>
-  </section>
-
-  <section class="sec">
     <div class="wrap">
       <p class="kick">First run</p>
       <h2>What the first run does.</h2>
