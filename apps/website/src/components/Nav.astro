@@ -1,0 +1,43 @@
+---
+// Site nav. The turbine mark carries its own gradient def so it renders
+// standalone. Links: in-page anchors + Token page + Discord + GitHub CTA.
+//
+// DISCORD: placeholder invite — swap for the real one. The user said a
+// Discord link exists; it wasn't in the repo or kit, so this is a stub.
+const REPO = "https://github.com/0x-copilot-dev/0x-copilot";
+const DISCORD = "https://discord.com/invite/NhCv7zDkmX";
+---
+
+<nav>
+  <div class="nav wrap">
+    <a class="brand" href="./" aria-label="0xCopilot home">
+      <svg class="mk" viewBox="0 0 400 400" aria-hidden="true">
+        <defs>
+          <linearGradient id="tg" x1="0" y1="0" x2="0" y2="1">
+            <stop offset="0" stop-color="#9bd4ff"></stop>
+            <stop offset="1" stop-color="#4593d8"></stop>
+          </linearGradient>
+        </defs>
+        <g fill="url(#tg)">
+          <path d="M200 96q46 10 54 60-28-8-54-24Z"></path>
+          <path d="M200 96q46 10 54 60-28-8-54-24Z" transform="rotate(60 200 200)"></path>
+          <path d="M200 96q46 10 54 60-28-8-54-24Z" transform="rotate(120 200 200)"></path>
+          <path d="M200 96q46 10 54 60-28-8-54-24Z" transform="rotate(180 200 200)"></path>
+          <path d="M200 96q46 10 54 60-28-8-54-24Z" transform="rotate(240 200 200)"></path>
+          <path d="M200 96q46 10 54 60-28-8-54-24Z" transform="rotate(300 200 200)"></path>
+        </g>
+        <circle cx="200" cy="200" r="30" fill="#0b0a0e"></circle>
+        <circle cx="200" cy="200" r="15" fill="#5fb2ec"></circle>
+      </svg>
+      <span class="wm">0x<b>Copilot</b></span>
+    </a>
+    <div class="nlinks">
+      <a href="./#what">What it is</a>
+      <a href="./#work">How it works</a>
+      <a href="./#local">Local</a>
+      <a href="./token.html">Token</a>
+      <a href={DISCORD} rel="noopener">Discord</a>
+      <a class="ncta" href={REPO} rel="noopener">GitHub ↗</a>
+    </div>
+  </div>
+</nav>
