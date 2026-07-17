@@ -21,6 +21,7 @@ COPY apps/frontend/package.json ./apps/frontend/package.json
 COPY apps/frontend/tsconfig.json ./apps/frontend/tsconfig.json
 COPY apps/frontend/vite.config.ts ./apps/frontend/vite.config.ts
 COPY apps/frontend/index.html ./apps/frontend/index.html
+COPY apps/frontend/wallet.html ./apps/frontend/wallet.html
 COPY apps/frontend/src ./apps/frontend/src
 
 RUN npm ci
