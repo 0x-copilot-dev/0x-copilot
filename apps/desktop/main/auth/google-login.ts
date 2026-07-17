@@ -1,5 +1,6 @@
-import type { AuthSession, SessionClaims } from "./oidc-client";
+import type { AuthSession } from "./oidc-client";
 import { awaitLoopbackCode, type LoopbackHandle } from "./loopback-server";
+import { fetchProfileClaims } from "./profile-claims";
 
 // "Continue with Google" — facade-brokered OIDC (backend flow, branch
 // feat/google-login-backend). Unlike OidcClient's direct-IdP mode, PKCE
@@ -52,12 +53,6 @@ interface CallbackHandoff {
   readonly expires_at: string;
   readonly return_to: string | null;
   readonly requires_mfa: boolean;
-}
-
-interface ProfileResponse {
-  readonly user_id?: string;
-  readonly email?: string | null;
-  readonly display_name?: string | null;
 }
 
 export class GoogleLoginError extends Error {
@@ -152,10 +147,11 @@ export async function runGoogleLogin(
     }
 
     // -- 4. best-effort display claims --------------------------------------
-    const claims = await fetchClaims(
+    const claims = await fetchProfileClaims(
       doFetch,
       facadeBaseUrl,
-      handoff,
+      handoff.bearer_token,
+      handoff.user_id,
       workspaceId,
     );
 
@@ -183,40 +179,6 @@ function handoffFailureMessage(status: number, detail: string): string {
     return `google sign-in not authorized: 401${suffix}`;
   }
   return `google sign-in handoff failed: ${status}${suffix}`;
-}
-
-async function fetchClaims(
-  doFetch: typeof fetch,
-  facadeBaseUrl: string,
-  handoff: CallbackHandoff,
-  workspaceId: string,
-): Promise<SessionClaims> {
-  const fallback: SessionClaims = {
-    sub: handoff.user_id,
-    email: null,
-    name: null,
-    workspaceId,
-  };
-  try {
-    const response = await doFetch(`${facadeBaseUrl}/v1/me/profile`, {
-      method: "GET",
-      headers: {
-        accept: "application/json",
-        authorization: `Bearer ${handoff.bearer_token}`,
-      },
-    });
-    if (!response.ok) return fallback;
-    const profile = (await response.json()) as ProfileResponse;
-    return {
-      sub: handoff.user_id,
-      email: typeof profile.email === "string" ? profile.email : null,
-      name:
-        typeof profile.display_name === "string" ? profile.display_name : null,
-      workspaceId,
-    };
-  } catch {
-    return fallback;
-  }
 }
 
 function trimTrailingSlash(url: string): string {

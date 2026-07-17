@@ -26,6 +26,33 @@ export interface LoopbackCode {
   readonly state: string;
 }
 
+/**
+ * Session handoff delivered straight to the loopback by the standalone
+ * wallet page (`{facade}/wallet.html` — see the frontend's
+ * `WalletHandoffPage.buildHandoffRedirectUrl`). Unlike the OIDC code
+ * flow there is no second facade hop: the redirect query already carries
+ * the minted session, using the same field names as the OIDC callback
+ * handoff JSON.
+ */
+export interface LoopbackHandoff {
+  readonly bearerToken: string;
+  readonly userId: string;
+  readonly sessionId: string;
+  /** ISO timestamp the minted session expires (as received). */
+  readonly expiresAt: string;
+  readonly requiresMfa: boolean;
+  readonly returnTo: string | null;
+  readonly state: string;
+}
+
+export interface LoopbackHandoffHandle {
+  readonly port: number;
+  readonly redirectUri: string;
+  readonly handoffPromise: Promise<LoopbackHandoff>;
+  armState(state: string): void;
+  close(): void;
+}
+
 export interface RandomPortOptions {
   /** Bind attempts before giving up (default 5). */
   readonly attempts?: number;
@@ -124,9 +151,26 @@ async function bindServer(
   }
 }
 
-export async function awaitLoopbackCode(
+type ParseOutcome<T> =
+  | { readonly ok: true; readonly value: T }
+  | { readonly ok: false; readonly message: string };
+
+interface GenericLoopbackHandle<T> {
+  readonly port: number;
+  readonly redirectUri: string;
+  readonly resultPromise: Promise<T>;
+  armState(state: string): void;
+  close(): void;
+}
+
+// Shared loopback scaffolding for the code flow (Google) and the wallet
+// handoff flow: bind (random-port retry), single-path routing, deferred
+// state arming, timeout, idempotent close. Only the redirect-query
+// parsing differs per flow.
+async function awaitLoopback<T>(
   options: AwaitLoopbackOptions,
-): Promise<LoopbackHandle> {
+  parse: (url: URL, expectedState: string) => ParseOutcome<T>,
+): Promise<GenericLoopbackHandle<T>> {
   const callbackPath = options.callbackPath ?? DEFAULT_CALLBACK_PATH;
   const timeoutMs = options.timeoutMs ?? DEFAULT_TIMEOUT_MS;
   const successHtml = options.successHtml ?? DEFAULT_SUCCESS_HTML;
@@ -134,11 +178,11 @@ export async function awaitLoopbackCode(
 
   let expectedState: string | null = options.expectedState ?? null;
 
-  let resolveCode: (value: LoopbackCode) => void = () => {};
-  let rejectCode: (err: Error) => void = () => {};
-  const codePromise = new Promise<LoopbackCode>((resolve, reject) => {
-    resolveCode = resolve;
-    rejectCode = reject;
+  let resolveResult: (value: T) => void = () => {};
+  let rejectResult: (err: Error) => void = () => {};
+  const resultPromise = new Promise<T>((resolve, reject) => {
+    resolveResult = resolve;
+    rejectResult = reject;
   });
 
   const server: Server = createServer(
@@ -157,34 +201,18 @@ export async function awaitLoopbackCode(
         res.end(failureHtml);
         return;
       }
-      const error = url.searchParams.get("error");
-      if (error !== null) {
+      const outcome = parse(url, expectedState);
+      if (!outcome.ok) {
         res.statusCode = 400;
         res.setHeader("content-type", "text/html; charset=utf-8");
         res.end(failureHtml);
-        rejectCode(new Error(`oidc redirect error: ${error}`));
-        return;
-      }
-      const code = url.searchParams.get("code");
-      const state = url.searchParams.get("state");
-      if (code === null || state === null) {
-        res.statusCode = 400;
-        res.setHeader("content-type", "text/html; charset=utf-8");
-        res.end(failureHtml);
-        rejectCode(new Error("oidc redirect missing code or state"));
-        return;
-      }
-      if (state !== expectedState) {
-        res.statusCode = 400;
-        res.setHeader("content-type", "text/html; charset=utf-8");
-        res.end(failureHtml);
-        rejectCode(new Error("oidc state mismatch"));
+        rejectResult(new Error(outcome.message));
         return;
       }
       res.statusCode = 200;
       res.setHeader("content-type", "text/html; charset=utf-8");
       res.end(successHtml);
-      resolveCode({ code, state });
+      resolveResult(outcome.value);
     },
   );
 
@@ -202,17 +230,17 @@ export async function awaitLoopbackCode(
   const close = (): void => {
     if (closed) return;
     closed = true;
-    rejectCode(new Error("loopback server closed before redirect"));
+    rejectResult(new Error("loopback server closed before redirect"));
     server.close();
   };
 
   const timeoutHandle = setTimeout(() => {
-    rejectCode(new Error("loopback redirect timed out"));
+    rejectResult(new Error("loopback redirect timed out"));
     close();
   }, timeoutMs);
   timeoutHandle.unref();
 
-  codePromise
+  resultPromise
     .catch(() => {})
     .finally(() => {
       clearTimeout(timeoutHandle);
@@ -222,10 +250,119 @@ export async function awaitLoopbackCode(
   return {
     port,
     redirectUri,
-    codePromise,
+    resultPromise,
     armState: (state: string): void => {
       expectedState = state;
     },
     close,
+  };
+}
+
+function parseCodeRedirect(
+  url: URL,
+  expectedState: string,
+): ParseOutcome<LoopbackCode> {
+  const error = url.searchParams.get("error");
+  if (error !== null) {
+    return { ok: false, message: `oidc redirect error: ${error}` };
+  }
+  const code = url.searchParams.get("code");
+  const state = url.searchParams.get("state");
+  if (code === null || state === null) {
+    return { ok: false, message: "oidc redirect missing code or state" };
+  }
+  if (state !== expectedState) {
+    return { ok: false, message: "oidc state mismatch" };
+  }
+  return { ok: true, value: { code, state } };
+}
+
+function parseHandoffRedirect(
+  url: URL,
+  expectedState: string,
+): ParseOutcome<LoopbackHandoff> {
+  const error = url.searchParams.get("error");
+  if (error !== null) {
+    return { ok: false, message: `wallet redirect error: ${error}` };
+  }
+  const state = url.searchParams.get("state");
+  if (state === null) {
+    return { ok: false, message: "wallet handoff missing state" };
+  }
+  if (state !== expectedState) {
+    return { ok: false, message: "wallet handoff state mismatch" };
+  }
+  const bearerToken = url.searchParams.get("bearer_token");
+  const userId = url.searchParams.get("user_id");
+  const sessionId = url.searchParams.get("session_id");
+  const expiresAt = url.searchParams.get("expires_at");
+  const requiresMfaRaw = url.searchParams.get("requires_mfa");
+  if (
+    bearerToken === null ||
+    bearerToken === "" ||
+    userId === null ||
+    sessionId === null ||
+    expiresAt === null ||
+    requiresMfaRaw === null
+  ) {
+    return {
+      ok: false,
+      message:
+        "wallet handoff missing required session fields " +
+        "(bearer_token, user_id, session_id, expires_at, requires_mfa)",
+    };
+  }
+  if (requiresMfaRaw !== "true" && requiresMfaRaw !== "false") {
+    return {
+      ok: false,
+      message: `wallet handoff malformed requires_mfa: ${requiresMfaRaw}`,
+    };
+  }
+  return {
+    ok: true,
+    value: {
+      bearerToken,
+      userId,
+      sessionId,
+      expiresAt,
+      requiresMfa: requiresMfaRaw === "true",
+      returnTo: url.searchParams.get("return_to"),
+      state,
+    },
+  };
+}
+
+export async function awaitLoopbackCode(
+  options: AwaitLoopbackOptions,
+): Promise<LoopbackHandle> {
+  const inner = await awaitLoopback<LoopbackCode>(options, parseCodeRedirect);
+  return {
+    port: inner.port,
+    redirectUri: inner.redirectUri,
+    codePromise: inner.resultPromise,
+    armState: inner.armState,
+    close: inner.close,
+  };
+}
+
+/**
+ * Loopback listener for the wallet (SIWE) sign-in flow. The wallet page
+ * redirects the system browser here with the full session handoff in the
+ * query string; `state` must round-trip the value the desktop embedded
+ * in the `?handoff=` target it opened the browser with.
+ */
+export async function awaitLoopbackHandoff(
+  options: AwaitLoopbackOptions,
+): Promise<LoopbackHandoffHandle> {
+  const inner = await awaitLoopback<LoopbackHandoff>(
+    options,
+    parseHandoffRedirect,
+  );
+  return {
+    port: inner.port,
+    redirectUri: inner.redirectUri,
+    handoffPromise: inner.resultPromise,
+    armState: inner.armState,
+    close: inner.close,
   };
 }

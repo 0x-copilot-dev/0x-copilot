@@ -8,6 +8,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { AuthAuditEntry, AuthAuditEvent, AuthAuditLog } from "./audit-log";
 import { AuthService, type AuthSession } from "./index";
 import type { runGoogleLogin } from "./google-login";
+import type { runWalletLogin } from "./wallet-login";
 import type { SafeStorageLike } from "./secret-storage";
 
 function fakeSafeStorage(): SafeStorageLike {
@@ -280,6 +281,197 @@ describe("AuthService", () => {
     expect(await service.getBearer("org_acme")).toBe("dev-bearer");
     await service.signInWithGoogle("org_acme");
     expect(await service.getBearer("org_acme")).toBe("g-bearer-3");
+  });
+
+  function walletSession(bearer: string, sub = "usr_w1"): AuthSession {
+    return {
+      idToken: null,
+      accessToken: bearer,
+      refreshToken: null,
+      expiresAt: Date.now() + 3600_000,
+      claims: {
+        sub,
+        email: "sarah@acme.test",
+        name: "Sarah Chen",
+        workspaceId: "org_acme",
+      },
+    };
+  }
+
+  it("signInWithWallet persists the session, audits success, and getBearer serves it", async () => {
+    const audit = memoryAudit();
+    const flow = vi.fn(
+      async (): Promise<AuthSession> => walletSession("w-bearer-1"),
+    ) as unknown as typeof runWalletLogin;
+    const service = new AuthService({
+      mode: "dev-mint",
+      facadeBaseUrl: "http://127.0.0.1:8200",
+      userDataDir: tmp,
+      safeStorage: fakeSafeStorage(),
+      openExternal: async () => {},
+      fetch: vi.fn() as unknown as typeof fetch,
+      authAudit: audit,
+      walletLoginFlow: flow,
+    });
+
+    const session = await service.signInWithWallet("org_acme");
+    expect(session.workspaceId).toBe("org_acme");
+    expect(session.email).toBe("sarah@acme.test");
+    expect(session.displayName).toBe("Sarah Chen");
+
+    // Flow received the workspace and the configured facade base URL.
+    const flowMock = flow as unknown as { mock: { calls: unknown[][] } };
+    expect(flowMock.mock.calls[0][0]).toBe("org_acme");
+    expect(
+      (flowMock.mock.calls[0][1] as { facadeBaseUrl: string }).facadeBaseUrl,
+    ).toBe("http://127.0.0.1:8200");
+
+    expect(await service.getBearer("org_acme")).toBe("w-bearer-1");
+    expect(audit.events).toEqual([
+      {
+        kind: "sign-in-success",
+        workspaceId: "org_acme",
+        sub: "usr_w1",
+        mode: "wallet",
+      },
+    ]);
+  });
+
+  it("signInWithWallet failure (e.g. MFA-pending refusal) audits and rethrows", async () => {
+    const audit = memoryAudit();
+    const flow = vi.fn(async (): Promise<AuthSession> => {
+      throw new Error(
+        "this account requires multi-factor authentication — sign in via the web app to complete MFA",
+      );
+    }) as unknown as typeof runWalletLogin;
+    const service = new AuthService({
+      mode: "dev-mint",
+      facadeBaseUrl: "http://127.0.0.1:8200",
+      userDataDir: tmp,
+      safeStorage: fakeSafeStorage(),
+      openExternal: async () => {},
+      fetch: vi.fn() as unknown as typeof fetch,
+      authAudit: audit,
+      walletLoginFlow: flow,
+    });
+
+    await expect(service.signInWithWallet("org_acme")).rejects.toThrow(
+      /multi-factor authentication/u,
+    );
+    expect(await service.getSession("org_acme")).toBeNull();
+    expect(audit.events).toEqual([
+      {
+        kind: "sign-in-failure",
+        workspaceId: "org_acme",
+        mode: "wallet",
+        reason:
+          "this account requires multi-factor authentication — sign in via the web app to complete MFA",
+      },
+    ]);
+  });
+
+  it("a second signInWithWallet cancels the pending first and replaces the stored session", async () => {
+    const audit = memoryAudit();
+    let cancelled = 0;
+    let call = 0;
+    const flow = vi.fn(
+      (workspaceId: string, deps: Parameters<typeof runWalletLogin>[1]) => {
+        call += 1;
+        if (call === 1) {
+          // First flow parks forever on the loopback until cancelled.
+          return new Promise<AuthSession>((_resolve, reject) => {
+            deps.onCancelAvailable?.(() => {
+              cancelled += 1;
+              reject(new Error("loopback server closed before redirect"));
+            });
+          });
+        }
+        return Promise.resolve(walletSession("w-bearer-2", "usr_w2"));
+      },
+    ) as unknown as typeof runWalletLogin;
+
+    const service = new AuthService({
+      mode: "dev-mint",
+      facadeBaseUrl: "http://127.0.0.1:8200",
+      userDataDir: tmp,
+      safeStorage: fakeSafeStorage(),
+      openExternal: async () => {},
+      fetch: vi.fn() as unknown as typeof fetch,
+      authAudit: audit,
+      walletLoginFlow: flow,
+    });
+
+    const firstError = service
+      .signInWithWallet("org_acme")
+      .then(() => null)
+      .catch((err: unknown) => err);
+    await Promise.resolve();
+    const second = await service.signInWithWallet("org_acme");
+
+    expect(cancelled).toBe(1);
+    expect(String(await firstError)).toMatch(/closed before redirect/u);
+    expect(second.workspaceId).toBe("org_acme");
+    expect(await service.getBearer("org_acme")).toBe("w-bearer-2");
+    const kinds = audit.events.map((e) => e.kind).sort();
+    expect(kinds).toEqual(["sign-in-failure", "sign-in-success"]);
+  });
+
+  it("a wallet sign-in cancels a pending Google sign-in (newest click wins across modes)", async () => {
+    let googleCancelled = 0;
+    const googleFlow = vi.fn(
+      (_workspaceId: string, deps: Parameters<typeof runGoogleLogin>[1]) =>
+        new Promise<AuthSession>((_resolve, reject) => {
+          deps.onCancelAvailable?.(() => {
+            googleCancelled += 1;
+            reject(new Error("loopback server closed before redirect"));
+          });
+        }),
+    ) as unknown as typeof runGoogleLogin;
+    const walletFlow = vi.fn(
+      async (): Promise<AuthSession> => walletSession("w-bearer-x"),
+    ) as unknown as typeof runWalletLogin;
+
+    const service = new AuthService({
+      mode: "dev-mint",
+      facadeBaseUrl: "http://127.0.0.1:8200",
+      userDataDir: tmp,
+      safeStorage: fakeSafeStorage(),
+      openExternal: async () => {},
+      fetch: vi.fn() as unknown as typeof fetch,
+      googleLoginFlow: googleFlow,
+      walletLoginFlow: walletFlow,
+    });
+
+    const googleError = service
+      .signInWithGoogle("org_acme")
+      .then(() => null)
+      .catch((err: unknown) => err);
+    await Promise.resolve();
+    const walletDone = await service.signInWithWallet("org_acme");
+
+    expect(googleCancelled).toBe(1);
+    expect(String(await googleError)).toMatch(/closed before redirect/u);
+    expect(walletDone.workspaceId).toBe("org_acme");
+    expect(await service.getBearer("org_acme")).toBe("w-bearer-x");
+  });
+
+  it("signInWithWallet replaces a previous dev-mint session on disk", async () => {
+    const service = new AuthService({
+      mode: "dev-mint",
+      facadeBaseUrl: "http://127.0.0.1:8200",
+      userDataDir: tmp,
+      safeStorage: fakeSafeStorage(),
+      openExternal: async () => {},
+      fetch: devMintFetch("dev-bearer"),
+      walletLoginFlow: vi.fn(
+        async (): Promise<AuthSession> => walletSession("w-bearer-3"),
+      ) as unknown as typeof runWalletLogin,
+    });
+
+    await service.signIn("org_acme");
+    expect(await service.getBearer("org_acme")).toBe("dev-bearer");
+    await service.signInWithWallet("org_acme");
+    expect(await service.getBearer("org_acme")).toBe("w-bearer-3");
   });
 
   it("refresh re-mints in dev-mint mode", async () => {

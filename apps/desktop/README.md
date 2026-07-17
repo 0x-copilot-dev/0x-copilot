@@ -43,7 +43,7 @@ decision report friction note 1).
 
 ## Sign-in
 
-The renderer's `SignInGate` offers two paths, both IPC → main (bearer
+The renderer's `SignInGate` offers three paths, all IPC → main (bearer
 tokens never cross the IPC boundary):
 
 - **Sign in** — `auth.sign-in`: dev-mint (default) or direct-IdP OIDC
@@ -58,12 +58,26 @@ tokens never cross the IPC boundary):
   JSON bearer handoff. PKCE verifier + nonce are held server-side, bound
   to the single-use 10-minute `state`. Requires `GOOGLE_OAUTH_CLIENT_ID`
   on the backend process (and the loopback URI authorized on the Google
-  OAuth client). Sessions persist via `SecretStorage` (safeStorage);
-  sign-in success/failure lands in the auth audit log
-  (`<userData>/audit/auth.log`). A second sign-in cancels any pending
-  Google flow and replaces the stored session. Sessions that come back
-  `requires_mfa: true` are refused — the desktop has no MFA challenge
-  surface yet.
+  OAuth client).
+- **Connect wallet** — `auth.sign-in-wallet`: Sign-In-With-Ethereum via
+  the facade-served standalone wallet page (`main/auth/wallet-login.ts`).
+  Main mints a random `state`, binds an ephemeral loopback server armed
+  with it, and opens
+  `{facade}/wallet.html?handoff=http://127.0.0.1:<port>/wallet/cb?state=<state>`
+  in the system browser. The page drives the wallet (EIP-6963 pick →
+  `personal_sign` → `POST /v1/auth/siwe/nonce` / `/verify`) and redirects
+  back to the loopback with the bearer handoff in the query (same field
+  names as the OIDC callback); the loopback rejects any redirect whose
+  `state` does not round-trip. No desktop-side facade hop besides the
+  best-effort `GET /v1/me/profile` claims enrichment.
+
+Shared hardening for both system-browser flows: sessions persist via
+`SecretStorage` (safeStorage); sign-in success/failure lands in the auth
+audit log (`<userData>/audit/auth.log`, modes `google` / `wallet`); a
+second sign-in click — either button — cancels any pending flow and
+replaces the stored session; loopback redirect waits time out (5 min
+default); sessions that come back `requires_mfa: true` are refused — the
+desktop has no MFA challenge surface yet.
 
 The facade base URL comes from `ATLAS_FACADE_URL` (default
 `http://127.0.0.1:8200`), the same source the transport bridge uses.

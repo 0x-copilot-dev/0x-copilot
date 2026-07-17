@@ -141,6 +141,8 @@ void app.whenReady().then(() => {
       signIn: (workspaceId) => authService.signIn(workspaceId),
       signInWithGoogle: (workspaceId) =>
         authService.signInWithGoogle(workspaceId),
+      signInWithWallet: (workspaceId) =>
+        authService.signInWithWallet(workspaceId),
       signOut: (workspaceId) => authService.signOut(workspaceId),
       getSession: (workspaceId) => authService.getSession(workspaceId),
       refresh: (workspaceId) => authService.refresh(workspaceId),
@@ -204,6 +206,9 @@ interface ActiveAuthService {
   signInWithGoogle(
     workspaceId: string,
   ): ReturnType<AuthService["signInWithGoogle"]>;
+  signInWithWallet(
+    workspaceId: string,
+  ): ReturnType<AuthService["signInWithWallet"]>;
   signOut(workspaceId: string): ReturnType<AuthService["signOut"]>;
   getSession(workspaceId: string): ReturnType<AuthService["getSession"]>;
   refresh(workspaceId: string): ReturnType<AuthService["refresh"]>;
@@ -260,6 +265,7 @@ function buildAuthService(authAudit: AuthAuditLog): ActiveAuthService {
   return {
     signIn: (workspaceId) => service.signIn(workspaceId),
     signInWithGoogle: (workspaceId) => service.signInWithGoogle(workspaceId),
+    signInWithWallet: (workspaceId) => service.signInWithWallet(workspaceId),
     signOut: (workspaceId) => service.signOut(workspaceId),
     getSession: (workspaceId) => service.getSession(workspaceId),
     refresh: (workspaceId) => service.refresh(workspaceId),
