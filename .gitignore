@@ -9,3 +9,6 @@ __pycache__/
 .cursor/
 *.egg-info/
 build/
+
+# Desktop runtime staging output (binaries staged by tools/desktop-runtime/stage.mjs)
+apps/desktop/resources/
