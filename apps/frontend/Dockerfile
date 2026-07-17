@@ -13,6 +13,7 @@ COPY packages/design-system/src ./packages/design-system/src
 COPY packages/chat-transport/package.json ./packages/chat-transport/package.json
 COPY packages/chat-transport/tsconfig.json ./packages/chat-transport/tsconfig.json
 COPY packages/chat-transport/src ./packages/chat-transport/src
+COPY packages/service-contracts/src ./packages/service-contracts/src
 COPY packages/chat-surface/package.json ./packages/chat-surface/package.json
 COPY packages/chat-surface/tsconfig.json ./packages/chat-surface/tsconfig.json
 COPY packages/chat-surface/src ./packages/chat-surface/src
