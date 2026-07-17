@@ -19,10 +19,11 @@ export const SIWE_STATEMENT = "Sign in to Atlas";
 export const SIWE_VERSION = "1";
 
 /**
- * The EIP-4361 message layout (required fields only — no Expiration
- * Time / Request ID / Resources lines; nonce TTL is enforced
- * server-side from the nonce row, and `expired_message` is derived from
- * Issued At). `{placeholders}` are filled by `buildSiweMessage`.
+ * The EIP-4361 message layout. `Expiration Time` is REQUIRED by the
+ * backend parser (`SiweMessageInvalid: "Expiration Time is required"`);
+ * clients set it to Issued At + 5 minutes, matching the server-side
+ * nonce TTL. No Not Before / Request ID / Resources lines.
+ * `{placeholders}` are filled by `buildSiweMessage`.
  *
  * Keep byte-identical to `backend_app/identity/siwe.py`.
  */
@@ -36,7 +37,11 @@ export const SIWE_MESSAGE_TEMPLATE =
   "Version: {version}\n" +
   "Chain ID: {chain_id}\n" +
   "Nonce: {nonce}\n" +
-  "Issued At: {issued_at}";
+  "Issued At: {issued_at}\n" +
+  "Expiration Time: {expiration_time}";
+
+/** Message validity window — mirrors the server-side nonce TTL. */
+export const SIWE_MESSAGE_TTL_MS = 5 * 60 * 1000;
 
 export interface SiweMessageFields {
   /** Serving origin's host (`window.location.host`) — must match what
@@ -52,6 +57,16 @@ export interface SiweMessageFields {
   nonce: string;
   /** ISO-8601 timestamp, e.g. `new Date().toISOString()`. */
   issuedAt: string;
+  /** ISO-8601 expiry — the backend rejects messages without it. Use
+   * `issuedAt + SIWE_MESSAGE_TTL_MS` (helper: `defaultExpirationTime`). */
+  expirationTime: string;
+}
+
+/** Issued At + the server-mirrored TTL, as ISO-8601. */
+export function defaultExpirationTime(issuedAt: string): string {
+  return new Date(
+    new Date(issuedAt).getTime() + SIWE_MESSAGE_TTL_MS,
+  ).toISOString();
 }
 
 /** Fill the frozen template. The result is what `personal_sign` signs
@@ -67,5 +82,6 @@ export function buildSiweMessage(fields: SiweMessageFields): string {
     .replace("{version}", SIWE_VERSION)
     .replace("{chain_id}", String(fields.chainId))
     .replace("{nonce}", fields.nonce)
-    .replace("{issued_at}", fields.issuedAt);
+    .replace("{issued_at}", fields.issuedAt)
+    .replace("{expiration_time}", fields.expirationTime);
 }

@@ -38,7 +38,7 @@ import {
   type Eip1193Provider,
   type WalletProviderCandidate,
 } from "./eip6963";
-import { buildSiweMessage } from "./siweMessage";
+import { buildSiweMessage, defaultExpirationTime } from "./siweMessage";
 
 export const CHAIN_NOT_ALLOWED_MESSAGE =
   "Switch to a supported network (Ethereum, Base, Arbitrum, Robinhood Chain)";
@@ -122,13 +122,15 @@ export function WalletSignIn(props: WalletSignInProps): ReactElement {
           chain_id: chainId,
         });
 
+        const issuedAt = new Date().toISOString();
         const message = buildSiweMessage({
           domain: window.location.host,
           uri: window.location.origin,
           address,
           chainId,
           nonce: nonce.nonce,
-          issuedAt: new Date().toISOString(),
+          issuedAt,
+          expirationTime: defaultExpirationTime(issuedAt),
         });
 
         setStep({ kind: "signing", walletName });

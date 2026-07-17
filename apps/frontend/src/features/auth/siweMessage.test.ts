@@ -9,6 +9,7 @@ import { describe, expect, it } from "vitest";
 
 import {
   buildSiweMessage,
+  defaultExpirationTime,
   SIWE_MESSAGE_TEMPLATE,
   SIWE_STATEMENT,
   SIWE_VERSION,
@@ -24,6 +25,7 @@ describe("buildSiweMessage", () => {
       chainId: 8453,
       nonce: "k9GhL2mPqRstUv",
       issuedAt: "2026-07-17T10:30:00.000Z",
+      expirationTime: "2026-07-17T10:35:00.000Z",
     });
     expect(message).toBe(
       "app.atlas.dev wants you to sign in with your Ethereum account:\n" +
@@ -35,7 +37,14 @@ describe("buildSiweMessage", () => {
         "Version: 1\n" +
         "Chain ID: 8453\n" +
         "Nonce: k9GhL2mPqRstUv\n" +
-        "Issued At: 2026-07-17T10:30:00.000Z",
+        "Issued At: 2026-07-17T10:30:00.000Z\n" +
+        "Expiration Time: 2026-07-17T10:35:00.000Z",
+    );
+  });
+
+  it("derives the default expiration from the server-mirrored TTL", () => {
+    expect(defaultExpirationTime("2026-07-17T10:30:00.000Z")).toBe(
+      "2026-07-17T10:35:00.000Z",
     );
   });
 
@@ -54,6 +63,7 @@ describe("buildSiweMessage", () => {
       "{chain_id}",
       "{nonce}",
       "{issued_at}",
+      "{expiration_time}",
     ]) {
       expect(SIWE_MESSAGE_TEMPLATE).toContain(placeholder);
     }
@@ -66,6 +76,7 @@ describe("buildSiweMessage", () => {
       uri: "https://app.atlas.dev",
       nonce: "n",
       issuedAt: "2026-07-17T10:30:00.000Z",
+      expirationTime: "2026-07-17T10:35:00.000Z",
     };
     expect(() => buildSiweMessage({ ...fields, chainId: 0 })).toThrow(
       /invalid chain id/,

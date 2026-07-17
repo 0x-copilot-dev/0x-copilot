@@ -15,7 +15,7 @@ import {
   EIP6963_REQUEST_EVENT,
   type Eip1193RequestArguments,
 } from "./eip6963";
-import { buildSiweMessage } from "./siweMessage";
+import { buildSiweMessage, defaultExpirationTime } from "./siweMessage";
 import { CHAIN_NOT_ALLOWED_MESSAGE, WalletSignIn } from "./WalletSignIn";
 
 const ADDRESS_EIP55 = "0xfB6916095ca1df60bB79Ce92cE3Ea74c37c5d359";
@@ -138,9 +138,12 @@ describe("WalletSignIn", () => {
     expect(hexToUtf8(hexMessage)).toBe(message);
 
     // And that message is the frozen template filled with our values
-    // (Issued At is wall-clock; extract it rather than pinning time).
-    const issuedAt = /Issued At: (.+)$/.exec(message)?.[1];
+    // (Issued At / Expiration Time are wall-clock; extract rather than
+    // pinning time, then assert the expiry is the TTL offset).
+    const issuedAt = /Issued At: (.+)$/m.exec(message)?.[1];
+    const expirationTime = /Expiration Time: (.+)$/m.exec(message)?.[1];
     expect(issuedAt).toBeDefined();
+    expect(expirationTime).toBe(defaultExpirationTime(issuedAt!));
     expect(message).toBe(
       buildSiweMessage({
         domain: window.location.host,
@@ -149,6 +152,7 @@ describe("WalletSignIn", () => {
         chainId: 1,
         nonce: "n0nceValue",
         issuedAt: issuedAt!,
+        expirationTime: expirationTime!,
       }),
     );
   });
