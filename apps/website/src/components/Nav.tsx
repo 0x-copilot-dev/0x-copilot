@@ -1,7 +1,7 @@
 const LINKS = [
-  { href: "/#what", label: "What it is", hideSm: true },
-  { href: "/#run", label: "Run it", hideSm: true },
-  { href: "/token.html", label: "Token" },
+  { href: "./#what", label: "What it is", hideSm: true },
+  { href: "./#run", label: "Run it", hideSm: true },
+  { href: "./token.html", label: "Token" },
   {
     href: "https://github.com/0x-copilot-dev/0x-copilot",
     label: "GitHub ↗",
@@ -12,7 +12,7 @@ const LINKS = [
 export function Nav({ here }: { readonly here?: "token" }) {
   return (
     <nav className="nav" id="nav">
-      <a className="mark" href="/">
+      <a className="mark" href="./">
         <b>0x</b>Copilot
       </a>
       <div className="nav__links">
