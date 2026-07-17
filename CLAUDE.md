@@ -44,11 +44,11 @@ OPENAI_API_KEY=$OPENAI_API_KEY make docker-dev
 make docker-dev-down
 ```
 
-Desktop app. Plain `npm run dev --workspace @0x-copilot/desktop` runs the Electron shell against MockTransport (or `ATLAS_FACADE_URL`). To exercise the supervised packaged boot (embedded PostgreSQL + the three services), stage the runtime once, then set `ATLAS_RUNTIME_DIR`:
+Desktop app. Plain `npm run dev --workspace @0x-copilot/desktop` runs the Electron shell against MockTransport (or `COPILOT_FACADE_URL`). To exercise the supervised packaged boot (embedded PostgreSQL + the three services), stage the runtime once, then set `COPILOT_RUNTIME_DIR`:
 
 ```bash
 node tools/desktop-runtime/stage.mjs --platform darwin --arch arm64   # match your host
-ATLAS_RUNTIME_DIR="$PWD/apps/desktop/resources" npm run dev --workspace @0x-copilot/desktop
+COPILOT_RUNTIME_DIR="$PWD/apps/desktop/resources" npm run dev --workspace @0x-copilot/desktop
 ```
 
 Details: `apps/desktop/README.md` (supervisor boot contract), `apps/desktop/SMOKE.md`, `tools/desktop-runtime/README.md`.

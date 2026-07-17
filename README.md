@@ -12,27 +12,35 @@
 
 ---
 
-## Download & install (desktop)
+## Install (desktop)
 
-Grab the latest build from the [**Releases**](https://github.com/0x-copilot-dev/0x-copilot/releases/latest) page:
+Install the `copilot` CLI — one command, no DMG, no installer, no admin rights:
 
-| Platform              | Asset                       |
-| --------------------- | --------------------------- |
-| macOS — Apple Silicon | `Atlas-<version>-arm64.dmg` |
-| macOS — Intel         | `Atlas-<version>-x64.dmg`   |
-| Windows               | `Atlas-Setup-<version>.exe` |
+```bash
+curl -fsSL https://0xcopilot.tech/install | bash
+```
 
-> **Builds are currently unsigned** until code-signing certificates land. macOS Gatekeeper and Windows SmartScreen will warn you the developer can't be verified — you'll need to click through (on macOS: right-click the app → **Open**; on Windows: **More info → Run anyway**). This goes away once signing is in place. See the [desktop release runbook](docs/deployment/desktop-release.md) for how builds are produced and where signing is gated.
+Already have Node 20+ or Bun? Install it directly:
 
-### Quickstart (3 steps)
+```bash
+npm install -g @0x-copilot/cli   # or: bun add -g @0x-copilot/cli
+```
 
-1. **Install** the download for your platform and launch it. On first run the app stages and boots its embedded services — you'll see a boot progress screen until it reports ready.
-2. **Sign in** — either:
-   - **Continue with Google**, or
-   - **Connect a wallet** — MetaMask, Rabby, or any [EIP-6963](https://eips.ethereum.org/EIPS/eip-6963) browser wallet. Supported chains: Ethereum (1), Base (8453), Arbitrum One (42161), Robinhood Chain (4663).
-3. **Add a model key** — open **Settings → AI & data → Provider keys** and paste your **OpenAI**, **Anthropic**, or **Google Gemini** key. Your key is encrypted at rest and used only for your runs.
+Then, anywhere:
 
-That's it — start a conversation and hand it work.
+```bash
+copilot
+```
+
+The first run stages a pinned, checksum-verified local runtime (Python + PostgreSQL + the app's services) and opens the app; every run after is instant. Because the runtime is fetched by your package manager rather than a browser, **macOS Gatekeeper and Windows SmartScreen never flag it** — no "unidentified developer" click-through — and on macOS the bundled binaries are ad-hoc signed at install time so they run on Apple Silicon without an Apple Developer certificate. macOS (Apple Silicon + Intel) and Windows x64. Full setup docs: [0xcopilot.tech/docs](https://0xcopilot.tech/docs) · CLI internals: [tools/cli](tools/cli).
+
+### Quickstart
+
+1. **Install & run** — `curl -fsSL https://0xcopilot.tech/install | bash`, then `copilot`. First run shows a boot screen while it stages and starts the embedded services.
+2. **Sign in** — **Connect a wallet** (MetaMask, Rabby, or any [EIP-6963](https://eips.ethereum.org/EIPS/eip-6963) wallet; chains: Ethereum 1, Base 8453, Arbitrum One 42161, Robinhood Chain 4663) or **Continue with Google**.
+3. **Add a model key** — **Settings → AI & data → Provider keys** and paste your **OpenAI**, **Anthropic**, or **Google Gemini** key (encrypted at rest, used only for your runs).
+
+Manage it: `copilot doctor` (diagnose) · `copilot uninstall` (remove runtime + data) · `npm rm -g @0x-copilot/cli` (remove the command). Prefer a signed DMG/installer? That's a future channel gated on signing certificates — see [desktop-app.md §10](docs/architecture/desktop-app.md).
 
 ---
 
@@ -85,7 +93,7 @@ make docker-dev-down
 
 ### Run the desktop app
 
-Plain `npm run dev --workspace @0x-copilot/desktop` launches the Electron shell against a mock transport (or `ATLAS_FACADE_URL` if you point it at a running facade) — no bundled services.
+Plain `npm run dev --workspace @0x-copilot/desktop` launches the Electron shell against a mock transport (or `COPILOT_FACADE_URL` if you point it at a running facade) — no bundled services.
 
 To exercise the full packaged boot (embedded PostgreSQL + the three Python services under supervision), stage the self-contained runtime once, then launch against it:
 
@@ -96,8 +104,8 @@ To exercise the full packaged boot (embedded PostgreSQL + the three Python servi
 node tools/desktop-runtime/stage.mjs --platform darwin --arch arm64
 
 # 2. Launch the Electron app against the staged runtime. Setting
-#    ATLAS_RUNTIME_DIR turns on the service supervisor.
-ATLAS_RUNTIME_DIR="$PWD/apps/desktop/resources" \
+#    COPILOT_RUNTIME_DIR turns on the service supervisor.
+COPILOT_RUNTIME_DIR="$PWD/apps/desktop/resources" \
   npm run dev --workspace @0x-copilot/desktop
 ```
 

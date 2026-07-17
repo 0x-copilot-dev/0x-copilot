@@ -19,11 +19,19 @@ Zero non-builtin node deps. External tools: system `tar` (bsdtar — reads
 ## Usage
 
 ```sh
-node tools/desktop-runtime/stage.mjs --platform darwin --arch arm64   # full staging on an arm64 mac
-node tools/desktop-runtime/stage.mjs --platform win32  --arch x64    # download+extract only (no exec cross-platform)
-node tools/desktop-runtime/run-local.mjs                              # boot + smoke + clean shutdown
-node tools/desktop-runtime/run-local.mjs --keep                       # leave the stack running
+node tools/desktop-runtime/stage.mjs --platform darwin --arch arm64              # full staging on an arm64 mac
+node tools/desktop-runtime/stage.mjs --platform darwin --arch arm64 --adhoc-sign # + credential-free ad-hoc code-signing (macOS host)
+node tools/desktop-runtime/stage.mjs --platform win32  --arch x64                # download+extract only (no exec cross-platform)
+node tools/desktop-runtime/run-local.mjs                                         # boot + smoke + clean shutdown
+node tools/desktop-runtime/run-local.mjs --keep                                  # leave the stack running
 ```
+
+`--adhoc-sign` (macOS host only) ad-hoc code-signs every staged Mach-O binary
+(`codesign --sign -`) and strips the quarantine xattr, so an **unsigned** bundle
+runs on Apple Silicon without Apple Developer credentials. This is what the
+`copilot` CLI ([tools/cli](../cli)) uses to distribute through npm/bun. The
+electron-builder packaging path leaves it **off** and signs with a real
+Developer ID instead (`build/sign-nested.js`), so the flag is opt-in.
 
 Staged output lands in `apps/desktop/resources/runtime/<platform>-<arch>/`
 (gitignored — never commit staged binaries). Cross-target staging verifies
@@ -84,4 +92,10 @@ backend/facade) plus `copilot-service-contracts` and
 - `compileall` may exit 1 on py2-era files inside shipped deps; treat as non-fatal (stage.mjs does).
 - Signing note for the mac app: executable Mach-O files live in `python/bin/*`,
   `python/lib/libpython3.13.dylib`, `postgres/bin/*`, `postgres/lib/**/*.dylib|*.so`, and native wheels'
-  `services/*/site-packages/**/*.so` — all need codesigning/notarization when packaged.
+  `services/*/site-packages/**/*.so`. Two distribution paths sign these differently:
+  the electron-builder packaged app signs them with a Developer ID + notarizes
+  (`build/sign-nested.js`); the `copilot` CLI ad-hoc signs them at stage time via
+  `--adhoc-sign` (no credentials — enough for arm64 execution, since npm/curl-staged
+  files never get the quarantine xattr that would trigger Gatekeeper notarization).
+  `--adhoc-sign` walks the staged tree, signs every Mach-O (executables + `.so`/`.dylib`),
+  and stamps a `.sign-stamp.json` so warm re-stages skip it.

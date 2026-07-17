@@ -2,7 +2,7 @@
 
 Status: **proposal — substrate decided (custom Electron)** · Owner: TBD · Last updated: 2026-05-17
 
-This document specifies the architecture for the Mac and Windows desktop client of the Atlas / 0x-copilot product. It is the **architecture spec** (what we're building and why); the [Desktop App PRD](../plan/desktop/PRD.md) is the execution plan (phases, agents, orchestration). Read this first, then the PRD.
+This document specifies the architecture for the Mac and Windows desktop client of the 0xCopilot product. It is the **architecture spec** (what we're building and why); the [Desktop App PRD](../plan/desktop/PRD.md) is the execution plan (phases, agents, orchestration). Read this first, then the PRD.
 
 This doc supersedes the prior fork-based draft (dated 2026-05-14). The prior `desktop-app-rollout.md` was replaced by the PRD and removed in Phase 0.
 
@@ -22,7 +22,7 @@ Related architecture docs:
 - One React tree (`packages/chat-surface`) for chat, layout, destinations, and per-SaaS renderers — byte-identical between `apps/frontend` (web) and `apps/desktop` (renderer).
 - Production-grade OIDC + OS keychain from day one (no dev-IdP code in shipped binaries).
 - Renderer architecture that **scales to 100+ SaaS** without 100+ hand-built renderers — see §4 (three-tier adapter strategy).
-- Inline diff approval that matches the Atlas design's PENDING-block UX, regardless of which renderer tier resolved.
+- Inline diff approval that matches the 0xCopilot design's PENDING-block UX, regardless of which renderer tier resolved.
 - Swimlane timeline scrubbing of agent-applied changes per surface (Time Machine; see §5.5).
 - Single source of truth for: routing, keybindings, URI scheme parsing, Transport contract.
 
@@ -61,8 +61,8 @@ Reasoning summary (full chain in [project-desktop-substrate-direction](../../.cl
 
 What would flip back to fork:
 
-1. A real plan to ship a third-party developer extension marketplace (extension model becomes product value). Not in the Atlas design.
-2. Source-code editing becomes a primary artifact (Monaco diff + code intelligence become load-bearing). Not in the Atlas design.
+1. A real plan to ship a third-party developer extension marketplace (extension model becomes product value). Not in the 0xCopilot design.
+2. Source-code editing becomes a primary artifact (Monaco diff + code intelligence become load-bearing). Not in the 0xCopilot design.
 
 ## 4. Renderer strategy — three tiers
 
@@ -190,7 +190,7 @@ This is _not_ a public extension API. Third parties don't write tier-1 adapters.
 
 ### 5.3 Window model
 
-Single `BrowserWindow`. Decision D9 in PRD. Match the Atlas design (one workspace, one window). Multi-window deferred indefinitely.
+Single `BrowserWindow`. Decision D9 in PRD. Match the 0xCopilot design (one workspace, one window). Multi-window deferred indefinitely.
 
 ### 5.4 Surface model
 
@@ -314,10 +314,30 @@ Decision D24 in PRD; reasoning in PRD §6.7.
 
 ## 10. Distribution
 
-- **Build matrix**: macOS x86_64 + arm64 (Universal lipo), Windows x86_64 (Windows arm64 built, not yet shipped), Linux x86_64 (CI verification only).
-- **Signing**: Apple Developer ID Application + notarization (notarytool); Windows EV cert on hardware token. Signing material never on PR/dev runners.
-- **Channels**: `stable` (electron-updater enabled) and `enterprise-mdm` (auto-update disabled via build flag; IT pushes updates via MDM).
-- **Update server (Phase 8)**: stateless, reads manifests from object storage; force-upgrade flag (`minSupportedVersion`); graceful degradation on unreachable.
+Two channels, sharing one runtime tree (`tools/desktop-runtime/stage.mjs`):
+
+**A. Terminal / npm — the `copilot` CLI (primary; no signing credentials).**
+`@0x-copilot/cli` ([tools/cli](../../tools/cli)) installs via `npm i -g` / `bun add -g`
+and launches the app with `copilot`. It stages the runtime with `--adhoc-sign` and
+spawns `electron <appDir>` under `COPILOT_RUNTIME_DIR`. This works with **zero Apple /
+Windows credentials**: arm64 execution needs only an ad-hoc signature (applied at stage
+time), and files staged by npm/curl never carry the `com.apple.quarantine` /
+Mark-of-the-Web marker that triggers Gatekeeper notarization or SmartScreen. Because it
+matches the fully-local, BYOK, wallet/Google-login direction, this is the default channel.
+Trade-offs vs. a signed installer: no MDM/tamper-evidence story, first-run staging cost,
+and updates come via `npm i -g …@latest` (electron-updater auto-no-ops when unpackaged).
+Publishing to public npm also exposes the bundled service source — use a private registry
+or a prebuilt-runtime download if that must stay closed.
+
+**B. Signed installer (optional; requires credentials we may not hold).** When Apple
+Developer ID + notarization (notarytool) and a Windows EV cert are available, electron-builder
+produces signed DMG/`.exe` artifacts (`build/sign-nested.js` pre-signs the bundled
+python/postgres Mach-O binaries with the hardened runtime; the CLI's `--adhoc-sign` is left
+off here). This is the path to add if/when an MDM-managed or tamper-evident distribution is
+required — it is not a prerequisite for shipping.
+
+- **Build matrix**: macOS x86_64 + arm64, Windows x86_64 (Windows arm64 built, not yet shipped), Linux x86_64 (CI verification only; not distributed).
+- **Auto-update**: CLI channel → `npm i -g …@latest`. Signed-installer channel → electron-updater against a stateless update server reading manifests from object storage; force-upgrade flag (`minSupportedVersion`); graceful degradation on unreachable.
 
 ## 11. Risks
 
