@@ -30,8 +30,8 @@ export function Demo({ rate = 2 }: { readonly rate?: number }) {
       <div className="shot">
         <video
           ref={ref}
-          src="/media/demo.webm"
-          poster="/media/poster.png"
+          src="./media/demo.webm"
+          poster="./media/poster.png"
           autoPlay
           muted
           loop

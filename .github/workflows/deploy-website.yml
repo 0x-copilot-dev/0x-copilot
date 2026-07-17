@@ -41,11 +41,19 @@ jobs:
         run: npm ci
 
       - name: Build
+        # SITE_BASE must match where Pages actually serves this site.
+        #   * Project site (no custom domain): /0x-copilot   <- today
+        #   * Custom domain attached:          /
+        # Getting this wrong 404s every stylesheet and the site renders as
+        # unstyled HTML. The link check below fails the build if the emitted
+        # HTML disagrees with SITE_BASE, so it cannot rot silently.
+        # When 0xcopilot.tech DNS is live: set SITE_BASE to "/" here.
+        env:
+          SITE_BASE: /0x-copilot
         run: npm run build --workspace @0x-copilot/website
 
       - name: Verify the build is intact
-        # Cheap guard against publishing a broken tree. A missing CNAME
-        # silently drops the custom domain, which is a painful way to
+        # A missing CNAME silently drops the custom domain — a painful way to
         # find out.
         run: |
           set -euo pipefail
@@ -54,6 +62,14 @@ jobs:
           done
           grep -q "0xcopilot.tech" apps/website/dist/CNAME
           echo "build OK"
+
+      - name: Verify every referenced asset resolves at the deploy base
+        # Regression guard: the first deploy shipped root-absolute asset URLs
+        # while Pages served under /0x-copilot, so every stylesheet 404'd.
+        # This fetches what the pages actually request, not what we assume.
+        run: node apps/website/scripts/check-links.mjs apps/website/dist "${SITE_BASE}"
+        env:
+          SITE_BASE: /0x-copilot
 
       - uses: actions/configure-pages@v5
 
