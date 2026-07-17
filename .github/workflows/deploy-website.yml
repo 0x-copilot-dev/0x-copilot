@@ -1,0 +1,65 @@
+name: deploy-website
+
+# 0xcopilot.tech — static Astro build, published to GitHub Pages.
+# Path-filtered so product changes never trigger a site deploy, per the CI
+# rules in CLAUDE.md.
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - "apps/website/**"
+      - ".github/workflows/deploy-website.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  pages: write
+  id-token: write
+
+# Never race two deploys; let an in-flight one finish rather than publishing
+# a half-written site.
+concurrency:
+  group: pages
+  cancel-in-progress: false
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    environment:
+      name: github-pages
+      url: ${{ steps.deploy.outputs.page_url }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          cache: npm
+
+      - name: Install
+        run: npm ci
+
+      - name: Build
+        run: npm run build --workspace @0x-copilot/website
+
+      - name: Verify the build is intact
+        # Cheap guard against publishing a broken tree. A missing CNAME
+        # silently drops the custom domain, which is a painful way to
+        # find out.
+        run: |
+          set -euo pipefail
+          for f in index.html token.html CNAME media/demo.webm; do
+            test -f "apps/website/dist/$f" || { echo "::error::missing dist/$f"; exit 1; }
+          done
+          grep -q "0xcopilot.tech" apps/website/dist/CNAME
+          echo "build OK"
+
+      - uses: actions/configure-pages@v5
+
+      - uses: actions/upload-pages-artifact@v3
+        with:
+          path: apps/website/dist
+
+      - id: deploy
+        uses: actions/deploy-pages@v4

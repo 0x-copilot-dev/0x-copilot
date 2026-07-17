@@ -1,0 +1,243 @@
+---
+import Base from "../layouts/Base.astro";
+import { Nav } from "../components/Nav";
+
+const REPO = "https://github.com/0x-copilot-dev/0x-copilot";
+---
+
+<Base
+  title="Tokenomics — 0xCopilot"
+  description="50% fair launch, 25% team & contributors, 25% automated capital formation. Every allocation has a job."
+  here="token"
+>
+  <Nav here="token" />
+
+  <header class="hero">
+    <span class="tag">● Not launched · no contract address exists yet</span>
+
+    <h1>Every allocation has <em>a job.</em></h1>
+
+    <p class="hero__sub">
+      0xCopilot launches on Virtuals Protocol. Three buckets, no hidden fourth.
+      Half the supply belongs to the market from the first block, a quarter is
+      reserved for the people who build the thing, and a quarter is a funding
+      engine the protocol runs — not a wallet anyone can reach into.
+    </p>
+
+    <div
+      class="alloc"
+      role="img"
+      aria-label="Supply allocation: 50 percent fair launch, 25 percent team and contributors, 25 percent automated capital formation"
+    >
+      <div class="alloc__seg" data-k="market">50% &nbsp;FAIR LAUNCH</div>
+      <div class="alloc__seg" data-k="people">25% &nbsp;ESOP</div>
+      <div class="alloc__seg" data-k="engine">25% &nbsp;ACF</div>
+    </div>
+  </header>
+
+  <section class="band" style="border-top:none;padding-top:0">
+    <div class="bucket" data-k="market">
+      <div class="bucket__pct">50%<span>The market</span></div>
+      <div class="bucket__body">
+        <h3>Fair launch — tradable from the first block.</h3>
+        <div class="prose">
+          <p>
+            Half the supply, in the pool, at launch. No lock, no vesting, no
+            allowlist, no preferential price. Everyone holding this half bought
+            it on the open curve at the same public price as everyone else.
+          </p>
+          <p>
+            <strong>There is no founder pre-buy.</strong> No insider bucket sits
+            in front of the market on the curve. The largest single allocation in
+            this project belongs to the people who buy it.
+          </p>
+        </div>
+        <ul class="facts">
+          <li><b>Lock</b><span>None — live at launch.</span></li>
+          <li>
+            <b>Float</b><span
+              >Grows one buy at a time. The pool is inventory, not a holder.</span
+            >
+          </li>
+          <li>
+            <b>Supply</b><span
+              ><span class="tbd">FILL: fixed supply</span> — set at launch under the
+              Virtuals framework and published here before the first block.</span
+            >
+          </li>
+        </ul>
+      </div>
+    </div>
+
+    <div class="bucket" data-k="people">
+      <div class="bucket__pct">25%<span>The people</span></div>
+      <div class="bucket__body">
+        <h3>Team &amp; contributors — the ESOP pool.</h3>
+        <div class="prose">
+          <p>
+            Reserved for the people who ship the product. Not a founder
+            allocation — a pool that pays out as grants to the engineers,
+            designers and contributors who actually build 0xCopilot, each grant
+            carrying its own vesting on top of the protocol lock.
+          </p>
+          <p>
+            Unallocated tokens sit still in a published wallet. A transfer out of
+            this pool means a person joined — nothing else.
+          </p>
+        </div>
+        <ul class="facts">
+          <li>
+            <b>Protocol lock</b><span
+              ><span class="tbd">FILL: lock period</span> from launch, enforced on-chain
+              by Virtuals.</span
+            >
+          </li>
+          <li>
+            <b>Protocol vest</b><span
+              ><span class="tbd">FILL: vest window + shape</span> into a pool wallet
+              the company controls.</span
+            >
+          </li>
+          <li>
+            <b>Grants</b><span
+              >Made from the pool with their own multi-year schedule and cliff,
+              sized by role. A grant re-locks; it does not unlock.</span
+            >
+          </li>
+          <li>
+            <b>Early vest</b><span
+              ><span class="tbd">FILL: FDV early-vest trigger, if any</span> — Virtuals
+              can start the vest early above a valuation threshold. If that applies
+              here it gets stated on this line, not discovered later.</span
+            >
+          </li>
+        </ul>
+      </div>
+    </div>
+
+    <div class="bucket" data-k="engine">
+      <div class="bucket__pct">25%<span>The engine</span></div>
+      <div class="bucket__body">
+        <h3>Automated Capital Formation — funding tied to proof.</h3>
+        <div class="prose">
+          <p>
+            The funding engine, executed by the protocol rather than by anyone's
+            judgment. As valuation rises, ACF converts tokens to USDC in small
+            automated steps and routes the proceeds to the operating company —
+            hiring, infrastructure, audits, the work.
+          </p>
+          <p>
+            <strong>No growth, no funding.</strong> Capital only forms when the
+            market has verified the work. There is no discretionary insider
+            selling from this bucket, because no insider can execute it.
+          </p>
+        </div>
+        <ul class="facts">
+          <li>
+            <b>Trigger</b><span
+              ><span class="tbd">FILL: starting FDV</span> — below that, ACF releases
+              nothing.</span
+            >
+          </li>
+          <li>
+            <b>Mechanism</b><span
+              >Automated conversion at each additional
+              <span class="tbd">FILL: FDV step</span>, continuing to
+              <span class="tbd">FILL: FDV ceiling</span>.</span
+            >
+          </li>
+          <li><b>Proceeds</b><span>USDC growth capital to the operating company.</span></li>
+          <li>
+            <b>Execution</b><span
+              >Protocol-run and on-chain. Not a wallet with a human signer.</span
+            >
+          </li>
+        </ul>
+      </div>
+    </div>
+  </section>
+
+  <section class="band">
+    <div class="eyebrow">Day one</div>
+    <h2>Insider-linked supply that can move at launch: zero.</h2>
+    <div class="prose">
+      <p>
+        Only fair-launch tokens can trade on day one. The ESOP is behind a
+        protocol lock, ACF hasn't triggered, and there is no pre-buy to unlock.
+        Every insider-linked token is locked, vested, or protocol-executed.
+      </p>
+    </div>
+
+    <div class="note">
+      <strong>Where the operating money comes from.</strong> Day-to-day costs are
+      meant to run on the protocol's trade-fee stream, not on selling supply — and
+      scale capital comes from ACF, which only fires when valuation rises.
+      <span class="tbd">FILL: fee split + operations share</span> once the launch
+      parameters are fixed, so this line matches what's actually on-chain.
+    </div>
+  </section>
+
+  <section class="band">
+    <div class="eyebrow">Commitments</div>
+    <h2>The rules we hold ourselves to.</h2>
+    <ul class="facts">
+      <li>
+        <b>01</b><span
+          >Every wallet is published and labeled — the ESOP pool and the company
+          treasury, watchable on-chain from day one. There are no allocations
+          other than the three on this page.</span
+        >
+      </li>
+      <li>
+        <b>02</b><span
+          >The ESOP wallet moves only by grant. Unallocated tokens sit visibly
+          still.</span
+        >
+      </li>
+      <li>
+        <b>03</b><span
+          >No founder pre-buy, at launch or after, from any bucket on this page.</span
+        >
+      </li>
+      <li>
+        <b>04</b><span
+          >The protocol holds the keys where it counts. Locks, vesting and ACF
+          execution are enforced on-chain by Virtuals — the parts you'd otherwise
+          have to trust are the parts we can't touch.</span
+        >
+      </li>
+    </ul>
+
+    <div class="legal">
+      <p>
+        The 0xCopilot token is not equity, and carries no dividend, revenue
+        entitlement, or claim on company assets. Nothing on this page is an offer
+        of securities or investment advice.
+      </p>
+      <p>
+        Protocol mechanics — locks, vesting and ACF thresholds — follow the
+        Virtuals Protocol framework and are enforced on-chain. The ESOP grant
+        policy is a 0xCopilot commitment, published here and verifiable by
+        watching the labeled wallets.
+      </p>
+      <p>
+        <strong style="color:var(--signal)">No contract address exists yet.</strong>
+        When one does it will be published here and on
+        <a href="https://x.com/Copilot0x" rel="noopener">@Copilot0x</a>. Any
+        address you see anywhere else, before then, is not ours.
+      </p>
+    </div>
+  </section>
+
+  <footer class="foot">
+    <div class="foot__links">
+      <a href="/">Home</a>
+      <a href={REPO} rel="noopener">GitHub ↗</a>
+      <a href="https://x.com/Copilot0x" rel="noopener">@Copilot0x ↗</a>
+    </div>
+    <p class="foot__fine">
+      © 2026 0xCopilot · Ask · Steer · Ship<br />
+      Nothing on this site is financial advice or an offer of securities.
+    </p>
+  </footer>
+</Base>

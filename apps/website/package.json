@@ -1,0 +1,23 @@
+{
+  "name": "@0x-copilot/website",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "description": "0xcopilot.tech — marketing site. Static, deployed to GitHub Pages.",
+  "scripts": {
+    "dev": "astro dev",
+    "build": "astro build",
+    "preview": "astro preview",
+    "typecheck": "astro check"
+  },
+  "dependencies": {
+    "@astrojs/react": "4.2.1",
+    "astro": "5.3.0",
+    "react": "19.0.0",
+    "react-dom": "19.0.0"
+  },
+  "devDependencies": {
+    "@types/react": "19.0.8",
+    "@types/react-dom": "19.0.3"
+  }
+}

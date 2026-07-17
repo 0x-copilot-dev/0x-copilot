@@ -1,0 +1,297 @@
+---
+import Base from "../layouts/Base.astro";
+import { Nav } from "../components/Nav";
+import { Shot } from "../components/Shot";
+import { Demo } from "../components/Demo";
+
+const REPO = "https://github.com/0x-copilot-dev/0x-copilot";
+
+// The real destinations, read off the running app's rail — not a wishlist.
+const SURFACES = [
+  ["home", "Your day: triage and live activity"],
+  ["chats", "Conversations and streamed runs"],
+  ["inbox", "Approvals and anything waiting on you"],
+  ["todos", "Tasks, recurring series, bulk actions"],
+  ["projects", "Scoped work, members, templates"],
+  ["library", "Files and datasets, indexed"],
+  ["agents", "Install and run subagents"],
+  ["tools", "What it can call — and every call it made"],
+  ["connectors", "MCP servers, OAuth, per-chat scope"],
+  ["team", "Shared work across your org"],
+  ["memory", "What it learned, and what it proposes to keep"],
+  ["routines", "Work that runs on a schedule"],
+] as const;
+---
+
+<Base
+  title="0xCopilot — the agent that shows its work"
+  description="0xCopilot does real multi-step work across your files and tools, and streams every step as it happens. Rewind any run. Stop it before it lands. Your machine, your key, your model."
+>
+  <Nav />
+
+  <header class="hero">
+    <span class="tag">● Pre-launch · building in the open</span>
+
+    <h1>The agent that <em>shows its work.</em></h1>
+
+    <p class="hero__sub">
+      0xCopilot takes on real multi-step work across your files, your tools and
+      the apps you already use — and streams every step as it happens. Rewind
+      any run. Stop it before it lands. It runs on your machine, on your API
+      key, on whatever model you pick.
+    </p>
+
+    <div class="cta">
+      <a class="btn btn--go" href="#run">See how it runs</a>
+      <a class="btn" href={REPO} rel="noopener">Read the source ↗</a>
+      <a class="btn" href="https://x.com/Copilot0x" rel="noopener">Follow the launch ↗</a>
+    </div>
+
+    <Demo client:load rate={2} />
+  </header>
+
+  <!-- ---------------------------------------------------------------- -->
+  <section class="band" id="what">
+    <div class="eyebrow">The problem</div>
+    <h2>Agents don't fail loudly.</h2>
+    <div class="prose">
+      <p>
+        They fail quietly, four steps back, and hand you a confident paragraph
+        about it. By the time you notice, you can't tell which step went wrong —
+        so you can't fix it, and you can't trust the next one either.
+      </p>
+      <p>
+        <strong>
+          An agent that does the work is the easy part. An agent whose work you
+          can check is the hard part.
+        </strong>
+        0xCopilot is built around the second problem. Every run is a durable, ordered
+        log of typed events — not a black box that emits a summary.
+      </p>
+    </div>
+
+    <div class="verbs">
+      <div class="verb">
+        <h3>Watch</h3>
+        <p>
+          Every step is a typed event, streamed live as it happens — not a
+          spinner and a summary at the end.
+        </p>
+        <code>GET /v1/agent/runs/:id/stream</code>
+      </div>
+      <div class="verb">
+        <h3>Rewind</h3>
+        <p>
+          Events persist with a monotonic sequence number per run. Replay any
+          run from any point, or reconnect and resume exactly where you dropped.
+        </p>
+        <code>?after_sequence=N</code>
+      </div>
+      <div class="verb">
+        <h3>Steer</h3>
+        <p>
+          The steps that touch the real world pause and wait for you. Approve,
+          redirect, or stop the run mid-flight.
+        </p>
+        <code>run.waiting_for_permission</code>
+      </div>
+    </div>
+  </section>
+
+  <!-- ---------------------------------------------------------------- -->
+  <section class="band">
+    <div class="split">
+      <div>
+        <div class="eyebrow">Yours</div>
+        <h2>Your machine. Your key. Your model.</h2>
+        <div class="prose">
+          <p>
+            0xCopilot runs locally. Bring your own API key — it talks to
+            <strong>OpenAI</strong>, <strong>Anthropic</strong> or
+            <strong>Google</strong>, and you pay your provider directly. No seat
+            license, no subscription tier, no middleman between you and the
+            model you chose.
+          </p>
+          <p>
+            Provider keys live in your own environment and are never accepted in
+            a request body — that's enforced in the codebase, not promised on a
+            landing page. Connectors authenticate through real OAuth, and their
+            tokens sit in a vault you run.
+          </p>
+        </div>
+      </div>
+      <Shot
+        src="/media/connectors.png"
+        alt="The 0xCopilot Connectors screen, showing connected and available MCP connectors."
+        cap="connectors"
+        note="OAuth to the services you already use."
+      />
+    </div>
+  </section>
+
+  <!-- ---------------------------------------------------------------- -->
+  <section class="band">
+    <div class="split split--flip">
+      <div>
+        <div class="eyebrow">Not a chatbot</div>
+        <h2>Twelve surfaces, not one text box.</h2>
+        <div class="prose">
+          <p>
+            Chat is the right rail, not the whole product. The work lands on
+            real surfaces you can open, filter and act on — and the agent works
+            the same surfaces you do.
+          </p>
+        </div>
+      </div>
+      <Shot
+        src="/media/todos.png"
+        alt="The 0xCopilot Todos destination, showing real tasks with priorities."
+        cap="todos"
+        note="Work the agent created, on a surface you own."
+      />
+    </div>
+
+    <div class="surfaces">
+      {
+        SURFACES.map(([name, what]) => (
+          <div class="surface">
+            <b>{name}</b>
+            <span>{what}</span>
+          </div>
+        ))
+      }
+    </div>
+  </section>
+
+  <!-- ---------------------------------------------------------------- -->
+  <section class="band" id="run">
+    <div class="eyebrow">Run it</div>
+    <h2>One command, on your hardware.</h2>
+    <div class="prose">
+      <p>
+        Today 0xCopilot runs as a local stack you bring up with Docker and open
+        in your browser at <code>127.0.0.1:8080</code>. The runtime, the stores
+        and the event log all stay on your machine.
+      </p>
+    </div>
+
+    <div class="term">
+      <pre><code><span class="c"># bring up the local stack</span>
+<span class="k">$</span> OPENAI_API_KEY=$OPENAI_API_KEY make docker-dev
+
+<span class="c"># open it</span>
+<span class="k">$</span> open http://127.0.0.1:8080
+
+<span class="c"># stop it — nothing left running, nothing left behind</span>
+<span class="k">$</span> make docker-dev-down</code></pre>
+    </div>
+
+    <div class="prose">
+      <p>
+        Native <strong>macOS and Windows</strong> apps are in design and not
+        shipped yet. Until they land, the local stack is the product — and it's
+        the same code you'll read on GitHub.
+      </p>
+    </div>
+  </section>
+
+  <!-- ---------------------------------------------------------------- -->
+  <section class="band">
+    <div class="eyebrow">Answers</div>
+    <h2>The questions that decide trust.</h2>
+    <div class="faq">
+      <details>
+        <summary>Can it do things without asking me?</summary>
+        <div class="faq__a">
+          <p>
+            That's your call, per run. Steps that touch the real world can pause
+            for an explicit approval before they execute — the run parks in
+            <code>waiting_for_permission</code> until you answer, and you can stop
+            it outright at any point.
+          </p>
+          <p>
+            Being straight with you: permission policy is configuration, not a
+            law of physics. Read the source and set it the way you want before
+            you point this at anything that matters.
+          </p>
+        </div>
+      </details>
+      <details>
+        <summary>Where do my API keys live?</summary>
+        <div class="faq__a">
+          <p>
+            In your own environment file, on your machine. Provider keys are
+            never accepted in a run request body — enforced in code. OAuth
+            tokens for connectors go into a token vault running in your stack.
+          </p>
+        </div>
+      </details>
+      <details>
+        <summary>Is any of this cloud-dependent?</summary>
+        <div class="faq__a">
+          <p>
+            The stack runs on your hardware. The one thing that leaves is what
+            you'd expect: your prompts and context go to whichever provider's
+            key you supplied. Point it at a local model and nothing leaves at
+            all.
+          </p>
+        </div>
+      </details>
+      <details>
+        <summary>What actually works today?</summary>
+        <div class="faq__a">
+          <p>
+            The runtime, streaming with replay and resume, approvals, MCP
+            connectors with OAuth, skills, memory, the library index, inline
+            citations, and the twelve surfaces above. It's real software under
+            active development — the video on this page is a recording of it.
+          </p>
+          <p>
+            Not shipped: the native desktop apps. We'd rather say that here than
+            let you find out after a download.
+          </p>
+        </div>
+      </details>
+      <details>
+        <summary>How do I know any of this is true?</summary>
+        <div class="faq__a">
+          <p>
+            Don't take our word for it — <a href={REPO} rel="noopener">read the code</a>.
+            Every claim on this page points at something you can go check.
+          </p>
+        </div>
+      </details>
+    </div>
+  </section>
+
+  <!-- ---------------------------------------------------------------- -->
+  <section class="band">
+    <div class="eyebrow">The token</div>
+    <h2>The app is the product.</h2>
+    <div class="prose">
+      <p>
+        0xCopilot is launching a token via Virtuals Protocol on Robinhood Chain.
+        Half the supply goes to the market on a fair launch, a quarter is
+        reserved for the people who build it, and a quarter funds the work
+        through protocol-run capital formation — released only as the market
+        verifies progress.
+      </p>
+      <p>Every allocation, lock and schedule is spelled out on one page.</p>
+    </div>
+    <div class="cta">
+      <a class="btn btn--go" href="/token.html">See the tokenomics</a>
+    </div>
+  </section>
+
+  <footer class="foot">
+    <div class="foot__links">
+      <a href="/token.html">Tokenomics</a>
+      <a href={REPO} rel="noopener">GitHub ↗</a>
+      <a href="https://x.com/Copilot0x" rel="noopener">@Copilot0x ↗</a>
+    </div>
+    <p class="foot__fine">
+      © 2026 0xCopilot · Ask · Steer · Ship<br />
+      Nothing on this site is financial advice or an offer of securities.
+    </p>
+  </footer>
+</Base>
