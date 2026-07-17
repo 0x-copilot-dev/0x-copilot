@@ -6,6 +6,7 @@ import {
   buildServiceEnv,
   databaseUrl,
   ENV_PASSTHROUGH_ALLOWLIST,
+  migrateDatabaseUrl,
   pythonPathValue,
   UVICORN_MODULES,
   type ServiceEnvInputs,
@@ -16,6 +17,7 @@ const SECRETS: BootSecrets = {
   serviceToken: "service-token-value",
   vaultSecret: "vault-secret-value",
   pgPassword: "pg+password/with=specials",
+  auditHmacKey: "audit-hmac-key-value",
 };
 
 function inputs(
@@ -52,6 +54,19 @@ describe("databaseUrl", () => {
   });
 });
 
+describe("migrateDatabaseUrl", () => {
+  it("uses the +psycopg driver marker (yoyo has no psycopg2)", () => {
+    const url = migrateDatabaseUrl({
+      pgPort: 5555,
+      pgPassword: "p@ss/w:rd",
+      database: "atlas_ai",
+    });
+    expect(url).toBe(
+      "postgresql+psycopg://atlas:p%40ss%2Fw%3Ard@127.0.0.1:5555/atlas_ai",
+    );
+  });
+});
+
 describe("uvicorn modules", () => {
   it("matches the resource contract", () => {
     expect(UVICORN_MODULES).toEqual({
@@ -67,15 +82,23 @@ describe("buildServiceEnv(backend)", () => {
     const env = buildServiceEnv("backend", inputs());
     expect(env.BACKEND_ENVIRONMENT).toBe("production");
     expect(env.ENTERPRISE_DEPLOYMENT_PROFILE).toBe("single_user_desktop");
-    expect(env.DATABASE_URL).toContain("/atlas_backend");
-    expect(env.DATABASE_URL).toContain("@127.0.0.1:54321/");
-    expect(env.BACKEND_DATABASE_URL).toBe(env.DATABASE_URL);
+    expect(env.DATABASE_URL).toBe(
+      "postgresql://atlas:pg%2Bpassword%2Fwith%3Dspecials@127.0.0.1:54321/atlas_backend",
+    );
+    // The app pool takes the bare scheme; yoyo needs the +psycopg marker.
+    expect(env.BACKEND_DATABASE_URL).toBe(
+      "postgresql+psycopg://atlas:pg%2Bpassword%2Fwith%3Dspecials@127.0.0.1:54321/atlas_backend",
+    );
     expect(env.ENTERPRISE_AUTH_SECRET).toBe(SECRETS.authSecret);
     expect(env.ENTERPRISE_SERVICE_TOKEN).toBe(SECRETS.serviceToken);
     expect(env.MCP_TOKEN_VAULT_BACKEND).toBe("local");
     expect(env.MCP_TOKEN_VAULT_SECRET).toBe(SECRETS.vaultSecret);
+    // desktop_app.py requires AUDIT_HMAC_KEY (audit chain fails closed).
+    expect(env.AUDIT_HMAC_KEY).toBe(SECRETS.auditHmacKey);
     expect(env.PYTHONPATH).toBe("src:site-packages");
     expect(env.PYTHONUNBUFFERED).toBe("1");
+    // Desktop has no OTel collector; the kill switch is required in production.
+    expect(env.OTEL_SDK_DISABLED).toBe("true");
   });
 
   it("passes GOOGLE_OAUTH_CLIENT_ID through when set", () => {
@@ -93,14 +116,21 @@ describe("buildServiceEnv(ai-backend)", () => {
     expect(env.RUNTIME_ENVIRONMENT).toBe("production");
     expect(env.ENTERPRISE_DEPLOYMENT_PROFILE).toBe("single_user_desktop");
     expect(env.RUNTIME_STORE_BACKEND).toBe("postgres");
+    expect(env.DATABASE_URL).toContain("postgresql://");
     expect(env.DATABASE_URL).toContain("/atlas_ai");
-    expect(env.RUNTIME_DATABASE_URL).toBe(env.DATABASE_URL);
+    // yoyo migrate URL uses the +psycopg driver marker.
+    expect(env.RUNTIME_DATABASE_URL).toContain("postgresql+psycopg://");
+    expect(env.RUNTIME_DATABASE_URL).toContain("/atlas_ai");
+    // Auto-apply is off: migrations.ts owns the apply with the +psycopg URL.
+    expect(env.RUNTIME_MIGRATIONS_AUTO_APPLY).toBe("false");
+    expect(env.OTEL_SDK_DISABLED).toBe("true");
     expect(env.RUNTIME_START_IN_PROCESS_WORKER).toBe("true");
     expect(env.RUNTIME_EVENT_BUS_BACKEND).toBe("in_memory");
     expect(env.MCP_BACKEND_REGISTRY_URL).toBe("http://127.0.0.1:8101");
     expect(env.SKILLS_BACKEND_REGISTRY_URL).toBe("http://127.0.0.1:8101");
     expect(env.ENTERPRISE_AUTH_SECRET).toBe(SECRETS.authSecret);
     expect(env.ENTERPRISE_SERVICE_TOKEN).toBe(SECRETS.serviceToken);
+    expect(env.AUDIT_HMAC_KEY).toBe(SECRETS.auditHmacKey);
     // Backend-only settings do not leak.
     expect(env.MCP_TOKEN_VAULT_SECRET).toBeUndefined();
     expect(env.BACKEND_ENVIRONMENT).toBeUndefined();

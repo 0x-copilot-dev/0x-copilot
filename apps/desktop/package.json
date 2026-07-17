@@ -13,7 +13,14 @@
     "build": "npm run compile",
     "dev": "npm run build && ELECTRON_RUN_AS_NODE= electron .",
     "desktop:dev": "npm run dev",
-    "package": "npm run build && electron-builder --dir",
+    "stage:runtime": "node ../../tools/desktop-runtime/stage.mjs --platform $(node -p process.platform) --arch $(node -p process.arch)",
+    "stage:runtime:mac:arm64": "node ../../tools/desktop-runtime/stage.mjs --platform darwin --arch arm64",
+    "stage:runtime:mac:x64": "node ../../tools/desktop-runtime/stage.mjs --platform darwin --arch x64",
+    "stage:runtime:win": "node ../../tools/desktop-runtime/stage.mjs --platform win32 --arch x64",
+    "package": "npm run build && electron-builder --dir --publish never",
+    "dist:mac:arm64": "npm run stage:runtime:mac:arm64 && npm run build && electron-builder --mac --arm64 --publish never",
+    "dist:mac:x64": "npm run stage:runtime:mac:x64 && npm run build && electron-builder --mac --x64 --publish never",
+    "dist:win": "npm run stage:runtime:win && npm run build && electron-builder --win --x64 --publish never",
     "clean": "rm -rf out dist"
   },
   "dependencies": {
@@ -21,6 +28,7 @@
     "@0x-copilot/chat-surface": "0.1.0",
     "@0x-copilot/chat-transport": "0.1.0",
     "@0x-copilot/surface-renderers": "0.1.0",
+    "electron-updater": "^6.6.2",
     "react": "19.2.7",
     "react-dom": "19.2.7",
     "zod": "3.25.76"

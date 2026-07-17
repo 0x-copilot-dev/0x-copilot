@@ -3,3 +3,12 @@ node_modules/
 dist/
 .vite/
 .cache/
+# The repo-root .gitignore ignores every `build/` dir, but ours holds
+# electron-builder INPUTS (entitlements + the afterPack signing hook), not
+# build output — re-include it.
+!build/
+!build/**
+# Staged self-contained runtime (python + postgres + service site-packages),
+# produced by tools/desktop-runtime/stage.mjs and consumed by extraResources.
+# Multi-hundred-MB per-arch binaries — never committed.
+resources/

@@ -71,7 +71,7 @@ function makeFakeFs(): { fs: BootSecretsFs; state: FakeFsState } {
 const USER_DATA = "/user-data";
 
 describe("loadOrCreateBootSecrets", () => {
-  it("generates all four secrets with the mandated shapes on first boot", async () => {
+  it("generates every secret with the mandated shapes on first boot", async () => {
     const { fs } = makeFakeFs();
     const secrets = await loadOrCreateBootSecrets({
       userDataDir: USER_DATA,
@@ -85,6 +85,8 @@ describe("loadOrCreateBootSecrets", () => {
     expect(secrets.vaultSecret).toMatch(/^[A-Za-z0-9_-]{64}$/u);
     // 32 bytes base64url = 43 chars.
     expect(secrets.pgPassword).toMatch(/^[A-Za-z0-9_-]{43}$/u);
+    // AUDIT_HMAC_KEY: 32 bytes hex = 64 hex chars (>= 32 bytes, hex-encoded).
+    expect(secrets.auditHmacKey).toMatch(/^[0-9a-f]{64}$/u);
   });
 
   it("persists once and returns identical secrets on the next load", async () => {

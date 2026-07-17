@@ -3,10 +3,11 @@ import { dirname, join } from "node:path";
 
 import type { SafeStorageLike } from "../auth/secret-storage";
 
-// The four secrets every supervised boot needs. Generated ONCE on first
-// boot and persisted; every later boot reuses the same values (the postgres
-// password in particular cannot change without losing access to the data
-// directory, and rotating ENTERPRISE_AUTH_SECRET invalidates sessions).
+// The secrets every supervised boot needs. Generated ONCE on first boot and
+// persisted; every later boot reuses the same values (the postgres password
+// in particular cannot change without losing access to the data directory,
+// rotating ENTERPRISE_AUTH_SECRET invalidates sessions, and rotating
+// AUDIT_HMAC_KEY breaks the tamper-evident audit chain's continuity).
 export interface BootSecrets {
   /** ENTERPRISE_AUTH_SECRET — 64 random bytes, hex encoded (128 chars). */
   readonly authSecret: string;
@@ -16,6 +17,12 @@ export interface BootSecrets {
   readonly vaultSecret: string;
   /** Postgres superuser (atlas) password — 32 random bytes, base64url. */
   readonly pgPassword: string;
+  /**
+   * AUDIT_HMAC_KEY — 32 random bytes, hex encoded (64 chars). desktop_app.py
+   * REQUIRES this (>= 32 bytes, hex): copilot_audit_chain fails closed
+   * without it under BACKEND_ENVIRONMENT=production.
+   */
+  readonly auditHmacKey: string;
 }
 
 // Thrown when the persisted blob exists but cannot be decrypted/parsed.
@@ -80,6 +87,7 @@ export async function loadOrCreateBootSecrets(
     serviceToken: random(48).toString("base64url"),
     vaultSecret: random(48).toString("base64url"),
     pgPassword: random(32).toString("base64url"),
+    auditHmacKey: random(32).toString("hex"),
   };
   await persist(path, secrets, config);
   return secrets;
@@ -148,6 +156,7 @@ function decode(raw: Buffer, safeStorage: SafeStorageLike): BootSecrets {
     "serviceToken",
     "vaultSecret",
     "pgPassword",
+    "auditHmacKey",
   ] as const;
   for (const field of fields) {
     const value = rec[field];
@@ -160,6 +169,7 @@ function decode(raw: Buffer, safeStorage: SafeStorageLike): BootSecrets {
     serviceToken: rec.serviceToken as string,
     vaultSecret: rec.vaultSecret as string,
     pgPassword: rec.pgPassword as string,
+    auditHmacKey: rec.auditHmacKey as string,
   };
 }
 

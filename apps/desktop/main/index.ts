@@ -1,3 +1,4 @@
+import { existsSync } from "node:fs";
 import {
   appendFile,
   mkdir,
@@ -15,15 +16,24 @@ import {
   shell,
   webContents,
 } from "electron";
+// Named import: electron-updater is CJS with no default export, so a default
+// import bundles to `undefined` under esbuild's interop.
+import { autoUpdater as electronAutoUpdater } from "electron-updater";
 
 import type { AdapterGeneratedPayload } from "@0x-copilot/api-types";
-import type { BootStatusPayload, Transport } from "@0x-copilot/chat-transport";
+import type {
+  BootStatusPayload,
+  Transport,
+  UpdateStatusPayload,
+} from "@0x-copilot/chat-transport";
 import {
   CHANNELS,
   MockTransport,
   WebTransport,
   withBearerRefresh,
 } from "@0x-copilot/chat-transport";
+
+import { initAutoUpdate, type AutoUpdateHandle } from "./updater";
 
 import {
   wireQualityGateForTier2,
@@ -70,6 +80,8 @@ let tier2LifecycleHandle: Tier2LifecycleHandle | null = null;
 let supervisor: ServiceSupervisor | null = null;
 let supervisorStopped = false;
 let latestBootStatus: BootStatusPayload | null = null;
+let updateHandle: AutoUpdateHandle | null = null;
+let latestUpdateStatus: UpdateStatusPayload | null = null;
 
 // One app instance at a time: the packaged build owns an embedded
 // postgres data dir — two postmasters on one cluster corrupt it.
@@ -109,6 +121,37 @@ function sendBootStatus(status: BootStatusPayload): void {
   mainWindow.webContents.send(CHANNELS.bootStatus, status);
 }
 
+function sendUpdateStatus(status: UpdateStatusPayload): void {
+  latestUpdateStatus = status;
+  if (mainWindow === null || mainWindow.isDestroyed()) return;
+  mainWindow.webContents.send(CHANNELS.updateStatus, status);
+}
+
+// electron-updater auto-update, active only in a packaged, signed build that
+// carries update metadata (app-update.yml). Unsigned/dev builds no-op. Runs
+// independently of the service supervisor: an update downloads in the
+// background and installs on the NEXT quit, never mid-run.
+function startAutoUpdate(): void {
+  try {
+    const hasUpdateConfig =
+      app.isPackaged &&
+      existsSync(join(process.resourcesPath, "app-update.yml"));
+    updateHandle = initAutoUpdate({
+      // electron-updater's autoUpdater matches AutoUpdaterLike structurally.
+      autoUpdater: electronAutoUpdater,
+      isPackaged: app.isPackaged,
+      hasUpdateConfig,
+      emit: sendUpdateStatus,
+      log: (message) => {
+        console.log("[updater]", message);
+      },
+    });
+  } catch (err) {
+    // Auto-update is never allowed to block or crash boot.
+    console.error("[updater] init failed (continuing without updates):", err);
+  }
+}
+
 if (hasSingleInstanceLock) {
   void app.whenReady().then(() => {
     startCrashReporter();
@@ -129,7 +172,13 @@ if (hasSingleInstanceLock) {
     });
     mainWindow.webContents.on("did-finish-load", () => {
       if (latestBootStatus !== null) sendBootStatus(latestBootStatus);
+      if (latestUpdateStatus !== null) sendUpdateStatus(latestUpdateStatus);
     });
+
+    // Background auto-update (packaged+signed only; no-op otherwise). Kept
+    // independent of the boot path so a boot failure never blocks updates and
+    // an update never interrupts a run.
+    startAutoUpdate();
 
     if (shouldSupervise({ isPackaged: app.isPackaged, env: process.env })) {
       supervisor = createDesktopSupervisor({
@@ -243,6 +292,8 @@ app.on("before-quit", (event) => {
   tier2LifecycleHandle = null;
   teardownIpcHandlers?.();
   teardownIpcHandlers = null;
+  updateHandle?.stop();
+  updateHandle = null;
   // Ordered shutdown: children (facade -> ai -> backend) then postgres.
   // preventDefault keeps the process alive until stop() resolves, then a
   // second quit passes straight through via the supervisorStopped flag.

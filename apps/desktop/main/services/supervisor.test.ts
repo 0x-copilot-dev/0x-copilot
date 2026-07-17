@@ -19,6 +19,7 @@ const SECRETS: BootSecrets = {
   serviceToken: "st",
   vaultSecret: "vs",
   pgPassword: "pg-pass",
+  auditHmacKey: "ah",
 };
 
 interface Harness {

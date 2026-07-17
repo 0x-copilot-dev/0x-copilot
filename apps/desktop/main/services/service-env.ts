@@ -51,6 +51,20 @@ export function databaseUrl(opts: {
   return `postgresql://${PG_SUPERUSER}:${password}@127.0.0.1:${opts.pgPort}/${opts.database}`;
 }
 
+// The app pools take the bare `postgresql://` URL (psycopg v3 accepts it),
+// but scripts/migrate.py runs yoyo, and yoyo resolves the bare scheme to the
+// psycopg2 driver — which is NOT installed. yoyo needs the explicit
+// `+psycopg` (v3) marker, exactly as tools/desktop-runtime/run-local.mjs
+// proves. Same DSN, driver-qualified scheme.
+export function migrateDatabaseUrl(opts: {
+  readonly pgPort: number;
+  readonly pgPassword: string;
+  readonly database: string;
+}): string {
+  const password = encodeURIComponent(opts.pgPassword);
+  return `postgresql+psycopg://${PG_SUPERUSER}:${password}@127.0.0.1:${opts.pgPort}/${opts.database}`;
+}
+
 export interface ServiceEnvInputs {
   readonly secrets: BootSecrets;
   readonly pgPort: number;
@@ -80,6 +94,10 @@ export function buildServiceEnv(
   }
   env.PYTHONPATH = pythonPathValue(inputs.pathDelimiter);
   env.PYTHONUNBUFFERED = "1";
+  // OTel kill switch: the desktop runs on a laptop with no collector. Without
+  // it, ai-backend's TelemetryBootstrap fails closed under *_ENVIRONMENT=production
+  // ("OTEL_EXPORTER_OTLP_ENDPOINT must be set in production").
+  env.OTEL_SDK_DISABLED = "true";
   env.ENTERPRISE_DEPLOYMENT_PROFILE = "single_user_desktop";
   env.ENTERPRISE_AUTH_SECRET = inputs.secrets.authSecret;
   env.ENTERPRISE_SERVICE_TOKEN = inputs.secrets.serviceToken;
@@ -96,10 +114,16 @@ export function buildServiceEnv(
       });
       env.BACKEND_ENVIRONMENT = "production";
       env.DATABASE_URL = dbUrl;
-      // scripts/migrate.py reads BACKEND_DATABASE_URL — keep both in sync.
-      env.BACKEND_DATABASE_URL = dbUrl;
+      // scripts/migrate.py runs yoyo, which needs the +psycopg driver marker.
+      env.BACKEND_DATABASE_URL = migrateDatabaseUrl({
+        pgPort: inputs.pgPort,
+        pgPassword: inputs.secrets.pgPassword,
+        database: BACKEND_DB_NAME,
+      });
       env.MCP_TOKEN_VAULT_BACKEND = "local";
       env.MCP_TOKEN_VAULT_SECRET = inputs.secrets.vaultSecret;
+      // desktop_app.py REQUIRES this (audit chain fails closed without it).
+      env.AUDIT_HMAC_KEY = inputs.secrets.auditHmacKey;
       break;
     }
     case "ai-backend": {
@@ -111,12 +135,23 @@ export function buildServiceEnv(
       env.RUNTIME_ENVIRONMENT = "production";
       env.RUNTIME_STORE_BACKEND = "postgres";
       env.DATABASE_URL = dbUrl;
-      // scripts/migrate.py reads RUNTIME_DATABASE_URL — keep both in sync.
-      env.RUNTIME_DATABASE_URL = dbUrl;
+      // scripts/migrate.py runs yoyo, which needs the +psycopg driver marker.
+      env.RUNTIME_DATABASE_URL = migrateDatabaseUrl({
+        pgPort: inputs.pgPort,
+        pgPassword: inputs.secrets.pgPassword,
+        database: AI_BACKEND_DB_NAME,
+      });
+      // Migrations are a dedicated boot step (migrations.ts). Without this the
+      // store's startup auto-apply would re-enter yoyo with the bare
+      // postgresql:// DATABASE_URL and crash on the missing psycopg2 driver.
+      env.RUNTIME_MIGRATIONS_AUTO_APPLY = "false";
       env.RUNTIME_START_IN_PROCESS_WORKER = "true";
       env.RUNTIME_EVENT_BUS_BACKEND = "in_memory";
       env.MCP_BACKEND_REGISTRY_URL = backendUrl;
       env.SKILLS_BACKEND_REGISTRY_URL = backendUrl;
+      // Passed for parity with the proven run-local.mjs boot; harmless if the
+      // ai-backend audit path does not read it.
+      env.AUDIT_HMAC_KEY = inputs.secrets.auditHmacKey;
       break;
     }
     case "backend-facade": {

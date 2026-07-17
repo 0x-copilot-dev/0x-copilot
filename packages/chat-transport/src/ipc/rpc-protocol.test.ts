@@ -4,6 +4,7 @@ import {
   BootPhaseSchema,
   BootStatusPayloadSchema,
   CHANNELS,
+  UpdateStatusPayloadSchema,
   isAllowedChannel,
 } from "./rpc-protocol";
 
@@ -71,5 +72,39 @@ describe("boot.status channel", () => {
       "ready",
       "stopping",
     ]);
+  });
+});
+
+describe("update.status channel", () => {
+  it("is present in the channel allowlist", () => {
+    expect(CHANNELS.updateStatus).toBe("update.status");
+    expect(isAllowedChannel("update.status")).toBe(true);
+  });
+
+  it("accepts a downloaded payload carrying the target version", () => {
+    const parsed = UpdateStatusPayloadSchema.parse({
+      kind: "downloaded",
+      version: "0.2.0",
+    });
+    expect(parsed.kind).toBe("downloaded");
+    expect(parsed.version).toBe("0.2.0");
+  });
+
+  it("accepts an error payload with a message and no version", () => {
+    const parsed = UpdateStatusPayloadSchema.parse({
+      kind: "error",
+      message: "network unreachable",
+    });
+    expect(parsed.kind).toBe("error");
+  });
+
+  it("rejects an unknown kind and unknown keys", () => {
+    expect(
+      UpdateStatusPayloadSchema.safeParse({ kind: "installing" }).success,
+    ).toBe(false);
+    expect(
+      UpdateStatusPayloadSchema.safeParse({ kind: "checking", extra: 1 })
+        .success,
+    ).toBe(false);
   });
 });

@@ -9,12 +9,14 @@ import {
   type PostgresManagerConfig,
 } from "./postgres";
 
+// Only initdb + pg_ctl exist in the zonky bundle; DB creation goes through
+// the staged python + psycopg (no psql / createdb).
 const PATHS = {
-  initdb: "/rt/pgsql/bin/initdb",
-  pgCtl: "/rt/pgsql/bin/pg_ctl",
-  pgIsReady: "/rt/pgsql/bin/pg_isready",
-  psql: "/rt/pgsql/bin/psql",
+  initdb: "/rt/postgres/bin/initdb",
+  pgCtl: "/rt/postgres/bin/pg_ctl",
 };
+const PYTHON_BIN = "/rt/python/bin/python3";
+const SITE_PACKAGES = "/rt/services/backend/site-packages";
 const DATA_DIR = "/user-data/pgdata";
 
 interface RunCall {
@@ -28,6 +30,7 @@ interface Harness {
   calls: RunCall[];
   files: Map<string, string>;
   removed: string[];
+  mkdirs: string[];
 }
 
 function ok(stdout = ""): CommandResult {
@@ -46,6 +49,7 @@ function makeHarness(options: {
 }): Harness {
   const files = new Map<string, string>(Object.entries(options.files ?? {}));
   const removed: string[] = [];
+  const mkdirs: string[] = [];
   const calls: RunCall[] = [];
   const fs: PostgresFs = {
     readFile: (path) => {
@@ -61,7 +65,10 @@ function makeHarness(options: {
       files.set(path, data);
       return Promise.resolve();
     },
-    mkdir: () => Promise.resolve(undefined),
+    mkdir: (path) => {
+      mkdirs.push(path);
+      return Promise.resolve(undefined);
+    },
     rm: (path) => {
       files.delete(path);
       removed.push(path);
@@ -74,6 +81,8 @@ function makeHarness(options: {
     logFile: "/user-data/logs/postgres.log",
     port: 55_432,
     password: "pg-secret",
+    pythonBin: PYTHON_BIN,
+    pythonSitePackages: SITE_PACKAGES,
     runner: (command, args, opts) => {
       const call: RunCall = { command, args, env: opts?.env };
       calls.push(call);
@@ -82,11 +91,9 @@ function makeHarness(options: {
     },
     fs,
     processAlive: options.processAlive ?? (() => true),
-    sleep: () => Promise.resolve(),
-    now: Date.now,
     ...options.config,
   });
-  return { manager, calls, files, removed };
+  return { manager, calls, files, removed, mkdirs };
 }
 
 describe("PostgresManager.start", () => {
@@ -110,6 +117,14 @@ describe("PostgresManager.start", () => {
     // pwfile is written before initdb and deleted afterwards.
     expect(h.removed).toContain(`${DATA_DIR}.pwfile`);
     expect(h.files.has(`${DATA_DIR}.pwfile`)).toBe(false);
+  });
+
+  it("creates the log-file directory before pg_ctl start", async () => {
+    // pg_ctl -l fails if logs/ does not exist yet (it runs before any service
+    // log writer). start() must mkdir it first.
+    const h = makeHarness({ files: { [`${DATA_DIR}/PG_VERSION`]: "17\n" } });
+    await h.manager.start();
+    expect(h.mkdirs).toContain("/user-data/logs");
   });
 
   it("skips initdb when PG_VERSION exists", async () => {
@@ -144,14 +159,9 @@ describe("PostgresManager.start", () => {
     expect(h.removed).not.toContain(`${DATA_DIR}/postmaster.pid`);
   });
 
-  it("starts via pg_ctl with loopback-only listen_addresses and waits for pg_isready", async () => {
-    const isReadyResults = [fail("no response"), fail("no response"), ok()];
+  it("starts via `pg_ctl -w -t start` with loopback-only listen_addresses (no pg_isready)", async () => {
     const h = makeHarness({
       files: { [`${DATA_DIR}/PG_VERSION`]: "17\n" },
-      onRun: (call) => {
-        if (call.command === PATHS.pgIsReady) return isReadyResults.shift();
-        return ok();
-      },
     });
     await h.manager.start();
 
@@ -159,8 +169,22 @@ describe("PostgresManager.start", () => {
     expect(start!.args).toContain("-w");
     expect(start!.args).toContain("start");
     expect(start!.args).toContain("-p 55432 -c listen_addresses=127.0.0.1");
-    const readyCalls = h.calls.filter((c) => c.command === PATHS.pgIsReady);
-    expect(readyCalls).toHaveLength(3);
+    // -w blocks until ready; the bundle ships no pg_isready to poll.
+    const tIndex = start!.args.indexOf("-t");
+    expect(tIndex).toBeGreaterThanOrEqual(0);
+    expect(start!.args[tIndex + 1]).toBe("60");
+    expect(h.calls.every((c) => !c.command.includes("pg_isready"))).toBe(true);
+  });
+
+  it("honors a custom startTimeoutSeconds", async () => {
+    const h = makeHarness({
+      files: { [`${DATA_DIR}/PG_VERSION`]: "17\n" },
+      config: { startTimeoutSeconds: 120 },
+    });
+    await h.manager.start();
+    const start = h.calls.find((c) => c.command === PATHS.pgCtl);
+    const tIndex = start!.args.indexOf("-t");
+    expect(start!.args[tIndex + 1]).toBe("120");
   });
 
   it("throws PostgresError when pg_ctl start fails", async () => {
@@ -173,68 +197,46 @@ describe("PostgresManager.start", () => {
     });
     await expect(h.manager.start()).rejects.toThrow(PostgresError);
   });
-
-  it("throws PostgresError when pg_isready never succeeds within budget", async () => {
-    let t = 0;
-    const h = makeHarness({
-      files: { [`${DATA_DIR}/PG_VERSION`]: "17\n" },
-      onRun: (call) => {
-        if (call.command === PATHS.pgIsReady) return fail("still starting");
-        return ok();
-      },
-      config: {
-        readyTimeoutMs: 1000,
-        readyIntervalMs: 250,
-        now: () => {
-          t += 300;
-          return t;
-        },
-      },
-    });
-    await expect(h.manager.start()).rejects.toThrow(/not ready after/u);
-  });
 });
 
 describe("PostgresManager.ensureDatabase", () => {
-  it("creates the database only when it does not exist", async () => {
-    const h = makeHarness({
-      files: { [`${DATA_DIR}/PG_VERSION`]: "17\n" },
-      onRun: (call) => {
-        if (
-          call.command === PATHS.psql &&
-          String(call.args.at(-1)).startsWith("SELECT 1 FROM pg_database")
-        ) {
-          return ok(""); // does not exist
-        }
-        return ok();
-      },
-    });
+  it("invokes the staged python + psycopg with the maintenance DSN", async () => {
+    const h = makeHarness({});
     await h.manager.ensureDatabase("atlas_backend");
-    const psqlCalls = h.calls.filter((c) => c.command === PATHS.psql);
-    expect(psqlCalls).toHaveLength(2);
-    expect(psqlCalls[1]!.args.at(-1)).toBe("CREATE DATABASE atlas_backend");
-    // Password travels via PGPASSWORD env, never argv.
-    expect(psqlCalls[0]!.env?.PGPASSWORD).toBe("pg-secret");
-    expect(psqlCalls[0]!.args.join(" ")).not.toContain("pg-secret");
+
+    const pyCalls = h.calls.filter((c) => c.command === PYTHON_BIN);
+    expect(pyCalls).toHaveLength(1);
+    const call = pyCalls[0]!;
+    expect(call.args[0]).toBe("-c");
+    // db name + conninfo are the two positional args after the -c script.
+    expect(call.args.at(-2)).toBe("atlas_backend");
+    expect(call.args.at(-1)).toBe(
+      "postgresql://atlas@127.0.0.1:55432/postgres",
+    );
+    // Password travels via PGPASSWORD env, never argv; psycopg is importable.
+    expect(call.env?.PGPASSWORD).toBe("pg-secret");
+    expect(call.env?.PYTHONPATH).toBe(SITE_PACKAGES);
+    expect(call.args.join(" ")).not.toContain("pg-secret");
   });
 
-  it("skips creation when the database already exists", async () => {
+  it("propagates a PostgresError when the python helper exits nonzero", async () => {
     const h = makeHarness({
       onRun: (call) => {
-        if (call.command === PATHS.psql) return ok("1\n");
+        if (call.command === PYTHON_BIN) return fail("connection refused");
         return ok();
       },
     });
-    await h.manager.ensureDatabase("atlas_ai");
-    const psqlCalls = h.calls.filter((c) => c.command === PATHS.psql);
-    expect(psqlCalls).toHaveLength(1);
+    await expect(h.manager.ensureDatabase("atlas_ai")).rejects.toThrow(
+      PostgresError,
+    );
   });
 
-  it("rejects an unsafe database name", async () => {
+  it("rejects an unsafe database name before spawning python", async () => {
     const h = makeHarness({});
     await expect(h.manager.ensureDatabase("bad; DROP TABLE x")).rejects.toThrow(
       /invalid db name/u,
     );
+    expect(h.calls).toHaveLength(0);
   });
 });
 

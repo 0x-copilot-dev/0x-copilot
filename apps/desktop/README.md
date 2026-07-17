@@ -93,37 +93,49 @@ transport once the facade is healthy.
 Plain `npm run dev` is unchanged: no supervisor, `ATLAS_FACADE_URL`
 selects WebTransport (MockTransport otherwise).
 
-**Runtime layout the supervisor expects** (electron-builder
-`extraResources` must stage exactly this under `<resourcesPath>/runtime`;
-in dev `ATLAS_RUNTIME_DIR` substitutes for `<resourcesPath>`, i.e. point
-it at `apps/desktop/resources` which contains `runtime/`):
+**Runtime layout the supervisor expects** — this is EXACTLY what
+`tools/desktop-runtime/stage.mjs` produces and what the proven
+`tools/desktop-runtime/run-local.mjs` boots. `resolveRuntimePaths()` roots
+the tree at `<base>/runtime/<platform>-<arch>`, where `<base>` is
+`process.resourcesPath` (packaged) or `ATLAS_RUNTIME_DIR` (dev, point it at
+`apps/desktop/resources`). electron-builder `extraResources` maps
+`apps/desktop/resources/runtime` → `<resourcesPath>/runtime`:
 
 ```
-runtime/
-  python/bin/python3(.exe)
-  pgsql/bin/{initdb,pg_ctl,pg_isready,psql}(.exe)
+runtime/<platform>-<arch>/          # e.g. darwin-arm64, win32-x64
+  python/bin/python3                # unix; symlink -> python3.13
+  python/python.exe                 # windows; at the python/ root, not bin/
+  postgres/bin/{initdb,pg_ctl}      # zonky bundle ships ONLY these two + `postgres`;
+                                    # NO psql / pg_isready / createdb
   services/{backend,ai-backend,backend-facade}/
-    src/  site-packages/  scripts/ (migrate.py for backend + ai-backend)
+    src/  site-packages/  scripts/ (migrate.py for backend + ai-backend)  migrations/
+  staging-manifest.json
 ```
 
 **Boot order** (`main/services/supervisor.ts`): secrets → free-port
 allocation (4 ports, OS-assigned) → postgres (initdb once with
-`--encoding=UTF8 --locale=C -U atlas --pwfile`, stale `postmaster.pid`
-cleanup, `pg_ctl -w start` on 127.0.0.1, `pg_isready` gate, create
-`atlas_backend` + `atlas_ai`) → `scripts/migrate.py apply` per stateful
-service → all three uvicorn children in parallel → health gate
-(`/v1/health`) backend + ai-backend first, then facade → ready. Progress
-streams to the renderer on the allowlisted `boot.status` channel
+`--encoding=UTF8 --locale=C -U atlas --pwfile --auth=scram-sha-256`, stale
+`postmaster.pid` cleanup, `pg_ctl -w -t 60 start` on 127.0.0.1 — `-w`
+blocks until the server accepts connections, so no separate `pg_isready`
+gate is needed or available; databases `atlas_backend` + `atlas_ai` are
+created with the staged python + psycopg because the bundle has no
+psql/createdb) → `scripts/migrate.py apply` per stateful service (yoyo runs
+against the `postgresql+psycopg://` migrate URL — the bare scheme resolves
+to the absent psycopg2 driver) → all three uvicorn children in parallel →
+health gate (`/v1/health`) backend + ai-backend first, then facade → ready.
+Progress streams to the renderer on the allowlisted `boot.status` channel
 (`BootStatusPayloadSchema`); the renderer's `BootGate` shows a progress
 screen until `phase: "ready"` and a terminal error screen on
 `fatal: true`. `before-quit` awaits `supervisor.stop()` (facade →
 ai-backend → backend → `pg_ctl stop -m fast`).
 
-**Secrets** are generated once (`main/services/boot-secrets.ts`) and
-persisted encrypted via safeStorage at `<userData>/secrets/boot-env.bin`
-(chmod-600 plaintext JSON fallback when safeStorage is unavailable). An
-unreadable blob is a fatal boot error — never silently regenerated,
-because the postgres password and `ENTERPRISE_AUTH_SECRET` live there.
+**Secrets** — `ENTERPRISE_AUTH_SECRET`, `ENTERPRISE_SERVICE_TOKEN`,
+`MCP_TOKEN_VAULT_SECRET`, the postgres password, and `AUDIT_HMAC_KEY` — are
+generated once (`main/services/boot-secrets.ts`) and persisted encrypted via
+safeStorage at `<userData>/secrets/boot-env.bin` (chmod-600 plaintext JSON
+fallback when safeStorage is unavailable). An unreadable blob is a fatal boot
+error — never silently regenerated, because the postgres password and
+`ENTERPRISE_AUTH_SECRET` live there.
 
 **On-disk locations** (all under `app.getPath("userData")`):
 `secrets/boot-env.bin`, `pgdata/` (postgres cluster),
@@ -141,6 +153,45 @@ Dev-run recipe against a staged runtime:
 ATLAS_RUNTIME_DIR="$PWD/apps/desktop/resources" \
   npm run dev --workspace @0x-copilot/desktop
 ```
+
+## Packaging, signing & auto-update
+
+Installers are built by `electron-builder` (`electron-builder.yml`). The
+`dist:*` npm scripts run the full handshake — **stage the runtime → compile →
+package** — for one platform/arch and never publish:
+
+```bash
+# from apps/desktop/ (run each on its native host — the staged python
+# site-packages are host-specific; a win build must run on Windows):
+npm run dist:mac:arm64     # -> dist/Atlas-<v>-arm64.dmg + -arm64-mac.zip
+npm run dist:mac:x64       # -> dist/Atlas-<v>-x64.dmg  + -x64-mac.zip
+npm run dist:win           # -> dist/Atlas Setup <v>.exe (nsis, per-user)
+```
+
+`stage:runtime*` runs `tools/desktop-runtime/stage.mjs` into
+`apps/desktop/resources/runtime/<platform>-<arch>/`; `extraResources` then maps
+`resources/runtime` → `<resourcesPath>/runtime`. Both `resources/` (staged
+binaries) and `dist/` are gitignored.
+
+**Signing (all via env; unset ⇒ unsigned local build that still runs):**
+
+- macOS code signing: `CSC_LINK` (base64 .p12 or path) + `CSC_KEY_PASSWORD`.
+  Set `CSC_IDENTITY_AUTO_DISCOVERY=false` to force an unsigned build.
+  `build/sign-nested.js` (afterPack) pre-signs the bundled python/postgres
+  Mach-O binaries with the hardened runtime BEFORE electron-builder signs the
+  `.app`; it no-ops cleanly when no identity is configured.
+- macOS notarization is auto-gated: it runs only when signing succeeds AND
+  `APPLE_API_KEY` + `APPLE_API_KEY_ID` + `APPLE_API_ISSUER` are in the env.
+- Windows signing: `CSC_LINK` + `CSC_KEY_PASSWORD` (same vars).
+
+**Auto-update** (`main/updater.ts`, electron-updater against the
+`0x-copilot-dev/0x-copilot` GitHub Releases feed): checks on ready + every 4h,
+downloads in the background, and installs **only on quit** so migrations never
+run under the old version. It is a hard no-op unless the build is packaged AND
+carries `app-update.yml` (i.e. signed release builds); lifecycle is surfaced to
+the renderer on the allowlisted `update.status` channel. CI publishes with
+`electron-builder --publish always`; the `dist:*` scripts pass
+`--publish never`.
 
 ## Manual sanity check after launching
 

@@ -38,6 +38,7 @@ export interface DesktopSupervisorConfig {
   readonly runtimeDirOverride?: string | undefined;
   readonly processEnv?: Readonly<Record<string, string | undefined>>;
   readonly platform?: NodeJS.Platform;
+  readonly arch?: NodeJS.Architecture;
 }
 
 // Composes the pure orchestrator (supervisor.ts) with the real OS-facing
@@ -51,6 +52,7 @@ export function createDesktopSupervisor(
     resourcesPath: config.resourcesPath,
     runtimeDirOverride: config.runtimeDirOverride,
     platform: config.platform,
+    arch: config.arch,
   });
   const processEnv = config.processEnv ?? process.env;
   const runner = createCommandRunner();
@@ -86,6 +88,10 @@ export function createDesktopSupervisor(
         logFile: join(logsDir, "postgres.log"),
         port,
         password,
+        // No psql/createdb in the bundle: databases are created with the
+        // staged interpreter + psycopg from the backend's site-packages.
+        pythonBin: paths.pythonBin,
+        pythonSitePackages: join(paths.serviceDir("backend"), "site-packages"),
         runner,
         fs: {
           readFile: (path, encoding) => readFile(path, encoding),

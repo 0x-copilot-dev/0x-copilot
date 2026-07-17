@@ -46,6 +46,11 @@ export const CHANNELS = {
   // the app shell after a `phase: "ready"` payload arrives. In dev
   // (unsupervised) mode main immediately pushes a synthetic ready payload.
   bootStatus: "boot.status",
+  // Main → renderer push: electron-updater lifecycle (GitHub Releases). The
+  // renderer can surface an "update ready — restart to apply" affordance; the
+  // actual install only happens on quit so migrations never run under the old
+  // version. No-op on unsigned/dev builds. Renderer never triggers installs.
+  updateStatus: "update.status",
 } as const;
 
 export type ChannelName = (typeof CHANNELS)[keyof typeof CHANNELS];
@@ -191,6 +196,34 @@ export const BootStatusPayloadSchema = z
 export type BootStatusPayload = z.infer<typeof BootStatusPayloadSchema>;
 
 // === end desktop supervisor boot status ===
+
+// === Desktop auto-update status ===
+
+// electron-updater lifecycle, surfaced Main → renderer on CHANNELS.updateStatus.
+// "downloaded" means an update is staged and will install on the NEXT quit.
+// "error" carries a human-readable message; it is never fatal to the running
+// app. Unsigned/dev builds never emit anything (the updater no-ops).
+export const UpdateStatusKindSchema = z.enum([
+  "checking",
+  "available",
+  "not-available",
+  "downloaded",
+  "error",
+]);
+export type UpdateStatusKind = z.infer<typeof UpdateStatusKindSchema>;
+
+export const UpdateStatusPayloadSchema = z
+  .object({
+    kind: UpdateStatusKindSchema,
+    /** Target version when known (available/downloaded). */
+    version: z.string().optional(),
+    /** Human-readable detail (error message, release notes summary). */
+    message: z.string().optional(),
+  })
+  .strict();
+export type UpdateStatusPayload = z.infer<typeof UpdateStatusPayloadSchema>;
+
+// === end desktop auto-update status ===
 
 export const StreamEventKindSchema = z.enum([
   "open",

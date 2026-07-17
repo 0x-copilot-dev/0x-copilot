@@ -1,0 +1,182 @@
+# Build, sign (best-effort), and publish the 0xCopilot / Atlas desktop app.
+#
+# Trigger: pushing a `v*` tag publishes; `workflow_dispatch` produces
+# downloadable artifacts only (an unsigned dry-run — never publishes).
+#
+# One native runner per (platform, arch): stage.mjs runs `pip install` on the
+# TARGET arch to populate each service's site-packages with matching wheels, so
+# a self-contained runtime cannot be cross-built. macos-14 = Apple Silicon
+# (arm64), macos-15-intel = Intel (x64 — GitHub retired the macos-13 Intel
+# image, so this is the current native x64 macOS host), windows-latest = x64.
+#
+# Signing degrades gracefully: every signing step is guarded on the *presence*
+# of its secret (routed through env, because GitHub forbids `secrets.*` inside a
+# step-level `if:`). With no cert the build is unsigned but still succeeds. See
+# docs/deployment/desktop-release.md for the exact secret names and the release
+# runbook.
+
+name: release-desktop
+
+on:
+  push:
+    tags:
+      - "v*"
+  workflow_dispatch:
+
+# Never interrupt an in-flight publish (a half-uploaded GitHub release is worse
+# than a slightly delayed one).
+concurrency:
+  group: release-desktop-${{ github.ref }}
+  cancel-in-progress: false
+
+# Read-only by default; the build job widens to contents:write so
+# electron-builder can create/update the GitHub release on a tag.
+permissions:
+  contents: read
+
+jobs:
+  build:
+    permissions:
+      contents: write
+    strategy:
+      # Surface every platform's outcome; one leg failing must not mask the rest.
+      fail-fast: false
+      matrix:
+        include:
+          - os: macos-14
+            platform: darwin
+            arch: arm64
+            eb_flags: "--mac --arm64"
+          - os: macos-15-intel
+            platform: darwin
+            arch: x64
+            eb_flags: "--mac --x64"
+          - os: windows-latest
+            platform: win32
+            arch: x64
+            eb_flags: "--win --x64"
+    runs-on: ${{ matrix.os }}
+    env:
+      # Secrets are hoisted to env so later steps can gate on their presence via
+      # `env.<NAME> != ''` — GitHub disallows `secrets.*` directly in a step `if:`.
+      # macOS Developer ID Application cert (.p12, base64) + its password:
+      MAC_CSC_LINK: ${{ secrets.MAC_CSC_LINK }}
+      MAC_CSC_KEY_PASSWORD: ${{ secrets.MAC_CSC_KEY_PASSWORD }}
+      # macOS notarization (App Store Connect API key for notarytool):
+      APPLE_API_KEY_B64: ${{ secrets.APPLE_API_KEY }}
+      APPLE_API_KEY_ID: ${{ secrets.APPLE_API_KEY_ID }}
+      APPLE_API_ISSUER: ${{ secrets.APPLE_API_ISSUER }}
+      # Windows Authenticode cert (.pfx, base64) + its password:
+      WIN_CSC_LINK: ${{ secrets.WIN_CSC_LINK }}
+      WIN_CSC_KEY_PASSWORD: ${{ secrets.WIN_CSC_KEY_PASSWORD }}
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+
+      - uses: actions/setup-node@48b55a011bda9f5d6aeb4c2d9c7362e8dae4041e # v6.4.0
+        with:
+          node-version: "22"
+          cache: npm
+
+      # Cache the downloaded CPython + PostgreSQL archives (~80 MB/platform).
+      # Keyed on the pinned manifest so a re-pin busts the cache automatically.
+      - name: Cache desktop runtime downloads
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: ~/.cache/enterprise-desktop-runtime
+          key: desktop-runtime-${{ runner.os }}-${{ matrix.arch }}-${{ hashFiles('tools/desktop-runtime/manifest.json') }}
+          restore-keys: |
+            desktop-runtime-${{ runner.os }}-${{ matrix.arch }}-
+
+      # `npm ci` also runs electron's postinstall, downloading the Electron
+      # binary into node_modules/electron/dist (required before electron-builder).
+      - name: Install dependencies
+        run: npm ci --no-audit --no-fund
+
+      # esbuild bundles main (CJS) + preload (CJS) + renderer (ESM, with
+      # chat-surface/chat-transport/surface-renderers inlined) into out/.
+      - name: Build desktop bundle
+        run: npm run build --workspace @0x-copilot/desktop
+
+      # Stages python + postgres + the three backend services (with wheels for
+      # THIS arch) into apps/desktop/resources/runtime/<platform>-<arch>/, which
+      # electron-builder's extraResources bundles into the app.
+      - name: Stage self-contained runtime
+        run: node tools/desktop-runtime/stage.mjs --platform ${{ matrix.platform }} --arch ${{ matrix.arch }}
+
+      # --- code signing (guarded on secret presence) --------------------------
+
+      - name: Enable macOS code signing
+        if: ${{ matrix.platform == 'darwin' && env.MAC_CSC_LINK != '' }}
+        shell: bash
+        run: |
+          echo "Developer ID Application cert present — signing enabled."
+          echo "CSC_LINK=$MAC_CSC_LINK" >> "$GITHUB_ENV"
+          echo "CSC_KEY_PASSWORD=$MAC_CSC_KEY_PASSWORD" >> "$GITHUB_ENV"
+
+      - name: Disable macOS code signing (no cert -> unsigned build)
+        if: ${{ matrix.platform == 'darwin' && env.MAC_CSC_LINK == '' }}
+        shell: bash
+        run: |
+          echo "::warning::No MAC_CSC_LINK secret — producing an UNSIGNED macOS build."
+          echo "CSC_IDENTITY_AUTO_DISCOVERY=false" >> "$GITHUB_ENV"
+
+      - name: Configure macOS notarization
+        if: ${{ matrix.platform == 'darwin' && env.APPLE_API_KEY_B64 != '' }}
+        shell: bash
+        run: |
+          key_path="$RUNNER_TEMP/apple_api_key.p8"
+          printf '%s' "$APPLE_API_KEY_B64" | base64 --decode > "$key_path"
+          echo "APPLE_API_KEY=$key_path" >> "$GITHUB_ENV"
+          # APPLE_API_KEY_ID / APPLE_API_ISSUER are already in job env for
+          # electron-builder's notarytool integration.
+          echo "notarization credentials configured."
+
+      - name: Skip macOS notarization (no API key)
+        if: ${{ matrix.platform == 'darwin' && env.APPLE_API_KEY_B64 == '' }}
+        shell: bash
+        run: echo "::warning::No APPLE_API_KEY secret — skipping notarization."
+
+      - name: Enable Windows code signing
+        if: ${{ matrix.platform == 'win32' && env.WIN_CSC_LINK != '' }}
+        shell: bash
+        run: |
+          echo "Authenticode cert present — signing enabled."
+          echo "CSC_LINK=$WIN_CSC_LINK" >> "$GITHUB_ENV"
+          echo "CSC_KEY_PASSWORD=$WIN_CSC_KEY_PASSWORD" >> "$GITHUB_ENV"
+
+      - name: Skip Windows code signing (no cert -> unsigned build)
+        if: ${{ matrix.platform == 'win32' && env.WIN_CSC_LINK == '' }}
+        shell: bash
+        run: echo "::warning::No WIN_CSC_LINK secret — producing an UNSIGNED Windows build. (Azure Trusted Signing is an alternative — see the runbook.)"
+
+      # --- package --------------------------------------------------------------
+
+      # Publishes ONLY for a pushed `v*` tag; a workflow_dispatch run (any ref,
+      # even a tag) uses --publish never and relies on upload-artifact below.
+      # electron-builder creates a DRAFT GitHub release and emits the
+      # latest-mac.yml / latest.yml feeds that electron-updater consumes.
+      - name: Build and publish desktop installers
+        working-directory: apps/desktop
+        shell: bash
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          npx electron-builder ${{ matrix.eb_flags }} \
+            --publish ${{ (github.event_name == 'push' && startsWith(github.ref, 'refs/tags/v')) && 'always' || 'never' }}
+
+      # Always upload the distributables — the sole output of a dispatch dry-run,
+      # and a convenient mirror of what a tag run also pushed to the release.
+      - name: Upload desktop installers
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: desktop-${{ matrix.platform }}-${{ matrix.arch }}
+          path: |
+            apps/desktop/dist/*.dmg
+            apps/desktop/dist/*.zip
+            apps/desktop/dist/*.exe
+            apps/desktop/dist/*.msi
+            apps/desktop/dist/*.blockmap
+            apps/desktop/dist/latest*.yml
+          if-no-files-found: warn
+          retention-days: 14

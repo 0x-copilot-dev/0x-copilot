@@ -13,8 +13,6 @@ export class PostgresError extends Error {
 export interface PostgresPaths {
   readonly initdb: string;
   readonly pgCtl: string;
-  readonly pgIsReady: string;
-  readonly psql: string;
 }
 
 export interface PostgresFs {
@@ -36,22 +34,51 @@ export interface PostgresManagerConfig {
   readonly logFile: string;
   readonly port: number;
   readonly password: string;
+  /**
+   * Staged python interpreter. The zonky postgres bundle ships NO psql /
+   * createdb, so database creation goes through python + psycopg (exactly as
+   * the proven tools/desktop-runtime/run-local.mjs does).
+   */
+  readonly pythonBin: string;
+  /**
+   * PYTHONPATH value that makes `import psycopg` resolve — the backend
+   * service's staged site-packages directory.
+   */
+  readonly pythonSitePackages: string;
   readonly runner: CommandRunner;
   readonly fs: PostgresFs;
   /** kill(pid, 0)-style liveness probe; injectable for stale-pid tests. */
   readonly processAlive?: (pid: number) => boolean;
-  readonly sleep?: (ms: number) => Promise<void>;
-  readonly readyTimeoutMs?: number;
-  readonly readyIntervalMs?: number;
-  readonly now?: () => number;
+  /** pg_ctl -w start wait budget in seconds (pg_ctl -t). Default 60. */
+  readonly startTimeoutSeconds?: number;
 }
 
 const DB_NAME_RE = /^[a-z_][a-z0-9_]*$/u;
 
+// Idempotent "create if absent" run by the staged interpreter. The db name is
+// pre-validated against DB_NAME_RE in TS, and the password never reaches argv
+// (libpq reads PGPASSWORD from the environment).
+const ENSURE_DB_SCRIPT = `
+import sys
+import psycopg
+
+name, conninfo = sys.argv[1], sys.argv[2]
+with psycopg.connect(conninfo, autocommit=True) as conn:
+    exists = conn.execute(
+        "SELECT 1 FROM pg_database WHERE datname = %s", (name,)
+    ).fetchone()
+    if exists is None:
+        conn.execute(f'CREATE DATABASE "{name}"')
+        print(f"created database {name}")
+    else:
+        print(f"database {name} already exists")
+`;
+
 // Owns the embedded postgres lifecycle: one-time initdb, stale
-// postmaster.pid cleanup, pg_ctl start + pg_isready gate, database
-// creation, pg_ctl stop -m fast. All process/filesystem touchpoints are
-// injected so the unit tests run against fakes.
+// postmaster.pid cleanup, `pg_ctl -w start` (which blocks until the server
+// accepts connections — the bundle has no pg_isready), database creation via
+// python + psycopg, and `pg_ctl stop -m fast`. All process/filesystem
+// touchpoints are injected so the unit tests run against fakes.
 export class PostgresManager {
   readonly #config: PostgresManagerConfig;
   #started = false;
@@ -61,9 +88,19 @@ export class PostgresManager {
   }
 
   async start(): Promise<void> {
+    // pg_ctl -l opens the server log file directly; its parent dir (the
+    // supervisor's logs/) is otherwise created lazily by the service log
+    // writers, which only run AFTER postgres. Ensure it exists first.
+    await this.#config.fs.mkdir(dirname(this.#config.logFile), {
+      recursive: true,
+    });
     await this.#ensureInitialized();
     await this.#cleanupStalePid();
-    const { paths, dataDir, logFile, port, runner } = this.#config;
+    const { paths, dataDir, logFile, port, runner, startTimeoutSeconds } =
+      this.#config;
+    // `-w` blocks until the postmaster is accepting connections (pg_ctl's own
+    // PQping loop); `-t` bounds that wait. No separate pg_isready gate — the
+    // zonky bundle does not ship it, and run-local.mjs proves `-w` is enough.
     const result = await runner(paths.pgCtl, [
       "-D",
       dataDir,
@@ -72,24 +109,39 @@ export class PostgresManager {
       "-o",
       `-p ${port} -c listen_addresses=127.0.0.1`,
       "-w",
+      "-t",
+      String(startTimeoutSeconds ?? 60),
       "start",
     ]);
     if (result.code !== 0) {
       throw new PostgresError("start", outputTail(result, 20));
     }
     this.#started = true;
-    await this.#waitReady();
   }
 
   async ensureDatabase(name: string): Promise<void> {
     if (!DB_NAME_RE.test(name)) {
       throw new PostgresError("create-database", `invalid db name "${name}"`);
     }
-    const exists = await this.#psql(
-      `SELECT 1 FROM pg_database WHERE datname = '${name}'`,
+    const { pythonBin, pythonSitePackages, port, password, runner } =
+      this.#config;
+    // Connect to the always-present `postgres` maintenance database as the
+    // bootstrap superuser; PGPASSWORD keeps the secret out of argv.
+    const conninfo = `postgresql://${PG_SUPERUSER}@127.0.0.1:${port}/postgres`;
+    const result = await runner(
+      pythonBin,
+      ["-c", ENSURE_DB_SCRIPT, name, conninfo],
+      {
+        env: {
+          PYTHONPATH: pythonSitePackages,
+          PYTHONDONTWRITEBYTECODE: "1",
+          PGPASSWORD: password,
+        },
+      },
     );
-    if (exists.trim() === "1") return;
-    await this.#psql(`CREATE DATABASE ${name}`);
+    if (result.code !== 0) {
+      throw new PostgresError("create-database", outputTail(result, 20));
+    }
   }
 
   async stop(): Promise<void> {
@@ -150,63 +202,6 @@ export class PostgresManager {
       await fs.rm(pidPath, { force: true });
     }
   }
-
-  async #waitReady(): Promise<void> {
-    const {
-      paths,
-      port,
-      runner,
-      readyTimeoutMs = 30_000,
-      readyIntervalMs = 250,
-    } = this.#config;
-    const now = this.#config.now ?? Date.now;
-    const sleep = this.#config.sleep ?? defaultSleep;
-    const deadline = now() + readyTimeoutMs;
-    let lastTail = "";
-    for (;;) {
-      const result = await runner(paths.pgIsReady, [
-        "-h",
-        "127.0.0.1",
-        "-p",
-        String(port),
-      ]);
-      if (result.code === 0) return;
-      lastTail = outputTail(result, 5);
-      if (now() >= deadline) {
-        throw new PostgresError(
-          "pg_isready",
-          `not ready after ${readyTimeoutMs}ms: ${lastTail}`,
-        );
-      }
-      await sleep(readyIntervalMs);
-    }
-  }
-
-  async #psql(sql: string): Promise<string> {
-    const { paths, port, password, runner } = this.#config;
-    const result = await runner(
-      paths.psql,
-      [
-        "-h",
-        "127.0.0.1",
-        "-p",
-        String(port),
-        "-U",
-        PG_SUPERUSER,
-        "-d",
-        "postgres",
-        "-v",
-        "ON_ERROR_STOP=1",
-        "-tAc",
-        sql,
-      ],
-      { env: { PGPASSWORD: password } },
-    );
-    if (result.code !== 0) {
-      throw new PostgresError("psql", outputTail(result, 10));
-    }
-    return result.stdout;
-  }
 }
 
 function defaultProcessAlive(pid: number): boolean {
@@ -217,12 +212,6 @@ function defaultProcessAlive(pid: number): boolean {
     // EPERM means "alive but not ours"; only ESRCH proves death.
     return isErrnoCode(err, "EPERM");
   }
-}
-
-function defaultSleep(ms: number): Promise<void> {
-  return new Promise((resolve) => {
-    setTimeout(resolve, ms);
-  });
 }
 
 function isEnoent(err: unknown): boolean {

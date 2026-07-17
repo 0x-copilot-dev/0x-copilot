@@ -1,0 +1,26 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+  <!--
+    Hardened-runtime entitlements for the 0xCopilot desktop app.
+
+    The app spawns a bundled CPython interpreter and a bundled PostgreSQL
+    server, and talks to remote APIs. It does NOT need JIT / executable
+    memory. It DOES need:
+      - network.client: outbound HTTPS to the product APIs + model providers.
+      - network.server: the embedded postgres + the loopback facade listen on
+        127.0.0.1.
+      - disable-library-validation: the bundled interpreter dlopen()s many
+        third-party .so/.dylib files (python extensions, postgres libs) that
+        are not all signed by our Team ID; without this, hardened runtime
+        blocks loading them even after nested signing.
+  -->
+  <key>com.apple.security.cs.disable-library-validation</key>
+  <true/>
+  <key>com.apple.security.network.client</key>
+  <true/>
+  <key>com.apple.security.network.server</key>
+  <true/>
+</dict>
+</plist>
