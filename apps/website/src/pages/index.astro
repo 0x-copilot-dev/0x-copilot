@@ -18,31 +18,31 @@ const SURFACES = [
   ["tools", "What it can call — and every call it made"],
   ["connectors", "MCP servers, OAuth, per-chat scope"],
   ["team", "Shared work across your org"],
-  ["memory", "What it learned, and what it proposes to keep"],
+  ["memory", "What it learned, and what it keeps"],
   ["routines", "Work that runs on a schedule"],
 ] as const;
 ---
 
 <Base
-  title="0xCopilot — the agent that shows its work"
-  description="0xCopilot does real multi-step work across your files and tools, and streams every step as it happens. Rewind any run. Stop it before it lands. Your machine, your key, your model."
+  title="0xCopilot — hand it the work, keep the keys"
+  description="0xCopilot takes on real, multi-step work across your apps and finishes it — on your machine, on your API key, on whatever model you pick. Local, BYOK, open source."
 >
   <Nav />
 
   <header class="hero">
-    <span class="tag">● Pre-launch · building in the open</span>
+    <span class="tag">● Pre-launch · local, BYOK, open source</span>
 
-    <h1>The agent that <em>shows its work.</em></h1>
+    <h1>Hand it the work. <em>Keep the keys.</em></h1>
 
     <p class="hero__sub">
-      0xCopilot takes on real multi-step work across your files, your tools and
-      the apps you already use — and streams every step as it happens. Rewind
-      any run. Stop it before it lands. It runs on your machine, on your API
-      key, on whatever model you pick.
+      0xCopilot takes on real, multi-step work across your apps and finishes it —
+      the research, the drafts, the spreadsheets, the follow-through. It runs on
+      your machine, on your API key, on whatever model you pick. No cloud to
+      trust. No seat to buy. No one holding your data but you.
     </p>
 
     <div class="cta">
-      <a class="btn btn--go" href="#run">See how it runs</a>
+      <a class="btn btn--go" href="#run">Watch it work</a>
       <a class="btn" href={REPO} rel="noopener">Read the source ↗</a>
       <a class="btn" href="https://x.com/Copilot0x" rel="noopener">Follow the launch ↗</a>
     </div>
@@ -51,50 +51,42 @@ const SURFACES = [
   </header>
 
   <!-- ---------------------------------------------------------------- -->
-  <section class="band" id="what">
-    <div class="eyebrow">The problem</div>
-    <h2>Agents don't fail loudly.</h2>
-    <div class="prose">
-      <p>
-        They fail quietly, four steps back, and hand you a confident paragraph
-        about it. By the time you notice, you can't tell which step went wrong —
-        so you can't fix it, and you can't trust the next one either.
-      </p>
-      <p>
-        <strong>
-          An agent that does the work is the easy part. An agent whose work you
-          can check is the hard part.
-        </strong>
-        0xCopilot is built around the second problem. Every run is a durable, ordered
-        log of typed events — not a black box that emits a summary.
-      </p>
+  <section class="band">
+    <div class="split split--flip">
+      <div>
+        <div class="eyebrow">Not another chat box</div>
+        <h2>Point it at the work you'd rather not do.</h2>
+        <div class="prose">
+          <p>
+            Draft the launch announcement. Summarize last week in Slack. Pull the
+            latest brand guidelines. Size up a competitor. You describe the
+            outcome; 0xCopilot plans it, works across your real tools, and hands
+            back something finished.
+          </p>
+          <p>
+            <strong>Chat is one corner of it.</strong> The work itself lands on
+            twelve real surfaces — tasks, projects, files, connectors — that you
+            can open, filter, and act on.
+          </p>
+        </div>
+      </div>
+      <Shot
+        src="./media/welcome.png"
+        alt="The 0xCopilot new-chat screen, offering to draft a launch announcement, summarize Slack, find brand guidelines, or compare against a competitor."
+        cap="chats"
+        note="Start of a real session — pick a job, or describe your own."
+      />
     </div>
 
-    <div class="verbs">
-      <div class="verb">
-        <h3>Watch</h3>
-        <p>
-          Every step is a typed event, streamed live as it happens — not a
-          spinner and a summary at the end.
-        </p>
-        <code>GET /v1/agent/runs/:id/stream</code>
-      </div>
-      <div class="verb">
-        <h3>Rewind</h3>
-        <p>
-          Events persist with a monotonic sequence number per run. Replay any
-          run from any point, or reconnect and resume exactly where you dropped.
-        </p>
-        <code>?after_sequence=N</code>
-      </div>
-      <div class="verb">
-        <h3>Steer</h3>
-        <p>
-          The steps that touch the real world pause and wait for you. Approve,
-          redirect, or stop the run mid-flight.
-        </p>
-        <code>run.waiting_for_permission</code>
-      </div>
+    <div class="surfaces">
+      {
+        SURFACES.map(([name, what]) => (
+          <div class="surface">
+            <b>{name}</b>
+            <span>{what}</span>
+          </div>
+        ))
+      }
     </div>
   </section>
 
@@ -109,12 +101,12 @@ const SURFACES = [
             0xCopilot runs locally. Bring your own API key — it talks to
             <strong>OpenAI</strong>, <strong>Anthropic</strong> or
             <strong>Google</strong>, and you pay your provider directly. No seat
-            license, no subscription tier, no middleman between you and the
-            model you chose.
+            license, no subscription tier, no middleman between you and the model
+            you chose.
           </p>
           <p>
             Provider keys live in your own environment and are never accepted in
-            a request body — that's enforced in the codebase, not promised on a
+            a request body — that's enforced in the code, not promised on a
             landing page. Connectors authenticate through real OAuth, and their
             tokens sit in a vault you run.
           </p>
@@ -130,36 +122,42 @@ const SURFACES = [
   </section>
 
   <!-- ---------------------------------------------------------------- -->
-  <section class="band">
-    <div class="split split--flip">
-      <div>
-        <div class="eyebrow">Not a chatbot</div>
-        <h2>Twelve surfaces, not one text box.</h2>
-        <div class="prose">
-          <p>
-            Chat is the right rail, not the whole product. The work lands on
-            real surfaces you can open, filter and act on — and the agent works
-            the same surfaces you do.
-          </p>
-        </div>
-      </div>
-      <Shot
-        src="./media/todos.png"
-        alt="The 0xCopilot Todos destination, showing real tasks with priorities."
-        cap="todos"
-        note="Work the agent created, on a surface you own."
-      />
+  <section class="band" id="control">
+    <div class="eyebrow">In control</div>
+    <h2>It works on its own. You're never out of the loop.</h2>
+    <div class="prose">
+      <p>
+        Autonomy you can actually trust — because nothing happens behind your
+        back. That's the whole point of the video above: you don't get a spinner
+        and a summary, you watch the work happen.
+      </p>
     </div>
 
-    <div class="surfaces">
-      {
-        SURFACES.map(([name, what]) => (
-          <div class="surface">
-            <b>{name}</b>
-            <span>{what}</span>
-          </div>
-        ))
-      }
+    <div class="verbs">
+      <div class="verb">
+        <h3>Watch</h3>
+        <p>
+          Every step is a typed event, streamed live as it happens — plans, tool
+          calls, results — not a black box that reports back at the end.
+        </p>
+        <code>GET /v1/agent/runs/:id/stream</code>
+      </div>
+      <div class="verb">
+        <h3>Rewind</h3>
+        <p>
+          Events persist with a monotonic sequence number per run. Replay any run
+          from any point, or reconnect and resume exactly where you dropped.
+        </p>
+        <code>?after_sequence=N</code>
+      </div>
+      <div class="verb">
+        <h3>Steer</h3>
+        <p>
+          Anything that touches the real world pauses and waits for your
+          go-ahead. Approve it, redirect it, or stop the run mid-flight.
+        </p>
+        <code>run.waiting_for_permission</code>
+      </div>
     </div>
   </section>
 
@@ -221,8 +219,8 @@ const SURFACES = [
         <div class="faq__a">
           <p>
             In your own environment file, on your machine. Provider keys are
-            never accepted in a run request body — enforced in code. OAuth
-            tokens for connectors go into a token vault running in your stack.
+            never accepted in a run request body — enforced in code. OAuth tokens
+            for connectors go into a token vault running in your stack.
           </p>
         </div>
       </details>
@@ -231,9 +229,8 @@ const SURFACES = [
         <div class="faq__a">
           <p>
             The stack runs on your hardware. The one thing that leaves is what
-            you'd expect: your prompts and context go to whichever provider's
-            key you supplied. Point it at a local model and nothing leaves at
-            all.
+            you'd expect: your prompts and context go to whichever provider's key
+            you supplied. Point it at a local model and nothing leaves at all.
           </p>
         </div>
       </details>

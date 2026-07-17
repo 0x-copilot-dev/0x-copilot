@@ -50,7 +50,7 @@ jobs:
         # public/CNAME and re-add the CNAME checks here.
         run: |
           set -euo pipefail
-          for f in index.html token.html media/demo.webm; do
+          for f in index.html token.html media/demo.mp4 media/demo.webm; do
             test -f "apps/website/dist/$f" || { echo "::error::missing dist/$f"; exit 1; }
           done
           if [ -f apps/website/dist/CNAME ]; then

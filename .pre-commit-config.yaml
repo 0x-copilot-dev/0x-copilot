@@ -24,11 +24,11 @@ repos:
       # excluding a whole directory — a new oversized asset should still
       # have to be a deliberate decision, not inherit someone else's.
       #   * model_prices.json — vendored LiteLLM pricing data.
-      #   * demo.webm (1.3 MB) — the site's hero recording of the real app.
-      #     Tiny for a hero video, but over the 500 KB default. The
-      #     screenshots beside it are all well under the limit.
+      #   * demo.{mp4,webm} — the site's hero recording of the real app.
+      #     ~0.5-0.7 MB each, over the 500 KB default but tiny for a hero
+      #     video. The screenshots beside them are all well under the limit.
       - id: check-added-large-files
-        exclude: "^(services/ai-backend/src/agent_runtime/pricing/litellm_data/model_prices\\.json|apps/website/public/media/demo\\.webm)$"
+        exclude: "^(services/ai-backend/src/agent_runtime/pricing/litellm_data/model_prices\\.json|apps/website/public/media/demo\\.(mp4|webm))$"
       - id: check-json
       - id: check-merge-conflict
       - id: check-toml
