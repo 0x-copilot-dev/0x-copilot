@@ -240,7 +240,7 @@ def register_members_routes(app: FastAPI) -> None:
         if member_user_id == identity.user_id:
             raise HTTPException(status.HTTP_409_CONFLICT, "cannot_remove_self")
 
-        target = _require_active_member(store, identity.org_id, member_user_id)
+        _require_active_member(store, identity.org_id, member_user_id)
 
         # Last-admin guard.
         _, target_role = _resolve_role(store, identity.org_id, member_user_id)

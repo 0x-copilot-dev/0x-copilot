@@ -48,7 +48,10 @@ export interface ToolPickerProps {
 type LoadState =
   | { readonly status: "idle" }
   | { readonly status: "loading" }
-  | { readonly status: "ready"; readonly tools: ReadonlyArray<ComposerToolDescriptor> }
+  | {
+      readonly status: "ready";
+      readonly tools: ReadonlyArray<ComposerToolDescriptor>;
+    }
   | { readonly status: "error" };
 
 export function ToolPicker(props: ToolPickerProps): ReactNode {
