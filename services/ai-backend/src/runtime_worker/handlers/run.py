@@ -43,6 +43,10 @@ from agent_runtime.api.presentation import (
     ToolDisplayLookup,
     ToolDisplayLookupContext,
 )
+from agent_runtime.api.user_policies_resolver import (
+    ProviderKeysHydrator,
+    UserPoliciesResolver,
+)
 from agent_runtime.capabilities.mcp.descriptor_registry import (
     McpDisplayRegistryContext,
 )
@@ -161,10 +165,20 @@ class RuntimeRunHandler:
         ) = None,
         usage_recorder: UsageRecorder | None = None,
         mcp_discovery_cache: object | None = None,
+        user_policies_resolver: UserPoliciesResolver | None = None,
     ) -> None:
         self.persistence: PersistencePort = persistence
         self.event_store: EventStorePort = event_store
         self.settings = settings or RuntimeSettings.load()
+        # BYOK re-hydration: queue commands round-trip through JSON, which
+        # drops the serialization-excluded ``AgentRuntimeContext.provider_keys``
+        # field. When a resolver is wired, the handler re-fetches the policy
+        # snapshot at claim time and re-attaches the keys in memory only.
+        self._provider_keys_hydrator = (
+            ProviderKeysHydrator(resolver=user_policies_resolver)
+            if user_policies_resolver is not None
+            else None
+        )
         # When the caller supplies a ``dependencies_factory`` we trust it
         # entirely (tests). Otherwise the default factory threads the cache
         # through ``RuntimeDependencies.mcp_discovery_cache`` so the runtime
@@ -329,7 +343,7 @@ class RuntimeRunHandler:
             )
             discovery_token = McpDiscoveryService.bind_for_run(discovery_service)
             harness_or_coro = self.agent_factory(
-                context=command.runtime_context,
+                context=await self._hydrated_runtime_context(command.runtime_context),
                 dependencies=dependencies,
             )
             harness = (
@@ -769,6 +783,20 @@ class RuntimeRunHandler:
             return McpDisplayRegistryContext.get(tool_name)
 
         return composite  # type: ignore[return-value]
+
+    async def _hydrated_runtime_context(
+        self, context: AgentRuntimeContext
+    ) -> AgentRuntimeContext:
+        """Re-attach the user's BYOK provider keys before harness construction.
+
+        Returns the context unchanged when no hydrator is wired (tests,
+        deployments without the backend lane) or when the user has no stored
+        keys — the run then relies on deployment env keys exactly as before.
+        """
+
+        if self._provider_keys_hydrator is None:
+            return context
+        return await self._provider_keys_hydrator.hydrate(context)
 
     def _dependencies_for_run(
         self,

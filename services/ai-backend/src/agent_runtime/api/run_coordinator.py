@@ -21,6 +21,7 @@ from agent_runtime.api.suggestible_connectors_resolver import (
 )
 from agent_runtime.api.user_policies_resolver import (
     NullUserPoliciesResolver,
+    ProviderKeysParser,
     UserPoliciesResolver,
 )
 from agent_runtime.execution.contracts import (
@@ -111,7 +112,7 @@ class RunCoordinator:
 
         (
             workspace_overrides,
-            user_policies_json,
+            user_policies_snapshot,
             suggested_connectors,
         ) = await asyncio.gather(
             self._resolve_workspace_behavior_overrides(org_id=request.org_id),
@@ -122,11 +123,18 @@ class RunCoordinator:
                 paused_connectors=request.request_context.paused_connectors,
             ),
         )
+        # BYOK keys must never reach a persisted surface: split them out of
+        # the snapshot before the remainder is sealed into the (persisted)
+        # ``user_policies_json`` context field.
+        provider_keys, user_policies_json = ProviderKeysParser.split(
+            user_policies_snapshot
+        )
         return await self._persist_and_enqueue(
             request=request,
             conversation_for_scope=conversation_for_scope,
             workspace_overrides=workspace_overrides,
             user_policies_json=user_policies_json,
+            provider_keys=provider_keys,
             suggested_connectors=suggested_connectors,
         )
 
@@ -138,6 +146,7 @@ class RunCoordinator:
         workspace_overrides: dict[str, object],
         user_policies_json: dict[str, object],
         suggested_connectors: tuple[CatalogSuggestionCard, ...],
+        provider_keys: dict[str, str] | None = None,
     ) -> CreateRunResponse:
         """Seal the runtime context, persist the run, and enqueue the worker command.
 
@@ -150,6 +159,7 @@ class RunCoordinator:
             request,
             workspace_behavior_overrides=workspace_overrides,
             user_policies_json=user_policies_json,
+            provider_keys=provider_keys,
             suggested_connectors=suggested_connectors,
         )
         context = request.runtime_context
@@ -464,6 +474,7 @@ class RunCoordinator:
         *,
         workspace_behavior_overrides: dict[str, object] | None = None,
         user_policies_json: dict[str, object] | None = None,
+        provider_keys: dict[str, str] | None = None,
         suggested_connectors: tuple[CatalogSuggestionCard, ...] = (),
     ) -> CreateRunRequest:
         """Build a sealed ``AgentRuntimeContext`` and attach it to the request.
@@ -471,6 +482,10 @@ class RunCoordinator:
         Collects trace metadata from all enrichment sources (quotes, attachments,
         branching, regeneration) into a single dict so the worker doesn't need to
         reassemble it from the request.
+
+        ``provider_keys`` (BYOK) rides the in-memory, serialization-excluded
+        context field; only its provider slugs feed the model resolver's
+        credential gate so a user key satisfies credentials without an env key.
         """
         try:
             model = request.model
@@ -494,7 +509,8 @@ class RunCoordinator:
                     # The resolver folds it into ``model_profile`` via the
                     # single depth → budget mapping point.
                     reasoning_depth=request.reasoning_depth,
-                )
+                ),
+                user_key_providers=frozenset(provider_keys or ()),
             )
         except AgentRuntimeError as exc:
             raise RuntimeApiError(
@@ -556,6 +572,7 @@ class RunCoordinator:
             feature_flags=context.feature_flags,
             workspace_behavior_overrides=workspace_behavior_overrides or {},
             user_policies_json=user_policies_json or {},
+            provider_keys=provider_keys or {},
         )
         return request.model_copy(update={"runtime_context": runtime_context})
 

@@ -62,6 +62,7 @@ class RuntimeWorker:
             "ConversationToolOrdinalStorePort | None"
         ) = None,
         mcp_discovery_cache: object | None = None,
+        user_policies_resolver: object | None = None,
     ) -> None:
         self.persistence: PersistencePort = persistence
         self.event_store: EventStorePort = event_store
@@ -95,6 +96,7 @@ class RuntimeWorker:
             draft_store=draft_store,
             conversation_tool_ordinal_store=self.conversation_tool_ordinal_store,
             mcp_discovery_cache=mcp_discovery_cache,
+            user_policies_resolver=user_policies_resolver,  # type: ignore[arg-type]
         )
         self.cancel_handler = cancel_handler or RuntimeCancelHandler(
             persistence=self.persistence,
@@ -108,6 +110,7 @@ class RuntimeWorker:
             draft_store=draft_store,
             conversation_tool_ordinal_store=self.conversation_tool_ordinal_store,
             mcp_discovery_cache=mcp_discovery_cache,
+            user_policies_resolver=user_policies_resolver,  # type: ignore[arg-type]
         )
         self._semaphore = asyncio.Semaphore(self.settings.execution.max_parallel_runs)
         self.logger = logging.getLogger("runtime_worker")

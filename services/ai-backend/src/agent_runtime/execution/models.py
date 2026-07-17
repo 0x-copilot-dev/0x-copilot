@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from collections.abc import Collection
 from dataclasses import dataclass
 
 from agent_runtime.execution.contracts import (
@@ -46,8 +47,16 @@ class ModelConfigResolver:
         selection: ModelSelection | None = None,
         *,
         require_credentials: bool = True,
+        user_key_providers: Collection[str] = (),
     ) -> ModelConfig:
         """Return a complete model config after provider credential validation.
+
+        ``user_key_providers`` carries the normalized provider slugs for which
+        the current user has a stored BYOK key (availability only — never the
+        key values). A user-supplied key satisfies the credential gate even
+        when the deployment has no env key for that provider; precedence
+        (user key > env key) is applied downstream where the key is injected
+        into model construction (``user_policy_model_kwargs``).
 
         Applies :class:`DepthBudgetTable` exactly once when the selection
         carries a ``reasoning_depth``. Downstream callers (the worker,
@@ -63,10 +72,15 @@ class ModelConfigResolver:
             or self.settings.default_model.provider
         )
         provider_settings = self.settings.provider_settings(provider)
-        if require_credentials and not provider_settings.is_configured:
+        if (
+            require_credentials
+            and not provider_settings.is_configured
+            and provider not in user_key_providers
+        ):
             raise AgentRuntimeError(
                 RuntimeErrorCode.CONFIGURATION_ERROR,
-                f"Missing API key for model provider '{provider}'.",
+                f"Missing API key for model provider '{provider}'. "
+                "Add one in Settings -> Provider keys.",
                 retryable=False,
             )
         default_model = self.settings.default_model

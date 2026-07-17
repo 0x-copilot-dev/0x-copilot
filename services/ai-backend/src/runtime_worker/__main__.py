@@ -4,6 +4,8 @@ from __future__ import annotations
 
 import asyncio
 
+from agent_runtime.api.user_policies_resolver import UserPoliciesResolverFactory
+from agent_runtime.capabilities.http_pool import BackendHttpPool
 from agent_runtime.observability.http_logging import LoggingConfigurator
 from agent_runtime.observability.otel import TelemetryBootstrap
 from agent_runtime.pricing import PricingRefreshLoop, PricingRefreshLoopEnv
@@ -59,6 +61,12 @@ class RuntimeWorkerEntrypoint:
             mcp_discovery_cache = (
                 DefaultRuntimeDependenciesFactory.build_default_discovery_cache()
             )
+            # BYOK: run/approval handlers re-fetch per-user provider keys at
+            # claim time (queue payloads never carry them). Null when the
+            # backend lane env is not configured — runs then use env keys.
+            user_policies_resolver = UserPoliciesResolverFactory.default(
+                http_client=BackendHttpPool.get()
+            )
             worker = RuntimeWorker(
                 persistence=async_ports.persistence,
                 event_store=async_ports.event_store,
@@ -70,6 +78,7 @@ class RuntimeWorkerEntrypoint:
                     async_ports.conversation_tool_ordinal_store
                 ),
                 mcp_discovery_cache=mcp_discovery_cache,
+                user_policies_resolver=user_policies_resolver,
             )
             logger.info(
                 "worker_started",
@@ -180,6 +189,9 @@ class RuntimeWorkerEntrypoint:
             if rollup_loop is not None:
                 await rollup_loop.stop()
             await async_ports.lifecycle.close()
+            # Idempotent — closes the pooled backend client used by the
+            # BYOK policy resolver (and any capability HTTP callers).
+            await BackendHttpPool.aclose()
 
     @staticmethod
     def main() -> None:
