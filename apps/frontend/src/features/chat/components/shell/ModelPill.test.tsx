@@ -99,4 +99,36 @@ describe("ModelPill", () => {
       screen.getByRole("button", { name: /Model: GPT-5\.4/ }),
     ).toBeDisabled();
   });
+
+  it("omits the custom-model field when onAddCustom is not provided", () => {
+    render(
+      <ModelPill
+        models={models}
+        value="openai/gpt-5.4"
+        onChange={() => undefined}
+      />,
+    );
+    fireEvent.click(screen.getByRole("button", { name: /Model: GPT-5\.4/ }));
+    expect(
+      screen.queryByPlaceholderText(/vendor\/model/),
+    ).not.toBeInTheDocument();
+  });
+
+  it("submits a custom OpenRouter slug via onAddCustom", () => {
+    const onAddCustom = vi.fn();
+    render(
+      <ModelPill
+        models={models}
+        value="openai/gpt-5.4"
+        onChange={() => undefined}
+        onAddCustom={onAddCustom}
+      />,
+    );
+    fireEvent.click(screen.getByRole("button", { name: /Model: GPT-5\.4/ }));
+    fireEvent.change(screen.getByPlaceholderText(/vendor\/model/), {
+      target: { value: "deepseek/deepseek-r1" },
+    });
+    fireEvent.click(screen.getByRole("button", { name: /^Add$/ }));
+    expect(onAddCustom).toHaveBeenCalledWith("deepseek/deepseek-r1");
+  });
 });

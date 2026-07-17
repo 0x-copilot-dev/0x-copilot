@@ -17,6 +17,7 @@ from agent_runtime.execution.contracts import (
     ModelReasoningEffort,
     ModelThinkingMode,
 )
+from agent_runtime.execution.openai_compat import OpenAICompatibleProviders
 
 WEB_EXCLUDED_DEEP_AGENT_TOOLS = frozenset(
     {
@@ -240,7 +241,26 @@ def build_chat_model(
     # this is the single read site.
     if model_config.max_output_tokens is not None:
         kwargs["max_tokens"] = model_config.max_output_tokens
-    if model_config.provider == "openai":
+    compat = OpenAICompatibleProviders.get(model_config.provider)
+    if compat is not None:
+        # OpenAI-wire-compatible gateway (OpenRouter today): a fixed
+        # base_url and CHAT-COMPLETIONS ONLY. ``use_responses_api`` MUST be
+        # False, and we must NOT apply ``_openai_model_kwargs`` — its
+        # ``reasoning`` / ``output_version`` / ``include`` payload silently
+        # re-routes ChatOpenAI onto the OpenAI ``/responses`` endpoint,
+        # which these gateways do not implement.
+        kwargs["base_url"] = compat.base_url
+        kwargs["use_responses_api"] = False
+        headers = compat.default_headers()
+        if headers:
+            kwargs["default_headers"] = headers
+        # Deployment-level fallback key. A per-user BYOK key arrives via
+        # ``extra_kwargs`` (from ``user_policy_model_kwargs``) and overrides
+        # this on the merge below — BYOK always wins over the env key.
+        env_key = compat.api_key_from_env()
+        if env_key is not None:
+            kwargs["api_key"] = env_key
+    elif model_config.provider == "openai":
         kwargs.update(_openai_model_kwargs(model_config))
     elif model_config.provider == "anthropic":
         kwargs.update(_anthropic_model_kwargs(model_config))
@@ -305,6 +325,10 @@ def _langchain_model_provider(provider: str) -> str:
     # LangChain uses ``google_genai`` while the runtime normalises to ``gemini``.
     if provider == "gemini":
         return "google_genai"
+    # OpenAI-wire-compatible gateways (OpenRouter) run through ChatOpenAI;
+    # the endpoint difference is carried by ``base_url`` in build_chat_model.
+    if OpenAICompatibleProviders.is_compatible(provider):
+        return "openai"
     return provider
 
 

@@ -16,12 +16,23 @@
 //
 // Validation split: the server 422s an unknown provider slug and 400s
 // an obviously-wrong key format (openai keys start `sk-`, anthropic
-// `sk-ant-`, google `AIza`; unknown-but-plausible values of length
-// >= 20 are accepted permissively). The frontend surfaces those errors
-// verbatim rather than duplicating the rules client-side.
+// `sk-ant-`, openrouter `sk-or-`, google `AIza`; unknown-but-plausible
+// values of length >= 20 are accepted permissively). The frontend
+// surfaces those errors verbatim rather than duplicating the rules
+// client-side.
 
-/** Model providers a workspace user can bring their own key for. */
-export type ProviderKeyProvider = "openai" | "anthropic" | "google";
+/**
+ * Model providers a workspace user can bring their own key for.
+ *
+ * `openrouter` is an OpenAI-wire-compatible gateway (300+ models via
+ * `vendor/model` slugs); the runtime routes it through the OpenAI client
+ * with a fixed base URL and the Responses API disabled.
+ */
+export type ProviderKeyProvider =
+  | "openai"
+  | "anthropic"
+  | "google"
+  | "openrouter";
 
 /**
  * One stored key, as returned by list and PUT. `key_hint` is a masked

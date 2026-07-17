@@ -93,6 +93,8 @@ export const AssistantComposer = forwardRef<
     models?: Array<ModelCatalogModel & { disabled?: boolean }>;
     selectedModel?: string;
     onModelChange?: (id: string) => void;
+    /** Register + select an arbitrary OpenRouter `vendor/model` slug. */
+    onAddCustomModel?: (slug: string) => void;
     depth?: ThinkingDepth;
     onDepthChange?: (depth: ThinkingDepth) => void;
     depthVisible?: boolean;
@@ -135,6 +137,7 @@ export const AssistantComposer = forwardRef<
     models,
     selectedModel,
     onModelChange,
+    onAddCustomModel,
     depth,
     onDepthChange,
     depthVisible,
@@ -469,6 +472,7 @@ export const AssistantComposer = forwardRef<
                 value={selectedModel}
                 onChange={onModelChange}
                 disabled={controlsDisabled}
+                onAddCustom={onAddCustomModel}
               />
             ) : null}
             {depth !== undefined && onDepthChange ? (

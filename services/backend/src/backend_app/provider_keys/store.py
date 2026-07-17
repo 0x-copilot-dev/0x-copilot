@@ -31,11 +31,13 @@ def _now() -> datetime:
 
 class ProviderName(StrEnum):
     """Closed set of providers the runtime supports — wire-aligned with
-    the CHECK constraint in migration 0034."""
+    the CHECK constraint in migrations 0034 (openai/anthropic/google) and
+    0036 (openrouter)."""
 
     OPENAI = "openai"
     ANTHROPIC = "anthropic"
     GOOGLE = "google"
+    OPENROUTER = "openrouter"
 
 
 class ProviderApiKeyRecord(BaseModel):

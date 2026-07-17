@@ -112,6 +112,60 @@ def test_deep_agent_builder_configures_openai_responses_reasoning(
     assert fake_deepagents.calls[0]["model"] == call
 
 
+def test_deep_agent_builder_routes_openrouter_to_chat_completions(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    # OpenRouter is OpenAI-wire-compatible but chat-completions only. Even
+    # with a reasoning config present, the builder must route through the
+    # OpenAI client with a fixed base_url, use_responses_api=False, and NONE
+    # of the Responses-API kwargs (which would 404 against /responses).
+    monkeypatch.setenv("OPENROUTER_API_KEY", "sk-or-v1-test000000000000000000009876")
+    fake_deepagents = FakeDeepAgentsModule()
+    chat_models = CapturingChatModelFactory()
+    monkeypatch.setattr(
+        builder_module, "create_deep_agent", fake_deepagents.create_deep_agent
+    )
+    monkeypatch.setattr(builder_module, "init_chat_model", chat_models)
+
+    build_deep_agent(
+        DeepAgentBuildRequest(
+            tools=("doc_search",),
+            model_config=ModelConfig(
+                provider="openrouter",
+                model_name="anthropic/claude-3.7-sonnet",
+                max_input_tokens=128_000,
+                timeout_seconds=45,
+                temperature=0,
+                supports_streaming=True,
+                reasoning=ModelReasoningConfig(
+                    effort=ModelReasoningEffort.MEDIUM,
+                    summary=ModelReasoningSummary.AUTO,
+                    include_encrypted_content=True,
+                ),
+            ),
+            system_prompt="Follow policy.",
+        )
+    )
+
+    call = chat_models.calls[0]
+    assert call.model == "anthropic/claude-3.7-sonnet"
+    # Resolves to the OpenAI LangChain client — the endpoint difference is
+    # carried by base_url, not a distinct provider slug.
+    assert call.model_provider == "openai"
+    assert call.kwargs["use_responses_api"] is False
+    assert call.kwargs["base_url"] == "https://openrouter.ai/api/v1"
+    assert call.kwargs["default_headers"] == {
+        "HTTP-Referer": "https://0xcopilot.tech",
+        "X-Title": "0xCopilot",
+    }
+    # Deployment env-fallback key is injected explicitly (base_url is
+    # openrouter.ai, so the client must NOT read OPENAI_API_KEY).
+    assert call.kwargs["api_key"] == "sk-or-v1-test000000000000000000009876"
+    # None of the Responses-API-only kwargs may leak through.
+    for forbidden in ("reasoning", "include", "output_version"):
+        assert forbidden not in call.kwargs
+
+
 def test_deep_agent_builder_configures_claude_opus_47_adaptive_thinking(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
