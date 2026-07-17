@@ -1,0 +1,299 @@
+"""Provider API key store (Phase 2 BYOK).
+
+Backs ``services/backend/migrations/0034_provider_api_keys.sql``.
+
+One row per ``(org_id, user_id, provider)``. The store persists ONLY
+the TokenVault ciphertext plus a last-4-chars ``key_hint`` — plaintext
+never touches an adapter. Encryption/decryption is the service layer's
+job (:mod:`backend_app.provider_keys.service`); adapters move opaque
+strings.
+
+Adapter shapes mirror ``backend_app.privacy.store``: a Protocol, a
+dict-backed in-memory adapter for tests/dev, and a psycopg-pool
+Postgres adapter for production.
+"""
+
+from __future__ import annotations
+
+from collections.abc import Iterator
+from contextlib import contextmanager
+from dataclasses import dataclass, field
+from datetime import datetime, timezone
+from enum import StrEnum
+from typing import Any, Protocol
+
+from pydantic import BaseModel, ConfigDict, Field
+
+
+def _now() -> datetime:
+    return datetime.now(timezone.utc)
+
+
+class ProviderName(StrEnum):
+    """Closed set of providers the runtime supports — wire-aligned with
+    the CHECK constraint in migration 0034."""
+
+    OPENAI = "openai"
+    ANTHROPIC = "anthropic"
+    GOOGLE = "google"
+
+
+class ProviderApiKeyRecord(BaseModel):
+    """One ``provider_api_keys`` row. ``encrypted_key`` is an opaque
+    TokenVault envelope; ``key_hint`` is display-safe (last 4 chars)."""
+
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    org_id: str
+    user_id: str
+    provider: ProviderName
+    encrypted_key: str
+    key_hint: str
+    created_at: datetime = Field(default_factory=_now)
+    updated_at: datetime = Field(default_factory=_now)
+
+
+class ProviderApiKeyStore(Protocol):
+    """Adapter contract — every adapter implements every method."""
+
+    @contextmanager
+    def transaction(self) -> Iterator[None]: ...  # pragma: no cover
+
+    def get(
+        self,
+        *,
+        org_id: str,
+        user_id: str,
+        provider: ProviderName,
+    ) -> ProviderApiKeyRecord | None:
+        """Return the row for one (org, user, provider) or ``None``."""
+
+    def list_for_user(
+        self,
+        *,
+        org_id: str,
+        user_id: str,
+    ) -> tuple[ProviderApiKeyRecord, ...]:
+        """Every stored key for one user, ordered by provider name."""
+
+    def upsert(
+        self,
+        record: ProviderApiKeyRecord,
+        *,
+        conn: Any | None = None,
+    ) -> ProviderApiKeyRecord:
+        """Insert or replace the (org, user, provider) row. The original
+        ``created_at`` survives a replace; ``updated_at`` is bumped."""
+
+    def delete(
+        self,
+        *,
+        org_id: str,
+        user_id: str,
+        provider: ProviderName,
+        conn: Any | None = None,
+    ) -> bool:
+        """Drop the row. Returns True if a row was removed."""
+
+
+@dataclass
+class InMemoryProviderApiKeyStore:
+    """Dict-backed adapter for tests + dev. Mirrors postgres semantics."""
+
+    rows: dict[tuple[str, str, str], ProviderApiKeyRecord] = field(default_factory=dict)
+
+    @contextmanager
+    def transaction(self) -> Iterator[None]:
+        yield None
+
+    def get(
+        self,
+        *,
+        org_id: str,
+        user_id: str,
+        provider: ProviderName,
+    ) -> ProviderApiKeyRecord | None:
+        return self.rows.get((org_id, user_id, provider.value))
+
+    def list_for_user(
+        self,
+        *,
+        org_id: str,
+        user_id: str,
+    ) -> tuple[ProviderApiKeyRecord, ...]:
+        matches = [
+            record
+            for (row_org, row_user, _), record in self.rows.items()
+            if row_org == org_id and row_user == user_id
+        ]
+        return tuple(sorted(matches, key=lambda record: record.provider.value))
+
+    def upsert(
+        self,
+        record: ProviderApiKeyRecord,
+        *,
+        conn: Any | None = None,
+    ) -> ProviderApiKeyRecord:
+        del conn
+        key = (record.org_id, record.user_id, record.provider.value)
+        existing = self.rows.get(key)
+        saved = record.model_copy(
+            update={
+                "created_at": existing.created_at if existing else record.created_at,
+                "updated_at": _now(),
+            }
+        )
+        self.rows[key] = saved
+        return saved
+
+    def delete(
+        self,
+        *,
+        org_id: str,
+        user_id: str,
+        provider: ProviderName,
+        conn: Any | None = None,
+    ) -> bool:
+        del conn
+        return self.rows.pop((org_id, user_id, provider.value), None) is not None
+
+
+# ---------------------------------------------------------------------------
+# Postgres adapter
+# ---------------------------------------------------------------------------
+
+
+class PostgresProviderApiKeyStore:
+    """psycopg-pool adapter for ``provider_api_keys``.
+
+    The composite primary key ``(org_id, user_id, provider)`` from
+    migration 0034 drives the single ``INSERT … ON CONFLICT`` upsert;
+    ``created_at`` is deliberately NOT in the update list so the first
+    write's timestamp survives key rotation.
+    """
+
+    def __init__(self, pool: Any) -> None:
+        self._pool = pool
+
+    @contextmanager
+    def transaction(self) -> Iterator[Any]:
+        with self._pool.connection() as conn:
+            with conn.transaction():
+                yield conn
+
+    @contextmanager
+    def _cursor(self, conn: Any | None) -> Iterator[Any]:
+        if conn is not None:
+            with conn.cursor() as cur:
+                yield cur
+            return
+        with self._pool.connection() as owned:
+            with owned.cursor() as cur:
+                yield cur
+
+    def get(
+        self,
+        *,
+        org_id: str,
+        user_id: str,
+        provider: ProviderName,
+    ) -> ProviderApiKeyRecord | None:
+        with self._cursor(None) as cur:
+            cur.execute(
+                """
+                SELECT org_id, user_id, provider, encrypted_key, key_hint,
+                       created_at, updated_at
+                FROM provider_api_keys
+                WHERE org_id = %s AND user_id = %s AND provider = %s
+                """,
+                (org_id, user_id, provider.value),
+            )
+            row = cur.fetchone()
+        if row is None:
+            return None
+        return ProviderApiKeyRecord.model_validate(dict(row))
+
+    def list_for_user(
+        self,
+        *,
+        org_id: str,
+        user_id: str,
+    ) -> tuple[ProviderApiKeyRecord, ...]:
+        with self._cursor(None) as cur:
+            cur.execute(
+                """
+                SELECT org_id, user_id, provider, encrypted_key, key_hint,
+                       created_at, updated_at
+                FROM provider_api_keys
+                WHERE org_id = %s AND user_id = %s
+                ORDER BY provider
+                """,
+                (org_id, user_id),
+            )
+            rows = cur.fetchall()
+        return tuple(ProviderApiKeyRecord.model_validate(dict(row)) for row in rows)
+
+    def upsert(
+        self,
+        record: ProviderApiKeyRecord,
+        *,
+        conn: Any | None = None,
+    ) -> ProviderApiKeyRecord:
+        saved = record.model_copy(update={"updated_at": _now()})
+        with self._cursor(conn) as cur:
+            cur.execute(
+                """
+                INSERT INTO provider_api_keys (
+                    org_id, user_id, provider, encrypted_key, key_hint,
+                    created_at, updated_at
+                ) VALUES (%s, %s, %s, %s, %s, %s, %s)
+                ON CONFLICT (org_id, user_id, provider) DO UPDATE SET
+                    encrypted_key = EXCLUDED.encrypted_key,
+                    key_hint = EXCLUDED.key_hint,
+                    updated_at = EXCLUDED.updated_at
+                RETURNING created_at
+                """,
+                (
+                    saved.org_id,
+                    saved.user_id,
+                    saved.provider.value,
+                    saved.encrypted_key,
+                    saved.key_hint,
+                    saved.created_at,
+                    saved.updated_at,
+                ),
+            )
+            returned = cur.fetchone()
+        if returned is not None:
+            created_at = (
+                returned["created_at"] if isinstance(returned, dict) else returned[0]
+            )
+            saved = saved.model_copy(update={"created_at": created_at})
+        return saved
+
+    def delete(
+        self,
+        *,
+        org_id: str,
+        user_id: str,
+        provider: ProviderName,
+        conn: Any | None = None,
+    ) -> bool:
+        with self._cursor(conn) as cur:
+            cur.execute(
+                """
+                DELETE FROM provider_api_keys
+                WHERE org_id = %s AND user_id = %s AND provider = %s
+                """,
+                (org_id, user_id, provider.value),
+            )
+            return (cur.rowcount or 0) > 0
+
+
+__all__ = [
+    "InMemoryProviderApiKeyStore",
+    "PostgresProviderApiKeyStore",
+    "ProviderApiKeyRecord",
+    "ProviderApiKeyStore",
+    "ProviderName",
+]

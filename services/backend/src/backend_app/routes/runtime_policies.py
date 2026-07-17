@@ -37,6 +37,7 @@ from backend_app.privacy.store import (
     DataResidencyRegion,  # noqa: F401 — re-exported via response shape
     PrivacySettingsStore,
 )
+from backend_app.provider_keys.service import ProviderKeysService
 
 
 # ---------------------------------------------------------------------------
@@ -88,6 +89,11 @@ class RuntimePolicyResponse(BaseModel):
 
     tool_use: ToolUseSection
     privacy: PrivacySection
+    # Phase 2 BYOK — decrypted per-user provider keys, present only for
+    # providers with stored rows (``None`` when the user stored none or
+    # the provider-keys service isn't wired). This field ONLY rides the
+    # service-token internal lane; the facade never exposes this route.
+    provider_keys: dict[str, str] | None = None
 
 
 # ---------------------------------------------------------------------------
@@ -100,6 +106,7 @@ def register_runtime_policies_routes(
     *,
     tool_use_store: ToolUsePolicyStore,
     privacy_store: PrivacySettingsStore,
+    provider_keys_service: ProviderKeysService | None = None,
 ) -> None:
     """Attach ``/internal/v1/policies/runtime`` to the app."""
 
@@ -124,6 +131,11 @@ def register_runtime_policies_routes(
             ),
             privacy=_compose_privacy(
                 store=privacy_store,
+                org_id=identity.org_id,
+                user_id=identity.user_id,
+            ),
+            provider_keys=_compose_provider_keys(
+                service=provider_keys_service,
                 org_id=identity.org_id,
                 user_id=identity.user_id,
             ),
@@ -154,6 +166,21 @@ def _modes_by_kind(rows) -> dict[str, str]:  # type: ignore[no-untyped-def]
     for row in rows:
         out[row.kind.value] = row.mode.value
     return out
+
+
+def _compose_provider_keys(
+    *,
+    service: ProviderKeysService | None,
+    org_id: str,
+    user_id: str,
+) -> dict[str, str] | None:
+    """Decrypted BYOK keys for the run — ``None`` when the user stored
+    none (or the service isn't wired, e.g. no TokenVault available)."""
+
+    if service is None:
+        return None
+    keys = service.decrypted_keys(org_id=org_id, user_id=user_id)
+    return keys or None
 
 
 def _compose_privacy(
