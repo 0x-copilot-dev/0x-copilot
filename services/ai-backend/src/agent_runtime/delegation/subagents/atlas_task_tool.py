@@ -14,6 +14,15 @@ Why a monkey-patch and not a fork:
 - `_build_task_tool` is small enough that mirroring its shape is low-risk;
   if deepagents refactors it we'll see test failures and follow up.
 
+Mirrored against deepagents' `_build_task_tool` as of the 1.x middleware
+(signature: `(subagents, task_description, *, private_state_keys,
+state_schema)`). Deltas from upstream are ONLY the
+`supervisor_task_call_id` stamps in the subagent invocation config. The
+parent's callbacks/tags/configurable reach the subagent ambiently via
+langgraph's `ensure_config` per-key merge, so — like upstream — we do not
+forward parent config keys explicitly (doing so double-counts under the
+merge).
+
 The function is registered in `agent_runtime/execution/factory.py` at
 module-load time via `deepagents.middleware.subagents._build_task_tool = ...`.
 
@@ -26,20 +35,27 @@ literal string `"ToolRuntime"` and `issubclass` returns False).
 
 import dataclasses
 import json
-from typing import Any
+from collections.abc import Sequence
+from typing import Any, cast
 
+from langchain.agents.structured_output import ResponseFormat
 from langchain.tools import ToolRuntime
-from langchain_core.messages import HumanMessage, ToolMessage
+from langchain_core.messages import AIMessage, HumanMessage, ToolMessage
 from langchain_core.runnables import Runnable, RunnableConfig
 from langchain_core.tools import StructuredTool
 from langgraph.types import Command
 
-# Re-import the constants we mirror so we stay 1:1 with the upstream
-# behavior except for the metadata injection.
+# Re-import the pieces we mirror so we stay 1:1 with the upstream behavior
+# except for the metadata injection.
 from deepagents.middleware.subagents import (  # type: ignore[import-untyped]
     TASK_TOOL_DESCRIPTION,
+    CompiledSubAgent,
+    SubAgent,
     TaskToolSchema,
     _EXCLUDED_STATE_KEYS,
+    _get_subagent_response_format,
+    _subagent_tracing_context,
+    create_sub_agent,
 )
 
 
@@ -52,19 +68,60 @@ SUPERVISOR_TASK_CALL_ID_KEY = "supervisor_task_call_id"
 
 
 def build_atlas_task_tool(
-    subagents: list[dict[str, Any]],
+    subagents: Sequence[Any],
     task_description: str | None = None,
+    *,
+    private_state_keys: frozenset[str] = frozenset(),
+    state_schema: type | None = None,
 ) -> StructuredTool:
     """Mirrors `deepagents._build_task_tool` but injects supervisor_task_call_id.
 
     Signature matches the upstream so the monkey-patch is drop-in.
     """
 
+    def _compile_spec(
+        spec: Any,
+        *,
+        response_format: ResponseFormat[Any] | type | dict[str, Any] | None = None,
+    ) -> CompiledSubAgent:
+        """Compile one raw spec or configure one provided runnable (upstream 1:1)."""
+        if "runnable" in spec:
+            if response_format is not None:
+                msg = (
+                    f'response_schema cannot be used with compiled subagent "{spec["name"]}"; '
+                    "dynamic schemas require a raw SubAgent spec."
+                )
+                raise ValueError(msg)
+            compiled = cast("CompiledSubAgent", spec)
+            runnable = compiled["runnable"].with_config(
+                {
+                    "metadata": {"lc_agent_name": spec["name"]},
+                    "run_name": spec["name"],
+                }
+            )
+            return {
+                "name": spec["name"],
+                "description": spec["description"],
+                "runnable": runnable,
+            }
+        return {
+            "name": spec["name"],
+            "description": spec["description"],
+            "runnable": create_sub_agent(
+                cast("SubAgent", spec),
+                state_schema=state_schema,
+                response_format=response_format,
+            ),
+        }
+
+    compiled_subagents = [_compile_spec(spec) for spec in subagents]
+    subagents_by_name = {spec["name"]: spec for spec in subagents}
+
     subagent_graphs: dict[str, Runnable] = {
-        spec["name"]: spec["runnable"] for spec in subagents
+        spec["name"]: spec["runnable"] for spec in compiled_subagents
     }
     subagent_description_str = "\n".join(
-        f"- {s['name']}: {s['description']}" for s in subagents
+        f"- {s['name']}: {s['description']}" for s in compiled_subagents
     )
 
     if task_description is None:
@@ -102,11 +159,16 @@ def build_atlas_task_tool(
             else:
                 content = json.dumps(structured)
         else:
-            content = (
-                result["messages"][-1].text.rstrip()
-                if result["messages"][-1].text
-                else ""
-            )
+            # Walk back to the last AIMessage with non-empty text (upstream
+            # fix: Anthropic occasionally emits a trailing empty `end_turn`
+            # AIMessage after a successful final tool call).
+            content = ""
+            for msg in reversed(result["messages"]):
+                if isinstance(msg, AIMessage):
+                    text = msg.text.rstrip() if msg.text else ""
+                    if text:
+                        content = text
+                        break
 
         return Command(
             update={
@@ -115,42 +177,48 @@ def build_atlas_task_tool(
             }
         )
 
+    def _select_subagent(subagent_type: str, runtime: ToolRuntime) -> Runnable:
+        """Return the runnable to use for this task invocation (upstream 1:1)."""
+        response_format = _get_subagent_response_format(runtime)
+        if response_format is not None:
+            new_spec = _compile_spec(
+                subagents_by_name[subagent_type],
+                response_format=response_format,
+            )
+            return new_spec["runnable"]
+        return subagent_graphs[subagent_type]
+
     def _validate_and_prepare_state(
         subagent_type: str,
         description: str,
         runtime: ToolRuntime,
     ) -> tuple[Runnable, dict[str, Any]]:
-        subagent = subagent_graphs[subagent_type]
+        subagent = _select_subagent(subagent_type, runtime)
         subagent_state = {
             k: v for k, v in runtime.state.items() if k not in _EXCLUDED_STATE_KEYS
+        }
+        subagent_state = {
+            k: v for k, v in subagent_state.items() if k not in private_state_keys
         }
         subagent_state["messages"] = [HumanMessage(content=description)]
         return subagent, subagent_state
 
     def _build_subagent_config(runtime: ToolRuntime) -> RunnableConfig:
-        """Build subagent's RunnableConfig.
+        """Minimal invocation config + the Atlas linkage stamps.
 
-        Mirrors deepagents' shape exactly, with two additions:
+        Upstream passes only `{"configurable": {"ls_agent_type": "subagent"}}`
+        — parent callbacks/tags/configurable/metadata propagate ambiently via
+        langgraph's per-key `ensure_config` merge. Our two additions:
         - `configurable.supervisor_task_call_id` (defensive — second channel)
         - `metadata.supervisor_task_call_id` (primary — what the worker reads)
-
-        Both default to runtime.tool_call_id; both fall back to None when not
-        available (the upstream code raises before this is reached when
-        tool_call_id is missing, so None is mostly belt-and-braces).
         """
-        parent_configurable: dict[str, Any] = dict(
-            runtime.config.get("configurable", {}) or {}
-        )
-        parent_metadata: dict[str, Any] = dict(runtime.config.get("metadata", {}) or {})
         tool_call_id = runtime.tool_call_id
         return {
             "configurable": {
-                **parent_configurable,
                 "ls_agent_type": "subagent",
                 SUPERVISOR_TASK_CALL_ID_KEY: tool_call_id,
             },
             "metadata": {
-                **parent_metadata,
                 SUPERVISOR_TASK_CALL_ID_KEY: tool_call_id,
             },
         }
@@ -173,7 +241,8 @@ def build_atlas_task_tool(
             subagent_type, description, runtime
         )
         subagent_config = _build_subagent_config(runtime)
-        result = subagent.invoke(subagent_state, subagent_config)
+        with _subagent_tracing_context():
+            result = subagent.invoke(subagent_state, subagent_config)
         return _return_command_with_state_update(result, runtime.tool_call_id)
 
     async def atask(
@@ -194,7 +263,8 @@ def build_atlas_task_tool(
             subagent_type, description, runtime
         )
         subagent_config = _build_subagent_config(runtime)
-        result = await subagent.ainvoke(subagent_state, subagent_config)
+        with _subagent_tracing_context():
+            result = await subagent.ainvoke(subagent_state, subagent_config)
         return _return_command_with_state_update(result, runtime.tool_call_id)
 
     return StructuredTool.from_function(
