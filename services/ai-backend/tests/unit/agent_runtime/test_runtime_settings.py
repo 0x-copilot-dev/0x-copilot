@@ -144,3 +144,60 @@ def test_model_resolver_rejects_missing_provider_key() -> None:
 
     assert exc_info.value.code == "configuration_error"
     assert "Missing API key" in exc_info.value.safe_message
+
+
+def test_model_resolver_missing_key_message_points_to_settings() -> None:
+    settings = RuntimeSettings.load(environ={})
+    resolver = ModelConfigResolver(settings)
+
+    with pytest.raises(AgentRuntimeError) as exc_info:
+        resolver.resolve(
+            ModelSelection(provider="anthropic", model_name="claude-sonnet-4")
+        )
+
+    assert exc_info.value.safe_message == (
+        "Missing API key for model provider 'anthropic'. "
+        "Add one in Settings -> Provider keys."
+    )
+
+
+def test_model_resolver_user_key_satisfies_credentials_without_env_key() -> None:
+    # BYOK: a stored user key for the provider passes the gate even when the
+    # deployment has no env key configured.
+    settings = RuntimeSettings.load(environ={})
+    resolver = ModelConfigResolver(settings)
+
+    resolved = resolver.resolve(
+        ModelSelection(provider="anthropic", model_name="claude-sonnet-4"),
+        user_key_providers=frozenset({"anthropic"}),
+    )
+
+    assert resolved.provider == "anthropic"
+    assert resolved.model_name == "claude-sonnet-4"
+
+
+def test_model_resolver_user_key_for_other_provider_does_not_unlock() -> None:
+    settings = RuntimeSettings.load(environ={})
+    resolver = ModelConfigResolver(settings)
+
+    with pytest.raises(AgentRuntimeError) as exc_info:
+        resolver.resolve(
+            ModelSelection(provider="anthropic", model_name="claude-sonnet-4"),
+            user_key_providers=frozenset({"openai"}),
+        )
+
+    assert exc_info.value.code == "configuration_error"
+
+
+def test_model_resolver_env_key_still_satisfies_without_user_key() -> None:
+    # Precedence is user > env at injection time; availability-wise either
+    # source passes the gate.
+    settings = RuntimeSettings.load(environ={"ANTHROPIC_API_KEY": "sk-ant-test"})
+    resolver = ModelConfigResolver(settings)
+
+    resolved = resolver.resolve(
+        ModelSelection(provider="anthropic", model_name="claude-sonnet-4"),
+        user_key_providers=frozenset(),
+    )
+
+    assert resolved.provider == "anthropic"

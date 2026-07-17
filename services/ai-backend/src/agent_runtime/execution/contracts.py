@@ -341,7 +341,19 @@ class AgentRuntimeContext(RuntimeContract):
     # Per-(org, user) policies resolved at run-create from the backend aggregate
     # route. Empty dict means "use deployment defaults." Consumers downcast to
     # ``ToolUsePolicySnapshot`` / ``PrivacySettingsSnapshot`` as needed.
+    # SECURITY INVARIANT: this dict is persisted verbatim (run records,
+    # outbox payloads) — it must NEVER contain provider API keys. Keys are
+    # split out into ``provider_keys`` below before the context is sealed.
     user_policies_json: JsonObject = Field(default_factory=dict)
+    # Per-user BYOK provider API keys (normalized provider slug -> plaintext
+    # key), resolved at run-create and re-hydrated by the worker at claim
+    # time. In-memory only: ``exclude=True`` keeps the mapping out of every
+    # ``model_dump`` / ``model_dump_json`` surface (``agent_runs.runtime_context_json``,
+    # queue/outbox payloads, events), and ``repr=False`` keeps it out of
+    # tracebacks and logs — mirroring ``ProviderSettings.api_key``.
+    provider_keys: dict[str, str] = Field(
+        default_factory=dict, exclude=True, repr=False
+    )
 
     @field_validator("user_id", "org_id")
     @classmethod
@@ -439,6 +451,27 @@ class AgentRuntimeContext(RuntimeContract):
                 raise ValueError(msg)
             normalized.append(item.strip())
         return frozenset(normalized)
+
+    @field_validator("provider_keys", mode="before")
+    @classmethod
+    def _normalize_provider_keys(cls, value: object) -> dict[str, str]:
+        # Error messages here must never include the mapping's values —
+        # they are plaintext credentials.
+        if value is None:
+            return {}
+        if not isinstance(value, Mapping):
+            msg = "provider_keys must be a mapping of provider slug to API key"
+            raise ValueError(msg)
+        normalized: dict[str, str] = {}
+        for provider, key in value.items():
+            if not isinstance(provider, str) or not provider.strip():
+                msg = "provider_keys keys must be non-empty provider slugs"
+                raise ValueError(msg)
+            if not isinstance(key, str) or not key.strip():
+                msg = "provider_keys values must be non-empty strings"
+                raise ValueError(msg)
+            normalized[provider.strip().lower()] = key.strip()
+        return normalized
 
     @field_validator("request_id", "run_id", "trace_id", mode="before")
     @classmethod

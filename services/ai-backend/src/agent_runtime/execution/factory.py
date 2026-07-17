@@ -16,7 +16,11 @@ from agent_runtime.execution.contracts import (
     RuntimeErrorCode,
 )
 from agent_runtime.execution.errors import AgentRuntimeError
-from agent_runtime.execution.provider_kwargs import workspace_model_kwargs
+from agent_runtime.execution.provider_kwargs import (
+    RegionUnavailableError,
+    user_policy_model_kwargs,
+    workspace_model_kwargs,
+)
 from agent_runtime.execution.deep_agent_builder import (
     DeepAgentBuildRequest,
     DeepAgentsBackend,
@@ -216,6 +220,26 @@ async def _assemble_harness(
                 runtime_context.workspace_behavior_overrides or None
             ),
         )
+        # Per-user policy + BYOK kwargs are merged AFTER workspace kwargs so
+        # the user's opt-out ratchet, region pin, and ``api_key`` win on any
+        # conflict. ``provider_keys`` is the in-memory (never persisted)
+        # context field — the resulting kwargs must not be logged.
+        try:
+            extra_model_kwargs.update(
+                user_policy_model_kwargs(
+                    provider=runtime_context.model_profile.provider,
+                    user_policies_json=runtime_context.user_policies_json or None,
+                    provider_keys=runtime_context.provider_keys or None,
+                )
+            )
+        except RegionUnavailableError as exc:
+            raise AgentRuntimeError(
+                RuntimeErrorCode.CONFIGURATION_ERROR,
+                f"Data residency region '{exc.region}' is not configured "
+                f"for model provider '{exc.provider}'.",
+                retryable=False,
+                correlation_id=runtime_context.trace_id,
+            ) from exc
         agent = builder(
             DeepAgentBuildRequest(
                 tools=model_tools,

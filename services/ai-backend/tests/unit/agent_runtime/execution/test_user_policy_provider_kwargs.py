@@ -87,3 +87,89 @@ class TestEmptySnapshot:
             )
             == {}
         )
+
+
+class ProviderKeyFixturesMixin:
+    """Shared BYOK key constants — obviously fake values (never real-looking)."""
+
+    OPENAI_KEY = "sk-unit-test-openai-key-000000000000"
+    ANTHROPIC_KEY = "sk-ant-unit-test-key-000000000000"
+    GEMINI_KEY = "AIzaUnitTestGeminiKey0000000000000"
+
+
+class TestProviderKeyInjection(ProviderKeyFixturesMixin):
+    """BYOK: the active provider's stored user key is injected as ``api_key``."""
+
+    def test_key_injected_per_provider(self) -> None:
+        keys = {
+            "openai": self.OPENAI_KEY,
+            "anthropic": self.ANTHROPIC_KEY,
+            "gemini": self.GEMINI_KEY,
+        }
+        for provider, expected in keys.items():
+            out = user_policy_model_kwargs(
+                provider=provider,
+                user_policies_json={},
+                provider_keys=keys,
+            )
+            assert out == {"api_key": expected}
+
+    def test_key_injected_even_with_empty_policy_snapshot(self) -> None:
+        # A user with a stored key but no privacy policies must still get
+        # the key — the old early-return on an empty snapshot would drop it.
+        out = user_policy_model_kwargs(
+            provider="openai",
+            user_policies_json=None,
+            provider_keys={"openai": self.OPENAI_KEY},
+        )
+        assert out == {"api_key": self.OPENAI_KEY}
+
+    def test_no_key_for_active_provider_injects_nothing(self) -> None:
+        out = user_policy_model_kwargs(
+            provider="anthropic",
+            user_policies_json={},
+            provider_keys={"openai": self.OPENAI_KEY},
+        )
+        assert out == {}
+
+    def test_key_composes_with_training_opt_out(self) -> None:
+        out = user_policy_model_kwargs(
+            provider="anthropic",
+            user_policies_json={"privacy": {"training_opt_out": True}},
+            provider_keys={"anthropic": self.ANTHROPIC_KEY},
+        )
+        assert out["api_key"] == self.ANTHROPIC_KEY
+        assert out["extra_headers"]["anthropic-disable-training"] == "true"
+
+    def test_key_composes_with_region_routing(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        monkeypatch.setenv(
+            "PROVIDER_REGION_DEPLOYMENTS",
+            "openai:eu-west-1=https://eu.openai.example",
+        )
+        out = user_policy_model_kwargs(
+            provider="openai",
+            user_policies_json={"privacy": {"region": "eu-west-1"}},
+            provider_keys={"openai": self.OPENAI_KEY},
+        )
+        assert out["base_url"] == "https://eu.openai.example"
+        assert out["api_key"] == self.OPENAI_KEY
+
+    def test_empty_or_non_string_key_values_are_skipped(self) -> None:
+        assert (
+            user_policy_model_kwargs(
+                provider="openai",
+                user_policies_json={},
+                provider_keys={"openai": ""},
+            )
+            == {}
+        )
+        assert (
+            user_policy_model_kwargs(
+                provider="openai",
+                user_policies_json={},
+                provider_keys=None,
+            )
+            == {}
+        )

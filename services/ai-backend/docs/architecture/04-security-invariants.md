@@ -81,6 +81,16 @@ it is injected into the system prompt. Memory paths with injection patterns are 
 
 - Provider API keys (`OPENAI_API_KEY`, `ANTHROPIC_API_KEY`, `GOOGLE_API_KEY`) are **never** accepted
   in HTTP request bodies. They are env-backed only and resolved in `RuntimeSettings`.
+- **BYOK per-user provider keys** arrive only over the trusted service-token lane as the optional
+  `provider_keys` field of the `/internal/v1/policies/runtime` snapshot. `ProviderKeysParser.split`
+  removes them from the snapshot before it is sealed into the persisted
+  `AgentRuntimeContext.user_policies_json`; the keys ride the separate
+  `AgentRuntimeContext.provider_keys` field, which is `exclude=True, repr=False` — it never appears
+  in `runtime_context_json`, queue/outbox payloads, events, or reprs. Because queue commands
+  round-trip through `model_dump(mode="json")`, the worker re-attaches keys in memory at claim time
+  via `ProviderKeysHydrator` (run and approval-resume handlers). The key value is injected into
+  model construction as the `api_key` kwarg (`user_policy_model_kwargs`), taking precedence over
+  the deployment env key.
 - OAuth tokens for MCP servers are owned and stored by `backend`'s `TokenVault`. `ai-backend`
   never sees raw tokens; it calls `backend` to create auth sessions and receives only the auth URL.
 - Encryption keys and KMS ARNs are in environment variables, not in code or DB rows.
@@ -141,11 +151,14 @@ to customer SIEM.** The in-memory adapter is test-only and must not be used in p
 
 ## 9 — Provider key scope
 
-**Model selection must resolve to a provider with a configured environment key.**
+**Model selection must resolve to a provider with a configured environment key or a stored
+per-user (BYOK) key.**
 
-If the workspace selects a model backed by a provider whose key is not set, the run is rejected
-at pre-flight with a safe error (`RuntimeErrorCode.PROVIDER_NOT_CONFIGURED`). The error message
-names the provider but not the expected key name.
+If the selected provider has neither a deployment env key nor a user key, the run is rejected
+at pre-flight with a safe error (`RuntimeErrorCode.CONFIGURATION_ERROR`): the message names the
+provider and points the user at Settings -> Provider keys, but never names the expected env var.
+`ModelConfigResolver.resolve` receives only the _availability_ of user keys
+(`user_key_providers`, a set of provider slugs) — never the key values.
 
 ---
 

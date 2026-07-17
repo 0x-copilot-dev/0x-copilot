@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from collections.abc import Mapping, Sequence
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import Protocol, runtime_checkable
 
 from deepagents import HarnessProfile, create_deep_agent, register_harness_profile
@@ -156,11 +156,12 @@ class DeepAgentBuildRequest:
     skill_directories: tuple[str, ...] = ()
     interrupt_on: Mapping[str, object] | None = None
     checkpointer: object | None = None
-    # Extra ``init_chat_model`` kwargs from workspace policy (e.g. training
-    # opt-out headers). Derived in ``factory.py`` and threaded here so every
-    # chat-model construction site — including subagents — honours policy
-    # uniformly.
-    extra_model_kwargs: Mapping[str, object] | None = None
+    # Extra ``init_chat_model`` kwargs from workspace + user policy (training
+    # opt-out headers, region ``base_url``, BYOK ``api_key``). Derived in
+    # ``factory.py`` and threaded here so every chat-model construction site —
+    # including subagents — honours policy uniformly. ``repr=False`` because
+    # the mapping may carry a plaintext user API key.
+    extra_model_kwargs: Mapping[str, object] | None = field(default=None, repr=False)
 
     @property
     def model_name(self) -> str:

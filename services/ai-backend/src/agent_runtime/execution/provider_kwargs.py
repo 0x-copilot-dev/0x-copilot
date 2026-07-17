@@ -20,8 +20,9 @@ Two load-bearing knobs:
 Public surface:
 
 * :func:`workspace_model_kwargs(provider, overrides)` — workspace opt-out.
-* :func:`user_policy_model_kwargs(provider, user_policies_json)` — per-user
-  opt-out + region routing.
+* :func:`user_policy_model_kwargs(provider, user_policies_json, provider_keys)`
+  — per-user opt-out + region routing + BYOK ``api_key`` injection for the
+  active provider (user key wins over the deployment env key).
 * :class:`RegionUnavailableError` — raised when the user pinned a region
   the deployment doesn't have a mapping for; the runtime worker catches
   this and translates to ``RUN_REJECTED``.
@@ -161,36 +162,46 @@ def user_policy_model_kwargs(
     *,
     provider: str,
     user_policies_json: Mapping[str, object] | None,
+    provider_keys: Mapping[str, str] | None = None,
 ) -> dict[str, object]:
-    """Return opt-out header and region routing kwargs from the user snapshot.
+    """Return opt-out, region routing, and BYOK key kwargs for one user.
 
     Composes with :func:`workspace_model_kwargs` at the call site:
     user opt-out is a one-way ratchet (cannot be silently disabled
     by a less-strict workspace setting), and region is a per-user
     knob without a workspace counterpart.
+
+    ``provider_keys`` is the in-memory ``AgentRuntimeContext.provider_keys``
+    mapping (normalized provider slug -> plaintext key). When the active
+    provider has a stored user key it is injected as ``api_key``, which
+    ``init_chat_model`` forwards to the provider client — taking precedence
+    over any deployment env key the SDK would otherwise read. The returned
+    dict must never be logged or persisted by callers.
     """
 
-    if not user_policies_json:
-        return {}
-    privacy = user_policies_json.get("privacy")
-    if not isinstance(privacy, Mapping):
-        return {}
     out: dict[str, object] = {}
-    if privacy.get("training_opt_out") is True:
-        template = _TRAINING_OPT_OUT_KWARGS.get(provider, {})
-        out.update(_shallow_copy_kwargs(template))
-    region = privacy.get("region")
-    if isinstance(region, str) and region:
-        deployments = _load_region_deployments()
-        base_url = deployments.get((provider, region))
-        if base_url is None:
-            raise RegionUnavailableError(provider=provider, region=region)
-        # ``init_chat_model`` accepts ``base_url`` for OpenAI-shaped
-        # clients (incl. Anthropic via the Anthropic SDK's ``base_url``
-        # kwarg). Providers that ignore the kwarg simply continue
-        # to route to the default region — mapped above to
-        # RegionUnavailableError so we never silently mis-route.
-        out["base_url"] = base_url
+    privacy = (
+        user_policies_json.get("privacy") if user_policies_json is not None else None
+    )
+    if isinstance(privacy, Mapping):
+        if privacy.get("training_opt_out") is True:
+            template = _TRAINING_OPT_OUT_KWARGS.get(provider, {})
+            out.update(_shallow_copy_kwargs(template))
+        region = privacy.get("region")
+        if isinstance(region, str) and region:
+            deployments = _load_region_deployments()
+            base_url = deployments.get((provider, region))
+            if base_url is None:
+                raise RegionUnavailableError(provider=provider, region=region)
+            # ``init_chat_model`` accepts ``base_url`` for OpenAI-shaped
+            # clients (incl. Anthropic via the Anthropic SDK's ``base_url``
+            # kwarg). Providers that ignore the kwarg simply continue
+            # to route to the default region — mapped above to
+            # RegionUnavailableError so we never silently mis-route.
+            out["base_url"] = base_url
+    api_key = (provider_keys or {}).get(provider)
+    if isinstance(api_key, str) and api_key:
+        out["api_key"] = api_key
     return out
 
 

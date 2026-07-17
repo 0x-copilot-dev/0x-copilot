@@ -14,6 +14,10 @@ from agent_runtime.api.run_termination import (
     TerminationReason,
 )
 from agent_runtime.api.presentation import ToolDisplayLookupContext
+from agent_runtime.api.user_policies_resolver import (
+    ProviderKeysHydrator,
+    UserPoliciesResolver,
+)
 from agent_runtime.capabilities.mcp.descriptor_registry import (
     McpDisplayRegistryContext,
 )
@@ -112,10 +116,19 @@ class RuntimeApprovalHandler:
             ConversationToolOrdinalStorePort | None
         ) = None,
         mcp_discovery_cache: object | None = None,
+        user_policies_resolver: UserPoliciesResolver | None = None,
     ) -> None:
         self.persistence: PersistencePort = persistence
         self.event_store: EventStorePort = event_store
         self.settings = settings or RuntimeSettings.load()
+        # BYOK re-hydration on resume: the persisted run record's context was
+        # serialized without ``provider_keys`` (excluded field), so the resumed
+        # harness re-fetches them in memory only — same seam as the run handler.
+        self._provider_keys_hydrator = (
+            ProviderKeysHydrator(resolver=user_policies_resolver)
+            if user_policies_resolver is not None
+            else None
+        )
         # Same pattern as ``RuntimeRunHandler``: caller-supplied factory wins
         # (tests inject their own); otherwise the default factory threads the
         # process-wide MCP discovery cache through ``RuntimeDependencies``.
@@ -282,8 +295,13 @@ class RuntimeApprovalHandler:
             RuntimeRunHandler._build_tool_display_lookup(dependencies.tool_registry)
         )
         try:
+            resume_context = running.runtime_context
+            if self._provider_keys_hydrator is not None:
+                resume_context = await self._provider_keys_hydrator.hydrate(
+                    resume_context
+                )
             harness_or_coro = self.agent_factory(
-                context=running.runtime_context,
+                context=resume_context,
                 dependencies=dependencies,
             )
             harness = (

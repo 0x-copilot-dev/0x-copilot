@@ -314,6 +314,19 @@ class RuntimeApiAppFactory:
                 if suggestible_connectors_resolver is not None
                 else SuggestibleConnectorsResolverFactory.default()
             )
+            # Wire the HTTP user-policies resolver when the trusted backend
+            # lane is configured (BACKEND_BASE_URL + ENTERPRISE_SERVICE_TOKEN)
+            # so run-create sees policy snapshots — including BYOK provider
+            # keys — in production. Falls back to Null when unconfigured.
+            if user_policies_resolver is None:
+                from agent_runtime.api.user_policies_resolver import (
+                    UserPoliciesResolverFactory,
+                )
+                from agent_runtime.capabilities.http_pool import BackendHttpPool
+
+                user_policies_resolver = UserPoliciesResolverFactory.default(
+                    http_client=BackendHttpPool.get()
+                )
             _ports = RuntimeAdapterFactory.from_settings(_settings)
             app.state.runtime_ports = _ports
             _on_event_appended = on_event_appended or event_bus.notify_sync
@@ -336,6 +349,9 @@ class RuntimeApiAppFactory:
         _user_policies_resolver: UserPoliciesResolver = (
             user_policies_resolver or NullUserPoliciesResolver()
         )
+        # Shared with the in-process worker so BYOK re-hydration uses the
+        # same resolver instance as run-create.
+        app.state.runtime_user_policies_resolver = _user_policies_resolver
         # P6.5-A2 — project ``default_connector_allowlist`` resolver.
         # Tests pass an explicit fake; production wires the HTTP impl
         # via the factory once the deployment configures
@@ -792,6 +808,9 @@ class RuntimeApiAppFactory:
                 ports, "conversation_tool_ordinal_store", None
             ),
             mcp_discovery_cache=getattr(app.state, "mcp_discovery_cache", None),
+            user_policies_resolver=getattr(
+                app.state, "runtime_user_policies_resolver", None
+            ),
         )
         app.state.runtime_in_process_worker = worker
         app.state.runtime_in_process_worker_task = asyncio.create_task(
