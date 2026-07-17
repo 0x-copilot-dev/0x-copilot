@@ -9,25 +9,35 @@ exposed via `GET /v1/health` on each service.
 
 ## Profiles
 
-| Profile                     | What it means                                        |
-| --------------------------- | ---------------------------------------------------- |
-| `saas_multi_tenant`         | Default. Many orgs in one DB, our infra.             |
-| `single_tenant_managed`     | One org in one DB, our infra (e.g. dedicated VPC).   |
-| `single_tenant_self_hosted` | One org in one DB, customer infra (Helm or Compose). |
+| Profile                     | What it means                                                    |
+| --------------------------- | ---------------------------------------------------------------- |
+| `saas_multi_tenant`         | Default. Many orgs in one DB, our infra.                         |
+| `single_tenant_managed`     | One org in one DB, our infra (e.g. dedicated VPC).               |
+| `single_tenant_self_hosted` | One org in one DB, customer infra (Helm or Compose).             |
+| `single_user_desktop`       | One person, one workspace, bundled local Postgres (desktop app). |
 
 ## Toggle matrix
 
-| Toggle                           | saas_multi_tenant | single_tenant_managed | single_tenant_self_hosted | dev (no profile) |
-| -------------------------------- | ----------------- | --------------------- | ------------------------- | ---------------- |
-| `dev_auth_bypass_allowed`        | false             | false                 | false                     | **true**         |
-| `require_kms_token_vault`        | true              | true                  | true                      | false            |
-| `require_field_level_encryption` | false             | true                  | true                      | false            |
-| `siem_export_required`           | true              | true                  | true                      | false            |
-| `enforce_rls`                    | true              | true                  | true                      | false            |
-| `allow_self_signup`              | true              | false                 | false                     | true             |
-| `allow_vendor_telemetry`         | true              | false                 | false                     | true             |
-| `allow_embedded_provider_keys`   | true              | true                  | **false**                 | true             |
-| `default_retention_days`         | 365               | 365                   | 365                       | 365              |
+| Toggle                           | saas_multi_tenant | single_tenant_managed | single_tenant_self_hosted | single_user_desktop | dev (no profile) |
+| -------------------------------- | ----------------- | --------------------- | ------------------------- | ------------------- | ---------------- |
+| `dev_auth_bypass_allowed`        | false             | false                 | false                     | false               | **true**         |
+| `require_kms_token_vault`        | true              | true                  | true                      | **false**           | false            |
+| `require_field_level_encryption` | false             | true                  | true                      | false               | false            |
+| `siem_export_required`           | true              | true                  | true                      | **false**           | false            |
+| `enforce_rls`                    | true              | true                  | true                      | **false**           | false            |
+| `allow_self_signup`              | true              | false                 | false                     | **true**            | true             |
+| `allow_vendor_telemetry`         | true              | false                 | false                     | false               | true             |
+| `allow_embedded_provider_keys`   | true              | true                  | **false**                 | true                | true             |
+| `default_retention_days`         | 365               | 365                   | 365                       | 365                 | 365              |
+
+`single_user_desktop` relaxes KMS/SIEM/RLS because the OS user boundary is
+the tenant boundary on a laptop; the token vault falls back to the local
+Fernet adapter keyed by `MCP_TOKEN_VAULT_SECRET`. `backend` boots through the
+dedicated composition root `backend_app.desktop_app:app`, which wires every
+existing Postgres adapter off `DATABASE_URL` and forces magic-link login OFF
+(no outbound email path on a desktop). Telemetry is disabled with the
+standard `OTEL_SDK_DISABLED=true` env var (all three services honor it)
+instead of pointing OTLP at a dead endpoint.
 
 `dev (no profile)` only applies when both `ENTERPRISE_DEPLOYMENT_PROFILE` is
 unset _and_ the service-specific environment variable
@@ -48,9 +58,10 @@ The loader rejects these combinations and exits with code `78` (sysexits.h
 `EX_CONFIG`):
 
 - `ENTERPRISE_DEPLOYMENT_PROFILE` set to a value not in the allowed list.
-- `ENTERPRISE_DEPLOYMENT_PROFILE=single_tenant_*` AND `DEV_AUTH_BYPASS=true` —
-  the bypass cannot be silently honored under a regulated profile even if
-  someone leaks `DEV_AUTH_BYPASS=true` from a dev shell.
+- Any explicit profile (`single_tenant_*`, `single_user_desktop`, or explicit
+  `saas_multi_tenant`) AND `DEV_AUTH_BYPASS=true` — the bypass cannot be
+  silently honored under a locked-down profile even if someone leaks
+  `DEV_AUTH_BYPASS=true` from a dev shell.
 
 ## Per-service env vars
 

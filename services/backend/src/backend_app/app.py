@@ -1948,4 +1948,19 @@ def create_app(
     return app
 
 
-app = create_app()
+def __getattr__(name: str) -> object:
+    """Lazily build the module-level ``app`` for ``uvicorn backend_app.app:app``.
+
+    PEP 562 module ``__getattr__``: the default app is only constructed when
+    the ``app`` attribute is actually requested (uvicorn does this once).
+    Importing :func:`create_app` from other composition roots (e.g.
+    ``backend_app.desktop_app``) must not boot the default app as a side
+    effect — the default wiring enforces SaaS-production invariants (OTLP
+    endpoint, KMS vault) that other profiles intentionally do not carry.
+    """
+
+    if name == "app":
+        application = create_app()
+        globals()["app"] = application
+        return application
+    raise AttributeError(f"module {__name__!r} has no attribute {name!r}")

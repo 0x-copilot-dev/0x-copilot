@@ -14,12 +14,18 @@ ENV_DEPLOYMENT_PROFILE = "ENTERPRISE_DEPLOYMENT_PROFILE"
 PROFILE_SAAS_MULTI_TENANT = "saas_multi_tenant"
 PROFILE_SINGLE_TENANT_MANAGED = "single_tenant_managed"
 PROFILE_SINGLE_TENANT_SELF_HOSTED = "single_tenant_self_hosted"
+# One person, one workspace, one machine: the desktop app runs the backend
+# services locally against a bundled Postgres. No KMS, no SIEM, no RLS —
+# the OS user boundary is the tenant boundary. Self-signup stays on because
+# the user creates their own workspace via Google/wallet on first launch.
+PROFILE_SINGLE_USER_DESKTOP = "single_user_desktop"
 
 ALLOWED_PROFILES = frozenset(
     {
         PROFILE_SAAS_MULTI_TENANT,
         PROFILE_SINGLE_TENANT_MANAGED,
         PROFILE_SINGLE_TENANT_SELF_HOSTED,
+        PROFILE_SINGLE_USER_DESKTOP,
     }
 )
 

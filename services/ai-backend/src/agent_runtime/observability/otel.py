@@ -138,6 +138,15 @@ class TelemetryBootstrap:
         if cls._CONFIGURED:
             return
 
+        if os.environ.get("OTEL_SDK_DISABLED", "").strip().lower() == "true":
+            # Standard OTel kill switch (spec env var). Deployments with no
+            # collector at all — e.g. the single_user_desktop profile, where
+            # the app runs on a laptop — set this instead of pointing OTLP
+            # at a dead endpoint; it also skips the production fail-closed
+            # endpoint requirement below.
+            cls._CONFIGURED = True
+            return
+
         env_value = (
             env or os.environ.get("RUNTIME_ENVIRONMENT", "development").strip().lower()
         )
