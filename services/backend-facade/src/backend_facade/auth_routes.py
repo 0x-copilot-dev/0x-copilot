@@ -127,7 +127,10 @@ def register_auth_routes(app: FastAPI) -> None:
     @app.get("/v1/auth/providers")
     async def list_providers(
         request: Request,
-        org_id: str = Query(..., min_length=1),
+        # Optional since the global Google provider landed: the pre-workspace
+        # login screen has no org yet. "-" tells the backend "no org context";
+        # deployment-global providers (id "google") are listed either way.
+        org_id: str = Query("-", min_length=1),
     ) -> dict[str, object]:
         backend_url = settings_for(app).backend_url
         client = http_client(request.app)
@@ -144,7 +147,11 @@ def register_auth_routes(app: FastAPI) -> None:
     async def oidc_start(
         request: Request,
         provider_id: str,
-        org_id: str = Query(..., min_length=1),
+        # Optional for deployment-global providers (id "google"): the caller
+        # cannot know the workspace before the IdP identifies the user. The
+        # backend pins global-provider state to its sentinel org; per-org
+        # providers still require a real org_id (400 otherwise).
+        org_id: str = Query("-", min_length=1),
         redirect_uri: str = Query(..., min_length=1),
         return_to: str | None = Query(None),
         format: str = Query("redirect", pattern="^(redirect|json)$"),

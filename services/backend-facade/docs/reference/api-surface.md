@@ -37,15 +37,15 @@ See also:
 
 ## Auth (forwarded by `register_auth_routes`)
 
-| Method     | Path                        | Auth   | Target  | Notes                                          |
-| ---------- | --------------------------- | ------ | ------- | ---------------------------------------------- |
-| `POST`     | `/v1/auth/login`            | Public | backend | Email+password login                           |
-| `POST`     | `/v1/auth/logout`           | Bearer | backend | Revokes session; invalidates touch cache       |
-| `GET`      | `/v1/auth/providers`        | Public | backend | Lists enabled IdPs                             |
-| `GET/POST` | `/v1/auth/oidc/*`           | Mixed  | backend | OIDC authorize + callback                      |
-| `GET/POST` | `/v1/auth/saml/*`           | Mixed  | backend | SAML authorize + ACS                           |
-| `POST`     | `/v1/auth/magic-link/*`     | Mixed  | backend | Magic-link start + callback + workspace select |
-| `POST`     | `/v1/auth/password-reset/*` | Public | backend | Password reset request + confirm               |
+| Method     | Path                        | Auth   | Target  | Notes                                                                                                                   |
+| ---------- | --------------------------- | ------ | ------- | ----------------------------------------------------------------------------------------------------------------------- |
+| `POST`     | `/v1/auth/login`            | Public | backend | Email+password login                                                                                                    |
+| `POST`     | `/v1/auth/logout`           | Bearer | backend | Revokes session; invalidates touch cache                                                                                |
+| `GET`      | `/v1/auth/providers`        | Public | backend | Lists enabled IdPs; `org_id` optional (defaults to `-`) — global providers (id `google`) are listed even without an org |
+| `GET/POST` | `/v1/auth/oidc/*`           | Mixed  | backend | OIDC authorize + callback; `/oidc/google/start` works without `org_id` (global provider)                                |
+| `GET/POST` | `/v1/auth/saml/*`           | Mixed  | backend | SAML authorize + ACS                                                                                                    |
+| `POST`     | `/v1/auth/magic-link/*`     | Mixed  | backend | Magic-link start + callback + workspace select                                                                          |
+| `POST`     | `/v1/auth/password-reset/*` | Public | backend | Password reset request + confirm                                                                                        |
 
 ---
 

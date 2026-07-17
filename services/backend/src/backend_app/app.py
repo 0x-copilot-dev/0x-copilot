@@ -94,6 +94,10 @@ from backend_app.identity import (
     build_default_email_dispatcher,
     build_pick_codec,
 )
+from backend_app.identity.google import (
+    build_google_provider,
+    ensure_global_auth_provider,
+)
 from backend_app.identity.session_sweeper import SessionSweeper
 from backend_app.observability import (
     RequestContextMiddleware,
@@ -528,6 +532,20 @@ def create_app(
             register_workspace_mfa_policy_routes(
                 app, identity_store=resolved_identity_store
             )
+            # Global "Continue with Google" (env-configured; reserved id
+            # "google"). The anchor row keeps Postgres FKs satisfied;
+            # resolution itself always reads the env-built record.
+            resolved_global_providers = {}
+            google_provider = build_google_provider(
+                environ=os.environ, token_vault=resolved_token_vault
+            )
+            if google_provider is not None:
+                ensure_global_auth_provider(
+                    identity_store=resolved_identity_store,
+                    record=google_provider,
+                )
+                resolved_global_providers[google_provider.provider_id] = google_provider
+            app.state.global_auth_providers = resolved_global_providers
             resolved_oidc_service = oidc_service or OidcService(
                 identity_store=resolved_identity_store,
                 oidc_store=resolved_oidc_store,
@@ -535,12 +553,15 @@ def create_app(
                 token_vault=resolved_token_vault,
                 lockout=resolved_lockout_service,
                 mfa=resolved_mfa_service,
+                global_providers=resolved_global_providers,
+                allow_self_signup=resolved_deployment.toggles.allow_self_signup,
             )
             app.state.oidc_service = resolved_oidc_service
             register_oidc_routes(
                 app,
                 service=resolved_oidc_service,
                 identity_store=resolved_identity_store,
+                global_providers=resolved_global_providers,
             )
 
         # SAML (A5): mints sessions on a successful ACS POST. Same gating
