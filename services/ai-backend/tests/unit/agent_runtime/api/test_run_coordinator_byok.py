@@ -53,11 +53,16 @@ class ByokCoordinatorMixin:
 
     @staticmethod
     def _settings_without_env_keys() -> RuntimeSettings:
+        # env_file points at a nonexistent path: RuntimeSettings.load
+        # otherwise layers the developer's local ``services/ai-backend/.env``
+        # (which may hold real provider keys) under ``environ`` — making the
+        # "no env key configured" branch untestable on a dev machine.
         return RuntimeSettings.load(
+            env_file="/nonexistent/byok-test.env",
             environ={
                 "RUNTIME_DEFAULT_PROVIDER": "openai",
                 "RUNTIME_DEFAULT_MODEL": "gpt-5.4-mini",
-            }
+            },
         )
 
     async def _build(
