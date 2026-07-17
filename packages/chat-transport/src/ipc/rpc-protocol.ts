@@ -18,6 +18,11 @@ export const CHANNELS = {
   // makes its outbound HTTP call. See PRD §6.7 / D24.
   authGetSession: "auth.get-session",
   authSignIn: "auth.sign-in",
+  // "Continue with Google" via the facade-brokered OIDC flow: main opens
+  // the system browser at {facade}/v1/auth/oidc/google/start and receives
+  // the bearer via the loopback + /v1/auth/oidc/callback JSON handoff.
+  // Same bearer-never-crosses-IPC rule as the other auth channels.
+  authSignInGoogle: "auth.sign-in-google",
   authSignOut: "auth.sign-out",
   authRefresh: "auth.refresh",
   // Phase 6C tier-2 adapter lifecycle. Main owns the install pipeline

@@ -41,6 +41,33 @@ which unsets it) because CI / agent harnesses sometimes set
 and `require('electron')` returns a path string instead of the API (S2
 decision report friction note 1).
 
+## Sign-in
+
+The renderer's `SignInGate` offers two paths, both IPC → main (bearer
+tokens never cross the IPC boundary):
+
+- **Sign in** — `auth.sign-in`: dev-mint (default) or direct-IdP OIDC
+  depending on `ATLAS_AUTH_MODE` (see `main/index.ts#buildAuthService`).
+- **Continue with Google** — `auth.sign-in-google`: the facade-brokered
+  flow from `main/auth/google-login.ts`. Main binds an ephemeral loopback
+  server (random port, EADDRINUSE retry), calls
+  `GET {facade}/v1/auth/oidc/google/start?redirect_uri=<loopback>&format=json`,
+  opens the returned `auth_url` in the system browser
+  (`shell.openExternal`), receives Google's redirect on the loopback, and
+  exchanges `state`+`code` at `GET {facade}/v1/auth/oidc/callback` for the
+  JSON bearer handoff. PKCE verifier + nonce are held server-side, bound
+  to the single-use 10-minute `state`. Requires `GOOGLE_OAUTH_CLIENT_ID`
+  on the backend process (and the loopback URI authorized on the Google
+  OAuth client). Sessions persist via `SecretStorage` (safeStorage);
+  sign-in success/failure lands in the auth audit log
+  (`<userData>/audit/auth.log`). A second sign-in cancels any pending
+  Google flow and replaces the stored session. Sessions that come back
+  `requires_mfa: true` are refused — the desktop has no MFA challenge
+  surface yet.
+
+The facade base URL comes from `ATLAS_FACADE_URL` (default
+`http://127.0.0.1:8200`), the same source the transport bridge uses.
+
 ## Manual sanity check after launching
 
 In DevTools console:

@@ -1,12 +1,14 @@
-import { StrictMode, useMemo, type ReactElement } from "react";
+import { StrictMode, useMemo, useState, type ReactElement } from "react";
 import { createRoot } from "react-dom/client";
 
 import {
   ChatShell,
+  DEFAULT_SHELL_DESTINATION,
   DocumentPresenceSignal,
   HashRouter,
   LocalStorageKeyValueStore,
   registerGenericStructuredDiff,
+  type ShellDestinationSlug,
 } from "@enterprise-search/chat-surface";
 import {
   IpcTransport,
@@ -83,12 +85,20 @@ function ChatShellForSession(props: ChatShellForSessionProps): ReactElement {
     // The renderer holds an opaque "session for workspace X" handle only.
     [props.session.workspaceId],
   );
+  // The shell never derives the destination itself — the host owns the
+  // slug ↔ route mapping (see ChatShellProps). The web host (App.tsx)
+  // maps rail clicks onto its route type; the desktop has no route type
+  // yet, so the minimal correct wiring is controlled local state.
+  const [activeDestination, setActiveDestination] =
+    useState<ShellDestinationSlug>(DEFAULT_SHELL_DESTINATION);
   return (
     <ChatShell
       transport={transport}
       router={props.router}
       keyValueStore={props.keyValueStore}
       presenceSignal={props.presenceSignal}
+      activeDestination={activeDestination}
+      onNavigate={setActiveDestination}
     >
       <DesktopPlaceholder />
     </ChatShell>

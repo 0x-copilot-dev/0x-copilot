@@ -101,7 +101,7 @@ void app.whenReady().then(() => {
   const auditLog = createFileAuthAuditLog({
     filePath: join(app.getPath("userData"), "audit", "auth.log"),
   });
-  const authService = buildAuthService();
+  const authService = buildAuthService(auditLog);
   const transport = createTransport(authService, auditLog);
 
   const transportBridge = new TransportBridge(
@@ -139,6 +139,8 @@ void app.whenReady().then(() => {
     bridge: transportBridge,
     auth: {
       signIn: (workspaceId) => authService.signIn(workspaceId),
+      signInWithGoogle: (workspaceId) =>
+        authService.signInWithGoogle(workspaceId),
       signOut: (workspaceId) => authService.signOut(workspaceId),
       getSession: (workspaceId) => authService.getSession(workspaceId),
       refresh: (workspaceId) => authService.refresh(workspaceId),
@@ -199,6 +201,9 @@ app.on("web-contents-created", (_event, contents) => {
 
 interface ActiveAuthService {
   signIn(workspaceId: string): ReturnType<AuthService["signIn"]>;
+  signInWithGoogle(
+    workspaceId: string,
+  ): ReturnType<AuthService["signInWithGoogle"]>;
   signOut(workspaceId: string): ReturnType<AuthService["signOut"]>;
   getSession(workspaceId: string): ReturnType<AuthService["getSession"]>;
   refresh(workspaceId: string): ReturnType<AuthService["refresh"]>;
@@ -207,7 +212,7 @@ interface ActiveAuthService {
   activeWorkspace(): string | null;
 }
 
-function buildAuthService(): ActiveAuthService {
+function buildAuthService(authAudit: AuthAuditLog): ActiveAuthService {
   const mode: AuthMode =
     process.env.ATLAS_AUTH_MODE === "oidc" ? "oidc" : "dev-mint";
   const facadeBaseUrl = process.env.ATLAS_FACADE_URL ?? "http://127.0.0.1:8200";
@@ -249,10 +254,12 @@ function buildAuthService(): ActiveAuthService {
     safeStorage,
     openExternal: (url) => shell.openExternal(url),
     allowPlaintextFallback: allowPlaintext,
+    authAudit,
   });
 
   return {
     signIn: (workspaceId) => service.signIn(workspaceId),
+    signInWithGoogle: (workspaceId) => service.signInWithGoogle(workspaceId),
     signOut: (workspaceId) => service.signOut(workspaceId),
     getSession: (workspaceId) => service.getSession(workspaceId),
     refresh: (workspaceId) => service.refresh(workspaceId),

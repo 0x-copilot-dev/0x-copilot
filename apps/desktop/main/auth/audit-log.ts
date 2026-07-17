@@ -2,7 +2,7 @@ import { appendFile, mkdir, readFile } from "node:fs/promises";
 import { dirname } from "node:path";
 
 export type ServerKind = "backend" | "mcp" | "saas";
-export type SignInMode = "dev-mint" | "oidc";
+export type SignInMode = "dev-mint" | "oidc" | "google";
 
 export type AuthAuditEvent =
   | {

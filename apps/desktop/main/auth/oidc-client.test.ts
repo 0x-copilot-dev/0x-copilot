@@ -11,6 +11,7 @@ function makeLoopback(code: string, state: string) {
     port: 12345,
     redirectUri: "http://127.0.0.1:12345/cb",
     codePromise: Promise.resolve({ code, state }),
+    armState: vi.fn(),
     close: vi.fn(),
   };
   return vi.fn(async () => handle);

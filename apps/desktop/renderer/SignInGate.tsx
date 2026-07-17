@@ -71,6 +71,21 @@ export function SignInGate(props: SignInGateProps): ReactNode {
       });
   }, [bridge, workspaceId]);
 
+  const signInWithGoogle = useCallback(() => {
+    setPhase({ kind: "signing-in" });
+    bridge.ipc
+      .invoke<RendererSession>(CHANNELS.authSignInGoogle, { workspaceId })
+      .then((session) => {
+        setPhase({ kind: "signed-in", session });
+      })
+      .catch((err: unknown) => {
+        setPhase({
+          kind: "error",
+          message: err instanceof Error ? err.message : "Google sign-in failed",
+        });
+      });
+  }, [bridge, workspaceId]);
+
   const retry = useCallback(() => {
     setPhase({ kind: "anon" });
   }, []);
@@ -85,6 +100,13 @@ export function SignInGate(props: SignInGateProps): ReactNode {
             <p>Sign in to your workspace to use Atlas.</p>
             <button type="button" onClick={signIn} data-testid="sign-in-button">
               Sign in
+            </button>
+            <button
+              type="button"
+              onClick={signInWithGoogle}
+              data-testid="sign-in-google-button"
+            >
+              Continue with Google
             </button>
           </SignInChrome>
         );
@@ -102,7 +124,7 @@ export function SignInGate(props: SignInGateProps): ReactNode {
       case "signed-in":
         return children(phase.session);
     }
-  }, [phase, signIn, retry, children]);
+  }, [phase, signIn, signInWithGoogle, retry, children]);
 
   return content;
 }

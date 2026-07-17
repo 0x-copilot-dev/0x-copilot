@@ -383,6 +383,14 @@ describe("auth.* channels", () => {
           email: "sarah@acme.test",
         }),
       ),
+      signInWithGoogle: vi.fn(
+        async (workspaceId: string): Promise<RS> => ({
+          workspaceId,
+          expiresAt: Date.now() + 60_000,
+          displayName: "Sarah (Google)",
+          email: "sarah@gmail.test",
+        }),
+      ),
       signOut: vi.fn(async (_workspaceId: string): Promise<void> => {}),
       getSession: vi.fn(
         async (_workspaceId: string): Promise<RS | null> => null,
@@ -399,9 +407,10 @@ describe("auth.* channels", () => {
     return { ipcMain, auth, teardown };
   }
 
-  it("registers all four auth channels", () => {
+  it("registers all five auth channels", () => {
     const { ipcMain } = setupWithAuth();
     expect(ipcMain.has(CHANNELS.authSignIn)).toBe(true);
+    expect(ipcMain.has(CHANNELS.authSignInGoogle)).toBe(true);
     expect(ipcMain.has(CHANNELS.authSignOut)).toBe(true);
     expect(ipcMain.has(CHANNELS.authRefresh)).toBe(true);
     expect(ipcMain.has(CHANNELS.authGetSession)).toBe(true);
@@ -414,6 +423,24 @@ describe("auth.* channels", () => {
     })) as { workspaceId: string };
     expect(res.workspaceId).toBe("org_acme");
     expect(auth.signIn).toHaveBeenCalledWith("org_acme");
+  });
+
+  it("auth.sign-in-google forwards the workspaceId and returns the RendererSession", async () => {
+    const { ipcMain, auth } = setupWithAuth();
+    const res = (await ipcMain.invoke(CHANNELS.authSignInGoogle, 1, {
+      workspaceId: "org_acme",
+    })) as { workspaceId: string; email: string | null };
+    expect(res.workspaceId).toBe("org_acme");
+    expect(res.email).toBe("sarah@gmail.test");
+    expect(auth.signInWithGoogle).toHaveBeenCalledWith("org_acme");
+    expect(auth.signIn).not.toHaveBeenCalled();
+  });
+
+  it("rejects auth.sign-in-google payloads without a workspaceId", async () => {
+    const { ipcMain } = setupWithAuth();
+    await expect(
+      ipcMain.invoke(CHANNELS.authSignInGoogle, 1, {}),
+    ).rejects.toBeInstanceOf(IpcValidationError);
   });
 
   it("auth.sign-out forwards the workspaceId and returns ok", async () => {
@@ -450,6 +477,7 @@ describe("auth.* channels", () => {
     const { ipcMain, teardown } = setupWithAuth();
     teardown();
     expect(ipcMain.has(CHANNELS.authSignIn)).toBe(false);
+    expect(ipcMain.has(CHANNELS.authSignInGoogle)).toBe(false);
     expect(ipcMain.has(CHANNELS.authSignOut)).toBe(false);
     expect(ipcMain.has(CHANNELS.authRefresh)).toBe(false);
     expect(ipcMain.has(CHANNELS.authGetSession)).toBe(false);
