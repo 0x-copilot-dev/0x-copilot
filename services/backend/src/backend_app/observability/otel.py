@@ -88,11 +88,24 @@ class SafeAttributeSpanProcessor(SpanProcessor):
         keys_to_drop = [
             key for key in list(attributes.keys()) if not self._is_safe_key(key)
         ]
-        for key in keys_to_drop:
-            try:
-                del attributes[key]
-            except (KeyError, TypeError):
-                continue
+        if not keys_to_drop:
+            return
+        # opentelemetry-sdk >= 1.43 freezes BoundedAttributes when the span
+        # ends (``_immutable`` flag; ``__delitem__`` raises TypeError). Lift
+        # the flag for the duration of the redaction, then restore it so the
+        # span stays read-only for every other consumer.
+        was_immutable = bool(getattr(attributes, "_immutable", False))
+        if was_immutable:
+            attributes._immutable = False
+        try:
+            for key in keys_to_drop:
+                try:
+                    del attributes[key]
+                except (KeyError, TypeError):
+                    continue
+        finally:
+            if was_immutable:
+                attributes._immutable = True
 
     def shutdown(self) -> None:  # type: ignore[override]
         return None
