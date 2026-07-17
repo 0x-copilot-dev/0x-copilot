@@ -10,6 +10,15 @@
  *     └─ submit → kind=magic_link→ magic_link_sent
  *     └─ submit → kind=unknown   → error inline (bank-profile message)
  *
+ * Above the email form sits an optional "Continue with Google" entry point.
+ * It renders only when the unscoped ``GET /v1/auth/providers`` list
+ * advertises ``provider_id: "google"`` (probed once on mount; any error
+ * degrades silently to no-button). Clicking it navigates straight to the
+ * existing ``/v1/auth/oidc/google/start`` URL — the same mechanism
+ * ``RedirectStep`` uses for discovered SSO providers, minus ``org_id``
+ * (no org is known yet; the server resolves the workspace from the Google
+ * account). The email-first flow below the divider is unchanged.
+ *
  *   redirect          (one-shot; the OIDC/SAML start URL handles the rest)
  *   magic_link_sent   ("Check your email"; dead-end until user clicks the URL)
  *   magic_link_cb     (consumes ?token= on mount)
@@ -41,13 +50,18 @@ import type {
 import type { FormEvent, ReactElement } from "react";
 import { useCallback, useEffect, useRef, useState } from "react";
 
-import { discoverAuth, startMagicLink } from "../../api/authApi";
+import {
+  discoverAuth,
+  listAuthProviders,
+  startMagicLink,
+} from "../../api/authApi";
 import { useAuth } from "./AuthContext";
 import { errorMessage } from "../../utils/errors";
 
 const DEBOUNCE_MS = 450;
 const MAGIC_LINK_CALLBACK_PATH = "/auth/magic-link/callback";
 const EMAIL_SHAPE_RE = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+const GOOGLE_PROVIDER_ID = "google";
 
 type LoginStep =
   | { kind: "email" }
@@ -71,6 +85,7 @@ export interface LoginScreenProps {
 export function LoginScreen(props: LoginScreenProps): ReactElement {
   const auth = useAuth();
   const [step, setStep] = useState<LoginStep>(() => _initialStep(auth));
+  const [googleLogin, setGoogleLogin] = useState(false);
 
   // Re-anchor on workspace_pick when the AuthContext flips into it
   // (consumeMagicLink → kind=workspace_pick_required).
@@ -79,6 +94,29 @@ export function LoginScreen(props: LoginScreenProps): ReactElement {
       setStep({ kind: "workspace_pick" });
     }
   }, [auth.status, step.kind]);
+
+  // One-shot public provider probe (no org context exists yet on the login
+  // screen, so this is the unscoped list). Any failure degrades silently to
+  // "no Google button" — the email-first flow is the fallback entry point
+  // and must never be blocked on this call.
+  useEffect(() => {
+    let cancelled = false;
+    listAuthProviders()
+      .then((providers) => {
+        if (cancelled) return;
+        setGoogleLogin(
+          providers.some(
+            (p) => p.provider_id === GOOGLE_PROVIDER_ID && p.enabled,
+          ),
+        );
+      })
+      .catch(() => {
+        /* degrade silently — email-first stays the entry point */
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, []);
 
   return (
     <div className="login-shell" data-testid="login-screen">
@@ -89,6 +127,7 @@ export function LoginScreen(props: LoginScreenProps): ReactElement {
             defaultOrgId={props.defaultOrgId}
             hideMagicLink={props.hideMagicLink ?? false}
             returnTo={props.returnTo}
+            googleLogin={googleLogin}
             onRedirect={(provider_id, org_id) =>
               setStep({ kind: "redirect", provider_id, org_id })
             }
@@ -185,6 +224,8 @@ interface EmailStepProps {
   defaultOrgId?: string;
   hideMagicLink: boolean;
   returnTo?: string;
+  /** True when the unscoped providers list advertises Google login. */
+  googleLogin: boolean;
   onRedirect(provider_id: string, org_id: string): void;
   onMagicLinkSent(email: string): void;
 }
@@ -198,6 +239,7 @@ type DiscoveryState =
 function EmailStep({
   hideMagicLink,
   returnTo,
+  googleLogin,
   onRedirect,
   onMagicLinkSent,
 }: EmailStepProps): ReactElement {
@@ -321,6 +363,14 @@ function EmailStep({
           Enter your work email — we&rsquo;ll route you to the right sign-in.
         </p>
       </header>
+      {googleLogin && (
+        <>
+          <GoogleSignInButton returnTo={returnTo ?? null} />
+          <div className="login-divider" role="separator">
+            <span>or continue with email</span>
+          </div>
+        </>
+      )}
       <form
         className="login-card__form"
         onSubmit={submit}
@@ -393,6 +443,74 @@ function _adaptiveButtonLabel(
     return "Email me a sign-in link";
   }
   return "Continue";
+}
+
+// ---------------------------------------------------------------------------
+// "Continue with Google" entry point.
+//
+// Same mechanism as <RedirectStep>: navigate to the existing facade OIDC
+// start URL and let the server drive the rest of the dance. Unlike the
+// discovered-SSO path there is no org_id yet — the Google account decides
+// the workspace server-side. return_to handling mirrors RedirectStep.
+// ---------------------------------------------------------------------------
+
+function GoogleSignInButton({
+  returnTo,
+}: {
+  returnTo: string | null;
+}): ReactElement {
+  const onClick = useCallback((): void => {
+    const params = new URLSearchParams({
+      redirect_uri: window.location.origin + "/v1/auth/oidc/callback",
+    });
+    if (returnTo) {
+      params.set("return_to", returnTo);
+    }
+    window.location.assign(
+      `/v1/auth/oidc/${encodeURIComponent(GOOGLE_PROVIDER_ID)}/start?${params}`,
+    );
+  }, [returnTo]);
+
+  return (
+    <button
+      type="button"
+      className="login-google-btn"
+      onClick={onClick}
+      data-testid="login-google"
+    >
+      <GoogleGLogo />
+      <span>Continue with Google</span>
+    </button>
+  );
+}
+
+/** Official four-colour Google "G" mark (brand guidelines; never re-tint). */
+function GoogleGLogo(): ReactElement {
+  return (
+    <svg
+      className="login-google-btn__logo"
+      viewBox="0 0 48 48"
+      aria-hidden="true"
+      focusable="false"
+    >
+      <path
+        fill="#EA4335"
+        d="M24 9.5c3.54 0 6.71 1.22 9.21 3.6l6.85-6.85C35.9 2.38 30.47 0 24 0 14.62 0 6.51 5.38 2.56 13.22l7.98 6.19C12.43 13.72 17.74 9.5 24 9.5z"
+      />
+      <path
+        fill="#4285F4"
+        d="M46.98 24.55c0-1.57-.15-3.09-.38-4.55H24v9.02h12.94c-.58 2.96-2.26 5.48-4.78 7.18l7.73 6c4.51-4.18 7.09-10.36 7.09-17.65z"
+      />
+      <path
+        fill="#FBBC05"
+        d="M10.53 28.59c-.48-1.45-.76-2.99-.76-4.59s.27-3.14.76-4.59l-7.98-6.19C.92 16.46 0 20.12 0 24c0 3.88.92 7.54 2.56 10.78l7.97-6.19z"
+      />
+      <path
+        fill="#34A853"
+        d="M24 48c6.48 0 11.93-2.13 15.89-5.81l-7.73-6c-2.15 1.45-4.92 2.3-8.16 2.3-6.26 0-11.57-4.22-13.47-9.91l-7.98 6.19C6.51 42.62 14.62 48 24 48z"
+      />
+    </svg>
+  );
 }
 
 // ---------------------------------------------------------------------------

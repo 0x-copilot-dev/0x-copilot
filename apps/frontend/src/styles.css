@@ -8169,6 +8169,69 @@ body.login-body {
   font-size: var(--font-size-sm);
 }
 
+/* "Continue with Google" entry point. Colours follow Google's sign-in
+ * button brand guidelines: the dark-neutral variant (#131314 fill,
+ * #8e918f stroke, #e3e3e3 label) on the dark schemes — which includes
+ * the default theme and slate — and the light variant (#fff fill,
+ * #747775 stroke, #1f1f1f label) under [data-theme="light"]. The "G"
+ * mark keeps its official four colours in every theme; never re-tint it. */
+.login-google-btn {
+  --google-btn-bg: #131314;
+  --google-btn-border: #8e918f;
+  --google-btn-fg: #e3e3e3;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 0.625rem;
+  width: 100%;
+  height: 2.5rem;
+  padding: 0 0.75rem;
+  border: 1px solid var(--google-btn-border);
+  border-radius: var(--radius-sm);
+  background: var(--google-btn-bg);
+  color: var(--google-btn-fg);
+  font: inherit;
+  font-size: var(--font-size-sm);
+  font-weight: var(--font-weight-medium);
+  letter-spacing: 0.01em;
+  cursor: pointer;
+}
+:root[data-theme="light"] .login-google-btn {
+  --google-btn-bg: #ffffff;
+  --google-btn-border: #747775;
+  --google-btn-fg: #1f1f1f;
+}
+.login-google-btn:hover {
+  /* Guideline hover state: 8% label-colour overlay on the fill. */
+  background: color-mix(in srgb, var(--google-btn-fg) 8%, var(--google-btn-bg));
+}
+.login-google-btn:focus-visible {
+  outline: 2px solid var(--color-focus-ring);
+  outline-offset: 2px;
+}
+.login-google-btn__logo {
+  width: 1.25rem;
+  height: 1.25rem;
+  flex: 0 0 auto;
+}
+
+/* Divider between the Google entry point and the email-first form. */
+.login-divider {
+  display: flex;
+  align-items: center;
+  gap: var(--space-md);
+  color: var(--color-text-subtle);
+  font-size: var(--font-size-xs);
+  white-space: nowrap;
+}
+.login-divider::before,
+.login-divider::after {
+  content: "";
+  flex: 1 1 auto;
+  height: 1px;
+  background: var(--color-border);
+}
+
 .login-discovery {
   border: 1px solid var(--color-border);
   border-radius: var(--radius-sm);
