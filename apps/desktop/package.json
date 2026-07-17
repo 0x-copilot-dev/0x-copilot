@@ -41,7 +41,7 @@
     "@types/react-dom": "19.2.3",
     "@typescript-eslint/parser": "8.63.0",
     "@vitejs/plugin-react": "6.0.3",
-    "electron": "42.1.0",
+    "electron": "43.1.1",
     "electron-builder": "26.15.3",
     "esbuild": "0.28.1",
     "eslint": "10.4.0",
