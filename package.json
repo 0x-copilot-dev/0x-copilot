@@ -11,6 +11,6 @@
     "test": "npm run test --workspaces --if-present"
   },
   "devDependencies": {
-    "playwright": "1.60.0"
+    "playwright": "1.61.1"
   }
 }
