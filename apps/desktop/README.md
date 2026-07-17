@@ -1,6 +1,6 @@
 # @0x-copilot/desktop
 
-Atlas Electron desktop client. See
+0xCopilot Electron desktop client. See
 [docs/plan/desktop/PRD.md](../../docs/plan/desktop/PRD.md) for the master
 plan and
 [docs/plan/desktop/phase-1/1A-electron-shell.md](../../docs/plan/desktop/phase-1/1A-electron-shell.md)
@@ -47,7 +47,7 @@ The renderer's `SignInGate` offers three paths, all IPC → main (bearer
 tokens never cross the IPC boundary):
 
 - **Sign in** — `auth.sign-in`: dev-mint (default) or direct-IdP OIDC
-  depending on `ATLAS_AUTH_MODE` (see `main/index.ts#buildAuthService`).
+  depending on `COPILOT_AUTH_MODE` (see `main/index.ts#buildAuthService`).
 - **Continue with Google** — `auth.sign-in-google`: the facade-brokered
   flow from `main/auth/google-login.ts`. Main binds an ephemeral loopback
   server (random port, EADDRINUSE retry), calls
@@ -79,7 +79,7 @@ replaces the stored session; loopback redirect waits time out (5 min
 default); sessions that come back `requires_mfa: true` are refused — the
 desktop has no MFA challenge surface yet.
 
-The facade base URL comes from `ATLAS_FACADE_URL` (default
+The facade base URL comes from `COPILOT_FACADE_URL` (default
 `http://127.0.0.1:8200`), the same source the transport bridge uses.
 
 ## Service supervisor (packaged / staged-runtime boots)
@@ -89,15 +89,15 @@ postgres plus the three python services and only hands the renderer a
 transport once the facade is healthy.
 
 **When it runs.** Supervision engages iff `app.isPackaged` OR
-`ATLAS_RUNTIME_DIR` is set (`main/services/boot-mode.ts#shouldSupervise`).
-Plain `npm run dev` is unchanged: no supervisor, `ATLAS_FACADE_URL`
+`COPILOT_RUNTIME_DIR` is set (`main/services/boot-mode.ts#shouldSupervise`).
+Plain `npm run dev` is unchanged: no supervisor, `COPILOT_FACADE_URL`
 selects WebTransport (MockTransport otherwise).
 
 **Runtime layout the supervisor expects** — this is EXACTLY what
 `tools/desktop-runtime/stage.mjs` produces and what the proven
 `tools/desktop-runtime/run-local.mjs` boots. `resolveRuntimePaths()` roots
 the tree at `<base>/runtime/<platform>-<arch>`, where `<base>` is
-`process.resourcesPath` (packaged) or `ATLAS_RUNTIME_DIR` (dev, point it at
+`process.resourcesPath` (packaged) or `COPILOT_RUNTIME_DIR` (dev, point it at
 `apps/desktop/resources`). electron-builder `extraResources` maps
 `apps/desktop/resources/runtime` → `<resourcesPath>/runtime`:
 
@@ -150,9 +150,31 @@ screen. The app holds a single-instance lock (two postmasters on one
 Dev-run recipe against a staged runtime:
 
 ```bash
-ATLAS_RUNTIME_DIR="$PWD/apps/desktop/resources" \
+COPILOT_RUNTIME_DIR="$PWD/apps/desktop/resources" \
   npm run dev --workspace @0x-copilot/desktop
 ```
+
+## Terminal distribution (the `copilot` CLI)
+
+[`tools/cli`](../../tools/cli) publishes `@0x-copilot/cli`, which installs and
+launches this app from the terminal with **no DMG/installer and no signing
+credentials**:
+
+```bash
+npm install -g @0x-copilot/cli   # or: bun add -g @0x-copilot/cli
+copilot                          # stages the runtime, then launches this app
+```
+
+It is a thin wrapper over the exact dev-run recipe above: it stages the runtime
+with `tools/desktop-runtime/stage.mjs --adhoc-sign` (credential-free ad-hoc
+signing so unsigned binaries run on Apple Silicon) into `~/.0xcopilot`, then
+spawns `electron <appDir>` with `COPILOT_RUNTIME_DIR` pointed there — which flips
+`shouldSupervise()` on, so the same supervisor path boots the runtime. Because
+the app runs as a spawned process (not a distributed `.app`/`.exe`) and
+npm/curl-staged files never carry the quarantine / Mark-of-the-Web marker,
+Gatekeeper/SmartScreen never gate it. `main/updater.ts` auto-no-ops (unpackaged
+→ `app.isPackaged` is false), so the CLI channel simply updates via
+`npm i -g …@latest`. See [tools/cli/README.md](../../tools/cli/README.md).
 
 ## Packaging, signing & auto-update
 
@@ -163,9 +185,9 @@ package** — for one platform/arch and never publish:
 ```bash
 # from apps/desktop/ (run each on its native host — the staged python
 # site-packages are host-specific; a win build must run on Windows):
-npm run dist:mac:arm64     # -> dist/Atlas-<v>-arm64.dmg + -arm64-mac.zip
-npm run dist:mac:x64       # -> dist/Atlas-<v>-x64.dmg  + -x64-mac.zip
-npm run dist:win           # -> dist/Atlas Setup <v>.exe (nsis, per-user)
+npm run dist:mac:arm64     # -> dist/0xCopilot-<v>-arm64.dmg + -arm64-mac.zip
+npm run dist:mac:x64       # -> dist/0xCopilot-<v>-x64.dmg  + -x64-mac.zip
+npm run dist:win           # -> dist/0xCopilot Setup <v>.exe (nsis, per-user)
 ```
 
 `stage:runtime*` runs `tools/desktop-runtime/stage.mjs` into

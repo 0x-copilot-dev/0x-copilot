@@ -143,7 +143,7 @@ describe("renderer bootstrap", () => {
       "[data-testid='desktop-placeholder']",
     );
     expect(placeholder).not.toBeNull();
-    expect(placeholder?.textContent).toContain("Atlas desktop");
+    expect(placeholder?.textContent).toContain("0xCopilot desktop");
   });
 
   it("shows the fatal boot screen when the supervisor reports a fatal status", async () => {

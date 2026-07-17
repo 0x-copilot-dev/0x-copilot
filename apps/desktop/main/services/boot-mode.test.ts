@@ -12,24 +12,24 @@ describe("shouldSupervise", () => {
     expect(shouldSupervise({ isPackaged: true, env: {} })).toBe(true);
   });
 
-  it("supervises in dev when ATLAS_RUNTIME_DIR points at a staged runtime", () => {
+  it("supervises in dev when COPILOT_RUNTIME_DIR points at a staged runtime", () => {
     expect(
       shouldSupervise({
         isPackaged: false,
-        env: { ATLAS_RUNTIME_DIR: "/repo/apps/desktop/resources" },
+        env: { COPILOT_RUNTIME_DIR: "/repo/apps/desktop/resources" },
       }),
     ).toBe(true);
   });
 
-  it("does NOT supervise plain dev (ATLAS_FACADE_URL flow unchanged)", () => {
+  it("does NOT supervise plain dev (COPILOT_FACADE_URL flow unchanged)", () => {
     expect(
       shouldSupervise({
         isPackaged: false,
-        env: { ATLAS_FACADE_URL: "http://127.0.0.1:8200" },
+        env: { COPILOT_FACADE_URL: "http://127.0.0.1:8200" },
       }),
     ).toBe(false);
     expect(
-      shouldSupervise({ isPackaged: false, env: { ATLAS_RUNTIME_DIR: "" } }),
+      shouldSupervise({ isPackaged: false, env: { COPILOT_RUNTIME_DIR: "" } }),
     ).toBe(false);
   });
 });

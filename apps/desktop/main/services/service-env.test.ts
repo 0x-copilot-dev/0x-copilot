@@ -158,14 +158,14 @@ describe("passthrough allowlist", () => {
         HOME: "/Users/me",
         SECRET_LEAK: "nope",
         AWS_SECRET_ACCESS_KEY: "nope",
-        ATLAS_FACADE_URL: "http://localhost:9999",
+        COPILOT_FACADE_URL: "http://localhost:9999",
       }),
     );
     expect(env.PATH).toBe("/usr/bin");
     expect(env.HOME).toBe("/Users/me");
     expect(env.SECRET_LEAK).toBeUndefined();
     expect(env.AWS_SECRET_ACCESS_KEY).toBeUndefined();
-    expect(env.ATLAS_FACADE_URL).toBeUndefined();
+    expect(env.COPILOT_FACADE_URL).toBeUndefined();
   });
 
   it("skips allowlisted keys that are unset or empty", () => {

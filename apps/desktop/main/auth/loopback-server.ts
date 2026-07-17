@@ -88,13 +88,13 @@ const DEFAULT_BIND_ATTEMPTS = 5;
 const RANDOM_PORT_MIN = 16384;
 const RANDOM_PORT_MAX = 65535;
 const DEFAULT_SUCCESS_HTML =
-  "<!doctype html><meta charset=utf-8><title>Atlas</title>" +
+  "<!doctype html><meta charset=utf-8><title>0xCopilot</title>" +
   '<body style="font-family:system-ui;padding:2rem">' +
-  "<h1>Signed in.</h1><p>You can close this window and return to Atlas.</p></body>";
+  "<h1>Signed in.</h1><p>You can close this window and return to 0xCopilot.</p></body>";
 const DEFAULT_FAILURE_HTML =
-  "<!doctype html><meta charset=utf-8><title>Atlas</title>" +
+  "<!doctype html><meta charset=utf-8><title>0xCopilot</title>" +
   '<body style="font-family:system-ui;padding:2rem">' +
-  "<h1>Sign-in failed.</h1><p>Check the Atlas window for details.</p></body>";
+  "<h1>Sign-in failed.</h1><p>Check the 0xCopilot window for details.</p></body>";
 
 function defaultPickPort(): number {
   return (

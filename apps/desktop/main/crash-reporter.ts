@@ -5,8 +5,8 @@ import { crashReporter } from "electron";
 // architecture spec §9).
 export function startCrashReporter(): void {
   crashReporter.start({
-    companyName: "Atlas",
-    productName: "Atlas Desktop",
+    companyName: "0xCopilot",
+    productName: "0xCopilot Desktop",
     submitURL: "",
     uploadToServer: false,
     ignoreSystemCrashHandler: false,

@@ -13,7 +13,7 @@ export function DesktopPlaceholder(): React.ReactElement {
         padding: 24,
       }}
     >
-      Atlas desktop · phase 1
+      0xCopilot desktop · phase 1
     </div>
   );
 }

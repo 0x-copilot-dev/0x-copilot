@@ -70,7 +70,7 @@ import type { ServiceSupervisor } from "./services/supervisor";
 import { TransportBridge } from "./transport-bridge";
 import { createMainWindow } from "./window";
 
-app.setName("Atlas");
+app.setName("0xCopilot");
 
 registerAppProtocolPrivilege();
 
@@ -185,7 +185,7 @@ if (hasSingleInstanceLock) {
         userDataDir: app.getPath("userData"),
         safeStorage,
         resourcesPath: process.resourcesPath,
-        runtimeDirOverride: process.env.ATLAS_RUNTIME_DIR,
+        runtimeDirOverride: process.env.COPILOT_RUNTIME_DIR,
       });
       supervisor.onStatus(sendBootStatus);
       supervisor
@@ -200,9 +200,9 @@ if (hasSingleInstanceLock) {
           console.error("[main] supervised boot failed:", err);
         });
     } else {
-      // Dev mode (`npm run dev`, no ATLAS_RUNTIME_DIR): no supervisor.
-      // ATLAS_FACADE_URL selects WebTransport; otherwise MockTransport.
-      wireTransportAndIpc(process.env.ATLAS_FACADE_URL);
+      // Dev mode (`npm run dev`, no COPILOT_RUNTIME_DIR): no supervisor.
+      // COPILOT_FACADE_URL selects WebTransport; otherwise MockTransport.
+      wireTransportAndIpc(process.env.COPILOT_FACADE_URL);
       sendBootStatus({ phase: "ready", message: "Ready", percent: 100 });
     }
 
@@ -343,27 +343,28 @@ function buildAuthService(
   facadeUrl: string | undefined,
 ): ActiveAuthService {
   const mode: AuthMode =
-    process.env.ATLAS_AUTH_MODE === "oidc" ? "oidc" : "dev-mint";
+    process.env.COPILOT_AUTH_MODE === "oidc" ? "oidc" : "dev-mint";
   const facadeBaseUrl =
-    facadeUrl ?? process.env.ATLAS_FACADE_URL ?? "http://127.0.0.1:8200";
-  const devPersonaSlug = process.env.ATLAS_DEV_PERSONA ?? "sarah_acme";
+    facadeUrl ?? process.env.COPILOT_FACADE_URL ?? "http://127.0.0.1:8200";
+  const devPersonaSlug = process.env.COPILOT_DEV_PERSONA ?? "sarah_acme";
   const allowPlaintext =
     process.env.BACKEND_ENVIRONMENT === "development" ||
-    process.env.ATLAS_AUTH_MODE === "dev-mint";
+    process.env.COPILOT_AUTH_MODE === "dev-mint";
 
   let oidcConfig: ConstructorParameters<typeof AuthService>[0]["oidc"];
   if (mode === "oidc") {
-    const issuer = process.env.ATLAS_OIDC_ISSUER ?? "";
-    const clientId = process.env.ATLAS_OIDC_CLIENT_ID ?? "";
+    const issuer = process.env.COPILOT_OIDC_ISSUER ?? "";
+    const clientId = process.env.COPILOT_OIDC_CLIENT_ID ?? "";
     const authEp =
-      process.env.ATLAS_OIDC_AUTHORIZATION_ENDPOINT ?? `${issuer}/authorize`;
-    const tokenEp = process.env.ATLAS_OIDC_TOKEN_ENDPOINT ?? `${issuer}/token`;
+      process.env.COPILOT_OIDC_AUTHORIZATION_ENDPOINT ?? `${issuer}/authorize`;
+    const tokenEp =
+      process.env.COPILOT_OIDC_TOKEN_ENDPOINT ?? `${issuer}/token`;
     const scopes = (
-      process.env.ATLAS_OIDC_SCOPES ?? "openid profile email"
+      process.env.COPILOT_OIDC_SCOPES ?? "openid profile email"
     ).split(/\s+/u);
     if (issuer === "" || clientId === "") {
       throw new Error(
-        "ATLAS_AUTH_MODE=oidc requires ATLAS_OIDC_ISSUER and ATLAS_OIDC_CLIENT_ID",
+        "COPILOT_AUTH_MODE=oidc requires COPILOT_OIDC_ISSUER and COPILOT_OIDC_CLIENT_ID",
       );
     }
     oidcConfig = {
@@ -402,7 +403,7 @@ function buildAuthService(
 }
 
 // No facadeUrl (plain dev): MockTransport — explicit, never an implicit
-// default. With a facadeUrl (supervised ready, or ATLAS_FACADE_URL in
+// default. With a facadeUrl (supervised ready, or COPILOT_FACADE_URL in
 // dev): WebTransport with the AuthService-backed bearer provider, wrapped
 // with withBearerRefresh to retry once on 401 by calling
 // authService.refresh. Auth audit events fire for the retry path.
@@ -423,7 +424,7 @@ function createTransport(
     },
   });
   return withBearerRefresh(web, {
-    workspaceId: process.env.ATLAS_WORKSPACE_ID ?? "wsp_unknown",
+    workspaceId: process.env.COPILOT_WORKSPACE_ID ?? "wsp_unknown",
     refresh: async (workspaceId) => {
       const ws = authService.activeWorkspace() ?? workspaceId;
       try {
