@@ -8232,6 +8232,124 @@ body.login-body {
   background: var(--color-border);
 }
 
+/* "Connect wallet" entry point (SIWE). Same geometry as the Google
+ * button so the two stack cleanly, but theme-token colours — there are
+ * no third-party brand rules to honour here. */
+.login-wallet {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-sm);
+}
+.login-wallet-btn {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 0.625rem;
+  width: 100%;
+  height: 2.5rem;
+  padding: 0 0.75rem;
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-sm);
+  background: var(--color-surface-2, var(--color-surface));
+  color: var(--color-text);
+  font: inherit;
+  font-size: var(--font-size-sm);
+  font-weight: var(--font-weight-medium);
+  letter-spacing: 0.01em;
+  cursor: pointer;
+}
+.login-wallet-btn:hover:not(:disabled) {
+  background: color-mix(
+    in srgb,
+    var(--color-text) 8%,
+    var(--color-surface-2, var(--color-surface))
+  );
+}
+.login-wallet-btn:focus-visible {
+  outline: 2px solid var(--color-focus-ring);
+  outline-offset: 2px;
+}
+.login-wallet-btn:disabled {
+  cursor: default;
+  opacity: 0.7;
+}
+.login-wallet-btn__glyph {
+  width: 1.125rem;
+  height: 1.125rem;
+  flex: 0 0 auto;
+}
+
+/* Provider picker — inline card listing announced EIP-6963 wallets. */
+.wallet-picker {
+  padding: var(--space-xs);
+}
+.wallet-picker__list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+.wallet-picker__row {
+  display: flex;
+  align-items: center;
+  gap: var(--space-sm);
+  width: 100%;
+  padding: var(--space-sm);
+  border: 0;
+  border-radius: var(--radius-sm);
+  background: transparent;
+  color: var(--color-text);
+  font: inherit;
+  font-size: var(--font-size-sm);
+  text-align: left;
+  cursor: pointer;
+}
+.wallet-picker__row:hover {
+  background: color-mix(
+    in srgb,
+    var(--color-text) 8%,
+    var(--color-surface, transparent)
+  );
+}
+.wallet-picker__row:focus-visible {
+  outline: 2px solid var(--color-focus-ring);
+  outline-offset: -2px;
+}
+.wallet-picker__icon {
+  width: 1.5rem;
+  height: 1.5rem;
+  flex: 0 0 auto;
+  border-radius: var(--radius-xs, 4px);
+  object-fit: contain;
+}
+.wallet-picker__icon--letter {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  background: var(--color-surface-2, var(--color-surface));
+  border: 1px solid var(--color-border);
+  font-size: var(--font-size-xs);
+  font-weight: var(--font-weight-semibold);
+}
+
+/* Standalone desktop wallet page (/wallet.html) — one centered card. */
+.wallet-page {
+  min-height: 100vh;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: var(--space-lg);
+  background: var(--color-bg, var(--color-surface));
+}
+.wallet-page__card {
+  width: min(26rem, 100%);
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-md);
+}
+
 .login-discovery {
   border: 1px solid var(--color-border);
   border-radius: var(--radius-sm);

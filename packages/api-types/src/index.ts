@@ -3848,3 +3848,17 @@ export type {
   PutProviderKeyRequest,
 } from "./providerKeys";
 // === end BYOK provider keys ===
+
+// === SIWE wallet sign-in (EIP-4361) ===
+// `/v1/auth/siwe/nonce` + `/v1/auth/siwe/verify` wire shapes. The verify
+// response mirrors the OIDC callback session handoff so the SPA adopts
+// wallet sessions through the same path as SSO. Single declaration site:
+// ./siwe.ts.
+export type {
+  SiweNonceRequest,
+  SiweNonceResponse,
+  SiweSessionResponse,
+  SiweVerifyErrorDetail,
+  SiweVerifyRequest,
+} from "./siwe";
+// === end SIWE wallet sign-in ===

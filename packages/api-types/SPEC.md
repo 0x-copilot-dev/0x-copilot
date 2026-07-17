@@ -43,6 +43,7 @@ run status enum constants between the Python server and this package.
 | Conversation and run types | `services/ai-backend` | `services/backend-facade` |
 | Runtime event types        | `services/ai-backend` | `services/backend-facade` |
 | Approval types             | `services/ai-backend` | `services/backend-facade` |
+| SIWE wallet sign-in types  | `services/backend`    | `services/backend-facade` |
 
 ## Compatibility Policy
 

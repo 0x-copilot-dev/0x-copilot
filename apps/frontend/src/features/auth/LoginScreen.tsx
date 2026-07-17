@@ -19,6 +19,11 @@
  * (no org is known yet; the server resolves the workspace from the Google
  * account). The email-first flow below the divider is unchanged.
  *
+ * Below Google sits the "Connect wallet" entry point (``<WalletSignIn>``,
+ * SIWE/EIP-4361 over EIP-6963 discovery). It is client-driven — no
+ * provider probe — so it always renders, which is also why the divider
+ * now renders unconditionally instead of riding on the Google flag.
+ *
  *   redirect          (one-shot; the OIDC/SAML start URL handles the rest)
  *   magic_link_sent   ("Check your email"; dead-end until user clicks the URL)
  *   magic_link_cb     (consumes ?token= on mount)
@@ -56,6 +61,7 @@ import {
   startMagicLink,
 } from "../../api/authApi";
 import { useAuth } from "./AuthContext";
+import { WalletSignIn } from "./WalletSignIn";
 import { errorMessage } from "../../utils/errors";
 
 const DEBOUNCE_MS = 450;
@@ -363,14 +369,11 @@ function EmailStep({
           Enter your work email — we&rsquo;ll route you to the right sign-in.
         </p>
       </header>
-      {googleLogin && (
-        <>
-          <GoogleSignInButton returnTo={returnTo ?? null} />
-          <div className="login-divider" role="separator">
-            <span>or continue with email</span>
-          </div>
-        </>
-      )}
+      {googleLogin && <GoogleSignInButton returnTo={returnTo ?? null} />}
+      <WalletSignIn />
+      <div className="login-divider" role="separator">
+        <span>or continue with email</span>
+      </div>
       <form
         className="login-card__form"
         onSubmit={submit}
