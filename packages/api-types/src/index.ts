@@ -3849,6 +3849,20 @@ export type {
 } from "./providerKeys";
 // === end BYOK provider keys ===
 
+// === Local models (Round 2 — HF GGUF + local Ollama) ===
+// Desktop / self-host only; the management routes 404 unless the deployment
+// enabled the feature. Single declaration site: ./localModels.ts.
+export type {
+  LocalModelPullEvent,
+  LocalModelRunPlacement,
+  LocalModelSize,
+  LocalModelSummary,
+  LocalModelsListResponse,
+  LocalModelsStatus,
+  PullLocalModelRequest,
+} from "./localModels";
+// === end Local models ===
+
 // === SIWE wallet sign-in (EIP-4361) ===
 // `/v1/auth/siwe/nonce` + `/v1/auth/siwe/verify` wire shapes. The verify
 // response mirrors the OIDC callback session handoff so the SPA adopts

@@ -12,6 +12,7 @@ from agent_runtime.execution.contracts import (
 )
 from agent_runtime.execution.depth import DepthBudgetTable, ReasoningDepth
 from agent_runtime.execution.errors import AgentRuntimeError
+from agent_runtime.execution.openai_compat import OpenAICompatibleProviders
 from agent_runtime.settings import RuntimeSettings
 
 
@@ -72,10 +73,17 @@ class ModelConfigResolver:
             or self.settings.default_model.provider
         )
         provider_settings = self.settings.provider_settings(provider)
+        # A registered keyless compat provider (local Ollama) needs no
+        # credential — the harness talks to a runtime on the user's own
+        # machine. Treat it as always-satisfied so the BYOK gate doesn't
+        # block it.
+        compat = OpenAICompatibleProviders.get(provider)
+        keyless = compat is not None and not compat.requires_api_key
         if (
             require_credentials
             and not provider_settings.is_configured
             and provider not in user_key_providers
+            and not keyless
         ):
             raise AgentRuntimeError(
                 RuntimeErrorCode.CONFIGURATION_ERROR,
@@ -123,9 +131,10 @@ class ModelConfigResolver:
             "google": "gemini",
             "google-genai": "gemini",
             "openai": "openai",
-            # OpenAI-wire-compatible gateway; resolves to the OpenAI client
+            # OpenAI-wire-compatible endpoints; resolve to the OpenAI client
             # with a fixed base_url (see execution/openai_compat.py).
             "openrouter": "openrouter",
+            "ollama": "ollama",
         }
         if normalized not in aliases:
             raise AgentRuntimeError(

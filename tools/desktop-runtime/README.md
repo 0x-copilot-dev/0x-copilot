@@ -67,7 +67,7 @@ backend/facade) plus `copilot-service-contracts` and
    (yoyo needs the explicit `+psycopg` driver marker; the bare `postgresql://` scheme resolves to psycopg2, which is not bundled)
 5. Spawn, in order — see run-local.mjs for the full env of each:
    - backend: `python -m uvicorn backend_app.desktop_app:app` (`BACKEND_ENVIRONMENT=production`, plain `DATABASE_URL`, the four generated secrets)
-   - ai-backend: `python -m uvicorn runtime_api.app:app` (`RUNTIME_ENVIRONMENT=production`, `RUNTIME_STORE_BACKEND=postgres`, `RUNTIME_START_IN_PROCESS_WORKER=true`, **`RUNTIME_MIGRATIONS_AUTO_APPLY=false`**)
+   - ai-backend: `python -m uvicorn runtime_api.app:app` (`RUNTIME_ENVIRONMENT=production`, `RUNTIME_STORE_BACKEND=postgres`, `RUNTIME_START_IN_PROCESS_WORKER=true`, **`RUNTIME_MIGRATIONS_AUTO_APPLY=false`**, `RUNTIME_ENABLE_LOCAL_MODELS=true`). The last flag surfaces **Settings → Local models** (download an HF GGUF + run via a user-installed [Ollama](https://ollama.com/download) at `localhost:11434`); the section shows setup steps until Ollama is running.
    - facade: `python -m uvicorn backend_facade.app:app` (`FACADE_ENVIRONMENT=production`, `BACKEND_URL`, `AI_BACKEND_URL`)
      All three get `ENTERPRISE_DEPLOYMENT_PROFILE=single_user_desktop` and `OTEL_SDK_DISABLED=true`.
 6. Health-gate `GET /v1/health` on each (asserts `deployment_profile == single_user_desktop`), then

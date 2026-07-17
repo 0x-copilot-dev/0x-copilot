@@ -58,6 +58,7 @@ from runtime_api.http.retention_routes import (
 )
 from runtime_api.http.agent_usage import AgentUsageApiRouter
 from runtime_api.http.llm_embed_routes import LlmEmbedApiRouter
+from runtime_api.http.local_models_routes import LocalModelsApiRouter
 from runtime_api.http.routes import (
     BudgetApiRouter,
     InternalRuntimeApiRouter,
@@ -172,6 +173,10 @@ class RuntimeApiAppFactory:
 
         # Expose ports and coordinators on app.state so route handlers and
         # lifespan helpers can access them via request.app.state.
+        # Expose the resolved settings on state for both the production
+        # (env) and injected-ports (test) paths — route handlers read
+        # feature flags (e.g. enable_local_models) from here.
+        app.state.runtime_settings = _settings
         app.state.runtime_persistence = _ports.persistence
         app.state.runtime_event_store = _ports.event_store
         app.state.runtime_notifications = _notifications
@@ -223,6 +228,9 @@ class RuntimeApiAppFactory:
         # indexing / retrieval. Service-token gated; TU-1 invariant
         # preserved (all writes go through the canonical UsageRecorder).
         app.include_router(LlmEmbedApiRouter.create_router())
+        # Round 2 — local (Ollama) model management. Gated by
+        # RUNTIME_ENABLE_LOCAL_MODELS; every route but /status 404s when off.
+        app.include_router(LocalModelsApiRouter.create_router())
         app.add_exception_handler(
             RuntimeApiError, RuntimeApiErrorMapper.handle_runtime_api_error
         )

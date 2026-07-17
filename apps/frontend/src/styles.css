@@ -3950,6 +3950,87 @@ p {
   gap: var(--space-xl);
 }
 
+/* Round 2 — Local models (Settings → Local models). */
+.local-models-steps {
+  margin: var(--space-sm) 0;
+  padding-left: 1.25rem;
+  display: grid;
+  gap: 6px;
+  color: var(--color-text-muted);
+}
+
+.local-models-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: grid;
+  gap: var(--space-sm);
+}
+
+.local-models-row {
+  display: flex;
+  align-items: center;
+  gap: var(--space-sm);
+}
+
+.local-models-row__main {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 0;
+  flex: 1 1 auto;
+}
+
+.local-models-row__main strong {
+  overflow-wrap: anywhere;
+}
+
+.local-models-badge {
+  flex: 0 0 auto;
+  padding: 2px 8px;
+  border-radius: var(--radius-sm, 6px);
+  font-size: var(--font-size-2xs);
+  font-weight: var(--font-weight-medium);
+  background: var(--color-surface-muted);
+  color: var(--color-text);
+}
+
+.local-models-badge[data-placement="gpu"] {
+  background: var(--color-accent);
+  color: var(--color-accent-contrast);
+}
+
+.local-models-badge[data-placement="cpu"],
+.local-models-badge[data-placement="partial"] {
+  background: var(--color-surface-muted);
+  color: var(--color-text-muted);
+}
+
+.local-models-progress {
+  margin-top: var(--space-sm);
+  display: grid;
+  gap: 6px;
+}
+
+.local-models-progress__line {
+  display: flex;
+  justify-content: space-between;
+  gap: var(--space-sm);
+  font-size: 0.82rem;
+  color: var(--color-text-muted);
+}
+
+.local-models-progress__bar {
+  width: 100%;
+  height: 8px;
+  border-radius: 999px;
+  overflow: hidden;
+}
+
+.local-models-error {
+  color: var(--color-danger, #c0392b);
+}
+
 .settings-section__header {
   align-items: center;
   display: flex;

@@ -40,19 +40,33 @@ class OpenAICompatibleEndpoint:
 
     ``provider`` is the normalised runtime slug — it matches
     ``ModelConfigResolver._normalize_provider`` output and the BYOK
-    ``provider_keys`` mapping key. ``base_url`` is fixed (never
-    region-routed like native providers). ``attribution_headers`` maps a
-    static header name to the env var that supplies its value, with a
-    hard-coded default when the env var is unset (used for OpenRouter's
-    optional ``HTTP-Referer`` / ``X-Title`` app-ranking headers).
+    ``provider_keys`` mapping key. ``base_url`` is the default endpoint;
+    ``base_url_env`` (when set) lets a deployment override it — e.g. a
+    self-host container reaching a local Ollama via ``host.docker.internal``.
+    ``requires_api_key`` is ``False`` for keyless local runtimes (Ollama):
+    the credential gate treats them as always-satisfied and a sentinel key
+    is injected because ``ChatOpenAI`` rejects an empty one.
+    ``attribution_headers`` maps a static header name to the env var that
+    supplies its value, with a hard-coded default when the env var is unset
+    (OpenRouter's optional ``HTTP-Referer`` / ``X-Title`` app-ranking headers).
     """
 
     provider: str
     base_url: str
     api_key_env: str
+    requires_api_key: bool = True
+    base_url_env: str | None = None
     attribution_headers: Mapping[
         str, tuple[str, str]
     ] = ()  # header -> (env_var, default)
+
+    def resolve_base_url(self, environ: Mapping[str, str] | None = None) -> str:
+        """Return ``base_url``, or its ``base_url_env`` override when set."""
+
+        if self.base_url_env is None:
+            return self.base_url
+        env = environ if environ is not None else os.environ
+        return env.get(self.base_url_env, "").strip() or self.base_url
 
     def default_headers(
         self, environ: Mapping[str, str] | None = None
@@ -87,6 +101,7 @@ class OpenAICompatibleProviders:
     """Registry of OpenAI-wire-compatible provider endpoints."""
 
     OPENROUTER_BASE_URL = "https://openrouter.ai/api/v1"
+    OLLAMA_BASE_URL = "http://localhost:11434/v1"
 
     _REGISTRY: Mapping[str, OpenAICompatibleEndpoint] = {
         "openrouter": OpenAICompatibleEndpoint(
@@ -100,6 +115,16 @@ class OpenAICompatibleProviders:
                 "HTTP-Referer": ("OPENROUTER_APP_URL", "https://0xcopilot.tech"),
                 "X-Title": ("OPENROUTER_APP_TITLE", "0xCopilot"),
             },
+        ),
+        # Round 2 — a local Ollama server (OpenAI-compatible at /v1). Keyless:
+        # the harness talks to a runtime the user installed on their own
+        # machine. ``OLLAMA_BASE_URL`` lets self-host containers repoint it.
+        "ollama": OpenAICompatibleEndpoint(
+            provider="ollama",
+            base_url=OLLAMA_BASE_URL,
+            base_url_env="OLLAMA_BASE_URL",
+            api_key_env="",
+            requires_api_key=False,
         ),
     }
 

@@ -56,6 +56,9 @@ docker compose -f docker-compose.prod.yml up -d
 | `SIWE_ALLOWED_CHAIN_IDS`                                  | no       | Comma-separated chain ids. Default `1,8453,42161,4663` (Ethereum, Base, Arbitrum, …).                                |
 | `GOOGLE_OAUTH_CLIENT_ID` / `GOOGLE_OAUTH_CLIENT_SECRET`   | no       | Enables "Continue with Google". Register redirect `${SIWE_ORIGIN}/v1/auth/oidc/google/callback`.                     |
 | `OPENAI_API_KEY` / `ANTHROPIC_API_KEY` / `GOOGLE_API_KEY` | no       | BYOK — users add keys in Settings; set here only for a shared fallback.                                              |
+| `OPENROUTER_API_KEY`                                      | no       | BYOK OpenRouter — users add keys in Settings; set here only for a shared fallback.                                   |
+| `LOCAL_MODELS_ENABLED`                                    | no       | `true` to show **Settings → Local models** (download an HF GGUF + run via Ollama). Requires Ollama (see below).      |
+| `OLLAMA_BASE_URL`                                         | no       | OpenAI-compatible Ollama endpoint. Default `http://host.docker.internal:11434/v1` (a host-installed Ollama).         |
 | `GATEWAY_PORT`                                            | no       | Host port for the gateway. Default `8080`.                                                                           |
 | `IMAGE_TAG`                                               | no       | Image tag to run. Default `latest`; pin to a commit sha for reproducibility.                                         |
 | `AI_BACKEND_WORKERS`                                      | no       | gunicorn workers for the ai-backend API. Default `2`.                                                                |
@@ -64,6 +67,16 @@ docker compose -f docker-compose.prod.yml up -d
 across `backend`, `ai-backend`, and `backend-facade` — they sign and verify the
 same bearers and the internal service lane. The compose file wires this for you
 from a single `.env`.
+
+### Local models (Ollama) — optional
+
+To let users download a Hugging Face GGUF and run it locally, install
+[Ollama](https://ollama.com/download) on the host, then set
+`LOCAL_MODELS_ENABLED=true`. The container reaches the host Ollama via
+`OLLAMA_BASE_URL` (default `http://host.docker.internal:11434/v1`); on Linux add
+`extra_hosts: ["host.docker.internal:host-gateway"]` to the `ai-backend` service
+(or point `OLLAMA_BASE_URL` at wherever Ollama runs). Downloaded models appear in
+the chat model picker. Left off, **Settings → Local models** is hidden.
 
 ### Going public (TLS + a domain)
 

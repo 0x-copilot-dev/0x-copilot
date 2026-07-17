@@ -34,6 +34,8 @@ import { ModelAndBehavior } from "./sections/ModelAndBehavior";
 import { PrivacyAndData } from "./sections/PrivacyAndData";
 // BYOK — per-user model provider keys.
 import { ProviderKeys } from "./sections/ProviderKeys";
+import { LocalModels } from "./sections/LocalModels";
+import { getLocalModelsStatus } from "../../api/localModelsApi";
 import { useWorkspaceDefaults } from "./useWorkspaceDefaults";
 // PR 8.1 — WORKSPACE group sections.
 import { AuditLogSettings } from "./AuditLogSettings";
@@ -81,6 +83,9 @@ export type SettingsSection =
   // BYOK — per-user model provider keys. Distinct from "api-keys"
   // (Account group), which are Atlas bearer tokens.
   | "provider-keys"
+  // Round 2 — local Ollama models (desktop / self-host only; gated by a
+  // server status probe).
+  | "local-models"
   | "connectors"
   | "skills"
   | "privacy-data"
@@ -176,6 +181,12 @@ const railSections: ReadonlyArray<RailEntry> = [
   },
   {
     kind: "section",
+    id: "local-models",
+    label: "Local models",
+    icon: "spark",
+  },
+  {
+    kind: "section",
     id: "connectors",
     label: "Connectors",
     icon: "link",
@@ -246,6 +257,24 @@ export function SettingsScreen({
     setActiveSection(initialSection);
   }, [initialSection]);
 
+  // Round 2 — the "Local models" section is server-gated: the status probe
+  // returns `enabled: false` on cloud/multi-tenant deployments, where it
+  // stays hidden. A failed probe also hides it (treat as unavailable).
+  const [localModelsEnabled, setLocalModelsEnabled] = useState(false);
+  useEffect(() => {
+    let cancelled = false;
+    getLocalModelsStatus()
+      .then((status) => {
+        if (!cancelled) setLocalModelsEnabled(status.enabled);
+      })
+      .catch(() => {
+        if (!cancelled) setLocalModelsEnabled(false);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+
   // Single hydration of workspace defaults for both Model & behavior and
   // Privacy & data. The hook tolerates being called without an identity
   // (returns nulls) so legacy callers without identity threading don't
@@ -285,25 +314,32 @@ export function SettingsScreen({
       />
       <div className="settings-shell__body">
         <aside className="settings-nav" aria-label="Settings sections">
-          {railSections.map((entry, index) =>
-            entry.kind === "group" ? (
-              <div
-                key={`group-${index}`}
-                className="settings-nav-group"
-                aria-hidden="true"
-              >
-                {entry.label}
-              </div>
-            ) : (
-              <RailRow
-                key={entry.id}
-                entry={entry}
-                active={activeSection === entry.id}
-                count={entry.countKey ? counts[entry.countKey] : null}
-                onPick={handlePick}
-              />
-            ),
-          )}
+          {railSections
+            .filter(
+              (entry) =>
+                entry.kind !== "section" ||
+                entry.id !== "local-models" ||
+                localModelsEnabled,
+            )
+            .map((entry, index) =>
+              entry.kind === "group" ? (
+                <div
+                  key={`group-${index}`}
+                  className="settings-nav-group"
+                  aria-hidden="true"
+                >
+                  {entry.label}
+                </div>
+              ) : (
+                <RailRow
+                  key={entry.id}
+                  entry={entry}
+                  active={activeSection === entry.id}
+                  count={entry.countKey ? counts[entry.countKey] : null}
+                  onPick={handlePick}
+                />
+              ),
+            )}
         </aside>
         <section className="settings-content">
           {activeSection === "profile" && profile ? (
@@ -331,6 +367,9 @@ export function SettingsScreen({
             <ModelAndBehavior workspaceDefaults={workspaceDefaults} />
           ) : null}
           {activeSection === "provider-keys" ? <ProviderKeys /> : null}
+          {activeSection === "local-models" && localModelsEnabled ? (
+            <LocalModels />
+          ) : null}
           {activeSection === "connectors" ? (
             <ConnectorsSettings connectors={connectors} />
           ) : null}

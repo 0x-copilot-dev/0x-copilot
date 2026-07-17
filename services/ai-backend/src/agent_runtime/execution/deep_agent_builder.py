@@ -249,7 +249,7 @@ def build_chat_model(
         # ``reasoning`` / ``output_version`` / ``include`` payload silently
         # re-routes ChatOpenAI onto the OpenAI ``/responses`` endpoint,
         # which these gateways do not implement.
-        kwargs["base_url"] = compat.base_url
+        kwargs["base_url"] = compat.resolve_base_url()
         kwargs["use_responses_api"] = False
         headers = compat.default_headers()
         if headers:
@@ -260,6 +260,10 @@ def build_chat_model(
         env_key = compat.api_key_from_env()
         if env_key is not None:
             kwargs["api_key"] = env_key
+        elif not compat.requires_api_key:
+            # Keyless local runtime (Ollama). ChatOpenAI rejects an empty
+            # api_key, so pass a sentinel the endpoint ignores.
+            kwargs["api_key"] = "ollama"
     elif model_config.provider == "openai":
         kwargs.update(_openai_model_kwargs(model_config))
     elif model_config.provider == "anthropic":
