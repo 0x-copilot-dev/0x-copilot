@@ -107,6 +107,19 @@ updates:
         update-types:
           - minor
           - patch
+    ignore:
+      # zod 4 is a breaking major, deferred deliberately: zod is pinned in
+      # lockstep across the chat-transport and desktop surfaces, so it must
+      # move as one coordinated migration — not via an automated bump.
+      - dependency-name: zod
+        versions:
+          - ">=4"
+      # recharts 3 is a breaking major, deferred deliberately: v3 is a full
+      # API rewrite; chart migrations happen intentionally, not via
+      # automated bumps.
+      - dependency-name: recharts
+        versions:
+          - ">=3"
     reviewers:
       - enterprise-search/frontend-owners
       - enterprise-search/security-reviewers

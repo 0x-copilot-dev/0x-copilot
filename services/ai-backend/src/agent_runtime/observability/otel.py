@@ -83,8 +83,29 @@ class SafeAttributeSpanProcessor(SpanProcessor):
         for key in keys_to_drop:
             try:
                 del attributes[key]
-            except (KeyError, TypeError):
+            except KeyError:
                 continue
+            except TypeError:
+                # OTEL SDK >= 1.42 freezes BoundedAttributes when the span
+                # ends (__delitem__ raises TypeError). Redaction must still
+                # happen before export, so drop the key through the
+                # underlying storage instead of silently leaking it.
+                self._drop_frozen_attribute(attributes, key)
+
+    @staticmethod
+    def _drop_frozen_attribute(attributes: object, key: str) -> None:
+        inner = getattr(attributes, "_dict", None)
+        if inner is None:
+            return
+        lock = getattr(attributes, "_lock", None)
+        try:
+            if lock is not None:
+                with lock:
+                    inner.pop(key, None)
+            else:
+                inner.pop(key, None)
+        except (KeyError, TypeError, AttributeError):
+            return
 
     def shutdown(self) -> None:  # type: ignore[override]
         return None

@@ -118,7 +118,7 @@ jobs:
           test -s deployment-manifest.json
 
       - name: Install cosign + GitHub CLI verify dependencies
-        uses: sigstore/cosign-installer@1aa8e0f2454b781fbf0fbf306a4c9533a0c57409 # v3.7.0
+        uses: sigstore/cosign-installer@dc72c7d5c4d10cd6bcb8cf6e3fd625a9e5e537da # v3.7.0
 
       - name: Lowercase repository owner
         id: lc
@@ -159,7 +159,7 @@ jobs:
         # Adjust per cloud: gcp uses google-github-actions/auth, azure uses azure/login.
         # The role/principal trust is configured in the tenant's cloud IdP per
         # docs/ci-cd/multi-tenant-deploy.md "OIDC trust convention".
-        uses: aws-actions/configure-aws-credentials@e3dd6a429d7300a6a4c196c26e071d42e0343502 # v4.0.2
+        uses: aws-actions/configure-aws-credentials@d979d5b3a71173a29b74b5b88418bfda9437d885 # v6.1.1
         if: vars.TENANT_CLOUD == 'aws' || vars.TENANT_CLOUD == ''
         with:
           role-to-assume: ${{ secrets.TENANT_DEPLOY_ROLE_ARN }}
