@@ -311,6 +311,67 @@ def register_auth_routes(app: FastAPI) -> None:
         return Response(content=response.content, media_type="application/xml")
 
     # ------------------------------------------------------------------
+    # Sign-In-With-Ethereum (SIWE, EIP-4361) — unauthenticated public
+    # surface.
+    #
+    # Two-step wallet ramp, same anonymous service-header pattern as OIDC:
+    #
+    #   /nonce   — mint a single-use nonce bound to {address, chain_id}.
+    #   /verify  — client submits the signed EIP-4361 message; the backend
+    #              recovers the signer, consumes the nonce, and mints a
+    #              session. Response mirrors the OIDC callback shape
+    #              (user_id / session_id / bearer_token / expires_at /
+    #              return_to / requires_mfa).
+    #
+    # The facade forwards bodies verbatim (plus ip / user_agent) so the
+    # backend's detail codes — nonce_invalid, nonce_expired,
+    # signature_invalid, domain_mismatch, chain_not_allowed,
+    # expired_message, self_signup_disabled — reach the frontend intact.
+    # ------------------------------------------------------------------
+
+    @app.post("/v1/auth/siwe/nonce")
+    async def siwe_nonce(
+        request: Request, payload: dict[str, object]
+    ) -> dict[str, object]:
+        backend_url = settings_for(app).backend_url
+        client = http_client(request.app)
+        response = await client.post(
+            f"{backend_url}/internal/v1/auth/siwe/nonce",
+            json={
+                # Forwarded untouched — shape/format validation (422) is
+                # the backend's job so the wire contract lives in one place.
+                "address": payload.get("address"),
+                "chain_id": payload.get("chain_id"),
+                "ip": _client_ip(request),
+                "user_agent": _user_agent(request),
+            },
+            headers=_anonymous_service_headers(org_id="-"),
+            timeout=10,
+        )
+        _raise_for_upstream(response)
+        return response.json()
+
+    @app.post("/v1/auth/siwe/verify")
+    async def siwe_verify(
+        request: Request, payload: dict[str, object]
+    ) -> dict[str, object]:
+        backend_url = settings_for(app).backend_url
+        client = http_client(request.app)
+        response = await client.post(
+            f"{backend_url}/internal/v1/auth/siwe/verify",
+            json={
+                "message": payload.get("message"),
+                "signature": payload.get("signature"),
+                "ip": _client_ip(request),
+                "user_agent": _user_agent(request),
+            },
+            headers=_anonymous_service_headers(org_id="-"),
+            timeout=15,
+        )
+        _raise_for_upstream(response)
+        return response.json()
+
+    # ------------------------------------------------------------------
     # Local password (A4) — login + reset surfaces.
     # ------------------------------------------------------------------
 

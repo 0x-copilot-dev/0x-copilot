@@ -68,6 +68,7 @@ from backend_app.identity import (
     InMemorySamlStore,
     InMemoryScimStore,
     InMemorySessionStore,
+    InMemorySiweStore,
     InvitationStore,
     InvitationsService,
     LockoutService,
@@ -91,12 +92,19 @@ from backend_app.identity import (
     SessionAuthSecretMissing,
     SessionSelectService,
     SessionService,
+    SiweService,
+    SiweStore,
     build_default_email_dispatcher,
     build_pick_codec,
 )
 from backend_app.identity.google import (
     build_google_provider,
     ensure_global_auth_provider,
+)
+from backend_app.identity.siwe import (
+    ENV_SIWE_ALLOWED_CHAIN_IDS,
+    ENV_SIWE_ORIGIN,
+    parse_allowed_chain_ids,
 )
 from backend_app.identity.session_sweeper import SessionSweeper
 from backend_app.observability import (
@@ -210,6 +218,7 @@ from backend_app.routes.health import register_health_routes
 from backend_app.routes.invitations import register_invitation_routes
 from backend_app.routes.lockouts import register_lockout_routes
 from backend_app.routes.login_email_first import register_login_email_first_routes
+from backend_app.routes.siwe import register_siwe_routes
 from backend_app.routes.me import register_me_routes
 from backend_app.routes.me_preferences import register_me_preferences_routes
 from backend_app.routes.api_keys import register_api_key_routes
@@ -414,6 +423,8 @@ def create_app(
     saml_store: SamlStore | None = None,
     saml_service: SamlService | None = None,
     saml_verifier: SamlVerifier | None = None,
+    siwe_store: SiweStore | None = None,
+    siwe_service: SiweService | None = None,
     scim_store: ScimStore | None = None,
     scim_service: ScimService | None = None,
     me_store: MeStore | None = None,
@@ -696,6 +707,33 @@ def create_app(
             magic_link=resolved_magic_link_service,
             session_select=resolved_session_select_service,
         )
+
+        # Sign-In-With-Ethereum (SIWE): wallet entry ramp. Same gating as
+        # the rest of the auth machinery — needs the session service to
+        # mint. Reuses the login-email-first in-process rate limiter for
+        # the unauthenticated nonce endpoint. ``SIWE_ORIGIN`` pins the
+        # EIP-4361 domain/URI binding to the serving origin (defaults to
+        # the dev frontend origin, same fallback as magic links);
+        # ``SIWE_ALLOWED_CHAIN_IDS`` narrows the accepted chains.
+        resolved_siwe_store: SiweStore = siwe_store or InMemorySiweStore()
+        app.state.siwe_store = resolved_siwe_store
+        resolved_siwe_service = siwe_service or SiweService(
+            identity_store=resolved_identity_store,
+            siwe_store=resolved_siwe_store,
+            sessions=resolved_session_service,
+            expected_origin=(
+                os.environ.get(ENV_SIWE_ORIGIN, "").strip() or magic_link_base_url
+            ),
+            allowed_chain_ids=parse_allowed_chain_ids(
+                os.environ.get(ENV_SIWE_ALLOWED_CHAIN_IDS)
+            ),
+            lockout=resolved_lockout_service,
+            mfa=resolved_mfa_service,
+            allow_self_signup=resolved_deployment.toggles.allow_self_signup,
+            rate_limiter=resolved_rate_limiter,
+        )
+        app.state.siwe_service = resolved_siwe_service
+        register_siwe_routes(app, service=resolved_siwe_service)
 
     @app.get("/v1/health", dependencies=[Depends(public_route())])
     def health() -> dict[str, object]:

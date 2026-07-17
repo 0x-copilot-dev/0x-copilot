@@ -19,8 +19,6 @@ keys (per the A3 spec):
 from __future__ import annotations
 
 import logging
-import re
-import secrets
 from collections.abc import Iterable, Mapping
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
@@ -61,6 +59,10 @@ from backend_app.identity.jwks import (
     JwksProvider,
 )
 from backend_app.identity.oidc_store import OidcStore
+from backend_app.identity.provisioning import (
+    PersonalOrgSlugExhausted,
+    provision_personal_org,
+)
 from backend_app.identity.sessions import SessionService
 from backend_app.identity.store import IdentityStore
 from backend_app.token_vault import TokenVault
@@ -70,12 +72,6 @@ _LOGGER = logging.getLogger(__name__)
 
 _AUTH_TTL_SECONDS = 10 * 60  # 10 minutes from authorize → callback
 _DEFAULT_SCOPES = ("openid", "email", "profile")
-
-# Personal-org slug derivation for global-provider self-signup: keep only
-# slug-legal characters from the email local part; collision retries append
-# a short random hex suffix.
-_SLUG_STRIP_PATTERN = re.compile(r"[^a-z0-9_-]+")
-_SLUG_MAX_COLLISION_RETRIES = 32
 
 
 def _now() -> datetime:
@@ -668,55 +664,19 @@ class OidcService:
 
         display_name = claims.get("name") or claims.get("preferred_username") or email
         local_part = email.split("@", 1)[0]
-        slug = self._free_personal_org_slug(local_part)
 
-        with self._identity_store.transaction():
-            org = self._identity_store.create_organization(
-                OrganizationRecord(display_name=local_part, slug=slug)
-            )
-            user = self._identity_store.create_user(
-                UserRecord(
-                    org_id=org.org_id,
-                    primary_email=email,
-                    display_name=str(display_name),
-                    email_verified_at=_now() if email_verified is True else None,
-                )
-            )
-            self._identity_store.add_member(
-                OrganizationMemberRecord(
-                    org_id=org.org_id,
-                    user_id=user.user_id,
-                    source=OrganizationMemberSource.OIDC,
-                )
-            )
-            admin_role = self._identity_store.get_role_by_name(
-                org_id=None, name="admin"
-            )
-            if admin_role is not None:
-                self._identity_store.assign_role(
-                    RoleAssignmentRecord(
-                        org_id=org.org_id,
-                        user_id=user.user_id,
-                        role_id=admin_role.role_id,
-                    )
-                )
-            else:  # pragma: no cover - system-role seed missing
-                _LOGGER.warning(
-                    "self-signup: system role 'admin' missing; user %s falls "
-                    "back to default employee scopes",
-                    user.user_id,
-                )
-            self._identity_store.append_identity_audit(
+        def _signup_audit_events(
+            org: OrganizationRecord, user: UserRecord
+        ) -> list[IdentityAuditEventRecord]:
+            return [
                 self._audit_event(
                     provider=provider,
                     user=user,
                     action="oidc.self_signup_org_created",
-                    metadata={"org_slug": slug, "subject": subject},
+                    metadata={"org_slug": org.slug, "subject": subject},
                     ip=ip,
                     user_agent=user_agent,
-                )
-            )
-            self._identity_store.append_identity_audit(
+                ),
                 self._audit_event(
                     provider=provider,
                     user=user,
@@ -724,8 +684,22 @@ class OidcService:
                     metadata={"subject": subject, "email": email},
                     ip=ip,
                     user_agent=user_agent,
-                )
+                ),
+            ]
+
+        try:
+            org, user = provision_personal_org(
+                identity_store=self._identity_store,
+                org_display_name=local_part,
+                slug_base=local_part,
+                primary_email=email,
+                user_display_name=str(display_name),
+                email_verified_at=_now() if email_verified is True else None,
+                member_source=OrganizationMemberSource.OIDC,
+                audit_events=_signup_audit_events,
             )
+        except PersonalOrgSlugExhausted as exc:  # pragma: no cover - 32 collisions
+            raise OidcConfigError(str(exc)) from exc
 
         self._oidc_store.create_identity(
             OidcIdentityRecord(
@@ -738,19 +712,6 @@ class OidcService:
             )
         )
         return user
-
-    def _free_personal_org_slug(self, local_part: str) -> str:
-        base = _SLUG_STRIP_PATTERN.sub("-", local_part.lower()).strip("-_")
-        if not base or not base[0].isalnum():
-            base = "workspace"
-        candidate = base
-        for _ in range(_SLUG_MAX_COLLISION_RETRIES):
-            if self._identity_store.get_organization_by_slug(slug=candidate) is None:
-                return candidate
-            candidate = f"{base}-{secrets.token_hex(2)}"
-        raise OidcConfigError(
-            f"could not derive a free org slug from {local_part!r}"
-        )  # pragma: no cover - 32 random collisions
 
     def _sync_role_assignments(
         self,
