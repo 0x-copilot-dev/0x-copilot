@@ -162,6 +162,15 @@ video {
 .nav__links a[aria-current="page"] {
   color: var(--ink);
 }
+.nav__icon,
+.foot__links a.foot__icon {
+  display: inline-flex;
+  align-items: center;
+}
+.nav__icon svg,
+.foot__icon svg {
+  display: block;
+}
 
 /* --- hero --------------------------------------------------------------- */
 
