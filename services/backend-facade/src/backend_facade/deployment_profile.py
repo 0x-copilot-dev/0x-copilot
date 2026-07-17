@@ -110,6 +110,21 @@ class DeploymentProfileLoader:
             "require_kms_token_vault": True,
             "siem_export_required": True,
         },
+        # Desktop app: one person, one workspace, bundled local Postgres.
+        # Local Fernet vault instead of KMS; RLS/SIEM off because the OS
+        # user boundary is the tenant boundary. Self-signup ON — the user
+        # creates their own workspace via Google/wallet at first launch.
+        "single_user_desktop": {
+            "allow_embedded_provider_keys": True,
+            "allow_self_signup": True,
+            "allow_vendor_telemetry": False,
+            "default_retention_days": 365,
+            "dev_auth_bypass_allowed": False,
+            "enforce_rls": False,
+            "require_field_level_encryption": False,
+            "require_kms_token_vault": False,
+            "siem_export_required": False,
+        },
     }
 
     _DEV_DEFAULT = {
