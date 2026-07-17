@@ -44,14 +44,19 @@ jobs:
         run: npm run build --workspace @0x-copilot/website
 
       - name: Verify the build is intact
-        # A missing CNAME silently drops the custom domain — a painful way to
-        # find out once 0xcopilot.tech DNS is attached.
+        # CNAME is intentionally NOT published yet: a published CNAME makes
+        # GitHub redirect github.io → 0xcopilot.tech, and that domain's DNS
+        # is not live. When DNS is ready, rename public/CNAME.example →
+        # public/CNAME and re-add the CNAME checks here.
         run: |
           set -euo pipefail
-          for f in index.html token.html CNAME media/demo.webm; do
+          for f in index.html token.html media/demo.webm; do
             test -f "apps/website/dist/$f" || { echo "::error::missing dist/$f"; exit 1; }
           done
-          grep -q "0xcopilot.tech" apps/website/dist/CNAME
+          if [ -f apps/website/dist/CNAME ]; then
+            echo "::error::CNAME must not be published until 0xcopilot.tech DNS is live"
+            exit 1
+          fi
           echo "build OK"
 
       - name: Verify every referenced asset resolves at the deploy base

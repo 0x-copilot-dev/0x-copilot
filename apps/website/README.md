@@ -57,7 +57,9 @@ Routes are real HTML files (`index.html`, `token.html`) with relative nav links
 
 2. On **`0x-copilot-dev.github.io` → Settings → Pages → Custom domain:**
    `0xcopilot.tech`, wait for the DNS check, then tick **Enforce HTTPS**.
-   `public/CNAME` keeps the domain attached across deploys — don't delete it.
+   Rename `public/CNAME.example` → `public/CNAME` so deploys keep the domain
+   attached. **Do not publish a CNAME until DNS works** — GitHub will redirect
+   `0x-copilot-dev.github.io` to the custom domain and the org URL will break.
 
 ## Design
 
