@@ -28,3 +28,11 @@ webauthn==2.7.1
 # OneLoginSamlVerifier imports python3-saml lazily so test runs that use
 # FakeSamlVerifier do not need xmlsec1 installed.
 python3-saml==1.16.0
+# Sign-In-With-Ethereum (SIWE). EIP-191 personal_sign recovery for the
+# EIP-4361 verify path (backend_app/identity/siwe.py). Pure-Python signing
+# stack — no node/solc toolchain required.
+eth-account==0.13.7
+# eth-account declares `eth-abi>=4.0.0-b.2`; the pre-release lower bound
+# makes resolvers consider betas (it would lock 6.0.0b1). Pin the current
+# stable so the hashed lock never carries a pre-release.
+eth-abi==5.2.0

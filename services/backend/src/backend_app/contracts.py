@@ -991,6 +991,7 @@ class OrganizationMemberSource(StrEnum):
     SCIM = "scim"
     BOOTSTRAP = "bootstrap"
     INVITE = "invite"
+    SIWE = "siwe"
 
 
 class AuthProviderKind(StrEnum):
@@ -1008,6 +1009,7 @@ class LoginAttemptKind(StrEnum):
     SCIM_TOKEN = "scim_token"
     API_KEY = "api_key"
     MAGIC_LINK = "magic_link"
+    SIWE = "siwe"
 
 
 class LoginAttemptOutcome(StrEnum):
@@ -2445,3 +2447,120 @@ class SessionSelectResult(BackendContract):
     org_id: str
     requires_mfa: bool = False
     expires_at: datetime
+
+
+# -----------------------------------------------------------------------------
+# Sign-In-With-Ethereum (SIWE, EIP-4361)
+# -----------------------------------------------------------------------------
+
+# Wire format only — EIP-55 checksum verification lives in
+# backend_app.identity.siwe (it needs eth-account; contracts stays light).
+_WALLET_ADDRESS_PATTERN = re.compile(r"0x[0-9a-fA-F]{40}")
+
+
+def _normalize_wallet_address(value: object) -> str:
+    """Validate ``0x`` + 40 hex chars and normalize to lowercase.
+
+    Storage and comparisons are always lowercase; EIP-55 checksumming is a
+    display concern (and a parse-time strictness concern in siwe.py).
+    """
+
+    text = Validators.normalize_text(value)
+    if not _WALLET_ADDRESS_PATTERN.fullmatch(text):
+        raise ValueError("invalid ethereum address format")
+    return text.lower()
+
+
+class SiweNonceRecord(BackendContract):
+    """One issued SIWE nonce, single-use.
+
+    Mirrors ``OidcAuthenticationRecord``: created when the client asks to
+    sign in, consumed exactly once by the verify endpoint (atomic CAS on
+    ``consumed_at``). Bound to the requesting address + chain so a nonce
+    minted for one wallet cannot authenticate another.
+    """
+
+    nonce_id: str = Field(default_factory=lambda: f"swn_{uuid4().hex}")
+    nonce: str
+    address: str
+    chain_id: int
+    issued_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
+    expires_at: datetime
+    consumed_at: datetime | None = None
+    ip: str | None = None
+    user_agent: str | None = None
+
+    @field_validator("nonce_id")
+    @classmethod
+    def _normalize_nonce_id(cls, value: object) -> str:
+        return Validators.normalize_id(value)
+
+    @field_validator("address")
+    @classmethod
+    def _normalize_address(cls, value: object) -> str:
+        return _normalize_wallet_address(value)
+
+
+class WalletIdentityRecord(BackendContract):
+    """Mapping from a wallet address to a local user.
+
+    The SIWE analogue of ``OidcIdentityRecord``. ``address`` is unique
+    across the deployment (lowercase; the DB column is CITEXT + UNIQUE).
+    ``chain_id`` records the chain used at first link — later logins may
+    arrive from any allowlisted chain since the address is chain-agnostic.
+    """
+
+    wallet_id: str = Field(default_factory=lambda: f"wid_{uuid4().hex}")
+    address: str
+    org_id: str
+    user_id: str
+    chain_id: int
+    created_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
+
+    @field_validator("wallet_id", "org_id", "user_id")
+    @classmethod
+    def _normalize_id(cls, value: object) -> str:
+        return Validators.normalize_id(value)
+
+    @field_validator("address")
+    @classmethod
+    def _normalize_address(cls, value: object) -> str:
+        return _normalize_wallet_address(value)
+
+
+class SiweNonceRequest(BackendContract):
+    # ``address`` intentionally has NO format validator here: the service
+    # validates and maps bad formats to 422 {"detail": "invalid_address"}
+    # so the public wire carries a stable detail code instead of a pydantic
+    # error list.
+    address: str
+    chain_id: int
+    ip: str | None = None
+    user_agent: str | None = None
+
+
+class SiweNonceResult(BackendContract):
+    nonce: str
+    expires_at: datetime
+
+
+class SiweVerifyRequest(BackendContract):
+    message: str
+    signature: str
+    ip: str | None = None
+    user_agent: str | None = None
+
+
+class SiweVerifyResult(BackendContract):
+    """Returned by the backend verify endpoint after a valid signature.
+
+    Mirrors :class:`OidcCallbackResult` so the facade and frontend deal
+    with every session-establishing login path uniformly.
+    """
+
+    user_id: str
+    session_id: str
+    bearer_token: str
+    expires_at: datetime
+    return_to: str | None = None
+    requires_mfa: bool = False

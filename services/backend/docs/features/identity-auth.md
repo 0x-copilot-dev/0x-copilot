@@ -140,6 +140,57 @@ like JIT provisioning. When off, unknown subjects get the standard
 
 ---
 
+## Sign-In-With-Ethereum (SIWE, EIP-4361)
+
+`backend_app/identity/siwe.py` — `SiweService`; stores in
+`identity/siwe_store.py` (`siwe_nonces` + `wallet_identities`,
+migration `0035_siwe.sql`). Facade surfaces: `POST /v1/auth/siwe/nonce`
+and `POST /v1/auth/siwe/verify` (both public entry ramps →
+`/internal/v1/auth/siwe/*` with the anonymous service headers).
+
+| Operation                       | Notes                                                                                                                                                   |
+| ------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `mint_nonce(address, chain_id)` | Single-use nonce (TTL 5 min) bound to the requesting address + chain; rate-limited per-IP and per-address                                               |
+| `verify(message, signature)`    | Strict EIP-4361 parse → chain allowlist → domain/URI binding → time window → EIP-191 recovery → atomic nonce consume → link-or-provision → session mint |
+
+- Statement is pinned to `"Sign in to Atlas"`; `Version: 1`;
+  `Expiration Time` is mandatory and honored, `Issued At` may not sit
+  more than 5 min in the future.
+- Domain binding: the message `domain` must equal the authority of
+  `SIWE_ORIGIN` (default: the magic-link base URL, i.e. the dev frontend
+  origin) and the `URI` must share its scheme + authority.
+- Chain allowlist: `SIWE_ALLOWED_CHAIN_IDS` (comma-separated), default
+  `1,8453,42161,4663` (Ethereum, Base, Arbitrum One, Robinhood Chain).
+  Enforced at nonce mint AND verify.
+- Signature: EIP-191 `personal_sign` recovery via
+  `eth_account.Account.recover_message(encode_defunct(text=...))`;
+  recovered signer must match the message address (case-insensitive).
+- Replay defense: `consume_nonce` is an atomic CAS on `consumed_at`;
+  nonce comparison is constant-time. Failed signatures do NOT burn the
+  nonce (replay protection rests on the consume, not on failures).
+- Addresses stored lowercase (`wallet_identities.address` CITEXT +
+  UNIQUE across the deployment); display strings use EIP-55.
+- Wire detail codes (400 unless noted): `nonce_invalid`, `nonce_expired`,
+  `signature_invalid`, `domain_mismatch`, `chain_not_allowed`,
+  `expired_message`, `message_invalid`; `self_signup_disabled` (403);
+  `invalid_address` (422 on nonce mint); `rate_limited` (429).
+
+**Self-signup** (first login from an unlinked wallet): gated by the same
+deployment-profile `allow_self_signup` toggle as the global Google
+provider and reuses the shared `identity/provisioning.py`
+`provision_personal_org` helper — personal org named from the truncated
+EIP-55 address (`0xAbCd…1234's Workspace`), user display name
+`0xAbCd…1234`, placeholder `primary_email`
+`<address>@wallet.invalid` (wallets carry no email; `.invalid` is the
+RFC 2606 reserved TLD), `organization_members` row (`source=siwe`),
+system `admin` role for the sole member, then the `wallet_identities`
+link. Flag off → 403 `self_signup_disabled`; already-linked wallets keep
+logging in either way. Audit events: `siwe.self_signup_org_created` +
+`siwe.user_provisioned` (first login) / `siwe.verify_succeeded`
+(subsequent logins); login attempts recorded with `auth_kind=siwe`.
+
+---
+
 ## SAML 2.0 SSO (A5)
 
 `backend_app/identity/saml.py` — `SamlService`
