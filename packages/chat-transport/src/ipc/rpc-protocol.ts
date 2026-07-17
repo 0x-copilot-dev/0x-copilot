@@ -35,6 +35,12 @@ export const CHANNELS = {
   // Renderer → main: forwarded when the renderer's error boundary catches
   // a live tier-2 render throw (Q6 trip).
   tier2BoundaryError: "tier2.boundary-error",
+  // Main → renderer push: ServiceSupervisor boot progress for the packaged
+  // desktop (postgres + migrations + the three python services). The
+  // renderer's BootProgress gate listens on this channel and only mounts
+  // the app shell after a `phase: "ready"` payload arrives. In dev
+  // (unsupervised) mode main immediately pushes a synthetic ready payload.
+  bootStatus: "boot.status",
 } as const;
 
 export type ChannelName = (typeof CHANNELS)[keyof typeof CHANNELS];
@@ -151,6 +157,35 @@ export type Tier2BoundaryErrorPayload = z.infer<
 >;
 
 // === end Phase 6C ===
+
+// === Desktop supervisor boot status ===
+
+// Boot phases in the order the ServiceSupervisor walks them. "ready" is
+// terminal-success; a payload with `fatal: true` is terminal-failure and
+// keeps the phase that failed (e.g. `{ phase: "migrations", fatal: true }`).
+export const BootPhaseSchema = z.enum([
+  "secrets",
+  "ports",
+  "postgres",
+  "migrations",
+  "services",
+  "health",
+  "ready",
+  "stopping",
+]);
+export type BootPhase = z.infer<typeof BootPhaseSchema>;
+
+export const BootStatusPayloadSchema = z
+  .object({
+    phase: BootPhaseSchema,
+    message: z.string(),
+    percent: z.number().min(0).max(100),
+    fatal: z.boolean().optional(),
+  })
+  .strict();
+export type BootStatusPayload = z.infer<typeof BootStatusPayloadSchema>;
+
+// === end desktop supervisor boot status ===
 
 export const StreamEventKindSchema = z.enum([
   "open",
