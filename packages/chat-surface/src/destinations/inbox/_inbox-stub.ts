@@ -1,5 +1,5 @@
 // chat-surface Inbox adapter shape (transitional; orchestrator rewires
-// at merge to `@enterprise-search/api-types/inbox`).
+// at merge to `@0x-copilot/api-types/inbox`).
 //
 // Phase 4 has parallel wave-agents working off slightly different
 // shape conventions:
@@ -15,7 +15,7 @@
 // canonical site so the merge-time rewire is a pure import swap.
 //
 // Every import of this stub should be marked
-// `TODO(merge): rewire to "@enterprise-search/api-types"` so the
+// `TODO(merge): rewire to "@0x-copilot/api-types"` so the
 // orchestrator's rewrite script can find them.
 
 import type {
@@ -26,7 +26,7 @@ import type {
   ProjectId,
   RunId,
   UserId,
-} from "@enterprise-search/api-types";
+} from "@0x-copilot/api-types";
 
 // ---- §4.1 Primitive enums --------------------------------------------------
 

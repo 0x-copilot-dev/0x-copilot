@@ -24,7 +24,7 @@
 //      DocList entry so they live in the same section as the parent.
 //
 // `_todos-stub.ts` carries wire-types until P3-A1's api-types lands.
-// Every import is marked `TODO(merge): rewire to "@enterprise-search/api-types"`.
+// Every import is marked `TODO(merge): rewire to "@0x-copilot/api-types"`.
 
 import {
   useCallback,
@@ -39,7 +39,7 @@ import type {
   ConversationId,
   SectionResult,
   TodoId,
-} from "@enterprise-search/api-types";
+} from "@0x-copilot/api-types";
 
 import { DocList } from "../../shell/DocList";
 import { EmptyState } from "../../shell/EmptyState";
@@ -48,7 +48,7 @@ import { StatusPill, type StatusTone } from "../../shell/StatusPill";
 import { ItemLink } from "../../refs/ItemLink";
 import { formatRelativeTime } from "../../util/time";
 
-// TODO(merge): rewire to "@enterprise-search/api-types"
+// TODO(merge): rewire to "@0x-copilot/api-types"
 import type {
   Todo,
   TodoExtraction,
@@ -58,7 +58,7 @@ import type {
   TodosPayload,
 } from "./_todos-stub";
 
-// TODO(merge): rewire to "@enterprise-search/api-types"
+// TODO(merge): rewire to "@0x-copilot/api-types"
 export type {
   Todo,
   TodoExtraction,

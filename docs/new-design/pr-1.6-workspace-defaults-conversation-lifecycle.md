@@ -256,7 +256,7 @@ The admin check reuses [`runtime_api/auth.py`](../../services/ai-backend/src/run
 
 Model-catalog validation reuses the same `ModelCatalog` already loaded by [`runtime_api/services/runs.py`](../../services/ai-backend/src/runtime_api/services/runs.py); we do not duplicate the model registry. Connector-scope validation reuses `ConnectorScopeValidator` from PR 1.2.
 
-### 2.7 Frontend contract (`@enterprise-search/api-types`)
+### 2.7 Frontend contract (`@0x-copilot/api-types`)
 
 Three additions:
 
@@ -292,7 +292,7 @@ export interface Conversation {
 }
 ```
 
-`@enterprise-search/api-types` is an additive change — no consumer breaks. Once the types ship, the FE Settings page (PR 4.2) and sidebar (PR 2.2) can render against them.
+`@0x-copilot/api-types` is an additive change — no consumer breaks. Once the types ship, the FE Settings page (PR 4.2) and sidebar (PR 2.2) can render against them.
 
 ### 2.8 What `RunService.create_run` and `ConversationService.create_conversation` change
 
@@ -519,7 +519,7 @@ We pay zero protocol surface, zero header parsing, and zero server timezone bugs
 | Facade routing                      | `backend-facade/app.py` proxy pattern + `forward_json_to_ai`                                                               | five proxy routes (4 lifecycle + 1 defaults; the `PUT /defaults` is one route, the `GET /defaults` is the other half — total **2** for defaults) |
 | FE state                            | existing `useConversations()` + `useSettings()`                                                                            | one `useWorkspaceDefaults()` hook returning `(defaults, save)`                                                                                   |
 | Day grouping                        | `Intl.DateTimeFormat` (browser built-in)                                                                                   | a 12-line `groupConversations.ts` reducer                                                                                                        |
-| Folder UX                           | existing `ContextMenu` from `@enterprise-search/design-system`                                                             | one menu item ("Move to folder…") + a tiny modal                                                                                                 |
+| Folder UX                           | existing `ContextMenu` from `@0x-copilot/design-system`                                                                    | one menu item ("Move to folder…") + a tiny modal                                                                                                 |
 
 **Net new code** is intentionally small:
 
@@ -677,7 +677,7 @@ Lives in the same PR. Minimum bar before merge.
 - [ ] One audit row per `workspace.defaults.update`, `conversation.delete`, `conversation.restore`, `conversation.update`. Chain verifier passes.
 - [ ] No new event types in `runtime_api/schemas/events.py`. `RuntimeEventEnvelope` Pydantic schema is byte-identical pre/post merge.
 - [ ] `backend-facade` exposes `GET/PUT /v1/agent/workspace/defaults` and `PATCH/DELETE /v1/agent/conversations/{id}` and `POST /v1/agent/conversations/{id}/restore`. None reach `/internal/v1/*`.
-- [ ] `@enterprise-search/api-types` exports `WorkspaceDefaults` + `UpdateConversationRequest`; existing `Conversation` gains optional `folder`, `deleted_at`, `parent_conversation_id`.
+- [ ] `@0x-copilot/api-types` exports `WorkspaceDefaults` + `UpdateConversationRequest`; existing `Conversation` gains optional `folder`, `deleted_at`, `parent_conversation_id`.
 - [ ] `useWorkspaceDefaults()` hook + `groupConversations.ts` reducer ship with tests.
 - [ ] `make test` green; targeted ai-backend pytest suite green; frontend typecheck + build green.
 

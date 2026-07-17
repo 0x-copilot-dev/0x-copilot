@@ -21,7 +21,7 @@ simplest mechanism that fails loudly the moment that rule is broken. The
 chat-surface boundary is the model — surface-renderers mirrors and
 extends it.
 
-The Phase 4-a TODO exception for `@enterprise-search/chat-transport` is
+The Phase 4-a TODO exception for `@0x-copilot/chat-transport` is
 the smallest possible deviation: `EmailRenderer.test.tsx` was scaffolded
 in spike-prep with the deprecated `SurfaceRendererProps` shape, which
 typed the `transport` prop as `Transport`. The renderer source itself
@@ -73,13 +73,13 @@ is narrowed to the package and dated for removal.
       `crypto`.
 - [ ] FR-2 — `packages/surface-renderers/eslint.config.js` bans imports
       from:
-  - `@enterprise-search/frontend` and `@enterprise-search/frontend/*`
-  - `@enterprise-search/desktop` and `@enterprise-search/desktop/*`
+  - `@0x-copilot/frontend` and `@0x-copilot/frontend/*`
+  - `@0x-copilot/desktop` and `@0x-copilot/desktop/*`
   - `apps/*` and `**/apps/*`
-  - `@enterprise-search/chat-surface/shell` and its source-path variants
+  - `@0x-copilot/chat-surface/shell` and its source-path variants
 - [ ] FR-3 — `packages/surface-renderers/eslint.config.js` bans imports
-      from `@enterprise-search/chat-transport` and
-      `@enterprise-search/chat-transport/*` with a Phase 4-a TODO
+      from `@0x-copilot/chat-transport` and
+      `@0x-copilot/chat-transport/*` with a Phase 4-a TODO
       exception comment explaining: EmailRenderer's spike-prep
       `SurfaceRendererProps` shape forces a Transport-typed prop;
       Phase 4-a migrates it to the pure `SaaSRendererAdapter` contract,
@@ -89,9 +89,9 @@ is narrowed to the package and dated for removal.
       chat-surface/shell groups, with the chat-transport package
       explicitly NOT in the deny list — and the TODO block above the
       rule documents why.
-- [ ] FR-4 — `npm run lint --workspace @enterprise-search/surface-renderers`
+- [ ] FR-4 — `npm run lint --workspace @0x-copilot/surface-renderers`
       passes after the changes.
-- [ ] FR-5 — `npm run typecheck --workspace @enterprise-search/surface-renderers`
+- [ ] FR-5 — `npm run typecheck --workspace @0x-copilot/surface-renderers`
       passes after the changes (no source touched, but verified).
 - [ ] FR-6 — `docs/architecture/desktop-app-rollout.md` is removed from
       the repo tracked tree (via `git rm`).
@@ -139,17 +139,17 @@ DENY GLOBALS in packages/surface-renderers/src/**/*.{ts,tsx}:
   fetch, EventSource, XMLHttpRequest, WebSocket, crypto
 
 DENY IMPORT PATTERNS in packages/surface-renderers/src/**/*.{ts,tsx}:
-  @enterprise-search/frontend(/**)
-  @enterprise-search/desktop(/**)
+  @0x-copilot/frontend(/**)
+  @0x-copilot/desktop(/**)
   apps/*, **/apps/*
-  @enterprise-search/chat-surface/shell(/**)
-  @enterprise-search/chat-surface/src/shell(/**)
+  @0x-copilot/chat-surface/shell(/**)
+  @0x-copilot/chat-surface/src/shell(/**)
 
 ALLOW (no rule blocks them):
   react, react-dom
-  @enterprise-search/chat-surface (the package's barrel — types + diff
+  @0x-copilot/chat-surface (the package's barrel — types + diff
     primitives + the (soon-to-be) SaaSRendererAdapter shape)
-  @enterprise-search/chat-transport (TEMPORARY — see Phase 4-a TODO in
+  @0x-copilot/chat-transport (TEMPORARY — see Phase 4-a TODO in
     the file)
 ```
 
@@ -189,8 +189,8 @@ ALLOW (no rule blocks them):
    orchestrator should confirm whether the S2 decision report was
    written elsewhere or skipped.
 
-4. **`@enterprise-search/desktop` import ban scope.** The agent brief
-   bans imports from `@enterprise-search/desktop`. That package does
+4. **`@0x-copilot/desktop` import ban scope.** The agent brief
+   bans imports from `@0x-copilot/desktop`. That package does
    not yet exist on disk (`apps/desktop/` is Phase 1). The ban is added
    prospectively so that when the package lands a future renderer
    cannot reach into it. The `apps/*` ban already covers the source
@@ -200,9 +200,9 @@ ALLOW (no rule blocks them):
 ## Done criteria
 
 - [ ] FR-1 through FR-7 met.
-- [ ] `npm run lint --workspace @enterprise-search/surface-renderers`
+- [ ] `npm run lint --workspace @0x-copilot/surface-renderers`
       passes.
-- [ ] `npm run typecheck --workspace @enterprise-search/surface-renderers`
+- [ ] `npm run typecheck --workspace @0x-copilot/surface-renderers`
       passes.
 - [ ] Repo-wide typecheck (`npm run typecheck` at the root or per
       workspace as the root script dictates) still passes — no source
@@ -218,7 +218,7 @@ ALLOW (no rule blocks them):
 
 - The Phase 4-a TODO exception is a single comment block above the
   `no-restricted-imports` rule. It does not add a special-case allow
-  entry — it documents that `@enterprise-search/chat-transport` is
+  entry — it documents that `@0x-copilot/chat-transport` is
   deliberately absent from the deny list. When Phase 4-a lands, the
   comment block and chat-transport import need to be added to the deny
   list together (and the spike-prep

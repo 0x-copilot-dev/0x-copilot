@@ -18,12 +18,12 @@ import { describe, expect, it } from "vitest";
 import type {
   CitationSourceRef,
   RuntimeEventEnvelope,
-} from "@enterprise-search/api-types";
+} from "@0x-copilot/api-types";
 import { applyCitationEvent } from "./citationReducer";
 import {
   citationsForRun,
   emptyCitationRegistry,
-} from "@enterprise-search/chat-surface";
+} from "@0x-copilot/chat-surface";
 import { applySourceEvent, emptySourceMap } from "./sourcesReducer";
 
 const RUN_ID = "run_invariant_1";

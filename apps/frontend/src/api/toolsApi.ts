@@ -20,7 +20,7 @@
 // directly. The transport singleton enforces this via the same-origin
 // Vite proxy → facade.
 //
-// Wire types are imported from `@enterprise-search/api-types` — single
+// Wire types are imported from `@0x-copilot/api-types` — single
 // declaration site (`packages/api-types/src/tools.ts`).
 
 import type {
@@ -41,7 +41,7 @@ import type {
   ToolUsageResponse,
   UpdateToolRequest,
   UserId,
-} from "@enterprise-search/api-types";
+} from "@0x-copilot/api-types";
 
 import type { RequestIdentity } from "./config";
 import { httpDelete, httpGet, httpPatchQuery, httpPostQuery } from "./http";

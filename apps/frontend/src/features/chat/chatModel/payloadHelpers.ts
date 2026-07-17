@@ -5,7 +5,7 @@ import {
   isToolCallPayload,
   isToolResultPayload,
   type RuntimeEventEnvelope,
-} from "@enterprise-search/api-types";
+} from "@0x-copilot/api-types";
 import { isPlainRecord, objectSummary, payloadString } from "./recordHelpers";
 
 export function reasoningText(event: RuntimeEventEnvelope): string | null {

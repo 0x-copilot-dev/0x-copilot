@@ -8,7 +8,7 @@ import type {
   TenantId,
   ToolId,
   UserId,
-} from "@enterprise-search/api-types";
+} from "@0x-copilot/api-types";
 import { fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { describe, expect, it, vi } from "vitest";
 

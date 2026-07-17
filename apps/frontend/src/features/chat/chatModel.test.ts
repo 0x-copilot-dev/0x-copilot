@@ -2,7 +2,7 @@ import type {
   Message,
   McpServer,
   RuntimeEventEnvelope,
-} from "@enterprise-search/api-types";
+} from "@0x-copilot/api-types";
 import type { ThreadMessageLike } from "./runtime/types";
 import { describe, expect, it } from "vitest";
 import {
@@ -1663,7 +1663,7 @@ describe("applyRuntimeEvent", () => {
         activity_kind: "approval",
         presentation: {
           title: "Allow ClickUp search?",
-          summary: "Enterprise Search wants to search ClickUp tasks.",
+          summary: "0xCopilot wants to search ClickUp tasks.",
           status_label: "Waiting for permission",
           kind: "approval",
           group_key: "call_123",
@@ -1682,7 +1682,7 @@ describe("applyRuntimeEvent", () => {
     expect(toolPart(items, "approval_request")?.args).toMatchObject({
       presentation: {
         title: "Allow ClickUp search?",
-        summary: "Enterprise Search wants to search ClickUp tasks.",
+        summary: "0xCopilot wants to search ClickUp tasks.",
         status_label: "Waiting for permission",
         kind: "approval",
       },

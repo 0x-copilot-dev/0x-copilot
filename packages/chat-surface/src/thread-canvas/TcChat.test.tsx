@@ -9,7 +9,7 @@ import type {
   Transport,
   TransportCapabilities,
   TypedRequest,
-} from "@enterprise-search/chat-transport";
+} from "@0x-copilot/chat-transport";
 
 import { TransportProvider } from "../providers/TransportProvider";
 import { SwimlaneScrubProvider } from "./SwimlaneScrubContext";

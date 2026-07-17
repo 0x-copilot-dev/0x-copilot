@@ -1,22 +1,22 @@
 // Local stub for the Phase 4 Inbox wire contract.
 //
-// The canonical types live in `@enterprise-search/api-types`
+// The canonical types live in `@0x-copilot/api-types`
 // (`packages/api-types/src/inbox.ts`), authored by the parallel
 // Phase 4 Impl-A backend-types agent. This frontend wave (P4-C) runs
 // in parallel against the same sub-PRD spec and cannot import a type
 // that is not yet on `main`, so this stub mirrors the shapes in
 // `docs/atlas-new-design/destinations/inbox-prd.md` §4 (wire contracts).
 //
-// `InboxItemId` already lives in `@enterprise-search/api-types/brands.ts`
+// `InboxItemId` already lives in `@0x-copilot/api-types/brands.ts`
 // — re-export from there so the cross-destination `<ItemLink>` registry
 // stays a single source of truth even before the rest of the Inbox
 // contract merges.
 //
 // TODO(merge): delete this file. Replace every `_inbox-stub` import
-// with `@enterprise-search/api-types` once Impl-A's
+// with `@0x-copilot/api-types` once Impl-A's
 // `packages/api-types/src/inbox.ts` lands on main.
 
-import type { InboxItemId } from "@enterprise-search/api-types";
+import type { InboxItemId } from "@0x-copilot/api-types";
 
 export type { InboxItemId };
 

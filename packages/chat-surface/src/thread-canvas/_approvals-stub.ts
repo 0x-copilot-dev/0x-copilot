@@ -2,7 +2,7 @@
 //
 // Background: P1-A's audit found the canonical backend approval system uses
 // `AssignedApproval` + `ApprovalStatus` ("pending"|"approved"|"rejected"|
-// "forwarded"|"suggest_edit") in `@enterprise-search/api-types`. P1-B's
+// "forwarded"|"suggest_edit") in `@0x-copilot/api-types`. P1-B's
 // chat-surface UI was designed against a narrower 4-state enum ("pending"|
 // "accepted"|"rejected"|"edited") that maps more cleanly to the rail's
 // pending-vs-resolved presentation.
@@ -38,7 +38,7 @@ import type {
   RunId,
   TenantId,
   UserId,
-} from "@enterprise-search/api-types";
+} from "@0x-copilot/api-types";
 
 /**
  * Approval lifecycle state.

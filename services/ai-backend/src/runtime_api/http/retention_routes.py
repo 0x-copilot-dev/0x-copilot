@@ -10,7 +10,7 @@ from __future__ import annotations
 
 from datetime import datetime, timezone
 
-from enterprise_service_contracts.scopes import ADMIN_RETENTION, RUNTIME_USE
+from copilot_service_contracts.scopes import ADMIN_RETENTION, RUNTIME_USE
 from fastapi import APIRouter, Depends, HTTPException, Query, Request, status
 
 from agent_runtime.api.constants import Keys

@@ -4,7 +4,7 @@ import asyncio
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
 
-from enterprise_service_contracts.headers import (
+from copilot_service_contracts.headers import (
     ORG_HEADER,
     SERVICE_TOKEN_HEADER,
     USER_HEADER,

@@ -27,7 +27,7 @@ CI must set both for production builds:
 ```bash
 GIT_SHA=$(git rev-parse HEAD) \
 DEPLOY_ENVIRONMENT=production \
-npm run build --workspace @enterprise-search/frontend
+npm run build --workspace @0x-copilot/frontend
 ```
 
 ---
@@ -60,7 +60,7 @@ Set this when running the frontend against a Docker-deployed facade:
 
 ```bash
 BACKEND_FACADE_URL=http://localhost:8080 \
-  npm run dev --workspace @enterprise-search/frontend
+  npm run dev --workspace @0x-copilot/frontend
 ```
 
 ---

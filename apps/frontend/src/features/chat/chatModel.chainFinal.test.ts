@@ -9,7 +9,7 @@
 // We stage the canonical PR 1.4 sequence and assert the parent's result
 // shape after the leaf event lands.
 
-import type { RuntimeEventEnvelope } from "@enterprise-search/api-types";
+import type { RuntimeEventEnvelope } from "@0x-copilot/api-types";
 import { describe, expect, it } from "vitest";
 import { applyRuntimeEvent } from "./chatModel/eventReducer";
 import type { ChatItem } from "./chatModel/types";

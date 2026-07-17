@@ -9,7 +9,7 @@
 // When the resolver supplies a concrete ProjectId, it rides through as
 // `project_id` on the wire body.
 
-import type { Conversation, ProjectId } from "@enterprise-search/api-types";
+import type { Conversation, ProjectId } from "@0x-copilot/api-types";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { createConversation } from "./agentApi";

@@ -6,10 +6,10 @@
 **Foundation:** [PRD.md](../PRD.md) — workspace shell + composer
 **Design references:**
 
-- `/tmp/atlas-design/enterprise-search-template/project/dest-inbox.jsx` — main view + panel reference
-- `/tmp/atlas-design/enterprise-search-template/project/os-data.jsx:141-271` — `MOCK_INBOX` shape (8 fixture items spanning every kind)
-- `/tmp/atlas-design/enterprise-search-template/project/os-app.jsx:149` — `<InboxMain navigate={navigate} route={route} adminMode={adminMode} />` mount + breadcrumb wiring at lines 84-108, badge count at line 111
-- `/tmp/atlas-design/enterprise-search-template/chats/chat1.md:295-322` — settled the in-thread inline approval ≠ Inbox distinction; chat1.md:309-322 ("Approval queue position? → We don't need this. Approval happens via diffs in the surface.") is the load-bearing decision
+- `/tmp/atlas-design/0x-copilot-template/project/dest-inbox.jsx` — main view + panel reference
+- `/tmp/atlas-design/0x-copilot-template/project/os-data.jsx:141-271` — `MOCK_INBOX` shape (8 fixture items spanning every kind)
+- `/tmp/atlas-design/0x-copilot-template/project/os-app.jsx:149` — `<InboxMain navigate={navigate} route={route} adminMode={adminMode} />` mount + breadcrumb wiring at lines 84-108, badge count at line 111
+- `/tmp/atlas-design/0x-copilot-template/chats/chat1.md:295-322` — settled the in-thread inline approval ≠ Inbox distinction; chat1.md:309-322 ("Approval queue position? → We don't need this. Approval happens via diffs in the surface.") is the load-bearing decision
 
 ---
 
@@ -831,10 +831,10 @@ Restated from §1.2 + master §9, codified as testable invariants:
 
 - [PRD.md](../PRD.md) — workspace shell + composer + thread canvas (the foundation).
 - [destinations-master-prd.md](../destinations-master-prd.md) — master destinations PRD; §3 (enterprise checklist), §4 (shared primitives), §5.2 (Inbox brief), §7 (dispatch pattern).
-- `/tmp/atlas-design/enterprise-search-template/project/dest-inbox.jsx` — main view + panel reference.
-- `/tmp/atlas-design/enterprise-search-template/project/os-data.jsx` — `MOCK_INBOX` shape (lines 141-271).
-- `/tmp/atlas-design/enterprise-search-template/project/os-app.jsx` — InboxMain mount (line 149); badges (line 111-116); breadcrumb (lines 84-108).
-- `/tmp/atlas-design/enterprise-search-template/chats/chat1.md` — inline-approval vs Inbox decision (lines 295-322, 309-316); shortcut caution (line 383).
+- `/tmp/atlas-design/0x-copilot-template/project/dest-inbox.jsx` — main view + panel reference.
+- `/tmp/atlas-design/0x-copilot-template/project/os-data.jsx` — `MOCK_INBOX` shape (lines 141-271).
+- `/tmp/atlas-design/0x-copilot-template/project/os-app.jsx` — InboxMain mount (line 149); badges (line 111-116); breadcrumb (lines 84-108).
+- `/tmp/atlas-design/0x-copilot-template/chats/chat1.md` — inline-approval vs Inbox decision (lines 295-322, 309-316); shortcut caution (line 383).
 - `packages/chat-surface/src/destinations/inbox/InboxDestination.tsx` — existing implementation (skeleton + 4 filter tabs + optimistic mark-read).
 - `packages/api-types/src/index.ts` lines 1424-1459 — existing `AssignedApproval` + `InboxEventEnvelope` types (PR-1.4.1 — the ephemeral SSE channel that complements the durable inbox introduced here).
 - `services/ai-backend/src/runtime_api/sse/inbox_bus.py` — existing per-user inbox event bus (the tier-1 pulse channel).

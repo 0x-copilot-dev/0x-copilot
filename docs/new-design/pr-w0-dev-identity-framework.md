@@ -466,7 +466,7 @@ In production, step 2 is skipped — the user goes through the real `/v1/auth/lo
 
 ```makefile
 dev: check-local-env check-provider-key
-    @echo "Starting Enterprise Search dev stack"
+    @echo "Starting 0xCopilot dev stack"
     ...
     BACKEND_ENVIRONMENT=development \
     ENTERPRISE_AUTH_SECRET=$${ENTERPRISE_AUTH_SECRET:-dev-only-not-for-prod} \
@@ -616,7 +616,7 @@ We deliberately do **not** add:
 We **do** reuse:
 
 - `FacadeAuthenticator.sign_identity_token` from `services/backend-facade/src/backend_facade/auth.py` — the dev IdP imports nothing from facade (boundary rule), so the **same** HMAC/sign helper is duplicated as `services/backend/src/backend_app/dev_idp/_sign.py` (~15 LoC). The duplication is acceptable per service boundaries; the alternative is a new shared package, which the rules call out as worse-than-duplication for primitives this small.
-- Existing `enterprise_service_contracts.headers` constants (already in `packages/service-contracts`) — the natural home.
+- Existing `copilot_service_contracts.headers` constants (already in `packages/service-contracts`) — the natural home.
 - Existing `AuthenticatedIdentity` / `TrustedRequestIdentity` shapes — no new types.
 - Existing FastAPI `Depends` + `Annotated` patterns.
 
@@ -746,7 +746,7 @@ Post-merge:
 - [`services/ai-backend/src/runtime_api/http/routes.py`](../../services/ai-backend/src/runtime_api/http/routes.py) — legacy `scoped_identity` (deleted by this PR).
 - [`services/ai-backend/src/runtime_api/http/workspace.py`](../../services/ai-backend/src/runtime_api/http/workspace.py) — PR 1.5 routes; clean rewrite via `Identity`.
 - [`services/ai-backend/src/runtime_api/http/drafts.py`](../../services/ai-backend/src/runtime_api/http/drafts.py) — PR 1.3 routes; clean rewrite via `Identity`.
-- [`packages/service-contracts/src/enterprise_service_contracts/headers.py`](../../packages/service-contracts/src/enterprise_service_contracts/headers.py) — header constants used by both signing and verification.
+- [`packages/service-contracts/src/copilot_service_contracts/headers.py`](../../packages/service-contracts/src/copilot_service_contracts/headers.py) — header constants used by both signing and verification.
 - [PR 1.5 — Subagent + workspace pane data feeds](./pr-1.5-subagent-discovery-workspace-feeds.md) — first PR that introduced the broken pattern.
 - [PR 1.3 — Draft artifact](./pr-1.3-draft-artifact.md) — second PR with the same pattern.
 - [PR 1.6 — Workspace defaults + conversation lifecycle](./pr-1.6-workspace-defaults-conversation-lifecycle.md) — DELETE 500 (separate fix in PR W0.2).

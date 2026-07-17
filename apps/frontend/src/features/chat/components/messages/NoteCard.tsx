@@ -11,7 +11,7 @@
 // projected by `RuntimeEventPresentationProjector`. Payload supplies
 // a human summary; we fall back to a generic line when missing.
 
-import { StatusLine } from "@enterprise-search/design-system";
+import { StatusLine } from "@0x-copilot/design-system";
 import type { ReactElement } from "react";
 
 export interface NoteCardProps {

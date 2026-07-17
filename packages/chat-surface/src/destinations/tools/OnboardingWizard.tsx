@@ -16,8 +16,8 @@ import {
   type ReactElement,
 } from "react";
 
-import { Button } from "@enterprise-search/design-system";
-import type { ToolKind } from "@enterprise-search/api-types";
+import { Button } from "@0x-copilot/design-system";
+import type { ToolKind } from "@0x-copilot/api-types";
 
 import {
   CodeWizard,

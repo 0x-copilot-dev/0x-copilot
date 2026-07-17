@@ -16,17 +16,14 @@ import {
   webContents,
 } from "electron";
 
-import type { AdapterGeneratedPayload } from "@enterprise-search/api-types";
-import type {
-  BootStatusPayload,
-  Transport,
-} from "@enterprise-search/chat-transport";
+import type { AdapterGeneratedPayload } from "@0x-copilot/api-types";
+import type { BootStatusPayload, Transport } from "@0x-copilot/chat-transport";
 import {
   CHANNELS,
   MockTransport,
   WebTransport,
   withBearerRefresh,
-} from "@enterprise-search/chat-transport";
+} from "@0x-copilot/chat-transport";
 
 import {
   wireQualityGateForTier2,

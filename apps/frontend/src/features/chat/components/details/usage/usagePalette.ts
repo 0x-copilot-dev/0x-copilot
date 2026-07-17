@@ -11,7 +11,7 @@
  * descending-cost order so the largest stack always wears `--color-accent`.
  */
 
-import { ACCENT_SCHEMES } from "@enterprise-search/design-system";
+import { ACCENT_SCHEMES } from "@0x-copilot/design-system";
 
 const RAMP: ReadonlyArray<string> = ACCENT_SCHEMES.map((entry) => entry.swatch);
 const OTHER_KEY = "__other__" as const;

@@ -12,7 +12,7 @@
 
 import { useState, type ReactElement } from "react";
 
-import type { ConnectorId } from "@enterprise-search/api-types";
+import type { ConnectorId } from "@0x-copilot/api-types";
 
 import type { RequestIdentity } from "../../api/config";
 import { ConnectorDetailRoute } from "./ConnectorDetailRoute";

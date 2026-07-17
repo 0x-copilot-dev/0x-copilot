@@ -17,7 +17,7 @@
 // backs onto `Memento` on desktop and `localStorage` on web. Single
 // source of truth for product KV state.
 
-import type { KeyValueStore } from "@enterprise-search/chat-surface";
+import type { KeyValueStore } from "@0x-copilot/chat-surface";
 
 import {
   DEFAULT_THINKING_DEPTH,

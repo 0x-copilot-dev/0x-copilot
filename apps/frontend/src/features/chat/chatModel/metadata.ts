@@ -3,7 +3,7 @@ import {
   type AssistantPerformanceMetrics,
   type Message,
   type RuntimeEventEnvelope,
-} from "@enterprise-search/api-types";
+} from "@0x-copilot/api-types";
 import type { MessageTiming, ThreadMessageLike } from "../runtime/types";
 import { asRecord } from "../utils/jsonUtils";
 

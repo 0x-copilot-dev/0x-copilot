@@ -28,8 +28,8 @@
 
 import { useEffect, useReducer, useRef, type ReactElement } from "react";
 
-import { HomeDestination, HomePanel } from "@enterprise-search/chat-surface";
-import type { HomePayload } from "@enterprise-search/api-types";
+import { HomeDestination, HomePanel } from "@0x-copilot/chat-surface";
+import type { HomePayload } from "@0x-copilot/api-types";
 
 import type { RequestIdentity } from "../../api/config";
 import {

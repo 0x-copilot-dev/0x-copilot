@@ -9,6 +9,6 @@ alwaysApply: false
 - Read `apps/frontend/README.md`, `ARCHITECTURE.md`, and `TESTING.md` before changing frontend behavior.
 - Browser code calls `backend-facade` through `/v1/*`; it must not call `backend` or `ai-backend` directly.
 - Keep HTTP and SSE clients in `src/api/*`. Do not add new callers to legacy root-level API helper files.
-- Use `@enterprise-search/api-types` for app-facing payloads and update it with public contract changes.
-- Use `@enterprise-search/design-system` primitives for reusable UI, but keep feature workflows in `apps/frontend`.
+- Use `@0x-copilot/api-types` for app-facing payloads and update it with public contract changes.
+- Use `@0x-copilot/design-system` primitives for reusable UI, but keep feature workflows in `apps/frontend`.
 - Run frontend typecheck/build for behavior or shared-package changes when practical.

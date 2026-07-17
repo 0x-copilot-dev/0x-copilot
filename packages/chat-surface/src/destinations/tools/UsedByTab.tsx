@@ -15,7 +15,7 @@
 
 import type { CSSProperties, ReactElement } from "react";
 
-import type { ItemRef } from "@enterprise-search/api-types";
+import type { ItemRef } from "@0x-copilot/api-types";
 
 import { ItemLink } from "../../refs/ItemLink";
 

@@ -50,7 +50,7 @@ import type {
   ReasoningDepth,
   SkillId,
   ToolId,
-} from "@enterprise-search/api-types";
+} from "@0x-copilot/api-types";
 
 import { Composer } from "../../composer/Composer";
 import { StatusPill } from "../../shell/StatusPill";

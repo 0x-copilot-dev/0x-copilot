@@ -3,7 +3,7 @@ import {
   type NavigateOptions,
   type Router,
   type ShellDestinationSlug,
-} from "@enterprise-search/chat-surface";
+} from "@0x-copilot/chat-surface";
 
 import type { SettingsSection } from "../features/settings/SettingsScreen";
 import {

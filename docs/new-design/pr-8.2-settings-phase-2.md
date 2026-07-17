@@ -120,8 +120,8 @@ No new endpoints. The empty state is honest about the "later" timing and doesn't
 
 - Backend: `cd services/backend && PYTHONPATH=src:../../packages/service-contracts/src .venv/bin/python -m pytest tests/test_me_routes.py tests/test_me_profile_preferences.py -q`
 - Backend MFA: existing `tests/test_mfa_*` continue to cover the service; new public routes get a small smoke test.
-- api-types: `npm run typecheck --workspace @enterprise-search/api-types`
-- Frontend: `npm run typecheck --workspace @enterprise-search/frontend && npm run build --workspace @enterprise-search/frontend`
+- api-types: `npm run typecheck --workspace @0x-copilot/api-types`
+- Frontend: `npm run typecheck --workspace @0x-copilot/frontend && npm run build --workspace @0x-copilot/frontend`
 - Vitest: settings + me feature tests pass.
 
 ## Out of scope (Phase 3+)

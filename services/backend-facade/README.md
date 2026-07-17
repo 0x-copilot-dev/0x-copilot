@@ -1,6 +1,6 @@
 # Backend Facade
 
-Product-facing API facade for Enterprise Search apps. It shapes app responses,
+Product-facing API facade for 0xCopilot apps. It shapes app responses,
 proxies service calls, and owns client-compatible streaming surfaces.
 
 See `ARCHITECTURE.md` for the forwarding matrix, `TESTING.md` for test
@@ -43,7 +43,7 @@ PYTHONPATH=src .venv/bin/python -m uvicorn backend_facade.app:app --host 127.0.0
 Build the service image from this directory:
 
 ```bash
-docker build -f services/backend-facade/Dockerfile -t enterprise-search-backend-facade .
+docker build -f services/backend-facade/Dockerfile -t 0x-copilot-backend-facade .
 ```
 
 ## Boundary Rule

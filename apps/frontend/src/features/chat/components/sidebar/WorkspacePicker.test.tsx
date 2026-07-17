@@ -4,7 +4,7 @@ import { describe, expect, it, vi } from "vitest";
 import { render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 
-import type { WorkspaceListResponse } from "@enterprise-search/api-types";
+import type { WorkspaceListResponse } from "@0x-copilot/api-types";
 
 const mockListMyWorkspaces = vi.fn<() => Promise<WorkspaceListResponse>>();
 vi.mock("../../../../api/meApi", () => ({

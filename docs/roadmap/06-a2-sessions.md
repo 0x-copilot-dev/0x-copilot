@@ -102,7 +102,7 @@ CREATE INDEX idx_sessions_expiring
 
 **Service-contracts addition:**
 
-- `packages/service-contracts/src/enterprise_service_contracts/auth_claims.py` — claim names `SID_CLAIM = "sid"`, `EXP_CLAIM = "exp"`, etc.
+- `packages/service-contracts/src/copilot_service_contracts/auth_claims.py` — claim names `SID_CLAIM = "sid"`, `EXP_CLAIM = "exp"`, etc.
 
 ### 2.5 Trust model & failure semantics
 
@@ -194,5 +194,5 @@ Set `REQUIRE_SESSION_BINDING=false`. App returns to accepting any HMAC-valid tok
 - Modify: [services/backend-facade/src/backend_facade/auth.py:185-187](../../services/backend-facade/src/backend_facade/auth.py#L185-L187) — `_identity_from_payload`.
 - Modify: [services/backend-facade/src/backend_facade/app.py:44](../../services/backend-facade/src/backend_facade/app.py#L44), [services/backend-facade/src/backend_facade/app.py:48](../../services/backend-facade/src/backend_facade/app.py#L48)
 - New: `services/backend-facade/src/backend_facade/auth_routes.py`
-- New: `packages/service-contracts/src/enterprise_service_contracts/auth_claims.py`
+- New: `packages/service-contracts/src/copilot_service_contracts/auth_claims.py`
 - New: `services/backend/src/backend_app/identity/session_sweeper.py`

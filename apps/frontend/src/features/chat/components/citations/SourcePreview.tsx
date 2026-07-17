@@ -9,8 +9,8 @@
 // Touch devices skip the preview entirely — tapping a chip already
 // opens the source URL, and there's no hover affordance to translate.
 
-import type { SourceEntry } from "@enterprise-search/api-types";
-import { Badge } from "@enterprise-search/design-system";
+import type { SourceEntry } from "@0x-copilot/api-types";
+import { Badge } from "@0x-copilot/design-system";
 import {
   createContext,
   useCallback,
@@ -30,7 +30,7 @@ import {
   humanizeConnector,
   SourceFavicon,
   sourceFreshnessLabel,
-} from "@enterprise-search/chat-surface";
+} from "@0x-copilot/chat-surface";
 import { createPortal } from "react-dom";
 
 const OPEN_DELAY_MS = 200;

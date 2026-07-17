@@ -1,4 +1,4 @@
-import { Button, TextInput } from "@enterprise-search/design-system";
+import { Button, TextInput } from "@0x-copilot/design-system";
 import {
   useMemo,
   useState,

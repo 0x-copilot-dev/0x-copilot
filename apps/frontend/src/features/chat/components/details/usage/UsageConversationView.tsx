@@ -6,13 +6,13 @@
  * has `cost_micro_usd === null`.
  */
 
-import { Badge, Card, classNames } from "@enterprise-search/design-system";
+import { Badge, Card, classNames } from "@0x-copilot/design-system";
 import type {
   UsageConnectorRow,
   UsageConversationRow,
   UsageMeResponse,
   UsagePeriod,
-} from "@enterprise-search/api-types";
+} from "@0x-copilot/api-types";
 import type { ReactElement } from "react";
 import { useCallback, useEffect, useState } from "react";
 

@@ -1,4 +1,4 @@
-import type { RuntimeEventEnvelope } from "@enterprise-search/api-types";
+import type { RuntimeEventEnvelope } from "@0x-copilot/api-types";
 import { asRecord } from "../utils/jsonUtils";
 import { toolArgs, toolArgsDelta, toolName } from "./payloadHelpers";
 import { objectSummary } from "./recordHelpers";

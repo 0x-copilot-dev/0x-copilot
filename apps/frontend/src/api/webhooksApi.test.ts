@@ -1,10 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
-import type {
-  TenantId,
-  TriggerId,
-  Webhook,
-} from "@enterprise-search/api-types";
+import type { TenantId, TriggerId, Webhook } from "@0x-copilot/api-types";
 
 import { configureAuthBearerProvider } from "./http";
 import {

@@ -20,11 +20,11 @@ import {
   Card,
   Field,
   TextInput,
-} from "@enterprise-search/design-system";
+} from "@0x-copilot/design-system";
 import type {
   MfaFactorSummary,
   TotpEnrollResponse,
-} from "@enterprise-search/api-types";
+} from "@0x-copilot/api-types";
 import { QRCodeSVG } from "qrcode.react";
 import type { ReactElement } from "react";
 import { useCallback, useEffect, useState } from "react";
@@ -134,7 +134,7 @@ export function MfaPanel(): ReactElement {
       const start = await webauthnRegisterStart({
         display_name: displayName.trim() || "Security key",
         rp_id: window.location.hostname,
-        rp_name: "Enterprise Search",
+        rp_name: "0xCopilot",
         user_name: factors[0]?.display_name ?? displayName.trim() ?? "user",
         user_display_name: displayName.trim() || null,
       });

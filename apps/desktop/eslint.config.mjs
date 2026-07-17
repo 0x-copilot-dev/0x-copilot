@@ -14,14 +14,14 @@ import globals from "globals";
 //          fast at lint time, before CSP catches them at run time.
 
 const APP_BOUNDARY_MESSAGE =
-  "@enterprise-search/desktop is its own deployable. It cannot import from another app.";
+  "@0x-copilot/desktop is its own deployable. It cannot import from another app.";
 
 const FORBIDDEN_SIBLING_APPS = {
   patterns: [
     {
       group: [
-        "@enterprise-search/frontend",
-        "@enterprise-search/frontend/*",
+        "@0x-copilot/frontend",
+        "@0x-copilot/frontend/*",
         "../../frontend",
         "../../frontend/*",
       ],

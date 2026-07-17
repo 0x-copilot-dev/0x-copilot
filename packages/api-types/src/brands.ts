@@ -3,7 +3,7 @@
 // Source: cross-audit.md §2.1 (binding 2026-05-17). This file is the
 // SINGLE declaration site for every brand. Re-exported from
 // `packages/api-types/src/index.ts`; every consumer (frontend, chat-surface,
-// destinations) imports from `@enterprise-search/api-types`.
+// destinations) imports from `@0x-copilot/api-types`.
 //
 // Branding pattern: a `string & { readonly __brand: "<Name>" }` intersection
 // produces a structurally-unique type at compile-time without runtime cost.

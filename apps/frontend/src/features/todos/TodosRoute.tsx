@@ -27,7 +27,7 @@
 
 import { useEffect, useMemo, useState, type ReactElement } from "react";
 
-import { TodosDestination } from "@enterprise-search/chat-surface";
+import { TodosDestination } from "@0x-copilot/chat-surface";
 
 import type { RequestIdentity } from "../../api/config";
 import { fetchTodos } from "../../api/todosApi";

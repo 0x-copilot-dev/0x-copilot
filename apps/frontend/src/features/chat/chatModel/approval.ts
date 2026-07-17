@@ -1,7 +1,7 @@
 import type {
   ApprovalDecision,
   ApprovalForwardedPayload,
-} from "@enterprise-search/api-types";
+} from "@0x-copilot/api-types";
 import type { MessageStatus as AssistantMessageStatus } from "../runtime/types";
 import { asRecord, stringValue } from "../utils/jsonUtils";
 import { resolveMcpAuthDecision } from "./mcpAuth";

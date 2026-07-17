@@ -5,8 +5,8 @@ import type {
   McpApprovalCategory,
   McpApprovalParam,
   McpApprovalReasonCode,
-} from "@enterprise-search/api-types";
-import { Button } from "@enterprise-search/design-system";
+} from "@0x-copilot/api-types";
+import { Button } from "@0x-copilot/design-system";
 import {
   Fragment,
   useEffect,

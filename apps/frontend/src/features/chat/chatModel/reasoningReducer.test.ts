@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import type { RuntimeEventEnvelope } from "@enterprise-search/api-types";
+import type { RuntimeEventEnvelope } from "@0x-copilot/api-types";
 import { applyRuntimeEvent } from "./eventReducer";
 import { assistantMessageId } from "./recordHelpers";
 import type { ChatItem, ThreadMessageContent } from "./types";

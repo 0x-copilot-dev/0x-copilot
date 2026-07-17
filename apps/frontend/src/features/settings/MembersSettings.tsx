@@ -18,7 +18,7 @@ import {
   Menu,
   Select,
   TextInput,
-} from "@enterprise-search/design-system";
+} from "@0x-copilot/design-system";
 import {
   type FormEvent,
   type ReactElement,
@@ -30,7 +30,7 @@ import type {
   CreateInvitationResponse,
   Member,
   WorkspaceRoleName,
-} from "@enterprise-search/api-types";
+} from "@0x-copilot/api-types";
 import type { RequestIdentity } from "../../api/config";
 import { Modal } from "./Modal";
 import { useInvitations, useWorkspaceMembers } from "./useWorkspace";

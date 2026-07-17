@@ -16,7 +16,7 @@ At process startup, `DeploymentProfileLoader.load()` reads `ENTERPRISE_DEPLOYMEN
 and resolves a frozen `DeploymentProfile` with a set of `DeploymentFeatureToggles`.
 The same profile module exists in all three Python services (backend, ai-backend,
 backend-facade) — they are not shared to preserve service isolation; only the profile
-name constants come from `enterprise_service_contracts`.
+name constants come from `copilot_service_contracts`.
 
 The profile is stored on `app.state.deployment` and is read-only for the lifetime
 of the process.

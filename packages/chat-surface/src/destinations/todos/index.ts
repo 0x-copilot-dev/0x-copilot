@@ -6,10 +6,10 @@
 // without forcing a circular dependency.
 //
 // Wire-type re-exports are forwarded from `_todos-stub.ts`; the
-// orchestrator rewires the stub to `@enterprise-search/api-types`
+// orchestrator rewires the stub to `@0x-copilot/api-types`
 // at merge time.
 
-import type { TodoId } from "@enterprise-search/api-types";
+import type { TodoId } from "@0x-copilot/api-types";
 
 import {
   hasItemRefResolver,
@@ -53,10 +53,10 @@ export {
 };
 
 // Wire-type re-exports (forwarded from `_todos-stub.ts`; the orchestrator
-// rewires the stub to `@enterprise-search/api-types` at merge — see
+// rewires the stub to `@0x-copilot/api-types` at merge — see
 // `_todos-stub.ts` header).
 //
-// TODO(merge): rewire to "@enterprise-search/api-types"
+// TODO(merge): rewire to "@0x-copilot/api-types"
 export type {
   Todo,
   TodoExtraction,

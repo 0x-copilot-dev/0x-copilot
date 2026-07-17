@@ -27,7 +27,7 @@ from agent_runtime.persistence.records import RuntimeModelCallUsageRecord
 from runtime_api.rbac import RequireScopes
 from runtime_api.schemas.usage import AgentUsageResponse, UsagePeriodWindow
 
-from enterprise_service_contracts.scopes import RUNTIME_USE
+from copilot_service_contracts.scopes import RUNTIME_USE
 
 
 class AgentUsageRoutes:

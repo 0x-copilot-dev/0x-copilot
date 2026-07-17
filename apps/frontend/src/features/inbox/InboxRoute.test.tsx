@@ -15,7 +15,7 @@ import {
   type Mock,
 } from "vitest";
 
-import type { InboxItemId } from "@enterprise-search/api-types";
+import type { InboxItemId } from "@0x-copilot/api-types";
 
 import type {
   InboxBodyRef,
@@ -29,7 +29,7 @@ import type {
 // would otherwise need full Transport / Router provider scaffolding to
 // mount; its own rendering is exercised in the chat-surface package
 // test suite.
-vi.mock("@enterprise-search/chat-surface", () => ({
+vi.mock("@0x-copilot/chat-surface", () => ({
   InboxDestination: () => <div data-testid="inbox-destination-stub">stub</div>,
 }));
 

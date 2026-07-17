@@ -462,7 +462,7 @@ export function ProjectsRoute({ identity }: ProjectsRouteProps): ReactElement {
   const items = state.kind === "ready" ? state.items : [];
 
   // TODO(merge): the package-shipped `<ProjectsDestination>` already
-  // exists in `@enterprise-search/chat-surface`, but it owns its own
+  // exists in `@0x-copilot/chat-surface`, but it owns its own
   // data fetch through the Transport hook. Wiring it as the inner
   // renderer requires the chat-surface component to accept controlled
   // `projects` / `onArchive` / `onStar` props; until that lands, we

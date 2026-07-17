@@ -5,7 +5,7 @@ alwaysApply: true
 
 # Compliance And Audit Reviews
 
-When reviewing Enterprise Search for bank, government, or other regulated buyers:
+When reviewing 0xCopilot for bank, government, or other regulated buyers:
 
 - Treat a control as implemented only when code, config, tests, and documentation all support it. Architecture intent is not enough.
 - Separate product controls from deployment controls. Mark TLS, WAF, KMS, SIEM, backup, private networking, and branch protection as "not evidenced in repo" unless there is deploy config or a runbook.

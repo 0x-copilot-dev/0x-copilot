@@ -17,7 +17,7 @@
 //   - SUBSTITUTION: pure data in, callbacks out. The host wires the
 //     transport (PATCH, load-more invocations, etc).
 //   - SINGLE SOURCE OF TRUTH: every wire-side type comes from
-//     `@enterprise-search/api-types`. Zero brand redeclarations here.
+//     `@0x-copilot/api-types`. Zero brand redeclarations here.
 //   - ARIA tabs (cross-audit §1.6, master §3.6): tablist + tab +
 //     tabpanel + arrow / Home / End keyboard nav.
 //   - Audit + Edit panels are slot-driven so the host (data-binder)
@@ -35,12 +35,8 @@ import {
   type ReactNode,
 } from "react";
 
-import type {
-  ItemRef,
-  Tool,
-  ToolInvocation,
-} from "@enterprise-search/api-types";
-import { StatusPill, type StatusTone } from "@enterprise-search/design-system";
+import type { ItemRef, Tool, ToolInvocation } from "@0x-copilot/api-types";
+import { StatusPill, type StatusTone } from "@0x-copilot/design-system";
 
 import { ToolInvocationsTable } from "./ToolInvocationsTable";
 import { ToolUsageChart, type ToolDailyCallPoint } from "./ToolUsageChart";

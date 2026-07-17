@@ -11,7 +11,7 @@
 //      fire ("Run now" — sub-PRD §3.11) back to the backend, optimistically
 //      driving the SSE-merged local list while the server confirms.
 //   4. Renders a host-side scaffolding today; the P5-B
-//      `<RoutinesDestination>` from `@enterprise-search/chat-surface`
+//      `<RoutinesDestination>` from `@0x-copilot/chat-surface`
 //      will replace the inner shell at merge — see `TODO(merge)`.
 //
 // Why a feature-level wrapper, not props on `<RoutinesDestination>`
@@ -335,7 +335,7 @@ export function RoutinesRoute({ identity }: RoutinesRouteProps): ReactElement {
   const items = state.kind === "ready" ? state.items : [];
 
   // TODO(merge): once P5-B's `<RoutinesDestination>` lands in
-  // `@enterprise-search/chat-surface`, swap the inner host-side list
+  // `@0x-copilot/chat-surface`, swap the inner host-side list
   // for the package-shipped destination:
   //
   //   <RoutinesDestination

@@ -199,9 +199,9 @@ export interface TcInlineDiffProps {
 ## Done criteria
 
 - [ ] All FRs met
-- [ ] `npm run typecheck --workspace @enterprise-search/chat-surface` passes
-- [ ] `npm test --workspace @enterprise-search/chat-surface` passes
-- [ ] `npm run lint --workspace @enterprise-search/chat-surface` passes
+- [ ] `npm run typecheck --workspace @0x-copilot/chat-surface` passes
+- [ ] `npm test --workspace @0x-copilot/chat-surface` passes
+- [ ] `npm run lint --workspace @0x-copilot/chat-surface` passes
 - [ ] No imports outside scope
 - [ ] No bare browser primitives in `TcInlineDiff.tsx` /
       `TcInlineDiff.fixtures.tsx`

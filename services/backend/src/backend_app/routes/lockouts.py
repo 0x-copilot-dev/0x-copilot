@@ -10,7 +10,7 @@ from __future__ import annotations
 
 from datetime import datetime
 
-from enterprise_service_contracts.scopes import ADMIN_USERS, RUNTIME_USE
+from copilot_service_contracts.scopes import ADMIN_USERS, RUNTIME_USE
 from fastapi import Depends, FastAPI, HTTPException, Query, Request, status
 
 from backend_app.auth import BackendServiceAuthenticator

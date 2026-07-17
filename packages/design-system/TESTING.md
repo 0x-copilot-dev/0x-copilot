@@ -6,14 +6,14 @@ tooling has not been added yet.
 ## Current Check
 
 ```bash
-npm run typecheck --workspace @enterprise-search/design-system
+npm run typecheck --workspace @0x-copilot/design-system
 ```
 
 Run frontend typecheck and build when a primitive change affects app usage:
 
 ```bash
-npm run typecheck --workspace @enterprise-search/frontend
-npm run build --workspace @enterprise-search/frontend
+npm run typecheck --workspace @0x-copilot/frontend
+npm run build --workspace @0x-copilot/frontend
 ```
 
 ## Expected Test Shape

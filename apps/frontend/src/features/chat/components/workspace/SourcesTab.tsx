@@ -11,7 +11,7 @@
 //   - `focusCitationId` scrolls the matching row into view (chip-click
 //     handshake from PR 3.1 §2.5 / `useWorkspacePaneAutoOpen`).
 
-import type { SourceEntry } from "@enterprise-search/api-types";
+import type { SourceEntry } from "@0x-copilot/api-types";
 import { useEffect, useRef, type ReactElement } from "react";
 
 import {
@@ -20,10 +20,7 @@ import {
   type SourceConnectorGroup,
   type SourceEntryMap,
 } from "../../chatModel/sourcesReducer";
-import {
-  humanizeConnector,
-  SourceSkeletonRow,
-} from "@enterprise-search/chat-surface";
+import { humanizeConnector, SourceSkeletonRow } from "@0x-copilot/chat-surface";
 import { SourceRow } from "../citations/SourceRow";
 
 const GROUP_THRESHOLD = 5;

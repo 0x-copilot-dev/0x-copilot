@@ -16,7 +16,7 @@ import type {
   UsageConversationRow,
   UsageDailyRow,
   UsageOrgResponse,
-} from "@enterprise-search/api-types";
+} from "@0x-copilot/api-types";
 
 import { USAGE_PALETTE_OTHER_KEY } from "./usagePalette";
 

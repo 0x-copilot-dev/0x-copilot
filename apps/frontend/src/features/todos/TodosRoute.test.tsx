@@ -7,7 +7,7 @@ import type { Todo, ListTodosResponse, TodoId } from "../../api/_todos-stub";
 // would otherwise need full Transport / Router provider scaffolding to
 // mount; its own rendering is exercised in the chat-surface package
 // test suite.
-vi.mock("@enterprise-search/chat-surface", () => ({
+vi.mock("@0x-copilot/chat-surface", () => ({
   TodosDestination: () => <div data-testid="todos-destination-stub">stub</div>,
 }));
 

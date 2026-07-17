@@ -26,7 +26,7 @@ import type {
   ToolId,
   ToolInvocationListResponse,
   ToolUsageResponse,
-} from "@enterprise-search/api-types";
+} from "@0x-copilot/api-types";
 
 import type { RequestIdentity } from "../../api/config";
 import {

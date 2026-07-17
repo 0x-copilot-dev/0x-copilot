@@ -22,7 +22,7 @@ import type {
   ReactNode,
 } from "react";
 
-import type { ConnectorStatus } from "@enterprise-search/api-types";
+import type { ConnectorStatus } from "@0x-copilot/api-types";
 
 import { StatusPill, type StatusTone } from "../../shell/StatusPill";
 import { formatRelativeTime } from "../../util/time";

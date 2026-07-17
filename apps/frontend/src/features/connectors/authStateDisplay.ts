@@ -2,7 +2,7 @@
 // requires updating exactly one place — never let raw enum values
 // (`auth_skipped` -> "auth skipped") leak into the UI.
 
-import type { McpAuthState } from "@enterprise-search/api-types";
+import type { McpAuthState } from "@0x-copilot/api-types";
 
 export type AuthStateTone =
   | "neutral"

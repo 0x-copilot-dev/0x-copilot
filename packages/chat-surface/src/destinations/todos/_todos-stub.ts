@@ -1,5 +1,5 @@
 // chat-surface Todos adapter shape (transitional; orchestrator rewires
-// at merge to `@enterprise-search/api-types/todos`).
+// at merge to `@0x-copilot/api-types/todos`).
 //
 // Phase 3 has four parallel wave-agents working off slightly different
 // shape conventions:
@@ -15,7 +15,7 @@
 // + §13 (sections rendering).
 //
 // Every import of this stub should be marked
-// `TODO(merge): rewire to "@enterprise-search/api-types"` so the
+// `TODO(merge): rewire to "@0x-copilot/api-types"` so the
 // orchestrator's rewrite script can find them.
 
 import type {
@@ -26,7 +26,7 @@ import type {
   TodoExtractionId,
   TodoId,
   TodoSeriesId,
-} from "@enterprise-search/api-types";
+} from "@0x-copilot/api-types";
 
 // Re-exports — let `import { TodoSeriesId } from "../_todos-stub"` keep
 // working without an island-wide churn pass. Canonical site is api-types.

@@ -17,7 +17,7 @@
 //     CardGrid / StatusPill / ItemLink). No bespoke buttons, colors,
 //     or px constants outside design-system tokens.
 //   - Wire-type single source: imports `Tool` etc. from
-//     `@enterprise-search/api-types` via `_tools-stub.ts`. Zero
+//     `@0x-copilot/api-types` via `_tools-stub.ts`. Zero
 //     `__brand:` re-declarations.
 //   - Pure presentation: NO transport, NO router, NO fetch. Props +
 //     callbacks only. The data-binder phase (P10-C) wires real data

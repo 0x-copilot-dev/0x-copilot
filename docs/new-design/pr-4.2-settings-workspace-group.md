@@ -324,7 +324,7 @@ Admin check reuses the existing `ADMIN_USERS` permission scope from `auth.py` (P
 | `DELETE /v1/workspace/members/{id}` last admin                      | 409    | `cannot_remove_last_admin`    |
 | `DELETE /v1/workspace/members/{id}` self                            | 409    | `cannot_remove_self`          |
 
-### 2.8 Frontend contract (`@enterprise-search/api-types`)
+### 2.8 Frontend contract (`@0x-copilot/api-types`)
 
 ```ts
 // packages/api-types/src/index.ts
@@ -615,7 +615,7 @@ Marcus              FE (Members)              backend-facade            backend 
 - [ ] `InvitationsService.create/list/revoke/accept()` mint with `token_urlsafe(32)`, hash-only persistence, rate-limited accept, idempotent on already-member.
 - [ ] `BillingService.digest()` joins seats + budgets + invoices stub.
 - [ ] `backend-facade` exposes `/v1/workspace`, `/v1/workspace/members`, `/v1/workspace/invitations`, `/v1/auth/invitations/{tok}/accept`, `/v1/workspace/billing` proxies; admin guard at the facade for all but accept.
-- [ ] `@enterprise-search/api-types` exports `Workspace`, `Member`, `Invitation`, `CreateInvitationResponse`, `BillingDigest`, plus role/source enums.
+- [ ] `@0x-copilot/api-types` exports `Workspace`, `Member`, `Invitation`, `CreateInvitationResponse`, `BillingDigest`, plus role/source enums.
 - [ ] `<WorkspaceSettings />`, `<Members />`, `<Billing />` mount under the "Workspace" group in `SettingsScreen`.
 - [ ] `<InviteModal />` shows the token once with a Copy button; `<MembersTable />` row menu uses Radix Dropdown.
 - [ ] PR 1.6 form embedded inside `<WorkspaceSettings />` (does not duplicate logic).
@@ -627,7 +627,7 @@ Marcus              FE (Members)              backend-facade            backend 
 
 ## 5 · References
 
-- Design Doc · Settings → "Workspace" group — bundle at `/tmp/design-doc/enterprise-search/project/Design Doc.html` lines 546-548.
+- Design Doc · Settings → "Workspace" group — bundle at `/tmp/design-doc/0x-copilot/project/Design Doc.html` lines 546-548.
 - [`services/backend/migrations/0004_identity_foundation.sql`](../../services/backend/migrations/0004_identity_foundation.sql) — `organizations`, `organization_members`, `roles`, `role_assignments`.
 - [`services/backend/migrations/0015_scim_provisioning.sql`](../../services/backend/migrations/0015_scim_provisioning.sql) — token-mint pattern we mirror for invitations.
 - [`services/backend/migrations/0002_audit_hardening.sql`](../../services/backend/migrations/0002_audit_hardening.sql) — append-only audit chain.

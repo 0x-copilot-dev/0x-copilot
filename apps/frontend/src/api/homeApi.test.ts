@@ -1,6 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
-import type { HomePayload } from "@enterprise-search/api-types";
+import type { HomePayload } from "@0x-copilot/api-types";
 
 import { fetchHome, openHomeStream, type HomeStreamEnvelope } from "./homeApi";
 import { configureAuthBearerProvider } from "./http";

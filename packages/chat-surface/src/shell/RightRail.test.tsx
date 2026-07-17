@@ -4,7 +4,7 @@ import type {
   RunId,
   TenantId,
   UserId,
-} from "@enterprise-search/api-types";
+} from "@0x-copilot/api-types";
 import { fireEvent, render, screen } from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
@@ -14,7 +14,7 @@ import {
   registerItemRefResolver,
 } from "../refs/registry";
 import type { ArtifactRoute, Router } from "../routing/router";
-// TODO(merge): rewire to "@enterprise-search/api-types" AssignedApproval
+// TODO(merge): rewire to "@0x-copilot/api-types" AssignedApproval
 import type { Approval } from "../thread-canvas/_approvals-stub";
 import type { ActivityEntry } from "../thread-canvas/eventProjector";
 

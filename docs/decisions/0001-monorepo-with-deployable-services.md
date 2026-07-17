@@ -6,13 +6,13 @@ Accepted for initial product development.
 
 ## Context
 
-Enterprise Search will include web, Mac, Windows, a backend facade, core backend services, and an AI backend. These components will evolve together early in the product. API contracts, auth context, permissions, streaming behavior, and UI flows will change frequently.
+0xCopilot will include web, Mac, Windows, a backend facade, core backend services, and an AI backend. These components will evolve together early in the product. API contracts, auth context, permissions, streaming behavior, and UI flows will change frequently.
 
 At the same time, backend services should have clear runtime boundaries and deploy independently.
 
 ## Decision
 
-Use one GitHub monorepo for the Enterprise Search workspace, with independently deployable services inside it.
+Use one GitHub monorepo for the 0xCopilot workspace, with independently deployable services inside it.
 
 The target shape is:
 

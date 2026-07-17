@@ -20,7 +20,7 @@
 
 import { useCallback, type ReactElement } from "react";
 
-import type { CreateToolRequest, Tool } from "@enterprise-search/api-types";
+import type { CreateToolRequest, Tool } from "@0x-copilot/api-types";
 
 import { createTool } from "../../api/toolsApi";
 import type { RequestIdentity } from "../../api/config";

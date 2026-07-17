@@ -21,7 +21,7 @@ import type {
   TeamStreamEnvelope,
   TenantId,
   UserId,
-} from "@enterprise-search/api-types";
+} from "@0x-copilot/api-types";
 
 // Hoisted mocks for teamApi — route tests stay off real fetch/transport.
 const teamApiMocks = vi.hoisted(() => ({

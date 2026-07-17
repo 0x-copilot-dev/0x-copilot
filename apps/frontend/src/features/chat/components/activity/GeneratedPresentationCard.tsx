@@ -1,4 +1,4 @@
-import type { RuntimeEventPresentation } from "@enterprise-search/api-types";
+import type { RuntimeEventPresentation } from "@0x-copilot/api-types";
 import type { ReactElement, ReactNode } from "react";
 import { ActivityCard } from "./ActivityCard";
 import { ActivityItem } from "./ActivityItem";

@@ -22,7 +22,7 @@ import {
   type ReactNode,
 } from "react";
 
-import type { ProjectTemplateId } from "@enterprise-search/api-types";
+import type { ProjectTemplateId } from "@0x-copilot/api-types";
 
 import { CardGrid } from "../../shell/CardGrid";
 import { EmptyState } from "../../shell/EmptyState";
@@ -43,7 +43,7 @@ const DANGER = "var(--color-danger)";
 
 // ── Public types ─────────────────────────────────────────────────────
 
-/** Canonical brand from `@enterprise-search/api-types/brands.ts`
+/** Canonical brand from `@0x-copilot/api-types/brands.ts`
  *  (projects-extensions-prd §7.2). Re-exported so existing
  *  `import { ProjectTemplateId } from "..."/TemplateGallery"` keep
  *  working without a churn pass. */

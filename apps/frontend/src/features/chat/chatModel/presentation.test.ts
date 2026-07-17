@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import type { RuntimeEventPresentation } from "@enterprise-search/api-types";
+import type { RuntimeEventPresentation } from "@0x-copilot/api-types";
 import { preferredPresentation } from "./presentation";
 
 function presentation(

@@ -13,7 +13,7 @@ import { render, screen } from "@testing-library/react";
 import type {
   CitationSourceRef,
   RuntimeEventEnvelope,
-} from "@enterprise-search/api-types";
+} from "@0x-copilot/api-types";
 
 // Stub the parts walker so we exercise only the strip-mount branch and
 // the class contract. The real walker is covered by its own tests; here
@@ -32,9 +32,9 @@ vi.mock("../../runtime/components", async (orig) => {
 vi.mock("../markdown/MarkdownText", () => ({
   MarkdownText: () => null,
 }));
-vi.mock("@enterprise-search/chat-surface", async () => ({
-  ...(await vi.importActual<typeof import("@enterprise-search/chat-surface")>(
-    "@enterprise-search/chat-surface",
+vi.mock("@0x-copilot/chat-surface", async () => ({
+  ...(await vi.importActual<typeof import("@0x-copilot/chat-surface")>(
+    "@0x-copilot/chat-surface",
   )),
   Reasoning: () => null,
 }));
@@ -57,7 +57,7 @@ vi.mock("./AssistantMessageFooter", () => ({
 import { AssistantMessage } from "./AssistantMessage";
 import { CitationsProvider } from "../citations/citationsContext";
 import { applyCitationEvent } from "../../chatModel/citationReducer";
-import { emptyCitationRegistry } from "@enterprise-search/chat-surface";
+import { emptyCitationRegistry } from "@0x-copilot/chat-surface";
 
 const RUN_ID = "run_a";
 const CONVERSATION_ID = "conv_a";

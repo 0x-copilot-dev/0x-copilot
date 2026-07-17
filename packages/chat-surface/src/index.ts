@@ -283,7 +283,7 @@ export {
 // === end Phase 2-E ===
 
 // === Phase 0.5 shared primitives — branded IDs + cross-destination refs ===
-// Source of truth: @enterprise-search/api-types/src/{brands,refs}.ts.
+// Source of truth: @0x-copilot/api-types/src/{brands,refs}.ts.
 // Re-exported here so chat-surface consumers can keep their single import
 // site, but the types themselves are NOT redeclared.
 export type {
@@ -314,7 +314,7 @@ export type {
   ToolId,
   ToolResultId,
   UserId,
-} from "@enterprise-search/api-types";
+} from "@0x-copilot/api-types";
 
 // ItemLink registry + renderer (cross-audit §3.3).
 export {

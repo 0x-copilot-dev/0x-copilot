@@ -12,7 +12,7 @@ import type {
   SectionResult,
   TimelineEntry,
   WhatsNewSection,
-} from "@enterprise-search/api-types";
+} from "@0x-copilot/api-types";
 import { fireEvent, render, screen } from "@testing-library/react";
 import { describe, expect, it, vi } from "vitest";
 

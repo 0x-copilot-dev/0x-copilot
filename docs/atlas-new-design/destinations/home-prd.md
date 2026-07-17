@@ -1117,7 +1117,7 @@ Phase 9 splits into **8 narrow parallel agents**. Each ≤30 min, ≤1000 LOC. T
 - Branch: `worktree-agent-phase9-api-types`
 - Files: `packages/api-types/src/home.ts` (rewrite), `packages/api-types/src/index.ts` (extend `ItemRef` with `routine` / `routine_new` variants)
 - Deliverable: full TS contract per §4. Re-export from `index.ts`. Zero changes to existing consumers other than removed types (`PinnedChatSummary`, `RecentRunSummary`, `FavoriteToolSummary`, `StarredProjectSummary`, `MeetingSummary` — replaced by `TimelineEntry` discriminator).
-- Test: `npm run typecheck --workspace @enterprise-search/api-types` clean.
+- Test: `npm run typecheck --workspace @0x-copilot/api-types` clean.
 
 **P9-A2 — backend `triage` + `last_visit` modules**
 

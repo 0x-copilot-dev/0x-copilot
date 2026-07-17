@@ -13,7 +13,7 @@ Excluded from:
 Exercised by:
 
 ```bash
-npm run lint:negatives --workspace @enterprise-search/surface-renderers
+npm run lint:negatives --workspace @0x-copilot/surface-renderers
 ```
 
 The script asserts ESLint exits non-zero and reports at least one error

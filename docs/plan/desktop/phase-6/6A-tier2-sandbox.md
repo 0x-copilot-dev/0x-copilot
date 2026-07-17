@@ -40,7 +40,7 @@ This phase deliberately ships **no codegen, no quality-gate composition, and no 
 
 ## Functional requirements
 
-- [ ] **FR-1 AST allowlist scan.** `astAllowlistScan(source: string): AstScanResult` parses the adapter source with `@typescript-eslint/parser` (already a `@enterprise-search/desktop` devDependency; supports JSX + TS shapes without a typecheck pass) and walks the AST. It rejects on any of:
+- [ ] **FR-1 AST allowlist scan.** `astAllowlistScan(source: string): AstScanResult` parses the adapter source with `@typescript-eslint/parser` (already a `@0x-copilot/desktop` devDependency; supports JSX + TS shapes without a typecheck pass) and walks the AST. It rejects on any of:
   - `ImportDeclaration` whose source value is **not** in `ALLOWED_IMPORTS` (the keyset).
   - `ImportDeclaration` whose specifiers include a name **not** in the listed allowlist for that module (e.g., `import { useEffect } from 'react'` rejects because `useEffect` is not in the `react` allowlist).
   - `ImportExpression` (dynamic `import()`).
@@ -54,7 +54,7 @@ This phase deliberately ships **no codegen, no quality-gate composition, and no 
 - [ ] **FR-2 ALLOWED_IMPORTS surface.** Exported as a readonly `const` so `sandbox.ts` and the future Phase 6D static-analysis CLI consume the same shape. Contents:
   - `react`: `['createElement', 'Fragment', 'useState']` — explicitly NOT `useEffect`, NOT `useLayoutEffect`, NOT `useRef` (each is a side-effect or escape hatch the adapter cannot need under D28).
   - `react-dom`: `[]` — present as a sanctioned target for type-only references; no value imports allowed.
-  - `@enterprise-search/design-system`: a documented set of pure-render primitives — `['Button', 'Badge', 'Card', 'TextInput', 'Select', 'Switch', 'Toggle', 'Field', 'IconButton', 'StatusPill', 'AppIcon', 'HarnessRow', 'StatusLine', 'ConnectorChip', 'classNames']`. `ThemeProvider`, `useTheme`, `Menu`, `Popover*` are excluded — they touch `document` / `window` / `localStorage` or render context that an adapter must not own.
+  - `@0x-copilot/design-system`: a documented set of pure-render primitives — `['Button', 'Badge', 'Card', 'TextInput', 'Select', 'Switch', 'Toggle', 'Field', 'IconButton', 'StatusPill', 'AppIcon', 'HarnessRow', 'StatusLine', 'ConnectorChip', 'classNames']`. `ThemeProvider`, `useTheme`, `Menu`, `Popover*` are excluded — they touch `document` / `window` / `localStorage` or render context that an adapter must not own.
 - [ ] **FR-3 Sandbox execution.** `compileAdapter(source: string): SandboxCompileResult` runs the validated source inside a Node `vm.createContext(...)` with an explicit `globals` object containing **only**: `React` (the renderer's React handle), `DesignSystem` (the curated design-system shape), `Math`, `JSON`, `Date`, `RegExp`, `Number`, `String`, `Array`, `Object`, `Boolean`, `Symbol`, `Error`, `TypeError`, `RangeError`, `console` (frozen, no-op `log` / `warn` / `error`), and a `module` object the adapter assigns to. The `globals` object is deep-frozen and does NOT contain `process`, `global`, `globalThis`, `Function`, `eval`, `require`, or any constructor that would let the adapter reach back to the host. Returns `{ ok: true, adapter }` where `adapter` is a `SaaSRendererAdapter`-shaped object, or `{ ok: false, error }` on syntax error / runtime throw / missing `module.exports`.
 - [ ] **FR-4 Loader composition.** `loadAdapterSource(opts: { adapterDir: string; scheme: string; version: number }): Promise<LoadResult>`:
   - Reads `{adapterDir}/{scheme}-v{version}.js` from disk (`fs/promises.readFile` — UTF-8).
@@ -93,7 +93,7 @@ This phase deliberately ships **no codegen, no quality-gate composition, and no 
 - No comments by default. The two security-relevant invariants where the WHY matters MAY have a comment: (1) the deep-frozen globals list in `sandbox.ts` (why each is included or excluded), (2) the worker-termination preemption claim in `Tier2Loader.tsx` (why `setTimeout` alone is not sufficient).
 - Worker production bundle is **out of scope** — `Tier2Loader` accepts a `workerFactory` prop so tests inject a stub `Worker` (a class exposing `postMessage`, `terminate`, `addEventListener('message' | 'error')`). Phase 6C wires the production bundle.
 - `apps/desktop/main/adapters/sandbox.ts` MUST NOT import from another deployable component's `src/`. It imports only Node built-ins and the AST-scan module sibling.
-- `packages/chat-surface/src/surfaces/Tier2Loader.tsx` MUST NOT import from `electron`, `node:*`, `@enterprise-search/desktop`, or `@enterprise-search/chat-transport`. It imports `react` + `@enterprise-search/design-system` for the reconciliation factory map only.
+- `packages/chat-surface/src/surfaces/Tier2Loader.tsx` MUST NOT import from `electron`, `node:*`, `@0x-copilot/desktop`, or `@0x-copilot/chat-transport`. It imports `react` + `@0x-copilot/design-system` for the reconciliation factory map only.
 - The AST allowlist is purely structural — no name-mangling, no shadow detection, no static-typing. Workarounds via aliased reassignment (`const f = fetch; f();`) are caught by the `Identifier`-reference pass, not by tracking the assignment. If a future bypass is found, the answer is to extend the scanner, not to defang the sandbox.
 - React 19 functional components only. No class components in the new files.
 
@@ -102,7 +102,7 @@ This phase deliberately ships **no codegen, no quality-gate composition, and no 
 - `SaaSRendererAdapter` from `packages/chat-surface/src/surfaces/SaaSRendererAdapter.ts` — the contract the sandboxed module must export.
 - `@typescript-eslint/parser` — already in `apps/desktop` devDependencies (`8.59.3`). No new dependency.
 - Node built-ins: `node:fs/promises` (loader), `node:path` (loader), `node:vm` (sandbox).
-- React + `@enterprise-search/design-system` primitives (reconciliation map).
+- React + `@0x-copilot/design-system` primitives (reconciliation map).
 
 ## Interfaces produced
 
@@ -111,7 +111,7 @@ This phase deliberately ships **no codegen, no quality-gate composition, and no 
 export const ALLOWED_IMPORTS: {
   readonly react: readonly ["createElement", "Fragment", "useState"];
   readonly "react-dom": readonly [];
-  readonly "@enterprise-search/design-system": readonly [
+  readonly "@0x-copilot/design-system": readonly [
     "Button",
     "Badge",
     "Card",
@@ -218,11 +218,11 @@ Phase 6A ships the protocol types and the host-side stub Worker used in tests. T
 ## Done criteria
 
 - [ ] All FRs met.
-- [ ] `npm test --workspace @enterprise-search/desktop` passes (existing tests + 3 new adapter test files).
-- [ ] `npm test --workspace @enterprise-search/chat-surface` passes (existing tests + `Tier2Loader.test.tsx`).
-- [ ] `npm run typecheck --workspace @enterprise-search/desktop` passes.
-- [ ] `npm run typecheck --workspace @enterprise-search/chat-surface` passes.
-- [ ] `npm run lint --workspace @enterprise-search/desktop` passes.
+- [ ] `npm test --workspace @0x-copilot/desktop` passes (existing tests + 3 new adapter test files).
+- [ ] `npm test --workspace @0x-copilot/chat-surface` passes (existing tests + `Tier2Loader.test.tsx`).
+- [ ] `npm run typecheck --workspace @0x-copilot/desktop` passes.
+- [ ] `npm run typecheck --workspace @0x-copilot/chat-surface` passes.
+- [ ] `npm run lint --workspace @0x-copilot/desktop` passes.
 - [ ] No new third-party dependency.
 - [ ] No imports outside scope (the `vm` module, `node:fs/promises`, `node:path`, `@typescript-eslint/parser` are pre-existing).
 - [ ] No edit to `packages/chat-surface/src/index.ts`.

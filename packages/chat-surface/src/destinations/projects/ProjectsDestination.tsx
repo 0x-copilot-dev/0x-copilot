@@ -31,7 +31,7 @@
 //     (apps/frontend P6-C) wires those.
 //
 // `_projects-stub.ts` carries wire-types until P6-A1's api-types land.
-// Every import is marked `TODO(merge): rewire to "@enterprise-search/api-types"`.
+// Every import is marked `TODO(merge): rewire to "@0x-copilot/api-types"`.
 
 import {
   useMemo,
@@ -40,7 +40,7 @@ import {
   type ReactNode,
 } from "react";
 
-import type { ProjectId, SectionResult } from "@enterprise-search/api-types";
+import type { ProjectId, SectionResult } from "@0x-copilot/api-types";
 
 import { CardGrid } from "../../shell/CardGrid";
 import { EmptyState } from "../../shell/EmptyState";
@@ -50,7 +50,7 @@ import { StatusPill, type StatusTone } from "../../shell/StatusPill";
 import { ItemLink } from "../../refs/ItemLink";
 import { formatRelativeTime } from "../../util/time";
 
-// TODO(merge): rewire to "@enterprise-search/api-types"
+// TODO(merge): rewire to "@0x-copilot/api-types"
 import type { ProjectStatus, ProjectSummary } from "./_projects-stub";
 
 // ===========================================================================

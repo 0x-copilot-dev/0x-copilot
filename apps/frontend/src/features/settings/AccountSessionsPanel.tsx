@@ -8,17 +8,12 @@
  * it matches the rest of the settings tree.
  */
 
-import {
-  Badge,
-  Button,
-  Card,
-  classNames,
-} from "@enterprise-search/design-system";
+import { Badge, Button, Card, classNames } from "@0x-copilot/design-system";
 import type { ReactElement } from "react";
 import { useCallback, useEffect, useMemo, useState } from "react";
 
 import { listAccountSessions, revokeAccountSession } from "../../api/authApi";
-import type { AccountSession } from "@enterprise-search/api-types";
+import type { AccountSession } from "@0x-copilot/api-types";
 import { formatDateTime } from "../../utils/dateFormat";
 import { errorMessage } from "../../utils/errors";
 

@@ -10,7 +10,7 @@ import type {
   ConnectorStreamEnvelope,
   TenantId,
   UserId,
-} from "@enterprise-search/api-types";
+} from "@0x-copilot/api-types";
 
 import {
   completeConnectorOAuth,

@@ -24,7 +24,7 @@
 
 import { useMemo } from "react";
 
-import type { RuntimeEventEnvelope } from "@enterprise-search/api-types";
+import type { RuntimeEventEnvelope } from "@0x-copilot/api-types";
 
 import {
   project,

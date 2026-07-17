@@ -45,7 +45,7 @@ import {
   type ReactNode,
 } from "react";
 
-import type { ItemRef, SectionResult } from "@enterprise-search/api-types";
+import type { ItemRef, SectionResult } from "@0x-copilot/api-types";
 
 import { CardGrid } from "../../shell/CardGrid";
 import { DocList } from "../../shell/DocList";
@@ -56,7 +56,7 @@ import { StatusPill, type StatusTone } from "../../shell/StatusPill";
 import { ItemLink } from "../../refs/ItemLink";
 import { formatRelativeTime } from "../../util/time";
 
-// TODO(merge): rewire to "@enterprise-search/api-types"
+// TODO(merge): rewire to "@0x-copilot/api-types"
 import type {
   LibraryIndexStatus,
   LibraryItemSummary,

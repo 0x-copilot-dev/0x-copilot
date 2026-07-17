@@ -1,11 +1,11 @@
 // Local stub for the Phase 2 Home wire contract.
 //
-// The canonical types live in `@enterprise-search/api-types`
+// The canonical types live in `@0x-copilot/api-types`
 // (`packages/api-types/src/home.ts`), authored by the parallel P2-A1
 // backend-types agent. This frontend wave (P2-C) runs in parallel and
 // cannot import a type that is not yet on `main`, so this stub mirrors
 // the sub-PRD §4 shape. The orchestrator rewires every `_home-stub`
-// import to `@enterprise-search/api-types` at merge time.
+// import to `@0x-copilot/api-types` at merge time.
 //
 // Source: docs/atlas-new-design/destinations/home-prd.md §4.1 (`HomePayload`)
 // + §4.2-4.6 (sub-types). The `ItemRef` and `SectionResult` types already
@@ -14,7 +14,7 @@
 // Home-specific types live in this stub.
 //
 // TODO(merge): delete this file. Replace every `_home-stub` import with
-// `@enterprise-search/api-types`.
+// `@0x-copilot/api-types`.
 
 import type {
   ConversationId,
@@ -22,7 +22,7 @@ import type {
   RunId,
   SectionResult,
   SkillId,
-} from "@enterprise-search/api-types";
+} from "@0x-copilot/api-types";
 
 export type TimeOfDay = "morning" | "afternoon" | "evening" | "late";
 

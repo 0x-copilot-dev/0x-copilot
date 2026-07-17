@@ -28,7 +28,7 @@ import type {
   ConnectorId,
   ConnectorSlug,
   SectionResult,
-} from "@enterprise-search/api-types";
+} from "@0x-copilot/api-types";
 
 import { CardGrid } from "../../shell/CardGrid";
 import { EmptyState } from "../../shell/EmptyState";

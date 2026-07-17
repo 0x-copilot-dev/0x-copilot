@@ -15,7 +15,7 @@ import {
   Card,
   Field,
   TextInput,
-} from "@enterprise-search/design-system";
+} from "@0x-copilot/design-system";
 import { type FormEvent, type ReactElement, useEffect, useState } from "react";
 import type { RequestIdentity } from "../../api/config";
 import { useWorkspace } from "./useWorkspace";

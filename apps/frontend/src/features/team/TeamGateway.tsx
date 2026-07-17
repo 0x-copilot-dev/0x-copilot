@@ -10,7 +10,7 @@
 
 import { useEffect, useState, type ReactElement } from "react";
 
-import type { UserId } from "@enterprise-search/api-types";
+import type { UserId } from "@0x-copilot/api-types";
 
 import type { RequestIdentity } from "../../api/config";
 import { TeamDetailRoute } from "./TeamDetailRoute";

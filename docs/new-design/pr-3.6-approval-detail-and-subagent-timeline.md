@@ -455,7 +455,7 @@ These were considered and explicitly left for follow‑ups:
 
 ## 6 · References
 
-- Atlas design handoff bundle: `/tmp/design-fetch/extracted/enterprise-search/`
+- Atlas design handoff bundle: `/tmp/design-fetch/extracted/0x-copilot/`
   - `project/messages.jsx` — original approval card render with labeled rows + accent pill + footer note
   - `project/app.jsx` — buildScenario → Aurora subagents
   - `Design Doc.html` § Pages → Main app → Approval card / Agents tab

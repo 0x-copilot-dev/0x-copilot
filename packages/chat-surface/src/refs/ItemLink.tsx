@@ -27,7 +27,7 @@ import {
   type ReactElement,
 } from "react";
 
-import type { ItemKind, ItemRef } from "@enterprise-search/api-types";
+import type { ItemKind, ItemRef } from "@0x-copilot/api-types";
 
 import { useRouter } from "../providers/RouterProvider";
 import type { ArtifactRoute } from "../routing/router";

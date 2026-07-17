@@ -6,7 +6,7 @@
 // Pure presentation: design-system primitives only, no substrate
 // touchpoints. Same shape on every substrate.
 
-import { Badge, Card } from "@enterprise-search/design-system";
+import { Badge, Card } from "@0x-copilot/design-system";
 import type { ReactElement } from "react";
 
 export interface SourceSkeletonRowProps {

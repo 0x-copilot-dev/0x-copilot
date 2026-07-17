@@ -39,7 +39,7 @@ browser → upstream IdP (OAuth)
    ▼
 upstream IdP → <origin>/mcp/oauth/callback?state=…&code=…
    │
-   │   <EnterpriseSearchApp> useEffect fires
+   │   <CopilotApp> useEffect fires
    │   ├── validate state / code / error / error_description
    │   ├── completeMcpOAuthOnce(state, code, error, error_description)
    │   │     → GET /v1/mcp/oauth/callback?state=…&code=…

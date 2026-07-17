@@ -412,7 +412,7 @@ auth scopes                                                           unchanged
 - [x] **Phase 1: full pytest** — 809/809 ai‑backend tests pass.
 - [ ] **Phase 2: streaming_executor edit** — landed; needs ai‑backend test run + new isolation test.
 - [ ] **Phase 2: live sibling‑continuation walk‑through** in `make dev` — research fleet with one MCP auth interrupt; siblings finish; approval resolves; paused subagent resumes; final answer synthesized.
-- [ ] **Phase 3: api‑types diff** — clean `npm run typecheck --workspace @enterprise-search/api-types`.
+- [ ] **Phase 3: api‑types diff** — clean `npm run typecheck --workspace @0x-copilot/api-types`.
 - [ ] **Phase 3: backend tests** — new event types projected, persisted, scoped by run_id.
 - [ ] **Phase 4: FE typecheck + tests + build** — clean.
 - [ ] **Phase 4: live walk‑through** — fleet card row shows amber pause + clickable timeline.

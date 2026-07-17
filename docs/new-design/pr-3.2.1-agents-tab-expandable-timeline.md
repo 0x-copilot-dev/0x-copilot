@@ -254,7 +254,7 @@ The frontend type currently in `activityDataBuilders.ts` is the canonical shape;
 // apps/frontend/src/features/chat/components/workspace/useSubagentActivities.ts
 
 import { useMemo } from "react";
-import type { SubagentActivityRecord } from "@enterprise-search/api-types";
+import type { SubagentActivityRecord } from "@0x-copilot/api-types";
 import { useThreadRuntime } from "@assistant-ui/react"; // already a dep
 import {
   isToolCallPart,
@@ -367,7 +367,7 @@ The disclosure `<summary>` carries the duration meta that today lives in a sibli
 
 ### 2.5 UX walk‑through (cross‑references the design)
 
-Pulled from the prototype (`/tmp/design-fetch/extracted/enterprise-search/project/composer.jsx:233-265`, design's `AgentsPane`):
+Pulled from the prototype (`/tmp/design-fetch/extracted/0x-copilot/project/composer.jsx:233-265`, design's `AgentsPane`):
 
 **Closed (default).** Card shows:
 
@@ -555,10 +555,10 @@ package.json                                     0 deps added
 
 Before merging:
 
-- [ ] `npm run typecheck --workspace @enterprise-search/frontend` clean.
-- [ ] `npm run typecheck --workspace @enterprise-search/api-types` clean.
-- [ ] `npm run build --workspace @enterprise-search/frontend` clean; bundle delta ≤ 2 KB gz.
-- [ ] `npm run test --workspace @enterprise-search/frontend` clean; 4 new tests; existing tests untouched and green.
+- [ ] `npm run typecheck --workspace @0x-copilot/frontend` clean.
+- [ ] `npm run typecheck --workspace @0x-copilot/api-types` clean.
+- [ ] `npm run build --workspace @0x-copilot/frontend` clean; bundle delta ≤ 2 KB gz.
+- [ ] `npm run test --workspace @0x-copilot/frontend` clean; 4 new tests; existing tests untouched and green.
 - [ ] `make test` clean (cross‑service smoke unaffected).
 - [ ] Manual walk‑through `make dev`:
   - Run the launch‑announcement scenario; while subagents stream, open Agents tab; expand "Doc reader"; observe `search_notion` row appear without remounting the disclosure.
@@ -596,4 +596,4 @@ Tracked, but not in this PR:
 - [`apps/frontend/src/features/chat/components/workspace/AgentsTab.tsx`](../../apps/frontend/src/features/chat/components/workspace/AgentsTab.tsx) — the file we extend.
 - [`apps/frontend/src/features/chat/components/workspace/useSubagents.ts`](../../apps/frontend/src/features/chat/components/workspace/useSubagents.ts) — the seed‑+‑live entry hook from PR 1.5.
 - [`services/ai-backend/migrations/0001_initial_runtime_persistence.sql`](../../services/ai-backend/migrations/0001_initial_runtime_persistence.sql) — `runtime_async_tasks`, `runtime_subagent_results`, `runtime_tool_invocations`, `runtime_events` schemas.
-- Design prototype subagent reference: `enterprise-search/project/composer.jsx` (`AgentsPane`, ~lines 233–266) and `enterprise-search/project/messages.jsx` (`SubagentFleet`, ~lines 207–243) from the Anthropic Design handoff bundle.
+- Design prototype subagent reference: `0x-copilot/project/composer.jsx` (`AgentsPane`, ~lines 233–266) and `0x-copilot/project/messages.jsx` (`SubagentFleet`, ~lines 207–243) from the Anthropic Design handoff bundle.

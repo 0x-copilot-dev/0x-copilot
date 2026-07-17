@@ -24,7 +24,7 @@ import {
   TextInput,
   Toggle,
   classNames,
-} from "@enterprise-search/design-system";
+} from "@0x-copilot/design-system";
 
 // PRD §9.5.2 — the worker is the preemptive boundary. React renders are
 // synchronous, so a host setTimeout cannot interrupt a `while(true){}`

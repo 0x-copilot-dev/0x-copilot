@@ -12,7 +12,7 @@
 //   - SP-1 primitives only. Scope toggle reuses `<FilterTabs>` (the
 //     same generic the destination uses) — one tablist primitive
 //     across destinations (cross-audit §1.6).
-//   - Wire types from `@enterprise-search/api-types/memory` only.
+//   - Wire types from `@0x-copilot/api-types/memory` only.
 //   - No markdown preview here; the editor only collects raw markdown.
 //     The host can render `<MemoryDetailView>` side-by-side if it wants
 //     a live preview.
@@ -31,7 +31,7 @@ import type {
   MemoryKind,
   MemoryScope,
   UpdateMemoryRequest,
-} from "@enterprise-search/api-types";
+} from "@0x-copilot/api-types";
 
 import { FilterTabs, type FilterTabOption } from "../../shell/FilterTabs";
 

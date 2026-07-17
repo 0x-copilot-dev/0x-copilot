@@ -11,7 +11,7 @@
 // No new dep. The disclosure is `<details>` per PR 3.2.1; the timeline is
 // `SubagentActivityList` per PR 3.2.1; truncation comes from the adapter.
 
-import { Badge } from "@enterprise-search/design-system";
+import { Badge } from "@0x-copilot/design-system";
 import type { ReactElement } from "react";
 import { ActivityStatusIcon } from "../activity/ActivityStatusIcon";
 import { SubagentActivityList } from "../tools/SubagentActivityList";

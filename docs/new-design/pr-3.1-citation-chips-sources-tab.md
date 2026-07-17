@@ -405,7 +405,7 @@ Net new code: **FE ≈ 220, ai-backend ≈ 80, api-types ≈ 6**.
 - [ ] Chip CSS in `apps/frontend/src/styles.css` aligns with `--accent #d97757`, hover-accent, connector glyph slot via `data-connector` attribute.
 - [ ] No new `RuntimeApiEventType`. Pydantic schemas in `services/ai-backend/src/runtime_api/schemas/events.py` are unchanged.
 - [ ] No regression on PR 1.1 tests. New tests added for endpoint + archive merge + auto-open hook.
-- [ ] `npm run typecheck --workspace @enterprise-search/frontend` and `npm run build --workspace @enterprise-search/frontend` pass.
+- [ ] `npm run typecheck --workspace @0x-copilot/frontend` and `npm run build --workspace @0x-copilot/frontend` pass.
 - [ ] `services/ai-backend` full test suite passes; manifest matches lock; rollback round-trip green.
 - [ ] `make test` green.
 

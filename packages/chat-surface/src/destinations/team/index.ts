@@ -6,7 +6,7 @@
 // `<ItemLink kind="person" id=…>` resolves without forcing a circular
 // dependency.
 
-import type { UserId } from "@enterprise-search/api-types";
+import type { UserId } from "@0x-copilot/api-types";
 
 import {
   hasItemRefResolver,

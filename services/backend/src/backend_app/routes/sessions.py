@@ -10,7 +10,7 @@ Wire into the FastAPI app with ``register_session_routes(app, service)``.
 from __future__ import annotations
 
 
-from enterprise_service_contracts.scopes import RUNTIME_USE
+from copilot_service_contracts.scopes import RUNTIME_USE
 from fastapi import Depends, FastAPI, HTTPException, Query, Request, Response, status
 
 from backend_app.auth import BackendServiceAuthenticator

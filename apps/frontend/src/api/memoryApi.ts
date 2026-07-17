@@ -33,7 +33,7 @@ import type {
   MemoryStreamEnvelope,
   ProjectId,
   UpdateMemoryRequest,
-} from "@enterprise-search/api-types";
+} from "@0x-copilot/api-types";
 
 import type { RequestIdentity } from "./config";
 import { httpDelete, httpGet, httpPatchQuery, httpPostQuery } from "./http";

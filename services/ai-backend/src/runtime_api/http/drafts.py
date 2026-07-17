@@ -14,7 +14,7 @@ Every handler is a thin shim over :class:`~agent_runtime.api.draft_service.Draft
 from __future__ import annotations
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Request, status
-from enterprise_service_contracts.scopes import RUNTIME_USE
+from copilot_service_contracts.scopes import RUNTIME_USE
 
 from agent_runtime.api.constants import Keys
 from agent_runtime.api.draft_service import DraftService

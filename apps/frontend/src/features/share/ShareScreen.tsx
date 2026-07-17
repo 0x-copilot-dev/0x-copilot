@@ -27,7 +27,7 @@
 import { formatDateTime } from "../../utils/dateFormat";
 import { errorMessage } from "../../utils/errors";
 
-import { Badge, Button, Card } from "@enterprise-search/design-system";
+import { Badge, Button, Card } from "@0x-copilot/design-system";
 import { type ReactElement, useCallback, useEffect, useState } from "react";
 import "./share-screen.css";
 import type {
@@ -35,7 +35,7 @@ import type {
   Message,
   RecipientPreview,
   SharedConversationView,
-} from "@enterprise-search/api-types";
+} from "@0x-copilot/api-types";
 import {
   forkShare,
   getSharedConversation,

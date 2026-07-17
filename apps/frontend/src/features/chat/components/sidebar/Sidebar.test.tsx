@@ -10,7 +10,7 @@
 import { describe, expect, it, vi } from "vitest";
 import { render, screen } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
-import type { Conversation } from "@enterprise-search/api-types";
+import type { Conversation } from "@0x-copilot/api-types";
 
 const mockUseAuth = vi.fn(() => ({
   identity: {

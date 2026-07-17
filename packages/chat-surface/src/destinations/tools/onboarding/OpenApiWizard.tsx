@@ -14,7 +14,7 @@
 // supply `onFetchOpenApi`, `onTestCall`, `onSave` callbacks.
 //
 // SP-1: types map onto `CreateToolRequest` and `TestToolCallRequest` from
-// `@enterprise-search/api-types/tools`. We don't redeclare them.
+// `@0x-copilot/api-types/tools`. We don't redeclare them.
 
 import {
   useCallback,
@@ -24,7 +24,7 @@ import {
   type ReactElement,
 } from "react";
 
-import { Badge, Button, TextInput } from "@enterprise-search/design-system";
+import { Badge, Button, TextInput } from "@0x-copilot/design-system";
 import type {
   ConnectorId,
   CreateToolRequest,
@@ -32,7 +32,7 @@ import type {
   TestToolCallResponse,
   ToolKind,
   ToolScope,
-} from "@enterprise-search/api-types";
+} from "@0x-copilot/api-types";
 
 import { useStepMachine } from "./useStepMachine";
 import { WizardShell, type WizardStepDescriptor } from "./WizardShell";
@@ -87,7 +87,7 @@ export interface OpenApiWizardProps {
   ) => Promise<{ doc: OpenApiDoc } | { error: string }>;
   /**
    * Host-supplied test caller. The wizard passes a `TestToolCallRequest`
-   * (matching `@enterprise-search/api-types/tools`); host owns the POST.
+   * (matching `@0x-copilot/api-types/tools`); host owns the POST.
    */
   readonly onTestCall: (
     req: TestToolCallRequest,

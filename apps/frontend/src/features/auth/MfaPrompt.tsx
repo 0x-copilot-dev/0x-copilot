@@ -6,12 +6,7 @@
  * ``AuthContext.completeMfa()`` which refreshes the canonical session.
  */
 
-import {
-  Button,
-  Card,
-  Field,
-  TextInput,
-} from "@enterprise-search/design-system";
+import { Button, Card, Field, TextInput } from "@0x-copilot/design-system";
 import type { FormEvent, ReactElement } from "react";
 import { useEffect, useState } from "react";
 

@@ -7,7 +7,7 @@
 // reference lives in this file — the contract describes behavior, not
 // the underlying API.
 
-import type { ItemRef } from "@enterprise-search/api-types";
+import type { ItemRef } from "@0x-copilot/api-types";
 
 import type { ShellDestinationSlug } from "../shell/destinations";
 

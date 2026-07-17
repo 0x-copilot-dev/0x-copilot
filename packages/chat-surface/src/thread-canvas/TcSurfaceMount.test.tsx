@@ -2,7 +2,7 @@ import { createElement, type ReactElement } from "react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { render, screen, fireEvent } from "@testing-library/react";
 
-import type { Transport } from "@enterprise-search/chat-transport";
+import type { Transport } from "@0x-copilot/chat-transport";
 
 import {
   TIER3_SCHEME,
@@ -16,7 +16,7 @@ import {
   reduceTo,
   type PendingDiffHandle,
 } from "./TcSurfaceMount";
-import type { RuntimeEventEnvelope } from "@enterprise-search/api-types";
+import type { RuntimeEventEnvelope } from "@0x-copilot/api-types";
 
 const stubTransport = {} as unknown as Transport;
 

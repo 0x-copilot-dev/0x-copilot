@@ -29,7 +29,7 @@ import {
   type ReactNode,
 } from "react";
 
-import type { InboxItemId, ItemRef } from "@enterprise-search/api-types";
+import type { InboxItemId, ItemRef } from "@0x-copilot/api-types";
 
 import { ItemLink } from "../../refs/ItemLink";
 import { StatusPill, type StatusTone } from "../../shell/StatusPill";

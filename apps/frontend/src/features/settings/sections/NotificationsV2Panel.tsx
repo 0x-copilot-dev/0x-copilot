@@ -11,8 +11,8 @@ import type {
   NotificationEventKind,
   NotificationPreferenceEntry,
   NotificationPreferencesResponse,
-} from "@enterprise-search/api-types";
-import { Card, Field, Switch } from "@enterprise-search/design-system";
+} from "@0x-copilot/api-types";
+import { Card, Field, Switch } from "@0x-copilot/design-system";
 import type { ReactElement } from "react";
 import { useCallback, useEffect, useState } from "react";
 import {

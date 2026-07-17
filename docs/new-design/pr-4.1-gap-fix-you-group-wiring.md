@@ -19,7 +19,7 @@ Density + reduce-motion must apply across the whole app, not just the Settings p
 
 Three edits, all in `apps/frontend/src`:
 
-1. **`app/App.tsx` — lift hydration to the shell.** Call `useUserProfile()` + `useUserPreferences()` once inside `EnterpriseSearchApp`, then `useThemeSync(preferences.data)` so the `<html>` attributes apply on chat too. Thread `profile` + `preferences` into `SettingsScreen` as props.
+1. **`app/App.tsx` — lift hydration to the shell.** Call `useUserProfile()` + `useUserPreferences()` once inside `CopilotApp`, then `useThemeSync(preferences.data)` so the `<html>` attributes apply on chat too. Thread `profile` + `preferences` into `SettingsScreen` as props.
 2. **`features/settings/SettingsScreen.tsx` — surface the "You" group.** Add the group label + four section rail entries above "Workspace". Render the four section components in the content switch.
 3. **No backend, no migration, no api-types churn.** This is FE wiring only.
 
@@ -34,4 +34,4 @@ The Atlas design doc places "You" first (it's the user's own surface). The order
 - ✅ Set accent to `gold` in Appearance, refresh on the chat surface (not Settings) — the chat repaints in gold (server-side preference applied at app shell).
 - ✅ Set density to `compact` — the chat sidebar tightens (HTML attribute applied globally).
 - ✅ Set reduce-motion to `always` — pulse animations stop everywhere, not just in Settings.
-- ✅ `npm run build --workspace @enterprise-search/frontend` green; no new dep.
+- ✅ `npm run build --workspace @0x-copilot/frontend` green; no new dep.

@@ -9,7 +9,7 @@
  * matching the same behaviour as the per-conversation table.
  */
 
-import { Badge, Card } from "@enterprise-search/design-system";
+import { Badge, Card } from "@0x-copilot/design-system";
 import type { ReactElement } from "react";
 import { useMemo, useState } from "react";
 
@@ -20,7 +20,7 @@ import {
   type UsageRankBy,
   type UsageUserRow,
 } from "./usageWorkspaceData";
-import type { UsageOrgResponse } from "@enterprise-search/api-types";
+import type { UsageOrgResponse } from "@0x-copilot/api-types";
 
 export interface UsageTopUsersTableProps {
   orgUsage: UsageOrgResponse;

@@ -10,7 +10,7 @@
 //   - ToolsPanel       — left rail (kind / scope / status chips + search)
 //   - ToolCard         — single tool row in the grid
 
-import type { ToolId } from "@enterprise-search/api-types";
+import type { ToolId } from "@0x-copilot/api-types";
 
 import {
   hasItemRefResolver,

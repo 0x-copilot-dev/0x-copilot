@@ -608,7 +608,7 @@ Backfill: not required. Prior approvals have `chain_parent_approval_id IS NULL` 
 
 ## 11 · References
 
-- Atlas Design Doc (handoff bundle, [`/tmp/design-doc/enterprise-search/project/Design Doc.html`](file:///tmp/design-doc/enterprise-search/project/Design%20Doc.html)) — §"Flow — Launch (full agent)" step 5, §"Flow — Approval", §"Approvals as content, not modals" decision.
+- Atlas Design Doc (handoff bundle, [`/tmp/design-doc/0x-copilot/project/Design Doc.html`](file:///tmp/design-doc/0x-copilot/project/Design%20Doc.html)) — §"Flow — Launch (full agent)" step 5, §"Flow — Approval", §"Approvals as content, not modals" decision.
 - [`docs/new-design/00-plan.md`](../../../.claude/plans/fetch-this-design-file-resilient-pumpkin.md) — wave plan, PR sizing, sequencing.
 - Sibling PRDs: [`01-citations-live-registry.md`](01-citations-live-registry.md) (event/projection conventions), [`pr-1-2-per-chat-connector-scope.md`](pr-1-2-per-chat-connector-scope.md) (per‑conversation persistence patterns), [`pr-1.3-draft-artifact.md`](pr-1.3-draft-artifact.md) (draft‑send goes through approval, which can now forward).
 - LangChain Human‑in‑the‑Loop docs — the prebuilt middleware we already use, unchanged by this PR: <https://docs.langchain.com/oss/python/langchain/human-in-the-loop>

@@ -23,7 +23,7 @@ import os
 from collections.abc import Callable
 from typing import Any
 
-from enterprise_service_contracts.scopes import MFA_PENDING
+from copilot_service_contracts.scopes import MFA_PENDING
 from fastapi import HTTPException, Request, status
 
 from backend_app.auth import BackendServiceAuthenticator, ScopedIdentity

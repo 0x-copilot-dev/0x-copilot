@@ -21,7 +21,7 @@ import {
   type ReactNode,
 } from "react";
 
-import type { ProjectId } from "@enterprise-search/api-types";
+import type { ProjectId } from "@0x-copilot/api-types";
 
 import { ContextPanel } from "../../shell/ContextPanel";
 import { EmptyState } from "../../shell/EmptyState";

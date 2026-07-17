@@ -47,11 +47,11 @@ import {
   Field,
   TextInput,
   classNames,
-} from "@enterprise-search/design-system";
+} from "@0x-copilot/design-system";
 import type {
   AuthDiscoverResponse,
   WorkspaceCandidate,
-} from "@enterprise-search/api-types";
+} from "@0x-copilot/api-types";
 import type { FormEvent, ReactElement } from "react";
 import { useCallback, useEffect, useRef, useState } from "react";
 

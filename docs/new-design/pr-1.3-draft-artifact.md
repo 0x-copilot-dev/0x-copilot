@@ -12,7 +12,7 @@ PRD + Spec + Architecture for the Atlas "Draft" workspace‑pane artifact and th
 
 ### 1.1 Problem
 
-The Atlas design doc ([Main app → Workspace pane → "Draft"](../../enterprise-search-design-doc.html), [Flow — Launch step 4](#)) requires a first‑class **draft artifact**: when the agent produces a writable output (announcement, doc, message body, ticket fields), it must appear in the right‑rail Draft tab as an editable, citation‑bearing artifact, with a `Send to {connector}` button that routes through the existing approval gate. The artifact must update _live_ during streaming, persist across run boundaries, and follow the same RLS / encryption / audit invariants as other tenant content.
+The Atlas design doc ([Main app → Workspace pane → "Draft"](../../0x-copilot-design-doc.html), [Flow — Launch step 4](#)) requires a first‑class **draft artifact**: when the agent produces a writable output (announcement, doc, message body, ticket fields), it must appear in the right‑rail Draft tab as an editable, citation‑bearing artifact, with a `Send to {connector}` button that routes through the existing approval gate. The artifact must update _live_ during streaming, persist across run boundaries, and follow the same RLS / encryption / audit invariants as other tenant content.
 
 We have nothing today: no `/drafts` table, no `DRAFT_UPDATED` event, no FE Draft tab, no `produce_draft` semantics. But we _do_ have the right primitives — deepagents already ships `FilesystemMiddleware` with `write_file` / `edit_file` / `read_file` / `ls` / `glob` / `grep`, the runtime worker already projects tool calls into runtime events, and `CompositeBackend` already routes path prefixes to per‑prefix backends (we use it today for `/subagents/`).
 

@@ -6,10 +6,10 @@ module-import time:
 
 - **Desktop / 6A** — `apps/desktop/main/adapters/ast-allowlist.ts` derives
   `ALLOWED_IMPORTS` and `FORBIDDEN_GLOBALS` from this file (via
-  `@enterprise-search/api-types`'s `ADAPTER_ALLOWLIST`).
+  `@0x-copilot/api-types`'s `ADAPTER_ALLOWLIST`).
 - **AI backend / 6B** — `services/ai-backend/src/agent_runtime/capabilities/render_adapter_generator/capability.py`
   derives `_ForbiddenPattern.TOKENS` and `_ImportAllowlist.ALLOWED` from this
-  file (via `enterprise_service_contracts.adapter_allowlist.load_adapter_allowlist`).
+  file (via `copilot_service_contracts.adapter_allowlist.load_adapter_allowlist`).
 
 If the two runtimes disagree on what is allowed, agent-generated code can be
 admitted by one side and rejected by the other — a confusing failure mode

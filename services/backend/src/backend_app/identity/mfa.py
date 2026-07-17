@@ -184,7 +184,7 @@ class MfaService:
         org_id: str,
         user_id: str,
         display_name: str,
-        issuer: str = "Enterprise Search",
+        issuer: str = "0xCopilot",
         account_name: str | None = None,
     ) -> TotpEnrollResult:
         secret_b32 = pyotp.random_base32()

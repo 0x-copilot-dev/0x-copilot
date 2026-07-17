@@ -22,7 +22,7 @@ import type {
   HomeActivityRow,
   HomePayload,
   ItemRef,
-} from "@enterprise-search/api-types";
+} from "@0x-copilot/api-types";
 
 import { EmptyState } from "../../shell/EmptyState";
 

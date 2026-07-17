@@ -7,7 +7,7 @@
  * single owner of the wire calls.
  */
 
-import type { KeyValueStore } from "@enterprise-search/chat-surface";
+import type { KeyValueStore } from "@0x-copilot/chat-surface";
 
 import { PERSONA_SLUG_STORAGE_KEY } from "./storageKeys";
 

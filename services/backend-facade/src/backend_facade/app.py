@@ -5,7 +5,7 @@ from __future__ import annotations
 from collections.abc import AsyncIterator
 from typing import Literal
 
-from enterprise_service_contracts.headers import REQUEST_ID_HEADER
+from copilot_service_contracts.headers import REQUEST_ID_HEADER
 from fastapi import FastAPI, HTTPException, Query, Request, Response, status
 from fastapi.responses import StreamingResponse
 import httpx
@@ -104,7 +104,7 @@ def create_app(
     resolved_deployment = deployment or resolve_or_exit()
     log_profile(resolved_deployment)
     app = FastAPI(
-        title="Enterprise Search Backend Facade",
+        title="0xCopilot Backend Facade",
         lifespan=HttpClientPool.lifespan,
     )
     app.add_middleware(RequestContextMiddleware, access_log_emitter=emit_access_log)

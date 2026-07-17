@@ -10,7 +10,7 @@ import type {
   SiweNonceResponse,
   SiweSessionResponse,
   SiweVerifyRequest,
-} from "@enterprise-search/api-types";
+} from "@0x-copilot/api-types";
 
 import { httpJson } from "./http";
 

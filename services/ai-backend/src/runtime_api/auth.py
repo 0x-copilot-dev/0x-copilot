@@ -6,7 +6,7 @@ from dataclasses import dataclass
 import json
 import os
 
-from enterprise_service_contracts.headers import (
+from copilot_service_contracts.headers import (
     CONNECTOR_SCOPES_HEADER,
     ORG_HEADER,
     PERMISSION_SCOPES_HEADER,

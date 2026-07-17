@@ -1,4 +1,4 @@
-# @enterprise-search/desktop
+# @0x-copilot/desktop
 
 Atlas Electron desktop client. See
 [docs/plan/desktop/PRD.md](../../docs/plan/desktop/PRD.md) for the master
@@ -11,7 +11,7 @@ for the Phase 1-A shell scope.
 ```
 main/         Node — app lifecycle, BrowserWindow, app:// protocol, deep links
 preload/      Node + sandboxed DOM — contextBridge.exposeInMainWorld('bridge', ...)
-renderer/     Chromium — mounts <ChatShell /> from @enterprise-search/chat-surface
+renderer/     Chromium — mounts <ChatShell /> from @0x-copilot/chat-surface
 out/          esbuild output (main/, preload/, renderer/)
 dist/         electron-builder output (Phase 8 expands)
 ```
@@ -20,7 +20,7 @@ dist/         electron-builder output (Phase 8 expands)
 
 `package.json` deliberately **omits** `"type": "module"`. The build picks per-process:
 
-- **main** and **preload** compile to **CommonJS** — Node-shaped, `__dirname` available, Electron's main-process loader resolves `@enterprise-search/*` workspace deps without an ESM/CJS interop dance.
+- **main** and **preload** compile to **CommonJS** — Node-shaped, `__dirname` available, Electron's main-process loader resolves `@0x-copilot/*` workspace deps without an ESM/CJS interop dance.
 - **renderer** compiles to **ESM** via an esbuild bundle — browser-shaped, React 19 + chat-surface + chat-transport + surface-renderers bundled into one `out/renderer/bootstrap.js`.
 
 Two tsconfigs split the targets (`tsconfig.main.json` and `tsconfig.renderer.json`); `tsconfig.json` is the typecheck-only umbrella. This was validated in the Phase S spike — see [docs/plan/desktop/phase-0.5/S2-decision.md](../../docs/plan/desktop/phase-0.5/S2-decision.md).
@@ -28,11 +28,11 @@ Two tsconfigs split the targets (`tsconfig.main.json` and `tsconfig.renderer.jso
 ## Scripts
 
 ```bash
-npm run typecheck --workspace @enterprise-search/desktop
-npm run lint --workspace @enterprise-search/desktop
-npm run test --workspace @enterprise-search/desktop
-npm run build --workspace @enterprise-search/desktop
-npm run dev --workspace @enterprise-search/desktop     # launches the GUI
+npm run typecheck --workspace @0x-copilot/desktop
+npm run lint --workspace @0x-copilot/desktop
+npm run test --workspace @0x-copilot/desktop
+npm run build --workspace @0x-copilot/desktop
+npm run dev --workspace @0x-copilot/desktop     # launches the GUI
 ```
 
 `dev` prefixes the child command with `ELECTRON_RUN_AS_NODE=` (empty,
@@ -139,7 +139,7 @@ Dev-run recipe against a staged runtime:
 
 ```bash
 ATLAS_RUNTIME_DIR="$PWD/apps/desktop/resources" \
-  npm run dev --workspace @enterprise-search/desktop
+  npm run dev --workspace @0x-copilot/desktop
 ```
 
 ## Manual sanity check after launching

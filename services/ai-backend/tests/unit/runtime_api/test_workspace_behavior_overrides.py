@@ -26,7 +26,7 @@ from collections.abc import Iterator
 from typing import Any
 
 import pytest
-from enterprise_service_contracts.scopes import (
+from copilot_service_contracts.scopes import (
     ADMIN_RETENTION,
     ADMIN_USERS,
     RUNTIME_USE,

@@ -17,7 +17,7 @@
 
 import type { ReactElement } from "react";
 
-import type { HomeGreeting as HomeGreetingT } from "@enterprise-search/api-types";
+import type { HomeGreeting as HomeGreetingT } from "@0x-copilot/api-types";
 
 import { PageHeader } from "../../../shell/PageHeader";
 

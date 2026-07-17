@@ -7,8 +7,8 @@
 // that wiring lives in the workspace-admin surface and isn't part of
 // this panel.
 
-import type { ToolUsePolicyResponse } from "@enterprise-search/api-types";
-import { Card, Field, classNames } from "@enterprise-search/design-system";
+import type { ToolUsePolicyResponse } from "@0x-copilot/api-types";
+import { Card, Field, classNames } from "@0x-copilot/design-system";
 import type { ReactElement } from "react";
 import { useCallback, useEffect, useState } from "react";
 import { getMyToolUsePolicy, updateMyToolUsePolicy } from "../../../api/meApi";

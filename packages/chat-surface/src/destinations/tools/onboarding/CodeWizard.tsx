@@ -20,13 +20,13 @@ import {
   type ReactElement,
 } from "react";
 
-import { Button, TextInput } from "@enterprise-search/design-system";
+import { Button, TextInput } from "@0x-copilot/design-system";
 import type {
   CreateToolRequest,
   TestToolCallRequest,
   TestToolCallResponse,
   ToolScope,
-} from "@enterprise-search/api-types";
+} from "@0x-copilot/api-types";
 
 import { useStepMachine } from "./useStepMachine";
 import { WizardShell, type WizardStepDescriptor } from "./WizardShell";

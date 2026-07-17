@@ -420,9 +420,9 @@ package.json                                          0 deps
 
 ## 5 · Verification checklist
 
-- [ ] `npm run typecheck --workspace @enterprise-search/frontend` clean.
-- [ ] `npm run test --workspace @enterprise-search/frontend` clean; new tests pass; PR 3.2.1 tests still pass.
-- [ ] `npm run build --workspace @enterprise-search/frontend` clean; bundle delta ≤ +1 KB gz vs PR 3.2.1.
+- [ ] `npm run typecheck --workspace @0x-copilot/frontend` clean.
+- [ ] `npm run test --workspace @0x-copilot/frontend` clean; new tests pass; PR 3.2.1 tests still pass.
+- [ ] `npm run build --workspace @0x-copilot/frontend` clean; bundle delta ≤ +1 KB gz vs PR 3.2.1.
 - [ ] Manual `make dev`:
   - Single‑shot subagent (e.g. prime checker): in‑thread block now shows name + task + finding + meta + disclosure; pane card shows the same; expanding the disclosure (with no activities) reveals the truncated full result, **not** "No detailed activity was reported."
   - Multi‑subagent fleet (FY26 Q1 launch): each fleet child + each pane card uses the same `<SubagentCard>`. Activities expand to the timeline.
@@ -452,4 +452,4 @@ Tracked, not in this PR:
 - [`apps/frontend/src/features/chat/components/tools/SubagentActivityList.tsx`](../../apps/frontend/src/features/chat/components/tools/SubagentActivityList.tsx) — timeline primitive reused verbatim.
 - [`apps/frontend/src/features/chat/components/activity/ActivityCollapsible.tsx`](../../apps/frontend/src/features/chat/components/activity/ActivityCollapsible.tsx) — native `<details>` pattern.
 - [`apps/frontend/src/features/chat/utils/jsonUtils.ts:truncateText`](../../apps/frontend/src/features/chat/utils/jsonUtils.ts) — char‑level truncation helper used by the adapter.
-- Design prototype reference: `enterprise-search/project/composer.jsx` (`AgentsPane`, `Subagent` ~lines 233–266 / 280–315) and `enterprise-search/project/messages.jsx` (`SubagentFleet` ~lines 207–243).
+- Design prototype reference: `0x-copilot/project/composer.jsx` (`AgentsPane`, `Subagent` ~lines 233–266 / 280–315) and `0x-copilot/project/messages.jsx` (`SubagentFleet` ~lines 207–243).

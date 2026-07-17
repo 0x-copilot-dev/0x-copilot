@@ -7,7 +7,7 @@ for the substrate-port interfaces (`Transport`, `Router`, `KeyValueStore`,
 `PresenceSignal`, `SurfaceHost`). Today three of those (`Router`,
 `KeyValueStore`, `PresenceSignal`) live in their feature directories
 (`src/routing/`, `src/storage/`, `src/presence/`); `Transport` lives in a
-sibling package (`@enterprise-search/chat-transport`); `SurfaceHost` is not yet
+sibling package (`@0x-copilot/chat-transport`); `SurfaceHost` is not yet
 defined anywhere.
 
 Staff-engineer take: do not relocate the producers. Re-export from a thin
@@ -17,7 +17,7 @@ chat-transport `WebTransport`, tests). Moving them would churn imports across
 the package and the apps for no behaviour change, and would re-open boundary
 questions that the on-disk modules have already answered. A re-export facade
 gives the rest of Phase 0+ a single canonical import path
-(`@enterprise-search/chat-surface/ports`) without disturbing the producers.
+(`@0x-copilot/chat-surface/ports`) without disturbing the producers.
 
 `SurfaceHost` is the one new interface introduced in this phase. It is defined
 once, here, and is intentionally not consumed in MVP — it exists so Phase 4-a
@@ -39,7 +39,7 @@ talk to MCP via the host's `TcSurfaceMount`, not via this port (D28).
 **In scope** (files this agent owns):
 
 - `docs/plan/desktop/phase-0/0B-ports-facade.md` — this file.
-- `packages/chat-surface/src/ports/Transport.ts` — re-export from `@enterprise-search/chat-transport`.
+- `packages/chat-surface/src/ports/Transport.ts` — re-export from `@0x-copilot/chat-transport`.
 - `packages/chat-surface/src/ports/Router.ts` — re-export from `../routing/router`.
 - `packages/chat-surface/src/ports/KeyValueStore.ts` — re-export from `../storage/key-value-store`.
 - `packages/chat-surface/src/ports/PresenceSignal.ts` — re-export from `../presence/presence-signal`.
@@ -60,7 +60,7 @@ talk to MCP via the host's `TcSurfaceMount`, not via this port (D28).
 
 ## Functional requirements
 
-- [ ] FR-1 — `import { ... } from '@enterprise-search/chat-surface/ports'`
+- [ ] FR-1 — `import { ... } from '@0x-copilot/chat-surface/ports'`
       resolves all of: `Transport`, `Session`, `SseSubscribeOptions`,
       `SseSubscription`, `TransportCapabilities`, `TypedRequest`, `HttpMethod`,
       `QueryParamValue`, `Router`, `ArtifactRoute`, `NavigateOptions`,
@@ -81,7 +81,7 @@ talk to MCP via the host's `TcSurfaceMount`, not via this port (D28).
       optional `readonly payload?: unknown`. Both are minimal placeholders.
 - [ ] FR-4 — `packages/chat-surface/src/index.ts` re-exports the entire
       `ports/` barrel via a delimited `// === Phase 0-B ports facade ===` block,
-      so existing import paths (`@enterprise-search/chat-surface`) keep working
+      so existing import paths (`@0x-copilot/chat-surface`) keep working
       and any new code can prefer either the package root or the
       `…/ports` subpath.
 - [ ] FR-5 — Round-trip import test exists at
@@ -106,7 +106,7 @@ talk to MCP via the host's `TcSurfaceMount`, not via this port (D28).
 
 - `Transport`, `Session`, `SseSubscribeOptions`, `SseSubscription`,
   `TransportCapabilities`, `TypedRequest`, `HttpMethod`, `QueryParamValue`,
-  `UnauthorizedError` — from `@enterprise-search/chat-transport`
+  `UnauthorizedError` — from `@0x-copilot/chat-transport`
   (`packages/chat-transport/src/{transport.ts,types.ts}`).
 - `Router`, `ArtifactRoute`, `NavigateOptions` — from
   `packages/chat-surface/src/routing/router.ts`.
@@ -204,9 +204,9 @@ export interface SurfaceEvent {
 ## Done criteria
 
 - [ ] All FRs met
-- [ ] `npm run typecheck --workspace @enterprise-search/chat-surface` passes
-- [ ] `npm test --workspace @enterprise-search/chat-surface` passes
-- [ ] `npm run lint --workspace @enterprise-search/chat-surface` passes
+- [ ] `npm run typecheck --workspace @0x-copilot/chat-surface` passes
+- [ ] `npm test --workspace @0x-copilot/chat-surface` passes
+- [ ] `npm run lint --workspace @0x-copilot/chat-surface` passes
 - [ ] No imports outside scope
 - [ ] No bare browser primitives in `chat-surface/src/ports/**`
 - [ ] No new third-party dependency

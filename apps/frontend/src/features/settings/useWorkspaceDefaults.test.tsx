@@ -15,7 +15,7 @@ import { act, renderHook, waitFor } from "@testing-library/react";
 import type {
   UpdateWorkspaceDefaultsRequest,
   WorkspaceDefaultsResponse,
-} from "@enterprise-search/api-types";
+} from "@0x-copilot/api-types";
 
 const mockGet = vi.fn<() => Promise<WorkspaceDefaultsResponse>>();
 const mockPut =

@@ -1,6 +1,6 @@
 import { createContext, runInContext, Script } from "node:vm";
 
-import type { SaaSRendererAdapter } from "@enterprise-search/chat-surface";
+import type { SaaSRendererAdapter } from "@0x-copilot/chat-surface";
 
 export type SandboxCompileResult =
   | { readonly ok: true; readonly adapter: SaaSRendererAdapter }

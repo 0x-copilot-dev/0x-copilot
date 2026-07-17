@@ -55,7 +55,7 @@ def main() -> int:
 
     manifest = json.loads(manifest_path.read_text())
 
-    if manifest.get("schema") != "enterprise-search/deployment-manifest/v2":
+    if manifest.get("schema") != "0x-copilot/deployment-manifest/v2":
         print(
             f"FAIL: manifest schema is {manifest.get('schema')!r}, expected v2",
             file=sys.stderr,

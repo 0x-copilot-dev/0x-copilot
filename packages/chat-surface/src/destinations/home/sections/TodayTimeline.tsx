@@ -21,7 +21,7 @@
 
 import type { CSSProperties, ReactElement } from "react";
 
-import type { TimelineEntry } from "@enterprise-search/api-types";
+import type { TimelineEntry } from "@0x-copilot/api-types";
 
 import { ItemLink } from "../../../refs/ItemLink";
 import { StatusPill, type StatusTone } from "../../../shell/StatusPill";

@@ -3,7 +3,7 @@ import { describe, expect, it } from "vitest";
 import type {
   RuntimeApiEventType,
   RuntimeEventEnvelope,
-} from "@enterprise-search/api-types";
+} from "@0x-copilot/api-types";
 
 import { project, projectAt, selectors } from "./eventProjector";
 

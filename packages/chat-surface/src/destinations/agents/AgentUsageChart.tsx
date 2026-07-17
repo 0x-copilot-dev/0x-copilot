@@ -1,4 +1,4 @@
-import { Select } from "@enterprise-search/design-system";
+import { Select } from "@0x-copilot/design-system";
 import { useMemo, type CSSProperties, type ReactElement } from "react";
 
 /**

@@ -1,8 +1,8 @@
 {
-  "name": "@enterprise-search/desktop",
+  "name": "@0x-copilot/desktop",
   "version": "0.1.0",
   "private": true,
-  "description": "Electron desktop client for the Atlas / enterprise-search product.",
+  "description": "Electron desktop client for the Atlas / 0x-copilot product.",
   "main": "./out/main/index.js",
   "scripts": {
     "typecheck": "tsc -p tsconfig.json --noEmit",
@@ -17,10 +17,10 @@
     "clean": "rm -rf out dist"
   },
   "dependencies": {
-    "@enterprise-search/api-types": "0.1.0",
-    "@enterprise-search/chat-surface": "0.1.0",
-    "@enterprise-search/chat-transport": "0.1.0",
-    "@enterprise-search/surface-renderers": "0.1.0",
+    "@0x-copilot/api-types": "0.1.0",
+    "@0x-copilot/chat-surface": "0.1.0",
+    "@0x-copilot/chat-transport": "0.1.0",
+    "@0x-copilot/surface-renderers": "0.1.0",
     "react": "19.2.7",
     "react-dom": "19.2.7",
     "zod": "3.25.76"

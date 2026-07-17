@@ -397,7 +397,7 @@ The partial unique index in the DB allows re-inviting after revoke or accept.
 
 ### Scope catalog
 
-All scopes are constants in `packages/service-contracts/src/enterprise_service_contracts/scopes.py`. Both backend and ai-backend import this module — a typo fails at import time, not in production.
+All scopes are constants in `packages/service-contracts/src/copilot_service_contracts/scopes.py`. Both backend and ai-backend import this module — a typo fails at import time, not in production.
 
 | Scope                | Purpose                                                                  |
 | -------------------- | ------------------------------------------------------------------------ |
@@ -429,7 +429,7 @@ A session minted before MFA verify carries `permission_scopes=("mfa:pending",)`.
 ### Usage pattern
 
 ```python
-from enterprise_service_contracts.scopes import MCP_WRITE
+from copilot_service_contracts.scopes import MCP_WRITE
 from backend_app.identity.rbac import RequireScopes
 
 @app.post("/v1/mcp/servers", dependencies=[Depends(RequireScopes(MCP_WRITE))])

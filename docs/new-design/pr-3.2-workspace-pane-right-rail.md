@@ -504,7 +504,7 @@ We add **nothing from npm** in this PR.
 - [ ] `DetailsPanelHost` continues to mount for `/context`, `/usage`, `/sources` slash commands; both surfaces share the `SourcesPanel` body.
 - [ ] No new `runtime_event` type. Pydantic schemas are unchanged.
 - [ ] No new endpoint. Facade route table is unchanged (the pane composes existing PR 1.x endpoints).
-- [ ] `npm run typecheck --workspace @enterprise-search/frontend` and `npm run build --workspace @enterprise-search/frontend` pass.
+- [ ] `npm run typecheck --workspace @0x-copilot/frontend` and `npm run build --workspace @0x-copilot/frontend` pass.
 - [ ] All upstream PRs' tests still pass.
 - [ ] `make test` green.
 

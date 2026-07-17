@@ -7,10 +7,10 @@
 // dependency.
 //
 // Wire-type re-exports are forwarded from `_projects-stub.ts`; the
-// orchestrator rewires the stub to `@enterprise-search/api-types` at
+// orchestrator rewires the stub to `@0x-copilot/api-types` at
 // merge time.
 
-import type { ProjectId } from "@enterprise-search/api-types";
+import type { ProjectId } from "@0x-copilot/api-types";
 
 import {
   hasItemRefResolver,
@@ -127,10 +127,10 @@ export {
 } from "./archive-blocked-dialog";
 
 // Wire-type re-exports (forwarded from `_projects-stub.ts`; the
-// orchestrator rewires the stub to `@enterprise-search/api-types` at
+// orchestrator rewires the stub to `@0x-copilot/api-types` at
 // merge time — see `_projects-stub.ts` header).
 //
-// TODO(merge): rewire to "@enterprise-search/api-types"
+// TODO(merge): rewire to "@0x-copilot/api-types"
 export type {
   ProjectActivityCounts,
   ProjectColorHue,

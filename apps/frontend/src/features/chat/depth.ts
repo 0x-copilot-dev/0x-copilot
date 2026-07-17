@@ -1,4 +1,4 @@
-import type { ModelCatalogModel } from "@enterprise-search/api-types";
+import type { ModelCatalogModel } from "@0x-copilot/api-types";
 
 /**
  * Thinking depth is the user-facing handle for reasoning effort.

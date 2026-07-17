@@ -1,11 +1,11 @@
-import type { UpdateUserProfileRequest } from "@enterprise-search/api-types";
+import type { UpdateUserProfileRequest } from "@0x-copilot/api-types";
 import {
   Badge,
   Button,
   Card,
   Field,
   TextInput,
-} from "@enterprise-search/design-system";
+} from "@0x-copilot/design-system";
 import type { ChangeEvent, DragEvent, FormEvent, ReactElement } from "react";
 import { useEffect, useRef, useState } from "react";
 import type { UserProfileState } from "../../me/useUserProfile";

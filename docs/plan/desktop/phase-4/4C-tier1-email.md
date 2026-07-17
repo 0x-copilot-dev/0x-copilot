@@ -25,7 +25,7 @@ This locks the first tier-1 adapter against the frozen contract — proving the 
 - `packages/surface-renderers/src/email/EmailDiffOverlay.test.tsx` (REWRITE or DELETE)
 - `packages/surface-renderers/src/email/index.ts` (REWRITE — `registerEmailAdapter()` replaces `registerEmailSurface()`)
 - `packages/surface-renderers/src/index.ts` (MODIFY — re-export `registerEmailAdapter`; `registerAll()` calls it)
-- `packages/surface-renderers/eslint.config.js` (MODIFY — remove the `src/email/**` carve-out / TODO; ban `@enterprise-search/chat-transport` imports across surface-renderers)
+- `packages/surface-renderers/eslint.config.js` (MODIFY — remove the `src/email/**` carve-out / TODO; ban `@0x-copilot/chat-transport` imports across surface-renderers)
 
 **Out of scope** (do NOT touch):
 
@@ -49,7 +49,7 @@ This locks the first tier-1 adapter against the frozen contract — proving the 
   - `renderDiff` shows the PENDING block, the provenance pill, the streaming cursor when `streaming: true`, and the same composer chrome as `renderCurrent` would render around it.
   - Accessibility: every field has a semantic `<label htmlFor>` paired with the field's id; the form is keyboard-tabbable through To → Cc → Subject → Save draft → Send → Schedule; Approve / Reject are NOT in the document (host renders those). Use Testing Library's queryByRole / getByLabelText assertions, not just `data-testid`.
   - Registration: after `registerEmailAdapter()`, `resolveAdapter('email://draft-1')` returns the email adapter.
-- [x] FR-10: ESLint carve-out for `src/email/**` is removed AND the boundary now bans `@enterprise-search/chat-transport` imports across all of `src/**`. Phase 4-A's TODO comment is also removed; the deprecated `SurfaceRendererProps` import path no longer needs an exception.
+- [x] FR-10: ESLint carve-out for `src/email/**` is removed AND the boundary now bans `@0x-copilot/chat-transport` imports across all of `src/**`. Phase 4-A's TODO comment is also removed; the deprecated `SurfaceRendererProps` import path no longer needs an exception.
 
 ## Non-functional requirements
 
@@ -58,11 +58,11 @@ This locks the first tier-1 adapter against the frozen contract — proving the 
 - React functional components only. The adapter object itself is not a component; the JSX trees returned by `renderCurrent` and `renderDiff` are built from small private functional sub-components (`<EmailComposerShell>` etc.) inside `EmailRenderer.tsx`. No class components.
 - Comments: none by default per `packages/chat-surface` discipline. One short line is fine where a non-obvious trade-off exists (e.g. the dual-call site of `<EmailComposerShell>` in both render functions).
 - Tests in Vitest + React Testing Library. `data-testid` is acceptable in addition to (not instead of) role/label queries.
-- ESLint passes with the carve-out removed. `npm run lint --workspace @enterprise-search/surface-renderers` clean.
+- ESLint passes with the carve-out removed. `npm run lint --workspace @0x-copilot/surface-renderers` clean.
 
 ## Interfaces consumed
 
-- `SaaSRendererAdapter`, `registerAdapter`, `resolveAdapter`, `TcInlineDiff`, `InlineDiffState` from `@enterprise-search/chat-surface`.
+- `SaaSRendererAdapter`, `registerAdapter`, `resolveAdapter`, `TcInlineDiff`, `InlineDiffState` from `@0x-copilot/chat-surface`.
 - NO `Transport`, NO `SurfaceRendererProps`, NO `MockTransport`, NO `EMAIL_FIXTURE` — those belonged to the spike-prep flow and are dropped.
 - The PRD's "frozen contract" comments in `SaaSRendererAdapter.ts` and `SurfaceRegistry.ts` govern the public shape.
 
@@ -120,17 +120,17 @@ export function registerAll(): void; // calls registerEmailAdapter()
 ## Done criteria
 
 - [x] All FRs met
-- [x] `npm test --workspace @enterprise-search/surface-renderers` passes
-- [x] `npm test --workspace @enterprise-search/chat-surface` passes
-- [x] `npm run lint --workspace @enterprise-search/surface-renderers` passes with no carve-out
-- [x] `npm run typecheck --workspace @enterprise-search/surface-renderers` passes
-- [x] No imports of `@enterprise-search/chat-transport` anywhere under `packages/surface-renderers/src/`
+- [x] `npm test --workspace @0x-copilot/surface-renderers` passes
+- [x] `npm test --workspace @0x-copilot/chat-surface` passes
+- [x] `npm run lint --workspace @0x-copilot/surface-renderers` passes with no carve-out
+- [x] `npm run typecheck --workspace @0x-copilot/surface-renderers` passes
+- [x] No imports of `@0x-copilot/chat-transport` anywhere under `packages/surface-renderers/src/`
 - [x] No `Transport`, `fetch`, `window`, `document`, `localStorage`, `EventSource`, `useState`, `useEffect`, `useRef` inside `packages/surface-renderers/src/email/EmailRenderer.tsx`
 - [x] `packages/chat-surface/src/index.ts` UNCHANGED by this branch
 
 ## Notes for orchestrator review
 
-- The `EMAIL_FIXTURE` re-export from `@enterprise-search/chat-transport` was load-bearing for the spike-prep tests. The Phase 4-C tests construct local `EmailState` / `EmailDiff` objects inline. Net effect: surface-renderers no longer depends on chat-transport for runtime OR test code, which is what lets the carve-out die.
-- The `package.json` keeps `@enterprise-search/chat-transport` only if it's still needed elsewhere in surface-renderers. After this branch, it isn't — but I leave the `dependencies` entry alone for now because (a) Phase 4-D / 4-E / 4-F may import it for their own fixtures, and (b) removing it is a no-op for behavior. Phase 4 cleanup or a later boundary-tightening agent can drop it once all four tier-1 renderers have landed.
+- The `EMAIL_FIXTURE` re-export from `@0x-copilot/chat-transport` was load-bearing for the spike-prep tests. The Phase 4-C tests construct local `EmailState` / `EmailDiff` objects inline. Net effect: surface-renderers no longer depends on chat-transport for runtime OR test code, which is what lets the carve-out die.
+- The `package.json` keeps `@0x-copilot/chat-transport` only if it's still needed elsewhere in surface-renderers. After this branch, it isn't — but I leave the `dependencies` entry alone for now because (a) Phase 4-D / 4-E / 4-F may import it for their own fixtures, and (b) removing it is a no-op for behavior. Phase 4 cleanup or a later boundary-tightening agent can drop it once all four tier-1 renderers have landed.
 - The `desktop/renderer/bootstrap.tsx` comment referencing "EmailRenderer's `hasMounted` guard" is now stale (the guard is gone, the renderer no longer has effects). I leave it alone — Phase 5 or a later docs sweep can prune.
 - The 2E inline-diff fixtures already cover `streaming`/`pending`/`accepted`/`rejected` rendering for the `TcInlineDiff` primitive. The Phase 4-C `renderDiff` tests verify the adapter passes the right `state` and `provenance` through, not that the inline-diff card itself renders correctly — that's already covered.

@@ -4,7 +4,7 @@
 // tri-mode semantics (null vs []), allowlist chip toggling, save payload
 // shape, members slot, owner-only gating, dirty state, error handling.
 
-import type { ProjectId } from "@enterprise-search/api-types";
+import type { ProjectId } from "@0x-copilot/api-types";
 import { fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { describe, expect, it, vi } from "vitest";
 
@@ -15,7 +15,7 @@ import {
   type ProjectEditorValue,
 } from "./ProjectEditor";
 
-// TODO(merge): rewire to "@enterprise-search/api-types"
+// TODO(merge): rewire to "@0x-copilot/api-types"
 import type { ProjectColorHue, ProjectIconEmoji } from "./_projects-stub";
 
 const asProjectId = (s: string): ProjectId => s as unknown as ProjectId;

@@ -16,7 +16,7 @@ import {
   emptyCitationLinkRegistry,
   upsertCitationLink,
 } from "../../chatModel/citationLinkReducer";
-import type { CitationLink } from "@enterprise-search/api-types";
+import type { CitationLink } from "@0x-copilot/api-types";
 
 const RUN = "run_1";
 

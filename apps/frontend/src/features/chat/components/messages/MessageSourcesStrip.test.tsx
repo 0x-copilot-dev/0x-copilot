@@ -1,6 +1,6 @@
 import { describe, expect, it, vi } from "vitest";
 import { render, screen } from "@testing-library/react";
-import type { CitationSourceRef } from "@enterprise-search/api-types";
+import type { CitationSourceRef } from "@0x-copilot/api-types";
 import { MessageSourcesStrip } from "./MessageSourcesStrip";
 
 function citation(

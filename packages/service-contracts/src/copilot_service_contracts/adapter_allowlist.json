@@ -3,7 +3,7 @@
   "allowed_imports": {
     "react": ["createElement", "Fragment", "useState"],
     "react-dom": [],
-    "@enterprise-search/design-system": [
+    "@0x-copilot/design-system": [
       "Button",
       "Badge",
       "Card",

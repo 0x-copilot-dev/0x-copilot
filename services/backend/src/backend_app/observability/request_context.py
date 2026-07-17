@@ -16,7 +16,7 @@ from dataclasses import dataclass
 import time
 import uuid
 
-from enterprise_service_contracts.headers import (
+from copilot_service_contracts.headers import (
     ORG_HEADER,
     REQUEST_ID_HEADER,
     USER_HEADER,

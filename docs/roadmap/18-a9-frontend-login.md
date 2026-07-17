@@ -129,7 +129,7 @@ N/A directly. The frontend doesn't make tenant decisions — the backend does. T
 
 **Build:**
 
-- `npm run typecheck --workspace @enterprise-search/frontend` clean.
+- `npm run typecheck --workspace @0x-copilot/frontend` clean.
 - `npm run build` clean.
 
 ### 3.3 Compliance evidence produced

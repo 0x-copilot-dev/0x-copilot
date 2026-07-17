@@ -6,7 +6,7 @@
 
 import { useEffect, useState, type ReactElement } from "react";
 
-import type { MemoryItemId } from "@enterprise-search/api-types";
+import type { MemoryItemId } from "@0x-copilot/api-types";
 
 import type { RequestIdentity } from "../../api/config";
 import { MemoryDetailRoute } from "./MemoryDetailRoute";

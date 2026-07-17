@@ -24,7 +24,7 @@ from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
 from typing import Any
 
-from enterprise_service_contracts.auth_claims import (
+from copilot_service_contracts.auth_claims import (
     CLAIM_CONNECTOR_SCOPES,
     CLAIM_EXPIRES_AT,
     CLAIM_ORG_ID,

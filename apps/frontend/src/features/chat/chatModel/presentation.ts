@@ -1,7 +1,7 @@
 import type {
   RuntimeEventEnvelope,
   RuntimeEventPresentation,
-} from "@enterprise-search/api-types";
+} from "@0x-copilot/api-types";
 import { asRecord, stringValue } from "../utils/jsonUtils";
 import { argsTextFromRecord, hiddenToolArgKeys } from "./payloadHelpers";
 import { isToolCallPart, jsonArgs, payloadString } from "./recordHelpers";

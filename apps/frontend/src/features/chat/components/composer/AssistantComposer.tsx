@@ -2,14 +2,14 @@ import type {
   McpServer,
   ModelCatalogModel,
   Skill,
-} from "@enterprise-search/api-types";
+} from "@0x-copilot/api-types";
 import {
   Composer,
   type AttachmentAdapter as ChatSurfaceAttachmentAdapter,
   type ComposerHandle,
   type CompleteAttachment as ChatSurfaceCompleteAttachment,
   type PendingAttachment as ChatSurfacePendingAttachment,
-} from "@enterprise-search/chat-surface";
+} from "@0x-copilot/chat-surface";
 import {
   forwardRef,
   useEffect,
@@ -44,7 +44,7 @@ export type DetailsPanelKind = "context" | "usage";
 
 /**
  * Atlas composer. Wraps the single monorepo
- * `@enterprise-search/chat-surface` `<Composer>` with the Atlas-specific
+ * `@0x-copilot/chat-surface` `<Composer>` with the Atlas-specific
  * `aui-*`-classed bottom bar (plus-menu, connectors trigger, mic, model
  * pill, depth control, send/stop) plus the selected-skills top-bar
  * pills. The chat-surface Composer owns text state, attachments, and

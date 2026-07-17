@@ -16,8 +16,8 @@ import {
   Card,
   TextInput,
   classNames,
-} from "@enterprise-search/design-system";
-import type { Draft, DraftStatus } from "@enterprise-search/api-types";
+} from "@0x-copilot/design-system";
+import type { Draft, DraftStatus } from "@0x-copilot/api-types";
 import { useEffect, useState, type ReactElement } from "react";
 import { errorMessage } from "../../../../utils/errors";
 

@@ -14,7 +14,7 @@
 //     EmptyState / StatusPill. `<ItemLink>` for every cross-destination
 //     ref (created-by-agent, source chats). Direct `router.navigate(…)`
 //     from rows is forbidden (cross-audit §1.1 + §3.3).
-//   - Wire types from `@enterprise-search/api-types/memory` only — no
+//   - Wire types from `@0x-copilot/api-types/memory` only — no
 //     local-stub copy (the wire types already shipped on main via
 //     P12-A1).
 //   - `formatRelativeTime` from `../../util/time` is the canonical
@@ -37,7 +37,7 @@ import type {
   MemoryKind,
   MemoryScope,
   SectionResult,
-} from "@enterprise-search/api-types";
+} from "@0x-copilot/api-types";
 
 import { ItemLink } from "../../refs/ItemLink";
 import { DocList } from "../../shell/DocList";

@@ -7,7 +7,7 @@
 // substrate-agnostic means the same visual is used on both substrates
 // without re-implementing the lookup or preview portal.
 
-import type { CitationSourceRef } from "@enterprise-search/api-types";
+import type { CitationSourceRef } from "@0x-copilot/api-types";
 import type { AnchorHTMLAttributes, ReactElement } from "react";
 
 export interface CitationChipProps {

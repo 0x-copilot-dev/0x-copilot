@@ -12,13 +12,7 @@
 // we call the hook's `save()` and let the hook own the busy/error
 // surface.
 
-import {
-  Button,
-  Card,
-  Field,
-  Select,
-  Switch,
-} from "@enterprise-search/design-system";
+import { Button, Card, Field, Select, Switch } from "@0x-copilot/design-system";
 import type { ReactElement } from "react";
 import { useEffect, useState } from "react";
 

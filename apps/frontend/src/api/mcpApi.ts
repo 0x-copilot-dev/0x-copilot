@@ -7,7 +7,7 @@ import type {
   McpServer,
   McpServerListResponse,
   UpdateMcpServerRequest,
-} from "@enterprise-search/api-types";
+} from "@0x-copilot/api-types";
 import type { RequestIdentity } from "./config";
 import {
   httpDelete,

@@ -3,7 +3,7 @@ import type { CSSProperties, ReactElement } from "react";
 import {
   registerAdapter,
   type SaaSRendererAdapter,
-} from "@enterprise-search/chat-surface";
+} from "@0x-copilot/chat-surface";
 
 import { resolveColumnWindow } from "./_columns";
 import { SheetDiff as SheetDiffView } from "./SheetDiff";

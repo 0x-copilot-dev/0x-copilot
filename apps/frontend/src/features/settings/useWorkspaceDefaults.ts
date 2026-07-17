@@ -18,7 +18,7 @@ import { useCallback, useEffect, useState } from "react";
 import type {
   UpdateWorkspaceDefaultsRequest,
   WorkspaceDefaultsResponse,
-} from "@enterprise-search/api-types";
+} from "@0x-copilot/api-types";
 import { getWorkspaceDefaults, putWorkspaceDefaults } from "../../api/agentApi";
 import type { RequestIdentity } from "../../api/config";
 import { errorMessage } from "../../utils/errors";

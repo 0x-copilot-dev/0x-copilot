@@ -40,7 +40,7 @@ Today's sidebar:
 - The footer has a single "Settings" button. There is no user identity pill, no workspace switcher, no sign-out affordance.
 - There are **no global keyboard shortcuts**. ⌘N, ⌘K, ⌘\, and ⌘↩ are the four design-doc-mandated bindings; only the inline `⌘ Enter` in the assistant-ui composer responds today.
 
-The design doc ([`Design Doc.html` § Sidebar / § Chrome behavior](../../../tmp/design-doc/enterprise-search/project/Design%20Doc.html)) requires:
+The design doc ([`Design Doc.html` § Sidebar / § Chrome behavior](../../../tmp/design-doc/0x-copilot/project/Design%20Doc.html)) requires:
 
 - "Brand mark top-left + sidebar collapse toggle top-right." → already partially there (logo top-left, no top-right toggle in sidebar).
 - "New chat button — keyboard ⌘N." → exists but no shortcut binding.
@@ -530,14 +530,14 @@ If `approveTopmost()` returns `false` (no approvals registered), the keymap fire
 
 - [ ] `apps/frontend/src/features/chat/components/sidebar/` ships with `Sidebar.tsx`, `SidebarSearch.tsx`, `ConversationListGroups.tsx`, `ConversationRow.tsx`, `UserCard.tsx`, `WorkspacePicker.tsx`.
 - [ ] `apps/frontend/src/features/chat/utils/groupConversations.ts` and `filterConversations.ts` ship as pure modules with unit tests.
-- [ ] `apps/frontend/src/app/keymap.ts` exports a single `useKeymap()` hook + a small `KeymapProvider` mounted once at `EnterpriseSearchApp` root in `App.tsx`.
+- [ ] `apps/frontend/src/app/keymap.ts` exports a single `useKeymap()` hook + a small `KeymapProvider` mounted once at `CopilotApp` root in `App.tsx`.
 - [ ] The four bindings (`$mod+N`, `$mod+K`, `$mod+\\`, `$mod+Enter`) are registered, with the input-focus guard semantics specified in §2.4.
 - [ ] `apps/frontend/src/features/chat/approval/ApprovalFocusContext.tsx` is consumed by `ApprovalTool.tsx` (PR 1.4) — registration on mount/unmount, `approveTopmost` is exported.
 - [ ] `AssistantThreadList.tsx` body is replaced by `<Sidebar />`; existing tests adapt.
 - [ ] `GET /v1/me/workspaces` returns the expected shape; covered by backend + facade unit tests; proxied identity headers preserved.
 - [ ] No new event types, no migration, no SSE handshake change.
 - [ ] `tinykeys` added to `apps/frontend/package.json` dependencies; no other npm change.
-- [ ] `npm run typecheck --workspace @enterprise-search/frontend` and `npm run build --workspace @enterprise-search/frontend` pass.
+- [ ] `npm run typecheck --workspace @0x-copilot/frontend` and `npm run build --workspace @0x-copilot/frontend` pass.
 - [ ] `make test` green; ai-backend pytest unaffected; backend pytest covers `me_workspaces`.
 
 ---

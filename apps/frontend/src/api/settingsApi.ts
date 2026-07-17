@@ -24,7 +24,7 @@ import type {
   UpdateWorkspaceNotificationDefaultsRequest,
   WebhookSecurityDefaults,
   WorkspaceNotificationDefaults,
-} from "@enterprise-search/api-types";
+} from "@0x-copilot/api-types";
 
 import type { RequestIdentity } from "./config";
 import { httpGet, httpPatchQuery } from "./http";

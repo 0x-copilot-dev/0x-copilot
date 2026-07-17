@@ -1,4 +1,4 @@
-import { Menu } from "@enterprise-search/design-system";
+import { Menu } from "@0x-copilot/design-system";
 import { useEffect, useRef, useState, type ReactElement } from "react";
 import { listMyWorkspaces } from "../../../../api/meApi";
 import { useAuth } from "../../../auth/AuthContext";

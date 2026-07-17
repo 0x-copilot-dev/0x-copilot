@@ -18,7 +18,7 @@ import type {
   TimelineEntry,
   TodoId,
   WhatsNewSection,
-} from "@enterprise-search/api-types";
+} from "@0x-copilot/api-types";
 import { fireEvent, render, screen, within } from "@testing-library/react";
 import { describe, expect, it, vi } from "vitest";
 

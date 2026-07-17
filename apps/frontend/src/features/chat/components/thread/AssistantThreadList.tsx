@@ -1,4 +1,4 @@
-import type { Conversation } from "@enterprise-search/api-types";
+import type { Conversation } from "@0x-copilot/api-types";
 import type { ReactElement } from "react";
 import { Sidebar } from "../sidebar/Sidebar";
 

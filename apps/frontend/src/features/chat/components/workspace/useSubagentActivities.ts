@@ -14,7 +14,7 @@
 //
 // No new event variant. No new endpoint. No new persistence column.
 
-import type { SubagentEntry } from "@enterprise-search/api-types";
+import type { SubagentEntry } from "@0x-copilot/api-types";
 import { useMemo } from "react";
 import { isToolCallPart } from "../../chatModel/recordHelpers";
 import { normaliseLifecycleStatus } from "../../chatModel/subagentStatus";

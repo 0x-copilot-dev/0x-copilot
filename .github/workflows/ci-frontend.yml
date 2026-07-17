@@ -46,10 +46,10 @@ jobs:
 
       - name: Typecheck packages and build frontend
         run: |
-          npm run typecheck --workspace @enterprise-search/api-types
-          npm run typecheck --workspace @enterprise-search/design-system
-          npm run typecheck --workspace @enterprise-search/frontend
-          npm run build --workspace @enterprise-search/frontend
+          npm run typecheck --workspace @0x-copilot/api-types
+          npm run typecheck --workspace @0x-copilot/design-system
+          npm run typecheck --workspace @0x-copilot/frontend
+          npm run build --workspace @0x-copilot/frontend
 
       - name: Audit Node dependencies
         run: npm audit --audit-level=high

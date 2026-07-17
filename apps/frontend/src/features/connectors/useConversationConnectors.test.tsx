@@ -12,11 +12,11 @@
  * surface.
  */
 
-import type { Conversation } from "@enterprise-search/api-types";
+import type { Conversation } from "@0x-copilot/api-types";
 import {
   DocumentPresenceSignal,
   PresenceSignalProvider,
-} from "@enterprise-search/chat-surface";
+} from "@0x-copilot/chat-surface";
 import { act, renderHook, waitFor } from "@testing-library/react";
 import type { ReactNode } from "react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";

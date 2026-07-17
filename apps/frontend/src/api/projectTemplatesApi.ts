@@ -26,11 +26,11 @@
 // `packages/api-types/src/project-templates.ts` on main and this file is
 // the only consumer. The shapes mirror sub-PRD §7.2 verbatim.
 //
-// TODO(merge): once `@enterprise-search/api-types/src/project-templates.ts`
+// TODO(merge): once `@0x-copilot/api-types/src/project-templates.ts`
 // lands on main, delete the local type declarations and re-export from
-// `@enterprise-search/api-types`.
+// `@0x-copilot/api-types`.
 
-import type { ProjectId, TenantId, UserId } from "@enterprise-search/api-types";
+import type { ProjectId, TenantId, UserId } from "@0x-copilot/api-types";
 
 import type { RequestIdentity } from "./config";
 import { httpDelete, httpGet, httpPatchQuery, httpPostQuery } from "./http";

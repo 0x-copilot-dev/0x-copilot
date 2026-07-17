@@ -1,5 +1,5 @@
 // chat-surface Library adapter shape (transitional; orchestrator rewires
-// at merge to `@enterprise-search/api-types/library`).
+// at merge to `@0x-copilot/api-types/library`).
 //
 // Phase 7 has parallel wave-agents working off the same shape conventions
 // as the canonical library-prd.md §3 + §4.1:
@@ -13,7 +13,7 @@
 // so merge-time rewire is a pure import swap.
 //
 // Every import of this stub should be marked
-// `TODO(merge): rewire to "@enterprise-search/api-types"` so the
+// `TODO(merge): rewire to "@0x-copilot/api-types"` so the
 // orchestrator's rewrite script can find them.
 
 import type {
@@ -26,7 +26,7 @@ import type {
   RunId,
   TenantId,
   UserId,
-} from "@enterprise-search/api-types";
+} from "@0x-copilot/api-types";
 
 // ---- §4.1 Discriminators ---------------------------------------------------
 

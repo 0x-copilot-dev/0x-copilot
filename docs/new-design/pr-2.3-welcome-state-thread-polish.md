@@ -351,7 +351,7 @@ const greeting = useMemo(
 }
 ```
 
-Tokens (`--color-line-soft`, `--color-surface`, `--color-surface-2`, `--color-accent`, etc.) are already defined by `@enterprise-search/design-system/styles.css` per PR 0.1's expected alignment with the design's palette.
+Tokens (`--color-line-soft`, `--color-surface`, `--color-surface-2`, `--color-accent`, etc.) are already defined by `@0x-copilot/design-system/styles.css` per PR 0.1's expected alignment with the design's palette.
 
 ### 2.5 Streaming impact — explicitly **none**
 
@@ -582,7 +582,7 @@ Sarah                          ChatScreen                ThreadWelcome          
 - [ ] `apps/frontend/src/styles.css` adds the welcome and message styling rules; existing reduce-motion and streaming-cursor rules continue to apply.
 - [ ] Assistant messages render flush-left, no bubble, max-width ~70ch; user messages render right-aligned in a soft surface bubble with max-width ~60% / 60ch.
 - [ ] No new event types, no SSE handshake change, no new endpoints, no migration, no new dependency.
-- [ ] `npm run typecheck --workspace @enterprise-search/frontend` passes; `npm run build --workspace @enterprise-search/frontend` passes.
+- [ ] `npm run typecheck --workspace @0x-copilot/frontend` passes; `npm run build --workspace @0x-copilot/frontend` passes.
 - [ ] `make test` green; backend / ai-backend pytest unaffected.
 - [ ] Existing snapshot tests for `AssistantMessage` and `UserMessage` updated minimally; semantic assertions preserved.
 
@@ -596,7 +596,7 @@ Sarah                          ChatScreen                ThreadWelcome          
 - [`apps/frontend/src/features/chat/prompts/index.ts`](../../apps/frontend/src/features/chat/prompts/index.ts) — extended.
 - [`apps/frontend/src/features/chat/ChatScreen.tsx`](../../apps/frontend/src/features/chat/ChatScreen.tsx) — passes `Suggestions(CHAT_PROMPT_SUGGESTIONS)` to `useAui`; unchanged in this PR.
 - [`packages/design-system/src/index.tsx`](../../packages/design-system/src/index.tsx) — tokens consumed via CSS variables; no API touched.
-- [Design Doc (handoff)](../../../tmp/design-doc/enterprise-search/project/Design%20Doc.html) — § Welcome state, § Thread, § Decisions log ("Welcome state cut down to headline + 4 cards").
+- [Design Doc (handoff)](../../../tmp/design-doc/0x-copilot/project/Design%20Doc.html) — § Welcome state, § Thread, § Decisions log ("Welcome state cut down to headline + 4 cards").
 - [`docs/new-design/pr-2.1-topbar-chrome-thinking-depth.md`](pr-2.1-topbar-chrome-thinking-depth.md) — sibling PR; topbar title is hidden when the welcome is on screen.
 - [`docs/new-design/pr-2.2-sidebar-user-card-keymap.md`](pr-2.2-sidebar-user-card-keymap.md) — sibling PR; sidebar carries the brand mark, freeing the welcome of the LogoMark.
 - [WCAG 2.1 · Contrast (Minimum) 1.4.3](https://www.w3.org/WAI/WCAG21/Understanding/contrast-minimum.html) — eyebrow color contrast verification.

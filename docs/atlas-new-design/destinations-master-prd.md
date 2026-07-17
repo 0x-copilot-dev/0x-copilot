@@ -3,7 +3,7 @@
 **Status:** draft (2026-05-17)
 **Owner:** parth (orchestrator) — sub-PRDs delegated to per-destination agents
 **Companion doc:** [PRD.md](PRD.md) — the workspace shell + composer + thread canvas PRD. This document picks up where that one stops: the 9 non-chats destinations.
-**Design source of truth:** Claude Design handoff bundle at `/tmp/atlas-design/enterprise-search-template/` — `project/dest-*.jsx` files are the destination-specific designs. Master companion: `chats/chat1.md`.
+**Design source of truth:** Claude Design handoff bundle at `/tmp/atlas-design/0x-copilot-template/` — `project/dest-*.jsx` files are the destination-specific designs. Master companion: `chats/chat1.md`.
 
 ---
 
@@ -241,7 +241,7 @@ The subagent's first job in its phase is **to write the sub-PRD**, get it review
 
 **Reference designs:**
 
-- `/tmp/atlas-design/enterprise-search-template/project/dest-inbox.jsx`
+- `/tmp/atlas-design/0x-copilot-template/project/dest-inbox.jsx`
 - chat1.md line 313+ ("approval queue" is inline-in-surface, but cross-thread / cross-user notifications land in Inbox)
 
 **Screens:**
@@ -284,8 +284,8 @@ The subagent's first job in its phase is **to write the sub-PRD**, get it review
 
 **Reference designs:**
 
-- `/tmp/atlas-design/enterprise-search-template/project/todos.jsx`
-- `/tmp/atlas-design/enterprise-search-template/project/projects-todos.css`
+- `/tmp/atlas-design/0x-copilot-template/project/todos.jsx`
+- `/tmp/atlas-design/0x-copilot-template/project/projects-todos.css`
 - chat1.md mentions todos as one of the rail destinations.
 
 **Screens:**
@@ -327,7 +327,7 @@ The subagent's first job in its phase is **to write the sub-PRD**, get it review
 
 **Reference designs:**
 
-- `/tmp/atlas-design/enterprise-search-template/project/dest-tools.jsx` (no — wrong file)
+- `/tmp/atlas-design/0x-copilot-template/project/dest-tools.jsx` (no — wrong file)
 - chat1.md project model: starred projects show in rail collapse, projects have nested threads, projects own a color/icon.
 - `apps/frontend/src/features/chat/runtime/composer/` had a project context that's worth examining.
 
@@ -367,7 +367,7 @@ The subagent's first job in its phase is **to write the sub-PRD**, get it review
 
 **Reference designs:**
 
-- `/tmp/atlas-design/enterprise-search-template/project/dest-library.jsx`
+- `/tmp/atlas-design/0x-copilot-template/project/dest-library.jsx`
 - chat1.md mentions library quick-link in the command palette.
 
 **Screens:**
@@ -405,7 +405,7 @@ The subagent's first job in its phase is **to write the sub-PRD**, get it review
 
 **Reference designs:**
 
-- `/tmp/atlas-design/enterprise-search-template/project/dest-agents.jsx`
+- `/tmp/atlas-design/0x-copilot-template/project/dest-agents.jsx`
 - chat1.md line 184: subagents with collapsible thinking, tool calls, streaming bodies — that's runtime behavior; the destination is the _management_ surface for agents.
 
 **Screens:**
@@ -443,7 +443,7 @@ The subagent's first job in its phase is **to write the sub-PRD**, get it review
 
 **Reference designs:**
 
-- `/tmp/atlas-design/enterprise-search-template/project/dest-tools.jsx`
+- `/tmp/atlas-design/0x-copilot-template/project/dest-tools.jsx`
 - chat1.md mentions "Onboard an internal API" in the ⌘K palette.
 
 **Screens:**
@@ -482,7 +482,7 @@ The subagent's first job in its phase is **to write the sub-PRD**, get it review
 **Reference designs:**
 
 - chat1.md references connectors heavily (the chat composer's `ConnectorPopover` already exists).
-- `/tmp/atlas-design/enterprise-search-template/project/mcp-overlay.jsx` (MCP overlay is a related popover; connectors destination is the full management page).
+- `/tmp/atlas-design/0x-copilot-template/project/mcp-overlay.jsx` (MCP overlay is a related popover; connectors destination is the full management page).
 
 **Screens:**
 
@@ -518,7 +518,7 @@ The subagent's first job in its phase is **to write the sub-PRD**, get it review
 
 **Reference designs:**
 
-- `/tmp/atlas-design/enterprise-search-template/project/dest-misc.jsx` (Team is one of the views)
+- `/tmp/atlas-design/0x-copilot-template/project/dest-misc.jsx` (Team is one of the views)
 - chat1.md mentions presence stacks in the topbar.
 
 **Screens:**
@@ -555,7 +555,7 @@ The subagent's first job in its phase is **to write the sub-PRD**, get it review
 
 **Reference designs:**
 
-- `/tmp/atlas-design/enterprise-search-template/project/dest-misc.jsx` (Memory is here)
+- `/tmp/atlas-design/0x-copilot-template/project/dest-misc.jsx` (Memory is here)
 - chat1.md profile menu references "Memory & skills".
 
 **Screens:**
@@ -660,7 +660,7 @@ Required reading:
 - docs/atlas-new-design/destinations-master-prd.md §3 (enterprise
   checklist), §4 (shared primitives), §5.<n> (your destination)
 - The destination's sub-PRD: docs/atlas-new-design/destinations/<slug>-prd.md
-- Design references at /tmp/atlas-design/enterprise-search-template/
+- Design references at /tmp/atlas-design/0x-copilot-template/
 ```
 
 ---
@@ -718,7 +718,7 @@ These need a call from product (parth) before the dependent phase starts. Alread
 ## 11. References
 
 - [PRD.md](PRD.md) — shell + composer + thread canvas (the foundation this builds on)
-- `/tmp/atlas-design/enterprise-search-template/` — design source bundle
+- `/tmp/atlas-design/0x-copilot-template/` — design source bundle
 - [`apps/frontend/CLAUDE.md`](../../apps/frontend/CLAUDE.md) — frontend engineering rules
 - [`services/backend/CLAUDE.md`](../../services/backend/CLAUDE.md) — product persistence rules
 - [`services/backend-facade/CLAUDE.md`](../../services/backend-facade/CLAUDE.md) — facade rules

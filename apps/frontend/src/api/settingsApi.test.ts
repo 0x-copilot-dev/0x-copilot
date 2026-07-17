@@ -5,7 +5,7 @@ import type {
   UserId,
   WebhookSecurityDefaults,
   WorkspaceNotificationDefaults,
-} from "@enterprise-search/api-types";
+} from "@0x-copilot/api-types";
 
 import { configureAuthBearerProvider } from "./http";
 import {

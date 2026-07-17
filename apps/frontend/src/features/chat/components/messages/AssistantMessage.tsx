@@ -6,7 +6,7 @@ import {
   performanceMetricsFromMetadata,
 } from "../../utils/activityDataBuilders";
 import { useRunCitations } from "../citations/citationsContext";
-import { Reasoning } from "@enterprise-search/chat-surface";
+import { Reasoning } from "@0x-copilot/chat-surface";
 import { MarkdownText } from "../markdown/MarkdownText";
 import { ReasoningGroup } from "../markdown/ReasoningGroup";
 import { ApprovalTool } from "../tools/ApprovalTool";

@@ -28,7 +28,7 @@ from __future__ import annotations
 
 import pytest
 
-from enterprise_service_contracts.headers import (
+from copilot_service_contracts.headers import (
     ORG_HEADER,
     ROLES_HEADER,
     SERVICE_TOKEN_HEADER,

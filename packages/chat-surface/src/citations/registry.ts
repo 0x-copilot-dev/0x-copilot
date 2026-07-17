@@ -10,7 +10,7 @@
 // if individual `source_ingested` events are observed twice (SSE drops +
 // resume after `?after_sequence=N`).
 
-import type { CitationSourceRef } from "@enterprise-search/api-types";
+import type { CitationSourceRef } from "@0x-copilot/api-types";
 
 export type CitationRegistryByRun = ReadonlyMap<
   string,

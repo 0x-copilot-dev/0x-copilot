@@ -30,7 +30,7 @@ import {
   type RefObject,
 } from "react";
 
-import type { InboxItemId } from "@enterprise-search/api-types";
+import type { InboxItemId } from "@0x-copilot/api-types";
 
 // ===========================================================================
 // Breakpoint constant — cross-audit §9.2 binding decision

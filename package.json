@@ -1,5 +1,5 @@
 {
-  "name": "enterprise-search",
+  "name": "0x-copilot",
   "private": true,
   "workspaces": [
     "apps/*",

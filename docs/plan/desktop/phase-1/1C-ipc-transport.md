@@ -129,7 +129,7 @@ Staff-engineer cuts that shape this work:
 ## Functional requirements
 
 - [x] FR-1 — `IpcTransport` implements `Transport` from
-      `@enterprise-search/chat-transport` (the on-disk shape: synchronous
+      `@0x-copilot/chat-transport` (the on-disk shape: synchronous
       `subscribeServerSentEvents`, synchronous `getSession`, synchronous
       `capabilities`).
 - [x] FR-2 — `IpcTransport.request<T>(req)` calls
@@ -212,8 +212,8 @@ ipcMain, bridge, logger? })` registers four handlers:
 
 - `Transport`, `Session`, `SseSubscribeOptions`, `SseSubscription`,
   `TransportCapabilities`, `TypedRequest`, `QueryParamValue`,
-  `HttpMethod`, `UnauthorizedError` from `@enterprise-search/chat-transport`.
-- `MockTransport` from `@enterprise-search/chat-transport` (Phase 1
+  `HttpMethod`, `UnauthorizedError` from `@0x-copilot/chat-transport`.
+- `MockTransport` from `@0x-copilot/chat-transport` (Phase 1
   backing transport for `transport-bridge.ts`).
 - `ipcMain`, `IpcMainInvokeEvent`, `WebContents` types from `electron`
   (main process only).
@@ -330,14 +330,14 @@ export function registerIpcHandlers(deps: RegisterHandlersDeps): () => void;
 ## Done criteria
 
 - [x] All FRs met (FR-12 shipped as `TransportBridge` class; see note).
-- [x] `npm run typecheck --workspace @enterprise-search/chat-transport`
+- [x] `npm run typecheck --workspace @0x-copilot/chat-transport`
       passes.
-- [x] `npm run typecheck --workspace @enterprise-search/desktop` passes.
-- [x] `npm test --workspace @enterprise-search/chat-transport` passes
+- [x] `npm run typecheck --workspace @0x-copilot/desktop` passes.
+- [x] `npm test --workspace @0x-copilot/chat-transport` passes
       (existing tests + new `IpcTransport` suite — 13 cases).
-- [x] `npm test --workspace @enterprise-search/desktop` passes (new
+- [x] `npm test --workspace @0x-copilot/desktop` passes (new
       `handlers` + `TransportBridge` suites — 20 cases).
-- [x] `npm run lint --workspace @enterprise-search/desktop` passes (Phase
+- [x] `npm run lint --workspace @0x-copilot/desktop` passes (Phase
       0's ESLint config is unchanged; not edited).
 - [x] No imports outside scope.
 - [x] No bare browser primitives in `IpcTransport` (renderer-side code):

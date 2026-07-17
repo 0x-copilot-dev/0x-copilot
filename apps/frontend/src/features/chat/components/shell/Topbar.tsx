@@ -2,8 +2,8 @@ import {
   IconButton,
   StatusPill,
   type StatusTone,
-} from "@enterprise-search/design-system";
-import type { ModelCatalogModel } from "@enterprise-search/api-types";
+} from "@0x-copilot/design-system";
+import type { ModelCatalogModel } from "@0x-copilot/api-types";
 import {
   useEffect,
   useRef,

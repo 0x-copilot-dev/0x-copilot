@@ -25,7 +25,7 @@
 //      style on top above the 960px breakpoint.
 //
 // `_inbox-stub.ts` carries wire-types until P4-A1's api-types land.
-// Every import is marked `TODO(merge): rewire to "@enterprise-search/api-types"`.
+// Every import is marked `TODO(merge): rewire to "@0x-copilot/api-types"`.
 
 import {
   useCallback,
@@ -37,7 +37,7 @@ import {
   type ReactNode,
 } from "react";
 
-import type { InboxItemId, SectionResult } from "@enterprise-search/api-types";
+import type { InboxItemId, SectionResult } from "@0x-copilot/api-types";
 
 import { DocList } from "../../shell/DocList";
 import { EmptyState } from "../../shell/EmptyState";
@@ -51,7 +51,7 @@ import {
   type InboxLayoutMode,
 } from "./useInboxLayout";
 
-// TODO(merge): rewire to "@enterprise-search/api-types"
+// TODO(merge): rewire to "@0x-copilot/api-types"
 import {
   READ_LOOKBACK_MS,
   type InboxItem,
@@ -64,7 +64,7 @@ import {
   type InboxSystemOrigin,
 } from "./_inbox-stub";
 
-// TODO(merge): rewire to "@enterprise-search/api-types"
+// TODO(merge): rewire to "@0x-copilot/api-types"
 export type {
   InboxItem,
   InboxItemKind,

@@ -61,8 +61,8 @@ Sandbox execution itself (worker boundary, vm compilation, privileged-global str
 
 ## Interfaces consumed
 
-- `SaaSRendererAdapter`, `SaaSRendererAdapterMetadata`, `SaaSRendererAdapterOrigin`, `TIER3_SCHEME` from `@enterprise-search/chat-surface` (re-exported from `packages/chat-surface/src/surfaces/SaaSRendererAdapter.ts`).
-- `markBroken` from `@enterprise-search/chat-surface` — called by `markAdapterBroken` through the injected `registry` dep.
+- `SaaSRendererAdapter`, `SaaSRendererAdapterMetadata`, `SaaSRendererAdapterOrigin`, `TIER3_SCHEME` from `@0x-copilot/chat-surface` (re-exported from `packages/chat-surface/src/surfaces/SaaSRendererAdapter.ts`).
+- `markBroken` from `@0x-copilot/chat-surface` — called by `markAdapterBroken` through the injected `registry` dep.
 - `app.getPath('userData')` from `electron` — only resolved at call time inside the default `deps` factory so unit tests never load Electron.
 - 6A artifacts (consumed via narrow injectable ports; orchestrator wires the real imports at merge time):
   - `AstAllowlistChecker` (port) — `staticAnalyze` delegates here.
@@ -172,9 +172,9 @@ export function markAdapterBroken(
 ## Done criteria
 
 - [ ] All FRs met.
-- [ ] `npm test --workspace @enterprise-search/desktop` passes (baseline 36 tests + new tests, no regression).
-- [ ] `npm run typecheck --workspace @enterprise-search/desktop` passes.
-- [ ] `npm run lint --workspace @enterprise-search/desktop` passes.
+- [ ] `npm test --workspace @0x-copilot/desktop` passes (baseline 36 tests + new tests, no regression).
+- [ ] `npm run typecheck --workspace @0x-copilot/desktop` passes.
+- [ ] `npm run lint --workspace @0x-copilot/desktop` passes.
 - [ ] No new third-party dependency.
 - [ ] No imports outside scope (quality-gate dir + chat-surface adapter contract + node std lib + zod + react types).
 - [ ] No DOM globals in main-process code (ESLint enforces).

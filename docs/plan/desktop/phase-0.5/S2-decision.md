@@ -77,7 +77,7 @@ This factor on its own probably justifies Electron given tier-2 is in the 1.0 pr
 What we lose by picking Electron:
 
 - Free Cmd+P quick-open (we already plan to hand-roll Cmd+K palette per PRD §3.2 — ~150 LOC, exists in the prototype design)
-- Familiar keyboard shortcuts for VS Code users (but the design's intended user is not a developer — see [project-atlas-product-model](../../../.claude/projects/-Users-parthpahwa-Documents-work-enterprise-search/memory/project_atlas_product_model.md))
+- Familiar keyboard shortcuts for VS Code users (but the design's intended user is not a developer — see [project-atlas-product-model](../../../.claude/projects/-Users-parthpahwa-Documents-work-0x-copilot/memory/project_atlas_product_model.md))
 - Theming infrastructure (we ship a single Atlas dark theme; not a cost we'd otherwise pay)
 
 What we gain:

@@ -5,7 +5,7 @@
 // Clipboard API entirely; the caller's UX surfaces success/failure via
 // its own toast (per the ClipboardPort doc comment).
 
-import type { ClipboardPort } from "@enterprise-search/chat-surface";
+import type { ClipboardPort } from "@0x-copilot/chat-surface";
 
 export class WebClipboardPort implements ClipboardPort {
   async copyText(text: string): Promise<void> {

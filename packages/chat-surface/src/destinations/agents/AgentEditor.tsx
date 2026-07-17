@@ -42,7 +42,7 @@ import {
   type ReactNode,
 } from "react";
 
-import { StatusPill } from "@enterprise-search/design-system";
+import { StatusPill } from "@0x-copilot/design-system";
 
 import { Composer } from "../../composer/Composer";
 

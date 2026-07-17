@@ -29,7 +29,7 @@
 
 import { type CSSProperties, type ReactElement } from "react";
 
-import type { MemoryProposal } from "@enterprise-search/api-types";
+import type { MemoryProposal } from "@0x-copilot/api-types";
 
 import { ItemLink } from "../../refs/ItemLink";
 import { StatusPill } from "../../shell/StatusPill";

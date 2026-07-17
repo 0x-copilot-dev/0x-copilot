@@ -11,7 +11,7 @@ Five endpoints under ``/v1/agent``:
 
 from __future__ import annotations
 
-from enterprise_service_contracts.scopes import ADMIN_USERS
+from copilot_service_contracts.scopes import ADMIN_USERS
 from fastapi import APIRouter, HTTPException, Query, Request, status
 from fastapi.responses import Response
 

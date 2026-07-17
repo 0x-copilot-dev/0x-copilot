@@ -19,9 +19,7 @@ class _Args(BaseModel):
 class TestErrorSanitizerStripsInternals:
     def test_strips_unix_file_paths(self) -> None:
         msg = ErrorSanitizer.sanitize(
-            RuntimeError(
-                "boom at /Users/parthpahwa/Documents/work/enterprise-search/file.py"
-            )
+            RuntimeError("boom at /Users/parthpahwa/Documents/work/0x-copilot/file.py")
         )
         assert "/Users/" not in msg
         assert "[redacted]" in msg

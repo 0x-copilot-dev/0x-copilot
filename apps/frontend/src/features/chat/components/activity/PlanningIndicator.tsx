@@ -1,4 +1,4 @@
-import { classNames } from "@enterprise-search/design-system";
+import { classNames } from "@0x-copilot/design-system";
 import { useEffect, useRef, useState, type ReactElement } from "react";
 
 export type RunIndicator = {

@@ -26,7 +26,7 @@ import type {
   WebhookListResponse,
   WebhookRotateResponse,
   WebhookTestFireResponse,
-} from "@enterprise-search/api-types";
+} from "@0x-copilot/api-types";
 
 import type { RequestIdentity } from "./config";
 import { httpDelete, httpGet, httpPatchQuery, httpPostQuery } from "./http";

@@ -1,4 +1,4 @@
-import type { RuntimeEventEnvelope } from "@enterprise-search/api-types";
+import type { RuntimeEventEnvelope } from "@0x-copilot/api-types";
 import { asRecord, stringValue } from "../utils/jsonUtils";
 import { activityResultText } from "./largeArtifact";
 import {

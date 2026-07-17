@@ -1,6 +1,6 @@
 """HMAC hash-chain signing for tamper-evident audit logs."""
 
-from enterprise_audit_chain.signer import (
+from copilot_audit_chain.signer import (
     AuditChainRow,
     AuditChainSigner,
     ChainSignature,

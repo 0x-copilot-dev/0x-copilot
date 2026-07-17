@@ -173,9 +173,9 @@ path:'/v1/mcp/servers'})`. Affordance choice is derived from
   call `router.current()` or `router.subscribe(...)` (their content
   is route-agnostic).
 - `Skill`, `McpServer`, `McpAuthState` from
-  `@enterprise-search/api-types`. The `Run` view shape is destination-
+  `@0x-copilot/api-types`. The `Run` view shape is destination-
   local (see Open question 2).
-- Design-system primitives from `@enterprise-search/design-system`:
+- Design-system primitives from `@0x-copilot/design-system`:
   `Button`, `Badge`, `TextInput`, `Select`, `StatusPill`,
   `AppIcon`. CSS is loaded by the host app at root; destinations
   inherit it via the `ui-*` class names baked into the primitives.
@@ -218,7 +218,7 @@ components. The orchestrator owns the edit (do not modify
    wants to retune these.
 
 2. **`Run` view shape vs `RunStatus`.** The on-disk `RunStatus`
-   shape in `@enterprise-search/api-types` carries `run_id`,
+   shape in `@0x-copilot/api-types` carries `run_id`,
    `conversation_id`, `status`, `started_at`, `completed_at` and a
    `latest_sequence_no` — it does not carry `agent_name`, `model`,
    `tokens`, or `latency`, which are the columns the PRD lists for
@@ -265,10 +265,10 @@ components. The orchestrator owns the edit (do not modify
 ## Done criteria
 
 - All FRs met.
-- `npm run typecheck --workspace @enterprise-search/chat-surface`
+- `npm run typecheck --workspace @0x-copilot/chat-surface`
   passes.
-- `npm test --workspace @enterprise-search/chat-surface` passes.
-- `npm run lint --workspace @enterprise-search/chat-surface` passes.
+- `npm test --workspace @0x-copilot/chat-surface` passes.
+- `npm run lint --workspace @0x-copilot/chat-surface` passes.
 - No imports outside scope.
 - No bare browser primitives (`window` / `document` / `fetch` /
   `localStorage` / `EventSource`) anywhere in this scope — enforced

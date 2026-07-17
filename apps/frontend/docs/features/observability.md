@@ -18,7 +18,7 @@ Source: [`src/observability/otel.ts`](../../src/observability/otel.ts),
 
 `bootstrapTelemetry()` runs once from `src/main.tsx` and:
 
-1. Builds a `Resource` with `service.name=enterprise-search-frontend`,
+1. Builds a `Resource` with `service.name=0x-copilot-frontend`,
    `service.version=__BUILD_SHA__`, `deployment.environment=__DEPLOY_ENV__`.
 2. Wraps a `BatchSpanProcessor` in a `SafeAttributeSpanProcessor` (see below).
 3. Registers `DocumentLoadInstrumentation` and `FetchInstrumentation`

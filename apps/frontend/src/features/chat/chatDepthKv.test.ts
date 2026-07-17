@@ -1,4 +1,4 @@
-import type { KeyValueStore } from "@enterprise-search/chat-surface";
+import type { KeyValueStore } from "@0x-copilot/chat-surface";
 import { describe, expect, it } from "vitest";
 
 import {

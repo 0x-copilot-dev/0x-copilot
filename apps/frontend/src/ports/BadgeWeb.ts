@@ -9,10 +9,7 @@
 // Destinations call `setBadge(slug, count)` without checking the
 // substrate; we satisfy the contract by doing nothing.
 
-import type {
-  BadgePort,
-  ShellDestinationSlug,
-} from "@enterprise-search/chat-surface";
+import type { BadgePort, ShellDestinationSlug } from "@0x-copilot/chat-surface";
 
 export class WebBadgePort implements BadgePort {
   setBadge(_slug: ShellDestinationSlug, _count: number): void {

@@ -340,7 +340,7 @@ Single PR. No flag. Merge.
 
 Pre-merge:
 
-- `npm run typecheck --workspace @enterprise-search/api-types` — confirms no contract drift (none expected).
+- `npm run typecheck --workspace @0x-copilot/api-types` — confirms no contract drift (none expected).
 - Full facade test suite green.
 - QA flow reproducible via `python3 /tmp/qa_run_inspect.py` against `make dev` returns 204 for the DELETE step.
 

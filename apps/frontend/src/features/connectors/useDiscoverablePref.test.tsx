@@ -12,11 +12,11 @@
 import type {
   UpdateUserPreferencesRequest,
   UserPreferences,
-} from "@enterprise-search/api-types";
+} from "@0x-copilot/api-types";
 import {
   KeyValueStoreProvider,
   LocalStorageKeyValueStore,
-} from "@enterprise-search/chat-surface";
+} from "@0x-copilot/chat-surface";
 import { act, renderHook, waitFor } from "@testing-library/react";
 import type { ReactNode } from "react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";

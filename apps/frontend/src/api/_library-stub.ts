@@ -1,6 +1,6 @@
 // Local stub for the Phase 7 Library wire contract.
 //
-// The canonical types live in `@enterprise-search/api-types`
+// The canonical types live in `@0x-copilot/api-types`
 // (`packages/api-types/src/library.ts`), authored by the parallel
 // Phase 7 P7-A backend-types agents. This frontend wave (P7-C) runs in
 // parallel against the same sub-PRD spec and cannot import a type that
@@ -10,12 +10,12 @@
 // `LibraryFileId`, `LibraryPageId`, `LibraryDatasetId`, `LibraryItemId`
 // (and the cross-destination `ItemRef` / `ItemKind` union, `ProjectId`,
 // `TenantId`, `UserId`, `ConnectorId`, `ConversationId`, `RunId`) already
-// live in `@enterprise-search/api-types` — re-export from there so the
+// live in `@0x-copilot/api-types` — re-export from there so the
 // `<ItemLink>` registry stays a single source of truth even before the
 // rest of the Library contract merges.
 //
 // TODO(merge): delete this file. Replace every `_library-stub` import
-// with `@enterprise-search/api-types` once P7-A's
+// with `@0x-copilot/api-types` once P7-A's
 // `packages/api-types/src/library.ts` lands on main.
 
 import type {
@@ -32,7 +32,7 @@ import type {
   RunId,
   TenantId,
   UserId,
-} from "@enterprise-search/api-types";
+} from "@0x-copilot/api-types";
 
 export type {
   ConnectorId,

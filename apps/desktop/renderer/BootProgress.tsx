@@ -5,7 +5,7 @@ import {
   CHANNELS,
   type BootStatusPayload,
   type WindowBridge,
-} from "@enterprise-search/chat-transport";
+} from "@0x-copilot/chat-transport";
 
 export interface BootGateProps {
   readonly bridge: WindowBridge;

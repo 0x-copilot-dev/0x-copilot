@@ -1,5 +1,5 @@
 // chat-surface Projects adapter shape (transitional; orchestrator rewires
-// at merge to `@enterprise-search/api-types/projects`).
+// at merge to `@0x-copilot/api-types/projects`).
 //
 // Phase 6 has parallel wave-agents working off the same shape conventions
 // as the canonical projects-prd.md §3 + §4.1:
@@ -14,10 +14,10 @@
 // site so merge-time rewire is a pure import swap.
 //
 // Every import of this stub should be marked
-// `TODO(merge): rewire to "@enterprise-search/api-types"` so the
+// `TODO(merge): rewire to "@0x-copilot/api-types"` so the
 // orchestrator's rewrite script can find them.
 
-import type { ProjectId, TenantId, UserId } from "@enterprise-search/api-types";
+import type { ProjectId, TenantId, UserId } from "@0x-copilot/api-types";
 
 // ---- §4.1 enums -----------------------------------------------------------
 

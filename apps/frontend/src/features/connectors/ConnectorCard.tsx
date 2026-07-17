@@ -10,8 +10,8 @@
 // ``isAuthenticated(server.auth_state)`` so unauthenticated rows never
 // reach this component.
 
-import { AppIcon, Switch } from "@enterprise-search/design-system";
-import type { McpServer } from "@enterprise-search/api-types";
+import { AppIcon, Switch } from "@0x-copilot/design-system";
+import type { McpServer } from "@0x-copilot/api-types";
 import { type ReactElement, useState } from "react";
 import { authStateDisplay } from "./authStateDisplay";
 import type { ConnectorState } from "./useConnectors";

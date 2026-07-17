@@ -1,4 +1,4 @@
-import { IconButton } from "@enterprise-search/design-system";
+import { IconButton } from "@0x-copilot/design-system";
 import type { ReactElement } from "react";
 
 export interface UsageMeterProps {

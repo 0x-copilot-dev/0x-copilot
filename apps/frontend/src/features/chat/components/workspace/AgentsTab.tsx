@@ -17,8 +17,8 @@
 // shared `<SubagentCard>` primitive. The pane composes the narrow
 // timeline variant on top of the in-thread base styling.
 
-import { classNames } from "@enterprise-search/design-system";
-import type { SubagentEntry } from "@enterprise-search/api-types";
+import { classNames } from "@0x-copilot/design-system";
+import type { SubagentEntry } from "@0x-copilot/api-types";
 import { useEffect, useRef, type ReactElement } from "react";
 
 import {
@@ -26,7 +26,7 @@ import {
   subagentsByRecency,
   type SubagentSnapshotMap,
 } from "../../chatModel/subagentReducer";
-import { scrollChatToEvent } from "@enterprise-search/chat-surface";
+import { scrollChatToEvent } from "@0x-copilot/chat-surface";
 import { SubagentCard } from "../subagents/SubagentCard";
 import { subagentCardFromEntry } from "../subagents/subagentCardViewModel";
 import type {

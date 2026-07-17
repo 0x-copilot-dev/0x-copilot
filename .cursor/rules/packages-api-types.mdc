@@ -10,4 +10,4 @@ alwaysApply: false
 - Keep this package free of business logic, fetch wrappers, route ownership, and UI view models.
 - Mirror public server contracts from `services/backend` and `services/ai-backend`; do not model `/internal/v1/*` here.
 - Treat enum removals, required-field additions, and response field removals as breaking changes that need a migration note.
-- Run `npm run typecheck --workspace @enterprise-search/api-types` and frontend typecheck when practical.
+- Run `npm run typecheck --workspace @0x-copilot/api-types` and frontend typecheck when practical.

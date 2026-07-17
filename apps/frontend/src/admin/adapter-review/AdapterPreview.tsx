@@ -23,7 +23,7 @@
 import type { ReactElement } from "react";
 import { useEffect, useRef, useState } from "react";
 
-import { Badge, Card } from "@enterprise-search/design-system";
+import { Badge, Card } from "@0x-copilot/design-system";
 
 import type { SyntheticState } from "./SyntheticStateFactory";
 

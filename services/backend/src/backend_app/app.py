@@ -5,7 +5,7 @@ from __future__ import annotations
 import os
 from contextlib import asynccontextmanager
 
-from enterprise_service_contracts.scopes import (
+from copilot_service_contracts.scopes import (
     ADMIN_AUDIT_EXPORT,
     CONNECTORS_AUTH,
     MCP_READ,
@@ -472,7 +472,7 @@ def create_app(
         TelemetryBootstrap.configure()
     resolved_deployment = deployment or resolve_or_exit()
     log_profile(resolved_deployment)
-    app = FastAPI(title="Enterprise Search Backend", lifespan=_lifespan)
+    app = FastAPI(title="0xCopilot Backend", lifespan=_lifespan)
     app.add_middleware(RequestContextMiddleware, access_log_emitter=emit_access_log)
     if configure_telemetry_on_create:
         TelemetryBootstrap.instrument_fastapi(app)

@@ -6,7 +6,7 @@
 // usage chart embedding is PR 4.5's job — until then the panel surfaces
 // the seats, plan card, and a placeholder for the chart slot.
 
-import { Badge, Button, Card } from "@enterprise-search/design-system";
+import { Badge, Button, Card } from "@0x-copilot/design-system";
 import type { ReactElement } from "react";
 import type { RequestIdentity } from "../../api/config";
 import { useBilling } from "./useWorkspace";

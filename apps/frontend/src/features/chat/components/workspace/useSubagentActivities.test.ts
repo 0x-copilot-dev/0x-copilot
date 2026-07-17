@@ -7,7 +7,7 @@
 
 import { describe, expect, it } from "vitest";
 import { renderHook } from "@testing-library/react";
-import type { RuntimeEventEnvelope } from "@enterprise-search/api-types";
+import type { RuntimeEventEnvelope } from "@0x-copilot/api-types";
 import { applyRuntimeEvent, type ChatItem } from "../../chatModel";
 import {
   collectSubagentHistory,

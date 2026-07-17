@@ -1,8 +1,8 @@
 import type {
   Conversation,
   ConversationConnectorScopes,
-} from "@enterprise-search/api-types";
-import { usePresenceSignal } from "@enterprise-search/chat-surface";
+} from "@0x-copilot/api-types";
+import { usePresenceSignal } from "@0x-copilot/chat-surface";
 import { useCallback, useEffect, useRef, useState } from "react";
 
 import {

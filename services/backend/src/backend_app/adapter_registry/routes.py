@@ -7,7 +7,7 @@ The facade re-exposes the app-facing subset under ``/v1/adapter_registry``
 
 from __future__ import annotations
 
-from enterprise_service_contracts.scopes import ADMIN_AUDIT_EXPORT, RUNTIME_USE
+from copilot_service_contracts.scopes import ADMIN_AUDIT_EXPORT, RUNTIME_USE
 from fastapi import (
     Depends,
     FastAPI,

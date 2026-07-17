@@ -50,13 +50,13 @@ jobs:
       matrix:
         include:
           - dockerfile: services/backend/Dockerfile
-            image_name: enterprise-search-backend
+            image_name: 0x-copilot-backend
           - dockerfile: services/backend-facade/Dockerfile
-            image_name: enterprise-search-backend-facade
+            image_name: 0x-copilot-backend-facade
           - dockerfile: services/ai-backend/Dockerfile
-            image_name: enterprise-search-ai-backend
+            image_name: 0x-copilot-ai-backend
           - dockerfile: apps/frontend/Dockerfile
-            image_name: enterprise-search-frontend
+            image_name: 0x-copilot-frontend
     steps:
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
 
@@ -287,7 +287,7 @@ jobs:
           oidc_issuer = "https://token.actions.githubusercontent.com"
 
           manifest = {
-              "schema": "enterprise-search/deployment-manifest/v2",
+              "schema": "0x-copilot/deployment-manifest/v2",
               "git_sha": commit,
               "workflow_run_id": run_id,
               "workflow_run_url": f"{server}/{repo}/actions/runs/{run_id}",

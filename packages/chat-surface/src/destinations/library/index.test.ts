@@ -2,7 +2,7 @@ import type {
   LibraryDatasetId,
   LibraryFileId,
   LibraryPageId,
-} from "@enterprise-search/api-types";
+} from "@0x-copilot/api-types";
 import { describe, expect, it } from "vitest";
 
 import { hasItemRefResolver, resolveItemRef } from "../../refs/registry";

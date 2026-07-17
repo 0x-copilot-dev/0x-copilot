@@ -13,8 +13,8 @@
 // slot, and double-clicks on Re-authenticate don't fire two OAuth
 // redirects.
 
-import { AppIcon, Badge, Switch } from "@enterprise-search/design-system";
-import type { McpServer } from "@enterprise-search/api-types";
+import { AppIcon, Badge, Switch } from "@0x-copilot/design-system";
+import type { McpServer } from "@0x-copilot/api-types";
 import { type ReactElement, useState } from "react";
 import { ConfirmDialog } from "./ConfirmDialog";
 import { authStateDisplay, isAuthenticated } from "./authStateDisplay";

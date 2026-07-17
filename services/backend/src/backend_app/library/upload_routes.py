@@ -40,7 +40,7 @@ from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from typing import Literal, Protocol
 
-from enterprise_service_contracts.scopes import LIBRARY_READ, LIBRARY_WRITE
+from copilot_service_contracts.scopes import LIBRARY_READ, LIBRARY_WRITE
 from fastapi import (
     Depends,
     FastAPI,

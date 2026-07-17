@@ -3,7 +3,7 @@
 // Phase 9 rewrite (sub-PRD home-prd.md §3.1 / §3.2). The Phase 2 rich
 // section vocabulary (PinnedChat / RecentRun / FavoriteTool / TodoSummary
 // / MeetingSummary / StarredProject) is retired in this destination.
-// Wire-types are sourced directly from `@enterprise-search/api-types`
+// Wire-types are sourced directly from `@0x-copilot/api-types`
 // (no per-destination stub) so contract drift cannot creep in.
 //
 // Per cross-audit §1.1 + §3.3, each destination registers its kind on

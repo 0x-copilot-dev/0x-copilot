@@ -1,4 +1,4 @@
-import type { Conversation } from "@enterprise-search/api-types";
+import type { Conversation } from "@0x-copilot/api-types";
 import { describe, expect, it } from "vitest";
 import { filterConversations } from "./filterConversations";
 

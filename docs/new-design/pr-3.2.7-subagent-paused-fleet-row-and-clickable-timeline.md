@@ -46,7 +46,7 @@ Three observed failures with parallel-fleet runs once Phase 3 lands and the data
 3. **Click-to-jump from paused row.** A "Review approval →" affordance appears on paused rows when the row's `source_event_id` matches a known approval / auth / question card on the main thread. Clicking it scrolls to and momentarily highlights the gating card. Reuses the existing `scrollChatToCitation` pattern from PR 3.7.x.
 4. **Keyboard + screen-reader parity.** The expandable row is `role="button" tabindex="0"`; the inline timeline is announced via `aria-expanded`. The paused chip has `aria-label="Paused, waiting on approval"`. Color is supplemental, never load-bearing.
 5. **No layout shift.** Inline timeline expansion uses CSS `grid-template-rows: auto 0fr`/`auto 1fr` per the existing PR 3.2.1 pattern. The fleet card's height grows; surrounding chat content reflows once.
-6. **Compose, don't fork.** Reuse `<SubagentActivityList>` for the inline timeline (same component used by `<SubagentCard>`'s disclosure). Reuse `tone="warning"` from `@enterprise-search/design-system` for the paused chip. No new shared primitives.
+6. **Compose, don't fork.** Reuse `<SubagentActivityList>` for the inline timeline (same component used by `<SubagentCard>`'s disclosure). Reuse `tone="warning"` from `@0x-copilot/design-system` for the paused chip. No new shared primitives.
 7. **Cheap to roll back.** The new disclosure state is local to `<FleetSubagentRow>` (a single `useState<boolean>`); ripping the click-to-expand reverts to the PR 3.2.4 compact row in one line.
 
 ### 1.3 Non-goals
@@ -75,8 +75,8 @@ Three observed failures with parallel-fleet runs once Phase 3 lands and the data
 | AC-10 | Pane Agents tab card surfaces a "Review approval →" link when the underlying entry is paused, mirroring the row affordance. Clicking jumps the chat scroll using `scrollChatToCitation` (or an analogous approval-anchored helper).                             | `AgentsTab.test.tsx::pane_card_jump_to_approval_when_paused`.                       |
 | AC-11 | Visual + axe checks pass:<br>• Paused chip contrast ≥ 4.5:1 against row background.<br>• Click target ≥ 32×32px.<br>• `aria-expanded` reflects state.<br>• Indicator glyph has `aria-hidden`; semantic state lives on the chip + row data attribute.            | `axe-core` snapshot in `FleetSubagentRow.test.tsx`; visual review against design.   |
 | AC-12 | Reducer + visual integration: an in-thread fleet card that receives `SUBAGENT_PAUSED` flips one row to paused without re-render of siblings (React keys remain stable). After `SUBAGENT_RESUMED`, the row reverts to running chrome with no flicker.            | New integration test `SubagentFleetTool.integration.test.tsx::pause_then_resume`.   |
-| AC-13 | Existing tests preserved: `FleetSubagentRow.test.tsx` cases that asserted PR 3.2.4 behavior still pass (running chrome, terminal status word, formatting). `SubagentCard.test.tsx` cases for non-paused states unchanged.                                       | Full FE suite: `npm test --workspace @enterprise-search/frontend`.                  |
-| AC-14 | Build + typecheck clean: `npm run typecheck --workspace @enterprise-search/frontend` and `npm run build --workspace @enterprise-search/frontend`.                                                                                                               | CI.                                                                                 |
+| AC-13 | Existing tests preserved: `FleetSubagentRow.test.tsx` cases that asserted PR 3.2.4 behavior still pass (running chrome, terminal status word, formatting). `SubagentCard.test.tsx` cases for non-paused states unchanged.                                       | Full FE suite: `npm test --workspace @0x-copilot/frontend`.                         |
+| AC-14 | Build + typecheck clean: `npm run typecheck --workspace @0x-copilot/frontend` and `npm run build --workspace @0x-copilot/frontend`.                                                                                                                             | CI.                                                                                 |
 
 ### 1.5 Risks
 
@@ -439,10 +439,10 @@ The approval / auth / ask-a-question card components already render a `data-even
 
 ### 3.2 Paused chip
 
-| Approach                                                                         | Pro                                      | Con                                                                                                                                                                                                     |
-| -------------------------------------------------------------------------------- | ---------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| **A. `Badge tone="warning"` from `@enterprise-search/design-system` (this PR).** | One line. Matches Atlas tone vocabulary. | None.                                                                                                                                                                                                   |
-| B. New `PausedChip` design-system primitive.                                     | Reuse if needed elsewhere.               | Premature abstraction — only used in two places, both in the chat feature. Per [`packages/design-system/CLAUDE.md`](../../packages/design-system/CLAUDE.md): "Feature workflows stay in apps/frontend." |
+| Approach                                                                  | Pro                                      | Con                                                                                                                                                                                                     |
+| ------------------------------------------------------------------------- | ---------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| **A. `Badge tone="warning"` from `@0x-copilot/design-system` (this PR).** | One line. Matches Atlas tone vocabulary. | None.                                                                                                                                                                                                   |
+| B. New `PausedChip` design-system primitive.                              | Reuse if needed elsewhere.               | Premature abstraction — only used in two places, both in the chat feature. Per [`packages/design-system/CLAUDE.md`](../../packages/design-system/CLAUDE.md): "Feature workflows stay in apps/frontend." |
 
 **Decision: A.**
 
@@ -495,9 +495,9 @@ Net new ≈ 200 LoC component code + 120 LoC CSS + 550 LoC tests.
 
 ## 5 · Verification checklist
 
-- [ ] `npm run typecheck --workspace @enterprise-search/frontend` → clean.
-- [ ] `npm run build --workspace @enterprise-search/frontend` → clean.
-- [ ] `npm test --workspace @enterprise-search/frontend` → all green; new cases pass; existing PR 3.2.4 / 3.2.2 cases unchanged.
+- [ ] `npm run typecheck --workspace @0x-copilot/frontend` → clean.
+- [ ] `npm run build --workspace @0x-copilot/frontend` → clean.
+- [ ] `npm test --workspace @0x-copilot/frontend` → all green; new cases pass; existing PR 3.2.4 / 3.2.2 cases unchanged.
 - [ ] `axe-core` violations: zero on paused state, zero on clickable row, zero on inline timeline.
 - [ ] Manual canary on `make dev`:
   - Trigger a 3-agent fleet with one subagent gated by `MCP_AUTH_REQUIRED`.

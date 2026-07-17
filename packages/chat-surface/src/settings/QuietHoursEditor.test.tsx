@@ -1,7 +1,7 @@
 import { fireEvent, render, screen } from "@testing-library/react";
 import { describe, expect, it, vi } from "vitest";
 
-import type { NotificationQuietHoursBlob } from "@enterprise-search/api-types";
+import type { NotificationQuietHoursBlob } from "@0x-copilot/api-types";
 
 import { QuietHoursEditor, validateQuietHoursWindow } from "./QuietHoursEditor";
 

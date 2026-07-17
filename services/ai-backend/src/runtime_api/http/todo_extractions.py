@@ -18,7 +18,7 @@ from typing import Any
 from fastapi import APIRouter, Depends, HTTPException, Query, Request, status
 from pydantic import BaseModel, ConfigDict, Field
 
-from enterprise_service_contracts.scopes import RUNTIME_USE
+from copilot_service_contracts.scopes import RUNTIME_USE
 
 from agent_runtime.api.todo_extractions import (
     TodoExtractionApiError,

@@ -1,7 +1,7 @@
 # Design System
 
-`@enterprise-search/design-system` contains shared web UI primitives, theme
-state, and CSS tokens for Enterprise Search.
+`@0x-copilot/design-system` contains shared web UI primitives, theme
+state, and CSS tokens for 0xCopilot.
 
 The package is intentionally small. Keep app-specific workflows in
 `apps/frontend` until a primitive has proven reusable.
@@ -19,13 +19,13 @@ controls, dialogs, layout helpers, and navigation-style components.
 Import the CSS once from the consuming app:
 
 ```tsx
-import "@enterprise-search/design-system/styles.css";
+import "@0x-copilot/design-system/styles.css";
 ```
 
 Use primitives through the package entry point:
 
 ```tsx
-import { Button, Card, ThemeProvider } from "@enterprise-search/design-system";
+import { Button, Card, ThemeProvider } from "@0x-copilot/design-system";
 ```
 
 ## Contribution Rules
@@ -41,7 +41,7 @@ import { Button, Card, ThemeProvider } from "@enterprise-search/design-system";
 ## Checks
 
 ```bash
-npm run typecheck --workspace @enterprise-search/design-system
+npm run typecheck --workspace @0x-copilot/design-system
 ```
 
 See `TESTING.md` for the current quality bar and future visual testing plan.

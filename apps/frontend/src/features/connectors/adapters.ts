@@ -3,7 +3,7 @@
 // Adapters are deliberately pure functions (no React, no fetch, no time
 // helpers reaching for `Date.now()` — callers pass `now` so tests can
 // drive deterministically). This file is the seam where the canonical
-// `@enterprise-search/api-types/connectors` shapes turn into the small
+// `@0x-copilot/api-types/connectors` shapes turn into the small
 // strings + tone-tokens the host-side route renders without dragging
 // design-system imports through every callsite.
 //
@@ -17,7 +17,7 @@ import type {
   ConnectorStatus,
   ConnectorStreamEnvelope,
   Webhook,
-} from "@enterprise-search/api-types";
+} from "@0x-copilot/api-types";
 
 // ---------------------------------------------------------------------------
 // Status pill tone

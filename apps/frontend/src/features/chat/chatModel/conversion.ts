@@ -1,7 +1,4 @@
-import type {
-  Message,
-  RuntimeEventEnvelope,
-} from "@enterprise-search/api-types";
+import type { Message, RuntimeEventEnvelope } from "@0x-copilot/api-types";
 import type { ThreadMessageLike } from "../runtime/types";
 import { applyRuntimeEvent } from "./eventReducer";
 import { mergeMetadata, metadataFromMessage } from "./metadata";

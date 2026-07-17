@@ -8,7 +8,7 @@ import {
 import type {
   UpdateUserProfileRequest,
   UserProfile,
-} from "@enterprise-search/api-types";
+} from "@0x-copilot/api-types";
 
 import { getMyProfile, updateMyProfile } from "../../api/meApi";
 import {

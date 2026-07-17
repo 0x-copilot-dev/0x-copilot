@@ -45,7 +45,7 @@ class _ErrorMessage:
     TIMEOUT = ("Step timed out", "This step took too long and was stopped.")
     PERMISSION_DENIED = (
         "Not allowed",
-        "Enterprise Search isn't allowed to do this.",
+        "0xCopilot isn't allowed to do this.",
     )
     EXTERNAL_SERVICE_ERROR = (
         "Service unavailable",
@@ -61,11 +61,11 @@ class _ErrorMessage:
     )
     TOOL_RUN_TIMEOUT = (
         "Step timed out",
-        "Enterprise Search ran out of time before this tool finished.",
+        "0xCopilot ran out of time before this tool finished.",
     )
     TOOL_RUN_ABANDONED = (
         "Step interrupted",
-        "Enterprise Search lost track of this step and stopped it.",
+        "0xCopilot lost track of this step and stopped it.",
     )
     TOOL_CANCELLED = (
         "Step cancelled",
@@ -73,9 +73,9 @@ class _ErrorMessage:
     )
     RUN_WORKER_LOST = (
         "Run interrupted",
-        "Enterprise Search stopped this run because the worker became unresponsive.",
+        "0xCopilot stopped this run because the worker became unresponsive.",
     )
-    DEFAULT = ("Step failed", "Enterprise Search couldn't complete this step.")
+    DEFAULT = ("Step failed", "0xCopilot couldn't complete this step.")
 
     @classmethod
     def for_code(cls, code: str | None) -> tuple[str, str]:
@@ -187,13 +187,11 @@ class DeterministicTemplates:
         ) or _Identifier.humanize(payload.get("server_name"))
         if entity:
             summary = (
-                f"Enterprise Search wants to run {tool} on {entity}. "
+                f"0xCopilot wants to run {tool} on {entity}. "
                 "Approve or deny to continue."
             )
         else:
-            summary = (
-                f"Enterprise Search wants to run {tool}. Approve or deny to continue."
-            )
+            summary = f"0xCopilot wants to run {tool}. Approve or deny to continue."
         return cls._envelope(
             title=f"Allow {tool}?",
             summary=summary,
@@ -214,7 +212,7 @@ class DeterministicTemplates:
         )
         return cls._envelope(
             title=f"Connect {entity}",
-            summary=f"Sign in to {entity} so Enterprise Search can continue.",
+            summary=f"Sign in to {entity} so 0xCopilot can continue.",
             status_label=_StatusLabel.WAITING,
             kind=_Kind.AUTH,
             group_key=group_key,

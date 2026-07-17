@@ -1,7 +1,7 @@
 import {
   registerAdapter,
   type SaaSRendererAdapter,
-} from "@enterprise-search/chat-surface";
+} from "@0x-copilot/chat-surface";
 
 import {
   opportunityAdapter,

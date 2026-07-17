@@ -65,8 +65,8 @@ export interface ThemeContextValue {
 
 const ThemeContext = createContext<ThemeContextValue | null>(null);
 
-const STORAGE_KEY_THEME = "enterprise-search-theme";
-const STORAGE_KEY_ACCENT = "enterprise-search-accent";
+const STORAGE_KEY_THEME = "0x-copilot-theme";
+const STORAGE_KEY_ACCENT = "0x-copilot-accent";
 const DEFAULT_SCHEME: ThemeScheme = "dark";
 const DEFAULT_ACCENT: AccentScheme = "atlas-orange";
 

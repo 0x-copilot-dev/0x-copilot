@@ -1,5 +1,5 @@
-import type { McpAuthState, McpServer } from "@enterprise-search/api-types";
-import { Badge, Button, Card } from "@enterprise-search/design-system";
+import type { McpAuthState, McpServer } from "@0x-copilot/api-types";
+import { Badge, Button, Card } from "@0x-copilot/design-system";
 import type { ReactElement } from "react";
 
 export function ConnectorSuggestionCard({

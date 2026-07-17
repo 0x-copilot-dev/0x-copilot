@@ -16,12 +16,12 @@ import { useCallback, useMemo, useState, type ReactElement } from "react";
 import {
   CommandPalette,
   useCommandPaletteHotkey,
-} from "@enterprise-search/chat-surface";
+} from "@0x-copilot/chat-surface";
 import type {
   PaletteHit,
   PaletteSearchRequest,
   PaletteSearchResponse,
-} from "@enterprise-search/api-types";
+} from "@0x-copilot/api-types";
 
 import type { RequestIdentity } from "../../api/config";
 import { searchPalette } from "../../api/paletteApi";

@@ -1,9 +1,6 @@
 import { describe, expect, it, vi } from "vitest";
 import { act, renderHook, waitFor } from "@testing-library/react";
-import type {
-  SourceEntry,
-  SourceListResponse,
-} from "@enterprise-search/api-types";
+import type { SourceEntry, SourceListResponse } from "@0x-copilot/api-types";
 import * as agentApi from "../../../../api/agentApi";
 import type { RequestIdentity } from "../../../../api/config";
 import { useArchivedSources } from "./useArchivedSources";

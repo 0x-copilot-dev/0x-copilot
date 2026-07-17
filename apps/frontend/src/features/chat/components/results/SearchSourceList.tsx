@@ -1,4 +1,4 @@
-import { Badge } from "@enterprise-search/design-system";
+import { Badge } from "@0x-copilot/design-system";
 import type { ReactElement } from "react";
 import { truncateText, type SearchSource } from "../../utils/jsonUtils";
 

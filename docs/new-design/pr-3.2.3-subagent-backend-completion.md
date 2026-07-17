@@ -448,8 +448,8 @@ package.json                                         0 deps added
 
 - [ ] **ai‑backend tests**: `cd services/ai-backend && PYTHONPATH=src:../../packages/service-contracts/src .venv/bin/python -m pytest tests/unit/runtime_worker/ tests/unit/runtime_api/`
 - [ ] **facade tests**: `cd services/backend-facade && PYTHONPATH=src:../../packages/service-contracts/src .venv/bin/python -m pytest`
-- [ ] **api-types**: `npm run typecheck --workspace @enterprise-search/api-types`
-- [ ] **frontend**: `npm run typecheck --workspace @enterprise-search/frontend && npm run test --workspace @enterprise-search/frontend && npm run build --workspace @enterprise-search/frontend`. Bundle delta ≤ +1 KB gz.
+- [ ] **api-types**: `npm run typecheck --workspace @0x-copilot/api-types`
+- [ ] **frontend**: `npm run typecheck --workspace @0x-copilot/frontend && npm run test --workspace @0x-copilot/frontend && npm run build --workspace @0x-copilot/frontend`. Bundle delta ≤ +1 KB gz.
 - [ ] **make test** clean (cross‑service smoke).
 - [ ] **make dev** end‑to‑end:
   - Run the prime‑checker scenario. Open the workspace pane Agents tab. Card now shows a 1–2 sentence finding (not the full code block). Disclosure summary row shows token meta. Cancel button is hidden (terminal).

@@ -11,7 +11,7 @@ import type { ReactNode } from "react";
 import type {
   UpdateUserPreferencesRequest,
   UserPreferences,
-} from "@enterprise-search/api-types";
+} from "@0x-copilot/api-types";
 
 const mockGet = vi.fn<() => Promise<UserPreferences>>();
 const mockPut =

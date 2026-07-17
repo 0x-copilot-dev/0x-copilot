@@ -24,7 +24,7 @@ import {
   type ReactElement,
 } from "react";
 
-import type { Person, TeamRole } from "@enterprise-search/api-types";
+import type { Person, TeamRole } from "@0x-copilot/api-types";
 
 import { CardGrid } from "../../shell/CardGrid";
 import { EmptyState } from "../../shell/EmptyState";

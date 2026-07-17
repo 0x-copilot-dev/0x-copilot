@@ -2,12 +2,12 @@ import { act, fireEvent, render, screen } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { ReactNode } from "react";
 
-import type { RuntimeEventEnvelope } from "@enterprise-search/api-types";
+import type { RuntimeEventEnvelope } from "@0x-copilot/api-types";
 import type {
   SseSubscribeOptions,
   SseSubscription,
   Transport,
-} from "@enterprise-search/chat-transport";
+} from "@0x-copilot/chat-transport";
 
 import { KeyValueStoreProvider } from "../providers/KeyValueStoreProvider";
 import { TransportProvider } from "../providers/TransportProvider";

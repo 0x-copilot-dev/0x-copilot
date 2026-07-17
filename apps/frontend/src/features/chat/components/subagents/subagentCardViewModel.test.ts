@@ -1,7 +1,7 @@
 // PR 3.2.2 — adapter unit tests.
 
 import { describe, expect, it } from "vitest";
-import type { SubagentEntry } from "@enterprise-search/api-types";
+import type { SubagentEntry } from "@0x-copilot/api-types";
 import {
   subagentCardFromArgs,
   subagentCardFromEntry,

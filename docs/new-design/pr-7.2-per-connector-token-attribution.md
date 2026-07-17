@@ -598,7 +598,7 @@ Lives in the same PR. Minimum bar before merge.
 - [ ] Worker `model_call.py` emit site populates `connector_slug` on the usage record and the `model_call_completed` event payload.
 - [ ] `UsageQueryService` supports `dimension=connector` for `/v1/usage/me`, `/v1/usage/conversations/{id}`, `/v1/usage/org`. Rollup-hit and cold-start paths both implemented.
 - [ ] `UsageRollupLoop` adds a third `INSERT … ON CONFLICT` for `runtime_usage_daily_connector`. Loop runtime increase ≤10% on the standard fixture.
-- [ ] `@enterprise-search/api-types` exports `UsageConnectorRow` and `by_connector` field on `UsageMeResponse` / `UsageOrgResponse` / `ConversationUsageResponse`. `RuntimeModelCallCompletedPayload` carries optional `connector_slug`.
+- [ ] `@0x-copilot/api-types` exports `UsageConnectorRow` and `by_connector` field on `UsageMeResponse` / `UsageOrgResponse` / `ConversationUsageResponse`. `RuntimeModelCallCompletedPayload` carries optional `connector_slug`.
 - [ ] `UsageConversationView` renders a "By connector" section when `by_connector` is populated; renders "(unattributed)" for empty-string slug.
 - [ ] `UsageWorkspaceView` tab toggle includes "By connector"; `UsageWorkspaceChart` accepts the new series keyed by connector slug; `usagePalette.colorForConnector(slug)` is stable.
 - [ ] `dimension=connector` reconciles to identical total tokens as `dimension=model` for any (org, period) — enforced by reconciliation test.

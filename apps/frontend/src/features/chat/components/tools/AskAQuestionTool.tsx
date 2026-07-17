@@ -1,5 +1,5 @@
 import type { ToolCallMessagePartProps } from "../../runtime/types";
-import { Button, classNames } from "@enterprise-search/design-system";
+import { Button, classNames } from "@0x-copilot/design-system";
 import { useMemo, useState, type FormEvent, type ReactElement } from "react";
 import { Streamdown } from "streamdown";
 import { asRecord, stringValue } from "../../utils/jsonUtils";

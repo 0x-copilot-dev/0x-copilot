@@ -13,7 +13,7 @@
 
 import type { ReactNode } from "react";
 
-import type { ItemKind, ItemRef } from "@enterprise-search/api-types";
+import type { ItemKind, ItemRef } from "@0x-copilot/api-types";
 
 import type { ArtifactRoute } from "../routing/router";
 

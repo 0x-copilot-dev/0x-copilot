@@ -1,7 +1,7 @@
 import {
   createRemarkCitations,
   streamingCursorProps,
-} from "@enterprise-search/chat-surface";
+} from "@0x-copilot/chat-surface";
 import type { ReactElement } from "react";
 import { Streamdown } from "streamdown";
 

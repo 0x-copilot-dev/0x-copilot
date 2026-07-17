@@ -18,10 +18,10 @@ A change to `services/ai-backend` should retest only `services/ai-backend` and a
 
 Each deployable has its own image:
 
-- `ghcr.io/<owner>/enterprise-search-backend`
-- `ghcr.io/<owner>/enterprise-search-backend-facade`
-- `ghcr.io/<owner>/enterprise-search-ai-backend`
-- `ghcr.io/<owner>/enterprise-search-frontend`
+- `ghcr.io/<owner>/0x-copilot-backend`
+- `ghcr.io/<owner>/0x-copilot-backend-facade`
+- `ghcr.io/<owner>/0x-copilot-ai-backend`
+- `ghcr.io/<owner>/0x-copilot-frontend`
 
 (The lowercase repository owner is computed at build time; matches `release-images.yml`.)
 

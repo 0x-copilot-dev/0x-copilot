@@ -18,7 +18,7 @@
 
 import type { CSSProperties, ReactElement, ReactNode } from "react";
 
-import { StatusPill, type StatusTone } from "@enterprise-search/design-system";
+import { StatusPill, type StatusTone } from "@0x-copilot/design-system";
 
 import type {
   AgentOrigin,

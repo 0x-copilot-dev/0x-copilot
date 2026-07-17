@@ -19,7 +19,7 @@ import {
   Card,
   Field,
   TextInput,
-} from "@enterprise-search/design-system";
+} from "@0x-copilot/design-system";
 import "./mcp-wizard.css";
 import {
   type FormEvent,
@@ -35,7 +35,7 @@ import type {
   McpCatalogEntry,
   McpOAuthClientConfigRequest,
   McpServer,
-} from "@enterprise-search/api-types";
+} from "@0x-copilot/api-types";
 import { Modal } from "../../settings/Modal";
 import { isOAuthSetupRequired } from "../../../api/mcpErrors";
 import { ConnectorRow } from "../ConnectorRow";

@@ -14,12 +14,12 @@
 
 Four sections, one row of persistence, zero new event types.
 
-| Section       | Backend                                                            | Frontend                                                                                         |
-| ------------- | ------------------------------------------------------------------ | ------------------------------------------------------------------------------------------------ |
-| Profile       | `user_profiles` sidecar on `users` (backend); `PUT /v1/me/profile` | Form bound to existing identity; avatar = URL only in v1                                         |
-| Appearance    | `user_preferences.preferences_json.appearance` (backend)           | Reuses `ThemeProvider` + 8-swatch `ACCENT_SCHEMES` already in `@enterprise-search/design-system` |
-| Shortcuts     | `user_preferences.preferences_json.shortcuts`                      | Renders the keymap registry from PR 2.2 with override slots                                      |
-| Notifications | `user_preferences.preferences_json.notifications`                  | 4-event × 3-channel matrix; senders ship later                                                   |
+| Section       | Backend                                                            | Frontend                                                                                  |
+| ------------- | ------------------------------------------------------------------ | ----------------------------------------------------------------------------------------- |
+| Profile       | `user_profiles` sidecar on `users` (backend); `PUT /v1/me/profile` | Form bound to existing identity; avatar = URL only in v1                                  |
+| Appearance    | `user_preferences.preferences_json.appearance` (backend)           | Reuses `ThemeProvider` + 8-swatch `ACCENT_SCHEMES` already in `@0x-copilot/design-system` |
+| Shortcuts     | `user_preferences.preferences_json.shortcuts`                      | Renders the keymap registry from PR 2.2 with override slots                               |
+| Notifications | `user_preferences.preferences_json.notifications`                  | 4-event × 3-channel matrix; senders ship later                                            |
 
 The persistence model is deliberately one JSONB row per user (`user_preferences`) plus one sidecar table (`user_profiles`). Senders for notifications and avatar uploads are out of scope (see §1.3). Density and reduce-motion are CSS-attribute hooks on `<html>` (`data-density`, `data-reduce-motion`) — no new design-system primitive.
 
@@ -246,7 +246,7 @@ This PR ships the **self** path. PR 4.2's Members panel adds the admin read for 
 
 Timezone validation: Python 3.13 ships `zoneinfo.available_timezones()`. Locale validation: `babel.Locale.parse()` — `babel` is already in the runtime tree (via `services/ai-backend/requirements.txt` for date formatting in markdown). If `babel` is not present in `services/backend`'s tree, validation falls back to a regex (BCP-47 is a small grammar) — no new dep.
 
-### 2.8 Frontend contract (`@enterprise-search/api-types`)
+### 2.8 Frontend contract (`@0x-copilot/api-types`)
 
 ```ts
 // packages/api-types/src/index.ts
@@ -320,7 +320,7 @@ export type UpdateUserPreferencesRequest = DeepPartial<UserPreferences>;
 | Density attribute       | `<html>` root                                                                                          | One root effect: `document.documentElement.dataset.density = preferences.appearance.density` |
 | Reduce-motion attribute | `<html>` root                                                                                          | Same pattern: `document.documentElement.dataset.reduceMotion = …`                            |
 | Shortcuts               | PR 2.2 keymap registry export `getKeymapRegistry(): KeymapAction[]`                                    | `<ShortcutsTable>` rendering grouped registry; `<ChordRecorder>` using `tinykeys` parser     |
-| Notifications matrix    | Existing `Switch` from `@enterprise-search/design-system`                                              | `<NotificationsMatrix>` (12 toggles in a CSS grid)                                           |
+| Notifications matrix    | Existing `Switch` from `@0x-copilot/design-system`                                                     | `<NotificationsMatrix>` (12 toggles in a CSS grid)                                           |
 | Save / dirty state      | Existing `useDebouncedSave` (or hand-rolled 300ms debounce, ~12 LOC)                                   | `usePreferencesDraft` hook holding `{server, draft, isDirty, save}`                          |
 | Hydration               | `useQuery`-style — one `useUserProfile()` + `useUserPreferences()` in `apps/frontend/src/features/me/` | Two ~30 LOC hooks                                                                            |
 
@@ -424,7 +424,7 @@ This is the same boundary call PR 1.6 §3.3 spelled out, applied in the opposite
 | Single-row-per-user JSONB        | Same shape `auth_providers.config` already uses                                            | One JSONB column                                                                                                                          |
 | ThemeProvider                    | `packages/design-system/src/index.tsx:61-100`                                              | One `useThemeSync` effect that mirrors `useUserPreferences().appearance` into the provider; localStorage stays as the paint-flicker cache |
 | Accent swatches                  | `ACCENT_SCHEMES` (8 already shipped per design-system inventory)                           | One `<AccentPicker>` UI                                                                                                                   |
-| Switch / Field / Card primitives | `@enterprise-search/design-system`                                                         | —                                                                                                                                         |
+| Switch / Field / Card primitives | `@0x-copilot/design-system`                                                                | —                                                                                                                                         |
 | Chord parsing                    | `tinykeys` (already transitive via `assistant-ui`) **or** 30-line inline parser            | Verify or inline                                                                                                                          |
 | Notifications matrix             | `Switch` × 12 in a CSS grid                                                                | One small component                                                                                                                       |
 | Density tokens                   | Existing `--space-*` tokens for the comfortable scheme                                     | One `[data-density="compact"]` override block (~10 lines)                                                                                 |
@@ -541,7 +541,7 @@ The localStorage cache stays — it's the paint-flicker avoidance the design wan
 - [ ] `MePreferencesService.get/put` materialises deployment defaults; deep-merge updates a single cell without touching siblings.
 - [ ] One audit row per write; chain verifier passes; new actions registered in `IdentityAuditAction` enum.
 - [ ] `backend-facade` exposes `GET/PUT /v1/me/profile` and `GET/PUT /v1/me/preferences`. None reach `/internal/v1/*`.
-- [ ] `@enterprise-search/api-types` exports `UserProfile`, `UserPreferences`, `UpdateUserProfileRequest`, `UpdateUserPreferencesRequest`, plus the four union types.
+- [ ] `@0x-copilot/api-types` exports `UserProfile`, `UserPreferences`, `UpdateUserProfileRequest`, `UpdateUserPreferencesRequest`, plus the four union types.
 - [ ] `useUserProfile()` + `useUserPreferences()` hooks ship with tests.
 - [ ] `<Profile />`, `<Appearance />`, `<Shortcuts />`, `<Notifications />` mount in `SettingsScreen` under the "You" group rail.
 - [ ] `ThemeProvider` mirrors `preferences.appearance` (accent, theme); density and reduce-motion are reflected as `<html data-density>` / `<html data-reduce-motion>`.
@@ -554,7 +554,7 @@ The localStorage cache stays — it's the paint-flicker avoidance the design wan
 
 ## 5 · References
 
-- Design Doc · Settings → "You" group (eight knobs across four panels) — bundle at `/tmp/design-doc/enterprise-search/project/Design Doc.html` lines 540-545.
+- Design Doc · Settings → "You" group (eight knobs across four panels) — bundle at `/tmp/design-doc/0x-copilot/project/Design Doc.html` lines 540-545.
 - [`packages/design-system/src/index.tsx:32-100`](../../packages/design-system/src/index.tsx) — `ThemeProvider`, `ACCENT_SCHEMES`, `useTheme`.
 - [`packages/design-system/CLAUDE.md`](../../packages/design-system/CLAUDE.md) — feature workflows stay in `apps/frontend`.
 - [`apps/frontend/src/features/settings/SettingsScreen.tsx`](../../apps/frontend/src/features/settings/SettingsScreen.tsx) — section host the new panels mount into.

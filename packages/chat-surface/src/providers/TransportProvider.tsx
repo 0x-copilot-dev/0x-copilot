@@ -1,4 +1,4 @@
-import type { Transport } from "@enterprise-search/chat-transport";
+import type { Transport } from "@0x-copilot/chat-transport";
 import { createContext, useContext, type ReactNode } from "react";
 
 // Substrate-agnostic access to the configured Transport. The host app

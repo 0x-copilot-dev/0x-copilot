@@ -1,10 +1,10 @@
-"""Stable constants shared across Enterprise Search services."""
+"""Stable constants shared across 0xCopilot services."""
 
-from enterprise_service_contracts.adapter_allowlist import (
+from copilot_service_contracts.adapter_allowlist import (
     AdapterAllowlist,
     load_adapter_allowlist,
 )
-from enterprise_service_contracts.headers import (
+from copilot_service_contracts.headers import (
     AUTH_HEADER,
     CONNECTOR_SCOPES_HEADER,
     ORG_HEADER,

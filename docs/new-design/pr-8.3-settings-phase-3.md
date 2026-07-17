@@ -161,8 +161,8 @@ The store layer already exists (`IdentityStore.get_identity_policy` / `upsert_id
 ## Verification
 
 ```bash
-npm run typecheck --workspace @enterprise-search/api-types
-npm run typecheck --workspace @enterprise-search/frontend
+npm run typecheck --workspace @0x-copilot/api-types
+npm run typecheck --workspace @0x-copilot/frontend
 cd services/backend && PYTHONPATH=src:../../packages/service-contracts/src .venv/bin/python -m pytest tests/test_me_profile_preferences.py tests/test_api_keys.py tests/test_mfa_routes.py -q
 ```
 

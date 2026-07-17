@@ -12,13 +12,8 @@ import type {
   ApiKeySummary,
   CreateApiKeyRequest,
   CreateApiKeyResponse,
-} from "@enterprise-search/api-types";
-import {
-  Button,
-  Card,
-  Field,
-  TextInput,
-} from "@enterprise-search/design-system";
+} from "@0x-copilot/api-types";
+import { Button, Card, Field, TextInput } from "@0x-copilot/design-system";
 import type { ReactElement } from "react";
 import { useCallback, useEffect, useState } from "react";
 import {

@@ -45,8 +45,8 @@ repo:<owner>/<repo>:environment:tenant-<tenant-id>-<env>
 Examples:
 
 ```
-repo:enterprise-search/enterprise-search:environment:tenant-acme-corp-staging
-repo:enterprise-search/enterprise-search:environment:tenant-acme-corp-production
+repo:0x-copilot/0x-copilot:environment:tenant-acme-corp-staging
+repo:0x-copilot/0x-copilot:environment:tenant-acme-corp-production
 ```
 
 This means:
@@ -97,10 +97,10 @@ Body:
   "environment": "production",
   "release_sha": "abc123…",
   "image_digests": [
-    {"component": "enterprise-search-backend", "digest": "sha256:…"},
-    {"component": "enterprise-search-backend-facade", "digest": "sha256:…"},
-    {"component": "enterprise-search-ai-backend", "digest": "sha256:…"},
-    {"component": "enterprise-search-frontend", "digest": "sha256:…"}
+    {"component": "0x-copilot-backend", "digest": "sha256:…"},
+    {"component": "0x-copilot-backend-facade", "digest": "sha256:…"},
+    {"component": "0x-copilot-ai-backend", "digest": "sha256:…"},
+    {"component": "0x-copilot-frontend", "digest": "sha256:…"}
   ],
   "approver": "alice",
   "workflow_run_url": "https://github.com/<owner>/<repo>/actions/runs/<id>",

@@ -23,8 +23,8 @@ from dataclasses import dataclass
 from datetime import datetime, timezone
 from typing import Any
 
-from enterprise_service_contracts.headers import ORG_HEADER, USER_HEADER
-from enterprise_service_contracts.scopes import ADMIN_SIEM
+from copilot_service_contracts.headers import ORG_HEADER, USER_HEADER
+from copilot_service_contracts.scopes import ADMIN_SIEM
 from fastapi import Depends, FastAPI, HTTPException, Query, Request, status
 from pydantic import BaseModel, Field
 

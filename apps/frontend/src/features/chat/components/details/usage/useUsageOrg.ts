@@ -13,7 +13,7 @@ import type {
   BudgetMeResponse,
   UsageOrgResponse,
   UsagePeriod,
-} from "@enterprise-search/api-types";
+} from "@0x-copilot/api-types";
 import { useCallback, useEffect, useState } from "react";
 
 import { getMyBudgets, getOrgUsage } from "../../../../../api/agentApi";

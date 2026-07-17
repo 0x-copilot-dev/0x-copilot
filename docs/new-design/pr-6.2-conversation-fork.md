@@ -823,7 +823,7 @@ The only ai-backend code touched on the prompt-after-fork side is the existing `
 - [ ] Audit row `conversation.fork` carries `{source_conversation_id, source_org_id, share_id, snapshot_at, message_count, target_conversation_id, target_user_id}`. Chain verifier passes.
 - [ ] No new event type. `RuntimeEventEnvelope` Pydantic schema byte-identical pre/post merge.
 - [ ] `backend-facade/share_routes.py` registers `POST /v1/agent/shares/{share_token}/fork`; identity headers preserved; never reaches `/internal/v1/*`.
-- [ ] `@enterprise-search/api-types` exports `ForkRequest` and `ForkResponse`. `Conversation` gains `forked_from_share_id?: string | null`.
+- [ ] `@0x-copilot/api-types` exports `ForkRequest` and `ForkResponse`. `Conversation` gains `forked_from_share_id?: string | null`.
 - [ ] `apps/frontend/src/features/share/ShareScreen.tsx` enables "Open in your chat" button; click calls `forkShare`, navigates to `/?conversationId=…`, surfaces toast.
 - [ ] `apps/frontend/src/api/agentApi.ts` exports `forkShare`.
 - [ ] First prompt in a forked conversation runs through the existing SSE pipeline with no special branch.
@@ -844,7 +844,7 @@ The only ai-backend code touched on the prompt-after-fork side is the existing `
 - [`services/ai-backend/src/agent_runtime/api/notifications.py`](../../services/ai-backend/src/agent_runtime/api/notifications.py) `NotificationDispatcher` — extended with one method.
 - [`services/ai-backend/src/runtime_api/auth.py`](../../services/ai-backend/src/runtime_api/auth.py) `RuntimeServiceAuthenticator` — identity parsing reused.
 - [`services/backend-facade/src/backend_facade/workspace_routes.py`](../../services/backend-facade/src/backend_facade/workspace_routes.py) `_forward` — proxy pattern reused (the route is added to `share_routes.py` from PR 6.1).
-- [`packages/service-contracts/src/enterprise_service_contracts/headers.py`](../../packages/service-contracts/src/enterprise_service_contracts/headers.py) — header constants reused.
+- [`packages/service-contracts/src/copilot_service_contracts/headers.py`](../../packages/service-contracts/src/copilot_service_contracts/headers.py) — header constants reused.
 - [`apps/frontend/src/api/agentApi.ts`](../../apps/frontend/src/api/agentApi.ts) — one new client function.
 - [`docs/new-design/pr-1.6-workspace-defaults-conversation-lifecycle.md`](pr-1.6-workspace-defaults-conversation-lifecycle.md) — sibling PR; provides forward-declared `parent_conversation_id` column and the model-resolution chain the fork's first run depends on.
 - [`docs/new-design/pr-6.1-conversation-sharing.md`](pr-6.1-conversation-sharing.md) — sibling PR; provides the share resolution + recipient-gate helpers this PR composes.

@@ -12,7 +12,7 @@ import {
 import {
   isRuntimeEventEnvelope,
   type RuntimeEventEnvelope,
-} from "@enterprise-search/api-types";
+} from "@0x-copilot/api-types";
 
 import { useKeyValueStore } from "../providers/KeyValueStoreProvider";
 import { useTransport } from "../providers/TransportProvider";

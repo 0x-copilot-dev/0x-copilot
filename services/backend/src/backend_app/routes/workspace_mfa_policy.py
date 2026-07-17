@@ -17,7 +17,7 @@ from __future__ import annotations
 from datetime import datetime, timezone
 from typing import Any
 
-from enterprise_service_contracts.scopes import ADMIN_USERS
+from copilot_service_contracts.scopes import ADMIN_USERS
 from fastapi import Depends, FastAPI, Query, Request, status
 from pydantic import BaseModel, ConfigDict, Field
 

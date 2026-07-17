@@ -8,7 +8,7 @@
 import type {
   RuntimeEventEnvelope,
   SubagentEntry,
-} from "@enterprise-search/api-types";
+} from "@0x-copilot/api-types";
 
 import { isResumableStatus, normaliseTerminalStatus } from "./subagentStatus";
 

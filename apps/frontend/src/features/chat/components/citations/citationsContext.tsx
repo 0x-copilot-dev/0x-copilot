@@ -26,16 +26,13 @@ import {
   type ReactElement,
   type ReactNode,
 } from "react";
-import type {
-  CitationLink,
-  CitationSourceRef,
-} from "@enterprise-search/api-types";
+import type { CitationLink, CitationSourceRef } from "@0x-copilot/api-types";
 import {
   citationsByOrdinal,
   citationsForRun,
   emptyCitationRegistry,
   type CitationRegistryByRun,
-} from "@enterprise-search/chat-surface";
+} from "@0x-copilot/chat-surface";
 import {
   anyLinkForOrdinalInRun,
   emptyCitationLinkRegistry,

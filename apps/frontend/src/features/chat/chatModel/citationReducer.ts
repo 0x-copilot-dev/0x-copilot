@@ -17,13 +17,13 @@ import {
   isSourcesIngestedPayload,
   type CitationSourceRef,
   type RuntimeEventEnvelope,
-} from "@enterprise-search/api-types";
+} from "@0x-copilot/api-types";
 import {
   emptyCitationRegistry,
   upsertCitation,
   upsertCitations,
   type CitationRegistryByRun,
-} from "@enterprise-search/chat-surface";
+} from "@0x-copilot/chat-surface";
 
 export function applyCitationEvent(
   registry: CitationRegistryByRun,

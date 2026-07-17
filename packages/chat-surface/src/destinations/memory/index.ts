@@ -6,12 +6,12 @@
 // `<ItemLink kind="memory" id=…>` resolves without forcing a circular
 // dependency.
 //
-// Wire types live in `@enterprise-search/api-types/memory` (shipped on
+// Wire types live in `@0x-copilot/api-types/memory` (shipped on
 // main via P12-A1) — this module re-exports them so consumers can grab
 // `MemoryItem` / `MemoryProposal` / etc. from a single chat-surface
 // surface alongside the components.
 
-import type { MemoryItemId } from "@enterprise-search/api-types";
+import type { MemoryItemId } from "@0x-copilot/api-types";
 
 import {
   hasItemRefResolver,
@@ -108,7 +108,7 @@ export type {
   MemoryStreamEnvelope,
   MemoryStreamEventType,
   UpdateMemoryRequest,
-} from "@enterprise-search/api-types";
+} from "@0x-copilot/api-types";
 
 // ===========================================================================
 // ItemRef resolver registration (cross-audit §3.3)

@@ -10,7 +10,7 @@ import type {
   FilePickerOptions,
   FilePickerPort,
   FilePickerSelection,
-} from "@enterprise-search/chat-surface";
+} from "@0x-copilot/chat-surface";
 
 export class WebFilePickerPort implements FilePickerPort {
   pick(

@@ -31,7 +31,7 @@
 //     distinct ``[[N]]`` chips pointing at the tool invocation,
 //     matching what ``sourcesByCitationCount`` expects.
 
-import type { CitationLink, SourceEntry } from "@enterprise-search/api-types";
+import type { CitationLink, SourceEntry } from "@0x-copilot/api-types";
 
 import type { CitationLinkRegistryByRun } from "./citationLinkReducer";
 import { linksForRun } from "./citationLinkReducer";

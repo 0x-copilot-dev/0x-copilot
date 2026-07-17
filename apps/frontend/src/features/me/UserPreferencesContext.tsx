@@ -8,7 +8,7 @@ import {
 import type {
   UpdateUserPreferencesRequest,
   UserPreferences,
-} from "@enterprise-search/api-types";
+} from "@0x-copilot/api-types";
 
 import { getMyPreferences, updateMyPreferences } from "../../api/meApi";
 import {
@@ -21,7 +21,7 @@ import {
 // One in-memory cache of the user's preferences, shared across every
 // consumer (Appearance, Shortcuts, Notifications, AppearanceProvider).
 // Before this provider, `useUserPreferences` was called once in
-// `EnterpriseSearchApp` and threaded as a prop through SettingsScreen
+// `CopilotApp` and threaded as a prop through SettingsScreen
 // → each section. The provider lift removes the prop drilling and
 // guarantees `AppearanceProvider` sees the same data the sections do.
 

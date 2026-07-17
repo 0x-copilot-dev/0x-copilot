@@ -17,10 +17,10 @@ If the TS side grew a new forbidden global and Python did not, the codegen would
 
 ## Fix
 
-Move the allowlist into `packages/service-contracts/src/enterprise_service_contracts/adapter_allowlist.json` — the same shared-contracts package both runtimes already use. Both sides load the JSON at module load:
+Move the allowlist into `packages/service-contracts/src/copilot_service_contracts/adapter_allowlist.json` — the same shared-contracts package both runtimes already use. Both sides load the JSON at module load:
 
-- TypeScript: `packages/api-types/src/adapterAllowlist.ts` re-exports `ADAPTER_ALLOWLIST` from JSON via `resolveJsonModule`. The 6A scanner now imports `ADAPTER_ALLOWLIST` from `@enterprise-search/api-types` and derives its working sets from it.
-- Python: `enterprise_service_contracts.adapter_allowlist.load_adapter_allowlist()` reads the JSON via `importlib.resources`. The 6B `_ForbiddenPattern` / `_ImportAllowlist` classes now derive their class-level tuples / frozensets from the loaded data at module import.
+- TypeScript: `packages/api-types/src/adapterAllowlist.ts` re-exports `ADAPTER_ALLOWLIST` from JSON via `resolveJsonModule`. The 6A scanner now imports `ADAPTER_ALLOWLIST` from `@0x-copilot/api-types` and derives its working sets from it.
+- Python: `copilot_service_contracts.adapter_allowlist.load_adapter_allowlist()` reads the JSON via `importlib.resources`. The 6B `_ForbiddenPattern` / `_ImportAllowlist` classes now derive their class-level tuples / frozensets from the loaded data at module import.
 
 ## Union strategy
 
@@ -28,11 +28,11 @@ The JSON ships the **union** of what 6A and 6B previously enforced. Drift in eit
 
 ### `allowed_imports`
 
-| module                             | source                                                                          | resolution                                                                                                                                                                                                        |
-| ---------------------------------- | ------------------------------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `react`                            | TS lists `createElement, Fragment, useState`; Python only lists the module name | Use the **TS named-specifier list** — Python previously enforced no named-specifier check, so taking the stricter TS list narrows nothing the backend was producing and locks the named-specifier discipline now. |
-| `react-dom`                        | TS lists module with empty named-specifier list (effectively a tombstone)       | Keep empty array — anything imported from `react-dom` will fail the named-specifier check, matching today's TS behaviour. Python previously did not whitelist `react-dom`, so this is a no-op for codegen.        |
-| `@enterprise-search/design-system` | TS lists 15 named primitives; Python lists module only                          | Use the **TS named-specifier list**.                                                                                                                                                                              |
+| module                      | source                                                                          | resolution                                                                                                                                                                                                        |
+| --------------------------- | ------------------------------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `react`                     | TS lists `createElement, Fragment, useState`; Python only lists the module name | Use the **TS named-specifier list** — Python previously enforced no named-specifier check, so taking the stricter TS list narrows nothing the backend was producing and locks the named-specifier discipline now. |
+| `react-dom`                 | TS lists module with empty named-specifier list (effectively a tombstone)       | Keep empty array — anything imported from `react-dom` will fail the named-specifier check, matching today's TS behaviour. Python previously did not whitelist `react-dom`, so this is a no-op for codegen.        |
+| `@0x-copilot/design-system` | TS lists 15 named primitives; Python lists module only                          | Use the **TS named-specifier list**.                                                                                                                                                                              |
 
 ### `forbidden_globals`
 
@@ -79,11 +79,11 @@ Identifiers handled by **syntax-aware** AST checks on the TS side and by the Pyt
 
 ## Migration steps applied
 
-1. Wrote `packages/service-contracts/src/enterprise_service_contracts/adapter_allowlist.json` with the union.
-2. Added Python loader `packages/service-contracts/src/enterprise_service_contracts/adapter_allowlist.py`.
+1. Wrote `packages/service-contracts/src/copilot_service_contracts/adapter_allowlist.json` with the union.
+2. Added Python loader `packages/service-contracts/src/copilot_service_contracts/adapter_allowlist.py`.
 3. Exposed the JSON via `setuptools` package-data so `importlib.resources` finds it.
 4. Added TS loader `packages/api-types/src/adapterAllowlist.ts` plus re-export from `packages/api-types/src/index.ts`.
-5. Added `@enterprise-search/api-types` to `apps/desktop/package.json` dependencies (desktop did not consume it before).
+5. Added `@0x-copilot/api-types` to `apps/desktop/package.json` dependencies (desktop did not consume it before).
 6. Updated 6A `ast-allowlist.ts` to derive `ALLOWED_IMPORTS` and `FORBIDDEN_GLOBALS` from the loaded data; AST scanner logic unchanged.
 7. Updated 6B `capability.py` so `_ForbiddenPattern.TOKENS` and `_ImportAllowlist.ALLOWED` are derived from the loaded JSON; auditor logic unchanged.
 8. Added one canary test on each side asserting the loaded values match a soft snapshot — anyone editing the JSON sees a visible signal in both runtimes' test suites.
@@ -92,7 +92,7 @@ Identifiers handled by **syntax-aware** AST checks on the TS side and by the Pyt
 
 One PR:
 
-1. Edit `packages/service-contracts/src/enterprise_service_contracts/adapter_allowlist.json`.
+1. Edit `packages/service-contracts/src/copilot_service_contracts/adapter_allowlist.json`.
 2. Update the canary tests (`packages/api-types/src/adapterAllowlist.test.ts` and `services/ai-backend/tests/unit/agent_runtime/capabilities/render_adapter_generator/test_adapter_allowlist_loader.py`) if the change crosses a snapshot threshold.
 3. Both sides pick the change up at next module import — no other code change required.
 

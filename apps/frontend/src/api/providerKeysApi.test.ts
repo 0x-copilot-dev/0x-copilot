@@ -3,7 +3,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type {
   ListProviderKeysResponse,
   ProviderKeySummary,
-} from "@enterprise-search/api-types";
+} from "@0x-copilot/api-types";
 
 import { configureAuthBearerProvider } from "./http";
 import {

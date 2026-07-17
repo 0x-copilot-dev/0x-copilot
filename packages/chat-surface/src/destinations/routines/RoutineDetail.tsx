@@ -37,12 +37,7 @@ import {
   type ReactElement,
 } from "react";
 
-import type {
-  ItemRef,
-  RoutineId,
-  RunId,
-  UserId,
-} from "@enterprise-search/api-types";
+import type { ItemRef, RoutineId, RunId, UserId } from "@0x-copilot/api-types";
 
 import type { ClipboardPort } from "../../ports/ClipboardPort";
 import { ItemLink } from "../../refs/ItemLink";

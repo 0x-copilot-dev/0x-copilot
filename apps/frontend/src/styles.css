@@ -6516,7 +6516,7 @@ p {
 /* ============================================================
  * Atlas topbar — PR 2.1
  * Composition lives in apps/frontend/src/features/chat/components/shell/.
- * Tokens and primitives come from @enterprise-search/design-system.
+ * Tokens and primitives come from @0x-copilot/design-system.
  * ============================================================ */
 
 .atlas-topbar {

@@ -10,7 +10,7 @@
 //   2. Switching to `running` then `complete` toggles the class back —
 //      i.e. the class doesn't stick after the run finishes.
 //
-// The contract itself now lives in @enterprise-search/chat-surface's
+// The contract itself now lives in @0x-copilot/chat-surface's
 // `streamingCursorProps()` (single source of truth across any future
 // streaming-text surface); MarkdownText spreads it onto Streamdown.
 // This test is the integration check that MarkdownText is still wired

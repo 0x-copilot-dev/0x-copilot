@@ -7,7 +7,7 @@
 // tabs today; per packages/design-system/CLAUDE.md we promote when a
 // second consumer needs it. Until then this stays small and local.
 
-import { classNames } from "@enterprise-search/design-system";
+import { classNames } from "@0x-copilot/design-system";
 import {
   useCallback,
   useId,

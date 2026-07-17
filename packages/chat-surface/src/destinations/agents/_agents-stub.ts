@@ -1,6 +1,6 @@
 // Local Agent shape for P8-B1 (gallery + card + panel).
 //
-// Phase 8 lands the production `Agent` shape in `@enterprise-search/api-types`
+// Phase 8 lands the production `Agent` shape in `@0x-copilot/api-types`
 // (P8-A5 wired Projects.default_agent_id; P8-A1 will land the full Agent
 // table). Until then, the gallery surface needs a stable shape it can render
 // against — that is what this file is. Consumers wire real data from
@@ -9,7 +9,7 @@
 // SCOPE: presentation-only. No transport, no router, no service calls.
 
 // AgentId — canonical brand from api-types (SP-1 single source of truth).
-import type { AgentId } from "@enterprise-search/api-types";
+import type { AgentId } from "@0x-copilot/api-types";
 export type { AgentId };
 
 /**

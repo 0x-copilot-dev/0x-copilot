@@ -161,9 +161,9 @@ The agent **proceeds to implementation** with the documented placeholders
 ## Done criteria
 
 - [x] All FRs met
-- [x] `npm run typecheck --workspace @enterprise-search/chat-surface` passes
-- [x] `npm test --workspace @enterprise-search/chat-surface` passes
-- [x] `npm run lint --workspace @enterprise-search/chat-surface` passes
+- [x] `npm run typecheck --workspace @0x-copilot/chat-surface` passes
+- [x] `npm test --workspace @0x-copilot/chat-surface` passes
+- [x] `npm run lint --workspace @0x-copilot/chat-surface` passes
 - [x] No imports outside scope; no edits outside the In-scope list
 - [x] No bare browser primitives (uses Transport / Router ports only)
 - [x] No new third-party dependency

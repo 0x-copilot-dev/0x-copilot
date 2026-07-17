@@ -86,8 +86,8 @@ wrong") would erase that context.
 
 ## Validation
 
-- `npm run typecheck --workspace @enterprise-search/frontend`
-- `npm run build --workspace @enterprise-search/frontend`
+- `npm run typecheck --workspace @0x-copilot/frontend`
+- `npm run build --workspace @0x-copilot/frontend`
 - `cd apps/frontend && npx vitest run` (jsdom/component tests)
 - Spot-check 5 randomly chosen call sites in the browser to confirm
   the same string surfaces.

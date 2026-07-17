@@ -1,6 +1,6 @@
 # API Types
 
-`@enterprise-search/api-types` contains shared TypeScript contracts for
+`@0x-copilot/api-types` contains shared TypeScript contracts for
 app-facing API payloads, runtime events, and public route data consumed by
 frontend code.
 
@@ -38,7 +38,7 @@ that implements the route:
 ## Checks
 
 ```bash
-npm run typecheck --workspace @enterprise-search/api-types
+npm run typecheck --workspace @0x-copilot/api-types
 ```
 
 When route contracts change, also run typecheck for frontend consumers.

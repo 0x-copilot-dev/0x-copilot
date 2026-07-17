@@ -1,13 +1,13 @@
-* @enterprise-search/security-reviewers
+* @0x-copilot/security-reviewers
 
-/services/backend/ @enterprise-search/backend-owners @enterprise-search/security-reviewers
-/services/backend-facade/ @enterprise-search/backend-owners @enterprise-search/security-reviewers
-/services/ai-backend/ @enterprise-search/ai-runtime-owners @enterprise-search/security-reviewers
-/apps/frontend/ @enterprise-search/frontend-owners @enterprise-search/security-reviewers
-/.github/ @enterprise-search/security-reviewers
-/.github/workflows/ @enterprise-search/security-reviewers
-/.github/dependabot.yml @enterprise-search/security-reviewers
-/deploy/ @enterprise-search/security-reviewers
-/deploy/tenants.yml @enterprise-search/security-reviewers @enterprise-search/backend-owners
-/docs/ci-cd/ @enterprise-search/security-reviewers
-/docs/security/ @enterprise-search/security-reviewers
+/services/backend/ @0x-copilot/backend-owners @0x-copilot/security-reviewers
+/services/backend-facade/ @0x-copilot/backend-owners @0x-copilot/security-reviewers
+/services/ai-backend/ @0x-copilot/ai-runtime-owners @0x-copilot/security-reviewers
+/apps/frontend/ @0x-copilot/frontend-owners @0x-copilot/security-reviewers
+/.github/ @0x-copilot/security-reviewers
+/.github/workflows/ @0x-copilot/security-reviewers
+/.github/dependabot.yml @0x-copilot/security-reviewers
+/deploy/ @0x-copilot/security-reviewers
+/deploy/tenants.yml @0x-copilot/security-reviewers @0x-copilot/backend-owners
+/docs/ci-cd/ @0x-copilot/security-reviewers
+/docs/security/ @0x-copilot/security-reviewers

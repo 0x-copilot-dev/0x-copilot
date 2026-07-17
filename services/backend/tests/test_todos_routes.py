@@ -20,7 +20,7 @@ the service token + headers, exercising the production auth path.
 from __future__ import annotations
 
 
-from enterprise_service_contracts.headers import (
+from copilot_service_contracts.headers import (
     ORG_HEADER,
     ROLES_HEADER,
     SERVICE_TOKEN_HEADER,

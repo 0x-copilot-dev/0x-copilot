@@ -37,7 +37,7 @@ Vitest tests under `src/**/*.test.{ts,tsx}` were treated as **consumers** for sy
 ### 1. TypeScript (`tsc`)
 
 ```bash
-npm run typecheck --workspace @enterprise-search/frontend
+npm run typecheck --workspace @0x-copilot/frontend
 ```
 
 A clean typecheck does not prove absence of dead code; it only rules out obvious broken references.
@@ -59,7 +59,7 @@ cd apps/frontend && npx ts-prune
 ### 3. Vitest coverage
 
 ```bash
-npm run test --workspace @enterprise-search/frontend
+npm run test --workspace @0x-copilot/frontend
 ```
 
 Low or missing coverage means “weakly exercised”, not “unused in production”. Prefer explicit unused-export analysis over coverage alone.

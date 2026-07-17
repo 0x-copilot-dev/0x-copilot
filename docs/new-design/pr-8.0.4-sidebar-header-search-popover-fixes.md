@@ -53,8 +53,8 @@ Direct evidence:
 - ✅ The search input renders with a magnifier glyph + borderless field on the sidebar background; focus paints an accent ring matching the rest of the surface; placeholder reads `Search chats…`.
 - ✅ Clicking Sarah Chen opens an anchored popover above the user card, fully visible, dismissable by Escape and outside-click. WorkspacePicker / Settings / Sign out items render and click through.
 - ✅ Existing `Sidebar.test.tsx` + `UserCard.test.tsx` pass without modification (because we removed UI, not behavior, and the tests assert on roles/aria not on the removed refresh button — verified before the implementation lands).
-- ✅ `npm run typecheck --workspace @enterprise-search/frontend` clean.
-- ✅ `npm run build --workspace @enterprise-search/frontend` clean.
+- ✅ `npm run typecheck --workspace @0x-copilot/frontend` clean.
+- ✅ `npm run build --workspace @0x-copilot/frontend` clean.
 - ✅ Visual smoke in `make dev` against the Atlas design's sidebar mock: matches.
 
 ---

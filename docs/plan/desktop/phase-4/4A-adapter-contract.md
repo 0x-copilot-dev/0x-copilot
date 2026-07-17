@@ -9,7 +9,7 @@ Phase 0-A scaffolded the contract and a measurement-style render budget + error 
 - Documents `PURE RENDER ONLY (D28)` on the contract surface itself so generated tier-2 reviewers can read it without leaving the file.
 - Hardens `SurfaceRegistry` resolution semantics with a re-read against PRD §3.3 and §9.5.4 (version disambiguation, hot-swap idempotency, exact-scheme exhaustion before tier-3 fallback).
 - Wires the host-side glue in `TcSurfaceMount`: resolve adapter → call `renderCurrent` or `renderDiff` → wrap with host-owned `Approve` / `Reject` / `Suggest changes` controls (D28) → on adapter throw or 100 ms wall-clock budget overrun, fall back to the tier-3 adapter (D29) rather than the empty placeholder, so the user always sees something useful.
-- Extends `@enterprise-search/surface-renderers`'s ESLint rule to ban `Transport`, `fetch`, `XMLHttpRequest`, `EventSource`, `WebSocket`, `window`, `document`, `localStorage`, `sessionStorage`, `navigator.clipboard.write*`, `document.cookie`, and dynamic `import()` of non-allowlisted modules — enforcing D28/D29 at lint time for tier-1. Tier-2's AST scanner is a separate Phase 6 deliverable.
+- Extends `@0x-copilot/surface-renderers`'s ESLint rule to ban `Transport`, `fetch`, `XMLHttpRequest`, `EventSource`, `WebSocket`, `window`, `document`, `localStorage`, `sessionStorage`, `navigator.clipboard.write*`, `document.cookie`, and dynamic `import()` of non-allowlisted modules — enforcing D28/D29 at lint time for tier-1. Tier-2's AST scanner is a separate Phase 6 deliverable.
 
 The contract that ships here does not change in Phase 6 / 7. Only its consumers grow.
 
@@ -57,9 +57,9 @@ The contract that ships here does not change in Phase 6 / 7. Only its consumers 
   - Existing global bans (`window`, `document`, `history`, `navigator`, `location`, `localStorage`, `sessionStorage`, `fetch`, `EventSource`, `XMLHttpRequest`, `WebSocket`, `crypto`) preserved.
   - Added globals: `clipboard`.
   - Member-expression ban: `document.cookie`, `navigator.clipboard.writeText`, `navigator.clipboard.write`.
-  - Import bans: `@enterprise-search/chat-transport`, `@enterprise-search/chat-transport/*`, plus the new allowlist for `@enterprise-search/chat-surface` (allowed for design tokens / `TcInlineDiff`), `react`, `react-dom`, `@enterprise-search/design-system`. Dynamic `import()` of any other specifier fails.
+  - Import bans: `@0x-copilot/chat-transport`, `@0x-copilot/chat-transport/*`, plus the new allowlist for `@0x-copilot/chat-surface` (allowed for design tokens / `TcInlineDiff`), `react`, `react-dom`, `@0x-copilot/design-system`. Dynamic `import()` of any other specifier fails.
   - Existing `chat-surface/shell` import-ban preserved.
-- [x] FR-6: ESLint negative-test files in `packages/surface-renderers/src/__lint-negatives__/` deliberately violate each ban. A script (`lint-negatives.sh`) runs ESLint on the directory and asserts every file errors out. Wired into a `npm run lint:negatives --workspace @enterprise-search/surface-renderers` script and exercised in this phase's verification (not as a vitest test; ESLint is the assertion).
+- [x] FR-6: ESLint negative-test files in `packages/surface-renderers/src/__lint-negatives__/` deliberately violate each ban. A script (`lint-negatives.sh`) runs ESLint on the directory and asserts every file errors out. Wired into a `npm run lint:negatives --workspace @0x-copilot/surface-renderers` script and exercised in this phase's verification (not as a vitest test; ESLint is the assertion).
 - [x] FR-7: New `TcSurfaceMount` props remain optional so the existing Phase 0-A consumers (`<TcSurfaceMount uri transport />`) keep compiling. Adding `pendingDiff`, `state`, `onApprove`, `onReject`, `onSuggestChanges` is additive.
 - [x] FR-8: Tests cover: hot-swap (A → A' visible on re-resolve), miss → tier-3 fallback, `markBroken` → tier-3 fallback, render-with-timeout fallback to tier-3, error boundary fallback to tier-3, version disambiguation (v2 wins, fall through to v1 when v2's `matches` rejects, `markBroken(v2)` → v1 resolves). `TcSurfaceMount` tests cover: controls absent when no `pendingDiff`, controls present + firing handlers when `pendingDiff`, controls present around tier-3 fallback, tier-3-and-empty case → placeholder.
 
@@ -73,7 +73,7 @@ The contract that ships here does not change in Phase 6 / 7. Only its consumers 
 
 ## Interfaces consumed
 
-- `Transport` from `@enterprise-search/chat-transport` — type only; `TcSurfaceMount` forwards it for Phase 4-onwards consumers. Phase 4-A does not call it.
+- `Transport` from `@0x-copilot/chat-transport` — type only; `TcSurfaceMount` forwards it for Phase 4-onwards consumers. Phase 4-A does not call it.
 - `PendingDiff` from `packages/chat-surface/src/surfaces/types.ts` — used as the type of the `pendingDiff.meta` prop on `TcSurfaceMount`.
 - `TcInlineDiff` from `packages/chat-surface/src/thread-canvas/TcInlineDiff.tsx` — **not** used in 4-A. The Approve / Reject / Suggest band is a plain control row; per-renderer inline-diff cards are the adapter's job (when applicable). Tier-1 renderers may use `TcInlineDiff` inside their `renderDiff` if it fits their layout.
 
@@ -104,10 +104,10 @@ No new exports from `packages/chat-surface/src/index.ts`. The Phase 0-A block al
 - Globals ban (`no-restricted-globals`): `window`, `document`, `history`, `navigator`, `location`, `localStorage`, `sessionStorage`, `fetch`, `EventSource`, `XMLHttpRequest`, `WebSocket`, `crypto`, `clipboard`.
 - Property-access ban (`no-restricted-syntax`): `MemberExpression[object.name='document'][property.name='cookie']`, `MemberExpression[object.object.name='navigator'][object.property.name='clipboard']` (matches `navigator.clipboard.*`).
 - Import ban (`no-restricted-imports`):
-  - Bans `@enterprise-search/chat-transport` (D28 — adapters do not call Transport).
-  - Bans `apps/*`, `@enterprise-search/frontend`, `@enterprise-search/desktop`.
-  - Bans `@enterprise-search/chat-surface/shell` (renderers are leaves, not layout).
-- Dynamic-import ban (`no-restricted-syntax`): `ImportExpression` is allowed only when its argument is a string literal in `['react', 'react-dom', '@enterprise-search/design-system', '@enterprise-search/chat-surface']`. Anything else errors.
+  - Bans `@0x-copilot/chat-transport` (D28 — adapters do not call Transport).
+  - Bans `apps/*`, `@0x-copilot/frontend`, `@0x-copilot/desktop`.
+  - Bans `@0x-copilot/chat-surface/shell` (renderers are leaves, not layout).
+- Dynamic-import ban (`no-restricted-syntax`): `ImportExpression` is allowed only when its argument is a string literal in `['react', 'react-dom', '@0x-copilot/design-system', '@0x-copilot/chat-surface']`. Anything else errors.
 
 Allowlist next to the rule, documented in the same file's header comment block:
 
@@ -115,8 +115,8 @@ Allowlist next to the rule, documented in the same file's header comment block:
 ALLOWED IMPORTS (static or dynamic):
   - react
   - react-dom
-  - @enterprise-search/design-system
-  - @enterprise-search/chat-surface   (design tokens, TcInlineDiff primitive)
+  - @0x-copilot/design-system
+  - @0x-copilot/chat-surface   (design tokens, TcInlineDiff primitive)
 ```
 
 ## Open questions
@@ -124,17 +124,17 @@ ALLOWED IMPORTS (static or dynamic):
 - **Q1 — Should the host control band live inside `TcSurfaceMount` or a sibling `TcHostControls` component?** Adopted: inside `TcSurfaceMount`. The controls are the host's responsibility; lifting them to a sibling would require a second mounting point in every consumer. Phase 4-A keeps it together. If a later phase needs to reuse the control row outside the surface mount, factor it out then.
 - **Q2 — Tier-3 fallback re-entrancy.** If the tier-3 adapter itself throws or times out, we render the static placeholder. We do not re-resolve again. Recorded so the orchestrator can flip this to "render plain JSON dump" if tier-3 reliability ever degrades.
 - **Q3 — Suggest-changes label and behavior.** The host control is a button with `Suggest changes` text that calls `onSuggestChanges(diffId)`. The downstream UX (modal for feedback, regen queue) is Phase 5 / 6 territory; the contract is just the callback. Recorded for the orchestrator.
-- **Q4 — Lint negatives discoverability.** ESLint negative tests live under `__lint-negatives__/` and are excluded from both `tsc` and `vitest`. They are run via `npm run lint:negatives --workspace @enterprise-search/surface-renderers`, which calls `eslint src/__lint-negatives__` and asserts the exit code is non-zero. This avoids polluting unit test counts while still exercising the rule. Recorded so 4-B / 4-C / 4-D / 4-E / 4-F agents know the lint exit semantics.
+- **Q4 — Lint negatives discoverability.** ESLint negative tests live under `__lint-negatives__/` and are excluded from both `tsc` and `vitest`. They are run via `npm run lint:negatives --workspace @0x-copilot/surface-renderers`, which calls `eslint src/__lint-negatives__` and asserts the exit code is non-zero. This avoids polluting unit test counts while still exercising the rule. Recorded so 4-B / 4-C / 4-D / 4-E / 4-F agents know the lint exit semantics.
 
 ## Done criteria
 
 - [x] All FRs met.
-- [x] `npm test --workspace @enterprise-search/chat-surface` passes (existing 135 tests + new tests).
-- [x] `npm run typecheck --workspace @enterprise-search/chat-surface` passes.
-- [x] `npm run lint --workspace @enterprise-search/chat-surface` passes.
-- [x] `npm run typecheck --workspace @enterprise-search/surface-renderers` passes (deprecated `EmailRenderer` still typechecks).
-- [x] `npm run lint --workspace @enterprise-search/surface-renderers` passes on production code.
-- [x] `npm run lint:negatives --workspace @enterprise-search/surface-renderers` fails as expected (each negative file errors).
+- [x] `npm test --workspace @0x-copilot/chat-surface` passes (existing 135 tests + new tests).
+- [x] `npm run typecheck --workspace @0x-copilot/chat-surface` passes.
+- [x] `npm run lint --workspace @0x-copilot/chat-surface` passes.
+- [x] `npm run typecheck --workspace @0x-copilot/surface-renderers` passes (deprecated `EmailRenderer` still typechecks).
+- [x] `npm run lint --workspace @0x-copilot/surface-renderers` passes on production code.
+- [x] `npm run lint:negatives --workspace @0x-copilot/surface-renderers` fails as expected (each negative file errors).
 - [x] No new third-party dependency.
 - [x] No imports outside scope.
 

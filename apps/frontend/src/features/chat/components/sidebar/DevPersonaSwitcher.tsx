@@ -10,10 +10,7 @@
  * gated by ``import.meta.env.DEV``.
  */
 
-import {
-  useKeyValueStore,
-  useSecretStorage,
-} from "@enterprise-search/chat-surface";
+import { useKeyValueStore, useSecretStorage } from "@0x-copilot/chat-surface";
 import { useEffect, useState, type ReactElement } from "react";
 
 import {

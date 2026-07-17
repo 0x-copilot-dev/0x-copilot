@@ -4,7 +4,7 @@
 
 This phase builds the Electron substrate `apps/desktop/` empty since Phase 0-C
 scaffolded only the package metadata. The thin shell mounts `<ChatShell />`
-from `@enterprise-search/chat-surface` inside a single sandboxed
+from `@0x-copilot/chat-surface` inside a single sandboxed
 `BrowserWindow`, served by a privileged `app://` protocol that delivers a
 strict CSP per response (no `webRequest.onHeadersReceived` workaround
 required — `file://` does not flow through it; PRD §3.3 / S2 friction
@@ -147,7 +147,7 @@ react-jsx`, excludes `main/**` and `preload/**`.
 
 ## Functional requirements
 
-- [x] FR-1: `npm run build --workspace @enterprise-search/desktop`
+- [x] FR-1: `npm run build --workspace @0x-copilot/desktop`
       produces `out/main/index.js`, `out/preload/bridge.js`,
       `out/renderer/bootstrap.js`, and `out/renderer/index.html`.
 - [x] FR-2: `app.setName('Atlas')` runs before `whenReady`.
@@ -192,9 +192,9 @@ react-jsx`, excludes `main/**` and `preload/**`.
       `activate` re-creates the window on darwin if none.
       `web-contents-created` denies navigation off `app://` and denies
       all new windows.
-- [x] FR-10: `npm run typecheck --workspace @enterprise-search/desktop`
-      passes. `npm run lint --workspace @enterprise-search/desktop`
-      passes. `npm run test --workspace @enterprise-search/desktop`
+- [x] FR-10: `npm run typecheck --workspace @0x-copilot/desktop`
+      passes. `npm run lint --workspace @0x-copilot/desktop`
+      passes. `npm run test --workspace @0x-copilot/desktop`
       passes (36 tests across 4 files).
 
 ## Non-functional requirements
@@ -211,15 +211,15 @@ react-jsx`, excludes `main/**` and `preload/**`.
 
 ## Interfaces consumed
 
-- `ChatShell` from `@enterprise-search/chat-surface` — props
+- `ChatShell` from `@0x-copilot/chat-surface` — props
   `transport`, `router`, `keyValueStore`, `presenceSignal`, `children`.
-- `MockTransport` from `@enterprise-search/chat-transport` — constructed
+- `MockTransport` from `@0x-copilot/chat-transport` — constructed
   with no config in this phase (defaults are fine).
 - `Router<TRoute>`, `ArtifactRoute`, `KeyValueStore`, `PresenceSignal`
-  from `@enterprise-search/chat-surface` (re-exported via
-  `@enterprise-search/chat-surface` index).
+  from `@0x-copilot/chat-surface` (re-exported via
+  `@0x-copilot/chat-surface` index).
 - `Transport`, `Session`, `TransportCapabilities` types from
-  `@enterprise-search/chat-transport`.
+  `@0x-copilot/chat-transport`.
 - Electron APIs: `app`, `BrowserWindow`, `protocol`, `session`,
   `crashReporter`, `contextBridge`, `ipcRenderer`.
 
@@ -284,7 +284,7 @@ Phase 0-C `tsconfig.json`(it's the workspace`typecheck`script's
 entry point) and downgrade it to a project-references-style
 composite that delegates to`tsconfig.main.json`+`tsconfig.renderer.json`.
 Each per-process tsconfig sets its own `lib`, `types`, and `jsx`.
-Net effect: `npm run typecheck --workspace @enterprise-search/desktop`still resolves to`tsc -p tsconfig.json`, but tsc now follows the
+Net effect: `npm run typecheck --workspace @0x-copilot/desktop`still resolves to`tsc -p tsconfig.json`, but tsc now follows the
 references and typechecks both partitions correctly.
 _Update during implementation:_ Project references require composite
 tsconfigs to emit. Simpler shape adopted instead: `tsconfig.json`stays as the single typecheck entry point with DOM libs (renderer
@@ -301,10 +301,10 @@ throw new Error(...)` guard, matching the spike-prep pattern.
 ## Done criteria
 
 - [x] All FRs met
-- [x] `npm run typecheck --workspace @enterprise-search/desktop` passes
-- [x] `npm run lint --workspace @enterprise-search/desktop` passes
-- [x] `npm run test --workspace @enterprise-search/desktop` passes
-- [x] `npm run build --workspace @enterprise-search/desktop` produces
+- [x] `npm run typecheck --workspace @0x-copilot/desktop` passes
+- [x] `npm run lint --workspace @0x-copilot/desktop` passes
+- [x] `npm run test --workspace @0x-copilot/desktop` passes
+- [x] `npm run build --workspace @0x-copilot/desktop` produces
       all four output files (main, preload, renderer bootstrap, renderer
       html)
 - [x] No files outside the in-scope list above (1C's `main/ipc/**` and

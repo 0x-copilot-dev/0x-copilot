@@ -18,7 +18,7 @@ write + audit row; the store is the canonical in-memory adapter.
 
 from __future__ import annotations
 
-from enterprise_service_contracts.headers import (
+from copilot_service_contracts.headers import (
     ORG_HEADER,
     SERVICE_TOKEN_HEADER,
     USER_HEADER,

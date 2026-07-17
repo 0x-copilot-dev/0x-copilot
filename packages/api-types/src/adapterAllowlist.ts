@@ -2,12 +2,12 @@
 // Loaded by the desktop 6A AST scanner (apps/desktop/main/adapters/ast-allowlist.ts)
 // and mirrored on the AI backend by
 // services/ai-backend/src/agent_runtime/capabilities/render_adapter_generator/capability.py
-// (via enterprise_service_contracts.adapter_allowlist).
+// (via copilot_service_contracts.adapter_allowlist).
 //
 // JSON lives in the service-contracts package which is Python-primary; we
 // import it directly by relative path so the same on-disk file feeds both
 // runtimes.
-import allowlist from "../../service-contracts/src/enterprise_service_contracts/adapter_allowlist.json";
+import allowlist from "../../service-contracts/src/copilot_service_contracts/adapter_allowlist.json";
 
 export interface AdapterAllowlist {
   readonly schema_version: number;

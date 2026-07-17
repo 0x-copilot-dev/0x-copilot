@@ -14,9 +14,9 @@ See also:
 ## Commands
 
 ```bash
-npm run typecheck --workspace @enterprise-search/frontend
-npm run test      --workspace @enterprise-search/frontend
-npm run build     --workspace @enterprise-search/frontend
+npm run typecheck --workspace @0x-copilot/frontend
+npm run test      --workspace @0x-copilot/frontend
+npm run build     --workspace @0x-copilot/frontend
 ```
 
 A single file or test:
@@ -52,7 +52,7 @@ stream and the rendered surface.
 
 - **Mock at the API layer.** Replace `src/api/*` calls in tests; never
   import backend modules.
-- **Use `@enterprise-search/api-types` for fixtures.** UI assumptions stay
+- **Use `@0x-copilot/api-types` for fixtures.** UI assumptions stay
   aligned with service contracts because every payload is shape-checked at
   type-check time.
 - **Browser-only tests live in `apps/frontend`.** Shared package tests

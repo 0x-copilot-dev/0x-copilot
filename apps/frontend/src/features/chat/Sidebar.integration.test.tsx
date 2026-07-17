@@ -18,7 +18,7 @@ import userEvent from "@testing-library/user-event";
 import type {
   Conversation,
   WorkspaceListResponse,
-} from "@enterprise-search/api-types";
+} from "@0x-copilot/api-types";
 
 const mockListMyWorkspaces = vi.fn<() => Promise<WorkspaceListResponse>>();
 const mockGetMyProfile = vi.fn(async () => {

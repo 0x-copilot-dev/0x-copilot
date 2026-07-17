@@ -21,7 +21,7 @@ import {
   type ReactElement,
 } from "react";
 
-import type { NotificationQuietHoursBlob } from "@enterprise-search/api-types";
+import type { NotificationQuietHoursBlob } from "@0x-copilot/api-types";
 
 export interface QuietHoursEditorProps {
   readonly value: NotificationQuietHoursBlob;

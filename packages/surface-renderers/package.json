@@ -1,5 +1,5 @@
 {
-  "name": "@enterprise-search/surface-renderers",
+  "name": "@0x-copilot/surface-renderers",
   "version": "0.1.0",
   "private": true,
   "type": "module",
@@ -16,8 +16,8 @@
     "react-dom": "^19.0.0"
   },
   "dependencies": {
-    "@enterprise-search/chat-surface": "0.1.0",
-    "@enterprise-search/chat-transport": "0.1.0"
+    "@0x-copilot/chat-surface": "0.1.0",
+    "@0x-copilot/chat-transport": "0.1.0"
   },
   "devDependencies": {
     "@testing-library/jest-dom": "6.9.1",

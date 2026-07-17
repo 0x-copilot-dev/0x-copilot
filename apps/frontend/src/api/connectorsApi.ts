@@ -16,7 +16,7 @@
 // Vite proxy → facade. 401s are intercepted globally by AuthContext via
 // the transport's `onUnauthorized` hook.
 //
-// Wire types come from `@enterprise-search/api-types` (canonical declaration
+// Wire types come from `@0x-copilot/api-types` (canonical declaration
 // site at `packages/api-types/src/connectors.ts`).
 
 import type {
@@ -34,8 +34,8 @@ import type {
   PatchConnectorScopesResponse,
   RefreshConnectorResponse,
   StartConnectorOAuthResponse,
-} from "@enterprise-search/api-types";
-import type { ConnectorId, ConnectorSlug } from "@enterprise-search/api-types";
+} from "@0x-copilot/api-types";
+import type { ConnectorId, ConnectorSlug } from "@0x-copilot/api-types";
 
 import type { RequestIdentity } from "./config";
 import { httpGet, httpJson, httpPatchQuery, httpPostQuery } from "./http";

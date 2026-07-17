@@ -1,4 +1,4 @@
-// Pure adapter functions mapping wire shapes (`@enterprise-search/api-types`)
+// Pure adapter functions mapping wire shapes (`@0x-copilot/api-types`)
 // to presentation props for the Tools destination views.
 //
 // Pure: no React, no I/O, no module-level state. Every transform here is
@@ -13,7 +13,7 @@ import type {
   ToolInvocation,
   ToolStreamEnvelope,
   ToolUsageProjection,
-} from "@enterprise-search/api-types";
+} from "@0x-copilot/api-types";
 
 /**
  * One row in the Tools list. Pre-shaped so the destination row

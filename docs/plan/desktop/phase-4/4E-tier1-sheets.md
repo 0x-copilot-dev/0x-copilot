@@ -158,7 +158,7 @@ export interface SheetDiff {
 ### Purity (D28)
 
 - [x] FR-P1 — Module file imports only from `react`,
-      `@enterprise-search/chat-surface`, and sibling files in
+      `@0x-copilot/chat-surface`, and sibling files in
       `./sheet/`. No transport / no MCP / no fetch / no `window`. ESLint
       rule from Phase 4-A enforces.
 - [x] FR-P2 — Both render functions are pure functions of their argument.
@@ -189,8 +189,8 @@ export interface SheetDiff {
 ## Interfaces consumed
 
 - `SaaSRendererAdapter`, `SaaSRendererAdapterMetadata`, `registerAdapter` from
-  `@enterprise-search/chat-surface`.
-- `TcInlineDiff`, `InlineDiffState` from `@enterprise-search/chat-surface`.
+  `@0x-copilot/chat-surface`.
+- `TcInlineDiff`, `InlineDiffState` from `@0x-copilot/chat-surface`.
 
 ## Interfaces produced
 
@@ -234,8 +234,8 @@ The agent **proceeds to implementation** with the documented placeholders.
 ## Done criteria
 
 - [x] All FRs met
-- [x] `npm test --workspace @enterprise-search/surface-renderers` passes
-- [x] `npm run lint --workspace @enterprise-search/surface-renderers` passes
+- [x] `npm test --workspace @0x-copilot/surface-renderers` passes
+- [x] `npm run lint --workspace @0x-copilot/surface-renderers` passes
 - [x] No imports outside scope; no edits outside the In-scope list
 - [x] No transport / fetch / MCP / `window` / `document` references
 - [x] No new third-party dependency

@@ -68,7 +68,7 @@ The spike-prep already shipped a `SurfaceRegistry` keyed on `{scheme → React.C
 
 ## Interfaces consumed
 
-- `Transport` from `@enterprise-search/chat-transport` (only the type — no calls in this phase; `TcSurfaceMount` accepts it so Phase 4-a's wire-up has the prop already).
+- `Transport` from `@0x-copilot/chat-transport` (only the type — no calls in this phase; `TcSurfaceMount` accepts it so Phase 4-a's wire-up has the prop already).
 - `parseArtifactUri` from `../routing/uri/parser` is **not** used inside `resolveAdapter`: the parser whitelists `ArtifactScheme`, but tier-2 schemes (`hubspot-deal`, `linear-issue`, …) and the wildcard `'*'` aren't in that whitelist. The registry parses scheme from URI with a one-line `indexOf('://')` so it doesn't constrain what schemes tier-2 can register. The whitelist still gates the URL-parsing layer above us.
 - `React`, `useEffect`, `useState`, error boundary primitive (class component is fine here; React error boundaries require a class — that's why D29's "no class components" rule has the documented exception "except for React error boundaries").
 
@@ -133,10 +133,10 @@ export function TcSurfaceMount(props: TcSurfaceMountProps): React.ReactElement;
 ## Done criteria
 
 - [ ] All FRs met
-- [ ] `npm run typecheck --workspace @enterprise-search/chat-surface` passes
-- [ ] `npm test --workspace @enterprise-search/chat-surface` passes
-- [ ] `npm run lint --workspace @enterprise-search/chat-surface` passes
-- [ ] `npm run typecheck --workspace @enterprise-search/surface-renderers` passes (spike-prep `EmailRenderer` still typechecks against the deprecated `SurfaceRendererProps`)
+- [ ] `npm run typecheck --workspace @0x-copilot/chat-surface` passes
+- [ ] `npm test --workspace @0x-copilot/chat-surface` passes
+- [ ] `npm run lint --workspace @0x-copilot/chat-surface` passes
+- [ ] `npm run typecheck --workspace @0x-copilot/surface-renderers` passes (spike-prep `EmailRenderer` still typechecks against the deprecated `SurfaceRendererProps`)
 - [ ] No imports outside scope
 - [ ] No bare browser primitives in chat-surface
 - [ ] No new third-party dependency

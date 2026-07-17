@@ -9,7 +9,7 @@
 // regardless of how the hook is composed.
 
 import { describe, expect, it } from "vitest";
-import type { RuntimeEventEnvelope } from "@enterprise-search/api-types";
+import type { RuntimeEventEnvelope } from "@0x-copilot/api-types";
 import {
   applyEventToSlot,
   emptySlot,

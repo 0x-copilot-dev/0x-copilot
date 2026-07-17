@@ -18,7 +18,7 @@ import type {
   UpdateMemberRequest,
   UpdateWorkspaceSettingsRequest,
   WorkspaceSettings,
-} from "@enterprise-search/api-types";
+} from "@0x-copilot/api-types";
 import type { RequestIdentity } from "./config";
 import {
   httpDelete,

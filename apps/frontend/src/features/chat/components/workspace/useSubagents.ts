@@ -6,7 +6,7 @@
 // Live writes win on conflict because `applySubagentEvent` upgrades
 // state monotonically (running → completed/failed/cancelled).
 
-import type { SubagentEntry } from "@enterprise-search/api-types";
+import type { SubagentEntry } from "@0x-copilot/api-types";
 import { useCallback, useEffect, useState } from "react";
 
 import { listSubagents } from "../../../../api/agentApi";

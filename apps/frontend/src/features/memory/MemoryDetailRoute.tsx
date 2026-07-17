@@ -7,7 +7,7 @@
 
 import { useEffect, useState, type ReactElement } from "react";
 
-import type { MemoryItem, MemoryItemId } from "@enterprise-search/api-types";
+import type { MemoryItem, MemoryItemId } from "@0x-copilot/api-types";
 
 import type { RequestIdentity } from "../../api/config";
 import {

@@ -12,7 +12,7 @@ from starlette import status
 from agent_runtime.api.constants import Messages
 from agent_runtime.execution.contracts import RuntimeErrorCode
 from agent_runtime.persistence.constants import Values as PersistenceValues
-from enterprise_audit_chain import AuditChainSigner
+from copilot_audit_chain import AuditChainSigner
 from agent_runtime.persistence.records import (
     ApprovalBatchItemRecord,
     ApprovalBatchRecord,

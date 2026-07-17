@@ -10,7 +10,7 @@ import type {
   LibraryFileId,
   LibraryPageId,
   LibraryDatasetId,
-} from "@enterprise-search/api-types";
+} from "@0x-copilot/api-types";
 import type {
   Session,
   SseSubscribeOptions,
@@ -18,7 +18,7 @@ import type {
   Transport,
   TransportCapabilities,
   TypedRequest,
-} from "@enterprise-search/chat-transport";
+} from "@0x-copilot/chat-transport";
 import { fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { type ReactElement } from "react";
 import { afterEach, describe, expect, it, vi } from "vitest";

@@ -12,7 +12,7 @@ NOT from the path — caller-supplied identity is untrusted (master rule).
 
 from __future__ import annotations
 
-from enterprise_service_contracts.scopes import RUNTIME_USE
+from copilot_service_contracts.scopes import RUNTIME_USE
 from fastapi import Depends, FastAPI, Query, Request
 
 from backend_app.auth import BackendServiceAuthenticator

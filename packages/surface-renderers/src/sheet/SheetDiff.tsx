@@ -1,6 +1,6 @@
 import type { CSSProperties, ReactElement } from "react";
 
-import { TcInlineDiff } from "@enterprise-search/chat-surface";
+import { TcInlineDiff } from "@0x-copilot/chat-surface";
 
 import type {
   SheetCellChange,

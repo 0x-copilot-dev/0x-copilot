@@ -1,9 +1,9 @@
-import type { ShellDestinationSlug } from "@enterprise-search/chat-surface";
+import type { ShellDestinationSlug } from "@0x-copilot/chat-surface";
 
 import type { SettingsSection } from "../features/settings/SettingsScreen";
 
 // Web-app route union. Settings + share are web-only concepts; the desktop
-// substrate's editor-area model (ArtifactRoute in @enterprise-search/
+// substrate's editor-area model (ArtifactRoute in @0x-copilot/
 // chat-surface) doesn't include them. HashRouter implements Router<AppRoute>
 // so the web app's wider route shape rides through the same port that the
 // desktop substrate will use for ArtifactRoute.

@@ -14,7 +14,7 @@
 //     fields that changed (= a valid `UpdateToolRequest`). The host
 //     owns the network call.
 //   - SINGLE SOURCE OF TRUTH: imports `Tool` / `UpdateToolRequest` from
-//     `@enterprise-search/api-types`. Zero brand redeclarations.
+//     `@0x-copilot/api-types`. Zero brand redeclarations.
 //   - JSON Schema editors are textareas with inline JSON.parse validation;
 //     invalid input shows the parse-error message inline and the Save
 //     button blocks the affected field's contribution to the patch.
@@ -39,8 +39,8 @@ import type {
   ToolTransport,
   ToolTransportKind,
   UpdateToolRequest,
-} from "@enterprise-search/api-types";
-import { StatusPill } from "@enterprise-search/design-system";
+} from "@0x-copilot/api-types";
+import { StatusPill } from "@0x-copilot/design-system";
 
 // ===========================================================================
 // Tab IDs + ARIA wiring.

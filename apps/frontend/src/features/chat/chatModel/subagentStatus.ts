@@ -1,4 +1,4 @@
-import type { SubagentLifecycleStatus } from "@enterprise-search/api-types";
+import type { SubagentLifecycleStatus } from "@0x-copilot/api-types";
 
 // Canonical normalisation + classification for SubagentLifecycleStatus.
 //

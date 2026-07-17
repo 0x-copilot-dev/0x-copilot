@@ -9,7 +9,7 @@
 
 import type { CSSProperties, ReactElement } from "react";
 
-import { Button } from "@enterprise-search/design-system";
+import { Button } from "@0x-copilot/design-system";
 
 export interface SkillWizardProps {
   /**

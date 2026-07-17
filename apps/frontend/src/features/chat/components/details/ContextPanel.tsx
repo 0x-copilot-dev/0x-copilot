@@ -11,18 +11,13 @@
  * the UI never re-derives them from `available_tokens / window_size`.
  */
 
-import {
-  Badge,
-  Button,
-  Card,
-  classNames,
-} from "@enterprise-search/design-system";
+import { Badge, Button, Card, classNames } from "@0x-copilot/design-system";
 import type {
   ContextCallRow,
   ContextCompressionRow,
   ContextSubagentRow,
   ConversationContextResponse,
-} from "@enterprise-search/api-types";
+} from "@0x-copilot/api-types";
 import type { ReactElement } from "react";
 import { useCallback, useEffect, useState } from "react";
 

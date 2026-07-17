@@ -38,7 +38,7 @@ pagination. The SIEM export pump pushes events to external collectors (Elastic, 
 | `key_version` | `int`   | Key rotation version                          |
 
 **Append-only invariant**: the store never issues an UPDATE or DELETE on audit rows. The
-chain signer from `enterprise_audit_chain` package verifies each new row links correctly
+chain signer from `copilot_audit_chain` package verifies each new row links correctly
 to the prior.
 
 ---

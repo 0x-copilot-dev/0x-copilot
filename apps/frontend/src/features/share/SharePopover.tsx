@@ -24,11 +24,8 @@ import {
   PopoverContent,
   PopoverTrigger,
   Switch,
-} from "@enterprise-search/design-system";
-import type {
-  ConversationShare,
-  ShareViewAccess,
-} from "@enterprise-search/api-types";
+} from "@0x-copilot/design-system";
+import type { ConversationShare, ShareViewAccess } from "@0x-copilot/api-types";
 import type { ReactElement } from "react";
 import { useCallback, useEffect, useMemo, useState } from "react";
 

@@ -1,4 +1,4 @@
-import type { ConversationId, RunId } from "@enterprise-search/api-types";
+import type { ConversationId, RunId } from "@0x-copilot/api-types";
 import { render, screen, waitFor } from "@testing-library/react";
 import { afterEach, describe, expect, it } from "vitest";
 

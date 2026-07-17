@@ -1,4 +1,4 @@
-import { classNames } from "@enterprise-search/design-system";
+import { classNames } from "@0x-copilot/design-system";
 import type { ReactElement } from "react";
 import type { ActivityParam } from "../../utils/activityDataBuilders";
 

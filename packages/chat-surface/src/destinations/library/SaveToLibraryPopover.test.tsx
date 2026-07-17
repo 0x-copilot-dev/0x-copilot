@@ -3,7 +3,7 @@
 // Covers: default kind override, name autofocus, project picker
 // integration, tag parsing, submit + error rendering, cancel, escape.
 
-import type { ProjectId } from "@enterprise-search/api-types";
+import type { ProjectId } from "@0x-copilot/api-types";
 import { fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { describe, expect, it, vi } from "vitest";
 

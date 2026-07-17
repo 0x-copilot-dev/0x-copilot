@@ -1,1 +1,1 @@
-"""Core backend service for product-owned Enterprise Search state."""
+"""Core backend service for product-owned 0xCopilot state."""

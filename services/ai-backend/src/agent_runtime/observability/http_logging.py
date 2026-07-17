@@ -26,7 +26,7 @@ import warnings
 from typing import Any, ClassVar
 import uuid
 
-from enterprise_service_contracts.headers import (
+from copilot_service_contracts.headers import (
     ORG_HEADER,
     REQUEST_ID_HEADER,
     USER_HEADER,

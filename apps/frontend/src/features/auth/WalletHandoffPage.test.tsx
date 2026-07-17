@@ -5,7 +5,7 @@
 
 import { render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
-import type { SiweSessionResponse } from "@enterprise-search/api-types";
+import type { SiweSessionResponse } from "@0x-copilot/api-types";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
 import * as siweApi from "../../api/siweApi";

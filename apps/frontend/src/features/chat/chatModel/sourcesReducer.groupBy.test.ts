@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import type { SourceEntry } from "@enterprise-search/api-types";
+import type { SourceEntry } from "@0x-copilot/api-types";
 import { groupSourcesByConnector } from "./sourcesReducer";
 
 function source(overrides: Partial<SourceEntry>): SourceEntry {

@@ -1,5 +1,5 @@
-import { Menu } from "@enterprise-search/design-system";
-import type { ModelCatalogModel } from "@enterprise-search/api-types";
+import { Menu } from "@0x-copilot/design-system";
+import type { ModelCatalogModel } from "@0x-copilot/api-types";
 import { useRef, useState, type ReactElement } from "react";
 
 export interface ModelPillProps {

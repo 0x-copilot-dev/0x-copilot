@@ -7,10 +7,10 @@
 // dependency.
 //
 // Wire-type re-exports are forwarded from `_routines-stub.ts`; the
-// orchestrator rewires the stub to `@enterprise-search/api-types` at
+// orchestrator rewires the stub to `@0x-copilot/api-types` at
 // merge time.
 
-import type { RoutineId } from "@enterprise-search/api-types";
+import type { RoutineId } from "@0x-copilot/api-types";
 
 import {
   hasItemRefResolver,
@@ -57,10 +57,10 @@ export {
 };
 
 // Wire-type re-exports (forwarded from `_routines-stub.ts`; the
-// orchestrator rewires the stub to `@enterprise-search/api-types` at
+// orchestrator rewires the stub to `@0x-copilot/api-types` at
 // merge time — see `_routines-stub.ts` header).
 //
-// TODO(merge): rewire to "@enterprise-search/api-types"
+// TODO(merge): rewire to "@0x-copilot/api-types"
 export type {
   Routine,
   RoutineAutonomy,

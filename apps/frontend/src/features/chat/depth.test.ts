@@ -1,4 +1,4 @@
-import type { ModelCatalogModel } from "@enterprise-search/api-types";
+import type { ModelCatalogModel } from "@0x-copilot/api-types";
 import { describe, expect, it } from "vitest";
 import {
   depthLabel,

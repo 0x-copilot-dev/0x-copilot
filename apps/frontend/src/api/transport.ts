@@ -1,7 +1,4 @@
-import {
-  WebTransport,
-  type Transport,
-} from "@enterprise-search/chat-transport";
+import { WebTransport, type Transport } from "@0x-copilot/chat-transport";
 
 // The frontend keeps a single WebTransport for the lifetime of the page.
 // Every HTTP call — through the http.ts helpers, through api modules that

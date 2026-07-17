@@ -13,11 +13,8 @@
  * Pure presentation: no fetch, no derived async work.
  */
 
-import type {
-  BudgetMeResponse,
-  UsageOrgResponse,
-} from "@enterprise-search/api-types";
-import { Card } from "@enterprise-search/design-system";
+import type { BudgetMeResponse, UsageOrgResponse } from "@0x-copilot/api-types";
+import { Card } from "@0x-copilot/design-system";
 import type { ReactElement } from "react";
 import { useMemo } from "react";
 import {

@@ -14,7 +14,7 @@ import type {
   DraftStatus,
   DraftUpdatedPayload,
   RuntimeEventEnvelope,
-} from "@enterprise-search/api-types";
+} from "@0x-copilot/api-types";
 
 export type DraftRegistryByConversation = ReadonlyMap<
   string,

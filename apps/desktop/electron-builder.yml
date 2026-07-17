@@ -1,4 +1,4 @@
-appId: com.enterprise-search.atlas
+appId: com.0x-copilot.atlas
 productName: Atlas
 directories:
   buildResources: build

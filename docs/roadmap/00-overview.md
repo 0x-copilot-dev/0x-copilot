@@ -101,7 +101,7 @@ User confirmed: ship Google/OIDC and SAML/SCIM **in parallel**. PRs A1–A2 are 
 ### A10 — `feat(backend,ai-backend): RBAC enforcement at every route`
 
 - **Spec:** [services/backend/docs/specs/auth/A10-rbac.md](services/backend/docs/specs/auth/A10-rbac.md), [services/ai-backend/docs/specs/auth/A10-rbac.md](services/ai-backend/docs/specs/auth/A10-rbac.md)
-- **Scope catalog:** new `packages/service-contracts/src/enterprise_service_contracts/scopes.py` constants: `mcp:read`, `mcp:write`, `skills:read`, `skills:write`, `connectors:auth`, `runtime:use`, `admin:users`, `admin:idp`, `admin:audit_export`, `audit:read`, `mfa:pending`.
+- **Scope catalog:** new `packages/service-contracts/src/copilot_service_contracts/scopes.py` constants: `mcp:read`, `mcp:write`, `skills:read`, `skills:write`, `connectors:auth`, `runtime:use`, `admin:users`, `admin:idp`, `admin:audit_export`, `audit:read`, `mfa:pending`.
 - **`RequireScopes(*scopes)` and `RequireRoles(*roles)` FastAPI dependencies** in both services. Annotate every existing route in [services/backend/src/backend_app/app.py](services/backend/src/backend_app/app.py) and [services/ai-backend/src/runtime_api/http/routes.py](services/ai-backend/src/runtime_api/http/routes.py).
 - **Default-deny:** static check in CI fails build if any FastAPI route is unannotated.
 - **Two-phase rollout:** `RBAC_MODE=audit` (log denies, pass through) → `RBAC_MODE=enforce`. Riskiest auth PR; ships last.
@@ -174,7 +174,7 @@ Sequencing principle: foundational config + tooling first (C1, C2, C4, C3), then
 ### C1 — `feat(deployment): ENTERPRISE_DEPLOYMENT_PROFILE config`
 
 - **Spec:** [docs/specs/deployment/C1-deployment-profiles.md](docs/specs/deployment/C1-deployment-profiles.md)
-- **Per-service module** (no shared package — service boundaries hard): `services/ai-backend/src/agent_runtime/deployment/profile.py`, `services/backend/src/backend_app/deployment_profile.py`, `services/backend-facade/src/backend_facade/deployment_profile.py`. Enum + `DeploymentFeatureToggles` constants mirrored into `packages/service-contracts/src/enterprise_service_contracts/deployment_profile.py`.
+- **Per-service module** (no shared package — service boundaries hard): `services/ai-backend/src/agent_runtime/deployment/profile.py`, `services/backend/src/backend_app/deployment_profile.py`, `services/backend-facade/src/backend_facade/deployment_profile.py`. Enum + `DeploymentFeatureToggles` constants mirrored into `packages/service-contracts/src/copilot_service_contracts/deployment_profile.py`.
 - **`DEV_AUTH_BYPASS=true` rejected** for managed/self-hosted profiles even when `FACADE_ENVIRONMENT=development` — closes the existing ambiguity at [services/backend-facade/src/backend_facade/auth.py:76-77](services/backend-facade/src/backend_facade/auth.py#L76-L77).
 - **Helm + Compose ship the same image.** Profile-specific config injected via env vars at deploy time. Helm chart and `docker-compose.prod.yml` produced as artifacts in this PR.
 
@@ -357,7 +357,7 @@ End-to-end verification per track:
 - [services/backend-facade/src/backend_facade/app.py:48](services/backend-facade/src/backend_facade/app.py#L48) — replace `/v1/session` with backend-backed lookup
 - [apps/frontend/src/app/App.tsx:113-146](apps/frontend/src/app/App.tsx#L113-L146) — refactor to AuthContext
 - [apps/frontend/src/api/sessionApi.ts](apps/frontend/src/api/sessionApi.ts), [apps/frontend/src/api/http.ts](apps/frontend/src/api/http.ts)
-- [packages/api-types/src/index.ts](packages/api-types/src/index.ts), new `packages/service-contracts/src/enterprise_service_contracts/scopes.py`
+- [packages/api-types/src/index.ts](packages/api-types/src/index.ts), new `packages/service-contracts/src/copilot_service_contracts/scopes.py`
 
 **Token Usage (Track B):**
 

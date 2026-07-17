@@ -17,12 +17,12 @@
 // directly. The transport singleton enforces this via the same-origin
 // Vite proxy → facade.
 //
-// Wire types come from `@enterprise-search/api-types/src/todos.ts`
+// Wire types come from `@0x-copilot/api-types/src/todos.ts`
 // once Phase 3 Impl-A lands. Today they live in `./_todos-stub` so the
 // frontend wave can run in parallel.
 //
 // TODO(merge): swap every `./_todos-stub` import for
-// `@enterprise-search/api-types`.
+// `@0x-copilot/api-types`.
 
 import type { RequestIdentity } from "./config";
 import { httpDelete, httpGet, httpPatchQuery, httpPostQuery } from "./http";

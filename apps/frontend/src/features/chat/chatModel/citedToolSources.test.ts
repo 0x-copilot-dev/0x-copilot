@@ -2,7 +2,7 @@
 // helpers powering the SourcesTab rail.
 
 import { describe, expect, it } from "vitest";
-import type { CitationLink } from "@enterprise-search/api-types";
+import type { CitationLink } from "@0x-copilot/api-types";
 
 import {
   citedToolSources,

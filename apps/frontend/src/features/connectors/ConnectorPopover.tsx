@@ -10,12 +10,7 @@
 // "Searching this chat / {n} of {N} connectors active" layout with an
 // inline Manage caret link; the footer becomes an explainer line.
 
-import {
-  AppIcon,
-  Button,
-  Menu,
-  classNames,
-} from "@enterprise-search/design-system";
+import { AppIcon, Button, Menu, classNames } from "@0x-copilot/design-system";
 import {
   useCallback,
   useRef,

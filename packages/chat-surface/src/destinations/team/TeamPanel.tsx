@@ -10,7 +10,7 @@
 
 import { type CSSProperties, type ReactElement } from "react";
 
-import type { Presence } from "@enterprise-search/api-types";
+import type { Presence } from "@0x-copilot/api-types";
 
 import { ContextPanel } from "../../shell/ContextPanel";
 import { FilterTabs, type FilterTabOption } from "../../shell/FilterTabs";

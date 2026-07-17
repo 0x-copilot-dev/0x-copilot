@@ -2,8 +2,8 @@ import {
   __resetItemRefRegistryForTests,
   registerItemRefResolver,
   type ArtifactRoute,
-} from "@enterprise-search/chat-surface";
-import type { ConversationId } from "@enterprise-search/api-types";
+} from "@0x-copilot/chat-surface";
+import type { ConversationId } from "@0x-copilot/api-types";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { WebNotificationPort } from "./NotificationWeb";

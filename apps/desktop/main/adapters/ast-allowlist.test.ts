@@ -14,7 +14,7 @@ describe("astAllowlistScan — ALLOWED_IMPORTS shape", () => {
     expect(Object.keys(ALLOWED_IMPORTS)).toEqual([
       "react",
       "react-dom",
-      "@enterprise-search/design-system",
+      "@0x-copilot/design-system",
     ]);
   });
 
@@ -31,7 +31,7 @@ describe("astAllowlistScan — ALLOWED_IMPORTS shape", () => {
   });
 
   it("excludes Menu / Popover / ThemeProvider from design-system", () => {
-    const ds = ALLOWED_IMPORTS["@enterprise-search/design-system"];
+    const ds = ALLOWED_IMPORTS["@0x-copilot/design-system"];
     expect(ds).not.toContain("Menu");
     expect(ds).not.toContain("Popover");
     expect(ds).not.toContain("ThemeProvider");
@@ -43,7 +43,7 @@ describe("astAllowlistScan — allowed", () => {
   it("accepts a minimal adapter that imports only from the allowlist", () => {
     const source = `
       import { createElement, useState } from 'react';
-      import { Button, Card } from '@enterprise-search/design-system';
+      import { Button, Card } from '@0x-copilot/design-system';
       module.exports = {
         scheme: 'demo',
         matches: (uri) => uri.startsWith('demo://'),
@@ -126,7 +126,7 @@ describe("astAllowlistScan — disallowed imports", () => {
 
   it("rejects namespace import from an allowed module", () => {
     expect(
-      violationKinds(`import * as DS from '@enterprise-search/design-system';`),
+      violationKinds(`import * as DS from '@0x-copilot/design-system';`),
     ).toContain("import.namespace-not-allowed");
   });
 

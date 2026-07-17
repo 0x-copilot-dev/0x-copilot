@@ -1,7 +1,7 @@
 // @vitest-environment node
 import { describe, expect, it, vi } from "vitest";
 
-import type { SaaSRendererAdapter } from "@enterprise-search/chat-surface";
+import type { SaaSRendererAdapter } from "@0x-copilot/chat-surface";
 
 import { wrapWithBoundary, type BoundaryError } from "./error-boundary";
 

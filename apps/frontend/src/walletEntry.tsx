@@ -12,7 +12,7 @@
 import { StrictMode } from "react";
 import { createRoot } from "react-dom/client";
 
-import "@enterprise-search/design-system/styles.css";
+import "@0x-copilot/design-system/styles.css";
 import "./styles.css";
 
 import { WalletHandoffPage } from "./features/auth/WalletHandoffPage";

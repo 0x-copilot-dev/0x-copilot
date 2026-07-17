@@ -3,9 +3,9 @@ requires = ["setuptools>=69", "wheel"]
 build-backend = "setuptools.build_meta"
 
 [project]
-name = "enterprise-search-backend-facade"
+name = "0x-copilot-backend-facade"
 version = "0.1.0"
-description = "Product-facing API facade for Enterprise Search"
+description = "Product-facing API facade for 0xCopilot"
 requires-python = ">=3.13"
 dependencies = [
   "fastapi==0.137.1",

@@ -51,8 +51,8 @@ import type {
   ConversationId,
   RunId,
   RuntimeEventEnvelope,
-} from "@enterprise-search/api-types";
-import type { Transport } from "@enterprise-search/chat-transport";
+} from "@0x-copilot/api-types";
+import type { Transport } from "@0x-copilot/chat-transport";
 
 import { SwimlaneScrubProvider } from "./SwimlaneScrubContext";
 import { TcChat } from "./TcChat";

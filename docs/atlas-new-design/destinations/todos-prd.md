@@ -4,7 +4,7 @@
 **Owner:** parth (orchestrator) — implementation delegated to Phase 3 impl agents
 **Master:** [destinations-master-prd.md](../destinations-master-prd.md) §5.3
 **Shell PRD:** [PRD.md](../PRD.md)
-**Design source of truth:** Claude Design handoff bundle at `/tmp/atlas-design/enterprise-search-template/` — `project/todos.jsx` (lines 1-379) is the load-bearing reference; `project/projects-todos.css` is the visual intent (we consume `packages/design-system` tokens, not literal CSS); `project/dest-misc.jsx:184-220` is the `TodosMain` mount; `project/data.jsx:118-200` is the mock data shape.
+**Design source of truth:** Claude Design handoff bundle at `/tmp/atlas-design/0x-copilot-template/` — `project/todos.jsx` (lines 1-379) is the load-bearing reference; `project/projects-todos.css` is the visual intent (we consume `packages/design-system` tokens, not literal CSS); `project/dest-misc.jsx:184-220` is the `TodosMain` mount; `project/data.jsx:118-200` is the mock data shape.
 
 ---
 
@@ -599,9 +599,9 @@ Required reading (in order):
 1. docs/atlas-new-design/PRD.md
 2. docs/atlas-new-design/destinations-master-prd.md §3, §4, §5.3
 3. docs/atlas-new-design/destinations/todos-prd.md  (this file)
-4. /tmp/atlas-design/enterprise-search-template/project/todos.jsx
-5. /tmp/atlas-design/enterprise-search-template/project/projects-todos.css
-6. /tmp/atlas-design/enterprise-search-template/project/data.jsx (lines 118-200)
+4. /tmp/atlas-design/0x-copilot-template/project/todos.jsx
+5. /tmp/atlas-design/0x-copilot-template/project/projects-todos.css
+6. /tmp/atlas-design/0x-copilot-template/project/data.jsx (lines 118-200)
 7. Your role's specific files (api-types + backend OR frontend OR ai-backend)
 ```
 
@@ -689,10 +689,10 @@ Run after all three impls merged: open a chat → produce a final response → w
 ## 19. References
 
 - [PRD.md](../PRD.md) · [destinations-master-prd.md](../destinations-master-prd.md) — workspace shell PRD + master destinations PRD (§3 checklist, §4 primitives, §5.3 todos master, §7 dispatch)
-- `/tmp/atlas-design/enterprise-search-template/project/todos.jsx` — design reference
-- `/tmp/atlas-design/enterprise-search-template/project/projects-todos.css` — visual intent (consumed via design-system tokens)
-- `/tmp/atlas-design/enterprise-search-template/project/data.jsx` lines 118-200 — mock todo data shape
-- `/tmp/atlas-design/enterprise-search-template/project/dest-misc.jsx` lines 184-220 — TodosMain mount
+- `/tmp/atlas-design/0x-copilot-template/project/todos.jsx` — design reference
+- `/tmp/atlas-design/0x-copilot-template/project/projects-todos.css` — visual intent (consumed via design-system tokens)
+- `/tmp/atlas-design/0x-copilot-template/project/data.jsx` lines 118-200 — mock todo data shape
+- `/tmp/atlas-design/0x-copilot-template/project/dest-misc.jsx` lines 184-220 — TodosMain mount
 - [`packages/audit-chain/`](../../../packages/audit-chain/) — append-only audit primitive
 - [`services/backend/migrations/0008_rls_tenant_isolation.sql`](../../../services/backend/migrations/0008_rls_tenant_isolation.sql) — RLS pattern to mirror
 - [`services/ai-backend/src/runtime_worker/jobs/retention_sweeper.py`](../../../services/ai-backend/src/runtime_worker/jobs/retention_sweeper.py) — claim-based job pattern Impl-C mirrors

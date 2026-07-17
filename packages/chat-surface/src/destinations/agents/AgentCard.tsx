@@ -1,4 +1,4 @@
-import { Badge, Button } from "@enterprise-search/design-system";
+import { Badge, Button } from "@0x-copilot/design-system";
 import {
   type CSSProperties,
   type KeyboardEvent,

@@ -2,11 +2,7 @@
 // (P12-C). Wire types in, presentation row shapes out — no React,
 // no side effects.
 
-import type {
-  Person,
-  TeamStreamEnvelope,
-  UserId,
-} from "@enterprise-search/api-types";
+import type { Person, TeamStreamEnvelope, UserId } from "@0x-copilot/api-types";
 
 // ---------------------------------------------------------------------------
 // Stream merge

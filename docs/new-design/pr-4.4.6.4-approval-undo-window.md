@@ -105,7 +105,7 @@ The fix is small and protocol-first: extend the decision response with `undo_exp
 - ✅ FE `ApprovalTool` reads `result.undo_expires_at` from the decision response and threads it into the receipt.
 - ✅ All Python tests under `services/ai-backend/tests/unit/runtime_api/` pass; new `test_approval_undo.py` adds 8 cases.
 - ✅ All FE tests pass; new `useUndoCountdown.test.ts` + `ApprovalReceipt` test cases for countdown render + click flow.
-- ✅ Typecheck on `@enterprise-search/api-types` and `@enterprise-search/frontend` clean.
+- ✅ Typecheck on `@0x-copilot/api-types` and `@0x-copilot/frontend` clean.
 
 ### 1.5 User stories
 

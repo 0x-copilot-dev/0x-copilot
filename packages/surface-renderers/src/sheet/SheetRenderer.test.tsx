@@ -1,7 +1,7 @@
 import { afterEach, describe, expect, it } from "vitest";
 import { render, screen } from "@testing-library/react";
 
-import { clearRegistry, resolveAdapter } from "@enterprise-search/chat-surface";
+import { clearRegistry, resolveAdapter } from "@0x-copilot/chat-surface";
 
 import {
   SheetRenderer,

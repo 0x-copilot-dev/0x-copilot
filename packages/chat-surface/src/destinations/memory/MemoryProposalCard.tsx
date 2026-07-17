@@ -11,11 +11,11 @@
 //     `renderBody="markdown"`). Source ref renders through `<ItemLink>`
 //     (cross-audit §1.1).
 //   - `formatRelativeTime` from `../../util/time` (cross-audit §3.4).
-//   - Wire types from `@enterprise-search/api-types/memory` only.
+//   - Wire types from `@0x-copilot/api-types/memory` only.
 
 import { type CSSProperties, type ReactElement } from "react";
 
-import type { MemoryProposal } from "@enterprise-search/api-types";
+import type { MemoryProposal } from "@0x-copilot/api-types";
 
 import { ItemLink } from "../../refs/ItemLink";
 import { StatusPill, type StatusTone } from "../../shell/StatusPill";

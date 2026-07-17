@@ -7,8 +7,8 @@ import {
   type ReactNode,
 } from "react";
 
-import type { RuntimeEventEnvelope } from "@enterprise-search/api-types";
-import type { Transport } from "@enterprise-search/chat-transport";
+import type { RuntimeEventEnvelope } from "@0x-copilot/api-types";
+import type { Transport } from "@0x-copilot/chat-transport";
 
 import { TIER3_SCHEME } from "../surfaces/SaaSRendererAdapter";
 import { resolveAdapter } from "../surfaces/SurfaceRegistry";

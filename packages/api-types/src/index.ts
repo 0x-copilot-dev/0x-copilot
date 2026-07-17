@@ -2849,7 +2849,7 @@ export interface UserProfile {
 
 export type UserProfileTheme = "system" | "light" | "dark" | "slate";
 
-/** Mirrors `ACCENT_SCHEMES` in `@enterprise-search/design-system`. */
+/** Mirrors `ACCENT_SCHEMES` in `@0x-copilot/design-system`. */
 export type UserProfileAccent =
   | "atlas-orange"
   | "gold"

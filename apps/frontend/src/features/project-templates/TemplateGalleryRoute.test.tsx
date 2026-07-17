@@ -1,4 +1,4 @@
-import type { ProjectId, TenantId, UserId } from "@enterprise-search/api-types";
+import type { ProjectId, TenantId, UserId } from "@0x-copilot/api-types";
 import { fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 

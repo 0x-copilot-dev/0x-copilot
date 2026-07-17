@@ -1,4 +1,4 @@
-# enterprise-audit-chain
+# copilot-audit-chain
 
 HMAC-SHA256 hash-chain signing and verification for tamper-evident audit logs.
 
@@ -7,7 +7,7 @@ Used by `services/backend` and `services/ai-backend` so both can share one canon
 ## Public API
 
 ```python
-from enterprise_audit_chain import (
+from copilot_audit_chain import (
     AuditChainSigner,
     AuditChainRow,
     ChainSignature,

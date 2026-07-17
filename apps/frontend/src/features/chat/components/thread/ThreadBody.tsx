@@ -1,4 +1,4 @@
-import type { McpServer, Skill } from "@enterprise-search/api-types";
+import type { McpServer, Skill } from "@0x-copilot/api-types";
 import { forwardRef, useState, type ReactElement, type ReactNode } from "react";
 import {
   PlanningIndicator,
@@ -8,17 +8,14 @@ import {
   AssistantComposer,
   type DetailsPanelKind,
 } from "../composer/AssistantComposer";
-import type { ModelCatalogModel } from "@enterprise-search/api-types";
+import type { ModelCatalogModel } from "@0x-copilot/api-types";
 import type { ThinkingDepth } from "../../depth";
 import { useAuth } from "../../../auth/AuthContext";
 import { useMyProfile } from "../../../auth/useMyProfile";
 import { AssistantMessage } from "../messages/AssistantMessage";
 import { UserEditComposer } from "../messages/UserEditComposer";
 import { UserMessage } from "../messages/UserMessage";
-import {
-  PlainText,
-  type ComposerHandle,
-} from "@enterprise-search/chat-surface";
+import { PlainText, type ComposerHandle } from "@0x-copilot/chat-surface";
 import { firstNameFromDisplayName } from "../../utils/greeting";
 import {
   Message,

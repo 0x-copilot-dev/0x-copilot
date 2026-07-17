@@ -24,7 +24,7 @@
 //
 // LivenessReport shape mirrors the PRD §3.3 / §3.4 wire contract. We
 // define a LOCAL stub here per the task brief; the orchestrator
-// rewires it to `@enterprise-search/api-types`'s `LivenessReport`
+// rewires it to `@0x-copilot/api-types`'s `LivenessReport`
 // at merge time (same pattern as `_projects-stub.ts`).
 
 import { useMemo, type CSSProperties, type ReactElement } from "react";
@@ -35,9 +35,9 @@ import { StatusPill } from "../../shell/StatusPill";
 
 // ── Local LivenessReport stub (PRD §3.3 mirror) ──────────────────────
 //
-// TODO(merge): rewire to "@enterprise-search/api-types"
+// TODO(merge): rewire to "@0x-copilot/api-types"
 //   import type { LivenessReport, LivenessDetail } from
-//     "@enterprise-search/api-types";
+//     "@0x-copilot/api-types";
 
 export type LivenessDetailSource =
   | "ai_backend.runs"

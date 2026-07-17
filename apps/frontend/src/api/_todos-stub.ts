@@ -1,6 +1,6 @@
 // Local stub for the Phase 3 Todos wire contract.
 //
-// The canonical types live in `@enterprise-search/api-types`
+// The canonical types live in `@0x-copilot/api-types`
 // (`packages/api-types/src/todos.ts`), authored by the parallel
 // Phase 3 Impl-A backend-types agent. This frontend wave (P3-C) runs
 // in parallel against the same sub-PRD spec and cannot import a type
@@ -14,14 +14,10 @@
 // of truth even before the rest of the Todos contract merges.
 //
 // TODO(merge): delete this file. Replace every `_todos-stub` import
-// with `@enterprise-search/api-types` once Impl-A's
+// with `@0x-copilot/api-types` once Impl-A's
 // `packages/api-types/src/todos.ts` lands on main.
 
-import type {
-  ConversationId,
-  RunId,
-  TodoId,
-} from "@enterprise-search/api-types";
+import type { ConversationId, RunId, TodoId } from "@0x-copilot/api-types";
 
 export type { TodoId };
 

@@ -4,7 +4,7 @@ import { describe, expect, it, vi } from "vitest";
 import type {
   NotificationDefaults,
   WorkspaceNotificationDefaults,
-} from "@enterprise-search/api-types";
+} from "@0x-copilot/api-types";
 
 import { NotificationsPage } from "./NotificationsPage";
 

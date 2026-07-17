@@ -13,7 +13,7 @@ import {
   Field,
   Select,
   TextInput,
-} from "@enterprise-search/design-system";
+} from "@0x-copilot/design-system";
 
 import type { RequestIdentity } from "../../api/config";
 import { errorMessage } from "../../utils/errors";

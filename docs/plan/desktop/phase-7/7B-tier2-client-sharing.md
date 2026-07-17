@@ -302,9 +302,9 @@ export function setOptOut(
 ## Done criteria
 
 - [ ] All FRs met.
-- [ ] `npm test --workspace @enterprise-search/desktop` passes (existing 36 tests + new 7B tests).
-- [ ] `npm run typecheck --workspace @enterprise-search/desktop` passes.
-- [ ] `npm run lint --workspace @enterprise-search/desktop` passes — no new lint errors, no `any`.
+- [ ] `npm test --workspace @0x-copilot/desktop` passes (existing 36 tests + new 7B tests).
+- [ ] `npm run typecheck --workspace @0x-copilot/desktop` passes.
+- [ ] `npm run lint --workspace @0x-copilot/desktop` passes — no new lint errors, no `any`.
 - [ ] No new third-party dependency in `apps/desktop/package.json` (zod is already there for schema validation if needed).
 - [ ] No imports outside the desktop app's deployable boundary (per `apps/desktop/eslint.config.mjs`).
 - [ ] Wire-up in `apps/desktop/main/index.ts` is gated on auth (off in Phase 1; ready to flip in Phase 5).

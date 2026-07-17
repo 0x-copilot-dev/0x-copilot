@@ -14,7 +14,7 @@ import type {
   UserId,
   WebhookSecurityDefaults,
   WorkspaceNotificationDefaults,
-} from "@enterprise-search/api-types";
+} from "@0x-copilot/api-types";
 
 const settingsApiMocks = vi.hoisted(() => ({
   getUserNotificationDefaults: vi.fn(),

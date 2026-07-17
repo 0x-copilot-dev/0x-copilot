@@ -24,9 +24,9 @@ import {
   type ReactElement,
 } from "react";
 
-import type { ApprovalId } from "@enterprise-search/api-types";
+import type { ApprovalId } from "@0x-copilot/api-types";
 
-// TODO(merge): replace import from "../thread-canvas/_approvals-stub" with "@enterprise-search/api-types"
+// TODO(merge): replace import from "../thread-canvas/_approvals-stub" with "@0x-copilot/api-types"
 import type { Approval } from "../thread-canvas/_approvals-stub";
 import type { ActivityEntry } from "../thread-canvas/eventProjector";
 import { ItemLink } from "../refs/ItemLink";

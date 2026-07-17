@@ -16,7 +16,7 @@ from datetime import datetime, timezone
 
 import pytest
 
-from enterprise_audit_chain import (
+from copilot_audit_chain import (
     AuditChainRow,
     AuditChainSigner,
     ChainSignature,

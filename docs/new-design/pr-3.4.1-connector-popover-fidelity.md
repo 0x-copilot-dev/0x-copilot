@@ -89,7 +89,7 @@ The popover header copy ("Connectors / Active for this chat" vs. design "Searchi
 - ✅ Header copy is "Searching this chat" + "{n} of {N} connectors active" + inline `Manage ↗`.
 - ✅ Custom MCP server (not in catalog) renders letter glyph and "No description available." subtitle — explicit fallback, no `undefined` in the DOM.
 - ✅ Streaming handshake unchanged: `runtime_events` schema diff is empty; `RuntimeEventEnvelope` is byte‑identical pre/post merge; `make test` green; ai‑backend pytest green.
-- ✅ `npm run typecheck --workspace @enterprise-search/frontend` and `npm run build --workspace @enterprise-search/frontend` pass.
+- ✅ `npm run typecheck --workspace @0x-copilot/frontend` and `npm run build --workspace @0x-copilot/frontend` pass.
 - ✅ A11y: row label includes the scope subtitle ("Notion — currently active. Read all pages, write to /Drafts. Press Space to pause."). Reduced motion preference disables the Switch knob slide.
 - ✅ Bundle delta < 4 KB gz (one extra prop branch + a string subtitle).
 
@@ -685,7 +685,7 @@ We add **nothing** from npm.
 - [ ] No new endpoint. Facade route table unchanged.
 - [ ] No new design‑system primitive (one new prop on existing `<AppIcon>`).
 - [ ] No npm dependency added.
-- [ ] `make test` green; `services/backend` pytest green; `services/ai-backend` pytest green; `npm run typecheck --workspace @enterprise-search/frontend` and `npm run build --workspace @enterprise-search/frontend` pass.
+- [ ] `make test` green; `services/backend` pytest green; `services/ai-backend` pytest green; `npm run typecheck --workspace @0x-copilot/frontend` and `npm run build --workspace @0x-copilot/frontend` pass.
 - [ ] Streaming integration test asserts paused / disconnected / workspace‑off all collapse to "absent from `connector_scopes`" at run‑create.
 - [ ] Resume‑after‑pause integration test asserts the next run's `connector_scopes[server_id]` equals server `default_scopes`, not `[]`.
 

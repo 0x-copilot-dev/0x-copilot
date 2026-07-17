@@ -162,8 +162,8 @@ discriminator.
 - `useTransport` from `../providers/TransportProvider`
 - `useKeyValueStore` from `../providers/KeyValueStoreProvider`
 - `RuntimeEventEnvelope`, `isRuntimeEventEnvelope` from
-  `@enterprise-search/api-types`
-- `SseSubscribeOptions`, `SseSubscription` from `@enterprise-search/chat-transport`
+  `@0x-copilot/api-types`
+- `SseSubscribeOptions`, `SseSubscription` from `@0x-copilot/chat-transport`
 
 ## Interfaces produced
 
@@ -246,10 +246,10 @@ export function TcSwimlanes(props: TcSwimlanesProps): ReactNode;
 ## Done criteria
 
 - [ ] All FRs met.
-- [ ] `npm run typecheck --workspace @enterprise-search/chat-surface` passes.
-- [ ] `npm test --workspace @enterprise-search/chat-surface` passes
+- [ ] `npm run typecheck --workspace @0x-copilot/chat-surface` passes.
+- [ ] `npm test --workspace @0x-copilot/chat-surface` passes
       (existing 135 tests + new TcSwimlanes tests).
-- [ ] `npm run lint --workspace @enterprise-search/chat-surface` passes.
+- [ ] `npm run lint --workspace @0x-copilot/chat-surface` passes.
 - [ ] No bare browser globals, no `any`, no `fetch`/`EventSource`/
       `localStorage`/`window`/`document` references.
 - [ ] `packages/chat-surface/src/thread-canvas/index.ts` gains only
@@ -283,4 +283,4 @@ requirements` was a heuristic written before the component's full
 - **No behavioural change.** The extraction is mechanical: tests
   (`TcSwimlanes.test.tsx`, 26 cases) pass unchanged. `npm test`,
   `npm run typecheck`, `npm run lint` all green for the
-  `@enterprise-search/chat-surface` workspace.
+  `@0x-copilot/chat-surface` workspace.

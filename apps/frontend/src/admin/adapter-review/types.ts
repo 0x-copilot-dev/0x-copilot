@@ -2,7 +2,7 @@
 //
 // These mirror 7A's wire contract (see
 // docs/plan/desktop/phase-7/7C-tier2-review-pipeline.md §2). They are
-// re-declared in the FE rather than imported from @enterprise-search/
+// re-declared in the FE rather than imported from @0x-copilot/
 // api-types because 7A hasn't merged its types-package contribution yet;
 // when it does, swap the local declarations for the package import in a
 // single follow-up PR.

@@ -34,4 +34,4 @@ export {
   type TransportRequestParams,
   type TransportSubscribeParams,
   type TransportUnsubscribeParams,
-} from "@enterprise-search/chat-transport";
+} from "@0x-copilot/chat-transport";

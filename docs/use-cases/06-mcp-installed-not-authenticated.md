@@ -131,7 +131,7 @@ Run status transitions to `WAITING_FOR_APPROVAL` between K and resume; no event 
 - **Backend `mcp_tokens`** — one envelope per `(server_id, org_id, user_id)` with `encrypted_access_token`, optional `encrypted_refresh_token`, `token_type`, `expires_at`. Ciphertexts produced by the configured `TokenVault.encrypt`.
 - **Backend audit log** — `mcp_auth_started`, then exactly one of `mcp_auth_completed` / `mcp_auth_failed` / `mcp_auth_unsupported` / `mcp_auth_skipped`.
 - **AI-backend run** — `status → waiting_for_approval`; `latest_sequence_no` advances by one. One `MCP_AUTH_REQUIRED` event (`visibility = user`); on resume, one `APPROVAL_RESOLVED`. Approval record created with `approval_kind = "mcp_auth"`, `approval_id = mcp_auth:{run_id}:{server_id}`.
-- **Frontend** — `sessionStorage["enterprise-search.pending-mcp-auth-action"]` set on Connect, consumed/cleared by resume. Assistant message gains an `mcp_auth_required` tool-call part with `status: "waiting"`; message status `requires-action`. After OAuth, `resolveAuthenticatedMcpServers` flips to `approved` and message status back to `running`. Banner cycles `Working… → Resuming after connector auth… → Working… → Ready`.
+- **Frontend** — `sessionStorage["0x-copilot.pending-mcp-auth-action"]` set on Connect, consumed/cleared by resume. Assistant message gains an `mcp_auth_required` tool-call part with `status: "waiting"`; message status `requires-action`. After OAuth, `resolveAuthenticatedMcpServers` flips to `approved` and message status back to `running`. Banner cycles `Working… → Resuming after connector auth… → Working… → Ready`.
 
 ## Edge cases handled
 

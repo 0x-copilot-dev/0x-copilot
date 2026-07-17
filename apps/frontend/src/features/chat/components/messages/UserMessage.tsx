@@ -1,4 +1,4 @@
-import { PlainText } from "@enterprise-search/chat-surface";
+import { PlainText } from "@0x-copilot/chat-surface";
 import type { ReactElement } from "react";
 import {
   Message,

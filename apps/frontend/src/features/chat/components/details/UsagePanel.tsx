@@ -16,8 +16,8 @@
  * see token-only rows with no missing-data noise.
  */
 
-import { Button, Card } from "@enterprise-search/design-system";
-import type { UsagePeriod } from "@enterprise-search/api-types";
+import { Button, Card } from "@0x-copilot/design-system";
+import type { UsagePeriod } from "@0x-copilot/api-types";
 import type { ReactElement } from "react";
 import { useState } from "react";
 

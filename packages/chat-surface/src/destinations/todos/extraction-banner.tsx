@@ -1,7 +1,7 @@
 import { useCallback, type CSSProperties, type ReactElement } from "react";
-import type { TodoExtractionId } from "@enterprise-search/api-types";
+import type { TodoExtractionId } from "@0x-copilot/api-types";
 
-// Canonical brand site is `@enterprise-search/api-types/brands.ts`
+// Canonical brand site is `@0x-copilot/api-types/brands.ts`
 // (P3-A2 extractor publisher writes the wire shape). Re-exported so
 // existing `from "../extraction-banner"` imports keep working.
 export type { TodoExtractionId };

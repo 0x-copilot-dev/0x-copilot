@@ -33,7 +33,7 @@
 
 import { useEffect, useRef, useState, type ReactElement } from "react";
 
-import { InboxDestination } from "@enterprise-search/chat-surface";
+import { InboxDestination } from "@0x-copilot/chat-surface";
 
 import type { RequestIdentity } from "../../api/config";
 import {

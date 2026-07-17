@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 import { render, fireEvent } from "@testing-library/react";
-import type { SourceEntry } from "@enterprise-search/api-types";
-import { SourceFavicon } from "@enterprise-search/chat-surface";
+import type { SourceEntry } from "@0x-copilot/api-types";
+import { SourceFavicon } from "@0x-copilot/chat-surface";
 
 function source(overrides: Partial<SourceEntry>): SourceEntry {
   return {

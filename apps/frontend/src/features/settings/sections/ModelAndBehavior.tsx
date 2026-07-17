@@ -21,13 +21,8 @@ import type {
   RefusalBehavior,
   UpdateWorkspaceDefaultsRequest,
   WorkspaceBehaviorOverrides,
-} from "@enterprise-search/api-types";
-import {
-  Card,
-  Field,
-  TextInput,
-  classNames,
-} from "@enterprise-search/design-system";
+} from "@0x-copilot/api-types";
+import { Card, Field, TextInput, classNames } from "@0x-copilot/design-system";
 import type { ReactElement } from "react";
 import { useCallback, useEffect, useRef, useState } from "react";
 import type { UseWorkspaceDefaultsResult } from "../useWorkspaceDefaults";

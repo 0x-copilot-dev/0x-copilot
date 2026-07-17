@@ -1,5 +1,5 @@
-import { AppIcon, classNames } from "@enterprise-search/design-system";
-import type { McpServer } from "@enterprise-search/api-types";
+import { AppIcon, classNames } from "@0x-copilot/design-system";
+import type { McpServer } from "@0x-copilot/api-types";
 import { forwardRef, type ReactElement } from "react";
 
 export interface ActiveConnectorGlyph {

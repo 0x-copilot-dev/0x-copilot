@@ -22,7 +22,7 @@
 
 import { useState, type CSSProperties, type ReactElement } from "react";
 
-import type { ItemRef, MemoryItem } from "@enterprise-search/api-types";
+import type { ItemRef, MemoryItem } from "@0x-copilot/api-types";
 
 import { ItemLink } from "../../refs/ItemLink";
 import { FilterTabs, type FilterTabOption } from "../../shell/FilterTabs";

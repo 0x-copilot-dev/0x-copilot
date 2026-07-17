@@ -6,7 +6,7 @@
 // consequences (revoking OAuth tokens, allowing the agent to use a
 // connector without auth) and need an explicit confirm.
 
-import { Button } from "@enterprise-search/design-system";
+import { Button } from "@0x-copilot/design-system";
 import { type ReactElement, type ReactNode, useState } from "react";
 import { Modal } from "../settings/Modal";
 import { errorMessage } from "../../utils/errors";

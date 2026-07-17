@@ -22,7 +22,7 @@ import {
   type ReactElement,
 } from "react";
 
-// TODO(merge): rewire to "@enterprise-search/api-types" AssignedApproval
+// TODO(merge): rewire to "@0x-copilot/api-types" AssignedApproval
 import type { Approval, ApprovalState } from "../thread-canvas/_approvals-stub";
 import { ItemLink } from "../refs/ItemLink";
 import { formatRelativeTime } from "../util/time";

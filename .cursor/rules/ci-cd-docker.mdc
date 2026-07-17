@@ -1,5 +1,5 @@
 ---
-description: CI/CD and Docker rules for the Enterprise Search monorepo
+description: CI/CD and Docker rules for the 0xCopilot monorepo
 globs: "{.github/**,infra/**,**/Dockerfile,**/docker-compose*.yml,**/compose*.yaml,**/compose*.yml}"
 alwaysApply: false
 ---

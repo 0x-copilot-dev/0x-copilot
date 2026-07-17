@@ -1,4 +1,4 @@
-import type { McpServer, Skill } from "@enterprise-search/api-types";
+import type { McpServer, Skill } from "@0x-copilot/api-types";
 import type { ReactElement } from "react";
 
 export type ComposerMenuView = "root" | "mcp" | "skills";

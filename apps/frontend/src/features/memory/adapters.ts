@@ -6,7 +6,7 @@ import type {
   MemoryItemId,
   MemoryProposal,
   MemoryStreamEnvelope,
-} from "@enterprise-search/api-types";
+} from "@0x-copilot/api-types";
 
 // ---------------------------------------------------------------------------
 // Stream merge (memory items)

@@ -230,7 +230,7 @@ Same `ADMIN_USERS` permission scope PR 1.6 uses. No new RBAC primitive.
 | `POST /v1/workspace/export` rate limit      | 429    | `rate_limited` (1/hour/org) |
 | `DELETE /v1/workspace/data` (real deletion) | 501    | `not_implemented`           |
 
-### 2.7 Frontend contract (`@enterprise-search/api-types`)
+### 2.7 Frontend contract (`@0x-copilot/api-types`)
 
 ```ts
 // packages/api-types/src/index.ts
@@ -570,7 +570,7 @@ The provider-specific header map lives in the model-call middleware (existing). 
 - [ ] `useSettingsSection()` hook syncs hashchange, popstate; navigates via pushState; old `/settings/{section}` paths migrate once on mount.
 - [ ] Three sections (`<ModelAndBehavior />`, `<Connectors />`, `<PrivacyAndData />`) mount under the "AI & data" group rail.
 - [ ] Connectors section opens PR 4.4 wizard via the "Add MCP server" CTA.
-- [ ] `@enterprise-search/api-types` exports `WorkspaceBehaviorOverrides` + the three preset enums; `WorkspaceDefaults` extended.
+- [ ] `@0x-copilot/api-types` exports `WorkspaceBehaviorOverrides` + the three preset enums; `WorkspaceDefaults` extended.
 - [ ] Streaming handshake byte-identical pre/post merge.
 - [ ] No new event types, no new wire variants, no LangGraph harness changes.
 - [ ] `npm run typecheck`, `npm run build`, ai-backend pytest, `make test` all green.
@@ -579,7 +579,7 @@ The provider-specific header map lives in the model-call middleware (existing). 
 
 ## 5 · References
 
-- Design Doc · Settings → "AI & data" group + the design's note on **Hash routing in Settings** as a P0 follow-up — bundle at `/tmp/design-doc/enterprise-search/project/Design Doc.html` lines 549-553, 671-672.
+- Design Doc · Settings → "AI & data" group + the design's note on **Hash routing in Settings** as a P0 follow-up — bundle at `/tmp/design-doc/0x-copilot/project/Design Doc.html` lines 549-553, 671-672.
 - [`services/ai-backend/migrations/0019_workspace_defaults.sql`](../../services/ai-backend/migrations/0019_workspace_defaults.sql) — table we extend.
 - [`services/ai-backend/migrations/0012_retention_policies.sql`](../../services/ai-backend/migrations/0012_retention_policies.sql) — the resolver we expose.
 - [`services/ai-backend/src/runtime_worker/jobs/retention_sweeper.py`](../../services/ai-backend/src/runtime_worker/jobs/retention_sweeper.py) — the consumer of the same resolver.

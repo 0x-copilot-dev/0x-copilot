@@ -14,7 +14,7 @@ import {
   type ReactElement,
 } from "react";
 
-import type { ConnectorScopeEntry } from "@enterprise-search/api-types";
+import type { ConnectorScopeEntry } from "@0x-copilot/api-types";
 
 export interface ScopeReviewTabProps {
   readonly scopes: ReadonlyArray<ConnectorScopeEntry>;

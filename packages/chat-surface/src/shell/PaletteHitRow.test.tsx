@@ -1,7 +1,7 @@
 // PaletteHitRow — entity rows go through <ItemLink>; non-entity rows
 // fire onActivate.
 
-import type { ConversationId, PaletteHit } from "@enterprise-search/api-types";
+import type { ConversationId, PaletteHit } from "@0x-copilot/api-types";
 import { fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 

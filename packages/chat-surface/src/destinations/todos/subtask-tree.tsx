@@ -27,7 +27,7 @@ import {
   type ReactElement,
 } from "react";
 
-import type { TodoId } from "@enterprise-search/api-types";
+import type { TodoId } from "@0x-copilot/api-types";
 
 // ===========================================================================
 // Local Todo shape — until api-types/src/todos.ts (P3-A) merges. The

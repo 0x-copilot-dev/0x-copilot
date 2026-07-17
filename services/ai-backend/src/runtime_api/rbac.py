@@ -19,7 +19,7 @@ import logging
 import os
 from collections.abc import Callable
 
-from enterprise_service_contracts.scopes import MFA_PENDING
+from copilot_service_contracts.scopes import MFA_PENDING
 from fastapi import HTTPException, Request, status
 
 from runtime_api.auth import (

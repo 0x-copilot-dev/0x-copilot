@@ -1,4 +1,4 @@
-import type { RuntimeEventEnvelope } from "@enterprise-search/api-types";
+import type { RuntimeEventEnvelope } from "@0x-copilot/api-types";
 import type { MessageStatus as AssistantMessageStatus } from "../runtime/types";
 import { asRecord, stringValue } from "../utils/jsonUtils";
 import { isToolCallPart, payloadString } from "./recordHelpers";

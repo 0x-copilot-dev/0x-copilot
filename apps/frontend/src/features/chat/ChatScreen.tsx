@@ -9,7 +9,7 @@ import type {
   RuntimeEventEnvelope,
   Skill,
   SubagentEntry,
-} from "@enterprise-search/api-types";
+} from "@0x-copilot/api-types";
 import type {
   AppendMessage,
   CompleteAttachment,
@@ -22,7 +22,7 @@ import {
   AtlasTextAttachmentAdapter,
   AtlasWebSpeechDictationAdapter,
 } from "./runtime";
-import type { ComposerHandle } from "@enterprise-search/chat-surface";
+import type { ComposerHandle } from "@0x-copilot/chat-surface";
 import type { ReactElement } from "react";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
@@ -97,7 +97,7 @@ import {
   citationsForRun,
   emptyCitationRegistry,
   type CitationRegistryByRun,
-} from "@enterprise-search/chat-surface";
+} from "@0x-copilot/chat-surface";
 import { applySubagentEvent } from "./chatModel/subagentReducer";
 import { applyDraftUpdatedEvent } from "./chatModel/draftsRegistry";
 import { CitationsProvider } from "./components/citations/citationsContext";
@@ -107,7 +107,7 @@ import {
   scrollChatToCitation,
   scrollChatToEvent,
   useKeyValueStore,
-} from "@enterprise-search/chat-surface";
+} from "@0x-copilot/chat-surface";
 import {
   readDepth as readDepthKv,
   writeConversationDepth,
@@ -2455,7 +2455,7 @@ function currentTitle(
   return (
     conversations.find(
       (conversation) => conversation.conversation_id === conversationId,
-    )?.title ?? "Enterprise Search"
+    )?.title ?? "0xCopilot"
   );
 }
 

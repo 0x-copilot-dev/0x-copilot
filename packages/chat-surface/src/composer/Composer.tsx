@@ -22,7 +22,7 @@ import { ToolPicker } from "./ToolPicker";
 
 /* Shared composer for Studio / Focus / Auto.
  *
- * Design source: /tmp/atlas-design/enterprise-search-template/project/
+ * Design source: /tmp/atlas-design/0x-copilot-template/project/
  * composer.jsx and chat1.md L805-820 ("bigger 2-row textarea, single
  * thin action row with Tools and Model · Depth plus attach, mic, send").
  *

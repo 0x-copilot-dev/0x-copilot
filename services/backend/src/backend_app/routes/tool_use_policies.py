@@ -20,7 +20,7 @@ evaluator fetches once per run start.
 
 from __future__ import annotations
 
-from enterprise_service_contracts.scopes import ADMIN_USERS, RUNTIME_USE
+from copilot_service_contracts.scopes import ADMIN_USERS, RUNTIME_USE
 from fastapi import Depends, FastAPI, HTTPException, Query, Request, status
 from pydantic import BaseModel, ConfigDict, Field, field_validator
 

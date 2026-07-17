@@ -1,7 +1,7 @@
 import type {
   UpdateWorkspaceMfaPolicyRequest,
   WorkspaceMfaPolicy,
-} from "@enterprise-search/api-types";
+} from "@0x-copilot/api-types";
 import { httpJson } from "./http";
 
 /**

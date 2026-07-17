@@ -8,7 +8,7 @@ import { useCallback, useEffect, useState, type ReactElement } from "react";
 import type {
   MemoryProposal,
   MemoryProposalListResponse,
-} from "@enterprise-search/api-types";
+} from "@0x-copilot/api-types";
 
 import type { RequestIdentity } from "../../api/config";
 import {

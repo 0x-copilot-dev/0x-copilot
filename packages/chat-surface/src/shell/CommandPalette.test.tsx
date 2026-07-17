@@ -4,7 +4,7 @@ import type {
   ConversationId,
   PaletteHit,
   PaletteSearchResponse,
-} from "@enterprise-search/api-types";
+} from "@0x-copilot/api-types";
 import {
   act,
   fireEvent,

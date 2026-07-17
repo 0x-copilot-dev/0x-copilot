@@ -12,7 +12,7 @@
 // Conversation switches cancel the in-flight fetch (StrictMode-safe) so
 // stale rows from the previous chat never leak into the new one.
 
-import type { SourceEntry } from "@enterprise-search/api-types";
+import type { SourceEntry } from "@0x-copilot/api-types";
 import { useCallback, useEffect, useState } from "react";
 
 import { listSources } from "../../api/agentApi";

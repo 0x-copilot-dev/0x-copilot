@@ -33,7 +33,7 @@ import {
   type ProjectMemberRole,
 } from "./ProjectMembersTab";
 
-import type { ProjectId } from "@enterprise-search/api-types";
+import type { ProjectId } from "@0x-copilot/api-types";
 
 // Tokens (match ProjectsDestination.tsx)
 const APP_BACKGROUND = "var(--color-bg)";

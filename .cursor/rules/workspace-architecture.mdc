@@ -1,11 +1,11 @@
 ---
-description: Workspace architecture for the Enterprise Search monorepo
+description: Workspace architecture for the 0xCopilot monorepo
 alwaysApply: true
 ---
 
-# Enterprise Search Workspace Architecture
+# 0xCopilot Workspace Architecture
 
-- Treat `enterprise-search` as one GitHub monorepo with multiple independently deployable components.
+- Treat `0x-copilot` as one GitHub monorepo with multiple independently deployable components.
 - Runtime architecture can be microservice-style: each service owns its API, Docker image, dependency environment, tests, and deploy path.
 - Apps call `backend-facade`; apps must not call internal services directly without an accepted spec.
 - `backend` currently owns MCP registration, OAuth/token state, user skills, and audit events. It is the target home for tenants, auth integration, permissions, product persistence, admin workflows, and jobs.

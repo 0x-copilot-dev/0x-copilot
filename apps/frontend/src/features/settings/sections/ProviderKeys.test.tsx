@@ -19,7 +19,7 @@ import type {
   ProviderKeyProvider,
   ProviderKeySummary,
   PutProviderKeyRequest,
-} from "@enterprise-search/api-types";
+} from "@0x-copilot/api-types";
 
 const mockList = vi.fn<() => Promise<ListProviderKeysResponse>>();
 const mockPut =

@@ -35,7 +35,7 @@ import type {
   UpdateNotificationDefaultsRequest,
   UpdateWorkspaceNotificationDefaultsRequest,
   WorkspaceNotificationDefaults,
-} from "@enterprise-search/api-types";
+} from "@0x-copilot/api-types";
 
 import { FilterTabs, type FilterTabOption } from "../shell/FilterTabs";
 import { PageHeader } from "../shell/PageHeader";

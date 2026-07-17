@@ -4,7 +4,7 @@
 // HTTP endpoints — diff is computed client-side and applied as a
 // sequence of POST / PATCH / DELETE calls.
 
-import type { McpServer } from "@enterprise-search/api-types";
+import type { McpServer } from "@0x-copilot/api-types";
 import { errorMessage } from "../../utils/errors";
 
 export interface JsonConfigEntry {

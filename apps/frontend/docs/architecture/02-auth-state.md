@@ -63,7 +63,7 @@ error string from `state.error`.
 | `error`          | `<LoginScreen>` + `app-auth-error`  | non-401 failure surfaced                                                                      |
 | `mfa_pending`    | `<MfaPrompt>`                       | bearer minted but carries `permission_scopes=("mfa:pending",)`                                |
 | `workspace_pick` | `<LoginScreen>` (workspace chooser) | magic link returned multiple workspaces; user picks one to exchange                           |
-| `authenticated`  | `<EnterpriseSearchApp>`             | `state.identity` non-null; downstream code may assume `org_id` and `user_id`                  |
+| `authenticated`  | `<CopilotApp>`                      | `state.identity` non-null; downstream code may assume `org_id` and `user_id`                  |
 
 ---
 

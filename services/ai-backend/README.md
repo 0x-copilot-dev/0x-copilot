@@ -6,7 +6,7 @@ This backend now contains the implemented agent runtime foundation for dynamic t
 
 ## Workspace Context
 
-`services/ai-backend` is one component inside the larger `enterprise-search` workspace. It is not the whole product.
+`services/ai-backend` is one component inside the larger `0x-copilot` workspace. It is not the whole product.
 
 The workspace is intended to become one GitHub monorepo with multiple deployable components. This service's canonical path is `services/ai-backend`.
 
@@ -26,7 +26,7 @@ Read the workspace architecture before changing runtime APIs:
 - `../../docs/architecture/service-boundaries.md`
 - `../../docs/decisions/0001-monorepo-with-deployable-services.md`
 
-## What Enterprise Search Means Here
+## What 0xCopilot Means Here
 
 Enterprise search is the user-facing entry point for a broader enterprise work surface. It should help executives and employees ask natural-language questions, find context, understand source-backed answers, and eventually take action across the systems where work already lives.
 

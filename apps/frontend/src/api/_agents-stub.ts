@@ -1,6 +1,6 @@
 // Local stub for the Phase 8 Agents wire contract.
 //
-// The canonical types live in `@enterprise-search/api-types`
+// The canonical types live in `@0x-copilot/api-types`
 // (`packages/api-types/src/agents.ts`), authored by the parallel
 // Phase 8 P8-A backend-types agent. This frontend wave (P8-C) runs in
 // parallel against the same sub-PRD spec and cannot import a type that
@@ -8,13 +8,13 @@
 // `docs/atlas-new-design/destinations/agents-prd.md` §3.1.
 //
 // `AgentId`, `TenantId`, `UserId`, `SkillId`, `ConnectorId`, and
-// `MemoryItemId` already live in `@enterprise-search/api-types/brands`
+// `MemoryItemId` already live in `@0x-copilot/api-types/brands`
 // — re-export from there so the cross-destination `<ItemLink>` registry
 // stays a single source of truth even before the rest of the Agents
 // contract merges.
 //
 // TODO(merge): delete this file. Replace every `_agents-stub` import
-// with `@enterprise-search/api-types` once P8-A's
+// with `@0x-copilot/api-types` once P8-A's
 // `packages/api-types/src/agents.ts` lands on main.
 
 import type {
@@ -24,12 +24,12 @@ import type {
   SkillId,
   TenantId,
   UserId,
-} from "@enterprise-search/api-types";
+} from "@0x-copilot/api-types";
 
 export type { AgentId, ConnectorId, MemoryItemId, SkillId, TenantId, UserId };
 
 // `AgentVersionId` / `AgentInstallId` / `MemoryRef` are not yet brand-typed
-// in `@enterprise-search/api-types/brands`. Local opaque aliases until
+// in `@0x-copilot/api-types/brands`. Local opaque aliases until
 // P8-A lands them.
 export type AgentVersionId = string & { readonly __brand: "AgentVersionId" };
 export type AgentInstallId = string & { readonly __brand: "AgentInstallId" };

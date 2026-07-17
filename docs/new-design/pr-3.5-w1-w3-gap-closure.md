@@ -70,7 +70,7 @@ The eleven gaps grouped by impact:
 - ✅ One contract test in `citationStore.invariant.test.ts` asserts that for every `source_ingested` event, both reducers ingest a row with identical `(citation_id, source_connector, source_doc_id, title, snippet, freshness_at)` payloads.
 - ✅ `useWorkspaceDefaults()` returns `{ defaults, loading, error, save }`. Optimistic update on `save` rolls back on 4xx. Tested.
 - ✅ Six missing tests added; all pass.
-- ✅ `npm run typecheck --workspace @enterprise-search/frontend` and `npm run build --workspace @enterprise-search/frontend` pass. `make test` green. ai-backend pytest green incl. one new replay-parity test.
+- ✅ `npm run typecheck --workspace @0x-copilot/frontend` and `npm run build --workspace @0x-copilot/frontend` pass. `make test` green. ai-backend pytest green incl. one new replay-parity test.
 
 ### 1.5 User stories
 
@@ -214,7 +214,7 @@ The type widens gracefully — every existing call site that consumed `reasoning
 import type {
   WorkspaceDefaultsResponse,
   UpdateWorkspaceDefaultsRequest,
-} from "@enterprise-search/api-types";
+} from "@0x-copilot/api-types";
 
 export function useWorkspaceDefaults(identity: RequestIdentity) {
   const [defaults, setDefaults] = useState<WorkspaceDefaultsResponse | null>(
@@ -612,9 +612,9 @@ The test plan **is** most of this PR. Targeted matrix:
 - [ ] No new endpoints in `services/backend-facade`. Route table unchanged.
 - [ ] No new migrations. `services/ai-backend/migrations/` lock unchanged.
 - [ ] No new npm packages in `apps/frontend/package.json`.
-- [ ] `npm run typecheck --workspace @enterprise-search/frontend` green.
-- [ ] `npm run typecheck --workspace @enterprise-search/api-types` green.
-- [ ] `npm run build --workspace @enterprise-search/frontend` green.
+- [ ] `npm run typecheck --workspace @0x-copilot/frontend` green.
+- [ ] `npm run typecheck --workspace @0x-copilot/api-types` green.
+- [ ] `npm run build --workspace @0x-copilot/frontend` green.
 - [ ] `make test` green.
 
 ---

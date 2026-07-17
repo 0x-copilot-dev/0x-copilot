@@ -16,7 +16,7 @@ import type {
   ProviderKeyProvider,
   ProviderKeySummary,
   PutProviderKeyRequest,
-} from "@enterprise-search/api-types";
+} from "@0x-copilot/api-types";
 import { httpJson } from "./http";
 
 export function listProviderKeys(): Promise<ListProviderKeysResponse> {

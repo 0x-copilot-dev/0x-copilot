@@ -1,4 +1,4 @@
-import type { McpServer } from "@enterprise-search/api-types";
+import type { McpServer } from "@0x-copilot/api-types";
 import { fireEvent, render, screen } from "@testing-library/react";
 import { describe, expect, it, vi } from "vitest";
 import { ConnectorsPill, activeConnectorsFromScopes } from "./ConnectorsPill";

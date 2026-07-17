@@ -3,7 +3,7 @@ import type { CSSProperties, ReactElement } from "react";
 import {
   TcInlineDiff,
   type SaaSRendererAdapter,
-} from "@enterprise-search/chat-surface";
+} from "@0x-copilot/chat-surface";
 
 import { SlideRenderer, type Slide } from "./SlideRenderer";
 

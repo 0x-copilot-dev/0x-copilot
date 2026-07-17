@@ -14,7 +14,7 @@ import type { ReactNode } from "react";
 import type {
   RuntimeApiEventType,
   RuntimeEventEnvelope,
-} from "@enterprise-search/api-types";
+} from "@0x-copilot/api-types";
 import type {
   Session,
   SseSubscribeOptions,
@@ -22,9 +22,9 @@ import type {
   Transport,
   TransportCapabilities,
   TypedRequest,
-} from "@enterprise-search/chat-transport";
+} from "@0x-copilot/chat-transport";
 
-import type { ConversationId, RunId } from "@enterprise-search/api-types";
+import type { ConversationId, RunId } from "@0x-copilot/api-types";
 
 import { TransportProvider } from "../providers/TransportProvider";
 import { clearRegistry } from "../surfaces/SurfaceRegistry";

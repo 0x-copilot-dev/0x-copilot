@@ -199,7 +199,7 @@ The Workspace pane right-rail is W3.2 (own surface). For this PR we lean on the 
 
 **Reads from:** the same context the chips read from (`citationsContext`). No new endpoint required for this PR; archived-conversation Sources viewing is gated on the conversation-level `GET /v1/agent/conversations/{id}/sources` endpoint that ships in W1.5.
 
-**UX.** The panel is a list, not a tabbed surface. Each row mimics the prototype's `SourcesPane` (`/tmp/design-doc/enterprise-search/project/messages.jsx:268-302`): app glyph, title, breadcrumb metadata, excerpt, author/freshness. Clicking the row opens `source_url` (or shows "no link" when null).
+**UX.** The panel is a list, not a tabbed surface. Each row mimics the prototype's `SourcesPane` (`/tmp/design-doc/0x-copilot/project/messages.jsx:268-302`): app glyph, title, breadcrumb metadata, excerpt, author/freshness. Clicking the row opens `source_url` (or shows "no link" when null).
 
 **Auto-open.** When the registry transitions from 0 → 1 entries during a run and the user has never manually toggled the sources panel, surface a one-time toast: "3 sources cited — open Sources panel?" (low-noise; dismissible). This is the spec's "auto-open when there are sources/agents" behavior, scoped to what's possible without the full Workspace pane.
 

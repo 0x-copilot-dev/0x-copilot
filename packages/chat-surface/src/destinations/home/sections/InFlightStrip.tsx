@@ -13,7 +13,7 @@
 
 import type { CSSProperties, ReactElement } from "react";
 
-import type { InFlightProject } from "@enterprise-search/api-types";
+import type { InFlightProject } from "@0x-copilot/api-types";
 
 import { ItemLink } from "../../../refs/ItemLink";
 import { StatusPill } from "../../../shell/StatusPill";

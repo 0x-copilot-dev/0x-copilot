@@ -9,7 +9,7 @@
 
 import type { CSSProperties, ReactElement } from "react";
 
-import type { ConnectorAuditEntry } from "@enterprise-search/api-types";
+import type { ConnectorAuditEntry } from "@0x-copilot/api-types";
 
 import { ItemLink } from "../../refs/ItemLink";
 import { formatRelativeTime } from "../../util/time";

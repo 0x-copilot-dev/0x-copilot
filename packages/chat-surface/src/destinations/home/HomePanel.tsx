@@ -12,10 +12,7 @@
 
 import { type CSSProperties, type ReactElement, type ReactNode } from "react";
 
-import type {
-  HomePayload,
-  QuickActionTarget,
-} from "@enterprise-search/api-types";
+import type { HomePayload, QuickActionTarget } from "@0x-copilot/api-types";
 
 import { ContextPanel } from "../../shell/ContextPanel";
 

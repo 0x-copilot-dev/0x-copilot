@@ -43,7 +43,7 @@ The architecture landed close to spec; the deltas worth flagging on review:
 ## Test results
 
 - **ai-backend**: 19 unit tests for ledger + projection passing. Migration apply/rollback round-trip passes against sqlite. Manifest matches lock. Wider suite: 519 passing, the only pre-existing failure is in `tests/unit/agent_runtime/budgets/test_enforcer_and_charger.py::TestConcurrentReservation::test_two_concurrent_runs_against_one_dollar_each_admit_one_each` — touches no citation code.
-- **frontend**: 11 tests for the citation reducer + remark plugin passing. `npm run typecheck --workspace @enterprise-search/frontend` clean. `npm run build --workspace @enterprise-search/frontend` clean. Wider suite: 168 passing. The 4 unrelated failures are in `useConversationConnectors.test.tsx` (in-flight PR 1.2 work).
+- **frontend**: 11 tests for the citation reducer + remark plugin passing. `npm run typecheck --workspace @0x-copilot/frontend` clean. `npm run build --workspace @0x-copilot/frontend` clean. Wider suite: 168 passing. The 4 unrelated failures are in `useConversationConnectors.test.tsx` (in-flight PR 1.2 work).
 
 ## Remaining work for this surface (follow-up PRs)
 
@@ -537,7 +537,7 @@ Backfill: not required. Prior runs have no citations; the FE renders them as bef
 
 ## 11 · References
 
-- Atlas Design Doc (handoff bundle, `/tmp/design-doc/enterprise-search/project/Design Doc.html`) — §"Citations as superscript chips" decision, §"Citations are first-class" principle, Sources tab spec.
+- Atlas Design Doc (handoff bundle, `/tmp/design-doc/0x-copilot/project/Design Doc.html`) — §"Citations as superscript chips" decision, §"Citations are first-class" principle, Sources tab spec.
 - [Anthropic Citations API][anthropic-citations] — `citations_delta` streaming contract.
 - [OpenAI Responses streaming events][openai-streaming] — annotations on `output_text.done`.
 - [LangGraph streaming custom events][langgraph-stream] — `get_stream_writer()` from tools.

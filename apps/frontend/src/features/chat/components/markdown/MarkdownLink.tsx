@@ -4,7 +4,7 @@ import {
   isOrdinalCitationHref,
   markdownLinkLabel,
   ordinalFromHref,
-} from "@enterprise-search/chat-surface";
+} from "@0x-copilot/chat-surface";
 import type { AnchorHTMLAttributes, ReactElement } from "react";
 
 import { CitationChip } from "../citations/CitationChip";

@@ -1,6 +1,6 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "$id": "https://enterprise-search/deploy/tenants.schema.json",
+  "$id": "https://0x-copilot/deploy/tenants.schema.json",
   "title": "Tenant Registry",
   "description": "Authoritative registry of tenants targeted by deploy workflows. Loaded by .github/workflows/deploy.yml.",
   "type": "object",

@@ -16,8 +16,8 @@
 
 import { useCallback, useEffect, useState, type ReactElement } from "react";
 
-import { RevealOnce } from "@enterprise-search/chat-surface";
-import type { Webhook } from "@enterprise-search/api-types";
+import { RevealOnce } from "@0x-copilot/chat-surface";
+import type { Webhook } from "@0x-copilot/api-types";
 
 import type { RequestIdentity } from "../../api/config";
 import {

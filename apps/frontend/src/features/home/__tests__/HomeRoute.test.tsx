@@ -9,7 +9,7 @@ import {
   type Mock,
 } from "vitest";
 
-import type { HomePayload } from "@enterprise-search/api-types";
+import type { HomePayload } from "@0x-copilot/api-types";
 
 // Mock chat-surface BEFORE HomeRoute pulls it in. Capture the props each
 // shell receives so we can introspect the v2 hand-off in tests without
@@ -20,7 +20,7 @@ const homeDestinationProps: { current: Record<string, unknown> | null } = {
 const homePanelProps: { current: Record<string, unknown> | null } = {
   current: null,
 };
-vi.mock("@enterprise-search/chat-surface", () => ({
+vi.mock("@0x-copilot/chat-surface", () => ({
   HomeDestination: (props: Record<string, unknown>) => {
     homeDestinationProps.current = props;
     return <div data-testid="home-destination-stub">destination</div>;

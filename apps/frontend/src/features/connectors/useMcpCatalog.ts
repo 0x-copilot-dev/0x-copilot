@@ -7,7 +7,7 @@
 // aligned with the rest of the data hooks so consumers compose the
 // same way in tests.
 
-import type { McpCatalogEntry } from "@enterprise-search/api-types";
+import type { McpCatalogEntry } from "@0x-copilot/api-types";
 import { useCallback } from "react";
 
 import { listMcpCatalog } from "../../api/mcpApi";

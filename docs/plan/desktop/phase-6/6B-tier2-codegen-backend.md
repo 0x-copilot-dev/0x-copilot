@@ -9,7 +9,7 @@ The capability runs server-side in `services/ai-backend`. It does not load, inst
 1. An `AdapterCodegenResult` returned to the immediate caller (the agent that invoked the capability).
 2. A `RuntimeEventEnvelope` of type `adapter_generated` written to the run's persisted event stream so the desktop's tier-2 lifecycle (6C) can subscribe on the existing SSE channel, persist the source to `{userData}/adapters/{scheme}-v{n}.js`, and hand it to the local quality gate.
 
-The frozen `SaaSRendererAdapter` contract from Phase 4-A is the only shape generated. The generated source uses `React.createElement(...)` rather than JSX so the downstream AST scan stays trivial (no JSX-grammar awareness in the scanner). Imports are restricted to `react` and `@enterprise-search/design-system` to match the 6A / 6D allowlist.
+The frozen `SaaSRendererAdapter` contract from Phase 4-A is the only shape generated. The generated source uses `React.createElement(...)` rather than JSX so the downstream AST scan stays trivial (no JSX-grammar awareness in the scanner). Imports are restricted to `react` and `@0x-copilot/design-system` to match the 6A / 6D allowlist.
 
 ## Status
 
@@ -47,7 +47,7 @@ The frozen `SaaSRendererAdapter` contract from Phase 4-A is the only shape gener
 - [ ] FR-3: `AdapterCodegenResult` is a Pydantic model with: `scheme: str`, `layout: LayoutTemplate`, `schema_version: PositiveInt` (always 1 in Phase 6), `adapter_source: str`. The field names match the desktop's expectation when reading the event payload.
 - [ ] FR-4: `RenderAdapterGenerator.generate(scheme, sample_state, layout_template)` returns `AdapterCodegenResult`. The async method does not await anything heavy and never makes network calls; it is async-shaped to fit the capability pattern used by the rest of `agent_runtime/capabilities/`.
 - [ ] FR-5: Each template produces a single complete TypeScript source file with:
-  - Two `import` statements at the top, each from one of `react` / `@enterprise-search/design-system`. No other module specifiers.
+  - Two `import` statements at the top, each from one of `react` / `@0x-copilot/design-system`. No other module specifiers.
   - One named `export const adapter: SaaSRendererAdapter<...>` declaring `scheme`, `matches`, `renderCurrent`, `renderDiff`, `metadata`.
   - Two named `export const renderCurrent` and `export const renderDiff` arrow functions that are the same functions assigned to `adapter.renderCurrent` / `adapter.renderDiff`. (Two distinct export paths so the desktop can either import the whole adapter or the individual render functions for unit smoke tests in 6D.)
   - `metadata.origin === "agent-generated"`, `metadata.schemaVersion === 1`, `metadata.generatedAt` set to the capability call's UTC ISO timestamp, `metadata.generatorModel` set to a constant `"render-adapter-generator/v1"`.
@@ -62,7 +62,7 @@ The frozen `SaaSRendererAdapter` contract from Phase 4-A is the only shape gener
     - Substring `export const renderDiff` present.
     - Substring `React.createElement(` present.
     - Substring `metadata: {` present.
-    - Imports limited to `react` and `@enterprise-search/design-system` (regex scan).
+    - Imports limited to `react` and `@0x-copilot/design-system` (regex scan).
     - None of the forbidden patterns from FR-7 are present.
     - The generated source parses as a sequence of TypeScript top-level statements by a permissive regex (we are not running a real TS parser; we mirror what the desktop's AST scanner enforces structurally, which is what 6A/6D will own at runtime).
   - The `AdapterAllowlistAuditor` raises on a manually-crafted bad source containing each forbidden pattern.

@@ -17,7 +17,7 @@ import {
   isCitationMadePayload,
   type CitationLink,
   type RuntimeEventEnvelope,
-} from "@enterprise-search/api-types";
+} from "@0x-copilot/api-types";
 
 /** All resolved citation links for one assistant message, keyed by their
  *  prose offset so a re-delivered delta does not duplicate the chip. */

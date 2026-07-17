@@ -9,13 +9,8 @@ import type {
   DataResidencyRegion,
   PrivacySettingsResponse,
   UpdatePrivacySettingsRequest,
-} from "@enterprise-search/api-types";
-import {
-  Card,
-  Field,
-  Switch,
-  classNames,
-} from "@enterprise-search/design-system";
+} from "@0x-copilot/api-types";
+import { Card, Field, Switch, classNames } from "@0x-copilot/design-system";
 import type { ReactElement } from "react";
 import { useCallback, useEffect, useState } from "react";
 import {

@@ -20,7 +20,7 @@
 //     agents shape would mean inventing a synthetic single-purpose key
 //     ("calls") and the period-toggle UI we can't drive. The single-
 //     source-of-truth here is the wire shape `ToolUsageProjection` from
-//     @enterprise-search/api-types — both charts read from canonical
+//     @0x-copilot/api-types — both charts read from canonical
 //     wire types; only the viz is per-destination.
 //
 // Invariants:
@@ -32,7 +32,7 @@
 
 import type { CSSProperties, ReactElement } from "react";
 
-import type { ToolUsageProjection } from "@enterprise-search/api-types";
+import type { ToolUsageProjection } from "@0x-copilot/api-types";
 
 import { formatRelativeTime } from "../../util/time";
 

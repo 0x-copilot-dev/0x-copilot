@@ -2,7 +2,7 @@
 
 ## Architecture Model
 
-Enterprise Search should be developed as one GitHub monorepo with multiple deployable services and apps. The code lives together so product changes can move coherently, but services still have clear runtime boundaries.
+0xCopilot should be developed as one GitHub monorepo with multiple deployable services and apps. The code lives together so product changes can move coherently, but services still have clear runtime boundaries.
 
 ```mermaid
 flowchart TD
@@ -24,7 +24,7 @@ implemented yet. Planned paths should stay out of builds and imports until they
 exist on disk.
 
 ```text
-enterprise-search/
+0x-copilot/
   apps/
     frontend/        # implemented
     mac/             # planned

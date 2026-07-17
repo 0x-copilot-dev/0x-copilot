@@ -16,14 +16,14 @@
 // directly. The transport singleton enforces this via the same-origin
 // Vite proxy → facade.
 //
-// Wire types come from `@enterprise-search/api-types/src/inbox.ts`
+// Wire types come from `@0x-copilot/api-types/src/inbox.ts`
 // once Phase 4 Impl-A lands. Today they live in `./_inbox-stub` so the
 // frontend wave can run in parallel.
 //
 // TODO(merge): swap every `./_inbox-stub` import for
-// `@enterprise-search/api-types`.
+// `@0x-copilot/api-types`.
 
-import type { InboxItemId } from "@enterprise-search/api-types";
+import type { InboxItemId } from "@0x-copilot/api-types";
 
 import type { RequestIdentity } from "./config";
 import { httpDelete, httpGet, httpPatchQuery, httpPostQuery } from "./http";

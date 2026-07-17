@@ -20,8 +20,8 @@ import {
   type ReactElement,
 } from "react";
 
-import { Badge, Button, TextInput } from "@enterprise-search/design-system";
-import type { CreateToolRequest } from "@enterprise-search/api-types";
+import { Badge, Button, TextInput } from "@0x-copilot/design-system";
+import type { CreateToolRequest } from "@0x-copilot/api-types";
 
 import { useStepMachine } from "./useStepMachine";
 import { WizardShell, type WizardStepDescriptor } from "./WizardShell";

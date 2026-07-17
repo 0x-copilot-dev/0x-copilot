@@ -13,7 +13,7 @@
 
 import type { CSSProperties, ReactElement, ReactNode } from "react";
 
-import type { ItemRefSnapshot } from "@enterprise-search/api-types";
+import type { ItemRefSnapshot } from "@0x-copilot/api-types";
 
 import { ItemLink } from "../refs/ItemLink";
 

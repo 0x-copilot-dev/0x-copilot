@@ -31,7 +31,7 @@ from agent_runtime.persistence.encryption import (
     FieldEncryptionFactory,
 )
 from agent_runtime.persistence.pool_metrics import PoolMetrics
-from enterprise_audit_chain import AuditChainSigner
+from copilot_audit_chain import AuditChainSigner
 from agent_runtime.persistence.records import (
     ApprovalBatchItemRecord,
     ApprovalBatchRecord,

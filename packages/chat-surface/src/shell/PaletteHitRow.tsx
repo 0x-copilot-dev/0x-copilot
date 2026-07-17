@@ -18,7 +18,7 @@
 
 import type { CSSProperties, ReactElement } from "react";
 
-import type { PaletteHit, PaletteHitKind } from "@enterprise-search/api-types";
+import type { PaletteHit, PaletteHitKind } from "@0x-copilot/api-types";
 
 import { ItemLink } from "../refs/ItemLink";
 

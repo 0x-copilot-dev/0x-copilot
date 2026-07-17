@@ -7,7 +7,7 @@
 // pattern Routines / Connectors use — DRY: no new reveal primitive).
 //
 // Pure presentation — the host owns transport, the wire's
-// `POST /v1/team/invite` shape lives in `@enterprise-search/api-types`.
+// `POST /v1/team/invite` shape lives in `@0x-copilot/api-types`.
 // The wizard does not call the network; the parent passes a fresh
 // `onInvite` and the resulting "invite_link" plaintext.
 
@@ -19,7 +19,7 @@ import {
   type ReactElement,
 } from "react";
 
-import type { InviteRequest, TeamRole } from "@enterprise-search/api-types";
+import type { InviteRequest, TeamRole } from "@0x-copilot/api-types";
 
 import { RevealOnce } from "../connectors/RevealOnce";
 

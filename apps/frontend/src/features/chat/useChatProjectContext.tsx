@@ -30,7 +30,7 @@
 
 import { useCallback, useMemo, useState } from "react";
 
-import type { ProjectId } from "@enterprise-search/api-types";
+import type { ProjectId } from "@0x-copilot/api-types";
 
 /**
  * Override state. `undefined` means "no override; follow the route".

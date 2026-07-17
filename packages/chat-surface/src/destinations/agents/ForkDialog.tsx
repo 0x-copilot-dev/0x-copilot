@@ -16,7 +16,7 @@
 
 import type { CSSProperties, ReactElement } from "react";
 
-import { StatusPill } from "@enterprise-search/design-system";
+import { StatusPill } from "@0x-copilot/design-system";
 
 export interface ForkDialogProps {
   /** Display name of the agent being forked. */

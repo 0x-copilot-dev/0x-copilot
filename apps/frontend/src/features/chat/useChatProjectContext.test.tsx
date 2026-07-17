@@ -13,7 +13,7 @@
 //
 // These mirror PRD §4.4 test gates and the §10.2 acceptance test list.
 
-import type { ProjectId } from "@enterprise-search/api-types";
+import type { ProjectId } from "@0x-copilot/api-types";
 import { act, renderHook } from "@testing-library/react";
 import { describe, expect, it } from "vitest";
 

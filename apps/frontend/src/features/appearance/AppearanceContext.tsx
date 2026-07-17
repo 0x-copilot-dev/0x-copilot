@@ -1,12 +1,12 @@
 import type {
   AppearancePreferences,
   UpdateUserPreferencesRequest,
-} from "@enterprise-search/api-types";
+} from "@0x-copilot/api-types";
 import {
   useTheme,
   type AccentScheme,
   type ThemeScheme,
-} from "@enterprise-search/design-system";
+} from "@0x-copilot/design-system";
 import {
   createContext,
   useCallback,

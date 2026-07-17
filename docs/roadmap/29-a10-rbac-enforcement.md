@@ -30,7 +30,7 @@ Today permission scopes are _carried_ in headers and the bearer token but not _e
 
 ### 2.1 Architecture
 
-- Permission scope catalog as constants in `packages/service-contracts/src/enterprise_service_contracts/scopes.py`.
+- Permission scope catalog as constants in `packages/service-contracts/src/copilot_service_contracts/scopes.py`.
 - FastAPI dependencies `RequireScopes(*scopes)` and `RequireRoles(*roles)` in both `services/backend` and `services/ai-backend`.
 - Two-phase rollout via `RBAC_MODE`:
   - `RBAC_MODE=audit` — log denies to `identity_audit_events`, pass through.
@@ -48,7 +48,7 @@ None new. **Behavior changes on every existing endpoint** — riskiest auth PR; 
 
 ### 2.4 Code changes
 
-**New** `packages/service-contracts/src/enterprise_service_contracts/scopes.py`:
+**New** `packages/service-contracts/src/copilot_service_contracts/scopes.py`:
 
 ```python
 # RBAC scope catalog
@@ -200,7 +200,7 @@ Set `RBAC_MODE=audit`. All denies become logs.
 
 ## 4. Critical files
 
-- New: `packages/service-contracts/src/enterprise_service_contracts/scopes.py`
+- New: `packages/service-contracts/src/copilot_service_contracts/scopes.py`
 - New: `services/backend/src/backend_app/identity/rbac.py`
 - New: `services/ai-backend/src/runtime_api/rbac.py`
 - Modify: [services/backend/src/backend_app/app.py](../../services/backend/src/backend_app/app.py) — every route.

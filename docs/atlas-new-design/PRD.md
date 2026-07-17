@@ -2,7 +2,7 @@
 
 **Status:** draft, in flight (Wave 1 dispatched 2026-05-17)
 **Owner:** parth
-**Design source of truth:** Claude Design handoff bundle at `/tmp/atlas-design/enterprise-search-template/` — specifically `project/Atlas Workspace.html` and the iteration transcript in `chats/chat1.md` (lines 240–820 are the load-bearing decisions).
+**Design source of truth:** Claude Design handoff bundle at `/tmp/atlas-design/0x-copilot-template/` — specifically `project/Atlas Workspace.html` and the iteration transcript in `chats/chat1.md` (lines 240–820 are the load-bearing decisions).
 
 ---
 
@@ -216,13 +216,13 @@ These need a call before the relevant wave lands. Flagging them so we don't acci
 
 ## 15. References
 
-- `/tmp/atlas-design/enterprise-search-template/chats/chat1.md` — design transcript (lines 240–820 load-bearing).
-- `/tmp/atlas-design/enterprise-search-template/project/os.css` — workspace layout primitives.
-- `/tmp/atlas-design/enterprise-search-template/project/os-shell.jsx` — AppRail / ContextPanel / TopbarOS shapes.
-- `/tmp/atlas-design/enterprise-search-template/project/os-app.jsx` — composition + destination dispatch.
-- `/tmp/atlas-design/enterprise-search-template/project/os-routing.jsx` — ⌘K + mention popover shapes.
-- `/tmp/atlas-design/enterprise-search-template/project/composer.jsx` — design composer.
-- `/tmp/atlas-design/enterprise-search-template/project/thread-canvas.jsx` — 3-mode canvas reference.
+- `/tmp/atlas-design/0x-copilot-template/chats/chat1.md` — design transcript (lines 240–820 load-bearing).
+- `/tmp/atlas-design/0x-copilot-template/project/os.css` — workspace layout primitives.
+- `/tmp/atlas-design/0x-copilot-template/project/os-shell.jsx` — AppRail / ContextPanel / TopbarOS shapes.
+- `/tmp/atlas-design/0x-copilot-template/project/os-app.jsx` — composition + destination dispatch.
+- `/tmp/atlas-design/0x-copilot-template/project/os-routing.jsx` — ⌘K + mention popover shapes.
+- `/tmp/atlas-design/0x-copilot-template/project/composer.jsx` — design composer.
+- `/tmp/atlas-design/0x-copilot-template/project/thread-canvas.jsx` — 3-mode canvas reference.
 - [`apps/frontend/CLAUDE.md`](../../apps/frontend/CLAUDE.md) — composer hint-row invariant + planning-pulse invariant.
 - [`packages/chat-surface/CLAUDE.md`](../../packages/chat-surface/CLAUDE.md) (if/when it lands) — chat-surface engineering rules.
 - [`docs/use-cases/01-…13-…md`](../use-cases/) — end-to-end use cases this UI must support without seams.

@@ -150,9 +150,9 @@ This PR is frontend-only. No new endpoints. No new contract fields. `useUserProf
 ## Verification
 
 ```bash
-npm run typecheck --workspace @enterprise-search/api-types
-npm run typecheck --workspace @enterprise-search/frontend
-npm run build --workspace @enterprise-search/frontend
+npm run typecheck --workspace @0x-copilot/api-types
+npm run typecheck --workspace @0x-copilot/frontend
+npm run build --workspace @0x-copilot/frontend
 ```
 
 Manual walk in `make dev`:

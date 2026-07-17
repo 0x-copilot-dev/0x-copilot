@@ -8,10 +8,7 @@
 //   - cross-message + cross-run lookups stay isolated.
 
 import { describe, expect, it } from "vitest";
-import type {
-  CitationLink,
-  RuntimeEventEnvelope,
-} from "@enterprise-search/api-types";
+import type { CitationLink, RuntimeEventEnvelope } from "@0x-copilot/api-types";
 import {
   applyCitationLinkEvent,
   anyLinkForOrdinalInRun,

@@ -1,5 +1,5 @@
 import type { ToolCallMessagePartProps } from "../../runtime/types";
-import { HarnessRow } from "@enterprise-search/design-system";
+import { HarnessRow } from "@0x-copilot/design-system";
 import type { ReactElement } from "react";
 import { largeToolResultFromValue, stringValue } from "../../utils/jsonUtils";
 import { inlineToolTitle, toolStatusLabel } from "../../utils/toolLabels";

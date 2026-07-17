@@ -1,4 +1,4 @@
-import { Badge, Card, classNames } from "@enterprise-search/design-system";
+import { Badge, Card, classNames } from "@0x-copilot/design-system";
 import type { ReactElement, ReactNode } from "react";
 import type { ActivityParam } from "../../utils/activityDataBuilders";
 import { badgeToneForStatus } from "../../utils/toolLabels";

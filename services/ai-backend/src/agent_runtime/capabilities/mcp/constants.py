@@ -199,7 +199,7 @@ class Values:
     class McpClientInfo:
         """Advertised client identity values sent in the MCP handshake."""
 
-        NAME = "enterprise-search-ai-backend"
+        NAME = "0x-copilot-ai-backend"
         PROTOCOL_VERSION = "2025-06-18"
         VERSION = "0.1.0"
 

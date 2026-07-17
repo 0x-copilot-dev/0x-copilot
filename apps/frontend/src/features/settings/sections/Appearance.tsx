@@ -5,14 +5,14 @@ import type {
   UserProfileDensity,
   UserProfileReduceMotion,
   UserProfileTheme,
-} from "@enterprise-search/api-types";
+} from "@0x-copilot/api-types";
 import {
   ACCENT_SCHEMES,
   Card,
   Field,
   TextInput,
   classNames,
-} from "@enterprise-search/design-system";
+} from "@0x-copilot/design-system";
 import type { ReactElement } from "react";
 import { useEffect, useState } from "react";
 

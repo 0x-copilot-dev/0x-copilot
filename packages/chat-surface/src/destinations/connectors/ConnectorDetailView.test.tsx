@@ -11,7 +11,7 @@ import type {
   ConnectorSlug,
   TenantId,
   UserId,
-} from "@enterprise-search/api-types";
+} from "@0x-copilot/api-types";
 
 import { RouterProvider } from "../../providers/RouterProvider";
 import {

@@ -156,7 +156,7 @@ wires the real components at merge time.
 - `resolveAdapter` from `../surfaces/SurfaceRegistry` (already used by
   the existing `TcSurfaceMount`).
 - `SaaSRendererAdapter` type from `../surfaces/SaaSRendererAdapter`.
-- `Transport` type from `@enterprise-search/chat-transport` (the
+- `Transport` type from `@0x-copilot/chat-transport` (the
   existing `TcSurfaceMount` carries this prop; preserved unchanged).
 - `React` types (`ReactElement`, `ReactNode`, `CSSProperties`).
 
@@ -247,11 +247,11 @@ export interface TcSurfaceMountProps {
 ## Done criteria
 
 - [ ] All FRs met
-- [ ] `npm run typecheck --workspace @enterprise-search/chat-surface`
+- [ ] `npm run typecheck --workspace @0x-copilot/chat-surface`
       passes
-- [ ] `npm test --workspace @enterprise-search/chat-surface` passes
+- [ ] `npm test --workspace @0x-copilot/chat-surface` passes
       (including all pre-existing Phase 0-A `TcSurfaceMount` tests)
-- [ ] `npm run lint --workspace @enterprise-search/chat-surface` passes
+- [ ] `npm run lint --workspace @0x-copilot/chat-surface` passes
 - [ ] No imports outside scope
 - [ ] No bare browser primitives anywhere in this scope — enforced by
       the existing ESLint rule

@@ -17,10 +17,10 @@
 // Vite proxy → facade.
 //
 // Wire types live in `./_agents-stub` until P8-A's
-// `@enterprise-search/api-types/src/agents.ts` lands on main.
+// `@0x-copilot/api-types/src/agents.ts` lands on main.
 //
 // TODO(merge): swap every `./_agents-stub` import for
-// `@enterprise-search/api-types`.
+// `@0x-copilot/api-types`.
 
 import type { RequestIdentity } from "./config";
 import { httpGet, httpPatchQuery, httpPostQuery } from "./http";

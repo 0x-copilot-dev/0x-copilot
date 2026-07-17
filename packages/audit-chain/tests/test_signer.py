@@ -26,12 +26,12 @@ from uuid import UUID
 
 import pytest
 
-from enterprise_audit_chain import (
+from copilot_audit_chain import (
     AuditChainRow,
     AuditChainSigner,
     ChainSignature,
 )
-from enterprise_audit_chain.signer import _DEV_SENTINEL_KEY
+from copilot_audit_chain.signer import _DEV_SENTINEL_KEY
 
 
 def _signer(*, version: int = 1) -> AuditChainSigner:

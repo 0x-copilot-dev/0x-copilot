@@ -1,5 +1,5 @@
 // Web wrapper around the substrate-agnostic citation-link reducer in
-// @enterprise-search/chat-surface.
+// @0x-copilot/chat-surface.
 //
 // The core reducer is pure: same inputs → same outputs, no console / no
 // DOM / no apps/frontend dependency. The diagnostic breadcrumbs it
@@ -26,8 +26,8 @@ import {
   type CitationLinkRegistryByRun,
   type CitationLinksByMessage,
   type CitationLinksByOffset,
-} from "@enterprise-search/chat-surface";
-import type { RuntimeEventEnvelope } from "@enterprise-search/api-types";
+} from "@0x-copilot/chat-surface";
+import type { RuntimeEventEnvelope } from "@0x-copilot/api-types";
 
 import { citationDebug } from "./citationDebug";
 

@@ -1,7 +1,7 @@
 import {
   scrollChatToCitation,
   scrollChatToEvent,
-} from "@enterprise-search/chat-surface";
+} from "@0x-copilot/chat-surface";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 beforeEach(() => {

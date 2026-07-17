@@ -20,7 +20,7 @@
 
 import { trace } from "@opentelemetry/api";
 
-export const SERVICE_NAME = "enterprise-search-frontend";
+export const SERVICE_NAME = "0x-copilot-frontend";
 
 export interface BootstrapOptions {
   /**

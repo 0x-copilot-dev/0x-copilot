@@ -1,5 +1,5 @@
 // chat-surface Routines adapter shape (transitional; orchestrator rewires
-// at merge to `@enterprise-search/api-types/routines`).
+// at merge to `@0x-copilot/api-types/routines`).
 //
 // Phase 5 has parallel wave-agents working off the same shape conventions
 // as the canonical routines-prd.md §3 + §4.1:
@@ -14,7 +14,7 @@
 // site so merge-time rewire is a pure import swap.
 //
 // Every import of this stub should be marked
-// `TODO(merge): rewire to "@enterprise-search/api-types"` so the
+// `TODO(merge): rewire to "@0x-copilot/api-types"` so the
 // orchestrator's rewrite script can find them.
 
 import type {
@@ -26,17 +26,17 @@ import type {
   TenantId,
   ToolId,
   UserId,
-} from "@enterprise-search/api-types";
-import type { ItemRef } from "@enterprise-search/api-types";
+} from "@0x-copilot/api-types";
+import type { ItemRef } from "@0x-copilot/api-types";
 
 // ---- §4.1 brand-shaped trigger ids
 //
-// `TriggerId` is owned canonically by `@enterprise-search/api-types`
+// `TriggerId` is owned canonically by `@0x-copilot/api-types`
 // (`packages/api-types/src/brands.ts`). Re-exported here so existing
 // imports `from "../_routines-stub"` keep working without a churn pass.
 
 /** Stable identifier for a single trigger row inside a routine. */
-import type { TriggerId } from "@enterprise-search/api-types";
+import type { TriggerId } from "@0x-copilot/api-types";
 export type { TriggerId };
 
 // ---- §3 / §4.1 enums ------------------------------------------------------

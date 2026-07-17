@@ -1,4 +1,4 @@
-import type { ConversationId } from "@enterprise-search/api-types";
+import type { ConversationId } from "@0x-copilot/api-types";
 import { describe, expect, it, vi } from "vitest";
 
 import type { NotificationPort, NotifyPayload } from "./NotificationPort";

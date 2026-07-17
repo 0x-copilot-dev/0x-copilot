@@ -6,7 +6,7 @@ classmethod surface so the result can be cached on ``app.state.deployment``.
 
 The same module exists (with identical surface) in each of the three Python
 services. They are not shared because monorepo rules forbid cross-service
-imports — only the constants in ``enterprise_service_contracts`` are shared.
+imports — only the constants in ``copilot_service_contracts`` are shared.
 """
 
 from __future__ import annotations
@@ -17,7 +17,7 @@ import logging
 import os
 import sys
 
-from enterprise_service_contracts.deployment_profile import (
+from copilot_service_contracts.deployment_profile import (
     ALLOWED_PROFILES,
     ENV_DEPLOYMENT_PROFILE,
     PROFILE_SAAS_MULTI_TENANT,

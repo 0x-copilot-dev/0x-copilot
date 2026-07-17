@@ -8,7 +8,7 @@ import {
   type SaaSRendererAdapter,
   type Tier2LoaderProps,
   type Tier2WorkerLike,
-} from "@enterprise-search/chat-surface";
+} from "@0x-copilot/chat-surface";
 import {
   CHANNELS,
   Tier2InstallPayloadSchema,
@@ -18,7 +18,7 @@ import {
   type Tier2MarkBrokenPayload,
   type Tier2UninstallPayload,
   type WindowBridge,
-} from "@enterprise-search/chat-transport";
+} from "@0x-copilot/chat-transport";
 
 // Phase 6C renderer-side bridge. Listens for tier2.install / tier2.uninstall
 // / tier2.mark-broken pushes from main and calls into chat-surface's

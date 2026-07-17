@@ -1,4 +1,4 @@
-import type { Conversation } from "@enterprise-search/api-types";
+import type { Conversation } from "@0x-copilot/api-types";
 
 /**
  * Sidebar search filter (PR 2.2). Pure, case-insensitive over `title` and

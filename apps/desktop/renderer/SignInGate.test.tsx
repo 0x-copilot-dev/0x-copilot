@@ -7,7 +7,7 @@ import {
   CHANNELS,
   type RendererSession,
   type WindowBridge,
-} from "@enterprise-search/chat-transport";
+} from "@0x-copilot/chat-transport";
 
 import { SignInGate } from "./SignInGate";
 

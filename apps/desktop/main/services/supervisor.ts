@@ -1,7 +1,4 @@
-import type {
-  BootPhase,
-  BootStatusPayload,
-} from "@enterprise-search/chat-transport";
+import type { BootPhase, BootStatusPayload } from "@0x-copilot/chat-transport";
 
 import type { BootSecrets } from "./boot-secrets";
 import type { FatalCrashLoop } from "./python-service";

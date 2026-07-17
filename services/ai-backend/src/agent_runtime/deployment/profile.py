@@ -4,7 +4,7 @@ The profile is set once at process startup via ``ENTERPRISE_DEPLOYMENT_PROFILE``
 and dictates the safety defaults for the rest of the process. Same surface as
 the backend and backend-facade loaders; they are duplicated rather than shared
 because monorepo rules forbid cross-service Python imports — only the constants
-in ``enterprise_service_contracts`` are shared.
+in ``copilot_service_contracts`` are shared.
 """
 
 from __future__ import annotations
@@ -15,7 +15,7 @@ import logging
 import os
 import sys
 
-from enterprise_service_contracts.deployment_profile import (
+from copilot_service_contracts.deployment_profile import (
     ALLOWED_PROFILES,
     ENV_DEPLOYMENT_PROFILE,
     PROFILE_SAAS_MULTI_TENANT,

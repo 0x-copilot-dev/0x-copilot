@@ -10,7 +10,7 @@ import {
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
-import type { AdapterGeneratedPayload } from "@enterprise-search/api-types";
+import type { AdapterGeneratedPayload } from "@0x-copilot/api-types";
 import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { wireQualityGateForTier2 } from "./integrate";

@@ -49,7 +49,7 @@ None. Pure config.
 
 ### 2.4 Code changes
 
-**New shared constants** — `packages/service-contracts/src/enterprise_service_contracts/deployment_profile.py`:
+**New shared constants** — `packages/service-contracts/src/copilot_service_contracts/deployment_profile.py`:
 
 ```python
 ENV_DEPLOYMENT_PROFILE = "ENTERPRISE_DEPLOYMENT_PROFILE"
@@ -182,7 +182,7 @@ Revert the PR. Process startup returns to ignoring the env var.
 
 ## 4. Critical files
 
-- New: `packages/service-contracts/src/enterprise_service_contracts/deployment_profile.py`
+- New: `packages/service-contracts/src/copilot_service_contracts/deployment_profile.py`
 - New: `services/ai-backend/src/agent_runtime/deployment/profile.py`
 - New: `services/backend/src/backend_app/deployment_profile.py`
 - New: `services/backend-facade/src/backend_facade/deployment_profile.py`

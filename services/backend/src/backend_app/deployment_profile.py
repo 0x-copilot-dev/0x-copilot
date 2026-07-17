@@ -15,7 +15,7 @@ import logging
 import os
 import sys
 
-from enterprise_service_contracts.deployment_profile import (
+from copilot_service_contracts.deployment_profile import (
     ALLOWED_PROFILES,
     ENV_DEPLOYMENT_PROFILE,
     PROFILE_SAAS_MULTI_TENANT,

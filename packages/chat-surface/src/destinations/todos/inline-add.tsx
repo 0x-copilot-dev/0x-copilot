@@ -8,9 +8,9 @@ import {
   type KeyboardEvent,
   type ReactElement,
 } from "react";
-import type { ProjectId } from "@enterprise-search/api-types";
+import type { ProjectId } from "@0x-copilot/api-types";
 
-// Branded ids — canonical site is `@enterprise-search/api-types`
+// Branded ids — canonical site is `@0x-copilot/api-types`
 // (`packages/api-types/src/brands.ts`). Re-export keeps existing
 // `from "../inline-add"` imports working without a churn pass.
 export type { ProjectId };

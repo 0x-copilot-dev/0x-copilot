@@ -4,7 +4,7 @@
 // Authority: this is the SINGLE declaration site for every Tools-
 // destination payload type. Re-exported from `packages/api-types/src/index.ts`;
 // every consumer (frontend, chat-surface, backend, ai-backend) imports
-// from `@enterprise-search/api-types` — drift here is a bug.
+// from `@0x-copilot/api-types` — drift here is a bug.
 //
 // Five concerns this file owns:
 //

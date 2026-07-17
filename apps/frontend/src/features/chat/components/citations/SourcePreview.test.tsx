@@ -1,7 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { act, fireEvent, render, screen } from "@testing-library/react";
 import type { ReactElement } from "react";
-import type { SourceEntry } from "@enterprise-search/api-types";
+import type { SourceEntry } from "@0x-copilot/api-types";
 import {
   SourcePreviewProvider,
   useSourcePreviewTrigger,

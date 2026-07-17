@@ -60,10 +60,10 @@ cd services/ai-backend && .venv/bin/python -m pytest tests/unit/agent_runtime/ag
 Frontend / TS:
 
 ```bash
-npm run dev --workspace @enterprise-search/frontend
-npm run typecheck --workspace @enterprise-search/frontend
-npm run build --workspace @enterprise-search/frontend
-npm run typecheck --workspace @enterprise-search/api-types
+npm run dev --workspace @0x-copilot/frontend
+npm run typecheck --workspace @0x-copilot/frontend
+npm run build --workspace @0x-copilot/frontend
+npm run typecheck --workspace @0x-copilot/api-types
 ```
 
 Lint/format runs through pre-commit (ruff + ruff-format for Python, prettier for JS/TS/CSS/MD/YAML).

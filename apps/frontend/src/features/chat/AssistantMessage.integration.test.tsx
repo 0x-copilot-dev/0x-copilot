@@ -16,7 +16,7 @@ import { render, screen } from "@testing-library/react";
 import type {
   CitationSourceRef,
   RuntimeEventEnvelope,
-} from "@enterprise-search/api-types";
+} from "@0x-copilot/api-types";
 
 // Stub the parts walker; AssistantMessage's body is not what this
 // integration test exercises (we assert MessageSourcesStrip mount).
@@ -31,9 +31,9 @@ vi.mock("./runtime/components", async (orig) => {
 vi.mock("./components/markdown/MarkdownText", () => ({
   MarkdownText: () => null,
 }));
-vi.mock("@enterprise-search/chat-surface", async () => ({
-  ...(await vi.importActual<typeof import("@enterprise-search/chat-surface")>(
-    "@enterprise-search/chat-surface",
+vi.mock("@0x-copilot/chat-surface", async () => ({
+  ...(await vi.importActual<typeof import("@0x-copilot/chat-surface")>(
+    "@0x-copilot/chat-surface",
   )),
   Reasoning: () => null,
 }));
@@ -64,7 +64,7 @@ vi.mock("./components/messages/AssistantMessageFooter", () => ({
 import { AssistantMessage } from "./components/messages/AssistantMessage";
 import { CitationsProvider } from "./components/citations/citationsContext";
 import { applyCitationEvent } from "./chatModel/citationReducer";
-import { emptyCitationRegistry } from "@enterprise-search/chat-surface";
+import { emptyCitationRegistry } from "@0x-copilot/chat-surface";
 import { chatItemsToThreadMessages } from "./chatModel/conversion";
 import type { ChatItem } from "./chatModel/types";
 

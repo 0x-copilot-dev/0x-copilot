@@ -41,7 +41,7 @@ Server is the source of truth — types here mirror what the server actually ser
 ## Validation
 
 ```bash
-npm run typecheck --workspace @enterprise-search/api-types
+npm run typecheck --workspace @0x-copilot/api-types
 ```
 
 Also run frontend typecheck when this package's changes affect consumers.

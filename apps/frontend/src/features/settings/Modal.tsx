@@ -10,7 +10,7 @@
 
 import { useEffect, useRef, type ReactElement, type ReactNode } from "react";
 import { createPortal } from "react-dom";
-import { IconButton } from "@enterprise-search/design-system";
+import { IconButton } from "@0x-copilot/design-system";
 
 export interface ModalProps {
   open: boolean;

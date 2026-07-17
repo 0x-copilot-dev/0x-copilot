@@ -13,7 +13,7 @@
 // component is intentionally aria-static — keyboard activation just
 // toggles the <details> element below.
 
-import { classNames } from "@enterprise-search/design-system";
+import { classNames } from "@0x-copilot/design-system";
 import type { ReactElement, ReactNode } from "react";
 import { ActivityDetails } from "./ActivityDetails";
 import { useUndoCountdown } from "../tools/useUndoCountdown";

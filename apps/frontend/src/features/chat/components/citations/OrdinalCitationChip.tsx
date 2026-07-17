@@ -1,5 +1,5 @@
 // Web wrapper around the substrate-agnostic OrdinalCitationChip in
-// @enterprise-search/chat-surface.
+// @0x-copilot/chat-surface.
 //
 // The headless chip is a pure renderer; this wrapper owns the
 // web-substrate-specific bits:
@@ -14,7 +14,7 @@
 // against its bridge and chooses its own diagnostics. The chat-surface
 // chip itself doesn't change.
 
-import { OrdinalCitationChip as HeadlessOrdinalCitationChip } from "@enterprise-search/chat-surface";
+import { OrdinalCitationChip as HeadlessOrdinalCitationChip } from "@0x-copilot/chat-surface";
 import type { ReactElement } from "react";
 import { useEffect, useRef } from "react";
 

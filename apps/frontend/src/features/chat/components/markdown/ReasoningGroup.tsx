@@ -1,4 +1,4 @@
-import { ThinkingIcon } from "@enterprise-search/chat-surface";
+import { ThinkingIcon } from "@0x-copilot/chat-surface";
 import type { ReactElement } from "react";
 
 import type { ReasoningGroupProps } from "../../runtime/types";

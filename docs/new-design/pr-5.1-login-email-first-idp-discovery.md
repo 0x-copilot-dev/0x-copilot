@@ -94,7 +94,7 @@ The design doc (Atlas → Login → §Flow — email‑first / progressive) coll
 - ✅ Magic‑link tokens are 256‑bit, base64url‑encoded, single‑use (`consumed_at` set on first redemption), 15‑minute TTL.
 - ✅ `GET /v1/auth/magic-link/callback?token=…` mints a session via `SessionService.create` if the email maps to **exactly one** workspace, otherwise issues a short‑lived `pick_token` (5 minutes) and surfaces the workspace list.
 - ✅ `POST /v1/auth/sessions/select` exchanges the `pick_token` + chosen `org_id` for the final session bearer.
-- ✅ `LoginScreen` rebuild matches the prototype (`/tmp/design-doc/enterprise-search/project/login-page.jsx`) on layout: brand pane left (1fr), card right (~440px), compliance row at bottom of brand pane, single email input, debounced 450 ms discovery, adaptive button.
+- ✅ `LoginScreen` rebuild matches the prototype (`/tmp/design-doc/0x-copilot/project/login-page.jsx`) on layout: brand pane left (1fr), card right (~440px), compliance row at bottom of brand pane, single email input, debounced 450 ms discovery, adaptive button.
 - ✅ `<input.focus({ preventScroll: true })>` keeps the page anchored on first paint (per the design doc's decisions log entry).
 - ✅ The login route opts out of the app's body scroll lock via `html.login-html, body.login-body { overflow: auto; height: auto }`.
 - ✅ Multi‑workspace users see a list with member counts (from `organization_members` count per org), last‑active (max `sessions.last_seen_at` per org/user), and role.
@@ -416,7 +416,7 @@ Rate limits are **policy** rows in the existing `lockout_policies` table (PR A8)
 
 The `/magic-link/start` shape **does not** return 4xx for nonexistent emails — anti‑enumeration. It returns 202 even when no row is written.
 
-### 2.10 Frontend contract (`@enterprise-search/api-types`)
+### 2.10 Frontend contract (`@0x-copilot/api-types`)
 
 ```ts
 // packages/api-types/src/index.ts
@@ -916,7 +916,7 @@ Multi‑workspace branch: the callback returns `outcome=workspace_pick_required`
 - [ ] All four routes are pure proxies (no business logic). `_anonymous_service_headers(org_id=...)` reused.
 - [ ] None of the four routes reaches `/internal/v1/*` from the browser.
 
-### `@enterprise-search/api-types`
+### `@0x-copilot/api-types`
 
 - [ ] Exports: `DiscoverKind`, `DiscoverProviderKind`, `AuthDiscoverRequest`, `AuthDiscoverResponse`, `MagicLinkStartRequest`, `MagicLinkStartResponse`, `MagicLinkCallbackOutcome`, `MagicLinkCallbackResponse`, `WorkspaceCandidate`, `SessionSelectRequest`, `SessionSelectResponse`.
 - [ ] Typecheck green. Build green.
@@ -948,9 +948,9 @@ Multi‑workspace branch: the callback returns `outcome=workspace_pick_required`
 
 ## 5 · References
 
-- Design Doc · `Login` page + `Flow — email‑first / progressive` + `Decisions log → Email‑first login (vs. tabbed picker)` + `Decisions log → Auto‑focus the email input without scrolling` — bundle at `/tmp/design-doc/enterprise-search/project/Design Doc.html` lines 402–446.
-- Prototype · [`/tmp/design-doc/enterprise-search/project/login-page.jsx`](/tmp/design-doc/enterprise-search/project/login-page.jsx) — visual reference for steps, brand pane, discovery card.
-- [`/tmp/design-doc/enterprise-search/project/login.css`](/tmp/design-doc/enterprise-search/project/login.css) — layout / dimensions / scroll‑lock opt‑out.
+- Design Doc · `Login` page + `Flow — email‑first / progressive` + `Decisions log → Email‑first login (vs. tabbed picker)` + `Decisions log → Auto‑focus the email input without scrolling` — bundle at `/tmp/design-doc/0x-copilot/project/Design Doc.html` lines 402–446.
+- Prototype · [`/tmp/design-doc/0x-copilot/project/login-page.jsx`](/tmp/design-doc/0x-copilot/project/login-page.jsx) — visual reference for steps, brand pane, discovery card.
+- [`/tmp/design-doc/0x-copilot/project/login.css`](/tmp/design-doc/0x-copilot/project/login.css) — layout / dimensions / scroll‑lock opt‑out.
 - [`apps/frontend/src/features/auth/LoginScreen.tsx`](../../apps/frontend/src/features/auth/LoginScreen.tsx) — the file this PR rebuilds.
 - [`apps/frontend/src/features/auth/MfaPrompt.tsx`](../../apps/frontend/src/features/auth/MfaPrompt.tsx) — reused unchanged.
 - [`apps/frontend/src/features/auth/AuthContext.tsx`](../../apps/frontend/src/features/auth/AuthContext.tsx) — one new transition.

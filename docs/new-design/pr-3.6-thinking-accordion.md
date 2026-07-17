@@ -297,7 +297,7 @@ export interface ReasoningGroupProps {
 }
 ```
 
-The component is a thin wrapper — under-30 LOC. The styling (italic body, accent-left-border, dashed-pill hover, time stamp on the right) lives in `apps/frontend/src/styles.css` keyed off the existing `.aui-reasoning-group` class. Steal the prototype's `.thinking__head` / `.thinking__inner` rules from [`styles.css:1520-1605`](/tmp/design-fetch/extracted/enterprise-search/project/styles.css) — they are already production-clean.
+The component is a thin wrapper — under-30 LOC. The styling (italic body, accent-left-border, dashed-pill hover, time stamp on the right) lives in `apps/frontend/src/styles.css` keyed off the existing `.aui-reasoning-group` class. Steal the prototype's `.thinking__head` / `.thinking__inner` rules from [`styles.css:1520-1605`](/tmp/design-fetch/extracted/0x-copilot/project/styles.css) — they are already production-clean.
 
 `MessageParts.tsx` synthesises `status` and `elapsedSeconds` for the group: status is `running` if any child reasoning part has `status.type === "running"`; `elapsedSeconds` is `Math.max(0, (latest updatedAtMs - earliest startedAtMs) / 1000)` rounded to integer seconds. Both reads are O(span-length) on the already-collected children.
 

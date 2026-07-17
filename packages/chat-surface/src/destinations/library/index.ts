@@ -7,14 +7,14 @@
 // without forcing a circular dependency.
 //
 // Wire-type re-exports are forwarded from `_library-stub.ts`; the
-// orchestrator rewires the stub to `@enterprise-search/api-types` at
+// orchestrator rewires the stub to `@0x-copilot/api-types` at
 // merge time.
 
 import type {
   LibraryDatasetId,
   LibraryFileId,
   LibraryPageId,
-} from "@enterprise-search/api-types";
+} from "@0x-copilot/api-types";
 
 import {
   hasItemRefResolver,
@@ -57,10 +57,10 @@ export {
 };
 
 // Wire-type re-exports (forwarded from `_library-stub.ts`; the
-// orchestrator rewires the stub to `@enterprise-search/api-types` at
+// orchestrator rewires the stub to `@0x-copilot/api-types` at
 // merge time — see `_library-stub.ts` header).
 //
-// TODO(merge): rewire to "@enterprise-search/api-types"
+// TODO(merge): rewire to "@0x-copilot/api-types"
 export type {
   LibraryDatasetSummary,
   LibraryFileKind,

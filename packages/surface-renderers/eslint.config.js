@@ -15,11 +15,11 @@ import globals from "globals";
 // packages/surface-renderers/src/**:
 //   - react
 //   - react-dom
-//   - @enterprise-search/design-system
-//   - @enterprise-search/chat-surface   (design tokens, TcInlineDiff)
+//   - @0x-copilot/design-system
+//   - @0x-copilot/chat-surface   (design tokens, TcInlineDiff)
 //
 // Specific bans (in addition to the existing chat-surface boundary set):
-//   - Transport: @enterprise-search/chat-transport is forbidden. Adapters
+//   - Transport: @0x-copilot/chat-transport is forbidden. Adapters
 //     do not call Transport; the host (TcSurfaceMount) owns I/O.
 //   - Browser globals: window, document, history, navigator, location,
 //     localStorage, sessionStorage, fetch, EventSource, XMLHttpRequest,
@@ -50,7 +50,7 @@ const BOUNDARY_MESSAGE_CLIPBOARD_WRITE =
   "navigator.clipboard.write* is a banned side-effect in surface-renderers (D28). Clipboard writes belong to host-owned actions, not adapter render.";
 
 const BOUNDARY_MESSAGE_DYNAMIC_IMPORT =
-  "Dynamic import() is restricted in surface-renderers to react / react-dom / @enterprise-search/design-system / @enterprise-search/chat-surface (PRD §9.5, D29 import allowlist).";
+  "Dynamic import() is restricted in surface-renderers to react / react-dom / @0x-copilot/design-system / @0x-copilot/chat-surface (PRD §9.5, D29 import allowlist).";
 
 const RESTRICTED_GLOBALS = [
   { name: "window", message: BOUNDARY_MESSAGE_GLOBALS },
@@ -71,10 +71,10 @@ const RESTRICTED_GLOBALS = [
 const APP_IMPORT_PATTERNS = [
   {
     group: [
-      "@enterprise-search/frontend",
-      "@enterprise-search/frontend/*",
-      "@enterprise-search/desktop",
-      "@enterprise-search/desktop/*",
+      "@0x-copilot/frontend",
+      "@0x-copilot/frontend/*",
+      "@0x-copilot/desktop",
+      "@0x-copilot/desktop/*",
       "apps/*",
       "**/apps/*",
     ],
@@ -82,20 +82,17 @@ const APP_IMPORT_PATTERNS = [
   },
   {
     group: [
-      "@enterprise-search/chat-surface/shell",
-      "@enterprise-search/chat-surface/shell/*",
-      "@enterprise-search/chat-surface/src/shell",
-      "@enterprise-search/chat-surface/src/shell/*",
+      "@0x-copilot/chat-surface/shell",
+      "@0x-copilot/chat-surface/shell/*",
+      "@0x-copilot/chat-surface/src/shell",
+      "@0x-copilot/chat-surface/src/shell/*",
     ],
     message: BOUNDARY_MESSAGE_SHELL_IMPORT,
   },
 ];
 
 const TRANSPORT_IMPORT_PATTERN = {
-  group: [
-    "@enterprise-search/chat-transport",
-    "@enterprise-search/chat-transport/*",
-  ],
+  group: ["@0x-copilot/chat-transport", "@0x-copilot/chat-transport/*"],
   message: BOUNDARY_MESSAGE_TRANSPORT_IMPORT,
 };
 
@@ -106,7 +103,7 @@ const CLIPBOARD_WRITE_SELECTOR =
 const DYNAMIC_IMPORT_NON_LITERAL_SELECTOR =
   "ImportExpression:not(:has(Literal))";
 const DYNAMIC_IMPORT_DISALLOWED_SELECTOR =
-  "ImportExpression > Literal[value!='react'][value!='react-dom'][value!='@enterprise-search/design-system'][value!='@enterprise-search/chat-surface']";
+  "ImportExpression > Literal[value!='react'][value!='react-dom'][value!='@0x-copilot/design-system'][value!='@0x-copilot/chat-surface']";
 
 const RESTRICTED_SYNTAX = [
   { selector: DOC_COOKIE_SELECTOR, message: BOUNDARY_MESSAGE_DOC_COOKIE },

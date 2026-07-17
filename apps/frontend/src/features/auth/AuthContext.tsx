@@ -41,7 +41,7 @@ import {
 import type {
   MagicLinkCallbackResponse,
   WorkspaceCandidate,
-} from "@enterprise-search/api-types";
+} from "@0x-copilot/api-types";
 import {
   configureUnauthorizedHandler,
   UnauthorizedError,
@@ -51,7 +51,7 @@ import {
   useSecretStorage,
   type KeyValueStore,
   type SecretStorage,
-} from "@enterprise-search/chat-surface";
+} from "@0x-copilot/chat-surface";
 
 import { stripMagicLinkTokenFromUrl } from "../../app/authUrlHygiene";
 import { loadActivePersonaSlug, mintDevBearer } from "./devIdp";

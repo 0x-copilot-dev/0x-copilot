@@ -1,5 +1,5 @@
 import type { ToolCallMessagePartProps } from "../../runtime/types";
-import { Button } from "@enterprise-search/design-system";
+import { Button } from "@0x-copilot/design-system";
 import { useState, type ReactElement } from "react";
 import { formatDateTime } from "../../../../utils/dateFormat";
 import { asRecord, stringValue } from "../../utils/jsonUtils";
@@ -84,7 +84,7 @@ export function ConnectorAuthTool({
   const message = isDiscovery
     ? (expectedValue ?? `${displayName} could improve this answer.`)
     : (stringValue(args.message) ??
-      `Enterprise Search needs permission to use ${displayName}.`);
+      `0xCopilot needs permission to use ${displayName}.`);
   const expiresAt = stringValue(args.expires_at);
   const resolved = result !== undefined;
   // Run terminated without a user decision: reducer settles the part

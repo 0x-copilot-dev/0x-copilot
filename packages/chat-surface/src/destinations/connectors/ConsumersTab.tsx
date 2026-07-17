@@ -7,7 +7,7 @@
 
 import type { CSSProperties, ReactElement } from "react";
 
-import type { ConnectorConsumers, ItemRef } from "@enterprise-search/api-types";
+import type { ConnectorConsumers, ItemRef } from "@0x-copilot/api-types";
 
 import { ActivityList, type ActivityRow } from "../../shell/ActivityList";
 

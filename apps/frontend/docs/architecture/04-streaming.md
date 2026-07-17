@@ -48,7 +48,7 @@ event it has actually rendered.
 ## Event envelope validation
 
 `onMessage` calls `JSON.parse`, then `isRuntimeEventEnvelope(parsed)` (from
-`@enterprise-search/api-types`). Two error paths:
+`@0x-copilot/api-types`). Two error paths:
 
 | Failure                                      | `onProtocolError` reason |
 | -------------------------------------------- | ------------------------ |

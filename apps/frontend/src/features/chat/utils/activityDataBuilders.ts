@@ -1,6 +1,6 @@
 import type { ThreadMessageLike } from "../runtime/types";
-import type { AssistantPerformanceMetrics } from "@enterprise-search/api-types";
-import { isAssistantPerformanceMetrics } from "@enterprise-search/api-types";
+import type { AssistantPerformanceMetrics } from "@0x-copilot/api-types";
+import { isAssistantPerformanceMetrics } from "@0x-copilot/api-types";
 import {
   asRecord,
   formatArgLabel,

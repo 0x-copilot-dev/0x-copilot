@@ -2,7 +2,7 @@ import {
   CITATION_HREF_PREFIX,
   CITATION_ORDINAL_HREF_PREFIX,
   createRemarkCitations,
-} from "@enterprise-search/chat-surface";
+} from "@0x-copilot/chat-surface";
 import remarkParse from "remark-parse";
 import remarkStringify from "remark-stringify";
 import { unified } from "unified";

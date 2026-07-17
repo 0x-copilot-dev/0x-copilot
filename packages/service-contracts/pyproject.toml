@@ -3,9 +3,9 @@ requires = ["setuptools>=69", "wheel"]
 build-backend = "setuptools.build_meta"
 
 [project]
-name = "enterprise-service-contracts"
+name = "copilot-service-contracts"
 version = "0.1.0"
-description = "Constants-only internal service contracts for Enterprise Search"
+description = "Constants-only internal service contracts for 0xCopilot"
 requires-python = ">=3.11"
 dependencies = []
 
@@ -13,4 +13,4 @@ dependencies = []
 where = ["src"]
 
 [tool.setuptools.package-data]
-enterprise_service_contracts = ["adapter_allowlist.json"]
+copilot_service_contracts = ["adapter_allowlist.json"]

@@ -42,7 +42,7 @@ No surface in 6C executes adapter code with privileged scope. The 6A `vm` sandbo
 
 - `apps/desktop/main/adapters/{loader,sandbox,ast-allowlist}.ts` — 6A's primitives. Imported.
 - `apps/desktop/main/adapters/quality-gate/**` — 6D's primitives. Imported via the barrel.
-- `services/ai-backend/**` — 6B's territory. Imported only via the `RuntimeEventEnvelope` shape and the `AdapterGeneratedPayload` type from `@enterprise-search/api-types`.
+- `services/ai-backend/**` — 6B's territory. Imported only via the `RuntimeEventEnvelope` shape and the `AdapterGeneratedPayload` type from `@0x-copilot/api-types`.
 - `packages/chat-surface/src/surfaces/{Tier2Loader,SurfaceRegistry,SaaSRendererAdapter}.ts` — chat-surface owns these; 6C consumes them through the public package API (`registerAdapter`, `unregisterAdapter`, `markBroken`, `Tier2Loader`).
 - Production worker bundle for `Tier2Loader` — out of scope for Phase 6. Tier2Loader's `workerFactory` is the seam; 6C's renderer-side bridge passes a stub factory that fails-closed if a production bundle is not wired. The Phase-8 build pipeline lands the real bundle.
 
@@ -161,12 +161,12 @@ Main-→-renderer channels use `webContents.send`. The renderer side listens via
 
 ## Interfaces consumed
 
-- `SaaSRendererAdapter`, `Tier2Loader`, `registerAdapter`, `unregisterAdapter`, `markBroken` — from `@enterprise-search/chat-surface`.
+- `SaaSRendererAdapter`, `Tier2Loader`, `registerAdapter`, `unregisterAdapter`, `markBroken` — from `@0x-copilot/chat-surface`.
 - `astAllowlistScan` — from 6A (`./ast-allowlist`).
 - `compileAdapter` — from 6A (`./sandbox`).
 - `validateAdapterSchema`, `staticAnalyze`, `runSmokeRender`, `setDefaultSmokeRenderExecutor`, `wrapWithBoundary`, `markAdapterBroken`, `setDefaultAstAllowlistChecker` — from 6D (`./quality-gate`).
-- `AdapterGeneratedPayload`, `AdapterLayoutTemplate` — from `@enterprise-search/api-types`.
-- `CHANNELS`, IPC schemas — from `@enterprise-search/chat-transport`.
+- `AdapterGeneratedPayload`, `AdapterLayoutTemplate` — from `@0x-copilot/api-types`.
+- `CHANNELS`, IPC schemas — from `@0x-copilot/chat-transport`.
 
 ## Interfaces produced
 
@@ -370,11 +370,11 @@ export class Tier2Bridge {
 ## Done criteria
 
 - [ ] All FRs met.
-- [ ] `npm test --workspace @enterprise-search/desktop` passes.
-- [ ] `npm test --workspace @enterprise-search/chat-surface` passes.
-- [ ] `npm test --workspace @enterprise-search/chat-transport` passes.
-- [ ] `npm run typecheck --workspace @enterprise-search/desktop` passes.
-- [ ] `npm run typecheck --workspace @enterprise-search/chat-transport` passes.
+- [ ] `npm test --workspace @0x-copilot/desktop` passes.
+- [ ] `npm test --workspace @0x-copilot/chat-surface` passes.
+- [ ] `npm test --workspace @0x-copilot/chat-transport` passes.
+- [ ] `npm run typecheck --workspace @0x-copilot/desktop` passes.
+- [ ] `npm run typecheck --workspace @0x-copilot/chat-transport` passes.
 - [ ] No new top-level npm dependency.
 - [ ] No edits to chat-surface's `SurfaceRegistry.ts` or `SaaSRendererAdapter.ts`.
 - [ ] Sub-PRD documents the renderer-vs-main split, the SQLite-vs-JSONL choice, and the IPC channel additions.

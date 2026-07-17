@@ -1,7 +1,7 @@
 import { fireEvent, render, screen } from "@testing-library/react";
 import { describe, expect, it, vi } from "vitest";
 
-import type { TodoId } from "@enterprise-search/api-types";
+import type { TodoId } from "@0x-copilot/api-types";
 
 import { SubtaskTree, type SubtaskTreeTodo } from "./subtask-tree";
 

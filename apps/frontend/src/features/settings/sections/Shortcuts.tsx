@@ -1,4 +1,4 @@
-import { Button, Card, Field } from "@enterprise-search/design-system";
+import { Button, Card, Field } from "@0x-copilot/design-system";
 import type { ReactElement } from "react";
 import { useCallback, useEffect, useState } from "react";
 import { useUserPreferences } from "../../me/useUserPreferences";

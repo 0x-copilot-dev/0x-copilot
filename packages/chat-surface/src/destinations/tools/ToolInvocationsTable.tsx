@@ -25,7 +25,7 @@ import type { CSSProperties, ReactElement } from "react";
 import type {
   ToolInvocation,
   ToolInvocationCallerKind,
-} from "@enterprise-search/api-types";
+} from "@0x-copilot/api-types";
 
 import { ItemLink } from "../../refs/ItemLink";
 import { formatRelativeTime } from "../../util/time";

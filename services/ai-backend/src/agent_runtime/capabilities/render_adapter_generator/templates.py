@@ -241,7 +241,7 @@ class AdapterSourceBuilder:
 
     IMPORT_LINES: ClassVar[tuple[str, ...]] = (
         'import * as React from "react";',
-        'import { tokens } from "@enterprise-search/design-system";',
+        'import { tokens } from "@0x-copilot/design-system";',
     )
 
     PRELUDE_LINES: ClassVar[tuple[str, ...]] = ("void tokens;",)

@@ -31,7 +31,7 @@ from datetime import datetime, timezone
 from typing import Protocol, runtime_checkable
 
 import httpx
-from enterprise_service_contracts import ORG_HEADER, SERVICE_TOKEN_HEADER, USER_HEADER
+from copilot_service_contracts import ORG_HEADER, SERVICE_TOKEN_HEADER, USER_HEADER
 
 from agent_runtime.persistence.records import (
     TodoExtractionRecord,

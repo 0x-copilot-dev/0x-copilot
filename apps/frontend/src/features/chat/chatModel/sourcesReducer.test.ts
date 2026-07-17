@@ -3,7 +3,7 @@ import type {
   CitationSourceRef,
   RuntimeEventEnvelope,
   SourceEntry,
-} from "@enterprise-search/api-types";
+} from "@0x-copilot/api-types";
 
 import {
   applySourceEvent,

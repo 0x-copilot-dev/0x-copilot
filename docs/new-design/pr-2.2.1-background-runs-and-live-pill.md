@@ -93,7 +93,7 @@ The CSS issue is a smaller cousin of the same gap: the row says "live" _twice_ b
 - ✅ The live row visual: left amber rail + a single pulsing dot in the meta slot, aligned with where neighbour rows render `10:37`. No lowercase `live` word. The aria‑label `"Live run"` stays for screen readers.
 - ✅ `?after_sequence=N` reconnect works from the slot's `latestSequence`, regardless of whether the slot was bound to the visible UI when the disconnect happened.
 - ✅ Memory is bounded. Closed terminal slots evict their `items`/`citations` after the user switches away (we keep the slot's metadata so the sidebar live‑pill state stays correct, but heavyweight content is dropped). Reopening replays from history. Cap: at most 8 in‑memory slots with content; LRU eviction otherwise.
-- ✅ `npm run typecheck --workspace @enterprise-search/frontend` and `npm run build --workspace @enterprise-search/frontend` green. ai‑backend pytest green for the projection update. `make test` green.
+- ✅ `npm run typecheck --workspace @0x-copilot/frontend` and `npm run build --workspace @0x-copilot/frontend` green. ai‑backend pytest green for the projection update. `make test` green.
 - ✅ No new event types. No new endpoints. No new persistence.
 
 ### 1.5 User stories

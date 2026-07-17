@@ -1,7 +1,7 @@
 // @vitest-environment node
 import { describe, expect, it, vi } from "vitest";
 
-import type { BootStatusPayload } from "@enterprise-search/chat-transport";
+import type { BootStatusPayload } from "@0x-copilot/chat-transport";
 
 import type { BootSecrets } from "./boot-secrets";
 import { MigrationsFailed } from "./migrations";

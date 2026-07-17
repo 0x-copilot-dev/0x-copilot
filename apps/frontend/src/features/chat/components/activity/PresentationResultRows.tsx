@@ -1,5 +1,5 @@
-import { Badge } from "@enterprise-search/design-system";
-import type { RuntimeEventPresentation } from "@enterprise-search/api-types";
+import { Badge } from "@0x-copilot/design-system";
+import type { RuntimeEventPresentation } from "@0x-copilot/api-types";
 import type { ReactElement } from "react";
 
 export function PresentationResultRows({

@@ -6,7 +6,7 @@ from collections import defaultdict
 from datetime import datetime, timezone
 from typing import Literal
 
-from enterprise_service_contracts.scopes import (
+from copilot_service_contracts.scopes import (
     ADMIN_AUDIT_EXPORT,
     ADMIN_BUDGETS,
     ADMIN_USERS,

@@ -4,7 +4,7 @@ import { describe, expect, it } from "vitest";
 import { ADAPTER_ALLOWLIST } from "./adapterAllowlist";
 
 // Soft snapshot of the JSON shipped from
-// packages/service-contracts/src/enterprise_service_contracts/adapter_allowlist.json.
+// packages/service-contracts/src/copilot_service_contracts/adapter_allowlist.json.
 // The intent is to give anyone editing the JSON a visible signal that
 // both runtimes (this TS scanner + the AI backend's 6B auditor) need to
 // stay in sync — a mirror canary lives at
@@ -18,7 +18,7 @@ describe("ADAPTER_ALLOWLIST — lock-in snapshot", () => {
     expect(Object.keys(ADAPTER_ALLOWLIST.allowed_imports)).toEqual([
       "react",
       "react-dom",
-      "@enterprise-search/design-system",
+      "@0x-copilot/design-system",
     ]);
   });
 

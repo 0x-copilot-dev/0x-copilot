@@ -138,6 +138,6 @@ export const slideAdapter: SaaSRendererAdapter<Slide, SlideDiffPayload> = {
 4. Write this sub-PRD (✓).
 5. Implement `slide/{SlideRenderer,SlideDiff}.tsx` + tests + `index.ts`.
 6. Add delimited block to `packages/surface-renderers/src/index.ts`.
-7. `npm test --workspace @enterprise-search/surface-renderers` — pass.
-8. `npm run lint --workspace @enterprise-search/surface-renderers` — pass.
+7. `npm test --workspace @0x-copilot/surface-renderers` — pass.
+8. `npm run lint --workspace @0x-copilot/surface-renderers` — pass.
 9. Commit. Report.

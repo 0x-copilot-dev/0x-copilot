@@ -15,7 +15,7 @@ share row but not to an unauthenticated viewer.
 
 from __future__ import annotations
 
-from enterprise_service_contracts.scopes import RUNTIME_USE
+from copilot_service_contracts.scopes import RUNTIME_USE
 from fastapi import APIRouter, Depends, HTTPException, Request, Response, status
 
 from agent_runtime.api.share_service import ShareService

@@ -10,7 +10,7 @@ from datetime import datetime
 import json
 from typing import Any
 
-from enterprise_audit_chain import AuditChainSigner
+from copilot_audit_chain import AuditChainSigner
 
 from backend_app.contracts import (
     AuditEventRecord,

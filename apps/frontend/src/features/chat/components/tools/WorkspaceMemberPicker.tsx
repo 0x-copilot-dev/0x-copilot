@@ -1,4 +1,4 @@
-import { Button } from "@enterprise-search/design-system";
+import { Button } from "@0x-copilot/design-system";
 import { useEffect, useMemo, useRef, useState, type ReactElement } from "react";
 
 // PR 1.4.1 Gap #10 — workspace member picker for the "Approve & forward

@@ -1,6 +1,6 @@
 // Local stub for the Phase 6 Projects wire contract.
 //
-// The canonical types live in `@enterprise-search/api-types`
+// The canonical types live in `@0x-copilot/api-types`
 // (`packages/api-types/src/projects.ts`), authored by the parallel
 // Phase 6 P6-A backend-types agent. This frontend wave (P6-C) runs in
 // parallel against the same sub-PRD spec and cannot import a type that
@@ -9,12 +9,12 @@
 //
 // `ProjectId`, `TenantId`, `UserId`, and the cross-destination
 // `ItemRef` / `ItemKind` union already live in
-// `@enterprise-search/api-types` — re-export from there so the
+// `@0x-copilot/api-types` — re-export from there so the
 // `<ItemLink>` registry stays a single source of truth even before
 // the rest of the Projects contract merges.
 //
 // TODO(merge): delete this file. Replace every `_projects-stub` import
-// with `@enterprise-search/api-types` once P6-A's
+// with `@0x-copilot/api-types` once P6-A's
 // `packages/api-types/src/projects.ts` lands on main.
 
 import type {
@@ -23,7 +23,7 @@ import type {
   ProjectId,
   TenantId,
   UserId,
-} from "@enterprise-search/api-types";
+} from "@0x-copilot/api-types";
 
 export type { ItemKind, ItemRef, ProjectId, TenantId, UserId };
 

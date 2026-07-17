@@ -35,13 +35,13 @@ import {
   type ReactNode,
 } from "react";
 
-import type { ConnectorSlug, ProjectId } from "@enterprise-search/api-types";
+import type { ConnectorSlug, ProjectId } from "@0x-copilot/api-types";
 
 import { EmptyState } from "../../shell/EmptyState";
 import { FilterTabs, type FilterTabOption } from "../../shell/FilterTabs";
 import { StatusPill, type StatusTone } from "../../shell/StatusPill";
 
-// TODO(merge): rewire to "@enterprise-search/api-types"
+// TODO(merge): rewire to "@0x-copilot/api-types"
 import type { ProjectColorHue, ProjectIconEmoji } from "./_projects-stub";
 
 // ── Tokens ───────────────────────────────────────────────────────────
@@ -58,7 +58,7 @@ const DANGER = "var(--color-danger)";
 
 // ── Public types ─────────────────────────────────────────────────────
 
-/** Connector kind — canonical site is `@enterprise-search/api-types`
+/** Connector kind — canonical site is `@0x-copilot/api-types`
  *  (`packages/api-types/src/projects.ts`). Kept as a presentation alias
  *  so existing `ProjectEditorConnectorSlug` imports still resolve. */
 export type ProjectEditorConnectorSlug = ConnectorSlug;

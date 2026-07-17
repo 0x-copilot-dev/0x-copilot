@@ -100,7 +100,7 @@ The FE is doing UX inference the runtime should be doing because it has the poli
 - ✅ FE `mcpApprovalCategory` reads server-supplied first; falls back to its `read_only`-based inference.
 - ✅ Stream-events test (`runtime_worker/tests/test_stream_events.py`) covers: read-only emission, write emission, no-args emission (params empty), risk_high path, idempotent replay (same approval emitted twice serialises identically).
 - ✅ ApprovalTool test (`apps/frontend/src/features/chat/components/tools/ApprovalTool.test.tsx`) covers: server-supplied params render verbatim; fallback path renders Risk + Access; `reason_code=RISK_HIGH` renders the high-risk sentence.
-- ✅ `npm run typecheck --workspace @enterprise-search/api-types`, `npm run typecheck --workspace @enterprise-search/frontend` pass.
+- ✅ `npm run typecheck --workspace @0x-copilot/api-types`, `npm run typecheck --workspace @0x-copilot/frontend` pass.
 - ✅ `cd services/ai-backend && PYTHONPATH=src:../../packages/service-contracts/src .venv/bin/python -m pytest tests/unit/runtime_worker/test_stream_events.py` passes.
 - ✅ A11y: param frame keeps `<dl>`/`<dt>`/`<dd>` semantics from Phase 1. Reason text and reassurance text remain `<p>` siblings (not visually hidden).
 

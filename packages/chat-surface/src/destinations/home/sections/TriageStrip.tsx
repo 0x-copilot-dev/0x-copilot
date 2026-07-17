@@ -21,7 +21,7 @@ import type {
   RunId,
   TodoId,
   TriageCounts,
-} from "@enterprise-search/api-types";
+} from "@0x-copilot/api-types";
 
 import { StatusPill, type StatusTone } from "../../../shell/StatusPill";
 

@@ -188,9 +188,9 @@ Run from worktree root:
 
 ```
 npm install
-npm test --workspace @enterprise-search/chat-surface
-npm run typecheck --workspace @enterprise-search/chat-surface
-npm run lint --workspace @enterprise-search/chat-surface
+npm test --workspace @0x-copilot/chat-surface
+npm run typecheck --workspace @0x-copilot/chat-surface
+npm run lint --workspace @0x-copilot/chat-surface
 ```
 
 Test counts (chat-surface workspace):

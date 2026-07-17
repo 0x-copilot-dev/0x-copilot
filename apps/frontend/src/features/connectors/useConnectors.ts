@@ -1,7 +1,7 @@
 import type {
   McpOAuthClientConfigRequest,
   McpServer,
-} from "@enterprise-search/api-types";
+} from "@0x-copilot/api-types";
 import { useMemo } from "react";
 import type { RequestIdentity } from "../../api/config";
 import { classifyMcpError } from "../../api/mcpErrors";

@@ -11,7 +11,7 @@ import type {
   ComposerToolDescriptor,
   ComposerToolKind,
   ComposerToolListResponse,
-} from "@enterprise-search/api-types";
+} from "@0x-copilot/api-types";
 
 import { useTransport } from "../providers/TransportProvider";
 
@@ -35,7 +35,7 @@ import { useTransport } from "../providers/TransportProvider";
 export type {
   ComposerToolDescriptor,
   ComposerToolKind,
-} from "@enterprise-search/api-types";
+} from "@0x-copilot/api-types";
 
 export interface ToolPickerProps {
   readonly open: boolean;

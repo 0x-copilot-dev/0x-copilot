@@ -12,7 +12,7 @@ import userEvent from "@testing-library/user-event";
 import type {
   SubagentEntry,
   SubagentLifecycleStatus,
-} from "@enterprise-search/api-types";
+} from "@0x-copilot/api-types";
 import {
   emptySubagentMap,
   seedSubagentMap,

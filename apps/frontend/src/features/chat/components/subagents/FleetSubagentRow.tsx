@@ -4,7 +4,7 @@
 // (independent disclosure per row), and a "Review approval →" link
 // that anchors back to the gating interrupt event on the same thread.
 
-import { Badge } from "@enterprise-search/design-system";
+import { Badge } from "@0x-copilot/design-system";
 import { useCallback, useId, useState, type ReactElement } from "react";
 import type { SubagentActivityRecord } from "../../utils/activityDataBuilders";
 import { SubagentActivityList } from "../tools/SubagentActivityList";

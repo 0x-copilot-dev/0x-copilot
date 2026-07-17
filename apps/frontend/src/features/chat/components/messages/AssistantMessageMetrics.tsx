@@ -1,4 +1,4 @@
-import type { AssistantPerformanceMetrics } from "@enterprise-search/api-types";
+import type { AssistantPerformanceMetrics } from "@0x-copilot/api-types";
 import type { ReactElement } from "react";
 import { formatMilliseconds } from "../../utils/jsonUtils";
 import { metricRows } from "../../utils/activityDataBuilders";

@@ -17,7 +17,7 @@
 
 import type { CSSProperties, ReactElement } from "react";
 
-import type { Person, Presence, TeamRole } from "@enterprise-search/api-types";
+import type { Person, Presence, TeamRole } from "@0x-copilot/api-types";
 
 const ROLE_LABEL: Readonly<Record<TeamRole, string>> = {
   owner: "Owner",

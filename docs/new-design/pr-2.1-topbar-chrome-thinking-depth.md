@@ -13,7 +13,7 @@
 
 The Atlas topbar replaces today's ad-hoc `aui-chat-header` (a `<select>` + a string status + a Share `<button>`) with the design-doc's chrome: **crumb · title · status pill · connectors pill · usage meter · share · settings · panel toggle · model pill · thinking-depth pill**.
 
-Almost every primitive is **already in `@enterprise-search/design-system`** (`StatusPill`, `IconButton`, `AppIcon`, `ConnectorChip`, `Menu`, `Button`, `Badge`). Almost every behavior is **already in `apps/frontend/src/features/chat/`** (`runUiState` phases → header status; `ConversationConnectorScopes` from PR 1.2 → connectors pill; `useDetailsPanel` `'usage'` → usage overlay; `share` handler → share popover). What's new is the **layout composition**, two new tiny components (`Crumb`, `ThinkingDepthControl`), and one richer `ModelPill` that replaces the old `<select>`.
+Almost every primitive is **already in `@0x-copilot/design-system`** (`StatusPill`, `IconButton`, `AppIcon`, `ConnectorChip`, `Menu`, `Button`, `Badge`). Almost every behavior is **already in `apps/frontend/src/features/chat/`** (`runUiState` phases → header status; `ConversationConnectorScopes` from PR 1.2 → connectors pill; `useDetailsPanel` `'usage'` → usage overlay; `share` handler → share popover). What's new is the **layout composition**, two new tiny components (`Crumb`, `ThinkingDepthControl`), and one richer `ModelPill` that replaces the old `<select>`.
 
 This PR also fixes a P0 in the design-doc TODO list — _"Thinking-depth control in composer (Fast / Balanced / Deep) — currently model picker conflates speed and reasoning depth"_ — by separating depth from model. Depth maps onto the existing `ModelSelection.reasoning.effort` slot, so **no schema change**.
 
@@ -43,7 +43,7 @@ The runtime already accepts `ModelSelection.reasoning.effort` per request (today
 
 ### 1.2 Goals
 
-1. The chat header matches the design-doc layout pixel-shape and tokens — built **entirely from primitives already in `@enterprise-search/design-system`** (no churn promoted into the design system in this PR).
+1. The chat header matches the design-doc layout pixel-shape and tokens — built **entirely from primitives already in `@0x-copilot/design-system`** (no churn promoted into the design system in this PR).
 2. The status pill is the existing `StatusPill` from design-system, fed by the existing `runUiState.phase` enum (idle | starting | working | acting | writing | reasoning | waiting_for_permission | terminal).
 3. The connectors pill renders the **chat's** active connectors (PR 1.2 `enabled_connectors`) — not the user's globally-authenticated set — and clicking it opens the same `ConnectorPopover` that the composer connectors button uses (PR 3.4).
 4. The usage meter is a 1-line bar + percentage that reuses the existing `useDetailsPanel('usage')` overlay; no new fetch.
@@ -111,11 +111,11 @@ The runtime already accepts `ModelSelection.reasoning.effort` per request (today
 | `Topbar` (new layout shell)                        | `apps/frontend/src/features/chat/components/shell/Topbar.tsx` _(new)_               | Pure layout. Owns no state.                                                                                                                 |
 | `Crumb`                                            | `apps/frontend/src/features/chat/components/shell/Crumb.tsx` _(new)_                | `Workspace › Folder` from `Conversation.folder` (PR 1.6). Single line, clipped 220 px. Falls back to workspace-only when folder is null.    |
 | `ConversationTitle`                                | `apps/frontend/src/features/chat/components/shell/ConversationTitle.tsx` _(new)_    | One line, 13 px. Editable on dbl-click → `PATCH …/conversations/{id}` (PR 1.6 endpoint already wired).                                      |
-| `StatusPill`                                       | `@enterprise-search/design-system` (existing)                                       | Tone = `running                                                                                                                             | ready | idle`. Already CSS-pulses on `running`. |
+| `StatusPill`                                       | `@0x-copilot/design-system` (existing)                                              | Tone = `running                                                                                                                             | ready | idle`. Already CSS-pulses on `running`. |
 | `ConnectorsPill`                                   | `apps/frontend/src/features/chat/components/shell/ConnectorsPill.tsx` _(new)_       | Wraps `AppIcon × N`, ▾ caret, click → `ConnectorPopover` (PR 3.4). Subscribes to `useConversationConnectorScopes(conversationId)` (PR 1.2). |
 | `UsageMeter`                                       | `apps/frontend/src/features/chat/components/shell/UsageMeter.tsx` _(new)_           | 1-line bar + %; click → `useDetailsPanel().open('usage')` (existing).                                                                       |
 | `ShareButton` (slot)                               | reuses existing `onShare` in `ChatScreen.tsx:564` for v1                            | Same one-shot copy-link in this PR; PR 4.5 replaces the body of the popover.                                                                |
-| `IconButton` for ⚙ (settings) and ◫ (panel toggle) | `@enterprise-search/design-system`                                                  | Settings click → `applyAppRoute({screen:'settings', section:'general'})` (existing).                                                        |
+| `IconButton` for ⚙ (settings) and ◫ (panel toggle) | `@0x-copilot/design-system`                                                         | Settings click → `applyAppRoute({screen:'settings', section:'general'})` (existing).                                                        |
 | `ModelPill`                                        | `apps/frontend/src/features/chat/components/shell/ModelPill.tsx` _(new)_            | Replaces `ModelSelector.tsx`. Uses `Menu` from design-system + the existing `ModelCatalogModel[]` from `demoModels`.                        |
 | `ThinkingDepthControl`                             | `apps/frontend/src/features/chat/components/shell/ThinkingDepthControl.tsx` _(new)_ | 3 chips. Mapped to `reasoning.effort`. Hidden when `model.supports_reasoning === false`.                                                    |
 
@@ -365,7 +365,7 @@ The disabled state for shared-read uses the existing `ChatScreen.modelDisabled` 
 | Share                           | existing `onShare` clipboard handler in `ChatScreen.tsx`                                                    | trigger button (~10 LOC); popover body lands in PR 4.5                                                               |
 | Settings nav                    | existing `applyAppRoute` in `App.tsx:175`                                                                   | one click handler                                                                                                    |
 | Panel toggle                    | new local state in `ChatScreen` (`workspacePaneOpen`); workspace pane host lands in PR 3.2                  | one boolean + one ⌘\ shortcut (in PR 2.2) + one toggle button                                                        |
-| Model select shape              | `ModelCatalogModel` (`@enterprise-search/api-types`)                                                        | one optional `reasoning.depth_label` field                                                                           |
+| Model select shape              | `ModelCatalogModel` (`@0x-copilot/api-types`)                                                               | one optional `reasoning.depth_label` field                                                                           |
 | Reasoning effort wire           | `ModelSelection.reasoning.effort` already accepted by `RunService`                                          | `applyDepth` translation + one `useState`                                                                            |
 | Menu / popover                  | `Menu` (`packages/design-system/src/index.tsx:365`)                                                         | —                                                                                                                    |
 | Icon glyph                      | `IconButton` (`packages/design-system/src/index.tsx:240`)                                                   | —                                                                                                                    |
@@ -472,19 +472,19 @@ Lives in the same PR.
 
 - [ ] `apps/frontend/src/features/chat/components/shell/Topbar.tsx` ships and replaces the `<header>` block in `AssistantThread.tsx`.
 - [ ] `Crumb`, `ConversationTitle`, `ConnectorsPill`, `UsageMeter`, `ModelPill`, `ThinkingDepthControl` ship as small, single-responsibility components in the same folder.
-- [ ] `StatusPill` from `@enterprise-search/design-system` is consumed; the ad-hoc `aui-status-pill` `<span>` is gone.
+- [ ] `StatusPill` from `@0x-copilot/design-system` is consumed; the ad-hoc `aui-status-pill` `<span>` is gone.
 - [ ] `ModelSelector.tsx` is deleted; no remaining import.
 - [ ] `applyDepth(model, depth)` is exercised by `submitUserMessage` and `onReload`; depth changes never alter an active run.
 - [ ] `ThinkingDepth` enum (`'fast' | 'balanced' | 'deep'`) and the `EFFORT_BY_DEPTH` table live in **one** module (`apps/frontend/src/features/chat/depth.ts`).
 - [ ] Depth state persists via `useLocalStorageState` and survives reload.
-- [ ] `ModelCatalogModel.reasoning.depth_label` exported by `@enterprise-search/api-types`; existing call sites compile unchanged.
+- [ ] `ModelCatalogModel.reasoning.depth_label` exported by `@0x-copilot/api-types`; existing call sites compile unchanged.
 - [ ] No new `runtime_event` type. Pydantic schemas in `services/ai-backend/src/runtime_api/schemas/events.py` are byte-identical pre/post merge.
 - [ ] No new endpoint. `services/backend-facade` route table is unchanged.
 - [ ] Topbar renders correctly at ≥ 1100 px (two-row), 760–1099 px (one-row), < 760 px (compact).
 - [ ] Status pill's `aria-live` polite region updates on phase transitions; depth changes announce "Depth: <name> — applies to next message." once.
 - [ ] All interactive pills are keyboard-reachable; Escape closes any open popover; arrow keys navigate the depth radiogroup.
-- [ ] `npm run typecheck --workspace @enterprise-search/frontend` and `npm run build --workspace @enterprise-search/frontend` pass.
-- [ ] `npm run typecheck --workspace @enterprise-search/api-types` passes.
+- [ ] `npm run typecheck --workspace @0x-copilot/frontend` and `npm run build --workspace @0x-copilot/frontend` pass.
+- [ ] `npm run typecheck --workspace @0x-copilot/api-types` passes.
 - [ ] `make test` green.
 
 ---

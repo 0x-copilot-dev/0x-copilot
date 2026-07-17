@@ -1,7 +1,4 @@
-import type {
-  BudgetMeResponse,
-  UsageOrgResponse,
-} from "@enterprise-search/api-types";
+import type { BudgetMeResponse, UsageOrgResponse } from "@0x-copilot/api-types";
 import { describe, expect, it } from "vitest";
 
 import { USAGE_PALETTE_OTHER_KEY } from "./usagePalette";

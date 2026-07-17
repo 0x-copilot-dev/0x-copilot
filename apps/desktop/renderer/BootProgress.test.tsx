@@ -3,7 +3,7 @@ import { act } from "react";
 import { createRoot, type Root } from "react-dom/client";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 
-import type { WindowBridge } from "@enterprise-search/chat-transport";
+import type { WindowBridge } from "@0x-copilot/chat-transport";
 
 import { BootGate } from "./BootProgress";
 

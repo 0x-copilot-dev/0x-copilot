@@ -1,7 +1,7 @@
 import type { IpcMain, IpcMainInvokeEvent } from "electron";
 import type { z } from "zod";
 
-import type { RendererSession } from "@enterprise-search/chat-transport";
+import type { RendererSession } from "@0x-copilot/chat-transport";
 
 import type { TransportBridge } from "../transport-bridge";
 import {

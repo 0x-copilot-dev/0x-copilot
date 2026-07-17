@@ -331,5 +331,5 @@ from the workspace directory:
 cd apps/frontend && npx vitest run   # 763/763 pass
 ```
 
-`npm run test --workspace @enterprise-search/frontend` also works
+`npm run test --workspace @0x-copilot/frontend` also works
 because npm sets the cwd to the workspace.

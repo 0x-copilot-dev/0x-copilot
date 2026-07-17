@@ -411,7 +411,7 @@ Owner check reuses [`runtime_api/services/conversations.py`](../../services/ai-b
 | `include_link=false` on create + caller tries to fetch by token         | n/a    | (no token to fetch with)    |
 | Concurrent `PATCH` adds two recipients with the same user_id            | 200    | (idempotent UPSERT)         |
 
-### 2.8 Frontend contract (`@enterprise-search/api-types`)
+### 2.8 Frontend contract (`@0x-copilot/api-types`)
 
 ```ts
 // packages/api-types/src/index.ts  (additive)
@@ -672,7 +672,7 @@ Sarah's chat → topbar Share button (PR 4.5) → SharePopover (this PR fills th
 └──────────────────────────────────────────────────────────────────────┘
 ```
 
-Built from `@enterprise-search/design-system` primitives: `Popover`, `RadioGroup`, `Switch`, `TextInput` (for "Add by name" autocomplete reusing the existing `useWorkspaceMembers()` hook PR 4.2 introduces), `Button`, `Menu`. **Zero new design-system primitives.** The "Add by name" autocomplete reuses the same `MemberAutocomplete` component PR 1.4.1 introduces for approval forwarding — same backend, same cache.
+Built from `@0x-copilot/design-system` primitives: `Popover`, `RadioGroup`, `Switch`, `TextInput` (for "Add by name" autocomplete reusing the existing `useWorkspaceMembers()` hook PR 4.2 introduces), `Button`, `Menu`. **Zero new design-system primitives.** The "Add by name" autocomplete reuses the same `MemberAutocomplete` component PR 1.4.1 introduces for approval forwarding — same backend, same cache.
 
 The plaintext token surfaces in the URL field exactly once, on first paint after `createShare()`. Subsequent re-paints, browser back/forward, or component remount with the same `share_id` show only `s_3f7b2c9 · workspace · created just now` — the token is gone from FE state because it's never persisted to a store.
 
@@ -835,7 +835,7 @@ The only library decision worth flagging is **how the FE constructs the share UR
 - [ ] `ShareService.update_share` accepts merge-patch; recipients diff yields `recipient_added`/`recipient_removed` audit rows.
 - [ ] No new `event_type` in `runtime_api/schemas/events.py`. `RuntimeEventEnvelope` Pydantic schema byte-identical pre/post merge.
 - [ ] `backend-facade/share_routes.py` proxies five public routes (`POST/GET /conversations/{id}/share[s]`, `PATCH/DELETE /shares/{id}`, `GET /shares/{token}`); none reach `/internal/v1/*`.
-- [ ] `@enterprise-search/api-types` exports `ConversationShare`, `CreateShareRequest`, `CreateShareResponse`, `UpdateShareRequest`, `SharedConversationView`, `ShareViewAccess`.
+- [ ] `@0x-copilot/api-types` exports `ConversationShare`, `CreateShareRequest`, `CreateShareResponse`, `UpdateShareRequest`, `SharedConversationView`, `ShareViewAccess`.
 - [ ] `apps/frontend/src/features/share/` ships `SharePopover.tsx`, `ShareScreen.tsx`, `useShares.ts`, `useSharedConversation.ts` with tests.
 - [ ] `CitationChip` extended with `restricted: boolean` (no breaking change). `SourcesTab` renders restricted state.
 - [ ] React Router has `/share/:token`; outside the auth-bypass layer.
@@ -859,7 +859,7 @@ The only library decision worth flagging is **how the FE constructs the share UR
 - [`services/ai-backend/src/agent_runtime/api/notifications.py`](../../services/ai-backend/src/agent_runtime/api/notifications.py) `NotificationDispatcher` — extended with one method.
 - [`services/ai-backend/src/runtime_worker/audit.py`](../../services/ai-backend/src/runtime_worker/audit.py) `WorkerAuditEmitter` — extended with six action constants.
 - [`services/backend-facade/src/backend_facade/workspace_routes.py`](../../services/backend-facade/src/backend_facade/workspace_routes.py) `_forward` — proxy pattern reused.
-- [`packages/service-contracts/src/enterprise_service_contracts/headers.py`](../../packages/service-contracts/src/enterprise_service_contracts/headers.py) — header constants reused.
+- [`packages/service-contracts/src/copilot_service_contracts/headers.py`](../../packages/service-contracts/src/copilot_service_contracts/headers.py) — header constants reused.
 - [`apps/frontend/src/api/agentApi.ts`](../../apps/frontend/src/api/agentApi.ts) — five new client functions added.
 - [`docs/new-design/pr-1.6-workspace-defaults-conversation-lifecycle.md`](pr-1.6-workspace-defaults-conversation-lifecycle.md) — sibling PR; provides `parent_conversation_id` forward-declaration we depend on.
 - [`docs/new-design/pr-3.1-citation-chips-sources-tab.md`](pr-3.1-citation-chips-sources-tab.md) · [`pr-3.2-workspace-pane-right-rail.md`](pr-3.2-workspace-pane-right-rail.md) — provide `CitationChip`, `SourcesTab`, `WorkspacePane` we extend.

@@ -8,7 +8,7 @@
 import type {
   ListAuditEventsRequest,
   ListAuditEventsResponse,
-} from "@enterprise-search/api-types";
+} from "@0x-copilot/api-types";
 import type { RequestIdentity } from "./config";
 import { httpGet } from "./http";
 

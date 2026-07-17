@@ -1,8 +1,8 @@
 import type {
   NotificationChannel,
   NotificationEvent,
-} from "@enterprise-search/api-types";
-import { Card, Switch } from "@enterprise-search/design-system";
+} from "@0x-copilot/api-types";
+import { Card, Switch } from "@0x-copilot/design-system";
 import type { ReactElement } from "react";
 import { useUserPreferences } from "../../me/useUserPreferences";
 import { NotificationsV2Panel } from "./NotificationsV2Panel";

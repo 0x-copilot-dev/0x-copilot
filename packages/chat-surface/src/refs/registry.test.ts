@@ -1,4 +1,4 @@
-import type { ConversationId, ItemRef } from "@enterprise-search/api-types";
+import type { ConversationId, ItemRef } from "@0x-copilot/api-types";
 import { afterEach, describe, expect, it } from "vitest";
 
 import {

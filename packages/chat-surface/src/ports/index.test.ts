@@ -8,7 +8,7 @@ import {
   type Transport as TransportTransport,
   type TransportCapabilities as TransportTransportCapabilities,
   type TypedRequest as TransportTypedRequest,
-} from "@enterprise-search/chat-transport";
+} from "@0x-copilot/chat-transport";
 import { describe, expect, it } from "vitest";
 
 import type {

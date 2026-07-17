@@ -4,7 +4,7 @@ import {
   isMcpAuthRequiredPayload,
   isRuntimeTextPayload,
   type RuntimeEventEnvelope,
-} from "@enterprise-search/api-types";
+} from "@0x-copilot/api-types";
 import { forwardActionFromPayload, resolveActionFromPayload } from "./approval";
 import {
   appendReasoning,

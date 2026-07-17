@@ -39,14 +39,14 @@ import {
   type ReactNode,
 } from "react";
 
-import type { ProjectId } from "@enterprise-search/api-types";
+import type { ProjectId } from "@0x-copilot/api-types";
 
 import {
   ProjectFilterChip,
   type ProjectFilterChipOption,
 } from "../projects/ProjectFilterChip";
 
-// TODO(merge): rewire to "@enterprise-search/api-types"
+// TODO(merge): rewire to "@0x-copilot/api-types"
 import type { LibraryItemKind, SaveToLibrarySource } from "./_library-stub";
 
 // ===========================================================================

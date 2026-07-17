@@ -1,6 +1,6 @@
 import { contextBridge, ipcRenderer, type IpcRendererEvent } from "electron";
 
-import { isAllowedChannel } from "@enterprise-search/chat-transport";
+import { isAllowedChannel } from "@0x-copilot/chat-transport";
 
 import type { WindowBridge } from "./window-bridge-types";
 

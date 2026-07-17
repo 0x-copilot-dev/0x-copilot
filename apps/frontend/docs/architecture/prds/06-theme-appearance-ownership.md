@@ -15,8 +15,8 @@ captures the boundary so it doesn't drift in future PRs.
 
 | Attribute        | DOM target                      | Owner                                                                               | Cache                                              |
 | ---------------- | ------------------------------- | ----------------------------------------------------------------------------------- | -------------------------------------------------- |
-| `scheme` (theme) | `<html data-theme="…">`         | [`ThemeProvider`](../../../../packages/design-system/src/index.tsx) (design-system) | `localStorage["enterprise-search-theme"]`          |
-| `accent`         | `<html data-accent="…">`        | `ThemeProvider`                                                                     | `localStorage["enterprise-search-accent"]`         |
+| `scheme` (theme) | `<html data-theme="…">`         | [`ThemeProvider`](../../../../packages/design-system/src/index.tsx) (design-system) | `localStorage["0x-copilot-theme"]`                 |
+| `accent`         | `<html data-accent="…">`        | `ThemeProvider`                                                                     | `localStorage["0x-copilot-accent"]`                |
 | `density`        | `<html data-density="…">`       | [`useThemeSync`](../../src/features/me/useThemeSync.ts)                             | server only (`UserPreferences.appearance.density`) |
 | `reduce_motion`  | `<html data-reduce-motion="…">` | `useThemeSync`                                                                      | server only                                        |
 

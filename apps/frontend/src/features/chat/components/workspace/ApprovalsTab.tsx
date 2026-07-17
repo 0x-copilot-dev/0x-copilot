@@ -7,7 +7,7 @@
 // pending-on-others; until then this surfaces a single pending list
 // plus a small recent-resolutions section.
 
-import { Badge, Card, classNames } from "@enterprise-search/design-system";
+import { Badge, Card, classNames } from "@0x-copilot/design-system";
 import type { ReactElement } from "react";
 
 import type {

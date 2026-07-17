@@ -1,6 +1,6 @@
 // TeamDestination — shell + filter/search/sort behavior.
 
-import type { Person, TenantId, UserId } from "@enterprise-search/api-types";
+import type { Person, TenantId, UserId } from "@0x-copilot/api-types";
 import { fireEvent, render, screen, within } from "@testing-library/react";
 import { describe, expect, it, vi } from "vitest";
 

@@ -18,7 +18,7 @@
 **Design references:**
 
 - master PRD §5.6 — premise + open questions ("first-party only or community?", "memory format", "agent-to-agent invocation").
-- `/tmp/atlas-design/enterprise-search-template/project/dest-agents.jsx` (gallery + detail card design).
+- `/tmp/atlas-design/0x-copilot-template/project/dest-agents.jsx` (gallery + detail card design).
 - chat1.md line 184 — subagent runtime semantics (orthogonal — runtime is owned by ai-backend; this PRD is the **management surface**).
 - The current `packages/chat-surface/src/destinations/agents/AgentsDestination.tsx` Wave-0 stub is **a debug table over `/v1/agent/runs`**. This PRD throws that shape away — runs/observability live in Home/Chats; the Agents destination is the **agent registry/gallery + editor + per-agent usage**.
 
@@ -1182,7 +1182,7 @@ Each agent runs in its own `.claude/worktrees/<id>/` with branch `worktree-agent
 
 - All §13 tests green (backend + frontend + cross-destination).
 - Browser-verified: gallery loads; install round-trips; editor saves; version pin works in the Routines editor; Project default-agent picker works.
-- `npm run typecheck` clean across `@enterprise-search/api-types` + `@enterprise-search/chat-surface` + `@enterprise-search/frontend`.
+- `npm run typecheck` clean across `@0x-copilot/api-types` + `@0x-copilot/chat-surface` + `@0x-copilot/frontend`.
 - `make test` smoke green.
 - The Wave-0 debug-table `/v1/agent/runs` UI is fully removed from `AgentsDestination.tsx`. Runs observability lives in Home (already shipped).
 - Master PRD §5.6 open questions Q1–Q3 are resolved (recorded in cross-audit §9 by the orchestrator post-merge).

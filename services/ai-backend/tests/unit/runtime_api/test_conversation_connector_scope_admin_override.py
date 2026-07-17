@@ -23,7 +23,7 @@ from typing import Any
 import pytest
 from fastapi.testclient import TestClient
 
-from enterprise_service_contracts.scopes import ADMIN_USERS, RUNTIME_USE
+from copilot_service_contracts.scopes import ADMIN_USERS, RUNTIME_USE
 from runtime_api.app import RuntimeApiAppFactory
 from agent_runtime.api.constants import Messages
 from runtime_adapters.factory import RuntimeAdapterFactory

@@ -1,4 +1,4 @@
-import type { InboxItemId } from "@enterprise-search/api-types";
+import type { InboxItemId } from "@0x-copilot/api-types";
 import { describe, expect, it } from "vitest";
 
 import { hasItemRefResolver, resolveItemRef } from "../../refs/registry";

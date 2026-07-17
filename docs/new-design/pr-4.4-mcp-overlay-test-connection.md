@@ -254,7 +254,7 @@ The wizard is the admin's flow. Members see the wizard read-only ("To add a serv
 
 The SSRF guard is the same one `services/backend/src/backend_app/http_client.py` uses for OAuth (existing — it blocks RFC 1918, link-local, and metadata IPs in production; admins set `MCP_ALLOW_PRIVATE_NETWORKS=true` for self-hosted scenarios).
 
-### 2.8 Frontend contract (`@enterprise-search/api-types`)
+### 2.8 Frontend contract (`@0x-copilot/api-types`)
 
 ```ts
 // packages/api-types/src/index.ts
@@ -325,7 +325,7 @@ Wizard primitives:
 
 | Primitive                  | Source                                                                           |
 | -------------------------- | -------------------------------------------------------------------------------- |
-| `<Dialog>` (host)          | `@enterprise-search/design-system` (NEW; wraps `@radix-ui/react-dialog`)         |
+| `<Dialog>` (host)          | `@0x-copilot/design-system` (NEW; wraps `@radix-ui/react-dialog`)                |
 | Stepper indicator          | Local (~30 LOC; horizontal pills with active/done states)                        |
 | Catalog grid               | Local (CSS grid + `<Card>` from design-system)                                   |
 | Form fields (URL, API key) | Existing `<TextInput>`, `<Field>`                                                |
@@ -661,12 +661,12 @@ Marcus           FE (McpOverlay)               backend-facade           backend 
 - [ ] Probe handles OAuth-unauth / OAuth-authed / api-key / none; timeouts at 5 s; SSRF guard active in production mode.
 - [ ] Two new `mcp_audit_events.action` constants registered; chain verifier passes.
 - [ ] Retention sweeper extended with `mcp_drafts` kind; reaps drafts >24 h.
-- [ ] `<Dialog>` primitive added to `@enterprise-search/design-system` wrapping `@radix-ui/react-dialog`; CSS for overlay + content shipped.
+- [ ] `<Dialog>` primitive added to `@0x-copilot/design-system` wrapping `@radix-ui/react-dialog`; CSS for overlay + content shipped.
 - [ ] `<McpOverlay>` mounts from Settings → Connectors → "Add MCP server" CTA (PR 4.3) and from a future composer popover.
 - [ ] Five step components (`<BrowseStep>`, `<AuthStep>`, `<TestStep>`, `<ScopeStep>`, `<ConfirmStep>`) render the right state.
 - [ ] Wizard state survives OAuth round-trip via sessionStorage keyed by OAuth state param.
 - [ ] "Add to workspace" button stays disabled until step 3 returns `reachable: true`.
-- [ ] `@enterprise-search/api-types` exports `McpCatalogEntry`, `McpProbeResult`, `McpProbeErrorKind`; `McpServer` extended.
+- [ ] `@0x-copilot/api-types` exports `McpCatalogEntry`, `McpProbeResult`, `McpProbeErrorKind`; `McpServer` extended.
 - [ ] Streaming handshake byte-identical pre/post merge.
 - [ ] No new event types, no new wire variants, no LangGraph harness changes.
 - [ ] `make test` green; backend pytest green; frontend typecheck + build green.
@@ -675,7 +675,7 @@ Marcus           FE (McpOverlay)               backend-facade           backend 
 
 ## 5 · References
 
-- Design Doc · MCP overlay (5-step wizard) + the **Test connection step before confirm** P1 TODO — bundle at `/tmp/design-doc/enterprise-search/project/Design Doc.html` lines 571-595, 677.
+- Design Doc · MCP overlay (5-step wizard) + the **Test connection step before confirm** P1 TODO — bundle at `/tmp/design-doc/0x-copilot/project/Design Doc.html` lines 571-595, 677.
 - [`services/backend/migrations/0001_initial_mcp_skills.sql`](../../services/backend/migrations/0001_initial_mcp_skills.sql) — `mcp_servers`, `mcp_auth_sessions`, `mcp_auth_connections`, `mcp_audit_events`.
 - [`services/backend/src/backend_app/mcp_oauth.py`](../../services/backend/src/backend_app/mcp_oauth.py) — discovery + PKCE the probe reuses.
 - [`services/backend/src/backend_app/http_client.py`](../../services/backend/src/backend_app/http_client.py) — SSRF guard reused for the probe.

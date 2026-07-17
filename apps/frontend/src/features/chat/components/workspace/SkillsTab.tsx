@@ -6,13 +6,8 @@
 // Disabled skills are visible but unclickable; the manage link routes
 // to Settings → Skills via the existing `onOpenSettings` hook.
 
-import {
-  Badge,
-  Button,
-  Card,
-  classNames,
-} from "@enterprise-search/design-system";
-import type { Skill } from "@enterprise-search/api-types";
+import { Badge, Button, Card, classNames } from "@0x-copilot/design-system";
+import type { Skill } from "@0x-copilot/api-types";
 import type { ReactElement } from "react";
 
 export interface SkillsTabProps {

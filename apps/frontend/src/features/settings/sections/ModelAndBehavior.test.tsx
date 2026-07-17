@@ -11,7 +11,7 @@ import { act, fireEvent, render, screen } from "@testing-library/react";
 import type {
   UpdateWorkspaceDefaultsRequest,
   WorkspaceDefaultsResponse,
-} from "@enterprise-search/api-types";
+} from "@0x-copilot/api-types";
 import type { UseWorkspaceDefaultsResult } from "../useWorkspaceDefaults";
 
 import { ModelAndBehavior } from "./ModelAndBehavior";

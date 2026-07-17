@@ -19,11 +19,11 @@
 import { describe, expect, it, vi } from "vitest";
 import { render, screen } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
-import type { CitationSourceRef } from "@enterprise-search/api-types";
+import type { CitationSourceRef } from "@0x-copilot/api-types";
 
 import { CitationChip } from "./CitationChip";
 import { CitationsProvider } from "./citationsContext";
-import { upsertCitation } from "@enterprise-search/chat-surface";
+import { upsertCitation } from "@0x-copilot/chat-surface";
 
 function citation(
   overrides: Partial<CitationSourceRef> = {},

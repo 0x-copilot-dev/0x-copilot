@@ -23,7 +23,7 @@ import type {
   ConnectorStreamEnvelope,
   TenantId,
   UserId,
-} from "@enterprise-search/api-types";
+} from "@0x-copilot/api-types";
 
 // Hoisted mocks for connectorsApi — keep the route test off the real
 // transport / fetch surface (covered in connectorsApi-level tests).

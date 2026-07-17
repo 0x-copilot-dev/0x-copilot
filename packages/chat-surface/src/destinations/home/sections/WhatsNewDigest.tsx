@@ -19,10 +19,7 @@
 
 import { useState, type CSSProperties, type ReactElement } from "react";
 
-import type {
-  HomeActivityRow,
-  WhatsNewSection,
-} from "@enterprise-search/api-types";
+import type { HomeActivityRow, WhatsNewSection } from "@0x-copilot/api-types";
 
 import { ActivityList, type ActivityRow } from "../../../shell/ActivityList";
 import { formatRelativeTime } from "../../../util/time";

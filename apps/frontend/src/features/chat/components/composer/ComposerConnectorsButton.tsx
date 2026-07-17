@@ -5,7 +5,7 @@
 // badge of active connectors so users can see at a glance whether the
 // chat is scoped before sending a prompt.
 
-import { classNames } from "@enterprise-search/design-system";
+import { classNames } from "@0x-copilot/design-system";
 import { forwardRef, type ReactElement } from "react";
 
 export interface ComposerConnectorsButtonProps {

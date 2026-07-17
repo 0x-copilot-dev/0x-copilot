@@ -131,7 +131,7 @@ Checks `identity.mfa_satisfied_at`:
 `StepUpRequired` is an `HTTPException(403)` with:
 
 ```
-WWW-Authenticate: x-step-up max_age="<n>", realm="enterprise-search"
+WWW-Authenticate: x-step-up max_age="<n>", realm="0x-copilot"
 ```
 
 The frontend reads this header to prompt for a fresh second factor without logging out.

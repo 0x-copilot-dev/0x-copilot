@@ -25,7 +25,7 @@ import type {
   TimelineEntry,
   TriageCounts,
   WhatsNewSection,
-} from "@enterprise-search/api-types";
+} from "@0x-copilot/api-types";
 
 import type { HomeStreamEnvelope } from "../../api/homeApi";
 

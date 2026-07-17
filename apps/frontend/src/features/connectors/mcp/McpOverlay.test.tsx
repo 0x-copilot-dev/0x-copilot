@@ -26,7 +26,7 @@ import type {
   McpCatalogEntry,
   McpCatalogResponse,
   McpServer,
-} from "@enterprise-search/api-types";
+} from "@0x-copilot/api-types";
 
 import { McpOverlay } from "./McpOverlay";
 import type { ConnectorState } from "../useConnectors";

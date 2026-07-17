@@ -101,7 +101,7 @@ Four separate append-only chains. Each write:
 
 1. Reads the last `(seq, signature)` for `(org_id)`.
 2. Computes the new chain link (seq+1, sha256 of prev_hash + payload).
-3. Signs with `AuditChainSigner` (from `enterprise_audit_chain` package).
+3. Signs with `AuditChainSigner` (from `copilot_audit_chain` package).
 4. Inserts with the chain fields populated.
 
 The chain is monotone and append-only. No UPDATE or DELETE is permitted on audit rows.

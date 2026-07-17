@@ -57,10 +57,10 @@ live in `src/api/*` and nowhere else.
 
 ```bash
 npm install                                            # repo root
-npm run dev    --workspace @enterprise-search/frontend # Vite on :5173
-npm run typecheck --workspace @enterprise-search/frontend
-npm run test   --workspace @enterprise-search/frontend
-npm run build  --workspace @enterprise-search/frontend
+npm run dev    --workspace @0x-copilot/frontend # Vite on :5173
+npm run typecheck --workspace @0x-copilot/frontend
+npm run test   --workspace @0x-copilot/frontend
+npm run build  --workspace @0x-copilot/frontend
 ```
 
 Vite proxies `/v1/*` to `http://127.0.0.1:8200` (the facade). In prod the
@@ -72,7 +72,7 @@ nginx image only serves the SPA — ingress must route `/v1/*` to the facade.
   `:8100` / `:8000` directly.
 - **Single HTTP layer.** All clients live in `src/api/*`. No new feature
   callers in root-level legacy helpers.
-- **No service imports.** Use `@enterprise-search/api-types` for shapes;
+- **No service imports.** Use `@0x-copilot/api-types` for shapes;
   reach the runtime over HTTP/SSE.
 - **No prefix-based activity inference.** Backend already projects
   `activity_kind` / `display_title` / `summary` / `status`.

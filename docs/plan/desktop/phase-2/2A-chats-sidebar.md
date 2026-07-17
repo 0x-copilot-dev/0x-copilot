@@ -231,10 +231,10 @@ export function ChatsDestination(): ReactElement;
 - Tests added: 17 (15 in `ChatsSidebar.test.tsx`, 2 in
   `ChatsDestination.test.tsx`).
 - Full chat-surface suite: 201/201 passing (was 184 before).
-- `npm run typecheck --workspace @enterprise-search/chat-surface` passes.
-- `npm run lint --workspace @enterprise-search/chat-surface` passes.
-- `npm run typecheck --workspace @enterprise-search/frontend` still passes.
-- `npm run typecheck --workspace @enterprise-search/surface-renderers`
+- `npm run typecheck --workspace @0x-copilot/chat-surface` passes.
+- `npm run lint --workspace @0x-copilot/chat-surface` passes.
+- `npm run typecheck --workspace @0x-copilot/frontend` still passes.
+- `npm run typecheck --workspace @0x-copilot/surface-renderers`
   still passes.
 
 **Deviations from the original PRD scope:**

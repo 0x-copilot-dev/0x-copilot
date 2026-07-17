@@ -14,7 +14,7 @@ import type {
   ProjectId,
   SectionResult,
   UserId,
-} from "@enterprise-search/api-types";
+} from "@0x-copilot/api-types";
 import { act, fireEvent, render, screen } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
@@ -26,7 +26,7 @@ import type { ArtifactRoute, Router } from "../../routing/router";
 // each row would resolve to the deleted-chip path.
 import "./index";
 
-// TODO(merge): rewire to "@enterprise-search/api-types"
+// TODO(merge): rewire to "@0x-copilot/api-types"
 import type { InboxItem, InboxItemKind } from "./_inbox-stub";
 
 import {

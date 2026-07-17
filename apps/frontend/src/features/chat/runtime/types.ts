@@ -9,7 +9,7 @@
 
 import type { ReactNode } from "react";
 
-// Message-part shapes live in @enterprise-search/chat-surface so the
+// Message-part shapes live in @0x-copilot/chat-surface so the
 // migrated PlainText / Reasoning components consume them at a single
 // source of truth. Imported here so this file's other type aliases can
 // reference them, AND re-exported so the rest of apps/frontend keeps
@@ -21,7 +21,7 @@ import type {
   ReasoningMessagePartProps,
   TextMessagePart,
   TextMessagePartProps,
-} from "@enterprise-search/chat-surface";
+} from "@0x-copilot/chat-surface";
 export type {
   MessagePartState,
   MessagePartStatus,
@@ -68,7 +68,7 @@ export interface MessageTiming {
 //
 // TextMessagePart, ReasoningMessagePart, MessagePartState,
 // TextMessagePartProps, and ReasoningMessagePartProps live in
-// @enterprise-search/chat-surface (re-exported at the top of this file).
+// @0x-copilot/chat-surface (re-exported at the top of this file).
 
 export interface ToolCallMessagePart<
   TArgs = Record<string, unknown>,

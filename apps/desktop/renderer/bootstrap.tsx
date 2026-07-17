@@ -9,12 +9,9 @@ import {
   LocalStorageKeyValueStore,
   registerGenericStructuredDiff,
   type ShellDestinationSlug,
-} from "@enterprise-search/chat-surface";
-import {
-  IpcTransport,
-  type RendererSession,
-} from "@enterprise-search/chat-transport";
-import { registerAll as registerSurfaceRenderers } from "@enterprise-search/surface-renderers";
+} from "@0x-copilot/chat-surface";
+import { IpcTransport, type RendererSession } from "@0x-copilot/chat-transport";
+import { registerAll as registerSurfaceRenderers } from "@0x-copilot/surface-renderers";
 
 import { BootGate } from "./BootProgress";
 import { DesktopPlaceholder } from "./DesktopPlaceholder";

@@ -16,7 +16,7 @@ import type {
   SectionResult,
   TenantId,
   UserId,
-} from "@enterprise-search/api-types";
+} from "@0x-copilot/api-types";
 import { fireEvent, render, screen } from "@testing-library/react";
 import { describe, expect, it, vi } from "vitest";
 
@@ -28,7 +28,7 @@ import type { ArtifactRoute, Router } from "../../routing/router";
 // card / row resolves without throwing.
 import "./index";
 
-// TODO(merge): rewire to "@enterprise-search/api-types"
+// TODO(merge): rewire to "@0x-copilot/api-types"
 import type {
   LibraryFileSummary,
   LibraryItemSummary,

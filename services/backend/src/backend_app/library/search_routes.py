@@ -32,7 +32,7 @@ from collections.abc import AsyncIterator
 from datetime import datetime, timezone
 from typing import Any, Literal
 
-from enterprise_service_contracts.scopes import RUNTIME_USE
+from copilot_service_contracts.scopes import RUNTIME_USE
 from fastapi import Depends, FastAPI, Header, Query, Request
 from fastapi.responses import StreamingResponse
 
@@ -207,7 +207,7 @@ def _resolve_rerank(*, rerank: bool | None, request: Request) -> bool:
 
     if rerank is not None:
         return rerank
-    from enterprise_service_contracts.headers import SERVICE_TOKEN_HEADER
+    from copilot_service_contracts.headers import SERVICE_TOKEN_HEADER
 
     return not bool(request.headers.get(SERVICE_TOKEN_HEADER, "").strip())
 

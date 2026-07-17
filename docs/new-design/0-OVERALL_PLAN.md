@@ -1,8 +1,8 @@
-# Atlas — Enterprise Search · Implementation plan
+# Atlas — 0xCopilot · Implementation plan
 
 ## Context
 
-We pulled the Anthropic Design handoff bundle for "Atlas — Enterprise Search" (`/tmp/design-doc/enterprise-search/`). The bundle's `Design Doc.html` is the authoritative spec: it inventories every page, flow, primitive, and decision. We need to land it incrementally against the existing monorepo (`apps/frontend`, `services/ai-backend`, `services/backend`, `services/backend-facade`, `packages/api-types`, `packages/design-system`) without breaking the existing assistant‑ui chat surface, SCIM/auth, MCP OAuth, or strict‑reads encryption already in production paths.
+We pulled the Anthropic Design handoff bundle for "Atlas — 0xCopilot" (`/tmp/design-doc/0x-copilot/`). The bundle's `Design Doc.html` is the authoritative spec: it inventories every page, flow, primitive, and decision. We need to land it incrementally against the existing monorepo (`apps/frontend`, `services/ai-backend`, `services/backend`, `services/backend-facade`, `packages/api-types`, `packages/design-system`) without breaking the existing assistant‑ui chat surface, SCIM/auth, MCP OAuth, or strict‑reads encryption already in production paths.
 
 The design covers six surfaces (Login, Main app, Settings, MCP overlay, Usage overlay, Share popover) and five flows (Search & summarize, Launch full agent, Approval, Connector scoping, Sharing). Key wire requirements: live citation registry, per‑chat connector scope, draft artifact, two‑stage approvals, subagent discovery, sources‑restricted recipient view, and a workspace-pane right rail.
 
@@ -301,7 +301,7 @@ For each wave we verify in this order:
 1. **Unit + service tests** in the changed component:
    - ai‑backend: `cd services/ai-backend && PYTHONPATH=src:../../packages/service-contracts/src .venv/bin/python -m pytest`
    - backend: same pattern
-   - frontend: `npm run typecheck --workspace @enterprise-search/frontend && npm run build --workspace @enterprise-search/frontend`
+   - frontend: `npm run typecheck --workspace @0x-copilot/frontend && npm run build --workspace @0x-copilot/frontend`
 2. **Cross‑service smoke**: `make test`.
 3. **Live stack walk‑through**: `make dev`, then for each PR walk the relevant flow end‑to‑end:
    - **W1.1 citations**: trigger search&summarize prompt; observe Sources tab populates as docs ingest, chips render inline as text streams, click chip scrolls to source row.

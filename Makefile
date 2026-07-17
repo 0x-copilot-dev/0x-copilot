@@ -17,7 +17,7 @@ SHARED_PYTHONPATH := src:$(SERVICE_CONTRACTS_PATH):$(AUDIT_CHAIN_PATH)
 .PHONY: help setup setup-node setup-python setup-hooks check-local-env check-provider-key dev prod prod-build check-prod-env docker-dev docker-dev-down test
 
 help:
-	@echo "Enterprise Search make targets"
+	@echo "0xCopilot make targets"
 	@echo
 	@echo "  make setup            Install npm deps and Python service venvs"
 	@echo "  make setup-hooks      Install local pre-commit hooks"
@@ -74,7 +74,7 @@ DEV_AUTH_SECRET ?= dev-only-not-for-prod
 DEV_SERVICE_TOKEN ?= dev-only-service-token
 
 dev: check-local-env check-provider-key
-	@echo "Starting Enterprise Search dev stack"
+	@echo "Starting 0xCopilot dev stack"
 	@echo "UI:      http://$(BIND_HOST):$(FRONTEND_PORT)"
 	@echo "Facade:  http://$(BIND_HOST):$(FACADE_PORT)"
 	@echo "Backend: http://$(BIND_HOST):$(BACKEND_PORT)"
@@ -82,7 +82,7 @@ dev: check-local-env check-provider-key
 	@echo "Dev IdP: POST $(BACKEND_PORT)/v1/dev/identity/mint  (or 'make dev-bearer PERSONA=...')"
 	@pids=""; \
 	cleanup() { \
-		echo; echo "Stopping Enterprise Search dev stack"; \
+		echo; echo "Stopping 0xCopilot dev stack"; \
 		[ -n "$$pids" ] && kill $$pids 2>/dev/null || true; \
 		wait $$pids 2>/dev/null || true; \
 	}; \
@@ -111,7 +111,7 @@ dev: check-local-env check-provider-key
 		AI_BACKEND_URL=http://$(BIND_HOST):$(AI_BACKEND_PORT) \
 		PYTHONPATH=$(SHARED_PYTHONPATH) \
 		.venv/bin/python -m uvicorn backend_facade.app:app --host $(BIND_HOST) --port $(FACADE_PORT)) & pids="$$pids $$!"; \
-	(npm run dev --workspace @enterprise-search/frontend -- --host $(BIND_HOST) --port $(FRONTEND_PORT)) & pids="$$pids $$!"; \
+	(npm run dev --workspace @0x-copilot/frontend -- --host $(BIND_HOST) --port $(FRONTEND_PORT)) & pids="$$pids $$!"; \
 	wait $$pids
 
 # W0.1 — print a dev bearer to stdout. Useful for curl scripts.
@@ -148,10 +148,10 @@ prod: check-prod-env prod-build
 
 prod-build:
 	npm run build --workspaces --if-present
-	docker build -f services/backend/Dockerfile -t enterprise-search-backend:prod .
-	docker build -f services/ai-backend/Dockerfile -t enterprise-search-ai-backend:prod .
-	docker build -f services/backend-facade/Dockerfile -t enterprise-search-backend-facade:prod .
-	docker build -f apps/frontend/Dockerfile -t enterprise-search-frontend:prod .
+	docker build -f services/backend/Dockerfile -t 0x-copilot-backend:prod .
+	docker build -f services/ai-backend/Dockerfile -t 0x-copilot-ai-backend:prod .
+	docker build -f services/backend-facade/Dockerfile -t 0x-copilot-backend-facade:prod .
+	docker build -f apps/frontend/Dockerfile -t 0x-copilot-frontend:prod .
 
 test:
 	cd services/backend && PYTHONPATH=$(SHARED_PYTHONPATH) .venv/bin/python -m pytest tests/test_mcp_api_flow.py tests/test_skills_api_flow.py

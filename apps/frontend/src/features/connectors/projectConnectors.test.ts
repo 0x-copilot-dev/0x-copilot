@@ -1,4 +1,4 @@
-import type { McpServer } from "@enterprise-search/api-types";
+import type { McpServer } from "@0x-copilot/api-types";
 import { describe, expect, it } from "vitest";
 
 import {

@@ -1,5 +1,5 @@
 // Web wrapper around the substrate-agnostic SourceRow in
-// @enterprise-search/chat-surface.
+// @0x-copilot/chat-surface.
 //
 // The headless row is a pure renderer that takes `previewProps` (mouse/
 // focus handlers, aria attributes) as a prop. This wrapper owns the
@@ -11,8 +11,8 @@
 // the preview entirely or routes through its own portal mechanism. The
 // chat-surface row itself does not change.
 
-import type { SourceEntry } from "@enterprise-search/api-types";
-import { SourceRow as HeadlessSourceRow } from "@enterprise-search/chat-surface";
+import type { SourceEntry } from "@0x-copilot/api-types";
+import { SourceRow as HeadlessSourceRow } from "@0x-copilot/chat-surface";
 import { forwardRef, type ReactElement, type Ref } from "react";
 
 import { useSourcePreviewTrigger } from "./SourcePreview";

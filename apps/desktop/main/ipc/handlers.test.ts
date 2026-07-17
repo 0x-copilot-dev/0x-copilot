@@ -7,7 +7,7 @@ import type {
   Transport,
   TransportCapabilities,
   TypedRequest,
-} from "@enterprise-search/chat-transport";
+} from "@0x-copilot/chat-transport";
 
 import { TransportBridge } from "../transport-bridge";
 import {

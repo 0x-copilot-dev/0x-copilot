@@ -17,7 +17,7 @@ import { FleetSubagentRow } from "../subagents/FleetSubagentRow";
 import { subagentCardFromArgs } from "../subagents/subagentCardViewModel";
 import { SubagentFleetCard } from "../messages/SubagentFleetCard";
 import { useSubagentFleetContext } from "../subagents/SubagentFleetContext";
-import { scrollChatToEvent } from "@enterprise-search/chat-surface";
+import { scrollChatToEvent } from "@0x-copilot/chat-surface";
 import type { SubagentActivityRecord } from "../../utils/activityDataBuilders";
 import type { SubagentSnapshotMap } from "../../chatModel/subagentReducer";
 import { isTerminalStatus } from "../../chatModel/subagentStatus";

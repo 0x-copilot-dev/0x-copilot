@@ -1,4 +1,4 @@
-import type { SaaSRendererAdapter } from "@enterprise-search/chat-surface";
+import type { SaaSRendererAdapter } from "@0x-copilot/chat-surface";
 
 import type {
   SmokeFailKind,

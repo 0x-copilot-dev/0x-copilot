@@ -9,7 +9,7 @@ import {
   type ReactElement,
 } from "react";
 
-import type { WebhookSecurityDefaults } from "@enterprise-search/api-types";
+import type { WebhookSecurityDefaults } from "@0x-copilot/api-types";
 
 import type { RequestIdentity } from "../../api/config";
 import {

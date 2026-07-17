@@ -1,6 +1,6 @@
 // Local stub for the Phase 5 Routines wire contract.
 //
-// The canonical types live in `@enterprise-search/api-types`
+// The canonical types live in `@0x-copilot/api-types`
 // (`packages/api-types/src/routines.ts`), authored by the parallel
 // Phase 5 P5-A backend-types agent. This frontend wave (P5-C) runs in
 // parallel against the same sub-PRD spec and cannot import a type that
@@ -8,10 +8,10 @@
 // `docs/atlas-new-design/destinations/routines-prd.md` §4 (wire contracts).
 //
 // TODO(merge): delete this file. Replace every `_routines-stub` import
-// with `@enterprise-search/api-types` once P5-A's
+// with `@0x-copilot/api-types` once P5-A's
 // `packages/api-types/src/routines.ts` lands on main.
 
-import type { ReasoningDepth } from "@enterprise-search/api-types";
+import type { ReasoningDepth } from "@0x-copilot/api-types";
 
 // ===========================================================================
 // Branded ids (§4.1)

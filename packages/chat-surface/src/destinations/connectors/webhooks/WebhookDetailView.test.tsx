@@ -3,11 +3,8 @@
 import { fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { describe, expect, it, vi } from "vitest";
 
-import type { TenantId, TriggerId } from "@enterprise-search/api-types";
-import type {
-  Webhook,
-  WebhookRotateResponse,
-} from "@enterprise-search/api-types";
+import type { TenantId, TriggerId } from "@0x-copilot/api-types";
+import type { Webhook, WebhookRotateResponse } from "@0x-copilot/api-types";
 
 import { WebhookDetailView } from "./WebhookDetailView";
 

@@ -1,6 +1,6 @@
 import type { ReactElement } from "react";
 
-import type { SaaSRendererAdapter } from "@enterprise-search/chat-surface";
+import type { SaaSRendererAdapter } from "@0x-copilot/chat-surface";
 
 // Q3 / Q5 instrumentation (PRD §9.5.1, D29). Wraps an installed adapter so
 // every live `renderCurrent` / `renderDiff` call is observed. On throw, the

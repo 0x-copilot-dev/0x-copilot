@@ -1,5 +1,5 @@
 import type { ReactElement } from "react";
-import { Composer } from "@enterprise-search/chat-surface";
+import { Composer } from "@0x-copilot/chat-surface";
 import type { ThreadMessageLike } from "../../runtime/types";
 
 /**

@@ -1,6 +1,6 @@
 import { describe, expect, it, vi } from "vitest";
 import { render, screen } from "@testing-library/react";
-import type { SourceEntry } from "@enterprise-search/api-types";
+import type { SourceEntry } from "@0x-copilot/api-types";
 import { emptySourceMap, seedSourceMap } from "../../chatModel/sourcesReducer";
 import { SourcesPanel } from "./SourcesPanel";
 

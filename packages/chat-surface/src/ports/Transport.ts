@@ -7,5 +7,5 @@ export type {
   Transport,
   TransportCapabilities,
   TypedRequest,
-} from "@enterprise-search/chat-transport";
-export { UnauthorizedError } from "@enterprise-search/chat-transport";
+} from "@0x-copilot/chat-transport";
+export { UnauthorizedError } from "@0x-copilot/chat-transport";

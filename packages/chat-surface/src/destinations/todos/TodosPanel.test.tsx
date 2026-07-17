@@ -3,7 +3,7 @@
 // Covers: primary filter chips (All / Mine), per-project chips, saved
 // filter selector stub, inline-add slot delegation.
 
-import type { ProjectId } from "@enterprise-search/api-types";
+import type { ProjectId } from "@0x-copilot/api-types";
 import { fireEvent, render, screen } from "@testing-library/react";
 import { describe, expect, it, vi } from "vitest";
 

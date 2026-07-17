@@ -11,10 +11,7 @@
 
 import type { CSSProperties, ReactElement } from "react";
 
-import type {
-  QuickAction,
-  QuickActionTarget,
-} from "@enterprise-search/api-types";
+import type { QuickAction, QuickActionTarget } from "@0x-copilot/api-types";
 
 import { EmptyState } from "../../../shell/EmptyState";
 

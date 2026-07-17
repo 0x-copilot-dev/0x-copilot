@@ -220,10 +220,10 @@ export function CommandPalette(props: CommandPaletteProps): React.ReactNode;
 ## Done criteria
 
 - [x] All FRs met
-- [x] `npm run typecheck --workspace @enterprise-search/chat-surface` passes
-- [x] `npm test --workspace @enterprise-search/chat-surface` passes
+- [x] `npm run typecheck --workspace @0x-copilot/chat-surface` passes
+- [x] `npm test --workspace @0x-copilot/chat-surface` passes
       (28 HashRouter + 9 route-table + 12 CommandPalette tests)
-- [x] `npm run lint --workspace @enterprise-search/chat-surface` passes
+- [x] `npm run lint --workspace @0x-copilot/chat-surface` passes
 - [x] No imports outside scope
 - [x] No bare browser globals (only `globalThis.` member access)
 - [x] No new third-party dependency

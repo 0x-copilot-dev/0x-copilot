@@ -1,11 +1,11 @@
 import { parse } from "@typescript-eslint/parser";
 
-import { ADAPTER_ALLOWLIST } from "@enterprise-search/api-types";
+import { ADAPTER_ALLOWLIST } from "@0x-copilot/api-types";
 
 // PRD §9.5 Q2 + D28/D29. The single source of truth for what a tier-2
 // adapter is allowed to import lives in
-// `packages/service-contracts/src/enterprise_service_contracts/adapter_allowlist.json`
-// (loaded here via `@enterprise-search/api-types`). The same JSON feeds the
+// `packages/service-contracts/src/copilot_service_contracts/adapter_allowlist.json`
+// (loaded here via `@0x-copilot/api-types`). The same JSON feeds the
 // AI backend's 6B `AdapterAllowlistAuditor`, so drift between codegen and
 // the desktop's load-time scanner is structurally prevented. Adding a name
 // to the JSON is a security decision; do not add anything that mutates the
@@ -15,7 +15,7 @@ import { ADAPTER_ALLOWLIST } from "@enterprise-search/api-types";
 // `react`: explicitly NO `useEffect` / `useLayoutEffect` (side effects —
 // D28 forbids); explicitly NO `useRef` (mutable cross-render storage,
 // which is the common escape hatch for the D28 contract).
-// `@enterprise-search/design-system`: explicitly NO `ThemeProvider`,
+// `@0x-copilot/design-system`: explicitly NO `ThemeProvider`,
 // `useTheme`, `Menu`, `Popover*` — each touches `document` / `window` /
 // `localStorage` or owns layout context that an adapter must not own.
 export const ALLOWED_IMPORTS: Readonly<Record<string, readonly string[]>> =

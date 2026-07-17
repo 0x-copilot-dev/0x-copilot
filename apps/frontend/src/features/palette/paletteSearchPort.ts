@@ -3,7 +3,7 @@
 // Sub-PRD §7.3: "Host wires a `PaletteSearchPort` (new port; mirrors
 // NotificationPort/BadgePort pattern). Web → facade. Desktop → IPC."
 //
-// Until the canonical interface lands in `@enterprise-search/chat-surface`
+// Until the canonical interface lands in `@0x-copilot/chat-surface`
 // (P12-B3), this is the local declaration the web host satisfies. When
 // the chat-surface package exports `PaletteSearchPort`, swap the import
 // and delete this file — the shape MUST match.
@@ -11,7 +11,7 @@
 import type {
   PaletteSearchRequest,
   PaletteSearchResponse,
-} from "@enterprise-search/api-types";
+} from "@0x-copilot/api-types";
 
 export interface PaletteSearchPort {
   /**

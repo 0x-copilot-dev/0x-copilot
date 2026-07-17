@@ -1,7 +1,7 @@
 """Signature-compatibility fixture between legacy and shared audit chain.
 
 The legacy implementation lived at ``backend_app/audit_chain.py`` and was
-deleted when ``packages/audit-chain`` (``enterprise_audit_chain``) became
+deleted when ``packages/audit-chain`` (``copilot_audit_chain``) became
 the single home for the HMAC chain primitive.
 
 Pre-existing rows in production were signed by the legacy implementation.
@@ -19,7 +19,7 @@ from __future__ import annotations
 
 from datetime import datetime, timezone
 
-from enterprise_audit_chain import AuditChainRow, AuditChainSigner
+from copilot_audit_chain import AuditChainRow, AuditChainSigner
 
 
 _DEV_SENTINEL_KEY = b"dev-audit-hmac-sentinel-key-32by"  # legacy value, byte-identical

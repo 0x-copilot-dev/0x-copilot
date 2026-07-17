@@ -6,7 +6,7 @@
 // `groupConversations(..., pinnedIds)`.
 //
 // Persistence routes through `KeyValueStore` (the substrate-agnostic
-// port in @enterprise-search/chat-surface) — on web that's
+// port in @0x-copilot/chat-surface) — on web that's
 // `LocalStorageKeyValueStore`; on desktop the extension host backs the
 // same interface. No window.localStorage references live here.
 //
@@ -14,10 +14,7 @@
 // this hook to a server-driven fetch with no consumer changes — the
 // `togglePinned(id)` signature stays the same.
 
-import {
-  useKeyValueStore,
-  type KeyValueStore,
-} from "@enterprise-search/chat-surface";
+import { useKeyValueStore, type KeyValueStore } from "@0x-copilot/chat-surface";
 import { useCallback, useEffect, useState } from "react";
 
 const STORAGE_KEY_PREFIX = "atlas:pinned:";

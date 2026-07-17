@@ -23,7 +23,7 @@ class AdapterAllowlist(TypedDict):
 class _AllowlistResource:
     """Where the JSON sibling lives inside the installed package."""
 
-    PACKAGE: str = "enterprise_service_contracts"
+    PACKAGE: str = "copilot_service_contracts"
     FILENAME: str = "adapter_allowlist.json"
 
 

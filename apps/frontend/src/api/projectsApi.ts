@@ -19,10 +19,10 @@
 // Vite proxy → facade.
 //
 // Wire types live in `./_projects-stub` until P6-A's
-// `@enterprise-search/api-types/src/projects.ts` lands on main.
+// `@0x-copilot/api-types/src/projects.ts` lands on main.
 //
 // TODO(merge): swap every `./_projects-stub` import for
-// `@enterprise-search/api-types`.
+// `@0x-copilot/api-types`.
 
 import type { RequestIdentity } from "./config";
 import { httpDelete, httpGet, httpPatchQuery, httpPostQuery } from "./http";

@@ -27,7 +27,7 @@
 import type { CSSProperties, ReactElement, ReactNode } from "react";
 import { useState } from "react";
 
-// TODO(merge): rewire to "@enterprise-search/api-types" AssignedApproval
+// TODO(merge): rewire to "@0x-copilot/api-types" AssignedApproval
 import type { Approval } from "../thread-canvas/_approvals-stub";
 import type { ActivityEntry } from "../thread-canvas/eventProjector";
 

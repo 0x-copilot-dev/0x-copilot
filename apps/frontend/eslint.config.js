@@ -77,8 +77,8 @@ export default [
             },
             {
               group: [
-                "@enterprise-search/chat-transport",
-                "@enterprise-search/chat-transport/*",
+                "@0x-copilot/chat-transport",
+                "@0x-copilot/chat-transport/*",
               ],
               message: BOUNDARY_MESSAGE_TRANSPORT,
             },

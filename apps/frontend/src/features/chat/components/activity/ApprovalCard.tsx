@@ -14,7 +14,7 @@
 // ``ApprovalReceipt`` sibling, so this card only renders the
 // "user must decide" path.
 
-import { Card, classNames } from "@enterprise-search/design-system";
+import { Card, classNames } from "@0x-copilot/design-system";
 import type { ReactElement, ReactNode } from "react";
 import { ActivityDetails } from "./ActivityDetails";
 import { ActivityParams } from "./ActivityParams";

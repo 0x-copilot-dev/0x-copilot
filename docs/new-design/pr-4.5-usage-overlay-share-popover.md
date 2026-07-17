@@ -58,7 +58,7 @@ The persistence story for "view access" + "sources visible" is Wave 6 (`conversa
 2. **30-day stacked area chart by user** rendered with `recharts`. Top-N users get distinct colours; the rest collapse into "Other." Plan-limit overlay as a horizontal threshold line. Period selector (today / 7d / 30d / month) reuses the existing one in `UsagePanel`.
 3. **Top users table** under the chart for the same period — drill-in sortable.
 4. **Share popover** mounting from the topbar share button. Copy-link works; Slack and email use deep-links (no API call); view-access + sources-visible toggles render but are no-op + tooltip in v1.
-5. **`<Popover>` primitive** added to `@enterprise-search/design-system` wrapping `@radix-ui/react-popover`. Same Radix family as PR 4.4's `<Dialog>` and PR 4.2's `<DropdownMenu>`.
+5. **`<Popover>` primitive** added to `@0x-copilot/design-system` wrapping `@radix-ui/react-popover`. Same Radix family as PR 4.4's `<Dialog>` and PR 4.2's `<DropdownMenu>`.
 6. **Streaming and runtime untouched.** No new event types, no schema change.
 
 ### 1.3 Non-goals
@@ -154,7 +154,7 @@ The existing endpoint guards (admin / auditor for org-usage) stay as-is. The Wor
 | Mailto blocked by browser                     | Same fallback.                                                                         |
 | Clipboard write blocked (Permissions API)     | Existing fallback in `onShare`: status message "Copy this page URL to share the chat." |
 
-### 2.7 Frontend contract (`@enterprise-search/api-types`)
+### 2.7 Frontend contract (`@0x-copilot/api-types`)
 
 **No new types in this PR.** Existing types are sufficient:
 
@@ -267,7 +267,7 @@ import {
   Popover,
   PopoverContent,
   PopoverTrigger,
-} from "@enterprise-search/design-system";
+} from "@0x-copilot/design-system";
 
 export function SharePopover({
   chatTitle,
@@ -555,7 +555,7 @@ Sarah               FE                                         ai-backend
 - [ ] Member opening the Workspace tab sees the admin-only empty state (server 403 surfaced cleanly).
 - [ ] Period selector refetches both me and org endpoints; chart re-renders.
 - [ ] `recharts` + `@radix-ui/react-popover` added as `apps/frontend` deps.
-- [ ] `<Popover>` primitive added to `@enterprise-search/design-system`; CSS includes the reduce-motion-respecting fade.
+- [ ] `<Popover>` primitive added to `@0x-copilot/design-system`; CSS includes the reduce-motion-respecting fade.
 - [ ] `<SharePopover>` mounts off the topbar share button (PR 2.1 slot).
 - [ ] Copy / Slack / Email deep-links work; view-access + sources-visible rows render disabled with tooltip.
 - [ ] No new event types, no new wire variants, no SSE schema change, no backend change.
@@ -565,7 +565,7 @@ Sarah               FE                                         ai-backend
 
 ## 5 · References
 
-- Design Doc · Usage overlay (two views) + Share popover — bundle at `/tmp/design-doc/enterprise-search/project/Design Doc.html` lines 599-612, 655-662.
+- Design Doc · Usage overlay (two views) + Share popover — bundle at `/tmp/design-doc/0x-copilot/project/Design Doc.html` lines 599-612, 655-662.
 - [`apps/frontend/src/features/chat/components/details/UsagePanel.tsx`](../../apps/frontend/src/features/chat/components/details/UsagePanel.tsx) — current per-conversation panel.
 - [`services/ai-backend/migrations/0007_usage_daily_rollups.sql`](../../services/ai-backend/migrations/0007_usage_daily_rollups.sql) — `runtime_usage_daily_user` + `runtime_usage_daily_org`.
 - [`services/ai-backend/migrations/0009_usage_budgets.sql`](../../services/ai-backend/migrations/0009_usage_budgets.sql) — `usage_budgets` for the plan-limit overlay.

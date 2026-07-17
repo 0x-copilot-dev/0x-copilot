@@ -100,7 +100,7 @@ class ShareService:
     """
 
     _ADMIN_SCOPE = "admin:users"
-    """Scope present on workspace admins (see ``enterprise_service_contracts.scopes``)."""
+    """Scope present on workspace admins (see ``copilot_service_contracts.scopes``)."""
 
     def __init__(
         self,

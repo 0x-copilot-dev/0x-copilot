@@ -17,7 +17,7 @@
 import { fireEvent, render, screen, within } from "@testing-library/react";
 import { describe, expect, it, vi } from "vitest";
 
-import type { ConnectorId, ProjectId } from "@enterprise-search/api-types";
+import type { ConnectorId, ProjectId } from "@0x-copilot/api-types";
 
 import {
   buildCronSpec,

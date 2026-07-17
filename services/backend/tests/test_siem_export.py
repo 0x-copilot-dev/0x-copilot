@@ -207,7 +207,7 @@ class TestElasticExporter:
 class TestSyslogCefFormatting:
     def test_cef_line_shape(self) -> None:
         line = SyslogCefExporter._cef_line(_event())
-        assert line.startswith("CEF:0|EnterpriseSearch|Backend|1.0|")
+        assert line.startswith("CEF:0|Copilot|Backend|1.0|")
         assert "externalId=org_a:evt_1" in line
         assert "cn1=org_a" in line
 

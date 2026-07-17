@@ -21,8 +21,8 @@ import {
   resolveItemRef,
   type NotificationPort,
   type NotifyPayload,
-} from "@enterprise-search/chat-surface";
-import type { ArtifactRoute } from "@enterprise-search/chat-surface";
+} from "@0x-copilot/chat-surface";
+import type { ArtifactRoute } from "@0x-copilot/chat-surface";
 
 /**
  * Caller hands in a `navigate` closure so the port stays decoupled from

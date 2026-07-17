@@ -119,7 +119,7 @@ the provider call `setScheme` etc. ahead of the server round-trip.
 
 1. Add `features/appearance/AppearanceContext.tsx` with
    `AppearanceProvider` + `useAppearance`.
-2. Wrap `<EnterpriseSearchApp />` in `<AppearanceProvider>` in
+2. Wrap `<CopilotApp />` in `<AppearanceProvider>` in
    [App.tsx](../../src/app/App.tsx), inside the existing
    `UserProfileProvider`.
 3. Delete `features/me/useThemeSync.ts` and its call site in

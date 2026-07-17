@@ -49,8 +49,8 @@ import type {
   UsagePeriod,
   WorkspaceDefaultsResponse,
   WorkspaceExportResponse,
-} from "@enterprise-search/api-types";
-import { isRuntimeEventEnvelope } from "@enterprise-search/api-types";
+} from "@0x-copilot/api-types";
+import { isRuntimeEventEnvelope } from "@0x-copilot/api-types";
 import type { RequestIdentity } from "./config";
 import { identityParams } from "./config";
 import {

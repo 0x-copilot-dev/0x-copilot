@@ -126,9 +126,9 @@ The popover is the **single surface** that explains all three layers in one glan
 | `useAutoFlipPlacement` (NEW small hook)    | `apps/frontend/src/utils/useAutoFlipPlacement.ts`                                  | ~50 LOC. Returns `{placement: "top"                                                                                                     | "bottom", style}` based on anchor rect + viewport. No dependency. |
 | `ComposerConnectorsButton` (NEW)           | `apps/frontend/src/features/chat/components/composer/ComposerConnectorsButton.tsx` | The trigger that lives in the composer footer. Uses the same anchor + popover.                                                          |
 | `ConnectorsPill` (existing PR 2.1)         | _existing_                                                                         | Already mounted in topbar. PR 3.4 wires its `onOpen` to the popover.                                                                    |
-| `<ConnectorChip>` (existing design-system) | `@enterprise-search/design-system`                                                 | Renders the four-state visual. **Already exists.**                                                                                      |
-| `<AppIcon>` (existing design-system)       | `@enterprise-search/design-system`                                                 | Renders the brand letter glyph.                                                                                                         |
-| `<Menu>` (existing design-system)          | `@enterprise-search/design-system`                                                 | Used as the popover host shell (mousedown-outside dismissal already implemented).                                                       |
+| `<ConnectorChip>` (existing design-system) | `@0x-copilot/design-system`                                                        | Renders the four-state visual. **Already exists.**                                                                                      |
+| `<AppIcon>` (existing design-system)       | `@0x-copilot/design-system`                                                        | Renders the brand letter glyph.                                                                                                         |
+| `<Menu>` (existing design-system)          | `@0x-copilot/design-system`                                                        | Used as the popover host shell (mousedown-outside dismissal already implemented).                                                       |
 
 ### 2.3 Hook lifting — single owner
 
@@ -501,7 +501,7 @@ We add **nothing** from npm.
 - [ ] Below 1100 px the popover transforms to a bottom-sheet; toggle behavior identical.
 - [ ] Manage and Enable links route to `/settings#connectors` via `applyAppRoute`.
 - [ ] Connect button uses the existing `connectors.authenticate(serverId)` path; popover stays open during OAuth.
-- [ ] `npm run typecheck --workspace @enterprise-search/frontend` and `npm run build --workspace @enterprise-search/frontend` pass.
+- [ ] `npm run typecheck --workspace @0x-copilot/frontend` and `npm run build --workspace @0x-copilot/frontend` pass.
 - [ ] `make test` green.
 
 ---

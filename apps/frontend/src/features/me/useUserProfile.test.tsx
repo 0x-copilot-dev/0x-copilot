@@ -11,7 +11,7 @@ import { act, renderHook, waitFor } from "@testing-library/react";
 import type {
   UpdateUserProfileRequest,
   UserProfile,
-} from "@enterprise-search/api-types";
+} from "@0x-copilot/api-types";
 
 const mockGet = vi.fn<() => Promise<UserProfile>>();
 const mockPut =

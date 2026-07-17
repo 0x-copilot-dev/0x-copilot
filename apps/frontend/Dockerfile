@@ -25,7 +25,7 @@ COPY apps/frontend/wallet.html ./apps/frontend/wallet.html
 COPY apps/frontend/src ./apps/frontend/src
 
 RUN npm ci
-RUN npm run build --workspace @enterprise-search/frontend
+RUN npm run build --workspace @0x-copilot/frontend
 
 FROM nginx:1.31-alpine
 

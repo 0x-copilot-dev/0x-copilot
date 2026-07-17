@@ -1,4 +1,4 @@
-import type { AdapterGeneratedPayload } from "@enterprise-search/api-types";
+import type { AdapterGeneratedPayload } from "@0x-copilot/api-types";
 
 import { appendLifecycleEvent } from "./lifecycle-events";
 import {

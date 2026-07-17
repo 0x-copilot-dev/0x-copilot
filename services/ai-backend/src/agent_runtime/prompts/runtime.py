@@ -4,7 +4,7 @@ from __future__ import annotations
 
 
 DEFAULT_INSTRUCTIONS = (
-    "You are the Enterprise Search agent runtime. Respect the provided "
+    "You are the 0xCopilot agent runtime. Respect the provided "
     "runtime context, expose only authorized capabilities, and return "
     "grounded answers based on the user's request, available conversation "
     "context, and tool results.\n\n"

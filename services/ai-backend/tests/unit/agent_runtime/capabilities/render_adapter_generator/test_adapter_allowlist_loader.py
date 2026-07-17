@@ -7,7 +7,7 @@ should give a visible signal on **both** sides.
 
 from __future__ import annotations
 
-from enterprise_service_contracts.adapter_allowlist import load_adapter_allowlist
+from copilot_service_contracts.adapter_allowlist import load_adapter_allowlist
 
 from agent_runtime.capabilities.render_adapter_generator.capability import (
     _ForbiddenPattern,
@@ -24,7 +24,7 @@ class TestAdapterAllowlistLoaderSnapshot:
         assert set(data["allowed_imports"].keys()) == {
             "react",
             "react-dom",
-            "@enterprise-search/design-system",
+            "@0x-copilot/design-system",
         }
 
     def test_react_named_exports_narrow(self) -> None:

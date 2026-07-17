@@ -9,7 +9,7 @@ export interface CompletedMcpAuthAction extends PendingMcpAuthAction {
   completedAt: string;
 }
 
-const pendingMcpAuthActionKey = "enterprise-search.pending-mcp-auth-action";
+const pendingMcpAuthActionKey = "0x-copilot.pending-mcp-auth-action";
 
 export function rememberPendingMcpAuthAction(action: {
   approvalId: string;

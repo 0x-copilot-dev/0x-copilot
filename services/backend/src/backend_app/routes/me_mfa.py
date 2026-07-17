@@ -16,7 +16,7 @@ replay-protection live there. The routes are 5–10 lines each.
 
 from __future__ import annotations
 
-from enterprise_service_contracts.scopes import RUNTIME_USE
+from copilot_service_contracts.scopes import RUNTIME_USE
 from fastapi import Depends, FastAPI, HTTPException, Query, Request, status
 from pydantic import BaseModel, ConfigDict, Field
 

@@ -1,5 +1,5 @@
 {
-  "name": "@enterprise-search/chat-transport",
+  "name": "@0x-copilot/chat-transport",
   "version": "0.1.0",
   "private": true,
   "type": "module",

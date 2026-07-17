@@ -8,7 +8,7 @@ import { describe, expect, it, vi } from "vitest";
 import type {
   AuditEvent,
   ListAuditEventsResponse,
-} from "@enterprise-search/api-types";
+} from "@0x-copilot/api-types";
 import { AuditLogSettings } from "./AuditLogSettings";
 
 vi.mock("../../api/auditApi", () => ({

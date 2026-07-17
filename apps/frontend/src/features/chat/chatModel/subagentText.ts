@@ -1,7 +1,7 @@
 import {
   isSubagentActivityPayload,
   type RuntimeEventEnvelope,
-} from "@enterprise-search/api-types";
+} from "@0x-copilot/api-types";
 
 export function subagentKeyForEvent(
   event: RuntimeEventEnvelope,

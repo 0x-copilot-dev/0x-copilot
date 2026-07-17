@@ -1,4 +1,4 @@
-import type { Transport } from "@enterprise-search/chat-transport";
+import type { Transport } from "@0x-copilot/chat-transport";
 import { fireEvent, render, screen } from "@testing-library/react";
 import { describe, expect, it, vi } from "vitest";
 

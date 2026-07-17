@@ -5,7 +5,7 @@
 //
 // SCOPE: presentation-only. No transport, no router, no service calls.
 // The destination consumes the canonical `Tool` wire shape directly from
-// `@enterprise-search/api-types`; this file carries:
+// `@0x-copilot/api-types`; this file carries:
 //
 //   - the catalog filter axis slugs + labels (the master filter axis
 //     "My / Installed / Available / Custom / By kind" — tools-prd §7.2)
@@ -24,7 +24,7 @@ import type {
   ToolKind,
   ToolScope,
   ToolStatus,
-} from "@enterprise-search/api-types";
+} from "@0x-copilot/api-types";
 
 import type { StatusTone } from "../../shell/StatusPill";
 

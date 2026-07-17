@@ -12,13 +12,13 @@
 //   * Tests: an in-memory implementation that returns a canned list.
 //
 // All shapes (`PaletteSearchRequest`, `PaletteSearchResponse`,
-// `PaletteHit`, etc.) come from `@enterprise-search/api-types/palette`
+// `PaletteHit`, etc.) come from `@0x-copilot/api-types/palette`
 // — this file does not re-declare them. Zero `__brand:` declarations.
 
 import type {
   PaletteSearchRequest,
   PaletteSearchResponse,
-} from "@enterprise-search/api-types";
+} from "@0x-copilot/api-types";
 
 export interface PaletteSearchPort {
   /**

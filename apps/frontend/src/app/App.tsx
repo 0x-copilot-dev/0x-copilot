@@ -1,8 +1,8 @@
-import { ThemeProvider } from "@enterprise-search/design-system";
-import type { McpServer } from "@enterprise-search/api-types";
+import { ThemeProvider } from "@0x-copilot/design-system";
+import type { McpServer } from "@0x-copilot/api-types";
 import type { ReactElement } from "react";
 import { Suspense, lazy, useEffect, useState } from "react";
-import "@enterprise-search/design-system/styles.css";
+import "@0x-copilot/design-system/styles.css";
 import "streamdown/styles.css";
 import "../styles.css";
 import { decideApproval } from "../api/agentApi";
@@ -109,7 +109,7 @@ const SettingsScreen = lazy(() =>
 // screens above.
 //
 // TODO(merge): once P5-B's `<RoutinesDestination>` lands in
-// `@enterprise-search/chat-surface` and `ShellDestinationSlug` is
+// `@0x-copilot/chat-surface` and `ShellDestinationSlug` is
 // extended to include `"routines"`, RoutinesRoute keeps its current
 // shape — only the inner host-side list inside the route is replaced
 // with the package-shipped destination component.
@@ -151,7 +151,7 @@ import {
   useKeyValueStore,
   type ArtifactRoute,
   type ShellDestinationSlug,
-} from "@enterprise-search/chat-surface";
+} from "@0x-copilot/chat-surface";
 import { getAppTransport } from "../api/transport";
 import { HashRouter, migrateLegacySettingsPath } from "./HashRouter";
 import { ROOT_DESTINATION, type AppRoute } from "./routes";
@@ -308,8 +308,8 @@ const mcpOAuthCompletions = new Map<string, Promise<McpServer>>();
 
 export default function App(): ReactElement {
   // Construct the substrate-side KeyValueStore here (not inside
-  // EnterpriseSearchApp) so AuthProvider's `useKeyValueStore()` resolves
-  // to the real store. AuthProvider sits above EnterpriseSearchApp; if
+  // CopilotApp) so AuthProvider's `useKeyValueStore()` resolves
+  // to the real store. AuthProvider sits above CopilotApp; if
   // the provider were only mounted inside ChatShell, AuthProvider would
   // pull the context's no-op default and the dev IdP would always mint
   // for the DEFAULT persona instead of the one the user picked in
@@ -340,7 +340,7 @@ export default function App(): ReactElement {
  * the login screen; ``mfa_pending`` to the MFA prompt; only
  * ``authenticated`` renders the actual app shell.
  *
- * Lives here (rather than inside ``EnterpriseSearchApp``) so the rest of
+ * Lives here (rather than inside ``CopilotApp``) so the rest of
  * the app continues to assume identity is non-null — same invariant the
  * pre-A9 code relied on.
  */
@@ -413,7 +413,7 @@ function AuthGate(): ReactElement {
     <UserProfileProvider>
       <UserPreferencesProvider>
         <AppearanceProvider>
-          <EnterpriseSearchApp
+          <CopilotApp
             identity={{
               orgId: auth.identity.org_id,
               userId: auth.identity.user_id,
@@ -450,7 +450,7 @@ function completeMcpOAuthOnce(
   return completion;
 }
 
-function EnterpriseSearchApp({
+function CopilotApp({
   identity,
   roles,
 }: {
@@ -475,7 +475,7 @@ function EnterpriseSearchApp({
   // (so AuthProvider can see it). Pull it from context here to pass
   // through to ChatShell — same instance, single source of truth.
   const keyValueStore = useKeyValueStore();
-  // PresenceSignal is local to EnterpriseSearchApp — AuthProvider doesn't
+  // PresenceSignal is local to CopilotApp — AuthProvider doesn't
   // need it (nothing in auth listens for tab visibility), so we don't have
   // to hoist it the way KeyValueStore was hoisted. Constructed once via
   // useState; reads through globalThis.document each call so jsdom and

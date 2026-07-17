@@ -432,7 +432,7 @@ PR 1.1 already plans `idx_runtime_citations_conversation_doc (org_id, conversati
 from fastapi import APIRouter, Depends, Query, Request
 
 from agent_runtime.api.workspace_feed_service import WorkspaceFeedService
-from enterprise_service_contracts.scopes import RUNTIME_USE
+from copilot_service_contracts.scopes import RUNTIME_USE
 from runtime_api.auth import RuntimeServiceAuthenticator
 from runtime_api.rbac import RequireScopes
 from runtime_api.schemas import (
@@ -592,7 +592,7 @@ import { useEffect, useReducer } from "react";
 import type {
   RuntimeEventEnvelope,
   SubagentEntry,
-} from "@enterprise-search/api-types";
+} from "@0x-copilot/api-types";
 
 import { listSubagents } from "../../../api/agentApi";
 import { projectSubagentEvent } from "../utils/projectSubagentEvent";

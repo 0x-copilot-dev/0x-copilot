@@ -188,7 +188,7 @@ This reuses the existing role check in `runtime_api/rbac.py`; nothing new.
 
 Validation reuses the workspace's authoritative connector card registry already loaded by [`agent_runtime/capabilities/tools/cards.py`](../../services/ai-backend/src/agent_runtime/capabilities/tools/cards.py) — DRY, no second source of truth.
 
-### 2.7 Frontend contract (`@enterprise-search/api-types`)
+### 2.7 Frontend contract (`@0x-copilot/api-types`)
 
 Two additions only:
 
@@ -401,7 +401,7 @@ None blocking. A v2 enhancement could add **per-tool toggles inside a connector*
 - [ ] `RunService.create_run` derives scopes from the conversation when the header is absent; existing tests stay green.
 - [ ] One audit row per successful PATCH; chain verifier passes.
 - [ ] `backend-facade` exposes `PATCH /v1/agent/conversations/{id}/connectors`, preserves identity headers, never reaches `/internal/v1/*`.
-- [ ] `@enterprise-search/api-types` exports the two new types; `npm run typecheck` is green across `apps/frontend`, `packages/api-types`.
+- [ ] `@0x-copilot/api-types` exports the two new types; `npm run typecheck` is green across `apps/frontend`, `packages/api-types`.
 - [ ] `useConversationConnectors()` exposes `(scopes, patchScopes)`; `ConnectorPopover` calls it.
 - [ ] No new event family in `runtime_api/schemas/events.py`; the streaming handshake doc is untouched.
 - [ ] `make test` green; targeted ai-backend pytest suite green; frontend typecheck + build green.

@@ -29,7 +29,7 @@ import type {
   WebhookCreateResponse,
   WebhookHmacAlgo,
   WebhookSecretStrategy,
-} from "@enterprise-search/api-types";
+} from "@0x-copilot/api-types";
 
 import { useStepMachine } from "../../tools/onboarding/useStepMachine";
 

@@ -31,10 +31,10 @@
 // large uploads off the API hot path (sub-PRD §5.5).
 //
 // Wire types live in `./_library-stub` until P7-A's
-// `@enterprise-search/api-types/src/library.ts` lands on main.
+// `@0x-copilot/api-types/src/library.ts` lands on main.
 //
 // TODO(merge): swap every `./_library-stub` import for
-// `@enterprise-search/api-types`.
+// `@0x-copilot/api-types`.
 
 import type { RequestIdentity } from "./config";
 import { httpDelete, httpGet, httpPatchQuery, httpPostQuery } from "./http";

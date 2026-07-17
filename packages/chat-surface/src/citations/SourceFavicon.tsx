@@ -10,8 +10,8 @@
 // The `<img>` is `aria-hidden`; the consuming row already labels itself
 // with title + connector for assistive tech.
 
-import type { SourceEntry } from "@enterprise-search/api-types";
-import { AppIcon } from "@enterprise-search/design-system";
+import type { SourceEntry } from "@0x-copilot/api-types";
+import { AppIcon } from "@0x-copilot/design-system";
 import { useMemo, useState, type ReactElement } from "react";
 
 const FAVICON_BASE = "https://www.google.com/s2/favicons";

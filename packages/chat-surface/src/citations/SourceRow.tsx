@@ -8,8 +8,8 @@
 // its own preview mechanism (or omits the preview entirely); this file
 // doesn't change.
 
-import type { SourceEntry } from "@enterprise-search/api-types";
-import { Badge, Card, classNames } from "@enterprise-search/design-system";
+import type { SourceEntry } from "@0x-copilot/api-types";
+import { Badge, Card, classNames } from "@0x-copilot/design-system";
 import {
   forwardRef,
   type HTMLAttributes,

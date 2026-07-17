@@ -1,5 +1,5 @@
 // Web wrapper around the substrate-agnostic CitationChip in
-// @enterprise-search/chat-surface.
+// @0x-copilot/chat-surface.
 //
 // The headless chip is a pure renderer — it takes resolved citation
 // data as a prop. This wrapper owns the web-substrate-specific bits:
@@ -14,11 +14,8 @@
 // against an extension-host bridge and (optionally) omits the preview
 // trigger entirely. The chat-surface chip itself doesn't change.
 
-import type {
-  CitationSourceRef,
-  SourceEntry,
-} from "@enterprise-search/api-types";
-import { CitationChip as HeadlessCitationChip } from "@enterprise-search/chat-surface";
+import type { CitationSourceRef, SourceEntry } from "@0x-copilot/api-types";
+import { CitationChip as HeadlessCitationChip } from "@0x-copilot/chat-surface";
 import { useMemo, type ReactElement } from "react";
 
 import { useCitation } from "./citationsContext";

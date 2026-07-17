@@ -15,11 +15,11 @@ from threading import Lock
 from typing import Any
 
 import httpx
-from enterprise_service_contracts.auth_claims import (
+from copilot_service_contracts.auth_claims import (
     CLAIM_SID,
     ENV_REQUIRE_SESSION_BINDING,
 )
-from enterprise_service_contracts.headers import (
+from copilot_service_contracts.headers import (
     AUTH_HEADER,
     CONNECTOR_SCOPES_HEADER,
     ORG_HEADER,
@@ -592,7 +592,7 @@ class StepUpRequired(HTTPException):
             detail=detail,
             headers={
                 "WWW-Authenticate": (
-                    f'x-step-up max_age="{max_age_seconds}", realm="enterprise-search"'
+                    f'x-step-up max_age="{max_age_seconds}", realm="0x-copilot"'
                 ),
             },
         )

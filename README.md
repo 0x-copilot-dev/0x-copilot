@@ -1,6 +1,6 @@
-# Enterprise Search
+# 0xCopilot
 
-Enterprise Search is the workspace for a broader enterprise work surface: one product that helps executives and employees search, understand, and act across company systems such as Slack, Google Workspace, Atlassian, internal APIs, MCP servers, and enterprise knowledge stores.
+0xCopilot is the workspace for a broader enterprise work surface: one product that helps executives and employees search, understand, and act across company systems such as Slack, Google Workspace, Atlassian, internal APIs, MCP servers, and enterprise knowledge stores.
 
 This is one GitHub monorepo with multiple deployable components. The runtime architecture is microservice-style: each service owns its API, Docker image, local dependency environment, tests, and deployment path.
 
@@ -13,7 +13,7 @@ architecture and should not be imported from or referenced by builds until they
 exist.
 
 ```text
-enterprise-search/
+0x-copilot/
   apps/
     frontend/        # implemented
     mac/             # planned
@@ -75,10 +75,10 @@ The product should feel like a trusted operating layer for enterprise work, not 
 
 Each deployable component should have its own Docker image:
 
-- `ghcr.io/<org>/enterprise-search-backend-facade`
-- `ghcr.io/<org>/enterprise-search-backend`
+- `ghcr.io/<org>/0x-copilot-backend-facade`
+- `ghcr.io/<org>/0x-copilot-backend`
 - `ghcr.io/<org>/agent-runtime-backend`
-- `ghcr.io/<org>/enterprise-search-frontend`
+- `ghcr.io/<org>/0x-copilot-frontend`
 
 Each deployable component also owns its local dependency environment:
 
@@ -107,7 +107,7 @@ The workspace now includes initial scaffolding for `apps/frontend`, `services/ba
 Use the root `Makefile` for the default workflow:
 
 ```bash
-cd enterprise-search
+cd 0x-copilot
 make setup
 ```
 
@@ -117,7 +117,7 @@ Python service. Do not reuse a sibling service `.venv`.
 Equivalent manual setup:
 
 ```bash
-cd enterprise-search
+cd 0x-copilot
 npm install
 
 cd services/backend
@@ -155,7 +155,7 @@ images install the package during build.
 Run the local end-to-end stack with one command:
 
 ```bash
-cd enterprise-search
+cd 0x-copilot
 make dev
 ```
 
@@ -204,8 +204,8 @@ PYTHONPATH=src:../../packages/service-contracts/src \
 ```
 
 ```bash
-cd enterprise-search
-npm run dev --workspace @enterprise-search/frontend -- --host 127.0.0.1
+cd 0x-copilot
+npm run dev --workspace @0x-copilot/frontend -- --host 127.0.0.1
 ```
 
 ## Auth In Development
@@ -293,7 +293,7 @@ paused stream can resume without replaying already-rendered events.
 Build and run the full local stack through Docker:
 
 ```bash
-cd enterprise-search
+cd 0x-copilot
 OPENAI_API_KEY=$OPENAI_API_KEY make docker-dev
 ```
 
@@ -324,7 +324,7 @@ want frontend, facade, backend, and AI backend together.
 or missing required secrets:
 
 ```bash
-cd enterprise-search
+cd 0x-copilot
 ENTERPRISE_AUTH_SECRET=... \
 ENTERPRISE_SERVICE_TOKEN=... \
 MCP_TOKEN_VAULT_SECRET=... \

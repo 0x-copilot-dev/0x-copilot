@@ -3,7 +3,7 @@ import { z, type ZodIssue } from "zod";
 import type {
   SaaSRendererAdapter,
   SaaSRendererAdapterOrigin,
-} from "@enterprise-search/chat-surface";
+} from "@0x-copilot/chat-surface";
 
 // Q1 (PRD §9.5.1). Run on every load of a tier-2 module from disk. A failure
 // here means the generated module does not implement SaaSRendererAdapter and

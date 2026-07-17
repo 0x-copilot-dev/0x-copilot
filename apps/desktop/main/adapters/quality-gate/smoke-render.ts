@@ -1,4 +1,4 @@
-import type { SaaSRendererAdapter } from "@enterprise-search/chat-surface";
+import type { SaaSRendererAdapter } from "@0x-copilot/chat-surface";
 
 // Q4 (PRD §9.5.1). Run once before activation. Render the adapter against a
 // synthetic minimal state + diff and refuse to install if it throws, exceeds

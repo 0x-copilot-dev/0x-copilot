@@ -16,7 +16,7 @@
 import type { ReactElement } from "react";
 import { useEffect, useMemo, useState } from "react";
 
-import { Badge, Button, Card, Field } from "@enterprise-search/design-system";
+import { Badge, Button, Card, Field } from "@0x-copilot/design-system";
 
 import { errorMessage } from "../../utils/errors";
 

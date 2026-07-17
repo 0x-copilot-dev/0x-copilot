@@ -1,7 +1,7 @@
 import tsParser from "@typescript-eslint/parser";
 import globals from "globals";
 
-// Substrate-portability enforcement for @enterprise-search/chat-surface.
+// Substrate-portability enforcement for @0x-copilot/chat-surface.
 //
 // This package is mounted in two substrates today (web via apps/frontend,
 // desktop webview via apps/desktop — Phase 2). Anything in here that
@@ -72,8 +72,8 @@ export default [
           patterns: [
             {
               group: [
-                "@enterprise-search/frontend",
-                "@enterprise-search/frontend/*",
+                "@0x-copilot/frontend",
+                "@0x-copilot/frontend/*",
                 "apps/*",
                 "**/apps/frontend/*",
               ],

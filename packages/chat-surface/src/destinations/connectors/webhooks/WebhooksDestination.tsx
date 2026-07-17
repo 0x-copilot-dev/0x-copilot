@@ -10,8 +10,8 @@
 
 import { type CSSProperties, type ReactElement } from "react";
 
-import type { SectionResult, TriggerId } from "@enterprise-search/api-types";
-import type { Webhook } from "@enterprise-search/api-types";
+import type { SectionResult, TriggerId } from "@0x-copilot/api-types";
+import type { Webhook } from "@0x-copilot/api-types";
 
 import { DocList } from "../../../shell/DocList";
 import { EmptyState } from "../../../shell/EmptyState";

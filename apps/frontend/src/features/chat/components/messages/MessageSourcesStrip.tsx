@@ -10,8 +10,8 @@
 // slash-overlay path) until PR 3.2 mounts the right-rail pane and takes
 // over the focus handshake.
 
-import type { CitationSourceRef } from "@enterprise-search/api-types";
-import { AppIcon, classNames } from "@enterprise-search/design-system";
+import type { CitationSourceRef } from "@0x-copilot/api-types";
+import { AppIcon, classNames } from "@0x-copilot/design-system";
 import type { ReactElement } from "react";
 
 export interface MessageSourcesStripProps {

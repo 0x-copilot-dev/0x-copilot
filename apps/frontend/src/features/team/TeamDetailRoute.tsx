@@ -6,10 +6,7 @@
 
 import { useEffect, useState, type ReactElement } from "react";
 
-import type {
-  PersonDetailResponse,
-  UserId,
-} from "@enterprise-search/api-types";
+import type { PersonDetailResponse, UserId } from "@0x-copilot/api-types";
 
 import type { RequestIdentity } from "../../api/config";
 import { fetchPerson } from "../../api/teamApi";

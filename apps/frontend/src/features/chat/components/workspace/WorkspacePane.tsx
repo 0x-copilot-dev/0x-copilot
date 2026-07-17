@@ -9,12 +9,8 @@
 // viewports < 1100px the pane switches to overlay mode (CSS handles
 // the position-fixed anchoring; this component just sets a data attr).
 
-import { IconButton } from "@enterprise-search/design-system";
-import type {
-  Skill,
-  SourceEntry,
-  SubagentEntry,
-} from "@enterprise-search/api-types";
+import { IconButton } from "@0x-copilot/design-system";
+import type { Skill, SourceEntry, SubagentEntry } from "@0x-copilot/api-types";
 import { useId, type ReactElement } from "react";
 
 import type { SourceEntryMap } from "../../chatModel/sourcesReducer";

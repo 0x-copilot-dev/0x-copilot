@@ -7,7 +7,7 @@ from collections.abc import Mapping
 from datetime import datetime, timezone
 from typing import TYPE_CHECKING, ClassVar
 
-from enterprise_service_contracts.adapter_allowlist import load_adapter_allowlist
+from copilot_service_contracts.adapter_allowlist import load_adapter_allowlist
 from pydantic import ValidationError
 
 from agent_runtime.capabilities.render_adapter_generator.models import (
@@ -28,7 +28,7 @@ if TYPE_CHECKING:  # pragma: no cover - typing-only imports
 
 
 # Single source of truth: the JSON ships from
-# packages/service-contracts/src/enterprise_service_contracts/adapter_allowlist.json
+# packages/service-contracts/src/copilot_service_contracts/adapter_allowlist.json
 # and is also consumed by the desktop's 6A AST scanner via
 # packages/api-types/src/adapterAllowlist.ts.
 _ALLOWLIST = load_adapter_allowlist()

@@ -248,7 +248,7 @@ class SyslogCefExporter:
             if value
         )
         return (
-            f"CEF:0|EnterpriseSearch|Backend|1.0|"
+            f"CEF:0|Copilot|Backend|1.0|"
             f"{event.event_type}|{event.event_type}|{severity}|{extensions}"
         )
 

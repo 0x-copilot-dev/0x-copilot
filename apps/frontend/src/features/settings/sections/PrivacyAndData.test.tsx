@@ -21,7 +21,7 @@ import type {
   UpdateWorkspaceDefaultsRequest,
   WorkspaceDefaultsResponse,
   WorkspaceExportResponse,
-} from "@enterprise-search/api-types";
+} from "@0x-copilot/api-types";
 import type { UseWorkspaceDefaultsResult } from "../useWorkspaceDefaults";
 
 const mockGetRetention = vi.fn<() => Promise<RetentionEffectiveResponse>>();

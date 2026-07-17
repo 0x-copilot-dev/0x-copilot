@@ -21,7 +21,7 @@ import type {
   UpdateWorkspaceDefaultsRequest,
   WorkspaceBehaviorOverrides,
   WorkspaceExportResponse,
-} from "@enterprise-search/api-types";
+} from "@0x-copilot/api-types";
 import {
   Badge,
   Button,
@@ -30,7 +30,7 @@ import {
   Switch,
   TextInput,
   classNames,
-} from "@enterprise-search/design-system";
+} from "@0x-copilot/design-system";
 import type { ReactElement } from "react";
 import { useCallback, useEffect, useState } from "react";
 import {

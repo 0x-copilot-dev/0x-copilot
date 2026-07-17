@@ -24,8 +24,8 @@
  *   - anything else                       → server detail verbatim
  */
 
-import { Card } from "@enterprise-search/design-system";
-import type { SiweSessionResponse } from "@enterprise-search/api-types";
+import { Card } from "@0x-copilot/design-system";
+import type { SiweSessionResponse } from "@0x-copilot/api-types";
 import type { ReactElement } from "react";
 import { useCallback, useContext, useEffect, useRef, useState } from "react";
 

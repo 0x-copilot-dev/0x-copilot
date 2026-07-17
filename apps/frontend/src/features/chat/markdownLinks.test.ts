@@ -1,4 +1,4 @@
-import { markdownLinkLabel } from "@enterprise-search/chat-surface";
+import { markdownLinkLabel } from "@0x-copilot/chat-surface";
 import { describe, expect, it } from "vitest";
 
 describe("markdownLinkLabel", () => {

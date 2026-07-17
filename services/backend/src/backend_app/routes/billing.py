@@ -22,7 +22,7 @@ from __future__ import annotations
 import os
 from datetime import datetime, timezone
 
-from enterprise_service_contracts.scopes import ADMIN_USERS, RUNTIME_USE
+from copilot_service_contracts.scopes import ADMIN_USERS, RUNTIME_USE
 from fastapi import Depends, FastAPI, HTTPException, Query, Request, status
 from pydantic import BaseModel, Field
 

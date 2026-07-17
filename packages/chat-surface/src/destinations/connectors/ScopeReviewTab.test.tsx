@@ -3,7 +3,7 @@
 import { fireEvent, render, screen } from "@testing-library/react";
 import { describe, expect, it, vi } from "vitest";
 
-import type { ConnectorScopeEntry } from "@enterprise-search/api-types";
+import type { ConnectorScopeEntry } from "@0x-copilot/api-types";
 
 import { ScopeReviewTab } from "./ScopeReviewTab";
 

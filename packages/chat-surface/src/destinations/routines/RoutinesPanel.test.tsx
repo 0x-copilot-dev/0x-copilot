@@ -4,7 +4,7 @@
 // trigger-kind chips (All / Schedule / Webhook / Event / Manual),
 // project filter (with ItemLink), "New routine" CTA, optional footer.
 
-import type { ProjectId } from "@enterprise-search/api-types";
+import type { ProjectId } from "@0x-copilot/api-types";
 import { fireEvent, render, screen } from "@testing-library/react";
 import { describe, expect, it, vi } from "vitest";
 

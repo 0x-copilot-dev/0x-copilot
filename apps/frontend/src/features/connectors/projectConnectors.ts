@@ -21,7 +21,7 @@
 import type {
   ConversationConnectorScopes,
   McpServer,
-} from "@enterprise-search/api-types";
+} from "@0x-copilot/api-types";
 import { isAuthenticated } from "./authStateDisplay";
 
 export type ConnectorRowState =

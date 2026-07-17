@@ -278,7 +278,7 @@ The Audit log section is a single table with three FE pieces:
 - `apps/frontend/src/features/settings/sections/audit/useAuditLog.ts` (new) — a hook that calls `/v1/audit` with the cursor, exposes `(rows, fetchMore, isLoading, degraded_streams)`.
 - `apps/frontend/src/features/settings/sections/audit/AuditRow.tsx` (new) — one row renderer; consults the typed action catalog (`packages/api-types`) for the headline; falls back to generic.
 
-Re-uses `@enterprise-search/design-system`: `Table`, `Pill` (status outcomes), `Avatar` (actor), `RelativeTime`, `EmptyState`, `Pagination`. **No new design-system primitive.**
+Re-uses `@0x-copilot/design-system`: `Table`, `Pill` (status outcomes), `Avatar` (actor), `RelativeTime`, `EmptyState`, `Pagination`. **No new design-system primitive.**
 
 The link from Settings → Members → "Audit log →" lives in the existing `MembersSettings.tsx` (PR 4.2) — it is currently a `<a>` to a missing route; PR 7.1 connects the route.
 
@@ -455,7 +455,7 @@ The **one** library decision worth considering is `httpx` for the facade's fan-o
 | Heap merge              | `heapq.nlargest` (stdlib)                                                                                                         | —                                            |
 | Service boundary        | Facade fan-out pattern; backend `RequireScopes`; ai-backend `RuntimeServiceAuthenticator`                                         | —                                            |
 | Streaming               | None — this PR doesn't touch streaming                                                                                            | —                                            |
-| FE primitives           | `Table`, `Avatar`, `Pill`, `RelativeTime`, `EmptyState` from `@enterprise-search/design-system`                                   | —                                            |
+| FE primitives           | `Table`, `Avatar`, `Pill`, `RelativeTime`, `EmptyState` from `@0x-copilot/design-system`                                          | —                                            |
 | FE typed-action catalog | TS literal-union types — same pattern PR 1.4 used for approval kinds                                                              | one TS const map (`AUDIT_ACTION_CATALOG`)    |
 
 **Net new code** is intentionally small:
@@ -574,7 +574,7 @@ Lives in the same PR. Minimum bar before merge.
 - [ ] All three services authorise via `ADMIN_AUDIT_EXPORT`. Non-admin → 403.
 - [ ] Cursor is opaque base64-encoded JSON of `(stream → last_seq_seen)`; round-trips; rejects `invalid_cursor` payloads.
 - [ ] `degraded_streams` populates when one stream errors; the other streams still return rows.
-- [ ] `@enterprise-search/api-types` exports `AuditRow`, `AuditListRequest`, `AuditListResponse`, `AUDIT_ACTION_CATALOG`.
+- [ ] `@0x-copilot/api-types` exports `AuditRow`, `AuditListRequest`, `AuditListResponse`, `AUDIT_ACTION_CATALOG`.
 - [ ] `apps/frontend/src/features/settings/sections/AuditLog.tsx` renders filters + paginated table; the link from `MembersSettings.tsx` resolves.
 - [ ] No new event types in `runtime_api/schemas/events.py`. `RuntimeEventEnvelope` Pydantic schema is byte-identical pre/post merge.
 - [ ] Existing `POST /internal/v1/audit/export` route is **untouched**.
@@ -592,7 +592,7 @@ Lives in the same PR. Minimum bar before merge.
 - [`services/ai-backend/migrations/0003_audit_hardening.sql`](../../services/ai-backend/migrations/0003_audit_hardening.sql) — same for `runtime_audit_log`.
 - [`services/backend/migrations/0004_identity_foundation.sql`](../../services/backend/migrations/0004_identity_foundation.sql) — `identity_audit_events` schema + indexes used as-is.
 - [`services/ai-backend/migrations/0001_initial_runtime_persistence.sql`](../../services/ai-backend/migrations/0001_initial_runtime_persistence.sql) — `runtime_audit_log` schema + indexes used as-is.
-- [`enterprise_service_contracts.scopes.ADMIN_AUDIT_EXPORT`](../../packages/service-contracts/src/enterprise_service_contracts/scopes.py) — RBAC scope reused by this PR.
+- [`copilot_service_contracts.scopes.ADMIN_AUDIT_EXPORT`](../../packages/service-contracts/src/copilot_service_contracts/scopes.py) — RBAC scope reused by this PR.
 - [`docs/architecture/runtime-stream-handshake.md`](../architecture/runtime-stream-handshake.md) — stays unchanged; this PR is a non-event.
 - [`docs/architecture/service-boundaries.md`](../architecture/service-boundaries.md) — facade-only ingress; backend owns 4 streams, ai-backend owns 1, facade composes.
 - [`docs/new-design/pr-1.4-two-stage-approvals.md`](pr-1.4-two-stage-approvals.md) — adds `approval.forwarded` action this PR surfaces.

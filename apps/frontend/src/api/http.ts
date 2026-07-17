@@ -1,4 +1,4 @@
-import { UnauthorizedError } from "@enterprise-search/chat-transport";
+import { UnauthorizedError } from "@0x-copilot/chat-transport";
 
 import type { RequestIdentity } from "./config";
 import { identityParams } from "./config";
@@ -11,7 +11,7 @@ import {
 } from "./transport";
 
 // Re-exported for callers that catch typed auth errors. Source of truth is
-// @enterprise-search/chat-transport — keep the symbol here only as a
+// @0x-copilot/chat-transport — keep the symbol here only as a
 // backward-compatible re-export so AuthContext + tests don't need to chase
 // the package boundary in every catch block.
 export { UnauthorizedError };

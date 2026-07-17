@@ -21,7 +21,7 @@ import type {
   ClipboardPort,
   FilePickerPort,
   NotificationPort,
-} from "@enterprise-search/chat-surface";
+} from "@0x-copilot/chat-surface";
 
 export interface PortBundle {
   readonly badge: BadgePort;

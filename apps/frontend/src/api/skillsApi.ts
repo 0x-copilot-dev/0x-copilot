@@ -3,7 +3,7 @@ import type {
   Skill,
   SkillListResponse,
   UpdateSkillRequest,
-} from "@enterprise-search/api-types";
+} from "@0x-copilot/api-types";
 import type { RequestIdentity } from "./config";
 import { httpDelete, httpGet, httpPost, httpPutQuery } from "./http";
 

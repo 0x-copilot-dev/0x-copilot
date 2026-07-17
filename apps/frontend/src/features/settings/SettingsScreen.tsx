@@ -3,7 +3,7 @@ import type {
   McpServer,
   Skill,
   SkillScope,
-} from "@enterprise-search/api-types";
+} from "@0x-copilot/api-types";
 import {
   Badge,
   Button,
@@ -12,7 +12,7 @@ import {
   Select,
   Switch,
   TextInput,
-} from "@enterprise-search/design-system";
+} from "@0x-copilot/design-system";
 import type { FormEvent, ReactElement } from "react";
 import { useEffect, useMemo, useState } from "react";
 import { useAuth } from "../auth/AuthContext";

@@ -30,7 +30,7 @@ from collections.abc import Iterator
 from typing import Any
 
 import pytest
-from enterprise_service_contracts.scopes import ADMIN_USERS, RUNTIME_USE
+from copilot_service_contracts.scopes import ADMIN_USERS, RUNTIME_USE
 from fastapi.testclient import TestClient
 
 from agent_runtime.api.project_resolver import ProjectResolverPort

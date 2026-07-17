@@ -2,7 +2,7 @@
 
 Status: **proposal — substrate decided (custom Electron)** · Owner: TBD · Last updated: 2026-05-17
 
-This document specifies the architecture for the Mac and Windows desktop client of the Atlas / enterprise-search product. It is the **architecture spec** (what we're building and why); the [Desktop App PRD](../plan/desktop/PRD.md) is the execution plan (phases, agents, orchestration). Read this first, then the PRD.
+This document specifies the architecture for the Mac and Windows desktop client of the Atlas / 0x-copilot product. It is the **architecture spec** (what we're building and why); the [Desktop App PRD](../plan/desktop/PRD.md) is the execution plan (phases, agents, orchestration). Read this first, then the PRD.
 
 This doc supersedes the prior fork-based draft (dated 2026-05-14). The prior `desktop-app-rollout.md` was replaced by the PRD and removed in Phase 0.
 
@@ -51,7 +51,7 @@ The substrate options were custom Electron, VS Code marketplace extension, and C
 
 The decision was **empirically validated by Phase S** of the PRD. Both Electron (S1-B) and a VS Code marketplace extension (S1-A) variant were built around the same shared renderer code (`packages/surface-renderers/email`); substrate cost was measured side-by-side (LOC, build complexity, dev experience, visual fidelity, security boundary). Custom Electron won on single source of truth, simple & elegant, and forward-fit for tier-2 dynamic-adapter loading. Full data: [phase-0.5/S2-decision.md](../plan/desktop/phase-0.5/S2-decision.md).
 
-Reasoning summary (full chain in [project-desktop-substrate-direction](../../.claude/projects/-Users-parthpahwa-Documents-work-enterprise-search/memory/project_desktop_substrate_direction.md)):
+Reasoning summary (full chain in [project-desktop-substrate-direction](../../.claude/projects/-Users-parthpahwa-Documents-work-0x-copilot/memory/project_desktop_substrate_direction.md)):
 
 - **DRY** is a wash — VS Code's claimed reuse (diff editor, tabs, tree, command palette) doesn't apply: our diffs are inline annotations on structured forms (not text-line diffs), tab strips are segment controls (not editor groups), only Chats has a tree, command palette is ~150 LOC.
 - **Substitution** favors Electron — fewer mount layers, no webview-RPC contract to version.

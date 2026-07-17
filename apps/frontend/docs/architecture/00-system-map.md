@@ -39,15 +39,15 @@ apps/frontend/
 
 ## `src/app/` — the gate
 
-| File                  | Owns                                                                                                                                          |
-| --------------------- | --------------------------------------------------------------------------------------------------------------------------------------------- |
-| `App.tsx`             | `<ThemeProvider>` → `<AuthProvider>` → `<AuthGate>` → `<EnterpriseSearchApp>`. Owns the route reducer (`routeFromLocation`, `applyAppRoute`). |
-| `keymap.ts` / `.test` | Global keyboard map (Cmd-K, Cmd-/, Esc, etc.) registered via `tinykeys`.                                                                      |
+| File                  | Owns                                                                                                                                 |
+| --------------------- | ------------------------------------------------------------------------------------------------------------------------------------ |
+| `App.tsx`             | `<ThemeProvider>` → `<AuthProvider>` → `<AuthGate>` → `<CopilotApp>`. Owns the route reducer (`routeFromLocation`, `applyAppRoute`). |
+| `keymap.ts` / `.test` | Global keyboard map (Cmd-K, Cmd-/, Esc, etc.) registered via `tinykeys`.                                                             |
 
 `<AuthGate>` is what makes the rest of the app safe to assume `identity` is
 non-null. `initial` / `loading` → spinner. `mfa_pending` → `<MfaPrompt>`.
 `anonymous` / `error` / `workspace_pick` / magic-link callback URL →
-`<LoginScreen>`. Only `authenticated` renders `<EnterpriseSearchApp>`.
+`<LoginScreen>`. Only `authenticated` renders `<CopilotApp>`.
 
 ---
 
@@ -124,9 +124,9 @@ See [features/observability.md](../features/observability.md) for the safe-attri
 
 ## Shared workspace packages
 
-- `@enterprise-search/api-types` — public payload shapes. Update **here**
+- `@0x-copilot/api-types` — public payload shapes. Update **here**
   (in `packages/api-types`) when a route's request/response changes.
-- `@enterprise-search/design-system` — reusable UI primitives + tokens.
+- `@0x-copilot/design-system` — reusable UI primitives + tokens.
   Feature workflows stay in this app; only stable, reusable primitives
   graduate.
 

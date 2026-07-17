@@ -17,10 +17,10 @@
 // Vite proxy → facade.
 //
 // Wire types live in `./_routines-stub` until P5-A's
-// `@enterprise-search/api-types/src/routines.ts` lands on main.
+// `@0x-copilot/api-types/src/routines.ts` lands on main.
 //
 // TODO(merge): swap every `./_routines-stub` import for
-// `@enterprise-search/api-types`.
+// `@0x-copilot/api-types`.
 
 import type { RequestIdentity } from "./config";
 import { httpDelete, httpGet, httpPatchQuery, httpPostQuery } from "./http";

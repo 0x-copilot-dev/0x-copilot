@@ -173,12 +173,12 @@ Each line is `{"ts":"<iso>","event":{...}}` — single record per line, never re
 ## Done criteria
 
 - [x] Sub-PRD committed first
-- [ ] `npm test --workspace @enterprise-search/chat-transport` passes (existing 26 + new tests)
-- [ ] `npm test --workspace @enterprise-search/desktop` passes (existing 36 + new tests)
-- [ ] `npm test --workspace @enterprise-search/chat-surface` still passes (untouched)
-- [ ] `npm run typecheck --workspace @enterprise-search/desktop` clean
-- [ ] `npm run typecheck --workspace @enterprise-search/chat-transport` clean
-- [ ] `npm run lint --workspace @enterprise-search/desktop` clean
+- [ ] `npm test --workspace @0x-copilot/chat-transport` passes (existing 26 + new tests)
+- [ ] `npm test --workspace @0x-copilot/desktop` passes (existing 36 + new tests)
+- [ ] `npm test --workspace @0x-copilot/chat-surface` still passes (untouched)
+- [ ] `npm run typecheck --workspace @0x-copilot/desktop` clean
+- [ ] `npm run typecheck --workspace @0x-copilot/chat-transport` clean
+- [ ] `npm run lint --workspace @0x-copilot/desktop` clean
 
 ## Coordination notes
 

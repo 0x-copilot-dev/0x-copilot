@@ -1,8 +1,8 @@
 // @vitest-environment jsdom
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
-import { clearRegistry, resolveAdapter } from "@enterprise-search/chat-surface";
-import { CHANNELS, type WindowBridge } from "@enterprise-search/chat-transport";
+import { clearRegistry, resolveAdapter } from "@0x-copilot/chat-surface";
+import { CHANNELS, type WindowBridge } from "@0x-copilot/chat-transport";
 
 import { Tier2Bridge } from "./Tier2Bridge";
 

@@ -45,8 +45,8 @@ runtime/<platform>-<arch>/
 ```
 
 `site-packages` includes the pinned third-party set (`--require-hashes` for
-backend/facade) plus `enterprise-service-contracts` and
-`enterprise-audit-chain`. Every service process runs with
+backend/facade) plus `copilot-service-contracts` and
+`copilot-audit-chain`. Every service process runs with
 `PYTHONPATH=<svc>/site-packages:<svc>/src` — nothing else.
 
 ## Boot contract (proven by run-local.mjs)

@@ -143,16 +143,16 @@ path: '/drafts/draft-1/events', ... })` delivers — in order over
   chat-surface's existing substrate-port ESLint rule: no bare `window`,
   `document`, `fetch`, `localStorage`, `EventSource`; no import from
   `apps/*` or `chat-surface/src/shell`. The ESLint rule is verified by
-  running `npm run lint --workspace @enterprise-search/surface-renderers`.
+  running `npm run lint --workspace @0x-copilot/surface-renderers`.
 
 ## Interfaces consumed
 
-- `Transport` from `@enterprise-search/chat-transport` —
+- `Transport` from `@0x-copilot/chat-transport` —
   `packages/chat-transport/src/transport.ts`. The on-disk shape:
   `request<TRes>(req): Promise<TRes>`, `subscribeServerSentEvents(opts): SseSubscription`,
   `getSession(): Session`, `capabilities(): TransportCapabilities`.
 - `SseSubscribeOptions`, `SseSubscription`, `Session`, `TypedRequest`,
-  `TransportCapabilities` from `@enterprise-search/chat-transport` —
+  `TransportCapabilities` from `@0x-copilot/chat-transport` —
   `packages/chat-transport/src/types.ts`.
 - `React`, `react/jsx-runtime` — peer.
 
@@ -311,7 +311,7 @@ export const EMAIL_FIXTURE: {
 2. **Deep import vs main export for MockTransport.** Both `MockTransport`
    and `EMAIL_FIXTURE` are exported from `packages/chat-transport/src/index.ts`
    (the main barrel) so variant shells can `import { MockTransport, EMAIL_FIXTURE }
-from '@enterprise-search/chat-transport'`. A `package.json#exports`
+from '@0x-copilot/chat-transport'`. A `package.json#exports`
    subpath was considered but adds Node 18+ exports-conditions machinery
    that none of our other packages use; main-barrel is consistent.
 3. **Vitest in chat-surface / chat-transport.** Neither package currently
@@ -327,14 +327,14 @@ from '@enterprise-search/chat-transport'`. A `package.json#exports`
 ## Done criteria
 
 - [ ] All FRs met.
-- [ ] `npm run typecheck --workspace @enterprise-search/chat-transport
---workspace @enterprise-search/chat-surface
---workspace @enterprise-search/surface-renderers` passes.
-- [ ] `npm test --workspace @enterprise-search/chat-transport
---workspace @enterprise-search/chat-surface
---workspace @enterprise-search/surface-renderers` passes.
-- [ ] `npm run lint --workspace @enterprise-search/chat-surface
---workspace @enterprise-search/surface-renderers` passes.
+- [ ] `npm run typecheck --workspace @0x-copilot/chat-transport
+--workspace @0x-copilot/chat-surface
+--workspace @0x-copilot/surface-renderers` passes.
+- [ ] `npm test --workspace @0x-copilot/chat-transport
+--workspace @0x-copilot/chat-surface
+--workspace @0x-copilot/surface-renderers` passes.
+- [ ] `npm run lint --workspace @0x-copilot/chat-surface
+--workspace @0x-copilot/surface-renderers` passes.
 - [ ] No imports outside the in-scope list above.
 - [ ] No bare browser primitives (chat-surface + surface-renderers).
 - [ ] No new third-party dependency without justification — added vitest +

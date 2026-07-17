@@ -1,4 +1,4 @@
-import type { Transport } from "@enterprise-search/chat-transport";
+import type { Transport } from "@0x-copilot/chat-transport";
 
 export interface PendingDiff {
   readonly diffId: string;

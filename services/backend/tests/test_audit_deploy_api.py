@@ -3,7 +3,7 @@ from __future__ import annotations
 import pytest
 from fastapi.testclient import TestClient
 
-from enterprise_service_contracts.headers import (
+from copilot_service_contracts.headers import (
     ORG_HEADER,
     SERVICE_TOKEN_HEADER,
     USER_HEADER,
@@ -27,10 +27,10 @@ def _payload(**overrides):
         "environment": "production",
         "release_sha": "abc1234567890abcdef",
         "image_digests": [
-            {"component": "enterprise-search-backend", "digest": SHA256_BACKEND},
-            {"component": "enterprise-search-backend-facade", "digest": SHA256_FACADE},
-            {"component": "enterprise-search-ai-backend", "digest": SHA256_AI},
-            {"component": "enterprise-search-frontend", "digest": SHA256_FRONTEND},
+            {"component": "0x-copilot-backend", "digest": SHA256_BACKEND},
+            {"component": "0x-copilot-backend-facade", "digest": SHA256_FACADE},
+            {"component": "0x-copilot-ai-backend", "digest": SHA256_AI},
+            {"component": "0x-copilot-frontend", "digest": SHA256_FRONTEND},
         ],
         "approver": "alice",
         "workflow_run_url": "https://github.com/example/repo/actions/runs/12345",

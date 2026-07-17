@@ -251,7 +251,7 @@ export type RoutineId = string & { readonly __brand: "RoutineId" };
 export type ApprovalId = string & { readonly __brand: "ApprovalId" };
 ```
 
-Existing types (e.g., `ConversationId` in `chat-surface/destinations/home`) are removed; everyone imports from `@enterprise-search/api-types`.
+Existing types (e.g., `ConversationId` in `chat-surface/destinations/home`) are removed; everyone imports from `@0x-copilot/api-types`.
 
 ### 2.2 Terminology — "approval" is the noun; "approval_request" is the event
 
@@ -316,7 +316,7 @@ No drift fix needed. Naming convention: every `<Resource>Status` enum is local t
 The registry lives at `packages/chat-surface/src/refs/registry.ts`. Public API:
 
 ```typescript
-import type { ItemKind, ItemRef } from "@enterprise-search/api-types";
+import type { ItemKind, ItemRef } from "@0x-copilot/api-types";
 
 export interface ItemRefResolved {
   readonly label: string;

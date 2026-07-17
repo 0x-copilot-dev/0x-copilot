@@ -14,7 +14,7 @@ import type {
   ToolStatus,
   TenantId,
   UserId,
-} from "@enterprise-search/api-types";
+} from "@0x-copilot/api-types";
 
 import { ToolCard } from "./ToolCard";
 import { ToolsDestination } from "./ToolsDestination";

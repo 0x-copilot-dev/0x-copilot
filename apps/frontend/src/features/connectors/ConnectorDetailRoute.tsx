@@ -12,7 +12,7 @@
 //      collapsing the detail view.
 //
 // The detail VIEW component (`<ConnectorDetailView>`, `<ScopeReviewTab>`,
-// `<ConsumersTab>`, `<ReadAuditTab>`) ships from `@enterprise-search/
+// `<ConsumersTab>`, `<ReadAuditTab>`) ships from `@0x-copilot/
 // chat-surface` in a sibling worktree (P11-B-finish). Until that lands,
 // the route renders a host-side scaffold that exposes the same
 // callbacks via data-testid hooks so the route is exercisable today.
@@ -27,7 +27,7 @@ import type {
   ConnectorDetailResponse,
   ConnectorId,
   ConnectorScopeEntry,
-} from "@enterprise-search/api-types";
+} from "@0x-copilot/api-types";
 
 import type { RequestIdentity } from "../../api/config";
 import {

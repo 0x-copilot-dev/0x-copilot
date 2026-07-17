@@ -1,5 +1,5 @@
 {
-  "name": "@enterprise-search/frontend",
+  "name": "@0x-copilot/frontend",
   "version": "0.1.0",
   "private": true,
   "type": "module",
@@ -11,8 +11,8 @@
     "lint": "eslint src"
   },
   "dependencies": {
-    "@enterprise-search/api-types": "0.1.0",
-    "@enterprise-search/design-system": "0.1.0",
+    "@0x-copilot/api-types": "0.1.0",
+    "@0x-copilot/design-system": "0.1.0",
     "@opentelemetry/api": "1.9.1",
     "@opentelemetry/context-zone": "2.9.0",
     "@opentelemetry/exporter-trace-otlp-http": "0.220.0",

@@ -6,7 +6,7 @@
 // applied subset in place; the panel re-pulls so the user sees what
 // actually landed.
 
-import { Button, Card, Field } from "@enterprise-search/design-system";
+import { Button, Card, Field } from "@0x-copilot/design-system";
 import { type ReactElement, useEffect, useMemo, useState } from "react";
 import { ConfirmDialog } from "./ConfirmDialog";
 import {

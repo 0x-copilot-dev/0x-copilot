@@ -6,8 +6,8 @@
  * loading shimmer otherwise. Pure composition — no business logic.
  */
 
-import { Card } from "@enterprise-search/design-system";
-import type { UsagePeriod } from "@enterprise-search/api-types";
+import { Card } from "@0x-copilot/design-system";
+import type { UsagePeriod } from "@0x-copilot/api-types";
 import type { ReactElement } from "react";
 
 import type { RequestIdentity } from "../../../../../api/config";

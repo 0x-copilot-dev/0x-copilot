@@ -30,7 +30,7 @@ import {
   type ReactNode,
 } from "react";
 
-import type { ProjectId } from "@enterprise-search/api-types";
+import type { ProjectId } from "@0x-copilot/api-types";
 
 import { ContextPanel } from "../../shell/ContextPanel";
 import { FilterTabs, type FilterTabOption } from "../../shell/FilterTabs";
@@ -39,7 +39,7 @@ import {
   type ProjectFilterChipOption,
 } from "../projects/ProjectFilterChip";
 
-// TODO(merge): rewire to "@enterprise-search/api-types"
+// TODO(merge): rewire to "@0x-copilot/api-types"
 import type { LibrarySortSlug, LibrarySourceKind } from "./_library-stub";
 
 // ===========================================================================

@@ -1,6 +1,6 @@
 # Backend
 
-Core product backend for Enterprise Search. The current implementation owns MCP
+Core product backend for 0xCopilot. The current implementation owns MCP
 registration, OAuth state, token storage, user skills, and audit events. Tenant
 auth, permissions, broad product persistence, admin workflows, billing, and jobs
 are target backend responsibilities that should land here as those features are
@@ -59,7 +59,7 @@ public MCP server responses.
 Build the service image from this directory:
 
 ```bash
-docker build -f services/backend/Dockerfile -t enterprise-search-backend .
+docker build -f services/backend/Dockerfile -t 0x-copilot-backend .
 ```
 
 ## Boundary Rule

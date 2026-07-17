@@ -1,5 +1,5 @@
-import type { AssistantPerformanceMetrics } from "@enterprise-search/api-types";
-import { CopyIcon, RetryIcon } from "@enterprise-search/chat-surface";
+import type { AssistantPerformanceMetrics } from "@0x-copilot/api-types";
+import { CopyIcon, RetryIcon } from "@0x-copilot/chat-surface";
 import type { ReactElement } from "react";
 
 import {

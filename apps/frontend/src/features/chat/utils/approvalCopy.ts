@@ -4,7 +4,7 @@
 // variants land server-side first; clients on this bundle ignore them
 // and fall through to the synthesised fallback.
 
-import type { McpApprovalReasonCode } from "@enterprise-search/api-types";
+import type { McpApprovalReasonCode } from "@0x-copilot/api-types";
 
 const REASON_COPY: Record<McpApprovalReasonCode, string> = {
   read_only_first_use:

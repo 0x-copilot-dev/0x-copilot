@@ -20,7 +20,7 @@
 **Design references:**
 
 - master PRD §5.5 — premise + open questions ("vector store choice", "page editor", "versioning").
-- `/tmp/atlas-design/enterprise-search-template/project/dest-library.jsx` — design reference.
+- `/tmp/atlas-design/0x-copilot-template/project/dest-library.jsx` — design reference.
 - chat1.md library quick-link in the command palette; agents cite library items in their replies.
 - Current stub: `packages/chat-surface/src/destinations/library/LibraryDestination.tsx` (Wave 0 stub with Adapters / Results / Knowledge tabs that don't fetch).
 
@@ -243,7 +243,7 @@ The page is the most interactive Library kind. Detail view is read-only; editor 
 Read-only layout:
 
 1. **Header** — title + `[Edit]` + `[⋯]` (rename · duplicate · file-to-project · tags · delete · view versions). Action row: `[Cite in chat] [Pin] [File under project] [View versions]`.
-2. **Body** — rendered markdown (using the existing `@enterprise-search/design-system` markdown renderer; the same one chat messages use). Headings get auto-anchor IDs for in-page navigation. Cross-destination links (`<ItemLink>` embedded in markdown) resolve at render time.
+2. **Body** — rendered markdown (using the existing `@0x-copilot/design-system` markdown renderer; the same one chat messages use). Headings get auto-anchor IDs for in-page navigation. Cross-destination links (`<ItemLink>` embedded in markdown) resolve at render time.
 3. **Metadata panel** — same shape as file: source attribution, project chip, tags, indexing status, citation back-index, audit log.
 
 Editor layout (`PageEditor.tsx`):

@@ -11,7 +11,7 @@
 
 import type { CSSProperties, ReactElement } from "react";
 
-import type { HomeActivityRow } from "@enterprise-search/api-types";
+import type { HomeActivityRow } from "@0x-copilot/api-types";
 
 import { ActivityList, type ActivityRow } from "../../../shell/ActivityList";
 

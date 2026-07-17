@@ -49,7 +49,7 @@ from datetime import datetime, timezone
 from typing import Any, Final, Literal, Protocol
 from uuid import uuid4
 
-from enterprise_service_contracts.scopes import RUNTIME_USE
+from copilot_service_contracts.scopes import RUNTIME_USE
 from fastapi import Depends, FastAPI, HTTPException, Path, Query, Request, status
 from pydantic import BaseModel, ConfigDict, Field
 

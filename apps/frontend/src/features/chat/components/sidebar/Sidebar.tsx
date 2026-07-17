@@ -1,5 +1,5 @@
-import type { Conversation } from "@enterprise-search/api-types";
-import { IconButton } from "@enterprise-search/design-system";
+import type { Conversation } from "@0x-copilot/api-types";
+import { IconButton } from "@0x-copilot/design-system";
 import { useId, useMemo, useRef, useState, type ReactElement } from "react";
 import { useKeymap } from "../../../../app/keymap";
 import { useApprovalFocus } from "../../approval/ApprovalFocusContext";

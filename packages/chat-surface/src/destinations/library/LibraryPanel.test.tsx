@@ -4,7 +4,7 @@
 // project filter chip (when projects are supplied), sort selector,
 // upload primary action, footer slot.
 
-import type { ProjectId } from "@enterprise-search/api-types";
+import type { ProjectId } from "@0x-copilot/api-types";
 import { fireEvent, render, screen } from "@testing-library/react";
 import { describe, expect, it, vi } from "vitest";
 

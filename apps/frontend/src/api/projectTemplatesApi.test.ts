@@ -1,4 +1,4 @@
-import type { ProjectId, TenantId, UserId } from "@enterprise-search/api-types";
+import type { ProjectId, TenantId, UserId } from "@0x-copilot/api-types";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { configureAuthBearerProvider } from "./http";

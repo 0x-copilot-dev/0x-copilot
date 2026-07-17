@@ -149,7 +149,7 @@ def deploy_helm(
         tenant["orchestrator"].get("namespace") or f"{tenant['id']}-{environment}"
     )
     release = tenant["orchestrator"].get("release_name") or tenant["id"]
-    chart_path = os.environ.get("HELM_CHART_PATH", "deploy/charts/enterprise-search")
+    chart_path = os.environ.get("HELM_CHART_PATH", "deploy/charts/0x-copilot")
     set_flags: list[str] = []
     for component, ref in digests.items():
         digest = ref.split("@", 1)[1]

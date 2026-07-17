@@ -282,10 +282,10 @@ export function RightRail(props: {
 ## Done criteria
 
 - [x] All FRs met
-- [x] `npm run typecheck --workspace @enterprise-search/chat-surface`
+- [x] `npm run typecheck --workspace @0x-copilot/chat-surface`
       passes
-- [x] `npm test --workspace @enterprise-search/chat-surface` passes
-- [x] `npm run lint --workspace @enterprise-search/chat-surface` passes
+- [x] `npm test --workspace @0x-copilot/chat-surface` passes
+- [x] `npm run lint --workspace @0x-copilot/chat-surface` passes
 - [x] No imports outside scope
 - [x] No bare browser primitives (`window` / `document` / `fetch` /
       `localStorage` / `history` / `location`) anywhere in this scope —
@@ -293,7 +293,7 @@ export function RightRail(props: {
 - [x] No new third-party dependency
 - [x] `packages/chat-surface/src/index.ts` only gains the delimited
       Phase 1-B block; all pre-existing exports are untouched
-- [x] `npm run typecheck --workspace @enterprise-search/surface-renderers`
+- [x] `npm run typecheck --workspace @0x-copilot/surface-renderers`
       still passes (deprecated `SurfaceRendererProps` continues to live)
 
 ### Deferred / carried forward

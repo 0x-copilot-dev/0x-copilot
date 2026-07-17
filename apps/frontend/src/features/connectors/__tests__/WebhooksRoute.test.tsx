@@ -7,11 +7,7 @@ import {
 } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
-import type {
-  TenantId,
-  TriggerId,
-  Webhook,
-} from "@enterprise-search/api-types";
+import type { TenantId, TriggerId, Webhook } from "@0x-copilot/api-types";
 
 const webhooksApiMocks = vi.hoisted(() => ({
   fetchWebhooks: vi.fn(),

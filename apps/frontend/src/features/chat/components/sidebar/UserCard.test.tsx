@@ -10,7 +10,7 @@ import { render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import type { ReactElement, ReactNode } from "react";
 
-import type { WorkspaceListResponse } from "@enterprise-search/api-types";
+import type { WorkspaceListResponse } from "@0x-copilot/api-types";
 
 const mockListMyWorkspaces = vi.fn<() => Promise<WorkspaceListResponse>>();
 const mockGetMyProfile = vi.fn(async () => {
@@ -33,9 +33,9 @@ vi.mock("../../../auth/AuthContext", () => ({
 // Partial mock — override AppIcon + Menu with test-friendly stubs, keep
 // the rest of the design-system surface (Button, Badge, etc.) for the
 // transitive imports the test pulls in via chat-surface's Tier2Loader.
-vi.mock("@enterprise-search/design-system", async (importOriginal) => {
+vi.mock("@0x-copilot/design-system", async (importOriginal) => {
   const actual =
-    await importOriginal<typeof import("@enterprise-search/design-system")>();
+    await importOriginal<typeof import("@0x-copilot/design-system")>();
   return {
     ...actual,
     AppIcon: ({ name }: { name: string }) => (

@@ -1,7 +1,7 @@
 import type {
   McpApprovalCategory,
   McpApprovalReasonCode,
-} from "@enterprise-search/api-types";
+} from "@0x-copilot/api-types";
 import { stringValue } from "./jsonUtils";
 import { approvalReasonForCode } from "./approvalCopy";
 
@@ -296,14 +296,13 @@ export function mcpApprovalDescription(
 ): string {
   const connector = displayName ?? "this connector";
   if (readOnly === true) {
-    return `Enterprise Search wants to ${actionName} ${connector}. Read-only. No changes will be made.`;
+    return `0xCopilot wants to ${actionName} ${connector}. Read-only. No changes will be made.`;
   }
   if (readOnly === false) {
-    return `Enterprise Search wants to ${actionName} ${connector}. This action may change data.`;
+    return `0xCopilot wants to ${actionName} ${connector}. This action may change data.`;
   }
   return (
-    stringValue(fallback) ??
-    `Enterprise Search wants to run a ${connector} action.`
+    stringValue(fallback) ?? `0xCopilot wants to run a ${connector} action.`
   );
 }
 

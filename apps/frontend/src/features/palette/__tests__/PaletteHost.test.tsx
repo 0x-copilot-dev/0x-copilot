@@ -2,12 +2,12 @@ import { render } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { ReactElement, ReactNode } from "react";
 
-import type { PaletteSearchResponse } from "@enterprise-search/api-types";
+import type { PaletteSearchResponse } from "@0x-copilot/api-types";
 import {
   RouterProvider,
   type ArtifactRoute,
   type Router,
-} from "@enterprise-search/chat-surface";
+} from "@0x-copilot/chat-surface";
 
 // CommandPalette (rendered inside PaletteHost) consumes useRouter — the
 // host normally provides a real HashRouter via ChatShell. In tests we

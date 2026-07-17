@@ -23,7 +23,7 @@ import {
   type ReactElement,
 } from "react";
 
-import { StatusPill } from "@enterprise-search/design-system";
+import { StatusPill } from "@0x-copilot/design-system";
 
 import type {
   AgentEditorModelDefault,

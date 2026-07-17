@@ -33,7 +33,7 @@ import hashlib
 import os
 from collections.abc import Mapping
 
-from enterprise_service_contracts.deployment_profile import (
+from copilot_service_contracts.deployment_profile import (
     ENV_DEPLOYMENT_PROFILE,
     PROFILE_SINGLE_USER_DESKTOP,
 )
@@ -94,7 +94,7 @@ class DesktopComposer:
         "ENTERPRISE_SERVICE_TOKEN",
         "MCP_TOKEN_VAULT_SECRET",
         # Tamper-evident audit chain signing key (hex-encoded, >= 32 bytes).
-        # enterprise_audit_chain fails closed without it under
+        # copilot_audit_chain fails closed without it under
         # BACKEND_ENVIRONMENT=production, so surface it in the same
         # missing-env error instead of letting the signer crash later.
         "AUDIT_HMAC_KEY",

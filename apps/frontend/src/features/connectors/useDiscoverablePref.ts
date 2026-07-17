@@ -26,10 +26,7 @@
 // next setEnabled retries the PATCH; that is the same end-state as
 // localStorage was, just without the cross-device persistence.
 
-import {
-  useKeyValueStore,
-  type KeyValueStore,
-} from "@enterprise-search/chat-surface";
+import { useKeyValueStore, type KeyValueStore } from "@0x-copilot/chat-surface";
 import { useCallback, useEffect, useState } from "react";
 
 import { getMyPreferences, updateMyPreferences } from "../../api/meApi";

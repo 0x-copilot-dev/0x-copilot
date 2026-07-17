@@ -1,4 +1,4 @@
-import type { Workspace } from "@enterprise-search/api-types";
+import type { Workspace } from "@0x-copilot/api-types";
 import { useEffect, useState, type ReactElement } from "react";
 import { listMyWorkspaces } from "../../../../api/meApi";
 import { errorMessage } from "../../../../utils/errors";

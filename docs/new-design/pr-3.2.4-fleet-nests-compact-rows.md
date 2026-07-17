@@ -80,7 +80,7 @@ The fleet card today is a label without a body. The three subagents are rendered
 2. **The fleet card looks broken** — "Dispatched 3 subagents in parallel" with no subagents inside.
 3. **There's no visible "this work runs in parallel" framing** — the 3‑up nesting and the per‑row progress bar are what tell the user "these run side‑by‑side; check the workspace pane for live status."
 
-The design ([handoff bundle, `messages.jsx:207-243`](/tmp/design-fetch/extracted/enterprise-search/project/messages.jsx) — `SubagentFleet`) shows the fleet card carrying compact one‑line rows for each child subagent. Each row has a status indicator, name, brief task, progress bar (animated while running), and elapsed time. **The fleet card IS the container.**
+The design ([handoff bundle, `messages.jsx:207-243`](/tmp/design-fetch/extracted/0x-copilot/project/messages.jsx) — `SubagentFleet`) shows the fleet card carrying compact one‑line rows for each child subagent. Each row has a status indicator, name, brief task, progress bar (animated while running), and elapsed time. **The fleet card IS the container.**
 
 The codebase has the right contract — `SubagentFleetCard` already accepts `children?: ReactNode` (per [`SubagentFleetCard.tsx:30`](../../apps/frontend/src/features/chat/components/messages/SubagentFleetCard.tsx#L30)). What's missing:
 
@@ -603,9 +603,9 @@ package.json                                          0 deps
 
 ## 5 · Verification checklist
 
-- [ ] `npm run typecheck --workspace @enterprise-search/frontend` clean.
-- [ ] `npm run test --workspace @enterprise-search/frontend` clean. New tests pass; PR 3.2.1 / 3.2.2 / 3.2.3 tests stay green.
-- [ ] `npm run build --workspace @enterprise-search/frontend` clean. Bundle delta ≤ +1.5 KB gz.
+- [ ] `npm run typecheck --workspace @0x-copilot/frontend` clean.
+- [ ] `npm run test --workspace @0x-copilot/frontend` clean. New tests pass; PR 3.2.1 / 3.2.2 / 3.2.3 tests stay green.
+- [ ] `npm run build --workspace @0x-copilot/frontend` clean. Bundle delta ≤ +1.5 KB gz.
 - [ ] `make dev`:
   - **Multi‑subagent fleet** (e.g., "run 3 subagents to write GCD, prime check, prime factors"): one fleet card with three nested rows; rows show name + 1‑line task + animated progress + elapsed; no standalone `<SubagentCard>` blocks above or below; head shows live `running/done` derived from children.
   - **Single subagent** (e.g., "write a prime checker"): renders as `<SubagentCard>` exactly as before. No fleet card, no compact row.
@@ -635,4 +635,4 @@ package.json                                          0 deps
 - [`apps/frontend/src/features/chat/components/messages/SubagentFleetCard.tsx`](../../apps/frontend/src/features/chat/components/messages/SubagentFleetCard.tsx) — already accepts `children`; this PR fills the slot.
 - [`apps/frontend/src/features/chat/components/tools/SubagentFleetTool.tsx`](../../apps/frontend/src/features/chat/components/tools/SubagentFleetTool.tsx) — extended to pass children through.
 - [`apps/frontend/src/features/chat/runtime/components/MessageParts.tsx`](../../apps/frontend/src/features/chat/runtime/components/MessageParts.tsx) — render dispatcher; gains the reshape call.
-- Design prototype reference: `enterprise-search/project/messages.jsx:207-243` (`SubagentFleet` + per‑row layout) from the Anthropic Design handoff bundle.
+- Design prototype reference: `0x-copilot/project/messages.jsx:207-243` (`SubagentFleet` + per‑row layout) from the Anthropic Design handoff bundle.

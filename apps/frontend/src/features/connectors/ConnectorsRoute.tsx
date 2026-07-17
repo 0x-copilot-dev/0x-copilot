@@ -37,7 +37,7 @@ import {
   ConnectorsPanel,
   type ConnectorsFilterCounts,
   type ConnectorsFilterSlug,
-} from "@enterprise-search/chat-surface";
+} from "@0x-copilot/chat-surface";
 import type {
   Connector,
   ConnectorId,
@@ -45,7 +45,7 @@ import type {
   ConnectorSlug,
   ConnectorStreamEnvelope,
   SectionResult,
-} from "@enterprise-search/api-types";
+} from "@0x-copilot/api-types";
 
 import type { RequestIdentity } from "../../api/config";
 import {

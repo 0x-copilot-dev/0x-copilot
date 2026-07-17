@@ -15,10 +15,7 @@
 
 import { useState, type CSSProperties, type ReactElement } from "react";
 
-import type {
-  PersonDetailResponse,
-  TeamRole,
-} from "@enterprise-search/api-types";
+import type { PersonDetailResponse, TeamRole } from "@0x-copilot/api-types";
 
 import { ItemLink } from "../../refs/ItemLink";
 import { ActivityList, type ActivityRow } from "../../shell/ActivityList";

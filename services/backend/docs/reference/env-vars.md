@@ -69,11 +69,11 @@ All env vars read by `services/backend`. No defaults means the var is required i
 
 ## MFA
 
-| Variable           | Default             | Notes                                                        |
-| ------------------ | ------------------- | ------------------------------------------------------------ |
-| `TOTP_ISSUER`      | `Enterprise Search` | Display name in authenticator apps                           |
-| `WEBAUTHN_RP_ID`   | —                   | Relying party ID for WebAuthn (must match the origin domain) |
-| `WEBAUTHN_RP_NAME` | `Enterprise Search` | Relying party display name                                   |
+| Variable           | Default     | Notes                                                        |
+| ------------------ | ----------- | ------------------------------------------------------------ |
+| `TOTP_ISSUER`      | `0xCopilot` | Display name in authenticator apps                           |
+| `WEBAUTHN_RP_ID`   | —           | Relying party ID for WebAuthn (must match the origin domain) |
+| `WEBAUTHN_RP_NAME` | `0xCopilot` | Relying party display name                                   |
 
 ---
 

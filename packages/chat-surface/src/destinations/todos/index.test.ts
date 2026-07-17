@@ -1,4 +1,4 @@
-import type { TodoId } from "@enterprise-search/api-types";
+import type { TodoId } from "@0x-copilot/api-types";
 import { describe, expect, it } from "vitest";
 
 import { hasItemRefResolver, resolveItemRef } from "../../refs/registry";

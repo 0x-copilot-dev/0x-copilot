@@ -18,7 +18,7 @@ import {
   Card,
   Field,
   TextInput,
-} from "@enterprise-search/design-system";
+} from "@0x-copilot/design-system";
 import { formatDateTime } from "../../utils/dateFormat";
 import { errorMessage } from "../../utils/errors";
 import {
@@ -28,7 +28,7 @@ import {
   useEffect,
   useState,
 } from "react";
-import type { AuditEvent } from "@enterprise-search/api-types";
+import type { AuditEvent } from "@0x-copilot/api-types";
 import { listAuditEvents } from "../../api/auditApi";
 import type { RequestIdentity } from "../../api/config";
 

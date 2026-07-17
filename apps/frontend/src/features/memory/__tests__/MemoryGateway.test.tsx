@@ -23,7 +23,7 @@ import type {
   MemoryStreamEnvelope,
   TenantId,
   UserId,
-} from "@enterprise-search/api-types";
+} from "@0x-copilot/api-types";
 
 const memoryApiMocks = vi.hoisted(() => ({
   fetchMemory: vi.fn(),

@@ -1,4 +1,4 @@
-import type { RuntimeEventEnvelope } from "@enterprise-search/api-types";
+import type { RuntimeEventEnvelope } from "@0x-copilot/api-types";
 import { applyCitationEvent } from "../chatModel/citationReducer";
 import {
   applyCitationLinkEvent,
@@ -8,7 +8,7 @@ import {
 import {
   emptyCitationRegistry,
   type CitationRegistryByRun,
-} from "@enterprise-search/chat-surface";
+} from "@0x-copilot/chat-surface";
 import { applyRuntimeEvent, type ChatItem } from "../chatModel";
 import {
   applySourceEvent,

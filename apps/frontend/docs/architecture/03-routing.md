@@ -90,7 +90,7 @@ migrator's `replaceState` and React's first paint.
 ## OAuth callback handling
 
 `/mcp/oauth/callback` is **not** in the route reducer because it's a
-one-shot side effect, not a screen. `<EnterpriseSearchApp>` mounts an
+one-shot side effect, not a screen. `<CopilotApp>` mounts an
 `useEffect` that:
 
 1. Reads `state`, `code`, `error`, `error_description` from the search.
@@ -115,7 +115,7 @@ end-to-end flow.
 
 ## Listener wiring
 
-`<EnterpriseSearchApp>` registers `popstate` and `hashchange` listeners on
+`<CopilotApp>` registers `popstate` and `hashchange` listeners on
 mount; both call `sync()` which reads `routeFromLocation()` and updates
 `route` state. Both are needed:
 

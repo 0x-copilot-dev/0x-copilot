@@ -16,7 +16,7 @@ import type {
   DraftPatchRequest,
   DraftSendRequest,
   DraftSendResponse,
-} from "@enterprise-search/api-types";
+} from "@0x-copilot/api-types";
 import { useCallback, useEffect, useState } from "react";
 
 import {

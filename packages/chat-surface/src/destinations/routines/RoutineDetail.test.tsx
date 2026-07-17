@@ -3,12 +3,7 @@
 // Covers every tab + the webhook URL copy-once reveal flow per
 // routines-prd.md §3.4 + cross-audit §2.4 + §9.7 Q6.
 
-import type {
-  ItemRef,
-  RoutineId,
-  RunId,
-  UserId,
-} from "@enterprise-search/api-types";
+import type { ItemRef, RoutineId, RunId, UserId } from "@0x-copilot/api-types";
 import type {
   Session,
   SseSubscribeOptions,
@@ -16,7 +11,7 @@ import type {
   Transport,
   TransportCapabilities,
   TypedRequest,
-} from "@enterprise-search/chat-transport";
+} from "@0x-copilot/chat-transport";
 import { fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { type ReactElement } from "react";
 import { afterEach, describe, expect, it, vi } from "vitest";

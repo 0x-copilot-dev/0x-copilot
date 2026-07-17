@@ -27,11 +27,11 @@
 //    it. While P1-A's wire `approvals.ts` is in flight, we synthesize
 //    Approvals from the runtime event payload using the local stub.
 //    TODO(merge): when P1-A ships, swap `_approvals-stub` import to
-//    `@enterprise-search/api-types`.
+//    `@0x-copilot/api-types`.
 
-import type { RuntimeEventEnvelope } from "@enterprise-search/api-types";
+import type { RuntimeEventEnvelope } from "@0x-copilot/api-types";
 
-// TODO(merge): replace import from "./_approvals-stub" with "@enterprise-search/api-types"
+// TODO(merge): replace import from "./_approvals-stub" with "@0x-copilot/api-types"
 import type { Approval, ApprovalState } from "./_approvals-stub";
 
 /**

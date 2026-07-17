@@ -14,8 +14,8 @@ Architecture, features, and reference docs are the source of truth.
 
 ## Shared packages
 
-- Use [`@enterprise-search/api-types`](../../packages/api-types) for app-facing payload shapes. When public contracts change, update api-types in the same change.
-- Use [`@enterprise-search/design-system`](../../packages/design-system) primitives for reusable UI. **Feature workflows stay here**, not in design-system.
+- Use [`@0x-copilot/api-types`](../../packages/api-types) for app-facing payload shapes. When public contracts change, update api-types in the same change.
+- Use [`@0x-copilot/design-system`](../../packages/design-system) primitives for reusable UI. **Feature workflows stay here**, not in design-system.
 
 ## Streaming
 
@@ -41,8 +41,8 @@ The `↵ send · ⇧+↵ new line · / skills · model · Sources cited inline` 
 ## Validation
 
 ```bash
-npm run typecheck --workspace @enterprise-search/frontend
-npm run build --workspace @enterprise-search/frontend
+npm run typecheck --workspace @0x-copilot/frontend
+npm run build --workspace @0x-copilot/frontend
 ```
 
 Run typecheck/build for behavior changes and shared-package consumers when practical.

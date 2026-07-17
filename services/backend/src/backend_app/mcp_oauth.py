@@ -86,8 +86,8 @@ class Values:
         REFRESH_TOKEN = "refresh_token"
 
     class OAuth:
-        CLIENT_ID = "enterprise-search"
-        CLIENT_NAME = "Enterprise Search"
+        CLIENT_ID = "0x-copilot"
+        CLIENT_NAME = "0xCopilot"
         CODE = "code"
         CODE_CHALLENGE_METHOD = "S256"
         DEFAULT_SCOPE = "mcp"

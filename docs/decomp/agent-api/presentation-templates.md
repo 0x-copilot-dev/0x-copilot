@@ -72,7 +72,7 @@ Codes (uppercase, `-` → `_`):
 - `TOOL_RUN_ABANDONED`
 - `TOOL_CANCELLED`
 - `RUN_WORKER_LOST`
-- `DEFAULT` ("Step failed", "Enterprise Search couldn't complete this step.")
+- `DEFAULT` ("Step failed", "0xCopilot couldn't complete this step.")
 
 `for_code(code)` (115–120) normalises `code.strip().upper().replace("-","_")` then `getattr` with default. **Adding a new error code = add a class attribute here.**
 

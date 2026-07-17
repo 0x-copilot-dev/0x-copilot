@@ -1,7 +1,4 @@
-import type {
-  ConversationId,
-  ItemRefSnapshot,
-} from "@enterprise-search/api-types";
+import type { ConversationId, ItemRefSnapshot } from "@0x-copilot/api-types";
 import { render, screen } from "@testing-library/react";
 import { afterEach, describe, expect, it } from "vitest";
 

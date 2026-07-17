@@ -38,8 +38,8 @@ function fakeChecker(): AstAllowlistChecker {
       const allowlist = new Set([
         "react",
         "react-dom",
-        "@enterprise-search/design-system",
-        "@enterprise-search/chat-surface",
+        "@0x-copilot/design-system",
+        "@0x-copilot/chat-surface",
       ]);
       while ((m = importRe.exec(source))) {
         if (!allowlist.has(m[1])) {

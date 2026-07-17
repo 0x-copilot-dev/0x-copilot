@@ -3,7 +3,7 @@
 **Status:** draft (2026-05-17)
 **Owner:** parth (product) — orchestrator dispatches impl agents from §17
 **Parent:** [PRD.md](../PRD.md) §8 + §9 (modes + composer) and [destinations-master-prd.md](../destinations-master-prd.md) §6 phase 1
-**Design source of truth:** Claude Design handoff bundle at `/tmp/atlas-design/enterprise-search-template/` — `chats/chat1.md` lines 240–820 are the load-bearing transcript; `project/thread-canvas.jsx`, `project/tc-chat.jsx`, `project/canvas-shared.jsx`, `project/canvas-apps.jsx`, `project/composer.jsx` are the JSX references.
+**Design source of truth:** Claude Design handoff bundle at `/tmp/atlas-design/0x-copilot-template/` — `chats/chat1.md` lines 240–820 are the load-bearing transcript; `project/thread-canvas.jsx`, `project/tc-chat.jsx`, `project/canvas-shared.jsx`, `project/canvas-apps.jsx`, `project/composer.jsx` are the JSX references.
 
 ---
 
@@ -617,7 +617,7 @@ What we are **not** building in Phase 1:
 ## References
 
 - Parent PRDs: [PRD.md](../PRD.md), [destinations-master-prd.md](../destinations-master-prd.md).
-- Design: `/tmp/atlas-design/enterprise-search-template/chats/chat1.md` (L240–820 transcript), `project/thread-canvas.jsx`, `project/tc-chat.jsx`, `project/canvas-shared.jsx`, `project/canvas-apps.jsx`, `project/composer.jsx`.
+- Design: `/tmp/atlas-design/0x-copilot-template/chats/chat1.md` (L240–820 transcript), `project/thread-canvas.jsx`, `project/tc-chat.jsx`, `project/canvas-shared.jsx`, `project/canvas-apps.jsx`, `project/composer.jsx`.
 - Existing code: `packages/chat-surface/src/thread-canvas/*`, `packages/chat-surface/src/composer/Composer.tsx`, `packages/chat-surface/src/shell/RightRail.tsx`, `apps/frontend/src/features/chat/ChatScreen.tsx`, `apps/frontend/src/api/agentApi.ts`, `packages/api-types/src/index.ts` (L239-339 events, L1260-1285 depth + run-request, L1325+ envelopes).
 - Backend runtime: `services/ai-backend/src/agent_runtime/execution/depth.py` (DepthBudgetTable), `services/ai-backend/src/runtime_api/http/routes.py` (events, stream, decide endpoints), `services/ai-backend/src/runtime_api/schemas/runs.py` (RunRequest reasoning_depth).
 - Engineering rules: [CLAUDE.md](../../../CLAUDE.md), [services/ai-backend/CLAUDE.md](../../../services/ai-backend/CLAUDE.md), [apps/frontend/CLAUDE.md](../../../apps/frontend/CLAUDE.md) (composer hint row invariant + planning-pulse invariant), [packages/api-types/CLAUDE.md](../../../packages/api-types/CLAUDE.md).
