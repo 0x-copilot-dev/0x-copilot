@@ -3834,3 +3834,17 @@ export type {
   WorkspaceNotificationDefaults,
 } from "./settings";
 // === end Phase 12 Settings ===
+
+// === BYOK provider keys (Settings → AI & data) ===
+// Bring-your-own-key wire shapes for the per-user model provider keys
+// under `/v1/settings/provider-keys`. Reads carry only a masked
+// `key_hint` (last 4 chars); the plaintext travels exactly once in the
+// PUT body and is encrypted at rest server-side. Single declaration
+// site: ./providerKeys.ts.
+export type {
+  ListProviderKeysResponse,
+  ProviderKeyProvider,
+  ProviderKeySummary,
+  PutProviderKeyRequest,
+} from "./providerKeys";
+// === end BYOK provider keys ===

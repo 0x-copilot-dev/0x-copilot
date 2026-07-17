@@ -16,6 +16,8 @@ export const SETTINGS_SECTIONS = [
   "audit-log",
   // PR 8.1 — AI & DATA group
   "model-and-behavior",
+  // BYOK — per-user model provider keys (OpenAI / Anthropic / Google).
+  "provider-keys",
   "connectors",
   "skills",
   "privacy-data",
