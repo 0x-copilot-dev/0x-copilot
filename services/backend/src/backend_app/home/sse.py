@@ -74,11 +74,13 @@ from collections.abc import AsyncIterator, Iterable
 from datetime import datetime, timezone
 from typing import Any, Literal
 
-from fastapi import FastAPI, Header, Query, Request
+from enterprise_service_contracts.scopes import RUNTIME_USE
+from fastapi import Depends, FastAPI, Header, Query, Request
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel, Field
 
 from backend_app.auth import BackendServiceAuthenticator
+from backend_app.identity.rbac import RequireScopes
 
 logger = logging.getLogger(__name__)
 
@@ -515,7 +517,10 @@ def register_home_sse_routes(
     resolved_bus = bus or HomeActivityBus.get_default()
     app.state.home_activity_bus = resolved_bus
 
-    @app.get("/v1/home/stream")
+    @app.get(
+        "/v1/home/stream",
+        dependencies=[Depends(RequireScopes(RUNTIME_USE))],
+    )
     def stream_home_activity(
         request: Request,
         org_id: str = Query(..., min_length=1),

@@ -601,7 +601,10 @@ def register_tool_internal_routes(
     tenant inserts collapse to 403.
     """
 
-    @app.post("/internal/v1/tools/by_ids")
+    @app.post(
+        "/internal/v1/tools/by_ids",
+        dependencies=[Depends(RequireScopes(RUNTIME_USE))],
+    )
     def bulk_fetch_tools(
         payload: ByIdsRequestModel,
         request: Request,
@@ -623,6 +626,7 @@ def register_tool_internal_routes(
     @app.post(
         "/internal/v1/tools/{tool_id}/invocations",
         status_code=status.HTTP_201_CREATED,
+        dependencies=[Depends(RequireScopes(RUNTIME_USE))],
     )
     def record_tool_invocation(
         tool_id: str,
@@ -668,7 +672,10 @@ def register_tool_internal_routes(
             ) from exc
         return _invocation_to_wire(stored)
 
-    @app.post("/internal/v1/tools/{tool_id}/error")
+    @app.post(
+        "/internal/v1/tools/{tool_id}/error",
+        dependencies=[Depends(RequireScopes(RUNTIME_USE))],
+    )
     def bump_tool_error_counter(
         tool_id: str,
         payload: BumpErrorRequestModel,

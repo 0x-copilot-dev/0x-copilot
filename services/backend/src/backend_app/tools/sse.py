@@ -48,11 +48,13 @@ from collections.abc import AsyncIterator, Iterable
 from datetime import datetime, timezone
 from typing import Any, Literal
 
-from fastapi import FastAPI, Header, Query, Request
+from enterprise_service_contracts.scopes import RUNTIME_USE
+from fastapi import Depends, FastAPI, Header, Query, Request
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel, Field
 
 from backend_app.auth import BackendServiceAuthenticator
+from backend_app.identity.rbac import RequireScopes
 
 logger = logging.getLogger(__name__)
 
@@ -313,7 +315,10 @@ def register_tool_sse_routes(
     resolved_bus = bus or ToolsActivityBus.get_default()
     app.state.tools_activity_bus = resolved_bus
 
-    @app.get("/v1/tools/stream")
+    @app.get(
+        "/v1/tools/stream",
+        dependencies=[Depends(RequireScopes(RUNTIME_USE))],
+    )
     def stream_tool_events(
         request: Request,
         org_id: str = Query(..., min_length=1),

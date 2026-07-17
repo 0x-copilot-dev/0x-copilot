@@ -55,7 +55,7 @@ from fastapi.responses import RedirectResponse
 from pydantic import BaseModel, Field
 
 from backend_app.auth import BackendServiceAuthenticator
-from backend_app.identity.rbac import RequireScopes
+from backend_app.identity.rbac import RequireScopes, public_route
 from backend_app.library.blob_store import (
     BlobKind,
     BlobNotFoundError,
@@ -523,6 +523,7 @@ def _register_dev_byte_pump(app: FastAPI, store: LocalDiskBlobStore) -> None:
     @app.put(
         "/_blobs/{blob_ref:path}",
         include_in_schema=False,
+        dependencies=[Depends(public_route())],
     )
     async def dev_blob_put(
         request: Request,
@@ -545,6 +546,7 @@ def _register_dev_byte_pump(app: FastAPI, store: LocalDiskBlobStore) -> None:
     @app.get(
         "/_blobs/{blob_ref:path}",
         include_in_schema=False,
+        dependencies=[Depends(public_route())],
     )
     def dev_blob_get(
         blob_ref: str = Path(...),

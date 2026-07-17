@@ -37,10 +37,12 @@ from __future__ import annotations
 
 from typing import Any
 
+from enterprise_service_contracts.scopes import RUNTIME_USE
 from fastapi import Depends, FastAPI, HTTPException, Request, status
 from pydantic import BaseModel, ConfigDict, Field
 
 from backend_app.auth import BackendServiceAuthenticator
+from backend_app.identity.rbac import RequireScopes
 from backend_app.inbox.service import (
     InboxInvalidRequest,
     InboxService,
@@ -176,6 +178,7 @@ def register_inbox_internal_routes(app: FastAPI) -> None:
         "/internal/v1/inbox/items",
         response_model=CreateInternalInboxItemResponse,
         status_code=status.HTTP_201_CREATED,
+        dependencies=[Depends(RequireScopes(RUNTIME_USE))],
     )
     async def create_inbox_item(
         payload: CreateInternalInboxItemRequest,

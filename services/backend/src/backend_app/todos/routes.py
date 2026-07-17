@@ -329,6 +329,7 @@ def register_todos_routes(app: FastAPI, *, service: TodosService) -> None:
     @app.post(
         "/internal/v1/todos/series/materialize-due",
         response_model=MaterializeDueSeriesResponse,
+        dependencies=[Depends(RequireScopes(RUNTIME_USE))],
     )
     def materialize_due_series(
         request: Request,
