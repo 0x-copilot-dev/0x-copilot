@@ -96,7 +96,7 @@ describe("SignInGate", () => {
     });
   }
 
-  it("renders both sign-in buttons when anonymous", async () => {
+  it("renders all three sign-in buttons when anonymous", async () => {
     const bridge = makeBridge({
       [CHANNELS.authGetSession]: async () => null,
     });
@@ -110,6 +110,11 @@ describe("SignInGate", () => {
     );
     expect(google).not.toBeNull();
     expect(google?.textContent).toContain("Continue with Google");
+    const wallet = container.querySelector(
+      "[data-testid='sign-in-wallet-button']",
+    );
+    expect(wallet).not.toBeNull();
+    expect(wallet?.textContent).toContain("Connect wallet");
   });
 
   it("clicking Continue with Google invokes auth.sign-in-google and lands signed-in", async () => {
@@ -164,6 +169,61 @@ describe("SignInGate", () => {
     });
     expect(
       container.querySelector("[data-testid='sign-in-google-button']"),
+    ).not.toBeNull();
+  });
+
+  it("clicking Connect wallet invokes auth.sign-in-wallet and lands signed-in", async () => {
+    const invoke = deferred();
+    const bridge = makeBridge({
+      [CHANNELS.authGetSession]: async () => null,
+      [CHANNELS.authSignInWallet]: () =>
+        invoke.promise as Promise<RendererSession>,
+    });
+    await mount(bridge);
+
+    click("sign-in-wallet-button");
+    // While main drives the system-browser round-trip we show progress.
+    expect(container.textContent).toContain("Opening browser…");
+    expect(bridge.calls.at(-1)).toEqual({
+      channel: CHANNELS.authSignInWallet,
+      payload: { workspaceId: "org_acme" },
+    });
+
+    await act(async () => {
+      invoke.resolve(SESSION);
+      await Promise.resolve();
+    });
+    expect(
+      container.querySelector("[data-testid='app']")?.textContent,
+    ).toContain("sarah@acme.test");
+  });
+
+  it("a failed wallet sign-in shows the error with a retry that returns to anon", async () => {
+    const bridge = makeBridge({
+      [CHANNELS.authGetSession]: async () => null,
+      [CHANNELS.authSignInWallet]: async () => {
+        throw new Error("wallet handoff state mismatch");
+      },
+    });
+    await mount(bridge);
+
+    click("sign-in-wallet-button");
+    await act(async () => {
+      await Promise.resolve();
+    });
+    const error = container.querySelector("[data-testid='sign-in-error']");
+    expect(error?.textContent).toContain("wallet handoff state mismatch");
+
+    // Try again returns to the anon screen with the wallet button back.
+    const retry = Array.from(container.querySelectorAll("button")).find(
+      (b) => b.textContent === "Try again",
+    );
+    expect(retry).toBeDefined();
+    act(() => {
+      retry?.click();
+    });
+    expect(
+      container.querySelector("[data-testid='sign-in-wallet-button']"),
     ).not.toBeNull();
   });
 

@@ -1,5 +1,6 @@
-import type { AuthAuditLog } from "./audit-log";
+import type { AuthAuditLog, SignInMode } from "./audit-log";
 import { runGoogleLogin } from "./google-login";
+import { runWalletLogin } from "./wallet-login";
 import {
   OidcClient,
   type AuthMode,
@@ -17,12 +18,23 @@ export type { AuthMode, AuthSession, SessionClaims } from "./oidc-client";
 export type { SafeStorageLike, ServerKind } from "./secret-storage";
 export { OidcClient } from "./oidc-client";
 export { SecretStorage } from "./secret-storage";
-export { awaitLoopbackCode, type LoopbackHandle } from "./loopback-server";
+export {
+  awaitLoopbackCode,
+  awaitLoopbackHandoff,
+  type LoopbackHandle,
+  type LoopbackHandoff,
+  type LoopbackHandoffHandle,
+} from "./loopback-server";
 export {
   GoogleLoginError,
   runGoogleLogin,
   type GoogleLoginDeps,
 } from "./google-login";
+export {
+  WalletLoginError,
+  runWalletLogin,
+  type WalletLoginDeps,
+} from "./wallet-login";
 
 export {
   createFileAuthAuditLog,
@@ -51,6 +63,10 @@ export interface AuthServiceConfig {
   readonly googleLoginFlow?: typeof runGoogleLogin;
   /** Loopback redirect timeout for the Google flow (user-cancel bound). */
   readonly googleTimeoutMs?: number;
+  /** Injectable for tests; defaults to the real wallet-page flow. */
+  readonly walletLoginFlow?: typeof runWalletLogin;
+  /** Loopback redirect timeout for the wallet flow (user-cancel bound). */
+  readonly walletTimeoutMs?: number;
 }
 
 export interface RendererSession {
@@ -72,7 +88,10 @@ export class AuthService {
   readonly #config: AuthServiceConfig;
   readonly #authAudit: AuthAuditLog | undefined;
   readonly #googleLoginFlow: typeof runGoogleLogin;
-  #cancelPendingGoogleLogin: (() => void) | null = null;
+  readonly #walletLoginFlow: typeof runWalletLogin;
+  // One slot shared by every system-browser flow (Google, wallet): the
+  // newest click always wins, whichever button it came from.
+  #cancelPendingBrowserLogin: (() => void) | null = null;
 
   constructor(config: AuthServiceConfig) {
     this.#oidc = new OidcClient({
@@ -94,6 +113,7 @@ export class AuthService {
     this.#config = config;
     this.#authAudit = config.authAudit;
     this.#googleLoginFlow = config.googleLoginFlow ?? runGoogleLogin;
+    this.#walletLoginFlow = config.walletLoginFlow ?? runWalletLogin;
   }
 
   async signIn(workspaceId: string): Promise<RendererSession> {
@@ -114,21 +134,52 @@ export class AuthService {
   // and its promise rejects) so the newest click always wins; a successful
   // sign-in overwrites whatever session was stored before.
   async signInWithGoogle(workspaceId: string): Promise<RendererSession> {
-    this.#cancelPendingGoogleLogin?.();
-    this.#cancelPendingGoogleLogin = null;
-    let myCancel: (() => void) | null = null;
-    try {
-      const session = await this.#googleLoginFlow(workspaceId, {
+    return this.#signInViaSystemBrowser(workspaceId, "google", (onCancel) =>
+      this.#googleLoginFlow(workspaceId, {
         facadeBaseUrl: this.#config.facadeBaseUrl,
         openExternal: this.#config.openExternal,
         fetch: this.#config.fetch,
         clock: this.#config.clock,
         timeoutMs: this.#config.googleTimeoutMs,
         returnTo: "atlas-desktop",
-        onCancelAvailable: (cancel) => {
-          myCancel = cancel;
-          this.#cancelPendingGoogleLogin = cancel;
-        },
+        onCancelAvailable: onCancel,
+      }),
+    );
+  }
+
+  // "Connect wallet" — SIWE via the facade-served wallet page in the
+  // system browser + loopback bearer handoff. Same cancel semantics as
+  // Google: the newest sign-in click (either mode) replaces the pending
+  // one.
+  async signInWithWallet(workspaceId: string): Promise<RendererSession> {
+    return this.#signInViaSystemBrowser(workspaceId, "wallet", (onCancel) =>
+      this.#walletLoginFlow(workspaceId, {
+        facadeBaseUrl: this.#config.facadeBaseUrl,
+        openExternal: this.#config.openExternal,
+        fetch: this.#config.fetch,
+        clock: this.#config.clock,
+        timeoutMs: this.#config.walletTimeoutMs,
+        onCancelAvailable: onCancel,
+      }),
+    );
+  }
+
+  // Shared tail of every system-browser sign-in: cancel-the-previous,
+  // persist, cache, audit success/failure, clear our own cancel hook.
+  async #signInViaSystemBrowser(
+    workspaceId: string,
+    mode: SignInMode,
+    run: (
+      onCancelAvailable: (cancel: () => void) => void,
+    ) => Promise<AuthSession>,
+  ): Promise<RendererSession> {
+    this.#cancelPendingBrowserLogin?.();
+    this.#cancelPendingBrowserLogin = null;
+    let myCancel: (() => void) | null = null;
+    try {
+      const session = await run((cancel) => {
+        myCancel = cancel;
+        this.#cancelPendingBrowserLogin = cancel;
       });
       this.#storage.setActiveWorkspace(workspaceId);
       await this.#storage.set(
@@ -142,22 +193,22 @@ export class AuthService {
         kind: "sign-in-success",
         workspaceId,
         sub: session.claims.sub,
-        mode: "google",
+        mode,
       });
       return this.#toRenderer(workspaceId, session);
     } catch (err) {
       await this.#appendAudit({
         kind: "sign-in-failure",
         workspaceId,
-        mode: "google",
+        mode,
         reason: err instanceof Error ? err.message : String(err),
       });
       throw err;
     } finally {
       // Only clear our own hook — a newer sign-in may have installed its
       // cancel function after ours was invalidated.
-      if (myCancel !== null && this.#cancelPendingGoogleLogin === myCancel) {
-        this.#cancelPendingGoogleLogin = null;
+      if (myCancel !== null && this.#cancelPendingBrowserLogin === myCancel) {
+        this.#cancelPendingBrowserLogin = null;
       }
     }
   }

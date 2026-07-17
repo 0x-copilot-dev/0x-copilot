@@ -391,6 +391,14 @@ describe("auth.* channels", () => {
           email: "sarah@gmail.test",
         }),
       ),
+      signInWithWallet: vi.fn(
+        async (workspaceId: string): Promise<RS> => ({
+          workspaceId,
+          expiresAt: Date.now() + 60_000,
+          displayName: "Sarah (Wallet)",
+          email: null,
+        }),
+      ),
       signOut: vi.fn(async (_workspaceId: string): Promise<void> => {}),
       getSession: vi.fn(
         async (_workspaceId: string): Promise<RS | null> => null,
@@ -407,10 +415,11 @@ describe("auth.* channels", () => {
     return { ipcMain, auth, teardown };
   }
 
-  it("registers all five auth channels", () => {
+  it("registers all six auth channels", () => {
     const { ipcMain } = setupWithAuth();
     expect(ipcMain.has(CHANNELS.authSignIn)).toBe(true);
     expect(ipcMain.has(CHANNELS.authSignInGoogle)).toBe(true);
+    expect(ipcMain.has(CHANNELS.authSignInWallet)).toBe(true);
     expect(ipcMain.has(CHANNELS.authSignOut)).toBe(true);
     expect(ipcMain.has(CHANNELS.authRefresh)).toBe(true);
     expect(ipcMain.has(CHANNELS.authGetSession)).toBe(true);
@@ -440,6 +449,25 @@ describe("auth.* channels", () => {
     const { ipcMain } = setupWithAuth();
     await expect(
       ipcMain.invoke(CHANNELS.authSignInGoogle, 1, {}),
+    ).rejects.toBeInstanceOf(IpcValidationError);
+  });
+
+  it("auth.sign-in-wallet forwards the workspaceId and returns the RendererSession", async () => {
+    const { ipcMain, auth } = setupWithAuth();
+    const res = (await ipcMain.invoke(CHANNELS.authSignInWallet, 1, {
+      workspaceId: "org_acme",
+    })) as { workspaceId: string; displayName: string | null };
+    expect(res.workspaceId).toBe("org_acme");
+    expect(res.displayName).toBe("Sarah (Wallet)");
+    expect(auth.signInWithWallet).toHaveBeenCalledWith("org_acme");
+    expect(auth.signIn).not.toHaveBeenCalled();
+    expect(auth.signInWithGoogle).not.toHaveBeenCalled();
+  });
+
+  it("rejects auth.sign-in-wallet payloads without a workspaceId", async () => {
+    const { ipcMain } = setupWithAuth();
+    await expect(
+      ipcMain.invoke(CHANNELS.authSignInWallet, 1, {}),
     ).rejects.toBeInstanceOf(IpcValidationError);
   });
 
@@ -478,6 +506,7 @@ describe("auth.* channels", () => {
     teardown();
     expect(ipcMain.has(CHANNELS.authSignIn)).toBe(false);
     expect(ipcMain.has(CHANNELS.authSignInGoogle)).toBe(false);
+    expect(ipcMain.has(CHANNELS.authSignInWallet)).toBe(false);
     expect(ipcMain.has(CHANNELS.authSignOut)).toBe(false);
     expect(ipcMain.has(CHANNELS.authRefresh)).toBe(false);
     expect(ipcMain.has(CHANNELS.authGetSession)).toBe(false);

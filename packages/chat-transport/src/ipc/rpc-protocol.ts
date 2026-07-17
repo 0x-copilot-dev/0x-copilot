@@ -23,6 +23,11 @@ export const CHANNELS = {
   // the bearer via the loopback + /v1/auth/oidc/callback JSON handoff.
   // Same bearer-never-crosses-IPC rule as the other auth channels.
   authSignInGoogle: "auth.sign-in-google",
+  // "Connect wallet" (SIWE): main opens the system browser at the
+  // facade-served /wallet.html with a loopback ?handoff= target and
+  // receives the bearer via the loopback redirect. Same
+  // bearer-never-crosses-IPC rule as the other auth channels.
+  authSignInWallet: "auth.sign-in-wallet",
   authSignOut: "auth.sign-out",
   authRefresh: "auth.refresh",
   // Phase 6C tier-2 adapter lifecycle. Main owns the install pipeline

@@ -1,7 +1,7 @@
 // @vitest-environment node
 import { describe, expect, it } from "vitest";
 
-import { awaitLoopbackCode } from "./loopback-server";
+import { awaitLoopbackCode, awaitLoopbackHandoff } from "./loopback-server";
 
 describe("awaitLoopbackCode", () => {
   it("resolves with the code when the redirect lands with a matching state", async () => {
@@ -110,6 +110,182 @@ describe("awaitLoopbackCode — deferred state arming", () => {
       await expect(handle.codePromise).rejects.toThrow(/state mismatch/u);
     } finally {
       handle.close();
+    }
+  });
+});
+
+describe("awaitLoopbackHandoff — wallet bearer handoff", () => {
+  function handoffQuery(overrides: Record<string, string> = {}): string {
+    const params = new URLSearchParams({
+      state: "st-w",
+      bearer_token: "bearer-w",
+      user_id: "usr_w",
+      session_id: "ses_w",
+      expires_at: "2026-07-17T00:00:00.000Z",
+      requires_mfa: "false",
+      ...overrides,
+    });
+    for (const [key, value] of Object.entries(overrides)) {
+      if (value === "") params.delete(key);
+    }
+    return params.toString();
+  }
+
+  it("resolves with the parsed session handoff when the state matches", async () => {
+    const handle = await awaitLoopbackHandoff({
+      expectedState: "st-w",
+      callbackPath: "/wallet/cb",
+      timeoutMs: 2000,
+    });
+    try {
+      expect(handle.redirectUri).toMatch(
+        /^http:\/\/127\.0\.0\.1:\d+\/wallet\/cb$/u,
+      );
+      const response = await fetch(
+        `${handle.redirectUri}?${handoffQuery({ return_to: "atlas-desktop" })}`,
+      );
+      expect(response.status).toBe(200);
+      const handoff = await handle.handoffPromise;
+      expect(handoff).toEqual({
+        bearerToken: "bearer-w",
+        userId: "usr_w",
+        sessionId: "ses_w",
+        expiresAt: "2026-07-17T00:00:00.000Z",
+        requiresMfa: false,
+        returnTo: "atlas-desktop",
+        state: "st-w",
+      });
+    } finally {
+      handle.close();
+    }
+  });
+
+  it("parses requires_mfa=true and leaves return_to null when absent", async () => {
+    const handle = await awaitLoopbackHandoff({
+      expectedState: "st-w",
+      timeoutMs: 2000,
+    });
+    try {
+      await fetch(
+        `${handle.redirectUri}?${handoffQuery({ requires_mfa: "true" })}`,
+      );
+      const handoff = await handle.handoffPromise;
+      expect(handoff.requiresMfa).toBe(true);
+      expect(handoff.returnTo).toBeNull();
+    } finally {
+      handle.close();
+    }
+  });
+
+  it("rejects when the state does not match (forged handoff)", async () => {
+    const handle = await awaitLoopbackHandoff({
+      expectedState: "st-good",
+      timeoutMs: 2000,
+    });
+    try {
+      const response = await fetch(
+        `${handle.redirectUri}?${handoffQuery({ state: "st-bad" })}`,
+      );
+      expect(response.status).toBe(400);
+      await expect(handle.handoffPromise).rejects.toThrow(/state mismatch/u);
+    } finally {
+      handle.close();
+    }
+  });
+
+  it("rejects when required session fields are missing", async () => {
+    const handle = await awaitLoopbackHandoff({
+      expectedState: "st-w",
+      timeoutMs: 2000,
+    });
+    try {
+      const response = await fetch(
+        `${handle.redirectUri}?${handoffQuery({ bearer_token: "" })}`,
+      );
+      expect(response.status).toBe(400);
+      await expect(handle.handoffPromise).rejects.toThrow(
+        /missing required session fields/u,
+      );
+    } finally {
+      handle.close();
+    }
+  });
+
+  it("rejects a malformed requires_mfa value", async () => {
+    const handle = await awaitLoopbackHandoff({
+      expectedState: "st-w",
+      timeoutMs: 2000,
+    });
+    try {
+      await fetch(
+        `${handle.redirectUri}?${handoffQuery({ requires_mfa: "maybe" })}`,
+      );
+      await expect(handle.handoffPromise).rejects.toThrow(
+        /malformed requires_mfa/u,
+      );
+    } finally {
+      handle.close();
+    }
+  });
+
+  it("rejects when an error param is present", async () => {
+    const handle = await awaitLoopbackHandoff({
+      expectedState: "st-w",
+      timeoutMs: 2000,
+    });
+    try {
+      await fetch(`${handle.redirectUri}?error=user_rejected&state=st-w`);
+      await expect(handle.handoffPromise).rejects.toThrow(/user_rejected/u);
+    } finally {
+      handle.close();
+    }
+  });
+
+  it("returns 404 for unrelated paths", async () => {
+    const handle = await awaitLoopbackHandoff({
+      expectedState: "st-w",
+      timeoutMs: 2000,
+    });
+    try {
+      const response = await fetch(`http://127.0.0.1:${handle.port}/other`);
+      expect(response.status).toBe(404);
+    } finally {
+      handle.close();
+    }
+  });
+
+  it("close before any redirect rejects the handoff promise", async () => {
+    const handle = await awaitLoopbackHandoff({
+      expectedState: "st-w",
+      timeoutMs: 60_000,
+    });
+    handle.close();
+    await expect(handle.handoffPromise).rejects.toThrow(
+      /closed before redirect/u,
+    );
+  });
+
+  it("supports random-port binding with conflict retry like the code flow", async () => {
+    const blocker = await awaitLoopbackHandoff({
+      expectedState: "b",
+      timeoutMs: 5000,
+      randomPorts: {},
+    });
+    const picks = [blocker.port, 0];
+    try {
+      const handle = await awaitLoopbackHandoff({
+        expectedState: "x",
+        timeoutMs: 5000,
+        randomPorts: { pick: () => picks.shift() ?? 0 },
+      });
+      try {
+        expect(picks).toHaveLength(0);
+        expect(handle.port).not.toBe(blocker.port);
+      } finally {
+        handle.close();
+      }
+    } finally {
+      blocker.close();
     }
   });
 });

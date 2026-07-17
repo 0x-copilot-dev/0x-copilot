@@ -20,6 +20,8 @@ export interface AuthHandlers {
   signIn(workspaceId: string): Promise<RendererSession>;
   /** "Continue with Google" — system browser + loopback handoff. */
   signInWithGoogle(workspaceId: string): Promise<RendererSession>;
+  /** "Connect wallet" (SIWE) — system browser + loopback handoff. */
+  signInWithWallet(workspaceId: string): Promise<RendererSession>;
   signOut(workspaceId: string): Promise<void>;
   getSession(workspaceId: string): Promise<RendererSession | null>;
   refresh(workspaceId: string): Promise<RendererSession | null>;
@@ -169,6 +171,15 @@ export function registerIpcHandlers(deps: RegisterHandlersDeps): () => void {
       return auth.signInWithGoogle(params.workspaceId);
     });
 
+    ipcMain.handle(CHANNELS.authSignInWallet, async (_event, raw: unknown) => {
+      const params = parseOrThrow(
+        CHANNELS.authSignInWallet,
+        AuthWorkspaceParamsSchema,
+        raw,
+      );
+      return auth.signInWithWallet(params.workspaceId);
+    });
+
     ipcMain.handle(CHANNELS.authSignOut, async (_event, raw: unknown) => {
       const params = parseOrThrow(
         CHANNELS.authSignOut,
@@ -217,6 +228,7 @@ export function registerIpcHandlers(deps: RegisterHandlersDeps): () => void {
         CHANNELS.authGetSession,
         CHANNELS.authSignIn,
         CHANNELS.authSignInGoogle,
+        CHANNELS.authSignInWallet,
         CHANNELS.authSignOut,
         CHANNELS.authRefresh,
       );

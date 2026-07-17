@@ -86,6 +86,21 @@ export function SignInGate(props: SignInGateProps): ReactNode {
       });
   }, [bridge, workspaceId]);
 
+  const signInWithWallet = useCallback(() => {
+    setPhase({ kind: "signing-in" });
+    bridge.ipc
+      .invoke<RendererSession>(CHANNELS.authSignInWallet, { workspaceId })
+      .then((session) => {
+        setPhase({ kind: "signed-in", session });
+      })
+      .catch((err: unknown) => {
+        setPhase({
+          kind: "error",
+          message: err instanceof Error ? err.message : "Wallet sign-in failed",
+        });
+      });
+  }, [bridge, workspaceId]);
+
   const retry = useCallback(() => {
     setPhase({ kind: "anon" });
   }, []);
@@ -108,6 +123,13 @@ export function SignInGate(props: SignInGateProps): ReactNode {
             >
               Continue with Google
             </button>
+            <button
+              type="button"
+              onClick={signInWithWallet}
+              data-testid="sign-in-wallet-button"
+            >
+              Connect wallet
+            </button>
           </SignInChrome>
         );
       case "signing-in":
@@ -124,7 +146,7 @@ export function SignInGate(props: SignInGateProps): ReactNode {
       case "signed-in":
         return children(phase.session);
     }
-  }, [phase, signIn, signInWithGoogle, retry, children]);
+  }, [phase, signIn, signInWithGoogle, signInWithWallet, retry, children]);
 
   return content;
 }
