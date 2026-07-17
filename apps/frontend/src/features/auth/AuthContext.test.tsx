@@ -137,6 +137,103 @@ describe("AuthContext", () => {
       expect(screen.getByTestId("status").textContent).toBe("mfa_pending");
     });
   });
+
+  it("adoptSession() sets the bearer and refreshes into authenticated", async () => {
+    // First probe (mount) 401s; the probe after adoption succeeds — the
+    // SIWE verify handoff mints the bearer out-of-band.
+    const probe = vi
+      .spyOn(authApi, "fetchCurrentSession")
+      .mockRejectedValueOnce(new UnauthorizedError("Missing bearer token"))
+      .mockResolvedValue({
+        identity: {
+          org_id: "org_a",
+          user_id: "usr_wallet",
+          roles: ["employee"],
+          permission_scopes: ["runtime:use"],
+        },
+      });
+
+    function AdoptHarness(): ReactElement {
+      const auth = useAuth();
+      return (
+        <>
+          <StatusProbe />
+          <button
+            type="button"
+            onClick={() =>
+              void auth.adoptSession({
+                bearer_token: "stub.wallet.bearer",
+                session_id: "sid_w",
+                user_id: "usr_wallet",
+                requires_mfa: false,
+              })
+            }
+          >
+            adopt
+          </button>
+        </>
+      );
+    }
+    render(
+      <AuthProvider persistBearer={false}>
+        <AdoptHarness />
+      </AuthProvider>,
+    );
+    await waitFor(() => {
+      expect(screen.getByTestId("status").textContent).toBe("anonymous");
+    });
+    await act(async () => {
+      await userEvent.click(screen.getByRole("button", { name: "adopt" }));
+    });
+    await waitFor(() => {
+      expect(screen.getByTestId("status").textContent).toBe(
+        "authenticated:usr_wallet",
+      );
+    });
+    expect(probe.mock.calls.length).toBeGreaterThanOrEqual(2);
+  });
+
+  it("adoptSession() with requires_mfa=true parks in mfa_pending", async () => {
+    vi.spyOn(authApi, "fetchCurrentSession").mockRejectedValue(
+      new UnauthorizedError("Missing bearer token"),
+    );
+
+    function AdoptHarness(): ReactElement {
+      const auth = useAuth();
+      return (
+        <>
+          <StatusProbe />
+          <button
+            type="button"
+            onClick={() =>
+              void auth.adoptSession({
+                bearer_token: "stub.wallet.bearer",
+                session_id: "sid_w",
+                user_id: "usr_wallet",
+                requires_mfa: true,
+              })
+            }
+          >
+            adopt
+          </button>
+        </>
+      );
+    }
+    render(
+      <AuthProvider persistBearer={false}>
+        <AdoptHarness />
+      </AuthProvider>,
+    );
+    await waitFor(() => {
+      expect(screen.getByTestId("status").textContent).toBe("anonymous");
+    });
+    await act(async () => {
+      await userEvent.click(screen.getByRole("button", { name: "adopt" }));
+    });
+    await waitFor(() => {
+      expect(screen.getByTestId("status").textContent).toBe("mfa_pending");
+    });
+  });
 });
 
 describe("LoginScreen — email-first (PR 5.1)", () => {

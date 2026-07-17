@@ -124,6 +124,18 @@ export interface AuthContextValue extends AuthState {
   /** PR 5.1 — exchange the workspace_pick state's ``pick_token`` plus a
    * chosen org for a final session bearer. Refreshes after success. */
   selectWorkspaceFromPick(orgId: string): Promise<void>;
+  /** SIWE wallet sign-in — adopt an already-minted session handoff (the
+   * OIDC-callback-shaped ``{bearer_token, session_id, user_id,
+   * requires_mfa}`` payload ``POST /v1/auth/siwe/verify`` returns).
+   * Mirrors the tail of ``login``: sets the bearer, then either flips to
+   * ``mfa_pending`` (AuthGate mounts ``<MfaPrompt>``) or refreshes into
+   * ``authenticated``. */
+  adoptSession(handoff: {
+    bearer_token: string;
+    session_id: string;
+    user_id: string;
+    requires_mfa: boolean;
+  }): Promise<void>;
   logout(): Promise<void>;
   refresh(): Promise<void>;
   bearer(): string | null;
@@ -431,6 +443,35 @@ export function AuthProvider({
     [refresh, setBearer, state.workspacePick],
   );
 
+  const adoptSession = useCallback(
+    async (handoff: {
+      bearer_token: string;
+      session_id: string;
+      user_id: string;
+      requires_mfa: boolean;
+    }): Promise<void> => {
+      setBearer(handoff.bearer_token);
+      if (handoff.requires_mfa) {
+        // Same shape `login` produces: the session carries `mfa:pending`
+        // and AuthGate routes to <MfaPrompt> off this state.
+        setState({
+          status: "mfa_pending",
+          identity: null,
+          mfaPending: {
+            session_id: handoff.session_id,
+            bearer_token: handoff.bearer_token,
+            user_id: handoff.user_id,
+          },
+          workspacePick: null,
+          error: null,
+        });
+        return;
+      }
+      await refresh();
+    },
+    [refresh, setBearer],
+  );
+
   const handleLogout = useCallback(async () => {
     try {
       await logoutApi();
@@ -477,6 +518,7 @@ export function AuthProvider({
       completeMfa,
       consumeMagicLink,
       selectWorkspaceFromPick,
+      adoptSession,
       logout: handleLogout,
       refresh,
       bearer: () => bearerRef.current,
@@ -488,6 +530,7 @@ export function AuthProvider({
       completeMfa,
       consumeMagicLink,
       selectWorkspaceFromPick,
+      adoptSession,
       handleLogout,
       refresh,
       switchWorkspace,
