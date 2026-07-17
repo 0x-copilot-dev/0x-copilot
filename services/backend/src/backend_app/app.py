@@ -215,6 +215,12 @@ from backend_app.routes.notifications import (
 from backend_app.routes.privacy import register_privacy_settings_routes
 from backend_app.routes.tool_use_policies import register_tool_use_policy_routes
 from backend_app.routes.runtime_policies import register_runtime_policies_routes
+from backend_app.provider_keys import (
+    InMemoryProviderApiKeyStore,
+    ProviderApiKeyStore,
+    ProviderKeysService,
+    register_provider_keys_routes,
+)
 from backend_app.routes.me_profile import register_me_profile_routes
 from backend_app.routes.members import register_members_routes
 from backend_app.routes.me_mfa import register_me_mfa_routes
@@ -441,6 +447,7 @@ def create_app(
     agents_store: AgentsStore | None = None,
     tools_store: ToolsStore | None = None,
     settings_store: SettingsStore | None = None,
+    provider_api_keys_store: ProviderApiKeyStore | None = None,
     liveness_service: LivenessService | None = None,
     palette_store: PaletteStorePort | None = None,
 ) -> FastAPI:
@@ -1354,14 +1361,45 @@ def create_app(
             identity_store=resolved_identity_store,
         ),
     )
+    # Phase 2 BYOK — per-user provider API keys, encrypted at rest via
+    # the shared TokenVault adapter (same encryption path as MCP OAuth
+    # tokens + TOTP secrets). Routes register only when a vault is
+    # available (webhooks pattern) — without one there is no safe way
+    # to store the secret.
+    resolved_provider_keys_store: ProviderApiKeyStore = (
+        provider_api_keys_store or InMemoryProviderApiKeyStore()
+    )
+    app.state.provider_api_keys_store = resolved_provider_keys_store
+    # Vault resolution mirrors the MFA/OIDC block but does NOT require a
+    # session service: an injected vault (tests) or the deployment
+    # default (dev/prod) both work. ``app.state.token_vault`` wins when
+    # the session block already resolved one so every consumer shares
+    # the same adapter instance.
+    provider_keys_vault = (
+        getattr(app.state, "token_vault", None)
+        or token_vault
+        or _default_token_vault(resolved_deployment)
+    )
+    provider_keys_service: ProviderKeysService | None = None
+    if provider_keys_vault is not None:
+        provider_keys_service = ProviderKeysService(
+            store=resolved_provider_keys_store,
+            identity_store=resolved_identity_store,
+            token_vault=provider_keys_vault,
+        )
+        app.state.provider_keys_service = provider_keys_service
+        register_provider_keys_routes(app, service=provider_keys_service)
     # PR 8.0.5 — single aggregate runtime-policies route consumed by
     # ai-backend at run start. Composes the same two stores above into
     # one wire shape so each run pays one HTTP round-trip instead of
     # two. Read-only; no audit row beyond the per-fetch access log.
+    # Phase 2 BYOK adds the optional decrypted ``provider_keys`` section
+    # to the same snapshot (service-token-only lane).
     register_runtime_policies_routes(
         app,
         tool_use_store=resolved_policy_store,
         privacy_store=resolved_privacy_store,
+        provider_keys_service=provider_keys_service,
     )
     # PR B3 / 8.0.3g — personal API keys (atlas_pk_… bearer for CI /
     # scripts). Plaintext is shown ONCE on creation; the server stores

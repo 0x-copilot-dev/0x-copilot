@@ -147,3 +147,70 @@ class TestAggregateShape:
         assert body["privacy"]["training_opt_out"] is False
         assert body["privacy"]["region"] == "us-east-1"
         assert body["privacy"]["retention_days"] == 180
+
+
+class TestProviderKeysSection:
+    """Phase 2 BYOK — the aggregate carries decrypted per-user provider
+    keys for the run, only when the user actually stored some."""
+
+    # Deliberately fake keys — long enough to pass the plausibility
+    # floor, obviously not real credentials.
+    _OPENAI_KEY = "sk-test-openai-0000000000000000001234"
+    _GOOGLE_KEY = "AIzaTest-00000000000000000000005678"
+
+    def _byok_client(self) -> TestClient:
+        from backend_app.provider_keys.store import InMemoryProviderApiKeyStore
+        from backend_app.token_vault import LocalTokenVault
+
+        app = create_app(
+            configure_logging_on_create=False,
+            configure_telemetry_on_create=False,
+            identity_store=_seeded_identity(),
+            provider_api_keys_store=InMemoryProviderApiKeyStore(),
+            token_vault=LocalTokenVault(
+                secret="test-vault-secret-32-chars-min-length-yes"
+            ),
+        )
+        return TestClient(app)
+
+    def test_absent_when_no_keys_stored(self) -> None:
+        client = self._byok_client()
+        response = client.get("/internal/v1/policies/runtime", params=_params())
+        assert response.status_code == 200, response.text
+        assert response.json()["provider_keys"] is None
+
+    def test_decrypted_keys_present_only_for_stored_providers(self) -> None:
+        client = self._byok_client()
+        # Store through the public surface so the test covers the full
+        # encrypt-on-write → decrypt-on-internal-read path.
+        for provider, key in (
+            ("openai", self._OPENAI_KEY),
+            ("google", self._GOOGLE_KEY),
+        ):
+            put = client.put(
+                f"/v1/settings/provider-keys/{provider}",
+                params=_params(),
+                json={"api_key": key},
+            )
+            assert put.status_code == 200, put.text
+        response = client.get("/internal/v1/policies/runtime", params=_params())
+        assert response.status_code == 200, response.text
+        assert response.json()["provider_keys"] == {
+            "openai": self._OPENAI_KEY,
+            "google": self._GOOGLE_KEY,
+        }
+
+    def test_keys_are_scoped_to_the_requesting_user(self) -> None:
+        client = self._byok_client()
+        put = client.put(
+            "/v1/settings/provider-keys/openai",
+            params=_params(),
+            json={"api_key": self._OPENAI_KEY},
+        )
+        assert put.status_code == 200, put.text
+        response = client.get(
+            "/internal/v1/policies/runtime",
+            params={"org_id": "org_acme", "user_id": "usr_marcus"},
+        )
+        assert response.status_code == 200
+        assert response.json()["provider_keys"] is None
