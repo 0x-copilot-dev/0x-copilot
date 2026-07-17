@@ -6,6 +6,10 @@ services:
     environment:
       BACKEND_ENVIRONMENT: development
       MCP_TOKEN_VAULT_PROVIDER: local
+      # Global "Continue with Google" OIDC provider (optional; provider id
+      # "google" is advertised on /v1/auth/providers only when set).
+      GOOGLE_OAUTH_CLIENT_ID: ${GOOGLE_OAUTH_CLIENT_ID:-}
+      GOOGLE_OAUTH_CLIENT_SECRET: ${GOOGLE_OAUTH_CLIENT_SECRET:-}
     ports:
       - "8100:8100"
 

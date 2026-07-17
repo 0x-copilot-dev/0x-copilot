@@ -19,7 +19,9 @@ keys (per the A3 spec):
 from __future__ import annotations
 
 import logging
-from collections.abc import Iterable
+import re
+import secrets
+from collections.abc import Iterable, Mapping
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
 from typing import Any, Protocol
@@ -40,6 +42,7 @@ from backend_app.contracts import (
     OidcRefreshTokenRecord,
     OrganizationMemberRecord,
     OrganizationMemberSource,
+    OrganizationRecord,
     RoleAssignmentRecord,
     SessionMintResult,
     UserRecord,
@@ -67,6 +70,12 @@ _LOGGER = logging.getLogger(__name__)
 
 _AUTH_TTL_SECONDS = 10 * 60  # 10 minutes from authorize → callback
 _DEFAULT_SCOPES = ("openid", "email", "profile")
+
+# Personal-org slug derivation for global-provider self-signup: keep only
+# slug-legal characters from the email local part; collision retries append
+# a short random hex suffix.
+_SLUG_STRIP_PATTERN = re.compile(r"[^a-z0-9_-]+")
+_SLUG_MAX_COLLISION_RETRIES = 32
 
 
 def _now() -> datetime:
@@ -237,12 +246,25 @@ class OidcService:
         jwks_provider: JwksProvider | None = None,
         lockout: LockoutService | None = None,
         mfa: MfaService | None = None,
+        global_providers: Mapping[str, AuthProviderRecord] | None = None,
+        allow_self_signup: bool = False,
     ) -> None:
         self._identity_store = identity_store
         self._oidc_store = oidc_store
         self._sessions = sessions
         self._token_vault = token_vault
         self._lockout = lockout
+        # Deployment-global providers (today: the env-configured Google
+        # provider, reserved id "google"). Resolved before — and therefore
+        # shadowing — any per-org auth_providers row with the same id.
+        self._global_providers: dict[str, AuthProviderRecord] = dict(
+            global_providers or {}
+        )
+        # Deployment-profile toggle (``allow_self_signup``). Gates whether an
+        # unknown subject arriving through a *global* provider gets a personal
+        # org provisioned. Per-org providers keep their own
+        # ``auto_provision_user`` config flag.
+        self._allow_self_signup = allow_self_signup
         # Same opt-in as PasswordService — when wired AND the org's
         # ``identity_policies.mfa_required`` is true AND the user has at
         # least one enrolled factor, the OIDC mint puts the session in
@@ -273,6 +295,13 @@ class OidcService:
         )
         if not provider.enabled:
             raise OidcProviderDisabled(f"provider {provider_id} is disabled")
+        if self._is_global(provider_id):
+            # Global providers are org-less at authorize time — the caller
+            # cannot know the workspace before the IdP identifies the user
+            # (facade sends the "-" placeholder). Pin the in-flight state
+            # row to the provider's sentinel org id; the callback resolves
+            # the real org from the linked identity or self-signup.
+            org_id = provider.org_id
 
         verifier = generate_verifier()
         state = generate_state()
@@ -427,9 +456,22 @@ class OidcService:
         )
 
     # Helpers -----------------------------------------------------------
+    def _is_global(self, provider_id: str) -> bool:
+        return provider_id in self._global_providers
+
     def _resolve_provider(
         self, *, org_id: str, provider_id: str
     ) -> tuple[AuthProviderRecord, OidcProviderConfig]:
+        global_record = self._global_providers.get(provider_id)
+        if global_record is not None:
+            # Env-configured global provider (e.g. "google"): resolution is
+            # org-independent and never reads auth_providers — the persisted
+            # anchor row exists only so Postgres FKs hold.
+            if global_record.kind.value != "oidc":
+                raise OidcConfigError(
+                    f"global provider {provider_id} is not an OIDC provider"
+                )
+            return global_record, OidcProviderConfig.from_provider(global_record)
         provider = self._identity_store.get_auth_provider(
             org_id=org_id, provider_id=provider_id
         )
@@ -504,6 +546,19 @@ class OidcService:
             )
             return user
 
+        if self._is_global(provider.provider_id):
+            # Global providers (e.g. "google") never JIT-provision into the
+            # provider's org — an unknown subject is a brand-new signup that
+            # gets its own personal org, gated by the deployment profile.
+            return self._self_signup_provision(
+                provider=provider,
+                subject=subject,
+                email=email,
+                claims=claims,
+                ip=ip,
+                user_agent=user_agent,
+            )
+
         if not config.auto_provision_user:
             self._record_login_attempt(
                 org_id=provider.org_id,
@@ -559,6 +614,143 @@ class OidcService:
             )
         )
         return user
+
+    def _self_signup_provision(
+        self,
+        *,
+        provider: AuthProviderRecord,
+        subject: str,
+        email: str | None,
+        claims: dict[str, Any],
+        ip: str | None,
+        user_agent: str | None,
+    ) -> UserRecord:
+        """First login through a global provider: create a personal org.
+
+        Provisions org + user + membership + admin role + identity link in
+        one shot, mirroring the per-org JIT path's shape. The sole member of
+        a personal org is its admin (system ``admin`` role). Refused when
+        the deployment profile's ``allow_self_signup`` toggle is off — same
+        ``OidcUserNotProvisioned`` surface as JIT-off per-org providers.
+        """
+
+        if not self._allow_self_signup:
+            self._record_login_attempt(
+                org_id=provider.org_id,
+                outcome=LoginAttemptOutcome.UNKNOWN_USER,
+                ip=ip,
+                user_agent=user_agent,
+                failure_reason="self-signup disabled by deployment profile",
+            )
+            raise OidcUserNotProvisioned(
+                "OIDC subject not linked and self-signup is disabled "
+                "for this deployment"
+            )
+        if email is None:
+            raise OidcUserNotProvisioned(
+                "id_token has no email claim; cannot self-provision user"
+            )
+        email_verified = claims.get("email_verified")
+        if email_verified is False:
+            # The IdP explicitly says the address is unverified — refuse to
+            # anchor a brand-new account on it (email drives org slug,
+            # discovery, and magic-link routing).
+            self._record_login_attempt(
+                org_id=provider.org_id,
+                outcome=LoginAttemptOutcome.PROVIDER_REJECTED,
+                ip=ip,
+                user_agent=user_agent,
+                failure_reason="IdP reports email not verified",
+            )
+            raise OidcUserNotProvisioned(
+                "IdP reports the email address is not verified; refusing self-signup"
+            )
+
+        display_name = claims.get("name") or claims.get("preferred_username") or email
+        local_part = email.split("@", 1)[0]
+        slug = self._free_personal_org_slug(local_part)
+
+        with self._identity_store.transaction():
+            org = self._identity_store.create_organization(
+                OrganizationRecord(display_name=local_part, slug=slug)
+            )
+            user = self._identity_store.create_user(
+                UserRecord(
+                    org_id=org.org_id,
+                    primary_email=email,
+                    display_name=str(display_name),
+                    email_verified_at=_now() if email_verified is True else None,
+                )
+            )
+            self._identity_store.add_member(
+                OrganizationMemberRecord(
+                    org_id=org.org_id,
+                    user_id=user.user_id,
+                    source=OrganizationMemberSource.OIDC,
+                )
+            )
+            admin_role = self._identity_store.get_role_by_name(
+                org_id=None, name="admin"
+            )
+            if admin_role is not None:
+                self._identity_store.assign_role(
+                    RoleAssignmentRecord(
+                        org_id=org.org_id,
+                        user_id=user.user_id,
+                        role_id=admin_role.role_id,
+                    )
+                )
+            else:  # pragma: no cover - system-role seed missing
+                _LOGGER.warning(
+                    "self-signup: system role 'admin' missing; user %s falls "
+                    "back to default employee scopes",
+                    user.user_id,
+                )
+            self._identity_store.append_identity_audit(
+                self._audit_event(
+                    provider=provider,
+                    user=user,
+                    action="oidc.self_signup_org_created",
+                    metadata={"org_slug": slug, "subject": subject},
+                    ip=ip,
+                    user_agent=user_agent,
+                )
+            )
+            self._identity_store.append_identity_audit(
+                self._audit_event(
+                    provider=provider,
+                    user=user,
+                    action="oidc.user_provisioned",
+                    metadata={"subject": subject, "email": email},
+                    ip=ip,
+                    user_agent=user_agent,
+                )
+            )
+
+        self._oidc_store.create_identity(
+            OidcIdentityRecord(
+                org_id=org.org_id,
+                user_id=user.user_id,
+                provider_id=provider.provider_id,
+                subject=subject,
+                email_at_link=email,
+                claims_snapshot=_safe_claims_snapshot(claims),
+            )
+        )
+        return user
+
+    def _free_personal_org_slug(self, local_part: str) -> str:
+        base = _SLUG_STRIP_PATTERN.sub("-", local_part.lower()).strip("-_")
+        if not base or not base[0].isalnum():
+            base = "workspace"
+        candidate = base
+        for _ in range(_SLUG_MAX_COLLISION_RETRIES):
+            if self._identity_store.get_organization_by_slug(slug=candidate) is None:
+                return candidate
+            candidate = f"{base}-{secrets.token_hex(2)}"
+        raise OidcConfigError(
+            f"could not derive a free org slug from {local_part!r}"
+        )  # pragma: no cover - 32 random collisions
 
     def _sync_role_assignments(
         self,
@@ -737,8 +929,11 @@ class OidcService:
         ip: str | None = None,
         user_agent: str | None = None,
     ) -> IdentityAuditEventRecord:
+        # Attribute to the resolved user's org when we have one. For per-org
+        # providers the two are identical; for global providers (google) the
+        # provider carries a sentinel org while the user lives in a real org.
         return IdentityAuditEventRecord(
-            org_id=provider.org_id,
+            org_id=user.org_id if user is not None else provider.org_id,
             actor_user_id=user.user_id if user else None,
             subject_user_id=user.user_id if user else None,
             action=action,

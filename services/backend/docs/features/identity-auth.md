@@ -99,6 +99,45 @@ JWKS is fetched via `identity/jwks.py` and cached in `OidcJwksCacheRecord` (TTL-
 JIT provisioning — on first login, creates `UserRecord` + `OrganizationMemberRecord` + default role assignment.
 `attributes_snapshot` in `OidcIdentityRecord` stores the last-seen claims for audit.
 
+### Global "Continue with Google" provider
+
+`backend_app/identity/google.py`
+
+A deployment-global OIDC provider under the **reserved id `google`**, resolved
+from env — not from a per-org `auth_providers` row:
+
+- `GOOGLE_OAUTH_CLIENT_ID` (enables the provider when set) and
+  `GOOGLE_OAUTH_CLIENT_SECRET` (optional; enables `client_secret_post`; the
+  value is TokenVault-encrypted at boot and decrypted only at token exchange,
+  same path as per-org secrets).
+- Endpoints are Google's documented OIDC constants (issuer
+  `https://accounts.google.com`, `.../o/oauth2/v2/auth`,
+  `https://oauth2.googleapis.com/token`, `.../oauth2/v3/certs`); scopes
+  `openid email profile`.
+- `OidcService` resolves global providers before (and shadowing) org-scoped
+  rows; `GET /internal/v1/auth/oidc/providers` appends the `google` entry for
+  every org — including the org-less placeholder `org_id="-"` used by the
+  pre-workspace login screen.
+- Authorize with a global provider pins the state row to the sentinel org
+  `org_global_google` (callers pass `org_id="-"`). The callback resolves the
+  real org from the linked identity, or provisions one (below).
+- Zero-migration persistence: an `auth_providers` **anchor row** is upserted
+  at boot (`ensure_global_auth_provider`) purely so the Postgres FKs on
+  `oidc_authentications` / `oidc_identities` / `oidc_refresh_tokens` /
+  `oidc_jwks_cache` hold. Resolution never reads it.
+
+**Self-signup** (first Google login with an unknown `sub`): gated by the
+deployment profile's `allow_self_signup` toggle (on for `saas_multi_tenant`
+and dev, off for single-tenant profiles). When on, the callback provisions a
+personal org (slug/name derived from the email local part, collision-safe
+random suffix), the user (`email_verified_at` stamped only when the ID token
+says `email_verified: true`; explicit `false` refuses signup), an
+`organization_members` row (`source=oidc`), the system `admin` role for the
+sole member, and the `oidc_identities` link — then mints the session exactly
+like JIT provisioning. When off, unknown subjects get the standard
+`OidcUserNotProvisioned` 401. Audit events: `oidc.self_signup_org_created` +
+`oidc.user_provisioned` in the new org.
+
 ---
 
 ## SAML 2.0 SSO (A5)

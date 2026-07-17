@@ -12,6 +12,7 @@ from backend_app.auth import BackendServiceAuthenticator
 from backend_app.identity.rbac import public_route
 from backend_app.contracts import (
     AuthProviderKind,
+    AuthProviderRecord,
     OidcAuthorizeRequest,
     OidcAuthorizeResult,
     OidcCallbackRequest,
@@ -37,7 +38,13 @@ def register_oidc_routes(
     *,
     service: OidcService,
     identity_store: IdentityStore,
+    global_providers: dict[str, AuthProviderRecord] | None = None,
 ) -> None:
+    # Deployment-global providers (env-configured, e.g. "google") are
+    # advertised to every org — and to org-less callers (org_id="-") so the
+    # pre-workspace login screen can render "Continue with Google".
+    resolved_global_providers = dict(global_providers or {})
+
     @app.post(
         "/internal/v1/auth/oidc/{provider_id}/authorize",
         response_model=OidcAuthorizeResult,
@@ -128,7 +135,23 @@ def register_oidc_routes(
             )
             for record in records
             if record.kind == AuthProviderKind.OIDC
+            # Reserved global ids never surface as per-org rows — resolution
+            # would shadow them anyway, so hide the stale duplicate.
+            and record.provider_id not in resolved_global_providers
         ]
+        for global_record in resolved_global_providers.values():
+            if global_record.kind != AuthProviderKind.OIDC:
+                continue
+            if not global_record.enabled:
+                continue
+            oidc_only.append(
+                OidcProviderSummary(
+                    provider_id=global_record.provider_id,
+                    kind=global_record.kind,
+                    display_name=global_record.display_name,
+                    enabled=global_record.enabled,
+                )
+            )
         return OidcProvidersResponse(providers=tuple(oidc_only))
 
 
