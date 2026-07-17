@@ -80,11 +80,18 @@ export async function fetchCurrentSession(): Promise<SessionEnvelope> {
 // Provider listing + login
 // ---------------------------------------------------------------------------
 
+/**
+ * List sign-in providers. With ``orgId`` the list is org-scoped (SSO
+ * providers registered for that workspace). Without it the facade returns
+ * the public, org-agnostic providers — e.g. an entry with
+ * ``provider_id: "google"`` when Google login is configured server-side.
+ * The login screen probes the unscoped list before any org is known.
+ */
 export async function listAuthProviders(
-  orgId: string,
+  orgId?: string,
 ): Promise<AuthProviderSummary[]> {
-  const params = new URLSearchParams({ org_id: orgId });
-  const data = await get<AuthProvidersResponse>(`/v1/auth/providers?${params}`);
+  const query = orgId ? `?${new URLSearchParams({ org_id: orgId })}` : "";
+  const data = await get<AuthProvidersResponse>(`/v1/auth/providers${query}`);
   return data.providers;
 }
 

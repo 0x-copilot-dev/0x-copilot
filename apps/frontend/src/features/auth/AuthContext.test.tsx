@@ -147,6 +147,9 @@ describe("LoginScreen — email-first (PR 5.1)", () => {
       /* no localStorage in this test env */
     }
     vi.restoreAllMocks();
+    // The mount-time provider probe (Google entry point) is not under test
+    // here; stub it to "nothing advertised" so these cases stay hermetic.
+    vi.spyOn(authApi, "listAuthProviders").mockResolvedValue([]);
   });
 
   it("renders the brand pane + autofocused email field", async () => {
@@ -364,6 +367,145 @@ describe("LoginScreen — email-first (PR 5.1)", () => {
         org_id: "org_acme",
       });
     });
+  });
+});
+
+describe("LoginScreen — Continue with Google", () => {
+  const GOOGLE_PROVIDER = {
+    provider_id: "google",
+    kind: "oidc",
+    display_name: "Google",
+    enabled: true,
+  } as const;
+
+  beforeEach(() => {
+    try {
+      window.localStorage?.clear?.();
+    } catch {
+      /* no localStorage in this test env */
+    }
+    vi.restoreAllMocks();
+    vi.spyOn(authApi, "fetchCurrentSession").mockRejectedValue(
+      new UnauthorizedError("Missing bearer token"),
+    );
+    // Earlier describes replace window.location with a magic-link-callback
+    // mock that leaks across tests in this file; anchor back to "/" so the
+    // screen boots into the email step.
+    Object.defineProperty(window, "location", {
+      configurable: true,
+      value: {
+        assign: vi.fn(),
+        origin: "http://localhost",
+        pathname: "/",
+        search: "",
+        href: "http://localhost/",
+      },
+    });
+  });
+
+  it("renders the button when the providers list advertises google", async () => {
+    vi.spyOn(authApi, "listAuthProviders").mockResolvedValue([GOOGLE_PROVIDER]);
+    render(
+      <AuthProvider persistBearer={false}>
+        <LoginScreen />
+      </AuthProvider>,
+    );
+    expect(await screen.findByTestId("login-google")).toBeInTheDocument();
+    expect(screen.getByText("Continue with Google")).toBeInTheDocument();
+    expect(screen.getByText(/or continue with email/)).toBeInTheDocument();
+    // The email-first flow stays fully intact alongside the new entry point.
+    expect(screen.getByTestId("login-email-input")).toBeInTheDocument();
+    expect(screen.getByTestId("login-submit")).toBeInTheDocument();
+  });
+
+  it("stays hidden when the providers list has no google entry", async () => {
+    const providersSpy = vi
+      .spyOn(authApi, "listAuthProviders")
+      .mockResolvedValue([
+        {
+          provider_id: "prv_okta",
+          kind: "oidc",
+          display_name: "Okta",
+          enabled: true,
+        },
+      ]);
+    render(
+      <AuthProvider persistBearer={false}>
+        <LoginScreen />
+      </AuthProvider>,
+    );
+    await waitFor(() => expect(providersSpy).toHaveBeenCalled());
+    await act(async () => {
+      /* flush the resolved providers promise */
+    });
+    expect(screen.getByTestId("login-email-input")).toBeInTheDocument();
+    expect(screen.queryByTestId("login-google")).toBeNull();
+  });
+
+  it("stays hidden when the google entry is disabled", async () => {
+    const providersSpy = vi
+      .spyOn(authApi, "listAuthProviders")
+      .mockResolvedValue([{ ...GOOGLE_PROVIDER, enabled: false }]);
+    render(
+      <AuthProvider persistBearer={false}>
+        <LoginScreen />
+      </AuthProvider>,
+    );
+    await waitFor(() => expect(providersSpy).toHaveBeenCalled());
+    await act(async () => {
+      /* flush the resolved providers promise */
+    });
+    expect(screen.queryByTestId("login-google")).toBeNull();
+  });
+
+  it("degrades silently to no button when the providers fetch fails", async () => {
+    const providersSpy = vi
+      .spyOn(authApi, "listAuthProviders")
+      .mockRejectedValue(new Error("providers endpoint unavailable"));
+    render(
+      <AuthProvider persistBearer={false}>
+        <LoginScreen />
+      </AuthProvider>,
+    );
+    await waitFor(() => expect(providersSpy).toHaveBeenCalled());
+    await act(async () => {
+      /* flush the rejected providers promise */
+    });
+    expect(screen.getByTestId("login-email-input")).toBeInTheDocument();
+    expect(screen.queryByTestId("login-google")).toBeNull();
+  });
+
+  it("click navigates to the google OIDC start URL with return_to", async () => {
+    vi.spyOn(authApi, "listAuthProviders").mockResolvedValue([GOOGLE_PROVIDER]);
+    const assignSpy = vi.fn();
+    Object.defineProperty(window, "location", {
+      configurable: true,
+      value: {
+        assign: assignSpy,
+        origin: "http://localhost",
+        pathname: "/",
+        search: "",
+        href: "http://localhost/",
+      },
+    });
+    render(
+      <AuthProvider persistBearer={false}>
+        <LoginScreen returnTo="/inbox" />
+      </AuthProvider>,
+    );
+    const button = await screen.findByTestId("login-google");
+    await act(async () => {
+      await userEvent.click(button);
+    });
+    expect(assignSpy).toHaveBeenCalledTimes(1);
+    const url = String(assignSpy.mock.calls[0]?.[0] ?? "");
+    expect(url).toContain("/v1/auth/oidc/google/start");
+    expect(url).toContain(
+      `redirect_uri=${encodeURIComponent("http://localhost/v1/auth/oidc/callback")}`,
+    );
+    expect(url).toContain("return_to=%2Finbox");
+    // No org is known pre-auth on the Google path.
+    expect(url).not.toContain("org_id=");
   });
 });
 
