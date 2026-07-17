@@ -42,6 +42,29 @@ class TestDeploymentProfileLoader:
 
         assert profile.toggles.require_field_level_encryption is True
 
+    def test_single_user_desktop_relaxes_kms_but_not_dev_bypass(self) -> None:
+        profile = DeploymentProfileLoader.load(
+            env={"ENTERPRISE_DEPLOYMENT_PROFILE": "single_user_desktop"}
+        )
+
+        assert profile.name == "single_user_desktop"
+        assert profile.toggles.require_kms_token_vault is False
+        assert profile.toggles.dev_auth_bypass_allowed is False
+        assert profile.toggles.allow_self_signup is True
+        assert profile.toggles.enforce_rls is False
+        assert profile.toggles.siem_export_required is False
+        assert profile.toggles.allow_vendor_telemetry is False
+        assert profile.toggles.pricing_primary_source == "litellm"
+
+    def test_dev_bypass_with_desktop_profile_fails_closed(self) -> None:
+        with pytest.raises(DeploymentProfileError):
+            DeploymentProfileLoader.load(
+                env={
+                    "ENTERPRISE_DEPLOYMENT_PROFILE": "single_user_desktop",
+                    "DEV_AUTH_BYPASS": "true",
+                }
+            )
+
     def test_unknown_profile_fails_closed(self) -> None:
         with pytest.raises(DeploymentProfileError):
             DeploymentProfileLoader.load(

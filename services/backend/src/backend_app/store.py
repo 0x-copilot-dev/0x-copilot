@@ -191,6 +191,21 @@ class PostgresConnectionPool:
     def connection(self) -> Any:
         return self._pool.connection()
 
+    @contextmanager
+    def transaction(self) -> Iterator[Any]:
+        """Yield a pooled connection inside an explicit transaction block.
+
+        The dataclass-style Postgres stores (``PostgresAuthProviderDomainStore``,
+        ``PostgresMagicLinkTokenStore``) call ``pool.transaction()`` directly;
+        every other adapter wraps this same connection+transaction pattern
+        itself. Adding it here lets composition roots hand those stores the
+        shared pool without a per-store shim.
+        """
+
+        with self._pool.connection() as conn:
+            with conn.transaction():
+                yield conn
+
     def close(self) -> None:
         self._pool.close()
 

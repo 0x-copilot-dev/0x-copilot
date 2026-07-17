@@ -107,6 +107,23 @@ class DeploymentProfileLoader:
             "siem_export_required": True,
             "pricing_primary_source": "litellm",
         },
+        # Desktop app: one person, one workspace, bundled local Postgres.
+        # Local Fernet vault instead of KMS; RLS/SIEM off because the OS
+        # user boundary is the tenant boundary. Self-signup ON — the user
+        # creates their own workspace via Google/wallet at first launch.
+        # Desktop machines are online, so pricing stays on litellm.
+        "single_user_desktop": {
+            "allow_embedded_provider_keys": True,
+            "allow_self_signup": True,
+            "allow_vendor_telemetry": False,
+            "default_retention_days": 365,
+            "dev_auth_bypass_allowed": False,
+            "enforce_rls": False,
+            "require_field_level_encryption": False,
+            "require_kms_token_vault": False,
+            "siem_export_required": False,
+            "pricing_primary_source": "litellm",
+        },
     }
 
     _DEV_DEFAULT = {
