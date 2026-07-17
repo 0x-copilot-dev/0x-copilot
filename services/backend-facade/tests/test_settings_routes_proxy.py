@@ -1,8 +1,8 @@
 """Tests for the ``/v1/settings/*`` facade proxy (Phase 12 P12-A6+A7).
 
-Six endpoints across three namespaces. Mirrors ``test_tool_routes_proxy.py``
-setup. Covers GET + PATCH on each namespace + identity forwarding +
-upstream-error propagation.
+Six endpoints across three namespaces, plus the BYOK provider-keys
+lane. Mirrors ``test_tool_routes_proxy.py`` setup. Covers GET + PATCH
+on each namespace + identity forwarding + upstream-error propagation.
 """
 
 from __future__ import annotations
@@ -375,3 +375,258 @@ class TestWebhookSecurityProxy:
         )
         assert resp.status_code == 403
         assert "admin" in resp.json()["detail"]
+
+
+# Obviously-fake fixture value — never a real credential. Shape matches
+# the wire contract's permissive minimum (sk- prefix, length >= 20).
+_FAKE_OPENAI_KEY = "sk-unit-test-placeholder-0000"
+
+_PROVIDER_KEYS_LIST_BODY = {
+    "keys": [
+        {
+            "provider": "openai",
+            "key_hint": "…0000",
+            "updated_at": "2026-07-01T00:00:00+00:00",
+        }
+    ]
+}
+
+_PROVIDER_KEY_PUT_BODY = {
+    "provider": "openai",
+    "key_hint": "…0000",
+    "updated_at": "2026-07-01T00:00:00+00:00",
+}
+
+
+class TestProviderKeysProxy:
+    """BYOK provider-keys lane: GET list, PUT upsert, DELETE remove."""
+
+    def test_unauthenticated_rejected(self) -> None:
+        client = TestClient(
+            create_app(FacadeSettings(backend_url="http://backend.local"))
+        )
+        assert client.get("/v1/settings/provider-keys").status_code == 401
+        assert (
+            client.put(
+                "/v1/settings/provider-keys/openai",
+                json={"api_key": _FAKE_OPENAI_KEY},
+            ).status_code
+            == 401
+        )
+        assert client.delete("/v1/settings/provider-keys/openai").status_code == 401
+
+    def test_get_list_proxies(self, monkeypatch) -> None:
+        captured: list[dict[str, object]] = []
+
+        class _Fake:
+            def __init__(self, *args, **kwargs) -> None:
+                pass
+
+            async def __aenter__(self):
+                return self
+
+            async def __aexit__(self, *args, **kwargs):
+                return None
+
+            async def post(self, url, *, json=None, headers=None, timeout=None):
+                return _touch_response()
+
+            async def get(self, url, *, params, headers, timeout=None):
+                captured.append(
+                    {"url": url, "params": dict(params), "headers": dict(headers)}
+                )
+                return httpx.Response(200, json=_PROVIDER_KEYS_LIST_BODY)
+
+        monkeypatch.setattr("backend_facade.http_client.httpx.AsyncClient", _Fake)
+
+        client = TestClient(
+            create_app(FacadeSettings(backend_url="http://backend.local"))
+        )
+        resp = client.get(
+            "/v1/settings/provider-keys", headers=_bearer_headers(monkeypatch)
+        )
+        assert resp.status_code == 200
+        assert resp.json() == _PROVIDER_KEYS_LIST_BODY
+
+        call = captured[0]
+        assert call["url"].endswith("/v1/settings/provider-keys")
+        assert call["params"]["org_id"] == "org_acme"
+        assert call["params"]["user_id"] == "usr_sarah"
+
+        downstream = {k.lower(): v for k, v in call["headers"].items()}
+        assert downstream["x-enterprise-service-token"] == "test-service-token"
+        assert downstream["x-enterprise-org-id"] == "org_acme"
+        assert downstream["x-enterprise-user-id"] == "usr_sarah"
+
+    def test_put_proxies_body_and_identity(self, monkeypatch) -> None:
+        captured: list[dict[str, object]] = []
+
+        class _Fake:
+            def __init__(self, *args, **kwargs) -> None:
+                pass
+
+            async def __aenter__(self):
+                return self
+
+            async def __aexit__(self, *args, **kwargs):
+                return None
+
+            async def get(self, url, *, params=None, headers=None, timeout=None):
+                return _touch_response()
+
+            async def post(self, url, *, json=None, headers=None, timeout=None):
+                return _touch_response()
+
+            async def put(self, url, *, params, json=None, headers=None, timeout=None):
+                captured.append({"url": url, "json": json, "params": dict(params)})
+                return httpx.Response(200, json=_PROVIDER_KEY_PUT_BODY)
+
+        monkeypatch.setattr("backend_facade.http_client.httpx.AsyncClient", _Fake)
+
+        client = TestClient(
+            create_app(FacadeSettings(backend_url="http://backend.local"))
+        )
+        resp = client.put(
+            "/v1/settings/provider-keys/openai",
+            json={"api_key": _FAKE_OPENAI_KEY},
+            headers=_bearer_headers(monkeypatch),
+        )
+        assert resp.status_code == 200, resp.text
+        # Response carries only the backend-computed hint — no plaintext echo.
+        assert resp.json() == _PROVIDER_KEY_PUT_BODY
+        assert "api_key" not in resp.json()
+
+        call = captured[0]
+        assert call["url"].endswith("/v1/settings/provider-keys/openai")
+        assert call["json"] == {"api_key": _FAKE_OPENAI_KEY}
+        assert call["params"]["org_id"] == "org_acme"
+        assert call["params"]["user_id"] == "usr_sarah"
+
+    def test_delete_returns_204(self, monkeypatch) -> None:
+        captured: list[dict[str, object]] = []
+
+        class _Fake:
+            def __init__(self, *args, **kwargs) -> None:
+                pass
+
+            async def __aenter__(self):
+                return self
+
+            async def __aexit__(self, *args, **kwargs):
+                return None
+
+            async def get(self, url, *, params=None, headers=None, timeout=None):
+                return _touch_response()
+
+            async def post(self, url, *, json=None, headers=None, timeout=None):
+                return _touch_response()
+
+            async def delete(self, url, *, params, headers, timeout=None):
+                captured.append({"url": url, "params": dict(params)})
+                return httpx.Response(204)
+
+        monkeypatch.setattr("backend_facade.http_client.httpx.AsyncClient", _Fake)
+
+        client = TestClient(
+            create_app(FacadeSettings(backend_url="http://backend.local"))
+        )
+        resp = client.delete(
+            "/v1/settings/provider-keys/anthropic",
+            headers=_bearer_headers(monkeypatch),
+        )
+        assert resp.status_code == 204
+        assert resp.content == b""
+
+        call = captured[0]
+        assert call["url"].endswith("/v1/settings/provider-keys/anthropic")
+        assert call["params"]["org_id"] == "org_acme"
+        assert call["params"]["user_id"] == "usr_sarah"
+
+    def test_put_upstream_422_bad_provider_propagates(self, monkeypatch) -> None:
+        class _Fake:
+            def __init__(self, *args, **kwargs) -> None:
+                pass
+
+            async def __aenter__(self):
+                return self
+
+            async def __aexit__(self, *args, **kwargs):
+                return None
+
+            async def post(self, url, *, json=None, headers=None, timeout=None):
+                return _touch_response()
+
+            async def put(self, url, *, params, json=None, headers=None, timeout=None):
+                return httpx.Response(422, json={"detail": "unsupported_provider"})
+
+        monkeypatch.setattr("backend_facade.http_client.httpx.AsyncClient", _Fake)
+
+        client = TestClient(
+            create_app(FacadeSettings(backend_url="http://backend.local"))
+        )
+        resp = client.put(
+            "/v1/settings/provider-keys/frontier-llm",
+            json={"api_key": _FAKE_OPENAI_KEY},
+            headers=_bearer_headers(monkeypatch),
+        )
+        assert resp.status_code == 422
+        assert resp.json()["detail"] == "unsupported_provider"
+
+    def test_put_upstream_400_format_mismatch_propagates(self, monkeypatch) -> None:
+        class _Fake:
+            def __init__(self, *args, **kwargs) -> None:
+                pass
+
+            async def __aenter__(self):
+                return self
+
+            async def __aexit__(self, *args, **kwargs):
+                return None
+
+            async def post(self, url, *, json=None, headers=None, timeout=None):
+                return _touch_response()
+
+            async def put(self, url, *, params, json=None, headers=None, timeout=None):
+                return httpx.Response(400, json={"detail": "api_key_format_mismatch"})
+
+        monkeypatch.setattr("backend_facade.http_client.httpx.AsyncClient", _Fake)
+
+        client = TestClient(
+            create_app(FacadeSettings(backend_url="http://backend.local"))
+        )
+        resp = client.put(
+            "/v1/settings/provider-keys/openai",
+            json={"api_key": "not-plausible"},
+            headers=_bearer_headers(monkeypatch),
+        )
+        assert resp.status_code == 400
+        assert resp.json()["detail"] == "api_key_format_mismatch"
+
+    def test_delete_upstream_404_propagates(self, monkeypatch) -> None:
+        class _Fake:
+            def __init__(self, *args, **kwargs) -> None:
+                pass
+
+            async def __aenter__(self):
+                return self
+
+            async def __aexit__(self, *args, **kwargs):
+                return None
+
+            async def post(self, url, *, json=None, headers=None, timeout=None):
+                return _touch_response()
+
+            async def delete(self, url, *, params, headers, timeout=None):
+                return httpx.Response(404, json={"detail": "provider_key_not_found"})
+
+        monkeypatch.setattr("backend_facade.http_client.httpx.AsyncClient", _Fake)
+
+        client = TestClient(
+            create_app(FacadeSettings(backend_url="http://backend.local"))
+        )
+        resp = client.delete(
+            "/v1/settings/provider-keys/google",
+            headers=_bearer_headers(monkeypatch),
+        )
+        assert resp.status_code == 404
+        assert resp.json()["detail"] == "provider_key_not_found"
