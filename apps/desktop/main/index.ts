@@ -17,7 +17,10 @@ import {
 } from "electron";
 
 import type { AdapterGeneratedPayload } from "@enterprise-search/api-types";
-import type { Transport } from "@enterprise-search/chat-transport";
+import type {
+  BootStatusPayload,
+  Transport,
+} from "@enterprise-search/chat-transport";
 import {
   CHANNELS,
   MockTransport,
@@ -54,6 +57,9 @@ import {
 import { startCrashReporter } from "./crash-reporter";
 import { registerDeepLinks } from "./deep-links";
 import { registerIpcHandlers } from "./ipc/handlers";
+import { installSingleInstance, shouldSupervise } from "./services/boot-mode";
+import { createDesktopSupervisor } from "./services/desktop-supervisor";
+import type { ServiceSupervisor } from "./services/supervisor";
 import { TransportBridge } from "./transport-bridge";
 import { createMainWindow } from "./window";
 
@@ -64,6 +70,17 @@ registerAppProtocolPrivilege();
 let mainWindow: BrowserWindow | null = null;
 let teardownIpcHandlers: (() => void) | null = null;
 let tier2LifecycleHandle: Tier2LifecycleHandle | null = null;
+let supervisor: ServiceSupervisor | null = null;
+let supervisorStopped = false;
+let latestBootStatus: BootStatusPayload | null = null;
+
+// One app instance at a time: the packaged build owns an embedded
+// postgres data dir — two postmasters on one cluster corrupt it.
+const hasSingleInstanceLock = installSingleInstance(app, () => {
+  if (mainWindow === null || mainWindow.isDestroyed()) return;
+  if (mainWindow.isMinimized()) mainWindow.restore();
+  mainWindow.focus();
+});
 
 // Pluggable tier-2 event source. Phase 6 ships a no-op stub — the wiring to
 // the live run-stream (subscribing to adapter_generated events) is Phase 7's
@@ -89,20 +106,76 @@ class WindowDispatcher implements RendererDispatcher {
   }
 }
 
-void app.whenReady().then(() => {
-  startCrashReporter();
-  registerDeepLinks();
-  wireQualityGateForTier2();
-  wireSmokeRenderExecutorForTier2();
+function sendBootStatus(status: BootStatusPayload): void {
+  latestBootStatus = status;
+  if (mainWindow === null || mainWindow.isDestroyed()) return;
+  mainWindow.webContents.send(CHANNELS.bootStatus, status);
+}
 
-  const rendererDir = join(__dirname, "..", "renderer");
-  registerAppProtocolHandler(rendererDir, session.defaultSession);
+if (hasSingleInstanceLock) {
+  void app.whenReady().then(() => {
+    startCrashReporter();
+    registerDeepLinks();
+    wireQualityGateForTier2();
+    wireSmokeRenderExecutorForTier2();
 
+    const rendererDir = join(__dirname, "..", "renderer");
+    registerAppProtocolHandler(rendererDir, session.defaultSession);
+
+    // Boot screen immediately: the window exists (renderer shows
+    // BootProgress) before any service work starts. If the renderer
+    // finishes loading after a status was already pushed, replay the
+    // latest one so it never misses the current phase.
+    mainWindow = createMainWindow();
+    mainWindow.webContents.on("did-fail-load", (_e, code, desc, url) => {
+      console.error("[main] renderer did-fail-load:", code, desc, url);
+    });
+    mainWindow.webContents.on("did-finish-load", () => {
+      if (latestBootStatus !== null) sendBootStatus(latestBootStatus);
+    });
+
+    if (shouldSupervise({ isPackaged: app.isPackaged, env: process.env })) {
+      supervisor = createDesktopSupervisor({
+        userDataDir: app.getPath("userData"),
+        safeStorage,
+        resourcesPath: process.resourcesPath,
+        runtimeDirOverride: process.env.ATLAS_RUNTIME_DIR,
+      });
+      supervisor.onStatus(sendBootStatus);
+      supervisor
+        .start()
+        .then(({ facadeUrl }) => {
+          wireTransportAndIpc(facadeUrl);
+        })
+        .catch((err: unknown) => {
+          // The supervisor already emitted a fatal BootStatus for the
+          // renderer's fatal screen; keep the process alive so the user
+          // can read it.
+          console.error("[main] supervised boot failed:", err);
+        });
+    } else {
+      // Dev mode (`npm run dev`, no ATLAS_RUNTIME_DIR): no supervisor.
+      // ATLAS_FACADE_URL selects WebTransport; otherwise MockTransport.
+      wireTransportAndIpc(process.env.ATLAS_FACADE_URL);
+      sendBootStatus({ phase: "ready", message: "Ready", percent: 100 });
+    }
+
+    app.on("activate", () => {
+      if (BrowserWindow.getAllWindows().length === 0) {
+        mainWindow = createMainWindow();
+      }
+    });
+  });
+}
+
+// Constructed only once the facade is reachable (supervised mode) or
+// immediately in dev mode. facadeUrl === undefined -> MockTransport.
+function wireTransportAndIpc(facadeUrl: string | undefined): void {
   const auditLog = createFileAuthAuditLog({
     filePath: join(app.getPath("userData"), "audit", "auth.log"),
   });
-  const authService = buildAuthService(auditLog);
-  const transport = createTransport(authService, auditLog);
+  const authService = buildAuthService(auditLog, facadeUrl);
+  const transport = createTransport(authService, auditLog, facadeUrl);
 
   const transportBridge = new TransportBridge(
     (webContentsId, payload) => {
@@ -164,24 +237,24 @@ void app.whenReady().then(() => {
     source: tier2Source,
     host: hostDeps,
   });
+}
 
-  mainWindow = createMainWindow();
-  mainWindow.webContents.on("did-fail-load", (_e, code, desc, url) => {
-    console.error("[main] renderer did-fail-load:", code, desc, url);
-  });
-
-  app.on("activate", () => {
-    if (BrowserWindow.getAllWindows().length === 0) {
-      mainWindow = createMainWindow();
-    }
-  });
-});
-
-app.on("before-quit", () => {
+app.on("before-quit", (event) => {
   tier2LifecycleHandle?.stop();
   tier2LifecycleHandle = null;
   teardownIpcHandlers?.();
   teardownIpcHandlers = null;
+  // Ordered shutdown: children (facade -> ai -> backend) then postgres.
+  // preventDefault keeps the process alive until stop() resolves, then a
+  // second quit passes straight through via the supervisorStopped flag.
+  if (supervisor !== null && !supervisorStopped) {
+    event.preventDefault();
+    const active = supervisor;
+    void active.stop().finally(() => {
+      supervisorStopped = true;
+      app.quit();
+    });
+  }
 });
 
 app.on("window-all-closed", () => {
@@ -212,10 +285,14 @@ interface ActiveAuthService {
   activeWorkspace(): string | null;
 }
 
-function buildAuthService(authAudit: AuthAuditLog): ActiveAuthService {
+function buildAuthService(
+  authAudit: AuthAuditLog,
+  facadeUrl: string | undefined,
+): ActiveAuthService {
   const mode: AuthMode =
     process.env.ATLAS_AUTH_MODE === "oidc" ? "oidc" : "dev-mint";
-  const facadeBaseUrl = process.env.ATLAS_FACADE_URL ?? "http://127.0.0.1:8200";
+  const facadeBaseUrl =
+    facadeUrl ?? process.env.ATLAS_FACADE_URL ?? "http://127.0.0.1:8200";
   const devPersonaSlug = process.env.ATLAS_DEV_PERSONA ?? "sarah_acme";
   const allowPlaintext =
     process.env.BACKEND_ENVIRONMENT === "development" ||
@@ -270,15 +347,16 @@ function buildAuthService(authAudit: AuthAuditLog): ActiveAuthService {
   };
 }
 
-// Dev (no ATLAS_FACADE_URL): MockTransport — explicit, never an implicit
-// default. Prod: WebTransport with the AuthService-backed bearer provider,
-// wrapped with withBearerRefresh to retry once on 401 by calling
+// No facadeUrl (plain dev): MockTransport — explicit, never an implicit
+// default. With a facadeUrl (supervised ready, or ATLAS_FACADE_URL in
+// dev): WebTransport with the AuthService-backed bearer provider, wrapped
+// with withBearerRefresh to retry once on 401 by calling
 // authService.refresh. Auth audit events fire for the retry path.
 function createTransport(
   authService: ActiveAuthService,
   auditLog: AuthAuditLog,
+  facadeUrl: string | undefined,
 ): Transport {
-  const facadeUrl = process.env.ATLAS_FACADE_URL;
   if (!facadeUrl) {
     return new MockTransport();
   }

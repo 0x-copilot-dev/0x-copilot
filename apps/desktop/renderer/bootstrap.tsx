@@ -16,6 +16,7 @@ import {
 } from "@enterprise-search/chat-transport";
 import { registerAll as registerSurfaceRenderers } from "@enterprise-search/surface-renderers";
 
+import { BootGate } from "./BootProgress";
 import { DesktopPlaceholder } from "./DesktopPlaceholder";
 import { DEFAULT_WORKSPACE_ID, SignInGate } from "./SignInGate";
 import { Tier2Bridge } from "./Tier2Bridge";
@@ -52,16 +53,18 @@ export function App(): ReactElement {
   const keyValueStore = useMemo(() => new LocalStorageKeyValueStore(), []);
   const presenceSignal = useMemo(() => new DocumentPresenceSignal(), []);
   return (
-    <SignInGate bridge={window.bridge} workspaceId={DEFAULT_WORKSPACE_ID}>
-      {(session) => (
-        <ChatShellForSession
-          session={session}
-          router={router}
-          keyValueStore={keyValueStore}
-          presenceSignal={presenceSignal}
-        />
-      )}
-    </SignInGate>
+    <BootGate bridge={window.bridge}>
+      <SignInGate bridge={window.bridge} workspaceId={DEFAULT_WORKSPACE_ID}>
+        {(session) => (
+          <ChatShellForSession
+            session={session}
+            router={router}
+            keyValueStore={keyValueStore}
+            presenceSignal={presenceSignal}
+          />
+        )}
+      </SignInGate>
+    </BootGate>
   );
 }
 

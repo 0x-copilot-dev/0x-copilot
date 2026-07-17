@@ -68,6 +68,66 @@ tokens never cross the IPC boundary):
 The facade base URL comes from `ATLAS_FACADE_URL` (default
 `http://127.0.0.1:8200`), the same source the transport bridge uses.
 
+## Service supervisor (packaged / staged-runtime boots)
+
+`main/services/` owns the packaged-app boot: it starts an embedded
+postgres plus the three python services and only hands the renderer a
+transport once the facade is healthy.
+
+**When it runs.** Supervision engages iff `app.isPackaged` OR
+`ATLAS_RUNTIME_DIR` is set (`main/services/boot-mode.ts#shouldSupervise`).
+Plain `npm run dev` is unchanged: no supervisor, `ATLAS_FACADE_URL`
+selects WebTransport (MockTransport otherwise).
+
+**Runtime layout the supervisor expects** (electron-builder
+`extraResources` must stage exactly this under `<resourcesPath>/runtime`;
+in dev `ATLAS_RUNTIME_DIR` substitutes for `<resourcesPath>`, i.e. point
+it at `apps/desktop/resources` which contains `runtime/`):
+
+```
+runtime/
+  python/bin/python3(.exe)
+  pgsql/bin/{initdb,pg_ctl,pg_isready,psql}(.exe)
+  services/{backend,ai-backend,backend-facade}/
+    src/  site-packages/  scripts/ (migrate.py for backend + ai-backend)
+```
+
+**Boot order** (`main/services/supervisor.ts`): secrets → free-port
+allocation (4 ports, OS-assigned) → postgres (initdb once with
+`--encoding=UTF8 --locale=C -U atlas --pwfile`, stale `postmaster.pid`
+cleanup, `pg_ctl -w start` on 127.0.0.1, `pg_isready` gate, create
+`atlas_backend` + `atlas_ai`) → `scripts/migrate.py apply` per stateful
+service → all three uvicorn children in parallel → health gate
+(`/v1/health`) backend + ai-backend first, then facade → ready. Progress
+streams to the renderer on the allowlisted `boot.status` channel
+(`BootStatusPayloadSchema`); the renderer's `BootGate` shows a progress
+screen until `phase: "ready"` and a terminal error screen on
+`fatal: true`. `before-quit` awaits `supervisor.stop()` (facade →
+ai-backend → backend → `pg_ctl stop -m fast`).
+
+**Secrets** are generated once (`main/services/boot-secrets.ts`) and
+persisted encrypted via safeStorage at `<userData>/secrets/boot-env.bin`
+(chmod-600 plaintext JSON fallback when safeStorage is unavailable). An
+unreadable blob is a fatal boot error — never silently regenerated,
+because the postgres password and `ENTERPRISE_AUTH_SECRET` live there.
+
+**On-disk locations** (all under `app.getPath("userData")`):
+`secrets/boot-env.bin`, `pgdata/` (postgres cluster),
+`logs/{backend,ai-backend,backend-facade}.log` (10 MB × 3 rotation),
+`logs/postgres.log`.
+
+**Crash policy**: children restart with 1s→2s→4s→…→30s backoff;
+≥ 5 crashes in 5 minutes is a `FatalCrashLoop` surfaced on the boot
+screen. The app holds a single-instance lock (two postmasters on one
+`pgdata/` would corrupt it); second launches re-focus the first window.
+
+Dev-run recipe against a staged runtime:
+
+```bash
+ATLAS_RUNTIME_DIR="$PWD/apps/desktop/resources" \
+  npm run dev --workspace @enterprise-search/desktop
+```
+
 ## Manual sanity check after launching
 
 In DevTools console:

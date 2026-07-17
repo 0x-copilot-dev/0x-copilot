@@ -1,0 +1,147 @@
+import { spawn } from "node:child_process";
+import {
+  appendFile,
+  chmod,
+  mkdir,
+  readFile,
+  rename,
+  rm,
+  stat,
+  writeFile,
+} from "node:fs/promises";
+import { join } from "node:path";
+
+import type { SafeStorageLike } from "../auth/secret-storage";
+import { loadOrCreateBootSecrets } from "./boot-secrets";
+import { createCommandRunner } from "./exec";
+import { waitForHealthy } from "./health";
+import { runMigrations } from "./migrations";
+import { allocateFreePorts } from "./ports";
+import { PostgresManager } from "./postgres";
+import { PythonService, type SpawnFn } from "./python-service";
+import { RotatingLogWriter } from "./rotating-log";
+import {
+  resolveRuntimePaths,
+  type SupervisedServiceName,
+} from "./runtime-paths";
+import { buildServiceEnv, UVICORN_MODULES } from "./service-env";
+import { ServiceSupervisor, type AllocatedPorts } from "./supervisor";
+import type { BootSecrets } from "./boot-secrets";
+
+export interface DesktopSupervisorConfig {
+  /** app.getPath("userData") — secrets, pgdata and logs live here. */
+  readonly userDataDir: string;
+  readonly safeStorage: SafeStorageLike;
+  /** process.resourcesPath (packaged) — ignored when the override is set. */
+  readonly resourcesPath: string;
+  /** ATLAS_RUNTIME_DIR (dev staged runtime, apps/desktop/resources). */
+  readonly runtimeDirOverride?: string | undefined;
+  readonly processEnv?: Readonly<Record<string, string | undefined>>;
+  readonly platform?: NodeJS.Platform;
+}
+
+// Composes the pure orchestrator (supervisor.ts) with the real OS-facing
+// adapters. This is the only services/ module that touches node:fs,
+// node:child_process and node:net directly — everything it composes is
+// unit-tested against fakes.
+export function createDesktopSupervisor(
+  config: DesktopSupervisorConfig,
+): ServiceSupervisor {
+  const paths = resolveRuntimePaths({
+    resourcesPath: config.resourcesPath,
+    runtimeDirOverride: config.runtimeDirOverride,
+    platform: config.platform,
+  });
+  const processEnv = config.processEnv ?? process.env;
+  const runner = createCommandRunner();
+  const logsDir = join(config.userDataDir, "logs");
+  const fsAdapter = { readFile, writeFile, mkdir, rm, chmod };
+
+  const envInputs = (
+    ports: AllocatedPorts,
+    secrets: BootSecrets,
+  ): Parameters<typeof buildServiceEnv>[1] => ({
+    secrets,
+    pgPort: ports.pg,
+    backendPort: ports.backend,
+    aiBackendPort: ports.aiBackend,
+    facadePort: ports.facade,
+    processEnv,
+  });
+
+  return new ServiceSupervisor({
+    loadSecrets: () =>
+      loadOrCreateBootSecrets({
+        userDataDir: config.userDataDir,
+        safeStorage: config.safeStorage,
+        fs: fsAdapter,
+      }),
+
+    allocatePorts: (count) => allocateFreePorts(count),
+
+    createPostgres: ({ port, password }) =>
+      new PostgresManager({
+        paths: paths.pgBin,
+        dataDir: join(config.userDataDir, "pgdata"),
+        logFile: join(logsDir, "postgres.log"),
+        port,
+        password,
+        runner,
+        fs: {
+          readFile: (path, encoding) => readFile(path, encoding),
+          writeFile,
+          mkdir,
+          rm,
+        },
+      }),
+
+    runMigrations: (service, { ports, secrets }) =>
+      runMigrations({
+        service,
+        pythonBin: paths.pythonBin,
+        serviceDir: paths.serviceDir(service),
+        env: buildServiceEnv(service, envInputs(ports, secrets)),
+        runner,
+      }),
+
+    createService: (name, { ports, secrets, onFatal }) => {
+      const port = portFor(name, ports);
+      const log = new RotatingLogWriter({
+        path: join(logsDir, `${name}.log`),
+        fs: { appendFile, stat, rename, rm, mkdir },
+      });
+      return new PythonService({
+        name,
+        command: paths.pythonBin,
+        args: [
+          "-m",
+          "uvicorn",
+          `${UVICORN_MODULES[name]}:app`,
+          "--host",
+          "127.0.0.1",
+          "--port",
+          String(port),
+        ],
+        cwd: paths.serviceDir(name),
+        env: buildServiceEnv(name, envInputs(ports, secrets)),
+        spawnFn: spawn as unknown as SpawnFn,
+        log,
+        onFatal,
+      });
+    },
+
+    waitForHealthy: (name, baseUrl) =>
+      waitForHealthy({ service: name, baseUrl }),
+  });
+}
+
+function portFor(name: SupervisedServiceName, ports: AllocatedPorts): number {
+  switch (name) {
+    case "backend":
+      return ports.backend;
+    case "ai-backend":
+      return ports.aiBackend;
+    case "backend-facade":
+      return ports.facade;
+  }
+}
