@@ -1,8 +1,8 @@
 name: deploy-website
 
-# 0xcopilot.tech — static Astro build, published to GitHub Pages.
-# Path-filtered so product changes never trigger a site deploy, per the CI
-# rules in CLAUDE.md.
+# Marketing site — static Astro build, published to the org GitHub Pages repo
+# (https://0x-copilot-dev.github.io/). Path-filtered so product changes never
+# trigger a site deploy, per the CI rules in CLAUDE.md.
 
 on:
   push:
@@ -14,8 +14,6 @@ on:
 
 permissions:
   contents: read
-  pages: write
-  id-token: write
 
 # Never race two deploys; let an in-flight one finish rather than publishing
 # a half-written site.
@@ -26,9 +24,6 @@ concurrency:
 jobs:
   deploy:
     runs-on: ubuntu-latest
-    environment:
-      name: github-pages
-      url: ${{ steps.deploy.outputs.page_url }}
     steps:
       - uses: actions/checkout@v4
 
@@ -41,20 +36,16 @@ jobs:
         run: npm ci
 
       - name: Build
-        # SITE_BASE must match where Pages actually serves this site.
-        #   * Project site (no custom domain): /0x-copilot   <- today
-        #   * Custom domain attached:          /
-        # Getting this wrong 404s every stylesheet and the site renders as
-        # unstyled HTML. The link check below fails the build if the emitted
-        # HTML disagrees with SITE_BASE, so it cannot rot silently.
-        # When 0xcopilot.tech DNS is live: set SITE_BASE to "/" here.
+        # Org site is served at the domain root (0x-copilot-dev.github.io/),
+        # so SITE_BASE must be "/". Getting this wrong 404s every stylesheet.
+        # The link check below fails the build if the emitted HTML disagrees.
         env:
-          SITE_BASE: /0x-copilot
+          SITE_BASE: /
         run: npm run build --workspace @0x-copilot/website
 
       - name: Verify the build is intact
         # A missing CNAME silently drops the custom domain — a painful way to
-        # find out.
+        # find out once 0xcopilot.tech DNS is attached.
         run: |
           set -euo pipefail
           for f in index.html token.html CNAME media/demo.webm; do
@@ -64,18 +55,20 @@ jobs:
           echo "build OK"
 
       - name: Verify every referenced asset resolves at the deploy base
-        # Regression guard: the first deploy shipped root-absolute asset URLs
-        # while Pages served under /0x-copilot, so every stylesheet 404'd.
-        # This fetches what the pages actually request, not what we assume.
+        # Regression guard: fetches what the pages actually request, not what
+        # we assume. Keeps root vs subpath base mistakes from shipping.
         run: node apps/website/scripts/check-links.mjs apps/website/dist "${SITE_BASE}"
         env:
-          SITE_BASE: /0x-copilot
+          SITE_BASE: /
 
-      - uses: actions/configure-pages@v5
-
-      - uses: actions/upload-pages-artifact@v3
+      - name: Publish to 0x-copilot-dev.github.io
+        uses: peaceiris/actions-gh-pages@v4
         with:
-          path: apps/website/dist
-
-      - id: deploy
-        uses: actions/deploy-pages@v4
+          deploy_key: ${{ secrets.PAGES_DEPLOY_KEY }}
+          external_repository: 0x-copilot-dev/0x-copilot-dev.github.io
+          publish_dir: apps/website/dist
+          publish_branch: main
+          force_orphan: true
+          user_name: github-actions[bot]
+          user_email: github-actions[bot]@users.noreply.github.com
+          commit_message: "deploy: website from 0x-copilot@${{ github.sha }}"

@@ -2,23 +2,20 @@
 import { defineConfig } from "astro/config";
 import react from "@astrojs/react";
 
-/* GitHub Pages serves a *project* site under /<repo> (here: /0x-copilot) until
- * a custom domain is attached, at which point it serves from the root instead.
- * Those two need different asset prefixes, and getting it wrong 404s every
- * stylesheet — the page renders as unstyled HTML.
+/* The marketing site is published to the org Pages repo
+ * (0x-copilot-dev.github.io) and served at the domain root:
+ *   https://0x-copilot-dev.github.io/
+ * (and later https://0xcopilot.tech once DNS is attached).
  *
- * SITE_BASE picks the target. The default matches where we actually deploy
- * today (the project subpath). Once 0xcopilot.tech DNS is live and Pages has
- * the custom domain attached, set SITE_BASE=/ in the workflow — there is a
- * check in deploy-website.yml that fails the build if the emitted HTML and the
- * chosen base disagree, so this can't silently rot.
+ * SITE_BASE must be "/" for that. Getting it wrong 404s every stylesheet —
+ * the page renders as unstyled HTML. deploy-website.yml sets SITE_BASE=/ and
+ * check-links.mjs fails the build if the emitted HTML disagrees.
  *
- * Note this only governs Astro's own emitted assets (/_astro/*). Everything we
- * author by hand uses relative URLs (./media/..., ./token.html) which resolve
- * correctly under BOTH a root and a subpath deploy, because both pages sit at
- * the same directory level.
+ * Note this only governs Astro's own emitted assets (/_astro/*). Hand-authored
+ * refs use relative URLs (./media/..., ./token.html) so they resolve under
+ * both a root and a subpath deploy.
  */
-const base = process.env.SITE_BASE ?? "/0x-copilot";
+const base = process.env.SITE_BASE ?? "/";
 
 export default defineConfig({
   site: process.env.SITE_ORIGIN ?? "https://0xcopilot.tech",

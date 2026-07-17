@@ -28,15 +28,21 @@ can't be set from markup. `token.html` ships no JavaScript at all.
 
 ## Deploying
 
+Live at **https://0x-copilot-dev.github.io/** (org Pages repo
+[`0x-copilot-dev.github.io`](https://github.com/0x-copilot-dev/0x-copilot-dev.github.io)).
+
 Push to `main` with anything under `apps/website/**` changed.
-[`deploy-website.yml`](../../.github/workflows/deploy-website.yml) builds and
-publishes to Pages. It's path-filtered, so product changes never trigger a site
-deploy. `workflow_dispatch` gives you a one-click manual deploy.
+[`deploy-website.yml`](../../.github/workflows/deploy-website.yml) builds with
+`SITE_BASE=/`, verifies every linked asset, then force-pushes `dist/` into that
+repo via the `PAGES_DEPLOY_KEY` deploy key. Path-filtered, so product changes
+never trigger a site deploy. `workflow_dispatch` is a one-click manual deploy.
 
-### One-time setup
+Routes are real HTML files (`index.html`, `token.html`) with relative nav links
+(`./token.html`), so home ↔ token works at the domain root.
 
-1. **Settings → Pages → Source: GitHub Actions** (not "Deploy from a branch").
-2. **DNS for `0xcopilot.tech`:**
+### One-time setup (custom domain)
+
+1. **DNS for `0xcopilot.tech`:**
 
    | Type    | Host  | Value                       |
    | ------- | ----- | --------------------------- |
@@ -49,9 +55,9 @@ deploy. `workflow_dispatch` gives you a one-click manual deploy.
    GoDaddy ships a parked-domain `A` record on `@` — delete it, or the apex
    keeps resolving to their landing page.
 
-3. **Settings → Pages → Custom domain:** `0xcopilot.tech`, wait for the DNS
-   check, then tick **Enforce HTTPS**. `public/CNAME` keeps the domain attached
-   across deploys — don't delete it.
+2. On **`0x-copilot-dev.github.io` → Settings → Pages → Custom domain:**
+   `0xcopilot.tech`, wait for the DNS check, then tick **Enforce HTTPS**.
+   `public/CNAME` keeps the domain attached across deploys — don't delete it.
 
 ## Design
 
