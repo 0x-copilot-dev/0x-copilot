@@ -1,0 +1,62 @@
+{
+  "$comment": "Pinned, sha256-verified binary inputs for the self-contained desktop runtime. Edit only by re-pinning: download the new artifact, compute sha256 locally, update url+sha256+version together. stage.mjs refuses any artifact whose sha256 does not match.",
+  "schema_version": 1,
+  "python": {
+    "$comment": "astral-sh/python-build-standalone 'install_only' builds. Archive is a .tar.gz with a single top-level 'python/' directory (bin/python3.13 on mac; python.exe at the tree root on windows). pip is bundled.",
+    "distribution": "python-build-standalone",
+    "release": "20260623",
+    "version": "3.13.14",
+    "platforms": {
+      "darwin-arm64": {
+        "url": "https://github.com/astral-sh/python-build-standalone/releases/download/20260623/cpython-3.13.14%2B20260623-aarch64-apple-darwin-install_only.tar.gz",
+        "sha256": "804c86c8665b18eb0df5070a79d828229018d145baea38a71a5c74c03f9b11d4",
+        "size": 25270661,
+        "archive_root": "python",
+        "python_exe": "bin/python3.13"
+      },
+      "darwin-x64": {
+        "url": "https://github.com/astral-sh/python-build-standalone/releases/download/20260623/cpython-3.13.14%2B20260623-x86_64-apple-darwin-install_only.tar.gz",
+        "sha256": "cd0023fb84de358d285c8e116cffd2f433086b943e752955dade521c12e78cab",
+        "size": 25010910,
+        "archive_root": "python",
+        "python_exe": "bin/python3.13"
+      },
+      "win32-x64": {
+        "url": "https://github.com/astral-sh/python-build-standalone/releases/download/20260623/cpython-3.13.14%2B20260623-x86_64-pc-windows-msvc-install_only.tar.gz",
+        "sha256": "646254b53fbac69c1b3c25131c237c9136e9bbed7444123880cea8deaf555e1f",
+        "size": 47087618,
+        "archive_root": "python",
+        "python_exe": "python.exe"
+      }
+    }
+  },
+  "postgres": {
+    "$comment": "io.zonky.test.postgres embedded-postgres-binaries maven JARs (PostgreSQL 17.10 compiled per-platform). Extraction is two-step: (1) the .jar is a plain zip whose payload is a single xz-compressed tarball next to META-INF/ (member name below as 'inner_archive'); (2) that .txz expands to bin/ lib/ share/ at the top level (NO wrapping directory). The bin/ dir contains ONLY initdb, pg_ctl and postgres — no psql, no createdb; database creation must go through a driver (we use the staged python + psycopg from the backend site-packages).",
+    "distribution": "io.zonky.test.postgres:embedded-postgres-binaries",
+    "version": "17.10.0",
+    "postgres_version": "17.10",
+    "platforms": {
+      "darwin-arm64": {
+        "url": "https://repo1.maven.org/maven2/io/zonky/test/postgres/embedded-postgres-binaries-darwin-arm64v8/17.10.0/embedded-postgres-binaries-darwin-arm64v8-17.10.0.jar",
+        "sha256": "b8c73288326af937b632208110b1d629c404ebef7519f8bcc7fd72404c68a36a",
+        "size": 30380264,
+        "maven_artifact": "embedded-postgres-binaries-darwin-arm64v8",
+        "inner_archive": "postgres-darwin-arm_64.txz"
+      },
+      "darwin-x64": {
+        "url": "https://repo1.maven.org/maven2/io/zonky/test/postgres/embedded-postgres-binaries-darwin-amd64/17.10.0/embedded-postgres-binaries-darwin-amd64-17.10.0.jar",
+        "sha256": "667a0eea70157656649417777af452148f6c79ae3654b2cd057a37fd701bd9e9",
+        "size": 30381924,
+        "maven_artifact": "embedded-postgres-binaries-darwin-amd64",
+        "inner_archive": "postgres-darwin-x86_64.txz"
+      },
+      "win32-x64": {
+        "url": "https://repo1.maven.org/maven2/io/zonky/test/postgres/embedded-postgres-binaries-windows-amd64/17.10.0/embedded-postgres-binaries-windows-amd64-17.10.0.jar",
+        "sha256": "f418c95daa6473f05d5129803fdb674d49fb472ee5c94039d408c941f50a9721",
+        "size": 23357276,
+        "maven_artifact": "embedded-postgres-binaries-windows-amd64",
+        "inner_archive": "postgres-windows-x86_64.txz"
+      }
+    }
+  }
+}
