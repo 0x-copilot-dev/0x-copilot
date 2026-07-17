@@ -69,7 +69,7 @@ describe("BootGate", () => {
     expect(container.querySelector("[data-testid='app-content']")).toBeNull();
     expect(
       container.querySelector("[data-testid='boot-message']")?.textContent,
-    ).toContain("Starting Atlas");
+    ).toContain("Starting 0xCopilot");
   });
 
   it("renders progress updates as they stream in", () => {

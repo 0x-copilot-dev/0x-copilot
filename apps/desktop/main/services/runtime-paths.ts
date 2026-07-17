@@ -16,7 +16,7 @@ import { join } from "node:path";
 //     staging-manifest.json
 //
 // runtimeRoot = <base>/runtime/<platform>-<arch>, where <base> is
-// process.resourcesPath (packaged) or ATLAS_RUNTIME_DIR (dev). This is
+// process.resourcesPath (packaged) or COPILOT_RUNTIME_DIR (dev). This is
 // EXACTLY the path run-local.mjs computes (`join(dest, "runtime", `${platform}-${arch}`)`),
 // so the dev override stays `apps/desktop/resources` and the packaged
 // extraResources maps the staged `runtime/` dir (which contains the single
@@ -28,7 +28,7 @@ import { join } from "node:path";
 export type SupervisedServiceName = "backend" | "ai-backend" | "backend-facade";
 
 export interface RuntimePathsConfig {
-  /** ATLAS_RUNTIME_DIR when set (dev override, e.g. apps/desktop/resources). */
+  /** COPILOT_RUNTIME_DIR when set (dev override, e.g. apps/desktop/resources). */
   readonly runtimeDirOverride?: string | undefined;
   /** process.resourcesPath in a packaged app. */
   readonly resourcesPath: string;

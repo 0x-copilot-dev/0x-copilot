@@ -25,7 +25,7 @@ export function createMainWindow(
     height: 800,
     show: false,
     backgroundColor: "#101113",
-    title: "Atlas",
+    title: "0xCopilot",
     titleBarStyle: "hiddenInset",
     webPreferences: {
       contextIsolation: true,

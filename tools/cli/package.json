@@ -1,0 +1,42 @@
+{
+  "name": "@0x-copilot/cli",
+  "version": "0.1.0",
+  "description": "Install and launch the 0xCopilot desktop app from your terminal — no DMG, no installer.",
+  "type": "module",
+  "bin": {
+    "copilot": "bin/copilot.mjs",
+    "0xcopilot": "bin/copilot.mjs"
+  },
+  "files": [
+    "bin",
+    "lib",
+    "payload",
+    "README.md"
+  ],
+  "engines": {
+    "node": ">=20"
+  },
+  "os": [
+    "darwin",
+    "win32"
+  ],
+  "dependencies": {
+    "electron": "42.1.0"
+  },
+  "scripts": {
+    "assemble": "node scripts/assemble-payload.mjs",
+    "prepack": "node scripts/assemble-payload.mjs",
+    "pack:dry": "npm pack --dry-run"
+  },
+  "publishConfig": {
+    "access": "public"
+  },
+  "keywords": [
+    "0xcopilot",
+    "copilot",
+    "desktop",
+    "electron",
+    "cli"
+  ],
+  "license": "UNLICENSED"
+}

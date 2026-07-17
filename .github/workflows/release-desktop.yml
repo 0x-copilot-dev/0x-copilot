@@ -1,4 +1,4 @@
-# Build, sign (best-effort), and publish the 0xCopilot / Atlas desktop app.
+# Build, sign (best-effort), and publish the 0xCopilot desktop app.
 #
 # Trigger: pushing a `v*` tag publishes; `workflow_dispatch` produces
 # downloadable artifacts only (an unsigned dry-run — never publishes).

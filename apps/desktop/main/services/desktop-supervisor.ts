@@ -34,7 +34,7 @@ export interface DesktopSupervisorConfig {
   readonly safeStorage: SafeStorageLike;
   /** process.resourcesPath (packaged) — ignored when the override is set. */
   readonly resourcesPath: string;
-  /** ATLAS_RUNTIME_DIR (dev staged runtime, apps/desktop/resources). */
+  /** COPILOT_RUNTIME_DIR (dev staged runtime, apps/desktop/resources). */
   readonly runtimeDirOverride?: string | undefined;
   readonly processEnv?: Readonly<Record<string, string | undefined>>;
   readonly platform?: NodeJS.Platform;

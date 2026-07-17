@@ -1,8 +1,7 @@
 # electron-builder config for the 0xCopilot desktop app.
 #
-# Product identity is INTENTIONALLY stable: appId com.0x-copilot.atlas +
-# productName "Atlas". electron-updater keys auto-update off these, so do not
-# rename them in this pass.
+# Product identity: appId com.0x-copilot.app + productName "0xCopilot".
+# electron-updater keys auto-update off these; keep them stable across releases.
 #
 # Layout handshake (see main/services/runtime-paths.ts):
 #   1. a prepack step stages the self-contained runtime for the TARGET
@@ -12,8 +11,8 @@
 #   3. at runtime resolveRuntimePaths() reads <resourcesPath>/runtime/<p>-<a>/...
 # The npm `dist:*` scripts run steps 1+2 (stage + build + electron-builder).
 
-appId: com.0x-copilot.atlas
-productName: Atlas
+appId: com.0x-copilot.app
+productName: 0xCopilot
 
 directories:
   buildResources: build

@@ -1,15 +1,17 @@
 # apps/website — 0xcopilot.tech
 
-Marketing site for 0xCopilot. Astro + React (TSX), static output, deployed to
-GitHub Pages.
+Marketing site for 0xCopilot. Astro, static output, deployed to GitHub Pages.
 
 ```
-src/pages/index.astro   home — thesis, the demo, surfaces, run-it, trust FAQ
-src/pages/token.astro   the 50 / 25 / 25 split
-src/components/*.tsx    Nav, Shot, Demo — all TSX
-src/layouts/Base.astro  head, fonts, sticky-nav script
-public/media/           real screenshots + the recorded demo
-public/CNAME            custom domain
+src/pages/index.astro        home — pitch, Time Machine demo, gap/wedge, surfaces, token, FAQ
+src/pages/token.astro        the 50 / 25 / 25 tokenomics
+src/components/Nav.astro      turbine mark + wordmark + Discord/GitHub
+src/components/TimeMachine.astro   the interactive demo (Studio + Focus, scrubbable timeline)
+src/layouts/Base.astro       head, fonts, favicons
+src/styles/site.css          one dark design system, shared by both pages
+public/media/                welcome.png (real app shot) + og-cover.png (social)
+public/favicon.svg           turbine mark
+public/CNAME.example         custom domain — rename to CNAME once DNS is live
 ```
 
 ## Local
@@ -19,13 +21,6 @@ npm run dev   --workspace @0x-copilot/website   # http://localhost:4321
 npm run build --workspace @0x-copilot/website   # → apps/website/dist
 ```
 
-## Why Astro, and why it ships almost no JS
-
-Every route is a real HTML document — a true MPA, no client router. React
-components render to HTML at build time and ship **zero** JS unless they opt in
-with a `client:` directive. Exactly one does: `<Demo>`, because `playbackRate`
-can't be set from markup. `token.html` ships no JavaScript at all.
-
 ## Deploying
 
 Live at **https://0x-copilot-dev.github.io/** (org Pages repo
@@ -33,84 +28,64 @@ Live at **https://0x-copilot-dev.github.io/** (org Pages repo
 
 Push to `main` with anything under `apps/website/**` changed.
 [`deploy-website.yml`](../../.github/workflows/deploy-website.yml) builds with
-`SITE_BASE=/`, verifies every linked asset, then force-pushes `dist/` into that
-repo via the `PAGES_DEPLOY_KEY` deploy key. Path-filtered, so product changes
-never trigger a site deploy. `workflow_dispatch` is a one-click manual deploy.
+`SITE_BASE=/`, verifies every linked asset with `scripts/check-links.mjs`
+(fetches what the pages actually request, so a root-vs-subpath base mistake
+fails the build instead of shipping unstyled), then force-pushes `dist/` into
+that repo. Path-filtered, so product changes never trigger a site deploy.
 
-Routes are real HTML files (`index.html`, `token.html`) with relative nav links
-(`./token.html`), so home ↔ token works at the domain root.
+Hand-authored links are relative (`./token.html`, `./media/…`) so they resolve
+under both a root and a subpath deploy.
 
-### One-time setup (custom domain)
+### Custom domain (when DNS is ready)
 
-1. **DNS for `0xcopilot.tech`:**
+DNS for `0xcopilot.tech` → the four GitHub Pages `A` records on `@`, plus a
+`CNAME` on `www` → `0x-copilot-dev.github.io.`. Then rename
+`public/CNAME.example` → `public/CNAME`. **Never publish a CNAME before DNS
+resolves** — GitHub redirects the org URL to the custom domain and the site
+404s until it does.
 
-   | Type    | Host  | Value                       |
-   | ------- | ----- | --------------------------- |
-   | `A`     | `@`   | `185.199.108.153`           |
-   | `A`     | `@`   | `185.199.109.153`           |
-   | `A`     | `@`   | `185.199.110.153`           |
-   | `A`     | `@`   | `185.199.111.153`           |
-   | `CNAME` | `www` | `0x-copilot-dev.github.io.` |
+## Design — dark / sky / turbine
 
-   GoDaddy ships a parked-domain `A` record on `@` — delete it, or the apex
-   keeps resolving to their landing page.
+Adopted from the 0xCopilot brand kit. Dark ground, sky-blue signal, the turbine
+mark, and one deliberate change: the body face is **IBM Plex Sans** rather than
+the kit's Instrument Sans — so the type is a hybrid the way we wanted it.
 
-2. On **`0x-copilot-dev.github.io` → Settings → Pages → Custom domain:**
-   `0xcopilot.tech`, wait for the DNS check, then tick **Enforce HTTPS**.
-   Rename `public/CNAME.example` → `public/CNAME` so deploys keep the domain
-   attached. **Do not publish a CNAME until DNS works** — GitHub will redirect
-   `0x-copilot-dev.github.io` to the custom domain and the org URL will break.
+| Role    | Face           | Note                                  |
+| ------- | -------------- | ------------------------------------- |
+| display | Space Grotesk  | geometric, crypto-native headlines    |
+| body    | IBM Plex Sans  | the readable face carried from before |
+| mono    | JetBrains Mono | labels, code, addresses               |
 
-## Design
+| Token | Value     |                           |
+| ----- | --------- | ------------------------- |
+| ink   | `#0b0a0e` | ground                    |
+| sky   | `#5fb2ec` | primary signal            |
+| jade  | `#57c785` | done / success            |
+| ember | `#f0764f` | energy accent, sparing    |
+| amber | `#e8b45e` | waiting / steer / `FILL:` |
 
-**Light, on purpose.** Every competitor in this category — VEX, MyClaw, Vantis,
-most of crypto/AI — is near-black with a neon accent. Dark _is_ the house style,
-which is why this isn't. Two things follow: it matches the thesis (the product
-is about receipts and an audit trail; a document should look like a document),
-and since the app is dark, **dark product screenshots pop against cool paper** —
-so the images carry the page instead of prose.
+## The Time Machine demo
 
-| Token  | Value     | Note                                              |
-| ------ | --------- | ------------------------------------------------- |
-| paper  | `#f6f7f9` | cool, biased toward the signal — not neutral grey |
-| ink    | `#14161a` |                                                   |
-| signal | `#0b6f6a` | deep teal                                         |
-| clay   | `#d97757` | the _app's_ accent; only ever labels product bits |
+`TimeMachine.astro` is the kit's signature interactive hero, ported: a
+Launch-Week / TGE workspace over a **4-lane scrubbable timeline** (Safe /
+Sheets / X thread / Discord). Drag the track to rewind; step with ◀ ▶; snap
+to now. Behaviour is the kit's dependency-free vanilla JS, inlined via
+`<script is:inline>` — no framework.
 
-Teal is roughly the complement of clay (`#d97757`, the app's accent, visible in
-every screenshot), so it frames the shots instead of fighting them — and it
-sidesteps the three colours already taken in this category: Claude orange, VEX
-blue, MyClaw red.
+Simplified from the kit's four modes to **Studio + Focus** (Compose and Auto
+were dropped as the redundant / non-working ones).
 
-Type is the **IBM Plex superfamily** — Serif (display), Sans (body), Mono (data).
-One family, three roles, natively harmonious, and not the AI-default Inter.
-
-## Every image here is real
-
-No mockups, no renders. `public/media/*.png` are captures of the running app;
-`demo.webm` is a recorded session — real prompt, real run against a real
-provider key, real streamed answer — filmed at 1x and played at 2x.
-
-Re-capture after UI changes: boot the stack (`make dev`), then drive it with
-Playwright (already a repo dep). The captures are 1600×1000 @2x.
+`welcome.png` is a real screenshot of the running app, shown under the surfaces
+so the stylized demo is anchored to the actual product.
 
 ## Before launch — unresolved
 
-`token.astro` ships deliberate `FILL:` markers, styled amber so they look
-unfinished. **They are not placeholders to quietly delete** — each is a number a
-buyer would rely on, and none were known when this was written:
+`token.astro` ships deliberate amber `FILL:` markers. **Not placeholders to
+quietly delete** — each is a number a buyer would rely on, unknown when written:
+fixed supply · ESOP lock period · ESOP vest window/shape · ESOP early-vest FDV
+trigger · ACF starting FDV / step / ceiling · fee split. Fill from **your**
+Virtuals launch parameters.
 
-- fixed supply
-- ESOP protocol lock period
-- ESOP protocol vest window and shape
-- ESOP early-vest FDV trigger (if the Virtuals framework applies one)
-- ACF starting FDV, step size, ceiling
-- trade-fee split and the operations share
-
-Fill them from **your** Virtuals launch parameters. Don't copy them from another
-project's page — those are that project's numbers.
-
-Also unresolved: the 50 / 25 / 25 split has no veVIRTUAL airdrop line. Virtuals
-launches typically allocate a slice to veVIRTUAL stakers under the protocol
-framework. If that's mandatory, the real split isn't 50 / 25 / 25 and this page
-needs a fourth bucket before it goes live.
+Also unresolved: the 50 / 25 / 25 split has no veVIRTUAL airdrop line. If the
+Virtuals framework mandates one, the real split isn't 50 / 25 / 25 and the page
+needs a fourth bucket.

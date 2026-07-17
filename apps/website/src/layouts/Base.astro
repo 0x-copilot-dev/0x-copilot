@@ -4,10 +4,10 @@ import "../styles/site.css";
 interface Props {
   title: string;
   description: string;
-  here?: "token";
 }
 const { title, description } = Astro.props;
 const canonical = new URL(Astro.url.pathname, Astro.site).href;
+const ogImage = new URL("./media/og-cover.png", Astro.site).href;
 ---
 
 <!doctype html>
@@ -17,9 +17,14 @@ const canonical = new URL(Astro.url.pathname, Astro.site).href;
     <meta name="viewport" content="width=device-width, initial-scale=1" />
     <title>{title}</title>
     <meta name="description" content={description} />
-    <meta name="theme-color" content="#f6f7f9" />
+    <meta name="theme-color" content="#0b0a0e" />
+    <meta
+      name="virtual-protocol-site-verification"
+      content="a602cf9c92678680fff8877fc584b9a7"
+    />
     <link rel="canonical" href={canonical} />
 
+    <link rel="icon" type="image/svg+xml" href="./favicon.svg" />
     <link rel="icon" type="image/png" href="./favicon.png" />
     <link rel="apple-touch-icon" href="./apple-touch-icon.png" />
 
@@ -27,35 +32,19 @@ const canonical = new URL(Astro.url.pathname, Astro.site).href;
     <meta property="og:url" content={canonical} />
     <meta property="og:title" content={title} />
     <meta property="og:description" content={description} />
+    <meta property="og:image" content={ogImage} />
     <meta name="twitter:card" content="summary_large_image" />
     <meta name="twitter:site" content="@Copilot0x" />
+    <meta name="twitter:image" content={ogImage} />
 
     <link rel="preconnect" href="https://fonts.googleapis.com" />
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
     <link
-      href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500&family=IBM+Plex+Sans:wght@400;500;600&family=IBM+Plex+Serif:ital,wght@0,500;0,600;1,600&display=swap"
+      href="https://fonts.googleapis.com/css2?family=IBM+Plex+Sans:wght@400;500;600&family=JetBrains+Mono:wght@400;500&family=Space+Grotesk:wght@500;600;700&display=swap"
       rel="stylesheet"
     />
   </head>
   <body>
-    <div class="wrap">
-      <slot />
-    </div>
-
-    <script is:inline>
-      // Sticky nav grows a hairline once you leave the top. Inline + tiny:
-      // not worth a hydration boundary.
-      (() => {
-        const nav = document.getElementById("nav");
-        if (!nav) return;
-        const s = document.createElement("div");
-        s.style.cssText = "position:absolute;top:0;height:1px;width:1px";
-        document.body.prepend(s);
-        new IntersectionObserver(
-          ([e]) => nav.setAttribute("data-stuck", String(!e.isIntersecting)),
-          { threshold: 0 },
-        ).observe(s);
-      })();
-    </script>
+    <slot />
   </body>
 </html>

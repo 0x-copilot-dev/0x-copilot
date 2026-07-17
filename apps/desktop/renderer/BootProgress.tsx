@@ -37,7 +37,7 @@ export function BootGate(props: BootGateProps): ReactNode {
     return (
       <BootChrome>
         <p data-testid="boot-fatal" role="alert">
-          Atlas could not start
+          0xCopilot could not start
         </p>
         <p data-testid="boot-fatal-message" style={{ maxWidth: "36rem" }}>
           {status.message}
@@ -54,7 +54,7 @@ export function BootGate(props: BootGateProps): ReactNode {
   }
 
   const percent = status?.percent ?? 0;
-  const message = status?.message ?? "Starting Atlas…";
+  const message = status?.message ?? "Starting 0xCopilot…";
   return (
     <BootChrome>
       <p data-testid="boot-message">{message}</p>

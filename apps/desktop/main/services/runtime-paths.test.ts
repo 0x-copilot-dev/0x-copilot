@@ -5,29 +5,29 @@ import { resolveRuntimePaths } from "./runtime-paths";
 
 describe("resolveRuntimePaths (packaged, darwin-arm64)", () => {
   const paths = resolveRuntimePaths({
-    resourcesPath: "/Applications/Atlas.app/Contents/Resources",
+    resourcesPath: "/Applications/0xCopilot.app/Contents/Resources",
     platform: "darwin",
     arch: "arm64",
   });
 
   it("roots the runtime at <resourcesPath>/runtime/<platform>-<arch>", () => {
     expect(paths.runtimeRoot).toBe(
-      "/Applications/Atlas.app/Contents/Resources/runtime/darwin-arm64",
+      "/Applications/0xCopilot.app/Contents/Resources/runtime/darwin-arm64",
     );
   });
 
   it("resolves the python interpreter under python/bin/python3", () => {
     expect(paths.pythonBin).toBe(
-      "/Applications/Atlas.app/Contents/Resources/runtime/darwin-arm64/python/bin/python3",
+      "/Applications/0xCopilot.app/Contents/Resources/runtime/darwin-arm64/python/bin/python3",
     );
   });
 
   it("resolves postgres binaries under postgres/bin (not pgsql)", () => {
     expect(paths.pgBin.initdb).toBe(
-      "/Applications/Atlas.app/Contents/Resources/runtime/darwin-arm64/postgres/bin/initdb",
+      "/Applications/0xCopilot.app/Contents/Resources/runtime/darwin-arm64/postgres/bin/initdb",
     );
     expect(paths.pgBin.pgCtl).toBe(
-      "/Applications/Atlas.app/Contents/Resources/runtime/darwin-arm64/postgres/bin/pg_ctl",
+      "/Applications/0xCopilot.app/Contents/Resources/runtime/darwin-arm64/postgres/bin/pg_ctl",
     );
     // The bundle ships no psql/pg_isready, so the contract omits them.
     expect(Object.keys(paths.pgBin).sort()).toEqual(["initdb", "pgCtl"]);
@@ -35,13 +35,13 @@ describe("resolveRuntimePaths (packaged, darwin-arm64)", () => {
 
   it("locates staged service dirs under services/<name>", () => {
     expect(paths.serviceDir("ai-backend")).toBe(
-      "/Applications/Atlas.app/Contents/Resources/runtime/darwin-arm64/services/ai-backend",
+      "/Applications/0xCopilot.app/Contents/Resources/runtime/darwin-arm64/services/ai-backend",
     );
   });
 });
 
 describe("resolveRuntimePaths (dev override matches stage.mjs/run-local.mjs)", () => {
-  it("appends runtime/<platform>-<arch> to ATLAS_RUNTIME_DIR", () => {
+  it("appends runtime/<platform>-<arch> to COPILOT_RUNTIME_DIR", () => {
     const paths = resolveRuntimePaths({
       resourcesPath: "/ignored/when/override/set",
       runtimeDirOverride: "/repo/apps/desktop/resources",
@@ -72,7 +72,7 @@ describe("resolveRuntimePaths (windows target)", () => {
   // NB: node:path.join uses the HOST separator, so on a POSIX test runner the
   // win32-target paths come back with "/". Normalize before asserting shape.
   const paths = resolveRuntimePaths({
-    resourcesPath: "C:/Program Files/Atlas/resources",
+    resourcesPath: "C:/Program Files/0xCopilot/resources",
     platform: "win32",
     arch: "x64",
   });

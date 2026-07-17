@@ -1,0 +1,169 @@
+---
+import Base from "../layouts/Base.astro";
+import Nav from "../components/Nav.astro";
+
+const REPO = "https://github.com/0x-copilot-dev/0x-copilot";
+const DISCORD = "https://discord.com/invite/NhCv7zDkmX";
+const X = "https://x.com/Copilot0x";
+---
+
+<Base
+  title="Install — 0xCopilot"
+  description="Install 0xCopilot from your terminal: one command, no DMG, no installer, no admin rights. macOS and Windows."
+>
+  <Nav />
+
+  <header class="hero">
+    <div class="hero-bg"></div>
+    <div class="wrap">
+      <span class="pill"><span class="dot"></span> Terminal install · no DMG · no admin</span>
+      <h1>Run 0xCopilot from <em>your terminal.</em></h1>
+      <p class="sub">
+        One command installs the <code>copilot</code> CLI. The first time you
+        run it, it stages a self-contained local runtime and opens the app.
+        Works on <b>macOS and Windows.</b>
+      </p>
+      <pre class="cmd"><span class="p">$</span> <b>curl -fsSL https://0xcopilot.tech/install | bash</b></pre>
+    </div>
+  </header>
+
+  <section class="sec" style="border-top:none;padding-top:8px">
+    <div class="wrap">
+      <p class="kick">Already have Node or Bun?</p>
+      <h2>Install it directly.</h2>
+      <pre class="cmd"><span class="c"># with npm</span>
+<span class="p">$</span> <b>npm install -g @0x-copilot/cli</b>
+
+<span class="c"># …or bun</span>
+<span class="p">$</span> <b>bun add -g @0x-copilot/cli</b>
+
+<span class="c"># then, anywhere</span>
+<span class="p">$</span> <b>copilot</b></pre>
+      <p class="note">
+        Needs Node.js 20+ or Bun. The command is also available as
+        <code>0xcopilot</code> if <code>copilot</code> collides with something
+        already on your <code>PATH</code>.
+      </p>
+    </div>
+  </section>
+
+  <section class="sec">
+    <div class="wrap">
+      <p class="kick">First run</p>
+      <h2>What the first run does.</h2>
+      <p class="lede">
+        Staging downloads a pinned, checksum-verified Python and PostgreSQL and
+        installs the app's services on your machine — a few hundred MB, once,
+        cached afterward. On macOS it ad-hoc code-signs everything so it runs on
+        Apple Silicon without an Apple Developer certificate. Every run after
+        that opens instantly.
+      </p>
+      <p class="note">
+        <b>No "unidentified developer" or SmartScreen warning.</b> The runtime
+        is fetched by your package manager, not a browser — so macOS Gatekeeper
+        and Windows SmartScreen never flag it, the same reason Homebrew and
+        <code>uv</code> install cleanly.
+      </p>
+    </div>
+  </section>
+
+  <section class="sec">
+    <div class="wrap">
+      <p class="kick">Commands</p>
+      <h2>Everything you'll need.</h2>
+      <div class="faq cmds">
+        <div class="qa"><div class="q">copilot</div><div class="a">Stage if needed, then open the app.</div></div>
+        <div class="qa"><div class="q">copilot install</div><div class="a">Download + stage the runtime without launching.</div></div>
+        <div class="qa"><div class="q">copilot doctor</div><div class="a">Check the install and report anything wrong.</div></div>
+        <div class="qa"><div class="q">copilot uninstall</div><div class="a">Remove the staged runtime, cache, and local app data.</div></div>
+        <div class="qa"><div class="q">npm rm -g @0x-copilot/cli</div><div class="a">Remove the command itself.</div></div>
+      </div>
+    </div>
+  </section>
+
+  <section class="sec">
+    <div class="wrap">
+      <p class="kick">Sign in</p>
+      <h2>Connect a wallet — or Google.</h2>
+      <p class="lede">
+        0xCopilot runs fully local. Sign in with an Ethereum wallet
+        (Sign-In-With-Ethereum) or Google; your keys and data stay on your
+        machine. Nothing about the desktop app touches a server you don't run.
+      </p>
+    </div>
+  </section>
+
+  <section class="sec">
+    <div class="wrap">
+      <p class="kick">Platforms</p>
+      <h2>macOS &amp; Windows.</h2>
+      <div class="faq">
+        <div class="qa"><div class="q">macOS</div><div class="a">Apple Silicon and Intel.</div></div>
+        <div class="qa"><div class="q">Windows</div><div class="a">x64.</div></div>
+        <div class="qa"><div class="q">Linux</div><div class="a">Not distributed this way yet — build from <a href={REPO} rel="noopener">source</a>.</div></div>
+      </div>
+    </div>
+  </section>
+
+  <footer>
+    <div class="wrap">
+      <div class="frow">
+        <span class="wm" style="font-size:22px">0x<b>Copilot</b></span>
+        <div class="flinks">
+          <a href="./">Home</a>
+          <a href="./token.html">Token</a>
+          <a href={REPO} rel="noopener">GitHub ↗</a>
+          <a href={DISCORD} rel="noopener">Discord ↗</a>
+          <a href={X} rel="noopener">@Copilot0x ↗</a>
+        </div>
+      </div>
+      <div class="foot-b">
+        <span>© 2026 0xCopilot · Ask · Steer · Ship</span>
+        <span class="ass">Fully local · BYOK · your keys, your data.</span>
+      </div>
+    </div>
+  </footer>
+</Base>
+
+<style>
+  /* Terminal block — palette-matched to the dark theme. */
+  .cmd {
+    background: var(--panel);
+    border: 1px solid var(--line);
+    border-radius: 12px;
+    padding: 16px 18px;
+    margin: 24px 0 0;
+    font-family: var(--mono);
+    font-size: 14px;
+    line-height: 1.75;
+    color: var(--tx);
+    overflow-x: auto;
+    white-space: pre;
+  }
+  .cmd .p {
+    color: var(--sky);
+    user-select: none;
+  }
+  .cmd .c {
+    color: var(--mut2);
+  }
+  .cmd b {
+    color: var(--jade);
+    font-weight: 500;
+  }
+
+  /* Inline code + the command column of the commands list read as terminal. */
+  code {
+    font-family: var(--mono);
+    font-size: 0.88em;
+    color: var(--sky-hi);
+    background: var(--panel2);
+    padding: 0.12em 0.4em;
+    border-radius: 6px;
+  }
+  .cmds .qa .q {
+    font-family: var(--mono);
+    font-size: 15px;
+    color: var(--jade);
+  }
+</style>

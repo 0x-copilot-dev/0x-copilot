@@ -20,15 +20,10 @@ repos:
       - id: trailing-whitespace
         args: ["--markdown-linebreak-ext=md"]
       - id: end-of-file-fixer
-      # Two intentional exceptions, both named explicitly rather than
-      # excluding a whole directory — a new oversized asset should still
-      # have to be a deliberate decision, not inherit someone else's.
-      #   * model_prices.json — vendored LiteLLM pricing data.
-      #   * demo.{mp4,webm} — the site's hero recording of the real app.
-      #     ~0.5-0.7 MB each, over the 500 KB default but tiny for a hero
-      #     video. The screenshots beside them are all well under the limit.
+      # One intentional exception (vendored LiteLLM pricing data); named
+      # explicitly so a new oversized asset stays a deliberate decision.
       - id: check-added-large-files
-        exclude: "^(services/ai-backend/src/agent_runtime/pricing/litellm_data/model_prices\\.json|apps/website/public/media/demo\\.(mp4|webm))$"
+        exclude: "^services/ai-backend/src/agent_runtime/pricing/litellm_data/model_prices\\.json$"
       - id: check-json
       - id: check-merge-conflict
       - id: check-toml

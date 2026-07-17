@@ -1,4 +1,4 @@
-# Atlas Desktop — Phase 5 smoke test
+# 0xCopilot Desktop — Phase 5 smoke test
 
 Manual end-to-end recipe. Phase 8 will automate this through a Spectron /
 Playwright harness; for Phase 5 the contract is "a human can walk this
@@ -19,22 +19,22 @@ breakage usually points at a single seam.
 ```bash
 cd apps/desktop
 npm run build
-ATLAS_AUTH_MODE=dev-mint \
-  ATLAS_FACADE_URL=http://127.0.0.1:8200 \
-  ATLAS_DEV_PERSONA=sarah_acme \
+COPILOT_AUTH_MODE=dev-mint \
+  COPILOT_FACADE_URL=http://127.0.0.1:8200 \
+  COPILOT_DEV_PERSONA=sarah_acme \
   npm run dev
 ```
 
-`ATLAS_AUTH_MODE=oidc` would route through the real authorization-code
+`COPILOT_AUTH_MODE=oidc` would route through the real authorization-code
 flow instead — Phase 5 leaves the production OIDC provider unresolved
 (PRD R3), so `dev-mint` is the local mode.
 
 ## Steps
 
 1. **Launch**
-   - Electron window opens with the Atlas chrome.
+   - Electron window opens with the 0xCopilot chrome.
    - First-launch state: the `<SignInGate>` renders, showing "Sign in to
-     your workspace to use Atlas." with a single CTA button.
+     your workspace to use 0xCopilot." with a single CTA button.
    - On macOS/Windows the first launch creates `{userData}/secrets/` —
      no `.bin` files yet because no session is stored.
 
@@ -45,7 +45,7 @@ flow instead — Phase 5 leaves the production OIDC provider unresolved
    - In `dev-mint` mode the main process POSTs to
      `http://127.0.0.1:8200/v1/dev/identity/mint`. No browser opens —
      dev-mint is a header-less HMAC mint. The full OIDC flow (system
-     browser + loopback redirect) only runs in `ATLAS_AUTH_MODE=oidc`.
+     browser + loopback redirect) only runs in `COPILOT_AUTH_MODE=oidc`.
    - Once the response lands, `<SignInGate>` swaps to render `<ChatShell>`.
 
 3. **See chats**
@@ -104,7 +104,7 @@ flow instead — Phase 5 leaves the production OIDC provider unresolved
   workspace returns null and emits a `[secret-storage] active-workspace
 gate rejected read` warning (see `audit-service.test.ts`).
 
-- **Loopback OIDC** (only when `ATLAS_AUTH_MODE=oidc`): the auth URL
+- **Loopback OIDC** (only when `COPILOT_AUTH_MODE=oidc`): the auth URL
   carries `code_challenge_method=S256`, `state`, and a redirect_uri
   pointing at `http://127.0.0.1:<random>/cb`. After the IdP redirects,
   the loopback server returns a "Signed in." page and the main process
@@ -113,7 +113,7 @@ gate rejected read` warning (see `audit-service.test.ts`).
 ## Platform notes
 
 - **macOS**: `safeStorage.encryptString` is backed by a Keychain item
-  named after `app.getName()` (= `Atlas`). The keychain shows a single
+  named after `app.getName()` (= `0xCopilot`). The keychain shows a single
   entry for the app — not one per workspace/server (per D24, the
   per-tuple compartmentalization is at the file layer, not the keychain
   layer). The first `safeStorage` call prompts the user if the keychain

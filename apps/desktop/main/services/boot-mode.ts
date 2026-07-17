@@ -7,11 +7,11 @@ export interface BootModeInputs {
 }
 
 // Supervise only when running packaged OR a staged dev runtime is named
-// via ATLAS_RUNTIME_DIR. Plain `npm run dev` keeps today's behavior:
-// no supervisor, ATLAS_FACADE_URL (or MockTransport) drives the app.
+// via COPILOT_RUNTIME_DIR. Plain `npm run dev` keeps today's behavior:
+// no supervisor, COPILOT_FACADE_URL (or MockTransport) drives the app.
 export function shouldSupervise(inputs: BootModeInputs): boolean {
   if (inputs.isPackaged) return true;
-  const override = inputs.env.ATLAS_RUNTIME_DIR;
+  const override = inputs.env.COPILOT_RUNTIME_DIR;
   return override !== undefined && override !== "";
 }
 

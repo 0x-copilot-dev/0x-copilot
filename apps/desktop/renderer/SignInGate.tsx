@@ -112,7 +112,7 @@ export function SignInGate(props: SignInGateProps): ReactNode {
       case "anon":
         return (
           <SignInChrome>
-            <p>Sign in to your workspace to use Atlas.</p>
+            <p>Sign in to your workspace to use 0xCopilot.</p>
             <button type="button" onClick={signIn} data-testid="sign-in-button">
               Sign in
             </button>
