@@ -1,6 +1,6 @@
 # Top-level runtime + test deps for services/backend. Regenerate lock:
 #   cd services/backend && .venv/bin/pip-compile --generate-hashes --resolver=backtracking requirements.in -o requirements.txt
-cryptography==48.0.1
+cryptography==49.0.0
 fastapi==0.138.2
 # PR 8.3 — UploadFile / multipart parsing on the avatar route.
 python-multipart==0.0.32
