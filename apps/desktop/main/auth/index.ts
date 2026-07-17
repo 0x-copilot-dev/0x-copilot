@@ -1,3 +1,5 @@
+import type { AuthAuditLog } from "./audit-log";
+import { runGoogleLogin } from "./google-login";
 import {
   OidcClient,
   type AuthMode,
@@ -16,6 +18,11 @@ export type { SafeStorageLike, ServerKind } from "./secret-storage";
 export { OidcClient } from "./oidc-client";
 export { SecretStorage } from "./secret-storage";
 export { awaitLoopbackCode, type LoopbackHandle } from "./loopback-server";
+export {
+  GoogleLoginError,
+  runGoogleLogin,
+  type GoogleLoginDeps,
+} from "./google-login";
 
 export {
   createFileAuthAuditLog,
@@ -36,8 +43,14 @@ export interface AuthServiceConfig {
   readonly openExternal: (url: string) => Promise<void>;
   readonly allowPlaintextFallback?: boolean;
   readonly audit?: SecretAuditLog;
+  /** Auth event trail (sign-in success/failure, …). Optional. */
+  readonly authAudit?: AuthAuditLog;
   readonly clock?: () => number;
   readonly fetch?: typeof fetch;
+  /** Injectable for tests; defaults to the real facade-brokered flow. */
+  readonly googleLoginFlow?: typeof runGoogleLogin;
+  /** Loopback redirect timeout for the Google flow (user-cancel bound). */
+  readonly googleTimeoutMs?: number;
 }
 
 export interface RendererSession {
@@ -56,6 +69,10 @@ export class AuthService {
   readonly #storage: SecretStorage;
   readonly #cache = new Map<string, AuthSession>();
   readonly #clock: () => number;
+  readonly #config: AuthServiceConfig;
+  readonly #authAudit: AuthAuditLog | undefined;
+  readonly #googleLoginFlow: typeof runGoogleLogin;
+  #cancelPendingGoogleLogin: (() => void) | null = null;
 
   constructor(config: AuthServiceConfig) {
     this.#oidc = new OidcClient({
@@ -74,6 +91,9 @@ export class AuthService {
       audit: config.audit,
     });
     this.#clock = config.clock ?? Date.now;
+    this.#config = config;
+    this.#authAudit = config.authAudit;
+    this.#googleLoginFlow = config.googleLoginFlow ?? runGoogleLogin;
   }
 
   async signIn(workspaceId: string): Promise<RendererSession> {
@@ -87,6 +107,71 @@ export class AuthService {
     );
     this.#cache.set(workspaceId, session);
     return this.#toRenderer(workspaceId, session);
+  }
+
+  // "Continue with Google" — facade-brokered system-browser flow. A second
+  // invocation while one is pending cancels the first (its loopback closes
+  // and its promise rejects) so the newest click always wins; a successful
+  // sign-in overwrites whatever session was stored before.
+  async signInWithGoogle(workspaceId: string): Promise<RendererSession> {
+    this.#cancelPendingGoogleLogin?.();
+    this.#cancelPendingGoogleLogin = null;
+    let myCancel: (() => void) | null = null;
+    try {
+      const session = await this.#googleLoginFlow(workspaceId, {
+        facadeBaseUrl: this.#config.facadeBaseUrl,
+        openExternal: this.#config.openExternal,
+        fetch: this.#config.fetch,
+        clock: this.#config.clock,
+        timeoutMs: this.#config.googleTimeoutMs,
+        returnTo: "atlas-desktop",
+        onCancelAvailable: (cancel) => {
+          myCancel = cancel;
+          this.#cancelPendingGoogleLogin = cancel;
+        },
+      });
+      this.#storage.setActiveWorkspace(workspaceId);
+      await this.#storage.set(
+        workspaceId,
+        BACKEND_KIND,
+        BACKEND_SERVER_ID,
+        session,
+      );
+      this.#cache.set(workspaceId, session);
+      await this.#appendAudit({
+        kind: "sign-in-success",
+        workspaceId,
+        sub: session.claims.sub,
+        mode: "google",
+      });
+      return this.#toRenderer(workspaceId, session);
+    } catch (err) {
+      await this.#appendAudit({
+        kind: "sign-in-failure",
+        workspaceId,
+        mode: "google",
+        reason: err instanceof Error ? err.message : String(err),
+      });
+      throw err;
+    } finally {
+      // Only clear our own hook — a newer sign-in may have installed its
+      // cancel function after ours was invalidated.
+      if (myCancel !== null && this.#cancelPendingGoogleLogin === myCancel) {
+        this.#cancelPendingGoogleLogin = null;
+      }
+    }
+  }
+
+  // Audit failures must never break the sign-in result path.
+  async #appendAudit(
+    event: Parameters<AuthAuditLog["append"]>[0],
+  ): Promise<void> {
+    if (this.#authAudit === undefined) return;
+    try {
+      await this.#authAudit.append(event);
+    } catch {
+      // swallow — the audit trail is best-effort on the client
+    }
   }
 
   async signOut(workspaceId: string): Promise<void> {

@@ -18,6 +18,8 @@ import {
 
 export interface AuthHandlers {
   signIn(workspaceId: string): Promise<RendererSession>;
+  /** "Continue with Google" — system browser + loopback handoff. */
+  signInWithGoogle(workspaceId: string): Promise<RendererSession>;
   signOut(workspaceId: string): Promise<void>;
   getSession(workspaceId: string): Promise<RendererSession | null>;
   refresh(workspaceId: string): Promise<RendererSession | null>;
@@ -158,6 +160,15 @@ export function registerIpcHandlers(deps: RegisterHandlersDeps): () => void {
       return auth.signIn(params.workspaceId);
     });
 
+    ipcMain.handle(CHANNELS.authSignInGoogle, async (_event, raw: unknown) => {
+      const params = parseOrThrow(
+        CHANNELS.authSignInGoogle,
+        AuthWorkspaceParamsSchema,
+        raw,
+      );
+      return auth.signInWithGoogle(params.workspaceId);
+    });
+
     ipcMain.handle(CHANNELS.authSignOut, async (_event, raw: unknown) => {
       const params = parseOrThrow(
         CHANNELS.authSignOut,
@@ -205,6 +216,7 @@ export function registerIpcHandlers(deps: RegisterHandlersDeps): () => void {
       channels.push(
         CHANNELS.authGetSession,
         CHANNELS.authSignIn,
+        CHANNELS.authSignInGoogle,
         CHANNELS.authSignOut,
         CHANNELS.authRefresh,
       );
