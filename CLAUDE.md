@@ -4,17 +4,23 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Workspace Layout
 
-Monorepo with independently deployable components. Each Python service owns its own Python 3.13 `.venv`, `requirements.txt`, `pyproject.toml`, `Dockerfile`, tests, and deploy path. The web app owns its own npm workspace. Implemented paths only:
+Monorepo with independently deployable components. Each Python service owns its own Python 3.13 `.venv`, `requirements.txt`, `pyproject.toml`, `Dockerfile`, tests, and deploy path. The frontend and desktop apps share the npm workspace (`apps/*`, `packages/*`). Implemented paths only:
 
 - `services/ai-backend` — agent runtime (FastAPI + LangGraph + Deep Agents). Modules: `agent_runtime/` (domain), `runtime_api/` (HTTP/SSE), `runtime_worker/` (queued run executor), `runtime_adapters/` (in-memory + postgres stores).
-- `services/backend` — core backend (`backend_app/`): MCP registration, OAuth state, token vault, user skills, audit events.
+- `services/backend` — core backend (`backend_app/`): MCP registration, OAuth state, token vault, user skills, audit events, identity (dev IdP, Google OAuth, SIWE, BYOK provider keys).
 - `services/backend-facade` — product-facing API (`backend_facade/`); proxies `/v1/*` to `backend` and `ai-backend`. **Apps must call only the facade.**
 - `apps/frontend` — Vite + React web surface.
+- `apps/desktop` — Electron client (`@0x-copilot/desktop`); supervises an embedded PostgreSQL + the three Python services from a bundled runtime. Staging/boot tooling lives in `tools/desktop-runtime/`.
+- `apps/website` — `0xcopilot.tech` marketing site (Astro), deployed to GitHub Pages.
 - `packages/api-types` — TypeScript contracts for app-facing payloads.
 - `packages/design-system` — React primitives + tokens.
+- `packages/chat-surface` — framework-agnostic chat UI surface.
+- `packages/chat-transport` — transport client for runs / events / streaming.
+- `packages/surface-renderers` — renderers for agent output surfaces.
+- `packages/audit-chain` — tamper-evident audit-chain primitives (shared Python + TS).
 - `packages/service-contracts` — constants-only Python package shared across services via `PYTHONPATH`.
 
-`apps/mac`, `apps/windows`, `packages/shared-config` are planned — do not import from them.
+`packages/shared-config` is planned — do not import from it until it exists.
 
 ## Commands
 
@@ -37,6 +43,23 @@ Docker dev stack (one URL at http://127.0.0.1:8080):
 OPENAI_API_KEY=$OPENAI_API_KEY make docker-dev
 make docker-dev-down
 ```
+
+Desktop app. Plain `npm run dev --workspace @0x-copilot/desktop` runs the Electron shell against MockTransport (or `ATLAS_FACADE_URL`). To exercise the supervised packaged boot (embedded PostgreSQL + the three services), stage the runtime once, then set `ATLAS_RUNTIME_DIR`:
+
+```bash
+node tools/desktop-runtime/stage.mjs --platform darwin --arch arm64   # match your host
+ATLAS_RUNTIME_DIR="$PWD/apps/desktop/resources" npm run dev --workspace @0x-copilot/desktop
+```
+
+Details: `apps/desktop/README.md` (supervisor boot contract), `apps/desktop/SMOKE.md`, `tools/desktop-runtime/README.md`.
+
+Self-host (web stack via Docker + GHCR images):
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/0x-copilot-dev/0x-copilot/main/deploy/self-host/install.sh | bash
+```
+
+See `deploy/self-host/README.md`, `docs/deployment/google-oauth-setup.md`, and `docs/deployment/wallet-login.md`.
 
 Production build (validates required secrets, refuses to register the dev IdP routes when `BACKEND_ENVIRONMENT != development`):
 
@@ -95,6 +118,12 @@ curl -H "Authorization: Bearer $TOKEN" http://127.0.0.1:8200/v1/me/profile
 
 **Auth in dev (W0.1 dev IdP):** `DEV_AUTH_BYPASS` no longer exists. Dev sessions go through a real signed bearer minted by `POST /v1/dev/identity/mint` (only registered when `BACKEND_ENVIRONMENT=development`). The frontend's `AuthContext` auto-mints on 401 via `_devEnsureBearer` for the active persona (`enterprise.dev.persona_slug` in localStorage; default `sarah_acme`). The bearer is signed with `ENTERPRISE_AUTH_SECRET` and verified by the same path production uses — no separate bypass code. `make dev-bearer PERSONA=...` mints one for curl. Production fails closed if `ENTERPRISE_AUTH_SECRET` or `ENTERPRISE_SERVICE_TOKEN` is missing. With `ENTERPRISE_SERVICE_TOKEN` set, internal callers must also send `x-enterprise-org-id` and `x-enterprise-user-id`. Treat caller-supplied identity/role/scope/tenant as untrusted unless derived from a verified session/token.
 
+**End-user auth (real sign-in, dev IdP unchanged):**
+
+- **Google OAuth** — deployment-global provider, enabled when `GOOGLE_OAUTH_CLIENT_ID` is set (`GOOGLE_OAUTH_CLIENT_SECRET` for web clients; desktop is PKCE-only). Backend `backend_app/identity/google.py`; facade `/v1/auth/providers`, `/v1/auth/oidc/google/start`, `/v1/auth/oidc/callback`; frontend `LoginScreen` "Continue with Google" (renders only when `/v1/auth/providers` advertises `google`). Setup: `docs/deployment/google-oauth-setup.md`.
+- **SIWE wallet login** — Sign-In-with-Ethereum (EIP-4361) via EIP-6963 wallets. Backend `backend_app/identity/siwe.py`; facade `/v1/auth/siwe/{nonce,verify}`; frontend `features/auth/WalletSignIn.tsx`. Chain allowlist `SIWE_ALLOWED_CHAIN_IDS` (default `1,8453,42161,4663` = Ethereum, Base, Arbitrum One, Robinhood Chain); origin `SIWE_ORIGIN` must match the serving origin. The EIP-4361 message template is **duplicated byte-identically** in `apps/frontend/src/features/auth/siweMessage.ts` and `services/backend/src/backend_app/identity/siwe.py` — change both together. Setup: `docs/deployment/wallet-login.md`.
+- **BYOK provider keys** — per-user OpenAI / Anthropic / Google Gemini keys, encrypted at rest via `TokenVault`. Backend `backend_app/provider_keys/` (`/v1/settings/provider-keys`); frontend Settings → AI & data → `ProviderKeys.tsx`. Responses carry only a `key_hint`; plaintext never appears in logs or audit rows.
+
 **MCP OAuth:** discovery + dynamic client registration when supported; per-server pre-registered client fields (`client_id`, `client_secret`, `scope`, `authorization_endpoint`, `token_endpoint`) when not. Secrets stored via `TokenVault` (local for dev only — production must inject a managed adapter and a persistent MCP registry store).
 
 ## Engineering Rules
@@ -121,7 +150,7 @@ Hard rule: no deployable component imports another's `src/`. This is non-negotia
 - Don't put AI orchestration in `backend-facade`. Don't put tenant auth, billing, or product persistence in `ai-backend`.
 - Never add a sibling component to `PYTHONPATH`, never reuse another service's `.venv`, never use relative imports across deployable boundaries.
 - `backend` currently owns MCP registration, OAuth/token state, user skills, audit events. Tenants, IdP integration, permissions, product persistence, admin workflows, and jobs are its target home.
-- `apps/mac`, `apps/windows`, `packages/shared-config` are planned — do not import from them until they exist.
+- `packages/shared-config` is planned — do not import from it until it exists.
 - Add or update a service-boundary doc before creating a new service or shared package.
 
 ## CI/CD & Docker

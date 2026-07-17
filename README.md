@@ -1,267 +1,204 @@
 # 0xCopilot
 
-0xCopilot is the workspace for a broader enterprise work surface: one product that helps executives and employees search, understand, and act across company systems such as Slack, Google Workspace, Atlassian, internal APIs, MCP servers, and enterprise knowledge stores.
+**An agent workspace that runs entirely on your machine — your keys, your data, your model.**
 
-This is one GitHub monorepo with multiple deployable components. The runtime architecture is microservice-style: each service owns its API, Docker image, local dependency environment, tests, and deployment path.
+0xCopilot takes on real, multi-step work across your apps and finishes it — on your machine, on your API key, on whatever model you pick. No cloud to trust, no seat to buy, no one holding your data but you.
 
-The workspace now includes initial deployable scaffolding for `apps/frontend`, `services/backend-facade`, `services/backend`, `services/ai-backend`, `packages/api-types`, and `packages/design-system`.
+<!-- screenshot placeholder -->
 
-## Current And Target Repository Layout
+- **Local-first.** The desktop app bundles its own Python runtime and PostgreSQL and runs the whole stack behind a strict-CSP Electron shell. Nothing leaves your machine except the model API calls you configure.
+- **BYOK.** Bring your own OpenAI, Anthropic, or Google Gemini key. Keys are stored per-user, encrypted at rest, and never travel in request bodies.
+- **Open source.** One monorepo, independently deployable services, self-hostable in one line.
 
-Implemented paths are present today. Planned paths describe the target
-architecture and should not be imported from or referenced by builds until they
-exist.
+---
+
+## Download & install (desktop)
+
+Grab the latest build from the [**Releases**](https://github.com/0x-copilot-dev/0x-copilot/releases/latest) page:
+
+| Platform              | Asset                       |
+| --------------------- | --------------------------- |
+| macOS — Apple Silicon | `Atlas-<version>-arm64.dmg` |
+| macOS — Intel         | `Atlas-<version>-x64.dmg`   |
+| Windows               | `Atlas-Setup-<version>.exe` |
+
+> **Builds are currently unsigned** until code-signing certificates land. macOS Gatekeeper and Windows SmartScreen will warn you the developer can't be verified — you'll need to click through (on macOS: right-click the app → **Open**; on Windows: **More info → Run anyway**). This goes away once signing is in place. See the [desktop release runbook](docs/deployment/desktop-release.md) for how builds are produced and where signing is gated.
+
+### Quickstart (3 steps)
+
+1. **Install** the download for your platform and launch it. On first run the app stages and boots its embedded services — you'll see a boot progress screen until it reports ready.
+2. **Sign in** — either:
+   - **Continue with Google**, or
+   - **Connect a wallet** — MetaMask, Rabby, or any [EIP-6963](https://eips.ethereum.org/EIPS/eip-6963) browser wallet. Supported chains: Ethereum (1), Base (8453), Arbitrum One (42161), Robinhood Chain (4663).
+3. **Add a model key** — open **Settings → AI & data → Provider keys** and paste your **OpenAI**, **Anthropic**, or **Google Gemini** key. Your key is encrypted at rest and used only for your runs.
+
+That's it — start a conversation and hand it work.
+
+---
+
+## Self-host in one line
+
+If you'd rather run the web stack on your own host, one command brings up PostgreSQL 17, the four service images, and an nginx gateway:
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/0x-copilot-dev/0x-copilot/main/deploy/self-host/install.sh | bash
+```
+
+By default the gateway is published on port `8090`. You need **Docker** (with Compose) and a **host or domain** to serve from. The images are pulled from GitHub Container Registry (`ghcr.io/0x-copilot-dev/0x-copilot-{backend,backend-facade,ai-backend,frontend}`); if those packages are private for your org you'll need to `docker login ghcr.io` first.
+
+Full configuration (env vars, TLS/domain, Google OAuth, wallet login) is in [`deploy/self-host/README.md`](deploy/self-host/README.md). To turn on sign-in providers, see:
+
+- [Google OAuth setup](docs/deployment/google-oauth-setup.md)
+- [Wallet login (SIWE)](docs/deployment/wallet-login.md)
+
+---
+
+## Community
+
+Questions, ideas, or want to help build? Join us on **[Discord](https://discord.gg/NhCv7zDkmX)**.
+
+---
+
+## Develop
+
+Prerequisites: Node.js + npm, Python 3.13, and (for the Docker paths) Docker.
+
+```bash
+make setup         # one .venv per Python service + node_modules
+make setup-hooks   # install pre-commit (ruff, ruff-format, prettier)
+```
+
+### Run the web stack locally
+
+```bash
+make dev
+```
+
+Starts `backend` on `:8100`, `ai-backend` on `:8000`, `backend-facade` on `:8200`, and `frontend` on `:5173`. Open <http://127.0.0.1:5173>; the Vite dev server proxies `/v1/*` to the facade. Every app — browser, curl, Postman, native — must call the **facade** at `:8200`, never `:8100`/`:8000` directly.
+
+One-URL Docker dev stack (frontend + facade + backend + ai-backend behind a gateway at <http://127.0.0.1:8080>):
+
+```bash
+OPENAI_API_KEY=$OPENAI_API_KEY make docker-dev
+make docker-dev-down
+```
+
+### Run the desktop app
+
+Plain `npm run dev --workspace @0x-copilot/desktop` launches the Electron shell against a mock transport (or `ATLAS_FACADE_URL` if you point it at a running facade) — no bundled services.
+
+To exercise the full packaged boot (embedded PostgreSQL + the three Python services under supervision), stage the self-contained runtime once, then launch against it:
+
+```bash
+# 1. Stage bundled CPython 3.13 + PostgreSQL 17 + the three services
+#    (output lands in apps/desktop/resources/runtime/, gitignored).
+#    Use your host's platform/arch — e.g. an Apple Silicon mac:
+node tools/desktop-runtime/stage.mjs --platform darwin --arch arm64
+
+# 2. Launch the Electron app against the staged runtime. Setting
+#    ATLAS_RUNTIME_DIR turns on the service supervisor.
+ATLAS_RUNTIME_DIR="$PWD/apps/desktop/resources" \
+  npm run dev --workspace @0x-copilot/desktop
+```
+
+See [`apps/desktop/README.md`](apps/desktop/README.md) for the supervisor boot contract and [`apps/desktop/SMOKE.md`](apps/desktop/SMOKE.md) for the manual smoke checklist. Runtime-staging details are in [`tools/desktop-runtime/README.md`](tools/desktop-runtime/README.md).
+
+### Tests
+
+`make test` runs a curated cross-service smoke subset. For a service's full suite or a single test, use that service's own `.venv`:
+
+```bash
+# Full suite for one service
+cd services/ai-backend && .venv/bin/python -m pytest
+
+# Single file / single test
+cd services/ai-backend && .venv/bin/python -m pytest tests/unit/agent_runtime/agent/test_runtime_factory.py
+cd services/ai-backend && .venv/bin/python -m pytest tests/unit/agent_runtime/agent/test_runtime_factory.py::TestName::test_method
+```
+
+Frontend / desktop / TS:
+
+```bash
+npm run typecheck --workspace @0x-copilot/frontend
+npm run build --workspace @0x-copilot/frontend
+npm run test --workspace @0x-copilot/desktop
+```
+
+---
+
+## Architecture
+
+One GitHub monorepo, microservice-style runtime: each service owns its API, Docker image, local dependency environment, tests, and deploy path. **Service boundaries are hard** — no deployable component imports another's `src/`. Cross-component integration is HTTP, generated contracts (`packages/api-types`), or constants-only (`packages/service-contracts`).
 
 ```text
 0x-copilot/
   apps/
-    frontend/        # implemented
-    mac/             # planned
-    windows/         # planned
-  services/
-    backend-facade/  # implemented
-    backend/         # implemented
-    ai-backend/      # implemented
+    desktop/          # Electron shell — bundled runtime, supervised boot, strict CSP
+    frontend/         # Vite + React web surface
+    website/          # 0xcopilot.tech marketing site (Astro)
   packages/
-    api-types/       # implemented
-    design-system/   # implemented
-    shared-config/   # planned
-  infra/
-    docker/
-    compose.yaml
-  docs/
-    architecture/
-    ci-cd/
-    decisions/
-  .cursor/
-    rules/
-  .github/
-    workflows/
+    api-types/        # TypeScript contracts for app-facing payloads
+    design-system/    # React primitives + tokens
+    chat-surface/     # framework-agnostic chat UI surface
+    chat-transport/   # transport client for runs/events/streaming
+    surface-renderers/# renderers for agent output surfaces
+    audit-chain/      # tamper-evident audit chain primitives
+    service-contracts/# constants-only Python package shared via PYTHONPATH
+  services/
+    backend/          # MCP registration, OAuth state, token vault, skills, audit, identity
+    backend-facade/   # product-facing API — the ONLY surface apps may call
+    ai-backend/       # agent runtime (FastAPI + LangGraph + Deep Agents)
+  tools/
+    desktop-runtime/  # stages + boots the self-contained desktop runtime
+  deploy/             # self-host + tenant/rollout tooling
+  docs/               # architecture, deployment, roadmap, security
 ```
 
-## Monorepo, Microservice Runtime
+**Request path:** browser → Vite proxy (or nginx ingress in prod) → `backend-facade:8200` → either `backend:8100` (MCP / skills / OAuth / identity) or `ai-backend:8000` (conversations, runs, events, approvals). The facade never exposes `/internal/v1/*`; the backend's `/internal/v1/*` is consumed only by `ai-backend`.
 
-Monorepo and microservices are separate decisions. This repo should keep related product code together while allowing services to deploy independently.
+**Published images:** `ghcr.io/0x-copilot-dev/0x-copilot-{backend,backend-facade,ai-backend,frontend}`.
 
-- Monorepo: one GitHub repository, one PR can update app, API contract, service, and docs together.
-- Microservice-style runtime: backend services are independently built, tested, containerized, and deployed.
-- Shared packages: stable contracts and cross-cutting primitives only, not a place to hide business ownership.
+Deeper reading:
 
-## Components
+- [`docs/architecture/workspace-topology.md`](docs/architecture/workspace-topology.md)
+- [`docs/architecture/service-boundaries.md`](docs/architecture/service-boundaries.md)
+- [`services/ai-backend/README.md`](services/ai-backend/README.md) and [`services/ai-backend/docs/README.md`](services/ai-backend/docs/README.md)
+- [`docs/dev-testing.md`](docs/dev-testing.md) — curl, Postman, and the dev IdP for non-browser callers.
 
-- `services/ai-backend`: implemented AI orchestration backend for Deep Agents, LangGraph, LangChain tools, dynamic MCP loading, skills, context/memory management, subagents, streaming, and retrieval orchestration.
-- `services/backend-facade`: implemented product-facing API surface that frontend and native apps call. It hides internal service topology.
-- `services/backend`: implemented core backend slice for MCP registration, OAuth state, token storage, user skills, and audit events. Tenant auth, permissions, billing/admin workflows, broader product persistence, and operational jobs remain target backend responsibilities.
-- `apps/frontend`: implemented web work surface for enterprise search, agent interaction, source review, workflow execution, and admin views.
-- `apps/windows`: planned Windows desktop client for desktop workflows and enterprise distribution.
-- `apps/mac`: planned macOS desktop client for executive workflows, desktop search, and notifications.
-- `packages/api-types`: implemented shared API schemas and contract types.
-- `packages/design-system`: implemented shared design tokens and UI primitives for web.
-- `packages/shared-config`: planned shared lint, formatting, TypeScript, Python, and CI config where appropriate.
+---
 
-## System Direction
+## Auth & keys
 
-The product should feel like a trusted operating layer for enterprise work, not a simple keyword search box. The user should not need to know which system owns the data or which tool must be called. The platform should route requests through the right backend, respect permissions, stream progress, and return grounded, traceable answers.
+0xCopilot supports four ways in, plus bring-your-own model keys:
 
-## Service Boundaries
+- **Dev IdP (development only).** `make dev` uses a signed bearer minted by `POST /v1/dev/identity/mint`, registered only when `BACKEND_ENVIRONMENT=development`. The bearer is signed with `ENTERPRISE_AUTH_SECRET` and verified by the same path production uses — there is no `DEV_AUTH_BYPASS` shortcut. Mint one for curl with `make dev-bearer` (see [API testing](#api-testing-curl-postman)).
+- **Google OAuth.** Set `GOOGLE_OAUTH_CLIENT_ID` (and `GOOGLE_OAUTH_CLIENT_SECRET` for web clients) and the login screen shows **Continue with Google**. Facade routes: `GET /v1/auth/providers`, `GET /v1/auth/oidc/google/start`, `GET /v1/auth/oidc/callback`. Step-by-step: [Google OAuth setup](docs/deployment/google-oauth-setup.md).
+- **Wallet login (SIWE).** Sign-In-With-Ethereum via any EIP-6963 wallet. Facade routes: `POST /v1/auth/siwe/nonce`, `POST /v1/auth/siwe/verify`. Chain allowlist defaults to Ethereum, Base, Arbitrum One, and Robinhood Chain (`4663`), tunable via `SIWE_ALLOWED_CHAIN_IDS`. Details: [Wallet login (SIWE)](docs/deployment/wallet-login.md).
+- **BYOK provider keys.** Per-user OpenAI / Anthropic / Google Gemini keys, encrypted at rest via `TokenVault`, managed in **Settings → AI & data → Provider keys** (`/v1/settings/provider-keys`). Plaintext never appears in any response, log, or audit row — only a `key_hint`.
 
-- Apps call `backend-facade`, not internal services directly.
-- `backend-facade` owns product-facing APIs, request aggregation, response shaping, and app-compatible streaming surfaces.
-- `backend` currently owns MCP registration, OAuth/token state, user skills, and audit events. It is the target home for tenants, auth integration, permissions, product persistence, admin workflows, and jobs.
-- `ai-backend` owns agent orchestration, tools, skills, MCP, memory, subagents, streaming events, and retrieval orchestration.
-- Shared packages hold stable contracts and generated clients. They should not contain hidden business logic that makes ownership ambiguous.
+Service-to-service calls (facade ↔ backend, ai-backend ↔ backend) use `ENTERPRISE_SERVICE_TOKEN` plus `x-enterprise-org-id` / `x-enterprise-user-id` headers derived from the verified user bearer. Treat caller-supplied identity, role, scope, and tenant as untrusted unless derived from a verified session or token. Production fails closed without `ENTERPRISE_AUTH_SECRET` and `ENTERPRISE_SERVICE_TOKEN`.
 
-## Docker And CI/CD Direction
+Do not hardcode bearers, JWTs, or service tokens in source, Dockerfiles, README examples, or committed `.env` files. Mint a fresh bearer per session when you need one.
 
-Each deployable component should have its own Docker image:
+---
 
-- `ghcr.io/<org>/0x-copilot-backend-facade`
-- `ghcr.io/<org>/0x-copilot-backend`
-- `ghcr.io/<org>/agent-runtime-backend`
-- `ghcr.io/<org>/0x-copilot-frontend`
+## API testing (curl, Postman)
 
-Each deployable component also owns its local dependency environment:
-
-- `services/backend`: service-local Python 3.13 `.venv`, `requirements.txt`, `pyproject.toml`, and `Dockerfile`; its Docker build uses the repo root as context for constants-only service contracts.
-- `services/backend-facade`: service-local Python 3.13 `.venv`, `requirements.txt`, `pyproject.toml`, and `Dockerfile`; its Docker build uses the repo root as context for constants-only service contracts.
-- `services/ai-backend`: service-local Python 3.13 `.venv`, `requirements.txt`, `pyproject.toml`, and `Dockerfile`; its Docker build uses the repo root as context for constants-only service contracts.
-- `apps/frontend`: npm workspace dependency environment with its own `package.json`, Vite config, and `Dockerfile`; it must not use a Python service venv.
-
-Do not run or test one service with another service's `.venv`. Create the target service's `.venv` from its own `requirements.txt` before running that component locally.
-
-Starting CI/CD model:
-
-- CI on every PR: lint, typecheck, unit tests, builds, and Docker build validation for changed components.
-- Path-filtered workflows so unrelated apps/services do not rebuild unnecessarily.
-- CD after merge to `main`: build and push service images to GitHub Container Registry.
-- Staging deploy from `main`.
-- Production deploy through GitHub Environments with manual approval.
-- Desktop apps use platform-specific pipelines later: macOS runners for Mac builds, and Windows runners for Windows builds.
-
-## Current Status
-
-The workspace now includes initial scaffolding for `apps/frontend`, `services/backend-facade`, `services/backend`, `services/ai-backend`, `packages/api-types`, and `packages/design-system`.
-
-## Development Setup
-
-Use the root `Makefile` for the default workflow:
+For non-browser callers, mint a dev bearer once and reuse it. All callers must hit the **facade** at `:8200`.
 
 ```bash
-cd 0x-copilot
-make setup
-```
+export TOKEN=$(make dev-bearer)                       # default: sarah_acme
+export TOKEN=$(make dev-bearer PERSONA=marcus_admin)  # admin variant
 
-`make setup` installs npm dependencies and creates one virtual environment per
-Python service. Do not reuse a sibling service `.venv`.
-
-Equivalent manual setup:
-
-```bash
-cd 0x-copilot
-npm install
-
-cd services/backend
-python3.13 -m venv .venv
-.venv/bin/python -m pip install --upgrade pip
-.venv/bin/python -m pip install -r requirements.txt
-
-cd ../backend-facade
-python3.13 -m venv .venv
-.venv/bin/python -m pip install --upgrade pip
-.venv/bin/python -m pip install -r requirements.txt
-
-cd ../ai-backend
-python3.13 -m venv .venv
-.venv/bin/python -m pip install --upgrade pip
-.venv/bin/python -m pip install -r requirements.txt
-cp env_example .env
-```
-
-Set at least one model provider key in `services/ai-backend/.env` or in your
-shell before sending chat messages:
-
-```bash
-OPENAI_API_KEY=...
-# or ANTHROPIC_API_KEY=...
-# or GOOGLE_API_KEY=...
-```
-
-The local Python commands include `packages/service-contracts/src` on
-`PYTHONPATH` because the services share constants from that package. Docker
-images install the package during build.
-
-## Run Locally
-
-Run the local end-to-end stack with one command:
-
-```bash
-cd 0x-copilot
-make dev
-```
-
-This starts:
-
-- `services/backend` on `http://127.0.0.1:8100`
-- `services/ai-backend` on `http://127.0.0.1:8000`
-- `services/backend-facade` on `http://127.0.0.1:8200`
-- `apps/frontend` on `http://127.0.0.1:5173`
-
-Open `http://127.0.0.1:5173`. The Vite dev server proxies `/v1/*` to
-`backend-facade`.
-
-To bind to a different interface, use `BIND_HOST`, for example
-`BIND_HOST=0.0.0.0 make dev`. The Makefile intentionally avoids the generic
-`HOST` variable because some shells set it to non-network values.
-
-Manual process commands, if you want separate terminals:
-
-```bash
-cd services/backend
-BACKEND_ENVIRONMENT=development \
-MCP_TOKEN_VAULT_PROVIDER=local \
-PYTHONPATH=src:../../packages/service-contracts/src \
-.venv/bin/python -m uvicorn backend_app.app:app --host 127.0.0.1 --port 8100
-```
-
-```bash
-cd services/ai-backend
-RUNTIME_ENVIRONMENT=development \
-RUNTIME_STORE_BACKEND=in_memory \
-RUNTIME_START_IN_PROCESS_WORKER=true \
-MCP_BACKEND_REGISTRY_URL=http://127.0.0.1:8100 \
-SKILLS_BACKEND_REGISTRY_URL=http://127.0.0.1:8100 \
-PYTHONPATH=src:../../packages/service-contracts/src \
-.venv/bin/python -m uvicorn runtime_api.app:app --host 127.0.0.1 --port 8000
-```
-
-```bash
-cd services/backend-facade
-FACADE_ENVIRONMENT=development \
-BACKEND_URL=http://127.0.0.1:8100 \
-AI_BACKEND_URL=http://127.0.0.1:8000 \
-PYTHONPATH=src:../../packages/service-contracts/src \
-.venv/bin/python -m uvicorn backend_facade.app:app --host 127.0.0.1 --port 8200
-```
-
-```bash
-cd 0x-copilot
-npm run dev --workspace @0x-copilot/frontend -- --host 127.0.0.1
-```
-
-## Auth In Development
-
-Local auth uses the **W0.1 dev IdP** — every request, dev or prod, carries a
-real bearer signed with `ENTERPRISE_AUTH_SECRET`. The verification path on the
-facade and the backend is the same one production uses; only the minting source
-is dev-specific. There is no `DEV_AUTH_BYPASS` shortcut.
-
-How it works:
-
-- `BACKEND_ENVIRONMENT=development` registers two extra routes on
-  `services/backend` (and re-exposes them through the facade):
-  - `GET  /v1/dev/personas` — list available fixtures.
-  - `POST /v1/dev/identity/mint` — exchange a persona slug for a bearer.
-- The frontend's `AuthContext` auto-mints on 401 using the persona stored at
-  `localStorage["enterprise.dev.persona_slug"]` (default `sarah_acme`).
-- Service-to-service calls (facade ↔ backend, ai-backend ↔ backend) use
-  `ENTERPRISE_SERVICE_TOKEN` plus `x-enterprise-org-id` /
-  `x-enterprise-user-id` headers derived from the verified user bearer. The
-  backend treats those headers as untrusted unless the service token is valid.
-- Production fails closed without `ENTERPRISE_AUTH_SECRET` and
-  `ENTERPRISE_SERVICE_TOKEN`. The `/v1/dev/*` surface is unregistered when
-  `BACKEND_ENVIRONMENT != development`.
-
-Do not hardcode bearers, JWTs, or service tokens in source, Dockerfiles,
-README examples, or committed `.env` files. Mint a fresh bearer per session
-when you need one.
-
-## API Testing (curl, Postman)
-
-For non-browser callers (curl, Postman, scripts), mint a dev bearer once and
-reuse it. All apps — browser, curl, Postman, native — must call the **facade**
-at `:8200`; never `:8100` (backend) or `:8000` (ai-backend) directly, even in
-dev. The internal surfaces require a service token plus identity headers.
-
-```bash
-# 1. Mint a bearer (defaults to the sarah_acme employee fixture).
-export TOKEN=$(make dev-bearer)
-# Or pick a different persona:
-export TOKEN=$(make dev-bearer PERSONA=marcus_admin)
-
-# 2. Hit the facade with it.
 curl -sS http://127.0.0.1:8200/v1/me/profile \
   -H "Authorization: Bearer $TOKEN" | jq
 ```
 
-Full curl recipes (conversations, runs, SSE, MCP install, per-chat connector
-scope toggles), the Postman collection setup, and the persona reference live in
-[`docs/dev-testing.md`](docs/dev-testing.md). Treat that doc as the single
-source of truth for non-browser API calls.
+Full recipes (conversations, runs, SSE streaming, MCP install, per-chat connector scope PATCH) and Postman setup live in [`docs/dev-testing.md`](docs/dev-testing.md).
 
-## Smoke Test
+### Smoke test
 
-After `make dev` has all four processes up, this script should produce a
-streaming run:
+After `make dev` is up, this should produce a streaming run:
 
 ```bash
 TOKEN=$(make dev-bearer)
@@ -280,51 +217,19 @@ curl -sS -X POST $BASE/v1/agent/runs \
 
 You can also send `Hi` from the UI composer at <http://127.0.0.1:5173>.
 
-## Streaming Runtime Events
+---
 
-The local chat UI opens `/v1/agent/runs/{run_id}/stream` through
-`backend-facade`. The AI backend persists ordered `RuntimeEventEnvelope` records
-before replaying or streaming them as `runtime_event` SSE frames. Browser clients
-track the highest `sequence_no` per run and reconnect with `after_sequence` so a
-paused stream can resume without replaying already-rendered events.
+## Streaming runtime events
 
-## Docker Development
+The chat UI opens `/v1/agent/runs/{run_id}/stream` through the facade. The AI backend persists ordered `RuntimeEventEnvelope` records with a monotonic `sequence_no` per run before replaying or streaming them as `runtime_event` SSE frames. Clients track the highest `sequence_no` and reconnect with `?after_sequence=N` so a paused stream resumes without replay. Replay-only is `GET /v1/agent/runs/{run_id}/events`. Use the backend's projected `activity_kind` / `display_title` / `summary` / `status` fields — do not derive activity types from event-name prefixes.
 
-Build and run the full local stack through Docker:
+---
 
-```bash
-cd 0x-copilot
-OPENAI_API_KEY=$OPENAI_API_KEY make docker-dev
-```
+## Production build
 
-Open `http://127.0.0.1:8080`. The `dev-gateway` container serves the frontend and
-proxies `/v1/*` to `backend-facade`, matching the route shape the browser uses.
-
-Useful Docker checks:
+`make prod` validates required secrets and refuses to register the dev IdP routes when `BACKEND_ENVIRONMENT != development`:
 
 ```bash
-curl http://127.0.0.1:8080/v1/session
-curl http://127.0.0.1:8200/v1/mcp/servers
-docker compose -f docker-compose.dev.yml logs -f ai-backend
-```
-
-Stop the stack:
-
-```bash
-make docker-dev-down
-```
-
-The older `services/ai-backend/docker-compose.yml` is scoped to production-style
-AI API and worker execution with Postgres. Use `docker-compose.dev.yml` when you
-want frontend, facade, backend, and AI backend together.
-
-## Production Build
-
-`make prod` builds production artifacts and refuses to run with dev auth enabled
-or missing required secrets:
-
-```bash
-cd 0x-copilot
 ENTERPRISE_AUTH_SECRET=... \
 ENTERPRISE_SERVICE_TOKEN=... \
 MCP_TOKEN_VAULT_SECRET=... \
@@ -332,32 +237,17 @@ OPENAI_API_KEY=... \
 make prod
 ```
 
-`make prod` does not register the dev IdP routes and does not hardcode a JWT or
-service token. Deploy the built images with your production orchestrator and
-managed secret store. The backend production runtime still requires a persistent
-MCP registry store and managed token-vault adapter before it can serve production
-traffic.
+Deploy the built images with your production orchestrator and managed secret store. The backend production runtime requires a persistent MCP registry store and a managed token-vault adapter before it can serve production traffic.
 
-Start there for architecture details:
+---
 
-- `apps/README.md`
-- `packages/README.md`
-- `services/ai-backend/README.md`
-- `services/ai-backend/docs/README.md`
-- `docs/architecture/workspace-topology.md`
-- `docs/architecture/service-boundaries.md`
-- `docs/dev-testing.md` — curl, Postman, and the dev IdP for non-browser callers.
+## Repo rules
 
-## Repo Rules
+- **Service boundaries are hard.** No deployable component imports another's `src/`. Cross-component integration is HTTP, generated contracts (`packages/api-types`), or constants-only (`packages/service-contracts`). Never add a sibling service to `PYTHONPATH`, never reuse another service's `.venv`, never use relative imports across deployable boundaries.
+- **Apps call the facade only** — never `backend` or `ai-backend` directly.
+- Don't put AI orchestration in `backend-facade`; don't put tenant auth, billing, or product persistence in `ai-backend`.
+- Each deployable component owns its dependency environment and Dockerfile. Python services use a service-local `.venv` + `requirements.txt`; the web/desktop apps use the npm workspace.
+- Don't create shared packages just to avoid small duplication — share only stable contracts and truly cross-cutting primitives.
+- Don't commit secrets, real `.env` files, tokens, certificates, or production credentials.
 
-- Keep service boundaries clear. Do not put frontend, facade, core backend, or native app concerns into `services/ai-backend`.
-- Prefer stable APIs and generated clients between components over direct cross-service imports.
-- Do not import implementation code across `apps/*` or `services/*`. Cross-component integration must use HTTP APIs, queues/events, constants-only service contracts, or generated contracts from `packages/api-types`.
-- Do not add a sibling service directory to `PYTHONPATH` or use relative imports to reach another deployable component.
-- Each deployable component owns its dependency environment and Dockerfile:
-  - Python services use a service-local `.venv`, `requirements.txt`, and `Dockerfile`.
-  - The web frontend uses its own npm workspace environment, `package.json`/`package-lock.json`, and `Dockerfile`.
-- Document responsibilities before implementation when introducing a new component.
-- Treat permissions, auth context, and tenant boundaries as cross-cutting product requirements.
-- Every implementation should include focused unit tests and edge-case coverage appropriate to its component.
-- Do not create shared packages just to avoid a small amount of duplication; share only stable contracts and truly cross-cutting primitives.
+Path-scoped engineering rules live in hierarchical `CLAUDE.md` files that load when you touch that subtree (`services/*/CLAUDE.md`, `apps/frontend/CLAUDE.md`, `packages/*/CLAUDE.md`).
