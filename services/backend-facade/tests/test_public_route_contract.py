@@ -19,6 +19,8 @@ def test_openapi_includes_core_product_paths() -> None:
         "/v1/agent/models",
         "/v1/skills",
         "/v1/agent/history",
+        "/v1/settings/provider-keys",
+        "/v1/settings/provider-keys/{provider}",
     )
     for route in required:
         assert route in paths, f"missing route {route}"

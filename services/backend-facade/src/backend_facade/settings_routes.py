@@ -11,6 +11,9 @@ Routes:
   * PATCH  /v1/settings/workspace/notifications    (admin)
   * GET    /v1/settings/security/webhooks          (admin)
   * PATCH  /v1/settings/security/webhooks          (admin)
+  * GET    /v1/settings/provider-keys              (user, BYOK)
+  * PUT    /v1/settings/provider-keys/{provider}   (user, BYOK)
+  * DELETE /v1/settings/provider-keys/{provider}   (user, BYOK)
 
 ACL is enforced server-side by ``backend_app.settings.service``. The
 facade never opens an admin path; it simply forwards the verified
@@ -21,7 +24,7 @@ the trusted facade-headers envelope.
 from __future__ import annotations
 
 import httpx
-from fastapi import FastAPI, HTTPException, Request, status
+from fastapi import FastAPI, HTTPException, Request, Response, status
 
 from backend_facade.auth import FacadeAuthenticator
 from backend_facade.http_client import http_client
@@ -35,6 +38,8 @@ class Constants:
         USER_NOTIFICATIONS = "/v1/settings/notifications"
         WORKSPACE_NOTIFICATIONS = "/v1/settings/workspace/notifications"
         SECURITY_WEBHOOKS = "/v1/settings/security/webhooks"
+        PROVIDER_KEYS = "/v1/settings/provider-keys"
+        PROVIDER_KEY_ITEM = "/v1/settings/provider-keys/{provider}"
 
 
 def register_settings_routes(app: FastAPI) -> None:
@@ -71,6 +76,30 @@ def register_settings_routes(app: FastAPI) -> None:
     @app.patch(Constants.Paths.SECURITY_WEBHOOKS)
     async def patch_security_webhooks(request: Request) -> dict[str, object]:
         return await _forward_patch(app, request, Constants.Paths.SECURITY_WEBHOOKS)
+
+    # ----- Provider keys (BYOK) ----------------------------------------
+    #
+    # The facade never inspects or logs the key material: PUT bodies are
+    # forwarded verbatim to the backend, and responses only ever carry
+    # the backend-computed ``key_hint`` (last 4 chars), never plaintext.
+
+    @app.get(Constants.Paths.PROVIDER_KEYS)
+    async def list_provider_keys(request: Request) -> dict[str, object]:
+        return await _forward_get(app, request, Constants.Paths.PROVIDER_KEYS)
+
+    @app.put(Constants.Paths.PROVIDER_KEY_ITEM)
+    async def put_provider_key(request: Request, provider: str) -> dict[str, object]:
+        return await _forward_put(
+            app, request, f"{Constants.Paths.PROVIDER_KEYS}/{provider}"
+        )
+
+    @app.delete(
+        Constants.Paths.PROVIDER_KEY_ITEM, status_code=status.HTTP_204_NO_CONTENT
+    )
+    async def delete_provider_key(request: Request, provider: str) -> Response:
+        return await _forward_delete_no_content(
+            app, request, f"{Constants.Paths.PROVIDER_KEYS}/{provider}"
+        )
 
 
 # ---------------------------------------------------------------------------
@@ -110,6 +139,42 @@ async def _forward_patch(
         timeout=15,
     )
     return _coerce_object_or_raise(response)
+
+
+async def _forward_put(app: FastAPI, request: Request, path: str) -> dict[str, object]:
+    backend_url = _settings_for(app).backend_url
+    client = http_client(app)
+    identity = await FacadeAuthenticator.verify_with_touch(
+        request, backend_url=backend_url, http_client=client
+    )
+    body = await _safe_json(request)
+    response = await client.put(
+        f"{backend_url}{path}",
+        params={"org_id": identity.org_id, "user_id": identity.user_id},
+        json=body,
+        headers=FacadeAuthenticator.service_headers(identity),
+        timeout=15,
+    )
+    return _coerce_object_or_raise(response)
+
+
+async def _forward_delete_no_content(
+    app: FastAPI, request: Request, path: str
+) -> Response:
+    backend_url = _settings_for(app).backend_url
+    client = http_client(app)
+    identity = await FacadeAuthenticator.verify_with_touch(
+        request, backend_url=backend_url, http_client=client
+    )
+    response = await client.delete(
+        f"{backend_url}{path}",
+        params={"org_id": identity.org_id, "user_id": identity.user_id},
+        headers=FacadeAuthenticator.service_headers(identity),
+        timeout=15,
+    )
+    if response.status_code >= 400:
+        _raise_for_upstream(response)
+    return Response(status_code=status.HTTP_204_NO_CONTENT)
 
 
 async def _safe_json(request: Request) -> dict[str, object]:
