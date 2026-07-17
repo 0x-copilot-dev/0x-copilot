@@ -1,0 +1,38 @@
+# Local-build override for verifying the self-host stack without GHCR.
+#
+# Builds the four service images from THIS checkout and tags them with the exact
+# refs docker-compose.prod.yml resolves (${GHCR_NAMESPACE}/...:${IMAGE_TAG}), so
+# the migration + worker containers that reference the same tags reuse the freshly
+# built images instead of pulling.
+#
+#   docker compose -f docker-compose.prod.yml -f docker-compose.local-build.yml build
+#   docker compose -f docker-compose.prod.yml -f docker-compose.local-build.yml up -d
+#
+# Pin IMAGE_TAG (e.g. IMAGE_TAG=local) in .env so a local build never shadows a
+# pulled :latest. Build context is the repo root (two levels up); the Dockerfiles
+# expect the monorepo layout.
+
+services:
+  backend:
+    build:
+      context: ../..
+      dockerfile: services/backend/Dockerfile
+    pull_policy: build
+
+  ai-backend:
+    build:
+      context: ../..
+      dockerfile: services/ai-backend/Dockerfile
+    pull_policy: build
+
+  backend-facade:
+    build:
+      context: ../..
+      dockerfile: services/backend-facade/Dockerfile
+    pull_policy: build
+
+  frontend:
+    build:
+      context: ../..
+      dockerfile: apps/frontend/Dockerfile
+    pull_policy: build

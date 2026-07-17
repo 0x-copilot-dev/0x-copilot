@@ -17,6 +17,12 @@ RUN python -m pip install --no-cache-dir --upgrade pip \
     && python -m pip install --no-cache-dir -r requirements.txt --require-hashes
 
 COPY services/backend/src ./src
+# Ship the versioned schema so the image can create its own database.
+# MigrationRunner resolves <app>/migrations (parents[3] of db/migrate.py),
+# and scripts/migrate.py is the operator CLI (`scripts/migrate.py apply`)
+# used by the desktop supervisor and the self-host migration container.
+COPY services/backend/migrations ./migrations
+COPY services/backend/scripts ./scripts
 
 EXPOSE 8100
 

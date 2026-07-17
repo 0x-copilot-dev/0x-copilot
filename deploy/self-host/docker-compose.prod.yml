@@ -1,0 +1,272 @@
+# 0xCopilot — single-node self-host stack.
+#
+# Pulls the four published images from GHCR and boots the whole product behind
+# one nginx gateway on ${GATEWAY_PORT} (default 8080). Everything is env-driven
+# from ./.env — no code changes per install. See .env.example + README.md.
+#
+# Deployment profile: single_user_desktop (see README "Why this profile"). It is
+# the only profile that ships a Postgres composition root (backend_app.desktop_app)
+# and boots without cloud KMS/SIEM, while keeping allow_self_signup=True so users
+# create their own workspace via Google / wallet on first visit.
+#
+# Requires Docker Compose v2.23.1+ (inline `configs` content).
+
+x-audit-env: &audit-env
+  # Tamper-evident audit chain signing key (hex, >= 32 bytes). Required by both
+  # the backend desktop composition root and the ai-backend postgres audit signer
+  # under *_ENVIRONMENT=production.
+  AUDIT_HMAC_KEY: ${AUDIT_HMAC_KEY}
+
+configs:
+  # Create the second logical database. The image creates POSTGRES_DB
+  # (atlas_backend); the runtime store lives in atlas_ai. initdb scripts only
+  # run on first boot against an empty volume, which is exactly what we want.
+  pg_init_sql:
+    content: |
+      CREATE DATABASE atlas_ai;
+
+  # Ingress: serve the SPA and proxy /v1 -> facade. Mirrors
+  # infra/docker/dev-gateway.conf (proxy_buffering off keeps SSE streaming live).
+  gateway_nginx:
+    content: |
+      server {
+        listen 8080;
+        server_name _;
+
+        location /v1/ {
+          proxy_pass http://backend-facade:8200;
+          proxy_http_version 1.1;
+          proxy_set_header Host $$host;
+          proxy_set_header X-Real-IP $$remote_addr;
+          proxy_set_header X-Forwarded-For $$proxy_add_x_forwarded_for;
+          proxy_set_header X-Forwarded-Proto $$scheme;
+          proxy_read_timeout 3600s;
+          proxy_buffering off;
+        }
+
+        location / {
+          proxy_pass http://frontend:8080;
+          proxy_http_version 1.1;
+          proxy_set_header Host $$host;
+        }
+      }
+
+services:
+  postgres:
+    image: postgres:17
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER:-atlas}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?set POSTGRES_PASSWORD in .env}
+      POSTGRES_DB: atlas_backend
+    configs:
+      - source: pg_init_sql
+        target: /docker-entrypoint-initdb.d/10-create-ai-db.sql
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test:
+        ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-atlas} -d atlas_backend"]
+      interval: 5s
+      timeout: 5s
+      retries: 20
+
+  # ---- One-shot schema migrations (run to completion, then exit) ----------
+  backend-migrate:
+    image: ${GHCR_NAMESPACE:-ghcr.io/0x-copilot-dev}/0x-copilot-backend:${IMAGE_TAG:-latest}
+    restart: "no"
+    command: ["python", "scripts/migrate.py", "apply"]
+    environment:
+      # yoyo selects its DB driver from the URL scheme; the images ship psycopg
+      # v3, so the migrator needs the `+psycopg` scheme. The app services connect
+      # with plain postgresql:// (psycopg's own pool).
+      BACKEND_DATABASE_URL: postgresql+psycopg://${POSTGRES_USER:-atlas}:${POSTGRES_PASSWORD}@postgres:5432/atlas_backend
+    depends_on:
+      postgres:
+        condition: service_healthy
+
+  ai-backend-migrate:
+    image: ${GHCR_NAMESPACE:-ghcr.io/0x-copilot-dev}/0x-copilot-ai-backend:${IMAGE_TAG:-latest}
+    restart: "no"
+    command: ["python", "scripts/migrate.py", "apply"]
+    environment:
+      # psycopg v3 driver via yoyo's `+psycopg` scheme (see backend-migrate).
+      RUNTIME_DATABASE_URL: postgresql+psycopg://${POSTGRES_USER:-atlas}:${POSTGRES_PASSWORD}@postgres:5432/atlas_ai
+    depends_on:
+      postgres:
+        condition: service_healthy
+
+  # ---- Core backend (single_user_desktop Postgres composition root) -------
+  backend:
+    image: ${GHCR_NAMESPACE:-ghcr.io/0x-copilot-dev}/0x-copilot-backend:${IMAGE_TAG:-latest}
+    restart: unless-stopped
+    # The published image's default CMD is backend_app.app:app (in-memory).
+    # Point uvicorn at the Postgres composition root that ships in the same image.
+    command:
+      [
+        "uvicorn",
+        "backend_app.desktop_app:app",
+        "--host",
+        "0.0.0.0",
+        "--port",
+        "8100",
+      ]
+    environment:
+      <<: *audit-env
+      BACKEND_ENVIRONMENT: production
+      ENTERPRISE_DEPLOYMENT_PROFILE: single_user_desktop
+      DATABASE_URL: postgresql://${POSTGRES_USER:-atlas}:${POSTGRES_PASSWORD}@postgres:5432/atlas_backend
+      ENTERPRISE_AUTH_SECRET: ${ENTERPRISE_AUTH_SECRET}
+      ENTERPRISE_SERVICE_TOKEN: ${ENTERPRISE_SERVICE_TOKEN}
+      MCP_TOKEN_VAULT_BACKEND: local
+      MCP_TOKEN_VAULT_SECRET: ${MCP_TOKEN_VAULT_SECRET}
+      # Wallet (SIWE) entry ramp. SIWE_ORIGIN must equal the public origin the
+      # browser loads from (the gateway URL); SIWE_ALLOWED_CHAIN_IDS narrows the
+      # accepted chains (default 1,8453,42161,4663 = ETH, Base, Arbitrum, ...).
+      SIWE_ORIGIN: ${SIWE_ORIGIN:-http://localhost:8080}
+      SIWE_ALLOWED_CHAIN_IDS: ${SIWE_ALLOWED_CHAIN_IDS:-1,8453,42161,4663}
+      # Optional global "Continue with Google". Advertised only when both are set.
+      GOOGLE_OAUTH_CLIENT_ID: ${GOOGLE_OAUTH_CLIENT_ID:-}
+      GOOGLE_OAUTH_CLIENT_SECRET: ${GOOGLE_OAUTH_CLIENT_SECRET:-}
+      # No OTLP collector in this stack; keep structured logging, skip OTel export.
+      OTEL_SDK_DISABLED: "true"
+    depends_on:
+      postgres:
+        condition: service_healthy
+      backend-migrate:
+        condition: service_completed_successfully
+    healthcheck:
+      test:
+        [
+          "CMD",
+          "python",
+          "-c",
+          "import urllib.request; urllib.request.urlopen('http://localhost:8100/v1/health', timeout=3)",
+        ]
+      interval: 10s
+      timeout: 5s
+      retries: 12
+      start_period: 20s
+
+  # ---- AI runtime: API + queued worker share one Postgres + LISTEN/NOTIFY --
+  ai-backend:
+    image: ${GHCR_NAMESPACE:-ghcr.io/0x-copilot-dev}/0x-copilot-ai-backend:${IMAGE_TAG:-latest}
+    restart: unless-stopped
+    environment: &ai-backend-env
+      <<: *audit-env
+      RUNTIME_ENVIRONMENT: production
+      ENTERPRISE_DEPLOYMENT_PROFILE: single_user_desktop
+      RUNTIME_STORE_BACKEND: postgres
+      DATABASE_URL: postgresql://${POSTGRES_USER:-atlas}:${POSTGRES_PASSWORD}@postgres:5432/atlas_ai
+      # API and worker are separate processes: the in-memory asyncio bus can't
+      # wake across them, so use Postgres LISTEN/NOTIFY (matches
+      # services/ai-backend/docker-compose.yml).
+      RUNTIME_EVENT_BUS_BACKEND: postgres
+      # A dedicated migration container owns schema apply; don't race on boot.
+      RUNTIME_MIGRATIONS_AUTO_APPLY: "false"
+      ENTERPRISE_AUTH_SECRET: ${ENTERPRISE_AUTH_SECRET}
+      ENTERPRISE_SERVICE_TOKEN: ${ENTERPRISE_SERVICE_TOKEN}
+      MCP_BACKEND_REGISTRY_URL: http://backend:8100
+      SKILLS_BACKEND_REGISTRY_URL: http://backend:8100
+      WEB_CONCURRENCY: ${AI_BACKEND_WORKERS:-2}
+      OTEL_SDK_DISABLED: "true"
+      # Provider keys are optional at deploy time — users add their own in
+      # Settings (BYOK). Set here only if you want a shared fallback.
+      OPENAI_API_KEY: ${OPENAI_API_KEY:-}
+      ANTHROPIC_API_KEY: ${ANTHROPIC_API_KEY:-}
+      GOOGLE_API_KEY: ${GOOGLE_API_KEY:-}
+    depends_on:
+      postgres:
+        condition: service_healthy
+      ai-backend-migrate:
+        condition: service_completed_successfully
+      backend:
+        condition: service_healthy
+    healthcheck:
+      test:
+        [
+          "CMD",
+          "python",
+          "-c",
+          "import urllib.request; urllib.request.urlopen('http://localhost:8000/v1/health', timeout=3)",
+        ]
+      interval: 10s
+      timeout: 5s
+      retries: 12
+      start_period: 20s
+
+  ai-backend-worker:
+    image: ${GHCR_NAMESPACE:-ghcr.io/0x-copilot-dev}/0x-copilot-ai-backend:${IMAGE_TAG:-latest}
+    restart: unless-stopped
+    command: ["python", "-m", "runtime_worker"]
+    environment:
+      <<: *ai-backend-env
+    depends_on:
+      postgres:
+        condition: service_healthy
+      ai-backend-migrate:
+        condition: service_completed_successfully
+
+  # ---- Product-facing API (thin proxy; the only surface apps may call) -----
+  backend-facade:
+    image: ${GHCR_NAMESPACE:-ghcr.io/0x-copilot-dev}/0x-copilot-backend-facade:${IMAGE_TAG:-latest}
+    restart: unless-stopped
+    environment:
+      FACADE_ENVIRONMENT: production
+      ENTERPRISE_DEPLOYMENT_PROFILE: single_user_desktop
+      BACKEND_URL: http://backend:8100
+      AI_BACKEND_URL: http://ai-backend:8000
+      ENTERPRISE_AUTH_SECRET: ${ENTERPRISE_AUTH_SECRET}
+      ENTERPRISE_SERVICE_TOKEN: ${ENTERPRISE_SERVICE_TOKEN}
+      OTEL_SDK_DISABLED: "true"
+    depends_on:
+      backend:
+        condition: service_healthy
+      ai-backend:
+        condition: service_healthy
+    healthcheck:
+      test:
+        [
+          "CMD",
+          "python",
+          "-c",
+          "import urllib.request; urllib.request.urlopen('http://localhost:8200/v1/health', timeout=3)",
+        ]
+      interval: 10s
+      timeout: 5s
+      retries: 12
+      start_period: 15s
+
+  # ---- Static SPA (nginx serving the built frontend on 8080) ---------------
+  frontend:
+    image: ${GHCR_NAMESPACE:-ghcr.io/0x-copilot-dev}/0x-copilot-frontend:${IMAGE_TAG:-latest}
+    restart: unless-stopped
+    expose:
+      - "8080"
+    depends_on:
+      backend-facade:
+        condition: service_healthy
+
+  # ---- Ingress gateway (published port) ------------------------------------
+  gateway:
+    image: nginx:1.29-alpine
+    restart: unless-stopped
+    configs:
+      - source: gateway_nginx
+        target: /etc/nginx/conf.d/default.conf
+    ports:
+      - "${GATEWAY_PORT:-8080}:8080"
+    depends_on:
+      frontend:
+        condition: service_started
+      backend-facade:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "wget", "-qO-", "http://localhost:8080/v1/health"]
+      interval: 10s
+      timeout: 5s
+      retries: 12
+      start_period: 10s
+
+volumes:
+  pgdata:

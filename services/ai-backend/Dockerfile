@@ -19,6 +19,13 @@ RUN python -m pip install --no-cache-dir --upgrade pip \
     && python -m pip install --no-cache-dir -r requirements.txt
 
 COPY services/ai-backend/src ./src
+# Ship the versioned schema so the image can create its own database.
+# MigrationRunner resolves <app>/migrations (parents[4] of schema/migrate.py);
+# scripts/migrate.py is the operator CLI (`scripts/migrate.py apply`) used by
+# the desktop supervisor and the self-host migration container. Boot-time
+# auto-apply (RUNTIME_MIGRATIONS_AUTO_APPLY) also reads this directory.
+COPY services/ai-backend/migrations ./migrations
+COPY services/ai-backend/scripts ./scripts
 
 EXPOSE 8000
 
