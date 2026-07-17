@@ -80,7 +80,11 @@ export function computeOverdueCount(
   let count = 0;
   for (const t of todos) {
     if (t.done) continue;
-    if (t.due === undefined) continue;
+    // `== null` on purpose: the server emits `"due": null` for undated
+    // todos rather than omitting the key, so an `=== undefined` guard
+    // lets the null through to `.split()` below and takes down the whole
+    // destination via the error boundary. Covers both null and undefined.
+    if (t.due == null) continue;
     // Parse the YYYY-MM-DD as a local date (NOT UTC). The server emits
     // a date-only string; `new Date("2026-05-17")` would parse as UTC
     // midnight and shift across the dateline.

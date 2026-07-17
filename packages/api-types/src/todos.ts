@@ -120,15 +120,21 @@ export interface Todo {
   readonly status: TodoStatus;
   readonly priority: TodoPriority;
   /** ISO-8601 due date. Server stores as `DATE`; client renders in
-   * the user's local timezone. Absent on undated todos. */
-  readonly due?: string;
+   * the user's local timezone.
+   *
+   * `null` on undated todos — the server always emits the key and sets
+   * it to `null` rather than omitting it, so consumers must narrow with
+   * `== null` (or an explicit `=== null` arm), not `=== undefined`.
+   * Declaring this `string | undefined` is what let a `null` reach
+   * `due.split("-")` and crash the whole Todos destination. */
+  readonly due?: string | null;
   readonly source: TodoSource;
-  readonly parent_id?: TodoId;
-  readonly sort_index_within_parent?: number;
-  readonly recurrence?: TodoRecurrence;
+  readonly parent_id?: TodoId | null;
+  readonly sort_index_within_parent?: number | null;
+  readonly recurrence?: TodoRecurrence | null;
   readonly created_at: string;
   readonly updated_at: string;
-  readonly completed_at?: string;
+  readonly completed_at?: string | null;
 }
 
 // ---------------------------------------------------------------------------

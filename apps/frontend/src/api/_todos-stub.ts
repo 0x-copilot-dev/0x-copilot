@@ -65,13 +65,20 @@ export interface Todo {
   readonly owner_user_id: string;
   readonly text: string;
   readonly done: boolean;
-  /** Set iff `done` flipped true. */
-  readonly completed_at?: string;
-  /** ISO date (no time component); user-tz interpreted server-side. */
-  readonly due?: string;
+  /** Set iff `done` flipped true. `null` while open — the server sends
+   * the key with a null value rather than omitting it. */
+  readonly completed_at?: string | null;
+  /** ISO date (no time component); user-tz interpreted server-side.
+   *
+   * `null` on undated todos. The server emits `"due": null` rather than
+   * omitting the key, so narrow with `== null`, never `=== undefined`.
+   * This read shape claimed `string | undefined` while the wire sent
+   * null, which is how a null reached `due.split("-")` and crashed the
+   * whole Todos destination via the error boundary. */
+  readonly due?: string | null;
   readonly priority: TodoPriority;
   readonly source: TodoSource;
-  readonly project_id?: string;
+  readonly project_id?: string | null;
   readonly labels: ReadonlyArray<string>;
   /** Float between bucket neighbours; server-managed. */
   readonly sort_index: number;

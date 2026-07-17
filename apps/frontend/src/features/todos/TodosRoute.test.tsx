@@ -89,6 +89,23 @@ describe("computeOverdueCount", () => {
       ),
     ).toBe(0);
   });
+
+  // Regression: the server emits `"due": null` for an undated todo — it
+  // sends the key with a null value rather than omitting it. The original
+  // guard only checked `=== undefined`, so a null fell through to
+  // `due.split("-")` and threw, and the error boundary tore down the whole
+  // app shell. The case above (`todo({ id: "e" })`) only ever exercised
+  // *absent*, which is why this shipped. Pin the real wire shape.
+  it("treats a null `due` as undated instead of throwing", () => {
+    const now = new Date(2026, 4, 18);
+    const items = [
+      todo({ id: "n1" as TodoId, due: null }),
+      todo({ id: "n2" as TodoId, due: null, done: true }),
+      todo({ id: "n3" as TodoId, due: "2026-05-17" }), // still counted
+    ];
+    expect(() => computeOverdueCount(items, now)).not.toThrow();
+    expect(computeOverdueCount(items, now)).toBe(1);
+  });
 });
 
 describe("TodosRoute", () => {
