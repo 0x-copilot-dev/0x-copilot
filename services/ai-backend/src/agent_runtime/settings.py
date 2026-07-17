@@ -52,6 +52,7 @@ class _EnvFields:
     # ``asyncio.Condition`` path; ``postgres`` switches to ``LISTEN/NOTIFY`` so
     # the worker's append wakes SSE adapters in a separate API process.
     EVENT_BUS_BACKEND = "RUNTIME_EVENT_BUS_BACKEND"
+    ENABLE_LOCAL_MODELS = "RUNTIME_ENABLE_LOCAL_MODELS"
     STORE_BACKEND = "RUNTIME_STORE_BACKEND"
     DATABASE_URL = "DATABASE_URL"
     MCP_BACKEND_REGISTRY_URL = "MCP_BACKEND_REGISTRY_URL"
@@ -121,6 +122,11 @@ class RuntimeExecutionSettings(RuntimeContract):
     # ``RuntimeSettings.resolved_event_bus_backend``. Explicit values
     # (``in_memory`` | ``postgres``) skip the resolver and pass through.
     event_bus_backend: str = "auto"
+    # Round 2 — expose the local-models (Ollama) management API. Off by
+    # default (cloud/multi-tenant can't run a user's local GPU model); the
+    # desktop-runtime and self-host set it true. Every /v1/local-models route
+    # 404s when this is false — server-authoritative, never client-trust.
+    enable_local_models: bool = False
 
 
 class RuntimeStoreSettings(RuntimeContract):
@@ -206,6 +212,11 @@ class RuntimeSettings(BaseSettings):
             return self.gemini
         if provider == "openrouter":
             return self.openrouter
+        # Keyless local runtime (Ollama): no env credential. Return an empty
+        # ProviderSettings so the credential gate's keyless branch handles it
+        # rather than raising here.
+        if provider == "ollama":
+            return ProviderSettings()
         raise ValueError(f"Unsupported model provider: {provider}")
 
     def resolved_event_bus_backend(self) -> str:
@@ -330,6 +341,8 @@ class RuntimeSettings(BaseSettings):
                 delta_coalesce_window_ms=int(_s(v, E.DELTA_COALESCE_WINDOW_MS, "0")),
                 delta_coalesce_max_chunks=int(_s(v, E.DELTA_COALESCE_MAX_CHUNKS, "64")),
                 event_bus_backend=_s(v, E.EVENT_BUS_BACKEND, "auto").lower(),
+                enable_local_models=_s(v, E.ENABLE_LOCAL_MODELS, "false").lower()
+                in _truthy,
             ),
             store=RuntimeStoreSettings(
                 backend=_s(v, E.STORE_BACKEND, "in_memory").lower(),

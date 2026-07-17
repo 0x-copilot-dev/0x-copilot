@@ -166,6 +166,79 @@ def test_deep_agent_builder_routes_openrouter_to_chat_completions(
         assert forbidden not in call.kwargs
 
 
+def test_deep_agent_builder_routes_ollama_keyless_to_localhost(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    # A local Ollama model is keyless: no OPENROUTER/OPENAI key involved. The
+    # builder must point at the local base_url, disable the Responses API, and
+    # inject a sentinel api_key (ChatOpenAI rejects an empty one).
+    monkeypatch.delenv("OLLAMA_BASE_URL", raising=False)
+    fake_deepagents = FakeDeepAgentsModule()
+    chat_models = CapturingChatModelFactory()
+    monkeypatch.setattr(
+        builder_module, "create_deep_agent", fake_deepagents.create_deep_agent
+    )
+    monkeypatch.setattr(builder_module, "init_chat_model", chat_models)
+
+    build_deep_agent(
+        DeepAgentBuildRequest(
+            tools=("doc_search",),
+            model_config=ModelConfig(
+                provider="ollama",
+                model_name="llama3.2:1b",
+                max_input_tokens=8192,
+                timeout_seconds=45,
+                temperature=0,
+                supports_streaming=True,
+                reasoning=None,
+            ),
+            system_prompt="Follow policy.",
+        )
+    )
+
+    call = chat_models.calls[0]
+    assert call.model == "llama3.2:1b"
+    assert call.model_provider == "openai"
+    assert call.kwargs["base_url"] == "http://localhost:11434/v1"
+    assert call.kwargs["use_responses_api"] is False
+    assert call.kwargs["api_key"] == "ollama"
+    for forbidden in ("reasoning", "include", "output_version"):
+        assert forbidden not in call.kwargs
+
+
+def test_deep_agent_builder_honours_ollama_base_url_override(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("OLLAMA_BASE_URL", "http://host.docker.internal:11434/v1")
+    fake_deepagents = FakeDeepAgentsModule()
+    chat_models = CapturingChatModelFactory()
+    monkeypatch.setattr(
+        builder_module, "create_deep_agent", fake_deepagents.create_deep_agent
+    )
+    monkeypatch.setattr(builder_module, "init_chat_model", chat_models)
+
+    build_deep_agent(
+        DeepAgentBuildRequest(
+            tools=("doc_search",),
+            model_config=ModelConfig(
+                provider="ollama",
+                model_name="qwen2.5:3b",
+                max_input_tokens=8192,
+                timeout_seconds=45,
+                temperature=0,
+                supports_streaming=True,
+                reasoning=None,
+            ),
+            system_prompt="Follow policy.",
+        )
+    )
+
+    assert (
+        chat_models.calls[0].kwargs["base_url"]
+        == "http://host.docker.internal:11434/v1"
+    )
+
+
 def test_deep_agent_builder_configures_claude_opus_47_adaptive_thinking(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:

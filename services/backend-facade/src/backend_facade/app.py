@@ -29,6 +29,7 @@ from backend_facade.memory_routes import register_memory_routes
 from backend_facade.palette_routes import register_palette_routes
 from backend_facade.projects_routes import register_projects_routes
 from backend_facade.routines_routes import register_routines_routes
+from backend_facade.local_models_routes import register_local_models_routes
 from backend_facade.settings_routes import register_settings_routes
 from backend_facade.team_routes import register_team_routes
 from backend_facade.todos_routes import register_todos_routes
@@ -147,6 +148,7 @@ def create_app(
     register_liveness_routes(app)
     register_routines_routes(app)
     register_settings_routes(app)
+    register_local_models_routes(app)
     register_team_routes(app)
     register_todos_routes(app)
     register_tool_routes(app)

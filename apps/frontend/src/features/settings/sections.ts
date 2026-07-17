@@ -16,8 +16,10 @@ export const SETTINGS_SECTIONS = [
   "audit-log",
   // PR 8.1 — AI & DATA group
   "model-and-behavior",
-  // BYOK — per-user model provider keys (OpenAI / Anthropic / Google).
+  // BYOK — per-user model provider keys (OpenAI / Anthropic / Google / OpenRouter).
   "provider-keys",
+  // Round 2 — local (Ollama) models; only rendered on desktop/self-host.
+  "local-models",
   "connectors",
   "skills",
   "privacy-data",

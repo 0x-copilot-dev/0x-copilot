@@ -413,6 +413,11 @@ conn.close()
       // Without this the store's startup auto-apply would re-enter yoyo with
       // the plain postgresql:// URL and crash on the psycopg2 default driver.
       RUNTIME_MIGRATIONS_AUTO_APPLY: "false",
+      // Round 2 — this IS the user's machine, so surface the local-models
+      // (Ollama) section. It only becomes usable once the user installs
+      // Ollama (the section shows setup steps until then). Default Ollama
+      // endpoint is http://localhost:11434/v1.
+      RUNTIME_ENABLE_LOCAL_MODELS: "true",
       DATABASE_URL: aiDbUrl,
       AUDIT_HMAC_KEY: secrets.auditHmacKey,
       MCP_BACKEND_REGISTRY_URL: `http://127.0.0.1:${backendPort}`,

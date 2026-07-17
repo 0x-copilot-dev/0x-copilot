@@ -2,8 +2,13 @@
 
 from __future__ import annotations
 
-from agent_runtime.execution.models import ModelConfigResolver
+import pytest
+
+from agent_runtime.execution.contracts import RuntimeErrorCode
+from agent_runtime.execution.errors import AgentRuntimeError
+from agent_runtime.execution.models import ModelConfigResolver, ModelSelection
 from agent_runtime.execution.openai_compat import OpenAICompatibleProviders
+from agent_runtime.settings import RuntimeSettings
 
 
 class TestRegistry:
@@ -12,6 +17,25 @@ class TestRegistry:
         assert endpoint is not None
         assert endpoint.base_url == "https://openrouter.ai/api/v1"
         assert endpoint.api_key_env == "OPENROUTER_API_KEY"
+        assert endpoint.requires_api_key is True
+
+    def test_ollama_endpoint_is_keyless_with_env_overridable_base_url(self) -> None:
+        endpoint = OpenAICompatibleProviders.get("ollama")
+        assert endpoint is not None
+        assert endpoint.requires_api_key is False
+        assert endpoint.resolve_base_url(environ={}) == "http://localhost:11434/v1"
+        assert (
+            endpoint.resolve_base_url(
+                environ={"OLLAMA_BASE_URL": "http://host.docker.internal:11434/v1"}
+            )
+            == "http://host.docker.internal:11434/v1"
+        )
+        # Blank override falls back to the default.
+        assert (
+            endpoint.resolve_base_url(environ={"OLLAMA_BASE_URL": "  "})
+            == "http://localhost:11434/v1"
+        )
+        assert endpoint.api_key_from_env(environ={}) is None
 
     def test_is_compatible_and_slugs(self) -> None:
         assert OpenAICompatibleProviders.is_compatible("openrouter") is True
@@ -85,3 +109,38 @@ class TestProviderResolution:
         assert ModelConfigResolver._infer_provider("gpt-5.4-mini") == "openai"
         assert ModelConfigResolver._infer_provider("claude-opus-4-7") == "anthropic"
         assert ModelConfigResolver._infer_provider("gemini-2.5-pro") == "gemini"
+
+    def test_normalize_ollama(self) -> None:
+        assert ModelConfigResolver._normalize_provider("ollama") == "ollama"
+        assert ModelConfigResolver._normalize_provider("Ollama") == "ollama"
+
+
+class TestCredentialGate:
+    @staticmethod
+    def _resolver() -> ModelConfigResolver:
+        # Build from an empty env so the gate is deterministic regardless of a
+        # local .env carrying provider keys.
+        return ModelConfigResolver(RuntimeSettings._from_env_values({}))
+
+    def test_keyless_ollama_is_not_blocked_without_credentials(self) -> None:
+        config = self._resolver().resolve(
+            ModelSelection(provider="ollama", model_name="llama3.2:1b"),
+            require_credentials=True,
+            user_key_providers=(),
+        )
+        assert config.provider == "ollama"
+        assert config.model_name == "llama3.2:1b"
+
+    def test_keyed_provider_still_requires_a_credential(self) -> None:
+        # A registered but key-requiring compat provider (openrouter) with no
+        # env key and no BYOK key must still be rejected — keyless is opt-in.
+        with pytest.raises(AgentRuntimeError) as exc_info:
+            self._resolver().resolve(
+                ModelSelection(
+                    provider="openrouter", model_name="anthropic/claude-3.7-sonnet"
+                ),
+                require_credentials=True,
+                user_key_providers=(),
+            )
+        assert exc_info.value.code is RuntimeErrorCode.CONFIGURATION_ERROR
+        assert "openrouter" in str(exc_info.value)

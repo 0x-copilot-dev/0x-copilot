@@ -41,6 +41,7 @@ import {
 } from "../../api/agentApi";
 import type { RequestIdentity } from "../../api/config";
 import { updateMyPreferences } from "../../api/meApi";
+import { listLocalModels } from "../../api/localModelsApi";
 import { isOAuthSetupRequired } from "../../api/mcpErrors";
 import { ConnectorSuggestionCard } from "../connectors/ConnectorConsentCard";
 import { ConnectorPopover } from "../connectors/ConnectorPopover";
@@ -254,9 +255,39 @@ export function ChatScreen({
   const [customModels, setCustomModels] = useState<
     Array<ModelCatalogModel & { disabled?: boolean }>
   >([]);
+  // Round 2 — locally-installed Ollama models (provider "ollama"), hydrated
+  // from the gated /v1/local-models endpoint. On cloud (feature off) the call
+  // 404s and we degrade to an empty list, so the picker is unchanged there.
+  const [localModels, setLocalModels] = useState<
+    Array<ModelCatalogModel & { disabled?: boolean }>
+  >([]);
+  useEffect(() => {
+    let cancelled = false;
+    listLocalModels()
+      .then((response) => {
+        if (cancelled) return;
+        setLocalModels(
+          response.models.map((model) => ({
+            id: model.name,
+            provider: "ollama",
+            model_name: model.name,
+            name: model.name,
+            description: "Local model",
+            configured: true,
+            supports_streaming: true,
+          })),
+        );
+      })
+      .catch(() => {
+        if (!cancelled) setLocalModels([]);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, []);
   const allModels = useMemo(
-    () => [...demoModels, ...customModels],
-    [customModels],
+    () => [...demoModels, ...customModels, ...localModels],
+    [customModels, localModels],
   );
   const handleAddCustomModel = useCallback((slug: string) => {
     const trimmed = slug.trim();

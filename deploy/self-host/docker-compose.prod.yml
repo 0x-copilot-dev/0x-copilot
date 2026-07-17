@@ -175,6 +175,13 @@ services:
       OPENAI_API_KEY: ${OPENAI_API_KEY:-}
       ANTHROPIC_API_KEY: ${ANTHROPIC_API_KEY:-}
       GOOGLE_API_KEY: ${GOOGLE_API_KEY:-}
+      OPENROUTER_API_KEY: ${OPENROUTER_API_KEY:-}
+      # Round 2 — local models (Ollama). Opt-in: install Ollama on the host,
+      # set LOCAL_MODELS_ENABLED=true, and point OLLAMA_BASE_URL at it. On
+      # Linux add `extra_hosts: ["host.docker.internal:host-gateway"]` so the
+      # container can reach a host Ollama.
+      RUNTIME_ENABLE_LOCAL_MODELS: ${LOCAL_MODELS_ENABLED:-false}
+      OLLAMA_BASE_URL: ${OLLAMA_BASE_URL:-http://host.docker.internal:11434/v1}
     depends_on:
       postgres:
         condition: service_healthy
