@@ -28,13 +28,128 @@
 > **optional/deferred** and specified in [AC3b](03-ac3-runtime-recovery.md) — it
 > is not built for the light store.
 
-> **Contract alignment.** AC1 is the single normative source and now defines the
-> LIGHT shapes directly: the record envelope `FileSessionRecordV1` (§7.4) and the
-> flat `events.jsonl` session layout (§8). AC2 imports those unchanged and adds
-> the append/durability, projection, retention, and migration semantics below.
-> Every other AC1 frozen contract — the broker handshake/headers (§6.3), grant
-> modes (§7.3), `ArtifactRefV1` (§7.5), the activation predicate (§6.2) — is also
-> imported unchanged.
+> **Contract alignment.** The flat `events.jsonl` + per-subagent session layout
+> and the append/durability, projection, and desktop-selection semantics below
+> are what shipped. The unified `FileSessionRecordV1` record envelope (with
+> `schema_version`/`record_id`/`record_hash`/RFC-8785 canonical JSON) is **not
+> built** — the delivered store persists each domain record as its own JSON line
+> keyed by its existing domain ID. Retention/deletion, migration, and quota
+> contracts referenced below are **deferred**. See the reconciliation immediately
+> below for the authoritative delivered-vs-deferred split; treat that section as
+> overriding any later prose that reads as "delivered".
+
+## Delivered (light) vs Deferred — implementation status
+
+This PRD was written ahead of the code. The heavyweight envelope/retention/
+migration machinery was intentionally **not** built for the light desktop store.
+This section is the authoritative reconciliation; where a later section describes
+machinery listed as **Deferred** here, read it as design intent, not shipped
+behavior.
+
+### Delivered (light) — what shipped
+
+Code: `services/ai-backend/src/runtime_adapters/file/*`, `factory.py`, and the
+tests under `services/ai-backend/tests/unit/runtime_adapters/`.
+
+- **Canonical plaintext JSONL per conversation** under
+  `<root>/workspaces/<ws-key>/sessions/<conv-key>/`: `events.jsonl`
+  (`RuntimeEventEnvelope` per line), `messages.jsonl`, `runs.jsonl`,
+  `conversation.json` (metadata, atomically rewritten in place), and
+  `subagents/<task-key>.jsonl` (one file per subagent task). Path keys are the
+  lowercase **hex** SHA-256 of the logical id (`_paths.py`
+  `FileStoreLayout.safe_key`) — not base32.
+- **Back-office "state" tables** as append-with-fold JSONL ledgers under
+  `<root>/state/<table>.jsonl` (`_state_ledger.py`): approvals, budgets, usage,
+  pricing, retention, audit, workspace defaults, and the command queue. Hot
+  tables append `put`/`delete` ops folded on load; cascade-delete tables atomic-
+  rewrite from the in-memory set.
+- **Content-addressed object store** under `<root>/objects/sha256/<hh>/<hash>`
+  (`object_store.py`): atomic temp→`fsync`→`os.replace`→verify-on-read put/get,
+  dedup by digest, typed `ObjectRef` (minimal shape). This is the AC2 primitive
+  AC4 offload wires onto.
+- **Disposable SQLite catalog index** at `<root>/index/catalog.sqlite3`
+  (`_catalog_index.py`): WAL + `synchronous=NORMAL`; tables
+  `conversations`/`messages`/`runs`/`events`; write-through upserts plus a full
+  `rebuild()` scan from JSONL. Deleting `index/` and reopening rebuilds it with
+  no data loss (proven by `test_restart_and_rebuild.py`).
+- **Durability primitives** (`_jsonl.py`): `append_line`/`append_lines` write
+  `\n`-terminated lines, flush, and `os.fsync` (default) before returning;
+  `iter_lines` skips a torn trailing line on load; `rewrite_json`/`rewrite_lines`
+  use temp-file + `fsync` + `os.replace` for in-place metadata and compaction.
+- **Concurrency**: a per-conversation `asyncio.Lock`, a per-approval-batch lock,
+  and one state-ledger lock in `FileRuntimeApiStore` — single writer, in-process.
+  No cross-process lock, generation pointer, or commit marker.
+- **Per-run `sequence_no`**: events keyed `(run_id, sequence_no)`, contiguous and
+  gap-free across the parent and all subagent streams for a run;
+  `list_events_after` / `latest_sequence` served from the index. No
+  session-global counter.
+- **Desktop factory gate** (`runtime_adapters/factory.py`): `_build_file_ports`
+  selects `file` only when `RUNTIME_STORE_BACKEND=file` **and**
+  `ENTERPRISE_DEPLOYMENT_PROFILE=single_user_desktop` **and**
+  `RUNTIME_FILE_STORE_ROOT` is set; any mismatch raises a non-retryable
+  `CONFIGURATION_ERROR`. `auto`/web/postgres paths are untouched.
+- **Hash-chained local audit**: `write_audit_log` signs each audit record with
+  `copilot_audit_chain.AuditChainSigner` (per-org previous-hash chain) —
+  tamper-**evident**, not tamper-proof.
+- **Tests**: `tests/unit/runtime_adapters/file/test_restart_and_rebuild.py`
+  (reopen + index-delete rebuild, byte-identical event replay across three
+  streams), `tests/unit/runtime_adapters/test_store_conformance.py` (queue
+  claim/retry/dead-letter + regenerate-parent reuse, parametrized over
+  `in_memory` and `file`), `test_factory_gating.py`, `test_object_store.py`,
+  `test_offload_and_composite_reads.py`.
+
+### Deferred / not in the light build
+
+Every subsection below describing this machinery is design intent, not shipped
+code:
+
+- **The unified `FileSessionRecordV1` envelope** — `schema_version`, `record_id`
+  as UUIDv5 over `(store_id, record_kind, logical_id)`, `record_hash`, and
+  RFC-8785 canonical JSON. Not built. Records are stored as their own domain-model
+  JSON via compact `json.dumps` (not RFC-8785), keyed by their existing domain
+  IDs; there is no wrapping envelope, no per-record UUIDv5, and no per-record
+  `record_hash` or per-stream hash chain. (`store.json`, `store_id`, and the
+  `migrations/`/`tmp/` roots do not exist either.)
+- **Capacity and admission** — per-session/workspace byte caps, session/line
+  counts, free-space floor, the 64 MiB terminal reserve, and
+  `file_store_quota_exceeded`. Not enforced.
+- **Physical purge / retention sweep** — `delete_user_history` **archives**
+  conversations and **tombstones** messages (content replaced with a placeholder)
+  and cancels non-terminal runs; **events are retained**. It does **not**
+  physically remove JSONL, does not rename into `tmp/deletions/`, and does not
+  decrement AC4 object reachability. There is no whole-session purge, no selective
+  `PayloadRemovalV1` tombstone rewrite, and no retention sweeper.
+- **Legal hold** (advisory or binding). Not built.
+- **Migration / backout scripts and flow** — `export_desktop_file_store.py`,
+  `export_file_store_to_postgres.py`, `remove_legacy_desktop_store.py`, and the
+  offline legacy-Postgres migration/backout procedure. Not built.
+- **FTS5 search and the richer catalog schema** — `projection_meta`,
+  `stream_cursors`, `records`, the per-entity projection tables,
+  `queue_commands`, `object_refs`, `idempotency_keys`, `retention_policies`,
+  `legal_holds`, and FTS5. The delivered catalog holds only
+  `conversations`/`messages`/`runs`/`events`; the queue is projected into in-
+  process maps folded from the `state/` ledger, not a SQLite queue table.
+- **The full crash / adversarial / platform / port-conformance matrix** — the
+  kill-at-every-append-step crash suite, the symlink/traversal/reserved-name
+  adversarial corpus, the macOS/Windows platform suites, and the per-port
+  tenant-isolation/retention/audit conformance suite. Delivered conformance is
+  the queue-lifecycle + regenerate suite over `in_memory`+`file` plus the
+  restart/rebuild integration test.
+- **Structured `file_store.*` logs, the metrics set, and the release performance
+  gates**. Not emitted.
+- **Windows `FlushFileBuffers`/`MoveFileExW` semantics, no-follow opens, and path
+  hardening beyond hex-key derivation.** _Interior-corruption fail-closed is being
+  fixed separately_ — today `iter_lines` stops at the first undecodable line,
+  which silently truncates on **interior** corruption instead of marking the
+  conversation read-only.
+- **Several "Critical files" the original list named** — see the corrected
+  [Critical files](#critical-files) list below.
+
+Layout note (delivered vs the diagram in [Filesystem layout](#filesystem-layout)):
+delivered `objects/` and `index/` are **root-level**, not per-workspace; there is
+a root-level `state/` directory of back-office ledgers; per-session metadata lives
+in `conversation.json`; and there is no `store.json`, `workspace.jsonl`,
+`audit.jsonl`, `migrations/`, or `tmp/` tree.
 
 ## Problem and why now
 
@@ -52,17 +167,28 @@ Because the desktop is a **single-writer** deployment (one in-process worker; su
 
 ## Goals
 
+### Delivered (light)
+
 - Make canonical desktop session state ordinary UTF-8 JSONL under the AC1 storage root.
 - Store each parent-session record in one main `events.jsonl` stream and each subagent record in one per-subagent `subagents/<task>.jsonl` stream. Each event is written to exactly one file.
 - Persist every `RuntimeEventEnvelope` exactly once, preserving its existing per-run `sequence_no` so SSE replay/reconnect behavior is unchanged.
-- Store large tool results, checkpoints, screenshots, downloads, and attachments once in a workspace-scoped, SHA-256-addressed `objects/sha256/` object store, and keep bounded typed references (AC1 `ArtifactRefV1`) in JSONL. This object-store primitive is the AC2 foundation that AC4 wires offload into.
+- Store large payloads once in a SHA-256-addressed `objects/sha256/` object store, and keep bounded typed references (the delivered `ObjectRef`, not AC1 `ArtifactRefV1`) in the offloaded records. This object-store primitive is the AC2 foundation that AC4 wires offload into.
 - Serialize all appends for one conversation behind a single in-process, per-conversation `asyncio.Lock` — the correct and sufficient concurrency control for one writer process.
-- Treat SQLite, FTS, query tables, and queue rows as disposable materialized views rebuildable by scanning JSONL.
-- Model the store surface on Anthropic's Agent SDK `SessionStore` contract — `append` / `load` / `list` / `delete` / `listSubkeys` (subkeys are subagent tasks) — so the shape maps cleanly onto documented prior art (<https://code.claude.com/docs/en/agent-sdk/session-storage>).
-- Implement the complete runtime persistence port surface for `RUNTIME_STORE_BACKEND=file`; no method may silently fall back to memory or raise `NotImplementedError`.
-- Select the file adapter only for `ENTERPRISE_DEPLOYMENT_PROFILE=single_user_desktop` with a valid AC1 storage grant.
+- Treat SQLite query tables and the folded queue state as disposable materialized views rebuildable by scanning JSONL.
+- Implement the runtime persistence/event/queue and satellite port surface used by the desktop for `RUNTIME_STORE_BACKEND=file`; no wired method silently falls back to memory.
+- Select the file adapter only for `ENTERPRISE_DEPLOYMENT_PROFILE=single_user_desktop` with a valid AC1 storage root, and fail closed otherwise.
 - Preserve the PostgreSQL adapter, schemas, migrations, event notification, and deployment behavior for every non-desktop profile.
-- Define migration, retention, deletion, legal-hold, export, and backout behavior before data is written.
+- Provide tamper-evident local audit records via `packages/audit-chain` (hash-chained), disclosed as tamper-evident, not tamper-proof.
+
+### Deferred / not in the light build
+
+- A unified `FileSessionRecordV1` envelope, RFC-8785 canonical JSON, UUIDv5 `record_id`, and per-record/per-stream `record_hash`.
+- FTS search and the full derived-projection schema (per-entity tables, queue table, object-reachability, idempotency, retention/legal-hold tables).
+- Capacity/admission quotas and free-space admission.
+- Physical retention/deletion, whole-session purge, selective payload tombstones, legal hold, and object garbage collection (AC4-owned).
+- Offline forward migration from the legacy Postgres store and verified reverse export/backout.
+- The complete crash-injection, adversarial, macOS/Windows platform, and full port-conformance test matrices; structured `file_store.*` logs, metrics, and release performance gates.
+- Model the store surface on Anthropic's Agent SDK `SessionStore` contract — the delivered store implements the existing runtime ports directly rather than an explicit `append`/`load`/`list`/`delete`/`listSubkeys` façade.
 
 ## Non-goals
 
@@ -186,6 +312,14 @@ No runtime event, message, tool invocation, approval, checkpoint reference, queu
 AC1's `workspace.jsonl` and `audit.jsonl` are separate canonical workspace-level append-only streams, never members of a session replay. Their records have `conversation_id=None`. They use the same encoding, immediate flush, and idempotency rules under the same single-writer discipline.
 
 ## Typed contracts
+
+> **Deferred / not in the light build.** The unified `FileSessionRecordV1`
+> envelope, RFC-8785 canonical encoding, UUIDv5 `record_id`, `record_hash`, the
+> `QueueTransitionPayloadV1`/`PayloadRemovalV1` record kinds, and the 1 MiB line
+> bound below are **design intent, not shipped**. The delivered store persists
+> each domain record as its own compact-`json.dumps` line keyed by its existing
+> domain ID (see the status section). This section is retained for when the
+> envelope is built.
 
 All new contracts use Pydantic v2 with `ConfigDict(extra="forbid", frozen=True)`. All datetimes are timezone-aware UTC and serialize with a `Z` suffix. All digests are lowercase 64-character SHA-256 hex. All integer bounds are enforced before allocation or file access.
 
@@ -402,6 +536,10 @@ Platform flush behavior is explicit:
 
 ## Capacity and admission
 
+> **Deferred / not in the light build.** None of the quotas, the free-space
+> floor, the 64 MiB terminal reserve, or `file_store_quota_exceeded` are
+> enforced by the delivered store. This section is design intent.
+
 AC2 v1 fixes these desktop defaults, configurable only downward by deployment policy:
 
 - 1 GiB of canonical JSONL per session;
@@ -413,6 +551,13 @@ AC2 v1 fixes these desktop defaults, configurable only downward by deployment po
 SQLite/WAL and staged temp files do not count as logical live bytes but do count in physical free-space admission. At the hard session/workspace/session-count/line limit, or below the free-space floor, new conversations, runs, large writes, checkpoints, and external-effect intents fail before mutation with `file_store_quota_exceeded`. The adapter reserves the final 64 MiB below the hard logical limit for bounded cancellation, terminal, and deletion records from already-active work; that reserve cannot start a model, tool, or subagent. Legal hold never yields to quota. Reads/export remain available, and there is no unbounded inline, in-memory, or PostgreSQL fallback.
 
 ## Content-addressed object store
+
+> **Partially delivered.** The atomic put/get/verify primitive **is** built
+> (`object_store.py`), but under a single-shard layout `objects/sha256/<hh>/<hash>`
+> at the **store root** (not per-workspace `<ab>/<cd>/<full-hex>`), returning a
+> minimal `ObjectRef` (`sha256`/`size`/`media_type`/`preview`) — **not** the
+> `ArtifactRefV1`/`artifact://` URI. Per-workspace namespacing, reference counting
+> / reachability, and object garbage collection are **deferred** (AC4-owned).
 
 AC2 owns the object-store primitive; AC4 owns the offload decision and typing.
 
@@ -496,6 +641,15 @@ The existing `postgres` and in-memory branches are not refactored beyond backend
 
 ## Persistence, retention, deletion, and export
 
+> **Mostly deferred.** What ships is: append-only immutable records, folded
+> current-state views, soft delete/restore of conversations, and a
+> `delete_user_history` that **archives** conversations, **tombstones** messages,
+> and cancels non-terminal runs (events retained). The physical
+> retention/deletion procedures, whole-session purge, selective `PayloadRemovalV1`
+> tombstones, legal hold, object dereference/GC, and the export reader described
+> in this section are **not built**. Read the machinery below as the managed-path
+> contract, per the profile-scoped posture.
+
 ### Profile-scoped posture (right-sizing)
 
 AC2 targets `single_user_desktop`, where the signed-in user is the administrator and owns the files. Operator-boundary controls therefore cannot bind them, and AC2 does **not** claim guarantees the profile cannot cash (see overview §20 and the threat model below):
@@ -546,6 +700,12 @@ A hold suspends automated cleanup/deletion and artifact dereference for its scop
 The export reader copies the conversation directory (`events.jsonl` plus every `subagents/<task>.jsonl`), the referenced object manifest entries, retention/legal-hold metadata allowed by policy, and validation hashes. Because there is one physical copy per session and one writer, export takes the per-conversation lock briefly, snapshots the file byte lengths, and reads up to those lengths — no generation rotation is required. It excludes SQLite, in-process notification state, secrets, broker tokens, and object bytes outside the referenced set.
 
 ## Migration from the legacy desktop AI-runtime store
+
+> **Deferred / not in the light build.** No migration or backout scripts exist
+> (`export_desktop_file_store.py`, `export_file_store_to_postgres.py`,
+> `remove_legacy_desktop_store.py` are unwritten). The desktop file store is used
+> for new/empty stores only; there is no offline import from, or reverse export
+> to, the legacy Postgres store. This section is design intent.
 
 Migration is offline and one-way per attempt; there is no live dual-write.
 
@@ -606,6 +766,12 @@ No spec or UI may claim “encrypted at rest” based only on OS permissions or 
 JSON validity checks, per-run sequence contiguity, and SQLite checks detect torn writes and accidental corruption. The light store does **not** carry per-stream hash chains; it does not claim to detect a determined same-user process rewriting content and is not marketed as tamper-proof. Authenticated product audit remains in the existing audit subsystem; AC10 may add signed manifests. AC2 does not overstate this control.
 
 ## Observability and audit
+
+> **Mostly deferred.** The structured `file_store.*` logs, the metrics set, and
+> the release performance gates are **not** implemented. What ships is
+> hash-chained local **product audit** records (`write_audit_log` +
+> `copilot_audit_chain.AuditChainSigner`, per-org previous-hash chain) —
+> tamper-evident, not tamper-proof. The rest of this section is design intent.
 
 ### Structured logs
 
@@ -762,77 +928,70 @@ The flag is server-authoritative and honored only with the AC1 activation predic
 
 ## Acceptance criteria and definition of done
 
-AC2 is done only when all are true:
+### Delivered (light) — met
 
-- [ ] The two canonical transcript shapes exist: one `events.jsonl` per session and one JSONL per subagent task.
-- [ ] Every runtime event is committed in exactly one physical file.
-- [ ] The per-run `sequence_no` invariant is implemented, documented in code, and crash-tested; there is no session-global counter.
-- [ ] Appends are serialized by a single in-process per-conversation `asyncio.Lock`; there is no cross-process lock file.
-- [ ] An append is acknowledged only after its required `fsync`; a torn trailing line is ignored on load and earlier history is never rewritten.
-- [ ] Interior corruption fails closed (conversation read-only) rather than skipping the bad line.
-- [ ] Large payloads are stored once as content-addressed `objects/sha256/` objects with typed references and bounded previews in JSONL.
-- [ ] Deleting/corrupting SQLite rebuilds all required projections, FTS, and queue state by scanning JSONL.
-- [ ] Active claims become recoverable after rebuild while attempt counts remain durable.
-- [ ] Capacity, physical-space, and emergency-reserve admission fail closed without blocking bounded terminal/cancel/delete records.
-- [ ] `RuntimeAdapterFactory` returns a complete file-backed `RuntimePorts` set only under the desktop activation predicate.
-- [ ] No production file-backed method falls back to an in-memory store.
-- [ ] Shared port conformance passes, including tenant isolation, unauthorized access, deletion cascades, retention expiry, audit evidence, redaction, and legal hold.
-- [ ] Whole-session purge removes canonical JSONL, staged trees, and derived SQLite/WAL/FTS bytes before completion while leaving shared objects to AC4's reference-aware garbage collection.
-- [ ] Offline forward migration and verified reverse export/backout work with representative data.
-- [ ] Plaintext disclosure, permissions, secret exclusions, and integrity limitations are documented and tested.
-- [ ] PostgreSQL and web behavior are unchanged.
-- [ ] Operational metrics, redacted logs, product audit, diagnostics, and runbooks exist.
-- [ ] The accepted component-local implementation spec maps every critical file, pinned dependency, migration, and acceptance-evidence artifact.
-- [ ] AC3 can consume canonical queue transitions and checkpoint/object references without changing AC2's format.
+- [x] The two canonical transcript shapes exist: one `events.jsonl` per session and one JSONL per subagent task (plus `messages.jsonl` / `runs.jsonl` / `conversation.json`).
+- [x] Every runtime event is committed in exactly one physical file.
+- [x] The per-run `sequence_no` invariant is implemented and documented in code; there is no session-global counter. (Crash-tested: **deferred** — covered by a restart/rebuild test, not the kill-at-every-step matrix.)
+- [x] Appends are serialized by a single in-process per-conversation `asyncio.Lock`; there is no cross-process lock file.
+- [x] An append is acknowledged only after its required `fsync`; a torn **trailing** line is ignored on load and earlier history is never rewritten.
+- [x] Large payloads are stored once as content-addressed `objects/sha256/` objects with a typed `ObjectRef` and bounded preview; the offloaded record keeps a `/large_tool_results/<sha256>` reference (AC4 wiring).
+- [x] Deleting the SQLite index rebuilds the conversation/message/run/event projections by scanning JSONL.
+- [x] Active claims become recoverable after reopen while attempt counts remain durable (queue folded from the `state/` ledger).
+- [x] The desktop `RuntimeAdapterFactory` branch returns a complete file-backed `RuntimePorts` set only under the desktop activation predicate, and fails closed otherwise.
+- [x] No wired file-backed method falls back to an in-memory store for the ports the desktop exercises.
+- [x] Plaintext disclosure and the tamper-evident (not tamper-proof) integrity limitation are stated; local hash-chained product audit exists.
+- [x] PostgreSQL and web behavior are unchanged (file backend is import-isolated behind a lazy factory branch).
+- [x] AC3 can consume the delivered queue transitions and checkpoint/object references without changing AC2's format.
+
+### Deferred / not in the light build
+
+- [ ] Interior corruption fails closed (conversation read-only) rather than stopping at the bad line. **Being fixed separately** — today `iter_lines` truncates at the first undecodable line.
+- [ ] FTS and the full derived projection (per-entity tables, queue table, object-reachability, idempotency, retention/legal-hold) rebuild from JSONL.
+- [ ] Capacity, physical-space, and emergency-reserve admission fail closed.
+- [ ] Shared port conformance across the full surface: tenant isolation, unauthorized access, deletion cascades, retention expiry, audit evidence, redaction, and legal hold.
+- [ ] Whole-session physical purge removes canonical JSONL, staged trees, and derived bytes while leaving shared objects to AC4 GC. (Delivered `delete_user_history` archives + tombstones only.)
+- [ ] Offline forward migration and verified reverse export/backout.
+- [ ] Operational metrics, structured `file_store.*` logs, diagnostics, runbooks, and release performance gates.
+- [ ] The accepted component-local implementation spec mapping every critical file, pinned dependency, migration, and acceptance-evidence artifact.
+- [ ] The unified `FileSessionRecordV1` envelope / RFC-8785 / UUIDv5 / `record_hash` contract.
 
 ## Critical files
 
-Implementation is expected to add or modify exactly scoped files in these areas; this list is the review checklist, not permission to cross service boundaries.
+### Delivered — actual files
 
-### AI runtime contracts and selection
+Selection and factory:
 
-- `services/ai-backend/src/agent_runtime/settings.py`
-- `services/ai-backend/src/agent_runtime/api/ports.py`
-- `services/ai-backend/src/agent_runtime/persistence/records/file_store.py`
-- `services/ai-backend/src/runtime_adapters/factory.py`
+- `services/ai-backend/src/runtime_adapters/factory.py` — `_build_file_ports` desktop gate + `file` backend branch.
 
-### File adapter
+File adapter (`services/ai-backend/src/runtime_adapters/file/`):
 
-- `services/ai-backend/src/runtime_adapters/file/__init__.py`
-- `services/ai-backend/src/runtime_adapters/file/contracts.py`
-- `services/ai-backend/src/runtime_adapters/file/encoding.py`
-- `services/ai-backend/src/runtime_adapters/file/journal.py`
-- `services/ai-backend/src/runtime_adapters/file/objects.py`
-- `services/ai-backend/src/runtime_adapters/file/deletion.py`
-- `services/ai-backend/src/runtime_adapters/file/catalog.py`
-- `services/ai-backend/src/runtime_adapters/file/queue.py`
-- `services/ai-backend/src/runtime_adapters/file/runtime_store.py`
-- `services/ai-backend/src/runtime_adapters/file/satellite_stores.py`
+- `__init__.py` — package exports.
+- `runtime_api_store.py` — `FileRuntimeApiStore`: persistence + event store + queue + satellite ports, per-conversation locks, materialized-view load, hash-chained audit.
+- `_paths.py` — `FileStoreLayout`: on-disk layout + hex-SHA-256 safe-key derivation.
+- `_jsonl.py` — `JsonlIo`: append/`fsync`, torn-tail-skipping read, atomic rewrite.
+- `_catalog_index.py` — `CatalogIndex`: disposable SQLite listing index + `rebuild()`.
+- `_state_ledger.py` — `StateLedger`: append-with-fold back-office JSONL ledgers.
+- `object_store.py` — `FileObjectStore` + `ObjectRef` content-addressed blobs.
+- `offload.py`, `large_tool_result_backend.py`, `subagent_trace_backend.py` — AC4 offload/trace wiring (see AC4).
+- Satellite stores: `citation_store.py`, `draft_store.py`, `share_store.py`, `conversation_tool_ordinal_store.py`.
 
-### Desktop selection and migration
+Tests (`services/ai-backend/tests/unit/runtime_adapters/`):
 
-- `apps/desktop/main/services/service-env.ts`
-- `apps/desktop/main/services/supervisor.ts`
-- `apps/desktop/main/services/desktop-supervisor.ts`
-- `services/ai-backend/scripts/export_desktop_file_store.py`
-- `services/ai-backend/scripts/export_file_store_to_postgres.py`
-- `services/ai-backend/scripts/remove_legacy_desktop_store.py`
+- `test_store_conformance.py` — queue lifecycle + regenerate, parametrized over `in_memory` + `file`.
+- `file/test_restart_and_rebuild.py` — reopen + delete-index rebuild.
+- `file/test_factory_gating.py`, `file/test_object_store.py`, `file/test_offload_and_composite_reads.py`.
 
-### Tests and runbooks
+### Deferred / proposed (not built)
 
-- `services/ai-backend/tests/contract/test_runtime_store_ports.py`
-- `services/ai-backend/tests/unit/runtime_adapters/file/test_contracts.py`
-- `services/ai-backend/tests/unit/runtime_adapters/file/test_journal.py`
-- `services/ai-backend/tests/unit/runtime_adapters/file/test_objects.py`
-- `services/ai-backend/tests/unit/runtime_adapters/file/test_catalog.py`
-- `services/ai-backend/tests/unit/runtime_adapters/file/test_queue.py`
-- `services/ai-backend/tests/integration/test_file_store_processes.py`
-- `services/ai-backend/tests/integration/test_file_store_migration.py`
-- `apps/desktop/main/services/service-env.test.ts`
-- `apps/desktop/main/services/supervisor.test.ts`
-- `services/ai-backend/docs/specs/desktop-agent-capabilities/ac2-file-session-store.md`
-- `docs/operations/desktop-file-store-recovery.md`
-- `docs/operations/desktop-file-store-migration.md`
+These were named in the original list but do not exist; they belong to the
+deferred envelope/migration/retention machinery above:
+
+- `agent_runtime/persistence/records/file_store.py`; `file/contracts.py`, `encoding.py`, `journal.py`, `objects.py`, `deletion.py`, `catalog.py`, `queue.py`, `runtime_store.py`, `satellite_stores.py` (the delivered adapter uses the concrete files listed above instead).
+- `scripts/export_desktop_file_store.py`, `scripts/export_file_store_to_postgres.py`, `scripts/remove_legacy_desktop_store.py`.
+- `tests/contract/test_runtime_store_ports.py`, `tests/unit/runtime_adapters/file/test_contracts.py` / `test_journal.py` / `test_catalog.py` / `test_queue.py`, `tests/integration/test_file_store_processes.py`, `tests/integration/test_file_store_migration.py`.
+- `services/ai-backend/docs/specs/desktop-agent-capabilities/ac2-file-session-store.md`, `docs/operations/desktop-file-store-recovery.md`, `docs/operations/desktop-file-store-migration.md`.
+- Desktop supervisor wiring for the file backend (`apps/desktop/main/services/service-env.ts`, `supervisor.ts`, `desktop-supervisor.ts`) is not part of this store's delivered scope.
 
 ## PR decomposition (light)
 

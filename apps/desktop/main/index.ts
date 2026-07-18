@@ -64,6 +64,7 @@ import {
 } from "./app-protocol";
 import {
   createCapabilityService,
+  isDesktopFilesystemEnabled,
   type CapabilityService,
 } from "./capabilities";
 import { startCrashReporter } from "./crash-reporter";
@@ -231,8 +232,18 @@ if (hasSingleInstanceLock) {
 
     // Capability subsystem (AC5): folder-grant model + loopback broker. Built
     // here so the picker can parent its dialog to the main window; started
-    // defensively so a broker bind failure never blocks boot.
-    startCapabilitySubsystem();
+    // defensively so a broker bind failure never blocks boot. G4: gated behind
+    // RUNTIME_ENABLE_DESKTOP_FILESYSTEM, read ONCE at boot — when unset/false
+    // the broker never binds and (because capabilityService stays null) the
+    // capability IPC channels are never registered, so calls fail closed.
+    if (isDesktopFilesystemEnabled(process.env)) {
+      startCapabilitySubsystem();
+    } else {
+      console.log(
+        "[capabilities] desktop filesystem disabled " +
+          "(set RUNTIME_ENABLE_DESKTOP_FILESYSTEM=1 to enable)",
+      );
+    }
 
     if (shouldSupervise({ isPackaged: app.isPackaged, env: process.env })) {
       supervisor = createDesktopSupervisor({

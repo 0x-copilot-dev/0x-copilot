@@ -1,7 +1,14 @@
 import { describe, expect, it, vi } from "vitest";
-import { fireEvent, render, screen, waitFor } from "@testing-library/react";
+import {
+  fireEvent,
+  render,
+  screen,
+  waitFor,
+  within,
+} from "@testing-library/react";
 import type { ReactNode } from "react";
 
+import type { SubagentEntry } from "@0x-copilot/api-types";
 import type {
   Session,
   SseSubscribeOptions,
@@ -11,6 +18,7 @@ import type {
   TypedRequest,
 } from "@0x-copilot/chat-transport";
 
+import type { FleetProjection } from "../subagents";
 import { TransportProvider } from "../providers/TransportProvider";
 import { SwimlaneScrubProvider } from "./SwimlaneScrubContext";
 import {
@@ -90,6 +98,47 @@ const SAMPLE_MESSAGES: ReadonlyArray<TcChatMessage> = [
 ];
 
 const SAMPLE_RESPONSE: TcChatMessagesResponse = { messages: SAMPLE_MESSAGES };
+
+// PR-3.8 — fleet fixtures for the inline SubagentFleetCard slot (FR-3.17a).
+function subagentEntry(overrides: Partial<SubagentEntry> = {}): SubagentEntry {
+  return {
+    task_id: "task_a",
+    parent_run_id: "run-1",
+    subagent_name: "doc_reader",
+    status: "running",
+    display_title: "Doc reader",
+    objective_summary: null,
+    started_at: "2026-05-06T10:00:00Z",
+    completed_at: null,
+    duration_ms: null,
+    result_summary: null,
+    safe_error_code: null,
+    safe_error_message: null,
+    token_usage: null,
+    ...overrides,
+  };
+}
+
+function fleet(overrides: Partial<FleetProjection> = {}): FleetProjection {
+  return {
+    fleetId: "fleet-1",
+    title: "Parallel research",
+    sub: null,
+    agentIds: ["doc_reader", "press_scout"],
+    total: 2,
+    running: 2,
+    done: 0,
+    elapsed: null,
+    finished: false,
+    sequenceNo: 4,
+    createdAtMs: 1716000030000,
+    children: [
+      subagentEntry({ task_id: "task_a", display_title: "Doc reader" }),
+      subagentEntry({ task_id: "task_b", display_title: "Press scout" }),
+    ],
+    ...overrides,
+  };
+}
 
 // A GFM table mid-stream: header + separator + one complete row, plus an
 // incomplete trailing row (`| Globex`). The citation-safe streaming markdown
@@ -300,5 +349,82 @@ describe("TcChat", () => {
     fireEvent.change(ta, { target: { value: "thanks" } });
     fireEvent.keyDown(ta, { key: "Enter" });
     expect(onSend).toHaveBeenCalledWith("thanks");
+  });
+});
+
+describe("TcChat — inline fleet card (PR-3.8 / FR-3.17a)", () => {
+  it("renders the hoisted SubagentFleetCard with a row per child when a fleet is projected", async () => {
+    const { transport } = makeTransport(() =>
+      Promise.resolve({ messages: [] }),
+    );
+    render(
+      withTransport(
+        transport,
+        <TcChat conversationId="c" mode="studio" fleets={[fleet()]} />,
+      ),
+    );
+    const card = await screen.findByTestId("tc-chat-fleet-fleet-1");
+    // The card's dispatch headline is derived from the projected total.
+    expect(card).toHaveTextContent("Dispatched 2 subagents in parallel");
+    // One FleetSubagentRow per projected child (reused Phase-1D primitive).
+    expect(within(card).getByText("Doc reader")).toBeInTheDocument();
+    expect(within(card).getByText("Press scout")).toBeInTheDocument();
+  });
+
+  it("renders no fleet card when no fleet is projected (linear run)", async () => {
+    const { transport } = makeTransport(() => Promise.resolve(SAMPLE_RESPONSE));
+    render(
+      withTransport(transport, <TcChat conversationId="c" mode="studio" />),
+    );
+    await screen.findByText("Sure — here is a draft.");
+    expect(
+      screen.queryByTestId("tc-chat-fleet-fleet-1"),
+    ).not.toBeInTheDocument();
+  });
+
+  it("interleaves the fleet card into the message stream by timestamp", async () => {
+    // Messages sit at t0 = …000000 and t1 = …060000; the fleet dispatched at
+    // …030000 must land between them.
+    const { transport } = makeTransport(() => Promise.resolve(SAMPLE_RESPONSE));
+    render(
+      withTransport(
+        transport,
+        <TcChat
+          conversationId="c"
+          mode="studio"
+          fleets={[fleet({ createdAtMs: 1716000030000 })]}
+        />,
+      ),
+    );
+    await screen.findByTestId("tc-chat-fleet-fleet-1");
+    const list = screen.getByTestId("tc-chat-messages");
+    const ids = Array.from(list.querySelectorAll("li")).map((li) =>
+      li.getAttribute("data-testid"),
+    );
+    expect(ids).toEqual([
+      "tc-chat-message-m1",
+      "tc-chat-fleet-fleet-1",
+      "tc-chat-message-m2",
+    ]);
+  });
+
+  it("hides a fleet dispatched after the scrub cut in ghost mode", async () => {
+    const { transport } = makeTransport(() => Promise.resolve(SAMPLE_RESPONSE));
+    render(
+      withTransport(
+        transport,
+        <SwimlaneScrubProvider value={{ scrubbedTo: 1716000030000 }}>
+          <TcChat
+            conversationId="c"
+            mode="studio"
+            fleets={[fleet({ createdAtMs: 1716000060000 })]}
+          />
+        </SwimlaneScrubProvider>,
+      ),
+    );
+    await screen.findByTestId("tc-chat-ghost-banner");
+    expect(
+      screen.queryByTestId("tc-chat-fleet-fleet-1"),
+    ).not.toBeInTheDocument();
   });
 });
