@@ -208,9 +208,12 @@ describe("RunDestination — shell composition", () => {
 
     renderRun(transport, makeStore());
 
-    // Header + canvas mount immediately; the goal fills in once the run resolves.
+    // Header mounts immediately; the canvas mounts once the run resolves (idle
+    // shows the empty-state composer until then — PR-3.11).
     expect(screen.getByTestId("run-header")).not.toBeNull();
-    expect(screen.getByTestId("thread-canvas")).not.toBeNull();
+    await waitFor(() =>
+      expect(screen.getByTestId("thread-canvas")).not.toBeNull(),
+    );
     expect(screen.getByTestId("run-header-kicker").textContent).toBe(
       "ACTIVE RUN",
     );
@@ -234,7 +237,7 @@ describe("RunDestination — shell composition", () => {
     renderRun(transport, store);
 
     const root = screen.getByTestId("run-destination");
-    const canvas = screen.getByTestId("thread-canvas");
+    const canvas = await screen.findByTestId("thread-canvas");
     expect(root.getAttribute("data-mode")).toBe("studio");
     expect(canvas.getAttribute("data-mode")).toBe("studio");
 
@@ -293,14 +296,15 @@ describe("RunDestination — shell composition", () => {
 
   // === PR-3.6 — tabbed right rail wiring ===
 
-  it("mounts the tabbed right rail (Chat default) and collapses the in-canvas mode switcher", () => {
+  it("mounts the tabbed right rail (Chat default) and collapses the in-canvas mode switcher", async () => {
     const transport = new FakeTransport();
     transport.requestHandler = async (req) =>
       req.path.includes("/messages") ? { messages: [] } : runningRun("Goal");
     renderRun(transport, makeStore());
 
-    // The recomposed rail mounts inside the canvas chat column…
-    const rail = screen.getByTestId("run-workspace-rail");
+    // The recomposed rail mounts inside the canvas chat column once the run
+    // resolves (idle shows the empty-state composer — PR-3.11)…
+    const rail = await screen.findByTestId("run-workspace-rail");
     expect(rail).not.toBeNull();
     expect(
       screen.getByRole("tablist", { name: "Run workspace tabs" }),
@@ -319,13 +323,13 @@ describe("RunDestination — shell composition", () => {
     expect(screen.queryByTestId("tc-mode-switcher")).toBeNull();
   });
 
-  it("toggling mode keeps the same rail + chat surface (single-mount, FR-3.9/3.13)", () => {
+  it("toggling mode keeps the same rail + chat surface (single-mount, FR-3.9/3.13)", async () => {
     const transport = new FakeTransport();
     transport.requestHandler = async (req) =>
       req.path.includes("/messages") ? { messages: [] } : runningRun("Goal");
     renderRun(transport, makeStore());
 
-    const railBefore = screen.getByTestId("run-workspace-rail");
+    const railBefore = await screen.findByTestId("run-workspace-rail");
     const chatBefore = screen.getByTestId("tc-chat");
 
     fireEvent.click(screen.getByTestId("run-mode-focus"));

@@ -149,7 +149,7 @@ function statusTone(status: AgentRunStatus | null): StatusTone {
     case "completed":
       return { label: "Done", color: "var(--color-text-muted, #9aa0a6)" };
     case "failed":
-    case "rejected":
+    case "timed_out":
       return { label: "Failed", color: "var(--color-danger, #f0764f)" };
     case "cancelled":
       return { label: "Stopped", color: "var(--color-text-muted, #9aa0a6)" };
