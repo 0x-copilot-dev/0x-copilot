@@ -19,6 +19,28 @@ export {
   type ProfilePagePerson,
   type ProfilePageProps,
 } from "./ProfilePage";
+
+// === Phase 5 (PR-5.3) — Account group section bodies ===
+// Profile is reused from ./ProfilePage (above). Appearance + Shortcuts are the
+// two Account bodies built here; they slot into SettingsSurface.renderSection.
+export {
+  AppearancePage,
+  appearanceAttributes,
+  splitAppearancePersistence,
+  APPEARANCE_THEMES,
+  APPEARANCE_ACCENTS,
+  APPEARANCE_DENSITIES,
+  type AppearancePageProps,
+  type AppearanceValue,
+  type AppearancePatch,
+  type AppearanceTheme,
+  type AppearanceAccentId,
+  type AppearanceDensity,
+  type AppearanceAttributes,
+  type AppearancePersistenceSplit,
+} from "./AppearancePage";
+export { ShortcutsPage, SHORTCUTS, type ShortcutRow } from "./ShortcutsPage";
+// === end Phase 5 (PR-5.3) ===
 export {
   QuietHoursEditor,
   validateQuietHoursWindow,
