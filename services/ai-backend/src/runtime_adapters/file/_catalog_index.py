@@ -116,16 +116,49 @@ class CatalogIndex:
     # ----- lifecycle -----------------------------------------------------
 
     def connect(self) -> None:
-        """Open (creating if needed) the SQLite db with WAL + NORMAL sync."""
+        """Open (creating if needed) the SQLite db with WAL + NORMAL sync.
+
+        The index is **disposable**: every row is derivable from the canonical
+        JSONL. A crash mid-commit (or bit-rot) can leave the SQLite file torn —
+        ``sqlite3.DatabaseError: file is not a database``. Because the caller
+        rebuilds the index from JSONL immediately after ``connect()``, a corrupt
+        file must not brick startup: we discard it and recreate an empty schema,
+        exactly as if the index were missing. Canonical data is never at risk.
+        """
 
         self._db_path.parent.mkdir(mode=0o700, parents=True, exist_ok=True)
-        conn = sqlite3.connect(str(self._db_path))
-        conn.execute("PRAGMA journal_mode=WAL")
-        conn.execute("PRAGMA synchronous=NORMAL")
-        conn.executescript(_SCHEMA)
-        conn.commit()
+        try:
+            conn = self._open_schema()
+        except sqlite3.DatabaseError:
+            self._discard_corrupt_db()
+            conn = self._open_schema()
         self._conn = conn
         self._fts_available = self._try_enable_fts(conn)
+
+    def _open_schema(self) -> sqlite3.Connection:
+        """Open the db and apply the base schema; may raise on a torn file."""
+
+        conn = sqlite3.connect(str(self._db_path))
+        try:
+            conn.execute("PRAGMA journal_mode=WAL")
+            conn.execute("PRAGMA synchronous=NORMAL")
+            conn.executescript(_SCHEMA)
+            conn.commit()
+        except sqlite3.DatabaseError:
+            conn.close()
+            raise
+        return conn
+
+    def _discard_corrupt_db(self) -> None:
+        """Delete a torn/corrupt disposable index (plus its WAL/SHM sidecars).
+
+        Safe because the index carries no canonical data — ``rebuild`` repopulates
+        every row from the JSONL folders on the next open.
+        """
+
+        for suffix in ("", "-wal", "-shm"):
+            sidecar = self._db_path.with_name(self._db_path.name + suffix)
+            sidecar.unlink(missing_ok=True)
 
     @staticmethod
     def _try_enable_fts(conn: sqlite3.Connection) -> bool:
