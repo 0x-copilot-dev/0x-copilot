@@ -265,6 +265,19 @@ export {
 export type { PaletteSearchPort } from "./ports/PaletteSearchPort";
 // === end Phase 12 ===
 
+// === Phase 6 — shell keyboard shortcuts (SSOT table + hook) ===
+// PR-6.6: surface the §6 shortcut hook + its callback/option types at the
+// package root so the desktop bootstrap (and any other host) can wire the
+// global chords through the single SSOT (`shell/shortcuts.ts`).
+export {
+  SHELL_SHORTCUTS,
+  useShellShortcuts,
+  type ShellShortcutCallbacks,
+  type ShortcutIntent,
+  type UseShellShortcutsOptions,
+} from "./shell";
+// === end Phase 6 shortcuts ===
+
 // === Phase 2-B thread-canvas ===
 export {
   ThreadCanvas,

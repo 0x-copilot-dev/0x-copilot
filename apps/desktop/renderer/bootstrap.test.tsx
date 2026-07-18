@@ -40,6 +40,22 @@ function installFakeBridge(
 
 const BOOT_READY = { phase: "ready", message: "Ready", percent: 100 };
 
+// PR-6.6: dispatch a DESIGN-SPEC §6 chord on `document` (where `useShellShortcuts`
+// listens). `metaKey` stands in for the command modifier on every §6 chord.
+function pressChord(key: string, opts: { shift?: boolean } = {}): void {
+  act(() => {
+    document.dispatchEvent(
+      new KeyboardEvent("keydown", {
+        key,
+        metaKey: true,
+        shiftKey: opts.shift ?? false,
+        bubbles: true,
+        cancelable: true,
+      }),
+    );
+  });
+}
+
 describe("renderer bootstrap", () => {
   let container: HTMLElement | null = null;
   let unmount: (() => void) | null = null;
@@ -229,6 +245,89 @@ describe("renderer bootstrap", () => {
       root.querySelector("[data-testid='destination-placeholder-title']")
         ?.textContent,
     ).toBe("Activity");
+  });
+
+  // === PR-6.6: shell keyboard shortcuts wired via useShellShortcuts ===
+
+  it("opens Settings on ⌘,", async () => {
+    const root = await mountSignedInShell();
+    expect(root.querySelector("[data-testid='settings-surface']")).toBeNull();
+
+    pressChord(",");
+
+    expect(
+      root.querySelector("[data-testid='settings-surface']"),
+    ).not.toBeNull();
+    expect(root.querySelector("[data-testid='destination-outlet']")).toBeNull();
+  });
+
+  it("opens Settings at the local-models section on ⌘⇧M", async () => {
+    const root = await mountSignedInShell();
+
+    pressChord("m", { shift: true });
+
+    expect(
+      root.querySelector("[data-testid='settings-surface']"),
+    ).not.toBeNull();
+    // The section deep-link lands on the local-models slug (the model picker).
+    expect(
+      root
+        .querySelector("[data-testid='settings-content']")
+        ?.getAttribute("data-active-slug"),
+    ).toBe("local-models");
+  });
+
+  it("starts/opens a run on ⌘N, leaving Settings", async () => {
+    const root = await mountSignedInShell();
+
+    // Open Settings first (via ⌘,) so ⌘N has to both leave Settings and land
+    // on the Run cockpit — driven purely through the wired global chords.
+    pressChord(",");
+    expect(
+      root.querySelector("[data-testid='settings-surface']"),
+    ).not.toBeNull();
+
+    pressChord("n");
+
+    expect(root.querySelector("[data-testid='settings-surface']")).toBeNull();
+    expect(
+      root
+        .querySelector("[data-testid='destination-outlet']")
+        ?.getAttribute("data-destination"),
+    ).toBe("run");
+  });
+
+  it("toggles the ⌘K palette exactly once per press (single ⌘K listener)", async () => {
+    const root = await mountSignedInShell();
+    const host = root.querySelector("[data-testid='desktop-palette-host']");
+    expect(host?.getAttribute("data-palette-open")).toBe("false");
+
+    // One press → exactly one toggle. A duplicate ⌘K listener would toggle
+    // twice (net no-op), so the palette landing open proves single sourcing.
+    pressChord("k");
+    expect(host?.getAttribute("data-palette-open")).toBe("true");
+
+    // A second press toggles it back closed — still one toggle per press.
+    pressChord("k");
+    expect(host?.getAttribute("data-palette-open")).toBe("false");
+  });
+
+  it("does not fire any bootstrap-level handler for the run-scoped ⌘M chord", async () => {
+    const root = await mountSignedInShell();
+    const host = root.querySelector("[data-testid='desktop-palette-host']");
+
+    // ⌘M (no shift) is a run-scoped chord owned by the cockpit (useRunMode),
+    // not wired at the bootstrap level. It must not open Settings, must not
+    // touch the palette, and must not navigate.
+    pressChord("m");
+
+    expect(root.querySelector("[data-testid='settings-surface']")).toBeNull();
+    expect(host?.getAttribute("data-palette-open")).toBe("false");
+    expect(
+      root
+        .querySelector("[data-testid='destination-outlet']")
+        ?.getAttribute("data-destination"),
+    ).toBe("run");
   });
 
   it("shows the fatal boot screen when the supervisor reports a fatal status", async () => {
