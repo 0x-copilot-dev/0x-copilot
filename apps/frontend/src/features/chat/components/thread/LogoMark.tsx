@@ -14,11 +14,11 @@ export function LogoMark({
   compact?: boolean;
 }): ReactElement {
   return (
-    <div className="aui-logo" aria-label="Atlas">
+    <div className="aui-logo" aria-label="Copilot">
       <span className="aui-logo__mark" aria-hidden="true">
-        A
+        C
       </span>
-      {compact ? null : <span className="aui-logo__wordmark">Atlas</span>}
+      {compact ? null : <span className="aui-logo__wordmark">Copilot</span>}
     </div>
   );
 }

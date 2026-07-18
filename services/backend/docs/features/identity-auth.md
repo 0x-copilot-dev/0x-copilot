@@ -153,7 +153,7 @@ and `POST /v1/auth/siwe/verify` (both public entry ramps →
 | `mint_nonce(address, chain_id)` | Single-use nonce (TTL 5 min) bound to the requesting address + chain; rate-limited per-IP and per-address                                               |
 | `verify(message, signature)`    | Strict EIP-4361 parse → chain allowlist → domain/URI binding → time window → EIP-191 recovery → atomic nonce consume → link-or-provision → session mint |
 
-- Statement is pinned to `"Sign in to Atlas"`; `Version: 1`;
+- Statement is pinned to `"Sign in to Copilot"`; `Version: 1`;
   `Expiration Time` is mandatory and honored, `Issued At` may not sit
   more than 5 min in the future.
 - Domain binding: the message `domain` must equal the authority of

@@ -288,7 +288,7 @@ export function MemoryDestination(
         <div style={containerStyle}>
           <PageHeader
             title="Memory"
-            subtitle="What Atlas remembers about you and your team"
+            subtitle="What Copilot remembers about you and your team"
           />
           <EmptyState
             title="What the agent remembers"
@@ -376,7 +376,7 @@ export function MemoryDestination(
 
   const subtitle =
     rows.length === 0
-      ? "What Atlas remembers about you and your team"
+      ? "What Copilot remembers about you and your team"
       : `${rows.length} ${rows.length === 1 ? "memory" : "memories"}`;
 
   const showingDetail = renderDetail !== undefined && focusedMemoryId !== null;
@@ -444,7 +444,7 @@ export function MemoryDestination(
         ) : rows.length === 0 ? (
           <EmptyState
             title="No memory yet"
-            body="Teach Atlas something in a chat, or add a memory directly."
+            body="Teach Copilot something in a chat, or add a memory directly."
             action={
               onCreateMemory !== undefined
                 ? { label: "Add memory", onClick: onCreateMemory }

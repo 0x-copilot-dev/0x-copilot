@@ -26,7 +26,7 @@ describe("usagePalette", () => {
     const keys = Array.from({ length: 20 }, (_, i) => `user_${i}`);
     const palette = usagePalette({ keys });
     expect(Object.keys(palette)).toHaveLength(20);
-    // Wrap-around: first and ninth (8 swatches) collide.
-    expect(palette.user_0).toBe(palette.user_8);
+    // Wrap-around: first and tenth (9 swatches) collide.
+    expect(palette.user_0).toBe(palette.user_9);
   });
 });

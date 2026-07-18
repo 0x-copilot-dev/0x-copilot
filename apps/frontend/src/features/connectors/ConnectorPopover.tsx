@@ -368,6 +368,6 @@ const FALLBACK_SUBTITLE_BY_STATE: Record<ConnectorRow["state"], string | null> =
   {
     active: null,
     paused: null,
-    disconnected: "Not connected — Atlas can't read this app yet.",
+    disconnected: "Not connected — Copilot can't read this app yet.",
     workspace_off: "Disabled by your workspace admin.",
   };

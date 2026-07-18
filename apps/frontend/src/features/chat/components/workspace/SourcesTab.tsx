@@ -80,7 +80,7 @@ export function SourcesTab({
         ) : error ? (
           <p role="alert">Couldn’t load sources — {error}</p>
         ) : (
-          <p>Sources will appear here as Atlas finds them.</p>
+          <p>Sources will appear here as Copilot finds them.</p>
         )}
       </div>
     );

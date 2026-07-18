@@ -45,7 +45,7 @@ export function SettingsRoute({
           onClick={onBackToChat}
           style={backButtonStyle}
         >
-          ← Back to Atlas
+          ← Back to Copilot
         </button>
       </header>
       {subPath === "notification-defaults" ? (

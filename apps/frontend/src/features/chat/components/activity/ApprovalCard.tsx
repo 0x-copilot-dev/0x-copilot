@@ -23,7 +23,7 @@ import type { ActivityParam } from "../../utils/activityDataBuilders";
 export interface ApprovalCardProps {
   /** "Search your Linear issues?" — verb-first, sentence case. */
   title: string;
-  /** "Atlas is asking because this writes outside your workspace." */
+  /** "Copilot is asking because this writes outside your workspace." */
   reason: ReactNode;
   /** {vendor: "LINEAR", access: "READ" | "WRITE" | "ACTION"}. */
   category?: { vendor: string; access: string } | null;

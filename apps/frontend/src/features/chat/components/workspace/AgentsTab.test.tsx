@@ -67,7 +67,7 @@ describe("AgentsTab disclosure", () => {
     render(<AgentsTab subagents={emptySubagentMap()} />);
     expect(
       screen.getByText(
-        /Subagents run here when Atlas dispatches parallel work/,
+        /Subagents run here when Copilot dispatches parallel work/,
       ),
     ).toBeInTheDocument();
   });

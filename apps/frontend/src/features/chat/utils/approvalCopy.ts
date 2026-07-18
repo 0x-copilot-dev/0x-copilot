@@ -8,13 +8,13 @@ import type { McpApprovalReasonCode } from "@0x-copilot/api-types";
 
 const REASON_COPY: Record<McpApprovalReasonCode, string> = {
   read_only_first_use:
-    "Atlas is asking before reading from this connector for the first time this turn.",
+    "Copilot is asking before reading from this connector for the first time this turn.",
   writes_out_of_workspace:
-    "Atlas is asking because this writes outside your workspace.",
+    "Copilot is asking because this writes outside your workspace.",
   risk_high:
-    "Atlas is asking because this writes to a high-risk connector — review the scope below.",
-  irreversible: "Atlas is asking because this action can't be undone.",
-  default: "Atlas is asking before running this connector.",
+    "Copilot is asking because this writes to a high-risk connector — review the scope below.",
+  irreversible: "Copilot is asking because this action can't be undone.",
+  default: "Copilot is asking before running this connector.",
 };
 
 /** Look up the reason sentence for a server-supplied reason_code.

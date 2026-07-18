@@ -66,7 +66,7 @@ from backend_app.identity.store import IdentityStore
 # The one statement this deployment signs. Baked into build + parse so a
 # message signed for another product (or a tampered statement) never
 # verifies here.
-SIWE_STATEMENT = "Sign in to Atlas"
+SIWE_STATEMENT = "Sign in to Copilot"
 
 # Reserved pseudo-provider id: lands in sessions.auth_provider_id and
 # audit metadata exactly like "google" does for the OIDC global ramp.

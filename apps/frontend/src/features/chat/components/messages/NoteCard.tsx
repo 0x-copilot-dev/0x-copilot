@@ -30,7 +30,7 @@ export function NoteCard({
   const text =
     summary?.trim() ||
     deriveSummary({ beforeTokens, afterTokens, strategy }) ||
-    "Atlas summarised older messages to keep this conversation efficient.";
+    "Copilot summarised older messages to keep this conversation efficient.";
   return <StatusLine className="aui-note-card">{text}</StatusLine>;
 }
 

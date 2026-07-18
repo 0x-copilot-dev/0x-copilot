@@ -87,7 +87,7 @@ export function AgentsTab({
         ) : error ? (
           <p role="alert">Couldn’t load subagents — {error}</p>
         ) : (
-          <p>Subagents run here when Atlas dispatches parallel work.</p>
+          <p>Subagents run here when Copilot dispatches parallel work.</p>
         )}
       </div>
     );

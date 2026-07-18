@@ -43,7 +43,7 @@ export interface RightRailProps {
   readonly open: boolean;
   readonly onToggle: () => void;
   /**
-   * Optional header title — defaults to "Atlas conversation". Lets the
+   * Optional header title — defaults to "Copilot conversation". Lets the
    * host re-label the right rail per destination without forking the
    * shell component.
    */
@@ -91,7 +91,7 @@ export function RightRail({
   onTabChange,
   now,
 }: RightRailProps): ReactElement {
-  const headerLabel = title ?? "Atlas conversation";
+  const headerLabel = title ?? "Copilot conversation";
   const [internalActiveTab, setInternalActiveTab] =
     useState<RightRailTabId>("activity");
   const activeTab = controlledActiveTab ?? internalActiveTab;

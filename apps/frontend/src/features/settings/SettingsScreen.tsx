@@ -410,7 +410,7 @@ function SettingsTopChrome({
         title="Back to chat"
       >
         <RailGlyph name="back" />
-        <span>Back to Atlas</span>
+        <span>Back to Copilot</span>
       </button>
       <div className="settings-chrome__crumb" aria-live="polite">
         Settings

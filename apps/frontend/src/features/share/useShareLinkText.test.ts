@@ -18,7 +18,7 @@ describe("useShareLinkText", () => {
       chatTitle: null,
       chatUrl: "https://app.example.com/c/abc",
     });
-    expect(result.title).toBe("Atlas conversation");
+    expect(result.title).toBe("Copilot conversation");
   });
 
   it("trims whitespace-only titles to the fallback", () => {
@@ -26,6 +26,6 @@ describe("useShareLinkText", () => {
       chatTitle: "   ",
       chatUrl: "https://x",
     });
-    expect(result.title).toBe("Atlas conversation");
+    expect(result.title).toBe("Copilot conversation");
   });
 });

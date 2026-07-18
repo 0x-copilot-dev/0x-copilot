@@ -231,7 +231,7 @@ function renderBody(args: BodyArgs): ReactElement {
     return (
       <EmptyState
         title="No custom connectors yet"
-        body="Custom OAuth connectors land here once Atlas supports user-installed bundles."
+        body="Custom OAuth connectors land here once Copilot supports user-installed bundles."
       />
     );
   }
@@ -241,7 +241,7 @@ function renderBody(args: BodyArgs): ReactElement {
       return (
         <EmptyState
           title="No more catalog entries"
-          body="You've installed every connector Atlas currently knows about."
+          body="You've installed every connector Copilot currently knows about."
         />
       );
     }
@@ -268,7 +268,7 @@ function renderBody(args: BodyArgs): ReactElement {
     return (
       <EmptyState
         title="Connect your first SaaS source"
-        body="Authorize Gmail, Slack, Salesforce, or any other connector to bring real data into Atlas."
+        body="Authorize Gmail, Slack, Salesforce, or any other connector to bring real data into Copilot."
         action={
           onConnect !== undefined
             ? { label: "Connect a connector", onClick: onConnect }

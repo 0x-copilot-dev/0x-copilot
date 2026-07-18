@@ -170,7 +170,7 @@ function fallbackTitle(kind: ApprovalsQueueItem["approvalKind"]): string {
     case "mcp_tool":
       return "Allow a connector action";
     case "ask_a_question":
-      return "Atlas needs an answer";
+      return "Copilot needs an answer";
     case "tool_action":
       return "Approve action";
     default:

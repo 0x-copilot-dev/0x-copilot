@@ -13,7 +13,7 @@
 import { toEip55Address } from "../../utils/eip55";
 
 /** Statement line — frozen by the SIWE wire contract. */
-export const SIWE_STATEMENT = "Sign in to Atlas";
+export const SIWE_STATEMENT = "Sign in to Copilot";
 
 /** EIP-4361 version field. Only "1" exists. */
 export const SIWE_VERSION = "1";

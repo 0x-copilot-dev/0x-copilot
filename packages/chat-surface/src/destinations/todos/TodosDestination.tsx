@@ -413,7 +413,7 @@ export function TodosDestination(
         {!hasAnyTodos ? (
           <EmptyState
             title="Nothing here yet"
-            body="Atlas extracts followups whenever it finds an action item — try the launch demo, or add one above."
+            body="Copilot extracts followups whenever it finds an action item — try the launch demo, or add one above."
             action={undefined}
           />
         ) : (

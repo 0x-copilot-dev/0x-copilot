@@ -23,7 +23,7 @@ describe("SourcesTab", () => {
   it("shows the empty hint when no sources have been ingested", () => {
     render(<SourcesTab sources={emptySourceMap()} />);
     expect(
-      screen.getByText(/Sources will appear here as Atlas finds them\./),
+      screen.getByText(/Sources will appear here as Copilot finds them\./),
     ).toBeInTheDocument();
   });
 

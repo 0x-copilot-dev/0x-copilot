@@ -387,7 +387,7 @@ describe("HomeDestination — Phase 9", () => {
     const region = screen.getByRole("region", { name: /home destination/i });
     expect(region).toHaveAttribute("data-state", "first-run");
     expect(screen.getByTestId("empty-state-title")).toHaveTextContent(
-      /welcome to atlas/i,
+      /welcome to copilot/i,
     );
   });
 });
