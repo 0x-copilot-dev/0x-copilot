@@ -243,14 +243,12 @@ export {
 } from "./shell";
 // === end Phase 1-B ===
 
-// === Phase 1-D routing-palette ===
+// === Phase 1-D routing (HashRouter + route-table) ===
+// The Phase-1 route-jumper palette that once lived here was superseded by the
+// substrate-shared ⌘K palette in `./shell` and removed in Phase 6 (PR-6.1);
+// only the HashRouter + route-table primitives remain.
 export { HashRouter } from "./routing/HashRouter";
 export { ROUTE_TABLE, type RouteEntry } from "./routing/route-table";
-// Phase-1 placeholder palette (route-jumper). Phase 12 supersedes it
-// with the substrate-shared palette in `./shell`; we keep the older
-// component exported under a distinct name so any in-tree consumer
-// can migrate without a flag day.
-export { CommandPalette as RouteJumpPalette } from "./palette";
 // === end Phase 1-D ===
 
 // === Phase 12 — substrate-shared global ⌘K palette ===
