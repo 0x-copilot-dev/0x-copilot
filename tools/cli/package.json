@@ -1,6 +1,6 @@
 {
   "name": "@0x-copilot/cli",
-  "version": "0.1.1",
+  "version": "0.1.2",
   "description": "Install and launch the 0xCopilot desktop app from your terminal — no DMG, no installer.",
   "type": "module",
   "bin": {
