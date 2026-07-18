@@ -29,10 +29,12 @@ import {
   useMemo,
   useRef,
   useState,
+  type CSSProperties,
   type ReactElement,
 } from "react";
 
 import {
+  ConnectModal,
   ConnectorsDestination,
   ConnectorsPanel,
   type ConnectorsFilterCounts,
@@ -40,6 +42,8 @@ import {
 } from "@0x-copilot/chat-surface";
 import type {
   Connector,
+  ConnectorAccessMode,
+  ConnectorCatalogEntry,
   ConnectorId,
   ConnectorListResponse,
   ConnectorSlug,
@@ -51,6 +55,7 @@ import type { RequestIdentity } from "../../api/config";
 import {
   type ConnectorEventsStream,
   fetchConnectors,
+  setConnectorAccessMode,
   startConnectorOAuth,
   streamConnectorEvents,
 } from "../../api/connectorsApi";
@@ -67,6 +72,13 @@ interface ConnectorsRouteProps {
   readonly onOpenConnector?: (id: ConnectorId) => void;
   /** Open the webhooks sub-route. */
   readonly onOpenWebhooks?: () => void;
+  /**
+   * Open Settings → Model & behavior from the Tools approval-policy note
+   * (FR-4.25). The actual destination dispatch is wired by the App shell in
+   * PR-4.11; until then hosts may pass a callback (or omit it, in which case
+   * the note renders as plain text).
+   */
+  readonly onOpenApprovalSettings?: () => void;
 }
 
 type ViewState =
@@ -86,11 +98,36 @@ export function ConnectorsRoute({
   identity,
   onOpenConnector,
   onOpenWebhooks,
+  onOpenApprovalSettings,
 }: ConnectorsRouteProps): ReactElement {
   const [state, setState] = useState<ViewState>({ kind: "loading" });
   const [reloadToken, setReloadToken] = useState(0);
   const [filter, setFilter] = useState<ConnectorsFilterSlug>("connected");
   const [pendingError, setPendingError] = useState<string | null>(null);
+  const [accessModeError, setAccessModeError] = useState<string | null>(null);
+
+  // ---- Connect flow (FR-4.23) — ConnectModal is host-driven -----------
+  const [connectOpen, setConnectOpen] = useState(false);
+  const [connectPending, setConnectPending] = useState(false);
+  const [connectError, setConnectError] = useState<string | null>(null);
+  // Slug the OAuth round-trip is currently authorizing. The SSE channel
+  // reports completion (`connector.created` / `status_changed` → connected)
+  // for this slug, which clears `connectPending` and advances the modal to
+  // the permission step. A ref (not state) so the SSE effect closure — keyed
+  // on `[identity, state.kind]` — always sees the latest value without
+  // re-subscribing.
+  const connectingSlugRef = useRef<ConnectorSlug | null>(null);
+
+  // Latest ready connectors, mirrored into a ref so the optimistic access-
+  // mode revert can snapshot the prior mode and the connect flow can resolve
+  // a freshly-created connector by slug — both across an `await` boundary
+  // without a stale render closure.
+  const connectorsRef = useRef<ReadonlyArray<Connector>>([]);
+  useEffect(() => {
+    if (state.kind === "ready") {
+      connectorsRef.current = state.response.connectors;
+    }
+  }, [state]);
 
   // ---- Initial fetch -------------------------------------------------
   useEffect(() => {
@@ -118,6 +155,27 @@ export function ConnectorsRoute({
       cancelled = true;
     };
   }, [identity, reloadToken]);
+
+  // Resolve the connect-flow OAuth round-trip from a streamed envelope.
+  // Stable identity (refs + stable setters only) so the SSE effect can list
+  // it as a dependency without re-subscribing.
+  const maybeCompleteConnect = useCallback(
+    (envelope: ConnectorStreamEnvelope): void => {
+      const slug = connectingSlugRef.current;
+      if (slug === null) return;
+      const conn = envelope.connector;
+      if (conn === undefined || conn.slug !== slug) return;
+      if (
+        envelope.event_type === "connector.created" ||
+        conn.status === "connected"
+      ) {
+        connectingSlugRef.current = null;
+        setConnectPending(false);
+        setConnectError(null);
+      }
+    },
+    [],
+  );
 
   // ---- SSE subscription with exponential-backoff reconnect -----------
   const backoffRef = useRef(RECONNECT_BACKOFF_MIN_MS);
@@ -165,6 +223,12 @@ export function ConnectorsRoute({
               highestSequenceNo,
             };
           });
+          // Connect-flow OAuth completion: the server-side callback inserts
+          // the connector row and emits `connector.created` /
+          // `status_changed`. When the row for the slug we're authorizing
+          // lands connected, clear `connectPending` so the ConnectModal
+          // auto-advances catalog → OAuth spinner → permission (FR-4.23).
+          maybeCompleteConnect(envelope);
         },
         onError: () => {
           if (cancelled) return;
@@ -189,15 +253,132 @@ export function ConnectorsRoute({
       }
       activeHandle?.close();
     };
-  }, [identity, state.kind]);
+  }, [identity, state.kind, maybeCompleteConnect]);
 
   // ---- Mutations -----------------------------------------------------
-  const handleConnect = useCallback(() => {
-    // For "Connect a connector" without a slug pre-selected, route to the
-    // Available tab so the user picks. The wizard for new-slug installs
-    // lands in a follow-up wave.
-    setFilter("available");
+
+  // "Connect a tool" CTA — open the ConnectModal (FR-4.23). The catalog it
+  // shows is the server-provided `available` set (generic-SaaS-first, no
+  // hardcoded Safe/Dune defaults — FR-4.24).
+  const handleOpenConnect = useCallback(() => {
+    connectingSlugRef.current = null;
+    setConnectError(null);
+    setConnectPending(false);
+    setConnectOpen(true);
   }, []);
+
+  const handleCloseConnect = useCallback(() => {
+    connectingSlugRef.current = null;
+    setConnectOpen(false);
+    setConnectPending(false);
+    setConnectError(null);
+  }, []);
+
+  // Access-mode PATCH (FR-4.22) — apply optimistically, reconcile against
+  // server truth on success, revert + surface an inline error on failure.
+  const handleSetAccessMode = useCallback(
+    async (id: ConnectorId, mode: ConnectorAccessMode): Promise<void> => {
+      const previous = connectorsRef.current.find(
+        (c) => c.id === id,
+      )?.access_mode;
+      setAccessModeError(null);
+      // Optimistic apply.
+      setState((prev) => {
+        if (prev.kind !== "ready") return prev;
+        const connectors = prev.response.connectors.map((c) =>
+          c.id === id ? { ...c, access_mode: mode } : c,
+        );
+        return { ...prev, response: { ...prev.response, connectors } };
+      });
+      try {
+        const res = await setConnectorAccessMode(identity, id, {
+          access_mode: mode,
+        });
+        // Reconcile with the authoritative row the server returned.
+        setState((prev) => {
+          if (prev.kind !== "ready") return prev;
+          const connectors = prev.response.connectors.map((c) =>
+            c.id === id ? res.connector : c,
+          );
+          return { ...prev, response: { ...prev.response, connectors } };
+        });
+      } catch (error: unknown) {
+        // Revert to the pre-optimistic mode.
+        setState((prev) => {
+          if (prev.kind !== "ready") return prev;
+          const connectors = prev.response.connectors.map((c) =>
+            c.id === id ? { ...c, access_mode: previous } : c,
+          );
+          return { ...prev, response: { ...prev.response, connectors } };
+        });
+        setAccessModeError(
+          errorMessage(error, "Could not update the tool's access mode."),
+        );
+      }
+    },
+    [identity],
+  );
+
+  // Connect flow — catalog pick starts the provider OAuth round-trip in a
+  // popup and flips the modal into its spinner state (`pending`). Completion
+  // is reported by the SSE channel (`maybeCompleteConnect`), which clears
+  // `pending` so the modal advances to the permission step.
+  const handleConnectSelectEntry = useCallback(
+    async (slug: ConnectorSlug): Promise<void> => {
+      connectingSlugRef.current = slug;
+      setConnectError(null);
+      setConnectPending(true);
+      try {
+        const res = await startConnectorOAuth(identity, slug);
+        // Keep the modal alive: authorize in a popup rather than a full-page
+        // redirect. The server-side callback inserts the connector and the
+        // SSE `connector.created` event resolves the pending state.
+        if (typeof window !== "undefined") {
+          window.open(res.authorization_url, "_blank", "noopener,noreferrer");
+        }
+      } catch (error: unknown) {
+        connectingSlugRef.current = null;
+        setConnectPending(false);
+        setConnectError(errorMessage(error, "Could not start the OAuth flow."));
+      }
+    },
+    [identity],
+  );
+
+  // Terminal Connect — persist the chosen access mode on the connector the
+  // OAuth round-trip just created, then close the modal. When the row isn't
+  // in the list yet (defensive), close and let the SSE reflect it.
+  const handleConnectConfirm = useCallback(
+    async (
+      slug: ConnectorSlug,
+      permission: ConnectorAccessMode,
+    ): Promise<void> => {
+      const connector = connectorsRef.current.find((c) => c.slug === slug);
+      if (connector === undefined) {
+        handleCloseConnect();
+        return;
+      }
+      setConnectPending(true);
+      setConnectError(null);
+      try {
+        const res = await setConnectorAccessMode(identity, connector.id, {
+          access_mode: permission,
+        });
+        setState((prev) => {
+          if (prev.kind !== "ready") return prev;
+          const connectors = prev.response.connectors.map((c) =>
+            c.id === connector.id ? res.connector : c,
+          );
+          return { ...prev, response: { ...prev.response, connectors } };
+        });
+        handleCloseConnect();
+      } catch (error: unknown) {
+        setConnectPending(false);
+        setConnectError(errorMessage(error, "Could not connect the tool."));
+      }
+    },
+    [identity, handleCloseConnect],
+  );
 
   const handleOpenCatalogEntry = useCallback(
     async (slug: ConnectorSlug): Promise<void> => {
@@ -263,6 +444,14 @@ export function ConnectorsRoute({
       ? state.response.connectors.length + state.response.available.length
       : 0;
 
+  // ConnectModal catalog — the server-provided available set, straight
+  // through. Generic-SaaS-first; Safe/Dune are ordinary catalog rows, never
+  // defaults (FR-4.24).
+  const catalog = useMemo<ReadonlyArray<ConnectorCatalogEntry>>(
+    () => (state.kind === "ready" ? state.response.available : []),
+    [state],
+  );
+
   // ---- Render --------------------------------------------------------
 
   return (
@@ -291,7 +480,7 @@ export function ConnectorsRoute({
           filter={filter}
           onFilterChange={setFilter}
           counts={counts}
-          onConnect={handleConnect}
+          onConnect={handleOpenConnect}
           onOpenWebhooks={onOpenWebhooks}
         />
       </aside>
@@ -303,16 +492,18 @@ export function ConnectorsRoute({
           <div
             role="status"
             data-testid="connectors-route-pending-error"
-            style={{
-              margin: 16,
-              padding: 12,
-              border: "1px solid var(--color-border-strong)",
-              borderRadius: 8,
-              backgroundColor: "var(--color-surface)",
-              fontSize: 13,
-            }}
+            style={inlineErrorStyle}
           >
             {pendingError}
+          </div>
+        )}
+        {accessModeError !== null && (
+          <div
+            role="alert"
+            data-testid="connectors-route-access-mode-error"
+            style={inlineErrorStyle}
+          >
+            {accessModeError}
           </div>
         )}
         <ConnectorsDestination
@@ -320,7 +511,7 @@ export function ConnectorsRoute({
           filter={filter}
           onFilterChange={setFilter}
           counts={counts}
-          onConnect={handleConnect}
+          onConnect={handleOpenConnect}
           onOpenConnector={onOpenConnector}
           onOpenCatalogEntry={(slug) => {
             void handleOpenCatalogEntry(slug);
@@ -328,9 +519,35 @@ export function ConnectorsRoute({
           onReconnect={(id) => {
             void handleReconnect(id);
           }}
+          onSetAccessMode={(id, mode) => {
+            void handleSetAccessMode(id, mode);
+          }}
+          onOpenApprovalSettings={onOpenApprovalSettings}
           onRetry={() => setReloadToken((t) => t + 1)}
         />
       </div>
+      <ConnectModal
+        open={connectOpen}
+        onClose={handleCloseConnect}
+        catalog={catalog}
+        onSelectEntry={(slug) => {
+          void handleConnectSelectEntry(slug);
+        }}
+        onConnect={(slug, permission) => {
+          void handleConnectConfirm(slug, permission);
+        }}
+        pending={connectPending}
+        error={connectError}
+      />
     </section>
   );
 }
+
+const inlineErrorStyle: CSSProperties = {
+  margin: 16,
+  padding: 12,
+  border: "1px solid var(--color-border-strong)",
+  borderRadius: 8,
+  backgroundColor: "var(--color-surface)",
+  fontSize: 13,
+};

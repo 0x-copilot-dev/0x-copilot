@@ -255,6 +255,23 @@ describe("RunWorkspaceRail — badges + empty copy (FR-3.12)", () => {
     expect(agentsTab).toHaveTextContent("1 live");
   });
 
+  it("counts only in-flight subagents as live — a paused one is frozen, not live (FR-3.17c)", () => {
+    render(
+      <RunWorkspaceRail
+        mode="studio"
+        chatSlot={chatSlot()}
+        subagents={subagentMap([
+          subagent({ task_id: "a", status: "running" }),
+          subagent({ task_id: "b", status: "paused" }),
+        ])}
+      />,
+    );
+    const agentsTab = screen.getByRole("tab", { name: /Agents/ });
+    // Two subagents exist, but only one is running → "1 live", not "2 live".
+    expect(agentsTab).toHaveTextContent("1 live");
+    expect(agentsTab).not.toHaveTextContent("2 live");
+  });
+
   it("falls back to the total on Agents when nothing is running", () => {
     render(
       <RunWorkspaceRail
@@ -351,5 +368,85 @@ describe("RunWorkspaceRail — Focus mode (FR-3.13)", () => {
     rerender(<RunWorkspaceRail mode="focus" chatSlot={chatSlot()} />);
     const after = screen.getByTestId("rail-chat-content");
     expect(after).toBe(before);
+  });
+});
+
+// ============================================================
+// PR-3.7 — approvals hidden while scrubbed (FR-3.15/3.16)
+// ============================================================
+
+describe("RunWorkspaceRail — scrubbed approvals gate (FR-3.15/3.16)", () => {
+  it("drops the Approvals tab while scrubbed and flags the rail", () => {
+    render(
+      <RunWorkspaceRail
+        mode="studio"
+        chatSlot={chatSlot()}
+        approvalsQueue={approvalsQueue([approval()])}
+        scrubbed
+      />,
+    );
+    expect(tabLabels()).toEqual(["Chat", "Sources", "Agents"]);
+    expect(screen.queryByRole("tab", { name: /Approvals/ })).toBeNull();
+    expect(screen.getByTestId("run-workspace-rail")).toHaveAttribute(
+      "data-approvals-hidden",
+      "true",
+    );
+  });
+
+  it("restores the Approvals tab when snapped back to live", () => {
+    const { rerender } = render(
+      <RunWorkspaceRail
+        mode="studio"
+        chatSlot={chatSlot()}
+        approvalsQueue={approvalsQueue([approval()])}
+        scrubbed
+      />,
+    );
+    expect(screen.queryByRole("tab", { name: /Approvals/ })).toBeNull();
+
+    rerender(
+      <RunWorkspaceRail
+        mode="studio"
+        chatSlot={chatSlot()}
+        approvalsQueue={approvalsQueue([approval()])}
+      />,
+    );
+    expect(screen.getByRole("tab", { name: /Approvals/ })).toBeInTheDocument();
+    expect(screen.getByTestId("run-workspace-rail")).toHaveAttribute(
+      "data-approvals-hidden",
+      "false",
+    );
+  });
+
+  it("falls back to Chat when Approvals was active and the run is scrubbed", () => {
+    const { rerender } = render(
+      <RunWorkspaceRail
+        mode="studio"
+        chatSlot={chatSlot()}
+        approvalsQueue={approvalsQueue([approval()])}
+      />,
+    );
+    // Select Approvals while live…
+    fireEvent.click(screen.getByRole("tab", { name: /Approvals/ }));
+    expect(screen.getByTestId("run-workspace-rail")).toHaveAttribute(
+      "data-active-tab",
+      "approvals",
+    );
+
+    // …then scrub: the panel gives way to Chat (its tab is gone).
+    rerender(
+      <RunWorkspaceRail
+        mode="studio"
+        chatSlot={chatSlot()}
+        approvalsQueue={approvalsQueue([approval()])}
+        scrubbed
+      />,
+    );
+    expect(screen.getByTestId("run-workspace-rail")).toHaveAttribute(
+      "data-active-tab",
+      "chat",
+    );
+    expect(screen.getByTestId("rail-chat-content")).toBeInTheDocument();
+    expect(screen.queryByTestId("run-rail-panel-approvals")).toBeNull();
   });
 });

@@ -87,6 +87,7 @@ from runtime_api.schemas import (
 )
 from runtime_worker.audit import WorkerAuditEmitter
 from runtime_worker.dependencies import DefaultRuntimeDependenciesFactory
+from runtime_worker.file_store_wiring import FileStoreWorkerWiring
 from runtime_worker.run_metrics import AssistantRunMetrics
 from runtime_worker.stream_events import StreamOrchestrator
 from runtime_worker.stream_messages import StreamTextHelper
@@ -208,7 +209,10 @@ class RuntimeRunHandler:
         self.run_termination = RunTerminationCoordinator(
             event_producer=self.event_producer,
         )
-        self.stream_event_mapper = StreamOrchestrator(self.event_producer)
+        self.stream_event_mapper = StreamOrchestrator(
+            self.event_producer,
+            tool_result_offloader=self._build_tool_result_offloader(),
+        )
         self._runtime_streamer_explicit = runtime_streamer is not astream_runtime
         self.audit_emitter = WorkerAuditEmitter(persistence=self.persistence)
         self.pricing_catalog = ModelPricingCatalog(self.persistence)
@@ -798,6 +802,48 @@ class RuntimeRunHandler:
             return context
         return await self._provider_keys_hydrator.hydrate(context)
 
+    def _file_store_wiring(self) -> FileStoreWorkerWiring:
+        """Shared file-store gate + offloader/read-backend builders.
+
+        The event store and persistence port are the same
+        ``FileRuntimeApiStore`` instance when the file backend is wired, so
+        either would do; the wiring reads from the event store. Kept in one
+        place so this path and the approval-resume path cannot drift.
+        """
+
+        return FileStoreWorkerWiring(self.event_store)
+
+    def _file_backend_store(self) -> object | None:
+        """Return the active file store, or ``None`` on non-file backends."""
+
+        return self._file_store_wiring().file_store()
+
+    def _build_tool_result_offloader(self) -> object | None:
+        """Construct the file-store tool-result offloader, or ``None`` elsewhere."""
+
+        return self._file_store_wiring().tool_result_offloader()
+
+    def _subagent_artifacts_backend(self, command: RuntimeRunCommand) -> object:
+        """Return the per-subagent trace backend for the active store backend.
+
+        On the desktop file store this reads the canonical per-subagent JSONL
+        directly; elsewhere it is the event-store projection used historically.
+        """
+
+        file_backend = self._file_store_wiring().subagent_artifacts_backend(
+            org_id=command.org_id,
+            conversation_id=command.conversation_id,
+        )
+        if file_backend is not None:
+            return file_backend
+        return SubagentArtifactsBackend(
+            event_store=self.event_store,
+            persistence=self.persistence,
+            org_id=command.org_id,
+            conversation_id=command.conversation_id,
+            current_run_id=command.run_id,
+        )
+
     def _dependencies_for_run(
         self,
         command: RuntimeRunCommand,
@@ -806,14 +852,16 @@ class RuntimeRunHandler:
         """Build ``RuntimeDependencies`` augmented with per-run backends (drafts, subagent artifacts)."""
         dependencies = self.dependencies_factory(command.runtime_context)
         update: dict[str, object] = {
-            "subagent_artifacts_backend": SubagentArtifactsBackend(
-                event_store=self.event_store,
-                persistence=self.persistence,
-                org_id=command.org_id,
-                conversation_id=command.conversation_id,
-                current_run_id=command.run_id,
-            ),
+            "subagent_artifacts_backend": self._subagent_artifacts_backend(command),
         }
+        # Route `/large_tool_results/<sha256>` reads to the object store so the
+        # supervisor can pull back an offloaded tool result. Desktop only —
+        # `None` (unrouted) on every other backend.
+        large_tool_results_backend = (
+            self._file_store_wiring().large_tool_results_backend()
+        )
+        if large_tool_results_backend is not None:
+            update["large_tool_results_backend"] = large_tool_results_backend
         if self.draft_store is not None:
             # Tenant identity is bound at construction so the model cannot inject
             # org_id via path strings when writing to /drafts/<uuid>.md.

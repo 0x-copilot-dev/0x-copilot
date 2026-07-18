@@ -38,6 +38,9 @@ vi.mock("streamdown", () => ({
       {String(children ?? "")}
     </div>
   ),
+  // MarkdownText re-spreads Streamdown's default remark plugins ahead of the
+  // citation plugin (so GFM tables survive); the stub just needs it present.
+  defaultRemarkPlugins: {},
 }));
 
 vi.mock("./MarkdownLink", () => ({ MarkdownLink: () => null }));

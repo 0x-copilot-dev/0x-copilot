@@ -64,6 +64,14 @@ export function TcMiniTimeline(props: TcMiniTimelineProps): ReactElement {
     if (beads.length === 0) {
       return;
     }
+    // PR-3.7 (FR-3.14): ⌘L / Ctrl+L snaps to now, alongside Escape. `⌘←`/`⌘→`
+    // step (the ArrowLeft/ArrowRight branch below already ignores modifiers, so
+    // the Meta-modified chords fall through to it).
+    if ((event.metaKey || event.ctrlKey) && event.key.toLowerCase() === "l") {
+      event.preventDefault();
+      onSnapToNow();
+      return;
+    }
     if (event.key === "Escape") {
       event.preventDefault();
       onSnapToNow();

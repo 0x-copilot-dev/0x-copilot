@@ -47,6 +47,7 @@ const CAPABILITIES: TransportCapabilities = {
 interface CapturedSub {
   readonly path: string;
   readonly eventName?: string;
+  readonly onMessage?: (raw: string) => void;
   readonly onError?: (err: Error) => void;
   closed: boolean;
 }
@@ -66,6 +67,7 @@ class FakeTransport implements Transport {
     const sub: CapturedSub = {
       path: opts.path,
       eventName: opts.eventName,
+      onMessage: opts.onMessage,
       onError: opts.onError,
       closed: false,
     };
@@ -75,6 +77,33 @@ class FakeTransport implements Transport {
         sub.closed = true;
       },
     };
+  }
+
+  /**
+   * Deliver one run event to EVERY open subscriber on its stream path — the
+   * session tail (`useRunSession`) AND `TcSwimlanes`' own incremental
+   * subscription both listen on `/v1/agent/runs/{id}/stream`, so one emit
+   * feeds the single canonical projection (fleet card + Agents count) and the
+   * lane stream together (FR-3.17).
+   */
+  emit(envelope: Record<string, unknown>): void {
+    const raw = JSON.stringify(envelope);
+    const path = `/v1/agent/runs/${String(envelope.run_id)}/stream`;
+    for (const sub of this.subs) {
+      if (!sub.closed && sub.path === path) {
+        sub.onMessage?.(raw);
+      }
+    }
+  }
+
+  /** The swimlane's un-named subscription on the run stream (lane liveness). */
+  get swimlaneSub(): CapturedSub | undefined {
+    return this.subs.find(
+      (sub) =>
+        !sub.closed &&
+        sub.eventName === undefined &&
+        sub.path.endsWith("/stream"),
+    );
   }
 
   getSession(): Session {
@@ -132,6 +161,41 @@ function renderRun(
 
 function runningRun(goal: string) {
   return { runs: [{ run_id: "run-1", status: "running", goal }] };
+}
+
+/**
+ * A state-changing, surface-touching runtime event — the projector turns it
+ * into one timeline bead (lane = the uri scheme) that the mini-timeline can
+ * scrub to. Shaped to pass `isRuntimeEventEnvelope` (the session-stream guard).
+ */
+function surfaceEvent(
+  sequenceNo: number,
+  eventId: string,
+  surfaceUri: string,
+  createdAt: string,
+) {
+  return {
+    event_id: eventId,
+    run_id: "run-1",
+    conversation_id: "conv-1",
+    sequence_no: sequenceNo,
+    event_type: "tool_result",
+    activity_kind: "tool",
+    payload: { surface_uri: surfaceUri },
+    created_at: createdAt,
+  };
+}
+
+/** Push scripted events into the session's (`runtime_event`) SSE tail. */
+function streamSessionEvents(
+  transport: FakeTransport,
+  events: readonly ReturnType<typeof surfaceEvent>[],
+): void {
+  act(() => {
+    for (const event of events) {
+      transport.sessionSub?.onMessage?.(JSON.stringify(event));
+    }
+  });
 }
 
 describe("RunDestination — shell composition", () => {
@@ -272,5 +336,426 @@ describe("RunDestination — shell composition", () => {
     expect(
       screen.queryByRole("tablist", { name: "Run workspace tabs" }),
     ).toBeNull();
+  });
+
+  // === PR-3.7 — timeline scrub ↔ surface time-travel + snap-to-now ===
+
+  async function renderScrubbable(): Promise<FakeTransport> {
+    const transport = new FakeTransport();
+    transport.requestHandler = async (req) =>
+      req.path.includes("/messages") ? { messages: [] } : runningRun("Goal");
+    renderRun(transport, makeStore());
+    // The session resolves the run, then opens its `runtime_event` tail.
+    await waitFor(() => expect(transport.sessionSub).toBeDefined());
+    streamSessionEvents(transport, [
+      surfaceEvent(1, "e1", "email://draft-1", "2026-05-17T10:00:00.000Z"),
+      surfaceEvent(2, "e2", "sheet://row-2", "2026-05-17T10:05:00.000Z"),
+    ]);
+    return transport;
+  }
+
+  function composerTextarea(): HTMLTextAreaElement {
+    return screen.getByTestId("composer-textarea") as HTMLTextAreaElement;
+  }
+
+  it("scrubbing a bead shows the Viewing banner, disables the composer, hides approvals, and snaps the surface tab (FR-3.15)", async () => {
+    await renderScrubbable();
+
+    // Live: no banner, Approvals tab present, composer enabled.
+    expect(screen.queryByTestId("run-viewing-banner")).toBeNull();
+    expect(screen.getByRole("tab", { name: "Approvals" })).not.toBeNull();
+    expect(composerTextarea().disabled).toBe(false);
+
+    // Scrub to the first (email) bead via the mini-timeline.
+    fireEvent.click(screen.getByTestId("tc-mini-timeline-bead-e1"));
+
+    // Viewing banner appears, with a "Return to live" affordance.
+    const banner = screen.getByTestId("run-viewing-banner");
+    expect(banner.getAttribute("role")).toBe("status");
+    expect(screen.getByTestId("run-viewing-label").textContent).toContain(
+      "Viewing",
+    );
+    expect(screen.getByTestId("run-return-to-live")).not.toBeNull();
+
+    // Composer is disabled (via the SwimlaneScrubProvider → TcChat ghost).
+    expect(composerTextarea().disabled).toBe(true);
+    expect(screen.getByTestId("tc-chat").getAttribute("data-ghost")).toBe(
+      "true",
+    );
+
+    // Approvals tab is hidden — you cannot approve a past state.
+    expect(screen.queryByRole("tab", { name: "Approvals" })).toBeNull();
+    expect(
+      screen
+        .getByTestId("run-workspace-rail")
+        .getAttribute("data-approvals-hidden"),
+    ).toBe("true");
+
+    // The active surface tab snapped to the scrubbed bead's surface.
+    const activeTab = screen
+      .getByTestId("tc-tabs")
+      .querySelector('[data-active="true"]');
+    expect(activeTab?.getAttribute("data-uri")).toBe("email://draft-1");
+  });
+
+  it("Return to live clears the banner and re-enables the composer + approvals (FR-3.16)", async () => {
+    await renderScrubbable();
+    fireEvent.click(screen.getByTestId("tc-mini-timeline-bead-e1"));
+    expect(screen.getByTestId("run-viewing-banner")).not.toBeNull();
+
+    fireEvent.click(screen.getByTestId("run-return-to-live"));
+
+    expect(screen.queryByTestId("run-viewing-banner")).toBeNull();
+    expect(composerTextarea().disabled).toBe(false);
+    expect(screen.getByTestId("tc-chat").getAttribute("data-ghost")).toBe(
+      "false",
+    );
+    expect(screen.getByRole("tab", { name: "Approvals" })).not.toBeNull();
+    expect(
+      screen
+        .getByTestId("run-workspace-rail")
+        .getAttribute("data-approvals-hidden"),
+    ).toBe("false");
+  });
+
+  it("⌘L / Escape on the timeline snaps to now (clears the banner)", async () => {
+    await renderScrubbable();
+    fireEvent.click(screen.getByTestId("tc-mini-timeline-bead-e2"));
+    expect(screen.getByTestId("run-viewing-banner")).not.toBeNull();
+
+    // ⌘L on the mini-timeline dispatches snap-to-now up to the shell.
+    fireEvent.keyDown(screen.getByTestId("tc-mini-timeline"), {
+      key: "l",
+      metaKey: true,
+    });
+    expect(screen.queryByTestId("run-viewing-banner")).toBeNull();
+    expect(composerTextarea().disabled).toBe(false);
+
+    // Scrub again, then snap via Escape.
+    fireEvent.click(screen.getByTestId("tc-mini-timeline-bead-e2"));
+    expect(screen.getByTestId("run-viewing-banner")).not.toBeNull();
+    fireEvent.keyDown(screen.getByTestId("tc-mini-timeline"), {
+      key: "Escape",
+    });
+    expect(screen.queryByTestId("run-viewing-banner")).toBeNull();
+  });
+
+  it("scrubbing does not remount the chat/composer (single-mount invariant, FR-3.9)", async () => {
+    await renderScrubbable();
+    const chatBefore = screen.getByTestId("tc-chat");
+    const composerBefore = composerTextarea();
+
+    fireEvent.click(screen.getByTestId("tc-mini-timeline-bead-e1"));
+    fireEvent.click(screen.getByTestId("run-return-to-live"));
+
+    // Same DOM nodes survive the scrub → snap round-trip (no remount).
+    expect(screen.getByTestId("tc-chat")).toBe(chatBefore);
+    expect(composerTextarea()).toBe(composerBefore);
+  });
+});
+
+// === PR-3.8 — parallel subagents: fleet card + lanes + Agents count ===
+//
+// Integration: a scripted RuntimeEventEnvelope[] with a fleet dispatch drives
+// ALL THREE subagent views off the ONE canonical stream (FR-3.17) — the inline
+// fleet card (a), one timeline lane per subagent (b), and the Agents "N live"
+// count (c). Completion updates counts without remounting sibling lanes.
+
+let seqCounter = 0;
+
+function event(overrides: Record<string, unknown>): Record<string, unknown> {
+  seqCounter += 1;
+  return {
+    event_id: `e-${seqCounter}`,
+    run_id: "run-1",
+    conversation_id: "conv-1",
+    sequence_no: seqCounter,
+    event_type: "progress",
+    activity_kind: "event",
+    payload: {},
+    created_at: new Date(1716000000000 + seqCounter * 1000).toISOString(),
+    ...overrides,
+  };
+}
+
+function fleetStarted(): Record<string, unknown> {
+  return event({
+    event_type: "subagent_fleet_started",
+    source: "main_agent",
+    activity_kind: "subagent",
+    payload: {
+      fleet_id: "fleet-1",
+      title: "Parallel research",
+      agent_ids: ["doc_reader", "press_scout"],
+    },
+  });
+}
+
+function subagentStarted(
+  taskId: string,
+  subagentId: string,
+): Record<string, unknown> {
+  return event({
+    event_type: "subagent_started",
+    source: "subagent",
+    activity_kind: "subagent",
+    task_id: taskId,
+    subagent_id: subagentId,
+    payload: { parent_fleet_id: "fleet-1", subagent_name: subagentId },
+  });
+}
+
+describe("RunDestination — parallel subagents (PR-3.8 / FR-3.17)", () => {
+  it("renders the fleet card, per-subagent lanes, and Agents 'N live' from one stream", async () => {
+    seqCounter = 0;
+    const transport = new FakeTransport();
+    transport.requestHandler = async (req) =>
+      req.path.includes("/messages")
+        ? { messages: [] }
+        : runningRun("Fan out the research");
+    renderRun(transport, makeStore());
+
+    // The session tail and the swimlane both subscribe to the same run stream.
+    await waitFor(() => expect(transport.sessionSub).toBeDefined());
+    await waitFor(() => expect(transport.swimlaneSub).toBeDefined());
+
+    act(() => {
+      transport.emit(fleetStarted());
+      transport.emit(subagentStarted("task_alpha", "doc_reader"));
+      transport.emit(subagentStarted("task_beta", "press_scout"));
+    });
+
+    // (a) inline SubagentFleetCard in the conversation…
+    const card = await screen.findByTestId("tc-chat-fleet-fleet-1");
+    expect(card).toHaveTextContent("Dispatched 2 subagents in parallel");
+    // (b) one live timeline lane per subagent…
+    expect(
+      screen.getByTestId("tc-swimlanes-lane-subagent:doc_reader"),
+    ).toBeInTheDocument();
+    expect(
+      screen.getByTestId("tc-swimlanes-lane-subagent:press_scout"),
+    ).toBeInTheDocument();
+    // (c) live Agents-tab count — all from the SINGLE stream.
+    expect(screen.getByTestId("run-rail-agents-badge")).toHaveTextContent(
+      "2 live",
+    );
+  });
+
+  it("updates the count on completion without remounting sibling lanes (FR-3.9)", async () => {
+    seqCounter = 0;
+    const transport = new FakeTransport();
+    transport.requestHandler = async (req) =>
+      req.path.includes("/messages")
+        ? { messages: [] }
+        : runningRun("Fan out the research");
+    renderRun(transport, makeStore());
+
+    await waitFor(() => expect(transport.sessionSub).toBeDefined());
+    await waitFor(() => expect(transport.swimlaneSub).toBeDefined());
+
+    act(() => {
+      transport.emit(fleetStarted());
+      transport.emit(subagentStarted("task_alpha", "doc_reader"));
+      transport.emit(subagentStarted("task_beta", "press_scout"));
+    });
+
+    await screen.findByTestId("tc-chat-fleet-fleet-1");
+    const survivingLane = screen.getByTestId(
+      "tc-swimlanes-lane-subagent:press_scout",
+    );
+    expect(screen.getByTestId("run-rail-agents-badge")).toHaveTextContent(
+      "2 live",
+    );
+
+    act(() => {
+      transport.emit(
+        event({
+          event_type: "subagent_completed",
+          source: "subagent",
+          activity_kind: "subagent",
+          task_id: "task_alpha",
+          subagent_id: "doc_reader",
+          status: "completed",
+          payload: { parent_fleet_id: "fleet-1" },
+        }),
+      );
+    });
+
+    // One still running → badge drops to "1 live"…
+    await waitFor(() =>
+      expect(screen.getByTestId("run-rail-agents-badge")).toHaveTextContent(
+        "1 live",
+      ),
+    );
+    // …and the still-running subagent's lane is the SAME node (no remount).
+    expect(screen.getByTestId("tc-swimlanes-lane-subagent:press_scout")).toBe(
+      survivingLane,
+    );
+  });
+});
+
+// === PR-3.10 — approvals: in-chat ApprovalCard + rail count + resolution ===
+//
+// Integration: a scripted `approval_requested` event surfaces the in-chat
+// ApprovalCard AND the Approvals-tab pending badge from the ONE canonical
+// stream (FR-3.22/3.12). Approve/Reject in chat optimistically flips the card
+// to a receipt, drops the count, and POSTs the decision through the Transport
+// port. Approvals are hidden while scrubbed off-now (FR-3.15).
+
+function approvalRequested(approvalId: string): Record<string, unknown> {
+  return event({
+    event_type: "approval_requested",
+    activity_kind: "approval",
+    payload: {
+      approval_id: approvalId,
+      approval_kind: "tool_action",
+      display_name: "Post to #launch-aurora",
+      tool_name: "slack_post_message",
+      message: "Posts the launch note to #launch-aurora",
+      server_name: "SLACK",
+      read_only: false,
+      arguments: { channel: "#launch-aurora" },
+    },
+  });
+}
+
+function approvalResolved(
+  approvalId: string,
+  decision: "approved" | "rejected",
+): Record<string, unknown> {
+  return event({
+    event_type: "approval_resolved",
+    activity_kind: "approval",
+    payload: { approval_id: approvalId, decision, status: decision },
+  });
+}
+
+describe("RunDestination — approvals (PR-3.10 / FR-3.21/3.22)", () => {
+  async function renderWithApproval(): Promise<FakeTransport> {
+    seqCounter = 0;
+    const transport = new FakeTransport();
+    transport.requestHandler = async (req) =>
+      req.path.includes("/messages")
+        ? { messages: [] }
+        : runningRun("Post the launch note");
+    renderRun(transport, makeStore());
+    await waitFor(() => expect(transport.sessionSub).toBeDefined());
+    act(() => {
+      transport.emit(approvalRequested("appr-1"));
+    });
+    await screen.findByTestId("tc-chat-approval-appr-1");
+    return transport;
+  }
+
+  it("surfaces the in-chat ApprovalCard + the Approvals-tab count from one stream", async () => {
+    await renderWithApproval();
+
+    // The 4-zone ApprovalCard renders the pending approval, with Approve/Reject.
+    const card = screen.getByTestId("tc-chat-approval-appr-1");
+    expect(card).toHaveTextContent("Post to #launch-aurora");
+    expect(
+      screen.getByTestId("tc-chat-approval-approve-appr-1"),
+    ).not.toBeNull();
+    expect(screen.getByTestId("tc-chat-approval-reject-appr-1")).not.toBeNull();
+    // …and the Approvals tab shows the accent pending count badge (FR-3.12).
+    expect(screen.getByTestId("run-rail-approvals-badge")).toHaveTextContent(
+      "1",
+    );
+  });
+
+  it("approving in chat flips the card to a signed receipt, clears the count, and POSTs the decision", async () => {
+    const transport = await renderWithApproval();
+
+    act(() => {
+      fireEvent.click(screen.getByTestId("tc-chat-approval-approve-appr-1"));
+    });
+
+    // Optimistic: card → receipt (approved); pending card + badge gone.
+    await waitFor(() =>
+      expect(
+        screen.getByTestId("tc-chat-approval-receipt-appr-1"),
+      ).toHaveAttribute("data-decision", "approved"),
+    );
+    expect(screen.queryByTestId("tc-chat-approval-appr-1")).toBeNull();
+    expect(screen.queryByTestId("run-rail-approvals-badge")).toBeNull();
+    // The host POSTed the decision through the Transport port (host owns POST).
+    await waitFor(() =>
+      expect(
+        transport.requests.some(
+          (r) =>
+            r.method === "POST" &&
+            r.path === "/v1/agent/approvals/appr-1/decision",
+        ),
+      ).toBe(true),
+    );
+  });
+
+  it("rejecting in chat flips the card to a rejected receipt", async () => {
+    await renderWithApproval();
+
+    act(() => {
+      fireEvent.click(screen.getByTestId("tc-chat-approval-reject-appr-1"));
+    });
+
+    await waitFor(() =>
+      expect(
+        screen.getByTestId("tc-chat-approval-receipt-appr-1"),
+      ).toHaveAttribute("data-decision", "rejected"),
+    );
+    expect(screen.queryByTestId("tc-chat-approval-appr-1")).toBeNull();
+  });
+
+  it("reconciles the server `approval_resolved` frame into a receipt", async () => {
+    const transport = await renderWithApproval();
+
+    act(() => {
+      transport.emit(approvalResolved("appr-1", "approved"));
+    });
+
+    await waitFor(() =>
+      expect(
+        screen.getByTestId("tc-chat-approval-receipt-appr-1"),
+      ).toHaveAttribute("data-decision", "approved"),
+    );
+    expect(screen.queryByTestId("tc-chat-approval-appr-1")).toBeNull();
+  });
+
+  it("hides in-chat approvals + the count while scrubbed off-now, restoring on snap-to-now (FR-3.15)", async () => {
+    seqCounter = 0;
+    const transport = new FakeTransport();
+    transport.requestHandler = async (req) =>
+      req.path.includes("/messages") ? { messages: [] } : runningRun("Goal");
+    renderRun(transport, makeStore());
+    await waitFor(() => expect(transport.sessionSub).toBeDefined());
+
+    act(() => {
+      // Distinct sequence numbers — the session tail dedupes by `sequence_no`.
+      transport.emit(approvalRequested("appr-1")); // seq 1 (via event())
+      transport.emit(
+        surfaceEvent(9, "bead-1", "sheet://row-2", "2026-05-17T10:00:00.000Z"),
+      );
+    });
+
+    // Live: approval card + rail badge present.
+    await screen.findByTestId("tc-chat-approval-appr-1");
+    expect(screen.getByTestId("run-rail-approvals-badge")).toHaveTextContent(
+      "1",
+    );
+
+    // Scrub to the bead → approvals hidden (cannot approve a past state).
+    act(() => {
+      fireEvent.click(screen.getByTestId("tc-mini-timeline-bead-bead-1"));
+    });
+    expect(screen.queryByTestId("tc-chat-approval-appr-1")).toBeNull();
+    expect(screen.queryByTestId("run-rail-approvals-badge")).toBeNull();
+
+    // Snap back to now → approvals restored.
+    act(() => {
+      fireEvent.click(screen.getByTestId("run-return-to-live"));
+    });
+    expect(screen.getByTestId("tc-chat-approval-appr-1")).not.toBeNull();
+    expect(screen.getByTestId("run-rail-approvals-badge")).toHaveTextContent(
+      "1",
+    );
   });
 });

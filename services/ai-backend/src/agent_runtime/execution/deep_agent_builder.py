@@ -202,19 +202,77 @@ def build_deep_agent(request: DeepAgentBuildRequest) -> object:
 
 
 def runtime_checkpointer(checkpointer: object | None = None) -> object:
-    """Return *checkpointer* if supplied, else the shared lazy singleton."""
+    """Return *checkpointer* if supplied, else the shared lazy singleton.
+
+    On the ``single_user_desktop`` file-store path (``RUNTIME_STORE_BACKEND=file``
+    with ``RUNTIME_FILE_STORE_ROOT`` set) the singleton is a file-backed
+    ``AsyncSqliteSaver`` so graph/approval continuation survives a worker
+    restart. Every other deployment (postgres, in-memory, web) keeps the
+    process-local ``InMemorySaver`` exactly as before — the SQLite path is
+    reached only when both env signals hold, so non-desktop behavior is
+    untouched.
+    """
 
     if checkpointer is not None:
         return checkpointer
     global _runtime_checkpointer
     if _runtime_checkpointer is None:
-        try:
-            from langgraph.checkpoint.memory import InMemorySaver
-        except ImportError:
-            from langgraph.checkpoint.memory import MemorySaver as InMemorySaver
-
-        _runtime_checkpointer = InMemorySaver()
+        file_saver = _file_store_checkpointer()
+        _runtime_checkpointer = (
+            file_saver if file_saver is not None else _in_memory_checkpointer()
+        )
     return _runtime_checkpointer
+
+
+def _in_memory_checkpointer() -> object:
+    """Return a fresh process-local ``InMemorySaver`` (non-desktop default)."""
+
+    try:
+        from langgraph.checkpoint.memory import InMemorySaver
+    except ImportError:  # pragma: no cover — older langgraph alias
+        from langgraph.checkpoint.memory import MemorySaver as InMemorySaver
+
+    return InMemorySaver()
+
+
+def _file_store_checkpointer() -> object | None:
+    """Build a durable SQLite checkpointer for the desktop file store, or ``None``.
+
+    Returns ``None`` (so the caller falls back to ``InMemorySaver``) unless the
+    file store is active: ``RUNTIME_STORE_BACKEND=file`` **and**
+    ``RUNTIME_FILE_STORE_ROOT`` is set. The checkpoint database lives next to
+    the disposable catalog index at ``<root>/index/checkpoints.sqlite3`` — it is
+    NOT the disposable index itself, so wiping ``index/catalog.sqlite3`` never
+    drops in-flight graph state.
+
+    The async graph is driven via ``ainvoke``/``astream``; the synchronous
+    ``SqliteSaver`` rejects async calls, so we use ``AsyncSqliteSaver`` over a
+    lazily-connected ``aiosqlite`` connection (it binds to the worker event loop
+    on first use and auto-creates its tables). ``check_same_thread=False`` lets
+    aiosqlite service the connection from its own worker thread.
+    """
+
+    import os
+
+    backend = os.environ.get("RUNTIME_STORE_BACKEND", "").strip().lower()
+    root = os.environ.get("RUNTIME_FILE_STORE_ROOT", "").strip()
+    if backend != "file" or not root:
+        return None
+
+    from pathlib import Path
+
+    import aiosqlite
+    from langgraph.checkpoint.sqlite.aio import AsyncSqliteSaver
+
+    # ``index/checkpoints.sqlite3`` mirrors ``FileStoreLayout.index_dir``; keep
+    # the two in sync if the on-disk layout ever moves. Imported by string here
+    # rather than pulling ``runtime_adapters`` into ``agent_runtime`` (adapters
+    # depend on the domain, never the reverse).
+    db_dir = Path(root).expanduser().resolve() / "index"
+    db_dir.mkdir(mode=0o700, parents=True, exist_ok=True)
+    db_path = db_dir / "checkpoints.sqlite3"
+    connection = aiosqlite.connect(str(db_path), check_same_thread=False)
+    return AsyncSqliteSaver(connection)
 
 
 def build_chat_model(

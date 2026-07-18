@@ -17,6 +17,10 @@ dependencies = [
   "langchain-anthropic==1.4.8",
   "langchain-google-genai==4.2.7",
   "langgraph==1.2.9",
+  # SQLite-backed LangGraph checkpointer for the single_user_desktop file store
+  # (durable graph/approval continuation across worker restart). Desktop path
+  # only; postgres/in-memory keep InMemorySaver. Pulls in aiosqlite.
+  "langgraph-checkpoint-sqlite==3.1.0",
   "openai==2.46.0",
   "anthropic==0.117.0",
   "pydantic==2.13.4",

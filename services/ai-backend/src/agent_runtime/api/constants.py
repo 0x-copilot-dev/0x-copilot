@@ -57,6 +57,14 @@ class Keys:
         NAME = "name"
         ORG_ID = "org_id"
         OUTPUT = "output"
+        # Set on a TOOL_RESULT payload when its oversized ``output`` was offloaded
+        # to the file store's object store; the value is the
+        # ``/large_tool_results/<sha256>`` reference. The ``ref`` substring in the
+        # key is load-bearing: ``RuntimeEventPresentationProjector`` flips such an
+        # event to ``redaction_state=OFFLOADED``.
+        OUTPUT_REF = "output_ref"
+        # Bounded inline peek that replaces the full ``output`` after an offload.
+        PREVIEW = "preview"
         PARENT_EVENT_ID = "parent_event_id"
         PARENT_SPAN_ID = "parent_span_id"
         PARENT_TASK_ID = "parent_task_id"

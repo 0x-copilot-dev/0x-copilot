@@ -361,6 +361,41 @@ describe("useInlineDiffReducer", () => {
   });
 });
 
+// PR-3.10 (FR-3.23) — the on-surface approval machine drives
+// `idle → streaming → pending → accepted|rejected` and rejects invalid
+// transitions. The generic coverage lives above; this block pins the exact
+// FR-3.23 sequence + the guard for traceability.
+describe("TcInlineDiff state machine (PR-3.10 / FR-3.23)", () => {
+  it("drives idle → streaming → pending → accepted", () => {
+    let state: InlineDiffState = "idle";
+    state = nextInlineDiffState(state, "stream_start");
+    expect(state).toBe("streaming");
+    state = nextInlineDiffState(state, "stream_end");
+    expect(state).toBe("pending");
+    state = nextInlineDiffState(state, "approve");
+    expect(state).toBe("accepted");
+  });
+
+  it("drives idle → streaming → pending → rejected", () => {
+    let state: InlineDiffState = "idle";
+    state = nextInlineDiffState(state, "stream_start");
+    state = nextInlineDiffState(state, "stream_end");
+    state = nextInlineDiffState(state, "reject");
+    expect(state).toBe("rejected");
+  });
+
+  it("throws InvalidInlineDiffTransitionError on an invalid transition", () => {
+    // Cannot approve straight out of idle (must stream → pending first).
+    expect(() => nextInlineDiffState("idle", "approve")).toThrow(
+      InvalidInlineDiffTransitionError,
+    );
+    // Cannot re-stream a settled diff.
+    expect(() => nextInlineDiffState("accepted", "stream_start")).toThrow(
+      InvalidInlineDiffTransitionError,
+    );
+  });
+});
+
 describe("inlineDiffFixtures", () => {
   it("exports a non-empty array of fixtures", () => {
     expect(inlineDiffFixtures.length).toBeGreaterThan(0);

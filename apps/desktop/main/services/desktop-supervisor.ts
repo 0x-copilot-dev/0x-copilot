@@ -24,7 +24,11 @@ import {
   resolveRuntimePaths,
   type SupervisedServiceName,
 } from "./runtime-paths";
-import { buildServiceEnv, UVICORN_MODULES } from "./service-env";
+import {
+  buildServiceEnv,
+  isAiFileStoreV1Enabled,
+  UVICORN_MODULES,
+} from "./service-env";
 import { ServiceSupervisor, type AllocatedPorts } from "./supervisor";
 import type { BootSecrets } from "./boot-secrets";
 
@@ -58,6 +62,10 @@ export function createDesktopSupervisor(
   const runner = createCommandRunner();
   const logsDir = join(config.userDataDir, "logs");
   const fsAdapter = { readFile, writeFile, mkdir, rm, chmod };
+  // Read the file-store flag ONCE at supervisor construction (same env
+  // buildServiceEnv reads). When on, the ai-backend uses the file-native store
+  // and has no Postgres DB env, so its migration gate must be skipped.
+  const aiFileStoreEnabled = isAiFileStoreV1Enabled(processEnv);
 
   const envInputs = (
     ports: AllocatedPorts,
@@ -69,6 +77,7 @@ export function createDesktopSupervisor(
     aiBackendPort: ports.aiBackend,
     facadePort: ports.facade,
     processEnv,
+    userDataDir: config.userDataDir,
   });
 
   return new ServiceSupervisor({
@@ -101,14 +110,22 @@ export function createDesktopSupervisor(
         },
       }),
 
-    runMigrations: (service, { ports, secrets }) =>
-      runMigrations({
+    runMigrations: (service, { ports, secrets }) => {
+      // The file-native store has no relational migrations. When it is active
+      // the ai-backend has no Postgres DB env, so scripts/migrate.py would fail
+      // closed ("set RUNTIME_DATABASE_URL"); skip its gate. The backend keeps
+      // its own Postgres migrations (identity/OAuth/vault) in every mode.
+      if (service === "ai-backend" && aiFileStoreEnabled) {
+        return Promise.resolve();
+      }
+      return runMigrations({
         service,
         pythonBin: paths.pythonBin,
         serviceDir: paths.serviceDir(service),
         env: buildServiceEnv(service, envInputs(ports, secrets)),
         runner,
-      }),
+      });
+    },
 
     createService: (name, { ports, secrets, onFatal }) => {
       const port = portFor(name, ports);
