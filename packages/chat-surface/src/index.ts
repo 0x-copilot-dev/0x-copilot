@@ -65,6 +65,21 @@ export { ThinkingIcon } from "./icons/ThinkingIcon";
 export { PlainText } from "./messages/PlainText";
 export { Reasoning } from "./messages/Reasoning";
 export { markdownLinkLabel } from "./messages/markdownLinks";
+// === Phase 1 (PR-1.1) message/markdown renderer ===
+// Hoisted streaming-markdown renderer. The host binds `components.a` (its
+// citation-chip dispatcher via `createMarkdownLink`) and `onMatch` (its
+// diagnostics sink); chat-surface stays app-import-free.
+export { MarkdownText, type MarkdownTextProps } from "./messages/MarkdownText";
+export {
+  createMarkdownLink,
+  isExternalHref,
+  type MarkdownLinkChips,
+} from "./messages/MarkdownLink";
+export {
+  ReasoningGroup,
+  type ReasoningGroupProps,
+} from "./messages/ReasoningGroup";
+// === end Phase 1 (PR-1.1) ===
 export { CitationChip, type CitationChipProps } from "./citations/CitationChip";
 export {
   OrdinalCitationChip,
