@@ -93,8 +93,16 @@ from runtime_adapters.file._deletion import (
     ObjectReachabilityScanner,
     SessionEraser,
 )
-from runtime_adapters.file._jsonl import JsonlIo
+from runtime_adapters.file._health import (
+    ConversationHealth,
+    FileStoreHealthTracker,
+    FileStoreRepairReason,
+    StoreHealthReport,
+)
+from runtime_adapters.file._jsonl import JsonlCorruptionError, JsonlIo
 from runtime_adapters.file._paths import FileStoreLayout
+from runtime_adapters.file._telemetry import FileStoreTelemetry
+from runtime_adapters.file.repair import StoreRepair
 from runtime_adapters.file.export_import import (
     ConversationArchiver,
     ExportManifest,
@@ -204,9 +212,20 @@ class FileRuntimeApiStore:
     ) -> None:
         self._layout = FileStoreLayout(Path(root))
         self._index = CatalogIndex(self._layout.index_db_path)
+        # Structured logs + metrics for the store's key operations, and a live
+        # record of "this chat needs repair" signals. Both are best-effort and
+        # never alter the store's fail-closed read/write behaviour.
+        self._telemetry = FileStoreTelemetry()
+        self._health = FileStoreHealthTracker()
         # Capacity controls — both OFF by default (unlimited / keep forever) so
         # a store built without explicit limits behaves exactly as before.
-        self._quota = QuotaGuard(self._layout, max_bytes=max_bytes)
+        self._quota = QuotaGuard(
+            self._layout,
+            max_bytes=max_bytes,
+            on_reject=lambda incoming: self._telemetry.quota_rejected(
+                incoming_bytes=incoming
+            ),
+        )
         self._retention_days = max(retention_days, 0)
         self.object_store = FileObjectStore(self._layout, quota=self._quota)
         self._reachability = ObjectReachabilityScanner(self._layout)
@@ -299,11 +318,31 @@ class FileRuntimeApiStore:
 
         self._layout.ensure_scaffold()
         self._ledgers = {}
-        self._load_sessions_from_disk()
+        # Interior corruption still fails closed (the store refuses to open with
+        # a truncated view); we record which conversation is at fault + emit a
+        # corruption metric/log on the way out so a caller that catches this can
+        # ask store_health() / needs_repair_ids() which chat needs repair.
+        try:
+            self._load_sessions_from_disk()
+        except JsonlCorruptionError as exc:
+            self._record_interior_corruption(exc)
+            raise
         self._load_state_from_disk()
         self._load_queue_from_disk()
-        self._index.connect()
-        self._rebuild_index()
+        catalog_discarded = self._index.connect()
+        if catalog_discarded:
+            # The disposable catalog was torn and discarded — a rebuild from the
+            # canonical JSONL follows immediately. Surface it as a health signal.
+            self._telemetry.catalog_discarded()
+            self._health.mark_catalog_rebuilt()
+        with self._telemetry.index_rebuild(
+            catalog_discarded=catalog_discarded, records=len(self.conversations)
+        ):
+            self._rebuild_index()
+        self._telemetry.store_opened(
+            conversations=len(self.conversations),
+            catalog_rebuilt=self._health.catalog_rebuilt,
+        )
         # Startup is the file store's background-maintenance seam: a desktop app
         # is not always running, so boot is the natural cadence to reap history
         # past the retention window. Gated OFF by default (retention_days == 0),
@@ -318,6 +357,96 @@ class FileRuntimeApiStore:
 
     async def migrate(self) -> None:
         """No schema migration: JSONL is schemaless, the index is rebuilt."""
+
+    # ==================================================================
+    # Health / needs-repair ("this chat needs repair")
+    # ==================================================================
+
+    async def store_health(self) -> StoreHealthReport:
+        """Whole-store health verdict for the "needs repair" UX.
+
+        Runs the offline, non-raising :meth:`StoreRepair.diagnose` over the
+        on-disk truth and reports every conversation that needs repair (interior
+        corruption, dangling object refs, or unreadable metadata), reusing the
+        repair module's diagnosis vocabulary. Also surfaces whether the
+        disposable catalog was discarded/rebuilt this session. Safe to call even
+        when :meth:`open` failed closed on interior corruption.
+        """
+
+        diagnosis = StoreRepair(self._layout.root).diagnose()
+        unhealthy = tuple(
+            ConversationHealth.from_diagnosis(conversation)
+            for conversation in diagnosis.conversations
+            if not conversation.healthy
+        )
+        return StoreHealthReport(
+            healthy=all(c.healthy for c in diagnosis.conversations)
+            and not self._health.catalog_rebuilt,
+            catalog_rebuilt=self._health.catalog_rebuilt,
+            orphan_object_count=len(diagnosis.orphan_objects),
+            conversations=unhealthy,
+        )
+
+    async def conversation_health(
+        self, *, org_id: str, conversation_id: str
+    ) -> ConversationHealth:
+        """Health verdict for one conversation (fresh, non-raising diagnosis)."""
+
+        conversation_dir = self._layout.conversation_dir(org_id, conversation_id)
+        if not conversation_dir.exists():
+            return ConversationHealth.clean(conversation_id)
+        diagnosis = StoreRepair(self._layout.root).diagnose_conversation(
+            conversation_dir
+        )
+        health = ConversationHealth.from_diagnosis(diagnosis)
+        # A diagnosis reads the on-disk id from metadata; keep the caller's id if
+        # the metadata is unreadable so the client can still key the response.
+        if health.conversation_id is None:
+            return health.model_copy(update={"conversation_id": conversation_id})
+        return health
+
+    def needs_repair_ids(self) -> frozenset[str]:
+        """Conversation ids flagged needs-repair on the live paths this session.
+
+        Cheap in-memory accessor (no disk scan) for a listing/summary flag: it
+        reflects the interior-corruption and catalog-discard signals observed on
+        :meth:`open`. The exhaustive verdict is :meth:`store_health`.
+        """
+
+        return self._health.needs_repair_ids()
+
+    def _record_interior_corruption(self, exc: JsonlCorruptionError) -> None:
+        """Emit the corruption metric/log + flag the conversation for repair."""
+
+        conversation_id = self._conversation_id_from_stream_path(exc.path)
+        self._telemetry.interior_corruption(
+            conversation_id=conversation_id, line_number=exc.line_number
+        )
+        if conversation_id is not None:
+            self._health.mark_needs_repair(
+                conversation_id, FileStoreRepairReason.INTERIOR_CORRUPTION
+            )
+
+    def _conversation_id_from_stream_path(self, path: Path) -> str | None:
+        """Recover the logical conversation id from a corrupt stream's path.
+
+        Session directories are named by a one-way hash of the conversation id,
+        so the id is read back from the conversation's metadata rather than the
+        directory name (subagent streams live one level deeper).
+        """
+
+        conversation_dir = path.parent
+        if conversation_dir.name == self._layout.SUBAGENTS_DIR:
+            conversation_dir = conversation_dir.parent
+        try:
+            meta = JsonlIo.read_json(conversation_dir / self._layout.CONVERSATION_META)
+        except (OSError, ValueError):
+            return None
+        if isinstance(meta, dict):
+            conversation_id = meta.get("conversation_id")
+            if isinstance(conversation_id, str):
+                return conversation_id
+        return None
 
     # ----- lock helpers --------------------------------------------------
 
@@ -348,6 +477,7 @@ class FileRuntimeApiStore:
 
     def _persist_conversation(self, conversation: ConversationRecord) -> None:
         doc = conversation.model_dump(mode="json")
+        line = JsonlIo.dumps(doc)
         JsonlIo.rewrite_json(
             self._layout.conversation_meta_path(
                 conversation.org_id, conversation.conversation_id
@@ -355,23 +485,29 @@ class FileRuntimeApiStore:
             doc,
         )
         self._index.upsert_conversation(doc)
+        self._telemetry.append_committed(kind="conversation", size=len(line))
 
     def _persist_message(self, message: MessageRecord) -> None:
         doc = message.model_dump(mode="json")
+        line = JsonlIo.dumps(doc)
         JsonlIo.append_line(
             self._layout.messages_path(message.org_id, message.conversation_id), doc
         )
         self._index.upsert_message(doc)
+        self._telemetry.append_committed(kind="message", size=len(line))
 
     def _persist_run(self, run: RunRecord) -> None:
         doc = run.model_dump(mode="json")
+        line = JsonlIo.dumps(doc)
         JsonlIo.append_line(
             self._layout.runs_path(run.org_id, run.conversation_id), doc
         )
         self._index.upsert_run(doc)
+        self._telemetry.append_committed(kind="run", size=len(line))
 
     def _persist_event(self, envelope: RuntimeEventEnvelope, *, org_id: str) -> None:
         doc = envelope.model_dump(mode="json")
+        line = JsonlIo.dumps(doc)
         if envelope.task_id:
             path = self._layout.subagent_path(
                 org_id, envelope.conversation_id, envelope.task_id
@@ -381,6 +517,7 @@ class FileRuntimeApiStore:
         JsonlIo.append_line(path, doc)
         index_doc = {**doc, "org_id": org_id}
         self._index.insert_events([index_doc])
+        self._telemetry.append_committed(kind="event", size=len(line))
 
     # ==================================================================
     # Replay from disk (open)
@@ -1703,6 +1840,11 @@ class FileRuntimeApiStore:
             now=now,
             outcome=outcome,
         )
+        self._telemetry.deletion_completed(
+            conversations=outcome.conversations,
+            objects_collected=outcome.objects,
+            trigger=trigger,
+        )
         return outcome
 
     def _conversation_event_count(self, conversation_id: str) -> int:
@@ -1836,6 +1978,11 @@ class FileRuntimeApiStore:
                 objects=outcome.objects,
                 skipped_legal_hold=outcome.skipped_legal_hold,
             )
+        self._telemetry.retention_sweep_completed(
+            conversations=report.conversations_deleted,
+            objects_collected=report.objects_collected,
+            dry_run=dry_run,
+        )
         return report
 
     # ==================================================================

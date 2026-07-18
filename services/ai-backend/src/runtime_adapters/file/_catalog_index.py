@@ -115,7 +115,7 @@ class CatalogIndex:
 
     # ----- lifecycle -----------------------------------------------------
 
-    def connect(self) -> None:
+    def connect(self) -> bool:
         """Open (creating if needed) the SQLite db with WAL + NORMAL sync.
 
         The index is **disposable**: every row is derivable from the canonical
@@ -124,16 +124,22 @@ class CatalogIndex:
         rebuilds the index from JSONL immediately after ``connect()``, a corrupt
         file must not brick startup: we discard it and recreate an empty schema,
         exactly as if the index were missing. Canonical data is never at risk.
+
+        Returns ``True`` when a torn db had to be discarded (so the caller can
+        surface a rebuild/observability signal), ``False`` on a clean open.
         """
 
         self._db_path.parent.mkdir(mode=0o700, parents=True, exist_ok=True)
+        discarded = False
         try:
             conn = self._open_schema()
         except sqlite3.DatabaseError:
             self._discard_corrupt_db()
+            discarded = True
             conn = self._open_schema()
         self._conn = conn
         self._fts_available = self._try_enable_fts(conn)
+        return discarded
 
     def _open_schema(self) -> sqlite3.Connection:
         """Open the db and apply the base schema; may raise on a torn file."""
