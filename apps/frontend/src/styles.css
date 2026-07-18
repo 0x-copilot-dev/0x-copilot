@@ -8653,23 +8653,12 @@ body.login-body {
   gap: var(--space-lg);
 }
 
-/* Hexagonal copilot mark */
+/* The canonical 0xCopilot turbine (BrandMark) */
 .loginx-mark {
   align-self: center;
 }
 .loginx-mark svg {
-  width: 2.5rem;
-  height: 2.5rem;
   display: block;
-}
-.loginx-mark__hex {
-  fill: none;
-  stroke: var(--color-accent);
-  stroke-width: 1.6;
-  stroke-linejoin: round;
-}
-.loginx-mark__cursor {
-  fill: var(--color-accent);
 }
 
 .loginx-head {

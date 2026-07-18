@@ -7,6 +7,7 @@ import {
   type ReactNode,
 } from "react";
 
+import { BrandMark } from "@0x-copilot/chat-surface";
 import {
   CHANNELS,
   type RendererSession,
@@ -362,44 +363,12 @@ function SignInChrome({
 
 /** Hexagonal 0xCopilot copilot mark, sky accent on near-black. */
 function CopilotMark(): ReactElement {
-  // The 6-blade turbine brand mark (the brand favicon / shell rail glyph), sky
-  // accent — NOT the earlier hex+cursor placeholder. Six curved blades rotated
-  // around a center ring.
+  // The canonical 0xCopilot turbine — the SAME `BrandMark` the shell rail
+  // renders (source of truth: 0xCopilot-kit/brand/favicon.svg). One brand mark
+  // everywhere, not a hand-rolled per-surface copy.
   return (
     <div className="loginx-mark" aria-hidden="true">
-      <svg viewBox="0 0 200 200" focusable="false">
-        <g fill="var(--color-accent)">
-          <path d="M100 54q26 6 30 34-16-5-30-14Z" />
-          <path
-            d="M100 54q26 6 30 34-16-5-30-14Z"
-            transform="rotate(60 100 100)"
-          />
-          <path
-            d="M100 54q26 6 30 34-16-5-30-14Z"
-            transform="rotate(120 100 100)"
-          />
-          <path
-            d="M100 54q26 6 30 34-16-5-30-14Z"
-            transform="rotate(180 100 100)"
-          />
-          <path
-            d="M100 54q26 6 30 34-16-5-30-14Z"
-            transform="rotate(240 100 100)"
-          />
-          <path
-            d="M100 54q26 6 30 34-16-5-30-14Z"
-            transform="rotate(300 100 100)"
-          />
-        </g>
-        <circle
-          cx="100"
-          cy="100"
-          r="11"
-          fill="var(--color-bg, #09090b)"
-          stroke="var(--color-accent)"
-          strokeWidth={5}
-        />
-      </svg>
+      <BrandMark size={44} />
     </div>
   );
 }

@@ -1,4 +1,5 @@
 export { AppRail, APP_RAIL_WIDTH, type AppRailProps } from "./AppRail";
+export { BrandMark, type BrandMarkProps } from "./BrandMark";
 export {
   ContextPanel,
   CONTEXT_PANEL_WIDTH,
