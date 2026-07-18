@@ -2,7 +2,13 @@
 
 from __future__ import annotations
 
+import os
 from dataclasses import dataclass
+
+from copilot_service_contracts.deployment_profile import (
+    ENV_DEPLOYMENT_PROFILE,
+    PROFILE_SINGLE_USER_DESKTOP,
+)
 
 from agent_runtime.api.ports import (
     EventStorePort,
@@ -37,6 +43,63 @@ from runtime_adapters.postgres.draft_store import PostgresDraftStore
 from runtime_adapters.postgres.share_store import PostgresShareStore
 from runtime_adapters.postgres.source_store import PostgresSourceStore
 from runtime_adapters.postgres.subagent_store import PostgresSubagentStore
+
+
+def _build_file_ports(settings: RuntimeSettings) -> "RuntimePorts":
+    """Construct the file-native ``RuntimePorts`` for the desktop profile.
+
+    Fails closed (``CONFIGURATION_ERROR``) unless every precondition holds:
+    ``RUNTIME_STORE_BACKEND=file`` **and**
+    ``ENTERPRISE_DEPLOYMENT_PROFILE=single_user_desktop`` **and**
+    ``RUNTIME_FILE_STORE_ROOT`` is set. The web/Postgres/in-memory paths are
+    never reached from here, so their behavior is untouched.
+    """
+
+    profile = os.environ.get(ENV_DEPLOYMENT_PROFILE, "").strip().lower()
+    if profile != PROFILE_SINGLE_USER_DESKTOP:
+        raise AgentRuntimeError(
+            RuntimeErrorCode.CONFIGURATION_ERROR,
+            "RUNTIME_STORE_BACKEND=file requires "
+            f"{ENV_DEPLOYMENT_PROFILE}={PROFILE_SINGLE_USER_DESKTOP} "
+            f"(got {profile or 'unset'!r}).",
+            retryable=False,
+        )
+    root = settings.store.file_store_root
+    if not root:
+        raise AgentRuntimeError(
+            RuntimeErrorCode.CONFIGURATION_ERROR,
+            "RUNTIME_FILE_STORE_ROOT is required when RUNTIME_STORE_BACKEND=file.",
+            retryable=False,
+        )
+
+    # Imported lazily so the file backend (and its sqlite dependency) is only
+    # pulled in for the desktop path — the web image never imports it.
+    from runtime_adapters.file import (
+        FileConversationToolOrdinalStore,
+        FileDraftStore,
+        FileRuntimeApiStore,
+        FileShareStore,
+    )
+    from runtime_adapters.file.citation_store import FileCitationStore
+    from runtime_adapters.in_memory.source_store import InMemorySourceStore
+    from runtime_adapters.in_memory.subagent_store import InMemorySubagentStore
+
+    file_store = FileRuntimeApiStore(root)
+    layout = file_store.layout
+    citation_store = FileCitationStore(layout)
+    return RuntimePorts(
+        persistence=file_store,
+        event_store=file_store,
+        queue=file_store,
+        backend="file",
+        lifecycle=file_store,
+        draft_store=FileDraftStore(layout),
+        share_store=FileShareStore(layout),
+        conversation_tool_ordinal_store=FileConversationToolOrdinalStore(layout),
+        # Pure projectors over the file store's file-backed materialized view.
+        subagent_store=InMemorySubagentStore(file_store),
+        source_store=InMemorySourceStore(citation_store),
+    )
 
 
 @dataclass(frozen=True)
@@ -150,9 +213,11 @@ class RuntimeAdapterFactory:
                 source_store=PostgresSourceStore(postgres_store),
                 postgres_store=postgres_store,
             )
+        if backend == "file":
+            return _build_file_ports(settings)
         raise AgentRuntimeError(
             RuntimeErrorCode.CONFIGURATION_ERROR,
             f"Unsupported async runtime store backend '{backend}'. "
-            "Use 'in_memory_async' or 'postgres'.",
+            "Use 'in_memory_async', 'postgres', or 'file'.",
             retryable=False,
         )
