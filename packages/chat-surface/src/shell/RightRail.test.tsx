@@ -67,10 +67,10 @@ function makeApproval(overrides: Partial<Approval> = {}): Approval {
 }
 
 describe("RightRail (chrome only)", () => {
-  it("renders the Atlas conversation header and a neutral empty state when open with no children or tab data", () => {
+  it("renders the Copilot conversation header and a neutral empty state when open with no children or tab data", () => {
     render(<RightRail open={true} onToggle={() => {}} />);
     expect(
-      screen.getByRole("complementary", { name: "Atlas conversation" }),
+      screen.getByRole("complementary", { name: "Copilot conversation" }),
     ).toBeInTheDocument();
     expect(screen.queryByText(/Placeholder message/i)).not.toBeInTheDocument();
     expect(screen.getByTestId("right-rail-empty")).toBeInTheDocument();

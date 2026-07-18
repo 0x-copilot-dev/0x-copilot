@@ -100,7 +100,7 @@ export function PrivacyOverridesPanel(): ReactElement {
       <Card>
         <Field
           label="Memory"
-          hint="Atlas remembers preferences and context across chats. Toggle off to disable for new chats."
+          hint="Copilot remembers preferences and context across chats. Toggle off to disable for new chats."
         >
           <Switch
             checked={snapshot.memory_enabled}

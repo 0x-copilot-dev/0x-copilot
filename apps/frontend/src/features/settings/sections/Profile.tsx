@@ -200,7 +200,7 @@ export function Profile({
       <div className="settings-section__header">
         <div>
           <h2>Profile</h2>
-          <p>How you appear across Atlas. Visible to your workspace.</p>
+          <p>How you appear across Copilot. Visible to your workspace.</p>
         </div>
       </div>
 
@@ -317,7 +317,7 @@ export function Profile({
 
           <Field
             label="Job title"
-            hint="Helps Atlas tailor responses to your role."
+            hint="Helps Copilot tailor responses to your role."
           >
             <TextInput
               value={title}
@@ -339,7 +339,7 @@ export function Profile({
 
           <Field
             label="Bio"
-            hint={`A few lines about how you work. Atlas can reference this. ${BIO_MAX_CHARS - bio.trim().length} characters remaining.`}
+            hint={`A few lines about how you work. Copilot can reference this. ${BIO_MAX_CHARS - bio.trim().length} characters remaining.`}
           >
             <textarea
               className="me-form__bio"

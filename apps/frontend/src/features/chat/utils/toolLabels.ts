@@ -415,17 +415,17 @@ export function mcpApprovalReason(
     return supplied;
   }
   if (readOnly === true) {
-    return "Atlas is asking before reading from this connector for the first time this turn.";
+    return "Copilot is asking before reading from this connector for the first time this turn.";
   }
   if (readOnly === false) {
     if (riskLevel === "high") {
-      return "Atlas is asking because this writes to a high-risk connector — review the scope below.";
+      return "Copilot is asking because this writes to a high-risk connector — review the scope below.";
     }
-    return "Atlas is asking because this writes outside your workspace.";
+    return "Copilot is asking because this writes outside your workspace.";
   }
   return (
     stringValue(fallbackMessage) ??
-    "Atlas is asking before running this connector."
+    "Copilot is asking before running this connector."
   );
 }
 
@@ -433,12 +433,12 @@ export function mcpApprovalReason(
  * third approval they predict it. */
 export function mcpApprovalReassurance(readOnly: boolean | null): string {
   if (readOnly === true) {
-    return "Atlas only reads here — no changes will be made.";
+    return "Copilot only reads here — no changes will be made.";
   }
   if (readOnly === false) {
-    return "You're always asked before Atlas writes outside this chat.";
+    return "You're always asked before Copilot writes outside this chat.";
   }
-  return "You're always asked before Atlas runs an unrecognised connector action.";
+  return "You're always asked before Copilot runs an unrecognised connector action.";
 }
 
 export function emptyResultLabel(toolName?: string): string {

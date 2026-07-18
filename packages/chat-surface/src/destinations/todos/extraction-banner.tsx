@@ -241,7 +241,7 @@ export function ExtractionBanner({
 
   const titleText =
     total === 1
-      ? "Atlas found 1 possible todo from your last chat"
+      ? "Copilot found 1 possible todo from your last chat"
       : `Atlas found ${total} possible todos from your last chat`;
 
   return (
@@ -249,7 +249,7 @@ export function ExtractionBanner({
       role="region"
       aria-label={
         total === 1
-          ? "1 proposed todo from Atlas"
+          ? "1 proposed todo from Copilot"
           : `${total} proposed todos from Atlas`
       }
       data-testid="extraction-banner"

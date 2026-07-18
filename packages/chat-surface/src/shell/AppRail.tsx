@@ -216,7 +216,7 @@ export function AppRail({
 
   return (
     <nav
-      aria-label="Atlas destinations"
+      aria-label="Copilot destinations"
       style={railStyle}
       data-component="app-rail"
     >

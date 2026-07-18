@@ -189,12 +189,12 @@ function _initialStep(auth: ReturnType<typeof useAuth>): LoginStep {
 
 function Brand(): ReactElement {
   return (
-    <aside className="login-brand" aria-label="Atlas">
+    <aside className="login-brand" aria-label="Copilot">
       <div className="login-brand__head">
         <div className="login-brand__mark" aria-hidden="true">
-          A
+          C
         </div>
-        <div className="login-brand__name">Atlas</div>
+        <div className="login-brand__name">Copilot</div>
       </div>
       <div className="login-brand__body">
         <div className="login-brand__eyebrow">
@@ -205,12 +205,12 @@ function Brand(): ReactElement {
           already uses.
         </h1>
         <p className="login-brand__lede">
-          Atlas reads across your connected tools. It drafts, summarises and
+          Copilot reads across your connected tools. It drafts, summarises and
           follows up — with citations, approvals, and a clear paper trail.
         </p>
       </div>
       <footer className="login-brand__foot">
-        <span>© 2026 Atlas Labs</span>
+        <span>© 2026 0xCopilot</span>
         <ul className="login-brand__compliance" aria-label="Compliance">
           <li>SOC 2 Type II</li>
           <li>ISO 27001</li>
@@ -364,7 +364,7 @@ function EmailStep({
   return (
     <Card className="login-card login-card--email" tone="default">
       <header className="login-card__head">
-        <h2>Sign in to Atlas</h2>
+        <h2>Sign in to Copilot</h2>
         <p>
           Enter your work email — we&rsquo;ll route you to the right sign-in.
         </p>

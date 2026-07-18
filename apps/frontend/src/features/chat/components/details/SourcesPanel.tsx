@@ -36,7 +36,7 @@ export function SourcesPanel({
           <h2>Sources</h2>
           <p className="details-panel__subtitle">
             {ordered.length === 0
-              ? "Sources will appear here as Atlas finds them."
+              ? "Sources will appear here as Copilot finds them."
               : `${ordered.length} source${ordered.length === 1 ? "" : "s"} cited.`}
           </p>
         </div>

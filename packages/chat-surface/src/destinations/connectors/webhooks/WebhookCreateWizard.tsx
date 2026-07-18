@@ -349,7 +349,7 @@ function SecretStrategyStep({
         value="rotating"
         currentValue={value}
         label="Rotating (90-day cycle with 14-day grace)"
-        description="Atlas rotates the secret automatically. The previous secret remains valid during the grace window so receivers can roll without a hard cutover."
+        description="Copilot rotates the secret automatically. The previous secret remains valid during the grace window so receivers can roll without a hard cutover."
         onChange={onChange}
       />
       <RadioOption
@@ -443,7 +443,8 @@ function TestFireStep(props: TestFireStepProps): ReactElement {
       <p style={hintStyle}>
         We&apos;ll create the webhook at{" "}
         <code style={codeInlineStyle}>{url}</code> and reveal the signing secret{" "}
-        <strong>exactly once</strong>. Copy it now — Atlas never shows it again.
+        <strong>exactly once</strong>. Copy it now — Copilot never shows it
+        again.
       </p>
 
       {createError !== null ? (

@@ -149,7 +149,7 @@ export function MemoryPanel(props: MemoryPanelProps = {}): ReactElement {
   return (
     <ContextPanel
       title="Memory"
-      subtitle="What Atlas remembers"
+      subtitle="What Copilot remembers"
       destination="memory"
       primaryAction={
         onCreateMemory !== undefined

@@ -98,7 +98,7 @@ export function AskAQuestionTool({
     <section
       className="aui-question-card"
       data-resolved={resolved ? "true" : undefined}
-      aria-label="Atlas needs an answer"
+      aria-label="Copilot needs an answer"
     >
       <div className="aui-question-card__head">
         <span className="aui-question-card__icon" aria-hidden="true">

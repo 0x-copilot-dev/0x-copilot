@@ -3,14 +3,14 @@ import { describe, expect, it } from "vitest";
 import { LogoMark } from "./LogoMark";
 
 describe("LogoMark", () => {
-  it("renders the Atlas wordmark by default", () => {
+  it("renders the Copilot wordmark by default", () => {
     render(<LogoMark />);
-    expect(screen.getByText("Atlas")).toBeInTheDocument();
-    expect(screen.getByLabelText("Atlas")).toBeInTheDocument();
+    expect(screen.getByText("Copilot")).toBeInTheDocument();
+    expect(screen.getByLabelText("Copilot")).toBeInTheDocument();
   });
   it("hides the wordmark when compact", () => {
     render(<LogoMark compact />);
-    expect(screen.queryByText("Atlas")).not.toBeInTheDocument();
-    expect(screen.getByLabelText("Atlas")).toBeInTheDocument();
+    expect(screen.queryByText("Copilot")).not.toBeInTheDocument();
+    expect(screen.getByLabelText("Copilot")).toBeInTheDocument();
   });
 });

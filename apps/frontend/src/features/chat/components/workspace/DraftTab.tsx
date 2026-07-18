@@ -87,7 +87,7 @@ export function DraftTab({
         ) : error ? (
           <p role="alert">Couldn’t load drafts — {error}</p>
         ) : (
-          <p>Drafts appear here when Atlas writes something for you.</p>
+          <p>Drafts appear here when Copilot writes something for you.</p>
         )}
       </div>
     );

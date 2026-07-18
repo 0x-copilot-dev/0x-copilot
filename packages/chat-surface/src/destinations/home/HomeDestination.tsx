@@ -151,7 +151,7 @@ export function HomeDestination(
         <div style={mainStyle}>
           <HomeGreeting greeting={homeResponse.greeting} />
           <EmptyState
-            title="Welcome to Atlas."
+            title="Welcome to Copilot."
             body="As your agents work, today's plan and what's new will fill in here."
           />
         </div>

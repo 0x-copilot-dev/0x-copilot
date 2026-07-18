@@ -5,7 +5,7 @@
  * popover always has something to send.
  */
 
-const FALLBACK_TITLE = "Atlas conversation";
+const FALLBACK_TITLE = "Copilot conversation";
 
 export function useShareLinkText(input: {
   chatTitle: string | null | undefined;
@@ -14,6 +14,6 @@ export function useShareLinkText(input: {
   const title = input.chatTitle?.trim()
     ? input.chatTitle.trim()
     : FALLBACK_TITLE;
-  const body = `Atlas — ${title}\n${input.chatUrl}`;
+  const body = `Copilot — ${title}\n${input.chatUrl}`;
   return { title, body };
 }

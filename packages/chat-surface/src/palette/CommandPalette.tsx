@@ -41,7 +41,7 @@ const DESTINATION_ENTRIES: ReadonlyArray<CommandPaletteEntry> = Object.values(
 const PLACEHOLDER_ENTRIES: ReadonlyArray<CommandPaletteEntry> = [
   {
     id: "chat:welcome",
-    label: "Welcome to Atlas",
+    label: "Welcome to Copilot",
     hint: "Chat",
     route: { kind: "chat", conversationId: "welcome" },
   },

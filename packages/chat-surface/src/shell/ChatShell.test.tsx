@@ -83,10 +83,10 @@ function mount({
 
 function shellRoot(): HTMLElement {
   // The shell mounts AppRail as a nav with the literal aria-label
-  // "Atlas destinations" — walk from there to the [data-component]
+  // "Copilot destinations" — walk from there to the [data-component]
   // ancestor without touching the substrate-banned `document` global.
   const rail = screen.getByRole("navigation", {
-    name: /atlas destinations/i,
+    name: /copilot destinations/i,
   });
   let el: HTMLElement | null = rail;
   while (el !== null && el.getAttribute("data-component") !== "chat-shell") {
@@ -124,7 +124,7 @@ describe("ChatShell", () => {
   it("renders AppRail, ContextPanel, Topbar, and RightRail on non-chats destinations", () => {
     mount({ activeDestination: "home" });
     expect(
-      screen.getByRole("navigation", { name: /atlas destinations/i }),
+      screen.getByRole("navigation", { name: /copilot destinations/i }),
     ).toBeInTheDocument();
     expect(
       screen.getByRole("complementary", { name: /home panel/i }),
@@ -134,7 +134,7 @@ describe("ChatShell", () => {
     // "(collapsed)" suffix.
     expect(
       screen.getByRole("complementary", {
-        name: "Atlas conversation (collapsed)",
+        name: "Copilot conversation (collapsed)",
       }),
     ).toBeInTheDocument();
     expect(screen.getByTestId("topbar-breadcrumb")).toBeInTheDocument();

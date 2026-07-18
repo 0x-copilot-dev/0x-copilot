@@ -43,7 +43,7 @@ export function ApprovalsTab({
           title="Pending"
           description={
             pending.length === 1
-              ? "Atlas is waiting on you."
+              ? "Copilot is waiting on you."
               : `Atlas is waiting on ${pending.length} decisions.`
           }
           items={pending}

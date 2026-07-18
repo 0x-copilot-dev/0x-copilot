@@ -31,7 +31,7 @@ describe("buildSiweMessage", () => {
       "app.atlas.dev wants you to sign in with your Ethereum account:\n" +
         "0xfB6916095ca1df60bB79Ce92cE3Ea74c37c5d359\n" +
         "\n" +
-        "Sign in to Atlas\n" +
+        "Sign in to Copilot\n" +
         "\n" +
         "URI: https://app.atlas.dev\n" +
         "Version: 1\n" +
@@ -49,7 +49,7 @@ describe("buildSiweMessage", () => {
   });
 
   it("keeps the frozen statement and version", () => {
-    expect(SIWE_STATEMENT).toBe("Sign in to Atlas");
+    expect(SIWE_STATEMENT).toBe("Sign in to Copilot");
     expect(SIWE_VERSION).toBe("1");
   });
 

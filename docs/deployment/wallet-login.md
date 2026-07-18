@@ -45,7 +45,7 @@ minutes`, matching the nonce TTL. The address is rendered EIP-55 checksummed.
 {domain} wants you to sign in with your Ethereum account:
 {address}
 
-Sign in to Atlas
+Sign in to Copilot
 
 URI: {uri}
 Version: 1
@@ -55,7 +55,7 @@ Issued At: {issued_at}
 Expiration Time: {expiration_time}
 ```
 
-The statement line is exactly `Sign in to Atlas`. There are no `Not Before`,
+The statement line is exactly `Sign in to Copilot`. There are no `Not Before`,
 `Request ID`, or `Resources` lines. `{domain}` is the serving origin's host
 (`window.location.host`) and `{uri}` is the serving origin
 (`window.location.origin`).

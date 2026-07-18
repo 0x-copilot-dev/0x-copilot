@@ -259,7 +259,7 @@ describe("LoginScreen — email-first (PR 5.1)", () => {
       </AuthProvider>,
     );
     expect(await screen.findByTestId("login-screen")).toBeInTheDocument();
-    expect(screen.getAllByText(/Atlas/).length).toBeGreaterThan(0);
+    expect(screen.getAllByText(/Copilot/).length).toBeGreaterThan(0);
     expect(screen.getByText(/SOC 2 Type II/)).toBeInTheDocument();
     expect(screen.getByTestId("login-email-input")).toBeInTheDocument();
   });
