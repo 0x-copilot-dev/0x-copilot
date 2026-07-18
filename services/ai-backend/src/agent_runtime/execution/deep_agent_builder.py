@@ -119,6 +119,23 @@ WORKSPACE_ACCESS_GUIDANCE = (
     "you cannot create, edit, move, or delete anything there. When you need to "
     "author or revise content, write it to `/drafts/` instead."
 )
+# Replaces the read-only line above when the run has at least one WRITABLE host
+# grant (``read_write*``). Host writes remain gated: every ``write_file`` /
+# ``edit_file`` on ``/workspace/`` pauses for explicit user approval before it
+# runs, and the prior contents are snapshotted first so a change can be undone.
+WORKSPACE_WRITE_GUIDANCE = (
+    "The user has granted access to one or more host folders, mounted under "
+    "`/workspace/`. Each granted folder is a named mount: run `ls /workspace/` "
+    "to see the available mounts, then use `ls`, `read_file`, `glob`, and "
+    "`grep` under `/workspace/<mount>/<path>` to inspect their contents. These "
+    "are the user's real files — never assume a path exists; list a directory "
+    "first, then read. Some mounts are WRITABLE: you may use `write_file` and "
+    "`edit_file` under `/workspace/<mount>/<path>`, but EVERY such change pauses "
+    "for the user's explicit approval before it is applied, and the file's "
+    "prior contents are snapshotted first. Read a file before editing it, keep "
+    "edits minimal, and prefer `/drafts/` for brand-new authored content. "
+    "Read-only mounts refuse writes."
+)
 _web_harness_profiles_registered = False
 _runtime_checkpointer: object | None = None
 
@@ -173,6 +190,11 @@ class DeepAgentBuildRequest:
     memory_paths: tuple[str, ...] = ()
     skill_directories: tuple[str, ...] = ()
     interrupt_on: Mapping[str, object] | None = None
+    # Deep Agents ``FilesystemPermission`` rules for the built-in file tools.
+    # An ``interrupt``-mode rule (e.g. ``/workspace/**`` writes) auto-installs
+    # the SAME ``HumanInTheLoopMiddleware`` that gates MCP tools, so a matching
+    # ``write_file`` / ``edit_file`` pauses for human approval BEFORE it runs.
+    permissions: tuple[object, ...] = ()
     checkpointer: object | None = None
     # Extra ``init_chat_model`` kwargs from workspace + user policy (training
     # opt-out headers, region ``base_url``, BYOK ``api_key``). Derived in
@@ -213,6 +235,12 @@ def build_deep_agent(request: DeepAgentBuildRequest) -> object:
     }
     if request.interrupt_on:
         kwargs["interrupt_on"] = dict(request.interrupt_on)
+    if request.permissions:
+        # ``create_deep_agent`` merges any interrupt-mode rules here into the
+        # HITL ``interrupt_on`` (user-supplied ``interrupt_on`` wins per tool),
+        # and applies deny/allow at the built-in file tools. This is the single
+        # seam host-write approval flows through.
+        kwargs["permissions"] = list(request.permissions)
     if request.checkpointer is not None:
         kwargs["checkpointer"] = request.checkpointer
     return create_deep_agent(**kwargs)

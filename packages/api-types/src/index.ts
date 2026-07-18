@@ -293,7 +293,8 @@ export type RuntimeApiEventType =
   | "subagent_fleet_finished"
   | "subagent_paused"
   | "subagent_resumed"
-  | "adapter_generated";
+  | "adapter_generated"
+  | "workspace_snapshot_captured";
 
 export const RUNTIME_EVENT_SOURCES = [
   "main_agent",
@@ -350,6 +351,7 @@ export const RUNTIME_API_EVENT_TYPES = [
   "subagent_paused",
   "subagent_resumed",
   "adapter_generated",
+  "workspace_snapshot_captured",
 ] as const satisfies readonly RuntimeApiEventType[];
 
 export const RUNTIME_ACTIVITY_KINDS = [
@@ -1855,6 +1857,12 @@ export interface RuntimeEventPayloadByType {
    * `{userData}/adapters/{scheme}-v{schema_version}.js`, and hands it to
    * the local quality gate (6D). */
   adapter_generated: AdapterGeneratedPayload;
+  /** AC5 slice 3b — host write-through pre-image snapshot. Emitted by the
+   * workspace backend BEFORE an approved overwrite/edit mutates a granted
+   * host file: the prior bytes are stored content-addressed and this event
+   * carries the reference (op / mount / virtual path / object_sha256 / size —
+   * never a host path) so the change is auditable and undoable. */
+  workspace_snapshot_captured: WorkspaceSnapshotCapturedPayload;
 }
 
 export interface CompressionNotePayload {
@@ -1997,6 +2005,18 @@ export interface DraftDiscardRequest {
 // optional ``summary`` string the projection layer adds for activity
 // rows. Required fields mirror what every emit guarantees; the rest
 // are optional because some emits (compact updates) omit them.
+/** AC5 slice 3b — reference to a host file's pre-image, captured before an
+ * approved overwrite/edit. `path` is the route-relative virtual path
+ * (`/<mount>/<relative>`); no host-absolute path is ever present. */
+export interface WorkspaceSnapshotCapturedPayload {
+  op: "overwrite" | "edit";
+  mount: string;
+  path: string;
+  object_sha256: string;
+  size: number;
+  [key: string]: unknown;
+}
+
 export interface DraftUpdatedPayload {
   draft_id: string;
   version: number;

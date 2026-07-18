@@ -221,7 +221,17 @@ function ChatShellForSession(props: ChatShellForSessionProps): ReactElement {
             onSectionChange={setSettingsSection}
           />
         ) : (
-          <DestinationOutlet destination={activeDestination} />
+          <DestinationOutlet
+            destination={activeDestination}
+            // Reopen / open-run / run-skill land on the Run cockpit (the
+            // desktop has no per-conversation run binding yet — honest
+            // interim, matching ⌘N / new-chat above).
+            onOpenRun={() => handleNavigate("run")}
+            // Activity's retention link + Tools' approval-policy note deep-link
+            // into the real Settings sections (reachable today, PR-5.9 / 6.4).
+            onOpenRetentionSettings={() => handleOpenSettings("privacy")}
+            onOpenApprovalSettings={() => handleOpenSettings("model-behavior")}
+          />
         )}
       </ChatShell>
       {/* PR-6.4: the global ⌘K palette + its topbar trigger. Mounted once at the
