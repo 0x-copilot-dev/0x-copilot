@@ -86,6 +86,7 @@ from agent_runtime.persistence.records import (
     UsageDailyUserRow,
 )
 from runtime_adapters.base import RuntimeAdapterHelpers, StatusTransition, _Fields
+from runtime_adapters.file._capacity import FileStoreCleanupReport, QuotaGuard
 from runtime_adapters.file._catalog_index import CatalogIndex
 from runtime_adapters.file._deletion import (
     LegalHoldPolicy,
@@ -94,6 +95,11 @@ from runtime_adapters.file._deletion import (
 )
 from runtime_adapters.file._jsonl import JsonlIo
 from runtime_adapters.file._paths import FileStoreLayout
+from runtime_adapters.file.export_import import (
+    ConversationArchiver,
+    ExportManifest,
+    ImportOutcome,
+)
 from runtime_adapters.file._state_ledger import StateLedger
 from runtime_adapters.file.object_store import FileObjectStore
 from runtime_adapters.file.search import ConversationSearchHit
@@ -189,10 +195,20 @@ class _PurgeOutcome:
 class FileRuntimeApiStore:
     """On-disk implementation of persistence, event store, and queue ports."""
 
-    def __init__(self, root: str | Path) -> None:
+    def __init__(
+        self,
+        root: str | Path,
+        *,
+        max_bytes: int = 0,
+        retention_days: int = 0,
+    ) -> None:
         self._layout = FileStoreLayout(Path(root))
         self._index = CatalogIndex(self._layout.index_db_path)
-        self.object_store = FileObjectStore(self._layout)
+        # Capacity controls — both OFF by default (unlimited / keep forever) so
+        # a store built without explicit limits behaves exactly as before.
+        self._quota = QuotaGuard(self._layout, max_bytes=max_bytes)
+        self._retention_days = max(retention_days, 0)
+        self.object_store = FileObjectStore(self._layout, quota=self._quota)
         self._reachability = ObjectReachabilityScanner(self._layout)
         self._session_eraser = SessionEraser(self._layout)
 
@@ -288,6 +304,12 @@ class FileRuntimeApiStore:
         self._load_queue_from_disk()
         self._index.connect()
         self._rebuild_index()
+        # Startup is the file store's background-maintenance seam: a desktop app
+        # is not always running, so boot is the natural cadence to reap history
+        # past the retention window. Gated OFF by default (retention_days == 0),
+        # so this is a no-op unless the desktop profile configured a window.
+        if self._retention_days > 0:
+            await self.sweep_expired_conversations()
 
     async def close(self) -> None:
         """Release the index connection. JSONL is already durable on disk."""
@@ -1555,6 +1577,48 @@ class FileRuntimeApiStore:
         )
 
     # ==================================================================
+    # Export / import (portable single-conversation archive) — file store only
+    # ==================================================================
+
+    async def export_conversation(
+        self,
+        *,
+        org_id: str,
+        user_id: str,
+        conversation_id: str,
+        destination: Path,
+    ) -> ExportManifest:
+        """Write a portable ``.tar.gz`` backup of one conversation.
+
+        Self-contained: the conversation's canonical session files, every
+        object-store blob those files actually reference, and a manifest of
+        SHA-256 hashes. The disposable catalog is not exported (it rebuilds).
+        See :mod:`runtime_adapters.file.export_import`.
+        """
+
+        return await ConversationArchiver(self).export(
+            org_id=org_id,
+            user_id=user_id,
+            conversation_id=conversation_id,
+            destination=Path(destination),
+        )
+
+    async def import_conversation(
+        self, *, org_id: str, user_id: str, source: Path
+    ) -> ImportOutcome:
+        """Import an archive under a fresh conversation id (fail-closed).
+
+        Validates the manifest + every part's SHA-256 before writing anything,
+        materialises the conversation with fresh conversation / run / message
+        ids so it never clobbers an existing one, re-registers the referenced
+        blobs, and refreshes the disposable catalog.
+        """
+
+        return await ConversationArchiver(self).import_(
+            org_id=org_id, user_id=user_id, source=Path(source)
+        )
+
+    # ==================================================================
     # Physical deletion (bytes-gone) — used by delete + retention sweep
     # ==================================================================
 
@@ -1724,6 +1788,55 @@ class FileRuntimeApiStore:
             },
         )
         return audit_event_id
+
+    async def sweep_expired_conversations(
+        self, *, now: datetime | None = None, dry_run: bool = False
+    ) -> FileStoreCleanupReport:
+        """Reap conversations whose last activity predates the retention window.
+
+        Gated on ``RUNTIME_FILE_STORE_RETENTION_DAYS`` (``retention_days``):
+        ``0``/unset keeps everything forever and returns an empty report. When a
+        positive window is configured, every conversation whose ``updated_at`` is
+        older than ``now - retention_days`` is physically erased through the
+        **existing** :meth:`_purge_conversations` path — same fail-safe plan,
+        legal-hold skip, and object garbage collection as a user-initiated
+        delete — so in-window conversations, legal-held conversations, and
+        content-addressed objects still referenced by a survivor are untouched.
+        Callable directly and also invoked from :meth:`open` at startup;
+        ``dry_run`` reports the would-be tally without removing anything.
+        """
+
+        report = FileStoreCleanupReport(dry_run=dry_run)
+        if self._retention_days <= 0:
+            return report
+
+        now = now or datetime.now(timezone.utc)
+        cutoff = now - timedelta(days=self._retention_days)
+        # Snapshot the victims (grouped by org) before any purge mutates the
+        # materialised view — _purge_conversations audits + GCs per org.
+        expired_by_org: dict[str, list[ConversationRecord]] = {}
+        for conversation in self.conversations.values():
+            if conversation.updated_at <= cutoff:
+                expired_by_org.setdefault(conversation.org_id, []).append(conversation)
+
+        for org_id, conversations in expired_by_org.items():
+            outcome = await self._purge_conversations(
+                org_id=org_id,
+                conversations=conversations,
+                trigger=_DeletionFields.TRIGGER_RETENTION_SWEEP,
+                reason=f"file_store_retention:{self._retention_days}d",
+                now=now,
+                dry_run=dry_run,
+            )
+            report = report.adding(
+                conversations=outcome.conversations,
+                messages=outcome.messages,
+                runs=outcome.runs,
+                events=outcome.events,
+                objects=outcome.objects,
+                skipped_legal_hold=outcome.skipped_legal_hold,
+            )
+        return report
 
     # ==================================================================
     # PersistencePort — usage + pricing
