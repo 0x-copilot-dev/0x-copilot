@@ -96,6 +96,7 @@ from runtime_adapters.file._jsonl import JsonlIo
 from runtime_adapters.file._paths import FileStoreLayout
 from runtime_adapters.file._state_ledger import StateLedger
 from runtime_adapters.file.object_store import FileObjectStore
+from runtime_adapters.file.search import ConversationSearchHit
 from runtime_api.http.errors import RuntimeApiError
 from runtime_api.schemas import (
     AgentRunStatus,
@@ -689,6 +690,42 @@ class FileRuntimeApiStore:
             include_deleted=include_deleted,
         )
         return tuple(ConversationRecord.model_validate_json(doc) for doc in docs)
+
+    async def search_conversations(
+        self,
+        *,
+        org_id: str,
+        user_id: str,
+        query: str,
+        limit: int,
+        include_archived: bool = False,
+        include_deleted: bool = False,
+    ) -> Sequence[ConversationSearchHit]:
+        """Full-text search this user's conversations, ranked best-first.
+
+        Matches the query against conversation titles and redacted
+        user/assistant message text held in the disposable catalog's FTS5 index
+        (tool payloads and system turns are never indexed). Scoping mirrors
+        :meth:`list_conversations`. Search is a desktop-only capability: when the
+        catalog's FTS5 module is unavailable this returns an empty result rather
+        than failing, and direct conversation reads are unaffected.
+        """
+
+        hits = self._index.search_conversations(
+            org_id=org_id,
+            user_id=user_id,
+            query=query,
+            limit=limit,
+            include_archived=include_archived,
+            include_deleted=include_deleted,
+        )
+        return tuple(
+            ConversationSearchHit(
+                conversation=ConversationRecord.model_validate_json(doc),
+                score=score,
+            )
+            for doc, score in hits
+        )
 
     async def list_messages(
         self,
