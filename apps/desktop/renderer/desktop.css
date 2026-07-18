@@ -1,0 +1,47 @@
+/* Desktop renderer globals (loaded once by bootstrap.tsx).
+ *
+ * Two structural fixes the packaged Electron window needs but the shared
+ * chat-surface shell can't own (they are substrate/window concerns):
+ *
+ * 1) FILL THE WINDOW. `ChatShell` (and the login `loginx-shell`) size to
+ *    `height: 100%`, so the mount chain must be 100% too — otherwise `#root`
+ *    collapses to content height and the UI floats in a partially-filled
+ *    window. `index.html` sets none of this.
+ *
+ * 2) macOS `titleBarStyle: "hiddenInset"` (see main/window.ts) renders the
+ *    traffic-light buttons OVER the content with no reserved space, so the app
+ *    rail's brand mark + top icons collide with the close/minimise/zoom
+ *    buttons (and the brand turbine looks "missing" behind them). Reserve a
+ *    draggable titlebar strip at the top: content sits below it, and dragging
+ *    the strip moves the window. The app itself opts back out of the drag
+ *    region so every control stays clickable.
+ */
+
+html,
+body,
+#root {
+  height: 100%;
+}
+body {
+  margin: 0;
+}
+
+:root {
+  /* Height of the reserved macOS traffic-light strip. */
+  --titlebar-inset: 32px;
+}
+
+#root {
+  box-sizing: border-box;
+  padding-top: var(--titlebar-inset);
+  /* Seamless: the reserved strip matches the near-black app canvas rather than
+     the body fallback, so there is no seam above the rail/header. */
+  background: var(--color-bg, #09090b);
+  -webkit-app-region: drag;
+}
+
+/* The application (the shell / login card) is fully interactive — only the
+   bare reserved strip above it drags the window. */
+#root > * {
+  -webkit-app-region: no-drag;
+}

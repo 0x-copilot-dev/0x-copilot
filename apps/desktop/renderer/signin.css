@@ -82,6 +82,8 @@
   color: var(--color-text-muted);
   font-size: var(--font-size-sm);
   line-height: 1.5;
+  /* Balance the wrap so no single word ("machine.") dangles on its own line. */
+  text-wrap: balance;
 }
 
 /* Option stack */
@@ -164,6 +166,8 @@
 .loginx-opt__sub {
   font-size: var(--font-size-xs);
   color: var(--color-text-subtle);
+  /* Keep the provider list from orphaning "Ledger" onto its own line. */
+  text-wrap: balance;
 }
 .loginx-opt__chev {
   flex: 0 0 auto;
@@ -211,6 +215,8 @@
   margin: 0;
   font-size: var(--font-size-xs);
   line-height: 1.5;
+  /* Avoid the orphaned "Settings." line at the bottom of the card. */
+  text-wrap: pretty;
   color: var(--color-text-muted);
 }
 .loginx-note strong {
