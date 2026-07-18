@@ -56,7 +56,8 @@ export class FsError extends Error {
 /**
  * Resource ceilings enforced BEFORE (and while) doing work, so a single
  * request can never exhaust memory, file descriptors, or wall-clock time.
- * These bound the read surface; write ceilings arrive with slice 3.
+ * These bound both the read surface and the slice-3 write surface
+ * (`maxWriteBytes`).
  */
 export const FS_LIMITS = {
   /** Max segments in a virtual path (depth). */
@@ -70,6 +71,10 @@ export const FS_LIMITS = {
   defaultReadBytes: 1024 * 1024, // 1 MiB
   /** read(): hard ceiling; a caller cannot request more than this per call. */
   maxReadBytes: 8 * 1024 * 1024, // 8 MiB
+
+  /** write()/edit(): hard ceiling on a single mutation's content size. A
+   * larger payload fails `too_large` before any temp file is created. */
+  maxWriteBytes: 8 * 1024 * 1024, // 8 MiB
 
   /** list(): max directory entries returned before truncation. */
   maxDirEntries: 10_000,

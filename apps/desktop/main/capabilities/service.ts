@@ -80,4 +80,23 @@ export class CapabilityService {
   brokerBaseUrl(): string {
     return this.#broker.baseUrl();
   }
+
+  // --- per-run grant snapshot (main-owned) ---
+
+  /**
+   * MAIN-ONLY: pin the currently-active grants for a starting run and return
+   * ONLY the opaque `run_capability_context` id. Hand this to the run's worker
+   * out of band; a later FS op that carries it is authorized against this
+   * pinned snapshot rather than live grant state. The pinned grants (which
+   * include host roots) never leave main.
+   */
+  async beginRun(): Promise<string> {
+    const ctx = await this.#broker.mintRunContext();
+    return ctx.runContext;
+  }
+
+  /** Release a finished run's pinned snapshot. True if it existed. */
+  endRun(runContext: string): boolean {
+    return this.#broker.releaseRunContext(runContext);
+  }
 }

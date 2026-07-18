@@ -59,10 +59,21 @@ import { useTransport } from "../../providers/TransportProvider";
 import { projectSubagents } from "../../subagents";
 import { ThreadCanvas, TcChat, type TcTab } from "../../thread-canvas";
 
+// PR-3.10: pure selector projecting approval state off the SAME single canonical
+// event stream (FR-3.3). Feeds the in-chat ApprovalCard/conf-card (TcChat) and
+// the Approvals-tab count (RunWorkspaceRail); no second subscription/projector.
+import {
+  overlayApprovalDecisions,
+  projectApprovals,
+  toApprovalsQueue,
+  type RunApprovalDecision,
+} from "./approvalProjection";
 import { RunHeader } from "./RunHeader";
 import { RunWorkspaceRail } from "./RunWorkspaceRail";
 import { useRunMode } from "./useRunMode";
 import { useRunSession } from "./useRunSession";
+
+const EMPTY_DECISIONS: ReadonlyMap<string, RunApprovalDecision> = new Map();
 
 export interface RunDestinationProps {
   /** Conversation whose active/selected run the cockpit binds to. */
@@ -230,22 +241,93 @@ export function RunDestination(props: RunDestinationProps): ReactElement {
     [session.events],
   );
 
+  // PR-3.10: the approval queue is projected off the SAME `session.events`
+  // (FR-3.3 — no second subscription/projector). `localDecisions` overlays the
+  // user's optimistic Approve/Reject so the in-chat card flips to its receipt
+  // immediately, before the trailing `approval_resolved` SSE frame lands; the
+  // server projection then reconciles it (a server-resolved approval always
+  // wins). The two approval consumers — TcChat (card/conf-card) and the rail
+  // (Approvals tab + count) — both read this ONE projection.
+  const [localDecisions, setLocalDecisions] =
+    useState<ReadonlyMap<string, RunApprovalDecision>>(EMPTY_DECISIONS);
+
+  const approvalProjection = useMemo(
+    () =>
+      overlayApprovalDecisions(
+        projectApprovals(session.events),
+        localDecisions,
+      ),
+    [session.events, localDecisions],
+  );
+
+  // PR-3.10 (FR-3.15): approvals are HIDDEN while scrubbed off-now — you cannot
+  // approve a past state. Snap-to-now (`scrubbedSeq === null`) restores them.
+  const chatApprovals = isScrubbed ? [] : approvalProjection.approvals;
+  const approvalsQueue = useMemo(
+    () => (isScrubbed ? undefined : toApprovalsQueue(approvalProjection)),
+    [isScrubbed, approvalProjection],
+  );
+
+  // PR-3.10: resolve an approval. The UI is optimistically resolved via
+  // `localDecisions`; the host owns the POST (D28), fired best-effort through
+  // the Transport port — a failure leaves the optimistic state (the trailing
+  // SSE frame is the authority) rather than blocking the cockpit.
+  const resolveApproval = useCallback(
+    (approvalId: string, decision: RunApprovalDecision): void => {
+      setLocalDecisions((prev) => {
+        if (prev.get(approvalId) === decision) {
+          return prev;
+        }
+        const next = new Map(prev);
+        next.set(approvalId, decision);
+        return next;
+      });
+      void transport
+        .request({
+          method: "POST",
+          path: `/v1/agent/approvals/${approvalId}/decision`,
+          body: { decision },
+        })
+        .catch(() => {
+          /* optimistic: SSE `approval_resolved` reconciles the truth */
+        });
+    },
+    [transport],
+  );
+
+  const handleApprove = useCallback(
+    (approvalId: string): void => resolveApproval(approvalId, "approved"),
+    [resolveApproval],
+  );
+  const handleReject = useCallback(
+    (approvalId: string): void => resolveApproval(approvalId, "rejected"),
+    [resolveApproval],
+  );
+
   const chatSlot = (
     <TcChat
       conversationId={conversationId as unknown as string}
       mode={mode}
       fleets={subagentProjection.fleets}
+      // PR-3.10: in-chat ApprovalCard (Studio) / conf-card (Focus) + receipts.
+      approvals={chatApprovals}
+      onApprove={handleApprove}
+      onReject={handleReject}
     />
   );
   // PR-3.7 (FR-3.15/3.16): while scrubbed off-now, `scrubbed` tells the rail to
   // suppress the Approvals tab — you cannot approve a past state; snap-to-now
   // restores it. PR-3.8: `subagents` feeds the Agents-tab "N live" count from
-  // the single projection.
+  // the single projection. PR-3.10: `approvalsQueue` feeds the Approvals-tab
+  // pending count from the same projection.
   const rightRail = (
     <RunWorkspaceRail
       mode={mode}
       chatSlot={chatSlot}
       subagents={subagentProjection.subagents}
+      approvalsQueue={approvalsQueue}
+      onApprove={handleApprove}
+      onReject={handleReject}
       scrubbed={isScrubbed}
     />
   );

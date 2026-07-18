@@ -12,8 +12,19 @@ import {
 import type { AddressInfo } from "node:net";
 
 import { HostFs } from "./host-fs";
-import { FsError, modeSatisfies, type FsErrorCode } from "./path-validation";
-import { toBrokerGrant, type Grant, type GrantProvider } from "./types";
+import {
+  FS_LIMITS,
+  FsError,
+  modeSatisfies,
+  type FsErrorCode,
+} from "./path-validation";
+import { RunContextStore } from "./run-context";
+import {
+  toBrokerGrant,
+  type Grant,
+  type GrantMode,
+  type GrantProvider,
+} from "./types";
 
 // Authenticated loopback capability broker (AC5 slice 1 — skeleton).
 //
@@ -32,13 +43,17 @@ import { toBrokerGrant, type Grant, type GrantProvider } from "./types";
 // previously issued one.
 //
 // SLICE 1 exposed ONLY grant-management reads (handshake / list / snapshot).
-// SLICE 2 (this change) adds the filesystem READ ops (stat/list/read/glob/grep)
-// for the runtime-worker audience. Each resolves its `grant_id` against the
-// CURRENT active snapshot (so a revoked grant fails closed), gates on the
-// grant mode, and runs `HostFs`, whose path-validation layer performs the
-// traversal / symlink / junction / ADS / TOCTOU checks. Write/mkdir/delete/
-// move remain absent (slice 3). Host absolute paths NEVER appear in any
-// response body — results carry only root-relative virtual paths.
+// SLICE 2 added the filesystem READ ops (stat/list/read/glob/grep).
+// SLICE 3 (this change) adds the filesystem WRITE ops (write/edit/mkdir/delete/
+// move) and the per-run grant snapshot (runs/begin + runs/end). Each FS op
+// resolves its `grant_id` — against the CURRENT active snapshot, OR, when the
+// request carries a `run_capability_context`, against the immutable snapshot
+// PINNED when that run started — then gates on the required grant MODE for the
+// route (reads: read_only; write/edit/mkdir: read_write_no_delete; delete/move:
+// read_write; fail-closed for an unknown mode) and runs `HostFs`, whose
+// path-validation layer performs the traversal / symlink / junction / ADS /
+// TOCTOU checks. Host absolute paths NEVER appear in any response body —
+// results carry only root-relative virtual paths.
 //
 // G1: the grant-management routes are ALSO path-free. `grants/list` and
 // `grants/snapshot` return a `BrokerGrant` projection (grantId + mode + label
@@ -52,34 +67,70 @@ export const CAPABILITY_BROKER_PROTOCOL = "1";
 
 const TOKEN_BYTES = 32; // 256-bit
 const MAX_BODY_BYTES = 64 * 1024;
+// Write routes carry file content in the request body, so they get a larger
+// cap sized to hold `FS_LIMITS.maxWriteBytes` (8 MiB) as base64 plus JSON
+// overhead. Every OTHER route keeps the tight 64 KiB cap.
+const MAX_WRITE_BODY_BYTES = 12 * 1024 * 1024;
 
 const ROUTES = {
   handshake: "/v1/handshake",
   grantsList: "/v1/grants/list",
   grantsSnapshot: "/v1/grants/snapshot",
+  runsBegin: "/v1/runs/begin",
+  runsEnd: "/v1/runs/end",
   fsStat: "/v1/fs/stat",
   fsList: "/v1/fs/list",
   fsRead: "/v1/fs/read",
   fsGlob: "/v1/fs/glob",
   fsGrep: "/v1/fs/grep",
+  fsWrite: "/v1/fs/write",
+  fsEdit: "/v1/fs/edit",
+  fsMkdir: "/v1/fs/mkdir",
+  fsDelete: "/v1/fs/delete",
+  fsMove: "/v1/fs/move",
 } as const;
+
+// Routes whose request body may carry file content (larger body cap).
+const WRITE_BODY_ROUTES: ReadonlySet<string> = new Set([
+  ROUTES.fsWrite,
+  ROUTES.fsEdit,
+]);
 
 // The capability methods this broker advertises to a handshaking child.
 const ADVERTISED_METHODS = [
   "listGrants",
   "snapshotGrants",
+  "beginRun",
+  "endRun",
   "statPath",
   "listDir",
   "readFile",
   "glob",
   "grep",
+  "writeFile",
+  "editFile",
+  "makeDir",
+  "deletePath",
+  "movePath",
 ] as const;
 
-// Every READ op requires at least a read-only grant. The gate is generic so
-// slice-3 writes can raise the bar per route; it fails closed for an unknown
-// mode. Reads never demand more than the minimum, so no read is mode-denied —
-// but the gate is the same one writes will use.
-const FS_READ_REQUIRED_MODE = "read_only";
+// The minimum grant MODE each FS route requires. Fail-closed: an unknown route
+// defaults to the highest bar (`read_write`), and `modeSatisfies` fails closed
+// for an unknown grant mode. Reads need only `read_only`; a mutation that only
+// creates/modifies needs `read_write_no_delete`; a mutation that can REMOVE a
+// path (delete, or move which renames the source away) needs `read_write`.
+const FS_ROUTE_REQUIRED_MODE: Record<string, GrantMode> = {
+  [ROUTES.fsStat]: "read_only",
+  [ROUTES.fsList]: "read_only",
+  [ROUTES.fsRead]: "read_only",
+  [ROUTES.fsGlob]: "read_only",
+  [ROUTES.fsGrep]: "read_only",
+  [ROUTES.fsWrite]: "read_write_no_delete",
+  [ROUTES.fsEdit]: "read_write_no_delete",
+  [ROUTES.fsMkdir]: "read_write_no_delete",
+  [ROUTES.fsDelete]: "read_write",
+  [ROUTES.fsMove]: "read_write",
+};
 
 export interface CapabilityBrokerConfig {
   readonly grants: GrantProvider;
@@ -90,6 +141,11 @@ export interface CapabilityBrokerConfig {
   readonly hostFs?: HostFs;
   /** Injectable CSPRNG for tests. Defaults to node:crypto randomBytes. */
   readonly randomBytes?: (size: number) => Buffer;
+  /**
+   * In-memory store of per-run grant snapshots. Injectable for tests; defaults
+   * to a fresh RAM-only store keyed by the same CSPRNG as the token.
+   */
+  readonly runContexts?: RunContextStore;
 }
 
 export interface CapabilityBrokerHandle {
@@ -102,6 +158,7 @@ export class CapabilityBroker {
   readonly #grants: GrantProvider;
   readonly #hostFs: HostFs | null;
   readonly #randomBytes: (size: number) => Buffer;
+  readonly #runContexts: RunContextStore;
 
   #server: Server | null = null;
   #tokenBuf: Buffer | null = null;
@@ -114,6 +171,9 @@ export class CapabilityBroker {
     this.#grants = config.grants;
     this.#hostFs = config.hostFs ?? null;
     this.#randomBytes = config.randomBytes ?? nodeRandomBytes;
+    this.#runContexts =
+      config.runContexts ??
+      new RunContextStore({ randomBytes: this.#randomBytes });
   }
 
   isRunning(): boolean {
@@ -175,6 +235,9 @@ export class CapabilityBroker {
     this.#tokenBuf = null;
     this.#saltBuf = null;
     this.#port = 0;
+    // Per-run snapshots are RAM-only and MUST NOT survive a restart — drop them
+    // so a fresh boot never inherits a prior boot's pinned authority.
+    this.#runContexts.clear();
     if (server === null) return;
     await new Promise<void>((resolve) => {
       server.close(() => {
@@ -203,6 +266,22 @@ export class CapabilityBroker {
     return this.#tokenBuf.toString("utf-8");
   }
 
+  /**
+   * Pin the CURRENT active grants under a fresh, opaque `run_capability_context`
+   * and return the immutable context (MAIN-SIDE view — includes host roots).
+   * Called at run start; the id is what a later FS op passes to bind itself to
+   * this run's authority snapshot rather than live grant state.
+   */
+  async mintRunContext() {
+    const snapshot = await this.#grants.snapshotActive();
+    return this.#runContexts.mint(snapshot);
+  }
+
+  /** Release a run's pinned snapshot. True if it existed. */
+  releaseRunContext(runContext: string): boolean {
+    return this.#runContexts.release(runContext);
+  }
+
   async #handle(req: IncomingMessage, res: ServerResponse): Promise<void> {
     // 1) No CORS / no browser callers. Reject any request carrying browser
     //    fetch metadata before doing anything else.
@@ -228,10 +307,15 @@ export class CapabilityBroker {
       respondJson(res, 401, { error: "unauthorized" });
       return;
     }
-    // 5) Body (size-capped, JSON).
+    // 5) Body (size-capped, JSON). Write routes carry file content, so they get
+    //    the larger cap; every other route keeps the tight 64 KiB cap.
+    const pathname = new URL(req.url ?? "/", "http://127.0.0.1").pathname;
+    const bodyCap = WRITE_BODY_ROUTES.has(pathname)
+      ? MAX_WRITE_BODY_BYTES
+      : MAX_BODY_BYTES;
     let body: unknown;
     try {
-      body = await readJsonBody(req);
+      body = await readJsonBody(req, bodyCap);
     } catch (err) {
       if (err instanceof BodyTooLargeError) {
         respondJson(res, 413, { error: "payload_too_large" });
@@ -240,7 +324,6 @@ export class CapabilityBroker {
       respondJson(res, 400, { error: "invalid_json" });
       return;
     }
-    const pathname = new URL(req.url ?? "/", "http://127.0.0.1").pathname;
     switch (pathname) {
       case ROUTES.handshake:
         respondJson(res, 200, {
@@ -269,11 +352,45 @@ export class CapabilityBroker {
         });
         return;
       }
+      case ROUTES.runsBegin: {
+        // Pin the active grants for a starting run; return the opaque context
+        // id + a PATH-FREE projection of the pinned set (host roots stay main).
+        const ctx = await this.mintRunContext();
+        respondJson(res, 200, {
+          runCapabilityContext: ctx.runContext,
+          capturedAt: ctx.capturedAt,
+          snapshotId: ctx.snapshotId,
+          grants: ctx.grants.map((g) =>
+            toBrokerGrant(g, this.#mountId(g.root)),
+          ),
+        });
+        return;
+      }
+      case ROUTES.runsEnd: {
+        const params = body === null || typeof body !== "object" ? {} : body;
+        let released: boolean;
+        try {
+          released = this.releaseRunContext(
+            requireString(params, "run_capability_context"),
+          );
+        } catch (err) {
+          const { status, code } = fsErrorResponse(err);
+          respondJson(res, status, { error: code });
+          return;
+        }
+        respondJson(res, 200, { released });
+        return;
+      }
       case ROUTES.fsStat:
       case ROUTES.fsList:
       case ROUTES.fsRead:
       case ROUTES.fsGlob:
       case ROUTES.fsGrep:
+      case ROUTES.fsWrite:
+      case ROUTES.fsEdit:
+      case ROUTES.fsMkdir:
+      case ROUTES.fsDelete:
+      case ROUTES.fsMove:
         await this.#handleFs(pathname, body, res);
         return;
       default:
@@ -302,8 +419,12 @@ export class CapabilityBroker {
     try {
       const params = body === null || typeof body !== "object" ? {} : body;
       const grantId = requireString(params, "grant_id");
-      const grant = await this.#resolveActiveGrant(grantId);
-      if (!modeSatisfies(FS_READ_REQUIRED_MODE, grant.mode)) {
+      const runContext = optionalString(params, "run_capability_context");
+      const grant = await this.#resolveGrant(grantId, runContext);
+      // Per-route MODE gate (fail closed to the highest bar for an unknown
+      // route; `modeSatisfies` fails closed for an unknown grant mode).
+      const required = FS_ROUTE_REQUIRED_MODE[route] ?? "read_write";
+      if (!modeSatisfies(required, grant.mode)) {
         throw new FsError("permission_denied", "grant mode too low");
       }
       const result = await runFsOp(hostFs, route, grant.root, params);
@@ -315,11 +436,28 @@ export class CapabilityBroker {
   }
 
   /**
-   * Resolve a grant id against the active snapshot. Unknown or revoked ids
-   * (revoked grants are excluded from `snapshotActive`) fail closed with
-   * `grant_required`, so a revoke takes effect on the very next op.
+   * Resolve a grant id to authorize an op. When the request carries a
+   * `run_capability_context`, resolve against that run's PINNED snapshot (the
+   * grants active when the run started) — so an op is authorized against a
+   * consistent, run-bound view rather than live state. Otherwise resolve
+   * against the CURRENT active snapshot (a revoke then takes effect on the very
+   * next op). Both fail closed with `grant_required`.
    */
-  async #resolveActiveGrant(grantId: string): Promise<Grant> {
+  async #resolveGrant(
+    grantId: string,
+    runContext: string | undefined,
+  ): Promise<Grant> {
+    if (runContext !== undefined) {
+      const ctx = this.#runContexts.get(runContext);
+      if (ctx === null) {
+        throw new FsError("grant_required", "unknown run capability context");
+      }
+      const pinned = ctx.grants.find((g) => g.grantId === grantId);
+      if (pinned === undefined) {
+        throw new FsError("grant_required", "grant not in run snapshot");
+      }
+      return pinned;
+    }
     const snapshot = await this.#grants.snapshotActive();
     const grant = snapshot.grants.find((g) => g.grantId === grantId);
     if (grant === undefined) {
@@ -386,6 +524,14 @@ const FS_ROUTE_HANDLERS: Record<
       flags: optionalString(p, "flags"),
       maxMatches: optionalInt(p, "max_matches"),
     }),
+  [ROUTES.fsWrite]: (hostFs, root, p) =>
+    hostFs.write(root, requirePath(p), requireContent(p)),
+  [ROUTES.fsEdit]: (hostFs, root, p) =>
+    hostFs.edit(root, requirePath(p), requireContent(p)),
+  [ROUTES.fsMkdir]: (hostFs, root, p) => hostFs.mkdir(root, requirePath(p)),
+  [ROUTES.fsDelete]: (hostFs, root, p) => hostFs.delete(root, requirePath(p)),
+  [ROUTES.fsMove]: (hostFs, root, p) =>
+    hostFs.move(root, requireString(p, "from"), requireString(p, "to")),
 };
 
 function runFsOp(
@@ -418,6 +564,21 @@ function requirePath(params: object): string {
     throw new FsError("invalid_request", "missing path");
   }
   return value;
+}
+
+// Decode the base64 `content_base64` write payload into a Buffer, enforcing the
+// decoded-size ceiling BEFORE it reaches HostFs (HostFs re-checks — defence in
+// depth). Absence or a non-string is `invalid_request`.
+function requireContent(params: object): Buffer {
+  const value = (params as Record<string, unknown>).content_base64;
+  if (typeof value !== "string") {
+    throw new FsError("invalid_request", "missing content_base64");
+  }
+  const buf = Buffer.from(value, "base64");
+  if (buf.length > FS_LIMITS.maxWriteBytes) {
+    throw new FsError("too_large", "content exceeds the write byte ceiling");
+  }
+  return buf;
 }
 
 function optionalString(params: object, key: string): string | undefined {
@@ -469,7 +630,10 @@ function fsErrorResponse(err: unknown): { status: number; code: string } {
 
 class BodyTooLargeError extends Error {}
 
-function readJsonBody(req: IncomingMessage): Promise<unknown> {
+function readJsonBody(
+  req: IncomingMessage,
+  maxBytes: number,
+): Promise<unknown> {
   return new Promise((resolve, reject) => {
     const chunks: Buffer[] = [];
     let size = 0;
@@ -477,7 +641,7 @@ function readJsonBody(req: IncomingMessage): Promise<unknown> {
     req.on("data", (chunk: Buffer) => {
       if (done) return;
       size += chunk.length;
-      if (size > MAX_BODY_BYTES) {
+      if (size > maxBytes) {
         done = true;
         // Drain (discard) the rest so the socket can still flush our 413,
         // rather than resetting the connection.
