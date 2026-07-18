@@ -107,5 +107,57 @@ class FileObjectStore:
         digest = ref.sha256 if isinstance(ref, ObjectRef) else ref
         return self._layout.object_path(digest).exists()
 
+    def write_in_flight(self, ref: ObjectRef | str) -> bool:
+        """Return ``True`` if a partial ``.tmp`` write for this digest exists.
+
+        :meth:`put` writes to ``<path>.tmp`` then atomically renames it into
+        place, so a lingering ``.tmp`` sibling is the single-writer desktop
+        store's only "open handle" state. The garbage collector consults this
+        to refuse deleting a blob whose bytes are still being written.
+        """
+
+        digest = ref.sha256 if isinstance(ref, ObjectRef) else ref
+        target = self._layout.object_path(digest)
+        return target.with_name(target.name + ".tmp").exists()
+
+    def delete(self, ref: ObjectRef | str) -> bool:
+        """Physically remove a blob, refusing to touch an in-flight write.
+
+        Returns ``True`` when the blob file was unlinked, ``False`` when it was
+        absent or a concurrent ``.tmp`` write made deletion unsafe. Best-effort
+        prunes the now-empty ``<hh>`` shard directory. Callers own reachability:
+        this only guards the open-handle case, never reference counting.
+        """
+
+        if self.write_in_flight(ref):
+            return False
+        digest = ref.sha256 if isinstance(ref, ObjectRef) else ref
+        target = self._layout.object_path(digest)
+        try:
+            target.unlink()
+        except FileNotFoundError:
+            return False
+        try:
+            target.parent.rmdir()
+        except OSError:
+            # Shard still holds other blobs (or vanished) — leave it be.
+            pass
+        return True
+
+    def iter_digests(self) -> tuple[str, ...]:
+        """Return every blob digest currently present under ``objects/sha256``."""
+
+        objects_dir = self._layout.objects_dir
+        if not objects_dir.exists():
+            return ()
+        digests: list[str] = []
+        for shard in objects_dir.iterdir():
+            if not shard.is_dir():
+                continue
+            for blob in shard.iterdir():
+                if blob.is_file() and not blob.name.endswith(".tmp"):
+                    digests.append(blob.name)
+        return tuple(digests)
+
 
 __all__ = ("FileObjectStore", "ObjectRef", "ObjectStoreError")
