@@ -1,90 +1,73 @@
+// ChatsDestination tests (Phase 4 · PR-4.2 recast).
+//
+// The destination is now a thin pure-presentation wrapper around
+// `ChatsArchive` — no ChatsSidebar, no thread-canvas placeholder. The
+// exhaustive state/section/row/callback coverage lives in
+// `ChatsArchive.test.tsx`; here we assert the wrapper forwards props and
+// stays safe with no props (loading) so it can mount before its PR-4.3
+// host binder is wired.
+
 import type {
-  Session,
-  SseSubscribeOptions,
-  SseSubscription,
-  Transport,
-  TransportCapabilities,
-  TypedRequest,
-} from "@0x-copilot/chat-transport";
+  ChatArchiveRow,
+  ChatsArchive as ChatsArchiveData,
+  ConversationId,
+  SectionResult,
+} from "@0x-copilot/api-types";
 import { fireEvent, render, screen } from "@testing-library/react";
 import { describe, expect, it, vi } from "vitest";
 
-import { RouterProvider } from "../../providers/RouterProvider";
-import { TransportProvider } from "../../providers/TransportProvider";
-import type { ArtifactRoute, Router } from "../../routing/router";
-
 import { ChatsDestination } from "./ChatsDestination";
 
-function makeTransport(): Transport {
+const asConversationId = (s: string): ConversationId =>
+  s as unknown as ConversationId;
+
+function row(id: string, title: string): ChatArchiveRow {
   return {
-    async request<TRes>(_req: TypedRequest): Promise<TRes> {
-      return { projects: [] } as unknown as TRes;
-    },
-    subscribeServerSentEvents(_opts: SseSubscribeOptions): SseSubscription {
-      return { close: () => undefined };
-    },
-    getSession(): Session {
-      return { bearer: null };
-    },
-    capabilities(): TransportCapabilities {
-      return {
-        substrate: "web",
-        nativeSecretStorage: false,
-        fileSystemAccess: false,
-        clipboardWrite: false,
-        openExternal: false,
-      };
-    },
+    id: asConversationId(id),
+    title,
+    status: "done",
+    preview: "…",
+    model: "gpt-4o",
+    updated_at: "2026-07-18T11:00:00Z",
+    pinned: false,
   };
 }
 
-function makeRouter(): Router<ArtifactRoute> {
-  let current: ArtifactRoute | null = null;
-  const subscribers = new Set<(r: ArtifactRoute) => void>();
-  return {
-    current(): ArtifactRoute {
-      if (current === null) throw new Error("no route");
-      return current;
-    },
-    navigate: vi.fn((r: ArtifactRoute) => {
-      current = r;
-      for (const s of subscribers) s(r);
-    }),
-    subscribe(handler) {
-      subscribers.add(handler);
-      return () => subscribers.delete(handler);
-    },
-  };
-}
-
-function renderDestination(): void {
-  render(
-    <TransportProvider transport={makeTransport()}>
-      <RouterProvider router={makeRouter()}>
-        <ChatsDestination />
-      </RouterProvider>
-    </TransportProvider>,
-  );
+function ok(recent: ChatArchiveRow[]): SectionResult<ChatsArchiveData> {
+  return { status: "ok", data: { pinned: [], recent, archived: [] } };
 }
 
 describe("ChatsDestination", () => {
-  it("renders the chats sidebar alongside a thread-canvas placeholder", () => {
-    renderDestination();
-    expect(
-      screen.getByRole("complementary", { name: /chats sidebar/i }),
-    ).toBeInTheDocument();
-    expect(screen.getByTestId("thread-canvas-placeholder")).toBeInTheDocument();
+  it("renders the loading archive when mounted with no props", () => {
+    render(<ChatsDestination />);
+    const root = screen.getByTestId("chats-archive");
+    expect(root).toHaveAttribute("data-state", "loading");
+    // No legacy thread-canvas placeholder anymore.
+    expect(screen.queryByTestId("thread-canvas-placeholder")).toBeNull();
   });
 
-  it("toggling fullscreen from the sidebar updates the destination's grid", () => {
-    renderDestination();
-    const root = screen
-      .getByTestId("thread-canvas-placeholder")
-      .closest("[data-component='chats-destination']");
-    expect(root).not.toBeNull();
-    expect(root).toHaveAttribute("data-fullscreen", "off");
+  it("forwards archive data through to ChatsArchive", () => {
+    render(<ChatsDestination archive={ok([row("c1", "Forwarded thread")])} />);
+    expect(screen.getByTestId("chats-archive")).toHaveAttribute(
+      "data-state",
+      "ready",
+    );
+    expect(screen.getByText("Forwarded thread")).toBeInTheDocument();
+  });
 
-    fireEvent.click(screen.getByTestId("chats-fullscreen-toggle"));
-    expect(root).toHaveAttribute("data-fullscreen", "on");
+  it("forwards onReopen and onNewChat callbacks", () => {
+    const onReopen = vi.fn();
+    const onNewChat = vi.fn();
+    render(
+      <ChatsDestination
+        archive={ok([row("c9", "Thread")])}
+        onReopen={onReopen}
+        onNewChat={onNewChat}
+      />,
+    );
+    fireEvent.click(screen.getByTestId("chat-archive-row"));
+    expect(onReopen).toHaveBeenCalledWith("c9");
+    fireEvent.click(screen.getByTestId("page-header-primary-action"));
+    expect(onNewChat).toHaveBeenCalledTimes(1);
   });
 });

@@ -1,47 +1,48 @@
-import { useState, type CSSProperties, type ReactElement } from "react";
+// Chats destination — archive host (desktop redesign, Phase 4 · PR-4.2).
+//
+// Recast of the earlier sidebar+thread-canvas placeholder: the Chats
+// destination is now a conversation ARCHIVE, not a live thread canvas.
+// A row click / Enter reopens the thread in the Run cockpit (reopen →
+// Run); "New chat" opens Run on a fresh conversation. There is no inline
+// thread canvas here (FR-4.7) — the Run destination (Phase 3) owns that.
+//
+// This is a thin pure-presentation wrapper around `ChatsArchive`: it
+// forwards data + callbacks straight through. The web/desktop host
+// binder (PR-4.3) supplies the fetched `archive` and the
+// `onReopen`/`onNewChat` handlers that route to `ArtifactRoute.run`.
+// Callbacks default to no-ops and `archive` defaults to `null` (loading)
+// so the destination can mount before its binder is wired.
+//
+// The legacy `ChatsSidebar` (which read the `/v1/chats/projects` stub)
+// stays in-tree and exported for Run's own thread rail if needed, but is
+// no longer mounted by this destination (PRD §5 — retire from top-level).
 
-import { ChatsSidebar } from "./ChatsSidebar";
+import type { ReactElement } from "react";
 
-// Design tokens (see packages/design-system/src/styles.css). Settings →
-// Appearance theme/accent changes flow through via the var(--color-…) refs.
-const CANVAS_BACKGROUND = "var(--color-bg)";
-const TEXT_SECONDARY = "var(--color-text-muted)";
+import { ChatsArchive, type ChatsArchiveProps } from "./ChatsArchive";
 
-export function ChatsDestination(): ReactElement {
-  const [fullscreen, setFullscreen] = useState(false);
+const noop = (): void => undefined;
 
-  const outerStyle: CSSProperties = {
-    width: "100%",
-    height: "100%",
-    minHeight: 0,
-    display: "grid",
-    gridTemplateColumns: fullscreen ? "0 1fr" : "256px 1fr",
-    gridTemplateRows: "100%",
-  };
-  const canvasStyle: CSSProperties = {
-    minWidth: 0,
-    minHeight: 0,
-    backgroundColor: CANVAS_BACKGROUND,
-    color: TEXT_SECONDARY,
-    display: "flex",
-    alignItems: "center",
-    justifyContent: "center",
-    fontSize: "var(--font-size-sm)",
-  };
+export type ChatsDestinationProps = ChatsArchiveProps;
+
+export function ChatsDestination(
+  props: Partial<ChatsDestinationProps> = {},
+): ReactElement {
+  const {
+    archive = null,
+    onReopen = noop,
+    onNewChat = noop,
+    onRetry,
+    now,
+  } = props;
 
   return (
-    <div
-      data-component="chats-destination"
-      data-fullscreen={fullscreen ? "on" : "off"}
-      style={outerStyle}
-    >
-      <ChatsSidebar
-        fullscreen={fullscreen}
-        onFullscreenChange={setFullscreen}
-      />
-      <div style={canvasStyle} data-testid="thread-canvas-placeholder">
-        ThreadCanvas mounts here (Phase 2-B).
-      </div>
-    </div>
+    <ChatsArchive
+      archive={archive}
+      onReopen={onReopen}
+      onNewChat={onNewChat}
+      onRetry={onRetry}
+      now={now}
+    />
   );
 }
