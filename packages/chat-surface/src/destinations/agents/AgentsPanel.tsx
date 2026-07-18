@@ -74,7 +74,7 @@ export function AgentsPanel({
     borderBottom: `1px solid ${BORDER}`,
   };
   const headTitleStyle: CSSProperties = {
-    fontSize: 13,
+    fontSize: "var(--font-size-sm)",
     fontWeight: 600,
     letterSpacing: 0.2,
   };
@@ -202,7 +202,7 @@ interface SectionGroupProps {
 function SectionGroup({ label, children }: SectionGroupProps): ReactElement {
   const headerStyle: CSSProperties = {
     padding: "10px 14px 4px",
-    fontSize: 11,
+    fontSize: "var(--font-size-2xs)",
     fontWeight: 600,
     letterSpacing: 0.4,
     textTransform: "uppercase",
@@ -234,7 +234,7 @@ function FilterRow({
     width: "100%",
     textAlign: "left",
     padding: "6px 14px",
-    fontSize: 12.5,
+    fontSize: "var(--font-size-xs)",
     background: active
       ? "color-mix(in srgb, var(--color-accent) 12%, transparent)"
       : "transparent",
@@ -274,7 +274,7 @@ function ChipButton({
   const style: CSSProperties = {
     padding: "3px 9px",
     borderRadius: 999,
-    fontSize: 11.5,
+    fontSize: "var(--font-size-2xs)",
     fontWeight: 500,
     border: `1px solid ${active ? ACCENT : BORDER}`,
     background: active
@@ -301,7 +301,7 @@ function ChipButton({
 function EmptyRow({ hint }: { hint: string }): ReactElement {
   const style: CSSProperties = {
     padding: "6px 14px",
-    fontSize: 12,
+    fontSize: "var(--font-size-xs)",
     color: TEXT_SECONDARY,
     fontStyle: "italic",
   };

@@ -239,11 +239,11 @@ export function InlineAdd({
     border: "none",
     outline: "none",
     color: TEXT_PRIMARY,
-    fontSize: 14,
+    fontSize: "var(--font-size-md)",
     padding: 0,
   };
   const previewStyle: CSSProperties = {
-    fontSize: 12,
+    fontSize: "var(--font-size-xs)",
     color: TEXT_FAINT,
     whiteSpace: "nowrap",
     overflow: "hidden",
@@ -257,7 +257,7 @@ export function InlineAdd({
     border: `1px solid ${PANEL_BORDER_STRONG}`,
     backgroundColor: "transparent",
     color: ACCENT,
-    fontSize: 13,
+    fontSize: "var(--font-size-sm)",
     fontWeight: 600,
     cursor: text.trim().length === 0 ? "default" : "pointer",
     opacity: text.trim().length === 0 ? 0.5 : 1,

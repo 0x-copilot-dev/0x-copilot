@@ -211,7 +211,7 @@ const avatarInitialsStyle: CSSProperties = {
   display: "inline-flex",
   alignItems: "center",
   justifyContent: "center",
-  fontSize: 14,
+  fontSize: "var(--font-size-md)",
   fontWeight: 600,
   flexShrink: 0,
 };

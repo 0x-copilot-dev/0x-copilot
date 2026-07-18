@@ -77,7 +77,7 @@ function rolePillStyle(role: ProjectMemberRole): CSSProperties {
   // neutral-strong; viewer = neutral-subtle.
   if (role === "owner") {
     return {
-      fontSize: 11,
+      fontSize: "var(--font-size-2xs)",
       fontWeight: 600,
       padding: "2px 8px",
       borderRadius: 999,
@@ -88,7 +88,7 @@ function rolePillStyle(role: ProjectMemberRole): CSSProperties {
   }
   if (role === "editor") {
     return {
-      fontSize: 11,
+      fontSize: "var(--font-size-2xs)",
       fontWeight: 600,
       padding: "2px 8px",
       borderRadius: 999,
@@ -98,7 +98,7 @@ function rolePillStyle(role: ProjectMemberRole): CSSProperties {
     };
   }
   return {
-    fontSize: 11,
+    fontSize: "var(--font-size-2xs)",
     fontWeight: 500,
     padding: "2px 8px",
     borderRadius: 999,
@@ -124,7 +124,7 @@ function Avatar({
     display: "flex",
     alignItems: "center",
     justifyContent: "center",
-    fontSize: 12,
+    fontSize: "var(--font-size-xs)",
     fontWeight: 600,
     flexShrink: 0,
     overflow: "hidden",
@@ -233,7 +233,7 @@ function AddMemberDialog({
     gap: 12,
   };
   const labelStyle: CSSProperties = {
-    fontSize: 12,
+    fontSize: "var(--font-size-xs)",
     color: TEXT_SECONDARY,
     fontWeight: 500,
   };
@@ -244,7 +244,7 @@ function AddMemberDialog({
     border: `1px solid ${PANEL_BORDER_STRONG}`,
     backgroundColor: "transparent",
     color: TEXT_PRIMARY,
-    fontSize: 13,
+    fontSize: "var(--font-size-sm)",
     outline: "none",
   };
   const selectStyle: CSSProperties = {
@@ -264,7 +264,7 @@ function AddMemberDialog({
     border: "none",
     backgroundColor: ACCENT,
     color: ACCENT_CONTRAST,
-    fontSize: 13,
+    fontSize: "var(--font-size-sm)",
     fontWeight: 600,
     cursor: "pointer",
     opacity: submitting || identifier.trim().length === 0 ? 0.6 : 1,
@@ -276,7 +276,7 @@ function AddMemberDialog({
     border: `1px solid ${PANEL_BORDER}`,
     backgroundColor: "transparent",
     color: TEXT_SECONDARY,
-    fontSize: 13,
+    fontSize: "var(--font-size-sm)",
     cursor: "pointer",
   };
 
@@ -294,11 +294,15 @@ function AddMemberDialog({
       <form style={card} onSubmit={handleSubmit}>
         <h2
           id="add-member-title"
-          style={{ margin: 0, fontSize: 16, fontWeight: 600 }}
+          style={{
+            margin: 0,
+            fontSize: "var(--font-size-lg)",
+            fontWeight: 600,
+          }}
         >
           Add member
         </h2>
-        <div style={{ fontSize: 12, color: TEXT_FAINT }}>
+        <div style={{ fontSize: "var(--font-size-xs)", color: TEXT_FAINT }}>
           Add a single workspace user to this project. Bulk add is not available
           in this phase.
         </div>
@@ -334,7 +338,7 @@ function AddMemberDialog({
         {error !== null ? (
           <div
             role="alert"
-            style={{ color: DANGER, fontSize: 12 }}
+            style={{ color: DANGER, fontSize: "var(--font-size-xs)" }}
             data-testid="project-add-member-error"
           >
             {error}
@@ -399,7 +403,7 @@ function MemberRow({
     backgroundColor: PANEL_BACKGROUND,
   };
   const nameStyle: CSSProperties = {
-    fontSize: 14,
+    fontSize: "var(--font-size-md)",
     fontWeight: 500,
     color: TEXT_PRIMARY,
     overflow: "hidden",
@@ -407,7 +411,7 @@ function MemberRow({
     whiteSpace: "nowrap",
   };
   const subStyle: CSSProperties = {
-    fontSize: 12,
+    fontSize: "var(--font-size-xs)",
     color: TEXT_FAINT,
     overflow: "hidden",
     textOverflow: "ellipsis",
@@ -421,7 +425,7 @@ function MemberRow({
     border: `1px solid ${PANEL_BORDER_STRONG}`,
     backgroundColor: "transparent",
     color: TEXT_PRIMARY,
-    fontSize: 12,
+    fontSize: "var(--font-size-xs)",
   };
   const removeBtn: CSSProperties = {
     height: 28,
@@ -430,7 +434,7 @@ function MemberRow({
     border: `1px solid ${PANEL_BORDER}`,
     backgroundColor: "transparent",
     color: DANGER,
-    fontSize: 12,
+    fontSize: "var(--font-size-xs)",
     cursor: "pointer",
   };
 
@@ -552,7 +556,7 @@ export function ProjectMembersTab(props: ProjectMembersTabProps): ReactElement {
     border: `1px solid ${PANEL_BORDER_STRONG}`,
     backgroundColor: "transparent",
     color: ACCENT,
-    fontSize: 13,
+    fontSize: "var(--font-size-sm)",
     fontWeight: 600,
     cursor: "pointer",
   };
@@ -569,7 +573,7 @@ export function ProjectMembersTab(props: ProjectMembersTabProps): ReactElement {
     borderRadius: 10,
     textAlign: "center",
     color: TEXT_SECONDARY,
-    fontSize: 13,
+    fontSize: "var(--font-size-sm)",
   };
 
   return (
@@ -579,7 +583,9 @@ export function ProjectMembersTab(props: ProjectMembersTabProps): ReactElement {
       style={wrapper}
     >
       <div style={header}>
-        <div style={{ fontSize: 14, fontWeight: 600 }}>Members</div>
+        <div style={{ fontSize: "var(--font-size-md)", fontWeight: 600 }}>
+          Members
+        </div>
         {canManage && onAddMember !== undefined ? (
           <button
             type="button"

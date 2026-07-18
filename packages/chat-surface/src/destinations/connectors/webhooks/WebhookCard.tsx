@@ -114,8 +114,7 @@ const headerRowStyle: CSSProperties = {
 };
 
 const urlStyle: CSSProperties = {
-  fontFamily:
-    "var(--font-family-mono, ui-monospace, SFMono-Regular, monospace)",
+  fontFamily: "var(--font-mono)",
   fontSize: "var(--font-size-sm, 13px)",
   color: "var(--color-text, #ededee)",
   overflow: "hidden",

@@ -59,7 +59,7 @@ export interface TransferOwnershipDialogProps {
 
 function WarningPill(): ReactElement {
   const style: CSSProperties = {
-    fontSize: 11,
+    fontSize: "var(--font-size-2xs)",
     fontWeight: 600,
     padding: "2px 10px",
     borderRadius: 999,
@@ -174,11 +174,11 @@ export function TransferOwnershipDialog(
   };
   const titleStyle: CSSProperties = {
     margin: 0,
-    fontSize: 16,
+    fontSize: "var(--font-size-lg)",
     fontWeight: 600,
   };
   const labelStyle: CSSProperties = {
-    fontSize: 12,
+    fontSize: "var(--font-size-xs)",
     color: TEXT_SECONDARY,
     fontWeight: 500,
   };
@@ -190,7 +190,7 @@ export function TransferOwnershipDialog(
     border: `1px solid ${PANEL_BORDER_STRONG}`,
     backgroundColor: "transparent",
     color: TEXT_PRIMARY,
-    fontSize: 13,
+    fontSize: "var(--font-size-sm)",
   };
   const inputStyle: CSSProperties = {
     height: 36,
@@ -199,7 +199,7 @@ export function TransferOwnershipDialog(
     border: `1px solid ${PANEL_BORDER_STRONG}`,
     backgroundColor: "transparent",
     color: TEXT_PRIMARY,
-    fontSize: 13,
+    fontSize: "var(--font-size-sm)",
     outline: "none",
   };
   const cancelStyle: CSSProperties = {
@@ -209,7 +209,7 @@ export function TransferOwnershipDialog(
     border: `1px solid ${PANEL_BORDER}`,
     backgroundColor: "transparent",
     color: TEXT_SECONDARY,
-    fontSize: 13,
+    fontSize: "var(--font-size-sm)",
     cursor: "pointer",
   };
   const submitStyle: CSSProperties = {
@@ -219,7 +219,7 @@ export function TransferOwnershipDialog(
     border: "none",
     backgroundColor: DANGER,
     color: ACCENT_CONTRAST,
-    fontSize: 13,
+    fontSize: "var(--font-size-sm)",
     fontWeight: 600,
     cursor: "pointer",
     opacity: !canConfirm || submitting ? 0.6 : 1,
@@ -236,7 +236,7 @@ export function TransferOwnershipDialog(
     backgroundColor: "rgba(245,158,11,0.06)",
     border: "1px solid rgba(245,158,11,0.3)",
     color: TEXT_PRIMARY,
-    fontSize: 12,
+    fontSize: "var(--font-size-xs)",
     lineHeight: 1.5,
   };
 
@@ -286,7 +286,7 @@ export function TransferOwnershipDialog(
           </select>
           {eligible.length === 0 ? (
             <span
-              style={{ fontSize: 11, color: TEXT_FAINT }}
+              style={{ fontSize: "var(--font-size-2xs)", color: TEXT_FAINT }}
               data-testid="transfer-ownership-no-candidates"
             >
               No eligible members. Add a member first.
@@ -313,7 +313,7 @@ export function TransferOwnershipDialog(
         {error !== null ? (
           <div
             role="alert"
-            style={{ color: DANGER, fontSize: 12 }}
+            style={{ color: DANGER, fontSize: "var(--font-size-xs)" }}
             data-testid="transfer-ownership-error"
           >
             {error}

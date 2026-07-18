@@ -1090,7 +1090,7 @@ const titleRowStyle: CSSProperties = {
 };
 
 const titleStyle: CSSProperties = {
-  fontSize: 18,
+  fontSize: "var(--font-size-xl)",
   fontWeight: 700,
   margin: 0,
   lineHeight: 1.3,
@@ -1101,7 +1101,7 @@ const metaRowStyle: CSSProperties = {
   flexWrap: "wrap",
   alignItems: "center",
   gap: 6,
-  fontSize: 12,
+  fontSize: "var(--font-size-xs)",
   color: "var(--color-text-muted)",
 };
 
@@ -1129,7 +1129,7 @@ const primaryButtonStyle = (busy: boolean): CSSProperties => ({
   border: "1px solid var(--color-accent)",
   background: "var(--color-accent)",
   color: "var(--color-on-accent, #fff)",
-  fontSize: 12,
+  fontSize: "var(--font-size-xs)",
   fontWeight: 600,
   cursor: busy ? "default" : "pointer",
   opacity: busy ? 0.6 : 1,
@@ -1142,7 +1142,7 @@ const secondaryButtonStyle = (busy: boolean): CSSProperties => ({
   border: "1px solid var(--color-border-strong)",
   background: "transparent",
   color: "var(--color-accent)",
-  fontSize: 12,
+  fontSize: "var(--font-size-xs)",
   fontWeight: 600,
   cursor: busy ? "default" : "pointer",
   opacity: busy ? 0.6 : 1,
@@ -1155,7 +1155,7 @@ const smallButtonStyle: CSSProperties = {
   border: "1px solid var(--color-border-strong)",
   background: "transparent",
   color: "var(--color-accent)",
-  fontSize: 12,
+  fontSize: "var(--font-size-xs)",
   fontWeight: 600,
   cursor: "pointer",
 };
@@ -1168,7 +1168,7 @@ const inlineCopyButtonStyle: CSSProperties = {
   border: "1px solid var(--color-border-strong)",
   background: "transparent",
   color: "var(--color-accent)",
-  fontSize: 11,
+  fontSize: "var(--font-size-2xs)",
   fontWeight: 600,
   cursor: "pointer",
 };
@@ -1187,7 +1187,7 @@ const tabButtonStyle = (selected: boolean): CSSProperties => ({
   borderBottomColor: selected ? "var(--color-accent)" : "transparent",
   background: "transparent",
   color: selected ? "var(--color-accent)" : "var(--color-text-muted)",
-  fontSize: 12,
+  fontSize: "var(--font-size-xs)",
   fontWeight: 600,
   cursor: "pointer",
 });
@@ -1209,7 +1209,7 @@ const panelInnerStyle: CSSProperties = {
 };
 
 const sectionHeadingStyle: CSSProperties = {
-  fontSize: 13,
+  fontSize: "var(--font-size-sm)",
   fontWeight: 700,
   margin: 0,
   color: "var(--color-text)",
@@ -1217,14 +1217,14 @@ const sectionHeadingStyle: CSSProperties = {
 
 const instructionsStyle: CSSProperties = {
   margin: 0,
-  fontSize: 13,
+  fontSize: "var(--font-size-sm)",
   lineHeight: 1.5,
   whiteSpace: "pre-wrap",
 };
 
 const mutedStyle: CSSProperties = {
   margin: 0,
-  fontSize: 13,
+  fontSize: "var(--font-size-sm)",
   color: "var(--color-text-muted)",
 };
 
@@ -1241,7 +1241,7 @@ const summaryItemStyle: CSSProperties = {
   display: "flex",
   alignItems: "center",
   gap: 8,
-  fontSize: 13,
+  fontSize: "var(--font-size-sm)",
 };
 
 const runListStyle: CSSProperties = {
@@ -1257,7 +1257,7 @@ const runRowStyle: CSSProperties = {
   display: "flex",
   alignItems: "center",
   gap: 8,
-  fontSize: 13,
+  fontSize: "var(--font-size-sm)",
   padding: "6px 8px",
   borderRadius: 6,
   border: "1px solid var(--color-border)",
@@ -1265,12 +1265,12 @@ const runRowStyle: CSSProperties = {
 
 const runTriggerStyle: CSSProperties = {
   color: "var(--color-text-muted)",
-  fontSize: 12,
+  fontSize: "var(--font-size-xs)",
 };
 
 const runTimeStyle: CSSProperties = {
   marginLeft: "auto",
-  fontSize: 12,
+  fontSize: "var(--font-size-xs)",
   color: "var(--color-text-subtle)",
 };
 
@@ -1292,7 +1292,7 @@ const triggerHeaderStyle: CSSProperties = {
 };
 
 const triggerTitleStyle: CSSProperties = {
-  fontSize: 13,
+  fontSize: "var(--font-size-sm)",
   fontWeight: 600,
 };
 
@@ -1302,7 +1302,7 @@ const triggerDetailsStyle: CSSProperties = {
   rowGap: 6,
   columnGap: 12,
   margin: 0,
-  fontSize: 13,
+  fontSize: "var(--font-size-sm)",
   alignItems: "center",
 };
 
@@ -1315,7 +1315,7 @@ const ddCodeStyle: CSSProperties = {
   margin: 0,
   fontFamily:
     "ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace",
-  fontSize: 12,
+  fontSize: "var(--font-size-xs)",
   wordBreak: "break-all",
   display: "flex",
   alignItems: "center",
@@ -1342,7 +1342,7 @@ const revealBannerStyle: CSSProperties = {
   border: "1px solid var(--color-warning, #d9a857)",
   background: "var(--color-warning-bg, #322615)",
   color: "var(--color-warning, #d9a857)",
-  fontSize: 12,
+  fontSize: "var(--font-size-xs)",
 };
 
 const errorRowStyle: CSSProperties = {
@@ -1350,18 +1350,18 @@ const errorRowStyle: CSSProperties = {
   alignItems: "center",
   gap: 10,
   color: "var(--color-danger)",
-  fontSize: 13,
+  fontSize: "var(--font-size-sm)",
 };
 
 const auditRowStyle: CSSProperties = {
   display: "flex",
   alignItems: "baseline",
   gap: 8,
-  fontSize: 13,
+  fontSize: "var(--font-size-sm)",
 };
 
 const auditTimeStyle: CSSProperties = {
-  fontSize: 12,
+  fontSize: "var(--font-size-xs)",
   color: "var(--color-text-subtle)",
   fontVariantNumeric: "tabular-nums",
   minWidth: 160,

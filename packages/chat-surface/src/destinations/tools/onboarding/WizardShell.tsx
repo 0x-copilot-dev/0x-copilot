@@ -179,13 +179,13 @@ const headerStyle: CSSProperties = {
 
 const titleStyle: CSSProperties = {
   margin: 0,
-  fontSize: 16,
+  fontSize: "var(--font-size-lg)",
   fontWeight: 600,
 };
 
 const subtitleStyle: CSSProperties = {
   margin: 0,
-  fontSize: 13,
+  fontSize: "var(--font-size-sm)",
   color: "var(--color-text-muted)",
 };
 
@@ -212,7 +212,7 @@ const stepperItemStyle = (
   alignItems: "center",
   gap: 6,
   padding: "4px 10px",
-  fontSize: 12,
+  fontSize: "var(--font-size-xs)",
   fontWeight: isCurrent ? 600 : 400,
   color: isCurrent
     ? "var(--color-text)"
@@ -236,7 +236,7 @@ const stepperIndexStyle = (
   width: 18,
   height: 18,
   borderRadius: 999,
-  fontSize: 11,
+  fontSize: "var(--font-size-2xs)",
   fontWeight: 600,
   background:
     isCurrent || done ? "var(--color-accent)" : "var(--color-bg-elevated)",
@@ -252,7 +252,7 @@ const bodyStyle: CSSProperties = {
 
 const stepTitleStyle: CSSProperties = {
   margin: 0,
-  fontSize: 14,
+  fontSize: "var(--font-size-md)",
   fontWeight: 600,
 };
 

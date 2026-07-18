@@ -86,7 +86,7 @@ const wrapperStyle: CSSProperties = {
 };
 
 const titleInputStyle: CSSProperties = {
-  fontSize: 18,
+  fontSize: "var(--font-size-xl)",
   fontWeight: 700,
   background: "transparent",
   border: "none",
@@ -119,7 +119,7 @@ const viewToggleButtonStyle = (active: boolean): CSSProperties => ({
   background: active ? "var(--color-accent)" : "transparent",
   color: active ? "var(--color-on-accent, #fff)" : "var(--color-text-muted)",
   cursor: "pointer",
-  fontSize: 12,
+  fontSize: "var(--font-size-xs)",
   fontWeight: 600,
 });
 
@@ -130,7 +130,7 @@ const primaryButtonStyle = (busy: boolean): CSSProperties => ({
   border: "1px solid var(--color-accent)",
   background: "var(--color-accent)",
   color: "var(--color-on-accent, #fff)",
-  fontSize: 12,
+  fontSize: "var(--font-size-xs)",
   fontWeight: 600,
   cursor: busy ? "default" : "pointer",
   opacity: busy ? 0.6 : 1,
@@ -143,7 +143,7 @@ const secondaryButtonStyle: CSSProperties = {
   border: "1px solid var(--color-border-strong)",
   background: "transparent",
   color: "var(--color-accent)",
-  fontSize: 12,
+  fontSize: "var(--font-size-xs)",
   fontWeight: 600,
   cursor: "pointer",
 };
@@ -163,7 +163,7 @@ const textareaStyle: CSSProperties = {
   resize: "vertical",
   padding: 12,
   fontFamily: "var(--font-mono, monospace)",
-  fontSize: 13,
+  fontSize: "var(--font-size-sm)",
   lineHeight: 1.5,
   background: "var(--color-bg)",
   color: "var(--color-text)",
@@ -179,7 +179,7 @@ const previewPaneStyle: CSSProperties = {
   background: "var(--color-bg)",
   minHeight: 280,
   overflow: "auto",
-  fontSize: 14,
+  fontSize: "var(--font-size-md)",
   lineHeight: 1.6,
 };
 
@@ -198,7 +198,7 @@ const statusChipStyle = (tone: PageEditorSaveStatus["kind"]): CSSProperties => {
     display: "inline-flex",
     alignItems: "center",
     gap: 6,
-    fontSize: 11,
+    fontSize: "var(--font-size-2xs)",
     fontWeight: 600,
     color,
   };
@@ -214,7 +214,7 @@ const conflictBannerStyle: CSSProperties = {
   border: "1px solid var(--color-danger, #ef4444)",
   background: "var(--color-danger-surface, rgba(239, 68, 68, 0.08))",
   color: "var(--color-danger, #ef4444)",
-  fontSize: 12,
+  fontSize: "var(--font-size-xs)",
 };
 
 // ---------------------------------------------------------------------------

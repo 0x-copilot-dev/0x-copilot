@@ -707,19 +707,19 @@ function TestStep(props: TestStepProps): ReactElement {
 
 const hintStyle: CSSProperties = {
   margin: 0,
-  fontSize: 12.5,
+  fontSize: "var(--font-size-xs)",
   color: "var(--color-text-muted)",
 };
 
 const errorStyle: CSSProperties = {
   margin: 0,
-  fontSize: 13,
+  fontSize: "var(--font-size-sm)",
   color: "var(--color-danger, #dc2626)",
 };
 
 const successStyle: CSSProperties = {
   margin: 0,
-  fontSize: 13,
+  fontSize: "var(--font-size-sm)",
   color: "var(--color-success, #16a34a)",
 };
 
@@ -751,19 +751,19 @@ const labelRowStyle: CSSProperties = {
   display: "inline-flex",
   alignItems: "center",
   gap: 8,
-  fontSize: 13,
+  fontSize: "var(--font-size-sm)",
   color: "var(--color-text)",
 };
 
 const codeStyle: CSSProperties = {
   fontFamily:
     "ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace",
-  fontSize: 12.5,
+  fontSize: "var(--font-size-xs)",
   color: "var(--color-text)",
 };
 
 const mutedStyle: CSSProperties = {
-  fontSize: 12.5,
+  fontSize: "var(--font-size-xs)",
   color: "var(--color-text-muted)",
 };
 
@@ -780,7 +780,7 @@ const selectStyle: CSSProperties = {
   border: "1px solid var(--color-border)",
   background: "transparent",
   color: "var(--color-text)",
-  fontSize: 13,
+  fontSize: "var(--font-size-sm)",
   fontFamily: "inherit",
 };
 
@@ -792,14 +792,14 @@ const defListStyle: CSSProperties = {
 };
 
 const dtStyle: CSSProperties = {
-  fontSize: 12,
+  fontSize: "var(--font-size-xs)",
   fontWeight: 600,
   color: "var(--color-text-muted)",
 };
 
 const ddStyle: CSSProperties = {
   margin: 0,
-  fontSize: 13,
+  fontSize: "var(--font-size-sm)",
   color: "var(--color-text)",
 };
 
@@ -814,7 +814,7 @@ const testResultStyle = (status: "ok" | "error"): CSSProperties => ({
   }`,
   background: "var(--color-bg-elevated)",
   color: "var(--color-text)",
-  fontSize: 13,
+  fontSize: "var(--font-size-sm)",
 });
 
 const preStyle: CSSProperties = {
@@ -822,7 +822,7 @@ const preStyle: CSSProperties = {
   padding: 8,
   borderRadius: 4,
   background: "var(--color-bg)",
-  fontSize: 12,
+  fontSize: "var(--font-size-xs)",
   fontFamily:
     "ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace",
   maxHeight: 200,

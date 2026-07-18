@@ -198,7 +198,7 @@ const headerStyle: CSSProperties = {
 };
 
 const hintStyle: CSSProperties = {
-  fontSize: 12,
+  fontSize: "var(--font-size-xs)",
   color: "var(--color-text-muted)",
 };
 
@@ -215,7 +215,7 @@ const presetButtonStyle = (disabled: boolean): CSSProperties => ({
   border: "1px solid var(--color-border-strong)",
   background: "transparent",
   color: "var(--color-text)",
-  fontSize: 12,
+  fontSize: "var(--font-size-xs)",
   fontWeight: 600,
   cursor: disabled ? "not-allowed" : "pointer",
   opacity: disabled ? 0.6 : 1,
@@ -228,7 +228,7 @@ const customRowStyle: CSSProperties = {
 };
 
 const customLabelStyle: CSSProperties = {
-  fontSize: 12,
+  fontSize: "var(--font-size-xs)",
   color: "var(--color-text-muted)",
   fontWeight: 500,
   flexShrink: 0,
@@ -243,7 +243,7 @@ const customInputStyle: CSSProperties = {
   border: "1px solid var(--color-border)",
   background: "var(--color-bg-elevated)",
   color: "var(--color-text)",
-  fontSize: 12,
+  fontSize: "var(--font-size-xs)",
   fontFamily: "inherit",
 };
 
@@ -254,7 +254,7 @@ const customSubmitStyle = (disabled: boolean): CSSProperties => ({
   border: "none",
   background: disabled ? "var(--color-surface-muted)" : "var(--color-accent)",
   color: disabled ? "var(--color-text-subtle)" : "var(--color-accent-contrast)",
-  fontSize: 12,
+  fontSize: "var(--font-size-xs)",
   fontWeight: 600,
   cursor: disabled ? "not-allowed" : "pointer",
 });
@@ -271,6 +271,6 @@ const cancelStyle: CSSProperties = {
   border: "1px solid var(--color-border)",
   background: "transparent",
   color: "var(--color-text-muted)",
-  fontSize: 12,
+  fontSize: "var(--font-size-xs)",
   cursor: "pointer",
 };

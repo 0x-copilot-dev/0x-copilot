@@ -356,7 +356,7 @@ export function RecurrenceEditor(props: RecurrenceEditorProps): ReactElement {
     flexWrap: "wrap",
   };
   const labelStyle: CSSProperties = {
-    fontSize: 12,
+    fontSize: "var(--font-size-xs)",
     fontWeight: 600,
     color: TEXT_SECONDARY,
   };
@@ -367,7 +367,7 @@ export function RecurrenceEditor(props: RecurrenceEditorProps): ReactElement {
     border: `1px solid ${PANEL_BORDER_STRONG}`,
     backgroundColor: "transparent",
     color: TEXT_PRIMARY,
-    fontSize: 13,
+    fontSize: "var(--font-size-sm)",
   };
   const intervalInputStyle: CSSProperties = {
     width: 56,
@@ -377,10 +377,10 @@ export function RecurrenceEditor(props: RecurrenceEditorProps): ReactElement {
     border: `1px solid ${PANEL_BORDER_STRONG}`,
     backgroundColor: "transparent",
     color: TEXT_PRIMARY,
-    fontSize: 13,
+    fontSize: "var(--font-size-sm)",
   };
   const previewStyle: CSSProperties = {
-    fontSize: 12,
+    fontSize: "var(--font-size-xs)",
     color: TEXT_FAINT,
     fontStyle: "italic",
   };
@@ -393,7 +393,7 @@ export function RecurrenceEditor(props: RecurrenceEditorProps): ReactElement {
       ? "var(--color-accent-soft, transparent)"
       : "transparent",
     color: active ? ACCENT : TEXT_SECONDARY,
-    fontSize: 12,
+    fontSize: "var(--font-size-xs)",
     fontWeight: 600,
     cursor: "pointer",
   });
@@ -457,7 +457,7 @@ export function RecurrenceEditor(props: RecurrenceEditorProps): ReactElement {
             border: `1px solid ${active ? ACCENT : PANEL_BORDER_STRONG}`,
             backgroundColor: active ? ACCENT : "transparent",
             color: active ? "var(--color-bg)" : TEXT_PRIMARY,
-            fontSize: 12,
+            fontSize: "var(--font-size-xs)",
             fontWeight: 600,
             cursor: "pointer",
           };

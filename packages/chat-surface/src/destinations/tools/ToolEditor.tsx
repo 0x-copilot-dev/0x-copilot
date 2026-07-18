@@ -479,7 +479,7 @@ function SchemaTab(props: SchemaTabProps): ReactElement {
           aria-label="Args schema"
           aria-invalid={argsError !== null}
           data-testid="tool-editor-args-schema-input"
-          style={{ ...textAreaStyle, fontFamily: "ui-monospace, monospace" }}
+          style={{ ...textAreaStyle, fontFamily: "var(--font-mono)" }}
           disabled={disabled}
           spellCheck={false}
         />
@@ -504,7 +504,7 @@ function SchemaTab(props: SchemaTabProps): ReactElement {
           aria-label="Returns schema"
           aria-invalid={returnsError !== null}
           data-testid="tool-editor-returns-schema-input"
-          style={{ ...textAreaStyle, fontFamily: "ui-monospace, monospace" }}
+          style={{ ...textAreaStyle, fontFamily: "var(--font-mono)" }}
           disabled={disabled}
           spellCheck={false}
         />
@@ -753,7 +753,7 @@ const nameHeaderStyle: CSSProperties = {
   border: "1px solid var(--color-border)",
   background: "transparent",
   color: "var(--color-text)",
-  fontSize: 14,
+  fontSize: "var(--font-size-md)",
   fontWeight: 600,
 };
 
@@ -771,7 +771,7 @@ const tabButtonStyle = (selected: boolean): CSSProperties => ({
   borderBottom: `2px solid ${selected ? "var(--color-accent)" : "transparent"}`,
   color: selected ? "var(--color-text)" : "var(--color-text-muted)",
   padding: "8px 14px",
-  fontSize: 13,
+  fontSize: "var(--font-size-sm)",
   fontFamily: "inherit",
   cursor: "pointer",
 });
@@ -793,14 +793,14 @@ const fieldStyle: CSSProperties = {
 };
 
 const labelStyle: CSSProperties = {
-  fontSize: 12,
+  fontSize: "var(--font-size-xs)",
   fontWeight: 600,
   color: "var(--color-text-muted)",
 };
 
 const hintStyle: CSSProperties = {
   margin: "4px 0 0 0",
-  fontSize: 12,
+  fontSize: "var(--font-size-xs)",
   color: "var(--color-text-muted)",
   fontStyle: "italic",
 };
@@ -812,7 +812,7 @@ const textInputStyle: CSSProperties = {
   border: "1px solid var(--color-border)",
   background: "transparent",
   color: "var(--color-text)",
-  fontSize: 13,
+  fontSize: "var(--font-size-sm)",
   fontFamily: "inherit",
   boxSizing: "border-box",
 };
@@ -823,7 +823,7 @@ const textAreaStyle: CSSProperties = {
   border: "1px solid var(--color-border)",
   background: "transparent",
   color: "var(--color-text)",
-  fontSize: 13,
+  fontSize: "var(--font-size-sm)",
   fontFamily: "inherit",
   resize: "vertical",
   boxSizing: "border-box",
@@ -831,9 +831,9 @@ const textAreaStyle: CSSProperties = {
 
 const errorTextStyle: CSSProperties = {
   margin: "4px 0 0 0",
-  fontSize: 12,
+  fontSize: "var(--font-size-xs)",
   color: "var(--color-danger, #d97777)",
-  fontFamily: "ui-monospace, monospace",
+  fontFamily: "var(--font-mono)",
 };
 
 const radioGroupStyle: CSSProperties = {
@@ -846,7 +846,7 @@ const radioLabelStyle: CSSProperties = {
   display: "inline-flex",
   alignItems: "center",
   gap: 8,
-  fontSize: 13,
+  fontSize: "var(--font-size-sm)",
   color: "var(--color-text)",
 };
 
@@ -861,7 +861,7 @@ const primaryButtonStyle = (saveState: ToolEditorSaveState): CSSProperties => ({
   border: "none",
   borderRadius: 6,
   padding: "6px 14px",
-  fontSize: 13,
+  fontSize: "var(--font-size-sm)",
   fontWeight: 600,
   cursor: saveState === "saving" ? "wait" : "pointer",
 });
@@ -872,6 +872,6 @@ const secondaryButtonStyle: CSSProperties = {
   border: "1px solid var(--color-border)",
   borderRadius: 6,
   padding: "5px 12px",
-  fontSize: 13,
+  fontSize: "var(--font-size-sm)",
   cursor: "pointer",
 };

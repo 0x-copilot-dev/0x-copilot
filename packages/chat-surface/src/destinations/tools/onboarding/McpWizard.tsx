@@ -450,18 +450,18 @@ function MethodsStep(props: MethodsStepProps): ReactElement {
 
 const hintStyle: CSSProperties = {
   margin: 0,
-  fontSize: 12.5,
+  fontSize: "var(--font-size-xs)",
   color: "var(--color-text-muted)",
 };
 
 const successStyle: CSSProperties = {
   margin: "8px 0 0 0",
-  fontSize: 13,
+  fontSize: "var(--font-size-sm)",
   color: "var(--color-success, #16a34a)",
 };
 
 const mutedStyle: CSSProperties = {
-  fontSize: 12.5,
+  fontSize: "var(--font-size-xs)",
   color: "var(--color-text-muted)",
 };
 
@@ -487,7 +487,7 @@ const labelRowStyle: CSSProperties = {
   display: "inline-flex",
   alignItems: "center",
   gap: 8,
-  fontSize: 13,
+  fontSize: "var(--font-size-sm)",
   color: "var(--color-text)",
   flexWrap: "wrap",
 };
@@ -495,7 +495,7 @@ const labelRowStyle: CSSProperties = {
 const codeStyle: CSSProperties = {
   fontFamily:
     "ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace",
-  fontSize: 12.5,
+  fontSize: "var(--font-size-xs)",
   color: "var(--color-text)",
 };
 
@@ -513,7 +513,7 @@ const tabButtonStyle = (selected: boolean): CSSProperties => ({
   borderBottom: `2px solid ${selected ? "var(--color-accent)" : "transparent"}`,
   color: selected ? "var(--color-text)" : "var(--color-text-muted)",
   padding: "8px 14px",
-  fontSize: 13,
+  fontSize: "var(--font-size-sm)",
   fontFamily: "inherit",
   cursor: "pointer",
 });

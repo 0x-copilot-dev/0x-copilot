@@ -667,8 +667,7 @@ const inputStyle: CSSProperties = {
   border: "1px solid var(--color-border-strong, #2a2a2c)",
   background: "var(--color-bg-elevated, #18181b)",
   color: "var(--color-text, #ededee)",
-  fontFamily:
-    "var(--font-family-mono, ui-monospace, SFMono-Regular, monospace)",
+  fontFamily: "var(--font-mono)",
   fontSize: "var(--font-size-sm, 13px)",
 };
 
@@ -678,8 +677,7 @@ const textareaStyle: CSSProperties = {
   border: "1px solid var(--color-border-strong, #2a2a2c)",
   background: "var(--color-bg-elevated, #18181b)",
   color: "var(--color-text, #ededee)",
-  fontFamily:
-    "var(--font-family-mono, ui-monospace, SFMono-Regular, monospace)",
+  fontFamily: "var(--font-mono)",
   fontSize: "var(--font-size-sm, 13px)",
   resize: "vertical",
 };
@@ -748,8 +746,7 @@ const errorStyle: CSSProperties = {
 };
 
 const codeInlineStyle: CSSProperties = {
-  fontFamily:
-    "var(--font-family-mono, ui-monospace, SFMono-Regular, monospace)",
+  fontFamily: "var(--font-mono)",
   fontSize: "var(--font-size-xs, 12px)",
   padding: "1px 4px",
   borderRadius: 3,
@@ -789,8 +786,7 @@ const snippetStyle: CSSProperties = {
   borderRadius: "var(--radius-sm, 6px)",
   background: "var(--color-surface-muted, #222224)",
   color: "var(--color-text, #ededee)",
-  fontFamily:
-    "var(--font-family-mono, ui-monospace, SFMono-Regular, monospace)",
+  fontFamily: "var(--font-mono)",
   fontSize: "var(--font-size-xs, 12px)",
   lineHeight: 1.55,
   whiteSpace: "pre",

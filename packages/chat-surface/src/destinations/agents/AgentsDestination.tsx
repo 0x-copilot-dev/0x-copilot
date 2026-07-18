@@ -114,12 +114,12 @@ export function AgentsDestination({
     gap: 12,
   };
   const titleStyle: CSSProperties = {
-    fontSize: 18,
+    fontSize: "var(--font-size-xl)",
     fontWeight: 600,
     margin: 0,
   };
   const subtitleStyle: CSSProperties = {
-    fontSize: 13,
+    fontSize: "var(--font-size-sm)",
     color: TEXT_SECONDARY,
     margin: 0,
   };
@@ -153,7 +153,7 @@ export function AgentsDestination({
   const emptyStyle: CSSProperties = {
     padding: 24,
     color: TEXT_SECONDARY,
-    fontSize: 13,
+    fontSize: "var(--font-size-sm)",
     textAlign: "center",
   };
   const starterHeaderStyle: CSSProperties = {
@@ -211,7 +211,7 @@ export function AgentsDestination({
             const tabStyle: CSSProperties = {
               padding: "6px 12px",
               borderRadius: 6,
-              fontSize: 13,
+              fontSize: "var(--font-size-sm)",
               fontWeight: active ? 600 : 500,
               color: active ? ACCENT : TEXT_SECONDARY,
               background: active
@@ -244,10 +244,12 @@ export function AgentsDestination({
         {showStarters ? (
           <div data-testid="agents-starters">
             <div style={starterHeaderStyle}>
-              <strong style={{ fontSize: 14 }}>
+              <strong style={{ fontSize: "var(--font-size-md)" }}>
                 Get started — one-tap install
               </strong>
-              <span style={{ fontSize: 13, color: TEXT_FAINT }}>
+              <span
+                style={{ fontSize: "var(--font-size-sm)", color: TEXT_FAINT }}
+              >
                 These recommended agents cover the most common jobs. Install one
                 to give your team its first member.
               </span>

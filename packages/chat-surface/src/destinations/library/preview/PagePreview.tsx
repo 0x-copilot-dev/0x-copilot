@@ -33,7 +33,7 @@ const wrapperStyle: CSSProperties = {
   border: "1px solid var(--color-border)",
   background: "var(--color-surface)",
   color: "var(--color-text)",
-  fontSize: 14,
+  fontSize: "var(--font-size-md)",
   lineHeight: 1.6,
   minHeight: 240,
   overflow: "auto",

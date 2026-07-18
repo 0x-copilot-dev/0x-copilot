@@ -272,7 +272,7 @@ export function ChatsSidebar({
     borderBottom: `1px solid ${BORDER}`,
   };
   const titleStyle: CSSProperties = {
-    fontSize: 13,
+    fontSize: "var(--font-size-sm)",
     fontWeight: 600,
     letterSpacing: 0.2,
     flex: 1,
@@ -314,7 +314,7 @@ export function ChatsSidebar({
     border: "none",
     outline: "none",
     color: TEXT_PRIMARY,
-    fontSize: 12,
+    fontSize: "var(--font-size-xs)",
     minWidth: 0,
   };
   const listStyle: CSSProperties = {
@@ -363,7 +363,11 @@ export function ChatsSidebar({
       {data.status === "loading" ? (
         <div
           data-testid="chats-sidebar-loading"
-          style={{ padding: 12, color: TEXT_SECONDARY, fontSize: 12 }}
+          style={{
+            padding: 12,
+            color: TEXT_SECONDARY,
+            fontSize: "var(--font-size-xs)",
+          }}
         >
           Loading chats…
         </div>
@@ -371,14 +375,22 @@ export function ChatsSidebar({
         <div
           role="alert"
           data-testid="chats-sidebar-error"
-          style={{ padding: 12, color: ERROR_TEXT, fontSize: 12 }}
+          style={{
+            padding: 12,
+            color: ERROR_TEXT,
+            fontSize: "var(--font-size-xs)",
+          }}
         >
           {data.message}
         </div>
       ) : filtered.length === 0 ? (
         <div
           data-testid="chats-sidebar-empty"
-          style={{ padding: 12, color: TEXT_TERTIARY, fontSize: 12 }}
+          style={{
+            padding: 12,
+            color: TEXT_TERTIARY,
+            fontSize: "var(--font-size-xs)",
+          }}
         >
           No projects match.
         </div>
@@ -411,7 +423,7 @@ export function ChatsSidebar({
               cursor: "pointer",
               width: "100%",
               textAlign: "left",
-              fontSize: 12,
+              fontSize: "var(--font-size-xs)",
               fontWeight: 600,
               letterSpacing: 0.1,
             };
@@ -457,7 +469,7 @@ export function ChatsSidebar({
                         borderLeft: `2px solid ${isActive ? ACCENT : "transparent"}`,
                         borderRadius: 4,
                         cursor: "pointer",
-                        fontSize: 12,
+                        fontSize: "var(--font-size-xs)",
                         lineHeight: "16px",
                       };
                       return (

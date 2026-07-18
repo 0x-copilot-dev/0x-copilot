@@ -450,7 +450,7 @@ function ProjectFilterOption({
         {label}
       </span>
       {active ? (
-        <span aria-hidden="true" style={{ fontSize: 12 }}>
+        <span aria-hidden="true" style={{ fontSize: "var(--font-size-xs)" }}>
           ✓
         </span>
       ) : null}

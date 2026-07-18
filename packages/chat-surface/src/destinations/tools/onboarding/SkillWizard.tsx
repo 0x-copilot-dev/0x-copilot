@@ -94,13 +94,13 @@ const headerStyle: CSSProperties = {
 
 const titleStyle: CSSProperties = {
   margin: 0,
-  fontSize: 16,
+  fontSize: "var(--font-size-lg)",
   fontWeight: 600,
 };
 
 const subtitleStyle: CSSProperties = {
   margin: 0,
-  fontSize: 13,
+  fontSize: "var(--font-size-sm)",
   color: "var(--color-text-muted)",
 };
 
@@ -114,13 +114,13 @@ const bodyStyle: CSSProperties = {
 
 const stepTitleStyle: CSSProperties = {
   margin: 0,
-  fontSize: 14,
+  fontSize: "var(--font-size-md)",
   fontWeight: 600,
 };
 
 const hintStyle: CSSProperties = {
   margin: 0,
-  fontSize: 13,
+  fontSize: "var(--font-size-sm)",
   color: "var(--color-text-muted)",
 };
 

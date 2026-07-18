@@ -242,7 +242,7 @@ const titleRowStyle: CSSProperties = {
 };
 
 const titleStyle: CSSProperties = {
-  fontSize: 18,
+  fontSize: "var(--font-size-xl)",
   fontWeight: 700,
   margin: 0,
   lineHeight: 1.3,
@@ -257,7 +257,7 @@ const chipRowStyle: CSSProperties = {
   flexWrap: "wrap",
   alignItems: "center",
   gap: 6,
-  fontSize: 12,
+  fontSize: "var(--font-size-xs)",
   color: "var(--color-text-muted)",
 };
 
@@ -275,7 +275,7 @@ const secondaryButtonStyle = (busy: boolean): CSSProperties => ({
   border: "1px solid var(--color-border-strong)",
   background: "transparent",
   color: "var(--color-accent)",
-  fontSize: 12,
+  fontSize: "var(--font-size-xs)",
   fontWeight: 600,
   cursor: busy ? "default" : "pointer",
   opacity: busy ? 0.6 : 1,
@@ -313,7 +313,7 @@ const sectionStyle: CSSProperties = {
 };
 
 const sectionTitleStyle: CSSProperties = {
-  fontSize: 11,
+  fontSize: "var(--font-size-2xs)",
   fontWeight: 600,
   textTransform: "uppercase",
   letterSpacing: 0.4,
@@ -324,12 +324,12 @@ const metaLineStyle: CSSProperties = {
   display: "flex",
   flexDirection: "column",
   gap: 2,
-  fontSize: 12,
+  fontSize: "var(--font-size-xs)",
   color: "var(--color-text)",
 };
 
 const metaLabelStyle: CSSProperties = {
-  fontSize: 10,
+  fontSize: "var(--font-size-2xs)",
   textTransform: "uppercase",
   letterSpacing: 0.4,
   color: "var(--color-text-subtle)",
@@ -341,7 +341,7 @@ const auditRowStyle: CSSProperties = {
   gap: 4,
   padding: "8px 0",
   borderTop: "1px solid var(--color-border)",
-  fontSize: 12,
+  fontSize: "var(--font-size-xs)",
 };
 
 const auditFirstRowStyle: CSSProperties = {
@@ -351,7 +351,7 @@ const auditFirstRowStyle: CSSProperties = {
 };
 
 const auditAtStyle: CSSProperties = {
-  fontSize: 10,
+  fontSize: "var(--font-size-2xs)",
   textTransform: "uppercase",
   letterSpacing: 0.4,
   color: "var(--color-text-subtle)",
@@ -374,7 +374,7 @@ const errorBannerStyle: CSSProperties = {
   border: "1px solid var(--color-danger, #ef4444)",
   background: "var(--color-danger-surface, rgba(239, 68, 68, 0.08))",
   color: "var(--color-danger, #ef4444)",
-  fontSize: 12,
+  fontSize: "var(--font-size-xs)",
 };
 
 // ===========================================================================
@@ -707,7 +707,10 @@ export function LibraryDetailView({
               <div style={sectionTitleStyle}>Audit history</div>
               {item.auditEntries.length === 0 ? (
                 <div
-                  style={{ fontSize: 12, color: "var(--color-text-subtle)" }}
+                  style={{
+                    fontSize: "var(--font-size-xs)",
+                    color: "var(--color-text-subtle)",
+                  }}
                 >
                   No audit entries yet.
                 </div>

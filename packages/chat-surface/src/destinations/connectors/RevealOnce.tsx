@@ -141,8 +141,7 @@ const valueRowStyle: CSSProperties = {
 };
 
 const codeStyle: CSSProperties = {
-  fontFamily:
-    "var(--font-family-mono, ui-monospace, SFMono-Regular, monospace)",
+  fontFamily: "var(--font-mono)",
   fontSize: "var(--font-size-sm, 13px)",
   padding: "4px 8px",
   borderRadius: "var(--radius-sm, 6px)",

@@ -297,7 +297,7 @@ const ghostBannerStyle: CSSProperties = {
   borderRadius: 8,
   color: PALETTE.ghostAccent,
   padding: "6px 10px",
-  fontSize: 12,
+  fontSize: "var(--font-size-xs)",
   letterSpacing: 0.4,
   textTransform: "uppercase",
 };
@@ -308,7 +308,7 @@ const composerSlotStyle: CSSProperties = {
 
 const statusStyle: CSSProperties = {
   color: PALETTE.textLo,
-  fontSize: 12,
+  fontSize: "var(--font-size-xs)",
   padding: 12,
 };
 
@@ -358,7 +358,7 @@ const tabButtonStyle = (selected: boolean): CSSProperties => ({
   border: "none",
   color: selected ? PALETTE.textHi : PALETTE.textLo,
   padding: "8px 12px",
-  fontSize: 13,
+  fontSize: "var(--font-size-sm)",
   borderBottom: selected ? "2px solid #c2ff5a" : "2px solid transparent",
   cursor: "pointer",
 });
@@ -366,6 +366,6 @@ const tabButtonStyle = (selected: boolean): CSSProperties => ({
 const tabPanelStyle: CSSProperties = {
   flex: 1,
   color: PALETTE.textLo,
-  fontSize: 13,
+  fontSize: "var(--font-size-sm)",
   padding: 12,
 };

@@ -289,7 +289,7 @@ const inputStyle: CSSProperties = {
   borderBottom: "1px solid #2a2a2a",
   outline: "none",
   padding: "14px 16px",
-  fontSize: 15,
+  fontSize: "var(--font-size-md)",
   background: "transparent",
   color: "inherit",
 };
@@ -316,11 +316,11 @@ const rowSelectedStyle: CSSProperties = {
 };
 
 const labelStyle: CSSProperties = {
-  fontSize: 14,
+  fontSize: "var(--font-size-md)",
 };
 
 const hintStyle: CSSProperties = {
-  fontSize: 12,
+  fontSize: "var(--font-size-xs)",
   color: "#888",
   marginLeft: 12,
 };
@@ -328,5 +328,5 @@ const hintStyle: CSSProperties = {
 const emptyStyle: CSSProperties = {
   padding: "12px 16px",
   color: "#888",
-  fontSize: 14,
+  fontSize: "var(--font-size-md)",
 };

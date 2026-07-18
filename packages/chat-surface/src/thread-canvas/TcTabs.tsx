@@ -39,7 +39,7 @@ const stripStyle: CSSProperties = {
   minHeight: 36,
   fontFamily:
     "ui-sans-serif, system-ui, -apple-system, 'Segoe UI', Roboto, sans-serif",
-  fontSize: 12,
+  fontSize: "var(--font-size-xs)",
 };
 
 const baseTabStyle: CSSProperties = {
@@ -90,7 +90,7 @@ const closeButtonStyle: CSSProperties = {
   borderRadius: 3,
   color: PALETTE.textLo,
   cursor: "pointer",
-  fontSize: 12,
+  fontSize: "var(--font-size-xs)",
   lineHeight: 1,
 };
 

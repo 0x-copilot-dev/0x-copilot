@@ -477,8 +477,7 @@ const slugStyle: CSSProperties = {
   margin: 0,
   fontSize: "var(--font-size-xs, 12px)",
   color: "var(--color-text-muted, #b4b4b8)",
-  fontFamily:
-    "var(--font-family-mono, ui-monospace, SFMono-Regular, monospace)",
+  fontFamily: "var(--font-mono)",
 };
 
 const pillRowStyle: CSSProperties = {

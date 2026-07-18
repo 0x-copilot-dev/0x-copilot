@@ -277,7 +277,7 @@ const tabButtonStyle = (selected: boolean): CSSProperties => ({
   borderBottom: `2px solid ${selected ? "var(--color-accent)" : "transparent"}`,
   color: selected ? "var(--color-text)" : "var(--color-text-muted)",
   padding: "8px 12px",
-  fontSize: 13,
+  fontSize: "var(--font-size-sm)",
   cursor: "pointer",
   fontFamily: "inherit",
 });
@@ -292,7 +292,7 @@ const countPillStyle: CSSProperties = {
   borderRadius: 999,
   background: "var(--color-surface-muted)",
   color: "var(--color-text-muted)",
-  fontSize: 11,
+  fontSize: "var(--font-size-2xs)",
   fontWeight: 600,
 };
 
@@ -302,13 +302,13 @@ const panelStyle: CSSProperties = {
   overflowY: "auto",
   padding: "12px 16px",
   color: "var(--color-text)",
-  fontSize: 13,
+  fontSize: "var(--font-size-sm)",
 };
 
 const emptyStyle: CSSProperties = {
   margin: 0,
   color: "var(--color-text-subtle)",
-  fontSize: 12.5,
+  fontSize: "var(--font-size-xs)",
   lineHeight: 1.55,
 };
 
@@ -345,13 +345,13 @@ const activityKindBadgeStyle: CSSProperties = {
   background: "var(--color-bg-elevated)",
   color: "var(--color-text-muted)",
   borderRadius: 4,
-  fontSize: 10,
+  fontSize: "var(--font-size-2xs)",
   textTransform: "uppercase",
   letterSpacing: 0.4,
 };
 
 const activityTitleStyle: CSSProperties = {
-  fontSize: 12.5,
+  fontSize: "var(--font-size-xs)",
   color: "var(--color-text)",
   fontWeight: 500,
   overflow: "hidden",
@@ -362,7 +362,7 @@ const activityTitleStyle: CSSProperties = {
 const activitySummaryStyle: CSSProperties = {
   margin: 0,
   color: "var(--color-text-muted)",
-  fontSize: 11.5,
+  fontSize: "var(--font-size-2xs)",
   lineHeight: 1.5,
 };
 
@@ -381,7 +381,7 @@ const approvalHeaderStyle: CSSProperties = {
   alignItems: "center",
   justifyContent: "space-between",
   gap: 8,
-  fontSize: 12,
+  fontSize: "var(--font-size-xs)",
   color: "var(--color-text-muted)",
 };
 
@@ -398,7 +398,7 @@ const acceptButtonStyle = (enabled: boolean): CSSProperties => ({
   border: "none",
   borderRadius: 6,
   padding: "4px 10px",
-  fontSize: 11.5,
+  fontSize: "var(--font-size-2xs)",
   fontWeight: 600,
   cursor: enabled ? "pointer" : "not-allowed",
 });
@@ -409,6 +409,6 @@ const rejectButtonStyle = (enabled: boolean): CSSProperties => ({
   border: "1px solid var(--color-border)",
   borderRadius: 6,
   padding: "4px 10px",
-  fontSize: 11.5,
+  fontSize: "var(--font-size-2xs)",
   cursor: enabled ? "pointer" : "not-allowed",
 });

@@ -184,13 +184,13 @@ const headerStyle: CSSProperties = {
 
 const titleStyle: CSSProperties = {
   margin: 0,
-  fontSize: 16,
+  fontSize: "var(--font-size-lg)",
   fontWeight: 600,
 };
 
 const subtitleStyle: CSSProperties = {
   margin: 0,
-  fontSize: 13,
+  fontSize: "var(--font-size-sm)",
   color: "var(--color-text-muted)",
 };
 
@@ -204,7 +204,7 @@ const bodyStyle: CSSProperties = {
 
 const stepTitleStyle: CSSProperties = {
   margin: 0,
-  fontSize: 14,
+  fontSize: "var(--font-size-md)",
   fontWeight: 600,
 };
 
@@ -235,18 +235,18 @@ const badgeStyle: CSSProperties = {
   borderRadius: 999,
   background: "var(--color-bg)",
   color: "var(--color-text-muted)",
-  fontSize: 10,
+  fontSize: "var(--font-size-2xs)",
   fontWeight: 700,
   letterSpacing: 0.4,
 };
 
 const cardTitleStyle: CSSProperties = {
-  fontSize: 14,
+  fontSize: "var(--font-size-md)",
   fontWeight: 600,
 };
 
 const cardDescStyle: CSSProperties = {
-  fontSize: 12.5,
+  fontSize: "var(--font-size-xs)",
   color: "var(--color-text-muted)",
 };
 

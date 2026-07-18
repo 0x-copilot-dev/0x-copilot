@@ -476,14 +476,14 @@ const heroBodyStyle: CSSProperties = {
 
 const titleStyle: CSSProperties = {
   margin: 0,
-  fontSize: 18,
+  fontSize: "var(--font-size-xl)",
   fontWeight: 600,
   color: "var(--color-text)",
 };
 
 const descriptionStyle: CSSProperties = {
   margin: 0,
-  fontSize: 13,
+  fontSize: "var(--font-size-sm)",
   lineHeight: 1.55,
   color: "var(--color-text-muted)",
 };
@@ -505,7 +505,7 @@ const chipStyle: CSSProperties = {
   border: "1px solid var(--color-border)",
   background: "var(--color-bg-elevated)",
   color: "var(--color-text-muted)",
-  fontSize: 11,
+  fontSize: "var(--font-size-2xs)",
   fontWeight: 600,
   letterSpacing: 0.3,
   textTransform: "uppercase",
@@ -530,7 +530,7 @@ const kpiStyle: CSSProperties = {
 };
 
 const kpiLabelStyle: CSSProperties = {
-  fontSize: 11,
+  fontSize: "var(--font-size-2xs)",
   color: "var(--color-text-muted)",
   textTransform: "uppercase",
   letterSpacing: 0.4,
@@ -538,7 +538,7 @@ const kpiLabelStyle: CSSProperties = {
 };
 
 const kpiValueStyle: CSSProperties = {
-  fontSize: 16,
+  fontSize: "var(--font-size-lg)",
   fontWeight: 600,
   color: "var(--color-text)",
   margin: 0,
@@ -560,7 +560,7 @@ const tabButtonStyle = (selected: boolean): CSSProperties => ({
   borderBottom: `2px solid ${selected ? "var(--color-accent)" : "transparent"}`,
   color: selected ? "var(--color-text)" : "var(--color-text-muted)",
   padding: "8px 14px",
-  fontSize: 13,
+  fontSize: "var(--font-size-sm)",
   fontFamily: "inherit",
   cursor: "pointer",
 });
@@ -589,7 +589,7 @@ const factStyle: CSSProperties = {
 };
 
 const factLabelStyle: CSSProperties = {
-  fontSize: 11,
+  fontSize: "var(--font-size-2xs)",
   color: "var(--color-text-muted)",
   textTransform: "uppercase",
   letterSpacing: 0.4,
@@ -597,7 +597,7 @@ const factLabelStyle: CSSProperties = {
 };
 
 const factValueStyle: CSSProperties = {
-  fontSize: 13,
+  fontSize: "var(--font-size-sm)",
   fontWeight: 600,
   color: "var(--color-text)",
   margin: 0,
@@ -615,7 +615,7 @@ const sectionStyle: CSSProperties = {
 
 const sectionTitleStyle: CSSProperties = {
   margin: 0,
-  fontSize: 12,
+  fontSize: "var(--font-size-xs)",
   fontWeight: 600,
   textTransform: "uppercase",
   letterSpacing: 0.5,
@@ -629,8 +629,8 @@ const codeBlockStyle: CSSProperties = {
   border: "1px solid var(--color-border)",
   background: "var(--color-bg-elevated)",
   color: "var(--color-text)",
-  fontSize: 12,
-  fontFamily: "ui-monospace, monospace",
+  fontSize: "var(--font-size-xs)",
+  fontFamily: "var(--font-mono)",
   whiteSpace: "pre-wrap",
   maxHeight: 280,
   overflow: "auto",
@@ -639,7 +639,7 @@ const codeBlockStyle: CSSProperties = {
 const emptyStyle: CSSProperties = {
   margin: 0,
   padding: 16,
-  fontSize: 13,
+  fontSize: "var(--font-size-sm)",
   color: "var(--color-text-muted)",
   fontStyle: "italic",
   textAlign: "center",

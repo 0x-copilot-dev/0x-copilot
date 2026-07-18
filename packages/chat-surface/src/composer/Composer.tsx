@@ -1444,7 +1444,7 @@ const iconButtonStyle = (active: boolean): CSSProperties => ({
   border: "1px solid transparent",
   borderRadius: 6,
   padding: 0,
-  fontSize: 14,
+  fontSize: "var(--font-size-md)",
   cursor: "pointer",
 });
 
@@ -1458,7 +1458,7 @@ const pillButtonStyle = (active: boolean): CSSProperties => ({
   border: `1px solid ${active ? "var(--color-accent)" : "var(--color-border)"}`,
   borderRadius: 999,
   padding: "0 10px",
-  fontSize: 12,
+  fontSize: "var(--font-size-xs)",
   cursor: "pointer",
   whiteSpace: "nowrap",
 });
@@ -1492,7 +1492,7 @@ const sendButtonStyle = (enabled: boolean): CSSProperties => ({
   border: "none",
   borderRadius: 8,
   padding: 0,
-  fontSize: 14,
+  fontSize: "var(--font-size-md)",
   cursor: enabled ? "pointer" : "not-allowed",
 });
 
@@ -1507,7 +1507,7 @@ const cancelButtonStyle: CSSProperties = {
   border: "1px solid var(--color-border)",
   borderRadius: 8,
   padding: "0 10px",
-  fontSize: 12,
+  fontSize: "var(--font-size-xs)",
   cursor: "pointer",
 };
 
@@ -1522,7 +1522,7 @@ const saveButtonStyle = (enabled: boolean): CSSProperties => ({
   border: "none",
   borderRadius: 8,
   padding: "0 12px",
-  fontSize: 12,
+  fontSize: "var(--font-size-xs)",
   fontWeight: 600,
   cursor: enabled ? "pointer" : "not-allowed",
 });
@@ -1545,7 +1545,7 @@ const hintRowStyle: CSSProperties = {
   alignItems: "center",
   gap: 10,
   padding: "2px 4px 0",
-  fontSize: 11,
+  fontSize: "var(--font-size-2xs)",
   color: "var(--color-text-subtle)",
   minHeight: 18,
 };
@@ -1569,7 +1569,7 @@ const hintSepStyle: CSSProperties = {
 
 const kbdStyle: CSSProperties = {
   fontFamily: "var(--font-sans)",
-  fontSize: 10.5,
+  fontSize: "var(--font-size-2xs)",
   background: "var(--color-surface-muted)",
   border: "1px solid var(--color-border)",
   borderBottomWidth: 2,
@@ -1605,7 +1605,7 @@ const attachmentPillStyle: CSSProperties = {
   border: "1px solid var(--color-border)",
   color: "var(--color-text-muted)",
   borderRadius: 999,
-  fontSize: 12,
+  fontSize: "var(--font-size-xs)",
   maxWidth: 240,
 };
 
@@ -1618,7 +1618,7 @@ const attachmentPillNameStyle: CSSProperties = {
 
 const attachmentPillSizeStyle: CSSProperties = {
   color: "var(--color-text-subtle)",
-  fontSize: 10.5,
+  fontSize: "var(--font-size-2xs)",
   flexShrink: 0,
 };
 
@@ -1634,6 +1634,6 @@ const attachmentPillRemoveStyle: CSSProperties = {
   borderRadius: "50%",
   padding: 0,
   cursor: "pointer",
-  fontSize: 11,
+  fontSize: "var(--font-size-2xs)",
   flexShrink: 0,
 };

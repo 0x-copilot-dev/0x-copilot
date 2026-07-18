@@ -198,7 +198,7 @@ function MetadataTab({
   readOnly: boolean;
 }): ReactElement {
   const labelStyle: CSSProperties = {
-    fontSize: 12,
+    fontSize: "var(--font-size-xs)",
     color: TEXT_SECONDARY,
     fontWeight: 500,
   };
@@ -209,7 +209,7 @@ function MetadataTab({
     border: `1px solid ${PANEL_BORDER_STRONG}`,
     backgroundColor: "transparent",
     color: TEXT_PRIMARY,
-    fontSize: 13,
+    fontSize: "var(--font-size-sm)",
     outline: "none",
   };
   const textareaStyle: CSSProperties = {
@@ -219,7 +219,7 @@ function MetadataTab({
     border: `1px solid ${PANEL_BORDER_STRONG}`,
     backgroundColor: "transparent",
     color: TEXT_PRIMARY,
-    fontSize: 13,
+    fontSize: "var(--font-size-sm)",
     outline: "none",
     fontFamily: "inherit",
     resize: "vertical",
@@ -272,7 +272,7 @@ function AppearanceTab({
   readOnly: boolean;
 }): ReactElement {
   const labelStyle: CSSProperties = {
-    fontSize: 12,
+    fontSize: "var(--font-size-xs)",
     color: TEXT_SECONDARY,
     fontWeight: 500,
   };
@@ -285,7 +285,7 @@ function AppearanceTab({
     display: "flex",
     alignItems: "center",
     justifyContent: "center",
-    fontSize: 26,
+    fontSize: "var(--font-size-2xl)",
   };
   const swatchRow: CSSProperties = {
     display: "flex",
@@ -300,7 +300,7 @@ function AppearanceTab({
     border: `1px solid ${PANEL_BORDER_STRONG}`,
     backgroundColor: "transparent",
     color: TEXT_PRIMARY,
-    fontSize: 14,
+    fontSize: "var(--font-size-md)",
     outline: "none",
     textAlign: "center",
   };
@@ -351,7 +351,7 @@ function AppearanceTab({
                 backgroundColor: PANEL_BACKGROUND,
                 color: TEXT_PRIMARY,
                 cursor: readOnly ? "not-allowed" : "pointer",
-                fontSize: 16,
+                fontSize: "var(--font-size-lg)",
               }}
             >
               {glyph}
@@ -408,12 +408,12 @@ function ConnectorsTab({
   readOnly: boolean;
 }): ReactElement {
   const labelStyle: CSSProperties = {
-    fontSize: 12,
+    fontSize: "var(--font-size-xs)",
     color: TEXT_SECONDARY,
     fontWeight: 500,
   };
   const helpStyle: CSSProperties = {
-    fontSize: 12,
+    fontSize: "var(--font-size-xs)",
     color: TEXT_FAINT,
     lineHeight: 1.5,
   };
@@ -511,7 +511,11 @@ function ConnectorsTab({
           />
           <div style={{ display: "flex", flexDirection: "column", gap: 2 }}>
             <span
-              style={{ fontSize: 13, color: TEXT_PRIMARY, fontWeight: 500 }}
+              style={{
+                fontSize: "var(--font-size-sm)",
+                color: TEXT_PRIMARY,
+                fontWeight: 500,
+              }}
             >
               {m === "inherit"
                 ? "Inherit owner defaults"
@@ -562,7 +566,7 @@ function ConnectorsTab({
                       ? "var(--color-bg-accent-subtle, #2a1a14)"
                       : "transparent",
                     color: selected ? ACCENT : TEXT_PRIMARY,
-                    fontSize: 12,
+                    fontSize: "var(--font-size-xs)",
                     fontWeight: 500,
                     cursor: readOnly ? "not-allowed" : "pointer",
                     display: "inline-flex",
@@ -727,7 +731,7 @@ export function ProjectEditor(props: ProjectEditorProps): ReactElement {
     border: `1px solid ${PANEL_BORDER}`,
     backgroundColor: "transparent",
     color: TEXT_SECONDARY,
-    fontSize: 13,
+    fontSize: "var(--font-size-sm)",
     cursor: "pointer",
   };
   const submitStyle: CSSProperties = {
@@ -737,7 +741,7 @@ export function ProjectEditor(props: ProjectEditorProps): ReactElement {
     border: "none",
     backgroundColor: ACCENT,
     color: ACCENT_CONTRAST,
-    fontSize: 13,
+    fontSize: "var(--font-size-sm)",
     fontWeight: 600,
     cursor: "pointer",
     opacity: !canEdit || !dirty || submitting ? 0.6 : 1,
@@ -749,7 +753,7 @@ export function ProjectEditor(props: ProjectEditorProps): ReactElement {
     border: `1px solid ${PANEL_BORDER}`,
     backgroundColor: "transparent",
     color: DANGER,
-    fontSize: 13,
+    fontSize: "var(--font-size-sm)",
     cursor: "pointer",
   };
 
@@ -771,7 +775,13 @@ export function ProjectEditor(props: ProjectEditorProps): ReactElement {
           gap: 10,
         }}
       >
-        <h3 style={{ margin: 0, fontSize: 16, fontWeight: 600 }}>
+        <h3
+          style={{
+            margin: 0,
+            fontSize: "var(--font-size-lg)",
+            fontWeight: 600,
+          }}
+        >
           Edit project
         </h3>
         <StatusPill
@@ -838,7 +848,7 @@ export function ProjectEditor(props: ProjectEditorProps): ReactElement {
       {error !== null ? (
         <div
           role="alert"
-          style={{ color: DANGER, fontSize: 12 }}
+          style={{ color: DANGER, fontSize: "var(--font-size-xs)" }}
           data-testid="project-editor-error"
         >
           {error}

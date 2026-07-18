@@ -125,7 +125,7 @@ export function RightRail({
     justifyContent: "space-between",
     padding: "0 16px",
     borderBottom: "1px solid var(--color-border)",
-    fontSize: 13,
+    fontSize: "var(--font-size-sm)",
     fontWeight: 600,
     color: "var(--color-text)",
   };
@@ -155,7 +155,7 @@ export function RightRail({
     border: "none",
     color: "var(--color-text-muted)",
     cursor: "pointer",
-    fontSize: 13,
+    fontSize: "var(--font-size-sm)",
     padding: 0,
   };
 
@@ -277,7 +277,7 @@ function EmptyStateMessage(): ReactElement {
         margin: 0,
         padding: "24px 16px",
         color: "var(--color-text-subtle)",
-        fontSize: 12.5,
+        fontSize: "var(--font-size-xs)",
         lineHeight: 1.55,
       }}
       data-testid="right-rail-empty"
