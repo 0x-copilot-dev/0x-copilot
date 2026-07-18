@@ -329,9 +329,13 @@ class RuntimeRunHandler:
         display_token: object | None = None
         mcp_display_token: object | None = None
         mcp_display_registry: dict[str, ToolDisplayTemplate] = {}
+        # Per-run ``/workspace/`` backend. Held across the try so the finally can
+        # release its pinned broker grant snapshot (``/v1/runs/end``) on every
+        # exit path — completion, failure, timeout, or cancel.
+        workspace_backend: object | None = None
         try:
             tool_observation_index = await self._tool_observation_index(command, run)
-            workspace_backend = await self._workspace_backend_for_run()
+            workspace_backend = await self._workspace_backend_for_run(command)
             dependencies = self._dependencies_for_run(
                 command,
                 tool_observation_index,
@@ -536,6 +540,7 @@ class RuntimeRunHandler:
                 ToolDisplayLookupContext.unbind(display_token)
             if mcp_display_token is not None:
                 McpDisplayRegistryContext.unbind(mcp_display_token)
+            await WorkspaceBackendWorkerWiring.release_backend(workspace_backend)
 
         completed = await with_optimistic_retry(
             lambda: self.persistence.update_run_status(
@@ -847,17 +852,52 @@ class RuntimeRunHandler:
             current_run_id=command.run_id,
         )
 
-    async def _workspace_backend_for_run(self) -> object | None:
-        """Construct the per-run read-only ``/workspace/`` backend, or ``None``.
+    async def _workspace_backend_for_run(
+        self, command: RuntimeRunCommand
+    ) -> object | None:
+        """Construct the per-run ``/workspace/`` backend, or ``None``.
 
         Gated on the desktop capability broker (env config + the run's active
         grant snapshot). Off the desktop path — web / postgres / in-memory — the
         broker env is absent, so this returns ``None`` and the factory composes
         no ``/workspace/`` route, leaving those images byte-identical. Broker
         unavailability or zero active grants likewise yield ``None`` (fail-soft).
+
+        When a writable grant is present, the write triple's durable half — the
+        content-addressed object store (``FileObjectStore``) plus a
+        snapshot-event emitter — is threaded in so the wiring can mint the run's
+        ``run_capability_context`` and enable the approval-gated write path. Both
+        are ``None`` off the file backend, so the write path stays inert.
         """
 
-        return await WorkspaceBackendWorkerWiring().workspace_backend()
+        file_store = self._file_store_wiring().file_store()
+        snapshot_store = (
+            getattr(file_store, "object_store", None)
+            if file_store is not None
+            else None
+        )
+        snapshot_emitter = (
+            self._workspace_snapshot_emitter(command)
+            if snapshot_store is not None
+            else None
+        )
+        return await WorkspaceBackendWorkerWiring(
+            snapshot_store=snapshot_store,
+            snapshot_emitter=snapshot_emitter,
+        ).workspace_backend()
+
+    def _workspace_snapshot_emitter(self, command: RuntimeRunCommand) -> object:
+        """Build the emitter the workspace backend records pre-image references through."""
+        from runtime_worker.workspace_backend_wiring import (  # noqa: PLC0415
+            WorkspaceSnapshotEventEmitter,
+        )
+
+        return WorkspaceSnapshotEventEmitter(
+            event_producer=self.event_producer,
+            persistence=self.persistence,
+            org_id=command.org_id,
+            run_id=command.run_id,
+        )
 
     def _dependencies_for_run(
         self,
