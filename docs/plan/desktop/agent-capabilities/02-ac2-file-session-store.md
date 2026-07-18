@@ -701,11 +701,17 @@ The export reader copies the conversation directory (`events.jsonl` plus every `
 
 ## Migration from the legacy desktop AI-runtime store
 
-> **Deferred / not in the light build.** No migration or backout scripts exist
-> (`export_desktop_file_store.py`, `export_file_store_to_postgres.py`,
-> `remove_legacy_desktop_store.py` are unwritten). The desktop file store is used
-> for new/empty stores only; there is no offline import from, or reverse export
-> to, the legacy Postgres store. This section is design intent.
+> **Forward migration built; backout/cleanup still deferred.** The offline
+> forward migration is implemented as `runtime_adapters/migrate.py` (core in
+> `runtime_adapters/file/migration.py`): it reads any source store through the
+> shared runtime port and writes it into the file store, preserving ids /
+> `sequence_no` / timestamps / payloads / object content-addresses, with
+> idempotent re-runs, a dry-run mode, and a fail-loud verify pass. Operator flow:
+> `docs/operations/desktop-file-store-migration.md`. It changes **no default** —
+> the file store stays opt-in behind `COPILOT_DESKTOP_FILE_STORE_V1`. Still
+> unwritten: the reverse export (`export_file_store_to_postgres.py`) and the
+> receipt-gated legacy-source cleanup (`remove_legacy_desktop_store.py`); the
+> steps below describe the full intended lifecycle including those.
 
 Migration is offline and one-way per attempt; there is no live dual-write.
 
