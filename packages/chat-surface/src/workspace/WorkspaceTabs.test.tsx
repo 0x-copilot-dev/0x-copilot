@@ -1,4 +1,6 @@
 // PR 3.2 — WorkspaceTabs ARIA + keyboard contract.
+// PR-1.7 — moved down with the component; the same assertions run from
+// chat-surface.
 
 import { fireEvent, render, screen } from "@testing-library/react";
 import { describe, expect, it, vi } from "vitest";

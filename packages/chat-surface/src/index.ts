@@ -836,3 +836,50 @@ export {
   type SettingsProfileGate,
 } from "./settings";
 // === end Phase 5 (PR-5.1) ===
+
+// === Phase 1 (PR-1.7) workspace pane ===
+// Hoisted right-rail pane + tablist + five tab bodies (Sources / Agents /
+// Draft / Approvals / Skills). Composition shell only — the host keeps the
+// data-binding hooks (useWorkspacePaneState / useApprovalsQueue / useSubagents
+// / useSubagentActivities / useDrafts / useArchivedSources / auto-open signal)
+// and passes their normalised outputs in as props. The tabs consume the
+// already-hoisted citations (SourceRow, via the injected `SourceRowComponent`
+// slot) and subagents (SubagentCard) families; every `chatModel`-typed prop is
+// re-typed chat-surface-local (SourceEntryMap / SubagentSnapshotMap /
+// ApprovalsQueueProjection / WorkspacePaneState / …).
+export {
+  WorkspacePane,
+  type WorkspacePaneProps,
+  WorkspaceTabs,
+  workspaceTabPanelId,
+  type WorkspaceTabsItem,
+  type WorkspaceTabsProps,
+  SourcesTab,
+  type SourcesTabProps,
+  type SourceRowSlot,
+  AgentsTab,
+  type AgentsTabProps,
+  DraftTab,
+  type DraftTabProps,
+  ApprovalsTab,
+  type ApprovalsTabProps,
+  SkillsTab,
+  type SkillsTabProps,
+  pluralize,
+  tabLabel,
+  TAB_LABELS,
+  type LabelForms,
+  type WorkspacePaneState,
+  type WorkspacePaneTabId,
+  type WorkspacePaneCloseReason,
+  type WorkspacePaneOpenOptions,
+  type WorkspacePaneFocus,
+  type ApprovalsQueueItem,
+  type ApprovalsQueueProjection,
+  type SubagentActivitiesByTask,
+  type SubagentHistoryGroup,
+  type SourceEntryMap,
+  type SubagentSnapshotMap,
+  type SourceConnectorGroup,
+} from "./workspace";
+// === end Phase 1 (PR-1.7) ===

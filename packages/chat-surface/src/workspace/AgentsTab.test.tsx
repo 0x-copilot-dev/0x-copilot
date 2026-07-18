@@ -1,4 +1,7 @@
 // PR 3.2.1 — disclosure UX coverage for the Agents tab.
+// PR-1.7 — moved down with the component; the same assertions run from
+// chat-surface. The host `chatModel` map helpers are reproduced inline here so
+// the test stays app-import-free.
 //
 // Closed by default (AC-2). Open reveals SubagentActivityList rows
 // (AC-3). focusTaskId auto-opens (AC-2 supporting). Empty-activities
@@ -13,12 +16,9 @@ import type {
   SubagentEntry,
   SubagentLifecycleStatus,
 } from "@0x-copilot/api-types";
-import {
-  emptySubagentMap,
-  seedSubagentMap,
-} from "../../chatModel/subagentReducer";
-import type { SubagentActivityRecord } from "../../utils/activityDataBuilders";
+import type { SubagentActivityRecord } from "../subagents";
 import { AgentsTab } from "./AgentsTab";
+import type { SubagentSnapshotMap } from "./workspaceHelpers";
 
 function entry(overrides: Partial<SubagentEntry> = {}): SubagentEntry {
   return {
@@ -38,6 +38,16 @@ function entry(overrides: Partial<SubagentEntry> = {}): SubagentEntry {
     token_usage: null,
     ...overrides,
   };
+}
+
+function emptySubagentMap(): SubagentSnapshotMap {
+  return new Map();
+}
+
+function seedSubagentMap(
+  entries: readonly SubagentEntry[],
+): SubagentSnapshotMap {
+  return new Map(entries.map((e) => [e.task_id, e]));
 }
 
 function activity(

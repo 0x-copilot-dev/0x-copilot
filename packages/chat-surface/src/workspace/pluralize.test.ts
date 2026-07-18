@@ -1,3 +1,7 @@
+// PR 8.0.1 — pluralize grammar contract.
+// PR-1.7 — moved down with the helper; the same assertions run from
+// chat-surface.
+
 import { describe, expect, it } from "vitest";
 import { TAB_LABELS, pluralize, tabLabel } from "./pluralize";
 

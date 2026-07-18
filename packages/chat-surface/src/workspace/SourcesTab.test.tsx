@@ -1,8 +1,13 @@
+// PR 3.1/3.2 — Sources tab body coverage.
+// PR-1.7 — moved down with the component; the same assertions run from
+// chat-surface. The host `chatModel` map helpers are reproduced inline here so
+// the test stays app-import-free (the tab reproduces the ordering internally).
+
 import { describe, expect, it, vi } from "vitest";
 import { render, screen } from "@testing-library/react";
 import type { SourceEntry } from "@0x-copilot/api-types";
-import { emptySourceMap, seedSourceMap } from "../../chatModel/sourcesReducer";
 import { SourcesTab } from "./SourcesTab";
+import type { SourceEntryMap } from "./workspaceHelpers";
 
 function source(overrides: Partial<SourceEntry> = {}): SourceEntry {
   return {
@@ -17,6 +22,19 @@ function source(overrides: Partial<SourceEntry> = {}): SourceEntry {
     last_cited_at: "2026-05-05T12:00:00Z",
     ...overrides,
   };
+}
+
+function emptySourceMap(): SourceEntryMap {
+  return new Map();
+}
+
+function seedSourceMap(entries: readonly SourceEntry[]): SourceEntryMap {
+  return new Map(
+    entries.map((entry) => [
+      `${entry.source_connector} ${entry.source_doc_id}`,
+      entry,
+    ]),
+  );
 }
 
 describe("SourcesTab", () => {
