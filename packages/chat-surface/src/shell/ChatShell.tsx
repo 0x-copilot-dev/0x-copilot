@@ -7,6 +7,10 @@ import {
 } from "react";
 
 import type { PresenceSignal } from "../presence/presence-signal";
+import {
+  useDeploymentProfile,
+  type DeploymentProfile,
+} from "../providers/DeploymentProfileProvider";
 import { KeyValueStoreProvider } from "../providers/KeyValueStoreProvider";
 import { PresenceSignalProvider } from "../providers/PresenceSignalProvider";
 import { RouterProvider } from "../providers/RouterProvider";
@@ -20,17 +24,45 @@ import {
   ContextPanel,
   type ContextPanelProps,
 } from "./ContextPanel";
-import { SHELL_DESTINATIONS, type ShellDestinationSlug } from "./destinations";
+import {
+  SHELL_DESTINATIONS,
+  destinationsForProfile,
+  type ShellDestination,
+  type ShellDestinationSlug,
+} from "./destinations";
 import { RIGHT_RAIL_WIDTH, RightRail } from "./RightRail";
 import { TOPBAR_HEIGHT, Topbar } from "./Topbar";
 
-// Destinations that intentionally skip the 224px context column. Chats is
-// the only one for now — the os-css reference (line 596-611) makes the
-// chats destination full-bleed because the chat surface brings its own
-// thread sidebar. Add destinations here if more want the same treatment.
+// Destinations that intentionally skip the 224px context column AND suppress
+// the shell topbar — the surface owns full height (DESIGN-SPEC §1). `chats`
+// (its ChatScreen brings its own thread sidebar + header) and `run` (the
+// flagship cockpit) both render full-bleed. Settings is likewise full-height
+// but is NOT a rail destination (it opens from the rail foot via
+// `onOpenSettings`), so it arrives through the `settingsActive` flag rather
+// than this slug set.
 const FULL_BLEED_DESTINATIONS: ReadonlySet<ShellDestinationSlug> = new Set([
   "chats",
+  "run",
 ]);
+
+// Read the DeploymentProfile port WITHOUT requiring a provider. The web host
+// (apps/frontend/src/app/App.tsx) mounts ChatShell with no
+// DeploymentProfileProvider — it renders the frozen legacy 12-destination
+// rail — so a hard `useDeploymentProfile()` (which throws when the provider is
+// absent) would crash it. Treating "no provider" as "web-legacy default" keeps
+// the web surface byte-identical while letting the desktop host gate the rail
+// by profile.
+//
+// Safety: `useDeploymentProfile` always calls exactly one hook (`useContext`)
+// before it decides whether to throw, so the hook count is invariant across
+// renders and this try/catch never trips the rules of hooks.
+function useOptionalDeploymentProfile(): DeploymentProfile | null {
+  try {
+    return useDeploymentProfile();
+  } catch {
+    return null;
+  }
+}
 
 export interface ChatShellProps<TRoute> {
   /** Transport singleton. Made available via context to descendants. */
@@ -60,9 +92,28 @@ export interface ChatShellProps<TRoute> {
   readonly onOpenSettings?: () => void;
 
   /**
+   * When `true` the shell renders full-bleed (topbar + context column +
+   * right rail suppressed) regardless of `activeDestination` — for the
+   * Settings surface, which is full-height (DESIGN-SPEC §1) but is not a rail
+   * destination (it opens from the rail foot via `onOpenSettings`). The rail
+   * still highlights `activeDestination`, mirroring the web host's behaviour
+   * of keeping the last destination active while Settings is open.
+   */
+  readonly settingsActive?: boolean;
+
+  /**
    * Optional sub-crumb for the topbar (e.g. conversation id, server id).
    */
   readonly topbarLeaf?: string | null;
+
+  /**
+   * Optional explicit rail destinations. When supplied, this list is rendered
+   * as-is (host passthrough). When omitted, the shell resolves the list from
+   * the DeploymentProfile port: `destinationsForProfile(profile)` when a
+   * provider is present, else the legacy `SHELL_DESTINATIONS` (the frozen web
+   * rail — so a web host with no provider stays byte-identical).
+   */
+  readonly destinations?: readonly ShellDestination[];
 
   /**
    * Optional per-destination ContextPanel content. The host supplies it
@@ -85,10 +136,22 @@ export function ChatShell<TRoute>({
   activeDestination,
   onNavigate,
   onOpenSettings,
+  settingsActive,
   topbarLeaf,
+  destinations,
   contextPanel,
   children,
 }: ChatShellProps<TRoute>): ReactElement {
+  const profile = useOptionalDeploymentProfile();
+  // Resolve the rail destination list ONCE: an explicit `destinations` prop
+  // wins (host passthrough), else the profile-derived view when a provider is
+  // present, else the frozen legacy list (web-safe default). The relabelled
+  // profile labels ("Tools"/"Skills") flow from here into both the rail and
+  // the topbar title, so the two never disagree.
+  const railDestinations =
+    destinations ??
+    (profile !== null ? destinationsForProfile(profile) : SHELL_DESTINATIONS);
+
   return (
     <TransportProvider transport={transport}>
       <RouterProvider router={router}>
@@ -96,8 +159,10 @@ export function ChatShell<TRoute>({
           <PresenceSignalProvider signal={presenceSignal}>
             <ShellGrid
               activeDestination={activeDestination}
+              destinations={railDestinations}
               onNavigate={onNavigate}
               onOpenSettings={onOpenSettings}
+              settingsActive={settingsActive ?? false}
               topbarLeaf={topbarLeaf}
               contextPanel={contextPanel}
             >
@@ -112,8 +177,10 @@ export function ChatShell<TRoute>({
 
 interface ShellGridProps {
   readonly activeDestination: ShellDestinationSlug;
+  readonly destinations: readonly ShellDestination[];
   readonly onNavigate: (slug: ShellDestinationSlug) => void;
   readonly onOpenSettings?: () => void;
+  readonly settingsActive: boolean;
   readonly topbarLeaf?: string | null;
   readonly contextPanel?: ReactNode | ContextPanelProps;
   readonly children?: ReactNode;
@@ -121,8 +188,10 @@ interface ShellGridProps {
 
 function ShellGrid({
   activeDestination,
+  destinations,
   onNavigate,
   onOpenSettings,
+  settingsActive,
   topbarLeaf,
   contextPanel,
   children,
@@ -132,10 +201,22 @@ function ShellGrid({
   // so an open empty rail is visual noise. Users open it via the edge
   // toggle when there's something to show.
   const [rightOpen, setRightOpen] = useState(false);
-  const fullBleed = FULL_BLEED_DESTINATIONS.has(activeDestination);
+  // Full-bleed = the surface owns full height: chats/run by slug, plus the
+  // Settings surface via the flag. Topbar + context column + right rail are
+  // all suppressed in that state.
+  const fullBleed =
+    settingsActive || FULL_BLEED_DESTINATIONS.has(activeDestination);
+
+  // Profile-correct label for the active destination (e.g. "Tools"/"Skills"
+  // in the solo view; the legacy label on web). `undefined` when the active
+  // destination isn't in the rendered list — the Topbar then falls back to its
+  // own total slug→label registry, which also covers `run`/`activity`.
+  const activeLabel = destinations.find(
+    (d) => d.slug === activeDestination,
+  )?.label;
 
   const rightCol = rightOpen ? `${RIGHT_RAIL_WIDTH}px` : "0";
-  // Three vs four column layouts. Chats (full-bleed) gets rail + main +
+  // Three vs four column layouts. Full-bleed surfaces get rail + main +
   // right rail; everything else inserts the 224px context column between.
   const gridTemplateColumns = fullBleed
     ? `${APP_RAIL_WIDTH}px 1fr ${rightCol}`
@@ -154,9 +235,10 @@ function ShellGrid({
   };
   const mainColumnStyle: CSSProperties = {
     display: "grid",
-    // Full-bleed destinations (chats) bring their own top bar via the main
-    // content (ChatScreen's own header), so the shell Topbar is suppressed
-    // there to avoid a duplicated bar + the "Chats / —" placeholder row.
+    // Full-bleed surfaces bring their own top bar via the main content
+    // (ChatScreen's own header; the Run cockpit / Settings own full height),
+    // so the shell Topbar is suppressed there to avoid a duplicated bar + the
+    // "<destination> / —" placeholder row.
     gridTemplateRows: fullBleed ? "100%" : `${TOPBAR_HEIGHT}px 1fr`,
     minHeight: 0,
     backgroundColor: "var(--color-bg)",
@@ -176,12 +258,14 @@ function ShellGrid({
     >
       <AppRail
         activeDestination={activeDestination}
+        destinations={destinations}
         onNavigate={onNavigate}
         onOpenSettings={onOpenSettings}
       />
       {fullBleed ? null : (
         <ContextPanelSlot
           activeDestination={activeDestination}
+          destinationLabel={activeLabel ?? activeDestination}
           contextPanel={contextPanel}
         />
       )}
@@ -189,6 +273,7 @@ function ShellGrid({
         {fullBleed ? null : (
           <Topbar
             activeDestination={activeDestination}
+            title={activeLabel}
             leaf={topbarLeaf ?? null}
           />
         )}
@@ -196,10 +281,11 @@ function ShellGrid({
           {children}
         </div>
       </div>
-      {/* Full-bleed chats owns its right panel via the main content
-          (ChatScreen's workspace pane), so the shell RightRail — empty
-          scaffolding until Activity/Approvals is wired in the canvas wave —
-          is suppressed there to avoid a duplicate, un-obvious panel. */}
+      {/* Full-bleed surfaces own their right panel via the main content
+          (ChatScreen's workspace pane; the Run cockpit's right rail), so the
+          shell RightRail — empty scaffolding until Activity/Approvals is wired
+          in the canvas wave — is suppressed there to avoid a duplicate,
+          un-obvious panel. */}
       {fullBleed ? null : (
         <RightRail open={rightOpen} onToggle={() => setRightOpen((v) => !v)} />
       )}
@@ -209,9 +295,11 @@ function ShellGrid({
 
 function ContextPanelSlot({
   activeDestination,
+  destinationLabel,
   contextPanel,
 }: {
   readonly activeDestination: ShellDestinationSlug;
+  readonly destinationLabel: string;
   readonly contextPanel?: ReactNode | ContextPanelProps;
 }): ReactElement {
   // If the host passed a fully composed ReactNode (anything that isn't a
@@ -219,12 +307,13 @@ function ContextPanelSlot({
   // default `<ContextPanel>` from the props bag (or the destination label
   // when nothing was passed). Single source of truth for the empty-state
   // copy and styling — destinations can opt out of building their own
-  // shell yet still get a consistent panel.
+  // shell yet still get a consistent panel. The label is resolved by the
+  // grid from the profile-aware list, so a relabelled destination
+  // (connectors → "Tools") reads correctly here too.
   if (contextPanel === undefined || contextPanel === null) {
-    const label =
-      SHELL_DESTINATIONS.find((d) => d.slug === activeDestination)?.label ??
-      activeDestination;
-    return <ContextPanel title={label} destination={activeDestination} />;
+    return (
+      <ContextPanel title={destinationLabel} destination={activeDestination} />
+    );
   }
   if (isContextPanelProps(contextPanel)) {
     return (
