@@ -9,6 +9,11 @@ export default defineConfig({
     environment: "jsdom",
     globals: false,
     css: false,
+    // Installs a working in-memory localStorage when the ambient one is
+    // unusable (Node's experimental --localstorage-file global can shadow
+    // jsdom's with a Storage missing getItem), so renderer components that
+    // read globalThis.localStorage (e.g. the Run cockpit's useRunMode) mount.
+    setupFiles: ["./vitest.setup.ts"],
     include: [
       "main/**/*.test.ts",
       "preload/**/*.test.ts",
