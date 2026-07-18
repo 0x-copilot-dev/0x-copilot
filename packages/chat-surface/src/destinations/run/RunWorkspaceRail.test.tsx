@@ -255,6 +255,23 @@ describe("RunWorkspaceRail — badges + empty copy (FR-3.12)", () => {
     expect(agentsTab).toHaveTextContent("1 live");
   });
 
+  it("counts only in-flight subagents as live — a paused one is frozen, not live (FR-3.17c)", () => {
+    render(
+      <RunWorkspaceRail
+        mode="studio"
+        chatSlot={chatSlot()}
+        subagents={subagentMap([
+          subagent({ task_id: "a", status: "running" }),
+          subagent({ task_id: "b", status: "paused" }),
+        ])}
+      />,
+    );
+    const agentsTab = screen.getByRole("tab", { name: /Agents/ });
+    // Two subagents exist, but only one is running → "1 live", not "2 live".
+    expect(agentsTab).toHaveTextContent("1 live");
+    expect(agentsTab).not.toHaveTextContent("2 live");
+  });
+
   it("falls back to the total on Agents when nothing is running", () => {
     render(
       <RunWorkspaceRail

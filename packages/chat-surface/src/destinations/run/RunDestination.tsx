@@ -54,6 +54,9 @@ import {
 import type { ConversationId, RunId } from "@0x-copilot/api-types";
 
 import { useTransport } from "../../providers/TransportProvider";
+// PR-3.8: pure selector projecting parallel-subagent + fleet state off the
+// single canonical event stream (no second subscription / projector).
+import { projectSubagents } from "../../subagents";
 import { ThreadCanvas, TcChat, type TcTab } from "../../thread-canvas";
 
 import { RunHeader } from "./RunHeader";
@@ -140,13 +143,39 @@ export function RunDestination(props: RunDestinationProps): ReactElement {
   // WorkspacePane consumes). The cockpit shell owns exactly one event source —
   // `useRunSession.events`, projected once inside ThreadCanvas — so we do NOT
   // open a second projection / SSE subscription to feed the rail (FR-3.3). Until
-  // the desktop host wires those reducers, the rail renders its per-tab empty
-  // copy; the badges light up as data flows in (PR-3.8 subagents / PR-3.10
-  // approvals). The `chatSlot` is the load-bearing wiring in PR-3.6.
-  const chatSlot = (
-    <TcChat conversationId={conversationId as unknown as string} mode={mode} />
+  // the desktop host wires the remaining reducers, the rail renders its per-tab
+  // empty copy; the badges light up as data flows in (PR-3.10 approvals). The
+  // `chatSlot` is the load-bearing wiring in PR-3.6.
+
+  // PR-3.8: parallel subagents render as THREE views from the ONE canonical
+  // event stream (FR-3.17). `projectSubagents` is a pure selector over
+  // `session.events` — the same array ThreadCanvas hands to `useEventProjector`
+  // — so it opens NO second SSE subscription and NO second `useEventProjector`
+  // (FR-3.3). Its output feeds the two consumers that live OUTSIDE ThreadCanvas:
+  //   (a) the inline `SubagentFleetCard` in TcChat  → `fleets`
+  //   (c) the Agents-tab "N live" count in the rail → `subagents`
+  // (b) — one timeline lane per subagent — comes from `TcSwimlanes`' own
+  // incremental stream inside ThreadCanvas (PRD §5 / risk R4), keyed off the
+  // same `runId`, so all three views stay in parity.
+  const subagentProjection = useMemo(
+    () => projectSubagents(session.events),
+    [session.events],
   );
-  const rightRail = <RunWorkspaceRail mode={mode} chatSlot={chatSlot} />;
+
+  const chatSlot = (
+    <TcChat
+      conversationId={conversationId as unknown as string}
+      mode={mode}
+      fleets={subagentProjection.fleets}
+    />
+  );
+  const rightRail = (
+    <RunWorkspaceRail
+      mode={mode}
+      chatSlot={chatSlot}
+      subagents={subagentProjection.subagents}
+    />
+  );
 
   return (
     <div

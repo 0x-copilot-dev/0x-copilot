@@ -36,9 +36,20 @@ interface Bead {
 }
 
 const SYSTEM_LANE = "system";
+const SUBAGENT_LANE_PREFIX = "subagent:";
 const PLAY_INTERVAL_MS = 500;
 
 function laneFromEvent(event: RuntimeEventEnvelope): string {
+  // PR-3.8 (FR-3.14 / FR-3.17b) — one live lane per subagent. Subagent-sourced
+  // frames group by their subagent identity so each dispatched subagent gets
+  // its own lane, independent of any surface it writes to. Non-subagent frames
+  // keep their surface-scheme lane (or `system`), unchanged.
+  if (event.source === "subagent") {
+    const id = subagentLaneId(event);
+    if (id !== null) {
+      return `${SUBAGENT_LANE_PREFIX}${id}`;
+    }
+  }
   const candidate = event.payload?.["surface_uri"];
   if (typeof candidate !== "string") {
     return SYSTEM_LANE;
@@ -48,6 +59,15 @@ function laneFromEvent(event: RuntimeEventEnvelope): string {
     return SYSTEM_LANE;
   }
   return candidate.slice(0, sepIndex);
+}
+
+function subagentLaneId(event: RuntimeEventEnvelope): string | null {
+  const subagentId = event.subagent_id?.trim();
+  if (subagentId) {
+    return subagentId;
+  }
+  const taskId = event.task_id?.trim();
+  return taskId ? taskId : null;
 }
 
 function titleFromEvent(event: RuntimeEventEnvelope): string {

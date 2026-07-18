@@ -1159,3 +1159,18 @@ export {
   type RunRailTabId,
 } from "./destinations/run";
 // === end Phase 3 (PR-3.6) ===
+
+// === Phase 3 (PR-3.8) subagents ===
+// `projectSubagents` is a PURE selector over the single canonical run event
+// stream (`session.events`). It yields the subagent snapshot map (feeds the
+// Agents-tab "N live" count) and the dispatched fleets (feed the inline
+// `SubagentFleetCard`) — the two subagent consumers that live outside
+// ThreadCanvas. It opens no SSE subscription and no second `useEventProjector`
+// (FR-3.3); the per-subagent timeline lanes come from TcSwimlanes' own stream.
+// `RunDestination` performs the wiring; hosts embedding it need nothing more.
+export {
+  projectSubagents,
+  type FleetProjection,
+  type SubagentProjection,
+} from "./subagents";
+// === end Phase 3 (PR-3.8) ===
