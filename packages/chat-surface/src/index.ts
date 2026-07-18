@@ -298,6 +298,32 @@ export {
 } from "./composer";
 // === end Phase 2-D ===
 
+// === Phase 1 (PR-1.2) composer sub-controls ===
+// Advanced-composer / topbar leaf controls (model pill incl. custom
+// OpenRouter slug, thinking-depth radiogroup, `+` menu views, connectors
+// trigger) hoisted from apps/frontend behind props. `ThinkingDepth` is the
+// advanced-composer reasoning-depth model — distinct from the base
+// Composer's `Depth` above; FR-1.7 flags the duplication (deferred to 3E).
+export {
+  ModelPill,
+  type ModelPillProps,
+  ThinkingDepthControl,
+  type ThinkingDepthControlProps,
+  ComposerPlusMenu,
+  type ComposerMenuView,
+  ComposerConnectorsButton,
+  type ComposerConnectorsButtonProps,
+  THINKING_DEPTHS,
+  DEFAULT_THINKING_DEPTH,
+  isThinkingDepth,
+  depthLabel,
+  depthLabelForModel,
+  depthDescription,
+  modelSupportsDepth,
+  type ThinkingDepth,
+} from "./composer";
+// === end Phase 1 (PR-1.2) ===
+
 // === Phase 2-E inline-diff state-machine ===
 export {
   nextInlineDiffState,
