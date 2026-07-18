@@ -149,7 +149,7 @@ describe("<ModelBehaviorPage>", () => {
 
   it("reports monthly-cap edits as a whole spend block, clamping negatives and blanks", () => {
     const onChange = vi.fn();
-    render(
+    const { rerender } = render(
       <ModelBehaviorPage
         value={BASE_VALUE}
         onChange={onChange}
@@ -168,6 +168,18 @@ describe("<ModelBehaviorPage>", () => {
       spend: { monthlyCapUsd: 0, pauseAtCap: false },
     });
 
+    // The field is controlled, so clearing it only emits a change when it
+    // currently holds a value — reflect a non-null cap first, then blank it.
+    rerender(
+      <ModelBehaviorPage
+        value={{
+          ...BASE_VALUE,
+          spend: { monthlyCapUsd: 50, pauseAtCap: false },
+        }}
+        onChange={onChange}
+        controller={makeController()}
+      />,
+    );
     fireEvent.change(input, { target: { value: "" } });
     expect(onChange).toHaveBeenCalledWith({
       spend: { monthlyCapUsd: null, pauseAtCap: false },

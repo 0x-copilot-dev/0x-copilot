@@ -408,10 +408,8 @@ export function ModelBehaviorPage({
               id={capId}
               data-testid="monthly-cap-input"
               aria-label="Monthly API cap in US dollars"
-              type="number"
+              type="text"
               inputMode="decimal"
-              min={0}
-              step={1}
               placeholder="No cap"
               style={capInputStyle}
               value={value.spend.monthlyCapUsd ?? ""}
