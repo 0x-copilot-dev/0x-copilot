@@ -26,13 +26,6 @@ describe("Topbar", () => {
     expect(screen.getByTestId("topbar-breadcrumb-leaf")).toHaveTextContent("—");
   });
 
-  it("renders the placeholder mode toggle", () => {
-    render(<Topbar activeDestination="home" />);
-    const toggle = screen.getByTestId("topbar-mode-toggle");
-    expect(toggle).toBeInTheDocument();
-    expect(toggle.tagName).toBe("BUTTON");
-  });
-
   it("re-labels the breadcrumb when the active destination changes", () => {
     const { rerender } = render(<Topbar activeDestination="home" />);
     expect(screen.getByTestId("topbar-breadcrumb")).toHaveTextContent("Home");

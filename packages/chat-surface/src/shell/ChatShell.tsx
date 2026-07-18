@@ -154,7 +154,10 @@ function ShellGrid({
   };
   const mainColumnStyle: CSSProperties = {
     display: "grid",
-    gridTemplateRows: `${TOPBAR_HEIGHT}px 1fr`,
+    // Full-bleed destinations (chats) bring their own top bar via the main
+    // content (ChatScreen's own header), so the shell Topbar is suppressed
+    // there to avoid a duplicated bar + the "Chats / —" placeholder row.
+    gridTemplateRows: fullBleed ? "100%" : `${TOPBAR_HEIGHT}px 1fr`,
     minHeight: 0,
     backgroundColor: "var(--color-bg)",
   };
@@ -183,10 +186,12 @@ function ShellGrid({
         />
       )}
       <div style={mainColumnStyle}>
-        <Topbar
-          activeDestination={activeDestination}
-          leaf={topbarLeaf ?? null}
-        />
+        {fullBleed ? null : (
+          <Topbar
+            activeDestination={activeDestination}
+            leaf={topbarLeaf ?? null}
+          />
+        )}
         <div style={mainBodyStyle} data-testid="chat-shell-main">
           {children}
         </div>
