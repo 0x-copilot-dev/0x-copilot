@@ -1,11 +1,17 @@
 // @vitest-environment jsdom
 // PR-6.4 — the desktop PaletteHost mounts one canonical CommandPalette over the
-// local static registry port, owns `open` (⌘K + topbar trigger), and dispatches
-// the palette's non-entity hits back to the host: destination navigation,
-// Settings deep-links, and the four action flow launchers. The topbar trigger is
-// suppressed on Run and Settings (FR-6.7).
+// local static registry port and dispatches the palette's non-entity hits back
+// to the host: destination navigation, Settings deep-links, and the four action
+// flow launchers. The topbar trigger is suppressed on Run and Settings (FR-6.7).
+//
+// PR-6.6 — the palette `open` state is now CONTROLLED by the host (`open` /
+// `onOpenChange` props); PaletteHost no longer owns state or mounts
+// `useCommandPaletteHotkey`. ⌘K is single-sourced by bootstrap's
+// `useShellShortcuts` (FR-6.14) and is covered in bootstrap.test.tsx — not here.
+// These tests drive open/close through a controlled harness so the topbar
+// trigger and hit-activation close paths still exercise the same state.
 
-import { act } from "react";
+import { useState, type ReactElement } from "react";
 import { cleanup, fireEvent, render, screen } from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
@@ -26,27 +32,28 @@ function setup(overrides: Partial<PaletteHostProps> = {}) {
     onDownloadLocalModel: vi.fn(),
     onConnectTool: vi.fn(),
   };
-  const props: PaletteHostProps = {
-    // A non-suppressed destination so the topbar trigger renders by default.
-    activeDestination: "chats",
-    settingsActive: false,
-    onNavigateDestination,
-    onOpenSettings,
-    actions,
-    ...overrides,
-  };
-  const utils = render(<PaletteHost {...props} />);
-  return { onNavigateDestination, onOpenSettings, actions, ...utils };
-}
 
-function pressCmdK(): void {
-  // Mirror the useCommandPaletteHotkey tests: dispatch on document (the hook
-  // listens there). The keydown flips host state, so wrap it in act().
-  act(() => {
-    document.dispatchEvent(
-      new KeyboardEvent("keydown", { key: "k", metaKey: true }),
+  // Controlled harness: the host lifts `open` state (as bootstrap does), so the
+  // trigger click and hit-activation close paths round-trip through it.
+  function Harness(): ReactElement {
+    const [open, setOpen] = useState(false);
+    return (
+      <PaletteHost
+        open={open}
+        onOpenChange={setOpen}
+        // A non-suppressed destination so the topbar trigger renders by default.
+        activeDestination="chats"
+        settingsActive={false}
+        onNavigateDestination={onNavigateDestination}
+        onOpenSettings={onOpenSettings}
+        actions={actions}
+        {...overrides}
+      />
     );
-  });
+  }
+
+  const utils = render(<Harness />);
+  return { onNavigateDestination, onOpenSettings, actions, ...utils };
 }
 
 function openViaTrigger(): void {
@@ -65,12 +72,6 @@ describe("<PaletteHost>", () => {
     expect(screen.queryByTestId("command-palette")).toBeNull();
   });
 
-  it("opens the palette on ⌘K", () => {
-    setup();
-    pressCmdK();
-    expect(screen.queryByTestId("command-palette")).not.toBeNull();
-  });
-
   it("opens the palette when the topbar trigger is clicked", () => {
     setup();
     expect(screen.queryByTestId("command-palette")).toBeNull();
@@ -81,9 +82,6 @@ describe("<PaletteHost>", () => {
   it("suppresses the topbar trigger on the Run destination", () => {
     setup({ activeDestination: "run" });
     expect(screen.queryByTestId("command-palette-trigger")).toBeNull();
-    // ⌘K still works even when the trigger is suppressed.
-    pressCmdK();
-    expect(screen.queryByTestId("command-palette")).not.toBeNull();
   });
 
   it("suppresses the topbar trigger while Settings is active", () => {

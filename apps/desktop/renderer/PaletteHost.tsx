@@ -9,9 +9,12 @@
 //   * exactly ONE `<CommandPalette>` (the canonical chat-surface shell palette),
 //     with `searchPort = createDesktopPaletteSearchPort()` and
 //     `starterActions = PALETTE_COMMANDS` (PR-6.3);
-//   * the `open` state (host-owned) + the interim `⌘K` opener via
-//     `useCommandPaletteHotkey`. PR-6.6 later single-sources `⌘K` through
-//     `useShellShortcuts` and drops this interim listener (FR-6.14);
+//   * PR-6.6: the `open` state is now CONTROLLED by bootstrap (`open` /
+//     `onOpenChange` props). `⌘K` is single-sourced through bootstrap's
+//     `useShellShortcuts` (FR-6.14) — this host no longer mounts
+//     `useCommandPaletteHotkey`, so there is exactly one `⌘K` listener. The
+//     topbar trigger and the close/connect-tool paths route through the same
+//     `onOpenChange`, so all open/close flows share one state;
 //   * dispatch of the palette's non-entity hits back to the host:
 //       - `navigation` → a Settings deep-link (`isSettingsRoute`) opens Settings
 //         at that section, otherwise the shell navigates to the destination slug;
@@ -33,7 +36,6 @@
 import {
   useCallback,
   useMemo,
-  useState,
   type CSSProperties,
   type ReactElement,
 } from "react";
@@ -41,7 +43,6 @@ import {
 import {
   CommandPalette,
   CommandPaletteTrigger,
-  useCommandPaletteHotkey,
   type SettingsSectionSlug,
   type ShellDestinationSlug,
 } from "@0x-copilot/chat-surface";
@@ -71,6 +72,14 @@ export interface PaletteHostActionHandlers {
 }
 
 export interface PaletteHostProps {
+  /**
+   * PR-6.6: whether the palette is open. Controlled by bootstrap so `⌘K`
+   * (single-sourced through `useShellShortcuts`, FR-6.14) is the only chord
+   * listener that toggles the palette.
+   */
+  readonly open: boolean;
+  /** PR-6.6: request a new open state (topbar trigger, close, connect-tool). */
+  readonly onOpenChange: (open: boolean) => void;
   /** The shell's active destination — drives topbar-trigger suppression. */
   readonly activeDestination: ShellDestinationSlug;
   /** Whether the Settings surface is open — suppresses the topbar trigger. */
@@ -100,20 +109,21 @@ const triggerSlotStyle: CSSProperties = {
 };
 
 export function PaletteHost({
+  open,
+  onOpenChange,
   activeDestination,
   settingsActive,
   onNavigateDestination,
   onOpenSettings,
   actions,
 }: PaletteHostProps): ReactElement {
-  const [open, setOpen] = useState(false);
   const searchPort = useMemo(() => createDesktopPaletteSearchPort(), []);
 
-  const handleOpen = useCallback(() => setOpen(true), []);
-  const handleClose = useCallback(() => setOpen(false), []);
-
-  // Interim ⌘K opener (PR-6.6 single-sources this through useShellShortcuts).
-  useCommandPaletteHotkey({ onOpen: handleOpen });
+  // PR-6.6: open/close are controlled by bootstrap. The topbar trigger opens
+  // via `onOpenChange(true)`; `⌘K` toggles through bootstrap's
+  // `useShellShortcuts` (the only ⌘K listener — FR-6.14).
+  const handleOpen = useCallback(() => onOpenChange(true), [onOpenChange]);
+  const handleClose = useCallback(() => onOpenChange(false), [onOpenChange]);
 
   const handleNavigate = useCallback(
     (route: string): void => {
@@ -157,8 +167,8 @@ export function PaletteHost({
   // flow; unlike an action hit it does not auto-close, so close it here.
   const handleConnectToolHint = useCallback(() => {
     actions.onConnectTool();
-    setOpen(false);
-  }, [actions]);
+    onOpenChange(false);
+  }, [actions, onOpenChange]);
 
   // FR-6.7 / DESIGN-SPEC §1: suppressed on Run and Settings (both full-bleed).
   const triggerSuppressed = settingsActive || activeDestination === "run";
@@ -173,7 +183,10 @@ export function PaletteHost({
           {/* Sizes the shared trigger to 250px via its className (DESIGN-SPEC §1)
               without touching the shared component. */}
           <style>{TRIGGER_WIDTH_CSS}</style>
-          <CommandPaletteTrigger className={TRIGGER_CLASS} onOpen={handleOpen} />
+          <CommandPaletteTrigger
+            className={TRIGGER_CLASS}
+            onOpen={handleOpen}
+          />
         </div>
       )}
       <CommandPalette

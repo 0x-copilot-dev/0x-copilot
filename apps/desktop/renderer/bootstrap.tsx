@@ -12,9 +12,11 @@ import {
   defaultDestinationForProfile,
   destinationsForProfile,
   registerGenericStructuredDiff,
+  useShellShortcuts,
   type DeploymentProfile,
   type SettingsSectionSlug,
   type ShellDestinationSlug,
+  type ShellShortcutCallbacks,
 } from "@0x-copilot/chat-surface";
 import { IpcTransport, type RendererSession } from "@0x-copilot/chat-transport";
 import { registerAll as registerSurfaceRenderers } from "@0x-copilot/surface-renderers";
@@ -125,6 +127,11 @@ function ChatShellForSession(props: ChatShellForSessionProps): ReactElement {
   // the user's in-surface tab clicks back here.
   const [settingsSection, setSettingsSection] =
     useState<SettingsSectionSlug | null>(null);
+  // PR-6.6: the ⌘K command palette open state is lifted here so ⌘K flows through
+  // a SINGLE listener (bootstrap's `useShellShortcuts`, FR-6.14). PaletteHost is
+  // now controlled (`open`/`onOpenChange`) and no longer mounts its own
+  // `useCommandPaletteHotkey` — exactly one ⌘K listener remains.
+  const [paletteOpen, setPaletteOpen] = useState(false);
 
   const destinations = useMemo(
     () => destinationsForProfile(DESKTOP_DEPLOYMENT_PROFILE),
@@ -141,6 +148,51 @@ function ChatShellForSession(props: ChatShellForSessionProps): ReactElement {
     setSettingsSection(section ?? null);
     setSettingsActive(true);
   };
+
+  // PR-6.6: wire the DESIGN-SPEC §6 GLOBAL chords through the single SSOT hook
+  // (`useShellShortcuts`). Only the five global intents are provided here; every
+  // callback closes over React setState functions (all stable), so the options
+  // object is memoized with no deps — the hook attaches its listener once.
+  //
+  // Run-scoped chords (⌘M switch-mode, ⌘←/⌘→ rewind/step, ⌘L jump-live,
+  // ⌘. pause, ⌘↵ approve, ⌘⌫ reject) are DELIBERATELY omitted: the Run cockpit
+  // owns them internally (useRunMode / TcMiniTimeline / TcSwimlanes / approvals),
+  // each with its own keydown listener scoped to the live run. Providing them
+  // here too would double-wire — two listeners firing per press. Left undefined,
+  // the hook no-ops them at the shell level and the cockpit stays the single
+  // owner (FR-6.13 is satisfied by the cockpit's own handlers, not by bootstrap).
+  const shortcutCallbacks = useMemo<ShellShortcutCallbacks>(
+    () => ({
+      // ⌘N — start/open a new run. Honest interim: routes to the Run cockpit
+      // (the front door for starting a run), matching PR-6.4's new-chat path.
+      onNewRun: () => {
+        setSettingsActive(false);
+        setActiveDestination("run");
+      },
+      // ⌘K — toggle the palette. A single toggle per press proves single
+      // sourcing; a duplicate listener would toggle twice (net no-op).
+      onOpenPalette: () => setPaletteOpen((prev) => !prev),
+      // ⌘, — open Settings at the profile-default section.
+      onOpenSettings: () => {
+        setSettingsSection(null);
+        setSettingsActive(true);
+      },
+      // ⌘⇧M — open Settings focused on the local-models section (the model
+      // picker lives there today).
+      onOpenLocalModelPicker: () => {
+        setSettingsSection("local-models");
+        setSettingsActive(true);
+      },
+      // ⌘⇧F — search activity. Honest interim: navigate to the Activity
+      // destination (its in-surface search lands with the real surface).
+      onSearchActivity: () => {
+        setSettingsActive(false);
+        setActiveDestination("activity");
+      },
+    }),
+    [],
+  );
+  useShellShortcuts(shortcutCallbacks);
 
   return (
     <>
@@ -180,8 +232,12 @@ function ChatShellForSession(props: ChatShellForSessionProps): ReactElement {
           Settings sections and `connect-tool` opens the Tools destination — all
           reachable today. `new-chat` routes to the Run cockpit (the front door
           for starting a run) as an honest interim; the dedicated new-run trigger
-          (⌘N → onNewRun) is wired in PR-6.6. */}
+          (⌘N → onNewRun) is wired in PR-6.6 via `useShellShortcuts` above.
+          PR-6.6: `open`/`onOpenChange` make the palette CONTROLLED so ⌘K is
+          single-sourced through that hook (FR-6.14) — one ⌘K listener. */}
       <PaletteHost
+        open={paletteOpen}
+        onOpenChange={setPaletteOpen}
         activeDestination={activeDestination}
         settingsActive={settingsActive}
         onNavigateDestination={handleNavigate}
