@@ -111,7 +111,9 @@ describe("renderer bootstrap", () => {
     expect(button).not.toBeNull();
   });
 
-  it("mounts ChatShell with the desktop placeholder once a session is present", async () => {
+  // Drive the renderer past boot + sign-in into the mounted shell. Returns
+  // once the profile-gated shell is on screen (default destination = Run).
+  async function mountSignedInShell(): Promise<HTMLElement> {
     const controls = installFakeBridge((channel: string) => {
       if (channel === "auth.get-session") {
         return Promise.resolve({
@@ -134,16 +136,99 @@ describe("renderer bootstrap", () => {
     await act(async () => {
       controls.emit("boot.status", BOOT_READY);
     });
-
     await act(async () => {
       await Promise.resolve();
     });
+    return container as HTMLElement;
+  }
 
-    const placeholder = container.querySelector(
-      "[data-testid='desktop-placeholder']",
+  it("mounts the profile-gated 6-destination shell on Run, without the placeholder", async () => {
+    const root = await mountSignedInShell();
+
+    // The static "phase 1" placeholder is no longer mounted (PR-2.6).
+    expect(
+      root.querySelector("[data-testid='desktop-placeholder']"),
+    ).toBeNull();
+
+    // Solo profile → exactly 6 rail destinations, in order.
+    const railButtons = Array.from(
+      root.querySelectorAll("[data-component='app-rail'] [data-destination]"),
     );
-    expect(placeholder).not.toBeNull();
-    expect(placeholder?.textContent).toContain("0xCopilot desktop");
+    expect(railButtons.map((b) => b.getAttribute("data-destination"))).toEqual([
+      "run",
+      "chats",
+      "projects",
+      "activity",
+      "connectors",
+      "tools",
+    ]);
+
+    // Landing destination is Run.
+    expect(
+      root.querySelector("[data-destination='run'][aria-current='page']"),
+    ).not.toBeNull();
+
+    // The destination outlet renders the Run surface (honest placeholder).
+    const outlet = root.querySelector("[data-testid='destination-outlet']");
+    expect(outlet).not.toBeNull();
+    expect(outlet?.getAttribute("data-destination")).toBe("run");
+    expect(
+      root.querySelector("[data-testid='destination-placeholder-title']")
+        ?.textContent,
+    ).toBe("Run");
+  });
+
+  it("shows the rail-foot Settings + avatar and opens the Settings surface", async () => {
+    const root = await mountSignedInShell();
+
+    const settingsButton = root.querySelector(
+      "[data-rail-action='settings']",
+    ) as HTMLButtonElement | null;
+    expect(settingsButton).not.toBeNull();
+    expect(root.querySelector("[data-rail-me]")).not.toBeNull();
+    // Settings surface is not mounted until the gear is clicked.
+    expect(root.querySelector("[data-testid='settings-surface']")).toBeNull();
+
+    await act(async () => {
+      settingsButton?.click();
+    });
+
+    // Gear opens the (stub) Settings surface without a destination-outlet.
+    expect(
+      root.querySelector("[data-testid='settings-surface']"),
+    ).not.toBeNull();
+    expect(root.querySelector("[data-testid='destination-outlet']")).toBeNull();
+  });
+
+  it("swaps the outlet when a rail destination is clicked and leaves Settings", async () => {
+    const root = await mountSignedInShell();
+
+    // Open Settings first, then navigate away via the rail.
+    await act(async () => {
+      (
+        root.querySelector("[data-rail-action='settings']") as HTMLButtonElement
+      )?.click();
+    });
+    expect(
+      root.querySelector("[data-testid='settings-surface']"),
+    ).not.toBeNull();
+
+    await act(async () => {
+      (
+        root.querySelector(
+          "[data-component='app-rail'] [data-destination='activity']",
+        ) as HTMLButtonElement
+      )?.click();
+    });
+
+    // Settings closed; the outlet now shows the Activity surface.
+    expect(root.querySelector("[data-testid='settings-surface']")).toBeNull();
+    const outlet = root.querySelector("[data-testid='destination-outlet']");
+    expect(outlet?.getAttribute("data-destination")).toBe("activity");
+    expect(
+      root.querySelector("[data-testid='destination-placeholder-title']")
+        ?.textContent,
+    ).toBe("Activity");
   });
 
   it("shows the fatal boot screen when the supervisor reports a fatal status", async () => {
