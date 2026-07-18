@@ -1054,3 +1054,23 @@ export {
   type ChatsDestinationProps,
 } from "./destinations/chats";
 // === end Phase 4 (PR-4.2) ===
+// === Phase 4 (PR-4.5) — Activity destination (run-history recast) ===
+// Presentational run-history feed that absorbs the former Agents / Inbox /
+// audit-log surfaces: a flat `SectionResult<ActivityRunRow[]>` in, day-grouped
+// rows out (grouping in-shell via the injected `now`). Running rows call
+// `onOpenRun`; non-running rows navigate through the `"run"` ItemLink resolver.
+// The host binder (PR-4.6) composes conversations + audit into the rows.
+export {
+  ActivityDestination,
+  activityStatusLabel,
+  activityStatusTone,
+  groupActivityByDay,
+  ACTIVITY_LEAD_COPY,
+  ACTIVITY_RETENTION_LINK_COPY,
+  ACTIVITY_RUN_STATUSES,
+  type ActivityDayGroup,
+  type ActivityDestinationProps,
+  type ActivityRunRow,
+  type ActivityRunStatus,
+} from "./destinations/activity";
+// === end Phase 4 (PR-4.5) ===
