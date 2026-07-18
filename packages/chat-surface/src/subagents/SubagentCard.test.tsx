@@ -1,11 +1,12 @@
-// PR 3.2.2 — shared SubagentCard component tests.
+// PR 3.2.2 — shared SubagentCard component tests. Moved down with the
+// component (PR-1.5); the same assertions run from chat-surface.
 //
 // Covers AC-2, 3, 4, 5, 6, 7, 8 from the PRD.
 
 import { describe, expect, it, vi } from "vitest";
 import { render, screen } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
-import type { SubagentActivityRecord } from "../../utils/activityDataBuilders";
+import type { SubagentActivityRecord } from "./subagentHelpers";
 import { SubagentCard } from "./SubagentCard";
 import type { SubagentCardViewModel } from "./subagentCardViewModel";
 

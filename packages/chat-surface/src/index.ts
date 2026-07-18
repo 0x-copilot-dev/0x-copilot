@@ -80,6 +80,34 @@ export {
   type ReasoningGroupProps,
 } from "./messages/ReasoningGroup";
 // === end Phase 1 (PR-1.1) ===
+// === Phase 1 (PR-1.5) subagent / fleet cards ===
+// Hoisted subagent presentation family. The host keeps the data-binding
+// (reducers, activity builders, fleet context, jump-to-approval wiring) and
+// passes normalised data + callbacks in as props; chat-surface stays
+// app-import-free.
+export {
+  SubagentCard,
+  type SubagentCardProps,
+  FleetSubagentRow,
+  type FleetSubagentRowProps,
+  SubagentFleetCard,
+  type SubagentFleetCardProps,
+  subagentCardFromArgs,
+  subagentCardFromEntry,
+  type SubagentCardStatus,
+  type SubagentCardViewModel,
+  type SubagentPauseReason,
+  formatSubagentDuration,
+  pauseAriaLabel,
+  pauseFullLabel,
+  pauseJumpLabel,
+  pauseShortLabel,
+  ActivityStatusIcon,
+  SubagentActivityList,
+  useElapsedSeconds,
+  type SubagentActivityRecord,
+} from "./subagents";
+// === end Phase 1 (PR-1.5) ===
 export { CitationChip, type CitationChipProps } from "./citations/CitationChip";
 export {
   OrdinalCitationChip,
