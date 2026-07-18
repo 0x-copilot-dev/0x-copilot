@@ -102,6 +102,23 @@ def format_web_subagent_suffix(
 # Back-compat constant. Callers wanting a per-org cap should invoke
 # ``format_web_subagent_suffix(cap)`` directly instead.
 WEB_SUBAGENT_CHECKPOINT_SUFFIX = format_web_subagent_suffix()
+
+# Appended to the supervisor system prompt ONLY when a read-only ``/workspace/``
+# route is composed for the run (the desktop capability broker is configured and
+# the user has granted at least one host folder). Off the desktop path the route
+# is absent, so the factory omits this block and the prompt is unchanged. Mirrors
+# the ``/subagents/`` guidance above: name the virtual root, tell the model to
+# list before it reads, and state the hard read-only boundary.
+WORKSPACE_ACCESS_GUIDANCE = (
+    "The user has granted read-only access to one or more host folders, "
+    "mounted under `/workspace/`. Each granted folder is a named mount: run "
+    "`ls /workspace/` to see the available mounts, then use `ls`, `read_file`, "
+    "`glob`, and `grep` under `/workspace/<mount>/<path>` to inspect their "
+    "contents. These are the user's real files — never assume a path exists; "
+    "list a directory first, then read. `/workspace/` is strictly READ-ONLY: "
+    "you cannot create, edit, move, or delete anything there. When you need to "
+    "author or revise content, write it to `/drafts/` instead."
+)
 _web_harness_profiles_registered = False
 _runtime_checkpointer: object | None = None
 

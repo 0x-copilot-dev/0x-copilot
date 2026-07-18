@@ -22,6 +22,7 @@ from agent_runtime.execution.provider_kwargs import (
     workspace_model_kwargs,
 )
 from agent_runtime.execution.deep_agent_builder import (
+    WORKSPACE_ACCESS_GUIDANCE,
     DeepAgentBuildRequest,
     DeepAgentsBackend,
     build_deep_agent,
@@ -186,10 +187,12 @@ async def _assemble_harness(
     # explicitly grants it.
     deepagents_subagents = _subagents_with_fs_permissions(subagents)
     memory_backend = runtime_dependencies.memory_backend_factory.create(runtime_context)
+    workspace_backend = runtime_dependencies.workspace_backend
     deep_backend = _composed_deep_backend(
         runtime_dependencies.subagent_artifacts_backend,
         drafts_backend=runtime_dependencies.drafts_backend,
         large_tool_results_backend=runtime_dependencies.large_tool_results_backend,
+        workspace_backend=workspace_backend,
     )
 
     try:
@@ -201,15 +204,18 @@ async def _assemble_harness(
             mcp_discovery_cache=runtime_dependencies.mcp_discovery_cache,
             runtime_context=runtime_context,
         )
-        model_instructions = _instructions_with_suggested_connectors(
-            instructions=_instructions_with_skill_cards(
-                instructions=_instructions_with_mcp_cards(
-                    instructions=instructions,
-                    mcp_servers=mcp_servers,
+        model_instructions = _instructions_with_workspace(
+            instructions=_instructions_with_suggested_connectors(
+                instructions=_instructions_with_skill_cards(
+                    instructions=_instructions_with_mcp_cards(
+                        instructions=instructions,
+                        mcp_servers=mcp_servers,
+                    ),
+                    skill_cards=skill_cards,
                 ),
-                skill_cards=skill_cards,
+                suggestions=runtime_context.suggested_connectors,
             ),
-            suggestions=runtime_context.suggested_connectors,
+            workspace_active=workspace_backend is not None,
         )
         # Compute workspace-policy kwargs (e.g. training opt-out provider
         # headers) once per build and thread them through every
@@ -588,11 +594,12 @@ def _composed_deep_backend(
     *,
     drafts_backend: object | None = None,
     large_tool_results_backend: object | None = None,
+    workspace_backend: object | None = None,
 ) -> object | None:
     """Wrap optional Atlas-specific backends in a deepagents ``CompositeBackend``.
 
     ``CompositeBackend`` routes paths to per-prefix backends and falls back to
-    a default. We register up to three prefixes:
+    a default. We register up to four prefixes:
 
     - ``/subagents/`` → read-only subagent execution trace. On the desktop file
       store this is a file-native reader over the canonical per-subagent JSONL;
@@ -604,6 +611,11 @@ def _composed_deep_backend(
     - ``/large_tool_results/`` → read-only resolver for offloaded oversized tool
       results from the desktop file store's object store. ``None`` (unrouted)
       on every other backend, so those paths stay on the ``StateBackend``
+      default exactly as before.
+    - ``/workspace/`` → read-only view of user-granted host folders, backed by
+      the desktop capability broker. Present only on the desktop path when the
+      broker is configured and the run has at least one active grant; ``None``
+      (unrouted) everywhere else, so those paths stay on the ``StateBackend``
       default exactly as before.
 
     Other FS paths (``/memories/``, ``/skills/``, …) stay on deepagents'
@@ -617,12 +629,32 @@ def _composed_deep_backend(
         routes["/drafts/"] = drafts_backend
     if large_tool_results_backend is not None:
         routes["/large_tool_results/"] = large_tool_results_backend
+    if workspace_backend is not None:
+        # Single source of truth for the prefix lives with the backend, so
+        # wiring and its own path handling cannot drift.
+        from agent_runtime.capabilities.desktop import ROUTE_PREFIX  # noqa: PLC0415
+
+        routes[ROUTE_PREFIX] = workspace_backend
     if not routes:
         return None
     from deepagents.backends.composite import CompositeBackend
     from deepagents.backends.state import StateBackend
 
     return CompositeBackend(default=StateBackend(), routes=routes)
+
+
+def _instructions_with_workspace(*, instructions: str, workspace_active: bool) -> str:
+    """Append the ``/workspace/`` guidance block when the route is active.
+
+    Gated on the composed ``/workspace/`` route existing for this run: off the
+    desktop path (or with no granted folders) ``workspace_active`` is ``False``
+    and the prompt is returned unchanged, so non-desktop runs pay no token tax
+    and never advertise a route they do not have.
+    """
+
+    if not workspace_active:
+        return instructions
+    return "\n\n".join((instructions, WORKSPACE_ACCESS_GUIDANCE))
 
 
 def _parse_context(

@@ -1,49 +1,48 @@
 // <ShortcutsPage /> — Settings → Account → Shortcuts (DESIGN-SPEC §4/§6, PR-5.3).
 //
-// A READ-ONLY reference grid of the keyboard shortcut set. Phase 5 only renders
-// it; the chords are actually registered/executed in Phase 6B (FR-5.10 non-goal
-// note). So this page has no recording, no overrides, no persistence — it is a
-// pure, static reference. The `SHORTCUTS` list is exported so the Phase-6A
-// command palette / 6B keymap can register against the same SSOT.
+// A READ-ONLY reference grid of the keyboard shortcut set. This page only
+// renders the chords; they are registered/executed by `useShellShortcuts`
+// (Phase 6). So this page has no recording, no overrides, no persistence — it
+// is a pure, static reference.
+//
+// FR-6.15 (SSOT): the rows are DERIVED from the one shortcut table in
+// `shell/shortcuts.ts` (`SHELL_SHORTCUTS`) — the SAME table `useShellShortcuts`
+// wires — so the displayed list cannot drift from the wired chords. There is no
+// second hand-authored copy here: each row's `label` and glyphs come straight
+// from the table's `label` and `chord.display`.
 //
 // Substrate-agnostic: no `navigator`/`window` platform sniffing. The product is
 // macOS-first (DESIGN-SPEC: "System — Match macOS", "macOS Keychain"), so the
-// glyphs are the mac chord glyphs exactly as DESIGN-SPEC §6 writes them.
+// glyphs are the mac chord glyphs exactly as DESIGN-SPEC §6 writes them (the
+// table's `chord.display`, split into per-key glyphs for rendering).
 //
 // Colors resolve ONLY to design-system v2 tokens.
 
 import { type CSSProperties, type ReactElement } from "react";
 
+import { SHELL_SHORTCUTS } from "../shell/shortcuts";
+
 import { SetCard } from "./SettingsChrome";
 
 export interface ShortcutRow {
-  /** Stable id (shared with the Phase-6B keymap registry). */
+  /** Stable id — the shortcut's `intent` from the SSOT table. */
   readonly id: string;
   readonly label: string;
   /** The chord glyphs, in press order (e.g. ["⌘", "⇧", "M"]). */
   readonly keys: readonly string[];
 }
 
-// DESIGN-SPEC §6, in the spec's order. The glyphs are the display form; the
-// Phase-6B keymap owns the tinykeys/electron chord strings keyed by `id`.
-export const SHORTCUTS: readonly ShortcutRow[] = [
-  { id: "run.new", label: "New run", keys: ["⌘", "N"] },
-  { id: "palette.open", label: "Command palette", keys: ["⌘", "K"] },
-  { id: "approval.approve", label: "Approve action", keys: ["⌘", "↵"] },
-  { id: "approval.reject", label: "Reject action", keys: ["⌘", "⌫"] },
-  { id: "run.pause", label: "Pause run", keys: ["⌘", "."] },
-  { id: "timeline.rewind", label: "Rewind timeline", keys: ["⌘", "←"] },
-  { id: "timeline.step", label: "Step forward", keys: ["⌘", "→"] },
-  { id: "timeline.live", label: "Jump to live", keys: ["⌘", "L"] },
-  { id: "run.mode", label: "Switch mode", keys: ["⌘", "M"] },
-  {
-    id: "models.localPicker",
-    label: "Local model picker",
-    keys: ["⌘", "⇧", "M"],
-  },
-  { id: "settings.open", label: "Settings", keys: ["⌘", ","] },
-  { id: "activity.search", label: "Search activity", keys: ["⌘", "⇧", "F"] },
-];
+// Derived from the SSOT table (`shell/shortcuts.ts`) in its canonical order:
+// the five global chords first, then the seven run-scoped chords. Each row maps
+// `intent` → id, keeps `label`, and splits `chord.display` (e.g. "⌘⇧M") into
+// per-key glyphs (["⌘", "⇧", "M"]) for the read-only grid.
+export const SHORTCUTS: readonly ShortcutRow[] = SHELL_SHORTCUTS.map(
+  (shortcut) => ({
+    id: shortcut.intent,
+    label: shortcut.label,
+    keys: Array.from(shortcut.chord.display),
+  }),
+);
 
 // ---------------------------------------------------------------------------
 // Styles (token-only)

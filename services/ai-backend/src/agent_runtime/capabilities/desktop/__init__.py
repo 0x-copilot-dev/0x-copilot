@@ -9,7 +9,9 @@ from __future__ import annotations
 from agent_runtime.capabilities.desktop.broker_client import (
     BrokerClientConfig,
     BrokerError,
+    BrokerGrant,
     BrokerGrantRequiredError,
+    BrokerGrantSnapshot,
     BrokerInvalidPathError,
     BrokerInvalidRequestError,
     BrokerNotADirectoryError,
@@ -27,6 +29,7 @@ from agent_runtime.capabilities.desktop.workspace_backend import (
     BrokeredWorkspaceBackend,
     WorkspaceBackendConfig,
     WorkspaceMount,
+    WorkspaceMountTable,
     WorkspaceWriteNotSupportedError,
     build_workspace_backend,
 )
@@ -35,7 +38,9 @@ __all__ = [
     "ROUTE_PREFIX",
     "BrokerClientConfig",
     "BrokerError",
+    "BrokerGrant",
     "BrokerGrantRequiredError",
+    "BrokerGrantSnapshot",
     "BrokerInvalidPathError",
     "BrokerInvalidRequestError",
     "BrokerNotADirectoryError",
@@ -50,6 +55,7 @@ __all__ = [
     "DesktopBrokerClient",
     "WorkspaceBackendConfig",
     "WorkspaceMount",
+    "WorkspaceMountTable",
     "WorkspaceWriteNotSupportedError",
     "build_workspace_backend",
 ]

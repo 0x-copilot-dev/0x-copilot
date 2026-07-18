@@ -62,6 +62,16 @@ export interface SettingsMountProps {
   readonly session: RendererSession;
   /** Sign out (rail-foot / Profile). Optional; a no-op when absent. */
   readonly onSignOut?: () => void;
+  /**
+   * PR-6.4: controlled active section. When provided (a slug, or `null` for the
+   * default section) the surface is controlled — the ⌘K palette can deep-link a
+   * section (FR-6.6/6.8) and switch it in place without remounting. When omitted
+   * (`undefined`) the surface stays uncontrolled and owns its own section state
+   * (the rail-foot open path and every existing caller / test).
+   */
+  readonly activeSection?: SettingsSectionSlug | null;
+  /** PR-6.4: reflect the user's in-surface section clicks back to the host. */
+  readonly onSectionChange?: (slug: SettingsSectionSlug) => void;
 }
 
 // ---------------------------------------------------------------------------
@@ -153,6 +163,8 @@ export function SettingsMount({
   transport,
   session,
   onSignOut,
+  activeSection,
+  onSectionChange,
 }: SettingsMountProps): ReactElement {
   const providerKeysPort = useMemo(
     () => createProviderKeysPort(transport),
@@ -304,5 +316,14 @@ export function SettingsMount({
     }
   };
 
-  return <SettingsSurface renderSection={renderSection} />;
+  return (
+    <SettingsSurface
+      // PR-6.4: `activeSection === undefined` leaves the surface uncontrolled
+      // (existing behaviour); a slug/`null` controls it so the palette can
+      // deep-link + switch section in place.
+      activeSlug={activeSection}
+      onNavigate={onSectionChange}
+      renderSection={renderSection}
+    />
+  );
 }

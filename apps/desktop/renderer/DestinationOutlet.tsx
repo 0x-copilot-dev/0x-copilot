@@ -25,11 +25,13 @@ import {
 // dead-ending.
 
 // The conversation the Run cockpit binds to when the host does not supply one.
-// The desktop shell does not thread an active conversation yet (a real
-// conversation binding lands with the empty/multi-run states in PR-3.11 and the
-// Chats → reopen-into-Run flow in Phase 4), so PR-3.5 mounts the cockpit against
-// a stable default id. `useRunSession` resolves this conversation's runs over
-// the Transport port — an empty result simply shows the idle cockpit.
+// PR-3.11 landed the cockpit's empty/idle + multi-run states, so an empty run
+// list against this default id now renders the honest goal composer (start a
+// run) rather than a bare idle cockpit — the surface is usable before any real
+// conversation binding exists. Threading the *real* active conversation is
+// still deferred: it arrives with the Chats → reopen-into-Run flow (Phase 4)
+// and the full desktop outlet mount (PR-6.7). `useRunSession` resolves this
+// conversation's runs over the Transport port.
 const DESKTOP_DEFAULT_CONVERSATION_ID = "desktop-default" as ConversationId;
 
 // Slugs the outlet folds onto another destination before rendering. Activity is

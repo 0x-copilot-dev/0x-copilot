@@ -13,6 +13,7 @@ import {
   destinationsForProfile,
   registerGenericStructuredDiff,
   type DeploymentProfile,
+  type SettingsSectionSlug,
   type ShellDestinationSlug,
 } from "@0x-copilot/chat-surface";
 import { IpcTransport, type RendererSession } from "@0x-copilot/chat-transport";
@@ -20,6 +21,7 @@ import { registerAll as registerSurfaceRenderers } from "@0x-copilot/surface-ren
 
 import { BootGate } from "./BootProgress";
 import { DestinationOutlet } from "./DestinationOutlet";
+import { PaletteHost } from "./PaletteHost";
 import { SettingsMount } from "./SettingsMount";
 import { DEFAULT_WORKSPACE_ID, SignInGate } from "./SignInGate";
 import { Tier2Bridge } from "./Tier2Bridge";
@@ -117,6 +119,12 @@ function ChatShellForSession(props: ChatShellForSessionProps): ReactElement {
   // full height (ChatShell suppresses the topbar/context/right-rail while it's
   // active). Navigating to any destination closes it.
   const [settingsActive, setSettingsActive] = useState(false);
+  // PR-6.4: the Settings section the surface is focused on. `null` = the profile
+  // default. The ⌘K palette can deep-link a section (FR-6.6/6.8); the surface
+  // stays mounted (no remount) and switches in place. `onSectionChange` reflects
+  // the user's in-surface tab clicks back here.
+  const [settingsSection, setSettingsSection] =
+    useState<SettingsSectionSlug | null>(null);
 
   const destinations = useMemo(
     () => destinationsForProfile(DESKTOP_DEPLOYMENT_PROFILE),
@@ -128,28 +136,64 @@ function ChatShellForSession(props: ChatShellForSessionProps): ReactElement {
     setActiveDestination(slug);
   };
 
+  // PR-6.4: open Settings, optionally focused on a section (undefined → default).
+  const handleOpenSettings = (section?: SettingsSectionSlug): void => {
+    setSettingsSection(section ?? null);
+    setSettingsActive(true);
+  };
+
   return (
-    <ChatShell
-      transport={transport}
-      router={props.router}
-      keyValueStore={props.keyValueStore}
-      presenceSignal={props.presenceSignal}
-      activeDestination={activeDestination}
-      destinations={destinations}
-      onNavigate={handleNavigate}
-      onOpenSettings={() => setSettingsActive(true)}
-      settingsActive={settingsActive}
-    >
-      {settingsActive ? (
-        // Phase 5 (PR-5.9): the real Settings surface — the profile-gated nav
-        // plus every section body wired through `renderSection`. The team
-        // sections stay gated off on the solo desktop profile and the solo
-        // footer shows (DESIGN-SPEC §4 / FR-5.3).
-        <SettingsMount transport={transport} session={props.session} />
-      ) : (
-        <DestinationOutlet destination={activeDestination} />
-      )}
-    </ChatShell>
+    <>
+      <ChatShell
+        transport={transport}
+        router={props.router}
+        keyValueStore={props.keyValueStore}
+        presenceSignal={props.presenceSignal}
+        activeDestination={activeDestination}
+        destinations={destinations}
+        onNavigate={handleNavigate}
+        // PR-6.4: rail-foot Settings opens at the default section.
+        onOpenSettings={() => handleOpenSettings()}
+        settingsActive={settingsActive}
+      >
+        {settingsActive ? (
+          // Phase 5 (PR-5.9): the real Settings surface — the profile-gated nav
+          // plus every section body wired through `renderSection`. The team
+          // sections stay gated off on the solo desktop profile and the solo
+          // footer shows (DESIGN-SPEC §4 / FR-5.3).
+          <SettingsMount
+            transport={transport}
+            session={props.session}
+            // PR-6.4: controlled section so the palette can deep-link Settings.
+            activeSection={settingsSection}
+            onSectionChange={setSettingsSection}
+          />
+        ) : (
+          <DestinationOutlet destination={activeDestination} />
+        )}
+      </ChatShell>
+      {/* PR-6.4: the global ⌘K palette + its topbar trigger. Mounted once at the
+          shell root so ⌘K is global and the trigger overlays the topbar band.
+          Dispatch: destination hits → the shell's `handleNavigate`; Settings
+          hits → `handleOpenSettings(section)`; action hits → the flow launchers
+          below. `add-provider-key` / `download-local-model` open the real
+          Settings sections and `connect-tool` opens the Tools destination — all
+          reachable today. `new-chat` routes to the Run cockpit (the front door
+          for starting a run) as an honest interim; the dedicated new-run trigger
+          (⌘N → onNewRun) is wired in PR-6.6. */}
+      <PaletteHost
+        activeDestination={activeDestination}
+        settingsActive={settingsActive}
+        onNavigateDestination={handleNavigate}
+        onOpenSettings={handleOpenSettings}
+        actions={{
+          onNewChat: () => handleNavigate("run"),
+          onAddProviderKey: () => handleOpenSettings("provider-keys"),
+          onDownloadLocalModel: () => handleOpenSettings("local-models"),
+          onConnectTool: () => handleNavigate("connectors"),
+        }}
+      />
+    </>
   );
 }
 

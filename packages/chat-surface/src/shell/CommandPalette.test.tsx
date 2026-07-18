@@ -78,6 +78,10 @@ function renderPalette(args: {
   port?: PaletteSearchPort;
   hits?: ReadonlyArray<PaletteHit>;
   onConnectToolHint?: () => void;
+  // Optional non-entity dispatch callbacks. When omitted (undefined),
+  // the component sees no props — reproducing today's close-only default.
+  onNavigate?: (route: string, hit: PaletteHit) => void;
+  onRunAction?: (token: string, hit: PaletteHit) => void;
 }): {
   rerender: (open: boolean) => void;
   onRequestClose: ReturnType<typeof vi.fn>;
@@ -98,6 +102,8 @@ function renderPalette(args: {
         searchPort={port}
         starterActions={STARTER_ACTIONS}
         onConnectToolHint={args.onConnectToolHint}
+        onNavigate={args.onNavigate}
+        onRunAction={args.onRunAction}
         debounceMs={1}
       />
     </RouterProvider>
@@ -301,6 +307,159 @@ describe("<CommandPalette>", () => {
     // Entity-hit activation closes the palette after dispatching the
     // ItemLink click.
     expect(onRequestClose).toHaveBeenCalled();
+  });
+
+  it("dispatches a navigation hit to onNavigate(route, hit) then closes", async () => {
+    const onNavigate = vi.fn();
+    const navHit: PaletteHit = {
+      id: "hit_n_1",
+      kind: "navigation",
+      title: "Go to Tools",
+      route: "/tools",
+      score: 0.9,
+    };
+    const { onRequestClose } = renderPalette({
+      open: true,
+      hits: [navHit],
+      onNavigate,
+    });
+    const input = screen.getByTestId("command-palette-input");
+    fireEvent.change(input, { target: { value: "tools" } });
+    await waitFor(() =>
+      expect(screen.getByTestId("palette-hit-button")).toBeInTheDocument(),
+    );
+    act(() => {
+      fireEvent.click(screen.getByTestId("palette-hit-button"));
+    });
+    expect(onNavigate).toHaveBeenCalledTimes(1);
+    expect(onNavigate).toHaveBeenCalledWith("/tools", navHit);
+    expect(onRequestClose).toHaveBeenCalled();
+  });
+
+  it("dispatches an action hit to onRunAction(action_token, hit) then closes", async () => {
+    const onRunAction = vi.fn();
+    const actionHit: PaletteHit = {
+      id: "hit_a_1",
+      kind: "action",
+      title: "Add a provider key",
+      action_token: "settings.add_provider_key",
+      score: 0.8,
+    };
+    const { onRequestClose } = renderPalette({
+      open: true,
+      hits: [actionHit],
+      onRunAction,
+    });
+    const input = screen.getByTestId("command-palette-input");
+    fireEvent.change(input, { target: { value: "key" } });
+    await waitFor(() =>
+      expect(screen.getByTestId("palette-hit-button")).toBeInTheDocument(),
+    );
+    act(() => {
+      fireEvent.click(screen.getByTestId("palette-hit-button"));
+    });
+    expect(onRunAction).toHaveBeenCalledTimes(1);
+    expect(onRunAction).toHaveBeenCalledWith(
+      "settings.add_provider_key",
+      actionHit,
+    );
+    expect(onRequestClose).toHaveBeenCalled();
+  });
+
+  it("dispatches a command hit to onRunAction(action_token, hit) then closes", async () => {
+    const onRunAction = vi.fn();
+    const commandHit: PaletteHit = {
+      id: "hit_c_1",
+      kind: "command",
+      title: "/help",
+      action_token: "/help",
+      score: 0.5,
+    };
+    const { onRequestClose } = renderPalette({
+      open: true,
+      hits: [commandHit],
+      onRunAction,
+    });
+    const input = screen.getByTestId("command-palette-input");
+    fireEvent.change(input, { target: { value: "help" } });
+    await waitFor(() =>
+      expect(screen.getByTestId("palette-hit-button")).toBeInTheDocument(),
+    );
+    act(() => {
+      fireEvent.click(screen.getByTestId("palette-hit-button"));
+    });
+    expect(onRunAction).toHaveBeenCalledTimes(1);
+    expect(onRunAction).toHaveBeenCalledWith("/help", commandHit);
+    expect(onRequestClose).toHaveBeenCalled();
+  });
+
+  it("still routes an entity hit via its ItemLink when dispatch props are provided", async () => {
+    registerItemRefResolver("chat", async () => ({
+      label: "Acme renewal",
+      icon: null,
+      route: { kind: "chat", conversationId: "conv_001" },
+    }));
+    const onNavigate = vi.fn();
+    const onRunAction = vi.fn();
+    const hits: ReadonlyArray<PaletteHit> = [
+      {
+        id: "hit_ent_1",
+        kind: "entity",
+        title: "Acme renewal",
+        target: { kind: "chat", id: "conv_001" as ConversationId },
+        score: 0.95,
+      },
+    ];
+    const { onRequestClose } = renderPalette({
+      open: true,
+      hits,
+      onNavigate,
+      onRunAction,
+    });
+    const input = screen.getByTestId("command-palette-input");
+    fireEvent.change(input, { target: { value: "acme" } });
+    await waitFor(() =>
+      expect(screen.getByTestId("item-link")).toBeInTheDocument(),
+    );
+    act(() => {
+      fireEvent.keyDown(input, { key: "Enter" });
+    });
+    // Entity hits keep routing through the ItemLink — the new non-entity
+    // callbacks are never invoked for them.
+    expect(onNavigate).not.toHaveBeenCalled();
+    expect(onRunAction).not.toHaveBeenCalled();
+    expect(onRequestClose).toHaveBeenCalled();
+  });
+
+  it("with dispatch props omitted, a navigation hit is close-only (today's behavior)", async () => {
+    // Local spies that are deliberately NOT passed to the palette. They
+    // prove the additive props default to close-only: nothing is invoked.
+    const onNavigate = vi.fn();
+    const onRunAction = vi.fn();
+    const navHit: PaletteHit = {
+      id: "hit_n_1",
+      kind: "navigation",
+      title: "Go to Tools",
+      route: "/tools",
+      score: 0.9,
+    };
+    const { onRequestClose } = renderPalette({
+      open: true,
+      hits: [navHit],
+      // onNavigate / onRunAction intentionally omitted.
+    });
+    const input = screen.getByTestId("command-palette-input");
+    fireEvent.change(input, { target: { value: "tools" } });
+    await waitFor(() =>
+      expect(screen.getByTestId("palette-hit-button")).toBeInTheDocument(),
+    );
+    act(() => {
+      fireEvent.click(screen.getByTestId("palette-hit-button"));
+    });
+    expect(onNavigate).not.toHaveBeenCalled();
+    expect(onRunAction).not.toHaveBeenCalled();
+    // Close-only: the palette still closes, exactly as before this PR.
+    expect(onRequestClose).toHaveBeenCalledTimes(1);
   });
 
   it("has dialog + combobox + listbox roles for assistive tech", () => {

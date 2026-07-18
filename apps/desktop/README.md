@@ -16,6 +16,27 @@ out/          esbuild output (main/, preload/, renderer/)
 dist/         electron-builder output (Phase 8 expands)
 ```
 
+## Run cockpit states
+
+`renderer/DestinationOutlet.tsx` mounts `RunDestination`
+(`@0x-copilot/chat-surface`) for the `run` slug. The cockpit binds to a
+conversation and resolves its runs over the Transport port, so it has two
+prototype-gap states beyond the live layout (Phase 3 / PR-3.11):
+
+- **Empty / idle** — no active run for the conversation. Instead of a blank
+  canvas, it shows an honest goal composer (`RunEmptyState`, "Give it a
+  goal…"). Submitting a goal starts a run and binds it in place, so the live
+  layout appears without remounting the shell.
+- **Multi-run** — more than one run in the conversation. A run selector
+  (`RunMultiSelect`, goal · status · time) lets you switch which run the
+  cockpit shows; picking one rebinds the projection/timeline/surface. A
+  conversation with zero or one run shows no selector chrome.
+
+The desktop still mounts the cockpit against a default conversation id
+(`DESKTOP_DEFAULT_CONVERSATION_ID`); threading the real active conversation
+arrives with the Chats → reopen-into-Run flow (Phase 4) and the full outlet
+mount (PR-6.7).
+
 ## Module system (read before adding source)
 
 `package.json` deliberately **omits** `"type": "module"`. The build picks per-process:
