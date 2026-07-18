@@ -37,3 +37,14 @@ export {
   type UseRunModeOptions,
   type UseRunModeResult,
 } from "./useRunMode";
+
+// === PR-3.10 — approval projection (in-chat card + rail queue) ===
+export {
+  projectApprovals,
+  overlayApprovalDecisions,
+  toApprovalsQueue,
+  type RunApproval,
+  type RunApprovalDecision,
+  type RunApprovalKind,
+  type ApprovalProjection,
+} from "./approvalProjection";
