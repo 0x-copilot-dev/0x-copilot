@@ -392,6 +392,21 @@ export {
 } from "./composer";
 // === end Phase 1 (PR-1.2) ===
 
+// === Phase 1 (PR-1.3) AssistantComposer shell ===
+// The advanced-composer shell hoisted behind ports/slots. The host binds the
+// runtime attachment bridge, the `FilePickerPort` (real-`File` web picker), the
+// `+` menu portal + outside-click (`renderPlusMenu` slot), and the
+// instruction-prompt builders — the moved core stays substrate-agnostic.
+export {
+  AssistantComposer,
+  type AssistantComposerProps,
+  type AssistantComposerPlusMenuSlotArgs,
+  type DetailsPanelKind,
+  AttachmentPill,
+  fileAttachmentAccept,
+} from "./composer";
+// === end Phase 1 (PR-1.3) ===
+
 // === Phase 2-E inline-diff state-machine ===
 export {
   nextInlineDiffState,
