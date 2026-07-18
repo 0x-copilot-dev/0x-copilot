@@ -22,10 +22,15 @@ import type {
   ReactNode,
 } from "react";
 
-import type { ConnectorStatus } from "@0x-copilot/api-types";
+import type {
+  ConnectorAccessMode,
+  ConnectorStatus,
+} from "@0x-copilot/api-types";
 
 import { StatusPill, type StatusTone } from "../../shell/StatusPill";
 import { formatRelativeTime } from "../../util/time";
+
+import { AccessModeSegment } from "./AccessModeSegment";
 
 export interface ConnectorCardProps {
   /** Stable identity (used in test ids + as the React key by the host). */
@@ -50,6 +55,19 @@ export interface ConnectorCardProps {
   readonly onClick?: () => void;
   /** Reference instant — test seam for relative-time formatting. */
   readonly now?: number;
+  /**
+   * Current per-connector access mode. When provided, the card renders the
+   * 3-way `AccessModeSegment` (Read / Read & act / Off) — FR-4.21. Absent =
+   * no segment (e.g. non-connected contexts). The destination defaults an
+   * omitted wire `access_mode` to least privilege (`off`) before passing it.
+   */
+  readonly accessMode?: ConnectorAccessMode;
+  /**
+   * Fired when the user picks a new access mode. The card owns nothing but
+   * the click → callback wiring; the destination maps this to
+   * `onSetAccessMode(id, mode)` and the host persists it (FR-4.22).
+   */
+  readonly onAccessModeChange?: (mode: ConnectorAccessMode) => void;
 }
 
 const STATUS_TONE: Readonly<Record<ConnectorStatus, StatusTone>> = {
@@ -76,6 +94,8 @@ export function ConnectorCard({
   action,
   onClick,
   now,
+  accessMode,
+  onAccessModeChange,
 }: ConnectorCardProps): ReactElement {
   const handleClick = (): void => {
     if (onClick !== undefined) onClick();
@@ -119,6 +139,23 @@ export function ConnectorCard({
         <p style={descriptionStyle} data-testid="connector-card-description">
           {description}
         </p>
+      ) : null}
+      {accessMode !== undefined ? (
+        // The segment is interactive inside a clickable card — stop clicks /
+        // keys from bubbling to the card-level open handler.
+        <div
+          style={accessRowStyle}
+          data-testid="connector-card-access"
+          onClick={(e) => e.stopPropagation()}
+          onKeyDown={(e) => e.stopPropagation()}
+        >
+          <span style={accessLabelStyle}>Agent access</span>
+          <AccessModeSegment
+            value={accessMode}
+            onChange={(mode) => onAccessModeChange?.(mode)}
+            ariaLabel={`Access mode for ${displayName}`}
+          />
+        </div>
       ) : null}
       <div style={footerRowStyle}>
         <span data-testid="connector-card-last-sync">{lastSyncLabel}</span>
@@ -184,6 +221,20 @@ const descriptionStyle: CSSProperties = {
   WebkitLineClamp: 2,
   WebkitBoxOrient: "vertical",
   overflow: "hidden",
+};
+
+const accessRowStyle: CSSProperties = {
+  display: "flex",
+  alignItems: "center",
+  justifyContent: "space-between",
+  gap: 10,
+  flexWrap: "wrap",
+};
+
+const accessLabelStyle: CSSProperties = {
+  fontSize: "var(--font-size-xs, 12px)",
+  fontWeight: 500,
+  color: "var(--color-text-subtle, #7e7e84)",
 };
 
 const footerRowStyle: CSSProperties = {
