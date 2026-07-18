@@ -907,3 +907,94 @@ describe("HostFs — native atomic open (workspace-fs helper)", () => {
     );
   });
 });
+
+// G2 (read/write time): a legitimately-granted folder that CONTAINS a nested
+// credential directory (`.ssh` / `.aws` / `.gnupg` / `keychains`) must never
+// expose that subtree, regardless of the leaf filename (the per-file denylist
+// only catches known secret NAMES; these files deliberately do not match it).
+describe("HostFs — nested credential directories are unreachable", () => {
+  beforeEach(() => {
+    mkdirSync(join(root, ".ssh"), { recursive: true });
+    mkdirSync(join(root, "project", ".aws"), { recursive: true });
+    mkdirSync(join(root, "project", ".gnupg"), { recursive: true });
+    // Files whose LEAF names are NOT on the sensitive-filename denylist, so only
+    // the nested-directory guard can protect them.
+    writeFileSync(join(root, ".ssh", "config"), "Host secret\n");
+    writeFileSync(
+      join(root, ".ssh", "known_hosts"),
+      "gh.com ssh-ed25519 AAA\n",
+    );
+    writeFileSync(
+      join(root, "project", ".aws", "config"),
+      "[default]\nregion=x\n",
+    );
+    writeFileSync(join(root, "project", ".gnupg", "secring.gpg"), "KEYRING\n");
+    writeFileSync(join(root, "project", "readme.txt"), "ordinary file\n");
+  });
+
+  it("read of a file inside a nested credential dir is denied", async () => {
+    expect(await codeOf(fs.read(root, ".ssh/config"))).toBe(
+      "permission_denied",
+    );
+    expect(await codeOf(fs.read(root, "project/.aws/config"))).toBe(
+      "permission_denied",
+    );
+    expect(await codeOf(fs.read(root, "project/.gnupg/secring.gpg"))).toBe(
+      "permission_denied",
+    );
+  });
+
+  it("stat / list of a nested credential dir is denied", async () => {
+    expect(await codeOf(fs.stat(root, ".ssh"))).toBe("permission_denied");
+    expect(await codeOf(fs.list(root, ".ssh"))).toBe("permission_denied");
+    expect(await codeOf(fs.list(root, "project/.aws"))).toBe(
+      "permission_denied",
+    );
+  });
+
+  it("case-insensitive: a differently-cased credential dir is still denied", async () => {
+    mkdirSync(join(root, ".SSH"), { recursive: true });
+    writeFileSync(join(root, ".SSH", "config"), "x\n");
+    // On a case-insensitive fs this aliases .ssh; on a case-sensitive fs it is
+    // a distinct dir — either way the guard denies it.
+    expect(await codeOf(fs.read(root, ".SSH/config"))).toBe(
+      "permission_denied",
+    );
+  });
+
+  it("glob never yields a path inside a nested credential dir", async () => {
+    const r = await fs.glob(root, "**/config");
+    expect(r.paths).not.toContain(".ssh/config");
+    expect(r.paths).not.toContain("project/.aws/config");
+    // The ordinary sibling file is still reachable.
+    const r2 = await fs.glob(root, "**/readme.txt");
+    expect(r2.paths).toContain("project/readme.txt");
+  });
+
+  it("grep never scans a file inside a nested credential dir", async () => {
+    const r = await fs.grep(root, "secret");
+    for (const hit of r.hits) {
+      expect(hit.path.includes(".ssh")).toBe(false);
+      expect(hit.path.includes(".aws")).toBe(false);
+      expect(hit.path.includes(".gnupg")).toBe(false);
+    }
+  });
+
+  it("writes into a nested credential dir are denied (write/edit/mkdir/delete)", async () => {
+    expect(
+      await codeOf(fs.write(root, ".ssh/authorized_keys", bufOf("x"))),
+    ).toBe("permission_denied");
+    expect(await codeOf(fs.edit(root, ".ssh/config", bufOf("x")))).toBe(
+      "permission_denied",
+    );
+    expect(await codeOf(fs.mkdir(root, "project/.aws/sub"))).toBe(
+      "permission_denied",
+    );
+    expect(await codeOf(fs.delete(root, ".ssh/config"))).toBe(
+      "permission_denied",
+    );
+    expect(
+      await codeOf(fs.move(root, "project/readme.txt", ".ssh/readme.txt")),
+    ).toBe("permission_denied");
+  });
+});
