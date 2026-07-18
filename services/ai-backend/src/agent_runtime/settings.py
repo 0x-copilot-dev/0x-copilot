@@ -59,6 +59,10 @@ class _EnvFields:
     # object store + disposable SQLite index). Required when
     # ``RUNTIME_STORE_BACKEND=file`` under the single_user_desktop profile.
     FILE_STORE_ROOT = "RUNTIME_FILE_STORE_ROOT"
+    # Desktop capacity controls for the ``file`` backend. Both default to 0
+    # (unlimited / keep forever); only the single_user_desktop profile sets them.
+    FILE_STORE_MAX_BYTES = "RUNTIME_FILE_STORE_MAX_BYTES"
+    FILE_STORE_RETENTION_DAYS = "RUNTIME_FILE_STORE_RETENTION_DAYS"
     MCP_BACKEND_REGISTRY_URL = "MCP_BACKEND_REGISTRY_URL"
     MCP_AUTH_REDIRECT_URI = "MCP_AUTH_REDIRECT_URI"
     SKILLS_BACKEND_REGISTRY_URL = "SKILLS_BACKEND_REGISTRY_URL"
@@ -142,6 +146,14 @@ class RuntimeStoreSettings(RuntimeContract):
     # profile sets ``RUNTIME_FILE_STORE_ROOT``; the factory fails closed when
     # ``backend == "file"`` and this is unset.
     file_store_root: str | None = None
+    # Byte ceiling on the ``file`` store root; ``0`` (default) is unlimited.
+    # Writes that would grow the store past this fail closed with a typed
+    # ``file_store_quota_exceeded`` error before any bytes land.
+    file_store_max_bytes: int = Field(default=0, ge=0)
+    # Age-based cleanup window for the ``file`` store in days; ``0`` (default)
+    # keeps history forever. Conversations whose last activity predates the
+    # window are physically reaped by the cleanup sweeper (startup + on demand).
+    file_store_retention_days: int = Field(default=0, ge=0)
 
 
 class RuntimeMcpSettings(RuntimeContract):
@@ -356,6 +368,8 @@ class RuntimeSettings(BaseSettings):
                 backend=_s(v, E.STORE_BACKEND, "in_memory").lower(),
                 database_url=_o(v, E.DATABASE_URL),
                 file_store_root=_o(v, E.FILE_STORE_ROOT),
+                file_store_max_bytes=int(_s(v, E.FILE_STORE_MAX_BYTES, "0")),
+                file_store_retention_days=int(_s(v, E.FILE_STORE_RETENTION_DAYS, "0")),
             ),
             mcp=RuntimeMcpSettings(
                 backend_registry_url=_o(v, E.MCP_BACKEND_REGISTRY_URL),
