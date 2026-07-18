@@ -42,6 +42,15 @@ from runtime_adapters.file.export_import import (
     ImportOutcome,
 )
 from runtime_adapters.file.large_tool_result_backend import FileLargeToolResultBackend
+from runtime_adapters.file.migration import (
+    ConversationOutcome,
+    MigrationError,
+    MigrationReport,
+    MigrationScope,
+    MigrationSourcePort,
+    MigrationVerificationError,
+    StoreMigrator,
+)
 from runtime_adapters.file.object_store import FileObjectStore, ObjectRef
 from runtime_adapters.file.offload import FileOffloadWriter
 from runtime_adapters.file.runtime_api_store import FileRuntimeApiStore
@@ -83,4 +92,11 @@ __all__ = [
     "ExportCounts",
     "ExportManifest",
     "ImportOutcome",
+    "StoreMigrator",
+    "MigrationScope",
+    "MigrationReport",
+    "MigrationError",
+    "MigrationVerificationError",
+    "MigrationSourcePort",
+    "ConversationOutcome",
 ]
