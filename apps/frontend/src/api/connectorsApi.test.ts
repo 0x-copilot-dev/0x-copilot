@@ -21,6 +21,7 @@ import {
   fetchConnectorScopes,
   patchConnectorScopes,
   refreshConnector,
+  setConnectorAccessMode,
   startConnectorOAuth,
   streamConnectorEvents,
 } from "./connectorsApi";
@@ -323,6 +324,29 @@ describe("refreshConnector + disconnectConnector + patchConnectorScopes", () => 
     expect(
       JSON.parse((fetchMock.mock.calls[0][1] as RequestInit).body as string),
     ).toEqual({ scopes });
+  });
+
+  it("PATCHes /v1/connectors/{id}/access-mode with the chosen mode", async () => {
+    const fetchMock = fetchMockReturning(() =>
+      jsonResponse({
+        connector: connectorFixture({ access_mode: "read_act" }),
+      }),
+    );
+    vi.stubGlobal("fetch", fetchMock);
+
+    const res = await setConnectorAccessMode(
+      IDENTITY,
+      "connector_1" as ConnectorId,
+      { access_mode: "read_act" },
+    );
+
+    expect(res.connector.access_mode).toBe("read_act");
+    const url = String(fetchMock.mock.calls[0][0]);
+    expect(url).toContain("/v1/connectors/connector_1/access-mode");
+    expect((fetchMock.mock.calls[0][1] as RequestInit).method).toBe("PATCH");
+    expect(
+      JSON.parse((fetchMock.mock.calls[0][1] as RequestInit).body as string),
+    ).toEqual({ access_mode: "read_act" });
   });
 });
 

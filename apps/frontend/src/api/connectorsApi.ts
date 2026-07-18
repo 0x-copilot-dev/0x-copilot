@@ -8,8 +8,9 @@
 //   5. `refreshConnector(identity, id)`             — POST /v1/connectors/{id}/refresh.
 //   6. `disconnectConnector(identity, id)`          — POST /v1/connectors/{id}/disconnect.
 //   7. `patchConnectorScopes(identity, id, body)`   — PATCH /v1/connectors/{id}/scopes.
-//   8. `fetchConnectorAudit(identity, id, opts)`    — GET /v1/connectors/{id}/audit (admin).
-//   9. `streamConnectorEvents({...})`               — GET /v1/connectors/stream (SSE).
+//   8. `setConnectorAccessMode(identity, id, body)` — PATCH /v1/connectors/{id}/access-mode.
+//   9. `fetchConnectorAudit(identity, id, opts)`    — GET /v1/connectors/{id}/audit (admin).
+//  10. `streamConnectorEvents({...})`               — GET /v1/connectors/stream (SSE).
 //
 // Network rule (apps/frontend/CLAUDE.md): apps call the **facade** only
 // (`/v1/*`). The transport singleton enforces this via the same-origin
@@ -33,6 +34,8 @@ import type {
   PatchConnectorScopesRequest,
   PatchConnectorScopesResponse,
   RefreshConnectorResponse,
+  SetConnectorAccessModeRequest,
+  SetConnectorAccessModeResponse,
   StartConnectorOAuthResponse,
 } from "@0x-copilot/api-types";
 import type { ConnectorId, ConnectorSlug } from "@0x-copilot/api-types";
@@ -190,6 +193,27 @@ export function patchConnectorScopes(
 ): Promise<PatchConnectorScopesResponse> {
   return httpPatchQuery<PatchConnectorScopesResponse>(
     `/v1/connectors/${encodeURIComponent(id)}/scopes`,
+    body,
+    identity,
+  );
+}
+
+/**
+ * PATCH /v1/connectors/{id}/access-mode — set the per-connector
+ * Read / Read & act / Off mode driving the Tools destination segment
+ * (desktop redesign Phase 4, FR-4.22). Unlike the scopes PATCH this does
+ * NOT trigger a re-OAuth round-trip — the mode is a local gate, not an
+ * OAuth grant change. Returns the updated `Connector` so the binder can
+ * reconcile its optimistic update against server truth. The optimistic
+ * apply + revert-on-failure lives in the `ConnectorsRoute` binder.
+ */
+export function setConnectorAccessMode(
+  identity: RequestIdentity,
+  id: ConnectorId,
+  body: SetConnectorAccessModeRequest,
+): Promise<SetConnectorAccessModeResponse> {
+  return httpPatchQuery<SetConnectorAccessModeResponse>(
+    `/v1/connectors/${encodeURIComponent(id)}/access-mode`,
     body,
     identity,
   );
