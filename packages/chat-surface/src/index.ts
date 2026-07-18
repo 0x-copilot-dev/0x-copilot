@@ -1088,3 +1088,18 @@ export {
   type RunHeaderProps,
 } from "./destinations/run";
 // === end Phase 3 (PR-3.5) ===
+
+// === Phase 3 (PR-3.6) run workspace rail ===
+// The Run cockpit's tabbed right rail `[Chat · Sources · Agents · Approvals]`
+// (Chat default). A recomposition — NOT a fork — of the hoisted WorkspacePane
+// tab bodies (SourcesTab / AgentsTab / ApprovalsTab); Draft + Skills are
+// omitted. Composition shell only: `chatSlot` (the single TcChat) + the
+// Sources/Agents/Approvals inputs are controlled/injected by the host, so the
+// rail opens no second event projection (FR-3.3). Focus mode collapses it to
+// Chat-only (FR-3.13). `RunDestination` feeds it to `ThreadCanvas.rightRail`.
+export {
+  RunWorkspaceRail,
+  type RunWorkspaceRailProps,
+  type RunRailTabId,
+} from "./destinations/run";
+// === end Phase 3 (PR-3.6) ===

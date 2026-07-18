@@ -13,6 +13,7 @@ import {
   render,
   screen,
   waitFor,
+  within,
 } from "@testing-library/react";
 import { type ReactElement } from "react";
 import { describe, expect, it } from "vitest";
@@ -220,5 +221,56 @@ describe("RunDestination — shell composition", () => {
     expect(screen.getByTestId("thread-canvas")).not.toBeNull();
     // No run → no SSE subscription opened.
     expect(transport.subs).toHaveLength(0);
+  });
+
+  // === PR-3.6 — tabbed right rail wiring ===
+
+  it("mounts the tabbed right rail (Chat default) and collapses the in-canvas mode switcher", () => {
+    const transport = new FakeTransport();
+    transport.requestHandler = async (req) =>
+      req.path.includes("/messages") ? { messages: [] } : runningRun("Goal");
+    renderRun(transport, makeStore());
+
+    // The recomposed rail mounts inside the canvas chat column…
+    const rail = screen.getByTestId("run-workspace-rail");
+    expect(rail).not.toBeNull();
+    expect(
+      screen.getByRole("tablist", { name: "Run workspace tabs" }),
+    ).not.toBeNull();
+    // …Chat is the default tab and hosts the single TcChat instance…
+    expect(
+      screen.getByRole("tab", { name: "Chat" }).getAttribute("aria-selected"),
+    ).toBe("true");
+    expect(
+      within(screen.getByTestId("run-rail-panel-chat")).getByTestId("tc-chat"),
+    ).not.toBeNull();
+    // …and there is exactly ONE TcChat (rail owns the column, not ThreadCanvas).
+    expect(screen.getAllByTestId("tc-chat")).toHaveLength(1);
+    // RunHeader is the single mode control — the in-canvas switcher is gone.
+    expect(screen.getByTestId("run-mode-switcher")).not.toBeNull();
+    expect(screen.queryByTestId("tc-mode-switcher")).toBeNull();
+  });
+
+  it("toggling mode keeps the same rail + chat surface (single-mount, FR-3.9/3.13)", () => {
+    const transport = new FakeTransport();
+    transport.requestHandler = async (req) =>
+      req.path.includes("/messages") ? { messages: [] } : runningRun("Goal");
+    renderRun(transport, makeStore());
+
+    const railBefore = screen.getByTestId("run-workspace-rail");
+    const chatBefore = screen.getByTestId("tc-chat");
+
+    fireEvent.click(screen.getByTestId("run-mode-focus"));
+
+    expect(
+      screen.getByTestId("run-destination").getAttribute("data-mode"),
+    ).toBe("focus");
+    // Same DOM nodes survive the mode switch — no remount.
+    expect(screen.getByTestId("run-workspace-rail")).toBe(railBefore);
+    expect(screen.getByTestId("tc-chat")).toBe(chatBefore);
+    // Focus collapses the rail to Chat-only: its tab chrome is suppressed.
+    expect(
+      screen.queryByRole("tablist", { name: "Run workspace tabs" }),
+    ).toBeNull();
   });
 });
