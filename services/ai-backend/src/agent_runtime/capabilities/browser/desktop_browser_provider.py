@@ -274,8 +274,24 @@ class DesktopBrowserMcpClient:
             raise McpConnectionError(BrowserMessages.INVALID_RESPONSE)
         return body
 
-    @staticmethod
-    def _tool_descriptor(tool: dict[str, Any]) -> McpToolDescriptor:
+    #: Side-effecting browser tools. When the desktop worker advertises the
+    #: action layer, these are marked HIGH risk so the existing MCP HITL
+    #: approval middleware interrupts on them before dispatch — the worker also
+    #: gates them defensively, but the model-facing approval rides the normal
+    #: interrupt path (no browser-specific approval engine).
+    _SIDE_EFFECTING_TOOLS = frozenset(
+        {
+            "browser_click",
+            "browser_type",
+            "browser_select",
+            "browser_submit",
+            "browser_download",
+            "browser_upload",
+        }
+    )
+
+    @classmethod
+    def _tool_descriptor(cls, tool: dict[str, Any]) -> McpToolDescriptor:
         """Build a validated descriptor from a broker tool schema."""
 
         name = tool.get(BrowserKeys.NAME)
@@ -286,10 +302,15 @@ class DesktopBrowserMcpClient:
             else {"type": "object"}
         )
         description = tool.get(BrowserKeys.DESCRIPTION)
+        risk_level = (
+            McpRiskLevel.HIGH
+            if str(name) in cls._SIDE_EFFECTING_TOOLS
+            else McpRiskLevel.MEDIUM
+        )
         return McpToolDescriptor(
             name=str(name),
             description=str(description) if description else f"{name} browser tool.",
             input_schema=schema,
             output_shape={"type": "object"},
-            risk_level=McpRiskLevel.MEDIUM,
+            risk_level=risk_level,
         )
