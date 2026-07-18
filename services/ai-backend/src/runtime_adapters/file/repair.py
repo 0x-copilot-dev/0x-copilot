@@ -279,6 +279,17 @@ class StoreRepair:
             orphan_objects=tuple(orphans),
         )
 
+    def diagnose_conversation(self, conversation_dir: Path) -> ConversationDiagnosis:
+        """Diagnose a single conversation session folder; never raises.
+
+        The per-conversation slice of :meth:`diagnose`, used by the live store's
+        health API to answer "does this chat need repair?" without scanning the
+        whole tree.
+        """
+
+        diagnosis, _refs = self._diagnose_conversation(conversation_dir)
+        return diagnosis
+
     def _diagnose_conversation(
         self, conversation_dir: Path
     ) -> tuple[ConversationDiagnosis, set[str]]:

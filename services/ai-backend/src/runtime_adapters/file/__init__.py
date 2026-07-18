@@ -22,6 +22,11 @@ from runtime_adapters.file._capacity import (
     FileStoreQuotaError,
     QuotaGuard,
 )
+from runtime_adapters.file._health import (
+    ConversationHealth,
+    FileStoreRepairReason,
+    StoreHealthReport,
+)
 from runtime_adapters.file.citation_store import FileCitationStore
 from runtime_adapters.file.conversation_tool_ordinal_store import (
     FileConversationToolOrdinalStore,
@@ -50,6 +55,9 @@ __all__ = [
     "FileStoreCleanupReport",
     "FileStoreQuotaError",
     "QuotaGuard",
+    "ConversationHealth",
+    "StoreHealthReport",
+    "FileStoreRepairReason",
     "ObjectRef",
     "FileOffloadWriter",
     "FileLargeToolResultBackend",

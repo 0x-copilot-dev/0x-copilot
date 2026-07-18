@@ -22,6 +22,8 @@ listed both as deferred; this module delivers the light desktop form of them.
 
 from __future__ import annotations
 
+from collections.abc import Callable
+
 from pydantic import BaseModel, ConfigDict
 
 from runtime_adapters.file._paths import FileStoreLayout
@@ -61,10 +63,19 @@ class QuotaGuard:
     past the ceiling.
     """
 
-    def __init__(self, layout: FileStoreLayout, *, max_bytes: int = 0) -> None:
+    def __init__(
+        self,
+        layout: FileStoreLayout,
+        *,
+        max_bytes: int = 0,
+        on_reject: Callable[[int], None] | None = None,
+    ) -> None:
         self._layout = layout
         # Clamp negatives to 0 (unlimited); the settings layer also validates.
         self._max_bytes = max_bytes if max_bytes > 0 else 0
+        # Best-effort observability hook fired *before* the reject is raised, so
+        # a metric/log is emitted even when a caller swallows the exception.
+        self._on_reject = on_reject
 
     @property
     def enabled(self) -> bool:
@@ -109,6 +120,11 @@ class QuotaGuard:
             return
         used = self.current_bytes()
         if used + incoming_bytes > self._max_bytes:
+            if self._on_reject is not None:
+                try:
+                    self._on_reject(incoming_bytes)
+                except Exception:  # pragma: no cover - telemetry must not mask
+                    pass
             raise FileStoreQuotaError(
                 used_bytes=used,
                 incoming_bytes=incoming_bytes,
