@@ -281,15 +281,61 @@ class DefaultRuntimeDependenciesFactory:
         )
 
     def _mcp_registry(self, context: AgentRuntimeContext) -> object:
-        """Return a ``DynamicMcpRegistry`` backed by the backend provider, or an ``EmptyMcpRegistry`` if unconfigured."""
-        if self.settings.mcp.backend_registry_url is None:
+        """Compose the backend SaaS provider with the gated desktop-browser provider.
+
+        The backend SaaS provider is present only when an MCP backend URL is
+        configured. The device-local browser provider (AC8) is composed
+        alongside it — WITHOUT a duplicate name — only when
+        ``RUNTIME_ENABLE_DESKTOP_BROWSER`` + ``single_user_desktop`` + a browser
+        broker URL/token are all present (``build_browser_mcp`` fails closed
+        otherwise). With no providers at all, an ``EmptyMcpRegistry`` is returned
+        so non-desktop / unconfigured images are byte-identical.
+        """
+        providers: list[object] = []
+        if self.settings.mcp.backend_registry_url is not None:
+            providers.append(
+                BackendMcpProvider(
+                    backend_url=self.settings.mcp.backend_registry_url,
+                    runtime_context=context,
+                    auth_redirect_uri=self.settings.mcp.auth_redirect_uri,
+                )
+            )
+        browser_provider = self._browser_provider(context)
+        if browser_provider is not None:
+            providers.append(browser_provider)
+        if not providers:
             return EmptyMcpRegistry()
-        provider = BackendMcpProvider(
-            backend_url=self.settings.mcp.backend_registry_url,
-            runtime_context=context,
-            auth_redirect_uri=self.settings.mcp.auth_redirect_uri,
+        return DynamicMcpRegistry(providers=tuple(providers))
+
+    def _browser_provider(self, context: AgentRuntimeContext) -> object | None:
+        """Build the gated device-local browser MCP provider, or ``None``.
+
+        Gated OFF by default: the ``build_browser_mcp`` seam returns ``None``
+        unless the browser flag is truthy, the deployment profile is
+        ``single_user_desktop``, and the browser broker URL + token are set. All
+        signals come from the trusted desktop service environment; off desktop
+        the vars are absent and no card ever appears.
+        """
+        import os  # noqa: PLC0415
+
+        from agent_runtime.capabilities.browser.constants import (  # noqa: PLC0415
+            BrowserEnv,
         )
-        return DynamicMcpRegistry(providers=(provider,))
+        from agent_runtime.capabilities.browser.desktop_browser_provider import (  # noqa: PLC0415
+            BrowserMcpConfig,
+            build_browser_mcp,
+        )
+
+        env = os.environ
+        return build_browser_mcp(
+            BrowserMcpConfig(
+                enabled=BrowserEnv.is_enabled(env.get(BrowserEnv.FLAG)),
+                deployment_profile=env.get("ENTERPRISE_DEPLOYMENT_PROFILE", ""),
+                broker_url=env.get(BrowserEnv.BROKER_URL) or None,
+                broker_token=env.get(BrowserEnv.BROKER_TOKEN) or None,
+                runtime_context=context,
+            )
+        )
 
     def _skill_registry(self, context: AgentRuntimeContext) -> object | None:
         """Return a ``VirtualSkillRegistry`` backed by the backend provider, or ``None`` if unconfigured."""

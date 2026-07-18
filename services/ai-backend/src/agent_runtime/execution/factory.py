@@ -22,6 +22,8 @@ from agent_runtime.execution.provider_kwargs import (
     workspace_model_kwargs,
 )
 from agent_runtime.execution.deep_agent_builder import (
+    CODE_MODE_GUIDANCE,
+    SANDBOX_EXECUTE_GUIDANCE,
     WORKSPACE_ACCESS_GUIDANCE,
     WORKSPACE_WRITE_GUIDANCE,
     DeepAgentBuildRequest,
@@ -208,21 +210,28 @@ async def _assemble_harness(
             skill_registry=runtime_dependencies.skill_registry,
             prior_tool_result_loader=runtime_dependencies.prior_tool_result_loader,
             mcp_discovery_cache=runtime_dependencies.mcp_discovery_cache,
+            code_mode_tool=runtime_dependencies.code_mode_tool,
+            sandbox_execute_tool=runtime_dependencies.sandbox_execute_tool,
             runtime_context=runtime_context,
         )
-        model_instructions = _instructions_with_workspace(
-            instructions=_instructions_with_suggested_connectors(
-                instructions=_instructions_with_skill_cards(
-                    instructions=_instructions_with_mcp_cards(
-                        instructions=instructions,
-                        mcp_servers=mcp_servers,
+        model_instructions = _instructions_with_capability_tools(
+            instructions=_instructions_with_workspace(
+                instructions=_instructions_with_suggested_connectors(
+                    instructions=_instructions_with_skill_cards(
+                        instructions=_instructions_with_mcp_cards(
+                            instructions=instructions,
+                            mcp_servers=mcp_servers,
+                        ),
+                        skill_cards=skill_cards,
                     ),
-                    skill_cards=skill_cards,
+                    suggestions=runtime_context.suggested_connectors,
                 ),
-                suggestions=runtime_context.suggested_connectors,
+                workspace_active=workspace_backend is not None,
+                workspace_writable=workspace_writable,
             ),
-            workspace_active=workspace_backend is not None,
-            workspace_writable=workspace_writable,
+            code_mode_active=runtime_dependencies.code_mode_tool is not None,
+            sandbox_execute_active=runtime_dependencies.sandbox_execute_tool
+            is not None,
         )
         # Compute workspace-policy kwargs (e.g. training opt-out provider
         # headers) once per build and thread them through every
@@ -305,6 +314,8 @@ def _model_visible_tools(
     skill_registry: object | None,
     prior_tool_result_loader: object | None,
     mcp_discovery_cache: object | None,
+    code_mode_tool: object | None = None,
+    sandbox_execute_tool: object | None = None,
     runtime_context: AgentRuntimeContext,
 ) -> tuple[object, ...]:
     model_tools = list(tools)
@@ -390,6 +401,14 @@ def _model_visible_tools(
             SuggestMcpConnectorInput,
         )
     )
+    # Gated Wave-1 capability tools. Each is a fully-built ``StructuredTool``
+    # (constructed per run by the worker) or ``None`` when its flag+desktop gate
+    # is off. Appended last so they receive the SAME tool-policy / approval /
+    # budget middleware every other model tool does — they are not privileged.
+    if code_mode_tool is not None:
+        model_tools.append(code_mode_tool)
+    if sandbox_execute_tool is not None:
+        model_tools.append(sandbox_execute_tool)
     return tuple(model_tools)
 
 
@@ -707,6 +726,30 @@ def _instructions_with_workspace(
         WORKSPACE_WRITE_GUIDANCE if workspace_writable else WORKSPACE_ACCESS_GUIDANCE
     )
     return "\n\n".join((instructions, guidance))
+
+
+def _instructions_with_capability_tools(
+    *,
+    instructions: str,
+    code_mode_active: bool,
+    sandbox_execute_active: bool,
+) -> str:
+    """Append gated Wave-1 capability-tool guidance blocks when their tools exist.
+
+    Each block is gated on the tool actually being present for the run (the
+    worker built it because its flag+desktop gate held). Off those paths the
+    tools are absent, both flags are ``False``, and the prompt is returned
+    unchanged so non-desktop / disabled runs pay no token tax.
+    """
+
+    blocks = [instructions]
+    if code_mode_active:
+        blocks.append(CODE_MODE_GUIDANCE)
+    if sandbox_execute_active:
+        blocks.append(SANDBOX_EXECUTE_GUIDANCE)
+    if len(blocks) == 1:
+        return instructions
+    return "\n\n".join(blocks)
 
 
 def _parse_context(
