@@ -7,7 +7,7 @@ export const SURFACE_PALETTE = {
   textMid: "#c8ccd1",
   textLo: "#9aa0a6",
   lime: "var(--color-accent)",
-  limeBgSoft: "rgba(194, 255, 90, 0.12)",
+  limeBgSoft: "color-mix(in srgb, var(--color-accent) 12%, transparent)",
 } as const;
 
 export type SurfacePalette = typeof SURFACE_PALETTE;
