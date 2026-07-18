@@ -1,0 +1,208 @@
+# AC9 — Desktop MCP connector profiles (backend-owned reconciliation overlay).
+#
+# This is NOT a third UI catalog. It is the server-side overlay that
+# reconciles a marketing `connector_slug` (from `connectors/catalog.yaml`)
+# with exactly one installable MCP server record — an existing `seed:<slug>`
+# from `mcp_catalog.DEFAULT_CATALOG`, or a profile-owned seed definition that
+# carries its own verified endpoint + auth metadata. A connector card can only
+# appear for a slug that resolves here to an installable server; a profile
+# whose slug is unknown to the marketing catalog fails boot.
+#
+# Endpoints, scopes, tools, and release stages are pinned from the official
+# vendor docs cited in `docs/plan/desktop/agent-capabilities/09-ac9-desktop-connectors.md`.
+# Provider access/refresh tokens and client secrets are NEVER stored here —
+# they live only in the backend TokenVault.
+#
+# Loader invariants (see profile_catalog.DesktopProfileCatalog):
+#   * unique profile_id / connector_slug / server_id
+#   * every connector_slug is a known marketing slug
+#   * endpoint_template is HTTPS (tenant `{placeholder}` allowed)
+#   * a write/draft tool must carry risk + per_call approval metadata
+#   * a `preview` release_stage requires `requires_preview_gate: true`
+
+profiles:
+  - profile_id: google-gmail
+    connector_slug: gmail
+    server_id: "desktop:google:gmail"
+    display_group: Google Workspace
+    endpoint_template: "https://gmailmcp.googleapis.com/mcp/v1"
+    transport: http
+    release_stage: preview
+    requires_preview_gate: true
+    verified_at: "2026-07-18"
+    requires_pre_registered_client: true
+    reference_urls:
+      - "https://developers.google.com/workspace/gmail/api/reference/mcp"
+    callback_modes: [loopback_pkce, deep_link_pkce]
+    permissions:
+      - identifier: "https://www.googleapis.com/auth/gmail.readonly"
+        kind: oauth_scope
+        required_for: read
+        admin_consent_required: false
+      - identifier: "https://www.googleapis.com/auth/gmail.compose"
+        kind: oauth_scope
+        required_for: draft
+        admin_consent_required: false
+    tools:
+      - tool_name: search_threads
+        product_scope: read
+        risk: low
+        approval: session
+      - tool_name: get_thread
+        product_scope: read
+        risk: low
+        approval: session
+      - tool_name: list_drafts
+        product_scope: read
+        risk: low
+        approval: session
+      - tool_name: list_labels
+        product_scope: read
+        risk: low
+        approval: session
+      - tool_name: create_draft
+        product_scope: draft
+        risk: medium
+        approval: per_call
+    unsupported_capabilities:
+      - "Sending mail is not in the official Gmail MCP preview toolset."
+      - "Label mutation is hidden; the setup scope grants no modify authority."
+
+  - profile_id: google-drive
+    connector_slug: gdrive
+    server_id: "desktop:google:drive"
+    display_group: Google Workspace
+    endpoint_template: "https://drivemcp.googleapis.com/mcp/v1"
+    transport: http
+    release_stage: preview
+    requires_preview_gate: true
+    verified_at: "2026-07-18"
+    requires_pre_registered_client: true
+    reference_urls:
+      - "https://developers.google.com/workspace/drive/api/reference/mcp"
+    callback_modes: [loopback_pkce, deep_link_pkce]
+    permissions:
+      - identifier: "https://www.googleapis.com/auth/drive.readonly"
+        kind: oauth_scope
+        required_for: read
+        admin_consent_required: false
+      - identifier: "https://www.googleapis.com/auth/drive.file"
+        kind: oauth_scope
+        required_for: write
+        admin_consent_required: false
+    tools:
+      - tool_name: search_files
+        product_scope: read
+        risk: low
+        approval: session
+      - tool_name: list_recent_files
+        product_scope: read
+        risk: low
+        approval: session
+      - tool_name: get_file_metadata
+        product_scope: read
+        risk: low
+        approval: session
+      - tool_name: read_file_content
+        product_scope: read
+        risk: low
+        approval: session
+      - tool_name: create_file
+        product_scope: write
+        risk: high
+        approval: per_call
+      - tool_name: copy_file
+        product_scope: write
+        risk: high
+        approval: per_call
+    unsupported_capabilities:
+      - "Drive files include readable Sheets and Slides text, not cell/formula or slide editing."
+      - "No format-stable export or chart operations."
+
+  - profile_id: microsoft-work-iq-mail
+    connector_slug: outlook
+    server_id: "desktop:microsoft:work-iq-mail"
+    display_group: Microsoft 365
+    endpoint_template: "https://agent365.svc.cloud.microsoft/agents/tenants/{tenantId}/servers/mcp_MailTools"
+    transport: http
+    release_stage: preview
+    requires_preview_gate: true
+    verified_at: "2026-07-18"
+    requires_pre_registered_client: true
+    requires_admin_setup: true
+    reference_urls:
+      - "https://learn.microsoft.com/en-us/microsoft-copilot-studio/mcp-mail-work-iq"
+      - "https://learn.microsoft.com/en-us/microsoft-agent-365/tooling-servers-overview"
+    callback_modes: [loopback_pkce, deep_link_pkce]
+    permissions:
+      - identifier: "WorkIQ-MailServer"
+        kind: admin_permission
+        required_for: read
+        admin_consent_required: true
+    tools:
+      - tool_name: mcp_MailTools_graph_mail_getMessage
+        product_scope: read
+        risk: low
+        approval: session
+      - tool_name: mcp_MailTools_graph_mail_listSent
+        product_scope: read
+        risk: low
+        approval: session
+      - tool_name: mcp_MailTools_graph_mail_searchMessages
+        product_scope: read
+        risk: low
+        approval: session
+      - tool_name: mcp_MailTools_graph_mail_createMessage
+        product_scope: draft
+        risk: medium
+        approval: per_call
+    unsupported_capabilities:
+      - "Reply, reply-all, send, update, and delete are hidden in AC9."
+
+  - profile_id: atlassian-rovo
+    connector_slug: atlassian
+    server_id: "seed:atlassian"
+    display_group: Atlassian/Jira
+    endpoint_template: "https://mcp.atlassian.com/v1/mcp/authv2"
+    transport: http
+    release_stage: stable
+    requires_preview_gate: false
+    verified_at: "2026-07-18"
+    requires_pre_registered_client: true
+    reuses_existing_seed: true
+    reference_urls:
+      - "https://developer.atlassian.com/cloud/rovo-mcp/guides/getting-started/"
+      - "https://developer.atlassian.com/cloud/rovo-mcp/guides/supported-tools/"
+    callback_modes: [loopback_pkce, deep_link_pkce]
+    permissions:
+      - identifier: "read:jira-work"
+        kind: provider_policy
+        required_for: read
+        admin_consent_required: false
+    tools:
+      - tool_name: getJiraIssue
+        product_scope: read
+        risk: low
+        approval: session
+      - tool_name: searchJiraIssuesUsingJql
+        product_scope: read
+        risk: low
+        approval: session
+      - tool_name: getTransitionsForJiraIssue
+        product_scope: read
+        risk: low
+        approval: session
+      - tool_name: getIssueLinkTypes
+        product_scope: read
+        risk: low
+        approval: session
+      - tool_name: getIssueWorklog
+        product_scope: read
+        risk: low
+        approval: session
+      - tool_name: getJiraIssueRemoteIssueLinks
+        product_scope: read
+        risk: low
+        approval: session
+    unsupported_capabilities:
+      - "Jira/Confluence writes, attachment commands, and API-token-only tools are hidden."

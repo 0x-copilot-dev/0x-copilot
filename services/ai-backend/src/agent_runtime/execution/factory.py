@@ -5,7 +5,7 @@ from __future__ import annotations
 import asyncio
 from collections.abc import Callable, Sequence
 from dataclasses import dataclass
-from typing import Any
+from typing import Any, Final
 
 from langchain_core.tools import StructuredTool
 from pydantic import ValidationError
@@ -23,6 +23,7 @@ from agent_runtime.execution.provider_kwargs import (
 )
 from agent_runtime.execution.deep_agent_builder import (
     WORKSPACE_ACCESS_GUIDANCE,
+    WORKSPACE_WRITE_GUIDANCE,
     DeepAgentBuildRequest,
     DeepAgentsBackend,
     build_deep_agent,
@@ -188,6 +189,11 @@ async def _assemble_harness(
     deepagents_subagents = _subagents_with_fs_permissions(subagents)
     memory_backend = runtime_dependencies.memory_backend_factory.create(runtime_context)
     workspace_backend = runtime_dependencies.workspace_backend
+    # Host writes are live only when the workspace backend reports write
+    # authority (a writable grant + a per-run capability context + a snapshot
+    # store). This one signal gates BOTH the approval permission and the
+    # writable prompt guidance.
+    workspace_writable = bool(getattr(workspace_backend, "supports_writes", False))
     deep_backend = _composed_deep_backend(
         runtime_dependencies.subagent_artifacts_backend,
         drafts_backend=runtime_dependencies.drafts_backend,
@@ -216,6 +222,7 @@ async def _assemble_harness(
                 suggestions=runtime_context.suggested_connectors,
             ),
             workspace_active=workspace_backend is not None,
+            workspace_writable=workspace_writable,
         )
         # Compute workspace-policy kwargs (e.g. training opt-out provider
         # headers) once per build and thread them through every
@@ -263,6 +270,7 @@ async def _assemble_harness(
                 memory_paths=_deepagents_memory_paths(memory_backend),
                 skill_directories=skill_directories,
                 interrupt_on=_native_interrupt_config(model_tools),
+                permissions=_workspace_write_permissions(workspace_writable),
                 checkpointer=runtime_checkpointer(),
                 extra_model_kwargs=extra_model_kwargs or None,
             )
@@ -398,6 +406,40 @@ def _native_interrupt_config(
             "allowed_decisions": ["approve", "edit", "reject"],
         },
     }
+
+
+#: Virtual prefix every host-folder mount lives under. A single ``interrupt``
+#: rule on ``/workspace/**`` writes gates ALL host mutations for approval,
+#: regardless of which mount/grant is addressed; the broker's per-grant
+#: mode-gate remains the final authority.
+_WORKSPACE_WRITE_GLOB: Final = "/workspace/**"
+
+
+def _workspace_write_permissions(workspace_writable: bool) -> tuple[object, ...]:  # noqa: FBT001
+    """Return the host-write approval permission when the run can write to host folders.
+
+    A single Deep Agents ``FilesystemPermission`` with ``mode="interrupt"`` over
+    ``/workspace/**`` writes routes every host ``write_file`` / ``edit_file``
+    through the SAME ``HumanInTheLoopMiddleware`` that gates MCP tools: the tool
+    call pauses for human approval BEFORE the backend mutation runs. Returns an
+    empty tuple when the run has no writable host grant, so the read-only /
+    non-desktop path installs no permission and stays byte-identical.
+    """
+    if not workspace_writable:
+        return ()
+    # Imported lazily so the deepagents permission type is referenced in exactly
+    # one place and non-workspace runs never touch it.
+    from deepagents.middleware.filesystem import (  # noqa: PLC0415
+        FilesystemPermission,
+    )
+
+    return (
+        FilesystemPermission(
+            operations=["write"],
+            paths=[_WORKSPACE_WRITE_GLOB],
+            mode="interrupt",
+        ),
+    )
 
 
 def _local_tool_names(
@@ -643,18 +685,28 @@ def _composed_deep_backend(
     return CompositeBackend(default=StateBackend(), routes=routes)
 
 
-def _instructions_with_workspace(*, instructions: str, workspace_active: bool) -> str:
+def _instructions_with_workspace(
+    *,
+    instructions: str,
+    workspace_active: bool,
+    workspace_writable: bool = False,
+) -> str:
     """Append the ``/workspace/`` guidance block when the route is active.
 
     Gated on the composed ``/workspace/`` route existing for this run: off the
     desktop path (or with no granted folders) ``workspace_active`` is ``False``
     and the prompt is returned unchanged, so non-desktop runs pay no token tax
-    and never advertise a route they do not have.
+    and never advertise a route they do not have. When at least one mount is
+    writable, the writable guidance (host writes allowed but approval-gated)
+    replaces the strictly-read-only block.
     """
 
     if not workspace_active:
         return instructions
-    return "\n\n".join((instructions, WORKSPACE_ACCESS_GUIDANCE))
+    guidance = (
+        WORKSPACE_WRITE_GUIDANCE if workspace_writable else WORKSPACE_ACCESS_GUIDANCE
+    )
+    return "\n\n".join((instructions, guidance))
 
 
 def _parse_context(

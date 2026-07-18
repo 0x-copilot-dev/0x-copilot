@@ -53,3 +53,7 @@ entries:
     display_name: Outlook
     description: Mail and calendar.
     icon_hint: outlook
+  - slug: atlassian
+    display_name: Atlassian
+    description: Jira issues and Confluence pages.
+    icon_hint: atlassian
