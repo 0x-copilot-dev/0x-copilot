@@ -1,3 +1,10 @@
+export { ConnectModal, CONNECT_PERMISSION_OPTIONS } from "./ConnectModal";
+export type {
+  ConnectModalProps,
+  ConnectPermission,
+  ConnectPermissionOption,
+} from "./ConnectModal";
+
 export {
   ConnectorsDestination,
   TOOLS_SUBTITLE,
