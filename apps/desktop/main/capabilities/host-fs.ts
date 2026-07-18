@@ -1,5 +1,15 @@
 import { randomBytes as nodeRandomBytes } from "node:crypto";
-import { constants, type Dir, type Dirent, type Stats } from "node:fs";
+import {
+  close as fsCloseCb,
+  constants,
+  type Dir,
+  type Dirent,
+  fstat as fsFstatCb,
+  fsync as fsFsyncCb,
+  read as fsReadCb,
+  type Stats,
+  write as fsWriteCb,
+} from "node:fs";
 import {
   lstat as fsLstat,
   mkdir as fsMkdir,
@@ -11,7 +21,10 @@ import {
   unlink as fsUnlink,
   type FileHandle,
 } from "node:fs/promises";
+import { createRequire } from "node:module";
 import { basename, join } from "node:path";
+
+import type { NativeWorkspaceFs } from "../../native/workspace-fs";
 
 import {
   assertWithinRoot,
@@ -20,6 +33,32 @@ import {
   isSensitiveFileName,
   normalizeVirtualPath,
 } from "./path-validation";
+
+export type { NativeWorkspaceFs };
+
+/**
+ * The subset of `FileHandle` the read/list/stat/grep pipeline actually uses.
+ * A real `node:fs/promises` FileHandle satisfies it structurally, and so does
+ * the thin wrapper we build around a raw fd returned by the native helper —
+ * so `#openAtomic` can hand back either without the callers caring which
+ * atomic-open primitive produced the descriptor.
+ */
+export interface OpenFile {
+  stat(): Promise<Stats>;
+  read(
+    buffer: Buffer,
+    offset: number,
+    length: number,
+    position: number | null,
+  ): Promise<{ bytesRead: number; buffer: Buffer }>;
+  write(
+    buffer: Buffer,
+    offset: number,
+    length: number,
+  ): Promise<{ bytesWritten: number; buffer: Buffer }>;
+  sync(): Promise<void>;
+  close(): Promise<void>;
+}
 import type {
   HostDeleteResult,
   HostDirEntry,
@@ -72,8 +111,12 @@ import type {
 //      an `open()` can never block on a device or FIFO.
 //   4. Atomic open + revalidate (TOCTOU) — open the resolved real path by
 //      handle with a symlink-refusing flag, then re-check identity and
-//      containment against the handle. See `#openAtomic` for the per-platform
-//      guarantee and the honestly-stated residual on Linux/Windows.
+//      containment against the handle. On Linux/Windows this prefers the native
+//      `workspace-fs` helper (openat2(RESOLVE_BENEATH) / reparse-safe
+//      NtCreateFile), which denies an intermediate-component swap ATOMICALLY
+//      inside the kernel open; when the native module is unavailable it falls
+//      back to the pure-Node `O_NOFOLLOW` + post-open realpath recheck (the
+//      conservative, non-atomic denial). See `#openAtomic`.
 //   5. Operate on the HANDLE (fd-pinned), never re-deriving from the path, and
 //      stop at the byte / entry / depth / result / duration ceilings.
 
@@ -99,6 +142,15 @@ export interface HostFsDeps {
   randomBytes(size: number): Buffer;
   now(): number;
   platform: NodeJS.Platform;
+  /**
+   * Native TOCTOU-safe open helper. When present (Linux/Windows, once the addon
+   * is built), `#openAtomic` opens the target through it so an intermediate
+   * symlink/junction swap is denied ATOMICALLY by the kernel rather than by the
+   * non-atomic post-open recheck. Left undefined on darwin (whose Node path is
+   * already atomic via `O_NOFOLLOW_ANY`) and whenever the addon is unavailable —
+   * in which case the pure-Node recheck fallback carries the guarantee.
+   */
+  native?: NativeWorkspaceFs;
   /**
    * TEST-ONLY seam. Invoked after resolve+authorize+lstat-gate but immediately
    * BEFORE the atomic open, so an adversarial test can swap a path component
@@ -132,6 +184,63 @@ export function defaultHostFsDeps(): HostFsDeps {
     randomBytes: (n) => nodeRandomBytes(n),
     now: () => Date.now(),
     platform: process.platform,
+    native: loadNativeWorkspaceFs(),
+  };
+}
+
+/**
+ * Best-effort load of the native `workspace-fs` addon. darwin never needs it
+ * (its Node path is already atomic), and a missing / unbuilt binary is a
+ * supported state — either case returns `undefined` and the Node fallback
+ * carries the TOCTOU guarantee. NEVER throws.
+ */
+function loadNativeWorkspaceFs(): NativeWorkspaceFs | undefined {
+  if (process.platform === "darwin") return undefined;
+  try {
+    // Computed specifier (array-join) so esbuild leaves this as a runtime
+    // require — the addon and its `.node` binary must not be bundled, and must
+    // resolve relative to the emitted main bundle at run time.
+    const specifier = ["..", "..", "native", "workspace-fs", "index.cjs"].join(
+      "/",
+    );
+    const req = createRequire(import.meta.url);
+    const mod = req(specifier) as {
+      loadNative?: () => NativeWorkspaceFs | undefined;
+    };
+    return typeof mod.loadNative === "function" ? mod.loadNative() : undefined;
+  } catch {
+    return undefined;
+  }
+}
+
+/** Wrap a raw OS fd (from the native helper) in the `OpenFile` surface the
+ *  read pipeline uses, backed by `node:fs` fd-level calls. */
+function openFileFromFd(fd: number): OpenFile {
+  return {
+    stat: () =>
+      new Promise<Stats>((resolve, reject) =>
+        fsFstatCb(fd, (err, stats) => (err ? reject(err) : resolve(stats))),
+      ),
+    read: (buffer, offset, length, position) =>
+      new Promise((resolve, reject) =>
+        fsReadCb(fd, buffer, offset, length, position, (err, bytesRead, buf) =>
+          err ? reject(err) : resolve({ bytesRead, buffer: buf }),
+        ),
+      ),
+    write: (buffer, offset, length) =>
+      new Promise((resolve, reject) =>
+        fsWriteCb(fd, buffer, offset, length, null, (err, bytesWritten, buf) =>
+          err ? reject(err) : resolve({ bytesWritten, buffer: buf }),
+        ),
+      ),
+    sync: () =>
+      new Promise<void>((resolve, reject) =>
+        fsFsyncCb(fd, (err) => (err ? reject(err) : resolve())),
+      ),
+    close: () =>
+      new Promise<void>((resolve, reject) =>
+        fsCloseCb(fd, (err) => (err ? reject(err) : resolve())),
+      ),
   };
 }
 
@@ -355,7 +464,7 @@ export class HostFs {
       }
       // Re-validate + open each file atomically (a walk-time swap of an
       // ancestor is caught here before we read any bytes).
-      let handle: { fh: FileHandle; fst: Stats };
+      let handle: { fh: OpenFile; fst: Stats };
       try {
         handle = await this.#openAtomic(
           {
@@ -714,20 +823,33 @@ export class HostFs {
    *   - darwin: `O_NOFOLLOW_ANY` makes the kernel reject a symlink in ANY
    *     component atomically during the open path-walk. A mid-flight swap of
    *     any ancestor to a symlink → ELOOP → denied. TOCTOU is fully closed.
-   *   - other: `O_NOFOLLOW` closes only the FINAL-component race atomically.
-   *     Intermediate-component swaps are caught by the post-open recheck below
-   *     (fstat-vs-lstat identity AND realpath-recheck containment), which is
-   *     the conservative denial applied here — NOT atomic. Full closure needs
-   *     `openat2(RESOLVE_BENEATH)` (Linux) via a native module, which this
-   *     read-only slice deliberately does not add.
+   *   - Linux / Windows WITH the native `workspace-fs` helper: the open goes
+   *     through `openBeneath` (openat2(RESOLVE_BENEATH|RESOLVE_NO_SYMLINKS) on
+   *     Linux, reparse-refusing NtCreateFile walk on Windows), which denies an
+   *     intermediate-component swap ATOMICALLY inside the kernel open — the
+   *     same closure darwin gets. No post-open recheck is needed on this path.
+   *   - Linux / Windows WITHOUT the native helper (unbuilt / unavailable, or an
+   *     `ENOSYS` kernel): `O_NOFOLLOW` closes only the FINAL-component race
+   *     atomically; intermediate-component swaps are caught by the post-open
+   *     recheck below (fstat-vs-lstat identity AND realpath-recheck
+   *     containment) — the conservative denial, NOT atomic. Documented residual.
    */
   async #openAtomic(
     target: ResolvedTarget,
     asDirectory: boolean,
-  ): Promise<{ fh: FileHandle; fst: Stats }> {
+  ): Promise<{ fh: OpenFile; fst: Stats }> {
     // TEST-ONLY: allow an adversarial swap between resolve and use.
     if (this.#deps.afterResolve !== undefined) {
       await this.#deps.afterResolve(target.targetReal);
+    }
+
+    // Prefer the native atomic open on the non-atomic platforms. darwin keeps
+    // its already-atomic pure-Node `O_NOFOLLOW_ANY` path unchanged.
+    const native = this.#deps.native;
+    if (native !== undefined && this.#deps.platform !== "darwin") {
+      const opened = await this.#openAtomicNative(native, target, asDirectory);
+      if (opened !== "unsupported") return opened;
+      // Kernel lacks the primitive (e.g. pre-5.6 Linux) — fall through to Node.
     }
 
     let fh: FileHandle;
@@ -763,14 +885,49 @@ export class HostFs {
     }
   }
 
+  /**
+   * Native branch of `#openAtomic`. Opens the target through the kernel's
+   * root-confined, symlink/reparse-refusing primitive, which denies an
+   * intermediate-component swap ATOMICALLY at open time. Because the native
+   * open already proves containment beneath the root, NO non-atomic post-open
+   * realpath recheck is performed here (unlike the Node fallback). Returns
+   * `"unsupported"` when the kernel lacks the primitive (`ENOSYS`), signalling
+   * `#openAtomic` to fall back to the Node path.
+   */
+  async #openAtomicNative(
+    native: NativeWorkspaceFs,
+    target: ResolvedTarget,
+    asDirectory: boolean,
+  ): Promise<{ fh: OpenFile; fst: Stats } | "unsupported"> {
+    let fd: number;
+    try {
+      fd = native.openBeneath(target.rootReal, target.relPosix, {
+        directory: asDirectory,
+      });
+    } catch (err) {
+      const code = errCode(err);
+      if (code === "ENOSYS" || code === "ENOTSUP") return "unsupported";
+      throw mapOpenError(err, asDirectory);
+    }
+    const fh = openFileFromFd(fd);
+    try {
+      const fst = await fh.stat();
+      return { fh, fst };
+    } catch (err) {
+      await closeQuietly(fh);
+      throw err;
+    }
+  }
+
   // --- WRITE internals ---
 
   /**
    * WRITE analogue of `#resolve`: split the virtual path into a PARENT path and
    * a `leaf` name, resolve-and-authorize the parent inside the root, and pin it
    * with the SAME atomic open the reads use (so a mid-flight swap of an ancestor
-   * to a symlink is caught — atomically on darwin, by the post-open recheck
-   * elsewhere). The leaf itself is not resolved (it may not exist yet), but it
+   * to a symlink is caught — atomically on darwin and via the native helper on
+   * Linux/Windows, or by the post-open recheck when the native helper is
+   * absent). The leaf itself is not resolved (it may not exist yet), but it
    * was already proven a single non-traversing segment by `normalizeVirtualPath`.
    */
   async #resolveParent(
@@ -1025,9 +1182,13 @@ function mapOpenError(err: unknown, asDirectory: boolean): FsError {
   switch (code) {
     case "ELOOP":
     case "EMLINK":
-      // O_NOFOLLOW / O_NOFOLLOW_ANY tripped a symlink — a TOCTOU swap or a
-      // symlink component. Deny.
+      // O_NOFOLLOW / O_NOFOLLOW_ANY / RESOLVE_NO_SYMLINKS tripped a symlink — a
+      // TOCTOU swap or a symlink component. Deny.
       return new FsError("permission_denied", "symlink in resolved path");
+    case "EXDEV":
+      // openat2(RESOLVE_BENEATH) refused a component that would escape the root
+      // (e.g. a swapped-in symlink pointing outside). Deny.
+      return new FsError("permission_denied", "path escapes the grant root");
     case "ENOTDIR":
       return asDirectory
         ? new FsError("not_a_directory", "component is not a directory")
@@ -1051,7 +1212,7 @@ function direntType(dent: Dirent): HostDirEntry["type"] {
   return "other";
 }
 
-async function closeQuietly(fh: FileHandle): Promise<void> {
+async function closeQuietly(fh: OpenFile): Promise<void> {
   await fh.close().catch(() => {});
 }
 

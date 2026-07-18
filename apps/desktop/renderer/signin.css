@@ -1,0 +1,321 @@
+/* ============================================================
+ * Desktop sign-in gate — v2 "0xCopilot Login" (wallet-first, quiet).
+ *
+ * A single centered card. Design-system tokens only: one sky accent
+ * (--color-accent), near-black neutrals, hairline borders, jade
+ * (--color-success), JetBrains Mono (--font-mono) for the version line.
+ * Light + dark aware (every colour is a token).
+ *
+ * This mirrors the web login's `loginx-` structure/classes
+ * (apps/frontend/src/styles.css), trimmed to the states the desktop gate
+ * actually renders: the desktop wallet *sign* step is external (system
+ * browser / loopback via wallet.html), so there is no inline signature-
+ * review, wallet-list, or workspace-picker here — clicking an option fires
+ * an IPC channel and we show a "waiting" state. The classes are duplicated
+ * (not imported) because apps/*→apps/* imports are forbidden and the desktop
+ * renderer does not load the web app's stylesheet.
+ * ============================================================ */
+
+.loginx-shell {
+  min-height: 100vh;
+  display: flex;
+  background-color: var(--color-bg);
+  color: var(--color-text);
+}
+.loginx-pane {
+  flex: 1 1 auto;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: var(--space-2xl) var(--space-lg);
+}
+
+.loginx-card {
+  width: 100%;
+  max-width: 26rem;
+  padding: var(--space-2xl);
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-lg);
+  background: var(--color-surface);
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-lg, 12px);
+}
+
+/* Hexagonal copilot mark */
+.loginx-mark {
+  align-self: center;
+}
+.loginx-mark svg {
+  width: 2.5rem;
+  height: 2.5rem;
+  display: block;
+}
+.loginx-mark__hex {
+  fill: none;
+  stroke: var(--color-accent);
+  stroke-width: 1.6;
+  stroke-linejoin: round;
+}
+.loginx-mark__cursor {
+  fill: var(--color-accent);
+}
+
+.loginx-head {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-xs);
+  text-align: center;
+}
+.loginx-title {
+  margin: 0;
+  font-size: var(--font-size-2xl);
+  font-weight: var(--font-weight-semibold);
+  letter-spacing: -0.02em;
+  line-height: 1.2;
+}
+.loginx-zx {
+  color: var(--color-accent);
+}
+.loginx-sub {
+  margin: 0;
+  color: var(--color-text-muted);
+  font-size: var(--font-size-sm);
+  line-height: 1.5;
+}
+
+/* Option stack */
+.loginx-options {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-sm);
+}
+
+.loginx-opt {
+  display: flex;
+  align-items: center;
+  gap: var(--space-md);
+  width: 100%;
+  padding: var(--space-md);
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-md);
+  background: var(--color-surface);
+  color: var(--color-text);
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+  transition:
+    border-color 0.12s ease,
+    background-color 0.12s ease;
+}
+.loginx-opt:hover:not(:disabled) {
+  border-color: var(--color-border-strong, var(--color-accent));
+  background: var(--color-surface-2, var(--color-surface));
+}
+.loginx-opt:focus-visible {
+  outline: 2px solid var(--color-focus-ring);
+  outline-offset: 2px;
+}
+.loginx-opt:disabled {
+  cursor: default;
+  opacity: 0.7;
+}
+
+/* Primary (wallet) — accent-filled */
+.loginx-opt[data-variant="primary"] {
+  border-color: transparent;
+  background: var(--color-accent);
+  color: var(--color-accent-contrast, var(--color-bg));
+}
+.loginx-opt[data-variant="primary"]:hover:not(:disabled) {
+  background: var(--color-accent-strong, var(--color-accent));
+  border-color: transparent;
+}
+.loginx-opt[data-variant="primary"] .loginx-opt__sub {
+  color: color-mix(
+    in srgb,
+    var(--color-accent-contrast, var(--color-bg)) 78%,
+    transparent
+  );
+}
+
+.loginx-opt__icon {
+  flex: 0 0 auto;
+  display: grid;
+  place-items: center;
+  width: 1.75rem;
+  height: 1.75rem;
+}
+.loginx-opt__glyph {
+  width: 1.25rem;
+  height: 1.25rem;
+}
+.loginx-opt__body {
+  display: flex;
+  flex-direction: column;
+  gap: 0.1rem;
+  min-width: 0;
+  flex: 1 1 auto;
+}
+.loginx-opt__label {
+  font-size: var(--font-size-sm);
+  font-weight: var(--font-weight-semibold);
+}
+.loginx-opt__sub {
+  font-size: var(--font-size-xs);
+  color: var(--color-text-subtle);
+}
+.loginx-opt__chev {
+  flex: 0 0 auto;
+  display: grid;
+  place-items: center;
+  color: var(--color-text-subtle);
+}
+.loginx-opt__chev svg {
+  width: 1.1rem;
+  height: 1.1rem;
+}
+.loginx-opt[data-variant="primary"] .loginx-opt__chev {
+  color: color-mix(
+    in srgb,
+    var(--color-accent-contrast, var(--color-bg)) 80%,
+    transparent
+  );
+}
+
+/* Divider */
+.loginx-divider {
+  display: flex;
+  align-items: center;
+  gap: var(--space-md);
+  color: var(--color-text-subtle);
+  font-size: var(--font-size-xs);
+  padding: var(--space-2xs) 0;
+}
+.loginx-divider::before,
+.loginx-divider::after {
+  content: "";
+  flex: 1 1 auto;
+  height: 1px;
+  background: var(--color-border);
+}
+
+/* Footer note + version line */
+.loginx-foot {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-sm);
+  text-align: center;
+}
+.loginx-note {
+  margin: 0;
+  font-size: var(--font-size-xs);
+  line-height: 1.5;
+  color: var(--color-text-muted);
+}
+.loginx-note strong {
+  color: var(--color-text);
+  font-weight: var(--font-weight-semibold);
+}
+.loginx-version {
+  margin: 0;
+  font-family: var(--font-mono);
+  font-size: var(--font-size-2xs);
+  color: var(--color-text-subtle);
+  letter-spacing: 0.01em;
+}
+
+/* Waiting / loading — a spinner while main drives the external round-trip */
+.loginx-wait {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: var(--space-sm);
+  text-align: center;
+  padding: var(--space-md) 0;
+}
+.loginx-spinner {
+  width: 1.75rem;
+  height: 1.75rem;
+  border-radius: 999px;
+  border: 2px solid var(--color-border);
+  border-top-color: var(--color-accent);
+  animation: loginx-spin 0.8s linear infinite;
+}
+@keyframes loginx-spin {
+  to {
+    transform: rotate(360deg);
+  }
+}
+@media (prefers-reduced-motion: reduce) {
+  .loginx-spinner {
+    animation-duration: 2s;
+  }
+}
+
+/* Error state */
+.loginx-error {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: var(--space-md);
+  text-align: center;
+  padding: var(--space-md) 0;
+}
+.loginx-error__badge {
+  display: grid;
+  place-items: center;
+  width: 2.5rem;
+  height: 2.5rem;
+  border-radius: 999px;
+  background: color-mix(in srgb, var(--color-danger) 16%, transparent);
+  color: var(--color-danger);
+}
+.loginx-error__badge svg {
+  width: 1.4rem;
+  height: 1.4rem;
+}
+.loginx-error__message {
+  margin: 0;
+  font-family: var(--font-mono);
+  font-size: var(--font-size-xs);
+  line-height: 1.5;
+  color: var(--color-text-muted);
+  word-break: break-word;
+}
+
+/* Retry / secondary action button (design-system button, tokenized) */
+.loginx-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: var(--space-xs);
+  padding: var(--space-sm) var(--space-lg);
+  border: 1px solid transparent;
+  border-radius: var(--radius-md);
+  background: var(--color-accent);
+  color: var(--color-accent-contrast, var(--color-bg));
+  font: inherit;
+  font-size: var(--font-size-sm);
+  font-weight: var(--font-weight-semibold);
+  cursor: pointer;
+  transition:
+    background-color 0.12s ease,
+    border-color 0.12s ease;
+}
+.loginx-btn:hover {
+  background: var(--color-accent-strong, var(--color-accent));
+}
+.loginx-btn:focus-visible {
+  outline: 2px solid var(--color-focus-ring);
+  outline-offset: 2px;
+}
+.loginx-btn--ghost {
+  background: transparent;
+  border-color: var(--color-border);
+  color: var(--color-text);
+}
+.loginx-btn--ghost:hover {
+  background: var(--color-surface-2, var(--color-surface));
+  border-color: var(--color-border-strong, var(--color-border));
+}
