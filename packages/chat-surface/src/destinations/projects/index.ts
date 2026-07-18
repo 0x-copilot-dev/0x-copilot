@@ -53,9 +53,12 @@ export {
 
 export {
   ProjectDetailView,
+  ProjectFilesTab,
   type ProjectDetail,
   type ProjectDetailViewProps,
   type ProjectDetailTabId,
+  type ProjectFileRow,
+  type ProjectFilesResult,
   type ProjectStatus,
 } from "./ProjectDetailView";
 

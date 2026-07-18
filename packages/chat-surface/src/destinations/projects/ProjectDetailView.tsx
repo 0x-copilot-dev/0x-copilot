@@ -7,16 +7,23 @@
 // keeps it substrate-agnostic and reusable from both the web app and
 // the desktop substrate (per chat-surface SP-1 invariants).
 //
-// Tab model (Projects sub-PRD §3 + cross-audit §1.3):
-//   Chats / Todos / Inbox / Library / Routines / Members / Activity
-// The five cross-destination tabs (Chats..Routines) render whatever
-// the host injects via `renderCrossDestinationTab` — the host is the
-// only thing that knows how to issue the `filter[project_id]=<id>`
-// list call for the relevant destination. We pass tab id + project
-// id and let the host return the list view.
+// Tab model (Projects sub-PRD §3 + cross-audit §1.3, extended by
+// Phase 4 FR-4.11):
+//   Chats / Files / Todos / Inbox / Library / Routines / Members / Activity
+// The five cross-destination tabs (Chats, Todos, Inbox, Library,
+// Routines) render whatever the host injects via
+// `renderCrossDestinationTab` — the host is the only thing that knows
+// how to issue the `filter[project_id]=<id>` list call for the relevant
+// destination. We pass tab id + project id and let the host return the
+// list view. Chat rows opened from that slot navigate to Run
+// (`ItemLink kind="run"`) — the host wires that.
 //
-// Members + Activity tabs are owned here (split into their own files
-// for clarity).
+// Files (Phase 4 FR-4.11/4.12), Members, and Activity tabs are owned
+// here. The Files tab takes a projected `SectionResult<ProjectFileRow[]>`
+// and renders the shared 4-state machine; each file row opens its
+// artifact via `<ItemLink kind="library_file">`. When no files source is
+// wired (the project files endpoint does not exist yet — PRD §11), the
+// tab degrades to a "coming soon" empty state, never an error.
 
 import {
   useMemo,
@@ -33,7 +40,15 @@ import {
   type ProjectMemberRole,
 } from "./ProjectMembersTab";
 
-import type { ProjectId } from "@0x-copilot/api-types";
+import { EmptyState } from "../../shell/EmptyState";
+import { ItemLink } from "../../refs/ItemLink";
+import { formatRelativeTime } from "../../util/time";
+
+import type {
+  LibraryFileId,
+  ProjectId,
+  SectionResult,
+} from "@0x-copilot/api-types";
 
 // Tokens (match ProjectsDestination.tsx)
 const APP_BACKGROUND = "var(--color-bg)";
@@ -64,16 +79,51 @@ export interface ProjectDetail {
   readonly memberCount: number;
 }
 
-/** The seven tabs in the project detail view. The first five proxy to
- *  other destinations (host owns the actual fetch). */
+/** The eight tabs in the project detail view. The five cross-destination
+ *  tabs (chats/todos/inbox/library/routines) proxy to other destinations
+ *  (host owns the actual fetch). `files`, `members`, and `activity` are
+ *  owned by this view. */
 export type ProjectDetailTabId =
   | "chats"
+  | "files"
   | "todos"
   | "inbox"
   | "library"
   | "routines"
   | "members"
   | "activity";
+
+/**
+ * A single file/artifact attached to a project. Minimal presentational
+ * row: the detail view renders an `<ItemLink kind="library_file">` from
+ * `id`, so opening a file navigates to its artifact route.
+ *
+ * NON-branded on purpose — there is no `ProjectFileRow` wire contract in
+ * `@0x-copilot/api-types` yet (the `/v1/projects/{id}/files` endpoint does
+ * not exist — PRD §11). `id` is cast to the existing `LibraryFileId` brand
+ * at the `<ItemLink>` boundary, so no `__brand` type is re-declared here.
+ *
+ * TODO(api-types): promote to a shared `ProjectFileRow` contract in
+ * `@0x-copilot/api-types` once the project files endpoint lands.
+ */
+export interface ProjectFileRow {
+  /** Opaque file/artifact id (the `<ItemLink kind="library_file">` target). */
+  readonly id: string;
+  /** File name shown in the row. */
+  readonly name: string;
+  /** Optional short kind/descriptor ("PDF", "Doc", "Dataset"). Display-only. */
+  readonly fileKind?: string;
+  /** Optional ISO timestamp; relative-time formatted at render. */
+  readonly updatedAt?: string;
+  /** Optional human-readable size ("1.2 MB"). Display-only. */
+  readonly sizeLabel?: string;
+}
+
+/** Files-tab data. Uniform `SectionResult` wrapper so the tab renders the
+ *  same 4-state machine as the other list surfaces (FR-4.2). `null` =
+ *  loading; the prop being omitted entirely = no source wired ("coming
+ *  soon"). */
+export type ProjectFilesResult = SectionResult<ReadonlyArray<ProjectFileRow>>;
 
 export interface ProjectDetailViewProps {
   readonly project: ProjectDetail;
@@ -83,6 +133,25 @@ export interface ProjectDetailViewProps {
 
   /** Activity tab data. Pass `null` while loading. */
   readonly activity: ReadonlyArray<ProjectActivity> | null;
+
+  /**
+   * Files tab data (FR-4.11/4.12).
+   *   - omitted / `undefined` → no source wired: "coming soon" empty state
+   *     (the project files endpoint does not exist yet — PRD §11). Never
+   *     an error.
+   *   - `null` → loading skeleton.
+   *   - `SectionResult` → the 4-state machine (error+Retry / unavailable /
+   *     empty / ready). Each ready row opens its artifact via
+   *     `<ItemLink kind="library_file">`.
+   */
+  readonly files?: ProjectFilesResult | null;
+
+  /** Retry callback when `files.status === "error"`. */
+  readonly onRetryFiles?: () => void;
+
+  /** Reference instant — test seam for relative-time formatting on file
+   *  rows. Defaults to `Date.now()`. */
+  readonly now?: number;
 
   /** Whether the current viewer can mutate the project (owner / admin).
    *  Drives visibility of member-management + transfer-ownership UI. */
@@ -129,6 +198,7 @@ const TAB_DEFS: ReadonlyArray<{
   readonly label: string;
 }> = [
   { id: "chats", label: "Chats" },
+  { id: "files", label: "Files" },
   { id: "todos", label: "Todos" },
   { id: "inbox", label: "Inbox" },
   { id: "library", label: "Library" },
@@ -433,6 +503,263 @@ function TabsBar({ active, onSelect }: TabsBarProps): ReactElement {
   );
 }
 
+// ── Files tab ────────────────────────────────────────────────────────
+//
+// Owned here (like Members / Activity). Renders the shared 4-state
+// machine over a `SectionResult<ProjectFileRow[]>`; each ready row opens
+// its artifact via `<ItemLink kind="library_file">` (FR-4.12). When no
+// source is wired (`files === undefined`) it degrades to a "coming soon"
+// empty state — never an error (FR-4.11, PRD §11 files gap).
+//
+// No member/role chips are rendered here: `viewer_role` gating lives on
+// the project card (ProjectsDestination), and the files section is
+// deliberately chip-free so nothing member-scoped leaks under the solo
+// profile (FR-4.13).
+
+interface ProjectFilesTabProps {
+  readonly files?: ProjectFilesResult | null;
+  readonly onRetry?: () => void;
+  readonly now?: number;
+}
+
+function ProjectFilesTab({
+  files,
+  onRetry,
+  now,
+}: ProjectFilesTabProps): ReactElement {
+  const wrapper: CSSProperties = {
+    display: "flex",
+    flexDirection: "column",
+    gap: 8,
+  };
+  const list: CSSProperties = {
+    listStyle: "none",
+    padding: 0,
+    margin: 0,
+    display: "flex",
+    flexDirection: "column",
+    gap: 8,
+  };
+  const skeletonRow: CSSProperties = {
+    height: 52,
+    borderRadius: 10,
+    border: `1px solid ${PANEL_BORDER}`,
+    backgroundColor: PANEL_BACKGROUND,
+    opacity: 0.6,
+  };
+
+  // No source wired → "coming soon" (endpoint absent). Never an error.
+  if (files === undefined) {
+    return (
+      <section
+        data-testid="project-files-tab"
+        data-state="unavailable"
+        style={wrapper}
+      >
+        <EmptyState
+          title="Project files coming soon"
+          body="This workspace doesn't expose a project files list yet. Chats and activity for the project are available above."
+        />
+      </section>
+    );
+  }
+
+  // Loading skeleton.
+  if (files === null) {
+    return (
+      <section
+        data-testid="project-files-tab"
+        data-state="loading"
+        style={wrapper}
+      >
+        <ul style={list} aria-busy="true">
+          {Array.from({ length: 4 }).map((_, i) => (
+            <li
+              key={i}
+              style={skeletonRow}
+              data-testid="project-files-skeleton"
+              aria-hidden="true"
+            />
+          ))}
+        </ul>
+      </section>
+    );
+  }
+
+  // Error → EmptyState + Retry.
+  if (files.status === "error") {
+    return (
+      <section
+        data-testid="project-files-tab"
+        data-state="error"
+        style={wrapper}
+      >
+        <EmptyState
+          title="Could not load files"
+          body={files.error ?? "Network error — try again."}
+          action={
+            onRetry !== undefined
+              ? { label: "Retry", onClick: onRetry }
+              : undefined
+          }
+        />
+      </section>
+    );
+  }
+
+  // Unavailable → distinct "not enabled" empty state.
+  if (files.status === "unavailable") {
+    return (
+      <section
+        data-testid="project-files-tab"
+        data-state="unavailable"
+        style={wrapper}
+      >
+        <EmptyState
+          title="Project files unavailable"
+          body={files.error ?? "File listing is not enabled for this project."}
+        />
+      </section>
+    );
+  }
+
+  const rows = files.data ?? [];
+
+  // Ready + empty → per-view empty copy.
+  if (rows.length === 0) {
+    return (
+      <section
+        data-testid="project-files-tab"
+        data-state="empty"
+        style={wrapper}
+      >
+        <EmptyState
+          title="No files yet"
+          body="Files attached to this project will appear here."
+        />
+      </section>
+    );
+  }
+
+  // Ready + rows.
+  return (
+    <section data-testid="project-files-tab" data-state="ready" style={wrapper}>
+      <ul style={list} data-testid="project-files-list">
+        {rows.map((row) => (
+          <ProjectFileRowView key={row.id} row={row} now={now} />
+        ))}
+      </ul>
+    </section>
+  );
+}
+
+function ProjectFileRowView({
+  row,
+  now,
+}: {
+  row: ProjectFileRow;
+  now?: number;
+}): ReactElement {
+  const li: CSSProperties = {
+    padding: "10px 12px",
+    border: `1px solid ${PANEL_BORDER}`,
+    borderRadius: 10,
+    backgroundColor: PANEL_BACKGROUND,
+    display: "flex",
+    alignItems: "center",
+    justifyContent: "space-between",
+    gap: 12,
+  };
+  const leftCol: CSSProperties = {
+    display: "flex",
+    flexDirection: "column",
+    gap: 4,
+    minWidth: 0,
+    flex: 1,
+  };
+  const nameStyle: CSSProperties = {
+    fontSize: "var(--font-size-sm)",
+    fontWeight: 500,
+    color: TEXT_PRIMARY,
+    overflow: "hidden",
+    textOverflow: "ellipsis",
+    whiteSpace: "nowrap",
+  };
+  const subStyle: CSSProperties = {
+    fontSize: "var(--font-size-2xs)",
+    color: TEXT_SECONDARY,
+    display: "flex",
+    alignItems: "center",
+    gap: 8,
+  };
+  const rightCol: CSSProperties = {
+    display: "flex",
+    alignItems: "center",
+    gap: 10,
+    flexShrink: 0,
+  };
+  const tsStyle: CSSProperties = {
+    fontSize: "var(--font-size-2xs)",
+    color: "var(--color-text-subtle)",
+  };
+
+  // Cast the plain-string id to the existing `LibraryFileId` brand at the
+  // <ItemLink> boundary — the artifact/file resolver is registered under
+  // kind `"library_file"` (packages/chat-surface/src/destinations/library).
+  // No new brand is declared here. The file name is shown as the primary
+  // text (the row's display hint); the <ItemLink> is the sanctioned
+  // navigational affordance that opens the artifact route (FR-4.12) —
+  // direct `router.navigate` from a row is forbidden (cross-audit §1.1).
+  const fileRef = {
+    kind: "library_file" as const,
+    id: row.id as LibraryFileId,
+  };
+
+  return (
+    <li
+      style={li}
+      data-testid="project-file-row"
+      data-file-id={row.id}
+      data-ref-kind={fileRef.kind}
+      data-ref-id={row.id}
+    >
+      <div style={leftCol}>
+        <span
+          style={nameStyle}
+          data-testid="project-file-row-name"
+          title={row.name}
+        >
+          {row.name}
+        </span>
+        {row.fileKind !== undefined || row.sizeLabel !== undefined ? (
+          <span style={subStyle} data-testid="project-file-row-sub">
+            {row.fileKind !== undefined ? (
+              <span data-testid="project-file-row-kind">{row.fileKind}</span>
+            ) : null}
+            {row.sizeLabel !== undefined ? (
+              <span data-testid="project-file-row-size">{row.sizeLabel}</span>
+            ) : null}
+          </span>
+        ) : null}
+      </div>
+      <div style={rightCol}>
+        {row.updatedAt !== undefined ? (
+          <time
+            style={tsStyle}
+            dateTime={row.updatedAt}
+            data-testid="project-file-row-time"
+          >
+            {formatRelativeTime(row.updatedAt, now)}
+          </time>
+        ) : null}
+        <span data-testid="project-file-row-open">
+          <ItemLink ref={fileRef} deletedLabel={row.name} />
+        </span>
+      </div>
+    </li>
+  );
+}
+
 // ── Main view ────────────────────────────────────────────────────────
 
 export function ProjectDetailView(props: ProjectDetailViewProps): ReactElement {
@@ -440,6 +767,9 @@ export function ProjectDetailView(props: ProjectDetailViewProps): ReactElement {
     project,
     members,
     activity,
+    files,
+    onRetryFiles,
+    now,
     canManage,
     initialTab,
     activeTab: controlledTab,
@@ -507,6 +837,19 @@ export function ProjectDetailView(props: ProjectDetailViewProps): ReactElement {
         </div>
       );
     }
+    if (active === "files") {
+      return (
+        <div
+          role="tabpanel"
+          id="project-tab-panel-files"
+          aria-labelledby="project-tab-files"
+          style={panelStyle}
+          data-testid="project-detail-panel-files"
+        >
+          <ProjectFilesTab files={files} onRetry={onRetryFiles} now={now} />
+        </div>
+      );
+    }
     if (active === "members") {
       return (
         <div
@@ -543,10 +886,13 @@ export function ProjectDetailView(props: ProjectDetailViewProps): ReactElement {
     active,
     activity,
     canManage,
+    files,
     members,
+    now,
     onAddMember,
     onChangeMemberRole,
     onRemoveMember,
+    onRetryFiles,
     panelStyle,
     project.id,
     project.ownerUserId,
@@ -573,5 +919,6 @@ export function ProjectDetailView(props: ProjectDetailViewProps): ReactElement {
   );
 }
 
+export { ProjectFilesTab };
 export type { ProjectMember, ProjectMemberRole } from "./ProjectMembersTab";
 export type { ProjectActivity } from "./ProjectActivityTab";

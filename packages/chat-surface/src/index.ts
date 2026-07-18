@@ -1074,3 +1074,24 @@ export {
   type ActivityRunStatus,
 } from "./destinations/activity";
 // === end Phase 4 (PR-4.5) ===
+// === Phase 4 (PR-4.4) — Projects detail files section ===
+// The project detail view (chats/files/members/activity + legacy tabs) and
+// its new Files tab. `ProjectDetailView` takes a projected
+// `files: SectionResult<ProjectFileRow[]> | null` and renders the shared
+// 4-state machine; each ready row opens its artifact via
+// `<ItemLink kind="library_file">` (FR-4.12). Omitting the `files` prop
+// degrades the tab to a "coming soon" empty state — never an error
+// (FR-4.11, PRD §11 files gap). The `ProjectsRoute` host binder (follow-up)
+// wires the `files` source + `onRetryFiles`. `ProjectFileRow` is a local
+// non-branded presentational row until a `@0x-copilot/api-types` contract
+// lands (see the type's TODO).
+export {
+  ProjectDetailView,
+  ProjectFilesTab,
+  type ProjectDetail,
+  type ProjectDetailViewProps,
+  type ProjectDetailTabId,
+  type ProjectFileRow,
+  type ProjectFilesResult,
+} from "./destinations/projects";
+// === end Phase 4 (PR-4.4) ===
