@@ -94,6 +94,11 @@ from runtime_adapters.file._deletion import (
 )
 from runtime_adapters.file._jsonl import JsonlIo
 from runtime_adapters.file._paths import FileStoreLayout
+from runtime_adapters.file.export_import import (
+    ConversationArchiver,
+    ExportManifest,
+    ImportOutcome,
+)
 from runtime_adapters.file._state_ledger import StateLedger
 from runtime_adapters.file.object_store import FileObjectStore
 from runtime_adapters.file.search import ConversationSearchHit
@@ -1552,6 +1557,48 @@ class FileRuntimeApiStore:
             runs_cancelled=outcome.runs,
             events_retained=outcome.retained_events,
             audit_event_id=outcome.audit_event_id,
+        )
+
+    # ==================================================================
+    # Export / import (portable single-conversation archive) — file store only
+    # ==================================================================
+
+    async def export_conversation(
+        self,
+        *,
+        org_id: str,
+        user_id: str,
+        conversation_id: str,
+        destination: Path,
+    ) -> ExportManifest:
+        """Write a portable ``.tar.gz`` backup of one conversation.
+
+        Self-contained: the conversation's canonical session files, every
+        object-store blob those files actually reference, and a manifest of
+        SHA-256 hashes. The disposable catalog is not exported (it rebuilds).
+        See :mod:`runtime_adapters.file.export_import`.
+        """
+
+        return await ConversationArchiver(self).export(
+            org_id=org_id,
+            user_id=user_id,
+            conversation_id=conversation_id,
+            destination=Path(destination),
+        )
+
+    async def import_conversation(
+        self, *, org_id: str, user_id: str, source: Path
+    ) -> ImportOutcome:
+        """Import an archive under a fresh conversation id (fail-closed).
+
+        Validates the manifest + every part's SHA-256 before writing anything,
+        materialises the conversation with fresh conversation / run / message
+        ids so it never clobbers an existing one, re-registers the referenced
+        blobs, and refreshes the disposable catalog.
+        """
+
+        return await ConversationArchiver(self).import_(
+            org_id=org_id, user_id=user_id, source=Path(source)
         )
 
     # ==================================================================
