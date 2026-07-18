@@ -1,5 +1,6 @@
 import {
   SHELL_DESTINATIONS,
+  destinationsForProfile,
   type NavigateOptions,
   type Router,
   type ShellDestinationSlug,
@@ -14,8 +15,16 @@ import {
 import { ROOT_DESTINATION, type AppRoute } from "./routes";
 
 const VALID_SETTINGS_SECTIONS = new Set<string>(SETTINGS_SECTIONS);
+// Every slug the URL layer accepts. This is the union of the legacy web rail
+// (`SHELL_DESTINATIONS`) and the profile-gated solo/team rail
+// (`destinationsForProfile("team")` is a superset of the solo set). The union
+// is important post-IA-fold (PR-4.11): the six live solo slugs
+// (`run`/`activity` are NOT in the legacy 12) MUST resolve to their route, and
+// the seven folded slugs (`home`/`library`/`inbox`/`todos`/`routines`/`agents`/
+// `memory`) MUST still resolve here so App.tsx can redirect them (FR-4.31)
+// rather than the router silently collapsing a folded deep-link to the root.
 const VALID_DESTINATIONS = new Set<string>(
-  SHELL_DESTINATIONS.map((d) => d.slug),
+  [...SHELL_DESTINATIONS, ...destinationsForProfile("team")].map((d) => d.slug),
 );
 
 // HashRouter is the web app's substrate-side implementation of the
@@ -24,9 +33,11 @@ const VALID_DESTINATIONS = new Set<string>(
 // as a black box behind this class.
 //
 // URL conventions:
-//   /                           → { screen: "chat", destination: "chats" }
+//   /                           → { screen: "chat", destination: ROOT_DESTINATION }
+//                                 (ROOT_DESTINATION is `run` post-IA-fold)
 //   /<destination>              → { screen: "chat", destination }
-//     where <destination> is one of the 11 ShellDestinationSlug values.
+//     where <destination> is any known ShellDestinationSlug (legacy ∪ solo ∪
+//     team). Folded slugs still parse here; App.tsx redirects them (FR-4.31).
 //   /settings#<section>         → { screen: "settings", section }
 //   /share/<token>              → { screen: "share", token }
 // Legacy /settings/<section> is migrated once on mount via
