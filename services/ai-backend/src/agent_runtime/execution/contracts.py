@@ -544,6 +544,14 @@ class RuntimeDependencies(RuntimeContract):
     # prefix to it. `None` everywhere else, so those paths stay on the default
     # `StateBackend` exactly as before.
     large_tool_results_backend: object | None = None
+    # Optional read-only Deep Agents backend exposing user-granted host folders
+    # under `/workspace/<mount>/<path>`. Constructed by the run handler per run
+    # from the desktop capability broker (env config + the run's ACTIVE grant
+    # snapshot); the factory routes the `/workspace/` prefix to it. `None`
+    # everywhere the broker is absent (web / postgres / in-memory) or when the
+    # user has granted no folders, so the route is absent and those images are
+    # byte-identical.
+    workspace_backend: object | None = None
     # Optional process-wide TTL cache for MCP discovery (the
     # ``connect + list_tools + list_resources`` round-trips on
     # ``McpLoader.load_server``). When ``None`` the loader behaves

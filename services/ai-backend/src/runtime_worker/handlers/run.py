@@ -88,6 +88,7 @@ from runtime_api.schemas import (
 from runtime_worker.audit import WorkerAuditEmitter
 from runtime_worker.dependencies import DefaultRuntimeDependenciesFactory
 from runtime_worker.file_store_wiring import FileStoreWorkerWiring
+from runtime_worker.workspace_backend_wiring import WorkspaceBackendWorkerWiring
 from runtime_worker.run_metrics import AssistantRunMetrics
 from runtime_worker.stream_events import StreamOrchestrator
 from runtime_worker.stream_messages import StreamTextHelper
@@ -330,9 +331,11 @@ class RuntimeRunHandler:
         mcp_display_registry: dict[str, ToolDisplayTemplate] = {}
         try:
             tool_observation_index = await self._tool_observation_index(command, run)
+            workspace_backend = await self._workspace_backend_for_run()
             dependencies = self._dependencies_for_run(
                 command,
                 tool_observation_index,
+                workspace_backend=workspace_backend,
             )
             mcp_display_token = McpDisplayRegistryContext.bind_for_run(
                 mcp_display_registry
@@ -844,16 +847,36 @@ class RuntimeRunHandler:
             current_run_id=command.run_id,
         )
 
+    async def _workspace_backend_for_run(self) -> object | None:
+        """Construct the per-run read-only ``/workspace/`` backend, or ``None``.
+
+        Gated on the desktop capability broker (env config + the run's active
+        grant snapshot). Off the desktop path — web / postgres / in-memory — the
+        broker env is absent, so this returns ``None`` and the factory composes
+        no ``/workspace/`` route, leaving those images byte-identical. Broker
+        unavailability or zero active grants likewise yield ``None`` (fail-soft).
+        """
+
+        return await WorkspaceBackendWorkerWiring().workspace_backend()
+
     def _dependencies_for_run(
         self,
         command: RuntimeRunCommand,
         tool_observation_index: ToolObservationIndex,
+        *,
+        workspace_backend: object | None = None,
     ) -> RuntimeDependencies:
-        """Build ``RuntimeDependencies`` augmented with per-run backends (drafts, subagent artifacts)."""
+        """Build ``RuntimeDependencies`` augmented with per-run backends (drafts, subagent artifacts, workspace)."""
         dependencies = self.dependencies_factory(command.runtime_context)
         update: dict[str, object] = {
             "subagent_artifacts_backend": self._subagent_artifacts_backend(command),
         }
+        # Route `/workspace/<mount>/<path>` reads to the user-granted host
+        # folders exposed by the desktop capability broker. Desktop only —
+        # `None` (unrouted) on every other backend and when no folders are
+        # granted, so those paths stay on the default `StateBackend`.
+        if workspace_backend is not None:
+            update["workspace_backend"] = workspace_backend
         # Route `/large_tool_results/<sha256>` reads to the object store so the
         # supervisor can pull back an offloaded tool result. Desktop only —
         # `None` (unrouted) on every other backend.

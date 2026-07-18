@@ -40,8 +40,9 @@ import asyncio
 import base64
 import binascii
 import os
+import re
 from collections.abc import Mapping, Sequence
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from typing import Final, cast
 
 from deepagents.backends.protocol import (
@@ -59,6 +60,7 @@ from deepagents.backends.protocol import (
 from agent_runtime.capabilities.desktop.broker_client import (
     BrokerClientConfig,
     BrokerError,
+    BrokerGrant,
     BrokerNotADirectoryError,
     BrokerNotAFileError,
     BrokerNotFoundError,
@@ -140,6 +142,68 @@ class WorkspaceMount:
         if not self.grant_id:
             msg = "workspace mount grant_id must be non-empty"
             raise ValueError(msg)
+
+
+class WorkspaceMountTable:
+    """Resolves the per-run mount table from a broker active-grant snapshot.
+
+    Each :class:`~agent_runtime.capabilities.desktop.broker_client.BrokerGrant`
+    becomes one :class:`WorkspaceMount`, binding a **readable** virtual mount
+    name (the agent addresses ``/workspace/<name>/...``) to the grant's
+    ``grant_id`` (every broker op keys off the id, never a host path). The name
+    is a slug of the grant's sanitized ``label``; when a label is empty or slugs
+    to nothing, the grant's opaque per-boot ``mount`` id is used instead.
+    Collisions are disambiguated with a numeric suffix so names stay unique
+    within a run. Revoked grants (and any with an empty ``grant_id``) are
+    skipped — the route only ever exposes live grants.
+    """
+
+    _ACTIVE: Final = "active"
+    _SLUG_INVALID: Final = re.compile(r"[^a-z0-9._-]+")
+    _DASH_RUN: Final = re.compile(r"-{2,}")
+    _FALLBACK_NAME: Final = "workspace"
+
+    @classmethod
+    def from_broker_grants(
+        cls, grants: Sequence[BrokerGrant]
+    ) -> tuple[WorkspaceMount, ...]:
+        """Map an ordered active-grant snapshot into a unique-named mount table."""
+        mounts: list[WorkspaceMount] = []
+        used: set[str] = set()
+        for grant in grants:
+            if grant.status != cls._ACTIVE or not grant.grant_id:
+                continue
+            base = (
+                cls._slug(grant.label) or cls._slug(grant.mount) or cls._FALLBACK_NAME
+            )
+            name = cls._dedupe(base, used)
+            used.add(name)
+            mounts.append(
+                WorkspaceMount(
+                    name=name,
+                    grant_id=grant.grant_id,
+                    label=grant.label or None,
+                )
+            )
+        return tuple(mounts)
+
+    @classmethod
+    def _slug(cls, value: str) -> str:
+        """Reduce a label to a single safe path segment (``[a-z0-9._-]``)."""
+        lowered = (value or "").strip().lower()
+        slug = cls._SLUG_INVALID.sub("-", lowered)
+        slug = cls._DASH_RUN.sub("-", slug).strip("-._")
+        return slug
+
+    @staticmethod
+    def _dedupe(base: str, used: set[str]) -> str:
+        """Return ``base``, or ``base-2`` / ``base-3`` … when already taken."""
+        if base not in used:
+            return base
+        suffix = 2
+        while f"{base}-{suffix}" in used:
+            suffix += 1
+        return f"{base}-{suffix}"
 
 
 @dataclass(frozen=True)
@@ -523,20 +587,36 @@ class WorkspaceBackendConfig:
             mounts=tuple(mounts),
         )
 
+    def with_mounts(self, mounts: Sequence[WorkspaceMount]) -> WorkspaceBackendConfig:
+        """Return a copy of this config carrying ``mounts`` (frozen-safe replace).
+
+        The wiring resolves mounts from the broker grant snapshot after building
+        the connection config from env, then binds them here before calling
+        :func:`build_workspace_backend`.
+        """
+        return replace(self, mounts=tuple(mounts))
+
 
 def build_workspace_backend(
     config: WorkspaceBackendConfig,
+    *,
+    client: DesktopBrokerClient | None = None,
 ) -> BrokeredWorkspaceBackend | None:
     """Construct the ``/workspace/`` backend, or ``None`` when broker config is absent.
 
-    This is the ONE seam the runtime factory wiring (a separate follow-up) will
-    call, e.g. registering ``{ROUTE_PREFIX: build_workspace_backend(cfg)}`` into
-    the ``CompositeBackend`` routes only when the result is not ``None``. It is
-    intentionally synchronous and does no network I/O — mounts are passed in.
+    This is the ONE seam the runtime factory wiring calls, e.g. registering
+    ``{ROUTE_PREFIX: build_workspace_backend(cfg)}`` into the ``CompositeBackend``
+    routes only when the result is not ``None``. It is intentionally synchronous
+    and does no network I/O — mounts are passed in via ``config``.
+
+    ``client`` lets the caller reuse the broker client it already built for the
+    grant-snapshot fetch (one client per run, and a test can inject a fake
+    transport). When omitted, a client is constructed from ``config`` over the
+    process-shared HTTP pool, preserving the original single-argument contract.
     """
     if not config.broker_base_url or not config.broker_token:
         return None
-    client = DesktopBrokerClient(
+    resolved_client = client or DesktopBrokerClient(
         BrokerClientConfig(
             base_url=config.broker_base_url,
             token=config.broker_token,
@@ -545,7 +625,7 @@ def build_workspace_backend(
         )
     )
     return BrokeredWorkspaceBackend(
-        client=client,
+        client=resolved_client,
         mounts=config.mounts,
         read_max_bytes=config.read_max_bytes,
     )

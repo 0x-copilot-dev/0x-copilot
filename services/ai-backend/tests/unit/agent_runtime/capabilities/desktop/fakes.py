@@ -162,13 +162,23 @@ class FakeBrokerFs:
 
 @dataclass
 class RecordingBroker:
-    """MockTransport-backed fake broker: dispatches ``/v1/fs/*`` and records requests."""
+    """MockTransport-backed fake broker: dispatches ``/v1/fs/*`` and records requests.
+
+    ``grant_meta`` optionally overrides the path-free grant projection returned
+    by ``/v1/grants/snapshot`` (``mount`` / ``label`` / ``mode`` / ``status``)
+    per grant id; grants without an override default to an active read-only
+    grant whose ``label`` and ``mount`` derive from the grant id. This lets a
+    test drive the full workspace wiring — grant snapshot → mount table → fs
+    reads — against one in-memory broker.
+    """
 
     grants: dict[str, FakeBrokerFs]
+    grant_meta: dict[str, dict[str, str]] = field(default_factory=dict)
     requests: list[tuple[str, dict[str, str], dict[str, object]]] = field(
         default_factory=list
     )
 
+    _GRANTS_SNAPSHOT = "/v1/grants/snapshot"
     _ROUTES = {
         "/v1/fs/stat": "stat",
         "/v1/fs/list": "list",
@@ -192,6 +202,8 @@ class RecordingBroker:
         route = request.url.path
         body = json.loads(request.content) if request.content else {}
         self.requests.append((route, dict(request.headers), body))
+        if route == self._GRANTS_SNAPSHOT:
+            return httpx.Response(200, json=self._snapshot())
         op = self._ROUTES.get(route)
         if op is None:
             return httpx.Response(404, json={"error": "not_found"})
@@ -220,6 +232,22 @@ class RecordingBroker:
         if op == "glob":
             return fs.glob(body["pattern"], body.get("max_results"))
         return fs.grep(body["pattern"], body.get("path_glob"))
+
+    def _snapshot(self) -> dict[str, object]:
+        """Build the ``/v1/grants/snapshot`` body (path-free ``BrokerGrant``s)."""
+        grants: list[dict[str, object]] = []
+        for grant_id in self.grants:
+            meta = self.grant_meta.get(grant_id, {})
+            grants.append(
+                {
+                    "grantId": grant_id,
+                    "mode": meta.get("mode", "read_only"),
+                    "label": meta.get("label", grant_id),
+                    "status": meta.get("status", "active"),
+                    "mount": meta.get("mount", f"mnt_{grant_id}"),
+                }
+            )
+        return {"snapshotId": "snap-fake", "capturedAt": 1000, "grants": grants}
 
     def transport(self) -> httpx.MockTransport:
         """An httpx transport wired to this fake broker."""

@@ -48,13 +48,15 @@ logger = logging.getLogger(__name__)
 
 
 class Routes:
-    """Broker filesystem READ route paths (mirrors ``broker.ts`` ``ROUTES``)."""
+    """Broker READ route paths (mirrors ``broker.ts`` ``ROUTES``)."""
 
     STAT: Final = "/v1/fs/stat"
     LIST: Final = "/v1/fs/list"
     READ: Final = "/v1/fs/read"
     GLOB: Final = "/v1/fs/glob"
     GREP: Final = "/v1/fs/grep"
+    #: Grant-management read — the CURRENT active grant snapshot (path-free).
+    GRANTS_SNAPSHOT: Final = "/v1/grants/snapshot"
 
 
 class Header:
@@ -277,6 +279,36 @@ class FsGrepResult(_BrokerModel):
     files_scanned: int = Field(alias="filesScanned", default=0)
 
 
+class BrokerGrant(_BrokerModel):
+    """One host-folder grant from ``/v1/grants/snapshot`` (path-free projection).
+
+    ``mount`` is an OPAQUE, per-boot id the broker derives from the grant's host
+    root (an HMAC under a per-boot salt): stable within a boot (two grants on
+    one tree share a mount) yet non-reversible, so it never becomes a host-path
+    oracle. ``label`` is the broker's sanitized display name (folder basename or
+    a renderer hint). No host-absolute path is ever present. Every op still keys
+    off ``grant_id`` — ``mount`` is presentation-only.
+    """
+
+    grant_id: str = Field(alias="grantId")
+    mode: Literal["read_only", "read_write_no_delete", "read_write"]
+    label: str = ""
+    status: Literal["active", "revoked"] = "active"
+    mount: str
+
+
+class BrokerGrantSnapshot(_BrokerModel):
+    """``/v1/grants/snapshot`` — the CURRENT active grant set.
+
+    The broker excludes revoked grants from the active snapshot, so every
+    ``grants`` entry is safe to bind as a workspace mount.
+    """
+
+    snapshot_id: str = Field(alias="snapshotId", default="")
+    captured_at: float = Field(alias="capturedAt", default=0.0)
+    grants: tuple[BrokerGrant, ...] = ()
+
+
 # --- client ------------------------------------------------------------------
 
 
@@ -397,6 +429,19 @@ class DesktopBrokerClient:
             payload[Field_.MAX_MATCHES] = max_matches
         body = await self._post(Routes.GREP, payload)
         return FsGrepResult.model_validate(body)
+
+    async def grants_snapshot(self) -> BrokerGrantSnapshot:
+        """Fetch the broker's CURRENT active grant snapshot (path-free).
+
+        Returns the set of active host-folder grants (revoked entries are
+        excluded by the broker), each carrying a ``grant_id`` + opaque ``mount``
+        id + sanitized ``label`` — never a host path. Raises a typed
+        :class:`BrokerError` on any transport, protocol, or broker-signalled
+        failure. The request body is empty; auth + protocol headers are applied
+        by :meth:`_post` exactly as for the ``/v1/fs/*`` ops.
+        """
+        body = await self._post(Routes.GRANTS_SNAPSHOT, {})
+        return BrokerGrantSnapshot.model_validate(body)
 
     # --- transport ----------------------------------------------------------
 

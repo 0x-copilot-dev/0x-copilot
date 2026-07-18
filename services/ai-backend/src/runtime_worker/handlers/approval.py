@@ -63,6 +63,7 @@ from runtime_worker.run_metrics import AssistantRunMetrics
 from runtime_worker.stream_events import StreamOrchestrator
 from runtime_worker.stream_messages import StreamTextHelper
 from runtime_worker.streaming_executor import StreamingExecutor
+from runtime_worker.workspace_backend_wiring import WorkspaceBackendWorkerWiring
 
 RuntimeDependenciesFactory = Callable[[AgentRuntimeContext], RuntimeDependencies]
 # Sync- or async-returning. Default is the async ``acreate_agent_runtime`` so
@@ -300,7 +301,10 @@ class RuntimeApprovalHandler:
         # Bind the per-run tool display lookup and MCP descriptor registry before
         # the resumed graph starts emitting tool events. The resumed run runs in a
         # fresh async task, so the original RuntimeRunHandler bindings are gone.
-        dependencies = self._dependencies_for_resume(running)
+        workspace_backend = await WorkspaceBackendWorkerWiring().workspace_backend()
+        dependencies = self._dependencies_for_resume(
+            running, workspace_backend=workspace_backend
+        )
         mcp_display_registry: dict[str, ToolDisplayTemplate] = {}
         mcp_display_token = McpDisplayRegistryContext.bind_for_run(mcp_display_registry)
         display_token = ToolDisplayLookupContext.bind_for_run(
@@ -434,20 +438,31 @@ class RuntimeApprovalHandler:
             store=self._conversation_tool_ordinal_store,
         )
 
-    def _dependencies_for_resume(self, run: RunRecord) -> RuntimeDependencies:
+    def _dependencies_for_resume(
+        self,
+        run: RunRecord,
+        *,
+        workspace_backend: object | None = None,
+    ) -> RuntimeDependencies:
         """Build ``RuntimeDependencies`` for a resumed run with per-run backends.
 
         Mirrors :meth:`RuntimeRunHandler._dependencies_for_run`: the bare factory
         output is augmented with the file-native ``/subagents/`` +
         ``/large_tool_results/`` read backends (so a reference produced *before*
-        the pause is readable through the composed backend after resume) and the
-        persistent ``/drafts/`` backend. All are ``None``-gated on the file store
-        / draft store, so non-file backends get an empty ``model_copy`` update
-        and stay byte-identical to the previous bare-factory behavior.
+        the pause is readable through the composed backend after resume), the
+        persistent ``/drafts/`` backend, and the read-only ``/workspace/`` host
+        folder backend. All are ``None``-gated (file store / draft store /
+        desktop broker), so non-file, non-desktop backends get an empty
+        ``model_copy`` update and stay byte-identical to the previous
+        bare-factory behavior. Keeping ``/workspace/`` here as well as on the
+        run path means a pre-pause ``/workspace/`` reference stays readable after
+        an approval, exactly as the file-native routes do.
         """
 
         dependencies = self.dependencies_factory(run.runtime_context)
         update: dict[str, object] = {}
+        if workspace_backend is not None:
+            update["workspace_backend"] = workspace_backend
         subagent_backend = self._file_store_wiring.subagent_artifacts_backend(
             org_id=run.org_id,
             conversation_id=run.conversation_id,
