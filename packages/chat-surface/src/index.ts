@@ -1020,3 +1020,20 @@ export {
   type UseRunModeResult,
 } from "./destinations/run/useRunMode";
 // === end Phase 3 (PR-3.4) ===
+
+// === Phase 4 (PR-4.2) chats archive destination ===
+// Pure-presentation Chats archive component: takes a pre-bucketed
+// `ChatsArchive` (`SectionResult`) + `onReopen`/`onNewChat` callbacks and
+// renders the shared `.pg` list surface with the 4-state machine
+// (loading / error+Retry / empty / ready). Reopen → Run, "New chat" →
+// Run are host concerns (the callbacks); the host binder (PR-4.3) wires
+// them. `ChatsDestination` (Phase 2-A/3 block above) now forwards to this
+// component; its props type is re-exported here.
+export {
+  ChatsArchive,
+  type ChatsArchiveProps,
+  CHATS_SECTION_ORDER,
+  type ChatsSectionKey,
+  type ChatsDestinationProps,
+} from "./destinations/chats";
+// === end Phase 4 (PR-4.2) ===
