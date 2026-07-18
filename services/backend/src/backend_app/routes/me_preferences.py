@@ -37,6 +37,7 @@ from backend_app.identity.store import IdentityStore
 # line in three places (here, api-types, design-system).
 THEME_SCHEMES = ("system", "light", "dark", "slate")
 ACCENT_SCHEMES = (
+    "sky",
     "atlas-orange",
     "gold",
     "amber",
@@ -77,7 +78,7 @@ class AppearancePreferences(BaseModel):
     model_config = ConfigDict(extra="forbid", frozen=True)
 
     theme: str = "dark"
-    accent: str = "atlas-orange"
+    accent: str = "sky"
     density: str = "comfortable"
     reduce_motion: str = "auto"
 
@@ -305,7 +306,7 @@ def deployment_default_preferences() -> dict[str, Any]:
     return {
         "appearance": {
             "theme": "dark",
-            "accent": "atlas-orange",
+            "accent": "sky",
             "density": "comfortable",
             "reduce_motion": "auto",
         },

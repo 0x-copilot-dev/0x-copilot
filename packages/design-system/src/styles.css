@@ -219,14 +219,15 @@
   --color-text: #ededee;
   --color-text-muted: #b4b4b8;
   --color-text-subtle: #7e7e84;
-  --color-accent: #d97757;
-  --color-accent-strong: #e2876a;
-  --color-accent-contrast: #1a0f0a;
+  /* Brand sky is the default accent; jade = success, amber = warning. */
+  --color-accent: #5fb2ec;
+  --color-accent-strong: #86caf4;
+  --color-accent-contrast: #04141f;
   --color-danger: #d97777;
   --color-danger-bg: #321a1a;
-  --color-success: #6ec48c;
+  --color-success: #57c785;
   --color-success-bg: #1a2f23;
-  --color-warning: #d9a857;
+  --color-warning: #e8b45e;
   --color-warning-bg: #322615;
 }
 
@@ -257,10 +258,19 @@
   --color-surface-raised: var(--color-surface);
   --color-text-danger: var(--color-danger);
   --color-warn: var(--color-warning);
+  /* Ember — the brand's sparing "energy" accent (distinct from the sky
+   * primary and the semantic warn/danger colours). */
+  --color-ember: #f0764f;
+  --color-ember-bg: #2c1a12;
 }
 
 /* Accent swatches — picked in Settings → Appearance.
    Layered on top of the scheme so a swatch override wins regardless of theme. */
+:root[data-accent="sky"] {
+  --color-accent: #5fb2ec;
+  --color-accent-strong: #86caf4;
+  --color-accent-contrast: #04141f;
+}
 :root[data-accent="atlas-orange"] {
   --color-accent: #d97757;
   --color-accent-strong: #e2876a;
@@ -313,9 +323,10 @@
   --color-text: #241f19;
   --color-text-muted: #6e6458;
   --color-text-subtle: #918677;
-  --color-accent: #8d5f16;
-  --color-accent-strong: #704a0f;
-  --color-accent-contrast: #fff7e8;
+  /* Darkened brand sky for legible accent text/borders on the light ground. */
+  --color-accent: #1f6fb0;
+  --color-accent-strong: #185a94;
+  --color-accent-contrast: #f2f9ff;
   --color-danger: #b42318;
   --color-danger-bg: #fff0ef;
   --color-success: #137a36;
