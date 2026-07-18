@@ -14,6 +14,13 @@ export {
   SubagentFleetCard,
   type SubagentFleetCardProps,
 } from "./SubagentFleetCard";
+// PR-3.8 — pure selector projecting subagent + fleet state off the single
+// run event stream (FR-3.17 / FR-3.3). No subscription, no second projector.
+export {
+  projectSubagents,
+  type FleetProjection,
+  type SubagentProjection,
+} from "./subagentProjection";
 export {
   subagentCardFromArgs,
   subagentCardFromEntry,
