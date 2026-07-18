@@ -1,5 +1,13 @@
 # @0x-copilot/cli
 
+[![ci](https://github.com/0x-copilot-dev/0x-copilot/actions/workflows/ci-cli.yml/badge.svg)](https://github.com/0x-copilot-dev/0x-copilot/actions/workflows/ci-cli.yml)
+[![npm](https://img.shields.io/npm/v/@0x-copilot/cli?logo=npm&color=cb3837)](https://www.npmjs.com/package/@0x-copilot/cli)
+[![downloads](https://img.shields.io/npm/dw/@0x-copilot/cli?color=cb3837)](https://www.npmjs.com/package/@0x-copilot/cli)
+[![license: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](./LICENSE)
+[![node](https://img.shields.io/node/v/@0x-copilot/cli?logo=node.js&logoColor=white)](https://nodejs.org)
+[![platform](https://img.shields.io/badge/platform-macOS%20%7C%20Windows-lightgrey)](#platforms)
+[![local-first](https://img.shields.io/badge/local--first-BYOK-6f42c1)](https://github.com/0x-copilot-dev/0x-copilot#readme)
+
 Install and launch the **0xCopilot** desktop app from your terminal. No DMG, no
 `.exe` installer, no Apple Developer or Windows code-signing credentials.
 
@@ -92,3 +100,7 @@ The credential-free signing lives in
 [`tools/desktop-runtime/stage.mjs`](../desktop-runtime/stage.mjs) behind the
 opt-in `--adhoc-sign` flag; the electron-builder packaging path leaves it off and
 signs with a real Developer ID instead.
+
+## License
+
+[MIT](./LICENSE) © 0xCopilot

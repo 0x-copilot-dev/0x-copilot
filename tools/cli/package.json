@@ -11,7 +11,8 @@
     "bin",
     "lib",
     "payload",
-    "README.md"
+    "README.md",
+    "LICENSE"
   ],
   "engines": {
     "node": ">=20"
@@ -25,9 +26,21 @@
   },
   "scripts": {
     "assemble": "node scripts/assemble-payload.mjs",
+    "check": "node --check bin/copilot.mjs && node --check lib/paths.mjs && node --check lib/stage.mjs && node --check lib/launch.mjs && node --check lib/doctor.mjs && node --check lib/uninstall.mjs && node --check lib/ui.mjs",
+    "smoke": "node bin/copilot.mjs version && node bin/copilot.mjs help && node bin/copilot.mjs doctor",
     "prepack": "node scripts/assemble-payload.mjs",
     "pack:dry": "npm pack --dry-run"
   },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/0x-copilot-dev/0x-copilot.git",
+    "directory": "tools/cli"
+  },
+  "homepage": "https://github.com/0x-copilot-dev/0x-copilot#readme",
+  "bugs": {
+    "url": "https://github.com/0x-copilot-dev/0x-copilot/issues"
+  },
+  "author": "0xCopilot",
   "publishConfig": {
     "access": "public"
   },
@@ -36,7 +49,10 @@
     "copilot",
     "desktop",
     "electron",
-    "cli"
+    "cli",
+    "local-first",
+    "byok",
+    "agent"
   ],
-  "license": "UNLICENSED"
+  "license": "MIT"
 }
