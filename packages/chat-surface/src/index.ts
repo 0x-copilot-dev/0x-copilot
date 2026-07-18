@@ -128,6 +128,27 @@ export {
   type CitationLinksByMessage,
   type CitationLinksByOffset,
 } from "./citations/linkReducer";
+// === Phase 1 (PR-1.4) citations subsystem ===
+// Run-scoped citation read context + Sources surfaces. The host binds the
+// concrete citation/link registries as provider props (the resolution seam);
+// `SourcesPanel` takes host-ordered sources + a `SourceRowComponent` slot so
+// the web hover-preview portal stays host-side.
+export {
+  CitationsProvider,
+  useCitation,
+  useRunCitations,
+  useOrdinalCitation,
+  useResolvedOrdinalCitation,
+  type CitationLookup,
+  type CitationsProviderProps,
+  type ResolvedOrdinalCitation,
+} from "./citations/CitationsContext";
+export {
+  MessageSourcesStrip,
+  type MessageSourcesStripProps,
+} from "./citations/MessageSourcesStrip";
+export { SourcesPanel, type SourcesPanelProps } from "./citations/SourcesPanel";
+// === end Phase 1 (PR-1.4) ===
 export {
   CITATION_HREF_PREFIX,
   CITATION_ORDINAL_HREF_PREFIX,

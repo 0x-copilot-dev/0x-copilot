@@ -1,16 +1,20 @@
-/**
- * Sources panel — slash-command (`/sources`) overlay host.
- *
- * Reads from the per-source `SourceEntryMap` owned by ChatScreen — the
- * same map that powers PR 3.2's right-rail Sources tab. Live updates
- * flow through `applySourceEvent` (PR 1.5) on every `source_ingested`
- * event; the archive seed comes from `useArchivedSources` (PR 3.1).
- *
- * The body uses the shared `<SourceRow />` primitive so the slash overlay
- * and the right-rail tab render identical rows.
- */
+// Web host adapter for the Sources slash-command (`/sources`) overlay.
+//
+// The presentational panel now lives in @0x-copilot/chat-surface (PR-1.4) so
+// web and desktop render the sources list identically. This adapter binds the
+// two web-substrate-specific bits the headless panel leaves to the host:
+//
+//   1. Ordering — `sourcesByCitationCount` (the host-owned `chatModel`
+//      sources reducer): citation_count desc, then last_cited_at desc.
+//   2. The preview-wired `SourceRow` wrapper (binds `useSourcePreviewTrigger`,
+//      a `createPortal`/`window` adapter that must stay in the host).
+//
+// Keeping both here keeps the moved core free of `chatModel/*` and the browser
+// preview portal (FR-1.13 / FR-1.14), so it stays substrate-agnostic. The
+// public API (`sources: SourceEntryMap`, `onClose`) is unchanged, so
+// `DetailsPanelHost` and the panel tests keep resolving `SourcesPanel` here.
 
-import { Button } from "@0x-copilot/design-system";
+import { SourcesPanel as SurfaceSourcesPanel } from "@0x-copilot/chat-surface";
 import type { ReactElement } from "react";
 
 import {
@@ -28,45 +32,11 @@ export function SourcesPanel({
   sources,
   onClose,
 }: SourcesPanelProps): ReactElement {
-  const ordered = sourcesByCitationCount(sources);
   return (
-    <aside className="details-panel" data-testid="sources-panel">
-      <header className="details-panel__header">
-        <div>
-          <h2>Sources</h2>
-          <p className="details-panel__subtitle">
-            {ordered.length === 0
-              ? "Sources will appear here as Copilot finds them."
-              : `${ordered.length} source${ordered.length === 1 ? "" : "s"} cited.`}
-          </p>
-        </div>
-        <div className="details-panel__header-actions">
-          <Button
-            type="button"
-            variant="ghost"
-            size="sm"
-            onClick={onClose}
-            aria-label="Close sources panel"
-          >
-            ✕
-          </Button>
-        </div>
-      </header>
-      {ordered.length === 0 ? (
-        <p className="details-panel__empty">
-          No citations yet. Start a turn that touches a connector.
-        </p>
-      ) : (
-        <ul className="details-panel__list" data-testid="sources-panel-list">
-          {ordered.map((source, index) => (
-            <SourceRow
-              key={`${source.source_connector}:${source.source_doc_id}`}
-              source={source}
-              ordinal={index + 1}
-            />
-          ))}
-        </ul>
-      )}
-    </aside>
+    <SurfaceSourcesPanel
+      sources={sourcesByCitationCount(sources)}
+      onClose={onClose}
+      SourceRowComponent={SourceRow}
+    />
   );
 }
