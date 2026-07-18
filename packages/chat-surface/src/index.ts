@@ -893,3 +893,17 @@ export {
   type SourceConnectorGroup,
 } from "./workspace";
 // === end Phase 1 (PR-1.7) ===
+
+// === Phase 3 (PR-3.3) run-session host hook ===
+// The Run cockpit's live-run host hook. Resolves the active/selected run for a
+// conversation and subscribes to its SSE tail through the Transport port,
+// exposing an append-only event array + session lifecycle status for the
+// RunDestination (PR-3.5) to project. No UI — network I/O is port-only.
+export {
+  useRunSession,
+  type RunSession,
+  type RunSessionStatus,
+  type RunListItem,
+  type UseRunSessionOptions,
+} from "./destinations/run/useRunSession";
+// === end Phase 3 (PR-3.3) ===
