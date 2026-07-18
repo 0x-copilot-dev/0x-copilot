@@ -159,6 +159,54 @@ class FakeBrokerFs:
                     )
         return {"hits": hits, "truncated": False, "filesScanned": len(self.files)}
 
+    # --- write ops (mirror host-fs.ts WRITE semantics) ---
+
+    def write(self, path: str, content: bytes) -> dict[str, object] | tuple[str, None]:
+        """Create-or-overwrite ``path`` (rejects clobbering a directory)."""
+        if path in self._dirs() and path not in self.files:
+            return ("not_a_file", None)
+        created = path not in self.files
+        self.files[path] = content
+        return {"path": path, "bytesWritten": len(content), "created": created}
+
+    def edit(self, path: str, content: bytes) -> dict[str, object] | tuple[str, None]:
+        """Full-content replace of an EXISTING file (``not_found`` when absent)."""
+        if path not in self.files:
+            return ("not_found", None)
+        self.files[path] = content
+        return {"path": path, "bytesWritten": len(content)}
+
+    def mkdir(self, path: str) -> dict[str, object] | tuple[str, None]:
+        """Create a single directory (idempotent; collides with a file)."""
+        if path in self.files:
+            return ("not_a_directory", None)
+        created = path not in self._dirs()
+        # A directory materializes once it holds a child; record a marker child
+        # so subsequent ``list`` reflects the new (empty) directory.
+        self.files.setdefault(f"{path}/.keep", b"")
+        return {"path": path, "created": created}
+
+    def delete(self, path: str) -> dict[str, object] | tuple[str, None]:
+        """Unlink a file, or rmdir an EMPTY directory."""
+        if path in self.files:
+            del self.files[path]
+            return {"path": path, "type": "file"}
+        if path in self._dirs():
+            children = [p for p in self.files if p.startswith(f"{path}/")]
+            if children:
+                return ("invalid_request", None)
+            return {"path": path, "type": "dir"}
+        return ("not_found", None)
+
+    def move(
+        self, from_path: str, to_path: str
+    ) -> dict[str, object] | tuple[str, None]:
+        """Rename an existing file (dir move not modelled — not backend-reachable)."""
+        if from_path not in self.files:
+            return ("not_found", None)
+        self.files[to_path] = self.files.pop(from_path)
+        return {"from": from_path, "to": to_path, "type": "file"}
+
 
 @dataclass
 class RecordingBroker:
@@ -177,15 +225,34 @@ class RecordingBroker:
     requests: list[tuple[str, dict[str, str], dict[str, object]]] = field(
         default_factory=list
     )
+    #: Minted run-capability contexts → the grant-mode snapshot pinned at begin.
+    run_contexts: dict[str, dict[str, str]] = field(default_factory=dict)
+    _rcx_counter: int = 0
 
     _GRANTS_SNAPSHOT = "/v1/grants/snapshot"
+    _RUNS_BEGIN = "/v1/runs/begin"
+    _RUNS_END = "/v1/runs/end"
     _ROUTES = {
         "/v1/fs/stat": "stat",
         "/v1/fs/list": "list",
         "/v1/fs/read": "read",
         "/v1/fs/glob": "glob",
         "/v1/fs/grep": "grep",
+        "/v1/fs/write": "write",
+        "/v1/fs/edit": "edit",
+        "/v1/fs/mkdir": "mkdir",
+        "/v1/fs/delete": "delete",
+        "/v1/fs/move": "move",
     }
+    # Minimum grant mode each route requires (mirrors broker.ts).
+    _ROUTE_REQUIRED_MODE = {
+        "write": "read_write_no_delete",
+        "edit": "read_write_no_delete",
+        "mkdir": "read_write_no_delete",
+        "delete": "read_write",
+        "move": "read_write",
+    }
+    _MODE_RANK = {"read_only": 0, "read_write_no_delete": 1, "read_write": 2}
     _ERROR_STATUS = {
         "grant_required": 403,
         "not_found": 404,
@@ -204,6 +271,11 @@ class RecordingBroker:
         self.requests.append((route, dict(request.headers), body))
         if route == self._GRANTS_SNAPSHOT:
             return httpx.Response(200, json=self._snapshot())
+        if route == self._RUNS_BEGIN:
+            return httpx.Response(200, json=self._begin_run())
+        if route == self._RUNS_END:
+            released = self.run_contexts.pop(body.get("run_capability_context"), None)
+            return httpx.Response(200, json={"released": released is not None})
         op = self._ROUTES.get(route)
         if op is None:
             return httpx.Response(404, json={"error": "not_found"})
@@ -211,6 +283,15 @@ class RecordingBroker:
         fs = self.grants.get(grant_id)
         if fs is None:
             return httpx.Response(403, json={"error": "grant_required"})
+        # Mode-gate the mutating routes exactly as the broker does, resolving the
+        # grant mode from the run's PINNED snapshot when a context is supplied.
+        required = self._ROUTE_REQUIRED_MODE.get(op)
+        if required is not None:
+            mode = self._resolve_mode(grant_id, body.get("run_capability_context"))
+            if mode is None:
+                return httpx.Response(403, json={"error": "grant_required"})
+            if self._MODE_RANK.get(mode, -1) < self._MODE_RANK[required]:
+                return httpx.Response(403, json={"error": "permission_denied"})
         result = self._dispatch(fs, op, body)
         if isinstance(result, tuple):
             code, _ = result
@@ -218,6 +299,30 @@ class RecordingBroker:
                 self._ERROR_STATUS.get(code, 500), json={"error": code}
             )
         return httpx.Response(200, json=result)
+
+    def _resolve_mode(self, grant_id: str, run_context: str | None) -> str | None:
+        """Resolve the grant's mode against the pinned snapshot or live state."""
+        if run_context is not None:
+            pinned = self.run_contexts.get(run_context)
+            if pinned is None:
+                return None
+            return pinned.get(grant_id)
+        return self.grant_meta.get(grant_id, {}).get("mode", "read_only")
+
+    def _begin_run(self) -> dict[str, object]:
+        """Pin the CURRENT active grant modes under a fresh, opaque context id."""
+        self._rcx_counter += 1
+        rcx = f"rcx_fake_{self._rcx_counter}"
+        self.run_contexts[rcx] = {
+            grant_id: self.grant_meta.get(grant_id, {}).get("mode", "read_only")
+            for grant_id in self.grants
+        }
+        return {
+            "runCapabilityContext": rcx,
+            "snapshotId": "snap-fake",
+            "capturedAt": 1000,
+            "grants": self._snapshot()["grants"],
+        }
 
     @staticmethod
     def _dispatch(
@@ -231,7 +336,17 @@ class RecordingBroker:
             return fs.read(body["path"], body.get("offset"), body.get("max_bytes"))
         if op == "glob":
             return fs.glob(body["pattern"], body.get("max_results"))
-        return fs.grep(body["pattern"], body.get("path_glob"))
+        if op == "grep":
+            return fs.grep(body["pattern"], body.get("path_glob"))
+        if op == "write":
+            return fs.write(body["path"], base64.b64decode(body["content_base64"]))
+        if op == "edit":
+            return fs.edit(body["path"], base64.b64decode(body["content_base64"]))
+        if op == "mkdir":
+            return fs.mkdir(body["path"])
+        if op == "delete":
+            return fs.delete(body["path"])
+        return fs.move(body["from"], body["to"])
 
     def _snapshot(self) -> dict[str, object]:
         """Build the ``/v1/grants/snapshot`` body (path-free ``BrokerGrant``s)."""
