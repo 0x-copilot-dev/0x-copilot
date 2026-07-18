@@ -2,7 +2,6 @@ import { type ReactElement } from "react";
 
 import {
   DestinationPlaceholder,
-  RunDestination,
   type ConversationId,
   type ShellDestinationSlug,
 } from "@0x-copilot/chat-surface";
@@ -12,6 +11,7 @@ import {
   ChatsBinder,
   ConnectorsBinder,
   ProjectsBinder,
+  RunBinder,
   SkillsBinder,
 } from "./destinationBinders";
 
@@ -140,7 +140,7 @@ function renderSurface(
       // threaded. `enabled` defaults to true — the outlet only mounts this
       // for the `run` slug, so the session + ⌘M handler are live exactly
       // while Run is active.
-      return <RunDestination conversationId={ctx.conversationId} />;
+      return <RunBinder conversationId={ctx.conversationId} />;
     case "chats":
       return <ChatsBinder onOpenRun={ctx.onOpenRun} />;
     case "projects":
