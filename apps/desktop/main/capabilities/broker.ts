@@ -7,7 +7,9 @@ import {
 } from "node:http";
 import type { AddressInfo } from "node:net";
 
-import type { GrantProvider } from "./types";
+import { HostFs } from "./host-fs";
+import { FsError, modeSatisfies, type FsErrorCode } from "./path-validation";
+import type { Grant, GrantProvider } from "./types";
 
 // Authenticated loopback capability broker (AC5 slice 1 — skeleton).
 //
@@ -25,9 +27,14 @@ import type { GrantProvider } from "./types";
 // restart (`stop()` then `start()`) mints a fresh token, invalidating any
 // previously issued one.
 //
-// SLICE 1 exposes ONLY grant-management reads (handshake / list / snapshot).
-// Filesystem read/write/stat/list/glob/grep methods land in slice 2, each
-// gated by careful path validation performed HERE.
+// SLICE 1 exposed ONLY grant-management reads (handshake / list / snapshot).
+// SLICE 2 (this change) adds the filesystem READ ops (stat/list/read/glob/grep)
+// for the runtime-worker audience. Each resolves its `grant_id` against the
+// CURRENT active snapshot (so a revoked grant fails closed), gates on the
+// grant mode, and runs `HostFs`, whose path-validation layer performs the
+// traversal / symlink / junction / ADS / TOCTOU checks. Write/mkdir/delete/
+// move remain absent (slice 3). Host absolute paths NEVER appear in any
+// response body — results carry only root-relative virtual paths.
 
 export const CAPABILITY_BROKER_PROTOCOL = "1";
 
@@ -38,13 +45,37 @@ const ROUTES = {
   handshake: "/v1/handshake",
   grantsList: "/v1/grants/list",
   grantsSnapshot: "/v1/grants/snapshot",
+  fsStat: "/v1/fs/stat",
+  fsList: "/v1/fs/list",
+  fsRead: "/v1/fs/read",
+  fsGlob: "/v1/fs/glob",
+  fsGrep: "/v1/fs/grep",
 } as const;
 
-// The capability methods this skeleton advertises. Slice 2 extends this list.
-const ADVERTISED_METHODS = ["listGrants", "snapshotGrants"] as const;
+// The capability methods this broker advertises to a handshaking child.
+const ADVERTISED_METHODS = [
+  "listGrants",
+  "snapshotGrants",
+  "statPath",
+  "listDir",
+  "readFile",
+  "glob",
+  "grep",
+] as const;
+
+// Every READ op requires at least a read-only grant. The gate is generic so
+// slice-3 writes can raise the bar per route; it fails closed for an unknown
+// mode. Reads never demand more than the minimum, so no read is mode-denied —
+// but the gate is the same one writes will use.
+const FS_READ_REQUIRED_MODE = "read_only";
 
 export interface CapabilityBrokerConfig {
   readonly grants: GrantProvider;
+  /**
+   * Host filesystem read executor. When omitted the FS routes fail closed
+   * (`unsupported`) — the broker never touches the disk without it.
+   */
+  readonly hostFs?: HostFs;
   /** Injectable CSPRNG for tests. Defaults to node:crypto randomBytes. */
   readonly randomBytes?: (size: number) => Buffer;
 }
@@ -57,6 +88,7 @@ export interface CapabilityBrokerHandle {
 
 export class CapabilityBroker {
   readonly #grants: GrantProvider;
+  readonly #hostFs: HostFs | null;
   readonly #randomBytes: (size: number) => Buffer;
 
   #server: Server | null = null;
@@ -65,6 +97,7 @@ export class CapabilityBroker {
 
   constructor(config: CapabilityBrokerConfig) {
     this.#grants = config.grants;
+    this.#hostFs = config.hostFs ?? null;
     this.#randomBytes = config.randomBytes ?? nodeRandomBytes;
   }
 
@@ -188,8 +221,6 @@ export class CapabilityBroker {
       respondJson(res, 400, { error: "invalid_json" });
       return;
     }
-    void body; // no request params are consumed by the slice-1 read methods.
-
     const pathname = new URL(req.url ?? "/", "http://127.0.0.1").pathname;
     switch (pathname) {
       case ROUTES.handshake:
@@ -209,10 +240,63 @@ export class CapabilityBroker {
         respondJson(res, 200, snapshot);
         return;
       }
+      case ROUTES.fsStat:
+      case ROUTES.fsList:
+      case ROUTES.fsRead:
+      case ROUTES.fsGlob:
+      case ROUTES.fsGrep:
+        await this.#handleFs(pathname, body, res);
+        return;
       default:
         respondJson(res, 404, { error: "not_found" });
         return;
     }
+  }
+
+  /**
+   * Dispatch a filesystem READ op. Resolves the grant from the CURRENT active
+   * snapshot (revoked → `grant_required`), gates on grant mode, then runs the
+   * op on `HostFs`. All failures collapse to a generic `{ error: <code> }`
+   * with a mapped status — never a host path, never an internal stack.
+   */
+  async #handleFs(
+    route: string,
+    body: unknown,
+    res: ServerResponse,
+  ): Promise<void> {
+    // Fail closed if no executor was wired.
+    if (this.#hostFs === null) {
+      respondJson(res, 404, { error: "unsupported" });
+      return;
+    }
+    const hostFs = this.#hostFs;
+    try {
+      const params = body === null || typeof body !== "object" ? {} : body;
+      const grantId = requireString(params, "grant_id");
+      const grant = await this.#resolveActiveGrant(grantId);
+      if (!modeSatisfies(FS_READ_REQUIRED_MODE, grant.mode)) {
+        throw new FsError("permission_denied", "grant mode too low");
+      }
+      const result = await runFsOp(hostFs, route, grant.root, params);
+      respondJson(res, 200, result);
+    } catch (err) {
+      const { status, code } = fsErrorResponse(err);
+      respondJson(res, status, { error: code });
+    }
+  }
+
+  /**
+   * Resolve a grant id against the active snapshot. Unknown or revoked ids
+   * (revoked grants are excluded from `snapshotActive`) fail closed with
+   * `grant_required`, so a revoke takes effect on the very next op.
+   */
+  async #resolveActiveGrant(grantId: string): Promise<Grant> {
+    const snapshot = await this.#grants.snapshotActive();
+    const grant = snapshot.grants.find((g) => g.grantId === grantId);
+    if (grant === undefined) {
+      throw new FsError("grant_required", "no active grant for id");
+    }
+    return grant;
   }
 
   #authorized(req: IncomingMessage): boolean {
@@ -228,6 +312,111 @@ export class CapabilityBroker {
     if (provided.length !== expected.length) return false;
     return timingSafeEqual(provided, expected);
   }
+}
+
+// --- FS op dispatch + param coercion (broker-side, dependency-light) ---
+
+const FS_ROUTE_HANDLERS: Record<
+  string,
+  (hostFs: HostFs, root: string, p: Record<string, unknown>) => Promise<unknown>
+> = {
+  [ROUTES.fsStat]: (hostFs, root, p) => hostFs.stat(root, requirePath(p)),
+  [ROUTES.fsList]: (hostFs, root, p) => hostFs.list(root, requirePath(p)),
+  [ROUTES.fsRead]: (hostFs, root, p) =>
+    hostFs.read(root, requirePath(p), {
+      offset: optionalInt(p, "offset"),
+      maxBytes: optionalInt(p, "max_bytes"),
+    }),
+  [ROUTES.fsGlob]: (hostFs, root, p) =>
+    hostFs.glob(root, requireString(p, "pattern"), {
+      maxResults: optionalInt(p, "max_results"),
+    }),
+  [ROUTES.fsGrep]: (hostFs, root, p) =>
+    hostFs.grep(root, requireString(p, "pattern"), {
+      pathGlob: optionalString(p, "path_glob"),
+      isRegex: optionalBool(p, "is_regex"),
+      flags: optionalString(p, "flags"),
+      maxMatches: optionalInt(p, "max_matches"),
+    }),
+};
+
+function runFsOp(
+  hostFs: HostFs,
+  route: string,
+  root: string,
+  params: object,
+): Promise<unknown> {
+  const handler = FS_ROUTE_HANDLERS[route];
+  if (handler === undefined) {
+    return Promise.reject(new FsError("unsupported", "unknown fs route"));
+  }
+  return handler(hostFs, root, params as Record<string, unknown>);
+}
+
+function requireString(params: object, key: string): string {
+  const value = (params as Record<string, unknown>)[key];
+  if (typeof value !== "string" || value.length === 0) {
+    throw new FsError("invalid_request", `missing ${key}`);
+  }
+  return value;
+}
+
+// `path` must be PRESENT and a string, but an empty string is valid — it
+// denotes the grant root itself (e.g. list/stat of the root). Absence is still
+// a bad request.
+function requirePath(params: object): string {
+  const value = (params as Record<string, unknown>).path;
+  if (typeof value !== "string") {
+    throw new FsError("invalid_request", "missing path");
+  }
+  return value;
+}
+
+function optionalString(params: object, key: string): string | undefined {
+  const value = (params as Record<string, unknown>)[key];
+  if (value === undefined) return undefined;
+  if (typeof value !== "string") {
+    throw new FsError("invalid_request", `invalid ${key}`);
+  }
+  return value;
+}
+
+function optionalInt(params: object, key: string): number | undefined {
+  const value = (params as Record<string, unknown>)[key];
+  if (value === undefined) return undefined;
+  if (typeof value !== "number" || !Number.isInteger(value)) {
+    throw new FsError("invalid_request", `invalid ${key}`);
+  }
+  return value;
+}
+
+function optionalBool(params: object, key: string): boolean | undefined {
+  const value = (params as Record<string, unknown>)[key];
+  if (value === undefined) return undefined;
+  if (typeof value !== "boolean") {
+    throw new FsError("invalid_request", `invalid ${key}`);
+  }
+  return value;
+}
+
+const FS_ERROR_STATUS: Record<FsErrorCode, number> = {
+  invalid_path: 400,
+  invalid_request: 400,
+  not_a_directory: 400,
+  not_a_file: 400,
+  grant_required: 403,
+  permission_denied: 403,
+  not_found: 404,
+  unsupported: 404,
+  too_large: 413,
+};
+
+function fsErrorResponse(err: unknown): { status: number; code: string } {
+  if (err instanceof FsError) {
+    return { status: FS_ERROR_STATUS[err.code], code: err.code };
+  }
+  // Never leak an unexpected error's message (could carry a host path).
+  return { status: 500, code: "internal" };
 }
 
 class BodyTooLargeError extends Error {}
