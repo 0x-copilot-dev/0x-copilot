@@ -4,8 +4,8 @@
 //
 // THE INVARIANT THAT GOVERNS THIS FILE
 // =====================================
-// ThreadCanvas mounts ONCE per (component-instance). The three modes
-// (Studio / Focus / Auto) are presentation slots — NOT separate canvases.
+// ThreadCanvas mounts ONCE per (component-instance). The two modes
+// (Studio / Focus) are presentation slots — NOT separate canvases.
 // Switching modes MUST NOT remount any of the inner components
 // (TcSurfaceMount, TcSwimlanes, TcChat, TcMiniTimeline, Composer).
 // Anything mounted in two modes survives the switch because the JSX is
@@ -62,9 +62,9 @@ import { TcSwimlanes } from "./TcSwimlanes";
 import { TcTabs, type TcTab } from "./TcTabs";
 import { useEventProjector } from "./useEventProjector";
 
-export type ThreadMode = "studio" | "focus" | "auto";
+export type ThreadMode = "studio" | "focus";
 
-const MODE_VALUES: readonly ThreadMode[] = ["studio", "focus", "auto"];
+const MODE_VALUES: readonly ThreadMode[] = ["studio", "focus"];
 
 export interface ThreadCanvasProps {
   /** Current presentation slot. */
@@ -136,15 +136,6 @@ export function ThreadCanvas(props: ThreadCanvasProps): ReactElement {
   // SINGLE projector — every consumer reads slices off this object.
   const projection = useEventProjector(events);
 
-  // Auto mode = pick Studio when surfaces are active, Focus otherwise.
-  // The choice is purely presentational; the underlying mounts persist.
-  const resolvedMode: ThreadMode = useMemo(() => {
-    if (mode !== "auto") {
-      return mode;
-    }
-    return projection.surface.hasActiveSurfaces ? "studio" : "focus";
-  }, [mode, projection.surface.hasActiveSurfaces]);
-
   // Time-travel surface payload (frozen at scrub cursor in studio/focus).
   // Auto-derived for the active uri so the surface stays consistent
   // with the swimlane/mini-timeline scrub cursor without a remount.
@@ -185,23 +176,21 @@ export function ThreadCanvas(props: ThreadCanvasProps): ReactElement {
   // React reconciliation NEVER unmounts the underlying components.
   // - Studio: surface + chat + swimlanes + mini-timeline
   // - Focus:  chat (with focus-tabs view) + mini-timeline; surface is hidden
-  // - Auto:   resolves to one of the above
-  const showSurfaceColumn = resolvedMode === "studio";
-  const showSwimlanes = resolvedMode === "studio" && runId !== null;
-  const showMiniTimeline =
-    resolvedMode === "focus" || resolvedMode === "studio";
-  const showTabs = resolvedMode === "studio" || resolvedMode === "focus";
+  const showSurfaceColumn = mode === "studio";
+  const showSwimlanes = mode === "studio" && runId !== null;
+  const showMiniTimeline = mode === "focus" || mode === "studio";
+  const showTabs = mode === "studio" || mode === "focus";
 
   return (
     <div
       data-testid="thread-canvas"
       data-conversation-id={conversationId}
       data-mode={mode}
-      data-resolved-mode={resolvedMode}
+      data-resolved-mode={mode}
       data-has-active-surfaces={
         projection.surface.hasActiveSurfaces ? "true" : "false"
       }
-      style={gridStyleFor(resolvedMode)}
+      style={gridStyleFor(mode)}
     >
       <ModeSwitcherTabs mode={mode} onModeChange={onModeChange} />
 
@@ -236,11 +225,11 @@ export function ThreadCanvas(props: ThreadCanvasProps): ReactElement {
         <div
           data-testid="tc-chat-slot"
           data-visible="true"
-          style={chatSlotStyle(resolvedMode)}
+          style={chatSlotStyle(mode)}
         >
           <TcChat
             conversationId={conversationId as unknown as string}
-            mode={resolvedMode}
+            mode={mode}
           />
         </div>
 
@@ -260,9 +249,7 @@ export function ThreadCanvas(props: ThreadCanvasProps): ReactElement {
               scrubbedTo={scrubbedSeq}
               onScrub={handleScrub}
               onSnapToNow={handleSnapToNow}
-              onExpand={
-                resolvedMode === "focus" ? handleExpandToStudio : undefined
-              }
+              onExpand={mode === "focus" ? handleExpandToStudio : undefined}
             />
           </div>
         ) : null}
@@ -276,8 +263,9 @@ export function ThreadCanvas(props: ThreadCanvasProps): ReactElement {
 // ============================================================
 //
 // Per chats-canvas-prd §9 + design-system tablist conventions, the
-// mode-switcher is a `role="tablist"` of three `role="tab"` buttons
-// with `aria-pressed` reflecting the current mode. Arrow keys move
+// mode-switcher is a `role="tablist"` of two `role="tab"` buttons
+// (Studio / Focus) with `aria-pressed` reflecting the current mode.
+// Autonomy is a run state, not a view — Auto mode was dropped. Arrow keys move
 // focus between tabs; Enter / Space activates. No global keyboard
 // chord (chat1.md L383 — buttons only).
 
@@ -289,7 +277,6 @@ interface ModeSwitcherTabsProps {
 const MODE_LABELS: Record<ThreadMode, string> = {
   studio: "Studio",
   focus: "Focus",
-  auto: "Auto",
 };
 
 function ModeSwitcherTabs(props: ModeSwitcherTabsProps): ReactElement {
@@ -346,11 +333,11 @@ function ModeSwitcherTabs(props: ModeSwitcherTabsProps): ReactElement {
 // Styles (tokens only)
 // ============================================================
 
-function gridStyleFor(resolvedMode: ThreadMode): CSSProperties {
+function gridStyleFor(mode: ThreadMode): CSSProperties {
   // Grid template adapts presentationally. Mode switch is a template
   // change, NOT a remount (PRD §3.3 — animation: 300ms grid-template
   // transition; the inner components are invariant).
-  if (resolvedMode === "studio") {
+  if (mode === "studio") {
     return {
       ...baseGridStyle,
       gridTemplateColumns: "1fr 360px",
@@ -396,7 +383,7 @@ const surfaceSlotStyle = (visible: boolean): CSSProperties => ({
   padding: 16,
 });
 
-const chatSlotStyle = (resolvedMode: ThreadMode): CSSProperties => ({
+const chatSlotStyle = (mode: ThreadMode): CSSProperties => ({
   gridArea: "chat",
   display: "flex",
   flexDirection: "column",
@@ -404,9 +391,7 @@ const chatSlotStyle = (resolvedMode: ThreadMode): CSSProperties => ({
   minHeight: 0,
   background: "var(--color-bg-elevated, #16181f)",
   borderLeft:
-    resolvedMode === "studio"
-      ? "1px solid var(--color-border, #22252e)"
-      : "none",
+    mode === "studio" ? "1px solid var(--color-border, #22252e)" : "none",
   overflow: "hidden",
 });
 

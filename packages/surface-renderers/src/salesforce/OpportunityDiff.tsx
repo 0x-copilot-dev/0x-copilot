@@ -152,7 +152,7 @@ const arrowStyle: CSSProperties = {
 
 const nextValueStyle: CSSProperties = {
   color: PALETTE.textHi,
-  background: "rgba(194, 255, 90, 0.18)",
+  background: "color-mix(in srgb, var(--color-accent) 18%, transparent)",
   padding: "1px 6px",
   borderRadius: 4,
 };

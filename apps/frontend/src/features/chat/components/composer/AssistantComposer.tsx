@@ -42,7 +42,6 @@ import {
 import type {
   Attachment,
   AttachmentAdapter,
-  CompleteAttachment,
   PendingAttachment,
 } from "../../runtime/types";
 import { AnchoredPlusMenu } from "./AnchoredPlusMenu";

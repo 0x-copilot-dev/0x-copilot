@@ -2,6 +2,8 @@ import { type ReactElement } from "react";
 
 import {
   DestinationPlaceholder,
+  RunDestination,
+  type ConversationId,
   type ShellDestinationSlug,
 } from "@0x-copilot/chat-surface";
 
@@ -10,17 +12,25 @@ import {
 // this in place of the static `DesktopPlaceholder`, so the renderer is a real
 // profile-gated shell rather than a single "phase 1" signal.
 //
-// None of the six solo surfaces exist yet — Run is Phase 3; Chats / Projects /
-// Activity / Tools / Skills are Phase 4 — so every destination renders the
-// sanctioned `DestinationPlaceholder` primitive (honest: names the intent,
-// names the phase, no fake data, no fetch). Phase 3 later swaps the `run` case
-// for `ThreadCanvas` and Phase 4 fills the list surfaces, each without changing
-// the outlet's contract (a slug in, a surface out).
+// Phase 3 (PR-3.5) swaps the `run` case for the real cockpit: `RunDestination`
+// (which composes `useRunSession` + `useRunMode` + `ThreadCanvas`). The other
+// solo surfaces — Chats / Projects / Activity / Tools / Skills — are Phase 4 and
+// still render the sanctioned `DestinationPlaceholder` primitive (honest: names
+// the intent, names the phase, no fake data, no fetch). The outlet's contract is
+// unchanged (a slug in, a surface out).
 //
 // Folding (DESIGN-SPEC §1/§3): the deprecated `agents` and `inbox` concepts are
 // absorbed by Activity ("everything the agent has done"), so a defensive/legacy
 // navigation to either slug resolves to the Activity surface rather than
 // dead-ending.
+
+// The conversation the Run cockpit binds to when the host does not supply one.
+// The desktop shell does not thread an active conversation yet (a real
+// conversation binding lands with the empty/multi-run states in PR-3.11 and the
+// Chats → reopen-into-Run flow in Phase 4), so PR-3.5 mounts the cockpit against
+// a stable default id. `useRunSession` resolves this conversation's runs over
+// the Transport port — an empty result simply shows the idle cockpit.
+const DESKTOP_DEFAULT_CONVERSATION_ID = "desktop-default" as ConversationId;
 
 // Slugs the outlet folds onto another destination before rendering. Activity is
 // the recast of the old audit-log + agents + inbox surfaces.
@@ -103,15 +113,22 @@ function resolveDestination(slug: ShellDestinationSlug): ShellDestinationSlug {
 export interface DestinationOutletProps {
   /** The shell's active destination slug (host-controlled). */
   readonly destination: ShellDestinationSlug;
+  /**
+   * Conversation the Run cockpit binds to. Optional so the current bootstrap
+   * (which has no active-conversation concept yet) mounts the outlet unchanged;
+   * defaults to {@link DESKTOP_DEFAULT_CONVERSATION_ID}. A later PR threads the
+   * real active conversation here.
+   */
+  readonly conversationId?: ConversationId;
 }
 
 export function DestinationOutlet({
   destination,
+  conversationId = DESKTOP_DEFAULT_CONVERSATION_ID,
 }: DestinationOutletProps): ReactElement {
   // Fold deprecated slugs onto their recast surface BEFORE resolving content,
   // so `agents`/`inbox` render Activity (FR-2.23) rather than a dead pane.
   const resolved = resolveDestination(destination);
-  const copy = DESTINATION_COPY[resolved] ?? fallbackCopy(resolved);
 
   return (
     <div
@@ -119,11 +136,18 @@ export function DestinationOutlet({
       data-destination={resolved}
       style={{ width: "100%", height: "100%", minHeight: 0 }}
     >
-      <DestinationPlaceholder
-        title={copy.title}
-        description={copy.description}
-        phaseLabel={copy.phaseLabel}
-      />
+      {resolved === "run" ? (
+        // PR-3.5: the flagship Run cockpit. Transport / KeyValueStore come from
+        // the providers `ChatShell` installs above this outlet, so no props are
+        // threaded here beyond the conversation binding. `enabled` defaults to
+        // true — the outlet only mounts this for the `run` slug, so the session
+        // + ⌘M handler are live exactly while Run is active.
+        <RunDestination conversationId={conversationId} />
+      ) : (
+        <DestinationPlaceholder
+          {...(DESTINATION_COPY[resolved] ?? fallbackCopy(resolved))}
+        />
+      )}
     </div>
   );
 }

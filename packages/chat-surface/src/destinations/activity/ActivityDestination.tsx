@@ -1,0 +1,762 @@
+// Activity — destination shell (desktop redesign, Phase 4 · PR-4.5).
+//
+// Source: docs/plan/desktop-redesign/phase-4/PRD.md §3 (US-4.4/4.5),
+// §4 (FR-4.14…FR-4.19), §9 (UI/UX checklist), and
+// docs/plan/desktop-redesign/design-reference/DESIGN-SPEC.md §3
+// (List destinations — Activity).
+//
+// Activity is the single run-history feed that ABSORBS the former Agents,
+// Inbox, and audit-log surfaces (PRD US-4.5). It renders every run the
+// agent has done, grouped by day (`.act-day` dividers), most-recent day
+// first. Each row shows: title, a meta line (tools/connectors touched),
+// a mono relative time, and a status chip.
+//
+// This file is PURE PRESENTATION (FR-4.3): no fetch, no direct
+// `router.navigate`, no SSE. The host binder (PR-4.6) composes
+// `/v1/agent/conversations` + `/v1/audit` into a flat `ActivityRunRow[]`
+// (there is no dedicated run-list endpoint yet — PRD §11) and passes it in
+// wrapped in a `SectionResult`. The component groups by day in-shell using
+// the injected `now` (FR-4.14) — day grouping never rides the wire.
+//
+// Navigation (FR-4.16):
+//   * running rows → `onOpenRun(run_id)` — a host callback that jumps into
+//     the live Run cockpit.
+//   * non-running rows → `<ItemLink kind="run">` — registry navigation to a
+//     read-only run detail (the codebase's cross-destination link pattern,
+//     cross-audit §3.3). The host registers the `"run"` resolver; its
+//     resolved label is the run's display title.
+//
+// Wire types (`ActivityRunRow`, `ActivityRunStatus`, `ACTIVITY_RUN_STATUSES`)
+// come from `@0x-copilot/api-types` (PR-4.1, already merged) — never
+// re-declared here (FR-4.33).
+
+import {
+  useMemo,
+  type CSSProperties,
+  type ReactElement,
+  type ReactNode,
+} from "react";
+
+import type {
+  ActivityRunRow,
+  ActivityRunStatus,
+  RunId,
+  SectionResult,
+} from "@0x-copilot/api-types";
+
+import { ItemLink } from "../../refs/ItemLink";
+import { DocList } from "../../shell/DocList";
+import { EmptyState } from "../../shell/EmptyState";
+import { PageHeader } from "../../shell/PageHeader";
+import { StatusPill, type StatusTone } from "../../shell/StatusPill";
+import { formatRelativeTime } from "../../util/time";
+
+// ===========================================================================
+// Copy (DESIGN-SPEC §3 — Activity) — exported so the host + tests assert the
+// exact strings rather than re-typing them.
+// ===========================================================================
+
+/** Lead paragraph opener. Rendered in the `.pg-lead` intro. */
+export const ACTIVITY_LEAD_COPY = "Everything the agent has done.";
+
+/**
+ * The retention/export/delete pointer. Rendered as an inline link that
+ * invokes `onOpenRetentionSettings` (host → Settings → Privacy). FR-4.17.
+ */
+export const ACTIVITY_RETENTION_LINK_COPY =
+  "Retention, export, and delete live in Settings → Privacy.";
+
+// ===========================================================================
+// Status → tone / label (single source; StatusPill renders the tone token)
+// ===========================================================================
+
+/**
+ * Map an activity run status to a `StatusPill` tone. One declaration site
+ * so the status→color choice is never inlined per-row (DESIGN-SPEC §9
+ * single-accent discipline). Running is jade/success; stopped is
+ * ember/error; paused is amber/warning; needs-input is the accent-tinted
+ * "info" call-to-action; done is neutral/muted.
+ */
+export function activityStatusTone(status: ActivityRunStatus): StatusTone {
+  switch (status) {
+    case "running":
+      return "ok";
+    case "done":
+      return "muted";
+    case "paused":
+      return "warning";
+    case "stopped":
+      return "error";
+    case "needs_input":
+      return "info";
+  }
+}
+
+/** Human label for a run status — single source for chip + a11y. */
+export function activityStatusLabel(status: ActivityRunStatus): string {
+  switch (status) {
+    case "running":
+      return "Running";
+    case "done":
+      return "Done";
+    case "paused":
+      return "Paused";
+    case "stopped":
+      return "Stopped";
+    case "needs_input":
+      return "Needs input";
+  }
+}
+
+// ===========================================================================
+// Day grouping (in-shell; FR-4.14) — pure + exported for tests
+// ===========================================================================
+
+/**
+ * One day's worth of run rows. `key` is a stable local calendar-day key
+ * (`YYYY-MM-DD`); `label` is the human divider ("Today" / "Yesterday" /
+ * an explicit date). Rows within a group are most-recent first.
+ */
+export interface ActivityDayGroup {
+  readonly key: string;
+  readonly label: string;
+  readonly rows: ReadonlyArray<ActivityRunRow>;
+}
+
+function startOfLocalDay(ms: number): number {
+  const d = new Date(ms);
+  d.setHours(0, 0, 0, 0);
+  return d.getTime();
+}
+
+function localDayKey(ms: number): string {
+  const d = new Date(ms);
+  const y = d.getFullYear();
+  const m = `${d.getMonth() + 1}`.padStart(2, "0");
+  const day = `${d.getDate()}`.padStart(2, "0");
+  return `${y}-${m}-${day}`;
+}
+
+function dayLabel(rowMs: number, nowMs: number, locale?: string): string {
+  const rowMidnight = startOfLocalDay(rowMs);
+  const nowMidnight = startOfLocalDay(nowMs);
+  if (rowMidnight === nowMidnight) return "Today";
+  // Round the midnight delta so a DST transition (a 23h/25h civil day)
+  // doesn't misclassify the boundary.
+  const diffDays = Math.round((nowMidnight - rowMidnight) / 86_400_000);
+  if (diffDays === 1) return "Yesterday";
+  return new Intl.DateTimeFormat(locale ?? undefined, {
+    year: "numeric",
+    month: "short",
+    day: "numeric",
+  }).format(new Date(rowMs));
+}
+
+function startedAtMs(iso: string): number {
+  const ms = Date.parse(iso);
+  return Number.isNaN(ms) ? Number.NaN : ms;
+}
+
+// Sentinel bucket for rows with an unparseable `started_at`. Sorted last so
+// bad data never hides real runs; still visible rather than dropped.
+const UNKNOWN_DAY_KEY = "unknown";
+
+interface MutableDayGroup {
+  label: string;
+  sortKey: number;
+  rows: ActivityRunRow[];
+}
+
+/**
+ * Group a flat `ActivityRunRow[]` into day buckets, most-recent day first,
+ * with each day's rows sorted most-recent first. `now` is an explicit test
+ * seam (FR-4.4) — the Today/Yesterday derivation is pinned by the caller,
+ * never by an implicit `Date.now()`.
+ */
+export function groupActivityByDay(
+  rows: ReadonlyArray<ActivityRunRow>,
+  now: number,
+  locale?: string,
+): ReadonlyArray<ActivityDayGroup> {
+  const buckets = new Map<string, MutableDayGroup>();
+
+  for (const row of rows) {
+    const ms = startedAtMs(row.started_at);
+    const valid = !Number.isNaN(ms);
+    const key = valid ? localDayKey(ms) : UNKNOWN_DAY_KEY;
+    let bucket = buckets.get(key);
+    if (bucket === undefined) {
+      bucket = {
+        label: valid ? dayLabel(ms, now, locale) : "Earlier",
+        sortKey: valid ? startOfLocalDay(ms) : Number.NEGATIVE_INFINITY,
+        rows: [],
+      };
+      buckets.set(key, bucket);
+    }
+    bucket.rows.push(row);
+  }
+
+  const groups = Array.from(buckets.entries()).map(([key, bucket]) => ({
+    key,
+    label: bucket.label,
+    sortKey: bucket.sortKey,
+    rows: [...bucket.rows].sort((a, b) => rowTsDesc(a, b)),
+  }));
+
+  groups.sort((a, b) => b.sortKey - a.sortKey);
+
+  return groups.map(({ key, label, rows: dayRows }) => ({
+    key,
+    label,
+    rows: dayRows,
+  }));
+}
+
+function rowTsDesc(a: ActivityRunRow, b: ActivityRunRow): number {
+  const ax = startedAtMs(a.started_at);
+  const bx = startedAtMs(b.started_at);
+  const aFinite = Number.isNaN(ax) ? Number.NEGATIVE_INFINITY : ax;
+  const bFinite = Number.isNaN(bx) ? Number.NEGATIVE_INFINITY : bx;
+  return bFinite - aFinite;
+}
+
+// ===========================================================================
+// Public props
+// ===========================================================================
+
+export interface ActivityDestinationProps {
+  /**
+   * Server-projected run history. `null`/`undefined` = loading skeleton;
+   * `status:"error"` = error + Retry; `status:"unavailable"` = distinct
+   * "not enabled" empty-state; `status:"ok"` with rows = the day-grouped
+   * feed; `status:"ok"` with zero rows = the "No activity yet" empty-state
+   * (FR-4.2). The rows are a FLAT list — grouping happens in-shell.
+   */
+  readonly items?: SectionResult<ReadonlyArray<ActivityRunRow>> | null;
+
+  /**
+   * Running-row activation — host jumps into the live Run cockpit
+   * (FR-4.16). Non-running rows navigate via the `"run"` ItemLink resolver
+   * instead, so they intentionally do NOT call this.
+   */
+  readonly onOpenRun?: (runId: RunId) => void;
+
+  /**
+   * Retention/export/delete link — host opens Settings → Privacy
+   * (FR-4.17). When omitted, the pointer copy renders as plain text.
+   */
+  readonly onOpenRetentionSettings?: () => void;
+
+  /** Retry callback for the `status:"error"` branch. */
+  readonly onRetry?: () => void;
+
+  /** Reference instant — test seam for day grouping + relative time. */
+  readonly now?: number;
+
+  /** BCP-47 locale for the explicit-date dividers; defaults to runtime. */
+  readonly locale?: string;
+}
+
+// ===========================================================================
+// Top-level shell
+// ===========================================================================
+
+export function ActivityDestination(
+  props: ActivityDestinationProps = {},
+): ReactElement {
+  const {
+    items = null,
+    onOpenRun,
+    onOpenRetentionSettings,
+    onRetry,
+    now,
+    locale,
+  } = props;
+
+  const nowMs = now ?? Date.now();
+
+  const groups = useMemo<ReadonlyArray<ActivityDayGroup>>(() => {
+    if (items === null || items === undefined) return [];
+    if (items.status !== "ok" || items.data === undefined) return [];
+    return groupActivityByDay(items.data, nowMs, locale);
+  }, [items, nowMs, locale]);
+
+  const dataState = resolveDataState(items, groups.length);
+
+  return (
+    <section
+      role="region"
+      aria-label="Activity"
+      data-component="activity-destination"
+      data-testid="activity-destination"
+      data-state={dataState}
+      style={rootStyle}
+    >
+      <div style={innerStyle} className="pg">
+        <PageHeader title="Activity" subtitle="Run history, grouped by day." />
+        <ActivityLead onOpenRetentionSettings={onOpenRetentionSettings} />
+        <div style={bodyStyle} data-testid="activity-body">
+          {renderBody({ items, groups, onOpenRun, onRetry, now: nowMs })}
+        </div>
+      </div>
+    </section>
+  );
+}
+
+function resolveDataState(
+  items: ActivityDestinationProps["items"],
+  groupCount: number,
+): "loading" | "error" | "unavailable" | "empty" | "ready" {
+  if (items === null || items === undefined) return "loading";
+  if (items.status === "error") return "error";
+  if (items.status === "unavailable") return "unavailable";
+  return groupCount === 0 ? "empty" : "ready";
+}
+
+// ===========================================================================
+// Lead paragraph (`.pg-lead`) + retention link
+// ===========================================================================
+
+function ActivityLead({
+  onOpenRetentionSettings,
+}: {
+  readonly onOpenRetentionSettings?: () => void;
+}): ReactElement {
+  return (
+    <p className="pg-lead" style={leadStyle} data-testid="activity-lead">
+      <span>{ACTIVITY_LEAD_COPY} </span>
+      {onOpenRetentionSettings !== undefined ? (
+        <button
+          type="button"
+          onClick={onOpenRetentionSettings}
+          style={leadLinkStyle}
+          data-testid="activity-retention-link"
+        >
+          {ACTIVITY_RETENTION_LINK_COPY}
+        </button>
+      ) : (
+        <span data-testid="activity-retention-copy">
+          {ACTIVITY_RETENTION_LINK_COPY}
+        </span>
+      )}
+    </p>
+  );
+}
+
+// ===========================================================================
+// Body — the 4-state machine (FR-4.2)
+// ===========================================================================
+
+interface BodyArgs {
+  readonly items: ActivityDestinationProps["items"];
+  readonly groups: ReadonlyArray<ActivityDayGroup>;
+  readonly onOpenRun: ActivityDestinationProps["onOpenRun"];
+  readonly onRetry: ActivityDestinationProps["onRetry"];
+  readonly now: number;
+}
+
+function renderBody(args: BodyArgs): ReactElement {
+  const { items, groups, onOpenRun, onRetry, now } = args;
+
+  // Loading — skeleton day-groups (FR-4.2). role="status" announces the
+  // busy state; the skeleton chrome itself is aria-hidden.
+  if (items === null || items === undefined) {
+    return (
+      <div
+        role="status"
+        aria-busy="true"
+        aria-label="Loading activity"
+        data-testid="activity-loading"
+        data-state="loading"
+        style={groupsWrapStyle}
+      >
+        {[0, 1].map((i) => (
+          <DaySkeleton key={i} />
+        ))}
+      </div>
+    );
+  }
+
+  // Error — role="alert" on the error node (DESIGN-SPEC §9) + Retry.
+  if (items.status === "error") {
+    return (
+      <div role="alert" data-testid="activity-error">
+        <EmptyState
+          title="Couldn't load activity"
+          body={items.error ?? "Network error — try again."}
+          action={
+            onRetry !== undefined
+              ? { label: "Retry", onClick: onRetry }
+              : undefined
+          }
+        />
+      </div>
+    );
+  }
+
+  // Unavailable — distinct "not enabled for your workspace" empty-state.
+  if (items.status === "unavailable") {
+    return (
+      <div data-testid="activity-unavailable">
+        <EmptyState
+          title="Activity unavailable"
+          body={
+            items.error ?? "This destination is not enabled for your workspace."
+          }
+        />
+      </div>
+    );
+  }
+
+  // Ready-but-empty — per-view empty copy (FR-4.2 / §9).
+  if (groups.length === 0) {
+    return (
+      <div data-testid="activity-empty">
+        <EmptyState
+          title="No activity yet"
+          body="The agent hasn't run anything yet. Start a run and it'll show up here, grouped by day."
+        />
+      </div>
+    );
+  }
+
+  // Ready — day-grouped run rows, most-recent day first.
+  return (
+    <div style={groupsWrapStyle} data-testid="activity-groups">
+      {groups.map((group) => (
+        <DayGroup
+          key={group.key}
+          group={group}
+          onOpenRun={onOpenRun}
+          now={now}
+        />
+      ))}
+    </div>
+  );
+}
+
+// ===========================================================================
+// DayGroup — one `.act-day` divider + its run rows
+// ===========================================================================
+
+function DayGroup({
+  group,
+  onOpenRun,
+  now,
+}: {
+  readonly group: ActivityDayGroup;
+  readonly onOpenRun: ActivityDestinationProps["onOpenRun"];
+  readonly now: number;
+}): ReactElement {
+  const headingId = `activity-day-${group.key}`;
+  return (
+    <section
+      aria-labelledby={headingId}
+      data-testid="activity-day-group"
+      data-day-key={group.key}
+      data-row-count={group.rows.length}
+      style={dayGroupStyle}
+    >
+      <h2
+        id={headingId}
+        className="act-day sect-h"
+        data-testid="activity-day"
+        data-day-key={group.key}
+        style={dayDividerStyle}
+      >
+        {group.label}
+      </h2>
+      <DocList<ActivityRunRow>
+        ariaLabel={`Runs on ${group.label}`}
+        items={group.rows}
+        keyFor={(row) => row.run_id}
+        renderRow={(row) => (
+          <ActivityRow row={row} onOpenRun={onOpenRun} now={now} />
+        )}
+      />
+    </section>
+  );
+}
+
+// ===========================================================================
+// ActivityRow — one run row (title, meta, status, time)
+// ===========================================================================
+
+function ActivityRow({
+  row,
+  onOpenRun,
+  now,
+}: {
+  readonly row: ActivityRunRow;
+  readonly onOpenRun: ActivityDestinationProps["onOpenRun"];
+  readonly now: number;
+}): ReactElement {
+  const isRunning = row.status === "running";
+  const tone = activityStatusTone(row.status);
+  const statusLabel = activityStatusLabel(row.status);
+
+  // Non-running rows navigate through the `"run"` ItemLink resolver
+  // (FR-4.16). The resolved label is the run's display title; while it
+  // resolves (or if the run was deleted) the projected `title` stands in
+  // via `deletedLabel`.
+  const title = isRunning ? (
+    <span style={titleStyle} data-testid="activity-row-title">
+      {row.title}
+    </span>
+  ) : (
+    <span style={titleLinkWrapStyle}>
+      <ItemLink
+        ref={{ kind: "run", id: row.run_id }}
+        deletedLabel={row.title}
+      />
+    </span>
+  );
+
+  const inner: ReactNode = (
+    <>
+      <span style={mainColStyle}>
+        {title}
+        {row.meta.length > 0 ? (
+          <span style={metaStyle} data-testid="activity-row-meta">
+            {row.meta}
+          </span>
+        ) : null}
+      </span>
+      <StatusPill status={tone} label={statusLabel} />
+      <time
+        dateTime={row.started_at}
+        data-testid="activity-row-time"
+        style={timeStyle}
+      >
+        {formatRelativeTime(row.started_at, now)}
+      </time>
+    </>
+  );
+
+  // Running rows are a single interactive control — click / Enter / Space
+  // jump into the live Run cockpit (FR-4.16, §9 keyboard).
+  if (isRunning && onOpenRun !== undefined) {
+    return (
+      <button
+        type="button"
+        data-testid="activity-row"
+        data-run-id={row.run_id}
+        data-status={row.status}
+        data-row-title={row.title}
+        data-open="run"
+        onClick={() => onOpenRun(row.run_id)}
+        aria-label={`Open running run: ${row.title}`}
+        style={runningRowStyle}
+      >
+        {inner}
+      </button>
+    );
+  }
+
+  return (
+    <span
+      data-testid="activity-row"
+      data-run-id={row.run_id}
+      data-status={row.status}
+      data-row-title={row.title}
+      data-open={isRunning ? "run" : "detail"}
+      style={staticRowStyle}
+    >
+      {inner}
+    </span>
+  );
+}
+
+// ===========================================================================
+// DaySkeleton — loading placeholder
+// ===========================================================================
+
+function DaySkeleton(): ReactElement {
+  return (
+    <div style={dayGroupStyle} aria-hidden="true">
+      <span
+        data-testid="activity-skeleton-day"
+        style={{ ...dayDividerStyle, ...skeletonBar(30) }}
+      />
+      <div style={{ display: "flex", flexDirection: "column", gap: 6 }}>
+        {[0, 1, 2].map((i) => (
+          <div
+            key={i}
+            data-testid="activity-skeleton-row"
+            style={skeletonRowStyle}
+          >
+            <span style={skeletonBar(45)} />
+            <span style={skeletonBar(15)} />
+          </div>
+        ))}
+      </div>
+    </div>
+  );
+}
+
+// ===========================================================================
+// Styles — tokens only (no hardcoded palette; DESIGN-SPEC §0 / §9)
+// ===========================================================================
+
+const rootStyle: CSSProperties = {
+  width: "100%",
+  height: "100%",
+  minHeight: 0,
+  background: "var(--color-bg, #131316)",
+  color: "var(--color-text, #ededee)",
+  boxSizing: "border-box",
+  display: "flex",
+  flexDirection: "column",
+  overflow: "auto",
+};
+
+// `.pg` — shared list surface, content column max 960 (FR-4.1).
+const innerStyle: CSSProperties = {
+  width: "100%",
+  maxWidth: 960,
+  margin: "0 auto",
+  padding: "16px 20px 32px",
+  boxSizing: "border-box",
+  display: "flex",
+  flexDirection: "column",
+  gap: 12,
+};
+
+const leadStyle: CSSProperties = {
+  margin: 0,
+  fontSize: "var(--font-size-sm, 13px)",
+  lineHeight: 1.5,
+  color: "var(--color-text-muted, #b4b4b8)",
+  maxWidth: 620,
+};
+
+const leadLinkStyle: CSSProperties = {
+  background: "transparent",
+  border: "none",
+  padding: 0,
+  margin: 0,
+  font: "inherit",
+  color: "var(--color-accent, #d97757)",
+  textDecoration: "underline",
+  textUnderlineOffset: 2,
+  cursor: "pointer",
+};
+
+const bodyStyle: CSSProperties = {
+  flex: 1,
+  minHeight: 0,
+  padding: "8px 0",
+};
+
+const groupsWrapStyle: CSSProperties = {
+  display: "flex",
+  flexDirection: "column",
+  gap: 20,
+};
+
+const dayGroupStyle: CSSProperties = {
+  display: "flex",
+  flexDirection: "column",
+  gap: 8,
+};
+
+// `.act-day` — mono uppercase day divider (DESIGN-SPEC §3 / §9).
+const dayDividerStyle: CSSProperties = {
+  margin: 0,
+  paddingBottom: 6,
+  borderBottom: "1px solid var(--color-border, #232325)",
+  fontFamily: "var(--font-mono, ui-monospace, SFMono-Regular, monospace)",
+  fontSize: "var(--font-size-xs, 12px)",
+  fontWeight: 600,
+  letterSpacing: 0.4,
+  textTransform: "uppercase",
+  color: "var(--color-text-subtle, #7e7e84)",
+};
+
+// Row inner layout — shared by the running (button) + non-running (span)
+// variants so both read identically.
+const rowLayout: CSSProperties = {
+  display: "flex",
+  alignItems: "center",
+  gap: 12,
+  width: "100%",
+  minWidth: 0,
+  boxSizing: "border-box",
+  textAlign: "left",
+};
+
+const runningRowStyle: CSSProperties = {
+  ...rowLayout,
+  background: "transparent",
+  border: "none",
+  padding: 0,
+  margin: 0,
+  font: "inherit",
+  color: "inherit",
+  cursor: "pointer",
+};
+
+const staticRowStyle: CSSProperties = {
+  ...rowLayout,
+};
+
+const mainColStyle: CSSProperties = {
+  display: "flex",
+  flexDirection: "column",
+  gap: 2,
+  flex: 1,
+  minWidth: 0,
+};
+
+const titleStyle: CSSProperties = {
+  fontSize: "var(--font-size-sm, 13px)",
+  fontWeight: 600,
+  color: "var(--color-text, #ededee)",
+  overflow: "hidden",
+  textOverflow: "ellipsis",
+  whiteSpace: "nowrap",
+};
+
+const titleLinkWrapStyle: CSSProperties = {
+  display: "inline-flex",
+  minWidth: 0,
+  maxWidth: "100%",
+};
+
+const metaStyle: CSSProperties = {
+  fontFamily: "var(--font-mono, ui-monospace, SFMono-Regular, monospace)",
+  fontSize: "var(--font-size-xs, 12px)",
+  color: "var(--color-text-subtle, #7e7e84)",
+  overflow: "hidden",
+  textOverflow: "ellipsis",
+  whiteSpace: "nowrap",
+};
+
+const timeStyle: CSSProperties = {
+  fontFamily: "var(--font-mono, ui-monospace, SFMono-Regular, monospace)",
+  fontSize: "var(--font-size-xs, 12px)",
+  color: "var(--color-text-subtle, #7e7e84)",
+  flexShrink: 0,
+};
+
+const skeletonRowStyle: CSSProperties = {
+  display: "flex",
+  alignItems: "center",
+  justifyContent: "space-between",
+  gap: 8,
+  padding: "8px 10px",
+  borderRadius: "var(--radius-sm, 6px)",
+  border: "1px solid var(--color-border, #232325)",
+  backgroundColor: "var(--color-bg-elevated, #161617)",
+};
+
+function skeletonBar(widthPercent: number): CSSProperties {
+  return {
+    display: "inline-block",
+    width: `${widthPercent}%`,
+    height: 10,
+    borderRadius: 4,
+    background: "var(--color-border, #232325)",
+    opacity: 0.7,
+  };
+}

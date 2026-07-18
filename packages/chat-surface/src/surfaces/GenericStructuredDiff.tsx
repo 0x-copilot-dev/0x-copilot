@@ -40,7 +40,7 @@ const PALETTE = {
   textLo: "#9aa0a6",
   textMute: "#6c7178",
   lime: "var(--color-accent)",
-  limeSoft: "rgba(194, 255, 90, 0.14)",
+  limeSoft: "color-mix(in srgb, var(--color-accent) 14%, transparent)",
   diffOld: "#ef5a5a",
   diffOldBg: "rgba(239, 90, 90, 0.10)",
   diffNew: "#3ddc97",
