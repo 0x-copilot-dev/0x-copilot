@@ -1,11 +1,16 @@
 // @vitest-environment node
+import { isAbsolute, join } from "node:path";
+
 import { describe, expect, it } from "vitest";
 
 import type { BootSecrets } from "./boot-secrets";
 import {
+  aiFileStoreV1Root,
+  AI_FILE_STORE_V1_FLAG,
   buildServiceEnv,
   databaseUrl,
   ENV_PASSTHROUGH_ALLOWLIST,
+  isAiFileStoreV1Enabled,
   migrateDatabaseUrl,
   pythonPathValue,
   UVICORN_MODULES,
@@ -20,6 +25,8 @@ const SECRETS: BootSecrets = {
   auditHmacKey: "audit-hmac-key-value",
 };
 
+const USER_DATA_DIR = "/Users/test/Library/Application Support/0xCopilot";
+
 function inputs(
   processEnv: Record<string, string | undefined> = {},
 ): ServiceEnvInputs {
@@ -30,6 +37,7 @@ function inputs(
     aiBackendPort: 8001,
     facadePort: 8201,
     processEnv,
+    userDataDir: USER_DATA_DIR,
     pathDelimiter: ":",
   };
 }
@@ -134,6 +142,86 @@ describe("buildServiceEnv(ai-backend)", () => {
     // Backend-only settings do not leak.
     expect(env.MCP_TOKEN_VAULT_SECRET).toBeUndefined();
     expect(env.BACKEND_ENVIRONMENT).toBeUndefined();
+    // Default (flag off) uses Postgres — no file store env.
+    expect(env.RUNTIME_FILE_STORE_ROOT).toBeUndefined();
+  });
+});
+
+describe("isAiFileStoreV1Enabled", () => {
+  it("enables only on an explicit truthy value (case/space-tolerant)", () => {
+    for (const raw of ["1", "true", "TRUE", " yes ", "On", "enabled"]) {
+      expect(isAiFileStoreV1Enabled({ [AI_FILE_STORE_V1_FLAG]: raw })).toBe(
+        true,
+      );
+    }
+  });
+
+  it("fails closed for unset/empty/falsey/unrecognized values", () => {
+    expect(isAiFileStoreV1Enabled({})).toBe(false);
+    for (const raw of ["", "0", "false", "off", "nope", "2"]) {
+      expect(isAiFileStoreV1Enabled({ [AI_FILE_STORE_V1_FLAG]: raw })).toBe(
+        false,
+      );
+    }
+  });
+});
+
+describe("aiFileStoreV1Root", () => {
+  it("derives <userData>/agent-data/v1 as an absolute path", () => {
+    const root = aiFileStoreV1Root(USER_DATA_DIR);
+    expect(root).toBe(join(USER_DATA_DIR, "agent-data", "v1"));
+    expect(isAbsolute(root)).toBe(true);
+    expect(root.startsWith(USER_DATA_DIR)).toBe(true);
+  });
+});
+
+describe("buildServiceEnv(ai-backend) with COPILOT_DESKTOP_FILE_STORE_V1", () => {
+  it("selects the file store and sets an absolute root under userData", () => {
+    const env = buildServiceEnv(
+      "ai-backend",
+      inputs({ [AI_FILE_STORE_V1_FLAG]: "1" }),
+    );
+    expect(env.RUNTIME_STORE_BACKEND).toBe("file");
+    expect(env.RUNTIME_FILE_STORE_ROOT).toBe(
+      join(USER_DATA_DIR, "agent-data", "v1"),
+    );
+    expect(isAbsolute(env.RUNTIME_FILE_STORE_ROOT)).toBe(true);
+    expect(env.RUNTIME_FILE_STORE_ROOT.startsWith(USER_DATA_DIR)).toBe(true);
+    // The file store rides the in-process worker; profile is required by the
+    // runtime factory for the file backend.
+    expect(env.RUNTIME_START_IN_PROCESS_WORKER).toBe("true");
+    expect(env.ENTERPRISE_DEPLOYMENT_PROFILE).toBe("single_user_desktop");
+    expect(env.RUNTIME_EVENT_BUS_BACKEND).toBe("in_memory");
+    // Store-agnostic wiring is preserved.
+    expect(env.MCP_BACKEND_REGISTRY_URL).toBe("http://127.0.0.1:8101");
+    expect(env.SKILLS_BACKEND_REGISTRY_URL).toBe("http://127.0.0.1:8101");
+    expect(env.AUDIT_HMAC_KEY).toBe(SECRETS.auditHmacKey);
+    // No Postgres AI-DB env in file mode.
+    expect(env.DATABASE_URL).toBeUndefined();
+    expect(env.RUNTIME_DATABASE_URL).toBeUndefined();
+    expect(env.RUNTIME_MIGRATIONS_AUTO_APPLY).toBeUndefined();
+  });
+
+  it("leaves the backend service on Postgres (flag scopes ai-backend only)", () => {
+    const env = buildServiceEnv(
+      "backend",
+      inputs({ [AI_FILE_STORE_V1_FLAG]: "1" }),
+    );
+    expect(env.DATABASE_URL).toContain("/atlas_backend");
+    expect(env.RUNTIME_FILE_STORE_ROOT).toBeUndefined();
+    expect(env.RUNTIME_STORE_BACKEND).toBeUndefined();
+  });
+
+  it("falls back to Postgres for falsey flag values", () => {
+    for (const raw of ["", "0", "false", "off"]) {
+      const env = buildServiceEnv(
+        "ai-backend",
+        inputs({ [AI_FILE_STORE_V1_FLAG]: raw }),
+      );
+      expect(env.RUNTIME_STORE_BACKEND).toBe("postgres");
+      expect(env.DATABASE_URL).toContain("/atlas_ai");
+      expect(env.RUNTIME_FILE_STORE_ROOT).toBeUndefined();
+    }
   });
 });
 
