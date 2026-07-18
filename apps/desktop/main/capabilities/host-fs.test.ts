@@ -1,9 +1,14 @@
 // @vitest-environment node
 import {
+  existsSync,
+  lstatSync,
   mkdirSync,
   mkdtempSync,
+  readdirSync,
+  readFileSync,
   realpathSync,
   rmSync,
+  statSync,
   symlinkSync,
   writeFileSync,
 } from "node:fs";
@@ -14,7 +19,13 @@ import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 
 import { defaultHostFsDeps, HostFs, type HostFsDeps } from "./host-fs";
-import { FsError } from "./path-validation";
+import { FS_LIMITS, FsError } from "./path-validation";
+
+const bufOf = (s: string): Buffer => Buffer.from(s, "utf-8");
+const readRoot = (rel: string): string =>
+  readFileSync(join(root, rel), "utf-8");
+const tempFilesIn = (dir: string): string[] =>
+  readdirSync(dir).filter((n) => n.startsWith(".captmp-"));
 
 // These tests run against REAL temporary directories and REAL symlinks so the
 // symlink-escape and TOCTOU guards are exercised against the actual kernel,
@@ -308,5 +319,352 @@ describe("HostFs — TOCTOU (swap between resolve and use)", () => {
     expect(Buffer.from(r.base64, "base64").toString("utf-8")).toContain(
       "needle",
     );
+  });
+});
+
+describe("HostFs — happy path writes", () => {
+  it("write creates a new file (created:true) with exact bytes", async () => {
+    const r = await fs.write(root, "created.txt", bufOf("brand new"));
+    expect(r.created).toBe(true);
+    expect(r.bytesWritten).toBe(9);
+    expect(r.path).toBe("created.txt");
+    expect(readRoot("created.txt")).toBe("brand new");
+  });
+
+  it("write overwrites an existing file (same-file replace, created:false)", async () => {
+    const r = await fs.write(root, "file.txt", bufOf("replaced content"));
+    expect(r.created).toBe(false);
+    expect(readRoot("file.txt")).toBe("replaced content");
+  });
+
+  it("write lands a file in a nested existing directory", async () => {
+    const r = await fs.write(root, "sub/new.txt", bufOf("x"));
+    expect(r.created).toBe(true);
+    expect(readRoot("sub/new.txt")).toBe("x");
+  });
+
+  it("write refuses when the target is an existing directory", async () => {
+    expect(await codeOf(fs.write(root, "sub", bufOf("x")))).toBe("not_a_file");
+  });
+
+  it("write fails not_found when the parent directory is missing", async () => {
+    expect(await codeOf(fs.write(root, "nope/leaf.txt", bufOf("x")))).toBe(
+      "not_found",
+    );
+  });
+
+  it("write cannot target the grant root itself", async () => {
+    expect(await codeOf(fs.write(root, "", bufOf("x")))).toBe(
+      "invalid_request",
+    );
+  });
+
+  it("edit replaces an EXISTING file's full contents", async () => {
+    const r = await fs.edit(root, "file.txt", bufOf("edited"));
+    expect(r.bytesWritten).toBe(6);
+    expect(readRoot("file.txt")).toBe("edited");
+  });
+
+  it("edit fails not_found on a missing file and never creates it", async () => {
+    expect(await codeOf(fs.edit(root, "ghost.txt", bufOf("x")))).toBe(
+      "not_found",
+    );
+    expect(existsSync(join(root, "ghost.txt"))).toBe(false);
+  });
+
+  it("edit refuses a directory", async () => {
+    expect(await codeOf(fs.edit(root, "sub", bufOf("x")))).toBe("not_a_file");
+  });
+
+  it("mkdir creates a new directory (created:true)", async () => {
+    const r = await fs.mkdir(root, "fresh");
+    expect(r.created).toBe(true);
+    expect(statSync(join(root, "fresh")).isDirectory()).toBe(true);
+  });
+
+  it("mkdir is idempotent on an existing directory (created:false)", async () => {
+    expect((await fs.mkdir(root, "sub")).created).toBe(false);
+  });
+
+  it("mkdir collides with an existing file (not_a_directory)", async () => {
+    expect(await codeOf(fs.mkdir(root, "file.txt"))).toBe("not_a_directory");
+  });
+
+  it("delete removes a regular file", async () => {
+    expect((await fs.delete(root, "file.txt")).type).toBe("file");
+    expect(existsSync(join(root, "file.txt"))).toBe(false);
+  });
+
+  it("delete removes an empty directory", async () => {
+    await fs.mkdir(root, "empty");
+    expect((await fs.delete(root, "empty")).type).toBe("dir");
+    expect(existsSync(join(root, "empty"))).toBe(false);
+  });
+
+  it("delete refuses a non-empty directory (invalid_request), leaving it intact", async () => {
+    expect(await codeOf(fs.delete(root, "sub"))).toBe("invalid_request");
+    expect(existsSync(join(root, "sub"))).toBe(true);
+  });
+
+  it("delete fails not_found on a missing path", async () => {
+    expect(await codeOf(fs.delete(root, "ghost"))).toBe("not_found");
+  });
+
+  it("move renames a file within the root", async () => {
+    const r = await fs.move(root, "file.txt", "moved.txt");
+    expect(r).toMatchObject({
+      from: "file.txt",
+      to: "moved.txt",
+      type: "file",
+    });
+    expect(existsSync(join(root, "file.txt"))).toBe(false);
+    expect(readRoot("moved.txt")).toContain("hello world");
+  });
+
+  it("move relocates a file into a nested existing directory", async () => {
+    expect((await fs.move(root, "file.txt", "sub/relocated.txt")).type).toBe(
+      "file",
+    );
+    expect(existsSync(join(root, "sub", "relocated.txt"))).toBe(true);
+  });
+
+  it("move renames a directory", async () => {
+    expect((await fs.move(root, "sub", "sub-renamed")).type).toBe("dir");
+    expect(existsSync(join(root, "sub-renamed", "nested.txt"))).toBe(true);
+  });
+
+  it("move fails not_found on a missing source", async () => {
+    expect(await codeOf(fs.move(root, "ghost.txt", "dest.txt"))).toBe(
+      "not_found",
+    );
+  });
+});
+
+describe("HostFs — adversarial write rejection", () => {
+  it("write rejects .. traversal before touching disk", async () => {
+    expect(await codeOf(fs.write(root, "../outside/x.txt", bufOf("x")))).toBe(
+      "invalid_path",
+    );
+    expect(existsSync(join(outside, "x.txt"))).toBe(false);
+  });
+
+  it("write rejects an absolute path", async () => {
+    expect(await codeOf(fs.write(root, "/tmp/evil.txt", bufOf("x")))).toBe(
+      "invalid_path",
+    );
+  });
+
+  it("write rejects a reserved device name and an ADS segment", async () => {
+    expect(await codeOf(fs.write(root, "NUL", bufOf("x")))).toBe(
+      "invalid_path",
+    );
+    expect(await codeOf(fs.write(root, "a.txt:stream", bufOf("x")))).toBe(
+      "invalid_path",
+    );
+  });
+
+  it("write THROUGH a parent symlink that escapes the root is denied", async () => {
+    symlinkSync(outside, join(root, "escape"));
+    expect(await codeOf(fs.write(root, "escape/pwn.txt", bufOf("x")))).toBe(
+      "permission_denied",
+    );
+    // The escape target directory got no new file.
+    expect(existsSync(join(outside, "pwn.txt"))).toBe(false);
+  });
+
+  it("write REFUSES to overwrite a symlink leaf (never follows it out)", async () => {
+    symlinkSync(join(outside, "secret.txt"), join(root, "link.txt"));
+    expect(await codeOf(fs.write(root, "link.txt", bufOf("x")))).toBe(
+      "permission_denied",
+    );
+    // The out-of-root secret behind the link is untouched.
+    expect(readFileSync(join(outside, "secret.txt"), "utf-8")).toBe(
+      "TOP SECRET DATA",
+    );
+  });
+
+  it("delete THROUGH an escaping symlink parent is denied (secret survives)", async () => {
+    symlinkSync(outside, join(root, "escape"));
+    expect(await codeOf(fs.delete(root, "escape/secret.txt"))).toBe(
+      "permission_denied",
+    );
+    expect(existsSync(join(outside, "secret.txt"))).toBe(true);
+  });
+
+  it("delete REFUSES a symlink leaf (removes neither the link's target nor escapes)", async () => {
+    symlinkSync(join(outside, "secret.txt"), join(root, "link.txt"));
+    expect(await codeOf(fs.delete(root, "link.txt"))).toBe("permission_denied");
+    expect(existsSync(join(outside, "secret.txt"))).toBe(true);
+  });
+
+  it("move cannot relocate a file OUT of the root via a symlink dest parent", async () => {
+    symlinkSync(outside, join(root, "escape"));
+    expect(await codeOf(fs.move(root, "file.txt", "escape/stolen.txt"))).toBe(
+      "permission_denied",
+    );
+    expect(existsSync(join(root, "file.txt"))).toBe(true);
+    expect(existsSync(join(outside, "stolen.txt"))).toBe(false);
+  });
+
+  it("write refuses content over the write byte ceiling (too_large)", async () => {
+    const tooBig = Buffer.alloc(FS_LIMITS.maxWriteBytes + 1);
+    expect(await codeOf(fs.write(root, "big.bin", tooBig))).toBe("too_large");
+    expect(existsSync(join(root, "big.bin"))).toBe(false);
+  });
+});
+
+describe("HostFs — sensitive-file write policy (G2)", () => {
+  it("write denies creating a .env file", async () => {
+    expect(await codeOf(fs.write(root, ".env", bufOf("SECRET=1")))).toBe(
+      "permission_denied",
+    );
+    expect(existsSync(join(root, ".env"))).toBe(false);
+  });
+
+  it("write denies a *.pem key file and id_rsa (at any depth)", async () => {
+    expect(await codeOf(fs.write(root, "server.pem", bufOf("k")))).toBe(
+      "permission_denied",
+    );
+    expect(await codeOf(fs.write(root, "sub/id_rsa", bufOf("k")))).toBe(
+      "permission_denied",
+    );
+  });
+
+  it("edit denies overwriting an existing credentials file (contents preserved)", async () => {
+    writeFileSync(join(root, "credentials"), "old");
+    expect(await codeOf(fs.edit(root, "credentials", bufOf("new")))).toBe(
+      "permission_denied",
+    );
+    expect(readRoot("credentials")).toBe("old");
+  });
+
+  it("delete denies removing a secret (.env survives)", async () => {
+    writeFileSync(join(root, ".env"), "SECRET=1");
+    expect(await codeOf(fs.delete(root, ".env"))).toBe("permission_denied");
+    expect(existsSync(join(root, ".env"))).toBe(true);
+  });
+
+  it("move denies relocating a secret file AND landing on a secret name", async () => {
+    writeFileSync(join(root, "id_rsa"), "KEY");
+    expect(await codeOf(fs.move(root, "id_rsa", "moved_key"))).toBe(
+      "permission_denied",
+    );
+    expect(existsSync(join(root, "id_rsa"))).toBe(true);
+    expect(await codeOf(fs.move(root, "file.txt", ".env"))).toBe(
+      "permission_denied",
+    );
+    expect(existsSync(join(root, "file.txt"))).toBe(true);
+    expect(existsSync(join(root, ".env"))).toBe(false);
+  });
+
+  it("still writes an ordinary file (policy does not over-block)", async () => {
+    const r = await fs.write(root, "notes.md", bufOf("plain"));
+    expect(r.created).toBe(true);
+  });
+});
+
+describe("HostFs — atomic write (all-or-nothing, no partial file)", () => {
+  it("a failure before the commit rename leaves the target unchanged + no temp", async () => {
+    const before = readRoot("file.txt");
+    const deps: HostFsDeps = {
+      ...defaultHostFsDeps(),
+      beforeCommit: async () => {
+        throw new Error("simulated crash before rename");
+      },
+    };
+    await expect(
+      new HostFs(deps).write(root, "file.txt", bufOf("SHOULD NOT LAND")),
+    ).rejects.toThrow(/simulated crash/u);
+    // Original bytes intact — the rename never ran.
+    expect(readRoot("file.txt")).toBe(before);
+    // No orphaned temp file left behind.
+    expect(tempFilesIn(root)).toEqual([]);
+  });
+
+  it("a failed CREATE leaves no target file and no temp", async () => {
+    const deps: HostFsDeps = {
+      ...defaultHostFsDeps(),
+      beforeCommit: async () => {
+        throw new Error("boom");
+      },
+    };
+    await expect(
+      new HostFs(deps).write(root, "newfile.txt", bufOf("x")),
+    ).rejects.toThrow(/boom/u);
+    expect(existsSync(join(root, "newfile.txt"))).toBe(false);
+    expect(tempFilesIn(root)).toEqual([]);
+  });
+
+  it("a successful write commits via a single rename (temp cleaned up)", async () => {
+    await fs.write(root, "committed.txt", bufOf("done"));
+    expect(readRoot("committed.txt")).toBe("done");
+    expect(tempFilesIn(root)).toEqual([]);
+  });
+});
+
+describe("HostFs — write TOCTOU (ancestor swap between resolve and use)", () => {
+  // Swap an INTERMEDIATE ancestor (`sub`) of the resolved parent for a symlink
+  // pointing OUTSIDE the root, AFTER resolve/authorize but BEFORE the atomic
+  // parent-pin open. A decoy `outside/deep` exists so the escaped path is
+  // openable — forcing the post-open recheck (not just an ENOENT) to be what
+  // denies, exactly as in the read-side TOCTOU tests. The write target is
+  // `sub/deep/planted.txt`, so `sub` is the parent's parent.
+  function swapSubToOutsideSymlink(): () => Promise<void> {
+    let fired = false;
+    return async () => {
+      if (fired) return;
+      fired = true;
+      await rm(join(root, "sub"), { recursive: true, force: true });
+      await symlink(outside, join(root, "sub"));
+    };
+  }
+
+  beforeEach(() => {
+    // Decoy so the swapped path root/sub/deep resolves to a real outside dir.
+    mkdirSync(join(outside, "deep"), { recursive: true });
+  });
+
+  it("darwin O_NOFOLLOW_ANY: a mid-flight ancestor swap is denied; nothing lands outside", async () => {
+    if (process.platform !== "darwin") return;
+    const deps: HostFsDeps = {
+      ...defaultHostFsDeps(),
+      afterResolve: swapSubToOutsideSymlink(),
+    };
+    expect(
+      await codeOf(
+        new HostFs(deps).write(root, "sub/deep/planted.txt", bufOf("x")),
+      ),
+    ).toBe("permission_denied");
+    expect(existsSync(join(outside, "deep", "planted.txt"))).toBe(false);
+  });
+
+  it("non-darwin fallback: the post-open realpath recheck denies the swapped ancestor", async () => {
+    // Force the O_NOFOLLOW-only (non-atomic) path even on macOS, proving the
+    // recheck — not the darwin flag — catches an intermediate-ancestor swap.
+    const deps: HostFsDeps = {
+      ...defaultHostFsDeps(),
+      platform: "linux",
+      afterResolve: swapSubToOutsideSymlink(),
+    };
+    expect(
+      await codeOf(
+        new HostFs(deps).write(root, "sub/deep/planted.txt", bufOf("x")),
+      ),
+    ).toBe("permission_denied");
+    expect(existsSync(join(outside, "deep", "planted.txt"))).toBe(false);
+  });
+
+  it("a legitimate write still succeeds when the seam does NOT swap", async () => {
+    const deps: HostFsDeps = {
+      ...defaultHostFsDeps(),
+      afterResolve: async () => {
+        /* no swap */
+      },
+    };
+    const r = await new HostFs(deps).write(root, "sub/ok.txt", bufOf("fine"));
+    expect(r.created).toBe(true);
+    expect(readRoot("sub/ok.txt")).toBe("fine");
+    // `lstatSync` proves it is a real regular file, not a symlink we followed.
+    expect(lstatSync(join(root, "sub", "ok.txt")).isFile()).toBe(true);
   });
 });

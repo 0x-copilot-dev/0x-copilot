@@ -1,9 +1,14 @@
+import { randomBytes as nodeRandomBytes } from "node:crypto";
 import { constants, type Dir, type Dirent, type Stats } from "node:fs";
 import {
   lstat as fsLstat,
+  mkdir as fsMkdir,
   open as fsOpen,
   opendir as fsOpendir,
   realpath as fsRealpath,
+  rename as fsRename,
+  rmdir as fsRmdir,
+  unlink as fsUnlink,
   type FileHandle,
 } from "node:fs/promises";
 import { basename, join } from "node:path";
@@ -16,21 +21,42 @@ import {
   normalizeVirtualPath,
 } from "./path-validation";
 import type {
+  HostDeleteResult,
   HostDirEntry,
+  HostEditResult,
   HostGlobResult,
   HostGrepHit,
   HostGrepResult,
   HostListResult,
+  HostMkdirResult,
+  HostMoveResult,
   HostReadResult,
   HostStatResult,
+  HostWriteResult,
 } from "./types";
 
-// Filesystem READ operations for the capability broker (AC5 slice 2). Every
-// method takes a grant's canonical `root` (resolved by the broker from the
-// grant store — the renderer never supplies it) plus an untrusted *virtual*
-// path or pattern, and refuses to touch anything that does not resolve to a
-// location strictly inside that root. NO write/mkdir/delete/move — those are
-// slice 3.
+// Filesystem READ + WRITE operations for the capability broker (AC5 slices 2 &
+// 3). Every method takes a grant's canonical `root` (resolved by the broker
+// from the grant store — the renderer never supplies it) plus an untrusted
+// *virtual* path or pattern, and refuses to touch anything that does not
+// resolve to a location strictly inside that root.
+//
+// The WRITE surface (slice 3) — write / edit / mkdir / delete / move — reuses
+// the SAME resolve-before-authorize + atomic-open pipeline as the reads:
+//   - For a mutation of an EXISTING leaf (edit / delete / move-source), the
+//     leaf is resolved and authorized exactly like a read target.
+//   - For CREATING a new leaf (write / mkdir / move-dest), the PARENT directory
+//     is resolved + authorized in-root and atomically pinned (`#openAtomic`),
+//     then the leaf name — already proven to be a single safe segment by
+//     `normalizeVirtualPath` — is created under it.
+//   - File replacements are ATOMIC: content is written to a temp file in the
+//     SAME directory, fsync'd, then `rename`d over the target, so a write is
+//     all-or-nothing and a crash never leaves a partial file.
+//   - `SENSITIVE_FILE_RULES` apply to writes too: the agent may not create,
+//     overwrite, delete, or move a well-known secret file (.pem / id_rsa /
+//     .env / credentials …) inside a grant.
+// Grant-MODE gating (write ⇒ read_write_no_delete; delete/move ⇒ read_write)
+// is enforced BEFORE HostFs is reached, by the broker.
 //
 // PATH VALIDATION ALGORITHM (applied on every op, order is load-bearing):
 //   1. Syntactic normalize (`normalizeVirtualPath`) — reject NUL, control
@@ -64,8 +90,13 @@ const O_NOFOLLOW_ANY = 0x20000000;
 export interface HostFsDeps {
   realpath(path: string): Promise<string>;
   lstat(path: string): Promise<Stats>;
-  open(path: string, flags: number): Promise<FileHandle>;
+  open(path: string, flags: number, mode?: number): Promise<FileHandle>;
   opendir(path: string): Promise<Dir>;
+  mkdir(path: string): Promise<void>;
+  rename(oldPath: string, newPath: string): Promise<void>;
+  unlink(path: string): Promise<void>;
+  rmdir(path: string): Promise<void>;
+  randomBytes(size: number): Buffer;
   now(): number;
   platform: NodeJS.Platform;
   /**
@@ -76,14 +107,29 @@ export interface HostFsDeps {
    * production — `defaultHostFsDeps()` leaves it undefined.
    */
   afterResolve?: (realTargetPath: string) => Promise<void>;
+  /**
+   * TEST-ONLY seam. Invoked in `#atomicReplace` AFTER the temp file is fully
+   * written + fsync'd but immediately BEFORE the `rename` that commits it. A
+   * test can throw here to simulate a mid-write failure and prove the target is
+   * left untouched and the temp file is cleaned up (no partial write). NEVER
+   * set in production.
+   */
+  beforeCommit?: (tempPath: string) => Promise<void>;
 }
 
 export function defaultHostFsDeps(): HostFsDeps {
   return {
     realpath: (p) => fsRealpath(p),
     lstat: (p) => fsLstat(p),
-    open: (p, flags) => fsOpen(p, flags),
+    open: (p, flags, mode) => fsOpen(p, flags, mode),
     opendir: (p) => fsOpendir(p),
+    mkdir: async (p) => {
+      await fsMkdir(p);
+    },
+    rename: (o, n) => fsRename(o, n),
+    unlink: (p) => fsUnlink(p),
+    rmdir: (p) => fsRmdir(p),
+    randomBytes: (n) => nodeRandomBytes(n),
     now: () => Date.now(),
     platform: process.platform,
   };
@@ -95,6 +141,22 @@ interface ResolvedTarget {
   readonly relPosix: string;
   readonly isDir: boolean;
   readonly isFile: boolean;
+}
+
+/**
+ * A write target decomposed into its (resolved, in-root, atomically-pinned)
+ * PARENT directory plus a single safe `leaf` name. Used by the create-capable
+ * write ops (write / mkdir / move-dest) where the leaf may not exist yet, so
+ * the parent — not the leaf — is what we resolve and authorize.
+ */
+interface ResolvedParent {
+  readonly rootReal: string;
+  /** realpath'd, in-root, symlink-free parent directory. */
+  readonly parentReal: string;
+  /** The final path segment (a single, validated, non-traversing name). */
+  readonly leaf: string;
+  /** Virtual (root-relative, POSIX) path of the leaf. */
+  readonly relPosix: string;
 }
 
 export interface ReadOptions {
@@ -350,6 +412,176 @@ export class HostFs {
     return { hits, truncated, filesScanned };
   }
 
+  // --- WRITE ops (slice 3) ---
+
+  /**
+   * Create or overwrite a regular file under the grant root with `content`
+   * (atomic: temp-in-same-dir → fsync → rename). Overwriting an existing file
+   * is a same-logical-file replacement. Refuses to write a well-known secret
+   * file, to clobber a directory, or to overwrite a symlink.
+   */
+  async write(
+    root: string,
+    virtualPath: string,
+    content: Buffer,
+  ): Promise<HostWriteResult> {
+    this.#assertWriteSize(content);
+    const parent = await this.#resolveParent(root, virtualPath);
+    this.#assertNotSensitiveLeaf(parent.leaf);
+    const targetPath = join(parent.parentReal, parent.leaf);
+
+    const existing = await this.#lstatLeaf(targetPath);
+    if (existing !== null) {
+      if (existing.isSymbolicLink()) {
+        throw new FsError("permission_denied", "target is a symlink");
+      }
+      if (existing.isDirectory()) {
+        throw new FsError("not_a_file", "target is a directory");
+      }
+      if (!existing.isFile()) {
+        throw new FsError("permission_denied", "unsupported target type");
+      }
+    }
+    await this.#atomicReplace(parent.parentReal, parent.leaf, content);
+    return {
+      path: parent.relPosix,
+      bytesWritten: content.length,
+      created: existing === null,
+    };
+  }
+
+  /**
+   * Atomically replace the FULL contents of an EXISTING regular file. Unlike
+   * `write`, `edit` fails `not_found` when the target does not exist — it never
+   * creates. Same secret-file / symlink / directory refusals.
+   */
+  async edit(
+    root: string,
+    virtualPath: string,
+    content: Buffer,
+  ): Promise<HostEditResult> {
+    this.#assertWriteSize(content);
+    const parent = await this.#resolveParent(root, virtualPath);
+    this.#assertNotSensitiveLeaf(parent.leaf);
+    const targetPath = join(parent.parentReal, parent.leaf);
+
+    const existing = await this.#lstatLeaf(targetPath);
+    if (existing === null) {
+      throw new FsError("not_found", "path does not exist");
+    }
+    if (existing.isSymbolicLink()) {
+      throw new FsError("permission_denied", "target is a symlink");
+    }
+    if (!existing.isFile()) {
+      throw new FsError("not_a_file", "target is not a regular file");
+    }
+    await this.#atomicReplace(parent.parentReal, parent.leaf, content);
+    return { path: parent.relPosix, bytesWritten: content.length };
+  }
+
+  /**
+   * Create a single directory whose PARENT already exists under the grant root
+   * (non-recursive — deeper trees are built one level at a time). Idempotent:
+   * an existing directory returns `created:false`; an existing file collides
+   * with `not_a_directory`.
+   */
+  async mkdir(root: string, virtualPath: string): Promise<HostMkdirResult> {
+    const parent = await this.#resolveParent(root, virtualPath);
+    const targetPath = join(parent.parentReal, parent.leaf);
+
+    const existing = await this.#lstatLeaf(targetPath);
+    if (existing !== null) {
+      if (existing.isDirectory() && !existing.isSymbolicLink()) {
+        return { path: parent.relPosix, created: false };
+      }
+      throw new FsError(
+        "not_a_directory",
+        "path exists and is not a directory",
+      );
+    }
+    try {
+      await this.#deps.mkdir(targetPath);
+    } catch (err) {
+      throw mapFsSyscallError(err);
+    }
+    return { path: parent.relPosix, created: true };
+  }
+
+  /**
+   * Delete a regular file (unlink) or an EMPTY directory (rmdir) under the
+   * grant root. Refuses a symlink (never manipulates link entries) and a
+   * well-known secret file. A non-empty directory fails `invalid_request`.
+   */
+  async delete(root: string, virtualPath: string): Promise<HostDeleteResult> {
+    const parent = await this.#resolveParent(root, virtualPath);
+    this.#assertNotSensitiveLeaf(parent.leaf);
+    const targetPath = join(parent.parentReal, parent.leaf);
+
+    const existing = await this.#lstatLeaf(targetPath);
+    if (existing === null) {
+      throw new FsError("not_found", "path does not exist");
+    }
+    if (existing.isSymbolicLink()) {
+      throw new FsError("permission_denied", "target is a symlink");
+    }
+    if (existing.isDirectory()) {
+      try {
+        await this.#deps.rmdir(targetPath);
+      } catch (err) {
+        throw mapFsSyscallError(err);
+      }
+      return { path: parent.relPosix, type: "dir" };
+    }
+    if (existing.isFile()) {
+      try {
+        await this.#deps.unlink(targetPath);
+      } catch (err) {
+        throw mapFsSyscallError(err);
+      }
+      return { path: parent.relPosix, type: "file" };
+    }
+    throw new FsError("permission_denied", "unsupported target type");
+  }
+
+  /**
+   * Move/rename an existing file or directory to a new location, BOTH inside
+   * the same grant root. Refuses to move a symlink, to move a secret file, or
+   * to land on a secret filename. `rename` replaces an existing destination
+   * file — which removes the source — hence this op requires `read_write`
+   * (delete authority); the broker gates the mode before we run.
+   */
+  async move(
+    root: string,
+    fromVirtual: string,
+    toVirtual: string,
+  ): Promise<HostMoveResult> {
+    const src = await this.#resolveParent(root, fromVirtual);
+    this.#assertNotSensitiveLeaf(src.leaf);
+    const dst = await this.#resolveParent(root, toVirtual);
+    this.#assertNotSensitiveLeaf(dst.leaf);
+
+    const srcPath = join(src.parentReal, src.leaf);
+    const dstPath = join(dst.parentReal, dst.leaf);
+
+    const existing = await this.#lstatLeaf(srcPath);
+    if (existing === null) {
+      throw new FsError("not_found", "source does not exist");
+    }
+    if (existing.isSymbolicLink()) {
+      throw new FsError("permission_denied", "source is a symlink");
+    }
+    const type: "file" | "dir" = existing.isDirectory() ? "dir" : "file";
+    if (type === "file" && !existing.isFile()) {
+      throw new FsError("permission_denied", "unsupported source type");
+    }
+    try {
+      await this.#deps.rename(srcPath, dstPath);
+    } catch (err) {
+      throw mapFsSyscallError(err);
+    }
+    return { from: src.relPosix, to: dst.relPosix, type };
+  }
+
   // --- internals ---
 
   /**
@@ -530,6 +762,187 @@ export class HostFs {
       throw err;
     }
   }
+
+  // --- WRITE internals ---
+
+  /**
+   * WRITE analogue of `#resolve`: split the virtual path into a PARENT path and
+   * a `leaf` name, resolve-and-authorize the parent inside the root, and pin it
+   * with the SAME atomic open the reads use (so a mid-flight swap of an ancestor
+   * to a symlink is caught — atomically on darwin, by the post-open recheck
+   * elsewhere). The leaf itself is not resolved (it may not exist yet), but it
+   * was already proven a single non-traversing segment by `normalizeVirtualPath`.
+   */
+  async #resolveParent(
+    root: string,
+    virtualPath: string,
+  ): Promise<ResolvedParent> {
+    const segments = normalizeVirtualPath(virtualPath);
+    if (segments.length === 0) {
+      // The grant root itself is never a write TARGET (no leaf to create,
+      // modify, or delete).
+      throw new FsError(
+        "invalid_request",
+        "path must name a file or directory",
+      );
+    }
+    const leaf = segments[segments.length - 1];
+    const parentSegments = segments.slice(0, -1);
+
+    const rootReal = await this.#deps.realpath(root);
+    const parentCandidate =
+      parentSegments.length === 0
+        ? rootReal
+        : join(rootReal, ...parentSegments);
+
+    let parentReal: string;
+    try {
+      parentReal = await this.#deps.realpath(parentCandidate);
+    } catch (err) {
+      if (errCode(err) === "ENOENT" || errCode(err) === "ENOTDIR") {
+        throw new FsError("not_found", "parent directory does not exist");
+      }
+      throw new FsError("permission_denied", "path could not be resolved");
+    }
+
+    assertWithinRoot(rootReal, parentReal);
+
+    const pre = await this.#deps.lstat(parentReal);
+    if (pre.isSymbolicLink()) {
+      throw new FsError("permission_denied", "parent is a symlink");
+    }
+    if (!pre.isDirectory()) {
+      throw new FsError("not_a_directory", "parent is not a directory");
+    }
+
+    // Atomically pin the parent (fires the `afterResolve` TOCTOU seam) so a
+    // swap of the parent (or, on darwin, any ancestor) to a symlink between
+    // resolve and use is denied rather than followed.
+    const { fh } = await this.#openAtomic(
+      {
+        rootReal,
+        targetReal: parentReal,
+        relPosix: parentSegments.join("/"),
+        isDir: true,
+        isFile: false,
+      },
+      true,
+    );
+    await closeQuietly(fh);
+
+    return { rootReal, parentReal, leaf, relPosix: segments.join("/") };
+  }
+
+  /** lstat a leaf by path (no realpath — we must see a symlink AS a symlink),
+   *  returning null on ENOENT and mapping other errors to `FsError`. */
+  async #lstatLeaf(targetPath: string): Promise<Stats | null> {
+    try {
+      return await this.#deps.lstat(targetPath);
+    } catch (err) {
+      const code = errCode(err);
+      if (code === "ENOENT" || code === "ENOTDIR") return null;
+      throw mapFsSyscallError(err);
+    }
+  }
+
+  /**
+   * Write `content` all-or-nothing: create a fresh temp file in the SAME
+   * directory (O_EXCL + a symlink-refusing flag so we never follow a planted
+   * link), write every byte, `fsync` it, then `rename` it over the target — an
+   * atomic swap on any POSIX filesystem. On ANY failure before the rename
+   * commits, the temp file is unlinked, so the target keeps its old bytes and
+   * no partial file is ever left behind.
+   */
+  async #atomicReplace(
+    parentReal: string,
+    leaf: string,
+    content: Buffer,
+  ): Promise<void> {
+    const suffix = this.#deps.randomBytes(9).toString("base64url");
+    const tempPath = join(parentReal, `.captmp-${suffix}`);
+    const targetPath = join(parentReal, leaf);
+
+    let committed = false;
+    try {
+      let fh: FileHandle;
+      try {
+        fh = await this.#deps.open(
+          tempPath,
+          openWriteFlags(this.#deps.platform),
+          0o600,
+        );
+      } catch (err) {
+        throw mapFsSyscallError(err);
+      }
+      try {
+        let written = 0;
+        while (written < content.length) {
+          const { bytesWritten } = await fh.write(
+            content,
+            written,
+            content.length - written,
+          );
+          if (bytesWritten === 0) break;
+          written += bytesWritten;
+        }
+        await fh.sync();
+      } finally {
+        await closeQuietly(fh);
+      }
+
+      // TEST-ONLY: simulate a crash after the temp is durable but before the
+      // commit rename. Must leave the target untouched + clean up the temp.
+      if (this.#deps.beforeCommit !== undefined) {
+        await this.#deps.beforeCommit(tempPath);
+      }
+
+      try {
+        await this.#deps.rename(tempPath, targetPath);
+      } catch (err) {
+        throw mapFsSyscallError(err);
+      }
+      committed = true;
+    } finally {
+      if (!committed) {
+        // Best-effort cleanup of the orphaned temp — never masks the real error.
+        await this.#deps.unlink(tempPath).catch(() => {});
+      }
+    }
+
+    // Best-effort durability of the rename itself. Directory fsync is a no-op /
+    // unsupported on some platforms (e.g. Windows) — swallow those.
+    await this.#fsyncDir(parentReal);
+  }
+
+  async #fsyncDir(dirReal: string): Promise<void> {
+    let fh: FileHandle;
+    try {
+      fh = await this.#deps.open(dirReal, constants.O_RDONLY | dirFlag());
+    } catch {
+      return;
+    }
+    try {
+      await fh.sync();
+    } catch {
+      /* directory fsync unsupported on this platform — ignore */
+    } finally {
+      await closeQuietly(fh);
+    }
+  }
+
+  #assertWriteSize(content: Buffer): void {
+    if (content.length > FS_LIMITS.maxWriteBytes) {
+      throw new FsError("too_large", "content exceeds the write byte ceiling");
+    }
+  }
+
+  #assertNotSensitiveLeaf(leaf: string): void {
+    // G2 for writes: never create / overwrite / delete / move a well-known
+    // secret file inside a grant, regardless of mode.
+    if (isSensitiveFileName(leaf)) {
+      throw new FsError("permission_denied", "sensitive file is not writable");
+    }
+  }
 }
 
 function openReadFlags(
@@ -546,6 +959,65 @@ function openReadFlags(
     flags |= constants.O_NOFOLLOW;
   }
   return flags;
+}
+
+/**
+ * Flags for creating the atomic-write TEMP file. `O_CREAT | O_EXCL` guarantees
+ * we create a brand-new file (the random name never collides), so we can never
+ * be tricked into writing THROUGH a pre-planted symlink at the temp path. The
+ * per-platform symlink guard mirrors the read path: `O_NOFOLLOW_ANY` (darwin)
+ * refuses a symlink in ANY component atomically; `O_NOFOLLOW` (else) closes the
+ * final-component race.
+ */
+function openWriteFlags(platform: NodeJS.Platform): number {
+  let flags = constants.O_WRONLY | constants.O_CREAT | constants.O_EXCL;
+  if (platform === "darwin") {
+    flags |= O_NOFOLLOW_ANY;
+  } else {
+    flags |= constants.O_NOFOLLOW;
+  }
+  return flags;
+}
+
+// O_DIRECTORY is undefined on some platforms (Windows) — fall back to 0.
+function dirFlag(): number {
+  return typeof constants.O_DIRECTORY === "number" ? constants.O_DIRECTORY : 0;
+}
+
+/**
+ * Map a write-path syscall error (`mkdir` / `rename` / `unlink` / `rmdir` /
+ * temp `open`) to a stable `FsError`. Like `mapOpenError`, the message never
+ * carries a host path — only the machine code the broker maps to a status.
+ */
+function mapFsSyscallError(err: unknown): FsError {
+  const code = errCode(err);
+  switch (code) {
+    case "ELOOP":
+    case "EMLINK":
+      return new FsError("permission_denied", "symlink in resolved path");
+    case "ENOENT":
+      return new FsError("not_found", "path does not exist");
+    case "ENOTDIR":
+      return new FsError(
+        "not_a_directory",
+        "a path component is not a directory",
+      );
+    case "EISDIR":
+      return new FsError("not_a_file", "target is a directory");
+    case "ENOTEMPTY":
+    case "EEXIST":
+      return new FsError(
+        "invalid_request",
+        "directory not empty or path exists",
+      );
+    case "EXDEV":
+      return new FsError("invalid_request", "cross-device move not supported");
+    case "EACCES":
+    case "EPERM":
+      return new FsError("permission_denied", "access denied by OS");
+    default:
+      return new FsError("permission_denied", "filesystem operation failed");
+  }
 }
 
 function mapOpenError(err: unknown, asDirectory: boolean): FsError {
