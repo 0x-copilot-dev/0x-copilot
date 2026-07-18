@@ -4,6 +4,7 @@ import {
   render,
   screen,
   waitFor,
+  within,
 } from "@testing-library/react";
 import {
   afterEach,
@@ -17,19 +18,24 @@ import {
 
 import type {
   Project,
+  ProjectActivity,
   ProjectId,
   ProjectListResponse,
+  ProjectMembership,
   ProjectStreamEnvelope,
   ProjectSummary,
   TenantId,
   UserId,
 } from "../../api/_projects-stub";
+import type { ConversationId } from "@0x-copilot/api-types";
 
 // Mock the projectsApi module so the tests don't have to drive the real
 // fetch / SSE plumbing — that surface is covered in `projectsApi.test.ts`.
 const projectsApiMocks = vi.hoisted(() => ({
   fetchProjects: vi.fn(),
   fetchProject: vi.fn(),
+  fetchProjectMembers: vi.fn(),
+  fetchProjectActivity: vi.fn(),
   activateProject: vi.fn(),
   archiveProject: vi.fn(),
   deleteProject: vi.fn(),
@@ -45,6 +51,8 @@ vi.mock("../../api/projectsApi", async () => {
     ...actual,
     fetchProjects: projectsApiMocks.fetchProjects,
     fetchProject: projectsApiMocks.fetchProject,
+    fetchProjectMembers: projectsApiMocks.fetchProjectMembers,
+    fetchProjectActivity: projectsApiMocks.fetchProjectActivity,
     activateProject: projectsApiMocks.activateProject,
     archiveProject: projectsApiMocks.archiveProject,
     deleteProject: projectsApiMocks.deleteProject,
@@ -118,6 +126,45 @@ function fullProject(overrides: Partial<Project> = {}): Project {
 function listResponse(
   items: ReadonlyArray<ProjectSummary>,
 ): ProjectListResponse {
+  return { items, next_cursor: null };
+}
+
+function membership(
+  overrides: Partial<ProjectMembership> = {},
+): ProjectMembership {
+  return {
+    project_id: "project_1" as ProjectId,
+    user_id: "user_test" as UserId,
+    role: "owner",
+    added_at: "2026-05-01T00:00:00Z",
+    added_by: "user_test" as UserId,
+    ...overrides,
+  };
+}
+
+function activityRow(
+  overrides: Partial<ProjectActivity> = {},
+): ProjectActivity {
+  return {
+    id: "act_1",
+    tenant_id: "tenant_1" as TenantId,
+    project_id: "project_1" as ProjectId,
+    actor_user_id: "user_test" as UserId,
+    actor_display_name: "Sarah",
+    action: "created a chat",
+    kind: "chat",
+    ref: { kind: "chat", id: "conv_1" as ConversationId },
+    preview: "Q3 kickoff",
+    occurred_at: "2026-05-18T09:00:00Z",
+    ...overrides,
+  };
+}
+
+function membersResponse(items: ReadonlyArray<ProjectMembership>) {
+  return { items, next_cursor: null };
+}
+
+function activityResponse(items: ReadonlyArray<ProjectActivity>) {
   return { items, next_cursor: null };
 }
 
@@ -714,5 +761,144 @@ describe("ProjectsRoute mutations", () => {
     ).toContain("archive_forbidden");
     // The list itself is still rendered — the user can retry.
     expect(screen.getByTestId("projects-route-row")).toBeInTheDocument();
+  });
+});
+
+// ===========================================================================
+// DETAIL BINDER — mount ProjectDetailView via the renderDetail slot
+// (FR-4.11/4.12/4.13)
+// ===========================================================================
+
+describe("ProjectsRoute detail pane", () => {
+  beforeEach(() => {
+    projectsApiMocks.fetchProjects.mockReset();
+    projectsApiMocks.fetchProject.mockReset();
+    projectsApiMocks.fetchProjectMembers.mockReset();
+    projectsApiMocks.fetchProjectActivity.mockReset();
+    projectsApiMocks.streamProjectEvents.mockReset();
+    projectsApiMocks.streamProjectEvents.mockReturnValue({ close: vi.fn() });
+    // Sensible detail defaults; individual tests override as needed.
+    projectsApiMocks.fetchProject.mockResolvedValue(fullProject());
+    projectsApiMocks.fetchProjectMembers.mockResolvedValue(
+      membersResponse([membership()]),
+    );
+    projectsApiMocks.fetchProjectActivity.mockResolvedValue(
+      activityResponse([]),
+    );
+  });
+  afterEach(() => {
+    vi.clearAllMocks();
+  });
+
+  /** Render the list and click a row's Open button to focus the detail. */
+  async function renderAndOpen(
+    props: { onOpenRun?: (id: ConversationId) => void } = {},
+  ): Promise<void> {
+    render(<ProjectsRoute identity={IDENTITY} {...props} />);
+    await waitFor(() => {
+      expect(screen.getByTestId("projects-route-open")).toBeInTheDocument();
+    });
+    fireEvent.click(screen.getByTestId("projects-route-open"));
+  }
+
+  it("opens the detail pane via a row's Open button and mounts ProjectDetailView (FR-4.11)", async () => {
+    projectsApiMocks.fetchProjects.mockResolvedValueOnce(
+      listResponse([summary({ name: "Q3 launch" })]),
+    );
+
+    await renderAndOpen();
+
+    // The detail renders inside the destination's own renderDetail slot.
+    const slot = await screen.findByTestId("projects-detail-slot");
+    await waitFor(() => {
+      expect(within(slot).getByTestId("project-detail-view")).toBeInTheDocument();
+    });
+    expect(screen.getByTestId("project-detail-name").textContent).toBe(
+      "Q3 launch",
+    );
+    expect(projectsApiMocks.fetchProject).toHaveBeenCalledWith(
+      IDENTITY,
+      "project_1",
+    );
+    // Focus is reflected on the route wrapper.
+    expect(screen.getByTestId("projects-route")).toHaveAttribute(
+      "data-focused-project-id",
+      "project_1",
+    );
+
+    // Back returns to the list.
+    fireEvent.click(screen.getByTestId("projects-detail-back"));
+    await waitFor(() => {
+      expect(screen.getByTestId("projects-route-list")).toBeInTheDocument();
+    });
+  });
+
+  it("degrades the Files tab to the coming-soon empty state — files omitted (FR-4.11)", async () => {
+    projectsApiMocks.fetchProjects.mockResolvedValueOnce(
+      listResponse([summary()]),
+    );
+
+    await renderAndOpen();
+    await screen.findByTestId("project-detail-view");
+
+    fireEvent.click(screen.getByTestId("project-detail-tab-files"));
+
+    const filesTab = await screen.findByTestId("project-files-tab");
+    expect(filesTab).toHaveAttribute("data-state", "unavailable");
+    expect(screen.getByText("Project files coming soon")).toBeInTheDocument();
+  });
+
+  it("opens Run from a chat row through the injected onOpenRun callback (FR-4.12)", async () => {
+    projectsApiMocks.fetchProjects.mockResolvedValueOnce(
+      listResponse([summary()]),
+    );
+    projectsApiMocks.fetchProjectActivity.mockResolvedValue(
+      activityResponse([
+        activityRow({
+          id: "act_chat",
+          ref: { kind: "chat", id: "conv_42" as ConversationId },
+          preview: "Renewal thread",
+        }),
+      ]),
+    );
+    const onOpenRun = vi.fn();
+
+    await renderAndOpen({ onOpenRun });
+    await screen.findByTestId("project-detail-view");
+
+    // Chats is the default tab, so the chat row renders immediately.
+    const chatRow = await screen.findByTestId("projects-detail-chat-row");
+    expect(chatRow).toHaveAttribute("data-conversation-id", "conv_42");
+    fireEvent.click(chatRow);
+    expect(onOpenRun).toHaveBeenCalledWith("conv_42");
+  });
+
+  it("renders a member/role chip on the row only when viewer_role is non-null (FR-4.13)", async () => {
+    projectsApiMocks.fetchProjects.mockResolvedValueOnce(
+      listResponse([summary({ viewer_role: "owner" })]),
+    );
+    render(<ProjectsRoute identity={IDENTITY} />);
+
+    await waitFor(() => {
+      expect(screen.getByTestId("projects-route-role-chip")).toBeInTheDocument();
+    });
+    expect(screen.getByTestId("projects-route-role-chip")).toHaveAttribute(
+      "data-role",
+      "owner",
+    );
+  });
+
+  it("omits the member/role chip under the solo profile (viewer_role null) (FR-4.13)", async () => {
+    projectsApiMocks.fetchProjects.mockResolvedValueOnce(
+      listResponse([summary({ viewer_role: null })]),
+    );
+    render(<ProjectsRoute identity={IDENTITY} />);
+
+    await waitFor(() => {
+      expect(screen.getByTestId("projects-route-row")).toBeInTheDocument();
+    });
+    expect(
+      screen.queryByTestId("projects-route-role-chip"),
+    ).not.toBeInTheDocument();
   });
 });
