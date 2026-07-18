@@ -1,0 +1,53 @@
+# CLI package checks for tools/cli (@0x-copilot/cli).
+# The launcher is dependency-free at runtime for version/help/doctor
+# (electron is required lazily only when staging/launching), so these
+# checks need no `npm install` — they stay fast and deterministic.
+
+name: ci-cli
+
+on:
+  pull_request:
+    paths:
+      - "tools/cli/**"
+      - ".github/workflows/ci-cli.yml"
+  push:
+    branches:
+      - main
+    paths:
+      - "tools/cli/**"
+      - ".github/workflows/ci-cli.yml"
+  workflow_dispatch:
+
+concurrency:
+  group: ci-cli-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  cli:
+    name: cli (${{ matrix.os }})
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest, windows-latest]
+    runs-on: ${{ matrix.os }}
+    defaults:
+      run:
+        working-directory: tools/cli
+    steps:
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: "20"
+
+      - name: Syntax check all sources
+        run: npm run check
+
+      - name: Smoke — version / help (dependency-free import graph)
+        run: npm run smoke
+
+      - name: Validate published file list (npm pack manifest)
+        run: node scripts/pack-manifest-check.mjs

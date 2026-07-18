@@ -2,6 +2,12 @@
 
 **An agent workspace that runs entirely on your machine — your keys, your data, your model.**
 
+[![ci](https://github.com/0x-copilot-dev/0x-copilot/actions/workflows/ci-cli.yml/badge.svg)](https://github.com/0x-copilot-dev/0x-copilot/actions/workflows/ci-cli.yml)
+[![npm](https://img.shields.io/npm/v/@0x-copilot/cli?logo=npm&color=cb3837&label=%400x-copilot%2Fcli)](https://www.npmjs.com/package/@0x-copilot/cli)
+[![license: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
+[![platform](https://img.shields.io/badge/platform-macOS%20%7C%20Windows-lightgrey)](tools/cli#platforms)
+[![local-first](https://img.shields.io/badge/local--first-BYOK-6f42c1)](#)
+
 0xCopilot takes on real, multi-step work across your apps and finishes it — on your machine, on your API key, on whatever model you pick. No cloud to trust, no seat to buy, no one holding your data but you.
 
 <!-- screenshot placeholder -->
@@ -253,3 +259,9 @@ Deploy the built images with your production orchestrator and managed secret sto
 - Don't commit secrets, real `.env` files, tokens, certificates, or production credentials.
 
 Path-scoped engineering rules live in hierarchical `CLAUDE.md` files that load when you touch that subtree (`services/*/CLAUDE.md`, `apps/frontend/CLAUDE.md`, `packages/*/CLAUDE.md`).
+
+---
+
+## License
+
+[MIT](LICENSE) © 0xCopilot
