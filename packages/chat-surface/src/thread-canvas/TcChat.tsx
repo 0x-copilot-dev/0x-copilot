@@ -12,7 +12,7 @@ import { Reasoning } from "../messages/Reasoning";
 import { useTransport } from "../providers/TransportProvider";
 import { useSwimlaneScrub } from "./SwimlaneScrubContext";
 
-export type TcChatMode = "studio" | "auto" | "focus";
+export type TcChatMode = "studio" | "focus";
 
 export interface TcChatMessagePart {
   readonly type: "text" | "reasoning";
@@ -98,7 +98,7 @@ export function TcChat(props: TcChatProps): ReactElement {
       data-testid="tc-chat"
       data-mode={mode}
       data-ghost={ghost ? "true" : "false"}
-      style={chatContainerStyle(mode)}
+      style={chatContainerStyle()}
       aria-live="polite"
     >
       {ghost && ghostLabel !== null ? (
@@ -110,7 +110,7 @@ export function TcChat(props: TcChatProps): ReactElement {
           Viewing {ghostLabel}
         </div>
       ) : null}
-      <div data-testid="tc-chat-messages" style={messageListStyle(ghost, mode)}>
+      <div data-testid="tc-chat-messages" style={messageListStyle(ghost)}>
         <MessageListBody state={state} messages={filteredMessages} />
       </div>
       <div style={composerSlotStyle}>
@@ -263,30 +263,30 @@ const PALETTE = {
   textLo: "#9aa0a6",
   ghostBg: "#1a1d20",
   ghostBorder: "#3a3e44",
-  ghostAccent: "#c2ff5a",
+  ghostAccent: "var(--color-accent)",
 } as const;
 
-const chatContainerStyle = (mode: TcChatMode): CSSProperties => ({
+const chatContainerStyle = (): CSSProperties => ({
   display: "flex",
   flexDirection: "column",
   height: "100%",
   background: PALETTE.cardBg,
   border: `1px solid ${PALETTE.cardBorder}`,
   borderRadius: 12,
-  padding: mode === "auto" ? 8 : 12,
+  padding: 12,
   gap: 10,
   color: PALETTE.textHi,
   fontFamily:
     "ui-sans-serif, system-ui, -apple-system, 'Segoe UI', Roboto, sans-serif",
 });
 
-const messageListStyle = (ghost: boolean, mode: TcChatMode): CSSProperties => ({
+const messageListStyle = (ghost: boolean): CSSProperties => ({
   flex: 1,
   overflowY: "auto",
   display: "flex",
   flexDirection: "column",
   gap: 8,
-  padding: mode === "auto" ? 4 : 8,
+  padding: 8,
   opacity: ghost ? 0.55 : 1,
   pointerEvents: ghost ? "none" : "auto",
 });
@@ -359,7 +359,9 @@ const tabButtonStyle = (selected: boolean): CSSProperties => ({
   color: selected ? PALETTE.textHi : PALETTE.textLo,
   padding: "8px 12px",
   fontSize: "var(--font-size-sm)",
-  borderBottom: selected ? "2px solid #c2ff5a" : "2px solid transparent",
+  borderBottom: selected
+    ? "2px solid var(--color-accent)"
+    : "2px solid transparent",
   cursor: "pointer",
 });
 

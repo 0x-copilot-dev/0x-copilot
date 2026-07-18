@@ -1,87 +1,13 @@
-import type { ReactElement } from "react";
-import {
-  THINKING_DEPTHS,
-  depthDescription,
-  depthLabel,
-  type ThinkingDepth,
-} from "../../depth";
+// Re-export shim for the thinking-depth radiogroup.
+//
+// The component now lives in @0x-copilot/chat-surface (PR-1.2) so web and
+// desktop render the Fast / Balanced / Deep control identically. It takes
+// its value + callbacks via props and has no substrate-specific
+// dependency, so this is a pure re-export rather than a host adapter;
+// existing import sites (and the `shell` barrel) keep resolving
+// `ThinkingDepthControl` from here.
 
-export interface ThinkingDepthControlProps {
-  value: ThinkingDepth;
-  onChange: (depth: ThinkingDepth) => void;
-  /**
-   * Hides the control when the active model doesn't support reasoning.
-   * The component returns null in that case so the topbar layout
-   * collapses cleanly — no display: none placeholder.
-   */
-  visible: boolean;
-  disabled?: boolean;
-}
-
-/**
- * Three-segment radiogroup for Fast / Balanced / Deep. The selection
- * flows to the run-start payload as a top-level `reasoning_depth` wire
- * field (chats-canvas-prd §16) — the runtime applies depth as a
- * multiplier on timeout, max_output_tokens, and tool-call budgets
- * (services/ai-backend/src/agent_runtime/execution/depth.py).
- */
-export function ThinkingDepthControl({
-  value,
-  onChange,
-  visible,
-  disabled,
-}: ThinkingDepthControlProps): ReactElement | null {
-  if (!visible) {
-    return null;
-  }
-  return (
-    <div
-      className="atlas-depth"
-      role="radiogroup"
-      aria-label="Thinking depth — applies to your next message"
-    >
-      {THINKING_DEPTHS.map((depth) => {
-        const checked = depth === value;
-        return (
-          <button
-            key={depth}
-            type="button"
-            role="radio"
-            aria-checked={checked}
-            className="atlas-depth__chip"
-            data-active={checked || undefined}
-            disabled={disabled}
-            onClick={() => onChange(depth)}
-            onKeyDown={(event) => handleArrow(event, value, onChange)}
-            data-tooltip={depthDescription(depth)}
-            data-tooltip-placement="bottom"
-          >
-            {depthLabel(depth)}
-          </button>
-        );
-      })}
-    </div>
-  );
-}
-
-function handleArrow(
-  event: React.KeyboardEvent<HTMLButtonElement>,
-  current: ThinkingDepth,
-  onChange: (depth: ThinkingDepth) => void,
-): void {
-  const index = THINKING_DEPTHS.indexOf(current);
-  if (index < 0) {
-    return;
-  }
-  if (event.key === "ArrowRight" || event.key === "ArrowDown") {
-    event.preventDefault();
-    onChange(THINKING_DEPTHS[(index + 1) % THINKING_DEPTHS.length]);
-  } else if (event.key === "ArrowLeft" || event.key === "ArrowUp") {
-    event.preventDefault();
-    onChange(
-      THINKING_DEPTHS[
-        (index - 1 + THINKING_DEPTHS.length) % THINKING_DEPTHS.length
-      ],
-    );
-  }
-}
+export {
+  ThinkingDepthControl,
+  type ThinkingDepthControlProps,
+} from "@0x-copilot/chat-surface";

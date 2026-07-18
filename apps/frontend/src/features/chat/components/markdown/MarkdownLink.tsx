@@ -1,52 +1,20 @@
-import {
-  citationIdFromHref,
-  isCitationHref,
-  isOrdinalCitationHref,
-  markdownLinkLabel,
-  ordinalFromHref,
-} from "@0x-copilot/chat-surface";
-import type { AnchorHTMLAttributes, ReactElement } from "react";
+// Web host adapter for the markdown anchor dispatcher.
+//
+// The dispatcher logic (route `#cite-ord:` → OrdinalCitationChip,
+// `#cite:` → CitationChip, else a plain `<a>` with a compacted label) now
+// lives in @0x-copilot/chat-surface (PR-1.1). This adapter binds it to
+// apps/frontend's citation-resolving chip wrappers, which resolve chips
+// against the host's CitationsProvider. `isExternalHref` is re-exported so
+// existing import sites (and the colocated test) keep resolving here.
+
+import { createMarkdownLink, isExternalHref } from "@0x-copilot/chat-surface";
 
 import { CitationChip } from "../citations/CitationChip";
 import { OrdinalCitationChip } from "../citations/OrdinalCitationChip";
 
-export function MarkdownLink({
-  children,
-  href,
-  ...props
-}: AnchorHTMLAttributes<HTMLAnchorElement>): ReactElement {
-  // The citation remark plugin rewrites tokens to citation anchors.
-  // Routing through the existing link slot keeps Streamdown's
-  // streaming-safe parsing while letting us swap in a chip renderer.
-  // Two formats coexist during the rollout: PR 1.1 `[c<id>]` chips
-  // resolve via `#cite:<id>`, and PR 1.1-rev2 `[[N]]` chips resolve
-  // via `#cite-ord:<n>`.
-  if (isOrdinalCitationHref(href)) {
-    const ordinal = ordinalFromHref(href as string);
-    if (ordinal !== null) {
-      return <OrdinalCitationChip conversationOrdinal={ordinal} />;
-    }
-  }
-  if (isCitationHref(href)) {
-    const id = citationIdFromHref(href as string);
-    if (id !== null) {
-      return <CitationChip citationId={id} />;
-    }
-  }
-  const external = isExternalHref(href);
-  return (
-    <a
-      {...props}
-      href={href}
-      rel={external ? "noreferrer" : props.rel}
-      target={external ? "_blank" : props.target}
-      title={props.title ?? (typeof href === "string" ? href : undefined)}
-    >
-      {markdownLinkLabel(href, children)}
-    </a>
-  );
-}
+export const MarkdownLink = createMarkdownLink({
+  CitationChip,
+  OrdinalCitationChip,
+});
 
-export function isExternalHref(href: string | undefined): boolean {
-  return Boolean(href && /^https?:\/\//i.test(href));
-}
+export { isExternalHref };

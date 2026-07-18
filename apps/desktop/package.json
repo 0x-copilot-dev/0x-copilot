@@ -27,6 +27,7 @@
     "@0x-copilot/api-types": "0.1.0",
     "@0x-copilot/chat-surface": "0.1.0",
     "@0x-copilot/chat-transport": "0.1.0",
+    "@0x-copilot/design-system": "0.1.0",
     "@0x-copilot/surface-renderers": "0.1.0",
     "electron-updater": "^6.6.2",
     "react": "19.2.7",

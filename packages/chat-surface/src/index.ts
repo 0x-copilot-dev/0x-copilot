@@ -48,6 +48,16 @@ export {
   type PresenceSignal,
   type PresenceState,
 } from "./presence/presence-signal";
+// === Phase 0 (PR-0.4) DeploymentProfile port ===
+// Runtime profile supplied by the host substrate; gates team-only surfaces
+// (Workspace / Members / Billing) off on single-user desktop. Consolidation
+// targets land under messages/composer/citations/subagents/approvals/workspace.
+export {
+  DeploymentProfileProvider,
+  useDeploymentProfile,
+  type DeploymentProfile,
+} from "./providers/DeploymentProfileProvider";
+// === end Phase 0 (PR-0.4) ===
 export { ChatShell } from "./shell/ChatShell";
 export { CopyIcon } from "./icons/CopyIcon";
 export { RetryIcon } from "./icons/RetryIcon";
@@ -55,6 +65,21 @@ export { ThinkingIcon } from "./icons/ThinkingIcon";
 export { PlainText } from "./messages/PlainText";
 export { Reasoning } from "./messages/Reasoning";
 export { markdownLinkLabel } from "./messages/markdownLinks";
+// === Phase 1 (PR-1.1) message/markdown renderer ===
+// Hoisted streaming-markdown renderer. The host binds `components.a` (its
+// citation-chip dispatcher via `createMarkdownLink`) and `onMatch` (its
+// diagnostics sink); chat-surface stays app-import-free.
+export { MarkdownText, type MarkdownTextProps } from "./messages/MarkdownText";
+export {
+  createMarkdownLink,
+  isExternalHref,
+  type MarkdownLinkChips,
+} from "./messages/MarkdownLink";
+export {
+  ReasoningGroup,
+  type ReasoningGroupProps,
+} from "./messages/ReasoningGroup";
+// === end Phase 1 (PR-1.1) ===
 export { CitationChip, type CitationChipProps } from "./citations/CitationChip";
 export {
   OrdinalCitationChip,
@@ -103,6 +128,27 @@ export {
   type CitationLinksByMessage,
   type CitationLinksByOffset,
 } from "./citations/linkReducer";
+// === Phase 1 (PR-1.4) citations subsystem ===
+// Run-scoped citation read context + Sources surfaces. The host binds the
+// concrete citation/link registries as provider props (the resolution seam);
+// `SourcesPanel` takes host-ordered sources + a `SourceRowComponent` slot so
+// the web hover-preview portal stays host-side.
+export {
+  CitationsProvider,
+  useCitation,
+  useRunCitations,
+  useOrdinalCitation,
+  useResolvedOrdinalCitation,
+  type CitationLookup,
+  type CitationsProviderProps,
+  type ResolvedOrdinalCitation,
+} from "./citations/CitationsContext";
+export {
+  MessageSourcesStrip,
+  type MessageSourcesStripProps,
+} from "./citations/MessageSourcesStrip";
+export { SourcesPanel, type SourcesPanelProps } from "./citations/SourcesPanel";
+// === end Phase 1 (PR-1.4) ===
 export {
   CITATION_HREF_PREFIX,
   CITATION_ORDINAL_HREF_PREFIX,
@@ -182,6 +228,8 @@ export {
   DEFAULT_SHELL_DESTINATION,
   DestinationPlaceholder,
   SHELL_DESTINATIONS,
+  defaultDestinationForProfile,
+  destinationsForProfile,
   type AppRailProps,
   type ChatShellProps,
   type ContextPanelPrimaryAction,
@@ -270,6 +318,47 @@ export {
   type MentionCandidate,
 } from "./composer";
 // === end Phase 2-D ===
+
+// === Phase 1 (PR-1.2) composer sub-controls ===
+// Advanced-composer / topbar leaf controls (model pill incl. custom
+// OpenRouter slug, thinking-depth radiogroup, `+` menu views, connectors
+// trigger) hoisted from apps/frontend behind props. `ThinkingDepth` is the
+// advanced-composer reasoning-depth model — distinct from the base
+// Composer's `Depth` above; FR-1.7 flags the duplication (deferred to 3E).
+export {
+  ModelPill,
+  type ModelPillProps,
+  ThinkingDepthControl,
+  type ThinkingDepthControlProps,
+  ComposerPlusMenu,
+  type ComposerMenuView,
+  ComposerConnectorsButton,
+  type ComposerConnectorsButtonProps,
+  THINKING_DEPTHS,
+  DEFAULT_THINKING_DEPTH,
+  isThinkingDepth,
+  depthLabel,
+  depthLabelForModel,
+  depthDescription,
+  modelSupportsDepth,
+  type ThinkingDepth,
+} from "./composer";
+// === end Phase 1 (PR-1.2) ===
+
+// === Phase 1 (PR-1.3) AssistantComposer shell ===
+// The advanced-composer shell hoisted behind ports/slots. The host binds the
+// runtime attachment bridge, the `FilePickerPort` (real-`File` web picker), the
+// `+` menu portal + outside-click (`renderPlusMenu` slot), and the
+// instruction-prompt builders — the moved core stays substrate-agnostic.
+export {
+  AssistantComposer,
+  type AssistantComposerProps,
+  type AssistantComposerPlusMenuSlotArgs,
+  type DetailsPanelKind,
+  AttachmentPill,
+  fileAttachmentAccept,
+} from "./composer";
+// === end Phase 1 (PR-1.3) ===
 
 // === Phase 2-E inline-diff state-machine ===
 export {
@@ -633,3 +722,285 @@ export {
   type WebhookSecurityPageProps,
 } from "./settings";
 // === end Phase 12 Settings ===
+
+// === Phase 5 (PR-5.2) — settings design primitives (tokenized) ===
+export {
+  Modal,
+  StepDots,
+  MODAL_WIDTH,
+  SetCard,
+  SecHead,
+  SetNote,
+  Frow,
+  Krow,
+  SettingsNavItem,
+  SaveBar,
+  Toast,
+  SegmentedControl,
+  AccentSwatch,
+  ThemeTile,
+  ProgressBar,
+  type ModalProps,
+  type StepDotsProps,
+  type SetCardProps,
+  type SecHeadProps,
+  type SetNoteProps,
+  type SetNoteTone,
+  type FrowProps,
+  type KrowProps,
+  type SettingsNavItemProps,
+  type SaveBarProps,
+  type ToastProps,
+  type ToastTone,
+  type SegmentedControlProps,
+  type SegmentedOption,
+  type AccentSwatchProps,
+  type ThemeTileProps,
+  type ProgressBarProps,
+  type ProgressTone,
+} from "./settings";
+// === end Phase 5 (PR-5.2) ===
+
+// === Phase 5 (PR-5.1) — settings shell (nav SSOT + profile gate + router) ===
+export {
+  SettingsSurface,
+  useSettingsSurface,
+  SETTINGS_NAV_WIDTH,
+  SETTINGS_CONTENT_MAX_WIDTH,
+  SETTINGS_NAV_GROUPS,
+  SETTINGS_NAV_ITEMS,
+  DEFAULT_SETTINGS_SLUG,
+  SOLO_FOOTER_COPY,
+  settingsNavForProfile,
+  visibleSettingsSlugs,
+  isSettingsSlugVisible,
+  resolveSettingsSlug,
+  showSoloFooter,
+  settingsNavItem,
+  type SettingsSurfaceProps,
+  type SettingsSurfaceController,
+  type SettingsDirtyState,
+  type SettingsSurfaceToast,
+  type SettingsSectionSlug,
+  type SettingsNavGroupId,
+  type SettingsNavGroupView,
+  type SettingsNavIcon,
+  type SettingsNavItemModel,
+  type SettingsProfileGate,
+} from "./settings";
+// === end Phase 5 (PR-5.1) ===
+
+// === Phase 1 — new interaction families (subagents · approvals · workspace) ===
+// These three families were introduced by Phase 1 and have no pre-Phase-1
+// sibling exports, so they cluster here in PR order (1.5 → 1.6 → 1.7) rather
+// than scattering through the messages/citations neighbourhood above.
+// Presentational cores only — the host keeps every data-binding hook/reducer
+// and passes normalised data + callbacks in as props (chat-surface stays
+// app-import-free).
+
+// === Phase 1 (PR-1.5) subagent / fleet cards ===
+// Hoisted subagent presentation family. The host keeps the data-binding
+// (reducers, activity builders, fleet context, jump-to-approval wiring) and
+// passes normalised data + callbacks in as props; chat-surface stays
+// app-import-free.
+export {
+  SubagentCard,
+  type SubagentCardProps,
+  FleetSubagentRow,
+  type FleetSubagentRowProps,
+  SubagentFleetCard,
+  type SubagentFleetCardProps,
+  subagentCardFromArgs,
+  subagentCardFromEntry,
+  type SubagentCardStatus,
+  type SubagentCardViewModel,
+  type SubagentPauseReason,
+  formatSubagentDuration,
+  pauseAriaLabel,
+  pauseFullLabel,
+  pauseJumpLabel,
+  pauseShortLabel,
+  ActivityStatusIcon,
+  SubagentActivityList,
+  useElapsedSeconds,
+  type SubagentActivityRecord,
+} from "./subagents";
+// === end Phase 1 (PR-1.5) ===
+
+// === Phase 1 (PR-1.6) approvals ===
+// Presentational consent card + collapsed receipt (+ their inset param /
+// details / undo-countdown leaves). The approval routing/wiring — the
+// ApprovalTool dispatcher, useApprovalsQueue, ApprovalFocusContext, the
+// forward/undo POST plumbing — stays host-owned in apps/frontend; the host
+// renders these behind its own Approve/Reject/Forward/Undo callbacks.
+export {
+  ApprovalCard,
+  type ApprovalCardProps,
+  ApprovalReceipt,
+  type ApprovalReceiptProps,
+  type ApprovalReceiptKind,
+  ActivityDetails,
+  ActivityParams,
+  useUndoCountdown,
+  type UndoCountdownState,
+  type ActivityParam,
+} from "./approvals";
+// === end Phase 1 (PR-1.6) ===
+
+// === Phase 5 (PR-5.3…PR-5.9) — settings section bodies ===
+// The section bodies that fill the SettingsSurface `renderSection` slot. They
+// live in `./settings`; they are surfaced at the package root so a host (the
+// desktop shell) can wire the whole surface through the public barrel rather
+// than deep-importing `src/settings/*` (which would cross the package boundary).
+// `ProfilePage`/`NotificationsPage`/`QuietHoursEditor` are already exported above
+// (Phase 12 Settings block).
+export {
+  // Account (PR-5.3)
+  AppearancePage,
+  appearanceAttributes,
+  splitAppearancePersistence,
+  APPEARANCE_THEMES,
+  APPEARANCE_ACCENTS,
+  APPEARANCE_DENSITIES,
+  ShortcutsPage,
+  SHORTCUTS,
+  type AppearancePageProps,
+  type AppearanceValue,
+  type AppearancePatch,
+  type AppearanceTheme,
+  type AppearanceAccentId,
+  type AppearanceDensity,
+  type AppearanceAttributes,
+  type AppearancePersistenceSplit,
+  type ShortcutRow,
+  // Models & keys (PR-5.4 / PR-5.5 / PR-5.6)
+  ProviderKeysPage,
+  PROVIDER_KEYS_KEYCHAIN_NOTE,
+  AddProviderKeyModal,
+  createProviderKeysPort,
+  checkProviderKeyFormat,
+  providerCatalogEntry,
+  PROVIDER_CATALOG,
+  type ProviderKeysPageProps,
+  type AddProviderKeyModalProps,
+  type AddProviderKeySubmit,
+  type ProviderKeysPort,
+  type ProviderCatalogEntry,
+  type ProviderKeyValidation,
+  LocalModelsPage,
+  DownloadLocalModelModal,
+  formatBytes,
+  formatEta,
+  humanStatus,
+  placementLabel,
+  type LocalModelsPageProps,
+  type DownloadLocalModelModalProps,
+  type AvailableLocalModel,
+  type LocalModelPullHandle,
+  type LocalModelPullHandlers,
+  type StartLocalModelPull,
+  type LocalModelDownloadResult,
+  ModelBehaviorPage,
+  REASONING_DEPTHS,
+  ApprovalPolicy,
+  READ_ONLY_APPROVAL_OPTIONS,
+  WRITE_APPROVAL_OPTIONS,
+  DANGER_APPROVAL_OPTIONS,
+  APPROVAL_POLICY_CONNECTOR_NOTE,
+  type ModelBehaviorPageProps,
+  type ModelBehaviorValue,
+  type ModelBehaviorPatch,
+  type ModelBehaviorModelOption,
+  type ReasoningDepth,
+  type SpendGuardrailValue,
+  type ApprovalPolicyProps,
+  type ApprovalPolicyValue,
+  type ReadOnlyApprovalMode,
+  type WriteApprovalMode,
+  type DangerApprovalMode,
+  // Data & privacy (PR-5.7)
+  PrivacyPage,
+  RETENTION_OPTIONS,
+  PRIVACY_EXPORT_PATH,
+  PRIVACY_DELETE_CONFIRM_PHRASE,
+  type PrivacyPageProps,
+  type RetentionChoice,
+  // Advanced (PR-5.9)
+  AppLockPage,
+  APP_LOCK_AFTER_OPTIONS,
+  APP_LOCK_KEYCHAIN_NOTE,
+  TOUCH_ID_UNAVAILABLE_HINT,
+  DeveloperTokensPage,
+  DEVELOPER_TOKENS_ONCE_NOTE,
+  createDeveloperTokensPort,
+  maskDeveloperToken,
+  lastUsedLabel,
+  type AppLockPageProps,
+  type AppLockValue,
+  type AppLockPatch,
+  type AppLockAfter,
+  type DeveloperTokensPageProps,
+  type DeveloperTokensPort,
+} from "./settings";
+// === end Phase 5 (PR-5.3…PR-5.9) ===
+
+// === Phase 1 (PR-1.7) workspace pane ===
+// Hoisted right-rail pane + tablist + five tab bodies (Sources / Agents /
+// Draft / Approvals / Skills). Composition shell only — the host keeps the
+// data-binding hooks (useWorkspacePaneState / useApprovalsQueue / useSubagents
+// / useSubagentActivities / useDrafts / useArchivedSources / auto-open signal)
+// and passes their normalised outputs in as props. The tabs consume the
+// already-hoisted citations (SourceRow, via the injected `SourceRowComponent`
+// slot) and subagents (SubagentCard) families; every `chatModel`-typed prop is
+// re-typed chat-surface-local (SourceEntryMap / SubagentSnapshotMap /
+// ApprovalsQueueProjection / WorkspacePaneState / …).
+export {
+  WorkspacePane,
+  type WorkspacePaneProps,
+  WorkspaceTabs,
+  workspaceTabPanelId,
+  type WorkspaceTabsItem,
+  type WorkspaceTabsProps,
+  SourcesTab,
+  type SourcesTabProps,
+  type SourceRowSlot,
+  AgentsTab,
+  type AgentsTabProps,
+  DraftTab,
+  type DraftTabProps,
+  ApprovalsTab,
+  type ApprovalsTabProps,
+  SkillsTab,
+  type SkillsTabProps,
+  pluralize,
+  tabLabel,
+  TAB_LABELS,
+  type LabelForms,
+  type WorkspacePaneState,
+  type WorkspacePaneTabId,
+  type WorkspacePaneCloseReason,
+  type WorkspacePaneOpenOptions,
+  type WorkspacePaneFocus,
+  type ApprovalsQueueItem,
+  type ApprovalsQueueProjection,
+  type SubagentActivitiesByTask,
+  type SubagentHistoryGroup,
+  type SourceEntryMap,
+  type SubagentSnapshotMap,
+  type SourceConnectorGroup,
+} from "./workspace";
+// === end Phase 1 (PR-1.7) ===
+
+// === Phase 3 (PR-3.3) run-session host hook ===
+// The Run cockpit's live-run host hook. Resolves the active/selected run for a
+// conversation and subscribes to its SSE tail through the Transport port,
+// exposing an append-only event array + session lifecycle status for the
+// RunDestination (PR-3.5) to project. No UI — network I/O is port-only.
+export {
+  useRunSession,
+  type RunSession,
+  type RunSessionStatus,
+  type RunListItem,
+  type UseRunSessionOptions,
+} from "./destinations/run/useRunSession";
+// === end Phase 3 (PR-3.3) ===

@@ -1,2 +1,8 @@
-export const fileAttachmentAccept =
-  "text/plain,text/html,text/markdown,text/csv,text/xml,text/json,text/css,application/pdf,application/msword,application/vnd.openxmlformats-officedocument.wordprocessingml.document,application/vnd.ms-excel,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet,application/vnd.ms-powerpoint,application/vnd.openxmlformats-officedocument.presentationml.presentation,.pdf,.doc,.docx,.xls,.xlsx,.ppt,.pptx";
+// Re-export shim for the composer file-attachment `accept` allow-list.
+//
+// The constant now lives in @0x-copilot/chat-surface (PR-1.3) alongside the
+// hoisted AssistantComposer shell that consumes it. Kept as a re-export so any
+// existing / future host import site resolves `fileAttachmentAccept` from the
+// original path.
+
+export { fileAttachmentAccept } from "@0x-copilot/chat-surface";

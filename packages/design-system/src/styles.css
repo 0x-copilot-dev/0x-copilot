@@ -1,77 +1,13 @@
-/* ── 0xCopilot brand faces ──────────────────────────────────────────────
- * Self-hosted variable fonts (vendored woff2 in ./fonts). Space Grotesk =
- * display, Instrument Sans = body, JetBrains Mono = mono. latin + latin-ext
- * are split by unicode-range so latin-ext downloads only when a glyph needs
- * it. font-display: swap paints the system fallback first, then swaps to the
- * brand face (same-origin bundle, so the swap window is tiny). Sourced from
- * @fontsource-variable (Space Grotesk 5.2.10, Instrument Sans / JetBrains
- * Mono 5.2.8). These at-rules carry no cascade/order dependency on :root. */
-@font-face {
-  font-family: "Space Grotesk";
-  font-style: normal;
-  font-weight: 300 700;
-  font-display: swap;
-  src: url("./fonts/space-grotesk-latin.woff2") format("woff2");
-  unicode-range:
-    U+0000-00FF, U+0131, U+0152-0153, U+02BB-02BC, U+02C6, U+02DA, U+02DC,
-    U+0304, U+0308, U+0329, U+2000-206F, U+2074, U+20AC, U+2122, U+2191, U+2193,
-    U+2212, U+2215, U+FEFF, U+FFFD;
-}
-@font-face {
-  font-family: "Space Grotesk";
-  font-style: normal;
-  font-weight: 300 700;
-  font-display: swap;
-  src: url("./fonts/space-grotesk-latin-ext.woff2") format("woff2");
-  unicode-range:
-    U+0100-02BA, U+02BD-02C5, U+02C7-02CC, U+02CE-02D7, U+02DD-02FF, U+0304,
-    U+0308, U+0329, U+1D00-1DBF, U+1E00-1E9F, U+1EF2-1EFF, U+2020, U+20A0-20AB,
-    U+20AD-20C0, U+2113, U+2C60-2C7F, U+A720-A7FF;
-}
-@font-face {
-  font-family: "Instrument Sans";
-  font-style: normal;
-  font-weight: 400 700;
-  font-display: swap;
-  src: url("./fonts/instrument-sans-latin.woff2") format("woff2");
-  unicode-range:
-    U+0000-00FF, U+0131, U+0152-0153, U+02BB-02BC, U+02C6, U+02DA, U+02DC,
-    U+0304, U+0308, U+0329, U+2000-206F, U+2074, U+20AC, U+2122, U+2191, U+2193,
-    U+2212, U+2215, U+FEFF, U+FFFD;
-}
-@font-face {
-  font-family: "Instrument Sans";
-  font-style: normal;
-  font-weight: 400 700;
-  font-display: swap;
-  src: url("./fonts/instrument-sans-latin-ext.woff2") format("woff2");
-  unicode-range:
-    U+0100-02BA, U+02BD-02C5, U+02C7-02CC, U+02CE-02D7, U+02DD-02FF, U+0304,
-    U+0308, U+0329, U+1D00-1DBF, U+1E00-1E9F, U+1EF2-1EFF, U+2020, U+20A0-20AB,
-    U+20AD-20C0, U+2113, U+2C60-2C7F, U+A720-A7FF;
-}
-@font-face {
-  font-family: "Instrument Sans";
-  font-style: italic;
-  font-weight: 400 700;
-  font-display: swap;
-  src: url("./fonts/instrument-sans-latin-italic.woff2") format("woff2");
-  unicode-range:
-    U+0000-00FF, U+0131, U+0152-0153, U+02BB-02BC, U+02C6, U+02DA, U+02DC,
-    U+0304, U+0308, U+0329, U+2000-206F, U+2074, U+20AC, U+2122, U+2191, U+2193,
-    U+2212, U+2215, U+FEFF, U+FFFD;
-}
-@font-face {
-  font-family: "Instrument Sans";
-  font-style: italic;
-  font-weight: 400 700;
-  font-display: swap;
-  src: url("./fonts/instrument-sans-latin-ext-italic.woff2") format("woff2");
-  unicode-range:
-    U+0100-02BA, U+02BD-02C5, U+02C7-02CC, U+02CE-02D7, U+02DD-02FF, U+0304,
-    U+0308, U+0329, U+1D00-1DBF, U+1E00-1E9F, U+1EF2-1EFF, U+2020, U+20A0-20AB,
-    U+20AD-20C0, U+2113, U+2C60-2C7F, U+A720-A7FF;
-}
+/* ── 0xCopilot type faces ───────────────────────────────────────────────
+ * v2 "quiet" system: --font-display and --font-sans resolve to the native
+ * platform UI stack (SF Pro Text on macOS, Segoe UI on Windows), so the app
+ * reads as calm, native chrome rather than a branded display face. Only the
+ * mono face is vendored — JetBrains Mono (self-hosted variable woff2 in
+ * ./fonts, latin + latin-ext split by unicode-range so latin-ext downloads
+ * only when a glyph needs it; font-display: swap). The Space Grotesk and
+ * Instrument Sans @font-face rules were removed with the v2 token adoption;
+ * the woff2 assets remain vendored but unreferenced. This at-rule carries no
+ * cascade/order dependency on :root. */
 @font-face {
   font-family: "JetBrains Mono";
   font-style: normal;
@@ -97,17 +33,17 @@
 
 :root {
   color-scheme: dark;
-  /* Brand type roles. --font-display (Space Grotesk) is applied to headings;
-   * --font-sans (Instrument Sans) is the body/UI default; --font-mono
-   * (JetBrains Mono) is code/labels. Full system fallback chains so any
-   * un-subsetted glyph degrades per-glyph instead of showing tofu. */
+  /* Type roles (v2 quiet system). --font-display and --font-sans both resolve
+   * to the native platform UI stack — there is no branded display face, so
+   * headings and body/UI share the system face. --font-mono (JetBrains Mono)
+   * is the only vendored face, used for code/labels. */
   --font-display:
-    "Space Grotesk", ui-sans-serif, system-ui, -apple-system,
-    BlinkMacSystemFont, "Segoe UI", sans-serif;
+    -apple-system, BlinkMacSystemFont, "SF Pro Text", "Segoe UI", system-ui,
+    sans-serif;
   --font-sans:
-    "Instrument Sans", ui-sans-serif, system-ui, -apple-system,
-    BlinkMacSystemFont, "Segoe UI", sans-serif;
-  --font-mono: "JetBrains Mono", "SFMono-Regular", Consolas, monospace;
+    -apple-system, BlinkMacSystemFont, "SF Pro Text", "Segoe UI", system-ui,
+    sans-serif;
+  --font-mono: "JetBrains Mono", ui-monospace, SFMono-Regular, monospace;
 
   /* Typography token tier — single source of truth for type scale and
    * weight, the same way :root[data-accent] is the source of truth for
@@ -151,10 +87,10 @@
   --space-2xl: 2rem;
   --space-3xl: 3rem;
 
-  --radius-sm: 0.45rem;
-  --radius-md: 0.75rem;
-  --radius-lg: 1rem;
-  --radius-xl: 1.5rem;
+  --radius-sm: 0.375rem; /* 6px — v2 quiet scale */
+  --radius-md: 0.5rem; /* 8px */
+  --radius-lg: 0.75rem; /* 12px */
+  --radius-xl: 1rem; /* 16px — nudged from 24px to keep the ladder monotonic */
   --radius-full: 999px;
 
   --shadow-soft: 0 18px 60px rgb(0 0 0 / 0.28);
@@ -210,21 +146,26 @@
 :root,
 :root[data-theme="dark"] {
   color-scheme: dark;
-  --color-bg: #0f0f10;
-  --color-bg-elevated: #161617;
-  --color-surface: #1a1a1c;
-  --color-surface-muted: #222224;
-  --color-border: #232325;
-  --color-border-strong: #2a2a2c;
-  --color-text: #ededee;
-  --color-text-muted: #b4b4b8;
-  --color-text-subtle: #7e7e84;
+  /* v2 "quiet" near-black neutral ladder. */
+  --color-bg: #09090b;
+  --color-bg-elevated: #0d0d10;
+  --color-surface: #111114;
+  --color-surface-muted: #16161a;
+  /* Hairline borders — near-invisible strokes over the near-black ground
+     (replaces the old solid ~#23 borders). */
+  --color-border: rgba(255, 255, 255, 0.06);
+  --color-border-strong: rgba(255, 255, 255, 0.1);
+  --color-text: #ececf1;
+  --color-text-muted: #98989f;
+  --color-text-subtle: #64646d;
   /* Brand sky is the default accent; jade = success, amber = warning. */
   --color-accent: #5fb2ec;
-  --color-accent-strong: #86caf4;
-  --color-accent-contrast: #04141f;
-  --color-danger: #d97777;
-  --color-danger-bg: #321a1a;
+  --color-accent-strong: #8cc8f4;
+  --color-accent-contrast: #08131d;
+  /* Ember is the single destructive colour (v2 locked decision — an
+     intentional shift from the old danger red). */
+  --color-danger: #f0764f;
+  --color-danger-bg: #2c1a12;
   --color-success: #57c785;
   --color-success-bg: #1a2f23;
   --color-warning: #e8b45e;
@@ -258,8 +199,9 @@
   --color-surface-raised: var(--color-surface);
   --color-text-danger: var(--color-danger);
   --color-warn: var(--color-warning);
-  /* Ember — the brand's sparing "energy" accent (distinct from the sky
-   * primary and the semantic warn/danger colours). */
+  /* Ember — the single destructive hue (v2 locked decision). --color-danger
+   * now shares this value; kept as a named alias for the energy/destructive
+   * register, distinct from the sky primary. */
   --color-ember: #f0764f;
   --color-ember-bg: #2c1a12;
 }
@@ -268,8 +210,8 @@
    Layered on top of the scheme so a swatch override wins regardless of theme. */
 :root[data-accent="sky"] {
   --color-accent: #5fb2ec;
-  --color-accent-strong: #86caf4;
-  --color-accent-contrast: #04141f;
+  --color-accent-strong: #8cc8f4;
+  --color-accent-contrast: #08131d;
 }
 :root[data-accent="atlas-orange"] {
   --color-accent: #d97757;
@@ -314,19 +256,23 @@
 
 :root[data-theme="light"] {
   color-scheme: light;
-  --color-bg: #f5f2ec;
-  --color-bg-elevated: #fffdf8;
+  /* v2 "quiet" neutral-grey light ladder (replaces the old warm cream). */
+  --color-bg: #f4f4f6;
+  --color-bg-elevated: #ececef;
   --color-surface: #ffffff;
-  --color-surface-muted: #ece7dc;
-  --color-border: #ded5c7;
-  --color-border-strong: #b9ad9b;
-  --color-text: #241f19;
-  --color-text-muted: #6e6458;
-  --color-text-subtle: #918677;
+  --color-surface-muted: #f6f6f8;
+  /* Hairline borders on the light ground. */
+  --color-border: rgba(10, 10, 14, 0.07);
+  --color-border-strong: rgba(10, 10, 14, 0.12);
+  --color-text: #141419;
+  /* Neutral-grey secondary/tertiary text (was warm-brown to match the old
+     cream bg; re-derived for the neutral ground). */
+  --color-text-muted: #56565d;
+  --color-text-subtle: #86868d;
   /* Darkened brand sky for legible accent text/borders on the light ground. */
   --color-accent: #1f6fb0;
   --color-accent-strong: #185a94;
-  --color-accent-contrast: #f2f9ff;
+  --color-accent-contrast: #f4faff;
   --color-danger: #b42318;
   --color-danger-bg: #fff0ef;
   --color-success: #137a36;
@@ -368,9 +314,9 @@ body {
   margin: 0;
 }
 
-/* Headings carry the display face (Space Grotesk). Element-level so it
- * composes with app heading rules (e.g. letter-spacing) that set other
- * properties; h4–h6 stay on the body face by design. */
+/* Headings reference the display role (now the native system face in the v2
+ * quiet system — same family as the body). Element-level so it composes with
+ * app heading rules (e.g. letter-spacing); h4–h6 stay on the body face. */
 h1,
 h2,
 h3 {
@@ -976,10 +922,10 @@ textarea {
 
 /* Popover — thin Radix wrapper. Token-driven. Reduce-motion aware. */
 .ds-popover-content {
-  background: var(--color-surface, #1a1a1c);
-  border: 1px solid var(--color-border, #2a2a2c);
+  background: var(--color-surface, #111114);
+  border: 1px solid var(--color-border, rgba(255, 255, 255, 0.06));
   border-radius: var(--radius-md, 8px);
-  color: var(--color-text, #ededee);
+  color: var(--color-text, #ececf1);
   box-shadow:
     0 6px 24px rgba(0, 0, 0, 0.32),
     0 1px 2px rgba(0, 0, 0, 0.2);

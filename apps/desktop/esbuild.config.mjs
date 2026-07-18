@@ -42,6 +42,10 @@ const rendererTask = build({
   loader: {
     ".tsx": "tsx",
     ".ts": "ts",
+    ".css": "css",
+    ".woff2": "dataurl",
+    ".woff": "dataurl",
+    ".ttf": "dataurl",
   },
   external: ["electron"],
   sourcemap: false,

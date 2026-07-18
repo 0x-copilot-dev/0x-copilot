@@ -1,32 +1,10 @@
-import type { ReactElement } from "react";
+// Re-export shim for the composer / user-message attachment chip.
+//
+// The component now lives in @0x-copilot/chat-surface (PR-1.3) so web and
+// desktop render the attachment pill identically. It is a pure
+// presentational chip driven by props (attachment + optional onRemove) with
+// no substrate-specific dependency, so this is a pure re-export rather than a
+// host adapter; existing import sites (`UserMessage`, the composer) keep
+// resolving `AttachmentPill` from here.
 
-/**
- * Attachment chip rendered in the composer's pill row and inside user
- * messages. The optional `onRemove` callback turns the chip into a
- * removable variant — clicking the × button calls it. Composer mounts
- * pass it; message-mounts (read-only history) omit it.
- */
-export function AttachmentPill({
-  attachment,
-  onRemove,
-}: {
-  attachment: { name: string; type: string };
-  onRemove?: () => void;
-}): ReactElement {
-  return (
-    <span className="aui-attachment-pill">
-      <span>{attachment.name}</span>
-      <small>{attachment.type}</small>
-      {onRemove ? (
-        <button
-          type="button"
-          className="aui-attachment-pill__remove"
-          aria-label={`Remove ${attachment.name}`}
-          onClick={onRemove}
-        >
-          ×
-        </button>
-      ) : null}
-    </span>
-  );
-}
+export { AttachmentPill } from "@0x-copilot/chat-surface";

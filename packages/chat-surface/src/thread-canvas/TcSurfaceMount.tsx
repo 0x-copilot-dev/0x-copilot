@@ -327,7 +327,7 @@ const controlsRowStyle: CSSProperties = {
 };
 
 const primaryButtonStyle: CSSProperties = {
-  background: "#c2ff5a",
+  background: "var(--color-accent)",
   color: "#101113",
   border: "none",
   borderRadius: 8,

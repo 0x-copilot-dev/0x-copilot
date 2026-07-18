@@ -165,6 +165,13 @@ import {
   type PortBundle,
 } from "../ports";
 
+// Desktop-redesign destinations (run/activity/members/billing) exist in
+// the shared slug union for the desktop solo shell but are never routed
+// to on web; this placeholder satisfies the exhaustive destination map.
+function DesktopOnlyDestination(): ReactElement {
+  return <section data-destination-unavailable style={{ height: "100%" }} />;
+}
+
 // Map every destination slug WITHOUT a host-side feature-binder to the
 // placeholder component shipped with the chat-surface package. Chats has
 // a dedicated host component (`ChatScreen`); Home, Todos, Inbox,
@@ -197,6 +204,15 @@ const NON_CHATS_DESTINATIONS: Readonly<
   >
 > = {
   tools: ToolsDestination,
+  // Desktop-redesign destinations (profile-gated solo shell) are part of
+  // the shared slug union but are NOT web-routable — the web host never
+  // navigates to them (absent from the web `SHELL_DESTINATIONS` list). The
+  // exhaustive map must still cover them, so point them at a placeholder
+  // that is never actually rendered on web.
+  run: DesktopOnlyDestination,
+  activity: DesktopOnlyDestination,
+  members: DesktopOnlyDestination,
+  billing: DesktopOnlyDestination,
 };
 
 // ItemRef resolver registration (cross-audit §3.3) for the `"todo"`
