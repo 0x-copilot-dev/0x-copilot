@@ -46,7 +46,7 @@ jobs:
       - name: Syntax check all sources
         run: npm run check
 
-      - name: Smoke — version / help / doctor
+      - name: Smoke — version / help (dependency-free import graph)
         run: npm run smoke
 
       - name: Validate published file list (npm pack manifest)
