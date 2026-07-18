@@ -147,7 +147,29 @@ describe("PostgresManager.start", () => {
     expect(h.removed).toContain(`${DATA_DIR}/postmaster.pid`);
   });
 
-  it("leaves postmaster.pid alone when the pid is alive", async () => {
+  it("reclaims the data dir from a LIVE orphaned postmaster (crash/force-quit): pg_ctl fast stop, then start", async () => {
+    const h = makeHarness({
+      files: {
+        [`${DATA_DIR}/PG_VERSION`]: "17\n",
+        [`${DATA_DIR}/postmaster.pid`]: "12345\n",
+      },
+      processAlive: () => true, // the orphan is still running
+    });
+    await h.manager.start();
+    // A `pg_ctl -m fast ... stop` is issued BEFORE the `start`.
+    const stop = h.calls.find(
+      (c) => c.args.includes("stop") && c.args.includes("fast"),
+    );
+    const start = h.calls.find((c) => c.args.includes("start"));
+    expect(stop).toBeDefined();
+    expect(start).toBeDefined();
+    expect(h.calls.indexOf(stop!)).toBeLessThan(h.calls.indexOf(start!));
+    // The lingering pid is cleared so the fresh start binds the new port clean.
+    expect(h.removed).toContain(`${DATA_DIR}/postmaster.pid`);
+  });
+
+  it("escalates to `pg_ctl -m immediate stop` when the orphan survives a fast stop", async () => {
+    // Alive on the pre-stop check AND still alive after the fast stop.
     const h = makeHarness({
       files: {
         [`${DATA_DIR}/PG_VERSION`]: "17\n",
@@ -156,7 +178,10 @@ describe("PostgresManager.start", () => {
       processAlive: () => true,
     });
     await h.manager.start();
-    expect(h.removed).not.toContain(`${DATA_DIR}/postmaster.pid`);
+    const immediate = h.calls.find(
+      (c) => c.args.includes("stop") && c.args.includes("immediate"),
+    );
+    expect(immediate).toBeDefined();
   });
 
   it("starts via `pg_ctl -w -t start` with loopback-only listen_addresses (no pg_isready)", async () => {
