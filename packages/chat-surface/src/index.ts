@@ -847,6 +847,103 @@ export {
 } from "./approvals";
 // === end Phase 1 (PR-1.6) ===
 
+// === Phase 5 (PR-5.3…PR-5.9) — settings section bodies ===
+// The section bodies that fill the SettingsSurface `renderSection` slot. They
+// live in `./settings`; they are surfaced at the package root so a host (the
+// desktop shell) can wire the whole surface through the public barrel rather
+// than deep-importing `src/settings/*` (which would cross the package boundary).
+// `ProfilePage`/`NotificationsPage`/`QuietHoursEditor` are already exported above
+// (Phase 12 Settings block).
+export {
+  // Account (PR-5.3)
+  AppearancePage,
+  appearanceAttributes,
+  splitAppearancePersistence,
+  APPEARANCE_THEMES,
+  APPEARANCE_ACCENTS,
+  APPEARANCE_DENSITIES,
+  ShortcutsPage,
+  SHORTCUTS,
+  type AppearancePageProps,
+  type AppearanceValue,
+  type AppearancePatch,
+  type AppearanceTheme,
+  type AppearanceAccentId,
+  type AppearanceDensity,
+  type AppearanceAttributes,
+  type AppearancePersistenceSplit,
+  type ShortcutRow,
+  // Models & keys (PR-5.4 / PR-5.5 / PR-5.6)
+  ProviderKeysPage,
+  PROVIDER_KEYS_KEYCHAIN_NOTE,
+  AddProviderKeyModal,
+  createProviderKeysPort,
+  checkProviderKeyFormat,
+  providerCatalogEntry,
+  PROVIDER_CATALOG,
+  type ProviderKeysPageProps,
+  type AddProviderKeyModalProps,
+  type AddProviderKeySubmit,
+  type ProviderKeysPort,
+  type ProviderCatalogEntry,
+  type ProviderKeyValidation,
+  LocalModelsPage,
+  DownloadLocalModelModal,
+  formatBytes,
+  formatEta,
+  humanStatus,
+  placementLabel,
+  type LocalModelsPageProps,
+  type DownloadLocalModelModalProps,
+  type AvailableLocalModel,
+  type LocalModelPullHandle,
+  type LocalModelPullHandlers,
+  type StartLocalModelPull,
+  type LocalModelDownloadResult,
+  ModelBehaviorPage,
+  REASONING_DEPTHS,
+  ApprovalPolicy,
+  READ_ONLY_APPROVAL_OPTIONS,
+  WRITE_APPROVAL_OPTIONS,
+  DANGER_APPROVAL_OPTIONS,
+  APPROVAL_POLICY_CONNECTOR_NOTE,
+  type ModelBehaviorPageProps,
+  type ModelBehaviorValue,
+  type ModelBehaviorPatch,
+  type ModelBehaviorModelOption,
+  type ReasoningDepth,
+  type SpendGuardrailValue,
+  type ApprovalPolicyProps,
+  type ApprovalPolicyValue,
+  type ReadOnlyApprovalMode,
+  type WriteApprovalMode,
+  type DangerApprovalMode,
+  // Data & privacy (PR-5.7)
+  PrivacyPage,
+  RETENTION_OPTIONS,
+  PRIVACY_EXPORT_PATH,
+  PRIVACY_DELETE_CONFIRM_PHRASE,
+  type PrivacyPageProps,
+  type RetentionChoice,
+  // Advanced (PR-5.9)
+  AppLockPage,
+  APP_LOCK_AFTER_OPTIONS,
+  APP_LOCK_KEYCHAIN_NOTE,
+  TOUCH_ID_UNAVAILABLE_HINT,
+  DeveloperTokensPage,
+  DEVELOPER_TOKENS_ONCE_NOTE,
+  createDeveloperTokensPort,
+  maskDeveloperToken,
+  lastUsedLabel,
+  type AppLockPageProps,
+  type AppLockValue,
+  type AppLockPatch,
+  type AppLockAfter,
+  type DeveloperTokensPageProps,
+  type DeveloperTokensPort,
+} from "./settings";
+// === end Phase 5 (PR-5.3…PR-5.9) ===
+
 // === Phase 1 (PR-1.7) workspace pane ===
 // Hoisted right-rail pane + tablist + five tab bodies (Sources / Agents /
 // Draft / Approvals / Skills). Composition shell only — the host keeps the

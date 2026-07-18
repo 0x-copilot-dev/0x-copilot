@@ -221,3 +221,34 @@ export {
   type DangerApprovalMode,
 } from "./ApprovalPolicy";
 // === end Phase 5 (PR-5.6) ===
+
+// === Phase 5 (PR-5.9) — Advanced group (Key storage & app lock · Developer
+// tokens) ===
+// The two Advanced-group section bodies. Both are controlled / props-driven and
+// reuse the PR-5.2 chrome. `AppLockPage` reads a native Touch-ID capability the
+// HOST supplies (chat-surface never calls a native API); `DeveloperTokensPage`
+// mints/lists/revokes through the injected `DeveloperTokensPort` (default:
+// `createDeveloperTokensPort(transport)` against `/v1/me/api-keys`), and the
+// plaintext secret is revealed exactly once.
+export {
+  AppLockPage,
+  APP_LOCK_AFTER_OPTIONS,
+  APP_LOCK_KEYCHAIN_NOTE,
+  TOUCH_ID_UNAVAILABLE_HINT,
+  type AppLockPageProps,
+  type AppLockValue,
+  type AppLockPatch,
+  type AppLockAfter,
+} from "./AppLockPage";
+export {
+  DeveloperTokensPage,
+  DEVELOPER_TOKENS_ONCE_NOTE,
+  type DeveloperTokensPageProps,
+} from "./DeveloperTokensPage";
+export {
+  createDeveloperTokensPort,
+  maskDeveloperToken,
+  lastUsedLabel,
+  type DeveloperTokensPort,
+} from "./data/developerTokens";
+// === end Phase 5 (PR-5.9) ===
