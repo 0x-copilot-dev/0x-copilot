@@ -3712,6 +3712,7 @@ export type {
 // Single declaration site: ./connectors.ts.
 export type {
   Connector,
+  ConnectorAccessMode,
   ConnectorAuditEntry,
   ConnectorAuditResponse,
   ConnectorCatalogEntry,
@@ -3729,6 +3730,8 @@ export type {
   PatchConnectorScopesResponse,
   PatchWebhookRequest,
   RefreshConnectorResponse,
+  SetConnectorAccessModeRequest,
+  SetConnectorAccessModeResponse,
   StartConnectorOAuthResponse,
   TestFireWebhookRequest,
   Webhook,
@@ -3740,6 +3743,10 @@ export type {
   WebhookStatus,
   WebhookTestFireResponse,
 } from "./connectors";
+// Runtime SSOT tuple for the per-connector access mode union (desktop
+// redesign, Phase 4). Value export so the 3-way segment + tests can
+// enumerate the modes without redeclaring them.
+export { CONNECTOR_ACCESS_MODES } from "./connectors";
 // === end Phase 11 Connectors ===
 
 // === Phase 12 Team destination ===
@@ -3877,3 +3884,36 @@ export type {
   SiweVerifyRequest,
 } from "./siwe";
 // === end SIWE wallet sign-in ===
+
+// === Phase 4 (desktop redesign) Chats destination ===
+// Conversation ARCHIVE read model (pinned / recent / archived). A row
+// reopens the thread in the Run cockpit — the destination is not a live
+// thread canvas. `ChatsArchive` is the bucketed shape the destination
+// consumes; the host binder composes it from `/v1/agent/conversations`
+// (incl. archived) until a dedicated bucketed endpoint lands (PRD §11).
+// Single declaration site: ./chats.ts.
+export type { ChatArchiveRow, ChatArchiveStatus, ChatsArchive } from "./chats";
+// Runtime SSOT tuple for the chat archive status union (state-chip map).
+export { CHAT_ARCHIVE_STATUSES } from "./chats";
+// === end Phase 4 Chats ===
+
+// === Phase 4 (desktop redesign) Activity destination ===
+// Single run-history feed that absorbs the former Agents / Inbox /
+// audit-log surfaces. `ActivityRunRow` is the projected day-groupable row;
+// day grouping is derived in the shell (no `DayGroup` on the wire). The
+// host binder composes `/v1/agent/conversations` + `/v1/audit` into rows
+// until a dedicated `GET /v1/activity` lands (PRD §11). Single declaration
+// site: ./activity.ts.
+export type { ActivityRunRow, ActivityRunStatus } from "./activity";
+// Runtime SSOT tuple for the activity run status union (status→tone map).
+export { ACTIVITY_RUN_STATUSES } from "./activity";
+// === end Phase 4 Activity ===
+
+// === Phase 4 (desktop redesign) Skills destination ===
+// Card-grid summary of saved multi-step workflows (name, sub, N runs;
+// Run / Edit / New). `SkillSummary` is the lightweight row projection,
+// distinct from the richer authoring `Skill` declared above; the binder
+// projects `/v1/skills` → `SkillSummary` (PRD §11). Single declaration
+// site: ./skills.ts.
+export type { SkillSummary } from "./skills";
+// === end Phase 4 Skills ===
