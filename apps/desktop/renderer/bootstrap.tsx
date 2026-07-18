@@ -5,18 +5,22 @@ import { createRoot } from "react-dom/client";
 
 import {
   ChatShell,
-  DEFAULT_SHELL_DESTINATION,
+  DeploymentProfileProvider,
   DocumentPresenceSignal,
   HashRouter,
   LocalStorageKeyValueStore,
+  SettingsSurface,
+  defaultDestinationForProfile,
+  destinationsForProfile,
   registerGenericStructuredDiff,
+  type DeploymentProfile,
   type ShellDestinationSlug,
 } from "@0x-copilot/chat-surface";
 import { IpcTransport, type RendererSession } from "@0x-copilot/chat-transport";
 import { registerAll as registerSurfaceRenderers } from "@0x-copilot/surface-renderers";
 
 import { BootGate } from "./BootProgress";
-import { DesktopPlaceholder } from "./DesktopPlaceholder";
+import { DestinationOutlet } from "./DestinationOutlet";
 import { DEFAULT_WORKSPACE_ID, SignInGate } from "./SignInGate";
 import { Tier2Bridge } from "./Tier2Bridge";
 
@@ -47,23 +51,35 @@ const DESKTOP_CAPABILITIES = {
   openExternal: false,
 };
 
+// The deployment profile the desktop build ships with. Desktop is always the
+// solo single-user product; `team` only ever renders on a hosted/web
+// deployment. `ENTERPRISE_DEPLOYMENT_PROFILE` lives on the main process
+// (service-env.ts) as env for the spawned Python services and is NOT bridged to
+// the renderer — so Phase 2 seeds the profile provider with this static default
+// (PRD FR-2.24). The value flows through the `DeploymentProfile` port, so when a
+// `team` desktop build eventually needs a real value a preload bridge can
+// supply it here without touching chat-surface.
+const DESKTOP_DEPLOYMENT_PROFILE: DeploymentProfile = "single_user_desktop";
+
 export function App(): ReactElement {
   const router = useMemo(() => new HashRouter(), []);
   const keyValueStore = useMemo(() => new LocalStorageKeyValueStore(), []);
   const presenceSignal = useMemo(() => new DocumentPresenceSignal(), []);
   return (
-    <BootGate bridge={window.bridge}>
-      <SignInGate bridge={window.bridge} workspaceId={DEFAULT_WORKSPACE_ID}>
-        {(session) => (
-          <ChatShellForSession
-            session={session}
-            router={router}
-            keyValueStore={keyValueStore}
-            presenceSignal={presenceSignal}
-          />
-        )}
-      </SignInGate>
-    </BootGate>
+    <DeploymentProfileProvider profile={DESKTOP_DEPLOYMENT_PROFILE}>
+      <BootGate bridge={window.bridge}>
+        <SignInGate bridge={window.bridge} workspaceId={DEFAULT_WORKSPACE_ID}>
+          {(session) => (
+            <ChatShellForSession
+              session={session}
+              router={router}
+              keyValueStore={keyValueStore}
+              presenceSignal={presenceSignal}
+            />
+          )}
+        </SignInGate>
+      </BootGate>
+    </DeploymentProfileProvider>
   );
 }
 
@@ -90,9 +106,28 @@ function ChatShellForSession(props: ChatShellForSessionProps): ReactElement {
   // The shell never derives the destination itself — the host owns the
   // slug ↔ route mapping (see ChatShellProps). The web host (App.tsx)
   // maps rail clicks onto its route type; the desktop has no route type
-  // yet, so the minimal correct wiring is controlled local state.
+  // yet, so the minimal correct wiring is controlled local state. The solo
+  // profile lands on Run — the flagship cockpit is the front door, not an
+  // archive list (PRD US-2.3 / FR-2.21).
   const [activeDestination, setActiveDestination] =
-    useState<ShellDestinationSlug>(DEFAULT_SHELL_DESTINATION);
+    useState<ShellDestinationSlug>(() =>
+      defaultDestinationForProfile(DESKTOP_DEPLOYMENT_PROFILE),
+    );
+  // Settings is not a rail destination — it opens from the rail foot and owns
+  // full height (ChatShell suppresses the topbar/context/right-rail while it's
+  // active). Navigating to any destination closes it.
+  const [settingsActive, setSettingsActive] = useState(false);
+
+  const destinations = useMemo(
+    () => destinationsForProfile(DESKTOP_DEPLOYMENT_PROFILE),
+    [],
+  );
+
+  const handleNavigate = (slug: ShellDestinationSlug): void => {
+    setSettingsActive(false);
+    setActiveDestination(slug);
+  };
+
   return (
     <ChatShell
       transport={transport}
@@ -100,9 +135,19 @@ function ChatShellForSession(props: ChatShellForSessionProps): ReactElement {
       keyValueStore={props.keyValueStore}
       presenceSignal={props.presenceSignal}
       activeDestination={activeDestination}
-      onNavigate={setActiveDestination}
+      destinations={destinations}
+      onNavigate={handleNavigate}
+      onOpenSettings={() => setSettingsActive(true)}
+      settingsActive={settingsActive}
     >
-      <DesktopPlaceholder />
+      {settingsActive ? (
+        // Phase 5 fills the section bodies via `renderSection`; until then the
+        // merged SettingsSurface renders the profile-gated nav with honest
+        // titled placeholders (PRD FR-2.22, R7 — a visible stub, not a no-op).
+        <SettingsSurface />
+      ) : (
+        <DestinationOutlet destination={activeDestination} />
+      )}
     </ChatShell>
   );
 }
