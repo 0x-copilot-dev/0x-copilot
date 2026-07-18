@@ -105,3 +105,28 @@ export {
   type ProgressTone,
 } from "./controls";
 // === end Phase 5 (PR-5.2) ===
+
+// === Phase 5 (PR-5.4) — Provider keys (BYOK) + Add-key flow ===
+// The page depends on an injected `ProviderKeysPort` (default:
+// `createProviderKeysPort(transport)`); plaintext keys never live in
+// chat-surface — reads carry only the masked `key_hint`.
+export {
+  ProviderKeysPage,
+  PROVIDER_KEYS_KEYCHAIN_NOTE,
+  type ProviderKeysPageProps,
+} from "./ProviderKeysPage";
+export {
+  AddProviderKeyModal,
+  type AddProviderKeyModalProps,
+  type AddProviderKeySubmit,
+} from "./AddProviderKeyModal";
+export {
+  createProviderKeysPort,
+  checkProviderKeyFormat,
+  providerCatalogEntry,
+  PROVIDER_CATALOG,
+  type ProviderKeysPort,
+  type ProviderCatalogEntry,
+  type ProviderKeyValidation,
+} from "./data/providerKeys";
+// === end Phase 5 (PR-5.4) ===
