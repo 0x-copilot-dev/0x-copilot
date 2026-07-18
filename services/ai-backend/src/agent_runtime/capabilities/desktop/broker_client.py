@@ -1,11 +1,17 @@
 """Async HTTP client for the desktop Electron capability broker's ``/v1/fs/*`` routes.
 
-AC5 slice 3a — the ai-backend side of user-granted host-folder READ access.
+AC5 slice 3a/3b — the ai-backend side of user-granted host-folder access.
 
 The Electron main process runs an authenticated, loopback-only capability
 broker (``apps/desktop/main/capabilities/broker.ts``). It exposes the
 filesystem READ operations (``stat``/``list``/``read``/``glob``/``grep``) at
-``/v1/fs/{stat,list,read,glob,grep}``. Every request must be a JSON ``POST``
+``/v1/fs/{stat,list,read,glob,grep}``, the filesystem WRITE operations
+(``write``/``edit``/``mkdir``/``delete``/``move``) at ``/v1/fs/{write,edit,mkdir,
+delete,move}`` — each broker-side mode-gated (write/edit/mkdir need
+``read_write_no_delete``; delete/move need ``read_write``) — and the per-run
+grant-snapshot lifecycle at ``/v1/runs/{begin,end}``. A mutating op may carry a
+``run_capability_context`` so the broker authorizes it against the run's PINNED
+snapshot rather than live grant state. Every request must be a JSON ``POST``
 carrying:
 
 * ``Authorization: Bearer <token>`` — a per-boot 256-bit secret delivered to
@@ -48,15 +54,29 @@ logger = logging.getLogger(__name__)
 
 
 class Routes:
-    """Broker READ route paths (mirrors ``broker.ts`` ``ROUTES``)."""
+    """Broker route paths (mirrors ``broker.ts`` ``ROUTES``)."""
 
     STAT: Final = "/v1/fs/stat"
     LIST: Final = "/v1/fs/list"
     READ: Final = "/v1/fs/read"
     GLOB: Final = "/v1/fs/glob"
     GREP: Final = "/v1/fs/grep"
+    #: Filesystem WRITE ops (slice 3). Each is mode-gated by the broker:
+    #: write/edit/mkdir need ``read_write_no_delete``; delete/move need
+    #: ``read_write``. A mutating op MAY carry a ``run_capability_context`` so it
+    #: authorizes against the run's pinned grant snapshot rather than live state.
+    WRITE: Final = "/v1/fs/write"
+    EDIT: Final = "/v1/fs/edit"
+    MKDIR: Final = "/v1/fs/mkdir"
+    DELETE: Final = "/v1/fs/delete"
+    MOVE: Final = "/v1/fs/move"
     #: Grant-management read — the CURRENT active grant snapshot (path-free).
     GRANTS_SNAPSHOT: Final = "/v1/grants/snapshot"
+    #: Per-run grant snapshot lifecycle. ``/v1/runs/begin`` pins the CURRENT
+    #: active grants under an opaque ``run_capability_context``; ``/v1/runs/end``
+    #: releases it. RAM-only, main-side; the projection is path-free.
+    RUNS_BEGIN: Final = "/v1/runs/begin"
+    RUNS_END: Final = "/v1/runs/end"
 
 
 class Header:
@@ -81,6 +101,14 @@ class Field_:  # noqa: N801 — a small constants namespace, not a runtime type
     FLAGS: Final = "flags"
     MAX_MATCHES: Final = "max_matches"
     ERROR: Final = "error"
+    #: Write-op request fields. ``content_base64`` carries the (base64-encoded)
+    #: file bytes for write/edit; ``from``/``to`` name the move source/dest.
+    CONTENT_BASE64: Final = "content_base64"
+    FROM: Final = "from"
+    TO: Final = "to"
+    #: Opaque per-run authority handle threaded onto a mutating op so the broker
+    #: authorizes it against the run's PINNED grant snapshot (see ``/v1/runs/*``).
+    RUN_CAPABILITY_CONTEXT: Final = "run_capability_context"
 
 
 class ErrorCode:
@@ -279,6 +307,43 @@ class FsGrepResult(_BrokerModel):
     files_scanned: int = Field(alias="filesScanned", default=0)
 
 
+class FsWriteResult(_BrokerModel):
+    """``/v1/fs/write`` — create-or-overwrite result (path-free, root-relative)."""
+
+    path: str
+    bytes_written: int = Field(alias="bytesWritten", default=0)
+    created: bool = False
+
+
+class FsEditResult(_BrokerModel):
+    """``/v1/fs/edit`` — atomic full-content replacement of an EXISTING file."""
+
+    path: str
+    bytes_written: int = Field(alias="bytesWritten", default=0)
+
+
+class FsMkdirResult(_BrokerModel):
+    """``/v1/fs/mkdir`` — single-directory create (idempotent)."""
+
+    path: str
+    created: bool = False
+
+
+class FsDeleteResult(_BrokerModel):
+    """``/v1/fs/delete`` — unlink a file / rmdir an empty directory."""
+
+    path: str
+    type: Literal["file", "dir"]
+
+
+class FsMoveResult(_BrokerModel):
+    """``/v1/fs/move`` — rename within one grant tree."""
+
+    from_path: str = Field(alias="from")
+    to_path: str = Field(alias="to")
+    type: Literal["file", "dir"]
+
+
 class BrokerGrant(_BrokerModel):
     """One host-folder grant from ``/v1/grants/snapshot`` (path-free projection).
 
@@ -307,6 +372,26 @@ class BrokerGrantSnapshot(_BrokerModel):
     snapshot_id: str = Field(alias="snapshotId", default="")
     captured_at: float = Field(alias="capturedAt", default=0.0)
     grants: tuple[BrokerGrant, ...] = ()
+
+
+class RunContextBinding(_BrokerModel):
+    """``/v1/runs/begin`` — the opaque per-run authority handle + pinned grants.
+
+    ``run_capability_context`` is the id a later mutating op passes back so the
+    broker authorizes it against the frozen snapshot pinned here (never live
+    grant state). ``grants`` is the path-free projection of the pinned set.
+    """
+
+    run_capability_context: str = Field(alias="runCapabilityContext")
+    snapshot_id: str = Field(alias="snapshotId", default="")
+    captured_at: float = Field(alias="capturedAt", default=0.0)
+    grants: tuple[BrokerGrant, ...] = ()
+
+
+class RunContextRelease(_BrokerModel):
+    """``/v1/runs/end`` — whether the run's pinned context existed and was dropped."""
+
+    released: bool = False
 
 
 # --- client ------------------------------------------------------------------
@@ -442,6 +527,145 @@ class DesktopBrokerClient:
         """
         body = await self._post(Routes.GRANTS_SNAPSHOT, {})
         return BrokerGrantSnapshot.model_validate(body)
+
+    # --- filesystem WRITE ops (slice 3) -------------------------------------
+
+    async def write(
+        self,
+        grant_id: str,
+        path: str,
+        content_base64: str,
+        *,
+        run_capability_context: str | None = None,
+    ) -> FsWriteResult:
+        """Create-or-overwrite file ``path`` under ``grant_id`` with base64 bytes.
+
+        Broker mode-gate: needs ``read_write_no_delete``. A too-low grant mode
+        surfaces as :class:`BrokerPermissionDeniedError`.
+        """
+        body = await self._post(
+            Routes.WRITE,
+            self._mutation_payload(
+                {
+                    Field_.GRANT_ID: grant_id,
+                    Field_.PATH: path,
+                    Field_.CONTENT_BASE64: content_base64,
+                },
+                run_capability_context,
+            ),
+        )
+        return FsWriteResult.model_validate(body)
+
+    async def edit(
+        self,
+        grant_id: str,
+        path: str,
+        content_base64: str,
+        *,
+        run_capability_context: str | None = None,
+    ) -> FsEditResult:
+        """Atomically replace the FULL contents of EXISTING file ``path``.
+
+        Unlike :meth:`write`, the broker fails ``not_found`` when the target does
+        not exist. Mode-gate: ``read_write_no_delete``.
+        """
+        body = await self._post(
+            Routes.EDIT,
+            self._mutation_payload(
+                {
+                    Field_.GRANT_ID: grant_id,
+                    Field_.PATH: path,
+                    Field_.CONTENT_BASE64: content_base64,
+                },
+                run_capability_context,
+            ),
+        )
+        return FsEditResult.model_validate(body)
+
+    async def mkdir(
+        self,
+        grant_id: str,
+        path: str,
+        *,
+        run_capability_context: str | None = None,
+    ) -> FsMkdirResult:
+        """Create a single directory whose parent exists. Mode-gate: ``read_write_no_delete``."""
+        body = await self._post(
+            Routes.MKDIR,
+            self._mutation_payload(
+                {Field_.GRANT_ID: grant_id, Field_.PATH: path},
+                run_capability_context,
+            ),
+        )
+        return FsMkdirResult.model_validate(body)
+
+    async def delete(
+        self,
+        grant_id: str,
+        path: str,
+        *,
+        run_capability_context: str | None = None,
+    ) -> FsDeleteResult:
+        """Delete a file / empty directory. Mode-gate: ``read_write`` (delete authority)."""
+        body = await self._post(
+            Routes.DELETE,
+            self._mutation_payload(
+                {Field_.GRANT_ID: grant_id, Field_.PATH: path},
+                run_capability_context,
+            ),
+        )
+        return FsDeleteResult.model_validate(body)
+
+    async def move(
+        self,
+        grant_id: str,
+        from_path: str,
+        to_path: str,
+        *,
+        run_capability_context: str | None = None,
+    ) -> FsMoveResult:
+        """Move/rename within one grant tree. Mode-gate: ``read_write`` (delete authority)."""
+        body = await self._post(
+            Routes.MOVE,
+            self._mutation_payload(
+                {
+                    Field_.GRANT_ID: grant_id,
+                    Field_.FROM: from_path,
+                    Field_.TO: to_path,
+                },
+                run_capability_context,
+            ),
+        )
+        return FsMoveResult.model_validate(body)
+
+    # --- per-run grant snapshot lifecycle (slice 3b) ------------------------
+
+    async def runs_begin(self) -> RunContextBinding:
+        """Pin the CURRENT active grants under a fresh ``run_capability_context``.
+
+        Called at run start; the returned opaque id is threaded onto every
+        subsequent mutating op so the op authorizes against this immutable
+        snapshot rather than live grant state. The projection is path-free.
+        """
+        body = await self._post(Routes.RUNS_BEGIN, {})
+        return RunContextBinding.model_validate(body)
+
+    async def runs_end(self, run_capability_context: str) -> RunContextRelease:
+        """Release a run's pinned grant snapshot (idempotent — ``released`` False if unknown)."""
+        body = await self._post(
+            Routes.RUNS_END,
+            {Field_.RUN_CAPABILITY_CONTEXT: run_capability_context},
+        )
+        return RunContextRelease.model_validate(body)
+
+    @staticmethod
+    def _mutation_payload(
+        payload: dict[str, object], run_capability_context: str | None
+    ) -> dict[str, object]:
+        """Attach the ``run_capability_context`` to a mutating request body when present."""
+        if run_capability_context is not None:
+            payload[Field_.RUN_CAPABILITY_CONTEXT] = run_capability_context
+        return payload
 
     # --- transport ----------------------------------------------------------
 

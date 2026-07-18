@@ -156,6 +156,23 @@ class CatalogIndex:
             self._insert_event(doc)
         self._c.commit()
 
+    def delete_conversation_cascade(self, conversation_id: str) -> None:
+        """Drop a conversation and every message / run / event row under it.
+
+        Mirrors a physical session deletion in the disposable index so live
+        listing reads stop returning the purged conversation without waiting
+        for the next ``rebuild`` on reopen.
+        """
+
+        conn = self._c
+        conn.execute("DELETE FROM events WHERE conversation_id=?", (conversation_id,))
+        conn.execute("DELETE FROM runs WHERE conversation_id=?", (conversation_id,))
+        conn.execute("DELETE FROM messages WHERE conversation_id=?", (conversation_id,))
+        conn.execute(
+            "DELETE FROM conversations WHERE conversation_id=?", (conversation_id,)
+        )
+        conn.commit()
+
     def _insert_conversation(self, doc: dict) -> None:
         self._c.execute(
             "INSERT OR REPLACE INTO conversations"
