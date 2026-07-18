@@ -185,7 +185,7 @@ export class PostgresManager {
   }
 
   async #cleanupStalePid(): Promise<void> {
-    const { fs, dataDir } = this.#config;
+    const { fs, dataDir, paths, runner, startTimeoutSeconds } = this.#config;
     const pidPath = join(dataDir, "postmaster.pid");
     let raw: string;
     try {
@@ -200,7 +200,34 @@ export class PostgresManager {
     if (Number.isNaN(pid) || !alive(pid)) {
       // Dead postmaster left a stale pid file (crash / force-quit).
       await fs.rm(pidPath, { force: true });
+      return;
     }
+    // A LIVE postmaster still owns our data dir: an orphan from a previous boot
+    // that was force-quit / crashed before stop() ran. `pg_ctl start` would
+    // refuse it ("another server might be running ... could not start server"),
+    // hard-failing every subsequent launch until the user hunts the process
+    // down by hand. Reclaim the data dir by stopping that cluster (fast
+    // shutdown, bounded wait), then drop any lingering pid so the fresh start
+    // below binds the newly-allocated port on a clean dir.
+    const stopArgs = (mode: "fast" | "immediate"): string[] => [
+      "-D",
+      dataDir,
+      "-m",
+      mode,
+      "-w",
+      "-t",
+      String(startTimeoutSeconds ?? 60),
+      "stop",
+    ];
+    await runner(paths.pgCtl, stopArgs("fast"));
+    // If the orphan is wedged and ignored a fast (SIGINT) shutdown, escalate to
+    // immediate (SIGQUIT) — aborts every backend without a checkpoint; the
+    // fresh start below simply does crash recovery. Best-effort: a remaining
+    // failure surfaces as the normal pg_ctl start error, not a silent hang.
+    if (alive(pid)) {
+      await runner(paths.pgCtl, stopArgs("immediate"));
+    }
+    await fs.rm(pidPath, { force: true });
   }
 }
 
