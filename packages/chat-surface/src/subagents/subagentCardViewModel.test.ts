@@ -1,4 +1,5 @@
-// PR 3.2.2 — adapter unit tests.
+// PR 3.2.2 — adapter unit tests. Moved down with the view model (PR-1.5);
+// the same assertions run from chat-surface.
 
 import { describe, expect, it } from "vitest";
 import type { SubagentEntry } from "@0x-copilot/api-types";

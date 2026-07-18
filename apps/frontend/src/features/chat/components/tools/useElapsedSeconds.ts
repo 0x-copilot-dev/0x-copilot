@@ -1,21 +1,9 @@
-import { useEffect, useState } from "react";
+// Re-export shim for the elapsed-seconds hook.
+//
+// The hook now lives in @0x-copilot/chat-surface (PR-1.5). Its interval was
+// rewritten from `window.setInterval` to the bare `setInterval` global
+// (FR-1.30) so it is substrate-portable while keeping the 5000 ms cadence
+// byte-identical. Existing import sites keep resolving `useElapsedSeconds`
+// from here.
 
-export function useElapsedSeconds(
-  active: boolean,
-  startedAt: string | null,
-): number {
-  const [mountedAt] = useState(() => Date.now());
-  const [now, setNow] = useState(() => Date.now());
-  useEffect(() => {
-    if (!active) {
-      return undefined;
-    }
-    const timer = window.setInterval(() => setNow(Date.now()), 5000);
-    return () => window.clearInterval(timer);
-  }, [active]);
-  const parsedStartedAt = startedAt ? Date.parse(startedAt) : Number.NaN;
-  const startMs = Number.isFinite(parsedStartedAt)
-    ? parsedStartedAt
-    : mountedAt;
-  return Math.max(0, Math.floor((now - startMs) / 1000));
-}
+export { useElapsedSeconds } from "@0x-copilot/chat-surface";

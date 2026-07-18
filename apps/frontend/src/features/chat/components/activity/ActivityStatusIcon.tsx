@@ -1,18 +1,8 @@
-import type { ReactElement } from "react";
+// Re-export shim for the activity status icon (spinner / ✓ / !).
+//
+// The component now lives in @0x-copilot/chat-surface (PR-1.5) as a shared
+// leaf of the subagent card family. It maps a status string to an icon via
+// the same `statusClassification` table; existing import sites (incl.
+// `ActivityItem`) keep resolving `ActivityStatusIcon` from here.
 
-import { statusClassification } from "../../utils/toolLabels";
-
-export function ActivityStatusIcon({
-  status,
-}: {
-  status: string;
-}): ReactElement {
-  const { kind } = statusClassification(status);
-  if (kind === "running") {
-    return <span className="aui-activity-item__spinner" />;
-  }
-  if (kind === "error") {
-    return <span className="aui-activity-item__mark">!</span>;
-  }
-  return <span className="aui-activity-item__mark">✓</span>;
-}
+export { ActivityStatusIcon } from "@0x-copilot/chat-surface";

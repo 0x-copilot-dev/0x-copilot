@@ -1,4 +1,5 @@
-// PR 3.2.4 — compact fleet-row coverage.
+// PR 3.2.4 — compact fleet-row coverage. Moved down with the component
+// (PR-1.5); the same assertions run from chat-surface.
 // AC-2 (structure), AC-3 (animated progress), AC-6 (failed/cancelled status word).
 // PR 3.2.7 — paused chrome (amber indicator + paused chip + frozen
 // progress) + clickable row with inline timeline disclosure + jump-to-
@@ -6,7 +7,7 @@
 
 import { describe, expect, it, vi } from "vitest";
 import { fireEvent, render, screen } from "@testing-library/react";
-import type { SubagentActivityRecord } from "../../utils/activityDataBuilders";
+import type { SubagentActivityRecord } from "./subagentHelpers";
 import { FleetSubagentRow } from "./FleetSubagentRow";
 import type { SubagentCardViewModel } from "./subagentCardViewModel";
 
