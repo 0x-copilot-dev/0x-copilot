@@ -15,32 +15,28 @@ import {
   type CompletedMcpAuthAction,
 } from "../features/chat/mcpAuthAction";
 import { useConnectors } from "../features/connectors/useConnectors";
-import { HomeRoute } from "../features/home/HomeRoute";
-import { InboxRoute } from "../features/inbox/InboxRoute";
-import { TodosRoute } from "../features/todos/TodosRoute";
-// PR P6-C — Projects destination data binder. Eager-loaded (vs the lazy
-// destination chunks below) because it follows the same feature-binder
-// pattern as HomeRoute / InboxRoute / TodosRoute and is needed at the
-// shell's destination dispatch — keeping it eager mirrors how those
-// routes are mounted today, which is the single source of truth for
-// "destination owned by a host-side data binder vs the chat-surface
-// placeholder".
+// PR-4.11 (IA fold) — the six-destination solo shell mounts these host-side
+// data binders at the destination dispatch. Chats / Activity / Skills are the
+// Phase-4 binders; Projects / Connectors predate the fold. All are eager (vs
+// the lazy screen chunks below) because they sit on the shell's hot
+// destination-dispatch path — the single source of truth for "destination
+// owned by a host-side binder vs the chat-surface placeholder".
+//
+// The seven folded destinations (home / library / inbox / todos / routines /
+// agents / memory) are no longer mounted here; deep-links to them redirect
+// (`foldedRedirectFor`, FR-4.31). Their feature routes stay in-tree for the
+// Phase-6C dead-code sweep.
+import { ChatsArchiveRoute } from "../features/chats/ChatsArchiveRoute";
 import { ProjectsRoute } from "../features/projects/ProjectsRoute";
-import { LibraryRoute } from "../features/library/LibraryRoute";
-import { AgentsRoute } from "../features/agents/AgentsRoute";
-// PR P11-C — Connectors destination data binder + sub-route gateway.
-// `ConnectorsGateway` owns the in-destination routing between the list
-// (/connectors), the detail (/connectors/<id>), and the webhooks
-// sub-route (/connectors/webhooks). Sub-routes ride on local state
-// because HashRouter only models top-level `/<destination>` slugs
-// today; lifting them into the URL is a follow-up.
+import { ActivityRoute } from "../features/activity/ActivityRoute";
+import { SkillsRoute } from "../features/skills/SkillsRoute";
+// `ConnectorsGateway` (the "Tools" destination) owns the in-destination
+// routing between the list (/connectors), the detail (/connectors/<id>), and
+// the webhooks sub-route. `TeamGateway` backs the team-profile `/team`
+// surface. Both ride on local state because HashRouter only models top-level
+// `/<destination>` slugs today.
 import { ConnectorsGateway } from "../features/connectors/ConnectorsGateway";
-// P12-C — Team + Memory destination gateways. The chat-surface
-// `<TeamDestination>` / `<MemoryDestination>` exports were Wave-0
-// stubs; the gateways here own fetch + SSE + the in-destination
-// sub-routes (`/team/<id>`, `/memory/<id>`, `/memory/proposals`).
 import { TeamGateway } from "../features/team/TeamGateway";
-import { MemoryGateway } from "../features/memory/MemoryGateway";
 // P12-C — ⌘K palette host adapter (sub-PRD §7.3 / §7.5). Mounted once
 // at the App root so the ⌘K hotkey is global and there is a single
 // CommandPalette instance across every page.
@@ -103,21 +99,6 @@ const SettingsScreen = lazy(() =>
     default: m.SettingsScreen,
   })),
 );
-// P5-C — Routines destination data binder. Owns its own Vite chunk so
-// the Routines screen costs the main bundle nothing until the user
-// navigates to it. Same lazy-loading shape as the other destination
-// screens above.
-//
-// TODO(merge): once P5-B's `<RoutinesDestination>` lands in
-// `@0x-copilot/chat-surface` and `ShellDestinationSlug` is
-// extended to include `"routines"`, RoutinesRoute keeps its current
-// shape — only the inner host-side list inside the route is replaced
-// with the package-shipped destination component.
-const RoutinesRoute = lazy(() =>
-  import("../features/routines/RoutinesRoute").then((m) => ({
-    default: m.RoutinesRoute,
-  })),
-);
 // P6.5-C2 — Project Templates gallery (sub-PRD §7.6). Top-level screen
 // (not a destination slug — §7.6 + §12 Q1: not on the rail), code-split
 // so the templates UI costs the main bundle nothing until the user
@@ -140,21 +121,22 @@ function RouteLoadingFallback(): ReactElement {
 }
 import {
   ChatShell,
+  DeploymentProfileProvider,
   DocumentPresenceSignal,
   KeyValueStoreProvider,
   LocalStorageKeyValueStore,
   SecretStorageProvider,
-  ToolsDestination,
   WebSecretStorage,
   registerItemRefResolver,
   hasItemRefResolver,
   useKeyValueStore,
   type ArtifactRoute,
+  type DeploymentProfile,
   type ShellDestinationSlug,
 } from "@0x-copilot/chat-surface";
 import { getAppTransport } from "../api/transport";
 import { HashRouter, migrateLegacySettingsPath } from "./HashRouter";
-import { ROOT_DESTINATION, type AppRoute } from "./routes";
+import { ROOT_DESTINATION, foldedRedirectFor, type AppRoute } from "./routes";
 import { errorMessage } from "../utils/errors";
 import {
   PortProvider,
@@ -165,52 +147,22 @@ import {
   type PortBundle,
 } from "../ports";
 
-// Desktop-redesign destinations (run/activity/members/billing) exist in
-// the shared slug union for the desktop solo shell but are never routed
-// to on web; this placeholder satisfies the exhaustive destination map.
+// Placeholder for a destination that exists in the shared slug union but has
+// no web surface yet. Renders an inert, unavailable section rather than
+// crashing the dispatch.
 function DesktopOnlyDestination(): ReactElement {
   return <section data-destination-unavailable style={{ height: "100%" }} />;
 }
 
-// Map every destination slug WITHOUT a host-side feature-binder to the
-// placeholder component shipped with the chat-surface package. Chats has
-// a dedicated host component (`ChatScreen`); Home, Todos, Inbox,
-// Routines, Projects, Library, and Agents have feature-level data
-// binders (`HomeRoute` / `TodosRoute` / `InboxRoute` / `RoutinesRoute`
-// / `ProjectsRoute` / `LibraryRoute` / `AgentsRoute`) that own their
-// fetch + SSE wiring — adding any of them here would shadow the
-// binder and lose the SSE / upload / autosave behaviour.
-const NON_CHATS_DESTINATIONS: Readonly<
-  Record<
-    Exclude<
-      ShellDestinationSlug,
-      | "chats"
-      | "home"
-      | "todos"
-      | "inbox"
-      | "routines"
-      | "projects"
-      | "library"
-      | "agents"
-      | "connectors"
-      // P12-C — Team + Memory now have host-side gateways
-      // (TeamGateway / MemoryGateway) that own fetch + SSE + the
-      // in-destination sub-routes. The chat-surface Wave-0 stubs are
-      // no longer mounted here.
-      | "team"
-      | "memory"
-    >,
-    () => ReactElement
-  >
+// PR-4.11 — the only slugs that reach the placeholder path are the
+// team-profile-only Members and Billing surfaces (Phase 6 / Settings work);
+// they are never on the solo rail, but a deep-link must resolve to a harmless
+// placeholder instead of an undefined outlet. Every other slug is either a
+// real binder branch in the dispatch below (run / chats / projects / activity
+// / connectors / tools / team) or a folded slug that redirects (FR-4.31).
+const PLACEHOLDER_DESTINATIONS: Partial<
+  Record<ShellDestinationSlug, () => ReactElement>
 > = {
-  tools: ToolsDestination,
-  // Desktop-redesign destinations (profile-gated solo shell) are part of
-  // the shared slug union but are NOT web-routable — the web host never
-  // navigates to them (absent from the web `SHELL_DESTINATIONS` list). The
-  // exhaustive map must still cover them, so point them at a placeholder
-  // that is never actually rendered on web.
-  run: DesktopOnlyDestination,
-  activity: DesktopOnlyDestination,
   members: DesktopOnlyDestination,
   billing: DesktopOnlyDestination,
 };
@@ -319,6 +271,21 @@ const DEFAULT_ORG_ID =
   (typeof import.meta !== "undefined" &&
     import.meta.env?.VITE_DEFAULT_ORG_ID) ||
   "org_123";
+
+/**
+ * PR-4.11 — the web shell renders the six-destination `single_user_desktop`
+ * solo rail by default (Run / Chats / Projects / Activity / Tools / Skills).
+ * A `team` deployment opts into the nine-destination rail via
+ * `VITE_DEPLOYMENT_PROFILE=team`. The value flows into
+ * `DeploymentProfileProvider`, which gates the rail (`destinationsForProfile`)
+ * — and the profile-aware Settings surfaces — instead of the frozen legacy
+ * 12-destination `SHELL_DESTINATIONS` fallback.
+ */
+const DEPLOYMENT_PROFILE: DeploymentProfile =
+  (typeof import.meta !== "undefined" &&
+    import.meta.env?.VITE_DEPLOYMENT_PROFILE) === "team"
+    ? "team"
+    : "single_user_desktop";
 
 const mcpOAuthCompletions = new Map<string, Promise<McpServer>>();
 
@@ -466,7 +433,7 @@ function completeMcpOAuthOnce(
   return completion;
 }
 
-function CopilotApp({
+export function CopilotApp({
   identity,
   roles,
 }: {
@@ -538,6 +505,22 @@ function CopilotApp({
     useState<CompletedMcpAuthAction | null>(null);
 
   useEffect(() => router.subscribe(setRoute), [router]);
+
+  // FR-4.31 — redirect a deep-link that lands on a folded destination slug
+  // (home / library / inbox / todos / routines / agents / memory) to the
+  // destination that absorbed it. `foldedRedirect` is a stable object
+  // reference per slug (it comes straight from `FOLDED_DESTINATION_REDIRECTS`),
+  // so this effect fires once per folded landing rather than on every render.
+  // `replace` keeps the folded URL out of the back stack. The render body
+  // shows the loading fallback for the transient frame before the redirect
+  // lands (see the dispatch below), so a folded slug never renders a dead
+  // outlet.
+  const foldedRedirect = foldedRedirectFor(route);
+  useEffect(() => {
+    if (foldedRedirect !== null) {
+      router.navigate(foldedRedirect, { replace: true });
+    }
+  }, [foldedRedirect, router]);
 
   useEffect(() => {
     if (window.location.pathname !== "/mcp/oauth/callback") {
@@ -648,8 +631,9 @@ function CopilotApp({
     route.screen === "chat" ? route.destination : ROOT_DESTINATION;
 
   // P12-C — round-trip a destination sub-path through the URL when the
-  // gateway switches in-destination panes. Today only Team and Memory
-  // consume sub-paths; other gateways still pass `null`. Replace history
+  // gateway switches in-destination panes. Post-IA-fold (PR-4.11) only the
+  // team-profile Team destination consumes sub-paths (Memory folded into
+  // Settings → Privacy); other gateways still pass `null`. Replace history
   // (not push) so the back button skips over intra-destination
   // transitions — mirrors the legacy settings hash migration.
   function handleSubPathChange(
@@ -666,6 +650,38 @@ function CopilotApp({
 
   const handleRailNavigate = (slug: ShellDestinationSlug): void => {
     router.navigate({ screen: "chat", destination: slug });
+  };
+
+  // PR-4.11 — host navigation seams the Phase-4 binders defer to the App
+  // (each binder takes these as props so it stays decoupled from the
+  // `AppRoute` union). The Run cockpit on web is the working conversation
+  // surface (`ChatScreen`) mounted under the `run` slug.
+  //
+  // `openRun` funnels reopen (Chats) / new-chat / skill-run (Skills) / live-run
+  // (Activity) / project-chat (Projects) into the Run destination. The
+  // conversation/run id is accepted because the binders pass it, but selecting
+  // that specific thread inside the cockpit is a Phase-3 Run-screen concern —
+  // `ChatScreen` opens its most-recent thread today; threading the id through
+  // is a one-line follow-up once the cockpit accepts an initial conversation.
+  const openRun = (_idOrRunId?: string): void => {
+    router.navigate({ screen: "chat", destination: "run" });
+  };
+  // Activity's retention/export/delete link → Settings → Privacy & data
+  // (FR-4.17).
+  const openRetentionSettings = (): void => {
+    router.navigate({ screen: "settings", section: "privacy-data" });
+  };
+  // Tools' approval-policy note → Settings → Model & behavior (FR-4.25).
+  const openApprovalSettings = (): void => {
+    router.navigate({ screen: "settings", section: "model-and-behavior" });
+  };
+  // Skills Edit / New open the existing skill editor, which lives in
+  // Settings → Skills. `skillId` is accepted for forward-compat (deep-link to
+  // a specific skill) but the Settings section does not pre-select a skill yet
+  // — a Phase-5 Settings enhancement. `null` = create a new skill (FR-4.27 /
+  // FR-4.28).
+  const openSkillEditor = (_skillId?: string | null): void => {
+    router.navigate({ screen: "settings", section: "skills" });
   };
 
   let body: ReactElement;
@@ -803,12 +819,21 @@ function CopilotApp({
         }
       />
     );
-  } else if (route.destination === "chats") {
-    // Chats keeps the legacy host-side ChatScreen — it owns its own
-    // thread sidebar + composer, and the chat-surface package's
-    // ChatsDestination is only a placeholder. ChatShell hides the
-    // ContextPanel column for chats (full-bleed), so there is exactly
-    // one rail + one thread sidebar + one main pane (+ right rail).
+  } else if (foldedRedirect !== null) {
+    // FR-4.31 — a deep-link landed on a folded destination slug. The effect
+    // above navigates to the absorbing destination; render the loading
+    // fallback for the transient frame before that redirect lands so we never
+    // dispatch a dead/undefined outlet for `home`/`library`/`inbox`/`todos`/
+    // `routines`/`agents`/`memory`.
+    body = <RouteLoadingFallback />;
+  } else if (route.destination === "run") {
+    // PR-4.11 — the Run cockpit. On web the flagship Run destination is the
+    // working conversation surface (`ChatScreen`), which owns its own thread
+    // sidebar + composer. `run` is full-bleed in ChatShell (no ContextPanel /
+    // Topbar), so there is exactly one rail + one thread sidebar + one main
+    // pane (+ right rail). Reopen (Chats) / new-chat / skill-run / live-run all
+    // land here via `openRun`. `/` maps to `run` (ROOT_DESTINATION), so the
+    // legacy `/` bookmark keeps opening the chat cockpit.
     body = (
       <ChatScreen
         connectors={connectors}
@@ -821,57 +846,26 @@ function CopilotApp({
         completedMcpAuthAction={completedMcpAuthAction}
       />
     );
-  } else if (route.destination === "home") {
+  } else if (route.destination === "chats") {
+    // PR-4.11 (FR-4.5..4.9) — Chats is now the conversation ARCHIVE
+    // (pinned/recent/archived), not the live cockpit. `ChatsArchiveRoute`
+    // buckets `/v1/agent/conversations`; reopen + new-chat funnel through
+    // `openRun` → the Run destination.
     body = (
       <section
         data-testid="destination-outlet"
-        data-destination="home"
+        data-destination="chats"
         style={{ height: "100%", overflow: "auto" }}
-        aria-label="home destination"
+        aria-label="chats destination"
       >
-        <HomeRoute identity={identity} />
-      </section>
-    );
-  } else if (route.destination === "todos") {
-    body = (
-      <section
-        data-testid="destination-outlet"
-        data-destination="todos"
-        style={{ height: "100%", overflow: "auto" }}
-        aria-label="todos destination"
-      >
-        <TodosRoute identity={identity} projectId={null} />
-      </section>
-    );
-  } else if (route.destination === "inbox") {
-    body = (
-      <section
-        data-testid="destination-outlet"
-        data-destination="inbox"
-        style={{ height: "100%", overflow: "auto" }}
-        aria-label="inbox destination"
-      >
-        <InboxRoute identity={identity} />
-      </section>
-    );
-  } else if (route.destination === "routines") {
-    // P5-C — Routines destination dispatch. ShellDestinationSlug was
-    // extended to include "routines" by P5-B1, so the comparison is a
-    // plain string check (cast no longer needed).
-    body = (
-      <section
-        data-testid="destination-outlet"
-        data-destination="routines"
-        style={{ height: "100%", overflow: "auto" }}
-        aria-label="routines destination"
-      >
-        <RoutinesRoute identity={identity} />
+        <ChatsArchiveRoute identity={identity} onOpenRun={openRun} />
       </section>
     );
   } else if (route.destination === "projects") {
     // P6-C — Projects destination dispatch. The route owns its own
     // fetch + SSE membership stream (sub-PRD §3.8); the chat-surface
-    // `<ProjectsDestination>` placeholder is no longer mounted here.
+    // `<ProjectsDestination>` placeholder is no longer mounted here. A chat
+    // row in the project detail opens the Run cockpit via `openRun` (FR-4.12).
     body = (
       <section
         data-testid="destination-outlet"
@@ -879,38 +873,33 @@ function CopilotApp({
         style={{ height: "100%", overflow: "auto" }}
         aria-label="projects destination"
       >
-        <ProjectsRoute identity={identity} />
+        <ProjectsRoute identity={identity} onOpenRun={openRun} />
       </section>
     );
-  } else if (route.destination === "library") {
+  } else if (route.destination === "activity") {
+    // PR-4.11 (FR-4.14..4.19) — Activity is the recast run/audit/agents/inbox
+    // feed. A live-run row opens the Run cockpit (`openRun`); the retention
+    // link opens Settings → Privacy & data (`openRetentionSettings`).
     body = (
       <section
         data-testid="destination-outlet"
-        data-destination="library"
+        data-destination="activity"
         style={{ height: "100%", overflow: "auto" }}
-        aria-label="library destination"
+        aria-label="activity destination"
       >
-        <LibraryRoute identity={identity} />
-      </section>
-    );
-  } else if (route.destination === "agents") {
-    body = (
-      <section
-        data-testid="destination-outlet"
-        data-destination="agents"
-        style={{ height: "100%", overflow: "auto" }}
-        aria-label="agents destination"
-      >
-        <AgentsRoute identity={identity} />
+        <ActivityRoute
+          identity={identity}
+          onOpenRun={openRun}
+          onOpenRetentionSettings={openRetentionSettings}
+        />
       </section>
     );
   } else if (route.destination === "connectors") {
-    // PR P11-C — Connectors destination dispatch. ConnectorsGateway
-    // owns the in-destination routing between the list, the detail,
-    // and the webhooks sub-route. The chat-surface
-    // `<ConnectorsDestination>` placeholder is no longer mounted here;
-    // the gateway hosts a fully-bound `<ConnectorsRoute>` that consumes
-    // the same destination component internally.
+    // PR-4.11 — the "Tools" destination (slug `connectors`, relabeled by the
+    // solo profile). ConnectorsGateway owns the in-destination routing between
+    // the list, the detail, and the webhooks sub-route; the approval-policy
+    // note links to Settings → Model & behavior (`openApprovalSettings`,
+    // FR-4.25).
     body = (
       <section
         data-testid="destination-outlet"
@@ -918,7 +907,30 @@ function CopilotApp({
         style={{ height: "100%", overflow: "auto" }}
         aria-label="connectors destination"
       >
-        <ConnectorsGateway identity={identity} isAdmin={isAdmin} />
+        <ConnectorsGateway
+          identity={identity}
+          isAdmin={isAdmin}
+          onOpenApprovalSettings={openApprovalSettings}
+        />
+      </section>
+    );
+  } else if (route.destination === "tools") {
+    // PR-4.11 — the "Skills" destination (slug `tools`, relabeled by the solo
+    // profile). `SkillsRoute` is the saved-workflow catalog backed by
+    // `/v1/skills`; Run starts a run + opens the Run cockpit (`openRun`),
+    // Edit/New open the skill editor (`openSkillEditor`, Settings → Skills).
+    body = (
+      <section
+        data-testid="destination-outlet"
+        data-destination="tools"
+        style={{ height: "100%", overflow: "auto" }}
+        aria-label="skills destination"
+      >
+        <SkillsRoute
+          identity={identity}
+          onOpenRun={openRun}
+          onOpenSkillEditor={openSkillEditor}
+        />
       </section>
     );
   } else if (route.destination === "team") {
@@ -939,30 +951,13 @@ function CopilotApp({
         />
       </section>
     );
-  } else if (route.destination === "memory") {
-    // P12-C — Memory destination dispatch. MemoryGateway owns the
-    // list (`/memory`), detail (`/memory/<id>`), and proposals queue
-    // (`/memory/proposals`) routing.
-    body = (
-      <section
-        data-testid="destination-outlet"
-        data-destination="memory"
-        style={{ height: "100%", overflow: "auto" }}
-        aria-label="memory destination"
-      >
-        <MemoryGateway
-          identity={identity}
-          initialSubPath={route.subPath ?? null}
-          onSubPathChange={(sub) => handleSubPathChange("memory", sub)}
-        />
-      </section>
-    );
   } else {
-    // Every other destination renders the package-shipped component.
-    // These are placeholder surfaces today; wiring real data fetchers
-    // is the next agent's job. The mapping itself is `route.destination`
-    // → `NON_CHATS_DESTINATIONS[destination]` — single source of truth.
-    const Destination = NON_CHATS_DESTINATIONS[route.destination];
+    // Only the team-profile-only Members / Billing slugs reach here (every
+    // other slug is a live binder branch above, a folded redirect, or `memory`
+    // which redirects to Settings → Privacy). They have no web surface yet, so
+    // fall back to the inert placeholder rather than an undefined outlet.
+    const Destination =
+      PLACEHOLDER_DESTINATIONS[route.destination] ?? DesktopOnlyDestination;
     body = (
       <section
         data-testid="destination-outlet"
@@ -986,30 +981,37 @@ function CopilotApp({
   // pane shows the fallback, matching how users expect a route transition
   // to behave in a shell-style app.
   return (
-    <PortProvider ports={ports}>
-      <ChatShell
-        transport={getAppTransport()}
-        router={router}
-        keyValueStore={keyValueStore}
-        presenceSignal={presenceSignal}
-        activeDestination={activeDestination}
-        onNavigate={handleRailNavigate}
-        onOpenSettings={() =>
-          router.navigate({
-            screen: "settings",
-            section: DEFAULT_SETTINGS_SECTION,
-          })
-        }
-      >
-        <Suspense fallback={<RouteLoadingFallback />}>{body}</Suspense>
-        {/*
-          P12-C — ⌘K palette host. Mounted once at the App root so the
-          hotkey is global and every page renders one CommandPalette
-          modal. The host owns the PaletteSearchPort that calls
-          `/v1/palette/search` through the facade (sub-PRD §7.3).
-        */}
-        <PaletteHost identity={identity} />
-      </ChatShell>
-    </PortProvider>
+    // PR-4.11 — the DeploymentProfile port drives the profile-gated shell rail
+    // (`destinationsForProfile`): the six-destination solo set by default, the
+    // nine-destination team set under `VITE_DEPLOYMENT_PROFILE=team`. Without
+    // this provider ChatShell falls back to the frozen legacy 12-destination
+    // `SHELL_DESTINATIONS` rail.
+    <DeploymentProfileProvider profile={DEPLOYMENT_PROFILE}>
+      <PortProvider ports={ports}>
+        <ChatShell
+          transport={getAppTransport()}
+          router={router}
+          keyValueStore={keyValueStore}
+          presenceSignal={presenceSignal}
+          activeDestination={activeDestination}
+          onNavigate={handleRailNavigate}
+          onOpenSettings={() =>
+            router.navigate({
+              screen: "settings",
+              section: DEFAULT_SETTINGS_SECTION,
+            })
+          }
+        >
+          <Suspense fallback={<RouteLoadingFallback />}>{body}</Suspense>
+          {/*
+            P12-C — ⌘K palette host. Mounted once at the App root so the
+            hotkey is global and every page renders one CommandPalette
+            modal. The host owns the PaletteSearchPort that calls
+            `/v1/palette/search` through the facade (sub-PRD §7.3).
+          */}
+          <PaletteHost identity={identity} />
+        </ChatShell>
+      </PortProvider>
+    </DeploymentProfileProvider>
   );
 }

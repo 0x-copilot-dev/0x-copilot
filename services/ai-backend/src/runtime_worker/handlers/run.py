@@ -87,6 +87,7 @@ from runtime_api.schemas import (
 )
 from runtime_worker.audit import WorkerAuditEmitter
 from runtime_worker.dependencies import DefaultRuntimeDependenciesFactory
+from runtime_worker.file_store_wiring import FileStoreWorkerWiring
 from runtime_worker.run_metrics import AssistantRunMetrics
 from runtime_worker.stream_events import StreamOrchestrator
 from runtime_worker.stream_messages import StreamTextHelper
@@ -801,35 +802,26 @@ class RuntimeRunHandler:
             return context
         return await self._provider_keys_hydrator.hydrate(context)
 
-    def _file_backend_store(self) -> object | None:
-        """Return the active file store, or ``None`` on non-file backends.
+    def _file_store_wiring(self) -> FileStoreWorkerWiring:
+        """Shared file-store gate + offloader/read-backend builders.
 
-        Duck-typed on the object store + layout the file adapter exposes so the
-        worker's hot path never imports the desktop-only file backend on the
-        web / postgres / in-memory images. The event store and persistence port
-        are the same ``FileRuntimeApiStore`` instance when the file backend is
-        wired, so either would do; we read from the event store.
+        The event store and persistence port are the same
+        ``FileRuntimeApiStore`` instance when the file backend is wired, so
+        either would do; the wiring reads from the event store. Kept in one
+        place so this path and the approval-resume path cannot drift.
         """
 
-        store = self.event_store
-        if hasattr(store, "object_store") and hasattr(store, "layout"):
-            return store
-        return None
+        return FileStoreWorkerWiring(self.event_store)
+
+    def _file_backend_store(self) -> object | None:
+        """Return the active file store, or ``None`` on non-file backends."""
+
+        return self._file_store_wiring().file_store()
 
     def _build_tool_result_offloader(self) -> object | None:
         """Construct the file-store tool-result offloader, or ``None`` elsewhere."""
 
-        store = self._file_backend_store()
-        if store is None:
-            return None
-        # Lazy imports: the file adapter (and its sqlite/object-store deps) must
-        # not load on the web/postgres images.
-        from runtime_adapters.file import FileOffloadWriter  # noqa: PLC0415
-        from runtime_worker.tool_result_offload import (  # noqa: PLC0415
-            ToolResultOffloader,
-        )
-
-        return ToolResultOffloader(FileOffloadWriter(store.object_store))
+        return self._file_store_wiring().tool_result_offloader()
 
     def _subagent_artifacts_backend(self, command: RuntimeRunCommand) -> object:
         """Return the per-subagent trace backend for the active store backend.
@@ -838,21 +830,18 @@ class RuntimeRunHandler:
         directly; elsewhere it is the event-store projection used historically.
         """
 
-        store = self._file_backend_store()
-        if store is None:
-            return SubagentArtifactsBackend(
-                event_store=self.event_store,
-                persistence=self.persistence,
-                org_id=command.org_id,
-                conversation_id=command.conversation_id,
-                current_run_id=command.run_id,
-            )
-        from runtime_adapters.file import FileSubagentTraceBackend  # noqa: PLC0415
-
-        return FileSubagentTraceBackend(
-            layout=store.layout,
+        file_backend = self._file_store_wiring().subagent_artifacts_backend(
             org_id=command.org_id,
             conversation_id=command.conversation_id,
+        )
+        if file_backend is not None:
+            return file_backend
+        return SubagentArtifactsBackend(
+            event_store=self.event_store,
+            persistence=self.persistence,
+            org_id=command.org_id,
+            conversation_id=command.conversation_id,
+            current_run_id=command.run_id,
         )
 
     def _dependencies_for_run(
@@ -865,18 +854,14 @@ class RuntimeRunHandler:
         update: dict[str, object] = {
             "subagent_artifacts_backend": self._subagent_artifacts_backend(command),
         }
-        file_store = self._file_backend_store()
-        if file_store is not None:
-            # Route `/large_tool_results/<sha256>` reads to the object store so
-            # the supervisor can pull back an offloaded tool result. Desktop
-            # only — `None` (unrouted) on every other backend.
-            from runtime_adapters.file import (  # noqa: PLC0415
-                FileLargeToolResultBackend,
-            )
-
-            update["large_tool_results_backend"] = FileLargeToolResultBackend(
-                file_store.object_store
-            )
+        # Route `/large_tool_results/<sha256>` reads to the object store so the
+        # supervisor can pull back an offloaded tool result. Desktop only —
+        # `None` (unrouted) on every other backend.
+        large_tool_results_backend = (
+            self._file_store_wiring().large_tool_results_backend()
+        )
+        if large_tool_results_backend is not None:
+            update["large_tool_results_backend"] = large_tool_results_backend
         if self.draft_store is not None:
             # Tenant identity is bound at construction so the model cannot inject
             # org_id via path strings when writing to /drafts/<uuid>.md.

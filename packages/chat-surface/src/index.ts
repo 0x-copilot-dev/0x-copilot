@@ -243,14 +243,12 @@ export {
 } from "./shell";
 // === end Phase 1-B ===
 
-// === Phase 1-D routing-palette ===
+// === Phase 1-D routing (HashRouter + route-table) ===
+// The Phase-1 route-jumper palette that once lived here was superseded by the
+// substrate-shared ⌘K palette in `./shell` and removed in Phase 6 (PR-6.1);
+// only the HashRouter + route-table primitives remain.
 export { HashRouter } from "./routing/HashRouter";
 export { ROUTE_TABLE, type RouteEntry } from "./routing/route-table";
-// Phase-1 placeholder palette (route-jumper). Phase 12 supersedes it
-// with the substrate-shared palette in `./shell`; we keep the older
-// component exported under a distinct name so any in-tree consumer
-// can migrate without a flag day.
-export { CommandPalette as RouteJumpPalette } from "./palette";
 // === end Phase 1-D ===
 
 // === Phase 12 — substrate-shared global ⌘K palette ===
@@ -1174,3 +1172,30 @@ export {
   type SubagentProjection,
 } from "./subagents";
 // === end Phase 3 (PR-3.8) ===
+
+// === Phase 3 (PR-3.10) approvals ===
+// `projectApprovals` is a PURE selector over the single canonical run event
+// stream (`session.events`) — the SAME array `projectSubagents` reads (FR-3.3;
+// no second SSE subscription / projector). It yields the pending + resolved
+// approvals that feed the two approval consumers living outside ThreadCanvas:
+// the in-chat 4-zone `ApprovalCard` / Focus `.conf-card` (`TcChat.approvals`)
+// and the Approvals-tab pending count (`RunWorkspaceRail.approvalsQueue`, via
+// `toApprovalsQueue`). `overlayApprovalDecisions` folds the user's optimistic
+// Approve/Reject in before the trailing `approval_resolved` frame. `RunDestination`
+// owns the wiring; `TcChatApproval` is the presentational view-model the card
+// consumes (structurally a subset of `RunApproval`). The on-surface per-row
+// states (`Approve & sign` / `✓ Signed` / `Rejected` / `Queued`) live in
+// `surface-renderers` `SheetDiff` (`SheetRowApproval`); the `TcInlineDiff`
+// state machine (`idle → streaming → pending → accepted|rejected`) is exported
+// from the Phase 2-E block above.
+export {
+  projectApprovals,
+  overlayApprovalDecisions,
+  toApprovalsQueue,
+  type RunApproval,
+  type RunApprovalDecision,
+  type RunApprovalKind,
+  type ApprovalProjection,
+} from "./destinations/run";
+export { type TcChatApproval } from "./thread-canvas";
+// === end Phase 3 (PR-3.10) ===

@@ -33,6 +33,28 @@ export interface SheetCellChange {
   readonly after: SheetCellValue;
 }
 
+/**
+ * PR-3.10 (FR-3.21) — on-surface per-row approval state.
+ *   - `pending`  → row highlighted (accent-soft + inset accent bar); shows
+ *                  `Reject` / `Approve & sign` wired to the injected callbacks.
+ *   - `signed`   → `✓ Signed` (jade `--color-success`).
+ *   - `rejected` → `Rejected` (ember `--color-danger`).
+ *   - `queued`   → `Queued` (muted).
+ */
+export type SheetRowApprovalState =
+  | "pending"
+  | "signed"
+  | "rejected"
+  | "queued";
+
+export interface SheetRowApproval {
+  /** Row index within `region.rows` this approval decorates. */
+  readonly row: number;
+  readonly state: SheetRowApprovalState;
+  /** Backing approval id (threaded to the injected approve/reject callbacks). */
+  readonly approvalId?: string;
+}
+
 export interface SheetDiff {
   readonly diffId: string;
   readonly provenance: string;
@@ -46,6 +68,13 @@ export interface SheetDiff {
    * (FR-3.20); omit it once the snapshot is complete.
    */
   readonly streamProgress?: number;
+  /**
+   * PR-3.10 (FR-3.21) — per-row inline approval states. When present, an
+   * approval column is appended: pending rows are highlighted with
+   * `Reject` / `Approve & sign`, resolved rows show their settled status.
+   * Omit for a plain read-only diff.
+   */
+  readonly rowApprovals?: readonly SheetRowApproval[];
 }
 
 const PALETTE = {

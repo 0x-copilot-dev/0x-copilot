@@ -23,6 +23,29 @@ from pathlib import Path
 from runtime_adapters.file._paths import FileStoreLayout
 
 
+class JsonlCorruptionError(RuntimeError):
+    """A JSONL file has an **interior** malformed line — committed data follows it.
+
+    The read path fails closed by raising this instead of silently returning a
+    truncated prefix. A malformed line is only tolerated when it is the *torn
+    final line* of the file — an incomplete last append interrupted by a crash
+    before ``fsync``, which was never durably committed. A malformed line with
+    any content line after it means real corruption (bit-rot, a partial disk
+    write in the middle, tampering): the records after it are genuine and must
+    not be dropped, so callers surface a "needs repair" failure rather than lose
+    history.
+    """
+
+    def __init__(self, path: Path, line_number: int) -> None:
+        self.path = path
+        self.line_number = line_number
+        super().__init__(
+            f"Interior corruption in {path} at line {line_number}: a malformed "
+            "line has valid records after it. Refusing to return a truncated "
+            "prefix; this file needs repair."
+        )
+
+
 class JsonlIo:
     """Stateless helpers for JSON-lines files. All methods are synchronous.
 
@@ -120,24 +143,44 @@ class JsonlIo:
 
     @staticmethod
     def iter_lines(path: Path) -> Iterator[dict]:
-        """Yield parsed objects from a JSONL file, skipping blank/torn tails.
+        """Yield parsed objects from a JSONL file, failing closed on corruption.
 
-        A trailing partial line (crash mid-append without fsync) is silently
-        skipped — the canonical record simply was not durably committed.
+        Distinguishes the two ways a JSONL line can fail to parse:
+
+        * **Torn final line** — an incomplete last append interrupted by a crash
+          before ``fsync``. The record was never durably committed, so the
+          partial trailing line (with only blank lines, if any, after it) is
+          silently dropped, exactly as before.
+        * **Interior corruption** — a malformed line with a committed content
+          line after it. Silently stopping there would truncate real history, so
+          this raises :class:`JsonlCorruptionError` and the caller fails closed.
+
+        A malformed line is deferred rather than acted on immediately: only once
+        a subsequent content line proves data follows it is it interior
+        corruption; if EOF (or only blanks) follows, it was a torn tail.
         """
 
         if not path.exists():
             return
         with open(path, encoding="utf-8") as handle:
-            for raw in handle:
+            pending_bad_line: int | None = None
+            for line_number, raw in enumerate(handle, start=1):
                 stripped = raw.strip()
                 if not stripped:
                     continue
+                if pending_bad_line is not None:
+                    # A malformed earlier line has committed content after it:
+                    # interior corruption, not a torn tail. Fail closed before
+                    # yielding anything past the corruption point.
+                    raise JsonlCorruptionError(path, pending_bad_line)
                 try:
-                    yield json.loads(stripped)
+                    parsed = json.loads(stripped)
                 except json.JSONDecodeError:
-                    # Torn final line from an interrupted append — stop here.
-                    break
+                    # Might be the torn final line; defer the verdict until we
+                    # know whether any content line follows it.
+                    pending_bad_line = line_number
+                    continue
+                yield parsed
 
 
-__all__ = ("JsonlIo",)
+__all__ = ("JsonlIo", "JsonlCorruptionError")

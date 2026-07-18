@@ -142,6 +142,17 @@ error — never silently regenerated, because the postgres password and
 `logs/{backend,ai-backend,backend-facade}.log` (10 MB × 3 rotation),
 `logs/postgres.log`.
 
+**File-native AI store (opt-in)** — setting `COPILOT_DESKTOP_FILE_STORE_V1`
+truthy (`1`/`true`/`yes`/`on`/`enabled`) switches only the **ai-backend**
+runtime store from the Postgres `atlas_ai` DB to the file-native JSONL store
+under `<userData>/agent-data/v1` (`RUNTIME_STORE_BACKEND=file`; adapter
+provisions the tree `0o700`), and its Postgres migration gate is skipped.
+`backend`'s own Postgres (identity/OAuth/vault) is untouched. **Opt-in pending a
+Postgres→file migration**: it does not exist yet, so enabling the flag starts a
+**fresh** store — conversations already in Postgres are not visible under the
+file store until a migration is built. Default (flag unset/false) is
+byte-identical to the Postgres store.
+
 **Crash policy**: children restart with 1s→2s→4s→…→30s backoff;
 ≥ 5 crashes in 5 minutes is a `FatalCrashLoop` surfaced on the boot
 screen. The app holds a single-instance lock (two postmasters on one
