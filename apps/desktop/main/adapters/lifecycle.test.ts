@@ -1,12 +1,5 @@
 // @vitest-environment node
 import { mkdtempSync } from "node:fs";
-import {
-  appendFile,
-  mkdir,
-  readFile,
-  unlink,
-  writeFile,
-} from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
@@ -50,6 +43,54 @@ beforeAll(() => {
 beforeEach(() => {
   tmpDir = mkdtempSync(join(tmpdir(), "lifecycle-"));
 });
+
+// In-memory fs backing the audit log and the installer. The install/boundary
+// pipeline is fire-and-forget (`void (async () => {})()`), so tests can only
+// probe it via `flush()` — a fixed count of event-loop ticks. Real fs calls
+// (mkdir + appendFile per audit line) need wall-clock time to settle, which
+// `flush()`'s zero-real-time `setImmediate` spin does not provide: under a
+// saturated parallel run the writes are still in flight when `flush()`
+// returns, so the counter/audit assertions flake. Routing every fs op through
+// this synchronous-ish store makes the whole pipeline resolve in pure
+// microtasks, so `flush()`'s tick budget is always sufficient regardless of
+// machine load — deterministic under `vitest run` and in isolation alike.
+function makeMemFs(): {
+  appendFile: (path: string, data: string) => Promise<void>;
+  writeFile: (path: string, data: string) => Promise<void>;
+  unlink: (path: string) => Promise<void>;
+  mkdir: (
+    path: string,
+    opts: { recursive: true },
+  ) => Promise<string | undefined>;
+  readFile: (path: string, encoding: "utf8") => Promise<string>;
+} {
+  const files = new Map<string, string>();
+  return {
+    async appendFile(path, data) {
+      files.set(path, (files.get(path) ?? "") + data);
+    },
+    async writeFile(path, data) {
+      files.set(path, data);
+    },
+    async unlink(path) {
+      files.delete(path);
+    },
+    async mkdir() {
+      return undefined;
+    },
+    async readFile(path) {
+      const content = files.get(path);
+      if (content === undefined) {
+        const err = new Error(
+          `ENOENT: no such file or directory, open '${path}'`,
+        ) as NodeJS.ErrnoException;
+        err.code = "ENOENT";
+        throw err;
+      }
+      return content;
+    },
+  };
+}
 
 function alwaysOkSmoke(): SmokeRenderExecutor {
   return {
@@ -104,13 +145,14 @@ function makeHost(smoke?: SmokeRenderExecutor): HostBundle {
       sends.push({ channel, payload });
     },
   };
+  const mem = makeMemFs();
   const logPath = join(tmpDir, "audit", "lifecycle.log");
   const audit: LifecycleEventsDeps = {
     logPath,
     fs: {
-      appendFile,
-      mkdir,
-      readFile: async (p, _e) => readFile(p, "utf8"),
+      appendFile: mem.appendFile,
+      mkdir: mem.mkdir,
+      readFile: mem.readFile,
     },
   };
   return {
@@ -125,7 +167,13 @@ function makeHost(smoke?: SmokeRenderExecutor): HostBundle {
       })(),
       dispatcher,
       audit,
-      installer: { fs: { writeFile, mkdir, unlink } },
+      installer: {
+        fs: {
+          writeFile: mem.writeFile,
+          mkdir: mem.mkdir,
+          unlink: mem.unlink,
+        },
+      },
       smokeExecutor: smoke ?? alwaysOkSmoke(),
     },
     sends,
