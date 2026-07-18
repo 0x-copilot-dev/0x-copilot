@@ -45,6 +45,7 @@ from __future__ import annotations
 import asyncio
 from collections.abc import Sequence
 from datetime import datetime, timedelta, timezone
+import hashlib
 from pathlib import Path
 from typing import Any
 
@@ -53,7 +54,7 @@ from starlette import status
 from agent_runtime.api.constants import Messages
 from agent_runtime.execution.contracts import RuntimeErrorCode
 from agent_runtime.persistence.constants import Values as PersistenceValues
-from copilot_audit_chain import AuditChainSigner
+from copilot_audit_chain import AuditChainSigner, ChainVerificationResult
 from agent_runtime.persistence.records import (
     ApprovalBatchItemRecord,
     ApprovalBatchRecord,
@@ -86,6 +87,10 @@ from agent_runtime.persistence.records import (
     UsageDailyUserRow,
 )
 from runtime_adapters.base import RuntimeAdapterHelpers, StatusTransition, _Fields
+from runtime_adapters.file._audit_manifest import (
+    AuditManifest,
+    AuditManifestVerifier,
+)
 from runtime_adapters.file._capacity import FileStoreCleanupReport, QuotaGuard
 from runtime_adapters.file._catalog_index import CatalogIndex
 from runtime_adapters.file._deletion import (
@@ -1603,18 +1608,37 @@ class FileRuntimeApiStore:
     def _audit_signing_payload(
         *, event_type: str, record: dict[str, object]
     ) -> dict[str, Any]:
-        signable = {
-            k: v
-            for k, v in record.items()
-            if k not in {"seq", "prev_hash", "signature", "key_version"}
-        }
-        signable["__event_type__"] = event_type
-        return signable
+        # Single source of truth shared with the independent verifier, so the
+        # bytes recomputed at verify time cannot drift from what was signed.
+        return AuditManifest.signing_payload(event_type=event_type, record=record)
+
+    def verify_audit_log(self, *, org_id: str | None = None) -> ChainVerificationResult:
+        """Independently verify the signed manifest chain; detect any tampering.
+
+        Reconstructs each row's signable payload and re-checks the HMAC chain via
+        :class:`~runtime_adapters.file._audit_manifest.AuditManifestVerifier`. A
+        flipped field, a reordered row, or a dropped row surfaces as ``ok=False``
+        with the offending ``broken_at_seq``. Optionally scoped to one ``org_id``
+        (the chain is per-org). Callable for a health check or a SIEM-side audit.
+        """
+
+        entries = [
+            (event_type, dict(record))
+            for event_type, record in self.audit_log
+            if org_id is None or record.get(_Fields.ORG_ID) == org_id
+        ]
+        return AuditManifestVerifier(self._audit_chain_signer).verify(entries)
 
     async def list_audit_log_for_export(
         self, *, after_id: str | None, limit: int
     ) -> Sequence[dict]:
-        rows: list[dict] = [dict(record) for _event_type, record in self.audit_log]
+        # Carry ``event_type`` on each exported row so an external SIEM-side
+        # verifier can recompute the HMAC independently (it is folded into the
+        # signed payload as ``__event_type__`` but is not otherwise in the row).
+        rows: list[dict] = [
+            {"event_type": event_type, **record}
+            for event_type, record in self.audit_log
+        ]
         if after_id is not None:
             for index, row in enumerate(rows):
                 if row.get("signature") == after_id:
@@ -1733,11 +1757,45 @@ class FileRuntimeApiStore:
         See :mod:`runtime_adapters.file.export_import`.
         """
 
-        return await ConversationArchiver(self).export(
+        manifest = await ConversationArchiver(self).export(
             org_id=org_id,
             user_id=user_id,
             conversation_id=conversation_id,
             destination=Path(destination),
+        )
+        await self._record_export_audit(manifest)
+        return manifest
+
+    async def _record_export_audit(self, manifest: ExportManifest) -> None:
+        """Write the tamper-evident conversation-export manifest row (``#9``).
+
+        Binds the whole archive into the signed chain via a single content hash
+        over every part's SHA-256 — no bytes, no destination host path, no
+        secrets. The caller-supplied ``exported_at`` is the manifest timestamp.
+        """
+
+        parts_digest = hashlib.sha256(
+            "\n".join(
+                f"{name}:{digest}" for name, digest in sorted(manifest.parts.items())
+            ).encode("utf-8")
+        ).hexdigest()
+        exported_at = manifest.exported_at.isoformat()
+        audit_event_id = (
+            f"conversation_export_{manifest.org_id}_{manifest.conversation_id}_"
+            f"{int(manifest.exported_at.timestamp() * 1_000_000)}"
+        )
+        await self.write_audit_log(
+            event_type=AuditManifest.EVENT_CONVERSATION_EXPORT,
+            record=AuditManifest.export_record(
+                audit_event_id=audit_event_id,
+                org_id=manifest.org_id,
+                user_id=manifest.user_id,
+                conversation_id=manifest.conversation_id,
+                exported_at=exported_at,
+                parts_digest=parts_digest,
+                part_count=len(manifest.parts),
+                counts=manifest.counts.model_dump(),
+            ),
         )
 
     async def import_conversation(

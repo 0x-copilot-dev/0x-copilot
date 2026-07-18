@@ -398,6 +398,39 @@ export function assertGrantableRoot(root: string, ctx: GrantRootContext): void {
 }
 
 /**
+ * True iff any segment of an ALREADY-NORMALIZED virtual path names a well-known
+ * credential directory (`.ssh`, `.aws`, `.gnupg`, macOS `keychains`, …). Reuses
+ * the SAME `SENSITIVE_ROOT_SEGMENTS` list the grant-creation gate uses, so the
+ * two controls can never drift.
+ *
+ * WHY THIS EXISTS (G2, read/write time). `assertGrantableRoot` blocks MINTING a
+ * grant that straddles a credential directory, but a legitimately-granted folder
+ * (say the user's whole project) can still *contain* a nested `.ssh` / `.aws` /
+ * `.gnupg`. The per-file content denylist (`isSensitiveFileName`) only catches
+ * known secret FILENAMES — it would still expose non-matching files inside such
+ * a directory (`.aws/config`, `.ssh/known_hosts`, `.gnupg/*.gpg`, …). This check
+ * denies traversal INTO the sensitive directory entirely, at read AND write
+ * time, so the credential tree is unreachable regardless of the leaf name. It
+ * only ever REDUCES authority.
+ *
+ * The argument is the segment list from `normalizeVirtualPath` (root-relative,
+ * already proven free of `.`/`..`/separators), so a plain per-segment match is
+ * sound.
+ */
+export function virtualPathTraversesSensitiveDir(
+  segments: readonly string[],
+): boolean {
+  return segments.some((s) =>
+    SENSITIVE_ROOT_SEGMENTS.includes(s.toLowerCase()),
+  );
+}
+
+/** True iff a single (dir OR file) leaf name is a well-known credential dir. */
+export function segmentIsSensitiveDir(name: string): boolean {
+  return SENSITIVE_ROOT_SEGMENTS.includes(name.toLowerCase());
+}
+
+/**
  * Filename policy for the in-grant content-read denylist. Matched against a
  * file's LEAF NAME only (case-insensitive), so a secret file is unreadable at
  * any depth. Documented as data so it is auditable and unit-testable.
