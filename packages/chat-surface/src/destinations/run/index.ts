@@ -48,3 +48,7 @@ export {
   type RunApprovalKind,
   type ApprovalProjection,
 } from "./approvalProjection";
+
+// === Phase 3 (PR-3.11) run empty/multi-run ===
+export { RunEmptyState, type RunEmptyStateProps } from "./RunEmptyState";
+export { RunMultiSelect, type RunMultiSelectProps } from "./RunMultiSelect";

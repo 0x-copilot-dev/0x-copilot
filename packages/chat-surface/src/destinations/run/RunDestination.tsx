@@ -34,10 +34,12 @@
 //   - PR-3.8 subagents / PR-3.9 streaming / PR-3.10 approvals: consume the same
 //     `session.events` projection + the surface `pendingDiff`/approve/reject
 //     props `ThreadCanvas` already exposes.
-//   - PR-3.11 empty/multi-run: `session.runs` + `session.selectRun` back the
-//     `RunMultiSelect`, and `RunEmptyState` (goal composer) mounts when
-//     `session.runId === null`; the `runId` prop lets the empty→live start bind
-//     to a fresh run without a shell remount (FR-3.25).
+//   - PR-3.11 empty/multi-run (DONE): `session.runs` + `session.selectRun` back
+//     the `RunMultiSelect` (mounted after the header when `runs.length > 1`),
+//     and `RunEmptyState` (goal composer) mounts in the canvas slot when
+//     `session.runId === null`. Starting a goal binds the fresh run through the
+//     `runId` seam (`startedRunId` feeds `useRunSession.runId`), so empty→live
+//     swaps the slot content IN PLACE without remounting the shell (FR-3.25).
 //
 // Boundary: framework-agnostic. All I/O is port-only — Transport (via
 // `useTransport`) + KeyValueStore (inside `useRunMode`); no bare
@@ -45,6 +47,7 @@
 
 import {
   useCallback,
+  useEffect,
   useMemo,
   useState,
   type CSSProperties,
@@ -68,7 +71,13 @@ import {
   toApprovalsQueue,
   type RunApprovalDecision,
 } from "./approvalProjection";
+// PR-3.11: the two prototype-gap states — the empty/idle goal composer
+// (FR-3.25) and the multi-run selector (FR-3.26). Both mount inside this shell
+// (no separate host remount): the empty state binds a freshly-started run via
+// the `runId` seam, and the selector rebinds the session via `selectRun`.
+import { RunEmptyState } from "./RunEmptyState";
 import { RunHeader } from "./RunHeader";
+import { RunMultiSelect } from "./RunMultiSelect";
 import { RunWorkspaceRail } from "./RunWorkspaceRail";
 import { useRunMode } from "./useRunMode";
 import { useRunSession } from "./useRunSession";
@@ -99,6 +108,18 @@ export interface RunDestinationProps {
    * run selection / empty-state composer.)
    */
   readonly goal?: string | null;
+  /**
+   * PR-3.11 (FR-3.25): start a run from the empty-state goal composer. The host
+   * owns run creation (identity + model), returning the new `runId` (or `null`
+   * on failure). When unset, the shell falls back to a default `POST
+   * /v1/agent/runs` through the Transport port (identity is derived from the
+   * verified session, never sent by the client). Either way the returned id is
+   * bound back into `useRunSession` via the `runId` seam, so empty→live never
+   * remounts the shell.
+   */
+  readonly onStartRun?: (
+    goal: string,
+  ) => Promise<string | null> | string | null;
 }
 
 export function RunDestination(props: RunDestinationProps): ReactElement {
@@ -108,12 +129,33 @@ export function RunDestination(props: RunDestinationProps): ReactElement {
     enabled = true,
     agentName,
     goal: goalOverride,
+    onStartRun,
   } = props;
 
   const transport = useTransport();
+
+  // PR-3.11 (FR-3.25): the run the empty-state composer just started. It feeds
+  // the SAME `runId` input the `explicitRunId` prop uses, so binding a freshly
+  // created run flips the session live WITHOUT the host remounting the shell:
+  // the empty state unmounts and the live layout mounts in place.
+  const [startedRunId, setStartedRunId] = useState<RunId | null>(null);
+  const [isStartingRun, setIsStartingRun] = useState(false);
+  // The goal the empty-state composer just started the run with. Bridges the
+  // header until the run list re-resolves to carry the run's own goal — so the
+  // empty→live transition never flashes "No active run" for a run we named.
+  const [startedGoal, setStartedGoal] = useState<string | null>(null);
+
+  // A new conversation clears the last-started run so a stale id never streams
+  // against it (mirrors `useRunSession`'s own per-conversation reset).
+  useEffect(() => {
+    setStartedRunId(null);
+    setIsStartingRun(false);
+    setStartedGoal(null);
+  }, [conversationId]);
+
   const session = useRunSession({
     conversationId,
-    runId: explicitRunId,
+    runId: startedRunId ?? explicitRunId,
     enabled,
   });
   const { mode, setMode } = useRunMode({ conversationId, enabled });
@@ -202,15 +244,77 @@ export function RunDestination(props: RunDestinationProps): ReactElement {
     scrubbedSeq !== null ? (scrubIndex.get(scrubbedSeq)?.atMs ?? null) : null;
   const isScrubbed = scrubbedSeq !== null;
 
-  // Goal: explicit override wins, else the selected run's list entry.
+  // PR-3.11 (FR-3.25): start a run from the empty-state goal composer. The host
+  // `onStartRun` wins (it owns identity/model); otherwise the shell POSTs a run
+  // through the Transport port — identity is derived from the verified session,
+  // so the client sends only the conversation + the goal. The returned id is
+  // bound via `setStartedRunId`, which feeds the `runId` seam and flips the
+  // cockpit live in place (no shell remount).
+  const { selectRun } = session;
+  const handleStartGoal = useCallback(
+    (goal: string): void => {
+      const trimmed = goal.trim();
+      if (trimmed === "" || isStartingRun) {
+        return;
+      }
+      setIsStartingRun(true);
+      setStartedGoal(trimmed);
+      const start = onStartRun
+        ? Promise.resolve(onStartRun(trimmed))
+        : transport
+            .request<unknown>({
+              method: "POST",
+              path: "/v1/agent/runs",
+              body: { conversation_id: conversationId, user_input: trimmed },
+            })
+            .then((payload) => runIdFromCreateResponse(payload));
+      void start
+        .then((newRunId) => {
+          if (newRunId !== null && newRunId !== undefined && newRunId !== "") {
+            setStartedRunId(newRunId as RunId);
+          }
+        })
+        .catch(() => {
+          /* leave the composer visible; the user can retry the goal */
+        })
+        .finally(() => {
+          setIsStartingRun(false);
+        });
+    },
+    [conversationId, isStartingRun, onStartRun, transport],
+  );
+
+  // PR-3.11 (FR-3.26): bind the cockpit to another run. `selectRun` wins over
+  // the started/explicit run in `useRunSession`, so the event projector, tabs,
+  // timeline, and surface all rebind to the picked run's own state; the shell
+  // also resets scrub + the surface-tab strip so mode/scrub reset appropriately.
+  const handleSelectRun = useCallback(
+    (nextRunId: string): void => {
+      setScrubbedSeq(null);
+      setTabs([]);
+      setActiveUri("");
+      selectRun(nextRunId);
+    },
+    [selectRun],
+  );
+
+  // Goal: explicit override wins, else the selected run's list entry, else —
+  // for a freshly started run not yet in the list — the goal we started it with
+  // (PR-3.11), so the empty→live header never regresses to "No active run".
   const derivedGoal = useMemo(() => {
     if (goalOverride !== undefined) {
       return goalOverride;
     }
-    return (
-      session.runs.find((run) => run.runId === session.runId)?.goal ?? null
-    );
-  }, [goalOverride, session.runs, session.runId]);
+    const listed =
+      session.runs.find((run) => run.runId === session.runId)?.goal ?? null;
+    if (listed !== null) {
+      return listed;
+    }
+    if (session.runId !== null && session.runId === startedRunId) {
+      return startedGoal;
+    }
+    return null;
+  }, [goalOverride, session.runs, session.runId, startedRunId, startedGoal]);
 
   // PR-3.6: the tabbed right rail (Chat · Sources · Agents · Approvals). The
   // single TcChat instance lives in the rail's Chat tab — we build it here and
@@ -346,6 +450,16 @@ export function RunDestination(props: RunDestinationProps): ReactElement {
         onModeChange={setMode}
       />
 
+      {/* PR-3.11 (FR-3.26): the multi-run selector. It renders NOTHING for a
+          conversation with ≤1 run (single/zero-run cockpit stays chrome-free);
+          with >1 run it lets the user rebind the whole cockpit to another run
+          via `handleSelectRun` → `useRunSession.selectRun`. */}
+      <RunMultiSelect
+        runs={session.runs}
+        selectedRunId={session.runId}
+        onSelectRun={handleSelectRun}
+      />
+
       {session.error !== null ? (
         <RunErrorBanner
           message={session.error.message}
@@ -363,29 +477,42 @@ export function RunDestination(props: RunDestinationProps): ReactElement {
       ) : null}
 
       <div data-testid="run-canvas-slot" style={canvasSlotStyle}>
-        <ThreadCanvas
-          mode={mode}
-          conversationId={conversationId}
-          runId={(session.runId as RunId | null) ?? null}
-          events={session.events}
-          onModeChange={setMode}
-          tabs={tabs}
-          activeUri={activeUri}
-          onActivateTab={handleActivateTab}
-          onCloseTab={handleCloseTab}
-          transport={transport}
-          // PR-3.7: own the scrub cursor here; ThreadCanvas forwards it to the
-          // mini-timeline (highlight + step/snap dispatch) and to the
-          // SwimlaneScrubProvider (in-chat ghost banner + composer disable).
-          scrubbedSeq={scrubbedSeq}
-          onScrub={handleScrub}
-          onSnapToNow={handleSnapToNow}
-          // PR-3.6: mount the recomposed rail in the chat column, and collapse
-          // the canvas's own mode switcher so RunHeader is the single mode
-          // control (per the PR-3.5 seam note).
-          rightRail={rightRail}
-          showModeSwitcher={false}
-        />
+        {/* PR-3.11 (FR-3.25): no active run → the empty/idle goal composer
+            (never a blank ThreadCanvas / placeholder string). Submitting a goal
+            starts a run and binds it via the `runId` seam (`handleStartGoal` →
+            `setStartedRunId`), so the live layout below mounts IN PLACE — the
+            shell (this outer div + header) never remounts. */}
+        {session.runId === null ? (
+          <RunEmptyState
+            agentName={agentName}
+            onSubmitGoal={handleStartGoal}
+            submitting={isStartingRun}
+          />
+        ) : (
+          <ThreadCanvas
+            mode={mode}
+            conversationId={conversationId}
+            runId={(session.runId as RunId | null) ?? null}
+            events={session.events}
+            onModeChange={setMode}
+            tabs={tabs}
+            activeUri={activeUri}
+            onActivateTab={handleActivateTab}
+            onCloseTab={handleCloseTab}
+            transport={transport}
+            // PR-3.7: own the scrub cursor here; ThreadCanvas forwards it to the
+            // mini-timeline (highlight + step/snap dispatch) and to the
+            // SwimlaneScrubProvider (in-chat ghost banner + composer disable).
+            scrubbedSeq={scrubbedSeq}
+            onScrub={handleScrub}
+            onSnapToNow={handleSnapToNow}
+            // PR-3.6: mount the recomposed rail in the chat column, and collapse
+            // the canvas's own mode switcher so RunHeader is the single mode
+            // control (per the PR-3.5 seam note).
+            rightRail={rightRail}
+            showModeSwitcher={false}
+          />
+        )}
       </div>
     </div>
   );
@@ -444,6 +571,29 @@ function surfaceTabTitle(uri: string): string {
     return uri;
   }
   return uri.slice(sep + 3) || uri;
+}
+
+// PR-3.11 (FR-3.25): pull the new run id out of a `POST /v1/agent/runs`
+// response. Tolerant of the shapes the runtime returns — a bare `{ run_id }` /
+// `{ runId }` / `{ id }`, or those nested under a `run` envelope — so the
+// empty→live start does not pin one exact server contract this phase.
+function runIdFromCreateResponse(payload: unknown): string | null {
+  const record = payload as Record<string, unknown> | null;
+  if (record === null || typeof record !== "object") {
+    return null;
+  }
+  const direct = record.run_id ?? record.runId ?? record.id;
+  if (typeof direct === "string" && direct !== "") {
+    return direct;
+  }
+  const nested = record.run as Record<string, unknown> | undefined;
+  if (nested !== undefined && nested !== null && typeof nested === "object") {
+    const inner = nested.run_id ?? nested.runId ?? nested.id;
+    if (typeof inner === "string" && inner !== "") {
+      return inner;
+    }
+  }
+  return null;
 }
 
 /** Format the viewed moment as `HH:MM` (24h); generic when there is no time. */
