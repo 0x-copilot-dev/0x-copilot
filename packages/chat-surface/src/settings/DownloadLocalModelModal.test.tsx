@@ -3,7 +3,7 @@
 // ember error + retry. The runtime pull is the injected `startPull` seam; the
 // test captures its handlers and drives `LocalModelPullEvent`s by hand.
 
-import { fireEvent, render, screen, within } from "@testing-library/react";
+import { act, fireEvent, render, screen, within } from "@testing-library/react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
 import type { LocalModelPullEvent } from "@0x-copilot/api-types";
@@ -112,7 +112,7 @@ describe("<DownloadLocalModelModal>", () => {
   it("streamed byte frames drive the progress bar percentage", () => {
     renderModal();
     pickFirst();
-    captured!.onEvent(progressFrame(404_000_000));
+    act(() => captured!.onEvent(progressFrame(404_000_000)));
     expect(screen.getByRole("progressbar")).toHaveAttribute(
       "aria-valuenow",
       "50",
@@ -123,7 +123,7 @@ describe("<DownloadLocalModelModal>", () => {
   it("a done frame advances to the ready step with the default toggle on", () => {
     renderModal();
     pickFirst();
-    captured!.onEvent(doneFrame());
+    act(() => captured!.onEvent(doneFrame()));
     expect(close).toHaveBeenCalled();
     expect(screen.getByTestId("download-ready")).toBeInTheDocument();
     expect(screen.getByText(/Ready to run locally/)).toBeInTheDocument();
@@ -140,7 +140,7 @@ describe("<DownloadLocalModelModal>", () => {
   it("Finish reports the chosen model and default preference, then closes", () => {
     const { onFinish, onClose } = renderModal();
     pickFirst();
-    captured!.onEvent(doneFrame());
+    act(() => captured!.onEvent(doneFrame()));
     // Turn the default toggle off before finishing.
     fireEvent.click(screen.getByTestId("download-default-toggle"));
     fireEvent.click(screen.getByTestId("download-finish"));
@@ -154,12 +154,14 @@ describe("<DownloadLocalModelModal>", () => {
   it("an error frame surfaces an ember alert and a retry that re-pulls", () => {
     renderModal();
     pickFirst();
-    captured!.onEvent({
-      ...doneFrame(),
-      status: "error",
-      done: false,
-      error: "not found",
-    });
+    act(() =>
+      captured!.onEvent({
+        ...doneFrame(),
+        status: "error",
+        done: false,
+        error: "not found",
+      }),
+    );
     const alert = screen.getByRole("alert");
     expect(alert).toHaveTextContent(/not found/);
     const fill = screen.getByTestId("progress-bar-fill");
@@ -173,7 +175,7 @@ describe("<DownloadLocalModelModal>", () => {
   it("a transport onError marks the download interrupted", () => {
     renderModal();
     pickFirst();
-    captured!.onError(new Error("socket closed"));
+    act(() => captured!.onError(new Error("socket closed")));
     expect(screen.getByRole("alert")).toHaveTextContent(/interrupted/i);
   });
 });
