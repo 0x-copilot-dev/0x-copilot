@@ -1,5 +1,5 @@
 import { useMemo, type ComponentProps, type ReactElement } from "react";
-import { Streamdown } from "streamdown";
+import { Streamdown, defaultRemarkPlugins } from "streamdown";
 
 import { createRemarkCitations } from "./citationRemarkPlugin";
 import { streamingCursorProps } from "./streamingCursor";
@@ -34,8 +34,19 @@ export function MarkdownText({
   // host supplies a module-scope `onMatch`, so the plugin identity stays
   // constant across renders — matching the pre-hoist module-load
   // construction that kept Streamdown seeing a consistent plugin.
+  //
+  // Streamdown only auto-includes its default remark plugins (GFM among
+  // them) when NO `remarkPlugins` prop is supplied; passing our own list
+  // replaces that default outright. Without GFM, a conversational table
+  // streams out as raw `| pipe |` text instead of a parsed `<table>`
+  // (FR-3.19's forbidden half-parsed leak). Re-spread `defaultRemarkPlugins`
+  // ahead of the citation plugin so GFM tables/strikethrough/autolinks keep
+  // working while the citation rewrite still runs over the parsed tree.
   const remarkPlugins = useMemo(
-    () => [createRemarkCitations(onMatch ? { onMatch } : undefined)],
+    () => [
+      ...Object.values(defaultRemarkPlugins),
+      createRemarkCitations(onMatch ? { onMatch } : undefined),
+    ],
     [onMatch],
   );
   // streamingCursorProps owns the single source of truth for the

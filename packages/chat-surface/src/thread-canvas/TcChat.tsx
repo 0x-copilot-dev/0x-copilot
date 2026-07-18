@@ -7,8 +7,10 @@ import {
 } from "react";
 
 import { Composer } from "../composer/Composer";
+import { MarkdownText, type MarkdownTextProps } from "../messages/MarkdownText";
 import { PlainText } from "../messages/PlainText";
 import { Reasoning } from "../messages/Reasoning";
+import type { MessagePartStatus } from "../messages/types";
 import { useTransport } from "../providers/TransportProvider";
 import { useSwimlaneScrub } from "./SwimlaneScrubContext";
 
@@ -17,6 +19,13 @@ export type TcChatMode = "studio" | "focus";
 export interface TcChatMessagePart {
   readonly type: "text" | "reasoning";
   readonly text: string;
+  /**
+   * Streaming lifecycle for this part. Absent parts (historical messages
+   * fetched via GET) default to `complete`; a part still arriving over the
+   * live stream carries `{ type: "running" }`, which routes the incremental
+   * blinking cursor onto the markdown renderer (FR-3.19).
+   */
+  readonly status?: MessagePartStatus;
 }
 
 export interface TcChatMessage {
@@ -35,6 +44,13 @@ export interface TcChatProps {
   readonly mode: TcChatMode;
   readonly onSend?: (text: string) => void;
   readonly portalTarget?: HTMLElement;
+  /**
+   * Anchor/chip renderers forwarded to `MarkdownText` (its `components.a`
+   * slot routes citation anchors to the host's chip dispatcher). Injected so
+   * assistant markdown keeps its citation chips without chat-surface pulling
+   * in the host's citation wrappers.
+   */
+  readonly markdownComponents?: MarkdownTextProps["components"];
 }
 
 type LoadState =
@@ -47,7 +63,8 @@ type LoadState =
   | { readonly status: "error" };
 
 export function TcChat(props: TcChatProps): ReactElement {
-  const { conversationId, mode, onSend, portalTarget } = props;
+  const { conversationId, mode, onSend, portalTarget, markdownComponents } =
+    props;
   const transport = useTransport();
   const scrub = useSwimlaneScrub();
   const [state, setState] = useState<LoadState>({ status: "idle" });
@@ -111,7 +128,11 @@ export function TcChat(props: TcChatProps): ReactElement {
         </div>
       ) : null}
       <div data-testid="tc-chat-messages" style={messageListStyle(ghost)}>
-        <MessageListBody state={state} messages={filteredMessages} />
+        <MessageListBody
+          state={state}
+          messages={filteredMessages}
+          markdownComponents={markdownComponents}
+        />
       </div>
       <div style={composerSlotStyle}>
         <Composer
@@ -130,10 +151,11 @@ export function TcChat(props: TcChatProps): ReactElement {
 interface MessageListBodyProps {
   readonly state: LoadState;
   readonly messages: ReadonlyArray<TcChatMessage>;
+  readonly markdownComponents?: MarkdownTextProps["components"];
 }
 
 function MessageListBody(props: MessageListBodyProps): ReactNode {
-  const { state, messages } = props;
+  const { state, messages, markdownComponents } = props;
   if (state.status === "loading" || state.status === "idle") {
     return (
       <div role="status" style={statusStyle} data-testid="tc-chat-loading">
@@ -164,23 +186,45 @@ function MessageListBody(props: MessageListBodyProps): ReactNode {
           data-testid={`tc-chat-message-${m.message_id}`}
           data-role={m.role}
         >
-          {m.parts.map((part, idx) =>
-            part.type === "reasoning" ? (
-              <Reasoning
-                key={idx}
-                type="reasoning"
-                text={part.text}
-                status={{ type: "complete" }}
-              />
-            ) : (
-              <PlainText
+          {m.parts.map((part, idx) => {
+            const status: MessagePartStatus = part.status ?? {
+              type: "complete",
+            };
+            if (part.type === "reasoning") {
+              return (
+                <Reasoning
+                  key={idx}
+                  type="reasoning"
+                  text={part.text}
+                  status={status}
+                />
+              );
+            }
+            // User input stays literal (a typed `| pipe |` is not markdown);
+            // agent/tool/system text routes through the citation-safe
+            // streaming markdown path so conversational GFM tables render as
+            // real tables with the incremental blinking cursor, never as
+            // half-parsed raw pipes (FR-3.19).
+            if (m.role === "user") {
+              return (
+                <PlainText
+                  key={idx}
+                  type="text"
+                  text={part.text}
+                  status={status}
+                />
+              );
+            }
+            return (
+              <MarkdownText
                 key={idx}
                 type="text"
                 text={part.text}
-                status={{ type: "complete" }}
+                status={status}
+                components={markdownComponents}
               />
-            ),
-          )}
+            );
+          })}
         </li>
       ))}
     </ul>

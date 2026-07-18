@@ -40,6 +40,12 @@ export interface SheetDiff {
   readonly description?: string;
   readonly region: SheetRegion;
   readonly changes: readonly SheetCellChange[];
+  /**
+   * Snapshot-streaming progress (0–100) while the tabular surface is still
+   * arriving. When present the diff's status pill reads `streaming · N%`
+   * (FR-3.20); omit it once the snapshot is complete.
+   */
+  readonly streamProgress?: number;
 }
 
 const PALETTE = {

@@ -19,6 +19,24 @@ import {
   type TcChatMessagesResponse,
 } from "./TcChat";
 
+// Assistant text now renders through the citation-safe markdown path
+// (Streamdown). Streamdown installs an IntersectionObserver for its
+// visibility-gated caret animation; jsdom ships none, so a no-op keeps
+// assistant markdown renderable under test.
+class NoopIntersectionObserver {
+  observe(): void {}
+  unobserve(): void {}
+  disconnect(): void {}
+  takeRecords(): unknown[] {
+    return [];
+  }
+}
+if (typeof globalThis.IntersectionObserver === "undefined") {
+  (
+    globalThis as unknown as { IntersectionObserver: unknown }
+  ).IntersectionObserver = NoopIntersectionObserver;
+}
+
 interface StubRecord {
   readonly calls: TypedRequest[];
 }
@@ -72,6 +90,23 @@ const SAMPLE_MESSAGES: ReadonlyArray<TcChatMessage> = [
 ];
 
 const SAMPLE_RESPONSE: TcChatMessagesResponse = { messages: SAMPLE_MESSAGES };
+
+// A GFM table mid-stream: header + separator + one complete row, plus an
+// incomplete trailing row (`| Globex`). The citation-safe streaming markdown
+// path must parse the complete rows into a real <table> and hold the partial
+// one — never emitting the raw `|pipe|` delimiters as visible text.
+const STREAMING_TABLE_MESSAGE: TcChatMessage = {
+  message_id: "m-table",
+  role: "assistant",
+  parts: [
+    {
+      type: "text",
+      text: "| Account | Q4 |\n| --- | --- |\n| Acme | 176 |\n| Globex",
+      status: { type: "running" },
+    },
+  ],
+  created_at_ms: 1716000120000,
+};
 
 describe("TcChat", () => {
   it("fetches messages from /v1/conversations/{id}/messages on mount", async () => {
@@ -227,6 +262,28 @@ describe("TcChat", () => {
       "data-ghost",
       "false",
     );
+  });
+
+  it("FR-3.19: streams a partial GFM table through the markdown path with a blinking cursor and no raw pipe leak", async () => {
+    const { transport } = makeTransport(() =>
+      Promise.resolve({ messages: [STREAMING_TABLE_MESSAGE] }),
+    );
+    render(
+      withTransport(transport, <TcChat conversationId="c" mode="studio" />),
+    );
+    // Streamdown parses the completed rows into a real <table> — i.e. the
+    // tabular markdown renders via the markdown path, not chat raw text.
+    const table = await screen.findByRole("table");
+    expect(table).toBeInTheDocument();
+
+    const li = screen.getByTestId("tc-chat-message-m-table");
+    // Assistant markdown must NOT fall through the raw PlainText renderer
+    // (the only place a literal `|pipe|` could leak at this layer).
+    expect(li.querySelector(".aui-plain-text")).toBeNull();
+    // No half-parsed table markup surfaces as visible text.
+    expect(li.textContent ?? "").not.toContain("|");
+    // The incremental blinking cursor is active while the part is running.
+    expect(li.querySelector(".assistant-markdown--streaming")).not.toBeNull();
   });
 
   it("invokes onSend when the composer sends", async () => {
