@@ -1074,3 +1074,21 @@ export {
   type ActivityRunStatus,
 } from "./destinations/activity";
 // === end Phase 4 (PR-4.5) ===
+
+// === Phase 4 (PR-4.8) — Tools ConnectModal ===
+// Presentational "Connect a tool" flow on the shared <Modal> + <StepDots>
+// chrome (DESIGN-SPEC §5, FR-4.23): catalog pick → OAuth spinner → permission
+// (Read only / Read & act) → Connect. The host binder (PR-4.8b) performs the
+// OAuth round-trip and persists the connection, driving the modal purely via
+// props: `onSelectEntry` kicks off OAuth, `pending`/`error` drive the
+// spinner + inline alert, and `onConnect(slug, permission)` fires on the
+// terminal Connect. Reuses `ConnectorCatalogEntry` + `ConnectorAccessMode`
+// from @0x-copilot/api-types (no re-declaration).
+export {
+  ConnectModal,
+  CONNECT_PERMISSION_OPTIONS,
+  type ConnectModalProps,
+  type ConnectPermission,
+  type ConnectPermissionOption,
+} from "./destinations/connectors";
+// === end Phase 4 (PR-4.8) ===
