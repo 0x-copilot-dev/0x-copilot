@@ -1,0 +1,2351 @@
+"""File-native runtime store: persistence + event store + queue ports on disk.
+
+This is the desktop ``single_user_desktop`` backend. It implements the same
+async port surface as ``InMemoryRuntimeApiStore`` and the Postgres adapter, but
+persists to plaintext JSONL folders (Claude-Code-session style) plus a
+content-addressed object store and a disposable SQLite catalog index.
+
+Design (locked; see the PR description):
+
+* **Single-writer, in-process.** The desktop runs one worker; subagents are
+  in-process async tasks. Concurrency control is therefore small in-process
+  ``asyncio.Lock``s — one per conversation for session writes, one per approval
+  batch for the atomic resume flip, and one for the back-office ledgers. There
+  is **no** cross-process ``flock``, no WAL commit-markers, no hash-chained
+  generations, no tail-repair — those were explicitly cut.
+* **Folders/JSONL are canonical.** Conversations/messages/runs/events/subagents
+  live under ``workspaces/<ws>/sessions/<conv>/``; the back-office tables live
+  as append-with-fold ledgers under ``state/``. The in-memory dicts this class
+  holds are a *materialized view* rebuilt from those files on :meth:`open` —
+  not a fallback. Every mutation writes through to disk with ``fsync`` on the
+  important records.
+* **The SQLite index is disposable.** It is rebuilt from the materialized dicts
+  on every :meth:`open`; deleting ``index/`` loses nothing. Listing / lookup
+  reads (conversations, messages, a run's events, latest sequence) are served
+  through it so it is genuinely load-bearing.
+
+Follow-up seams intentionally left for other PRs (do not wire here):
+
+* ``self.object_store`` is ready but nothing offloads into it yet — wiring
+  ``ContextPayloadManager`` / ``OffloadWriter`` is a follow-up PR.
+* Routing Deep Agents ``CompositeBackend`` ``/subagents/`` and
+  ``/large_tool_results/`` reads to the object store is a follow-up PR.
+* Swapping the LangGraph checkpointer to ``SqliteSaver`` is a follow-up PR;
+  ``execution/factory.py`` is deliberately untouched.
+"""
+
+from __future__ import annotations
+
+import asyncio
+from collections.abc import Sequence
+from datetime import datetime, timezone
+from pathlib import Path
+from typing import Any
+
+from starlette import status
+
+from agent_runtime.api.constants import Messages
+from agent_runtime.execution.contracts import RuntimeErrorCode
+from agent_runtime.persistence.constants import Values as PersistenceValues
+from copilot_audit_chain import AuditChainSigner
+from agent_runtime.persistence.records import (
+    ApprovalBatchItemRecord,
+    ApprovalBatchRecord,
+    ApprovalBatchSpec,
+    ApprovalBatchStatus,
+    BatchItemDecision,
+    BatchOutcomeStatus,
+    BatchTransitionOutcome,
+    BudgetRecord,
+    BudgetReservationRecord,
+    BudgetStateRecord,
+    ChargeOutcome,
+    CompressionEventRecord,
+    ModelPricingRecord,
+    OutboxStatus,
+    RetentionPolicyRecord,
+    RetentionSweepOutcome,
+    RuntimeModelCallUsageRecord,
+    RuntimeRunUsageRecord,
+    RuntimeWorkerClaim,
+    RuntimeWorkerResult,
+    ToolBudgetEnforcement,
+    ToolBudgetRecord,
+    UsageConversationAggregateRecord,
+    UsageDailyConnectorRow,
+    UsageDailyOrgRow,
+    UsageDailyPurposeRow,
+    UsageDailySubagentRow,
+    UsageDailyUserRow,
+)
+from runtime_adapters.base import RuntimeAdapterHelpers, StatusTransition, _Fields
+from runtime_adapters.file._catalog_index import CatalogIndex
+from runtime_adapters.file._jsonl import JsonlIo
+from runtime_adapters.file._paths import FileStoreLayout
+from runtime_adapters.file._state_ledger import StateLedger
+from runtime_adapters.file.object_store import FileObjectStore
+from runtime_api.http.errors import RuntimeApiError
+from runtime_api.schemas import (
+    AgentRunStatus,
+    ApprovalDecision,
+    ApprovalDecisionRecord,
+    ApprovalRequestRecord,
+    ConversationRecord,
+    ConversationStatus,
+    CreateConversationRequest,
+    CreateRunRequest,
+    HistoryDeletionResponse,
+    MessageRecord,
+    MessageRole,
+    MessageStatus,
+    RuntimeApprovalResolvedCommand,
+    RuntimeCancelCommand,
+    RuntimeEventDraft,
+    RuntimeEventEnvelope,
+    RuntimeEventPresentationProjector,
+    RuntimeRunCommand,
+    RunRecord,
+    WorkspaceDefaultsRecord,
+)
+
+
+class _Tables:
+    """State-ledger file basenames (one JSONL per back-office table)."""
+
+    APPROVALS = "approvals"
+    APPROVAL_DECISIONS = "approval_decisions"
+    APPROVAL_BATCHES = "approval_batches"
+    APPROVAL_BATCH_ITEMS = "approval_batch_items"
+    RUN_USAGE = "run_usage"
+    MODEL_CALL_USAGE = "model_call_usage"
+    PRICING = "pricing"
+    USER_DAILY = "usage_daily_user"
+    ORG_DAILY = "usage_daily_org"
+    CONNECTOR_DAILY = "usage_daily_connector"
+    SUBAGENT_DAILY = "usage_daily_subagent"
+    PURPOSE_DAILY = "usage_daily_purpose"
+    BUDGETS = "budgets"
+    BUDGET_STATES = "budget_states"
+    BUDGET_RESERVATIONS = "budget_reservations"
+    RETENTION_POLICIES = "retention_policies"
+    DELETION_EVIDENCE = "deletion_evidence"
+    WORKSPACE_DEFAULTS = "workspace_defaults"
+    AUDIT_LOG = "audit_log"
+    QUEUE = "queue"
+
+
+class FileRuntimeApiStore:
+    """On-disk implementation of persistence, event store, and queue ports."""
+
+    def __init__(self, root: str | Path) -> None:
+        self._layout = FileStoreLayout(Path(root))
+        self._index = CatalogIndex(self._layout.index_db_path)
+        self.object_store = FileObjectStore(self._layout)
+
+        # ---- materialized view (rebuilt from disk on open) --------------
+        self.conversations: dict[str, ConversationRecord] = {}
+        self.messages: dict[str, MessageRecord] = {}
+        self.runs: dict[str, RunRecord] = {}
+        self.events_by_run: dict[str, list[RuntimeEventEnvelope]] = {}
+        self.approval_requests: dict[str, ApprovalRequestRecord] = {}
+        self.approval_decisions: dict[str, ApprovalDecisionRecord] = {}
+        self.approval_batches: dict[str, ApprovalBatchRecord] = {}
+        self.approval_batch_items: dict[str, ApprovalBatchItemRecord] = {}
+        self.run_usage: dict[str, RuntimeRunUsageRecord] = {}
+        self.model_call_usage: list[RuntimeModelCallUsageRecord] = []
+        self.pricing_rows: list[ModelPricingRecord] = []
+        self.user_daily_usage: dict[
+            tuple[str, str, str, str, str], UsageDailyUserRow
+        ] = {}
+        self.org_daily_usage: dict[tuple[str, str, str, str], UsageDailyOrgRow] = {}
+        self.connector_daily_usage: dict[
+            tuple[str, str, str, str], UsageDailyConnectorRow
+        ] = {}
+        self.subagent_daily_usage: dict[
+            tuple[str, str, str, str, str], UsageDailySubagentRow
+        ] = {}
+        self.purpose_daily_usage: dict[
+            tuple[str, str, str, str, str], UsageDailyPurposeRow
+        ] = {}
+        self.compression_events: list[CompressionEventRecord] = []
+        self.budgets: dict[str, BudgetRecord] = {}
+        self.budget_states: dict[tuple[str, str], BudgetStateRecord] = {}
+        self.budget_reservations: dict[str, BudgetReservationRecord] = {}
+        self.retention_policies: dict[str, tuple[RetentionPolicyRecord, ...]] = {}
+        self.deletion_evidence: list = []
+        self.workspace_defaults: dict[str, WorkspaceDefaultsRecord] = {}
+        self.tool_budgets: dict[str, ToolBudgetRecord] = {
+            "seed_default": ToolBudgetRecord(
+                id="seed_default",
+                org_id=None,
+                tool_name="*",
+                max_calls_per_run=6,
+                enforcement=ToolBudgetEnforcement.HARD,
+            ),
+        }
+        self.audit_log: list[tuple[str, dict[str, object]]] = []
+        self._audit_chain_signer = AuditChainSigner.from_env(
+            environment_env_var="RUNTIME_ENVIRONMENT"
+        )
+        self._audit_chain_heads_by_org: dict[str, bytes] = {}
+        self._audit_chain_counts_by_org: dict[str, int] = {}
+        self._conversation_idempotency: dict[tuple[str, str, str], str] = {}
+        self._run_idempotency: dict[tuple[str, str, str], str] = {}
+        self._run_idempotency_fingerprint: dict[
+            tuple[str, str, str], tuple[str, str]
+        ] = {}
+
+        # ---- queue (outbox) ---------------------------------------------
+        self.run_commands: list[RuntimeRunCommand] = []
+        self.cancel_commands: list[RuntimeCancelCommand] = []
+        self.approval_commands: list[RuntimeApprovalResolvedCommand] = []
+        self._queue_order: list[str] = []
+        self._queue_payloads: dict[str, dict[str, object]] = {}
+        self._queue_statuses: dict[str, OutboxStatus] = {}
+        self._queue_attempts: dict[str, int] = {}
+        self._queue_available_at: dict[str, datetime] = {}
+        self._queue_claims: dict[str, RuntimeWorkerClaim] = {}
+
+        # ---- locks (in-process, single-writer) --------------------------
+        self._conversation_locks: dict[str, asyncio.Lock] = {}
+        self._approval_batch_locks: dict[str, asyncio.Lock] = {}
+        self._state_lock = asyncio.Lock()
+
+        # ---- ledgers ----------------------------------------------------
+        self._ledgers: dict[str, StateLedger] = {}
+
+    @property
+    def layout(self) -> FileStoreLayout:
+        """On-disk layout resolver — used by the factory to wire satellites."""
+
+        return self._layout
+
+    # ==================================================================
+    # Lifecycle
+    # ==================================================================
+
+    async def open(self) -> None:
+        """Create the scaffold, replay canonical JSONL, rebuild the index."""
+
+        self._layout.ensure_scaffold()
+        self._ledgers = {}
+        self._load_sessions_from_disk()
+        self._load_state_from_disk()
+        self._load_queue_from_disk()
+        self._index.connect()
+        self._rebuild_index()
+
+    async def close(self) -> None:
+        """Release the index connection. JSONL is already durable on disk."""
+
+        self._index.close()
+
+    async def migrate(self) -> None:
+        """No schema migration: JSONL is schemaless, the index is rebuilt."""
+
+    # ----- lock helpers --------------------------------------------------
+
+    def _conversation_lock(self, conversation_id: str) -> asyncio.Lock:
+        lock = self._conversation_locks.get(conversation_id)
+        if lock is None:
+            lock = asyncio.Lock()
+            self._conversation_locks[conversation_id] = lock
+        return lock
+
+    def _approval_batch_lock(self, batch_id: str) -> asyncio.Lock:
+        lock = self._approval_batch_locks.get(batch_id)
+        if lock is None:
+            lock = asyncio.Lock()
+            self._approval_batch_locks[batch_id] = lock
+        return lock
+
+    def _ledger(self, table: str) -> StateLedger:
+        ledger = self._ledgers.get(table)
+        if ledger is None:
+            ledger = StateLedger(self._layout.state_path(table))
+            self._ledgers[table] = ledger
+        return ledger
+
+    # ==================================================================
+    # Persistence write-through helpers (session data)
+    # ==================================================================
+
+    def _persist_conversation(self, conversation: ConversationRecord) -> None:
+        doc = conversation.model_dump(mode="json")
+        JsonlIo.rewrite_json(
+            self._layout.conversation_meta_path(
+                conversation.org_id, conversation.conversation_id
+            ),
+            doc,
+        )
+        self._index.upsert_conversation(doc)
+
+    def _persist_message(self, message: MessageRecord) -> None:
+        doc = message.model_dump(mode="json")
+        JsonlIo.append_line(
+            self._layout.messages_path(message.org_id, message.conversation_id), doc
+        )
+        self._index.upsert_message(doc)
+
+    def _persist_run(self, run: RunRecord) -> None:
+        doc = run.model_dump(mode="json")
+        JsonlIo.append_line(
+            self._layout.runs_path(run.org_id, run.conversation_id), doc
+        )
+        self._index.upsert_run(doc)
+
+    def _persist_event(self, envelope: RuntimeEventEnvelope, *, org_id: str) -> None:
+        doc = envelope.model_dump(mode="json")
+        if envelope.task_id:
+            path = self._layout.subagent_path(
+                org_id, envelope.conversation_id, envelope.task_id
+            )
+        else:
+            path = self._layout.events_path(org_id, envelope.conversation_id)
+        JsonlIo.append_line(path, doc)
+        index_doc = {**doc, "org_id": org_id}
+        self._index.insert_events([index_doc])
+
+    # ==================================================================
+    # Replay from disk (open)
+    # ==================================================================
+
+    def _load_sessions_from_disk(self) -> None:
+        sessions_root = self._layout.workspaces_dir
+        if not sessions_root.exists():
+            return
+        for workspace_dir in sessions_root.iterdir():
+            sessions_dir = workspace_dir / "sessions"
+            if not sessions_dir.is_dir():
+                continue
+            for conversation_dir in sessions_dir.iterdir():
+                if conversation_dir.is_dir():
+                    self._load_one_conversation(conversation_dir)
+        self._rebuild_idempotency_maps()
+
+    def _load_one_conversation(self, conversation_dir: Path) -> None:
+        meta = JsonlIo.read_json(conversation_dir / self._layout.CONVERSATION_META)
+        if meta is not None:
+            conversation = ConversationRecord.model_validate(meta)
+            self.conversations[conversation.conversation_id] = conversation
+
+        for doc in JsonlIo.iter_lines(conversation_dir / self._layout.MESSAGES_FILE):
+            message = MessageRecord.model_validate(doc)
+            self.messages[message.message_id] = message  # last write wins
+
+        for doc in JsonlIo.iter_lines(conversation_dir / self._layout.RUNS_FILE):
+            run = RunRecord.model_validate(doc)
+            self.runs[run.run_id] = run  # last write wins (status updates)
+
+        envelopes: list[RuntimeEventEnvelope] = []
+        for doc in JsonlIo.iter_lines(conversation_dir / self._layout.EVENTS_FILE):
+            envelopes.append(RuntimeEventEnvelope.model_validate(doc))
+        subagents_dir = conversation_dir / self._layout.SUBAGENTS_DIR
+        if subagents_dir.is_dir():
+            for sub_file in subagents_dir.iterdir():
+                for doc in JsonlIo.iter_lines(sub_file):
+                    envelopes.append(RuntimeEventEnvelope.model_validate(doc))
+        for envelope in envelopes:
+            bucket = self.events_by_run.setdefault(envelope.run_id, [])
+            bucket.append(envelope)
+        for bucket in self.events_by_run.values():
+            bucket.sort(key=lambda event: event.sequence_no)
+
+    def _rebuild_idempotency_maps(self) -> None:
+        for conversation in self.conversations.values():
+            if conversation.idempotency_key is not None:
+                self._conversation_idempotency[
+                    (
+                        conversation.org_id,
+                        conversation.user_id,
+                        conversation.idempotency_key,
+                    )
+                ] = conversation.conversation_id
+        for run in self.runs.values():
+            if run.idempotency_key is None:
+                continue
+            key = (run.org_id, run.user_id, run.idempotency_key)
+            self._run_idempotency[key] = run.run_id
+            user_message = self.messages.get(run.user_message_id)
+            fingerprint_input = (
+                user_message.content_text if user_message is not None else ""
+            )
+            self._run_idempotency_fingerprint[key] = (
+                run.conversation_id,
+                fingerprint_input or "",
+            )
+
+    def _rebuild_index(self) -> None:
+        events: list[dict] = []
+        for run_id, bucket in self.events_by_run.items():
+            run = self.runs.get(run_id)
+            org_id = run.org_id if run is not None else ""
+            for envelope in bucket:
+                events.append({**envelope.model_dump(mode="json"), "org_id": org_id})
+        self._index.rebuild(
+            conversations=(
+                c.model_dump(mode="json") for c in self.conversations.values()
+            ),
+            messages=(m.model_dump(mode="json") for m in self.messages.values()),
+            runs=(r.model_dump(mode="json") for r in self.runs.values()),
+            events=events,
+        )
+
+    def _load_state_from_disk(self) -> None:
+        # Fold-by-key + append-only tables.
+        for op, rec in self._ledger(_Tables.APPROVALS).load_ops():
+            if op == "put":
+                r = ApprovalRequestRecord.model_validate(rec)
+                self.approval_requests[r.approval_id] = r
+            else:
+                self.approval_requests.pop(rec, None)
+        for op, rec in self._ledger(_Tables.APPROVAL_DECISIONS).load_ops():
+            if op == "put":
+                r = ApprovalDecisionRecord.model_validate(rec)
+                self.approval_decisions[r.approval_id] = r
+        for op, rec in self._ledger(_Tables.APPROVAL_BATCHES).load_ops():
+            if op == "put":
+                r = ApprovalBatchRecord.model_validate(rec)
+                self.approval_batches[r.batch_id] = r
+        for op, rec in self._ledger(_Tables.APPROVAL_BATCH_ITEMS).load_ops():
+            if op == "put":
+                r = ApprovalBatchItemRecord.model_validate(rec)
+                self.approval_batch_items[r.item_id] = r
+        for op, rec in self._ledger(_Tables.RUN_USAGE).load_ops():
+            if op == "put":
+                r = RuntimeRunUsageRecord.model_validate(rec)
+                self.run_usage[r.run_id] = r
+        # model_call_usage is an append-only list keyed by id (updates re-put).
+        model_calls: dict[str, RuntimeModelCallUsageRecord] = {}
+        order: list[str] = []
+        for rec in self._ledger(_Tables.MODEL_CALL_USAGE).load_puts():
+            r = RuntimeModelCallUsageRecord.model_validate(rec)
+            if r.id not in model_calls:
+                order.append(r.id)
+            model_calls[r.id] = r
+        self.model_call_usage = [model_calls[i] for i in order]
+        pricing: dict[str, ModelPricingRecord] = {}
+        pricing_order: list[str] = []
+        for rec in self._ledger(_Tables.PRICING).load_puts():
+            r = ModelPricingRecord.model_validate(rec)
+            if r.id not in pricing:
+                pricing_order.append(r.id)
+            pricing[r.id] = r
+        self.pricing_rows = [pricing[i] for i in pricing_order]
+        for rec in self._ledger(_Tables.USER_DAILY).load_puts():
+            r = UsageDailyUserRow.model_validate(rec)
+            self.user_daily_usage[self._user_daily_key(r)] = r
+        for rec in self._ledger(_Tables.ORG_DAILY).load_puts():
+            r = UsageDailyOrgRow.model_validate(rec)
+            self.org_daily_usage[self._org_daily_key(r)] = r
+        for rec in self._ledger(_Tables.CONNECTOR_DAILY).load_puts():
+            r = UsageDailyConnectorRow.model_validate(rec)
+            self.connector_daily_usage[self._connector_daily_key(r)] = r
+        for rec in self._ledger(_Tables.SUBAGENT_DAILY).load_puts():
+            r = UsageDailySubagentRow.model_validate(rec)
+            self.subagent_daily_usage[self._subagent_daily_key(r)] = r
+        for rec in self._ledger(_Tables.PURPOSE_DAILY).load_puts():
+            r = UsageDailyPurposeRow.model_validate(rec)
+            self.purpose_daily_usage[self._purpose_daily_key(r)] = r
+        for op, rec in self._ledger(_Tables.BUDGETS).load_ops():
+            if op == "put":
+                r = BudgetRecord.model_validate(rec)
+                self.budgets[r.id] = r
+            else:
+                self.budgets.pop(rec, None)
+        # Whole-collection rewrite tables.
+        for rec in self._ledger(_Tables.BUDGET_STATES).load_puts():
+            r = BudgetStateRecord.model_validate(rec)
+            self.budget_states[(r.budget_id, r.period_start.isoformat())] = r
+        for rec in self._ledger(_Tables.BUDGET_RESERVATIONS).load_puts():
+            r = BudgetReservationRecord.model_validate(rec)
+            self.budget_reservations[r.reservation_id] = r
+        retention: dict[str, list[RetentionPolicyRecord]] = {}
+        for rec in self._ledger(_Tables.RETENTION_POLICIES).load_puts():
+            r = RetentionPolicyRecord.model_validate(rec)
+            retention.setdefault(r.org_id, []).append(r)
+        self.retention_policies = {k: tuple(v) for k, v in retention.items()}
+        for rec in self._ledger(_Tables.WORKSPACE_DEFAULTS).load_puts():
+            r = WorkspaceDefaultsRecord.model_validate(rec)
+            self.workspace_defaults[r.org_id] = r
+        self.deletion_evidence = list(
+            self._ledger(_Tables.DELETION_EVIDENCE).load_puts()
+        )
+        self._load_audit_log_from_disk()
+
+    def _load_audit_log_from_disk(self) -> None:
+        for rec in self._ledger(_Tables.AUDIT_LOG).load_puts():
+            event_type = str(rec.get("event_type", ""))
+            record = rec.get("record")
+            if not isinstance(record, dict):
+                continue
+            self.audit_log.append((event_type, record))
+            org_id = str(record.get(_Fields.ORG_ID, "unknown"))
+            seq = int(record.get("seq") or 0)
+            self._audit_chain_counts_by_org[org_id] = max(
+                self._audit_chain_counts_by_org.get(org_id, 0), seq
+            )
+            signature_hex = record.get("signature")
+            if isinstance(signature_hex, str):
+                self._audit_chain_heads_by_org[org_id] = bytes.fromhex(signature_hex)
+
+    def _load_queue_from_disk(self) -> None:
+        for line in JsonlIo.iter_lines(self._layout.state_path(_Tables.QUEUE)):
+            op = line.get("op")
+            command_id = line.get("command_id")
+            if not isinstance(command_id, str):
+                continue
+            if op == "enqueue":
+                payload = line.get("payload")
+                if not isinstance(payload, dict):
+                    continue
+                if command_id not in self._queue_payloads:
+                    self._queue_order.append(command_id)
+                self._queue_payloads[command_id] = payload
+                self._queue_statuses[command_id] = OutboxStatus.PENDING
+                self._queue_attempts[command_id] = 0
+                self._queue_available_at[command_id] = self._parse_dt(
+                    line.get("available_at")
+                )
+            elif op == "status":
+                self._queue_statuses[command_id] = OutboxStatus(str(line.get("status")))
+                self._queue_available_at[command_id] = self._parse_dt(
+                    line.get("available_at")
+                )
+            elif op == "attempts":
+                self._queue_attempts[command_id] = int(line.get("attempts") or 0)
+        # Claims (lock ownership) are ephemeral — a restarted worker re-claims.
+        self._queue_claims = {}
+
+    @staticmethod
+    def _parse_dt(value: object) -> datetime:
+        if isinstance(value, str):
+            try:
+                return datetime.fromisoformat(value)
+            except ValueError:
+                pass
+        return datetime.now(timezone.utc)
+
+    # ----- daily-usage key functions ------------------------------------
+
+    @staticmethod
+    def _user_daily_key(row: UsageDailyUserRow) -> tuple[str, str, str, str, str]:
+        return (
+            row.org_id,
+            row.user_id,
+            row.day.isoformat(),
+            row.model_provider,
+            row.model_name,
+        )
+
+    @staticmethod
+    def _org_daily_key(row: UsageDailyOrgRow) -> tuple[str, str, str, str]:
+        return (row.org_id, row.day.isoformat(), row.model_provider, row.model_name)
+
+    @staticmethod
+    def _connector_daily_key(
+        row: UsageDailyConnectorRow,
+    ) -> tuple[str, str, str, str]:
+        return (row.org_id, row.day.isoformat(), row.connector_slug, row.model_name)
+
+    @staticmethod
+    def _subagent_daily_key(
+        row: UsageDailySubagentRow,
+    ) -> tuple[str, str, str, str, str]:
+        return (
+            row.org_id,
+            row.day.isoformat(),
+            row.subagent_slug,
+            row.model_provider,
+            row.model_name,
+        )
+
+    @staticmethod
+    def _purpose_daily_key(
+        row: UsageDailyPurposeRow,
+    ) -> tuple[str, str, str, str, str]:
+        return (
+            row.org_id,
+            row.day.isoformat(),
+            row.purpose,
+            row.model_provider,
+            row.model_name,
+        )
+
+    # ==================================================================
+    # PersistencePort — conversations / messages
+    # ==================================================================
+
+    async def create_conversation(
+        self, request: CreateConversationRequest
+    ) -> ConversationRecord:
+        if request.idempotency_key is not None:
+            key = (request.org_id, request.user_id, request.idempotency_key)
+            existing_id = self._conversation_idempotency.get(key)
+            if existing_id is not None:
+                return self.conversations[existing_id]
+        conversation = ConversationRecord(
+            org_id=request.org_id,
+            user_id=request.user_id,
+            assistant_id=request.assistant_id,
+            title=request.title,
+            metadata=request.metadata,
+            idempotency_key=request.idempotency_key,
+        )
+        async with self._conversation_lock(conversation.conversation_id):
+            self.conversations[conversation.conversation_id] = conversation
+            if request.idempotency_key is not None:
+                self._conversation_idempotency[
+                    (request.org_id, request.user_id, request.idempotency_key)
+                ] = conversation.conversation_id
+            self._persist_conversation(conversation)
+        return conversation
+
+    async def get_conversation(
+        self, *, org_id: str, user_id: str, conversation_id: str
+    ) -> ConversationRecord | None:
+        conversation = self.conversations.get(conversation_id)
+        if conversation is None:
+            return None
+        if conversation.org_id != org_id or conversation.user_id != user_id:
+            return None
+        return conversation
+
+    async def get_conversation_for_org(
+        self, *, org_id: str, conversation_id: str
+    ) -> ConversationRecord | None:
+        conversation = self.conversations.get(conversation_id)
+        if conversation is None or conversation.org_id != org_id:
+            return None
+        return conversation
+
+    async def list_conversations(
+        self,
+        *,
+        org_id: str,
+        user_id: str,
+        limit: int,
+        include_archived: bool = False,
+        include_deleted: bool = False,
+    ) -> Sequence[ConversationRecord]:
+        docs = self._index.list_conversations(
+            org_id=org_id,
+            user_id=user_id,
+            limit=limit,
+            include_archived=include_archived,
+            include_deleted=include_deleted,
+        )
+        return tuple(ConversationRecord.model_validate_json(doc) for doc in docs)
+
+    async def list_messages(
+        self,
+        *,
+        org_id: str,
+        conversation_id: str,
+        limit: int,
+        include_deleted: bool = False,
+    ) -> Sequence[MessageRecord]:
+        docs = self._index.list_messages(
+            org_id=org_id,
+            conversation_id=conversation_id,
+            limit=limit,
+            include_deleted=include_deleted,
+        )
+        return tuple(MessageRecord.model_validate_json(doc) for doc in docs)
+
+    async def append_message(self, message: MessageRecord) -> MessageRecord:
+        async with self._conversation_lock(message.conversation_id):
+            self.messages[message.message_id] = message
+            self._persist_message(message)
+            conversation = self.conversations.get(message.conversation_id)
+            if conversation is not None:
+                updated = conversation.model_copy(
+                    update={"updated_at": message.created_at}
+                )
+                self.conversations[message.conversation_id] = updated
+                self._persist_conversation(updated)
+        return message
+
+    async def insert_forked_conversation(
+        self, conversation: ConversationRecord
+    ) -> ConversationRecord:
+        async with self._conversation_lock(conversation.conversation_id):
+            self.conversations[conversation.conversation_id] = conversation
+            self._persist_conversation(conversation)
+        return conversation
+
+    async def update_conversation_connectors(
+        self,
+        *,
+        org_id: str,
+        user_id: str,
+        conversation_id: str,
+        scopes_patch: dict[str, tuple[str, ...] | None],
+        now: datetime,
+    ) -> ConversationRecord | None:
+        conversation = await self.get_conversation(
+            org_id=org_id, user_id=user_id, conversation_id=conversation_id
+        )
+        if conversation is None:
+            return None
+        merged: dict[str, tuple[str, ...] | None] = dict(
+            conversation.enabled_connectors
+        )
+        merged.update(scopes_patch)
+        updated = conversation.model_copy(
+            update={
+                "enabled_connectors": merged,
+                "connectors_updated_at": now,
+                "updated_at": now,
+            }
+        )
+        async with self._conversation_lock(conversation_id):
+            self.conversations[conversation_id] = updated
+            self._persist_conversation(updated)
+        return updated
+
+    async def get_workspace_defaults(
+        self, *, org_id: str
+    ) -> WorkspaceDefaultsRecord | None:
+        return self.workspace_defaults.get(org_id)
+
+    async def upsert_workspace_defaults(
+        self, *, record: WorkspaceDefaultsRecord
+    ) -> WorkspaceDefaultsRecord:
+        persisted = record.model_copy(update={"retention_days": None})
+        async with self._state_lock:
+            self.workspace_defaults[record.org_id] = persisted
+            self._ledger(_Tables.WORKSPACE_DEFAULTS).append_put(
+                persisted.model_dump(mode="json")
+            )
+        return persisted
+
+    async def update_conversation(
+        self,
+        *,
+        org_id: str,
+        user_id: str,
+        conversation_id: str,
+        title: str | None,
+        title_changed: bool,
+        folder: str | None,
+        folder_changed: bool,
+        archived: bool | None,
+        archived_changed: bool,
+        now: datetime,
+    ) -> ConversationRecord | None:
+        conversation = await self.get_conversation(
+            org_id=org_id, user_id=user_id, conversation_id=conversation_id
+        )
+        if conversation is None:
+            return None
+        update: dict[str, object] = {"updated_at": now}
+        if title_changed:
+            update["title"] = title
+        if folder_changed:
+            update["folder"] = folder
+        if archived_changed:
+            if archived:
+                update["status"] = ConversationStatus.ARCHIVED
+                update["archived_at"] = now
+            else:
+                update["status"] = ConversationStatus.ACTIVE
+                update["archived_at"] = None
+        updated = conversation.model_copy(update=update)
+        async with self._conversation_lock(conversation_id):
+            self.conversations[conversation_id] = updated
+            self._persist_conversation(updated)
+        return updated
+
+    async def soft_delete_conversation(
+        self, *, org_id: str, user_id: str, conversation_id: str, now: datetime
+    ) -> ConversationRecord | None:
+        conversation = await self.get_conversation(
+            org_id=org_id, user_id=user_id, conversation_id=conversation_id
+        )
+        if conversation is None:
+            return None
+        if conversation.deleted_at is not None:
+            return conversation
+        updated = conversation.model_copy(update={"deleted_at": now, "updated_at": now})
+        async with self._conversation_lock(conversation_id):
+            self.conversations[conversation_id] = updated
+            self._persist_conversation(updated)
+        return updated
+
+    async def restore_conversation(
+        self, *, org_id: str, user_id: str, conversation_id: str, now: datetime
+    ) -> ConversationRecord | None:
+        conversation = await self.get_conversation(
+            org_id=org_id, user_id=user_id, conversation_id=conversation_id
+        )
+        if conversation is None:
+            return None
+        if conversation.deleted_at is None:
+            return conversation
+        updated = conversation.model_copy(
+            update={"deleted_at": None, "updated_at": now}
+        )
+        async with self._conversation_lock(conversation_id):
+            self.conversations[conversation_id] = updated
+            self._persist_conversation(updated)
+        return updated
+
+    # ==================================================================
+    # PersistencePort — runs
+    # ==================================================================
+
+    async def create_run_with_user_message(
+        self, *, request: CreateRunRequest, conversation: ConversationRecord
+    ) -> tuple[RunRecord, MessageRecord, bool]:
+        context = request.runtime_context
+        if context is None:
+            raise RuntimeApiError(
+                RuntimeErrorCode.VALIDATION_ERROR,
+                "Runtime context is required.",
+                http_status=status.HTTP_400_BAD_REQUEST,
+                retryable=False,
+            )
+        if request.idempotency_key is not None:
+            key = (context.org_id, context.user_id, request.idempotency_key)
+            existing_run_id = self._run_idempotency.get(key)
+            if existing_run_id is not None:
+                self._ensure_run_idempotency_match(key=key, request=request)
+                run = self.runs[existing_run_id]
+                return run, self.messages[run.user_message_id], False
+
+        user_message = RuntimeAdapterHelpers.message_for_run_request(
+            request=request,
+            conversation=conversation,
+            get_message=lambda mid: self.messages.get(mid),
+            get_latest_message_id=self._latest_message_id,
+            find_latest_assistant_for_run=self._find_latest_assistant_for_run,
+            run_id_for_message=context.run_id,
+        )
+        run = RunRecord(
+            run_id=context.run_id,
+            conversation_id=conversation.conversation_id,
+            org_id=context.org_id,
+            user_id=context.user_id,
+            user_message_id=user_message.message_id,
+            idempotency_key=request.idempotency_key,
+            trace_id=context.trace_id,
+            model_provider=context.model_profile.provider,
+            model_name=context.model_profile.model_name,
+            runtime_context=context,
+            request_options=request.request_options,
+        )
+        async with self._conversation_lock(conversation.conversation_id):
+            message_is_new = user_message.message_id not in self.messages
+            if message_is_new:
+                self.messages[user_message.message_id] = user_message
+                self._persist_message(user_message)
+            self.runs[run.run_id] = run
+            self._persist_run(run)
+            updated_conversation = conversation.model_copy(
+                update={"updated_at": run.created_at}
+            )
+            self.conversations[conversation.conversation_id] = updated_conversation
+            self._persist_conversation(updated_conversation)
+            self.events_by_run.setdefault(run.run_id, [])
+            if request.idempotency_key is not None:
+                key = (context.org_id, context.user_id, request.idempotency_key)
+                self._run_idempotency[key] = run.run_id
+                self._run_idempotency_fingerprint[key] = (
+                    request.conversation_id,
+                    request.user_input,
+                )
+        return run, user_message, True
+
+    def _latest_message_id(self, org_id: str, conversation_id: str) -> str | None:
+        candidates = [
+            message
+            for message in self.messages.values()
+            if message.org_id == org_id
+            and message.conversation_id == conversation_id
+            and message.deleted_at is None
+        ]
+        if not candidates:
+            return None
+        return max(candidates, key=lambda m: m.created_at).message_id
+
+    def _find_latest_assistant_for_run(
+        self, org_id: str, conversation_id: str, run_id: str
+    ) -> str | None:
+        matches = [
+            message
+            for message in self.messages.values()
+            if message.org_id == org_id
+            and message.conversation_id == conversation_id
+            and message.run_id == run_id
+            and message.role == MessageRole.ASSISTANT
+            and message.deleted_at is None
+        ]
+        if not matches:
+            return None
+        return max(matches, key=lambda m: m.created_at).message_id
+
+    async def get_run(self, *, org_id: str, run_id: str) -> RunRecord | None:
+        run = self.runs.get(run_id)
+        if run is None or run.org_id != org_id:
+            return None
+        return run
+
+    async def get_active_run_for_conversation(
+        self, *, org_id: str, conversation_id: str
+    ) -> RunRecord | None:
+        non_terminal = {
+            AgentRunStatus.QUEUED,
+            AgentRunStatus.RUNNING,
+            AgentRunStatus.WAITING_FOR_APPROVAL,
+            AgentRunStatus.CANCELLING,
+        }
+        candidates = [
+            run
+            for run in self.runs.values()
+            if run.org_id == org_id
+            and run.conversation_id == conversation_id
+            and run.status in non_terminal
+        ]
+        if not candidates:
+            return None
+        return max(candidates, key=lambda run: run.created_at)
+
+    async def update_run_status(
+        self, *, run_id: str, status: AgentRunStatus
+    ) -> RunRecord:
+        run = self.runs[run_id]
+        timestamps = StatusTransition.timestamp_updates(
+            status, already_started=run.started_at is not None
+        )
+        updated = run.model_copy(update={"status": status, **timestamps})
+        async with self._conversation_lock(updated.conversation_id):
+            self.runs[run_id] = updated
+            self._persist_run(updated)
+        return updated
+
+    async def set_run_latest_sequence(
+        self, *, run_id: str, latest_sequence_no: int
+    ) -> RunRecord:
+        current = self.runs[run_id]
+        existing = current.latest_sequence_no
+        if existing is not None and existing >= latest_sequence_no:
+            return current
+        updated = current.model_copy(update={"latest_sequence_no": latest_sequence_no})
+        self.runs[run_id] = updated
+        self._persist_run(updated)
+        return updated
+
+    def _ensure_run_idempotency_match(
+        self, *, key: tuple[str, str, str], request: CreateRunRequest
+    ) -> None:
+        fingerprint = self._run_idempotency_fingerprint.get(key)
+        if fingerprint is not None and fingerprint != (
+            request.conversation_id,
+            request.user_input,
+        ):
+            raise RuntimeApiError(
+                RuntimeErrorCode.VALIDATION_ERROR,
+                Messages.Error.IDEMPOTENCY_CONFLICT,
+                http_status=status.HTTP_409_CONFLICT,
+                retryable=False,
+                correlation_id=request.runtime_context.trace_id,
+            )
+
+    # ==================================================================
+    # EventStorePort
+    # ==================================================================
+
+    async def append_event(self, event: RuntimeEventDraft) -> RuntimeEventEnvelope:
+        async with self._conversation_lock(event.conversation_id):
+            events = self.events_by_run.setdefault(event.run_id, [])
+            envelope = RuntimeEventEnvelope(
+                run_id=event.run_id,
+                conversation_id=event.conversation_id,
+                sequence_no=len(events) + 1,
+                source=event.source,
+                event_type=event.event_type,
+                trace_id=event.trace_id,
+                parent_event_id=event.parent_event_id,
+                span_id=event.span_id,
+                parent_span_id=event.parent_span_id,
+                parent_task_id=event.parent_task_id,
+                task_id=event.task_id,
+                subagent_id=event.subagent_id,
+                display_title=event.display_title,
+                summary=event.summary,
+                status=event.status,
+                activity_kind=event.activity_kind
+                or RuntimeEventPresentationProjector.activity_kind_for(
+                    event_type=event.event_type,
+                    source=event.source,
+                ),
+                visibility=event.visibility,
+                redaction_state=event.redaction_state,
+                presentation=event.presentation,
+                payload=event.payload,
+                metadata=event.metadata,
+            )
+            events.append(envelope)
+            self._persist_event(envelope, org_id=event.org_id)
+            if event.run_id in self.runs:
+                await self.set_run_latest_sequence(
+                    run_id=event.run_id, latest_sequence_no=envelope.sequence_no
+                )
+        return envelope
+
+    async def append_events_batch(
+        self, events: Sequence[RuntimeEventDraft]
+    ) -> Sequence[RuntimeEventEnvelope]:
+        if not events:
+            return ()
+        run_ids = {event.run_id for event in events}
+        if len(run_ids) > 1:
+            raise ValueError(
+                "append_events_batch requires all events to share one run_id; "
+                f"saw {len(run_ids)}."
+            )
+        envelopes: list[RuntimeEventEnvelope] = []
+        for event in events:
+            envelopes.append(await self.append_event(event))
+        return tuple(envelopes)
+
+    async def list_events_after(
+        self, *, org_id: str, run_id: str, after_sequence: int
+    ) -> Sequence[RuntimeEventEnvelope]:
+        run = await self.get_run(org_id=org_id, run_id=run_id)
+        if run is None:
+            return ()
+        docs = self._index.list_events_after(
+            run_id=run_id, after_sequence=after_sequence
+        )
+        return tuple(RuntimeEventEnvelope.model_validate_json(doc) for doc in docs)
+
+    async def get_latest_sequence(self, *, run_id: str) -> int:
+        return self._index.latest_sequence(run_id=run_id)
+
+    # ==================================================================
+    # PersistencePort — approvals
+    # ==================================================================
+
+    async def record_approval_decision(
+        self, *, record: ApprovalDecisionRecord
+    ) -> ApprovalDecisionRecord:
+        async with self._state_lock:
+            self.approval_decisions[record.approval_id] = record
+            self._ledger(_Tables.APPROVAL_DECISIONS).append_put(
+                record.model_dump(mode="json")
+            )
+            request = self.approval_requests[record.approval_id]
+            merged_metadata = dict(request.metadata)
+            merged_metadata["decided_at"] = record.decided_at.isoformat()
+            updated = request.model_copy(
+                update={"status": record.status, "metadata": merged_metadata}
+            )
+            self.approval_requests[record.approval_id] = updated
+            self._ledger(_Tables.APPROVALS).append_put(updated.model_dump(mode="json"))
+        return record
+
+    async def create_approval_request(
+        self, *, record: ApprovalRequestRecord
+    ) -> ApprovalRequestRecord:
+        async with self._state_lock:
+            existing = self.approval_requests.get(record.approval_id)
+            if existing is not None:
+                return existing
+            normalized_metadata = dict(record.metadata)
+            normalized_metadata[_Fields.RISK_LEVEL] = (
+                RuntimeAdapterHelpers.normalize_risk_class(record.metadata)
+            )
+            record = record.model_copy(update={"metadata": normalized_metadata})
+            self.approval_requests[record.approval_id] = record
+            self._ledger(_Tables.APPROVALS).append_put(record.model_dump(mode="json"))
+        return record
+
+    async def forward_approval_request(
+        self,
+        *,
+        parent_approval_id: str,
+        org_id: str,
+        decided_by_user_id: str,
+        forwarded_to_user_id: str,
+        decision_reason: str | None,
+        child: ApprovalRequestRecord,
+        now: datetime,
+    ) -> tuple[ApprovalRequestRecord, ApprovalRequestRecord]:
+        from runtime_api.schemas.common import ApprovalStatus
+
+        async with self._state_lock:
+            parent = self.approval_requests.get(parent_approval_id)
+            if parent is None or parent.org_id != org_id:
+                raise KeyError(parent_approval_id)
+            if parent.status is not ApprovalStatus.PENDING:
+                existing_child = self.approval_requests.get(child.approval_id)
+                if (
+                    parent.status is ApprovalStatus.FORWARDED
+                    and parent.forwarded_to_user_id == forwarded_to_user_id
+                    and existing_child is not None
+                    and existing_child.chain_parent_approval_id == parent_approval_id
+                ):
+                    return parent, existing_child
+                raise RuntimeError("approval_forward_parent_no_longer_pending")
+            existing_child = self.approval_requests.get(child.approval_id)
+            if existing_child is not None:
+                return parent, existing_child
+            updated_parent = parent.model_copy(
+                update={
+                    "status": ApprovalStatus.FORWARDED,
+                    "forwarded_to_user_id": forwarded_to_user_id,
+                    "forwarded_at": now,
+                }
+            )
+            self.approval_requests[parent_approval_id] = updated_parent
+            normalized_metadata = dict(child.metadata)
+            normalized_metadata[_Fields.RISK_LEVEL] = (
+                RuntimeAdapterHelpers.normalize_risk_class(child.metadata)
+            )
+            normalized_child = child.model_copy(
+                update={
+                    "metadata": normalized_metadata,
+                    "chain_parent_approval_id": parent_approval_id,
+                    "chain_depth": child.chain_depth or (parent.chain_depth + 1),
+                }
+            )
+            self.approval_requests[normalized_child.approval_id] = normalized_child
+            parent_decision = ApprovalDecisionRecord(
+                approval_id=parent_approval_id,
+                run_id=updated_parent.run_id,
+                conversation_id=updated_parent.conversation_id,
+                org_id=updated_parent.org_id,
+                user_id=updated_parent.user_id,
+                status=ApprovalStatus.FORWARDED,
+                decided_by_user_id=decided_by_user_id,
+                reason=decision_reason,
+                decided_at=now,
+                forwarded_to_user_id=forwarded_to_user_id,
+            )
+            self.approval_decisions[parent_approval_id] = parent_decision
+            approvals = self._ledger(_Tables.APPROVALS)
+            approvals.append_put(updated_parent.model_dump(mode="json"))
+            approvals.append_put(normalized_child.model_dump(mode="json"))
+            self._ledger(_Tables.APPROVAL_DECISIONS).append_put(
+                parent_decision.model_dump(mode="json")
+            )
+        return updated_parent, normalized_child
+
+    async def get_approval_request(
+        self, *, org_id: str, approval_id: str
+    ) -> ApprovalRequestRecord | None:
+        approval = self.approval_requests.get(approval_id)
+        if approval is None or approval.org_id != org_id:
+            return None
+        return approval
+
+    async def insert_approval_batch(
+        self, *, spec: ApprovalBatchSpec
+    ) -> ApprovalBatchRecord:
+        async with self._state_lock:
+            existing = self.approval_batches.get(spec.batch.batch_id)
+            if existing is not None:
+                return existing
+            self.approval_batches[spec.batch.batch_id] = spec.batch
+            self._ledger(_Tables.APPROVAL_BATCHES).append_put(
+                spec.batch.model_dump(mode="json")
+            )
+            items_ledger = self._ledger(_Tables.APPROVAL_BATCH_ITEMS)
+            for item in spec.items:
+                self.approval_batch_items[item.item_id] = item
+                items_ledger.append_put(item.model_dump(mode="json"))
+        return spec.batch
+
+    async def get_approval_batch(
+        self, *, org_id: str, batch_id: str
+    ) -> ApprovalBatchRecord | None:
+        batch = self.approval_batches.get(batch_id)
+        if batch is None or batch.org_id != org_id:
+            return None
+        return batch
+
+    async def get_approval_batch_item(
+        self, *, org_id: str, item_id: str
+    ) -> ApprovalBatchItemRecord | None:
+        item = self.approval_batch_items.get(item_id)
+        if item is None:
+            return None
+        batch = self.approval_batches.get(item.batch_id)
+        if batch is None or batch.org_id != org_id:
+            return None
+        return item
+
+    async def list_items_for_batch(
+        self, *, org_id: str, batch_id: str
+    ) -> tuple[ApprovalBatchItemRecord, ...]:
+        batch = self.approval_batches.get(batch_id)
+        if batch is None or batch.org_id != org_id:
+            return ()
+        items = [
+            item
+            for item in self.approval_batch_items.values()
+            if item.batch_id == batch_id
+        ]
+        items.sort(key=lambda record: record.index)
+        return tuple(items)
+
+    async def record_item_decision_and_maybe_lock_batch(
+        self, *, org_id: str, item_id: str, decision: ApprovalDecision
+    ) -> BatchTransitionOutcome:
+        item = self.approval_batch_items.get(item_id)
+        if item is None:
+            return BatchTransitionOutcome(status=BatchOutcomeStatus.LOST_RACE)
+        batch_id = item.batch_id
+        batch = self.approval_batches.get(batch_id)
+        if batch is None or batch.org_id != org_id:
+            return BatchTransitionOutcome(status=BatchOutcomeStatus.LOST_RACE)
+
+        async with self._approval_batch_lock(batch_id):
+            current_batch = self.approval_batches.get(batch_id)
+            if current_batch is None:
+                return BatchTransitionOutcome(status=BatchOutcomeStatus.LOST_RACE)
+            if current_batch.status is not ApprovalBatchStatus.PENDING:
+                return BatchTransitionOutcome(status=BatchOutcomeStatus.LOST_RACE)
+            current_item = self.approval_batch_items[item_id]
+            batch_decision = BatchItemDecision(decision.value)
+            updated_item = current_item.model_copy(update={"decision": batch_decision})
+            async with self._state_lock:
+                self.approval_batch_items[item_id] = updated_item
+                self._ledger(_Tables.APPROVAL_BATCH_ITEMS).append_put(
+                    updated_item.model_dump(mode="json")
+                )
+                siblings = [
+                    row
+                    for row in self.approval_batch_items.values()
+                    if row.batch_id == batch_id
+                ]
+                siblings.sort(key=lambda record: record.index)
+                if any(sibling.decision is None for sibling in siblings):
+                    return BatchTransitionOutcome(
+                        status=BatchOutcomeStatus.BATCH_INCOMPLETE
+                    )
+                resuming = current_batch.model_copy(
+                    update={"status": ApprovalBatchStatus.RESUMING}
+                )
+                self.approval_batches[batch_id] = resuming
+                self._ledger(_Tables.APPROVAL_BATCHES).append_put(
+                    resuming.model_dump(mode="json")
+                )
+            return BatchTransitionOutcome(
+                status=BatchOutcomeStatus.READY_TO_RESUME,
+                batch=resuming,
+                items=tuple(siblings),
+            )
+
+    async def mark_approval_batch_resolved(self, *, org_id: str, batch_id: str) -> None:
+        batch = self.approval_batches.get(batch_id)
+        if batch is None or batch.org_id != org_id:
+            return
+        if batch.status in {ApprovalBatchStatus.RESOLVED, ApprovalBatchStatus.EXPIRED}:
+            return
+        updated = batch.model_copy(update={"status": ApprovalBatchStatus.RESOLVED})
+        async with self._state_lock:
+            self.approval_batches[batch_id] = updated
+            self._ledger(_Tables.APPROVAL_BATCHES).append_put(
+                updated.model_dump(mode="json")
+            )
+
+    async def list_assigned_approvals(
+        self,
+        *,
+        org_id: str,
+        requested_by_user_id: str,
+        status: str,
+        limit: int,
+        cursor: tuple[datetime, str] | None,
+    ) -> Sequence[ApprovalRequestRecord]:
+        rows: list[ApprovalRequestRecord] = []
+        for approval in self.approval_requests.values():
+            if approval.org_id != org_id:
+                continue
+            if approval.user_id != requested_by_user_id:
+                continue
+            if approval.status.value != status:
+                continue
+            if cursor is not None:
+                cursor_at, cursor_id = cursor
+                if (approval.created_at, approval.approval_id) >= (
+                    cursor_at,
+                    cursor_id,
+                ):
+                    continue
+            rows.append(approval)
+        rows.sort(
+            key=lambda record: (record.created_at, record.approval_id), reverse=True
+        )
+        return tuple(rows[:limit])
+
+    async def list_pending_expired_approvals(
+        self, *, now: datetime, limit: int
+    ) -> Sequence[ApprovalRequestRecord]:
+        from runtime_api.schemas.common import ApprovalStatus
+
+        rows = [
+            approval
+            for approval in self.approval_requests.values()
+            if approval.status is ApprovalStatus.PENDING
+            and approval.expires_at is not None
+            and approval.expires_at <= now
+        ]
+        rows.sort(key=lambda record: (record.expires_at or now, record.approval_id))
+        return tuple(rows[:limit])
+
+    async def list_pending_approvals_for_membership_audit(
+        self, *, limit: int
+    ) -> Sequence[ApprovalRequestRecord]:
+        from runtime_api.schemas.common import ApprovalStatus
+
+        rows = [
+            approval
+            for approval in self.approval_requests.values()
+            if approval.status is ApprovalStatus.PENDING
+        ]
+        rows.sort(key=lambda record: (record.created_at, record.approval_id))
+        return tuple(rows[:limit])
+
+    async def seed_approval_request(
+        self, record: ApprovalRequestRecord
+    ) -> ApprovalRequestRecord:
+        async with self._state_lock:
+            self.approval_requests[record.approval_id] = record
+            self._ledger(_Tables.APPROVALS).append_put(record.model_dump(mode="json"))
+        return record
+
+    # ==================================================================
+    # PersistencePort — audit + history deletion
+    # ==================================================================
+
+    async def write_audit_log(
+        self, *, event_type: str, record: dict[str, object]
+    ) -> None:
+        async with self._state_lock:
+            signed = self._sign_audit_record(event_type=event_type, record=record)
+            self.audit_log.append((event_type, signed))
+            self._ledger(_Tables.AUDIT_LOG).append_put(
+                {"event_type": event_type, "record": signed}
+            )
+
+    def _sign_audit_record(
+        self, *, event_type: str, record: dict[str, object]
+    ) -> dict[str, object]:
+        org_id = str(record.get(_Fields.ORG_ID, "unknown"))
+        prev_hash = self._audit_chain_heads_by_org.get(org_id)
+        payload = self._audit_signing_payload(event_type=event_type, record=record)
+        sig = self._audit_chain_signer.sign(prev_hash=prev_hash, payload=payload)
+        seq = self._audit_chain_counts_by_org.get(org_id, 0) + 1
+        self._audit_chain_counts_by_org[org_id] = seq
+        self._audit_chain_heads_by_org[org_id] = sig.signature
+        return {
+            **record,
+            "seq": seq,
+            "prev_hash": prev_hash.hex() if prev_hash else None,
+            "signature": sig.signature.hex(),
+            "key_version": sig.key_version,
+        }
+
+    @staticmethod
+    def _audit_signing_payload(
+        *, event_type: str, record: dict[str, object]
+    ) -> dict[str, Any]:
+        signable = {
+            k: v
+            for k, v in record.items()
+            if k not in {"seq", "prev_hash", "signature", "key_version"}
+        }
+        signable["__event_type__"] = event_type
+        return signable
+
+    async def list_audit_log_for_export(
+        self, *, after_id: str | None, limit: int
+    ) -> Sequence[dict]:
+        rows: list[dict] = [dict(record) for _event_type, record in self.audit_log]
+        if after_id is not None:
+            for index, row in enumerate(rows):
+                if row.get("signature") == after_id:
+                    rows = rows[index + 1 :]
+                    break
+            else:
+                rows = []
+        return tuple(rows[:limit])
+
+    async def list_audit_log_events(
+        self,
+        *,
+        org_id: str,
+        after_seq: int = 0,
+        limit: int = 50,
+        action_prefix: str | None = None,
+        actor_user_id: str | None = None,
+        since: datetime | None = None,
+        until: datetime | None = None,
+    ) -> Sequence[dict[str, object]]:
+        rows: list[dict[str, object]] = []
+        for _event_type, record in self.audit_log:
+            if record.get("org_id") != org_id:
+                continue
+            seq = int(record.get("seq") or 0)
+            if seq <= after_seq:
+                continue
+            action = str(record.get("action") or "")
+            if action_prefix is not None and not action.startswith(action_prefix):
+                continue
+            actor = record.get("user_id")
+            if actor_user_id is not None and actor != actor_user_id:
+                continue
+            created_at_value = record.get("created_at")
+            if isinstance(created_at_value, str):
+                try:
+                    created_at_value = datetime.fromisoformat(created_at_value)
+                except ValueError:
+                    created_at_value = None
+            if since is not None and (
+                not isinstance(created_at_value, datetime) or created_at_value < since
+            ):
+                continue
+            if until is not None and (
+                not isinstance(created_at_value, datetime) or created_at_value >= until
+            ):
+                continue
+            rows.append(dict(record))
+        rows.sort(
+            key=lambda r: (r.get("created_at") or "", int(r.get("seq") or 0)),
+            reverse=True,
+        )
+        return tuple(rows[:limit])
+
+    async def delete_user_history(
+        self, *, org_id: str, user_id: str, reason: str | None = None
+    ) -> HistoryDeletionResponse:
+        now = datetime.now(timezone.utc)
+        conversation_ids = {
+            conversation.conversation_id
+            for conversation in self.conversations.values()
+            if conversation.org_id == org_id and conversation.user_id == user_id
+        }
+        conversations_archived = 0
+        for conversation_id in conversation_ids:
+            conversation = self.conversations[conversation_id]
+            if conversation.status != ConversationStatus.ARCHIVED:
+                conversations_archived += 1
+            updated = conversation.model_copy(
+                update={
+                    "status": ConversationStatus.ARCHIVED,
+                    "archived_at": now,
+                    "updated_at": now,
+                }
+            )
+            self.conversations[conversation_id] = updated
+            self._persist_conversation(updated)
+
+        messages_tombstoned = 0
+        for message_id, message in tuple(self.messages.items()):
+            if (
+                message.org_id != org_id
+                or message.conversation_id not in conversation_ids
+            ):
+                continue
+            if message.deleted_at is None:
+                messages_tombstoned += 1
+            updated_message = message.model_copy(
+                update={
+                    "status": MessageStatus.DELETED,
+                    "content_text": "[deleted by user request]",
+                    "deleted_at": now,
+                }
+            )
+            self.messages[message_id] = updated_message
+            self._persist_message(updated_message)
+
+        runs_cancelled = 0
+        for run_id, run in tuple(self.runs.items()):
+            if run.org_id != org_id or run.user_id != user_id:
+                continue
+            if run.status not in StatusTransition.TERMINAL_STATUSES:
+                runs_cancelled += 1
+                updated_run = run.model_copy(
+                    update={"status": AgentRunStatus.CANCELLED, "cancelled_at": now}
+                )
+                self.runs[run_id] = updated_run
+                self._persist_run(updated_run)
+
+        events_retained = sum(
+            len(events)
+            for run_id, events in self.events_by_run.items()
+            if self.runs.get(run_id) is not None
+            and self.runs[run_id].org_id == org_id
+            and self.runs[run_id].user_id == user_id
+        )
+        audit_event_id = f"history_delete_{org_id}_{user_id}_{int(now.timestamp())}"
+        await self.write_audit_log(
+            event_type="user_history_deleted",
+            record={
+                _Fields.AUDIT_EVENT_ID: audit_event_id,
+                _Fields.ORG_ID: org_id,
+                _Fields.USER_ID: user_id,
+                _Fields.REASON: reason,
+                _Fields.DELETED_AT: now.isoformat(),
+            },
+        )
+        return HistoryDeletionResponse(
+            org_id=org_id,
+            user_id=user_id,
+            conversations_archived=conversations_archived,
+            messages_tombstoned=messages_tombstoned,
+            runs_cancelled=runs_cancelled,
+            events_retained=events_retained,
+            audit_event_id=audit_event_id,
+        )
+
+    # ==================================================================
+    # PersistencePort — usage + pricing
+    # ==================================================================
+
+    async def record_run_usage(self, record: RuntimeRunUsageRecord) -> None:
+        async with self._state_lock:
+            if record.run_id in self.run_usage:
+                return
+            self.run_usage[record.run_id] = record
+            self._ledger(_Tables.RUN_USAGE).append_put(record.model_dump(mode="json"))
+
+    async def record_model_call_usage(
+        self, record: RuntimeModelCallUsageRecord
+    ) -> None:
+        async with self._state_lock:
+            self.model_call_usage.append(record)
+            self._ledger(_Tables.MODEL_CALL_USAGE).append_put(
+                record.model_dump(mode="json")
+            )
+
+    async def update_run_usage_cost(
+        self, *, run_id: str, cost_micro_usd: int, pricing_id: str, pricing_version: str
+    ) -> None:
+        async with self._state_lock:
+            existing = self.run_usage.get(run_id)
+            if existing is None:
+                return
+            updated = existing.model_copy(
+                update={
+                    "cost_micro_usd": cost_micro_usd,
+                    "pricing_id": pricing_id,
+                    "pricing_version": pricing_version,
+                }
+            )
+            self.run_usage[run_id] = updated
+            self._ledger(_Tables.RUN_USAGE).append_put(updated.model_dump(mode="json"))
+
+    async def update_model_call_usage_cost(
+        self,
+        *,
+        usage_id: str,
+        cost_micro_usd: int,
+        pricing_id: str,
+        pricing_version: str,
+    ) -> None:
+        async with self._state_lock:
+            for index, row in enumerate(self.model_call_usage):
+                if row.id == usage_id:
+                    updated = row.model_copy(
+                        update={
+                            "cost_micro_usd": cost_micro_usd,
+                            "pricing_id": pricing_id,
+                            "pricing_version": pricing_version,
+                        }
+                    )
+                    self.model_call_usage[index] = updated
+                    self._ledger(_Tables.MODEL_CALL_USAGE).append_put(
+                        updated.model_dump(mode="json")
+                    )
+                    return
+
+    async def upsert_pricing(self, record: ModelPricingRecord) -> ModelPricingRecord:
+        async with self._state_lock:
+            for index, existing in enumerate(self.pricing_rows):
+                if (
+                    existing.provider == record.provider
+                    and existing.model_name == record.model_name
+                    and existing.region == record.region
+                    and existing.effective_until is None
+                    and existing.effective_from < record.effective_from
+                ):
+                    closed = existing.model_copy(
+                        update={"effective_until": record.effective_from}
+                    )
+                    self.pricing_rows[index] = closed
+                    self._ledger(_Tables.PRICING).append_put(
+                        closed.model_dump(mode="json")
+                    )
+            self.pricing_rows.append(record)
+            self._ledger(_Tables.PRICING).append_put(record.model_dump(mode="json"))
+        return record
+
+    async def lookup_pricing(
+        self, *, provider: str, model_name: str, region: str, at: datetime
+    ) -> ModelPricingRecord | None:
+        candidates = [
+            row
+            for row in self.pricing_rows
+            if row.provider == provider
+            and row.model_name == model_name
+            and row.region == region
+            and row.effective_from <= at
+            and (row.effective_until is None or row.effective_until > at)
+        ]
+        if not candidates:
+            return None
+        return max(candidates, key=lambda row: row.effective_from)
+
+    async def list_runs_missing_cost(
+        self, *, limit: int, cursor: str | None = None
+    ) -> Sequence[RuntimeRunUsageRecord]:
+        rows = sorted(
+            (row for row in self.run_usage.values() if row.cost_micro_usd is None),
+            key=lambda row: row.id,
+        )
+        if cursor is not None:
+            rows = [row for row in rows if row.id > cursor]
+        return tuple(rows[:limit])
+
+    async def upsert_user_daily_usage(self, row: UsageDailyUserRow) -> None:
+        async with self._state_lock:
+            self.user_daily_usage[self._user_daily_key(row)] = row
+            self._ledger(_Tables.USER_DAILY).append_put(row.model_dump(mode="json"))
+
+    async def upsert_org_daily_usage(self, row: UsageDailyOrgRow) -> None:
+        async with self._state_lock:
+            self.org_daily_usage[self._org_daily_key(row)] = row
+            self._ledger(_Tables.ORG_DAILY).append_put(row.model_dump(mode="json"))
+
+    async def upsert_connector_daily_usage(self, row: UsageDailyConnectorRow) -> None:
+        async with self._state_lock:
+            self.connector_daily_usage[self._connector_daily_key(row)] = row
+            self._ledger(_Tables.CONNECTOR_DAILY).append_put(
+                row.model_dump(mode="json")
+            )
+
+    async def upsert_subagent_daily_usage(self, row: UsageDailySubagentRow) -> None:
+        async with self._state_lock:
+            self.subagent_daily_usage[self._subagent_daily_key(row)] = row
+            self._ledger(_Tables.SUBAGENT_DAILY).append_put(row.model_dump(mode="json"))
+
+    async def upsert_purpose_daily_usage(self, row: UsageDailyPurposeRow) -> None:
+        async with self._state_lock:
+            self.purpose_daily_usage[self._purpose_daily_key(row)] = row
+            self._ledger(_Tables.PURPOSE_DAILY).append_put(row.model_dump(mode="json"))
+
+    async def query_user_daily_usage(
+        self, *, org_id: str, user_id: str, start_day: datetime, end_day: datetime
+    ) -> Sequence[UsageDailyUserRow]:
+        return tuple(
+            sorted(
+                (
+                    row
+                    for row in self.user_daily_usage.values()
+                    if row.org_id == org_id
+                    and row.user_id == user_id
+                    and start_day <= row.day <= end_day
+                ),
+                key=lambda r: r.day,
+                reverse=True,
+            )
+        )
+
+    async def query_org_daily_usage(
+        self, *, org_id: str, start_day: datetime, end_day: datetime
+    ) -> Sequence[UsageDailyOrgRow]:
+        return tuple(
+            sorted(
+                (
+                    row
+                    for row in self.org_daily_usage.values()
+                    if row.org_id == org_id and start_day <= row.day <= end_day
+                ),
+                key=lambda r: r.day,
+                reverse=True,
+            )
+        )
+
+    async def query_connector_daily_usage(
+        self, *, org_id: str, start_day: datetime, end_day: datetime
+    ) -> Sequence[UsageDailyConnectorRow]:
+        return tuple(
+            sorted(
+                (
+                    row
+                    for row in self.connector_daily_usage.values()
+                    if row.org_id == org_id and start_day <= row.day <= end_day
+                ),
+                key=lambda r: r.day,
+                reverse=True,
+            )
+        )
+
+    async def query_subagent_daily_usage(
+        self, *, org_id: str, start_day: datetime, end_day: datetime
+    ) -> Sequence[UsageDailySubagentRow]:
+        return tuple(
+            sorted(
+                (
+                    row
+                    for row in self.subagent_daily_usage.values()
+                    if row.org_id == org_id and start_day <= row.day <= end_day
+                ),
+                key=lambda r: r.day,
+                reverse=True,
+            )
+        )
+
+    async def query_purpose_daily_usage(
+        self, *, org_id: str, start_day: datetime, end_day: datetime
+    ) -> Sequence[UsageDailyPurposeRow]:
+        return tuple(
+            sorted(
+                (
+                    row
+                    for row in self.purpose_daily_usage.values()
+                    if row.org_id == org_id and start_day <= row.day <= end_day
+                ),
+                key=lambda r: r.day,
+                reverse=True,
+            )
+        )
+
+    async def query_model_call_usage_for_range(
+        self, *, org_id: str | None, start: datetime, end: datetime
+    ) -> Sequence[RuntimeModelCallUsageRecord]:
+        return tuple(
+            sorted(
+                (
+                    row
+                    for row in self.model_call_usage
+                    if (org_id is None or row.org_id == org_id)
+                    and start <= row.created_at <= end
+                ),
+                key=lambda r: r.created_at,
+                reverse=True,
+            )
+        )
+
+    async def list_run_ids_for_agent(
+        self, *, org_id: str, agent_id: str, start: datetime, end: datetime
+    ) -> Sequence[str]:
+        if not agent_id:
+            return ()
+        matches: list[tuple[datetime, str]] = []
+        for run in self.runs.values():
+            if run.org_id != org_id:
+                continue
+            if not (start <= run.created_at <= end):
+                continue
+            trace_metadata = getattr(run.runtime_context, "trace_metadata", None)
+            if not isinstance(trace_metadata, dict):
+                continue
+            if trace_metadata.get("agent_id") == agent_id:
+                matches.append((run.created_at, run.run_id))
+        matches.sort(key=lambda entry: entry[0], reverse=True)
+        return tuple(run_id for _, run_id in matches)
+
+    async def query_run_usage(
+        self, *, org_id: str, run_id: str
+    ) -> RuntimeRunUsageRecord | None:
+        record = self.run_usage.get(run_id)
+        if record is None or record.org_id != org_id:
+            return None
+        return record
+
+    async def query_run_usage_for_range(
+        self,
+        *,
+        org_id: str | None,
+        user_id: str | None,
+        start: datetime,
+        end: datetime,
+    ) -> Sequence[RuntimeRunUsageRecord]:
+        return tuple(
+            sorted(
+                (
+                    row
+                    for row in self.run_usage.values()
+                    if (org_id is None or row.org_id == org_id)
+                    and (user_id is None or row.user_id == user_id)
+                    and start <= row.completed_at <= end
+                    and (user_id is None or row.pii_purged_at is None)
+                ),
+                key=lambda r: r.completed_at,
+                reverse=True,
+            )
+        )
+
+    async def query_top_conversations(
+        self, *, org_id: str, user_id: str, start: datetime, end: datetime, limit: int
+    ) -> Sequence[UsageConversationAggregateRecord]:
+        aggregates: dict[str, UsageConversationAggregateRecord] = {}
+        for row in self.run_usage.values():
+            if (
+                row.org_id != org_id
+                or row.user_id != user_id
+                or not (start <= row.completed_at <= end)
+                or row.pii_purged_at is not None
+            ):
+                continue
+            current = aggregates.get(row.conversation_id)
+            if current is None:
+                conversation = self.conversations.get(row.conversation_id)
+                aggregates[row.conversation_id] = UsageConversationAggregateRecord(
+                    conversation_id=row.conversation_id,
+                    title=conversation.title if conversation is not None else None,
+                    input_tokens=row.input_tokens,
+                    output_tokens=row.output_tokens,
+                    cached_input_tokens=row.cached_input_tokens,
+                    total_tokens=row.total_tokens,
+                    runs_count=1,
+                    cost_micro_usd=row.cost_micro_usd,
+                )
+                continue
+            aggregates[row.conversation_id] = current.model_copy(
+                update={
+                    "input_tokens": current.input_tokens + row.input_tokens,
+                    "output_tokens": current.output_tokens + row.output_tokens,
+                    "cached_input_tokens": current.cached_input_tokens
+                    + row.cached_input_tokens,
+                    "total_tokens": current.total_tokens + row.total_tokens,
+                    "runs_count": current.runs_count + 1,
+                    "cost_micro_usd": self._sum_optional_cost(
+                        current.cost_micro_usd, row.cost_micro_usd
+                    ),
+                }
+            )
+        ranked = sorted(
+            aggregates.values(), key=lambda item: item.total_tokens, reverse=True
+        )
+        return tuple(ranked[:limit])
+
+    @staticmethod
+    def _sum_optional_cost(left: int | None, right: int | None) -> int | None:
+        if left is None:
+            return right
+        if right is None:
+            return left
+        return left + right
+
+    async def query_model_call_usage_for_run(
+        self, *, org_id: str, run_id: str
+    ) -> Sequence[RuntimeModelCallUsageRecord]:
+        return tuple(
+            row
+            for row in self.model_call_usage
+            if row.org_id == org_id and row.run_id == run_id
+        )
+
+    async def query_latest_run_usage_for_conversation(
+        self, *, org_id: str, user_id: str, conversation_id: str
+    ) -> RuntimeRunUsageRecord | None:
+        candidates = [
+            row
+            for row in self.run_usage.values()
+            if row.org_id == org_id
+            and row.user_id == user_id
+            and row.conversation_id == conversation_id
+            and row.pii_purged_at is None
+        ]
+        if not candidates:
+            return None
+        return max(candidates, key=lambda r: r.completed_at)
+
+    async def query_compression_events_for_run(
+        self, *, org_id: str, run_id: str
+    ) -> Sequence[CompressionEventRecord]:
+        return tuple(
+            sorted(
+                (
+                    event
+                    for event in self.compression_events
+                    if event.org_id == org_id and event.run_id == run_id
+                ),
+                key=lambda e: e.created_at,
+            )
+        )
+
+    # ==================================================================
+    # PersistencePort — budgets
+    # ==================================================================
+
+    async def lookup_budgets_for_run(
+        self, *, org_id: str, user_id: str, now: datetime | None = None
+    ) -> Sequence:
+        from datetime import datetime as _datetime, timezone as _timezone
+
+        from agent_runtime.budgets.period import BudgetPeriodCalculator
+        from agent_runtime.persistence.records import BudgetWithState
+
+        if now is None:
+            now = _datetime.now(_timezone.utc)
+        results: list = []
+        for budget in self.budgets.values():
+            if budget.org_id != org_id:
+                continue
+            if budget.scope.value == "user" and budget.user_id != user_id:
+                continue
+            window = BudgetPeriodCalculator.window(budget.period, now=now)
+            state_key = (budget.id, window.period_start.isoformat())
+            state = self.budget_states.get(state_key)
+            reserved_micro = sum(
+                r.reserved_micro_usd
+                for r in self.budget_reservations.values()
+                if r.budget_id == budget.id
+                and r.period_start == window.period_start
+                and r.consumed_at is None
+            )
+            reserved_tokens = sum(
+                r.reserved_tokens
+                for r in self.budget_reservations.values()
+                if r.budget_id == budget.id
+                and r.period_start == window.period_start
+                and r.consumed_at is None
+            )
+            if state is not None:
+                state = state.model_copy(
+                    update={
+                        "current_spend_micro_usd": state.current_spend_micro_usd
+                        + reserved_micro,
+                        "current_spend_tokens": state.current_spend_tokens
+                        + reserved_tokens,
+                    }
+                )
+            elif reserved_micro > 0 or reserved_tokens > 0:
+                state = BudgetStateRecord(
+                    budget_id=budget.id,
+                    period_start=window.period_start,
+                    period_end=window.period_end,
+                    current_spend_micro_usd=reserved_micro,
+                    current_spend_tokens=reserved_tokens,
+                )
+            results.append(BudgetWithState(budget=budget, state=state))
+        results.sort(key=lambda e: e.budget.id)
+        return tuple(results)
+
+    async def charge_budget(
+        self,
+        *,
+        budget_id: str,
+        period_start,
+        period_end,
+        delta_micro_usd: int,
+        delta_tokens: int,
+        run_id: str,
+        now,
+    ) -> ChargeOutcome:
+        async with self._state_lock:
+            key = (budget_id, period_start.isoformat())
+            state = self.budget_states.get(key)
+            if state is None:
+                state = BudgetStateRecord(
+                    budget_id=budget_id,
+                    period_start=period_start,
+                    period_end=period_end,
+                    current_spend_micro_usd=0,
+                    current_spend_tokens=0,
+                )
+            if state.last_charged_run_id == run_id:
+                return ChargeOutcome.IDEMPOTENT_NOOP
+            updated = state.model_copy(
+                update={
+                    "current_spend_micro_usd": state.current_spend_micro_usd
+                    + delta_micro_usd,
+                    "current_spend_tokens": state.current_spend_tokens + delta_tokens,
+                    "row_version": state.row_version + 1,
+                    "last_charged_run_id": run_id,
+                    "updated_at": now,
+                }
+            )
+            self.budget_states[key] = updated
+            self._rewrite_budget_states()
+            return ChargeOutcome.APPLIED
+
+    async def reserve_budget(
+        self,
+        *,
+        budget_id: str,
+        period_start,
+        run_id: str,
+        reserved_micro_usd: int,
+        reserved_tokens: int,
+        now,
+    ) -> BudgetReservationRecord | None:
+        from agent_runtime.budgets.reservations import BudgetReservationManager
+
+        async with self._state_lock:
+            existing = next(
+                (
+                    r
+                    for r in self.budget_reservations.values()
+                    if r.budget_id == budget_id
+                    and r.run_id == run_id
+                    and r.consumed_at is None
+                ),
+                None,
+            )
+            if existing is not None:
+                return None
+            record = BudgetReservationRecord(
+                budget_id=budget_id,
+                period_start=period_start,
+                run_id=run_id,
+                reserved_micro_usd=reserved_micro_usd,
+                reserved_tokens=reserved_tokens,
+                expires_at=BudgetReservationManager.expires_at(now=now, ttl_seconds=60),
+            )
+            self.budget_reservations[record.reservation_id] = record
+            self._rewrite_budget_reservations()
+            return record
+
+    async def consume_budget_reservation(self, *, reservation_id: str, now) -> None:
+        async with self._state_lock:
+            record = self.budget_reservations.get(reservation_id)
+            if record is None or record.consumed_at is not None:
+                return
+            self.budget_reservations[reservation_id] = record.model_copy(
+                update={"consumed_at": now}
+            )
+            self._rewrite_budget_reservations()
+
+    async def reap_expired_budget_reservations(self, *, now) -> int:
+        async with self._state_lock:
+            purged = 0
+            for reservation_id, record in list(self.budget_reservations.items()):
+                if record.consumed_at is None and record.expires_at < now:
+                    del self.budget_reservations[reservation_id]
+                    purged += 1
+            if purged:
+                self._rewrite_budget_reservations()
+            return purged
+
+    async def list_budgets(self, *, org_id: str) -> Sequence[BudgetRecord]:
+        return tuple(
+            sorted(
+                (b for b in self.budgets.values() if b.org_id == org_id),
+                key=lambda b: b.created_at,
+                reverse=True,
+            )
+        )
+
+    async def list_tool_budgets_for_org(
+        self, *, org_id: str
+    ) -> Sequence[ToolBudgetRecord]:
+        return tuple(
+            b
+            for b in self.tool_budgets.values()
+            if b.org_id == org_id or b.org_id is None
+        )
+
+    async def get_budget(self, *, org_id: str, budget_id: str) -> BudgetRecord | None:
+        record = self.budgets.get(budget_id)
+        if record is None or record.org_id != org_id:
+            return None
+        return record
+
+    async def create_budget(self, record: BudgetRecord) -> BudgetRecord:
+        async with self._state_lock:
+            for existing in self.budgets.values():
+                if (
+                    existing.org_id == record.org_id
+                    and (existing.user_id or "<org>") == (record.user_id or "<org>")
+                    and existing.scope == record.scope
+                    and existing.period == record.period
+                ):
+                    raise ValueError("budget already exists for that scope/period")
+            self.budgets[record.id] = record
+            self._ledger(_Tables.BUDGETS).append_put(record.model_dump(mode="json"))
+        return record
+
+    async def update_budget(self, record: BudgetRecord) -> BudgetRecord:
+        async with self._state_lock:
+            if record.id not in self.budgets:
+                raise KeyError(record.id)
+            self.budgets[record.id] = record
+            self._ledger(_Tables.BUDGETS).append_put(record.model_dump(mode="json"))
+        return record
+
+    async def delete_budget(self, *, org_id: str, budget_id: str) -> None:
+        async with self._state_lock:
+            record = self.budgets.get(budget_id)
+            if record is None or record.org_id != org_id:
+                return
+            del self.budgets[budget_id]
+            self._ledger(_Tables.BUDGETS).append_delete(budget_id)
+            self.budget_states = {
+                key: state
+                for key, state in self.budget_states.items()
+                if state.budget_id != budget_id
+            }
+            self.budget_reservations = {
+                rid: r
+                for rid, r in self.budget_reservations.items()
+                if r.budget_id != budget_id
+            }
+            self._rewrite_budget_states()
+            self._rewrite_budget_reservations()
+
+    def _rewrite_budget_states(self) -> None:
+        self._ledger(_Tables.BUDGET_STATES).rewrite(
+            state.model_dump(mode="json") for state in self.budget_states.values()
+        )
+
+    def _rewrite_budget_reservations(self) -> None:
+        self._ledger(_Tables.BUDGET_RESERVATIONS).rewrite(
+            r.model_dump(mode="json") for r in self.budget_reservations.values()
+        )
+
+    # ==================================================================
+    # PersistencePort — retention
+    # ==================================================================
+
+    async def list_retention_orgs(self) -> Sequence[str]:
+        seen: set[str] = set()
+        seen.update(c.org_id for c in self.conversations.values())
+        seen.update(m.org_id for m in self.messages.values())
+        seen.update(r.org_id for r in self.runs.values())
+        return tuple(sorted(seen))
+
+    async def sweep_retention_kind(
+        self,
+        *,
+        org_id: str,
+        kind,
+        ttl_seconds: int,
+        dry_run: bool = False,
+        chunk_size: int = 0,
+    ) -> RetentionSweepOutcome:
+        # Desktop is single-user and low-volume; the sweeper runs end-to-end
+        # but tombstones nothing here (parity with the in-memory dev backend).
+        return RetentionSweepOutcome(
+            org_id=org_id, kind=kind, tombstoned=0, deleted=0, skipped_legal_hold=0
+        )
+
+    async def insert_retention_deletion_evidence(self, record) -> None:
+        async with self._state_lock:
+            self.deletion_evidence.append(record)
+            payload = (
+                record.model_dump(mode="json")
+                if hasattr(record, "model_dump")
+                else dict(record)
+            )
+            self._ledger(_Tables.DELETION_EVIDENCE).append_put(payload)
+
+    async def backfill_retention_until(
+        self, *, org_id: str, kind, ttl_seconds: int, chunk_size: int
+    ) -> int:
+        return 0
+
+    async def recompute_retention_until_for_policy(
+        self, *, org_id: str, kind, scope, resource_id, ttl_seconds
+    ) -> int:
+        return 0
+
+    async def list_retention_policies(
+        self, *, org_id: str
+    ) -> Sequence[RetentionPolicyRecord]:
+        return tuple(self.retention_policies.get(org_id, ()))
+
+    async def upsert_retention_policy(
+        self, record: RetentionPolicyRecord
+    ) -> RetentionPolicyRecord:
+        async with self._state_lock:
+            bucket = list(self.retention_policies.get(record.org_id, ()))
+            bucket = [
+                row
+                for row in bucket
+                if (row.scope, row.resource_id, row.kind)
+                != (record.scope, record.resource_id, record.kind)
+            ]
+            bucket.append(record)
+            self.retention_policies[record.org_id] = tuple(bucket)
+            self._rewrite_retention_policies()
+        return record
+
+    async def delete_retention_policy(self, *, org_id: str, policy_id: str) -> None:
+        async with self._state_lock:
+            bucket = self.retention_policies.get(org_id, ())
+            self.retention_policies[org_id] = tuple(
+                row for row in bucket if row.id != policy_id
+            )
+            self._rewrite_retention_policies()
+
+    def _rewrite_retention_policies(self) -> None:
+        rows = [
+            policy.model_dump(mode="json")
+            for policies in self.retention_policies.values()
+            for policy in policies
+        ]
+        self._ledger(_Tables.RETENTION_POLICIES).rewrite(rows)
+
+    # ==================================================================
+    # RuntimeQueuePort
+    # ==================================================================
+
+    async def enqueue_run(self, command: RuntimeRunCommand) -> None:
+        self.run_commands.append(command)
+        await self._register_command(
+            command_id=command.command_id,
+            command_type=PersistenceValues.EventType.RUN_REQUESTED,
+            org_id=command.org_id,
+            run_id=command.run_id,
+            approval_id=None,
+            payload=command.model_dump(mode="json"),
+        )
+
+    async def enqueue_cancel(self, command: RuntimeCancelCommand) -> None:
+        self.cancel_commands.append(command)
+        await self._register_command(
+            command_id=command.command_id,
+            command_type=PersistenceValues.EventType.RUN_CANCEL_REQUESTED,
+            org_id=command.org_id,
+            run_id=command.run_id,
+            approval_id=None,
+            payload=command.model_dump(mode="json"),
+        )
+
+    async def enqueue_approval_resolved(
+        self, command: RuntimeApprovalResolvedCommand
+    ) -> None:
+        self.approval_commands.append(command)
+        await self._register_command(
+            command_id=command.command_id,
+            command_type=PersistenceValues.EventType.APPROVAL_RESOLVED,
+            org_id=command.org_id,
+            run_id=command.run_id,
+            approval_id=command.approval_id,
+            payload=command.model_dump(mode="json"),
+        )
+
+    async def claim_next(
+        self, *, worker_id: str, lock_expires_at: datetime
+    ) -> RuntimeWorkerClaim | None:
+        async with self._state_lock:
+            now = datetime.now(timezone.utc)
+            for command_id in self._queue_order:
+                status_value = self._queue_statuses[command_id]
+                if status_value in {OutboxStatus.COMPLETED, OutboxStatus.DEAD_LETTER}:
+                    continue
+                if self._queue_available_at[command_id] > now:
+                    continue
+                active_claim = self._queue_claims.get(command_id)
+                if active_claim is not None and active_claim.lock_expires_at > now:
+                    continue
+                claim = self._claim_command(
+                    command_id=command_id,
+                    worker_id=worker_id,
+                    lock_expires_at=lock_expires_at,
+                )
+                self._queue_claims[command_id] = claim
+                self._queue_statuses[command_id] = OutboxStatus.CLAIMED
+                self._append_queue_op(
+                    {
+                        "op": "attempts",
+                        "command_id": command_id,
+                        "attempts": self._queue_attempts[command_id],
+                    }
+                )
+                return claim
+            return None
+
+    async def mark_complete(self, *, result: RuntimeWorkerResult) -> None:
+        async with self._state_lock:
+            self._queue_statuses[result.command_id] = OutboxStatus.COMPLETED
+            self._queue_claims.pop(result.command_id, None)
+            self._append_queue_status(result.command_id, OutboxStatus.COMPLETED, None)
+
+    async def mark_retry(self, *, result: RuntimeWorkerResult) -> None:
+        async with self._state_lock:
+            available_at = result.retry_available_at or datetime.now(timezone.utc)
+            self._queue_statuses[result.command_id] = OutboxStatus.RETRY
+            self._queue_available_at[result.command_id] = available_at
+            self._queue_claims.pop(result.command_id, None)
+            self._append_queue_status(
+                result.command_id, OutboxStatus.RETRY, available_at
+            )
+
+    async def mark_dead_letter(self, *, result: RuntimeWorkerResult) -> None:
+        async with self._state_lock:
+            self._queue_statuses[result.command_id] = OutboxStatus.DEAD_LETTER
+            self._queue_claims.pop(result.command_id, None)
+            self._append_queue_status(result.command_id, OutboxStatus.DEAD_LETTER, None)
+
+    async def _register_command(
+        self,
+        *,
+        command_id: str,
+        command_type: str,
+        org_id: str,
+        run_id: str,
+        approval_id: str | None,
+        payload: dict[str, object],
+    ) -> None:
+        async with self._state_lock:
+            available_at = datetime.now(timezone.utc)
+            self._queue_order.append(command_id)
+            full_payload = {
+                **payload,
+                _Fields.COMMAND_ID: command_id,
+                _Fields.COMMAND_TYPE: command_type,
+                _Fields.ORG_ID: org_id,
+                _Fields.RUN_ID: run_id,
+                _Fields.APPROVAL_ID: approval_id,
+            }
+            self._queue_payloads[command_id] = full_payload
+            self._queue_statuses[command_id] = OutboxStatus.PENDING
+            self._queue_attempts[command_id] = 0
+            self._queue_available_at[command_id] = available_at
+            self._append_queue_op(
+                {
+                    "op": "enqueue",
+                    "command_id": command_id,
+                    "payload": full_payload,
+                    "available_at": available_at.isoformat(),
+                }
+            )
+
+    def _claim_command(
+        self, *, command_id: str, worker_id: str, lock_expires_at: datetime
+    ) -> RuntimeWorkerClaim:
+        payload = self._queue_payloads[command_id]
+        self._queue_attempts[command_id] += 1
+        return RuntimeWorkerClaim(
+            command_id=command_id,
+            command_type=str(payload[_Fields.COMMAND_TYPE]),
+            org_id=str(payload[_Fields.ORG_ID]),
+            run_id=str(payload[_Fields.RUN_ID]),
+            approval_id=payload[_Fields.APPROVAL_ID]
+            if isinstance(payload[_Fields.APPROVAL_ID], str)
+            else None,
+            locked_by=worker_id,
+            lock_expires_at=lock_expires_at,
+            attempts=self._queue_attempts[command_id],
+            payload=payload,
+        )
+
+    def _append_queue_status(
+        self, command_id: str, status_value: OutboxStatus, available_at: datetime | None
+    ) -> None:
+        self._append_queue_op(
+            {
+                "op": "status",
+                "command_id": command_id,
+                "status": status_value.value,
+                "available_at": (
+                    available_at or datetime.now(timezone.utc)
+                ).isoformat(),
+            }
+        )
+
+    def _append_queue_op(self, op: dict[str, object]) -> None:
+        JsonlIo.append_line(self._layout.state_path(_Tables.QUEUE), op)
+
+
+__all__ = ("FileRuntimeApiStore",)

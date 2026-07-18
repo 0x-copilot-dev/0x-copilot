@@ -10,6 +10,7 @@ import { join } from "node:path";
 import {
   app,
   BrowserWindow,
+  dialog,
   ipcMain,
   safeStorage,
   session,
@@ -61,6 +62,10 @@ import {
   registerAppProtocolHandler,
   registerAppProtocolPrivilege,
 } from "./app-protocol";
+import {
+  createCapabilityService,
+  type CapabilityService,
+} from "./capabilities";
 import { startCrashReporter } from "./crash-reporter";
 import { registerDeepLinks } from "./deep-links";
 import { registerIpcHandlers } from "./ipc/handlers";
@@ -79,6 +84,7 @@ let teardownIpcHandlers: (() => void) | null = null;
 let tier2LifecycleHandle: Tier2LifecycleHandle | null = null;
 let supervisor: ServiceSupervisor | null = null;
 let supervisorStopped = false;
+let capabilityService: CapabilityService | null = null;
 let latestBootStatus: BootStatusPayload | null = null;
 let updateHandle: AutoUpdateHandle | null = null;
 let latestUpdateStatus: UpdateStatusPayload | null = null;
@@ -152,6 +158,49 @@ function startAutoUpdate(): void {
   }
 }
 
+// Builds the capability service (grant store + native picker + loopback
+// broker) and starts the broker. The broker token is minted per boot and is
+// delivered OUT OF BAND to intended children (slice 2 wiring); it is never
+// logged and never crosses renderer IPC. A broker failure must never block
+// boot — the app is fully usable without host-folder grants.
+function startCapabilitySubsystem(): void {
+  try {
+    const allowPlaintext =
+      process.env.BACKEND_ENVIRONMENT === "development" ||
+      process.env.COPILOT_AUTH_MODE === "dev-mint";
+    capabilityService = createCapabilityService({
+      userDataDir: app.getPath("userData"),
+      safeStorage,
+      showOpenDialog: async () => {
+        // Main owns the path: the renderer never supplies or receives one.
+        const parent =
+          mainWindow !== null && !mainWindow.isDestroyed()
+            ? mainWindow
+            : undefined;
+        const result =
+          parent !== undefined
+            ? await dialog.showOpenDialog(parent, {
+                properties: ["openDirectory"],
+              })
+            : await dialog.showOpenDialog({ properties: ["openDirectory"] });
+        return { canceled: result.canceled, filePaths: result.filePaths };
+      },
+      allowPlaintextFallback: allowPlaintext,
+    });
+    capabilityService
+      .startBroker()
+      .then((handle) => {
+        // baseUrl (host+port) is non-secret; the token is NOT logged.
+        console.log("[capability-broker] listening on", handle.baseUrl);
+      })
+      .catch((err: unknown) => {
+        console.error("[capability-broker] failed to start:", err);
+      });
+  } catch (err) {
+    console.error("[capabilities] init failed (continuing without):", err);
+  }
+}
+
 if (hasSingleInstanceLock) {
   void app.whenReady().then(() => {
     startCrashReporter();
@@ -179,6 +228,11 @@ if (hasSingleInstanceLock) {
     // independent of the boot path so a boot failure never blocks updates and
     // an update never interrupts a run.
     startAutoUpdate();
+
+    // Capability subsystem (AC5): folder-grant model + loopback broker. Built
+    // here so the picker can parent its dialog to the main window; started
+    // defensively so a broker bind failure never blocks boot.
+    startCapabilitySubsystem();
 
     if (shouldSupervise({ isPackaged: app.isPackaged, env: process.env })) {
       supervisor = createDesktopSupervisor({
@@ -279,6 +333,17 @@ function wireTransportAndIpc(facadeUrl: string | undefined): void {
         );
       },
     },
+    // AC5 capability channels. Only wired when the subsystem constructed;
+    // returns only the renderer-safe grant view (no host path / broker token).
+    capability:
+      capabilityService === null
+        ? undefined
+        : {
+            requestFolderGrant: (params) =>
+              capabilityService!.requestFolderGrant(params),
+            listGrants: () => capabilityService!.listGrants(),
+            revokeGrant: (grantId) => capabilityService!.revokeGrant(grantId),
+          },
   });
 
   tier2LifecycleHandle = startTier2Lifecycle({
@@ -294,6 +359,11 @@ app.on("before-quit", (event) => {
   teardownIpcHandlers = null;
   updateHandle?.stop();
   updateHandle = null;
+  // Close the loopback broker; its per-boot token dies with it.
+  if (capabilityService !== null) {
+    void capabilityService.stopBroker().catch(() => {});
+    capabilityService = null;
+  }
   // Ordered shutdown: children (facade -> ai -> backend) then postgres.
   // preventDefault keeps the process alive until stop() resolves, then a
   // second quit passes straight through via the supervisorStopped flag.

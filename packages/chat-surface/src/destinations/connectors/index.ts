@@ -1,4 +1,15 @@
-export { ConnectorsDestination } from "./ConnectorsDestination";
+export { ConnectModal, CONNECT_PERMISSION_OPTIONS } from "./ConnectModal";
+export type {
+  ConnectModalProps,
+  ConnectPermission,
+  ConnectPermissionOption,
+} from "./ConnectModal";
+
+export {
+  ConnectorsDestination,
+  TOOLS_SUBTITLE,
+  TOOLS_POLICY_NOTE_COPY,
+} from "./ConnectorsDestination";
 export type {
   ConnectorsDestinationProps,
   ConnectorsFilterCounts,
@@ -6,6 +17,8 @@ export type {
 } from "./ConnectorsDestination";
 export { ConnectorCard } from "./ConnectorCard";
 export type { ConnectorCardProps } from "./ConnectorCard";
+export { AccessModeSegment } from "./AccessModeSegment";
+export type { AccessModeSegmentProps } from "./AccessModeSegment";
 export { ConnectorsPanel } from "./ConnectorsPanel";
 export type { ConnectorsPanelProps } from "./ConnectorsPanel";
 export { RevealOnce } from "./RevealOnce";

@@ -1,8 +1,19 @@
-import { fireEvent, render, screen } from "@testing-library/react";
-import { describe, expect, it, vi } from "vitest";
+import { fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
 
-import { ProjectDetailView, type ProjectDetail } from "./ProjectDetailView";
-import type { ProjectId } from "@0x-copilot/api-types";
+import { RouterProvider } from "../../providers/RouterProvider";
+import type { ArtifactRoute, Router } from "../../routing/router";
+import {
+  registerItemRefResolver,
+  unregisterItemRefResolver,
+} from "../../refs/registry";
+
+import {
+  ProjectDetailView,
+  type ProjectDetail,
+  type ProjectFileRow,
+} from "./ProjectDetailView";
+import type { LibraryFileId, ProjectId } from "@0x-copilot/api-types";
 
 const PROJECT: ProjectDetail = {
   id: "proj-1" as ProjectId,
@@ -15,8 +26,32 @@ const PROJECT: ProjectDetail = {
   memberCount: 5,
 };
 
+// A stub router so <ItemLink> (rendered by file rows) has its provider.
+function makeRouter(): Router<ArtifactRoute> & {
+  navigate: ReturnType<typeof vi.fn>;
+} {
+  let current: ArtifactRoute | null = null;
+  const subscribers = new Set<(r: ArtifactRoute) => void>();
+  const navigate = vi.fn((r: ArtifactRoute) => {
+    current = r;
+    for (const s of subscribers) s(r);
+  });
+  return {
+    current(): ArtifactRoute {
+      if (current === null) throw new Error("no route");
+      return current;
+    },
+    navigate,
+    subscribe(handler) {
+      subscribers.add(handler);
+      return () => subscribers.delete(handler);
+    },
+  };
+}
+
 function renderView(
   overrides: Partial<React.ComponentProps<typeof ProjectDetailView>> = {},
+  router: Router<ArtifactRoute> = makeRouter(),
 ) {
   const renderCrossDestinationTab = vi.fn((tab: string, projectId: string) => (
     <div data-testid={`stub-${tab}`} data-project-id={projectId}>
@@ -25,15 +60,18 @@ function renderView(
   ));
   return {
     renderCrossDestinationTab,
+    router,
     ...render(
-      <ProjectDetailView
-        project={PROJECT}
-        members={[]}
-        activity={[]}
-        canManage={false}
-        renderCrossDestinationTab={renderCrossDestinationTab}
-        {...overrides}
-      />,
+      <RouterProvider router={router}>
+        <ProjectDetailView
+          project={PROJECT}
+          members={[]}
+          activity={[]}
+          canManage={false}
+          renderCrossDestinationTab={renderCrossDestinationTab}
+          {...overrides}
+        />
+      </RouterProvider>,
     ),
   };
 }
@@ -65,13 +103,14 @@ describe("ProjectDetailView", () => {
     );
   });
 
-  it("renders all seven tabs in order", () => {
+  it("renders all eight tabs in order (files after chats)", () => {
     renderView();
     const tabs = screen.getByTestId("project-detail-tabs");
     const buttons = tabs.querySelectorAll('[role="tab"]');
     const ids = Array.from(buttons).map((b) => b.getAttribute("data-testid"));
     expect(ids).toEqual([
       "project-detail-tab-chats",
+      "project-detail-tab-files",
       "project-detail-tab-todos",
       "project-detail-tab-inbox",
       "project-detail-tab-library",
@@ -195,5 +234,138 @@ describe("ProjectDetailView", () => {
       "data-tone",
       "idle",
     );
+  });
+
+  it("selecting the files tab renders the files panel", () => {
+    renderView();
+    fireEvent.click(screen.getByTestId("project-detail-tab-files"));
+    expect(screen.getByTestId("project-detail-view")).toHaveAttribute(
+      "data-active-tab",
+      "files",
+    );
+    expect(
+      screen.getByTestId("project-detail-panel-files"),
+    ).toBeInTheDocument();
+    expect(screen.getByTestId("project-files-tab")).toBeInTheDocument();
+  });
+});
+
+// ===========================================================================
+// Files tab (Phase 4 FR-4.11/4.12/4.13)
+// ===========================================================================
+
+const FILES: ReadonlyArray<ProjectFileRow> = [
+  {
+    id: "file-abc",
+    name: "Renewal deck.pdf",
+    fileKind: "PDF",
+    sizeLabel: "1.2 MB",
+    updatedAt: new Date(Date.now() - 5 * 60_000).toISOString(),
+  },
+  { id: "file-def", name: "Pricing model.xlsx", fileKind: "Dataset" },
+];
+
+describe("ProjectDetailView — files tab", () => {
+  // The library destination owns the `library_file` resolver. Register a
+  // stand-in here so the row's <ItemLink> resolves to a real (artifact)
+  // route without importing another destination's index at test time.
+  beforeAll(() => {
+    registerItemRefResolver(
+      "library_file",
+      async (id: LibraryFileId) => ({
+        label: "File",
+        icon: null,
+        route: { kind: "workspace", workspaceId: id as unknown as string },
+        breadcrumb: "Library",
+      }),
+      { replace: true },
+    );
+  });
+  afterAll(() => {
+    unregisterItemRefResolver("library_file");
+  });
+
+  it("degrades to a coming-soon empty state when no files source is provided", () => {
+    renderView({ initialTab: "files" }); // `files` prop omitted
+    const panel = screen.getByTestId("project-files-tab");
+    expect(panel).toHaveAttribute("data-state", "unavailable");
+    expect(screen.getByText("Project files coming soon")).toBeInTheDocument();
+  });
+
+  it("renders a skeleton while files is null", () => {
+    renderView({ initialTab: "files", files: null });
+    expect(screen.getByTestId("project-files-tab")).toHaveAttribute(
+      "data-state",
+      "loading",
+    );
+    expect(screen.getAllByTestId("project-files-skeleton")).toHaveLength(4);
+  });
+
+  it("renders the error state with a working Retry", () => {
+    const onRetryFiles = vi.fn();
+    renderView({
+      initialTab: "files",
+      files: { status: "error", error: "boom" },
+      onRetryFiles,
+    });
+    expect(screen.getByTestId("project-files-tab")).toHaveAttribute(
+      "data-state",
+      "error",
+    );
+    expect(screen.getByText("boom")).toBeInTheDocument();
+    fireEvent.click(screen.getByTestId("empty-state-action"));
+    expect(onRetryFiles).toHaveBeenCalledTimes(1);
+  });
+
+  it("renders the no-files empty state when ready with zero files", () => {
+    renderView({ initialTab: "files", files: { status: "ok", data: [] } });
+    expect(screen.getByTestId("project-files-tab")).toHaveAttribute(
+      "data-state",
+      "empty",
+    );
+    expect(screen.getByText("No files yet")).toBeInTheDocument();
+  });
+
+  it("renders one row per file, each wired to a library_file ItemLink ref", async () => {
+    renderView({ initialTab: "files", files: { status: "ok", data: FILES } });
+    const rows = screen.getAllByTestId("project-file-row");
+    expect(rows).toHaveLength(2);
+    expect(rows[0]).toHaveAttribute("data-ref-kind", "library_file");
+    expect(rows[0]).toHaveAttribute("data-ref-id", "file-abc");
+    expect(rows[1]).toHaveAttribute("data-ref-id", "file-def");
+    // The file name is shown as the row's primary text (display hint).
+    expect(screen.getByText("Renewal deck.pdf")).toBeInTheDocument();
+    expect(screen.getByText("Pricing model.xlsx")).toBeInTheDocument();
+    // <ItemLink> resolves asynchronously — flush so the open-link renders
+    // inside act().
+    expect(await screen.findAllByTestId("item-link")).toHaveLength(2);
+  });
+
+  it("opens the file's artifact route via the ItemLink on click", async () => {
+    const router = makeRouter();
+    renderView(
+      { initialTab: "files", files: { status: "ok", data: FILES } },
+      router,
+    );
+    const links = await screen.findAllByTestId("item-link");
+    expect(links[0]).toHaveAttribute("data-item-kind", "library_file");
+    expect(links[0]).toHaveAttribute("data-item-id", "file-abc");
+    fireEvent.click(links[0]!);
+    expect(router.navigate).toHaveBeenCalledWith({
+      kind: "workspace",
+      workspaceId: "file-abc",
+    });
+  });
+
+  it("renders no member/role chips in the files section (solo-safe)", async () => {
+    renderView({ initialTab: "files", files: { status: "ok", data: FILES } });
+    await waitFor(() =>
+      expect(screen.getByTestId("project-files-tab")).toHaveAttribute(
+        "data-state",
+        "ready",
+      ),
+    );
+    const panel = screen.getByTestId("project-detail-panel-files");
+    expect(panel.querySelector('[data-testid="status-pill"]')).toBeNull();
   });
 });

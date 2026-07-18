@@ -55,6 +55,10 @@ class _EnvFields:
     ENABLE_LOCAL_MODELS = "RUNTIME_ENABLE_LOCAL_MODELS"
     STORE_BACKEND = "RUNTIME_STORE_BACKEND"
     DATABASE_URL = "DATABASE_URL"
+    # Root directory for the ``file`` runtime store backend (JSONL folders +
+    # object store + disposable SQLite index). Required when
+    # ``RUNTIME_STORE_BACKEND=file`` under the single_user_desktop profile.
+    FILE_STORE_ROOT = "RUNTIME_FILE_STORE_ROOT"
     MCP_BACKEND_REGISTRY_URL = "MCP_BACKEND_REGISTRY_URL"
     MCP_AUTH_REDIRECT_URI = "MCP_AUTH_REDIRECT_URI"
     SKILLS_BACKEND_REGISTRY_URL = "SKILLS_BACKEND_REGISTRY_URL"
@@ -134,6 +138,10 @@ class RuntimeStoreSettings(RuntimeContract):
 
     backend: str = "in_memory"
     database_url: str | None = Field(default=None, repr=False, exclude=True)
+    # Filesystem root for the ``file`` backend. ``None`` unless the desktop
+    # profile sets ``RUNTIME_FILE_STORE_ROOT``; the factory fails closed when
+    # ``backend == "file"`` and this is unset.
+    file_store_root: str | None = None
 
 
 class RuntimeMcpSettings(RuntimeContract):
@@ -347,6 +355,7 @@ class RuntimeSettings(BaseSettings):
             store=RuntimeStoreSettings(
                 backend=_s(v, E.STORE_BACKEND, "in_memory").lower(),
                 database_url=_o(v, E.DATABASE_URL),
+                file_store_root=_o(v, E.FILE_STORE_ROOT),
             ),
             mcp=RuntimeMcpSettings(
                 backend_registry_url=_o(v, E.MCP_BACKEND_REGISTRY_URL),

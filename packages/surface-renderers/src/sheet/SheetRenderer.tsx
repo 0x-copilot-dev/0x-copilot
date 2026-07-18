@@ -40,6 +40,12 @@ export interface SheetDiff {
   readonly description?: string;
   readonly region: SheetRegion;
   readonly changes: readonly SheetCellChange[];
+  /**
+   * Snapshot-streaming progress (0–100) while the tabular surface is still
+   * arriving. When present the diff's status pill reads `streaming · N%`
+   * (FR-3.20); omit it once the snapshot is complete.
+   */
+  readonly streamProgress?: number;
 }
 
 const PALETTE = {
@@ -52,9 +58,9 @@ const PALETTE = {
   textMid: "#c8ccd1",
   textLo: "#7E8492",
   lime: "var(--color-accent)",
-  limeBgSoft: "rgba(194, 255, 90, 0.10)",
+  limeBgSoft: "color-mix(in srgb, var(--color-accent) 10%, transparent)",
   changed: "var(--color-accent)",
-  changedBg: "rgba(194, 255, 90, 0.12)",
+  changedBg: "color-mix(in srgb, var(--color-accent) 12%, transparent)",
   removed: "#ef5a5a",
 } as const;
 

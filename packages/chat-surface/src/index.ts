@@ -1004,3 +1004,158 @@ export {
   type UseRunSessionOptions,
 } from "./destinations/run/useRunSession";
 // === end Phase 3 (PR-3.3) ===
+// === Phase 3 (PR-3.4) run mode ===
+// KeyValueStore-backed Studio/Focus mode owner for the Run destination +
+// the global ⌘M / Ctrl+M toggle. Owns the persisted mode value; feeds
+// ThreadCanvas.mode in PR-3.5 (RunDestination shell). RunMode is an alias
+// of ThreadMode — single source of truth for the "studio" | "focus" union.
+export {
+  useRunMode,
+  readRunMode,
+  writeRunMode,
+  runModeKey,
+  DEFAULT_RUN_MODE,
+  type RunMode,
+  type UseRunModeOptions,
+  type UseRunModeResult,
+} from "./destinations/run/useRunMode";
+// === end Phase 3 (PR-3.4) ===
+
+// === Phase 4 (PR-4.9) — Skills destination (skill catalog) ===
+// Presentational card grid of saved multi-step workflows (`/v1/skills`):
+// name, description sub, `N runs`, Run / Edit per card + a "New skill"
+// header action. Controlled by `SectionResult<SkillSummary[]> | null` with
+// the 4-state machine. The redesigned Skills slug — NOT the MCP
+// tool-integration catalog (`tools/`), which the PRD supersedes for this
+// slug. Host binding (fetch + Run/Edit/New wiring) lands in PR-4.10.
+export {
+  SkillsDestination,
+  SkillCard,
+  runCountLabel,
+  SKILLS_SUBTITLE_COPY,
+  SKILLS_EMPTY_TITLE,
+  type SkillsDestinationProps,
+  type SkillCardProps,
+} from "./destinations/skills";
+// === end Phase 4 (PR-4.9) ===
+// === Phase 4 (PR-4.2) chats archive destination ===
+// Pure-presentation Chats archive component: takes a pre-bucketed
+// `ChatsArchive` (`SectionResult`) + `onReopen`/`onNewChat` callbacks and
+// renders the shared `.pg` list surface with the 4-state machine
+// (loading / error+Retry / empty / ready). Reopen → Run, "New chat" →
+// Run are host concerns (the callbacks); the host binder (PR-4.3) wires
+// them. `ChatsDestination` (Phase 2-A/3 block above) now forwards to this
+// component; its props type is re-exported here.
+export {
+  ChatsArchive,
+  type ChatsArchiveProps,
+  CHATS_SECTION_ORDER,
+  type ChatsSectionKey,
+  type ChatsDestinationProps,
+} from "./destinations/chats";
+// === end Phase 4 (PR-4.2) ===
+// === Phase 4 (PR-4.5) — Activity destination (run-history recast) ===
+// Presentational run-history feed that absorbs the former Agents / Inbox /
+// audit-log surfaces: a flat `SectionResult<ActivityRunRow[]>` in, day-grouped
+// rows out (grouping in-shell via the injected `now`). Running rows call
+// `onOpenRun`; non-running rows navigate through the `"run"` ItemLink resolver.
+// The host binder (PR-4.6) composes conversations + audit into the rows.
+export {
+  ActivityDestination,
+  activityStatusLabel,
+  activityStatusTone,
+  groupActivityByDay,
+  ACTIVITY_LEAD_COPY,
+  ACTIVITY_RETENTION_LINK_COPY,
+  ACTIVITY_RUN_STATUSES,
+  type ActivityDayGroup,
+  type ActivityDestinationProps,
+  type ActivityRunRow,
+  type ActivityRunStatus,
+} from "./destinations/activity";
+// === end Phase 4 (PR-4.5) ===
+// === Phase 3 (PR-3.5) run cockpit shell ===
+// The Run destination composition: `RunDestination` wires `useRunSession` +
+// `useRunMode` + `ThreadCanvas` into the DESIGN-SPEC §2 cockpit, and `RunHeader`
+// renders the "ACTIVE RUN" kicker + goal + the Studio/Focus segmented control.
+// `apps/desktop` mounts `RunDestination` on the `run` slug (via its
+// DestinationOutlet); PR-3.6…3.11 fill the rail / timeline scrub / subagents /
+// streaming / approvals / empty+multi-run seams left in the shell.
+export {
+  RunDestination,
+  type RunDestinationProps,
+  RunHeader,
+  type RunHeaderProps,
+} from "./destinations/run";
+// === end Phase 3 (PR-3.5) ===
+// === Phase 4 (PR-4.7) — Tools access-mode segment ===
+// The Connectors destination, relabeled "Tools" (FR-4.20): each connected
+// tool row renders <AccessModeSegment> (Read / Read & act / Off — FR-4.21),
+// changes routed via the destination's `onSetAccessMode(id, mode)` (FR-4.22),
+// plus the approval-policy note pointing at Settings → Model & behavior
+// (FR-4.25). `ConnectorsDestination` / `ConnectorCard` themselves are already
+// surfaced above (Phase 2-A / 3 block); this block adds only the new symbols.
+export {
+  AccessModeSegment,
+  TOOLS_SUBTITLE,
+  TOOLS_POLICY_NOTE_COPY,
+} from "./destinations/connectors";
+export type { AccessModeSegmentProps } from "./destinations/connectors";
+// Re-export the wire union so hosts can type `onSetAccessMode` / segment
+// values without a second `@0x-copilot/api-types` import.
+export type { ConnectorAccessMode } from "@0x-copilot/api-types";
+// === end Phase 4 (PR-4.7) ===
+// === Phase 4 (PR-4.4) — Projects detail files section ===
+// The project detail view (chats/files/members/activity + legacy tabs) and
+// its new Files tab. `ProjectDetailView` takes a projected
+// `files: SectionResult<ProjectFileRow[]> | null` and renders the shared
+// 4-state machine; each ready row opens its artifact via
+// `<ItemLink kind="library_file">` (FR-4.12). Omitting the `files` prop
+// degrades the tab to a "coming soon" empty state — never an error
+// (FR-4.11, PRD §11 files gap). The `ProjectsRoute` host binder (follow-up)
+// wires the `files` source + `onRetryFiles`. `ProjectFileRow` is a local
+// non-branded presentational row until a `@0x-copilot/api-types` contract
+// lands (see the type's TODO).
+export {
+  ProjectDetailView,
+  ProjectFilesTab,
+  type ProjectDetail,
+  type ProjectDetailViewProps,
+  type ProjectDetailTabId,
+  type ProjectFileRow,
+  type ProjectFilesResult,
+} from "./destinations/projects";
+// === end Phase 4 (PR-4.4) ===
+
+// === Phase 4 (PR-4.8) — Tools ConnectModal ===
+// Presentational "Connect a tool" flow on the shared <Modal> + <StepDots>
+// chrome (DESIGN-SPEC §5, FR-4.23): catalog pick → OAuth spinner → permission
+// (Read only / Read & act) → Connect. The host binder (PR-4.8b) performs the
+// OAuth round-trip and persists the connection, driving the modal purely via
+// props: `onSelectEntry` kicks off OAuth, `pending`/`error` drive the
+// spinner + inline alert, and `onConnect(slug, permission)` fires on the
+// terminal Connect. Reuses `ConnectorCatalogEntry` + `ConnectorAccessMode`
+// from @0x-copilot/api-types (no re-declaration).
+export {
+  ConnectModal,
+  CONNECT_PERMISSION_OPTIONS,
+  type ConnectModalProps,
+  type ConnectPermission,
+  type ConnectPermissionOption,
+} from "./destinations/connectors";
+// === end Phase 4 (PR-4.8) ===
+
+// === Phase 3 (PR-3.6) run workspace rail ===
+// The Run cockpit's tabbed right rail `[Chat · Sources · Agents · Approvals]`
+// (Chat default). A recomposition — NOT a fork — of the hoisted WorkspacePane
+// tab bodies (SourcesTab / AgentsTab / ApprovalsTab); Draft + Skills are
+// omitted. Composition shell only: `chatSlot` (the single TcChat) + the
+// Sources/Agents/Approvals inputs are controlled/injected by the host, so the
+// rail opens no second event projection (FR-3.3). Focus mode collapses it to
+// Chat-only (FR-3.13). `RunDestination` feeds it to `ThreadCanvas.rightRail`.
+export {
+  RunWorkspaceRail,
+  type RunWorkspaceRailProps,
+  type RunRailTabId,
+} from "./destinations/run";
+// === end Phase 3 (PR-3.6) ===

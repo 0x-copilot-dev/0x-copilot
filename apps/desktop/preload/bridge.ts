@@ -2,7 +2,18 @@ import { contextBridge, ipcRenderer, type IpcRendererEvent } from "electron";
 
 import { CHANNELS, isAllowedChannel } from "@0x-copilot/chat-transport";
 
+// Capability channels (AC5) are app-local, not part of the chat-transport
+// package, so they extend the allowlist here. `channels.ts` is a
+// dependency-free constants module — safe to bundle into the preload sandbox.
+import { isCapabilityChannel } from "../main/capabilities/channels";
+
 import type { WindowBridge } from "./window-bridge-types";
+
+// The full set of channels the renderer may reach over the bridge: the shared
+// transport/auth channels plus the app-local capability channels.
+function isBridgeChannel(channel: string): boolean {
+  return isAllowedChannel(channel) || isCapabilityChannel(channel);
+}
 
 type IpcHandler = (payload: unknown) => void;
 
@@ -30,7 +41,7 @@ for (const channel of statefulChannels) {
 const bridge: WindowBridge = {
   ipc: {
     invoke<T = unknown>(channel: string, payload: unknown): Promise<T> {
-      if (!isAllowedChannel(channel)) {
+      if (!isBridgeChannel(channel)) {
         return Promise.reject(
           new Error(`bridge.ipc.invoke: channel "${channel}" not in allowlist`),
         );
@@ -38,7 +49,7 @@ const bridge: WindowBridge = {
       return ipcRenderer.invoke(channel, payload) as Promise<T>;
     },
     on(channel: string, handler: (payload: unknown) => void): () => void {
-      if (!isAllowedChannel(channel)) {
+      if (!isBridgeChannel(channel)) {
         throw new Error(`bridge.ipc.on: channel "${channel}" not in allowlist`);
       }
       if (statefulChannels.has(channel)) {
