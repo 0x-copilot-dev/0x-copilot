@@ -1,44 +1,38 @@
-import {
-  createRemarkCitations,
-  streamingCursorProps,
-} from "@0x-copilot/chat-surface";
+// Web host adapter for the streaming-markdown renderer.
+//
+// The renderer core now lives in @0x-copilot/chat-surface so web and
+// desktop render assistant text identically (PR-1.1). This adapter binds
+// the web-substrate-specific injections the core takes as props:
+//
+//   1. `components.a` — the citation-chip dispatcher (`MarkdownLink`),
+//      which resolves chips against apps/frontend's CitationsProvider.
+//   2. `onMatch` — the diagnostics sink (`citationDebug`, a console
+//      logger). A desktop adapter would wire its own telemetry sink.
+//
+// Binding these here keeps the moved core free of `citationDebug` / the
+// web `MarkdownLink` imports (FR-1.2), so it stays substrate-agnostic.
+
+import { MarkdownText as SurfaceMarkdownText } from "@0x-copilot/chat-surface";
 import type { ReactElement } from "react";
-import { Streamdown } from "streamdown";
 
 import { citationDebug } from "../../chatModel/citationDebug";
 import type { TextMessagePartProps } from "../../runtime/types";
 import { MarkdownLink } from "./MarkdownLink";
 
-const markdownComponents = {
-  a: MarkdownLink,
-};
+// Stable module-scope identities so the core's memoized plugin + component
+// map never churn across renders (matches the pre-hoist construction).
+const markdownComponents = { a: MarkdownLink };
 
-// Construct the citation plugin once at module load; the closure over
-// citationDebug is stable so Streamdown sees a consistent plugin
-// identity across renders.
-const remarkPlugins = [
-  createRemarkCitations({
-    onMatch: (matches) =>
-      citationDebug(`plugin.match tokens=${matches.length}`, matches),
-  }),
-];
+function onCitationMatch(matches: readonly string[]): void {
+  citationDebug(`plugin.match tokens=${matches.length}`, matches);
+}
 
-export function MarkdownText({
-  text,
-  status,
-}: TextMessagePartProps): ReactElement {
-  // streamingCursorProps owns the single source of truth for the
-  // `assistant-markdown[--streaming]` class + Streamdown's
-  // mode/isAnimating/animated triple. Any future streaming-text surface
-  // (tool output, subagent transcript, …) imports the same helper rather
-  // than re-deriving the toggle.
+export function MarkdownText(props: TextMessagePartProps): ReactElement {
   return (
-    <Streamdown
-      {...streamingCursorProps(status)}
+    <SurfaceMarkdownText
+      {...props}
       components={markdownComponents}
-      remarkPlugins={remarkPlugins}
-    >
-      {text}
-    </Streamdown>
+      onMatch={onCitationMatch}
+    />
   );
 }
