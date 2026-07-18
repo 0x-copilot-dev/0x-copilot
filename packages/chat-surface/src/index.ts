@@ -192,6 +192,8 @@ export {
   DEFAULT_SHELL_DESTINATION,
   DestinationPlaceholder,
   SHELL_DESTINATIONS,
+  defaultDestinationForProfile,
+  destinationsForProfile,
   type AppRailProps,
   type ChatShellProps,
   type ContextPanelPrimaryAction,

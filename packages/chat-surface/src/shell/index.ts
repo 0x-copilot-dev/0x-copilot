@@ -26,6 +26,8 @@ export { ChatShell, type ChatShellProps } from "./ChatShell";
 export {
   DEFAULT_SHELL_DESTINATION,
   SHELL_DESTINATIONS,
+  defaultDestinationForProfile,
+  destinationsForProfile,
   type ShellDestination,
   type ShellDestinationSlug,
 } from "./destinations";
