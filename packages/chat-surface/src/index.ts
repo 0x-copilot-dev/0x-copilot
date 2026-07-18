@@ -80,6 +80,25 @@ export {
   type ReasoningGroupProps,
 } from "./messages/ReasoningGroup";
 // === end Phase 1 (PR-1.1) ===
+// === Phase 1 (PR-1.6) approvals ===
+// Presentational consent card + collapsed receipt (+ their inset param /
+// details / undo-countdown leaves). The approval routing/wiring — the
+// ApprovalTool dispatcher, useApprovalsQueue, ApprovalFocusContext, the
+// forward/undo POST plumbing — stays host-owned in apps/frontend; the host
+// renders these behind its own Approve/Reject/Forward/Undo callbacks.
+export {
+  ApprovalCard,
+  type ApprovalCardProps,
+  ApprovalReceipt,
+  type ApprovalReceiptProps,
+  type ApprovalReceiptKind,
+  ActivityDetails,
+  ActivityParams,
+  useUndoCountdown,
+  type UndoCountdownState,
+  type ActivityParam,
+} from "./approvals";
+// === end Phase 1 (PR-1.6) ===
 export { CitationChip, type CitationChipProps } from "./citations/CitationChip";
 export {
   OrdinalCitationChip,

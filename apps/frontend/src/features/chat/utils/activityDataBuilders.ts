@@ -19,13 +19,13 @@ import {
   safeToolActionLabel,
   toolDisplayName,
 } from "./toolLabels";
-import type { ReactNode } from "react";
-
-export type ActivityParam = {
-  label: string;
-  value: ReactNode;
-  block?: boolean;
-};
+// `ActivityParam` now lives in @0x-copilot/chat-surface (PR-1.6, alongside
+// the approval family that renders it). Imported here for this module's own
+// param builders and re-exported so every host import site (`ActivityCard`,
+// plus the `ActivityParams` / `ApprovalCard` shims) keeps resolving the
+// shape from `activityDataBuilders` unchanged.
+import type { ActivityParam } from "@0x-copilot/chat-surface";
+export type { ActivityParam };
 
 export type SubagentActivityRecord = {
   id: string;
