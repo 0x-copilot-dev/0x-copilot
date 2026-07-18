@@ -159,7 +159,7 @@ const STREAMING_TABLE_MESSAGE: TcChatMessage = {
 };
 
 describe("TcChat", () => {
-  it("fetches messages from /v1/conversations/{id}/messages on mount", async () => {
+  it("fetches messages from /v1/agent/conversations/{id}/messages on mount", async () => {
     const { transport, record } = makeTransport(() =>
       Promise.resolve(SAMPLE_RESPONSE),
     );
@@ -173,7 +173,7 @@ describe("TcChat", () => {
     expect(record.calls).toHaveLength(1);
     expect(record.calls[0]).toMatchObject({
       method: "GET",
-      path: "/v1/conversations/conv-1/messages",
+      path: "/v1/agent/conversations/conv-1/messages",
     });
   });
 
@@ -197,7 +197,9 @@ describe("TcChat", () => {
     await waitFor(() => {
       expect(record.calls.length).toBe(2);
     });
-    expect(record.calls[1]?.path).toBe("/v1/conversations/conv-2/messages");
+    expect(record.calls[1]?.path).toBe(
+      "/v1/agent/conversations/conv-2/messages",
+    );
   });
 
   it("renders studio mode with messages and a composer", async () => {

@@ -334,7 +334,7 @@ describe("useRunSession — error + retry (FR-3.32)", () => {
     expect(result.current.events).toHaveLength(2);
   });
 
-  it("reports error when run resolution fails and no run is selected", async () => {
+  it("degrades to empty/idle (not a blocking error) when run resolution fails — the list is best-effort", async () => {
     const transport = new FakeTransport();
     transport.requestHandler = async () => {
       throw new Error("list failed");
@@ -344,9 +344,14 @@ describe("useRunSession — error + retry (FR-3.32)", () => {
       conversationId: "conv-1",
     });
 
-    await waitFor(() => expect(result.current.status).toBe("error"));
-    expect(result.current.error?.message).toBe("list failed");
+    // The run list only backs the multi-run selector and some deployments do
+    // not expose a run-list endpoint, so a resolution failure MUST degrade to
+    // "no prior runs" (the empty/idle cockpit), never a blocking error —
+    // starting a run (POST) and streaming it (…/stream) are independent.
+    await waitFor(() => expect(result.current.status).toBe("idle"));
+    expect(result.current.error).toBeNull();
     expect(result.current.runId).toBeNull();
+    expect(result.current.runs).toEqual([]);
   });
 });
 
