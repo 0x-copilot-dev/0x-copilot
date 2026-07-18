@@ -67,6 +67,7 @@ import {
   isDesktopFilesystemEnabled,
   type CapabilityService,
 } from "./capabilities";
+import { ConnectorService } from "./connectors/connector-service";
 import { startCrashReporter } from "./crash-reporter";
 import { registerDeepLinks } from "./deep-links";
 import { registerIpcHandlers } from "./ipc/handlers";
@@ -86,6 +87,11 @@ let tier2LifecycleHandle: Tier2LifecycleHandle | null = null;
 let supervisor: ServiceSupervisor | null = null;
 let supervisorStopped = false;
 let capabilityService: CapabilityService | null = null;
+// AC9 — desktop connector OAuth service. Constructed once the facade is
+// reachable (WebTransport mode). Held at module scope so the deep-link
+// dispatcher (registered eagerly at boot) can route connector OAuth callbacks
+// to it by state without re-registering the protocol handler.
+let connectorService: ConnectorService | null = null;
 let latestBootStatus: BootStatusPayload | null = null;
 let updateHandle: AutoUpdateHandle | null = null;
 let latestUpdateStatus: UpdateStatusPayload | null = null;
@@ -205,7 +211,13 @@ function startCapabilitySubsystem(): void {
 if (hasSingleInstanceLock) {
   void app.whenReady().then(() => {
     startCrashReporter();
-    registerDeepLinks();
+    // AC9: route connector OAuth deep-link callbacks (keyed on the unique
+    // 256-bit state) to the connector coordinator BEFORE app-login. A state
+    // the connector service does not own returns false and falls through.
+    registerDeepLinks({
+      connectorCallbackRouter: (code, state) =>
+        connectorService?.handleDeepLinkCallback(code, state) ?? false,
+    });
     wireQualityGateForTier2();
     wireSmokeRenderExecutorForTier2();
 
@@ -288,6 +300,21 @@ function wireTransportAndIpc(facadeUrl: string | undefined): void {
   const authService = buildAuthService(auditLog, facadeUrl);
   const transport = createTransport(authService, auditLog, facadeUrl);
 
+  // AC9 — connector OAuth service. Only meaningful against a real facade
+  // (MockTransport dev has no connector backend), so it is null in mock mode
+  // and the connector IPC channels are simply never registered (fail closed).
+  connectorService =
+    facadeUrl === undefined
+      ? null
+      : new ConnectorService({
+          facadeBaseUrl: facadeUrl,
+          openExternal: (url) => shell.openExternal(url),
+          getBearer: async () => {
+            const ws = authService.activeWorkspace();
+            return ws === null ? null : authService.getBearer(ws);
+          },
+        });
+
   const transportBridge = new TransportBridge(
     (webContentsId, payload) => {
       const target = webContents.fromId(webContentsId);
@@ -354,6 +381,16 @@ function wireTransportAndIpc(facadeUrl: string | undefined): void {
               capabilityService!.requestFolderGrant(params),
             listGrants: () => capabilityService!.listGrants(),
             revokeGrant: (grantId) => capabilityService!.revokeGrant(grantId),
+          },
+    // AC9 connector channels. Wired only against a real facade; returns only
+    // the renderer-safe catalog + connection metadata (no provider token).
+    connectors:
+      connectorService === null
+        ? undefined
+        : {
+            listCatalog: () => connectorService!.listCatalog(),
+            connect: (slug, options) =>
+              connectorService!.connect(slug, options),
           },
   });
 
