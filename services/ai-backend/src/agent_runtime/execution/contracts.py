@@ -537,6 +537,13 @@ class RuntimeDependencies(RuntimeContract):
     # the `/drafts/` prefix to it so the agent's existing `write_file` /
     # `edit_file` tools produce Workspace-pane drafts without a new tool.
     drafts_backend: object | None = None
+    # Optional read-only Deep Agents backend that resolves offloaded oversized
+    # tool results under `/large_tool_results/<sha256>` from the desktop file
+    # store's content-addressed object store. Constructed by the run handler on
+    # the `file` backend only; the factory routes the `/large_tool_results/`
+    # prefix to it. `None` everywhere else, so those paths stay on the default
+    # `StateBackend` exactly as before.
+    large_tool_results_backend: object | None = None
     # Optional process-wide TTL cache for MCP discovery (the
     # ``connect + list_tools + list_resources`` round-trips on
     # ``McpLoader.load_server``). When ``None`` the loader behaves

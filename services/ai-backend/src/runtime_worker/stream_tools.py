@@ -20,6 +20,7 @@ from runtime_worker.stream_messages import StreamMessageParser, StreamTextHelper
 from runtime_worker.stream_parts import StreamNamespace
 from runtime_worker.stream_subagents import StreamUpdateProcessor
 from runtime_worker.tool_call_ledger import ToolCallLedger
+from runtime_worker.tool_result_offload import ToolResultOffloader
 
 
 @dataclass
@@ -69,10 +70,18 @@ class StreamMessageProcessor:
         self,
         event_producer: RuntimeEventProducer,
         update_processor: StreamUpdateProcessor,
+        *,
+        tool_result_offloader: ToolResultOffloader | None = None,
     ) -> None:
-        """Wire the event producer and update sub-processor; initialise per-run state dicts."""
+        """Wire the event producer and update sub-processor; initialise per-run state dicts.
+
+        ``tool_result_offloader`` is supplied only on the desktop file-store
+        path; when ``None`` (postgres / in-memory / web) tool results are emitted
+        inline exactly as before.
+        """
         self.event_producer = event_producer
         self._update_processor = update_processor
+        self._tool_result_offloader = tool_result_offloader
         self._tool_call_states: dict[
             tuple[str, tuple[str, ...], str], ToolCallStreamState
         ] = {}
@@ -195,6 +204,18 @@ class StreamMessageProcessor:
         if StreamMessageParser.is_tool_result_message(message):
             payload = self.tool_result_payload(message)
             payload = self.tool_result_payload_with_state(run.run_id, payload)
+            # Desktop file store only: park an oversized ``output`` in the object
+            # store, leaving the event with a bounded preview + ``output_ref``.
+            # No-op (offloader is None) on every other backend, and the ``task``
+            # tool result — routed below to a SUBAGENT_COMPLETED lifecycle event
+            # rather than a TOOL_RESULT — is left untouched.
+            if (
+                self._tool_result_offloader is not None
+                and payload[Keys.Field.TOOL_NAME] != Values.Tool.TASK
+            ):
+                payload = self._tool_result_offloader.apply(
+                    payload, trace_id=run.trace_id or run.run_id
+                )
             if payload[Keys.Field.TOOL_NAME] == Values.Tool.TASK:
                 state = self.tool_call_state_for_payload(run.run_id, payload)
                 await self._update_processor.append_task_lifecycle_event(

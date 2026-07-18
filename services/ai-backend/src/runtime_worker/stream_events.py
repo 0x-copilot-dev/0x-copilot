@@ -36,6 +36,7 @@ from runtime_worker.stream_messages import StreamMessageParser, StreamTextHelper
 from runtime_worker.stream_parts import StreamNamespace, StreamPartParser
 from runtime_worker.stream_subagents import StreamUpdateProcessor
 from runtime_worker.stream_tools import StreamMessageProcessor
+from runtime_worker.tool_result_offload import ToolResultOffloader
 
 _logger = logging.getLogger(__name__)
 
@@ -122,12 +123,24 @@ class StreamOrchestrator:
     StreamMessageProcessor, StreamUpdateProcessor, and StreamCustomProcessor.
     """
 
-    def __init__(self, event_producer: RuntimeEventProducer) -> None:
-        """Wire the event producer and instantiate the message and update sub-processors."""
+    def __init__(
+        self,
+        event_producer: RuntimeEventProducer,
+        *,
+        tool_result_offloader: ToolResultOffloader | None = None,
+    ) -> None:
+        """Wire the event producer and instantiate the message and update sub-processors.
+
+        ``tool_result_offloader`` is threaded to the message processor so
+        oversized tool output is offloaded on the desktop file store; ``None``
+        (the default) keeps the historical inline behavior everywhere else.
+        """
         self.event_producer = event_producer
         self.update_processor = StreamUpdateProcessor(event_producer)
         self.message_processor = StreamMessageProcessor(
-            event_producer, self.update_processor
+            event_producer,
+            self.update_processor,
+            tool_result_offloader=tool_result_offloader,
         )
 
     async def append_activity_events(

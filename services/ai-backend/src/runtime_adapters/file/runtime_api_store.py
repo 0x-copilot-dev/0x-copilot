@@ -24,14 +24,20 @@ Design (locked; see the PR description):
   reads (conversations, messages, a run's events, latest sequence) are served
   through it so it is genuinely load-bearing.
 
-Follow-up seams intentionally left for other PRs (do not wire here):
+Runtime wirings that hang off this store (built on the file-store PR2 seams;
+all gated to the ``file`` backend, no effect on postgres/in-memory/web):
 
-* ``self.object_store`` is ready but nothing offloads into it yet — wiring
-  ``ContextPayloadManager`` / ``OffloadWriter`` is a follow-up PR.
-* Routing Deep Agents ``CompositeBackend`` ``/subagents/`` and
-  ``/large_tool_results/`` reads to the object store is a follow-up PR.
-* Swapping the LangGraph checkpointer to ``SqliteSaver`` is a follow-up PR;
-  ``execution/factory.py`` is deliberately untouched.
+* ``self.object_store`` is the offload target — the worker's
+  :class:`~runtime_worker.tool_result_offload.ToolResultOffloader` parks
+  oversized tool output there via ``ContextPayloadManager`` /
+  :class:`~runtime_adapters.file.offload.FileOffloadWriter`.
+* Deep Agents' ``CompositeBackend`` routes ``/subagents/`` reads to
+  :class:`~runtime_adapters.file.subagent_trace_backend.FileSubagentTraceBackend`
+  (canonical per-subagent JSONL) and ``/large_tool_results/`` reads to
+  :class:`~runtime_adapters.file.large_tool_result_backend.FileLargeToolResultBackend`
+  (the object store).
+* The LangGraph checkpointer is a durable ``AsyncSqliteSaver`` at
+  ``index/checkpoints.sqlite3`` (see ``execution/deep_agent_builder.py``).
 """
 
 from __future__ import annotations

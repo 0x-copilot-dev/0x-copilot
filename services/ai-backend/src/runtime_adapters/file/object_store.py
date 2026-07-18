@@ -1,15 +1,16 @@
 """Content-addressed blob store for large runtime payloads.
 
-Large tool results and offloaded context payloads (offload wiring is a
-follow-up PR — see the module TODOs) are stored once, keyed by the SHA-256 of
-their bytes, under ``objects/sha256/<hh>/<hash>``. Writes are atomic
-(temp-write + fsync + rename) and reads verify the digest so a corrupted blob
-is never silently returned.
+Large tool results are stored once, keyed by the SHA-256 of their bytes, under
+``objects/sha256/<hh>/<hash>``. Writes are atomic (temp-write + fsync + rename)
+and reads verify the digest so a corrupted blob is never silently returned.
 
-This module provides only the durable store plus a typed reference shape
-(:class:`ObjectRef`). No caller in this PR offloads into it yet; the seam is
-here for the follow-up that wires ``ContextPayloadManager`` / Deep Agents'
-``CompositeBackend`` ``/large_tool_results/`` reads to it.
+The offload seam this module was built for is now wired:
+:class:`~runtime_adapters.file.offload.FileOffloadWriter` parks oversized tool
+output here (via ``ContextPayloadManager``) and
+:class:`~runtime_adapters.file.large_tool_result_backend.FileLargeToolResultBackend`
+resolves Deep Agents' ``CompositeBackend`` ``/large_tool_results/<sha256>`` reads
+back out of it. This module still owns only the durable store plus a typed
+reference shape (:class:`ObjectRef`).
 """
 
 from __future__ import annotations
@@ -29,7 +30,7 @@ class ObjectStoreError(RuntimeError):
 class ObjectRef(BaseModel):
     """Typed reference to a content-addressed blob.
 
-    Minimal shape (``AC1``'s ``ArtifactRefV1`` does not exist yet); a follow-up
+    Minimal shape (``AC1``'s ``ArtifactRefV1`` does not exist yet); a later PR
     can widen this or swap it for the shared contract without touching the
     on-disk layout, since the ``sha256`` fully addresses the bytes.
     """
