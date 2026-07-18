@@ -79,6 +79,33 @@ class FakeTransport implements Transport {
     };
   }
 
+  /**
+   * Deliver one run event to EVERY open subscriber on its stream path — the
+   * session tail (`useRunSession`) AND `TcSwimlanes`' own incremental
+   * subscription both listen on `/v1/agent/runs/{id}/stream`, so one emit
+   * feeds the single canonical projection (fleet card + Agents count) and the
+   * lane stream together (FR-3.17).
+   */
+  emit(envelope: Record<string, unknown>): void {
+    const raw = JSON.stringify(envelope);
+    const path = `/v1/agent/runs/${String(envelope.run_id)}/stream`;
+    for (const sub of this.subs) {
+      if (!sub.closed && sub.path === path) {
+        sub.onMessage?.(raw);
+      }
+    }
+  }
+
+  /** The swimlane's un-named subscription on the run stream (lane liveness). */
+  get swimlaneSub(): CapturedSub | undefined {
+    return this.subs.find(
+      (sub) =>
+        !sub.closed &&
+        sub.eventName === undefined &&
+        sub.path.endsWith("/stream"),
+    );
+  }
+
   getSession(): Session {
     return { bearer: null };
   }
@@ -424,5 +451,145 @@ describe("RunDestination — shell composition", () => {
     // Same DOM nodes survive the scrub → snap round-trip (no remount).
     expect(screen.getByTestId("tc-chat")).toBe(chatBefore);
     expect(composerTextarea()).toBe(composerBefore);
+  });
+});
+
+// === PR-3.8 — parallel subagents: fleet card + lanes + Agents count ===
+//
+// Integration: a scripted RuntimeEventEnvelope[] with a fleet dispatch drives
+// ALL THREE subagent views off the ONE canonical stream (FR-3.17) — the inline
+// fleet card (a), one timeline lane per subagent (b), and the Agents "N live"
+// count (c). Completion updates counts without remounting sibling lanes.
+
+let seqCounter = 0;
+
+function event(overrides: Record<string, unknown>): Record<string, unknown> {
+  seqCounter += 1;
+  return {
+    event_id: `e-${seqCounter}`,
+    run_id: "run-1",
+    conversation_id: "conv-1",
+    sequence_no: seqCounter,
+    event_type: "progress",
+    activity_kind: "event",
+    payload: {},
+    created_at: new Date(1716000000000 + seqCounter * 1000).toISOString(),
+    ...overrides,
+  };
+}
+
+function fleetStarted(): Record<string, unknown> {
+  return event({
+    event_type: "subagent_fleet_started",
+    source: "main_agent",
+    activity_kind: "subagent",
+    payload: {
+      fleet_id: "fleet-1",
+      title: "Parallel research",
+      agent_ids: ["doc_reader", "press_scout"],
+    },
+  });
+}
+
+function subagentStarted(
+  taskId: string,
+  subagentId: string,
+): Record<string, unknown> {
+  return event({
+    event_type: "subagent_started",
+    source: "subagent",
+    activity_kind: "subagent",
+    task_id: taskId,
+    subagent_id: subagentId,
+    payload: { parent_fleet_id: "fleet-1", subagent_name: subagentId },
+  });
+}
+
+describe("RunDestination — parallel subagents (PR-3.8 / FR-3.17)", () => {
+  it("renders the fleet card, per-subagent lanes, and Agents 'N live' from one stream", async () => {
+    seqCounter = 0;
+    const transport = new FakeTransport();
+    transport.requestHandler = async (req) =>
+      req.path.includes("/messages")
+        ? { messages: [] }
+        : runningRun("Fan out the research");
+    renderRun(transport, makeStore());
+
+    // The session tail and the swimlane both subscribe to the same run stream.
+    await waitFor(() => expect(transport.sessionSub).toBeDefined());
+    await waitFor(() => expect(transport.swimlaneSub).toBeDefined());
+
+    act(() => {
+      transport.emit(fleetStarted());
+      transport.emit(subagentStarted("task_alpha", "doc_reader"));
+      transport.emit(subagentStarted("task_beta", "press_scout"));
+    });
+
+    // (a) inline SubagentFleetCard in the conversation…
+    const card = await screen.findByTestId("tc-chat-fleet-fleet-1");
+    expect(card).toHaveTextContent("Dispatched 2 subagents in parallel");
+    // (b) one live timeline lane per subagent…
+    expect(
+      screen.getByTestId("tc-swimlanes-lane-subagent:doc_reader"),
+    ).toBeInTheDocument();
+    expect(
+      screen.getByTestId("tc-swimlanes-lane-subagent:press_scout"),
+    ).toBeInTheDocument();
+    // (c) live Agents-tab count — all from the SINGLE stream.
+    expect(screen.getByTestId("run-rail-agents-badge")).toHaveTextContent(
+      "2 live",
+    );
+  });
+
+  it("updates the count on completion without remounting sibling lanes (FR-3.9)", async () => {
+    seqCounter = 0;
+    const transport = new FakeTransport();
+    transport.requestHandler = async (req) =>
+      req.path.includes("/messages")
+        ? { messages: [] }
+        : runningRun("Fan out the research");
+    renderRun(transport, makeStore());
+
+    await waitFor(() => expect(transport.sessionSub).toBeDefined());
+    await waitFor(() => expect(transport.swimlaneSub).toBeDefined());
+
+    act(() => {
+      transport.emit(fleetStarted());
+      transport.emit(subagentStarted("task_alpha", "doc_reader"));
+      transport.emit(subagentStarted("task_beta", "press_scout"));
+    });
+
+    await screen.findByTestId("tc-chat-fleet-fleet-1");
+    const survivingLane = screen.getByTestId(
+      "tc-swimlanes-lane-subagent:press_scout",
+    );
+    expect(screen.getByTestId("run-rail-agents-badge")).toHaveTextContent(
+      "2 live",
+    );
+
+    act(() => {
+      transport.emit(
+        event({
+          event_type: "subagent_completed",
+          source: "subagent",
+          activity_kind: "subagent",
+          task_id: "task_alpha",
+          subagent_id: "doc_reader",
+          status: "completed",
+          payload: { parent_fleet_id: "fleet-1" },
+        }),
+      );
+    });
+
+    // One still running → badge drops to "1 live"…
+    await waitFor(() =>
+      expect(screen.getByTestId("run-rail-agents-badge")).toHaveTextContent(
+        "1 live",
+      ),
+    );
+    // …and the still-running subagent's lane is the SAME node (no remount).
+    expect(screen.getByTestId("tc-swimlanes-lane-subagent:press_scout")).toBe(
+      survivingLane,
+    );
   });
 });
