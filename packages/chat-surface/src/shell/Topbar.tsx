@@ -34,18 +34,26 @@ export function Topbar({ activeDestination, leaf }: TopbarProps): ReactElement {
     alignItems: "center",
     gap: 8,
     fontSize: "var(--font-size-sm)",
+    // Fill the bar and bound the crumb so a long leaf ellipsizes instead of
+    // colliding with anything to its right.
+    flex: 1,
+    minWidth: 0,
+    overflow: "hidden",
   };
-  const crumbStyle: CSSProperties = { color: "var(--color-text)" };
-  const separatorStyle: CSSProperties = { color: "var(--color-text-subtle)" };
-  const leafStyle: CSSProperties = { color: "var(--color-text-muted)" };
-  const toggleStyle: CSSProperties = {
-    background: "transparent",
-    border: "1px solid var(--color-border)",
+  const crumbStyle: CSSProperties = {
     color: "var(--color-text)",
-    fontSize: "var(--font-size-xs)",
-    padding: "4px 10px",
-    borderRadius: 6,
-    cursor: "pointer",
+    flex: "0 0 auto",
+  };
+  const separatorStyle: CSSProperties = {
+    color: "var(--color-text-subtle)",
+    flex: "0 0 auto",
+  };
+  const leafStyle: CSSProperties = {
+    color: "var(--color-text-muted)",
+    overflow: "hidden",
+    textOverflow: "ellipsis",
+    whiteSpace: "nowrap",
+    minWidth: 0,
   };
 
   return (
@@ -63,14 +71,6 @@ export function Topbar({ activeDestination, leaf }: TopbarProps): ReactElement {
           {leaf !== undefined && leaf !== null && leaf !== "" ? leaf : "—"}
         </span>
       </nav>
-      <button
-        type="button"
-        aria-label="Toggle mode"
-        data-testid="topbar-mode-toggle"
-        style={toggleStyle}
-      >
-        Studio
-      </button>
     </header>
   );
 }

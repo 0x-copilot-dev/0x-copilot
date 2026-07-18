@@ -181,10 +181,17 @@ describe("ChatShell", () => {
     expect(screen.queryByRole("button", { name: "Settings" })).toBeNull();
   });
 
-  it("forwards the topbar leaf when supplied", () => {
-    mount({ activeDestination: "chats", topbarLeaf: "c-123" });
+  it("forwards the topbar leaf when supplied (non-full-bleed destinations)", () => {
+    // Full-bleed chats suppresses the shell Topbar (ChatScreen brings its
+    // own), so leaf forwarding is exercised on a destination that renders it.
+    mount({ activeDestination: "home", topbarLeaf: "c-123" });
     expect(screen.getByTestId("topbar-breadcrumb-leaf")).toHaveTextContent(
       "c-123",
     );
+  });
+
+  it("suppresses the shell Topbar on full-bleed chats", () => {
+    mount({ activeDestination: "chats", topbarLeaf: "c-123" });
+    expect(screen.queryByTestId("topbar-breadcrumb")).toBeNull();
   });
 });

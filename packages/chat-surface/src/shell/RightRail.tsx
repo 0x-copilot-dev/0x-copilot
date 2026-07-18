@@ -136,7 +136,12 @@ export function RightRail({
   };
   const toggleEdgeStyle: CSSProperties = {
     position: "absolute",
-    top: 12,
+    // Centre the drawer handle on the right edge, out of the 44px topbar
+    // band. Previously top:12 floated it into the top-right corner where it
+    // collided with the topbar's right-hand control (the "tab overlaps
+    // Studio" bug); mid-height keeps it clear of any topbar.
+    top: "50%",
+    transform: "translateY(-50%)",
     left: -28,
     width: 24,
     height: 24,
