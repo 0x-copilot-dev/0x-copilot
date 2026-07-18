@@ -1,12 +1,45 @@
 import { type CSSProperties, type ReactElement } from "react";
 
-import { SHELL_DESTINATIONS, type ShellDestinationSlug } from "./destinations";
+import {
+  SHELL_DESTINATIONS,
+  type ShellDestination,
+  type ShellDestinationSlug,
+} from "./destinations";
 
 // Geometry constants — kept here, not stretched into a token, because they
-// describe THIS component's box (not a colour or a font). One source of
-// truth: the same constant feeds the rail's own style and is exported so
-// ChatShell's grid template can mirror it without redefining the literal.
-const RAIL_WIDTH = 52;
+// describe THIS component's box (not a colour or a font). Values track the v2
+// "quiet" shell spec (DESIGN-SPEC §0/§1). One source of truth: `RAIL_WIDTH`
+// feeds the rail's own style and is exported so ChatShell's grid template can
+// mirror it without redefining the literal.
+const RAIL_WIDTH = 48; // §0: Rail 48px
+const BUTTON_SIZE = 34; // §1: destination buttons 34×34
+const BRAND_SIZE = 32; // §1: brand mark 32×32
+const AVATAR_SIZE = 26; // §1: avatar (.rail-me) 26px circle
+
+// The brand mark navigates here, and the shell's canonical front door.
+const BRAND_DESTINATION: ShellDestinationSlug = "run";
+
+// Rail-scoped CSS for interaction states that inline styles cannot express:
+// hover lift, the focus-visible ring (FR-2.26), and a subtle colour brighten.
+// Reduced-motion is inherited from the design-system global rule
+// (`:root[data-reduce-motion] *` / `prefers-reduced-motion`), which zeroes
+// these transitions — no local media query needed. Selectors are scoped to
+// `[data-component="app-rail"]` so multiple rail instances share one rule set.
+const RAIL_STYLE_RULES = `
+[data-component="app-rail"] .rail-btn {
+  transition: background-color 120ms ease, color 120ms ease;
+}
+[data-component="app-rail"] .rail-btn:hover {
+  background: var(--color-bg-elevated);
+}
+[data-component="app-rail"] .rail-btn:not(.rail-brand):hover {
+  color: var(--color-text);
+}
+[data-component="app-rail"] .rail-btn:focus-visible {
+  outline: 2px solid var(--color-accent);
+  outline-offset: 2px;
+}
+`;
 
 export interface AppRailProps {
   /**
@@ -24,13 +57,23 @@ export interface AppRailProps {
    */
   readonly onNavigate: (slug: ShellDestinationSlug) => void;
   /**
-   * Optional Settings click handler. When supplied, a Settings gear
-   * button renders in the rail's foot section (mirrors os-shell.jsx
-   * rail__foot). Settings isn't a destination — it lives outside the
-   * 11-slug enum — so it gets its own slot rather than being squeezed
-   * in next to the destinations.
+   * Optional Settings click handler. When supplied, the rail's foot renders
+   * a Settings gear + an account avatar (mirrors os-shell.jsx `rail__foot`).
+   * Settings isn't a destination — it lives outside the shell destination
+   * union — so it gets its own foot slot rather than sitting in the list.
+   * When absent (e.g. a bare test harness), the whole foot is omitted.
    */
   readonly onOpenSettings?: () => void;
+  /**
+   * The destinations to render, in display order. Defaults to the legacy
+   * 12-item `SHELL_DESTINATIONS` — the web host's frozen rail, so omitting
+   * this prop preserves that surface byte-for-byte. The desktop host passes
+   * the profile-derived list from `destinationsForProfile(profile)`. The rail
+   * stays a pure controlled view: it renders whatever list it is given and
+   * never resolves the deployment profile itself (that single responsibility
+   * lives in ChatShell / the host).
+   */
+  readonly destinations?: readonly ShellDestination[];
 }
 
 function Glyph({ slug }: { slug: ShellDestinationSlug }): ReactElement {
@@ -171,6 +214,28 @@ function Glyph({ slug }: { slug: ShellDestinationSlug }): ReactElement {
   }
 }
 
+// Brand mark — 6-blade turbine/asterisk (DESIGN-SPEC §7). Single-accent
+// discipline: rendered monochrome in `--color-accent` (the button's colour)
+// rather than the prototype's sky gradient, so it follows `[data-accent]`.
+function BrandGlyph(): ReactElement {
+  return (
+    <svg
+      aria-hidden
+      focusable={false}
+      fill="none"
+      stroke="currentColor"
+      strokeWidth={1.7}
+      strokeLinecap="round"
+      viewBox="0 0 24 24"
+      width={18}
+      height={18}
+    >
+      <path d="M12 4v6M12 14v6M4.5 7.75l5.2 3M14.3 13.25l5.2 3M4.5 16.25l5.2-3M14.3 10.75l5.2-3" />
+      <circle cx="12" cy="12" r="2.2" fill="currentColor" stroke="none" />
+    </svg>
+  );
+}
+
 function SettingsGlyph(): ReactElement {
   return (
     <svg
@@ -191,28 +256,65 @@ function SettingsGlyph(): ReactElement {
   );
 }
 
-function railButtonStyle(isActive: boolean): CSSProperties {
+// Neutral account glyph inside the foot avatar (no identity data flows into
+// this framework-agnostic view yet — the host supplies real avatar art later).
+function AvatarGlyph(): ReactElement {
+  return (
+    <svg
+      aria-hidden
+      focusable={false}
+      fill="none"
+      stroke="currentColor"
+      strokeWidth={1.5}
+      strokeLinecap="round"
+      strokeLinejoin="round"
+      viewBox="0 0 24 24"
+      width={14}
+      height={14}
+    >
+      <circle cx="12" cy="9" r="3.2" />
+      <path d="M5.5 19c.6-3.2 3.3-5 6.5-5s5.9 1.8 6.5 5" />
+    </svg>
+  );
+}
+
+function railButtonStyle(size: number, isActive: boolean): CSSProperties {
   return {
-    width: 36,
-    height: 36,
+    position: "relative",
+    width: size,
+    height: size,
     display: "flex",
     alignItems: "center",
     justifyContent: "center",
-    background: isActive
-      ? "color-mix(in srgb, var(--color-accent) 12%, transparent)"
-      : "transparent",
+    // Active = elevated panel background (DESIGN-SPEC §1 panel2); the sole
+    // decorative accent is the left-edge bar below, not a fill.
+    background: isActive ? "var(--color-bg-elevated)" : "transparent",
     border: "none",
-    borderRadius: 8,
-    color: isActive ? "var(--color-accent)" : "var(--color-text-subtle)",
+    borderRadius: "var(--radius-md)",
+    color: isActive ? "var(--color-text)" : "var(--color-text-subtle)",
     cursor: "pointer",
     padding: 0,
   };
 }
 
+// 2px accent bar on the button's left edge — the active-state affordance
+// (DESIGN-SPEC §1). Rendered as an inset child rather than a box-shadow so it
+// stays a crisp vertical bar despite the button's rounded corners.
+const activeBarStyle: CSSProperties = {
+  position: "absolute",
+  left: 0,
+  top: 6,
+  bottom: 6,
+  width: 2,
+  borderRadius: 1,
+  background: "var(--color-accent)",
+};
+
 export function AppRail({
   activeDestination,
   onNavigate,
   onOpenSettings,
+  destinations = SHELL_DESTINATIONS,
 }: AppRailProps): ReactElement {
   const railStyle: CSSProperties = {
     width: RAIL_WIDTH,
@@ -223,12 +325,12 @@ export function AppRail({
     display: "flex",
     flexDirection: "column",
     alignItems: "center",
-    paddingTop: 12,
-    paddingBottom: 12,
+    paddingTop: 10,
+    paddingBottom: 10,
     boxSizing: "border-box",
   };
-  // The destinations list takes the available vertical space; the foot
-  // group (currently just Settings) hugs the bottom — mirrors os.css's
+  // The destinations list takes the available vertical space; the foot group
+  // (Settings + avatar) hugs the bottom — mirrors os.css's
   // `.rail__items { flex: 1 }` + `.rail__foot { border-top }` pattern.
   const itemsStyle: CSSProperties = {
     display: "flex",
@@ -236,15 +338,30 @@ export function AppRail({
     alignItems: "center",
     gap: 4,
     flex: 1,
+    marginTop: 10,
   };
   const footStyle: CSSProperties = {
     display: "flex",
     flexDirection: "column",
     alignItems: "center",
-    gap: 4,
+    gap: 6,
     paddingTop: 8,
     borderTop: "1px solid var(--color-border)",
-    width: 36,
+    width: BUTTON_SIZE,
+  };
+  const avatarStyle: CSSProperties = {
+    position: "relative",
+    width: AVATAR_SIZE,
+    height: AVATAR_SIZE,
+    display: "flex",
+    alignItems: "center",
+    justifyContent: "center",
+    background: "var(--color-bg-elevated)",
+    border: "1px solid var(--color-border)",
+    borderRadius: "var(--radius-full)",
+    color: "var(--color-text-subtle)",
+    cursor: "pointer",
+    padding: 0,
   };
 
   return (
@@ -253,21 +370,44 @@ export function AppRail({
       style={railStyle}
       data-component="app-rail"
     >
+      <style>{RAIL_STYLE_RULES}</style>
+      <button
+        type="button"
+        className="rail-btn rail-brand"
+        aria-label="0xCopilot"
+        title="0xCopilot — Run"
+        data-rail-brand=""
+        onClick={() => onNavigate(BRAND_DESTINATION)}
+        style={{
+          ...railButtonStyle(BRAND_SIZE, false),
+          color: "var(--color-accent)",
+        }}
+      >
+        <BrandGlyph />
+      </button>
       <div style={itemsStyle}>
-        {SHELL_DESTINATIONS.map((d) => {
+        {destinations.map((d) => {
           const isActive = d.slug === activeDestination;
           return (
             <button
               key={d.slug}
               type="button"
+              className="rail-btn"
               aria-label={d.label}
               aria-current={isActive ? "page" : undefined}
               data-destination={d.slug}
               data-state={isActive ? "active" : "inactive"}
               onClick={() => onNavigate(d.slug)}
-              style={railButtonStyle(isActive)}
+              style={railButtonStyle(BUTTON_SIZE, isActive)}
               title={d.label}
             >
+              {isActive ? (
+                <span
+                  aria-hidden
+                  data-rail-active-bar=""
+                  style={activeBarStyle}
+                />
+              ) : null}
               <Glyph slug={d.slug} />
             </button>
           );
@@ -277,13 +417,25 @@ export function AppRail({
         <div style={footStyle}>
           <button
             type="button"
+            className="rail-btn"
             aria-label="Settings"
             data-rail-action="settings"
             onClick={onOpenSettings}
-            style={railButtonStyle(false)}
+            style={railButtonStyle(BUTTON_SIZE, false)}
             title="Settings"
           >
             <SettingsGlyph />
+          </button>
+          <button
+            type="button"
+            className="rail-btn"
+            aria-label="Account"
+            data-rail-me=""
+            onClick={onOpenSettings}
+            style={avatarStyle}
+            title="Account"
+          >
+            <AvatarGlyph />
           </button>
         </div>
       ) : null}
