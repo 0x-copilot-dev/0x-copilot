@@ -811,7 +811,9 @@ describe("ProjectsRoute detail pane", () => {
     // The detail renders inside the destination's own renderDetail slot.
     const slot = await screen.findByTestId("projects-detail-slot");
     await waitFor(() => {
-      expect(within(slot).getByTestId("project-detail-view")).toBeInTheDocument();
+      expect(
+        within(slot).getByTestId("project-detail-view"),
+      ).toBeInTheDocument();
     });
     expect(screen.getByTestId("project-detail-name").textContent).toBe(
       "Q3 launch",
@@ -880,7 +882,9 @@ describe("ProjectsRoute detail pane", () => {
     render(<ProjectsRoute identity={IDENTITY} />);
 
     await waitFor(() => {
-      expect(screen.getByTestId("projects-route-role-chip")).toBeInTheDocument();
+      expect(
+        screen.getByTestId("projects-route-role-chip"),
+      ).toBeInTheDocument();
     });
     expect(screen.getByTestId("projects-route-role-chip")).toHaveAttribute(
       "data-role",
