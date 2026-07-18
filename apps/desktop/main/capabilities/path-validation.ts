@@ -265,3 +265,172 @@ export function modeSatisfies(required: string, granted: string): boolean {
   if (need === undefined || have === undefined) return false;
   return have >= need;
 }
+
+// ---------------------------------------------------------------------------
+// SENSITIVE-PATH POLICY (G2). Two independent, NON-OVERRIDABLE denylists:
+//
+//   (a) SENSITIVE_ROOT — a grant may NOT be minted over the filesystem root,
+//       the user's home directory (or any ancestor of it), the app's own
+//       userData tree (which holds the encrypted grant store + auth secrets),
+//       or any tree containing a well-known credential directory. Enforced at
+//       grant creation (`GrantStore.create`) — the authoritative choke point,
+//       so a caller that bypasses the native picker is still blocked.
+//
+//   (b) SENSITIVE_FILE — within an otherwise-granted folder, the CONTENTS of
+//       well-known secret files (private keys, dotenv, credential stores) are
+//       never readable, regardless of grant mode. Enforced in the read path
+//       (`HostFs.read` / `HostFs.grep`) so neither a direct read nor a content
+//       grep can exfiltrate them. Listing/stat still see the name (this is a
+//       content-read policy, not an existence-hiding one).
+//
+// Both lists are plain, documented constants so they are trivially auditable
+// and unit-testable. They only ever REDUCE authority; nothing here can widen
+// what a grant already allows.
+// ---------------------------------------------------------------------------
+
+/**
+ * Directory basenames that must never appear anywhere in a grant root's path.
+ * Case-insensitive. These hold credentials/keys whose exposure is catastrophic;
+ * a folder grant must not straddle any of them.
+ */
+export const SENSITIVE_ROOT_SEGMENTS: readonly string[] = [
+  ".ssh", // OpenSSH private keys, known_hosts
+  ".aws", // AWS access keys / config
+  ".gnupg", // GnuPG keyrings & trust db
+  ".gpg", // GnuPG (alternate)
+  ".password-store", // pass(1) encrypted secret store
+  ".docker", // Docker config.json (registry credentials)
+  ".kube", // kubeconfig (cluster credentials)
+  ".azure", // Azure CLI tokens
+  "keychains", // macOS ~/Library/Keychains
+];
+
+/** Machine-readable reason a candidate grant root was rejected. */
+export type ForbiddenRootReason =
+  | "filesystem_root"
+  | "home_directory"
+  | "user_data_directory"
+  | "sensitive_directory";
+
+export interface GrantRootContext {
+  /** The user's home directory (canonical). */
+  readonly homeDir: string;
+  /** The app's userData directory (holds the grant store + auth secrets). */
+  readonly userDataDir: string;
+}
+
+function splitPathSegments(p: string): string[] {
+  return p.split(/[/\\]+/u).filter((s) => s.length > 0);
+}
+
+// Canonical, comparison-friendly form: separator-normalized, trailing-slash
+// stripped, lower-cased. Lower-casing is defense in depth against a bypass via
+// case variation on the case-insensitive host filesystems (macOS/Windows);
+// on a case-sensitive fs the over-rejection risk (two dirs differing only in
+// case) is negligible for a security denylist.
+function normalizeRootForCompare(p: string): string {
+  return splitPathSegments(p).join("/").toLowerCase();
+}
+
+function isFilesystemRoot(rawRoot: string): boolean {
+  // POSIX root (`/`, `//`) or a bare Windows drive root (`C:\`, `C:/`, `C:`).
+  return /^[/\\]+$/u.test(rawRoot) || /^[A-Za-z]:[/\\]*$/u.test(rawRoot);
+}
+
+// True iff `descendant` is `ancestor` itself or lives strictly beneath it.
+// Both must already be `normalizeRootForCompare`-normalized.
+function isAncestorOrEqual(ancestor: string, descendant: string): boolean {
+  if (ancestor === "") return true; // "" == filesystem root
+  return descendant === ancestor || descendant.startsWith(`${ancestor}/`);
+}
+
+/**
+ * Classify a candidate grant root, or return null when it is safe to grant.
+ * Pure — takes the home/userData context explicitly so it stays testable.
+ */
+export function classifyForbiddenRoot(
+  root: string,
+  ctx: GrantRootContext,
+): ForbiddenRootReason | null {
+  if (isFilesystemRoot(root)) return "filesystem_root";
+
+  const norm = normalizeRootForCompare(root);
+  const home = normalizeRootForCompare(ctx.homeDir);
+  const userData = normalizeRootForCompare(ctx.userDataDir);
+
+  // The home directory itself, or any ancestor of it (`/Users`, `/home`, …):
+  // far too broad, and an ancestor exposes every user.
+  if (isAncestorOrEqual(norm, home)) return "home_directory";
+
+  // The app's userData tree in EITHER direction: granting it, an ancestor of
+  // it, or a folder inside it could expose the encrypted grant store and the
+  // auth-token vault.
+  if (isAncestorOrEqual(norm, userData) || isAncestorOrEqual(userData, norm)) {
+    return "user_data_directory";
+  }
+
+  // Any well-known credential directory anywhere along the path.
+  const segments = splitPathSegments(root).map((s) => s.toLowerCase());
+  if (segments.some((s) => SENSITIVE_ROOT_SEGMENTS.includes(s))) {
+    return "sensitive_directory";
+  }
+  return null;
+}
+
+/**
+ * Throw `FsError('permission_denied')` when `root` is not a safe folder to
+ * grant. The message carries only the machine reason category — never the
+ * offending host path, so a rejection cannot become a path oracle.
+ */
+export function assertGrantableRoot(root: string, ctx: GrantRootContext): void {
+  const reason = classifyForbiddenRoot(root, ctx);
+  if (reason !== null) {
+    throw new FsError(
+      "permission_denied",
+      `grant root is a sensitive location (${reason})`,
+    );
+  }
+}
+
+/**
+ * Filename policy for the in-grant content-read denylist. Matched against a
+ * file's LEAF NAME only (case-insensitive), so a secret file is unreadable at
+ * any depth. Documented as data so it is auditable and unit-testable.
+ */
+export const SENSITIVE_FILE_RULES = {
+  /** Suffixes denoting key / certificate / keystore material. */
+  suffixes: [
+    ".pem",
+    ".key",
+    ".p12",
+    ".pfx",
+    ".pkcs12",
+    ".keystore",
+    ".keychain",
+    ".asc",
+    ".ppk",
+  ],
+  /** Prefixes for conventional SSH private-key files. */
+  prefixes: ["id_rsa", "id_ed25519", "id_dsa", "id_ecdsa"],
+  /** Exact credential-store filenames. */
+  exact: ["credentials", ".netrc", ".pgpass", ".htpasswd", ".dockercfg"],
+} as const;
+
+/**
+ * True iff a file with this leaf name holds secret material and its CONTENTS
+ * must never be returned to the broker caller. Covers dotenv variants
+ * (`.env`, `.env.local`, …), SSH private keys, PEM/PKCS keystores, and common
+ * credential stores.
+ */
+export function isSensitiveFileName(name: string): boolean {
+  const lower = name.toLowerCase();
+  if (lower === ".env" || lower.startsWith(".env.")) return true;
+  if (SENSITIVE_FILE_RULES.exact.some((e) => e === lower)) return true;
+  if (SENSITIVE_FILE_RULES.prefixes.some((p) => lower.startsWith(p))) {
+    return true;
+  }
+  if (SENSITIVE_FILE_RULES.suffixes.some((s) => lower.endsWith(s))) {
+    return true;
+  }
+  return false;
+}

@@ -214,6 +214,46 @@ describe("HostFs — adversarial path rejection", () => {
   });
 });
 
+describe("HostFs — sensitive-file content policy (G2)", () => {
+  it("denies reading .ssh/id_rsa inside a granted folder", async () => {
+    mkdirSync(join(root, ".ssh"), { recursive: true });
+    writeFileSync(join(root, ".ssh", "id_rsa"), "PRIVATE KEY MATERIAL");
+    expect(await codeOf(fs.read(root, ".ssh/id_rsa"))).toBe(
+      "permission_denied",
+    );
+  });
+
+  it("denies reading a .env file", async () => {
+    writeFileSync(join(root, ".env"), "SECRET=hunter2\n");
+    writeFileSync(join(root, ".env.production"), "TOKEN=abc\n");
+    expect(await codeOf(fs.read(root, ".env"))).toBe("permission_denied");
+    expect(await codeOf(fs.read(root, ".env.production"))).toBe(
+      "permission_denied",
+    );
+  });
+
+  it("denies reading a *.pem private-key file", async () => {
+    writeFileSync(join(root, "server.pem"), "-----BEGIN PRIVATE KEY-----\n");
+    writeFileSync(join(root, "tls.key"), "-----BEGIN RSA PRIVATE KEY-----\n");
+    expect(await codeOf(fs.read(root, "server.pem"))).toBe("permission_denied");
+    expect(await codeOf(fs.read(root, "tls.key"))).toBe("permission_denied");
+  });
+
+  it("grep never returns the contents of a secret file", async () => {
+    writeFileSync(join(root, ".env"), "API_KEY=needle-secret-value\n");
+    const g = await fs.grep(root, "needle-secret-value");
+    // The literal lives ONLY in .env, which grep must skip — no hits, no leak.
+    expect(g.hits).toHaveLength(0);
+  });
+
+  it("still reads an ordinary file (policy does not over-block)", async () => {
+    const r = await fs.read(root, "file.txt");
+    expect(Buffer.from(r.base64, "base64").toString("utf-8")).toContain(
+      "hello world",
+    );
+  });
+});
+
 describe("HostFs — TOCTOU (swap between resolve and use)", () => {
   // The afterResolve seam swaps a real directory component for a symlink
   // pointing OUTSIDE the root AFTER path resolution/authorization but BEFORE

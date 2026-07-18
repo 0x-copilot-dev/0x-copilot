@@ -12,6 +12,7 @@ import {
   assertWithinRoot,
   FS_LIMITS,
   FsError,
+  isSensitiveFileName,
   normalizeVirtualPath,
 } from "./path-validation";
 import type {
@@ -172,6 +173,11 @@ export class HostFs {
     opts: ReadOptions = {},
   ): Promise<HostReadResult> {
     const target = await this.#resolve(root, virtualPath, "file");
+    // G2: never return the CONTENTS of a well-known secret file, regardless of
+    // grant mode. Denied here (a direct read); grep skips them separately.
+    if (isSensitiveFileName(basename(target.targetReal))) {
+      throw new FsError("permission_denied", "sensitive file is not readable");
+    }
     const { fh, fst } = await this.#openAtomic(target, false);
     try {
       const size = fst.size;
@@ -270,6 +276,8 @@ export class HostFs {
       deadline,
       (relPosix, realPath, isFile) => {
         if (!isFile) return "continue";
+        // G2: never scan the contents of a well-known secret file.
+        if (isSensitiveFileName(basename(realPath))) return "continue";
         if (pathFilter !== null && !pathFilter.test(relPosix))
           return "continue";
         candidates.push({ real: realPath, rel: relPosix });

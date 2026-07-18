@@ -172,19 +172,34 @@ describe("CapabilityBroker", () => {
     expect(res.status).toBe(413);
   });
 
-  it("lists grants for an authenticated caller", async () => {
+  it("lists grants as a path-free projection (no host root leaks)", async () => {
     const res = await fetch(`${baseUrl}/v1/grants/list`, {
       method: "POST",
       headers: H(),
       body: "{}",
     });
     expect(res.status).toBe(200);
-    const body = (await res.json()) as { grants: Grant[] };
+    const text = await res.text();
+    // G1: the canonical host root must NEVER appear in the response body.
+    expect(text).not.toContain("/data/private");
+    const body = JSON.parse(text) as {
+      grants: Array<Record<string, unknown>>;
+    };
     expect(body.grants).toHaveLength(1);
-    expect(body.grants[0].root).toBe("/data/private");
+    const g = body.grants[0];
+    expect(Object.keys(g).sort()).toEqual([
+      "grantId",
+      "label",
+      "mode",
+      "mount",
+      "status",
+    ]);
+    expect(g).not.toHaveProperty("root");
+    expect(typeof g.mount).toBe("string");
+    expect(g.mount).toMatch(/^mnt_/u);
   });
 
-  it("snapshots only active grants", async () => {
+  it("snapshots only active grants, path-free with a stable mount id", async () => {
     grants.grants = [
       makeGrant({ grantId: "a", status: "active" }),
       makeGrant({ grantId: "b", status: "revoked" }),
@@ -194,9 +209,30 @@ describe("CapabilityBroker", () => {
       headers: H(),
       body: "{}",
     });
-    const body = (await res.json()) as GrantSnapshot;
+    const text = await res.text();
+    expect(text).not.toContain("/data/private"); // G1: no host root
+    const body = JSON.parse(text) as {
+      grants: Array<Record<string, unknown>>;
+    };
     expect(body.grants).toHaveLength(1);
     expect(body.grants[0].grantId).toBe("a");
+    expect(body.grants[0]).not.toHaveProperty("root");
+    expect(body.grants[0].mount).toMatch(/^mnt_/u);
+  });
+
+  it("mount id is stable across list and snapshot for the same root", async () => {
+    grants.grants = [makeGrant({ grantId: "a", status: "active" })];
+    const list = (await fetch(`${baseUrl}/v1/grants/list`, {
+      method: "POST",
+      headers: H(),
+      body: "{}",
+    }).then((r) => r.json())) as { grants: Array<{ mount: string }> };
+    const snap = (await fetch(`${baseUrl}/v1/grants/snapshot`, {
+      method: "POST",
+      headers: H(),
+      body: "{}",
+    }).then((r) => r.json())) as { grants: Array<{ mount: string }> };
+    expect(list.grants[0].mount).toBe(snap.grants[0].mount);
   });
 
   it("returns 404 for an unknown route (authenticated)", async () => {
