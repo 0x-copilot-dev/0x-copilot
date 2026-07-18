@@ -15,10 +15,20 @@
 //   4. Proxies state changes (archive / activate / star / unstar /
 //      delete) back to the backend, optimistically driving the
 //      SSE-merged local list while the server confirms.
-//   5. Renders a host-side scaffolding today; the package-shipped
-//      `<ProjectsDestination>` already exists with its own data path —
-//      this route is the feature-binder that adds the membership-SSE
-//      auto-add behaviour the destination component does not own.
+//   5. Renders a host-side scaffold list (real names + archive / activate
+//      / star / delete affordances) for the un-focused view. The list
+//      still uses the scaffold — not `<ProjectsDestination>`'s card grid —
+//      because the card name is a `<ItemLink kind="project">` whose stub
+//      resolver renders the literal label "Project" (real per-project
+//      names await the resolver upgrade); the scaffold keeps names honest.
+//   6. Detail binder (PR-4.4b / FR-4.11–4.13): a row's "Open" affordance
+//      focuses a project and lazy-loads project + members + activity, then
+//      mounts `<ProjectDetailView>` through `<ProjectsDestination>`'s own
+//      `renderDetail` / `focusedProjectId` slot. The Files tab degrades to
+//      "coming soon" (the `files` prop is omitted — there is no
+//      `GET /v1/projects/{id}/files` endpoint yet, PRD §11). A chat row
+//      opens the Run cockpit via the injected `onOpenRun` callback; a file
+//      row (once wired) opens its artifact via `<ItemLink kind="library_file">`.
 //
 // Why a feature-level wrapper, not props on `<ProjectsDestination>`
 // today: the package component reads through its own Transport hook and
@@ -33,7 +43,22 @@ import {
   useRef,
   useState,
   type ReactElement,
+  type ReactNode,
 } from "react";
+
+import {
+  ProjectDetailView,
+  ProjectsDestination,
+  hasItemRefResolver,
+  registerItemRefResolver,
+  type ProjectDetail,
+  type ProjectDetailViewProps,
+} from "@0x-copilot/chat-surface";
+import type {
+  ConversationId,
+  LibraryFileId,
+  SectionResult,
+} from "@0x-copilot/api-types";
 
 import type { RequestIdentity } from "../../api/config";
 import {
@@ -41,6 +66,8 @@ import {
   archiveProject,
   deleteProject,
   fetchProject,
+  fetchProjectActivity,
+  fetchProjectMembers,
   fetchProjects,
   starProject,
   streamProjectEvents,
@@ -48,12 +75,39 @@ import {
 } from "../../api/projectsApi";
 import type {
   Project,
+  ProjectActivity as ProjectActivityRecord,
   ProjectId,
   ProjectListResponse,
+  ProjectMembership,
   ProjectStreamEnvelope,
   ProjectSummary,
 } from "../../api/_projects-stub";
 import { errorMessage } from "../../utils/errors";
+
+// The Members / Activity tab view-models aren't re-exported from the
+// chat-surface barrel; derive them from the exported props contract so the
+// adapters below stay type-checked against the component's expectations.
+type ProjectMember = NonNullable<ProjectDetailViewProps["members"]>[number];
+type ProjectActivityRow = NonNullable<
+  ProjectDetailViewProps["activity"]
+>[number];
+
+// FR-4.12 — a file row in the project detail opens its artifact via
+// `<ItemLink kind="library_file">`. The Library destination owns that
+// resolver and registers it as a side-effect of the chat-surface barrel
+// import above; this guarded fallback keeps file-row links resolvable even
+// if the Library index is ever tree-shaken out of the host bundle. (This
+// binder OMITS the `files` source — see the Files-tab note in
+// `renderProjectDetail` — so no file row renders yet, but the resolver
+// must be present for when `GET /v1/projects/{id}/files` lands.)
+if (!hasItemRefResolver("library_file")) {
+  registerItemRefResolver("library_file", async (id: LibraryFileId) => ({
+    label: "File",
+    icon: null,
+    route: { kind: "workspace", workspaceId: id as unknown as string },
+    breadcrumb: "Library",
+  }));
+}
 
 /** Reconnect backoff bounds (mirrors RoutinesRoute / sub-PRD §3.8 conventions). */
 const RECONNECT_BACKOFF_MIN_MS = 1_000;
@@ -61,6 +115,15 @@ const RECONNECT_BACKOFF_MAX_MS = 30_000;
 
 interface ProjectsRouteProps {
   readonly identity: RequestIdentity;
+  /**
+   * Open the Run cockpit for a conversation (FR-4.12). A chat row in the
+   * project detail funnels through this injected callback rather than an
+   * in-component navigation, keeping the route decoupled from the host's
+   * `AppRoute` union — the same seam as `ActivityRoute.onOpenRun` /
+   * `ChatsArchiveRoute.onOpenRun`. App-level dispatch wires it in PR-4.11;
+   * until then it defaults to a no-op.
+   */
+  readonly onOpenRun?: (conversationId: ConversationId) => void;
 }
 
 type ViewState =
@@ -70,6 +133,23 @@ type ViewState =
       readonly kind: "ready";
       readonly items: ReadonlyArray<ProjectSummary>;
       readonly highestSequenceNo: number;
+    };
+
+/**
+ * State for the focused-project detail pane. Loaded lazily when a row's
+ * "Open" affordance sets `focusedProjectId` (FR-4.11). `fetchProject` is
+ * fatal (its failure fails the pane); the members / activity reads are
+ * members-only and degrade to empty on 403 so the header + files
+ * "coming soon" still render for a non-member viewer.
+ */
+type DetailState =
+  | { readonly kind: "loading" }
+  | { readonly kind: "error"; readonly message: string }
+  | {
+      readonly kind: "ready";
+      readonly project: Project;
+      readonly members: ReadonlyArray<ProjectMembership>;
+      readonly activity: ReadonlyArray<ProjectActivityRecord>;
     };
 
 /**
@@ -191,10 +271,25 @@ function isSummaryShape(value: unknown): boolean {
   );
 }
 
-export function ProjectsRoute({ identity }: ProjectsRouteProps): ReactElement {
+export function ProjectsRoute({
+  identity,
+  onOpenRun,
+}: ProjectsRouteProps): ReactElement {
   const [state, setState] = useState<ViewState>({ kind: "loading" });
   const [reloadToken, setReloadToken] = useState(0);
   const [pendingError, setPendingError] = useState<string | null>(null);
+
+  // ---- Detail pane (FR-4.11) ---------------------------------------
+  //
+  // A row's "Open" affordance focuses a project; the pane then lazy-loads
+  // the project + members + activity and mounts `<ProjectDetailView>`
+  // inside `<ProjectsDestination>`'s `renderDetail` / `focusedProjectId`
+  // slot. `focusedProjectId === null` collapses back to the list.
+  const [focusedProjectId, setFocusedProjectId] = useState<ProjectId | null>(
+    null,
+  );
+  const [detail, setDetail] = useState<DetailState | null>(null);
+  const [detailReloadToken, setDetailReloadToken] = useState(0);
 
   // ---- Initial fetch ------------------------------------------------
   useEffect(() => {
@@ -332,6 +427,53 @@ export function ProjectsRoute({ identity }: ProjectsRouteProps): ReactElement {
     // stream.
   }, [identity, state.kind]);
 
+  // ---- Detail fetch (project + members + activity) -----------------
+  //
+  // Runs whenever a project is focused. `fetchProject` is the fatal read;
+  // members / activity are members-only and degrade to empty on failure
+  // (403 for a non-member viewer) so the pane still renders the header
+  // and the files "coming soon" state.
+  useEffect(() => {
+    if (focusedProjectId === null) {
+      setDetail(null);
+      return;
+    }
+    let cancelled = false;
+    setDetail({ kind: "loading" });
+
+    Promise.all([
+      fetchProject(identity, focusedProjectId),
+      fetchProjectMembers(identity, focusedProjectId).catch(() => ({
+        items: [] as ReadonlyArray<ProjectMembership>,
+        next_cursor: null,
+      })),
+      fetchProjectActivity(identity, focusedProjectId).catch(() => ({
+        items: [] as ReadonlyArray<ProjectActivityRecord>,
+        next_cursor: null,
+      })),
+    ])
+      .then(([project, membersResp, activityResp]) => {
+        if (cancelled) return;
+        setDetail({
+          kind: "ready",
+          project,
+          members: membersResp.items,
+          activity: activityResp.items,
+        });
+      })
+      .catch((error: unknown) => {
+        if (cancelled) return;
+        setDetail({
+          kind: "error",
+          message: errorMessage(error, "Could not load project."),
+        });
+      });
+
+    return () => {
+      cancelled = true;
+    };
+  }, [identity, focusedProjectId, detailReloadToken]);
+
   // ---- Mutation helpers (archive / activate / star / unstar / delete)
   //
   // Each helper replaces the local row optimistically when the server
@@ -461,20 +603,182 @@ export function ProjectsRoute({ identity }: ProjectsRouteProps): ReactElement {
 
   const items = state.kind === "ready" ? state.items : [];
 
-  // TODO(merge): the package-shipped `<ProjectsDestination>` already
-  // exists in `@0x-copilot/chat-surface`, but it owns its own
-  // data fetch through the Transport hook. Wiring it as the inner
-  // renderer requires the chat-surface component to accept controlled
-  // `projects` / `onArchive` / `onStar` props; until that lands, we
-  // render a minimal host-side list so the route is exercised and
-  // testable. Swap in `<ProjectsDestination items={items} ... />` once
-  // the package exposes a controlled variant.
+  // Cross-destination tab slot (FR-4.12). The host owns the per-tab list.
+  // For "chats" we surface the project's chat activity, each row opening
+  // its conversation in the Run cockpit via the injected `onOpenRun`
+  // callback (not an in-component navigation). The other four tabs
+  // (todos / inbox / library / routines) get a placeholder until the
+  // filtered destination views are wired app-side in PR-4.11.
+  const renderCrossDestinationTab = (
+    tab: "chats" | "todos" | "inbox" | "library" | "routines",
+    _projectId: ProjectId,
+    activity: ReadonlyArray<ProjectActivityRecord>,
+  ): ReactNode => {
+    if (tab !== "chats") {
+      return (
+        <div
+          data-testid={`projects-crosstab-${tab}`}
+          style={{ fontSize: 13, color: "var(--color-text-muted)" }}
+        >
+          Opens in the {tab} destination filtered to this project.
+        </div>
+      );
+    }
+    const chatRows = activity.filter((a) => a.ref.kind === "chat");
+    return (
+      <div data-testid="projects-crosstab-chats">
+        {chatRows.length === 0 ? (
+          <div
+            data-testid="projects-crosstab-chats-empty"
+            style={{ fontSize: 13, color: "var(--color-text-muted)" }}
+          >
+            No chats in this project yet.
+          </div>
+        ) : (
+          <ul style={{ listStyle: "none", margin: 0, padding: 0 }}>
+            {chatRows.map((a) => (
+              <li key={a.id} style={{ padding: "8px 0" }}>
+                <button
+                  type="button"
+                  data-testid="projects-detail-chat-row"
+                  data-conversation-id={a.ref.id}
+                  onClick={() => onOpenRun?.(a.ref.id as ConversationId)}
+                  style={{
+                    background: "transparent",
+                    border: "none",
+                    color: "var(--color-accent)",
+                    cursor: "pointer",
+                    padding: 0,
+                    fontSize: 13,
+                    textAlign: "left",
+                  }}
+                >
+                  {a.preview.length > 0 ? a.preview : a.action}
+                </button>
+              </li>
+            ))}
+          </ul>
+        )}
+      </div>
+    );
+  };
+
+  // Renders the focused project's detail into `<ProjectsDestination>`'s
+  // `renderDetail` slot. `files` is intentionally OMITTED so the Files tab
+  // degrades to its "coming soon" empty state (FR-4.11): there is no
+  // `GET /v1/projects/{id}/files` endpoint yet (PRD §11 files gap), and
+  // passing `files` at all — even `null` — would render a skeleton that
+  // never resolves. Wire a `SectionResult<ProjectFileRow[]>` here once the
+  // backend endpoint lands.
+  const renderProjectDetail = (onClose: () => void): ReactNode => {
+    const backButton = (
+      <button
+        type="button"
+        data-testid="projects-detail-back"
+        onClick={onClose}
+        style={{
+          background: "transparent",
+          border: "none",
+          color: "var(--color-accent)",
+          cursor: "pointer",
+          padding: "0 0 12px",
+          fontSize: 13,
+          fontWeight: 600,
+        }}
+      >
+        ← Projects
+      </button>
+    );
+
+    if (detail === null || detail.kind === "loading") {
+      return (
+        <div>
+          {backButton}
+          <div data-testid="projects-detail-loading" style={{ fontSize: 13 }}>
+            Loading project…
+          </div>
+        </div>
+      );
+    }
+    if (detail.kind === "error") {
+      return (
+        <div>
+          {backButton}
+          <div
+            role="alert"
+            data-testid="projects-detail-error"
+            style={{ fontSize: 13, color: "var(--color-text-muted)" }}
+          >
+            {detail.message}
+            <button
+              type="button"
+              data-testid="projects-detail-retry"
+              onClick={() => setDetailReloadToken((t) => t + 1)}
+              style={{
+                marginLeft: 12,
+                background: "transparent",
+                border: "1px solid var(--color-border-strong)",
+                borderRadius: 8,
+                color: "var(--color-accent)",
+                cursor: "pointer",
+                padding: "2px 10px",
+                fontSize: 13,
+              }}
+            >
+              Retry
+            </button>
+          </div>
+        </div>
+      );
+    }
+
+    const { project, members, activity } = detail;
+    const projectDetail: ProjectDetail = {
+      id: project.id,
+      name: project.name,
+      iconEmoji: project.icon_emoji,
+      colorHue: project.color_hue,
+      status: project.status,
+      ownerUserId: project.owner_user_id,
+      ownerName: ownerNameFor(project, members),
+      memberCount: project.counts.members,
+    };
+    // Only the owner can mutate membership / transfer ownership. Under the
+    // solo profile `viewer_role` is null → no management affordances.
+    const canManage = project.viewer_role === "owner";
+
+    return (
+      <div>
+        {backButton}
+        <ProjectDetailView
+          project={projectDetail}
+          members={members.map(toDetailMember)}
+          activity={activity.map(toDetailActivity)}
+          canManage={canManage}
+          renderCrossDestinationTab={(tab, projectId) =>
+            renderCrossDestinationTab(tab, projectId, activity)
+          }
+        />
+      </div>
+    );
+  };
+
+  // The controlled list result handed to `<ProjectsDestination>` so its
+  // ready-state detail slot renders (the loading / error branches never
+  // reach `renderDetail`). We only mount the destination once a project
+  // is focused; the un-focused list stays the host-side scaffold below.
+  const detailSection: SectionResult<ReadonlyArray<ProjectSummary>> = {
+    status: "ok",
+    data: items,
+  };
+
   return (
     <section
       aria-label="Projects destination"
       data-testid="projects-route"
       data-state={state.kind}
       data-item-count={items.length}
+      data-focused-project-id={focusedProjectId ?? undefined}
       style={{
         height: "100%",
         width: "100%",
@@ -499,7 +803,16 @@ export function ProjectsRoute({ identity }: ProjectsRouteProps): ReactElement {
           {pendingError}
         </div>
       )}
-      {state.kind === "loading" ? (
+      {focusedProjectId !== null ? (
+        // Detail pane — mounted through the destination's own
+        // `renderDetail` / `focusedProjectId` slot (FR-4.11).
+        <ProjectsDestination
+          items={detailSection}
+          focusedProjectId={focusedProjectId}
+          onCloseDetail={() => setFocusedProjectId(null)}
+          renderDetail={({ onClose }) => renderProjectDetail(onClose)}
+        />
+      ) : state.kind === "loading" ? (
         <div data-testid="projects-route-loading" style={{ fontSize: 13 }}>
           Loading projects…
         </div>
@@ -536,15 +849,54 @@ export function ProjectsRoute({ identity }: ProjectsRouteProps): ReactElement {
                   </span>
                   {project.name}
                 </div>
-                <div style={{ fontSize: 12, color: "var(--color-text-muted)" }}>
-                  {project.status}
-                  {project.counts.members > 0
-                    ? ` · ${project.counts.members} member${
-                        project.counts.members === 1 ? "" : "s"
-                      }`
-                    : null}
+                <div
+                  style={{
+                    fontSize: 12,
+                    color: "var(--color-text-muted)",
+                    display: "flex",
+                    alignItems: "center",
+                    gap: 8,
+                  }}
+                >
+                  <span>
+                    {project.status}
+                    {project.counts.members > 0
+                      ? ` · ${project.counts.members} member${
+                          project.counts.members === 1 ? "" : "s"
+                        }`
+                      : null}
+                  </span>
+                  {/* Member/role chip — FR-4.13: rendered ONLY when the
+                      viewer is a member (`viewer_role !== null`). Under the
+                      `single_user_desktop` profile the server returns a null
+                      `viewer_role`, so the chip is absent (not an empty
+                      strip). */}
+                  {project.viewer_role !== null ? (
+                    <span
+                      data-testid="projects-route-role-chip"
+                      data-role={project.viewer_role}
+                      style={{
+                        padding: "1px 8px",
+                        borderRadius: 999,
+                        border: "1px solid var(--color-border-strong)",
+                        fontSize: 11,
+                        fontWeight: 600,
+                        textTransform: "capitalize",
+                      }}
+                    >
+                      {project.viewer_role}
+                    </span>
+                  ) : null}
                 </div>
               </div>
+              <button
+                type="button"
+                data-testid="projects-route-open"
+                data-project-id={project.id}
+                onClick={() => setFocusedProjectId(project.id)}
+              >
+                Open
+              </button>
               <button
                 type="button"
                 data-testid="projects-route-star"
@@ -618,5 +970,47 @@ function removeById(prev: ViewState, id: ProjectId): ViewState {
   return {
     ...prev,
     items: prev.items.slice(0, idx).concat(prev.items.slice(idx + 1)),
+  };
+}
+
+// ===========================================================================
+// Detail-view adapters — map wire records → the chat-surface view models.
+// ===========================================================================
+
+/**
+ * Best-effort owner display name. `ProjectMembership` carries no profile
+ * fields in the current contract (ids + role + timestamps only), so the
+ * owner's user id is surfaced until the members endpoint returns richer
+ * profiles.
+ */
+function ownerNameFor(
+  project: Project,
+  members: ReadonlyArray<ProjectMembership>,
+): string {
+  const owner = members.find((m) => m.user_id === project.owner_user_id);
+  return owner?.user_id ?? project.owner_user_id;
+}
+
+/** `ProjectMembership` (wire) → `ProjectMember` (ProjectMembersTab view). */
+function toDetailMember(m: ProjectMembership): ProjectMember {
+  return {
+    userId: m.user_id,
+    // No display-name field on membership rows yet — fall back to the id.
+    displayName: m.user_id,
+    role: m.role,
+    joinedAt: m.added_at,
+  };
+}
+
+/** `ProjectActivity` (wire) → `ProjectActivity` (ProjectActivityTab view). */
+function toDetailActivity(a: ProjectActivityRecord): ProjectActivityRow {
+  return {
+    id: a.id,
+    ref: { kind: a.ref.kind, id: a.ref.id },
+    label: a.action.length > 0 ? a.action : a.preview,
+    summary: a.preview.length > 0 ? a.preview : undefined,
+    at: a.occurred_at,
+    actorName:
+      a.actor_display_name.length > 0 ? a.actor_display_name : undefined,
   };
 }
