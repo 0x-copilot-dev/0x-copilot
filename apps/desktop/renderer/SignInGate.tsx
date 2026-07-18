@@ -10,6 +10,7 @@ import {
 import { BrandMark } from "@0x-copilot/chat-surface";
 import {
   CHANNELS,
+  type AuthPosturePayload,
   type RendererSession,
   type WindowBridge,
 } from "@0x-copilot/chat-transport";
@@ -45,6 +46,26 @@ export function SignInGate(props: SignInGateProps): ReactNode {
   const { bridge, children } = props;
   const workspaceId = props.workspaceId ?? DEFAULT_WORKSPACE_ID;
   const [phase, setPhase] = useState<Phase>({ kind: "loading" });
+  // Production posture hides the dev-mint "Use locally" option. Defaults to
+  // false (dev) so a missing/legacy posture channel keeps all three options.
+  const [productionPosture, setProductionPosture] = useState(false);
+
+  useEffect(() => {
+    let cancelled = false;
+    // Best-effort, non-blocking: posture only toggles which options render.
+    bridge.ipc
+      .invoke<AuthPosturePayload | null>(CHANNELS.authGetPosture, {})
+      .then((posture) => {
+        if (cancelled) return;
+        setProductionPosture(posture?.productionPosture === true);
+      })
+      .catch(() => {
+        // Fall back to dev posture (show all options) on any failure.
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [bridge]);
 
   useEffect(() => {
     let cancelled = false;
@@ -127,6 +148,7 @@ export function SignInGate(props: SignInGateProps): ReactNode {
               onWallet={signInWithWallet}
               onGoogle={signInWithGoogle}
               onLocal={signInLocally}
+              showLocal={!productionPosture}
             />
           </SignInChrome>
         );
@@ -147,6 +169,7 @@ export function SignInGate(props: SignInGateProps): ReactNode {
     }
   }, [
     phase,
+    productionPosture,
     signInWithWallet,
     signInWithGoogle,
     signInLocally,
@@ -165,10 +188,13 @@ function PickView({
   onWallet,
   onGoogle,
   onLocal,
+  showLocal,
 }: {
   onWallet(): void;
   onGoogle(): void;
   onLocal(): void;
+  /** Dev-mint local sign-in is offered only outside production posture. */
+  showLocal: boolean;
 }): ReactElement {
   return (
     <>
@@ -199,17 +225,21 @@ function PickView({
           onClick={onGoogle}
         />
 
-        <div className="loginx-divider" role="separator">
-          <span>or</span>
-        </div>
+        {showLocal && (
+          <>
+            <div className="loginx-divider" role="separator">
+              <span>or</span>
+            </div>
 
-        <OptionButton
-          testId="sign-in-button"
-          icon={<ChipGlyph />}
-          label="Use locally, no account"
-          subtitle="everything stays on this device"
-          onClick={onLocal}
-        />
+            <OptionButton
+              testId="sign-in-button"
+              icon={<ChipGlyph />}
+              label="Use locally, no account"
+              subtitle="everything stays on this device"
+              onClick={onLocal}
+            />
+          </>
+        )}
       </div>
 
       <footer className="loginx-foot">

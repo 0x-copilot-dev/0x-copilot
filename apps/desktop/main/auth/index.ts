@@ -235,10 +235,51 @@ export class AuthService {
     }
   }
 
+  // Boot-time session lookup. Fails CLOSED: a persisted session is returned
+  // only after it is validated against the facade. A stale/rejected bearer
+  // (e.g. the leftover "Sarah Chen" dev session on a now-production install)
+  // is dropped and null is returned so SignInGate shows the sign-in screen —
+  // rather than loading a dead identity that every subsequent API call 401s.
   async getSession(workspaceId: string): Promise<RendererSession | null> {
     const session = await this.#loadSession(workspaceId);
     if (session === null) return null;
+    // Locally-known expiry: fail closed without a network round-trip.
+    if (session.expiresAt <= this.#clock()) {
+      await this.signOut(workspaceId);
+      return null;
+    }
+    const verdict = await this.#probePersistedSession(session);
+    if (verdict === "rejected") {
+      await this.signOut(workspaceId);
+      return null;
+    }
+    // "valid" or "unknown" (facade unreachable / non-401 error): keep the
+    // still-unexpired session. The live transport's 401 interceptor handles a
+    // later rejection; a transient network blip must not nuke a good session.
     return this.#toRenderer(workspaceId, session);
+  }
+
+  // Probe the facade with the persisted bearer. Returns "rejected" ONLY on a
+  // definitive 401/403 (drop the session), "valid" on 2xx, and "unknown" for
+  // anything inconclusive (network error, 5xx) so the caller keeps the session.
+  async #probePersistedSession(
+    session: AuthSession,
+  ): Promise<"valid" | "rejected" | "unknown"> {
+    const base = this.#config.facadeBaseUrl.endsWith("/")
+      ? this.#config.facadeBaseUrl.slice(0, -1)
+      : this.#config.facadeBaseUrl;
+    const fetchImpl = this.#config.fetch ?? globalThis.fetch.bind(globalThis);
+    try {
+      const response = await fetchImpl(`${base}/v1/me/profile`, {
+        method: "GET",
+        headers: { authorization: `Bearer ${session.accessToken}` },
+      });
+      if (response.status === 401 || response.status === 403) return "rejected";
+      if (response.ok) return "valid";
+      return "unknown";
+    } catch {
+      return "unknown";
+    }
   }
 
   async refresh(workspaceId: string): Promise<RendererSession | null> {

@@ -52,12 +52,7 @@ import {
   type RegistryHostDeps,
   type RendererDispatcher,
 } from "./adapters/registry-host";
-import {
-  AuthService,
-  createFileAuthAuditLog,
-  type AuthAuditLog,
-  type AuthMode,
-} from "./auth";
+import { AuthService, createFileAuthAuditLog, type AuthAuditLog } from "./auth";
 import {
   registerAppProtocolHandler,
   registerAppProtocolPrivilege,
@@ -71,6 +66,7 @@ import { ConnectorService } from "./connectors/connector-service";
 import { startCrashReporter } from "./crash-reporter";
 import { registerDeepLinks } from "./deep-links";
 import { registerIpcHandlers } from "./ipc/handlers";
+import { resolveAuthPosture } from "./posture";
 import { installSingleInstance, shouldSupervise } from "./services/boot-mode";
 import { createDesktopSupervisor } from "./services/desktop-supervisor";
 import type { ServiceSupervisor } from "./services/supervisor";
@@ -357,6 +353,9 @@ function wireTransportAndIpc(facadeUrl: string | undefined): void {
       signOut: (workspaceId) => authService.signOut(workspaceId),
       getSession: (workspaceId) => authService.getSession(workspaceId),
       refresh: (workspaceId) => authService.refresh(workspaceId),
+      getPosture: () => ({
+        productionPosture: authService.isProductionPosture(),
+      }),
     },
     tier2: {
       onBoundaryError: (payload) => {
@@ -454,14 +453,24 @@ interface ActiveAuthService {
   getBearer(workspaceId: string): Promise<string | null>;
   getBearerCachedSync(workspaceId: string): string | null;
   activeWorkspace(): string | null;
+  /** Real install (no dev-mint, fail closed). Surfaced to the renderer. */
+  isProductionPosture(): boolean;
 }
 
 function buildAuthService(
   authAudit: AuthAuditLog,
   facadeUrl: string | undefined,
 ): ActiveAuthService {
-  const mode: AuthMode =
-    process.env.COPILOT_AUTH_MODE === "oidc" ? "oidc" : "dev-mint";
+  // Production posture (real install, incl. CLI launch where app.isPackaged is
+  // false) forces mode away from "dev-mint" so OidcClient can never mint the
+  // "Sarah Chen" dev persona. Wallet + Google flows are mode-independent and
+  // stay available. The dev-mint local sign-in is additionally hard-blocked in
+  // the signIn wrapper below (defense in depth).
+  const { productionPosture, mode } = resolveAuthPosture({
+    isPackaged: app.isPackaged,
+    env: process.env,
+  });
+  const explicitOidc = process.env.COPILOT_AUTH_MODE === "oidc";
   const facadeBaseUrl =
     facadeUrl ?? process.env.COPILOT_FACADE_URL ?? "http://127.0.0.1:8200";
   const devPersonaSlug = process.env.COPILOT_DEV_PERSONA ?? "sarah_acme";
@@ -470,7 +479,11 @@ function buildAuthService(
     process.env.COPILOT_AUTH_MODE === "dev-mint";
 
   let oidcConfig: ConstructorParameters<typeof AuthService>[0]["oidc"];
-  if (mode === "oidc") {
+  // Only validate/build the OIDC provider config when a real OIDC provider was
+  // explicitly requested. In production posture `mode` is "oidc" without any
+  // provider env — that is intentional (it only disables dev-mint); signIn()
+  // and refresh() then fail closed instead of minting a dev persona.
+  if (explicitOidc) {
     const issuer = process.env.COPILOT_OIDC_ISSUER ?? "";
     const clientId = process.env.COPILOT_OIDC_CLIENT_ID ?? "";
     const authEp =
@@ -507,7 +520,19 @@ function buildAuthService(
   });
 
   return {
-    signIn: (workspaceId) => service.signIn(workspaceId),
+    // Dev-mint local sign-in ("Use locally, no account"). Hard-blocked in
+    // production posture so a real install can never seed the Sarah Chen dev
+    // persona — the renderer also hides the option, this is defense in depth.
+    signIn: (workspaceId) => {
+      if (productionPosture) {
+        return Promise.reject(
+          new Error(
+            "local dev sign-in is disabled in production — sign in with a wallet or Google",
+          ),
+        );
+      }
+      return service.signIn(workspaceId);
+    },
     signInWithGoogle: (workspaceId) => service.signInWithGoogle(workspaceId),
     signInWithWallet: (workspaceId) => service.signInWithWallet(workspaceId),
     signOut: (workspaceId) => service.signOut(workspaceId),
@@ -517,6 +542,7 @@ function buildAuthService(
     getBearerCachedSync: (workspaceId) =>
       service.getBearerCachedSync(workspaceId),
     activeWorkspace: () => service.activeWorkspace(),
+    isProductionPosture: () => productionPosture,
   };
 }
 
