@@ -28,6 +28,89 @@
 > Summarization is **store-agnostic** — it runs above the adapter on the
 > preview/inline text and does not depend on where the bytes live.
 
+## Delivered (light) vs Deferred — implementation status
+
+This PRD was written ahead of the code. What shipped is the **offload wiring**
+over AC2's object store — reusing the existing `ContextPayloadManager` /
+`OffloadWriter` seam — plus the Deep Agents `CompositeBackend` routing and a
+durable checkpointer. The typed artifact-store layer (`ArtifactRefV1`,
+`ArtifactStorePort`, commit coordinator, retention/GC, sidecars, gzip/MIME
+policy) was intentionally **not** built. This section is the authoritative
+reconciliation; where a later section describes that layer, read it as design
+intent, not shipped behavior.
+
+### Delivered (light) — what shipped
+
+- **Write half** (`runtime_adapters/file/offload.py`): `FileOffloadWriter`
+  implements the existing `OffloadWriter = Callable[[str], str]` alias — it
+  UTF-8-encodes the content, `put`s it once in AC2's `FileObjectStore`, and
+  returns a `/large_tool_results/<sha256>` reference (with a ≤200-char inline
+  preview stored on the `ObjectRef`).
+- **Offload decision** (`runtime_worker/tool_result_offload.py`):
+  `ToolResultOffloader` runs oversized `TOOL_RESULT` output through the shared
+  **synchronous** `ContextPayloadManager.prepare_tool_output(...)` with a
+  `TokenBudgetPolicy`. On `OFFLOAD` it rewrites the event payload — `output`/
+  `preview` become the bounded preview and `output_ref` becomes the reference.
+  The threshold actually used is **~8,000 estimated tokens**
+  (`INLINE_TOKEN_BUDGET`), not the spec's 32 KiB-byte + 8,192-token pair.
+- **Read half** (`runtime_adapters/file/large_tool_result_backend.py`):
+  `FileLargeToolResultBackend` implements the pinned Deep Agents
+  `BackendProtocol` read-only — it resolves `/large_tool_results/<sha256>` back
+  out of the object store (verify-on-read); `write`/`edit` are refused;
+  `ls`/`glob`/`grep` return empty (the content store is not enumerable).
+- **`/subagents/` file-native reader**
+  (`runtime_adapters/file/subagent_trace_backend.py`):
+  `FileSubagentTraceBackend` serves the canonical per-subagent JSONL.
+- **CompositeBackend routing** (`agent_runtime/execution/factory.py`
+  `_composed_deep_backend`): registers `/subagents/`, `/drafts/`, and
+  `/large_tool_results/` over a `StateBackend` default; unrouted on non-desktop
+  backends so those paths stay on `StateBackend` exactly as before.
+- **Durable checkpointer** (`agent_runtime/execution/deep_agent_builder.py`): an
+  `AsyncSqliteSaver` at `<root>/index/checkpoints.sqlite3` on the desktop file
+  store; `InMemorySaver` elsewhere.
+- **Construction/gating** (`runtime_worker/handlers/run.py`): builds
+  `ToolResultOffloader(FileOffloadWriter(store.object_store))`,
+  `FileSubagentTraceBackend`, and `FileLargeToolResultBackend` only when the
+  store exposes an object store (the `file` backend); postgres/in-memory/web keep
+  emitting full inline output.
+- **Reuse of AC2's object store** for the durable bytes — no second byte store
+  was built (a stated goal).
+
+### Deferred / not in the light build
+
+Every subsection below describing this layer is design intent, not shipped code:
+
+- **`ArtifactRefV1`** typed frozen ref (`version`/`artifact_id`/`stored_size`/
+  `compression`/`kind`/…). The delivered reference is AC2's minimal `ObjectRef`
+  (`sha256`/`size`/`media_type`/`preview`); the model-facing pointer is a plain
+  `/large_tool_results/<sha256>` string. `artifact://sha256/<digest>` URIs are
+  not used.
+- **`ArtifactStorePort` / `ArtifactReferenceSinkPort` / `ArtifactCommitCoordinator`**,
+  the `ArtifactWriteRequestV1`/`ArtifactUseRecordV1`/`ContextPayloadRecordV1`
+  contracts, and the async `ContextPayloadOffloadPort` /
+  `aprepare_tool_output()` seam. The delivered path uses the pre-existing
+  **synchronous** `prepare_tool_output` + `OffloadWriter`.
+- **`runtime_context_payloads`-equivalent canonical owner records** and the
+  "object first, canonical owner record second, then acknowledge" commit
+  ordering. The offloaded bytes are referenced inline in the tool-result event's
+  `output_ref`; there is no separate durable owner/use record, reachability
+  index, or refcount.
+- **Retention classes, legal hold, garbage collection, quarantine, orphan grace,
+  startup repair/scrub, and quota/free-space admission.** None built.
+- **The `.meta.json` decoding sidecar** and the deterministic **`none`/`gzip`
+  compression + MIME-sniffing + preview-redaction policy.** Not built — bytes are
+  stored verbatim (UTF-8), the object layout is AC2's single-shard
+  `objects/sha256/<hh>/<hash>`, and the preview is a raw 200-char prefix.
+- **`packages/api-types/src/artifacts.ts`** and the broker artifact-ref fixtures.
+- **The proposed `agent_runtime/persistence/artifacts/*` and
+  `runtime_adapters/file/artifacts.py` / `artifact_index.py` / `artifact_repair.py`
+  files, and the artifact GC worker job.** Not created.
+- **The full crash / corruption / adversarial / retention / platform test matrix
+  and the `artifact.*` structured events/metrics/audit.** Not built.
+- Per-kind handling of **attachments, screenshots, downloads, and LangGraph/Monty
+  checkpoints through one artifact port** — only tool-result/context offload and
+  the subagent-trace/large-tool-result read routes ship.
+
 ## Problem and why now
 
 The repository already names most of the concepts needed for large payloads, but
@@ -65,29 +148,40 @@ AC4 is the wiring and policy layer — offload decision, reference model,
 
 ## Goals
 
+### Delivered (light)
+
 - Reuse AC2's content-addressed object store for durable large bytes; do not
-  build a second byte store. Each logical byte sequence is stored once per
-  workspace under its SHA-256 digest by AC2's `ObjectStore`.
-- Freeze `ArtifactRefV1` exactly as AC1 defines it and use it for every durable
-  large-payload reference.
-- Hash and size the original logical bytes, never the compressed representation.
-- Use one deterministic `none`/`gzip` storage policy with MIME validation and
-  bounded, redacted UTF-8 previews.
-- Delegate byte commit (same-filesystem temporary files, `fsync`, atomic rename,
-  directory `fsync`, and post-write verification) to AC2's `ObjectStore`; AC4
-  supplies the encoded bytes and consumes the verified reference.
-- Wire production context/tool-result offload to
-  `runtime_context_payloads` semantics with `storage_backend=local_file` and an
-  `artifact://sha256/<digest>` URI.
-- Add an artifact-backed `/large_tool_results/` Deep Agents route while
-  preserving the existing event visibility and frontend behavior.
+  build a second byte store. Each logical byte sequence is stored once under its
+  SHA-256 digest by AC2's `FileObjectStore`.
+- Delegate byte commit (same-filesystem temp file, `fsync`, atomic rename,
+  verify-on-read) to AC2's `FileObjectStore`; the offload writer supplies bytes
+  and consumes the verified reference.
+- Wire production context/tool-result offload through the existing
+  `ContextPayloadManager` / `OffloadWriter` seam so oversized tool output is
+  parked in the object store with a bounded preview and a
+  `/large_tool_results/<sha256>` reference.
+- Add a durable object-backed `/large_tool_results/` Deep Agents route
+  (read-only) and a file-native `/subagents/` route behind the existing
+  `CompositeBackend`, preserving event visibility and frontend behavior.
+- Provide a durable LangGraph checkpointer (`AsyncSqliteSaver`) on the desktop
+  file store.
+- Preserve current web/Postgres selection and public API/SSE semantics (all
+  wiring is gated to the `file` backend).
+
+### Deferred / not in the light build
+
+- Freeze and use `ArtifactRefV1` for every durable large-payload reference (the
+  delivered reference is AC2's minimal `ObjectRef`).
+- One deterministic `none`/`gzip` storage policy with MIME validation and
+  bounded, **redacted** previews, plus the `.meta.json` decoding sidecar.
+- Wire offload to `runtime_context_payloads`-equivalent canonical owner records
+  with `storage_backend=local_file` and `artifact://sha256/<digest>` URIs.
 - Store attachments, screenshots, downloads, LangGraph/Monty checkpoints,
   remote-transfer payloads, and AC5 file-history preimages through one port.
 - Derive reachability and reference counts from canonical owner records; make
   every SQLite artifact table disposable and rebuildable.
 - Define deterministic quota, retention, deletion, legal-hold, garbage
   collection, quarantine, repair, and corruption behavior.
-- Preserve current web/Postgres selection and public API/SSE semantics.
 
 ## Non-goals
 
@@ -283,6 +377,14 @@ User-root I/O remains exclusively behind Electron main and the AC5 broker.
 
 ## Canonical bytes, thresholds, MIME, preview, and limits
 
+> **Deferred / not in the light build.** The delivered offload uses a **single
+> ~8,000-token threshold** (`ToolResultOffloader.INLINE_TOKEN_BUDGET`) on
+> tool-result output only, via the shared `ContextPayloadManager`. The byte/token
+> threshold pairs, per-kind hard ceilings (512 MiB, etc.), the deterministic
+> `none`/`gzip` compression policy, MIME sniffing, logical-name normalization, and
+> redacted-preview policy in this section are **design intent** — the shipped code
+> stores UTF-8 bytes verbatim with a raw 200-char preview.
+
 ### Logical-byte rules
 
 The caller supplies a byte stream plus a content representation:
@@ -371,6 +473,14 @@ decompression beyond `logical_size`, and unknown compression values.
   restore, export, checksum verification, or legal-hold evidence.
 
 ## Strict typed contracts
+
+> **Deferred / not in the light build.** None of these contracts ship.
+> `ArtifactRefV1`, `ArtifactOwnerV1`, `ArtifactWriteRequestV1`,
+> `ArtifactUseRecordV1`, `ContextPayloadRecordV1`, the `ArtifactStorePort` /
+> `ArtifactReferenceSinkPort` ports, and the stable `artifact_*` error vocabulary
+> are design intent. The delivered reference is AC2's minimal `ObjectRef`
+> (`sha256`/`size`/`media_type`/`preview`), and `packages/api-types/src/artifacts.ts`
+> does not exist.
 
 AC1's `ArtifactRefV1` is normative. AC4 does not add, remove, rename, loosen, or
 reinterpret a field:
@@ -591,6 +701,12 @@ exception, or cross-workspace existence signal.
 
 ### Production offload path
 
+> **Delivered via the existing synchronous seam.** The shipped path uses
+> `ContextPayloadManager.prepare_tool_output(...)` (synchronous) with an
+> `OffloadWriter`, wired by `ToolResultOffloader`. The async
+> `ContextPayloadOffloadPort` / `aprepare_tool_output()` seam and the
+> owner-record integration below are **deferred**.
+
 AC4 adds an async production seam:
 
 ```python
@@ -651,6 +767,13 @@ The route is inserted alongside, not instead of, `/drafts/` and
 contract tests are mandatory.
 
 ## Persistence, atomicity, and recovery
+
+> **Mostly deferred.** What ships is AC2's atomic object `put`/verify-on-read
+> (temp → `fsync` → `os.replace` → readback). The `.meta.json` decoding sidecar,
+> `quarantine/` tree, the artifact SQLite projections
+> (`artifact_objects`/`artifact_references`/`artifact_aliases`/`artifact_leases`/
+> `artifact_gc_queue`), startup repair/scrub, and idempotency-key handling in this
+> section are **design intent**.
 
 ### Object layout (AC2-owned)
 
@@ -770,6 +893,11 @@ deduplicate by digest. It must then append exactly one owner record using that
 record's own idempotency key.
 
 ## Retention, deletion, GC, legal hold, and export
+
+> **Deferred / not in the light build.** No retention classes, deletion cascade
+> over artifact references, legal hold, garbage collection, quarantine, or
+> export/backup for artifacts are implemented. Offloaded objects are written and
+> read; nothing reclaims or expires them yet. This entire section is design intent.
 
 ### Reference retention
 
@@ -1087,99 +1215,95 @@ platform atomicity.
 
 ## Acceptance criteria
 
-- `ArtifactRefV1` is byte/field/semantic-compatible with AC1, including
-  `none | gzip` and logical-byte SHA-256.
-- Identical logical bytes deduplicate within one workspace and never across
-  workspaces.
-- Every committed object follows temp + fsync + atomic rename + directory
-  fsync + post-write full verification.
-- Compression, MIME, previews, inline thresholds, per-kind limits, and quota
-  behavior match this PRD exactly.
-- Production tool/MCP offload writes a durable object and a canonical
-  `runtime_context_payloads`-equivalent owner record before acknowledgement.
-- `/large_tool_results/` resolves through `ArtifactBackend` behind the current
-  `CompositeBackend`; existing `/drafts/`, `/subagents/`, and default routes
-  retain behavior.
-- Offloaded bytes are absent from durable JSONL payload bodies, SQLite blobs,
-  Postgres context-payload blobs, Deep Agents state, and duplicate feature
-  stores.
+### Delivered (light) — met
+
+- Offload reuses AC2's object store; identical bytes deduplicate by digest and no
+  second byte store is built.
+- Every committed object follows AC2's temp + `fsync` + atomic rename +
+  verify-on-read path; a missing/corrupt object raises `ObjectStoreError` rather
+  than serving unverified bytes.
+- Production tool-result offload parks oversized output in the object store and
+  rewrites the event to a bounded preview + `/large_tool_results/<sha256>`
+  reference through the shared `ContextPayloadManager` seam.
+- `/large_tool_results/` resolves through `FileLargeToolResultBackend` behind the
+  current `CompositeBackend`; existing `/drafts/`, `/subagents/`, and default
+  routes retain behavior.
+- Offloaded bytes are not duplicated inline in the durable event payload (the
+  `output` is replaced by the preview).
+- A durable `AsyncSqliteSaver` checkpointer replaces `InMemorySaver` on the
+  desktop file store.
+- Desktop-local offload wiring is unavailable outside the `file` backend;
+  web/Postgres APIs, migrations, SSE, and UI remain unchanged.
+
+### Deferred / not in the light build
+
+- `ArtifactRefV1` field/semantic compatibility, `none | gzip`, and logical-byte
+  hashing distinct from stored bytes.
+- Compression, MIME, redacted previews, inline byte/token threshold pairs, and
+  per-kind limit/quota behavior matching this PRD.
+- A canonical `runtime_context_payloads`-equivalent owner record written before
+  acknowledgement (delivered offload references the object inline in the event).
 - Attachments, screenshots, downloads, checkpoints, transfers, drafts, and
-  file-history preimages use the same port/reference/object format.
-- SQLite deletion/corruption followed by rebuild restores exact reachability,
-  aliases, refcounts, deadlines, holds, and object states.
-- Missing/corrupt objects fail closed, remain diagnostically visible, and never
-  serve unverified bytes.
-- Retention, conversation/workspace deletion, legal hold, open leases, orphan
-  grace, GC, quarantine, and export pass the full matrix.
-- Desktop-local artifact code is unavailable outside
-  `single_user_desktop`; web/Postgres APIs, migrations, SSE, and UI remain
-  unchanged.
+  file-history preimages using one port/reference/object format.
+- SQLite artifact projections and their rebuild; reachability/refcounts/aliases/
+  leases/GC queue.
+- Retention, conversation/workspace deletion cascade, legal hold, open leases,
+  orphan grace, GC, quarantine, and export.
 
 ## Definition of done
 
-- AC1 is implemented and AC4 is accepted.
-- A component-local implementation spec pins the exact metadata schema, gzip
-  vectors, filesystem calls, SQLite schema, limits, and benchmark budgets.
-- Artifact contracts, ports, desktop-file adapter, commit coordinator,
-  context/result shaper, Deep Agents backend, reference projection, repair,
-  scrub, GC, events, metrics, and audit are implemented.
-- Unit, port-conformance, integration, crash, corruption, adversarial,
-  retention, load, macOS, Windows, and no-web-impact suites pass.
-- A disk-full recovery drill, SQLite rebuild drill, checksum quarantine drill,
-  legal-hold deletion drill, and data-preserving backout drill are attached as
-  evidence.
-- `services/ai-backend/docs/features/artifacts.md` documents limits, errors,
-  retention, repair, export, and operator/user diagnostics.
-- Desktop support documentation states the plaintext-at-rest boundary and
-  never claims KMS, immutable audit, secure erase, or SIEM completeness.
-- Repository scans prove artifact bytes have one durable desktop owner and no
-  physical path or secret leaks into events/logs/renderer payloads.
+### Delivered (light)
+
+- Offload write/read wiring, the `/large_tool_results/` + `/subagents/`
+  CompositeBackend routes, and the `AsyncSqliteSaver` checkpointer are
+  implemented and gated to the desktop `file` backend.
+- Offload behavior is covered by
+  `services/ai-backend/tests/unit/runtime_adapters/file/test_offload_and_composite_reads.py`.
+
+### Deferred / not in the light build
+
+- The component-local implementation spec pinning metadata schema, gzip vectors,
+  filesystem calls, SQLite schema, limits, and benchmark budgets.
+- Artifact contracts, ports, desktop-file artifact adapter, commit coordinator,
+  reference projection, repair, scrub, GC, events, metrics, and audit.
+- The unit/port-conformance/integration/crash/corruption/adversarial/retention/
+  load/macOS/Windows suites and the recovery/rebuild/quarantine/legal-hold/backout
+  drills.
+- `services/ai-backend/docs/features/artifacts.md` and the desktop support docs.
+- Repository scans proving one durable owner and no physical-path/secret leaks.
 
 ## Critical current and proposed files
 
-### Current evidence and integration points
+### Delivered — actual files
 
-- `docs/plan/desktop/agent-capabilities/01-ac1-desktop-capability-foundation.md`
-- `services/ai-backend/src/agent_runtime/context/memory/contracts.py`
-- `services/ai-backend/src/agent_runtime/context/memory/summarization.py`
-- `services/ai-backend/src/agent_runtime/execution/factory.py`
-- `services/ai-backend/src/agent_runtime/execution/contracts.py`
-- `services/ai-backend/src/agent_runtime/execution/deep_agent_builder.py`
-- `services/ai-backend/src/agent_runtime/capabilities/mcp/middleware/call_tool.py`
-- `services/ai-backend/src/runtime_worker/stream_events.py`
-- `services/ai-backend/src/runtime_api/schemas/runs.py`
-- `services/ai-backend/src/runtime_api/schemas/events.py`
-- `services/ai-backend/src/agent_runtime/api/events.py`
-- `services/ai-backend/src/runtime_adapters/postgres/runtime_api_store.py`
-- `services/ai-backend/migrations/0001_initial_runtime_persistence.sql`
-- `services/ai-backend/migrations/0011_field_encryption.sql`
-- `apps/frontend/src/features/chat/chatModel/largeArtifact.ts`
-- `packages/api-types/src/index.ts`
+Offload wiring (`services/ai-backend/src/`):
 
-### Proposed implementation files
+- `runtime_adapters/file/offload.py` — `FileOffloadWriter` (write half).
+- `runtime_adapters/file/large_tool_result_backend.py` — `FileLargeToolResultBackend` (read half).
+- `runtime_adapters/file/subagent_trace_backend.py` — `FileSubagentTraceBackend` (`/subagents/` reader).
+- `runtime_adapters/file/object_store.py` — AC2 `FileObjectStore` + `ObjectRef` (the durable bytes).
+- `runtime_worker/tool_result_offload.py` — `ToolResultOffloader` (~8k-token offload decision).
+- `runtime_worker/handlers/run.py` — constructs the offloader/backends, gated to the `file` backend.
+- `agent_runtime/execution/factory.py` — `_composed_deep_backend` CompositeBackend routing.
+- `agent_runtime/execution/deep_agent_builder.py` — `AsyncSqliteSaver` checkpointer.
+- `agent_runtime/context/memory/summarization.py` / `contracts.py` — the reused `ContextPayloadManager` / `OffloadWriter` / `ManagedContextPayload` seam.
 
-- `services/ai-backend/src/agent_runtime/persistence/artifacts/__init__.py`
-- `services/ai-backend/src/agent_runtime/persistence/artifacts/contracts.py`
-- `services/ai-backend/src/agent_runtime/persistence/artifacts/ports.py`
-- `services/ai-backend/src/agent_runtime/persistence/artifacts/service.py`
-- `services/ai-backend/src/agent_runtime/persistence/artifacts/retention.py`
-- `services/ai-backend/src/agent_runtime/capabilities/backends/artifact_backend.py`
-- `services/ai-backend/src/agent_runtime/context/memory/artifact_payloads.py`
-- `services/ai-backend/src/runtime_adapters/file/artifacts.py` (facade over AC2 `objects.py`)
-- `services/ai-backend/src/runtime_adapters/file/artifact_index.py`
-- `services/ai-backend/src/runtime_adapters/file/artifact_repair.py`
-- `services/ai-backend/src/runtime_worker/jobs/artifact_gc.py`
-- `services/ai-backend/tests/contract/artifacts/test_artifact_store_port.py`
-- `services/ai-backend/tests/contract/artifacts/test_artifact_ref_fixtures.py`
-- `services/ai-backend/tests/unit/agent_runtime/context/test_artifact_payloads.py`
-- `services/ai-backend/tests/unit/agent_runtime/capabilities/backends/test_artifact_backend.py`
-- `services/ai-backend/tests/integration/runtime_adapters/file/test_artifact_crash_recovery.py`
-- `services/ai-backend/tests/integration/runtime_worker/test_artifact_offload.py`
-- `packages/api-types/src/artifacts.ts`
-- `docs/contracts/desktop-broker/v1/artifact-ref-valid.json`
-- `docs/contracts/desktop-broker/v1/artifact-ref-invalid.json`
-- `services/ai-backend/docs/features/artifacts.md`
-- `services/ai-backend/docs/specs/desktop-agent-capabilities/ac4-artifact-store.md`
+Tests:
+
+- `services/ai-backend/tests/unit/runtime_adapters/file/test_offload_and_composite_reads.py`.
+
+### Deferred / proposed (not built)
+
+The typed artifact layer — none of these exist:
+
+- `agent_runtime/persistence/artifacts/{__init__,contracts,ports,service,retention}.py`
+- `agent_runtime/capabilities/backends/artifact_backend.py`
+- `agent_runtime/context/memory/artifact_payloads.py`
+- `runtime_adapters/file/{artifacts,artifact_index,artifact_repair}.py`
+- `runtime_worker/jobs/artifact_gc.py`
+- `tests/contract/artifacts/*`, `tests/integration/runtime_adapters/file/test_artifact_crash_recovery.py`, `tests/integration/runtime_worker/test_artifact_offload.py`
+- `packages/api-types/src/artifacts.ts`, `docs/contracts/desktop-broker/v1/artifact-ref-{valid,invalid}.json`
+- `services/ai-backend/docs/features/artifacts.md`, `services/ai-backend/docs/specs/desktop-agent-capabilities/ac4-artifact-store.md`
 
 No implementation may import a sibling deployable component's source, expose a
 physical artifact path, or add artifact bytes to `packages/api-types`.
