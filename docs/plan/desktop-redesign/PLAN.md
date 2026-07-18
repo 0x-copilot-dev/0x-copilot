@@ -136,11 +136,11 @@ Each row = one PR: hoist behind ports → `apps/frontend` re-exports (shim) → 
 
 ### Phase 6 — Palette, polish, verify
 
-- **6A** Command palette (`⌘K`) → nav + settings + actions.
-- **6B** Keyboard shortcuts (SHORTCUTS set) + reduce-motion + density.
-- **6C** Remove dead code (DesktopPlaceholder, superseded settings).
-- **6D** End-to-end **live** desktop smoke (boot → run → approve → scrub → settings → BYOK/local model) per `apps/desktop/SMOKE.md`. _(Unit fakes have hidden real-run breakage before — smoke live.)_
-- **6E** READMEs/docs.
+- ✅ **6A** Command palette (`⌘K`) → nav + settings + actions.
+- ✅ **6B** Keyboard shortcuts (SHORTCUTS set) + reduce-motion + density.
+- ✅ **6C** Remove dead code (DesktopPlaceholder, superseded route-table palette).
+- ⏳ **6D** End-to-end **live** desktop smoke (boot → run → approve → scrub → settings → BYOK/local model) per `apps/desktop/SMOKE.md`. _(Unit fakes have hidden real-run breakage before — smoke live.)_ Procedure written; **pending the operator's live run** (result recorded in `SMOKE.md`).
+- ✅ **6E** READMEs/docs (`apps/desktop/README.md`, `apps/desktop/SMOKE.md`, this §11).
 
 ## 9. Sequencing & dependencies
 
@@ -159,7 +159,17 @@ Each row = one PR: hoist behind ports → `apps/frontend` re-exports (shim) → 
 
 ## 11. Definition of done
 
-Desktop boots into the 6-destination solo shell in v2 "quiet" styling with fonts loaded; Run mounts the real `ThreadCanvas` (Studio/Focus, timeline scrub, inline + in-chat approvals, streaming); the advanced composer (real models incl. custom OpenRouter, attachments, connectors, skills) works; Settings solo surface with BYOK + local models + approval policy; team features gated off; `⌘K` palette; end-to-end **live** smoke passes; no `DesktopPlaceholder`; **design-system is the only token source**.
+Status legend: ✅ shipped on `feat/desktop-redesign` · ⏳ pending the operator's
+live run (docs/tooling in place, awaiting execution).
+
+- [x] Desktop boots into the **6-destination solo shell** in v2 "quiet" styling with fonts loaded.
+- [x] **Run** mounts the real `ThreadCanvas` cockpit (Studio/Focus, timeline scrub, inline + in-chat approvals, streaming), through the real `DestinationOutlet`.
+- [x] The advanced composer (real models incl. custom OpenRouter, attachments, connectors, skills) works.
+- [x] **Settings** solo surface with BYOK + local models + approval policy; **team features gated off** (`single_user_desktop`).
+- [x] **`⌘K` command palette** wired (6 destinations + 3 settings sections + 4 actions) with the full `DESIGN-SPEC.md` §6 keyboard-shortcut set (SSOT `shell/shortcuts.ts`, input-guarded).
+- [x] **No `DesktopPlaceholder`** and no superseded second palette — `grep DesktopPlaceholder` / `RouteJumpPalette` returns zero (dead code removed, PR-6.1/6.7).
+- [x] **design-system is the only token source.**
+- [ ] ⏳ End-to-end **live** desktop smoke passes (boot → run → approve → scrub → settings → BYOK → local model) with a console/CSP-clean session. Procedure is written in [`apps/desktop/SMOKE.md`](../../../apps/desktop/SMOKE.md); the operator runs it against `make dev` and records the result table there. **Docs do not claim the live run was performed** — this box is ticked only after the operator's walk is clean.
 
 ## 12. Execution model
 

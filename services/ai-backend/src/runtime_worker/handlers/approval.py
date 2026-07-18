@@ -301,7 +301,7 @@ class RuntimeApprovalHandler:
         # Bind the per-run tool display lookup and MCP descriptor registry before
         # the resumed graph starts emitting tool events. The resumed run runs in a
         # fresh async task, so the original RuntimeRunHandler bindings are gone.
-        workspace_backend = await WorkspaceBackendWorkerWiring().workspace_backend()
+        workspace_backend = await self._workspace_backend_for_resume(running)
         dependencies = self._dependencies_for_resume(
             running, workspace_backend=workspace_backend
         )
@@ -362,6 +362,10 @@ class RuntimeApprovalHandler:
             ConversationOrdinalAllocator.unbind(allocator_token)
             ToolDisplayLookupContext.unbind(display_token)
             McpDisplayRegistryContext.unbind(mcp_display_token)
+            # Release this resume invocation's pinned grant snapshot
+            # (``/v1/runs/end``) — the approved host write lands during resume,
+            # so its pinned authority must not outlive the invocation.
+            await WorkspaceBackendWorkerWiring.release_backend(workspace_backend)
             # PR #43 — stamp ``RESUMING -> RESOLVED`` on the batch row so a
             # subsequent crash + retry on the same batch does not double-resume.
             # Idempotent for terminal statuses (RESOLVED / EXPIRED).
@@ -436,6 +440,45 @@ class RuntimeApprovalHandler:
             conversation_id=run.conversation_id,
             run_id=run.run_id,
             store=self._conversation_tool_ordinal_store,
+        )
+
+    async def _workspace_backend_for_resume(self, run: RunRecord) -> object | None:
+        """Construct the resumed run's ``/workspace/`` backend, or ``None``.
+
+        Mirrors :meth:`RuntimeRunHandler._workspace_backend_for_run`: gated on the
+        desktop broker, and — when a writable grant is present — threaded with the
+        write triple's durable half (the object store + a snapshot-event emitter)
+        so the approved host write that lands DURING resume is snapshotted and
+        approval-gated exactly as on the initial run path. Both are ``None`` off
+        the file backend, so the write path stays inert.
+        """
+        file_store = self._file_store_wiring.file_store()
+        snapshot_store = (
+            getattr(file_store, "object_store", None)
+            if file_store is not None
+            else None
+        )
+        snapshot_emitter = (
+            self._workspace_snapshot_emitter(run)
+            if snapshot_store is not None
+            else None
+        )
+        return await WorkspaceBackendWorkerWiring(
+            snapshot_store=snapshot_store,
+            snapshot_emitter=snapshot_emitter,
+        ).workspace_backend()
+
+    def _workspace_snapshot_emitter(self, run: RunRecord) -> object:
+        """Build the emitter the workspace backend records pre-image references through."""
+        from runtime_worker.workspace_backend_wiring import (  # noqa: PLC0415
+            WorkspaceSnapshotEventEmitter,
+        )
+
+        return WorkspaceSnapshotEventEmitter(
+            event_producer=self.event_producer,
+            persistence=self.persistence,
+            org_id=run.org_id,
+            run_id=run.run_id,
         )
 
     def _dependencies_for_resume(
