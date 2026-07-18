@@ -1,0 +1,5 @@
+# node-gyp / prebuild build artifacts — the compiled .node is platform+ABI
+# specific and is produced at build/packaging time, never committed.
+build/
+prebuilds/
+*.node
