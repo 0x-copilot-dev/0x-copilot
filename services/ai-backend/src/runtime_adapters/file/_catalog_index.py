@@ -16,11 +16,25 @@ enough (canonical data is the JSONL anyway) and fast for interactive use.
 
 from __future__ import annotations
 
+import re
 import sqlite3
 from collections.abc import Iterable, Sequence
 from pathlib import Path
 
 from runtime_adapters.file._jsonl import JsonlIo
+
+# Message roles whose redacted text is safe to index for search. Tool and
+# system turns carry connector payloads / prompt scaffolding and are never
+# indexed, so a secret parked in a tool result can never surface via search.
+_SEARCHABLE_ROLES = frozenset({"user", "assistant"})
+
+_FTS_KIND_TITLE = "title"
+_FTS_KIND_MESSAGE = "message"
+
+# Word-ish run extractor: neutralises FTS5 query syntax (quotes, ``*``, ``:``,
+# ``AND``/``OR`` operators, column filters) by keeping only token characters,
+# so raw user input can never form a malformed or injected MATCH expression.
+_QUERY_TOKEN = re.compile(r"\w+", re.UNICODE)
 
 _SCHEMA = """
 CREATE TABLE IF NOT EXISTS conversations (
@@ -67,6 +81,24 @@ CREATE TABLE IF NOT EXISTS events (
 );
 """
 
+# FTS5 lives in its own statement because ``CREATE VIRTUAL TABLE`` fails hard on
+# a SQLite build without the FTS5 module. We create it separately so that a
+# missing module disables *search only* (per the AC2 contract) without taking
+# down the listing index or blocking any direct read/write. ``text`` is the one
+# indexed column; the rest are UNINDEXED sidecars used for scoping, dedup, and
+# incremental row maintenance. Only conversation title + redacted user/assistant
+# message text is ever written here.
+_FTS_SCHEMA = """
+CREATE VIRTUAL TABLE IF NOT EXISTS conversation_fts USING fts5(
+    conversation_id UNINDEXED,
+    org_id          UNINDEXED,
+    ref_id          UNINDEXED,
+    kind            UNINDEXED,
+    text,
+    tokenize = 'unicode61'
+);
+"""
+
 
 class CatalogIndex:
     """SQLite-backed listing index. All methods are synchronous.
@@ -79,6 +111,7 @@ class CatalogIndex:
     def __init__(self, db_path: Path) -> None:
         self._db_path = db_path
         self._conn: sqlite3.Connection | None = None
+        self._fts_available = False
 
     # ----- lifecycle -----------------------------------------------------
 
@@ -92,6 +125,23 @@ class CatalogIndex:
         conn.executescript(_SCHEMA)
         conn.commit()
         self._conn = conn
+        self._fts_available = self._try_enable_fts(conn)
+
+    @staticmethod
+    def _try_enable_fts(conn: sqlite3.Connection) -> bool:
+        """Create the FTS5 table; return ``False`` if the module is absent.
+
+        A SQLite build without FTS5 raises here — we swallow that and leave the
+        index fully functional for direct reads. Search then degrades to empty
+        results (AC2: "FTS unavailability disables search only").
+        """
+
+        try:
+            conn.executescript(_FTS_SCHEMA)
+            conn.commit()
+        except sqlite3.OperationalError:
+            return False
+        return True
 
     def close(self) -> None:
         if self._conn is not None:
@@ -127,6 +177,8 @@ class CatalogIndex:
         conn.execute("DELETE FROM messages")
         conn.execute("DELETE FROM runs")
         conn.execute("DELETE FROM events")
+        if self._fts_available:
+            conn.execute("DELETE FROM conversation_fts")
         for doc in conversations:
             self._insert_conversation(doc)
         for doc in messages:
@@ -171,6 +223,11 @@ class CatalogIndex:
         conn.execute(
             "DELETE FROM conversations WHERE conversation_id=?", (conversation_id,)
         )
+        if self._fts_available:
+            conn.execute(
+                "DELETE FROM conversation_fts WHERE conversation_id=?",
+                (conversation_id,),
+            )
         conn.commit()
 
     def _insert_conversation(self, doc: dict) -> None:
@@ -188,6 +245,7 @@ class CatalogIndex:
                 JsonlIo.dumps(doc),
             ),
         )
+        self._index_title(doc)
 
     def _insert_message(self, doc: dict) -> None:
         self._c.execute(
@@ -202,6 +260,65 @@ class CatalogIndex:
                 doc.get("deleted_at"),
                 JsonlIo.dumps(doc),
             ),
+        )
+        self._index_message(doc)
+
+    # ----- FTS maintenance (write-through) ------------------------------
+
+    def _fts_replace(
+        self,
+        *,
+        conversation_id: str,
+        org_id: str,
+        ref_id: str,
+        kind: str,
+        text: str | None,
+    ) -> None:
+        """Idempotently (re)index one row's searchable text.
+
+        Drops any prior row for this ``(ref_id, kind)`` — FTS5 has no UPDATE, so
+        an edited title/message is a delete-then-insert — and re-inserts only
+        when ``text`` is non-empty. Called for every conversation/message write
+        *and* during rebuild, so incremental writes and a from-JSONL rebuild
+        converge on the same index contents.
+        """
+
+        if not self._fts_available:
+            return
+        self._c.execute(
+            "DELETE FROM conversation_fts WHERE ref_id=? AND kind=?", (ref_id, kind)
+        )
+        clean = (text or "").strip()
+        if not clean:
+            return
+        self._c.execute(
+            "INSERT INTO conversation_fts"
+            " (conversation_id, org_id, ref_id, kind, text) VALUES (?,?,?,?,?)",
+            (conversation_id, org_id, ref_id, kind, clean),
+        )
+
+    def _index_title(self, doc: dict) -> None:
+        self._fts_replace(
+            conversation_id=doc["conversation_id"],
+            org_id=doc["org_id"],
+            ref_id=doc["conversation_id"],
+            kind=_FTS_KIND_TITLE,
+            text=doc.get("title") if doc.get("deleted_at") is None else None,
+        )
+
+    def _index_message(self, doc: dict) -> None:
+        # Only redacted user/assistant text is searchable. Tool/system turns —
+        # which carry connector payloads and prompt scaffolding — and deleted
+        # messages are dropped from the index rather than indexed.
+        indexable = (
+            doc.get("role") in _SEARCHABLE_ROLES and doc.get("deleted_at") is None
+        )
+        self._fts_replace(
+            conversation_id=doc["conversation_id"],
+            org_id=doc["org_id"],
+            ref_id=doc["message_id"],
+            kind=_FTS_KIND_MESSAGE,
+            text=doc.get("content_text") if indexable else None,
         )
 
     def _insert_run(self, doc: dict) -> None:
@@ -287,6 +404,78 @@ class CatalogIndex:
             "SELECT MAX(sequence_no) FROM events WHERE run_id=?", (run_id,)
         ).fetchone()
         return int(row[0]) if row and row[0] is not None else 0
+
+    def search_conversations(
+        self,
+        *,
+        org_id: str,
+        user_id: str,
+        query: str,
+        limit: int,
+        include_archived: bool,
+        include_deleted: bool,
+    ) -> list[tuple[str, float]]:
+        """Return ``(conversation doc, score)`` ranked best-first.
+
+        Matches the query against indexed title + user/assistant message text,
+        collapses the per-row FTS hits to one entry per conversation (keeping the
+        strongest match), then joins to ``conversations`` so the same
+        org/user/archived/deleted scoping as :meth:`list_conversations` applies.
+        Returns ``[]`` when FTS is unavailable or the query has no usable tokens.
+        """
+
+        if not self._fts_available:
+            return []
+        match = self._to_match_query(query)
+        if match is None:
+            return []
+        # bm25() returns a score where a smaller (more negative) value is a
+        # better match; we keep the best (min) score per conversation.
+        rows = self._c.execute(
+            "SELECT conversation_id, bm25(conversation_fts) AS score"
+            " FROM conversation_fts"
+            " WHERE conversation_fts MATCH ? AND org_id = ?",
+            (match, org_id),
+        ).fetchall()
+        best: dict[str, float] = {}
+        for conversation_id, score in rows:
+            if conversation_id not in best or score < best[conversation_id]:
+                best[conversation_id] = float(score)
+        if not best:
+            return []
+
+        placeholders = ",".join("?" for _ in best)
+        sql = (
+            f"SELECT conversation_id, doc FROM conversations"
+            f" WHERE conversation_id IN ({placeholders})"
+            f" AND org_id=? AND user_id=?"
+        )
+        params: list[object] = [*best.keys(), org_id, user_id]
+        if not include_archived:
+            sql += " AND status != 'archived'"
+        if not include_deleted:
+            sql += " AND deleted_at IS NULL"
+        doc_by_id = {
+            conversation_id: doc
+            for conversation_id, doc in self._c.execute(sql, params).fetchall()
+        }
+        ranked = sorted(doc_by_id, key=lambda cid: (best[cid], cid))
+        return [(doc_by_id[cid], best[cid]) for cid in ranked[:limit]]
+
+    @staticmethod
+    def _to_match_query(query: str) -> str | None:
+        """Build a safe FTS5 MATCH expression from raw user input.
+
+        Extracts word tokens (dropping every FTS operator/quote/wildcard char),
+        turns each into a prefix term, and ANDs them together. Returns ``None``
+        when nothing indexable remains, so a blank or punctuation-only query
+        yields no results rather than a SQL error.
+        """
+
+        tokens = _QUERY_TOKEN.findall(query or "")
+        if not tokens:
+            return None
+        return " ".join(f'"{token}"*' for token in tokens)
 
 
 __all__ = ("CatalogIndex",)
