@@ -20,6 +20,16 @@ from agent_runtime.capabilities.interpreter.contracts import (
     RunCodeModeInput,
     SnapshotRef,
 )
+from agent_runtime.capabilities.interpreter.policy_invoker import (
+    AuthorizedToolResolver,
+    ExternalCallApprovalGate,
+    ExternalCallBudgetGuard,
+    ExternalCallDispatcher,
+    ExternalToolDispatchError,
+    HitlPolicyToolInvoker,
+    InterruptApprovalGate,
+    LangChainToolDispatcher,
+)
 from agent_runtime.capabilities.interpreter.ports import (
     InterpreterPort,
     PolicyInvocationContext,
@@ -34,8 +44,14 @@ from agent_runtime.capabilities.interpreter.registration import (
 )
 
 __all__ = (
+    "AuthorizedToolResolver",
+    "ExternalCallApprovalGate",
+    "ExternalCallBudgetGuard",
+    "ExternalCallDispatcher",
     "ExternalFunctionCall",
     "ExternalFunctionSpec",
+    "ExternalToolDispatchError",
+    "HitlPolicyToolInvoker",
     "InterpreterCompleted",
     "InterpreterErrorCode",
     "InterpreterFailed",
@@ -44,6 +60,8 @@ __all__ = (
     "InterpreterLimits",
     "InterpreterPort",
     "InterpreterRequest",
+    "InterruptApprovalGate",
+    "LangChainToolDispatcher",
     "MontyCodeModeConfig",
     "PolicyInvocationContext",
     "PolicyToolInvocationOutcome",

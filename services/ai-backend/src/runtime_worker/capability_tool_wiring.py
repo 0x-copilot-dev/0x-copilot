@@ -37,6 +37,50 @@ _DESKTOP_PROFILE = "single_user_desktop"
 _DEPLOYMENT_PROFILE_ENV = "ENTERPRISE_DEPLOYMENT_PROFILE"
 
 
+class _ContextBudgetGuard:
+    """Bridges an interpreter external call to the run's active tool budget.
+
+    Reuses the *same* per-run :class:`~agent_runtime.capabilities.tool_budget_guard.
+    ToolBudgetGuard` an ordinary tool call is charged against, so a bridged call
+    is not a budget-free back door. Admits when no guard is bound (parity with
+    ``ToolBudgetGuardedTool``'s ``guard is None`` path — non-desktop / eval runs
+    install no guard) and denies on a hard :class:`ToolBudgetReject`.
+    """
+
+    async def charge(self, *, tool_name, arguments, context) -> bool:  # noqa: ANN001
+        del context
+        from agent_runtime.capabilities.tool_budget_guard import (  # noqa: PLC0415
+            ToolBudgetGuard,
+        )
+        from agent_runtime.capabilities.tool_budget_middleware import (  # noqa: PLC0415
+            ToolBudgetAdmit,
+            ToolBudgetWarn,
+        )
+
+        guard = ToolBudgetGuard.active()
+        if guard is None:
+            return True
+        estimated = _estimate_input_tokens(arguments)
+        decision = guard.check_admit(
+            tool_name=tool_name, estimated_input_tokens=estimated
+        )
+        if isinstance(decision, ToolBudgetWarn):
+            await guard.emit_warning(decision=decision)
+        return isinstance(decision, (ToolBudgetAdmit, ToolBudgetWarn))
+
+
+def _estimate_input_tokens(arguments: Mapping[str, object]) -> int:
+    """Cheap char-count estimate for the external call's arguments (1 tok ~= 4 chars)."""
+
+    import json  # noqa: PLC0415
+
+    try:
+        payload = json.dumps(arguments, default=str)
+    except (TypeError, ValueError):
+        payload = repr(arguments)
+    return min(len(payload) // 4, 100_000)
+
+
 class CapabilityToolWiring:
     """Gate + builder for the per-run Monty and sandbox model tools.
 
@@ -44,6 +88,13 @@ class CapabilityToolWiring:
     tool; ``file_store`` is the active file store (``None`` off the file
     backend) whose content-addressed object store backs Monty's snapshot/result
     stores; ``env`` defaults to ``os.environ`` and is injectable for tests.
+
+    ``external_tools_by_name`` is the run's already scope-filtered, model-visible
+    toolset keyed by tool name. When supplied (non-empty), Monty code mode is
+    wired in **Option B** — interpreted code can make real external calls under
+    budget + HITL approval, dispatched to these tools. When ``None`` / empty (the
+    default), Monty stays **pure-compute** (Option A): the resolver authorizes
+    nothing and no external tool is reachable.
     """
 
     def __init__(
@@ -52,10 +103,12 @@ class CapabilityToolWiring:
         runtime_context: AgentRuntimeContext,
         file_store: object | None = None,
         env: Mapping[str, str] | None = None,
+        external_tools_by_name: Mapping[str, object] | None = None,
     ) -> None:
         self._runtime_context = runtime_context
         self._file_store = file_store
         self._env = env
+        self._external_tools_by_name = dict(external_tools_by_name or {})
 
     # -- Monty code mode ---------------------------------------------------
 
@@ -63,9 +116,18 @@ class CapabilityToolWiring:
         """Build the gated ``run_code_mode`` tool, or ``None`` when gated off.
 
         Returns ``None`` unless every Monty gate holds AND the file object store
-        (snapshot backing) is available. Wired pure-compute: the resolver
-        authorizes no external function, so interpreted code has no tool surface
-        and nothing in the normal approval path is weakened.
+        (snapshot backing) is available.
+
+        Posture depends on whether an external toolset was supplied:
+
+        * **Option B** (a non-empty ``external_tools_by_name``) — interpreted
+          code can make real external calls. Each is routed through the
+          production :class:`HitlPolicyToolInvoker`: budget, then HITL approval
+          via the LangGraph interrupt seam, then dispatch to the authorized
+          tool. Nothing bypasses the normal approval/budget path.
+        * **Option A / pure-compute** (the default) — the resolver authorizes no
+          external function, so interpreted code has no tool surface and the
+          normal approval path is untouched.
         """
 
         from agent_runtime.capabilities.interpreter import (  # noqa: PLC0415
@@ -84,24 +146,50 @@ class CapabilityToolWiring:
             # backend). Fail soft — code mode stays absent rather than crash.
             logger.debug("code_mode.object_store_absent")
             return None
-        from agent_runtime.capabilities.interpreter.pure_compute import (  # noqa: PLC0415
-            ClosedPolicyInvoker,
-            PureComputeResolver,
-        )
 
         port = build_monty_interpreter(
             config, snapshot_store=build_snapshot_store(object_store)
         )
         if port is None:
             return None
+        policy_invoker, resolver = self._code_mode_policy()
         return build_code_mode_tool(
             port=port,
-            policy_invoker=ClosedPolicyInvoker(),
-            resolver=PureComputeResolver(),
+            policy_invoker=policy_invoker,
+            resolver=resolver,
             identity_provider=self._code_mode_identity,
             config=config,
             result_store=object_store,
         )
+
+    def _code_mode_policy(self) -> tuple[object, object]:
+        """Select the invoker + resolver pair for code mode.
+
+        Option B when a real toolset is available (real external calls under
+        budget + HITL approval), else the fail-closed pure-compute pair.
+        """
+
+        if self._external_tools_by_name:
+            from agent_runtime.capabilities.interpreter.policy_invoker import (  # noqa: PLC0415
+                AuthorizedToolResolver,
+                HitlPolicyToolInvoker,
+                InterruptApprovalGate,
+                LangChainToolDispatcher,
+            )
+
+            invoker = HitlPolicyToolInvoker(
+                budget=_ContextBudgetGuard(),
+                approval=InterruptApprovalGate(),
+                dispatcher=LangChainToolDispatcher(self._external_tools_by_name),
+            )
+            resolver = AuthorizedToolResolver(self._external_tools_by_name)
+            return invoker, resolver
+        from agent_runtime.capabilities.interpreter.pure_compute import (  # noqa: PLC0415
+            ClosedPolicyInvoker,
+            PureComputeResolver,
+        )
+
+        return ClosedPolicyInvoker(), PureComputeResolver()
 
     def _code_mode_identity(self) -> object:
         from agent_runtime.capabilities.interpreter.code_mode_tool import (  # noqa: PLC0415
