@@ -23,6 +23,13 @@ interface ConnectorsGatewayProps {
   readonly identity: RequestIdentity;
   /** Forwarded into the detail view so the audit tab is gated host-side. */
   readonly isAdmin?: boolean;
+  /**
+   * PR-4.11 — the Tools destination's approval-policy note links to
+   * Settings → Model & behavior (FR-4.25). The App shell wires this to
+   * `router.navigate({ screen: "settings", section: "model-and-behavior" })`;
+   * the gateway just forwards it to the list route.
+   */
+  readonly onOpenApprovalSettings?: () => void;
 }
 
 type PaneMode =
@@ -33,6 +40,7 @@ type PaneMode =
 export function ConnectorsGateway({
   identity,
   isAdmin = false,
+  onOpenApprovalSettings,
 }: ConnectorsGatewayProps): ReactElement {
   const [pane, setPane] = useState<PaneMode>({ kind: "list" });
 
@@ -61,6 +69,7 @@ export function ConnectorsGateway({
       identity={identity}
       onOpenConnector={(id) => setPane({ kind: "detail", connectorId: id })}
       onOpenWebhooks={() => setPane({ kind: "webhooks" })}
+      onOpenApprovalSettings={onOpenApprovalSettings}
     />
   );
 }
