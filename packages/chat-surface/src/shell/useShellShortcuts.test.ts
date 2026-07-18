@@ -10,7 +10,10 @@ import {
 } from "./shortcuts";
 import { attachShellShortcuts, useShellShortcuts } from "./useShellShortcuts";
 
-type Handler = ReturnType<typeof vi.fn>;
+// `() => void` (not the raw vi.fn Mock type, whose constructable overload is
+// not assignable to the options' `() => void` slots); the mock still records
+// calls at runtime for the `toHaveBeenCalledTimes` assertions.
+type Handler = () => void;
 
 function chordFor(intent: ShortcutIntent): ShortcutChord {
   const found = SHELL_SHORTCUTS.find((s) => s.intent === intent);
@@ -57,7 +60,7 @@ describe("useShellShortcuts — dispatch", () => {
   it("fires the matching callback for every §6 chord", () => {
     const handlers = Object.fromEntries(
       SHELL_SHORTCUTS.map((s) => [s.intent, vi.fn()]),
-    ) as Record<ShortcutIntent, Handler>;
+    ) as unknown as Record<ShortcutIntent, Handler>;
 
     renderHook(() => useShellShortcuts(handlers));
 
