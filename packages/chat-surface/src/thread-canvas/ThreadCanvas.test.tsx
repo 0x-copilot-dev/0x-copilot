@@ -1,7 +1,7 @@
 // ThreadCanvas tests.
 //
 // The crown jewel here is the **mount-once invariant** suite. The
-// three modes (Studio / Focus / Auto) are presentation slots, not
+// two modes (Studio / Focus) are presentation slots, not
 // separate canvases — switching modes MUST NOT remount the inner
 // components. We assert this via a `useRef`-stamped instance id on
 // TcSurfaceMount + TcChat that persists across rerenders only if the
@@ -155,13 +155,16 @@ describe("ThreadCanvas", () => {
       expect(root).toHaveAttribute("data-resolved-mode", "studio");
     });
 
-    it("renders the mode-switcher tablist with three tabs (Studio/Focus/Auto)", () => {
+    it("renders the mode-switcher tablist with two tabs (Studio/Focus)", () => {
       renderCanvas();
       const tablist = screen.getByTestId("tc-mode-switcher");
       expect(tablist).toHaveAttribute("role", "tablist");
       expect(screen.getByTestId("tc-mode-switcher-studio")).toBeInTheDocument();
       expect(screen.getByTestId("tc-mode-switcher-focus")).toBeInTheDocument();
-      expect(screen.getByTestId("tc-mode-switcher-auto")).toBeInTheDocument();
+      // Auto mode was dropped — autonomy is a run state, not a view.
+      expect(
+        screen.queryByTestId("tc-mode-switcher-auto"),
+      ).not.toBeInTheDocument();
     });
 
     it("marks the active mode button with aria-selected=true", () => {
@@ -262,40 +265,8 @@ describe("ThreadCanvas", () => {
       fireEvent.keyDown(screen.getByTestId("tc-mode-switcher"), {
         key: "ArrowLeft",
       });
-      // studio → auto (wrap).
-      expect(onModeChange).toHaveBeenCalledWith("auto");
-    });
-  });
-
-  describe("Auto mode resolution", () => {
-    it("resolves Auto to Studio when at least one surface has an active payload", () => {
-      const events = [
-        makeEnvelope("tool_result", {
-          display_title: "Wrote a row",
-          payload: { surface_uri: "sheet://acme", state: { rows: 5 } },
-        }),
-      ];
-      renderCanvas({ mode: "auto", events });
-      expect(screen.getByTestId("thread-canvas")).toHaveAttribute(
-        "data-resolved-mode",
-        "studio",
-      );
-      expect(screen.getByTestId("thread-canvas")).toHaveAttribute(
-        "data-has-active-surfaces",
-        "true",
-      );
-    });
-
-    it("resolves Auto to Focus when no surfaces are active", () => {
-      renderCanvas({ mode: "auto", events: [] });
-      expect(screen.getByTestId("thread-canvas")).toHaveAttribute(
-        "data-resolved-mode",
-        "focus",
-      );
-      expect(screen.getByTestId("thread-canvas")).toHaveAttribute(
-        "data-has-active-surfaces",
-        "false",
-      );
+      // studio → focus (wrap over the two-value union).
+      expect(onModeChange).toHaveBeenCalledWith("focus");
     });
   });
 
@@ -392,26 +363,6 @@ describe("ThreadCanvas", () => {
         withProviders(
           transport,
           <ThreadCanvas
-            mode="auto"
-            conversationId={CONV_ID}
-            runId={RUN_ID}
-            events={[]}
-            onModeChange={() => {}}
-            tabs={SAMPLE_TABS}
-            activeUri="email://draft-1"
-            onActivateTab={() => {}}
-            onCloseTab={() => {}}
-            transport={transport}
-          />,
-        ),
-      );
-      const afterAuto = screen.getByTestId("tc-chat");
-      expect(afterAuto).toBe(initialChat);
-
-      rerender(
-        withProviders(
-          transport,
-          <ThreadCanvas
             mode="focus"
             conversationId={CONV_ID}
             runId={RUN_ID}
@@ -427,6 +378,26 @@ describe("ThreadCanvas", () => {
       );
       const afterFocus = screen.getByTestId("tc-chat");
       expect(afterFocus).toBe(initialChat);
+
+      rerender(
+        withProviders(
+          transport,
+          <ThreadCanvas
+            mode="studio"
+            conversationId={CONV_ID}
+            runId={RUN_ID}
+            events={[]}
+            onModeChange={() => {}}
+            tabs={SAMPLE_TABS}
+            activeUri="email://draft-1"
+            onActivateTab={() => {}}
+            onCloseTab={() => {}}
+            transport={transport}
+          />,
+        ),
+      );
+      const afterStudio = screen.getByTestId("tc-chat");
+      expect(afterStudio).toBe(initialChat);
     });
 
     it("does not remount the canvas root across N mode switches", () => {
@@ -452,7 +423,6 @@ describe("ThreadCanvas", () => {
 
       const modes: readonly ThreadMode[] = [
         "focus",
-        "auto",
         "studio",
         "focus",
         "studio",
@@ -562,8 +532,7 @@ describe("ThreadCanvas", () => {
           payload: { surface_uri: "sheet://x", state: { rows: 2 } },
         }),
       ];
-      renderCanvas({ mode: "auto", events });
-      // Auto resolves to Studio when surfaces are active.
+      renderCanvas({ mode: "studio", events });
       expect(screen.getByTestId("thread-canvas")).toHaveAttribute(
         "data-resolved-mode",
         "studio",
