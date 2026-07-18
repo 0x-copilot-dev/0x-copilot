@@ -27,6 +27,18 @@ export interface StagedArtifact {
   /** Opaque staging ref — resolved to an AC4 artifact in a later slice. */
   readonly ref: string;
   readonly byteLength: number;
+  /** Absolute staging path the bytes were written to (worker-internal). */
+  readonly path: string;
+}
+
+/** Kinds of bytes that may be staged under a run directory. */
+export type StagedKind = "screenshot" | "download";
+
+/** Only lowercase alphanumerics survive as a staged-file extension. */
+function safeExtension(ext: string | undefined): string {
+  if (ext === undefined) return "bin";
+  const cleaned = ext.replace(/[^a-z0-9]/giu, "").toLowerCase();
+  return cleaned === "" ? "bin" : cleaned.slice(0, 16);
 }
 
 export class StagingArea {
@@ -44,18 +56,45 @@ export class StagingArea {
     this.#dir = this.#join(cfg.stagingRoot, cfg.runId);
   }
 
-  /** Stage bytes under a generated filename; returns an opaque `stg://` ref. */
-  async stage(kind: "screenshot", bytes: Uint8Array): Promise<StagedArtifact> {
+  /**
+   * Stage bytes under a GENERATED filename inside the per-run directory; returns
+   * an opaque `stg://` ref. The filename is `<kind>_<randomId>.<ext>` with the
+   * extension sanitized to `[a-z0-9]`, so a caller-supplied (e.g. site-suggested)
+   * extension can never inject a path separator or traversal. The full path is
+   * asserted to stay CONTAINED within the run directory before any write.
+   */
+  async stage(
+    kind: StagedKind,
+    bytes: Uint8Array,
+    opts?: { ext?: string },
+  ): Promise<StagedArtifact> {
     if (!this.#ensured) {
       await this.#cfg.fs.mkdir(this.#dir, { recursive: true, mode: 0o700 });
       this.#ensured = true;
     }
-    const name = `${kind}_${this.#randomId()}.bin`;
-    await this.#cfg.fs.writeFile(this.#join(this.#dir, name), bytes);
+    const name = `${kind}_${this.#randomId()}.${safeExtension(opts?.ext)}`;
+    const path = this.#join(this.#dir, name);
+    // Defense in depth: never write outside the run directory even if `join`
+    // or `name` were somehow manipulated.
+    if (!this.#isContained(path)) {
+      throw new Error("staging path escapes the run directory");
+    }
+    await this.#cfg.fs.writeFile(path, bytes);
     return {
       ref: `stg://${this.#cfg.runId}/${name}`,
       byteLength: bytes.byteLength,
+      path,
     };
+  }
+
+  /** True when `path` is the run directory itself or a direct child of it. */
+  #isContained(path: string): boolean {
+    if (path === this.#dir) return false;
+    const prefixes = [`${this.#dir}/`, `${this.#dir}\\`];
+    if (!prefixes.some((p) => path.startsWith(p))) return false;
+    const rest = path.slice(this.#dir.length + 1);
+    // A contained artifact is a single leaf: no nested dirs, no traversal.
+    return !rest.includes("/") && !rest.includes("\\") && !rest.includes("..");
   }
 
   /** Remove the whole run staging directory. Best-effort. */

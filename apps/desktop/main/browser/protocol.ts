@@ -33,53 +33,106 @@ export type BrowserProfileMode =
   (typeof BrowserProfileMode)[keyof typeof BrowserProfileMode];
 
 /**
- * The action classes the policy layer can reason about. The read-only classes
- * (`read`, `navigate`) are LIVE in this foundation. The remaining classes are
- * DEFERRED — named so the egress/approval policy is total, but no MCP tool
- * dispatches them yet.
+ * The action classes the policy layer can reason about. The read classes
+ * (`read`, `navigate`) run freely within an approved origin set. The
+ * side-effecting classes (`input`, `submit`, `download`) are LIVE in the action
+ * layer but MUST clear a per-action approval before they dispatch. `upload` and
+ * the `external_effect` marker remain DEFERRED (upload needs an AC5 object-ref
+ * grant not modelled in this slice).
  */
 export const BrowserActionClass = {
   Read: "read",
   Navigate: "navigate",
-  Input: "input", // deferred
-  Submit: "submit", // deferred
-  Upload: "upload", // deferred
-  Download: "download", // deferred
-  ExternalEffect: "external_effect", // deferred
+  Input: "input",
+  Submit: "submit",
+  Upload: "upload", // deferred (needs AC5 object-ref grant)
+  Download: "download",
+  ExternalEffect: "external_effect", // classification marker; no tool dispatches it
 } as const;
 export type BrowserActionClass =
   (typeof BrowserActionClass)[keyof typeof BrowserActionClass];
 
-/** Action classes that dispatch in the read-only foundation. */
-export const LIVE_ACTION_CLASSES: ReadonlySet<BrowserActionClass> = new Set([
+/** Action classes that run WITHOUT a per-action approval (reads). */
+export const READ_ACTION_CLASSES: ReadonlySet<BrowserActionClass> = new Set([
   BrowserActionClass.Read,
   BrowserActionClass.Navigate,
 ]);
 
-/** Read-only MCP tool names exposed by the desktop browser server. */
+/**
+ * Side-effecting action classes: every one MUST clear an approval before the
+ * worker dispatches it (PRD §Action policy and approvals). `external_effect`
+ * is the catch-all class for an ambiguous control treated as a side effect.
+ */
+export const SIDE_EFFECTING_ACTION_CLASSES: ReadonlySet<BrowserActionClass> =
+  new Set([
+    BrowserActionClass.Input,
+    BrowserActionClass.Submit,
+    BrowserActionClass.Download,
+    BrowserActionClass.Upload,
+    BrowserActionClass.ExternalEffect,
+  ]);
+
+/** True when an action class must clear a per-action approval before dispatch. */
+export function actionRequiresApproval(
+  actionClass: BrowserActionClass,
+): boolean {
+  return SIDE_EFFECTING_ACTION_CLASSES.has(actionClass);
+}
+
+/** MCP tool names exposed by the desktop browser server. */
 export const BrowserToolName = {
   Navigate: "browser_navigate",
   Snapshot: "browser_snapshot",
   Wait: "browser_wait",
   Screenshot: "browser_screenshot",
   Close: "browser_close",
+  // Action layer (side-effecting; each clears an approval before dispatch).
+  Click: "browser_click",
+  Type: "browser_type",
+  Select: "browser_select",
+  Submit: "browser_submit",
+  Download: "browser_download",
 } as const;
 export type BrowserToolName =
   (typeof BrowserToolName)[keyof typeof BrowserToolName];
 
 /**
- * Tool names that are DEFERRED in this foundation. They are enumerated so the
- * provider can assert they are NOT advertised, and so a later slice can wire
- * them without re-deciding the contract.
+ * Map a tool name to its action class. This is the AUTHORITATIVE classification
+ * used by the worker — caller-supplied `actionClass` on a request is treated as
+ * untrusted and re-derived here so a mislabelled request cannot smuggle a
+ * side-effecting tool through the read path. Unknown tools return `null`.
  */
-export const DEFERRED_TOOL_NAMES: readonly string[] = [
-  "browser_click",
-  "browser_type",
-  "browser_select",
-  "browser_submit",
-  "browser_download",
-  "browser_upload",
-];
+export function classifyTool(toolName: string): BrowserActionClass | null {
+  switch (toolName) {
+    case BrowserToolName.Navigate:
+      return BrowserActionClass.Navigate;
+    case BrowserToolName.Snapshot:
+    case BrowserToolName.Wait:
+    case BrowserToolName.Screenshot:
+    case BrowserToolName.Close:
+      return BrowserActionClass.Read;
+    case BrowserToolName.Type:
+    case BrowserToolName.Select:
+      return BrowserActionClass.Input;
+    case BrowserToolName.Click:
+      // A click is treated as a side effect: it may submit, navigate
+      // cross-origin, or trigger a download. Ambiguity resolves to "interrupt".
+      return BrowserActionClass.ExternalEffect;
+    case BrowserToolName.Submit:
+      return BrowserActionClass.Submit;
+    case BrowserToolName.Download:
+      return BrowserActionClass.Download;
+    default:
+      return null;
+  }
+}
+
+/**
+ * Tool names that are DEFERRED. They are enumerated so the provider can assert
+ * they are NOT advertised, and so a later slice can wire them without
+ * re-deciding the contract. Upload needs an AC5 object-ref grant.
+ */
+export const DEFERRED_TOOL_NAMES: readonly string[] = ["browser_upload"];
 
 /** Stable error codes (PRD §Stable errors). */
 export const BrowserErrorCode = {
@@ -212,6 +265,41 @@ export type ScreenshotArgs = z.infer<typeof ScreenshotArgsSchema>;
 
 export const CloseArgsSchema = z.object({}).strict();
 
+// --- Tool argument schemas (action layer, side-effecting) -----------------
+
+/** A generation-bound element ref, as minted by the last snapshot. */
+const ElementRefField = z.string().min(1);
+
+export const ClickArgsSchema = z.object({
+  ref: ElementRefField,
+});
+export type ClickArgs = z.infer<typeof ClickArgsSchema>;
+
+export const TypeArgsSchema = z.object({
+  ref: ElementRefField,
+  /** Non-secret text. Secret fields (password/MFA/etc.) force user takeover. */
+  text: z.string(),
+});
+export type TypeArgs = z.infer<typeof TypeArgsSchema>;
+
+export const SelectArgsSchema = z.object({
+  ref: ElementRefField,
+  /** The option value/label to select. */
+  value: z.string().min(1),
+});
+export type SelectArgs = z.infer<typeof SelectArgsSchema>;
+
+export const SubmitArgsSchema = z.object({
+  ref: ElementRefField,
+});
+export type SubmitArgs = z.infer<typeof SubmitArgsSchema>;
+
+export const DownloadArgsSchema = z.object({
+  /** The element that initiates the download when clicked. */
+  ref: ElementRefField,
+});
+export type DownloadArgs = z.infer<typeof DownloadArgsSchema>;
+
 // --- Action request / result ---------------------------------------------
 
 export const BrowserActionRequestSchema = z.object({
@@ -277,6 +365,13 @@ export const SNAPSHOT_LIMITS = {
 export const SCREENSHOT_LIMITS = {
   maxMegapixels: 16,
   maxBytes: 10 * 1024 * 1024,
+} as const;
+
+export const DOWNLOAD_LIMITS = {
+  /** Default per-download ceiling (PRD §Snapshot/screenshot/download). */
+  maxBytes: 100 * 1024 * 1024,
+  /** Hard ceiling; a download over this is cancelled and its staging removed. */
+  hardMaxBytes: 512 * 1024 * 1024,
 } as const;
 
 // --- Origin canonicalization ----------------------------------------------

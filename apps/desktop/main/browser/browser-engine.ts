@@ -25,6 +25,24 @@ export interface NavigationOutcome {
   readonly status: number;
 }
 
+/**
+ * A generation-bound element the model addressed by ref. The worker supplies
+ * the ref plus the redacted role/name from the last snapshot so the engine can
+ * locate the element WITHOUT the model ever handing over a raw selector.
+ */
+export interface ElementTarget {
+  readonly ref: string;
+  readonly role: string;
+  readonly name: string;
+}
+
+/** Bytes captured from a browser-initiated download. */
+export interface DownloadCapture {
+  /** Site-suggested filename (untrusted metadata; sanitized by the caller). */
+  readonly suggestedName: string;
+  readonly body: Uint8Array;
+}
+
 export interface EnginePage {
   goto(url: string, opts: { timeoutMs: number }): Promise<NavigationOutcome>;
   accessibilitySnapshot(): Promise<RawAxNode | null>;
@@ -35,6 +53,16 @@ export interface EnginePage {
   ): Promise<void>;
   currentUrl(): string;
   currentTitle(): Promise<string>;
+  // --- action layer (side-effecting; gated by an approval upstream) ---
+  clickRef(target: ElementTarget): Promise<void>;
+  fillRef(target: ElementTarget, text: string): Promise<void>;
+  selectRef(target: ElementTarget, value: string): Promise<void>;
+  submitRef(target: ElementTarget): Promise<void>;
+  /** Click an element and capture the download it initiates. */
+  downloadViaRef(
+    target: ElementTarget,
+    opts: { timeoutMs: number },
+  ): Promise<DownloadCapture>;
 }
 
 export interface EngineContext {
@@ -47,6 +75,12 @@ export interface BrowserEngine {
   newContext(opts: {
     userDataDir: string;
     persistent: boolean;
+    /**
+     * Accept browser-initiated downloads. Read-only sessions leave this off;
+     * the action layer opts in so `browser_download` can capture bytes into
+     * the per-run staging directory. Off by default (read-only default).
+     */
+    acceptDownloads?: boolean;
   }): Promise<EngineContext>;
   /** Pinned Chromium build id. */
   version(): string;
@@ -84,14 +118,15 @@ export async function createPlaywrightEngine(
 
   return {
     version: () => version,
-    async newContext({ userDataDir, persistent }) {
+    async newContext({ userDataDir, persistent, acceptDownloads }) {
       // Both paths route ALL traffic through the loopback policy proxy with no
       // bypass; service workers are blocked (they can hide requests from
-      // context routing); downloads are denied in the read-only foundation.
+      // context routing). Downloads are OFF unless the action layer opts in.
+      const downloads = acceptDownloads === true;
       const contextOpts = {
         proxy: { server: `http://${opts.proxyServer}` },
         serviceWorkers: "block" as const,
-        acceptDownloads: false,
+        acceptDownloads: downloads,
         args: launchArgs,
         executablePath: opts.executablePath,
       };
@@ -107,7 +142,7 @@ export async function createPlaywrightEngine(
         });
         ctx = await browser.newContext({
           serviceWorkers: "block",
-          acceptDownloads: false,
+          acceptDownloads: downloads,
         });
         ctx.__browser = browser;
       }
@@ -166,5 +201,47 @@ function wrapPage(page: any): EnginePage {
     async currentTitle() {
       return page.title();
     },
+    // The model addresses elements by generation-bound ref + redacted
+    // role/name; the engine resolves them via ARIA role/name locators — there
+    // is NO raw-selector, coordinate, or `evaluate` passthrough. Best-effort;
+    // the read-only + action CONTRACTS are covered by the fake-engine suites.
+    async clickRef(target) {
+      await locate(page, target).click();
+    },
+    async fillRef(target, text) {
+      await locate(page, target).fill(text);
+    },
+    async selectRef(target, value) {
+      await locate(page, target).selectOption(value);
+    },
+    async submitRef(target) {
+      // A submit is a click on the reviewed submit control.
+      await locate(page, target).click();
+    },
+    async downloadViaRef(target, { timeoutMs }) {
+      const [download] = await Promise.all([
+        page.waitForEvent("download", { timeout: timeoutMs }),
+        locate(page, target).click(),
+      ]);
+      const stream = await download.createReadStream();
+      const chunks: Buffer[] = [];
+      for await (const chunk of stream as AsyncIterable<Buffer>) {
+        chunks.push(chunk);
+      }
+      return {
+        suggestedName: String(download.suggestedFilename?.() ?? "download"),
+        body: Buffer.concat(chunks),
+      };
+    },
   };
+}
+
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+function locate(page: any, target: ElementTarget): any {
+  // Prefer an accessible role+name locator; fall back to name text. This never
+  // accepts a raw CSS/XPath selector from the model.
+  if (target.name !== "") {
+    return page.getByRole(target.role, { name: target.name }).first();
+  }
+  return page.getByRole(target.role).first();
 }
