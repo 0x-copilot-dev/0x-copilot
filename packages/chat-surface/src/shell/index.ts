@@ -80,3 +80,20 @@ export {
   type UseCommandPaletteHotkeyOptions,
 } from "./useCommandPaletteHotkey";
 // === end Phase 12 ===
+
+// === Phase 6 — shell keyboard shortcuts (SSOT table + hook) ===
+export {
+  SHELL_SHORTCUTS,
+  matchesChord,
+  normalizeShortcutKey,
+  type ShellShortcut,
+  type ShellShortcutCallbacks,
+  type ShellShortcutMap,
+  type ShortcutChord,
+  type ShortcutIntent,
+  type ShortcutKeyEvent,
+  type ShortcutScope,
+  type UseShellShortcutsOptions,
+} from "./shortcuts";
+export { useShellShortcuts } from "./useShellShortcuts";
+// === end Phase 6 shortcuts ===
