@@ -10,6 +10,7 @@ import type {
 } from "@0x-copilot/chat-transport";
 
 import { TransportBridge } from "../transport-bridge";
+import { CAPABILITY_CHANNELS } from "../capabilities/channels";
 import {
   CHANNELS,
   IpcValidationError,
@@ -594,5 +595,174 @@ describe("tier2.boundary-error channel (Phase 6C)", () => {
         message: "x",
       }),
     ).rejects.toBeInstanceOf(IpcValidationError);
+  });
+});
+
+describe("capability.* channels", () => {
+  function setupCapability() {
+    const ipcMain = makeFakeIpcMain();
+    const transport = new FakeTransport();
+    const bridge = new TransportBridge(() => undefined, { transport });
+    const capability = {
+      requestFolderGrant: vi.fn(async () => ({
+        grantId: "22222222-2222-4222-8222-222222222222",
+        mode: "read_write" as const,
+        label: "proj",
+        status: "active" as const,
+      })),
+      listGrants: vi.fn(async () => [
+        {
+          grantId: "22222222-2222-4222-8222-222222222222",
+          mode: "read_only" as const,
+          label: "proj",
+          status: "active" as const,
+        },
+      ]),
+      revokeGrant: vi.fn(async () => ({
+        grantId: "22222222-2222-4222-8222-222222222222",
+        mode: "read_only" as const,
+        label: "proj",
+        status: "revoked" as const,
+      })),
+    };
+    const teardown = registerIpcHandlers({
+      ipcMain: ipcMain as unknown as Parameters<
+        typeof registerIpcHandlers
+      >[0]["ipcMain"],
+      bridge,
+      capability,
+    });
+    return { ipcMain, capability, teardown };
+  }
+
+  it("registers the three capability channels only when a handler is provided", () => {
+    const { ipcMain } = setupCapability();
+    expect(ipcMain.has(CAPABILITY_CHANNELS.requestFolderGrant)).toBe(true);
+    expect(ipcMain.has(CAPABILITY_CHANNELS.listGrants)).toBe(true);
+    expect(ipcMain.has(CAPABILITY_CHANNELS.revokeGrant)).toBe(true);
+  });
+
+  it("does not register capability channels when no handler is provided", () => {
+    const ipcMain = makeFakeIpcMain();
+    const transport = new FakeTransport();
+    const bridge = new TransportBridge(() => undefined, { transport });
+    registerIpcHandlers({
+      ipcMain: ipcMain as unknown as Parameters<
+        typeof registerIpcHandlers
+      >[0]["ipcMain"],
+      bridge,
+    });
+    expect(ipcMain.has(CAPABILITY_CHANNELS.requestFolderGrant)).toBe(false);
+  });
+
+  it("requestFolderGrant validates the mode and returns the renderer view", async () => {
+    const { ipcMain, capability } = setupCapability();
+    const res = (await ipcMain.invoke(
+      CAPABILITY_CHANNELS.requestFolderGrant,
+      1,
+      { mode: "read_write" },
+    )) as Record<string, unknown>;
+    expect(capability.requestFolderGrant).toHaveBeenCalledWith({
+      mode: "read_write",
+    });
+    expect(res).toEqual({
+      grantId: "22222222-2222-4222-8222-222222222222",
+      mode: "read_write",
+      label: "proj",
+      status: "active",
+    });
+    // No host path / broker token keys ever cross the boundary.
+    expect(res).not.toHaveProperty("root");
+    expect(res).not.toHaveProperty("token");
+  });
+
+  it("rejects an unknown grant mode with IpcValidationError", async () => {
+    const { ipcMain } = setupCapability();
+    await expect(
+      ipcMain.invoke(CAPABILITY_CHANNELS.requestFolderGrant, 1, {
+        mode: "read_write_all_the_things",
+      }),
+    ).rejects.toBeInstanceOf(IpcValidationError);
+  });
+
+  it("rejects a request-folder-grant payload that smuggles a path", async () => {
+    const { ipcMain } = setupCapability();
+    await expect(
+      ipcMain.invoke(CAPABILITY_CHANNELS.requestFolderGrant, 1, {
+        mode: "read_only",
+        root: "/etc",
+      }),
+    ).rejects.toBeInstanceOf(IpcValidationError);
+  });
+
+  it("strips a host path if a handler ever tries to return one (strict outbound)", async () => {
+    const ipcMain = makeFakeIpcMain();
+    const transport = new FakeTransport();
+    const bridge = new TransportBridge(() => undefined, { transport });
+    const leaky = {
+      requestFolderGrant: vi.fn(async () => ({
+        grantId: "33333333-3333-4333-8333-333333333333",
+        mode: "read_only" as const,
+        label: "x",
+        status: "active" as const,
+        root: "/secret/path",
+      })),
+      listGrants: vi.fn(async () => []),
+      revokeGrant: vi.fn(async () => null),
+    };
+    registerIpcHandlers({
+      ipcMain: ipcMain as unknown as Parameters<
+        typeof registerIpcHandlers
+      >[0]["ipcMain"],
+      bridge,
+      capability: leaky as unknown as Parameters<
+        typeof registerIpcHandlers
+      >[0]["capability"],
+    });
+    // The strict RendererGrant schema throws on the extra `root` key rather
+    // than letting the host path reach the renderer.
+    await expect(
+      ipcMain.invoke(CAPABILITY_CHANNELS.requestFolderGrant, 1, {
+        mode: "read_only",
+      }),
+    ).rejects.toThrow();
+  });
+
+  it("listGrants accepts no params and maps to renderer views", async () => {
+    const { ipcMain } = setupCapability();
+    const res = (await ipcMain.invoke(
+      CAPABILITY_CHANNELS.listGrants,
+      1,
+      {},
+    )) as unknown[];
+    expect(res).toHaveLength(1);
+  });
+
+  it("revokeGrant requires a uuid grantId", async () => {
+    const { ipcMain } = setupCapability();
+    await expect(
+      ipcMain.invoke(CAPABILITY_CHANNELS.revokeGrant, 1, {
+        grantId: "not-a-uuid",
+      }),
+    ).rejects.toBeInstanceOf(IpcValidationError);
+  });
+
+  it("revokeGrant returns the revoked renderer view", async () => {
+    const { ipcMain, capability } = setupCapability();
+    const res = (await ipcMain.invoke(CAPABILITY_CHANNELS.revokeGrant, 1, {
+      grantId: "22222222-2222-4222-8222-222222222222",
+    })) as { status: string };
+    expect(capability.revokeGrant).toHaveBeenCalledWith(
+      "22222222-2222-4222-8222-222222222222",
+    );
+    expect(res.status).toBe("revoked");
+  });
+
+  it("teardown removes the capability channels", async () => {
+    const { ipcMain, teardown } = setupCapability();
+    teardown();
+    expect(ipcMain.has(CAPABILITY_CHANNELS.requestFolderGrant)).toBe(false);
+    expect(ipcMain.has(CAPABILITY_CHANNELS.listGrants)).toBe(false);
+    expect(ipcMain.has(CAPABILITY_CHANNELS.revokeGrant)).toBe(false);
   });
 });

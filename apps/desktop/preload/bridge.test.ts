@@ -3,6 +3,13 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 
 import { CHANNELS, type WindowBridge } from "@0x-copilot/chat-transport";
 
+import { CAPABILITY_CHANNELS } from "../main/capabilities/channels";
+// The runtime bridge accepts any string channel (it validates internally);
+// this local contract types `invoke` with `string`, so capability channels —
+// which are intentionally NOT part of chat-transport's ChannelName union —
+// can be exercised without casts.
+import type { WindowBridge as LocalWindowBridge } from "./window-bridge-types";
+
 type ElectronListener = (event: unknown, payload: unknown) => void;
 
 const electron = vi.hoisted(() => {
@@ -105,5 +112,44 @@ describe("preload bridge stateful IPC", () => {
     emit(CHANNELS.streamEvent, event);
     expect(handler).toHaveBeenCalledOnce();
     expect(handler).toHaveBeenCalledWith(event);
+  });
+});
+
+describe("preload bridge capability-channel allowlist", () => {
+  let bridge: LocalWindowBridge;
+
+  beforeEach(async () => {
+    vi.resetModules();
+    electron.listeners.clear();
+    electron.exposed.bridge = undefined;
+    electron.contextBridge.exposeInMainWorld.mockClear();
+    electron.ipcRenderer.invoke.mockClear();
+    electron.ipcRenderer.on.mockClear();
+    electron.ipcRenderer.removeListener.mockClear();
+
+    await import("./bridge");
+    bridge = electron.exposed.bridge as LocalWindowBridge;
+  });
+
+  it("forwards the capability channels through ipcRenderer.invoke", async () => {
+    await bridge.ipc.invoke(CAPABILITY_CHANNELS.requestFolderGrant, {
+      mode: "read_only",
+    });
+    await bridge.ipc.invoke(CAPABILITY_CHANNELS.listGrants, {});
+    await bridge.ipc.invoke(CAPABILITY_CHANNELS.revokeGrant, {
+      grantId: "x",
+    });
+    expect(electron.ipcRenderer.invoke).toHaveBeenCalledWith(
+      CAPABILITY_CHANNELS.requestFolderGrant,
+      { mode: "read_only" },
+    );
+    expect(electron.ipcRenderer.invoke).toHaveBeenCalledTimes(3);
+  });
+
+  it("still rejects a channel that is in neither allowlist", async () => {
+    await expect(
+      bridge.ipc.invoke("capability.read-file", { grantId: "x" }),
+    ).rejects.toThrow(/not in allowlist/u);
+    expect(electron.ipcRenderer.invoke).not.toHaveBeenCalled();
   });
 });
