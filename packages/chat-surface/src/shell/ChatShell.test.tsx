@@ -194,4 +194,12 @@ describe("ChatShell", () => {
     mount({ activeDestination: "chats", topbarLeaf: "c-123" });
     expect(screen.queryByTestId("topbar-breadcrumb")).toBeNull();
   });
+
+  it("suppresses the shell RightRail on full-bleed chats", () => {
+    // ChatScreen owns the right panel on chats; the empty shell rail would
+    // be a duplicate. (It still renders on non-full-bleed destinations —
+    // covered by "toggles the right column open ...".)
+    mount({ activeDestination: "chats" });
+    expect(screen.queryByTestId("right-rail-toggle")).toBeNull();
+  });
 });

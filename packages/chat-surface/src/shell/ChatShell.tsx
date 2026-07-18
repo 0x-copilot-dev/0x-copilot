@@ -196,7 +196,13 @@ function ShellGrid({
           {children}
         </div>
       </div>
-      <RightRail open={rightOpen} onToggle={() => setRightOpen((v) => !v)} />
+      {/* Full-bleed chats owns its right panel via the main content
+          (ChatScreen's workspace pane), so the shell RightRail — empty
+          scaffolding until Activity/Approvals is wired in the canvas wave —
+          is suppressed there to avoid a duplicate, un-obvious panel. */}
+      {fullBleed ? null : (
+        <RightRail open={rightOpen} onToggle={() => setRightOpen((v) => !v)} />
+      )}
     </div>
   );
 }

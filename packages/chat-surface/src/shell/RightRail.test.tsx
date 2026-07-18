@@ -114,6 +114,21 @@ describe("RightRail (chrome only)", () => {
     expect(onToggle).toHaveBeenCalledTimes(1);
   });
 
+  it("closes via the header close button (replaces the inert ⋯ menu)", () => {
+    const onToggle = vi.fn();
+    render(
+      <RightRail
+        open={true}
+        onToggle={onToggle}
+        title="Copilot conversation"
+      />,
+    );
+    const close = screen.getByTestId("right-rail-header-close");
+    expect(close).toHaveAttribute("aria-label", "Close Copilot conversation");
+    fireEvent.click(close);
+    expect(onToggle).toHaveBeenCalledTimes(1);
+  });
+
   it("re-labels the rail when the host passes a title", () => {
     render(
       <RightRail open={true} onToggle={() => {}} title="Approvals queue" />,
