@@ -34,6 +34,7 @@ const connectorsApiMocks = vi.hoisted(() => ({
   refreshConnector: vi.fn(),
   disconnectConnector: vi.fn(),
   patchConnectorScopes: vi.fn(),
+  setConnectorAccessMode: vi.fn(),
   streamConnectorEvents: vi.fn(),
 }));
 vi.mock("../../../api/connectorsApi", async () => {
@@ -48,6 +49,7 @@ vi.mock("../../../api/connectorsApi", async () => {
     refreshConnector: connectorsApiMocks.refreshConnector,
     disconnectConnector: connectorsApiMocks.disconnectConnector,
     patchConnectorScopes: connectorsApiMocks.patchConnectorScopes,
+    setConnectorAccessMode: connectorsApiMocks.setConnectorAccessMode,
     streamConnectorEvents: connectorsApiMocks.streamConnectorEvents,
   };
 });
@@ -289,5 +291,273 @@ describe("ConnectorsRoute SSE", () => {
     // detail (backoff schedule) is owned by the route file and pinned
     // by the constants above. Reading the source would re-implement
     // the schedule in the test; rely on the close signal.
+  });
+});
+
+// ===========================================================================
+// ACCESS-MODE PATCH — optimistic apply + revert-on-failure (FR-4.22)
+// ===========================================================================
+
+describe("ConnectorsRoute access-mode PATCH", () => {
+  beforeEach(() => {
+    connectorsApiMocks.fetchConnectors.mockReset();
+    connectorsApiMocks.setConnectorAccessMode.mockReset();
+    connectorsApiMocks.streamConnectorEvents.mockReset();
+    connectorsApiMocks.streamConnectorEvents.mockReturnValue({
+      close: vi.fn(),
+    });
+  });
+  afterEach(() => {
+    vi.clearAllMocks();
+  });
+
+  it("applies the picked mode optimistically and reconciles on success", async () => {
+    connectorsApiMocks.fetchConnectors.mockResolvedValueOnce(
+      listResponse([
+        connector({ id: "conn_1" as ConnectorId, access_mode: "read" }),
+      ]),
+    );
+    connectorsApiMocks.setConnectorAccessMode.mockResolvedValueOnce({
+      connector: connector({
+        id: "conn_1" as ConnectorId,
+        access_mode: "read_act",
+      }),
+    });
+
+    render(<ConnectorsRoute identity={IDENTITY} />);
+    await waitFor(() => {
+      expect(screen.getByTestId("connectors-route")).toHaveAttribute(
+        "data-state",
+        "ready",
+      );
+    });
+
+    fireEvent.click(screen.getByTestId("access-mode-option-read_act"));
+
+    // Optimistic: the segment reflects read_act before the PATCH resolves.
+    expect(screen.getByTestId("access-mode-segment")).toHaveAttribute(
+      "data-value",
+      "read_act",
+    );
+    expect(connectorsApiMocks.setConnectorAccessMode).toHaveBeenCalledWith(
+      IDENTITY,
+      "conn_1",
+      { access_mode: "read_act" },
+    );
+
+    // Reconciled row keeps read_act, no error surfaced.
+    await waitFor(() => {
+      expect(
+        screen.queryByTestId("connectors-route-access-mode-error"),
+      ).not.toBeInTheDocument();
+    });
+    expect(screen.getByTestId("access-mode-segment")).toHaveAttribute(
+      "data-value",
+      "read_act",
+    );
+  });
+
+  it("reverts to the prior mode and shows an inline error on PATCH failure", async () => {
+    connectorsApiMocks.fetchConnectors.mockResolvedValueOnce(
+      listResponse([
+        connector({ id: "conn_1" as ConnectorId, access_mode: "read" }),
+      ]),
+    );
+    connectorsApiMocks.setConnectorAccessMode.mockRejectedValueOnce(
+      new Error("patch_failed"),
+    );
+
+    render(<ConnectorsRoute identity={IDENTITY} />);
+    await waitFor(() => {
+      expect(screen.getByTestId("connectors-route")).toHaveAttribute(
+        "data-state",
+        "ready",
+      );
+    });
+
+    fireEvent.click(screen.getByTestId("access-mode-option-off"));
+
+    // Optimistic flip to off before the rejection settles.
+    expect(screen.getByTestId("access-mode-segment")).toHaveAttribute(
+      "data-value",
+      "off",
+    );
+
+    // Revert to the prior mode + inline error once the PATCH rejects.
+    await waitFor(() => {
+      expect(
+        screen.getByTestId("connectors-route-access-mode-error"),
+      ).toBeInTheDocument();
+    });
+    expect(screen.getByTestId("access-mode-segment")).toHaveAttribute(
+      "data-value",
+      "read",
+    );
+  });
+});
+
+// ===========================================================================
+// CONNECT FLOW — ConnectModal catalog → OAuth → permission → persist
+// (FR-4.23)
+// ===========================================================================
+
+describe("ConnectorsRoute connect flow", () => {
+  const originalOpen = window.open;
+
+  beforeEach(() => {
+    connectorsApiMocks.fetchConnectors.mockReset();
+    connectorsApiMocks.startConnectorOAuth.mockReset();
+    connectorsApiMocks.setConnectorAccessMode.mockReset();
+    connectorsApiMocks.streamConnectorEvents.mockReset();
+    // Popup OAuth: stub window.open so jsdom doesn't warn "Not implemented".
+    window.open = vi.fn() as unknown as typeof window.open;
+  });
+  afterEach(() => {
+    window.open = originalOpen;
+    vi.clearAllMocks();
+  });
+
+  it("advances catalog → OAuth → permission and persists the access mode", async () => {
+    connectorsApiMocks.fetchConnectors.mockResolvedValueOnce(
+      listResponse(
+        [],
+        [
+          {
+            slug: "notion" as ConnectorSlug,
+            display_name: "Notion",
+            description: "Docs and notes.",
+          },
+        ],
+      ),
+    );
+    connectorsApiMocks.startConnectorOAuth.mockResolvedValueOnce({
+      authorization_url: "https://example.com/oauth",
+      state: "state_abc",
+    });
+    connectorsApiMocks.setConnectorAccessMode.mockResolvedValueOnce({
+      connector: connector({
+        id: "conn_notion" as ConnectorId,
+        slug: "notion" as ConnectorSlug,
+        display_name: "Notion",
+        access_mode: "read",
+      }),
+    });
+    const sse = captureStreamCallbacks();
+
+    render(<ConnectorsRoute identity={IDENTITY} />);
+    await waitFor(() => {
+      expect(connectorsApiMocks.streamConnectorEvents).toHaveBeenCalledTimes(1);
+    });
+
+    // Open the ConnectModal via the "Connect a tool" CTA.
+    fireEvent.click(
+      screen.getAllByRole("button", { name: "Connect a tool" })[0],
+    );
+    expect(screen.getByTestId("connect-catalog-list")).toBeInTheDocument();
+
+    // Pick the catalog entry → OAuth round-trip starts + spinner shows.
+    fireEvent.click(screen.getByTestId("connect-catalog-option"));
+    expect(connectorsApiMocks.startConnectorOAuth).toHaveBeenCalledWith(
+      IDENTITY,
+      "notion",
+    );
+    expect(screen.getByTestId("connect-oauth")).toBeInTheDocument();
+
+    // OAuth completes: the SSE reports the created connector, clearing the
+    // pending state so the modal auto-advances to the permission step.
+    act(() => {
+      sse.lastCall().onEvent(
+        envelope(
+          "connector.created",
+          connector({
+            id: "conn_notion" as ConnectorId,
+            slug: "notion" as ConnectorSlug,
+            display_name: "Notion",
+            status: "connected",
+          }),
+          1,
+        ),
+      );
+    });
+    await waitFor(() => {
+      expect(screen.getByTestId("connect-permission")).toBeInTheDocument();
+    });
+
+    // Terminal Connect persists the chosen access mode (default "read").
+    fireEvent.click(screen.getByTestId("connect-confirm"));
+    await waitFor(() => {
+      expect(connectorsApiMocks.setConnectorAccessMode).toHaveBeenCalledWith(
+        IDENTITY,
+        "conn_notion",
+        { access_mode: "read" },
+      );
+    });
+  });
+});
+
+// ===========================================================================
+// RECONNECT — error/expired connectors kick off the OAuth restart (FR-4.25)
+// ===========================================================================
+
+describe("ConnectorsRoute reconnect", () => {
+  const ORIGINAL_LOCATION = window.location;
+
+  beforeEach(() => {
+    connectorsApiMocks.fetchConnectors.mockReset();
+    connectorsApiMocks.startConnectorOAuth.mockReset();
+    connectorsApiMocks.streamConnectorEvents.mockReset();
+    connectorsApiMocks.streamConnectorEvents.mockReturnValue({
+      close: vi.fn(),
+    });
+    // jsdom guards navigation — redefine location so `assign` is a no-op spy.
+    Object.defineProperty(window, "location", {
+      configurable: true,
+      writable: true,
+      value: { ...ORIGINAL_LOCATION, assign: vi.fn() },
+    });
+  });
+  afterEach(() => {
+    Object.defineProperty(window, "location", {
+      configurable: true,
+      writable: true,
+      value: ORIGINAL_LOCATION,
+    });
+    vi.clearAllMocks();
+  });
+
+  it("wires a Reconnect action on an error connector to the OAuth restart", async () => {
+    connectorsApiMocks.fetchConnectors.mockResolvedValueOnce(
+      listResponse([
+        connector({
+          id: "conn_1" as ConnectorId,
+          slug: "gmail" as ConnectorSlug,
+          status: "error",
+        }),
+      ]),
+    );
+    connectorsApiMocks.startConnectorOAuth.mockResolvedValueOnce({
+      authorization_url: "https://example.com/oauth",
+      state: "state_abc",
+    });
+
+    render(<ConnectorsRoute identity={IDENTITY} />);
+    await waitFor(() => {
+      expect(screen.getByTestId("connectors-route")).toHaveAttribute(
+        "data-state",
+        "ready",
+      );
+    });
+
+    fireEvent.click(screen.getByTestId("connector-card-action"));
+
+    await waitFor(() => {
+      expect(connectorsApiMocks.startConnectorOAuth).toHaveBeenCalledWith(
+        IDENTITY,
+        "gmail",
+      );
+    });
+    expect(window.location.assign).toHaveBeenCalledWith(
+      "https://example.com/oauth",
+    );
   });
 });
