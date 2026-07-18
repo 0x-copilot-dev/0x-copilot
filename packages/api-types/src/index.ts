@@ -3735,6 +3735,8 @@ export type {
   ConnectorAccessMode,
   ConnectorAuditEntry,
   ConnectorAuditResponse,
+  ConnectorAvailability,
+  ConnectorCapabilitySummary,
   ConnectorCatalogEntry,
   ConnectorConsumers,
   ConnectorDetailResponse,
@@ -3767,6 +3769,26 @@ export type {
 // redesign, Phase 4). Value export so the 3-way segment + tests can
 // enumerate the modes without redeclaring them.
 export { CONNECTOR_ACCESS_MODES } from "./connectors";
+// AC9 — Desktop MCP connector OAuth transport (desktop-only variant types).
+// These do NOT touch the shared web OAuth shapes above; they live in a
+// separate module so the shipped web redirect flow stays byte-identical while
+// the desktop facade routes speak the richer loopback/deep-link transport.
+export type {
+  DesktopConnectorCallback,
+  DesktopConnectorCatalogEntry,
+  DesktopConnectorCatalogResponse,
+  DesktopConnectorConnectionResult,
+  DesktopConnectorOAuthCallbackRequest,
+  DesktopDeepLinkCallback,
+  DesktopLoopbackCallback,
+  DesktopRequestedProductScope,
+  DesktopStartConnectorOAuthRequest,
+  DesktopStartConnectorOAuthResponse,
+} from "./connectors-desktop";
+export {
+  DESKTOP_CONNECTOR_DEEP_LINK_URI,
+  DESKTOP_CONNECTOR_LOOPBACK_PATH,
+} from "./connectors-desktop";
 // === end Phase 11 Connectors ===
 
 // === Phase 12 Team destination ===

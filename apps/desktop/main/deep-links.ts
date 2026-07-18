@@ -41,6 +41,16 @@ function pickPathname(parsed: URL): string {
 
 export type OAuthCallbackHandler = (code: string, state: string) => void;
 
+/**
+ * Connector (AC9) demux hook. The single `enterprise://oauth/callback` scheme
+ * is shared by app-login and every desktop connector flow, so a callback must
+ * be routed by its unique 256-bit `state`. This handler is consulted FIRST for
+ * every OAuth-callback deep link: it returns true iff a pending connector flow
+ * owns the state (and consumes it); a false lets the callback fall through to
+ * app-login (`onOAuthCallback`). Never routes tokens — only code + state.
+ */
+export type ConnectorCallbackRouter = (code: string, state: string) => boolean;
+
 export interface DeepLinkRegistration {
   readonly unsubscribe: () => void;
 }
@@ -51,6 +61,12 @@ export interface RegisterDeepLinksOptions {
   // fallback for environments that can't reliably register custom URL
   // schemes; whichever resolves first wins the race in oidc-client.
   readonly onOAuthCallback?: OAuthCallbackHandler;
+  /**
+   * AC9 — routed BEFORE `onOAuthCallback`. When it returns true the callback
+   * belonged to a connector flow and app-login is NOT invoked; false means the
+   * state is not a connector's, so the app-login handler runs.
+   */
+  readonly connectorCallbackRouter?: ConnectorCallbackRouter;
   readonly logger?: {
     info: (msg: string, ctx?: Record<string, unknown>) => void;
     warn: (msg: string, ctx?: Record<string, unknown>) => void;
@@ -71,6 +87,7 @@ export function registerDeepLinks(
 ): DeepLinkRegistration {
   const logger = options.logger ?? defaultLogger;
   const onOAuthCallback = options.onOAuthCallback;
+  const connectorCallbackRouter = options.connectorCallbackRouter;
 
   const protocolRegistered = app.setAsDefaultProtocolClient(DEEP_LINK_SCHEME);
   if (!protocolRegistered) {
@@ -88,21 +105,27 @@ export function registerDeepLinks(
     }
     if (isOAuthCallbackPath(parsed.pathname)) {
       const { code, state } = parsed.searchParams;
-      if (
-        onOAuthCallback &&
-        typeof code === "string" &&
-        code.length > 0 &&
-        typeof state === "string" &&
-        state.length > 0
-      ) {
-        onOAuthCallback(code, state);
-        return;
+      const hasCode = typeof code === "string" && code.length > 0;
+      const hasState = typeof state === "string" && state.length > 0;
+      if (hasCode && hasState) {
+        // AC9 demux: a connector flow that owns this state consumes the
+        // callback first; only a non-connector state reaches app-login. The
+        // 256-bit state is the sole discriminator — the query never carries a
+        // flow tag we could spoof against.
+        if (connectorCallbackRouter && connectorCallbackRouter(code, state)) {
+          return;
+        }
+        if (onOAuthCallback) {
+          onOAuthCallback(code, state);
+          return;
+        }
       }
-      logger.warn("oauth callback missing code/state", {
+      logger.warn("oauth callback missing code/state or no handler", {
         source,
-        hasCode: typeof code === "string" && code.length > 0,
-        hasState: typeof state === "string" && state.length > 0,
-        hasHandler: Boolean(onOAuthCallback),
+        hasCode,
+        hasState,
+        hasConnectorRouter: Boolean(connectorCallbackRouter),
+        hasLoginHandler: Boolean(onOAuthCallback),
       });
       return;
     }

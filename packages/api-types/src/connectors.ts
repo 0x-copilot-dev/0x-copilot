@@ -149,6 +149,42 @@ export interface Connector {
 }
 
 // ---------------------------------------------------------------------------
+// Availability (AC9 — desktop connector reconciliation overlay)
+// ---------------------------------------------------------------------------
+//
+// The honest, stable availability state a reconciled connector reports BEFORE
+// any live provider probe. Preview connectors read `preview` until the
+// deployment enables them; tenant-template / admin-gated connectors read
+// `admin_setup_required`. Mirrors `ConnectorAvailability` in
+// `services/backend/src/backend_app/connectors/profile_catalog.py`.
+//
+// ADDITIVE + optional-only: this enum is consumed only by the new (optional)
+// catalog fields below and by the desktop-only `connectors-desktop.ts`
+// transport. No existing web payload is changed.
+
+export type ConnectorAvailability =
+  | "available"
+  | "preview"
+  | "admin_setup_required"
+  | "tenant_disabled"
+  | "unsupported_by_policy"
+  | "tool_contract_mismatch"
+  | "temporarily_unavailable";
+
+/**
+ * One user-facing capability line on a reconciled connector (e.g. "Search Jira
+ * issues"). `status` distinguishes a supported read tool from one that needs a
+ * broader scope, or an operation the profile explicitly does not support.
+ * ADDITIVE + optional-only.
+ */
+export interface ConnectorCapabilitySummary {
+  readonly id: string;
+  readonly label: string;
+  readonly status: "supported" | "scope_required" | "unsupported";
+  readonly read_only: boolean;
+}
+
+// ---------------------------------------------------------------------------
 // Catalog entry — slugs Atlas knows about but the caller has not installed
 // ---------------------------------------------------------------------------
 
@@ -159,12 +195,22 @@ export interface Connector {
  * `icon_hint` is a hint string the FE may map to a built-in icon registry
  * (e.g. `"gmail"`, `"slack"`); when absent the FE renders a letter
  * glyph.
+ *
+ * The `display_group` / `release_stage` / `availability` / `capabilities`
+ * fields are AC9 ADDITIONS: every one is OPTIONAL, so existing web call sites
+ * and snapshots keep compiling unchanged and older payloads (which omit them)
+ * stay valid. Only the desktop reconciled catalog populates them today.
  */
 export interface ConnectorCatalogEntry {
   readonly slug: ConnectorSlug;
   readonly display_name: string;
   readonly description: string;
   readonly icon_hint?: string;
+  readonly display_group?: string;
+  readonly release_stage?: "stable" | "preview";
+  readonly availability?: ConnectorAvailability;
+  readonly availability_reason?: string;
+  readonly capabilities?: ReadonlyArray<ConnectorCapabilitySummary>;
 }
 
 // ---------------------------------------------------------------------------

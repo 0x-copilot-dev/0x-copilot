@@ -87,6 +87,49 @@ describe("registerDeepLinks — OAuth callback dispatch", () => {
     reg.unsubscribe();
   });
 
+  it("routes to the connector router first, bypassing app-login, when it owns the state (AC9 demux)", () => {
+    const onOAuthCallback = vi.fn();
+    // The connector router claims only its own 256-bit state.
+    const connectorCallbackRouter = vi.fn(
+      (_code: string, state: string) => state === "CONNECTOR_STATE",
+    );
+    const reg = registerDeepLinks({ onOAuthCallback, connectorCallbackRouter });
+
+    fakeApp.emit(
+      "open-url",
+      fakeOpenUrlEvent(),
+      "enterprise://oauth/callback?code=CODE_C&state=CONNECTOR_STATE",
+    );
+
+    // Connector owned it → app-login is NOT invoked.
+    expect(connectorCallbackRouter).toHaveBeenCalledWith(
+      "CODE_C",
+      "CONNECTOR_STATE",
+    );
+    expect(onOAuthCallback).not.toHaveBeenCalled();
+    reg.unsubscribe();
+  });
+
+  it("falls through to app-login when the connector router does not own the state", () => {
+    const onOAuthCallback = vi.fn();
+    const connectorCallbackRouter = vi.fn(() => false);
+    const reg = registerDeepLinks({ onOAuthCallback, connectorCallbackRouter });
+
+    fakeApp.emit(
+      "open-url",
+      fakeOpenUrlEvent(),
+      "enterprise://oauth/callback?code=CODE_L&state=LOGIN_STATE",
+    );
+
+    expect(connectorCallbackRouter).toHaveBeenCalledWith(
+      "CODE_L",
+      "LOGIN_STATE",
+    );
+    // Not a connector's state → app-login handles it.
+    expect(onOAuthCallback).toHaveBeenCalledWith("CODE_L", "LOGIN_STATE");
+    reg.unsubscribe();
+  });
+
   it("invokes onOAuthCallback when second-instance argv carries oauth/callback", () => {
     const onOAuthCallback = vi.fn();
     const reg = registerDeepLinks({ onOAuthCallback });
@@ -115,7 +158,7 @@ describe("registerDeepLinks — OAuth callback dispatch", () => {
 
     expect(onOAuthCallback).not.toHaveBeenCalled();
     expect(logger.warn).toHaveBeenCalledWith(
-      "oauth callback missing code/state",
+      "oauth callback missing code/state or no handler",
       expect.objectContaining({ hasCode: true, hasState: false }),
     );
     reg.unsubscribe();
@@ -207,8 +250,8 @@ describe("registerDeepLinks — OAuth callback dispatch", () => {
     );
 
     expect(logger.warn).toHaveBeenCalledWith(
-      "oauth callback missing code/state",
-      expect.objectContaining({ hasHandler: false }),
+      "oauth callback missing code/state or no handler",
+      expect.objectContaining({ hasLoginHandler: false }),
     );
     reg.unsubscribe();
   });

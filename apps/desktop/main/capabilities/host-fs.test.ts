@@ -1,9 +1,11 @@
 // @vitest-environment node
 import {
+  constants,
   existsSync,
   lstatSync,
   mkdirSync,
   mkdtempSync,
+  openSync,
   readdirSync,
   readFileSync,
   realpathSync,
@@ -13,12 +15,18 @@ import {
   writeFileSync,
 } from "node:fs";
 import { rm, symlink } from "node:fs/promises";
+import { createRequire } from "node:module";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { isAbsolute, join, relative } from "node:path";
 
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 
-import { defaultHostFsDeps, HostFs, type HostFsDeps } from "./host-fs";
+import {
+  defaultHostFsDeps,
+  HostFs,
+  type HostFsDeps,
+  type NativeWorkspaceFs,
+} from "./host-fs";
 import { FS_LIMITS, FsError } from "./path-validation";
 
 const bufOf = (s: string): Buffer => Buffer.from(s, "utf-8");
@@ -666,5 +674,327 @@ describe("HostFs — write TOCTOU (ancestor swap between resolve and use)", () =
     expect(readRoot("sub/ok.txt")).toBe("fine");
     // `lstatSync` proves it is a real regular file, not a symlink we followed.
     expect(lstatSync(join(root, "sub", "ok.txt")).isFile()).toBe(true);
+  });
+});
+
+describe("HostFs — native atomic open (workspace-fs helper)", () => {
+  // A faithful in-process stand-in for the native `openBeneath` primitive: it
+  // resolves `rel` beneath `rootReal` reading the CURRENT filesystem state (so
+  // it observes a mid-flight swap, exactly as openat2(RESOLVE_BENEATH) /
+  // NtCreateFile would), refuses ANY symlink component (RESOLVE_NO_SYMLINKS)
+  // with ELOOP and any out-of-root escape (RESOLVE_BENEATH) with EXDEV, and
+  // otherwise hands back a real OS fd the Node side can fstat/read/close. This
+  // lets us prove host-fs's native WIRING atomically here; the compiled C addon
+  // is validated per-platform at build/packaging time (follow-up).
+  interface FakeNative extends NativeWorkspaceFs {
+    readonly calls: string[];
+  }
+  function makeFakeNative(): FakeNative {
+    const calls: string[] = [];
+    return {
+      calls,
+      platform: "linux",
+      openBeneath(rootReal, rel, opts) {
+        calls.push(rel);
+        const parts = rel === "" ? [] : rel.split("/");
+        let cur = rootReal;
+        for (const part of parts) {
+          cur = join(cur, part);
+          let st: ReturnType<typeof lstatSync>;
+          try {
+            st = lstatSync(cur);
+          } catch {
+            throw Object.assign(new Error("no entry"), { code: "ENOENT" });
+          }
+          // RESOLVE_NO_SYMLINKS: a symlink in ANY component is refused.
+          if (st.isSymbolicLink()) {
+            throw Object.assign(new Error("symlink component"), {
+              code: "ELOOP",
+            });
+          }
+        }
+        // RESOLVE_BENEATH: the resolved target must stay under the root.
+        const real = parts.length === 0 ? rootReal : realpathSync(cur);
+        const rel2 = relative(rootReal, real);
+        if (rel2 !== "" && (rel2.startsWith("..") || isAbsolute(rel2))) {
+          throw Object.assign(new Error("escapes root"), { code: "EXDEV" });
+        }
+        const flags = opts.directory
+          ? constants.O_RDONLY | constants.O_DIRECTORY
+          : constants.O_RDONLY;
+        return openSync(parts.length === 0 ? rootReal : cur, flags);
+      },
+    };
+  }
+
+  function swapSubToOutsideSymlink(): () => Promise<void> {
+    let fired = false;
+    return async () => {
+      if (fired) return;
+      fired = true;
+      await rm(join(root, "sub"), { recursive: true, force: true });
+      await symlink(outside, join(root, "sub"));
+    };
+  }
+
+  // Deps whose pure-Node post-open recheck is DELIBERATELY DEFEATED: `realpath`
+  // reports no drift and `lstat` follows symlinks so the fstat-vs-lstat identity
+  // check always matches. Under these deps the Node fallback would let an
+  // intermediate-component swap escape — so any denial can ONLY come from the
+  // native primitive, making the "atomic, not the recheck" claim airtight.
+  function depsWithDefeatedRecheck(extra: Partial<HostFsDeps>): HostFsDeps {
+    return {
+      ...defaultHostFsDeps(),
+      platform: "linux",
+      realpath: async (p) => p,
+      lstat: async (p) => statSync(p),
+      ...extra,
+    };
+  }
+
+  it("native path denies an intermediate-component swap ATOMICALLY (not the recheck)", async () => {
+    const native = makeFakeNative();
+    const hostFs = new HostFs(
+      depsWithDefeatedRecheck({
+        native,
+        afterResolve: swapSubToOutsideSymlink(),
+      }),
+    );
+    // root/sub is swapped to a symlink→outside AFTER resolve; the native
+    // openBeneath observes the symlink component and refuses (ELOOP). The Node
+    // recheck is defeated, so this denial is attributable solely to native.
+    expect(await codeOf(hostFs.read(root, "sub/nested.txt"))).toBe(
+      "permission_denied",
+    );
+    expect(native.calls).toContain("sub/nested.txt");
+  });
+
+  it("control: with the recheck defeated AND no native, the SAME swap escapes (so native is what closes it)", async () => {
+    // No `native` → the Node O_NOFOLLOW-only path runs; O_NOFOLLOW guards only
+    // the FINAL component, so the swapped intermediate `sub` symlink is
+    // followed and (recheck defeated) the outside file leaks. This is the
+    // residual the native helper exists to close — proven by contrast.
+    const hostFs = new HostFs(
+      depsWithDefeatedRecheck({ afterResolve: swapSubToOutsideSymlink() }),
+    );
+    const r = await hostFs.read(root, "sub/nested.txt");
+    expect(Buffer.from(r.base64, "base64").toString("utf-8")).toBe(
+      "OUTSIDE NESTED SECRET",
+    );
+  });
+
+  it("native path allows a legitimate read (no swap) and is the code path taken", async () => {
+    const native = makeFakeNative();
+    const hostFs = new HostFs({
+      ...defaultHostFsDeps(),
+      platform: "linux",
+      native,
+    });
+    const r = await hostFs.read(root, "sub/nested.txt");
+    expect(Buffer.from(r.base64, "base64").toString("utf-8")).toContain(
+      "needle",
+    );
+    expect(native.calls).toContain("sub/nested.txt");
+  });
+
+  it("native ENOSYS falls back to the Node recheck, which still denies the swap", async () => {
+    const nativeEnosys: NativeWorkspaceFs = {
+      platform: "linux",
+      openBeneath() {
+        throw Object.assign(new Error("no openat2"), { code: "ENOSYS" });
+      },
+    };
+    const hostFs = new HostFs({
+      ...defaultHostFsDeps(),
+      platform: "linux",
+      native: nativeEnosys,
+      afterResolve: swapSubToOutsideSymlink(),
+    });
+    // ENOSYS → fall through to the (real, not defeated) Node recheck → denied.
+    expect(await codeOf(hostFs.read(root, "sub/nested.txt"))).toBe(
+      "permission_denied",
+    );
+  });
+
+  it("darwin ignores the native helper (keeps its already-atomic Node path)", async () => {
+    const native = makeFakeNative();
+    const hostFs = new HostFs({
+      ...defaultHostFsDeps(),
+      platform: "darwin",
+      native,
+      afterResolve: swapSubToOutsideSymlink(),
+    });
+    // darwin's O_NOFOLLOW_ANY open denies the swap atomically; the native
+    // helper must NOT be consulted (darwin path is unchanged).
+    expect(await codeOf(hostFs.read(root, "sub/nested.txt"))).toBe(
+      "permission_denied",
+    );
+    expect(native.calls).toEqual([]);
+  });
+
+  it("native parent-pin denies a write TOCTOU ancestor swap; nothing lands outside", async () => {
+    mkdirSync(join(outside, "deep"), { recursive: true }); // decoy target dir
+    const native = makeFakeNative();
+    const hostFs = new HostFs(
+      depsWithDefeatedRecheck({
+        native,
+        afterResolve: swapSubToOutsideSymlink(),
+      }),
+    );
+    // Write target sub/deep/planted.txt → parent `sub/deep` is pinned via the
+    // native open; the swapped `sub` symlink component is refused (ELOOP).
+    expect(
+      await codeOf(hostFs.write(root, "sub/deep/planted.txt", bufOf("x"))),
+    ).toBe("permission_denied");
+    expect(existsSync(join(outside, "deep", "planted.txt"))).toBe(false);
+    expect(native.calls).toContain("sub/deep");
+  });
+
+  it("loader is graceful: loadNative() never throws and returns undefined or a valid helper", () => {
+    // Until the addon is prebuilt / electron-rebuilt for the target ABI, no
+    // `.node` binary exists and the loader must degrade to `undefined` (Node
+    // fallback) rather than throw. If a binary IS present it must expose a
+    // callable `openBeneath`. Both are acceptable — loading is always safe.
+    const req = createRequire(import.meta.url);
+    const mod = req("../../native/workspace-fs/index.cjs") as {
+      loadNative: () => NativeWorkspaceFs | undefined;
+    };
+    expect(typeof mod.loadNative).toBe("function");
+    const helper = mod.loadNative();
+    expect(
+      helper === undefined || typeof helper.openBeneath === "function",
+    ).toBe(true);
+  });
+
+  // --- REAL compiled-addon integration (runs only when a binary is present) ---
+  // These load the ACTUAL native `.node` (built via `npm run build` in
+  // native/workspace-fs) and drive host-fs through it. When no binary exists in
+  // the environment they skip — the fake-native tests above already cover the
+  // wiring, and the compiled binary is validated per-platform at packaging time.
+  function loadRealNative(): NativeWorkspaceFs | undefined {
+    const req = createRequire(import.meta.url);
+    const mod = req("../../native/workspace-fs/index.cjs") as {
+      loadNative: () => NativeWorkspaceFs | undefined;
+    };
+    return mod.loadNative();
+  }
+
+  it("REAL addon denies a genuine intermediate-component symlink swap (skips if unbuilt)", async () => {
+    const realNative = loadRealNative();
+    if (realNative === undefined) return;
+    const hostFs = new HostFs({
+      ...defaultHostFsDeps(),
+      platform: "linux", // force host-fs down the native branch
+      native: realNative,
+      afterResolve: swapSubToOutsideSymlink(),
+    });
+    expect(await codeOf(hostFs.read(root, "sub/nested.txt"))).toBe(
+      "permission_denied",
+    );
+  });
+
+  it("REAL addon opens a legitimate in-root file (skips if unbuilt)", async () => {
+    const realNative = loadRealNative();
+    if (realNative === undefined) return;
+    const hostFs = new HostFs({
+      ...defaultHostFsDeps(),
+      platform: "linux",
+      native: realNative,
+    });
+    const r = await hostFs.read(root, "sub/nested.txt");
+    expect(Buffer.from(r.base64, "base64").toString("utf-8")).toContain(
+      "needle",
+    );
+  });
+});
+
+// G2 (read/write time): a legitimately-granted folder that CONTAINS a nested
+// credential directory (`.ssh` / `.aws` / `.gnupg` / `keychains`) must never
+// expose that subtree, regardless of the leaf filename (the per-file denylist
+// only catches known secret NAMES; these files deliberately do not match it).
+describe("HostFs — nested credential directories are unreachable", () => {
+  beforeEach(() => {
+    mkdirSync(join(root, ".ssh"), { recursive: true });
+    mkdirSync(join(root, "project", ".aws"), { recursive: true });
+    mkdirSync(join(root, "project", ".gnupg"), { recursive: true });
+    // Files whose LEAF names are NOT on the sensitive-filename denylist, so only
+    // the nested-directory guard can protect them.
+    writeFileSync(join(root, ".ssh", "config"), "Host secret\n");
+    writeFileSync(
+      join(root, ".ssh", "known_hosts"),
+      "gh.com ssh-ed25519 AAA\n",
+    );
+    writeFileSync(
+      join(root, "project", ".aws", "config"),
+      "[default]\nregion=x\n",
+    );
+    writeFileSync(join(root, "project", ".gnupg", "secring.gpg"), "KEYRING\n");
+    writeFileSync(join(root, "project", "readme.txt"), "ordinary file\n");
+  });
+
+  it("read of a file inside a nested credential dir is denied", async () => {
+    expect(await codeOf(fs.read(root, ".ssh/config"))).toBe(
+      "permission_denied",
+    );
+    expect(await codeOf(fs.read(root, "project/.aws/config"))).toBe(
+      "permission_denied",
+    );
+    expect(await codeOf(fs.read(root, "project/.gnupg/secring.gpg"))).toBe(
+      "permission_denied",
+    );
+  });
+
+  it("stat / list of a nested credential dir is denied", async () => {
+    expect(await codeOf(fs.stat(root, ".ssh"))).toBe("permission_denied");
+    expect(await codeOf(fs.list(root, ".ssh"))).toBe("permission_denied");
+    expect(await codeOf(fs.list(root, "project/.aws"))).toBe(
+      "permission_denied",
+    );
+  });
+
+  it("case-insensitive: a differently-cased credential dir is still denied", async () => {
+    mkdirSync(join(root, ".SSH"), { recursive: true });
+    writeFileSync(join(root, ".SSH", "config"), "x\n");
+    // On a case-insensitive fs this aliases .ssh; on a case-sensitive fs it is
+    // a distinct dir — either way the guard denies it.
+    expect(await codeOf(fs.read(root, ".SSH/config"))).toBe(
+      "permission_denied",
+    );
+  });
+
+  it("glob never yields a path inside a nested credential dir", async () => {
+    const r = await fs.glob(root, "**/config");
+    expect(r.paths).not.toContain(".ssh/config");
+    expect(r.paths).not.toContain("project/.aws/config");
+    // The ordinary sibling file is still reachable.
+    const r2 = await fs.glob(root, "**/readme.txt");
+    expect(r2.paths).toContain("project/readme.txt");
+  });
+
+  it("grep never scans a file inside a nested credential dir", async () => {
+    const r = await fs.grep(root, "secret");
+    for (const hit of r.hits) {
+      expect(hit.path.includes(".ssh")).toBe(false);
+      expect(hit.path.includes(".aws")).toBe(false);
+      expect(hit.path.includes(".gnupg")).toBe(false);
+    }
+  });
+
+  it("writes into a nested credential dir are denied (write/edit/mkdir/delete)", async () => {
+    expect(
+      await codeOf(fs.write(root, ".ssh/authorized_keys", bufOf("x"))),
+    ).toBe("permission_denied");
+    expect(await codeOf(fs.edit(root, ".ssh/config", bufOf("x")))).toBe(
+      "permission_denied",
+    );
+    expect(await codeOf(fs.mkdir(root, "project/.aws/sub"))).toBe(
+      "permission_denied",
+    );
+    expect(await codeOf(fs.delete(root, ".ssh/config"))).toBe(
+      "permission_denied",
+    );
+    expect(
+      await codeOf(fs.move(root, "project/readme.txt", ".ssh/readme.txt")),
+    ).toBe("permission_denied");
   });
 });

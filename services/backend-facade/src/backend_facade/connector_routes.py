@@ -46,6 +46,12 @@ class Constants:
         SCOPES = "/v1/connectors/{connector_id}/scopes"
         AUDIT = "/v1/connectors/{connector_id}/audit"
         STREAM = "/v1/connectors/stream"
+        # AC9 — desktop-only OAuth transport variant. Distinct paths from the
+        # web START_OAUTH / OAUTH_CALLBACK above so the shipped web redirect
+        # flow's wire shapes stay byte-identical.
+        DESKTOP_CATALOG = "/v1/connectors/desktop/catalog"
+        DESKTOP_START_OAUTH = "/v1/connectors/{slug}/desktop/start-oauth"
+        DESKTOP_OAUTH_CALLBACK = "/v1/connectors/desktop/oauth-callback"
 
     class Sse:
         MEDIA_TYPE = "text/event-stream"
@@ -141,6 +147,63 @@ def register_connector_routes(app: FastAPI) -> None:
             media_type=Constants.Sse.MEDIA_TYPE,
             headers={"X-Accel-Buffering": "no", "Cache-Control": "no-store"},
         )
+
+    # ----- Desktop OAuth transport (AC9) ---------------------------------
+    # Thin, token-free forwarders for the desktop-only OAuth variant. The
+    # facade injects the VERIFIED identity (query params in dev, service-token
+    # headers in prod) and never sees or stores a provider token — the backend
+    # coordinator keeps them encrypted in TokenVault. Declared BEFORE the
+    # ``/{connector_id}`` param route (all three carry a literal ``desktop``
+    # segment, so no ambiguity, but registration-order keeps intent clear).
+
+    @app.get(Constants.Paths.DESKTOP_CATALOG)
+    async def desktop_catalog(request: Request) -> dict[str, object]:
+        backend_url = _settings_for(app).backend_url
+        client = http_client(app)
+        identity = await FacadeAuthenticator.verify_with_touch(
+            request, backend_url=backend_url, http_client=client
+        )
+        response = await client.get(
+            f"{backend_url}{Constants.Paths.DESKTOP_CATALOG}",
+            params={"org_id": identity.org_id, "user_id": identity.user_id},
+            headers=FacadeAuthenticator.service_headers(identity),
+            timeout=15,
+        )
+        return _coerce_object_or_raise(response)
+
+    @app.post(Constants.Paths.DESKTOP_START_OAUTH)
+    async def desktop_start_oauth(request: Request, slug: str) -> dict[str, object]:
+        backend_url = _settings_for(app).backend_url
+        client = http_client(app)
+        identity = await FacadeAuthenticator.verify_with_touch(
+            request, backend_url=backend_url, http_client=client
+        )
+        body = await _safe_json(request)
+        response = await client.post(
+            f"{backend_url}/v1/connectors/{slug}/desktop/start-oauth",
+            params={"org_id": identity.org_id, "user_id": identity.user_id},
+            json=body,
+            headers=FacadeAuthenticator.service_headers(identity),
+            timeout=15,
+        )
+        return _coerce_object_or_raise(response)
+
+    @app.post(Constants.Paths.DESKTOP_OAUTH_CALLBACK)
+    async def desktop_oauth_callback(request: Request) -> dict[str, object]:
+        backend_url = _settings_for(app).backend_url
+        client = http_client(app)
+        identity = await FacadeAuthenticator.verify_with_touch(
+            request, backend_url=backend_url, http_client=client
+        )
+        body = await _safe_json(request)
+        response = await client.post(
+            f"{backend_url}{Constants.Paths.DESKTOP_OAUTH_CALLBACK}",
+            params={"org_id": identity.org_id, "user_id": identity.user_id},
+            json=body,
+            headers=FacadeAuthenticator.service_headers(identity),
+            timeout=15,
+        )
+        return _coerce_object_or_raise(response)
 
     # ----- Detail ---------------------------------------------------------
 

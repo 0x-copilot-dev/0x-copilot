@@ -24,6 +24,32 @@ class BrowserBroker:
     ENVELOPE_TTL_MS = 5 * 60 * 1000
 
 
+class BrowserEnv:
+    """Environment variables the desktop supervisor sets for the browser edge.
+
+    ``FLAG`` is the byte-for-byte counterpart of the desktop-side
+    ``DESKTOP_BROWSER_FLAG`` (``apps/desktop/main/browser/feature-gate.ts``); the
+    subsystem — worker, loopback broker, and this MCP card — is opt-in behind it
+    and fails closed when unset. ``BROKER_URL`` / ``BROKER_TOKEN`` carry the
+    loopback base URL + bootstrap credential for the Electron-main browser broker
+    (distinct from the AC5 capability broker), injected only by the trusted
+    desktop service environment.
+    """
+
+    FLAG = "RUNTIME_ENABLE_DESKTOP_BROWSER"
+    BROKER_URL = "DESKTOP_BROWSER_BROKER_URL"
+    BROKER_TOKEN = "DESKTOP_BROWSER_BROKER_TOKEN"
+
+    #: Truthy tokens mirror the desktop feature gate exactly.
+    _TRUTHY = frozenset({"1", "true", "yes", "on", "enabled"})
+
+    @classmethod
+    def is_enabled(cls, value: str | None) -> bool:
+        """Whether the browser flag value is explicitly truthy (fails closed)."""
+
+        return (value or "").strip().lower() in cls._TRUTHY
+
+
 class BrowserServer:
     """Identity of the desktop browser MCP server card."""
 

@@ -552,6 +552,18 @@ class RuntimeDependencies(RuntimeContract):
     # user has granted no folders, so the route is absent and those images are
     # byte-identical.
     workspace_backend: object | None = None
+    # Optional gated ``run_code_mode`` tool (AC6 Monty code mode). Built per run
+    # by the worker only when ``RUNTIME_ENABLE_MONTY`` + ``single_user_desktop``
+    # hold and the file object store is present; the factory appends it to the
+    # model-visible tool set and adds its prompt guidance. ``None`` everywhere
+    # else, so non-desktop / disabled runs are byte-identical.
+    code_mode_tool: object | None = None
+    # Optional gated ``run_in_sandbox`` tool (AC7 remote sandbox, execute-only).
+    # Built per run by the worker only when ``RUNTIME_ENABLE_REMOTE_SANDBOX`` + a
+    # configured provider + ``single_user_desktop`` hold; the factory appends it
+    # to the model-visible tool set and adds its prompt guidance. ``None``
+    # everywhere else, so non-desktop / disabled runs are byte-identical.
+    sandbox_execute_tool: object | None = None
     # Optional process-wide TTL cache for MCP discovery (the
     # ``connect + list_tools + list_resources`` round-trips on
     # ``McpLoader.load_server``). When ``None`` the loader behaves
