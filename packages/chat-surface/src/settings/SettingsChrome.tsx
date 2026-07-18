@@ -61,7 +61,11 @@ export function SecHead({
 // optional `meta` line and an optional right-aligned `actions` slot.
 // ---------------------------------------------------------------------------
 
-export interface SetCardProps extends HTMLAttributes<HTMLElement> {
+export interface SetCardProps extends Omit<
+  HTMLAttributes<HTMLElement>,
+  "title"
+> {
+  /** Card heading (rendered as an h3) — a node, not the DOM `title` attribute. */
   readonly title?: ReactNode;
   /** Sub-line under the title (DESIGN-SPEC §4 "head h3 + meta"). */
   readonly meta?: ReactNode;
