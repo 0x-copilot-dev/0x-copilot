@@ -189,6 +189,7 @@ async def _assemble_harness(
     deep_backend = _composed_deep_backend(
         runtime_dependencies.subagent_artifacts_backend,
         drafts_backend=runtime_dependencies.drafts_backend,
+        large_tool_results_backend=runtime_dependencies.large_tool_results_backend,
     )
 
     try:
@@ -586,17 +587,24 @@ def _composed_deep_backend(
     subagent_artifacts_backend: object | None,
     *,
     drafts_backend: object | None = None,
+    large_tool_results_backend: object | None = None,
 ) -> object | None:
     """Wrap optional Atlas-specific backends in a deepagents ``CompositeBackend``.
 
     ``CompositeBackend`` routes paths to per-prefix backends and falls back to
-    a default. We register two prefixes:
+    a default. We register up to three prefixes:
 
-    - ``/subagents/`` → read-only subagent execution trace projection.
+    - ``/subagents/`` → read-only subagent execution trace. On the desktop file
+      store this is a file-native reader over the canonical per-subagent JSONL;
+      elsewhere it is the on-demand event-store projection.
     - ``/drafts/`` → versioned, append-only Workspace-pane draft persistence.
       Catches the agent's existing ``write_file`` / ``edit_file``
       tool calls and turns them into ``runtime_drafts`` rows + ``DRAFT_UPDATED``
       events.
+    - ``/large_tool_results/`` → read-only resolver for offloaded oversized tool
+      results from the desktop file store's object store. ``None`` (unrouted)
+      on every other backend, so those paths stay on the ``StateBackend``
+      default exactly as before.
 
     Other FS paths (``/memories/``, ``/skills/``, …) stay on deepagents'
     ``StateBackend`` default.
@@ -607,6 +615,8 @@ def _composed_deep_backend(
         routes["/subagents/"] = subagent_artifacts_backend
     if drafts_backend is not None:
         routes["/drafts/"] = drafts_backend
+    if large_tool_results_backend is not None:
+        routes["/large_tool_results/"] = large_tool_results_backend
     if not routes:
         return None
     from deepagents.backends.composite import CompositeBackend

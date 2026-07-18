@@ -208,7 +208,10 @@ class RuntimeRunHandler:
         self.run_termination = RunTerminationCoordinator(
             event_producer=self.event_producer,
         )
-        self.stream_event_mapper = StreamOrchestrator(self.event_producer)
+        self.stream_event_mapper = StreamOrchestrator(
+            self.event_producer,
+            tool_result_offloader=self._build_tool_result_offloader(),
+        )
         self._runtime_streamer_explicit = runtime_streamer is not astream_runtime
         self.audit_emitter = WorkerAuditEmitter(persistence=self.persistence)
         self.pricing_catalog = ModelPricingCatalog(self.persistence)
@@ -798,6 +801,60 @@ class RuntimeRunHandler:
             return context
         return await self._provider_keys_hydrator.hydrate(context)
 
+    def _file_backend_store(self) -> object | None:
+        """Return the active file store, or ``None`` on non-file backends.
+
+        Duck-typed on the object store + layout the file adapter exposes so the
+        worker's hot path never imports the desktop-only file backend on the
+        web / postgres / in-memory images. The event store and persistence port
+        are the same ``FileRuntimeApiStore`` instance when the file backend is
+        wired, so either would do; we read from the event store.
+        """
+
+        store = self.event_store
+        if hasattr(store, "object_store") and hasattr(store, "layout"):
+            return store
+        return None
+
+    def _build_tool_result_offloader(self) -> object | None:
+        """Construct the file-store tool-result offloader, or ``None`` elsewhere."""
+
+        store = self._file_backend_store()
+        if store is None:
+            return None
+        # Lazy imports: the file adapter (and its sqlite/object-store deps) must
+        # not load on the web/postgres images.
+        from runtime_adapters.file import FileOffloadWriter  # noqa: PLC0415
+        from runtime_worker.tool_result_offload import (  # noqa: PLC0415
+            ToolResultOffloader,
+        )
+
+        return ToolResultOffloader(FileOffloadWriter(store.object_store))
+
+    def _subagent_artifacts_backend(self, command: RuntimeRunCommand) -> object:
+        """Return the per-subagent trace backend for the active store backend.
+
+        On the desktop file store this reads the canonical per-subagent JSONL
+        directly; elsewhere it is the event-store projection used historically.
+        """
+
+        store = self._file_backend_store()
+        if store is None:
+            return SubagentArtifactsBackend(
+                event_store=self.event_store,
+                persistence=self.persistence,
+                org_id=command.org_id,
+                conversation_id=command.conversation_id,
+                current_run_id=command.run_id,
+            )
+        from runtime_adapters.file import FileSubagentTraceBackend  # noqa: PLC0415
+
+        return FileSubagentTraceBackend(
+            layout=store.layout,
+            org_id=command.org_id,
+            conversation_id=command.conversation_id,
+        )
+
     def _dependencies_for_run(
         self,
         command: RuntimeRunCommand,
@@ -806,14 +863,20 @@ class RuntimeRunHandler:
         """Build ``RuntimeDependencies`` augmented with per-run backends (drafts, subagent artifacts)."""
         dependencies = self.dependencies_factory(command.runtime_context)
         update: dict[str, object] = {
-            "subagent_artifacts_backend": SubagentArtifactsBackend(
-                event_store=self.event_store,
-                persistence=self.persistence,
-                org_id=command.org_id,
-                conversation_id=command.conversation_id,
-                current_run_id=command.run_id,
-            ),
+            "subagent_artifacts_backend": self._subagent_artifacts_backend(command),
         }
+        file_store = self._file_backend_store()
+        if file_store is not None:
+            # Route `/large_tool_results/<sha256>` reads to the object store so
+            # the supervisor can pull back an offloaded tool result. Desktop
+            # only — `None` (unrouted) on every other backend.
+            from runtime_adapters.file import (  # noqa: PLC0415
+                FileLargeToolResultBackend,
+            )
+
+            update["large_tool_results_backend"] = FileLargeToolResultBackend(
+                file_store.object_store
+            )
         if self.draft_store is not None:
             # Tenant identity is bound at construction so the model cannot inject
             # org_id via path strings when writing to /drafts/<uuid>.md.
