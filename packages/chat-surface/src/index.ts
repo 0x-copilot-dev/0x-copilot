@@ -265,6 +265,19 @@ export {
 export type { PaletteSearchPort } from "./ports/PaletteSearchPort";
 // === end Phase 12 ===
 
+// === Phase 6 — shell keyboard shortcuts (SSOT table + hook) ===
+// PR-6.6: surface the §6 shortcut hook + its callback/option types at the
+// package root so the desktop bootstrap (and any other host) can wire the
+// global chords through the single SSOT (`shell/shortcuts.ts`).
+export {
+  SHELL_SHORTCUTS,
+  useShellShortcuts,
+  type ShellShortcutCallbacks,
+  type ShortcutIntent,
+  type UseShellShortcutsOptions,
+} from "./shell";
+// === end Phase 6 shortcuts ===
+
 // === Phase 2-B thread-canvas ===
 export {
   ThreadCanvas,
@@ -1199,3 +1212,21 @@ export {
 } from "./destinations/run";
 export { type TcChatApproval } from "./thread-canvas";
 // === end Phase 3 (PR-3.10) ===
+
+// === Phase 3 (PR-3.11) run empty/multi-run ===
+// The two prototype-gap states `RunDestination` mounts internally: the
+// empty/idle goal composer (`RunEmptyState`, FR-3.25 — shown when the
+// conversation has no active run; its submit starts a run the shell binds via
+// the `runId` seam, no shell remount) and the multi-run selector
+// (`RunMultiSelect`, FR-3.26 — shown when the conversation has >1 run; picking
+// one rebinds the cockpit via `useRunSession.selectRun`, and it renders no
+// chrome for ≤1 run). Both are presentational; `RunDestination` owns the wiring,
+// so hosts embedding the cockpit need nothing more, but they are exported for
+// standalone hosts / tests.
+export {
+  RunEmptyState,
+  type RunEmptyStateProps,
+  RunMultiSelect,
+  type RunMultiSelectProps,
+} from "./destinations/run";
+// === end Phase 3 (PR-3.11) ===

@@ -61,14 +61,14 @@ export {
 } from "./ActivityList";
 // === end Phase 0.5 ===
 
-// === W0 placeholder for not-yet-built destinations ===
+// === Placeholder for destinations not yet built in the redesign ===
 export {
   DestinationPlaceholder,
   type DestinationPlaceholderBridge,
   type DestinationPlaceholderProps,
 } from "./DestinationPlaceholder";
 
-// === Phase 12 — global ⌘K command palette ===
+// === Phase 6 — global ⌘K command palette ===
 export { CommandPalette, type CommandPaletteProps } from "./CommandPalette";
 export {
   CommandPaletteTrigger,
@@ -79,4 +79,21 @@ export {
   useCommandPaletteHotkey,
   type UseCommandPaletteHotkeyOptions,
 } from "./useCommandPaletteHotkey";
-// === end Phase 12 ===
+// === end Phase 6 command palette ===
+
+// === Phase 6 — shell keyboard shortcuts (SSOT table + hook) ===
+export {
+  SHELL_SHORTCUTS,
+  matchesChord,
+  normalizeShortcutKey,
+  type ShellShortcut,
+  type ShellShortcutCallbacks,
+  type ShellShortcutMap,
+  type ShortcutChord,
+  type ShortcutIntent,
+  type ShortcutKeyEvent,
+  type ShortcutScope,
+  type UseShellShortcutsOptions,
+} from "./shortcuts";
+export { useShellShortcuts } from "./useShellShortcuts";
+// === end Phase 6 shortcuts ===

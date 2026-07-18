@@ -1,10 +1,10 @@
 # @0x-copilot/desktop
 
-0xCopilot Electron desktop client. See
-[docs/plan/desktop/PRD.md](../../docs/plan/desktop/PRD.md) for the master
-plan and
-[docs/plan/desktop/phase-1/1A-electron-shell.md](../../docs/plan/desktop/phase-1/1A-electron-shell.md)
-for the Phase 1-A shell scope.
+0xCopilot Electron desktop client. The original 8-phase Atlas plan lives in
+[docs/plan/desktop/PRD.md](../../docs/plan/desktop/PRD.md); the shipped shell
+is the **6-destination solo redesign** —
+[docs/plan/desktop-redesign/PLAN.md](../../docs/plan/desktop-redesign/PLAN.md)
+is the current source of truth.
 
 ## Layout
 
@@ -13,8 +13,97 @@ main/         Node — app lifecycle, BrowserWindow, app:// protocol, deep links
 preload/      Node + sandboxed DOM — contextBridge.exposeInMainWorld('bridge', ...)
 renderer/     Chromium — mounts <ChatShell /> from @0x-copilot/chat-surface
 out/          esbuild output (main/, preload/, renderer/)
-dist/         electron-builder output (Phase 8 expands)
+dist/         electron-builder output
 ```
+
+## Renderer wiring (the redesigned shell)
+
+`renderer/bootstrap.tsx` composes the shipped 6-destination solo shell. From
+the outside in:
+
+```
+DeploymentProfileProvider  profile = "single_user_desktop" (team gated off)
+  BootGate                 supervised-boot progress screen (packaged/staged only)
+    SignInGate             dev-mint / Google / wallet sign-in; bearer stays in main
+      ChatShell            48px icon rail (6 destinations) + 46px topbar + rail-foot Settings/avatar
+        DestinationOutlet  active-slug → real surface (Run cockpit or a Phase-4 binder)
+        SettingsMount      full-height Settings surface when settingsActive
+      PaletteHost          the global ⌘K command palette + topbar trigger
+```
+
+- **`DeploymentProfileProvider`** seeds the static `single_user_desktop`
+  profile (the value is not bridged from main; a future `team` desktop build
+  can supply it through the same `DeploymentProfile` port). `destinationsForProfile`
+  yields the six solo destinations — **Run · Chats · Projects · Activity ·
+  Tools · Skills** — and `defaultDestinationForProfile` lands the app on
+  **Run**.
+- **`ChatShell`** owns the rail/topbar chrome and reads the slug↔label SSOT
+  from `chat-surface`'s `destinations.ts`. The host owns navigation state
+  (`activeDestination`) and the `onOpenSettings` rail-foot wiring; Settings is
+  not a rail destination — it opens full height and suppresses the
+  topbar/context/right-rail while active.
+- **`DestinationOutlet`** (`renderer/DestinationOutlet.tsx`) maps the active
+  slug to its surface: `run` → the `RunDestination` cockpit; `chats` /
+  `projects` / `activity` / `connectors` (Tools) / `tools` (Skills) → the real
+  Phase-4 surfaces from `@0x-copilot/chat-surface`, each fed by a desktop
+  binder in **`renderer/destinationBinders.tsx`** that fetches over the shell's
+  `Transport` port (no `apps/frontend` import — that is a hard boundary). Any
+  unexpected slug falls back to the sanctioned `DestinationPlaceholder`, and
+  the legacy `agents` / `inbox` slugs fold onto Activity. `DesktopPlaceholder`
+  is deleted — no scaffolding ships.
+- **`PaletteHost`** (`renderer/PaletteHost.tsx`) mounts exactly one
+  `CommandPalette` over a **local static registry**
+  (`renderer/palette-commands.ts` → `renderer/DesktopPaletteSearchPort.ts`, no
+  network call): 6 navigation + 3 settings + 4 action entries. Navigation hits
+  dispatch to the shell's `onNavigate(slug)`, settings hits open Settings at
+  the target section, action hits launch the matching flow (New chat / Add
+  provider key / Download local model / Connect tool). The palette is
+  **controlled** by bootstrap (`open`/`onOpenChange`) so `⌘K` is single-sourced.
+- **Keyboard shortcuts** come from `chat-surface`'s `useShellShortcuts`, driven
+  by the `shell/shortcuts.ts` chord SSOT. Bootstrap wires the five **global**
+  chords — `⌘N` new run, `⌘K` palette, `⌘,` Settings, `⌘⇧M` local-model
+  picker, `⌘⇧F` search Activity — with the input guard that keeps single-letter
+  chords from firing inside a composer (`⌘K` / `⌘,` stay exempt). The
+  **run-scoped** chords (`⌘M`/`⌘←`/`⌘→`/`⌘L`/`⌘.`/`⌘↵`/`⌘⌫`) are owned by the
+  Run cockpit's own listeners, live only while Run is active, and are
+  deliberately left undefined at the shell level to avoid double-wiring.
+
+## Running the renderer
+
+```bash
+# MockTransport (no backend): plain dev
+npm run dev --workspace @0x-copilot/desktop
+
+# WebTransport against a running facade (e.g. `make dev` from the repo root)
+COPILOT_FACADE_URL=http://127.0.0.1:8200 npm run dev --workspace @0x-copilot/desktop
+```
+
+`COPILOT_FACADE_URL` selects `IpcTransport → WebTransport`; unset falls back
+to `MockTransport`. This plain path does **not** engage the service supervisor
+(no embedded Postgres) — that is the staged `COPILOT_RUNTIME_DIR` boot below.
+The live redesign walkthrough (boot → run → palette → shortcuts → settings) is
+[`SMOKE.md`](./SMOKE.md).
+
+## Run cockpit states
+
+`renderer/DestinationOutlet.tsx` mounts `RunDestination`
+(`@0x-copilot/chat-surface`) for the `run` slug. The cockpit binds to a
+conversation and resolves its runs over the Transport port, so it has two
+prototype-gap states beyond the live layout (Phase 3 / PR-3.11):
+
+- **Empty / idle** — no active run for the conversation. Instead of a blank
+  canvas, it shows an honest goal composer (`RunEmptyState`, "Give it a
+  goal…"). Submitting a goal starts a run and binds it in place, so the live
+  layout appears without remounting the shell.
+- **Multi-run** — more than one run in the conversation. A run selector
+  (`RunMultiSelect`, goal · status · time) lets you switch which run the
+  cockpit shows; picking one rebinds the projection/timeline/surface. A
+  conversation with zero or one run shows no selector chrome.
+
+The desktop mounts the cockpit against a default conversation id
+(`DESKTOP_DEFAULT_CONVERSATION_ID`); threading the _real_ active conversation
+(Chats → reopen-into-Run) is still deferred, so reopen / open-run / run-skill
+all land on the cockpit front door as an honest interim.
 
 ## Module system (read before adding source)
 
@@ -239,16 +328,15 @@ This must fail. The renderer's CSP is delivered per response by the
 and includes `connect-src 'none'`. If a network request succeeds, the
 CSP is not being applied — investigate the protocol handler first.
 
-## Phase 1-A status
+## Shipped state (desktop redesign)
 
-Phase 1-A ships the substrate only: one `BrowserWindow`, hardened
-WebPreferences, the `app://` protocol with strict per-response CSP, a
-preload bridge whose `ipc.invoke` / `ipc.on` throw "not yet wired" (Phase
-1-C populates the channel allowlist), and a renderer that mounts
-`<ChatShell />` against `MockTransport` and local stubs for `Router` /
-`KeyValueStore` / `PresenceSignal`. OIDC, secret storage, auto-update,
-signing, and crash-report uploading are Phase 5 / Phase 8.
+The renderer ships the full 6-destination solo shell (see **Renderer wiring**
+above): the profile-gated rail, the Run cockpit mounted through the real
+`DestinationOutlet` (no `DesktopPlaceholder`), the Phase-4 list surfaces, the
+solo Settings surface (BYOK + local models + approval policy, team sections
+gated off), the `⌘K` command palette, and the `DESIGN-SPEC.md` §6 keyboard
+shortcuts. Sign-in (dev-mint / Google / wallet), secret storage, the service
+supervisor, packaging, signing, and auto-update are all wired (see the
+sections above). The live end-to-end walkthrough is [`SMOKE.md`](./SMOKE.md).
 
-The bootstrap deliberately does NOT use `<StrictMode>` — see PRD
-§S2-decision friction note 5 and the sub-PRD Open question 4. Re-enable
-once the EmailRenderer's `hasMounted` guard is fixed in Phase 4-a.
+The bootstrap now renders under `<StrictMode>` (`renderer/bootstrap.tsx`).

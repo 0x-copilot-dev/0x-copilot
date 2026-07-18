@@ -1,18 +1,24 @@
 // Single source of truth for the shell's slug ↔ label mapping.
 //
-// This file has two consumers with different information architectures that
-// share the SAME build:
+// Post-redesign (PR-2.2 registry + PR-4.11 IA fold), BOTH surfaces render the
+// SAME profile-gated rail, derived per `DeploymentProfile` via
+// `destinationsForProfile` / `defaultDestinationForProfile`:
 //
-//   1. The hosted web app (`apps/frontend`) renders the legacy 12-destination
-//      Atlas rail. Its URL routing (`HashRouter.ts`, `routes.ts`, `App.tsx`)
-//      is pinned to those 12 slugs, so their identity and order MUST NOT
-//      change. `SHELL_DESTINATIONS` / `DEFAULT_SHELL_DESTINATION` are the
-//      stable web contract.
+//   • the 6-destination solo view (`single_user_desktop`) — the default; or
+//   • the 9-destination team view (`team`) — the 6 solo destinations plus the
+//     team-only surfaces (`team`, `members`, `billing`).
 //
-//   2. The solo desktop app renders a profile-gated 6-destination rail
-//      (`single_user_desktop`) or a 9-destination rail (`team`). Those views
-//      are derived, per `DeploymentProfile`, via `destinationsForProfile` /
-//      `defaultDestinationForProfile`.
+// The web app (`apps/frontend`) picks the profile from
+// `VITE_DEPLOYMENT_PROFILE` (default `single_user_desktop`); the desktop pins
+// `single_user_desktop`. There is no longer a rendered 12-destination rail.
+//
+// The legacy 12-slug set survives only as a FROZEN CONTRACT, never a rendered
+// rail: the URL layer (`HashRouter.ts` union, `routes.ts` folded-slug
+// redirects) still resolves all 12 slugs, and `SHELL_DESTINATIONS` /
+// `DEFAULT_SHELL_DESTINATION` remain the web-safe fallback `ChatShell` uses
+// only when no `DeploymentProfile` provider is present. Their slug identity,
+// order, and labels MUST NOT change — frozen by `destinations.test.ts`
+// (FR-2.7).
 //
 // To keep ONE source of truth for slug↔label (the file's original invariant),
 // every view is derived from a single `DESTINATION_REGISTRY`:
@@ -30,7 +36,7 @@
 import type { DeploymentProfile } from "../providers/DeploymentProfileProvider";
 
 export type ShellDestinationSlug =
-  // --- legacy 12 (web Atlas rail; slug identity is a frozen contract) ---
+  // --- legacy 12 slugs (frozen URL/routing contract, not a rendered rail) ---
   | "home"
   | "chats"
   | "agents"
