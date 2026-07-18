@@ -1,9 +1,11 @@
 import { randomUUID } from "node:crypto";
 import { mkdir, readFile, writeFile } from "node:fs/promises";
+import { homedir } from "node:os";
 import { isAbsolute, join } from "node:path";
 
 import type { SafeStorageLike } from "../auth/secret-storage";
 
+import { assertGrantableRoot } from "./path-validation";
 import type { Grant, GrantMode, GrantProvider, GrantSnapshot } from "./types";
 
 // Encrypted, main-owned persistence for host-folder grants (AC5 slice 1).
@@ -30,6 +32,8 @@ export interface GrantStoreConfig {
    * is unavailable. Defaults to false — production fails closed. */
   readonly allowPlaintextFallback?: boolean;
   readonly audit?: GrantStoreAudit;
+  /** User home dir for the sensitive-root policy. Defaults to os.homedir(). */
+  readonly homeDir?: string;
   /** Injectable for tests. */
   readonly uuid?: () => string;
   /** Injectable for tests. */
@@ -50,6 +54,8 @@ interface PersistedShape {
 
 export class GrantStore implements GrantProvider {
   readonly #path: string;
+  readonly #userDataDir: string;
+  readonly #homeDir: string;
   readonly #safeStorage: SafeStorageLike;
   readonly #allowPlaintext: boolean;
   readonly #audit: GrantStoreAudit;
@@ -61,7 +67,9 @@ export class GrantStore implements GrantProvider {
   #plaintextWarned = false;
 
   constructor(config: GrantStoreConfig) {
+    this.#userDataDir = config.userDataDir;
     this.#path = join(config.userDataDir, ...STORE_RELATIVE_PATH);
+    this.#homeDir = config.homeDir ?? homedir();
     this.#safeStorage = config.safeStorage;
     this.#allowPlaintext = config.allowPlaintextFallback ?? false;
     this.#audit = config.audit ?? defaultAudit();
@@ -75,6 +83,14 @@ export class GrantStore implements GrantProvider {
       // bypasses it. Never echo the offending value (could be a host path).
       throw new Error("grant root must be an absolute path");
     }
+    // G2: refuse a grant over the filesystem root, the home dir, the app's own
+    // userData tree, or any well-known credential directory. This is the
+    // authoritative choke point — a caller bypassing the native picker is still
+    // blocked. Throws FsError('permission_denied') without echoing the path.
+    assertGrantableRoot(input.root, {
+      homeDir: this.#homeDir,
+      userDataDir: this.#userDataDir,
+    });
     await this.#ensureLoaded();
     const now = this.#clock();
     const grant: Grant = {
