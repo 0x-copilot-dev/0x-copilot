@@ -38,6 +38,15 @@ export function __setRenderBudgetClockForTests(clock: Clock | null): void {
 export interface PendingDiffHandle<TDiff = unknown> {
   readonly diff: TDiff;
   readonly meta: PendingDiff;
+  /**
+   * Snapshot-streaming progress (0–100) for the pending surface. When set,
+   * the center pane shows a `streaming · N%` chip above the rendered diff
+   * (FR-3.20) — a generic affordance for any streaming snapshot. Adapters
+   * that render their own streaming pill inside `renderDiff` (e.g. the sheet
+   * diff's `TcInlineDiff`) drive that pill from their own diff payload and
+   * leave this unset.
+   */
+  readonly streamProgress?: number;
 }
 
 /**
@@ -278,13 +287,29 @@ export function TcSurfaceMount(props: TcSurfaceMountProps): ReactElement {
   };
 
   const showControls = Boolean(pendingDiff);
+  const streamProgress = pendingDiff?.streamProgress;
+  const streamPercent =
+    typeof streamProgress === "number"
+      ? Math.round(Math.max(0, Math.min(100, streamProgress)))
+      : null;
 
   return (
     <div
       data-testid="tc-surface-mount"
       data-tier={chosenLabel}
+      data-streaming={streamPercent !== null ? "true" : "false"}
       style={rootStyle}
     >
+      {streamPercent !== null ? (
+        <div style={streamChipRowStyle}>
+          <span
+            data-testid="tc-surface-mount-stream-chip"
+            style={streamChipStyle}
+          >
+            streaming · {streamPercent}%
+          </span>
+        </div>
+      ) : null}
       <div style={contentStyle}>
         <AdapterBoundary
           onError={handleBoundaryError}
@@ -317,6 +342,24 @@ const contentStyle: CSSProperties = {
   display: "flex",
   flexDirection: "column",
   minHeight: 0,
+};
+
+const streamChipRowStyle: CSSProperties = {
+  display: "flex",
+  justifyContent: "flex-start",
+};
+
+const streamChipStyle: CSSProperties = {
+  display: "inline-flex",
+  alignItems: "center",
+  gap: 6,
+  padding: "2px 10px",
+  borderRadius: 999,
+  fontSize: "var(--font-size-2xs)",
+  fontWeight: 600,
+  letterSpacing: 0.4,
+  color: "var(--color-accent-contrast)",
+  background: "var(--color-accent)",
 };
 
 const controlsRowStyle: CSSProperties = {

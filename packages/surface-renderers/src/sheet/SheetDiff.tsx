@@ -87,6 +87,7 @@ export function SheetDiff(props: SheetDiffProps): ReactElement {
       <div style={pillRowStyle}>
         <TcInlineDiff
           state="streaming"
+          progressPercent={diff.streamProgress}
           provenance={diff.provenance}
           title={diff.title}
           description={diff.description}

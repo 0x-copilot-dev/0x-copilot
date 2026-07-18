@@ -10,6 +10,13 @@
 export { RunDestination, type RunDestinationProps } from "./RunDestination";
 export { RunHeader, type RunHeaderProps } from "./RunHeader";
 
+// === PR-3.6 — tabbed right rail (Chat · Sources · Agents · Approvals) ===
+export {
+  RunWorkspaceRail,
+  type RunWorkspaceRailProps,
+  type RunRailTabId,
+} from "./RunWorkspaceRail";
+
 // === PR-3.3 — live run session host hook ===
 export {
   useRunSession,

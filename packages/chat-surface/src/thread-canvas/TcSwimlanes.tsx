@@ -283,6 +283,14 @@ export function TcSwimlanes(props: TcSwimlanesProps): ReactNode {
 
   const handleKeyDown = useCallback(
     (event: KeyboardEvent<HTMLDivElement>) => {
+      // PR-3.7 (FR-3.14): ⌘L / Ctrl+L snaps to now, alongside Escape. `⌘←`/`⌘→`
+      // step — the Arrow branches ignore modifiers, so the Meta-modified chords
+      // reach them.
+      if ((event.metaKey || event.ctrlKey) && event.key.toLowerCase() === "l") {
+        event.preventDefault();
+        snapToNow();
+        return;
+      }
       if (event.key === "ArrowLeft") {
         event.preventDefault();
         step(-1);

@@ -13,6 +13,7 @@ import {
   render,
   screen,
   waitFor,
+  within,
 } from "@testing-library/react";
 import { type ReactElement } from "react";
 import { describe, expect, it } from "vitest";
@@ -46,6 +47,7 @@ const CAPABILITIES: TransportCapabilities = {
 interface CapturedSub {
   readonly path: string;
   readonly eventName?: string;
+  readonly onMessage?: (raw: string) => void;
   readonly onError?: (err: Error) => void;
   closed: boolean;
 }
@@ -65,6 +67,7 @@ class FakeTransport implements Transport {
     const sub: CapturedSub = {
       path: opts.path,
       eventName: opts.eventName,
+      onMessage: opts.onMessage,
       onError: opts.onError,
       closed: false,
     };
@@ -131,6 +134,41 @@ function renderRun(
 
 function runningRun(goal: string) {
   return { runs: [{ run_id: "run-1", status: "running", goal }] };
+}
+
+/**
+ * A state-changing, surface-touching runtime event — the projector turns it
+ * into one timeline bead (lane = the uri scheme) that the mini-timeline can
+ * scrub to. Shaped to pass `isRuntimeEventEnvelope` (the session-stream guard).
+ */
+function surfaceEvent(
+  sequenceNo: number,
+  eventId: string,
+  surfaceUri: string,
+  createdAt: string,
+) {
+  return {
+    event_id: eventId,
+    run_id: "run-1",
+    conversation_id: "conv-1",
+    sequence_no: sequenceNo,
+    event_type: "tool_result",
+    activity_kind: "tool",
+    payload: { surface_uri: surfaceUri },
+    created_at: createdAt,
+  };
+}
+
+/** Push scripted events into the session's (`runtime_event`) SSE tail. */
+function streamSessionEvents(
+  transport: FakeTransport,
+  events: readonly ReturnType<typeof surfaceEvent>[],
+): void {
+  act(() => {
+    for (const event of events) {
+      transport.sessionSub?.onMessage?.(JSON.stringify(event));
+    }
+  });
 }
 
 describe("RunDestination — shell composition", () => {
@@ -220,5 +258,171 @@ describe("RunDestination — shell composition", () => {
     expect(screen.getByTestId("thread-canvas")).not.toBeNull();
     // No run → no SSE subscription opened.
     expect(transport.subs).toHaveLength(0);
+  });
+
+  // === PR-3.6 — tabbed right rail wiring ===
+
+  it("mounts the tabbed right rail (Chat default) and collapses the in-canvas mode switcher", () => {
+    const transport = new FakeTransport();
+    transport.requestHandler = async (req) =>
+      req.path.includes("/messages") ? { messages: [] } : runningRun("Goal");
+    renderRun(transport, makeStore());
+
+    // The recomposed rail mounts inside the canvas chat column…
+    const rail = screen.getByTestId("run-workspace-rail");
+    expect(rail).not.toBeNull();
+    expect(
+      screen.getByRole("tablist", { name: "Run workspace tabs" }),
+    ).not.toBeNull();
+    // …Chat is the default tab and hosts the single TcChat instance…
+    expect(
+      screen.getByRole("tab", { name: "Chat" }).getAttribute("aria-selected"),
+    ).toBe("true");
+    expect(
+      within(screen.getByTestId("run-rail-panel-chat")).getByTestId("tc-chat"),
+    ).not.toBeNull();
+    // …and there is exactly ONE TcChat (rail owns the column, not ThreadCanvas).
+    expect(screen.getAllByTestId("tc-chat")).toHaveLength(1);
+    // RunHeader is the single mode control — the in-canvas switcher is gone.
+    expect(screen.getByTestId("run-mode-switcher")).not.toBeNull();
+    expect(screen.queryByTestId("tc-mode-switcher")).toBeNull();
+  });
+
+  it("toggling mode keeps the same rail + chat surface (single-mount, FR-3.9/3.13)", () => {
+    const transport = new FakeTransport();
+    transport.requestHandler = async (req) =>
+      req.path.includes("/messages") ? { messages: [] } : runningRun("Goal");
+    renderRun(transport, makeStore());
+
+    const railBefore = screen.getByTestId("run-workspace-rail");
+    const chatBefore = screen.getByTestId("tc-chat");
+
+    fireEvent.click(screen.getByTestId("run-mode-focus"));
+
+    expect(
+      screen.getByTestId("run-destination").getAttribute("data-mode"),
+    ).toBe("focus");
+    // Same DOM nodes survive the mode switch — no remount.
+    expect(screen.getByTestId("run-workspace-rail")).toBe(railBefore);
+    expect(screen.getByTestId("tc-chat")).toBe(chatBefore);
+    // Focus collapses the rail to Chat-only: its tab chrome is suppressed.
+    expect(
+      screen.queryByRole("tablist", { name: "Run workspace tabs" }),
+    ).toBeNull();
+  });
+
+  // === PR-3.7 — timeline scrub ↔ surface time-travel + snap-to-now ===
+
+  async function renderScrubbable(): Promise<FakeTransport> {
+    const transport = new FakeTransport();
+    transport.requestHandler = async (req) =>
+      req.path.includes("/messages") ? { messages: [] } : runningRun("Goal");
+    renderRun(transport, makeStore());
+    // The session resolves the run, then opens its `runtime_event` tail.
+    await waitFor(() => expect(transport.sessionSub).toBeDefined());
+    streamSessionEvents(transport, [
+      surfaceEvent(1, "e1", "email://draft-1", "2026-05-17T10:00:00.000Z"),
+      surfaceEvent(2, "e2", "sheet://row-2", "2026-05-17T10:05:00.000Z"),
+    ]);
+    return transport;
+  }
+
+  function composerTextarea(): HTMLTextAreaElement {
+    return screen.getByTestId("composer-textarea") as HTMLTextAreaElement;
+  }
+
+  it("scrubbing a bead shows the Viewing banner, disables the composer, hides approvals, and snaps the surface tab (FR-3.15)", async () => {
+    await renderScrubbable();
+
+    // Live: no banner, Approvals tab present, composer enabled.
+    expect(screen.queryByTestId("run-viewing-banner")).toBeNull();
+    expect(screen.getByRole("tab", { name: "Approvals" })).not.toBeNull();
+    expect(composerTextarea().disabled).toBe(false);
+
+    // Scrub to the first (email) bead via the mini-timeline.
+    fireEvent.click(screen.getByTestId("tc-mini-timeline-bead-e1"));
+
+    // Viewing banner appears, with a "Return to live" affordance.
+    const banner = screen.getByTestId("run-viewing-banner");
+    expect(banner.getAttribute("role")).toBe("status");
+    expect(screen.getByTestId("run-viewing-label").textContent).toContain(
+      "Viewing",
+    );
+    expect(screen.getByTestId("run-return-to-live")).not.toBeNull();
+
+    // Composer is disabled (via the SwimlaneScrubProvider → TcChat ghost).
+    expect(composerTextarea().disabled).toBe(true);
+    expect(screen.getByTestId("tc-chat").getAttribute("data-ghost")).toBe(
+      "true",
+    );
+
+    // Approvals tab is hidden — you cannot approve a past state.
+    expect(screen.queryByRole("tab", { name: "Approvals" })).toBeNull();
+    expect(
+      screen
+        .getByTestId("run-workspace-rail")
+        .getAttribute("data-approvals-hidden"),
+    ).toBe("true");
+
+    // The active surface tab snapped to the scrubbed bead's surface.
+    const activeTab = screen
+      .getByTestId("tc-tabs")
+      .querySelector('[data-active="true"]');
+    expect(activeTab?.getAttribute("data-uri")).toBe("email://draft-1");
+  });
+
+  it("Return to live clears the banner and re-enables the composer + approvals (FR-3.16)", async () => {
+    await renderScrubbable();
+    fireEvent.click(screen.getByTestId("tc-mini-timeline-bead-e1"));
+    expect(screen.getByTestId("run-viewing-banner")).not.toBeNull();
+
+    fireEvent.click(screen.getByTestId("run-return-to-live"));
+
+    expect(screen.queryByTestId("run-viewing-banner")).toBeNull();
+    expect(composerTextarea().disabled).toBe(false);
+    expect(screen.getByTestId("tc-chat").getAttribute("data-ghost")).toBe(
+      "false",
+    );
+    expect(screen.getByRole("tab", { name: "Approvals" })).not.toBeNull();
+    expect(
+      screen
+        .getByTestId("run-workspace-rail")
+        .getAttribute("data-approvals-hidden"),
+    ).toBe("false");
+  });
+
+  it("⌘L / Escape on the timeline snaps to now (clears the banner)", async () => {
+    await renderScrubbable();
+    fireEvent.click(screen.getByTestId("tc-mini-timeline-bead-e2"));
+    expect(screen.getByTestId("run-viewing-banner")).not.toBeNull();
+
+    // ⌘L on the mini-timeline dispatches snap-to-now up to the shell.
+    fireEvent.keyDown(screen.getByTestId("tc-mini-timeline"), {
+      key: "l",
+      metaKey: true,
+    });
+    expect(screen.queryByTestId("run-viewing-banner")).toBeNull();
+    expect(composerTextarea().disabled).toBe(false);
+
+    // Scrub again, then snap via Escape.
+    fireEvent.click(screen.getByTestId("tc-mini-timeline-bead-e2"));
+    expect(screen.getByTestId("run-viewing-banner")).not.toBeNull();
+    fireEvent.keyDown(screen.getByTestId("tc-mini-timeline"), {
+      key: "Escape",
+    });
+    expect(screen.queryByTestId("run-viewing-banner")).toBeNull();
+  });
+
+  it("scrubbing does not remount the chat/composer (single-mount invariant, FR-3.9)", async () => {
+    await renderScrubbable();
+    const chatBefore = screen.getByTestId("tc-chat");
+    const composerBefore = composerTextarea();
+
+    fireEvent.click(screen.getByTestId("tc-mini-timeline-bead-e1"));
+    fireEvent.click(screen.getByTestId("run-return-to-live"));
+
+    // Same DOM nodes survive the scrub → snap round-trip (no remount).
+    expect(screen.getByTestId("tc-chat")).toBe(chatBefore);
+    expect(composerTextarea()).toBe(composerBefore);
   });
 });

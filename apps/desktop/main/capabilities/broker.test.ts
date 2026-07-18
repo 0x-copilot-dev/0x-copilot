@@ -1,7 +1,12 @@
 // @vitest-environment node
+import { mkdtempSync, realpathSync, rmSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 
 import { CapabilityBroker, CAPABILITY_BROKER_PROTOCOL } from "./broker";
+import { HostFs } from "./host-fs";
 import type { Grant, GrantProvider, GrantSnapshot } from "./types";
 
 function makeGrant(overrides: Partial<Grant> = {}): Grant {
@@ -240,5 +245,189 @@ describe("CapabilityBroker", () => {
     await broker.stop();
     expect(() => broker.authToken()).toThrow(/not running/u);
     expect(() => broker.baseUrl()).toThrow(/not running/u);
+  });
+});
+
+// Grant provider backed by a real on-disk root so the broker's FS routes hit
+// HostFs end-to-end. Supports revocation (revoked grants drop out of the
+// active snapshot, exactly like the real GrantStore).
+class RealRootGrants implements GrantProvider {
+  grant: Grant;
+  constructor(root: string) {
+    this.grant = makeGrant({ grantId: "grant-1", root, mode: "read_only" });
+  }
+  async listAll(): Promise<readonly Grant[]> {
+    return [this.grant];
+  }
+  async snapshotActive(): Promise<GrantSnapshot> {
+    return {
+      snapshotId: "snap",
+      capturedAt: 0,
+      grants: this.grant.status === "active" ? [this.grant] : [],
+    };
+  }
+}
+
+describe("CapabilityBroker — filesystem read ops", () => {
+  let broker: CapabilityBroker;
+  let grants: RealRootGrants;
+  let baseUrl: string;
+  let token: string;
+  let root: string;
+
+  const H = () => ({
+    authorization: `Bearer ${token}`,
+    "x-capability-protocol": CAPABILITY_BROKER_PROTOCOL,
+    "content-type": "application/json",
+  });
+
+  const post = (route: string, body: unknown) =>
+    fetch(`${baseUrl}${route}`, {
+      method: "POST",
+      headers: H(),
+      body: JSON.stringify(body),
+    });
+
+  beforeEach(async () => {
+    root = realpathSync(mkdtempSync(join(tmpdir(), "cap-broker-fs-")));
+    writeFileSync(join(root, "file.txt"), "hello broker\nneedle line\n");
+    grants = new RealRootGrants(root);
+    broker = new CapabilityBroker({ grants, hostFs: new HostFs() });
+    const handle = await broker.start();
+    baseUrl = handle.baseUrl;
+    token = broker.authToken();
+  });
+
+  afterEach(async () => {
+    await broker.stop();
+    rmSync(root, { recursive: true, force: true });
+  });
+
+  it("advertises the FS methods in the handshake", async () => {
+    const res = await post("/v1/handshake", {});
+    const body = (await res.json()) as { methods: string[] };
+    expect(body.methods).toEqual(
+      expect.arrayContaining(["statPath", "readFile", "glob", "grep"]),
+    );
+  });
+
+  it("stat succeeds for a granted file", async () => {
+    const res = await post("/v1/fs/stat", {
+      grant_id: "grant-1",
+      path: "file.txt",
+    });
+    expect(res.status).toBe(200);
+    const body = (await res.json()) as { type: string; size: number };
+    expect(body.type).toBe("file");
+    expect(body.size).toBe(Buffer.byteLength("hello broker\nneedle line\n"));
+  });
+
+  it("read returns base64 content and never the host path", async () => {
+    const res = await post("/v1/fs/read", {
+      grant_id: "grant-1",
+      path: "file.txt",
+    });
+    expect(res.status).toBe(200);
+    const text = await res.text();
+    expect(text).not.toContain(root); // host path must never appear
+    const body = JSON.parse(text) as { base64: string };
+    expect(Buffer.from(body.base64, "base64").toString("utf-8")).toContain(
+      "hello broker",
+    );
+  });
+
+  it("list and glob and grep all work over the loopback", async () => {
+    const list = (await await post("/v1/fs/list", {
+      grant_id: "grant-1",
+      path: "",
+    }).then((r) => r.json())) as { entries: { name: string }[] };
+    expect(list.entries.map((e) => e.name)).toContain("file.txt");
+
+    const glob = (await post("/v1/fs/glob", {
+      grant_id: "grant-1",
+      pattern: "*.txt",
+    }).then((r) => r.json())) as { paths: string[] };
+    expect(glob.paths).toEqual(["file.txt"]);
+
+    const grep = (await post("/v1/fs/grep", {
+      grant_id: "grant-1",
+      pattern: "needle",
+    }).then((r) => r.json())) as { hits: { path: string }[] };
+    expect(grep.hits[0].path).toBe("file.txt");
+  });
+
+  it("returns grant_required (403) for an unknown grant id", async () => {
+    const res = await post("/v1/fs/stat", {
+      grant_id: "does-not-exist",
+      path: "file.txt",
+    });
+    expect(res.status).toBe(403);
+    expect((await res.json()) as unknown).toEqual({ error: "grant_required" });
+  });
+
+  it("returns grant_required (403) after the grant is revoked", async () => {
+    grants.grant = { ...grants.grant, status: "revoked" };
+    const res = await post("/v1/fs/stat", {
+      grant_id: "grant-1",
+      path: "file.txt",
+    });
+    expect(res.status).toBe(403);
+    expect((await res.json()) as unknown).toEqual({ error: "grant_required" });
+  });
+
+  it("returns invalid_path (400) for a traversal attempt", async () => {
+    const res = await post("/v1/fs/read", {
+      grant_id: "grant-1",
+      path: "../escape",
+    });
+    expect(res.status).toBe(400);
+    expect((await res.json()) as unknown).toEqual({ error: "invalid_path" });
+  });
+
+  it("returns not_found (404) for a missing path", async () => {
+    const res = await post("/v1/fs/read", {
+      grant_id: "grant-1",
+      path: "nope.txt",
+    });
+    expect(res.status).toBe(404);
+    expect((await res.json()) as unknown).toEqual({ error: "not_found" });
+  });
+
+  it("rejects a request missing the path param (400 invalid_request)", async () => {
+    const res = await post("/v1/fs/stat", { grant_id: "grant-1" });
+    expect(res.status).toBe(400);
+    expect((await res.json()) as unknown).toEqual({ error: "invalid_request" });
+  });
+
+  it("fails closed with unsupported (404) when no HostFs is wired", async () => {
+    const noFs = new CapabilityBroker({ grants });
+    const handle = await noFs.start();
+    try {
+      const res = await fetch(`${handle.baseUrl}/v1/fs/stat`, {
+        method: "POST",
+        headers: {
+          authorization: `Bearer ${noFs.authToken()}`,
+          "x-capability-protocol": CAPABILITY_BROKER_PROTOCOL,
+          "content-type": "application/json",
+        },
+        body: JSON.stringify({ grant_id: "grant-1", path: "file.txt" }),
+      });
+      expect(res.status).toBe(404);
+      expect((await res.json()) as unknown).toEqual({ error: "unsupported" });
+    } finally {
+      await noFs.stop();
+    }
+  });
+
+  it("still refuses an unauthenticated FS request (401)", async () => {
+    const res = await fetch(`${baseUrl}/v1/fs/stat`, {
+      method: "POST",
+      headers: {
+        "x-capability-protocol": CAPABILITY_BROKER_PROTOCOL,
+        "content-type": "application/json",
+      },
+      body: JSON.stringify({ grant_id: "grant-1", path: "file.txt" }),
+    });
+    expect(res.status).toBe(401);
   });
 });
