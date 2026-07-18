@@ -181,3 +181,106 @@ describe("GrantStore", () => {
     }).toThrow();
   });
 });
+
+// G2(a): a grant may NOT be minted over sensitive roots. Enforced at creation
+// (the authoritative choke point) so bypassing the native picker still fails.
+describe("GrantStore — sensitive-root policy (G2)", () => {
+  let tmp: string;
+
+  beforeEach(() => {
+    idCounter = 0;
+    tmp = mkdtempSync(join(tmpdir(), "cap-grants-sens-"));
+  });
+  afterEach(() => {
+    rmSync(tmp, { recursive: true, force: true });
+  });
+
+  function makeStoreWith(homeDir: string, userDataDir: string = tmp) {
+    return new GrantStore({
+      userDataDir,
+      homeDir,
+      safeStorage: makeFakeSafeStorage(true),
+      uuid: seqUuid,
+      clock: () => 1000,
+    });
+  }
+
+  it("rejects the filesystem root", async () => {
+    const store = makeStoreWith("/Users/alice");
+    await expect(
+      store.create({ root: "/", mode: "read_only", label: "root" }),
+    ).rejects.toThrow(/sensitive/u);
+  });
+
+  it("rejects the home directory itself", async () => {
+    const store = makeStoreWith("/Users/alice");
+    await expect(
+      store.create({ root: "/Users/alice", mode: "read_only", label: "home" }),
+    ).rejects.toThrow(/sensitive/u);
+  });
+
+  it("rejects an ancestor of the home directory", async () => {
+    const store = makeStoreWith("/Users/alice");
+    await expect(
+      store.create({ root: "/Users", mode: "read_only", label: "users" }),
+    ).rejects.toThrow(/sensitive/u);
+  });
+
+  it("rejects the app userData directory (holds the grant store + secrets)", async () => {
+    const store = makeStoreWith("/Users/alice", "/Users/alice/AppData/copilot");
+    await expect(
+      store.create({
+        root: "/Users/alice/AppData/copilot",
+        mode: "read_only",
+        label: "ud",
+      }),
+    ).rejects.toThrow(/sensitive/u);
+  });
+
+  it("rejects a credential directory anywhere in the path (.ssh / .aws)", async () => {
+    const store = makeStoreWith("/Users/alice");
+    await expect(
+      store.create({
+        root: "/Users/alice/.ssh",
+        mode: "read_only",
+        label: "ssh",
+      }),
+    ).rejects.toThrow(/sensitive/u);
+    await expect(
+      store.create({
+        root: "/Users/alice/.aws/cache",
+        mode: "read_only",
+        label: "aws",
+      }),
+    ).rejects.toThrow(/sensitive/u);
+  });
+
+  it("allows a normal project folder under home", async () => {
+    const store = makeStoreWith("/Users/alice");
+    const grant = await store.create({
+      root: "/Users/alice/projects/atlas",
+      mode: "read_write",
+      label: "atlas",
+    });
+    expect(grant.status).toBe("active");
+    expect(grant.root).toBe("/Users/alice/projects/atlas");
+  });
+
+  it("never echoes the offending path in the rejection message", async () => {
+    const store = makeStoreWith("/Users/secret-person");
+    await store
+      .create({
+        root: "/Users/secret-person/.ssh",
+        mode: "read_only",
+        label: "x",
+      })
+      .then(
+        () => {
+          throw new Error("expected a rejection");
+        },
+        (err: unknown) => {
+          expect((err as Error).message).not.toContain("secret-person");
+        },
+      );
+  });
+});

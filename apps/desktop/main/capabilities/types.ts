@@ -70,6 +70,47 @@ export function toRendererGrant(grant: Grant): RendererGrant {
 }
 
 /**
+ * Broker-audience projection — the grant shape returned over the loopback
+ * broker's grant-management routes (`/v1/grants/list`, `/v1/grants/snapshot`)
+ * to the semi-trusted runtime worker. Like `RendererGrant` it carries NO host
+ * `root`; the worker keys every FS op off `grantId`, and `mount` is an OPAQUE,
+ * per-boot, non-reversible handle to the grant's virtual root so the worker can
+ * tell which grants share a physical tree WITHOUT ever learning that tree. The
+ * canonical `root` stays main-side for internal FS resolution only (G1).
+ */
+export interface BrokerGrant {
+  readonly grantId: string;
+  readonly mode: GrantMode;
+  readonly label: string;
+  readonly status: GrantStatus;
+  /** Opaque per-boot virtual-root id. NEVER the host path. */
+  readonly mount: string;
+}
+
+/** Path-free projection of a `GrantSnapshot` for the broker audience. */
+export interface BrokerGrantSnapshot {
+  readonly snapshotId: string;
+  readonly capturedAt: number;
+  readonly grants: readonly BrokerGrant[];
+}
+
+/**
+ * Project an internal `Grant` to its broker-audience view. `mount` is supplied
+ * by the broker (it owns the per-boot salt used to derive the opaque id); this
+ * function is the single place that decides WHICH fields cross to the worker —
+ * and `root` is not one of them.
+ */
+export function toBrokerGrant(grant: Grant, mount: string): BrokerGrant {
+  return {
+    grantId: grant.grantId,
+    mode: grant.mode,
+    label: grant.label,
+    status: grant.status,
+    mount,
+  };
+}
+
+/**
  * Immutable per-run snapshot of the active grants, pinned when a run starts
  * so that a revoke mid-run cannot retroactively widen or narrow what that run
  * already resolved. The broker hands one of these to an intended child.

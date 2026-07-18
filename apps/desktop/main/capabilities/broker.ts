@@ -1,4 +1,8 @@
-import { randomBytes as nodeRandomBytes, timingSafeEqual } from "node:crypto";
+import {
+  createHmac,
+  randomBytes as nodeRandomBytes,
+  timingSafeEqual,
+} from "node:crypto";
 import {
   createServer,
   type IncomingMessage,
@@ -9,7 +13,7 @@ import type { AddressInfo } from "node:net";
 
 import { HostFs } from "./host-fs";
 import { FsError, modeSatisfies, type FsErrorCode } from "./path-validation";
-import type { Grant, GrantProvider } from "./types";
+import { toBrokerGrant, type Grant, type GrantProvider } from "./types";
 
 // Authenticated loopback capability broker (AC5 slice 1 — skeleton).
 //
@@ -35,6 +39,14 @@ import type { Grant, GrantProvider } from "./types";
 // traversal / symlink / junction / ADS / TOCTOU checks. Write/mkdir/delete/
 // move remain absent (slice 3). Host absolute paths NEVER appear in any
 // response body — results carry only root-relative virtual paths.
+//
+// G1: the grant-management routes are ALSO path-free. `grants/list` and
+// `grants/snapshot` return a `BrokerGrant` projection (grantId + mode + label
+// + status + an OPAQUE per-boot `mount` id) — the canonical host `root` is kept
+// main-side for internal FS resolution and never crosses to the worker. The
+// `mount` id is an HMAC of the root under a per-boot random salt, so it is
+// stable within a boot (two grants on one tree share a mount) yet reveals
+// nothing about the path and is not a brute-force oracle across boots.
 
 export const CAPABILITY_BROKER_PROTOCOL = "1";
 
@@ -93,6 +105,9 @@ export class CapabilityBroker {
 
   #server: Server | null = null;
   #tokenBuf: Buffer | null = null;
+  // Per-boot salt keying the opaque grant `mount` ids (G1). Minted with the
+  // token, dropped on stop — so mount ids rotate every boot alongside it.
+  #saltBuf: Buffer | null = null;
   #port = 0;
 
   constructor(config: CapabilityBrokerConfig) {
@@ -118,6 +133,8 @@ export class CapabilityBroker {
       this.#randomBytes(TOKEN_BYTES).toString("base64url"),
       "utf-8",
     );
+    // 256-bit per-boot salt for the opaque grant `mount` ids (never sent).
+    this.#saltBuf = this.#randomBytes(TOKEN_BYTES);
 
     const server = createServer((req, res) => {
       this.#handle(req, res).catch(() => {
@@ -143,6 +160,7 @@ export class CapabilityBroker {
     if (address === null || typeof address === "string") {
       server.close();
       this.#tokenBuf = null;
+      this.#saltBuf = null;
       throw new Error("capability broker failed to bind");
     }
     this.#server = server;
@@ -155,6 +173,7 @@ export class CapabilityBroker {
     const server = this.#server;
     this.#server = null;
     this.#tokenBuf = null;
+    this.#saltBuf = null;
     this.#port = 0;
     if (server === null) return;
     await new Promise<void>((resolve) => {
@@ -231,13 +250,23 @@ export class CapabilityBroker {
         });
         return;
       case ROUTES.grantsList: {
-        const grants = await this.#grants.listAll();
+        // G1: path-free projection — the host `root` never leaves main.
+        const grants = (await this.#grants.listAll()).map((g) =>
+          toBrokerGrant(g, this.#mountId(g.root)),
+        );
         respondJson(res, 200, { grants });
         return;
       }
       case ROUTES.grantsSnapshot: {
+        // G1: path-free projection of the active snapshot.
         const snapshot = await this.#grants.snapshotActive();
-        respondJson(res, 200, snapshot);
+        respondJson(res, 200, {
+          snapshotId: snapshot.snapshotId,
+          capturedAt: snapshot.capturedAt,
+          grants: snapshot.grants.map((g) =>
+            toBrokerGrant(g, this.#mountId(g.root)),
+          ),
+        });
         return;
       }
       case ROUTES.fsStat:
@@ -297,6 +326,25 @@ export class CapabilityBroker {
       throw new FsError("grant_required", "no active grant for id");
     }
     return grant;
+  }
+
+  /**
+   * Derive the OPAQUE, per-boot `mount` id for a grant's canonical root (G1).
+   * HMAC-SHA256 under the per-boot salt, base64url, truncated. Stable within a
+   * boot (same root → same mount) and non-reversible; because the salt is
+   * random per boot and never leaves main, it is not a cross-boot brute-force
+   * oracle for a caller that guesses a candidate host path.
+   */
+  #mountId(root: string): string {
+    const salt = this.#saltBuf;
+    if (salt === null) {
+      // Only reachable if called while stopped; fail closed rather than leak.
+      throw new Error("capability broker is not running");
+    }
+    const digest = createHmac("sha256", salt)
+      .update(root, "utf-8")
+      .digest("base64url");
+    return `mnt_${digest.slice(0, 24)}`;
   }
 
   #authorized(req: IncomingMessage): boolean {
