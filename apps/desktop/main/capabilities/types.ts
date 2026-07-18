@@ -92,24 +92,72 @@ export interface GrantProvider {
 }
 
 // ---------------------------------------------------------------------------
-// SLICE 2 (NOT built here) — filesystem operations contract.
+// SLICE 2 — filesystem READ operations contract (implemented in `host-fs.ts`,
+// exposed over the authenticated loopback broker for the runtime-worker
+// audience only). Every result carries VIRTUAL paths (relative to the grant
+// root, POSIX separators) — never a host absolute path — so nothing here can
+// become a host-path oracle even for the token-holding worker.
 //
-// The next slice adds authenticated broker methods that actually touch the
-// filesystem, each gated by (a) a resolved grant snapshot and (b) careful
-// path validation (traversal / symlink / junction / ADS / TOCTOU) performed
-// AT the broker, never in the renderer. The shape below is a placeholder to
-// pin the interface direction — it is intentionally NOT implemented in this
-// slice. Do not wire it up without the path-validation layer.
+// Reads only. write/mkdir/delete/move (mode >= read_write_no_delete) are
+// slice 3 and intentionally absent.
 // ---------------------------------------------------------------------------
-export interface HostFolderFsCapabilityTODO {
-  // stat(grantId, relPath): Promise<HostStat>;
-  // list(grantId, relPath): Promise<HostDirEntry[]>;
-  // read(grantId, relPath, range?): Promise<Uint8Array>;
-  // glob(grantId, pattern): Promise<string[]>;
-  // grep(grantId, pattern, opts): Promise<HostGrepHit[]>;
-  // write(grantId, relPath, bytes): Promise<void>;   // mode >= read_write_no_delete
-  // mkdir(grantId, relPath): Promise<void>;           // mode >= read_write_no_delete
-  // delete(grantId, relPath): Promise<void>;          // mode === read_write
-  // move(grantId, fromRel, toRel): Promise<void>;      // mode === read_write
-  readonly _todoSlice2?: never;
+
+/** Kind of a directory entry (symlinks are reported, never followed). */
+export type HostEntryType = "file" | "dir" | "symlink" | "other";
+
+/** Result of `stat` on a file or directory under a grant root. */
+export interface HostStatResult {
+  readonly type: "file" | "dir";
+  readonly size: number;
+  readonly mtimeMs: number;
+  /** Leaf name only (never a full host path). */
+  readonly name: string;
+}
+
+/** One child from a `list`. */
+export interface HostDirEntry {
+  readonly name: string;
+  readonly type: HostEntryType;
+}
+
+export interface HostListResult {
+  readonly entries: readonly HostDirEntry[];
+  /** True when the entry ceiling stopped enumeration early. */
+  readonly truncated: boolean;
+}
+
+/** Result of a bounded `read`. Bytes are base64 for JSON transport. */
+export interface HostReadResult {
+  readonly base64: string;
+  /** Full size of the underlying file. */
+  readonly size: number;
+  readonly offset: number;
+  readonly bytesRead: number;
+  /** True when the file was larger than the byte cap from `offset`. */
+  readonly truncated: boolean;
+}
+
+export interface HostGlobResult {
+  /** Virtual (root-relative, POSIX) paths that matched. */
+  readonly paths: readonly string[];
+  readonly truncated: boolean;
+  /** Entries inspected during the walk (for observability). */
+  readonly scanned: number;
+}
+
+export interface HostGrepHit {
+  /** Virtual (root-relative, POSIX) path of the matching file. */
+  readonly path: string;
+  /** 1-based line number. */
+  readonly line: number;
+  /** 1-based column of the first match on the line. */
+  readonly column: number;
+  /** Bounded snippet of the matching line. */
+  readonly preview: string;
+}
+
+export interface HostGrepResult {
+  readonly hits: readonly HostGrepHit[];
+  readonly truncated: boolean;
+  readonly filesScanned: number;
 }
