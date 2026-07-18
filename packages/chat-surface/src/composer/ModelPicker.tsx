@@ -179,7 +179,7 @@ const panelStyle: CSSProperties = {
   width: 280,
   color: "var(--color-text)",
   fontFamily: "var(--font-sans)",
-  fontSize: 13,
+  fontSize: "var(--font-size-sm)",
   display: "flex",
   flexDirection: "column",
   gap: 6,
@@ -199,7 +199,7 @@ const headerRowStyle: CSSProperties = {
 };
 
 const headerStyle: CSSProperties = {
-  fontSize: 11,
+  fontSize: "var(--font-size-2xs)",
   letterSpacing: 0.4,
   color: "var(--color-text-muted)",
   textTransform: "uppercase",
@@ -209,7 +209,7 @@ const closeButtonStyle: CSSProperties = {
   background: "transparent",
   border: "none",
   color: "var(--color-text-muted)",
-  fontSize: 16,
+  fontSize: "var(--font-size-lg)",
   cursor: "pointer",
   lineHeight: 1,
 };
@@ -239,7 +239,7 @@ const rowStyle = (selected: boolean): CSSProperties => ({
   color: "var(--color-text)",
   cursor: "pointer",
   textAlign: "left",
-  fontSize: 13,
+  fontSize: "var(--font-size-sm)",
 });
 
 const labelStyle: CSSProperties = {
@@ -247,7 +247,7 @@ const labelStyle: CSSProperties = {
 };
 
 const familyStyle: CSSProperties = {
-  fontSize: 11,
+  fontSize: "var(--font-size-2xs)",
   color: "var(--color-text-muted)",
 };
 
@@ -281,7 +281,7 @@ const depthChipStyle = (selected: boolean): CSSProperties => ({
   color: "var(--color-text)",
   cursor: "pointer",
   textAlign: "left",
-  fontSize: 12,
+  fontSize: "var(--font-size-xs)",
 });
 
 const depthLabelStyle: CSSProperties = {
@@ -290,6 +290,6 @@ const depthLabelStyle: CSSProperties = {
 };
 
 const depthSubStyle: CSSProperties = {
-  fontSize: 10.5,
+  fontSize: "var(--font-size-2xs)",
   color: "var(--color-text-muted)",
 };

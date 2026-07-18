@@ -84,7 +84,7 @@ function ActivityRow({
     flex: 1,
   };
   const labelStyle: CSSProperties = {
-    fontSize: 13,
+    fontSize: "var(--font-size-sm)",
     fontWeight: 500,
     color: TEXT_PRIMARY,
     overflow: "hidden",
@@ -92,14 +92,14 @@ function ActivityRow({
     whiteSpace: "nowrap",
   };
   const summaryStyle: CSSProperties = {
-    fontSize: 12,
+    fontSize: "var(--font-size-xs)",
     color: TEXT_SECONDARY,
     overflow: "hidden",
     textOverflow: "ellipsis",
     whiteSpace: "nowrap",
   };
   const tsStyle: CSSProperties = {
-    fontSize: 11,
+    fontSize: "var(--font-size-2xs)",
     color: TEXT_FAINT,
     flexShrink: 0,
   };
@@ -175,7 +175,7 @@ export function ProjectActivityTab(
     borderRadius: 10,
     textAlign: "center",
     color: TEXT_SECONDARY,
-    fontSize: 13,
+    fontSize: "var(--font-size-sm)",
   };
 
   if (activity === null) {

@@ -67,13 +67,13 @@ export function ContextPanel({
     gap: 8,
   };
   const titleStyle: CSSProperties = {
-    fontSize: 13,
+    fontSize: "var(--font-size-sm)",
     fontWeight: 600,
     letterSpacing: 0.2,
     color: "var(--color-text)",
   };
   const subtitleStyle: CSSProperties = {
-    fontSize: 11.5,
+    fontSize: "var(--font-size-2xs)",
     color: "var(--color-text-subtle)",
   };
   const searchWrapStyle: CSSProperties = {
@@ -90,7 +90,7 @@ export function ContextPanel({
     border: "none",
     background: "transparent",
     color: "var(--color-text)",
-    fontSize: 12.5,
+    fontSize: "var(--font-size-xs)",
     outline: "none",
     minWidth: 0,
   };
@@ -104,7 +104,7 @@ export function ContextPanel({
     color: "var(--color-text)",
     border: "1px solid var(--color-border)",
     borderRadius: 6,
-    fontSize: 12.5,
+    fontSize: "var(--font-size-xs)",
     fontWeight: 500,
     cursor: "pointer",
   };
@@ -117,7 +117,7 @@ export function ContextPanel({
   const footerStyle: CSSProperties = {
     borderTop: "1px solid var(--color-border)",
     padding: "8px 14px",
-    fontSize: 11,
+    fontSize: "var(--font-size-2xs)",
     color: "var(--color-text-muted)",
   };
 
@@ -176,7 +176,7 @@ function EmptyState(): ReactElement {
         margin: 0,
         padding: "24px 14px",
         color: "var(--color-text-subtle)",
-        fontSize: 12,
+        fontSize: "var(--font-size-xs)",
         textAlign: "center",
       }}
       data-testid="context-panel-empty"

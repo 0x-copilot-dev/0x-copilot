@@ -317,14 +317,14 @@ const rowButtonStyle: CSSProperties = {
   border: "none",
   cursor: "pointer",
   fontFamily: "inherit",
-  fontSize: 13,
+  fontSize: "var(--font-size-sm)",
   textAlign: "left",
 };
 
 const versionStyle: CSSProperties = {
   fontWeight: 600,
   minWidth: 44,
-  fontFamily: "var(--font-family-mono, ui-monospace, monospace)",
+  fontFamily: "var(--font-mono)",
 };
 
 const labelStyle: CSSProperties = {
@@ -335,7 +335,7 @@ const labelStyle: CSSProperties = {
 };
 
 const metaStyle: CSSProperties = {
-  fontSize: 11,
+  fontSize: "var(--font-size-2xs)",
   color: "var(--color-text-muted)",
 };
 
@@ -359,13 +359,13 @@ const snapshotHeaderStyle: CSSProperties = {
 
 const snapshotTitleStyle: CSSProperties = {
   margin: 0,
-  fontSize: 14,
+  fontSize: "var(--font-size-md)",
   fontWeight: 600,
 };
 
 const snapshotMetaStyle: CSSProperties = {
   margin: 0,
-  fontSize: 12,
+  fontSize: "var(--font-size-xs)",
   color: "var(--color-text-muted)",
 };
 
@@ -386,7 +386,7 @@ const factCellStyle: CSSProperties = {
 };
 
 const factLabelStyle: CSSProperties = {
-  fontSize: 11,
+  fontSize: "var(--font-size-2xs)",
   textTransform: "uppercase",
   letterSpacing: 0.4,
   color: "var(--color-text-muted)",
@@ -394,7 +394,7 @@ const factLabelStyle: CSSProperties = {
 };
 
 const factValueStyle: CSSProperties = {
-  fontSize: 13,
+  fontSize: "var(--font-size-sm)",
   fontWeight: 600,
   margin: 0,
   color: "var(--color-text)",
@@ -410,7 +410,7 @@ const instructionsBlockStyle: CSSProperties = {
   border: "1px solid var(--color-border)",
   background: "var(--color-bg)",
   color: "var(--color-text)",
-  fontSize: 12,
+  fontSize: "var(--font-size-xs)",
   fontFamily: "inherit",
   whiteSpace: "pre-wrap",
   maxHeight: 240,
@@ -428,14 +428,14 @@ const secondaryButtonStyle: CSSProperties = {
   border: "1px solid var(--color-border)",
   borderRadius: 6,
   padding: "5px 12px",
-  fontSize: 13,
+  fontSize: "var(--font-size-sm)",
   cursor: "pointer",
 };
 
 const emptyStyle: CSSProperties = {
   padding: 16,
   textAlign: "center",
-  fontSize: 13,
+  fontSize: "var(--font-size-sm)",
   color: "var(--color-text-muted)",
   fontStyle: "italic",
 };

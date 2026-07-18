@@ -68,7 +68,7 @@ const cardHeadStyle: CSSProperties = {
 };
 
 const emojiStyle: CSSProperties = {
-  fontSize: 16,
+  fontSize: "var(--font-size-lg)",
   flexShrink: 0,
 };
 

@@ -332,7 +332,7 @@ const primaryButtonStyle: CSSProperties = {
   border: "none",
   borderRadius: 8,
   padding: "8px 14px",
-  fontSize: 12,
+  fontSize: "var(--font-size-xs)",
   fontWeight: 600,
   cursor: "pointer",
 };
@@ -343,7 +343,7 @@ const secondaryButtonStyle: CSSProperties = {
   border: "1px solid #2a2d31",
   borderRadius: 8,
   padding: "8px 14px",
-  fontSize: 12,
+  fontSize: "var(--font-size-xs)",
   fontWeight: 600,
   cursor: "pointer",
 };
@@ -356,5 +356,5 @@ const fallbackStyle: CSSProperties = {
   background: "#181a1c",
   fontFamily:
     "ui-sans-serif, system-ui, -apple-system, 'Segoe UI', Roboto, sans-serif",
-  fontSize: 13,
+  fontSize: "var(--font-size-sm)",
 };

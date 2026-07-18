@@ -322,7 +322,7 @@ const iconSwatchStyle: CSSProperties = {
 };
 
 const iconGlyphStyle: CSSProperties = {
-  fontSize: 28,
+  fontSize: "var(--font-size-3xl)",
   lineHeight: 1,
 };
 
@@ -335,16 +335,16 @@ const heroBodyStyle: CSSProperties = {
 
 const titleStyle: CSSProperties = {
   margin: 0,
-  fontSize: 18,
+  fontSize: "var(--font-size-xl)",
   fontWeight: 600,
   color: "var(--color-text)",
 };
 
 const slugStyle: CSSProperties = {
   margin: 0,
-  fontSize: 12,
+  fontSize: "var(--font-size-xs)",
   color: "var(--color-text-muted)",
-  fontFamily: "var(--font-family-mono, ui-monospace, monospace)",
+  fontFamily: "var(--font-mono)",
 };
 
 const pillRowStyle: CSSProperties = {
@@ -356,7 +356,7 @@ const pillRowStyle: CSSProperties = {
 };
 
 const metaStyle: CSSProperties = {
-  fontSize: 11,
+  fontSize: "var(--font-size-2xs)",
   color: "var(--color-text-muted)",
   padding: "2px 6px",
   borderRadius: 4,
@@ -365,7 +365,7 @@ const metaStyle: CSSProperties = {
 
 const descriptionStyle: CSSProperties = {
   margin: 0,
-  fontSize: 13,
+  fontSize: "var(--font-size-sm)",
   lineHeight: 1.55,
   color: "var(--color-text)",
 };
@@ -388,7 +388,7 @@ const factStyle: CSSProperties = {
 };
 
 const factLabelStyle: CSSProperties = {
-  fontSize: 11,
+  fontSize: "var(--font-size-2xs)",
   color: "var(--color-text-muted)",
   textTransform: "uppercase",
   letterSpacing: 0.4,
@@ -396,7 +396,7 @@ const factLabelStyle: CSSProperties = {
 };
 
 const factValueStyle: CSSProperties = {
-  fontSize: 13,
+  fontSize: "var(--font-size-sm)",
   fontWeight: 600,
   color: "var(--color-text)",
   margin: 0,
@@ -413,7 +413,7 @@ const sectionStyle: CSSProperties = {
 
 const sectionTitleStyle: CSSProperties = {
   margin: 0,
-  fontSize: 12,
+  fontSize: "var(--font-size-xs)",
   fontWeight: 600,
   textTransform: "uppercase",
   letterSpacing: 0.5,
@@ -427,7 +427,7 @@ const instructionsBlockStyle: CSSProperties = {
   border: "1px solid var(--color-border)",
   background: "var(--color-bg-elevated)",
   color: "var(--color-text)",
-  fontSize: 12,
+  fontSize: "var(--font-size-xs)",
   fontFamily: "inherit",
   whiteSpace: "pre-wrap",
   maxHeight: 240,
@@ -436,7 +436,7 @@ const instructionsBlockStyle: CSSProperties = {
 
 const emptyStyle: CSSProperties = {
   margin: 0,
-  fontSize: 12,
+  fontSize: "var(--font-size-xs)",
   color: "var(--color-text-muted)",
   fontStyle: "italic",
 };
@@ -451,7 +451,7 @@ const actionRowStyle: CSSProperties = {
 };
 
 const timestampStyle: CSSProperties = {
-  fontSize: 11,
+  fontSize: "var(--font-size-2xs)",
   color: "var(--color-text-muted)",
 };
 
@@ -461,7 +461,7 @@ const primaryButtonStyle: CSSProperties = {
   border: "none",
   borderRadius: 6,
   padding: "6px 14px",
-  fontSize: 13,
+  fontSize: "var(--font-size-sm)",
   fontWeight: 600,
   cursor: "pointer",
 };
@@ -472,7 +472,7 @@ const linkButtonStyle: CSSProperties = {
   border: "none",
   padding: 0,
   margin: 0,
-  fontSize: 12,
+  fontSize: "var(--font-size-xs)",
   fontWeight: 600,
   cursor: "pointer",
   textAlign: "left",

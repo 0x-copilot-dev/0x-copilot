@@ -200,7 +200,7 @@ export function ForkFromTemplateDialog(
     gap: 14,
   };
   const labelStyle: CSSProperties = {
-    fontSize: 12,
+    fontSize: "var(--font-size-xs)",
     color: TEXT_SECONDARY,
     fontWeight: 500,
   };
@@ -211,7 +211,7 @@ export function ForkFromTemplateDialog(
     border: `1px solid ${PANEL_BORDER_STRONG}`,
     backgroundColor: "transparent",
     color: TEXT_PRIMARY,
-    fontSize: 13,
+    fontSize: "var(--font-size-sm)",
     outline: "none",
   };
   const textareaStyle: CSSProperties = {
@@ -221,7 +221,7 @@ export function ForkFromTemplateDialog(
     border: `1px solid ${PANEL_BORDER_STRONG}`,
     backgroundColor: "transparent",
     color: TEXT_PRIMARY,
-    fontSize: 13,
+    fontSize: "var(--font-size-sm)",
     outline: "none",
     fontFamily: "inherit",
     resize: "vertical",
@@ -233,7 +233,7 @@ export function ForkFromTemplateDialog(
     border: `1px solid ${PANEL_BORDER}`,
     backgroundColor: "transparent",
     color: TEXT_SECONDARY,
-    fontSize: 13,
+    fontSize: "var(--font-size-sm)",
     cursor: "pointer",
   };
   const submitStyle: CSSProperties = {
@@ -243,7 +243,7 @@ export function ForkFromTemplateDialog(
     border: "none",
     backgroundColor: ACCENT,
     color: ACCENT_CONTRAST,
-    fontSize: 13,
+    fontSize: "var(--font-size-sm)",
     fontWeight: 600,
     cursor: "pointer",
     opacity: !canSubmit ? 0.6 : 1,
@@ -263,7 +263,7 @@ export function ForkFromTemplateDialog(
     display: "inline-flex",
     alignItems: "center",
     justifyContent: "center",
-    fontSize: 22,
+    fontSize: "var(--font-size-2xl)",
     flexShrink: 0,
   };
 
@@ -282,7 +282,11 @@ export function ForkFromTemplateDialog(
       <form style={card} onSubmit={handleSubmit}>
         <h2
           id="fork-from-template-title"
-          style={{ margin: 0, fontSize: 16, fontWeight: 600 }}
+          style={{
+            margin: 0,
+            fontSize: "var(--font-size-lg)",
+            fontWeight: 600,
+          }}
         >
           Fork from &ldquo;{templateName}&rdquo;
         </h2>
@@ -293,7 +297,7 @@ export function ForkFromTemplateDialog(
             gap: 10,
             alignItems: "center",
             flexWrap: "wrap",
-            fontSize: 12,
+            fontSize: "var(--font-size-xs)",
             color: TEXT_FAINT,
           }}
           data-testid="fork-from-template-snapshot-summary"
@@ -380,7 +384,7 @@ export function ForkFromTemplateDialog(
                     backgroundColor: PANEL_BACKGROUND,
                     color: TEXT_PRIMARY,
                     cursor: submitting ? "not-allowed" : "pointer",
-                    fontSize: 15,
+                    fontSize: "var(--font-size-md)",
                   }}
                 >
                   {glyph}
@@ -421,7 +425,7 @@ export function ForkFromTemplateDialog(
         {error !== null ? (
           <div
             role="alert"
-            style={{ color: DANGER, fontSize: 12 }}
+            style={{ color: DANGER, fontSize: "var(--font-size-xs)" }}
             data-testid="fork-from-template-error"
           >
             {error}

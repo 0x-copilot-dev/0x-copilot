@@ -87,7 +87,7 @@ const headerStyle: CSSProperties = {
   alignItems: "center",
   justifyContent: "space-between",
   padding: "10px 12px",
-  fontSize: 12,
+  fontSize: "var(--font-size-xs)",
   color: "var(--color-text-muted)",
   borderBottom: "1px solid var(--color-border)",
 };
@@ -103,7 +103,7 @@ const tableStyle: CSSProperties = {
   width: "100%",
   borderCollapse: "collapse",
   tableLayout: "auto",
-  fontSize: 12,
+  fontSize: "var(--font-size-xs)",
   color: "var(--color-text)",
 };
 
@@ -115,7 +115,7 @@ const theadCellStyle: CSSProperties = {
   padding: "8px 10px",
   textAlign: "left",
   fontWeight: 600,
-  fontSize: 11,
+  fontSize: "var(--font-size-2xs)",
   textTransform: "uppercase",
   letterSpacing: 0.4,
   color: "var(--color-text-muted)",
@@ -147,7 +147,7 @@ const placeholderStyle: CSSProperties = {
   padding: 32,
   minHeight: 200,
   color: "var(--color-text-muted)",
-  fontSize: 13,
+  fontSize: "var(--font-size-sm)",
   textAlign: "center",
 };
 
@@ -158,14 +158,14 @@ const errorButtonStyle: CSSProperties = {
   border: "1px solid var(--color-border-strong)",
   background: "transparent",
   color: "var(--color-accent)",
-  fontSize: 12,
+  fontSize: "var(--font-size-xs)",
   fontWeight: 600,
   cursor: "pointer",
 };
 
 const typeBadgeStyle: CSSProperties = {
   marginLeft: 6,
-  fontSize: 10,
+  fontSize: "var(--font-size-2xs)",
   color: "var(--color-text-subtle)",
   textTransform: "lowercase",
   letterSpacing: 0,

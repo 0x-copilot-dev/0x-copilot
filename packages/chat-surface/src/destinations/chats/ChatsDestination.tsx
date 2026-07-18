@@ -26,7 +26,7 @@ export function ChatsDestination(): ReactElement {
     display: "flex",
     alignItems: "center",
     justifyContent: "center",
-    fontSize: 13,
+    fontSize: "var(--font-size-sm)",
   };
 
   return (

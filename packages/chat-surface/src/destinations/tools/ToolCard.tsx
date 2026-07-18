@@ -91,7 +91,7 @@ export function ToolCard({ tool, onOpen, now }: ToolCardProps): ReactElement {
     display: "flex",
     alignItems: "center",
     justifyContent: "center",
-    fontSize: 12,
+    fontSize: "var(--font-size-xs)",
     fontWeight: 600,
     color: TEXT_SECONDARY,
     flexShrink: 0,

@@ -273,7 +273,7 @@ export function ToolsDestination(
     display: "inline-flex",
     alignItems: "center",
     justifyContent: "center",
-    fontSize: 11,
+    fontSize: "var(--font-size-2xs)",
     fontWeight: 700,
     color: TEXT_SECONDARY,
     letterSpacing: 0.4,

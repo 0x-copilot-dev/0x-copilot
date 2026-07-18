@@ -1060,7 +1060,7 @@ const nameHeaderInputStyle: CSSProperties = {
   border: "1px solid var(--color-border)",
   background: "transparent",
   color: "var(--color-text)",
-  fontSize: 14,
+  fontSize: "var(--font-size-md)",
   fontWeight: 600,
 };
 
@@ -1078,7 +1078,7 @@ const tabButtonStyle = (selected: boolean): CSSProperties => ({
   borderBottom: `2px solid ${selected ? "var(--color-accent)" : "transparent"}`,
   color: selected ? "var(--color-text)" : "var(--color-text-muted)",
   padding: "8px 14px",
-  fontSize: 13,
+  fontSize: "var(--font-size-sm)",
   fontFamily: "inherit",
   cursor: "pointer",
 });
@@ -1097,14 +1097,14 @@ const fieldStyle: CSSProperties = {
 };
 
 const labelStyle: CSSProperties = {
-  fontSize: 12,
+  fontSize: "var(--font-size-xs)",
   fontWeight: 600,
   color: "var(--color-text-muted)",
 };
 
 const hintStyle: CSSProperties = {
   margin: "4px 0 0 0",
-  fontSize: 12,
+  fontSize: "var(--font-size-xs)",
   color: "var(--color-text-muted)",
   fontStyle: "italic",
 };
@@ -1116,7 +1116,7 @@ const textInputStyle: CSSProperties = {
   border: "1px solid var(--color-border)",
   background: "transparent",
   color: "var(--color-text)",
-  fontSize: 13,
+  fontSize: "var(--font-size-sm)",
   fontFamily: "inherit",
   boxSizing: "border-box",
 };
@@ -1133,7 +1133,7 @@ const selectStyle: CSSProperties = {
   border: "1px solid var(--color-border)",
   background: "transparent",
   color: "var(--color-text)",
-  fontSize: 13,
+  fontSize: "var(--font-size-sm)",
   fontFamily: "inherit",
 };
 
@@ -1150,7 +1150,7 @@ const primaryButtonStyle = (
   border: "none",
   borderRadius: 6,
   padding: "6px 14px",
-  fontSize: 13,
+  fontSize: "var(--font-size-sm)",
   fontWeight: 600,
   cursor: saveState === "saving" ? "wait" : "pointer",
 });
@@ -1161,7 +1161,7 @@ const secondaryButtonStyle: CSSProperties = {
   border: "1px solid var(--color-border)",
   borderRadius: 6,
   padding: "5px 12px",
-  fontSize: 13,
+  fontSize: "var(--font-size-sm)",
   cursor: "pointer",
 };
 
@@ -1175,13 +1175,13 @@ const radioLabelStyle: CSSProperties = {
   display: "inline-flex",
   alignItems: "center",
   gap: 8,
-  fontSize: 13,
+  fontSize: "var(--font-size-sm)",
   color: "var(--color-text)",
 };
 
 const emptyStyle: CSSProperties = {
   margin: "8px 0",
-  fontSize: 12.5,
+  fontSize: "var(--font-size-xs)",
   color: "var(--color-text-muted)",
 };
 
@@ -1207,7 +1207,7 @@ const instructionsPreviewStyle: CSSProperties = {
   border: "1px solid var(--color-border)",
   background: "var(--color-bg-elevated)",
   color: "var(--color-text)",
-  fontSize: 12,
+  fontSize: "var(--font-size-xs)",
   fontFamily: "inherit",
   whiteSpace: "pre-wrap",
   maxHeight: 200,

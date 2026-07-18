@@ -100,7 +100,7 @@ export function AgentCard({
     display: "flex",
     alignItems: "center",
     justifyContent: "center",
-    fontSize: 18,
+    fontSize: "var(--font-size-xl)",
     flexShrink: 0,
   };
   const titleColStyle: CSSProperties = {
@@ -111,7 +111,7 @@ export function AgentCard({
     flex: 1,
   };
   const nameStyle: CSSProperties = {
-    fontSize: 14,
+    fontSize: "var(--font-size-md)",
     fontWeight: 600,
     color: TEXT_PRIMARY,
     margin: 0,
@@ -120,7 +120,7 @@ export function AgentCard({
     whiteSpace: "nowrap",
   };
   const descStyle: CSSProperties = {
-    fontSize: 13,
+    fontSize: "var(--font-size-sm)",
     color: TEXT_SECONDARY,
     margin: 0,
     display: "-webkit-box",

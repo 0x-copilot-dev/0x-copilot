@@ -188,7 +188,7 @@ function ProjectIconTile({
     display: "flex",
     alignItems: "center",
     justifyContent: "center",
-    fontSize: 22,
+    fontSize: "var(--font-size-2xl)",
     flexShrink: 0,
   };
   return (
@@ -232,7 +232,7 @@ function ProjectDetailHeader({
     minWidth: 0,
   };
   const nameStyle: CSSProperties = {
-    fontSize: 20,
+    fontSize: "var(--font-size-xl)",
     fontWeight: 600,
     color: TEXT_PRIMARY,
     display: "flex",
@@ -241,14 +241,14 @@ function ProjectDetailHeader({
     flexWrap: "wrap",
   };
   const metaStyle: CSSProperties = {
-    fontSize: 13,
+    fontSize: "var(--font-size-sm)",
     color: TEXT_SECONDARY,
     display: "flex",
     alignItems: "center",
     gap: 10,
   };
   const pillStyle: CSSProperties = {
-    fontSize: 11,
+    fontSize: "var(--font-size-2xs)",
     fontWeight: 600,
     padding: "2px 8px",
     borderRadius: 999,
@@ -266,7 +266,7 @@ function ProjectDetailHeader({
     border: `1px solid ${PANEL_BORDER_STRONG}`,
     backgroundColor: "transparent",
     color: ACCENT,
-    fontSize: 12,
+    fontSize: "var(--font-size-xs)",
     fontWeight: 600,
     cursor: "pointer",
   };
@@ -288,7 +288,7 @@ function ProjectDetailHeader({
         ? "rgb(251,191,36)"
         : "rgb(148,163,184)";
   const statusPill: CSSProperties = {
-    fontSize: 11,
+    fontSize: "var(--font-size-2xs)",
     fontWeight: 600,
     padding: "2px 10px",
     borderRadius: 999,
@@ -392,7 +392,7 @@ function TabsBar({ active, onSelect }: TabsBarProps): ReactElement {
     border: "none",
     background: "transparent",
     color: TEXT_SECONDARY,
-    fontSize: 13,
+    fontSize: "var(--font-size-sm)",
     fontWeight: 500,
     cursor: "pointer",
     borderBottom: "2px solid transparent",

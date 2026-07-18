@@ -38,7 +38,7 @@ const buttonStyle: CSSProperties = {
   border: `1px solid ${PALETTE.cardBorder}`,
   borderRadius: 6,
   padding: "4px 10px",
-  fontSize: 12,
+  fontSize: "var(--font-size-xs)",
   cursor: "pointer",
 };
 
@@ -48,14 +48,14 @@ const primaryButtonStyle: CSSProperties = {
   border: "none",
   borderRadius: 6,
   padding: "4px 10px",
-  fontSize: 12,
+  fontSize: "var(--font-size-xs)",
   fontWeight: 600,
   cursor: "pointer",
 };
 
 const emptyStateStyle: CSSProperties = {
   color: PALETTE.textLo,
-  fontSize: 12,
+  fontSize: "var(--font-size-xs)",
   padding: 12,
 };
 
@@ -73,7 +73,7 @@ const laneRowStyle: CSSProperties = {
 
 const laneLabelStyle: CSSProperties = {
   width: 96,
-  fontSize: 11,
+  fontSize: "var(--font-size-2xs)",
   color: PALETTE.textLo,
   textTransform: "lowercase",
 };
@@ -116,7 +116,7 @@ const pinButtonStyle = (isPinned: boolean): CSSProperties => ({
   border: "none",
   borderRadius: 999,
   cursor: "pointer",
-  fontSize: 9,
+  fontSize: "var(--font-size-2xs)",
   lineHeight: 1,
   padding: 0,
   width: 12,

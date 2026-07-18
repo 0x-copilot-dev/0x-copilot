@@ -194,7 +194,7 @@ export function AgentUsageChart({
   const chipLabelStyle: CSSProperties = {
     color: TEXT_SECONDARY,
     fontWeight: 500,
-    fontSize: 12,
+    fontSize: "var(--font-size-xs)",
     textTransform: "uppercase",
     letterSpacing: 0.5,
   };
@@ -213,10 +213,10 @@ export function AgentUsageChart({
           style={chipStyle}
         >
           <span style={chipLabelStyle}>Period total</span>
-          <span style={{ fontSize: 16 }}>
+          <span style={{ fontSize: "var(--font-size-lg)" }}>
             {formatCostMicroUsd(usage.total_cost_micro_usd)}
           </span>
-          <span style={{ ...chipLabelStyle, fontSize: 11 }}>
+          <span style={{ ...chipLabelStyle, fontSize: "var(--font-size-2xs)" }}>
             {usage.currency}
           </span>
         </div>
@@ -226,7 +226,7 @@ export function AgentUsageChart({
             alignItems: "center",
             gap: 8,
             color: TEXT_SECONDARY,
-            fontSize: 12,
+            fontSize: "var(--font-size-xs)",
           }}
         >
           <span>View by</span>
@@ -260,7 +260,7 @@ export function AgentUsageChart({
             borderRadius: 6,
             color: TEXT_SECONDARY,
             textAlign: "center",
-            fontSize: 13,
+            fontSize: "var(--font-size-sm)",
           }}
         >
           This agent hasn&apos;t been used in this window.
@@ -415,7 +415,7 @@ function Legend({ purposes }: LegendProps): ReactElement {
             display: "inline-flex",
             alignItems: "center",
             gap: 6,
-            fontSize: 12,
+            fontSize: "var(--font-size-xs)",
             color: TEXT_SUBTLE,
           }}
         >

@@ -156,19 +156,19 @@ function TemplateCard({
     display: "inline-flex",
     alignItems: "center",
     justifyContent: "center",
-    fontSize: 18,
+    fontSize: "var(--font-size-xl)",
     flexShrink: 0,
   };
   const nameStyle: CSSProperties = {
     margin: 0,
-    fontSize: 14,
+    fontSize: "var(--font-size-md)",
     fontWeight: 600,
     overflow: "hidden",
     textOverflow: "ellipsis",
     whiteSpace: "nowrap",
   };
   const descStyle: CSSProperties = {
-    fontSize: 12,
+    fontSize: "var(--font-size-xs)",
     color: TEXT_SECONDARY,
     display: "-webkit-box",
     WebkitLineClamp: 2,
@@ -178,7 +178,7 @@ function TemplateCard({
     minHeight: 32,
   };
   const metaStyle: CSSProperties = {
-    fontSize: 11,
+    fontSize: "var(--font-size-2xs)",
     color: TEXT_FAINT,
     display: "flex",
     gap: 10,
@@ -197,7 +197,7 @@ function TemplateCard({
     border: "none",
     backgroundColor: ACCENT,
     color: ACCENT_CONTRAST,
-    fontSize: 12,
+    fontSize: "var(--font-size-xs)",
     fontWeight: 600,
     cursor: "pointer",
   };
@@ -208,7 +208,7 @@ function TemplateCard({
     border: `1px solid ${PANEL_BORDER_STRONG}`,
     backgroundColor: "transparent",
     color: TEXT_SECONDARY,
-    fontSize: 12,
+    fontSize: "var(--font-size-xs)",
     cursor: "pointer",
   };
   const dangerBtn: CSSProperties = {
@@ -373,7 +373,7 @@ export function TemplateGallery(props: TemplateGalleryProps): ReactElement {
     marginBottom: 12,
   };
   const titleStyle: CSSProperties = {
-    fontSize: 18,
+    fontSize: "var(--font-size-xl)",
     fontWeight: 600,
     margin: 0,
   };
@@ -384,7 +384,7 @@ export function TemplateGallery(props: TemplateGalleryProps): ReactElement {
     border: "none",
     backgroundColor: ACCENT,
     color: ACCENT_CONTRAST,
-    fontSize: 13,
+    fontSize: "var(--font-size-sm)",
     fontWeight: 600,
     cursor: "pointer",
   };

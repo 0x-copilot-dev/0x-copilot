@@ -128,7 +128,7 @@ function SnapshotPreview({
   );
 
   const sectionTitle: CSSProperties = {
-    fontSize: 12,
+    fontSize: "var(--font-size-xs)",
     fontWeight: 600,
     color: TEXT_SECONDARY,
     textTransform: "uppercase",
@@ -138,12 +138,12 @@ function SnapshotPreview({
     padding: "8px 12px",
     border: `1px solid ${PANEL_BORDER}`,
     borderRadius: 8,
-    fontSize: 12,
+    fontSize: "var(--font-size-xs)",
     color: TEXT_PRIMARY,
     backgroundColor: PANEL_BACKGROUND,
   };
   const metaStyle: CSSProperties = {
-    fontSize: 11,
+    fontSize: "var(--font-size-2xs)",
     color: TEXT_FAINT,
     marginTop: 2,
   };
@@ -172,13 +172,15 @@ function SnapshotPreview({
               display: "inline-flex",
               alignItems: "center",
               justifyContent: "center",
-              fontSize: 18,
+              fontSize: "var(--font-size-xl)",
             }}
             data-testid="template-editor-snapshot-icon"
           >
             {snapshot.iconEmoji ?? "📁"}
           </div>
-          <span style={{ fontSize: 13, color: TEXT_PRIMARY }}>
+          <span
+            style={{ fontSize: "var(--font-size-sm)", color: TEXT_PRIMARY }}
+          >
             {snapshot.memberCount} suggested member
             {snapshot.memberCount === 1 ? "" : "s"}
           </span>
@@ -317,7 +319,7 @@ export function TemplateEditor(props: TemplateEditorProps): ReactElement {
     padding: 20,
   };
   const labelStyle: CSSProperties = {
-    fontSize: 12,
+    fontSize: "var(--font-size-xs)",
     color: TEXT_SECONDARY,
     fontWeight: 500,
   };
@@ -328,7 +330,7 @@ export function TemplateEditor(props: TemplateEditorProps): ReactElement {
     border: `1px solid ${PANEL_BORDER_STRONG}`,
     backgroundColor: "transparent",
     color: TEXT_PRIMARY,
-    fontSize: 13,
+    fontSize: "var(--font-size-sm)",
     outline: "none",
   };
   const textareaStyle: CSSProperties = {
@@ -338,7 +340,7 @@ export function TemplateEditor(props: TemplateEditorProps): ReactElement {
     border: `1px solid ${PANEL_BORDER_STRONG}`,
     backgroundColor: "transparent",
     color: TEXT_PRIMARY,
-    fontSize: 13,
+    fontSize: "var(--font-size-sm)",
     outline: "none",
     fontFamily: "inherit",
     resize: "vertical",
@@ -356,7 +358,7 @@ export function TemplateEditor(props: TemplateEditorProps): ReactElement {
     border: `1px solid ${PANEL_BORDER}`,
     backgroundColor: "transparent",
     color: TEXT_SECONDARY,
-    fontSize: 13,
+    fontSize: "var(--font-size-sm)",
     cursor: "pointer",
   };
   const submitStyle: CSSProperties = {
@@ -366,7 +368,7 @@ export function TemplateEditor(props: TemplateEditorProps): ReactElement {
     border: "none",
     backgroundColor: ACCENT,
     color: ACCENT_CONTRAST,
-    fontSize: 13,
+    fontSize: "var(--font-size-sm)",
     fontWeight: 600,
     cursor: "pointer",
     opacity: !canEdit || !dirty || submitting ? 0.6 : 1,
@@ -378,7 +380,7 @@ export function TemplateEditor(props: TemplateEditorProps): ReactElement {
     border: `1px solid ${PANEL_BORDER}`,
     backgroundColor: "transparent",
     color: DANGER,
-    fontSize: 13,
+    fontSize: "var(--font-size-sm)",
     cursor: "pointer",
   };
   const expanderToggle: CSSProperties = {
@@ -388,7 +390,7 @@ export function TemplateEditor(props: TemplateEditorProps): ReactElement {
     border: `1px solid ${PANEL_BORDER_STRONG}`,
     backgroundColor: "transparent",
     color: TEXT_SECONDARY,
-    fontSize: 12,
+    fontSize: "var(--font-size-xs)",
     cursor: "pointer",
   };
 
@@ -401,7 +403,9 @@ export function TemplateEditor(props: TemplateEditorProps): ReactElement {
       data-dirty={dirty}
       aria-label="Project template editor"
     >
-      <h3 style={{ margin: 0, fontSize: 16, fontWeight: 600 }}>
+      <h3
+        style={{ margin: 0, fontSize: "var(--font-size-lg)", fontWeight: 600 }}
+      >
         Edit template
       </h3>
 
@@ -463,7 +467,7 @@ export function TemplateEditor(props: TemplateEditorProps): ReactElement {
       {error !== null ? (
         <div
           role="alert"
-          style={{ color: DANGER, fontSize: 12 }}
+          style={{ color: DANGER, fontSize: "var(--font-size-xs)" }}
           data-testid="template-editor-error"
         >
           {error}

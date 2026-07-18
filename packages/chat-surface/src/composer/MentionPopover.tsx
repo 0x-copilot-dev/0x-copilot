@@ -161,7 +161,7 @@ const panelStyle: CSSProperties = {
   width: 240,
   color: "var(--color-text)",
   fontFamily: "var(--font-sans)",
-  fontSize: 13,
+  fontSize: "var(--font-size-sm)",
   display: "flex",
   flexDirection: "column",
   gap: 4,
@@ -170,7 +170,7 @@ const panelStyle: CSSProperties = {
 const statusStyle: CSSProperties = {
   padding: "8px 10px",
   color: "var(--color-text-muted)",
-  fontSize: 12,
+  fontSize: "var(--font-size-xs)",
 };
 
 const listStyle: CSSProperties = {
@@ -200,7 +200,7 @@ const rowStyle: CSSProperties = {
   color: "var(--color-text)",
   cursor: "pointer",
   textAlign: "left",
-  fontSize: 13,
+  fontSize: "var(--font-size-sm)",
 };
 
 const labelStyle: CSSProperties = {
@@ -208,7 +208,7 @@ const labelStyle: CSSProperties = {
 };
 
 const kindStyle: CSSProperties = {
-  fontSize: 11,
+  fontSize: "var(--font-size-2xs)",
   color: "var(--color-text-muted)",
   textTransform: "uppercase",
   letterSpacing: 0.4,

@@ -751,7 +751,7 @@ function LibraryCard({ item, now }: LibraryCardProps): ReactElement {
     display: "inline-flex",
     alignItems: "center",
     justifyContent: "center",
-    fontSize: 14,
+    fontSize: "var(--font-size-md)",
     flexShrink: 0,
   };
   const nameStyle: CSSProperties = {
@@ -844,7 +844,7 @@ function LibraryRow({
     display: "inline-flex",
     alignItems: "center",
     justifyContent: "center",
-    fontSize: 14,
+    fontSize: "var(--font-size-md)",
     flexShrink: 0,
   };
   const nameStyle: CSSProperties = {

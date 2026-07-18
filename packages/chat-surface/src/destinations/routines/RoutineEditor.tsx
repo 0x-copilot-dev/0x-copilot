@@ -693,7 +693,7 @@ export function RoutineEditor(props: RoutineEditorProps): ReactElement {
     border: "1px solid var(--color-border-strong)",
     background: "transparent",
     color: "var(--color-text)",
-    fontSize: 14,
+    fontSize: "var(--font-size-md)",
     fontWeight: 600,
   };
 
@@ -1883,7 +1883,7 @@ const tabButtonStyle = (selected: boolean): CSSProperties => ({
   borderBottom: `2px solid ${selected ? "var(--color-accent)" : "transparent"}`,
   color: selected ? "var(--color-text)" : "var(--color-text-muted)",
   padding: "8px 14px",
-  fontSize: 13,
+  fontSize: "var(--font-size-sm)",
   fontFamily: "inherit",
   cursor: "pointer",
 });
@@ -1910,14 +1910,14 @@ const rowStyle: CSSProperties = {
 };
 
 const labelStyle: CSSProperties = {
-  fontSize: 12,
+  fontSize: "var(--font-size-xs)",
   fontWeight: 600,
   color: "var(--color-text-muted)",
 };
 
 const hintStyle: CSSProperties = {
   margin: "4px 0 0 0",
-  fontSize: 12,
+  fontSize: "var(--font-size-xs)",
   color: "var(--color-text-subtle)",
   fontStyle: "italic",
 };
@@ -1929,7 +1929,7 @@ const textInputStyle: CSSProperties = {
   border: "1px solid var(--color-border-strong)",
   background: "transparent",
   color: "var(--color-text)",
-  fontSize: 13,
+  fontSize: "var(--font-size-sm)",
   fontFamily: "inherit",
   boxSizing: "border-box",
 };
@@ -1946,7 +1946,7 @@ const selectStyle: CSSProperties = {
   border: "1px solid var(--color-border-strong)",
   background: "transparent",
   color: "var(--color-text)",
-  fontSize: 13,
+  fontSize: "var(--font-size-sm)",
   fontFamily: "inherit",
 };
 
@@ -1956,7 +1956,7 @@ const primaryButtonStyle: CSSProperties = {
   border: "none",
   borderRadius: 6,
   padding: "6px 14px",
-  fontSize: 13,
+  fontSize: "var(--font-size-sm)",
   fontWeight: 600,
   cursor: "pointer",
 };
@@ -1967,7 +1967,7 @@ const secondaryButtonStyle: CSSProperties = {
   border: "1px solid var(--color-border-strong)",
   borderRadius: 6,
   padding: "5px 12px",
-  fontSize: 13,
+  fontSize: "var(--font-size-sm)",
   cursor: "pointer",
 };
 
@@ -1977,7 +1977,7 @@ const iconButtonStyle: CSSProperties = {
   border: "1px solid var(--color-border)",
   borderRadius: 6,
   padding: "3px 8px",
-  fontSize: 11.5,
+  fontSize: "var(--font-size-2xs)",
   cursor: "pointer",
 };
 
@@ -1987,7 +1987,7 @@ const toggleButtonStyle = (active: boolean): CSSProperties => ({
   border: `1px solid ${active ? "var(--color-accent)" : "var(--color-border-strong)"}`,
   borderRadius: 999,
   padding: "3px 12px",
-  fontSize: 12,
+  fontSize: "var(--font-size-xs)",
   fontWeight: 600,
   cursor: "pointer",
 });
@@ -2000,14 +2000,14 @@ const weekdayButtonStyle = (active: boolean): CSSProperties => ({
   border: `1px solid ${active ? "var(--color-accent)" : "var(--color-border-strong)"}`,
   background: active ? "var(--color-accent)" : "transparent",
   color: active ? "var(--color-bg)" : "var(--color-text)",
-  fontSize: 12,
+  fontSize: "var(--font-size-xs)",
   fontWeight: 600,
   cursor: "pointer",
 });
 
 const previewStyle: CSSProperties = {
   margin: "8px 0 0 0",
-  fontSize: 12,
+  fontSize: "var(--font-size-xs)",
   color: "var(--color-text-subtle)",
   fontStyle: "italic",
 };
@@ -2022,7 +2022,7 @@ const radioLabelStyle: CSSProperties = {
   display: "inline-flex",
   alignItems: "center",
   gap: 8,
-  fontSize: 13,
+  fontSize: "var(--font-size-sm)",
   color: "var(--color-text)",
 };
 
@@ -2058,7 +2058,7 @@ const addRowStyle: CSSProperties = {
 
 const emptyStyle: CSSProperties = {
   margin: "8px 0",
-  fontSize: 12.5,
+  fontSize: "var(--font-size-xs)",
   color: "var(--color-text-subtle)",
 };
 

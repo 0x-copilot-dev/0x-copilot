@@ -160,7 +160,7 @@ const sectionStyle: CSSProperties = {
 
 const sectionTitleStyle: CSSProperties = {
   margin: 0,
-  fontSize: 12,
+  fontSize: "var(--font-size-xs)",
   fontWeight: 600,
   textTransform: "uppercase",
   letterSpacing: 0.5,
@@ -188,7 +188,7 @@ const rowStyle: CSSProperties = {
 const emptyStyle: CSSProperties = {
   margin: 0,
   padding: "8px 10px",
-  fontSize: 12,
+  fontSize: "var(--font-size-xs)",
   color: "var(--color-text-muted)",
   fontStyle: "italic",
 };
@@ -202,20 +202,20 @@ const countStyle: CSSProperties = {
 };
 
 const countNumberStyle: CSSProperties = {
-  fontSize: 22,
+  fontSize: "var(--font-size-2xl)",
   fontWeight: 600,
   color: "var(--color-text)",
   fontVariantNumeric: "tabular-nums",
 };
 
 const countLabelStyle: CSSProperties = {
-  fontSize: 12,
+  fontSize: "var(--font-size-xs)",
   color: "var(--color-text-muted)",
 };
 
 const hintStyle: CSSProperties = {
   margin: "4px 0 0 0",
-  fontSize: 11,
+  fontSize: "var(--font-size-2xs)",
   color: "var(--color-text-subtle)",
   fontStyle: "italic",
 };

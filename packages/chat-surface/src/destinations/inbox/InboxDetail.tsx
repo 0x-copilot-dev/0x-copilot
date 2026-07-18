@@ -402,7 +402,7 @@ const backButtonStyle: CSSProperties = {
   border: "1px solid var(--color-border)",
   background: "transparent",
   color: "var(--color-text-muted)",
-  fontSize: 12,
+  fontSize: "var(--font-size-xs)",
   cursor: "pointer",
 };
 
@@ -421,7 +421,7 @@ const senderRowStyle: CSSProperties = {
   display: "flex",
   alignItems: "center",
   gap: 6,
-  fontSize: 13,
+  fontSize: "var(--font-size-sm)",
   color: "var(--color-text-muted)",
 };
 
@@ -439,7 +439,7 @@ const arrowStyle: CSSProperties = {
 };
 
 const subjectStyle: CSSProperties = {
-  fontSize: 18,
+  fontSize: "var(--font-size-xl)",
   fontWeight: 700,
   margin: 0,
   lineHeight: 1.3,
@@ -453,7 +453,7 @@ const chipRowStyle: CSSProperties = {
 };
 
 const timeRowStyle: CSSProperties = {
-  fontSize: 12,
+  fontSize: "var(--font-size-xs)",
   color: "var(--color-text-subtle)",
 };
 
@@ -479,7 +479,7 @@ const actionButtonStyle = (pendingState: boolean): CSSProperties => ({
   border: "1px solid var(--color-border-strong)",
   background: "transparent",
   color: "var(--color-accent)",
-  fontSize: 12,
+  fontSize: "var(--font-size-xs)",
   fontWeight: 600,
   cursor: pendingState ? "default" : "pointer",
   opacity: pendingState ? 0.6 : 1,
@@ -492,7 +492,7 @@ const dangerActionButtonStyle = (pendingState: boolean): CSSProperties => ({
   border: "1px solid var(--color-border-strong)",
   background: "transparent",
   color: "var(--color-danger)",
-  fontSize: 12,
+  fontSize: "var(--font-size-xs)",
   fontWeight: 600,
   cursor: pendingState ? "default" : "pointer",
   opacity: pendingState ? 0.6 : 1,
@@ -515,7 +515,7 @@ const bodySectionStyle: CSSProperties = {
 
 const bodyMutedStyle: CSSProperties = {
   color: "var(--color-text-muted)",
-  fontSize: 13,
+  fontSize: "var(--font-size-sm)",
 };
 
 const bodyErrorStyle: CSSProperties = {
@@ -523,7 +523,7 @@ const bodyErrorStyle: CSSProperties = {
   alignItems: "center",
   gap: 10,
   color: "var(--color-danger)",
-  fontSize: 13,
+  fontSize: "var(--font-size-sm)",
 };
 
 const retryStyle: CSSProperties = {
@@ -533,7 +533,7 @@ const retryStyle: CSSProperties = {
   border: "1px solid var(--color-border-strong)",
   background: "transparent",
   color: "var(--color-accent)",
-  fontSize: 12,
+  fontSize: "var(--font-size-xs)",
   fontWeight: 600,
   cursor: "pointer",
 };
@@ -543,7 +543,7 @@ const bodyPreStyle: CSSProperties = {
   whiteSpace: "pre-wrap",
   wordBreak: "break-word",
   fontFamily: "inherit",
-  fontSize: 13,
+  fontSize: "var(--font-size-sm)",
   lineHeight: 1.5,
   color: "var(--color-text)",
 };
@@ -555,7 +555,7 @@ const replySectionStyle: CSSProperties = {
 };
 
 const replyHintStyle: CSSProperties = {
-  fontSize: 12,
+  fontSize: "var(--font-size-xs)",
   color: "var(--color-text-subtle)",
   paddingLeft: 2,
 };

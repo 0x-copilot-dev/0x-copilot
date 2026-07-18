@@ -270,7 +270,7 @@ const pillStyle = (accent: string): CSSProperties => ({
   display: "inline-block",
   padding: "2px 8px",
   borderRadius: 999,
-  fontSize: 11,
+  fontSize: "var(--font-size-2xs)",
   fontWeight: 600,
   letterSpacing: 0.4,
   color: PALETTE.cardBg,
@@ -284,7 +284,7 @@ const provenancePillStyle: CSSProperties = {
   padding: "2px 8px",
   borderRadius: 999,
   border: `1px solid ${PALETTE.cardBorder}`,
-  fontSize: 11,
+  fontSize: "var(--font-size-2xs)",
   letterSpacing: 0.4,
   color: PALETTE.textLo,
   textTransform: "uppercase",
@@ -313,19 +313,19 @@ const iconStyle = (accent: string): CSSProperties => ({
   borderRadius: 999,
   background: accent,
   color: PALETTE.cardBg,
-  fontSize: 11,
+  fontSize: "var(--font-size-2xs)",
   fontWeight: 700,
   lineHeight: 1,
 });
 
 const titleStyle = (muted: boolean): CSSProperties => ({
-  fontSize: 14,
+  fontSize: "var(--font-size-md)",
   lineHeight: 1.45,
   color: muted ? PALETTE.textLo : PALETTE.textHi,
 });
 
 const descriptionStyle: CSSProperties = {
-  fontSize: 12,
+  fontSize: "var(--font-size-xs)",
   lineHeight: 1.5,
   color: PALETTE.textLo,
 };
@@ -343,7 +343,7 @@ const primaryButtonStyle = (accent: string): CSSProperties => ({
   border: "none",
   borderRadius: 8,
   padding: "8px 14px",
-  fontSize: 12,
+  fontSize: "var(--font-size-xs)",
   fontWeight: 600,
   cursor: "pointer",
 });
@@ -354,7 +354,7 @@ const secondaryButtonStyle: CSSProperties = {
   border: `1px solid ${PALETTE.cardBorder}`,
   borderRadius: 8,
   padding: "8px 14px",
-  fontSize: 12,
+  fontSize: "var(--font-size-xs)",
   fontWeight: 600,
   cursor: "pointer",
 };

@@ -401,7 +401,7 @@ function ProjectCard({
     display: "inline-flex",
     alignItems: "center",
     justifyContent: "center",
-    fontSize: 16,
+    fontSize: "var(--font-size-lg)",
     flexShrink: 0,
   };
   const nameStyle: CSSProperties = {

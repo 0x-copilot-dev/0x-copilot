@@ -144,7 +144,7 @@ export function SubtaskTree(props: SubtaskTreeProps): ReactElement {
     display: "flex",
     alignItems: "center",
     gap: 8,
-    fontSize: 12,
+    fontSize: "var(--font-size-xs)",
     color: TEXT_SECONDARY,
   };
   const collapseButtonStyle: CSSProperties = {
@@ -155,7 +155,7 @@ export function SubtaskTree(props: SubtaskTreeProps): ReactElement {
     border: `1px solid ${PANEL_BORDER_STRONG}`,
     backgroundColor: "transparent",
     color: TEXT_SECONDARY,
-    fontSize: 12,
+    fontSize: "var(--font-size-xs)",
     cursor: "pointer",
     lineHeight: 1,
   };
@@ -179,7 +179,7 @@ export function SubtaskTree(props: SubtaskTreeProps): ReactElement {
   const textStyleDone: CSSProperties = {
     flex: 1,
     minWidth: 0,
-    fontSize: 13,
+    fontSize: "var(--font-size-sm)",
     color: TEXT_SECONDARY,
     textDecoration: "line-through",
     overflow: "hidden",
@@ -189,7 +189,7 @@ export function SubtaskTree(props: SubtaskTreeProps): ReactElement {
   const textStyleOpen: CSSProperties = {
     flex: 1,
     minWidth: 0,
-    fontSize: 13,
+    fontSize: "var(--font-size-sm)",
     color: TEXT_PRIMARY,
     overflow: "hidden",
     textOverflow: "ellipsis",
@@ -213,7 +213,7 @@ export function SubtaskTree(props: SubtaskTreeProps): ReactElement {
     border: `1px solid ${PANEL_BORDER}`,
     backgroundColor: "transparent",
     color: TEXT_PRIMARY,
-    fontSize: 13,
+    fontSize: "var(--font-size-sm)",
   };
   const addButtonStyle: CSSProperties = {
     height: 28,
@@ -222,7 +222,7 @@ export function SubtaskTree(props: SubtaskTreeProps): ReactElement {
     border: `1px solid ${PANEL_BORDER_STRONG}`,
     backgroundColor: "transparent",
     color: ACCENT,
-    fontSize: 12,
+    fontSize: "var(--font-size-xs)",
     fontWeight: 600,
     cursor: "pointer",
   };
@@ -235,7 +235,7 @@ export function SubtaskTree(props: SubtaskTreeProps): ReactElement {
     backgroundColor: "var(--color-accent-soft, transparent)",
     border: `1px solid ${ACCENT}`,
     color: ACCENT,
-    fontSize: 12,
+    fontSize: "var(--font-size-xs)",
     fontWeight: 600,
   };
   const hintButtonStyle: CSSProperties = {
@@ -245,12 +245,12 @@ export function SubtaskTree(props: SubtaskTreeProps): ReactElement {
     border: `1px solid ${ACCENT}`,
     backgroundColor: "transparent",
     color: ACCENT,
-    fontSize: 12,
+    fontSize: "var(--font-size-xs)",
     fontWeight: 600,
     cursor: "pointer",
   };
   const projectHintStyle: CSSProperties = {
-    fontSize: 11,
+    fontSize: "var(--font-size-2xs)",
     color: TEXT_FAINT,
     fontStyle: "italic",
   };

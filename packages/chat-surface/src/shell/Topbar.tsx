@@ -33,7 +33,7 @@ export function Topbar({ activeDestination, leaf }: TopbarProps): ReactElement {
     display: "flex",
     alignItems: "center",
     gap: 8,
-    fontSize: 13,
+    fontSize: "var(--font-size-sm)",
   };
   const crumbStyle: CSSProperties = { color: "var(--color-text)" };
   const separatorStyle: CSSProperties = { color: "var(--color-text-subtle)" };
@@ -42,7 +42,7 @@ export function Topbar({ activeDestination, leaf }: TopbarProps): ReactElement {
     background: "transparent",
     border: "1px solid var(--color-border)",
     color: "var(--color-text)",
-    fontSize: 12,
+    fontSize: "var(--font-size-xs)",
     padding: "4px 10px",
     borderRadius: 6,
     cursor: "pointer",

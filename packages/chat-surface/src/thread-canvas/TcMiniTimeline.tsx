@@ -164,7 +164,7 @@ const containerStyle: CSSProperties = {
   borderTop: "1px solid var(--color-border)",
   color: "var(--color-text-muted)",
   fontFamily: "var(--font-sans)",
-  fontSize: 11,
+  fontSize: "var(--font-size-2xs)",
 };
 
 const beadStripStyle: CSSProperties = {
@@ -178,7 +178,7 @@ const beadStripStyle: CSSProperties = {
 
 const emptyStyle: CSSProperties = {
   color: "var(--color-text-subtle)",
-  fontSize: 11,
+  fontSize: "var(--font-size-2xs)",
 };
 
 const beadStyle = (
@@ -213,7 +213,7 @@ const pillStyle = (live: boolean): CSSProperties => ({
   border: "1px solid var(--color-border)",
   borderRadius: 999,
   padding: "2px 10px",
-  fontSize: 11,
+  fontSize: "var(--font-size-2xs)",
   cursor: "pointer",
   fontFamily: "inherit",
 });
@@ -224,7 +224,7 @@ const expandStyle: CSSProperties = {
   border: "1px solid var(--color-border)",
   borderRadius: 6,
   padding: "2px 6px",
-  fontSize: 11,
+  fontSize: "var(--font-size-2xs)",
   cursor: "pointer",
   fontFamily: "inherit",
 };

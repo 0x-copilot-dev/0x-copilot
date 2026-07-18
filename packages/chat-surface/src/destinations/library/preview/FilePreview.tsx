@@ -84,7 +84,7 @@ const placeholderStyle: CSSProperties = {
   padding: 32,
   minHeight: 240,
   color: "var(--color-text-muted)",
-  fontSize: 13,
+  fontSize: "var(--font-size-sm)",
   textAlign: "center",
 };
 
@@ -118,7 +118,7 @@ const errorButtonStyle: CSSProperties = {
   border: "1px solid var(--color-border-strong)",
   background: "transparent",
   color: "var(--color-accent)",
-  fontSize: 12,
+  fontSize: "var(--font-size-xs)",
   fontWeight: 600,
   cursor: "pointer",
 };
@@ -126,7 +126,7 @@ const errorButtonStyle: CSSProperties = {
 const downloadLinkStyle: CSSProperties = {
   color: "var(--color-accent)",
   textDecoration: "underline",
-  fontSize: 13,
+  fontSize: "var(--font-size-sm)",
 };
 
 // ---------------------------------------------------------------------------
@@ -151,7 +151,7 @@ export function FilePreview({
         <div
           style={{
             padding: 12,
-            fontSize: 12,
+            fontSize: "var(--font-size-xs)",
             color: "var(--color-text-subtle)",
           }}
         >

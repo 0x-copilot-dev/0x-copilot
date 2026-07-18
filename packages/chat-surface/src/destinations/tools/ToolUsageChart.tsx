@@ -313,7 +313,7 @@ const kpiStyle: CSSProperties = {
 };
 
 const kpiLabelStyle: CSSProperties = {
-  fontSize: 11,
+  fontSize: "var(--font-size-2xs)",
   color: "var(--color-text-muted)",
   textTransform: "uppercase",
   letterSpacing: 0.4,
@@ -321,7 +321,7 @@ const kpiLabelStyle: CSSProperties = {
 };
 
 const kpiValueStyle: CSSProperties = {
-  fontSize: 16,
+  fontSize: "var(--font-size-lg)",
   fontWeight: 600,
   color: "var(--color-text)",
   margin: 0,
@@ -335,7 +335,7 @@ const subStripStyle: CSSProperties = {
 };
 
 const mutedStyle: CSSProperties = {
-  fontSize: 12,
+  fontSize: "var(--font-size-xs)",
   color: "var(--color-text-muted)",
 };
 
@@ -346,5 +346,5 @@ const emptyStyle: CSSProperties = {
   borderRadius: 6,
   color: "var(--color-text-muted)",
   textAlign: "center",
-  fontSize: 13,
+  fontSize: "var(--font-size-sm)",
 };

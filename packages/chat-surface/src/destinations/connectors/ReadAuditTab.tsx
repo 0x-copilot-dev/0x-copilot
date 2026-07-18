@@ -203,8 +203,7 @@ const tdStyle: CSSProperties = {
 
 const tdEndpointStyle: CSSProperties = {
   ...tdStyle,
-  fontFamily:
-    "var(--font-family-mono, ui-monospace, SFMono-Regular, monospace)",
+  fontFamily: "var(--font-mono)",
   maxWidth: 280,
   overflow: "hidden",
   textOverflow: "ellipsis",

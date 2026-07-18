@@ -492,7 +492,7 @@ function safeJsonParse(text: string): JsonParseResult {
 
 const hintStyle: CSSProperties = {
   margin: 0,
-  fontSize: 12.5,
+  fontSize: "var(--font-size-xs)",
   color: "var(--color-text-muted)",
 };
 
@@ -500,14 +500,14 @@ const labelStyle: CSSProperties = {
   display: "flex",
   flexDirection: "column",
   gap: 4,
-  fontSize: 12,
+  fontSize: "var(--font-size-xs)",
   fontWeight: 600,
   color: "var(--color-text-muted)",
   marginBottom: 8,
 };
 
 const labelTextStyle: CSSProperties = {
-  fontSize: 12,
+  fontSize: "var(--font-size-xs)",
   fontWeight: 600,
   color: "var(--color-text-muted)",
 };
@@ -523,7 +523,7 @@ const labelRowStyle: CSSProperties = {
   display: "inline-flex",
   alignItems: "center",
   gap: 6,
-  fontSize: 13,
+  fontSize: "var(--font-size-sm)",
   color: "var(--color-text)",
 };
 
@@ -543,7 +543,7 @@ const gutterStyle: CSSProperties = {
   background: "var(--color-bg)",
   fontFamily:
     "ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace",
-  fontSize: 12,
+  fontSize: "var(--font-size-xs)",
   color: "var(--color-text-muted)",
   userSelect: "none",
   textAlign: "right",
@@ -563,7 +563,7 @@ const editorTextareaStyle: CSSProperties = {
   color: "var(--color-text)",
   fontFamily:
     "ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace",
-  fontSize: 12.5,
+  fontSize: "var(--font-size-xs)",
   lineHeight: "18px",
   resize: "vertical",
 };
@@ -577,7 +577,7 @@ const jsonTextareaStyle: CSSProperties = {
   color: "var(--color-text)",
   fontFamily:
     "ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace",
-  fontSize: 12.5,
+  fontSize: "var(--font-size-xs)",
   lineHeight: "18px",
   resize: "vertical",
   width: "100%",
@@ -594,7 +594,7 @@ const detailsStyle: CSSProperties = {
 
 const summaryStyle: CSSProperties = {
   cursor: "pointer",
-  fontSize: 13,
+  fontSize: "var(--font-size-sm)",
   fontWeight: 600,
   color: "var(--color-text)",
 };
@@ -602,7 +602,7 @@ const summaryStyle: CSSProperties = {
 const allowListStyle: CSSProperties = {
   margin: "8px 0 0 0",
   paddingLeft: 18,
-  fontSize: 12,
+  fontSize: "var(--font-size-xs)",
   color: "var(--color-text-muted)",
   display: "flex",
   flexDirection: "column",
@@ -612,24 +612,24 @@ const allowListStyle: CSSProperties = {
 const codeStyle: CSSProperties = {
   fontFamily:
     "ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace",
-  fontSize: 12,
+  fontSize: "var(--font-size-xs)",
   color: "var(--color-text)",
 };
 
 const errorStyle: CSSProperties = {
   margin: "6px 0 0 0",
-  fontSize: 13,
+  fontSize: "var(--font-size-sm)",
   color: "var(--color-danger, #dc2626)",
 };
 
 const successStyle: CSSProperties = {
   margin: "6px 0 0 0",
-  fontSize: 13,
+  fontSize: "var(--font-size-sm)",
   color: "var(--color-success, #16a34a)",
 };
 
 const mutedStyle: CSSProperties = {
-  fontSize: 12.5,
+  fontSize: "var(--font-size-xs)",
   color: "var(--color-text-muted)",
 };
 
@@ -644,7 +644,7 @@ const testResultStyle = (status: "ok" | "error"): CSSProperties => ({
   }`,
   background: "var(--color-bg-elevated)",
   color: "var(--color-text)",
-  fontSize: 13,
+  fontSize: "var(--font-size-sm)",
 });
 
 const preStyle: CSSProperties = {
@@ -652,7 +652,7 @@ const preStyle: CSSProperties = {
   padding: 8,
   borderRadius: 4,
   background: "var(--color-bg)",
-  fontSize: 12,
+  fontSize: "var(--font-size-xs)",
   fontFamily:
     "ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace",
   maxHeight: 200,

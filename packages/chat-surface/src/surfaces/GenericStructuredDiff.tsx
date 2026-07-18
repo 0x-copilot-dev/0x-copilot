@@ -495,7 +495,7 @@ const cardStyle: CSSProperties = {
   width: "min(420px, 100%)",
   fontFamily:
     "ui-sans-serif, system-ui, -apple-system, 'Segoe UI', Roboto, sans-serif",
-  fontSize: 13,
+  fontSize: "var(--font-size-sm)",
 };
 
 const headerRowStyle: CSSProperties = {
@@ -522,7 +522,7 @@ const saasPillStyle: CSSProperties = {
   border: `1px solid ${PALETTE.cardBorder}`,
   borderRadius: 999,
   padding: "2px 8px",
-  fontSize: 11,
+  fontSize: "var(--font-size-2xs)",
   fontWeight: 600,
   textTransform: "uppercase",
   letterSpacing: 0.4,
@@ -531,7 +531,7 @@ const saasPillStyle: CSSProperties = {
 
 const resourceIdStyle: CSSProperties = {
   color: PALETTE.textHi,
-  fontSize: 13,
+  fontSize: "var(--font-size-sm)",
   fontWeight: 600,
   overflow: "hidden",
   textOverflow: "ellipsis",
@@ -543,7 +543,7 @@ const pendingPillStyle: CSSProperties = {
   color: PALETTE.cardBg,
   borderRadius: 999,
   padding: "2px 8px",
-  fontSize: 10.5,
+  fontSize: "var(--font-size-2xs)",
   fontWeight: 700,
   letterSpacing: 0.7,
 };
@@ -570,7 +570,7 @@ const dlRowStyle: CSSProperties = {
 
 const dtStyle: CSSProperties = {
   color: PALETTE.textLo,
-  fontSize: 12,
+  fontSize: "var(--font-size-xs)",
   textTransform: "uppercase",
   letterSpacing: 0.4,
   margin: 0,
@@ -579,14 +579,14 @@ const dtStyle: CSSProperties = {
 const ddStyle: CSSProperties = {
   margin: 0,
   color: PALETTE.textHi,
-  fontSize: 13,
+  fontSize: "var(--font-size-sm)",
   minWidth: 0,
   overflowWrap: "anywhere",
 };
 
 const dlOverflowStyle: CSSProperties = {
   color: PALETTE.textMute,
-  fontSize: 11,
+  fontSize: "var(--font-size-2xs)",
   fontStyle: "italic",
 };
 
@@ -604,7 +604,7 @@ const listItemStyle: CSSProperties = {
 
 const listOverflowStyle: CSSProperties = {
   color: PALETTE.textMute,
-  fontSize: 11,
+  fontSize: "var(--font-size-2xs)",
   fontStyle: "italic",
   listStyle: "none",
 };
@@ -638,7 +638,7 @@ const depthCapStyle: CSSProperties = {
 const reasoningStyle: CSSProperties = {
   margin: 0,
   color: PALETTE.textMid,
-  fontSize: 12.5,
+  fontSize: "var(--font-size-xs)",
   lineHeight: 1.5,
   borderLeft: `2px solid ${PALETTE.lime}`,
   paddingLeft: 10,
@@ -656,7 +656,7 @@ const changeRowStyle: CSSProperties = {
 
 const changeFieldNameStyle: CSSProperties = {
   color: PALETTE.textLo,
-  fontSize: 11,
+  fontSize: "var(--font-size-2xs)",
   textTransform: "uppercase",
   letterSpacing: 0.6,
   fontWeight: 600,
@@ -676,7 +676,7 @@ const oldCellStyle: CSSProperties = {
   padding: "6px 8px",
   color: PALETTE.textMid,
   textDecoration: "line-through",
-  fontSize: 12.5,
+  fontSize: "var(--font-size-xs)",
   minWidth: 0,
   overflowWrap: "anywhere",
 };
@@ -688,14 +688,14 @@ const newCellStyle: CSSProperties = {
   padding: "6px 8px",
   color: PALETTE.textHi,
   fontWeight: 500,
-  fontSize: 12.5,
+  fontSize: "var(--font-size-xs)",
   minWidth: 0,
   overflowWrap: "anywhere",
 };
 
 const arrowStyle: CSSProperties = {
   color: PALETTE.textLo,
-  fontSize: 14,
+  fontSize: "var(--font-size-md)",
 };
 
 const footerStyle: CSSProperties = {
@@ -705,7 +705,7 @@ const footerStyle: CSSProperties = {
 
 const openLinkStyle: CSSProperties = {
   color: PALETTE.lime,
-  fontSize: 12,
+  fontSize: "var(--font-size-xs)",
   fontWeight: 600,
   textDecoration: "none",
   borderBottom: `1px dashed ${PALETTE.lime}`,

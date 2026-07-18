@@ -87,14 +87,14 @@ function ProposalRow({
     gap: 2,
   };
   const titleStyle: CSSProperties = {
-    fontSize: 13,
+    fontSize: "var(--font-size-sm)",
     fontWeight: 600,
     overflow: "hidden",
     textOverflow: "ellipsis",
     whiteSpace: "nowrap",
   };
   const subStyle: CSSProperties = {
-    fontSize: 12,
+    fontSize: "var(--font-size-xs)",
     color: TEXT_FAINT,
     overflow: "hidden",
     textOverflow: "ellipsis",
@@ -108,7 +108,7 @@ function ProposalRow({
     border: `1px solid ${PANEL_BORDER_STRONG}`,
     backgroundColor: "transparent",
     color: ACCENT,
-    fontSize: 12,
+    fontSize: "var(--font-size-xs)",
     fontWeight: 600,
     cursor: "pointer",
   };
@@ -204,11 +204,11 @@ export function ExtractionBanner({
   const titleStyle: CSSProperties = {
     flex: 1,
     minWidth: 0,
-    fontSize: 14,
+    fontSize: "var(--font-size-md)",
     fontWeight: 600,
   };
   const subStyle: CSSProperties = {
-    fontSize: 12,
+    fontSize: "var(--font-size-xs)",
     color: TEXT_SECONDARY,
   };
   const acceptAllStyle: CSSProperties = {
@@ -218,7 +218,7 @@ export function ExtractionBanner({
     border: `1px solid ${ACCENT}`,
     backgroundColor: "transparent",
     color: ACCENT,
-    fontSize: 13,
+    fontSize: "var(--font-size-sm)",
     fontWeight: 600,
     cursor: "pointer",
   };
@@ -229,7 +229,7 @@ export function ExtractionBanner({
     border: "none",
     backgroundColor: "transparent",
     color: TEXT_FAINT,
-    fontSize: 18,
+    fontSize: "var(--font-size-xl)",
     lineHeight: "1",
     cursor: "pointer",
   };

@@ -130,13 +130,13 @@ const headerStyle: CSSProperties = {
 
 const titleStyle: CSSProperties = {
   margin: 0,
-  fontSize: 16,
+  fontSize: "var(--font-size-lg)",
   fontWeight: 600,
 };
 
 const bodyStyle: CSSProperties = {
   margin: 0,
-  fontSize: 13,
+  fontSize: "var(--font-size-sm)",
   lineHeight: 1.5,
   color: "var(--color-text-muted)",
 };
@@ -154,7 +154,7 @@ const primaryButtonStyle: CSSProperties = {
   border: "none",
   borderRadius: 6,
   padding: "6px 14px",
-  fontSize: 13,
+  fontSize: "var(--font-size-sm)",
   fontWeight: 600,
   cursor: "pointer",
 };
@@ -165,6 +165,6 @@ const secondaryButtonStyle: CSSProperties = {
   border: "1px solid var(--color-border)",
   borderRadius: 6,
   padding: "5px 12px",
-  fontSize: 13,
+  fontSize: "var(--font-size-sm)",
   cursor: "pointer",
 };

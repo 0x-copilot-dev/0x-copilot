@@ -267,7 +267,7 @@ const filterStripStyle: CSSProperties = {
 };
 
 const filterLabelStyle: CSSProperties = {
-  fontSize: 11,
+  fontSize: "var(--font-size-2xs)",
   color: "var(--color-text-muted)",
   textTransform: "uppercase",
   letterSpacing: 0.4,
@@ -283,7 +283,7 @@ const chipStyle = (active: boolean): CSSProperties => ({
   border: `1px solid ${active ? "var(--color-accent)" : "var(--color-border)"}`,
   background: active ? "var(--color-bg-accent-subtle)" : "transparent",
   color: active ? "var(--color-text)" : "var(--color-text-muted)",
-  fontSize: 11,
+  fontSize: "var(--font-size-2xs)",
   fontWeight: 600,
   letterSpacing: 0.3,
   textTransform: "lowercase",
@@ -310,7 +310,7 @@ const rowStyle: CSSProperties = {
 };
 
 const timeStyle: CSSProperties = {
-  fontSize: 11,
+  fontSize: "var(--font-size-2xs)",
   color: "var(--color-text-subtle)",
   fontVariantNumeric: "tabular-nums",
 };
@@ -321,9 +321,9 @@ const callerCellStyle: CSSProperties = {
 };
 
 const argsStyle: CSSProperties = {
-  fontSize: 12,
+  fontSize: "var(--font-size-xs)",
   color: "var(--color-text-muted)",
-  fontFamily: "var(--font-family-mono, ui-monospace, monospace)",
+  fontFamily: "var(--font-mono)",
   overflow: "hidden",
   textOverflow: "ellipsis",
   whiteSpace: "nowrap",
@@ -336,7 +336,7 @@ const statusChipStyle = (status: "ok" | "error"): CSSProperties => ({
   height: 18,
   padding: "0 8px",
   borderRadius: 999,
-  fontSize: 11,
+  fontSize: "var(--font-size-2xs)",
   fontWeight: 600,
   textTransform: "uppercase",
   letterSpacing: 0.3,
@@ -357,7 +357,7 @@ const statusChipStyle = (status: "ok" | "error"): CSSProperties => ({
 });
 
 const latencyStyle: CSSProperties = {
-  fontSize: 11,
+  fontSize: "var(--font-size-2xs)",
   color: "var(--color-text-muted)",
   fontVariantNumeric: "tabular-nums",
   textAlign: "right",
@@ -366,7 +366,7 @@ const latencyStyle: CSSProperties = {
 const emptyStyle: CSSProperties = {
   margin: "8px 0",
   padding: 16,
-  fontSize: 13,
+  fontSize: "var(--font-size-sm)",
   color: "var(--color-text-muted)",
   fontStyle: "italic",
   background: "var(--color-bg-elevated)",
@@ -382,7 +382,7 @@ const loadMoreStyle: CSSProperties = {
   border: "1px solid var(--color-border)",
   borderRadius: 6,
   padding: "6px 14px",
-  fontSize: 12,
+  fontSize: "var(--font-size-xs)",
   fontWeight: 600,
   cursor: "pointer",
 };
