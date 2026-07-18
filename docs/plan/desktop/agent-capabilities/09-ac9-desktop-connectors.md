@@ -1,4 +1,9 @@
-# AC9 — Desktop connectors
+# AC9 — Desktop MCP connectors
+
+> OAuth here is the **per-MCP-server auth layer**, not a parallel credential
+> path: every desktop connector is a Model Context Protocol server, and its
+> OAuth flow runs through the same backend registration + `TokenVault` authority
+> the existing MCP connectors use. There is no second token system.
 
 | Field             | Decision                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                               |
 | ----------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
