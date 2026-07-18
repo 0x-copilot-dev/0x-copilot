@@ -1,5 +1,7 @@
 # @0x-copilot/desktop
 
+[![ci-desktop](https://github.com/0x-copilot-dev/0x-copilot/actions/workflows/ci-desktop.yml/badge.svg)](https://github.com/0x-copilot-dev/0x-copilot/actions/workflows/ci-desktop.yml)
+
 0xCopilot Electron desktop client. The original 8-phase Atlas plan lives in
 [docs/plan/desktop/PRD.md](../../docs/plan/desktop/PRD.md); the shipped shell
 is the **6-destination solo redesign** —
