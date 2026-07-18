@@ -1004,3 +1004,19 @@ export {
   type UseRunSessionOptions,
 } from "./destinations/run/useRunSession";
 // === end Phase 3 (PR-3.3) ===
+// === Phase 3 (PR-3.4) run mode ===
+// KeyValueStore-backed Studio/Focus mode owner for the Run destination +
+// the global ⌘M / Ctrl+M toggle. Owns the persisted mode value; feeds
+// ThreadCanvas.mode in PR-3.5 (RunDestination shell). RunMode is an alias
+// of ThreadMode — single source of truth for the "studio" | "focus" union.
+export {
+  useRunMode,
+  readRunMode,
+  writeRunMode,
+  runModeKey,
+  DEFAULT_RUN_MODE,
+  type RunMode,
+  type UseRunModeOptions,
+  type UseRunModeResult,
+} from "./destinations/run/useRunMode";
+// === end Phase 3 (PR-3.4) ===
