@@ -28,6 +28,12 @@
 //     via the registry. Enter on a selected entity hit triggers a
 //     programmatic click on that ItemLink (so router.navigate flows
 //     through the same resolver).
+//   * Non-entity dispatch: `navigation` hits call the optional
+//     `onNavigate(route, hit)` prop; `action` / `command` hits call the
+//     optional `onRunAction(action_token, hit)` prop; then the palette
+//     closes. Both props are additive — when a host omits them (the web
+//     PaletteHost does), non-entity hits are close-only, exactly as
+//     before.
 //
 // ARIA:
 //   * role="dialog" + aria-modal="true" on the scrim.
@@ -77,6 +83,21 @@ export interface CommandPaletteProps {
    * empty-results state. Optional — when omitted the hint is hidden.
    */
   readonly onConnectToolHint?: () => void;
+  /**
+   * Fired when a `navigation` hit is activated. Receives the hit's
+   * `route` and the full hit. Optional — when omitted, activating a
+   * navigation hit closes the palette with no other effect (the web
+   * `PaletteHost` relies on this close-only default). Desktop hosts pass
+   * this to route through the shell's `onNavigate(slug)`.
+   */
+  readonly onNavigate?: (route: string, hit: PaletteHit) => void;
+  /**
+   * Fired when an `action` or `command` hit is activated. Receives the
+   * hit's `action_token` and the full hit. Optional — when omitted,
+   * activating such a hit closes the palette with no other effect
+   * (close-only default, matching today's behavior).
+   */
+  readonly onRunAction?: (token: string, hit: PaletteHit) => void;
   /** Debounce window for the search input. Defaults to 150ms. */
   readonly debounceMs?: number;
 }
@@ -105,6 +126,8 @@ export function CommandPalette({
   context,
   limit,
   onConnectToolHint,
+  onNavigate,
+  onRunAction,
   debounceMs = 150,
 }: CommandPaletteProps): ReactElement | null {
   const [query, setQuery] = useState("");
@@ -217,10 +240,20 @@ export function CommandPalette({
         if (row !== null && row !== undefined) {
           row.click();
         }
+      } else if (hit.kind === "navigation" && hit.route !== undefined) {
+        // Non-entity dispatch is host-owned via optional callbacks. When
+        // the host passes none (e.g. the web PaletteHost), this is a
+        // no-op and the palette simply closes — today's behavior.
+        onNavigate?.(hit.route, hit);
+      } else if (
+        (hit.kind === "action" || hit.kind === "command") &&
+        hit.action_token !== undefined
+      ) {
+        onRunAction?.(hit.action_token, hit);
       }
       onRequestClose();
     },
-    [onRequestClose],
+    [onNavigate, onRunAction, onRequestClose],
   );
 
   // Selected row's DOM id (for aria-activedescendant).
