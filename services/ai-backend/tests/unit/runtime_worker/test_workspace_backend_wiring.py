@@ -19,8 +19,12 @@ import httpx
 
 from agent_runtime.capabilities.desktop.workspace_backend import (
     BrokeredWorkspaceBackend,
+    WorkspaceMutationSnapshot,
 )
-from agent_runtime.execution.deep_agent_builder import WORKSPACE_ACCESS_GUIDANCE
+from agent_runtime.execution.deep_agent_builder import (
+    WORKSPACE_ACCESS_GUIDANCE,
+    WORKSPACE_WRITE_GUIDANCE,
+)
 from agent_runtime.execution.factory import (
     _composed_deep_backend,
     _instructions_with_workspace,
@@ -94,6 +98,106 @@ class TestWorkspaceBackendWiring:
         assert await wiring.workspace_backend() is None
 
 
+def _writable_broker() -> RecordingBroker:
+    """A fake broker exposing one writable + one read-only grant."""
+    return RecordingBroker(
+        grants={
+            "grant-rw": FakeBrokerFs(files={"a.txt": b"OLD"}),
+            "grant-ro": FakeBrokerFs(files={"readme.md": b"hello\n"}),
+        },
+        grant_meta={
+            "grant-rw": {"mode": "read_write", "label": "Project"},
+            "grant-ro": {"mode": "read_only", "label": "Docs"},
+        },
+    )
+
+
+def _readonly_broker() -> RecordingBroker:
+    return RecordingBroker(
+        grants={"grant-ro": FakeBrokerFs(files={"readme.md": b"hello\n"})},
+        grant_meta={"grant-ro": {"mode": "read_only", "label": "Docs"}},
+    )
+
+
+class _Emitter:
+    def __init__(self) -> None:
+        self.records: list[WorkspaceMutationSnapshot] = []
+
+    async def __call__(self, record: WorkspaceMutationSnapshot) -> None:
+        self.records.append(record)
+
+
+class _Store:
+    def put(self, data: bytes, *, media_type: str = "", preview: str | None = None):
+        raise AssertionError("store.put is not exercised by the wiring test")
+
+
+def _write_wiring(broker: RecordingBroker, *, store: object, emitter: object):
+    return WorkspaceBackendWorkerWiring(
+        env=_ENV,
+        http_client=httpx.AsyncClient(transport=broker.transport()),
+        snapshot_store=store,
+        snapshot_emitter=emitter,
+    )
+
+
+class TestWorkspaceWriteActivation:
+    """The wiring mints a run context + write triple ONLY for a writable grant."""
+
+    async def test_writable_grant_mints_context_and_enables_writes(self) -> None:
+        broker = _writable_broker()
+        store, emitter = _Store(), _Emitter()
+        backend = await _write_wiring(
+            broker, store=store, emitter=emitter
+        ).workspace_backend()
+
+        assert isinstance(backend, BrokeredWorkspaceBackend)
+        # A run context was pinned via /v1/runs/begin at build time…
+        begin_calls = [r for r, _h, _b in broker.requests if r == "/v1/runs/begin"]
+        assert begin_calls == ["/v1/runs/begin"]
+        # …and threaded into the backend so the write path is live.
+        assert backend.run_capability_context in broker.run_contexts
+        assert backend.supports_writes is True
+
+    async def test_release_backend_ends_the_run_context(self) -> None:
+        broker = _writable_broker()
+        backend = await _write_wiring(
+            broker, store=_Store(), emitter=_Emitter()
+        ).workspace_backend()
+        context = backend.run_capability_context
+        assert context in broker.run_contexts
+
+        await WorkspaceBackendWorkerWiring.release_backend(backend)
+        # /v1/runs/end released the pinned snapshot.
+        assert context not in broker.run_contexts
+        assert any(r == "/v1/runs/end" for r, _h, _b in broker.requests)
+
+    async def test_read_only_grant_does_not_mint_context(self) -> None:
+        broker = _readonly_broker()
+        backend = await _write_wiring(
+            broker, store=_Store(), emitter=_Emitter()
+        ).workspace_backend()
+        assert isinstance(backend, BrokeredWorkspaceBackend)
+        assert backend.supports_writes is False
+        assert backend.run_capability_context is None
+        assert not any(r == "/v1/runs/begin" for r, _h, _b in broker.requests)
+
+    async def test_missing_store_or_emitter_stays_read_only(self) -> None:
+        broker = _writable_broker()
+        # Writable grant, but no snapshot store/emitter supplied → read-only.
+        backend = await _wiring(broker).workspace_backend()
+        assert isinstance(backend, BrokeredWorkspaceBackend)
+        assert backend.supports_writes is False
+        assert not any(r == "/v1/runs/begin" for r, _h, _b in broker.requests)
+
+    async def test_release_backend_is_none_safe(self) -> None:
+        # A read-only backend has no aclose; None is a no-op — neither raises.
+        await WorkspaceBackendWorkerWiring.release_backend(None)
+        broker = _readonly_broker()
+        backend = await _wiring(broker).workspace_backend()
+        await WorkspaceBackendWorkerWiring.release_backend(backend)
+
+
 class TestComposedWorkspaceRoute:
     """The factory routes `/workspace/` only when a backend is supplied."""
 
@@ -145,3 +249,10 @@ class TestWorkspacePromptGating:
     def test_guidance_omitted_when_inactive(self) -> None:
         out = _instructions_with_workspace(instructions="BASE", workspace_active=False)
         assert out == "BASE"
+
+    def test_writable_guidance_replaces_readonly_when_writable(self) -> None:
+        out = _instructions_with_workspace(
+            instructions="BASE", workspace_active=True, workspace_writable=True
+        )
+        assert WORKSPACE_WRITE_GUIDANCE in out
+        assert WORKSPACE_ACCESS_GUIDANCE not in out

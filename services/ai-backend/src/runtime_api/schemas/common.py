@@ -145,6 +145,13 @@ class RuntimeApiEventType(StrEnum):
     # successful awrite/aedit and by ConversationCoordinator on user PATCH /
     # POST send / POST discard.
     DRAFT_UPDATED = "draft_updated"
+    # AC5 slice 3b — host write-through. Emitted by the workspace backend's
+    # snapshot-before-write step: BEFORE an approved overwrite/edit mutates a
+    # user's host file, the pre-image bytes are put into the content-addressed
+    # object store and this event records the reference (op / mount / virtual
+    # path / object_sha256 / size — never a host path) so the change is
+    # auditable and undoable. Projects to the default RuntimeActivityKind.EVENT.
+    WORKSPACE_SNAPSHOT_CAPTURED = "workspace_snapshot_captured"
     # PR 1.1 — citations live registry. One event per (run, source) the
     # CitationLedger registers; payload carries `CitationSourceRef` under
     # `payload.citation` and projects to RuntimeActivityKind.TOOL.
