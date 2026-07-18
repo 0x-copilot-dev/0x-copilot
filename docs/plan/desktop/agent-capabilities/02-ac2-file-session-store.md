@@ -28,20 +28,13 @@
 > **optional/deferred** and specified in [AC3b](03-ac3-runtime-recovery.md) — it
 > is not built for the light store.
 
-> **Contract note — divergence from AC1 §7.4/§8 (must be reconciled).** AC1's
-> frozen `FileStoreRecordV1` (§7.4) still carries `global_sequence_no` and the
-> `previous_stream_hash` per-stream chain, and AC1's on-disk layout (§8) still
-> shows `CURRENT`, `generations/`, `pending/`, and `locks/`. Those fields and
-> directories belong to the **heavy** variant. The LIGHT store below does not
-> emit `global_sequence_no`, does not chain per-stream hashes, and uses a flat
-> `events.jsonl` per conversation rather than copy-on-write generations. AC1 §7.4
-> and §8 must be revised to the light envelope/layout in a follow-up AC1 minor
-> revision; until then, **where AC1 and this LIGHT AC2 differ on the record
-> envelope or session layout, this PRD is the built design and AC1's heavy fields
-> are treated as reserved-for-the-deferred-variant only.** Every other AC1 frozen
-> contract — the broker handshake/headers (§6.3), grant modes (§7.3),
-> `ArtifactRefV1` (§7.5), the activation predicate (§6.2) — is imported
-> unchanged.
+> **Contract alignment.** AC1 is the single normative source and now defines the
+> LIGHT shapes directly: the record envelope `FileSessionRecordV1` (§7.4) and the
+> flat `events.jsonl` session layout (§8). AC2 imports those unchanged and adds
+> the append/durability, projection, retention, and migration semantics below.
+> Every other AC1 frozen contract — the broker handshake/headers (§6.3), grant
+> modes (§7.3), `ArtifactRefV1` (§7.5), the activation predicate (§6.2) — is also
+> imported unchanged.
 
 ## Problem and why now
 
@@ -198,9 +191,10 @@ All new contracts use Pydantic v2 with `ConfigDict(extra="forbid", frozen=True)`
 
 ### Canonical record envelope (light)
 
-The light store uses a flat, single-writer envelope. It drops the heavy
-variant's `global_sequence_no`, `previous_stream_hash` chain, and
-batch-commit-marker fields (see the Contract note at the top of this PRD):
+AC2 imports AC1's frozen `FileSessionRecordV1` (§7.4) unchanged and adds only
+semantic validators; it does not fork that cross-wave contract. The flat,
+single-writer envelope carries no `global_sequence_no`, no `previous_stream_hash`
+chain, and no batch-commit-marker fields:
 
 ```python
 class FileSessionRecordV1(BaseModel):
@@ -211,17 +205,18 @@ class FileSessionRecordV1(BaseModel):
     record_kind: str = Field(min_length=1, max_length=96)
     org_id: str = Field(min_length=1, max_length=256)
     user_id: str | None = Field(default=None, max_length=256)
-    conversation_id: str = Field(min_length=1, max_length=256)
+    conversation_id: str | None = Field(default=None, max_length=256)
     run_id: str | None = Field(default=None, max_length=256)
     task_id: str | None = Field(default=None, max_length=256)
     run_sequence_no: int | None = Field(default=None, ge=1)
     created_at: AwareDatetime
     payload: dict[str, JsonValue]
+    record_hash: str | None = Field(default=None, pattern=r"^[0-9a-f]{64}$")
 ```
 
 Rules:
 
-1. AC2 session records require `conversation_id`; workspace-level records use AC1's separate `workspace.jsonl`/`audit.jsonl` ownership and set `conversation_id=None` (their envelope relaxes that one field).
+1. AC2 session records require `conversation_id` (a semantic validator over AC1's superset envelope); workspace-level records use AC1's separate `workspace.jsonl`/`audit.jsonl` ownership and set `conversation_id=None`.
 2. Root `store_id` is generated once in `store.json` and is never accepted from an HTTP request. A domain record's `record_id` is UUIDv5 over `(store_id, record_kind, logical_id)`. A runtime event uses its `event_id` as the logical ID.
 3. `org_id` and `user_id` come from verified runtime identity, never a payload or renderer assertion. AC1's lowercase-base32 SHA-256 scoped workspace/conversation path keys are location metadata and are not added to this envelope.
 4. A serialized line, including the newline, may not exceed 1 MiB. Larger content must be redacted/truncated or represented by an AC4 `ArtifactRefV1` pointing at an `objects/sha256/` object.
@@ -854,7 +849,6 @@ Roughly **4 PRs** versus the heavy draft's 6–8.
 
 There is no open implementation choice in this PRD. The remaining risks have fixed handling and ship gates:
 
-- **AC1 §7.4/§8 reconciliation:** the light envelope/layout diverges from AC1's frozen heavy fields; an AC1 minor revision must adopt the light shapes (tracked). Until then this PRD is the built design (see the Contract note above).
 - **Plaintext local disclosure:** accepted for v1 with user-only permissions, full-disk-encryption guidance, strict secret exclusion, and explicit product disclosure. Do not add ad hoc field encryption to AC2.
 - **Same-user malicious modification:** the light store has no hash chain and is not an authenticated boundary. Detect accidental inconsistency and fail closed; do not market tamper proofing. AC10 may add signed manifests compatibly.
 - **Filesystem durability variance:** use the specified platform flush/rename adapters and block rollout on crash-matrix failures. Do not weaken acknowledgement to improve benchmarks.

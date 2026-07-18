@@ -192,7 +192,7 @@ The initially reserved settings are:
 
 ```text
 RUNTIME_STORE_BACKEND=file
-RUNTIME_EVENT_BUS_BACKEND=file_notify
+RUNTIME_EVENT_BUS_BACKEND=file_notify   # reserved; used only by the deferred AC3b separate-worker variant
 RUNTIME_FILE_STORE_ROOT=<Electron-injected absolute app-data path>
 DESKTOP_BROKER_URL=http://127.0.0.1:<ephemeral-port>
 DESKTOP_BROKER_TOKEN=<per-boot, audience-scoped opaque secret>
@@ -207,6 +207,12 @@ RUNTIME_ENABLE_DESKTOP_BROWSER=true|false
 `RUNTIME_STORE_BACKEND=file` itself also requires the broker handshake. This
 proves that the process was launched by the supervised desktop rather than by a
 server operator who accidentally selected the file adapter.
+
+The shipping LIGHT store runs a single **in-process** worker
+(`RUNTIME_START_IN_PROCESS_WORKER=true`), so the API and worker share memory and
+SSE waiters are woken in-process; `RUNTIME_EVENT_BUS_BACKEND=file_notify` is
+**reserved** for the optional/deferred AC3b topology that supervises a separate
+`runtime_worker` process, and is unused by the in-process design.
 
 ### 6.3 Broker transport and authentication
 
@@ -367,8 +373,13 @@ turn `read_only` into write access or `read_write_no_delete` into delete access.
 
 ### 7.4 Canonical storage envelope
 
+This is the normative record for the single-writer file store (AC2, LIGHT). One
+in-process worker appends one JSON line per record, so the envelope carries no
+cross-file coordination fields — no session-global counter, no per-stream hash
+chain, and no batch/generation coordinates:
+
 ```python
-class FileStoreRecordV1(BaseModel):
+class FileSessionRecordV1(BaseModel):
     model_config = ConfigDict(extra="forbid", frozen=True)
 
     schema_version: Literal[1]
@@ -379,29 +390,29 @@ class FileStoreRecordV1(BaseModel):
     conversation_id: str | None = Field(default=None, max_length=256)
     run_id: str | None = Field(default=None, max_length=256)
     task_id: str | None = Field(default=None, max_length=256)
-    global_sequence_no: int = Field(ge=1)
     run_sequence_no: int | None = Field(default=None, ge=1)
-    stream_id: str = Field(min_length=1, max_length=256)
-    batch_id: UUID
-    batch_index: int = Field(ge=0)
-    batch_size: int = Field(ge=1, le=1024)
     created_at: AwareDatetime
     payload: dict[str, JsonValue]
-    previous_stream_hash: str | None = Field(
-        default=None, pattern=r"^[0-9a-f]{64}$"
-    )
-    record_hash: str = Field(pattern=r"^[0-9a-f]{64}$")
+    record_hash: str | None = Field(default=None, pattern=r"^[0-9a-f]{64}$")
 ```
 
-`global_sequence_no` is monotonic within one canonical session across the main
-stream and every child stream. `run_sequence_no` preserves the existing
-per-run, gap-free `RuntimeEventEnvelope.sequence_no` contract. The two values
-must not be conflated.
+`run_sequence_no` preserves the existing per-run, gap-free
+`RuntimeEventEnvelope.sequence_no` contract and is what SSE replay/reconnect
+uses; it is set for `runtime.event` records and null otherwise. There is no
+`global_sequence_no`: cross-run/cross-file ordering for a merged conversation
+view derives from parent linkage events plus per-run `sequence_no` and the
+single-writer append order.
 
-`record_hash` is SHA-256 over RFC 8785-style canonical JSON of every field
-except `record_hash`. `previous_stream_hash` chains records within the physical
-stream. This detects accidental corruption; it is not presented as a
-tamper-proof audit control.
+`task_id` selects the physical file: `None` writes to the conversation's
+`events.jsonl`, and a task ID writes to that task's `subagents/<task-key>.jsonl`.
+A record is written to exactly one file. For a `runtime.event` record the
+payload's `event.event_id` is the idempotency key; other record kinds derive a
+stable `record_id` (UUIDv5) from their logical ID.
+
+`record_hash`, when present, is an optional SHA-256 over RFC 8785-style
+canonical JSON of every field except `record_hash`, used to detect accidental
+line corruption. It is **not** a per-stream chain and is not presented as a
+tamper-proof audit control; the single-writer store has no hash chain.
 
 ### 7.5 Artifact reference
 
@@ -453,23 +464,14 @@ that exact path as `RUNTIME_FILE_STORE_ROOT`.
 │               ├── audit.jsonl
 │               ├── sessions/
 │               │   └── <conversation-key>/
-│               │       ├── CURRENT
-│               │       ├── generations/
-│               │       │   └── <generation>/
-│               │       │       ├── generation.json
-│               │       │       ├── session.jsonl
-│               │       │       └── subagents/
-│               │       │           └── <task-key>.jsonl
-│               │       ├── pending/
-│               │       └── locks/
-│               ├── artifacts/
-│               │   ├── objects/sha256/
-│               │   ├── metadata/
-│               │   ├── temporary/
-│               │   └── quarantine/
+│               │       ├── events.jsonl            # flat, append-only main stream
+│               │       └── subagents/
+│               │           └── <task-key>.jsonl    # one file per subagent task
+│               ├── objects/
+│               │   └── sha256/                     # content-addressed bytes (AC2; AC4 wires offload)
+│               ├── tmp/                             # same-volume staging for object put/compaction
 │               └── index/
-│                   ├── catalog.sqlite3
-│                   └── notify/
+│                   └── catalog.sqlite3             # disposable projection (WAL sidecars alongside)
 └── capability-broker/
     └── v1/
         └── grants/              # encrypted, Electron-main-owned
@@ -480,10 +482,13 @@ that exact path as `RUNTIME_FILE_STORE_ROOT`.
 - Path keys are lowercase base32 of the full SHA-256 of the scoped identifier,
   not raw org, conversation, run, task, or user IDs. The original IDs remain in
   validated records. This removes path traversal and platform filename issues.
-- Session/workspace/audit JSONL and artifact bytes are canonical. `CURRENT`
-  atomically selects the committed session generation; generations exist so
-  retention or hard deletion can compact append-only records without in-place
-  editing. SQLite, notification files, caches, and lock files are disposable.
+- Session/workspace/audit JSONL and object bytes are canonical. A session is a
+  single flat, append-only `events.jsonl` (plus one file per subagent); a single
+  in-process writer appends directly, so there is no copy-on-write generation
+  set, `CURRENT` pointer, or cross-process lock file. Retention and hard deletion
+  compact or remove whole files (temp-file + atomic rename), never in-place
+  edits. SQLite and its WAL sidecars are disposable and rebuildable by scanning
+  JSONL.
 - Browser profiles, OAuth tokens, provider keys, and broker credentials are
   outside `agent-data`. They must never be copied into it.
 - POSIX mode is `0700` for directories and `0600` for files. Windows ACLs grant

@@ -1072,7 +1072,7 @@ registered provider idempotency/query evidence reconstructs the same validated
 result.
 
 For a model result, `result_record_id` is the deterministic
-`FileStoreRecordV1.record_id` wrapping the pending-write checkpoint reference;
+`FileSessionRecordV1.record_id` wrapping the pending-write checkpoint reference;
 it is not the artifact digest, artifact-use ID, or checkpoint-ref ID.
 
 The canonical provider key is
