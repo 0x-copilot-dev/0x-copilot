@@ -4,6 +4,15 @@ import type { z } from "zod";
 import type { RendererSession } from "@0x-copilot/chat-transport";
 
 import type { TransportBridge } from "../transport-bridge";
+import { CAPABILITY_CHANNELS } from "../capabilities/channels";
+import {
+  ListGrantsParamsSchema,
+  RendererGrantSchema,
+  RequestFolderGrantParamsSchema,
+  RevokeGrantParamsSchema,
+  type RequestFolderGrantParams,
+} from "../capabilities/schemas";
+import type { RendererGrant } from "../capabilities/types";
 import {
   AuthWorkspaceParamsSchema,
   CHANNELS,
@@ -25,6 +34,17 @@ export interface AuthHandlers {
   signOut(workspaceId: string): Promise<void>;
   getSession(workspaceId: string): Promise<RendererSession | null>;
   refresh(workspaceId: string): Promise<RendererSession | null>;
+}
+
+// Capability / host-folder grant handlers (AC5 slice 1). Every method returns
+// ONLY the renderer-safe grant view — no host path, no broker token. The
+// CapabilityService satisfies this structurally.
+export interface CapabilityHandlers {
+  requestFolderGrant(
+    params: RequestFolderGrantParams,
+  ): Promise<RendererGrant | null>;
+  listGrants(): Promise<RendererGrant[]>;
+  revokeGrant(grantId: string): Promise<RendererGrant | null>;
 }
 
 export interface IpcLogger {
@@ -62,7 +82,15 @@ export interface RegisterHandlersDeps {
   readonly bridge: TransportBridge;
   readonly auth?: AuthHandlers;
   readonly tier2?: Tier2InboundDispatcher;
+  readonly capability?: CapabilityHandlers;
   readonly logger?: IpcLogger;
+}
+
+// Structural guarantee that no host path (or any other field) can leak to the
+// renderer: strict-parse the outbound grant view before it crosses IPC. An
+// accidental extra key throws here instead of reaching the renderer.
+function toSafeRendererGrant(grant: RendererGrant): RendererGrant {
+  return RendererGrantSchema.parse(grant);
 }
 
 // Registers every IPC handler the renderer's IpcTransport invokes.
@@ -216,6 +244,48 @@ export function registerIpcHandlers(deps: RegisterHandlersDeps): () => void {
     );
   }
 
+  const capability = deps.capability;
+  if (capability) {
+    ipcMain.handle(
+      CAPABILITY_CHANNELS.requestFolderGrant,
+      async (_event, raw: unknown) => {
+        const params = parseOrThrow(
+          CAPABILITY_CHANNELS.requestFolderGrant,
+          RequestFolderGrantParamsSchema,
+          raw,
+        );
+        const grant = await capability.requestFolderGrant(params);
+        return grant === null ? null : toSafeRendererGrant(grant);
+      },
+    );
+
+    ipcMain.handle(
+      CAPABILITY_CHANNELS.listGrants,
+      async (_event, raw: unknown) => {
+        parseOrThrow(
+          CAPABILITY_CHANNELS.listGrants,
+          ListGrantsParamsSchema,
+          raw ?? {},
+        );
+        const grants = await capability.listGrants();
+        return grants.map(toSafeRendererGrant);
+      },
+    );
+
+    ipcMain.handle(
+      CAPABILITY_CHANNELS.revokeGrant,
+      async (_event, raw: unknown) => {
+        const params = parseOrThrow(
+          CAPABILITY_CHANNELS.revokeGrant,
+          RevokeGrantParamsSchema,
+          raw,
+        );
+        const grant = await capability.revokeGrant(params.grantId);
+        return grant === null ? null : toSafeRendererGrant(grant);
+      },
+    );
+  }
+
   return () => {
     const channels: string[] = [
       CHANNELS.transportRequest,
@@ -235,6 +305,13 @@ export function registerIpcHandlers(deps: RegisterHandlersDeps): () => void {
     }
     if (tier2) {
       channels.push(CHANNELS.tier2BoundaryError);
+    }
+    if (capability) {
+      channels.push(
+        CAPABILITY_CHANNELS.requestFolderGrant,
+        CAPABILITY_CHANNELS.listGrants,
+        CAPABILITY_CHANNELS.revokeGrant,
+      );
     }
     for (const channel of channels) {
       ipcMain.removeHandler(channel);
