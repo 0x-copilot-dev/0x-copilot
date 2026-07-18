@@ -15,10 +15,12 @@ import base64
 import pytest
 
 from agent_runtime.capabilities.desktop import workspace_backend as wb
+from agent_runtime.capabilities.desktop.broker_client import BrokerGrant
 from agent_runtime.capabilities.desktop.workspace_backend import (
     BrokeredWorkspaceBackend,
     WorkspaceBackendConfig,
     WorkspaceMount,
+    WorkspaceMountTable,
     WorkspaceWriteNotSupportedError,
     build_workspace_backend,
 )
@@ -266,6 +268,98 @@ class TestBuildWorkspaceBackendSeam:
             mounts=[WorkspaceMount(name="proj", grant_id="grant-proj")],
         )
         assert isinstance(build_workspace_backend(config), BrokeredWorkspaceBackend)
+
+    def test_with_mounts_replaces_mount_table(self) -> None:
+        base = WorkspaceBackendConfig(
+            broker_base_url="http://127.0.0.1:9", broker_token="secret"
+        )
+        bound = base.with_mounts([WorkspaceMount(name="proj", grant_id="grant-proj")])
+        assert base.mounts == ()  # original is untouched (frozen)
+        assert bound.mounts == (WorkspaceMount(name="proj", grant_id="grant-proj"),)
+
+    async def test_injected_client_is_reused_for_reads(self) -> None:
+        # A client built over the fake transport is reused verbatim, so the
+        # resulting backend's reads go through it (no second real client).
+        broker = RecordingBroker(
+            grants={"grant-proj": FakeBrokerFs(files={"a.txt": b"L1\n"})}
+        )
+        config = WorkspaceBackendConfig(
+            broker_base_url="http://127.0.0.1:9",
+            broker_token="secret",
+            mounts=(WorkspaceMount(name="proj", grant_id="grant-proj"),),
+        )
+        backend = build_workspace_backend(config, client=broker.client())
+        assert isinstance(backend, BrokeredWorkspaceBackend)
+        result = await backend.aread("/proj/a.txt")
+        assert result.error is None
+        assert result.file_data["content"] == "L1\n"
+
+
+class TestWorkspaceMountTable:
+    """`WorkspaceMountTable` resolves a broker grant snapshot into named mounts."""
+
+    @staticmethod
+    def _grant(
+        grant_id: str,
+        *,
+        label: str = "",
+        mount: str = "mnt_x",
+        status: str = "active",
+        mode: str = "read_only",
+    ) -> BrokerGrant:
+        return BrokerGrant(
+            grantId=grant_id, mode=mode, label=label, status=status, mount=mount
+        )
+
+    def test_label_becomes_readable_slug_bound_to_grant_id(self) -> None:
+        mounts = WorkspaceMountTable.from_broker_grants(
+            [self._grant("g1", label="My Docs", mount="mnt_a")]
+        )
+        assert len(mounts) == 1
+        assert mounts[0].name == "my-docs"
+        assert mounts[0].grant_id == "g1"
+        assert mounts[0].label == "My Docs"  # human hint carried, never sent
+
+    def test_duplicate_labels_are_disambiguated(self) -> None:
+        mounts = WorkspaceMountTable.from_broker_grants(
+            [
+                self._grant("g1", label="Docs", mount="mnt_a"),
+                self._grant("g2", label="Docs", mount="mnt_b"),
+            ]
+        )
+        assert [m.name for m in mounts] == ["docs", "docs-2"]
+        assert [m.grant_id for m in mounts] == ["g1", "g2"]
+
+    def test_empty_label_falls_back_to_opaque_mount_id(self) -> None:
+        mounts = WorkspaceMountTable.from_broker_grants(
+            [self._grant("g1", label="", mount="mnt_opaque")]
+        )
+        assert mounts[0].name == "mnt_opaque"
+        assert mounts[0].label is None
+
+    def test_revoked_and_empty_grant_ids_are_skipped(self) -> None:
+        mounts = WorkspaceMountTable.from_broker_grants(
+            [
+                self._grant("g1", label="live", mount="mnt_a"),
+                self._grant("g2", label="gone", mount="mnt_b", status="revoked"),
+                self._grant("", label="noid", mount="mnt_c"),
+            ]
+        )
+        assert [m.name for m in mounts] == ["live"]
+
+    def test_all_grant_modes_are_readable(self) -> None:
+        # `/workspace/` is read-only regardless of grant mode; every active mode
+        # yields a mount (the broker enforces the actual read floor).
+        mounts = WorkspaceMountTable.from_broker_grants(
+            [
+                self._grant("g1", label="ro", mount="m1", mode="read_only"),
+                self._grant("g2", label="rw", mount="m2", mode="read_write"),
+            ]
+        )
+        assert {m.name for m in mounts} == {"ro", "rw"}
+
+    def test_empty_snapshot_yields_no_mounts(self) -> None:
+        assert WorkspaceMountTable.from_broker_grants([]) == ()
 
 
 def test_module_exposes_route_prefix() -> None:

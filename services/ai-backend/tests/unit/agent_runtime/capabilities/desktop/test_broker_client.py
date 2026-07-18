@@ -140,6 +140,35 @@ class TestBrokerClientRoundTrips(BrokerClientMixin):
         # Literal search is the default: no `is_regex` on the wire.
         assert "is_regex" not in broker.requests[-1][2]
 
+    async def test_grants_snapshot_parses_path_free_projection(self) -> None:
+        broker = RecordingBroker(
+            grants={"grant-1": FakeBrokerFs(files={"a.txt": b"x\n"})},
+            grant_meta={
+                "grant-1": {
+                    "mode": "read_write_no_delete",
+                    "label": "My Notes",
+                    "status": "active",
+                    "mount": "mnt_abc123",
+                }
+            },
+        )
+        snapshot = await broker.client().grants_snapshot()
+        assert snapshot.snapshot_id == "snap-fake"  # parsed from `snapshotId`
+        assert snapshot.captured_at == 1000  # parsed from `capturedAt`
+        assert len(snapshot.grants) == 1
+        grant = snapshot.grants[0]
+        assert grant.grant_id == "grant-1"  # parsed from `grantId`
+        assert grant.mode == "read_write_no_delete"
+        assert grant.label == "My Notes"
+        assert grant.status == "active"
+        assert grant.mount == "mnt_abc123"
+        route, headers, body = broker.requests[-1]
+        assert route == "/v1/grants/snapshot"
+        assert body == {}  # empty request body
+        # Auth + protocol headers ride the same transport as the fs ops.
+        assert headers["authorization"] == f"Bearer {TEST_TOKEN}"
+        assert headers["x-capability-protocol"] == TEST_PROTOCOL
+
 
 class TestBrokerClientErrorMapping(BrokerClientMixin):
     """Broker `{error: code}` bodies map to the matching typed exception."""
