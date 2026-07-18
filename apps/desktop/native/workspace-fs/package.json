@@ -1,0 +1,13 @@
+{
+  "name": "@0x-copilot/workspace-fs-native",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Native N-API helper for TOCTOU-safe, root-confined host-file opens (openat2/O_NOFOLLOW_ANY/NtCreateFile). Consumed only by apps/desktop main.",
+  "main": "index.cjs",
+  "types": "index.d.ts",
+  "gypfile": true,
+  "scripts": {
+    "build": "node-gyp rebuild",
+    "build:electron": "node-gyp rebuild --runtime=electron --dist-url=https://electronjs.org/headers --target=$npm_config_electron_version"
+  }
+}
