@@ -172,11 +172,17 @@ beforeEach(() => {
   apiMocks.listAuditEvents.mockReset();
   navigate.mockClear();
   vi.spyOn(Date, "now").mockReturnValue(NOW);
-  registerItemRefResolver("run", async (id) => ({
-    label: `Run ${id}`,
-    icon: null,
-    route: { kind: "run", runId: id },
-  }));
+  // The Run destination registers the "run" resolver at import time; override
+  // it with the test stand-in deliberately (registry throws otherwise).
+  registerItemRefResolver(
+    "run",
+    async (id) => ({
+      label: `Run ${id}`,
+      icon: null,
+      route: { kind: "run", runId: id },
+    }),
+    { replace: true },
+  );
 });
 
 afterEach(() => {
