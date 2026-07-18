@@ -96,25 +96,75 @@ describe("SignInGate", () => {
     });
   }
 
-  it("renders all three sign-in buttons when anonymous", async () => {
+  it("renders the three v2 options with wallet first and primary", async () => {
     const bridge = makeBridge({
       [CHANNELS.authGetSession]: async () => null,
     });
     await mount(bridge);
 
-    expect(
-      container.querySelector("[data-testid='sign-in-button']"),
-    ).not.toBeNull();
-    const google = container.querySelector(
-      "[data-testid='sign-in-google-button']",
-    );
-    expect(google).not.toBeNull();
-    expect(google?.textContent).toContain("Continue with Google");
+    // Heading + honest sub-copy.
+    expect(container.textContent).toContain("Welcome to");
+    expect(container.textContent).toContain("it runs on your machine");
+
     const wallet = container.querySelector(
       "[data-testid='sign-in-wallet-button']",
     );
+    const google = container.querySelector(
+      "[data-testid='sign-in-google-button']",
+    );
+    const local = container.querySelector("[data-testid='sign-in-button']");
     expect(wallet).not.toBeNull();
-    expect(wallet?.textContent).toContain("Connect wallet");
+    expect(google).not.toBeNull();
+    expect(local).not.toBeNull();
+
+    // Wallet is the accent-filled primary and comes first in the DOM.
+    expect(wallet?.getAttribute("data-variant")).toBe("primary");
+    expect(google?.getAttribute("data-variant")).toBe("secondary");
+    expect(local?.getAttribute("data-variant")).toBe("secondary");
+    const options = Array.from(
+      container.querySelectorAll(".loginx-opt"),
+    ) as HTMLElement[];
+    expect(options[0]?.getAttribute("data-testid")).toBe(
+      "sign-in-wallet-button",
+    );
+
+    // Labels/subtitles from the v2 design.
+    expect(wallet?.textContent).toContain("Continue with a wallet");
+    expect(wallet?.textContent).toContain("MetaMask");
+    expect(google?.textContent).toContain("Continue with Google");
+    expect(local?.textContent).toContain("Use locally, no account");
+
+    // Footer honesty note.
+    expect(container.textContent).toContain("No seed phrase, ever.");
+  });
+
+  it("clicking Continue with a wallet invokes auth.sign-in-wallet and lands signed-in", async () => {
+    const invoke = deferred();
+    const bridge = makeBridge({
+      [CHANNELS.authGetSession]: async () => null,
+      [CHANNELS.authSignInWallet]: () =>
+        invoke.promise as Promise<RendererSession>,
+    });
+    await mount(bridge);
+
+    click("sign-in-wallet-button");
+    // While main drives the external wallet round-trip we show a waiting state.
+    expect(
+      container.querySelector("[data-testid='sign-in-waiting']"),
+    ).not.toBeNull();
+    expect(container.textContent).toContain("Waiting for your wallet…");
+    expect(bridge.calls.at(-1)).toEqual({
+      channel: CHANNELS.authSignInWallet,
+      payload: { workspaceId: "org_acme" },
+    });
+
+    await act(async () => {
+      invoke.resolve(SESSION);
+      await Promise.resolve();
+    });
+    expect(
+      container.querySelector("[data-testid='app']")?.textContent,
+    ).toContain("sarah@acme.test");
   });
 
   it("clicking Continue with Google invokes auth.sign-in-google and lands signed-in", async () => {
@@ -127,8 +177,7 @@ describe("SignInGate", () => {
     await mount(bridge);
 
     click("sign-in-google-button");
-    // While main drives the system-browser round-trip we show progress.
-    expect(container.textContent).toContain("Opening browser…");
+    expect(container.textContent).toContain("Opening your browser…");
     expect(bridge.calls.at(-1)).toEqual({
       channel: CHANNELS.authSignInGoogle,
       payload: { workspaceId: "org_acme" },
@@ -143,7 +192,24 @@ describe("SignInGate", () => {
     ).toContain("sarah@acme.test");
   });
 
-  it("a failed Google sign-in shows the error with a retry that returns to anon", async () => {
+  it("using locally still invokes auth.sign-in", async () => {
+    const signIn = vi.fn(async () => SESSION);
+    const bridge = makeBridge({
+      [CHANNELS.authGetSession]: async () => null,
+      [CHANNELS.authSignIn]: signIn,
+    });
+    await mount(bridge);
+
+    click("sign-in-button");
+    expect(container.textContent).toContain("Setting up your workspace…");
+    await act(async () => {
+      await Promise.resolve();
+    });
+    expect(signIn).toHaveBeenCalledWith({ workspaceId: "org_acme" });
+    expect(container.querySelector("[data-testid='app']")).not.toBeNull();
+  });
+
+  it("a failed Google sign-in shows the error with a retry that returns to the pick screen", async () => {
     const bridge = makeBridge({
       [CHANNELS.authGetSession]: async () => null,
       [CHANNELS.authSignInGoogle]: async () => {
@@ -159,46 +225,20 @@ describe("SignInGate", () => {
     const error = container.querySelector("[data-testid='sign-in-error']");
     expect(error?.textContent).toContain("loopback redirect timed out");
 
-    // Try again returns to the anon screen with both buttons.
-    const retry = Array.from(container.querySelectorAll("button")).find(
-      (b) => b.textContent === "Try again",
-    );
-    expect(retry).toBeDefined();
-    act(() => {
-      retry?.click();
-    });
+    // Try again returns to the pick screen with all three options back.
+    click("sign-in-retry-button");
+    expect(
+      container.querySelector("[data-testid='sign-in-wallet-button']"),
+    ).not.toBeNull();
     expect(
       container.querySelector("[data-testid='sign-in-google-button']"),
     ).not.toBeNull();
-  });
-
-  it("clicking Connect wallet invokes auth.sign-in-wallet and lands signed-in", async () => {
-    const invoke = deferred();
-    const bridge = makeBridge({
-      [CHANNELS.authGetSession]: async () => null,
-      [CHANNELS.authSignInWallet]: () =>
-        invoke.promise as Promise<RendererSession>,
-    });
-    await mount(bridge);
-
-    click("sign-in-wallet-button");
-    // While main drives the system-browser round-trip we show progress.
-    expect(container.textContent).toContain("Opening browser…");
-    expect(bridge.calls.at(-1)).toEqual({
-      channel: CHANNELS.authSignInWallet,
-      payload: { workspaceId: "org_acme" },
-    });
-
-    await act(async () => {
-      invoke.resolve(SESSION);
-      await Promise.resolve();
-    });
     expect(
-      container.querySelector("[data-testid='app']")?.textContent,
-    ).toContain("sarah@acme.test");
+      container.querySelector("[data-testid='sign-in-button']"),
+    ).not.toBeNull();
   });
 
-  it("a failed wallet sign-in shows the error with a retry that returns to anon", async () => {
+  it("a failed wallet sign-in shows the error with a retry that returns to the pick screen", async () => {
     const bridge = makeBridge({
       [CHANNELS.authGetSession]: async () => null,
       [CHANNELS.authSignInWallet]: async () => {
@@ -214,32 +254,35 @@ describe("SignInGate", () => {
     const error = container.querySelector("[data-testid='sign-in-error']");
     expect(error?.textContent).toContain("wallet handoff state mismatch");
 
-    // Try again returns to the anon screen with the wallet button back.
-    const retry = Array.from(container.querySelectorAll("button")).find(
-      (b) => b.textContent === "Try again",
-    );
-    expect(retry).toBeDefined();
-    act(() => {
-      retry?.click();
-    });
+    click("sign-in-retry-button");
     expect(
       container.querySelector("[data-testid='sign-in-wallet-button']"),
     ).not.toBeNull();
   });
 
-  it("legacy sign-in button still uses auth.sign-in", async () => {
-    const signIn = vi.fn(async () => SESSION);
+  it("a failed session lookup surfaces the error state", async () => {
     const bridge = makeBridge({
-      [CHANNELS.authGetSession]: async () => null,
-      [CHANNELS.authSignIn]: signIn,
+      [CHANNELS.authGetSession]: async () => {
+        throw new Error("session store unreachable");
+      },
     });
     await mount(bridge);
 
-    click("sign-in-button");
-    await act(async () => {
-      await Promise.resolve();
+    const error = container.querySelector("[data-testid='sign-in-error']");
+    expect(error?.textContent).toContain("session store unreachable");
+  });
+
+  it("an existing session skips the pick screen entirely", async () => {
+    const bridge = makeBridge({
+      [CHANNELS.authGetSession]: async () => SESSION,
     });
-    expect(signIn).toHaveBeenCalledWith({ workspaceId: "org_acme" });
-    expect(container.querySelector("[data-testid='app']")).not.toBeNull();
+    await mount(bridge);
+
+    expect(
+      container.querySelector("[data-testid='app']")?.textContent,
+    ).toContain("sarah@acme.test");
+    expect(
+      container.querySelector("[data-testid='sign-in-wallet-button']"),
+    ).toBeNull();
   });
 });

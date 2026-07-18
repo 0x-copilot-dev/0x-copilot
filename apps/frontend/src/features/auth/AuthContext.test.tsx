@@ -9,13 +9,50 @@
 import { act, render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import type { ReactElement } from "react";
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { AuthProvider, useAuth } from "./AuthContext";
 import { LoginScreen } from "./LoginScreen";
 import { MfaPrompt } from "./MfaPrompt";
 import * as authApi from "../../api/authApi";
+import * as devIdpApi from "../../api/devIdpApi";
+import {
+  EIP6963_ANNOUNCE_EVENT,
+  EIP6963_REQUEST_EVENT,
+  type Eip1193RequestArguments,
+} from "./eip6963";
 import { UnauthorizedError } from "../../api/http";
+
+/** Install a fake EIP-6963 wallet that announces on request. Mirrors the
+ * helper in WalletSignIn.test.tsx so the login card's wallet picker can be
+ * driven end-to-end. Returns a teardown. */
+function installFakeWallet(): () => void {
+  const request = vi.fn(
+    async ({ method }: Eip1193RequestArguments): Promise<unknown> => {
+      if (method === "eth_requestAccounts")
+        return ["0xfB6916095ca1df60bB79Ce92cE3Ea74c37c5d359"];
+      if (method === "eth_chainId") return "0x1";
+      throw new Error(`unexpected wallet method: ${method}`);
+    },
+  );
+  const onRequest = (): void => {
+    window.dispatchEvent(
+      new CustomEvent(EIP6963_ANNOUNCE_EVENT, {
+        detail: {
+          info: {
+            uuid: "u-test",
+            name: "TestWallet",
+            icon: "",
+            rdns: "dev.testwallet",
+          },
+          provider: { request },
+        },
+      }),
+    );
+  };
+  window.addEventListener(EIP6963_REQUEST_EVENT, onRequest);
+  return () => window.removeEventListener(EIP6963_REQUEST_EVENT, onRequest);
+}
 
 function StatusProbe(): ReactElement {
   const auth = useAuth();
@@ -236,7 +273,9 @@ describe("AuthContext", () => {
   });
 });
 
-describe("LoginScreen — email-first (PR 5.1)", () => {
+describe("LoginScreen — v2 wallet-first pick view", () => {
+  const teardowns: Array<() => void> = [];
+
   beforeEach(() => {
     try {
       window.localStorage?.clear?.();
@@ -244,123 +283,102 @@ describe("LoginScreen — email-first (PR 5.1)", () => {
       /* no localStorage in this test env */
     }
     vi.restoreAllMocks();
-    // The mount-time provider probe (Google entry point) is not under test
-    // here; stub it to "nothing advertised" so these cases stay hermetic.
+    // No Google advertised by default; each case that needs it overrides.
     vi.spyOn(authApi, "listAuthProviders").mockResolvedValue([]);
-  });
-
-  it("renders the brand pane + autofocused email field", async () => {
     vi.spyOn(authApi, "fetchCurrentSession").mockRejectedValue(
       new UnauthorizedError("Missing bearer token"),
     );
-    render(
-      <AuthProvider persistBearer={false}>
-        <LoginScreen />
-      </AuthProvider>,
-    );
-    expect(await screen.findByTestId("login-screen")).toBeInTheDocument();
-    expect(screen.getAllByText(/Copilot/).length).toBeGreaterThan(0);
-    expect(screen.getByText(/SOC 2 Type II/)).toBeInTheDocument();
-    expect(screen.getByTestId("login-email-input")).toBeInTheDocument();
-  });
-
-  it("submits an SSO email and routes to the OIDC start URL", async () => {
-    vi.spyOn(authApi, "fetchCurrentSession").mockRejectedValue(
-      new UnauthorizedError("Missing bearer token"),
-    );
-    vi.spyOn(authApi, "discoverAuth").mockResolvedValue({
-      kind: "sso",
-      domain: "acme.com",
-      org_id: "org_acme",
-      org_display_name: "Acme Inc.",
-      org_logo_url: null,
-      member_count: 12483,
-      provider_id: "prv_okta",
-      provider_kind: "oidc",
-      provider_display_name: "Okta",
-      sso_enforced: false,
-      magic_link_supported: true,
-      message: null,
-    });
-    const assignSpy = vi.fn();
+    // Anchor to "/" so initialStep resolves to the choose view (earlier
+    // describes replace window.location with a magic-link-callback mock).
     Object.defineProperty(window, "location", {
       configurable: true,
       value: {
-        assign: assignSpy,
+        assign: vi.fn(),
         origin: "http://localhost",
         pathname: "/",
         search: "",
         href: "http://localhost/",
       },
     });
-    render(
-      <AuthProvider persistBearer={false}>
-        <LoginScreen />
-      </AuthProvider>,
-    );
-    await waitFor(() =>
-      expect(screen.getByTestId("login-email-input")).toBeInTheDocument(),
-    );
-    await userEvent.type(
-      screen.getByTestId("login-email-input"),
-      "sarah@acme.com",
-    );
-    // Submit synchronously (skips the 450ms debounce by using the form
-    // submit path which calls discover directly).
-    await act(async () => {
-      await userEvent.click(screen.getByTestId("login-submit"));
-    });
-    await waitFor(() => {
-      expect(assignSpy).toHaveBeenCalled();
-    });
-    const url = String(assignSpy.mock.calls[0]?.[0] ?? "");
-    expect(url).toContain("/v1/auth/oidc/prv_okta/start");
-    expect(url).toContain("org_id=org_acme");
   });
 
-  it("submits a personal email and shows the magic-link sent card", async () => {
-    vi.spyOn(authApi, "fetchCurrentSession").mockRejectedValue(
-      new UnauthorizedError("Missing bearer token"),
-    );
-    vi.spyOn(authApi, "discoverAuth").mockResolvedValue({
-      kind: "personal",
-      domain: "gmail.com",
-      org_id: null,
-      org_display_name: null,
-      org_logo_url: null,
-      member_count: null,
-      provider_id: null,
-      provider_kind: null,
-      provider_display_name: "Google",
-      sso_enforced: false,
-      magic_link_supported: true,
-      message: null,
-    });
-    const startSpy = vi
-      .spyOn(authApi, "startMagicLink")
-      .mockResolvedValue({ status: "queued", expires_in_seconds: 900 });
+  afterEach(() => {
+    while (teardowns.length > 0) {
+      teardowns.pop()?.();
+    }
+  });
+
+  it("renders the three options and never renders the email form", async () => {
     render(
       <AuthProvider persistBearer={false}>
         <LoginScreen />
       </AuthProvider>,
     );
-    await waitFor(() =>
-      expect(screen.getByTestId("login-email-input")).toBeInTheDocument(),
+    expect(await screen.findByTestId("login-screen")).toBeInTheDocument();
+    expect(screen.getByTestId("login-option-wallet")).toBeInTheDocument();
+    expect(screen.getByTestId("login-option-local")).toBeInTheDocument();
+    expect(screen.getByText(/Welcome to/)).toBeInTheDocument();
+    // Email is unplugged from the UI (code retained in emailLogin.tsx).
+    expect(screen.queryByTestId("login-email-input")).toBeNull();
+    expect(screen.queryByTestId("login-email-form")).toBeNull();
+    expect(screen.queryByTestId("login-submit")).toBeNull();
+    // Google hidden until advertised.
+    expect(screen.queryByTestId("login-google")).toBeNull();
+  });
+
+  it("wallet option opens the EIP-6963-discovered picker", async () => {
+    teardowns.push(installFakeWallet());
+    render(
+      <AuthProvider persistBearer={false}>
+        <LoginScreen />
+      </AuthProvider>,
     );
-    await userEvent.type(
-      screen.getByTestId("login-email-input"),
-      "me@gmail.com",
+    await userEvent.click(await screen.findByTestId("login-option-wallet"));
+    // The discovered wallet (announced over EIP-6963) shows up as a row.
+    expect(
+      await screen.findByTestId("wallet-provider-dev.testwallet"),
+    ).toBeInTheDocument();
+    expect(screen.getByText(/Choose a wallet/)).toBeInTheDocument();
+  });
+
+  it("wallet option shows the honest empty state when none discovered", async () => {
+    render(
+      <AuthProvider persistBearer={false}>
+        <LoginScreen />
+      </AuthProvider>,
     );
+    await userEvent.click(await screen.findByTestId("login-option-wallet"));
+    expect(await screen.findByTestId("wallet-empty")).toBeInTheDocument();
+    expect(screen.getByText(/No wallet detected/)).toBeInTheDocument();
+  });
+
+  it("use-locally mints a dev-persona bearer via the local path", async () => {
+    const mintSpy = vi.spyOn(devIdpApi, "mintDevBearer").mockResolvedValue({
+      bearer: "dev.bearer",
+      expires_at: "2099-01-01T00:00:00Z",
+      persona_slug: "sarah_acme",
+      identity: {
+        org_id: "org_acme",
+        user_id: "usr_local",
+        display_name: "Sarah",
+        primary_email: "sarah@acme.com",
+        roles: ["employee"],
+        permission_scopes: ["runtime:use"],
+      },
+    });
+    render(
+      <AuthProvider persistBearer={false}>
+        <StatusProbe />
+        <LoginScreen />
+      </AuthProvider>,
+    );
+    const local = await screen.findByTestId("login-option-local");
+    // Ignore any mount-time dev re-auth; assert the click itself drives it.
+    mintSpy.mockClear();
     await act(async () => {
-      await userEvent.click(screen.getByTestId("login-submit"));
+      await userEvent.click(local);
     });
-    await waitFor(() => {
-      expect(startSpy).toHaveBeenCalledWith({
-        email: "me@gmail.com",
-        return_to: undefined,
-      });
-    });
-    expect(await screen.findByText(/Check your email/)).toBeInTheDocument();
+    await waitFor(() => expect(mintSpy).toHaveBeenCalledWith("sarah_acme"));
   });
 
   it("renders the workspace picker rows when consume returns multiple workspaces", async () => {
@@ -500,7 +518,7 @@ describe("LoginScreen — Continue with Google", () => {
     });
   });
 
-  it("renders the button when the providers list advertises google", async () => {
+  it("renders the option when the providers list advertises google", async () => {
     vi.spyOn(authApi, "listAuthProviders").mockResolvedValue([GOOGLE_PROVIDER]);
     render(
       <AuthProvider persistBearer={false}>
@@ -509,10 +527,11 @@ describe("LoginScreen — Continue with Google", () => {
     );
     expect(await screen.findByTestId("login-google")).toBeInTheDocument();
     expect(screen.getByText("Continue with Google")).toBeInTheDocument();
-    expect(screen.getByText(/or continue with email/)).toBeInTheDocument();
-    // The email-first flow stays fully intact alongside the new entry point.
-    expect(screen.getByTestId("login-email-input")).toBeInTheDocument();
-    expect(screen.getByTestId("login-submit")).toBeInTheDocument();
+    // The wallet-first options stay alongside the Google entry point.
+    expect(screen.getByTestId("login-option-wallet")).toBeInTheDocument();
+    expect(screen.getByTestId("login-option-local")).toBeInTheDocument();
+    // Email is unplugged from the UI regardless of Google availability.
+    expect(screen.queryByTestId("login-email-input")).toBeNull();
   });
 
   it("stays hidden when the providers list has no google entry", async () => {
@@ -535,7 +554,7 @@ describe("LoginScreen — Continue with Google", () => {
     await act(async () => {
       /* flush the resolved providers promise */
     });
-    expect(screen.getByTestId("login-email-input")).toBeInTheDocument();
+    expect(screen.getByTestId("login-option-wallet")).toBeInTheDocument();
     expect(screen.queryByTestId("login-google")).toBeNull();
   });
 
@@ -568,7 +587,7 @@ describe("LoginScreen — Continue with Google", () => {
     await act(async () => {
       /* flush the rejected providers promise */
     });
-    expect(screen.getByTestId("login-email-input")).toBeInTheDocument();
+    expect(screen.getByTestId("login-option-wallet")).toBeInTheDocument();
     expect(screen.queryByTestId("login-google")).toBeNull();
   });
 

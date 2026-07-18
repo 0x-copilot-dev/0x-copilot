@@ -8614,3 +8614,447 @@ body.login-body {
 [data-component="chat-shell"][data-destination="chats"] .aui-sidebar__footer {
   display: none;
 }
+
+/* ============================================================
+ * Login v2 — "0xCopilot Login" (wallet-first, quiet aesthetic).
+ *
+ * A single centered card. Design-system tokens only: one sky accent
+ * (--color-accent), near-black neutrals, hairline borders, jade
+ * (--color-success) for the done-check, JetBrains Mono (--font-mono) for
+ * the version line + address chip + message preview. Light + dark aware
+ * (every colour is a token, so the theme toggle carries through).
+ *
+ * The `loginx-` prefix keeps this isolated from the retained email
+ * classes (`login-card`, `login-google-btn`, `login-divider`,
+ * `login-discovery`, `wallet-picker`, …) which are still used by
+ * emailLogin.tsx (re-pluggable) and WalletSignIn.tsx (WalletHandoffPage).
+ * ============================================================ */
+
+.loginx-shell {
+  min-height: 100vh;
+  display: flex;
+  background-color: var(--color-bg);
+  color: var(--color-text);
+}
+.loginx-pane {
+  flex: 1 1 auto;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: var(--space-2xl) var(--space-lg);
+}
+
+.loginx-card {
+  width: 100%;
+  max-width: 26rem;
+  padding: var(--space-2xl);
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-lg);
+}
+
+/* Hexagonal copilot mark */
+.loginx-mark {
+  align-self: center;
+}
+.loginx-mark svg {
+  width: 2.5rem;
+  height: 2.5rem;
+  display: block;
+}
+.loginx-mark__hex {
+  fill: none;
+  stroke: var(--color-accent);
+  stroke-width: 1.6;
+  stroke-linejoin: round;
+}
+.loginx-mark__cursor {
+  fill: var(--color-accent);
+}
+
+.loginx-head {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-xs);
+  text-align: center;
+}
+.loginx-title {
+  margin: 0;
+  font-size: var(--font-size-2xl);
+  font-weight: var(--font-weight-semibold);
+  letter-spacing: -0.02em;
+  line-height: 1.2;
+}
+.loginx-zx {
+  color: var(--color-accent);
+}
+.loginx-sub {
+  margin: 0;
+  color: var(--color-text-muted);
+  font-size: var(--font-size-sm);
+  line-height: 1.5;
+}
+
+/* Option stack */
+.loginx-options {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-sm);
+}
+
+.loginx-opt {
+  display: flex;
+  align-items: center;
+  gap: var(--space-md);
+  width: 100%;
+  padding: var(--space-md);
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-md);
+  background: var(--color-surface);
+  color: var(--color-text);
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+  transition:
+    border-color 0.12s ease,
+    background-color 0.12s ease;
+}
+.loginx-opt:hover:not(:disabled) {
+  border-color: var(--color-border-strong, var(--color-accent));
+  background: var(--color-surface-2, var(--color-surface));
+}
+.loginx-opt:focus-visible {
+  outline: 2px solid var(--color-focus-ring);
+  outline-offset: 2px;
+}
+.loginx-opt:disabled {
+  cursor: default;
+  opacity: 0.7;
+}
+
+/* Primary (wallet) — accent-filled */
+.loginx-opt[data-variant="primary"] {
+  border-color: transparent;
+  background: var(--color-accent);
+  color: var(--color-accent-contrast, var(--color-bg));
+}
+.loginx-opt[data-variant="primary"]:hover:not(:disabled) {
+  background: var(--color-accent-strong, var(--color-accent));
+  border-color: transparent;
+}
+.loginx-opt[data-variant="primary"] .loginx-opt__sub {
+  color: color-mix(
+    in srgb,
+    var(--color-accent-contrast, var(--color-bg)) 78%,
+    transparent
+  );
+}
+
+.loginx-opt__icon {
+  flex: 0 0 auto;
+  display: grid;
+  place-items: center;
+  width: 1.75rem;
+  height: 1.75rem;
+}
+.loginx-opt__glyph {
+  width: 1.25rem;
+  height: 1.25rem;
+}
+.loginx-opt__body {
+  display: flex;
+  flex-direction: column;
+  gap: 0.1rem;
+  min-width: 0;
+  flex: 1 1 auto;
+}
+.loginx-opt__label {
+  font-size: var(--font-size-sm);
+  font-weight: var(--font-weight-semibold);
+}
+.loginx-opt__sub {
+  font-size: var(--font-size-xs);
+  color: var(--color-text-subtle);
+}
+.loginx-opt__chev {
+  flex: 0 0 auto;
+  display: grid;
+  place-items: center;
+  color: var(--color-text-subtle);
+}
+.loginx-opt__chev svg {
+  width: 1.1rem;
+  height: 1.1rem;
+}
+.loginx-opt[data-variant="primary"] .loginx-opt__chev {
+  color: color-mix(
+    in srgb,
+    var(--color-accent-contrast, var(--color-bg)) 80%,
+    transparent
+  );
+}
+
+/* Divider */
+.loginx-divider {
+  display: flex;
+  align-items: center;
+  gap: var(--space-md);
+  color: var(--color-text-subtle);
+  font-size: var(--font-size-xs);
+  padding: var(--space-2xs) 0;
+}
+.loginx-divider::before,
+.loginx-divider::after {
+  content: "";
+  flex: 1 1 auto;
+  height: 1px;
+  background: var(--color-border);
+}
+
+/* Footer note + version line */
+.loginx-foot {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-sm);
+  text-align: center;
+}
+.loginx-note {
+  margin: 0;
+  font-size: var(--font-size-xs);
+  line-height: 1.5;
+  color: var(--color-text-muted);
+}
+.loginx-note strong {
+  color: var(--color-text);
+  font-weight: var(--font-weight-semibold);
+}
+.loginx-version {
+  margin: 0;
+  font-family: var(--font-mono);
+  font-size: var(--font-size-2xs);
+  color: var(--color-text-subtle);
+  letter-spacing: 0.01em;
+}
+
+/* Back link */
+.loginx-back {
+  align-self: flex-start;
+  border: 0;
+  background: transparent;
+  color: var(--color-text-muted);
+  font: inherit;
+  font-size: var(--font-size-sm);
+  cursor: pointer;
+  padding: 0;
+}
+.loginx-back:hover {
+  color: var(--color-text);
+}
+.loginx-back:focus-visible {
+  outline: 2px solid var(--color-focus-ring);
+  outline-offset: 2px;
+  border-radius: var(--radius-xs, 4px);
+}
+
+/* Wallet list (also reused by the workspace picker) */
+.loginx-wallets {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-xs);
+}
+.loginx-wallet-row {
+  display: flex;
+  align-items: center;
+  gap: var(--space-md);
+  width: 100%;
+  padding: var(--space-md);
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-md);
+  background: var(--color-surface);
+  color: var(--color-text);
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+}
+.loginx-wallet-row:hover:not(:disabled) {
+  border-color: var(--color-accent);
+}
+.loginx-wallet-row:focus-visible {
+  outline: 2px solid var(--color-focus-ring);
+  outline-offset: 2px;
+}
+.loginx-wallet-row:disabled {
+  opacity: 0.55;
+  cursor: not-allowed;
+}
+.loginx-wallet-row__icon {
+  flex: 0 0 auto;
+  width: 1.75rem;
+  height: 1.75rem;
+  border-radius: var(--radius-sm);
+  object-fit: contain;
+}
+.loginx-wallet-row__icon--letter {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  background: var(--color-surface-2, var(--color-surface));
+  border: 1px solid var(--color-border);
+  font-size: var(--font-size-xs);
+  font-weight: var(--font-weight-semibold);
+}
+.loginx-wallet-row__body {
+  display: flex;
+  flex-direction: column;
+  gap: 0.1rem;
+  min-width: 0;
+  flex: 1 1 auto;
+}
+.loginx-wallet-row__name {
+  font-size: var(--font-size-sm);
+  font-weight: var(--font-weight-semibold);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.loginx-wallet-row__sub {
+  font-family: var(--font-mono);
+  font-size: var(--font-size-2xs);
+  color: var(--color-text-subtle);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+/* Empty / status */
+.loginx-status {
+  margin: 0;
+  color: var(--color-text-muted);
+  font-size: var(--font-size-sm);
+  text-align: center;
+}
+.loginx-empty {
+  border: 1px dashed var(--color-border);
+  border-radius: var(--radius-md);
+  padding: var(--space-lg);
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-xs);
+  text-align: center;
+}
+.loginx-empty__title {
+  margin: 0;
+  font-weight: var(--font-weight-semibold);
+  font-size: var(--font-size-sm);
+}
+.loginx-empty__hint {
+  margin: 0;
+  color: var(--color-text-muted);
+  font-size: var(--font-size-xs);
+  line-height: 1.5;
+}
+
+/* Connecting / verifying */
+.loginx-wait {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: var(--space-sm);
+  text-align: center;
+  padding: var(--space-md) 0;
+}
+.loginx-spinner {
+  width: 1.75rem;
+  height: 1.75rem;
+  border-radius: 999px;
+  border: 2px solid var(--color-border);
+  border-top-color: var(--color-accent);
+  animation: loginx-spin 0.8s linear infinite;
+}
+@keyframes loginx-spin {
+  to {
+    transform: rotate(360deg);
+  }
+}
+@media (prefers-reduced-motion: reduce) {
+  .loginx-spinner {
+    animation-duration: 2s;
+  }
+}
+
+/* Signature review */
+.loginx-addr {
+  display: flex;
+  align-items: center;
+  gap: var(--space-sm);
+  padding: var(--space-sm) var(--space-md);
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-md);
+  background: var(--color-surface-2, var(--color-surface));
+  flex-wrap: wrap;
+}
+.loginx-addr__dot {
+  width: 0.55rem;
+  height: 0.55rem;
+  border-radius: 999px;
+  background: var(--color-success);
+  flex: 0 0 auto;
+}
+.loginx-addr__hex {
+  font-family: var(--font-mono);
+  font-size: var(--font-size-sm);
+  color: var(--color-text);
+}
+.loginx-addr__meta {
+  font-size: var(--font-size-xs);
+  color: var(--color-text-subtle);
+}
+.loginx-message {
+  margin: 0;
+  padding: var(--space-md);
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-md);
+  background: var(--color-surface-2, var(--color-surface));
+  font-family: var(--font-mono);
+  font-size: var(--font-size-2xs);
+  line-height: 1.55;
+  color: var(--color-text-muted);
+  white-space: pre-wrap;
+  word-break: break-word;
+  max-height: 12rem;
+  overflow-y: auto;
+}
+.loginx-actions {
+  display: flex;
+  gap: var(--space-sm);
+  justify-content: flex-end;
+}
+
+/* Done */
+.loginx-done {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: var(--space-sm);
+  text-align: center;
+  padding: var(--space-md) 0;
+}
+.loginx-done__check {
+  display: grid;
+  place-items: center;
+  width: 2.5rem;
+  height: 2.5rem;
+  border-radius: 999px;
+  background: var(
+    --color-success-bg,
+    color-mix(in srgb, var(--color-success) 16%, transparent)
+  );
+  color: var(--color-success);
+}
+.loginx-done__check svg {
+  width: 1.4rem;
+  height: 1.4rem;
+}
