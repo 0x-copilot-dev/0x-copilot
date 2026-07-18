@@ -105,3 +105,25 @@ export {
   type ProgressTone,
 } from "./controls";
 // === end Phase 5 (PR-5.2) ===
+
+// === Phase 5 (PR-5.5) — Local models section + Download flow ===
+// LocalModelsPage fills the "local-models" SettingsSurface slot; the runtime
+// (Ollama pull/list/delete + SSE progress) is a host callback seam — chat-surface
+// stays framework-agnostic. DownloadLocalModelModal is the DESIGN-SPEC §5 flow.
+export { LocalModelsPage, type LocalModelsPageProps } from "./LocalModelsPage";
+export {
+  DownloadLocalModelModal,
+  type DownloadLocalModelModalProps,
+  type AvailableLocalModel,
+  type LocalModelPullHandle,
+  type LocalModelPullHandlers,
+  type StartLocalModelPull,
+  type LocalModelDownloadResult,
+} from "./DownloadLocalModelModal";
+export {
+  formatBytes,
+  formatEta,
+  humanStatus,
+  placementLabel,
+} from "./localModelsFormat";
+// === end Phase 5 (PR-5.5) ===
