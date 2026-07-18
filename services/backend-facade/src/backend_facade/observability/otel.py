@@ -7,6 +7,7 @@ import re
 from typing import ClassVar
 
 from opentelemetry import metrics, trace
+from opentelemetry.attributes import BoundedAttributes
 from opentelemetry.exporter.otlp.proto.grpc.metric_exporter import (
     OTLPMetricExporter,
 )
@@ -63,14 +64,23 @@ class SafeAttributeSpanProcessor(SpanProcessor):
         attributes = getattr(span, "_attributes", None)
         if attributes is None:
             return
-        keys_to_drop = [
-            key for key in list(attributes.keys()) if not self._is_safe_key(key)
-        ]
-        for key in keys_to_drop:
-            try:
-                del attributes[key]
-            except (KeyError, TypeError):
-                continue
+        safe_items = {
+            key: value for key, value in attributes.items() if self._is_safe_key(key)
+        }
+        if len(safe_items) == len(attributes):
+            return
+        # By the time on_end runs the span is finalized, so its _attributes
+        # BoundedAttributes is immutable (otel-sdk >= 1.44 raises TypeError on
+        # __delitem__/__setitem__). In-place deletion is silently swallowed, so
+        # replace the mapping wholesale with a sanitized copy instead. This
+        # runs before the export BatchSpanProcessor, which reads the redacted
+        # attributes off span.attributes.
+        span._attributes = BoundedAttributes(  # type: ignore[attr-defined]
+            maxlen=getattr(attributes, "maxlen", None),
+            attributes=safe_items,
+            immutable=True,
+            max_value_len=getattr(attributes, "max_value_len", None),
+        )
 
     def shutdown(self) -> None:  # type: ignore[override]
         return None
