@@ -46,6 +46,9 @@ export {
   type SheetDiff,
   type SheetDiffProps,
   type SheetRegion,
+  // PR-3.10 (FR-3.21) — per-row inline approval states.
+  type SheetRowApproval,
+  type SheetRowApprovalState,
 } from "./sheet";
 // === end Phase 4-E ===
 

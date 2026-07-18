@@ -20,9 +20,47 @@ import {
   subagentCardFromEntry,
   type FleetProjection,
 } from "../subagents";
+// PR-3.10 — in-chat approvals. Reuses the hoisted Phase-1E consent family: the
+// 4-zone `ApprovalCard` (pending, Studio) and the collapsed `ApprovalReceipt`
+// (resolved). Presentation only — resolution is the injected onApprove/onReject
+// (host owns the POST, D28). Focus mode renders a local `.conf-card` variant.
+import {
+  ApprovalCard,
+  ApprovalReceipt,
+  type ActivityParam,
+} from "../approvals";
 import { useSwimlaneScrub } from "./SwimlaneScrubContext";
 
 export type TcChatMode = "studio" | "focus";
+
+/**
+ * PR-3.10 — an approval projected off the run stream
+ * (`projectApprovals(session.events)`), shaped for the in-chat card. The
+ * superset `RunApproval` (destinations/run) is structurally assignable to this,
+ * so the host threads its projection straight through with no mapping pass.
+ */
+export interface TcChatApproval {
+  readonly approvalId: string;
+  /** Verb-first card title ("Post to #launch-aurora"). */
+  readonly title: string;
+  /** The "why" line under the title. */
+  readonly reason: string;
+  /** Optional sub-line. */
+  readonly summary: string | null;
+  /** Vendor·access pill; null when unknown. */
+  readonly category: {
+    readonly vendor: string;
+    readonly access: string;
+  } | null;
+  /** Inset key/value frame. */
+  readonly params: readonly ActivityParam[];
+  /** Resolved? Pending → card / conf-card; resolved → receipt. */
+  readonly resolved: boolean;
+  /** Final decision once resolved; null while pending. */
+  readonly decision: "approved" | "rejected" | null;
+  /** Dispatch time (epoch ms) — the conversation anchor. */
+  readonly createdAtMs: number | null;
+}
 
 export interface TcChatMessagePart {
   readonly type: "text" | "reasoning";
@@ -67,9 +105,25 @@ export interface TcChatProps {
    * standalone usage — linear runs render no fleet card.
    */
   readonly fleets?: readonly FleetProjection[];
+  /**
+   * PR-3.10 — pending + recently-resolved approvals projected off the run
+   * stream. Studio renders each pending one as the hoisted 4-zone
+   * `ApprovalCard` (Approve ⌘↵ / Reject ⌘⌫) and each resolved one as an
+   * `ApprovalReceipt`; Focus renders pending ones as `.conf-card` confirmation
+   * cards (FR-3.22). The host hides them while scrubbed off-now by passing `[]`;
+   * as a safeguard the chat also hides them whenever the scrub cursor is off-now.
+   */
+  readonly approvals?: readonly TcChatApproval[];
+  /** Resolve the approval (host owns the POST); fires on Approve / `⌘↵`. */
+  readonly onApprove?: (approvalId: string) => void;
+  /** Reject the approval (host owns the POST); fires on Reject / `⌘⌫`. */
+  readonly onReject?: (approvalId: string) => void;
 }
 
 const EMPTY_FLEETS: readonly FleetProjection[] = [];
+const EMPTY_APPROVALS: readonly TcChatApproval[] = [];
+const APPROVAL_REASSURANCE =
+  "You're always asked before Copilot acts outside this chat.";
 
 type LoadState =
   | { readonly status: "idle" }
@@ -88,6 +142,9 @@ export function TcChat(props: TcChatProps): ReactElement {
     portalTarget,
     markdownComponents,
     fleets = EMPTY_FLEETS,
+    approvals = EMPTY_APPROVALS,
+    onApprove,
+    onReject,
   } = props;
   const transport = useTransport();
   const scrub = useSwimlaneScrub();
@@ -118,9 +175,27 @@ export function TcChat(props: TcChatProps): ReactElement {
     };
   }, [conversationId, transport]);
 
+  // PR-3.10 — approvals are HIDDEN while scrubbed off-now (you cannot approve a
+  // past state). The host also drops them from `approvals` when scrubbed, but
+  // guarding on the scrub cursor here keeps standalone usage correct too.
+  const scrubbedOffNow = scrub.scrubbedTo !== "now";
+  const visibleApprovals = scrubbedOffNow ? EMPTY_APPROVALS : approvals;
+
   if (mode === "focus") {
+    // PR-3.10 (FR-3.13/FR-3.22) — Focus collapses to Chat-only; a pending
+    // approval surfaces as a `.conf-card` confirmation card (a resolved one as
+    // its receipt) above the focus tabs.
     return (
       <div data-testid="tc-chat" data-mode="focus" style={focusContainerStyle}>
+        {visibleApprovals.length > 0 ? (
+          <div data-testid="tc-chat-conf-cards" style={confCardsWrapStyle}>
+            {visibleApprovals.map((approval) =>
+              approval.resolved
+                ? renderApprovalReceipt(approval)
+                : renderConfCard(approval, onApprove, onReject),
+            )}
+          </div>
+        ) : null}
         <FocusTabs />
       </div>
     );
@@ -162,6 +237,19 @@ export function TcChat(props: TcChatProps): ReactElement {
           markdownComponents={markdownComponents}
         />
       </div>
+      {/* PR-3.10 (FR-3.22) — in-chat approvals sit between the transcript and
+          the composer: pending ones render the 4-zone ApprovalCard, resolved
+          ones their receipt. Outside the ghost-dimmed message list so they stay
+          interactive. */}
+      {visibleApprovals.length > 0 ? (
+        <div data-testid="tc-chat-approvals" style={approvalsWrapStyle}>
+          {visibleApprovals.map((approval) =>
+            approval.resolved
+              ? renderApprovalReceipt(approval)
+              : renderStudioApprovalCard(approval, onApprove, onReject),
+          )}
+        </div>
+      ) : null}
       <div style={composerSlotStyle}>
         <Composer
           onSend={(text) => onSend?.(text)}
@@ -172,6 +260,116 @@ export function TcChat(props: TcChatProps): ReactElement {
           portalTarget={portalTarget}
         />
       </div>
+    </div>
+  );
+}
+
+// PR-3.10 — in-chat approval renderers. Pure presentation over the injected
+// projection: Studio uses the hoisted 4-zone `ApprovalCard`, Focus a local
+// `.conf-card` confirmation card; a resolved approval collapses to the hoisted
+// `ApprovalReceipt`. Resolution is the injected onApprove/onReject (D28).
+
+function renderStudioApprovalCard(
+  approval: TcChatApproval,
+  onApprove?: (approvalId: string) => void,
+  onReject?: (approvalId: string) => void,
+): ReactNode {
+  return (
+    <div
+      key={`approval-${approval.approvalId}`}
+      data-testid={`tc-chat-approval-${approval.approvalId}`}
+      data-approval-id={approval.approvalId}
+    >
+      <ApprovalCard
+        title={approval.title}
+        reason={approval.reason}
+        category={approval.category}
+        params={[...approval.params]}
+        reassurance={APPROVAL_REASSURANCE}
+        actions={
+          <>
+            <button
+              type="button"
+              data-testid={`tc-chat-approval-reject-${approval.approvalId}`}
+              onClick={() => onReject?.(approval.approvalId)}
+              style={approvalRejectButtonStyle}
+            >
+              Reject <span aria-hidden="true">⌘⌫</span>
+            </button>
+            <button
+              type="button"
+              data-testid={`tc-chat-approval-approve-${approval.approvalId}`}
+              onClick={() => onApprove?.(approval.approvalId)}
+              style={approvalApproveButtonStyle}
+            >
+              Approve <span aria-hidden="true">⌘↵</span>
+            </button>
+          </>
+        }
+      />
+    </div>
+  );
+}
+
+function renderConfCard(
+  approval: TcChatApproval,
+  onApprove?: (approvalId: string) => void,
+  onReject?: (approvalId: string) => void,
+): ReactNode {
+  return (
+    <div
+      key={`conf-${approval.approvalId}`}
+      className="conf-card"
+      role="group"
+      aria-label={`Approval: ${approval.title}`}
+      data-testid={`tc-chat-conf-card-${approval.approvalId}`}
+      data-approval-id={approval.approvalId}
+      style={confCardStyle}
+    >
+      <div className="conf-card__head" style={confHeadStyle}>
+        {approval.title}
+      </div>
+      {approval.summary !== null ? (
+        <p className="conf-card__summary" style={confSummaryStyle}>
+          {approval.summary}
+        </p>
+      ) : null}
+      <div className="conf-card__actions" style={confActionsStyle}>
+        <button
+          type="button"
+          data-testid={`tc-chat-conf-reject-${approval.approvalId}`}
+          onClick={() => onReject?.(approval.approvalId)}
+          style={confRejectButtonStyle}
+        >
+          Reject
+        </button>
+        <button
+          type="button"
+          data-testid={`tc-chat-conf-approve-${approval.approvalId}`}
+          onClick={() => onApprove?.(approval.approvalId)}
+          style={confApproveButtonStyle}
+        >
+          Approve &amp; sign
+        </button>
+      </div>
+      <p className="conf-card__foot" style={confFootStyle}>
+        The agent paused here — it won&apos;t sign until you approve
+      </p>
+    </div>
+  );
+}
+
+function renderApprovalReceipt(approval: TcChatApproval): ReactNode {
+  return (
+    <div
+      key={`receipt-${approval.approvalId}`}
+      data-testid={`tc-chat-approval-receipt-${approval.approvalId}`}
+      data-decision={approval.decision ?? "approved"}
+    >
+      <ApprovalReceipt
+        kind={approval.decision === "rejected" ? "rejected" : "approved"}
+        title={approval.title}
+      />
     </div>
   );
 }
@@ -541,4 +739,111 @@ const tabPanelStyle: CSSProperties = {
   color: PALETTE.textLo,
   fontSize: "var(--font-size-sm)",
   padding: 12,
+};
+
+// PR-3.10 — in-chat approvals (design-system tokens only; sky accent, jade
+// success, ember danger — no lime, no hardcoded hex).
+
+const approvalsWrapStyle: CSSProperties = {
+  flexShrink: 0,
+  display: "flex",
+  flexDirection: "column",
+  gap: 8,
+  padding: "0 8px",
+};
+
+const approvalApproveButtonStyle: CSSProperties = {
+  display: "inline-flex",
+  alignItems: "center",
+  gap: 6,
+  background: "var(--color-accent)",
+  color: "var(--color-accent-contrast, #101113)",
+  border: "none",
+  borderRadius: 8,
+  padding: "8px 14px",
+  fontSize: "var(--font-size-xs)",
+  fontWeight: 600,
+  cursor: "pointer",
+  fontFamily: "inherit",
+};
+
+const approvalRejectButtonStyle: CSSProperties = {
+  display: "inline-flex",
+  alignItems: "center",
+  gap: 6,
+  background: "transparent",
+  color: "var(--color-text, #f4f5f6)",
+  border: "1px solid var(--color-border, #2a2d31)",
+  borderRadius: 8,
+  padding: "8px 14px",
+  fontSize: "var(--font-size-xs)",
+  fontWeight: 600,
+  cursor: "pointer",
+  fontFamily: "inherit",
+};
+
+const confCardsWrapStyle: CSSProperties = {
+  display: "flex",
+  flexDirection: "column",
+  gap: 8,
+};
+
+const confCardStyle: CSSProperties = {
+  display: "flex",
+  flexDirection: "column",
+  gap: 8,
+  padding: 14,
+  borderRadius: 12,
+  background: "var(--color-accent-soft, rgba(95,178,236,.12))",
+  border: "1px solid var(--color-accent, #5fb2ec)",
+  color: "var(--color-text, #f4f5f6)",
+};
+
+const confHeadStyle: CSSProperties = {
+  fontSize: "var(--font-size-sm)",
+  fontWeight: 600,
+  color: "var(--color-text, #f4f5f6)",
+};
+
+const confSummaryStyle: CSSProperties = {
+  margin: 0,
+  fontSize: "var(--font-size-xs)",
+  lineHeight: 1.5,
+  color: "var(--color-text-muted, #9aa0a6)",
+};
+
+const confActionsStyle: CSSProperties = {
+  display: "flex",
+  gap: 8,
+  justifyContent: "flex-end",
+};
+
+const confApproveButtonStyle: CSSProperties = {
+  background: "var(--color-accent)",
+  color: "var(--color-accent-contrast, #101113)",
+  border: "none",
+  borderRadius: 8,
+  padding: "6px 12px",
+  fontSize: "var(--font-size-xs)",
+  fontWeight: 600,
+  cursor: "pointer",
+  fontFamily: "inherit",
+};
+
+const confRejectButtonStyle: CSSProperties = {
+  background: "transparent",
+  color: "var(--color-text, #f4f5f6)",
+  border: "1px solid var(--color-border, #2a2d31)",
+  borderRadius: 8,
+  padding: "6px 12px",
+  fontSize: "var(--font-size-xs)",
+  fontWeight: 600,
+  cursor: "pointer",
+  fontFamily: "inherit",
+};
+
+const confFootStyle: CSSProperties = {
+  margin: 0,
+  fontSize: "var(--font-size-2xs)",
+  color: "var(--color-text-muted, #9aa0a6)",
 };
