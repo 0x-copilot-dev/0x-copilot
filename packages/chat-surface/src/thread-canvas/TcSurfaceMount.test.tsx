@@ -232,6 +232,58 @@ describe("TcSurfaceMount", () => {
     expect(onSuggestChanges).toHaveBeenCalledWith("d-42");
   });
 
+  it("FR-3.20: renders a `streaming · N%` chip when the pending diff is streaming", () => {
+    registerAdapter(adapterRenderingText("current", "the diff"));
+    render(
+      <TcSurfaceMount
+        uri="email://draft-1"
+        transport={stubTransport}
+        pendingDiff={{ ...pendingHandle("d-stream"), streamProgress: 37 }}
+      />,
+    );
+    expect(
+      screen.getByTestId("tc-surface-mount-stream-chip"),
+    ).toHaveTextContent(/streaming · 37%/i);
+    expect(screen.getByTestId("tc-surface-mount")).toHaveAttribute(
+      "data-streaming",
+      "true",
+    );
+    // The diff is still the center-pane render (not chat text).
+    expect(screen.getByText("the diff")).toBeInTheDocument();
+  });
+
+  it("rounds and clamps the streaming progress on the mount chip", () => {
+    registerAdapter(adapterRenderingText("current", "the diff"));
+    render(
+      <TcSurfaceMount
+        uri="email://draft-1"
+        transport={stubTransport}
+        pendingDiff={{ ...pendingHandle("d-stream"), streamProgress: 149.5 }}
+      />,
+    );
+    expect(
+      screen.getByTestId("tc-surface-mount-stream-chip"),
+    ).toHaveTextContent(/streaming · 100%/i);
+  });
+
+  it("omits the streaming chip when the pending diff carries no progress", () => {
+    registerAdapter(adapterRenderingText("current", "the diff"));
+    render(
+      <TcSurfaceMount
+        uri="email://draft-1"
+        transport={stubTransport}
+        pendingDiff={pendingHandle("d-static")}
+      />,
+    );
+    expect(
+      screen.queryByTestId("tc-surface-mount-stream-chip"),
+    ).not.toBeInTheDocument();
+    expect(screen.getByTestId("tc-surface-mount")).toHaveAttribute(
+      "data-streaming",
+      "false",
+    );
+  });
+
   it("wraps the tier-3 fallback path with the host controls too (D28)", () => {
     registerAdapter(adapterThatThrows("primary boom"));
     registerAdapter(tier3RenderingText("tier-3 here"));

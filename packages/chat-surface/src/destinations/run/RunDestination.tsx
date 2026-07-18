@@ -21,11 +21,13 @@
 // stays in parity.
 //
 // SEAMS LEFT FOR THE REST OF PHASE 3 (kept intentionally thin here):
-//   - PR-3.6 right rail: `ThreadCanvas` currently hosts `TcChat` in its chat
-//     column. When `ThreadCanvas` gains a `rightRail` slot, the recomposed
-//     `[Chat · Sources · Agents · Approvals]` `RunWorkspaceRail` mounts there;
-//     `ThreadCanvas` also owns an in-canvas mode switcher today, which that PR
-//     collapses so `RunHeader` becomes the single mode control.
+//   - PR-3.6 right rail (DONE): the recomposed `[Chat · Sources · Agents ·
+//     Approvals]` `RunWorkspaceRail` now mounts in `ThreadCanvas`'s new
+//     `rightRail` slot (replacing its built-in `TcChat` column), and the
+//     in-canvas mode switcher is collapsed (`showModeSwitcher={false}`) so
+//     `RunHeader` is the single mode control. The Sources/Agents/Approvals
+//     tab inputs stay controlled/injected — a later PR / the desktop host
+//     threads the reducer outputs; PR-3.6 wires the Chat tab (single TcChat).
 //   - PR-3.7 timeline scrub: `scrubbedSeq`/`onScrub`/`onSnapToNow` plumb through
 //     `ThreadCanvas`; the shell will own the scrub cursor + the surface tab it
 //     snaps to, plus the "Viewing…" banner and composer/approval gating.
@@ -52,9 +54,10 @@ import {
 import type { ConversationId, RunId } from "@0x-copilot/api-types";
 
 import { useTransport } from "../../providers/TransportProvider";
-import { ThreadCanvas, type TcTab } from "../../thread-canvas";
+import { ThreadCanvas, TcChat, type TcTab } from "../../thread-canvas";
 
 import { RunHeader } from "./RunHeader";
+import { RunWorkspaceRail } from "./RunWorkspaceRail";
 import { useRunMode } from "./useRunMode";
 import { useRunSession } from "./useRunSession";
 
@@ -127,6 +130,24 @@ export function RunDestination(props: RunDestinationProps): ReactElement {
     );
   }, [goalOverride, session.runs, session.runId]);
 
+  // PR-3.6: the tabbed right rail (Chat · Sources · Agents · Approvals). The
+  // single TcChat instance lives in the rail's Chat tab — we build it here and
+  // inject it as `chatSlot` so mode/tab switches never spawn a second chat
+  // mount (FR-3.9). ThreadCanvas renders this rail in its chat gridArea in
+  // place of its built-in TcChat (`rightRail` slot).
+  //
+  // Sources/Agents/Approvals inputs are host-reducer outputs (the same shapes
+  // WorkspacePane consumes). The cockpit shell owns exactly one event source —
+  // `useRunSession.events`, projected once inside ThreadCanvas — so we do NOT
+  // open a second projection / SSE subscription to feed the rail (FR-3.3). Until
+  // the desktop host wires those reducers, the rail renders its per-tab empty
+  // copy; the badges light up as data flows in (PR-3.8 subagents / PR-3.10
+  // approvals). The `chatSlot` is the load-bearing wiring in PR-3.6.
+  const chatSlot = (
+    <TcChat conversationId={conversationId as unknown as string} mode={mode} />
+  );
+  const rightRail = <RunWorkspaceRail mode={mode} chatSlot={chatSlot} />;
+
   return (
     <div
       data-testid="run-destination"
@@ -160,6 +181,11 @@ export function RunDestination(props: RunDestinationProps): ReactElement {
           onActivateTab={handleActivateTab}
           onCloseTab={handleCloseTab}
           transport={transport}
+          // PR-3.6: mount the recomposed rail in the chat column, and collapse
+          // the canvas's own mode switcher so RunHeader is the single mode
+          // control (per the PR-3.5 seam note).
+          rightRail={rightRail}
+          showModeSwitcher={false}
         />
       </div>
     </div>

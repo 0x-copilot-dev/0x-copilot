@@ -80,6 +80,40 @@ describe("SheetDiff", () => {
     expect(screen.getByText("Q4 renewal uplift applied")).toBeInTheDocument();
   });
 
+  it("FR-3.20: shows a `streaming · N%` chip while the snapshot streams, as a diff table (not chat text)", () => {
+    const diff = makeDiff(
+      [{ row: 0, column: 4, before: cell(160), after: cell(176) }],
+      { streamProgress: 42 },
+    );
+    render(<SheetDiffView diff={diff} />);
+    // Progress rides the existing streaming pill: `STREAMING · 42%`.
+    expect(screen.getByTestId("tc-inline-diff-pill")).toHaveTextContent(
+      /streaming · 42%/i,
+    );
+    // The tabular surface renders as a structured diff table, not a chat
+    // markdown table.
+    expect(screen.getByRole("table")).toBeInTheDocument();
+    expect(screen.getByTestId("sheet-diff")).toBeInTheDocument();
+  });
+
+  it("rounds the streaming progress percentage on the pill", () => {
+    const diff = makeDiff([], { streamProgress: 66.6 });
+    render(<SheetDiffView diff={diff} />);
+    expect(screen.getByTestId("tc-inline-diff-pill")).toHaveTextContent(
+      /streaming · 67%/i,
+    );
+  });
+
+  it("shows the bare STREAMING pill when no progress is supplied", () => {
+    const diff = makeDiff([
+      { row: 0, column: 4, before: cell(160), after: cell(176) },
+    ]);
+    render(<SheetDiffView diff={diff} />);
+    const pill = screen.getByTestId("tc-inline-diff-pill");
+    expect(pill).toHaveTextContent("STREAMING");
+    expect(pill.textContent ?? "").not.toContain("·");
+  });
+
   it("does not render host-owned Approve / Reject / Suggest buttons (D28)", () => {
     const diff = makeDiff([
       { row: 0, column: 4, before: cell(160), after: cell(176) },
