@@ -1,5 +1,12 @@
 // @vitest-environment node
-import { mkdtempSync, realpathSync, rmSync, writeFileSync } from "node:fs";
+import {
+  existsSync,
+  mkdtempSync,
+  readFileSync,
+  realpathSync,
+  rmSync,
+  writeFileSync,
+} from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
@@ -7,7 +14,10 @@ import { afterEach, beforeEach, describe, expect, it } from "vitest";
 
 import { CapabilityBroker, CAPABILITY_BROKER_PROTOCOL } from "./broker";
 import { HostFs } from "./host-fs";
+import { FS_LIMITS } from "./path-validation";
 import type { Grant, GrantProvider, GrantSnapshot } from "./types";
+
+const b64 = (s: string): string => Buffer.from(s, "utf-8").toString("base64");
 
 function makeGrant(overrides: Partial<Grant> = {}): Grant {
   return {
@@ -465,5 +475,419 @@ describe("CapabilityBroker — filesystem read ops", () => {
       body: JSON.stringify({ grant_id: "grant-1", path: "file.txt" }),
     });
     expect(res.status).toBe(401);
+  });
+});
+
+describe("CapabilityBroker — filesystem write ops + mode gating", () => {
+  let broker: CapabilityBroker;
+  let grants: RealRootGrants;
+  let baseUrl: string;
+  let token: string;
+  let root: string;
+
+  const H = () => ({
+    authorization: `Bearer ${token}`,
+    "x-capability-protocol": CAPABILITY_BROKER_PROTOCOL,
+    "content-type": "application/json",
+  });
+  const post = (route: string, body: unknown) =>
+    fetch(`${baseUrl}${route}`, {
+      method: "POST",
+      headers: H(),
+      body: JSON.stringify(body),
+    });
+  const setMode = (mode: Grant["mode"]) => {
+    grants.grant = { ...grants.grant, mode };
+  };
+  const onDisk = (rel: string) => readFileSync(join(root, rel), "utf-8");
+
+  beforeEach(async () => {
+    root = realpathSync(mkdtempSync(join(tmpdir(), "cap-broker-wr-")));
+    writeFileSync(join(root, "file.txt"), "hello broker\n");
+    grants = new RealRootGrants(root);
+    // Default to full authority; individual tests narrow the mode.
+    grants.grant = { ...grants.grant, mode: "read_write" };
+    broker = new CapabilityBroker({ grants, hostFs: new HostFs() });
+    const handle = await broker.start();
+    baseUrl = handle.baseUrl;
+    token = broker.authToken();
+  });
+
+  afterEach(async () => {
+    await broker.stop();
+    rmSync(root, { recursive: true, force: true });
+  });
+
+  it("advertises the write methods in the handshake", async () => {
+    const body = (await post("/v1/handshake", {}).then((r) => r.json())) as {
+      methods: string[];
+    };
+    expect(body.methods).toEqual(
+      expect.arrayContaining([
+        "writeFile",
+        "editFile",
+        "makeDir",
+        "deletePath",
+        "movePath",
+      ]),
+    );
+  });
+
+  it("write creates a file, returns created:true, and never leaks the host path", async () => {
+    const res = await post("/v1/fs/write", {
+      grant_id: "grant-1",
+      path: "new.txt",
+      content_base64: b64("written via broker"),
+    });
+    expect(res.status).toBe(200);
+    const text = await res.text();
+    expect(text).not.toContain(root); // host path must never appear
+    const body = JSON.parse(text) as { created: boolean; path: string };
+    expect(body).toMatchObject({ created: true, path: "new.txt" });
+    expect(onDisk("new.txt")).toBe("written via broker");
+  });
+
+  it("edit replaces an existing file's contents", async () => {
+    const res = await post("/v1/fs/edit", {
+      grant_id: "grant-1",
+      path: "file.txt",
+      content_base64: b64("edited"),
+    });
+    expect(res.status).toBe(200);
+    expect(onDisk("file.txt")).toBe("edited");
+  });
+
+  it("mkdir creates a directory", async () => {
+    const res = await post("/v1/fs/mkdir", {
+      grant_id: "grant-1",
+      path: "created-dir",
+    });
+    expect(res.status).toBe(200);
+    expect(existsSync(join(root, "created-dir"))).toBe(true);
+  });
+
+  it("delete removes a file under read_write", async () => {
+    const res = await post("/v1/fs/delete", {
+      grant_id: "grant-1",
+      path: "file.txt",
+    });
+    expect(res.status).toBe(200);
+    expect(existsSync(join(root, "file.txt"))).toBe(false);
+  });
+
+  it("move renames a file under read_write", async () => {
+    const res = await post("/v1/fs/move", {
+      grant_id: "grant-1",
+      from: "file.txt",
+      to: "renamed.txt",
+    });
+    expect(res.status).toBe(200);
+    expect(existsSync(join(root, "renamed.txt"))).toBe(true);
+    expect(existsSync(join(root, "file.txt"))).toBe(false);
+  });
+
+  it("read_only DENIES every write op (403 permission_denied), mutating nothing", async () => {
+    setMode("read_only");
+    const cases: Array<[string, unknown]> = [
+      [
+        "/v1/fs/write",
+        { grant_id: "grant-1", path: "x.txt", content_base64: b64("x") },
+      ],
+      [
+        "/v1/fs/edit",
+        { grant_id: "grant-1", path: "file.txt", content_base64: b64("x") },
+      ],
+      ["/v1/fs/mkdir", { grant_id: "grant-1", path: "d" }],
+      ["/v1/fs/delete", { grant_id: "grant-1", path: "file.txt" }],
+      ["/v1/fs/move", { grant_id: "grant-1", from: "file.txt", to: "y.txt" }],
+    ];
+    for (const [route, body] of cases) {
+      const res = await post(route, body);
+      expect(res.status).toBe(403);
+      expect((await res.json()) as unknown).toEqual({
+        error: "permission_denied",
+      });
+    }
+    expect(onDisk("file.txt")).toBe("hello broker\n");
+  });
+
+  it("read_write_no_delete allows write/edit/mkdir but DENIES delete + move", async () => {
+    setMode("read_write_no_delete");
+    expect(
+      (
+        await post("/v1/fs/write", {
+          grant_id: "grant-1",
+          path: "ok.txt",
+          content_base64: b64("ok"),
+        })
+      ).status,
+    ).toBe(200);
+    expect(
+      (
+        await post("/v1/fs/edit", {
+          grant_id: "grant-1",
+          path: "file.txt",
+          content_base64: b64("ed"),
+        })
+      ).status,
+    ).toBe(200);
+    expect(
+      (await post("/v1/fs/mkdir", { grant_id: "grant-1", path: "okdir" }))
+        .status,
+    ).toBe(200);
+
+    const del = await post("/v1/fs/delete", {
+      grant_id: "grant-1",
+      path: "file.txt",
+    });
+    expect(del.status).toBe(403);
+    expect((await del.json()) as unknown).toEqual({
+      error: "permission_denied",
+    });
+
+    const mv = await post("/v1/fs/move", {
+      grant_id: "grant-1",
+      from: "file.txt",
+      to: "z.txt",
+    });
+    expect(mv.status).toBe(403);
+    expect((await mv.json()) as unknown).toEqual({
+      error: "permission_denied",
+    });
+
+    // The rename-away target never appeared and the source survives.
+    expect(existsSync(join(root, "z.txt"))).toBe(false);
+    expect(existsSync(join(root, "file.txt"))).toBe(true);
+  });
+
+  it("read_write_no_delete PERMITS an atomic same-file overwrite", async () => {
+    setMode("read_write_no_delete");
+    expect(
+      (
+        await post("/v1/fs/write", {
+          grant_id: "grant-1",
+          path: "same.txt",
+          content_base64: b64("v1"),
+        })
+      ).status,
+    ).toBe(200);
+    const second = await post("/v1/fs/write", {
+      grant_id: "grant-1",
+      path: "same.txt",
+      content_base64: b64("v2"),
+    });
+    expect(second.status).toBe(200);
+    expect(((await second.json()) as { created: boolean }).created).toBe(false);
+    expect(onDisk("same.txt")).toBe("v2");
+  });
+
+  it("denies creating a sensitive file even under read_write (403)", async () => {
+    const res = await post("/v1/fs/write", {
+      grant_id: "grant-1",
+      path: ".env",
+      content_base64: b64("SECRET=1"),
+    });
+    expect(res.status).toBe(403);
+    expect((await res.json()) as unknown).toEqual({
+      error: "permission_denied",
+    });
+    expect(existsSync(join(root, ".env"))).toBe(false);
+  });
+
+  it("content over the write ceiling is rejected (413 too_large)", async () => {
+    const tooBig = Buffer.alloc(FS_LIMITS.maxWriteBytes + 1).toString("base64");
+    const res = await post("/v1/fs/write", {
+      grant_id: "grant-1",
+      path: "big.bin",
+      content_base64: tooBig,
+    });
+    expect(res.status).toBe(413);
+    expect((await res.json()) as unknown).toEqual({ error: "too_large" });
+    expect(existsSync(join(root, "big.bin"))).toBe(false);
+  });
+
+  it("rejects a write missing content_base64 (400 invalid_request)", async () => {
+    const res = await post("/v1/fs/write", {
+      grant_id: "grant-1",
+      path: "x.txt",
+    });
+    expect(res.status).toBe(400);
+    expect((await res.json()) as unknown).toEqual({ error: "invalid_request" });
+  });
+
+  it("denies a traversal write (400 invalid_path), writing nothing outside", async () => {
+    const res = await post("/v1/fs/write", {
+      grant_id: "grant-1",
+      path: "../escape.txt",
+      content_base64: b64("x"),
+    });
+    expect(res.status).toBe(400);
+    expect((await res.json()) as unknown).toEqual({ error: "invalid_path" });
+    expect(existsSync(join(root, "..", "escape.txt"))).toBe(false);
+  });
+
+  it("still refuses an unauthenticated write (401)", async () => {
+    const res = await fetch(`${baseUrl}/v1/fs/write`, {
+      method: "POST",
+      headers: {
+        "x-capability-protocol": CAPABILITY_BROKER_PROTOCOL,
+        "content-type": "application/json",
+      },
+      body: JSON.stringify({
+        grant_id: "grant-1",
+        path: "x.txt",
+        content_base64: b64("x"),
+      }),
+    });
+    expect(res.status).toBe(401);
+    expect(existsSync(join(root, "x.txt"))).toBe(false);
+  });
+});
+
+describe("CapabilityBroker — per-run grant snapshot", () => {
+  let broker: CapabilityBroker;
+  let grants: RealRootGrants;
+  let baseUrl: string;
+  let token: string;
+  let root: string;
+
+  const H = () => ({
+    authorization: `Bearer ${token}`,
+    "x-capability-protocol": CAPABILITY_BROKER_PROTOCOL,
+    "content-type": "application/json",
+  });
+  const post = (route: string, body: unknown) =>
+    fetch(`${baseUrl}${route}`, {
+      method: "POST",
+      headers: H(),
+      body: JSON.stringify(body),
+    });
+
+  beforeEach(async () => {
+    root = realpathSync(mkdtempSync(join(tmpdir(), "cap-broker-run-")));
+    writeFileSync(join(root, "file.txt"), "hello broker\n");
+    grants = new RealRootGrants(root); // read_only suffices to prove pinning
+    broker = new CapabilityBroker({ grants, hostFs: new HostFs() });
+    const handle = await broker.start();
+    baseUrl = handle.baseUrl;
+    token = broker.authToken();
+  });
+
+  afterEach(async () => {
+    await broker.stop();
+    rmSync(root, { recursive: true, force: true });
+  });
+
+  it("runs/begin mints an opaque context id + a PATH-FREE grant projection", async () => {
+    const res = await post("/v1/runs/begin", {});
+    expect(res.status).toBe(200);
+    const text = await res.text();
+    expect(text).not.toContain(root); // no host root leak
+    const body = JSON.parse(text) as {
+      runCapabilityContext: string;
+      grants: Array<Record<string, unknown>>;
+    };
+    expect(body.runCapabilityContext).toMatch(/^rcx_[A-Za-z0-9_-]{43}$/u);
+    expect(body.grants[0]).not.toHaveProperty("root");
+    expect(body.grants[0].mount).toMatch(/^mnt_/u);
+  });
+
+  it("a run-context-bound op resolves against the PINNED snapshot (survives a mid-run revoke)", async () => {
+    const begin = (await post("/v1/runs/begin", {}).then((r) => r.json())) as {
+      runCapabilityContext: string;
+    };
+    const rcx = begin.runCapabilityContext;
+
+    // Revoke the grant AFTER the run started.
+    grants.grant = { ...grants.grant, status: "revoked" };
+
+    // A LIVE op (no run context) now fails closed on the revoke.
+    const live = await post("/v1/fs/stat", {
+      grant_id: "grant-1",
+      path: "file.txt",
+    });
+    expect(live.status).toBe(403);
+    expect((await live.json()) as unknown).toEqual({ error: "grant_required" });
+
+    // The SAME op bound to the pinned run context still succeeds.
+    const pinned = await post("/v1/fs/stat", {
+      grant_id: "grant-1",
+      path: "file.txt",
+      run_capability_context: rcx,
+    });
+    expect(pinned.status).toBe(200);
+    expect(((await pinned.json()) as { type: string }).type).toBe("file");
+  });
+
+  it("rejects an unknown / forged run_capability_context (403 grant_required)", async () => {
+    const res = await post("/v1/fs/stat", {
+      grant_id: "grant-1",
+      path: "file.txt",
+      run_capability_context: "rcx_forged-value",
+    });
+    expect(res.status).toBe(403);
+    expect((await res.json()) as unknown).toEqual({ error: "grant_required" });
+  });
+
+  it("runs/end releases the context; a subsequently bound op fails closed", async () => {
+    const begin = (await post("/v1/runs/begin", {}).then((r) => r.json())) as {
+      runCapabilityContext: string;
+    };
+    const rcx = begin.runCapabilityContext;
+
+    const end = await post("/v1/runs/end", { run_capability_context: rcx });
+    expect(end.status).toBe(200);
+    expect((await end.json()) as unknown).toEqual({ released: true });
+
+    const after = await post("/v1/fs/stat", {
+      grant_id: "grant-1",
+      path: "file.txt",
+      run_capability_context: rcx,
+    });
+    expect(after.status).toBe(403);
+    expect((await after.json()) as unknown).toEqual({
+      error: "grant_required",
+    });
+  });
+
+  it("stop() clears all run contexts (RAM-only; a restart never inherits them)", async () => {
+    const begin = (await post("/v1/runs/begin", {}).then((r) => r.json())) as {
+      runCapabilityContext: string;
+    };
+    const rcx = begin.runCapabilityContext;
+
+    await broker.stop();
+    await broker.start();
+    baseUrl = broker.baseUrl();
+    token = broker.authToken();
+
+    const after = await post("/v1/fs/stat", {
+      grant_id: "grant-1",
+      path: "file.txt",
+      run_capability_context: rcx,
+    });
+    expect(after.status).toBe(403);
+    expect((await after.json()) as unknown).toEqual({
+      error: "grant_required",
+    });
+  });
+
+  it("runs/begin and runs/end require auth (401)", async () => {
+    const noAuth = {
+      "x-capability-protocol": CAPABILITY_BROKER_PROTOCOL,
+      "content-type": "application/json",
+    };
+    const begin = await fetch(`${baseUrl}/v1/runs/begin`, {
+      method: "POST",
+      headers: noAuth,
+      body: "{}",
+    });
+    expect(begin.status).toBe(401);
+    const end = await fetch(`${baseUrl}/v1/runs/end`, {
+      method: "POST",
+      headers: noAuth,
+      body: JSON.stringify({ run_capability_context: "rcx_x" }),
+    });
+    expect(end.status).toBe(401);
   });
 });
