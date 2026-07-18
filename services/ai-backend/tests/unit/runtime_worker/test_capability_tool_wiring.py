@@ -47,9 +47,12 @@ def _file_store(tmp_path) -> SimpleNamespace:
     return SimpleNamespace(object_store=FileObjectStore(FileStoreLayout(tmp_path)))
 
 
-def _wiring(env, *, file_store=None) -> CapabilityToolWiring:
+def _wiring(env, *, file_store=None, external_tools=None) -> CapabilityToolWiring:
     return CapabilityToolWiring(
-        runtime_context=_context(), file_store=file_store, env=env
+        runtime_context=_context(),
+        file_store=file_store,
+        env=env,
+        external_tools_by_name=external_tools,
     )
 
 
@@ -73,6 +76,55 @@ class TestCodeModeGating:
     def test_absent_wrong_provider(self, tmp_path) -> None:
         env = {**_MONTY_ON, "RUNTIME_INTERPRETER_PROVIDER": "quickjs"}
         assert _wiring(env, file_store=_file_store(tmp_path)).code_mode_tool() is None
+
+
+class TestCodeModePosture:
+    """Option A (pure-compute) vs Option B (real external calls) selection."""
+
+    def test_pure_compute_when_no_external_toolset(self, tmp_path) -> None:
+        # No toolset supplied → fail-closed pure-compute pair.
+        wiring = _wiring(_MONTY_ON, file_store=_file_store(tmp_path))
+        invoker, resolver = wiring._code_mode_policy()
+        from agent_runtime.capabilities.interpreter.pure_compute import (
+            ClosedPolicyInvoker,
+            PureComputeResolver,
+        )
+
+        assert isinstance(invoker, ClosedPolicyInvoker)
+        assert isinstance(resolver, PureComputeResolver)
+        # The tool still builds (gates hold); it simply has no tool surface.
+        assert wiring.code_mode_tool() is not None
+
+    def test_option_b_when_external_toolset_present(self, tmp_path) -> None:
+        wiring = _wiring(
+            _MONTY_ON,
+            file_store=_file_store(tmp_path),
+            external_tools={"search": object()},
+        )
+        invoker, resolver = wiring._code_mode_policy()
+        from agent_runtime.capabilities.interpreter.policy_invoker import (
+            AuthorizedToolResolver,
+            HitlPolicyToolInvoker,
+        )
+
+        assert isinstance(invoker, HitlPolicyToolInvoker)
+        assert isinstance(resolver, AuthorizedToolResolver)
+        assert wiring.code_mode_tool() is not None
+
+
+class TestContextBudgetGuard:
+    """The interpreter budget bridge reuses the run's active ToolBudgetGuard."""
+
+    async def test_admits_when_no_guard_bound(self) -> None:
+        # Non-desktop / eval runs install no guard; parity with
+        # ToolBudgetGuardedTool's ``guard is None`` path → admit.
+        from runtime_worker.capability_tool_wiring import _ContextBudgetGuard
+
+        guard = _ContextBudgetGuard()
+        admitted = await guard.charge(
+            tool_name="tools.search_web", arguments={"q": "x"}, context=object()
+        )
+        assert admitted is True
 
 
 class TestSandboxGating:
