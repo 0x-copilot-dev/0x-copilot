@@ -74,7 +74,11 @@ export function SignInGate(props: SignInGateProps): ReactNode {
   // session (the bearer never crosses IPC). Only the "waiting" copy and the
   // failure fallback differ per method.
   const startSignIn = useCallback(
-    (method: SignInMethod, channel: string, failMessage: string) => {
+    (
+      method: SignInMethod,
+      channel: (typeof CHANNELS)[keyof typeof CHANNELS],
+      failMessage: string,
+    ) => {
       setPhase({ kind: "signing-in", method });
       bridge.ipc
         .invoke<RendererSession>(channel, { workspaceId })
