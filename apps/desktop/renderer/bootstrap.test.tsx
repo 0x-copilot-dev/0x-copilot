@@ -184,14 +184,22 @@ describe("renderer bootstrap", () => {
       root.querySelector("[data-destination='run'][aria-current='page']"),
     ).not.toBeNull();
 
-    // The destination outlet renders the Run surface (honest placeholder).
+    // The destination outlet renders the real Run cockpit (PR-6.7), not a
+    // phase placeholder: its root + header + idle empty-state are present.
     const outlet = root.querySelector("[data-testid='destination-outlet']");
     expect(outlet).not.toBeNull();
     expect(outlet?.getAttribute("data-destination")).toBe("run");
     expect(
-      root.querySelector("[data-testid='destination-placeholder-title']")
-        ?.textContent,
-    ).toBe("Run");
+      root.querySelector("[data-testid='run-destination']"),
+    ).not.toBeNull();
+    expect(root.querySelector("[data-testid='run-header']")).not.toBeNull();
+    expect(
+      root.querySelector("[data-testid='run-empty-state']"),
+    ).not.toBeNull();
+    // No phase placeholder anywhere in the mounted shell.
+    expect(
+      root.querySelector("[data-testid='destination-placeholder']"),
+    ).toBeNull();
   });
 
   it("shows the rail-foot Settings + avatar and opens the Settings surface", async () => {
@@ -237,14 +245,17 @@ describe("renderer bootstrap", () => {
       )?.click();
     });
 
-    // Settings closed; the outlet now shows the Activity surface.
+    // Settings closed; the outlet now shows the real Activity surface (PR-6.7),
+    // not a phase placeholder.
     expect(root.querySelector("[data-testid='settings-surface']")).toBeNull();
     const outlet = root.querySelector("[data-testid='destination-outlet']");
     expect(outlet?.getAttribute("data-destination")).toBe("activity");
     expect(
-      root.querySelector("[data-testid='destination-placeholder-title']")
-        ?.textContent,
-    ).toBe("Activity");
+      root.querySelector("[data-testid='activity-destination']"),
+    ).not.toBeNull();
+    expect(
+      root.querySelector("[data-testid='destination-placeholder']"),
+    ).toBeNull();
   });
 
   // === PR-6.6: shell keyboard shortcuts wired via useShellShortcuts ===
