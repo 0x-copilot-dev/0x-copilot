@@ -212,8 +212,9 @@ export function PrivacyPage({
     if (exporting) return;
     setExporting(true);
     setExportError(null);
-    Promise.resolve()
-      .then(() => onExport())
+    // Invoke the host callback synchronously (a click calls it immediately),
+    // then chain on its possibly-promise result.
+    Promise.resolve(onExport())
       .then(() => {
         onToast?.(`Export queued to ${exportPath}.`);
       })
@@ -230,8 +231,7 @@ export function PrivacyPage({
     if (!confirmMatches || deleting) return;
     setDeleting(true);
     setDeleteError(null);
-    Promise.resolve()
-      .then(() => onDeleteAll())
+    Promise.resolve(onDeleteAll())
       .then(() => {
         setConfirmText("");
         onToast?.("All history deleted.");
