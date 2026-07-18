@@ -1,16 +1,22 @@
 # AC8 — Agentic browser
 
-| Field             | Decision                                                                                               |
-| ----------------- | ------------------------------------------------------------------------------------------------------ |
-| Spec ID           | AC8                                                                                                    |
-| Status            | Draft; decision-complete and awaiting architecture review                                              |
-| Wave              | 3 — Execution capabilities                                                                             |
-| Estimated effort  | XL — 20–25 engineer-days including process supervision, policy proxy, packaging, and adversarial tests |
-| Dependencies      | AC2 event model, AC4 artifact store, AC5 scoped host filesystem access                                 |
-| Required for      | AC10 hardening and staged desktop rollout                                                              |
-| Primary owner     | `apps/desktop` browser runtime                                                                         |
-| Supporting owners | AI-backend MCP integration, desktop packaging, security                                                |
-| Web impact        | None                                                                                                   |
+| Field             | Decision                                                                                                                                                                                                        |
+| ----------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Spec ID           | AC8                                                                                                                                                                                                             |
+| Status            | **Planned — in scope** (wanted, not deferred); decision-complete and awaiting architecture review. Multi-PR epic: supervised-worker + read-only foundation → downloads/uploads/side-effects → profiles/consent. |
+| Wave              | 3 — Execution capabilities                                                                                                                                                                                      |
+| Estimated effort  | XL — 20–25 engineer-days including process supervision, policy proxy, packaging, and adversarial tests                                                                                                          |
+| Dependencies      | AC2 event model, AC4 artifact store, AC5 scoped host filesystem access                                                                                                                                          |
+| Required for      | AC10 hardening and staged desktop rollout                                                                                                                                                                       |
+| Primary owner     | `apps/desktop` browser runtime                                                                                                                                                                                  |
+| Supporting owners | AI-backend MCP integration, desktop packaging, security                                                                                                                                                         |
+| Web impact        | None                                                                                                                                                                                                            |
+
+## Built-in-first (do not reinvent the framework)
+
+Use the DeepAgents/LangChain built-in as the engine — DeepAgents interpreters (Monty), `SandboxBackendProtocol` (remote sandbox), LangChain Playwright toolkit / browser-MCP, `langchain-mcp-adapters`, `HumanInTheLoopMiddleware`, LangGraph savers — and add only the thin enforcement layer (approval/budget/event/persistence) we require. Do not reinvent what the framework provides.
+
+For AC8 the engine is **Playwright plus a local browser-MCP surface consumed through the existing `langchain-mcp-adapters` MCP loader** — the LangChain Playwright toolkit and Microsoft Playwright MCP are the reference tool shape, and the desktop-local `DesktopBrowserMcpProvider` plugs into the same `DynamicMcpRegistry` that already carries SaaS connectors. What AC8 adds is only the enforcement layer we require: exact-origin policy proxy, run/workspace/profile binding, per-action approval classes, AC4 artifact offload, AC5 upload refs, and local broker authentication. The MCP calls ride the existing MCP permission/approval/budget/citation/audit middleware and the DeepAgents-native `interrupt_on` approval interrupt ([`factory.py`](../../../../services/ai-backend/src/agent_runtime/execution/factory.py)) rather than a browser-specific policy engine — the same built-in-first discipline already proven for the checkpointer (`AsyncSqliteSaver`) and `CompositeBackend` routes. A generic Playwright/`evaluate`/CDP escape hatch is the reinvention we refuse; the toolkit's raw-selector surface is prototype reference, not the production boundary.
 
 ## Problem and why now
 
