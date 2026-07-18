@@ -1,4 +1,5 @@
 import "@0x-copilot/design-system/styles.css";
+import "./desktop.css";
 
 import { StrictMode, useMemo, useState, type ReactElement } from "react";
 import { createRoot } from "react-dom/client";
