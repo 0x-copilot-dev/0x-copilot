@@ -137,6 +137,11 @@ from backend_app.connectors import (
     register_connector_routes,
     register_connector_sse_routes,
 )
+from backend_app.connectors.desktop_routes import (
+    register_desktop_connector_routes,
+)
+from backend_app.connectors.oauth_coordinator import DesktopMcpOAuthCoordinator
+from backend_app.connectors.profile_catalog import DesktopProfileCatalog
 from backend_app.webhooks import (
     InMemoryWebhooksStore,
     WebhooksService,
@@ -1648,6 +1653,40 @@ def create_app(
         register_webhook_routes(app, service=webhooks_service)
 
     register_connector_routes(app, service=connectors_service)
+
+    # AC9 — Desktop MCP connector OAuth. The generic desktop coordinator is the
+    # missing bridge between Electron's system-browser / loopback delivery and
+    # the existing MCP OAuth authority (state + PKCE + TokenVault). It is the
+    # *per-MCP-server* auth layer, not a second credential path: it drives the
+    # same ``McpRegistryService`` the web connectors use, adding only the
+    # desktop redirect-reconstruction + callback-owner-match invariants.
+    #
+    # The profile overlay (``desktop_profiles.yaml``) is loaded soft: a missing
+    # or invalid file degrades the desktop connector surface to unavailable
+    # rather than crashing boot (mirrors the marketing-catalog soft-fail above).
+    # Preview connectors (Google/Microsoft) stay disabled unless the deployment
+    # explicitly sets ``DESKTOP_CONNECTORS_ALLOW_PREVIEW=true``; even then the
+    # tenant-template profiles fail closed with ``admin_setup_required``.
+    desktop_preview_enabled = (
+        os.environ.get("DESKTOP_CONNECTORS_ALLOW_PREVIEW", "").strip().lower() == "true"
+    )
+    try:
+        desktop_profile_catalog = DesktopProfileCatalog.load()
+    except Exception:  # noqa: BLE001 — soft-fail; desktop surface degrades
+        desktop_profile_catalog = None
+    if desktop_profile_catalog is not None:
+        desktop_oauth_coordinator = DesktopMcpOAuthCoordinator(
+            mcp_service=_AppServices.mcp(app),
+            catalog=desktop_profile_catalog,
+            preview_enabled=desktop_preview_enabled,
+        )
+        app.state.desktop_connector_coordinator = desktop_oauth_coordinator
+        register_desktop_connector_routes(
+            app,
+            coordinator=desktop_oauth_coordinator,
+            catalog=desktop_profile_catalog,
+            preview_enabled=desktop_preview_enabled,
+        )
 
     # Phase 6 — Projects destination. The canonical project-scoped ACL
     # predicate lives in ``backend_app.projects.acl`` and is consumed

@@ -3,6 +3,12 @@ import type { z } from "zod";
 
 import type { RendererSession } from "@0x-copilot/chat-transport";
 
+import type {
+  DesktopConnectorCatalogResponse,
+  DesktopConnectorConnectionResult,
+  DesktopRequestedProductScope,
+} from "@0x-copilot/api-types";
+
 import type { TransportBridge } from "../transport-bridge";
 import { CAPABILITY_CHANNELS } from "../capabilities/channels";
 import {
@@ -13,6 +19,13 @@ import {
   type RequestFolderGrantParams,
 } from "../capabilities/schemas";
 import type { RendererGrant } from "../capabilities/types";
+import { CONNECTOR_CHANNELS } from "../connectors/channels";
+import {
+  ConnectorCatalogResponseSchema,
+  ConnectorConnectionResultSchema,
+  ConnectParamsSchema,
+  ListCatalogParamsSchema,
+} from "../connectors/schemas";
 import {
   AuthWorkspaceParamsSchema,
   CHANNELS,
@@ -45,6 +58,18 @@ export interface CapabilityHandlers {
   ): Promise<RendererGrant | null>;
   listGrants(): Promise<RendererGrant[]>;
   revokeGrant(grantId: string): Promise<RendererGrant | null>;
+}
+
+// Connector connect handlers (AC9). The renderer asks main to fetch the
+// reconciled catalog and to begin the system-browser OAuth connect flow for a
+// slug. Both return ONLY renderer-safe views — no provider token, no redirect
+// URI. The ConnectorService satisfies this structurally.
+export interface ConnectorHandlers {
+  listCatalog(): Promise<DesktopConnectorCatalogResponse>;
+  connect(
+    slug: string,
+    options: { readonly productScope?: DesktopRequestedProductScope },
+  ): Promise<DesktopConnectorConnectionResult>;
 }
 
 export interface IpcLogger {
@@ -83,6 +108,7 @@ export interface RegisterHandlersDeps {
   readonly auth?: AuthHandlers;
   readonly tier2?: Tier2InboundDispatcher;
   readonly capability?: CapabilityHandlers;
+  readonly connectors?: ConnectorHandlers;
   readonly logger?: IpcLogger;
 }
 
@@ -286,6 +312,37 @@ export function registerIpcHandlers(deps: RegisterHandlersDeps): () => void {
     );
   }
 
+  const connectors = deps.connectors;
+  if (connectors) {
+    ipcMain.handle(
+      CONNECTOR_CHANNELS.listCatalog,
+      async (_event, raw: unknown) => {
+        parseOrThrow(
+          CONNECTOR_CHANNELS.listCatalog,
+          ListCatalogParamsSchema,
+          raw ?? {},
+        );
+        const catalog = await connectors.listCatalog();
+        // Strict-parse outbound: an unexpected key (e.g. a token) throws here
+        // rather than reaching the renderer.
+        return ConnectorCatalogResponseSchema.parse(catalog);
+      },
+    );
+
+    ipcMain.handle(CONNECTOR_CHANNELS.connect, async (_event, raw: unknown) => {
+      const params = parseOrThrow(
+        CONNECTOR_CHANNELS.connect,
+        ConnectParamsSchema,
+        raw,
+      );
+      const result = await connectors.connect(params.slug, {
+        productScope: params.productScope,
+      });
+      // Only the SAFE connection metadata may cross to the renderer.
+      return ConnectorConnectionResultSchema.parse(result);
+    });
+  }
+
   return () => {
     const channels: string[] = [
       CHANNELS.transportRequest,
@@ -312,6 +369,9 @@ export function registerIpcHandlers(deps: RegisterHandlersDeps): () => void {
         CAPABILITY_CHANNELS.listGrants,
         CAPABILITY_CHANNELS.revokeGrant,
       );
+    }
+    if (connectors) {
+      channels.push(CONNECTOR_CHANNELS.listCatalog, CONNECTOR_CHANNELS.connect);
     }
     for (const channel of channels) {
       ipcMain.removeHandler(channel);

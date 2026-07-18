@@ -26,6 +26,7 @@ import {
   ProjectsDestination,
   SkillsDestination,
   useTransport,
+  type ConnectorsFilterSlug,
   type ProjectSummary,
 } from "@0x-copilot/chat-surface";
 import type { Transport } from "@0x-copilot/chat-transport";
@@ -39,9 +40,11 @@ import type {
   Connector,
   ConnectorCatalogEntry,
   ConnectorListResponse,
+  ConnectorSlug,
   Conversation,
   ConversationId,
   ConversationListResponse,
+  DesktopConnectorCatalogResponse,
   ListAuditEventsResponse,
   RunId,
   SectionResult,
@@ -50,6 +53,11 @@ import type {
   SkillListResponse,
   SkillSummary,
 } from "@0x-copilot/api-types";
+
+// AC9 — connector IPC channel names (dependency-free constants module; safe to
+// bundle into the renderer). The connect flow is owned by Electron MAIN
+// (loopback binding + system browser); the renderer only asks by slug.
+import { CONNECTOR_CHANNELS } from "../main/connectors/channels";
 
 // ---------------------------------------------------------------------------
 // Shared load hook — drives the 4-state machine (loading / ok / empty / error)
@@ -340,20 +348,64 @@ type ConnectorsData = {
   readonly available: ReadonlyArray<ConnectorCatalogEntry>;
 };
 
+// Project a reconciled desktop catalog row into the shared (additive) catalog
+// wire shape so the Available tab renders the pinned profiles with their real
+// availability / release-stage badges. The desktop catalog is the reconciled,
+// installable set — it supersedes the generic web `available` list on desktop.
+function desktopEntryToCatalog(
+  entry: DesktopConnectorCatalogResponse["entries"][number],
+): ConnectorCatalogEntry {
+  return {
+    slug: entry.slug as ConnectorSlug,
+    display_name: entry.display_name,
+    description: entry.description,
+    icon_hint: entry.slug,
+    display_group: entry.display_group,
+    release_stage: entry.release_stage,
+    availability: entry.availability,
+    capabilities: entry.capabilities,
+  };
+}
+
+// Best-effort fetch of the reconciled catalog through Electron main. Returns
+// null when the bridge is absent (web preview / tests) so the caller falls back
+// to the generic web `available` list.
+async function loadDesktopCatalog(): Promise<ReadonlyArray<ConnectorCatalogEntry> | null> {
+  const win = window as unknown as { bridge?: Window["bridge"] };
+  if (win.bridge === undefined) return null;
+  try {
+    const response =
+      await win.bridge.ipc.invoke<DesktopConnectorCatalogResponse>(
+        CONNECTOR_CHANNELS.listCatalog,
+        {},
+      );
+    return (response?.entries ?? []).map(desktopEntryToCatalog);
+  } catch {
+    return null;
+  }
+}
+
 async function loadConnectors(
   transport: Transport,
 ): Promise<SectionResult<ConnectorsData>> {
-  const response = await transport.request<ConnectorListResponse>({
-    method: "GET",
-    path: "/v1/connectors",
-    query: { limit: 50 },
-  });
+  const [response, desktopCatalog] = await Promise.all([
+    transport.request<ConnectorListResponse>({
+      method: "GET",
+      path: "/v1/connectors",
+      query: { limit: 50 },
+    }),
+    loadDesktopCatalog(),
+  ]);
+  const connected = response?.connectors ?? [];
+  const connectedSlugs = new Set(connected.map((c) => c.slug));
+  // Prefer the reconciled desktop catalog when available; drop slugs already
+  // connected so the Available tab only shows what can still be installed.
+  const available = (desktopCatalog ?? response?.available ?? []).filter(
+    (entry) => !connectedSlugs.has(entry.slug),
+  );
   return {
     status: "ok",
-    data: {
-      connectors: response?.connectors ?? [],
-      available: response?.available ?? [],
-    },
+    data: { connectors: connected, available },
   };
 }
 
@@ -363,13 +415,37 @@ export function ConnectorsBinder({
   const transport = useTransport();
   const load = useCallback(() => loadConnectors(transport), [transport]);
   const { result, retry } = useSectionLoad(load);
-  // Connect flow / access-mode PATCH / detail navigation are not wired on
-  // desktop yet, so those callbacks are intentionally omitted — the surface
-  // renders read-only with real data. The approval-policy note deep-links to
-  // Settings, which IS reachable today.
+  const [filter, setFilter] = useState<ConnectorsFilterSlug>("connected");
+
+  // The connect flow is owned by Electron MAIN: the renderer hands main a
+  // stable slug and main binds the loopback + opens the system browser. On
+  // success we refetch so the newly-connected row appears. No token ever
+  // crosses the bridge — the invoke resolves with safe connection metadata.
+  const connect = useCallback(
+    (slug: ConnectorSlug): void => {
+      const win = window as unknown as { bridge?: Window["bridge"] };
+      if (win.bridge === undefined) return;
+      win.bridge.ipc
+        .invoke(CONNECTOR_CHANNELS.connect, { slug })
+        .then(() => {
+          setFilter("connected");
+          retry();
+        })
+        .catch(() => {
+          // A denied / failed connect is surfaced by the row staying in the
+          // Available tab; a full inline error affordance is future work.
+        });
+    },
+    [retry],
+  );
+
   return (
     <ConnectorsDestination
       items={result}
+      filter={filter}
+      onFilterChange={setFilter}
+      onConnect={() => setFilter("available")}
+      onOpenCatalogEntry={connect}
       onOpenApprovalSettings={onOpenApprovalSettings}
       onRetry={retry}
     />
