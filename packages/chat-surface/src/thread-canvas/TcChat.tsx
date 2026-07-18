@@ -263,7 +263,7 @@ const PALETTE = {
   textLo: "#9aa0a6",
   ghostBg: "#1a1d20",
   ghostBorder: "#3a3e44",
-  ghostAccent: "#c2ff5a",
+  ghostAccent: "var(--color-accent)",
 } as const;
 
 const chatContainerStyle = (mode: TcChatMode): CSSProperties => ({
@@ -359,7 +359,9 @@ const tabButtonStyle = (selected: boolean): CSSProperties => ({
   color: selected ? PALETTE.textHi : PALETTE.textLo,
   padding: "8px 12px",
   fontSize: "var(--font-size-sm)",
-  borderBottom: selected ? "2px solid #c2ff5a" : "2px solid transparent",
+  borderBottom: selected
+    ? "2px solid var(--color-accent)"
+    : "2px solid transparent",
   cursor: "pointer",
 });
 

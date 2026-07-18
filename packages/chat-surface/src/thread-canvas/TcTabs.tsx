@@ -19,7 +19,7 @@ export interface TcTabsProps {
 }
 
 const PALETTE = {
-  lime: "#c2ff5a",
+  lime: "var(--color-accent)",
   cardBg: "#181a1c",
   cardBorder: "#2a2d31",
   textHi: "#f4f5f6",

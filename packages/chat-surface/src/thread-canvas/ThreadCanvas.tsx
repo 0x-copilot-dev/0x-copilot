@@ -432,12 +432,12 @@ const modeSwitcherStyle: CSSProperties = {
 };
 
 const modeButtonStyle = (selected: boolean): CSSProperties => ({
-  background: selected ? "var(--color-accent, #c2ff5a)" : "transparent",
+  background: selected ? "var(--color-accent)" : "transparent",
   color: selected
     ? "var(--color-accent-contrast, #101113)"
     : "var(--color-text-muted, #9aa0a6)",
   border: `1px solid ${
-    selected ? "var(--color-accent, #c2ff5a)" : "var(--color-border, #2a2d31)"
+    selected ? "var(--color-accent)" : "var(--color-border, #2a2d31)"
   }`,
   borderRadius: 999,
   padding: "4px 12px",

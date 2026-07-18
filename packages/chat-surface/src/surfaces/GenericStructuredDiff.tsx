@@ -39,7 +39,7 @@ const PALETTE = {
   textMid: "#c8ccd1",
   textLo: "#9aa0a6",
   textMute: "#6c7178",
-  lime: "#c2ff5a",
+  lime: "var(--color-accent)",
   limeSoft: "rgba(194, 255, 90, 0.14)",
   diffOld: "#ef5a5a",
   diffOldBg: "rgba(239, 90, 90, 0.10)",

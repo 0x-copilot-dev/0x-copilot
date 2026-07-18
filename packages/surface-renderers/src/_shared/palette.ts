@@ -6,7 +6,7 @@ export const SURFACE_PALETTE = {
   textHi: "#f4f5f6",
   textMid: "#c8ccd1",
   textLo: "#9aa0a6",
-  lime: "#c2ff5a",
+  lime: "var(--color-accent)",
   limeBgSoft: "rgba(194, 255, 90, 0.12)",
 } as const;
 

@@ -82,7 +82,7 @@ export interface TcInlineDiffProps {
 }
 
 const PALETTE = {
-  lime: "#c2ff5a",
+  lime: "var(--color-accent)",
   limeShadow: "rgba(194, 255, 90, 0.18)",
   cardBg: "#181a1c",
   cardBorder: "#2a2d31",
