@@ -155,13 +155,16 @@ export function RightRail({
     justifyContent: "center",
     padding: 0,
   };
-  const toggleInsideStyle: CSSProperties = {
+  const headerCloseStyle: CSSProperties = {
     background: "transparent",
     border: "none",
     color: "var(--color-text-muted)",
     cursor: "pointer",
-    fontSize: "var(--font-size-sm)",
-    padding: 0,
+    fontSize: "var(--font-size-lg)",
+    lineHeight: 1,
+    padding: "2px 4px",
+    marginRight: -4,
+    borderRadius: 4,
   };
 
   if (!open) {
@@ -230,10 +233,12 @@ export function RightRail({
         <span>{headerLabel}</span>
         <button
           type="button"
-          aria-label={`${headerLabel} menu`}
-          style={toggleInsideStyle}
+          aria-label={`Close ${headerLabel}`}
+          onClick={onToggle}
+          data-testid="right-rail-header-close"
+          style={headerCloseStyle}
         >
-          ⋯
+          ×
         </button>
       </div>
       <div style={bodyStyle} data-testid="right-rail-body">
