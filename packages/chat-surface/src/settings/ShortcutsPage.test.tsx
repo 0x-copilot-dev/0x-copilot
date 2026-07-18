@@ -1,37 +1,48 @@
 import { render, screen } from "@testing-library/react";
 import { describe, expect, it } from "vitest";
 
+import { SHELL_SHORTCUTS } from "../shell/shortcuts";
+
 import { SHORTCUTS, ShortcutsPage } from "./ShortcutsPage";
 
 describe("<ShortcutsPage>", () => {
-  it("renders all 12 DESIGN-SPEC §6 shortcuts read-only", () => {
+  it("derives its rows from the SHELL_SHORTCUTS SSOT table (FR-6.15)", () => {
+    // One row per table entry, in table order, with no hand-authored copy:
+    // each row is exactly { intent → id, label, chord.display → glyphs }.
+    expect(SHORTCUTS).toHaveLength(SHELL_SHORTCUTS.length);
+    expect(SHORTCUTS).toEqual(
+      SHELL_SHORTCUTS.map((s) => ({
+        id: s.intent,
+        label: s.label,
+        keys: Array.from(s.chord.display),
+      })),
+    );
+  });
+
+  it("renders every SSOT chord's label and glyphs read-only", () => {
     render(<ShortcutsPage />);
-    expect(SHORTCUTS).toHaveLength(12);
-    for (const shortcut of SHORTCUTS) {
-      expect(screen.getByTestId(`shortcut-${shortcut.id}`)).toHaveTextContent(
-        shortcut.label,
+    for (const shortcut of SHELL_SHORTCUTS) {
+      // Label cell, keyed by the shortcut's intent.
+      expect(
+        screen.getByTestId(`shortcut-${shortcut.intent}`),
+      ).toHaveTextContent(shortcut.label);
+      // Chord cell renders the display glyphs in press order.
+      const cell = screen.getByTestId(`shortcut-keys-${shortcut.intent}`);
+      const glyphs = Array.from(cell.querySelectorAll("kbd")).map(
+        (k) => k.textContent,
       );
+      expect(glyphs).toEqual(Array.from(shortcut.chord.display));
     }
     // Read-only reference — no interactive controls (no Record/Reset buttons).
     expect(screen.queryAllByRole("button")).toHaveLength(0);
   });
 
-  it("renders each chord as kbd glyphs in press order", () => {
+  it("renders the local-model-picker chord as ⌘⇧M glyphs in press order", () => {
     render(<ShortcutsPage />);
-    const localPicker = screen.getByTestId("shortcut-keys-models.localPicker");
-    const glyphs = Array.from(localPicker.querySelectorAll("kbd")).map(
+    const cell = screen.getByTestId("shortcut-keys-onOpenLocalModelPicker");
+    const glyphs = Array.from(cell.querySelectorAll("kbd")).map(
       (k) => k.textContent,
     );
     expect(glyphs).toEqual(["⌘", "⇧", "M"]);
-  });
-
-  it("covers the canonical chords from §6", () => {
-    const byId = new Map(SHORTCUTS.map((s) => [s.id, s.keys.join(" ")]));
-    expect(byId.get("run.new")).toBe("⌘ N");
-    expect(byId.get("palette.open")).toBe("⌘ K");
-    expect(byId.get("approval.approve")).toBe("⌘ ↵");
-    expect(byId.get("approval.reject")).toBe("⌘ ⌫");
-    expect(byId.get("settings.open")).toBe("⌘ ,");
-    expect(byId.get("activity.search")).toBe("⌘ ⇧ F");
   });
 });
