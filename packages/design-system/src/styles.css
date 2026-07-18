@@ -393,6 +393,11 @@ textarea {
   border-radius: var(--radius-md);
   cursor: pointer;
   display: inline-flex;
+  /* Managed label type so button text stops inheriting whatever the
+   * parent context happens to be (root cause of inconsistent button
+   * formatting). Default is the md tier; --sm/--lg override below. */
+  font-size: var(--font-size-md);
+  line-height: var(--line-height-tight);
   /* Heavier than --font-weight-semibold (600) for the call-to-action
    * register. Kept as 650 for the brand vocabulary (sits between
    * semibold and bold; intentional — the app's "press me" affordance). */
@@ -409,6 +414,7 @@ textarea {
 }
 
 .ui-button--sm {
+  font-size: var(--font-size-xs);
   min-height: 2rem;
   padding: 0.35rem 0.7rem;
 }
@@ -419,6 +425,7 @@ textarea {
 }
 
 .ui-button--lg {
+  font-size: var(--font-size-lg);
   min-height: 3rem;
   padding: 0.75rem 1.1rem;
 }
