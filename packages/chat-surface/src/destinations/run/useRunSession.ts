@@ -184,7 +184,14 @@ export function useRunSession(options: UseRunSessionOptions): RunSession {
         if (cancelled) {
           return;
         }
-        setResolveError(toError(err));
+        // The run list is a best-effort enhancement — it only backs the
+        // multi-run selector. Some deployments do not expose a run-list
+        // endpoint (there is no `GET /v1/agent/runs`), so a failure here MUST
+        // degrade to "no prior runs" (the empty/idle cockpit), never a blocking
+        // error: starting a run (POST) and streaming it (GET …/stream) are
+        // independent of listing.
+        void err;
+        setRuns(EMPTY_RUNS);
       })
       .finally(() => {
         if (!cancelled) {

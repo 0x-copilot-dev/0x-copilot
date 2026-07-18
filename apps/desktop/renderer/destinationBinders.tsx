@@ -24,6 +24,7 @@ import {
   ChatsArchive,
   ConnectorsDestination,
   ProjectsDestination,
+  RunDestination,
   SkillsDestination,
   useTransport,
   type ConnectorsFilterSlug,
@@ -527,4 +528,75 @@ export function ProjectsBinder(): ReactElement {
   const load = useCallback(() => loadProjects(transport), [transport]);
   const { result, retry } = useSectionLoad(load);
   return <ProjectsDestination items={result} onRetry={retry} />;
+}
+
+// The Run cockpit. The desktop has no server-side "active conversation" concept
+// (the PR-3.5 seam left a placeholder id), but the cockpit's chat transcript,
+// run list, and run creation are ALL keyed on a real `conversationId`. So the
+// binder resolves one up front — reuse the most-recent conversation, else
+// create a fresh "Desktop session" — and binds the cockpit to it. Runs then
+// start against that real conversation (POST works, 404-placeholder gone), and
+// `TcChat` loads its messages (`/v1/agent/conversations/{id}/messages`, 200).
+export function RunBinder({
+  conversationId: fallbackConversationId,
+}: {
+  readonly conversationId: ConversationId;
+}): ReactElement {
+  const transport = useTransport();
+  const [conversationId, setConversationId] = useState<ConversationId | null>(
+    null,
+  );
+
+  useEffect(() => {
+    let cancelled = false;
+    void (async () => {
+      try {
+        const list = await transport.request<ConversationListResponse>({
+          method: "GET",
+          path: "/v1/agent/conversations",
+          query: { limit: 1 },
+        });
+        const existing = list.conversations?.[0]?.conversation_id;
+        const resolved =
+          existing ??
+          (
+            await transport.request<{ readonly conversation_id: string }>({
+              method: "POST",
+              path: "/v1/agent/conversations",
+              body: { title: "Desktop session" },
+            })
+          ).conversation_id;
+        if (!cancelled) {
+          setConversationId(resolved as ConversationId);
+        }
+      } catch {
+        if (!cancelled) {
+          setConversationId(fallbackConversationId);
+        }
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [transport, fallbackConversationId]);
+
+  const activeConversationId = conversationId ?? fallbackConversationId;
+  const handleStartRun = useCallback(
+    async (goal: string): Promise<string | null> => {
+      const run = await transport.request<{ readonly run_id: string }>({
+        method: "POST",
+        path: "/v1/agent/runs",
+        body: { conversation_id: activeConversationId, user_input: goal },
+      });
+      return run.run_id ?? null;
+    },
+    [transport, activeConversationId],
+  );
+
+  return (
+    <RunDestination
+      conversationId={activeConversationId}
+      onStartRun={handleStartRun}
+    />
+  );
 }
