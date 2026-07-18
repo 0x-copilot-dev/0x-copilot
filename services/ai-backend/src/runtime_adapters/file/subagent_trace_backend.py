@@ -35,7 +35,7 @@ from deepagents.backends.protocol import (
 )
 
 from agent_runtime.context.memory.subagent_trace import SubagentTraceProjector
-from runtime_adapters.file._jsonl import JsonlIo
+from runtime_adapters.file._jsonl import JsonlCorruptionError, JsonlIo
 from runtime_adapters.file._paths import FileStoreLayout
 from runtime_api.schemas import RuntimeEventEnvelope
 
@@ -60,6 +60,13 @@ class _Files:
 _TASK_PATH = re.compile(r"^(?:/subagents)?/(?P<task_id>[^/]+)(?:/(?P<file>.+?))?/?$")
 _ROOT_PATHS = frozenset({"/", "/subagents", "/subagents/"})
 _READ_ONLY_ERROR = "The /subagents/ filesystem is read-only."
+# Surfaced (instead of a truncated projection) when a canonical JSONL for this
+# conversation has interior corruption — the read fails closed and marks the
+# subagent trace as needing repair rather than silently dropping events.
+_CORRUPT_TRACE_ERROR = (
+    "The subagent trace is unavailable: a canonical event log for this "
+    "conversation is corrupt and needs repair."
+)
 
 
 class FileSubagentTraceBackend(BackendProtocol):
@@ -92,7 +99,10 @@ class FileSubagentTraceBackend(BackendProtocol):
 
     def _ls(self, path: str) -> LsResult:
         normalized = self._normalize_dir_path(path)
-        events = self._collect_events()
+        try:
+            events = self._collect_events()
+        except JsonlCorruptionError:
+            return LsResult(error=_CORRUPT_TRACE_ERROR)
         task_pairs = SubagentTraceProjector.list_task_ids_with_names(events)
         if normalized in _ROOT_PATHS:
             entries: list[FileInfo] = [
@@ -142,7 +152,10 @@ class FileSubagentTraceBackend(BackendProtocol):
         file_name = match.group("file")
         if file_name not in _Files.ALL:
             return ReadResult(error=f"File not found: {file_path}")
-        events = self._collect_events()
+        try:
+            events = self._collect_events()
+        except JsonlCorruptionError:
+            return ReadResult(error=_CORRUPT_TRACE_ERROR)
         task_pairs = SubagentTraceProjector.list_task_ids_with_names(events)
         if not any(task_id == tid for tid, _ in task_pairs):
             return ReadResult(error=f"Subagent not found: {task_id}")
@@ -273,16 +286,22 @@ class FileSubagentTraceBackend(BackendProtocol):
 
     @staticmethod
     def _extend_from_file(sink: list[RuntimeEventEnvelope], path: Path) -> None:
-        """Append parsed envelopes from one JSONL file, skipping malformed rows."""
+        """Append parsed envelopes from one JSONL file, failing closed on corruption.
 
-        for doc in JsonlIo.iter_lines(path):
+        ``iter_lines`` already drops a torn trailing line and raises
+        :class:`JsonlCorruptionError` on interior JSON corruption. A row that is
+        valid JSON but does not round-trip to a ``RuntimeEventEnvelope`` is
+        therefore *not* a torn tail — it is a committed-but-corrupt record — so
+        we raise rather than silently skip it and lose the surrounding history.
+        """
+
+        for index, doc in enumerate(JsonlIo.iter_lines(path), start=1):
             try:
                 sink.append(RuntimeEventEnvelope.model_validate(doc))
-            except Exception:
-                # A row that does not round-trip is skipped rather than failing
-                # the whole read — the canonical stream is append-only and any
-                # torn tail was already dropped by ``iter_lines``.
-                continue
+            except JsonlCorruptionError:
+                raise
+            except Exception as exc:
+                raise JsonlCorruptionError(path, index) from exc
 
 
 __all__ = ("FileSubagentTraceBackend",)

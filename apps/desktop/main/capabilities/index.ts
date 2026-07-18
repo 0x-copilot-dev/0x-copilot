@@ -61,8 +61,19 @@ export {
   normalizeVirtualPath,
   assertWithinRoot,
   modeSatisfies,
+  assertGrantableRoot,
+  classifyForbiddenRoot,
+  isSensitiveFileName,
+  SENSITIVE_ROOT_SEGMENTS,
+  SENSITIVE_FILE_RULES,
   type FsErrorCode,
+  type ForbiddenRootReason,
+  type GrantRootContext,
 } from "./path-validation";
+export {
+  DESKTOP_FILESYSTEM_FLAG,
+  isDesktopFilesystemEnabled,
+} from "./feature-gate";
 export {
   FolderPicker,
   FolderPickerError,
@@ -79,12 +90,15 @@ export {
 } from "./schemas";
 export {
   toRendererGrant,
+  toBrokerGrant,
   type Grant,
   type GrantMode,
   type GrantProvider,
   type GrantSnapshot,
   type GrantStatus,
   type RendererGrant,
+  type BrokerGrant,
+  type BrokerGrantSnapshot,
   type HostEntryType,
   type HostStatResult,
   type HostDirEntry,

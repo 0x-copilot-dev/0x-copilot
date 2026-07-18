@@ -12,6 +12,107 @@
 | Supporting owners | `services/ai-backend` capabilities/backends, desktop native/platform security, runtime worker                                                                                                                                    |
 | Web impact        | None                                                                                                                                                                                                                             |
 
+## Delivered (light) vs Deferred — implementation status
+
+This PRD is the full XL epic. What shipped is **slices 1 + 2** (broker + picker +
+grants, and read-only FS ops + path security) in `apps/desktop/main/capabilities/`.
+Slice 3 (mutation/approval/`/workspace/` route), the signed native Rust helper,
+the per-run capability context, the event-sourced grant lifecycle, and the entire
+AI-runtime side are **not** built. This section is the authoritative
+reconciliation; where a later section describes that machinery, read it as design
+intent, not shipped behavior.
+
+Note the delivered code lives **flat** under `apps/desktop/main/capabilities/`,
+not the proposed `.../capabilities/workspace/` + `apps/desktop/native/workspace-fs/`
+tree; it addresses a grant by its `grant_id` plus a grant-root-relative virtual
+path, **not** an opaque `/workspace/<mount-id>` virtual root.
+
+### Delivered (light) — slices 1 + 2
+
+Code in `apps/desktop/main/capabilities/`:
+
+- **Main-owned native folder picker** (`folder-picker.ts`, `FolderPicker`): wraps
+  `dialog.showOpenDialog({ properties: ['openDirectory'] })`; only main opens it.
+- **`safeStorage`-encrypted grant store** (`grant-store.ts`, `GrantStore`):
+  persists grants to `<userData>/capabilities/grants.bin`, encrypted with Electron
+  `safeStorage` (cipher marker), **fail-closed** to no-plaintext in production
+  (dev-only plaintext fallback with a warning). Three modes `read_only` /
+  `read_write_no_delete` / `read_write`. Operations: `create`, `list`,
+  `listActive`, `get`, `revoke`, `snapshotActive`. Status is `active | revoked`.
+- **Path-free renderer IPC** (`types.ts` `toRendererGrant`, `service.ts`): the
+  renderer only ever receives `RendererGrant` (`grantId`/`mode`/`label`/`status`)
+  — the canonical host `root` never crosses the IPC boundary.
+- **Authenticated loopback broker** (`broker.ts`, `CapabilityBroker`): a
+  `127.0.0.1`-only HTTP listener on an OS-assigned ephemeral port; every request
+  needs a per-boot 256-bit bearer (constant-time compared), an
+  `X-Capability-Protocol` header, POST + JSON body under a 64 KiB cap, and no
+  browser fetch metadata (no CORS). Routes: `handshake`, `grants/list`,
+  `grants/snapshot`, and `fs/{stat,list,read,glob,grep}`. The token is handed to
+  the intended child out of band; a restart mints a fresh token.
+- **Read FS ops with path validation** (`host-fs.ts`, `HostFs`; `path-validation.ts`):
+  `stat` / `list` / `read` / `glob` / `grep`. The load-bearing algorithm per op is
+  **syntactic-normalize** (reject NUL/controls, absolute/drive/UNC, `..`,
+  confusable dots, reserved device names, `:`/ADS, trailing dot/space, lone
+  surrogates, over-long/over-deep) → **resolve-before-authorize** (`realpath` then
+  `assertWithinRoot`) → **lstat type gate** → **atomic open + revalidate**. On
+  darwin the open uses `O_NOFOLLOW_ANY` (atomic TOCTOU closure); on non-darwin it
+  uses `O_NOFOLLOW` plus a conservative post-open identity + containment recheck
+  (non-atomic — the documented Linux/Windows residual). Bounded by `FS_LIMITS`.
+  Grant resolved from the **current** active snapshot on every op (a revoke fails
+  closed on the next call); mode gated via `modeSatisfies` (fail-closed).
+- **Composition + lifecycle** (`index.ts` `createCapabilityService`, `service.ts`
+  `CapabilityService`): electron-free composition root; `requestFolderGrant` /
+  `listGrants` / `revokeGrant` return only renderer-safe views; broker
+  start/stop/token/baseUrl are main-only.
+- **Tests**: `broker.test.ts`, `folder-picker.test.ts`, `grant-store.test.ts`,
+  `host-fs.test.ts` (incl. darwin `O_NOFOLLOW_ANY` swap denial + non-darwin
+  post-open recheck), `path-validation.test.ts`, `service.test.ts`.
+
+### Deferred / not in the light build
+
+Every subsection below describing this machinery is design intent, not shipped
+code:
+
+- **The opaque `virtual_root` / `mount_id` contract.** Delivered addresses a grant
+  by its `grant_id` (a UUID) plus a grant-root-relative virtual path; there is no
+  `/workspace/<26-char lowercase-base32 mount>` root and no
+  `^/workspace/[a-z2-7]{26}$` `virtual_root`.
+- **The full `CapabilityGrantV1` shape** (`version`/`capability`/`virtual_root`/
+  the `active|offline|revoked|needs_reauthorization` status set) and the main-only
+  `PhysicalWorkspaceGrantV1` (encrypted-root/identity fields, `workspaceId`/
+  `userId`/`mountId`/`policyVersion`). Delivered `Grant`/`RendererGrant` are the
+  simpler shapes above; only `active|revoked` status; only create + revoke (no
+  expand/downgrade/offline/reauthorize).
+- **Per-run `run_capability_context` and the immutable per-run grant snapshot.**
+  Not built — no 256-bit run context bound to run/workspace/user/expiry; the
+  broker re-reads the active-grant snapshot per op instead of pinning one at run
+  start. (A `GrantSnapshot` type exists but is not a run-bound capability token.)
+- **Event-sourced grant lifecycle + capability audit/metrics.** Grants are a
+  single mutable encrypted collection rewritten on change, not an append-only
+  `created`/`expanded`/`downgraded`/`reauthorized`/`offline`/`revoked` event log
+  with previous-event hashes. Only a `GrantStoreAudit.warn` seam exists; the
+  `workspace.*` structured events and `desktop_workspace_*` metrics are not
+  emitted.
+- **The signed native Rust N-API helper** (`apps/desktop/native/workspace-fs/*`).
+  Not built — path enforcement uses **pure-Node** `realpath` + `O_NOFOLLOW(_ANY)`.
+  On darwin this is atomic; on **Windows** the post-open recheck is non-atomic
+  (the honestly-documented weakness) and there is no `NtCreateFile` root-handle
+  traversal.
+- **Slice 3: mutation + approval + route.** `write`/`edit`/`mkdir` and
+  `delete`/`move` are absent; there is no two-phase prepare/commit mutation
+  journal or reconciler, no AC4 `file_history` preimage, no approval-digest
+  binding, no `workspace_mkdir`/`workspace_delete`/`workspace_move` typed tools,
+  no `/workspace/` Deep Agents route, and no `BrokeredWorkspaceBackend`.
+- **The entire AI-runtime side.** No `agent_runtime/capabilities/workspace/*`
+  (contracts/ports/service/policy/tools), no `workspace_backend.py`, no desktop
+  broker client. Nothing on the Python side calls this broker yet.
+- **Watches, per-run quotas beyond the read `FS_LIMITS` ceilings, and the
+  sensitive-path policy** (root deny rules for filesystem/home/`userData`/
+  credential stores; `.ssh`/`.env`/`*.pem` per-file approvals). Not built.
+- **Hardening items being fixed separately:** **G1** (a physical-root leak),
+  **G2** (sensitive-path policy), and **G4** (the `RUNTIME_ENABLE_DESKTOP_FILESYSTEM`
+  feature gate — the delivered capability code is not yet behind it).
+
 ## Problem and why now
 
 Desktop users expect Copilot to work with files in a project, documents folder,
@@ -68,31 +169,43 @@ slices (stages 1–2 → slice 1; stages 3–4 → slice 2; stages 5–6 → sli
 
 ## Goals
 
+### Delivered (light) — slices 1 + 2
+
 - Let only an interactive user select a workspace root through an
   Electron-main native directory picker.
-- Support exactly `read_only`, `read_write_no_delete`, and `read_write`.
-- Keep canonical physical paths, filesystem handles/identities, and grant
-  persistence in Electron main.
-- Expose only `/workspace/<opaque-mount>/...` paths to the model, runtime
-  records, renderer, approvals, and artifacts.
-- Keep the existing `FilePickerPort` attachment lane separate from persistent
-  workspace grants and the AI broker lane.
-- Add `BrokeredWorkspaceBackend`, implementing the pinned Deep Agents
-  `BackendProtocol` behind the existing `CompositeBackend`.
-- Route every read/mutation through verified run identity, immutable grant
-  snapshot, tool policy, approval, budget, event, and audit enforcement.
-- Use two-phase, durable, idempotent mutation intents and AC4 preimages before
-  changing or deleting existing bytes.
-- Resolve and authorize paths by physical handle, defending against traversal,
-  symlinks, junctions, reparse points, hard-link aliases, mount changes, and
-  time-of-check/time-of-use races.
-- Define bounded stat/list/read/glob/grep/write/edit/mkdir/delete/move,
-  workspace snapshot, patch-apply, and advisory watch behavior.
-- Provide explicit macOS and Windows behavior with one conformance contract.
-- Fail closed when the broker, grant, native helper, identity, approval,
-  precondition, snapshot, quota, or platform primitive is unavailable.
-- Preserve renderer isolation, service boundaries, web/Postgres behavior, and
-  all non-desktop tool catalogs.
+- Support exactly `read_only`, `read_write_no_delete`, and `read_write` grant
+  modes (mode enforcement for reads via `modeSatisfies`, fail-closed).
+- Keep canonical physical paths and grant persistence in Electron main; expose
+  the renderer only a path-free `RendererGrant`.
+- Route every FS **read** through the authenticated loopback broker with a
+  per-boot bearer, protocol header, no-CORS, and the current active-grant
+  snapshot (a revoke fails closed on the next op).
+- Resolve and authorize paths by realpath-before-authorize + atomic no-follow
+  open + revalidate, defending against traversal, symlinks, reserved names, ADS,
+  and (on darwin, atomically) TOCTOU races.
+- Provide bounded `stat`/`list`/`read`/`glob`/`grep` behind `FS_LIMITS`.
+- Fail closed when the broker or grant is unavailable.
+- Preserve renderer isolation, service boundaries, and web/Postgres behavior;
+  add nothing to non-desktop tool catalogs.
+
+### Deferred / not in the light build
+
+- Expose only opaque `/workspace/<opaque-mount>/...` paths (delivered uses
+  `grant_id` + a grant-root-relative virtual path).
+- Add `BrokeredWorkspaceBackend` behind the `CompositeBackend`, and the
+  `/workspace/` route + `workspace_mkdir`/`delete`/`move` typed tools.
+- Route mutations through verified run identity, an immutable per-run grant
+  snapshot, tool policy, approval, budget, and audit; two-phase, durable,
+  idempotent mutation intents and AC4 preimages before changing/deleting bytes.
+- The signed native helper and its `NtCreateFile`/`openat` handle-relative
+  primitives (delivered uses pure-Node `realpath` + `O_NOFOLLOW(_ANY)`; Windows
+  is non-atomic).
+- `write`/`edit`/`mkdir`/`delete`/`move`, workspace snapshot, patch-apply, and
+  advisory watch behavior; the full macOS/Windows conformance contract.
+- Keep the existing `FilePickerPort` attachment lane formally separated from a
+  `WorkspaceGrantPickerPort` (the delivered picker is main-only and directory-
+  only, but the renderer-facing `WorkspaceGrantPickerPort` and its wiring are not
+  built).
 
 ## Non-goals
 
@@ -388,6 +501,15 @@ Non-desktop harness profiles and tool catalogs remain byte-for-byte unchanged.
 
 ## Grant lifecycle and authorization
 
+> **Partially delivered.** Delivered: main-only picker-driven grant creation,
+> `safeStorage`-encrypted persistence, immediate revocation (a revoked grant is
+> excluded from the next active snapshot), and the renderer-safe view. **Deferred:**
+> the event-sourced lifecycle (`created`/`expanded`/`downgraded`/`reauthorized`/
+> `offline`/`revoked` with previous-event hashes), overlap/sensitive-root
+> rejection, mode expansion/downgrade flows, the immutable per-run snapshot, and
+> the 256-bit `run_capability_context`. Grants are a mutable encrypted collection
+> rewritten on change; the broker re-reads the active snapshot per op.
+
 ### Grant creation
 
 Only Electron main may create a physical grant:
@@ -467,6 +589,15 @@ cannot add a mount or mode.
 
 ## Virtual path contract
 
+> **Deferred / not in the light build.** The opaque `/workspace/<26-char base32
+mount>` root is **not** delivered. The broker addresses a grant by its
+> `grant_id` (UUID) plus a grant-root-relative virtual path; the shipped syntactic
+> validation (`normalizeVirtualPath` in `path-validation.ts`) enforces most of the
+> segment rules below (traversal, separators, reserved names, ADS, trailing
+> dot/space, controls, over-long/over-deep) but the mount-id addressing scheme and
+> the case/normalization-collision `workspace_name_collision` handling are design
+> intent.
+
 The renderer/model-visible root is exactly:
 
 ```text
@@ -502,6 +633,16 @@ Case and normalization collisions are fail-closed:
   `workspace_name_collision`.
 
 ## Native physical enforcement
+
+> **Deferred / not in the light build.** The signed Rust N-API helper is **not**
+> built. Delivered enforcement is **pure Node** (`host-fs.ts`): realpath-resolve
+> before authorize, `lstat` type gate, and an atomic no-follow open with
+> post-open recheck. On **darwin** `O_NOFOLLOW_ANY` closes the TOCTOU window
+> atomically; on **non-darwin (incl. Windows)** the recheck is non-atomic (the
+> honestly-documented residual) and there is no `NtCreateFile`/`openat`
+> handle-relative traversal, `st_dev`/`st_ino` volume-escape enforcement, or
+> platform-specific replacement path. The macOS/Windows sections below are design
+> intent for the future signed helper.
 
 String normalization is defense in depth, not the authorization boundary.
 AC5 ships a signed Rust N-API helper inside `apps/desktop` with only
@@ -597,6 +738,13 @@ string-only `CreateFileW` authorization is prohibited.
 
 ## Tool policy, approvals, and grant intersection
 
+> **Deferred / not in the light build.** Delivered read gating is the profile
+> grant + grant-mode (`modeSatisfies`) + operation-time physical path/identity
+> checks. The tool-use policy (`auto`/`ask`/`require`/`block`), approval-digest
+> binding, per-file sensitive-path approval, capability risk floors, and budgets
+> are **not** wired (no AI-runtime side calls the broker yet). Sensitive-path
+> policy is tracked as **G2**. This section is design intent.
+
 The effective decision is the intersection of:
 
 1. desktop profile and AC5 feature gate;
@@ -653,6 +801,16 @@ Root creation/expansion is never an AI approval category. It always returns to
 the native user lane.
 
 ## Strict typed contracts
+
+> **Mostly deferred.** Delivered contracts are the simpler `Grant` /
+> `RendererGrant` (`grantId`/`root`/`mode`/`label`/`status: active|revoked`/
+> timestamps) in `types.ts`, validated at the IPC/broker boundary by the Zod
+> schemas in `schemas.ts`, plus the read-op result shapes (`HostStatResult`,
+> `HostDirEntry`/`HostListResult`, `HostReadResult`, `HostGlobResult`,
+> `HostGrepHit`/`HostGrepResult`). The full `CapabilityGrantV1`/
+> `PhysicalWorkspaceGrantV1`, the `WorkspaceRead*`/`WorkspaceMutation*`/two-phase
+> intent contracts, `SecretStr` tokens, and the broker mutation-operation
+> allowlist below are **design intent**.
 
 ### Renderer-safe and main-only grants
 
@@ -886,6 +1044,10 @@ content, or cross-workspace existence detail.
 
 ## Two-phase and idempotent mutation protocol
 
+> **Deferred / not in the light build (slice 3).** No mutation path ships — no
+> prepare/commit journal, reconciler, staging, idempotency keys, AC4 preimage, or
+> postcondition verification. This entire section is design intent.
+
 ### Phase 0 — propose and approve
 
 The runtime builds the exact virtual-path operation, reads current content only
@@ -969,6 +1131,14 @@ compensation cannot be proven, the batch is `outcome_unknown` with per-path
 results; it is never reported as fully committed.
 
 ## Persistence, recovery, retention, and deletion
+
+> **Mostly deferred.** Delivered persistence is a single `safeStorage`-encrypted
+> `<userData>/capabilities/grants.bin` (whole-collection, rewritten on change),
+> not the append-only `grants/`/`intents/`/`staging/`/`quarantine/` event tree
+> below. There is no intent journal, mutation reconciliation, staging, or
+> file-history retention (no mutations ship). Revocation is delivered; grant/audit
+> retention, offline/needs-reauthorization states, and corruption-quarantine
+> recovery are design intent.
 
 ### Exact main-owned layout
 
@@ -1064,6 +1234,13 @@ key, and postcondition reconciliation make the boundary explicit.
   require run reauthorization.
 
 ## Quotas and watch behavior
+
+> **Partially delivered.** The delivered read path enforces the `FS_LIMITS`
+> ceilings in `path-validation.ts` (path depth/bytes, read byte caps, dir-entry
+> cap, walk depth/entries/deadline, glob/grep match caps, grep file/line caps).
+> The per-run/per-workspace grant/mount/byte quotas in the table below, the
+> sensitive-path deny/approval rules (**G2**), and **watches** (an Electron-main
+> capability) are **not** built. This section is otherwise design intent.
 
 ### Operation limits
 
@@ -1437,132 +1614,102 @@ storage, or remote sandbox mounts.
 
 ## Acceptance criteria
 
-- Only a focused interactive user can create/expand a root grant through an
-  Electron-main native picker and confirmation.
-- Exactly three modes exist and the operation matrix is enforced in main,
-  independent of AI policy/approval.
-- Physical paths/identities stay main-only; every other layer sees
-  `/workspace/<26-character opaque mount>/...`.
-- Existing `FilePickerPort` remains the user attachment lane and cannot create
-  AI authority; the AI broker cannot open native pickers.
-- `BrokeredWorkspaceBackend` passes the pinned Deep Agents
-  `BackendProtocol` suite behind `CompositeBackend`, preserving all existing
-  routes.
-- mkdir/delete/move use narrow typed tools through the same authorization and
-  mutation service.
-- Every existing-content mutation has a durable, checksum-matching AC4
-  `file_history` preimage before effect.
-- Every mutation uses prepared/content-staged/committing/committed journal
-  semantics and is idempotent across worker/main/app crashes.
-- Approval edits/replay cannot add roots, strengthen modes, change paths or
-  effects, bypass quotas, or survive revocation/restart.
-- macOS uses descriptor-relative no-follow operations; Windows uses
-  root-handle-relative native operations. No string-only fallback exists.
-- Traversal, symlink, junction, reparse, mount, hard-link, name-alias, and race
-  corpora cannot escape or affect another path.
-- Quotas are enforced before unbounded work; watch overflow is visible and
-  watches never become authority or autonomous triggers.
-- Renderer has no Node/host API, Python has no direct user-root I/O, and
-  production cannot select unrestricted `FilesystemBackend` or
-  `LocalShellBackend`.
-- Revocation/backout closes future authority without deleting user files.
-- AC5 is absent in all non-desktop profiles and all web/Postgres/API/SSE
-  regression suites remain unchanged.
+### Delivered (light) — slices 1 + 2
+
+- Only a main-owned native picker creates a root grant; the renderer cannot open
+  it and the AI broker cannot open native pickers.
+- Exactly three modes exist; read gating is enforced in main via `modeSatisfies`
+  (fail-closed for an unknown mode).
+- Physical paths stay main-only; the renderer receives only a path-free
+  `RendererGrant`, and broker read results carry only grant-root-relative virtual
+  paths.
+- The authenticated loopback broker enforces the per-boot bearer, protocol
+  header, POST/JSON body cap, and no-CORS browser-metadata rejection; a revoked
+  grant fails closed on the next op.
+- Traversal, symlink, reserved-name, ADS, and (on darwin, atomic) race corpora
+  cannot escape the grant root; resolve-before-authorize + no-follow open +
+  post-open recheck is applied on every op.
+- Read quotas (`FS_LIMITS`) bound each op before unbounded work.
+- The renderer has no Node/host API; the delivered capability code adds nothing
+  to non-desktop profiles.
+
+### Deferred / not in the light build
+
+- Grant **expansion** through native confirmation; the opaque
+  `/workspace/<26-char mount>/...` addressing (delivered uses `grant_id` +
+  relative path).
+- `BrokeredWorkspaceBackend` passing the pinned `BackendProtocol` suite behind
+  `CompositeBackend`; the `/workspace/` route.
+- `mkdir`/`delete`/`move` typed tools; every existing-content mutation carrying a
+  checksum-matching AC4 `file_history` preimage; prepared/staged/committing/
+  committed journal semantics and crash idempotency.
+- Approval-digest binding and its edit/replay/revocation invariants.
+- The signed native helper's descriptor-/root-handle-relative operations
+  (delivered is pure-Node; **Windows is non-atomic**).
+- Watches; per-run/per-workspace byte quotas; sensitive-path policy (**G2**).
+- The AI-runtime side (Python broker client, workspace backend/tools) — nothing
+  calls the broker yet — and the `RUNTIME_ENABLE_DESKTOP_FILESYSTEM` feature gate
+  (**G4**). A physical-root leak (**G1**) is being fixed separately.
 
 ## Definition of done
 
-- AC1 and AC4 are implemented and AC5 is accepted.
-- One lead implementation spec under the desktop spec tree pins broker/native
-  protocol, Rust/Node toolchain, supported OS/filesystems, exact system calls,
-  journal crypto/layout, limits, and packaging/signing.
-- Native picker/grant store, safe IPC, run snapshots, broker endpoints, native
-  helper, mutation journal/reconciliation, watcher, AI client/backend/tools,
-  policy/approval integration, AC4 history, events, metrics, and audit are
-  implemented.
-- Unit, cross-language contract, Deep Agents conformance, grant/mode,
-  path/race, crash/idempotency, quota/watch, renderer/security, macOS, Windows,
-  packaging, and no-web-impact suites pass.
-- Recorded drills cover revoke during approval, disk full before snapshot,
-  crash at every commit boundary, outcome-unknown handling, root move/eject,
-  watch overflow, native helper disable, and data-preserving backout.
-- Desktop user/support docs explain modes, sensitive roots, virtual paths,
-  restore limits, offline/reauthorization, plaintext local boundary, and
-  deletion behavior.
-- Security review confirms no claim of kernel/VM isolation and no direct
-  renderer, Python, shell, or unrestricted backend path.
-- Code, config, tests, docs, signed packaged artifacts, and evidence all agree
-  before status becomes Implemented.
+### Delivered (light) — slices 1 + 2
+
+- Native picker, `safeStorage` grant store, path-free renderer IPC, authenticated
+  loopback broker, and read FS ops (`stat`/`list`/`read`/`glob`/`grep`) with the
+  full syntactic + resolve-before-authorize + atomic-open path-validation layer
+  are implemented in `apps/desktop/main/capabilities/`.
+- Covered by `broker.test.ts`, `folder-picker.test.ts`, `grant-store.test.ts`,
+  `host-fs.test.ts`, `path-validation.test.ts`, and `service.test.ts` (incl. the
+  darwin atomic-swap-denial and non-darwin post-open-recheck cases).
+
+### Deferred / not in the light build
+
+- The lead implementation spec (broker/native protocol, Rust/Node toolchain,
+  supported OS/filesystems, syscalls, journal crypto, packaging/signing).
+- Run snapshots, mutation journal/reconciliation, the signed native helper,
+  watcher, AI client/backend/tools, policy/approval integration, AC4 history,
+  `workspace.*` events, `desktop_workspace_*` metrics, and capability audit.
+- The cross-language contract, Deep Agents conformance, crash/idempotency,
+  quota/watch, macOS/Windows platform, and packaging suites; the recorded
+  commit-boundary/outcome-unknown/root-move/native-helper-disable/backout drills.
+- Desktop user/support docs; the security review sign-off; signed packaged
+  artifacts.
 
 ## Critical current and proposed files
 
-### Current evidence and integration points
+### Delivered — actual files
 
-- `docs/plan/desktop/agent-capabilities/01-ac1-desktop-capability-foundation.md`
-- `docs/plan/desktop/agent-capabilities/04-ac4-artifact-store.md`
-- `docs/architecture/desktop-app.md`
-- `docs/architecture/service-boundaries.md`
-- `apps/desktop/main/window.ts`
-- `apps/desktop/main/index.ts`
-- `apps/desktop/main/ipc/handlers.ts`
-- `apps/desktop/main/ipc/schemas.ts`
-- `apps/desktop/preload/bridge.ts`
-- `apps/desktop/preload/window-bridge-types.ts`
-- `apps/desktop/main/services/service-env.ts`
-- `apps/desktop/main/services/supervisor.ts`
-- `packages/chat-surface/src/ports/FilePickerPort.ts`
-- `packages/chat-surface/src/ports/index.ts`
-- `packages/chat-transport/src/ipc/rpc-protocol.ts`
-- `services/ai-backend/src/agent_runtime/execution/factory.py`
-- `services/ai-backend/src/agent_runtime/execution/contracts.py`
-- `services/ai-backend/src/agent_runtime/execution/deep_agent_builder.py`
-- `services/ai-backend/src/agent_runtime/capabilities/backends/draft_backend.py`
-- `services/ai-backend/src/agent_runtime/capabilities/tools/runtime_gate.py`
-- `services/ai-backend/src/agent_runtime/capabilities/tools/permissions.py`
-- `services/ai-backend/src/agent_runtime/api/approval_coordinator.py`
-- `services/ai-backend/src/runtime_worker/handlers/approval.py`
-- `services/ai-backend/src/runtime_worker/handlers/run.py`
+All under `apps/desktop/main/capabilities/` (flat, not a `workspace/` subtree):
 
-### Proposed desktop implementation files
+- `index.ts` — `createCapabilityService` composition root + public exports.
+- `service.ts` — `CapabilityService` (picker/store/broker composition; renderer-safe returns).
+- `folder-picker.ts` — `FolderPicker` (main-only native directory picker).
+- `grant-store.ts` — `GrantStore` (`safeStorage`-encrypted grants at `<userData>/capabilities/grants.bin`).
+- `broker.ts` — `CapabilityBroker` (authenticated loopback HTTP; handshake/grants/fs read routes).
+- `host-fs.ts` — `HostFs` (read ops + atomic no-follow open + TOCTOU recheck).
+- `path-validation.ts` — pure syntactic validation, `FS_LIMITS`, `assertWithinRoot`, `modeSatisfies`, `FsError`.
+- `channels.ts`, `schemas.ts` (Zod), `types.ts` — IPC channels, boundary schemas, and grant/read-result types.
+- Tests: `broker.test.ts`, `folder-picker.test.ts`, `grant-store.test.ts`, `host-fs.test.ts`, `path-validation.test.ts`, `service.test.ts`.
 
-- `apps/desktop/main/capabilities/workspace/grant-picker.ts`
-- `apps/desktop/main/capabilities/workspace/grant-store.ts`
-- `apps/desktop/main/capabilities/workspace/grant-policy.ts`
-- `apps/desktop/main/capabilities/workspace/run-snapshots.ts`
-- `apps/desktop/main/capabilities/workspace/workspace-broker.ts`
-- `apps/desktop/main/capabilities/workspace/mutation-journal.ts`
-- `apps/desktop/main/capabilities/workspace/mutation-reconciler.ts`
-- `apps/desktop/main/capabilities/workspace/watch-manager.ts`
-- `apps/desktop/main/capabilities/workspace/protocol-v1.ts`
-- `apps/desktop/main/capabilities/workspace/errors.ts`
-- `apps/desktop/main/capabilities/workspace/__tests__/`
-- `apps/desktop/native/workspace-fs/Cargo.toml`
-- `apps/desktop/native/workspace-fs/src/lib.rs`
-- `apps/desktop/native/workspace-fs/src/macos.rs`
-- `apps/desktop/native/workspace-fs/src/windows.rs`
-- `apps/desktop/native/workspace-fs/src/contracts.rs`
-- `apps/desktop/native/workspace-fs/tests/`
-- `packages/chat-surface/src/ports/WorkspaceGrantPickerPort.ts`
-- `packages/chat-transport/src/ipc/workspace-grants.ts`
-- `apps/desktop/docs/specs/agent-capabilities/ac5-filesystem-capability.md`
-- `apps/desktop/docs/workspace-access.md`
+### Deferred / proposed (not built)
 
-### Proposed AI runtime implementation files
+Desktop side — none of these exist (the delivered flat files above replace the
+proposed `workspace/` subtree for slices 1–2):
 
-- `services/ai-backend/src/agent_runtime/capabilities/workspace/__init__.py`
-- `services/ai-backend/src/agent_runtime/capabilities/workspace/contracts.py`
-- `services/ai-backend/src/agent_runtime/capabilities/workspace/ports.py`
-- `services/ai-backend/src/agent_runtime/capabilities/workspace/service.py`
-- `services/ai-backend/src/agent_runtime/capabilities/workspace/policy.py`
-- `services/ai-backend/src/agent_runtime/capabilities/workspace/tools.py`
+- `apps/desktop/main/capabilities/workspace/{grant-picker,grant-policy,run-snapshots,workspace-broker,mutation-journal,mutation-reconciler,watch-manager,protocol-v1,errors}.ts`
+- `apps/desktop/native/workspace-fs/*` (the signed Rust N-API helper: `Cargo.toml`, `src/{lib,macos,windows,contracts}.rs`, `tests/`)
+- `packages/chat-surface/src/ports/WorkspaceGrantPickerPort.ts`, `packages/chat-transport/src/ipc/workspace-grants.ts`
+- `apps/desktop/docs/specs/agent-capabilities/ac5-filesystem-capability.md`, `apps/desktop/docs/workspace-access.md`
+
+AI-runtime side — none of these exist (nothing on the Python side calls the
+broker yet):
+
+- `services/ai-backend/src/agent_runtime/capabilities/workspace/{__init__,contracts,ports,service,policy,tools}.py`
 - `services/ai-backend/src/agent_runtime/capabilities/backends/workspace_backend.py`
 - `services/ai-backend/src/agent_runtime/capabilities/desktop/client.py`
-- `services/ai-backend/tests/contract/desktop_broker/test_workspace_protocol.py`
-- `services/ai-backend/tests/contract/backends/test_workspace_backend.py`
-- `services/ai-backend/tests/unit/agent_runtime/capabilities/workspace/`
-- `services/ai-backend/tests/integration/runtime_worker/test_workspace_mutations.py`
-- `docs/contracts/desktop-broker/v1/workspace-valid.json`
-- `docs/contracts/desktop-broker/v1/workspace-invalid.json`
-- `services/ai-backend/docs/features/desktop-workspaces.md`
+- `services/ai-backend/tests/contract/desktop_broker/test_workspace_protocol.py`, `tests/contract/backends/test_workspace_backend.py`, `tests/unit/agent_runtime/capabilities/workspace/`, `tests/integration/runtime_worker/test_workspace_mutations.py`
+- `docs/contracts/desktop-broker/v1/workspace-{valid,invalid}.json`, `services/ai-backend/docs/features/desktop-workspaces.md`
 
 No implementation may add a sibling component import, place business logic in
 `packages/service-contracts`, expose the native helper to preload, or add a
