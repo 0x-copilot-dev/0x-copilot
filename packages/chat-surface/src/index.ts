@@ -80,53 +80,6 @@ export {
   type ReasoningGroupProps,
 } from "./messages/ReasoningGroup";
 // === end Phase 1 (PR-1.1) ===
-// === Phase 1 (PR-1.6) approvals ===
-// Presentational consent card + collapsed receipt (+ their inset param /
-// details / undo-countdown leaves). The approval routing/wiring — the
-// ApprovalTool dispatcher, useApprovalsQueue, ApprovalFocusContext, the
-// forward/undo POST plumbing — stays host-owned in apps/frontend; the host
-// renders these behind its own Approve/Reject/Forward/Undo callbacks.
-export {
-  ApprovalCard,
-  type ApprovalCardProps,
-  ApprovalReceipt,
-  type ApprovalReceiptProps,
-  type ApprovalReceiptKind,
-  ActivityDetails,
-  ActivityParams,
-  useUndoCountdown,
-  type UndoCountdownState,
-  type ActivityParam,
-} from "./approvals";
-// === end Phase 1 (PR-1.6) ===
-// === Phase 1 (PR-1.5) subagent / fleet cards ===
-// Hoisted subagent presentation family. The host keeps the data-binding
-// (reducers, activity builders, fleet context, jump-to-approval wiring) and
-// passes normalised data + callbacks in as props; chat-surface stays
-// app-import-free.
-export {
-  SubagentCard,
-  type SubagentCardProps,
-  FleetSubagentRow,
-  type FleetSubagentRowProps,
-  SubagentFleetCard,
-  type SubagentFleetCardProps,
-  subagentCardFromArgs,
-  subagentCardFromEntry,
-  type SubagentCardStatus,
-  type SubagentCardViewModel,
-  type SubagentPauseReason,
-  formatSubagentDuration,
-  pauseAriaLabel,
-  pauseFullLabel,
-  pauseJumpLabel,
-  pauseShortLabel,
-  ActivityStatusIcon,
-  SubagentActivityList,
-  useElapsedSeconds,
-  type SubagentActivityRecord,
-} from "./subagents";
-// === end Phase 1 (PR-1.5) ===
 export { CitationChip, type CitationChipProps } from "./citations/CitationChip";
 export {
   OrdinalCitationChip,
@@ -836,6 +789,63 @@ export {
   type SettingsProfileGate,
 } from "./settings";
 // === end Phase 5 (PR-5.1) ===
+
+// === Phase 1 — new interaction families (subagents · approvals · workspace) ===
+// These three families were introduced by Phase 1 and have no pre-Phase-1
+// sibling exports, so they cluster here in PR order (1.5 → 1.6 → 1.7) rather
+// than scattering through the messages/citations neighbourhood above.
+// Presentational cores only — the host keeps every data-binding hook/reducer
+// and passes normalised data + callbacks in as props (chat-surface stays
+// app-import-free).
+
+// === Phase 1 (PR-1.5) subagent / fleet cards ===
+// Hoisted subagent presentation family. The host keeps the data-binding
+// (reducers, activity builders, fleet context, jump-to-approval wiring) and
+// passes normalised data + callbacks in as props; chat-surface stays
+// app-import-free.
+export {
+  SubagentCard,
+  type SubagentCardProps,
+  FleetSubagentRow,
+  type FleetSubagentRowProps,
+  SubagentFleetCard,
+  type SubagentFleetCardProps,
+  subagentCardFromArgs,
+  subagentCardFromEntry,
+  type SubagentCardStatus,
+  type SubagentCardViewModel,
+  type SubagentPauseReason,
+  formatSubagentDuration,
+  pauseAriaLabel,
+  pauseFullLabel,
+  pauseJumpLabel,
+  pauseShortLabel,
+  ActivityStatusIcon,
+  SubagentActivityList,
+  useElapsedSeconds,
+  type SubagentActivityRecord,
+} from "./subagents";
+// === end Phase 1 (PR-1.5) ===
+
+// === Phase 1 (PR-1.6) approvals ===
+// Presentational consent card + collapsed receipt (+ their inset param /
+// details / undo-countdown leaves). The approval routing/wiring — the
+// ApprovalTool dispatcher, useApprovalsQueue, ApprovalFocusContext, the
+// forward/undo POST plumbing — stays host-owned in apps/frontend; the host
+// renders these behind its own Approve/Reject/Forward/Undo callbacks.
+export {
+  ApprovalCard,
+  type ApprovalCardProps,
+  ApprovalReceipt,
+  type ApprovalReceiptProps,
+  type ApprovalReceiptKind,
+  ActivityDetails,
+  ActivityParams,
+  useUndoCountdown,
+  type UndoCountdownState,
+  type ActivityParam,
+} from "./approvals";
+// === end Phase 1 (PR-1.6) ===
 
 // === Phase 1 (PR-1.7) workspace pane ===
 // Hoisted right-rail pane + tablist + five tab bodies (Sources / Agents /
