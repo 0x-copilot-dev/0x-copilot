@@ -44,7 +44,7 @@ from __future__ import annotations
 
 import asyncio
 from collections.abc import Sequence
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any
 
@@ -69,6 +69,7 @@ from agent_runtime.persistence.records import (
     CompressionEventRecord,
     ModelPricingRecord,
     OutboxStatus,
+    RetentionKind,
     RetentionPolicyRecord,
     RetentionSweepOutcome,
     RuntimeModelCallUsageRecord,
@@ -86,10 +87,16 @@ from agent_runtime.persistence.records import (
 )
 from runtime_adapters.base import RuntimeAdapterHelpers, StatusTransition, _Fields
 from runtime_adapters.file._catalog_index import CatalogIndex
+from runtime_adapters.file._deletion import (
+    LegalHoldPolicy,
+    ObjectReachabilityScanner,
+    SessionEraser,
+)
 from runtime_adapters.file._jsonl import JsonlIo
 from runtime_adapters.file._paths import FileStoreLayout
 from runtime_adapters.file._state_ledger import StateLedger
 from runtime_adapters.file.object_store import FileObjectStore
+from runtime_adapters.file.search import ConversationSearchHit
 from runtime_api.http.errors import RuntimeApiError
 from runtime_api.schemas import (
     AgentRunStatus,
@@ -103,7 +110,6 @@ from runtime_api.schemas import (
     HistoryDeletionResponse,
     MessageRecord,
     MessageRole,
-    MessageStatus,
     RuntimeApprovalResolvedCommand,
     RuntimeCancelCommand,
     RuntimeEventDraft,
@@ -140,6 +146,46 @@ class _Tables:
     QUEUE = "queue"
 
 
+class _DeletionFields:
+    """Audit-record keys for physical-deletion (bytes-gone) events."""
+
+    EVENT_TYPE = "runtime_data_purged"
+    CONVERSATIONS_DELETED = "conversations_deleted"
+    MESSAGES_DELETED = "messages_deleted"
+    RUNS_DELETED = "runs_deleted"
+    EVENTS_DELETED = "events_deleted"
+    OBJECTS_GARBAGE_COLLECTED = "objects_garbage_collected"
+    SKIPPED_LEGAL_HOLD = "skipped_legal_hold"
+    TRIGGER = "trigger"
+    TRIGGER_USER_REQUEST = "user_history_delete"
+    TRIGGER_RETENTION_SWEEP = "retention_sweep"
+
+
+class _PurgeOutcome:
+    """Mutable tally returned by :meth:`FileRuntimeApiStore._purge_conversations`."""
+
+    __slots__ = (
+        "conversations",
+        "messages",
+        "runs",
+        "events",
+        "objects",
+        "skipped_legal_hold",
+        "retained_events",
+        "audit_event_id",
+    )
+
+    def __init__(self) -> None:
+        self.conversations = 0
+        self.messages = 0
+        self.runs = 0
+        self.events = 0
+        self.objects = 0
+        self.skipped_legal_hold = 0
+        self.retained_events = 0
+        self.audit_event_id: str | None = None
+
+
 class FileRuntimeApiStore:
     """On-disk implementation of persistence, event store, and queue ports."""
 
@@ -147,6 +193,8 @@ class FileRuntimeApiStore:
         self._layout = FileStoreLayout(Path(root))
         self._index = CatalogIndex(self._layout.index_db_path)
         self.object_store = FileObjectStore(self._layout)
+        self._reachability = ObjectReachabilityScanner(self._layout)
+        self._session_eraser = SessionEraser(self._layout)
 
         # ---- materialized view (rebuilt from disk on open) --------------
         self.conversations: dict[str, ConversationRecord] = {}
@@ -642,6 +690,42 @@ class FileRuntimeApiStore:
             include_deleted=include_deleted,
         )
         return tuple(ConversationRecord.model_validate_json(doc) for doc in docs)
+
+    async def search_conversations(
+        self,
+        *,
+        org_id: str,
+        user_id: str,
+        query: str,
+        limit: int,
+        include_archived: bool = False,
+        include_deleted: bool = False,
+    ) -> Sequence[ConversationSearchHit]:
+        """Full-text search this user's conversations, ranked best-first.
+
+        Matches the query against conversation titles and redacted
+        user/assistant message text held in the disposable catalog's FTS5 index
+        (tool payloads and system turns are never indexed). Scoping mirrors
+        :meth:`list_conversations`. Search is a desktop-only capability: when the
+        catalog's FTS5 module is unavailable this returns an empty result rather
+        than failing, and direct conversation reads are unaffected.
+        """
+
+        hits = self._index.search_conversations(
+            org_id=org_id,
+            user_id=user_id,
+            query=query,
+            limit=limit,
+            include_archived=include_archived,
+            include_deleted=include_deleted,
+        )
+        return tuple(
+            ConversationSearchHit(
+                conversation=ConversationRecord.model_validate_json(doc),
+                score=score,
+            )
+            for doc, score in hits
+        )
 
     async def list_messages(
         self,
@@ -1429,85 +1513,217 @@ class FileRuntimeApiStore:
     async def delete_user_history(
         self, *, org_id: str, user_id: str, reason: str | None = None
     ) -> HistoryDeletionResponse:
+        """Physically erase a user's conversations from disk (desktop profile).
+
+        Unlike the Postgres/in-memory adapters — which tombstone user-visible
+        history while retaining audit-safe evidence — the desktop file store
+        takes "delete my data" literally: each non-held conversation's session
+        directory and JSONL streams are removed from disk and every object that
+        becomes unreferenced is garbage-collected. Conversations under a legal
+        hold (``metadata.legal_hold``) are skipped and left intact; their events
+        are reported via ``events_retained``.
+
+        The legacy ``HistoryDeletionResponse`` field names are mapped to the
+        physical reality: ``conversations_archived`` / ``messages_tombstoned`` /
+        ``runs_cancelled`` carry the *deleted* counts, and ``events_retained``
+        carries the events kept because their conversation was on legal hold.
+        The signed audit row records the byte-accurate tally.
+        """
+
         now = datetime.now(timezone.utc)
-        conversation_ids = {
-            conversation.conversation_id
+        targets = [
+            conversation
             for conversation in self.conversations.values()
             if conversation.org_id == org_id and conversation.user_id == user_id
-        }
-        conversations_archived = 0
-        for conversation_id in conversation_ids:
-            conversation = self.conversations[conversation_id]
-            if conversation.status != ConversationStatus.ARCHIVED:
-                conversations_archived += 1
-            updated = conversation.model_copy(
-                update={
-                    "status": ConversationStatus.ARCHIVED,
-                    "archived_at": now,
-                    "updated_at": now,
-                }
-            )
-            self.conversations[conversation_id] = updated
-            self._persist_conversation(updated)
-
-        messages_tombstoned = 0
-        for message_id, message in tuple(self.messages.items()):
-            if (
-                message.org_id != org_id
-                or message.conversation_id not in conversation_ids
-            ):
-                continue
-            if message.deleted_at is None:
-                messages_tombstoned += 1
-            updated_message = message.model_copy(
-                update={
-                    "status": MessageStatus.DELETED,
-                    "content_text": "[deleted by user request]",
-                    "deleted_at": now,
-                }
-            )
-            self.messages[message_id] = updated_message
-            self._persist_message(updated_message)
-
-        runs_cancelled = 0
-        for run_id, run in tuple(self.runs.items()):
-            if run.org_id != org_id or run.user_id != user_id:
-                continue
-            if run.status not in StatusTransition.TERMINAL_STATUSES:
-                runs_cancelled += 1
-                updated_run = run.model_copy(
-                    update={"status": AgentRunStatus.CANCELLED, "cancelled_at": now}
-                )
-                self.runs[run_id] = updated_run
-                self._persist_run(updated_run)
-
-        events_retained = sum(
-            len(events)
-            for run_id, events in self.events_by_run.items()
-            if self.runs.get(run_id) is not None
-            and self.runs[run_id].org_id == org_id
-            and self.runs[run_id].user_id == user_id
+        ]
+        outcome = await self._purge_conversations(
+            org_id=org_id,
+            conversations=targets,
+            trigger=_DeletionFields.TRIGGER_USER_REQUEST,
+            reason=reason,
+            now=now,
+            user_id=user_id,
         )
-        audit_event_id = f"history_delete_{org_id}_{user_id}_{int(now.timestamp())}"
+        return HistoryDeletionResponse(
+            org_id=org_id,
+            user_id=user_id,
+            conversations_archived=outcome.conversations,
+            messages_tombstoned=outcome.messages,
+            runs_cancelled=outcome.runs,
+            events_retained=outcome.retained_events,
+            audit_event_id=outcome.audit_event_id,
+        )
+
+    # ==================================================================
+    # Physical deletion (bytes-gone) — used by delete + retention sweep
+    # ==================================================================
+
+    async def _purge_conversations(
+        self,
+        *,
+        org_id: str,
+        conversations: Sequence[ConversationRecord],
+        trigger: str,
+        reason: str | None,
+        now: datetime,
+        user_id: str | None = None,
+        dry_run: bool = False,
+    ) -> _PurgeOutcome:
+        """Erase the given conversations' sessions + GC newly-orphaned objects.
+
+        Serialised on the state lock so no concurrent writer can interleave a
+        session write with a directory removal. Legal-held conversations are
+        filtered out here (counted, never touched). When ``dry_run`` the tallies
+        reflect what *would* be removed but nothing is deleted and no audit row
+        is written (parity with the sweeper's dry-run contract).
+        """
+
+        outcome = _PurgeOutcome()
+        async with self._state_lock:
+            deletable: list[ConversationRecord] = []
+            for conversation in conversations:
+                if LegalHoldPolicy.is_on_hold(conversation):
+                    outcome.skipped_legal_hold += 1
+                    outcome.retained_events += self._conversation_event_count(
+                        conversation.conversation_id
+                    )
+                    continue
+                deletable.append(conversation)
+
+            if not deletable:
+                return outcome
+
+            conv_ids = {c.conversation_id for c in deletable}
+            # 1) Tally + snapshot victim object refs while the JSONL still exists.
+            victim_refs = self._reachability.scan_all(deletable)
+            outcome.conversations = len(deletable)
+            outcome.messages = sum(
+                1 for m in self.messages.values() if m.conversation_id in conv_ids
+            )
+            victim_runs = [
+                run for run in self.runs.values() if run.conversation_id in conv_ids
+            ]
+            outcome.runs = len(victim_runs)
+            outcome.events = sum(
+                len(self.events_by_run.get(run.run_id, ())) for run in victim_runs
+            )
+
+            # 2) Fail-safe: verify the whole plan before removing a single byte.
+            planned_dirs = self._session_eraser.plan(deletable)
+
+            if dry_run:
+                return outcome
+
+            # 3) Erase session directories, then drop materialised + index state.
+            self._session_eraser.erase(planned_dirs)
+            for conversation in deletable:
+                self._drop_conversation_state(conversation, victim_runs=victim_runs)
+
+            # 4) GC objects that became unreferenced (survivors recomputed from
+            #    the JSONL that remains on disk). Content-addressed sharing keeps
+            #    any blob still referenced by another conversation alive.
+            survivor_refs = self._reachability.scan_all(self.conversations.values())
+            for digest in self._reachability.collectible(
+                victim_refs=victim_refs,
+                survivor_refs=survivor_refs,
+                object_store=self.object_store,
+            ):
+                if self.object_store.delete(digest):
+                    outcome.objects += 1
+
+        outcome.audit_event_id = await self._record_deletion_audit(
+            org_id=org_id,
+            user_id=user_id,
+            trigger=trigger,
+            reason=reason,
+            now=now,
+            outcome=outcome,
+        )
+        return outcome
+
+    def _conversation_event_count(self, conversation_id: str) -> int:
+        """Count persisted events across every run of one conversation."""
+
+        run_ids = {
+            run.run_id
+            for run in self.runs.values()
+            if run.conversation_id == conversation_id
+        }
+        return sum(len(self.events_by_run.get(run_id, ())) for run_id in run_ids)
+
+    def _drop_conversation_state(
+        self,
+        conversation: ConversationRecord,
+        *,
+        victim_runs: Sequence[RunRecord],
+    ) -> None:
+        """Remove one conversation from the materialised view + disposable index.
+
+        The on-disk session directory is already gone; this keeps the in-memory
+        dicts, idempotency maps, and SQLite index consistent so live reads never
+        surface the purged conversation. The index also rebuilds from the (now
+        absent) JSONL on the next :meth:`open`, so both paths agree.
+        """
+
+        conversation_id = conversation.conversation_id
+        self.conversations.pop(conversation_id, None)
+        if conversation.idempotency_key is not None:
+            self._conversation_idempotency.pop(
+                (
+                    conversation.org_id,
+                    conversation.user_id,
+                    conversation.idempotency_key,
+                ),
+                None,
+            )
+        for message_id, message in tuple(self.messages.items()):
+            if message.conversation_id == conversation_id:
+                self.messages.pop(message_id, None)
+        for run in victim_runs:
+            if run.conversation_id != conversation_id:
+                continue
+            self.runs.pop(run.run_id, None)
+            self.events_by_run.pop(run.run_id, None)
+            if run.idempotency_key is not None:
+                key = (run.org_id, run.user_id, run.idempotency_key)
+                self._run_idempotency.pop(key, None)
+                self._run_idempotency_fingerprint.pop(key, None)
+        self._conversation_locks.pop(conversation_id, None)
+        self._index.delete_conversation_cascade(conversation_id)
+
+    async def _record_deletion_audit(
+        self,
+        *,
+        org_id: str,
+        user_id: str | None,
+        trigger: str,
+        reason: str | None,
+        now: datetime,
+        outcome: _PurgeOutcome,
+    ) -> str:
+        """Write the tamper-evident deletion-completed audit row; return its id."""
+
+        audit_event_id = (
+            f"data_purge_{org_id}_{trigger}_{int(now.timestamp() * 1_000_000)}"
+        )
         await self.write_audit_log(
-            event_type="user_history_deleted",
+            event_type=_DeletionFields.EVENT_TYPE,
             record={
                 _Fields.AUDIT_EVENT_ID: audit_event_id,
                 _Fields.ORG_ID: org_id,
                 _Fields.USER_ID: user_id,
                 _Fields.REASON: reason,
                 _Fields.DELETED_AT: now.isoformat(),
+                _DeletionFields.TRIGGER: trigger,
+                _DeletionFields.CONVERSATIONS_DELETED: outcome.conversations,
+                _DeletionFields.MESSAGES_DELETED: outcome.messages,
+                _DeletionFields.RUNS_DELETED: outcome.runs,
+                _DeletionFields.EVENTS_DELETED: outcome.events,
+                _DeletionFields.OBJECTS_GARBAGE_COLLECTED: outcome.objects,
+                _DeletionFields.SKIPPED_LEGAL_HOLD: outcome.skipped_legal_hold,
             },
         )
-        return HistoryDeletionResponse(
-            org_id=org_id,
-            user_id=user_id,
-            conversations_archived=conversations_archived,
-            messages_tombstoned=messages_tombstoned,
-            runs_cancelled=runs_cancelled,
-            events_retained=events_retained,
-            audit_event_id=audit_event_id,
-        )
+        return audit_event_id
 
     # ==================================================================
     # PersistencePort — usage + pricing
@@ -2123,15 +2339,48 @@ class FileRuntimeApiStore:
         self,
         *,
         org_id: str,
-        kind,
+        kind: RetentionKind,
         ttl_seconds: int,
         dry_run: bool = False,
         chunk_size: int = 0,
     ) -> RetentionSweepOutcome:
-        # Desktop is single-user and low-volume; the sweeper runs end-to-end
-        # but tombstones nothing here (parity with the in-memory dev backend).
+        """Physically reap expired conversation sessions for one tenant.
+
+        The file store is session-folder-based rather than row-based, so the
+        conversation session is the unit of retention. Session-scoped reaping is
+        driven by :data:`RetentionKind.MESSAGES` (the conversation-lifecycle
+        kind — see ``docs/features/retention.md``); a session is expired when its
+        last activity (``updated_at``) is older than ``ttl_seconds``. Expired,
+        non-legal-hold sessions are erased from disk with the same GC + fail-safe
+        plan as a user-initiated delete. Every other kind is subsumed by session
+        deletion and returns an empty tally. ``dry_run`` reports what would be
+        removed without deleting.
+        """
+
+        if kind is not RetentionKind.MESSAGES:
+            return RetentionSweepOutcome(org_id=org_id, kind=kind)
+
+        now = datetime.now(timezone.utc)
+        cutoff = now - timedelta(seconds=max(ttl_seconds, 0))
+        expired = [
+            conversation
+            for conversation in self.conversations.values()
+            if conversation.org_id == org_id and conversation.updated_at <= cutoff
+        ]
+        outcome = await self._purge_conversations(
+            org_id=org_id,
+            conversations=expired,
+            trigger=_DeletionFields.TRIGGER_RETENTION_SWEEP,
+            reason=f"retention:{kind.value}",
+            now=now,
+            dry_run=dry_run,
+        )
         return RetentionSweepOutcome(
-            org_id=org_id, kind=kind, tombstoned=0, deleted=0, skipped_legal_hold=0
+            org_id=org_id,
+            kind=kind,
+            tombstoned=0,
+            deleted=outcome.conversations,
+            skipped_legal_hold=outcome.skipped_legal_hold,
         )
 
     async def insert_retention_deletion_evidence(self, record) -> None:
