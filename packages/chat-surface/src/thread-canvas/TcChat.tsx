@@ -85,6 +85,45 @@ export interface TcChatMessagesResponse {
   readonly messages: ReadonlyArray<TcChatMessage>;
 }
 
+// The facade returns messages in the wire shape (`content_text` + `content`
+// blocks + `created_at`), NOT the presentational `{ parts }` shape this
+// component renders. Normalize each fetched message into a `TcChatMessage` with
+// a single text part so `renderMessage` never maps over an undefined `parts`.
+// A message that already arrives with `parts` (a test fixture, or a future
+// endpoint) is passed through untouched.
+interface ApiChatMessage {
+  readonly message_id: string;
+  readonly role: TcChatMessage["role"];
+  readonly content_text?: string | null;
+  readonly created_at?: string | null;
+  readonly parts?: ReadonlyArray<TcChatMessagePart>;
+  readonly created_at_ms?: number;
+}
+interface ApiChatMessagesResponse {
+  readonly messages?: ReadonlyArray<ApiChatMessage>;
+}
+function toTcChatMessage(message: ApiChatMessage): TcChatMessage {
+  if (Array.isArray(message.parts)) {
+    return {
+      message_id: message.message_id,
+      role: message.role,
+      parts: message.parts,
+      ...(message.created_at_ms != null
+        ? { created_at_ms: message.created_at_ms }
+        : {}),
+    };
+  }
+  const text = message.content_text ?? "";
+  const createdAt =
+    message.created_at != null ? Date.parse(message.created_at) : Number.NaN;
+  return {
+    message_id: message.message_id,
+    role: message.role,
+    parts: text.length > 0 ? [{ type: "text", text }] : [],
+    ...(Number.isNaN(createdAt) ? {} : { created_at_ms: createdAt }),
+  };
+}
+
 export interface TcChatProps {
   readonly conversationId: string;
   readonly mode: TcChatMode;
@@ -154,15 +193,18 @@ export function TcChat(props: TcChatProps): ReactElement {
     let cancelled = false;
     setState({ status: "loading" });
     transport
-      .request<TcChatMessagesResponse>({
+      .request<ApiChatMessagesResponse>({
         method: "GET",
-        path: `/v1/conversations/${conversationId}/messages`,
+        path: `/v1/agent/conversations/${conversationId}/messages`,
       })
       .then((res) => {
         if (cancelled) {
           return;
         }
-        setState({ status: "ready", messages: res.messages ?? [] });
+        setState({
+          status: "ready",
+          messages: (res.messages ?? []).map(toTcChatMessage),
+        });
       })
       .catch(() => {
         if (cancelled) {
@@ -429,7 +471,7 @@ function renderMessage(
       data-testid={`tc-chat-message-${m.message_id}`}
       data-role={m.role}
     >
-      {m.parts.map((part, idx) => {
+      {(m.parts ?? []).map((part, idx) => {
         const status: MessagePartStatus = part.status ?? {
           type: "complete",
         };
