@@ -48,6 +48,11 @@ export { CapabilityService } from "./service";
 export { CapabilityBroker, CAPABILITY_BROKER_PROTOCOL } from "./broker";
 export { GrantStore } from "./grant-store";
 export {
+  RunContextStore,
+  type RunCapabilityContext,
+  type RunContextStoreConfig,
+} from "./run-context";
+export {
   HostFs,
   defaultHostFsDeps,
   type HostFsDeps,
@@ -107,4 +112,9 @@ export {
   type HostGlobResult,
   type HostGrepHit,
   type HostGrepResult,
+  type HostWriteResult,
+  type HostEditResult,
+  type HostMkdirResult,
+  type HostDeleteResult,
+  type HostMoveResult,
 } from "./types";

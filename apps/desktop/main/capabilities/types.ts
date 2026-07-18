@@ -202,3 +202,49 @@ export interface HostGrepResult {
   readonly truncated: boolean;
   readonly filesScanned: number;
 }
+
+// ---------------------------------------------------------------------------
+// SLICE 3 — filesystem WRITE operations contract (implemented in `host-fs.ts`,
+// exposed over the authenticated loopback broker). Every result carries VIRTUAL
+// (root-relative, POSIX) paths only — never a host absolute path. Writes are
+// gated on grant MODE (see `MODE_RANK`): write/edit/mkdir need
+// `read_write_no_delete`; delete/move need `read_write`. Every write goes
+// through the SAME resolve-before-authorize + atomic-open validation pipeline
+// as the reads, and file replacements are atomic (temp-in-same-dir → fsync →
+// rename), so a mutation is all-or-nothing.
+// ---------------------------------------------------------------------------
+
+/** Result of `write` (create-or-overwrite a regular file). */
+export interface HostWriteResult {
+  /** Virtual (root-relative, POSIX) path written. */
+  readonly path: string;
+  readonly bytesWritten: number;
+  /** True when the file did not previously exist (created), false on overwrite. */
+  readonly created: boolean;
+}
+
+/** Result of `edit` (atomic full-content replacement of an EXISTING file). */
+export interface HostEditResult {
+  readonly path: string;
+  readonly bytesWritten: number;
+}
+
+/** Result of `mkdir` (create a single directory whose parent already exists). */
+export interface HostMkdirResult {
+  readonly path: string;
+  /** True when the directory was created, false when it already existed. */
+  readonly created: boolean;
+}
+
+/** Result of `delete` (unlink a file or rmdir an EMPTY directory). */
+export interface HostDeleteResult {
+  readonly path: string;
+  readonly type: "file" | "dir";
+}
+
+/** Result of `move`/`rename` within a single grant tree. */
+export interface HostMoveResult {
+  readonly from: string;
+  readonly to: string;
+  readonly type: "file" | "dir";
+}
