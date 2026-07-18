@@ -32,6 +32,7 @@ export type { PopoverContentProps, PopoverProps } from "./popover";
 export type ThemeScheme = "dark" | "light" | "slate";
 
 export type AccentScheme =
+  | "sky"
   | "atlas-orange"
   | "gold"
   | "amber"
@@ -46,6 +47,7 @@ export const ACCENT_SCHEMES: ReadonlyArray<{
   label: string;
   swatch: string;
 }> = [
+  { id: "sky", label: "Sky", swatch: "#5fb2ec" },
   { id: "atlas-orange", label: "Atlas orange", swatch: "#d97757" },
   { id: "gold", label: "Gold", swatch: "#d8b46a" },
   { id: "amber", label: "Amber", swatch: "#f0b450" },
@@ -68,7 +70,7 @@ const ThemeContext = createContext<ThemeContextValue | null>(null);
 const STORAGE_KEY_THEME = "0x-copilot-theme";
 const STORAGE_KEY_ACCENT = "0x-copilot-accent";
 const DEFAULT_SCHEME: ThemeScheme = "dark";
-const DEFAULT_ACCENT: AccentScheme = "atlas-orange";
+const DEFAULT_ACCENT: AccentScheme = "sky";
 
 export function ThemeProvider({
   children,

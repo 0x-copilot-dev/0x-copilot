@@ -2851,6 +2851,7 @@ export type UserProfileTheme = "system" | "light" | "dark" | "slate";
 
 /** Mirrors `ACCENT_SCHEMES` in `@0x-copilot/design-system`. */
 export type UserProfileAccent =
+  | "sky"
   | "atlas-orange"
   | "gold"
   | "amber"

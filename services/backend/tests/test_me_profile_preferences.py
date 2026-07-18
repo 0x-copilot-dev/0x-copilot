@@ -191,7 +191,7 @@ class TestGetPreferences:
         # Defaults match the design's notification matrix: mention email+desktop;
         # approval email+desktop; run_finished desktop only; weekly_digest email.
         assert body["appearance"]["theme"] == "dark"
-        assert body["appearance"]["accent"] == "atlas-orange"
+        assert body["appearance"]["accent"] == "sky"
         assert body["appearance"]["density"] == "comfortable"
         assert body["appearance"]["reduce_motion"] == "auto"
         matrix = body["notifications"]["matrix"]
