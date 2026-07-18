@@ -1020,3 +1020,21 @@ export {
   type UseRunModeResult,
 } from "./destinations/run/useRunMode";
 // === end Phase 3 (PR-3.4) ===
+
+// === Phase 4 (PR-4.9) — Skills destination (skill catalog) ===
+// Presentational card grid of saved multi-step workflows (`/v1/skills`):
+// name, description sub, `N runs`, Run / Edit per card + a "New skill"
+// header action. Controlled by `SectionResult<SkillSummary[]> | null` with
+// the 4-state machine. The redesigned Skills slug — NOT the MCP
+// tool-integration catalog (`tools/`), which the PRD supersedes for this
+// slug. Host binding (fetch + Run/Edit/New wiring) lands in PR-4.10.
+export {
+  SkillsDestination,
+  SkillCard,
+  runCountLabel,
+  SKILLS_SUBTITLE_COPY,
+  SKILLS_EMPTY_TITLE,
+  type SkillsDestinationProps,
+  type SkillCardProps,
+} from "./destinations/skills";
+// === end Phase 4 (PR-4.9) ===
