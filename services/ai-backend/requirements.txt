@@ -85,6 +85,10 @@ pyasn1==0.6.4
 pyasn1_modules==0.4.2
 pycparser==3.0
 pydantic==2.13.4
+# AC6 Monty code mode — embedded Python-subset interpreter. Experimental; the
+# feature is gated OFF by default (RUNTIME_ENABLE_MONTY). Only the Monty adapter
+# imports it, lazily, behind the InterpreterPort.
+pydantic-monty==0.0.18
 pydantic-settings==2.14.2
 pydantic_core==2.46.4
 Pygments==2.20.0
