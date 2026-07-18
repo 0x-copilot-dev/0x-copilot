@@ -20,6 +20,7 @@ import os
 
 from pydantic import BaseModel, ConfigDict, Field
 
+from runtime_adapters.file._capacity import QuotaGuard
 from runtime_adapters.file._paths import FileStoreLayout
 
 
@@ -48,8 +49,12 @@ class ObjectRef(BaseModel):
 class FileObjectStore:
     """Atomic, verify-on-read content-addressed store under one root."""
 
-    def __init__(self, layout: FileStoreLayout) -> None:
+    def __init__(
+        self, layout: FileStoreLayout, *, quota: QuotaGuard | None = None
+    ) -> None:
         self._layout = layout
+        # Unlimited by default: an omitted guard behaves exactly as before.
+        self._quota = quota if quota is not None else QuotaGuard(layout)
 
     def put(
         self,
@@ -67,6 +72,10 @@ class FileObjectStore:
         digest = hashlib.sha256(data).hexdigest()
         target = self._layout.object_path(digest)
         if not target.exists():
+            # Fail closed BEFORE writing a byte: a rejected admission leaves no
+            # partial blob and no lingering .tmp sibling. Idempotent re-puts of
+            # an already-stored digest never reach here, so they are exempt.
+            self._quota.admit(len(data))
             FileStoreLayout.ensure_dir(target.parent)
             tmp = target.with_name(target.name + ".tmp")
             with open(tmp, "wb") as handle:

@@ -60,6 +60,9 @@ pythonpath = [
     "../../packages/audit-chain/src",
 ]
 asyncio_mode = "auto"
+markers = [
+    "postgres: conformance/integration case that requires a live PostgreSQL database (skipped by default in CI).",
+]
 
 [tool.basedpyright]
 include = ["src", "tests"]

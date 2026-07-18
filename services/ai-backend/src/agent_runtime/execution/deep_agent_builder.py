@@ -136,6 +136,35 @@ WORKSPACE_WRITE_GUIDANCE = (
     "edits minimal, and prefer `/drafts/` for brand-new authored content. "
     "Read-only mounts refuse writes."
 )
+# Appended to the supervisor system prompt ONLY when the gated ``run_code_mode``
+# tool is present for the run (AC6 Monty, ``RUNTIME_ENABLE_MONTY`` +
+# ``single_user_desktop``). Off that path the tool is absent and this block is
+# omitted, so the prompt is unchanged. Code mode ships pure-compute for now:
+# calculation / transformation only, with NO tool-calling from inside the
+# interpreter (external functions are unavailable until the direct-path
+# tool-policy engine lands), so the guidance must not promise tool access.
+CODE_MODE_GUIDANCE = (
+    "You have a `run_code_mode` tool that runs a small program in a sandboxed "
+    "Python subset — no filesystem, network, or imports. Use it for exact "
+    "calculation, data transformation, parsing, branching, and repeated "
+    "arithmetic where doing the math yourself would be error-prone. It is "
+    "calculation/transformation ONLY right now: it cannot call other tools, read "
+    "files, or reach the network, so do not declare `external_functions`. Pass "
+    "your data via `inputs` and return the result as JSON."
+)
+# Appended to the supervisor system prompt ONLY when the gated ``run_in_sandbox``
+# tool is present (AC7, ``RUNTIME_ENABLE_REMOTE_SANDBOX`` + a configured provider
+# + ``single_user_desktop``). Off that path the tool is absent and this block is
+# omitted. Each call provisions a throwaway remote sandbox and destroys it after,
+# so nothing persists between calls and nothing is shared with local files.
+SANDBOX_EXECUTE_GUIDANCE = (
+    "You have a `run_in_sandbox` tool that runs a single shell command in an "
+    "isolated, network-restricted remote sandbox and returns its output and exit "
+    "code. Each call gets a fresh sandbox that is destroyed immediately after, so "
+    "no state carries between calls and it CANNOT see the user's files. Use it "
+    "for one-shot scripts or CLI tools that need a real shell; to read or write "
+    "the user's files, use the filesystem tools instead."
+)
 _web_harness_profiles_registered = False
 _runtime_checkpointer: object | None = None
 

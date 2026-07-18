@@ -18,13 +18,19 @@ import {
 } from "./protocol";
 import type { BrowserSession } from "./browser-session";
 import type { BrowserWorkerPort } from "./browser-broker";
-import { BROWSER_TOOL_SCHEMAS, type BrowserToolSchema } from "./tool-schemas";
+import { browserToolSchemas, type BrowserToolSchema } from "./tool-schemas";
 
 export interface SessionWorkerPortConfig {
   /** Build (and open) a session for a run binding. Main supplies profile paths. */
   readonly createSession: (
     binding: BrowserActionRequest["binding"],
   ) => Promise<BrowserSession>;
+  /**
+   * Advertise the side-effecting action tools. Only set true when the injected
+   * sessions are composed with an approval authority; otherwise the action
+   * tools are hidden and the read-only surface is advertised. Default false.
+   */
+  readonly includeActionTools?: boolean;
 }
 
 export class SessionWorkerPort implements BrowserWorkerPort {
@@ -36,7 +42,9 @@ export class SessionWorkerPort implements BrowserWorkerPort {
   }
 
   listTools(): Promise<readonly BrowserToolSchema[]> {
-    return Promise.resolve(BROWSER_TOOL_SCHEMAS);
+    return Promise.resolve(
+      browserToolSchemas({ includeActions: this.#cfg.includeActionTools }),
+    );
   }
 
   async dispatch(request: BrowserActionRequest): Promise<BrowserActionResult> {

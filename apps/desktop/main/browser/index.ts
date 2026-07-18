@@ -32,7 +32,25 @@ export {
   type ProfileManifest,
   type ProfileFsPort,
 } from "./profile-store";
-export { StagingArea, type StagingFsPort } from "./staging";
+export {
+  StagingArea,
+  type StagingFsPort,
+  type StagedArtifact,
+  type StagedKind,
+} from "./staging";
+export {
+  sanitizeDownloadName,
+  downloadExtension,
+  evaluateDownloadPolicy,
+  sha256Hex,
+  type DownloadPolicyDecision,
+} from "./downloads";
+export {
+  BrowserApprovalDecision,
+  toolRequiresApproval,
+  type BrowserApprovalPort,
+  type BrowserApprovalRequest,
+} from "./action-policy";
 export { BrowserSession, type BrowserSessionConfig } from "./browser-session";
 export {
   BrowserWorkerSupervisor,
@@ -50,12 +68,19 @@ export {
   SessionWorkerPort,
   type SessionWorkerPortConfig,
 } from "./session-worker-port";
-export { BROWSER_TOOL_SCHEMAS, type BrowserToolSchema } from "./tool-schemas";
+export {
+  BROWSER_TOOL_SCHEMAS,
+  BROWSER_ACTION_TOOL_SCHEMAS,
+  browserToolSchemas,
+  type BrowserToolSchema,
+} from "./tool-schemas";
 export {
   createPlaywrightEngine,
   type BrowserEngine,
   type EngineContext,
   type EnginePage,
+  type ElementTarget,
+  type DownloadCapture,
   type RawAxNode,
 } from "./browser-engine";
 
@@ -83,9 +108,16 @@ export function buildDesktopBrowserSubsystem(deps: {
   readonly createSession: (
     binding: BrowserActionRequest["binding"],
   ) => Promise<BrowserSession>;
+  /**
+   * Advertise the side-effecting action layer. Only pass true when
+   * `createSession` composes sessions with an approval authority. Default false
+   * keeps the read-only surface.
+   */
+  readonly includeActionTools?: boolean;
 }): DesktopBrowserSubsystem {
   const workerPort = new SessionWorkerPort({
     createSession: deps.createSession,
+    includeActionTools: deps.includeActionTools,
   });
   const broker = new BrowserBroker({ worker: workerPort });
   return {

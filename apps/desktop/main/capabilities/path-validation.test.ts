@@ -7,6 +7,8 @@ import {
   FsError,
   modeSatisfies,
   normalizeVirtualPath,
+  segmentIsSensitiveDir,
+  virtualPathTraversesSensitiveDir,
 } from "./path-validation";
 
 // Control / confusable codepoints are spelled with \u escapes so NO literal
@@ -178,5 +180,43 @@ describe("modeSatisfies (fail-closed grant gate)", () => {
   it("an unknown mode never satisfies anything (fail closed)", () => {
     expect(modeSatisfies("read_only", "bogus")).toBe(false);
     expect(modeSatisfies("bogus", "read_write")).toBe(false);
+  });
+});
+
+describe("virtualPathTraversesSensitiveDir (G2, nested credential dirs)", () => {
+  it("flags any segment naming a well-known credential directory", () => {
+    expect(virtualPathTraversesSensitiveDir([".ssh"])).toBe(true);
+    expect(virtualPathTraversesSensitiveDir(["a", ".aws", "config"])).toBe(
+      true,
+    );
+    expect(virtualPathTraversesSensitiveDir(["a", ".gnupg", "x.gpg"])).toBe(
+      true,
+    );
+    expect(virtualPathTraversesSensitiveDir(["Library", "Keychains"])).toBe(
+      true,
+    );
+  });
+  it("is case-insensitive (host fs may be case-insensitive)", () => {
+    expect(virtualPathTraversesSensitiveDir([".SSH"])).toBe(true);
+    expect(virtualPathTraversesSensitiveDir(["a", ".AWS"])).toBe(true);
+  });
+  it("allows ordinary paths that merely resemble a credential dir", () => {
+    expect(virtualPathTraversesSensitiveDir([])).toBe(false);
+    expect(virtualPathTraversesSensitiveDir(["src", "notes.txt"])).toBe(false);
+    // Substring, not a whole segment — not a credential directory.
+    expect(virtualPathTraversesSensitiveDir(["my.ssh-notes"])).toBe(false);
+    expect(virtualPathTraversesSensitiveDir(["sshconfig"])).toBe(false);
+  });
+});
+
+describe("segmentIsSensitiveDir (single leaf name)", () => {
+  it("matches a credential dir leaf, case-insensitively", () => {
+    expect(segmentIsSensitiveDir(".ssh")).toBe(true);
+    expect(segmentIsSensitiveDir(".AWS")).toBe(true);
+    expect(segmentIsSensitiveDir("keychains")).toBe(true);
+  });
+  it("does not match ordinary names", () => {
+    expect(segmentIsSensitiveDir("src")).toBe(false);
+    expect(segmentIsSensitiveDir("ssh")).toBe(false);
   });
 });

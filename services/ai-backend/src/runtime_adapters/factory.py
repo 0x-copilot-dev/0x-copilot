@@ -84,7 +84,11 @@ def _build_file_ports(settings: RuntimeSettings) -> "RuntimePorts":
     from runtime_adapters.in_memory.source_store import InMemorySourceStore
     from runtime_adapters.in_memory.subagent_store import InMemorySubagentStore
 
-    file_store = FileRuntimeApiStore(root)
+    file_store = FileRuntimeApiStore(
+        root,
+        max_bytes=settings.store.file_store_max_bytes,
+        retention_days=settings.store.file_store_retention_days,
+    )
     layout = file_store.layout
     citation_store = FileCitationStore(layout)
     return RuntimePorts(

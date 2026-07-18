@@ -2,17 +2,23 @@ import { contextBridge, ipcRenderer, type IpcRendererEvent } from "electron";
 
 import { CHANNELS, isAllowedChannel } from "@0x-copilot/chat-transport";
 
-// Capability channels (AC5) are app-local, not part of the chat-transport
-// package, so they extend the allowlist here. `channels.ts` is a
-// dependency-free constants module — safe to bundle into the preload sandbox.
+// Capability channels (AC5) and connector channels (AC9) are app-local, not
+// part of the chat-transport package, so they extend the allowlist here. Both
+// `channels.ts` modules are dependency-free constants — safe to bundle into the
+// preload sandbox.
 import { isCapabilityChannel } from "../main/capabilities/channels";
+import { isConnectorChannel } from "../main/connectors/channels";
 
 import type { WindowBridge } from "./window-bridge-types";
 
 // The full set of channels the renderer may reach over the bridge: the shared
-// transport/auth channels plus the app-local capability channels.
+// transport/auth channels plus the app-local capability + connector channels.
 function isBridgeChannel(channel: string): boolean {
-  return isAllowedChannel(channel) || isCapabilityChannel(channel);
+  return (
+    isAllowedChannel(channel) ||
+    isCapabilityChannel(channel) ||
+    isConnectorChannel(channel)
+  );
 }
 
 type IpcHandler = (payload: unknown) => void;

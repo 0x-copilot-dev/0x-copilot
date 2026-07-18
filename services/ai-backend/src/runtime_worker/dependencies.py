@@ -131,15 +131,42 @@ class DefaultRuntimeDependenciesFactory:
                 inner=CitationCapturingRegistry(inner=WebSearchToolRegistry())
             )
         )
+        # Single gate read per run: on the desktop file store this returns the
+        # wiring that persists memory / skills / subagent defs as files; on the
+        # web / postgres / in-memory images it is ``None`` and every branch below
+        # falls back to the prior behavior byte-identically.
+        file_agent_wiring = self._file_agent_wiring()
         return RuntimeDependencies(
             tool_registry=tool_registry,
             mcp_registry=mcp_registry,
-            skill_source_config=self._skill_source_config(),
+            skill_source_config=self._skill_source_config(file_agent_wiring),
             skill_registry=self._skill_registry(_context),
-            memory_backend_factory=ScopedMemoryBackendFactory(),
-            subagent_catalog=EmptySubagentCatalog(),
+            memory_backend_factory=self._memory_backend_factory(file_agent_wiring),
+            subagent_catalog=self._subagent_catalog(file_agent_wiring),
             mcp_discovery_cache=self.mcp_discovery_cache,
         )
+
+    @staticmethod
+    def _file_agent_wiring() -> object | None:
+        """Return the file-store agent-state wiring when active, else ``None``.
+
+        The env gate (``RUNTIME_STORE_BACKEND=file`` + ``RUNTIME_FILE_STORE_ROOT``)
+        is read cheaply first so the desktop-only file adapter — and its deep
+        agent / object-store imports — is never loaded on the web/postgres images.
+        """
+
+        import os  # noqa: PLC0415
+
+        backend = os.environ.get("RUNTIME_STORE_BACKEND", "").strip().lower()
+        root = os.environ.get("RUNTIME_FILE_STORE_ROOT", "").strip()
+        if backend != "file" or not root:
+            return None
+        from runtime_adapters.file.agent_state_store import (  # noqa: PLC0415
+            FileAgentStateWiring,
+        )
+
+        wiring = FileAgentStateWiring()
+        return wiring if wiring.active else None
 
     @classmethod
     def build_default_discovery_cache(cls) -> McpDiscoveryCache:
@@ -179,14 +206,60 @@ class DefaultRuntimeDependenciesFactory:
             max_entries=_positive_int("RUNTIME_MCP_DISCOVERY_CACHE_MAX_ENTRIES", 1000),
         )
 
-    def _skill_source_config(self) -> SkillSourceConfig:
-        """Return a ``SkillSourceConfig`` that includes the built-in skills directory, if it exists."""
+    def _skill_source_config(
+        self, file_agent_wiring: object | None = None
+    ) -> SkillSourceConfig:
+        """Return a ``SkillSourceConfig`` combining built-in and file-store skills.
 
-        if not BUILTIN_SKILLS_ROOT.is_dir():
-            return SkillSourceConfig()
-        return SkillSourceConfig(
-            sources=(SkillSource(path=BUILTIN_SKILLS_ROOT, precedence=0),),
+        The built-in wheel skills stay at precedence 0. When the desktop file
+        store is active, its ``skills/`` root is added at a higher precedence so
+        user-authored / hand-dropped skills override a wheel skill of the same
+        name (last source wins). Off the file store the behavior is unchanged.
+        """
+
+        sources: list[SkillSource] = []
+        if BUILTIN_SKILLS_ROOT.is_dir():
+            sources.append(SkillSource(path=BUILTIN_SKILLS_ROOT, precedence=0))
+        if file_agent_wiring is not None:
+            skills_root = file_agent_wiring.skills_root()
+            if skills_root is not None:
+                sources.append(SkillSource(path=skills_root, precedence=1))
+        return SkillSourceConfig(sources=tuple(sources))
+
+    @staticmethod
+    def _memory_backend_factory(file_agent_wiring: object | None = None) -> object:
+        """Return the memory backend factory, file-backed when the store is active.
+
+        On the file store the factory's ``backend_builder`` yields per-route
+        :class:`FileMemoryBackend` instances so memory persists as inspectable
+        JSON + ``.md`` files. Off the file store it is the plain route-plan
+        factory, byte-identical to before.
+        """
+
+        if file_agent_wiring is None:
+            return ScopedMemoryBackendFactory()
+        return ScopedMemoryBackendFactory(
+            backend_builder=file_agent_wiring.memory_backend_builder()
         )
+
+    @staticmethod
+    def _subagent_catalog(file_agent_wiring: object | None = None) -> object:
+        """Return the subagent catalog, file-backed when the store is active.
+
+        On the file store, subagent definitions are loaded from
+        ``subagent_defs/*.json`` through the standard dynamic catalog (same
+        permission-visibility + duplicate-name checks). Off the file store it is
+        the empty catalog, unchanged.
+        """
+
+        if file_agent_wiring is None:
+            return EmptySubagentCatalog()
+        from agent_runtime.delegation.subagents.definitions import (  # noqa: PLC0415
+            DynamicSubagentCatalog,
+        )
+
+        provider = file_agent_wiring.subagent_definition_provider()
+        return DynamicSubagentCatalog(providers=(provider,))
 
     def _validate_capability_mode(self, context: AgentRuntimeContext) -> None:
         """Raise ``AgentRuntimeError`` in production when no capability source is configured."""
@@ -208,15 +281,61 @@ class DefaultRuntimeDependenciesFactory:
         )
 
     def _mcp_registry(self, context: AgentRuntimeContext) -> object:
-        """Return a ``DynamicMcpRegistry`` backed by the backend provider, or an ``EmptyMcpRegistry`` if unconfigured."""
-        if self.settings.mcp.backend_registry_url is None:
+        """Compose the backend SaaS provider with the gated desktop-browser provider.
+
+        The backend SaaS provider is present only when an MCP backend URL is
+        configured. The device-local browser provider (AC8) is composed
+        alongside it — WITHOUT a duplicate name — only when
+        ``RUNTIME_ENABLE_DESKTOP_BROWSER`` + ``single_user_desktop`` + a browser
+        broker URL/token are all present (``build_browser_mcp`` fails closed
+        otherwise). With no providers at all, an ``EmptyMcpRegistry`` is returned
+        so non-desktop / unconfigured images are byte-identical.
+        """
+        providers: list[object] = []
+        if self.settings.mcp.backend_registry_url is not None:
+            providers.append(
+                BackendMcpProvider(
+                    backend_url=self.settings.mcp.backend_registry_url,
+                    runtime_context=context,
+                    auth_redirect_uri=self.settings.mcp.auth_redirect_uri,
+                )
+            )
+        browser_provider = self._browser_provider(context)
+        if browser_provider is not None:
+            providers.append(browser_provider)
+        if not providers:
             return EmptyMcpRegistry()
-        provider = BackendMcpProvider(
-            backend_url=self.settings.mcp.backend_registry_url,
-            runtime_context=context,
-            auth_redirect_uri=self.settings.mcp.auth_redirect_uri,
+        return DynamicMcpRegistry(providers=tuple(providers))
+
+    def _browser_provider(self, context: AgentRuntimeContext) -> object | None:
+        """Build the gated device-local browser MCP provider, or ``None``.
+
+        Gated OFF by default: the ``build_browser_mcp`` seam returns ``None``
+        unless the browser flag is truthy, the deployment profile is
+        ``single_user_desktop``, and the browser broker URL + token are set. All
+        signals come from the trusted desktop service environment; off desktop
+        the vars are absent and no card ever appears.
+        """
+        import os  # noqa: PLC0415
+
+        from agent_runtime.capabilities.browser.constants import (  # noqa: PLC0415
+            BrowserEnv,
         )
-        return DynamicMcpRegistry(providers=(provider,))
+        from agent_runtime.capabilities.browser.desktop_browser_provider import (  # noqa: PLC0415
+            BrowserMcpConfig,
+            build_browser_mcp,
+        )
+
+        env = os.environ
+        return build_browser_mcp(
+            BrowserMcpConfig(
+                enabled=BrowserEnv.is_enabled(env.get(BrowserEnv.FLAG)),
+                deployment_profile=env.get("ENTERPRISE_DEPLOYMENT_PROFILE", ""),
+                broker_url=env.get(BrowserEnv.BROKER_URL) or None,
+                broker_token=env.get(BrowserEnv.BROKER_TOKEN) or None,
+                runtime_context=context,
+            )
+        )
 
     def _skill_registry(self, context: AgentRuntimeContext) -> object | None:
         """Return a ``VirtualSkillRegistry`` backed by the backend provider, or ``None`` if unconfigured."""

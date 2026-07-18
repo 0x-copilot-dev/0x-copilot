@@ -944,6 +944,24 @@ class RuntimeRunHandler:
             update["prior_tool_result_loader"] = PriorToolResultLoader(
                 tool_observation_index
             )
+        # Gated Wave-1 capability tools (Monty code mode, remote sandbox
+        # execute). Each is built only when its flag+desktop gate holds and is
+        # `None` (unset) otherwise, so non-desktop / disabled runs are
+        # byte-identical. The file store backs Monty's snapshot/result stores.
+        from runtime_worker.capability_tool_wiring import (  # noqa: PLC0415
+            CapabilityToolWiring,
+        )
+
+        capability_tools = CapabilityToolWiring(
+            runtime_context=command.runtime_context,
+            file_store=self._file_backend_store(),
+        )
+        code_mode_tool = capability_tools.code_mode_tool()
+        if code_mode_tool is not None:
+            update["code_mode_tool"] = code_mode_tool
+        sandbox_execute_tool = capability_tools.sandbox_execute_tool()
+        if sandbox_execute_tool is not None:
+            update["sandbox_execute_tool"] = sandbox_execute_tool
         return dependencies.model_copy(update=update)
 
     def _draft_event_emitter(

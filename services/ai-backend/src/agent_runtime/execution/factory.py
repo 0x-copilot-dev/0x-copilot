@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import asyncio
-from collections.abc import Callable, Sequence
+from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass
 from typing import Any, Final
 
@@ -22,6 +22,8 @@ from agent_runtime.execution.provider_kwargs import (
     workspace_model_kwargs,
 )
 from agent_runtime.execution.deep_agent_builder import (
+    CODE_MODE_GUIDANCE,
+    SANDBOX_EXECUTE_GUIDANCE,
     WORKSPACE_ACCESS_GUIDANCE,
     WORKSPACE_WRITE_GUIDANCE,
     DeepAgentBuildRequest,
@@ -199,6 +201,7 @@ async def _assemble_harness(
         drafts_backend=runtime_dependencies.drafts_backend,
         large_tool_results_backend=runtime_dependencies.large_tool_results_backend,
         workspace_backend=workspace_backend,
+        memory_routes=_file_memory_routes(memory_backend),
     )
 
     try:
@@ -208,21 +211,28 @@ async def _assemble_harness(
             skill_registry=runtime_dependencies.skill_registry,
             prior_tool_result_loader=runtime_dependencies.prior_tool_result_loader,
             mcp_discovery_cache=runtime_dependencies.mcp_discovery_cache,
+            code_mode_tool=runtime_dependencies.code_mode_tool,
+            sandbox_execute_tool=runtime_dependencies.sandbox_execute_tool,
             runtime_context=runtime_context,
         )
-        model_instructions = _instructions_with_workspace(
-            instructions=_instructions_with_suggested_connectors(
-                instructions=_instructions_with_skill_cards(
-                    instructions=_instructions_with_mcp_cards(
-                        instructions=instructions,
-                        mcp_servers=mcp_servers,
+        model_instructions = _instructions_with_capability_tools(
+            instructions=_instructions_with_workspace(
+                instructions=_instructions_with_suggested_connectors(
+                    instructions=_instructions_with_skill_cards(
+                        instructions=_instructions_with_mcp_cards(
+                            instructions=instructions,
+                            mcp_servers=mcp_servers,
+                        ),
+                        skill_cards=skill_cards,
                     ),
-                    skill_cards=skill_cards,
+                    suggestions=runtime_context.suggested_connectors,
                 ),
-                suggestions=runtime_context.suggested_connectors,
+                workspace_active=workspace_backend is not None,
+                workspace_writable=workspace_writable,
             ),
-            workspace_active=workspace_backend is not None,
-            workspace_writable=workspace_writable,
+            code_mode_active=runtime_dependencies.code_mode_tool is not None,
+            sandbox_execute_active=runtime_dependencies.sandbox_execute_tool
+            is not None,
         )
         # Compute workspace-policy kwargs (e.g. training opt-out provider
         # headers) once per build and thread them through every
@@ -305,6 +315,8 @@ def _model_visible_tools(
     skill_registry: object | None,
     prior_tool_result_loader: object | None,
     mcp_discovery_cache: object | None,
+    code_mode_tool: object | None = None,
+    sandbox_execute_tool: object | None = None,
     runtime_context: AgentRuntimeContext,
 ) -> tuple[object, ...]:
     model_tools = list(tools)
@@ -390,6 +402,14 @@ def _model_visible_tools(
             SuggestMcpConnectorInput,
         )
     )
+    # Gated Wave-1 capability tools. Each is a fully-built ``StructuredTool``
+    # (constructed per run by the worker) or ``None`` when its flag+desktop gate
+    # is off. Appended last so they receive the SAME tool-policy / approval /
+    # budget middleware every other model tool does — they are not privileged.
+    if code_mode_tool is not None:
+        model_tools.append(code_mode_tool)
+    if sandbox_execute_tool is not None:
+        model_tools.append(sandbox_execute_tool)
     return tuple(model_tools)
 
 
@@ -637,11 +657,13 @@ def _composed_deep_backend(
     drafts_backend: object | None = None,
     large_tool_results_backend: object | None = None,
     workspace_backend: object | None = None,
+    memory_routes: Mapping[str, object] | None = None,
 ) -> object | None:
     """Wrap optional Atlas-specific backends in a deepagents ``CompositeBackend``.
 
     ``CompositeBackend`` routes paths to per-prefix backends and falls back to
-    a default. We register up to four prefixes:
+    a default. We register up to four Atlas prefixes plus the file-native
+    memory routes:
 
     - ``/subagents/`` → read-only subagent execution trace. On the desktop file
       store this is a file-native reader over the canonical per-subagent JSONL;
@@ -659,9 +681,17 @@ def _composed_deep_backend(
       broker is configured and the run has at least one active grant; ``None``
       (unrouted) everywhere else, so those paths stay on the ``StateBackend``
       default exactly as before.
+    - ``memory_routes`` → the file-native memory prefixes
+      (``/memories/`` · ``/policies/`` · ``/skills/``) produced by
+      :class:`~runtime_adapters.file.FileMemoryBackendFactory` when the desktop
+      file store is active. Mounting them here makes the agent's built-in
+      ``read_file`` / ``write_file`` / ``edit_file`` on those paths persist as
+      inspectable ``memory/<scope>/<key>.json`` (+ human ``.md``) files instead
+      of the ephemeral ``StateBackend``. ``None`` off the file store, so those
+      paths stay on the ``StateBackend`` default exactly as before.
 
-    Other FS paths (``/memories/``, ``/skills/``, …) stay on deepagents'
-    ``StateBackend`` default.
+    Any FS path not routed above (and, off the file store, ``/memories/`` &c.)
+    stays on deepagents' ``StateBackend`` default.
     """
 
     routes: dict[str, object] = {}
@@ -677,12 +707,40 @@ def _composed_deep_backend(
         from agent_runtime.capabilities.desktop import ROUTE_PREFIX  # noqa: PLC0415
 
         routes[ROUTE_PREFIX] = workspace_backend
+    if memory_routes:
+        # The FileMemoryBackendFactory owns which memory prefixes exist for the
+        # run, so we mount exactly what it produced rather than hard-coding the
+        # prefix list here — wiring and route planning cannot drift.
+        routes.update(memory_routes)
     if not routes:
         return None
     from deepagents.backends.composite import CompositeBackend
     from deepagents.backends.state import StateBackend
 
     return CompositeBackend(default=StateBackend(), routes=routes)
+
+
+def _file_memory_routes(memory_backend: object) -> Mapping[str, object] | None:
+    """Return the ``{path_prefix: FileMemoryBackend}`` map when the file store is active.
+
+    ``ScopedMemoryBackendFactory.create`` returns a
+    :class:`~agent_runtime.context.memory.backends.MemoryRoutePlan` off the file
+    store (no injected ``backend_builder``) and a ``{path_prefix: FileMemoryBackend}``
+    mapping on it (its ``backend_builder`` is
+    :class:`~runtime_adapters.file.FileMemoryBackendFactory`). Only the mapping
+    form is mountable into the composite backend; every other shape — the route
+    plan, a test fake's sentinel, ``None`` — yields ``None`` here so memory keeps
+    routing to the deepagents ``StateBackend`` default exactly as before.
+    """
+
+    if not isinstance(memory_backend, Mapping) or not memory_backend:
+        return None
+    routes = {
+        prefix: backend
+        for prefix, backend in memory_backend.items()
+        if isinstance(prefix, str) and prefix and backend is not None
+    }
+    return routes or None
 
 
 def _instructions_with_workspace(
@@ -707,6 +765,30 @@ def _instructions_with_workspace(
         WORKSPACE_WRITE_GUIDANCE if workspace_writable else WORKSPACE_ACCESS_GUIDANCE
     )
     return "\n\n".join((instructions, guidance))
+
+
+def _instructions_with_capability_tools(
+    *,
+    instructions: str,
+    code_mode_active: bool,
+    sandbox_execute_active: bool,
+) -> str:
+    """Append gated Wave-1 capability-tool guidance blocks when their tools exist.
+
+    Each block is gated on the tool actually being present for the run (the
+    worker built it because its flag+desktop gate held). Off those paths the
+    tools are absent, both flags are ``False``, and the prompt is returned
+    unchanged so non-desktop / disabled runs pay no token tax.
+    """
+
+    blocks = [instructions]
+    if code_mode_active:
+        blocks.append(CODE_MODE_GUIDANCE)
+    if sandbox_execute_active:
+        blocks.append(SANDBOX_EXECUTE_GUIDANCE)
+    if len(blocks) == 1:
+        return instructions
+    return "\n\n".join(blocks)
 
 
 def _parse_context(
