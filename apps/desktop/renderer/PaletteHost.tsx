@@ -173,7 +173,10 @@ export function PaletteHost({
           {/* Sizes the shared trigger to 250px via its className (DESIGN-SPEC §1)
               without touching the shared component. */}
           <style>{TRIGGER_WIDTH_CSS}</style>
-          <CommandPaletteTrigger className={TRIGGER_CLASS} onOpen={handleOpen} />
+          <CommandPaletteTrigger
+            className={TRIGGER_CLASS}
+            onOpen={handleOpen}
+          />
         </div>
       )}
       <CommandPalette
