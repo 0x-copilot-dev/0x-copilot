@@ -698,3 +698,32 @@ export {
   type ProgressTone,
 } from "./settings";
 // === end Phase 5 (PR-5.2) ===
+
+// === Phase 5 (PR-5.1) — settings shell (nav SSOT + profile gate + router) ===
+export {
+  SettingsSurface,
+  useSettingsSurface,
+  SETTINGS_NAV_WIDTH,
+  SETTINGS_CONTENT_MAX_WIDTH,
+  SETTINGS_NAV_GROUPS,
+  SETTINGS_NAV_ITEMS,
+  DEFAULT_SETTINGS_SLUG,
+  SOLO_FOOTER_COPY,
+  settingsNavForProfile,
+  visibleSettingsSlugs,
+  isSettingsSlugVisible,
+  resolveSettingsSlug,
+  showSoloFooter,
+  settingsNavItem,
+  type SettingsSurfaceProps,
+  type SettingsSurfaceController,
+  type SettingsDirtyState,
+  type SettingsSurfaceToast,
+  type SettingsSectionSlug,
+  type SettingsNavGroupId,
+  type SettingsNavGroupView,
+  type SettingsNavIcon,
+  type SettingsNavItemModel,
+  type SettingsProfileGate,
+} from "./settings";
+// === end Phase 5 (PR-5.1) ===
