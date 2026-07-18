@@ -57,6 +57,7 @@ from runtime_api.schemas import (
 )
 from runtime_worker.audit import WorkerAuditEmitter
 from runtime_worker.dependencies import DefaultRuntimeDependenciesFactory
+from runtime_worker.file_store_wiring import FileStoreWorkerWiring
 from runtime_worker.handlers.run import RuntimeRunHandler
 from runtime_worker.run_metrics import AssistantRunMetrics
 from runtime_worker.stream_events import StreamOrchestrator
@@ -148,7 +149,18 @@ class RuntimeApprovalHandler:
         self.run_termination = RunTerminationCoordinator(
             event_producer=self.event_producer,
         )
-        self.stream_event_mapper = StreamOrchestrator(self.event_producer)
+        # Single source of truth for the desktop file-store gate shared with the
+        # run handler. On non-file backends every method returns ``None`` so the
+        # resume path stays byte-identical to before (offloader ``None`` → inline).
+        self._file_store_wiring = FileStoreWorkerWiring(self.event_store)
+        # Mirror the run handler: on the desktop file store, oversized tool
+        # output produced *after* an approval is offloaded to the object store
+        # instead of persisted inline in ``events.jsonl``. ``None`` everywhere
+        # else keeps the historical inline behavior.
+        self.stream_event_mapper = StreamOrchestrator(
+            self.event_producer,
+            tool_result_offloader=self._file_store_wiring.tool_result_offloader(),
+        )
         self.audit_emitter = WorkerAuditEmitter(persistence=self.persistence)
         # Required for draft-send approvals; absent on unit-test construction.
         # Without it, draft-send approvals skip status transitions rather than crashing.
@@ -288,7 +300,7 @@ class RuntimeApprovalHandler:
         # Bind the per-run tool display lookup and MCP descriptor registry before
         # the resumed graph starts emitting tool events. The resumed run runs in a
         # fresh async task, so the original RuntimeRunHandler bindings are gone.
-        dependencies = self.dependencies_factory(running.runtime_context)
+        dependencies = self._dependencies_for_resume(running)
         mcp_display_registry: dict[str, ToolDisplayTemplate] = {}
         mcp_display_token = McpDisplayRegistryContext.bind_for_run(mcp_display_registry)
         display_token = ToolDisplayLookupContext.bind_for_run(
@@ -421,6 +433,63 @@ class RuntimeApprovalHandler:
             run_id=run.run_id,
             store=self._conversation_tool_ordinal_store,
         )
+
+    def _dependencies_for_resume(self, run: RunRecord) -> RuntimeDependencies:
+        """Build ``RuntimeDependencies`` for a resumed run with per-run backends.
+
+        Mirrors :meth:`RuntimeRunHandler._dependencies_for_run`: the bare factory
+        output is augmented with the file-native ``/subagents/`` +
+        ``/large_tool_results/`` read backends (so a reference produced *before*
+        the pause is readable through the composed backend after resume) and the
+        persistent ``/drafts/`` backend. All are ``None``-gated on the file store
+        / draft store, so non-file backends get an empty ``model_copy`` update
+        and stay byte-identical to the previous bare-factory behavior.
+        """
+
+        dependencies = self.dependencies_factory(run.runtime_context)
+        update: dict[str, object] = {}
+        subagent_backend = self._file_store_wiring.subagent_artifacts_backend(
+            org_id=run.org_id,
+            conversation_id=run.conversation_id,
+        )
+        if subagent_backend is not None:
+            update["subagent_artifacts_backend"] = subagent_backend
+        large_tool_results_backend = (
+            self._file_store_wiring.large_tool_results_backend()
+        )
+        if large_tool_results_backend is not None:
+            update["large_tool_results_backend"] = large_tool_results_backend
+        if self._draft_store is not None:
+            # Tenant identity is bound at construction so the model cannot inject
+            # org_id via path strings when writing to /drafts/<uuid>.md.
+            from agent_runtime.capabilities.backends import (  # noqa: PLC0415 — break import cycle
+                DraftBackend,
+            )
+
+            update["drafts_backend"] = DraftBackend(
+                store=self._draft_store,
+                org_id=run.org_id,
+                conversation_id=run.conversation_id,
+                run_id=run.run_id,
+                user_id=run.runtime_context.user_id,
+                emit_event=self._draft_backend_event_emitter(run),
+            )
+        return dependencies.model_copy(update=update)
+
+    def _draft_backend_event_emitter(
+        self, run: RunRecord
+    ) -> "Callable[[object], Awaitable[None]]":
+        """Build the ``emit_event`` closure ``DraftBackend`` uses to emit ``DRAFT_UPDATED``.
+
+        Reuses :meth:`_emit_draft_updated` so a draft the agent writes during the
+        resumed graph flows through the same redaction + projection + sequence
+        cursor path as every other API-authored event.
+        """
+
+        async def _emit(record: object) -> None:
+            await self._emit_draft_updated(run=run, record=record)
+
+        return _emit
 
     async def _stream_resume(
         self,
