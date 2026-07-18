@@ -47,6 +47,11 @@ export interface AuthHandlers {
   signOut(workspaceId: string): Promise<void>;
   getSession(workspaceId: string): Promise<RendererSession | null>;
   refresh(workspaceId: string): Promise<RendererSession | null>;
+  /**
+   * Read-only production/dev posture. Lets the renderer hide the dev-mint
+   * "Use locally" option in production posture. Carries no secret.
+   */
+  getPosture(): { readonly productionPosture: boolean };
 }
 
 // Capability / host-folder grant handlers (AC5 slice 1). Every method returns
@@ -207,6 +212,11 @@ export function registerIpcHandlers(deps: RegisterHandlersDeps): () => void {
       return auth.getSession(params.workspaceId);
     });
 
+    ipcMain.handle(CHANNELS.authGetPosture, async (_event, raw: unknown) => {
+      parseOrThrow(CHANNELS.authGetPosture, EmptyParamsSchema, raw ?? {});
+      return auth.getPosture();
+    });
+
     ipcMain.handle(CHANNELS.authSignIn, async (_event, raw: unknown) => {
       const params = parseOrThrow(
         CHANNELS.authSignIn,
@@ -353,6 +363,7 @@ export function registerIpcHandlers(deps: RegisterHandlersDeps): () => void {
     if (auth) {
       channels.push(
         CHANNELS.authGetSession,
+        CHANNELS.authGetPosture,
         CHANNELS.authSignIn,
         CHANNELS.authSignInGoogle,
         CHANNELS.authSignInWallet,

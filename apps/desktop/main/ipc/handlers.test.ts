@@ -405,6 +405,9 @@ describe("auth.* channels", () => {
         async (_workspaceId: string): Promise<RS | null> => null,
       ),
       refresh: vi.fn(async (_workspaceId: string): Promise<RS | null> => null),
+      getPosture: vi.fn((): { readonly productionPosture: boolean } => ({
+        productionPosture: true,
+      })),
     };
     const teardown = registerIpcHandlers({
       ipcMain: ipcMain as unknown as Parameters<
@@ -416,7 +419,7 @@ describe("auth.* channels", () => {
     return { ipcMain, auth, teardown };
   }
 
-  it("registers all six auth channels", () => {
+  it("registers all auth channels", () => {
     const { ipcMain } = setupWithAuth();
     expect(ipcMain.has(CHANNELS.authSignIn)).toBe(true);
     expect(ipcMain.has(CHANNELS.authSignInGoogle)).toBe(true);
@@ -424,6 +427,16 @@ describe("auth.* channels", () => {
     expect(ipcMain.has(CHANNELS.authSignOut)).toBe(true);
     expect(ipcMain.has(CHANNELS.authRefresh)).toBe(true);
     expect(ipcMain.has(CHANNELS.authGetSession)).toBe(true);
+    expect(ipcMain.has(CHANNELS.authGetPosture)).toBe(true);
+  });
+
+  it("auth.get-posture returns the posture flag with no workspace payload", async () => {
+    const { ipcMain, auth } = setupWithAuth();
+    const res = (await ipcMain.invoke(CHANNELS.authGetPosture, 1, {})) as {
+      productionPosture: boolean;
+    };
+    expect(res).toEqual({ productionPosture: true });
+    expect(auth.getPosture).toHaveBeenCalled();
   });
 
   it("auth.sign-in forwards the workspaceId and returns the RendererSession", async () => {
@@ -511,6 +524,7 @@ describe("auth.* channels", () => {
     expect(ipcMain.has(CHANNELS.authSignOut)).toBe(false);
     expect(ipcMain.has(CHANNELS.authRefresh)).toBe(false);
     expect(ipcMain.has(CHANNELS.authGetSession)).toBe(false);
+    expect(ipcMain.has(CHANNELS.authGetPosture)).toBe(false);
   });
 });
 

@@ -17,6 +17,10 @@ export const CHANNELS = {
   // claims) and the actual bearer is attached in main when the transport
   // makes its outbound HTTP call. See PRD §6.7 / D24.
   authGetSession: "auth.get-session",
+  // Read-only production/dev posture flag for the renderer. Lets SignInGate
+  // hide the "Use locally, no account" (dev-mint) option in production posture
+  // — a real install must only offer wallet + Google. Carries no secret.
+  authGetPosture: "auth.get-posture",
   authSignIn: "auth.sign-in",
   // "Continue with Google" via the facade-brokered OIDC flow: main opens
   // the system browser at {facade}/v1/auth/oidc/google/start and receives
@@ -108,6 +112,15 @@ export const AuthWorkspaceParamsSchema = z
   })
   .strict();
 export type AuthWorkspaceParams = z.infer<typeof AuthWorkspaceParamsSchema>;
+
+// Return shape for CHANNELS.authGetPosture. Renderer-safe: a single boolean,
+// no bearer, no identity.
+export const AuthPosturePayloadSchema = z
+  .object({
+    productionPosture: z.boolean(),
+  })
+  .strict();
+export type AuthPosturePayload = z.infer<typeof AuthPosturePayloadSchema>;
 
 export const RendererSessionSchema = z
   .object({

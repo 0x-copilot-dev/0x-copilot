@@ -50,6 +50,11 @@ export function launchApp({ electronBinary, appDir }) {
   delete env.ELECTRON_RUN_AS_NODE;
   // The supervisor reads its runtime tree from here.
   env.COPILOT_RUNTIME_DIR = RUNTIME_DEST;
+  // A CLI launch spawns Electron against a directory, so `app.isPackaged` is
+  // false even though this is a real end-user install. Flag production posture
+  // explicitly so the app runs real sign-in and fails closed on stale sessions
+  // (main/posture.ts#isProductionPosture) instead of dropping into dev-mint.
+  env.COPILOT_PRODUCTION = "1";
 
   ui.step("starting 0xCopilot…");
   const child = spawn(electronBinary, [appDir], { stdio: "inherit", env });

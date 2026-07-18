@@ -118,6 +118,64 @@ describe("AuthService", () => {
     expect(after).toBeNull();
   });
 
+  it("getSession drops a persisted session the facade rejects with 401 (fail closed)", async () => {
+    // Persist a session (simulating the leftover dev-mint / stale bearer).
+    const persist = new AuthService({
+      mode: "dev-mint",
+      facadeBaseUrl: "http://127.0.0.1:8200",
+      userDataDir: tmp,
+      safeStorage: fakeSafeStorage(),
+      openExternal: async () => {},
+      fetch: devMintFetch("stale-bearer"),
+    });
+    await persist.signIn("org_acme");
+
+    // Reboot: a fresh service reads the on-disk session, then validates it
+    // against the facade — which now rejects the stale bearer with 401.
+    const probe = vi.fn(
+      async () => new Response("", { status: 401 }),
+    ) as unknown as typeof fetch;
+    const reboot = new AuthService({
+      mode: "dev-mint",
+      facadeBaseUrl: "http://127.0.0.1:8200",
+      userDataDir: tmp,
+      safeStorage: fakeSafeStorage(),
+      openExternal: async () => {},
+      fetch: probe,
+    });
+    expect(await reboot.getSession("org_acme")).toBeNull();
+    expect(probe).toHaveBeenCalled();
+    // Cleared on disk: a second lookup is null too.
+    expect(await reboot.getSession("org_acme")).toBeNull();
+  });
+
+  it("getSession keeps an unexpired session when the facade is unreachable (non-401)", async () => {
+    const persist = new AuthService({
+      mode: "dev-mint",
+      facadeBaseUrl: "http://127.0.0.1:8200",
+      userDataDir: tmp,
+      safeStorage: fakeSafeStorage(),
+      openExternal: async () => {},
+      fetch: devMintFetch("good-bearer"),
+    });
+    await persist.signIn("org_acme");
+
+    const netErr = vi.fn(async () => {
+      throw new Error("ECONNREFUSED");
+    }) as unknown as typeof fetch;
+    const reboot = new AuthService({
+      mode: "dev-mint",
+      facadeBaseUrl: "http://127.0.0.1:8200",
+      userDataDir: tmp,
+      safeStorage: fakeSafeStorage(),
+      openExternal: async () => {},
+      fetch: netErr,
+    });
+    const out = await reboot.getSession("org_acme");
+    expect(out).not.toBeNull();
+    expect(out?.email).toBe("sarah@acme.test");
+  });
+
   function memoryAudit(): AuthAuditLog & { events: AuthAuditEvent[] } {
     const events: AuthAuditEvent[] = [];
     return {
