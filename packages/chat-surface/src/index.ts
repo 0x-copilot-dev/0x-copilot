@@ -1088,3 +1088,20 @@ export {
   type RunHeaderProps,
 } from "./destinations/run";
 // === end Phase 3 (PR-3.5) ===
+// === Phase 4 (PR-4.7) — Tools access-mode segment ===
+// The Connectors destination, relabeled "Tools" (FR-4.20): each connected
+// tool row renders <AccessModeSegment> (Read / Read & act / Off — FR-4.21),
+// changes routed via the destination's `onSetAccessMode(id, mode)` (FR-4.22),
+// plus the approval-policy note pointing at Settings → Model & behavior
+// (FR-4.25). `ConnectorsDestination` / `ConnectorCard` themselves are already
+// surfaced above (Phase 2-A / 3 block); this block adds only the new symbols.
+export {
+  AccessModeSegment,
+  TOOLS_SUBTITLE,
+  TOOLS_POLICY_NOTE_COPY,
+} from "./destinations/connectors";
+export type { AccessModeSegmentProps } from "./destinations/connectors";
+// Re-export the wire union so hosts can type `onSetAccessMode` / segment
+// values without a second `@0x-copilot/api-types` import.
+export type { ConnectorAccessMode } from "@0x-copilot/api-types";
+// === end Phase 4 (PR-4.7) ===

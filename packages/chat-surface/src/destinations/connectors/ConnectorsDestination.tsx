@@ -24,6 +24,7 @@ import {
 
 import type {
   Connector,
+  ConnectorAccessMode,
   ConnectorCatalogEntry,
   ConnectorId,
   ConnectorSlug,
@@ -36,6 +37,24 @@ import { FilterTabs, type FilterTabOption } from "../../shell/FilterTabs";
 import { PageHeader } from "../../shell/PageHeader";
 
 import { ConnectorCard } from "./ConnectorCard";
+
+// ===========================================================================
+// Copy (DESIGN-SPEC §3 — "Tools = connectors") — exported so the host + tests
+// assert the exact strings rather than re-typing them. Generic-SaaS-first;
+// Safe/Dune are ordinary catalog entries, never defaults (FR-4.24).
+// ===========================================================================
+
+/** Page subtitle. Frames Tools as a destination, not a settings tab. */
+export const TOOLS_SUBTITLE =
+  "The apps the agent can read from and act through.";
+
+/**
+ * Note that the approval *policy* is separate from per-connector access mode
+ * (FR-4.25). Rendered as an inline link that invokes `onOpenApprovalSettings`
+ * (host → Settings → Model & behavior); plain text when no handler is wired.
+ */
+export const TOOLS_POLICY_NOTE_COPY =
+  "The approval policy lives in Settings → Model & behavior.";
 
 export type ConnectorsFilterSlug = "connected" | "available" | "custom";
 
@@ -87,6 +106,22 @@ export interface ConnectorsDestinationProps {
    *  `expired`. Host kicks off the re-OAuth flow. */
   readonly onReconnect?: (id: ConnectorId) => void;
 
+  /**
+   * A connected tool's access mode changed (FR-4.22). Host persists via the
+   * access-mode PATCH; the optimistic-update + revert-on-failure lives in the
+   * binder, not here.
+   */
+  readonly onSetAccessMode?: (
+    id: ConnectorId,
+    mode: ConnectorAccessMode,
+  ) => void;
+
+  /**
+   * Opens Settings → Model & behavior from the approval-policy note
+   * (FR-4.25). When omitted the note renders as plain text.
+   */
+  readonly onOpenApprovalSettings?: () => void;
+
   /** Retry callback when items.status === "error". */
   readonly onRetry?: () => void;
 
@@ -111,6 +146,8 @@ export function ConnectorsDestination(
     onOpenConnector,
     onOpenCatalogEntry,
     onReconnect,
+    onSetAccessMode,
+    onOpenApprovalSettings,
     onRetry,
     now,
     renderIcon,
@@ -135,25 +172,26 @@ export function ConnectorsDestination(
   return (
     <section
       role="region"
-      aria-label="Connectors"
+      aria-label="Tools"
       data-component="connectors-destination"
       style={rootStyle}
     >
       <div style={innerStyle}>
         <PageHeader
-          title="Connectors"
-          subtitle="Authenticated bridges to your SaaS sources."
+          title="Tools"
+          subtitle={TOOLS_SUBTITLE}
           primaryAction={
             onConnect !== undefined
-              ? { label: "Connect a connector", onClick: onConnect }
+              ? { label: "Connect a tool", onClick: onConnect }
               : undefined
           }
         />
+        <ApprovalPolicyNote onOpenApprovalSettings={onOpenApprovalSettings} />
         <FilterTabs<ConnectorsFilterSlug>
           value={filter}
           onChange={handleFilterChange}
           options={filterOptions}
-          ariaLabel="Connectors filter"
+          ariaLabel="Tools filter"
           idPrefix="connectors-filter"
         />
         <div
@@ -171,6 +209,7 @@ export function ConnectorsDestination(
             onOpenConnector,
             onOpenCatalogEntry,
             onReconnect,
+            onSetAccessMode,
             now,
             renderIcon,
           })}
@@ -188,6 +227,7 @@ interface BodyArgs {
   readonly onOpenConnector: ConnectorsDestinationProps["onOpenConnector"];
   readonly onOpenCatalogEntry: ConnectorsDestinationProps["onOpenCatalogEntry"];
   readonly onReconnect: ConnectorsDestinationProps["onReconnect"];
+  readonly onSetAccessMode: ConnectorsDestinationProps["onSetAccessMode"];
   readonly now: ConnectorsDestinationProps["now"];
   readonly renderIcon: ConnectorsDestinationProps["renderIcon"];
 }
@@ -201,6 +241,7 @@ function renderBody(args: BodyArgs): ReactElement {
     onOpenConnector,
     onOpenCatalogEntry,
     onReconnect,
+    onSetAccessMode,
     now,
     renderIcon,
   } = args;
@@ -267,18 +308,18 @@ function renderBody(args: BodyArgs): ReactElement {
   if (data.connectors.length === 0) {
     return (
       <EmptyState
-        title="Connect your first SaaS source"
-        body="Authorize Gmail, Slack, Salesforce, or any other connector to bring real data into Copilot."
+        title="Connect your first tool"
+        body="Authorize Gmail, Slack, Notion, or any other app to let the agent read from and act through it."
         action={
           onConnect !== undefined
-            ? { label: "Connect a connector", onClick: onConnect }
+            ? { label: "Connect a tool", onClick: onConnect }
             : undefined
         }
       />
     );
   }
   return (
-    <CardGrid ariaLabel="Connected connectors">
+    <CardGrid ariaLabel="Connected tools">
       {data.connectors.map((c) => {
         const needsReconnect = c.status === "error" || c.status === "expired";
         return (
@@ -291,6 +332,15 @@ function renderBody(args: BodyArgs): ReactElement {
             lastSyncIso={c.last_sync_at}
             icon={renderIcon !== undefined ? renderIcon(c.slug) : undefined}
             now={now}
+            // Optional wire field; default an omitted mode to least
+            // privilege (`off`) so the segment always reflects a real state
+            // (api-types Connector.access_mode contract).
+            accessMode={c.access_mode ?? "off"}
+            onAccessModeChange={
+              onSetAccessMode !== undefined
+                ? (mode) => onSetAccessMode(c.id, mode)
+                : undefined
+            }
             onClick={
               onOpenConnector !== undefined
                 ? () => onOpenConnector(c.id)
@@ -305,6 +355,33 @@ function renderBody(args: BodyArgs): ReactElement {
         );
       })}
     </CardGrid>
+  );
+}
+
+// --- Approval-policy note (FR-4.25) --------------------------------------
+
+function ApprovalPolicyNote({
+  onOpenApprovalSettings,
+}: {
+  readonly onOpenApprovalSettings?: () => void;
+}): ReactElement {
+  return (
+    <p style={policyNoteStyle} data-testid="tools-policy-note">
+      {onOpenApprovalSettings !== undefined ? (
+        <button
+          type="button"
+          onClick={onOpenApprovalSettings}
+          style={policyNoteLinkStyle}
+          data-testid="tools-policy-note-link"
+        >
+          {TOOLS_POLICY_NOTE_COPY}
+        </button>
+      ) : (
+        <span data-testid="tools-policy-note-copy">
+          {TOOLS_POLICY_NOTE_COPY}
+        </span>
+      )}
+    </p>
   );
 }
 
@@ -396,6 +473,26 @@ const bodyStyle: CSSProperties = {
   flex: 1,
   minHeight: 0,
   padding: "8px 0",
+};
+
+const policyNoteStyle: CSSProperties = {
+  margin: 0,
+  fontSize: "var(--font-size-sm, 13px)",
+  lineHeight: 1.5,
+  color: "var(--color-text-muted, #b4b4b8)",
+  maxWidth: 620,
+};
+
+const policyNoteLinkStyle: CSSProperties = {
+  background: "transparent",
+  border: "none",
+  padding: 0,
+  margin: 0,
+  font: "inherit",
+  color: "var(--color-accent, #d97757)",
+  textDecoration: "underline",
+  textUnderlineOffset: 2,
+  cursor: "pointer",
 };
 
 const catalogCardStyle: CSSProperties = {
