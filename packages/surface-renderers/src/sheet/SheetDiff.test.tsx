@@ -1,5 +1,5 @@
-import { describe, expect, it } from "vitest";
-import { render, screen } from "@testing-library/react";
+import { describe, expect, it, vi } from "vitest";
+import { fireEvent, render, screen } from "@testing-library/react";
 
 import { sheetAdapter } from "./SheetRenderer";
 import { SheetDiff as SheetDiffView } from "./SheetDiff";
@@ -8,6 +8,7 @@ import type {
   SheetCellValue,
   SheetDiff as SheetDiffData,
   SheetRegion,
+  SheetRowApproval,
 } from "./SheetRenderer";
 
 function cell(
@@ -258,5 +259,167 @@ describe("sheetAdapter.renderDiff", () => {
       "data-changed",
       "true",
     );
+  });
+});
+
+// PR-3.10 (FR-3.21) — on-surface per-row inline approval states.
+describe("SheetDiff — per-row approvals (PR-3.10 / FR-3.21)", () => {
+  function withApprovals(
+    approvals: readonly SheetRowApproval[],
+  ): SheetDiffData {
+    return makeDiff(
+      [{ row: 0, column: 4, before: cell(160), after: cell(176) }],
+      { rowApprovals: approvals },
+    );
+  }
+
+  it("appends an approval column header only when rows carry approvals", () => {
+    const { rerender } = render(<SheetDiffView diff={makeDiff([])} />);
+    expect(
+      screen.queryByTestId("sheet-diff-approval-header"),
+    ).not.toBeInTheDocument();
+
+    rerender(
+      <SheetDiffView diff={withApprovals([{ row: 0, state: "pending" }])} />,
+    );
+    expect(
+      screen.getByTestId("sheet-diff-approval-header"),
+    ).toBeInTheDocument();
+  });
+
+  it("highlights a pending row and shows Reject / Approve & sign", () => {
+    render(
+      <SheetDiffView
+        diff={withApprovals([{ row: 0, state: "pending", approvalId: "a-1" }])}
+      />,
+    );
+    const row = screen.getByTestId("sheet-diff-row-0");
+    // The pending row is flagged for the accent-soft highlight + inset accent
+    // bar (styling keys off this attribute).
+    expect(row).toHaveAttribute("data-approval-state", "pending");
+
+    const approve = screen.getByTestId("sheet-diff-row-approve-0");
+    const reject = screen.getByTestId("sheet-diff-row-reject-0");
+    expect(approve).toHaveTextContent("Approve & sign");
+    expect(reject).toHaveTextContent("Reject");
+    // Group semantics on the pending action cluster.
+    expect(
+      screen.getByRole("group", { name: /Row 1 approval/ }),
+    ).not.toBeNull();
+    // A settled row on a still-pending sheet does not appear.
+    expect(
+      screen.queryByTestId("sheet-diff-row-status-0"),
+    ).not.toBeInTheDocument();
+  });
+
+  it("uses a plain 'Approve' label when approveLabel overrides the default", () => {
+    render(
+      <SheetDiffView
+        diff={withApprovals([{ row: 0, state: "pending" }])}
+        approveLabel="Approve"
+      />,
+    );
+    const approve = screen.getByTestId("sheet-diff-row-approve-0");
+    expect(approve).toHaveTextContent("Approve");
+    expect(approve.textContent).not.toContain("sign");
+  });
+
+  it("wires the Approve & Reject buttons to the injected callbacks", () => {
+    const onApproveRow = vi.fn();
+    const onRejectRow = vi.fn();
+    const approval: SheetRowApproval = {
+      row: 0,
+      state: "pending",
+      approvalId: "a-1",
+    };
+    render(
+      <SheetDiffView
+        diff={withApprovals([approval])}
+        onApproveRow={onApproveRow}
+        onRejectRow={onRejectRow}
+      />,
+    );
+    fireEvent.click(screen.getByTestId("sheet-diff-row-approve-0"));
+    expect(onApproveRow).toHaveBeenCalledTimes(1);
+    expect(onApproveRow).toHaveBeenCalledWith(approval);
+    fireEvent.click(screen.getByTestId("sheet-diff-row-reject-0"));
+    expect(onRejectRow).toHaveBeenCalledTimes(1);
+    expect(onRejectRow).toHaveBeenCalledWith(approval);
+  });
+
+  it("renders resolved rows as ✓ Signed (jade) / Rejected (ember) / Queued (muted)", () => {
+    const region: SheetRegion = {
+      sheetId: "s",
+      regionId: "r",
+      headers: ["Recipient", "Amount"],
+      rows: [
+        [cell("Acme"), cell(100)],
+        [cell("Globex"), cell(200)],
+        [cell("Initech"), cell(300)],
+      ],
+    };
+    const diff = makeDiff([], {
+      region,
+      rowApprovals: [
+        { row: 0, state: "signed" },
+        { row: 1, state: "rejected" },
+        { row: 2, state: "queued" },
+      ],
+    });
+    render(<SheetDiffView diff={diff} />);
+
+    const signed = screen.getByTestId("sheet-diff-row-status-0");
+    expect(signed).toHaveTextContent("✓ Signed");
+    expect(screen.getByTestId("sheet-diff-row-0")).toHaveAttribute(
+      "data-approval-state",
+      "signed",
+    );
+
+    const rejected = screen.getByTestId("sheet-diff-row-status-1");
+    expect(rejected).toHaveTextContent("Rejected");
+    expect(screen.getByTestId("sheet-diff-row-1")).toHaveAttribute(
+      "data-approval-state",
+      "rejected",
+    );
+
+    const queued = screen.getByTestId("sheet-diff-row-status-2");
+    expect(queued).toHaveTextContent("Queued");
+    expect(screen.getByTestId("sheet-diff-row-2")).toHaveAttribute(
+      "data-approval-state",
+      "queued",
+    );
+
+    // Resolved rows expose no Approve/Reject affordance.
+    expect(
+      screen.queryByTestId("sheet-diff-row-approve-0"),
+    ).not.toBeInTheDocument();
+  });
+
+  it("leaves rows without an approval entry blank in the approval column", () => {
+    const region: SheetRegion = {
+      sheetId: "s",
+      regionId: "r",
+      headers: ["Recipient", "Amount"],
+      rows: [
+        [cell("Acme"), cell(100)],
+        [cell("Globex"), cell(200)],
+      ],
+    };
+    const diff = makeDiff([], {
+      region,
+      rowApprovals: [{ row: 0, state: "pending" }],
+    });
+    render(<SheetDiffView diff={diff} />);
+    // Row 1 has no approval → empty approval cell, no status/actions.
+    expect(screen.getByTestId("sheet-diff-approval-1")).toHaveAttribute(
+      "data-approval-state",
+      "none",
+    );
+    expect(
+      screen.queryByTestId("sheet-diff-row-status-1"),
+    ).not.toBeInTheDocument();
+    expect(
+      screen.queryByTestId("sheet-diff-row-approve-1"),
+    ).not.toBeInTheDocument();
   });
 });

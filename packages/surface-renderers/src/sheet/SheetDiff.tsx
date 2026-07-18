@@ -7,6 +7,7 @@ import type {
   SheetCellValue,
   SheetDiff as SheetDiffData,
   SheetRegion,
+  SheetRowApproval,
 } from "./SheetRenderer";
 import { resolveColumnWindow } from "./_columns";
 
@@ -28,6 +29,20 @@ const PALETTE = {
 
 function changeKey(row: number, column: number): string {
   return `${row}:${column}`;
+}
+
+// PR-3.10 (FR-3.21) — index the per-row approvals by row for O(1) lookup.
+function buildApprovalIndex(
+  approvals: readonly SheetRowApproval[] | undefined,
+): ReadonlyMap<number, SheetRowApproval> {
+  const map = new Map<number, SheetRowApproval>();
+  if (approvals === undefined) {
+    return map;
+  }
+  for (const approval of approvals) {
+    map.set(approval.row, approval);
+  }
+  return map;
 }
 
 function buildChangeIndex(
@@ -60,10 +75,24 @@ function cellAriaLabel(
 
 export interface SheetDiffProps {
   readonly diff: SheetDiffData;
+  /**
+   * PR-3.10 (FR-3.21) — resolve a pending row's approval. Fired by the row's
+   * `Approve & sign` button; the host owns the POST (D28 pure-render rule).
+   */
+  readonly onApproveRow?: (approval: SheetRowApproval) => void;
+  /** PR-3.10 (FR-3.21) — reject a pending row's approval (host owns the POST). */
+  readonly onRejectRow?: (approval: SheetRowApproval) => void;
+  /** PR-3.10 — primary approve label ("Approve & sign" default; "Approve"). */
+  readonly approveLabel?: string;
 }
 
 export function SheetDiff(props: SheetDiffProps): ReactElement {
-  const { diff } = props;
+  const {
+    diff,
+    onApproveRow,
+    onRejectRow,
+    approveLabel = "Approve & sign",
+  } = props;
   const region = diff.region;
   const columnWindow = resolveColumnWindow(region);
   const visibleHeaders = region.headers.slice(
@@ -71,6 +100,10 @@ export function SheetDiff(props: SheetDiffProps): ReactElement {
     columnWindow.endColumn,
   );
   const changeIndex = buildChangeIndex(diff.changes);
+  // PR-3.10 (FR-3.21) — per-row approval states drive an appended approval
+  // column (highlight + Reject/Approve on pending; settled status otherwise).
+  const approvalIndex = buildApprovalIndex(diff.rowApprovals);
+  const hasApprovals = approvalIndex.size > 0;
 
   return (
     <div
@@ -116,6 +149,16 @@ export function SheetDiff(props: SheetDiffProps): ReactElement {
                     {header}
                   </th>
                 ))}
+                {hasApprovals ? (
+                  <th
+                    scope="col"
+                    style={headerCellStyle}
+                    data-testid="sheet-diff-approval-header"
+                    aria-label="Approval"
+                  >
+                    Approval
+                  </th>
+                ) : null}
               </tr>
             </thead>
             <tbody>
@@ -124,10 +167,14 @@ export function SheetDiff(props: SheetDiffProps): ReactElement {
                   columnWindow.startColumn,
                   columnWindow.endColumn,
                 );
+                const approval = approvalIndex.get(rowIdx);
+                const isPending = approval?.state === "pending";
                 return (
                   <tr
                     key={`row-${rowIdx}`}
                     data-testid={`sheet-diff-row-${rowIdx}`}
+                    data-approval-state={approval?.state ?? "none"}
+                    style={isPending ? pendingRowStyle : undefined}
                   >
                     {visibleCells.map((cell, cellIdx) => {
                       const absoluteCol = columnWindow.startColumn + cellIdx;
@@ -176,6 +223,15 @@ export function SheetDiff(props: SheetDiffProps): ReactElement {
                         </td>
                       );
                     })}
+                    {hasApprovals ? (
+                      <ApprovalCell
+                        rowIdx={rowIdx}
+                        approval={approval}
+                        approveLabel={approveLabel}
+                        onApproveRow={onApproveRow}
+                        onRejectRow={onRejectRow}
+                      />
+                    ) : null}
                   </tr>
                 );
               })}
@@ -185,6 +241,104 @@ export function SheetDiff(props: SheetDiffProps): ReactElement {
       )}
     </div>
   );
+}
+
+// PR-3.10 (FR-3.21) — the appended per-row approval cell. Pending rows show
+// `Reject` / `Approve & sign` (host-owned callbacks); resolved rows show their
+// settled status (`✓ Signed` jade / `Rejected` ember / `Queued` muted).
+interface ApprovalCellProps {
+  readonly rowIdx: number;
+  readonly approval: SheetRowApproval | undefined;
+  readonly approveLabel: string;
+  readonly onApproveRow?: (approval: SheetRowApproval) => void;
+  readonly onRejectRow?: (approval: SheetRowApproval) => void;
+}
+
+function ApprovalCell(props: ApprovalCellProps): ReactElement {
+  const { rowIdx, approval, approveLabel, onApproveRow, onRejectRow } = props;
+  if (approval === undefined) {
+    return (
+      <td
+        data-testid={`sheet-diff-approval-${rowIdx}`}
+        data-approval-state="none"
+        style={approvalCellStyle}
+      />
+    );
+  }
+  if (approval.state === "pending") {
+    return (
+      <td
+        data-testid={`sheet-diff-approval-${rowIdx}`}
+        data-approval-state="pending"
+        style={approvalCellStyle}
+      >
+        <div
+          role="group"
+          aria-label={`Row ${rowIdx + 1} approval`}
+          style={approvalActionsStyle}
+        >
+          <button
+            type="button"
+            data-testid={`sheet-diff-row-reject-${rowIdx}`}
+            onClick={() => onRejectRow?.(approval)}
+            style={rejectButtonStyle}
+          >
+            Reject
+          </button>
+          <button
+            type="button"
+            data-testid={`sheet-diff-row-approve-${rowIdx}`}
+            onClick={() => onApproveRow?.(approval)}
+            style={approveButtonStyle}
+          >
+            {approveLabel}
+          </button>
+        </div>
+      </td>
+    );
+  }
+  return (
+    <td
+      data-testid={`sheet-diff-approval-${rowIdx}`}
+      data-approval-state={approval.state}
+      style={approvalCellStyle}
+    >
+      <span
+        data-testid={`sheet-diff-row-status-${rowIdx}`}
+        style={statusStyle(approval.state)}
+      >
+        {statusLabel(approval.state)}
+      </span>
+    </td>
+  );
+}
+
+function statusLabel(state: SheetRowApproval["state"]): string {
+  switch (state) {
+    case "signed":
+      return "✓ Signed";
+    case "rejected":
+      return "Rejected";
+    case "queued":
+      return "Queued";
+    default:
+      return "";
+  }
+}
+
+function statusStyle(state: SheetRowApproval["state"]): CSSProperties {
+  const color =
+    state === "signed"
+      ? "var(--color-success, #57c785)"
+      : state === "rejected"
+        ? "var(--color-danger, #f0764f)"
+        : "var(--color-text-muted, #7E8492)";
+  return {
+    fontSize: 12,
+    fontWeight: 600,
+    whiteSpace: "nowrap",
+    color,
+  };
 }
 
 const wrapperStyle: CSSProperties = {
@@ -283,4 +437,49 @@ const emptyStyle: CSSProperties = {
   color: PALETTE.textLo,
   fontSize: 13,
   textAlign: "center",
+};
+
+// PR-3.10 (FR-3.21) — a pending row is highlighted with an accent-soft fill and
+// an inset accent bar down its leading edge (design-system tokens only).
+const pendingRowStyle: CSSProperties = {
+  background: "var(--color-accent-soft, rgba(95,178,236,.12))",
+  boxShadow: "inset 3px 0 0 0 var(--color-accent)",
+};
+
+const approvalCellStyle: CSSProperties = {
+  padding: "8px 12px",
+  borderBottom: `1px solid ${PALETTE.border}`,
+  verticalAlign: "middle",
+  background: PALETTE.surface,
+  whiteSpace: "nowrap",
+};
+
+const approvalActionsStyle: CSSProperties = {
+  display: "flex",
+  gap: 6,
+  justifyContent: "flex-end",
+};
+
+const approveButtonStyle: CSSProperties = {
+  background: "var(--color-accent)",
+  color: "var(--color-accent-contrast, #0F1218)",
+  border: "none",
+  borderRadius: 6,
+  padding: "4px 10px",
+  fontSize: 12,
+  fontWeight: 600,
+  cursor: "pointer",
+  whiteSpace: "nowrap",
+};
+
+const rejectButtonStyle: CSSProperties = {
+  background: "transparent",
+  color: PALETTE.textHi,
+  border: `1px solid ${PALETTE.borderStrong}`,
+  borderRadius: 6,
+  padding: "4px 10px",
+  fontSize: 12,
+  fontWeight: 600,
+  cursor: "pointer",
+  whiteSpace: "nowrap",
 };

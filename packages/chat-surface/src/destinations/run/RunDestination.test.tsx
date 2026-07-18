@@ -593,3 +593,169 @@ describe("RunDestination — parallel subagents (PR-3.8 / FR-3.17)", () => {
     );
   });
 });
+
+// === PR-3.10 — approvals: in-chat ApprovalCard + rail count + resolution ===
+//
+// Integration: a scripted `approval_requested` event surfaces the in-chat
+// ApprovalCard AND the Approvals-tab pending badge from the ONE canonical
+// stream (FR-3.22/3.12). Approve/Reject in chat optimistically flips the card
+// to a receipt, drops the count, and POSTs the decision through the Transport
+// port. Approvals are hidden while scrubbed off-now (FR-3.15).
+
+function approvalRequested(approvalId: string): Record<string, unknown> {
+  return event({
+    event_type: "approval_requested",
+    activity_kind: "approval",
+    payload: {
+      approval_id: approvalId,
+      approval_kind: "tool_action",
+      display_name: "Post to #launch-aurora",
+      tool_name: "slack_post_message",
+      message: "Posts the launch note to #launch-aurora",
+      server_name: "SLACK",
+      read_only: false,
+      arguments: { channel: "#launch-aurora" },
+    },
+  });
+}
+
+function approvalResolved(
+  approvalId: string,
+  decision: "approved" | "rejected",
+): Record<string, unknown> {
+  return event({
+    event_type: "approval_resolved",
+    activity_kind: "approval",
+    payload: { approval_id: approvalId, decision, status: decision },
+  });
+}
+
+describe("RunDestination — approvals (PR-3.10 / FR-3.21/3.22)", () => {
+  async function renderWithApproval(): Promise<FakeTransport> {
+    seqCounter = 0;
+    const transport = new FakeTransport();
+    transport.requestHandler = async (req) =>
+      req.path.includes("/messages")
+        ? { messages: [] }
+        : runningRun("Post the launch note");
+    renderRun(transport, makeStore());
+    await waitFor(() => expect(transport.sessionSub).toBeDefined());
+    act(() => {
+      transport.emit(approvalRequested("appr-1"));
+    });
+    await screen.findByTestId("tc-chat-approval-appr-1");
+    return transport;
+  }
+
+  it("surfaces the in-chat ApprovalCard + the Approvals-tab count from one stream", async () => {
+    await renderWithApproval();
+
+    // The 4-zone ApprovalCard renders the pending approval, with Approve/Reject.
+    const card = screen.getByTestId("tc-chat-approval-appr-1");
+    expect(card).toHaveTextContent("Post to #launch-aurora");
+    expect(
+      screen.getByTestId("tc-chat-approval-approve-appr-1"),
+    ).not.toBeNull();
+    expect(screen.getByTestId("tc-chat-approval-reject-appr-1")).not.toBeNull();
+    // …and the Approvals tab shows the accent pending count badge (FR-3.12).
+    expect(screen.getByTestId("run-rail-approvals-badge")).toHaveTextContent(
+      "1",
+    );
+  });
+
+  it("approving in chat flips the card to a signed receipt, clears the count, and POSTs the decision", async () => {
+    const transport = await renderWithApproval();
+
+    act(() => {
+      fireEvent.click(screen.getByTestId("tc-chat-approval-approve-appr-1"));
+    });
+
+    // Optimistic: card → receipt (approved); pending card + badge gone.
+    await waitFor(() =>
+      expect(
+        screen.getByTestId("tc-chat-approval-receipt-appr-1"),
+      ).toHaveAttribute("data-decision", "approved"),
+    );
+    expect(screen.queryByTestId("tc-chat-approval-appr-1")).toBeNull();
+    expect(screen.queryByTestId("run-rail-approvals-badge")).toBeNull();
+    // The host POSTed the decision through the Transport port (host owns POST).
+    await waitFor(() =>
+      expect(
+        transport.requests.some(
+          (r) =>
+            r.method === "POST" &&
+            r.path === "/v1/agent/approvals/appr-1/decision",
+        ),
+      ).toBe(true),
+    );
+  });
+
+  it("rejecting in chat flips the card to a rejected receipt", async () => {
+    await renderWithApproval();
+
+    act(() => {
+      fireEvent.click(screen.getByTestId("tc-chat-approval-reject-appr-1"));
+    });
+
+    await waitFor(() =>
+      expect(
+        screen.getByTestId("tc-chat-approval-receipt-appr-1"),
+      ).toHaveAttribute("data-decision", "rejected"),
+    );
+    expect(screen.queryByTestId("tc-chat-approval-appr-1")).toBeNull();
+  });
+
+  it("reconciles the server `approval_resolved` frame into a receipt", async () => {
+    const transport = await renderWithApproval();
+
+    act(() => {
+      transport.emit(approvalResolved("appr-1", "approved"));
+    });
+
+    await waitFor(() =>
+      expect(
+        screen.getByTestId("tc-chat-approval-receipt-appr-1"),
+      ).toHaveAttribute("data-decision", "approved"),
+    );
+    expect(screen.queryByTestId("tc-chat-approval-appr-1")).toBeNull();
+  });
+
+  it("hides in-chat approvals + the count while scrubbed off-now, restoring on snap-to-now (FR-3.15)", async () => {
+    seqCounter = 0;
+    const transport = new FakeTransport();
+    transport.requestHandler = async (req) =>
+      req.path.includes("/messages") ? { messages: [] } : runningRun("Goal");
+    renderRun(transport, makeStore());
+    await waitFor(() => expect(transport.sessionSub).toBeDefined());
+
+    act(() => {
+      // Distinct sequence numbers — the session tail dedupes by `sequence_no`.
+      transport.emit(approvalRequested("appr-1")); // seq 1 (via event())
+      transport.emit(
+        surfaceEvent(9, "bead-1", "sheet://row-2", "2026-05-17T10:00:00.000Z"),
+      );
+    });
+
+    // Live: approval card + rail badge present.
+    await screen.findByTestId("tc-chat-approval-appr-1");
+    expect(screen.getByTestId("run-rail-approvals-badge")).toHaveTextContent(
+      "1",
+    );
+
+    // Scrub to the bead → approvals hidden (cannot approve a past state).
+    act(() => {
+      fireEvent.click(screen.getByTestId("tc-mini-timeline-bead-bead-1"));
+    });
+    expect(screen.queryByTestId("tc-chat-approval-appr-1")).toBeNull();
+    expect(screen.queryByTestId("run-rail-approvals-badge")).toBeNull();
+
+    // Snap back to now → approvals restored.
+    act(() => {
+      fireEvent.click(screen.getByTestId("run-return-to-live"));
+    });
+    expect(screen.getByTestId("tc-chat-approval-appr-1")).not.toBeNull();
+    expect(screen.getByTestId("run-rail-approvals-badge")).toHaveTextContent(
+      "1",
+    );
+  });
+});

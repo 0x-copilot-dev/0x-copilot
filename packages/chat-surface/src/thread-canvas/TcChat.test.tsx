@@ -23,6 +23,7 @@ import { TransportProvider } from "../providers/TransportProvider";
 import { SwimlaneScrubProvider } from "./SwimlaneScrubContext";
 import {
   TcChat,
+  type TcChatApproval,
   type TcChatMessage,
   type TcChatMessagesResponse,
 } from "./TcChat";
@@ -426,5 +427,131 @@ describe("TcChat — inline fleet card (PR-3.8 / FR-3.17a)", () => {
     expect(
       screen.queryByTestId("tc-chat-fleet-fleet-1"),
     ).not.toBeInTheDocument();
+  });
+});
+
+// PR-3.10 (FR-3.22) — in-chat approvals: the 4-zone ApprovalCard (Studio), the
+// `.conf-card` confirmation variant (Focus), and the collapsed receipt on
+// resolution.
+function approval(overrides: Partial<TcChatApproval> = {}): TcChatApproval {
+  return {
+    approvalId: "appr-1",
+    title: "Post to #launch-aurora",
+    reason: "Copilot is asking before it writes outside this chat.",
+    summary: "Posts the launch note to #launch-aurora",
+    category: { vendor: "SLACK", access: "ACTION" },
+    params: [{ label: "channel", value: "#launch-aurora" }],
+    resolved: false,
+    decision: null,
+    createdAtMs: 1716000090000,
+    ...overrides,
+  };
+}
+
+describe("TcChat approvals (PR-3.10 / FR-3.22)", () => {
+  it("renders a pending approval as the 4-zone ApprovalCard in Studio", () => {
+    const { transport } = makeTransport(() => Promise.resolve(SAMPLE_RESPONSE));
+    render(
+      withTransport(
+        transport,
+        <TcChat conversationId="c" mode="studio" approvals={[approval()]} />,
+      ),
+    );
+    const card = screen.getByTestId("tc-chat-approval-appr-1");
+    expect(card).toHaveTextContent("Post to #launch-aurora");
+    expect(
+      screen.getByTestId("tc-chat-approval-approve-appr-1"),
+    ).toHaveTextContent("Approve");
+    expect(
+      screen.getByTestId("tc-chat-approval-reject-appr-1"),
+    ).toHaveTextContent("Reject");
+  });
+
+  it("fires onApprove / onReject with the approval id", () => {
+    const { transport } = makeTransport(() => Promise.resolve(SAMPLE_RESPONSE));
+    const onApprove = vi.fn();
+    const onReject = vi.fn();
+    render(
+      withTransport(
+        transport,
+        <TcChat
+          conversationId="c"
+          mode="studio"
+          approvals={[approval()]}
+          onApprove={onApprove}
+          onReject={onReject}
+        />,
+      ),
+    );
+    fireEvent.click(screen.getByTestId("tc-chat-approval-approve-appr-1"));
+    expect(onApprove).toHaveBeenCalledWith("appr-1");
+    fireEvent.click(screen.getByTestId("tc-chat-approval-reject-appr-1"));
+    expect(onReject).toHaveBeenCalledWith("appr-1");
+  });
+
+  it("collapses a resolved approval to a receipt (approved / rejected)", () => {
+    const { transport } = makeTransport(() => Promise.resolve(SAMPLE_RESPONSE));
+    const { rerender } = render(
+      withTransport(
+        transport,
+        <TcChat
+          conversationId="c"
+          mode="studio"
+          approvals={[approval({ resolved: true, decision: "approved" })]}
+        />,
+      ),
+    );
+    expect(
+      screen.getByTestId("tc-chat-approval-receipt-appr-1"),
+    ).toHaveAttribute("data-decision", "approved");
+    // No pending card once resolved.
+    expect(screen.queryByTestId("tc-chat-approval-appr-1")).toBeNull();
+
+    rerender(
+      withTransport(
+        transport,
+        <TcChat
+          conversationId="c"
+          mode="studio"
+          approvals={[approval({ resolved: true, decision: "rejected" })]}
+        />,
+      ),
+    );
+    expect(
+      screen.getByTestId("tc-chat-approval-receipt-appr-1"),
+    ).toHaveAttribute("data-decision", "rejected");
+  });
+
+  it("renders a pending approval as a `.conf-card` in Focus mode", () => {
+    const { transport } = makeTransport(() => Promise.resolve(SAMPLE_RESPONSE));
+    render(
+      withTransport(
+        transport,
+        <TcChat conversationId="c" mode="focus" approvals={[approval()]} />,
+      ),
+    );
+    const conf = screen.getByTestId("tc-chat-conf-card-appr-1");
+    expect(conf).toHaveClass("conf-card");
+    expect(conf).toHaveTextContent("Post to #launch-aurora");
+    expect(conf).toHaveTextContent("The agent paused here");
+    expect(screen.getByTestId("tc-chat-conf-approve-appr-1")).toHaveTextContent(
+      "Approve & sign",
+    );
+    // The Studio ApprovalCard is NOT used in Focus.
+    expect(screen.queryByTestId("tc-chat-approval-appr-1")).toBeNull();
+  });
+
+  it("hides approvals while scrubbed off-now", () => {
+    const { transport } = makeTransport(() => Promise.resolve(SAMPLE_RESPONSE));
+    render(
+      withTransport(
+        transport,
+        <SwimlaneScrubProvider value={{ scrubbedTo: 1716000030000 }}>
+          <TcChat conversationId="c" mode="studio" approvals={[approval()]} />
+        </SwimlaneScrubProvider>,
+      ),
+    );
+    expect(screen.queryByTestId("tc-chat-approval-appr-1")).toBeNull();
+    expect(screen.queryByTestId("tc-chat-approvals")).toBeNull();
   });
 });
