@@ -189,3 +189,35 @@ export {
   type RetentionChoice,
 } from "./PrivacyPage";
 // === end Phase 5 (PR-5.7) ===
+// === Phase 5 (PR-5.6) — Model & behavior (default model / depth / web /
+// approval policy / spend guardrail) ===
+// `ModelBehaviorPage` fills the "model-behavior" SettingsSurface slot. It is a
+// controlled, props-driven section: the default-model optgroups are SUPPLIED BY
+// THE HOST (composed from PR-5.4 provider keys + PR-5.5 local models), and a
+// dirty section docks its SaveBar through the injected surface controller. The
+// approval-policy block (`ApprovalPolicy`) is the spec relocation of the web
+// `ToolUsePolicyPanel`. Persistence (workspace defaults / tool-use policy /
+// spend cap) is a host concern wired in the desktop-mount PR.
+export {
+  ModelBehaviorPage,
+  REASONING_DEPTHS,
+  type ModelBehaviorPageProps,
+  type ModelBehaviorValue,
+  type ModelBehaviorPatch,
+  type ModelBehaviorModelOption,
+  type ReasoningDepth,
+  type SpendGuardrailValue,
+} from "./ModelBehaviorPage";
+export {
+  ApprovalPolicy,
+  READ_ONLY_APPROVAL_OPTIONS,
+  WRITE_APPROVAL_OPTIONS,
+  DANGER_APPROVAL_OPTIONS,
+  APPROVAL_POLICY_CONNECTOR_NOTE,
+  type ApprovalPolicyProps,
+  type ApprovalPolicyValue,
+  type ReadOnlyApprovalMode,
+  type WriteApprovalMode,
+  type DangerApprovalMode,
+} from "./ApprovalPolicy";
+// === end Phase 5 (PR-5.6) ===
