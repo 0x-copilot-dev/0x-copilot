@@ -58,3 +58,18 @@ export {
   type ThinkingDepth,
 } from "./depth";
 // === end Phase 1 (PR-1.2) ===
+// === Phase 1 (PR-1.3) AssistantComposer shell ===
+// The advanced-composer shell (topbar skill pills, bottom-bar tools row,
+// send/stop, slash-cue) hoisted behind ports/slots: the file picker is a
+// `FilePickerPort`, the `+` menu portal + outside-click is the host
+// `renderPlusMenu` slot, and the runtime attachment bridge + instruction-prompt
+// builders are host-bound. `AttachmentPill` + `fileAttachmentAccept` move too.
+export {
+  AssistantComposer,
+  type AssistantComposerProps,
+  type AssistantComposerPlusMenuSlotArgs,
+  type DetailsPanelKind,
+} from "./AssistantComposer";
+export { AttachmentPill } from "./AttachmentPill";
+export { fileAttachmentAccept } from "./fileAttachmentAccept";
+// === end Phase 1 (PR-1.3) ===
