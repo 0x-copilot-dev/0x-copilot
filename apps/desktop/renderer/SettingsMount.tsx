@@ -51,6 +51,7 @@ import type {
   LocalModelsStatus,
   NotificationDefaults,
   UpdateNotificationDefaultsRequest,
+  UserId,
 } from "@0x-copilot/api-types";
 import type { RendererSession, Transport } from "@0x-copilot/chat-transport";
 
@@ -99,7 +100,7 @@ const STUB_OLLAMA_STATUS: LocalModelsStatus = {
 
 function makeNotificationDefaults(userId: string): NotificationDefaults {
   return {
-    user_id: userId,
+    user_id: userId as UserId,
     destinations_enabled: {},
     quiet_hours: {
       enabled: false,
