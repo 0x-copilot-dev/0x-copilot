@@ -49,7 +49,6 @@ interface CapturedSub {
   readonly eventName?: string;
   readonly onMessage?: (raw: string) => void;
   readonly onError?: (err: Error) => void;
-  readonly onMessage?: (raw: string) => void;
   closed: boolean;
 }
 
@@ -70,7 +69,6 @@ class FakeTransport implements Transport {
       eventName: opts.eventName,
       onMessage: opts.onMessage,
       onError: opts.onError,
-      onMessage: opts.onMessage,
       closed: false,
     };
     this.subs.push(sub);
