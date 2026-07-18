@@ -135,6 +135,39 @@ function Glyph({ slug }: { slug: ShellDestinationSlug }): ReactElement {
           <path d="M12 8v4l3 2" />
         </svg>
       );
+    case "run":
+      // Rounded viewport + play head: the live agent run (DESIGN-SPEC §7 `run`).
+      return (
+        <svg {...common}>
+          <rect x="3" y="3" width="18" height="18" rx="4" />
+          <path d="M10 9l5 3-5 3z" />
+        </svg>
+      );
+    case "activity":
+      // Pulse line: the run-history feed (DESIGN-SPEC §7 `activity`).
+      return (
+        <svg {...common}>
+          <path d="M3 12h4l2.5 7 5-14L17 12h4" />
+        </svg>
+      );
+    case "members":
+      // Two people: team member directory (team profile only).
+      return (
+        <svg {...common}>
+          <circle cx="9" cy="8" r="3" />
+          <circle cx="17" cy="9" r="2.5" />
+          <path d="M3 20c0-3 2.7-5 6-5s6 2 6 5" />
+          <path d="M15 20c0-2 1.3-3.5 3-3.5s3 1.5 3 3.5" />
+        </svg>
+      );
+    case "billing":
+      // Card: billing (team profile only).
+      return (
+        <svg {...common}>
+          <rect x="3" y="6" width="18" height="12" rx="2" />
+          <path d="M3 10h18" />
+        </svg>
+      );
   }
 }
 
