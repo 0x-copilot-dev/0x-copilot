@@ -9,7 +9,6 @@ import {
   DocumentPresenceSignal,
   HashRouter,
   LocalStorageKeyValueStore,
-  SettingsSurface,
   defaultDestinationForProfile,
   destinationsForProfile,
   registerGenericStructuredDiff,
@@ -21,6 +20,7 @@ import { registerAll as registerSurfaceRenderers } from "@0x-copilot/surface-ren
 
 import { BootGate } from "./BootProgress";
 import { DestinationOutlet } from "./DestinationOutlet";
+import { SettingsMount } from "./SettingsMount";
 import { DEFAULT_WORKSPACE_ID, SignInGate } from "./SignInGate";
 import { Tier2Bridge } from "./Tier2Bridge";
 
@@ -141,10 +141,11 @@ function ChatShellForSession(props: ChatShellForSessionProps): ReactElement {
       settingsActive={settingsActive}
     >
       {settingsActive ? (
-        // Phase 5 fills the section bodies via `renderSection`; until then the
-        // merged SettingsSurface renders the profile-gated nav with honest
-        // titled placeholders (PRD FR-2.22, R7 — a visible stub, not a no-op).
-        <SettingsSurface />
+        // Phase 5 (PR-5.9): the real Settings surface — the profile-gated nav
+        // plus every section body wired through `renderSection`. The team
+        // sections stay gated off on the solo desktop profile and the solo
+        // footer shows (DESIGN-SPEC §4 / FR-5.3).
+        <SettingsMount transport={transport} session={props.session} />
       ) : (
         <DestinationOutlet destination={activeDestination} />
       )}
