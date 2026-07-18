@@ -32,6 +32,8 @@ import {
   FsError,
   isSensitiveFileName,
   normalizeVirtualPath,
+  segmentIsSensitiveDir,
+  virtualPathTraversesSensitiveDir,
 } from "./path-validation";
 
 export type { NativeWorkspaceFs };
@@ -740,6 +742,13 @@ export class HostFs {
             dent = await dir.read();
             continue;
           }
+          // G2 (glob/grep): never visit or descend into a nested credential
+          // directory (`.ssh` / `.aws` / `.gnupg` / `keychains` / …), so a
+          // content search can neither list nor scan anything beneath it.
+          if (segmentIsSensitiveDir(dent.name)) {
+            dent = await dir.read();
+            continue;
+          }
           if (dent.isDirectory()) {
             if (visit(childRel, childReal, false) === "stop") return true;
             if (frame.depth + 1 <= FS_LIMITS.maxWalkDepth) {
@@ -772,6 +781,16 @@ export class HostFs {
     expect: "file" | "dir" | "any",
   ): Promise<ResolvedTarget> {
     const segments = normalizeVirtualPath(virtualPath);
+    // G2 (read/write time): never traverse INTO a nested credential directory
+    // (`.ssh` / `.aws` / `.gnupg` / `keychains` / …) even inside an otherwise
+    // legit grant. Denied before any disk access so it is not an existence
+    // oracle either.
+    if (virtualPathTraversesSensitiveDir(segments)) {
+      throw new FsError(
+        "permission_denied",
+        "path traverses a sensitive directory",
+      );
+    }
     const rootReal = await this.#deps.realpath(root);
     const candidate =
       segments.length === 0 ? rootReal : join(rootReal, ...segments);
@@ -935,6 +954,15 @@ export class HostFs {
     virtualPath: string,
   ): Promise<ResolvedParent> {
     const segments = normalizeVirtualPath(virtualPath);
+    // G2 (write time): the same nested-credential-directory denial the read
+    // path enforces — a write / edit / mkdir / delete / move may not create or
+    // touch anything inside a `.ssh` / `.aws` / `.gnupg` / `keychains` subtree.
+    if (virtualPathTraversesSensitiveDir(segments)) {
+      throw new FsError(
+        "permission_denied",
+        "path traverses a sensitive directory",
+      );
+    }
     if (segments.length === 0) {
       // The grant root itself is never a write TARGET (no leaf to create,
       // modify, or delete).

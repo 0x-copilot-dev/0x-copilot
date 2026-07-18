@@ -198,8 +198,22 @@ class WorkspaceSnapshotEventEmitter:
         self._run_id = run_id
 
     async def __call__(self, record: WorkspaceMutationSnapshot) -> None:
-        """Persist the pre-image reference as a ``WORKSPACE_SNAPSHOT_CAPTURED`` event."""
+        """Persist the pre-image reference + a signed manifest row before a host write.
+
+        Two durable records land BEFORE the broker mutation (fail-closed — any
+        failure propagates and the host file is never touched):
+
+        1. the ``WORKSPACE_SNAPSHOT_CAPTURED`` timeline event (undo/inspection);
+        2. a tamper-evident signed manifest row through the persistence audit
+           chain, so the host write-through is independently verifiable and
+           exportable to a SIEM. The manifest carries only op / mount / virtual
+           path / pre-image content hash / size — never a host path, the run
+           capability context, or file bytes.
+        """
+        from datetime import datetime, timezone  # noqa: PLC0415
+
         from agent_runtime.execution.contracts import StreamEventSource  # noqa: PLC0415
+        from runtime_adapters.file._audit_manifest import AuditManifest  # noqa: PLC0415
         from runtime_api.schemas import RuntimeApiEventType  # noqa: PLC0415
 
         run = await self._persistence.get_run(  # type: ignore[attr-defined]
@@ -214,6 +228,26 @@ class WorkspaceSnapshotEventEmitter:
             payload=record.event_payload(),
             summary=record.event_summary(),
             status="completed",
+        )
+        now = datetime.now(timezone.utc)
+        audit_event_id = (
+            f"workspace_write_{self._org_id}_{self._run_id}_"
+            f"{int(now.timestamp() * 1_000_000)}"
+        )
+        await self._persistence.write_audit_log(  # type: ignore[attr-defined]
+            event_type=AuditManifest.EVENT_WORKSPACE_WRITE,
+            record=AuditManifest.workspace_write_record(
+                audit_event_id=audit_event_id,
+                org_id=self._org_id,
+                user_id=getattr(run, "user_id", None),
+                run_id=self._run_id,
+                op=record.op,
+                mount=record.mount,
+                path=record.path,
+                object_sha256=record.object_sha256,
+                size=record.size,
+                created_at=now.isoformat(),
+            ),
         )
 
 
