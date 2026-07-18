@@ -235,6 +235,25 @@ class WorkspaceMutationSnapshot(BaseModel):
     size: int = Field(ge=0)
     run_capability_context: str
 
+    def event_payload(self) -> dict[str, object]:
+        """Client-visible reference payload for a snapshot event.
+
+        Excludes ``run_capability_context`` — an opaque per-boot authority handle
+        that must never cross to the client — while carrying enough (op / mount /
+        virtual path / content address / size) to drive audit and undo.
+        """
+        return {
+            "op": self.op,
+            "mount": self.mount,
+            "path": self.path,
+            "object_sha256": self.object_sha256,
+            "size": self.size,
+        }
+
+    def event_summary(self) -> str:
+        """Short human summary for the snapshot event timeline row."""
+        return f"Snapshotted {self.path} before {self.op}"
+
 
 #: Async sink the backend calls with each pre-image reference BEFORE mutating.
 WorkspaceSnapshotEmitter = Callable[[WorkspaceMutationSnapshot], Awaitable[None]]
