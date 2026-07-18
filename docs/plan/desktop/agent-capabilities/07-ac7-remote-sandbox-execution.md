@@ -1,16 +1,22 @@
 # AC7 — Remote sandbox execution
 
-| Field             | Decision                                                                                                       |
-| ----------------- | -------------------------------------------------------------------------------------------------------------- |
-| Spec ID           | AC7                                                                                                            |
-| Status            | Draft; decision-complete and awaiting architecture review                                                      |
-| Wave              | 3 — Execution capabilities                                                                                     |
-| Estimated effort  | L — 15–20 engineer-days for the provider-neutral layer, LangSmith adapter, transfer path, and cleanup evidence |
-| Dependencies      | AC4 artifact store, AC5 scoped host filesystem access                                                          |
-| Required for      | AC10 hardening and staged desktop rollout                                                                      |
-| Primary owner     | `services/ai-backend` sandbox adapters                                                                         |
-| Supporting owners | Runtime worker, Electron capability broker, deployment/security                                                |
-| Web impact        | None                                                                                                           |
+| Field             | Decision                                                                                                                                                                        |
+| ----------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Spec ID           | AC7                                                                                                                                                                             |
+| Status            | **Planned — in scope** (wanted, not deferred); decision-complete and awaiting architecture review. Multi-PR epic: provider foundation → egress/secrets → lifecycle/patch-apply. |
+| Wave              | 3 — Execution capabilities                                                                                                                                                      |
+| Estimated effort  | L — 15–20 engineer-days for the provider-neutral layer, LangSmith adapter, transfer path, and cleanup evidence                                                                  |
+| Dependencies      | AC4 artifact store, AC5 scoped host filesystem access                                                                                                                           |
+| Required for      | AC10 hardening and staged desktop rollout                                                                                                                                       |
+| Primary owner     | `services/ai-backend` sandbox adapters                                                                                                                                          |
+| Supporting owners | Runtime worker, Electron capability broker, deployment/security                                                                                                                 |
+| Web impact        | None                                                                                                                                                                            |
+
+## Built-in-first (do not reinvent the framework)
+
+Use the DeepAgents/LangChain built-in as the engine — DeepAgents interpreters (Monty), `SandboxBackendProtocol` (remote sandbox), LangChain Playwright toolkit / browser-MCP, `langchain-mcp-adapters`, `HumanInTheLoopMiddleware`, LangGraph savers — and add only the thin enforcement layer (approval/budget/event/persistence) we require. Do not reinvent what the framework provides.
+
+For AC7 the engine is **DeepAgents `SandboxBackendProtocol` and its native `upload_files()`/`download_files()` transfer, with LangSmith as the initial provider** — 0xCopilot does not invent a vendor execution API. What AC7 adds is only the enforcement layer we require: a provider-neutral registry, a `PolicyEnforcedSandboxBackend` façade over the pinned protocol, deny-all egress compilation, short-lived audience-bound secret refs, snapshot-in / patch-out over AC4/AC5, and a durable reaper. This is the same discipline already validated in this codebase, where model-facing files are DeepAgents `CompositeBackend` routes ([`factory.py`](../../../../services/ai-backend/src/agent_runtime/execution/factory.py)) and graph continuation reuses the LangGraph `AsyncSqliteSaver` ([`deep_agent_builder.py`](../../../../services/ai-backend/src/agent_runtime/execution/deep_agent_builder.py)) rather than a bespoke engine. `LocalShellBackend` and raw host subprocess are the reinvention we explicitly refuse.
 
 ## Problem and why now
 
