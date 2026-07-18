@@ -173,3 +173,19 @@ export {
   type ProviderKeyValidation,
 } from "./data/providerKeys";
 // === end Phase 5 (PR-5.4) ===
+
+// === Phase 5 (PR-5.7) — Data & privacy (retention / memory / export / delete) ===
+// PrivacyPage fills the "privacy" SettingsSurface slot. Controlled +
+// presentation-only: retention/memory are props, and export/delete/activity/
+// review are injected HOST callbacks (chat-surface never touches fs, history,
+// routing, or storage). Delete is destructive and gated behind a typed
+// confirmation (PRIVACY_DELETE_CONFIRM_PHRASE) — never auto (FR-5.20).
+export {
+  PrivacyPage,
+  RETENTION_OPTIONS,
+  PRIVACY_EXPORT_PATH,
+  PRIVACY_DELETE_CONFIRM_PHRASE,
+  type PrivacyPageProps,
+  type RetentionChoice,
+} from "./PrivacyPage";
+// === end Phase 5 (PR-5.7) ===
