@@ -23,7 +23,9 @@ const NOW = Date.parse("2026-07-18T12:00:00Z");
 const asConversationId = (s: string): ConversationId =>
   s as unknown as ConversationId;
 
-function makeRow(overrides: Partial<ChatArchiveRow> = {}): ChatArchiveRow {
+function makeRow(
+  overrides: Partial<Omit<ChatArchiveRow, "id">> & { id?: string } = {},
+): ChatArchiveRow {
   return {
     id: asConversationId(overrides.id ?? "conv-1"),
     title: overrides.title ?? "Quarterly revenue analysis",
