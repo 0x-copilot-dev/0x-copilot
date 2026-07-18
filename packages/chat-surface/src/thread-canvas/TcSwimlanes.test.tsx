@@ -300,6 +300,56 @@ describe("TcSwimlanes", () => {
     expect(container).toHaveAttribute("data-playhead", "now");
   });
 
+  it("⌘← / ⌘→ step beads and ⌘L snaps to now (PR-3.7 / FR-3.14)", () => {
+    const transport = makeTransport();
+    const onScrubChange = vi.fn<(p: Playhead) => void>();
+    renderWith(
+      transport,
+      makeKvStore(),
+      <TcSwimlanes runId="run-1" onScrubChange={onScrubChange} />,
+    );
+
+    act(() => {
+      transport.emit(
+        JSON.stringify(
+          envelope({
+            event_id: "e1",
+            created_at: "2026-05-17T10:00:00.000Z",
+            payload: { surface_uri: "email://draft-1" },
+          }),
+        ),
+      );
+      transport.emit(
+        JSON.stringify(
+          envelope({
+            event_id: "e2",
+            created_at: "2026-05-17T10:00:05.000Z",
+            payload: { surface_uri: "email://draft-1" },
+          }),
+        ),
+      );
+    });
+
+    const container = screen.getByTestId("tc-swimlanes");
+
+    // ⌘← steps back from now to the previous bead…
+    fireEvent.keyDown(container, { key: "ArrowLeft", metaKey: true });
+    expect(onScrubChange).toHaveBeenLastCalledWith({
+      at: Date.parse("2026-05-17T10:00:00.000Z"),
+    });
+
+    // …⌘→ steps forward…
+    fireEvent.keyDown(container, { key: "ArrowRight", metaKey: true });
+    expect(onScrubChange).toHaveBeenLastCalledWith({
+      at: Date.parse("2026-05-17T10:00:05.000Z"),
+    });
+
+    // …and ⌘L snaps back to live.
+    fireEvent.keyDown(container, { key: "l", metaKey: true });
+    expect(onScrubChange).toHaveBeenLastCalledWith("now");
+    expect(container).toHaveAttribute("data-playhead", "now");
+  });
+
   it("Snap-to-now, Branch and Restore are visible only when scrubbed off-now", () => {
     const transport = makeTransport();
     const onBranch = vi.fn<(at: number) => void>();

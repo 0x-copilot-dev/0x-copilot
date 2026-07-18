@@ -85,6 +85,14 @@ export interface RunWorkspaceRailProps {
   readonly chatSlot: ReactNode;
   /** Initial selected tab. Defaults to `"chat"` (FR-3.10). */
   readonly defaultTab?: RunRailTabId;
+  /**
+   * PR-3.7 (FR-3.15/3.16): when the cockpit is scrubbed off-now, the Approvals
+   * tab is suppressed — you cannot approve a past state. If Approvals was the
+   * active tab it falls back to Chat; snap-to-now (`scrubbed=false`) restores
+   * the tab. Default `false` (live). Chat/Sources/Agents are unaffected — you
+   * can still inspect a past state's sources/agents.
+   */
+  readonly scrubbed?: boolean;
 
   // ── Sources tab (WorkspacePane body inputs) ────────────────────────────
   readonly sources?: SourceEntryMap;
@@ -138,6 +146,7 @@ export function RunWorkspaceRail(props: RunWorkspaceRailProps): ReactElement {
     subagentHistoryGroups,
     approvalsQueue = EMPTY_APPROVALS,
     onJumpToApproval,
+    scrubbed = false,
   } = props;
 
   // Internal, survives mode/tab switches (the rail is never remounted across
@@ -145,8 +154,14 @@ export function RunWorkspaceRail(props: RunWorkspaceRailProps): ReactElement {
   const [activeTab, setActiveTab] = useState<RunRailTabId>(defaultTab);
 
   const isStudio = mode === "studio";
-  // Focus mode is ALWAYS Chat; Studio honors the selected tab (FR-3.13).
-  const effectiveTab: RunRailTabId = isStudio ? activeTab : "chat";
+  // PR-3.7 (FR-3.15): approvals are hidden while scrubbed off-now. If Approvals
+  // was the active tab, fall back to Chat so the panel does not linger without
+  // its tab. Focus mode is ALWAYS Chat; Studio honors the selected tab (FR-3.13).
+  const effectiveTab: RunRailTabId = isStudio
+    ? scrubbed && activeTab === "approvals"
+      ? "chat"
+      : activeTab
+    : "chat";
   const chatVisible = effectiveTab === "chat";
 
   // Counts (FR-3.12) derived from the injected maps — same semantics as
@@ -163,11 +178,16 @@ export function RunWorkspaceRail(props: RunWorkspaceRailProps): ReactElement {
       label: "Agents",
       badge: agentsBadge(runningAgents, agentsCount),
     },
-    {
-      id: "approvals",
-      label: "Approvals",
-      badge: approvalsBadge(pendingApprovals),
-    },
+    // PR-3.7: the Approvals tab drops out of the tablist while scrubbed.
+    ...(scrubbed
+      ? []
+      : [
+          {
+            id: "approvals" as const,
+            label: "Approvals",
+            badge: approvalsBadge(pendingApprovals),
+          },
+        ]),
   ];
 
   return (
@@ -175,6 +195,7 @@ export function RunWorkspaceRail(props: RunWorkspaceRailProps): ReactElement {
       data-testid="run-workspace-rail"
       data-mode={mode}
       data-active-tab={effectiveTab}
+      data-approvals-hidden={scrubbed ? "true" : "false"}
       style={railStyle}
     >
       {/* Tab chrome is suppressed in Focus — the rail is Chat-only (FR-3.13). */}

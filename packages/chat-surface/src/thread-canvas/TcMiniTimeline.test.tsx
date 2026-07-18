@@ -237,4 +237,76 @@ describe("TcMiniTimeline", () => {
     });
     expect(onSnapToNow).toHaveBeenCalledTimes(1);
   });
+
+  // === PR-3.7 (FR-3.14) — ⌘←/⌘→ step + ⌘L snap-to-now ===
+
+  it("⌘← steps to the previous bead (Meta-modified arrow)", () => {
+    const onScrub = vi.fn();
+    render(
+      <TcMiniTimeline
+        beads={sampleBeads}
+        scrubbedTo={2}
+        onScrub={onScrub}
+        onSnapToNow={() => {}}
+      />,
+    );
+    fireEvent.keyDown(screen.getByTestId("tc-mini-timeline"), {
+      key: "ArrowLeft",
+      metaKey: true,
+    });
+    expect(onScrub).toHaveBeenCalledWith(1);
+  });
+
+  it("⌘→ from the last bead snaps to now", () => {
+    const onScrub = vi.fn();
+    const onSnapToNow = vi.fn();
+    render(
+      <TcMiniTimeline
+        beads={sampleBeads}
+        scrubbedTo={2}
+        onScrub={onScrub}
+        onSnapToNow={onSnapToNow}
+      />,
+    );
+    fireEvent.keyDown(screen.getByTestId("tc-mini-timeline"), {
+      key: "ArrowRight",
+      metaKey: true,
+    });
+    expect(onSnapToNow).toHaveBeenCalledTimes(1);
+    expect(onScrub).not.toHaveBeenCalled();
+  });
+
+  it("⌘L snaps to now", () => {
+    const onSnapToNow = vi.fn();
+    render(
+      <TcMiniTimeline
+        beads={sampleBeads}
+        scrubbedTo={1}
+        onScrub={() => {}}
+        onSnapToNow={onSnapToNow}
+      />,
+    );
+    fireEvent.keyDown(screen.getByTestId("tc-mini-timeline"), {
+      key: "l",
+      metaKey: true,
+    });
+    expect(onSnapToNow).toHaveBeenCalledTimes(1);
+  });
+
+  it("Ctrl+L snaps to now (non-mac chord)", () => {
+    const onSnapToNow = vi.fn();
+    render(
+      <TcMiniTimeline
+        beads={sampleBeads}
+        scrubbedTo={1}
+        onScrub={() => {}}
+        onSnapToNow={onSnapToNow}
+      />,
+    );
+    fireEvent.keyDown(screen.getByTestId("tc-mini-timeline"), {
+      key: "l",
+      ctrlKey: true,
+    });
+    expect(onSnapToNow).toHaveBeenCalledTimes(1);
+  });
 });
