@@ -1,5 +1,6 @@
 import { type CSSProperties, type ReactElement } from "react";
 
+import { BrandMark } from "./BrandMark";
 import {
   SHELL_DESTINATIONS,
   type ShellDestination,
@@ -214,28 +215,6 @@ function Glyph({ slug }: { slug: ShellDestinationSlug }): ReactElement {
   }
 }
 
-// Brand mark — 6-blade turbine/asterisk (DESIGN-SPEC §7). Single-accent
-// discipline: rendered monochrome in `--color-accent` (the button's colour)
-// rather than the prototype's sky gradient, so it follows `[data-accent]`.
-function BrandGlyph(): ReactElement {
-  return (
-    <svg
-      aria-hidden
-      focusable={false}
-      fill="none"
-      stroke="currentColor"
-      strokeWidth={1.7}
-      strokeLinecap="round"
-      viewBox="0 0 24 24"
-      width={18}
-      height={18}
-    >
-      <path d="M12 4v6M12 14v6M4.5 7.75l5.2 3M14.3 13.25l5.2 3M4.5 16.25l5.2-3M14.3 10.75l5.2-3" />
-      <circle cx="12" cy="12" r="2.2" fill="currentColor" stroke="none" />
-    </svg>
-  );
-}
-
 function SettingsGlyph(): ReactElement {
   return (
     <svg
@@ -383,7 +362,7 @@ export function AppRail({
           color: "var(--color-accent)",
         }}
       >
-        <BrandGlyph />
+        <BrandMark size={20} />
       </button>
       <div style={itemsStyle}>
         {destinations.map((d) => {

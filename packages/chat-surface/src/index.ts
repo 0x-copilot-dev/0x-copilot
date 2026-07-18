@@ -218,6 +218,7 @@ export * from "./ports";
 // === Phase 1-B chat-shell-layout ===
 export {
   AppRail,
+  BrandMark,
   ContextPanel,
   Topbar,
   RightRail,
@@ -231,6 +232,7 @@ export {
   defaultDestinationForProfile,
   destinationsForProfile,
   type AppRailProps,
+  type BrandMarkProps,
   type ChatShellProps,
   type ContextPanelPrimaryAction,
   type ContextPanelProps,

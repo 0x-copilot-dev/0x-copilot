@@ -37,7 +37,7 @@
  */
 
 import { Button, Card } from "@0x-copilot/design-system";
-import { useKeyValueStore } from "@0x-copilot/chat-surface";
+import { BrandMark, useKeyValueStore } from "@0x-copilot/chat-surface";
 import type { WorkspaceCandidate } from "@0x-copilot/api-types";
 import type { ReactElement } from "react";
 import { useCallback, useEffect, useState } from "react";
@@ -1004,18 +1004,12 @@ function BackLink({ onClick }: { onClick(): void }): ReactElement {
 
 /** Hexagonal 0xCopilot copilot mark, sky accent. */
 function CopilotMark(): ReactElement {
+  // The canonical 0xCopilot turbine — the SAME `BrandMark` the desktop shell and
+  // sign-in render (source of truth: 0xCopilot-kit/brand/favicon.svg). One brand
+  // mark everywhere, never a per-surface hand-rolled glyph.
   return (
     <div className="loginx-mark" aria-hidden="true">
-      <svg viewBox="0 0 32 32" focusable="false">
-        <path
-          className="loginx-mark__hex"
-          d="M16 2.5 27.7 9.25v13.5L16 29.5 4.3 22.75V9.25z"
-        />
-        <path
-          className="loginx-mark__cursor"
-          d="M12 10.5 22 16l-4.4 1.5L15.8 22z"
-        />
-      </svg>
+      <BrandMark size={44} />
     </div>
   );
 }
