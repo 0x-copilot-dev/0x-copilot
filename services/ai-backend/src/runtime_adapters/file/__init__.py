@@ -17,6 +17,11 @@ from runtime_adapters.file.agent_state_store import (
     FileSubagentDefinitionStore,
     MemoryDocument,
 )
+from runtime_adapters.file._capacity import (
+    FileStoreCleanupReport,
+    FileStoreQuotaError,
+    QuotaGuard,
+)
 from runtime_adapters.file.citation_store import FileCitationStore
 from runtime_adapters.file.conversation_tool_ordinal_store import (
     FileConversationToolOrdinalStore,
@@ -42,6 +47,9 @@ from runtime_adapters.file.subagent_trace_backend import FileSubagentTraceBacken
 __all__ = [
     "FileRuntimeApiStore",
     "FileObjectStore",
+    "FileStoreCleanupReport",
+    "FileStoreQuotaError",
+    "QuotaGuard",
     "ObjectRef",
     "FileOffloadWriter",
     "FileLargeToolResultBackend",
