@@ -30,6 +30,10 @@ from agent_runtime.capabilities.desktop.workspace_backend import (
     WorkspaceBackendConfig,
     WorkspaceMount,
     WorkspaceMountTable,
+    WorkspaceMutationSnapshot,
+    WorkspaceSnapshotEmitter,
+    WorkspaceSnapshotError,
+    WorkspaceSnapshotStore,
     WorkspaceWriteNotSupportedError,
     build_workspace_backend,
 )
@@ -56,6 +60,10 @@ __all__ = [
     "WorkspaceBackendConfig",
     "WorkspaceMount",
     "WorkspaceMountTable",
+    "WorkspaceMutationSnapshot",
+    "WorkspaceSnapshotEmitter",
+    "WorkspaceSnapshotError",
+    "WorkspaceSnapshotStore",
     "WorkspaceWriteNotSupportedError",
     "build_workspace_backend",
 ]
