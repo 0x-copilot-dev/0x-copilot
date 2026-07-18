@@ -52,6 +52,39 @@ export type ConnectorStatus =
   | "expired";
 
 // ---------------------------------------------------------------------------
+// Access mode (desktop redesign, Phase 4 — Tools destination)
+// ---------------------------------------------------------------------------
+//
+// Source: docs/plan/desktop-redesign/design-reference/DESIGN-SPEC.md §3
+// (Tools = connectors: per-tool segmented `Read / Read & act / Off`) +
+// phase-4/PRD.md FR-4.21/4.22 + §11 (access-mode is a NEW per-connector
+// concept, distinct from OAuth scopes and from the global tool-use
+// approval policy — the recommended shape is this new persisted field).
+
+/**
+ * Canonical per-connector access modes, as the runtime SSOT (value tuple)
+ * the union derives from. Kept as an `as const` tuple so the union is also
+ * runtime-enumerable (the 3-way segmented control, tests) with a single
+ * declaration site — no value/type drift.
+ *
+ * * `read`     — the agent may READ from the connector (least privilege
+ *                that still lets it see data).
+ * * `read_act` — the agent may read AND ACT through the connector
+ *                (write/side-effecting calls, still subject to the global
+ *                approval policy in Settings → Model & behavior).
+ * * `off`      — the connector is disabled for the agent; no reads, no acts.
+ */
+export const CONNECTOR_ACCESS_MODES = ["read", "read_act", "off"] as const;
+
+/**
+ * Per-connector access mode driving the Tools destination's 3-way
+ * segmented control (Read / Read & act / Off). The global approval
+ * *policy* lives separately (Settings → Model & behavior); this field is
+ * the per-connector *which app may do what* switch.
+ */
+export type ConnectorAccessMode = (typeof CONNECTOR_ACCESS_MODES)[number];
+
+// ---------------------------------------------------------------------------
 // Scope — the OAuth scopes a user granted, per slug, per connection.
 // ---------------------------------------------------------------------------
 
@@ -93,6 +126,14 @@ export interface Connector {
   readonly description: string;
   readonly status: ConnectorStatus;
   readonly status_reason?: string;
+  /**
+   * Per-connector access mode (Tools destination 3-way segment). OPTIONAL
+   * and backward-compatible: the facade does not serve it until the
+   * access-mode PATCH lands (PRD §11), so older payloads omit it. When
+   * absent, consumers SHOULD default to least privilege (`off`) rather
+   * than assume a granted mode.
+   */
+  readonly access_mode?: ConnectorAccessMode;
   readonly owner_user_id: UserId;
   /**
    * Scopes granted by the user, per the most recent OAuth round-trip.
@@ -211,6 +252,26 @@ export interface PatchConnectorScopesRequest {
 export interface PatchConnectorScopesResponse {
   readonly reauth_url: string;
   readonly state: string;
+}
+
+/**
+ * `PATCH /v1/connectors/{id}/access-mode` request body (desktop redesign,
+ * Phase 4). Sets the per-connector Read / Read & act / Off mode driving
+ * the Tools destination segment. Unlike the scopes PATCH this does NOT
+ * trigger a re-OAuth round-trip — the mode is a local gate, not an OAuth
+ * grant change. The host applies it optimistically and reverts on failure
+ * (PRD FR-4.22).
+ */
+export interface SetConnectorAccessModeRequest {
+  readonly access_mode: ConnectorAccessMode;
+}
+
+/**
+ * `PATCH /v1/connectors/{id}/access-mode` response — the connector row
+ * with its updated `access_mode`.
+ */
+export interface SetConnectorAccessModeResponse {
+  readonly connector: Connector;
 }
 
 /**
