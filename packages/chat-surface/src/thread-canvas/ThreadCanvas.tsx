@@ -45,6 +45,7 @@ import {
   type CSSProperties,
   type KeyboardEvent as ReactKeyboardEvent,
   type ReactElement,
+  type ReactNode,
 } from "react";
 
 import type {
@@ -104,6 +105,23 @@ export interface ThreadCanvasProps {
   readonly scrubbedSeq?: number | null;
   readonly onScrub?: (sequenceNo: number) => void;
   readonly onSnapToNow?: () => void;
+  /**
+   * PR-3.6 right-rail slot (PRD §5 data-flow). When provided, this node is
+   * rendered in the chat `gridArea` **in place of** the built-in `TcChat`
+   * column — the recomposed `RunWorkspaceRail` (`[Chat · Sources · Agents ·
+   * Approvals]`) mounts here, hosting `TcChat` inside its Chat tab. Rendered
+   * inside the `SwimlaneScrubProvider` so a nested `TcChat` still reads the
+   * scrub context. Keeping this a plain `ReactNode` lets the rail be composed
+   * by the host (`RunDestination`) without `ThreadCanvas` importing
+   * `WorkspacePane` (dependency-light, FR-3.11). Omitted → default `TcChat`.
+   */
+  readonly rightRail?: ReactNode;
+  /**
+   * PR-3.6: gate the in-canvas Studio/Focus switcher. Defaults to `true`
+   * (standalone / web usage). `RunDestination` passes `false` so `RunHeader`
+   * is the single mode control (per the PR-3.5 seam note).
+   */
+  readonly showModeSwitcher?: boolean;
 }
 
 const EMPTY_EVENTS: readonly RuntimeEventEnvelope[] = [];
@@ -131,6 +149,8 @@ export function ThreadCanvas(props: ThreadCanvasProps): ReactElement {
     scrubbedSeq = null,
     onScrub,
     onSnapToNow,
+    rightRail,
+    showModeSwitcher = true,
   } = props;
 
   // SINGLE projector — every consumer reads slices off this object.
@@ -192,7 +212,9 @@ export function ThreadCanvas(props: ThreadCanvasProps): ReactElement {
       }
       style={gridStyleFor(mode)}
     >
-      <ModeSwitcherTabs mode={mode} onModeChange={onModeChange} />
+      {showModeSwitcher ? (
+        <ModeSwitcherTabs mode={mode} onModeChange={onModeChange} />
+      ) : null}
 
       {showTabs ? (
         <div style={tabsRowStyle}>
@@ -225,12 +247,22 @@ export function ThreadCanvas(props: ThreadCanvasProps): ReactElement {
         <div
           data-testid="tc-chat-slot"
           data-visible="true"
+          data-rail={rightRail !== undefined ? "true" : "false"}
           style={chatSlotStyle(mode)}
         >
-          <TcChat
-            conversationId={conversationId as unknown as string}
-            mode={mode}
-          />
+          {/* PR-3.6: when the host injects a right rail, it OWNS the chat
+              column (its Chat tab hosts the single TcChat). Otherwise fall
+              back to the built-in TcChat so standalone/web usage is
+              unchanged. Rendered here — inside SwimlaneScrubProvider — so a
+              nested TcChat still resolves the scrub context. */}
+          {rightRail !== undefined ? (
+            rightRail
+          ) : (
+            <TcChat
+              conversationId={conversationId as unknown as string}
+              mode={mode}
+            />
+          )}
         </div>
 
         {showSwimlanes && runId !== null ? (
