@@ -16,7 +16,7 @@ import {
   within,
 } from "@testing-library/react";
 import { type ReactElement } from "react";
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 
 import type { ConversationId } from "@0x-copilot/api-types";
 import type {
@@ -271,7 +271,7 @@ describe("RunDestination — shell composition", () => {
     expect(failedSub?.closed).toBe(true);
   });
 
-  it("renders without a run (idle) — no error banner, canvas still mounted", async () => {
+  it("renders the empty/idle goal composer (not a blank canvas) when there is no run — PR-3.11/FR-3.25", async () => {
     const transport = new FakeTransport();
     transport.requestHandler = async (req) =>
       req.path.includes("/messages") ? { messages: [] } : { runs: [] };
@@ -281,8 +281,12 @@ describe("RunDestination — shell composition", () => {
       const root = screen.getByTestId("run-destination");
       expect(root.getAttribute("data-run-status")).toBe("idle");
     });
+    // Empty/idle → the goal composer, NOT a ThreadCanvas or a placeholder.
+    expect(screen.getByTestId("run-empty-state")).not.toBeNull();
+    expect(screen.queryByTestId("thread-canvas")).toBeNull();
     expect(screen.queryByTestId("run-error-banner")).toBeNull();
-    expect(screen.getByTestId("thread-canvas")).not.toBeNull();
+    // ≤1 run → no multi-run selector chrome.
+    expect(screen.queryByTestId("run-multi-select")).toBeNull();
     // No run → no SSE subscription opened.
     expect(transport.subs).toHaveLength(0);
   });
@@ -757,5 +761,175 @@ describe("RunDestination — approvals (PR-3.10 / FR-3.21/3.22)", () => {
     expect(screen.getByTestId("run-rail-approvals-badge")).toHaveTextContent(
       "1",
     );
+  });
+});
+
+// === PR-3.11 — empty/idle goal composer + multi-run selection ===
+//
+// Integration: with no run the shell mounts the empty-state goal composer
+// (FR-3.25); submitting a goal POSTs a run and binds it via the `runId` seam, so
+// the live cockpit mounts IN PLACE (the shell root node is unchanged). With >1
+// run the shell mounts the run selector (FR-3.26); picking a run rebinds the
+// session's SSE tail without remounting the ThreadCanvas.
+
+const TWO_RUNS = {
+  runs: [
+    {
+      run_id: "run-a",
+      status: "running",
+      goal: "Ship the renewal batch",
+      started_at: "2026-05-17T10:00:00.000Z",
+    },
+    {
+      run_id: "run-b",
+      status: "completed",
+      goal: "Reconcile Q2 invoices",
+      started_at: "2026-05-17T09:00:00.000Z",
+    },
+  ],
+};
+
+describe("RunDestination — empty/idle + multi-run (PR-3.11 / FR-3.25/3.26)", () => {
+  it("starts a run from the empty composer and binds it live WITHOUT remounting the shell (FR-3.25)", async () => {
+    const transport = new FakeTransport();
+    // No runs listed → empty state; POST creates `run-new`.
+    transport.requestHandler = async (req) => {
+      if (req.path.includes("/messages")) {
+        return { messages: [] };
+      }
+      if (req.method === "POST" && req.path === "/v1/agent/runs") {
+        return { run_id: "run-new" };
+      }
+      return { runs: [] };
+    };
+    renderRun(transport, makeStore());
+
+    // Empty/idle: the goal composer, no ThreadCanvas.
+    await screen.findByTestId("run-empty-state");
+    expect(screen.queryByTestId("thread-canvas")).toBeNull();
+    const rootBefore = screen.getByTestId("run-destination");
+
+    // Give it a goal and start.
+    fireEvent.change(screen.getByTestId("run-empty-goal-input"), {
+      target: { value: "Draft the launch note" },
+    });
+    act(() => {
+      fireEvent.click(screen.getByTestId("run-empty-submit"));
+    });
+
+    // Empty → live: the ThreadCanvas mounts in place, the composer is gone…
+    await screen.findByTestId("thread-canvas");
+    expect(screen.queryByTestId("run-empty-state")).toBeNull();
+    // …and the SHELL root is the SAME DOM node (no host/shell remount).
+    expect(screen.getByTestId("run-destination")).toBe(rootBefore);
+
+    // The freshly-started run drives the session's SSE tail.
+    await waitFor(() =>
+      expect(transport.sessionSub?.path).toBe("/v1/agent/runs/run-new/stream"),
+    );
+    // The shell POSTed the run through the Transport port (identity from token).
+    expect(
+      transport.requests.some(
+        (r) => r.method === "POST" && r.path === "/v1/agent/runs",
+      ),
+    ).toBe(true);
+  });
+
+  it("uses the host `onStartRun` when provided (host owns run creation)", async () => {
+    const transport = new FakeTransport();
+    transport.requestHandler = async (req) =>
+      req.path.includes("/messages") ? { messages: [] } : { runs: [] };
+    const onStartRun = vi.fn(async () => "host-run");
+
+    render(
+      <TransportProvider transport={transport}>
+        <KeyValueStoreProvider store={makeStore()}>
+          <RunDestination conversationId={CONV} onStartRun={onStartRun} />
+        </KeyValueStoreProvider>
+      </TransportProvider>,
+    );
+
+    await screen.findByTestId("run-empty-state");
+    fireEvent.change(screen.getByTestId("run-empty-goal-input"), {
+      target: { value: "Do the thing" },
+    });
+    act(() => {
+      fireEvent.click(screen.getByTestId("run-empty-submit"));
+    });
+
+    await screen.findByTestId("thread-canvas");
+    expect(onStartRun).toHaveBeenCalledWith("Do the thing");
+    // The host callback supplied the run id — the shell did NOT POST itself.
+    expect(
+      transport.requests.some(
+        (r) => r.method === "POST" && r.path === "/v1/agent/runs",
+      ),
+    ).toBe(false);
+    await waitFor(() =>
+      expect(transport.sessionSub?.path).toBe("/v1/agent/runs/host-run/stream"),
+    );
+  });
+
+  it("mounts the multi-run selector for >1 run and auto-binds the live run (FR-3.26)", async () => {
+    const transport = new FakeTransport();
+    transport.requestHandler = async (req) =>
+      req.path.includes("/messages") ? { messages: [] } : TWO_RUNS;
+    renderRun(transport, makeStore());
+
+    // Two runs → the selector mounts; the live (running) run auto-binds.
+    await screen.findByTestId("run-multi-select");
+    expect(screen.getByTestId("run-select-run-a")).not.toBeNull();
+    expect(screen.getByTestId("run-select-run-b")).not.toBeNull();
+    expect(
+      screen.getByTestId("run-select-run-a").getAttribute("aria-selected"),
+    ).toBe("true");
+    await waitFor(() =>
+      expect(transport.sessionSub?.path).toBe("/v1/agent/runs/run-a/stream"),
+    );
+    // The live layout renders (not the empty composer).
+    expect(screen.getByTestId("thread-canvas")).not.toBeNull();
+    expect(screen.queryByTestId("run-empty-state")).toBeNull();
+  });
+
+  it("selecting another run rebinds the session's SSE tail without remounting the canvas", async () => {
+    const transport = new FakeTransport();
+    transport.requestHandler = async (req) =>
+      req.path.includes("/messages") ? { messages: [] } : TWO_RUNS;
+    renderRun(transport, makeStore());
+
+    await screen.findByTestId("run-multi-select");
+    await waitFor(() =>
+      expect(transport.sessionSub?.path).toBe("/v1/agent/runs/run-a/stream"),
+    );
+    const canvasBefore = screen.getByTestId("thread-canvas");
+    const runASub = transport.sessionSub;
+
+    // Pick the other run.
+    act(() => {
+      fireEvent.click(screen.getByTestId("run-select-run-b"));
+    });
+
+    // The session rebinds to run-b's stream (a fresh sub; run-a's is closed)…
+    await waitFor(() =>
+      expect(transport.sessionSub?.path).toBe("/v1/agent/runs/run-b/stream"),
+    );
+    expect(runASub?.closed).toBe(true);
+    // …and the ThreadCanvas is the SAME node — no gratuitous cockpit remount.
+    expect(screen.getByTestId("thread-canvas")).toBe(canvasBefore);
+    expect(
+      screen.getByTestId("run-select-run-b").getAttribute("aria-selected"),
+    ).toBe("true");
+  });
+
+  it("shows no multi-run selector for a single run", async () => {
+    const transport = new FakeTransport();
+    transport.requestHandler = async (req) =>
+      req.path.includes("/messages")
+        ? { messages: [] }
+        : runningRun("Only run");
+    renderRun(transport, makeStore());
+
+    await screen.findByTestId("thread-canvas");
+    expect(screen.queryByTestId("run-multi-select")).toBeNull();
   });
 });
