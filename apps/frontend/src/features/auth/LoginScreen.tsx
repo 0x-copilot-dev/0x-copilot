@@ -1,90 +1,98 @@
 /**
- * Login screen (PR 5.1) — email-first IdP discovery + magic-link +
- * workspace picker, plus brand right pane.
+ * Login screen — v2 "0xCopilot Login" (wallet-first, quiet aesthetic).
  *
- * State machine (local to this component, narrows on each transition):
+ * A single centered card with five view states, wallet-first:
  *
- *   email
- *     └─ submit → kind=sso       → redirect (window.location.assign)
- *     └─ submit → kind=personal  → magic_link_sent
- *     └─ submit → kind=magic_link→ magic_link_sent
- *     └─ submit → kind=unknown   → error inline (bank-profile message)
+ *   pick        heading + three options:
+ *                 · Continue with a wallet   (PRIMARY, accent-filled)
+ *                 · Continue with Google     (gated on /v1/auth/providers)
+ *                 · Use locally, no account  (dev/desktop persona sign-in)
+ *   wallets     EIP-6963-discovered wallet list (or an honest empty state)
+ *   connecting  waiting for the extension to approve the connection
+ *   sign        signature-request review (address chip + message preview)
+ *   done        signed-in confirmation, workspace opening
  *
- * Above the email form sits an optional "Continue with Google" entry point.
- * It renders only when the unscoped ``GET /v1/auth/providers`` list
- * advertises ``provider_id: "google"`` (probed once on mount; any error
- * degrades silently to no-button). Clicking it navigates straight to the
- * existing ``/v1/auth/oidc/google/start`` URL — the same mechanism
- * ``RedirectStep`` uses for discovered SSO providers, minus ``org_id``
- * (no org is known yet; the server resolves the workspace from the Google
- * account). The email-first flow below the divider is unchanged.
+ * All three options wire to the REAL auth machinery — nothing is faked:
+ *   - Wallet → the same SIWE (EIP-4361) flow the standalone
+ *     ``WalletSignIn`` uses: EIP-6963 discovery (``discoverWalletProviders``),
+ *     ``requestSiweNonce`` / ``verifySiwe`` over ``/v1/auth/siwe/*``, the
+ *     frozen ``buildSiweMessage`` template, then ``auth.adoptSession`` — the
+ *     shared "bearer in hand, refresh the session" tail. The only reason
+ *     this doesn't render ``<WalletSignIn>`` verbatim is the v2 design's
+ *     explicit signature-review step, which that component (auto-sign)
+ *     structurally can't produce; the underlying primitives are reused.
+ *   - Google → ``buildGoogleStartUrl`` → ``/v1/auth/oidc/google/start``,
+ *     the same entry point the retained email path used. Renders only when
+ *     the unscoped ``/v1/auth/providers`` list advertises ``google``.
+ *   - Use locally → mint a dev-persona bearer (``mintDevBearer`` for the
+ *     active persona slug) and hand it to ``auth.adoptSession`` — the exact
+ *     dev-IdP path ``AuthContext`` uses on a 401, made an explicit choice.
  *
- * Below Google sits the "Connect wallet" entry point (``<WalletSignIn>``,
- * SIWE/EIP-4361 over EIP-6963 discovery). It is client-driven — no
- * provider probe — so it always renders, which is also why the divider
- * now renders unconditionally instead of riding on the Google flag.
- *
- *   redirect          (one-shot; the OIDC/SAML start URL handles the rest)
- *   magic_link_sent   ("Check your email"; dead-end until user clicks the URL)
- *   magic_link_cb     (consumes ?token= on mount)
- *   workspace_pick    (driven by auth.workspacePick from AuthContext)
- *
- * MFA is owned by ``AuthGate`` (status === "mfa_pending" → ``<MfaPrompt>``);
- * we don't render it here. Same for the authenticated path.
- *
- * Reuse:
- *   - ``ThemeProvider`` accent / theme already set globally; the brand
- *     pane reads from existing CSS tokens.
- *   - ``MfaPrompt`` mounts after a session is minted with requires_mfa=true;
- *     no extra wiring here.
- *   - ``auth.consumeMagicLink`` handles the bearer write + refresh.
- *   - ``auth.selectWorkspaceFromPick`` handles the pick-token exchange.
+ * Email is DROPPED from the rendered UI per the v2 design, but the whole
+ * email/magic-link flow is retained in ``emailLogin.tsx`` (dead-but-present,
+ * trivial to re-plug). ``MagicLinkCallbackStep`` and ``WorkspacePickStep``
+ * stay here because those completion paths are still reachable (an
+ * already-sent magic-link URL, or a multi-workspace return) even though no
+ * new links can be requested from the UI.
  */
 
-import {
-  Button,
-  Card,
-  Field,
-  TextInput,
-  classNames,
-} from "@0x-copilot/design-system";
-import type {
-  AuthDiscoverResponse,
-  WorkspaceCandidate,
-} from "@0x-copilot/api-types";
-import type { FormEvent, ReactElement } from "react";
-import { useCallback, useEffect, useRef, useState } from "react";
+import { Button, Card } from "@0x-copilot/design-system";
+import { useKeyValueStore } from "@0x-copilot/chat-surface";
+import type { WorkspaceCandidate } from "@0x-copilot/api-types";
+import type { ReactElement } from "react";
+import { useCallback, useEffect, useState } from "react";
 
-import {
-  discoverAuth,
-  listAuthProviders,
-  startMagicLink,
-} from "../../api/authApi";
-import { useAuth } from "./AuthContext";
-import { WalletSignIn } from "./WalletSignIn";
+import { listAuthProviders } from "../../api/authApi";
+import { mintDevBearer } from "../../api/devIdpApi";
+import { requestSiweNonce, verifySiwe } from "../../api/siweApi";
 import { errorMessage } from "../../utils/errors";
+import { toWireAddress } from "../../utils/eip55";
+import { useAuth } from "./AuthContext";
+import { loadActivePersonaSlug } from "./devIdp";
+import {
+  buildGoogleStartUrl,
+  GoogleGLogo,
+  GOOGLE_PROVIDER_ID,
+} from "./emailLogin";
+import {
+  discoverWalletProviders,
+  type Eip1193Provider,
+  type WalletProviderCandidate,
+} from "./eip6963";
+import { buildSiweMessage, defaultExpirationTime } from "./siweMessage";
+import { CHAIN_NOT_ALLOWED_MESSAGE } from "./WalletSignIn";
 
-const DEBOUNCE_MS = 450;
 const MAGIC_LINK_CALLBACK_PATH = "/auth/magic-link/callback";
-const EMAIL_SHAPE_RE = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
-const GOOGLE_PROVIDER_ID = "google";
+
+/** Frontend build version (mono footer line). */
+const APP_VERSION = "0.1.0";
+
+/** SIWE_ALLOWED_CHAIN_IDS (see backend siwe config) → display names. */
+const CHAIN_NAMES: Record<number, string> = {
+  1: "Ethereum",
+  8453: "Base",
+  42_161: "Arbitrum One",
+  4663: "Robinhood Chain",
+};
+
+function chainName(chainId: number): string {
+  return CHAIN_NAMES[chainId] ?? `Chain ${chainId}`;
+}
 
 type LoginStep =
-  | { kind: "email" }
-  | { kind: "redirect"; provider_id: string; org_id: string }
-  | { kind: "magic_link_sent"; email: string }
+  | { kind: "choose" }
   | { kind: "magic_link_cb"; token: string }
   | { kind: "workspace_pick" };
 
 export interface LoginScreenProps {
-  /** Default org slug — kept for backwards compat with the legacy URL hint
-   * (``?org_id=acme``). The new flow doesn't require it; if present, we
-   * pre-narrow discovery toward the matching workspace. */
+  /** Default org slug — retained for backwards compat with the legacy URL
+   * hint (``?org_id=acme``). Unused by the wallet-first flow. */
   defaultOrgId?: string;
-  /** Hide the magic-link CTA entirely (bank deploys with strict SSO). */
+  /** Hide the magic-link CTA entirely (bank deploys with strict SSO).
+   * Retained for the re-pluggable email path; the v2 UI never renders it. */
   hideMagicLink?: boolean;
-  /** Optional path to navigate to after a successful login. Carried into
-   * the magic-link URL as a signed claim on the token (server-side). */
+  /** Optional path to navigate to after a successful login (carried into
+   * the Google start URL). */
   returnTo?: string;
 }
 
@@ -93,18 +101,16 @@ export function LoginScreen(props: LoginScreenProps): ReactElement {
   const [step, setStep] = useState<LoginStep>(() => _initialStep(auth));
   const [googleLogin, setGoogleLogin] = useState(false);
 
-  // Re-anchor on workspace_pick when the AuthContext flips into it
-  // (consumeMagicLink → kind=workspace_pick_required).
+  // Re-anchor on workspace_pick when AuthContext flips into it
+  // (consumeMagicLink → workspace_pick_required).
   useEffect(() => {
     if (auth.status === "workspace_pick" && step.kind !== "workspace_pick") {
       setStep({ kind: "workspace_pick" });
     }
   }, [auth.status, step.kind]);
 
-  // One-shot public provider probe (no org context exists yet on the login
-  // screen, so this is the unscoped list). Any failure degrades silently to
-  // "no Google button" — the email-first flow is the fallback entry point
-  // and must never be blocked on this call.
+  // One-shot public provider probe. Any failure degrades silently to
+  // "no Google button" — wallet + use-locally are the always-on entries.
   useEffect(() => {
     let cancelled = false;
     listAuthProviders()
@@ -117,48 +123,38 @@ export function LoginScreen(props: LoginScreenProps): ReactElement {
         );
       })
       .catch(() => {
-        /* degrade silently — email-first stays the entry point */
+        /* degrade silently */
       });
     return () => {
       cancelled = true;
     };
   }, []);
 
+  // The login route needs normal page scroll (the chat shell scroll-locks
+  // <body>); opt out for as long as the screen is mounted.
+  useEffect(() => {
+    const { documentElement, body } = document;
+    documentElement.classList.add("login-html");
+    body.classList.add("login-body");
+    return () => {
+      documentElement.classList.remove("login-html");
+      body.classList.remove("login-body");
+    };
+  }, []);
+
   return (
-    <div className="login-shell" data-testid="login-screen">
-      <Brand />
-      <main className="login-pane">
-        {step.kind === "email" && (
-          <EmailStep
-            defaultOrgId={props.defaultOrgId}
-            hideMagicLink={props.hideMagicLink ?? false}
-            returnTo={props.returnTo}
+    <div className="loginx-shell" data-testid="login-screen">
+      <main className="loginx-pane">
+        {step.kind === "choose" && (
+          <SignInCard
             googleLogin={googleLogin}
-            onRedirect={(provider_id, org_id) =>
-              setStep({ kind: "redirect", provider_id, org_id })
-            }
-            onMagicLinkSent={(email) =>
-              setStep({ kind: "magic_link_sent", email })
-            }
-          />
-        )}
-        {step.kind === "redirect" && (
-          <RedirectStep
-            provider_id={step.provider_id}
-            org_id={step.org_id}
             returnTo={props.returnTo ?? null}
-          />
-        )}
-        {step.kind === "magic_link_sent" && (
-          <MagicLinkSent
-            email={step.email}
-            onBack={() => setStep({ kind: "email" })}
           />
         )}
         {step.kind === "magic_link_cb" && (
           <MagicLinkCallbackStep
             token={step.token}
-            onError={() => setStep({ kind: "email" })}
+            onError={() => setStep({ kind: "choose" })}
           />
         )}
         {step.kind === "workspace_pick" && <WorkspacePickStep />}
@@ -180,499 +176,630 @@ function _initialStep(auth: ReturnType<typeof useAuth>): LoginStep {
       }
     }
   }
-  return { kind: "email" };
+  return { kind: "choose" };
 }
 
 // ---------------------------------------------------------------------------
-// Brand pane
+// The wallet-first sign-in card — five view states in one component.
 // ---------------------------------------------------------------------------
 
-function Brand(): ReactElement {
-  return (
-    <aside className="login-brand" aria-label="Copilot">
-      <div className="login-brand__head">
-        <div className="login-brand__mark" aria-hidden="true">
-          C
-        </div>
-        <div className="login-brand__name">Copilot</div>
-      </div>
-      <div className="login-brand__body">
-        <div className="login-brand__eyebrow">
-          Agentic search for the rest of the company
-        </div>
-        <h1 className="login-brand__h">
-          One place to ask, <em>find,</em> and act — across every tool your team
-          already uses.
-        </h1>
-        <p className="login-brand__lede">
-          Copilot reads across your connected tools. It drafts, summarises and
-          follows up — with citations, approvals, and a clear paper trail.
-        </p>
-      </div>
-      <footer className="login-brand__foot">
-        <span>© 2026 0xCopilot</span>
-        <ul className="login-brand__compliance" aria-label="Compliance">
-          <li>SOC 2 Type II</li>
-          <li>ISO 27001</li>
-          <li>GDPR</li>
-          <li>HIPAA</li>
-        </ul>
-      </footer>
-    </aside>
-  );
-}
+type WalletView =
+  | { kind: "pick" }
+  | { kind: "discovering" }
+  | { kind: "wallets"; providers: WalletProviderCandidate[] }
+  | { kind: "connecting"; walletName: string }
+  | {
+      kind: "sign";
+      walletName: string;
+      provider: Eip1193Provider;
+      address: string;
+      chainId: number;
+      message: string;
+    }
+  | { kind: "verifying"; walletName: string }
+  | { kind: "done" };
 
-// ---------------------------------------------------------------------------
-// Email step
-// ---------------------------------------------------------------------------
-
-interface EmailStepProps {
-  defaultOrgId?: string;
-  hideMagicLink: boolean;
-  returnTo?: string;
-  /** True when the unscoped providers list advertises Google login. */
+interface SignInCardProps {
   googleLogin: boolean;
-  onRedirect(provider_id: string, org_id: string): void;
-  onMagicLinkSent(email: string): void;
+  returnTo: string | null;
 }
 
-type DiscoveryState =
-  | { kind: "idle" }
-  | { kind: "loading" }
-  | { kind: "ready"; data: AuthDiscoverResponse }
-  | { kind: "error"; message: string };
+function SignInCard({ googleLogin, returnTo }: SignInCardProps): ReactElement {
+  const auth = useAuth();
+  const kvStore = useKeyValueStore();
+  const [view, setView] = useState<WalletView>({ kind: "pick" });
+  const [error, setError] = useState<string | null>(null);
+  const [localBusy, setLocalBusy] = useState(false);
 
-function EmailStep({
-  hideMagicLink,
-  returnTo,
-  googleLogin,
-  onRedirect,
-  onMagicLinkSent,
-}: EmailStepProps): ReactElement {
-  const [email, setEmail] = useState("");
-  const [submitting, setSubmitting] = useState(false);
-  const [submitError, setSubmitError] = useState<string | null>(null);
-  const [discovery, setDiscovery] = useState<DiscoveryState>({ kind: "idle" });
-  const debounceRef = useRef<number | null>(null);
-  const abortRef = useRef<AbortController | null>(null);
-
-  // Auto-focus without scrolling. The login layout overrides body scroll
-  // (login.css opt-out) so the page stays anchored. We query by id rather
-  // than ref-forwarding so we don't have to widen the design-system primitive.
-  useEffect(() => {
-    const el = document.getElementById(
-      "login-email-input",
-    ) as HTMLInputElement | null;
-    el?.focus({ preventScroll: true });
+  const reset = useCallback(() => {
+    setError(null);
+    setView({ kind: "pick" });
   }, []);
 
-  // Debounced discovery as the user types. We cancel the in-flight request
-  // when the email changes so only the latest value resolves.
-  useEffect(() => {
-    if (debounceRef.current !== null) {
-      window.clearTimeout(debounceRef.current);
-    }
-    if (abortRef.current !== null) {
-      abortRef.current.abort();
-      abortRef.current = null;
-    }
-    if (!_emailLooksComplete(email)) {
-      setDiscovery({ kind: "idle" });
-      return;
-    }
-    setDiscovery({ kind: "loading" });
-    debounceRef.current = window.setTimeout(() => {
-      const controller = new AbortController();
-      abortRef.current = controller;
-      discoverAuth({ email })
-        .then((data) => {
-          if (controller.signal.aborted) return;
-          setDiscovery({ kind: "ready", data });
-        })
-        .catch((err: unknown) => {
-          if (controller.signal.aborted) return;
-          const message = errorMessage(err, "could not look up domain");
-          setDiscovery({ kind: "error", message });
-        });
-    }, DEBOUNCE_MS);
-    return () => {
-      if (debounceRef.current !== null) {
-        window.clearTimeout(debounceRef.current);
-        debounceRef.current = null;
-      }
-    };
-  }, [email]);
+  // --- Wallet: EIP-6963 discovery → picker -------------------------------
+  const openWallets = useCallback(async (): Promise<void> => {
+    setError(null);
+    setView({ kind: "discovering" });
+    const providers = await discoverWalletProviders();
+    // Always land on the list view — an empty list renders the honest
+    // "no wallet detected" state rather than an error toast.
+    setView({ kind: "wallets", providers });
+  }, []);
 
-  const submit = useCallback(
-    async (event: FormEvent<HTMLFormElement>): Promise<void> => {
-      event.preventDefault();
-      if (submitting || !_emailLooksComplete(email)) {
-        return;
-      }
-      setSubmitting(true);
-      setSubmitError(null);
+  // --- Wallet: connect + nonce + build message → signature review --------
+  const selectWallet = useCallback(
+    async (candidate: WalletProviderCandidate): Promise<void> => {
+      const walletName = candidate.info.name;
+      setError(null);
+      setView({ kind: "connecting", walletName });
       try {
-        // If discovery already ran and we have a result, use it. Otherwise
-        // fire a synchronous discover so the submit isn't a no-op when the
-        // user hits Enter before the debounce settles.
-        const result =
-          discovery.kind === "ready"
-            ? discovery.data
-            : await discoverAuth({ email });
-        if (result.kind === "sso" && result.provider_id && result.org_id) {
-          onRedirect(result.provider_id, result.org_id);
-          return;
-        }
-        if (
-          (result.kind === "personal" || result.kind === "magic_link") &&
-          result.magic_link_supported &&
-          !hideMagicLink
-        ) {
-          await startMagicLink({ email, return_to: returnTo });
-          onMagicLinkSent(email);
-          return;
-        }
-        // unknown / SSO-required / magic-link disabled — surface the
-        // server's message verbatim if present, otherwise a generic
-        // SSO-required string.
-        setSubmitError(
-          result.message ??
-            "Your workspace requires single sign-on. Contact your admin.",
-        );
+        const { address, chainId } = await connectWallet(candidate.provider);
+        const nonce = await requestSiweNonce({
+          address: toWireAddress(address),
+          chain_id: chainId,
+        });
+        const issuedAt = new Date().toISOString();
+        const message = buildSiweMessage({
+          domain: window.location.host,
+          uri: window.location.origin,
+          address,
+          chainId,
+          nonce: nonce.nonce,
+          issuedAt,
+          expirationTime: defaultExpirationTime(issuedAt),
+        });
+        setView({
+          kind: "sign",
+          walletName,
+          provider: candidate.provider,
+          address,
+          chainId,
+          message,
+        });
       } catch (err) {
-        const message = errorMessage(err, "login failed");
-        setSubmitError(message);
-      } finally {
-        setSubmitting(false);
+        _handleWalletError(err, setError, reset);
       }
     },
-    [
-      submitting,
-      email,
-      discovery,
-      hideMagicLink,
-      returnTo,
-      onRedirect,
-      onMagicLinkSent,
-    ],
+    [reset],
   );
 
-  const buttonLabel = _adaptiveButtonLabel(discovery, hideMagicLink);
-  const data = discovery.kind === "ready" ? discovery.data : null;
-  const canSubmit = !submitting && _emailLooksComplete(email);
+  // --- Wallet: personal_sign + verify + session handoff ------------------
+  const signAndContinue = useCallback(async (): Promise<void> => {
+    if (view.kind !== "sign") return;
+    const { provider, message, address, walletName } = view;
+    setError(null);
+    setView({ kind: "verifying", walletName });
+    try {
+      const signature = await personalSign(provider, message, address);
+      const session = await verifySiwe({ message, signature });
+      setView({ kind: "done" });
+      // Same tail as magic-link / workspace-pick completion.
+      await auth.adoptSession({
+        bearer_token: session.bearer_token,
+        session_id: session.session_id,
+        user_id: session.user_id,
+        requires_mfa: session.requires_mfa,
+      });
+    } catch (err) {
+      _handleWalletError(err, setError, reset);
+    }
+  }, [auth, reset, view]);
+
+  // --- Use locally: dev-persona bearer → adoptSession --------------------
+  const signInLocally = useCallback(async (): Promise<void> => {
+    if (localBusy) return;
+    setLocalBusy(true);
+    setError(null);
+    try {
+      const slug = loadActivePersonaSlug(kvStore);
+      const mint = await mintDevBearer(slug);
+      await auth.adoptSession({
+        bearer_token: mint.bearer,
+        // session_id is only read by adoptSession on the requires_mfa
+        // branch (dev personas never require MFA), so an empty value is
+        // inert here; user_id is the real minted identity.
+        session_id: "",
+        user_id: mint.identity.user_id,
+        requires_mfa: false,
+      });
+    } catch (err) {
+      setError(
+        errorMessage(err, "Local sign-in is unavailable in this build."),
+      );
+    } finally {
+      setLocalBusy(false);
+    }
+  }, [auth, kvStore, localBusy]);
+
+  // --- Google: navigate to the OIDC start URL ----------------------------
+  const continueWithGoogle = useCallback((): void => {
+    window.location.assign(buildGoogleStartUrl(returnTo));
+  }, [returnTo]);
 
   return (
-    <Card className="login-card login-card--email" tone="default">
-      <header className="login-card__head">
-        <h2>Sign in to Copilot</h2>
-        <p>
-          Enter your work email — we&rsquo;ll route you to the right sign-in.
-        </p>
-      </header>
-      {googleLogin && <GoogleSignInButton returnTo={returnTo ?? null} />}
-      <WalletSignIn />
-      <div className="login-divider" role="separator">
-        <span>or continue with email</span>
-      </div>
-      <form
-        className="login-card__form"
-        onSubmit={submit}
-        data-testid="login-email-form"
-        noValidate
-      >
-        <Field label="Email" className="login-card__field">
-          <TextInput
-            id="login-email-input"
-            type="email"
-            inputMode="email"
-            autoComplete="email"
-            placeholder="you@company.com"
-            value={email}
-            onChange={(e) => {
-              setEmail(e.target.value);
-              setSubmitError(null);
-            }}
-            data-testid="login-email-input"
-          />
-        </Field>
-        {data !== null && <DiscoveryCard data={data} />}
-        {discovery.kind === "loading" && (
-          <p className="login-card__hint" role="status">
-            Checking your domain&rsquo;s directory…
-          </p>
-        )}
-        {submitError && (
-          <p
-            className="login-card__error"
-            role="alert"
-            data-testid="login-error"
-          >
-            {submitError}
-          </p>
-        )}
-        <Button
-          type="submit"
-          variant="primary"
-          size="lg"
-          disabled={!canSubmit}
-          data-testid="login-submit"
-          className={classNames("login-card__submit")}
-        >
-          {submitting ? "One moment…" : buttonLabel}
-        </Button>
-      </form>
+    <Card className="loginx-card" tone="default">
+      <CopilotMark />
+
+      {view.kind === "pick" && (
+        <PickView
+          googleLogin={googleLogin}
+          localBusy={localBusy}
+          error={error}
+          onWallet={() => void openWallets()}
+          onGoogle={continueWithGoogle}
+          onLocal={() => void signInLocally()}
+        />
+      )}
+
+      {view.kind === "discovering" && (
+        <WalletsView
+          providers={null}
+          error={error}
+          onBack={reset}
+          onSelect={() => {}}
+        />
+      )}
+
+      {view.kind === "wallets" && (
+        <WalletsView
+          providers={view.providers}
+          error={error}
+          onBack={reset}
+          onSelect={(c) => void selectWallet(c)}
+        />
+      )}
+
+      {view.kind === "connecting" && (
+        <ConnectingView walletName={view.walletName} onCancel={reset} />
+      )}
+
+      {view.kind === "sign" && (
+        <SignView
+          walletName={view.walletName}
+          address={view.address}
+          chainId={view.chainId}
+          message={view.message}
+          error={error}
+          onCancel={reset}
+          onSign={() => void signAndContinue()}
+        />
+      )}
+
+      {view.kind === "verifying" && (
+        <ConnectingView
+          walletName={view.walletName}
+          verifying
+          onCancel={reset}
+        />
+      )}
+
+      {view.kind === "done" && <DoneView />}
     </Card>
   );
 }
 
-function _emailLooksComplete(email: string): boolean {
-  return EMAIL_SHAPE_RE.test(email.trim());
-}
-
-function _adaptiveButtonLabel(
-  state: DiscoveryState,
-  hideMagicLink: boolean,
-): string {
-  if (state.kind !== "ready") return "Continue";
-  const data = state.data;
-  if (data.kind === "sso" && data.provider_display_name) {
-    return `Continue with ${data.provider_display_name}`;
-  }
-  if (
-    (data.kind === "personal" || data.kind === "magic_link") &&
-    data.magic_link_supported &&
-    !hideMagicLink
-  ) {
-    return "Email me a sign-in link";
-  }
-  return "Continue";
-}
-
 // ---------------------------------------------------------------------------
-// "Continue with Google" entry point.
-//
-// Same mechanism as <RedirectStep>: navigate to the existing facade OIDC
-// start URL and let the server drive the rest of the dance. Unlike the
-// discovered-SSO path there is no org_id yet — the Google account decides
-// the workspace server-side. return_to handling mirrors RedirectStep.
+// Pick view — the three sign-in options.
 // ---------------------------------------------------------------------------
 
-function GoogleSignInButton({
-  returnTo,
+function PickView({
+  googleLogin,
+  localBusy,
+  error,
+  onWallet,
+  onGoogle,
+  onLocal,
 }: {
-  returnTo: string | null;
+  googleLogin: boolean;
+  localBusy: boolean;
+  error: string | null;
+  onWallet(): void;
+  onGoogle(): void;
+  onLocal(): void;
 }): ReactElement {
-  const onClick = useCallback((): void => {
-    const params = new URLSearchParams({
-      redirect_uri: window.location.origin + "/v1/auth/oidc/callback",
-    });
-    if (returnTo) {
-      params.set("return_to", returnTo);
-    }
-    window.location.assign(
-      `/v1/auth/oidc/${encodeURIComponent(GOOGLE_PROVIDER_ID)}/start?${params}`,
-    );
-  }, [returnTo]);
+  return (
+    <>
+      <header className="loginx-head">
+        <h1 className="loginx-title">
+          Welcome to <span className="loginx-zx">0x</span>Copilot
+        </h1>
+        <p className="loginx-sub">
+          Choose how to sign in — either way, it runs on your machine.
+        </p>
+      </header>
 
+      <div className="loginx-options">
+        <OptionButton
+          variant="primary"
+          testId="login-option-wallet"
+          icon={<WalletGlyph />}
+          label="Continue with a wallet"
+          subtitle="MetaMask · Rabby · WalletConnect · Ledger"
+          onClick={onWallet}
+        />
+
+        {googleLogin && (
+          <OptionButton
+            testId="login-google"
+            icon={<GoogleGLogo className="loginx-opt__glyph" />}
+            label="Continue with Google"
+            subtitle="for encrypted settings sync"
+            onClick={onGoogle}
+          />
+        )}
+
+        <div className="loginx-divider" role="separator">
+          <span>or</span>
+        </div>
+
+        <OptionButton
+          testId="login-option-local"
+          icon={<ChipGlyph />}
+          label="Use locally, no account"
+          subtitle="everything stays on this device"
+          busy={localBusy}
+          onClick={onLocal}
+        />
+      </div>
+
+      {error !== null && (
+        <p className="login-card__error" role="alert" data-testid="login-error">
+          {error}
+        </p>
+      )}
+
+      <footer className="loginx-foot">
+        <p className="loginx-note">
+          <strong>No seed phrase, ever.</strong> Wallet sign-in is a signed
+          message — no transaction, no gas. You can link an account later in
+          Settings.
+        </p>
+        <p className="loginx-version">
+          v{APP_VERSION} · {import.meta.env.DEV ? "local build" : "main"}
+        </p>
+      </footer>
+    </>
+  );
+}
+
+function OptionButton({
+  variant = "secondary",
+  testId,
+  icon,
+  label,
+  subtitle,
+  busy = false,
+  onClick,
+}: {
+  variant?: "primary" | "secondary";
+  testId: string;
+  icon: ReactElement;
+  label: string;
+  subtitle: string;
+  busy?: boolean;
+  onClick(): void;
+}): ReactElement {
   return (
     <button
       type="button"
-      className="login-google-btn"
+      className="loginx-opt"
+      data-variant={variant}
+      data-testid={testId}
       onClick={onClick}
-      data-testid="login-google"
+      disabled={busy}
     >
-      <GoogleGLogo />
-      <span>Continue with Google</span>
+      <span className="loginx-opt__icon" aria-hidden="true">
+        {icon}
+      </span>
+      <span className="loginx-opt__body">
+        <span className="loginx-opt__label">{label}</span>
+        <span className="loginx-opt__sub">
+          {busy ? "One moment…" : subtitle}
+        </span>
+      </span>
+      <span className="loginx-opt__chev" aria-hidden="true">
+        <ChevronRight />
+      </span>
     </button>
   );
 }
 
-/** Official four-colour Google "G" mark (brand guidelines; never re-tint). */
-function GoogleGLogo(): ReactElement {
+// ---------------------------------------------------------------------------
+// Wallets view — EIP-6963 discovered list, or the honest empty state.
+// ---------------------------------------------------------------------------
+
+function WalletsView({
+  providers,
+  error,
+  onBack,
+  onSelect,
+}: {
+  /** null while discovery is still running. */
+  providers: WalletProviderCandidate[] | null;
+  error: string | null;
+  onBack(): void;
+  onSelect(candidate: WalletProviderCandidate): void;
+}): ReactElement {
   return (
-    <svg
-      className="login-google-btn__logo"
-      viewBox="0 0 48 48"
-      aria-hidden="true"
-      focusable="false"
-    >
-      <path
-        fill="#EA4335"
-        d="M24 9.5c3.54 0 6.71 1.22 9.21 3.6l6.85-6.85C35.9 2.38 30.47 0 24 0 14.62 0 6.51 5.38 2.56 13.22l7.98 6.19C12.43 13.72 17.74 9.5 24 9.5z"
-      />
-      <path
-        fill="#4285F4"
-        d="M46.98 24.55c0-1.57-.15-3.09-.38-4.55H24v9.02h12.94c-.58 2.96-2.26 5.48-4.78 7.18l7.73 6c4.51-4.18 7.09-10.36 7.09-17.65z"
-      />
-      <path
-        fill="#FBBC05"
-        d="M10.53 28.59c-.48-1.45-.76-2.99-.76-4.59s.27-3.14.76-4.59l-7.98-6.19C.92 16.46 0 20.12 0 24c0 3.88.92 7.54 2.56 10.78l7.97-6.19z"
-      />
-      <path
-        fill="#34A853"
-        d="M24 48c6.48 0 11.93-2.13 15.89-5.81l-7.73-6c-2.15 1.45-4.92 2.3-8.16 2.3-6.26 0-11.57-4.22-13.47-9.91l-7.98 6.19C6.51 42.62 14.62 48 24 48z"
-      />
-    </svg>
+    <>
+      <BackLink onClick={onBack} />
+      <header className="loginx-head">
+        <h1 className="loginx-title">Choose a wallet</h1>
+        <p className="loginx-sub">
+          We&rsquo;ll ask it to sign a one-line message. Nothing is broadcast
+          on-chain.
+        </p>
+      </header>
+
+      {providers === null ? (
+        <p className="loginx-status" role="status">
+          Looking for wallets…
+        </p>
+      ) : providers.length === 0 ? (
+        <div className="loginx-empty" data-testid="wallet-empty">
+          <p className="loginx-empty__title">No wallet detected</p>
+          <p className="loginx-empty__hint">
+            Install a browser wallet (MetaMask, Rabby, …), then reload this
+            page. Or use one of the other sign-in options.
+          </p>
+        </div>
+      ) : (
+        <ul className="loginx-wallets" aria-label="Available wallets">
+          {providers.map((candidate) => (
+            <li key={candidate.info.uuid}>
+              <button
+                type="button"
+                className="loginx-wallet-row"
+                onClick={() => onSelect(candidate)}
+                data-testid={`wallet-provider-${candidate.info.rdns}`}
+              >
+                {candidate.info.icon ? (
+                  <img
+                    className="loginx-wallet-row__icon"
+                    src={candidate.info.icon}
+                    alt=""
+                    aria-hidden="true"
+                  />
+                ) : (
+                  <span
+                    className="loginx-wallet-row__icon loginx-wallet-row__icon--letter"
+                    aria-hidden="true"
+                  >
+                    {candidate.info.name.charAt(0).toUpperCase()}
+                  </span>
+                )}
+                <span className="loginx-wallet-row__body">
+                  <span className="loginx-wallet-row__name">
+                    {candidate.info.name}
+                  </span>
+                  <span className="loginx-wallet-row__sub">
+                    {candidate.info.rdns}
+                  </span>
+                </span>
+                <span className="loginx-opt__chev" aria-hidden="true">
+                  <ChevronRight />
+                </span>
+              </button>
+            </li>
+          ))}
+        </ul>
+      )}
+
+      {error !== null && (
+        <p
+          className="login-card__error"
+          role="alert"
+          data-testid="wallet-error"
+        >
+          {error}
+        </p>
+      )}
+    </>
   );
 }
 
 // ---------------------------------------------------------------------------
-// Discovery card (shown beneath the email field once a result is in)
+// Connecting / verifying view — a spinner while the extension is busy.
 // ---------------------------------------------------------------------------
 
-function DiscoveryCard({ data }: { data: AuthDiscoverResponse }): ReactElement {
-  if (data.kind === "sso") {
-    return (
-      <div
-        className="login-discovery login-discovery--sso"
-        data-testid="login-discovery-sso"
-      >
-        <div className="login-discovery__row">
-          <strong className="login-discovery__org">
-            {data.org_display_name ?? data.org_id}
-          </strong>
-          <span className="login-discovery__domain">· {data.domain}</span>
-        </div>
-        <div className="login-discovery__row">
-          Sign in with{" "}
-          <strong>
-            {data.provider_display_name ?? data.provider_kind ?? "SSO"}
-          </strong>
-          {data.member_count !== null && (
-            <span className="login-discovery__members">
-              · {data.member_count.toLocaleString()} members
-            </span>
-          )}
-        </div>
-        {data.sso_enforced && (
-          <span
-            className="login-discovery__badge"
-            data-testid="login-discovery-sso-enforced"
-          >
-            SSO enforced
-          </span>
-        )}
-      </div>
-    );
-  }
-  if (data.kind === "personal") {
-    return (
-      <div
-        className="login-discovery login-discovery--personal"
-        data-testid="login-discovery-personal"
-      >
-        <strong>{data.provider_display_name ?? "Personal"} account</strong>
-        <p className="login-discovery__hint">
-          We&rsquo;ll email you a one-time sign-in link.
-        </p>
-      </div>
-    );
-  }
-  if (data.kind === "magic_link") {
-    return (
-      <div
-        className="login-discovery login-discovery--unknown"
-        data-testid="login-discovery-unknown"
-      >
-        <strong>No SSO found for {data.domain}</strong>
-        <p className="login-discovery__hint">
-          We&rsquo;ll email you a one-time sign-in link.
-        </p>
-      </div>
-    );
-  }
-  // unknown
+function ConnectingView({
+  walletName,
+  verifying = false,
+  onCancel,
+}: {
+  walletName: string;
+  verifying?: boolean;
+  onCancel(): void;
+}): ReactElement {
   return (
-    <div
-      className="login-discovery login-discovery--blocked"
-      data-testid="login-discovery-blocked"
-      role="alert"
-    >
-      <strong>{data.message ?? "Single sign-on required."}</strong>
+    <div className="loginx-wait" data-testid="wallet-connecting">
+      <Spinner />
+      <h1 className="loginx-title">
+        {verifying ? "Verifying signature…" : `Waiting for ${walletName}…`}
+      </h1>
+      <p className="loginx-sub">
+        {verifying
+          ? "Confirming your signature with the server."
+          : "Approve the connection request in the extension."}
+      </p>
+      {!verifying && (
+        <Button type="button" variant="ghost" size="sm" onClick={onCancel}>
+          Cancel
+        </Button>
+      )}
     </div>
   );
 }
 
 // ---------------------------------------------------------------------------
-// Redirect step — ships the user to the existing OIDC/SAML start URL.
+// Sign view — signature-request review before personal_sign.
 // ---------------------------------------------------------------------------
 
-function RedirectStep({
-  provider_id,
-  org_id,
-  returnTo,
+function SignView({
+  walletName,
+  address,
+  chainId,
+  message,
+  error,
+  onCancel,
+  onSign,
 }: {
-  provider_id: string;
-  org_id: string;
-  returnTo: string | null;
-}): ReactElement {
-  useEffect(() => {
-    const params = new URLSearchParams({
-      org_id,
-      redirect_uri: window.location.origin + "/v1/auth/oidc/callback",
-    });
-    if (returnTo) {
-      params.set("return_to", returnTo);
-    }
-    // OIDC start is the first ramp; deploys with SAML can branch here on
-    // the provider kind. v1 sends both through the OIDC path because the
-    // existing facade route is the same for both.
-    window.location.assign(
-      `/v1/auth/oidc/${encodeURIComponent(provider_id)}/start?${params}`,
-    );
-  }, [provider_id, org_id, returnTo]);
-
-  return (
-    <Card className="login-card login-card--redirect" tone="muted">
-      <header className="login-card__head">
-        <h2>Redirecting to your IdP…</h2>
-        <p>
-          You&rsquo;ll come back here once your IdP confirms it&rsquo;s you.
-        </p>
-      </header>
-    </Card>
-  );
-}
-
-// ---------------------------------------------------------------------------
-// Magic-link sent
-// ---------------------------------------------------------------------------
-
-function MagicLinkSent({
-  email,
-  onBack,
-}: {
-  email: string;
-  onBack(): void;
+  walletName: string;
+  address: string;
+  chainId: number;
+  message: string;
+  error: string | null;
+  onCancel(): void;
+  onSign(): void;
 }): ReactElement {
   return (
-    <Card className="login-card login-card--magic-sent" tone="default">
-      <header className="login-card__head">
-        <h2>Check your email</h2>
-        <p>
-          We sent a one-time sign-in link to <strong>{email}</strong>. The link
-          is valid for 15 minutes.
+    <>
+      <header className="loginx-head">
+        <h1 className="loginx-title">Signature request</h1>
+        <p className="loginx-sub">
+          Signing proves you own this address. It never leaves your machine.
         </p>
       </header>
-      <p className="login-card__hint">
-        Didn&rsquo;t see it? Check your spam folder, or{" "}
+
+      <div className="loginx-addr" data-testid="wallet-address">
+        <span className="loginx-addr__dot" aria-hidden="true" />
+        <span className="loginx-addr__hex">{shortenAddress(address)}</span>
+        <span className="loginx-addr__meta">
+          {walletName} · {chainName(chainId)}
+        </span>
+      </div>
+
+      <pre className="loginx-message" data-testid="wallet-message">
+        {message}
+      </pre>
+
+      {error !== null && (
+        <p
+          className="login-card__error"
+          role="alert"
+          data-testid="wallet-error"
+        >
+          {error}
+        </p>
+      )}
+
+      <div className="loginx-actions">
+        <Button type="button" variant="ghost" size="md" onClick={onCancel}>
+          Cancel
+        </Button>
         <Button
           type="button"
-          variant="ghost"
-          size="sm"
-          onClick={onBack}
-          data-testid="login-magic-back"
+          variant="primary"
+          size="md"
+          onClick={onSign}
+          data-testid="wallet-sign-submit"
         >
-          use a different email
+          Sign &amp; continue
         </Button>
-        .
-      </p>
-    </Card>
+      </div>
+    </>
   );
 }
 
 // ---------------------------------------------------------------------------
-// Magic-link callback step (consumes ?token= on mount)
+// Done view — jade check, workspace opening.
+// ---------------------------------------------------------------------------
+
+function DoneView(): ReactElement {
+  return (
+    <div className="loginx-done" data-testid="wallet-done">
+      <span className="loginx-done__check" aria-hidden="true">
+        <CheckGlyph />
+      </span>
+      <h1 className="loginx-title">Signed in</h1>
+      <p className="loginx-sub">Opening your workspace…</p>
+    </div>
+  );
+}
+
+// ---------------------------------------------------------------------------
+// EIP-1193 plumbing (standard wallet glue — the frozen SIWE contract lives
+// in siweMessage.ts / siweApi.ts, not here). Mirrors WalletSignIn's private
+// helpers so this card can drive the flow with an explicit review step.
+// ---------------------------------------------------------------------------
+
+async function connectWallet(
+  provider: Eip1193Provider,
+): Promise<{ address: string; chainId: number }> {
+  const accounts = await provider.request({ method: "eth_requestAccounts" });
+  if (
+    !Array.isArray(accounts) ||
+    accounts.length === 0 ||
+    typeof accounts[0] !== "string"
+  ) {
+    throw new Error("wallet returned no accounts");
+  }
+  const address = accounts[0];
+
+  const chainHex = await provider.request({ method: "eth_chainId" });
+  const chainId =
+    typeof chainHex === "string" ? Number.parseInt(chainHex, 16) : Number.NaN;
+  if (!Number.isInteger(chainId) || chainId <= 0) {
+    throw new Error("wallet returned an invalid chain id");
+  }
+  return { address, chainId };
+}
+
+async function personalSign(
+  provider: Eip1193Provider,
+  message: string,
+  address: string,
+): Promise<string> {
+  const signature = await provider.request({
+    method: "personal_sign",
+    params: [hexEncodeUtf8(message), address],
+  });
+  if (typeof signature !== "string" || !signature.startsWith("0x")) {
+    throw new Error("wallet returned an invalid signature");
+  }
+  return signature;
+}
+
+function hexEncodeUtf8(text: string): string {
+  let hex = "0x";
+  for (const byte of new TextEncoder().encode(text)) {
+    hex += byte.toString(16).padStart(2, "0");
+  }
+  return hex;
+}
+
+/** EIP-1193 ProviderRpcError code 4001 — "User Rejected Request". */
+function isUserRejection(err: unknown): boolean {
+  return (
+    typeof err === "object" &&
+    err !== null &&
+    "code" in err &&
+    (err as { code: unknown }).code === 4001
+  );
+}
+
+function _handleWalletError(
+  err: unknown,
+  setError: (message: string | null) => void,
+  reset: () => void,
+): void {
+  if (isUserRejection(err)) {
+    // Deliberate cancel — back to the picker, quietly.
+    reset();
+    return;
+  }
+  const detail = errorMessage(err, "wallet sign-in failed");
+  setError(detail === "chain_not_allowed" ? CHAIN_NOT_ALLOWED_MESSAGE : detail);
+  reset();
+}
+
+function shortenAddress(address: string): string {
+  if (address.length <= 12) return address;
+  return `${address.slice(0, 6)}…${address.slice(-4)}`;
+}
+
+// ---------------------------------------------------------------------------
+// Magic-link callback step (RETAINED — consumes ?token= on mount).
 // ---------------------------------------------------------------------------
 
 function MagicLinkCallbackStep({
@@ -684,32 +811,29 @@ function MagicLinkCallbackStep({
 }): ReactElement {
   const auth = useAuth();
   const [error, setError] = useState<string | null>(null);
-  const consumedRef = useRef(false);
+  const [consumed, setConsumed] = useState(false);
 
   useEffect(() => {
-    if (consumedRef.current) return;
-    consumedRef.current = true;
+    if (consumed) return;
+    setConsumed(true);
     void (async () => {
       try {
         await auth.consumeMagicLink(token);
-        // On session_minted, AuthContext flips to authenticated → AuthGate
-        // remounts the app shell. On workspace_pick_required, AuthContext
-        // flips to workspace_pick → the parent re-anchors. URL hygiene
-        // (stripping ?token=) is owned by AuthContext.consumeMagicLink
-        // so the call site only handles errors.
       } catch (err) {
-        const message = errorMessage(err, "could not consume link");
-        setError(message);
+        setError(errorMessage(err, "could not consume link"));
       }
     })();
-  }, [auth, token]);
+  }, [auth, token, consumed]);
 
   return (
-    <Card className="login-card login-card--magic-cb" tone="default">
-      <header className="login-card__head">
-        <h2>Signing you in…</h2>
+    <Card className="loginx-card" tone="default">
+      <CopilotMark />
+      <header className="loginx-head">
+        <h1 className="loginx-title">Signing you in…</h1>
         {error === null ? (
-          <p>Hang tight — verifying your sign-in link.</p>
+          <p className="loginx-sub">
+            Hang tight — verifying your sign-in link.
+          </p>
         ) : (
           <>
             <p role="alert" className="login-card__error">
@@ -732,7 +856,7 @@ function MagicLinkCallbackStep({
 }
 
 // ---------------------------------------------------------------------------
-// Workspace picker (post-magic-link, multi-workspace)
+// Workspace picker (RETAINED — post-magic-link, multi-workspace).
 // ---------------------------------------------------------------------------
 
 function WorkspacePickStep(): ReactElement {
@@ -743,8 +867,11 @@ function WorkspacePickStep(): ReactElement {
 
   if (pick === null) {
     return (
-      <Card className="login-card" tone="muted">
-        <p>Workspace pick state expired. Please request a new link.</p>
+      <Card className="loginx-card" tone="muted">
+        <CopilotMark />
+        <p className="loginx-sub">
+          Workspace pick state expired. Please request a new link.
+        </p>
       </Card>
     );
   }
@@ -756,23 +883,23 @@ function WorkspacePickStep(): ReactElement {
     try {
       await auth.selectWorkspaceFromPick(org_id);
     } catch (err) {
-      const message = errorMessage(err, "could not select workspace");
-      setError(message);
+      setError(errorMessage(err, "could not select workspace"));
     } finally {
       setSubmittingOrg(null);
     }
   };
 
   return (
-    <Card className="login-card login-card--pick" tone="default">
-      <header className="login-card__head">
-        <h2>Pick a workspace</h2>
-        <p>
+    <Card className="loginx-card" tone="default">
+      <CopilotMark />
+      <header className="loginx-head">
+        <h1 className="loginx-title">Pick a workspace</h1>
+        <p className="loginx-sub">
           Choose where you want to land. We&rsquo;ll remember your last one.
         </p>
       </header>
       <ul
-        className="login-pick__list"
+        className="loginx-wallets"
         aria-label="Your workspaces"
         data-testid="login-pick-list"
       >
@@ -811,21 +938,26 @@ function WorkspaceRow({
   onSelect(): void;
 }): ReactElement {
   return (
-    <li className="login-pick__row">
+    <li>
       <button
         type="button"
-        className="login-pick__btn"
+        className="loginx-wallet-row"
         onClick={onSelect}
         disabled={disabled}
         data-testid={`login-pick-${workspace.org_id}`}
         data-org-id={workspace.org_id}
       >
-        <span className="login-pick__avatar" aria-hidden="true">
+        <span
+          className="loginx-wallet-row__icon loginx-wallet-row__icon--letter"
+          aria-hidden="true"
+        >
           {workspace.display_name.charAt(0).toUpperCase()}
         </span>
-        <span className="login-pick__col">
-          <span className="login-pick__name">{workspace.display_name}</span>
-          <span className="login-pick__sub">
+        <span className="loginx-wallet-row__body">
+          <span className="loginx-wallet-row__name">
+            {workspace.display_name}
+          </span>
+          <span className="loginx-wallet-row__sub">
             {workspace.role} · {workspace.member_count.toLocaleString()} member
             {workspace.member_count === 1 ? "" : "s"}
             {workspace.last_active_at !== null && (
@@ -833,8 +965,8 @@ function WorkspaceRow({
             )}
           </span>
         </span>
-        <span className="login-pick__chev" aria-hidden="true">
-          {submitting ? "…" : "›"}
+        <span className="loginx-opt__chev" aria-hidden="true">
+          {submitting ? "…" : <ChevronRight />}
         </span>
       </button>
     </li>
@@ -851,4 +983,108 @@ function _formatLastActive(iso: string): string {
   const days = Math.floor(seconds / 86_400);
   if (days < 30) return `${days}d ago`;
   return new Date(iso).toLocaleDateString();
+}
+
+// ---------------------------------------------------------------------------
+// Small presentational bits.
+// ---------------------------------------------------------------------------
+
+function BackLink({ onClick }: { onClick(): void }): ReactElement {
+  return (
+    <button
+      type="button"
+      className="loginx-back"
+      onClick={onClick}
+      data-testid="wallet-back"
+    >
+      <span aria-hidden="true">‹</span> Back
+    </button>
+  );
+}
+
+/** Hexagonal 0xCopilot copilot mark, sky accent. */
+function CopilotMark(): ReactElement {
+  return (
+    <div className="loginx-mark" aria-hidden="true">
+      <svg viewBox="0 0 32 32" focusable="false">
+        <path
+          className="loginx-mark__hex"
+          d="M16 2.5 27.7 9.25v13.5L16 29.5 4.3 22.75V9.25z"
+        />
+        <path
+          className="loginx-mark__cursor"
+          d="M12 10.5 22 16l-4.4 1.5L15.8 22z"
+        />
+      </svg>
+    </div>
+  );
+}
+
+function ChevronRight(): ReactElement {
+  return (
+    <svg
+      viewBox="0 0 24 24"
+      fill="none"
+      stroke="currentColor"
+      strokeWidth="1.8"
+      strokeLinecap="round"
+      strokeLinejoin="round"
+      focusable="false"
+    >
+      <path d="m9 6 6 6-6 6" />
+    </svg>
+  );
+}
+
+function WalletGlyph(): ReactElement {
+  return (
+    <svg
+      className="loginx-opt__glyph"
+      viewBox="0 0 24 24"
+      fill="none"
+      stroke="currentColor"
+      strokeWidth="1.6"
+      focusable="false"
+    >
+      <rect x="3" y="6" width="18" height="13" rx="2.5" />
+      <path d="M16 3.8H6.2A3.2 3.2 0 0 0 3 7v1" />
+      <circle cx="16.6" cy="12.6" r="1.15" fill="currentColor" stroke="none" />
+    </svg>
+  );
+}
+
+function ChipGlyph(): ReactElement {
+  return (
+    <svg
+      className="loginx-opt__glyph"
+      viewBox="0 0 24 24"
+      fill="none"
+      stroke="currentColor"
+      strokeWidth="1.6"
+      focusable="false"
+    >
+      <rect x="6" y="6" width="12" height="12" rx="2" />
+      <path d="M9 3v3M15 3v3M9 18v3M15 18v3M3 9h3M3 15h3M18 9h3M18 15h3" />
+    </svg>
+  );
+}
+
+function CheckGlyph(): ReactElement {
+  return (
+    <svg
+      viewBox="0 0 24 24"
+      fill="none"
+      stroke="currentColor"
+      strokeWidth="2.4"
+      strokeLinecap="round"
+      strokeLinejoin="round"
+      focusable="false"
+    >
+      <path d="m5 12.5 4.5 4.5L19 7" />
+    </svg>
+  );
+}
+
+function Spinner(): ReactElement {
+  return <span className="loginx-spinner" aria-hidden="true" />;
 }
