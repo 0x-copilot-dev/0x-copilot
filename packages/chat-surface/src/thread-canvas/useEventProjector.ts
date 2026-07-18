@@ -39,7 +39,8 @@ import type { Approval } from "./_approvals-stub";
 
 /**
  * Consumer-shape for `TcSurfaceMount`. Carries the per-surface state map
- * + a `hasActiveSurfaces` flag used by Auto mode to pick its layout.
+ * + a `hasActiveSurfaces` flag (true once any surface has a recorded
+ * payload).
  */
 export interface SurfaceConsumer {
   /** All surface uris with at least one recorded payload. */
