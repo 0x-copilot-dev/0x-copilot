@@ -51,9 +51,9 @@ const PALETTE = {
   textHi: "#E4E5E9",
   textMid: "#c8ccd1",
   textLo: "#7E8492",
-  lime: "#c2ff5a",
+  lime: "var(--color-accent)",
   limeBgSoft: "rgba(194, 255, 90, 0.10)",
-  changed: "#c2ff5a",
+  changed: "var(--color-accent)",
   changedBg: "rgba(194, 255, 90, 0.12)",
   removed: "#ef5a5a",
 } as const;
