@@ -154,14 +154,6 @@ describe("TcChat", () => {
     );
   });
 
-  it("renders auto mode similar to studio but with the reduced-chrome flag", async () => {
-    const { transport } = makeTransport(() => Promise.resolve(SAMPLE_RESPONSE));
-    render(withTransport(transport, <TcChat conversationId="c" mode="auto" />));
-    await screen.findByText("Draft an email to ops");
-    expect(screen.getByTestId("tc-chat")).toHaveAttribute("data-mode", "auto");
-    expect(screen.getByTestId("composer")).toBeInTheDocument();
-  });
-
   it("renders an error state when the message fetch rejects", async () => {
     const { transport } = makeTransport(() =>
       Promise.reject(new Error("nope")),

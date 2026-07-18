@@ -1,0 +1,26 @@
+"""File-native runtime adapters for the single-user desktop profile.
+
+Plaintext JSONL folders (Claude-Code-session style) are canonical; a
+content-addressed object store holds large payloads; a disposable SQLite
+catalog index answers listing/lookup. See ``runtime_api_store.py`` for the
+locked design decisions.
+"""
+
+from runtime_adapters.file.citation_store import FileCitationStore
+from runtime_adapters.file.conversation_tool_ordinal_store import (
+    FileConversationToolOrdinalStore,
+)
+from runtime_adapters.file.draft_store import FileDraftStore
+from runtime_adapters.file.object_store import FileObjectStore, ObjectRef
+from runtime_adapters.file.runtime_api_store import FileRuntimeApiStore
+from runtime_adapters.file.share_store import FileShareStore
+
+__all__ = [
+    "FileRuntimeApiStore",
+    "FileObjectStore",
+    "ObjectRef",
+    "FileCitationStore",
+    "FileDraftStore",
+    "FileShareStore",
+    "FileConversationToolOrdinalStore",
+]

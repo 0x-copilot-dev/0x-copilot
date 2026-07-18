@@ -2,7 +2,7 @@ import type { CSSProperties } from "react";
 
 const PALETTE = {
   lime: "var(--color-accent)",
-  limeShadow: "rgba(194, 255, 90, 0.18)",
+  limeShadow: "color-mix(in srgb, var(--color-accent) 18%, transparent)",
   cardBg: "#181a1c",
   cardBorder: "#2a2d31",
   laneBg: "#1f2225",
