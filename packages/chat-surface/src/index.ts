@@ -48,6 +48,16 @@ export {
   type PresenceSignal,
   type PresenceState,
 } from "./presence/presence-signal";
+// === Phase 0 (PR-0.4) DeploymentProfile port ===
+// Runtime profile supplied by the host substrate; gates team-only surfaces
+// (Workspace / Members / Billing) off on single-user desktop. Consolidation
+// targets land under messages/composer/citations/subagents/approvals/workspace.
+export {
+  DeploymentProfileProvider,
+  useDeploymentProfile,
+  type DeploymentProfile,
+} from "./providers/DeploymentProfileProvider";
+// === end Phase 0 (PR-0.4) ===
 export { ChatShell } from "./shell/ChatShell";
 export { CopyIcon } from "./icons/CopyIcon";
 export { RetryIcon } from "./icons/RetryIcon";
