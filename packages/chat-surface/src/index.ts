@@ -660,3 +660,41 @@ export {
   type WebhookSecurityPageProps,
 } from "./settings";
 // === end Phase 12 Settings ===
+
+// === Phase 5 (PR-5.2) — settings design primitives (tokenized) ===
+export {
+  Modal,
+  StepDots,
+  MODAL_WIDTH,
+  SetCard,
+  SecHead,
+  SetNote,
+  Frow,
+  Krow,
+  SettingsNavItem,
+  SaveBar,
+  Toast,
+  SegmentedControl,
+  AccentSwatch,
+  ThemeTile,
+  ProgressBar,
+  type ModalProps,
+  type StepDotsProps,
+  type SetCardProps,
+  type SecHeadProps,
+  type SetNoteProps,
+  type SetNoteTone,
+  type FrowProps,
+  type KrowProps,
+  type SettingsNavItemProps,
+  type SaveBarProps,
+  type ToastProps,
+  type ToastTone,
+  type SegmentedControlProps,
+  type SegmentedOption,
+  type AccentSwatchProps,
+  type ThemeTileProps,
+  type ProgressBarProps,
+  type ProgressTone,
+} from "./settings";
+// === end Phase 5 (PR-5.2) ===
