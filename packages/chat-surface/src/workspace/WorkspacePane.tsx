@@ -1,0 +1,277 @@
+// PR 3.2 — Workspace pane host (right rail).
+// PR-1.7 — hoisted into @0x-copilot/chat-surface so web and desktop mount
+// one copy (FR-1.24).
+//
+// Composition shell only. Owns no fetches, no event subscriptions. The
+// pane is open/closed via `useWorkspacePaneState` (host-owned); data flows
+// in via props (citations / subagents / drafts / approvalsQueue / skills)
+// the parent (ChatScreen) lifts from the upstream host hooks (FR-1.25).
+// Every `chatModel`-typed value at this boundary is expressed as a
+// chat-surface-local type (`./workspaceHelpers`, `./types`) so this file
+// never imports apps/frontend (FR-1.27).
+//
+// The right column lives inside `aui-workspace` and is collapsible. On
+// viewports < 1100px the pane switches to overlay mode (CSS handles
+// the position-fixed anchoring; this component just sets a data attr).
+
+import { IconButton } from "@0x-copilot/design-system";
+import type { Skill, SourceEntry, SubagentEntry } from "@0x-copilot/api-types";
+import { useId, type ReactElement } from "react";
+
+import { ApprovalsTab } from "./ApprovalsTab";
+import { AgentsTab } from "./AgentsTab";
+import { DraftTab, type DraftTabProps } from "./DraftTab";
+import { SkillsTab } from "./SkillsTab";
+import { SourcesTab, type SourceRowSlot } from "./SourcesTab";
+import {
+  WorkspaceTabs,
+  workspaceTabPanelId,
+  type WorkspaceTabsItem,
+} from "./WorkspaceTabs";
+import { TAB_LABELS, tabLabel } from "./pluralize";
+import {
+  isRunningStatus,
+  type SourceEntryMap,
+  type SubagentSnapshotMap,
+} from "./workspaceHelpers";
+import type {
+  ApprovalsQueueProjection,
+  SubagentActivitiesByTask,
+  SubagentHistoryGroup,
+  WorkspacePaneState,
+  WorkspacePaneTabId,
+} from "./types";
+
+export interface WorkspacePaneProps {
+  state: WorkspacePaneState;
+  /** Sources tab inputs (PR 1.5 reducer + PR 3.1 archive). */
+  sources: SourceEntryMap;
+  sourcesLoading?: boolean;
+  sourcesError?: string | null;
+  /** PR 3.7.1 — derived from runUiState; drives the "Looking for sources…" shimmer. */
+  sourcesSearching?: boolean;
+  onSelectSource?: (source: SourceEntry) => void;
+  /** PR 1.1-rev2 — invoked when a Sources row's ↗ jump button is clicked.
+   *  ChatScreen wires this to the chip-pulse helper so the chat scrolls
+   *  back to where the source was cited. */
+  onJumpToChatSource?: (source: SourceEntry) => void;
+  /**
+   * Sources row renderer. Defaults (in `SourcesTab`) to the shared headless
+   * `SourceRow`. The web host passes its preview-wired wrapper so the
+   * hover-preview portal stays host-side (FR-1.14).
+   */
+  SourceRowComponent?: SourceRowSlot;
+  /** Agents tab inputs (PR 1.5 reducer + PR 3.2 archive). */
+  subagents: SubagentSnapshotMap;
+  subagentsLoading?: boolean;
+  subagentsError?: string | null;
+  onJumpToSubagent?: (subagent: SubagentEntry) => void;
+  /** PR 3.2.1 — activities-by-task projection for the expandable
+   *  per-subagent timeline inside each Agents tab card. Hoisted in
+   *  `ChatScreen` from `useSubagentActivities(items)` so the pane and
+   *  the in-thread `SubagentTool` share one source of truth. */
+  subagentActivitiesByTask?: SubagentActivitiesByTask;
+  subagentHistoryGroups?: readonly SubagentHistoryGroup[];
+  /** Draft tab inputs (PR 1.3 + PR 3.2 mutations). */
+  draft: DraftTabProps["draft"];
+  draftLoading?: boolean;
+  draftError?: string | null;
+  onPatchDraft?: DraftTabProps["onPatch"];
+  onSendDraft?: DraftTabProps["onSend"];
+  onDiscardDraft?: DraftTabProps["onDiscard"];
+  /** Approvals tab inputs (pure projection). */
+  approvalsQueue: ApprovalsQueueProjection;
+  onJumpToApproval?: (approvalId: string, messageId: string) => void;
+  /** Skills tab inputs. */
+  skills: readonly Skill[];
+  skillsLoading?: boolean;
+  skillsError?: string | null;
+  onPickSkill?: (skill: Skill) => void;
+  onOpenSkillSettings?: () => void;
+  /** Read-only chrome (e.g. shared-conversation view). */
+  disabled?: boolean;
+  /** Force overlay mode regardless of viewport (used by ChatScreen below 1100px). */
+  overlay?: boolean;
+}
+
+export function WorkspacePane({
+  state,
+  sources,
+  sourcesLoading,
+  sourcesError,
+  sourcesSearching,
+  onSelectSource,
+  onJumpToChatSource,
+  SourceRowComponent,
+  subagents,
+  subagentsLoading,
+  subagentsError,
+  onJumpToSubagent,
+  subagentActivitiesByTask,
+  subagentHistoryGroups,
+  draft,
+  draftLoading,
+  draftError,
+  onPatchDraft,
+  onSendDraft,
+  onDiscardDraft,
+  approvalsQueue,
+  onJumpToApproval,
+  skills,
+  skillsLoading,
+  skillsError,
+  onPickSkill,
+  onOpenSkillSettings,
+  disabled,
+  overlay,
+}: WorkspacePaneProps): ReactElement | null {
+  const tablistId = useId();
+  if (!state.open) {
+    return null;
+  }
+
+  // PR 8.0.1 — Singular/plural labels per count, hide tabs whose surface
+  // is empty so the tab strip never asks "Skill 0?".
+  const sourcesCount = sources.size;
+  const agentsCount = subagents.size;
+  const pendingApprovals = approvalsQueue.pending.length;
+  const approvalsCount = pendingApprovals + approvalsQueue.recent.length;
+  const skillsCount = skills.length;
+
+  const tabs: WorkspaceTabsItem<WorkspacePaneTabId>[] = [
+    {
+      id: "sources",
+      label: tabLabel(TAB_LABELS.sources, sourcesCount),
+      badge: sourcesCount > 0 ? <span>{sourcesCount}</span> : undefined,
+    },
+    {
+      id: "agents",
+      label: tabLabel(TAB_LABELS.agents, agentsCount),
+      badge: agentsBadge(subagents),
+    },
+  ];
+  if (draft !== null) {
+    tabs.push({ id: "draft", label: "Draft", badge: <span>1</span> });
+  }
+  if (approvalsCount > 0) {
+    tabs.push({
+      id: "approvals",
+      label: tabLabel(TAB_LABELS.approval, pendingApprovals || approvalsCount),
+      badge: pendingApprovals > 0 ? <span>{pendingApprovals}</span> : undefined,
+    });
+  }
+  if (skillsCount > 0) {
+    tabs.push({
+      id: "skills",
+      label: tabLabel(TAB_LABELS.skill, skillsCount),
+      badge: <span>{skillsCount}</span>,
+    });
+  }
+
+  const panelId = workspaceTabPanelId(tablistId, state.activeTab);
+
+  return (
+    <aside
+      className="atlas-workspace-pane"
+      aria-label="Workspace pane"
+      data-testid="workspace-pane"
+      data-overlay={overlay ? "true" : "false"}
+      data-active-tab={state.activeTab}
+    >
+      <header className="atlas-workspace-pane__header">
+        <WorkspaceTabs
+          items={tabs}
+          active={state.activeTab}
+          onSelect={(id) => state.setActiveTab(id)}
+          ariaLabel="Workspace pane tabs"
+        />
+        <IconButton
+          type="button"
+          size="sm"
+          variant="ghost"
+          aria-label="Close workspace pane"
+          data-tooltip="Close pane"
+          data-tooltip-placement="bottom"
+          onClick={() => state.close("manual")}
+          data-testid="workspace-pane-close"
+        >
+          ✕
+        </IconButton>
+      </header>
+      <section
+        role="tabpanel"
+        id={panelId}
+        className="atlas-workspace-pane__body"
+        aria-label={tabs.find((tab) => tab.id === state.activeTab)?.label}
+      >
+        {state.activeTab === "sources" ? (
+          <SourcesTab
+            sources={sources}
+            loading={sourcesLoading}
+            error={sourcesError ?? null}
+            focusCitationId={state.focus.citationId ?? null}
+            searching={sourcesSearching}
+            onSelect={onSelectSource}
+            onJumpToChat={onJumpToChatSource}
+            SourceRowComponent={SourceRowComponent}
+          />
+        ) : null}
+        {state.activeTab === "agents" ? (
+          <AgentsTab
+            subagents={subagents}
+            loading={subagentsLoading}
+            error={subagentsError ?? null}
+            focusTaskId={state.focus.subagentTaskId ?? null}
+            onJumpToSubagent={onJumpToSubagent}
+            activitiesByTask={subagentActivitiesByTask}
+            historyGroups={subagentHistoryGroups}
+          />
+        ) : null}
+        {state.activeTab === "draft" ? (
+          <DraftTab
+            draft={draft}
+            loading={draftLoading}
+            error={draftError ?? null}
+            disabled={disabled}
+            onPatch={onPatchDraft}
+            onSend={onSendDraft}
+            onDiscard={onDiscardDraft}
+          />
+        ) : null}
+        {state.activeTab === "approvals" ? (
+          <ApprovalsTab
+            queue={approvalsQueue}
+            onJumpToApproval={onJumpToApproval}
+          />
+        ) : null}
+        {state.activeTab === "skills" ? (
+          <SkillsTab
+            skills={skills}
+            loading={skillsLoading}
+            error={skillsError ?? null}
+            onPick={onPickSkill}
+            onOpenSettings={onOpenSkillSettings}
+          />
+        ) : null}
+      </section>
+    </aside>
+  );
+}
+
+function agentsBadge(subagents: SubagentSnapshotMap): ReactElement | undefined {
+  if (subagents.size === 0) {
+    return undefined;
+  }
+  let running = 0;
+  for (const entry of subagents.values()) {
+    if (isRunningStatus(entry.status)) {
+      running += 1;
+    }
+  }
+  if (running === 0) {
+    return <span>{subagents.size}</span>;
+  }
+  return (
+    <span aria-label={`${running} running subagents`}>{running} live</span>
+  );
+}

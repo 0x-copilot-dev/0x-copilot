@@ -1,262 +1,31 @@
-// PR 3.2 — Workspace pane host (right rail).
+// Web host adapter for the right-rail Workspace pane.
 //
-// Composition shell only. Owns no fetches, no event subscriptions. The
-// pane is open/closed via `useWorkspacePaneState`; data flows in via
-// props (citations / subagents / drafts / approvalsQueue / skills) the
-// parent (ChatScreen) lifts from the upstream PR 1.x hooks.
+// The pane + its five tab bodies now live in @0x-copilot/chat-surface (PR-1.7)
+// so web and desktop render the right rail identically. This adapter binds the
+// one web-substrate-specific bit the headless pane leaves to the host: the
+// preview-wired `SourceRow` wrapper (which binds `useSourcePreviewTrigger`, a
+// `createPortal`/`window` adapter that must stay in the host). Everything else
+// — pane state, the data-binding hooks, the draft PATCH/SEND POSTs, the
+// jump-to-approval focus — is passed in by `ChatScreen` as props, unchanged.
 //
-// The right column lives inside `aui-workspace` and is collapsible. On
-// viewports < 1100px the pane switches to overlay mode (CSS handles
-// the position-fixed anchoring; this component just sets a data attr).
+// The public API (`WorkspacePaneProps`) is re-exported from chat-surface, so
+// `ChatScreen` and the pane test keep resolving `WorkspacePane` here.
 
-import { IconButton } from "@0x-copilot/design-system";
-import type { Skill, SourceEntry, SubagentEntry } from "@0x-copilot/api-types";
-import { useId, type ReactElement } from "react";
-
-import type { SourceEntryMap } from "../../chatModel/sourcesReducer";
-import type { SubagentSnapshotMap } from "../../chatModel/subagentReducer";
-import { isRunningStatus } from "../../chatModel/subagentStatus";
-import type {
-  SubagentActivitiesByTask,
-  SubagentHistoryGroup,
-} from "./useSubagentActivities";
-import { ApprovalsTab } from "./ApprovalsTab";
-import { AgentsTab } from "./AgentsTab";
-import { DraftTab, type DraftTabProps } from "./DraftTab";
-import { SkillsTab } from "./SkillsTab";
-import { SourcesTab } from "./SourcesTab";
 import {
-  WorkspaceTabs,
-  workspaceTabPanelId,
-  type WorkspaceTabsItem,
-} from "./WorkspaceTabs";
-import { TAB_LABELS, tabLabel } from "./pluralize";
-import type { WorkspacePaneTabId } from "./useWorkspacePaneAutoOpen";
-import type { WorkspacePaneState } from "./useWorkspacePaneState";
-import type { ApprovalsQueueProjection } from "./useApprovalsQueue";
+  WorkspacePane as SurfaceWorkspacePane,
+  type WorkspacePaneProps,
+} from "@0x-copilot/chat-surface";
+import type { ReactElement } from "react";
 
-export interface WorkspacePaneProps {
-  state: WorkspacePaneState;
-  /** Sources tab inputs (PR 1.5 reducer + PR 3.1 archive). */
-  sources: SourceEntryMap;
-  sourcesLoading?: boolean;
-  sourcesError?: string | null;
-  /** PR 3.7.1 — derived from runUiState; drives the "Looking for sources…" shimmer. */
-  sourcesSearching?: boolean;
-  onSelectSource?: (source: SourceEntry) => void;
-  /** PR 1.1-rev2 — invoked when a Sources row's ↗ jump button is clicked.
-   *  ChatScreen wires this to the chip-pulse helper so the chat scrolls
-   *  back to where the source was cited. */
-  onJumpToChatSource?: (source: SourceEntry) => void;
-  /** Agents tab inputs (PR 1.5 reducer + PR 3.2 archive). */
-  subagents: SubagentSnapshotMap;
-  subagentsLoading?: boolean;
-  subagentsError?: string | null;
-  onJumpToSubagent?: (subagent: SubagentEntry) => void;
-  /** PR 3.2.1 — activities-by-task projection for the expandable
-   *  per-subagent timeline inside each Agents tab card. Hoisted in
-   *  `ChatScreen` from `useSubagentActivities(items)` so the pane and
-   *  the in-thread `SubagentTool` share one source of truth. */
-  subagentActivitiesByTask?: SubagentActivitiesByTask;
-  subagentHistoryGroups?: readonly SubagentHistoryGroup[];
-  /** Draft tab inputs (PR 1.3 + PR 3.2 mutations). */
-  draft: DraftTabProps["draft"];
-  draftLoading?: boolean;
-  draftError?: string | null;
-  onPatchDraft?: DraftTabProps["onPatch"];
-  onSendDraft?: DraftTabProps["onSend"];
-  onDiscardDraft?: DraftTabProps["onDiscard"];
-  /** Approvals tab inputs (pure projection). */
-  approvalsQueue: ApprovalsQueueProjection;
-  onJumpToApproval?: (approvalId: string, messageId: string) => void;
-  /** Skills tab inputs. */
-  skills: readonly Skill[];
-  skillsLoading?: boolean;
-  skillsError?: string | null;
-  onPickSkill?: (skill: Skill) => void;
-  onOpenSkillSettings?: () => void;
-  /** Read-only chrome (e.g. shared-conversation view). */
-  disabled?: boolean;
-  /** Force overlay mode regardless of viewport (used by ChatScreen below 1100px). */
-  overlay?: boolean;
-}
+import { SourceRow } from "../citations/SourceRow";
 
-export function WorkspacePane({
-  state,
-  sources,
-  sourcesLoading,
-  sourcesError,
-  sourcesSearching,
-  onSelectSource,
-  onJumpToChatSource,
-  subagents,
-  subagentsLoading,
-  subagentsError,
-  onJumpToSubagent,
-  subagentActivitiesByTask,
-  subagentHistoryGroups,
-  draft,
-  draftLoading,
-  draftError,
-  onPatchDraft,
-  onSendDraft,
-  onDiscardDraft,
-  approvalsQueue,
-  onJumpToApproval,
-  skills,
-  skillsLoading,
-  skillsError,
-  onPickSkill,
-  onOpenSkillSettings,
-  disabled,
-  overlay,
-}: WorkspacePaneProps): ReactElement | null {
-  const tablistId = useId();
-  if (!state.open) {
-    return null;
-  }
+export type { WorkspacePaneProps };
 
-  // PR 8.0.1 — Singular/plural labels per count, hide tabs whose surface
-  // is empty so the tab strip never asks "Skill 0?".
-  const sourcesCount = sources.size;
-  const agentsCount = subagents.size;
-  const pendingApprovals = approvalsQueue.pending.length;
-  const approvalsCount = pendingApprovals + approvalsQueue.recent.length;
-  const skillsCount = skills.length;
-
-  const tabs: WorkspaceTabsItem<WorkspacePaneTabId>[] = [
-    {
-      id: "sources",
-      label: tabLabel(TAB_LABELS.sources, sourcesCount),
-      badge: sourcesCount > 0 ? <span>{sourcesCount}</span> : undefined,
-    },
-    {
-      id: "agents",
-      label: tabLabel(TAB_LABELS.agents, agentsCount),
-      badge: agentsBadge(subagents),
-    },
-  ];
-  if (draft !== null) {
-    tabs.push({ id: "draft", label: "Draft", badge: <span>1</span> });
-  }
-  if (approvalsCount > 0) {
-    tabs.push({
-      id: "approvals",
-      label: tabLabel(TAB_LABELS.approval, pendingApprovals || approvalsCount),
-      badge: pendingApprovals > 0 ? <span>{pendingApprovals}</span> : undefined,
-    });
-  }
-  if (skillsCount > 0) {
-    tabs.push({
-      id: "skills",
-      label: tabLabel(TAB_LABELS.skill, skillsCount),
-      badge: <span>{skillsCount}</span>,
-    });
-  }
-
-  const panelId = workspaceTabPanelId(tablistId, state.activeTab);
-
+export function WorkspacePane(props: WorkspacePaneProps): ReactElement | null {
   return (
-    <aside
-      className="atlas-workspace-pane"
-      aria-label="Workspace pane"
-      data-testid="workspace-pane"
-      data-overlay={overlay ? "true" : "false"}
-      data-active-tab={state.activeTab}
-    >
-      <header className="atlas-workspace-pane__header">
-        <WorkspaceTabs
-          items={tabs}
-          active={state.activeTab}
-          onSelect={(id) => state.setActiveTab(id)}
-          ariaLabel="Workspace pane tabs"
-        />
-        <IconButton
-          type="button"
-          size="sm"
-          variant="ghost"
-          aria-label="Close workspace pane"
-          data-tooltip="Close pane"
-          data-tooltip-placement="bottom"
-          onClick={() => state.close("manual")}
-          data-testid="workspace-pane-close"
-        >
-          ✕
-        </IconButton>
-      </header>
-      <section
-        role="tabpanel"
-        id={panelId}
-        className="atlas-workspace-pane__body"
-        aria-label={tabs.find((tab) => tab.id === state.activeTab)?.label}
-      >
-        {state.activeTab === "sources" ? (
-          <SourcesTab
-            sources={sources}
-            loading={sourcesLoading}
-            error={sourcesError ?? null}
-            focusCitationId={state.focus.citationId ?? null}
-            searching={sourcesSearching}
-            onSelect={onSelectSource}
-            onJumpToChat={onJumpToChatSource}
-          />
-        ) : null}
-        {state.activeTab === "agents" ? (
-          <AgentsTab
-            subagents={subagents}
-            loading={subagentsLoading}
-            error={subagentsError ?? null}
-            focusTaskId={state.focus.subagentTaskId ?? null}
-            onJumpToSubagent={onJumpToSubagent}
-            activitiesByTask={subagentActivitiesByTask}
-            historyGroups={subagentHistoryGroups}
-          />
-        ) : null}
-        {state.activeTab === "draft" ? (
-          <DraftTab
-            draft={draft}
-            loading={draftLoading}
-            error={draftError ?? null}
-            disabled={disabled}
-            onPatch={onPatchDraft}
-            onSend={onSendDraft}
-            onDiscard={onDiscardDraft}
-          />
-        ) : null}
-        {state.activeTab === "approvals" ? (
-          <ApprovalsTab
-            queue={approvalsQueue}
-            onJumpToApproval={onJumpToApproval}
-          />
-        ) : null}
-        {state.activeTab === "skills" ? (
-          <SkillsTab
-            skills={skills}
-            loading={skillsLoading}
-            error={skillsError ?? null}
-            onPick={onPickSkill}
-            onOpenSettings={onOpenSkillSettings}
-          />
-        ) : null}
-      </section>
-    </aside>
-  );
-}
-
-function agentsBadge(subagents: SubagentSnapshotMap): ReactElement | undefined {
-  if (subagents.size === 0) {
-    return undefined;
-  }
-  let running = 0;
-  for (const entry of subagents.values()) {
-    if (isRunningStatus(entry.status)) {
-      running += 1;
-    }
-  }
-  if (running === 0) {
-    return <span>{subagents.size}</span>;
-  }
-  return (
-    <span aria-label={`${running} running subagents`}>{running} live</span>
+    <SurfaceWorkspacePane
+      {...props}
+      SourceRowComponent={props.SourceRowComponent ?? SourceRow}
+    />
   );
 }
