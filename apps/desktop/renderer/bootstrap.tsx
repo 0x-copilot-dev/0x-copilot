@@ -1,4 +1,8 @@
 import "@0x-copilot/design-system/styles.css";
+// Composer parity: the shared AssistantComposer emits `aui-*` classes whose
+// styles ship with the component here (previously stranded in the web app's
+// private styles.css). Without this the desktop Run composer renders unstyled.
+import "@0x-copilot/chat-surface/src/composer/composer.css";
 import "./desktop.css";
 
 import { StrictMode, useMemo, useState, type ReactElement } from "react";

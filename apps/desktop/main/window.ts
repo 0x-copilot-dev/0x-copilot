@@ -27,6 +27,11 @@ export function createMainWindow(
     backgroundColor: "#101113",
     title: "0xCopilot",
     titleBarStyle: "hiddenInset",
+    // Windows/Linux take the taskbar + window icon from the window; macOS
+    // ignores this and uses the bundle/dock icon (main/branding.ts).
+    ...(process.platform === "darwin"
+      ? {}
+      : { icon: join(__dirname, "icon.png") }),
     webPreferences: {
       contextIsolation: true,
       nodeIntegration: false,

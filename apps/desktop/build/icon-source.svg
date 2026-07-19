@@ -1,0 +1,30 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1024" height="1024" viewBox="0 0 1024 1024">
+  <!--
+    0xCopilot desktop app icon — authoritative vector source.
+
+    Same mark as apps/website/public/favicon.svg (keep the two in sync), laid
+    out on the macOS icon grid: a 1024 canvas with the 824x824 rounded tile
+    centered inside transparent margins (Apple's Big Sur icon geometry), corner
+    radius ~23% of the tile like the favicon.
+
+    Regenerate build/icon.png + icon.icns + icon.ico with:
+      node apps/desktop/build/generate-icons.mjs   (macOS host required)
+  -->
+  <defs>
+    <linearGradient id="g" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#9bd4ff"/>
+      <stop offset="1" stop-color="#4593d8"/>
+    </linearGradient>
+  </defs>
+  <g transform="translate(100 100) scale(2.06)">
+    <rect width="400" height="400" rx="92" fill="#17161c"/>
+    <path d="M200 96q46 10 54 60-28-8-54-24Z" fill="url(#g)" transform="rotate(0 200 200)"/>
+    <path d="M200 96q46 10 54 60-28-8-54-24Z" fill="url(#g)" transform="rotate(60 200 200)"/>
+    <path d="M200 96q46 10 54 60-28-8-54-24Z" fill="url(#g)" transform="rotate(120 200 200)"/>
+    <path d="M200 96q46 10 54 60-28-8-54-24Z" fill="url(#g)" transform="rotate(180 200 200)"/>
+    <path d="M200 96q46 10 54 60-28-8-54-24Z" fill="url(#g)" transform="rotate(240 200 200)"/>
+    <path d="M200 96q46 10 54 60-28-8-54-24Z" fill="url(#g)" transform="rotate(300 200 200)"/>
+    <circle cx="200" cy="200" r="30" fill="#0d0c10"/>
+    <circle cx="200" cy="200" r="15" fill="#5fb2ec"/>
+  </g>
+</svg>

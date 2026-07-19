@@ -39,7 +39,10 @@ extraResources:
     filter:
       - "**/*"
 
+# Icons are committed binaries generated from build/icon-source.svg by
+# build/generate-icons.mjs (macOS host). Regenerate them when the mark changes.
 mac:
+  icon: build/icon.icns
   category: public.app-category.productivity
   # dmg for the installer, zip for electron-updater (mac updates are delivered
   # as zip — dmg alone cannot be applied by electron-updater).
@@ -59,6 +62,7 @@ mac:
   # builds (CSC_IDENTITY_AUTO_DISCOVERY=false) skip both signing and notarize.
 
 win:
+  icon: build/icon.ico
   target:
     - target: nsis
       arch:

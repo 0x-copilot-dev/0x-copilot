@@ -1,0 +1,683 @@
+/* Composer stylesheet for @0x-copilot/chat-surface.
+ *
+ * The composer components (AssistantComposer, Composer plus-menu, ModelPill,
+ * send button, attachment pills, skill pills) emit `aui-*` class names. These
+ * rules were previously stranded in apps/frontend/src/styles.css, so any host
+ * other than the web app rendered the composer UNSTYLED. Extracted here so the
+ * styles travel with the shared components; hosts import this once.
+ *
+ * Tokens (--color-*, --font-*, …) come from @0x-copilot/design-system styles.
+ * Generated from apps/frontend/src/styles.css — the web copy is the de-dup
+ * follow-up (both hosts should eventually import only this file). */
+
+.aui-new-thread,
+.aui-thread-list-item__trigger,
+.aui-ghost-button,
+.aui-action,
+.aui-trigger-popover__item,
+.aui-trigger-popover__back {
+  background: transparent;
+  border: 1px solid transparent;
+  border-radius: var(--radius-md);
+  color: var(--color-text);
+  cursor: pointer;
+  font: inherit;
+}
+
+.aui-icon-button[data-tooltip],
+.aui-footer-icon-button[data-tooltip],
+.aui-send-button[data-tooltip] {
+  position: relative;
+}
+
+.aui-icon-button[data-tooltip]::after,
+.aui-footer-icon-button[data-tooltip]::after,
+.aui-send-button[data-tooltip]::after {
+  background: var(--color-bg-elevated);
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-md);
+  bottom: calc(100% + 0.375rem);
+  box-shadow: 0 8px 24px rgb(0 0 0 / 0.24);
+  color: var(--color-text);
+  content: attr(data-tooltip);
+  font: 500 0.75rem/1.2 var(--font-sans);
+  left: 50%;
+  max-width: min(12rem, calc(100vw - 2rem));
+  opacity: 0;
+  overflow-wrap: break-word;
+  padding: 0.375rem 0.5rem;
+  pointer-events: none;
+  position: absolute;
+  text-align: center;
+  transform: translateX(-50%) translateY(0.125rem);
+  transition:
+    opacity 120ms ease,
+    transform 120ms ease;
+  visibility: hidden;
+  white-space: nowrap;
+  width: max-content;
+  z-index: 80;
+}
+
+.aui-icon-button[data-tooltip-placement="bottom"]::after,
+.aui-footer-icon-button[data-tooltip-placement="bottom"]::after,
+.aui-send-button[data-tooltip-placement="bottom"]::after {
+  bottom: auto;
+  top: calc(100% + 0.375rem);
+  transform: translateX(-50%) translateY(-0.125rem);
+}
+
+.aui-icon-button[data-tooltip-align="start"]::after,
+.aui-footer-icon-button[data-tooltip-align="start"]::after,
+.aui-send-button[data-tooltip-align="start"]::after {
+  left: 0;
+  transform: translateY(0.125rem);
+}
+
+.aui-icon-button[data-tooltip-align="end"]::after,
+.aui-footer-icon-button[data-tooltip-align="end"]::after,
+.aui-send-button[data-tooltip-align="end"]::after {
+  left: auto;
+  right: 0;
+  transform: translateY(0.125rem);
+}
+
+.aui-icon-button[data-tooltip-placement="bottom"][data-tooltip-align="start"]::after,
+.aui-footer-icon-button[data-tooltip-placement="bottom"][data-tooltip-align="start"]::after,
+.aui-send-button[data-tooltip-placement="bottom"][data-tooltip-align="start"]::after,
+.aui-icon-button[data-tooltip-placement="bottom"][data-tooltip-align="end"]::after,
+.aui-footer-icon-button[data-tooltip-placement="bottom"][data-tooltip-align="end"]::after,
+.aui-send-button[data-tooltip-placement="bottom"][data-tooltip-align="end"]::after {
+  transform: translateY(-0.125rem);
+}
+
+.aui-icon-button[data-tooltip]:hover::after,
+.aui-icon-button[data-tooltip]:focus-visible::after,
+.aui-footer-icon-button[data-tooltip]:hover::after,
+.aui-footer-icon-button[data-tooltip]:focus-visible::after,
+.aui-send-button[data-tooltip]:hover::after,
+.aui-send-button[data-tooltip]:focus-visible::after {
+  opacity: 1;
+  transform: translateX(-50%) translateY(0);
+  visibility: visible;
+}
+
+.aui-icon-button[data-tooltip-align="start"]:hover::after,
+.aui-icon-button[data-tooltip-align="start"]:focus-visible::after,
+.aui-footer-icon-button[data-tooltip-align="start"]:hover::after,
+.aui-footer-icon-button[data-tooltip-align="start"]:focus-visible::after,
+.aui-send-button[data-tooltip-align="start"]:hover::after,
+.aui-send-button[data-tooltip-align="start"]:focus-visible::after,
+.aui-icon-button[data-tooltip-align="end"]:hover::after,
+.aui-icon-button[data-tooltip-align="end"]:focus-visible::after,
+.aui-footer-icon-button[data-tooltip-align="end"]:hover::after,
+.aui-footer-icon-button[data-tooltip-align="end"]:focus-visible::after,
+.aui-send-button[data-tooltip-align="end"]:hover::after,
+.aui-send-button[data-tooltip-align="end"]:focus-visible::after {
+  transform: translateY(0);
+}
+
+.aui-action,
+.aui-ghost-button,
+.aui-icon-button {
+  color: var(--color-text-muted);
+  font-size: var(--font-size-md);
+  padding: 0.45rem 0.625rem;
+}
+
+.aui-icon-button {
+  align-items: center;
+  background: transparent;
+  border: 1px solid transparent;
+  border-radius: var(--radius-md);
+  color: var(--color-text-muted);
+  cursor: pointer;
+  display: inline-flex;
+  font: inherit;
+  justify-content: center;
+  min-height: 2.25rem;
+  min-width: 2.25rem;
+}
+
+.aui-action:hover,
+.aui-ghost-button:hover,
+.aui-icon-button:hover,
+.aui-trigger-popover__item:hover,
+.aui-trigger-popover__item[data-highlighted] {
+  background: var(--color-surface-muted);
+  color: var(--color-text);
+}
+
+.aui-model-selector {
+  align-items: center;
+  background: transparent;
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-md);
+  display: inline-flex;
+  gap: var(--space-xs);
+  min-height: 2.25rem;
+  padding: 0 0.65rem;
+}
+
+.aui-model-selector select {
+  appearance: none;
+  background: transparent;
+  border: 0;
+  color: var(--color-text);
+  cursor: pointer;
+  font-size: var(--font-size-md);
+  min-height: 2.1rem;
+  outline: none;
+}
+
+.aui-composer {
+  --composer-padding: 0.5rem;
+  --composer-radius: 1.5rem;
+  /* Phase 9 composer redesign: base shell sized for a 3-row textarea
+   * (matches minRows={3} in AssistantComposer). Switched from fixed
+   * `height` to `min-height` so the container GROWS when the textarea
+   * auto-expands past 3 rows — previously the fixed height + overflow:
+   * hidden clipped the textarea and pushed the toolbar/hint past the
+   * workspace bottom (the "why do I need to scroll?" bug). */
+  --composer-shell-height: 11rem;
+  background: var(--color-bg);
+  border: 1px solid var(--color-border);
+  border-radius: var(--composer-radius);
+  box-shadow: none;
+  display: flex;
+  flex-direction: column;
+  gap: 0.5rem;
+  margin: var(--space-lg) auto 0;
+  max-width: var(--chat-content-width);
+  box-sizing: border-box;
+  min-height: var(--composer-shell-height);
+  /* No `overflow: hidden` — the textarea owns its own internal scroll
+   * (Composer.tsx sets overflow-y: auto on the <textarea>) once it
+   * exceeds maxRows. Letting the shell grow naturally avoids clipping
+   * chrome below the visible viewport. */
+  padding: var(--composer-padding);
+  position: relative;
+  transition:
+    border-color 150ms ease,
+    box-shadow 150ms ease;
+  width: 100%;
+}
+
+.aui-composer[data-has-topbar="true"] {
+  --composer-shell-height: 13rem;
+}
+
+.aui-composer[data-focused="true"] .atlas-depth {
+  max-width: 14rem;
+}
+
+.aui-composer[data-focused="true"] .atlas-depth__chip {
+  padding-left: 10px;
+  padding-right: 10px;
+}
+
+.aui-composer:focus-within {
+  border-color: color-mix(in srgb, var(--color-accent) 75%, transparent);
+  box-shadow: 0 0 0 2px color-mix(in srgb, var(--color-accent) 20%, transparent);
+}
+
+.aui-composer__dropzone {
+  display: flex;
+  flex-direction: column;
+  gap: 0.5rem;
+}
+
+.aui-composer__dropzone[data-dragging="true"] {
+  background: color-mix(in srgb, var(--color-surface-muted) 50%, transparent);
+  outline: 2px dashed var(--color-accent);
+}
+
+.aui-composer-attachments {
+  align-items: center;
+  display: flex;
+  flex-direction: row;
+  gap: 0.5rem;
+  min-height: 1.9rem;
+  overflow-x: auto;
+  overflow-y: hidden;
+  padding: 0.05rem 0.1rem;
+  width: 100%;
+}
+
+.aui-composer-attachments:empty {
+  display: none;
+}
+
+.aui-composer-action-wrapper {
+  align-items: center;
+  display: flex;
+  gap: var(--space-sm);
+  justify-content: space-between;
+  min-height: 2rem;
+  min-width: 0;
+  position: relative;
+}
+
+.aui-composer-focus-meta {
+  color: var(--color-text-muted);
+  flex: 0 1 auto;
+  font-size: var(--font-size-2xs);
+  font-weight: var(--font-weight-regular);
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.aui-composer-action-wrapper__right {
+  align-items: center;
+  display: flex;
+  flex: 0 1 auto;
+  gap: var(--space-sm);
+  justify-content: flex-end;
+  min-width: 0;
+}
+
+.aui-composer-slash-cue {
+  align-items: center;
+  animation: aui-slash-cue-enter 160ms ease-out;
+  background: color-mix(in srgb, var(--color-accent) 18%, transparent);
+  border: 1px solid color-mix(in srgb, var(--color-accent) 45%, transparent);
+  border-radius: var(--radius-full);
+  bottom: calc(100% + 0.25rem);
+  box-shadow: 0 8px 24px rgb(0 0 0 / 0.24);
+  color: var(--color-accent-strong);
+  display: inline-flex;
+  font-size: var(--font-size-2xs);
+  font-weight: var(--font-weight-semibold);
+  gap: 0.3rem;
+  left: 0.25rem;
+  padding: 0.25rem 0.5rem;
+  position: absolute;
+}
+
+.aui-composer-slash-cue kbd {
+  background: color-mix(in srgb, var(--color-accent) 25%, transparent);
+  border: 1px solid color-mix(in srgb, var(--color-accent) 55%, transparent);
+  border-radius: 4px;
+  color: var(--color-accent-strong);
+  font-family: var(--font-mono, ui-monospace, "SF Mono", Menlo, monospace);
+  font-size: var(--font-size-2xs);
+  padding: 0 0.28rem;
+}
+
+.aui-composer-tools {
+  align-items: center;
+  display: flex;
+  flex: 1 1 auto;
+  flex-wrap: nowrap;
+  gap: var(--space-sm);
+  min-width: 0;
+  overflow: hidden;
+}
+
+.aui-composer-tools-spacer {
+  background: color-mix(in srgb, var(--color-border) 70%, transparent);
+  display: inline-block;
+  flex-shrink: 0;
+  height: 1.2rem;
+  margin: 0 var(--space-xs);
+  width: 1px;
+}
+
+.aui-plus-menu-root {
+  display: inline-flex;
+  position: relative;
+}
+
+.aui-composer-add-attachment,
+.aui-composer-send {
+  border-radius: var(--radius-full);
+  font-size: var(--font-size-md);
+  height: 2rem;
+  min-height: 2rem;
+  min-width: 2rem;
+  padding: 0.25rem;
+  width: 2rem;
+}
+
+.aui-plus-menu {
+  background: var(--color-bg-elevated);
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-lg);
+  box-shadow: 0 18px 48px rgb(0 0 0 / 0.32);
+  /* Portaled to <body> — reference design-system tokens explicitly so
+   * the popup matches the rest of the app regardless of where it
+   * mounts. Theme + accent are owned by :root[data-theme]/[data-accent]
+   * which Settings → Appearance writes to. */
+  color: var(--color-text);
+  font-family: var(--font-sans);
+  font-size: var(--font-size-md);
+  font-weight: var(--font-weight-regular);
+  line-height: var(--line-height-snug);
+  display: grid;
+  gap: var(--space-xs);
+  max-height: min(20rem, 60vh);
+  overflow-y: auto;
+  padding: var(--space-sm);
+  /* The popup is rendered inside an `<AnchoredPlusMenu>` portal that
+   * applies `position: fixed` + viewport coords from the `+` button.
+   * The popup itself is just a styled box; positioning lives in the
+   * wrapper so we escape the composer card's `overflow: hidden`. */
+  position: relative;
+  width: min(22rem, calc(100vw - 2rem));
+}
+
+.aui-plus-menu__section {
+  border-bottom: 1px solid var(--color-border);
+  display: grid;
+  gap: var(--space-xs);
+  padding-bottom: var(--space-xs);
+}
+
+.aui-plus-menu__section > strong {
+  color: var(--color-text);
+  font-size: var(--font-size-xs);
+  padding: var(--space-xs) var(--space-sm);
+}
+
+.aui-plus-menu__section > span {
+  color: var(--color-text-muted);
+  font-size: var(--font-size-xs);
+  padding: var(--space-xs) var(--space-sm);
+}
+
+.aui-composer__input {
+  background: transparent;
+  border: 0;
+  color: var(--color-text);
+  display: block;
+  flex: 0 0 var(--composer-input-height);
+  font-size: var(--font-size-md);
+  height: var(--composer-input-height);
+  line-height: 1.25rem;
+  max-height: 8rem;
+  min-height: var(--composer-input-height);
+  outline: none;
+  padding: 0.25rem 0.4375rem;
+  position: relative;
+  resize: none;
+  transition: height 180ms ease;
+  width: 100%;
+}
+
+.aui-composer__input :where(p) {
+  color: inherit;
+  line-height: 1.25rem;
+  margin: 0;
+}
+
+.aui-composer__input :where(.aui-lexical-input) {
+  min-height: 1.25rem;
+  outline: none;
+}
+
+.aui-composer__input :where(.aui-lexical-placeholder) {
+  color: color-mix(in srgb, var(--color-text-muted) 80%, transparent);
+  left: 0;
+  padding: 0.25rem 0.4375rem;
+  pointer-events: none;
+  position: absolute;
+  top: 0;
+}
+
+.aui-composer__hint {
+  align-items: center;
+  border-top: 1px solid color-mix(in srgb, var(--color-border) 40%, transparent);
+  color: var(--color-text-subtle);
+  display: flex;
+  flex-wrap: wrap;
+  font-size: var(--font-size-2xs);
+  font-weight: var(--font-weight-regular);
+  gap: 0.5rem;
+  line-height: var(--line-height-tight);
+  /* Tightened vertical padding (Phase 9): 0.45rem top/bottom was
+   * adding ~14px on top of the composer + footer paddings below. The
+   * hint is auxiliary info — 0.3rem reads as a footer-strip without
+   * crowding the kbd glyphs. */
+  max-height: 2rem;
+  overflow: hidden;
+  padding: 0.3rem 0.75rem 0.25rem;
+  transition:
+    border-color 160ms ease,
+    max-height 160ms ease,
+    opacity 120ms ease,
+    padding 160ms ease;
+}
+
+.aui-composer[data-focused="true"] .aui-composer__hint {
+  border-top-color: transparent;
+  max-height: 0;
+  opacity: 0;
+  padding-bottom: 0;
+  padding-top: 0;
+  pointer-events: none;
+}
+
+.aui-composer__hint kbd {
+  background: var(--color-bg-elevated);
+  border: 1px solid color-mix(in srgb, var(--color-border) 70%, transparent);
+  border-bottom-width: 2px;
+  border-radius: 4px;
+  color: var(--color-text-muted);
+  font-family: var(--font-mono, ui-monospace, "SF Mono", Menlo, monospace);
+  font-size: var(--font-size-2xs);
+  margin: 0 0.1rem;
+  padding: 0.05rem 0.35rem;
+}
+
+.aui-composer__hint-sep {
+  background: color-mix(in srgb, var(--color-border) 60%, transparent);
+  display: inline-block;
+  height: 0.85rem;
+  width: 1px;
+}
+
+.aui-composer__hint-grow {
+  flex: 1 1 auto;
+}
+
+.aui-composer__hint-meta {
+  color: var(--color-text-muted);
+}
+
+.aui-send-button {
+  align-items: center;
+  background: color-mix(in srgb, var(--color-accent) 18%, transparent);
+  border: 1px solid color-mix(in srgb, var(--color-accent) 35%, transparent);
+  border-radius: var(--radius-md);
+  color: color-mix(in srgb, var(--color-accent) 75%, var(--color-text-subtle));
+  cursor: pointer;
+  display: inline-flex;
+  font: inherit;
+  font-weight: var(--font-weight-semibold);
+  justify-content: center;
+  min-height: 2rem;
+  min-width: 2rem;
+  padding: 0.25rem;
+  text-decoration: none;
+  transition:
+    color 120ms ease,
+    border-color 120ms ease,
+    background 120ms ease;
+}
+
+.aui-send-button:hover:not([disabled]):not(.aui-send-button--stop) {
+  background: color-mix(in srgb, var(--color-accent) 88%, white);
+  color: var(--color-accent-contrast, white);
+  border-color: var(--color-accent);
+}
+
+.aui-send-button:not([disabled]):not(.aui-send-button--stop) {
+  background: var(--color-accent);
+  color: var(--color-accent-contrast, white);
+  border-color: var(--color-accent);
+}
+
+.aui-send-button[disabled] {
+  cursor: not-allowed;
+  /* Subtle dimming — the tinted base already signals "not ready"; full
+   * opacity 0.5 would push it back into invisibility. */
+  opacity: 0.85;
+}
+
+.aui-send-button--stop {
+  background: color-mix(in srgb, var(--color-accent) 18%, transparent);
+  border-color: color-mix(in srgb, var(--color-accent) 55%, transparent);
+  color: var(--color-accent);
+}
+
+.aui-send-button__stop-icon {
+  background: currentColor;
+  border-radius: 2px;
+  display: inline-block;
+  height: 0.7rem;
+  width: 0.7rem;
+}
+
+.aui-attachment-pill {
+  align-items: center;
+  background: var(--color-surface-muted);
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-full);
+  color: var(--color-text);
+  display: inline-flex;
+  gap: var(--space-xs);
+  margin-right: var(--space-xs);
+  padding: 0.35rem 0.65rem;
+}
+
+.aui-attachment-pill small {
+  color: var(--color-text-subtle);
+  font-size: var(--font-size-2xs);
+}
+
+.aui-skill-pill {
+  align-items: center;
+  background: color-mix(in srgb, var(--color-accent) 14%, transparent);
+  border: 1px solid color-mix(in srgb, var(--color-accent) 42%, transparent);
+  border-radius: var(--radius-full);
+  color: var(--color-text);
+  display: inline-flex;
+  gap: var(--space-xs);
+  margin-right: var(--space-xs);
+  max-width: 100%;
+  padding: 0.32rem 0.55rem;
+}
+
+.aui-skill-pill code {
+  color: var(--color-accent-strong);
+  font-family: var(--font-mono, ui-monospace, "SF Mono", Menlo, monospace);
+  font-size: var(--font-size-2xs);
+  font-weight: var(--font-weight-bold);
+}
+
+.aui-skill-pill span {
+  font-size: var(--font-size-xs);
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.aui-attachment-pill__remove,
+.aui-skill-pill__remove {
+  align-items: center;
+  background: transparent;
+  border: 0;
+  border-radius: var(--radius-full);
+  color: var(--color-text-subtle);
+  cursor: pointer;
+  display: inline-flex;
+  font: inherit;
+  height: 1.1rem;
+  justify-content: center;
+  line-height: 1;
+  padding: 0;
+  width: 1.1rem;
+}
+
+.aui-attachment-pill__remove:hover,
+.aui-skill-pill__remove:hover,
+.aui-attachment-pill__remove:focus-visible,
+.aui-skill-pill__remove:focus-visible {
+  background: var(--color-surface-raised);
+  color: var(--color-text);
+  outline: none;
+}
+
+.aui-trigger-popover {
+  background: var(--color-bg-elevated);
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-lg);
+  box-shadow: var(--shadow-soft);
+  display: grid;
+  gap: var(--space-xs);
+  max-width: 22rem;
+  padding: var(--space-sm);
+  position: absolute;
+  z-index: 30;
+}
+
+.aui-trigger-popover__list {
+  display: grid;
+  gap: var(--space-xs);
+}
+
+.aui-trigger-popover__item {
+  display: grid;
+  gap: var(--space-2xs);
+  padding: var(--space-sm);
+  text-align: left;
+}
+
+.aui-plus-menu__item {
+  grid-template-columns: 16px 1fr;
+  gap: 0 var(--space-sm);
+  align-items: center;
+}
+
+.aui-plus-menu__item > .aui-plus-menu__icon {
+  grid-row: 1;
+  grid-column: 1;
+  color: var(--color-text-muted);
+}
+
+.aui-plus-menu__item > strong {
+  grid-row: 1;
+  grid-column: 2;
+  /* <strong> defaults to weight 700 which reads as a different family
+   * next to the rest of the app's 600-weight UI titles. Pin to the
+   * design-system token. Size + line-height also tokenized so popups
+   * stay coherent if the type scale shifts. */
+  font-size: var(--font-size-md);
+  font-weight: var(--font-weight-semibold);
+  line-height: var(--line-height-snug);
+}
+
+.aui-plus-menu__item > span {
+  grid-row: 2;
+  grid-column: 2;
+  font-size: var(--font-size-xs);
+  line-height: var(--line-height-snug);
+}
+
+.aui-plus-menu__item:hover .aui-plus-menu__icon,
+.aui-plus-menu__item[data-highlighted] .aui-plus-menu__icon {
+  color: var(--color-text);
+}
+
+.aui-trigger-popover__back {
+  padding: var(--space-sm);
+  text-align: left;
+}
+
+.aui-trigger-popover__item span {
+  color: var(--color-text-muted);
+  font-size: var(--font-size-xs);
+}

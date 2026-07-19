@@ -66,6 +66,7 @@ import { ConnectorService } from "./connectors/connector-service";
 import { startCrashReporter } from "./crash-reporter";
 import { registerDeepLinks } from "./deep-links";
 import { registerIpcHandlers } from "./ipc/handlers";
+import { applyBrandDockIcon, applyBrandIdentity } from "./branding";
 import { resolveAuthPosture } from "./posture";
 import { installSingleInstance, shouldSupervise } from "./services/boot-mode";
 import { createDesktopSupervisor } from "./services/desktop-supervisor";
@@ -74,7 +75,7 @@ import type { ServiceSupervisor } from "./services/supervisor";
 import { TransportBridge } from "./transport-bridge";
 import { createMainWindow } from "./window";
 
-app.setName("0xCopilot");
+applyBrandIdentity(app, { platform: process.platform });
 
 registerAppProtocolPrivilege();
 
@@ -208,6 +209,10 @@ function startCapabilitySubsystem(): void {
 if (hasSingleInstanceLock) {
   void app.whenReady().then(() => {
     startCrashReporter();
+    applyBrandDockIcon(app, {
+      platform: process.platform,
+      iconPngPath: join(__dirname, "icon.png"),
+    });
     // AC9: route connector OAuth deep-link callbacks (keyed on the unique
     // 256-bit state) to the connector coordinator BEFORE app-login. A state
     // the connector service does not own returns false and falls through.

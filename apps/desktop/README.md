@@ -278,6 +278,39 @@ Gatekeeper/SmartScreen never gate it. `main/updater.ts` auto-no-ops (unpackaged
 → `app.isPackaged` is false), so the CLI channel simply updates via
 `npm i -g …@latest`. See [tools/cli/README.md](../../tools/cli/README.md).
 
+## Brand identity (name + icons)
+
+macOS takes the Dock icon and hover name from the **.app bundle hosting the
+process**, never from the JS runtime — so a launch that spawns the stock
+Electron binary would present as "Electron" with the atom icon. Branding is
+therefore applied per launch mode:
+
+- **Assets** — `build/icon-source.svg` is the vector source (same mark as the
+  website favicon); `node build/generate-icons.mjs` (macOS host) regenerates
+  the committed `build/icon.png` / `icon.icns` / `icon.ico`. The compile step
+  stages the png + icns into `out/main/` so they ship in the asar and the CLI
+  payload.
+- **Packaged installs** — `electron-builder.yml` (`productName`, `mac.icon`,
+  `win.icon`) bakes the identity into the bundle; nothing to do at runtime.
+- **`copilot` CLI launches** — `tools/cli/lib/mac-shell.mjs` clones
+  Electron.app into `~/.0xcopilot/shell/0xCopilot.app` (APFS copy-on-write, so
+  ~no extra disk), rewrites `CFBundleName`/`CFBundleDisplayName`/
+  `CFBundleIdentifier`, swaps in `icon.icns`, ad-hoc re-signs the outer
+  bundle, and launches that — the Dock shows the real name + icon. This is
+  the rebrand procedure from Electron's own Application Distribution docs
+  (what electron-packager automates), minus the helper-app renames: helpers
+  never appear in the Dock, and leaving them untouched keeps their nested
+  signatures valid without a deep re-sign — so Activity Monitor still lists
+  "Electron Helper" child processes. Cosmetic only.
+- **Plain `npm run dev`** — `main/branding.ts` sets the app name and the
+  runtime **dock icon**; the Dock _tooltip_ still reads "Electron" here (it
+  comes from node_modules' Electron.app Info.plist, which we don't mutate).
+  Launch through `copilot` from the repo checkout if that matters.
+
+`main/branding.ts#APP_ID`, `electron-builder.yml#appId`, and the shell's
+`CFBundleIdentifier` must stay identical (`com.0x-copilot.app`) so
+notifications and Windows taskbar grouping attribute to one app.
+
 ## Packaging, signing & auto-update
 
 Installers are built by `electron-builder` (`electron-builder.yml`). The
