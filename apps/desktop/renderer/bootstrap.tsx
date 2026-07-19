@@ -77,9 +77,10 @@ export function App(): ReactElement {
       <DeploymentProfileProvider profile={DESKTOP_DEPLOYMENT_PROFILE}>
         <BootGate bridge={window.bridge}>
           <SignInGate bridge={window.bridge} workspaceId={DEFAULT_WORKSPACE_ID}>
-            {(session) => (
+            {(session, signOut) => (
               <ChatShellForSession
                 session={session}
+                onSignOut={signOut}
                 router={router}
                 keyValueStore={keyValueStore}
                 presenceSignal={presenceSignal}
@@ -96,6 +97,8 @@ export function App(): ReactElement {
 
 interface ChatShellForSessionProps {
   readonly session: RendererSession;
+  /** Clears the persisted session and returns to the sign-in gate. */
+  readonly onSignOut: () => void;
   readonly router: HashRouter;
   readonly keyValueStore: LocalStorageKeyValueStore;
   readonly presenceSignal: DocumentPresenceSignal;
@@ -225,6 +228,9 @@ function ChatShellForSession(props: ChatShellForSessionProps): ReactElement {
           <SettingsMount
             transport={transport}
             session={props.session}
+            // Real sign-out: clears the persisted session in main, then the gate
+            // returns to the sign-in screen (SignInGate owns the auth phase).
+            onSignOut={props.onSignOut}
             // PR-6.4: controlled section so the palette can deep-link Settings.
             activeSection={settingsSection}
             onSectionChange={setSettingsSection}

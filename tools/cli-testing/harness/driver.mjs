@@ -28,7 +28,12 @@ import { _electron as electron } from "playwright";
 
 const HERE = path.dirname(fileURLToPath(import.meta.url));
 const REPO_ROOT = path.resolve(HERE, "..", "..", "..");
-const APP_DIR = path.join(REPO_ROOT, "apps", "desktop");
+// APP_DIR override lets the harness drive the ASSEMBLED PAYLOAD
+// (tools/cli/payload/desktop) exactly as the published `copilot` runs it —
+// not just the source checkout (apps/desktop). Defaults to the source app.
+const APP_DIR = process.env.APP_DIR
+  ? path.resolve(process.env.APP_DIR)
+  : path.join(REPO_ROOT, "apps", "desktop");
 
 const CTL_PORT = Number(process.env.CTL_PORT ?? "8790");
 const POSTURE = process.env.POSTURE ?? "prod"; // "prod" | "dev"
