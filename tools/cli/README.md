@@ -38,17 +38,23 @@ DMG/`.exe` would need Apple/Windows signing certificates. Distributing through
 
 ## Commands
 
-| Command             | What it does                                                       |
-| ------------------- | ------------------------------------------------------------------ |
-| `copilot`           | Stage the runtime if needed, then start the app.                   |
-| `copilot start`     | Same as no command.                                                |
-| `copilot install`   | Download + stage the runtime (and sign it on macOS); don't launch. |
-| `copilot doctor`    | Report platform, source, Electron, staged runtime, signatures.     |
-| `copilot uninstall` | Remove the staged runtime, download cache, and local app data.     |
-| `copilot help`      | Usage.                                                             |
-| `copilot version`   | CLI version.                                                       |
+| Command             | What it does                                                               |
+| ------------------- | -------------------------------------------------------------------------- |
+| `copilot`           | Stage the runtime if needed, then start the app.                           |
+| `copilot start`     | Same as no command.                                                        |
+| `copilot install`   | Download + stage the runtime (and sign it on macOS); don't launch.         |
+| `copilot doctor`    | Report platform, source, Electron, staged runtime, signatures.             |
+| `copilot repair`    | Unblock a stuck launch (orphaned database / stale lock) — keeps your data. |
+| `copilot uninstall` | Remove the staged runtime, download cache, and local app data.             |
+| `copilot help`      | Usage.                                                                     |
+| `copilot version`   | CLI version.                                                               |
 
-Flags: `--force` (re-stage from scratch), `--yes` (skip the uninstall prompt).
+Flags: `--force` (re-stage from scratch), `--yes` (skip prompts), `--session`
+(make `repair` also clear a stuck sign-in).
+
+If a launch won't come up, see **[TROUBLESHOOTING.md](./TROUBLESHOOTING.md)** —
+the reset ladder is `copilot doctor` → `copilot repair` (keeps your data) →
+`copilot uninstall` (wipes it).
 
 To remove the command itself: `npm rm -g @0x-copilot/cli`.
 

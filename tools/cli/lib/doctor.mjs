@@ -1,6 +1,6 @@
 // `copilot doctor` — inspect the install and report what would stop a launch.
 
-import { existsSync, statSync } from "node:fs";
+import { existsSync, readFileSync, statSync } from "node:fs";
 import { spawnSync } from "node:child_process";
 import { createRequire } from "node:module";
 import path from "node:path";
@@ -117,6 +117,20 @@ export function doctor(pkgRoot) {
       ? DOWNLOAD_CACHE
       : `${DOWNLOAD_CACHE} ${ui.c.dim("(empty)")}`,
   );
+
+  // Orphaned embedded database: a force-quit/crash leftover that would block a
+  // fresh start. The app now auto-reclaims it on boot, but surface it here with
+  // the one-liner fix. Informational — doesn't fail `doctor`.
+  const orphanPid = orphanedDatabasePid();
+  if (orphanPid !== null) {
+    line(
+      "database",
+      ui.c.yellow(`orphaned instance running (pid ${orphanPid})`),
+    );
+    ui.plain(
+      `  ${ui.c.dim("".padEnd(16))} if a launch won't start, run ${ui.c.bold("copilot repair")}`,
+    );
+  }
   ui.plain();
 
   if (problems.length === 0) {
@@ -125,6 +139,26 @@ export function doctor(pkgRoot) {
   }
   for (const p of problems) ui.err(p);
   return false;
+}
+
+/** The pid of a live orphaned embedded postgres holding pgdata, or null. */
+function orphanedDatabasePid() {
+  const pidPath = path.join(appUserDataDir(), "pgdata", "postmaster.pid");
+  if (!existsSync(pidPath)) return null;
+  let pid;
+  try {
+    const first = readFileSync(pidPath, "utf-8").split(/\r?\n/u, 1)[0] ?? "";
+    pid = Number.parseInt(first.trim(), 10);
+  } catch {
+    return null;
+  }
+  if (Number.isNaN(pid)) return null;
+  try {
+    process.kill(pid, 0);
+    return pid;
+  } catch (e) {
+    return e && e.code === "EPERM" ? pid : null;
+  }
 }
 
 /** Spot-check a couple of critical binaries actually carry a valid signature. */

@@ -6,6 +6,7 @@
 //   copilot start
 //   copilot install    stage/refresh the runtime without launching
 //   copilot doctor      diagnose the install
+//   copilot repair      unblock a stuck launch (keeps data); --session also signs out
 //   copilot uninstall   remove the staged runtime + app data
 //   copilot help | version
 
@@ -23,6 +24,7 @@ import {
 import { isStaged, stageRuntime } from "../lib/stage.mjs";
 import { ensureAppBuilt, launchApp } from "../lib/launch.mjs";
 import { doctor } from "../lib/doctor.mjs";
+import { repair } from "../lib/repair.mjs";
 import { uninstall } from "../lib/uninstall.mjs";
 import * as ui from "../lib/ui.mjs";
 
@@ -55,13 +57,16 @@ function printHelp() {
     `  ${ui.c.cyan("doctor")}         check the install and report problems`,
   );
   ui.plain(
+    `  ${ui.c.cyan("repair")}         unblock a stuck launch (orphaned database / stale lock); keeps your data`,
+  );
+  ui.plain(
     `  ${ui.c.cyan("uninstall")}      remove the staged runtime + local app data`,
   );
   ui.plain(`  ${ui.c.cyan("help")}           show this help`);
   ui.plain(`  ${ui.c.cyan("version")}        print the CLI version`);
   ui.plain();
   ui.plain(
-    `  ${ui.c.dim("Flags: --force (re-stage), --yes (uninstall without prompt)")}`,
+    `  ${ui.c.dim("Flags: --force (re-stage), --yes (skip prompts), --session (repair also clears sign-in)")}`,
   );
   ui.plain();
 }
@@ -138,12 +143,14 @@ async function main() {
   const positional = argv.filter((a) => !a.startsWith("-"));
   const force = flags.has("--force") || flags.has("-f");
   const yes = flags.has("--yes") || flags.has("-y");
+  const session = flags.has("--session");
 
   const KNOWN_FLAGS = new Set([
     "--force",
     "-f",
     "--yes",
     "-y",
+    "--session",
     "--help",
     "-h",
     "--version",
@@ -177,6 +184,9 @@ async function main() {
       break;
     case "doctor":
       process.exit(doctor(PKG_ROOT) ? 0 : 1);
+      break;
+    case "repair":
+      process.exit((await repair({ yes, session })) ? 0 : 1);
       break;
     case "uninstall":
       process.exit((await uninstall({ yes })) ? 0 : 1);
