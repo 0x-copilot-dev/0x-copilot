@@ -20,6 +20,8 @@ import {
   type ReactNode,
 } from "react";
 
+import { parseTransportError } from "../errors/transportError";
+
 export type NotifyTone = "error" | "success" | "info";
 
 export interface NotifyAction {
@@ -143,6 +145,10 @@ export function useNotify(): (input: NotifyInput) => string {
  * facade returns `{ detail: { safe_message, code, … } }` (or `{ detail: "…" }`),
  * and transport/IPC often wraps it as `"…: Error: {json}"` — dig out the
  * `safe_message` so the user sees the actionable line, not the raw envelope.
+ *
+ * Delegates the envelope parsing to the shared {@link parseTransportError} (the
+ * single source of that logic); this wrapper keeps the string-only signature
+ * toasts want and preserves the `undefined`/`""` edges its callers rely on.
  */
 export function messageFromError(err: unknown): string | undefined {
   const raw =
@@ -152,23 +158,5 @@ export function messageFromError(err: unknown): string | undefined {
         ? err
         : undefined;
   if (raw === undefined || raw === "") return raw;
-  const start = raw.indexOf("{");
-  const end = raw.lastIndexOf("}");
-  if (start >= 0 && end > start) {
-    try {
-      const parsed: unknown = JSON.parse(raw.slice(start, end + 1));
-      const detail =
-        parsed !== null && typeof parsed === "object" && "detail" in parsed
-          ? (parsed as { detail: unknown }).detail
-          : parsed;
-      if (typeof detail === "string" && detail !== "") return detail;
-      if (detail !== null && typeof detail === "object") {
-        const safe = (detail as { safe_message?: unknown }).safe_message;
-        if (typeof safe === "string" && safe !== "") return safe;
-      }
-    } catch {
-      /* not JSON — fall through to the raw message */
-    }
-  }
-  return raw;
+  return parseTransportError(err).safeMessage ?? raw;
 }

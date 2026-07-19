@@ -546,13 +546,65 @@ export function ProjectsBinder(): ReactElement {
 // `TcChat` loads its messages (`/v1/agent/conversations/{id}/messages`, 200).
 export function RunBinder({
   conversationId: fallbackConversationId,
+  onOpenModelSettings,
 }: {
   readonly conversationId: ConversationId;
+  /** Open Settings → Provider keys (readiness setup CTA / config-error CTA). */
+  readonly onOpenModelSettings?: () => void;
 }): ReactElement {
   const transport = useTransport();
   const [conversationId, setConversationId] = useState<ConversationId | null>(
     null,
   );
+  // Readiness gate (Issue 1): does the user have a usable model — a BYOK
+  // provider key OR a running local model? Default true (fail-open) so we never
+  // flash the setup CTA on load for a user who IS configured; flip to false only
+  // once the probe CONFIRMS neither exists. A probe error also fails open — the
+  // run-start error surfacing is the backstop that shows the actionable config
+  // message if a key really is missing.
+  const [modelReady, setModelReady] = useState(true);
+
+  useEffect(() => {
+    let cancelled = false;
+    void (async () => {
+      let hasProviderKey = false;
+      try {
+        const res = await transport.request<{
+          readonly keys?: readonly unknown[];
+        }>({ method: "GET", path: "/v1/settings/provider-keys" });
+        hasProviderKey = (res.keys?.length ?? 0) > 0;
+      } catch {
+        // Can't tell → don't hard-block. Leave ready=true.
+        return;
+      }
+      if (hasProviderKey) {
+        if (!cancelled) setModelReady(true);
+        return;
+      }
+      // No cloud key — a running local model with at least one pulled model
+      // counts as ready. Local models are optional/server-gated, so any error
+      // (disabled → 404) simply means "no local option", not "not ready".
+      let hasLocalModel = false;
+      try {
+        const status = await transport.request<{
+          readonly enabled?: boolean;
+          readonly ollama_running?: boolean;
+        }>({ method: "GET", path: "/v1/local-models/status" });
+        if (status.enabled === true && status.ollama_running === true) {
+          const list = await transport.request<{
+            readonly models?: readonly unknown[];
+          }>({ method: "GET", path: "/v1/local-models" });
+          hasLocalModel = (list.models?.length ?? 0) > 0;
+        }
+      } catch {
+        /* local models unavailable — not a readiness signal */
+      }
+      if (!cancelled) setModelReady(hasProviderKey || hasLocalModel);
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [transport]);
 
   useEffect(() => {
     let cancelled = false;
@@ -604,6 +656,8 @@ export function RunBinder({
     <RunDestination
       conversationId={activeConversationId}
       onStartRun={handleStartRun}
+      modelReady={modelReady}
+      onOpenModelSettings={onOpenModelSettings}
     />
   );
 }

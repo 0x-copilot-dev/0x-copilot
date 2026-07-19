@@ -30,6 +30,22 @@ import {
 
 const DEFAULT_AGENT_NAME = "the agent";
 
+/**
+ * Structured failure from the last start attempt. `message` is the primary,
+ * actionable line — the facade `safe_message` when present (e.g. "Missing API
+ * key for model provider 'openai'. Add one in Settings -> Provider keys."),
+ * never the raw transport envelope. `code` lets the composer branch (a
+ * `configuration_error` shows an "Add a provider key" CTA). `correlationId` /
+ * `raw` are demoted behind a "Show details" disclosure so a support reference
+ * stays recoverable without dumping the envelope into the primary message.
+ */
+export interface StartRunError {
+  readonly message: string;
+  readonly code?: string;
+  readonly correlationId?: string;
+  readonly raw?: string;
+}
+
 export interface RunEmptyStateProps {
   /** Agent display name — woven into the honest empty copy. */
   readonly agentName?: string;
@@ -46,11 +62,26 @@ export interface RunEmptyStateProps {
    */
   readonly submitting?: boolean;
   /**
-   * Human-readable failure from the last start attempt (run POST 4xx/5xx, a
-   * transport error, …). Rendered inline so a failed start is never silent.
-   * `null`/undefined = no error.
+   * Structured failure from the last start attempt (run POST 4xx/5xx, a
+   * transport error, …). Rendered inline so a failed start is never silent, with
+   * an "Add a provider key" CTA on a configuration error and a demoted
+   * "Show details" disclosure. `null`/undefined = no error.
    */
-  readonly error?: string | null;
+  readonly error?: StartRunError | null;
+  /**
+   * `true` when NO model provider is configured (no BYOK key and no local
+   * model). The composer is disabled and a "Set up your model" CTA is shown
+   * instead of letting the user start a run that is guaranteed to fail with a
+   * configuration error. The host binder computes this from the
+   * provider-keys / local-models readiness probe.
+   */
+  readonly setupRequired?: boolean;
+  /**
+   * Open Settings → Provider keys. Wired by the host binder; when absent (e.g. a
+   * substrate with no settings surface) the setup / error CTAs are hidden but
+   * the honest copy still shows.
+   */
+  readonly onOpenModelSettings?: () => void;
 }
 
 export function RunEmptyState(props: RunEmptyStateProps): ReactElement {
@@ -59,19 +90,24 @@ export function RunEmptyState(props: RunEmptyStateProps): ReactElement {
     onSubmitGoal,
     submitting = false,
     error = null,
+    setupRequired = false,
+    onOpenModelSettings,
   } = props;
 
   const [draft, setDraft] = useState("");
   const trimmed = draft.trim();
-  const canSubmit = trimmed !== "" && !submitting;
+  // Not ready to run: mid-flight, or no model provider configured yet. Either
+  // way the composer stays inert so a doomed start can't fire.
+  const composerLocked = submitting || setupRequired;
+  const canSubmit = trimmed !== "" && !composerLocked;
 
   const submit = useCallback((): void => {
     const goal = draft.trim();
-    if (goal === "" || submitting) {
+    if (goal === "" || submitting || setupRequired) {
       return;
     }
     onSubmitGoal(goal);
-  }, [draft, submitting, onSubmitGoal]);
+  }, [draft, submitting, setupRequired, onSubmitGoal]);
 
   const handleSubmit = useCallback(
     (event: FormEvent<HTMLFormElement>): void => {
@@ -107,6 +143,32 @@ export function RunEmptyState(props: RunEmptyStateProps): ReactElement {
           before it acts.
         </p>
 
+        {/* Readiness gate (FR-1.x): no provider key + no local model → say so
+            and offer the one action that unblocks a run, rather than letting the
+            user start a run that fails with a configuration error. */}
+        {setupRequired ? (
+          <div
+            data-testid="run-empty-setup"
+            style={setupNoticeStyle}
+            role="note"
+          >
+            <p style={setupTextStyle}>
+              Before {agentName} can run, connect a model — a cloud API key
+              (OpenAI, Anthropic, Google) or a local model. It takes a minute.
+            </p>
+            {onOpenModelSettings !== undefined ? (
+              <button
+                type="button"
+                data-testid="run-empty-setup-cta"
+                style={ctaButtonStyle}
+                onClick={onOpenModelSettings}
+              >
+                Set up your model
+              </button>
+            ) : null}
+          </div>
+        ) : null}
+
         <form
           data-testid="run-empty-form"
           style={formStyle}
@@ -119,7 +181,7 @@ export function RunEmptyState(props: RunEmptyStateProps): ReactElement {
             placeholder="Give it a goal…"
             rows={3}
             value={draft}
-            disabled={submitting}
+            disabled={composerLocked}
             onChange={(event) => setDraft(event.target.value)}
             onKeyDown={handleKeyDown}
           />
@@ -136,10 +198,52 @@ export function RunEmptyState(props: RunEmptyStateProps): ReactElement {
               {submitting ? "Starting…" : "Start run"}
             </button>
           </div>
-          {error !== null && error !== "" ? (
-            <p data-testid="run-empty-error" style={errorStyle} role="alert">
-              {error}
-            </p>
+          {error !== null && error !== undefined ? (
+            <div
+              data-testid="run-empty-error"
+              style={errorBlockStyle}
+              role="alert"
+            >
+              <p
+                data-testid="run-empty-error-message"
+                style={errorMessageStyle}
+              >
+                {error.message}
+              </p>
+              {error.code === "configuration_error" &&
+              onOpenModelSettings !== undefined ? (
+                <button
+                  type="button"
+                  data-testid="run-empty-error-cta"
+                  style={ctaButtonStyle}
+                  onClick={onOpenModelSettings}
+                >
+                  Add a provider key
+                </button>
+              ) : null}
+              {error.correlationId !== undefined ||
+              (error.raw !== undefined &&
+                error.raw !== "" &&
+                error.raw !== error.message) ? (
+                <details style={detailsStyle}>
+                  <summary
+                    data-testid="run-empty-error-details-toggle"
+                    style={detailsSummaryStyle}
+                  >
+                    Show details
+                  </summary>
+                  <pre
+                    data-testid="run-empty-error-details"
+                    style={detailsPreStyle}
+                  >
+                    {error.correlationId !== undefined
+                      ? `Reference: ${error.correlationId}\n`
+                      : ""}
+                    {error.raw ?? ""}
+                  </pre>
+                </details>
+              ) : null}
+            </div>
           ) : null}
         </form>
       </div>
@@ -235,11 +339,81 @@ const hintStyle: CSSProperties = {
   color: "var(--color-text-subtle, #7e7e84)",
 };
 
-const errorStyle: CSSProperties = {
+const errorBlockStyle: CSSProperties = {
   margin: "12px 0 0",
+  display: "flex",
+  flexDirection: "column",
+  alignItems: "flex-start",
+  gap: 8,
+};
+
+const errorMessageStyle: CSSProperties = {
+  margin: 0,
   fontSize: "var(--font-size-xs, 12px)",
   lineHeight: 1.45,
   color: "var(--color-danger, #e5678a)",
+};
+
+// Setup notice — the honest "no model configured yet" state (readiness gate).
+const setupNoticeStyle: CSSProperties = {
+  marginTop: 4,
+  display: "flex",
+  flexDirection: "column",
+  alignItems: "flex-start",
+  gap: 10,
+  padding: "12px 14px",
+  borderRadius: 10,
+  background: "var(--color-bg, #0e1015)",
+  border: "1px solid var(--color-border, #2a2d31)",
+};
+
+const setupTextStyle: CSSProperties = {
+  margin: 0,
+  fontSize: "var(--font-size-sm, 13px)",
+  lineHeight: 1.5,
+  color: "var(--color-text, #f4f5f6)",
+};
+
+// Actionable CTA — the accent-filled button for "Set up your model" /
+// "Add a provider key". Shares the accent look with the primary Start button.
+const ctaButtonStyle: CSSProperties = {
+  alignSelf: "flex-start",
+  background: "var(--color-accent, #5fb2ec)",
+  color: "var(--color-accent-contrast, #08131d)",
+  border: "1px solid var(--color-accent, #5fb2ec)",
+  borderRadius: 8,
+  padding: "6px 14px",
+  fontSize: "var(--font-size-xs, 12px)",
+  fontWeight: 600,
+  cursor: "pointer",
+  fontFamily: "inherit",
+};
+
+const detailsStyle: CSSProperties = {
+  width: "100%",
+};
+
+const detailsSummaryStyle: CSSProperties = {
+  cursor: "pointer",
+  fontSize: "var(--font-size-2xs, 11px)",
+  color: "var(--color-text-subtle, #7e7e84)",
+  fontFamily: "var(--font-mono)",
+};
+
+const detailsPreStyle: CSSProperties = {
+  margin: "6px 0 0",
+  padding: "8px 10px",
+  maxHeight: 160,
+  overflow: "auto",
+  borderRadius: 8,
+  background: "var(--color-bg, #0e1015)",
+  border: "1px solid var(--color-border, #2a2d31)",
+  fontFamily: "var(--font-mono)",
+  fontSize: "var(--font-size-2xs, 11px)",
+  lineHeight: 1.4,
+  color: "var(--color-text-muted, #9aa0a6)",
+  whiteSpace: "pre-wrap",
+  wordBreak: "break-word",
 };
 
 const submitButtonStyle = (enabled: boolean): CSSProperties => ({

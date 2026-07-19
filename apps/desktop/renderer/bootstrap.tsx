@@ -246,6 +246,9 @@ function ChatShellForSession(props: ChatShellForSessionProps): ReactElement {
             // into the real Settings sections (reachable today, PR-5.9 / 6.4).
             onOpenRetentionSettings={() => handleOpenSettings("privacy")}
             onOpenApprovalSettings={() => handleOpenSettings("model-behavior")}
+            // Run cockpit readiness / config-error CTAs → Settings → Provider
+            // keys (Issues 1 + 2). handleOpenSettings + the slug already exist.
+            onOpenModelSettings={() => handleOpenSettings("provider-keys")}
           />
         )}
       </ChatShell>
