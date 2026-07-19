@@ -105,4 +105,20 @@ describe("RunEmptyState", () => {
     fireEvent.keyDown(input, { key: "Enter" });
     expect(onSubmitGoal).not.toHaveBeenCalled();
   });
+
+  it("surfaces a start-run error instead of failing silently", () => {
+    const { rerender } = render(<RunEmptyState onSubmitGoal={() => {}} />);
+    // No error initially.
+    expect(screen.queryByTestId("run-empty-error")).toBeNull();
+    // A failure is rendered as an alert with the message.
+    rerender(
+      <RunEmptyState
+        onSubmitGoal={() => {}}
+        error="Couldn't start the run: 500 Internal Server Error"
+      />,
+    );
+    const err = screen.getByTestId("run-empty-error");
+    expect(err.getAttribute("role")).toBe("alert");
+    expect(err.textContent).toContain("Couldn't start the run");
+  });
 });
