@@ -170,4 +170,36 @@ fs.writeFileSync(
 );
 log(`copied built desktop app (v${desktopVersion})`);
 
+// --- 6b. bundled-default Google OAuth client -----------------------------
+// Ships next to the app (app.getAppPath()) so "Continue with Google" works
+// with zero user setup. Source of truth is a gitignored google-oauth.json
+// (never in git — the repo is public); at publish/CI time it can instead be
+// synthesized from GOOGLE_OAUTH_CLIENT_ID/SECRET in the env. Absent both, no
+// default ships and Google sign-in stays unavailable (wallet/local still work).
+const gOAuthSrc = path.join(REPO_ROOT, "apps", "desktop", "google-oauth.json");
+const gOAuthDest = path.join(appDest, "google-oauth.json");
+if (fs.existsSync(gOAuthSrc)) {
+  fs.copyFileSync(gOAuthSrc, gOAuthDest);
+  log("bundled Google OAuth default (from apps/desktop/google-oauth.json)");
+} else if ((process.env.GOOGLE_OAUTH_CLIENT_ID || "").trim() !== "") {
+  const clientSecret = (process.env.GOOGLE_OAUTH_CLIENT_SECRET || "").trim();
+  fs.writeFileSync(
+    gOAuthDest,
+    JSON.stringify(
+      {
+        client_id: process.env.GOOGLE_OAUTH_CLIENT_ID.trim(),
+        ...(clientSecret !== "" ? { client_secret: clientSecret } : {}),
+      },
+      null,
+      2,
+    ) + "\n",
+  );
+  log("bundled Google OAuth default (from publish env GOOGLE_OAUTH_CLIENT_ID)");
+} else {
+  log(
+    "no Google OAuth default bundled (no google-oauth.json, no env) — " +
+      "Google sign-in will be unavailable in this build",
+  );
+}
+
 log(`payload assembled at ${path.relative(REPO_ROOT, PAYLOAD)}`);

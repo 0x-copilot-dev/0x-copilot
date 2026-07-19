@@ -12,3 +12,7 @@ dist/
 # produced by tools/desktop-runtime/stage.mjs and consumed by extraResources.
 # Multi-hundred-MB per-arch binaries — never committed.
 resources/
+# Bundled-default Google OAuth client (id + secret). Ships in the npm payload
+# (assemble-payload.mjs) but MUST NOT be committed — this repo is public. The
+# tracked google-oauth.json.example documents the shape.
+google-oauth.json
