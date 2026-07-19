@@ -56,7 +56,10 @@ import {
 
 import type { ConversationId, RunId } from "@0x-copilot/api-types";
 
-import { parseTransportError } from "../../errors/transportError";
+import {
+  humanTransportMessage,
+  parseTransportError,
+} from "../../errors/transportError";
 import { useTransport } from "../../providers/TransportProvider";
 // PR-3.8: pure selector projecting parallel-subagent + fleet state off the
 // single canonical event stream (no second subscription / projector).
@@ -510,13 +513,11 @@ export function RunDestination(props: RunDestinationProps): ReactElement {
 
       {session.error !== null ? (
         <RunErrorBanner
-          // A streamed run/resolution failure can also carry the raw envelope;
-          // surface its safe_message (falls through unchanged for a plain
-          // message) so the banner is honest too (Issue 2).
-          message={
-            parseTransportError(session.error.message).safeMessage ??
-            session.error.message
-          }
+          // A streamed run/resolution failure surfaces its safe_message when it
+          // carries an envelope, else a cleaned line — NEVER the raw IPC string
+          // (which on desktop names the remote method 'transport.request'),
+          // so the banner is honest too (Issue 2 / NFR-2.1).
+          message={humanTransportMessage(session.error.message)}
           onRetry={session.retry}
         />
       ) : null}
