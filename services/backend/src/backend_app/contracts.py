@@ -1087,6 +1087,11 @@ class UserRecord(BackendContract):
     status: UserStatus = UserStatus.ACTIVE
     is_service_account: bool = False
     last_seen_at: datetime | None = None
+    # Denormalized pointer to the IdP's stable external id (migration 0015). The
+    # canonical mapping lives in `scim_external_ids`; SCIM provisioning maintains
+    # this column via its own path. Modeled here (default None) so `SELECT *` reads
+    # round-trip against this strict (`extra="forbid"`) contract instead of 500ing.
+    scim_external_id: str | None = None
     metadata: dict[str, Any] = Field(default_factory=dict)
     created_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
     updated_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))

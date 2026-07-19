@@ -1,0 +1,11 @@
+{
+  "name": "cli-testing-harness",
+  "private": true,
+  "version": "0.0.0",
+  "type": "module",
+  "description": "Automated live-smoke harness that drives the copilot Electron app as a real user and captures screenshots/logs for LLM-as-judge review.",
+  "dependencies": {
+    "playwright": "1.49.1",
+    "viem": "^2.21.55"
+  }
+}

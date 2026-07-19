@@ -1947,7 +1947,11 @@ class PostgresRuntimeApiStore:
         audit_id = str(data.get(_Fields.AUDIT_EVENT_ID) or f"audit_{ts_ns}")
         org_id = str(data.get(_Fields.ORG_ID, "unknown"))
         signer = AuditChainSigner.from_env(environment_env_var="RUNTIME_ENVIRONMENT")
-        async with self._tenant_connection(org_id=record.org_id) as conn:
+        # `record` is a dict (the audit-write contract across all adapters), so the
+        # tenant connection must use the normalized local `org_id` computed above —
+        # `record.org_id` is an attribute access on a dict and raises AttributeError,
+        # which 500s every conversation/run create on the Postgres store.
+        async with self._tenant_connection(org_id=org_id) as conn:
             async with conn.transaction():
                 await _take_runtime_audit_chain_lock_async(conn, org_id=org_id)
                 seq, prev_hash = await _read_runtime_audit_chain_head_async(
