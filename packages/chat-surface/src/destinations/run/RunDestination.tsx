@@ -140,6 +140,9 @@ export function RunDestination(props: RunDestinationProps): ReactElement {
   // the empty state unmounts and the live layout mounts in place.
   const [startedRunId, setStartedRunId] = useState<RunId | null>(null);
   const [isStartingRun, setIsStartingRun] = useState(false);
+  // The last start-run failure, surfaced in the empty-state composer so a
+  // failed "Start run" is never silent (no backend, 4xx/5xx, transport error).
+  const [startError, setStartError] = useState<string | null>(null);
   // The goal the empty-state composer just started the run with. Bridges the
   // header until the run list re-resolves to carry the run's own goal — so the
   // empty→live transition never flashes "No active run" for a run we named.
@@ -258,6 +261,7 @@ export function RunDestination(props: RunDestinationProps): ReactElement {
         return;
       }
       setIsStartingRun(true);
+      setStartError(null);
       setStartedGoal(trimmed);
       const start = onStartRun
         ? Promise.resolve(onStartRun(trimmed))
@@ -272,10 +276,18 @@ export function RunDestination(props: RunDestinationProps): ReactElement {
         .then((newRunId) => {
           if (newRunId !== null && newRunId !== undefined && newRunId !== "") {
             setStartedRunId(newRunId as RunId);
+          } else {
+            // The POST resolved but carried no run id — surface it rather than
+            // sitting on the composer with no feedback.
+            setStartError(
+              "Couldn't start the run — the agent service didn't return a run. Is the backend running?",
+            );
           }
         })
-        .catch(() => {
-          /* leave the composer visible; the user can retry the goal */
+        .catch((err: unknown) => {
+          // Never swallow: a failed start must say why (no backend, 4xx/5xx,
+          // transport error) instead of looking like the button does nothing.
+          setStartError(startRunErrorMessage(err));
         })
         .finally(() => {
           setIsStartingRun(false);
@@ -487,6 +499,7 @@ export function RunDestination(props: RunDestinationProps): ReactElement {
             agentName={agentName}
             onSubmitGoal={handleStartGoal}
             submitting={isStartingRun}
+            error={startError}
           />
         ) : (
           <ThreadCanvas
@@ -577,6 +590,20 @@ function surfaceTabTitle(uri: string): string {
 // response. Tolerant of the shapes the runtime returns — a bare `{ run_id }` /
 // `{ runId }` / `{ id }`, or those nested under a `run` envelope — so the
 // empty→live start does not pin one exact server contract this phase.
+// Turn a thrown start-run failure into a short, human line for the composer.
+// Keeps the underlying message (status code / detail) so the user can act, and
+// nudges toward the most common cause on a fresh desktop install.
+function startRunErrorMessage(err: unknown): string {
+  const raw =
+    err instanceof Error ? err.message : typeof err === "string" ? err : "";
+  const detail = raw.trim();
+  const base = "Couldn't start the run";
+  if (detail === "") {
+    return `${base}. Is the backend running and a model configured?`;
+  }
+  return `${base}: ${detail}`;
+}
+
 function runIdFromCreateResponse(payload: unknown): string | null {
   const record = payload as Record<string, unknown> | null;
   if (record === null || typeof record !== "object") {

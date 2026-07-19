@@ -45,6 +45,12 @@ export interface RunEmptyStateProps {
    * submit can't spawn two runs.
    */
   readonly submitting?: boolean;
+  /**
+   * Human-readable failure from the last start attempt (run POST 4xx/5xx, a
+   * transport error, …). Rendered inline so a failed start is never silent.
+   * `null`/undefined = no error.
+   */
+  readonly error?: string | null;
 }
 
 export function RunEmptyState(props: RunEmptyStateProps): ReactElement {
@@ -52,6 +58,7 @@ export function RunEmptyState(props: RunEmptyStateProps): ReactElement {
     agentName = DEFAULT_AGENT_NAME,
     onSubmitGoal,
     submitting = false,
+    error = null,
   } = props;
 
   const [draft, setDraft] = useState("");
@@ -129,6 +136,11 @@ export function RunEmptyState(props: RunEmptyStateProps): ReactElement {
               {submitting ? "Starting…" : "Start run"}
             </button>
           </div>
+          {error !== null && error !== "" ? (
+            <p data-testid="run-empty-error" style={errorStyle} role="alert">
+              {error}
+            </p>
+          ) : null}
         </form>
       </div>
     </div>
@@ -221,6 +233,13 @@ const hintStyle: CSSProperties = {
   fontFamily: "var(--font-mono)",
   fontSize: "var(--font-size-2xs, 11px)",
   color: "var(--color-text-subtle, #7e7e84)",
+};
+
+const errorStyle: CSSProperties = {
+  margin: "12px 0 0",
+  fontSize: "var(--font-size-xs, 12px)",
+  lineHeight: 1.45,
+  color: "var(--color-danger, #e5678a)",
 };
 
 const submitButtonStyle = (enabled: boolean): CSSProperties => ({
