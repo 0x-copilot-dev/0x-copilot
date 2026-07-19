@@ -102,6 +102,7 @@ describe("Sidebar", () => {
   });
 
   it("⌘K (or Ctrl+K) focuses the search input — proves the keymap binding wires up", async () => {
+    const user = userEvent.setup();
     renderWithProvider(
       <Sidebar
         collapsed={false}
@@ -117,16 +118,15 @@ describe("Sidebar", () => {
     const search = screen.getByRole("searchbox");
     expect(document.activeElement).not.toBe(search);
     // tinykeys binds against `window` and resolves `$mod` to ctrl on jsdom
-    // (non-mac platform string). Dispatch on the window root so the
-    // listener catches it; send only ctrlKey to match the resolved chord.
-    window.dispatchEvent(
-      new KeyboardEvent("keydown", {
-        key: "k",
-        ctrlKey: true,
-        bubbles: true,
-        cancelable: true,
-      }),
-    );
+    // (non-mac platform string), so the chord to send is Ctrl+K. Drive it
+    // through `userEvent` rather than a hand-built `KeyboardEvent`: tinykeys
+    // guards on `isKeyboardEvent` (requires both `key` AND `code`), and a
+    // raw `new KeyboardEvent({ key: "k", ctrlKey: true })` leaves `code`
+    // empty, so tinykeys drops it before the handler runs. `userEvent`
+    // emits a fully-formed event (`key: "k"` + `code: "KeyK"`) that bubbles
+    // to `window`, the handler focuses the input, and jsdom then reflects
+    // the focus in `document.activeElement`.
+    await user.keyboard("{Control>}k{/Control}");
     expect(document.activeElement).toBe(search);
   });
 
