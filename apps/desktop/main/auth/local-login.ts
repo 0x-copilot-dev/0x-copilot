@@ -27,9 +27,12 @@ import { fetchProfileClaims } from "./profile-claims";
 const SIWE_STATEMENT = "Sign in to Copilot";
 const SIWE_MESSAGE_TTL_MS = 5 * 60 * 1000;
 const DEFAULT_SESSION_TTL_MS = 60 * 60 * 1000;
-// Ethereum mainnet — in the backend's DEFAULT_ALLOWED_CHAIN_IDS. The local
-// identity is off-chain (we never transact); the chain id only scopes the nonce.
-const LOCAL_CHAIN_ID = 1;
+// Robinhood Chain (EIP-155 id 4663), the product's home chain and part of the
+// backend's DEFAULT_ALLOWED_CHAIN_IDS (1 Ethereum · 8453 Base · 42161 Arbitrum
+// One · 4663 Robinhood). The local key is a standard EVM (secp256k1) key, so its
+// address is identical across every EVM chain — the identity is portable; the
+// chain id only scopes the SIWE nonce, and we never transact on-chain.
+const LOCAL_CHAIN_ID = 4663;
 
 export interface LocalLoginDeps {
   readonly facadeBaseUrl: string;

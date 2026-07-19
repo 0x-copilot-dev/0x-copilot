@@ -71,7 +71,8 @@ describe("runLocalLogin", () => {
     expect(verifyPayload.message).toContain(ADDRESS);
     expect(verifyPayload.message).toContain("Sign in to Copilot");
     expect(verifyPayload.message).toContain("URI: http://127.0.0.1:54321");
-    expect(verifyPayload.message).toContain("Chain ID: 1");
+    // Robinhood Chain (the product's home EVM chain).
+    expect(verifyPayload.message).toContain("Chain ID: 4663");
     expect(typeof verifyPayload.signature).toBe("string");
     expect(verifyPayload.signature).toMatch(/^0x/);
   });
