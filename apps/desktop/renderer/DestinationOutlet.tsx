@@ -93,6 +93,12 @@ export interface DestinationOutletProps {
   readonly onOpenRetentionSettings?: () => void;
   /** Open Settings → Model & behavior (Tools' approval-policy note). */
   readonly onOpenApprovalSettings?: () => void;
+  /**
+   * Open Settings → Provider keys. The Run cockpit's empty-state uses it for the
+   * "Set up your model" readiness CTA and the `configuration_error` "Add a
+   * provider key" CTA (Issues 1 + 2).
+   */
+  readonly onOpenModelSettings?: () => void;
 }
 
 export function DestinationOutlet({
@@ -101,6 +107,7 @@ export function DestinationOutlet({
   onOpenRun,
   onOpenRetentionSettings,
   onOpenApprovalSettings,
+  onOpenModelSettings,
 }: DestinationOutletProps): ReactElement {
   // Fold deprecated slugs onto their recast surface BEFORE resolving content,
   // so `agents`/`inbox` render Activity (FR-2.23) rather than a dead pane.
@@ -117,6 +124,7 @@ export function DestinationOutlet({
         onOpenRun,
         onOpenRetentionSettings,
         onOpenApprovalSettings,
+        onOpenModelSettings,
       })}
     </div>
   );
@@ -127,6 +135,7 @@ interface SurfaceContext {
   readonly onOpenRun?: () => void;
   readonly onOpenRetentionSettings?: () => void;
   readonly onOpenApprovalSettings?: () => void;
+  readonly onOpenModelSettings?: () => void;
 }
 
 function renderSurface(
@@ -140,7 +149,12 @@ function renderSurface(
       // threaded. `enabled` defaults to true — the outlet only mounts this
       // for the `run` slug, so the session + ⌘M handler are live exactly
       // while Run is active.
-      return <RunBinder conversationId={ctx.conversationId} />;
+      return (
+        <RunBinder
+          conversationId={ctx.conversationId}
+          onOpenModelSettings={ctx.onOpenModelSettings}
+        />
+      );
     case "chats":
       return <ChatsBinder onOpenRun={ctx.onOpenRun} />;
     case "projects":

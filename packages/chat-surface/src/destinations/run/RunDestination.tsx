@@ -56,6 +56,7 @@ import {
 
 import type { ConversationId, RunId } from "@0x-copilot/api-types";
 
+import { parseTransportError } from "../../errors/transportError";
 import { useTransport } from "../../providers/TransportProvider";
 // PR-3.8: pure selector projecting parallel-subagent + fleet state off the
 // single canonical event stream (no second subscription / projector).
@@ -75,7 +76,7 @@ import {
 // (FR-3.25) and the multi-run selector (FR-3.26). Both mount inside this shell
 // (no separate host remount): the empty state binds a freshly-started run via
 // the `runId` seam, and the selector rebinds the session via `selectRun`.
-import { RunEmptyState } from "./RunEmptyState";
+import { RunEmptyState, type StartRunError } from "./RunEmptyState";
 import { RunHeader } from "./RunHeader";
 import { RunMultiSelect } from "./RunMultiSelect";
 import { RunWorkspaceRail } from "./RunWorkspaceRail";
@@ -120,6 +121,21 @@ export interface RunDestinationProps {
   readonly onStartRun?: (
     goal: string,
   ) => Promise<string | null> | string | null;
+  /**
+   * Readiness gate (Issue 1): `false` when NO model provider is configured (no
+   * BYOK key and no local model), so the empty-state composer shows a "Set up
+   * your model" CTA and refuses to start a run that would fail with a
+   * configuration error. Defaults to `true` so existing mounts/tests are
+   * unaffected; the host binder computes it from the provider-keys /
+   * local-models readiness probe.
+   */
+  readonly modelReady?: boolean;
+  /**
+   * Open Settings → Provider keys. Threaded to the empty-state composer for the
+   * setup CTA and the `configuration_error` "Add a provider key" CTA. Host-owned
+   * so the substrate-agnostic package never navigates directly.
+   */
+  readonly onOpenModelSettings?: () => void;
 }
 
 export function RunDestination(props: RunDestinationProps): ReactElement {
@@ -130,6 +146,8 @@ export function RunDestination(props: RunDestinationProps): ReactElement {
     agentName,
     goal: goalOverride,
     onStartRun,
+    modelReady = true,
+    onOpenModelSettings,
   } = props;
 
   const transport = useTransport();
@@ -142,7 +160,10 @@ export function RunDestination(props: RunDestinationProps): ReactElement {
   const [isStartingRun, setIsStartingRun] = useState(false);
   // The last start-run failure, surfaced in the empty-state composer so a
   // failed "Start run" is never silent (no backend, 4xx/5xx, transport error).
-  const [startError, setStartError] = useState<string | null>(null);
+  // Structured (safe_message / code / correlation_id) so the composer can show
+  // the actionable line + an "Add a provider key" CTA and demote the raw
+  // envelope — never the wall of JSON the transport throws (Issue 2).
+  const [startError, setStartError] = useState<StartRunError | null>(null);
   // The goal the empty-state composer just started the run with. Bridges the
   // header until the run list re-resolves to carry the run's own goal — so the
   // empty→live transition never flashes "No active run" for a run we named.
@@ -154,6 +175,7 @@ export function RunDestination(props: RunDestinationProps): ReactElement {
     setStartedRunId(null);
     setIsStartingRun(false);
     setStartedGoal(null);
+    setStartError(null);
   }, [conversationId]);
 
   const session = useRunSession({
@@ -257,7 +279,10 @@ export function RunDestination(props: RunDestinationProps): ReactElement {
   const handleStartGoal = useCallback(
     (goal: string): void => {
       const trimmed = goal.trim();
-      if (trimmed === "" || isStartingRun) {
+      // Readiness gate (Issue 1): never fire a start that is guaranteed to fail
+      // with a configuration error. The composer disables itself when
+      // `modelReady` is false; this guards the keyboard path too.
+      if (trimmed === "" || isStartingRun || !modelReady) {
         return;
       }
       setIsStartingRun(true);
@@ -279,21 +304,32 @@ export function RunDestination(props: RunDestinationProps): ReactElement {
           } else {
             // The POST resolved but carried no run id — surface it rather than
             // sitting on the composer with no feedback.
-            setStartError(
-              "Couldn't start the run — the agent service didn't return a run. Is the backend running?",
-            );
+            setStartError({
+              message:
+                "Couldn't start the run — the agent service didn't return a run. Is the backend running?",
+            });
           }
         })
         .catch((err: unknown) => {
-          // Never swallow: a failed start must say why (no backend, 4xx/5xx,
-          // transport error) instead of looking like the button does nothing.
-          setStartError(startRunErrorMessage(err));
+          // Never swallow, and never dump the raw transport envelope: parse out
+          // the actionable `safe_message` + `code` so the composer shows the
+          // one useful line (e.g. "Missing API key…") and a CTA, with the raw
+          // detail demoted behind "Show details" (Issue 2).
+          const parsed = parseTransportError(err);
+          setStartError({
+            message:
+              parsed.safeMessage ??
+              "Couldn't start the run. Is the backend running and a model configured?",
+            code: parsed.code,
+            correlationId: parsed.correlationId,
+            raw: parsed.raw !== "" ? parsed.raw : undefined,
+          });
         })
         .finally(() => {
           setIsStartingRun(false);
         });
     },
-    [conversationId, isStartingRun, onStartRun, transport],
+    [conversationId, isStartingRun, modelReady, onStartRun, transport],
   );
 
   // PR-3.11 (FR-3.26): bind the cockpit to another run. `selectRun` wins over
@@ -474,7 +510,13 @@ export function RunDestination(props: RunDestinationProps): ReactElement {
 
       {session.error !== null ? (
         <RunErrorBanner
-          message={session.error.message}
+          // A streamed run/resolution failure can also carry the raw envelope;
+          // surface its safe_message (falls through unchanged for a plain
+          // message) so the banner is honest too (Issue 2).
+          message={
+            parseTransportError(session.error.message).safeMessage ??
+            session.error.message
+          }
           onRetry={session.retry}
         />
       ) : null}
@@ -500,6 +542,8 @@ export function RunDestination(props: RunDestinationProps): ReactElement {
             onSubmitGoal={handleStartGoal}
             submitting={isStartingRun}
             error={startError}
+            setupRequired={!modelReady}
+            onOpenModelSettings={onOpenModelSettings}
           />
         ) : (
           <ThreadCanvas
@@ -590,20 +634,6 @@ function surfaceTabTitle(uri: string): string {
 // response. Tolerant of the shapes the runtime returns — a bare `{ run_id }` /
 // `{ runId }` / `{ id }`, or those nested under a `run` envelope — so the
 // empty→live start does not pin one exact server contract this phase.
-// Turn a thrown start-run failure into a short, human line for the composer.
-// Keeps the underlying message (status code / detail) so the user can act, and
-// nudges toward the most common cause on a fresh desktop install.
-function startRunErrorMessage(err: unknown): string {
-  const raw =
-    err instanceof Error ? err.message : typeof err === "string" ? err : "";
-  const detail = raw.trim();
-  const base = "Couldn't start the run";
-  if (detail === "") {
-    return `${base}. Is the backend running and a model configured?`;
-  }
-  return `${base}: ${detail}`;
-}
-
 function runIdFromCreateResponse(payload: unknown): string | null {
   const record = payload as Record<string, unknown> | null;
   if (record === null || typeof record !== "object") {

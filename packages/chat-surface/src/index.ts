@@ -1229,6 +1229,7 @@ export { type TcChatApproval } from "./thread-canvas";
 export {
   RunEmptyState,
   type RunEmptyStateProps,
+  type StartRunError,
   RunMultiSelect,
   type RunMultiSelectProps,
 } from "./destinations/run";
@@ -1251,3 +1252,16 @@ export {
 } from "./providers/NotificationCenterProvider";
 export { ToastStack } from "./shell/ToastStack";
 // === end Notifications ===
+
+// === Transport error parsing (shared) ===
+// One structured parse of a rejected Transport/IPC request — recovers the
+// facade `safe_message` / `code` / `correlation_id` from the raw (possibly
+// Electron-prefixed) `err.message`. Consumers surface `safeMessage`, branch on
+// `code` (e.g. `configuration_error` → an "Add a provider key" CTA), and demote
+// the raw envelope behind a "Show details" affordance. `messageFromError`
+// delegates to it.
+export {
+  parseTransportError,
+  type ParsedTransportError,
+} from "./errors/transportError";
+// === end Transport error parsing ===

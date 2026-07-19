@@ -114,11 +114,65 @@ describe("RunEmptyState", () => {
     rerender(
       <RunEmptyState
         onSubmitGoal={() => {}}
-        error="Couldn't start the run: 500 Internal Server Error"
+        error={{ message: "Couldn't start the run: 500 Internal Server Error" }}
       />,
     );
     const err = screen.getByTestId("run-empty-error");
     expect(err.getAttribute("role")).toBe("alert");
     expect(err.textContent).toContain("Couldn't start the run");
+  });
+
+  it("shows the setup CTA and locks the composer when no model is configured", () => {
+    const onOpenModelSettings = vi.fn();
+    render(
+      <RunEmptyState
+        onSubmitGoal={() => {}}
+        setupRequired
+        onOpenModelSettings={onOpenModelSettings}
+      />,
+    );
+    // Composer is inert — a doomed run can't be started.
+    expect(
+      (screen.getByTestId("run-empty-goal-input") as HTMLTextAreaElement)
+        .disabled,
+    ).toBe(true);
+    expect(
+      (screen.getByTestId("run-empty-submit") as HTMLButtonElement).disabled,
+    ).toBe(true);
+    // The honest setup notice + CTA is shown and opens model settings.
+    expect(screen.getByTestId("run-empty-setup")).not.toBeNull();
+    fireEvent.click(screen.getByTestId("run-empty-setup-cta"));
+    expect(onOpenModelSettings).toHaveBeenCalledTimes(1);
+  });
+
+  it("surfaces the safe_message + an 'Add a provider key' CTA and demotes the raw envelope on a configuration error", () => {
+    const onOpenModelSettings = vi.fn();
+    render(
+      <RunEmptyState
+        onSubmitGoal={() => {}}
+        onOpenModelSettings={onOpenModelSettings}
+        error={{
+          message:
+            "Missing API key for model provider 'openai'. Add one in Settings -> Provider keys.",
+          code: "configuration_error",
+          correlationId: "935a40d5",
+          raw: '{"detail":{"code":"configuration_error","safe_message":"Missing API key…","correlation_id":"935a40d5"}}',
+        }}
+      />,
+    );
+    // The actionable safe_message is the PRIMARY line — never the raw JSON.
+    const primary = screen.getByTestId("run-empty-error-message");
+    expect(primary.textContent).toContain(
+      "Missing API key for model provider 'openai'",
+    );
+    expect(primary.textContent).not.toContain("{");
+    // The config-error CTA opens Settings → Provider keys.
+    fireEvent.click(screen.getByTestId("run-empty-error-cta"));
+    expect(onOpenModelSettings).toHaveBeenCalledTimes(1);
+    // The correlation id + raw envelope live behind a "Show details" disclosure.
+    fireEvent.click(screen.getByTestId("run-empty-error-details-toggle"));
+    expect(screen.getByTestId("run-empty-error-details").textContent).toContain(
+      "935a40d5",
+    );
   });
 });
