@@ -104,7 +104,6 @@ export interface PlaywrightEngineOptions {
 export async function createPlaywrightEngine(
   opts: PlaywrightEngineOptions,
 ): Promise<BrowserEngine> {
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
   const pw: any = await import("playwright");
   const chromium = pw.chromium;
   const launchArgs = [
@@ -130,7 +129,6 @@ export async function createPlaywrightEngine(
         args: launchArgs,
         executablePath: opts.executablePath,
       };
-      // eslint-disable-next-line @typescript-eslint/no-explicit-any
       let ctx: any;
       if (persistent) {
         ctx = await chromium.launchPersistentContext(userDataDir, contextOpts);
@@ -154,7 +152,6 @@ export async function createPlaywrightEngine(
   };
 }
 
-// eslint-disable-next-line @typescript-eslint/no-explicit-any
 function wrapContext(ctx: any): EngineContext {
   return {
     async newPage() {
@@ -168,7 +165,6 @@ function wrapContext(ctx: any): EngineContext {
   };
 }
 
-// eslint-disable-next-line @typescript-eslint/no-explicit-any
 function wrapPage(page: any): EnginePage {
   return {
     async goto(url, { timeoutMs }) {
@@ -236,7 +232,6 @@ function wrapPage(page: any): EnginePage {
   };
 }
 
-// eslint-disable-next-line @typescript-eslint/no-explicit-any
 function locate(page: any, target: ElementTarget): any {
   // Prefer an accessible role+name locator; fall back to name text. This never
   // accepts a raw CSS/XPath selector from the model.
