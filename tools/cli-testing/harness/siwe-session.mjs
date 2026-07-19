@@ -105,9 +105,16 @@ async function main() {
     if (v !== undefined && v !== null) cb.searchParams.set(k, v);
   }
   out.loopbackUrl = cb.toString();
-  const cbRes = await fetch(cb.toString(), { redirect: "manual" });
-  out.loopbackStatus = cbRes.status;
-  out.loopbackText = (await cbRes.text().catch(() => "")).slice(0, 200);
+  // Tolerant: with a dummy/unreachable loopback (API-only verification) the GET
+  // throws — the bearer is already in out.verifyBody, so never lose it.
+  try {
+    const cbRes = await fetch(cb.toString(), { redirect: "manual" });
+    out.loopbackStatus = cbRes.status;
+    out.loopbackText = (await cbRes.text().catch(() => "")).slice(0, 200);
+  } catch (e) {
+    out.loopbackStatus = null;
+    out.loopbackError = e?.message ?? String(e);
+  }
 
   console.log(JSON.stringify(out, null, 2));
 }
