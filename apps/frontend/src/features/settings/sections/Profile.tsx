@@ -189,9 +189,26 @@ export function Profile({
     );
   }
 
+  // Honest identity (Issues 3 + 4): a wallet (SIWE) account has no real email —
+  // never show the `<address>@wallet.invalid` placeholder or nag to "verify" a
+  // structurally-unverifiable address.
+  const isWallet =
+    data.email_is_placeholder === true ||
+    (data.wallet_address != null && data.wallet_address !== "");
+  const walletAddress =
+    data.wallet_address != null && data.wallet_address !== ""
+      ? data.wallet_address
+      : isWallet
+        ? data.email.split("@")[0]
+        : null;
+
+  const nameInitial =
+    data.display_name && !data.display_name.startsWith("0x")
+      ? data.display_name.charAt(0)
+      : null;
   const initial = (
-    data.display_name?.charAt(0) ??
-    data.email.charAt(0) ??
+    nameInitial ??
+    (isWallet ? "⬡" : data.email.charAt(0)) ??
     "·"
   ).toUpperCase();
 
@@ -296,24 +313,39 @@ export function Profile({
             />
           </Field>
 
-          <Field label="Email">
-            <div className="me-form__email-row">
-              <code>{data.email}</code>
-              {data.email_verified_at ? (
-                <Badge tone="success">verified</Badge>
-              ) : (
-                <Badge tone="warning">unverified</Badge>
-              )}
-              <button
-                type="button"
-                className="me-form__inline-link"
-                onClick={() => void auth.logout()}
-                title="Re-authenticate to refresh your session"
-              >
-                Re-authenticate
-              </button>
-            </div>
-          </Field>
+          {isWallet ? (
+            <Field label="Wallet">
+              <div className="me-form__email-row">
+                <code>{walletAddress}</code>
+                {data.chain_name ? (
+                  <Badge tone="success">{data.chain_name}</Badge>
+                ) : null}
+              </div>
+              <p className="settings-meta">
+                You signed in with your wallet — no email is associated with
+                this account.
+              </p>
+            </Field>
+          ) : (
+            <Field label="Email">
+              <div className="me-form__email-row">
+                <code>{data.email}</code>
+                {data.email_verified_at ? (
+                  <Badge tone="success">verified</Badge>
+                ) : (
+                  <Badge tone="warning">unverified</Badge>
+                )}
+                <button
+                  type="button"
+                  className="me-form__inline-link"
+                  onClick={() => void auth.logout()}
+                  title="Re-authenticate to refresh your session"
+                >
+                  Re-authenticate
+                </button>
+              </div>
+            </Field>
+          )}
 
           <Field
             label="Job title"

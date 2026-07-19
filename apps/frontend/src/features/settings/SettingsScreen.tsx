@@ -308,7 +308,7 @@ export function SettingsScreen({
     <main className="settings-shell">
       <SettingsTopChrome
         workspaceName={workspace.workspace?.display_name ?? null}
-        userEmail={profile?.data?.email ?? null}
+        userEmail={headerIdentityLabel(profile?.data ?? null)}
         onBack={onBackToChat}
         onJumpConnectors={() => handlePick("connectors")}
       />
@@ -387,6 +387,21 @@ export function SettingsScreen({
       </div>
     </main>
   );
+}
+
+// Honest header identity (Issues 3 + 4): a wallet (SIWE) account has no real
+// email, so label it by its truncated address instead of the undeliverable
+// `@wallet.invalid` placeholder.
+function headerIdentityLabel(data: UserProfileState["data"]): string | null {
+  if (!data) return null;
+  const isWallet =
+    data.email_is_placeholder === true ||
+    (data.wallet_address != null && data.wallet_address !== "");
+  if (!isWallet) return data.email;
+  const address = data.wallet_address ?? data.email.split("@")[0];
+  return address.length > 12
+    ? `${address.slice(0, 6)}…${address.slice(-4)}`
+    : address;
 }
 
 function SettingsTopChrome({

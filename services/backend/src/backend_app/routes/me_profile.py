@@ -37,6 +37,12 @@ from backend_app.auth import BackendServiceAuthenticator
 from backend_app.contracts import IdentityAuditEventRecord
 from backend_app.identity.me_store import MeStore, UserProfileRecord
 from backend_app.identity.rbac import RequireScopes
+from backend_app.identity.siwe import (
+    chain_display_name,
+    display_address,
+    is_placeholder_email,
+)
+from backend_app.identity.siwe_store import SiweStore
 from backend_app.identity.store import IdentityStore
 
 
@@ -113,6 +119,17 @@ class UserProfileResponse(BaseModel):
     avatar_url: str | None
     bio: str | None
     updated_at: str
+    # Honest identity (wallet vs email). For a SIWE account ``email`` is the
+    # undeliverable ``<address>@wallet.invalid`` placeholder that must NEVER be
+    # shown; ``email_is_placeholder`` tells the FE to render the wallet anchor
+    # instead. ``wallet_address`` is the EIP-55 checksummed form + its chain.
+    email_is_placeholder: bool = False
+    wallet_address: str | None = None
+    chain_id: int | None = None
+    chain_name: str | None = None
+    # Durable auth origin (``siwe`` / ``google`` / ``local`` / …) from the
+    # membership record — drives the "Signed in with" indicator.
+    auth_method: str | None = None
 
 
 class UpdateUserProfileRequest(BaseModel):
@@ -183,8 +200,15 @@ def register_me_profile_routes(
     *,
     me_store: MeStore,
     identity_store: IdentityStore,
+    siwe_store: SiweStore | None = None,
 ) -> None:
-    """Attach ``/internal/v1/me/profile`` GET + PUT to a backend FastAPI app."""
+    """Attach ``/internal/v1/me/profile`` GET + PUT to a backend FastAPI app.
+
+    ``siwe_store`` is optional so non-wallet deployments / older test harnesses
+    keep working; when present, the profile surfaces the caller's wallet
+    address + chain so the FE renders honest identity instead of the
+    ``@wallet.invalid`` placeholder email.
+    """
 
     @app.get(
         "/internal/v1/me/profile",
@@ -203,7 +227,10 @@ def register_me_profile_routes(
         if user is None:
             raise HTTPException(status.HTTP_404_NOT_FOUND, "user_not_found")
         record = me_store.get_profile(org_id=identity.org_id, user_id=identity.user_id)
-        return _hydrate(user, record)
+        wallet, auth_method = _resolve_identity_extras(
+            identity_store, siwe_store, identity.org_id, identity.user_id
+        )
+        return _hydrate(user, record, wallet=wallet, auth_method=auth_method)
 
     @app.put(
         "/internal/v1/me/profile",
@@ -298,7 +325,10 @@ def register_me_profile_routes(
             # Concurrent delete — surface a 404 but the audit row is already
             # captured so forensics has the event.
             raise HTTPException(status.HTTP_404_NOT_FOUND, "user_not_found")
-        return _hydrate(refreshed_user, saved)
+        wallet, auth_method = _resolve_identity_extras(
+            identity_store, siwe_store, identity.org_id, identity.user_id
+        )
+        return _hydrate(refreshed_user, saved, wallet=wallet, auth_method=auth_method)
 
 
 def _request_ip(request: Request) -> str | None:
@@ -308,12 +338,66 @@ def _request_ip(request: Request) -> str | None:
     return request.client.host if request.client else None
 
 
-def _hydrate(user: Any, record: UserProfileRecord | None) -> UserProfileResponse:
+def _resolve_identity_extras(
+    identity_store: IdentityStore,
+    siwe_store: SiweStore | None,
+    org_id: str,
+    user_id: str,
+) -> tuple[Any, str | None]:
+    """The caller's wallet link (if any) + durable auth method for the profile.
+
+    Both are best-effort: a wallet lookup failure or an absent ``siwe_store``
+    simply yields a non-wallet profile rather than failing the read.
+    """
+
+    wallet: Any = None
+    if siwe_store is not None:
+        try:
+            wallet = siwe_store.get_wallet_identity_by_user(
+                org_id=org_id, user_id=user_id
+            )
+        except Exception:  # pragma: no cover - defensive
+            wallet = None
+    return wallet, _resolve_auth_method(identity_store, org_id, user_id)
+
+
+def _resolve_auth_method(
+    identity_store: IdentityStore, org_id: str, user_id: str
+) -> str | None:
+    """Durable auth origin from the membership record (``siwe`` / ``google`` …).
+
+    Mirrors ``routes.members._resolve_member_source`` — a small scan that is a
+    single row for a personal org.
+    """
+
+    try:
+        members = identity_store.list_members(org_id=org_id)
+    except Exception:  # pragma: no cover - defensive
+        return None
+    for member in members:
+        if member.user_id == user_id:
+            return member.source.value
+    return None
+
+
+def _hydrate(
+    user: Any,
+    record: UserProfileRecord | None,
+    *,
+    wallet: Any = None,
+    auth_method: str | None = None,
+) -> UserProfileResponse:
     """Materialise the response from the identity row + (maybe) sidecar.
 
     Absent sidecar → every column is ``null``; the FE renders a fresh form
-    against deployment defaults.
+    against deployment defaults. When ``wallet`` is present the honest wallet
+    anchor (checksummed address + chain) is surfaced and the placeholder email
+    is flagged so the FE never shows the ``@wallet.invalid`` address.
     """
+
+    wallet_address = display_address(wallet.address) if wallet is not None else None
+    chain_id = wallet.chain_id if wallet is not None else None
+    chain_name = chain_display_name(wallet.chain_id) if wallet is not None else None
 
     return UserProfileResponse(
         user_id=user.user_id,
@@ -331,6 +415,11 @@ def _hydrate(user: Any, record: UserProfileRecord | None) -> UserProfileResponse
         updated_at=_isoformat(record.updated_at if record else user.updated_at)
         or _isoformat(user.updated_at)
         or "",
+        email_is_placeholder=is_placeholder_email(user.primary_email),
+        wallet_address=wallet_address,
+        chain_id=chain_id,
+        chain_name=chain_name,
+        auth_method=auth_method,
     )
 
 

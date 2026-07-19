@@ -16,6 +16,7 @@ export {
 } from "./WebhookSecurityPage";
 export {
   ProfilePage,
+  type ProfileIdentityAnchor,
   type ProfilePagePerson,
   type ProfilePageProps,
 } from "./ProfilePage";
