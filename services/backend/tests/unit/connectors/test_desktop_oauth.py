@@ -20,7 +20,7 @@ from backend_app.connectors.oauth_coordinator import (
 )
 from backend_app.connectors.profile_catalog import DesktopProfileCatalog
 from backend_app.contracts import McpAuthState, OAuthTokenRequest
-from backend_app.mcp_oauth import McpAuthorization
+from backend_app.mcp_oauth import McpAuthorization, McpOAuthError, Values
 from backend_app.service import McpRegistryService
 from backend_app.store import InMemoryMcpStore
 from backend_app.token_vault import LocalTokenVault
@@ -256,3 +256,41 @@ class TestPreviewAndSetupGates:
         # Pydantic wraps the field validator's DesktopOAuthError at construction.
         with pytest.raises(ValidationError):
             DesktopOAuthCallback(kind="desktop_loopback", port=80)
+
+
+class _SetupRequiredOAuthClient:
+    """``authorization`` raises SETUP_REQUIRED — no configured OAuth client."""
+
+    def authorization(
+        self, *, record, redirect_uri, state, code_challenge, token_vault
+    ) -> McpAuthorization:
+        raise McpOAuthError(Values.OAuth.SETUP_REQUIRED)
+
+    def refresh_token(self, *, record, refresh_token, token_vault) -> OAuthTokenRequest:
+        raise AssertionError("refresh not expected in this test")
+
+
+class TestOAuthClientNotConfigured:
+    """A connector whose MCP server has no OAuth client must not 500."""
+
+    def test_start_maps_setup_required_to_stable_desktop_error(self) -> None:
+        store = InMemoryMcpStore()
+        service = McpRegistryService(
+            store=store,
+            token_vault=LocalTokenVault(secret="x" * 40),
+            oauth_client=_SetupRequiredOAuthClient(),
+            token_exchanger=FakeExchanger(),
+            auth_session_ttl=timedelta(minutes=5),
+        )
+        coordinator = DesktopMcpOAuthCoordinator(
+            mcp_service=service, catalog=DesktopProfileCatalog.load()
+        )
+        with pytest.raises(DesktopOAuthError) as excinfo:
+            coordinator.start(
+                slug="atlassian",
+                org_id=Fixture.ORG,
+                user_id=Fixture.USER,
+                callback=Fixture.loopback(),
+            )
+        # Stable code → the route maps it to 409 (never a raw 500).
+        assert excinfo.value.code == "connector_oauth_setup_required"

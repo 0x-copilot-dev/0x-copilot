@@ -125,7 +125,9 @@ import {
   DocumentPresenceSignal,
   KeyValueStoreProvider,
   LocalStorageKeyValueStore,
+  NotificationCenterProvider,
   SecretStorageProvider,
+  ToastStack,
   WebSecretStorage,
   registerItemRefResolver,
   hasItemRefResolver,
@@ -306,13 +308,17 @@ export default function App(): ReactElement {
   const [secretStorage] = useState(() => new WebSecretStorage());
   return (
     <ThemeProvider defaultScheme="dark">
-      <KeyValueStoreProvider store={keyValueStore}>
-        <SecretStorageProvider store={secretStorage}>
-          <AuthProvider>
-            <AuthGate />
-          </AuthProvider>
-        </SecretStorageProvider>
-      </KeyValueStoreProvider>
+      <NotificationCenterProvider>
+        <KeyValueStoreProvider store={keyValueStore}>
+          <SecretStorageProvider store={secretStorage}>
+            <AuthProvider>
+              <AuthGate />
+            </AuthProvider>
+          </SecretStorageProvider>
+        </KeyValueStoreProvider>
+        {/* One toast surface for the whole app; floats above full-bleed surfaces. */}
+        <ToastStack />
+      </NotificationCenterProvider>
     </ThemeProvider>
   );
 }

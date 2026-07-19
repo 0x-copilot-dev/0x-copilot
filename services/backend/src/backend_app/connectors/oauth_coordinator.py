@@ -43,6 +43,7 @@ from backend_app.contracts import (
     McpServerRecord,
     McpTransport,
 )
+from backend_app.mcp_oauth import McpOAuthError
 from backend_app.service import McpRegistryService
 
 DESKTOP_OAUTH_TTL = timedelta(minutes=5)
@@ -158,14 +159,26 @@ class DesktopMcpOAuthCoordinator:
         self._ensure_server(profile, org_id=org_id, user_id=user_id)
 
         redirect_uri = callback.redirect_uri()
-        response = self.mcp_service.start_auth(
-            server_id=profile.server_id,
-            request=InternalMcpAuthRequest(
-                org_id=org_id,
-                user_id=user_id,
-                redirect_uri=redirect_uri,
-            ),
-        )
+        try:
+            response = self.mcp_service.start_auth(
+                server_id=profile.server_id,
+                request=InternalMcpAuthRequest(
+                    org_id=org_id,
+                    user_id=user_id,
+                    redirect_uri=redirect_uri,
+                ),
+            )
+        except McpOAuthError as exc:
+            # The MCP server has no configured/discoverable OAuth client (e.g. a
+            # catalog connector shipped without pre-registered client fields).
+            # This is an EXPECTED, handleable state — surface it as a stable-coded
+            # desktop error (→ 409) so the client shows a graceful "needs setup"
+            # message instead of a raw 500. Catch McpOAuthError specifically so
+            # genuine programming errors still surface.
+            raise DesktopOAuthError(
+                "connector_oauth_setup_required",
+                "this connector has no OAuth client configured",
+            ) from exc
         state = self._state_from_auth_url(response.auth_url)
         self._pending[state] = _PendingSession(
             org_id=org_id,

@@ -49,6 +49,7 @@ import {
   useCallback,
   useEffect,
   useMemo,
+  useRef,
   useState,
   type CSSProperties,
   type ReactElement,
@@ -56,6 +57,7 @@ import {
 
 import type { ConversationId, RunId } from "@0x-copilot/api-types";
 
+import { useNotify } from "../../providers/NotificationCenterProvider";
 import { useTransport } from "../../providers/TransportProvider";
 // PR-3.8: pure selector projecting parallel-subagent + fleet state off the
 // single canonical event stream (no second subscription / projector).
@@ -133,6 +135,10 @@ export function RunDestination(props: RunDestinationProps): ReactElement {
   } = props;
 
   const transport = useTransport();
+  const notify = useNotify();
+  // Stable indirection so the failure toast's Retry can re-invoke the latest
+  // handleStartGoal without the callback depending on itself.
+  const startGoalRef = useRef<(goal: string) => void>(() => undefined);
 
   // PR-3.11 (FR-3.25): the run the empty-state composer just started. It feeds
   // the SAME `runId` input the `explicitRunId` prop uses, so binding a freshly
@@ -274,15 +280,31 @@ export function RunDestination(props: RunDestinationProps): ReactElement {
             setStartedRunId(newRunId as RunId);
           }
         })
-        .catch(() => {
-          /* leave the composer visible; the user can retry the goal */
+        .catch((err: unknown) => {
+          // Surface the failure — a rejected start (500 / network / rejected
+          // host onStartRun) used to be swallowed, leaving the app looking idle.
+          // The composer stays visible; the toast names what failed + offers Retry.
+          notify({
+            tone: "error",
+            title: "Couldn’t start the run",
+            body: err instanceof Error ? err.message : undefined,
+            action: {
+              label: "Retry",
+              onClick: () => startGoalRef.current(trimmed),
+            },
+          });
         })
         .finally(() => {
           setIsStartingRun(false);
         });
     },
-    [conversationId, isStartingRun, onStartRun, transport],
+    [conversationId, isStartingRun, notify, onStartRun, transport],
   );
+
+  // Keep the ref pointed at the latest callback so Retry re-runs the current one.
+  useEffect(() => {
+    startGoalRef.current = handleStartGoal;
+  }, [handleStartGoal]);
 
   // PR-3.11 (FR-3.26): bind the cockpit to another run. `selectRun` wins over
   // the started/explicit run in `useRunSession`, so the event projector, tabs,

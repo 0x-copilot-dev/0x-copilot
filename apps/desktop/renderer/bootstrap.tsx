@@ -10,6 +10,8 @@ import {
   DocumentPresenceSignal,
   HashRouter,
   LocalStorageKeyValueStore,
+  NotificationCenterProvider,
+  ToastStack,
   defaultDestinationForProfile,
   destinationsForProfile,
   registerGenericStructuredDiff,
@@ -71,20 +73,24 @@ export function App(): ReactElement {
   const keyValueStore = useMemo(() => new LocalStorageKeyValueStore(), []);
   const presenceSignal = useMemo(() => new DocumentPresenceSignal(), []);
   return (
-    <DeploymentProfileProvider profile={DESKTOP_DEPLOYMENT_PROFILE}>
-      <BootGate bridge={window.bridge}>
-        <SignInGate bridge={window.bridge} workspaceId={DEFAULT_WORKSPACE_ID}>
-          {(session) => (
-            <ChatShellForSession
-              session={session}
-              router={router}
-              keyValueStore={keyValueStore}
-              presenceSignal={presenceSignal}
-            />
-          )}
-        </SignInGate>
-      </BootGate>
-    </DeploymentProfileProvider>
+    <NotificationCenterProvider>
+      <DeploymentProfileProvider profile={DESKTOP_DEPLOYMENT_PROFILE}>
+        <BootGate bridge={window.bridge}>
+          <SignInGate bridge={window.bridge} workspaceId={DEFAULT_WORKSPACE_ID}>
+            {(session) => (
+              <ChatShellForSession
+                session={session}
+                router={router}
+                keyValueStore={keyValueStore}
+                presenceSignal={presenceSignal}
+              />
+            )}
+          </SignInGate>
+        </BootGate>
+      </DeploymentProfileProvider>
+      {/* One toast surface for the whole app; floats above full-bleed surfaces. */}
+      <ToastStack />
+    </NotificationCenterProvider>
   );
 }
 
