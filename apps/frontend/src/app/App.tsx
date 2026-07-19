@@ -509,6 +509,9 @@ export function CopilotApp({
   const [oauthStatus, setOauthStatus] = useState<string | null>(null);
   const [completedMcpAuthAction, setCompletedMcpAuthAction] =
     useState<CompletedMcpAuthAction | null>(null);
+  // ⌘K palette open-state, lifted here so the shell topbar's single trigger
+  // (ChatShell.onOpenCommandPalette) and the palette's ⌘K hotkey share one state.
+  const [paletteOpen, setPaletteOpen] = useState(false);
 
   useEffect(() => router.subscribe(setRoute), [router]);
 
@@ -1007,6 +1010,7 @@ export function CopilotApp({
               section: DEFAULT_SETTINGS_SECTION,
             })
           }
+          onOpenCommandPalette={() => setPaletteOpen(true)}
         >
           <Suspense fallback={<RouteLoadingFallback />}>{body}</Suspense>
           {/*
@@ -1015,7 +1019,11 @@ export function CopilotApp({
             modal. The host owns the PaletteSearchPort that calls
             `/v1/palette/search` through the facade (sub-PRD §7.3).
           */}
-          <PaletteHost identity={identity} />
+          <PaletteHost
+            identity={identity}
+            open={paletteOpen}
+            onOpenChange={setPaletteOpen}
+          />
         </ChatShell>
       </PortProvider>
     </DeploymentProfileProvider>

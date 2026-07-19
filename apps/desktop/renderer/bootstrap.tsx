@@ -213,6 +213,8 @@ function ChatShellForSession(props: ChatShellForSessionProps): ReactElement {
         onNavigate={handleNavigate}
         // PR-6.4: rail-foot Settings opens at the default section.
         onOpenSettings={() => handleOpenSettings()}
+        // The shell topbar's single ⌘K trigger opens the (controlled) palette.
+        onOpenCommandPalette={() => setPaletteOpen(true)}
         settingsActive={settingsActive}
       >
         {settingsActive ? (
@@ -255,8 +257,6 @@ function ChatShellForSession(props: ChatShellForSessionProps): ReactElement {
       <PaletteHost
         open={paletteOpen}
         onOpenChange={setPaletteOpen}
-        activeDestination={activeDestination}
-        settingsActive={settingsActive}
         onNavigateDestination={handleNavigate}
         onOpenSettings={handleOpenSettings}
         actions={{

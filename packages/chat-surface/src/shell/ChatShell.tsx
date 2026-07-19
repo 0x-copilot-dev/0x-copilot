@@ -8,7 +8,7 @@ import {
 
 import type { PresenceSignal } from "../presence/presence-signal";
 import {
-  useDeploymentProfile,
+  useOptionalDeploymentProfile,
   type DeploymentProfile,
 } from "../providers/DeploymentProfileProvider";
 import { KeyValueStoreProvider } from "../providers/KeyValueStoreProvider";
@@ -45,25 +45,6 @@ const FULL_BLEED_DESTINATIONS: ReadonlySet<ShellDestinationSlug> = new Set([
   "run",
 ]);
 
-// Read the DeploymentProfile port WITHOUT requiring a provider. The web host
-// (apps/frontend/src/app/App.tsx) mounts ChatShell with no
-// DeploymentProfileProvider — it renders the frozen legacy 12-destination
-// rail — so a hard `useDeploymentProfile()` (which throws when the provider is
-// absent) would crash it. Treating "no provider" as "web-legacy default" keeps
-// the web surface byte-identical while letting the desktop host gate the rail
-// by profile.
-//
-// Safety: `useDeploymentProfile` always calls exactly one hook (`useContext`)
-// before it decides whether to throw, so the hook count is invariant across
-// renders and this try/catch never trips the rules of hooks.
-function useOptionalDeploymentProfile(): DeploymentProfile | null {
-  try {
-    return useDeploymentProfile();
-  } catch {
-    return null;
-  }
-}
-
 export interface ChatShellProps<TRoute> {
   /** Transport singleton. Made available via context to descendants. */
   readonly transport: Transport;
@@ -90,6 +71,15 @@ export interface ChatShellProps<TRoute> {
    * `ShellDestinationSlug` enum.
    */
   readonly onOpenSettings?: () => void;
+
+  /**
+   * Opens the ⌘K command palette. Wired to the topbar's single
+   * `CommandPaletteTrigger` (the one search affordance); the host owns the
+   * palette open-state. When omitted the trigger is an inert no-op — but hosts
+   * must supply it (else they'd add a second, competing trigger, the exact
+   * duplicate this prop removes).
+   */
+  readonly onOpenCommandPalette?: () => void;
 
   /**
    * When `true` the shell renders full-bleed (topbar + context column +
@@ -136,6 +126,7 @@ export function ChatShell<TRoute>({
   activeDestination,
   onNavigate,
   onOpenSettings,
+  onOpenCommandPalette,
   settingsActive,
   topbarLeaf,
   destinations,
@@ -162,6 +153,7 @@ export function ChatShell<TRoute>({
               destinations={railDestinations}
               onNavigate={onNavigate}
               onOpenSettings={onOpenSettings}
+              onOpenCommandPalette={onOpenCommandPalette}
               settingsActive={settingsActive ?? false}
               topbarLeaf={topbarLeaf}
               contextPanel={contextPanel}
@@ -180,6 +172,7 @@ interface ShellGridProps {
   readonly destinations: readonly ShellDestination[];
   readonly onNavigate: (slug: ShellDestinationSlug) => void;
   readonly onOpenSettings?: () => void;
+  readonly onOpenCommandPalette?: () => void;
   readonly settingsActive: boolean;
   readonly topbarLeaf?: string | null;
   readonly contextPanel?: ReactNode | ContextPanelProps;
@@ -191,6 +184,7 @@ function ShellGrid({
   destinations,
   onNavigate,
   onOpenSettings,
+  onOpenCommandPalette,
   settingsActive,
   topbarLeaf,
   contextPanel,
@@ -275,6 +269,7 @@ function ShellGrid({
             activeDestination={activeDestination}
             title={activeLabel}
             leaf={topbarLeaf ?? null}
+            onOpenCommandPalette={onOpenCommandPalette}
           />
         )}
         <div style={mainBodyStyle} data-testid="chat-shell-main">

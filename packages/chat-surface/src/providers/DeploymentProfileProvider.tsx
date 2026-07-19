@@ -40,3 +40,13 @@ export function useDeploymentProfile(): DeploymentProfile {
   }
   return value;
 }
+
+/**
+ * Null-safe read for components that may render without a provider (tests, or
+ * mounts outside the shell). Prefer `useDeploymentProfile` inside the shell; use
+ * this only for profile-aware polish (e.g. the palette placeholder copy) that
+ * must not throw when the provider is absent.
+ */
+export function useOptionalDeploymentProfile(): DeploymentProfile | null {
+  return useContext(DeploymentProfileContext);
+}

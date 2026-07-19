@@ -55,6 +55,7 @@ export {
 export {
   DeploymentProfileProvider,
   useDeploymentProfile,
+  useOptionalDeploymentProfile,
   type DeploymentProfile,
 } from "./providers/DeploymentProfileProvider";
 // === end Phase 0 (PR-0.4) ===

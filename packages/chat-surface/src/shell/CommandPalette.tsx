@@ -61,8 +61,15 @@ import type {
 } from "@0x-copilot/api-types";
 
 import type { PaletteSearchPort } from "../ports/PaletteSearchPort";
+import { useOptionalDeploymentProfile } from "../providers/DeploymentProfileProvider";
 
 import { PaletteHitRow } from "./PaletteHitRow";
+
+// Placeholder copy is profile-aware: "the team" only makes sense on a team
+// deployment. Solo desktop drops it. Null profile (no provider) → solo copy.
+const PALETTE_PLACEHOLDER_TEAM =
+  "Search the team, your work, or run a command…";
+const PALETTE_PLACEHOLDER_SOLO = "Search your work, or run a command…";
 
 export interface CommandPaletteProps {
   readonly open: boolean;
@@ -130,6 +137,9 @@ export function CommandPalette({
   onRunAction,
   debounceMs = 150,
 }: CommandPaletteProps): ReactElement | null {
+  const profile = useOptionalDeploymentProfile();
+  const placeholder =
+    profile === "team" ? PALETTE_PLACEHOLDER_TEAM : PALETTE_PLACEHOLDER_SOLO;
   const [query, setQuery] = useState("");
   const [hits, setHits] = useState<ReadonlyArray<PaletteHit>>([]);
   const [selectedIndex, setSelectedIndex] = useState(0);
@@ -330,7 +340,7 @@ export function CommandPalette({
           aria-autocomplete="list"
           aria-activedescendant={selectedRowId}
           value={query}
-          placeholder="Search the team, your work, or run a command…"
+          placeholder={placeholder}
           onChange={(event) => {
             setQuery(event.target.value);
             setSelectedIndex(0);

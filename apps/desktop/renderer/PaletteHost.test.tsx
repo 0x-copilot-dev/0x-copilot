@@ -2,14 +2,14 @@
 // PR-6.4 — the desktop PaletteHost mounts one canonical CommandPalette over the
 // local static registry port and dispatches the palette's non-entity hits back
 // to the host: destination navigation, Settings deep-links, and the four action
-// flow launchers. The topbar trigger is suppressed on Run and Settings (FR-6.7).
+// flow launchers.
 //
-// PR-6.6 — the palette `open` state is now CONTROLLED by the host (`open` /
-// `onOpenChange` props); PaletteHost no longer owns state or mounts
-// `useCommandPaletteHotkey`. ⌘K is single-sourced by bootstrap's
-// `useShellShortcuts` (FR-6.14) and is covered in bootstrap.test.tsx — not here.
-// These tests drive open/close through a controlled harness so the topbar
-// trigger and hit-activation close paths still exercise the same state.
+// PR-6.6 / minor-ui — PaletteHost is MODAL-ONLY: `open` is CONTROLLED by the host
+// (`open` / `onOpenChange`) and it renders no trigger of its own. The single
+// search affordance is the shell topbar's `CommandPaletteTrigger`, wired via
+// `ChatShell.onOpenCommandPalette` (covered in bootstrap.test.tsx). These tests
+// drive open/close through a controlled harness whose "open" button stands in for
+// that shell trigger, so hit-activation close paths still exercise the state.
 
 import { useState, type ReactElement } from "react";
 import { cleanup, fireEvent, render, screen } from "@testing-library/react";
@@ -33,22 +33,28 @@ function setup(overrides: Partial<PaletteHostProps> = {}) {
     onConnectTool: vi.fn(),
   };
 
-  // Controlled harness: the host lifts `open` state (as bootstrap does), so the
-  // trigger click and hit-activation close paths round-trip through it.
+  // Controlled harness: the host lifts `open` state (as bootstrap does). The
+  // "open" button stands in for the shell topbar's ⌘K trigger.
   function Harness(): ReactElement {
     const [open, setOpen] = useState(false);
     return (
-      <PaletteHost
-        open={open}
-        onOpenChange={setOpen}
-        // A non-suppressed destination so the topbar trigger renders by default.
-        activeDestination="chats"
-        settingsActive={false}
-        onNavigateDestination={onNavigateDestination}
-        onOpenSettings={onOpenSettings}
-        actions={actions}
-        {...overrides}
-      />
+      <>
+        <button
+          type="button"
+          data-testid="harness-open"
+          onClick={() => setOpen(true)}
+        >
+          open
+        </button>
+        <PaletteHost
+          open={open}
+          onOpenChange={setOpen}
+          onNavigateDestination={onNavigateDestination}
+          onOpenSettings={onOpenSettings}
+          actions={actions}
+          {...overrides}
+        />
+      </>
     );
   }
 
@@ -56,8 +62,8 @@ function setup(overrides: Partial<PaletteHostProps> = {}) {
   return { onNavigateDestination, onOpenSettings, actions, ...utils };
 }
 
-function openViaTrigger(): void {
-  fireEvent.click(screen.getByTestId("command-palette-trigger"));
+function openPalette(): void {
+  fireEvent.click(screen.getByTestId("harness-open"));
 }
 
 function typeQuery(value: string): void {
@@ -72,26 +78,21 @@ describe("<PaletteHost>", () => {
     expect(screen.queryByTestId("command-palette")).toBeNull();
   });
 
-  it("opens the palette when the topbar trigger is clicked", () => {
+  it("renders no trigger of its own (the shell topbar owns the single one)", () => {
+    setup();
+    expect(screen.queryByTestId("command-palette-trigger")).toBeNull();
+  });
+
+  it("opens the palette when the host requests it (shell trigger / ⌘K)", () => {
     setup();
     expect(screen.queryByTestId("command-palette")).toBeNull();
-    openViaTrigger();
+    openPalette();
     expect(screen.queryByTestId("command-palette")).not.toBeNull();
-  });
-
-  it("suppresses the topbar trigger on the Run destination", () => {
-    setup({ activeDestination: "run" });
-    expect(screen.queryByTestId("command-palette-trigger")).toBeNull();
-  });
-
-  it("suppresses the topbar trigger while Settings is active", () => {
-    setup({ activeDestination: "chats", settingsActive: true });
-    expect(screen.queryByTestId("command-palette-trigger")).toBeNull();
   });
 
   it("routes the 'Go to Tools' hit to the connectors slug (solo relabel) and closes", () => {
     const { onNavigateDestination } = setup();
-    openViaTrigger();
+    openPalette();
     // Present in the empty-query starter list (first 8 of PALETTE_COMMANDS).
     fireEvent.click(screen.getByText("Go to Tools"));
     expect(onNavigateDestination).toHaveBeenCalledWith("connectors");
@@ -101,14 +102,14 @@ describe("<PaletteHost>", () => {
 
   it("opens Settings at the 'Appearance' section", () => {
     const { onOpenSettings } = setup();
-    openViaTrigger();
+    openPalette();
     fireEvent.click(screen.getByText("Appearance"));
     expect(onOpenSettings).toHaveBeenCalledWith("appearance");
   });
 
   it("opens Settings at the default section for the bare 'Open Settings' hit", async () => {
     const { onOpenSettings } = setup();
-    openViaTrigger();
+    openPalette();
     typeQuery("Open Settings");
     fireEvent.click(await screen.findByText("Open Settings"));
     expect(onOpenSettings).toHaveBeenCalledWith(undefined);
@@ -116,7 +117,7 @@ describe("<PaletteHost>", () => {
 
   it("launches the 'Add a provider key' action flow", async () => {
     const { actions } = setup();
-    openViaTrigger();
+    openPalette();
     typeQuery("provider key");
     fireEvent.click(await screen.findByText("Add a provider key"));
     expect(actions.onAddProviderKey).toHaveBeenCalledTimes(1);
@@ -124,7 +125,7 @@ describe("<PaletteHost>", () => {
 
   it("launches the 'Download a local model' action flow", async () => {
     const { actions } = setup();
-    openViaTrigger();
+    openPalette();
     typeQuery("local model");
     fireEvent.click(await screen.findByText("Download a local model"));
     expect(actions.onDownloadLocalModel).toHaveBeenCalledTimes(1);
@@ -132,7 +133,7 @@ describe("<PaletteHost>", () => {
 
   it("launches the 'Connect a tool' action flow", async () => {
     const { actions } = setup();
-    openViaTrigger();
+    openPalette();
     typeQuery("Connect a tool");
     fireEvent.click(await screen.findByText("Connect a tool"));
     expect(actions.onConnectTool).toHaveBeenCalledTimes(1);
@@ -140,7 +141,7 @@ describe("<PaletteHost>", () => {
 
   it("launches the 'New chat' action flow", async () => {
     const { actions } = setup();
-    openViaTrigger();
+    openPalette();
     typeQuery("New chat");
     fireEvent.click(await screen.findByText("New chat"));
     expect(actions.onNewChat).toHaveBeenCalledTimes(1);
@@ -148,7 +149,7 @@ describe("<PaletteHost>", () => {
 
   it("runs the connect-tool flow from the empty-state 'Connect a tool →' hint and closes", async () => {
     const { actions } = setup();
-    openViaTrigger();
+    openPalette();
     // A query with zero registry matches shows the "No results" hint.
     typeQuery("zzz-nothing-matches");
     fireEvent.click(await screen.findByTestId("palette-connect-tool-hint"));

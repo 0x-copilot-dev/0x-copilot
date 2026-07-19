@@ -29,6 +29,13 @@ import type { PaletteSearchPort } from "./paletteSearchPort";
 
 interface PaletteHostProps {
   readonly identity: RequestIdentity;
+  /**
+   * Optional controlled open-state so the shell topbar's ⌘K trigger
+   * (`ChatShell.onOpenCommandPalette`) can open the same palette. Falls back to
+   * internal state when omitted, keeping ⌘K-only mounts working.
+   */
+  readonly open?: boolean;
+  readonly onOpenChange?: (open: boolean) => void;
 }
 
 /**
@@ -86,16 +93,22 @@ const STARTER_ACTIONS: ReadonlyArray<PaletteHit> = [
   },
 ];
 
-export function PaletteHost({ identity }: PaletteHostProps): ReactElement {
-  const [open, setOpen] = useState(false);
+export function PaletteHost({
+  identity,
+  open: controlledOpen,
+  onOpenChange,
+}: PaletteHostProps): ReactElement {
+  const [internalOpen, setInternalOpen] = useState(false);
+  const open = controlledOpen ?? internalOpen;
+  const setOpen = onOpenChange ?? setInternalOpen;
 
   const port = useMemo<PaletteSearchPort>(
     () => createWebPaletteSearchPort(identity),
     [identity],
   );
 
-  const handleOpen = useCallback(() => setOpen(true), []);
-  const handleClose = useCallback(() => setOpen(false), []);
+  const handleOpen = useCallback(() => setOpen(true), [setOpen]);
+  const handleClose = useCallback(() => setOpen(false), [setOpen]);
 
   useCommandPaletteHotkey({ onOpen: handleOpen });
 
