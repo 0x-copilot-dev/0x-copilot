@@ -520,19 +520,10 @@ function buildAuthService(
   });
 
   return {
-    // Dev-mint local sign-in ("Use locally, no account"). Hard-blocked in
-    // production posture so a real install can never seed the Sarah Chen dev
-    // persona — the renderer also hides the option, this is defense in depth.
-    signIn: (workspaceId) => {
-      if (productionPosture) {
-        return Promise.reject(
-          new Error(
-            "local dev sign-in is disabled in production — sign in with a wallet or Google",
-          ),
-        );
-      }
-      return service.signIn(workspaceId);
-    },
+    // "Use locally, no account" — offered in every posture (the renderer shows
+    // it unconditionally). The underlying local mint is the AuthService's own
+    // path; production-safe local-identity provisioning is tracked separately.
+    signIn: (workspaceId) => service.signIn(workspaceId),
     signInWithGoogle: (workspaceId) => service.signInWithGoogle(workspaceId),
     signInWithWallet: (workspaceId) => service.signInWithWallet(workspaceId),
     signOut: (workspaceId) => service.signOut(workspaceId),

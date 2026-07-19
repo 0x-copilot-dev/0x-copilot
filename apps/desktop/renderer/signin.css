@@ -32,14 +32,16 @@
 
 .loginx-card {
   width: 100%;
-  max-width: 26rem;
-  padding: var(--space-2xl);
+  max-width: 23rem;
   display: flex;
   flex-direction: column;
   gap: var(--space-lg);
-  background: var(--color-surface);
-  border: 1px solid var(--color-border);
-  border-radius: var(--radius-lg, 12px);
+  /* Floats directly on the window — no surface/border/card padding — to match
+   * the "0xCopilot Login" design. The pane centres it; colours stay tokenised
+   * so the card is theme-aware. */
+  background: transparent;
+  border: 0;
+  padding: 0;
 }
 
 /* The canonical 0xCopilot turbine (BrandMark) */

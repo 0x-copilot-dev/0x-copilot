@@ -272,14 +272,15 @@ describe("SignInGate", () => {
     expect(error?.textContent).toContain("session store unreachable");
   });
 
-  it("hides the local 'Use locally' option in production posture", async () => {
+  it("offers all three options — including 'Use locally' — in every posture", async () => {
+    // 'Use locally, no account' is no longer gated on posture; a packaged
+    // (production) install shows wallet + Google + local, same as dev.
     const bridge = makeBridge({
       [CHANNELS.authGetSession]: async () => null,
       [CHANNELS.authGetPosture]: async () => ({ productionPosture: true }),
     });
     await mount(bridge);
 
-    // Sign-in screen is shown, wallet + Google remain, dev-mint is gone.
     expect(
       container.querySelector("[data-testid='sign-in-gate']"),
     ).not.toBeNull();
@@ -289,18 +290,6 @@ describe("SignInGate", () => {
     expect(
       container.querySelector("[data-testid='sign-in-google-button']"),
     ).not.toBeNull();
-    expect(
-      container.querySelector("[data-testid='sign-in-button']"),
-    ).toBeNull();
-  });
-
-  it("shows all three options when posture reports dev (productionPosture false)", async () => {
-    const bridge = makeBridge({
-      [CHANNELS.authGetSession]: async () => null,
-      [CHANNELS.authGetPosture]: async () => ({ productionPosture: false }),
-    });
-    await mount(bridge);
-
     expect(
       container.querySelector("[data-testid='sign-in-button']"),
     ).not.toBeNull();
