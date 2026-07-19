@@ -19,6 +19,7 @@ from backend_facade.adapter_review_routes import register_adapter_review_routes
 from backend_facade.agents_routes import register_agents_routes
 from backend_facade.audit_routes import register_audit_routes
 from backend_facade.auth_routes import register_auth_routes
+from backend_facade.wallet_page_routes import register_wallet_page_routes
 from backend_facade.connector_routes import register_connector_routes
 from backend_facade.home_routes import register_home_routes
 from backend_facade.inbox_routes import register_inbox_routes
@@ -133,6 +134,9 @@ def create_app(
     register_agents_routes(app)
     register_audit_routes(app)
     register_auth_routes(app)
+    # Desktop-only (env-gated): serve the built SIWE wallet page same-origin with
+    # the /v1/auth/siwe/* API so the packaged app's wallet sign-in isn't a 404.
+    register_wallet_page_routes(app)
     # Webhook routes BEFORE connector routes so the literal
     # `/v1/connectors/webhooks` path wins FastAPI's registration-order
     # matcher over `/v1/connectors/{connector_id}`.

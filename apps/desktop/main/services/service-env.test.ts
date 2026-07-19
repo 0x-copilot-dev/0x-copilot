@@ -116,6 +116,25 @@ describe("buildServiceEnv(backend)", () => {
     );
     expect(env.GOOGLE_OAUTH_CLIENT_ID).toBe("client-123");
   });
+
+  it("forwards GOOGLE_OAUTH_CLIENT_SECRET when set (Web-client operator)", () => {
+    const env = buildServiceEnv(
+      "backend",
+      inputs({
+        GOOGLE_OAUTH_CLIENT_ID: "client-123",
+        GOOGLE_OAUTH_CLIENT_SECRET: "secret-abc",
+      }),
+    );
+    expect(env.GOOGLE_OAUTH_CLIENT_SECRET).toBe("secret-abc");
+  });
+
+  it("omits GOOGLE_OAUTH_CLIENT_SECRET when unset (Desktop-app client, PKCE)", () => {
+    const env = buildServiceEnv(
+      "backend",
+      inputs({ GOOGLE_OAUTH_CLIENT_ID: "client-123" }),
+    );
+    expect("GOOGLE_OAUTH_CLIENT_SECRET" in env).toBe(false);
+  });
 });
 
 describe("buildServiceEnv(ai-backend)", () => {
@@ -266,6 +285,7 @@ describe("passthrough allowlist", () => {
 
   it("is a single shared list that includes the contract passthrough", () => {
     expect(ENV_PASSTHROUGH_ALLOWLIST).toContain("GOOGLE_OAUTH_CLIENT_ID");
+    expect(ENV_PASSTHROUGH_ALLOWLIST).toContain("GOOGLE_OAUTH_CLIENT_SECRET");
     expect(ENV_PASSTHROUGH_ALLOWLIST).toContain("PATH");
   });
 });

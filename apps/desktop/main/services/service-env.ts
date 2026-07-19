@@ -6,7 +6,7 @@ import type { SupervisedServiceName } from "./runtime-paths";
 // ONE passthrough allowlist for all three children. Anything not named
 // here is stripped from the child environment (children get a curated env,
 // never the raw desktop process env). PATH/HOME/etc. are baseline process
-// plumbing; GOOGLE_OAUTH_CLIENT_ID is the contract's named passthrough;
+// plumbing; the Google OAuth vars are the contract's named passthroughs;
 // the provider keys are dev conveniences that BYOK supersedes in-product.
 export const ENV_PASSTHROUGH_ALLOWLIST: readonly string[] = [
   // Baseline process plumbing.
@@ -19,8 +19,15 @@ export const ENV_PASSTHROUGH_ALLOWLIST: readonly string[] = [
   "TMPDIR",
   "LANG",
   "LC_ALL",
-  // Contract passthrough.
+  // Google sign-in. The client id alone drives the preferred posture: a
+  // "Desktop app" OAuth client (loopback + PKCE, no secret) — the backend's
+  // build_google_provider uses auth_method "none". An operator running their
+  // own "Web application" client instead must ALSO supply the secret; we
+  // forward it faithfully (from the operator's local launch env, never baked
+  // into the distributed app) so the backend can pick "client_secret_post".
+  // The confidential/public decision stays single-sourced in the backend.
   "GOOGLE_OAUTH_CLIENT_ID",
+  "GOOGLE_OAUTH_CLIENT_SECRET",
   // Model-provider keys (dev convenience; BYOK covers packaged installs).
   "OPENAI_API_KEY",
   "ANTHROPIC_API_KEY",
@@ -118,6 +125,12 @@ export interface ServiceEnvInputs {
   readonly processEnv: Readonly<Record<string, string | undefined>>;
   /** app.getPath("userData") — used to derive the file store root. */
   readonly userDataDir: string;
+  /**
+   * Built frontend web dir (wallet.html + assets/). When set, the facade serves
+   * the SIWE wallet page from here. Optional so unit tests without a staged web
+   * dir still build a valid env.
+   */
+  readonly webDir?: string;
   /** Injectable for path-separator tests; defaults to the host's. */
   readonly pathDelimiter?: string;
 }
@@ -169,6 +182,12 @@ export function buildServiceEnv(
       env.MCP_TOKEN_VAULT_SECRET = inputs.secrets.vaultSecret;
       // desktop_app.py REQUIRES this (audit chain fails closed without it).
       env.AUDIT_HMAC_KEY = inputs.secrets.auditHmacKey;
+      // Pin SIWE's expected origin to the facade origin — the wallet page is
+      // served BY the facade (see FACADE_WEB_DIST_DIR) and derives its SIWE
+      // message domain from window.location, so expected_origin must match it.
+      // Without this the backend defaults to magic_link_base_url (localhost:5173)
+      // and every desktop wallet sign-in fails domain_mismatch.
+      env.SIWE_ORIGIN = `http://127.0.0.1:${inputs.facadePort}`;
       break;
     }
     case "ai-backend": {
@@ -216,6 +235,11 @@ export function buildServiceEnv(
       env.FACADE_ENVIRONMENT = "production";
       env.BACKEND_URL = backendUrl;
       env.AI_BACKEND_URL = aiBackendUrl;
+      // Serve the built SIWE wallet page (wallet.html + assets/) from the staged
+      // web dir, same-origin with /v1/auth/siwe/*. Empty when unstaged → no route.
+      if (inputs.webDir !== undefined && inputs.webDir !== "") {
+        env.FACADE_WEB_DIST_DIR = inputs.webDir;
+      }
       break;
     }
   }
