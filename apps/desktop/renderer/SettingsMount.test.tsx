@@ -4,7 +4,7 @@
 // the solo desktop profile (with the solo footer shown).
 
 import { fireEvent, render, screen } from "@testing-library/react";
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 
 import { DeploymentProfileProvider } from "@0x-copilot/chat-surface";
 import type {
@@ -42,10 +42,14 @@ function fakeTransport(): Transport {
   };
 }
 
-function mount(): void {
+function mount(onSignOut: () => void = () => undefined): void {
   render(
     <DeploymentProfileProvider profile="single_user_desktop">
-      <SettingsMount transport={fakeTransport()} session={SESSION} />
+      <SettingsMount
+        transport={fakeTransport()}
+        session={SESSION}
+        onSignOut={onSignOut}
+      />
     </DeploymentProfileProvider>,
   );
 }
@@ -91,6 +95,16 @@ describe("<SettingsMount>", () => {
 
     clickSlug("model-behavior");
     expect(screen.getByTestId("model-behavior-page")).toBeTruthy();
+  });
+
+  it("delegates the Profile Sign out button to the host onSignOut handler", () => {
+    const onSignOut = vi.fn();
+    mount(onSignOut);
+    // Profile is the default section. The Sign out CTA is presentational —
+    // it must invoke the host-supplied handler (which performs the real
+    // session clear via the authSignOut IPC), not swallow the click.
+    fireEvent.click(screen.getByTestId("profile-signout"));
+    expect(onSignOut).toHaveBeenCalledTimes(1);
   });
 
   it("wires Data & privacy and Notifications", () => {

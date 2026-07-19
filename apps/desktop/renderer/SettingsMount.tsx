@@ -60,8 +60,15 @@ export interface SettingsMountProps {
   readonly transport: Transport;
   /** The signed-in session, for the Profile identity row. */
   readonly session: RendererSession;
-  /** Sign out (rail-foot / Profile). Optional; a no-op when absent. */
-  readonly onSignOut?: () => void;
+  /**
+   * Sign out (Profile section). REQUIRED — the host must wire this to the real
+   * session clear (bootstrap → SignInGate.signOut → `authSignOut` IPC →
+   * AuthService.signOut). It is intentionally non-optional so a missing wire
+   * fails typecheck rather than silently becoming a dead "Sign out" button —
+   * the exact regression that shipped once (bootstrap omitted the prop, so the
+   * click resolved to `undefined?.()` and did nothing).
+   */
+  readonly onSignOut: () => void;
   /**
    * PR-6.4: controlled active section. When provided (a slug, or `null` for the
    * default section) the surface is controlled — the ⌘K palette can deep-link a
@@ -211,7 +218,7 @@ export function SettingsMount({
               setDisplayName(next);
               toast("Display name saved.");
             }}
-            onSignOut={() => onSignOut?.()}
+            onSignOut={onSignOut}
           />
         );
       case "appearance":

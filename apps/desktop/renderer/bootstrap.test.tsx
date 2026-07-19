@@ -224,6 +224,73 @@ describe("renderer bootstrap", () => {
     expect(root.querySelector("[data-testid='destination-outlet']")).toBeNull();
   });
 
+  it("signs out from the Profile section: fires authSignOut and returns to the sign-in gate", async () => {
+    // Record the IPC channels main sees, and hand back a live session for the
+    // boot-time getSession so we land in the signed-in shell.
+    const invoked: string[] = [];
+    const controls = installFakeBridge((channel: string) => {
+      invoked.push(channel);
+      if (channel === "auth.get-session") {
+        return Promise.resolve({
+          workspaceId: "org_acme",
+          expiresAt: Date.now() + 60_000,
+          displayName: "Sarah",
+          email: "sarah@acme.test",
+        });
+      }
+      // auth.sign-out (and anything else) resolves cleanly.
+      return Promise.resolve(null);
+    });
+
+    container = document.createElement("div");
+    container.id = "root";
+    document.body.appendChild(container);
+
+    await act(async () => {
+      unmount = mountApp(container as HTMLElement);
+    });
+    await act(async () => {
+      controls.emit("boot.status", BOOT_READY);
+    });
+    await act(async () => {
+      await Promise.resolve();
+    });
+
+    // Open Settings — Profile is the default section, so the Sign out CTA shows.
+    await act(async () => {
+      (
+        container?.querySelector(
+          "[data-rail-action='settings']",
+        ) as HTMLButtonElement
+      )?.click();
+    });
+    const signOutButton = container?.querySelector(
+      "[data-testid='profile-signout']",
+    ) as HTMLButtonElement | null;
+    expect(signOutButton).not.toBeNull();
+
+    await act(async () => {
+      signOutButton?.click();
+    });
+    // Flush the authSignOut promise + the phase→anon transition.
+    await act(async () => {
+      await Promise.resolve();
+    });
+    await act(async () => {
+      await Promise.resolve();
+    });
+
+    // The real sign-out IPC fired (not a dead click)…
+    expect(invoked).toContain("auth.sign-out");
+    // …and the app returned to the sign-in gate with Settings torn down.
+    expect(
+      container?.querySelector("[data-testid='sign-in-gate']"),
+    ).not.toBeNull();
+    expect(
+      container?.querySelector("[data-testid='settings-surface']"),
+    ).toBeNull();
+  });
+
   it("swaps the outlet when a rail destination is clicked and leaves Settings", async () => {
     const root = await mountSignedInShell();
 
