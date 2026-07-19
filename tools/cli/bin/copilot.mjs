@@ -23,6 +23,7 @@ import {
 } from "../lib/paths.mjs";
 import { isStaged, stageRuntime } from "../lib/stage.mjs";
 import { ensureAppBuilt, launchApp } from "../lib/launch.mjs";
+import { ensureBrandedShell } from "../lib/mac-shell.mjs";
 import { doctor } from "../lib/doctor.mjs";
 import { repair } from "../lib/repair.mjs";
 import { uninstall } from "../lib/uninstall.mjs";
@@ -97,7 +98,17 @@ async function cmdStart({ force }) {
     process.exit(1);
   }
   const electronBinary = resolveElectronBinary(roots.electronBases);
-  const child = launchApp({ electronBinary, appDir: roots.appDir });
+  // macOS: launch through a shell bundle carrying our name + icon so the Dock
+  // doesn't present the app as "Electron". No-op elsewhere; falls back to the
+  // stock binary on any failure.
+  const launchBinary = ensureBrandedShell({
+    electronBinary,
+    appDir: roots.appDir,
+  });
+  const child = launchApp({
+    electronBinary: launchBinary,
+    appDir: roots.appDir,
+  });
 
   // Forward termination to the app; exit with its code.
   const forward = (sig) => {

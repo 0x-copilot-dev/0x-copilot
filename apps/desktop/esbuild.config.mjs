@@ -58,6 +58,14 @@ const copyAssetsTask = (async () => {
     join(__dirname, "renderer/index.html"),
     join(outDir, "renderer/index.html"),
   );
+  // Brand icons travel with the built app (out/ is all that ships in the asar
+  // and in the CLI payload): the PNG backs the runtime dock/taskbar icon
+  // (main/branding.ts, main/window.ts), the icns backs the CLI's branded macOS
+  // shell (tools/cli/lib/mac-shell.mjs).
+  await mkdir(join(outDir, "main"), { recursive: true });
+  for (const icon of ["icon.png", "icon.icns"]) {
+    await copyFile(join(__dirname, "build", icon), join(outDir, "main", icon));
+  }
 })();
 
 await Promise.all([mainTask, preloadTask, rendererTask, copyAssetsTask]);

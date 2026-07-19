@@ -59,6 +59,14 @@ downloads and SHA-256-verifies pinned CPython and PostgreSQL builds, installs th
 bundled services, and signs native binaries on macOS. Later launches reuse the
 staged runtime; CLI upgrades check it again to keep the app and services in sync.
 
+On macOS the CLI also prepares a **branded app shell** — a copy-on-write clone
+of Electron.app at `~/.0xcopilot/shell/0xCopilot.app` with the 0xCopilot name,
+bundle id, and icon, re-signed ad-hoc — and launches through it so the Dock
+shows **0xCopilot** instead of "Electron". It is rebuilt automatically when the
+bundled Electron or the icon changes, and removed by `copilot uninstall`. If
+preparing it ever fails, the launch falls back to the stock Electron binary
+(everything works; only the Dock branding is generic).
+
 ## Update
 
 ```bash
