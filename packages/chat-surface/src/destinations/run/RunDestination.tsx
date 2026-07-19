@@ -49,7 +49,6 @@ import {
   useCallback,
   useEffect,
   useMemo,
-  useRef,
   useState,
   type CSSProperties,
   type ReactElement,
@@ -57,10 +56,6 @@ import {
 
 import type { ConversationId, RunId } from "@0x-copilot/api-types";
 
-import {
-  messageFromError,
-  useNotify,
-} from "../../providers/NotificationCenterProvider";
 import { useTransport } from "../../providers/TransportProvider";
 // PR-3.8: pure selector projecting parallel-subagent + fleet state off the
 // single canonical event stream (no second subscription / projector).
@@ -138,10 +133,6 @@ export function RunDestination(props: RunDestinationProps): ReactElement {
   } = props;
 
   const transport = useTransport();
-  const notify = useNotify();
-  // Stable indirection so the failure toast's Retry can re-invoke the latest
-  // handleStartGoal without the callback depending on itself.
-  const startGoalRef = useRef<(goal: string) => void>(() => undefined);
 
   // PR-3.11 (FR-3.25): the run the empty-state composer just started. It feeds
   // the SAME `runId` input the `explicitRunId` prop uses, so binding a freshly
@@ -149,6 +140,9 @@ export function RunDestination(props: RunDestinationProps): ReactElement {
   // the empty state unmounts and the live layout mounts in place.
   const [startedRunId, setStartedRunId] = useState<RunId | null>(null);
   const [isStartingRun, setIsStartingRun] = useState(false);
+  // The last start-run failure, surfaced in the empty-state composer so a
+  // failed "Start run" is never silent (no backend, 4xx/5xx, transport error).
+  const [startError, setStartError] = useState<string | null>(null);
   // The goal the empty-state composer just started the run with. Bridges the
   // header until the run list re-resolves to carry the run's own goal — so the
   // empty→live transition never flashes "No active run" for a run we named.
@@ -267,6 +261,7 @@ export function RunDestination(props: RunDestinationProps): ReactElement {
         return;
       }
       setIsStartingRun(true);
+      setStartError(null);
       setStartedGoal(trimmed);
       const start = onStartRun
         ? Promise.resolve(onStartRun(trimmed))
@@ -281,33 +276,25 @@ export function RunDestination(props: RunDestinationProps): ReactElement {
         .then((newRunId) => {
           if (newRunId !== null && newRunId !== undefined && newRunId !== "") {
             setStartedRunId(newRunId as RunId);
+          } else {
+            // The POST resolved but carried no run id — surface it rather than
+            // sitting on the composer with no feedback.
+            setStartError(
+              "Couldn't start the run — the agent service didn't return a run. Is the backend running?",
+            );
           }
         })
         .catch((err: unknown) => {
-          // Surface the failure — a rejected start (500 / network / rejected
-          // host onStartRun) used to be swallowed, leaving the app looking idle.
-          // The composer stays visible; the toast names what failed + offers Retry.
-          notify({
-            tone: "error",
-            title: "Couldn’t start the run",
-            body: messageFromError(err),
-            action: {
-              label: "Retry",
-              onClick: () => startGoalRef.current(trimmed),
-            },
-          });
+          // Never swallow: a failed start must say why (no backend, 4xx/5xx,
+          // transport error) instead of looking like the button does nothing.
+          setStartError(startRunErrorMessage(err));
         })
         .finally(() => {
           setIsStartingRun(false);
         });
     },
-    [conversationId, isStartingRun, notify, onStartRun, transport],
+    [conversationId, isStartingRun, onStartRun, transport],
   );
-
-  // Keep the ref pointed at the latest callback so Retry re-runs the current one.
-  useEffect(() => {
-    startGoalRef.current = handleStartGoal;
-  }, [handleStartGoal]);
 
   // PR-3.11 (FR-3.26): bind the cockpit to another run. `selectRun` wins over
   // the started/explicit run in `useRunSession`, so the event projector, tabs,
@@ -512,6 +499,7 @@ export function RunDestination(props: RunDestinationProps): ReactElement {
             agentName={agentName}
             onSubmitGoal={handleStartGoal}
             submitting={isStartingRun}
+            error={startError}
           />
         ) : (
           <ThreadCanvas
@@ -602,6 +590,20 @@ function surfaceTabTitle(uri: string): string {
 // response. Tolerant of the shapes the runtime returns — a bare `{ run_id }` /
 // `{ runId }` / `{ id }`, or those nested under a `run` envelope — so the
 // empty→live start does not pin one exact server contract this phase.
+// Turn a thrown start-run failure into a short, human line for the composer.
+// Keeps the underlying message (status code / detail) so the user can act, and
+// nudges toward the most common cause on a fresh desktop install.
+function startRunErrorMessage(err: unknown): string {
+  const raw =
+    err instanceof Error ? err.message : typeof err === "string" ? err : "";
+  const detail = raw.trim();
+  const base = "Couldn't start the run";
+  if (detail === "") {
+    return `${base}. Is the backend running and a model configured?`;
+  }
+  return `${base}: ${detail}`;
+}
+
 function runIdFromCreateResponse(payload: unknown): string | null {
   const record = payload as Record<string, unknown> | null;
   if (record === null || typeof record !== "object") {

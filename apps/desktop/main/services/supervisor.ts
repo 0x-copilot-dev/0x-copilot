@@ -120,13 +120,13 @@ export class ServiceSupervisor {
 
     const secrets = await this.#phase(
       "secrets",
-      "Unlocking local secrets…",
+      "Unlocking secure storage…",
       () => this.#deps.loadSecrets(),
     );
 
     const ports = await this.#phase(
       "ports",
-      "Reserving local ports…",
+      "Preparing your workspace…",
       async (): Promise<AllocatedPorts> => {
         const [pg, backend, aiBackend, facade] =
           await this.#deps.allocatePorts(4);
@@ -134,7 +134,7 @@ export class ServiceSupervisor {
       },
     );
 
-    await this.#phase("postgres", "Starting local database…", async () => {
+    await this.#phase("postgres", "Starting the local database…", async () => {
       const postgres = this.#deps.createPostgres({
         port: ports.pg,
         password: secrets.pgPassword,
@@ -145,16 +145,12 @@ export class ServiceSupervisor {
       await postgres.ensureDatabase(AI_BACKEND_DB_NAME);
     });
 
-    await this.#phase(
-      "migrations",
-      "Applying database migrations…",
-      async () => {
-        await this.#deps.runMigrations("backend", { ports, secrets });
-        await this.#deps.runMigrations("ai-backend", { ports, secrets });
-      },
-    );
+    await this.#phase("migrations", "Setting up the database…", async () => {
+      await this.#deps.runMigrations("backend", { ports, secrets });
+      await this.#deps.runMigrations("ai-backend", { ports, secrets });
+    });
 
-    await this.#phase("services", "Starting services…", () => {
+    await this.#phase("services", "Starting 0xCopilot…", () => {
       const onFatal = (err: FatalCrashLoop): void => {
         this.#onFatalCrashLoop(err);
       };
@@ -174,7 +170,7 @@ export class ServiceSupervisor {
       return Promise.resolve();
     });
 
-    await this.#phase("health", "Waiting for services…", async () => {
+    await this.#phase("health", "Finishing up…", async () => {
       await Promise.all([
         this.#deps.waitForHealthy(
           "backend",
