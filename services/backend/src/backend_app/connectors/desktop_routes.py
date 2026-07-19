@@ -54,6 +54,9 @@ _ERROR_STATUS: dict[str, int] = {
     "connector_profile_unavailable": status.HTTP_404_NOT_FOUND,
     "connector_preview_disabled": status.HTTP_403_FORBIDDEN,
     "connector_admin_setup_required": status.HTTP_403_FORBIDDEN,
+    # The connector exists but has no OAuth client configured — not connectable
+    # yet. 409 Conflict (a state conflict), not a 500.
+    "connector_oauth_setup_required": status.HTTP_409_CONFLICT,
     "connector_oauth_redirect_unsupported": status.HTTP_400_BAD_REQUEST,
     "connector_oauth_state_invalid": status.HTTP_400_BAD_REQUEST,
     "connector_oauth_expired": status.HTTP_400_BAD_REQUEST,

@@ -26,6 +26,8 @@ import {
   ProjectsDestination,
   RunDestination,
   SkillsDestination,
+  messageFromError,
+  useNotify,
   useTransport,
   type ConnectorsFilterSlug,
   type ProjectSummary,
@@ -414,6 +416,7 @@ export function ConnectorsBinder({
   onOpenApprovalSettings,
 }: DestinationBinderCallbacks): ReactElement {
   const transport = useTransport();
+  const notify = useNotify();
   const load = useCallback(() => loadConnectors(transport), [transport]);
   const { result, retry } = useSectionLoad(load);
   const [filter, setFilter] = useState<ConnectorsFilterSlug>("connected");
@@ -432,12 +435,16 @@ export function ConnectorsBinder({
           setFilter("connected");
           retry();
         })
-        .catch(() => {
-          // A denied / failed connect is surfaced by the row staying in the
-          // Available tab; a full inline error affordance is future work.
+        .catch((error: unknown) => {
+          // Surface the failure instead of silently leaving the row in Available.
+          const raw = error instanceof Error ? error.message : String(error);
+          const body = raw.includes("connector_oauth_setup_required")
+            ? "This connector isn’t set up for sign-in yet."
+            : messageFromError(error);
+          notify({ tone: "error", title: `Couldn’t connect ${slug}`, body });
         });
     },
-    [retry],
+    [notify, retry],
   );
 
   return (

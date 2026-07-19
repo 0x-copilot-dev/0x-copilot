@@ -1232,3 +1232,21 @@ export {
   type RunMultiSelectProps,
 } from "./destinations/run";
 // === end Phase 3 (PR-3.11) ===
+
+// === Notifications (SSOT in-app toast) ===
+// One place converts a failed action mutation (run-start, connector connect,
+// profile save) into a user-visible toast — no more silent 500s. In-package
+// provider (pure React + timers), mounted once per host; render one <ToastStack/>.
+export {
+  NotificationCenterProvider,
+  useNotify,
+  useNotificationCenter,
+  messageFromError,
+  type NotifyInput,
+  type NotifyTone,
+  type NotifyAction,
+  type AppNotification,
+  type NotificationCenter,
+} from "./providers/NotificationCenterProvider";
+export { ToastStack } from "./shell/ToastStack";
+// === end Notifications ===
