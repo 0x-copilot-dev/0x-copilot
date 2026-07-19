@@ -83,6 +83,24 @@ ENV_SIWE_ORIGIN = "SIWE_ORIGIN"
 # Ethereum mainnet, Base, Arbitrum One, Robinhood Chain.
 DEFAULT_ALLOWED_CHAIN_IDS = (1, 8453, 42161, 4663)
 
+# Human-readable chain names for the honest identity surfaces (the profile
+# "Signed in with a wallet · <chain>" row). Server-side source of truth; mirrored
+# by necessity in the frontend's PRE-auth chain picker (LoginScreen CHAIN_NAMES),
+# which cannot fetch a name before a session exists — keep the two in sync like
+# the siweMessage.ts <-> siwe.py template.
+CHAIN_NAMES: dict[int, str] = {
+    1: "Ethereum",
+    8453: "Base",
+    42161: "Arbitrum One",
+    4663: "Robinhood Chain",
+}
+
+# Wallet accounts carry no email, but users.primary_email is NOT NULL — so an
+# undeliverable placeholder on the RFC-2606 reserved .invalid TLD is anchored at
+# signup. It is NEVER shown to the user; surfaces test for it via
+# ``is_placeholder_email`` rather than hard-coding the suffix in each place.
+WALLET_PLACEHOLDER_EMAIL_DOMAIN = "wallet.invalid"
+
 # Single-use nonce TTL. Contract cap is 10 minutes; five is plenty for a
 # wallet-popup round-trip.
 NONCE_TTL_SECONDS = 5 * 60
@@ -205,6 +223,24 @@ def truncated_display_address(address: str) -> str:
 
     checksummed = display_address(address)
     return f"{checksummed[:6]}…{checksummed[-4:]}"
+
+
+def chain_display_name(chain_id: int) -> str:
+    """Human name for a chain id (falls back to ``Chain <id>`` for the unknown)."""
+
+    return CHAIN_NAMES.get(chain_id, f"Chain {chain_id}")
+
+
+def is_placeholder_email(email: str | None) -> bool:
+    """True when ``email`` is the synthetic, undeliverable wallet placeholder.
+
+    Wallet accounts have no real email; the placeholder anchored at signup
+    (``<address>@wallet.invalid``) must never be surfaced as the user's address.
+    """
+
+    if not email:
+        return False
+    return email.lower().endswith(f"@{WALLET_PLACEHOLDER_EMAIL_DOMAIN}")
 
 
 # ---------------------------------------------------------------------------
@@ -801,7 +837,7 @@ class SiweService:
                 # Wallets carry no email. users.primary_email is NOT NULL, so
                 # anchor a syntactically valid, undeliverable placeholder on
                 # the reserved .invalid TLD (RFC 2606). Never verified.
-                primary_email=f"{address}@wallet.invalid",
+                primary_email=f"{address}@{WALLET_PLACEHOLDER_EMAIL_DOMAIN}",
                 user_display_name=truncated,
                 email_verified_at=None,
                 member_source=OrganizationMemberSource.SIWE,
@@ -907,10 +943,12 @@ class SiweService:
 
 
 __all__ = [
+    "CHAIN_NAMES",
     "DEFAULT_ALLOWED_CHAIN_IDS",
     "ENV_SIWE_ALLOWED_CHAIN_IDS",
     "ENV_SIWE_ORIGIN",
     "NONCE_TTL_SECONDS",
+    "WALLET_PLACEHOLDER_EMAIL_DOMAIN",
     "SIWE_GLOBAL_ORG_ID",
     "SIWE_PROVIDER_ID",
     "SIWE_STATEMENT",
@@ -929,7 +967,9 @@ __all__ = [
     "SiweSignatureInvalid",
     "SiweUserNotProvisioned",
     "build_siwe_message",
+    "chain_display_name",
     "display_address",
+    "is_placeholder_email",
     "normalize_wallet_address",
     "parse_allowed_chain_ids",
     "parse_siwe_message",

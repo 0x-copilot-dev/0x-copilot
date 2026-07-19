@@ -730,6 +730,7 @@ export {
   type DestinationRowDescriptor,
   type NotificationsPageProps,
   type NotificationsPageTabSlug,
+  type ProfileIdentityAnchor,
   type ProfilePagePerson,
   type ProfilePageProps,
   type QuietHoursEditorProps,

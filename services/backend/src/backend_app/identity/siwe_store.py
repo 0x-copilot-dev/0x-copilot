@@ -50,6 +50,17 @@ class SiweStore(Protocol):
 
     def get_wallet_identity(self, *, address: str) -> WalletIdentityRecord | None: ...
 
+    def get_wallet_identity_by_user(
+        self, *, org_id: str, user_id: str
+    ) -> WalletIdentityRecord | None:
+        """Reverse lookup: the wallet linked to a user (by org + user id).
+
+        The by-address ``get_wallet_identity`` cannot answer "does the current
+        user have a wallet?" for the profile route. Returns the first-linked
+        wallet when a user has more than one (deterministic "the" profile
+        wallet), or ``None`` for a non-wallet account.
+        """
+
 
 # ---------------------------------------------------------------------------
 # In-memory adapter
@@ -111,6 +122,19 @@ class InMemorySiweStore:
             if row.address == needle:
                 return row
         return None
+
+    def get_wallet_identity_by_user(
+        self, *, org_id: str, user_id: str
+    ) -> WalletIdentityRecord | None:
+        matches = [
+            row
+            for row in self.wallet_identities.values()
+            if row.org_id == org_id and row.user_id == user_id
+        ]
+        if not matches:
+            return None
+        # First-linked wins (deterministic "the" profile wallet).
+        return min(matches, key=lambda row: row.created_at)
 
 
 # ---------------------------------------------------------------------------
@@ -212,6 +236,23 @@ class PostgresSiweStore:
             cur.execute(
                 "SELECT * FROM wallet_identities WHERE address = %s",
                 (address.lower(),),
+            )
+            row = cur.fetchone()
+        return WalletIdentityRecord.model_validate(row) if row else None
+
+    def get_wallet_identity_by_user(
+        self, *, org_id: str, user_id: str
+    ) -> WalletIdentityRecord | None:
+        # First-linked wallet is "the" profile wallet. wallet_identities has a
+        # UNIQUE index on address; the (org_id, user_id) filter is a small scan
+        # today (a personal org has ~1 wallet), so no new index is required for
+        # the single-user desktop. Add one if team wallet-linking ever grows.
+        with self._cursor(None) as cur:
+            cur.execute(
+                "SELECT * FROM wallet_identities "
+                "WHERE org_id = %s AND user_id = %s "
+                "ORDER BY created_at ASC LIMIT 1",
+                (org_id, user_id),
             )
             row = cur.fetchone()
         return WalletIdentityRecord.model_validate(row) if row else None

@@ -20,7 +20,13 @@
 // This is app code (the renderer owns `document` + native capabilities); the
 // chat-surface sections stay framework-agnostic behind their props/ports.
 
-import { useMemo, useState, type ReactElement, type ReactNode } from "react";
+import {
+  useEffect,
+  useMemo,
+  useState,
+  type ReactElement,
+  type ReactNode,
+} from "react";
 
 import {
   AppLockPage,
@@ -40,6 +46,7 @@ import {
   type AppLockValue,
   type AppearanceValue,
   type ModelBehaviorValue,
+  type ProfileIdentityAnchor,
   type ProfilePagePerson,
   type RetentionChoice,
   type SettingsSectionSlug,
@@ -52,6 +59,7 @@ import type {
   NotificationDefaults,
   UpdateNotificationDefaultsRequest,
   UserId,
+  UserProfile,
 } from "@0x-copilot/api-types";
 import type { RendererSession, Transport } from "@0x-copilot/chat-transport";
 
@@ -129,15 +137,66 @@ function makeNotificationDefaults(userId: string): NotificationDefaults {
   };
 }
 
-function personFromSession(
-  session: RendererSession,
-  displayName: string | null,
-): ProfilePagePerson {
+// A placeholder wallet email (`<address>@wallet.invalid`) is NOT a real
+// address — never show it. Kept in sync with the backend
+// WALLET_PLACEHOLDER_EMAIL_DOMAIN by convention (the profile payload's
+// `email_is_placeholder` / `wallet_address` are the primary signals; this
+// suffix check only backstops the pre-profile session fallback).
+const WALLET_PLACEHOLDER_SUFFIX = "@wallet.invalid";
+
+function anchorFromEmail(
+  email: string,
+  verified: boolean,
+): ProfileIdentityAnchor {
+  if (email.toLowerCase().endsWith(WALLET_PLACEHOLDER_SUFFIX)) {
+    // Recover the address from the placeholder's local part (lowercase; the
+    // profile fetch replaces it with the checksummed form + chain).
+    return {
+      kind: "wallet",
+      address: email.slice(0, email.length - WALLET_PLACEHOLDER_SUFFIX.length),
+      chainId: null,
+      chainLabel: null,
+    };
+  }
+  return { kind: "email", email, verified };
+}
+
+// Pre-profile fallback (rendered for the sub-second before /me/profile loads).
+function personFromSession(session: RendererSession): ProfilePagePerson {
   return {
     user_id: session.workspaceId,
-    email: session.email ?? "",
-    display_name: displayName,
+    display_name: session.displayName,
     avatar_url: null,
+    anchor: anchorFromEmail(session.email ?? "", false),
+  };
+}
+
+// The honest identity, built from the facade profile: a wallet anchor
+// (checksummed address + chain) for SIWE accounts, else the real email + its
+// verified state. Never surfaces the `@wallet.invalid` placeholder.
+function personFromProfile(profile: UserProfile): ProfilePagePerson {
+  const walletAddress = profile.wallet_address ?? null;
+  const anchor: ProfileIdentityAnchor =
+    walletAddress !== null && walletAddress !== ""
+      ? {
+          kind: "wallet",
+          address: walletAddress,
+          chainId: profile.chain_id ?? null,
+          chainLabel: profile.chain_name ?? null,
+        }
+      : profile.email_is_placeholder === true
+        ? anchorFromEmail(profile.email, false)
+        : {
+            kind: "email",
+            email: profile.email,
+            verified: profile.email_verified_at !== null,
+          };
+  return {
+    user_id: profile.user_id,
+    display_name: profile.display_name,
+    avatar_url: profile.avatar_url,
+    anchor,
+    authMethod: profile.auth_method ?? undefined,
   };
 }
 
@@ -184,9 +243,24 @@ export function SettingsMount({
   const touchIdAvailable = transport.capabilities().nativeSecretStorage;
 
   // --- controlled section state -------------------------------------------
-  const [displayName, setDisplayName] = useState<string | null>(
-    session.displayName,
-  );
+  // Honest identity: fetch the real profile (wallet address + chain + whether
+  // the email is a placeholder) so the Profile page never shows the synthetic
+  // `@wallet.invalid` address. Until it loads, fall back to the session.
+  const [profile, setProfile] = useState<UserProfile | null>(null);
+  useEffect(() => {
+    let cancelled = false;
+    void transport
+      .request<UserProfile>({ method: "GET", path: "/v1/me/profile" })
+      .then((loaded) => {
+        if (!cancelled) setProfile(loaded);
+      })
+      .catch(() => {
+        // Fall back to the session-derived identity (no hard failure).
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [transport]);
   const [appearance, setAppearance] =
     useState<AppearanceValue>(DEFAULT_APPEARANCE);
   const [modelBehavior, setModelBehavior] = useState<ModelBehaviorValue>(
@@ -213,10 +287,27 @@ export function SettingsMount({
       case "profile":
         return (
           <ProfilePage
-            person={personFromSession(session, displayName)}
+            person={
+              profile !== null
+                ? personFromProfile(profile)
+                : personFromSession(session)
+            }
+            // Persist to the facade (PUT /v1/me/profile), not just local state,
+            // so a rename survives a reload — and reflect the server response.
             onSaveDisplayName={(next) => {
-              setDisplayName(next);
-              toast("Display name saved.");
+              void transport
+                .request<UserProfile>({
+                  method: "PUT",
+                  path: "/v1/me/profile",
+                  body: { display_name: next },
+                })
+                .then((updated) => {
+                  setProfile(updated);
+                  toast("Display name saved.");
+                })
+                .catch(() => {
+                  toast("Couldn't save your display name. Please try again.");
+                });
             }}
             onSignOut={onSignOut}
           />

@@ -26,6 +26,21 @@ function fakeTransport(): Transport {
   const request = (async (req: TypedRequest) => {
     if (req.path === "/v1/settings/provider-keys") return { keys: [] };
     if (req.path === "/v1/me/api-keys") return { keys: [] };
+    if (req.path === "/v1/me/profile") {
+      return {
+        user_id: "usr_local",
+        email: "parth@local.test",
+        email_verified_at: null,
+        display_name: "Parth",
+        title: null,
+        timezone: null,
+        locale: null,
+        working_hours: null,
+        avatar_url: null,
+        bio: null,
+        updated_at: "2026-01-01T00:00:00Z",
+      };
+    }
     return {};
   }) as Transport["request"];
   return {

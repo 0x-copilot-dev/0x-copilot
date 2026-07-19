@@ -1333,6 +1333,11 @@ def create_app(
         app,
         me_store=resolved_me_store,
         identity_store=resolved_identity_store,
+        # Surfaces the caller's wallet address + chain on /me/profile so the FE
+        # renders honest identity instead of the @wallet.invalid placeholder.
+        # getattr: degrades to a non-wallet profile if the auth block that sets
+        # app.state.siwe_store didn't run.
+        siwe_store=getattr(app.state, "siwe_store", None),
     )
     register_me_preferences_routes(
         app,

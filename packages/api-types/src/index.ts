@@ -746,7 +746,10 @@ export type WorkspaceMemberSource =
   | "saml"
   | "scim"
   | "bootstrap"
-  | "invite";
+  | "invite"
+  // Sign-In-With-Ethereum (wallet) — matches the backend OrganizationMemberSource
+  // enum, which has carried `siwe` since wallet login shipped.
+  | "siwe";
 
 export interface MemberRoleSummary {
   id: string;
@@ -2865,6 +2868,20 @@ export interface UserProfile {
    */
   bio: string | null;
   updated_at: string;
+  /**
+   * Honest identity (Issues 3 + 4). A SIWE (wallet) account has no real email —
+   * `email` is the undeliverable `<address>@wallet.invalid` placeholder, which
+   * `email_is_placeholder` flags so surfaces render the wallet anchor instead.
+   * `wallet_address` is the EIP-55 checksummed address; `chain_id`/`chain_name`
+   * the chain it linked on. Absent/`null`/`false` for an email account.
+   * Optional so older servers stay compatible (non-breaking additions).
+   */
+  email_is_placeholder?: boolean;
+  wallet_address?: string | null;
+  chain_id?: number | null;
+  chain_name?: string | null;
+  /** Durable auth origin — drives the "Signed in with" indicator. */
+  auth_method?: WorkspaceMemberSource | string | null;
 }
 
 export type UserProfileTheme = "system" | "light" | "dark" | "slate";
