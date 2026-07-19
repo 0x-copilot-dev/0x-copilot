@@ -59,16 +59,47 @@ downloads and SHA-256-verifies pinned CPython and PostgreSQL builds, installs th
 bundled services, and signs native binaries on macOS. Later launches reuse the
 staged runtime; CLI upgrades check it again to keep the app and services in sync.
 
-## Update or uninstall
+## Update
 
 ```bash
-npm install -g @0x-copilot/cli@latest  # update
-copilot uninstall                      # delete runtime and local data
-npm rm -g @0x-copilot/cli              # remove the command
+npm install -g @0x-copilot/cli@latest  # (bun add -g @0x-copilot/cli@latest)
 ```
 
-`copilot uninstall` permanently deletes the database, settings, keys, and logs.
-Use `copilot repair` first when possible; it keeps local data.
+The next `copilot` re-checks the staged runtime and refreshes it if the CLI
+version changed, so the app and services stay in sync.
+
+## Uninstall
+
+Removal has **two independent layers** — do both for a complete uninstall:
+
+```bash
+copilot uninstall          # 1. delete the staged runtime, download cache, and local app data
+npm rm -g @0x-copilot/cli  # 2. remove the `copilot` / `0xcopilot` command itself
+```
+
+1. `copilot uninstall` clears everything the app _created_ on disk — the staged
+   runtime (`~/.0xcopilot`), the download cache, and all app data (database,
+   settings, keys, logs). It permanently deletes that data, so use
+   `copilot repair` instead when you only need to recover a stuck launch (it
+   keeps your data). Add `--yes` to skip the confirmation prompt. This step does
+   **not** remove the `copilot` command — that is a separate npm package.
+2. `npm rm -g @0x-copilot/cli` (or `bun rm -g @0x-copilot/cli`) removes the
+   command. Order does not matter, but running `copilot uninstall` first lets it
+   clean up while the command is still available.
+
+### `copilot` still runs after `npm rm`?
+
+If `copilot` still resolves in the **same** terminal after removal, the file is
+gone but your shell cached its old location. Refresh the shell's command lookup:
+
+```bash
+hash -r        # zsh/bash: clear the cached command table (zsh also accepts `rehash`)
+which copilot  # → should now report "not found"
+```
+
+Opening a new terminal window has the same effect. If `which -a copilot` still
+finds a binary in a fresh shell, it is a different install (a separate npm
+prefix, Bun, or an unrelated `copilot` on your `PATH`) — remove that one too.
 
 ## Troubleshooting
 

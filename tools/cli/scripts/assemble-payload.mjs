@@ -96,6 +96,32 @@ if (process.env.COPILOT_SKIP_BUILD === "1" && fs.existsSync(appMain)) {
 }
 if (!fs.existsSync(appMain)) fail(`desktop build produced no ${appMain}`);
 
+// --- 1b. build the frontend web assets (SIWE wallet page) ----------------
+// stage.mjs (stageWebAssets) stages apps/frontend/dist -> <runtime>/web so the
+// supervised facade can serve wallet.html same-origin with /v1/auth/siwe/*.
+// The published payload must ship this pre-built dist (in payload mode stage.mjs
+// has no npm workspace to build from), so build it here at prepack.
+const walletHtml = path.join(
+  REPO_ROOT,
+  "apps",
+  "frontend",
+  "dist",
+  "wallet.html",
+);
+if (process.env.COPILOT_SKIP_BUILD === "1" && fs.existsSync(walletHtml)) {
+  log(
+    "COPILOT_SKIP_BUILD=1 and frontend already built — skipping frontend build",
+  );
+} else {
+  log("building @0x-copilot/frontend");
+  const npm = process.platform === "win32" ? "npm.cmd" : "npm";
+  run(npm, ["run", "build", "--workspace", "@0x-copilot/frontend"], {
+    cwd: REPO_ROOT,
+  });
+}
+if (!fs.existsSync(walletHtml))
+  fail(`frontend build produced no ${walletHtml}`);
+
 // --- 2. reset payload ----------------------------------------------------
 fs.rmSync(PAYLOAD, { recursive: true, force: true });
 fs.mkdirSync(PAYLOAD, { recursive: true });
@@ -201,5 +227,16 @@ if (fs.existsSync(gOAuthSrc)) {
       "Google sign-in will be unavailable in this build",
   );
 }
+
+// --- 7. built frontend web assets ----------------------------------------
+// stage.mjs (stageWebAssets) reads REPO_ROOT/apps/frontend/dist and copies it
+// to <runtime>/web. In the payload REPO_ROOT is this dir, so mirror the dist —
+// its presence makes stage.mjs skip the (unavailable) workspace build.
+const feDest = path.join(PAYLOAD, "apps", "frontend", "dist");
+fs.mkdirSync(feDest, { recursive: true });
+fs.cpSync(path.join(REPO_ROOT, "apps", "frontend", "dist"), feDest, {
+  recursive: true,
+});
+log("copied built frontend dist (wallet.html + assets)");
 
 log(`payload assembled at ${path.relative(REPO_ROOT, PAYLOAD)}`);
