@@ -215,6 +215,59 @@ describe("TcChat", () => {
     expect(screen.getByTestId("composer")).toBeInTheDocument();
   });
 
+  it("renders an injected host composer via renderComposer instead of the base composer", async () => {
+    const { transport } = makeTransport(() => Promise.resolve(SAMPLE_RESPONSE));
+    const seen: Array<{ disabled: boolean; placeholder: string }> = [];
+    render(
+      withTransport(
+        transport,
+        <TcChat
+          conversationId="c"
+          mode="studio"
+          renderComposer={(ctx) => {
+            seen.push(ctx);
+            return <div data-testid="host-composer">host composer</div>;
+          }}
+        />,
+      ),
+    );
+    await screen.findByText("Sure — here is a draft.");
+    // The host composer wins the slot; the base composer never mounts.
+    expect(screen.getByTestId("host-composer")).toBeInTheDocument();
+    expect(screen.queryByTestId("composer")).not.toBeInTheDocument();
+    // Live cockpit → the seam hands the host a non-disabled, "send" placeholder.
+    expect(seen.at(-1)).toEqual({
+      disabled: false,
+      placeholder: "Send a message…",
+    });
+  });
+
+  it("passes the ghost disabled state + placeholder to the injected composer when scrubbed", async () => {
+    const { transport } = makeTransport(() => Promise.resolve(SAMPLE_RESPONSE));
+    const seen: Array<{ disabled: boolean; placeholder: string }> = [];
+    render(
+      withTransport(
+        transport,
+        <SwimlaneScrubProvider value={{ scrubbedTo: 1716000030000 }}>
+          <TcChat
+            conversationId="c"
+            mode="studio"
+            renderComposer={(ctx) => {
+              seen.push(ctx);
+              return <div data-testid="host-composer" />;
+            }}
+          />
+        </SwimlaneScrubProvider>,
+      ),
+    );
+    await screen.findByTestId("tc-chat-ghost-banner");
+    // Off-live → the injected composer is told to disable, with the snap copy.
+    expect(seen.at(-1)).toEqual({
+      disabled: true,
+      placeholder: "Snap to now to send a message",
+    });
+  });
+
   it("renders focus mode as Activity / Approvals tabs and hides the composer", () => {
     const { transport } = makeTransport(() => Promise.resolve(SAMPLE_RESPONSE));
     render(

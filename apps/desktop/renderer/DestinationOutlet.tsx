@@ -99,6 +99,13 @@ export interface DestinationOutletProps {
    * provider key" CTA (Issues 1 + 2).
    */
   readonly onOpenModelSettings?: () => void;
+  /**
+   * Navigate to the Tools (connectors) surface. The Run composer's connectors
+   * trigger + `+`-menu "show connectors" use it for the MCP + non-MCP view.
+   */
+  readonly onOpenConnectors?: () => void;
+  /** Navigate to the Skills surface (Run composer's skills settings link). */
+  readonly onOpenSkills?: () => void;
 }
 
 export function DestinationOutlet({
@@ -108,6 +115,8 @@ export function DestinationOutlet({
   onOpenRetentionSettings,
   onOpenApprovalSettings,
   onOpenModelSettings,
+  onOpenConnectors,
+  onOpenSkills,
 }: DestinationOutletProps): ReactElement {
   // Fold deprecated slugs onto their recast surface BEFORE resolving content,
   // so `agents`/`inbox` render Activity (FR-2.23) rather than a dead pane.
@@ -125,6 +134,8 @@ export function DestinationOutlet({
         onOpenRetentionSettings,
         onOpenApprovalSettings,
         onOpenModelSettings,
+        onOpenConnectors,
+        onOpenSkills,
       })}
     </div>
   );
@@ -136,6 +147,8 @@ interface SurfaceContext {
   readonly onOpenRetentionSettings?: () => void;
   readonly onOpenApprovalSettings?: () => void;
   readonly onOpenModelSettings?: () => void;
+  readonly onOpenConnectors?: () => void;
+  readonly onOpenSkills?: () => void;
 }
 
 function renderSurface(
@@ -153,6 +166,8 @@ function renderSurface(
         <RunBinder
           conversationId={ctx.conversationId}
           onOpenModelSettings={ctx.onOpenModelSettings}
+          onOpenConnectors={ctx.onOpenConnectors}
+          onOpenSkills={ctx.onOpenSkills}
         />
       );
     case "chats":

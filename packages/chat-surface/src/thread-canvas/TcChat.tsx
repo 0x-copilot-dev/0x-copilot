@@ -157,6 +157,21 @@ export interface TcChatProps {
   readonly onApprove?: (approvalId: string) => void;
   /** Reject the approval (host owns the POST); fires on Reject / `⌘⌫`. */
   readonly onReject?: (approvalId: string) => void;
+  /**
+   * Composer slot override. When supplied, the cockpit renders the host's
+   * composer in place of the bare base `<Composer>` — the seam the desktop
+   * host uses to mount the full `AssistantComposer` (attachments, `/`-menu,
+   * connectors, model picker) while keeping the Run cockpit's scrub/ghost
+   * gating: the ghost `disabled` state and the placeholder are handed to the
+   * host so the injected composer disables identically off-live. The host owns
+   * submission end-to-end (it wires its own `onSubmit`), so `onSend` is only
+   * consulted for the default base composer. Omitted → the base `<Composer>`
+   * renders as before (web + tests unchanged).
+   */
+  readonly renderComposer?: (ctx: {
+    readonly disabled: boolean;
+    readonly placeholder: string;
+  }) => ReactNode;
 }
 
 const EMPTY_FLEETS: readonly FleetProjection[] = [];
@@ -184,6 +199,7 @@ export function TcChat(props: TcChatProps): ReactElement {
     approvals = EMPTY_APPROVALS,
     onApprove,
     onReject,
+    renderComposer,
   } = props;
   const transport = useTransport();
   const scrub = useSwimlaneScrub();
@@ -248,6 +264,11 @@ export function TcChat(props: TcChatProps): ReactElement {
     typeof scrub.scrubbedTo === "number"
       ? formatGhostTime(scrub.scrubbedTo)
       : null;
+  // One placeholder source for both the base composer and an injected host
+  // composer, so the off-live copy stays identical across the seam.
+  const composerPlaceholder = ghost
+    ? "Snap to now to send a message"
+    : "Send a message…";
 
   const filteredMessages = filterByScrub(state, scrub.scrubbedTo);
   // PR-3.8 — fleet cards follow the same scrub cursor as messages so a
@@ -293,14 +314,16 @@ export function TcChat(props: TcChatProps): ReactElement {
         </div>
       ) : null}
       <div style={composerSlotStyle}>
-        <Composer
-          onSend={(text) => onSend?.(text)}
-          disabled={ghost}
-          placeholder={
-            ghost ? "Snap to now to send a message" : "Send a message…"
-          }
-          portalTarget={portalTarget}
-        />
+        {renderComposer !== undefined ? (
+          renderComposer({ disabled: ghost, placeholder: composerPlaceholder })
+        ) : (
+          <Composer
+            onSend={(text) => onSend?.(text)}
+            disabled={ghost}
+            placeholder={composerPlaceholder}
+            portalTarget={portalTarget}
+          />
+        )}
       </div>
     </div>
   );

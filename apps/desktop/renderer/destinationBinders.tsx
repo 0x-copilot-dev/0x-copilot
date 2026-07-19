@@ -61,6 +61,9 @@ import type {
 // bundle into the renderer). The connect flow is owned by Electron MAIN
 // (loopback binding + system browser); the renderer only asks by slug.
 import { CONNECTOR_CHANNELS } from "../main/connectors/channels";
+// Composer parity: the desktop Run cockpit's in-chat composer (shared
+// AssistantComposer bound to desktop substrate ports). Same-app import, allowed.
+import { RunComposer } from "./composer/RunComposer";
 
 // ---------------------------------------------------------------------------
 // Shared load hook — drives the 4-state machine (loading / ok / empty / error)
@@ -547,10 +550,16 @@ export function ProjectsBinder(): ReactElement {
 export function RunBinder({
   conversationId: fallbackConversationId,
   onOpenModelSettings,
+  onOpenConnectors,
+  onOpenSkills,
 }: {
   readonly conversationId: ConversationId;
   /** Open Settings → Provider keys (readiness setup CTA / config-error CTA). */
   readonly onOpenModelSettings?: () => void;
+  /** Navigate to the Tools (connectors) surface — composer connections view. */
+  readonly onOpenConnectors?: () => void;
+  /** Navigate to the Skills surface — composer skills settings. */
+  readonly onOpenSkills?: () => void;
 }): ReactElement {
   const transport = useTransport();
   const [conversationId, setConversationId] = useState<ConversationId | null>(
@@ -652,12 +661,31 @@ export function RunBinder({
     [transport, activeConversationId],
   );
 
+  // Composer parity (PRD: desktop-composer-parity): mount the shared
+  // AssistantComposer in the cockpit's in-chat composer slot. The cockpit hands
+  // us the ghost/scrub `disabled` + placeholder; RunComposer owns the substrate
+  // ports (attachments, `/`-menu, connectors, model picker) and run dispatch.
+  const renderComposer = useCallback(
+    (ctx: { readonly disabled: boolean; readonly placeholder: string }) => (
+      <RunComposer
+        conversationId={activeConversationId as unknown as string}
+        disabled={ctx.disabled}
+        placeholder={ctx.placeholder}
+        onShowConnectors={onOpenConnectors}
+        onOpenSkillsSettings={onOpenSkills}
+        onOpenModelSettings={onOpenModelSettings}
+      />
+    ),
+    [activeConversationId, onOpenConnectors, onOpenSkills, onOpenModelSettings],
+  );
+
   return (
     <RunDestination
       conversationId={activeConversationId}
       onStartRun={handleStartRun}
       modelReady={modelReady}
       onOpenModelSettings={onOpenModelSettings}
+      renderComposer={renderComposer}
     />
   );
 }

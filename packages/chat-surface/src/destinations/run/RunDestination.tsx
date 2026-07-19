@@ -139,6 +139,18 @@ export interface RunDestinationProps {
    * so the substrate-agnostic package never navigates directly.
    */
   readonly onOpenModelSettings?: () => void;
+  /**
+   * Composer slot override for the in-cockpit chat (`TcChat`). Forwarded
+   * verbatim to `TcChat.renderComposer`, letting a host mount the full
+   * `AssistantComposer` (attachments, `/`-menu, connectors, model picker) in
+   * place of the bare base `Composer` while the cockpit keeps owning the
+   * scrub/ghost gating (it hands the injected composer the `disabled` +
+   * `placeholder` state). Omitted → the base composer renders unchanged.
+   */
+  readonly renderComposer?: (ctx: {
+    readonly disabled: boolean;
+    readonly placeholder: string;
+  }) => ReactElement | null;
 }
 
 export function RunDestination(props: RunDestinationProps): ReactElement {
@@ -151,6 +163,7 @@ export function RunDestination(props: RunDestinationProps): ReactElement {
     onStartRun,
     modelReady = true,
     onOpenModelSettings,
+    renderComposer,
   } = props;
 
   const transport = useTransport();
@@ -468,6 +481,8 @@ export function RunDestination(props: RunDestinationProps): ReactElement {
       approvals={chatApprovals}
       onApprove={handleApprove}
       onReject={handleReject}
+      // Host composer seam: desktop mounts the full AssistantComposer here.
+      renderComposer={renderComposer}
     />
   );
   // PR-3.7 (FR-3.15/3.16): while scrubbed off-now, `scrubbed` tells the rail to
