@@ -296,7 +296,12 @@ therefore applied per launch mode:
   Electron.app into `~/.0xcopilot/shell/0xCopilot.app` (APFS copy-on-write, so
   ~no extra disk), rewrites `CFBundleName`/`CFBundleDisplayName`/
   `CFBundleIdentifier`, swaps in `icon.icns`, ad-hoc re-signs the outer
-  bundle, and launches that — the Dock shows the real name + icon.
+  bundle, and launches that — the Dock shows the real name + icon. This is
+  the rebrand procedure from Electron's own Application Distribution docs
+  (what electron-packager automates), minus the helper-app renames: helpers
+  never appear in the Dock, and leaving them untouched keeps their nested
+  signatures valid without a deep re-sign — so Activity Monitor still lists
+  "Electron Helper" child processes. Cosmetic only.
 - **Plain `npm run dev`** — `main/branding.ts` sets the app name and the
   runtime **dock icon**; the Dock _tooltip_ still reads "Electron" here (it
   comes from node_modules' Electron.app Info.plist, which we don't mutate).
