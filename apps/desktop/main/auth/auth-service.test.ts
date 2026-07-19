@@ -565,4 +565,83 @@ describe("AuthService", () => {
     const bearer = await service.getBearer("org_acme");
     expect(bearer).toBe("bearer-2");
   });
+
+  describe("sign-out auditing — user-initiated vs. eviction", () => {
+    // signOutUserInitiated is exactly what the authSignOut IPC handler is wired
+    // to (see main/index.ts). Auditing it here proves the user-initiated
+    // sign-out path records one 'sign-out' row.
+    it("signOutUserInitiated (the IPC sign-out path) appends exactly one 'sign-out' audit row", async () => {
+      const audit = memoryAudit();
+      const service = new AuthService({
+        mode: "dev-mint",
+        facadeBaseUrl: "http://127.0.0.1:8200",
+        userDataDir: tmp,
+        safeStorage: fakeSafeStorage(),
+        openExternal: async () => {},
+        fetch: devMintFetch("bearer-1"),
+        authAudit: audit,
+      });
+      await service.signIn("org_acme");
+      await service.signOutUserInitiated("org_acme");
+
+      // dev-mint signIn does not audit, so this is the only event.
+      expect(audit.events).toEqual([
+        { kind: "sign-out", workspaceId: "org_acme" },
+      ]);
+      // The session really is gone (and the null-session getSession below
+      // returns early without calling signOut, so no extra row is appended).
+      expect(await service.getSession("org_acme")).toBeNull();
+      expect(audit.events.filter((e) => e.kind === "sign-out")).toHaveLength(1);
+    });
+
+    it("getSession dropping a stale (401) session appends NO 'sign-out' audit row (eviction is not a user sign-out)", async () => {
+      // Persist a session, then reboot into a service whose facade rejects the
+      // stored bearer with 401 — getSession evicts it via the raw signOut.
+      const persist = new AuthService({
+        mode: "dev-mint",
+        facadeBaseUrl: "http://127.0.0.1:8200",
+        userDataDir: tmp,
+        safeStorage: fakeSafeStorage(),
+        openExternal: async () => {},
+        fetch: devMintFetch("stale-bearer"),
+      });
+      await persist.signIn("org_acme");
+
+      const audit = memoryAudit();
+      const probe = vi.fn(
+        async () => new Response("", { status: 401 }),
+      ) as unknown as typeof fetch;
+      const reboot = new AuthService({
+        mode: "dev-mint",
+        facadeBaseUrl: "http://127.0.0.1:8200",
+        userDataDir: tmp,
+        safeStorage: fakeSafeStorage(),
+        openExternal: async () => {},
+        fetch: probe,
+        authAudit: audit,
+      });
+
+      expect(await reboot.getSession("org_acme")).toBeNull();
+      expect(probe).toHaveBeenCalled();
+      expect(audit.events.filter((e) => e.kind === "sign-out")).toEqual([]);
+    });
+
+    it("the bare signOut mechanism appends NO 'sign-out' audit row", async () => {
+      // Locks the invariant that eviction reuse of signOut() can never emit a
+      // user sign-out event, independent of the getSession wiring above.
+      const audit = memoryAudit();
+      const service = new AuthService({
+        mode: "dev-mint",
+        facadeBaseUrl: "http://127.0.0.1:8200",
+        userDataDir: tmp,
+        safeStorage: fakeSafeStorage(),
+        openExternal: async () => {},
+        fetch: devMintFetch("bearer-1"),
+        authAudit: audit,
+      });
+      await service.signIn("org_acme");
+      await service.signOut("org_acme");
+      expect(audit.events.filter((e) => e.kind === "sign-out")).toEqual([]);
+    });
+  });
 });

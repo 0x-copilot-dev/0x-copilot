@@ -244,6 +244,9 @@ export function registerIpcHandlers(deps: RegisterHandlersDeps): () => void {
       return auth.signInWithWallet(params.workspaceId);
     });
 
+    // User-initiated sign-out. The wired AuthService routes auth.signOut to the
+    // audited signOutUserInitiated (emits one 'sign-out' audit row); the raw
+    // AuthService.signOut reused by getSession eviction stays audit-free.
     ipcMain.handle(CHANNELS.authSignOut, async (_event, raw: unknown) => {
       const params = parseOrThrow(
         CHANNELS.authSignOut,
