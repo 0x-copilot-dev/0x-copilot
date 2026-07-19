@@ -704,6 +704,32 @@ function adhocSignTree(runtimeDir) {
 // main
 // ---------------------------------------------------------------------------
 
+// Stage the built frontend web assets (wallet.html + assets/) arch-agnostically
+// at <dest>/web so the supervised facade can serve the SIWE wallet page
+// same-origin with /v1/auth/siwe/* (FACADE_WEB_DIST_DIR -> wallet_page_routes.py;
+// resolveRuntimePaths().webDir == <base>/web). Single source of truth: the built
+// apps/frontend dist. In a dev checkout we build it if absent; the published
+// payload ships a pre-built dist which we simply copy.
+function stageWebAssets(dest) {
+  const distSrc = path.join(REPO_ROOT, "apps", "frontend", "dist");
+  const walletPage = path.join(distSrc, "wallet.html");
+  if (!fs.existsSync(walletPage)) {
+    log("building apps/frontend (dist/wallet.html missing)");
+    const npm = process.platform === "win32" ? "npm.cmd" : "npm";
+    run(npm, ["run", "build", "--workspace", "@0x-copilot/frontend"], {
+      cwd: REPO_ROOT,
+    });
+  }
+  if (!fs.existsSync(walletPage)) {
+    fail("frontend build did not produce apps/frontend/dist/wallet.html");
+  }
+  const webDest = path.join(dest, "web");
+  rmrf(webDest);
+  fs.mkdirSync(webDest, { recursive: true });
+  copyTree(distSrc, webDest);
+  log(`web: staged frontend dist -> ${webDest}`);
+}
+
 async function main() {
   const args = parseArgs(process.argv.slice(2));
   const platformKey = `${args.platform}-${args.arch}`;
@@ -740,6 +766,9 @@ async function main() {
   for (const svc of SERVICES) {
     stageService(runtimeDir, svc, pythonExe, hostExec);
   }
+
+  // Frontend web assets (SIWE wallet page) — arch-agnostic, staged at <dest>/web.
+  stageWebAssets(args.dest);
 
   // Ad-hoc sign LAST: signing seals each Mach-O, so it must run after every
   // write (extraction, pip, prune, compileall). Only on a macOS host, and only

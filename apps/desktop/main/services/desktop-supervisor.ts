@@ -78,6 +78,9 @@ export function createDesktopSupervisor(
     facadePort: ports.facade,
     processEnv,
     userDataDir: config.userDataDir,
+    // Staged frontend web assets (wallet.html + assets/); the facade serves the
+    // SIWE wallet page from here (FACADE_WEB_DIST_DIR).
+    webDir: paths.webDir,
   });
 
   return new ServiceSupervisor({

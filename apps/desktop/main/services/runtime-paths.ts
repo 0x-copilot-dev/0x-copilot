@@ -40,6 +40,12 @@ export interface RuntimePathsConfig {
 
 export interface RuntimePaths {
   readonly runtimeRoot: string;
+  /**
+   * Built frontend web assets (wallet.html + assets/) staged arch-agnostically
+   * as a sibling of `runtime/` (they are platform-independent JS/HTML). The
+   * facade serves the SIWE wallet page from here; see wallet_page_routes.py.
+   */
+  readonly webDir: string;
   readonly pythonBin: string;
   /**
    * The postgres bundle ships ONLY initdb + pg_ctl + the postgres server.
@@ -71,6 +77,9 @@ export function resolveRuntimePaths(config: RuntimePathsConfig): RuntimePaths {
       : join(runtimeRoot, "python", "bin", "python3");
   return {
     runtimeRoot,
+    // Sibling of runtime/<platform>-<arch>; arch-agnostic, mirrors stage.mjs
+    // which stages the built frontend dist to <base>/web.
+    webDir: join(base, "web"),
     pythonBin,
     pgBin: {
       initdb: join(pgBinDir, `initdb${exe}`),
