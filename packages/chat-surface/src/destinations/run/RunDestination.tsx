@@ -15,7 +15,7 @@
 //     `events` **once** internally (`useEventProjector`), so the shell does NOT
 //     project again — one projection per render (FR-3.3).
 //
-// The header (`RunHeader`) shows the "ACTIVE RUN" kicker + goal and the
+// The header (`RunHeader`) shows a state-aware kicker ("ACTIVE RUN" / "STANDBY") + goal and the
 // Studio/Focus segmented control; both the header control and `ThreadCanvas`'s
 // `onModeChange` drive the single `useRunMode.setMode`, so every mode affordance
 // stays in parity.
@@ -182,7 +182,7 @@ export function RunDestination(props: RunDestinationProps): ReactElement {
   const [startError, setStartError] = useState<StartRunError | null>(null);
   // The goal the empty-state composer just started the run with. Bridges the
   // header until the run list re-resolves to carry the run's own goal — so the
-  // empty→live transition never flashes "No active run" for a run we named.
+  // empty→live transition never flashes the idle placeholder for a run we named.
   const [startedGoal, setStartedGoal] = useState<string | null>(null);
 
   // A new conversation clears the last-started run so a stale id never streams
@@ -364,7 +364,7 @@ export function RunDestination(props: RunDestinationProps): ReactElement {
 
   // Goal: explicit override wins, else the selected run's list entry, else —
   // for a freshly started run not yet in the list — the goal we started it with
-  // (PR-3.11), so the empty→live header never regresses to "No active run".
+  // (PR-3.11), so the empty→live header never regresses to the idle placeholder.
   const derivedGoal = useMemo(() => {
     if (goalOverride !== undefined) {
       return goalOverride;
@@ -376,6 +376,13 @@ export function RunDestination(props: RunDestinationProps): ReactElement {
     }
     if (session.runId !== null && session.runId === startedRunId) {
       return startedGoal;
+    }
+    // A run IS attached but carries no goal text (explicit runId binding, or
+    // a list entry without a goal). The header must still claim the run —
+    // "STANDBY" over a subscribed run is a lie (design review) — so fall back
+    // to an honest generic title rather than null (null → idle copy).
+    if (session.runId !== null) {
+      return "Untitled run";
     }
     return null;
   }, [goalOverride, session.runs, session.runId, startedRunId, startedGoal]);

@@ -52,7 +52,7 @@ describe("TcMiniTimeline", () => {
     ).toBeInTheDocument();
   });
 
-  it("renders the empty state when there are no beads", () => {
+  it("renders the empty state when there are no beads (receded: no Live pill, out of tab order)", () => {
     render(
       <TcMiniTimeline
         beads={[]}
@@ -62,6 +62,14 @@ describe("TcMiniTimeline", () => {
       />,
     );
     expect(screen.getByTestId("tc-mini-timeline-empty")).toBeInTheDocument();
+    // Progressive disclosure: an empty timeline is permanently live, so the
+    // Live/Now pill is withheld and the strip drops out of the tab order.
+    expect(
+      screen.queryByTestId("tc-mini-timeline-now"),
+    ).not.toBeInTheDocument();
+    const strip = screen.getByTestId("tc-mini-timeline");
+    expect(strip).toHaveAttribute("data-empty", "true");
+    expect(strip).toHaveAttribute("tabindex", "-1");
   });
 
   it("emits onScrub with the bead's sequence_no on click", () => {

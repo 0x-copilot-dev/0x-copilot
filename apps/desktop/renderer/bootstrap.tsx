@@ -3,6 +3,10 @@ import "@0x-copilot/design-system/styles.css";
 // styles ship with the component here (previously stranded in the web app's
 // private styles.css). Without this the desktop Run composer renders unstyled.
 import "@0x-copilot/chat-surface/src/composer/composer.css";
+// Workspace-rail chrome (tab strip + connectors trigger) — same stranded-CSS
+// fix as composer.css: without it the [Chat · Sources · Agents · Approvals]
+// tabs render as native gray buttons with no active state.
+import "@0x-copilot/chat-surface/src/workspace/workspace.css";
 import "./desktop.css";
 
 import { StrictMode, useMemo, useState, type ReactElement } from "react";

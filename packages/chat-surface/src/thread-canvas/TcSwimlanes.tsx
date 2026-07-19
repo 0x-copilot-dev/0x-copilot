@@ -414,19 +414,27 @@ export function TcSwimlanes(props: TcSwimlanesProps): ReactNode {
       data-playhead={playhead === "now" ? "now" : "scrubbed"}
       tabIndex={0}
       onKeyDown={handleKeyDown}
-      style={swimlaneStyles.container}
+      style={
+        hasBeads ? swimlaneStyles.container : swimlaneStyles.containerEmpty
+      }
     >
-      <TcSwimlanesTransportControls
-        hasBeads={hasBeads}
-        isPlaying={isPlaying}
-        isOffNow={isOffNow}
-        onStepBack={() => step(-1)}
-        onTogglePlay={togglePlay}
-        onStepForward={() => step(1)}
-        onSnapToNow={snapToNow}
-        onBranch={handleBranch}
-        onRestore={handleRestore}
-      />
+      {/* Progressive disclosure: the transport toolbar is withheld until the
+          first bead arrives — a dead `<` / `Play` / `>` row over an empty
+          timeline reads as broken chrome. The SSE subscription above stays
+          live regardless, so the first event reveals the controls. */}
+      {hasBeads ? (
+        <TcSwimlanesTransportControls
+          hasBeads={hasBeads}
+          isPlaying={isPlaying}
+          isOffNow={isOffNow}
+          onStepBack={() => step(-1)}
+          onTogglePlay={togglePlay}
+          onStepForward={() => step(1)}
+          onSnapToNow={snapToNow}
+          onBranch={handleBranch}
+          onRestore={handleRestore}
+        />
+      ) : null}
 
       {!hasBeads ? (
         <div

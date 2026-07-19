@@ -99,6 +99,17 @@ describe("TcSurfaceMount", () => {
     expect(fallback).toHaveTextContent(/unknown scheme/i);
   });
 
+  it("shows the human empty state when no surface tab is active", () => {
+    render(<TcSurfaceMount uri="" transport={stubTransport} />);
+    // Quiet "waiting" copy — never the tier-3 jargon card or the dashed
+    // placeholder, both of which read as errors.
+    expect(screen.getByTestId("surface-empty-state")).toBeInTheDocument();
+    expect(screen.queryByTestId("surface-placeholder")).not.toBeInTheDocument();
+    expect(
+      screen.queryByTestId("generic-structured-diff"),
+    ).not.toBeInTheDocument();
+  });
+
   it("renders the adapter's renderCurrent output when one is registered", () => {
     registerAdapter(adapterRenderingText("hello from email adapter"));
     render(<TcSurfaceMount uri="email://draft-1" transport={stubTransport} />);

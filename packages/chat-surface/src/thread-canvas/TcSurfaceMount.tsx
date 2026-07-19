@@ -140,6 +140,21 @@ function FallbackEmpty(props: { readonly scheme: string }): ReactElement {
   );
 }
 
+function SurfaceEmptyState(): ReactElement {
+  return (
+    <div
+      role="status"
+      data-testid="surface-empty-state"
+      style={emptyStateStyle}
+    >
+      <p style={emptyStateTitleStyle}>Nothing open yet</p>
+      <p style={emptyStateHintStyle}>
+        When the agent opens or edits something, it shows up here.
+      </p>
+    </div>
+  );
+}
+
 function schemeOf(uri: string): string {
   const idx = uri.indexOf("://");
   return idx > 0 ? uri.slice(0, idx) : "";
@@ -229,6 +244,29 @@ export function TcSurfaceMount(props: TcSurfaceMountProps): ReactElement {
   // contractual tier-3 adapter.
   const tier3 = useMemo(() => resolveAdapter(TIER3_URI), []);
   const placeholder = <FallbackEmpty scheme={scheme} />;
+
+  // No surface tab is active yet — a run has started but the agent has not
+  // opened or edited anything. Render a quiet, human empty state instead of
+  // delegating to the always-matching tier-3 adapter, whose renderCurrent({})
+  // paints a card of placeholder tokens ("(unknown saas)", "(no resource id)",
+  // "(no fields)") that reads to a user like an error. A pending diff always
+  // renders — it can arrive before its surface uri is set.
+  if (!pendingDiff && uri.trim() === "") {
+    // Full-height variant: the empty tier stretches to the pane so its
+    // centering rules center in the ACTUAL pane, not top-hang in a
+    // content-sized wrapper (design review: block centered at ~28% height).
+    return (
+      <div
+        data-testid="tc-surface-mount"
+        data-tier="empty"
+        style={emptyRootStyle}
+      >
+        <div style={emptyContentWrapStyle}>
+          <SurfaceEmptyState />
+        </div>
+      </div>
+    );
+  }
 
   let chosenNode: ReactElement | null = null;
   let chosenLabel: "primary" | "tier3" | "placeholder" = "placeholder";
@@ -344,6 +382,19 @@ const contentStyle: CSSProperties = {
   minHeight: 0,
 };
 
+// Empty tier: fill the pane so the status block centers vertically in it.
+const emptyRootStyle: CSSProperties = {
+  ...rootStyle,
+  height: "100%",
+  minHeight: 0,
+};
+
+const emptyContentWrapStyle: CSSProperties = {
+  ...contentStyle,
+  flex: 1,
+  justifyContent: "center",
+};
+
 const streamChipRowStyle: CSSProperties = {
   display: "flex",
   justifyContent: "flex-start",
@@ -400,4 +451,31 @@ const fallbackStyle: CSSProperties = {
   fontFamily:
     "ui-sans-serif, system-ui, -apple-system, 'Segoe UI', Roboto, sans-serif",
   fontSize: "var(--font-size-sm)",
+};
+
+// The no-surface-yet empty state: centered, quiet, no card chrome or accent —
+// it must read as "waiting", never as an error.
+const emptyStateStyle: CSSProperties = {
+  display: "flex",
+  flexDirection: "column",
+  alignItems: "center",
+  justifyContent: "center",
+  gap: 6,
+  minHeight: 160,
+  padding: 24,
+  textAlign: "center",
+  fontFamily: "var(--font-sans)",
+};
+
+const emptyStateTitleStyle: CSSProperties = {
+  margin: 0,
+  fontSize: "var(--font-size-sm)",
+  fontWeight: 600,
+  color: "var(--color-text, #f4f5f6)",
+};
+
+const emptyStateHintStyle: CSSProperties = {
+  margin: 0,
+  fontSize: "var(--font-size-xs)",
+  color: "var(--color-text-muted, #9aa0a6)",
 };

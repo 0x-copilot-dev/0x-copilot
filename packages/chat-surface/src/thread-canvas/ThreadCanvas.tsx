@@ -198,7 +198,15 @@ export function ThreadCanvas(props: ThreadCanvasProps): ReactElement {
   // - Focus:  chat (with focus-tabs view) + mini-timeline; surface is hidden
   const showSurfaceColumn = mode === "studio";
   const showSwimlanes = mode === "studio" && runId !== null;
-  const showMiniTimeline = mode === "focus" || mode === "studio";
+  // Progressive disclosure (design review): when the Studio swimlanes band is
+  // mounted but has zero beads, the mini-timeline would stack a SECOND empty
+  // status line ("No activity yet") under the swimlanes' own "Listening for
+  // run events…" — two strings, one meaning. Withhold the mini strip until the
+  // first event lands; Focus (no swimlanes) keeps it always.
+  const timelineEmpty = projection.timeline.beads.length === 0;
+  const showMiniTimeline =
+    mode === "focus" ||
+    (mode === "studio" && !(showSwimlanes && timelineEmpty));
   const showTabs = mode === "studio" || mode === "focus";
 
   return (

@@ -145,14 +145,20 @@ describe("TcSwimlanes", () => {
     vi.useRealTimers();
   });
 
-  it("renders the empty state and disabled controls until beads arrive", () => {
+  it("shows only the empty state (no transport controls) until beads arrive", () => {
     const transport = makeTransport();
     const kv = makeKvStore();
     renderWith(transport, kv, <TcSwimlanes runId="run-1" />);
     expect(screen.getByTestId("tc-swimlanes-empty")).toBeInTheDocument();
-    expect(screen.getByTestId("tc-swimlanes-back")).toBeDisabled();
-    expect(screen.getByTestId("tc-swimlanes-play")).toBeDisabled();
-    expect(screen.getByTestId("tc-swimlanes-forward")).toBeDisabled();
+    // Progressive disclosure: the toolbar is withheld, not disabled — dead
+    // `<`/`Play`/`>` chrome over an empty timeline reads as broken.
+    expect(screen.queryByTestId("tc-swimlanes-back")).not.toBeInTheDocument();
+    expect(screen.queryByTestId("tc-swimlanes-play")).not.toBeInTheDocument();
+    expect(
+      screen.queryByTestId("tc-swimlanes-forward"),
+    ).not.toBeInTheDocument();
+    // Subscription is still live despite the collapsed toolbar, so the first
+    // bead will progressively reveal the controls.
     expect(transport.subscribePath).toBe("/v1/agent/runs/run-1/stream");
   });
 

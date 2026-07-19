@@ -693,13 +693,15 @@ const PALETTE = {
   ghostAccent: "var(--color-accent)",
 } as const;
 
+// Flush pane, not a card: the chat column already sits inside the workspace
+// rail (whose tab strip provides the separation), and the composer carries its
+// own bordered shell — a third bordered box around both read as visual noise
+// (design review: three nested borders within ~25px at the composer corner).
 const chatContainerStyle = (): CSSProperties => ({
   display: "flex",
   flexDirection: "column",
   height: "100%",
-  background: PALETTE.cardBg,
-  border: `1px solid ${PALETTE.cardBorder}`,
-  borderRadius: 12,
+  background: "transparent",
   padding: 12,
   gap: 10,
   color: PALETTE.textHi,
@@ -763,11 +765,10 @@ const fleetItemStyle: CSSProperties = {
   padding: 0,
 };
 
+// Focus mode: same flush-pane treatment as the studio container above.
 const focusContainerStyle: CSSProperties = {
   height: "100%",
-  background: PALETTE.cardBg,
-  border: `1px solid ${PALETTE.cardBorder}`,
-  borderRadius: 12,
+  background: "transparent",
   padding: 12,
   color: PALETTE.textHi,
   fontFamily:

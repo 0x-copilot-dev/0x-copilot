@@ -212,8 +212,25 @@ describe("ThreadCanvas", () => {
       expect(screen.queryByTestId("tc-swimlanes-slot")).not.toBeInTheDocument();
     });
 
-    it("renders the mini-timeline in Studio and Focus modes", () => {
-      const { rerender } = renderCanvas({ mode: "studio" });
+    it("renders the mini-timeline in Focus always; in Studio only once events exist", () => {
+      // Studio + zero events: the swimlanes band owns the single empty status
+      // line, so the mini strip is withheld (progressive disclosure — no
+      // duplicate "No activity yet" under "Listening for run events…").
+      const empty = renderCanvas({ mode: "studio" });
+      expect(
+        screen.queryByTestId("tc-mini-timeline-slot"),
+      ).not.toBeInTheDocument();
+      empty.unmount();
+      // Studio + events → the strip appears.
+      const { rerender } = renderCanvas({
+        mode: "studio",
+        events: [
+          makeEnvelope("tool_result", {
+            display_title: "Wrote a row",
+            payload: { surface_uri: "sheet://acme" },
+          }),
+        ],
+      });
       expect(screen.getByTestId("tc-mini-timeline-slot")).toBeInTheDocument();
       const transport = makeTransport();
       rerender(

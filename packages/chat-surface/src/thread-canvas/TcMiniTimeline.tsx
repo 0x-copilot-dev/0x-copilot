@@ -59,6 +59,7 @@ function colorForLane(lane: string): string {
 export function TcMiniTimeline(props: TcMiniTimelineProps): ReactElement {
   const { beads, scrubbedTo, onScrub, onSnapToNow, onExpand } = props;
   const isLive = scrubbedTo === null;
+  const isEmpty = beads.length === 0;
 
   const handleKeyDown = (event: ReactKeyboardEvent<HTMLDivElement>): void => {
     if (beads.length === 0) {
@@ -98,8 +99,9 @@ export function TcMiniTimeline(props: TcMiniTimelineProps): ReactElement {
     <div
       data-testid="tc-mini-timeline"
       data-state={isLive ? "live" : "scrubbed"}
-      style={containerStyle}
-      tabIndex={0}
+      data-empty={isEmpty ? "true" : "false"}
+      style={isEmpty ? emptyContainerStyle : containerStyle}
+      tabIndex={isEmpty ? -1 : 0}
       role="region"
       aria-label="Run timeline (mini)"
       onKeyDown={handleKeyDown}
@@ -138,15 +140,20 @@ export function TcMiniTimeline(props: TcMiniTimelineProps): ReactElement {
         )}
       </div>
       <div style={controlsRowStyle}>
-        <button
-          type="button"
-          data-testid="tc-mini-timeline-now"
-          aria-pressed={isLive}
-          onClick={onSnapToNow}
-          style={pillStyle(isLive)}
-        >
-          {isLive ? "Live" : "↩ Now"}
-        </button>
+        {/* Progressive disclosure: an empty timeline is permanently "Live" and
+            snap-to-now is a no-op, so the pill is dead chrome — withhold it
+            until the first bead arrives. */}
+        {!isEmpty ? (
+          <button
+            type="button"
+            data-testid="tc-mini-timeline-now"
+            aria-pressed={isLive}
+            onClick={onSnapToNow}
+            style={pillStyle(isLive)}
+          >
+            {isLive ? "Live" : "↩ Now"}
+          </button>
+        ) : null}
         {onExpand ? (
           <button
             type="button"
@@ -173,6 +180,19 @@ const containerStyle: CSSProperties = {
   color: "var(--color-text-muted)",
   fontFamily: "var(--font-sans)",
   fontSize: "var(--font-size-2xs)",
+};
+
+// Progressive disclosure: with zero beads there is nothing to scrub, so the
+// strip recedes to a quiet status line — transparent fill, hairline top rule,
+// subtler text — instead of presenting as an interactive transport bar. Same
+// quiet-chrome recipe as the web composer hint row (styles.css:2185-2214).
+const emptyContainerStyle: CSSProperties = {
+  ...containerStyle,
+  background: "transparent",
+  borderTop:
+    "1px solid color-mix(in srgb, var(--color-border) 40%, transparent)",
+  color: "var(--color-text-subtle)",
+  opacity: 0.8,
 };
 
 const beadStripStyle: CSSProperties = {

@@ -504,11 +504,13 @@ function SectionPlaceholder({
   return (
     <SetCard
       title={label}
-      meta="This section is built in a later Phase 5 PR."
+      // User-voice copy — internal PR numbering stays in the code comment
+      // above (design review: dev jargon was leaking into user-facing text).
+      meta="Coming soon"
       data-testid={`settings-placeholder-${slug}`}
     >
       <SetNote>
-        Placeholder — the {label} controls land in one of PR-5.3…PR-5.9.
+        {label} settings aren&apos;t available yet. They&apos;re on the way.
       </SetNote>
     </SetCard>
   );

@@ -22,16 +22,20 @@ describe("RunHeader", () => {
     );
   });
 
-  it("falls back to idle copy when the goal is null/empty (never a blank h2)", () => {
+  it("falls back to idle copy when the goal is null/empty (never a blank h2, and the kicker never claims a run)", () => {
     const { rerender } = render(
       <RunHeader goal={null} mode="studio" onModeChange={() => {}} />,
     );
+    // The eyebrow must NOT say "ACTIVE RUN" with no run, and the goal line is a
+    // standby posture — not a duplicate of the empty-state card's copy.
+    expect(screen.getByTestId("run-header-kicker").textContent).toBe("STANDBY");
     expect(screen.getByTestId("run-header-goal").textContent).toBe(
-      "No active run",
+      "Standing by",
     );
     rerender(<RunHeader goal="   " mode="studio" onModeChange={() => {}} />);
+    expect(screen.getByTestId("run-header-kicker").textContent).toBe("STANDBY");
     expect(screen.getByTestId("run-header-goal").textContent).toBe(
-      "No active run",
+      "Standing by",
     );
   });
 

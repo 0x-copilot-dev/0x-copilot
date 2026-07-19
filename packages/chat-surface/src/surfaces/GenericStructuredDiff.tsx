@@ -283,7 +283,7 @@ function CurrentStateBody(props: {
   if (fields === undefined) {
     return (
       <section style={bodyStyle} data-testid="generic-diff-current-body-empty">
-        <span style={emptyStyle}>(no fields)</span>
+        <span style={emptyStyle}>No details yet</span>
       </section>
     );
   }

@@ -32,8 +32,13 @@ const MODE_LABELS: Record<RunMode, string> = {
   focus: "Focus",
 };
 
-/** Copy shown as the goal when no run has resolved a goal yet (idle/empty). */
-const IDLE_GOAL_COPY = "No active run";
+/** Kicker shown when no run is active — the header must NOT claim "ACTIVE RUN".
+ *  Complements (never duplicates) the empty-state card's "NO ACTIVE RUN". */
+const IDLE_KICKER = "STANDBY";
+/** Goal-line copy when no run is active: a calm standby posture that is honest
+ *  in every idle sub-state (ready, setup-required, submitting) and never a
+ *  verbatim echo of the empty-state card's "NO ACTIVE RUN". */
+const IDLE_GOAL_COPY = "Standing by";
 
 export interface RunHeaderProps {
   /**
@@ -43,7 +48,11 @@ export interface RunHeaderProps {
    * just the safe header fallback.)
    */
   readonly goal?: string | null;
-  /** Mono kicker above the goal. Defaults to "ACTIVE RUN" (DESIGN-SPEC §2). */
+  /**
+   * Mono kicker above the goal. When unset it is state-aware: "ACTIVE RUN" with
+   * a live goal, "STANDBY" when idle — so the header never claims a run it does
+   * not have (DESIGN-SPEC §2). An explicit value overrides both states.
+   */
   readonly kicker?: string;
   /** Agent display name — seeds the avatar glyph + a11y label. */
   readonly agentName?: string;
@@ -59,23 +68,29 @@ export interface RunHeaderProps {
   readonly status?: ReactNode;
 }
 
-const DEFAULT_KICKER = "ACTIVE RUN";
+const ACTIVE_KICKER = "ACTIVE RUN";
 const DEFAULT_AGENT_NAME = "Agent";
 
 export function RunHeader(props: RunHeaderProps): ReactElement {
   const {
     goal,
-    kicker = DEFAULT_KICKER,
+    kicker,
     agentName = DEFAULT_AGENT_NAME,
     mode,
     onModeChange,
     status,
   } = props;
 
-  const goalText =
-    goal !== null && goal !== undefined && goal.trim() !== ""
-      ? goal
-      : IDLE_GOAL_COPY;
+  // A run is "active" only when it carries a real goal. Deriving BOTH the goal
+  // line and the kicker from this one fact is what stops the header from ever
+  // claiming "ACTIVE RUN" while showing idle copy.
+  const activeGoal =
+    goal !== null && goal !== undefined && goal.trim() !== "" ? goal : null;
+  const goalText = activeGoal ?? IDLE_GOAL_COPY;
+  // State-aware kicker: "ACTIVE RUN" with a live goal, idle kicker otherwise.
+  // An explicit `kicker` prop overrides both states.
+  const resolvedKicker =
+    kicker ?? (activeGoal !== null ? ACTIVE_KICKER : IDLE_KICKER);
   const avatarGlyph = (agentName.trim()[0] ?? "A").toUpperCase();
 
   return (
@@ -89,7 +104,7 @@ export function RunHeader(props: RunHeaderProps): ReactElement {
       </div>
       <div style={headingBlockStyle}>
         <span data-testid="run-header-kicker" style={kickerStyle}>
-          {kicker}
+          {resolvedKicker}
         </span>
         <div style={goalRowStyle}>
           <h2 data-testid="run-header-goal" style={goalStyle}>

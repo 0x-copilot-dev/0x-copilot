@@ -1092,7 +1092,7 @@ export {
 // === Phase 3 (PR-3.5) run cockpit shell ===
 // The Run destination composition: `RunDestination` wires `useRunSession` +
 // `useRunMode` + `ThreadCanvas` into the DESIGN-SPEC §2 cockpit, and `RunHeader`
-// renders the "ACTIVE RUN" kicker + goal + the Studio/Focus segmented control.
+// renders a state-aware kicker ("ACTIVE RUN" / "STANDBY") + goal + the Studio/Focus segmented control.
 // `apps/desktop` mounts `RunDestination` on the `run` slug (via its
 // DestinationOutlet); PR-3.6…3.11 fill the rail / timeline scrub / subagents /
 // streaming / approvals / empty+multi-run seams left in the shell.

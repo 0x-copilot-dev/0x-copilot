@@ -1,0 +1,116 @@
+/* Workspace-rail stylesheet for @0x-copilot/chat-surface.
+ *
+ * The Run cockpit's right rail emits `atlas-workspace-tabs*` (the
+ * [Chat · Sources · Agents · Approvals] strip) and the composer's connectors
+ * trigger emits `atlas-composer-connectors*`. Like the composer families
+ * before them (see composer/composer.css), these rules were stranded in
+ * apps/frontend/src/styles.css — the web app's private stylesheet — so on any
+ * other host the tab strip rendered as native Chromium buttons (uniform gray,
+ * no active state) and the connectors trigger fell back to the 36px
+ * icon-button tier instead of its 28px pill-tier size.
+ *
+ * Ported byte-faithfully from apps/frontend/src/styles.css (tabs: 5574-5633,
+ * connectors trigger: 6786-6828 at the time of the port). Tokens come from
+ * @0x-copilot/design-system. Web keeps its own copy — de-duplicating both
+ * hosts onto this file is the standing follow-up. */
+
+.atlas-workspace-tabs {
+  align-items: center;
+  display: flex;
+  flex: 1 1 auto;
+  gap: 2px;
+  min-width: 0;
+  overflow-x: auto;
+}
+
+.atlas-workspace-tabs__tab {
+  align-items: center;
+  background: transparent;
+  border: 0;
+  border-radius: var(--radius-md);
+  color: var(--color-text-muted);
+  cursor: pointer;
+  display: inline-flex;
+  font: 500 0.75rem/1.2 var(--font-sans);
+  gap: 4px;
+  min-height: 1.75rem;
+  padding: 0 0.5rem;
+  white-space: nowrap;
+}
+
+.atlas-workspace-tabs__tab:hover:not(:disabled) {
+  background: var(--color-surface);
+  color: var(--color-text);
+}
+
+.atlas-workspace-tabs__tab--active {
+  background: var(--color-surface);
+  color: var(--color-text);
+  box-shadow: inset 0 -2px 0 0 var(--color-accent-strong);
+}
+
+.atlas-workspace-tabs__tab:focus-visible {
+  outline: 2px solid var(--color-accent-strong);
+  outline-offset: -2px;
+}
+
+.atlas-workspace-tabs__tab:disabled {
+  cursor: not-allowed;
+  opacity: 0.5;
+}
+
+.atlas-workspace-tabs__badge {
+  background: var(--color-surface-muted);
+  border-radius: 999px;
+  color: var(--color-text-muted);
+  font-size: var(--font-size-2xs);
+  font-weight: var(--font-weight-semibold);
+  line-height: 1;
+  padding: 2px 6px;
+}
+
+.atlas-workspace-tabs__tab--active .atlas-workspace-tabs__badge {
+  background: var(--color-bg);
+  color: var(--color-text);
+}
+
+/* Composer connectors trigger — 28px pill tier (NOT the 36px icon-button
+ * fallback), count badge tucked inside the 28x28 hit area. */
+.atlas-composer-connectors {
+  position: relative;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  height: 28px;
+  width: 28px;
+  min-height: 28px;
+  min-width: 28px;
+  padding: 0;
+  color: var(--color-text-muted);
+}
+
+.atlas-composer-connectors:hover:not([disabled]) {
+  color: var(--color-text);
+}
+
+.atlas-composer-connectors__icon {
+  display: block;
+  width: 16px;
+  height: 16px;
+}
+
+.atlas-composer-connectors__count {
+  position: absolute;
+  top: 1px;
+  right: 1px;
+  min-width: 11px;
+  height: 11px;
+  padding: 0 3px;
+  border-radius: 999px;
+  background: var(--color-accent);
+  color: var(--color-bg);
+  font-size: 9px;
+  font-weight: var(--font-weight-bold);
+  line-height: 11px;
+  text-align: center;
+}
