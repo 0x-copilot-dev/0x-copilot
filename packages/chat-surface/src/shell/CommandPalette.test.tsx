@@ -15,6 +15,7 @@ import {
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import type { PaletteSearchPort } from "../ports/PaletteSearchPort";
+import { DeploymentProfileProvider } from "../providers/DeploymentProfileProvider";
 import { RouterProvider } from "../providers/RouterProvider";
 import {
   __resetItemRefRegistryForTests,
@@ -479,5 +480,53 @@ describe("<CommandPalette>", () => {
     ) as HTMLInputElement;
     const firstRow = screen.getAllByTestId("palette-hit-row")[0];
     expect(input.getAttribute("aria-activedescendant")).toBe(firstRow.id);
+  });
+});
+
+describe("<CommandPalette> placeholder is profile-aware", () => {
+  function placeholderFor(
+    profile: "single_user_desktop" | "team" | null,
+  ): string {
+    const { router } = makeRouter();
+    const { port } = makePort([]);
+    const palette = (
+      <RouterProvider router={router}>
+        <CommandPalette
+          open
+          onRequestClose={() => undefined}
+          searchPort={port}
+          starterActions={STARTER_ACTIONS}
+        />
+      </RouterProvider>
+    );
+    render(
+      profile === null ? (
+        palette
+      ) : (
+        <DeploymentProfileProvider profile={profile}>
+          {palette}
+        </DeploymentProfileProvider>
+      ),
+    );
+    return (
+      screen.getByTestId("command-palette-input").getAttribute("placeholder") ??
+      ""
+    );
+  }
+
+  it("drops 'the team' on single_user_desktop", () => {
+    expect(placeholderFor("single_user_desktop")).toBe(
+      "Search your work, or run a command…",
+    );
+  });
+
+  it("drops 'the team' when no provider is present (solo default)", () => {
+    expect(placeholderFor(null)).toBe("Search your work, or run a command…");
+  });
+
+  it("keeps 'the team' on a team deployment", () => {
+    expect(placeholderFor("team")).toBe(
+      "Search the team, your work, or run a command…",
+    );
   });
 });
