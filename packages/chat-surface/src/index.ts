@@ -1241,6 +1241,7 @@ export {
   NotificationCenterProvider,
   useNotify,
   useNotificationCenter,
+  messageFromError,
   type NotifyInput,
   type NotifyTone,
   type NotifyAction,

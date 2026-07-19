@@ -137,3 +137,38 @@ export function useNotificationCenter(): NotificationCenter {
 export function useNotify(): (input: NotifyInput) => string {
   return useContext(NotificationCenterContext).notify;
 }
+
+/**
+ * Best-effort human message from a rejected mutation, for a toast body. The
+ * facade returns `{ detail: { safe_message, code, … } }` (or `{ detail: "…" }`),
+ * and transport/IPC often wraps it as `"…: Error: {json}"` — dig out the
+ * `safe_message` so the user sees the actionable line, not the raw envelope.
+ */
+export function messageFromError(err: unknown): string | undefined {
+  const raw =
+    err instanceof Error
+      ? err.message
+      : typeof err === "string"
+        ? err
+        : undefined;
+  if (raw === undefined || raw === "") return raw;
+  const start = raw.indexOf("{");
+  const end = raw.lastIndexOf("}");
+  if (start >= 0 && end > start) {
+    try {
+      const parsed: unknown = JSON.parse(raw.slice(start, end + 1));
+      const detail =
+        parsed !== null && typeof parsed === "object" && "detail" in parsed
+          ? (parsed as { detail: unknown }).detail
+          : parsed;
+      if (typeof detail === "string" && detail !== "") return detail;
+      if (detail !== null && typeof detail === "object") {
+        const safe = (detail as { safe_message?: unknown }).safe_message;
+        if (typeof safe === "string" && safe !== "") return safe;
+      }
+    } catch {
+      /* not JSON — fall through to the raw message */
+    }
+  }
+  return raw;
+}

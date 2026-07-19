@@ -3,10 +3,30 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import type { ReactNode } from "react";
 
 import {
+  messageFromError,
   NotificationCenterProvider,
   useNotificationCenter,
   useNotify,
 } from "./NotificationCenterProvider";
+
+describe("messageFromError", () => {
+  it("extracts safe_message from a wrapped facade error envelope", () => {
+    const err = new Error(
+      `Error invoking remote method 'transport.request': Error: {"detail":{"code":"configuration_error","safe_message":"Missing API key for model provider 'openai'. Add one in Settings -> Provider keys.","retryable":false}}`,
+    );
+    expect(messageFromError(err)).toBe(
+      "Missing API key for model provider 'openai'. Add one in Settings -> Provider keys.",
+    );
+  });
+
+  it("extracts a string detail", () => {
+    expect(messageFromError(new Error('{"detail":"nope"}'))).toBe("nope");
+  });
+
+  it("falls back to the raw message when not JSON", () => {
+    expect(messageFromError(new Error("plain failure"))).toBe("plain failure");
+  });
+});
 
 function wrapper({ children }: { children: ReactNode }): ReactNode {
   return <NotificationCenterProvider>{children}</NotificationCenterProvider>;

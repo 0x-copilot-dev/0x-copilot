@@ -26,6 +26,7 @@ import {
   ProjectsDestination,
   RunDestination,
   SkillsDestination,
+  messageFromError,
   useNotify,
   useTransport,
   type ConnectorsFilterSlug,
@@ -439,7 +440,7 @@ export function ConnectorsBinder({
           const raw = error instanceof Error ? error.message : String(error);
           const body = raw.includes("connector_oauth_setup_required")
             ? "This connector isn’t set up for sign-in yet."
-            : raw;
+            : messageFromError(error);
           notify({ tone: "error", title: `Couldn’t connect ${slug}`, body });
         });
     },

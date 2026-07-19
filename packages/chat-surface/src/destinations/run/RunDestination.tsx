@@ -57,7 +57,10 @@ import {
 
 import type { ConversationId, RunId } from "@0x-copilot/api-types";
 
-import { useNotify } from "../../providers/NotificationCenterProvider";
+import {
+  messageFromError,
+  useNotify,
+} from "../../providers/NotificationCenterProvider";
 import { useTransport } from "../../providers/TransportProvider";
 // PR-3.8: pure selector projecting parallel-subagent + fleet state off the
 // single canonical event stream (no second subscription / projector).
@@ -287,7 +290,7 @@ export function RunDestination(props: RunDestinationProps): ReactElement {
           notify({
             tone: "error",
             title: "Couldn’t start the run",
-            body: err instanceof Error ? err.message : undefined,
+            body: messageFromError(err),
             action: {
               label: "Retry",
               onClick: () => startGoalRef.current(trimmed),
