@@ -304,6 +304,11 @@ export class AuthService {
     }
   }
 
+  // The audit-free sign-out mechanism: drop the cached bearer and delete the
+  // persisted session. getSession() reuses this to silently evict a stale or
+  // facade-rejected session, so it must NOT emit a 'sign-out' audit row — that
+  // would conflate an automatic eviction with a real user sign-out. A
+  // user-initiated sign-out goes through signOutUserInitiated() below.
   async signOut(workspaceId: string): Promise<void> {
     this.#cache.delete(workspaceId);
     if (this.#storage.getActiveWorkspace() === workspaceId) {
@@ -312,6 +317,16 @@ export class AuthService {
     } else {
       await this.#storage.deleteWorkspaceSecrets(workspaceId);
     }
+  }
+
+  // User-initiated sign-out — the renderer/IPC entry point (wired in
+  // main/index.ts). Same teardown as signOut() plus a best-effort 'sign-out'
+  // audit row. Deliberately distinct from signOut() so the getSession()
+  // eviction paths, which call signOut() directly, never emit a user
+  // sign-out event.
+  async signOutUserInitiated(workspaceId: string): Promise<void> {
+    await this.signOut(workspaceId);
+    await this.#appendAudit({ kind: "sign-out", workspaceId });
   }
 
   // Boot-time session lookup. Fails CLOSED: a persisted session is returned

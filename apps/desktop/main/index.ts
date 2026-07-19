@@ -458,7 +458,12 @@ interface ActiveAuthService {
   signInWithWallet(
     workspaceId: string,
   ): ReturnType<AuthService["signInWithWallet"]>;
-  signOut(workspaceId: string): ReturnType<AuthService["signOut"]>;
+  /**
+   * User-initiated sign-out (renderer → IPC). Routes to the audited
+   * signOutUserInitiated so a real sign-out is recorded; getSession eviction
+   * uses the raw AuthService.signOut, which stays audit-free.
+   */
+  signOut(workspaceId: string): ReturnType<AuthService["signOutUserInitiated"]>;
   getSession(workspaceId: string): ReturnType<AuthService["getSession"]>;
   refresh(workspaceId: string): ReturnType<AuthService["refresh"]>;
   getBearer(workspaceId: string): Promise<string | null>;
@@ -541,7 +546,10 @@ function buildAuthService(
         : service.signIn(workspaceId),
     signInWithGoogle: (workspaceId) => service.signInWithGoogle(workspaceId),
     signInWithWallet: (workspaceId) => service.signInWithWallet(workspaceId),
-    signOut: (workspaceId) => service.signOut(workspaceId),
+    // User-initiated sign-out: route to the audited variant so a real sign-out
+    // emits a 'sign-out' audit row. The raw service.signOut used by getSession
+    // eviction stays audit-free (no user-sign-out event on a silent eviction).
+    signOut: (workspaceId) => service.signOutUserInitiated(workspaceId),
     getSession: (workspaceId) => service.getSession(workspaceId),
     refresh: (workspaceId) => service.refresh(workspaceId),
     getBearer: (workspaceId) => service.getBearer(workspaceId),
