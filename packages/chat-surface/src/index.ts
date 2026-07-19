@@ -1263,6 +1263,7 @@ export { ToastStack } from "./shell/ToastStack";
 // delegates to it.
 export {
   parseTransportError,
+  humanTransportMessage,
   type ParsedTransportError,
 } from "./errors/transportError";
 // === end Transport error parsing ===

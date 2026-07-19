@@ -92,3 +92,26 @@ export function parseTransportError(err: unknown): ParsedTransportError {
 
   return { safeMessage, code, correlationId, raw };
 }
+
+/**
+ * A user-facing one-liner for a transport/IPC failure that has NO structured
+ * envelope (e.g. a dropped SSE stream, a network error). Prefers the server
+ * `safeMessage` when present; otherwise strips the desktop Electron wrapper
+ * (`Error invoking remote method 'transport.request': Error: …`) and any bare
+ * `Error:` prefix, and falls back to a generic line if what remains still names
+ * an internal method — so a remote-method identifier is NEVER surfaced (NFR-2.1).
+ */
+export function humanTransportMessage(err: unknown): string {
+  const parsed = parseTransportError(err);
+  if (parsed.safeMessage !== undefined) {
+    return parsed.safeMessage;
+  }
+  const stripped = parsed.raw
+    .replace(/Error invoking remote method '[^']*':\s*/gi, "")
+    .replace(/^Error:\s*/i, "")
+    .trim();
+  if (stripped === "" || /remote method|transport\.request/i.test(stripped)) {
+    return "The connection was interrupted.";
+  }
+  return stripped;
+}

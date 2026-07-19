@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 
-import { parseTransportError } from "./transportError";
+import { humanTransportMessage, parseTransportError } from "./transportError";
 
 // The real missing-provider-key body the facade returns (HTTP 400): the
 // ai-backend emits a FLAT { code, safe_message, ... } and the facade re-wraps it
@@ -73,5 +73,36 @@ describe("parseTransportError", () => {
     expect(parseTransportError(undefined).raw).toBe("");
     expect(parseTransportError(null).raw).toBe("");
     expect(parseTransportError("boom").raw).toBe("boom");
+  });
+});
+
+describe("humanTransportMessage", () => {
+  it("prefers the envelope safe_message", () => {
+    expect(humanTransportMessage(new Error(FACADE_ENVELOPE))).toContain(
+      "Missing API key for model provider",
+    );
+  });
+
+  it("never surfaces the desktop remote-method name on a no-envelope IPC failure", () => {
+    // A dropped stream with no JSON envelope, Electron-wrapped.
+    const err = new Error(
+      "Error invoking remote method 'transport.request': Error: ECONNREFUSED",
+    );
+    const msg = humanTransportMessage(err);
+    expect(msg).not.toMatch(/remote method/i);
+    expect(msg).not.toMatch(/transport\.request/i);
+    // The useful tail survives.
+    expect(msg).toBe("ECONNREFUSED");
+  });
+
+  it("falls back to a generic line when only an internal identifier remains", () => {
+    const err = new Error("Error invoking remote method 'transport.request'");
+    expect(humanTransportMessage(err)).toBe("The connection was interrupted.");
+  });
+
+  it("passes a plain human message through unchanged", () => {
+    expect(humanTransportMessage(new Error("stream dropped"))).toBe(
+      "stream dropped",
+    );
   });
 });
