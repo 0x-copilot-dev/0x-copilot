@@ -5,6 +5,7 @@ import Nav from "../components/Nav.astro";
 const REPO = "https://github.com/0x-copilot-dev/0x-copilot";
 const DISCORD = "https://discord.com/invite/NhCv7zDkmX";
 const X = "https://x.com/Copilot0x";
+const VIRTUALS = "https://app.virtuals.io/virtuals/113720";
 ---
 
 <Base
@@ -49,7 +50,7 @@ const X = "https://x.com/Copilot0x";
       <p class="note">
         <b>No "unidentified developer" or SmartScreen warning.</b> The runtime
         is fetched by your package manager, not a browser — so macOS Gatekeeper
-        and Windows SmartScreen never flag it, the same reason Homebrew and
+        and Windows SmartScreen never flag it, the same reason Homebrew and{" "}
         <code>uv</code> install cleanly.
       </p>
     </div>
@@ -100,6 +101,7 @@ const X = "https://x.com/Copilot0x";
         <div class="flinks">
           <a href="./">Home</a>
           <a href="./token.html">Token</a>
+          <a href={VIRTUALS} rel="noopener">Buy $CPILOT ↗</a>
           <a href={REPO} rel="noopener">GitHub ↗</a>
           <a href={DISCORD} rel="noopener">Discord ↗</a>
           <a href={X} rel="noopener">@Copilot0x ↗</a>

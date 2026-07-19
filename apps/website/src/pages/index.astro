@@ -1,32 +1,27 @@
 ---
 import Base from "../layouts/Base.astro";
 import Nav from "../components/Nav.astro";
-import TimeMachine from "../components/TimeMachine.astro";
 
 const REPO = "https://github.com/0x-copilot-dev/0x-copilot";
 const DISCORD = "https://discord.com/invite/NhCv7zDkmX";
 const X = "https://x.com/Copilot0x";
+const VIRTUALS = "https://app.virtuals.io/virtuals/113720";
 
-// The twelve real destinations, read off the running app's rail.
+// The six real destinations on the single-user desktop rail, in order.
+// Descriptions mirror the app's own destination copy.
 const SURFACES = [
-  ["home", "Your day: triage + live activity"],
-  ["chats", "Conversations and streamed runs"],
-  ["inbox", "Approvals and anything waiting on you"],
-  ["todos", "Tasks, recurring series, bulk actions"],
-  ["projects", "Scoped work, members, templates"],
-  ["library", "Files and datasets, indexed"],
-  ["agents", "Install and run subagents"],
-  ["tools", "What it can call — and every call it made"],
-  ["connectors", "MCP servers, OAuth, per-chat scope"],
-  ["team", "Shared work across your org"],
-  ["memory", "What it learned, and what it keeps"],
-  ["routines", "Work that runs on a schedule"],
+  ["Run", "Give it a goal — it plans, works, and pauses for approval"],
+  ["Chats", "Conversations and streamed runs"],
+  ["Projects", "Group related work under one shared context"],
+  ["Activity", "Run history, grouped so you see everything it did"],
+  ["Tools", "The apps the agent can read from and act in"],
+  ["Skills", "Saved multi-step workflows you can rerun"],
 ];
 ---
 
 <Base
-  title="0xCopilot — the agent that does the work, and shows it"
-  description="Agentic AI got built for engineers. 0xCopilot brings it to everyone else — an agent that does multi-step work across your apps and shows every step. Local, BYOK, open source."
+  title="0xCopilot — put your day on autopilot"
+  description="Copilot lives on your machine, moves through your files and tools, and quietly takes care of the work — check in, change direction, or leave it running. Local, BYOK, open source. Desktop app for macOS & Windows; $CPILOT live on Virtuals."
 >
   <Nav />
 
@@ -35,33 +30,43 @@ const SURFACES = [
     <div class="hero-bg"></div>
     <div class="hero-grid"></div>
     <div class="wrap">
-      <span class="pill"><span class="dot pulse"></span> Pre-launch · building in the open</span>
-      <h1>The agent that does the work <em>— and shows it.</em></h1>
+      <span class="pill"><span class="dot pulse"></span> Now live · desktop app + $CPILOT on Virtuals</span>
+      <h1>Put your day <em>on autopilot.</em></h1>
       <p class="sub">
-        Cursor, Codex and Claude Code built real agents — for people who write
-        code. <b>0xCopilot brings that to everyone else.</b> It takes on
-        multi-step work across your files and the apps you already use, and
-        streams every step as it happens. <b>Rewind any run. Stop it before it
-        lands.</b> Your machine, your key, your model.
+        <b>Copilot lives on your machine</b>, moves through your files and
+        tools, and quietly takes care of the work. You can check in, change
+        direction, or leave it running while you focus on what matters.{" "}
+        <b>Consider your day handled.</b>
       </p>
       <div class="cta-row">
-        <a class="btn pri" href="#work">See how it runs</a>
-        <a class="btn ghost" href={REPO} rel="noopener">Read the source ↗</a>
-        <a class="btn ghost" href={DISCORD} rel="noopener">Join the Discord ↗</a>
+        <a class="btn pri" href="./docs.html">Get the desktop app</a>
+        <a class="btn ghost" href={VIRTUALS} rel="noopener">Buy $CPILOT ↗</a>
+        <a class="btn ghost" href="#work">See how it runs</a>
       </div>
       <div class="trust">
         <b>OpenAI · Anthropic · Google — your key</b>
         <span class="s"></span>
         <b>Open source</b>
         <span class="s"></span>
-        <span>Launching via Virtuals on Robinhood Chain</span>
+        <span>$CPILOT live on Virtuals · Robinhood Chain</span>
       </div>
     </div>
   </header>
 
-  <!-- ============================ DEMO ============================ -->
-  <section class="band">
-    <div class="wrap"><TimeMachine /></div>
+  <!-- ============================ THE APP ============================ -->
+  <section class="band" id="app">
+    <div class="wrap">
+      <div class="shot" style="height:auto">
+        <img
+          src="./media/app-run.png"
+          alt="The 0xCopilot desktop app — the Run cockpit with a goal composer and the six-surface rail: Run, Chats, Projects, Activity, Tools, Skills."
+          style="position:static;height:auto"
+          width="1600"
+          height="1066"
+        />
+      </div>
+      <p class="cap"><b>The real app, today — not a mockup. Give it a goal; it plans, works across your files and the apps you connect, and pauses for your approval. Local, on your machine.</b></p>
+    </div>
   </section>
 
   <!-- ============================ THE GAP ============================ -->
@@ -74,8 +79,8 @@ const SURFACES = [
         every one is pointed at a repo. The people who run <b>treasury,
         community, governance and growth</b> got a chat box and a copy button.
         0xCopilot is the agent for that work: it opens your sheets, your
-        multisig, your threads and your Discord, and does the multi-step thing
-        end to end — where you can watch it, rewind it, and stop it.
+        multisig, your threads and your Discord, and does the whole multi-step
+        job end to end.
       </p>
       <div class="compare">
         <div class="cc">
@@ -109,14 +114,11 @@ const SURFACES = [
   <section class="sec" id="work">
     <div class="wrap">
       <p class="kick">The wedge</p>
-      <h2 class="head-wide">
-        An agent that does the work is the easy part. One whose work you can
-        check is the point.
-      </h2>
+      <h2 class="head-wide">Handled doesn't mean hidden.</h2>
       <p class="lede">
         0xCopilot makes every run a <b>durable, ordered log of typed events</b> —
-        not a black box that emits a summary. That's the whole demo above: you
-        don't get a spinner, you watch the work happen and scrub back through it.
+        not a black box that emits a summary. Watch it happen live, rewind to any
+        point, and step in the moment it matters.
       </p>
       <div class="cards">
         <div class="card">
@@ -158,11 +160,11 @@ const SURFACES = [
   <section class="sec">
     <div class="wrap">
       <p class="kick">Not a chatbot</p>
-      <h2 class="head-wide">Twelve surfaces, not one text box.</h2>
+      <h2 class="head-wide">Six surfaces, not one text box.</h2>
       <p class="lede">
-        Chat is the right rail, not the whole product. The work lands on real
-        surfaces you can open, filter and act on — and the agent works the same
-        surfaces you do.
+        Chat is one surface, not the whole product. The work lands on real places
+        you can open, filter and act on — and the agent works the same surfaces
+        you do. It's a workspace, not a prompt box.
       </p>
       <div class="surf">
         {
@@ -174,10 +176,6 @@ const SURFACES = [
           ))
         }
       </div>
-      <div class="shot" style="height:auto;margin-top:44px">
-        <img src="./media/welcome.png" alt="The real 0xCopilot app — a new chat offering to draft a launch announcement, summarize Slack, find brand guidelines, or compare a competitor." style="position:static;height:auto" />
-      </div>
-      <p class="cap"><b>The real app, today — not a mockup. The demo up top is the same product, dressed for a launch-week scenario.</b></p>
     </div>
   </section>
 
@@ -219,31 +217,29 @@ const SURFACES = [
     </div>
   </section>
 
-  <!-- ============================ RUN IT ============================ -->
+  <!-- ============================ GET IT ============================ -->
   <section class="sec">
     <div class="wrap">
-      <p class="kick">Run it</p>
-      <h2>One command, on your hardware.</h2>
+      <p class="kick">Get it</p>
+      <h2>One command, and it's yours.</h2>
       <p class="lede">
-        Today 0xCopilot runs as a local stack you bring up with Docker and open
-        in your browser at <b>127.0.0.1:8080</b>. The runtime, the stores and the
-        event log all stay on your machine.
+        0xCopilot ships as a desktop app for <b>macOS and Windows</b>. Install
+        the <b>copilot</b> CLI with npm or Bun; the first run stages a
+        self-contained local runtime and opens the app. The runtime, the stores
+        and the event log all stay on your machine.
       </p>
       <div class="codewrap">
         <div class="codebar"><span class="tl-dot r"></span><span class="tl-dot y"></span><span class="tl-dot g"></span><span class="fn">~/0xcopilot</span></div>
-        <pre><code><span class="c"># bring up the local stack</span>
-<span class="p">$</span> OPENAI_API_KEY=$OPENAI_API_KEY make docker-dev
+        <pre><code><span class="c"># Node 20+ or Bun</span>
+<span class="p">$</span> npm install -g @0x-copilot/cli
 
-<span class="c"># open it</span>
-<span class="p">$</span> open http://127.0.0.1:8080
-
-<span class="c"># stop it — nothing left running, nothing left behind</span>
-<span class="p">$</span> make docker-dev-down</code></pre>
+<span class="c"># …then launch the app</span>
+<span class="p">$</span> copilot</code></pre>
       </div>
       <p class="note">
-        <b>Native macOS and Windows apps are in design and not shipped yet.</b>
-        Until they land, the local stack is the product — and it's the same code
-        you'll read on GitHub.
+        Full install notes — first-run staging, commands, platforms — are on the{" "}
+        <a href="./docs.html">Install page</a>. Prefer to self-host the web stack
+        instead? It still runs anywhere Docker does — <a href={REPO} rel="noopener">read the source</a>.
       </p>
     </div>
   </section>
@@ -254,32 +250,37 @@ const SURFACES = [
       <p class="kick">The token</p>
       <h2>The app is the product.</h2>
       <p class="lede">
-        0xCopilot is launching a token via Virtuals Protocol on Robinhood Chain.
-        Half the supply goes to the market on a fair launch, a quarter to the
-        people who build it, and a quarter to protocol-run capital formation —
-        released only as the market verifies progress.
+        0xCopilot has launched <b>$CPILOT</b> on Virtuals Protocol, on Robinhood
+        Chain. Nearly half the fixed supply seeded the liquidity pool at launch,
+        just under a third funds the team and contributors, and a quarter is
+        protocol-run capital formation — released only as the market verifies
+        progress.
       </p>
-      <div class="bar">
-        <div class="seg mkt">50%&nbsp; Fair launch</div>
-        <div class="seg bld">25%&nbsp; ESOP</div>
+      <div class="bar" role="img" aria-label="45.56% liquidity pool, 29.19% team and contributors, 25% automated capital formation, 0.25% veVIRTUAL airdrop">
+        <div class="seg mkt">45.56%&nbsp; Liquidity</div>
+        <div class="seg bld">29.19%&nbsp; Team</div>
         <div class="seg pro">25%&nbsp; ACF</div>
       </div>
+      <p class="cap" style="text-align:left;margin-top:14px">
+        + 0.25% veVIRTUAL airdrop · fixed 1,000,000,000 $CPILOT supply
+      </p>
       <div class="tlegend">
         <div class="tl-item">
-          <div class="lt"><span class="sw mkt"></span>Market — fair launch</div>
-          <p>Half the supply, tradable from the first block. No lock, no pre-buy.</p>
+          <div class="lt"><span class="sw mkt"></span>Liquidity pool</div>
+          <p>45.56% of a fixed 1B supply, in the pool at launch — the tradable float everyone buys from.</p>
         </div>
         <div class="tl-item">
-          <div class="lt"><span class="sw bld"></span>Builders — ESOP</div>
-          <p>Reserved for the people who ship the product, on a protocol lock + grant vesting.</p>
+          <div class="lt"><span class="sw bld"></span>Team &amp; contributors</div>
+          <p>29.19% for the people who ship it — mostly locked and vesting, including a disclosed 2% launch buy.</p>
         </div>
         <div class="tl-item">
           <div class="lt"><span class="sw pro"></span>Capital formation</div>
-          <p>Protocol-run, tied to valuation. No discretionary insider selling.</p>
+          <p>25%, protocol-run and tied to valuation. No discretionary insider selling.</p>
         </div>
       </div>
       <div class="cta-row">
         <a class="btn pri" href="./token.html">See the full tokenomics</a>
+        <a class="btn ghost" href={VIRTUALS} rel="noopener">Buy $CPILOT ↗</a>
       </div>
     </div>
   </section>
@@ -304,8 +305,36 @@ const SURFACES = [
         </div>
         <div class="qa">
           <div class="q">What actually works today?</div>
-          <div class="a">The runtime, streaming with replay and resume, approvals, MCP connectors with OAuth, skills, memory, the library index, and the twelve surfaces above. <b>Not shipped: the native desktop apps.</b> We'd rather say that here than let you find out after a download.</div>
+          <div class="a">The desktop app for macOS and Windows, installed with one command — and under it the local runtime, streaming with replay and resume, approvals, MCP connectors with OAuth, skills, memory, the library index, and the surfaces above. <b>Native Linux packaging is the one piece still in progress</b> — build from source in the meantime.</div>
         </div>
+      </div>
+    </div>
+  </section>
+
+  <!-- ============================ CONTACT ============================ -->
+  <section class="sec" id="contact">
+    <div class="wrap">
+      <p class="kick">Contact</p>
+      <h2>Come say hi.</h2>
+      <p class="lede">
+        Questions, ideas, or want to follow along? Find us here.
+      </p>
+      <div class="contact">
+        <a class="contact-card" href={DISCORD} rel="noopener">
+          <span class="cc-go" aria-hidden="true">↗</span>
+          <div class="cc-name">Discord</div>
+          <div class="cc-sub">Join the community</div>
+        </a>
+        <a class="contact-card" href={X} rel="noopener">
+          <span class="cc-go" aria-hidden="true">↗</span>
+          <div class="cc-name">X · @Copilot0x</div>
+          <div class="cc-sub">Follow for updates</div>
+        </a>
+        <a class="contact-card" href={VIRTUALS} rel="noopener">
+          <span class="cc-go" aria-hidden="true">↗</span>
+          <div class="cc-name">$CPILOT on Virtuals</div>
+          <div class="cc-sub">Trade the token</div>
+        </a>
       </div>
     </div>
   </section>
@@ -317,6 +346,7 @@ const SURFACES = [
         <span class="wm" style="font-size:22px">0x<b>Copilot</b></span>
         <div class="flinks">
           <a href="./token.html">Tokenomics</a>
+          <a href={VIRTUALS} rel="noopener">Buy $CPILOT ↗</a>
           <a href={REPO} rel="noopener">GitHub ↗</a>
           <a href={DISCORD} rel="noopener">Discord ↗</a>
           <a href={X} rel="noopener">@Copilot0x ↗</a>

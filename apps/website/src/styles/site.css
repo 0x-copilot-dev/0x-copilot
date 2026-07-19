@@ -1343,11 +1343,11 @@ pre .p {
   color: #08131d;
 }
 .seg.mkt {
-  flex: 50;
+  flex: 45.56;
   background: linear-gradient(180deg, var(--sky-hi), var(--sky-lo));
 }
 .seg.bld {
-  flex: 25;
+  flex: 29.19;
   background: linear-gradient(180deg, #8ce8b4, #3da56c);
 }
 .seg.pro {
@@ -1411,6 +1411,50 @@ pre .p {
   color: #dde0e6;
 }
 
+/* contact */
+.contact {
+  display: grid;
+  grid-template-columns: repeat(3, 1fr);
+  gap: 16px;
+  margin-top: 44px;
+}
+.contact-card {
+  position: relative;
+  display: block;
+  border: 1px solid var(--line2);
+  border-radius: 14px;
+  padding: 22px 24px;
+  background: linear-gradient(180deg, rgba(255, 255, 255, 0.02), transparent);
+  color: var(--tx);
+  transition:
+    border-color 0.15s,
+    transform 0.15s;
+}
+.contact-card:hover {
+  border-color: var(--sky);
+  transform: translateY(-2px);
+  color: var(--tx);
+}
+.contact-card .cc-name {
+  font-family: var(--disp);
+  font-weight: 600;
+  font-size: 18px;
+  color: #fff;
+}
+.contact-card .cc-sub {
+  color: var(--mut);
+  font-size: 14.5px;
+  margin-top: 6px;
+}
+.contact-card .cc-go {
+  position: absolute;
+  top: 18px;
+  right: 20px;
+  color: var(--sky);
+  font-family: var(--mono);
+  font-size: 15px;
+}
+
 /* footer */
 footer {
   border-top: 1px solid var(--line);
@@ -1458,7 +1502,7 @@ footer {
   border-top: 1px solid var(--line);
   padding: 44px 0;
   display: grid;
-  grid-template-columns: 150px 1fr;
+  grid-template-columns: 168px 1fr;
   gap: 44px;
 }
 .tk-bucket:first-of-type {
@@ -1467,7 +1511,7 @@ footer {
 .tk-pct {
   font-family: var(--disp);
   font-weight: 600;
-  font-size: 52px;
+  font-size: 44px;
   line-height: 1;
   color: var(--tx);
 }
@@ -1569,7 +1613,8 @@ footer {
   .surf,
   .two,
   .tlegend,
-  .faq {
+  .faq,
+  .contact {
     grid-template-columns: 1fr;
   }
   .hero {

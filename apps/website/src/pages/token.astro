@@ -5,78 +5,96 @@ import Nav from "../components/Nav.astro";
 const REPO = "https://github.com/0x-copilot-dev/0x-copilot";
 const DISCORD = "https://discord.com/invite/NhCv7zDkmX";
 const X = "https://x.com/Copilot0x";
+const VIRTUALS = "https://app.virtuals.io/virtuals/113720";
 ---
 
 <Base
-  title="Tokenomics — 0xCopilot"
-  description="50% fair launch, 25% team & contributors, 25% automated capital formation. Every allocation has a job. No pre-buy, no hidden fourth bucket."
+  title="Tokenomics — $CPILOT · 0xCopilot"
+  description="$CPILOT is live on Virtuals (Robinhood Chain): 45.56% liquidity pool, 25% automated capital formation, 29.19% team & contributors, 0.25% veVIRTUAL airdrop. Fixed 1B supply, every allocation on-chain."
 >
   <Nav />
 
   <header class="hero">
     <div class="hero-bg"></div>
     <div class="wrap">
-      <span class="pill"><span class="dot"></span> Not launched · no contract address exists yet</span>
+      <span class="pill"><span class="dot pulse"></span> Live on Virtuals · Robinhood Chain · $CPILOT</span>
       <h1>Every allocation has <em>a job.</em></h1>
       <p class="sub">
-        0xCopilot launches on Virtuals Protocol. Three buckets, no hidden fourth.
-        Half the supply belongs to the market from the first block, a quarter is
-        reserved for the people who build the thing, and a quarter is a funding
-        engine the protocol runs — <b>not a wallet anyone can reach into.</b>
+        $CPILOT is live on Virtuals Protocol, on Robinhood Chain. Four
+        allocations, every one on-chain: the liquidity pool holds the largest
+        share, a quarter is protocol-run capital formation, just under a third
+        is team and contributors — <b>including a disclosed 2% launch buy</b> —
+        and a small veVIRTUAL airdrop rounds out a fixed 1B supply.
       </p>
-      <div class="bar" role="img" aria-label="50% fair launch, 25% ESOP, 25% automated capital formation">
-        <div class="seg mkt">50%&nbsp; Fair launch</div>
-        <div class="seg bld">25%&nbsp; ESOP</div>
+      <div class="bar" role="img" aria-label="45.56% liquidity pool, 29.19% team and contributors, 25% automated capital formation, 0.25% veVIRTUAL airdrop">
+        <div class="seg mkt">45.56%&nbsp; Liquidity</div>
+        <div class="seg bld">29.19%&nbsp; Team</div>
         <div class="seg pro">25%&nbsp; ACF</div>
       </div>
+      <p class="cap" style="text-align:left;margin-top:14px">
+        + 0.25% veVIRTUAL airdrop · fixed 1,000,000,000 $CPILOT supply
+      </p>
     </div>
   </header>
 
   <section class="sec" style="border-top:none;padding-top:8px">
     <div class="wrap">
-      <!-- 50% market -->
+      <!-- 45.56% liquidity pool -->
       <div class="tk-bucket">
-        <div class="tk-pct mkt">50%<span>The market</span></div>
+        <div class="tk-pct mkt">45.56%<span>Liquidity pool</span></div>
         <div class="tk-body">
-          <h3>Fair launch — tradable from the first block.</h3>
-          <p>Half the supply, in the pool, at launch. No lock, no vesting, no allowlist, no preferential price. Everyone holding this half bought it on the open curve at the same public price as everyone else.</p>
-          <p><b>There is no founder pre-buy.</b> No insider bucket sits in front of the market on the curve. The largest single allocation in this project belongs to the people who buy it.</p>
+          <h3>Liquidity pool — live and tradable at launch.</h3>
+          <p>The largest single allocation, seeded into the pool at launch on Robinhood Chain. No lock, no allowlist, no preferential price — the tradable float everyone buys from grows one purchase at a time on the open curve.</p>
+          <p>This is the market's share, and it's the biggest bucket in the project — larger than the team allocation, larger than capital formation.</p>
           <ul class="tk-facts">
-            <li><b>Lock</b><span>None — live at launch.</span></li>
+            <li><b>Lock</b><span>None — live from launch.</span></li>
             <li><b>Float</b><span>Grows one buy at a time. The pool is inventory, not a holder.</span></li>
-            <li><b>Supply</b><span><span class="tbd">FILL: fixed supply</span> — set at launch under the Virtuals framework and published here before the first block.</span></li>
+            <li><b>Supply</b><span>Fixed at 1,000,000,000 $CPILOT — no mint, no inflation.</span></li>
           </ul>
         </div>
       </div>
 
-      <!-- 25% people -->
+      <!-- 29.19% team & contributors -->
       <div class="tk-bucket">
-        <div class="tk-pct">25%<span>The people</span></div>
+        <div class="tk-pct">29.19%<span>Team &amp; contributors</span></div>
         <div class="tk-body">
-          <h3>Team &amp; contributors — the ESOP pool.</h3>
-          <p>Reserved for the people who ship the product. Not a founder allocation — a pool that pays out as grants to the engineers, designers and contributors who actually build 0xCopilot, each grant carrying its own vesting on top of the protocol lock.</p>
-          <p>Unallocated tokens sit still in a published wallet. A transfer out of this pool means a person joined — nothing else.</p>
+          <h3>Team &amp; contributors — mostly locked, disclosed in full.</h3>
+          <p>Reserved for the people who ship the product: default team vesting on the protocol schedule, plus a small launch buy and a sniper-tax buyback that funds the team. Every line is enforced on-chain by Virtuals.</p>
+          <p><b>The team did take a 2% launch buy</b> — bought on the same public curve, at the same price, as everyone else on day one. We'd rather state that plainly here than have you find it on-chain.</p>
           <ul class="tk-facts">
-            <li><b>Protocol lock</b><span><span class="tbd">FILL: lock period</span> from launch, enforced on-chain by Virtuals.</span></li>
-            <li><b>Protocol vest</b><span><span class="tbd">FILL: vest window + shape</span> into a pool wallet the company controls.</span></li>
-            <li><b>Grants</b><span>Made from the pool with their own multi-year schedule and cliff, sized by role. A grant re-locks; it does not unlock.</span></li>
-            <li><b>Early vest</b><span><span class="tbd">FILL: FDV early-vest trigger, if any</span> — Virtuals can start the vest early above a valuation threshold. If that applies here it gets stated on this line, not discovered later.</span></li>
+            <li><b>Team vesting</b><span>25.00% on Virtuals' default team-vesting schedule, enforced on-chain.</span></li>
+            <li><b>Team initial buy</b><span>2.00%, bought on the open launch curve at the same public price — disclosed, not hidden.</span></li>
+            <li><b>Sniper-tax buyback</b><span>2.19%, locked 3 months, then vesting linearly over 9 months.</span></li>
+            <li><b>Live schedule</b><span>The current unlock countdown is shown on the <a href={VIRTUALS} rel="noopener">Virtuals listing</a>.</span></li>
           </ul>
         </div>
       </div>
 
       <!-- 25% engine -->
       <div class="tk-bucket">
-        <div class="tk-pct">25%<span>The engine</span></div>
+        <div class="tk-pct">25%<span>Capital formation</span></div>
         <div class="tk-body">
           <h3>Automated Capital Formation — funding tied to proof.</h3>
-          <p>The funding engine, executed by the protocol rather than by anyone's judgment. As valuation rises, ACF converts tokens to USDC in small automated steps and routes the proceeds to the operating company — hiring, infrastructure, audits, the work.</p>
+          <p>The funding engine, executed by the protocol rather than by anyone's judgment. As valuation rises, ACF converts tokens in small automated steps and routes the proceeds to the operating company — hiring, infrastructure, audits, the work.</p>
           <p><b>No growth, no funding.</b> Capital only forms when the market has verified the work. There is no discretionary insider selling from this bucket, because no insider can execute it.</p>
           <ul class="tk-facts">
-            <li><b>Trigger</b><span><span class="tbd">FILL: starting FDV</span> — below that, ACF releases nothing.</span></li>
-            <li><b>Mechanism</b><span>Automated conversion at each additional <span class="tbd">FILL: FDV step</span>, continuing to <span class="tbd">FILL: FDV ceiling</span>.</span></li>
-            <li><b>Proceeds</b><span>USDC growth capital to the operating company.</span></li>
+            <li><b>Program</b><span>Follows the Virtuals Limit Order Program, executed on-chain.</span></li>
+            <li><b>Range</b><span>Releases across a 2,000,000 → 160,000,000 FDV band. Below the floor, ACF releases nothing.</span></li>
+            <li><b>Proceeds</b><span>Growth capital to the operating company.</span></li>
             <li><b>Execution</b><span>Protocol-run and on-chain. Not a wallet with a human signer.</span></li>
+          </ul>
+        </div>
+      </div>
+
+      <!-- 0.25% veVIRTUAL airdrop -->
+      <div class="tk-bucket">
+        <div class="tk-pct">0.25%<span>veVIRTUAL airdrop</span></div>
+        <div class="tk-body">
+          <h3>veVIRTUAL airdrop — to the Virtuals ecosystem.</h3>
+          <p>A fixed 0.25% of supply airdropped to veVIRTUAL holders under the Virtuals framework. It rounds the four allocations out to the whole supply — there is no fifth bucket.</p>
+          <ul class="tk-facts">
+            <li><b>Recipients</b><span>veVIRTUAL holders, per the Virtuals Protocol framework.</span></li>
+            <li><b>Supply</b><span>Fixed 0.25% — the remainder of the 100% on this page.</span></li>
           </ul>
         </div>
       </div>
@@ -86,14 +104,13 @@ const X = "https://x.com/Copilot0x";
   <section class="sec">
     <div class="wrap">
       <p class="kick">Day one</p>
-      <h2>Insider-linked supply that can move at launch: zero.</h2>
-      <p class="lede">Only fair-launch tokens can trade on day one. The ESOP is behind a protocol lock, ACF hasn't triggered, and there is no pre-buy to unlock. Every insider-linked token is locked, vested, or protocol-executed.</p>
+      <h2>What could move at launch — and what couldn't.</h2>
+      <p class="lede">The liquidity pool is live, and the team's disclosed 2% initial buy traded on the open curve like anyone else's. Everything else insider-linked is locked or protocol-executed: team vesting runs on the protocol schedule, the sniper-tax buyback is locked three months, ACF only fires as valuation rises, and the veVIRTUAL airdrop follows the framework.</p>
       <p class="note">
         <b>Where the operating money comes from.</b> Day-to-day costs are meant to
-        run on the protocol's trade-fee stream, not on selling supply — and scale
-        capital comes from ACF, which only fires when valuation rises.
-        <span class="tbd">FILL: fee split + operations share</span> once the launch
-        parameters are fixed, so this line matches what's actually on-chain.
+        run on the protocol's trade-fee stream rather than on selling supply — and
+        scale capital comes from ACF, which only fires when valuation rises. The
+        exact trade-fee split follows the Virtuals Protocol framework.
       </p>
     </div>
   </section>
@@ -103,15 +120,15 @@ const X = "https://x.com/Copilot0x";
       <p class="kick">Commitments</p>
       <h2>The rules we hold ourselves to.</h2>
       <div class="faq">
-        <div class="qa"><div class="q">Every wallet is published</div><div class="a">The ESOP pool and the company treasury are labeled and watchable on-chain from day one. There are no allocations other than the three on this page.</div></div>
-        <div class="qa"><div class="q">The ESOP moves only by grant</div><div class="a">Unallocated tokens sit visibly still. A transfer out means a person joined.</div></div>
-        <div class="qa"><div class="q">No founder pre-buy</div><div class="a">At launch or after, from any bucket on this page.</div></div>
+        <div class="qa"><div class="q">Every wallet is published</div><div class="a">The team, treasury and ACF wallets are labeled and watchable on-chain from day one. There are no allocations other than the four on this page.</div></div>
+        <div class="qa"><div class="q">The team buy is disclosed</div><div class="a">The team's 2% launch buy is stated here and visible on-chain — bought on the open curve, at the same public price, not ahead of the pool.</div></div>
+        <div class="qa"><div class="q">Team supply moves on schedule</div><div class="a">Beyond that disclosed buy, team tokens are locked and vest on the protocol schedule. Unallocated tokens sit visibly still.</div></div>
         <div class="qa"><div class="q">The protocol holds the keys</div><div class="a">Locks, vesting and ACF execution are enforced on-chain by Virtuals — the parts you'd otherwise have to trust are the parts we can't touch.</div></div>
       </div>
       <div class="legal">
-        <p>The 0xCopilot token is not equity, and carries no dividend, revenue entitlement, or claim on company assets. Nothing on this page is an offer of securities or investment advice.</p>
-        <p>Protocol mechanics — locks, vesting and ACF thresholds — follow the Virtuals Protocol framework and are enforced on-chain. The ESOP grant policy is a 0xCopilot commitment, published here and verifiable by watching the labeled wallets.</p>
-        <p><b style="color:var(--sky)">No contract address exists yet.</b> When one does it will be published here and on <a href={X} rel="noopener">@Copilot0x</a>. Any address you see anywhere else, before then, is not ours.</p>
+        <p>The $CPILOT token is not equity, and carries no dividend, revenue entitlement, or claim on company assets. Nothing on this page is an offer of securities or investment advice.</p>
+        <p>Protocol mechanics — locks, vesting and ACF thresholds — follow the Virtuals Protocol framework and are enforced on-chain. Allocation figures are the launch parameters as published on the Virtuals listing.</p>
+        <p><b style="color:var(--sky)">Verify the contract before you transact.</b> $CPILOT is live on Robinhood Chain; the canonical listing is the <a href={VIRTUALS} rel="noopener">official Virtuals page</a>, also announced on <a href={X} rel="noopener">@Copilot0x</a>. Confirm the token address there — any address you see anywhere else is not authoritative.</p>
       </div>
     </div>
   </section>
@@ -122,6 +139,7 @@ const X = "https://x.com/Copilot0x";
         <span class="wm" style="font-size:22px">0x<b>Copilot</b></span>
         <div class="flinks">
           <a href="./">Home</a>
+          <a href={VIRTUALS} rel="noopener">Buy $CPILOT ↗</a>
           <a href={REPO} rel="noopener">GitHub ↗</a>
           <a href={DISCORD} rel="noopener">Discord ↗</a>
           <a href={X} rel="noopener">@Copilot0x ↗</a>

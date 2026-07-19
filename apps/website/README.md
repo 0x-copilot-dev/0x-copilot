@@ -3,13 +3,13 @@
 Marketing site for 0xCopilot. Astro, static output, deployed to GitHub Pages.
 
 ```
-src/pages/index.astro        home — pitch, Time Machine demo, gap/wedge, surfaces, token, FAQ
-src/pages/token.astro        the 50 / 25 / 25 tokenomics
-src/components/Nav.astro      turbine mark + wordmark + Discord/GitHub
-src/components/TimeMachine.astro   the interactive demo (Studio + Focus, scrubbable timeline)
+src/pages/index.astro        home — pitch, real app shot, gap/wedge, six surfaces, token, FAQ
+src/pages/token.astro        $CPILOT tokenomics — 45.56 / 29.19 / 25 / 0.25
+src/pages/docs.astro         install — copilot CLI (npm/bun), first-run, platforms
+src/components/Nav.astro      turbine mark + wordmark + 3 links + "Get the app" CTA
 src/layouts/Base.astro       head, fonts, favicons
 src/styles/site.css          one dark design system, shared by both pages
-public/media/                welcome.png (real app shot) + og-cover.png (social)
+public/media/                app-run.png (real Run-cockpit shot) + og-cover.png (social)
 public/favicon.svg           turbine mark
 public/CNAME.example         custom domain — rename to CNAME once DNS is live
 ```
@@ -56,36 +56,50 @@ the kit's Instrument Sans — so the type is a hybrid the way we wanted it.
 | body    | IBM Plex Sans  | the readable face carried from before |
 | mono    | JetBrains Mono | labels, code, addresses               |
 
-| Token | Value     |                           |
-| ----- | --------- | ------------------------- |
-| ink   | `#0b0a0e` | ground                    |
-| sky   | `#5fb2ec` | primary signal            |
-| jade  | `#57c785` | done / success            |
-| ember | `#f0764f` | energy accent, sparing    |
-| amber | `#e8b45e` | waiting / steer / `FILL:` |
+| Token | Value     |                        |
+| ----- | --------- | ---------------------- |
+| ink   | `#0b0a0e` | ground                 |
+| sky   | `#5fb2ec` | primary signal         |
+| jade  | `#57c785` | done / success         |
+| ember | `#f0764f` | energy accent, sparing |
+| amber | `#e8b45e` | waiting / steer        |
 
-## The Time Machine demo
+## Product shot (real app, not a mockup)
 
-`TimeMachine.astro` is the kit's signature interactive hero, ported: a
-Launch-Week / TGE workspace over a **4-lane scrubbable timeline** (Safe /
-Sheets / X thread / Discord). Drag the track to rewind; step with ◀ ▶; snap
-to now. Behaviour is the kit's dependency-free vanilla JS, inlined via
-`<script is:inline>` — no framework.
+The home page shows the **real app**: `public/media/app-run.png` is a screenshot
+of the running desktop app's Run cockpit (captured via the `tools/cli-testing`
+driver in **production** posture), framed in the `.shot` container right under
+the hero. Its visible left rail is the product's **six-surface** IA — Run ·
+Chats · Projects · Activity · Tools · Skills — which the "Six surfaces, not one
+text box" section lists in the same order.
 
-Simplified from the kit's four modes to **Studio + Focus** (Compose and Auto
-were dropped as the redundant / non-working ones).
+The old bespoke "Time Machine" scrubbable demo (`TimeMachine.astro` +
+`public/hero-demo.js`) and the stale `welcome.png` were removed — a launched
+product's best demo is the product. To refresh the shot: re-run the driver, then
+`sips --resampleWidth 1600 <shot>.png --out public/media/app-run.png`. (A block
+of now-dead `.tm-*` rules remains in `site.css` — safe to prune.)
 
-`welcome.png` is a real screenshot of the running app, shown under the surfaces
-so the stylized demo is anchored to the actual product.
+## Post-launch — the numbers on the page
 
-## Before launch — unresolved
+`$CPILOT` is **live** on Virtuals Protocol, on Robinhood Chain
+([listing](https://app.virtuals.io/virtuals/113720)). The old amber `FILL:`
+markers are gone — `token.astro` now carries the real launch parameters, read
+off the live listing:
 
-`token.astro` ships deliberate amber `FILL:` markers. **Not placeholders to
-quietly delete** — each is a number a buyer would rely on, unknown when written:
-fixed supply · ESOP lock period · ESOP vest window/shape · ESOP early-vest FDV
-trigger · ACF starting FDV / step / ceiling · fee split. Fill from **your**
-Virtuals launch parameters.
+| Bucket                      | Share  | Note                                             |
+| --------------------------- | ------ | ------------------------------------------------ |
+| Liquidity pool              | 45.56% | fixed supply, live at launch                     |
+| Automated Capital Formation | 25.00% | Limit Order Program, 2M → 160M FDV               |
+| Team vesting                | 25.00% | Virtuals default team vesting                    |
+| Sniper-tax buyback (team)   | 2.19%  | locked 3 mo, then 9 mo linear                    |
+| Team initial buy            | 2.00%  | bought on the open curve — **disclosed on-page** |
+| veVIRTUAL airdrop           | 0.25%  | to veVIRTUAL holders                             |
 
-Also unresolved: the 50 / 25 / 25 split has no veVIRTUAL airdrop line. If the
-Virtuals framework mandates one, the real split isn't 50 / 25 / 25 and the page
-needs a fourth bucket.
+The page groups the three team-associated lines (25 + 2 + 2.19) as one **29.19%
+Team & contributors** bucket, and the veVIRTUAL airdrop is the fourth bucket the
+old 50/25/25 split was missing. Total supply is a fixed **1,000,000,000**.
+
+Deliberately **not** on the page: the live price and the "unlocks in N days"
+countdown (both volatile — link out to the listing), and a token **contract
+address** (verification points to the Virtuals listing so there's one canonical
+source). Paste a verified address here only if you want it rendered on-page.
