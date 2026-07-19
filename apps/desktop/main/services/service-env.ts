@@ -19,13 +19,14 @@ export const ENV_PASSTHROUGH_ALLOWLIST: readonly string[] = [
   "TMPDIR",
   "LANG",
   "LC_ALL",
-  // Google sign-in. The client id alone drives the preferred posture: a
-  // "Desktop app" OAuth client (loopback + PKCE, no secret) — the backend's
-  // build_google_provider uses auth_method "none". An operator running their
-  // own "Web application" client instead must ALSO supply the secret; we
-  // forward it faithfully (from the operator's local launch env, never baked
-  // into the distributed app) so the backend can pick "client_secret_post".
-  // The confidential/public decision stays single-sourced in the backend.
+  // Google sign-in. The distributed app ships a bundled-default "Desktop app"
+  // OAuth client (id + secret) — see google-oauth-default.ts, which seeds these
+  // two vars into process.env at boot from a gitignored google-oauth.json when
+  // the operator has not set them (env override always wins). We forward both
+  // faithfully so the backend's build_google_provider can pick its auth_method
+  // ("none" with PKCE for a pure Desktop client, "client_secret_post" when a
+  // secret is present). The confidential/public decision stays single-sourced
+  // in the backend; the credentials never live in git (the repo is public).
   "GOOGLE_OAUTH_CLIENT_ID",
   "GOOGLE_OAUTH_CLIENT_SECRET",
   // Model-provider keys (dev convenience; BYOK covers packaged installs).

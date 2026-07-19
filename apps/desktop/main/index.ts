@@ -69,6 +69,7 @@ import { registerIpcHandlers } from "./ipc/handlers";
 import { resolveAuthPosture } from "./posture";
 import { installSingleInstance, shouldSupervise } from "./services/boot-mode";
 import { createDesktopSupervisor } from "./services/desktop-supervisor";
+import { applyBundledGoogleOAuth } from "./services/google-oauth-default";
 import type { ServiceSupervisor } from "./services/supervisor";
 import { TransportBridge } from "./transport-bridge";
 import { createMainWindow } from "./window";
@@ -254,6 +255,16 @@ if (hasSingleInstanceLock) {
     }
 
     if (shouldSupervise({ isPackaged: app.isPackaged, env: process.env })) {
+      // Seed the bundled-default Google OAuth client (id + secret) into the env
+      // BEFORE the supervisor builds child envs, so "Continue with Google" works
+      // out of the box. An operator GOOGLE_OAUTH_CLIENT_ID env var still wins;
+      // the credentials live in a gitignored google-oauth.json next to the app
+      // (shipped in the npm payload, never in git — the repo is public).
+      const googleOAuth = applyBundledGoogleOAuth(
+        process.env,
+        app.getAppPath(),
+      );
+      console.log(`[auth] google oauth client source: ${googleOAuth.applied}`);
       supervisor = createDesktopSupervisor({
         userDataDir: app.getPath("userData"),
         safeStorage,

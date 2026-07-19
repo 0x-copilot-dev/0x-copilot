@@ -1,0 +1,5 @@
+{
+  "_comment": "Bundled-default Google OAuth client for the packaged app. Copy to google-oauth.json (gitignored) and fill in a Google 'Desktop app' OAuth client. This ships in the npm payload so 'Continue with Google' works with zero user setup; GOOGLE_OAUTH_CLIENT_ID/SECRET env vars override it. NEVER commit the real google-oauth.json — this repo is public.",
+  "client_id": "REPLACE_ME.apps.googleusercontent.com",
+  "client_secret": "REPLACE_ME"
+}
