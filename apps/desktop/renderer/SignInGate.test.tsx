@@ -308,4 +308,56 @@ describe("SignInGate", () => {
       container.querySelector("[data-testid='sign-in-wallet-button']"),
     ).toBeNull();
   });
+
+  it("signOut invokes auth.sign-out and returns to the pick screen", async () => {
+    // Regression: the render prop's signOut must clear the PERSISTED session
+    // (authSignOut IPC), not just the view — otherwise the app boots straight
+    // back in. This is what wires the Settings "Sign out" button end-to-end.
+    const bridge = makeBridge({
+      [CHANNELS.authGetSession]: async () => SESSION,
+      [CHANNELS.authSignOut]: async () => undefined,
+    });
+    await act(async () => {
+      root = createRoot(container);
+      root.render(
+        <SignInGate bridge={bridge} workspaceId="org_acme">
+          {(session, signOut) => (
+            <button type="button" data-testid="do-sign-out" onClick={signOut}>
+              out {session.email}
+            </button>
+          )}
+        </SignInGate>,
+      );
+    });
+    await act(async () => {
+      await Promise.resolve();
+    });
+
+    // Signed in first (session present).
+    expect(
+      container.querySelector("[data-testid='do-sign-out']"),
+    ).not.toBeNull();
+
+    click("do-sign-out");
+    await act(async () => {
+      await Promise.resolve();
+    });
+
+    // The persisted session was cleared via the IPC…
+    expect(
+      bridge.calls.some(
+        (c) =>
+          c.channel === CHANNELS.authSignOut &&
+          (c.payload as { workspaceId?: string }).workspaceId === "org_acme",
+      ),
+    ).toBe(true);
+    // …and the gate is back on the pick screen (all three options shown).
+    expect(
+      container.querySelector("[data-testid='sign-in-wallet-button']"),
+    ).not.toBeNull();
+    expect(
+      container.querySelector("[data-testid='sign-in-button']"),
+    ).not.toBeNull();
+    expect(container.querySelector("[data-testid='do-sign-out']")).toBeNull();
+  });
 });

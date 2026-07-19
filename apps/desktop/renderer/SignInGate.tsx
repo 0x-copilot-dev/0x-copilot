@@ -28,7 +28,16 @@ const APP_VERSION = "0.1.0";
 export interface SignInGateProps {
   readonly bridge: WindowBridge;
   readonly workspaceId?: string;
-  readonly children: (session: RendererSession) => ReactNode;
+  /**
+   * Render prop for the signed-in app. Receives the session and a `signOut`
+   * that clears the PERSISTED session (via the authSignOut IPC) and returns the
+   * gate to the sign-in screen — the gate owns the auth phase, so sign-out must
+   * route through here, not just clear a view.
+   */
+  readonly children: (
+    session: RendererSession,
+    signOut: () => void,
+  ) => ReactNode;
 }
 
 /** Which option the user picked — drives the "waiting" copy. */
@@ -112,6 +121,25 @@ export function SignInGate(props: SignInGateProps): ReactNode {
     setPhase({ kind: "anon" });
   }, []);
 
+  // Sign out for real: clear the PERSISTED session in main (authSignOut deletes
+  // the stored bearer — auth/index.ts signOut()), then drop back to the pick
+  // screen. Without this the "Sign out" button only cleared the renderer view
+  // and the app booted straight back in (the stored session was never deleted).
+  const signOut = useCallback(() => {
+    setPhase({ kind: "loading" });
+    bridge.ipc
+      .invoke<void>(CHANNELS.authSignOut, { workspaceId })
+      .then(() => {
+        setPhase({ kind: "anon" });
+      })
+      .catch((err: unknown) => {
+        setPhase({
+          kind: "error",
+          message: err instanceof Error ? err.message : "sign-out failed",
+        });
+      });
+  }, [bridge, workspaceId]);
+
   const content = useMemo(() => {
     switch (phase.kind) {
       case "loading":
@@ -143,7 +171,7 @@ export function SignInGate(props: SignInGateProps): ReactNode {
           </SignInChrome>
         );
       case "signed-in":
-        return children(phase.session);
+        return children(phase.session, signOut);
     }
   }, [
     phase,
@@ -151,6 +179,7 @@ export function SignInGate(props: SignInGateProps): ReactNode {
     signInWithGoogle,
     signInLocally,
     retry,
+    signOut,
     children,
   ]);
 
