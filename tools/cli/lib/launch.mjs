@@ -9,17 +9,29 @@ import { appMainEntry, RUNTIME_DEST } from "./paths.mjs";
 import * as ui from "./ui.mjs";
 
 /**
- * Ensure the app's bundled JS exists. Published payloads ship it prebuilt; a
- * dev checkout may need `npm run build` first.
+ * Ensure the app's bundled JS is present AND current.
+ *
+ * Published payloads ship a prebuilt bundle (never rebuilt here). A **dev
+ * checkout** rebuilds on every start: the source is live and may have advanced
+ * (a `git pull`, a new `main`) since `out/` was last built, and `out/` merely
+ * *existing* does NOT mean it matches the checked-out source. Skipping the
+ * rebuild there is the trap that silently runs stale renderer code — e.g. an old
+ * sign-in / loading screen after the branch moved. esbuild is ~300ms, so the
+ * cost is sub-second; correctness wins.
  */
 export function ensureAppBuilt({ appDir, mode, repoRoot }) {
-  if (existsSync(appMainEntry(appDir))) return;
+  const built = existsSync(appMainEntry(appDir));
   if (mode !== "dev") {
+    if (built) return;
     throw new Error(
       `the app bundle is missing at ${appMainEntry(appDir)} — reinstall the CLI.`,
     );
   }
-  ui.step("building the desktop app (dev checkout, first run)…");
+  ui.step(
+    built
+      ? "rebuilding the desktop app (dev checkout — keeping it in sync with source)…"
+      : "building the desktop app (dev checkout, first run)…",
+  );
   // On Windows npm is `npm.cmd`; Node's spawn only auto-resolves .exe from a
   // bare name, so pick the platform-correct binary.
   const npm = process.platform === "win32" ? "npm.cmd" : "npm";
