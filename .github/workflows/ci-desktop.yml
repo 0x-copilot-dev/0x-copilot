@@ -1,0 +1,75 @@
+name: ci-desktop
+
+# Typecheck + vitest for the Electron desktop app. Nothing else in CI exercises
+# apps/desktop (release-desktop.yml only builds installers on a tag), so without
+# this workflow a desktop-only regression — main-process auth posture, the
+# renderer shell, the ~830-test main/renderer suite — could merge unnoticed.
+#
+# Path filter covers apps/desktop and EVERY workspace package the desktop
+# imports (its package.json dependencies resolve to those packages' source, so a
+# breaking API change there surfaces in the desktop typecheck), plus the root
+# manifests / base tsconfig / this workflow file.
+
+on:
+  pull_request:
+    paths:
+      - "apps/desktop/**"
+      - "packages/api-types/**"
+      - "packages/chat-surface/**"
+      - "packages/chat-transport/**"
+      - "packages/design-system/**"
+      - "packages/surface-renderers/**"
+      - "package.json"
+      - "package-lock.json"
+      - "tsconfig.base.json"
+      - ".github/workflows/ci-desktop.yml"
+  push:
+    branches:
+      - main
+    paths:
+      - "apps/desktop/**"
+      - "packages/api-types/**"
+      - "packages/chat-surface/**"
+      - "packages/chat-transport/**"
+      - "packages/design-system/**"
+      - "packages/surface-renderers/**"
+      - "package.json"
+      - "package-lock.json"
+      - "tsconfig.base.json"
+      - ".github/workflows/ci-desktop.yml"
+  workflow_dispatch:
+
+concurrency:
+  group: ci-desktop-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  typecheck-and-test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: "22"
+          cache: npm
+
+      - name: Install Node dependencies
+        run: npm ci
+
+      # The desktop typecheck (tsc -p tsconfig.json --noEmit) resolves the
+      # @0x-copilot/* workspace deps to their source, so this transitively
+      # type-checks the parts of those packages the desktop actually imports —
+      # no prior build of the deps is required.
+      - name: Typecheck desktop
+        run: npm run typecheck --workspace @0x-copilot/desktop
+
+      # vitest.config.ts pins fileParallelism:false — the main/* lifecycle tests
+      # await a real async fs pipeline via fixed-tick polling and flake under
+      # parallel-file contention (worse on 2-core runners). Do not add -p/--pool
+      # overrides here that would re-enable file parallelism.
+      - name: Run desktop tests
+        run: npm run test --workspace @0x-copilot/desktop

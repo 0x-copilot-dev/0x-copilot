@@ -195,16 +195,6 @@ function payload(
   };
 }
 
-async function flush(): Promise<void> {
-  // Allow the void-returning IIFE inside the handler to settle. The install
-  // pipeline chains many awaits (audit append, AST scan, compile, schema,
-  // smoke render, persist, dispatch, second audit append). 50 ticks is the
-  // conservative upper bound — well below any sleep-based threshold.
-  for (let i = 0; i < 50; i += 1) {
-    await new Promise((r) => setImmediate(r));
-  }
-}
-
 describe("startTier2Lifecycle — happy path", () => {
   it("install pipeline runs and dispatches tier2.install", async () => {
     const host = makeHost();
@@ -216,7 +206,7 @@ describe("startTier2Lifecycle — happy path", () => {
       onError: (e) => errors.push(e),
     });
     src.fireGenerated(payload());
-    await flush();
+    await handle.settled();
     expect(errors).toEqual([]);
     expect(host.sends.find((s) => s.channel === "tier2.install")).toBeTruthy();
     expect(handle.attempts("email")).toBe(0);
@@ -231,7 +221,7 @@ describe("startTier2Lifecycle — happy path", () => {
       host: host.hostDeps,
     });
     src.fireGenerated(payload());
-    await flush();
+    await handle.settled();
     const events = await readLifecycleEvents({}, host.audit);
     expect(events.map((e) => e.kind)).toEqual(["generated", "installed"]);
     handle.stop();
@@ -252,11 +242,11 @@ describe("startTier2Lifecycle — happy path", () => {
       method: "renderCurrent",
       reason: "boom",
     });
-    await flush();
+    await handle.settled();
     expect(handle.attempts("email")).toBe(1);
     // Successful install resets to 0.
     src.fireGenerated(payload({ schema_version: 2 }));
-    await flush();
+    await handle.settled();
     expect(handle.attempts("email")).toBe(0);
     handle.stop();
   });
@@ -276,7 +266,7 @@ describe("startTier2Lifecycle — broken adapter (Q6 trip)", () => {
       method: "renderCurrent",
       reason: "TypeError",
     });
-    await flush();
+    await handle.settled();
     expect(handle.attempts("email")).toBe(1);
     expect(
       host.sends.find((s) => s.channel === "tier2.mark-broken"),
@@ -297,7 +287,7 @@ describe("startTier2Lifecycle — broken adapter (Q6 trip)", () => {
       method: "renderDiff",
       reason: "diff drift",
     });
-    await flush();
+    await handle.settled();
     const events = await readLifecycleEvents({ scheme: "email" }, host.audit);
     expect(events.map((e) => e.kind)).toEqual([
       "render-error",
@@ -325,11 +315,11 @@ describe("startTier2Lifecycle — bounded retry budget", () => {
       method: "renderCurrent",
       reason: "boom",
     });
-    await flush();
+    await handle.settled();
     // Subsequent adapter_generated for the SAME scheme is rejected.
     host.sends.length = 0;
     src.fireGenerated(payload({ schema_version: 2 }));
-    await flush();
+    await handle.settled();
     expect(
       host.sends.find((s) => s.channel === "tier2.install"),
     ).toBeUndefined();
@@ -353,7 +343,7 @@ describe("startTier2Lifecycle — bounded retry budget", () => {
     src.fireGenerated(
       payload({ adapter_source: BAD_ALLOWLIST_SOURCE, schema_version: 1 }),
     );
-    await flush();
+    await handle.settled();
     expect(handle.attempts("email")).toBe(1);
     const events = await readLifecycleEvents(
       { scheme: "email", kind: "regen-queued" },
@@ -380,7 +370,7 @@ describe("startTier2Lifecycle — bounded retry budget", () => {
           schema_version: 1 + i,
         }),
       );
-      await flush();
+      await handle.settled();
     }
     expect(exhausted).toEqual(["email"]);
     handle.stop();
@@ -414,14 +404,17 @@ describe("startTier2Lifecycle — per-attempt deadline", () => {
 
     src.fireGenerated(payload());
     // Wait for the install promise to start and the timer to be registered.
-    // The lifecycle's raceWithDeadline registers the timer synchronously
-    // when the install promise begins.
-    for (let i = 0; i < 50 && firedTimer === null; i += 1) {
+    // raceWithDeadline registers the timer synchronously once the handler
+    // reaches it, but the handler first awaits the "generated" audit append,
+    // so poll (the handler is blocked on this timer, so settled() cannot be
+    // used here). The bound is a generous ceiling for one fs append on a slow
+    // runner; the loop exits as soon as the timer lands.
+    for (let i = 0; i < 500 && firedTimer === null; i += 1) {
       await new Promise((r) => setImmediate(r));
     }
     expect(firedTimer).not.toBeNull();
     firedTimer!();
-    await flush();
+    await handle.settled();
 
     expect(handle.attempts("email")).toBe(1);
     const events = await readLifecycleEvents(
@@ -443,7 +436,7 @@ describe("startTier2Lifecycle — stop unsubscribes", () => {
     });
     handle.stop();
     src.fireGenerated(payload());
-    await flush();
+    await handle.settled();
     expect(host.sends).toHaveLength(0);
   });
 });

@@ -44,6 +44,14 @@ export interface Tier2LifecycleDeps {
 export interface Tier2LifecycleHandle {
   stop(): void;
   attempts(scheme: string): number;
+  /**
+   * Resolves once every generated/boundary handler dispatched so far has run
+   * to completion (including its awaited audit-log appends). Production callers
+   * fire-and-forget; this is a determinism hook for tests, which would
+   * otherwise have to guess how many event-loop ticks the async fs pipeline
+   * needs — a guess that flakes on slower hardware.
+   */
+  settled(): Promise<void>;
 }
 
 export const DEFAULT_RETRY_BUDGET = 3;
@@ -100,6 +108,17 @@ export function startTier2Lifecycle(
   // (PRD §9.5.4: a freshly-broken adapter starts with a full budget).
   const attempts = new Map<string, number>();
 
+  // In-flight handler promises, tracked so `settled()` can await them. Handlers
+  // catch their own errors, so these never reject.
+  const inFlight = new Set<Promise<void>>();
+  const runTracked = (work: () => Promise<void>): void => {
+    const p = work();
+    inFlight.add(p);
+    void p.finally(() => {
+      inFlight.delete(p);
+    });
+  };
+
   const recordError = (err: unknown): void => {
     if (deps.onError) {
       deps.onError(err instanceof Error ? err : new Error(String(err)));
@@ -107,7 +126,7 @@ export function startTier2Lifecycle(
   };
 
   const handleGenerated = (payload: AdapterGeneratedPayload): void => {
-    void (async () => {
+    runTracked(async () => {
       try {
         await appendLifecycleEvent(
           {
@@ -197,11 +216,11 @@ export function startTier2Lifecycle(
       } catch (err) {
         recordError(err);
       }
-    })();
+    });
   };
 
   const handleBoundaryError = (info: LifecycleBoundaryEvent): void => {
-    void (async () => {
+    runTracked(async () => {
       try {
         await markBrokenFromBoundary(info, deps.host);
         const used = attempts.get(info.scheme) ?? 0;
@@ -209,7 +228,7 @@ export function startTier2Lifecycle(
       } catch (err) {
         recordError(err);
       }
-    })();
+    });
   };
 
   const unsubGenerated = deps.source.onAdapterGenerated(handleGenerated);
@@ -222,6 +241,13 @@ export function startTier2Lifecycle(
     },
     attempts(scheme: string): number {
       return attempts.get(scheme) ?? 0;
+    },
+    async settled(): Promise<void> {
+      // Loop: awaiting one batch can let a handler enqueue follow-up work
+      // (none do today, but the drain must stay correct if that changes).
+      while (inFlight.size > 0) {
+        await Promise.allSettled([...inFlight]);
+      }
     },
   };
 }
