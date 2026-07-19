@@ -520,10 +520,14 @@ function buildAuthService(
   });
 
   return {
-    // "Use locally, no account" — offered in every posture (the renderer shows
-    // it unconditionally). The underlying local mint is the AuthService's own
-    // path; production-safe local-identity provisioning is tracked separately.
-    signIn: (workspaceId) => service.signIn(workspaceId),
+    // "Use locally, no account" — offered in every posture. In production posture
+    // (a real packaged install) it runs the production-safe local-key SIWE flow
+    // (a per-install keychain key, no dev IdP, no external service). In dev
+    // posture it keeps the dev-mint path so the `make dev` flow is unchanged.
+    signIn: (workspaceId) =>
+      productionPosture
+        ? service.signInLocal(workspaceId)
+        : service.signIn(workspaceId),
     signInWithGoogle: (workspaceId) => service.signInWithGoogle(workspaceId),
     signInWithWallet: (workspaceId) => service.signInWithWallet(workspaceId),
     signOut: (workspaceId) => service.signOut(workspaceId),

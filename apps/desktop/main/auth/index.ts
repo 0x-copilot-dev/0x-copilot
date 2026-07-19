@@ -1,5 +1,8 @@
+import { generatePrivateKey } from "viem/accounts";
+
 import type { AuthAuditLog, SignInMode } from "./audit-log";
 import { runGoogleLogin } from "./google-login";
+import { runLocalLogin } from "./local-login";
 import { runWalletLogin } from "./wallet-login";
 import {
   OidcClient,
@@ -35,6 +38,11 @@ export {
   runWalletLogin,
   type WalletLoginDeps,
 } from "./wallet-login";
+export {
+  LocalLoginError,
+  runLocalLogin,
+  type LocalLoginDeps,
+} from "./local-login";
 
 export {
   createFileAuthAuditLog,
@@ -67,6 +75,8 @@ export interface AuthServiceConfig {
   readonly walletLoginFlow?: typeof runWalletLogin;
   /** Loopback redirect timeout for the wallet flow (user-cancel bound). */
   readonly walletTimeoutMs?: number;
+  /** Injectable for tests; defaults to the real local-key SIWE flow. */
+  readonly localLoginFlow?: typeof runLocalLogin;
 }
 
 export interface RendererSession {
@@ -78,6 +88,9 @@ export interface RendererSession {
 
 const BACKEND_KIND: ServerKind = "backend";
 const BACKEND_SERVER_ID = "facade";
+// Where the per-install local-identity private key is stored (SecretStorage,
+// keychain-encrypted). Distinct serverId from the session so both persist.
+const LOCAL_KEY_SERVER_ID = "local-identity";
 const REFRESH_WINDOW_MS = 60_000;
 
 export class AuthService {
@@ -89,6 +102,7 @@ export class AuthService {
   readonly #authAudit: AuthAuditLog | undefined;
   readonly #googleLoginFlow: typeof runGoogleLogin;
   readonly #walletLoginFlow: typeof runWalletLogin;
+  readonly #localLoginFlow: typeof runLocalLogin;
   // One slot shared by every system-browser flow (Google, wallet): the
   // newest click always wins, whichever button it came from.
   #cancelPendingBrowserLogin: (() => void) | null = null;
@@ -114,6 +128,7 @@ export class AuthService {
     this.#authAudit = config.authAudit;
     this.#googleLoginFlow = config.googleLoginFlow ?? runGoogleLogin;
     this.#walletLoginFlow = config.walletLoginFlow ?? runWalletLogin;
+    this.#localLoginFlow = config.localLoginFlow ?? runLocalLogin;
   }
 
   async signIn(workspaceId: string): Promise<RendererSession> {
@@ -162,6 +177,70 @@ export class AuthService {
         onCancelAvailable: onCancel,
       }),
     );
+  }
+
+  // "Use locally, no account" — a genuinely local sign-in for the packaged app
+  // (production posture). Mints a per-install local Ethereum key (kept in the
+  // keychain) and drives the SIWE self-signup ramp in-process — no browser, no
+  // external wallet, no IdP. Stable identity across restarts (same key → same
+  // account). Distinct from dev-mint (which needs the dev IdP + seeds a dev
+  // persona); this uses the production-safe SIWE backend.
+  async signInLocal(workspaceId: string): Promise<RendererSession> {
+    this.#storage.setActiveWorkspace(workspaceId);
+    const privateKey = await this.#getOrCreateLocalKey(workspaceId);
+    try {
+      const session = await this.#localLoginFlow(workspaceId, {
+        facadeBaseUrl: this.#config.facadeBaseUrl,
+        privateKey,
+        fetch: this.#config.fetch,
+        clock: this.#config.clock,
+      });
+      await this.#storage.set(
+        workspaceId,
+        BACKEND_KIND,
+        BACKEND_SERVER_ID,
+        session,
+      );
+      this.#cache.set(workspaceId, session);
+      await this.#appendAudit({
+        kind: "sign-in-success",
+        workspaceId,
+        sub: session.claims.sub,
+        mode: "local",
+      });
+      return this.#toRenderer(workspaceId, session);
+    } catch (err) {
+      await this.#appendAudit({
+        kind: "sign-in-failure",
+        workspaceId,
+        mode: "local",
+        reason: err instanceof Error ? err.message : String(err),
+      });
+      throw err;
+    }
+  }
+
+  // Get-or-create the per-install local-identity key. Stored keychain-encrypted
+  // via SecretStorage under its own serverId so the local account is the SAME
+  // across restarts (a fresh key would orphan the previous local account).
+  async #getOrCreateLocalKey(workspaceId: string): Promise<`0x${string}`> {
+    const existing = (await this.#storage.get(
+      workspaceId,
+      BACKEND_KIND,
+      LOCAL_KEY_SERVER_ID,
+    )) as { privateKey?: unknown } | null;
+    if (
+      existing !== null &&
+      typeof existing.privateKey === "string" &&
+      existing.privateKey.startsWith("0x")
+    ) {
+      return existing.privateKey as `0x${string}`;
+    }
+    const privateKey = generatePrivateKey();
+    await this.#storage.set(workspaceId, BACKEND_KIND, LOCAL_KEY_SERVER_ID, {
+      privateKey,
+    });
+    return privateKey;
   }
 
   // Shared tail of every system-browser sign-in: cancel-the-previous,
