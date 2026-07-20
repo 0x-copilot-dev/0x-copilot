@@ -268,12 +268,17 @@ class OidcService:
         mfa: MfaService | None = None,
         global_providers: Mapping[str, AuthProviderRecord] | None = None,
         allow_self_signup: bool = False,
+        merge_service: Any | None = None,
     ) -> None:
         self._identity_store = identity_store
         self._oidc_store = oidc_store
         self._sessions = sessions
         self._token_vault = token_vault
         self._lockout = lockout
+        # Account-merge engine (PRD §6.3), duck-typed to avoid an import
+        # cycle (account_merge imports nothing from oidc). When absent, a
+        # confirmed-merge link conflict degrades to the plain 409.
+        self._merge_service = merge_service
         # Deployment-global providers (today: the env-configured Google
         # provider, reserved id "google"). Resolved before — and therefore
         # shadowing — any per-org auth_providers row with the same id.
@@ -311,6 +316,7 @@ class OidcService:
         user_agent: str | None = None,
         link_org_id: str | None = None,
         link_user_id: str | None = None,
+        link_confirm_merge: bool = False,
     ) -> OidcAuthorizeResult:
         provider, config = self._resolve_provider(
             org_id=org_id, provider_id=provider_id
@@ -347,6 +353,7 @@ class OidcService:
             # carries the binding, so it cannot be tampered with.
             link_org_id=link_org_id,
             link_user_id=link_user_id,
+            link_confirm_merge=link_confirm_merge,
         )
         self._oidc_store.create_authentication(record)
 
@@ -540,6 +547,22 @@ class OidcService:
                 # FR-L6: already mine — idempotent no-op.
                 status = "already_linked"
                 identity_id = existing.identity_id
+            elif consumed.link_confirm_merge and self._merge_service is not None:
+                # FR-M1/U2 (D-01): the user consented at link-start; the
+                # verified id_token IS the proof of the absorbed identity.
+                # The saga re-keys the identity row (with everything else)
+                # to the caller; after it returns the subject is ours.
+                self._merge_service.merge_for_conflict(
+                    survivor_org_id=org_id,
+                    survivor_user_id=user_id,
+                    absorbed_org_id=existing.org_id,
+                    absorbed_user_id=existing.user_id,
+                    proof_ref=f"oidc:{provider.provider_id}:{subject}",
+                    ip=ip,
+                    user_agent=user_agent,
+                )
+                status = "merged"
+                identity_id = existing.identity_id
             else:
                 # FR-M1: owned by another account — the merge flow's trigger.
                 raise OidcIdentityAlreadyLinked(
@@ -564,7 +587,7 @@ class OidcService:
         # email is left untouched (the merge engine reconciles duplicates).
         email_upgraded = False
         if (
-            status == "linked"
+            status in ("linked", "merged")
             and email is not None
             and is_placeholder_email(caller.primary_email)
         ):

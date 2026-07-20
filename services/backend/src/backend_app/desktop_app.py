@@ -47,6 +47,8 @@ from backend_app.deployment_profile import (
     DeploymentProfileLoader,
 )
 from backend_app.identity import SessionService
+from backend_app.identity.account_merge import PostgresMergeData
+from backend_app.identity.account_merge_store import PostgresAccountMergeStore
 from backend_app.identity.avatar_store import PostgresAvatarStore
 from backend_app.identity.invitation_store import PostgresInvitationStore
 from backend_app.identity.lockout_store import PostgresLockoutStore
@@ -232,6 +234,11 @@ class DesktopComposer:
             "adapter_registry_store": PostgresAdapterRegistryStore(pool),
             "settings_store": PostgresSettingsStore(pool),
             "provider_api_keys_store": PostgresProviderApiKeyStore(pool),
+            # Account-merge engine (PRD §6.3): saga record + the privileged
+            # re-key executor. The runtime (ai-backend) leg resolves from
+            # AI_BACKEND_URL in create_app (the desktop supervisor exports it).
+            "account_merge_store": PostgresAccountMergeStore(pool),
+            "merge_data_port": PostgresMergeData(pool),
         }
 
     @classmethod

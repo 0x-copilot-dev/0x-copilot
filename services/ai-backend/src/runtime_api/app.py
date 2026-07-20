@@ -51,6 +51,7 @@ from agent_runtime.observability.http_logging import (
 from agent_runtime.observability.otel import TelemetryBootstrap
 from agent_runtime.settings import RuntimeSettings
 from runtime_adapters.factory import RuntimeAdapterFactory, RuntimePorts
+from runtime_api.http.account_merge_routes import AccountMergeApiRouter
 from runtime_api.http.errors import RuntimeApiError, RuntimeApiErrorMapper
 from runtime_api.http.retention_routes import (
     RetentionAdminRouter,
@@ -224,6 +225,9 @@ class RuntimeApiAppFactory:
         app.include_router(RetentionAdminRouter.create_router())
         app.include_router(RetentionMemberRouter.create_router())
         app.include_router(InternalRuntimeApiRouter.create_router())
+        # Account-linking PRD §6.4 — the backend merge saga's re-key call.
+        # Service-token gated, never tenant-scoped, never facade-exposed.
+        app.include_router(AccountMergeApiRouter.create_router())
         # P7.5-A1 — internal LLM-embedding endpoint for Library
         # indexing / retrieval. Service-token gated; TU-1 invariant
         # preserved (all writes go through the canonical UsageRecorder).

@@ -72,6 +72,16 @@ class SiweStore(Protocol):
         """
         ...
 
+    def delete_wallet_identity(
+        self, *, wallet_id: str, org_id: str, user_id: str
+    ) -> bool:
+        """Unlink (FR-L5): delete the row IF it belongs to the caller.
+
+        Owner-scoped so a caller can never unlink someone else's wallet.
+        Returns ``False`` for unknown/foreign rows.
+        """
+        ...
+
 
 # ---------------------------------------------------------------------------
 # In-memory adapter
@@ -150,6 +160,15 @@ class InMemorySiweStore:
             if row.org_id == org_id and row.user_id == user_id
         ]
         return tuple(sorted(matches, key=lambda row: row.created_at))
+
+    def delete_wallet_identity(
+        self, *, wallet_id: str, org_id: str, user_id: str
+    ) -> bool:
+        row = self.wallet_identities.get(wallet_id)
+        if row is None or row.org_id != org_id or row.user_id != user_id:
+            return False
+        del self.wallet_identities[wallet_id]
+        return True
 
 
 # ---------------------------------------------------------------------------
@@ -284,6 +303,17 @@ class PostgresSiweStore:
             )
             rows = cur.fetchall()
         return tuple(WalletIdentityRecord.model_validate(row) for row in rows)
+
+    def delete_wallet_identity(
+        self, *, wallet_id: str, org_id: str, user_id: str
+    ) -> bool:
+        with self._cursor(None) as cur:
+            cur.execute(
+                "DELETE FROM wallet_identities "
+                "WHERE wallet_id = %s AND org_id = %s AND user_id = %s",
+                (wallet_id, org_id, user_id),
+            )
+            return bool(cur.rowcount)
 
 
 __all__ = [

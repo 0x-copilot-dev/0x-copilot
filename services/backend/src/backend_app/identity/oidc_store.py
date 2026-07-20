@@ -64,6 +64,12 @@ class OidcStore(Protocol):
         """
         ...
 
+    def unlink_identity(self, *, identity_id: str, org_id: str, user_id: str) -> bool:
+        """Unlink (FR-L5): soft-unlink (stamp ``unlinked_at``) IF owned by the
+        caller. The partial unique on (provider, subject) frees the subject
+        for a future re-link. Returns ``False`` for unknown/foreign rows."""
+        ...
+
     def update_identity_claims(
         self,
         *,
@@ -181,6 +187,18 @@ class InMemoryOidcStore:
             and ident.unlinked_at is None
         ]
         return tuple(sorted(matches, key=lambda ident: ident.linked_at))
+
+    def unlink_identity(self, *, identity_id: str, org_id: str, user_id: str) -> bool:
+        row = self.identities.get(identity_id)
+        if (
+            row is None
+            or row.org_id != org_id
+            or row.user_id != user_id
+            or row.unlinked_at is not None
+        ):
+            return False
+        self.identities[identity_id] = row.model_copy(update={"unlinked_at": _now()})
+        return True
 
     def update_identity_claims(
         self,
@@ -383,6 +401,18 @@ class PostgresOidcStore:
             )
             rows = cur.fetchall()
         return tuple(_row_to_identity(row) for row in rows)
+
+    def unlink_identity(self, *, identity_id: str, org_id: str, user_id: str) -> bool:
+        with self._cursor(None) as cur:
+            cur.execute(
+                """
+                UPDATE oidc_identities SET unlinked_at = now()
+                WHERE identity_id = %s AND org_id = %s AND user_id = %s
+                  AND unlinked_at IS NULL
+                """,
+                (identity_id, org_id, user_id),
+            )
+            return bool(cur.rowcount)
 
     def update_identity_claims(
         self,

@@ -206,3 +206,104 @@ class TestLinkWallet:
                 message=message,
                 signature=signature,
             )
+
+
+class TestUnlinkRoutes:
+    """FR-L5 — unlink with the last-method guard, over the full app."""
+
+    def _client(self) -> tuple[Any, InMemorySiweStore]:
+        from fastapi.testclient import TestClient
+
+        from backend_app.app import create_app
+        from backend_app.contracts import (
+            OrganizationMemberRecord,
+            OrganizationMemberSource,
+            WalletIdentityRecord,
+        )
+
+        identity_store = InMemoryIdentityStore()
+        siwe_store = InMemorySiweStore()
+        identity_store.create_organization(
+            OrganizationRecord(
+                org_id="org_caller", display_name="Caller", slug="caller"
+            )
+        )
+        identity_store.create_user(
+            UserRecord(
+                user_id="usr_caller",
+                org_id="org_caller",
+                primary_email="caller@acme.com",
+                display_name="Caller",
+            )
+        )
+        identity_store.add_member(
+            OrganizationMemberRecord(
+                org_id="org_caller",
+                user_id="usr_caller",
+                source=OrganizationMemberSource.SIWE,
+            )
+        )
+        wallet_a = Account.create()
+        wallet_b = Account.create()
+        for account, chain in ((wallet_a, 8453), (wallet_b, 1)):
+            siwe_store.create_wallet_identity(
+                WalletIdentityRecord(
+                    address=account.address.lower(),
+                    org_id="org_caller",
+                    user_id="usr_caller",
+                    chain_id=chain,
+                )
+            )
+        sessions = SessionService(
+            store=InMemorySessionStore(),
+            auth_secret=_AUTH_SECRET,
+            dev_mint_allowed=True,
+        )
+        app = create_app(
+            configure_logging_on_create=False,
+            configure_telemetry_on_create=False,
+            identity_store=identity_store,
+            siwe_store=siwe_store,
+            session_service=sessions,
+        )
+        return TestClient(app), siwe_store
+
+    def test_unlink_wallet_then_last_method_guard(self) -> None:
+        client, siwe_store = self._client()
+        wallets = siwe_store.list_wallets_by_user(
+            org_id="org_caller", user_id="usr_caller"
+        )
+        assert len(wallets) == 2
+        params = {"org_id": "org_caller", "user_id": "usr_caller"}
+
+        # Two wallets → the first unlink succeeds.
+        first = client.delete(
+            f"/internal/v1/me/identities/wallet/{wallets[0].wallet_id}",
+            params=params,
+        )
+        assert first.status_code == 204
+        assert (
+            len(
+                siwe_store.list_wallets_by_user(
+                    org_id="org_caller", user_id="usr_caller"
+                )
+            )
+            == 1
+        )
+
+        # One wallet left → FR-L5: refuse to remove the last sign-in method.
+        second = client.delete(
+            f"/internal/v1/me/identities/wallet/{wallets[1].wallet_id}",
+            params=params,
+        )
+        assert second.status_code == 409
+        assert second.json()["detail"]["code"] == "last_sign_in_method"
+
+    def test_unlink_foreign_wallet_is_404(self) -> None:
+        client, siwe_store = self._client()
+        # A wallet id belonging to nobody / another user → 404, never leaked.
+        response = client.delete(
+            "/internal/v1/me/identities/wallet/wid_deadbeef",
+            params={"org_id": "org_caller", "user_id": "usr_caller"},
+        )
+        assert response.status_code == 404

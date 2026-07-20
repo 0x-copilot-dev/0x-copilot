@@ -136,7 +136,14 @@ from runtime_api.schemas.workspace import (
     SubagentTokenUsage,
 )
 
+from runtime_api.schemas.account_merge import (
+    AccountMergeRequest,
+    AccountMergeResponse,
+)
+
 __all__ = [
+    "AccountMergeRequest",
+    "AccountMergeResponse",
     "ConversationStatus",
     "MessageRole",
     "MessageStatus",

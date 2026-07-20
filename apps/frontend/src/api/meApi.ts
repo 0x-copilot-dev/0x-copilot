@@ -38,11 +38,24 @@ export function listMyWorkspaces(): Promise<WorkspaceListResponse> {
 export function startGoogleLink(
   redirectUri: string,
   returnTo?: string,
+  options?: { confirmMerge?: boolean },
 ): Promise<{ auth_url: string; state: string }> {
   return httpJson("POST", "/v1/me/identities/google/link/start", {
     redirect_uri: redirectUri,
     return_to: returnTo ?? null,
+    // FR-U2: explicit consent that a Google account owned by another
+    // 0xCopilot account should merge into this one. Recorded server-side on
+    // the state row; never defaulted to true.
+    confirm_merge: options?.confirmMerge ?? false,
   });
+}
+
+/** Unlink a linked sign-in identity (PRD FR-L5). 409 when it is the last one. */
+export function unlinkIdentity(
+  kind: "wallet" | "oidc",
+  id: string,
+): Promise<void> {
+  return httpJson("DELETE", `/v1/me/identities/${kind}/${id}`);
 }
 
 export function getMyProfile(): Promise<UserProfile> {

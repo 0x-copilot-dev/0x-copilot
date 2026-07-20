@@ -189,10 +189,23 @@ class SiweWalletAlreadyLinked(SiweError):
 
     detail = "wallet_linked_to_another_account"
 
-    def __init__(self, *, org_id: str, user_id: str) -> None:
+    def __init__(
+        self,
+        *,
+        org_id: str,
+        user_id: str,
+        wallet_id: str | None = None,
+        address: str | None = None,
+        chain_id: int | None = None,
+    ) -> None:
         super().__init__(self.detail)
         self.org_id = org_id
         self.user_id = user_id
+        # The proven wallet's facts, so the merge path can complete the link
+        # result after the conflict resolves (PRD FR-M1).
+        self.wallet_id = wallet_id
+        self.address = address
+        self.chain_id = chain_id
 
 
 class SiweRateLimited(SiweError):
@@ -718,7 +731,11 @@ class SiweService:
                 )
             # FR-M1: owned by another account — the merge flow's trigger.
             raise SiweWalletAlreadyLinked(
-                org_id=existing.org_id, user_id=existing.user_id
+                org_id=existing.org_id,
+                user_id=existing.user_id,
+                wallet_id=existing.wallet_id,
+                address=checksummed,
+                chain_id=existing.chain_id,
             )
 
         record = self._siwe_store.create_wallet_identity(
