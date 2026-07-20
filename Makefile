@@ -14,7 +14,7 @@ SERVICE_CONTRACTS_PATH := ../../packages/service-contracts/src
 AUDIT_CHAIN_PATH := ../../packages/audit-chain/src
 SHARED_PYTHONPATH := src:$(SERVICE_CONTRACTS_PATH):$(AUDIT_CHAIN_PATH)
 
-.PHONY: help setup setup-node setup-python setup-hooks check-local-env check-provider-key dev prod prod-build check-prod-env docker-dev docker-dev-down test
+.PHONY: help setup setup-node setup-python setup-hooks check-local-env check-provider-key dev prod prod-build check-prod-env docker-dev docker-dev-down desktop-install desktop-uninstall test
 
 help:
 	@echo "0xCopilot make targets"
@@ -24,6 +24,8 @@ help:
 	@echo "  make dev              Run local end-to-end stack on 127.0.0.1"
 	@echo "  make docker-dev       Run Docker dev stack on http://127.0.0.1:8080"
 	@echo "  make docker-dev-down  Stop Docker dev stack"
+	@echo "  make desktop-install    Build the copilot CLI from this checkout, install it globally, launch"
+	@echo "  make desktop-uninstall  Remove the copilot CLI, staged runtime, and local app data"
 	@echo "  make prod             Build production artifacts after prod env checks"
 	@echo "  make test             Run focused auth/runtime tests"
 
@@ -129,6 +131,33 @@ docker-dev: check-provider-key
 
 docker-dev-down:
 	docker compose -f docker-compose.dev.yml down
+
+# Desktop app via the copilot CLI (tools/cli). `npm pack` runs prepack, which
+# builds @0x-copilot/desktop + @0x-copilot/frontend and assembles the payload,
+# so root node_modules must exist. First launch downloads pinned CPython and
+# PostgreSQL builds (~a few hundred MB).
+desktop-install:
+	@test -d node_modules || (echo "Missing node_modules. Run: make setup" && exit 1)
+	cd tools/cli && \
+		rm -f 0x-copilot-cli-*.tgz && \
+		npm pack && \
+		npm install -g ./0x-copilot-cli-*.tgz
+	copilot
+
+# Removes all three layers: staged runtime + app data (copilot uninstall,
+# which asks for confirmation), the global npm package, and local pack
+# artifacts. Use `copilot repair` instead if you only want to fix a stuck
+# launch while keeping data.
+desktop-uninstall:
+	@if command -v copilot >/dev/null 2>&1; then \
+		copilot uninstall; \
+	else \
+		echo "copilot not on PATH — skipping runtime/app-data cleanup"; \
+	fi
+	npm rm -g @0x-copilot/cli
+	rm -f tools/cli/0x-copilot-cli-*.tgz
+	rm -rf tools/cli/payload
+	@echo "Done. If 'copilot' still resolves in this shell, run: hash -r"
 
 check-prod-env:
 	@test -n "$$ENTERPRISE_AUTH_SECRET" || (echo "ENTERPRISE_AUTH_SECRET is required for make prod" && exit 1)
