@@ -26,6 +26,9 @@ COPY services/ai-backend/src ./src
 # auto-apply (RUNTIME_MIGRATIONS_AUTO_APPLY) also reads this directory.
 COPY services/ai-backend/migrations ./migrations
 COPY services/ai-backend/scripts ./scripts
+# Vendored fallbacks read at runtime: pricing_overrides.yaml and the
+# models.dev catalog snapshot (offline tier of ModelsDevCatalogSource).
+COPY services/ai-backend/config ./config
 
 EXPOSE 8000
 
