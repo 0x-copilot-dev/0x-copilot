@@ -1,6 +1,6 @@
 // Key storage & app lock — Settings → Advanced (DESIGN-SPEC §4 · PRD PR-5.9).
 //
-//   * Keychain note — "keys in macOS Keychain, encrypted at rest" (SetNote).
+//   * Storage note — "encrypted at rest in your local vault" (SetNote).
 //   * Encrypt local run history — toggle.
 //   * Require Touch ID to open — toggle. When the platform CANNOT provide
 //     Touch ID the control is DISABLED with a visible, readable hint rather
@@ -44,8 +44,10 @@ export const APP_LOCK_AFTER_OPTIONS: ReadonlyArray<{
 ];
 
 /** DESIGN-SPEC §4 keychain note. */
+// Honest storage claim (amended 2026-07-20): secrets are vault-encrypted on
+// disk; the macOS Keychain is involved only via the opt-in toggle below.
 export const APP_LOCK_KEYCHAIN_NOTE =
-  "Your provider keys and developer tokens live in the macOS Keychain, encrypted at rest — never sent to a 0xCopilot server.";
+  "Provider keys and developer tokens are encrypted at rest in your local vault — never sent to a 0xCopilot server.";
 
 /** Default hint shown when the platform cannot provide Touch ID (FR-5.23). */
 export const TOUCH_ID_UNAVAILABLE_HINT =
