@@ -126,6 +126,12 @@ export interface AssistantComposerProps {
   onCancel?: () => void;
   /** Composer disabled (e.g. no active conversation row). */
   disabled?: boolean;
+  /**
+   * Starting textarea rows for the empty composer. Web keeps the roomy
+   * default (3, the size tuned for the welcome-cards layout); the desktop
+   * Run rail passes 2 for the compact v3 "quiet" composer shell.
+   */
+  minRows?: number;
 }
 
 /**
@@ -188,6 +194,7 @@ export const AssistantComposer = forwardRef<
     onSubmit,
     onCancel,
     disabled = false,
+    minRows = 3,
   },
   ref,
 ): ReactElement {
@@ -294,7 +301,8 @@ export const AssistantComposer = forwardRef<
       // user identified as "what it should look like" (matches the focused
       // / multi-line state from earlier screenshots). maxRows lifted to 8
       // so multi-line drafts have headroom before internal scroll kicks in.
-      minRows={3}
+      // Hosts may override the starting rows (desktop rail passes 2).
+      minRows={minRows}
       maxRows={8}
       onSubmit={(payload) => {
         const skillInstructions = selectedSkills.map((skill) =>
