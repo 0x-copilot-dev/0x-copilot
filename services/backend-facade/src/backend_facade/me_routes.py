@@ -59,6 +59,13 @@ def register_me_routes(app: FastAPI) -> None:
     async def put_my_profile(request: Request) -> dict[str, object]:
         return await _forward_me(request, "PUT", "profile")
 
+    # Account-linking (PRD FR-L1): authenticated wallet link. The SIWE proof
+    # travels in the body; the identity binding comes from the verified
+    # session via _forward_me's service headers — never the body.
+    @app.post("/v1/me/identities/wallet")
+    async def link_my_wallet(request: Request) -> dict[str, object]:
+        return await _forward_me(request, "POST", "identities/wallet")
+
     @app.get("/v1/me/preferences")
     async def get_my_preferences(request: Request) -> dict[str, object]:
         return await _forward_me(request, "GET", "preferences")
