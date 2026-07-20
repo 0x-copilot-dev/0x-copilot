@@ -74,6 +74,19 @@ def register_me_routes(app: FastAPI) -> None:
     async def link_my_google_start(request: Request) -> dict[str, object]:
         return await _forward_me(request, "POST", "identities/google/link/start")
 
+    # Unlink (PRD FR-L5) — refused upstream when it is the last sign-in method.
+    @app.delete("/v1/me/identities/wallet/{wallet_id}", status_code=204)
+    async def unlink_my_wallet(request: Request, wallet_id: str) -> None:
+        await _forward_me(
+            request, "DELETE", f"identities/wallet/{wallet_id}", expect_json=False
+        )
+
+    @app.delete("/v1/me/identities/oidc/{identity_id}", status_code=204)
+    async def unlink_my_oidc(request: Request, identity_id: str) -> None:
+        await _forward_me(
+            request, "DELETE", f"identities/oidc/{identity_id}", expect_json=False
+        )
+
     @app.get("/v1/me/preferences")
     async def get_my_preferences(request: Request) -> dict[str, object]:
         return await _forward_me(request, "GET", "preferences")

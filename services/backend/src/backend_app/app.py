@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import os
 from contextlib import asynccontextmanager
+from typing import Any
 
 from copilot_service_contracts.scopes import (
     ADMIN_AUDIT_EXPORT,
@@ -100,6 +101,19 @@ from backend_app.identity import (
 from backend_app.identity.google import (
     build_google_provider,
     ensure_global_auth_provider,
+)
+from backend_app.identity.account_merge import (
+    AccountMergeService,
+    HttpRuntimeMergeClient,
+    InMemoryMergeData,
+    MergeDataPort,
+    MergeNotAllowed,
+    NullRuntimeMergeClient,
+    RuntimeMergePort,
+)
+from backend_app.identity.account_merge_store import (
+    AccountMergeStore,
+    InMemoryAccountMergeStore,
 )
 from backend_app.identity.siwe import (
     ENV_SIWE_ALLOWED_CHAIN_IDS,
@@ -407,6 +421,33 @@ def _default_session_service(
         return None
 
 
+class _AppStateMergeProxy:
+    """Late-binding handle to ``app.state.account_merge_service``.
+
+    The OIDC service and the identities routes are registered BEFORE every
+    store the merge engine composes has resolved, so they receive this proxy
+    instead of the service. It delegates once the real engine is set at the
+    end of ``create_app``; if a deployment never wires one (e.g. Postgres
+    stores injected without a merge data port), a confirmed merge degrades
+    to a clean ``MergeNotAllowed`` rather than a half-run.
+    """
+
+    def __init__(self, app: FastAPI) -> None:
+        self._app = app
+
+    def merge_for_conflict(self, **kwargs: Any) -> Any:
+        service = getattr(self._app.state, "account_merge_service", None)
+        if service is None:
+            raise MergeNotAllowed("account merge is not configured")
+        return service.merge_for_conflict(**kwargs)
+
+    def resume(self, merge_id: str, **kwargs: Any) -> Any:
+        service = getattr(self._app.state, "account_merge_service", None)
+        if service is None:
+            raise MergeNotAllowed("account merge is not configured")
+        return service.resume(merge_id, **kwargs)
+
+
 def create_app(
     service: McpRegistryService | None = None,
     skill_service: SkillRegistryService | None = None,
@@ -431,6 +472,9 @@ def create_app(
     saml_verifier: SamlVerifier | None = None,
     siwe_store: SiweStore | None = None,
     siwe_service: SiweService | None = None,
+    account_merge_store: AccountMergeStore | None = None,
+    merge_data_port: MergeDataPort | None = None,
+    runtime_merge_client: RuntimeMergePort | None = None,
     scim_store: ScimStore | None = None,
     scim_service: ScimService | None = None,
     me_store: MeStore | None = None,
@@ -579,6 +623,9 @@ def create_app(
                 mfa=resolved_mfa_service,
                 global_providers=resolved_global_providers,
                 allow_self_signup=resolved_deployment.toggles.allow_self_signup,
+                # Account-merge engine (PRD §6.3): late-binding proxy — the
+                # real service composes stores that resolve further down.
+                merge_service=_AppStateMergeProxy(app),
             )
             app.state.oidc_service = resolved_oidc_service
             register_oidc_routes(
@@ -1342,12 +1389,17 @@ def create_app(
         siwe_store=getattr(app.state, "siwe_store", None),
         oidc_store=getattr(app.state, "oidc_store", None),
     )
-    # Account-linking (PRD FR-L1/L2): authenticated wallet + Google links.
-    # Degrades to 503 when the auth block that builds the services didn't run.
+    # Account-linking (PRD FR-L1/L2/L5): authenticated wallet + Google links
+    # + unlink. Degrades to 503 when the auth block didn't run. The merge
+    # proxy late-binds to app.state.account_merge_service (set below).
     register_me_identities_routes(
         app,
         siwe_service=getattr(app.state, "siwe_service", None),
         oidc_service=getattr(app.state, "oidc_service", None),
+        merge_service=_AppStateMergeProxy(app),  # type: ignore[arg-type]
+        siwe_store=getattr(app.state, "siwe_store", None),
+        oidc_store=getattr(app.state, "oidc_store", None),
+        password_store=getattr(app.state, "password_store", None),
     )
     register_me_preferences_routes(
         app,
@@ -2036,6 +2088,50 @@ def create_app(
     )
     app.state.team_service = team_service
     register_team_routes(app, service=team_service)
+
+    # --- Account-merge engine (PRD §6.3, linking PR6) ----------------------
+    # Constructed LAST so every store it composes has resolved; the OIDC
+    # service + identities routes reach it through the late-binding proxy.
+    # Defaults are in-memory only when the stores actually ARE in-memory — a
+    # deployment that injects Postgres stores must also inject
+    # merge_data_port/account_merge_store (desktop_app.py does), else merges
+    # degrade to a clean "not configured" refusal rather than a half-run.
+    state_siwe_store = getattr(app.state, "siwe_store", None)
+    state_oidc_store = getattr(app.state, "oidc_store", None)
+    resolved_merge_data: MergeDataPort | None = merge_data_port
+    if resolved_merge_data is None and isinstance(state_siwe_store, InMemorySiweStore):
+        resolved_merge_data = InMemoryMergeData(
+            identity_store=resolved_identity_store,
+            siwe_store=state_siwe_store,
+            oidc_store=state_oidc_store
+            if isinstance(state_oidc_store, InMemoryOidcStore)
+            else None,
+            provider_keys_store=resolved_provider_keys_store
+            if isinstance(resolved_provider_keys_store, InMemoryProviderApiKeyStore)
+            else None,
+            me_store=resolved_me_store
+            if isinstance(resolved_me_store, InMemoryMeStore)
+            else None,
+        )
+    if resolved_merge_data is not None and resolved_session_service is not None:
+        ai_backend_url = os.environ.get("AI_BACKEND_URL", "").strip()
+        resolved_runtime_merge: RuntimeMergePort = runtime_merge_client or (
+            HttpRuntimeMergeClient(
+                base_url=ai_backend_url,
+                service_token=os.environ.get("ENTERPRISE_SERVICE_TOKEN"),
+            )
+            if ai_backend_url
+            else NullRuntimeMergeClient()
+        )
+        app.state.account_merge_service = AccountMergeService(
+            identity_store=resolved_identity_store,
+            merge_store=account_merge_store or InMemoryAccountMergeStore(),
+            sessions=resolved_session_service,
+            data_port=resolved_merge_data,
+            runtime_port=resolved_runtime_merge,
+        )
+    else:
+        app.state.account_merge_service = None
 
     return app
 

@@ -1096,6 +1096,12 @@ class UserRecord(BackendContract):
     created_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
     updated_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
     deleted_at: datetime | None = None
+    # Account-merge lineage (PRD FR-M7, migration 0038): when this account was
+    # absorbed into another, the survivor's user id + when. The soft-disabled
+    # stub + these columns + the audit trail are the support-grade reversal
+    # record (NFR-6). NULL for a never-merged user.
+    absorbed_into_user_id: str | None = None
+    merged_at: datetime | None = None
 
     @field_validator(_IdentityFields.USER_ID, _IdentityFields.ORG_ID)
     @classmethod
@@ -1457,6 +1463,11 @@ class OidcAuthenticationRecord(BackendContract):
     # the consumed row. NULL = a plain sign-in flow (pre-0037 behavior).
     link_org_id: str | None = None
     link_user_id: str | None = None
+    # FR-U2 (migration 0038): the user explicitly confirmed on link-start that
+    # an identity owned by another account should MERGE that account into
+    # theirs. Recorded server-side so the public callback can honor the
+    # consent without trusting the browser round-trip.
+    link_confirm_merge: bool = False
 
     @field_validator("auth_id", "org_id", "provider_id")
     @classmethod
@@ -2593,6 +2604,44 @@ class SiweVerifyResult(BackendContract):
     expires_at: datetime
     return_to: str | None = None
     requires_mfa: bool = False
+
+
+class AccountMergeState(StrEnum):
+    """Saga checkpoints for an account merge (PRD §6.3 / NFR-3).
+
+    Each value is the last COMPLETED step; ``resume`` re-enters at the next
+    one. A failure leaves ``error`` set with ``state`` still at the last
+    checkpoint — nothing is half-owned, and re-running is safe (NFR-8).
+    """
+
+    PENDING = "pending"
+    BACKEND_DONE = "backend_done"
+    RUNTIME_DONE = "runtime_done"
+    SESSIONS_REVOKED = "sessions_revoked"
+    COMPLETED = "completed"
+
+
+class AccountMergeRecord(BackendContract):
+    """One account merge: absorbed → survivor (PRD §6.1, migration 0038).
+
+    The saga record + audit anchor. ``proof_ref`` names the fresh
+    proof-of-ownership that authorized the merge (e.g. ``siwe:0xabc…`` /
+    ``oidc:google:<sub>``) — the consent record (NFR-1/5). ``counts`` holds
+    per-store rows-moved from each re-key step (NFR-10).
+    """
+
+    merge_id: str = Field(default_factory=lambda: f"amg_{uuid4().hex}")
+    survivor_org_id: str
+    survivor_user_id: str
+    absorbed_org_id: str
+    absorbed_user_id: str
+    state: AccountMergeState = AccountMergeState.PENDING
+    proof_ref: str
+    error: str | None = None
+    counts: dict[str, Any] = Field(default_factory=dict)
+    started_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
+    updated_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
+    completed_at: datetime | None = None
 
 
 class SiweLinkWalletResult(BackendContract):
