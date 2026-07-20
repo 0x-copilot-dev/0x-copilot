@@ -1,0 +1,101 @@
+{
+  "cluster": "flow-contracts",
+  "verdicts": [
+    {
+      "ref": "F1",
+      "title": "Six _*-stub.ts contract copies never rewired to api-types; drifted + dead island",
+      "type": "ssot-violation/dead-code",
+      "severity": "high",
+      "verdict": "confirmed",
+      "note": "_todos-stub.ts:57 models `done: boolean` while server todos/store.py:70 and api-types/todos.ts:114 use `status`+recurrence/parent_id; _home-stub.ts:71 AgentActivityKind shares zero values with api-types/home.ts:178 HomeActivityKind; todosApi.ts:212 sends filter[done] but todos/routes.py:404 only parses filter[status]; App.tsx imports only ProjectsRoute (30) — Todos/Inbox/Library/Routines/Agents/HomeRoute are unmounted, routes.ts folds those seven slugs."
+    },
+    {
+      "ref": "F2",
+      "title": "SIWE EIP-4361 byte-exact template in three hand-synced copies (docs say two)",
+      "type": "ssot-violation",
+      "severity": "high",
+      "verdict": "confirmed",
+      "note": "Template rendered independently at backend siwe.py:288 build_siwe_message, frontend siweMessage.ts:31 SIWE_MESSAGE_TEMPLATE, and desktop local-login.ts:79 inline string (identical field order/blank lines); root CLAUDE.md documents only the frontend+backend pair."
+    },
+    {
+      "ref": "F3",
+      "title": "≥6 divergent hardcoded model catalogs",
+      "type": "ssot-violation",
+      "severity": "high",
+      "verdict": "confirmed",
+      "note": "Divergent lists confirmed across model_catalog.py:44, desktopModelCatalog.ts:32 (claude-sonnet-4-6), ModelPicker.tsx:33 (claude-opus-4-7/sonnet-4-6/haiku-4-5), ChatScreen.tsx:2559 demoModels (gpt-5.4-nano), agents/service.py:66 (anthropic:claude-sonnet-4-7-1m), providerKeys.ts:65-93 (claude-opus-4/gpt-4o/gemini-2.5) — model ids/versions differ site to site."
+    },
+    {
+      "ref": "F4",
+      "title": "Entire ~9k-LOC TS mirror hand-synced with zero automated drift detection; docs mislabel 'generated'",
+      "type": "ssot-violation/risk",
+      "severity": "medium",
+      "verdict": "confirmed",
+      "note": "api-types/src is 9,255 LOC (index.ts 4,002); ci-frontend.yml:49 only runs tsc typecheck, ci-ai-backend.yml:63 runs check_route_scopes.py (RBAC not payloads), no CI job exports Pydantic/openapi and diffs it against api-types; root CLAUDE.md:106,147 call the package 'generated contracts'."
+    },
+    {
+      "ref": "F5",
+      "title": "MCP enums + card shapes triplicated with no shared constants module",
+      "type": "duplication",
+      "severity": "medium",
+      "verdict": "confirmed",
+      "note": "McpTransport/McpAuthMode/McpAuthState/McpServerHealth defined at backend_app/contracts.py:148-175 (string literals), ai-backend mcp/cards.py:45-79 (values from service-LOCAL constants.py:111, not service-contracts), and api-types/index.ts:17-29; service-contracts holds no MCP values (grep empty)."
+    },
+    {
+      "ref": "F6",
+      "title": "~200-LOC deployment-profile loader triplicated per service",
+      "type": "duplication",
+      "severity": "medium",
+      "verdict": "confirmed",
+      "note": "Three loaders at backend_facade/deployment_profile.py (230 LOC), backend_app/deployment_profile.py (196), ai-backend deployment/profile.py (215); all import only constants from copilot_service_contracts.deployment_profile and re-implement the profile→toggles derivation — self-documented at backend_facade/deployment_profile.py:7-9."
+    },
+    {
+      "ref": "F7",
+      "title": "Desktop→services env contract is ~20 unregistered TS string literals; already shipped one breakage",
+      "type": "risk",
+      "severity": "medium",
+      "verdict": "confirmed",
+      "note": "service-env.ts:161-235 sets ~30 env literals (ENTERPRISE_DEPLOYMENT_PROFILE, RUNTIME_STORE_BACKEND, MCP_BACKEND_REGISTRY_URL, SIWE_ORIGIN, BACKEND_BASE_URL…) that must match Python loaders with no TS-reachable registry; commit bcc65dbb (#114) fixed the exact BACKEND_BASE_URL omission that degraded the ai-backend policies resolver to Null."
+    },
+    {
+      "ref": "F8",
+      "title": "Error contracts are prose (shape-sniff + regex), not machine-readable codes",
+      "type": "bespoke-replaceable/risk",
+      "severity": "medium",
+      "verdict": "confirmed",
+      "note": "http.ts:59-72 parseErrorMessage shape-sniffs {\"detail\"} and passes non-JSON through verbatim; mcpErrors.ts:11-12 SETUP_PATTERN regexes backend prose to classify OAuth setup-required; ai-backend errors.py:22 does expose a typed code/details ApiErrorResponse but the FE ignores `code` and the backend MCP path being classified isn't consumed by code — so consumption is prose-based as claimed."
+    },
+    {
+      "ref": "F9",
+      "title": "WindowBridge interface declared twice; stale rpc-protocol comment",
+      "type": "duplication",
+      "severity": "low",
+      "verdict": "accepted",
+      "note": "Low severity accepted without deep verification per instructions."
+    },
+    {
+      "ref": "F10",
+      "title": "Docs-vs-code: audit-chain 'shared Python + TS' and api-types 'generated' are both false",
+      "type": "inconsistency",
+      "severity": "low",
+      "verdict": "accepted",
+      "note": "Low severity accepted without deep verification per instructions."
+    },
+    {
+      "ref": "F11",
+      "title": "Default persona slug 'sarah_acme' hardcoded ×4",
+      "type": "inconsistency",
+      "severity": "low",
+      "verdict": "accepted",
+      "note": "Low severity accepted without deep verification per instructions."
+    },
+    {
+      "ref": "F12",
+      "title": "Positive patterns worth propagating",
+      "type": "positive",
+      "severity": "low",
+      "verdict": "accepted",
+      "note": "Non-defect positive-pattern note accepted as-is per instructions."
+    }
+  ]
+}
