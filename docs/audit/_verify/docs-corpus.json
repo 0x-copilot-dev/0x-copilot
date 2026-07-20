@@ -1,0 +1,93 @@
+{
+  "cluster": "docs-corpus",
+  "verdicts": [
+    {
+      "ref": "F1",
+      "title": "Folder 'unused-code/backend' actually audits ai-backend; duplicates ai-backend pass; services/backend unaudited",
+      "type": "duplication",
+      "severity": "high",
+      "verdict": "confirmed",
+      "note": "docs/unused-code/backend/README.md:1 titles itself 'Unused code and smells — services/ai-backend' and README.md:9 scopes out services/backend/backend-facade; both passes date 2026-05-06 over the same service, so services/backend has no audit."
+    },
+    {
+      "ref": "F2",
+      "title": "use-cases README index desynced from folder; 13/14 links dead; data-flow link untracked",
+      "type": "inconsistency",
+      "severity": "high",
+      "verdict": "confirmed",
+      "note": "README lists 01-cold-start-first-message.md etc. while git ls-files docs/use-cases shows 01-new-conversation-simple.md etc.; only 06-mcp-installed-not-authenticated.md matches, and services/ai-backend/docs/architecture/data-flow.md is not tracked."
+    },
+    {
+      "ref": "F3",
+      "title": "decomp corpus half-written; indexes overstate coverage; refactor/ + replacement-analysis.md missing",
+      "type": "dead-code",
+      "severity": "medium",
+      "verdict": "confirmed",
+      "note": "docs/refactor/ and docs/decomp/replacement-analysis.md are untracked; _index.md files link ~20 nonexistent docs incl. capabilities/mcp-loader.md, runtime-worker/handlers-approval.md, persistence/persistence-bundle.md (minor: standalone-doc count is 13 not the MD's 14)."
+    },
+    {
+      "ref": "F4",
+      "title": "Workspace-layout facts drifted across topology + two .cursor mirrors + service-boundaries",
+      "type": "ssot-violation",
+      "severity": "medium",
+      "verdict": "confirmed",
+      "note": "docs/architecture/workspace-topology.md:29-31 lists apps/mac|windows 'planned' and omits apps/desktop; .cursor/rules/workspace-architecture.mdc:14 + service-boundaries.mdc:20 repeat it; docs/architecture/service-boundaries.md:20,40 still mark apps/desktop 'Planned' and gated on Phase S."
+    },
+    {
+      "ref": "F5",
+      "title": "multi-tenant-deployment lists RLS/KMS-vault/SIEM as planned while C5-C9 runbooks document them implemented",
+      "type": "inconsistency",
+      "severity": "medium",
+      "verdict": "confirmed",
+      "note": "docs/architecture/multi-tenant-deployment.md:22-31 lists RLS ('not enabled in application DDL today'), managed vault, SIEM as 'Planned / design-only' while rls-incident-response.md:8-25 (PR 15 policies + rollout) and siem-export.md:1-20 (running pump) describe them as implemented."
+    },
+    {
+      "ref": "F6",
+      "title": "Two ai-backend passes contradict on share_service._collect_sources(sources_visible)",
+      "type": "inconsistency",
+      "severity": "medium",
+      "verdict": "confirmed",
+      "note": "ai-backend/06-agent-runtime-api-and-services.md:20 marks it High-confidence 'Remove redundant parameter' while backend/cluster-agent-runtime-domain-services.md:30 rules it a 'False positive … No remediation needed' citing call-site reads ~lines 459/468."
+    },
+    {
+      "ref": "F7",
+      "title": "Surviving prior dead-code claims to re-verify at HEAD (curated salvage list)",
+      "type": "dead-code",
+      "severity": "medium",
+      "verdict": "partial",
+      "note": "All cited docs do carry these claims, but the 'surviving/high-confidence' framing is stale for >=2 enumerated items: at HEAD InboxEventEnvelopeSchema IS imported/used (sse/inbox_adapter.py:17,72) and ToolBudgetMiddleware.check_admit IS wired (runtime_worker/handlers/run.py:1429, capability_tool_wiring.py:64); register_health_routes(app) still passes no checkers (app.py:1317) so readyz-always-ready holds — exactly the re-verification the finding asks for."
+    },
+    {
+      "ref": "F8",
+      "title": "Broken/stale pointers in living docs (dev-testing Run-Locally, desktop-app machine-local memory link)",
+      "type": "inconsistency",
+      "severity": "low",
+      "verdict": "accepted",
+      "note": "Low severity accepted as-is per protocol."
+    },
+    {
+      "ref": "F9",
+      "title": "Roadmap/plan corpora carry no shipped-status tracking",
+      "type": "inconsistency",
+      "severity": "low",
+      "verdict": "accepted",
+      "note": "Low severity accepted as-is per protocol."
+    },
+    {
+      "ref": "F10",
+      "title": "~70k LOC of historical planning text without archival marker",
+      "type": "refactor",
+      "severity": "low",
+      "verdict": "accepted",
+      "note": "Low severity accepted as-is per protocol."
+    },
+    {
+      "ref": "F11",
+      "title": "Doc holds a third copy of the byte-exact SIWE template + hardcoded persona table",
+      "type": "risk",
+      "severity": "low",
+      "verdict": "accepted",
+      "note": "Low severity accepted as-is per protocol."
+    }
+  ]
+}
