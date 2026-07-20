@@ -110,6 +110,7 @@ from backend_app.identity.account_merge import (
     MergeNotAllowed,
     NullRuntimeMergeClient,
     RuntimeMergePort,
+    UnconfiguredRuntimeMergeClient,
 )
 from backend_app.identity.account_merge_store import (
     AccountMergeStore,
@@ -1400,6 +1401,7 @@ def create_app(
         siwe_store=getattr(app.state, "siwe_store", None),
         oidc_store=getattr(app.state, "oidc_store", None),
         password_store=getattr(app.state, "password_store", None),
+        identity_store=resolved_identity_store,
     )
     register_me_preferences_routes(
         app,
@@ -2115,14 +2117,21 @@ def create_app(
         )
     if resolved_merge_data is not None and resolved_session_service is not None:
         ai_backend_url = os.environ.get("AI_BACKEND_URL", "").strip()
-        resolved_runtime_merge: RuntimeMergePort = runtime_merge_client or (
-            HttpRuntimeMergeClient(
+        if runtime_merge_client is not None:
+            resolved_runtime_merge: RuntimeMergePort = runtime_merge_client
+        elif ai_backend_url:
+            resolved_runtime_merge = HttpRuntimeMergeClient(
                 base_url=ai_backend_url,
                 service_token=os.environ.get("ENTERPRISE_SERVICE_TOKEN"),
             )
-            if ai_backend_url
-            else NullRuntimeMergeClient()
-        )
+        elif merge_data_port is not None:
+            # A REAL (injected/Postgres) deployment without AI_BACKEND_URL:
+            # fail CLOSED at the runtime checkpoint rather than silently
+            # skipping the ai-backend re-key (NFR-10 — no silent partial
+            # merge). In-memory harnesses keep the Null client below.
+            resolved_runtime_merge = UnconfiguredRuntimeMergeClient()
+        else:
+            resolved_runtime_merge = NullRuntimeMergeClient()
         app.state.account_merge_service = AccountMergeService(
             identity_store=resolved_identity_store,
             merge_store=account_merge_store or InMemoryAccountMergeStore(),

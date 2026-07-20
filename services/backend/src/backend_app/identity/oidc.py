@@ -547,24 +547,16 @@ class OidcService:
                 # FR-L6: already mine — idempotent no-op.
                 status = "already_linked"
                 identity_id = existing.identity_id
-            elif consumed.link_confirm_merge and self._merge_service is not None:
-                # FR-M1/U2 (D-01): the user consented at link-start; the
-                # verified id_token IS the proof of the absorbed identity.
-                # The saga re-keys the identity row (with everything else)
-                # to the caller; after it returns the subject is ours.
-                self._merge_service.merge_for_conflict(
-                    survivor_org_id=org_id,
-                    survivor_user_id=user_id,
-                    absorbed_org_id=existing.org_id,
-                    absorbed_user_id=existing.user_id,
-                    proof_ref=f"oidc:{provider.provider_id}:{subject}",
-                    ip=ip,
-                    user_agent=user_agent,
-                )
-                status = "merged"
-                identity_id = existing.identity_id
             else:
-                # FR-M1: owned by another account — the merge flow's trigger.
+                # FR-M1: owned by another account. SECURITY: a merge is NEVER
+                # executed from this public callback — the completer is
+                # unauthenticated, so an attacker could start a link on THEIR
+                # account (consent pre-recorded) and let the victim's Google
+                # sign-in absorb the victim's account (confused deputy). The
+                # recorded ``link_confirm_merge`` stays on the state row for a
+                # future AUTHENTICATED completion endpoint; until then Google
+                # conflicts surface merge_required and the merge runs through
+                # the authenticated wallet-link path (routes/me_identities).
                 raise OidcIdentityAlreadyLinked(
                     org_id=existing.org_id, user_id=existing.user_id
                 )

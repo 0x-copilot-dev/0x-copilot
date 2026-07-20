@@ -118,6 +118,10 @@ class LinkedIdentityModel(BaseModel):
     id: str
     provider: str | None = None
     email: str | None = None
+    # Per-identity IdP assertion (FR-L4 "with verified state"): True/False
+    # from the id_token's email_verified claim at link time; None when the
+    # IdP asserted nothing (or for wallets, which have no email).
+    email_verified: bool | None = None
     address: str | None = None
     chain_id: int | None = None
     chain_name: str | None = None
@@ -405,6 +409,13 @@ def _resolve_identity_extras(
     return wallet, _resolve_auth_method(identity_store, org_id, user_id)
 
 
+def _claim_bool(claims: dict[str, Any], key: str) -> bool | None:
+    """A boolean IdP claim, or ``None`` when absent/non-boolean."""
+
+    value = claims.get(key)
+    return value if isinstance(value, bool) else None
+
+
 def _resolve_linked_identities(
     siwe_store: SiweStore | None,
     oidc_store: OidcStore | None,
@@ -446,6 +457,9 @@ def _resolve_linked_identities(
                         id=ident.identity_id,
                         provider=ident.provider_id,
                         email=ident.email_at_link,
+                        email_verified=_claim_bool(
+                            ident.claims_snapshot, "email_verified"
+                        ),
                         linked_at=ident.linked_at.isoformat(),
                     )
                 )

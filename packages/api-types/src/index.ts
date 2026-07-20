@@ -2902,6 +2902,8 @@ export interface LinkedIdentity {
   id: string;
   provider?: string | null;
   email?: string | null;
+  /** Per-identity IdP `email_verified` assertion at link time (null = unasserted). */
+  email_verified?: boolean | null;
   address?: string | null;
   chain_id?: number | null;
   chain_name?: string | null;

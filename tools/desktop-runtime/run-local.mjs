@@ -393,6 +393,9 @@ conn.close()
       MCP_TOKEN_VAULT_SECRET: secrets.vaultSecret,
       MCP_TOKEN_VAULT_BACKEND: "local",
       AUDIT_HMAC_KEY: secrets.auditHmacKey,
+      // Account-merge runtime leg: the backend saga calls ai-backend over
+      // HTTP; without this the saga fails closed at its runtime checkpoint.
+      AI_BACKEND_URL: `http://127.0.0.1:${aiPort}`,
     },
   });
 
