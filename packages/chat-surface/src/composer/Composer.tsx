@@ -1375,8 +1375,11 @@ function formatBytes(bytes: number): string {
  * 220px values fall out of the default 2 rows / 8 rows at 14px font · 1.5
  * line-height + 20px padding, so call sites that didn't pass rows props see
  * the exact same visual size. */
-const TEXTAREA_FONT_SIZE_PX = 14;
-const TEXTAREA_LINE_HEIGHT_PX = TEXTAREA_FONT_SIZE_PX * 1.5; // 21
+// v3 "quiet" system sizes the composer text at 12.5–13px (copilot-v3.css
+// `.cmp textarea{font:12.5px/1.55}`); 13px keeps it a hair above the 12.5
+// baseline while matching the 13px chat-body anchor.
+const TEXTAREA_FONT_SIZE_PX = 13;
+const TEXTAREA_LINE_HEIGHT_PX = TEXTAREA_FONT_SIZE_PX * 1.5; // 19.5
 const TEXTAREA_PADDING_PX = 20; // 10 top + 10 bottom
 const DEFAULT_MIN_ROWS = 2;
 const DEFAULT_MAX_ROWS = 8;

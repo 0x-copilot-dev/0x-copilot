@@ -446,6 +446,9 @@ export function RunComposer(props: RunComposerProps): ReactElement {
       // The Fast/Balanced/Deep depth grid is intentionally hidden — the picker
       // is a model list (Cursor/Claude shape), not a depth toggle.
       depthVisible={false}
+      // Compact v3 "quiet" composer for the narrow Run rail — start at 2 rows
+      // instead of web's roomy 3 (paired with composer.css's auto-height shell).
+      minRows={2}
       onSubmit={handleSubmit}
       disabled={disabled}
       onOpenSkillsPanel={() => onOpenSkillsSettings?.()}

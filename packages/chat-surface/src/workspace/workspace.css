@@ -21,20 +21,32 @@
   gap: 2px;
   min-width: 0;
   overflow-x: auto;
+  /* v3 `.sd-tabs{padding:7px 9px}` — a 9px inset so the first tab clears the
+   * rail's left edge (was 0: the "Chat" tab butted the border) and 7px of
+   * vertical breathing room around the strip. */
+  padding: 7px 9px;
 }
 
 .atlas-workspace-tabs__tab {
   align-items: center;
   background: transparent;
-  border: 0;
+  /* Transparent hairline so the active box (below) adds a border with no
+   * layout shift. */
+  border: 1px solid transparent;
   border-radius: var(--radius-md);
+  box-sizing: border-box;
   color: var(--color-text-muted);
   cursor: pointer;
   display: inline-flex;
-  font: 500 0.75rem/1.2 var(--font-sans);
-  gap: 4px;
+  /* v3 `.sd-tab{flex:1}` — tabs share the strip evenly and center their
+   * label, so the 2px gap reads as distinct segments rather than a run of
+   * left-packed labels. */
+  flex: 1 1 0;
+  justify-content: center;
+  font: 500 11.5px/1.2 var(--font-sans);
+  gap: 6px;
   min-height: 1.75rem;
-  padding: 0 0.5rem;
+  padding: 5px 2px;
   white-space: nowrap;
 }
 
@@ -46,7 +58,9 @@
 .atlas-workspace-tabs__tab--active {
   background: var(--color-surface);
   color: var(--color-text);
-  box-shadow: inset 0 -2px 0 0 var(--color-accent-strong);
+  /* v3 `.sd-tab[data-on]` — a full hairline box (border + surface), not an
+   * accent underline. */
+  border-color: var(--color-border);
 }
 
 .atlas-workspace-tabs__tab:focus-visible {
@@ -113,4 +127,28 @@
   font-weight: var(--font-weight-bold);
   line-height: 11px;
   text-align: center;
+}
+
+/* Workspace tab BODY + empty state. These lived ONLY in apps/frontend's
+ * private styles.css, so on desktop the Sources/Agents/Approvals panels and
+ * their empty states rendered unstyled (no padding, left-aligned, full-strength
+ * text). Hoisted here so both hosts get them from the package, styled to the v3
+ * empty state: centered, generous padding, muted secondary text. */
+.atlas-workspace-tab {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  min-height: 0;
+  overflow-y: auto;
+  padding: 12px 14px;
+}
+
+.atlas-workspace-tab--empty {
+  align-items: center;
+  justify-content: center;
+  text-align: center;
+  color: var(--color-text-muted);
+  font-size: var(--font-size-xs);
+  line-height: 1.6;
+  padding: 40px 20px;
 }

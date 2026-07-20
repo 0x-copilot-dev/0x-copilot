@@ -683,13 +683,16 @@ function formatGhostTime(epochMs: number): string {
   return fmt.format(new Date(epochMs));
 }
 
+// v3 "quiet" system colors resolved through design-system tokens so the chat
+// canvas themes correctly (light / dark / accent). The previous hardcoded
+// near-black hex was locked to the dark theme and drifted warm of the tokens.
 const PALETTE = {
-  cardBg: "#101213",
-  cardBorder: "#1f2225",
-  textHi: "#f4f5f6",
-  textLo: "#9aa0a6",
-  ghostBg: "#1a1d20",
-  ghostBorder: "#3a3e44",
+  cardBg: "var(--color-surface)",
+  cardBorder: "var(--color-border)",
+  textHi: "var(--color-text)",
+  textLo: "var(--color-text-muted)",
+  ghostBg: "var(--color-surface-muted)",
+  ghostBorder: "var(--color-border-strong)",
   ghostAccent: "var(--color-accent)",
 } as const;
 
@@ -705,8 +708,11 @@ const chatContainerStyle = (): CSSProperties => ({
   padding: 12,
   gap: 10,
   color: PALETTE.textHi,
-  fontFamily:
-    "ui-sans-serif, system-ui, -apple-system, 'Segoe UI', Roboto, sans-serif",
+  // v3 anchors chat body text at 12.5–13px (copilot.css `body{font-size:13px}`,
+  // `.msg{font-size:12.5px}`). Without this the message text inherited the UA
+  // 16px default — the single largest text in the cockpit ("too big").
+  fontSize: 13,
+  fontFamily: "var(--font-sans)",
 });
 
 const messageListStyle = (ghost: boolean): CSSProperties => ({
@@ -751,11 +757,15 @@ const ulStyle: CSSProperties = {
 };
 
 const messageItemStyle = (role: TcChatMessage["role"]): CSSProperties => ({
-  background: role === "user" ? "#1f2225" : "transparent",
+  // v3 `.msg.you` — a right-aligned speech bubble (muted surface, asymmetric
+  // radius, 88% cap) for the user; the assistant message renders flush.
+  background: role === "user" ? "var(--color-surface-muted)" : "transparent",
   border: role === "user" ? `1px solid ${PALETTE.cardBorder}` : "none",
-  borderRadius: 8,
-  padding: role === "user" ? "8px 12px" : "0",
+  borderRadius: role === "user" ? "10px 10px 3px 10px" : 0,
+  padding: role === "user" ? "8px 11px" : "0",
   color: PALETTE.textHi,
+  alignSelf: role === "user" ? "flex-end" : "stretch",
+  maxWidth: role === "user" ? "88%" : "100%",
 });
 
 // PR-3.8 — the fleet card carries its own chrome (`.aui-fleet-card`), so the

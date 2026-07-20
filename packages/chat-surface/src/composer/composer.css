@@ -172,14 +172,19 @@
 
 .aui-composer {
   --composer-padding: 0.5rem;
-  --composer-radius: 1.5rem;
+  /* v3 `.cmp{border-radius:11px}` — the 24px pill read as an oversized card
+   * in the ~360px Run rail. */
+  --composer-radius: 11px;
   /* Phase 9 composer redesign: base shell sized for a 3-row textarea
    * (matches minRows={3} in AssistantComposer). Switched from fixed
    * `height` to `min-height` so the container GROWS when the textarea
    * auto-expands past 3 rows — previously the fixed height + overflow:
    * hidden clipped the textarea and pushed the toolbar/hint past the
    * workspace bottom (the "why do I need to scroll?" bug). */
-  --composer-shell-height: 11rem;
+  /* v3 composer has NO reserved minimum — it sizes to content (a 2-row
+   * textarea in the rail) and grows. `auto` removes the 176px floor that
+   * made the empty composer ~half the rail's width tall. */
+  --composer-shell-height: auto;
   background: var(--color-bg);
   border: 1px solid var(--color-border);
   border-radius: var(--composer-radius);
@@ -187,7 +192,7 @@
   display: flex;
   flex-direction: column;
   gap: 0.5rem;
-  margin: var(--space-lg) auto 0;
+  margin: var(--space-sm) auto 0;
   max-width: var(--chat-content-width);
   box-sizing: border-box;
   min-height: var(--composer-shell-height);
@@ -204,7 +209,7 @@
 }
 
 .aui-composer[data-has-topbar="true"] {
-  --composer-shell-height: 13rem;
+  --composer-shell-height: auto;
 }
 
 .aui-composer[data-focused="true"] .atlas-depth {
@@ -330,15 +335,17 @@
   position: relative;
 }
 
+/* v3 control tier: 28px rounded-square icons (copilot-v3.css `.cmp-ic`/
+ * `.cmp-send`), not the 32px pill-round buttons. */
 .aui-composer-add-attachment,
 .aui-composer-send {
-  border-radius: var(--radius-full);
+  border-radius: var(--radius-md);
   font-size: var(--font-size-md);
-  height: 2rem;
-  min-height: 2rem;
-  min-width: 2rem;
+  height: 28px;
+  min-height: 28px;
+  min-width: 28px;
   padding: 0.25rem;
-  width: 2rem;
+  width: 28px;
 }
 
 /* Mic (voice input, disabled placeholder). Ported from the web baseline
@@ -373,13 +380,16 @@
   display: inline-flex;
   align-items: center;
   gap: var(--space-xs);
-  padding: 4px 10px;
-  height: 28px;
+  padding: 0 8px;
+  height: 26px;
   background: var(--color-surface);
   border: 1px solid var(--color-border);
-  border-radius: 999px;
+  border-radius: var(--radius-md);
   color: var(--color-text);
-  font-size: var(--font-size-xs);
+  /* v3 `.cmp-pill` — metadata is set in JetBrains Mono at 10px, the "quiet
+   * system" signature that separates data/technical chrome from body sans. */
+  font-family: var(--font-mono);
+  font-size: 10px;
   font-weight: var(--font-weight-medium);
   cursor: pointer;
   outline: none;
