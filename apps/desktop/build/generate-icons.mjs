@@ -5,17 +5,19 @@
 //   build/icon.icns  macOS bundle icon (electron-builder + CLI branded shell)
 //   build/icon.ico   Windows bundle icon (electron-builder)
 //
-// macOS-only on purpose: it leans on the OS renderers (qlmanage for SVG
-// rasterization, sips for resizing, iconutil for icns) so the repo carries no
-// image-processing dependency. The .ico container is written by hand — modern
-// Windows accepts PNG-compressed entries for every size we ship.
+// macOS-only on purpose: sips (resize) and iconutil (icns) are macOS tools.
+// SVG rasterization uses rsvg-convert (librsvg, `brew install librsvg`) instead
+// of the built-in qlmanage thumbnailer, because qlmanage flattens SVG
+// transparency onto opaque WHITE — which shipped a white box behind the
+// dock/taskbar icon. rsvg-convert honours the source alpha. The .ico container
+// is written by hand — modern Windows accepts PNG-compressed entries for every
+// size we ship.
 
 import { spawnSync } from "node:child_process";
 import {
   copyFileSync,
   mkdtempSync,
   readFileSync,
-  renameSync,
   rmSync,
   writeFileSync,
 } from "node:fs";
@@ -27,7 +29,15 @@ const HERE = path.dirname(fileURLToPath(import.meta.url));
 const SOURCE = path.join(HERE, "icon-source.svg");
 
 if (process.platform !== "darwin") {
-  console.error("generate-icons.mjs needs macOS (qlmanage/sips/iconutil).");
+  console.error("generate-icons.mjs needs macOS (sips/iconutil).");
+  process.exit(1);
+}
+
+if (spawnSync("rsvg-convert", ["--version"], { stdio: "ignore" }).status !== 0) {
+  console.error(
+    "generate-icons.mjs needs rsvg-convert for transparent SVG rasterization.\n" +
+      "Install librsvg first:  brew install librsvg",
+  );
   process.exit(1);
 }
 
@@ -43,10 +53,11 @@ function run(cmd, args) {
 
 const work = mkdtempSync(path.join(tmpdir(), "copilot-icons-"));
 try {
-  // 1. SVG -> 1024 master PNG. qlmanage names the thumbnail <name>.svg.png.
-  run("qlmanage", ["-t", "-s", "1024", "-o", work, SOURCE]);
+  // 1. SVG -> 1024 master PNG, preserving the source alpha (transparent margins
+  //    + rounded-corner cutouts). rsvg-convert renders straight to the target
+  //    size; unlike qlmanage it does not composite onto white.
   const master = path.join(work, "icon-1024.png");
-  renameSync(path.join(work, "icon-source.svg.png"), master);
+  run("rsvg-convert", ["-w", "1024", "-h", "1024", SOURCE, "-o", master]);
   const width = run("sips", ["-g", "pixelWidth", master]);
   if (!/pixelWidth: 1024/.test(width)) {
     throw new Error(`master render is not 1024px:\n${width}`);
