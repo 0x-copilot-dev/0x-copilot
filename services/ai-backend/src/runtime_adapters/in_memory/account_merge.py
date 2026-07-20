@@ -188,7 +188,7 @@ class InMemoryAccountMergeRekeyer:
     def _rekey_queue(self, store: InMemoryRuntimeApiStore) -> None:
         """Rewrite tenancy on queued commands and their outbox payloads.
 
-        The merge saga quiesces the absorbed account first, so pending
+        FR-M6 quiesce is NOT implemented yet (deferred), so pending
         entries here mean the drain was incomplete — re-key them anyway
         (conservative: never leave absorbed-keyed work) and warn.
         """
@@ -220,7 +220,7 @@ class InMemoryAccountMergeRekeyer:
         if moved:
             self._warn(
                 "queue_not_drained: re-keyed pending queue entries for the "
-                "absorbed account; the saga should quiesce before merging"
+                "absorbed account re-keyed WITHOUT a drain (FR-M6 deferred)"
             )
         self._count("queue_commands", moved)
 

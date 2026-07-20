@@ -307,3 +307,114 @@ class TestUnlinkRoutes:
             params={"org_id": "org_caller", "user_id": "usr_caller"},
         )
         assert response.status_code == 404
+
+
+class TestLinkWalletConflictRoutes:
+    """FR-L6/M1/U2 at the ROUTE layer: 409 merge_required without consent;
+    with confirm_merge the real saga runs and the link completes as merged."""
+
+    def _app(self) -> tuple[Any, Any, Any]:
+        from fastapi.testclient import TestClient
+
+        from backend_app.app import create_app
+        from backend_app.contracts import (
+            OrganizationMemberRecord,
+            OrganizationMemberSource,
+            WalletIdentityRecord,
+        )
+
+        identity_store = InMemoryIdentityStore()
+        siwe_store = InMemorySiweStore()
+        for org, user, email in (
+            ("org_caller", "usr_caller", "caller@acme.com"),
+            ("org_other", "usr_other", "other@acme.com"),
+        ):
+            identity_store.create_organization(
+                OrganizationRecord(org_id=org, display_name=org, slug=org)
+            )
+            identity_store.create_user(
+                UserRecord(
+                    user_id=user,
+                    org_id=org,
+                    primary_email=email,
+                    display_name=user,
+                )
+            )
+            identity_store.add_member(
+                OrganizationMemberRecord(
+                    org_id=org, user_id=user, source=OrganizationMemberSource.SIWE
+                )
+            )
+        wallet = Account.create()
+        siwe_store.create_wallet_identity(
+            WalletIdentityRecord(
+                address=wallet.address.lower(),
+                org_id="org_other",
+                user_id="usr_other",
+                chain_id=8453,
+            )
+        )
+        sessions = SessionService(
+            store=InMemorySessionStore(),
+            auth_secret=_AUTH_SECRET,
+            dev_mint_allowed=True,
+        )
+        app = create_app(
+            configure_logging_on_create=False,
+            configure_telemetry_on_create=False,
+            identity_store=identity_store,
+            siwe_store=siwe_store,
+            session_service=sessions,
+        )
+        return TestClient(app), wallet, identity_store
+
+    def _signed_link_body(self, client: Any, wallet: Any) -> dict[str, str]:
+        nonce_res = client.post(
+            "/internal/v1/auth/siwe/nonce",
+            json={"address": wallet.address, "chain_id": 8453},
+        )
+        assert nonce_res.status_code == 200
+        now = datetime.now(timezone.utc)
+        message = build_siwe_message(
+            domain=_DOMAIN,
+            address=wallet.address,
+            uri=_ORIGIN,
+            chain_id=8453,
+            nonce=nonce_res.json()["nonce"],
+            issued_at=now,
+            expiration_time=now + timedelta(minutes=5),
+        )
+        return {"message": message, "signature": _sign(wallet, message)}
+
+    def test_conflict_409_then_confirmed_merge_completes(self) -> None:
+        client, wallet, identity_store = self._app()
+        params = {"org_id": "org_caller", "user_id": "usr_caller"}
+
+        # Without consent: the structured 409 (owner ids never leaked).
+        body = self._signed_link_body(client, wallet)
+        refused = client.post(
+            "/internal/v1/me/identities/wallet", params=params, json=body
+        )
+        assert refused.status_code == 409
+        detail = refused.json()["detail"]
+        assert detail["code"] == "merge_required"
+        assert "usr_other" not in refused.text
+
+        # With consent (FR-U2): the REAL saga runs; the link returns merged.
+        body = self._signed_link_body(client, wallet)
+        merged = client.post(
+            "/internal/v1/me/identities/wallet",
+            params=params,
+            json={**body, "confirm_merge": True},
+        )
+        assert merged.status_code == 200, merged.text
+        payload = merged.json()
+        assert payload["status"] == "merged"
+        assert payload["chain_name"] == "Base"
+        # The wallet row now belongs to the caller; the absorbed account is
+        # disabled with lineage.
+        row = next(iter((client.app.state.siwe_store).wallet_identities.values()))
+        assert (row.org_id, row.user_id) == ("org_caller", "usr_caller")
+        absorbed = identity_store.users["usr_other"]
+        assert absorbed.status.value == "disabled"
+        assert absorbed.absorbed_into_user_id == "usr_caller"

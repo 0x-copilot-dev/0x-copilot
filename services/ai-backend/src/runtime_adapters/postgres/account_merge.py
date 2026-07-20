@@ -63,15 +63,15 @@ class PostgresAccountMergeRekeyer:
     _SIMPLE_TABLES: tuple[tuple[str, tuple[str, ...]], ...] = (
         ("runtime_outbox_events", ()),
         ("runtime_async_tasks", ()),
-        ("runtime_subagent_results", ()),
-        ("runtime_tool_invocations", ()),
+        # runtime_subagent_results / runtime_tool_invocations /
+        # runtime_context_payload_blobs are 0011 encryption targets — they
+        # move via _rekey_encrypted_extras (v1 guard + re-wrap), not here.
         (
             "runtime_approval_requests",
             ("requested_by_user_id", "decided_by_user_id", "forwarded_to_user_id"),
         ),
         ("runtime_approval_batches", ()),
         ("runtime_context_payloads", ()),
-        ("runtime_context_payload_blobs", ()),
         ("runtime_compression_events", ()),
         ("runtime_capability_snapshots", ()),
         (
@@ -191,6 +191,7 @@ class PostgresAccountMergeRekeyer:
                 await self._rekey_encrypted_messages(conn)
                 await self._rekey_encrypted_events(conn)
                 await self._rekey_encrypted_citations(conn)
+                await self._rekey_encrypted_extras(conn)
                 await self._rekey_drafts(conn)
                 await self._rekey_memory(conn)
                 await self._rekey_share_recipients(conn)
@@ -248,7 +249,8 @@ class PostgresAccountMergeRekeyer:
         self._count(table, moved)
 
     async def _warn_if_outbox_pending(self, conn: psycopg.AsyncConnection) -> None:
-        """The saga quiesces first — pending outbox work means an incomplete drain."""
+        """FR-M6 quiesce is NOT implemented yet (deferred, PRD amendment §11):
+        pending outbox work is re-keyed with a warning instead of drained."""
 
         cur = await conn.execute(
             """
@@ -262,7 +264,8 @@ class PostgresAccountMergeRekeyer:
         if pending:
             self._warn(
                 f"queue_not_drained: {pending} pending outbox row(s) for the "
-                "absorbed org were re-keyed; the saga should quiesce first"
+                "absorbed org were re-keyed WITHOUT a drain (FR-M6 quiesce is "
+                "deferred) — verify their commands re-execute correctly"
             )
 
     # ----- conversations / runs (idempotency uniques + runtime context) ---
@@ -460,6 +463,104 @@ class PostgresAccountMergeRekeyer:
         moved = await self._execute(
             conn,
             "UPDATE agent_messages SET org_id = %s WHERE org_id = %s",
+            (self._survivor_org, self._absorbed_org),
+        )
+        self._count(table, moved)
+
+    async def _rekey_encrypted_extras(self, conn: psycopg.AsyncConnection) -> None:
+        """Move the remaining 0011 encryption-target tables with a v1 guard.
+
+        ``runtime_subagent_results.response_text`` (text envelope) and
+        ``runtime_tool_invocations.args_json_redacted`` /
+        ``result_summary_json_redacted`` (``$enc`` jsonb) re-wrap like the
+        message columns. ``runtime_context_payload_blobs.encrypted_blob`` has
+        NO live writer defining its byte format yet — v1 rows there always
+        census-warn (operator re-wrap) rather than guessing an encoding.
+        """
+
+        table = "runtime_subagent_results"
+        if not self._codec.is_envelope_v1:
+            await self._warn_unrewrappable_v1_rows(conn, table)
+        else:
+            cur = await conn.execute(
+                """
+                SELECT id, response_text
+                  FROM runtime_subagent_results
+                 WHERE org_id = %s AND encryption_version = 1
+                """,
+                (self._absorbed_org,),
+            )
+            for row in await cur.fetchall():
+                await conn.execute(
+                    "UPDATE runtime_subagent_results SET response_text = %s "
+                    "WHERE id = %s",
+                    (
+                        self._rewrap_text(
+                            row["response_text"],
+                            table=table,
+                            column="response_text",
+                        ),
+                        row["id"],
+                    ),
+                )
+        moved = await self._execute(
+            conn,
+            "UPDATE runtime_subagent_results SET org_id = %s WHERE org_id = %s",
+            (self._survivor_org, self._absorbed_org),
+        )
+        self._count(table, moved)
+
+        table = "runtime_tool_invocations"
+        if not self._codec.is_envelope_v1:
+            await self._warn_unrewrappable_v1_rows(conn, table)
+        else:
+            cur = await conn.execute(
+                """
+                SELECT id, args_json_redacted, result_summary_json_redacted
+                  FROM runtime_tool_invocations
+                 WHERE org_id = %s AND encryption_version = 1
+                """,
+                (self._absorbed_org,),
+            )
+            for row in await cur.fetchall():
+                await conn.execute(
+                    """
+                    UPDATE runtime_tool_invocations
+                       SET args_json_redacted = %s,
+                           result_summary_json_redacted = %s
+                     WHERE id = %s
+                    """,
+                    (
+                        self._jsonb(
+                            self._rewrap_jsonb(
+                                row["args_json_redacted"],
+                                table=table,
+                                column="args_json_redacted",
+                            )
+                        ),
+                        self._jsonb(
+                            self._rewrap_jsonb(
+                                row["result_summary_json_redacted"],
+                                table=table,
+                                column="result_summary_json_redacted",
+                            )
+                        ),
+                        row["id"],
+                    ),
+                )
+        moved = await self._execute(
+            conn,
+            "UPDATE runtime_tool_invocations SET org_id = %s WHERE org_id = %s",
+            (self._survivor_org, self._absorbed_org),
+        )
+        self._count(table, moved)
+
+        # Blob store: no writer defines the byte format yet — never guess.
+        table = "runtime_context_payload_blobs"
+        await self._warn_unrewrappable_v1_rows(conn, table)
+        moved = await self._execute(
+            conn,
+            "UPDATE runtime_context_payload_blobs SET org_id = %s WHERE org_id = %s",
             (self._survivor_org, self._absorbed_org),
         )
         self._count(table, moved)

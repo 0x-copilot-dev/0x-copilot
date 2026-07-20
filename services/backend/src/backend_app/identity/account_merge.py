@@ -120,6 +120,23 @@ class NullRuntimeMergeClient:
         }
 
 
+class UnconfiguredRuntimeMergeClient:
+    """Fails CLOSED when a real (Postgres) deployment lacks AI_BACKEND_URL.
+
+    Silently skipping the runtime leg would mark a merge "completed" while
+    the absorbed account's conversations/runs/memory stay stranded in
+    ai-backend — the exact silent-partial-merge NFR-10 forbids. Raising here
+    halts the saga at its resumable ``backend_done`` checkpoint instead.
+    """
+
+    def merge(self, **kwargs: Any) -> dict[str, Any]:
+        del kwargs
+        raise MergeRuntimeFailed(
+            "runtime merge is not configured: set AI_BACKEND_URL for the "
+            "backend process (the saga resumes from its checkpoint once set)"
+        )
+
+
 class HttpRuntimeMergeClient:
     """Calls the ai-backend internal merge endpoint (PRD §6.4).
 
@@ -354,50 +371,113 @@ class PostgresMergeData:
       where it happened (NFR-5); sessions die by revocation, not adoption.
     """
 
-    # Plain retenant: no cross-account unique to collide with.
-    _RETENANT_PLAIN: tuple[str, ...] = (
-        "wallet_identities",
-        "oidc_identities",
-        "saml_identities",
-        "scim_external_ids",
-        "mcp_servers",
-        "mcp_auth_sessions",
-        "mcp_auth_connections",
-        "skills",
-        "todos",
-        "todo_series",
-        "api_keys",
-        "adapter_candidates",
-        "adapter_reviews",
+    # Declarative registry — org/user COLUMN NAMES are explicit per table
+    # (several tables use tenant_id / owner_user_id / reviewer_* naming) and
+    # are verified against the migrations DDL by
+    # tests/identity/test_postgres_merge_registry.py, so a schema drift or a
+    # wrong column here fails CI instead of aborting a live merge.
+    #
+    # Spec shape: (table, strategy, org_col, user_col, key_cols)
+    #   retenant  — plain UPDATE of the tenancy columns.
+    #   singleton — one row per owner: survivor's row wins, else re-key.
+    #   keyed     — survivor wins per key value, rest re-keyed.
+    #   drop      — security material / pending flow state dies with the
+    #               absorbed account (never follows the user).
+    _SPECS: tuple[tuple[str, str, str | None, str | None, tuple[str, ...]], ...] = (
+        ("wallet_identities", "retenant", "org_id", "user_id", ()),
+        ("oidc_identities", "retenant", "org_id", "user_id", ()),
+        ("saml_identities", "retenant", "org_id", "user_id", ()),
+        ("scim_external_ids", "retenant", "org_id", "user_id", ()),
+        ("mcp_servers", "retenant", "org_id", "user_id", ()),
+        ("mcp_auth_sessions", "retenant", "org_id", "user_id", ()),
+        ("mcp_auth_connections", "retenant", "org_id", "user_id", ()),
+        ("api_keys", "retenant", "org_id", "user_id", ()),
+        ("todos", "retenant", "tenant_id", "owner_user_id", ()),
+        ("todo_series", "retenant", "tenant_id", "owner_user_id", ()),
+        ("adapter_candidates", "retenant", "tenant_id", "submitter_user_id", ()),
+        ("adapter_reviews", "retenant", "reviewer_org_id", "reviewer_user_id", ()),
+        # UNIQUE (org_id, user_id, name): same-named skill → survivor wins.
+        ("skills", "keyed", "org_id", "user_id", ("name",)),
+        ("provider_api_keys", "keyed", "org_id", "user_id", ("provider",)),
+        # user_id-only tables (no org column at all).
+        (
+            "notification_preferences",
+            "keyed",
+            None,
+            "user_id",
+            ("event_kind", "channel"),
+        ),
+        ("notification_quiet_hours", "singleton", None, "user_id", ()),
+        # org-only config, PK (tenant_id, namespace).
+        ("tenant_settings", "keyed", "tenant_id", None, ("namespace",)),
+        ("user_profiles", "singleton", "org_id", "user_id", ()),
+        ("user_preferences", "singleton", "org_id", "user_id", ()),
+        ("user_avatars", "singleton", "org_id", "user_id", ()),
+        ("privacy_settings", "singleton", "org_id", "user_id", ()),
+        ("tool_use_policies", "singleton", "org_id", "user_id", ()),
+        # Security material / pending flow state: dies with the absorbed
+        # account (the survivor keeps their own). oidc_refresh_tokens are
+        # encrypted IdP credentials — exactly the _DROP doctrine.
+        ("mfa_factors", "drop", "org_id", "user_id", ()),
+        ("mfa_challenges", "drop", "org_id", "user_id", ()),
+        ("mfa_recovery_codes", "drop", "org_id", "user_id", ()),
+        ("local_credentials", "drop", "org_id", "user_id", ()),
+        ("password_reset_tokens", "drop", "org_id", "user_id", ()),
+        ("account_lockouts", "drop", "org_id", "user_id", ()),
+        ("oidc_refresh_tokens", "drop", "org_id", "user_id", ()),
+        ("oidc_authentications", "drop", "org_id", None, ()),
+        ("magic_link_tokens", "drop", "org_id", None, ()),
+        ("invitations", "drop", "org_id", None, ()),
+        ("scim_tokens", "drop", "org_id", None, ()),
     )
-    # Singleton per (org, user): if the survivor already has their row, the
-    # absorbed one is dropped (survivor wins, FR-M8); else it is re-keyed.
-    _SINGLETON: tuple[str, ...] = (
-        "user_profiles",
-        "user_preferences",
-        "user_avatars",
-        "notification_preferences",
-        "notification_quiet_hours",
-        "privacy_settings",
-        "tool_use_policies",
-        "siem_exporter_controls",
-        "tenant_settings",
-    )
-    # Keyed per (org, user, <key>): survivor wins per key value.
-    _KEYED: tuple[tuple[str, str], ...] = (("provider_api_keys", "provider"),)
-    # Security material / pending secrets that must NOT follow the user: the
-    # survivor keeps their own factors and unfinished flows die with the org.
-    _DROP: tuple[str, ...] = (
-        "mfa_factors",
-        "totp_secrets",
-        "webauthn_credentials",
-        "mfa_challenges",
-        "mfa_recovery_codes",
-        "local_credentials",
-        "password_reset_tokens",
-        "magic_link_tokens",
-        "account_lockouts",
-        "invitations",
+    # DELIBERATELY LEFT IN PLACE (the registry test enforces that every
+    # tenant table is either in _SPECS or named here with its reason):
+    # - identity_audit_events / mcp_audit_events / skill_audit_events /
+    #   todo_audit_events / adapter_registry_audit_events / login_attempts:
+    #   append-only history stays where it happened (NFR-5).
+    # - sessions: die by revocation in the saga's step 3, never adopted.
+    # - organizations / users / organization_members / role_assignments:
+    #   the absorbed org is retired with its sole member soft-disabled; the
+    #   single-org user model forbids moving memberships (PRD §3).
+    # - promoted_adapters / adapter_registry state / scim_groups /
+    #   scim_group_members / siem_exporter_controls / auth_providers /
+    #   auth_provider_domains / identity_policies / lockout_policies /
+    #   password_policies / tenant-level org config: org-scoped configuration
+    #   of the retired org — inert once no member can sign in (disabled users
+    #   fail closed at every ramp).
+    # - saml_authentications / siwe_nonces / oidc_jwks_cache: TTL'd flow
+    #   state / global cache; completing a pending flow against a disabled
+    #   user fails closed at user resolution.
+    # - account_merges: the saga's own ledger.
+    _LEAVE_IN_PLACE: frozenset[str] = frozenset(
+        {
+            "identity_audit_events",
+            "mcp_audit_events",
+            "skill_audit_events",
+            "todo_audit_events",
+            "adapter_registry_audit_events",
+            "login_attempts",
+            "sessions",
+            "organizations",
+            "users",
+            "organization_members",
+            "roles",
+            "role_assignments",
+            "promoted_adapters",
+            "tenant_adapter_settings",
+            "scim_groups",
+            "scim_group_members",
+            "siem_exporter_controls",
+            "auth_providers",
+            "auth_provider_domains",
+            "identity_policies",
+            "lockout_policies",
+            "password_policies",
+            "saml_authentications",
+            "siwe_nonces",
+            "oidc_jwks_cache",
+            "account_merges",
+        }
     )
 
     def __init__(self, pool: Any) -> None:
@@ -427,6 +507,27 @@ class PostgresMergeData:
         )
         return cur.fetchone() is not None
 
+    @staticmethod
+    def _predicates(
+        org_col: str | None,
+        user_col: str | None,
+        org_id: str,
+        user_id: str,
+        alias: str = "",
+    ) -> tuple[str, tuple[str, ...]]:
+        """WHERE fragment + params for a table's declared tenancy columns."""
+
+        prefix = f"{alias}." if alias else ""
+        clauses: list[str] = []
+        params: list[str] = []
+        if org_col is not None:
+            clauses.append(f"{prefix}{org_col} = %s")
+            params.append(org_id)
+        if user_col is not None:
+            clauses.append(f"{prefix}{user_col} = %s")
+            params.append(user_id)
+        return " AND ".join(clauses), tuple(params)
+
     def rekey(
         self,
         *,
@@ -439,105 +540,85 @@ class PostgresMergeData:
         with self._conn() as conn:
             with conn.cursor() as cur:
 
-                def _where(table: str) -> tuple[str, tuple[str, ...]]:
-                    """Absorbed-row predicate, tolerating org-only tables."""
-                    if self._has_column(cur, table, "user_id"):
-                        return (
-                            "org_id = %s AND user_id = %s",
-                            (absorbed_org_id, absorbed_user_id),
-                        )
-                    return ("org_id = %s", (absorbed_org_id,))
-
-                def _retenant(table: str) -> int:
-                    where, params = _where(table)
-                    if "user_id" in where:
-                        cur.execute(
-                            f"UPDATE {table} SET org_id = %s, user_id = %s "
-                            f"WHERE {where}",
-                            (survivor_org_id, survivor_user_id, *params),
-                        )
-                    else:
-                        cur.execute(
-                            f"UPDATE {table} SET org_id = %s WHERE {where}",
-                            (survivor_org_id, *params),
-                        )
+                def _retenant(
+                    table: str, org_col: str | None, user_col: str | None
+                ) -> int:
+                    where, where_params = self._predicates(
+                        org_col, user_col, absorbed_org_id, absorbed_user_id
+                    )
+                    sets: list[str] = []
+                    set_params: list[str] = []
+                    if org_col is not None:
+                        sets.append(f"{org_col} = %s")
+                        set_params.append(survivor_org_id)
+                    if user_col is not None:
+                        sets.append(f"{user_col} = %s")
+                        set_params.append(survivor_user_id)
+                    cur.execute(
+                        f"UPDATE {table} SET {', '.join(sets)} WHERE {where}",
+                        (*set_params, *where_params),
+                    )
                     return cur.rowcount
 
-                for table in self._RETENANT_PLAIN:
-                    if not self._exists(cur, table):
+                # MFA children first: totp_secrets / webauthn_credentials carry
+                # only factor_id, so they drop via a join through mfa_factors —
+                # and MUST go before the factors row (FK, no CASCADE).
+                for child in ("totp_secrets", "webauthn_credentials"):
+                    if not self._exists(cur, child) or not self._exists(
+                        cur, "mfa_factors"
+                    ):
                         continue
-                    counts[table] = _retenant(table)
-
-                for table in self._SINGLETON:
-                    if not self._exists(cur, table):
-                        continue
-                    # Survivor wins (FR-M8): drop the absorbed row when the
-                    # survivor already has theirs, else re-key it.
-                    if self._has_column(cur, table, "user_id"):
-                        cur.execute(
-                            f"""
-                            DELETE FROM {table}
-                            WHERE org_id = %s AND user_id = %s
-                              AND EXISTS (
-                                SELECT 1 FROM {table} s
-                                WHERE s.org_id = %s AND s.user_id = %s
-                              )
-                            """,
-                            (
-                                absorbed_org_id,
-                                absorbed_user_id,
-                                survivor_org_id,
-                                survivor_user_id,
-                            ),
-                        )
-                    else:
-                        cur.execute(
-                            f"""
-                            DELETE FROM {table}
-                            WHERE org_id = %s
-                              AND EXISTS (
-                                SELECT 1 FROM {table} s WHERE s.org_id = %s
-                              )
-                            """,
-                            (absorbed_org_id, survivor_org_id),
-                        )
-                    dropped = cur.rowcount
-                    counts[table] = _retenant(table)
-                    if dropped:
-                        counts[f"{table}_dropped"] = dropped
-
-                for table, key_col in self._KEYED:
-                    if not self._exists(cur, table):
-                        continue
-                    # Survivor wins per key value (e.g. per provider).
                     cur.execute(
                         f"""
-                        DELETE FROM {table} a
-                        WHERE a.org_id = %s AND a.user_id = %s
-                          AND EXISTS (
-                            SELECT 1 FROM {table} s
-                            WHERE s.org_id = %s AND s.user_id = %s
-                              AND s.{key_col} = a.{key_col}
-                          )
+                        DELETE FROM {child}
+                        WHERE factor_id IN (
+                            SELECT factor_id FROM mfa_factors
+                            WHERE org_id = %s AND user_id = %s
+                        )
                         """,
-                        (
-                            absorbed_org_id,
-                            absorbed_user_id,
-                            survivor_org_id,
-                            survivor_user_id,
-                        ),
+                        (absorbed_org_id, absorbed_user_id),
                     )
-                    dropped = cur.rowcount
-                    counts[table] = _retenant(table)
-                    if dropped:
-                        counts[f"{table}_dropped"] = dropped
+                    counts[f"{child}_dropped"] = cur.rowcount
 
-                for table in self._DROP:
+                for table, strategy, org_col, user_col, key_cols in self._SPECS:
                     if not self._exists(cur, table):
                         continue
-                    where, params = _where(table)
-                    cur.execute(f"DELETE FROM {table} WHERE {where}", params)
-                    counts[f"{table}_dropped"] = cur.rowcount
+                    a_where, a_params = self._predicates(
+                        org_col, user_col, absorbed_org_id, absorbed_user_id, "a"
+                    )
+                    s_where, s_params = self._predicates(
+                        org_col, user_col, survivor_org_id, survivor_user_id, "s"
+                    )
+
+                    if strategy == "drop":
+                        where, params = self._predicates(
+                            org_col, user_col, absorbed_org_id, absorbed_user_id
+                        )
+                        cur.execute(f"DELETE FROM {table} WHERE {where}", params)
+                        counts[f"{table}_dropped"] = cur.rowcount
+                        continue
+
+                    if strategy in ("singleton", "keyed"):
+                        # Survivor wins (FR-M8): drop absorbed rows whose
+                        # owner (+ key value) already exists survivor-side.
+                        key_match = "".join(
+                            f" AND s.{col} = a.{col}" for col in key_cols
+                        )
+                        cur.execute(
+                            f"""
+                            DELETE FROM {table} a
+                            WHERE {a_where}
+                              AND EXISTS (
+                                SELECT 1 FROM {table} s
+                                WHERE {s_where}{key_match}
+                              )
+                            """,
+                            (*a_params, *s_params),
+                        )
+                        if cur.rowcount:
+                            counts[f"{table}_dropped"] = cur.rowcount
+
+                    counts[table] = _retenant(table, org_col, user_col)
         return counts
 
     def disable_absorbed_user(
@@ -819,6 +900,7 @@ __all__ = [
     "AccountMergeError",
     "AccountMergeService",
     "HttpRuntimeMergeClient",
+    "UnconfiguredRuntimeMergeClient",
     "InMemoryMergeData",
     "MergeDataPort",
     "MergeNotAllowed",

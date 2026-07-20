@@ -189,6 +189,12 @@ export function buildServiceEnv(
       // Without this the backend defaults to magic_link_base_url (localhost:5173)
       // and every desktop wallet sign-in fails domain_mismatch.
       env.SIWE_ORIGIN = `http://127.0.0.1:${inputs.facadePort}`;
+      // Account-merge runtime leg (PRD account-linking §6.4): the backend's
+      // merge saga calls ai-backend's /internal/v1/admin/account-merge over
+      // HTTP. Without this URL the saga fails CLOSED at its runtime
+      // checkpoint (UnconfiguredRuntimeMergeClient) instead of silently
+      // skipping the ai-backend re-key.
+      env.AI_BACKEND_URL = aiBackendUrl;
       break;
     }
     case "ai-backend": {

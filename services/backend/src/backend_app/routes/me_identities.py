@@ -81,6 +81,7 @@ def register_me_identities_routes(
     siwe_store: SiweStore | None = None,
     oidc_store: OidcStore | None = None,
     password_store: object | None = None,
+    identity_store: object | None = None,
 ) -> None:
     """Attach ``/internal/v1/me/identities/*``. No-op parts degrade honestly.
 
@@ -238,6 +239,29 @@ def register_me_identities_routes(
                     pass
         return count
 
+    def _audit_unlink(
+        org_id: str, user_id: str, action: str, metadata: dict[str, object]
+    ) -> None:
+        """Append-only ``identity.*_unlinked`` trail (NFR-5). Best-effort —
+        an audit hiccup must not turn a completed unlink into a 500."""
+
+        if identity_store is None:
+            return
+        try:
+            from backend_app.contracts import IdentityAuditEventRecord
+
+            identity_store.append_identity_audit(  # type: ignore[attr-defined]
+                IdentityAuditEventRecord(
+                    org_id=org_id,
+                    actor_user_id=user_id,
+                    subject_user_id=user_id,
+                    action=action,
+                    metadata=metadata,
+                )
+            )
+        except Exception:  # pragma: no cover - defensive
+            pass
+
     def _guard_last_method(org_id: str, user_id: str) -> None:
         # FR-L5: never let a user unlink their only way back in.
         if _sign_in_method_count(org_id, user_id) <= 1:
@@ -272,13 +296,23 @@ def register_me_identities_routes(
             )
         _guard_last_method(identity.org_id, identity.user_id)
         # Owner-scoped delete: a foreign wallet_id is indistinguishable from
-        # an unknown one (404) — existence is never leaked.
+        # an unknown one (404) — existence is never leaked. HARD delete is
+        # deliberate (documented FR-L5 deviation): wallet_identities.address
+        # is deployment-wide UNIQUE with no unlinked_at column, so a soft
+        # unlink would block the wallet from ever re-linking; the immutable
+        # audit row below is the durable record instead.
         if not siwe_store.delete_wallet_identity(
             wallet_id=wallet_id,
             org_id=identity.org_id,
             user_id=identity.user_id,
         ):
             raise HTTPException(status.HTTP_404_NOT_FOUND, "identity_not_found")
+        _audit_unlink(
+            identity.org_id,
+            identity.user_id,
+            "identity.wallet_unlinked",
+            {"wallet_id": wallet_id},
+        )
 
     @app.delete(
         "/internal/v1/me/identities/oidc/{identity_id}",
@@ -305,6 +339,12 @@ def register_me_identities_routes(
             user_id=identity.user_id,
         ):
             raise HTTPException(status.HTTP_404_NOT_FOUND, "identity_not_found")
+        _audit_unlink(
+            identity.org_id,
+            identity.user_id,
+            "identity.oidc_unlinked",
+            {"identity_id": identity_id},
+        )
 
 
 __all__ = [

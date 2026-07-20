@@ -163,3 +163,44 @@ The system has **no first-class account**. The unit of identity is `(org_id, use
 - **Cross-service saga** partial-failure handling — the state machine must be genuinely idempotent; a live failure-injection test is required.
 - **Pre-existing audit immutability gap** on `identity_audit_events` (no DB trigger) — closed as part of NFR-5.
 - **Scope realism** — steps 2–5 are well-bounded and shippable; step 6 (merge) is a large, integration-heavy build and is the one that needs the live-stack gate before production.
+
+## 11. Implementation deviations & deferrals (post-ship amendment)
+
+Recorded after the adversarial FR/NFR verification of PR #125 + the
+hardening PR, so the paper trail matches what shipped:
+
+- **Google merge never executes from the public callback (SECURITY).** The
+  callback completer is unauthenticated, so an attacker-initiated link URL
+  must not let a victim's Google sign-in absorb the victim's account
+  (confused deputy). `link_confirm_merge` is still recorded on the state row
+  for a future AUTHENTICATED completion endpoint; until then Google
+  conflicts return `merge_required` and the merge runs through the
+  authenticated wallet-link path (`confirm_merge` on
+  `POST /v1/me/identities/wallet`), which requires the caller's own bearer.
+  The plain (non-merge) Google link from the callback carries a residual
+  attacker-initiated-URL risk on SHARED deployments — accepted for the
+  local-first desktop (each user runs their own backend, foreign state
+  tokens don't resolve) and tracked for the authenticated-complete redesign.
+- **FR-M5 re-mint clause**: every shipped entry point makes the CALLER the
+  survivor (FR-M2), so the "caller on an absorbed identity" re-mint branch
+  is unreachable and unimplemented. Any future admin-initiated merge path
+  must implement it first.
+- **FR-M6 quiesce is deferred**: the saga does not yet block new runs or
+  drain waiting-for-approval/outbox work; the ai-backend re-keyers re-key
+  pending rows and surface a `queue_not_drained` warning instead.
+- **FR-L5 "soft-unlink"**: OIDC identities soft-unlink (`unlinked_at`);
+  wallet unlink is a HARD delete by design — `wallet_identities.address` is
+  deployment-wide UNIQUE with no unlink column, so a soft row would block
+  the wallet from ever re-linking. Both unlinks append immutable
+  `identity.*_unlinked` audit rows. The guard→delete sequence is not
+  transactional (TOCTOU) — accepted for the single-user desktop.
+- **NFR-7 async job**: the merge runs synchronously per-request (runtime leg
+  ≤60s HTTP budget), resumable at checkpoints; the async-job + progress UI
+  shape is deferred with the client work below.
+- **Client surfaces pending**: the merge-confirm dialog, unlink buttons,
+  wallet-link CTA, and a proper browser landing page for the Google
+  callback are not yet wired in the apps; the API contracts (409
+  `merge_required`, `confirm_merge`, `DELETE /v1/me/identities/*`) are live
+  and tested.
+- **NFR-4 decrypt smoke** runs with the live embedded-Postgres gate (§8),
+  which remains the production sign-off for both Postgres re-key executors.
