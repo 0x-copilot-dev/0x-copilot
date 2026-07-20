@@ -281,8 +281,9 @@ class PostgresOidcStore:
                 INSERT INTO oidc_authentications (
                     auth_id, org_id, provider_id, state, nonce,
                     code_verifier, redirect_uri, return_to,
-                    requested_at, expires_at, consumed_at, ip, user_agent
-                ) VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s)
+                    requested_at, expires_at, consumed_at, ip, user_agent,
+                    link_org_id, link_user_id
+                ) VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s)
                 """,
                 (
                     record.auth_id,
@@ -298,6 +299,8 @@ class PostgresOidcStore:
                     record.consumed_at,
                     record.ip,
                     record.user_agent,
+                    record.link_org_id,
+                    record.link_user_id,
                 ),
             )
         return record

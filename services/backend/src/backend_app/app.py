@@ -1342,11 +1342,12 @@ def create_app(
         siwe_store=getattr(app.state, "siwe_store", None),
         oidc_store=getattr(app.state, "oidc_store", None),
     )
-    # Account-linking (PRD FR-L1): authenticated wallet link. Degrades to 503
-    # when the auth block that builds the SIWE service didn't run.
+    # Account-linking (PRD FR-L1/L2): authenticated wallet + Google links.
+    # Degrades to 503 when the auth block that builds the services didn't run.
     register_me_identities_routes(
         app,
         siwe_service=getattr(app.state, "siwe_service", None),
+        oidc_service=getattr(app.state, "oidc_service", None),
     )
     register_me_preferences_routes(
         app,

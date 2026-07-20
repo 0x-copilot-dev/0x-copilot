@@ -37,6 +37,7 @@ from backend_app.contracts import (
     OidcAuthorizeResult,
     OidcCallbackResult,
     OidcIdentityRecord,
+    OidcLinkCallbackResult,
     OidcRefreshTokenRecord,
     OrganizationMemberRecord,
     OrganizationMemberSource,
@@ -64,6 +65,7 @@ from backend_app.identity.provisioning import (
     provision_personal_org,
 )
 from backend_app.identity.sessions import SessionService
+from backend_app.identity.siwe import is_placeholder_email
 from backend_app.identity.store import IdentityStore
 from backend_app.token_vault import TokenVault
 
@@ -101,6 +103,28 @@ class OidcUserNotProvisioned(RuntimeError):
 
 class OidcTokenExchangeError(RuntimeError):
     """Token endpoint returned an error or malformed response."""
+
+
+class OidcIdentityAlreadyLinked(RuntimeError):
+    """The Google/OIDC identity is already bound to a DIFFERENT account.
+
+    The account-merge trigger (PRD FR-M1 / D-01): carries the owning account
+    so the caller can route the conflict into the merge flow.
+    """
+
+    def __init__(self, *, org_id: str, user_id: str) -> None:
+        super().__init__("oidc_identity_linked_to_another_account")
+        self.org_id = org_id
+        self.user_id = user_id
+
+
+class OidcEmailNotVerified(RuntimeError):
+    """Refusing to LINK an identity whose email the IdP has not verified.
+
+    Linking upgrades a wallet account's placeholder email to the Google
+    address (PRD FR-L2) — an unverified address must never overwrite the
+    anchor.
+    """
 
 
 # ---------------------------------------------------------------------------
@@ -285,6 +309,8 @@ class OidcService:
         return_to: str | None = None,
         ip: str | None = None,
         user_agent: str | None = None,
+        link_org_id: str | None = None,
+        link_user_id: str | None = None,
     ) -> OidcAuthorizeResult:
         provider, config = self._resolve_provider(
             org_id=org_id, provider_id=provider_id
@@ -316,6 +342,11 @@ class OidcService:
             expires_at=expires_at,
             ip=ip,
             user_agent=user_agent,
+            # Account-linking (PRD FR-L2): the AUTHENTICATED link-start binds
+            # the flow to the caller server-side; the browser round-trip never
+            # carries the binding, so it cannot be tampered with.
+            link_org_id=link_org_id,
+            link_user_id=link_user_id,
         )
         self._oidc_store.create_authentication(record)
 
@@ -352,7 +383,7 @@ class OidcService:
         code: str,
         ip: str | None = None,
         user_agent: str | None = None,
-    ) -> OidcCallbackResult:
+    ) -> OidcCallbackResult | OidcLinkCallbackResult:
         consumed = self._oidc_store.consume_authentication(state=state)
         if consumed is None:
             self._record_login_attempt(
@@ -411,6 +442,20 @@ class OidcService:
         email_claim = claims.get("email")
         email = email_claim if isinstance(email_claim, str) and email_claim else None
 
+        # Account-linking fork (PRD FR-L2): a link-bound state row diverts to
+        # the authenticated-link path — attach the identity to the bound
+        # caller, upgrade a placeholder email, and DO NOT mint a session.
+        if consumed.link_user_id is not None and consumed.link_org_id is not None:
+            return self._link_identity_to_user(
+                consumed=consumed,
+                provider=provider,
+                subject=subject,
+                email=email,
+                claims=claims,
+                ip=ip,
+                user_agent=user_agent,
+            )
+
         user = self._link_or_provision_user(
             provider=provider,
             config=config,
@@ -449,6 +494,115 @@ class OidcService:
             expires_at=session.expires_at,
             return_to=consumed.return_to,
             requires_mfa=mfa_required,
+        )
+
+    # Authenticated link (PRD FR-L2) -------------------------------------
+    def _link_identity_to_user(
+        self,
+        *,
+        consumed: OidcAuthenticationRecord,
+        provider: AuthProviderRecord,
+        subject: str,
+        email: str | None,
+        claims: dict[str, Any],
+        ip: str | None,
+        user_agent: str | None,
+    ) -> OidcLinkCallbackResult:
+        """Attach the verified IdP identity to the link-bound caller.
+
+        Divergences from ``_link_or_provision_user`` (deliberate, PRD §6.2):
+        never provisions, never mints a session, requires
+        ``email_verified is True`` (the link may UPGRADE the caller's
+        placeholder email — an unverified address must never become the
+        anchor), and a subject owned by another account raises the merge
+        trigger instead of signing that account in.
+        """
+
+        org_id = consumed.link_org_id
+        user_id = consumed.link_user_id
+        assert org_id is not None and user_id is not None  # guarded by caller
+        caller = self._identity_store.get_user(org_id=org_id, user_id=user_id)
+        if caller is None:
+            raise OidcUserNotProvisioned("link-bound caller no longer exists")
+
+        if claims.get("email_verified") is not True:
+            raise OidcEmailNotVerified(
+                "IdP did not assert email_verified; refusing to link"
+            )
+
+        existing = self._oidc_store.get_identity_by_subject(
+            provider_id=provider.provider_id, subject=subject
+        )
+        status = "linked"
+        identity_id: str
+        if existing is not None:
+            if existing.org_id == org_id and existing.user_id == user_id:
+                # FR-L6: already mine — idempotent no-op.
+                status = "already_linked"
+                identity_id = existing.identity_id
+            else:
+                # FR-M1: owned by another account — the merge flow's trigger.
+                raise OidcIdentityAlreadyLinked(
+                    org_id=existing.org_id, user_id=existing.user_id
+                )
+        else:
+            created = self._oidc_store.create_identity(
+                OidcIdentityRecord(
+                    org_id=org_id,
+                    user_id=user_id,
+                    provider_id=provider.provider_id,
+                    subject=subject,
+                    email_at_link=email,
+                    claims_snapshot=_safe_claims_snapshot(claims),
+                )
+            )
+            identity_id = created.identity_id
+
+        # Placeholder-email upgrade (FR-L2): a wallet account gains its first
+        # real, VERIFIED address. Collision-guarded against the per-org
+        # unique(lower(email)) index; on collision the link stands but the
+        # email is left untouched (the merge engine reconciles duplicates).
+        email_upgraded = False
+        if (
+            status == "linked"
+            and email is not None
+            and is_placeholder_email(caller.primary_email)
+        ):
+            collision = self._identity_store.get_user_by_email(
+                org_id=org_id, email=email
+            )
+            if collision is None or collision.user_id == user_id:
+                self._identity_store.update_user(
+                    caller.model_copy(
+                        update={
+                            "primary_email": email,
+                            "email_verified_at": _now(),
+                        }
+                    )
+                )
+                email_upgraded = True
+
+        self._identity_store.append_identity_audit(
+            self._audit_event(
+                provider=provider,
+                user=caller,
+                action="oidc.identity_linked",
+                metadata={
+                    "identity_id": identity_id,
+                    "status": status,
+                    "email_upgraded": email_upgraded,
+                },
+                ip=ip,
+                user_agent=user_agent,
+            )
+        )
+        return OidcLinkCallbackResult(
+            status=status,
+            user_id=user_id,
+            provider_id=provider.provider_id,
+            email=email,
+            email_upgraded=email_upgraded,
+            return_to=consumed.return_to,
         )
 
     # Helpers -----------------------------------------------------------
