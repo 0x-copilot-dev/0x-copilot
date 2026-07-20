@@ -2,6 +2,7 @@ import { randomBytes as nodeRandomBytes } from "node:crypto";
 import { dirname, join } from "node:path";
 
 import type { SafeStorageLike } from "../auth/secret-storage";
+import type { SecureStorageMode } from "./secure-storage-policy";
 
 // The secrets every supervised boot needs. Generated ONCE on first boot and
 // persisted; every later boot reuses the same values (the postgres password
@@ -60,6 +61,15 @@ export interface BootSecretsConfig {
   readonly userDataDir: string;
   readonly safeStorage: SafeStorageLike;
   readonly fs: BootSecretsFs;
+  /**
+   * Secure-storage policy for a CREATE (first boot) or re-persist. Default
+   * `"file"` — chmod-600 plaintext-marker blob, no keychain touch, so a
+   * default install never triggers a macOS keychain prompt. `"keychain"`
+   * encrypts via safeStorage (the pre-policy behavior). LOADING an existing
+   * blob always follows the blob's own marker, so neither mode ever strands
+   * previously written secrets.
+   */
+  readonly mode?: SecureStorageMode;
   readonly randomBytes?: (size: number) => Buffer;
 }
 
@@ -100,19 +110,62 @@ async function persist(
 ): Promise<void> {
   const plaintext = JSON.stringify({ version: 1, ...secrets });
   let blob: Buffer;
-  if (config.safeStorage.isEncryptionAvailable()) {
+  const wantKeychain = (config.mode ?? "file") === "keychain";
+  if (wantKeychain && config.safeStorage.isEncryptionAvailable()) {
     blob = Buffer.concat([
       Buffer.from(CIPHER_MARKER, "utf-8"),
       config.safeStorage.encryptString(plaintext),
     ]);
   } else {
-    // chmod-600 JSON fallback (headless linux / keychain unavailable).
+    // chmod-600 JSON blob: the default (`mode: "file"`) and the fallback for
+    // keychain mode when the OS keychain is unavailable (headless linux).
     blob = Buffer.from(PLAINTEXT_MARKER + plaintext, "utf-8");
   }
   await config.fs.mkdir(dirname(path), { recursive: true });
   await config.fs.writeFile(path, blob, { mode: 0o600 });
   // writeFile mode is ignored when the file pre-exists; enforce anyway.
   await config.fs.chmod(path, 0o600);
+}
+
+/** How the on-disk blob is currently protected (by its own marker). */
+export type BootSecretsStorageState = "keychain" | "file" | "absent";
+
+export async function bootSecretsStorageState(
+  userDataDir: string,
+  fs: BootSecretsFs,
+): Promise<BootSecretsStorageState> {
+  let raw: Buffer;
+  try {
+    raw = await fs.readFile(bootSecretsPath(userDataDir));
+  } catch (err) {
+    if (isEnoent(err)) return "absent";
+    throw err;
+  }
+  return startsWith(raw, CIPHER_MARKER) ? "keychain" : "file";
+}
+
+/**
+ * Migrate the boot-secrets blob to/from keychain encryption (the Settings
+ * "Protect secrets with macOS Keychain" toggle). Reads the existing secrets
+ * (decrypting via the REAL safeStorage when the blob is cipher — on enable →
+ * this is where the one user-initiated keychain prompt fires) and re-persists
+ * them in the requested mode. Creates fresh secrets only when none exist yet.
+ */
+export async function setBootSecretsEncryption(
+  config: BootSecretsConfig & { readonly enabled: boolean },
+): Promise<BootSecretsStorageState> {
+  const mode: SecureStorageMode = config.enabled ? "keychain" : "file";
+  if (config.enabled && !config.safeStorage.isEncryptionAvailable()) {
+    throw new BootSecretsUnreadable(
+      "OS keychain encryption is unavailable on this platform",
+    );
+  }
+  const secrets = await loadOrCreateBootSecrets({ ...config, mode });
+  await persist(bootSecretsPath(config.userDataDir), secrets, {
+    ...config,
+    mode,
+  });
+  return mode === "keychain" ? "keychain" : "file";
 }
 
 function decode(raw: Buffer, safeStorage: SafeStorageLike): BootSecrets {

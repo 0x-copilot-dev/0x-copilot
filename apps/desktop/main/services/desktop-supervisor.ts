@@ -31,11 +31,19 @@ import {
 } from "./service-env";
 import { ServiceSupervisor, type AllocatedPorts } from "./supervisor";
 import type { BootSecrets } from "./boot-secrets";
+import type { SecureStorageMode } from "./secure-storage-policy";
 
 export interface DesktopSupervisorConfig {
   /** app.getPath("userData") — secrets, pgdata and logs live here. */
   readonly userDataDir: string;
   readonly safeStorage: SafeStorageLike;
+  /**
+   * Secure-storage policy for boot secrets. `"file"` (the default) writes a
+   * chmod-600 blob and never touches the OS keychain; `"keychain"` (Settings
+   * opt-in) encrypts via safeStorage. Existing blobs always load by their own
+   * marker regardless of this value.
+   */
+  readonly secureStorageMode?: SecureStorageMode;
   /** process.resourcesPath (packaged) — ignored when the override is set. */
   readonly resourcesPath: string;
   /** COPILOT_RUNTIME_DIR (dev staged runtime, apps/desktop/resources). */
@@ -89,6 +97,7 @@ export function createDesktopSupervisor(
         userDataDir: config.userDataDir,
         safeStorage: config.safeStorage,
         fs: fsAdapter,
+        mode: config.secureStorageMode ?? "file",
       }),
 
     allocatePorts: (count) => allocateFreePorts(count),

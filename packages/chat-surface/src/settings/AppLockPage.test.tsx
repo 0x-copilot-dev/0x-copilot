@@ -91,4 +91,55 @@ describe("<AppLockPage>", () => {
     fireEvent.click(screen.getByTestId("app-lock-retry"));
     expect(onRetry).toHaveBeenCalledTimes(1);
   });
+  it("renders no keychain-protection row when the host omits the block", () => {
+    render(<AppLockPage value={BASE} onChange={vi.fn()} />);
+    expect(screen.queryByTestId("app-lock-keychain-protection")).toBeNull();
+  });
+
+  it("renders the keychain-protection toggle and reports flips", () => {
+    const onFlip = vi.fn();
+    render(
+      <AppLockPage
+        value={BASE}
+        onChange={vi.fn()}
+        keychainProtection={{ enabled: false, available: true }}
+        onKeychainProtectionChange={onFlip}
+      />,
+    );
+    const toggle = screen.getByTestId(
+      "app-lock-keychain-protection",
+    ) as HTMLInputElement;
+    expect(toggle.checked).toBe(false);
+    expect(toggle.disabled).toBe(false);
+    fireEvent.click(toggle);
+    expect(onFlip).toHaveBeenCalledWith(true);
+  });
+
+  it("disables the keychain toggle when unavailable or busy", () => {
+    const { rerender } = render(
+      <AppLockPage
+        value={BASE}
+        onChange={vi.fn()}
+        keychainProtection={{ enabled: false, available: false }}
+        onKeychainProtectionChange={vi.fn()}
+      />,
+    );
+    expect(
+      (screen.getByTestId("app-lock-keychain-protection") as HTMLInputElement)
+        .disabled,
+    ).toBe(true);
+    rerender(
+      <AppLockPage
+        value={BASE}
+        onChange={vi.fn()}
+        keychainProtection={{ enabled: true, available: true, busy: true }}
+        onKeychainProtectionChange={vi.fn()}
+      />,
+    );
+    const toggle = screen.getByTestId(
+      "app-lock-keychain-protection",
+    ) as HTMLInputElement;
+    expect(toggle.disabled).toBe(true);
+    expect(toggle.checked).toBe(true);
+  });
 });

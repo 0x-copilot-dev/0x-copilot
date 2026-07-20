@@ -8,6 +8,7 @@ import { CHANNELS, isAllowedChannel } from "@0x-copilot/chat-transport";
 // preload sandbox.
 import { isCapabilityChannel } from "../main/capabilities/channels";
 import { isConnectorChannel } from "../main/connectors/channels";
+import { isSecureStorageChannel } from "../main/services/secure-storage-channels";
 
 import type { WindowBridge } from "./window-bridge-types";
 
@@ -17,7 +18,8 @@ function isBridgeChannel(channel: string): boolean {
   return (
     isAllowedChannel(channel) ||
     isCapabilityChannel(channel) ||
-    isConnectorChannel(channel)
+    isConnectorChannel(channel) ||
+    isSecureStorageChannel(channel)
   );
 }
 

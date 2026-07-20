@@ -222,10 +222,18 @@ ai-backend → backend → `pg_ctl stop -m fast`).
 
 **Secrets** — `ENTERPRISE_AUTH_SECRET`, `ENTERPRISE_SERVICE_TOKEN`,
 `MCP_TOKEN_VAULT_SECRET`, the postgres password, and `AUDIT_HMAC_KEY` — are
-generated once (`main/services/boot-secrets.ts`) and persisted encrypted via
-safeStorage at `<userData>/secrets/boot-env.bin` (chmod-600 plaintext JSON
-fallback when safeStorage is unavailable). An unreadable blob is a fatal boot
-error — never silently regenerated, because the postgres password and
+generated once (`main/services/boot-secrets.ts`) and persisted at
+`<userData>/secrets/boot-env.bin`. By DEFAULT the blob is a chmod-600 JSON
+file and the OS keychain is never touched, so a fresh install shows no macOS
+keychain prompt. Settings → Key storage & app lock → "Protect secrets with
+macOS Keychain" opts into safeStorage encryption
+(`main/services/secure-storage-policy.ts`): the keychain prompt then fires at
+toggle time, and again only after an upgrade re-signs the ad-hoc binaries.
+The same policy gates the auth session store and the capability grant store
+(their chmod-600 plaintext paths are sanctioned in file mode). Existing blobs
+always load by their own marker — flipping the toggle migrates in place, and
+legacy cipher blobs stay readable in file mode. An unreadable blob is a fatal
+boot error — never silently regenerated, because the postgres password and
 `ENTERPRISE_AUTH_SECRET` live there.
 
 **On-disk locations** (all under `app.getPath("userData")`):

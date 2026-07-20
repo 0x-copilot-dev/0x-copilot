@@ -45,6 +45,7 @@ import {
   createProviderKeysPort,
   type AppLockValue,
   type AppearanceValue,
+  type KeychainProtectionValue,
   type ModelBehaviorModelOption,
   type ModelBehaviorValue,
   type ProfileIdentityAnchor,
@@ -66,7 +67,18 @@ import type {
 } from "@0x-copilot/api-types";
 import type { RendererSession, Transport } from "@0x-copilot/chat-transport";
 
+import { SECURE_STORAGE_CHANNELS } from "../main/services/secure-storage-channels";
 import { buildModelCatalog } from "./composer/desktopModelCatalog";
+
+interface SecureStorageStatus {
+  readonly mode?: string;
+  readonly keychainAvailable?: boolean;
+}
+interface SecureStorageSetResult {
+  readonly ok?: boolean;
+  readonly mode?: string;
+  readonly error?: string;
+}
 
 export interface SettingsMountProps {
   /** The renderer's IPC transport (facade proxy) — backs the live ports. */
@@ -415,6 +427,67 @@ export function SettingsMount({
   );
   const [appLock, setAppLock] = useState<AppLockValue>(DEFAULT_APP_LOCK);
 
+  // "Protect secrets with macOS Keychain" — real state from main over the
+  // bridge (default policy is file/off, so no keychain prompt ever fires
+  // until the user flips this). Enabling performs the boot-secrets migration
+  // in main, which is exactly where the one OS prompt belongs.
+  const [keychainProtection, setKeychainProtection] =
+    useState<KeychainProtectionValue | null>(null);
+  useEffect(() => {
+    // No bridge (unit tests, web preview) → the row simply never renders.
+    if (typeof window === "undefined" || window.bridge === undefined) return;
+    let cancelled = false;
+    void window.bridge.ipc
+      .invoke<SecureStorageStatus>(SECURE_STORAGE_CHANNELS.get, {})
+      .then((status) => {
+        if (cancelled) return;
+        setKeychainProtection({
+          enabled: status.mode === "keychain",
+          available: status.keychainAvailable === true,
+        });
+      })
+      .catch(() => {
+        // Bridge unavailable (tests / web preview) → row simply not rendered.
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+  const handleKeychainProtectionChange = (
+    enabled: boolean,
+    toast: (message: string) => void,
+  ): void => {
+    if (typeof window === "undefined" || window.bridge === undefined) return;
+    setKeychainProtection((prev) =>
+      prev === null ? prev : { ...prev, busy: true },
+    );
+    void window.bridge.ipc
+      .invoke<SecureStorageSetResult>(SECURE_STORAGE_CHANNELS.set, { enabled })
+      .then((result) => {
+        const on = result.mode === "keychain";
+        setKeychainProtection((prev) =>
+          prev === null ? prev : { ...prev, enabled: on, busy: false },
+        );
+        if (result.ok === true) {
+          toast(
+            on
+              ? "Keychain protection on — macOS may ask for access after app updates."
+              : "Secrets now stored in a file only your account can read.",
+          );
+        } else {
+          toast(
+            `Couldn't change keychain protection${result.error !== undefined ? `: ${result.error}` : ""}.`,
+          );
+        }
+      })
+      .catch(() => {
+        setKeychainProtection((prev) =>
+          prev === null ? prev : { ...prev, busy: false },
+        );
+        toast("Couldn't change keychain protection — try again.");
+      });
+  };
+
   // Local models are read-only stubs for now (PR-6D wires the runtime).
   const localModels: readonly LocalModelSummary[] = [];
 
@@ -557,6 +630,10 @@ export function SettingsMount({
             value={appLock}
             onChange={(patch) => setAppLock((prev) => ({ ...prev, ...patch }))}
             touchIdAvailable={touchIdAvailable}
+            keychainProtection={keychainProtection ?? undefined}
+            onKeychainProtectionChange={(enabled) =>
+              handleKeychainProtectionChange(enabled, toast)
+            }
           />
         );
       case "developer-tokens":

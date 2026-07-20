@@ -5,7 +5,9 @@ import type { SafeStorageLike } from "../auth/secret-storage";
 import {
   BootSecretsUnreadable,
   bootSecretsPath,
+  bootSecretsStorageState,
   loadOrCreateBootSecrets,
+  setBootSecretsEncryption,
   type BootSecretsFs,
 } from "./boot-secrets";
 
@@ -106,18 +108,53 @@ describe("loadOrCreateBootSecrets", () => {
     expect(state.files.get(bootSecretsPath(USER_DATA))).toEqual(blobAfterFirst);
   });
 
-  it("encrypts at rest when safeStorage is available (no plaintext in blob)", async () => {
+  it("defaults to the chmod-600 file mode — no keychain use even when available", async () => {
+    const { fs, state } = makeFakeFs();
+    const path = bootSecretsPath(USER_DATA);
+    const secrets = await loadOrCreateBootSecrets({
+      userDataDir: USER_DATA,
+      safeStorage: makeFakeSafeStorage(true),
+      fs,
+    });
+    const blob = state.files.get(path)!;
+    expect(blob.toString("utf-8")).toContain("ATLASBOOTv1:plaintext:");
+    expect(blob.toString("utf-8")).toContain(secrets.pgPassword);
+    expect(state.modes.get(path)).toBe(0o600);
+  });
+
+  it("encrypts at rest in keychain mode (no plaintext in blob)", async () => {
     const { fs, state } = makeFakeFs();
     const secrets = await loadOrCreateBootSecrets({
       userDataDir: USER_DATA,
       safeStorage: makeFakeSafeStorage(true),
       fs,
+      mode: "keychain",
     });
     const blob = state.files.get(bootSecretsPath(USER_DATA))!;
     const asText = blob.toString("utf-8");
     expect(asText).toContain("ATLASBOOTv1:cipher:");
     expect(asText).not.toContain(secrets.authSecret);
     expect(asText).not.toContain(secrets.pgPassword);
+  });
+
+  it("loads a cipher blob by its own marker even when the mode is file", async () => {
+    const { fs } = makeFakeFs();
+    const safeStorage = makeFakeSafeStorage(true);
+    const first = await loadOrCreateBootSecrets({
+      userDataDir: USER_DATA,
+      safeStorage,
+      fs,
+      mode: "keychain",
+    });
+    // A later boot with the default file policy must still decrypt the
+    // existing cipher blob — the policy governs writes, never reads.
+    const second = await loadOrCreateBootSecrets({
+      userDataDir: USER_DATA,
+      safeStorage,
+      fs,
+      mode: "file",
+    });
+    expect(second).toEqual(first);
   });
 
   it("falls back to a chmod-600 JSON blob when safeStorage is unavailable", async () => {
@@ -171,11 +208,12 @@ describe("loadOrCreateBootSecrets", () => {
 
   it("throws BootSecretsUnreadable when the blob is encrypted but safeStorage is now unavailable", async () => {
     const { fs, state } = makeFakeFs();
-    // Write with encryption available...
+    // Write an encrypted blob (keychain opt-in)...
     await loadOrCreateBootSecrets({
       userDataDir: USER_DATA,
       safeStorage: makeFakeSafeStorage(true),
       fs,
+      mode: "keychain",
     });
     // ...then reload with the keychain gone.
     await expect(
@@ -234,5 +272,59 @@ describe("loadOrCreateBootSecrets", () => {
     expect(randomBytes).toHaveBeenCalledWith(64);
     expect(randomBytes).toHaveBeenCalledWith(48);
     expect(randomBytes).toHaveBeenCalledWith(32);
+  });
+});
+
+describe("setBootSecretsEncryption / bootSecretsStorageState", () => {
+  it("migrates file → keychain, preserving every secret", async () => {
+    const { fs, state } = makeFakeFs();
+    const safeStorage = makeFakeSafeStorage(true);
+    const base = { userDataDir: USER_DATA, safeStorage, fs };
+    const before = await loadOrCreateBootSecrets(base);
+    expect(await bootSecretsStorageState(USER_DATA, fs)).toBe("file");
+
+    await setBootSecretsEncryption({ ...base, enabled: true });
+    expect(await bootSecretsStorageState(USER_DATA, fs)).toBe("keychain");
+    const blob = state.files.get(bootSecretsPath(USER_DATA))!;
+    expect(blob.toString("utf-8")).not.toContain(before.pgPassword);
+
+    const after = await loadOrCreateBootSecrets(base);
+    expect(after).toEqual(before);
+  });
+
+  it("migrates keychain → file, preserving every secret", async () => {
+    const { fs, state } = makeFakeFs();
+    const safeStorage = makeFakeSafeStorage(true);
+    const base = { userDataDir: USER_DATA, safeStorage, fs };
+    const before = await loadOrCreateBootSecrets({
+      ...base,
+      mode: "keychain" as const,
+    });
+
+    await setBootSecretsEncryption({ ...base, enabled: false });
+    expect(await bootSecretsStorageState(USER_DATA, fs)).toBe("file");
+    const blob = state.files.get(bootSecretsPath(USER_DATA))!;
+    expect(blob.toString("utf-8")).toContain(before.pgPassword);
+    expect(state.modes.get(bootSecretsPath(USER_DATA))).toBe(0o600);
+
+    const after = await loadOrCreateBootSecrets(base);
+    expect(after).toEqual(before);
+  });
+
+  it("refuses to enable keychain mode when the OS keychain is unavailable", async () => {
+    const { fs } = makeFakeFs();
+    await expect(
+      setBootSecretsEncryption({
+        userDataDir: USER_DATA,
+        safeStorage: makeFakeSafeStorage(false),
+        fs,
+        enabled: true,
+      }),
+    ).rejects.toThrow(BootSecretsUnreadable);
+  });
+
+  it("reports absent before any boot has created secrets", async () => {
+    const { fs } = makeFakeFs();
+    expect(await bootSecretsStorageState(USER_DATA, fs)).toBe("absent");
   });
 });
