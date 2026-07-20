@@ -1,6 +1,7 @@
 import { existsSync } from "node:fs";
 import {
   appendFile,
+  chmod,
   mkdir,
   readFile,
   unlink,
@@ -69,8 +70,19 @@ import { registerIpcHandlers } from "./ipc/handlers";
 import { applyBrandDockIcon, applyBrandIdentity } from "./branding";
 import { resolveAuthPosture } from "./posture";
 import { installSingleInstance, shouldSupervise } from "./services/boot-mode";
+import {
+  setBootSecretsEncryption,
+  type BootSecretsFs,
+} from "./services/boot-secrets";
 import { createDesktopSupervisor } from "./services/desktop-supervisor";
 import { applyBundledGoogleOAuth } from "./services/google-oauth-default";
+import { SECURE_STORAGE_CHANNELS } from "./services/secure-storage-channels";
+import {
+  gatedSafeStorage,
+  loadSecureStorageMode,
+  saveSecureStorageMode,
+  type SecureStorageMode,
+} from "./services/secure-storage-policy";
 import type { ServiceSupervisor } from "./services/supervisor";
 import { TransportBridge } from "./transport-bridge";
 import { createMainWindow } from "./window";
@@ -81,6 +93,19 @@ registerAppProtocolPrivilege();
 
 let mainWindow: BrowserWindow | null = null;
 let teardownIpcHandlers: (() => void) | null = null;
+// Secure-storage policy (Settings → Key storage & app lock). Read once at
+// boot; flipped in place by the IPC toggle so future store writes follow the
+// new mode without a restart. `storesSafeStorage` is what the auth + grant
+// stores receive: in "file" mode it reports encryption unavailable (their
+// chmod-600 plaintext paths activate — no keychain prompt), while decrypt
+// still delegates to the real safeStorage so legacy cipher blobs stay
+// readable.
+let secureStorageMode: SecureStorageMode = "file";
+const storesSafeStorage = gatedSafeStorage(
+  safeStorage,
+  () => secureStorageMode,
+);
+const bootSecretsFs: BootSecretsFs = { readFile, writeFile, mkdir, chmod };
 let tier2LifecycleHandle: Tier2LifecycleHandle | null = null;
 let supervisor: ServiceSupervisor | null = null;
 let supervisorStopped = false;
@@ -170,12 +195,17 @@ function startAutoUpdate(): void {
 // boot — the app is fully usable without host-folder grants.
 function startCapabilitySubsystem(): void {
   try {
+    // Plaintext is legitimate in dev AND whenever the user's secure-storage
+    // policy is "file" (the default) — the gated safeStorage reports
+    // encryption unavailable then, and the store must not fail closed on the
+    // user's own choice.
     const allowPlaintext =
       process.env.BACKEND_ENVIRONMENT === "development" ||
-      process.env.COPILOT_AUTH_MODE === "dev-mint";
+      process.env.COPILOT_AUTH_MODE === "dev-mint" ||
+      secureStorageMode === "file";
     capabilityService = createCapabilityService({
       userDataDir: app.getPath("userData"),
-      safeStorage,
+      safeStorage: storesSafeStorage,
       showOpenDialog: async () => {
         // Main owns the path: the renderer never supplies or receives one.
         const parent =
@@ -206,9 +236,46 @@ function startCapabilitySubsystem(): void {
   }
 }
 
+// Registers the Settings toggle's IPC surface. `set` performs the boot-secrets
+// migration with the REAL safeStorage (enabling is the one user-initiated
+// moment the macOS keychain prompt belongs to), persists the policy, and flips
+// the live mode.
+function registerSecureStorageIpc(): void {
+  ipcMain.handle(SECURE_STORAGE_CHANNELS.get, () => ({
+    mode: secureStorageMode,
+    keychainAvailable: safeStorage.isEncryptionAvailable(),
+  }));
+  ipcMain.handle(SECURE_STORAGE_CHANNELS.set, async (_event, payload) => {
+    const enabled =
+      typeof payload === "object" &&
+      payload !== null &&
+      (payload as Record<string, unknown>).enabled === true;
+    try {
+      await setBootSecretsEncryption({
+        userDataDir: app.getPath("userData"),
+        safeStorage,
+        fs: bootSecretsFs,
+        enabled,
+      });
+      secureStorageMode = enabled ? "keychain" : "file";
+      saveSecureStorageMode(app.getPath("userData"), secureStorageMode);
+      return { ok: true, mode: secureStorageMode };
+    } catch (err) {
+      console.error("[secure-storage] toggle failed:", err);
+      return {
+        ok: false,
+        mode: secureStorageMode,
+        error: err instanceof Error ? err.message : "unknown error",
+      };
+    }
+  });
+}
+
 if (hasSingleInstanceLock) {
   void app.whenReady().then(() => {
     startCrashReporter();
+    secureStorageMode = loadSecureStorageMode(app.getPath("userData"));
+    registerSecureStorageIpc();
     applyBrandDockIcon(app, {
       platform: process.platform,
       iconPngPath: join(__dirname, "icon.png"),
@@ -273,6 +340,7 @@ if (hasSingleInstanceLock) {
       supervisor = createDesktopSupervisor({
         userDataDir: app.getPath("userData"),
         safeStorage,
+        secureStorageMode,
         resourcesPath: process.resourcesPath,
         runtimeDirOverride: process.env.COPILOT_RUNTIME_DIR,
       });
@@ -495,9 +563,12 @@ function buildAuthService(
   const facadeBaseUrl =
     facadeUrl ?? process.env.COPILOT_FACADE_URL ?? "http://127.0.0.1:8200";
   const devPersonaSlug = process.env.COPILOT_DEV_PERSONA ?? "sarah_acme";
+  // Mirror the capability-store rule: the user's "file" secure-storage policy
+  // makes plaintext (chmod-600) the sanctioned path, not a dev-only fallback.
   const allowPlaintext =
     process.env.BACKEND_ENVIRONMENT === "development" ||
-    process.env.COPILOT_AUTH_MODE === "dev-mint";
+    process.env.COPILOT_AUTH_MODE === "dev-mint" ||
+    secureStorageMode === "file";
 
   let oidcConfig: ConstructorParameters<typeof AuthService>[0]["oidc"];
   // Only validate/build the OIDC provider config when a real OIDC provider was
@@ -534,7 +605,7 @@ function buildAuthService(
     devPersonaSlug,
     oidc: oidcConfig,
     userDataDir: app.getPath("userData"),
-    safeStorage,
+    safeStorage: storesSafeStorage,
     openExternal: (url) => shell.openExternal(url),
     allowPlaintextFallback: allowPlaintext,
     authAudit,

@@ -955,6 +955,7 @@ export {
   type AppLockValue,
   type AppLockPatch,
   type AppLockAfter,
+  type KeychainProtectionValue,
   type DeveloperTokensPageProps,
   type DeveloperTokensPort,
 } from "./settings";

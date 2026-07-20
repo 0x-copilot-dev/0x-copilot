@@ -67,6 +67,20 @@ export interface AppLockPatch {
   readonly lockAfter?: AppLockAfter;
 }
 
+/**
+ * Host-supplied state for the "Protect secrets with macOS Keychain" toggle.
+ * Desktop-only: the row renders only when the host passes this block (web has
+ * no boot-secrets store, so it simply omits it).
+ */
+export interface KeychainProtectionValue {
+  /** Current policy: true = keychain-encrypted, false = chmod-600 file. */
+  readonly enabled: boolean;
+  /** Whether the OS keychain exists on this platform (row disables if not). */
+  readonly available: boolean;
+  /** A toggle round-trip is in flight — the control disables meanwhile. */
+  readonly busy?: boolean;
+}
+
 export interface AppLockPageProps {
   readonly value: AppLockValue;
   /**
@@ -74,6 +88,14 @@ export interface AppLockPageProps {
    * this page, FR-5.7).
    */
   readonly onChange: (patch: AppLockPatch) => void;
+  /**
+   * Keychain protection for app secrets (desktop). Absent ⇒ the row is not
+   * rendered. NOT part of `AppLockValue`/`onChange`: flipping it performs a
+   * real secrets migration in the host (and may raise an OS prompt), so it
+   * gets its own explicit callback instead of the optimistic patch path.
+   */
+  readonly keychainProtection?: KeychainProtectionValue;
+  readonly onKeychainProtectionChange?: (enabled: boolean) => void;
   /**
    * Whether the platform can provide Touch ID. When `false` the Touch-ID toggle
    * renders DISABLED with an explanatory hint (FR-5.23) rather than vanishing.
@@ -142,6 +164,8 @@ const retryButtonStyle: CSSProperties = {
 export function AppLockPage({
   value,
   onChange,
+  keychainProtection,
+  onKeychainProtectionChange,
   touchIdAvailable = true,
   touchIdUnavailableHint = TOUCH_ID_UNAVAILABLE_HINT,
   loading = false,
@@ -149,6 +173,7 @@ export function AppLockPage({
   onRetry,
 }: AppLockPageProps): ReactElement {
   const reactId = useId();
+  const keychainId = `${reactId}-keychain-protection`;
   const encryptId = `${reactId}-encrypt-history`;
   const touchIdId = `${reactId}-require-touch-id`;
   const touchIdHintId = `${reactId}-touch-id-hint`;
@@ -215,6 +240,31 @@ export function AppLockPage({
       </SetNote>
 
       <SecHead>On-device protection</SecHead>
+
+      {keychainProtection !== undefined ? (
+        <Frow
+          label="Protect secrets with macOS Keychain"
+          hint={
+            keychainProtection.available
+              ? "Off: secrets stay in a file only your account can read — no keychain prompts. On: macOS encrypts them and asks permission after app updates."
+              : "The OS keychain is not available on this platform."
+          }
+          htmlFor={keychainId}
+        >
+          <Toggle
+            id={keychainId}
+            checked={keychainProtection.enabled}
+            disabled={
+              !keychainProtection.available || keychainProtection.busy === true
+            }
+            aria-label="Protect secrets with macOS Keychain"
+            data-testid="app-lock-keychain-protection"
+            onChange={(event) =>
+              onKeychainProtectionChange?.(event.currentTarget.checked)
+            }
+          />
+        </Frow>
+      ) : null}
 
       <Frow
         label="Encrypt local run history"

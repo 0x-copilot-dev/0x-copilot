@@ -241,6 +241,7 @@ export {
   type AppLockValue,
   type AppLockPatch,
   type AppLockAfter,
+  type KeychainProtectionValue,
 } from "./AppLockPage";
 export {
   DeveloperTokensPage,
