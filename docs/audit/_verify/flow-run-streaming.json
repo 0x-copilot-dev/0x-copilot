@@ -1,0 +1,101 @@
+{
+  "cluster": "flow-run-streaming",
+  "verdicts": [
+    {
+      "ref": "F1",
+      "title": "TcSwimlanes SSE subscription omits eventName and receives zero events from the real backend",
+      "type": "risk",
+      "severity": "high",
+      "verdict": "confirmed",
+      "note": "TcSwimlanes.tsx:158 subscribes with no eventName; WebTransport.ts:81 defaults it to \"message\" and sse.ts:109 drops any frame whose event != expected, while the backend frames every event as \"runtime_event\" (constants.py:194 SSE_EVENT_NAME + adapter.py:112) — useRunSession.ts:229 passes it explicitly, TcSwimlanes does not."
+    },
+    {
+      "ref": "F2",
+      "title": "Worker processes commands serially; cancels/approval-resumes starve behind the running run",
+      "type": "risk",
+      "severity": "high",
+      "verdict": "confirmed",
+      "note": "loop.py:164-170 run_forever awaits run_once, which at :124-125 acquires the semaphore and awaits the entire _handle_claim before the next claim; run_until_idle (the only parallel path, :128-139) is used exclusively by tests, and both prod (__main__.py:184) and in-process (app.py:826) call run_forever."
+    },
+    {
+      "ref": "F3",
+      "title": "Cancellation never interrupts execution and terminal states can overwrite each other",
+      "type": "risk",
+      "severity": "high",
+      "verdict": "confirmed",
+      "note": "handlers/run.py has no CANCELLING check mid-stream (only a comment at :334); cancel.py:46-51 unconditionally writes CANCELLED and run.py:545-549 writes COMPLETED via with_optimistic_retry, whose refetch-and-retry defeats the postgres CAS (runtime_api_store.py:1290-1300 checks row_version but not transition legality; in-memory store:586-597 has no guard at all)."
+    },
+    {
+      "ref": "F4",
+      "title": "Event contract is hand-mirrored across Python and TypeScript, and the strict TS guard fails closed",
+      "type": "ssot-violation",
+      "severity": "high",
+      "verdict": "confirmed",
+      "note": "Python StrEnums (common.py:81-160) are re-declared as a TS union (index.ts:253-297) AND a const array (index.ts:310-355) with no codegen; isRuntimeEventEnvelope rejects unknown event_type/activity_kind (index.ts:2366,2369) so parseEnvelope silently drops them (useRunSession.ts:325) and the legacy path raises RuntimeStreamProtocolError (agentApi.ts:70-85)."
+    },
+    {
+      "ref": "F5",
+      "title": "Three client-side stream-consumption/projection pipelines for the same envelope stream",
+      "type": "duplication",
+      "severity": "high",
+      "verdict": "confirmed",
+      "note": "Legacy chatModel reducer family (~30 modules incl. eventReducer/status.ts/approval.ts) fed by agentApi.streamRunEvents (:607), the cockpit's eventProjector.ts+approvalProjection.ts, and TcSwimlanes' own subscription+toBead (TcSwimlanes.tsx:79) all reduce the same stream; approval reduction and run-status-from-event-type (backend _status_for events.py:448, useRunSession:331, chatModel/status.ts:67) are each triplicated."
+    },
+    {
+      "ref": "F6",
+      "title": "useRunSession run-list resolution calls an endpoint that does not exist",
+      "type": "dead-code",
+      "severity": "medium",
+      "verdict": "confirmed",
+      "note": "useRunSession.ts:172-176 fires GET /v1/agent/runs?conversation_id=, but the facade registers only POST on that path (app.py:886) and runtime_api registers /runs POST-only (routes.py:561-563), so the request always errors into the catch (EMPTY_RUNS) and parseRunList/pickActiveRunId/RunMultiSelect can never populate against the real stack."
+    },
+    {
+      "ref": "F7",
+      "title": "No keepalive on the run SSE stream plus no clean-EOF/auto-reconnect handling in the cockpit",
+      "type": "risk",
+      "severity": "medium",
+      "verdict": "confirmed",
+      "note": "adapter.py:67-70 only waits/sleeps in follow mode with no keepalive frame, while inbox_adapter.py:27-30,60 sends \": keepalive\" every 25s with a docstring falsely claiming runtime parity; sse.ts:60-61 returns on clean EOF with no callback and useRunSession only exposes a manual retry() (:291-296), whereas ChatScreen auto-reconnects with backoff (:693-706) but shares the clean-EOF hole."
+    },
+    {
+      "ref": "F8",
+      "title": "RuntimeRunHandler.handle is a ~340-line method in a 1,667-line class",
+      "type": "refactor/complexity",
+      "severity": "medium",
+      "verdict": "confirmed",
+      "note": "handlers/run.py:229-573 is a single ~344-line method (next method _preflight_budgets at :574) in a 1,667-line file with seven context-var unbind pairs in one finally (run.py:530-542) and repeated terminal choreography that RunTerminationCoordinator (already used at run.py:554, cancel.py:52) is meant to own."
+    },
+    {
+      "ref": "F9",
+      "title": "In-process worker silently refuses non-in-memory stores; docs don't say so",
+      "type": "inconsistency",
+      "severity": "low",
+      "verdict": "accepted",
+      "note": "Low severity accepted as-is; incidentally confirmed at app.py:797-798 where start_in_process_worker returns early when store.backend is not in_memory."
+    },
+    {
+      "ref": "F10",
+      "title": "SSE bookkeeping edge cases: shared-waiter unsubscribe, leaked conditions, synthetic heartbeat sequence",
+      "type": "risk",
+      "severity": "low",
+      "verdict": "accepted",
+      "note": "Low severity accepted as-is per verification protocol."
+    },
+    {
+      "ref": "F11",
+      "title": "Unbounded event replay with a hardcoded has_more=False",
+      "type": "efficiency",
+      "severity": "low",
+      "verdict": "accepted",
+      "note": "Low severity accepted as-is per verification protocol."
+    },
+    {
+      "ref": "F12",
+      "title": "Facade SSE passthrough only notices client disconnect on upstream traffic",
+      "type": "efficiency",
+      "severity": "low",
+      "verdict": "accepted",
+      "note": "Low severity accepted as-is per verification protocol."
+    }
+  ]
+}

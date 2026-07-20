@@ -1,0 +1,117 @@
+{
+  "cluster": "build-deploy",
+  "verdicts": [
+    {
+      "ref": "F1",
+      "title": "apply-branch-protection.yml can never run — top-level return in inline Python",
+      "type": "risk",
+      "severity": "high",
+      "verdict": "confirmed",
+      "note": "apply-branch-protection.yml:54,60,74,84 use bare `return` at module scope inside `python3 << 'PY'` heredoc, a compile-time SyntaxError; branch-protection.json:50 has bypass_actors: []."
+    },
+    {
+      "ref": "F2",
+      "title": "CI runs no tests for frontend / chat-surface / chat-transport / surface-renderers",
+      "type": "risk",
+      "severity": "high",
+      "verdict": "confirmed",
+      "note": "ci-frontend.yml:47-52 only typechecks+builds; the sole `npm run test` in any workflow is ci-desktop.yml:75, while 157 frontend + 186 chat-surface test files with `test` scripts (apps/frontend/package.json:10, chat-surface:11) never run."
+    },
+    {
+      "ref": "F3",
+      "title": "CI/release path filters drifted from the real dependency graph",
+      "type": "inconsistency",
+      "severity": "high",
+      "verdict": "confirmed",
+      "note": "ci-frontend.yml:5-8 filter excludes chat-surface (imported 169x) and chat-transport (3x); release-images.yml:12-24 omits packages/audit-chain though backend/ai-backend Dockerfiles pip-install it (Dockerfile:12-16) — sub-claim (c) surface-renderers is imprecise (0 frontend imports; it is in the desktop chain, not frontend)."
+    },
+    {
+      "ref": "F4",
+      "title": "Production staged-rollout gate always fails for non-canary tiers",
+      "type": "risk",
+      "severity": "high",
+      "verdict": "confirmed",
+      "note": "deploy.yml:146 hard-codes synthesized prior records as {tier:\"unknown\",environment:\"unknown\"}, but check_staged_rollout.py:65-66 counts only tier==upstream(canary/early) AND environment==\"production\", so early/general exit 1 unless --force (force_deploy=true) is passed."
+    },
+    {
+      "ref": "F5",
+      "title": "Supply-chain rigor asymmetric across the three services",
+      "type": "inconsistency",
+      "severity": "medium",
+      "verdict": "confirmed",
+      "note": "ai-backend has no requirements.in and installs plain `pip install -r requirements.txt` in CI (ci-ai-backend.yml:47) and Dockerfile:18 (no --require-hashes), while backend/facade use requirements.in + --require-hashes (backend/Dockerfile:17, facade/Dockerfile:15) + pip-compile reproducibility check (ci-backend.yml:48-54)."
+    },
+    {
+      "ref": "F6",
+      "title": "Python version skew: images 3.14, CI/venv 3.13, pyright 3.11",
+      "type": "inconsistency",
+      "severity": "medium",
+      "verdict": "confirmed",
+      "note": "All three service images are `FROM python:3.14-slim-bookworm` (backend/facade/ai-backend Dockerfile:1) while ci-backend.yml:37 pins 3.13, desktop-runtime/manifest.json:8 is 3.13.14, and pyrightconfig.json:11 declares 3.11."
+    },
+    {
+      "ref": "F7",
+      "title": "Migration-manifest logic triplicated; documented CI gate does not exist",
+      "type": "ssot-violation",
+      "severity": "medium",
+      "verdict": "confirmed",
+      "note": "check_migration_manifest.py's parse/digest/render is byte-near-identical in backend/db/migrate.py:99-160 and ai-backend schema/migrate.py:95-158 (same sha256(up)+NUL+rollback algo, same `line.split(\" sha256=\")` parse, same auto-generated header saying 'CI will refuse'), yet grep of .github/Makefile/.pre-commit finds zero invocations; docs claim a CI gate (roadmap/02-c2:92,147; decisions/0002:39)."
+    },
+    {
+      "ref": "F8",
+      "title": "branch-protection.json would deadlock merges if applied",
+      "type": "risk",
+      "severity": "medium",
+      "verdict": "confirmed",
+      "note": "branch-protection.json:38-46 sets strict_required_status_checks_policy:true with contexts naming path-filtered workflows (ci-backend/frontend/etc.) that never report on unrelated PRs, and all three backend workflows share job name `test-and-audit` (ci-backend:30, ci-backend-facade:28, ci-ai-backend:30); bypass_actors: [] (line 50) leaves no escape."
+    },
+    {
+      "ref": "F9",
+      "title": "DEV_AUTH_BYPASS: docs say removed but build config still sets/honors it",
+      "type": "inconsistency",
+      "severity": "low",
+      "verdict": "accepted",
+      "note": "Low-severity, accepted as-is per verifier scope."
+    },
+    {
+      "ref": "F10",
+      "title": "nginx gateway config duplicated and already drifted (SSE read timeout)",
+      "type": "duplication",
+      "severity": "low",
+      "verdict": "accepted",
+      "note": "Low-severity, accepted as-is per verifier scope."
+    },
+    {
+      "ref": "F11",
+      "title": "deploy-website.yml uses floating action tags while others SHA-pin",
+      "type": "inconsistency",
+      "severity": "low",
+      "verdict": "accepted",
+      "note": "Low-severity, accepted as-is per verifier scope."
+    },
+    {
+      "ref": "F12",
+      "title": "policy-lint test suites have no runner",
+      "type": "dead-code",
+      "severity": "low",
+      "verdict": "accepted",
+      "note": "Low-severity, accepted as-is per verifier scope."
+    },
+    {
+      "ref": "F13",
+      "title": "apps/website has no PR CI",
+      "type": "inconsistency",
+      "severity": "low",
+      "verdict": "accepted",
+      "note": "Low-severity, accepted as-is per verifier scope."
+    },
+    {
+      "ref": "F14",
+      "title": "Legacy env-var names in dev configs (MCP_TOKEN_VAULT_PROVIDER)",
+      "type": "inconsistency",
+      "severity": "low",
+      "verdict": "accepted",
+      "note": "Low-severity, accepted as-is per verifier scope."
+    }
+  ]
+}

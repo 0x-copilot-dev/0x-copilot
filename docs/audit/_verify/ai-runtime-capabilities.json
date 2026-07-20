@@ -1,0 +1,109 @@
+{
+  "cluster": "ai-runtime-capabilities",
+  "verdicts": [
+    {
+      "ref": "F1",
+      "title": "render_adapter_generator/ (~1,443 LOC) has no production consumer",
+      "type": "dead-code",
+      "severity": "high",
+      "verdict": "confirmed",
+      "note": "RenderAdapterGenerator is never instantiated in prod; only __init__ re-export, tests, and a comment at runtime_api/schemas/common.py:181; ADAPTER_GENERATED is emitted only inside the dead package (render_adapter_generator/capability.py:216)."
+    },
+    {
+      "ref": "F2",
+      "title": "Dynamic tool-loading subsystem (registry/loader/load_tool/runtime_gate) has zero production consumers",
+      "type": "dead-code",
+      "severity": "high",
+      "verdict": "confirmed",
+      "note": "DynamicToolRegistry/ToolLoader/LoadToolSpecTool/ToolUsePolicyGate referenced only within tools/ package + __init__ re-exports; display_for defined only on registry.py:96 while the live worker stack roots at WebSearchToolRegistry (dependencies.py:41), so handlers/run.py:784 getattr probe never hits it."
+    },
+    {
+      "ref": "F3",
+      "title": "In-process AST-gated code_sandbox + code_tool_adapter are dead, superseded by interpreter/ and sandbox/",
+      "type": "dead-code",
+      "severity": "high",
+      "verdict": "confirmed",
+      "note": "InProcessCodeSandbox/CodeToolAdapter have no consumer outside their own package (code_tool_adapter.py:29 self-imports code_sandbox); the services/backend 'code_sandbox_not_yet_wired' hits are an unrelated error string in a different service."
+    },
+    {
+      "ref": "F4",
+      "title": "mcp/files.py (459 LOC) file-based MCP config + secret scanner never used in production",
+      "type": "dead-code",
+      "severity": "medium",
+      "verdict": "confirmed",
+      "note": "McpFileLayout/FileMcpConfigStore/FileMcpServerProvider/SecretShapeScanner reached only by mcp/__init__.py:40-47 re-exports and tests/mcp/test_files.py; no other consumer."
+    },
+    {
+      "ref": "F5",
+      "title": "MCP dispatcher re-implements citation ordinal-hint block inline; cite_mcp.py is a pass-through alias",
+      "type": "duplication",
+      "severity": "medium",
+      "verdict": "confirmed",
+      "note": "call_tool.py:160-205 duplicates citation_capturing_tool.py:143-181 (same allocator lookup, skip-warning shapes, _CitationHint.append_to, hint_appended/hint_raised logs) and imports private _CitationHint at call_tool.py:13; cite_mcp.py:8-25 is a pure forward to CitationProjector.project."
+    },
+    {
+      "ref": "F6",
+      "title": "BackendMcpServiceAuth.headers and BackendSkillServiceAuth.headers are byte-identical",
+      "type": "duplication",
+      "severity": "low",
+      "verdict": "accepted",
+      "note": "Low severity accepted per protocol; both ENTERPRISE_SERVICE_TOKEN header builders at mcp/backend_provider.py:427 and skills/virtual.py:215."
+    },
+    {
+      "ref": "F7",
+      "title": "Token estimator implemented twice with same 4-chars/token, 100k-cap constants",
+      "type": "duplication",
+      "severity": "low",
+      "verdict": "accepted",
+      "note": "Low severity accepted per protocol; tool_budget_guard.py:162 _Estimator vs runtime_worker/capability_tool_wiring.py:72 _estimate_input_tokens."
+    },
+    {
+      "ref": "F8",
+      "title": "Four near-identical BaseTool wrappers + three registry decorators; composition order only in worker prose",
+      "type": "refactor",
+      "severity": "medium",
+      "verdict": "confirmed",
+      "note": "ToolBudgetGuardedTool/ToolErrorPolicyTool/CitationCapturingTool/RetryingTool each re-implement _run/_arun propagating name/description/args_schema, and the three registries re-implement list_available_tools+_wrap; order lives only at runtime_worker/dependencies.py:129-131 with a 5th structurally-different wrap in display_metadata.py:516."
+    },
+    {
+      "ref": "F9",
+      "title": "agent_runtime (pure domain) imports runtime_api.schemas at runtime — inverted dependency",
+      "type": "boundary-violation",
+      "severity": "medium",
+      "verdict": "confirmed",
+      "note": "Runtime imports of runtime_api.schemas in tool_budget_guard.py:25, citations.py:22, backends/draft_backend.py:32, render_adapter_generator/capability.py:23, plus late import at citation_resolver.py:108 whose comment admits dodging a circular import, against services/ai-backend/CLAUDE.md:7 'agent_runtime/ — pure domain'."
+    },
+    {
+      "ref": "F10",
+      "title": "Three independent interrupt-resume decision parsers with diverging vocabularies",
+      "type": "inconsistency",
+      "severity": "low",
+      "verdict": "accepted",
+      "note": "Low severity accepted per protocol; auth_mcp.py:116, interpreter/policy_invoker.py:259, tools/builtin/ask_a_question.py:154."
+    },
+    {
+      "ref": "F11",
+      "title": "Two parallel citation token systems ([cN] ledger vs [[N]] ordinals) across five modules",
+      "type": "complexity",
+      "severity": "low",
+      "verdict": "accepted",
+      "note": "Low severity accepted per protocol; citations.py, citation_capturing_tool.py, citation_resolver.py, conversation_ordinals.py."
+    },
+    {
+      "ref": "F12",
+      "title": "CapabilityAuthGate restates McpAuthState enum value as a string literal",
+      "type": "ssot-violation",
+      "severity": "low",
+      "verdict": "accepted",
+      "note": "Low severity accepted per protocol; auth_gate.py:70-72,114 AUTHENTICATED_AUTH_STATE='authenticated' vs mcp/cards.py:62 McpAuthState."
+    },
+    {
+      "ref": "F13",
+      "title": "CallMcpTool final handler swallows every exception with no logging",
+      "type": "risk",
+      "severity": "low",
+      "verdict": "accepted",
+      "note": "Low severity accepted per protocol; mcp/middleware/call_tool.py:123 except (McpClientError, Exception) vs loader.py:212-217 which logs with exc_info."
+    }
+  ]
+}
