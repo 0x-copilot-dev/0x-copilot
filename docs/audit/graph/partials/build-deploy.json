@@ -1,0 +1,336 @@
+{
+  "cluster": {
+    "id": "build-deploy",
+    "title": "Build, CI/CD, Deploy & Website",
+    "kind": "cluster",
+    "paths": [".github", "deploy", "infra", "tools", "tests", "apps/website"],
+    "md": "docs/audit/clusters/16-build-deploy.md",
+    "summary": "Repo scaffolding: 15 GitHub Actions workflows (per-component CI, signed GHCR image releases, tenant deploy pipeline, desktop release, restore drill, Pages deploy), multi-tenant deploy scripts and registry, self-host compose + installer, local dev stack (Makefile/docker-compose), five AST policy-lint tools, and the Astro marketing site. Strong supply-chain design (SHA-pinned actions, cosign+attestation+Trivy, digest-pinned promotion) undermined by unexercised safety paths: a broken branch-protection applier, a staged-rollout gate that always fails, drifted CI path filters, and large JS test suites that no CI runs."
+  },
+  "nodes": [
+    {
+      "id": "build-deploy/ci-workflows",
+      "kind": "process",
+      "path": ".github/workflows/ci-*.yml",
+      "summary": "Path-filtered per-component CI: pytest/pip-audit/SBOM per Python service, typecheck+build for frontend, typecheck+vitest for desktop, 3-OS CLI checks, repo-wide pre-commit + gitleaks + tenants lint."
+    },
+    {
+      "id": "build-deploy/release-images",
+      "kind": "process",
+      "path": ".github/workflows/release-images.yml",
+      "summary": "Main-branch 4-image matrix: build/push to GHCR, cosign keyless sign, provenance attestation, Trivy CRITICAL gate, then assemble deployment-manifest.json (v2) referencing image digests + SBOM artifact IDs."
+    },
+    {
+      "id": "build-deploy/deploy-pipeline",
+      "kind": "process",
+      "path": ".github/workflows/deploy.yml",
+      "summary": "Parameterized per-tenant promotion inside GitHub Environments: verify release (cosign/attestation/residency), staged-rollout gate, OIDC federation, orchestrator invocation, audit POST; deploy-staging/deploy-production are thin wrappers."
+    },
+    {
+      "id": "build-deploy/deploy-scripts",
+      "kind": "tool",
+      "path": "deploy/scripts",
+      "summary": "Six untested Python CLIs backing deploy.yml: validate_tenants, load_tenant, verify_release, check_staged_rollout, invoke_orchestrator (argo/helm/flux), post_audit."
+    },
+    {
+      "id": "build-deploy/tenant-registry",
+      "kind": "store",
+      "path": "deploy/tenants.yml",
+      "summary": "Authoritative (currently empty) tenant registry + JSON-schema contract; validated in ci-repo and again inside deploy.yml; enforces tenant-<id> GitHub Environment naming."
+    },
+    {
+      "id": "build-deploy/branch-protection",
+      "kind": "process",
+      "path": "deploy/branch-protection.json",
+      "summary": "Ruleset source-of-truth plus apply-branch-protection.yml applier; the applier's inline Python has a top-level `return` SyntaxError so it can never run, and the required checks would deadlock path-filtered PRs if applied."
+    },
+    {
+      "id": "build-deploy/restore-drill",
+      "kind": "process",
+      "path": ".github/workflows/postgres-restore-drill.yml",
+      "summary": "C12 weekly + migration-PR drill: clean postgres:16, yoyo-apply both services' migrations, load tests/fixtures/postgres-restore/seed.sql, run each service's restore_smoke.py against manifest.yaml expected counts."
+    },
+    {
+      "id": "build-deploy/release-desktop",
+      "kind": "process",
+      "path": ".github/workflows/release-desktop.yml",
+      "summary": "v* tag → 3-leg native matrix (mac arm64/x64, win x64): desktop bundle build, runtime staging via desktop-distribution's stage.mjs, secret-gated signing/notarization, electron-builder publish + updater feeds."
+    },
+    {
+      "id": "build-deploy/self-host",
+      "kind": "process",
+      "path": "deploy/self-host",
+      "summary": "Single-node production stack: idempotent install.sh generates .env secrets once, pulls 4 GHCR images, boots postgres 17 + one-shot migrate jobs + backend/ai-backend(+worker)/facade/frontend behind an nginx gateway (single_user_desktop profile)."
+    },
+    {
+      "id": "build-deploy/dev-stack",
+      "kind": "process",
+      "path": "Makefile",
+      "summary": "Local dev: make setup/dev runs the 3 services + Vite with dev-IdP secrets; docker-dev variant behind infra/docker/dev-gateway.conf nginx on :8080 (still uses legacy DEV_AUTH_BYPASS); make prod builds all images after secret checks."
+    },
+    {
+      "id": "build-deploy/policy-lints",
+      "kind": "tool",
+      "path": "tools",
+      "summary": "Five AST guards: A10 route-scope coverage (imports both FastAPI apps), C2 migration-manifest checksums (not wired into CI despite docs), C3 audit-in-transaction, C10 @reader no-write-SQL, TU-1 forbid direct LLM SDK imports; own pytest suites run by nothing."
+    },
+    {
+      "id": "build-deploy/repo-governance",
+      "kind": "module",
+      "path": "package.json",
+      "summary": "npm workspace root, tsconfig.base, pyrightconfig (stale 3.11 pin), .pre-commit-config (ruff/prettier/pygrep + 4 local policy hooks), dependabot (actions/pip/npm/docker with reasoned ignores), CODEOWNERS."
+    },
+    {
+      "id": "build-deploy/website",
+      "kind": "app",
+      "path": "apps/website",
+      "summary": "3-page Astro marketing site (index/token/docs, ~2.6k LOC) with Playwright capture tooling and a serve-and-fetch link checker; deploy-website.yml publishes dist/ to the org GitHub Pages repo via deploy key (only unpinned-action workflow)."
+    },
+    {
+      "id": "build-deploy/dashboards",
+      "kind": "doc",
+      "path": "infra/dashboards/db-statement-perf.json",
+      "summary": "Grafana C11 dashboard: top-N slowest/hottest DB statement digests from prometheus db_statement_* metrics."
+    }
+  ],
+  "edges": [
+    {
+      "from": "build-deploy/ci-workflows",
+      "to": "backend-platform",
+      "kind": "build",
+      "label": "ci-backend: hash-verified install, full pytest, A10 route-scope check, SBOM",
+      "evidence": ".github/workflows/ci-backend.yml:41-79"
+    },
+    {
+      "from": "build-deploy/ci-workflows",
+      "to": "ai-runtime-execution",
+      "kind": "build",
+      "label": "ci-ai-backend: full services/ai-backend pytest + pip-audit + SBOM (no hash pinning)",
+      "evidence": ".github/workflows/ci-ai-backend.yml:41-68"
+    },
+    {
+      "from": "build-deploy/ci-workflows",
+      "to": "backend-facade",
+      "kind": "build",
+      "label": "ci-backend-facade: hash-verified install + pytest + SBOM",
+      "evidence": ".github/workflows/ci-backend-facade.yml:39-63"
+    },
+    {
+      "from": "build-deploy/ci-workflows",
+      "to": "frontend-web",
+      "kind": "build",
+      "label": "ci-frontend: typecheck + vite build (runs no vitest suites; filter misses chat-surface/chat-transport)",
+      "evidence": ".github/workflows/ci-frontend.yml:4-52"
+    },
+    {
+      "from": "build-deploy/ci-workflows",
+      "to": "desktop-app",
+      "kind": "build",
+      "label": "ci-desktop: typecheck + ~830-test vitest suite, filter covers all imported workspace packages",
+      "evidence": ".github/workflows/ci-desktop.yml:15-75"
+    },
+    {
+      "from": "build-deploy/ci-workflows",
+      "to": "desktop-distribution",
+      "kind": "build",
+      "label": "ci-cli: 3-OS syntax check, smoke, npm-pack manifest validation of tools/cli",
+      "evidence": ".github/workflows/ci-cli.yml:29-53"
+    },
+    {
+      "from": "build-deploy/policy-lints",
+      "to": "ai-runtime-api",
+      "kind": "import",
+      "label": "check_route_scopes imports runtime_api.app:RuntimeApiAppFactory.create_app to enumerate routes",
+      "evidence": "tools/check_route_scopes.py:59-65,118-131"
+    },
+    {
+      "from": "build-deploy/policy-lints",
+      "to": "backend-platform",
+      "kind": "import",
+      "label": "check_route_scopes imports backend_app.app:create_app; check_audit_in_transaction AST-scans service.py",
+      "evidence": "tools/check_route_scopes.py:63; tools/check_audit_in_transaction.py:26-29"
+    },
+    {
+      "from": "build-deploy/policy-lints",
+      "to": "ai-runtime-persistence",
+      "kind": "file",
+      "label": "check_reader_methods scans services/ai-backend/src for write SQL in @reader methods; MANIFEST.lock format shared with both migrate.py implementations",
+      "evidence": "tools/check_reader_methods.py:24-25; services/backend/src/backend_app/db/migrate.py:105"
+    },
+    {
+      "from": "build-deploy/release-images",
+      "to": "external:github",
+      "kind": "http",
+      "label": "push signed digest-pinned images to GHCR; resolve SBOM artifact IDs via gh api; upload deployment-manifest",
+      "evidence": ".github/workflows/release-images.yml:69-97,202-254,311-315"
+    },
+    {
+      "from": "build-deploy/release-images",
+      "to": "external:sigstore",
+      "kind": "http",
+      "label": "cosign keyless OIDC signing of every image digest",
+      "evidence": ".github/workflows/release-images.yml:111-120"
+    },
+    {
+      "from": "build-deploy/release-images",
+      "to": "backend-platform",
+      "kind": "build",
+      "label": "builds services/backend/Dockerfile (+facade, ai-backend, frontend Dockerfiles) from repo context",
+      "evidence": ".github/workflows/release-images.yml:50-59,84-97"
+    },
+    {
+      "from": "build-deploy/deploy-pipeline",
+      "to": "build-deploy/deploy-scripts",
+      "kind": "spawn",
+      "label": "runs validate_tenants, load_tenant, verify_release, check_staged_rollout, invoke_orchestrator, post_audit",
+      "evidence": ".github/workflows/deploy.yml:74-227"
+    },
+    {
+      "from": "build-deploy/deploy-pipeline",
+      "to": "external:aws",
+      "kind": "http",
+      "label": "OIDC federation into tenant cloud via configure-aws-credentials",
+      "evidence": ".github/workflows/deploy.yml:158-167"
+    },
+    {
+      "from": "build-deploy/deploy-scripts",
+      "to": "external:kubernetes",
+      "kind": "http",
+      "label": "orchestrator dispatch: argo REST PATCH+sync+poll, helm upgrade --atomic, flux reconcile",
+      "evidence": "deploy/scripts/invoke_orchestrator.py:56-208"
+    },
+    {
+      "from": "build-deploy/deploy-scripts",
+      "to": "backend-platform",
+      "kind": "http",
+      "label": "post_audit.py POSTs deploy audit event to /internal/v1/audit/deploy with x-enterprise-service-token",
+      "evidence": "deploy/scripts/post_audit.py:86-96"
+    },
+    {
+      "from": "build-deploy/deploy-pipeline",
+      "to": "build-deploy/tenant-registry",
+      "kind": "contract",
+      "label": "tenant entry + tenant-<id>-<env> GitHub Environment naming resolved from tenants.yml",
+      "evidence": ".github/workflows/deploy.yml:56-86; deploy/scripts/validate_tenants.py:56-64"
+    },
+    {
+      "from": "build-deploy/restore-drill",
+      "to": "external:postgres",
+      "kind": "db",
+      "label": "postgres:16 service container; yoyo-applies both services' migrations then seeds and counts",
+      "evidence": ".github/workflows/postgres-restore-drill.yml:52-125"
+    },
+    {
+      "from": "build-deploy/restore-drill",
+      "to": "ai-runtime-persistence",
+      "kind": "build",
+      "label": "applies services/ai-backend/migrations and runs its scripts/restore_smoke.py (same for backend)",
+      "evidence": ".github/workflows/postgres-restore-drill.yml:107-125"
+    },
+    {
+      "from": "build-deploy/release-desktop",
+      "to": "desktop-app",
+      "kind": "build",
+      "label": "npm run build --workspace @0x-copilot/desktop then electron-builder per-arch installers",
+      "evidence": ".github/workflows/release-desktop.yml:97-98,158-165"
+    },
+    {
+      "from": "build-deploy/release-desktop",
+      "to": "desktop-distribution",
+      "kind": "spawn",
+      "label": "runs tools/desktop-runtime/stage.mjs to stage python+postgres+services for the target arch",
+      "evidence": ".github/workflows/release-desktop.yml:103-104"
+    },
+    {
+      "from": "build-deploy/release-desktop",
+      "to": "external:apple",
+      "kind": "http",
+      "label": "notarytool notarization via App Store Connect API key (secret-gated)",
+      "evidence": ".github/workflows/release-desktop.yml:124-133"
+    },
+    {
+      "from": "build-deploy/self-host",
+      "to": "external:github",
+      "kind": "http",
+      "label": "pulls the 4 published GHCR images (IMAGE_TAG pinnable to a commit sha)",
+      "evidence": "deploy/self-host/docker-compose.prod.yml:76,101,153,249; install.sh:106-112"
+    },
+    {
+      "from": "build-deploy/self-host",
+      "to": "backend-platform",
+      "kind": "spawn",
+      "label": "boots backend desktop_app composition root + migrate job + facade + ai-backend API/worker + SPA behind nginx",
+      "evidence": "deploy/self-host/docker-compose.prod.yml:75-276"
+    },
+    {
+      "from": "build-deploy/self-host",
+      "to": "external:postgres",
+      "kind": "db",
+      "label": "postgres:17 with atlas_backend + atlas_ai logical DBs; LISTEN/NOTIFY event bus for API/worker split",
+      "evidence": "deploy/self-host/docker-compose.prod.yml:20-27,55-72,160-166"
+    },
+    {
+      "from": "build-deploy/self-host",
+      "to": "external:ollama",
+      "kind": "env",
+      "label": "optional local models: RUNTIME_ENABLE_LOCAL_MODELS + OLLAMA_BASE_URL passthrough",
+      "evidence": "deploy/self-host/docker-compose.prod.yml:179-184"
+    },
+    {
+      "from": "build-deploy/dev-stack",
+      "to": "backend-platform",
+      "kind": "spawn",
+      "label": "make dev launches backend/ai-backend/facade uvicorn processes + Vite with shared dev secrets env contract",
+      "evidence": "Makefile:78-117"
+    },
+    {
+      "from": "build-deploy/dev-stack",
+      "to": "backend-facade",
+      "kind": "env",
+      "label": "docker-dev still sets legacy DEV_AUTH_BYPASS=true + FACADE_DEV_ORG_ID/USER_ID for the facade",
+      "evidence": "docker-compose.dev.yml:38-44"
+    },
+    {
+      "from": "build-deploy/dev-stack",
+      "to": "external:openai",
+      "kind": "env",
+      "label": "provider key passthrough (OPENAI/ANTHROPIC/GOOGLE_API_KEY) required by check-provider-key",
+      "evidence": "Makefile:62-70; docker-compose.dev.yml:26-28"
+    },
+    {
+      "from": "build-deploy/website",
+      "to": "external:github",
+      "kind": "http",
+      "label": "deploy-website publishes dist/ to 0x-copilot-dev.github.io via deploy key (unpinned peaceiris action)",
+      "evidence": ".github/workflows/deploy-website.yml:69-79"
+    },
+    {
+      "from": "build-deploy/repo-governance",
+      "to": "external:github",
+      "kind": "contract",
+      "label": "dependabot weekly update lanes for actions/pip(x3)/npm/docker(x4) with reviewer teams",
+      "evidence": ".github/dependabot.yml:4-151"
+    },
+    {
+      "from": "build-deploy/branch-protection",
+      "to": "external:github",
+      "kind": "http",
+      "label": "gh api rulesets diff/apply (currently unreachable: inline Python SyntaxError)",
+      "evidence": ".github/workflows/apply-branch-protection.yml:44-90"
+    },
+    {
+      "from": "build-deploy/ci-workflows",
+      "to": "shared-packages",
+      "kind": "build",
+      "label": "CI pip-installs packages/service-contracts + packages/audit-chain into each service env",
+      "evidence": ".github/workflows/ci-backend.yml:44-45; ci-ai-backend.yml:44-45"
+    },
+    {
+      "from": "build-deploy/deploy-pipeline",
+      "to": "docs-corpus",
+      "kind": "file",
+      "label": "contract documented in docs/ci-cd/multi-tenant-deploy.md; runbooks referenced from workflow comments",
+      "evidence": ".github/workflows/deploy.yml:4; .github/workflows/release-desktop.yml:16"
+    }
+  ]
+}

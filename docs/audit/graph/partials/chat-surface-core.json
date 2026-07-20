@@ -1,0 +1,301 @@
+{
+  "cluster": {
+    "id": "chat-surface-core",
+    "title": "Chat Surface — Core (shell, canvas, composer, ports)",
+    "kind": "cluster",
+    "paths": [
+      "packages/chat-surface/src/shell",
+      "packages/chat-surface/src/thread-canvas",
+      "packages/chat-surface/src/composer",
+      "packages/chat-surface/src/workspace",
+      "packages/chat-surface/src/subagents",
+      "packages/chat-surface/src/ports",
+      "packages/chat-surface/src/citations",
+      "packages/chat-surface/src/messages",
+      "packages/chat-surface/src/surfaces",
+      "packages/chat-surface/src/approvals",
+      "packages/chat-surface/src/routing",
+      "packages/chat-surface/src/providers",
+      "packages/chat-surface/src/refs",
+      "packages/chat-surface/src/icons",
+      "packages/chat-surface/src/util",
+      "packages/chat-surface/src/storage",
+      "packages/chat-surface/src/errors",
+      "packages/chat-surface/src/presence",
+      "packages/chat-surface/src/test",
+      "packages/chat-surface/src/settings",
+      "packages/chat-surface/package.json",
+      "packages/chat-surface/eslint.config.js",
+      "packages/chat-surface/CLAUDE.md",
+      "packages/chat-surface/src/index.ts"
+    ],
+    "md": "docs/audit/clusters/11-chat-surface-core.md",
+    "summary": "The substrate-agnostic SSOT interaction layer both web and desktop mount: ChatShell + Run-cockpit ThreadCanvas + composer + citation/subagent/approval/workspace families + Settings surface, all behind a typed ports contract (Transport/Router/KeyValueStore/SecretStorage/Presence/Palette/etc.) with an eslint-enforced browser-primitive ban. Architecture is disciplined and well unit-tested, but no CI runs its lint/tests, the 'one event projection' cockpit invariant has forked (second SSE in TcSwimlanes, mostly-dead projector slices), and several acknowledged duplications (depth models, subagent reducers, aui CSS, legacy web Settings) await convergence."
+  },
+  "nodes": [
+    {
+      "id": "chat-surface-core/barrel",
+      "kind": "package",
+      "path": "packages/chat-surface/src/index.ts",
+      "summary": "1,269-line phase-blocked public barrel; hosts consume only through it (main/types both point at src/index.ts)."
+    },
+    {
+      "id": "chat-surface-core/ports",
+      "kind": "module",
+      "path": "packages/chat-surface/src/ports",
+      "summary": "The substrate contract: Transport/Router/KeyValueStore/SecretStorage/PresenceSignal/SurfaceHost/Badge/Notification/FilePicker/Clipboard/PaletteSearch ports; contract-tested re-export facade."
+    },
+    {
+      "id": "chat-surface-core/providers",
+      "kind": "module",
+      "path": "packages/chat-surface/src/providers",
+      "summary": "React context per port (strict Transport/Router/DeploymentProfile; tolerant KV/Secret/Presence) + NotificationCenter toast SSOT."
+    },
+    {
+      "id": "chat-surface-core/web-port-impls",
+      "kind": "module",
+      "path": "packages/chat-surface/src/storage",
+      "summary": "Web reference implementations via globalThis convention: LocalStorageKeyValueStore, WebSecretStorage (dev-grade), DocumentPresenceSignal, HashRouter."
+    },
+    {
+      "id": "chat-surface-core/routing",
+      "kind": "module",
+      "path": "packages/chat-surface/src/routing",
+      "summary": "Router<TRoute> port, ArtifactRoute union, artifact-URI schemes/parser, HashRouter web impl; ROUTE_TABLE is stub vestige."
+    },
+    {
+      "id": "chat-surface-core/shell",
+      "kind": "module",
+      "path": "packages/chat-surface/src/shell",
+      "summary": "ChatShell grid + AppRail/Topbar/ContextPanel/RightRail + primitives + the destinations SSOT (slug/label/profile rail) and shortcuts SSOT (12 chords) + CommandPalette."
+    },
+    {
+      "id": "chat-surface-core/thread-canvas",
+      "kind": "module",
+      "path": "packages/chat-surface/src/thread-canvas",
+      "summary": "Single-mount Run cockpit canvas: eventProjector + TcChat + TcSwimlanes + TcMiniTimeline + TcSurfaceMount + TcInlineDiff; modes are presentation slots, never remounts."
+    },
+    {
+      "id": "chat-surface-core/run-session",
+      "kind": "module",
+      "path": "packages/chat-surface/src/destinations/run/useRunSession.ts",
+      "summary": "Canonical run resolver + cursor-resumed SSE tail owner (exported through the barrel; file lives under destinations/run, shared scope with chat-surface-destinations)."
+    },
+    {
+      "id": "chat-surface-core/composer",
+      "kind": "module",
+      "path": "packages/chat-surface/src/composer",
+      "summary": "Composer (1.6k LOC) + AssistantComposer shell + model/tool/depth pickers + composer.css; two coexisting depth models and hardcoded model lists."
+    },
+    {
+      "id": "chat-surface-core/messages",
+      "kind": "module",
+      "path": "packages/chat-surface/src/messages",
+      "summary": "Streamdown-based streaming markdown, citation href helpers + remark plugin, reasoning groups."
+    },
+    {
+      "id": "chat-surface-core/citations",
+      "kind": "module",
+      "path": "packages/chat-surface/src/citations",
+      "summary": "Citation context/chips/Sources surfaces + pure citation/link registries (the converged family — web host wraps these reducers)."
+    },
+    {
+      "id": "chat-surface-core/subagents",
+      "kind": "module",
+      "path": "packages/chat-surface/src/subagents",
+      "summary": "Subagent/fleet cards + projectSubagents pure selector; subagentHelpers reproduces the web host's chatModel/subagentStatus.ts."
+    },
+    {
+      "id": "chat-surface-core/approvals",
+      "kind": "module",
+      "path": "packages/chat-surface/src/approvals",
+      "summary": "Presentational ApprovalCard/Receipt/undo-countdown; decision wiring stays host-owned."
+    },
+    {
+      "id": "chat-surface-core/workspace",
+      "kind": "module",
+      "path": "packages/chat-surface/src/workspace",
+      "summary": "Right-rail WorkspacePane + five tab bodies; boundary types structurally mirror host hooks (deferred convergence)."
+    },
+    {
+      "id": "chat-surface-core/surfaces",
+      "kind": "module",
+      "path": "packages/chat-surface/src/surfaces",
+      "summary": "Module-singleton SaaS renderer adapter registry (version-sorted, broken-marking), pure-render adapter contract (D28), Tier2Loader, tier-3 GenericStructuredDiff."
+    },
+    {
+      "id": "chat-surface-core/refs",
+      "kind": "module",
+      "path": "packages/chat-surface/src/refs",
+      "summary": "ItemLink + module-singleton ItemRef resolver registry — one resolution path for palette hits and inline refs."
+    },
+    {
+      "id": "chat-surface-core/settings",
+      "kind": "module",
+      "path": "packages/chat-surface/src/settings",
+      "summary": "SettingsSurface + settingsNav SSOT + 12 section bodies + Transport-backed provider-keys/developer-tokens port factories (desktop mounts it; web still on legacy SettingsScreen)."
+    },
+    {
+      "id": "chat-surface-core/errors-util",
+      "kind": "module",
+      "path": "packages/chat-surface/src/errors",
+      "summary": "parseTransportError/humanTransportMessage (facade envelope + Electron IPC prefix recovery) and formatRelativeTime SSOT."
+    }
+  ],
+  "edges": [
+    {
+      "from": "chat-surface-core/barrel",
+      "to": "chat-surface-core/ports",
+      "kind": "import",
+      "label": "export * from ./ports",
+      "evidence": "packages/chat-surface/src/index.ts:216"
+    },
+    {
+      "from": "chat-surface-core/ports",
+      "to": "shared-packages",
+      "kind": "contract",
+      "label": "Transport types re-exported from @0x-copilot/chat-transport",
+      "evidence": "packages/chat-surface/src/ports/Transport.ts:1-11"
+    },
+    {
+      "from": "chat-surface-core/barrel",
+      "to": "shared-packages",
+      "kind": "contract",
+      "label": "branded IDs / ItemRef / wire types re-exported from @0x-copilot/api-types",
+      "evidence": "packages/chat-surface/src/index.ts:392-420"
+    },
+    {
+      "from": "chat-surface-core/settings",
+      "to": "shared-packages",
+      "kind": "import",
+      "label": "design-system components (Badge/Button/Select/TextInput/Toggle)",
+      "evidence": "packages/chat-surface/src/settings/LocalModelsPage.tsx:26"
+    },
+    {
+      "from": "chat-surface-core/messages",
+      "to": "external:streamdown",
+      "kind": "import",
+      "label": "streaming markdown renderer peer dep",
+      "evidence": "packages/chat-surface/package.json:16"
+    },
+    {
+      "from": "chat-surface-core/run-session",
+      "to": "backend-facade",
+      "kind": "sse",
+      "label": "GET /v1/agent/runs/{id}/stream?after_sequence=N (canonical cursor-resumed stream)",
+      "evidence": "packages/chat-surface/src/destinations/run/useRunSession.ts:226-229"
+    },
+    {
+      "from": "chat-surface-core/thread-canvas",
+      "to": "backend-facade",
+      "kind": "sse",
+      "label": "TcSwimlanes' second uncursored subscription to the same run stream (FR-3.3 violation)",
+      "evidence": "packages/chat-surface/src/thread-canvas/TcSwimlanes.tsx:157-160"
+    },
+    {
+      "from": "chat-surface-core/thread-canvas",
+      "to": "backend-facade",
+      "kind": "http",
+      "label": "TcChat GET /v1/agent/conversations/{id}/messages",
+      "evidence": "packages/chat-surface/src/thread-canvas/TcChat.tsx:212-215"
+    },
+    {
+      "from": "chat-surface-core/run-session",
+      "to": "backend-facade",
+      "kind": "http",
+      "label": "GET /v1/agent/runs?conversation_id= (run resolution)",
+      "evidence": "packages/chat-surface/src/destinations/run/useRunSession.ts:172-176"
+    },
+    {
+      "from": "chat-surface-core/settings",
+      "to": "backend-facade",
+      "kind": "http",
+      "label": "/v1/settings/provider-keys* and /v1/settings/api-keys* via Transport port factories",
+      "evidence": "packages/chat-surface/src/settings/data/providerKeys.ts:11-16"
+    },
+    {
+      "from": "frontend-web",
+      "to": "chat-surface-core/barrel",
+      "kind": "import",
+      "label": "web host mounts ChatShell + port impls + wraps reducers (106 importing files)",
+      "evidence": "apps/frontend/src/app/App.tsx:1000"
+    },
+    {
+      "from": "desktop-app",
+      "to": "chat-surface-core/barrel",
+      "kind": "import",
+      "label": "desktop renderer mounts ChatShell/SettingsSurface, drives Tier2 registerAdapter",
+      "evidence": "apps/desktop/renderer/bootstrap.tsx:217"
+    },
+    {
+      "from": "desktop-app",
+      "to": "chat-surface-core/composer",
+      "kind": "import",
+      "label": "deep CSS imports (composer.css, workspace.css) — the one barrel exception",
+      "evidence": "apps/desktop/renderer/bootstrap.tsx:5-9"
+    },
+    {
+      "from": "chat-surface-destinations",
+      "to": "chat-surface-core/shell",
+      "kind": "import",
+      "label": "destinations consume shell primitives, ports/providers, families, util/time",
+      "evidence": "packages/chat-surface/src/destinations/connectors/ConsumersTab.tsx:12"
+    },
+    {
+      "from": "shared-packages",
+      "to": "chat-surface-core/surfaces",
+      "kind": "import",
+      "label": "surface-renderers registers tier-1 adapters into SurfaceRegistry",
+      "evidence": "packages/surface-renderers/src/slide/index.ts:2"
+    },
+    {
+      "from": "chat-surface-core/shell",
+      "to": "chat-surface-core/providers",
+      "kind": "import",
+      "label": "ChatShell stacks Transport/Router/KV/Presence providers",
+      "evidence": "packages/chat-surface/src/shell/ChatShell.tsx:146-167"
+    },
+    {
+      "from": "chat-surface-core/thread-canvas",
+      "to": "chat-surface-core/surfaces",
+      "kind": "import",
+      "label": "TcSurfaceMount resolves adapters (100ms budget, tier-3 fallback)",
+      "evidence": "packages/chat-surface/src/thread-canvas/TcSurfaceMount.tsx:17"
+    },
+    {
+      "from": "chat-surface-core/shell",
+      "to": "chat-surface-core/refs",
+      "kind": "import",
+      "label": "CommandPalette entity hits navigate via the ItemLink resolver registry",
+      "evidence": "packages/chat-surface/src/shell/CommandPalette.tsx:28-31"
+    },
+    {
+      "from": "chat-surface-core/run-session",
+      "to": "chat-surface-core/thread-canvas",
+      "kind": "import",
+      "label": "session.events feeds ThreadCanvas -> useEventProjector (single projection)",
+      "evidence": "packages/chat-surface/src/destinations/run/RunDestination.tsx:406-407"
+    },
+    {
+      "from": "chat-surface-core/subagents",
+      "to": "chat-surface-core/run-session",
+      "kind": "import",
+      "label": "projectSubagents pure selector over session.events",
+      "evidence": "packages/chat-surface/src/subagents/subagentProjection.ts:8-14"
+    },
+    {
+      "from": "build-deploy",
+      "to": "chat-surface-core/barrel",
+      "kind": "build",
+      "label": "ci-desktop path filter + release-desktop bundle inline; NO job runs package lint/tests",
+      "evidence": ".github/workflows/ci-desktop.yml:18"
+    },
+    {
+      "from": "chat-surface-core/web-port-impls",
+      "to": "chat-surface-core/ports",
+      "kind": "import",
+      "label": "reference impls satisfy KeyValueStore/SecretStorage/PresenceSignal/Router contracts",
+      "evidence": "packages/chat-surface/src/storage/key-value-store.ts:52"
+    }
+  ]
+}

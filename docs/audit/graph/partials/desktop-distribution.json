@@ -1,0 +1,291 @@
+{
+  "cluster": {
+    "id": "desktop-distribution",
+    "title": "Desktop Distribution — CLI, staging, smoke harness",
+    "kind": "cluster",
+    "paths": ["tools/cli", "tools/cli-testing", "tools/desktop-runtime"],
+    "md": "docs/audit/clusters/14-desktop-distribution.md",
+    "summary": "The no-installer distribution pipeline for the desktop app: the published `copilot` CLI (npm) stages a sha256-pinned CPython+Postgres+services runtime into the user's home, ad-hoc signs it on macOS, and launches Electron in production posture; tools/desktop-runtime is the shared staging engine (also driven by release CI) plus an executable boot-contract smoke; tools/cli-testing is a Playwright-Electron live-smoke harness with real SIWE sign-in. Well-crafted and supply-chain-careful, but weakened by hand-synced duplicate facts (Electron 42 vs 43 pin skew, mirrored SERVICES lists, drifted boot-contract copy) and a syntax-check-only test posture."
+  },
+  "nodes": [
+    {
+      "id": "desktop-distribution/cli-entry",
+      "kind": "tool",
+      "path": "tools/cli/bin/copilot.mjs",
+      "summary": "`copilot` command dispatch: start/install/doctor/repair/uninstall/help/version, flag parsing, signal forwarding (win32 tree-kill)."
+    },
+    {
+      "id": "desktop-distribution/cli-lifecycle",
+      "kind": "module",
+      "path": "tools/cli/lib",
+      "summary": "paths.mjs (payload-vs-dev root + electron resolution, state dirs), stage.mjs (idempotent wrapper spawning the staging engine), launch.mjs (Electron spawn with COPILOT_RUNTIME_DIR/COPILOT_PRODUCTION), ui.mjs (TTY output)."
+    },
+    {
+      "id": "desktop-distribution/cli-maintenance",
+      "kind": "module",
+      "path": "tools/cli/lib",
+      "summary": "doctor.mjs (install diagnosis + codesign spot-checks), repair.mjs (orphaned-postgres reclaim, session clear), uninstall.mjs (path-prefix process sweep + guarded rm -rf)."
+    },
+    {
+      "id": "desktop-distribution/mac-shell",
+      "kind": "module",
+      "path": "tools/cli/lib/mac-shell.mjs",
+      "summary": "Branded macOS shell: CoW-clones Electron.app into ~/.0xcopilot/shell, rewrites Info.plist identity + icon, re-signs ad-hoc, stamp-cached; falls back to stock Electron on any failure."
+    },
+    {
+      "id": "desktop-distribution/payload-assembly",
+      "kind": "module",
+      "path": "tools/cli/scripts",
+      "summary": "assemble-payload.mjs (prepack: build desktop+frontend, mirror monorepo subset + stage tooling + Google OAuth default into payload/) and pack-manifest-check.mjs (build-free publish-manifest CI check)."
+    },
+    {
+      "id": "desktop-distribution/runtime-stager",
+      "kind": "tool",
+      "path": "tools/desktop-runtime/stage.mjs",
+      "summary": "Staging engine: downloads sha256-pinned python/postgres (manifest.json), extracts, per-service pip (--require-hashes + pin-check), prunes, compiles, stages wallet-page web assets, optional macOS ad-hoc signing; stamp-driven idempotence."
+    },
+    {
+      "id": "desktop-distribution/runtime-smoke",
+      "kind": "tool",
+      "path": "tools/desktop-runtime/run-local.mjs",
+      "summary": "Executable boot contract: initdb → pg_ctl → create DBs via psycopg → migrate.py ×2 → three uvicorn services with per-run secrets → health/providers/dev-IdP-absent smoke → clean shutdown. Manual-only; mirrors (and has drifted from) the Electron supervisor."
+    },
+    {
+      "id": "desktop-distribution/live-smoke-harness",
+      "kind": "tool",
+      "path": "tools/cli-testing/harness/driver.mjs",
+      "summary": "Playwright-Electron driver launching the real app with CLI-identical env, intercepting shell.openExternal, exposing an HTTP /rpc control server for click/screenshot/DOM-dump steps."
+    },
+    {
+      "id": "desktop-distribution/siwe-session",
+      "kind": "tool",
+      "path": "tools/cli-testing/harness/siwe-session.mjs",
+      "summary": "Completes a real SIWE login against the live facade (nonce → viem-signed EIP-4361 → verify) and feeds the app's loopback; carries a third hand-copy of the SIWE message template."
+    },
+    {
+      "id": "desktop-distribution/docs",
+      "kind": "doc",
+      "path": "tools/cli/README.md",
+      "summary": "User + operator docs: CLI README/TROUBLESHOOTING, desktop-runtime boot-contract README with sharp-edges list, cli-testing README + FIX-PLAN/FIX-VERIFICATION remediation record."
+    }
+  ],
+  "edges": [
+    {
+      "from": "desktop-distribution/cli-entry",
+      "to": "desktop-distribution/cli-lifecycle",
+      "kind": "import",
+      "label": "paths/stage/launch/ui + mac-shell imports",
+      "evidence": "tools/cli/bin/copilot.mjs:18-30"
+    },
+    {
+      "from": "desktop-distribution/cli-entry",
+      "to": "desktop-distribution/cli-maintenance",
+      "kind": "import",
+      "label": "doctor/repair/uninstall dispatch",
+      "evidence": "tools/cli/bin/copilot.mjs:27-29,196-204"
+    },
+    {
+      "from": "desktop-distribution/cli-entry",
+      "to": "desktop-distribution/mac-shell",
+      "kind": "import",
+      "label": "ensureBrandedShell before launch",
+      "evidence": "tools/cli/bin/copilot.mjs:26,104-107"
+    },
+    {
+      "from": "desktop-distribution/cli-lifecycle",
+      "to": "desktop-distribution/runtime-stager",
+      "kind": "spawn",
+      "label": "stageRuntime spawns node stage.mjs --platform --arch --dest --adhoc-sign",
+      "evidence": "tools/cli/lib/stage.mjs:67-83"
+    },
+    {
+      "from": "desktop-distribution/payload-assembly",
+      "to": "desktop-distribution/runtime-stager",
+      "kind": "file",
+      "label": "copies stage.mjs + manifest.json into payload/tools/desktop-runtime",
+      "evidence": "tools/cli/scripts/assemble-payload.mjs:130-138"
+    },
+    {
+      "from": "desktop-distribution/cli-maintenance",
+      "to": "desktop-distribution/runtime-stager",
+      "kind": "file",
+      "label": "reads staging-manifest.json; runs staged pg_ctl; codesign spot-checks staged binaries",
+      "evidence": "tools/cli/lib/doctor.mjs:86,165-181; tools/cli/lib/repair.mjs:32-35"
+    },
+    {
+      "from": "desktop-distribution/runtime-smoke",
+      "to": "desktop-distribution/runtime-stager",
+      "kind": "file",
+      "label": "requires staged tree + staging-manifest.json host_exec",
+      "evidence": "tools/desktop-runtime/run-local.mjs:230-242"
+    },
+    {
+      "from": "desktop-distribution/live-smoke-harness",
+      "to": "desktop-distribution/siwe-session",
+      "kind": "file",
+      "label": "captured openExternal loopback URL feeds siwe-session --loopback",
+      "evidence": "tools/cli-testing/harness/siwe-session.mjs:12-13; tools/cli-testing/README.md:18-21"
+    },
+    {
+      "from": "desktop-distribution/cli-lifecycle",
+      "to": "desktop-app",
+      "kind": "spawn",
+      "label": "spawn(electron, [appDir]) with COPILOT_RUNTIME_DIR + COPILOT_PRODUCTION=1",
+      "evidence": "tools/cli/lib/launch.mjs:58-73"
+    },
+    {
+      "from": "desktop-distribution/cli-lifecycle",
+      "to": "desktop-app",
+      "kind": "env",
+      "label": "posture contract: COPILOT_PRODUCTION consumed by main/posture.ts; COPILOT_RUNTIME_DIR by boot-mode.ts",
+      "evidence": "tools/cli/lib/launch.mjs:64-69; apps/desktop/main/posture.ts:26-27"
+    },
+    {
+      "from": "desktop-distribution/payload-assembly",
+      "to": "desktop-app",
+      "kind": "build",
+      "label": "npm run build --workspace @0x-copilot/desktop; ships out/ bundle in payload/desktop",
+      "evidence": "tools/cli/scripts/assemble-payload.mjs:90-97,166-197"
+    },
+    {
+      "from": "desktop-distribution/mac-shell",
+      "to": "desktop-app",
+      "kind": "file",
+      "label": "reads out/main/icon.icns; BUNDLE_ID mirrors branding.ts APP_ID / electron-builder appId",
+      "evidence": "tools/cli/lib/mac-shell.mjs:43-44,83"
+    },
+    {
+      "from": "desktop-distribution/runtime-stager",
+      "to": "frontend-web",
+      "kind": "build",
+      "label": "builds/stages apps/frontend/dist (wallet.html) -> <dest>/web for facade FACADE_WEB_DIST_DIR",
+      "evidence": "tools/desktop-runtime/stage.mjs:713-731"
+    },
+    {
+      "from": "desktop-distribution/runtime-stager",
+      "to": "backend-platform",
+      "kind": "file",
+      "label": "stages services/backend {src,migrations,scripts} + hash-locked pip site-packages",
+      "evidence": "tools/desktop-runtime/stage.mjs:56-61,397-459"
+    },
+    {
+      "from": "desktop-distribution/runtime-stager",
+      "to": "backend-facade",
+      "kind": "file",
+      "label": "stages services/backend-facade src + hash-locked pip site-packages",
+      "evidence": "tools/desktop-runtime/stage.mjs:62-66,397-459"
+    },
+    {
+      "from": "desktop-distribution/runtime-stager",
+      "to": "ai-runtime-api",
+      "kind": "file",
+      "label": "stages services/ai-backend {src,migrations,scripts,config,skills} + pip site-packages",
+      "evidence": "tools/desktop-runtime/stage.mjs:67-71,397-459"
+    },
+    {
+      "from": "desktop-distribution/runtime-stager",
+      "to": "shared-packages",
+      "kind": "build",
+      "label": "pip installs packages/service-contracts + packages/audit-chain into each service's site-packages",
+      "evidence": "tools/desktop-runtime/stage.mjs:74-77,451-452"
+    },
+    {
+      "from": "desktop-distribution/runtime-stager",
+      "to": "external:github",
+      "kind": "http",
+      "label": "downloads pinned python-build-standalone archives (sha256-verified)",
+      "evidence": "tools/desktop-runtime/manifest.json:11; tools/desktop-runtime/stage.mjs:207-217"
+    },
+    {
+      "from": "desktop-distribution/runtime-stager",
+      "to": "external:maven-central",
+      "kind": "http",
+      "label": "downloads pinned zonky embedded-postgres jars (sha256-verified)",
+      "evidence": "tools/desktop-runtime/manifest.json:40; tools/desktop-runtime/stage.mjs:207-217"
+    },
+    {
+      "from": "desktop-distribution/runtime-smoke",
+      "to": "backend-platform",
+      "kind": "spawn",
+      "label": "python -m uvicorn backend_app.desktop_app:app (production, single_user_desktop)",
+      "evidence": "tools/desktop-runtime/run-local.mjs:381-397"
+    },
+    {
+      "from": "desktop-distribution/runtime-smoke",
+      "to": "ai-runtime-api",
+      "kind": "spawn",
+      "label": "python -m uvicorn runtime_api.app:app (postgres store, in-proc worker, migrations off)",
+      "evidence": "tools/desktop-runtime/run-local.mjs:399-426"
+    },
+    {
+      "from": "desktop-distribution/runtime-smoke",
+      "to": "backend-facade",
+      "kind": "http",
+      "label": "spawns backend_facade.app:app then smokes /v1/health, /v1/auth/providers, /v1/dev absence",
+      "evidence": "tools/desktop-runtime/run-local.mjs:428-500"
+    },
+    {
+      "from": "desktop-distribution/runtime-smoke",
+      "to": "external:postgres",
+      "kind": "spawn",
+      "label": "staged initdb / pg_ctl / postgres lifecycle (embedded cluster)",
+      "evidence": "tools/desktop-runtime/run-local.mjs:271-305"
+    },
+    {
+      "from": "desktop-distribution/live-smoke-harness",
+      "to": "desktop-app",
+      "kind": "spawn",
+      "label": "playwright electron.launch([appDir]) with CLI-identical env; intercepts shell.openExternal",
+      "evidence": "tools/cli-testing/harness/driver.mjs:119-146"
+    },
+    {
+      "from": "desktop-distribution/siwe-session",
+      "to": "backend-facade",
+      "kind": "http",
+      "label": "POST /v1/auth/siwe/nonce + /v1/auth/siwe/verify against the live supervised facade",
+      "evidence": "tools/cli-testing/harness/siwe-session.mjs:48,81"
+    },
+    {
+      "from": "desktop-distribution/siwe-session",
+      "to": "backend-identity",
+      "kind": "contract",
+      "label": "EIP-4361 message template + 'Sign in to Copilot' statement must byte-match siwe.py (3rd copy)",
+      "evidence": "tools/cli-testing/harness/siwe-session.mjs:42,66-76"
+    },
+    {
+      "from": "desktop-distribution/siwe-session",
+      "to": "desktop-app",
+      "kind": "http",
+      "label": "GET app loopback /wallet/cb with bearer fields to sign the GUI in",
+      "evidence": "tools/cli-testing/harness/siwe-session.mjs:94-117"
+    },
+    {
+      "from": "build-deploy",
+      "to": "desktop-distribution/runtime-stager",
+      "kind": "spawn",
+      "label": "release-desktop.yml runs stage.mjs per (platform,arch); caches ~/.cache/enterprise-desktop-runtime keyed on manifest.json",
+      "evidence": ".github/workflows/release-desktop.yml:85-104"
+    },
+    {
+      "from": "build-deploy",
+      "to": "desktop-distribution/cli-entry",
+      "kind": "build",
+      "label": "ci-cli.yml: node --check, version/help smoke, pack-manifest-check on 3 OSes",
+      "evidence": ".github/workflows/ci-cli.yml:38-52"
+    },
+    {
+      "from": "desktop-distribution/payload-assembly",
+      "to": "external:google-oauth",
+      "kind": "file",
+      "label": "bundles default Google OAuth client (gitignored google-oauth.json or publish env) into payload",
+      "evidence": "tools/cli/scripts/assemble-payload.mjs:199-229"
+    },
+    {
+      "from": "desktop-distribution/payload-assembly",
+      "to": "frontend-web",
+      "kind": "build",
+      "label": "builds @0x-copilot/frontend and mirrors dist (wallet.html) into payload/apps/frontend/dist",
+      "evidence": "tools/cli/scripts/assemble-payload.mjs:99-123,231-240"
+    }
+  ]
+}

@@ -1,0 +1,175 @@
+{
+  "cluster": {
+    "id": "flow-mcp",
+    "title": "MCP & Connectors end-to-end",
+    "kind": "flow",
+    "paths": [
+      "services/backend/src/backend_app/mcp_catalog.py",
+      "services/backend/src/backend_app/mcp_oauth.py",
+      "services/backend/src/backend_app/token_vault.py",
+      "services/backend/src/backend_app/service.py",
+      "services/backend/src/backend_app/connectors",
+      "services/backend-facade/src/backend_facade/connector_routes.py",
+      "services/ai-backend/src/agent_runtime/capabilities/mcp",
+      "services/ai-backend/src/agent_runtime/api/mcp_discovery_service.py",
+      "apps/frontend/src/features/connectors",
+      "apps/frontend/src/api/mcpApi.ts",
+      "apps/desktop/main/connectors",
+      "packages/chat-surface/src/destinations/connectors",
+      "packages/api-types/src/connectors.ts",
+      "packages/api-types/src/connectors-desktop.ts"
+    ],
+    "md": "docs/audit/flows/mcp-connectors.md",
+    "summary": "Traces an MCP server from catalog/install through OAuth (discovery + dynamic client registration or pre-registered clients), TokenVault storage, the /internal/v1 cards/client-session/RPC proxy consumed by ai-backend, runtime tool exposure (load/call/auth/suggest builtins) and per-chat connector scoping, out to the web, chat-surface, and desktop connector UIs. Core MCP spine is solid with tokens confined to services/backend; the parallel Connectors-destination read model is stub-wired (fake OAuth URL, 503 callback, in-memory-only store, no production populate path) and the connector concept has ~10 hand-maintained representations across three catalogs."
+  },
+  "nodes": [
+    {
+      "id": "flow-mcp",
+      "kind": "flow",
+      "path": "docs/audit/flows/mcp-connectors.md",
+      "summary": "MCP & Connectors end-to-end: catalog -> install -> OAuth/PKCE -> TokenVault -> internal cards/RPC proxy -> runtime MCP tools -> per-chat scopes -> web/desktop connector UIs."
+    }
+  ],
+  "edges": [
+    {
+      "from": "frontend-web",
+      "to": "backend-facade",
+      "kind": "http",
+      "label": "/v1/mcp/* catalog, install, servers, auth start/skip, oauth callback",
+      "evidence": "apps/frontend/src/api/mcpApi.ts:25-125"
+    },
+    {
+      "from": "frontend-web",
+      "to": "backend-facade",
+      "kind": "http",
+      "label": "/v1/connectors/* destination read model + stub start-oauth + SSE stream",
+      "evidence": "apps/frontend/src/api/connectorsApi.ts:78-310"
+    },
+    {
+      "from": "frontend-web",
+      "to": "backend-facade",
+      "kind": "http",
+      "label": "PATCH /v1/agent/conversations/{id}/connectors per-chat scope merge-patch",
+      "evidence": "apps/frontend/src/features/connectors/useConversationConnectors.ts:17-45"
+    },
+    {
+      "from": "backend-facade",
+      "to": "backend-platform",
+      "kind": "http",
+      "label": "proxy /v1/mcp/* to backend :8100 (McpRegistryService)",
+      "evidence": "services/backend-facade/src/backend_facade/app.py:236-384"
+    },
+    {
+      "from": "backend-facade",
+      "to": "backend-product",
+      "kind": "http",
+      "label": "proxy /v1/connectors/* incl. desktop catalog + desktop OAuth routes",
+      "evidence": "services/backend-facade/src/backend_facade/connector_routes.py:40-330"
+    },
+    {
+      "from": "backend-facade",
+      "to": "ai-runtime-api",
+      "kind": "http",
+      "label": "PATCH /v1/agent/conversations/{id}/connectors forwarded to runtime API",
+      "evidence": "services/backend-facade/src/backend_facade/app.py:477-487"
+    },
+    {
+      "from": "ai-runtime-api",
+      "to": "backend-platform",
+      "kind": "http",
+      "label": "GET /internal/v1/me/suggestible-connectors at run-create (service-token lane)",
+      "evidence": "services/ai-backend/src/agent_runtime/api/suggestible_connectors_resolver.py:1-60"
+    },
+    {
+      "from": "ai-runtime-worker",
+      "to": "ai-runtime-capabilities",
+      "kind": "import",
+      "label": "composes BackendMcpProvider + DynamicMcpRegistry + discovery cache",
+      "evidence": "services/ai-backend/src/runtime_worker/dependencies.py:282-308"
+    },
+    {
+      "from": "ai-runtime-execution",
+      "to": "ai-runtime-capabilities",
+      "kind": "import",
+      "label": "factory wires load_mcp_server / call_mcp_tool / auth_mcp / suggest_mcp_connector builtins",
+      "evidence": "services/ai-backend/src/agent_runtime/execution/factory.py:336-402"
+    },
+    {
+      "from": "ai-runtime-capabilities",
+      "to": "backend-platform",
+      "kind": "http",
+      "label": "/internal/v1/mcp cards + auth/start + client-session + rpc (JSON-RPC proxy)",
+      "evidence": "services/ai-backend/src/agent_runtime/capabilities/mcp/backend_provider.py:66-243"
+    },
+    {
+      "from": "backend-platform",
+      "to": "external:mcp-servers",
+      "kind": "http",
+      "label": "OAuth discovery (RFC 9728/8414), dynamic registration (RFC 7591), token exchange, JSON-RPC forward with Bearer",
+      "evidence": "services/backend/src/backend_app/mcp_oauth.py:193-311; services/backend/src/backend_app/service.py:764-790"
+    },
+    {
+      "from": "backend-platform",
+      "to": "external:postgres",
+      "kind": "db",
+      "label": "PostgresMcpStore when DATABASE_URL set; production fails closed without it",
+      "evidence": "services/backend/src/backend_app/service.py:806-813"
+    },
+    {
+      "from": "ai-runtime-capabilities",
+      "to": "shared-packages",
+      "kind": "contract",
+      "label": "copilot_service_contracts headers for trusted service lane",
+      "evidence": "services/ai-backend/src/agent_runtime/capabilities/mcp/backend_provider.py:10-15"
+    },
+    {
+      "from": "chat-surface-destinations",
+      "to": "shared-packages",
+      "kind": "contract",
+      "label": "ConnectorsDestination typed on api-types Connector/ConnectorCatalogEntry",
+      "evidence": "packages/chat-surface/src/destinations/connectors/ConnectorsDestination.tsx:26-33"
+    },
+    {
+      "from": "frontend-web",
+      "to": "chat-surface-destinations",
+      "kind": "import",
+      "label": "ConnectorsRoute mounts chat-surface ConnectorsDestination/ConnectModal; composer button re-export shim",
+      "evidence": "apps/frontend/src/features/connectors/ConnectorsRoute.tsx:37; apps/frontend/src/features/chat/components/composer/ComposerConnectorsButton.tsx:10-13"
+    },
+    {
+      "from": "desktop-app",
+      "to": "backend-facade",
+      "kind": "http",
+      "label": "GET /v1/connectors/desktop/catalog + desktop start-oauth/oauth-callback (loopback/deep-link PKCE)",
+      "evidence": "apps/desktop/main/connectors/connector-service.ts:43-60; apps/desktop/main/connectors/oauth-coordinator.ts:9-27"
+    },
+    {
+      "from": "desktop-app",
+      "to": "external:mcp-servers",
+      "kind": "spawn",
+      "label": "opens provider authorization_url in the system browser (openExternal)",
+      "evidence": "apps/desktop/main/connectors/oauth-coordinator.ts:14-21,58"
+    },
+    {
+      "from": "backend-product",
+      "to": "backend-platform",
+      "kind": "import",
+      "label": "DesktopMcpOAuthCoordinator drives McpRegistryService.start_auth/complete_auth + TokenVault",
+      "evidence": "services/backend/src/backend_app/connectors/oauth_coordinator.py:141-296; services/backend/src/backend_app/app.py:1683-1697"
+    },
+    {
+      "from": "ai-runtime-api",
+      "to": "frontend-web",
+      "kind": "sse",
+      "label": "mcp_auth_required envelope (Connect/Skip card) on the run event stream",
+      "evidence": "services/ai-backend/src/agent_runtime/api/mcp_discovery_service.py:1-12; packages/api-types/src/index.ts:1816"
+    },
+    {
+      "from": "backend-facade",
+      "to": "external:mcp-servers",
+      "kind": "http",
+      "label": "OAuth provider browser redirect terminates at public GET /v1/mcp/oauth/callback (state-anchored)",
+      "evidence": "services/backend/src/backend_app/app.py:932-955"
+    }
+  ]
+}

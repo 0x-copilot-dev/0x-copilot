@@ -1,0 +1,329 @@
+{
+  "cluster": {
+    "id": "shared-packages",
+    "title": "Shared Packages — contracts, transport, tokens, renderers",
+    "kind": "cluster",
+    "paths": [
+      "packages/api-types",
+      "packages/service-contracts",
+      "packages/chat-transport",
+      "packages/audit-chain",
+      "packages/design-system",
+      "packages/surface-renderers"
+    ],
+    "md": "docs/audit/clusters/15-shared-packages.md",
+    "summary": "Six boundary-crossing workspace packages: hand-maintained TS wire contracts (api-types), Python constants (service-contracts), the substrate-agnostic Transport port with web/IPC/mock implementations (chat-transport), the shared HMAC audit-chain signer (audit-chain), the v2 token SoT + React primitives (design-system), and tier-1 SaaS surface renderers (surface-renderers). Structurally disciplined with strong tests on transport/audit-chain, but api-types is a ~9.6k-LOC dual-write mirror with drift tests covering only 4 enum tuples, and the renderer package registers into a registry nothing mounted reads yet."
+  },
+  "nodes": [
+    {
+      "id": "shared-packages/api-types",
+      "kind": "package",
+      "path": "packages/api-types",
+      "summary": "Hand-maintained TS mirrors of the facade's public HTTP payloads: 3,978-line barrel (MCP, runs/events, approvals, auth/MFA, usage, audit) plus one module per destination (home, inbox, library, todos, team, routines, memory, agents, projects, activity, chats, connectors) and branded IDs in brands.ts."
+    },
+    {
+      "id": "shared-packages/api-types-allowlist-bridge",
+      "kind": "module",
+      "path": "packages/api-types/src/adapterAllowlist.ts",
+      "summary": "Re-exports service-contracts' adapter_allowlist.json as ADAPTER_ALLOWLIST via a cross-package relative import, feeding the desktop 6A AST scanner."
+    },
+    {
+      "id": "shared-packages/service-contracts",
+      "kind": "package",
+      "path": "packages/service-contracts",
+      "summary": "Constants-only Python package: internal x-enterprise-* header names, bearer claim names, A10 RBAC scope catalog, deployment-profile enums/toggles. Shared into all three services via PYTHONPATH (dev) / pip (Docker)."
+    },
+    {
+      "id": "shared-packages/adapter-allowlist-json",
+      "kind": "store",
+      "path": "packages/service-contracts/src/copilot_service_contracts/adapter_allowlist.json",
+      "summary": "Canonical tier-2 adapter sandbox allowlist (allowed_imports / forbidden_globals / forbidden_syntax / budget_ms), the single on-disk file both the TS AST scanner and the Python generator auditor load; snapshot canary tests on both sides."
+    },
+    {
+      "id": "shared-packages/chat-transport-core",
+      "kind": "module",
+      "path": "packages/chat-transport/src/transport.ts",
+      "summary": "The substrate-agnostic Transport port (typed request, raw SSE subscribe, session, capabilities) plus TypedRequest/Session types and UnauthorizedError; the contract chat-surface binds against."
+    },
+    {
+      "id": "shared-packages/chat-transport-web",
+      "kind": "module",
+      "path": "packages/chat-transport/src/web",
+      "summary": "WebTransport: fetch-based Transport adding bearer + x-request-id headers and FastAPI detail parsing, plus a hand-rolled streaming-fetch SSE reader (EventSource cannot send Authorization headers)."
+    },
+    {
+      "id": "shared-packages/chat-transport-ipc",
+      "kind": "module",
+      "path": "packages/chat-transport/src/ipc",
+      "summary": "Electron IPC protocol: CHANNELS allowlist + zod payload schemas (transport, auth, tier2, boot, update) consumed by desktop preload and main, and IpcTransport, the renderer-side Transport with microtask-buffered stream event dispatch."
+    },
+    {
+      "id": "shared-packages/chat-transport-auth",
+      "kind": "module",
+      "path": "packages/chat-transport/src/auth/withBearerRefresh.ts",
+      "summary": "Decorator wrapping any Transport with a single 401 → refresh → retry cycle; a second 401 propagates so sign-in UIs re-prompt instead of looping."
+    },
+    {
+      "id": "shared-packages/chat-transport-mock",
+      "kind": "module",
+      "path": "packages/chat-transport/src/mock",
+      "summary": "MockTransport: timer-scripted email-draft fixture (tool_call_start/chunk/end, pending_diff) used by the desktop shell in unwired dev mode and by tests."
+    },
+    {
+      "id": "shared-packages/audit-chain",
+      "kind": "package",
+      "path": "packages/audit-chain",
+      "summary": "copilot_audit_chain: HMAC-SHA256 hash-chain signer/verifier with key rotation, env loading (AUDIT_HMAC_KEY*), production fail-closed, and a dev sentinel key byte-pinned by compat fixtures in both consumer services."
+    },
+    {
+      "id": "shared-packages/design-system-components",
+      "kind": "module",
+      "path": "packages/design-system/src/index.tsx",
+      "summary": "React primitives (Button, Card, Badge, Switch, Menu, AppIcon with brand-glyph map, HarnessRow, StatusPill, Radix Popover wrapper) plus ThemeProvider owning localStorage theme/accent keys and root data attributes."
+    },
+    {
+      "id": "shared-packages/design-system-tokens",
+      "kind": "module",
+      "path": "packages/design-system/src/styles.css",
+      "summary": "The v2 quiet token single source of truth: color/type/space/radius/motion tokens on :root, theme/accent/density/reduce-motion switches, all ui-* component CSS, vendored JetBrains Mono (plus 6 unreferenced legacy font files)."
+    },
+    {
+      "id": "shared-packages/surface-renderers-adapters",
+      "kind": "module",
+      "path": "packages/surface-renderers/src",
+      "summary": "Four tier-1 SaaSRendererAdapters (email, salesforce opportunity, sheet with column virtualization, slide) with renderCurrent/renderDiff, registered into chat-surface's SurfaceRegistry via registerAll(); currently reachable only through the unmounted thread-canvas."
+    },
+    {
+      "id": "shared-packages/surface-renderers-boundary",
+      "kind": "tool",
+      "path": "packages/surface-renderers/eslint.config.js",
+      "summary": "D28 boundary enforcement: eslint bans on browser globals, app/shell/transport imports, and non-allowlisted dynamic imports, plus a lint-negatives harness asserting every ban still fires."
+    }
+  ],
+  "edges": [
+    {
+      "from": "shared-packages/api-types-allowlist-bridge",
+      "to": "shared-packages/adapter-allowlist-json",
+      "kind": "file",
+      "label": "relative-path JSON import (undeclared cross-package dependency)",
+      "evidence": "packages/api-types/src/adapterAllowlist.ts:10"
+    },
+    {
+      "from": "shared-packages/service-contracts",
+      "to": "shared-packages/adapter-allowlist-json",
+      "kind": "file",
+      "label": "load_adapter_allowlist() via importlib.resources",
+      "evidence": "packages/service-contracts/src/copilot_service_contracts/adapter_allowlist.py:30"
+    },
+    {
+      "from": "shared-packages/chat-transport-web",
+      "to": "shared-packages/chat-transport-core",
+      "kind": "import",
+      "label": "implements Transport",
+      "evidence": "packages/chat-transport/src/web/WebTransport.ts:1"
+    },
+    {
+      "from": "shared-packages/chat-transport-ipc",
+      "to": "shared-packages/chat-transport-core",
+      "kind": "import",
+      "label": "implements Transport over WindowBridge",
+      "evidence": "packages/chat-transport/src/ipc/IpcTransport.ts:1"
+    },
+    {
+      "from": "shared-packages/chat-transport-auth",
+      "to": "shared-packages/chat-transport-core",
+      "kind": "import",
+      "label": "decorates Transport (401 refresh retry)",
+      "evidence": "packages/chat-transport/src/auth/withBearerRefresh.ts:1"
+    },
+    {
+      "from": "shared-packages/chat-transport-mock",
+      "to": "shared-packages/chat-transport-core",
+      "kind": "import",
+      "label": "implements Transport with scripted fixture",
+      "evidence": "packages/chat-transport/src/mock/MockTransport.ts:1"
+    },
+    {
+      "from": "shared-packages/chat-transport-web",
+      "to": "backend-facade",
+      "kind": "http",
+      "label": "typed /v1/* requests with bearer + x-request-id",
+      "evidence": "packages/chat-transport/src/web/WebTransport.ts:52"
+    },
+    {
+      "from": "shared-packages/chat-transport-web",
+      "to": "backend-facade",
+      "kind": "sse",
+      "label": "streaming-fetch SSE (run event streams)",
+      "evidence": "packages/chat-transport/src/web/sse.ts:28"
+    },
+    {
+      "from": "shared-packages/surface-renderers-adapters",
+      "to": "chat-surface-core",
+      "kind": "import",
+      "label": "registerAdapter + TcInlineDiff + SaaSRendererAdapter contract",
+      "evidence": "packages/surface-renderers/src/email/EmailRenderer.tsx:3"
+    },
+    {
+      "from": "shared-packages/design-system-components",
+      "to": "shared-packages/design-system-tokens",
+      "kind": "contract",
+      "label": "ui-* class names + var(--*) tokens defined in styles.css",
+      "evidence": "packages/design-system/src/index.tsx:155"
+    },
+    {
+      "from": "shared-packages/design-system-components",
+      "to": "external:radix-ui",
+      "kind": "import",
+      "label": "@radix-ui/react-popover peer dependency",
+      "evidence": "packages/design-system/src/popover.tsx:10"
+    },
+    {
+      "from": "shared-packages/chat-transport-ipc",
+      "to": "external:zod",
+      "kind": "import",
+      "label": "IPC payload schema validation",
+      "evidence": "packages/chat-transport/src/ipc/rpc-protocol.ts:1"
+    },
+    {
+      "from": "frontend-web",
+      "to": "shared-packages/api-types",
+      "kind": "contract",
+      "label": "typed payloads for all /v1/* calls (242 files)",
+      "evidence": "apps/frontend/package.json:2 dependencies @0x-copilot/api-types"
+    },
+    {
+      "from": "chat-surface-core",
+      "to": "shared-packages/api-types",
+      "kind": "contract",
+      "label": "typed payloads for destinations + run cockpit (225 files)",
+      "evidence": "packages/chat-surface/src/thread-canvas/eventProjector.ts:1"
+    },
+    {
+      "from": "chat-surface-core",
+      "to": "shared-packages/chat-transport-core",
+      "kind": "import",
+      "label": "type-only Transport port binding",
+      "evidence": "packages/chat-surface/src/providers/TransportProvider.tsx:1"
+    },
+    {
+      "from": "frontend-web",
+      "to": "shared-packages/chat-transport-web",
+      "kind": "import",
+      "label": "singleton WebTransport for the web app",
+      "evidence": "apps/frontend/src/api/transport.ts:1"
+    },
+    {
+      "from": "desktop-app",
+      "to": "shared-packages/chat-transport-ipc",
+      "kind": "import",
+      "label": "renderer IpcTransport + preload CHANNELS allowlist + main zod schemas",
+      "evidence": "apps/desktop/preload/bridge.ts:3"
+    },
+    {
+      "from": "desktop-app",
+      "to": "shared-packages/chat-transport-web",
+      "kind": "import",
+      "label": "main-process WebTransport + MockTransport + withBearerRefresh to facade",
+      "evidence": "apps/desktop/main/index.ts:30-36"
+    },
+    {
+      "from": "desktop-app",
+      "to": "shared-packages/surface-renderers-adapters",
+      "kind": "import",
+      "label": "registerAll() at renderer bootstrap",
+      "evidence": "apps/desktop/renderer/bootstrap.tsx:33"
+    },
+    {
+      "from": "desktop-app",
+      "to": "shared-packages/api-types-allowlist-bridge",
+      "kind": "import",
+      "label": "6A AST scanner derives ALLOWED_IMPORTS/FORBIDDEN_GLOBALS from ADAPTER_ALLOWLIST",
+      "evidence": "apps/desktop/main/adapters/ast-allowlist.ts:3"
+    },
+    {
+      "from": "frontend-web",
+      "to": "shared-packages/design-system-tokens",
+      "kind": "import",
+      "label": "styles.css import + 70 component files",
+      "evidence": "apps/frontend/src/app/App.tsx:5"
+    },
+    {
+      "from": "desktop-app",
+      "to": "shared-packages/design-system-tokens",
+      "kind": "import",
+      "label": "styles.css at renderer bootstrap",
+      "evidence": "apps/desktop/renderer/bootstrap.tsx:1"
+    },
+    {
+      "from": "backend-facade",
+      "to": "shared-packages/service-contracts",
+      "kind": "import",
+      "label": "auth claim names + internal headers + deployment profile",
+      "evidence": "services/backend-facade/src/backend_facade/auth.py:18"
+    },
+    {
+      "from": "backend-identity",
+      "to": "shared-packages/service-contracts",
+      "kind": "import",
+      "label": "headers, claims, RBAC scopes, deployment profile",
+      "evidence": "services/backend/src/backend_app/identity/sessions.py"
+    },
+    {
+      "from": "ai-runtime-api",
+      "to": "shared-packages/service-contracts",
+      "kind": "import",
+      "label": "internal header names for trusted-caller auth",
+      "evidence": "services/ai-backend/src/runtime_api/auth.py:9"
+    },
+    {
+      "from": "ai-runtime-capabilities",
+      "to": "shared-packages/adapter-allowlist-json",
+      "kind": "import",
+      "label": "6B generator auditor loads the allowlist via copilot_service_contracts",
+      "evidence": "services/ai-backend/src/agent_runtime/capabilities/render_adapter_generator/capability.py"
+    },
+    {
+      "from": "backend-product",
+      "to": "shared-packages/audit-chain",
+      "kind": "import",
+      "label": "AuditChainSigner for tamper-evident audit rows",
+      "evidence": "services/backend/src/backend_app/store.py:13"
+    },
+    {
+      "from": "ai-runtime-persistence",
+      "to": "shared-packages/audit-chain",
+      "kind": "import",
+      "label": "AuditChainSigner in in_memory/postgres/file runtime stores",
+      "evidence": "services/ai-backend/src/runtime_adapters/postgres/runtime_api_store.py:34"
+    },
+    {
+      "from": "ai-runtime-api",
+      "to": "shared-packages/api-types",
+      "kind": "contract",
+      "label": "drift test regex-compares 4 runtime enum tuples against Python enums",
+      "evidence": "services/ai-backend/tests/unit/runtime_api/test_api_type_contracts.py:13"
+    },
+    {
+      "from": "build-deploy",
+      "to": "shared-packages/service-contracts",
+      "kind": "build",
+      "label": "every service Dockerfile copies + pip-installs; frontend Dockerfile copies src for the api-types JSON import",
+      "evidence": "services/backend/Dockerfile:11-16"
+    },
+    {
+      "from": "build-deploy",
+      "to": "shared-packages/audit-chain",
+      "kind": "build",
+      "label": "backend + ai-backend Dockerfiles pip-install; Makefile PYTHONPATH in dev",
+      "evidence": "services/ai-backend/Dockerfile:14-18"
+    },
+    {
+      "from": "shared-packages/audit-chain",
+      "to": "external:env",
+      "kind": "env",
+      "label": "AUDIT_HMAC_KEY / AUDIT_HMAC_KEY_VERSION / AUDIT_HMAC_KEY_V<N>, fail-closed in production",
+      "evidence": "packages/audit-chain/src/copilot_audit_chain/signer.py:47-49"
+    }
+  ]
+}
