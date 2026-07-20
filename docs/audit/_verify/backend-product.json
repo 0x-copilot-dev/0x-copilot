@@ -1,0 +1,117 @@
+{
+  "cluster": "backend-product",
+  "verdicts": [
+    {
+      "ref": "F1",
+      "title": "Web Connectors OAuth surface is a permanent stub",
+      "type": "risk",
+      "severity": "high",
+      "verdict": "confirmed",
+      "note": "connectors/routes.py:303-306,333-338,557-567 returns https://auth.example stub / 503; app.state.connector_oauth_start|callback never set in src (grep) and write_through_from_mcp only called in tests."
+    },
+    {
+      "ref": "F2",
+      "title": "All destination stores are in-memory in every shipped composition",
+      "type": "risk",
+      "severity": "high",
+      "verdict": "confirmed",
+      "note": "No Postgres*Store class exists for todos/inbox/routines/connectors/webhooks/projects/library/memory/agents/tools/palette (grep); desktop_app.py:157-171 lists all as in-memory 'accepted desktop-v1 gap'; Dockerfile:31 boots app:app in-memory."
+    },
+    {
+      "ref": "F3",
+      "title": "Six near-identical SSE stacks; three have no producer",
+      "type": "duplication",
+      "severity": "medium",
+      "verdict": "confirmed",
+      "note": "inbox/memory/tools/connectors/home/team sse.py total 2438 LOC each re-implementing deque+asyncio.Condition bus+LastEventIdResolver (inbox/sse.py:14 'copy of the home SSE discipline'); .publish() only in inbox/memory/team so tools/connectors/home buses have no producer."
+    },
+    {
+      "ref": "F4",
+      "title": "agents/installs.py (1058 LOC) never mounted",
+      "type": "dead-code",
+      "severity": "medium",
+      "verdict": "confirmed",
+      "note": "register_agent_install_routes (installs.py:652) called only by tests/test_agent_installs_routes.py:154, never in app.py/desktop_app.py; facade agents_routes.py proxies only list/get/create/patch/delete, no install endpoints."
+    },
+    {
+      "ref": "F5",
+      "title": "Palette read model has no writers",
+      "type": "dead-code",
+      "severity": "medium",
+      "verdict": "confirmed",
+      "note": "upsert_entry/delete_entry have zero callers outside palette/ (grep); PaletteRefreshDispatcher stashed at app.py:1926-1927 but never consumed; only test-side PaletteEntry constructors exist."
+    },
+    {
+      "ref": "F6",
+      "title": "notifications/dispatcher_gate.py is test-only dead code",
+      "type": "dead-code",
+      "severity": "medium",
+      "verdict": "confirmed",
+      "note": "dispatcher_gate.py (260 LOC) has exactly one repo-wide reference — tests/test_notification_dispatcher_gate.py:10; no src/ai-backend/facade consumer."
+    },
+    {
+      "ref": "F7",
+      "title": "Per-destination CRUD scaffolding copy-pasted; 14 _ADMIN_ROLES copies",
+      "type": "refactor",
+      "severity": "medium",
+      "verdict": "confirmed",
+      "note": "_ADMIN_ROLES = frozenset({\"admin\",\"owner\"}) defined verbatim in exactly 14 files; _safe_dump duplicated across 7 service.py files (grep)."
+    },
+    {
+      "ref": "F8",
+      "title": "Todo recurrence grammar implemented twice across services",
+      "type": "ssot-violation",
+      "severity": "medium",
+      "verdict": "confirmed",
+      "note": "RecurrenceRuleEvaluator (FREQ/BYDAY/INTERVAL RFC-5545 subset) in backend todos/service.py:86 and ai-backend todo_recurrence_materializer.py:94; no shared contract/fixture in packages/service-contracts (grep exit=1)."
+    },
+    {
+      "ref": "F9",
+      "title": "Two-tier layering: settings routes carry business logic at route layer",
+      "type": "inconsistency",
+      "severity": "low",
+      "verdict": "accepted",
+      "note": "LOW severity accepted as-is per verification policy."
+    },
+    {
+      "ref": "F10",
+      "title": "Three hand-maintained duplicate fact sets (todos DDL, HMAC constants, connector slugs)",
+      "type": "ssot-violation",
+      "severity": "low",
+      "verdict": "accepted",
+      "note": "LOW severity accepted as-is per verification policy."
+    },
+    {
+      "ref": "F11",
+      "title": "create_app 2049-line composition root with private reach-ins",
+      "type": "complexity",
+      "severity": "low",
+      "verdict": "accepted",
+      "note": "LOW severity accepted as-is per verification policy."
+    },
+    {
+      "ref": "F12",
+      "title": "runtime policies route returns decrypted BYOK keys over HTTP",
+      "type": "risk",
+      "severity": "low",
+      "verdict": "accepted",
+      "note": "LOW severity accepted as-is per verification policy."
+    },
+    {
+      "ref": "F13",
+      "title": "WebhookRotationWorker has no launcher",
+      "type": "dead-code",
+      "severity": "low",
+      "verdict": "accepted",
+      "note": "LOW severity accepted as-is per verification policy."
+    },
+    {
+      "ref": "F14",
+      "title": "Minor stubs and drift (billing stub, tools 501, misplaced row store, private import)",
+      "type": "inconsistency",
+      "severity": "low",
+      "verdict": "accepted",
+      "note": "LOW severity accepted as-is per verification policy."
+    }
+  ]
+}

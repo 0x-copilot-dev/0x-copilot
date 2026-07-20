@@ -1,0 +1,93 @@
+{
+  "cluster": "frontend-web",
+  "verdicts": [
+    {
+      "ref": "F1",
+      "title": "~17.8k LOC of folded-destination code is dead but still in-tree",
+      "type": "dead-code",
+      "severity": "high",
+      "verdict": "confirmed",
+      "note": "All 8 feature dirs (home/library/inbox/todos/routines/agents/memory/tools) have zero non-test importers (grep), App.tsx:24-28 defers them to Phase-6C, tools slug is served by SkillsRoute (App.tsx:926-938), _library-stub.ts:18 says 'TODO(merge): delete this file'."
+    },
+    {
+      "ref": "F2",
+      "title": "Settings exists as two parallel implementations (web vs chat-surface)",
+      "type": "ssot-violation",
+      "severity": "high",
+      "verdict": "confirmed",
+      "note": "Web mounts features/settings/SettingsScreen.tsx (1405 LOC) via App.tsx:97-99,746; chat-surface/src/settings/ ships a full SettingsSurface+ProfilePage/ProviderKeysPage/etc that only apps/desktop/renderer/SettingsMount.tsx:41-418 mounts — frontend imports none of it (grep empty), contradicting root CLAUDE.md's same-Settings claim."
+    },
+    {
+      "ref": "F3",
+      "title": "Phantom workspace dependencies (chat-surface / chat-transport undeclared)",
+      "type": "inconsistency",
+      "severity": "medium",
+      "verdict": "confirmed",
+      "note": "apps/frontend/package.json declares neither package despite 106 chat-surface + 2 chat-transport import sites; Dockerfile hand-copies both sources (Dockerfile:15,17-19); typescript/vite sit in dependencies not devDependencies (package.json:31,34); desktop/package.json:28-29 does declare both."
+    },
+    {
+      "ref": "F4",
+      "title": "Two identity conventions coexist (org_id/user_id query params vs bearer-only)",
+      "type": "inconsistency",
+      "severity": "medium",
+      "verdict": "confirmed",
+      "note": "config.ts:6-10 identityParams threads org_id/user_id into query, used by http.ts:133-151 buildQuery and agentApi.ts:718-727 sseQueryFor, while localModelsApi.ts:9-12 documents bearer-only; ~12 live + ~8 dead modules import RequestIdentity (the '~20' count includes dead modules, but the inconsistency is real)."
+    },
+    {
+      "ref": "F5",
+      "title": "Atlas to 0xCopilot rename is incomplete",
+      "type": "inconsistency",
+      "severity": "medium",
+      "verdict": "confirmed",
+      "note": "wallet.html:6 title still 'Atlas — Wallet sign-in' (user-visible); 476 atlas refs in src; 255 atlas- CSS classes (styles.css:3261 .atlas-approval-card); Atlas* runtime adapters (runtime/index.ts:11-24); error string 'inside an Atlas <Message> subtree' (messageContext.ts:28); Atlas Demo CRM data in SyntheticStateFactory.ts:25-135."
+    },
+    {
+      "ref": "F6",
+      "title": "ChatScreen.tsx is a 2,698-line god component with no direct test",
+      "type": "complexity",
+      "severity": "medium",
+      "verdict": "confirmed",
+      "note": "ChatScreen.tsx = 2698 LOC and ChatScreen.test.tsx does not exist (only Sidebar/AssistantMessage integration tests reference it); App.tsx 1031 + SettingsScreen.tsx 1405 confirmed as smaller instances."
+    },
+    {
+      "ref": "F7",
+      "title": "styles.css is a 9,049-line monolithic stylesheet",
+      "type": "complexity",
+      "severity": "low",
+      "verdict": "accepted",
+      "note": "LOW severity accepted as-is; consistent with observed 255 atlas- classes and monolithic styles.css."
+    },
+    {
+      "ref": "F8",
+      "title": "Coverage inverted: dead modules exhaustively tested, largest screens untested",
+      "type": "test-coverage",
+      "severity": "medium",
+      "verdict": "confirmed",
+      "note": "Dead API module tests total exactly 3,801 LOC (home/library/inbox/todos/routines/agents/memory/toolsApi.test.ts) while ChatScreen/SettingsScreen/LoginScreen have no direct .test.tsx (verified absent)."
+    },
+    {
+      "ref": "F9",
+      "title": "SIWE message template + ThinkingDepth duplication (documented, deliberate)",
+      "type": "ssot-violation",
+      "severity": "low",
+      "verdict": "accepted",
+      "note": "LOW severity accepted as-is; in-code documented deferral per root CLAUDE.md and depth.ts."
+    },
+    {
+      "ref": "F10",
+      "title": "Docs drift in docs/README.md (pre-IA-fold routing/auth description)",
+      "type": "risk",
+      "severity": "low",
+      "verdict": "accepted",
+      "note": "LOW severity accepted as-is."
+    },
+    {
+      "ref": "F11",
+      "title": "Hand-rolled Keccak-256 / EIP-55 (deliberate, acceptable)",
+      "type": "bespoke-replaceable",
+      "severity": "low",
+      "verdict": "accepted",
+      "note": "LOW severity accepted as-is; author flags it as intentional to avoid pulling viem/wagmi."
+    }
+  ]
+}
