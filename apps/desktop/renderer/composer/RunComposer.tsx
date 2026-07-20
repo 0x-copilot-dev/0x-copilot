@@ -2,6 +2,7 @@ import {
   useCallback,
   useEffect,
   useMemo,
+  useRef,
   useState,
   type ReactElement,
 } from "react";
@@ -63,6 +64,12 @@ interface McpServersResponse {
 interface ProviderKeysResponse {
   readonly keys?: readonly { readonly provider?: string }[];
 }
+interface WorkspaceDefaultsResponseLite {
+  readonly default_model?: {
+    readonly provider?: string;
+    readonly model_name?: string;
+  } | null;
+}
 interface LocalModelsResponse {
   readonly models?: readonly { readonly name?: string }[];
 }
@@ -112,6 +119,14 @@ export function RunComposer(props: RunComposerProps): ReactElement {
   const [localModelNames, setLocalModelNames] = useState<readonly string[]>([]);
   const [customModels, setCustomModels] = useState<readonly CatalogModel[]>([]);
   const [selectedModel, setSelectedModel] = useState<string>("");
+  const [workspaceDefault, setWorkspaceDefault] = useState<{
+    readonly provider: string;
+    readonly model_name: string;
+  } | null>(null);
+  // Seed-once guards: the persisted workspace default wins over the curated
+  // fallback exactly once, and never over an explicit user pick.
+  const seededDefaultRef = useRef(false);
+  const userPickedRef = useRef(false);
 
   useEffect(() => {
     let cancelled = false;
@@ -161,6 +176,10 @@ export function RunComposer(props: RunComposerProps): ReactElement {
         const providers = new Set<string>();
         for (const key of res.keys ?? []) {
           if (key.provider) providers.add(key.provider);
+          // The key store speaks `google`; the curated catalog (and the
+          // runtime's model resolver) speak `gemini`. Alias so a Google key
+          // actually lights up the Gemini rows.
+          if (key.provider === "google") providers.add("gemini");
         }
         setConfiguredProviders(providers);
         setProvidersKnown(true);
@@ -194,26 +213,109 @@ export function RunComposer(props: RunComposerProps): ReactElement {
     };
   }, [transport]);
 
+  useEffect(() => {
+    let cancelled = false;
+    void transport
+      .request<WorkspaceDefaultsResponseLite>({
+        method: "GET",
+        path: "/v1/agent/workspace/defaults",
+      })
+      .then((res) => {
+        if (cancelled) return;
+        const dm = res.default_model;
+        if (
+          dm &&
+          typeof dm.provider === "string" &&
+          dm.provider !== "" &&
+          typeof dm.model_name === "string" &&
+          dm.model_name !== ""
+        ) {
+          setWorkspaceDefault({
+            provider: dm.provider,
+            model_name: dm.model_name,
+          });
+        }
+      })
+      .catch(() => {
+        // Defaults are optional — the curated fallback selection stands.
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [transport]);
+
   const models = useMemo<CatalogModel[]>(() => {
     const base = buildModelCatalog({
       configuredProviders,
       providersKnown,
       localModelNames,
     });
-    return [...base, ...customModels];
-  }, [configuredProviders, providersKnown, localModelNames, customModels]);
+    const merged = [...base, ...customModels];
+    // The persisted workspace default may live outside the curated set (e.g.
+    // the Add-key wizard's gpt-4o). Surface it as a synthetic entry so it is
+    // visible and selectable, with the same configured-gating as curated rows.
+    if (workspaceDefault !== null) {
+      const listed = merged.some(
+        (m) =>
+          m.provider === workspaceDefault.provider &&
+          m.model_name === workspaceDefault.model_name,
+      );
+      if (!listed) {
+        const configured =
+          !providersKnown || configuredProviders.has(workspaceDefault.provider);
+        merged.push({
+          id: workspaceDefault.model_name,
+          provider: workspaceDefault.provider,
+          model_name: workspaceDefault.model_name,
+          name: workspaceDefault.model_name,
+          description: "Workspace default",
+          configured,
+          supports_streaming: true,
+          disabled: !configured,
+        });
+      }
+    }
+    return merged;
+  }, [
+    configuredProviders,
+    providersKnown,
+    localModelNames,
+    customModels,
+    workspaceDefault,
+  ]);
 
-  // Keep a valid selection: default to the first usable model, and re-resolve
-  // if the current pick falls out of the list (e.g. a local model was removed).
+  // Selection resolution — ONE writer so the workspace-default seed and the
+  // keep-valid fallback cannot race each other's stale closures:
+  //   1. seed the persisted default exactly once, when present and usable;
+  //   2. otherwise keep a valid current pick;
+  //   3. otherwise fall back to the first usable model.
   useEffect(() => {
-    setSelectedModel((current) =>
-      current !== "" && models.some((m) => m.id === current)
+    setSelectedModel((current) => {
+      if (
+        !userPickedRef.current &&
+        !seededDefaultRef.current &&
+        workspaceDefault !== null
+      ) {
+        const dm = models.find(
+          (m) =>
+            m.provider === workspaceDefault.provider &&
+            m.model_name === workspaceDefault.model_name,
+        );
+        // An unusable default (key removed since) stays unseeded so a later
+        // configured flip can still seed it; the fallback keeps things honest.
+        if (dm && dm.configured && dm.disabled !== true) {
+          seededDefaultRef.current = true;
+          return dm.id;
+        }
+      }
+      return current !== "" && models.some((m) => m.id === current)
         ? current
-        : defaultSelectedModelId(models),
-    );
-  }, [models]);
+        : defaultSelectedModelId(models);
+    });
+  }, [models, workspaceDefault]);
 
   const handleModelChange = useCallback((id: string): void => {
+    userPickedRef.current = true;
     setSelectedModel(id);
   }, []);
 

@@ -19,6 +19,8 @@ import type {
   ListProviderKeysResponse,
   ProviderKeySummary,
   PutProviderKeyRequest,
+  UpdateWorkspaceDefaultsRequest,
+  WorkspaceDefaultsResponse,
 } from "@0x-copilot/api-types";
 
 import type { Transport } from "../../ports/Transport";
@@ -187,6 +189,16 @@ export interface ProviderKeysPort {
     apiKey: string,
     signal?: AbortSignal,
   ): Promise<ProviderKeyValidation>;
+  /**
+   * Persist the Add-flow's step-3 model pick as the workspace default model
+   * so runs actually use it (`PUT /v1/agent/workspace/defaults`). Optional:
+   * when a host omits it the pick stays a view-only chip, exactly as before.
+   */
+  saveDefaultModel?(
+    provider: string,
+    modelName: string,
+    signal?: AbortSignal,
+  ): Promise<void>;
 }
 
 /**
@@ -216,6 +228,31 @@ export function createProviderKeysPort(transport: Transport): ProviderKeysPort {
       await transport.request<void>({
         method: "DELETE",
         path: `/v1/settings/provider-keys/${encodeURIComponent(provider)}`,
+        signal,
+      });
+    },
+    async saveDefaultModel(provider, modelName, signal) {
+      // The key store speaks `google` (ProviderName); the runtime's model
+      // resolver speaks `gemini`. Mirror the backend ProviderKeysParser
+      // normalization so the persisted default matches what runs resolve.
+      const runtimeProvider = provider === "google" ? "gemini" : provider;
+      // The PUT is a full-document replace, so read-merge-write: only
+      // `default_model` changes; connectors/retention/behavior ride along.
+      const current = await transport.request<WorkspaceDefaultsResponse>({
+        method: "GET",
+        path: "/v1/agent/workspace/defaults",
+        signal,
+      });
+      const body: UpdateWorkspaceDefaultsRequest = {
+        default_model: { provider: runtimeProvider, model_name: modelName },
+        default_connectors: current.default_connectors,
+        retention_days: current.retention_days,
+        behavior_overrides: current.behavior_overrides,
+      };
+      await transport.request<WorkspaceDefaultsResponse>({
+        method: "PUT",
+        path: "/v1/agent/workspace/defaults",
+        body,
         signal,
       });
     },

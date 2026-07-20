@@ -227,6 +227,12 @@ export function buildServiceEnv(
       env.RUNTIME_EVENT_BUS_BACKEND = "in_memory";
       env.MCP_BACKEND_REGISTRY_URL = backendUrl;
       env.SKILLS_BACKEND_REGISTRY_URL = backendUrl;
+      // BYOK lane: UserPoliciesResolverFactory activates the runtime-policies
+      // fetch (decrypted provider keys included) only when BOTH
+      // BACKEND_BASE_URL and ENTERPRISE_SERVICE_TOKEN are set. Without this
+      // line it silently degrades to the Null resolver and every BYOK run
+      // fails at create with "Missing API key for model provider …".
+      env.BACKEND_BASE_URL = backendUrl;
       // Passed for parity with the proven run-local.mjs boot; harmless if the
       // ai-backend audit path does not read it.
       env.AUDIT_HMAC_KEY = inputs.secrets.auditHmacKey;

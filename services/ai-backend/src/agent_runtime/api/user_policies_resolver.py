@@ -272,6 +272,19 @@ class UserPoliciesResolverFactory:
         backend_url = os.environ.get(_Env.BACKEND_BASE_URL, "").strip()
         service_token = os.environ.get(_Env.SERVICE_TOKEN, "").strip()
         if not backend_url or not service_token or http_client is None:
+            if backend_url or service_token:
+                # Partial configuration is almost always a deployment bug: the
+                # snapshot (and with it BYOK provider keys) silently degrades
+                # to empty and every keyless run fails at create. Say so once,
+                # loudly, at wiring time instead of per-run.
+                _LOGGER.warning(
+                    "user-policies resolver disabled by partial configuration "
+                    "(backend_base_url_set=%s service_token_set=%s "
+                    "http_client_set=%s); BYOK provider keys will NOT reach runs",
+                    bool(backend_url),
+                    bool(service_token),
+                    http_client is not None,
+                )
             return NullUserPoliciesResolver()
         return HttpUserPoliciesResolver(
             http_client=http_client,

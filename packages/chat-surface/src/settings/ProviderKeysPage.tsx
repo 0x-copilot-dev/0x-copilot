@@ -186,10 +186,25 @@ export function ProviderKeysPage({
           summary,
         ]);
         setChosenModels((prev) => ({ ...prev, [target.entry.id]: model }));
+        // Persist the step-3 pick as the workspace default so runs use it.
+        // The key save above already succeeded — a defaults failure must not
+        // read as a failed key add, so it degrades to honest toast copy.
+        let defaultOutcome: "saved" | "failed" | "skipped" = "skipped";
+        if (model !== "" && port.saveDefaultModel !== undefined) {
+          try {
+            await port.saveDefaultModel(target.entry.id, model);
+            defaultOutcome = "saved";
+          } catch {
+            defaultOutcome = "failed";
+          }
+        }
+        const keyVerb = target.mode === "rotate" ? "rotated" : "added";
         onToast?.(
-          target.mode === "rotate"
-            ? `${target.entry.label} key rotated.`
-            : `${target.entry.label} key added.`,
+          defaultOutcome === "saved"
+            ? `${target.entry.label} key ${keyVerb} · ${model} is your default model.`
+            : defaultOutcome === "failed"
+              ? `${target.entry.label} key ${keyVerb}. Saving the default model failed — set it in Model & behavior.`
+              : `${target.entry.label} key ${keyVerb}.`,
         );
       },
     [port, onToast],

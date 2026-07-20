@@ -71,6 +71,11 @@ function payloadFor(path: string): Record<string, unknown> {
     return { keys: [{ provider: "openai" }] };
   }
   if (path.includes("/v1/local-models")) return { models: [] };
+  if (path.includes("/v1/agent/workspace/defaults")) {
+    // The persisted wizard pick: an OpenAI model OUTSIDE the curated set, so
+    // seeding must synthesize a picker entry rather than match one.
+    return { default_model: { provider: "openai", model_name: "gpt-4o" } };
+  }
   return {};
 }
 
@@ -114,6 +119,22 @@ describe("RunComposer", () => {
       expect(paths).toContain("/v1/mcp/servers");
       expect(paths).toContain("/v1/settings/provider-keys");
       expect(paths).toContain("/v1/local-models");
+    });
+  });
+
+  it("seeds the picker from the persisted workspace default model", async () => {
+    const { recorder, container } = renderComposer();
+    await waitFor(() => {
+      expect(recorder.calls.map((c) => c.path)).toContain(
+        "/v1/agent/workspace/defaults",
+      );
+    });
+    // gpt-4o is outside the curated set → appended as a synthetic entry and
+    // selected, so the model pill announces it.
+    await waitFor(() => {
+      expect(
+        container.querySelector('[aria-label="Model: gpt-4o"]'),
+      ).not.toBeNull();
     });
   });
 
