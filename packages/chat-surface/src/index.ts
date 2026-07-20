@@ -731,6 +731,7 @@ export {
   type NotificationsPageProps,
   type NotificationsPageTabSlug,
   type ProfileIdentityAnchor,
+  type ProfileLinkedIdentity,
   type ProfilePagePerson,
   type ProfilePageProps,
   type QuietHoursEditorProps,

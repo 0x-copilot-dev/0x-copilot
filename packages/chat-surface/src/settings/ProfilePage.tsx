@@ -66,6 +66,19 @@ export interface ProfilePagePerson {
   readonly authMethod?: "google" | "siwe" | "local" | "dev" | string | null;
 }
 
+/**
+ * One linked sign-in identity (account-linking PRD FR-L4/U1). Mirrors the
+ * api-types `LinkedIdentity` wire shape as plain props — the host maps it.
+ */
+export interface ProfileLinkedIdentity {
+  readonly kind: "wallet" | "oidc" | string;
+  readonly id: string;
+  readonly provider?: string | null;
+  readonly email?: string | null;
+  readonly address?: string | null;
+  readonly chainName?: string | null;
+}
+
 export interface ProfilePageProps {
   readonly person: ProfilePagePerson;
   /**
@@ -75,6 +88,22 @@ export interface ProfilePageProps {
    */
   readonly onSaveDisplayName?: (nextDisplayName: string) => void;
   readonly onSignOut: () => void;
+  /**
+   * Every sign-in identity linked to the account (PRD FR-U1). When provided
+   * (even empty) the "Linked accounts" panel renders; when omitted the panel
+   * is hidden entirely (older hosts / no data).
+   */
+  readonly linkedIdentities?: readonly ProfileLinkedIdentity[];
+  /**
+   * Start the link-a-wallet flow (SIWE proof). Optional — the CTA renders
+   * only when the host wires the flow.
+   */
+  readonly onLinkWallet?: () => void;
+  /**
+   * Start the link-Google flow (OAuth; also how a wallet account adds an
+   * email). Optional — the CTA renders only when the host wires the flow.
+   */
+  readonly onLinkGoogle?: () => void;
 }
 
 // ---------------------------------------------------------------------------
@@ -220,6 +249,20 @@ const saveButtonStyle: CSSProperties = {
   cursor: "pointer",
 };
 
+// Link-a-method CTA — quiet outline button inside the Linked accounts panel.
+const linkCtaStyle: CSSProperties = {
+  alignSelf: "flex-start",
+  height: 30,
+  padding: "0 12px",
+  borderRadius: "var(--radius-sm, 6px)",
+  border: "1px solid var(--color-border, #232325)",
+  background: "transparent",
+  color: "var(--color-accent, #d97757)",
+  fontSize: "var(--font-size-sm, 13px)",
+  fontWeight: 600,
+  cursor: "pointer",
+};
+
 const signOutButtonStyle: CSSProperties = {
   height: 32,
   padding: "0 14px",
@@ -271,6 +314,9 @@ export function ProfilePage({
   person,
   onSaveDisplayName,
   onSignOut,
+  linkedIdentities,
+  onLinkWallet,
+  onLinkGoogle,
 }: ProfilePageProps): ReactElement {
   const reactId = useId();
   const nameId = `${reactId}-display-name`;
@@ -409,6 +455,84 @@ export function ProfilePage({
             </>
           )}
         </fieldset>
+
+        {/* Linked accounts (PRD FR-U1): every sign-in identity on the account.
+            Rendered only when the host supplies the data; Link CTAs render
+            only when the host wires the flow (substrate-agnostic — callbacks
+            out, data in). Unlink ships with its backend (FR-L5, merge PR). */}
+        {linkedIdentities !== undefined ? (
+          <fieldset style={fieldsetStyle} data-testid="profile-linked-accounts">
+            <legend style={legendStyle}>Linked accounts</legend>
+            {linkedIdentities.length === 0 ? (
+              <span style={noteStyle} data-testid="profile-linked-empty">
+                No linked sign-in methods yet.
+              </span>
+            ) : (
+              linkedIdentities.map((identity) => (
+                <div
+                  key={identity.id}
+                  style={rowStyle}
+                  data-testid={`profile-linked-${identity.kind}`}
+                >
+                  {identity.kind === "wallet" ? (
+                    <>
+                      <span style={labelStyle}>Wallet</span>
+                      <input
+                        type="text"
+                        value={identity.address ?? ""}
+                        readOnly
+                        aria-readonly
+                        style={monoReadOnlyStyle}
+                      />
+                      {identity.chainName ? (
+                        <span style={chainChipStyle}>{identity.chainName}</span>
+                      ) : null}
+                    </>
+                  ) : (
+                    <>
+                      <span style={labelStyle}>
+                        {identity.provider === "google"
+                          ? "Google"
+                          : (identity.provider ?? "SSO")}
+                      </span>
+                      <input
+                        type="text"
+                        value={identity.email ?? ""}
+                        readOnly
+                        aria-readonly
+                        style={readOnlyStyle}
+                      />
+                    </>
+                  )}
+                </div>
+              ))
+            )}
+            {onLinkWallet !== undefined ? (
+              <button
+                type="button"
+                onClick={onLinkWallet}
+                style={linkCtaStyle}
+                data-testid="profile-link-wallet"
+              >
+                Link a wallet
+              </button>
+            ) : null}
+            {onLinkGoogle !== undefined &&
+            !linkedIdentities.some((i) => i.provider === "google") ? (
+              <button
+                type="button"
+                onClick={onLinkGoogle}
+                style={linkCtaStyle}
+                data-testid="profile-link-google"
+              >
+                {person.anchor.kind === "wallet"
+                  ? "Add an email — continue with Google"
+                  : "Link Google"}
+              </button>
+            ) : null}
+          </fieldset>
+        ) : null}
+
         <div style={saveBarStyle}>
           <button
             type="button"

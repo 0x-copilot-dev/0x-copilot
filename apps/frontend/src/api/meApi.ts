@@ -29,6 +29,22 @@ export function listMyWorkspaces(): Promise<WorkspaceListResponse> {
   return httpJson<WorkspaceListResponse>("GET", "/v1/me/workspaces");
 }
 
+/**
+ * Account-linking (PRD FR-L2): start the authenticated link-Google flow.
+ * Returns the IdP `auth_url` to navigate the browser to; the flow completes
+ * on the public /v1/auth/oidc/callback whose link intent is recovered
+ * server-side from the state row.
+ */
+export function startGoogleLink(
+  redirectUri: string,
+  returnTo?: string,
+): Promise<{ auth_url: string; state: string }> {
+  return httpJson("POST", "/v1/me/identities/google/link/start", {
+    redirect_uri: redirectUri,
+    return_to: returnTo ?? null,
+  });
+}
+
 export function getMyProfile(): Promise<UserProfile> {
   return httpJson<UserProfile>("GET", "/v1/me/profile");
 }

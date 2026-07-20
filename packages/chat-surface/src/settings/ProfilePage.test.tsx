@@ -148,3 +148,83 @@ describe("<ProfilePage>", () => {
     expect(screen.getByTestId("profile-signout")).toBeInTheDocument();
   });
 });
+
+describe("<ProfilePage> linked accounts (PRD FR-U1)", () => {
+  const LINKED = [
+    {
+      kind: "wallet",
+      id: "wid_1",
+      address: "0x5aAeb6053F3E94C9b9A09f33669435E7Ef1BeAed",
+      chainName: "Base",
+    },
+    {
+      kind: "oidc",
+      id: "oid_1",
+      provider: "google",
+      email: "sarah@gmail.test",
+    },
+  ] as const;
+
+  it("hides the panel entirely when no data is supplied", () => {
+    render(<ProfilePage person={PERSON} onSignOut={() => undefined} />);
+    expect(screen.queryByTestId("profile-linked-accounts")).toBeNull();
+  });
+
+  it("renders every linked identity with its kind-appropriate detail", () => {
+    render(
+      <ProfilePage
+        person={PERSON}
+        onSignOut={() => undefined}
+        linkedIdentities={LINKED}
+      />,
+    );
+    expect(screen.getByTestId("profile-linked-accounts")).toBeInTheDocument();
+    const wallet = screen.getByTestId("profile-linked-wallet");
+    expect(wallet.querySelector("input")).toHaveValue(
+      "0x5aAeb6053F3E94C9b9A09f33669435E7Ef1BeAed",
+    );
+    expect(wallet.textContent).toContain("Base");
+    const oidc = screen.getByTestId("profile-linked-oidc");
+    expect(oidc.querySelector("input")).toHaveValue("sarah@gmail.test");
+  });
+
+  it("shows link CTAs only when the host wires them, and hides Link Google once linked", () => {
+    const onLinkWallet = vi.fn();
+    const { rerender } = render(
+      <ProfilePage
+        person={WALLET_PERSON}
+        onSignOut={() => undefined}
+        linkedIdentities={[]}
+        onLinkWallet={onLinkWallet}
+        onLinkGoogle={() => undefined}
+      />,
+    );
+    fireEvent.click(screen.getByTestId("profile-link-wallet"));
+    expect(onLinkWallet).toHaveBeenCalledTimes(1);
+    // Wallet person + no Google yet → the "add an email" phrasing.
+    expect(screen.getByTestId("profile-link-google").textContent).toContain(
+      "Add an email",
+    );
+    // Once a Google identity is linked, the Google CTA disappears.
+    rerender(
+      <ProfilePage
+        person={WALLET_PERSON}
+        onSignOut={() => undefined}
+        linkedIdentities={LINKED}
+        onLinkWallet={onLinkWallet}
+        onLinkGoogle={() => undefined}
+      />,
+    );
+    expect(screen.queryByTestId("profile-link-google")).toBeNull();
+    // No handlers → no CTAs at all.
+    rerender(
+      <ProfilePage
+        person={WALLET_PERSON}
+        onSignOut={() => undefined}
+        linkedIdentities={[]}
+      />,
+    );
+    expect(screen.queryByTestId("profile-link-wallet")).toBeNull();
+    expect(screen.queryByTestId("profile-link-google")).toBeNull();
+  });
+});

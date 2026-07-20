@@ -13,6 +13,7 @@ import { AccountSessionsPanel } from "../AccountSessionsPanel";
 import { useAuth } from "../../auth/AuthContext";
 import { AvatarUploadError, fileToAvatarBlob } from "./avatarPipeline";
 import { deleteMyAvatar, uploadMyAvatar } from "../../../api/avatarApi";
+import { startGoogleLink } from "../../../api/meApi";
 import { MfaPanel } from "./MfaPanel";
 import { errorMessage } from "../../../utils/errors";
 
@@ -325,6 +326,22 @@ export function Profile({
                 You signed in with your wallet — no email is associated with
                 this account.
               </p>
+              <button
+                type="button"
+                className="me-form__inline-link"
+                onClick={() => {
+                  // Account-linking (PRD FR-L2): "add an email" = link Google.
+                  // The authenticated start binds the flow to this account
+                  // server-side; the browser completes on the public callback.
+                  void startGoogleLink(
+                    window.location.origin + "/v1/auth/oidc/callback",
+                    window.location.pathname,
+                  ).then((res) => window.location.assign(res.auth_url));
+                }}
+                title="Link a Google account to add a verified email"
+              >
+                Add an email — continue with Google
+              </button>
             </Field>
           ) : (
             <Field label="Email">
@@ -346,6 +363,32 @@ export function Profile({
               </div>
             </Field>
           )}
+
+          {data.linked_identities && data.linked_identities.length > 0 ? (
+            <Field label="Linked accounts">
+              {data.linked_identities.map((identity) => (
+                <div key={identity.id} className="me-form__email-row">
+                  {identity.kind === "wallet" ? (
+                    <>
+                      <code>{identity.address}</code>
+                      {identity.chain_name ? (
+                        <Badge tone="success">{identity.chain_name}</Badge>
+                      ) : null}
+                    </>
+                  ) : (
+                    <>
+                      <code>{identity.email ?? identity.provider}</code>
+                      <Badge tone="success">
+                        {identity.provider === "google"
+                          ? "Google"
+                          : (identity.provider ?? "SSO")}
+                      </Badge>
+                    </>
+                  )}
+                </div>
+              ))}
+            </Field>
+          ) : null}
 
           <Field
             label="Job title"
