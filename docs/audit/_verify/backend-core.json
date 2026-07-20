@@ -1,0 +1,101 @@
+{
+  "cluster": "backend-core",
+  "verdicts": [
+    {
+      "ref": "F1",
+      "title": "Audit-list backward pagination broken for real-world (seq positively correlated with created_at) data",
+      "type": "correctness",
+      "severity": "high",
+      "verdict": "confirmed",
+      "note": "Store filters seq>after_seq then sorts (created_at,seq) desc (store.py:327,333); _advance_cursor sets cursor to max(seq) (audit_reader.py:446-449), so with seq positively correlated to created_at page 2 asks seq>newest and returns nothing; the passing test only works via inverted seeding when=now-index (test_audit_list.py:200-207)."
+    },
+    {
+      "ref": "F2",
+      "title": "Deploy audit is in-memory only (no Postgres adapter, no migration table)",
+      "type": "risk",
+      "severity": "high",
+      "verdict": "confirmed",
+      "note": "DeployAuditService defaults to InMemoryDeployAuditStore (service.py:1333-1334); no deploy_audit_events table in migrations/ and no Postgres adapter (only InMemoryDeployAuditStore at store.py:1316), with the gap flagged in the docstring (store.py:1319-1322) and desktop_app.py:157."
+    },
+    {
+      "ref": "F3",
+      "title": "Personal-API-key HMAC pepper fails open in production",
+      "type": "risk",
+      "severity": "high",
+      "verdict": "confirmed",
+      "note": "When resolved pepper<16 bytes create_app silently substitutes the hardcoded constant b\"dev-only-pepper-NOT-FOR-PROD!\" with no BACKEND_ENVIRONMENT guard (app.py:1499-1508), unlike the fail-closed vault (token_vault.py:478-482) and email dispatcher (app.py:356-365); cited line range drifted ~10 lines but code is identical."
+    },
+    {
+      "ref": "F4",
+      "title": "create_app is a ~1620-line god-factory with ~70 params and mid-function imports",
+      "type": "complexity",
+      "severity": "high",
+      "verdict": "confirmed",
+      "note": "create_app spans app.py:410-2040 (~1630 lines) with a ~64-line param block and 13+ mid-function imports to dodge cycles (app.py:1360,1380,1398,1415,1489,1776,1947,1990,...)."
+    },
+    {
+      "ref": "F5",
+      "title": "contracts.py god-module: ~1600 lines are the identity domain, imported back by identity package",
+      "type": "ssot-violation",
+      "severity": "high",
+      "verdict": "confirmed",
+      "note": "Identity records (Organization/User/Role/OIDC/Password/Lockout/MFA/SAML/SCIM/SIWE) occupy contracts.py:~948-2560 in a 2611-line file; 27 backend_app.identity.* modules import their own domain models from core and 64 modules total import backend_app.contracts."
+    },
+    {
+      "ref": "F6",
+      "title": "Three near-identical audit paths / duplicated Postgres-store helpers",
+      "type": "duplication",
+      "severity": "medium",
+      "verdict": "confirmed",
+      "note": "append_skill_audit (store.py:1141-1215) is a verbatim structural copy of append_audit (store.py:658-730) differing only in table/column; _sign_{mcp,skill,deploy}_audit and _json_list/_json_object/_datetime helpers are copy-variants across both Postgres stores."
+    },
+    {
+      "ref": "F7",
+      "title": "SSRF residual: URL guard blocks only IP literals, fetch sites re-resolve DNS via urlopen",
+      "type": "risk",
+      "severity": "medium",
+      "verdict": "confirmed",
+      "note": "validate_public_mcp_url only inspects hostnames parseable as ip_address literals; a DNS name resolving to 169.254.169.254/10.x passes (contracts.py:116-137), then _get_json (mcp_oauth.py:448-455) and _post_remote_mcp_rpc (service.py:761-786) re-resolve via urlopen at fetch time with no IP pinning or redirect blocking — a genuine TOCTOU/DNS-rebind window (MD marked plausible; verification upgrades to confirmed)."
+    },
+    {
+      "ref": "F8",
+      "title": "Broad except Exception at boot hides misconfiguration (silently omits auth routes)",
+      "type": "risk",
+      "severity": "medium",
+      "verdict": "confirmed",
+      "note": "_default_token_vault (app.py:325-328) and _default_saml_verifier (app.py:378-381) swallow all exceptions and return None; connector catalog (app.py:1632-1635) and desktop profile catalog (app.py:1688-1691) soft-fail identically, so a prod secret typo yields missing routes not a fail-closed boot."
+    },
+    {
+      "ref": "F9",
+      "title": "Hardcoded /tmp storage defaults for tier-2 adapter source + library blobs",
+      "type": "risk",
+      "severity": "medium",
+      "verdict": "confirmed",
+      "note": "Adapter source storage defaults to /tmp/atlas-adapter-registry (app.py:1968-1971) and library blobs to /tmp/atlas-library-blobs (app.py:1997-2000), env-overridable but with no production guard requiring an explicit data dir ('world-readable' is a slight overstatement since new files honor the umask, but the shared-/tmp default is real)."
+    },
+    {
+      "ref": "F10",
+      "title": "DEV_AUTH_BYPASS documented as removed yet toggle + env check remain (overloaded field)",
+      "type": "inconsistency",
+      "severity": "medium",
+      "verdict": "confirmed",
+      "note": "deployment_profile.py still models dev_auth_bypass_allowed (line 40) and _enforce_consistency still reads DEV_AUTH_BYPASS (line 166), while the same toggle is reused as dev_mint_allowed (app.py:404; desktop_app.py:186) though root CLAUDE.md:119 states DEV_AUTH_BYPASS 'no longer exists'."
+    },
+    {
+      "ref": "F11",
+      "title": "Composition root reaches into private attributes across module boundaries",
+      "type": "refactor",
+      "severity": "low",
+      "verdict": "accepted",
+      "note": "Low severity accepted as-is; membership_port private reuse noted at app.py:1940 (# noqa: SLF001) consistent with the finding."
+    },
+    {
+      "ref": "F12",
+      "title": "AuditChainSigner.from_env reconstructed on every audit append in Postgres stores",
+      "type": "efficiency",
+      "severity": "low",
+      "verdict": "accepted",
+      "note": "Low severity accepted as-is; per-append signer construction confirmed at store.py:661 and 1147 versus in-memory _AuditChain caching."
+    }
+  ]
+}
