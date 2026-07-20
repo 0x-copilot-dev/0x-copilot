@@ -239,6 +239,13 @@ export function buildServiceEnv(
       // line it silently degrades to the Null resolver and every BYOK run
       // fails at create with "Missing API key for model provider …".
       env.BACKEND_BASE_URL = backendUrl;
+      // models.dev catalog disk cache (PR-A): lets the live model catalog
+      // survive offline boots with the last successful fetch. Unset would
+      // silently drop to the vendored snapshot tier — fine, but staler.
+      env.RUNTIME_MODEL_CATALOG_CACHE_DIR = join(
+        inputs.userDataDir,
+        "model-catalog",
+      );
       // Passed for parity with the proven run-local.mjs boot; harmless if the
       // ai-backend audit path does not read it.
       env.AUDIT_HMAC_KEY = inputs.secrets.auditHmacKey;

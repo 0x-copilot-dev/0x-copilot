@@ -342,6 +342,12 @@ class ModelsDevCatalogSource:
         with self._lock:
             return self._tier
 
+    def refresh_due(self) -> bool:
+        """Whether a live refresh would be attempted now (TTL lapsed, backoff clear)."""
+
+        with self._lock:
+            return self._needs_refresh_locked()
+
     def refresh_now(self) -> bool:
         """Fetch and swap in live data synchronously; ``False`` (never raise) on failure."""
 
