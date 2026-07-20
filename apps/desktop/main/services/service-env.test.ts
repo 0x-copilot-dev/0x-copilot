@@ -155,6 +155,9 @@ describe("buildServiceEnv(ai-backend)", () => {
     expect(env.RUNTIME_EVENT_BUS_BACKEND).toBe("in_memory");
     expect(env.MCP_BACKEND_REGISTRY_URL).toBe("http://127.0.0.1:8101");
     expect(env.SKILLS_BACKEND_REGISTRY_URL).toBe("http://127.0.0.1:8101");
+    // BYOK lane: the user-policies resolver needs the backend base URL (with
+    // ENTERPRISE_SERVICE_TOKEN) or stored provider keys never reach runs.
+    expect(env.BACKEND_BASE_URL).toBe("http://127.0.0.1:8101");
     expect(env.ENTERPRISE_AUTH_SECRET).toBe(SECRETS.authSecret);
     expect(env.ENTERPRISE_SERVICE_TOKEN).toBe(SECRETS.serviceToken);
     expect(env.AUDIT_HMAC_KEY).toBe(SECRETS.auditHmacKey);
@@ -214,6 +217,7 @@ describe("buildServiceEnv(ai-backend) with COPILOT_DESKTOP_FILE_STORE_V1", () =>
     // Store-agnostic wiring is preserved.
     expect(env.MCP_BACKEND_REGISTRY_URL).toBe("http://127.0.0.1:8101");
     expect(env.SKILLS_BACKEND_REGISTRY_URL).toBe("http://127.0.0.1:8101");
+    expect(env.BACKEND_BASE_URL).toBe("http://127.0.0.1:8101");
     expect(env.AUDIT_HMAC_KEY).toBe(SECRETS.auditHmacKey);
     // No Postgres AI-DB env in file mode.
     expect(env.DATABASE_URL).toBeUndefined();

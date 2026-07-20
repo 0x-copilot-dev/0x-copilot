@@ -45,6 +45,7 @@ import {
   createProviderKeysPort,
   type AppLockValue,
   type AppearanceValue,
+  type ModelBehaviorModelOption,
   type ModelBehaviorValue,
   type ProfileIdentityAnchor,
   type ProfilePagePerson,
@@ -58,10 +59,14 @@ import type {
   LocalModelsStatus,
   NotificationDefaults,
   UpdateNotificationDefaultsRequest,
+  UpdateWorkspaceDefaultsRequest,
   UserId,
   UserProfile,
+  WorkspaceDefaultsResponse,
 } from "@0x-copilot/api-types";
 import type { RendererSession, Transport } from "@0x-copilot/chat-transport";
+
+import { buildModelCatalog } from "./composer/desktopModelCatalog";
 
 export interface SettingsMountProps {
   /** The renderer's IPC transport (facade proxy) — backs the live ports. */
@@ -266,6 +271,143 @@ export function SettingsMount({
   const [modelBehavior, setModelBehavior] = useState<ModelBehaviorValue>(
     DEFAULT_MODEL_BEHAVIOR,
   );
+
+  // --- Model & behavior: real default-model wiring ------------------------
+  // The default-model select is backed by the workspace-defaults contract
+  // (GET on mount, read-merge-PUT on change — the PUT is a full-document
+  // replace). Options come from the same curated catalog as the Run composer,
+  // gated by which BYOK providers actually have keys.
+  const [mbConfiguredProviders, setMbConfiguredProviders] = useState<
+    ReadonlySet<string>
+  >(new Set());
+  const [mbProvidersKnown, setMbProvidersKnown] = useState(false);
+  const [workspaceDefaults, setWorkspaceDefaults] =
+    useState<WorkspaceDefaultsResponse | null>(null);
+
+  useEffect(() => {
+    let cancelled = false;
+    void providerKeysPort
+      .list()
+      .then((keys) => {
+        if (cancelled) return;
+        const providers = new Set<string>();
+        for (const key of keys) {
+          providers.add(key.provider);
+          // Key store speaks `google`; catalog + runtime speak `gemini`.
+          if (key.provider === "google") providers.add("gemini");
+        }
+        setMbConfiguredProviders(providers);
+        setMbProvidersKnown(true);
+      })
+      .catch(() => {
+        // Fail open (catalog stays selectable); the PUT is the backstop.
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [providerKeysPort]);
+
+  useEffect(() => {
+    let cancelled = false;
+    void transport
+      .request<WorkspaceDefaultsResponse>({
+        method: "GET",
+        path: "/v1/agent/workspace/defaults",
+      })
+      .then((res) => {
+        if (!cancelled) setWorkspaceDefaults(res);
+      })
+      .catch(() => {
+        // Section renders without a persisted default (select stays unset).
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [transport]);
+
+  const mbCatalog = useMemo(
+    () =>
+      buildModelCatalog({
+        configuredProviders: mbConfiguredProviders,
+        providersKnown: mbProvidersKnown,
+        localModelNames: [],
+      }),
+    [mbConfiguredProviders, mbProvidersKnown],
+  );
+  // The select's value: the catalog id when the persisted default matches a
+  // curated entry, else the bare model_name (rendered as a synthetic option).
+  const mbDefaultValue = useMemo(() => {
+    const dm = workspaceDefaults?.default_model;
+    if (!dm || dm.provider === "" || dm.model_name === "") return null;
+    const match = mbCatalog.find(
+      (m) => m.provider === dm.provider && m.model_name === dm.model_name,
+    );
+    return match ? match.id : dm.model_name;
+  }, [mbCatalog, workspaceDefaults]);
+  const mbCloudModels = useMemo(() => {
+    const options: ModelBehaviorModelOption[] = mbCatalog.map((m) => ({
+      value: m.id,
+      label: m.name,
+      sub: m.provider,
+      disabled: m.disabled,
+    }));
+    if (
+      mbDefaultValue !== null &&
+      !options.some((o) => o.value === mbDefaultValue)
+    ) {
+      options.push({
+        value: mbDefaultValue,
+        label: mbDefaultValue,
+        sub: workspaceDefaults?.default_model?.provider,
+        disabled: false,
+      });
+    }
+    return options;
+  }, [mbCatalog, mbDefaultValue, workspaceDefaults]);
+
+  const persistDefaultModel = async (
+    value: string | null,
+    toast: (message: string) => void,
+  ): Promise<void> => {
+    if (value === null) {
+      // The contract has no "no default" state (default_model is required);
+      // runs always send the composer's explicit pick anyway. Say so.
+      toast(
+        "Runs use the composer's model pick; the saved default is unchanged.",
+      );
+      return;
+    }
+    const entry = mbCatalog.find((m) => m.id === value);
+    const dm = workspaceDefaults?.default_model;
+    const selection = entry
+      ? { provider: entry.provider, model_name: entry.model_name }
+      : dm && dm.model_name === value
+        ? { provider: dm.provider, model_name: dm.model_name }
+        : null;
+    if (selection === null || workspaceDefaults === null) {
+      toast(
+        "Couldn't resolve that model — retry once settings finish loading.",
+      );
+      return;
+    }
+    const body: UpdateWorkspaceDefaultsRequest = {
+      default_model: selection,
+      default_connectors: workspaceDefaults.default_connectors,
+      retention_days: workspaceDefaults.retention_days,
+      behavior_overrides: workspaceDefaults.behavior_overrides,
+    };
+    try {
+      const updated = await transport.request<WorkspaceDefaultsResponse>({
+        method: "PUT",
+        path: "/v1/agent/workspace/defaults",
+        body,
+      });
+      setWorkspaceDefaults(updated);
+      toast(`Default model saved — new runs start on ${selection.model_name}.`);
+    } catch {
+      toast("Saving the default model failed — retry in a moment.");
+    }
+  };
   const [retention, setRetention] = useState<RetentionChoice>("forever");
   const [memoryEnabled, setMemoryEnabled] = useState(true);
   const [notifications, setNotifications] = useState<NotificationDefaults>(() =>
@@ -346,10 +488,16 @@ export function SettingsMount({
       case "model-behavior":
         return (
           <ModelBehaviorPage
-            value={modelBehavior}
-            onChange={(patch) =>
-              setModelBehavior((prev) => ({ ...prev, ...patch }))
-            }
+            // The default-model field is server-backed (workspace defaults);
+            // the remaining knobs stay local until their persistence lands.
+            value={{ ...modelBehavior, defaultModel: mbDefaultValue }}
+            cloudModels={mbCloudModels}
+            onChange={(patch) => {
+              if (patch.defaultModel !== undefined) {
+                void persistDefaultModel(patch.defaultModel, toast);
+              }
+              setModelBehavior((prev) => ({ ...prev, ...patch }));
+            }}
             controller={controller}
           />
         );

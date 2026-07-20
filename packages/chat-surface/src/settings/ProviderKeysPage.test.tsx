@@ -100,6 +100,52 @@ describe("<ProviderKeysPage>", () => {
     expect(onToast).toHaveBeenCalledWith("OpenAI key added.");
   });
 
+  it("persists the step-3 pick as the workspace default when the port supports it", async () => {
+    const saveDefaultModel = vi
+      .fn<NonNullable<ProviderKeysPort["saveDefaultModel"]>>()
+      .mockResolvedValue(undefined);
+    const port = makePort({ saveDefaultModel });
+    const onToast = vi.fn();
+    render(<ProviderKeysPage port={port} onToast={onToast} />);
+
+    fireEvent.click(await screen.findByTestId("provider-add-openai"));
+    fireEvent.change(screen.getByTestId("add-key-input"), {
+      target: { value: FAKE_KEY },
+    });
+    fireEvent.click(screen.getByTestId("add-key-continue"));
+    fireEvent.click(await screen.findByTestId("add-key-submit"));
+
+    await waitFor(() =>
+      expect(saveDefaultModel).toHaveBeenCalledWith("openai", "gpt-4o"),
+    );
+    expect(onToast).toHaveBeenCalledWith(
+      "OpenAI key added · gpt-4o is your default model.",
+    );
+  });
+
+  it("keeps the key add honest when the defaults write fails", async () => {
+    const saveDefaultModel = vi
+      .fn<NonNullable<ProviderKeysPort["saveDefaultModel"]>>()
+      .mockRejectedValue(new Error("defaults unavailable"));
+    const port = makePort({ saveDefaultModel });
+    const onToast = vi.fn();
+    render(<ProviderKeysPage port={port} onToast={onToast} />);
+
+    fireEvent.click(await screen.findByTestId("provider-add-openai"));
+    fireEvent.change(screen.getByTestId("add-key-input"), {
+      target: { value: FAKE_KEY },
+    });
+    fireEvent.click(screen.getByTestId("add-key-continue"));
+    fireEvent.click(await screen.findByTestId("add-key-submit"));
+
+    // The key row still lands (the save succeeded) and the copy says exactly
+    // which half failed.
+    await screen.findByTestId("provider-row-openai");
+    expect(onToast).toHaveBeenCalledWith(
+      "OpenAI key added. Saving the default model failed — set it in Model & behavior.",
+    );
+  });
+
   it("removes a stored key via the port and toasts", async () => {
     const port = makePort({
       list: vi.fn().mockResolvedValue([SAVED_ANTHROPIC]),
