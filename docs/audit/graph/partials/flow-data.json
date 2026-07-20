@@ -1,0 +1,262 @@
+{
+  "cluster": {
+    "id": "flow-data",
+    "title": "Data at rest, retention & audit trail",
+    "kind": "flow",
+    "paths": [
+      "services/backend/migrations",
+      "services/backend/src/backend_app",
+      "services/ai-backend/migrations",
+      "services/ai-backend/src/agent_runtime/persistence",
+      "services/ai-backend/src/runtime_adapters",
+      "services/ai-backend/src/runtime_worker/jobs",
+      "packages/audit-chain",
+      "apps/desktop/main/services",
+      "apps/frontend/src/features/auth"
+    ],
+    "md": "docs/audit/flows/data-persistence-retention.md",
+    "summary": "Traces every durable store (backend Postgres, runtime Postgres, desktop file-native JSONL store + SQLite checkpoints, token vault, four backend audit chains + runtime audit chain, desktop userData, browser localStorage), who writes/reads each, and the retention, deletion, legal-hold and SIEM-export paths. Core plumbing (migrations, HMAC chains, C7 field encryption, retention sweeper, fail-safe desktop erasure) is well built, but a large fraction of the declared schema is dead: 10 of 19 runtime tables have no writer, 12 backend product destinations are in-memory only with unapplied schema.sql files, the privacy retention_days knob and legal holds are unreachable, and postgres deployments keep LangGraph checkpoints in process memory."
+  },
+  "nodes": [
+    {
+      "id": "flow-data",
+      "kind": "flow",
+      "path": "docs/audit/flows/data-persistence-retention.md",
+      "summary": "Data at rest, retention & audit trail flow"
+    },
+    {
+      "id": "flow-data/backend-postgres-schema",
+      "kind": "store",
+      "path": "services/backend/migrations",
+      "summary": "Backend Postgres: identity, sessions, MCP/skills, token-vault ciphertext, privacy/policies, audit chains; yoyo migrations 0001-0036 with MANIFEST.lock"
+    },
+    {
+      "id": "flow-data/runtime-postgres-schema",
+      "kind": "store",
+      "path": "services/ai-backend/migrations",
+      "summary": "Runtime Postgres: conversations/messages/runs/events/outbox/approvals/audit/usage/retention; 10 of 19 initial tables have no writer"
+    },
+    {
+      "id": "flow-data/desktop-file-store",
+      "kind": "store",
+      "path": "services/ai-backend/src/runtime_adapters/file",
+      "summary": "Desktop file-native store: plaintext JSONL sessions, state/ ledgers, sha256 object store, disposable SQLite catalog; physical erase + GC + signed manifest"
+    },
+    {
+      "id": "flow-data/sqlite-checkpoints",
+      "kind": "store",
+      "path": "services/ai-backend/src/agent_runtime/execution/deep_agent_builder.py",
+      "summary": "LangGraph checkpoints: AsyncSqliteSaver at index/checkpoints.sqlite3 on desktop; InMemorySaver on postgres/web (not durable)"
+    },
+    {
+      "id": "flow-data/inmemory-product-stores",
+      "kind": "store",
+      "path": "services/backend/src/backend_app",
+      "summary": "12 in-memory-only backend product destination stores (todos, memory, library, inbox, routines, webhooks, agents, tools, connectors, projects, palette, team); volatile, schema.sql never applied"
+    },
+    {
+      "id": "flow-data/token-vault",
+      "kind": "module",
+      "path": "services/backend/src/backend_app/token_vault.py",
+      "summary": "TokenVault: Fernet LocalTokenVault (dev) / AwsKmsTokenVault (kms_v1 envelope); encrypts MCP OAuth tokens and BYOK provider keys at rest"
+    },
+    {
+      "id": "flow-data/field-encryption",
+      "kind": "module",
+      "path": "services/ai-backend/src/agent_runtime/persistence/encryption.py",
+      "summary": "C7 envelope AES-256-GCM per-column encryption, AAD-bound to (table, column, org_id); KMS-wrapped DEKs; backfill job in runtime_worker"
+    },
+    {
+      "id": "flow-data/audit-chains",
+      "kind": "module",
+      "path": "packages/audit-chain/src/copilot_audit_chain/signer.py",
+      "summary": "Shared HMAC-SHA256 hash-chain signer used by backend (mcp/skill/deploy streams) and ai-backend (runtime_audit_log, file-store manifest); identity stream is unchained"
+    },
+    {
+      "id": "flow-data/retention-pipeline",
+      "kind": "module",
+      "path": "services/ai-backend/src/runtime_worker/jobs/retention_sweeper.py",
+      "summary": "Per-org x kind retention sweeper (tombstone, grace, hard-delete, deletion evidence) + policy resolver; privacy_user_retention_days hook has no callers"
+    },
+    {
+      "id": "flow-data/deletion-paths",
+      "kind": "module",
+      "path": "services/ai-backend/src/runtime_adapters/file/_deletion.py",
+      "summary": "User deletion: postgres tombstone/archive with chained audit row and legal-hold gate; desktop containment-verified physical erase with object GC"
+    },
+    {
+      "id": "flow-data/siem-export",
+      "kind": "module",
+      "path": "services/backend/src/backend_app/siem_export/pump.py",
+      "summary": "SIEM export pump: cursor-driven per-source export of backend audit tables + runtime audit via internal HTTP cursor; dead-letter on 4xx, backoff on 5xx"
+    },
+    {
+      "id": "flow-data/desktop-userdata",
+      "kind": "store",
+      "path": "apps/desktop/main/services/desktop-supervisor.ts",
+      "summary": "Desktop userData: pgdata cluster, rotating service logs, safeStorage-encrypted boot secrets (auth secret, vault secret, AUDIT_HMAC_KEY, pg password), agent-data/v1 file store"
+    },
+    {
+      "id": "flow-data/browser-localstorage",
+      "kind": "store",
+      "path": "apps/frontend/src/features/auth/storageKeys.ts",
+      "summary": "Browser/renderer localStorage: enterprise.auth.bearer, persona slug, connector prefs, chat UI KV via chat-surface KeyValueStore port"
+    }
+  ],
+  "edges": [
+    {
+      "from": "flow-data/backend-postgres-schema",
+      "to": "external:postgres",
+      "kind": "db",
+      "label": "yoyo MigrationRunner applies backend migrations",
+      "evidence": "services/backend/src/backend_app/db/migrate.py:26-56"
+    },
+    {
+      "from": "flow-data/runtime-postgres-schema",
+      "to": "external:postgres",
+      "kind": "db",
+      "label": "yoyo MigrationRunner applies runtime migrations",
+      "evidence": "services/ai-backend/src/agent_runtime/persistence/schema/migrate.py:28-56"
+    },
+    {
+      "from": "ai-runtime-worker",
+      "to": "ai-runtime-persistence",
+      "kind": "db",
+      "label": "retention sweeper tombstones/hard-deletes via PersistencePort",
+      "evidence": "services/ai-backend/src/runtime_worker/jobs/retention_sweeper.py:255-262"
+    },
+    {
+      "from": "ai-runtime-persistence",
+      "to": "external:postgres",
+      "kind": "db",
+      "label": "runtime store SQL (tombstone, sweep, chained audit insert)",
+      "evidence": "services/ai-backend/src/runtime_adapters/postgres/runtime_api_store.py:2212-2221"
+    },
+    {
+      "from": "ai-runtime-persistence",
+      "to": "flow-data/desktop-file-store",
+      "kind": "file",
+      "label": "file adapter writes canonical JSONL sessions + object store",
+      "evidence": "services/ai-backend/src/runtime_adapters/file/_paths.py:9-23"
+    },
+    {
+      "from": "ai-runtime-execution",
+      "to": "flow-data/sqlite-checkpoints",
+      "kind": "file",
+      "label": "AsyncSqliteSaver at <file-store>/index/checkpoints.sqlite3 (desktop only)",
+      "evidence": "services/ai-backend/src/agent_runtime/execution/deep_agent_builder.py:339-349"
+    },
+    {
+      "from": "ai-runtime-api",
+      "to": "backend-product",
+      "kind": "http",
+      "label": "GET /internal/v1/policies/runtime (privacy + tool-use snapshot at run start)",
+      "evidence": "services/backend/src/backend_app/routes/runtime_policies.py:1-6"
+    },
+    {
+      "from": "backend-platform",
+      "to": "ai-runtime-api",
+      "kind": "http",
+      "label": "SIEM pump reads runtime audit chain via GET /internal/v1/audit/cursor",
+      "evidence": "services/backend/src/backend_app/siem_export/pump.py:12-14"
+    },
+    {
+      "from": "flow-data/siem-export",
+      "to": "external:siem",
+      "kind": "http",
+      "label": "normalized audit events exported; cursor advance / dead-letter / backoff",
+      "evidence": "services/backend/src/backend_app/siem_export/pump.py:5-10"
+    },
+    {
+      "from": "backend-product",
+      "to": "shared-packages",
+      "kind": "import",
+      "label": "copilot_audit_chain AuditChainSigner for mcp/skill/deploy chains",
+      "evidence": "services/backend/src/backend_app/store.py:13"
+    },
+    {
+      "from": "ai-runtime-persistence",
+      "to": "shared-packages",
+      "kind": "import",
+      "label": "copilot_audit_chain for runtime_audit_log + file-store signed manifest",
+      "evidence": "services/ai-backend/src/runtime_adapters/file/runtime_api_store.py:57"
+    },
+    {
+      "from": "flow-data/token-vault",
+      "to": "external:aws-kms",
+      "kind": "http",
+      "label": "AwsKmsTokenVault wraps connector tokens/provider keys via KMS",
+      "evidence": "services/backend/src/backend_app/token_vault.py:1-21"
+    },
+    {
+      "from": "flow-data/field-encryption",
+      "to": "external:aws-kms",
+      "kind": "http",
+      "label": "column DEKs wrapped by customer-managed CMK",
+      "evidence": "services/ai-backend/src/agent_runtime/persistence/_aws_kms_client.py:1"
+    },
+    {
+      "from": "desktop-app",
+      "to": "external:postgres",
+      "kind": "spawn",
+      "label": "supervisor initdb/starts embedded cluster at <userData>/pgdata",
+      "evidence": "apps/desktop/main/services/desktop-supervisor.ts:99"
+    },
+    {
+      "from": "desktop-app",
+      "to": "ai-runtime-persistence",
+      "kind": "env",
+      "label": "RUNTIME_FILE_STORE_ROOT=<userData>/agent-data/v1 selects the file store",
+      "evidence": "apps/desktop/main/services/service-env.ts:205"
+    },
+    {
+      "from": "desktop-app",
+      "to": "backend-product",
+      "kind": "spawn",
+      "label": "per-service scripts/migrate.py gate before boot (facade stateless)",
+      "evidence": "apps/desktop/main/services/desktop-supervisor.ts:117-133"
+    },
+    {
+      "from": "desktop-app",
+      "to": "flow-data/desktop-userdata",
+      "kind": "file",
+      "label": "boot secrets blob (safeStorage), rotating logs, pgdata under userData",
+      "evidence": "apps/desktop/main/services/boot-secrets.ts:44-47"
+    },
+    {
+      "from": "frontend-web",
+      "to": "flow-data/browser-localstorage",
+      "kind": "file",
+      "label": "bearer + persona + UI prefs persisted in localStorage",
+      "evidence": "apps/frontend/src/features/auth/storageKeys.ts:6-7"
+    },
+    {
+      "from": "chat-surface-core",
+      "to": "flow-data/browser-localstorage",
+      "kind": "contract",
+      "label": "KeyValueStore port; hosts bind LocalStorageKeyValueStore",
+      "evidence": "apps/desktop/renderer/bootstrap.tsx:81"
+    },
+    {
+      "from": "backend-facade",
+      "to": "ai-runtime-api",
+      "kind": "http",
+      "label": "proxies /v1/retention/effective and workspace-defaults retention reads",
+      "evidence": "services/backend-facade/src/backend_facade/app.py:597-603"
+    },
+    {
+      "from": "backend-product",
+      "to": "flow-data/inmemory-product-stores",
+      "kind": "import",
+      "label": "create_app defaults every product destination to InMemory* stores",
+      "evidence": "services/backend/src/backend_app/app.py:1555-1856"
+    },
+    {
+      "from": "ai-runtime-api",
+      "to": "ai-runtime-persistence",
+      "kind": "db",
+      "label": "delete_user_history: legal-hold gate, tombstone, chained+encrypted audit row",
+      "evidence": "services/ai-backend/src/runtime_adapters/postgres/runtime_api_store.py:2078-2231"
+    }
+  ]
+}
