@@ -234,6 +234,10 @@ class DesktopComposer:
             "adapter_registry_store": PostgresAdapterRegistryStore(pool),
             "settings_store": PostgresSettingsStore(pool),
             "provider_api_keys_store": PostgresProviderApiKeyStore(pool),
+            # PR-B: live key validation is on for real desktop installs —
+            # PUT stores anyway when the provider is unreachable, so an
+            # offline desktop is never blocked from saving a key.
+            "enable_provider_key_live_validation": True,
             # Account-merge engine (PRD §6.3): saga record + the privileged
             # re-key executor. The runtime (ai-backend) leg resolves from
             # AI_BACKEND_URL in create_app (the desktop supervisor exports it).

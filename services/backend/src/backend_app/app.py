@@ -251,6 +251,7 @@ from backend_app.routes.runtime_policies import register_runtime_policies_routes
 from backend_app.provider_keys import (
     InMemoryProviderApiKeyStore,
     ProviderApiKeyStore,
+    ProviderKeyLiveValidator,
     ProviderKeysService,
     register_provider_keys_routes,
 )
@@ -514,6 +515,8 @@ def create_app(
     tools_store: ToolsStore | None = None,
     settings_store: SettingsStore | None = None,
     provider_api_keys_store: ProviderApiKeyStore | None = None,
+    provider_key_live_validator: ProviderKeyLiveValidator | None = None,
+    enable_provider_key_live_validation: bool = False,
     liveness_service: LivenessService | None = None,
     palette_store: PaletteStorePort | None = None,
 ) -> FastAPI:
@@ -1521,7 +1524,22 @@ def create_app(
             token_vault=provider_keys_vault,
         )
         app.state.provider_keys_service = provider_keys_service
-        register_provider_keys_routes(app, service=provider_keys_service)
+        # PR-B live validation: OFF by default so a bare ``create_app()``
+        # (every unit test) can never make an outbound provider call —
+        # PR CI must not require live third-party services. The two real
+        # composition roots opt in: the SaaS default app (module
+        # ``__getattr__`` below) and the desktop profile
+        # (``desktop_app.build_create_app_kwargs``). Tests that want the
+        # lane inject ``provider_key_live_validator`` (MockTransport).
+        resolved_live_validator = provider_key_live_validator or (
+            ProviderKeyLiveValidator() if enable_provider_key_live_validation else None
+        )
+        app.state.provider_key_live_validator = resolved_live_validator
+        register_provider_keys_routes(
+            app,
+            service=provider_keys_service,
+            live_validator=resolved_live_validator,
+        )
     # PR 8.0.5 — single aggregate runtime-policies route consumed by
     # ai-backend at run start. Composes the same two stores above into
     # one wire shape so each run pays one HTTP round-trip instead of
@@ -2157,7 +2175,7 @@ def __getattr__(name: str) -> object:
     """
 
     if name == "app":
-        application = create_app()
+        application = create_app(enable_provider_key_live_validation=True)
         globals()["app"] = application
         return application
     raise AttributeError(f"module {__name__!r} has no attribute {name!r}")

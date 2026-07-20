@@ -2,10 +2,16 @@
 
 Storage adapters live in :mod:`backend_app.provider_keys.store`, the
 TokenVault-composing service in :mod:`backend_app.provider_keys.service`,
+the live key probe in :mod:`backend_app.provider_keys.live_validator`,
 and the public ``/v1/settings/provider-keys`` routes in
 :mod:`backend_app.provider_keys.routes`.
 """
 
+from backend_app.provider_keys.live_validator import (
+    LiveCheckStatus,
+    ProviderKeyLiveCheckResult,
+    ProviderKeyLiveValidator,
+)
 from backend_app.provider_keys.routes import register_provider_keys_routes
 from backend_app.provider_keys.service import (
     ProviderKeyFormatError,
@@ -22,10 +28,13 @@ from backend_app.provider_keys.store import (
 
 __all__ = [
     "InMemoryProviderApiKeyStore",
+    "LiveCheckStatus",
     "PostgresProviderApiKeyStore",
     "ProviderApiKeyRecord",
     "ProviderApiKeyStore",
     "ProviderKeyFormatError",
+    "ProviderKeyLiveCheckResult",
+    "ProviderKeyLiveValidator",
     "ProviderKeysService",
     "ProviderName",
     "register_provider_keys_routes",

@@ -57,3 +57,37 @@ export interface ListProviderKeysResponse {
 export interface PutProviderKeyRequest {
   readonly api_key: string;
 }
+
+/**
+ * `PUT /v1/settings/provider-keys/{provider}` response: the stored
+ * summary plus an optional live-check note. `"passed"` = the provider
+ * accepted the key; `"skipped_unreachable"` = the provider couldn't be
+ * reached and the key was stored anyway (offline-friendly). Absent when
+ * live validation is disabled — the legacy three-field shape.
+ */
+export interface PutProviderKeyResponse extends ProviderKeySummary {
+  readonly live_check?: "passed" | "skipped_unreachable";
+}
+
+/**
+ * Body for `POST /v1/settings/provider-keys/{provider}/validate` — the
+ * live probe. The key feeds exactly one outbound provider call and is
+ * never stored, audited, or echoed.
+ */
+export interface ValidateProviderKeyRequest {
+  readonly api_key: string;
+}
+
+/**
+ * Tri-state live verdict — discriminate on `valid`:
+ * `true` → `models` lists the ids this key can reach (may legitimately
+ * be empty where the authenticated probe isn't a model listing);
+ * `false` → the provider rejected the key (`reason: "invalid_key"`);
+ * `null` → the check couldn't run (`reason: "provider_unreachable"`),
+ * which is NOT a failure verdict. All three keys are always present.
+ */
+export interface ValidateProviderKeyResponse {
+  readonly valid: boolean | null;
+  readonly models: readonly string[] | null;
+  readonly reason: "invalid_key" | "provider_unreachable" | null;
+}

@@ -4,11 +4,13 @@ from __future__ import annotations
 
 from datetime import datetime, timezone
 
+import httpx
 from fastapi.testclient import TestClient
 
 from backend_app.app import create_app
 from backend_app.contracts import OrganizationRecord, UserRecord
 from backend_app.identity.store import InMemoryIdentityStore
+from backend_app.provider_keys.live_validator import ProviderKeyLiveValidator
 from backend_app.provider_keys.store import InMemoryProviderApiKeyStore
 from backend_app.token_vault import LocalTokenVault
 
@@ -44,6 +46,7 @@ def _client(
     identity_store: InMemoryIdentityStore | None = None,
     provider_store: InMemoryProviderApiKeyStore | None = None,
     vault: LocalTokenVault | None = None,
+    live_validator: ProviderKeyLiveValidator | None = None,
 ) -> tuple[TestClient, InMemoryIdentityStore, InMemoryProviderApiKeyStore]:
     identity = identity_store or _seeded_identity()
     provider_keys = provider_store or InMemoryProviderApiKeyStore()
@@ -53,8 +56,17 @@ def _client(
         identity_store=identity,
         provider_api_keys_store=provider_keys,
         token_vault=vault or LocalTokenVault(secret=_VAULT_SECRET),
+        provider_key_live_validator=live_validator,
     )
     return TestClient(app), identity, provider_keys
+
+
+def _live_validator(handler) -> ProviderKeyLiveValidator:
+    """Real validator, mocked transport — no network in tests."""
+
+    return ProviderKeyLiveValidator(
+        client_factory=lambda: httpx.AsyncClient(transport=httpx.MockTransport(handler))
+    )
 
 
 def _params(user_id: str = "usr_sarah", org_id: str = "org_acme") -> dict[str, str]:
@@ -280,3 +292,113 @@ class TestRbac:
             headers=self._service_headers(scopes="runtime:use"),
         )
         assert response.status_code == 200, response.text
+
+
+class TestLiveValidationLane:
+    """PR-B: the live lane through the REAL routes + REAL validator
+    (mocked transport). Default ``create_app()`` has the lane OFF, so
+    every other test in this file stays offline by construction."""
+
+    def test_put_with_provider_rejected_key_is_400_and_stores_nothing(self) -> None:
+        client, _i, store = _client(
+            live_validator=_live_validator(lambda request: httpx.Response(401, json={}))
+        )
+        response = client.put(
+            "/v1/settings/provider-keys/openai",
+            params=_params(),
+            json={"api_key": _OPENAI_KEY},
+        )
+        assert response.status_code == 400, response.text
+        assert response.json()["detail"] == "api_key_rejected_by_provider"
+        assert store.list_for_user(org_id="org_acme", user_id="usr_sarah") == ()
+
+    def test_put_stores_with_passed_note_when_provider_accepts(self) -> None:
+        client, _i, _p = _client(
+            live_validator=_live_validator(
+                lambda request: httpx.Response(200, json={"data": [{"id": "gpt-4o"}]})
+            )
+        )
+        response = client.put(
+            "/v1/settings/provider-keys/openai",
+            params=_params(),
+            json={"api_key": _OPENAI_KEY},
+        )
+        assert response.status_code == 200, response.text
+        body = response.json()
+        assert body["live_check"] == "passed"
+        assert body["provider"] == "openai"
+
+    def test_put_stores_anyway_when_provider_unreachable(self) -> None:
+        def handler(request: httpx.Request) -> httpx.Response:
+            raise httpx.ConnectError("offline")
+
+        client, _i, _p = _client(live_validator=_live_validator(handler))
+        response = client.put(
+            "/v1/settings/provider-keys/openai",
+            params=_params(),
+            json={"api_key": _OPENAI_KEY},
+        )
+        assert response.status_code == 200, response.text
+        assert response.json()["live_check"] == "skipped_unreachable"
+        listing = client.get("/v1/settings/provider-keys", params=_params())
+        assert len(listing.json()["keys"]) == 1
+
+    def test_put_without_validator_keeps_legacy_shape(self) -> None:
+        client, _i, _p = _client()
+        response = client.put(
+            "/v1/settings/provider-keys/openai",
+            params=_params(),
+            json={"api_key": _OPENAI_KEY},
+        )
+        assert response.status_code == 200, response.text
+        assert set(response.json().keys()) == {"provider", "key_hint", "updated_at"}
+
+    def test_validate_reports_valid_with_models_and_stores_nothing(self) -> None:
+        client, _i, store = _client(
+            live_validator=_live_validator(
+                lambda request: httpx.Response(
+                    200, json={"data": [{"id": "gpt-4o"}, {"id": "o3"}]}
+                )
+            )
+        )
+        response = client.post(
+            "/v1/settings/provider-keys/openai/validate",
+            params=_params(),
+            json={"api_key": _OPENAI_KEY},
+        )
+        assert response.status_code == 200, response.text
+        assert response.json() == {
+            "valid": True,
+            "models": ["gpt-4o", "o3"],
+            "reason": None,
+        }
+        assert store.list_for_user(org_id="org_acme", user_id="usr_sarah") == ()
+        assert _OPENAI_KEY not in response.text
+
+    def test_validate_reports_invalid_key(self) -> None:
+        client, _i, _p = _client(
+            live_validator=_live_validator(lambda request: httpx.Response(403, json={}))
+        )
+        response = client.post(
+            "/v1/settings/provider-keys/openai/validate",
+            params=_params(),
+            json={"api_key": _OPENAI_KEY},
+        )
+        assert response.json() == {
+            "valid": False,
+            "models": None,
+            "reason": "invalid_key",
+        }
+
+    def test_validate_without_validator_is_couldnt_check(self) -> None:
+        client, _i, _p = _client()
+        response = client.post(
+            "/v1/settings/provider-keys/openai/validate",
+            params=_params(),
+            json={"api_key": _OPENAI_KEY},
+        )
+        assert response.json() == {
+            "valid": None,
+            "models": None,
+            "reason": "provider_unreachable",
+        }

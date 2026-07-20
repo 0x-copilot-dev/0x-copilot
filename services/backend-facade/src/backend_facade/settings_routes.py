@@ -40,6 +40,7 @@ class Constants:
         SECURITY_WEBHOOKS = "/v1/settings/security/webhooks"
         PROVIDER_KEYS = "/v1/settings/provider-keys"
         PROVIDER_KEY_ITEM = "/v1/settings/provider-keys/{provider}"
+        PROVIDER_KEY_VALIDATE = "/v1/settings/provider-keys/{provider}/validate"
 
 
 def register_settings_routes(app: FastAPI) -> None:
@@ -91,6 +92,18 @@ def register_settings_routes(app: FastAPI) -> None:
     async def put_provider_key(request: Request, provider: str) -> dict[str, object]:
         return await _forward_put(
             app, request, f"{Constants.Paths.PROVIDER_KEYS}/{provider}"
+        )
+
+    @app.post(Constants.Paths.PROVIDER_KEY_VALIDATE)
+    async def validate_provider_key(
+        request: Request, provider: str
+    ) -> dict[str, object]:
+        # Live-check WITHOUT storing: the body (which carries the key)
+        # is forwarded verbatim to the backend probe and never logged.
+        return await _forward_post(
+            app,
+            request,
+            f"{Constants.Paths.PROVIDER_KEYS}/{provider}/validate",
         )
 
     @app.delete(
@@ -153,6 +166,24 @@ async def _forward_put(app: FastAPI, request: Request, path: str) -> dict[str, o
         params={"org_id": identity.org_id, "user_id": identity.user_id},
         json=body,
         headers=FacadeAuthenticator.service_headers(identity),
+        timeout=15,
+    )
+    return _coerce_object_or_raise(response)
+
+
+async def _forward_post(app: FastAPI, request: Request, path: str) -> dict[str, object]:
+    backend_url = _settings_for(app).backend_url
+    client = http_client(app)
+    identity = await FacadeAuthenticator.verify_with_touch(
+        request, backend_url=backend_url, http_client=client
+    )
+    body = await _safe_json(request)
+    response = await client.post(
+        f"{backend_url}{path}",
+        params={"org_id": identity.org_id, "user_id": identity.user_id},
+        json=body,
+        headers=FacadeAuthenticator.service_headers(identity),
+        # Live probe upstream allows 6s; leave headroom, stay bounded.
         timeout=15,
     )
     return _coerce_object_or_raise(response)
