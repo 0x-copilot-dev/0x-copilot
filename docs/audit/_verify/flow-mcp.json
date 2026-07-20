@@ -1,0 +1,85 @@
+{
+  "cluster": "flow-mcp",
+  "verdicts": [
+    {
+      "ref": "F1",
+      "title": "Web Connectors/Tools destination connect flow is a stub end-to-end; read model never populated",
+      "type": "risk/dead-wiring",
+      "severity": "high",
+      "verdict": "confirmed",
+      "note": "routes.py:557-567 _default_oauth_start returns https://auth.example/{slug}/authorize; oauth_callback 503s (routes.py:333-338); connector_oauth_start/callback set nowhere in repo (grep hits only routes.py); write_through_from_mcp called only by tests; app.py:1618-1619 always uses InMemoryConnectorsStore (connectors_store never passed) and no Postgres adapter class exists in store.py."
+    },
+    {
+      "ref": "F2",
+      "title": "~10 representations of an MCP server/connector plus three hand-maintained catalogs",
+      "type": "duplication",
+      "severity": "high",
+      "verdict": "confirmed",
+      "note": "All named classes verified: McpServerRecord/Response/InternalMcpServerCard (contracts.py:257,520,713), CatalogEntry (mcp_catalog.py:32), ConnectorRecord/ConnectorCatalogEntry (store.py:74, service.py:72), Desktop*Profile (profile_catalog.py:87,155), McpServerCard/McpServerConfigFile (cards.py:119, files.py:204), api-types McpServer/Connector (index.ts:32, connectors.ts:121); two live UI worlds (Settings grid on McpServer via useConnectors→/v1/mcp vs Tools destination on Connector) and two disjoint status taxonomies (ConnectorStatus connected/disconnected/error/expired vs McpAuthState 6-value) with no mapping found."
+    },
+    {
+      "ref": "F3",
+      "title": "MCP enum vocabulary hand-copied in three places with no generation or conformance test",
+      "type": "ssot-violation",
+      "severity": "medium",
+      "verdict": "confirmed",
+      "note": "backend contracts.py:148-176 declares raw-string StrEnums with no shared import; ai-backend cards.py:45-80 derives from ai-backend-LOCAL constants.py (Values.*, not the shared service-contracts pkg); api-types index.ts:18-31 declares raw-string unions; no cross-service parity/conformance test found — three independent sources across deployables."
+    },
+    {
+      "ref": "F4",
+      "title": "Trusted service-header names re-declared by hand next to the constants package that owns them",
+      "type": "ssot-violation",
+      "severity": "medium",
+      "verdict": "confirmed",
+      "note": "suggestible_connectors_resolver.py:33-38 hand-declares x-enterprise-service-token/org-id/user-id while copilot_service_contracts/headers.py:4-6 is the SSOT, imported correctly one dir away in backend_provider.py:11-14; the file also re-implements BACKEND_BASE_URL/fallback env resolution (also duplicated in runtime_worker/jobs/todo_recurrence_materializer.py:53)."
+    },
+    {
+      "ref": "F5",
+      "title": "Internal RPC proxy flattens SSE to first data event and does no JSON-RPC id matching; blocking urllib",
+      "type": "risk",
+      "severity": "medium",
+      "verdict": "confirmed",
+      "note": "service.py:792-802 _decode_remote_mcp_response returns json.loads of the FIRST non-[DONE] data line inside the loop with no id check, so a notifications/progress emitted first would be returned as the result; service.py:776 uses blocking urlopen(timeout=30) inside sync proxy_internal_rpc, reached from sync route internal_mcp_rpc (app.py:1080) → serialized through FastAPI threadpool."
+    },
+    {
+      "ref": "F6",
+      "title": "Hand-rolled OAuth 2.1 client and MCP JSON-RPC client instead of maintained libraries",
+      "type": "bespoke-replaceable",
+      "severity": "medium",
+      "verdict": "confirmed",
+      "note": "mcp_oauth.py is exactly 518 LOC on raw urllib (urllib.request Request/urlopen, line 449-454); BackendMcpClient hand-implements connect/_initialize/list_tools(tools/list)/list_resources(resources/list)/call_tool(tools/call) (backend_provider.py:165-258); no authlib/oauthlib in backend requirements and no mcp SDK in either service's requirements — no library wrapper exists; replaceable judgment is reasonable and finding fairly notes the credential-isolation constraint on the ai-backend side."
+    },
+    {
+      "ref": "F7",
+      "title": "The MCP-as-files provider is built, exported, and wired nowhere",
+      "type": "dead-code",
+      "severity": "medium",
+      "verdict": "confirmed",
+      "note": "files.py is 459 LOC with SecretShapeScanner (110), McpServerConfigFile (204), FileMcpConfigStore (304), FileMcpServerProvider (427); exported from capabilities/mcp/__init__.py:41-42,61-62; grep across ai-backend/src finds no constructor of either class outside files.py's own defs and the __init__ re-export; sole consumer is tests/unit/.../test_files.py."
+    },
+    {
+      "ref": "F8",
+      "title": "Composer Tools listing bypasses the effective-auth-state upgrade used everywhere else",
+      "type": "inconsistency",
+      "severity": "low",
+      "verdict": "accepted",
+      "note": "LOW severity accepted as-is per protocol."
+    },
+    {
+      "ref": "F9",
+      "title": "Desktop OAuth loopback/deep-link constants duplicated byte-identically across TS and Python",
+      "type": "duplication",
+      "severity": "low",
+      "verdict": "accepted",
+      "note": "LOW severity accepted as-is per protocol."
+    },
+    {
+      "ref": "F10",
+      "title": "N+1 vault/token reads on every card listing",
+      "type": "complexity",
+      "severity": "low",
+      "verdict": "accepted",
+      "note": "LOW severity accepted as-is per protocol."
+    }
+  ]
+}

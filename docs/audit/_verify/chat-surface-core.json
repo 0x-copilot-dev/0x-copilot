@@ -1,0 +1,117 @@
+{
+  "cluster": "chat-surface-core",
+  "verdicts": [
+    {
+      "ref": "F0",
+      "title": "SSOT interaction layer has zero CI enforcement (lint/typecheck/vitest run nowhere)",
+      "type": "risk",
+      "severity": "high",
+      "verdict": "confirmed",
+      "note": "No workflow runs chat-surface's own lint/test/typecheck (grep .github/workflows: only ci-desktop.yml:18/32 triggers on packages/chat-surface/** but runs desktop-only typecheck+test); ci-frontend.yml:4-23 omits chat-surface; .pre-commit-config.yaml:43-59 is prettier-only; test files use bare document (useShellShortcuts.test.ts:53-54)."
+    },
+    {
+      "ref": "F1",
+      "title": "Run cockpit opens a second SSE subscription (FR-3.3 single-projection violated)",
+      "type": "ssot-violation",
+      "severity": "high",
+      "verdict": "confirmed",
+      "note": "TcSwimlanes.tsx:158-184 opens its own uncursored subscribeServerSentEvents to /v1/agent/runs/{runId}/stream with its own toBead reducer, while useRunSession.ts:225-256 owns the canonical after_sequence-cursored stream; R4 convergence risk documented at useRunSession.ts:20-23."
+    },
+    {
+      "ref": "F2",
+      "title": "Most eventProjector output has no production consumer (+ unreachable resolveError/toError)",
+      "type": "dead-code",
+      "severity": "high",
+      "verdict": "confirmed",
+      "note": "ThreadCanvas.tsx only reads projection.surface and projection.timeline.beads (grep for projection.chat/.activity/.swimlanes/.state = zero non-test hits); setResolveError is only ever called with null (useRunSession.ts:158,170,293) so resolveError branch and toError (line 456) are unreachable."
+    },
+    {
+      "ref": "F3",
+      "title": "Three parallel reducers for the same run-event families across package and host",
+      "type": "duplication",
+      "severity": "high",
+      "verdict": "confirmed",
+      "note": "subagentHelpers.ts:206 reproduces chatModel/subagentStatus.ts byte-for-byte (host also has subagentReducer.ts 314 LOC); approvalProjection.ts:128 mirrors host approval.ts and coexists with eventProjector extractApproval/nextApprovalState (468,498); workspace/types.ts:1-12 re-declares host hook shapes; citationLinkReducer.ts:1-30 proves the apps-can-import-package convergence path works."
+    },
+    {
+      "ref": "F4",
+      "title": "Two coexisting composer depth models (Depth vs ThinkingDepth)",
+      "type": "ssot-violation",
+      "severity": "medium",
+      "verdict": "confirmed",
+      "note": "depth.ts:24-42 defines ThinkingDepth/THINKING_DEPTHS/DEPTH_LABEL (feeds reasoning_depth wire) while ModelPicker.tsx:25-45 independently defines Depth/DEPTHS with own labels; depth.ts:5-12 flags the fork explicitly (FR-1.7, reconciliation deferred to Phase 3E)."
+    },
+    {
+      "ref": "F5",
+      "title": "RightRailTabs (414 LOC) and legacy registerSurface path are dead",
+      "type": "dead-code",
+      "severity": "medium",
+      "verdict": "confirmed",
+      "note": "RightRailTabs.tsx (414 LOC) is absent from src/index.ts and shell/index.ts and only referenced in two comments (RightRail.tsx:17, useEventProjector.ts:71); registerSurface/resolveSurface/clearRegistry are referenced only by the barrel (index.ts:11-13) and their own defs — zero non-test consumers vs live registerAdapter."
+    },
+    {
+      "ref": "F6",
+      "title": "routing/route-table.ts ROUTE_TABLE is exported but unconsumed",
+      "type": "dead-code",
+      "severity": "medium",
+      "verdict": "confirmed",
+      "note": "ROUTE_TABLE's only non-test references are the barrel export/comment (index.ts:249-254) and its own definition; no consumer in packages or apps."
+    },
+    {
+      "ref": "F7",
+      "title": "Hardcoded, divergent model-ID lists in 5+ places",
+      "type": "ssot-violation",
+      "severity": "medium",
+      "verdict": "confirmed",
+      "note": "Genuinely divergent: providerKeys.ts:63 'claude-opus-4' vs ModelPicker.tsx:34 'claude-opus-4-7' vs AgentEditor.tsx:224 'anthropic:claude-opus-4-7'; also Composer.tsx:361 DEFAULT_MODEL and RoutineEditor.tsx:207 default."
+    },
+    {
+      "ref": "F8",
+      "title": "Settings surface exists twice (package SettingsSurface vs web legacy SettingsScreen) + aui CSS duplicated",
+      "type": "ssot-violation",
+      "severity": "medium",
+      "verdict": "confirmed",
+      "note": "Desktop mounts package SettingsSurface (SettingsMount.tsx) while web App.tsx:97-99,746 mounts legacy SettingsScreen with its own SETTINGS_SECTIONS (sections.ts:6); aui-* CSS duplicated across composer.css (123 refs) and apps/frontend/styles.css (513 refs)."
+    },
+    {
+      "ref": "F9",
+      "title": "composer/Composer.tsx is 1,639 LOC in one file",
+      "type": "complexity",
+      "severity": "medium",
+      "verdict": "confirmed",
+      "note": "wc -l confirms Composer.tsx is exactly 1,639 LOC and Composer.test.tsx 1,435 LOC — the package's largest and least-reviewable unit."
+    },
+    {
+      "ref": "F10",
+      "title": "Stale VS-Code-fork commentary in most-read contract files",
+      "type": "inconsistency",
+      "severity": "low",
+      "verdict": "accepted",
+      "note": "Low severity — accepted without deep verification per instructions (doc/comment staleness in key-value-store.ts / secret-storage.ts / presence-signal.ts)."
+    },
+    {
+      "ref": "F11",
+      "title": "Latent decision-value bug in unconsumed projector approval path (reject vs rejected)",
+      "type": "risk",
+      "severity": "medium",
+      "verdict": "confirmed",
+      "note": "eventProjector.ts:498 branches on decision==='reject' but the wire emits past-tense 'rejected' (approval_coordinator.py:420 'Wire decision values stay past-tense'; approval.py:653), so a rejected approval would project as 'accepted'; live path approvalProjection.ts:307-315 checks the correct values; harmless today only because the slice is dead per F2 (correctly characterized as latent)."
+    },
+    {
+      "ref": "F12",
+      "title": "citations/sourceFreshness.formatRelative is not relative (returns toLocaleString)",
+      "type": "inconsistency",
+      "severity": "low",
+      "verdict": "accepted",
+      "note": "Low severity — accepted without deep verification per instructions."
+    },
+    {
+      "ref": "F13",
+      "title": "Sanctioned-in-spirit boundary deviations (CSS deep-import; unguarded globalThis.document)",
+      "type": "boundary-violation",
+      "severity": "low",
+      "verdict": "accepted",
+      "note": "Low severity — accepted without deep verification per instructions."
+    }
+  ]
+}

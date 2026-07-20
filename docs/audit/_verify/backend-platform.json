@@ -1,0 +1,112 @@
+{
+  "cluster": "backend-platform",
+  "verdicts": [
+    {
+      "ref": "F1",
+      "title": "SIEM export pump is unwired and schema-broken",
+      "type": "risk",
+      "severity": "high",
+      "verdict": "confirmed",
+      "note": "SiemExportPump appears only in its own module + siem_export/__init__.py re-export (no composition root/script/compose); _fetch_local queries 'id' (pump.py:287) but mcp_audit_events PK is audit_id/action (migrations/0001_initial_mcp_skills.sql:56-60) — same for identity_audit_events (0004); siem_exporter_controls is written by routes/siem.py:105 but never read in pump.py, contradicting its own docstring; 3 profiles set siem_export_required=True (deployment_profile.py:71/82/93)."
+    },
+    {
+      "ref": "F2",
+      "title": "Audit list/export return empty under Postgres-backed deployments",
+      "type": "risk",
+      "severity": "high",
+      "verdict": "confirmed",
+      "note": "audit_reader.py:221/243/265 return () when the store lacks list_audit_events; PostgresMcpStore (store.py:405) and PostgresSkillStore (store.py:1015) define only append_audit, no list method, and the () path never appends to degraded (only the except at audit_reader.py:181 does); audit_export.py:112 reads the in-memory 'audit_events' attribute (docstring: 'Postgres-backed export is a follow-up'); deploy audit is InMemory-only everywhere (store.py:1316, desktop accepted gap desktop_app.py:157)."
+    },
+    {
+      "ref": "F3",
+      "title": "LibraryIndexerLoop is never started by any composition root",
+      "type": "dead-code",
+      "severity": "medium",
+      "verdict": "confirmed",
+      "note": "LibraryIndexerLoop is constructed only in jobs/library_indexer.py:262 and tests/test_library_indexer.py; app.py lifespan starts only the SessionSweeper (app.py:303) and desktop_app.py never references it, while LibraryService._safe_enqueue still writes library_index_jobs rows (library/service.py:430) — queue is filled but never drained."
+    },
+    {
+      "ref": "F4",
+      "title": "create_app is a ~1,620-line, ~60-parameter mega-function",
+      "type": "complexity",
+      "severity": "high",
+      "verdict": "confirmed",
+      "note": "app.py is 2048 lines; create_app spans 409-2030 with ~62 keyword params (app.py:409-473), an inline _RoutineProjectAllowlistBridge class (app.py:1768) monkey-patched onto routines_service._project_allowlist_lookup (app.py:1808), and repeated SLF001 reaches into session_service._auth_secret (679) and projects_service._membership_port (1822/1838/1863/1875/1908/1930)."
+    },
+    {
+      "ref": "F5",
+      "title": "_default_token_vault swallows the factory's fail-closed errors",
+      "type": "risk",
+      "severity": "medium",
+      "verdict": "confirmed",
+      "note": "TokenVaultFactory._enforce_profile raises RuntimeError when require_kms_token_vault and backend=='local' (token_vault.py:469-474), but _default_token_vault wraps create() in 'except Exception: return None' (app.py:324-327), and a None vault silently skips the entire MFA/OIDC/Google block gated at app.py:527 — turning a fail-closed control into a silent feature outage."
+    },
+    {
+      "ref": "F6",
+      "title": "SIEM exporter env-var name split",
+      "type": "ssot-violation",
+      "severity": "medium",
+      "verdict": "confirmed",
+      "note": "exporters.py:274 reads SIEM_EXPORTER_BACKEND (matching docs/security/siem-export.md:46) while routes/siem.py:250-253 reads SIEM_EXPORT_BACKEND_NAMES/SIEM_EXPORT_BACKEND (matching docs/roadmap/00-overview.md:253) — two distinct names for the same concept across the exporter factory vs the admin routes."
+    },
+    {
+      "ref": "F7",
+      "title": "Two DB-URL contracts inside one process",
+      "type": "inconsistency",
+      "severity": "medium",
+      "verdict": "confirmed",
+      "note": "Runtime stores resolve DATABASE_URL (service.py:806, desktop_app.py:92) while SIEM admin routes 503 unless BACKEND_DATABASE_URL is set (routes/siem.py:260-266) and open raw per-request psycopg.connect (routes/siem.py:314/324) instead of the shared PostgresConnectionPool; scripts also use BACKEND_DATABASE_URL (desktop_app.py:26)."
+    },
+    {
+      "ref": "F8",
+      "title": "store.py re-implements the audit-append pattern five times",
+      "type": "duplication",
+      "severity": "medium",
+      "verdict": "confirmed",
+      "note": "_sign_mcp_audit/_sign_skill_audit/_sign_deploy_audit are structurally identical (payload dict -> chain.next -> model_copy) at store.py:382/990/1370; _json_list/_json_object/_datetime are duplicated verbatim between PostgresMcpStore (848-865) and PostgresSkillStore (1292-1309); _connect/_connect_or_inherit duplicated (752/766 vs 1232/1238); AuditChainSigner.from_env rebuilt per append (661, 1147)."
+    },
+    {
+      "ref": "F9",
+      "title": "Hand-mirrored platform modules across services",
+      "type": "duplication",
+      "severity": "medium",
+      "verdict": "confirmed",
+      "note": "deployment_profile.py:6-7 and db/pool_metrics.py:3 self-describe as mirrors; backend-facade carries its own deployment_profile.py + observability/{log_config,log_event,request_context,otel}.py and ai-backend carries otel.py + pool_metrics.py; env_int/env_float are re-implemented three times in-cluster (_BackendPoolEnv store.py:61, SiemExportPumpEnv pump.py:56, LibraryIndexerEnv library_indexer.py:88) — factual mirroring confirmed, though monorepo rules deliberately forbid the cross-service import that would collapse it."
+    },
+    {
+      "ref": "F10",
+      "title": "backend_app/migrations.py has zero importers",
+      "type": "dead-code",
+      "severity": "low",
+      "verdict": "accepted"
+    },
+    {
+      "ref": "F11",
+      "title": "Non-constant-time service-token comparison",
+      "type": "risk",
+      "severity": "low",
+      "verdict": "accepted"
+    },
+    {
+      "ref": "F12",
+      "title": "LocalTokenVault.decrypt catches (InvalidToken, Exception)",
+      "type": "risk",
+      "severity": "low",
+      "verdict": "accepted"
+    },
+    {
+      "ref": "F13",
+      "title": "Dockerfile ships Python 3.14 while convention says 3.13",
+      "type": "inconsistency",
+      "severity": "low",
+      "verdict": "accepted"
+    },
+    {
+      "ref": "F14",
+      "title": "mcp_catalog docstring describes removed seeding behavior",
+      "type": "inconsistency",
+      "severity": "low",
+      "verdict": "accepted"
+    }
+  ]
+}
