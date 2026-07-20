@@ -1,0 +1,287 @@
+{
+  "cluster": {
+    "id": "backend-facade",
+    "title": "Backend Facade — Product-facing API gateway",
+    "kind": "cluster",
+    "paths": ["services/backend-facade"],
+    "md": "docs/audit/clusters/09-backend-facade.md",
+    "summary": "Single app-facing HTTP surface (:8200) that verifies bearers and forwards /v1/* to backend (identity, MCP, product destinations) and ai-backend (conversations, runs, usage, local models), including byte-for-byte SSE stream proxies. Stateless by design; owns bearer verification (HMAC + cached session touch), deployment-profile fail-closed boot, redacting observability, and env-gated desktop wallet-page serving. Healthy trust-boundary discipline but heavy copy-paste boilerplate and a two-tier auth inconsistency: the core /v1/agent surface skips session touch and token expiry."
+  },
+  "nodes": [
+    {
+      "id": "backend-facade/app-core",
+      "kind": "service",
+      "path": "services/backend-facade/src/backend_facade/app.py",
+      "summary": "create_app bootstrap + forward_json kernel + ~85 inline handlers: MCP registry, agent conversations/runs/drafts/shares, skills merge, usage, budgets, telemetry relay, dev-IdP proxy, run SSE stream."
+    },
+    {
+      "id": "backend-facade/auth",
+      "kind": "module",
+      "path": "services/backend-facade/src/backend_facade/auth.py",
+      "summary": "FacadeAuthenticator: HMAC bearer verify, verify_with_touch with 30s TTL-bucketed LRU touch cache, atlas_pk_ API-key verify via backend, service-header stamping, step-up MFA gate."
+    },
+    {
+      "id": "backend-facade/auth-routes",
+      "kind": "route-group",
+      "path": "services/backend-facade/src/backend_facade/auth_routes.py",
+      "summary": "/v1/auth/*: public login ramps (OIDC, SAML, SIWE, password, magic-link, discover), session list/revoke/logout, MFA enroll/challenge/verify/recovery, login-attempts."
+    },
+    {
+      "id": "backend-facade/me-workspace-routes",
+      "kind": "route-group",
+      "path": "services/backend-facade/src/backend_facade/me_routes.py",
+      "summary": "/v1/me/* (profile, preferences, notifications, API keys, MFA factors, avatar, policies) + /v1/workspace/* admin (members, invitations, billing, mfa-policy, api-keys) + SCIM /scim/v2/* pass-through."
+    },
+    {
+      "id": "backend-facade/destination-proxies",
+      "kind": "route-group",
+      "path": "services/backend-facade/src/backend_facade/tool_routes.py",
+      "summary": "Sixteen near-identical forwarders for product destinations on backend: tools, connectors (+desktop OAuth), connector webhooks, inbox, home, library, memory, palette, projects, routines, team, todos, agents, liveness, settings — six with SSE stream proxies."
+    },
+    {
+      "id": "backend-facade/audit-merge",
+      "kind": "module",
+      "path": "services/backend-facade/src/backend_facade/audit_routes.py",
+      "summary": "GET /v1/audit: fans out to backend + ai-backend internal audit lists, merge-sorts by created_at with composite base64 cursor and per-stream degradation — the facade's one real aggregation."
+    },
+    {
+      "id": "backend-facade/adapter-routes",
+      "kind": "route-group",
+      "path": "services/backend-facade/src/backend_facade/adapter_registry_routes.py",
+      "summary": "Tier-2 adapter registry submit/promoted/opt-out plus admin review trio; the admin routes are registered by BOTH adapter_registry_routes and adapter_review_routes — the review (touch-authenticated) copies are shadowed dead code."
+    },
+    {
+      "id": "backend-facade/local-models-proxy",
+      "kind": "route-group",
+      "path": "services/backend-facade/src/backend_facade/local_models_routes.py",
+      "summary": "/v1/local-models proxy onto ai-backend: status/list/size/delete JSON plus SSE pull-progress stream for local Ollama models."
+    },
+    {
+      "id": "backend-facade/webhook-ingest",
+      "kind": "route-group",
+      "path": "services/backend-facade/src/backend_facade/routines_webhook_routes.py",
+      "summary": "POST /v1/webhook/routines/{trigger_id}: bearer-free HMAC-secret webhook proxy with byte-exact body forwarding and X-Forwarded-For chain for audit fidelity."
+    },
+    {
+      "id": "backend-facade/wallet-page",
+      "kind": "module",
+      "path": "services/backend-facade/src/backend_facade/wallet_page_routes.py",
+      "summary": "Env-gated static serving of the built frontend wallet.html + /assets so the packaged desktop's SIWE sign-in is same-origin with /v1/auth/siwe/* (FACADE_WEB_DIST_DIR set by the desktop supervisor)."
+    },
+    {
+      "id": "backend-facade/http-pool",
+      "kind": "module",
+      "path": "services/backend-facade/src/backend_facade/http_client.py",
+      "summary": "Lifespan-owned shared httpx.AsyncClient per worker (100 conns / 20 keepalive) amortizing TLS across upstream calls; http_client(app) accessor used by every route."
+    },
+    {
+      "id": "backend-facade/settings-profile",
+      "kind": "module",
+      "path": "services/backend-facade/src/backend_facade/deployment_profile.py",
+      "summary": "FacadeSettings (BACKEND_URL / AI_BACKEND_URL / OTEL collector / web dist dir) plus deployment-profile resolver with per-profile safety toggles and fail-closed boot (exit 78)."
+    },
+    {
+      "id": "backend-facade/observability",
+      "kind": "module",
+      "path": "services/backend-facade/src/backend_facade/observability",
+      "summary": "Redacting JSON structured logging (Pydantic LogEvent, metadata denylist), OTEL bootstrap with SafeAttributeSpanProcessor, pure-ASGI RequestContextMiddleware (request-id propagation, access log), plus /healthz + /readyz."
+    },
+    {
+      "id": "backend-facade/tests",
+      "kind": "module",
+      "path": "services/backend-facade/tests",
+      "summary": "33 files / 207 tests: per-module proxy behavior, tenant isolation, session binding + touch cache, deployment profile, observability redaction, IdP ramps (SAML/SIWE/Google/SCIM), public route contract."
+    }
+  ],
+  "edges": [
+    {
+      "from": "backend-facade/app-core",
+      "to": "backend-facade/auth",
+      "kind": "import",
+      "label": "authenticate_request + service headers on every inline handler",
+      "evidence": "services/backend-facade/src/backend_facade/app.py:14"
+    },
+    {
+      "from": "backend-facade/app-core",
+      "to": "backend-facade/http-pool",
+      "kind": "import",
+      "label": "HttpClientPool.attach + http_client(app)",
+      "evidence": "services/backend-facade/src/backend_facade/app.py:39,122"
+    },
+    {
+      "from": "backend-facade/app-core",
+      "to": "backend-facade/settings-profile",
+      "kind": "import",
+      "label": "resolve_or_exit deployment profile at boot",
+      "evidence": "services/backend-facade/src/backend_facade/app.py:106"
+    },
+    {
+      "from": "backend-facade/app-core",
+      "to": "backend-facade/observability",
+      "kind": "import",
+      "label": "RequestContextMiddleware + TelemetryBootstrap + configure_logging",
+      "evidence": "services/backend-facade/src/backend_facade/app.py:49-56,112-114"
+    },
+    {
+      "from": "backend-facade/auth",
+      "to": "backend-identity",
+      "kind": "http",
+      "label": "POST /internal/v1/auth/sessions/touch + /internal/v1/auth/api-keys/verify",
+      "evidence": "services/backend-facade/src/backend_facade/auth.py:267-276,321-335"
+    },
+    {
+      "from": "backend-facade/auth-routes",
+      "to": "backend-identity",
+      "kind": "http",
+      "label": "/internal/v1/auth/* (OIDC, SAML, SIWE, password, magic-link, MFA, sessions)",
+      "evidence": "services/backend-facade/src/backend_facade/auth_routes.py:59,162,243,339,464"
+    },
+    {
+      "from": "backend-facade/me-workspace-routes",
+      "to": "backend-product",
+      "kind": "http",
+      "label": "/internal/v1/{me,workspace,policies}/*",
+      "evidence": "services/backend-facade/src/backend_facade/me_routes.py:323,366,415"
+    },
+    {
+      "from": "backend-facade/me-workspace-routes",
+      "to": "backend-identity",
+      "kind": "http",
+      "label": "SCIM proxy to /internal/v1/auth/scim/resource/*",
+      "evidence": "services/backend-facade/src/backend_facade/scim_routes.py:76"
+    },
+    {
+      "from": "backend-facade/destination-proxies",
+      "to": "backend-product",
+      "kind": "http",
+      "label": "/v1/{tools,connectors,inbox,home,library,memory,palette,projects,routines,team,todos,agents,settings} + /internal/v1/liveness",
+      "evidence": "services/backend-facade/src/backend_facade/tool_routes.py:100"
+    },
+    {
+      "from": "backend-facade/destination-proxies",
+      "to": "backend-product",
+      "kind": "sse",
+      "label": "byte-for-byte stream proxies with Last-Event-ID passthrough",
+      "evidence": "services/backend-facade/src/backend_facade/connector_routes.py:120-149"
+    },
+    {
+      "from": "backend-facade/app-core",
+      "to": "backend-platform",
+      "kind": "http",
+      "label": "/v1/mcp/*, /v1/skills/*, /v1/dev/* proxies",
+      "evidence": "services/backend-facade/src/backend_facade/app.py:244,910,1416-1422"
+    },
+    {
+      "from": "backend-facade/app-core",
+      "to": "ai-runtime-api",
+      "kind": "http",
+      "label": "/v1/agent/* conversations, runs, drafts, shares, usage, budgets + /internal/v1/skills/system",
+      "evidence": "services/backend-facade/src/backend_facade/app.py:395-402,938,1133"
+    },
+    {
+      "from": "backend-facade/app-core",
+      "to": "ai-runtime-api",
+      "kind": "sse",
+      "label": "GET /v1/agent/runs/{id}/stream pass-through",
+      "evidence": "services/backend-facade/src/backend_facade/app.py:1040-1069"
+    },
+    {
+      "from": "backend-facade/local-models-proxy",
+      "to": "ai-runtime-api",
+      "kind": "http",
+      "label": "/v1/local-models JSON + SSE pull-progress",
+      "evidence": "services/backend-facade/src/backend_facade/local_models_routes.py:53,110"
+    },
+    {
+      "from": "backend-facade/audit-merge",
+      "to": "backend-product",
+      "kind": "http",
+      "label": "GET /internal/v1/audit/list (4 streams)",
+      "evidence": "services/backend-facade/src/backend_facade/audit_routes.py:126"
+    },
+    {
+      "from": "backend-facade/audit-merge",
+      "to": "ai-runtime-api",
+      "kind": "http",
+      "label": "GET /internal/v1/audit/list (runtime_audit_log)",
+      "evidence": "services/backend-facade/src/backend_facade/audit_routes.py:132"
+    },
+    {
+      "from": "backend-facade/adapter-routes",
+      "to": "backend-product",
+      "kind": "http",
+      "label": "/internal/v1/adapter_registry/* submit, promoted, opt-out, admin review",
+      "evidence": "services/backend-facade/src/backend_facade/adapter_registry_routes.py:29,93"
+    },
+    {
+      "from": "backend-facade/webhook-ingest",
+      "to": "backend-product",
+      "kind": "http",
+      "label": "POST /v1/webhook/routines/{trigger_id} byte-exact body",
+      "evidence": "services/backend-facade/src/backend_facade/routines_webhook_routes.py:62-68"
+    },
+    {
+      "from": "backend-facade/app-core",
+      "to": "external:otel-collector",
+      "kind": "http",
+      "label": "browser OTLP trace relay POST /v1/telemetry/otlp/v1/traces",
+      "evidence": "services/backend-facade/src/backend_facade/app.py:188-193"
+    },
+    {
+      "from": "backend-facade/observability",
+      "to": "external:otel-collector",
+      "kind": "http",
+      "label": "OTLP gRPC span + metric export",
+      "evidence": "services/backend-facade/src/backend_facade/observability/otel.py:149-162"
+    },
+    {
+      "from": "backend-facade/auth",
+      "to": "shared-packages",
+      "kind": "contract",
+      "label": "copilot_service_contracts headers + auth_claims constants",
+      "evidence": "services/backend-facade/src/backend_facade/auth.py:18-30"
+    },
+    {
+      "from": "backend-facade/settings-profile",
+      "to": "shared-packages",
+      "kind": "contract",
+      "label": "deployment_profile constants (ALLOWED_PROFILES, env name)",
+      "evidence": "services/backend-facade/src/backend_facade/deployment_profile.py:20-24"
+    },
+    {
+      "from": "frontend-web",
+      "to": "backend-facade/app-core",
+      "kind": "http",
+      "label": "all /v1/* API calls via Vite proxy / nginx to :8200",
+      "evidence": "apps/frontend/vite.config.ts:29"
+    },
+    {
+      "from": "desktop-app",
+      "to": "backend-facade/wallet-page",
+      "kind": "env",
+      "label": "supervisor sets FACADE_WEB_DIST_DIR; opens {facade}/wallet.html for SIWE",
+      "evidence": "apps/desktop/main/services/service-env.ts:242"
+    },
+    {
+      "from": "desktop-app",
+      "to": "backend-facade/app-core",
+      "kind": "spawn",
+      "label": "supervised facade process in packaged desktop boot",
+      "evidence": "apps/desktop/main/services/desktop-supervisor.ts:82"
+    },
+    {
+      "from": "chat-surface-core",
+      "to": "backend-facade/app-core",
+      "kind": "sse",
+      "label": "run event streaming via chat-transport against facade origin",
+      "evidence": "services/backend-facade/src/backend_facade/app.py:1026-1069"
+    },
+    {
+      "from": "build-deploy",
+      "to": "backend-facade/app-core",
+      "kind": "build",
+      "label": "Dockerfile (python:3.14-slim!) + GHCR image in self-host compose",
+      "evidence": "services/backend-facade/Dockerfile:1"
+    }
+  ]
+}

@@ -1,0 +1,336 @@
+{
+  "cluster": {
+    "id": "backend-platform",
+    "title": "Backend — Platform, Audit, MCP registry & Internal API",
+    "kind": "cluster",
+    "paths": [
+      "services/backend/src/backend_app/db",
+      "services/backend/src/backend_app/observability",
+      "services/backend/src/backend_app/siem_export",
+      "services/backend/src/backend_app/jobs",
+      "services/backend/src/backend_app/liveness"
+    ],
+    "md": "docs/audit/clusters/08-backend-platform.md",
+    "summary": "Platform substrate of services/backend: app composition roots, MCP registry + OAuth + skill registry, token vault, tamper-evident audit chains with list/export/SIEM surfaces, DB pool + versioned migrations, observability, background jobs, liveness aggregator, and the whole /internal/v1/* surface consumed by ai-backend and backend-facade. Core registry/vault/chain machinery is healthy and well-tested; the SIEM/audit egress pipeline is façade-only (pump unwired and schema-broken; Postgres audit reads unimplemented) and create_app is a 1,600-line 60-parameter composition root overdue for decomposition."
+  },
+  "nodes": [
+    {
+      "id": "backend-platform/app-composition",
+      "kind": "module",
+      "path": "services/backend/src/backend_app/app.py",
+      "summary": "create_app() composition root: wires ~30 subsystems via ~60 injectable kwargs and registers MCP/skills/internal routes inline; PEP 562 lazy module app."
+    },
+    {
+      "id": "backend-platform/desktop-composition",
+      "kind": "module",
+      "path": "services/backend/src/backend_app/desktop_app.py",
+      "summary": "single_user_desktop composition root: validates 5 required secrets, forces the desktop profile, wires every existing Postgres adapter."
+    },
+    {
+      "id": "backend-platform/deployment-profile",
+      "kind": "module",
+      "path": "services/backend/src/backend_app/deployment_profile.py",
+      "summary": "ENTERPRISE_DEPLOYMENT_PROFILE loader with per-profile feature toggles; fails closed at boot (exit 78); hand-mirrored in facade/ai-backend."
+    },
+    {
+      "id": "backend-platform/mcp-registry-service",
+      "kind": "module",
+      "path": "services/backend/src/backend_app/service.py",
+      "summary": "McpRegistryService: MCP install/CRUD, PKCE OAuth sessions, token refresh, internal cards/client-session/RPC proxy; plus static curated catalog (mcp_catalog.py)."
+    },
+    {
+      "id": "backend-platform/skill-registry",
+      "kind": "module",
+      "path": "services/backend/src/backend_app/service.py",
+      "summary": "SkillRegistryService + SkillMarkdownParser: SKILL.md CRUD, preloaded-skill seeding, internal cards/bundles; ToolCatalogService projection; DeployAuditService."
+    },
+    {
+      "id": "backend-platform/mcp-oauth-client",
+      "kind": "module",
+      "path": "services/backend/src/backend_app/mcp_oauth.py",
+      "summary": "RemoteMcpOAuthClient: RFC 8414/7591 discovery, dynamic client registration, PKCE code/refresh exchange over urllib."
+    },
+    {
+      "id": "backend-platform/stores",
+      "kind": "store",
+      "path": "services/backend/src/backend_app/store.py",
+      "summary": "PostgresConnectionPool (singleton, RLS session vars, statement timeouts) + in-memory/Postgres MCP & skill stores + in-memory-only deploy-audit store; per-org HMAC chain appends under advisory locks."
+    },
+    {
+      "id": "backend-platform/token-vault",
+      "kind": "module",
+      "path": "services/backend/src/backend_app/token_vault.py",
+      "summary": "TokenVault adapter hierarchy: LocalTokenVault (Fernet + legacy XOR fallback) and AwsKmsTokenVault (kms_v1 envelope, decrypt cache, OTel metrics); factory enforces profile fail-closed."
+    },
+    {
+      "id": "backend-platform/contracts",
+      "kind": "module",
+      "path": "services/backend/src/backend_app/contracts.py",
+      "summary": "All Pydantic wire/record contracts for MCP, skills, tokens, audit and identity records (2.5k LOC single module)."
+    },
+    {
+      "id": "backend-platform/service-auth",
+      "kind": "module",
+      "path": "services/backend/src/backend_app/auth.py",
+      "summary": "BackendServiceAuthenticator: ENTERPRISE_SERVICE_TOKEN + x-enterprise-* header identity for internal calls, dev query-param fallback."
+    },
+    {
+      "id": "backend-platform/internal-api",
+      "kind": "route-group",
+      "path": "services/backend/src/backend_app/app.py",
+      "summary": "/internal/v1/* surface: MCP cards/client-session/RPC/test-token, skills cards/bundles, suggestible-connectors, audit deploy — consumed only by ai-backend (and facade for audit/liveness)."
+    },
+    {
+      "id": "backend-platform/audit-read",
+      "kind": "route-group",
+      "path": "services/backend/src/backend_app/audit_reader.py",
+      "summary": "AuditReader 4-stream fan-out with opaque cursor + /internal/v1/audit/list + NDJSON /internal/v1/audit/export; only in-memory stores implement the readers (empty under Postgres)."
+    },
+    {
+      "id": "backend-platform/siem-export",
+      "kind": "module",
+      "path": "services/backend/src/backend_app/siem_export",
+      "summary": "NormalizedEvent + 5 exporters (null/file/splunk_hec/elastic/syslog_cef), cursor-driven async pump, /v1/siem admin pause/resume/replay routes; pump is unwired and its SQL mismatches the audit schema."
+    },
+    {
+      "id": "backend-platform/db-migrations",
+      "kind": "module",
+      "path": "services/backend/src/backend_app/db/migrate.py",
+      "summary": "yoyo-backed MigrationRunner over migrations/*.sql (36 pairs) with MANIFEST.lock sha256 enforcement; scripts/migrate.py operator CLI."
+    },
+    {
+      "id": "backend-platform/pool-metrics",
+      "kind": "module",
+      "path": "services/backend/src/backend_app/db/pool_metrics.py",
+      "summary": "OTel gauges/histograms for the sync psycopg pool; mirrors ai-backend's pool_metrics module."
+    },
+    {
+      "id": "backend-platform/observability",
+      "kind": "module",
+      "path": "services/backend/src/backend_app/observability",
+      "summary": "Typed LogEvent JSON logging with metadata redaction, pure-ASGI request-context middleware, OTel bootstrap with span-attribute denylist processor (production requires OTLP endpoint)."
+    },
+    {
+      "id": "backend-platform/jobs-library-indexer",
+      "kind": "process",
+      "path": "services/backend/src/backend_app/jobs/library_indexer.py",
+      "summary": "Claim→extract→chunk→embed→insert loop over library_index_jobs with retry/backoff and content-hash idempotency; never started by any composition root."
+    },
+    {
+      "id": "backend-platform/liveness",
+      "kind": "module",
+      "path": "services/backend/src/backend_app/liveness",
+      "summary": "LivenessService: is-project-alive aggregation over ai-backend runs/approvals + in-process routines/inbox stores, 2s TTL cache, per-source fail-open; /internal/v1/liveness route."
+    },
+    {
+      "id": "backend-platform/runtime-policies-route",
+      "kind": "route-group",
+      "path": "services/backend/src/backend_app/routes/runtime_policies.py",
+      "summary": "GET /internal/v1/policies/runtime — aggregate tool-use + privacy + decrypted BYOK provider-keys snapshot consumed by ai-backend at run start."
+    },
+    {
+      "id": "backend-platform/ops",
+      "kind": "tool",
+      "path": "services/backend/scripts",
+      "summary": "Operator CLIs: migrate.py, rotate_token_vault.py (KMS re-encrypt), restore_smoke.py, backfill_notification_preferences.py; Dockerfile ships src+migrations+scripts."
+    }
+  ],
+  "edges": [
+    {
+      "from": "backend-platform/app-composition",
+      "to": "backend-platform/mcp-registry-service",
+      "kind": "import",
+      "label": "wires McpRegistryService/SkillRegistryService/ToolCatalog/DeployAudit onto app.state",
+      "evidence": "services/backend/src/backend_app/app.py:270-296"
+    },
+    {
+      "from": "backend-platform/app-composition",
+      "to": "backend-platform/stores",
+      "kind": "import",
+      "label": "PostgresConnectionPool lifecycle (close on shutdown)",
+      "evidence": "services/backend/src/backend_app/app.py:276,309"
+    },
+    {
+      "from": "backend-platform/app-composition",
+      "to": "backend-platform/observability",
+      "kind": "import",
+      "label": "configure_logging + TelemetryBootstrap + RequestContextMiddleware",
+      "evidence": "services/backend/src/backend_app/app.py:110-115,474-483"
+    },
+    {
+      "from": "backend-platform/app-composition",
+      "to": "backend-identity",
+      "kind": "import",
+      "label": "wires identity stores/services (sessions, OIDC, SAML, SCIM, SIWE, MFA, RBAC deps)",
+      "evidence": "services/backend/src/backend_app/app.py:52-109"
+    },
+    {
+      "from": "backend-platform/app-composition",
+      "to": "backend-product",
+      "kind": "import",
+      "label": "wires destination packages (home/inbox/todos/routines/connectors/projects/library/memory/agents/tools/palette/team/settings)",
+      "evidence": "services/backend/src/backend_app/app.py:117-211,1536-2028"
+    },
+    {
+      "from": "backend-platform/desktop-composition",
+      "to": "backend-platform/app-composition",
+      "kind": "import",
+      "label": "DesktopComposer builds create_app kwargs with Postgres adapters",
+      "evidence": "services/backend/src/backend_app/desktop_app.py:44,247-249"
+    },
+    {
+      "from": "backend-platform/mcp-registry-service",
+      "to": "backend-platform/token-vault",
+      "kind": "import",
+      "label": "encrypts/decrypts OAuth tokens + client secrets",
+      "evidence": "services/backend/src/backend_app/service.py:75,536-551"
+    },
+    {
+      "from": "backend-platform/mcp-registry-service",
+      "to": "backend-platform/mcp-oauth-client",
+      "kind": "import",
+      "label": "discovery/registration/token-exchange delegate",
+      "evidence": "services/backend/src/backend_app/service.py:65,171-187"
+    },
+    {
+      "from": "backend-platform/mcp-registry-service",
+      "to": "external:mcp-servers",
+      "kind": "http",
+      "label": "JSON-RPC proxy + OAuth discovery/registration/token exchange to remote MCP servers",
+      "evidence": "services/backend/src/backend_app/service.py:762-789; mcp_oauth.py:448-481"
+    },
+    {
+      "from": "backend-platform/stores",
+      "to": "external:postgres",
+      "kind": "db",
+      "label": "psycopg_pool shared pool; mcp_servers/skills/audit chains; RLS session vars",
+      "evidence": "services/backend/src/backend_app/store.py:174-183,355-379"
+    },
+    {
+      "from": "backend-platform/stores",
+      "to": "shared-packages",
+      "kind": "import",
+      "label": "copilot_audit_chain.AuditChainSigner for HMAC hash-chain signing",
+      "evidence": "services/backend/src/backend_app/store.py:13"
+    },
+    {
+      "from": "backend-platform/service-auth",
+      "to": "shared-packages",
+      "kind": "contract",
+      "label": "copilot_service_contracts headers + scopes constants",
+      "evidence": "services/backend/src/backend_app/auth.py:8-14; app.py:8-16"
+    },
+    {
+      "from": "backend-platform/token-vault",
+      "to": "external:aws-kms",
+      "kind": "http",
+      "label": "boto3 KMS encrypt/decrypt (aws_kms backend)",
+      "evidence": "services/backend/src/backend_app/token_vault.py:374-400"
+    },
+    {
+      "from": "backend-platform/observability",
+      "to": "external:otel-collector",
+      "kind": "http",
+      "label": "OTLP gRPC span + metric export (production fail-closed without endpoint)",
+      "evidence": "services/backend/src/backend_app/observability/otel.py:157-189"
+    },
+    {
+      "from": "backend-platform/liveness",
+      "to": "ai-runtime-api",
+      "kind": "http",
+      "label": "GET /v1/agent/runs + /v1/agent/approvals counts (service-token headers)",
+      "evidence": "services/backend/src/backend_app/liveness/service.py:111-153"
+    },
+    {
+      "from": "backend-platform/siem-export",
+      "to": "ai-runtime-api",
+      "kind": "http",
+      "label": "GET /internal/v1/audit/cursor (runtime audit source for the pump)",
+      "evidence": "services/backend/src/backend_app/siem_export/pump.py:302-320"
+    },
+    {
+      "from": "backend-platform/siem-export",
+      "to": "external:siem",
+      "kind": "http",
+      "label": "Splunk HEC / Elastic _bulk / syslog-CEF exporters",
+      "evidence": "services/backend/src/backend_app/siem_export/exporters.py:80-264"
+    },
+    {
+      "from": "backend-platform/siem-export",
+      "to": "external:postgres",
+      "kind": "db",
+      "label": "siem_export_cursors/dead_letters + raw audit-table reads (raw psycopg.connect, not the pool)",
+      "evidence": "services/backend/src/backend_app/siem_export/pump.py:266-300"
+    },
+    {
+      "from": "backend-platform/jobs-library-indexer",
+      "to": "ai-runtime-api",
+      "kind": "http",
+      "label": "POST /internal/v1/llm/embed (HttpEmbeddingsClient)",
+      "evidence": "services/backend/src/backend_app/jobs/library_indexer.py:196"
+    },
+    {
+      "from": "backend-platform/jobs-library-indexer",
+      "to": "backend-product",
+      "kind": "import",
+      "label": "library store/embeddings/index-jobs ports",
+      "evidence": "services/backend/src/backend_app/jobs/library_indexer.py:43-59"
+    },
+    {
+      "from": "backend-platform/db-migrations",
+      "to": "external:postgres",
+      "kind": "db",
+      "label": "yoyo applies migrations/*.sql under a DB lock",
+      "evidence": "services/backend/src/backend_app/db/migrate.py:43-54"
+    },
+    {
+      "from": "ai-runtime-capabilities",
+      "to": "backend-platform/internal-api",
+      "kind": "http",
+      "label": "MCP cards/client-session/RPC + skill cards/bundles",
+      "evidence": "services/ai-backend/src/agent_runtime/capabilities/mcp/backend_provider.py; capabilities/skills/virtual.py"
+    },
+    {
+      "from": "ai-runtime-api",
+      "to": "backend-platform/internal-api",
+      "kind": "http",
+      "label": "suggestible-connectors at run-create + /internal/v1/policies/runtime at run start",
+      "evidence": "services/ai-backend/src/agent_runtime/api/suggestible_connectors_resolver.py; services/backend/src/backend_app/routes/runtime_policies.py:1-6"
+    },
+    {
+      "from": "backend-facade",
+      "to": "backend-platform/audit-read",
+      "kind": "http",
+      "label": "GET /internal/v1/audit/list (unified audit feed)",
+      "evidence": "services/backend-facade/src/backend_facade/audit_routes.py:126"
+    },
+    {
+      "from": "backend-facade",
+      "to": "backend-platform/liveness",
+      "kind": "http",
+      "label": "GET /internal/v1/liveness/project/{id} proxy",
+      "evidence": "services/backend-facade/src/backend_facade/liveness_routes.py:43"
+    },
+    {
+      "from": "backend-facade",
+      "to": "backend-platform/mcp-registry-service",
+      "kind": "http",
+      "label": "app-facing /v1/mcp/* and /v1/skills/* proxied to backend:8100",
+      "evidence": "services/backend-facade/src/backend_facade/app.py"
+    },
+    {
+      "from": "desktop-app",
+      "to": "backend-platform/desktop-composition",
+      "kind": "spawn",
+      "label": "supervised child: uvicorn backend_app.desktop_app:app against embedded Postgres",
+      "evidence": "services/backend/src/backend_app/desktop_app.py:3-6"
+    },
+    {
+      "from": "build-deploy",
+      "to": "backend-platform/ops",
+      "kind": "build",
+      "label": "Dockerfile installs service-contracts + audit-chain wheels, ships src+migrations+scripts",
+      "evidence": "services/backend/Dockerfile:11-25"
+    }
+  ]
+}

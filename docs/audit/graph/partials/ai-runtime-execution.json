@@ -1,0 +1,350 @@
+{
+  "cluster": {
+    "id": "ai-runtime-execution",
+    "title": "AI Runtime — Execution Core",
+    "kind": "cluster",
+    "paths": [
+      "services/ai-backend/src/agent_runtime/execution",
+      "services/ai-backend/src/agent_runtime/delegation",
+      "services/ai-backend/src/agent_runtime/context",
+      "services/ai-backend/src/agent_runtime/prompts",
+      "services/ai-backend/src/agent_runtime/budgets",
+      "services/ai-backend/src/agent_runtime/pricing",
+      "services/ai-backend/src/agent_runtime/deployment"
+    ],
+    "md": "docs/audit/clusters/01-ai-runtime-execution.md",
+    "summary": "Domain heart of ai-backend: the runtime factory that assembles a Deep Agents/LangGraph harness from injected capability ports, plus model resolution and depth budgets, prompt assembly, tool-error policy, in-process subagent delegation, memory routing/compression, run-budget preflight/charging, LiteLLM-vendored pricing, and deployment-profile toggles. Well-engineered contract-first core with a visible layer of dead machinery (async subagent lifecycle, unread depth-scaled tool budget) and prompt-vs-enforcement SSOT drift."
+  },
+  "nodes": [
+    {
+      "id": "ai-runtime-execution/contracts",
+      "kind": "module",
+      "path": "services/ai-backend/src/agent_runtime/execution/contracts.py",
+      "summary": "Frozen Pydantic contract layer (AgentRuntimeContext, RuntimeDependencies, ModelConfig, StreamEvent, error envelopes) + ports.py protocols and typed AgentRuntimeError; consumed service-wide."
+    },
+    {
+      "id": "ai-runtime-execution/factory",
+      "kind": "module",
+      "path": "services/ai-backend/src/agent_runtime/execution/factory.py",
+      "summary": "acreate_agent_runtime: 5-way parallel capability listing, prompt assembly, CompositeBackend routing, HITL permission wiring, policy model-kwargs, deep-agent builder kickoff; graph.py langgraph.json shim."
+    },
+    {
+      "id": "ai-runtime-execution/deep-agent-builder",
+      "kind": "module",
+      "path": "services/ai-backend/src/agent_runtime/execution/deep_agent_builder.py",
+      "summary": "Single funnel for create_deep_agent and init_chat_model/init_embeddings; harness-profile registration, checkpointer singleton (InMemory or desktop AsyncSqlite), OpenAI-compat registry (OpenRouter/Ollama), workspace/user policy kwargs."
+    },
+    {
+      "id": "ai-runtime-execution/invocation",
+      "kind": "module",
+      "path": "services/ai-backend/src/agent_runtime/execution/runtime.py",
+      "summary": "Traced ainvoke/astream/resume helpers over the harness plus LangGraph config builder (thread_id=run_id, hashed identity metadata)."
+    },
+    {
+      "id": "ai-runtime-execution/model-resolution",
+      "kind": "module",
+      "path": "services/ai-backend/src/agent_runtime/execution/models.py",
+      "summary": "ModelConfigResolver: provider normalization/inference, BYOK-aware credential gate, defaults merge; depth.py Fast/Balanced/Deep multiplier table applied exactly once."
+    },
+    {
+      "id": "ai-runtime-execution/tool-error-stack",
+      "kind": "module",
+      "path": "services/ai-backend/src/agent_runtime/execution/tool_error_policy.py",
+      "summary": "SURFACE_TO_LLM vs FAIL_RUN classification, regex sanitizer stripping paths/IDs/secrets from exception text, structured hint extraction, terminal ToolOutcome enum."
+    },
+    {
+      "id": "ai-runtime-execution/citation-adapters",
+      "kind": "module",
+      "path": "services/ai-backend/src/agent_runtime/execution/providers",
+      "summary": "Per-provider (Anthropic/OpenAI Responses/Gemini grounding) native-citation stream adapters behind CitationStreamPipeline; no-op fallback for other providers."
+    },
+    {
+      "id": "ai-runtime-execution/subagent-delegation",
+      "kind": "module",
+      "path": "services/ai-backend/src/agent_runtime/delegation/subagents",
+      "summary": "atlas_task_tool monkey-patch of deepagents' task tool for deterministic supervisor_task_call_id linkage; DynamicSubagentCatalog with permission visibility; SubagentDefinition + fs-permission contracts."
+    },
+    {
+      "id": "ai-runtime-execution/subagent-async-lifecycle",
+      "kind": "module",
+      "path": "services/ai-backend/src/agent_runtime/delegation/subagents/runner.py",
+      "summary": "Start/check/update/cancel async task state machine + handoff builder over a SubagentRunner protocol — no production consumer (test-only dead code, finding F2)."
+    },
+    {
+      "id": "ai-runtime-execution/memory",
+      "kind": "module",
+      "path": "services/ai-backend/src/agent_runtime/context/memory",
+      "summary": "Scoped memory route planning (/memories, /policies, /skills), read/write policy with user toggle and phrase-list injection guard, inline/offload/summarize compression, chars/4 token estimator."
+    },
+    {
+      "id": "ai-runtime-execution/subagent-trace",
+      "kind": "module",
+      "path": "services/ai-backend/src/agent_runtime/context/memory/subagent_trace.py",
+      "summary": "Read-only Deep Agents backend projecting runtime_events into virtual /subagents/<task_id>/ files (conversation, tool_calls, summary, events.jsonl); imports runtime_api.schemas (layering inversion, F3)."
+    },
+    {
+      "id": "ai-runtime-execution/prompts",
+      "kind": "module",
+      "path": "services/ai-backend/src/agent_runtime/prompts",
+      "summary": "Supervisor DEFAULT_INSTRUCTIONS, MCP/skill card prompt blocks, builtin tool description strings (re-exported via capabilities constants)."
+    },
+    {
+      "id": "ai-runtime-execution/budgets",
+      "kind": "module",
+      "path": "services/ai-backend/src/agent_runtime/budgets",
+      "summary": "Pre-run Allow/Warn/Deny preflight with TTL reservations, post-run CAS charge idempotent on run_id, conservative cost estimator, UTC period window math."
+    },
+    {
+      "id": "ai-runtime-execution/pricing",
+      "kind": "module",
+      "path": "services/ai-backend/src/agent_runtime/pricing",
+      "summary": "Integer micro-USD CostCalculator, LRU pricing catalog cache, vendored LiteLLM JSON ingestion + YAML seeds/overrides, idempotent upsert planner, sanity-bounded 24h refresh loop, seed-diff CLI."
+    },
+    {
+      "id": "ai-runtime-execution/deployment-profile",
+      "kind": "module",
+      "path": "services/ai-backend/src/agent_runtime/deployment/profile.py",
+      "summary": "ENTERPRISE_DEPLOYMENT_PROFILE → frozen safety toggles matrix (RLS, KMS vault, SIEM, self-signup, pricing source) with fail-closed boot; duplicated per-service by design."
+    }
+  ],
+  "edges": [
+    {
+      "from": "ai-runtime-execution/factory",
+      "to": "ai-runtime-execution/contracts",
+      "kind": "import",
+      "label": "validates AgentRuntimeContext / RuntimeDependencies",
+      "evidence": "services/ai-backend/src/agent_runtime/execution/factory.py:13"
+    },
+    {
+      "from": "ai-runtime-execution/factory",
+      "to": "ai-runtime-execution/deep-agent-builder",
+      "kind": "import",
+      "label": "DeepAgentBuildRequest → build_deep_agent",
+      "evidence": "services/ai-backend/src/agent_runtime/execution/factory.py:24-33"
+    },
+    {
+      "from": "ai-runtime-execution/factory",
+      "to": "ai-runtime-execution/subagent-delegation",
+      "kind": "import",
+      "label": "install_atlas_task_tool() at module import",
+      "evidence": "services/ai-backend/src/agent_runtime/execution/factory.py:64-72"
+    },
+    {
+      "from": "ai-runtime-execution/factory",
+      "to": "ai-runtime-execution/prompts",
+      "kind": "import",
+      "label": "DEFAULT_INSTRUCTIONS + card blocks",
+      "evidence": "services/ai-backend/src/agent_runtime/execution/factory.py:58-63"
+    },
+    {
+      "from": "ai-runtime-execution/invocation",
+      "to": "ai-runtime-execution/factory",
+      "kind": "import",
+      "label": "RuntimeHarness",
+      "evidence": "services/ai-backend/src/agent_runtime/execution/runtime.py:14"
+    },
+    {
+      "from": "ai-runtime-execution/model-resolution",
+      "to": "ai-runtime-execution/deep-agent-builder",
+      "kind": "import",
+      "label": "OpenAICompatibleProviders keyless/credential gate",
+      "evidence": "services/ai-backend/src/agent_runtime/execution/models.py:15"
+    },
+    {
+      "from": "ai-runtime-execution/budgets",
+      "to": "ai-runtime-execution/pricing",
+      "kind": "import",
+      "label": "estimator reuses CostCalculator",
+      "evidence": "services/ai-backend/src/agent_runtime/budgets/estimator.py:22"
+    },
+    {
+      "from": "ai-runtime-execution/pricing",
+      "to": "ai-runtime-execution/deployment-profile",
+      "kind": "import",
+      "label": "refresh loop self-disables on yaml primary source",
+      "evidence": "services/ai-backend/src/agent_runtime/pricing/refresh_loop.py:23-26"
+    },
+    {
+      "from": "ai-runtime-execution/factory",
+      "to": "ai-runtime-capabilities",
+      "kind": "import",
+      "label": "MCP loader/middleware, skills, builtin tools, display wrapper",
+      "evidence": "services/ai-backend/src/agent_runtime/execution/factory.py:35-57"
+    },
+    {
+      "from": "ai-runtime-execution/citation-adapters",
+      "to": "ai-runtime-capabilities",
+      "kind": "import",
+      "label": "CitationLedger / SourceRef",
+      "evidence": "services/ai-backend/src/agent_runtime/execution/providers/anthropic_stream_adapter.py:34"
+    },
+    {
+      "from": "ai-runtime-execution/budgets",
+      "to": "ai-runtime-persistence",
+      "kind": "import",
+      "label": "Budget*/ChargeOutcome records",
+      "evidence": "services/ai-backend/src/agent_runtime/budgets/enforcer.py:28-34"
+    },
+    {
+      "from": "ai-runtime-execution/pricing",
+      "to": "ai-runtime-persistence",
+      "kind": "import",
+      "label": "ModelPricingRecord",
+      "evidence": "services/ai-backend/src/agent_runtime/pricing/litellm_source.py:24"
+    },
+    {
+      "from": "ai-runtime-execution/subagent-trace",
+      "to": "ai-runtime-api",
+      "kind": "import",
+      "label": "runtime_api.schemas + agent_runtime.api.ports (layering inversion F3)",
+      "evidence": "services/ai-backend/src/agent_runtime/context/memory/subagent_trace.py:30-38"
+    },
+    {
+      "from": "ai-runtime-execution/pricing",
+      "to": "ai-runtime-api",
+      "kind": "import",
+      "label": "PersistencePort from agent_runtime.api.ports",
+      "evidence": "services/ai-backend/src/agent_runtime/pricing/upsert_planner.py:15"
+    },
+    {
+      "from": "ai-runtime-execution/deployment-profile",
+      "to": "shared-packages",
+      "kind": "import",
+      "label": "copilot_service_contracts.deployment_profile constants",
+      "evidence": "services/ai-backend/src/agent_runtime/deployment/profile.py:18-22"
+    },
+    {
+      "from": "ai-runtime-execution/deep-agent-builder",
+      "to": "external:deepagents",
+      "kind": "import",
+      "label": "create_deep_agent / HarnessProfile / CompositeBackend / FilesystemPermission",
+      "evidence": "services/ai-backend/src/agent_runtime/execution/deep_agent_builder.py:9"
+    },
+    {
+      "from": "ai-runtime-execution/subagent-delegation",
+      "to": "external:deepagents",
+      "kind": "import",
+      "label": "monkey-patches _build_task_tool for supervisor_task_call_id",
+      "evidence": "services/ai-backend/src/agent_runtime/delegation/subagents/atlas_task_tool.py:286-292"
+    },
+    {
+      "from": "ai-runtime-execution/deep-agent-builder",
+      "to": "external:openai",
+      "kind": "http",
+      "label": "ChatOpenAI (native + OpenRouter/Ollama gateways via base_url)",
+      "evidence": "services/ai-backend/src/agent_runtime/execution/deep_agent_builder.py:376-423"
+    },
+    {
+      "from": "ai-runtime-execution/deep-agent-builder",
+      "to": "external:anthropic",
+      "kind": "http",
+      "label": "ChatAnthropic with extended-thinking kwargs",
+      "evidence": "services/ai-backend/src/agent_runtime/execution/deep_agent_builder.py:494-520"
+    },
+    {
+      "from": "ai-runtime-execution/deep-agent-builder",
+      "to": "external:ollama",
+      "kind": "http",
+      "label": "keyless local endpoint http://localhost:11434/v1 (OLLAMA_BASE_URL)",
+      "evidence": "services/ai-backend/src/agent_runtime/execution/openai_compat.py:104-128"
+    },
+    {
+      "from": "ai-runtime-execution/deep-agent-builder",
+      "to": "external:sqlite",
+      "kind": "file",
+      "label": "AsyncSqliteSaver at <RUNTIME_FILE_STORE_ROOT>/index/checkpoints.sqlite3",
+      "evidence": "services/ai-backend/src/agent_runtime/execution/deep_agent_builder.py:339-349"
+    },
+    {
+      "from": "ai-runtime-execution/deep-agent-builder",
+      "to": "external:litellm",
+      "kind": "file",
+      "label": "vendored model_prices.json pricing catalog (via pricing module)",
+      "evidence": "services/ai-backend/src/agent_runtime/pricing/litellm_source.py:29-31"
+    },
+    {
+      "from": "ai-runtime-worker",
+      "to": "ai-runtime-execution/factory",
+      "kind": "import",
+      "label": "run handler builds harness via acreate_agent_runtime",
+      "evidence": "services/ai-backend/src/runtime_worker/handlers/run.py:71"
+    },
+    {
+      "from": "ai-runtime-worker",
+      "to": "ai-runtime-execution/invocation",
+      "kind": "import",
+      "label": "astream_runtime / astream_runtime_resume drive LangGraph",
+      "evidence": "services/ai-backend/src/runtime_worker/handlers/approval.py:41"
+    },
+    {
+      "from": "ai-runtime-worker",
+      "to": "ai-runtime-execution/budgets",
+      "kind": "import",
+      "label": "preflight + post-run charge in run handler",
+      "evidence": "services/ai-backend/src/runtime_worker/handlers/run.py:1429"
+    },
+    {
+      "from": "ai-runtime-worker",
+      "to": "ai-runtime-execution/citation-adapters",
+      "kind": "import",
+      "label": "CitationStreamPipeline in streaming executor",
+      "evidence": "services/ai-backend/src/runtime_worker/streaming_executor.py:1"
+    },
+    {
+      "from": "ai-runtime-worker",
+      "to": "ai-runtime-execution/memory",
+      "kind": "import",
+      "label": "ContextPayloadManager for tool-result offload; memory factory wiring",
+      "evidence": "services/ai-backend/src/runtime_worker/tool_result_offload.py:26"
+    },
+    {
+      "from": "ai-runtime-api",
+      "to": "ai-runtime-execution/contracts",
+      "kind": "import",
+      "label": "run schemas embed ModelConfig/ReasoningDepth; coordinators consume contracts",
+      "evidence": "services/ai-backend/src/runtime_api/schemas/runs.py:163-209"
+    },
+    {
+      "from": "ai-runtime-api",
+      "to": "ai-runtime-execution/deployment-profile",
+      "kind": "import",
+      "label": "app startup resolves profile fail-closed",
+      "evidence": "services/ai-backend/src/runtime_api/app.py:1"
+    },
+    {
+      "from": "ai-runtime-persistence",
+      "to": "ai-runtime-execution/budgets",
+      "kind": "import",
+      "label": "adapters use BudgetReservationManager.expires_at TTL",
+      "evidence": "services/ai-backend/src/runtime_adapters/postgres/runtime_api_store.py:3365-3370"
+    },
+    {
+      "from": "ai-runtime-persistence",
+      "to": "ai-runtime-execution/subagent-delegation",
+      "kind": "import",
+      "label": "file store loads SubagentDefinition JSON via DynamicSubagentCatalog",
+      "evidence": "services/ai-backend/src/runtime_adapters/file/agent_state_store.py:525"
+    },
+    {
+      "from": "build-deploy",
+      "to": "ai-runtime-execution/factory",
+      "kind": "build",
+      "label": "langgraph.json exports execution/graph.py:create_graph",
+      "evidence": "services/ai-backend/langgraph.json:4"
+    },
+    {
+      "from": "ai-runtime-execution/deployment-profile",
+      "to": "ai-runtime-execution/deployment-profile",
+      "kind": "env",
+      "label": "ENTERPRISE_DEPLOYMENT_PROFILE / RUNTIME_ENVIRONMENT / DEV_AUTH_BYPASS consistency",
+      "evidence": "services/ai-backend/src/agent_runtime/deployment/profile.py:145-187"
+    },
+    {
+      "from": "ai-runtime-execution/model-resolution",
+      "to": "ai-runtime-execution/contracts",
+      "kind": "contract",
+      "label": "ReasoningDepth string values are the wire contract mirrored in api-types",
+      "evidence": "services/ai-backend/src/agent_runtime/execution/depth.py:29-38"
+    }
+  ]
+}

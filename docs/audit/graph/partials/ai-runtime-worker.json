@@ -1,0 +1,341 @@
+{
+  "cluster": {
+    "id": "ai-runtime-worker",
+    "title": "AI Runtime — Worker & Streaming Executor",
+    "kind": "cluster",
+    "paths": ["services/ai-backend/src/runtime_worker"],
+    "md": "docs/audit/clusters/05-ai-runtime-worker.md",
+    "summary": "Separate process (also runnable in-process in the API) that claims queued run/cancel/approval commands, drives LangGraph execution, and projects raw stream chunks into typed RuntimeEventEnvelope records with monotonic sequence_no, plus per-run usage/budget/audit accounting and desktop-gated capability wiring. Hot path is strong and heavily tested; ~3.2k LOC of jobs/ (routines, todo/proposal extractors, approval expiry) are built and tested but started by no entrypoint, and the approval-resume path has drifted from the run path (no usage/audit/budget/timeout)."
+  },
+  "nodes": [
+    {
+      "id": "ai-runtime-worker/entrypoint",
+      "kind": "process",
+      "path": "services/ai-backend/src/runtime_worker/__main__.py",
+      "summary": "python -m runtime_worker boot: settings, OTel, adapters, MCP cache, BYOK resolver; starts worker + opt-in maintenance loops"
+    },
+    {
+      "id": "ai-runtime-worker/loop",
+      "kind": "module",
+      "path": "services/ai-backend/src/runtime_worker/loop.py",
+      "summary": "Claim/dispatch/complete state machine with retry vs dead-letter and OTel trace re-parenting; strictly serial in run_forever"
+    },
+    {
+      "id": "ai-runtime-worker/run-handler",
+      "kind": "module",
+      "path": "services/ai-backend/src/runtime_worker/handlers/run.py",
+      "summary": "Full run lifecycle: budget preflight, 7 ContextVar capability bindings, harness build, stream, final persistence, usage+audit+budget on completion"
+    },
+    {
+      "id": "ai-runtime-worker/approval-handler",
+      "kind": "module",
+      "path": "services/ai-backend/src/runtime_worker/handlers/approval.py",
+      "summary": "Approval resolution: batch fan-in gate, LangGraph resume, draft-send terminal path; missing usage/audit/budget/timeout vs run path"
+    },
+    {
+      "id": "ai-runtime-worker/cancel-handler",
+      "kind": "module",
+      "path": "services/ai-backend/src/runtime_worker/handlers/cancel.py",
+      "summary": "Owner-checked status flip to CANCELLED + termination event; does not preempt in-flight streams"
+    },
+    {
+      "id": "ai-runtime-worker/streaming-executor",
+      "kind": "module",
+      "path": "services/ai-backend/src/runtime_worker/streaming_executor.py",
+      "summary": "Shared chunk loop for run+resume: per-chunk usage attribution, MODEL_CALL_COMPLETED, delta coalescing, interrupt flagging, citation feed"
+    },
+    {
+      "id": "ai-runtime-worker/stream-projection",
+      "kind": "module",
+      "path": "services/ai-backend/src/runtime_worker/stream_events.py",
+      "summary": "Orchestrator + message/update/custom processors projecting LangGraph chunks into typed events; approval-batch insertion and consent-card synthesis"
+    },
+    {
+      "id": "ai-runtime-worker/approval-recognisers",
+      "kind": "module",
+      "path": "services/ai-backend/src/runtime_worker/approval_recognisers.py",
+      "summary": "Vendor-specific (Slack/GitHub/Linear/Notion/Atlassian) consent-card param projection and reversibility opinions"
+    },
+    {
+      "id": "ai-runtime-worker/tool-bookkeeping",
+      "kind": "module",
+      "path": "services/ai-backend/src/runtime_worker/tool_call_ledger.py",
+      "summary": "In-flight tool-call ledger (reconciliation, attribution, budget counts), cross-turn tool-observation prompt context, oversized-result offload"
+    },
+    {
+      "id": "ai-runtime-worker/run-metrics",
+      "kind": "module",
+      "path": "services/ai-backend/src/runtime_worker/run_metrics.py",
+      "summary": "Run-level + per-LLM-call token accumulation with attribution; materializes usage records"
+    },
+    {
+      "id": "ai-runtime-worker/audit",
+      "kind": "module",
+      "path": "services/ai-backend/src/runtime_worker/audit.py",
+      "summary": "Typed fail-soft audit rows for run lifecycle, approval decisions, tool outcomes, forks; also imported by agent_runtime (inversion)"
+    },
+    {
+      "id": "ai-runtime-worker/dependencies-factory",
+      "kind": "module",
+      "path": "services/ai-backend/src/runtime_worker/dependencies.py",
+      "summary": "Default RuntimeDependencies graph: layered tool registries, backend MCP/skill providers, browser gate, file-store wiring, discovery cache"
+    },
+    {
+      "id": "ai-runtime-worker/desktop-wiring",
+      "kind": "module",
+      "path": "services/ai-backend/src/runtime_worker/workspace_backend_wiring.py",
+      "summary": "Env-gated desktop seams: Monty/sandbox tools, file-store offloader + read backends, broker-granted /workspace/ backend with snapshot emitter"
+    },
+    {
+      "id": "ai-runtime-worker/maintenance-loops",
+      "kind": "module",
+      "path": "services/ai-backend/src/runtime_worker/usage_rollup_loop.py",
+      "summary": "Wired periodic jobs: usage rollups (5 dimensions), retention sweeper (opt-in), retention backfill (one-shot)"
+    },
+    {
+      "id": "ai-runtime-worker/unwired-jobs",
+      "kind": "module",
+      "path": "services/ai-backend/src/runtime_worker/jobs/routine_scheduler.py",
+      "summary": "DORMANT ~3.2k LOC: routine scheduler + pre-fire gate, todo/proposal extractors, todo recurrence materializer, approval expiry sweeper — tests are the only consumers"
+    },
+    {
+      "id": "ai-runtime-worker/encryption-backfill",
+      "kind": "module",
+      "path": "services/ai-backend/src/runtime_worker/jobs/encrypt_existing_columns.py",
+      "summary": "Operator re-encryption of encryption_version=0 rows via direct psycopg; referenced by scripts/count_unencrypted_rows.py"
+    }
+  ],
+  "edges": [
+    {
+      "from": "ai-runtime-worker/entrypoint",
+      "to": "ai-runtime-worker/loop",
+      "kind": "import",
+      "label": "constructs RuntimeWorker and runs run_forever",
+      "evidence": "services/ai-backend/src/runtime_worker/__main__.py:70-181"
+    },
+    {
+      "from": "ai-runtime-worker/entrypoint",
+      "to": "ai-runtime-worker/maintenance-loops",
+      "kind": "import",
+      "label": "starts rollup/retention loops behind env gates",
+      "evidence": "services/ai-backend/src/runtime_worker/__main__.py:91-178"
+    },
+    {
+      "from": "ai-runtime-worker/loop",
+      "to": "ai-runtime-worker/run-handler",
+      "kind": "import",
+      "label": "dispatch RUN_REQUESTED",
+      "evidence": "services/ai-backend/src/runtime_worker/loop.py:222-225"
+    },
+    {
+      "from": "ai-runtime-worker/loop",
+      "to": "ai-runtime-worker/approval-handler",
+      "kind": "import",
+      "label": "dispatch APPROVAL_RESOLVED",
+      "evidence": "services/ai-backend/src/runtime_worker/loop.py:230-233"
+    },
+    {
+      "from": "ai-runtime-worker/loop",
+      "to": "ai-runtime-worker/cancel-handler",
+      "kind": "import",
+      "label": "dispatch RUN_CANCEL_REQUESTED",
+      "evidence": "services/ai-backend/src/runtime_worker/loop.py:226-229"
+    },
+    {
+      "from": "ai-runtime-worker/run-handler",
+      "to": "ai-runtime-worker/streaming-executor",
+      "kind": "import",
+      "label": "StreamingExecutor.run under asyncio.timeout",
+      "evidence": "services/ai-backend/src/runtime_worker/handlers/run.py:1302-1325"
+    },
+    {
+      "from": "ai-runtime-worker/approval-handler",
+      "to": "ai-runtime-worker/streaming-executor",
+      "kind": "import",
+      "label": "resume streaming (no timeout)",
+      "evidence": "services/ai-backend/src/runtime_worker/handlers/approval.py:561-575"
+    },
+    {
+      "from": "ai-runtime-worker/streaming-executor",
+      "to": "ai-runtime-worker/stream-projection",
+      "kind": "import",
+      "label": "append_activity_events / stream_delta per chunk",
+      "evidence": "services/ai-backend/src/runtime_worker/streaming_executor.py:315-335"
+    },
+    {
+      "from": "ai-runtime-worker/stream-projection",
+      "to": "ai-runtime-worker/approval-recognisers",
+      "kind": "import",
+      "label": "vendor consent-card params + reversibility",
+      "evidence": "services/ai-backend/src/runtime_worker/stream_events.py:972-1037"
+    },
+    {
+      "from": "ai-runtime-worker/stream-projection",
+      "to": "ai-runtime-worker/tool-bookkeeping",
+      "kind": "import",
+      "label": "per-run ToolCallLedger + result offload",
+      "evidence": "services/ai-backend/src/runtime_worker/stream_tools.py:22-23,100-107"
+    },
+    {
+      "from": "ai-runtime-worker/run-handler",
+      "to": "ai-runtime-worker/dependencies-factory",
+      "kind": "import",
+      "label": "default RuntimeDependencies per run",
+      "evidence": "services/ai-backend/src/runtime_worker/handlers/run.py:188-193"
+    },
+    {
+      "from": "ai-runtime-worker/run-handler",
+      "to": "ai-runtime-worker/desktop-wiring",
+      "kind": "import",
+      "label": "file-store / workspace / capability tool wiring per run",
+      "evidence": "services/ai-backend/src/runtime_worker/handlers/run.py:813-900,951-964"
+    },
+    {
+      "from": "ai-runtime-worker/run-handler",
+      "to": "ai-runtime-worker/run-metrics",
+      "kind": "import",
+      "label": "AssistantRunMetrics accumulation + usage records",
+      "evidence": "services/ai-backend/src/runtime_worker/handlers/run.py:276,701-732"
+    },
+    {
+      "from": "ai-runtime-worker/run-handler",
+      "to": "ai-runtime-worker/audit",
+      "kind": "import",
+      "label": "run lifecycle audit rows",
+      "evidence": "services/ai-backend/src/runtime_worker/handlers/run.py:218,274"
+    },
+    {
+      "from": "ai-runtime-worker/run-handler",
+      "to": "ai-runtime-execution",
+      "kind": "import",
+      "label": "acreate_agent_runtime + astream_runtime drive LangGraph",
+      "evidence": "services/ai-backend/src/runtime_worker/handlers/run.py:66-71"
+    },
+    {
+      "from": "ai-runtime-worker/run-handler",
+      "to": "ai-runtime-capabilities",
+      "kind": "import",
+      "label": "citation ledger/resolver, ordinals, tool budgets, MCP discovery",
+      "evidence": "services/ai-backend/src/runtime_worker/handlers/run.py:21-28,50-53"
+    },
+    {
+      "from": "ai-runtime-worker/run-handler",
+      "to": "ai-runtime-api",
+      "kind": "contract",
+      "label": "RuntimeEventProducer + runtime_api.schemas command/record contracts",
+      "evidence": "services/ai-backend/src/runtime_worker/handlers/run.py:36-37,80-87"
+    },
+    {
+      "from": "ai-runtime-worker/entrypoint",
+      "to": "ai-runtime-persistence",
+      "kind": "import",
+      "label": "RuntimeAdapterFactory.from_settings(role=worker) + migrate",
+      "evidence": "services/ai-backend/src/runtime_worker/__main__.py:48-50"
+    },
+    {
+      "from": "ai-runtime-worker/entrypoint",
+      "to": "external:postgres",
+      "kind": "db",
+      "label": "store backend (postgres role connections) via adapters",
+      "evidence": "services/ai-backend/src/runtime_worker/__main__.py:128-138"
+    },
+    {
+      "from": "ai-runtime-worker/entrypoint",
+      "to": "backend-identity",
+      "kind": "http",
+      "label": "BYOK per-user provider-key snapshot at claim time",
+      "evidence": "services/ai-backend/src/runtime_worker/__main__.py:64-69"
+    },
+    {
+      "from": "ai-runtime-worker/dependencies-factory",
+      "to": "backend-platform",
+      "kind": "http",
+      "label": "BackendMcpProvider + BackendSkillProvider over internal lane",
+      "evidence": "services/ai-backend/src/runtime_worker/dependencies.py:295-308,340-348"
+    },
+    {
+      "from": "ai-runtime-worker/dependencies-factory",
+      "to": "external:duckduckgo",
+      "kind": "http",
+      "label": "default web_search tool (DuckDuckGoSearchResults + retry)",
+      "evidence": "services/ai-backend/src/runtime_worker/dependencies.py:65-82"
+    },
+    {
+      "from": "ai-runtime-worker/desktop-wiring",
+      "to": "desktop-app",
+      "kind": "http",
+      "label": "capability broker: grants snapshot + /v1/runs/begin|end pinning",
+      "evidence": "services/ai-backend/src/runtime_worker/workspace_backend_wiring.py:98-155"
+    },
+    {
+      "from": "ai-runtime-worker/desktop-wiring",
+      "to": "ai-runtime-persistence",
+      "kind": "import",
+      "label": "lazy file adapters (offload writer, subagent trace, large-result backends)",
+      "evidence": "services/ai-backend/src/runtime_worker/file_store_wiring.py:54-89"
+    },
+    {
+      "from": "ai-runtime-worker/unwired-jobs",
+      "to": "backend-product",
+      "kind": "http",
+      "label": "routine claim/fire + todo materialize-due internal endpoints (dormant)",
+      "evidence": "services/ai-backend/src/runtime_worker/jobs/todo_recurrence_materializer.py:21-27"
+    },
+    {
+      "from": "ai-runtime-worker/unwired-jobs",
+      "to": "external:openai",
+      "kind": "http",
+      "label": "extractor LLM calls via build_chat_model (dormant)",
+      "evidence": "services/ai-backend/src/runtime_worker/jobs/todo_extractor.py:47"
+    },
+    {
+      "from": "ai-runtime-worker/encryption-backfill",
+      "to": "external:postgres",
+      "kind": "db",
+      "label": "direct psycopg batch re-encryption",
+      "evidence": "services/ai-backend/src/runtime_worker/jobs/encrypt_existing_columns.py:11-12"
+    },
+    {
+      "from": "ai-runtime-worker/maintenance-loops",
+      "to": "ai-runtime-persistence",
+      "kind": "db",
+      "label": "usage rollup upserts + retention sweeps via PersistencePort",
+      "evidence": "services/ai-backend/src/runtime_worker/usage_rollup_loop.py:144-267"
+    },
+    {
+      "from": "ai-runtime-api",
+      "to": "ai-runtime-worker/loop",
+      "kind": "import",
+      "label": "in-process worker (RUNTIME_START_IN_PROCESS_WORKER)",
+      "evidence": "services/ai-backend/src/runtime_api/app.py:76,807-829"
+    },
+    {
+      "from": "ai-runtime-execution",
+      "to": "ai-runtime-worker/audit",
+      "kind": "import",
+      "label": "INVERSION: agent_runtime/api fork flows import WorkerAuditEmitter",
+      "evidence": "services/ai-backend/src/agent_runtime/api/self_fork.py:27"
+    },
+    {
+      "from": "ai-runtime-api",
+      "to": "ai-runtime-worker/dependencies-factory",
+      "kind": "import",
+      "label": "INVERSION: system_skills imports BUILTIN_SKILLS_ROOT",
+      "evidence": "services/ai-backend/src/runtime_api/system_skills.py:30"
+    },
+    {
+      "from": "build-deploy",
+      "to": "ai-runtime-worker/entrypoint",
+      "kind": "spawn",
+      "label": "compose runs python -m runtime_worker",
+      "evidence": "deploy/self-host/docker-compose.prod.yml:208"
+    },
+    {
+      "from": "ai-runtime-worker/loop",
+      "to": "external:otel-collector",
+      "kind": "http",
+      "label": "trace re-parenting + handler spans",
+      "evidence": "services/ai-backend/src/runtime_worker/loop.py:212-221"
+    }
+  ]
+}

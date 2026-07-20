@@ -1,0 +1,277 @@
+{
+  "cluster": {
+    "id": "ai-runtime-persistence",
+    "title": "AI Runtime — Persistence & Store Adapters",
+    "kind": "cluster",
+    "paths": [
+      "services/ai-backend/src/agent_runtime/persistence",
+      "services/ai-backend/src/agent_runtime/retention",
+      "services/ai-backend/src/runtime_adapters"
+    ],
+    "md": "docs/audit/clusters/03-ai-runtime-persistence.md",
+    "summary": "Durable-state substrate of the agent runtime: Pydantic persistence records, satellite store ports, field-level envelope encryption, yoyo migrations, a pure retention-policy resolver, and three swappable adapter families (in-memory, Postgres, desktop file/JSONL) composed into RuntimePorts by an env-driven factory. Contracts are strong but the ~90-method structural PersistencePort has already drifted (Postgres is missing three live approval methods), citation wiring is split-brain off-postgres, and the file adapter duplicates the in-memory adapter's logic nearly verbatim."
+  },
+  "nodes": [
+    {
+      "id": "ai-runtime-persistence/records",
+      "kind": "module",
+      "path": "services/ai-backend/src/agent_runtime/persistence/records",
+      "summary": "Pydantic contracts for every persisted aggregate (approvals, batches, budgets, citations, drafts, outbox, retention, shares, telemetry, todo extractions, tool ordinals) plus shared enums and normalizers."
+    },
+    {
+      "id": "ai-runtime-persistence/ports",
+      "kind": "module",
+      "path": "services/ai-backend/src/agent_runtime/persistence/ports.py",
+      "summary": "Seven runtime-checkable satellite store Protocols (drafts, subagents, sources, citations, ordinals, shares, todo extractions) and typed conflict exceptions."
+    },
+    {
+      "id": "ai-runtime-persistence/encryption",
+      "kind": "module",
+      "path": "services/ai-backend/src/agent_runtime/persistence/encryption.py",
+      "summary": "C7 field-level envelope encryption: AES-256-GCM with KMS-wrapped per-row DEKs, AAD bound to (table,column,org), FieldCodec text/JSONB facade, env-driven factory, lazy AWS KMS adapter, OTel metrics."
+    },
+    {
+      "id": "ai-runtime-persistence/schema",
+      "kind": "module",
+      "path": "services/ai-backend/src/agent_runtime/persistence/schema",
+      "summary": "Yoyo-backed MigrationRunner pinned to services/ai-backend/migrations with MANIFEST.lock checksum verification; legacy test-only SQL catalog shim."
+    },
+    {
+      "id": "ai-runtime-persistence/concurrency",
+      "kind": "module",
+      "path": "services/ai-backend/src/agent_runtime/persistence/optimistic.py",
+      "summary": "Typed CAS-miss errors and with_optimistic_retry (bounded exponential backoff + jitter + OTel retry counter)."
+    },
+    {
+      "id": "ai-runtime-persistence/retention-resolver",
+      "kind": "module",
+      "path": "services/ai-backend/src/agent_runtime/retention/policy_resolver.py",
+      "summary": "Pure most-specific-wins retention TTL resolver (conversation > assistant > user > org > deployment default) layering per-user privacy overrides; shared by sweeper jobs, retention routes, and coordinators."
+    },
+    {
+      "id": "ai-runtime-persistence/adapter-base",
+      "kind": "module",
+      "path": "services/ai-backend/src/runtime_adapters/base.py",
+      "summary": "Shared adapter helpers: run status-transition timestamps, run-request message construction (sync + async siblings), metadata field constants."
+    },
+    {
+      "id": "ai-runtime-persistence/factory",
+      "kind": "module",
+      "path": "services/ai-backend/src/runtime_adapters/factory.py",
+      "summary": "RuntimeAdapterFactory + frozen RuntimePorts bundle; dispatches on RUNTIME_STORE_BACKEND; file backend fail-closes unless single_user_desktop profile and RUNTIME_FILE_STORE_ROOT are set."
+    },
+    {
+      "id": "ai-runtime-persistence/in-memory-store",
+      "kind": "store",
+      "path": "services/ai-backend/src/runtime_adapters/in_memory",
+      "summary": "Deterministic async in-memory implementation of the full port surface plus 8 satellites; retention sweep is an explicit no-op stub; hash-chained audit log."
+    },
+    {
+      "id": "ai-runtime-persistence/postgres-store",
+      "kind": "store",
+      "path": "services/ai-backend/src/runtime_adapters/postgres",
+      "summary": "Production adapter: psycopg async pool with env-tuned guards, RLS session vars, field-encryption codec at insert/read, lock-free event appends with UNIQUE-retry, chunked retention sweeps for 8 kinds, read-replica routing. Missing three PersistencePort approval methods (F1)."
+    },
+    {
+      "id": "ai-runtime-persistence/file-store",
+      "kind": "store",
+      "path": "services/ai-backend/src/runtime_adapters/file/runtime_api_store.py",
+      "summary": "Desktop single_user_desktop backend: canonical JSONL session folders + append-with-fold state ledgers, in-memory materialized view rebuilt on open, disposable SQLite catalog, physical deletion with legal-hold skip and object GC, signed audit chain."
+    },
+    {
+      "id": "ai-runtime-persistence/file-internals",
+      "kind": "module",
+      "path": "services/ai-backend/src/runtime_adapters/file",
+      "summary": "File-store building blocks: traversal-safe hashed layout, fsync JSONL IO, state ledgers, SQLite catalog + FTS, quota guard, eraser/reachability GC, health tracker, telemetry, content-addressed object store, signed operation manifests."
+    },
+    {
+      "id": "ai-runtime-persistence/file-lifecycle-tools",
+      "kind": "tool",
+      "path": "services/ai-backend/src/runtime_adapters/migrate.py",
+      "summary": "Operator tooling: offline Postgres/in-memory to file-store migration CLI with verify pass, corruption diagnose/salvage/repair CLI, portable conversation export/import archiver (export/import currently unmounted)."
+    },
+    {
+      "id": "ai-runtime-persistence/file-runtime-seams",
+      "kind": "module",
+      "path": "services/ai-backend/src/runtime_adapters/file/agent_state_store.py",
+      "summary": "Desktop Deep Agents seams: file-native memory/skills/subagent-def stores, /subagents/ trace backend, /large_tool_results/ blob backend, offload writer, durable satellite stores (citations, drafts, shares, ordinals)."
+    }
+  ],
+  "edges": [
+    {
+      "from": "ai-runtime-persistence/factory",
+      "to": "ai-runtime-persistence/in-memory-store",
+      "kind": "import",
+      "label": "constructs in-memory RuntimePorts",
+      "evidence": "services/ai-backend/src/runtime_adapters/factory.py:29-37"
+    },
+    {
+      "from": "ai-runtime-persistence/factory",
+      "to": "ai-runtime-persistence/postgres-store",
+      "kind": "import",
+      "label": "constructs postgres RuntimePorts",
+      "evidence": "services/ai-backend/src/runtime_adapters/factory.py:38-45"
+    },
+    {
+      "from": "ai-runtime-persistence/factory",
+      "to": "ai-runtime-persistence/file-store",
+      "kind": "import",
+      "label": "lazy-imports file backend for desktop profile (fail-closed gate)",
+      "evidence": "services/ai-backend/src/runtime_adapters/factory.py:48-106"
+    },
+    {
+      "from": "ai-runtime-persistence/file-store",
+      "to": "ai-runtime-persistence/file-internals",
+      "kind": "import",
+      "label": "layout, jsonl IO, ledgers, catalog, deletion, capacity, health, telemetry",
+      "evidence": "services/ai-backend/src/runtime_adapters/file/runtime_api_store.py:90-118"
+    },
+    {
+      "from": "ai-runtime-persistence/file-lifecycle-tools",
+      "to": "ai-runtime-persistence/file-store",
+      "kind": "import",
+      "label": "migration/repair/export operate on FileRuntimeApiStore",
+      "evidence": "services/ai-backend/src/runtime_adapters/migrate.py:36-41"
+    },
+    {
+      "from": "ai-runtime-persistence/file-lifecycle-tools",
+      "to": "ai-runtime-persistence/postgres-store",
+      "kind": "import",
+      "label": "migration CLI reads source store via ports",
+      "evidence": "services/ai-backend/src/runtime_adapters/migrate.py:115-117"
+    },
+    {
+      "from": "ai-runtime-persistence/in-memory-store",
+      "to": "ai-runtime-persistence/adapter-base",
+      "kind": "import",
+      "label": "shared status-transition + message-building helpers",
+      "evidence": "services/ai-backend/src/runtime_adapters/in_memory/runtime_api_store.py (imports RuntimeAdapterHelpers, StatusTransition)"
+    },
+    {
+      "from": "ai-runtime-persistence/file-store",
+      "to": "ai-runtime-persistence/adapter-base",
+      "kind": "import",
+      "label": "shared helpers",
+      "evidence": "services/ai-backend/src/runtime_adapters/file/runtime_api_store.py:89"
+    },
+    {
+      "from": "ai-runtime-persistence/postgres-store",
+      "to": "ai-runtime-persistence/encryption",
+      "kind": "import",
+      "label": "FieldCodec encrypt/decrypt at insert/read call sites",
+      "evidence": "services/ai-backend/src/runtime_adapters/postgres/runtime_api_store.py:386-394"
+    },
+    {
+      "from": "ai-runtime-persistence/postgres-store",
+      "to": "ai-runtime-persistence/schema",
+      "kind": "import",
+      "label": "MigrationRunner for migrate()",
+      "evidence": "services/ai-backend/src/runtime_adapters/postgres/runtime_api_store.py:74"
+    },
+    {
+      "from": "ai-runtime-persistence/postgres-store",
+      "to": "ai-runtime-persistence/retention-resolver",
+      "kind": "import",
+      "label": "resolver drives retention_until recompute",
+      "evidence": "services/ai-backend/src/runtime_adapters/postgres/runtime_api_store.py:77,5568"
+    },
+    {
+      "from": "ai-runtime-persistence/postgres-store",
+      "to": "external:postgres",
+      "kind": "db",
+      "label": "psycopg async pool, RLS session vars, LISTEN/NOTIFY",
+      "evidence": "services/ai-backend/src/runtime_adapters/postgres/runtime_api_store.py:224-350"
+    },
+    {
+      "from": "ai-runtime-persistence/schema",
+      "to": "external:postgres",
+      "kind": "db",
+      "label": "yoyo migration apply/rollback",
+      "evidence": "services/ai-backend/src/agent_runtime/persistence/schema/migrate.py:47-55"
+    },
+    {
+      "from": "ai-runtime-persistence/encryption",
+      "to": "external:aws-kms",
+      "kind": "http",
+      "label": "boto3 wrap/unwrap of per-row DEKs",
+      "evidence": "services/ai-backend/src/agent_runtime/persistence/_aws_kms_client.py:1-67"
+    },
+    {
+      "from": "ai-runtime-persistence/file-internals",
+      "to": "external:sqlite",
+      "kind": "db",
+      "label": "disposable catalog index + FTS at index/catalog.sqlite3",
+      "evidence": "services/ai-backend/src/runtime_adapters/file/_catalog_index.py:1-12"
+    },
+    {
+      "from": "ai-runtime-persistence/file-store",
+      "to": "shared-packages",
+      "kind": "import",
+      "label": "copilot_audit_chain AuditChainSigner (also imported by in-memory and postgres stores)",
+      "evidence": "services/ai-backend/src/runtime_adapters/file/runtime_api_store.py:57"
+    },
+    {
+      "from": "ai-runtime-persistence/factory",
+      "to": "shared-packages",
+      "kind": "import",
+      "label": "copilot_service_contracts deployment-profile constants",
+      "evidence": "services/ai-backend/src/runtime_adapters/factory.py:8-11"
+    },
+    {
+      "from": "ai-runtime-persistence/adapter-base",
+      "to": "ai-runtime-api",
+      "kind": "import",
+      "label": "imports runtime_api.schemas record types (layering inversion, F8)",
+      "evidence": "services/ai-backend/src/runtime_adapters/base.py:8-14"
+    },
+    {
+      "from": "ai-runtime-persistence/file-runtime-seams",
+      "to": "ai-runtime-capabilities",
+      "kind": "import",
+      "label": "memory backend routes/contracts + subagent trace projector",
+      "evidence": "services/ai-backend/src/runtime_adapters/file/agent_state_store.py:54-55"
+    },
+    {
+      "from": "ai-runtime-api",
+      "to": "ai-runtime-persistence/factory",
+      "kind": "import",
+      "label": "app lifespan builds RuntimePorts and hands satellite stores to services",
+      "evidence": "services/ai-backend/src/runtime_api/app.py:634-656"
+    },
+    {
+      "from": "ai-runtime-worker",
+      "to": "ai-runtime-persistence/factory",
+      "kind": "import",
+      "label": "worker main builds role=worker RuntimePorts; loop duck-checks CitationStorePort (F2)",
+      "evidence": "services/ai-backend/src/runtime_worker/__main__.py:48; services/ai-backend/src/runtime_worker/loop.py:74-80"
+    },
+    {
+      "from": "ai-runtime-worker",
+      "to": "ai-runtime-persistence/retention-resolver",
+      "kind": "import",
+      "label": "retention sweeper + backfill jobs resolve TTLs per org",
+      "evidence": "services/ai-backend/src/runtime_worker/jobs/retention_sweeper.py:19,200"
+    },
+    {
+      "from": "desktop-app",
+      "to": "ai-runtime-persistence/file-store",
+      "kind": "env",
+      "label": "supervisor sets RUNTIME_STORE_BACKEND=file + RUNTIME_FILE_STORE_ROOT",
+      "evidence": "apps/desktop/main/services/service-env.ts:204-205"
+    },
+    {
+      "from": "ai-runtime-execution",
+      "to": "ai-runtime-persistence/file-internals",
+      "kind": "file",
+      "label": "LangGraph AsyncSqliteSaver checkpoints at <root>/index/checkpoints.sqlite3 mirroring FileStoreLayout.index_dir",
+      "evidence": "services/ai-backend/src/agent_runtime/execution/deep_agent_builder.py:318-341"
+    },
+    {
+      "from": "build-deploy",
+      "to": "ai-runtime-persistence/schema",
+      "kind": "build",
+      "label": "MANIFEST.lock checksum + reader-method CI checks",
+      "evidence": "services/ai-backend/src/agent_runtime/persistence/schema/migrate.py:96-122"
+    }
+  ]
+}

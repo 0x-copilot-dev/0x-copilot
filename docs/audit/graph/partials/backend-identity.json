@@ -1,0 +1,299 @@
+{
+  "cluster": {
+    "id": "backend-identity",
+    "title": "Backend — Identity, Auth & Secrets",
+    "kind": "cluster",
+    "paths": [
+      "services/backend/src/backend_app/identity",
+      "services/backend/src/backend_app/dev_idp",
+      "services/backend/src/backend_app/api_keys",
+      "services/backend/src/backend_app/provider_keys",
+      "services/backend/src/backend_app/policies",
+      "services/backend/src/backend_app/team",
+      "services/backend/src/backend_app/settings",
+      "services/backend/src/backend_app/privacy"
+    ],
+    "md": "docs/audit/clusters/06-backend-identity.md",
+    "summary": "The identity plane of services/backend: identity store, sessions, OIDC/Google, SAML, passwords, MFA, SCIM, lockout, magic links, SIWE, invitations, RBAC, dev IdP, API keys, BYOK provider keys, tool-use/privacy policies, Team destination, Settings namespaces, plus the claimed TokenVault (Fernet local + AWS KMS envelope). Uniform Protocol-store/dual-adapter/service architecture with strong per-module code; the real debt is in composition wiring (RBAC never enforced, PostgresSiweStore unwired) and hand-mirrored cross-language contracts."
+  },
+  "nodes": [
+    {
+      "id": "backend-identity/identity-core-store",
+      "kind": "store",
+      "path": "services/backend/src/backend_app/identity/store.py",
+      "summary": "IdentityStore Protocol + InMemory/Postgres adapters: orgs, users, members, roles, auth providers, append-only identity audit + login attempts."
+    },
+    {
+      "id": "backend-identity/sessions",
+      "kind": "module",
+      "path": "services/backend/src/backend_app/identity/sessions.py",
+      "summary": "HMAC bearer mint/verify (_BearerCodec), session rows keyed by sha256(signature), touch/revoke/list, MFA-satisfied stamp, retention sweeper."
+    },
+    {
+      "id": "backend-identity/sso-oidc",
+      "kind": "module",
+      "path": "services/backend/src/backend_app/identity/oidc.py",
+      "summary": "OIDC authorize→callback→session, JWKS cache + ID-token verify, env-configured global Google provider, PKCE primitives."
+    },
+    {
+      "id": "backend-identity/sso-saml",
+      "kind": "module",
+      "path": "services/backend/src/backend_app/identity/saml.py",
+      "summary": "SAML 2.0 mirror of OidcService; SamlVerifier Protocol isolates python3-saml/xmlsec1 behind OneLogin + Fake verifiers."
+    },
+    {
+      "id": "backend-identity/siwe",
+      "kind": "module",
+      "path": "services/backend/src/backend_app/identity/siwe.py",
+      "summary": "EIP-4361 build/strict-parse, EIP-191 recovery, chain allowlist, single-use nonces, link-or-provision wallet identities."
+    },
+    {
+      "id": "backend-identity/passwords-mfa-lockout",
+      "kind": "module",
+      "path": "services/backend/src/backend_app/identity/passwords.py",
+      "summary": "Argon2id local auth + bootstrap admin, TOTP/WebAuthn/recovery MFA (TokenVault-encrypted seeds), sliding-window lockout on every login path."
+    },
+    {
+      "id": "backend-identity/login-email-first",
+      "kind": "module",
+      "path": "services/backend/src/backend_app/identity/login_email_first.py",
+      "summary": "IdP discovery (anti-enumeration), magic links, workspace-pick tokens, in-memory rate limiter, email dispatcher port."
+    },
+    {
+      "id": "backend-identity/scim",
+      "kind": "module",
+      "path": "services/backend/src/backend_app/identity/scim.py",
+      "summary": "SCIM 2.0 User/Group CRUD + role sync, filter parser, route-boundary serializer, sha256-at-rest tokens."
+    },
+    {
+      "id": "backend-identity/invitations-provisioning",
+      "kind": "module",
+      "path": "services/backend/src/backend_app/identity/invitations.py",
+      "summary": "One-time invite links (accept = user+member+role in one txn); shared provision_personal_org used by Google + SIWE self-signup."
+    },
+    {
+      "id": "backend-identity/rbac",
+      "kind": "module",
+      "path": "services/backend/src/backend_app/identity/rbac.py",
+      "summary": "RequireScopes/RequireRoles/public_route FastAPI deps; RBAC_MODE audit-vs-enforce (default audit = pass-through); mfa:pending hard deny."
+    },
+    {
+      "id": "backend-identity/me-profile",
+      "kind": "store",
+      "path": "services/backend/src/backend_app/identity/me_store.py",
+      "summary": "user_profiles + user_preferences JSONB sidecars; avatar BYTEA store with ETag."
+    },
+    {
+      "id": "backend-identity/dev-idp",
+      "kind": "route-group",
+      "path": "services/backend/src/backend_app/dev_idp",
+      "summary": "Dev-only /v1/dev/personas + /v1/dev/identity/mint; YAML persona directory with mtime reload; standalone HMAC signer; 365-day session-less bearers."
+    },
+    {
+      "id": "backend-identity/api-keys",
+      "kind": "module",
+      "path": "services/backend/src/backend_app/api_keys",
+      "summary": "atlas_pk_* bearer parse/mint, peppered HMAC-SHA256 at rest, constant-time verify, CRUD + rotate + last-used stamping."
+    },
+    {
+      "id": "backend-identity/provider-keys",
+      "kind": "module",
+      "path": "services/backend/src/backend_app/provider_keys",
+      "summary": "BYOK provider keys: TokenVault encrypt-on-write, hint-only /v1/settings/provider-keys surface, internal decrypted_keys lane for the runtime aggregate."
+    },
+    {
+      "id": "backend-identity/policies-privacy",
+      "kind": "store",
+      "path": "services/backend/src/backend_app/policies/store.py",
+      "summary": "tool_use_policies (read/write/destructive × auto/ask/require/block, workspace default + user override) and privacy_settings toggles."
+    },
+    {
+      "id": "backend-identity/team",
+      "kind": "module",
+      "path": "services/backend/src/backend_app/team",
+      "summary": "Team destination: read projection over identity tables, invite/role-change/offboard orchestration, in-memory SSE activity bus at /v1/team/stream."
+    },
+    {
+      "id": "backend-identity/settings",
+      "kind": "module",
+      "path": "services/backend/src/backend_app/settings",
+      "summary": "Namespace'd JSONB settings: user notifications inside user_preferences, tenant rows in tenant_settings; ACL + audit + deep-merge in the service layer."
+    },
+    {
+      "id": "backend-identity/token-vault",
+      "kind": "module",
+      "path": "services/backend/src/backend_app/token_vault.py",
+      "summary": "TokenVault ABC: Fernet LocalTokenVault (+ legacy XOR fallback), kms_v1 envelope, AwsKmsTokenVault, decrypt TTL cache, fail-closed factory, rotation CLI."
+    }
+  ],
+  "edges": [
+    {
+      "from": "backend-identity/siwe",
+      "to": "backend-identity/sessions",
+      "kind": "import",
+      "label": "mints the same SessionService bearer as every login ramp",
+      "evidence": "services/backend/src/backend_app/identity/siwe.py:57,887"
+    },
+    {
+      "from": "backend-identity/siwe",
+      "to": "backend-identity/invitations-provisioning",
+      "kind": "import",
+      "label": "self-signup via shared provision_personal_org",
+      "evidence": "services/backend/src/backend_app/identity/siwe.py:53-56,833"
+    },
+    {
+      "from": "backend-identity/siwe",
+      "to": "backend-identity/identity-core-store",
+      "kind": "import",
+      "label": "user lookup, login attempts, audit rows",
+      "evidence": "services/backend/src/backend_app/identity/siwe.py:59,908"
+    },
+    {
+      "from": "backend-identity/sso-oidc",
+      "to": "backend-identity/token-vault",
+      "kind": "import",
+      "label": "encrypts OIDC client secrets (incl. global Google) at rest",
+      "evidence": "services/backend/src/backend_app/identity/google.py:42,108-110"
+    },
+    {
+      "from": "backend-identity/passwords-mfa-lockout",
+      "to": "backend-identity/token-vault",
+      "kind": "import",
+      "label": "TOTP secret encryption via TokenVault",
+      "evidence": "services/backend/src/backend_app/app.py:522-537"
+    },
+    {
+      "from": "backend-identity/provider-keys",
+      "to": "backend-identity/token-vault",
+      "kind": "import",
+      "label": "BYOK keys encrypt-on-write / decrypt for runtime lane",
+      "evidence": "services/backend/src/backend_app/provider_keys/service.py:32,96,165"
+    },
+    {
+      "from": "backend-identity/team",
+      "to": "backend-identity/invitations-provisioning",
+      "kind": "import",
+      "label": "invite delegates to InvitationsService (no parallel invite path)",
+      "evidence": "services/backend/src/backend_app/team/service.py:1-30"
+    },
+    {
+      "from": "backend-identity/settings",
+      "to": "backend-identity/me-profile",
+      "kind": "db",
+      "label": "user namespaces deep-merge into the user_preferences JSONB blob (migration 0018)",
+      "evidence": "services/backend/src/backend_app/settings/store.py:1-15"
+    },
+    {
+      "from": "backend-identity/dev-idp",
+      "to": "backend-identity/identity-core-store",
+      "kind": "import",
+      "label": "idempotent persona org/user seeding on first mint",
+      "evidence": "services/backend/src/backend_app/dev_idp/routes.py:134-139,193-233"
+    },
+    {
+      "from": "backend-identity/sessions",
+      "to": "shared-packages",
+      "kind": "contract",
+      "label": "CLAIM_* bearer claim names from copilot_service_contracts.auth_claims",
+      "evidence": "services/backend/src/backend_app/identity/sessions.py:27-35"
+    },
+    {
+      "from": "backend-identity/rbac",
+      "to": "shared-packages",
+      "kind": "contract",
+      "label": "scope string catalog (RUNTIME_USE, MFA_PENDING, ...)",
+      "evidence": "services/backend/src/backend_app/identity/rbac.py:26"
+    },
+    {
+      "from": "backend-identity/rbac",
+      "to": "backend-platform",
+      "kind": "import",
+      "label": "BackendServiceAuthenticator trusted-header envelope",
+      "evidence": "services/backend/src/backend_app/identity/rbac.py:29"
+    },
+    {
+      "from": "backend-identity/sso-oidc",
+      "to": "external:google-oauth",
+      "kind": "http",
+      "label": "pinned Google OIDC endpoints; token exchange + JWKS fetch",
+      "evidence": "services/backend/src/backend_app/identity/google.py:60-63"
+    },
+    {
+      "from": "backend-identity/siwe",
+      "to": "external:ethereum",
+      "kind": "import",
+      "label": "eth_account EIP-191 signature recovery + EIP-55 checksums",
+      "evidence": "services/backend/src/backend_app/identity/siwe.py:33-35,706"
+    },
+    {
+      "from": "backend-identity/token-vault",
+      "to": "external:aws-kms",
+      "kind": "http",
+      "label": "boto3 KMS encrypt/decrypt (kms_v1 envelope)",
+      "evidence": "services/backend/src/backend_app/token_vault.py:374-400"
+    },
+    {
+      "from": "backend-identity/identity-core-store",
+      "to": "external:postgres",
+      "kind": "db",
+      "label": "Postgres adapters for every identity/session/key store",
+      "evidence": "services/backend/src/backend_app/identity/store.py:695"
+    },
+    {
+      "from": "backend-identity/sso-saml",
+      "to": "external:saml-idp",
+      "kind": "http",
+      "label": "AuthnRequest/ACS via python3-saml OneLoginSamlVerifier",
+      "evidence": "services/backend/src/backend_app/identity/_saml_lib.py:152"
+    },
+    {
+      "from": "backend-facade",
+      "to": "backend-identity",
+      "kind": "http",
+      "label": "proxies /v1/auth/*, /v1/dev/*, /v1/settings/provider-keys*, /v1/team*, /v1/settings/*",
+      "evidence": "services/backend-facade/src/backend_facade/auth_routes.py"
+    },
+    {
+      "from": "backend-facade",
+      "to": "backend-identity/api-keys",
+      "kind": "http",
+      "label": "POST /internal/v1/auth/api-keys/verify for atlas_pk_* bearers",
+      "evidence": "services/backend-facade/src/backend_facade/auth.py:322"
+    },
+    {
+      "from": "backend-facade",
+      "to": "backend-identity/sessions",
+      "kind": "contract",
+      "label": "byte-identical HMAC bearer scheme (sign here, verify there) + session touch",
+      "evidence": "services/backend/src/backend_app/identity/sessions.py:1-12"
+    },
+    {
+      "from": "ai-runtime-api",
+      "to": "backend-identity/provider-keys",
+      "kind": "http",
+      "label": "GET /internal/v1/policies/runtime at run-create (policies + privacy + decrypted BYOK keys)",
+      "evidence": "services/ai-backend/src/agent_runtime/api/user_policies_resolver.py:104"
+    },
+    {
+      "from": "frontend-web",
+      "to": "backend-identity/siwe",
+      "kind": "contract",
+      "label": "byte-identical EIP-4361 message template (siweMessage.ts)",
+      "evidence": "apps/frontend/src/features/auth/siweMessage.ts:30-41"
+    },
+    {
+      "from": "desktop-app",
+      "to": "backend-identity/siwe",
+      "kind": "http",
+      "label": "local no-account login drives /v1/auth/siwe/{nonce,verify} with a third template copy",
+      "evidence": "apps/desktop/main/auth/local-login.ts:79-91,119,150"
+    },
+    {
+      "from": "backend-identity/sessions",
+      "to": "build-deploy",
+      "kind": "env",
+      "label": "ENTERPRISE_AUTH_SECRET / SESSION_* TTLs; RBAC_MODE; SIWE_*; GOOGLE_OAUTH_*; MCP_TOKEN_VAULT_*",
+      "evidence": "services/backend/src/backend_app/identity/sessions.py:203"
+    }
+  ]
+}

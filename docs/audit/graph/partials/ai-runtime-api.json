@@ -1,0 +1,318 @@
+{
+  "cluster": {
+    "id": "ai-runtime-api",
+    "title": "AI Runtime — HTTP/SSE API layer",
+    "kind": "cluster",
+    "paths": [
+      "services/ai-backend/src/runtime_api",
+      "services/ai-backend/src/agent_runtime/api",
+      "services/ai-backend/src/agent_runtime/observability"
+    ],
+    "md": "docs/audit/clusters/04-ai-runtime-api.md",
+    "summary": "FastAPI ingress of ai-backend: conversations/runs/approvals/usage/budgets/retention/shares/drafts/local-models routes, SSE run + inbox streaming with sequence_no reconnect, the coordinator/service layer behind them, and the observability toolkit (redacted logging, OTel, usage recording). Consumed only by backend-facade over HTTP; hands work to the runtime worker via queued commands. Well-engineered core with soft security defaults (log-only RBAC, always-ready readiness), a process-local inbox bus under a 4-worker gunicorn image, and a circular agent_runtime↔runtime_api import graph."
+  },
+  "nodes": [
+    {
+      "id": "ai-runtime-api/app-factory",
+      "kind": "service",
+      "path": "services/ai-backend/src/runtime_api/app.py",
+      "summary": "RuntimeApiAppFactory: wires coordinators, event bus, optional services, routers, lifespan (store open/migrate, MCP cache, in-process worker)"
+    },
+    {
+      "id": "ai-runtime-api/auth-rbac",
+      "kind": "module",
+      "path": "services/ai-backend/src/runtime_api/auth.py",
+      "summary": "Service-token validation + trusted-header identity (auth.py, identity.py) and RequireScopes/RequireAnyScope RBAC with audit|enforce modes (rbac.py)"
+    },
+    {
+      "id": "ai-runtime-api/http-routes",
+      "kind": "route-group",
+      "path": "services/ai-backend/src/runtime_api/http",
+      "summary": "/v1/agent, /v1/usage, /v1/budgets, /v1/retention, /v1/local-models, /v1/todo-extractions, /internal/v1 routers + global error mapper (16 files)"
+    },
+    {
+      "id": "ai-runtime-api/schemas",
+      "kind": "module",
+      "path": "services/ai-backend/src/runtime_api/schemas",
+      "summary": "Pydantic wire contracts for every surface; events.py holds RuntimeEventEnvelope + RuntimeEventPresentationProjector (activity_kind/display_title projection, payload sanitisation)"
+    },
+    {
+      "id": "ai-runtime-api/sse",
+      "kind": "module",
+      "path": "services/ai-backend/src/runtime_api/sse",
+      "summary": "Run-stream SSE adapter with replay+push-wakeup loop; InMemory and Postgres LISTEN/NOTIFY event buses; process-local per-user inbox bus + adapter"
+    },
+    {
+      "id": "ai-runtime-api/local-models",
+      "kind": "module",
+      "path": "services/ai-backend/src/runtime_api/local_models",
+      "summary": "Ollama daemon client (version/tags/ps/pull/delete), HF GGUF size resolver, pull-progress annotation service"
+    },
+    {
+      "id": "ai-runtime-api/system-skills",
+      "kind": "module",
+      "path": "services/ai-backend/src/runtime_api/system_skills.py",
+      "summary": "Projects filesystem-shipped skills under skills/ into the settings-UI wire shape for /internal/v1/skills/system"
+    },
+    {
+      "id": "ai-runtime-api/health",
+      "kind": "module",
+      "path": "services/ai-backend/src/runtime_api/routes/health.py",
+      "summary": "/healthz + /readyz; readiness checker registry exists but no checkers are wired (always ready)"
+    },
+    {
+      "id": "ai-runtime-api/coordinators",
+      "kind": "module",
+      "path": "services/ai-backend/src/agent_runtime/api",
+      "summary": "Run/Conversation/Approval coordinators + ConversationQueryService + WorkspaceCoordinator: run create/cancel, context sealing, approval decisions/forwarding/undo, replay reads"
+    },
+    {
+      "id": "ai-runtime-api/domain-services",
+      "kind": "module",
+      "path": "services/ai-backend/src/agent_runtime/api/share_service.py",
+      "summary": "Share lifecycle + token mint/hash, share-fork and self-fork engines, draft service with capability auth-gate, workspace feeds/defaults, UsageQueryService rollup math, model catalog"
+    },
+    {
+      "id": "ai-runtime-api/event-producer",
+      "kind": "module",
+      "path": "services/ai-backend/src/agent_runtime/api/events.py",
+      "summary": "RuntimeEventProducer chokepoint (sanitise, project presentation, lifecycle ledger, append, SSE notify) + PresentationGenerator/DeterministicTemplates + RunTerminationCoordinator + MCP discovery offers"
+    },
+    {
+      "id": "ai-runtime-api/backend-resolvers",
+      "kind": "module",
+      "path": "services/ai-backend/src/agent_runtime/api/user_policies_resolver.py",
+      "summary": "HTTP+Null resolvers for backend-owned facts: policy snapshots incl. BYOK keys (ProviderKeysParser/Hydrator), membership w/ TTL cache, connector suggestions, projects, routines, todos, notification dispatch"
+    },
+    {
+      "id": "ai-runtime-api/ports",
+      "kind": "module",
+      "path": "services/ai-backend/src/agent_runtime/api/ports.py",
+      "summary": "Async Protocol port definitions (PersistencePort, EventStorePort, RuntimeQueuePort, lifecycle, satellite stores) implemented by runtime_adapters"
+    },
+    {
+      "id": "ai-runtime-api/observability",
+      "kind": "module",
+      "path": "services/ai-backend/src/agent_runtime/observability",
+      "summary": "PII-safe logging + redaction deny-keys, OTel bootstrap w/ safe-attribute processor, W3C queue trace propagation, token-usage extractor registry, UsageRecorder single write boundary, lifecycle ledger, metric meters"
+    },
+    {
+      "id": "ai-runtime-api/service-config",
+      "kind": "module",
+      "path": "services/ai-backend/src/agent_runtime/settings.py",
+      "summary": "Catch-all: RuntimeSettings env surface, deployment-profile resolver, validation helpers, prompts, pricing catalog (litellm data + seeds + refresh loop), budget enforcer, retention policy resolver, Dockerfile/pyproject"
+    }
+  ],
+  "edges": [
+    {
+      "from": "ai-runtime-api/app-factory",
+      "to": "ai-runtime-api/coordinators",
+      "kind": "import",
+      "label": "constructs the five coordinators onto app.state",
+      "evidence": "services/ai-backend/src/runtime_api/app.py:13-45,383-415"
+    },
+    {
+      "from": "ai-runtime-api/app-factory",
+      "to": "ai-runtime-api/sse",
+      "kind": "import",
+      "label": "selects InMemory vs Postgres event bus, starts/stops listener in lifespan",
+      "evidence": "services/ai-backend/src/runtime_api/app.py:658-723"
+    },
+    {
+      "from": "ai-runtime-api/http-routes",
+      "to": "ai-runtime-api/auth-rbac",
+      "kind": "import",
+      "label": "scoped_identity + RequireScopes route dependencies",
+      "evidence": "services/ai-backend/src/runtime_api/http/routes.py:26-27,509"
+    },
+    {
+      "from": "ai-runtime-api/http-routes",
+      "to": "ai-runtime-api/coordinators",
+      "kind": "import",
+      "label": "handlers delegate to coordinators from app.state",
+      "evidence": "services/ai-backend/src/runtime_api/http/routes.py:19-25,446-474"
+    },
+    {
+      "from": "ai-runtime-api/http-routes",
+      "to": "ai-runtime-api/sse",
+      "kind": "sse",
+      "label": "stream_run + stream_inbox wrap SSE adapters in StreamingResponse",
+      "evidence": "services/ai-backend/src/runtime_api/http/routes.py:279-304,363-390"
+    },
+    {
+      "from": "ai-runtime-api/coordinators",
+      "to": "ai-runtime-api/ports",
+      "kind": "import",
+      "label": "all writes/reads via PersistencePort/RuntimeQueuePort protocols",
+      "evidence": "services/ai-backend/src/agent_runtime/api/run_coordinator.py:17"
+    },
+    {
+      "from": "ai-runtime-api/coordinators",
+      "to": "ai-runtime-api/event-producer",
+      "kind": "import",
+      "label": "append RUN_QUEUED/APPROVAL_RESOLVED etc. envelopes",
+      "evidence": "services/ai-backend/src/agent_runtime/api/run_coordinator.py:16,201-206"
+    },
+    {
+      "from": "ai-runtime-api/coordinators",
+      "to": "ai-runtime-api/backend-resolvers",
+      "kind": "import",
+      "label": "policy/membership/suggestion resolvers fan-out at run-create",
+      "evidence": "services/ai-backend/src/agent_runtime/api/run_coordinator.py:18-26,113-125"
+    },
+    {
+      "from": "ai-runtime-api/coordinators",
+      "to": "ai-runtime-api/schemas",
+      "kind": "import",
+      "label": "domain layer imports wire schemas (circular layering, finding F1)",
+      "evidence": "services/ai-backend/src/agent_runtime/api/run_coordinator.py:38-50"
+    },
+    {
+      "from": "ai-runtime-api/event-producer",
+      "to": "ai-runtime-api/schemas",
+      "kind": "import",
+      "label": "RuntimeEventPresentationProjector + envelope construction",
+      "evidence": "services/ai-backend/src/agent_runtime/api/events.py:22-28"
+    },
+    {
+      "from": "ai-runtime-api/event-producer",
+      "to": "ai-runtime-api/observability",
+      "kind": "import",
+      "label": "lifecycle ledger tracking on every append",
+      "evidence": "services/ai-backend/src/agent_runtime/api/events.py:18-21"
+    },
+    {
+      "from": "ai-runtime-api/app-factory",
+      "to": "ai-runtime-persistence",
+      "kind": "import",
+      "label": "RuntimeAdapterFactory.from_settings builds RuntimePorts",
+      "evidence": "services/ai-backend/src/runtime_api/app.py:53,338"
+    },
+    {
+      "from": "ai-runtime-api/ports",
+      "to": "ai-runtime-persistence",
+      "kind": "contract",
+      "label": "in_memory + postgres + file adapters implement these Protocols",
+      "evidence": "services/ai-backend/src/agent_runtime/api/ports.py:3-7"
+    },
+    {
+      "from": "ai-runtime-api/app-factory",
+      "to": "ai-runtime-worker",
+      "kind": "spawn",
+      "label": "in-process RuntimeWorker task when RUNTIME_START_IN_PROCESS_WORKER=true",
+      "evidence": "services/ai-backend/src/runtime_api/app.py:76,791-828"
+    },
+    {
+      "from": "ai-runtime-api/coordinators",
+      "to": "ai-runtime-worker",
+      "kind": "contract",
+      "label": "RuntimeRunCommand/RuntimeCancelCommand/RuntimeApprovalResolvedCommand enqueued via queue port",
+      "evidence": "services/ai-backend/src/agent_runtime/api/run_coordinator.py:207-217"
+    },
+    {
+      "from": "ai-runtime-api/domain-services",
+      "to": "ai-runtime-worker",
+      "kind": "import",
+      "label": "fork/mcp services import WorkerAuditEmitter from runtime_worker.audit (F1)",
+      "evidence": "services/ai-backend/src/agent_runtime/api/self_fork.py:27"
+    },
+    {
+      "from": "ai-runtime-api/system-skills",
+      "to": "ai-runtime-worker",
+      "kind": "import",
+      "label": "BUILTIN_SKILLS_ROOT from runtime_worker.dependencies (F1)",
+      "evidence": "services/ai-backend/src/runtime_api/system_skills.py:30"
+    },
+    {
+      "from": "ai-runtime-api/coordinators",
+      "to": "ai-runtime-execution",
+      "kind": "import",
+      "label": "AgentRuntimeContext, ModelConfigResolver, RuntimeErrorCode contracts",
+      "evidence": "services/ai-backend/src/agent_runtime/api/run_coordinator.py:27-34"
+    },
+    {
+      "from": "ai-runtime-api/http-routes",
+      "to": "ai-runtime-execution",
+      "kind": "import",
+      "label": "/internal/v1/llm/embed calls build_embeddings_model",
+      "evidence": "services/ai-backend/src/runtime_api/http/llm_embed_routes.py:33"
+    },
+    {
+      "from": "ai-runtime-api/app-factory",
+      "to": "ai-runtime-capabilities",
+      "kind": "import",
+      "label": "BackendHttpPool, McpDiscoveryCache, CapabilityAuthGate wiring",
+      "evidence": "services/ai-backend/src/runtime_api/app.py:142,333,523,742"
+    },
+    {
+      "from": "ai-runtime-api/backend-resolvers",
+      "to": "backend-product",
+      "kind": "http",
+      "label": "GET /internal/v1/policies/runtime (BYOK+policies), membership, suggestions, projects, routines, todos, email notify",
+      "evidence": "services/ai-backend/src/agent_runtime/api/user_policies_resolver.py:104"
+    },
+    {
+      "from": "ai-runtime-api/sse",
+      "to": "external:postgres",
+      "kind": "db",
+      "label": "dedicated LISTEN connection on channel runtime_events_v1",
+      "evidence": "services/ai-backend/src/runtime_api/sse/postgres_event_bus.py:30,191"
+    },
+    {
+      "from": "ai-runtime-api/local-models",
+      "to": "external:ollama",
+      "kind": "http",
+      "label": "/api/version,/api/tags,/api/ps,/api/pull (NDJSON),/api/delete",
+      "evidence": "services/ai-backend/src/runtime_api/local_models/ollama_client.py:68-152"
+    },
+    {
+      "from": "ai-runtime-api/local-models",
+      "to": "external:huggingface",
+      "kind": "http",
+      "label": "GGUF size lookup via HF tree API",
+      "evidence": "services/ai-backend/src/runtime_api/local_models/hf_metadata.py:23"
+    },
+    {
+      "from": "ai-runtime-api/observability",
+      "to": "external:otel-collector",
+      "kind": "env",
+      "label": "OTLP span+metric export; prod fails closed without OTEL_EXPORTER_OTLP_ENDPOINT",
+      "evidence": "services/ai-backend/src/agent_runtime/observability/otel.py:10,154"
+    },
+    {
+      "from": "ai-runtime-api/auth-rbac",
+      "to": "shared-packages",
+      "kind": "import",
+      "label": "copilot_service_contracts header + scope constants",
+      "evidence": "services/ai-backend/src/runtime_api/auth.py:9-16"
+    },
+    {
+      "from": "backend-facade",
+      "to": "ai-runtime-api/http-routes",
+      "kind": "http",
+      "label": "proxies all /v1 agent traffic to AI_BACKEND_URL :8000",
+      "evidence": "services/backend-facade/src/backend_facade/settings.py:14"
+    },
+    {
+      "from": "backend-product",
+      "to": "ai-runtime-api/http-routes",
+      "kind": "http",
+      "label": "Library indexer calls POST /internal/v1/llm/embed",
+      "evidence": "services/ai-backend/src/runtime_api/http/llm_embed_routes.py:3-5"
+    },
+    {
+      "from": "ai-runtime-worker",
+      "to": "ai-runtime-api/event-producer",
+      "kind": "import",
+      "label": "worker handlers emit envelopes through RuntimeEventProducer + RunTerminationCoordinator",
+      "evidence": "services/ai-backend/src/runtime_worker/handlers/run.py:776"
+    },
+    {
+      "from": "ai-runtime-persistence",
+      "to": "ai-runtime-api/schemas",
+      "kind": "import",
+      "label": "adapters use records + RuntimeEventPresentationProjector.activity_kind_for during replay (F1)",
+      "evidence": "services/ai-backend/src/runtime_adapters/postgres/runtime_api_store.py:103,4800"
+    }
+  ]
+}
