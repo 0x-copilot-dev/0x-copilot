@@ -772,3 +772,125 @@ class TestGoogleLink(GoogleFlowFixtureMixin):
             self.link_round_trip(service, ctx)
         assert exc_info.value.org_id == "org_other"
         assert exc_info.value.user_id == "usr_other"
+
+
+class TestGoogleLinkConfirmMerge(GoogleFlowFixtureMixin):
+    """FR-M1/U2 end-to-end: a confirmed Google-link conflict runs the REAL
+    merge saga and completes the link + email upgrade against the survivor."""
+
+    def test_confirmed_conflict_merges_then_links_and_upgrades_email(self) -> None:
+        from backend_app.contracts import (
+            OidcIdentityRecord,
+            OrganizationMemberRecord,
+            OrganizationMemberSource,
+            UserRecord,
+            UserStatus,
+        )
+        from backend_app.identity.account_merge import (
+            AccountMergeService,
+            InMemoryMergeData,
+            NullRuntimeMergeClient,
+        )
+        from backend_app.identity.account_merge_store import (
+            InMemoryAccountMergeStore,
+        )
+
+        service, ctx = self.build()
+        identity_store = ctx["identity_store"]
+
+        # Caller: a wallet-only personal account (placeholder email).
+        for org, user, email in (
+            (
+                "org_caller",
+                "usr_caller",
+                "0x5aaeb6053f3e94c9b9a09f33669435e7ef1beaed@wallet.invalid",
+            ),
+            ("org_other", "usr_other", "alice.doe@gmail.example"),
+        ):
+            identity_store.create_organization(
+                OrganizationRecord(org_id=org, display_name=org, slug=org)
+            )
+            identity_store.create_user(
+                UserRecord(
+                    user_id=user,
+                    org_id=org,
+                    primary_email=email,
+                    display_name=user,
+                    email_verified_at=None,
+                )
+            )
+            identity_store.add_member(
+                OrganizationMemberRecord(
+                    org_id=org,
+                    user_id=user,
+                    source=OrganizationMemberSource.SIWE,
+                )
+            )
+        # The Google subject already belongs to the OTHER account.
+        ctx["oidc_store"].create_identity(
+            OidcIdentityRecord(
+                org_id="org_other",
+                user_id="usr_other",
+                provider_id=GOOGLE_PROVIDER_ID,
+                subject="gsub-conflict",
+            )
+        )
+        # Wire the REAL saga into the OIDC service (app.py does the same via
+        # the late-binding proxy).
+        service._merge_service = AccountMergeService(  # noqa: SLF001
+            identity_store=identity_store,
+            merge_store=InMemoryAccountMergeStore(),
+            sessions=ctx["sessions"],
+            data_port=InMemoryMergeData(
+                identity_store=identity_store, oidc_store=ctx["oidc_store"]
+            ),
+            runtime_port=NullRuntimeMergeClient(),
+        )
+
+        # Authenticated link-start WITH the explicit merge consent (FR-U2).
+        authorize = service.authorize(
+            org_id="org_caller",
+            provider_id=GOOGLE_PROVIDER_ID,
+            redirect_uri="https://app.example/v1/auth/oidc/callback",
+            link_org_id="org_caller",
+            link_user_id="usr_caller",
+            link_confirm_merge=True,
+        )
+        auth_record = next(
+            row
+            for row in ctx["oidc_store"].authentications.values()
+            if row.state == authorize.state
+        )
+        assert auth_record.link_confirm_merge is True
+        id_token = _sign_id_token(
+            ctx["private"],
+            kid=ctx["kid"],
+            subject="gsub-conflict",
+            nonce=auth_record.nonce,
+            email="alice.doe@gmail.example",
+            email_verified=True,
+        )
+        ctx["token_endpoint"].response = {
+            "id_token": id_token,
+            "access_token": "test-access-token",
+            "expires_in": 3600,
+        }
+
+        result = service.callback(state=authorize.state, code="auth-code-from-google")
+
+        assert result.linked is True
+        assert result.status == "merged"
+        assert result.user_id == "usr_caller"
+        # The identity row now belongs to the survivor (the caller).
+        ident = ctx["oidc_store"].get_identity_by_subject(
+            provider_id=GOOGLE_PROVIDER_ID, subject="gsub-conflict"
+        )
+        assert (ident.org_id, ident.user_id) == ("org_caller", "usr_caller")
+        # Placeholder email upgraded post-merge (FR-L2 continues to apply).
+        caller = identity_store.get_user(org_id="org_caller", user_id="usr_caller")
+        assert caller.primary_email == "alice.doe@gmail.example"
+        assert caller.email_verified_at is not None
+        # The absorbed account is disabled with lineage (FR-M7).
+        absorbed = identity_store.users["usr_other"]
+        assert absorbed.status == UserStatus.DISABLED
+        assert absorbed.absorbed_into_user_id == "usr_caller"
