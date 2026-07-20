@@ -239,6 +239,7 @@ from backend_app.provider_keys import (
     ProviderKeysService,
     register_provider_keys_routes,
 )
+from backend_app.routes.me_identities import register_me_identities_routes
 from backend_app.routes.me_profile import register_me_profile_routes
 from backend_app.routes.members import register_members_routes
 from backend_app.routes.me_mfa import register_me_mfa_routes
@@ -1340,6 +1341,12 @@ def create_app(
         # linked_identities list (account-linking PRD FR-L4).
         siwe_store=getattr(app.state, "siwe_store", None),
         oidc_store=getattr(app.state, "oidc_store", None),
+    )
+    # Account-linking (PRD FR-L1): authenticated wallet link. Degrades to 503
+    # when the auth block that builds the SIWE service didn't run.
+    register_me_identities_routes(
+        app,
+        siwe_service=getattr(app.state, "siwe_service", None),
     )
     register_me_preferences_routes(
         app,

@@ -2569,3 +2569,19 @@ class SiweVerifyResult(BackendContract):
     expires_at: datetime
     return_to: str | None = None
     requires_mfa: bool = False
+
+
+class SiweLinkWalletResult(BackendContract):
+    """Returned by the AUTHENTICATED link-wallet endpoint (PRD FR-L1).
+
+    Deliberately NOT a :class:`SiweVerifyResult` — linking never mints a
+    session (the caller already holds a valid bearer). ``status`` is
+    ``linked`` for a fresh link and ``already_linked`` for the idempotent
+    no-op (the wallet was already bound to this account, FR-L6).
+    """
+
+    status: str  # "linked" | "already_linked"
+    wallet_id: str
+    address: str  # EIP-55 checksummed display form
+    chain_id: int
+    chain_name: str

@@ -41,6 +41,7 @@ from backend_app.contracts import (
     LoginAttemptRecord,
     OrganizationMemberSource,
     OrganizationRecord,
+    SiweLinkWalletResult,
     SiweNonceRecord,
     SiweNonceResult,
     SiweVerifyResult,
@@ -176,6 +177,22 @@ class SiweUserNotProvisioned(SiweError):
     """Linked wallet points at a deleted/disabled user."""
 
     detail = "user_not_provisioned"
+
+
+class SiweWalletAlreadyLinked(SiweError):
+    """The wallet is already bound to a DIFFERENT account (PRD FR-M1).
+
+    Carries the owning account so the caller can route the conflict into the
+    account-merge flow (D-01: conflicts always merge; the merge engine is a
+    later PR — until it lands, routes surface this as ``merge_required``).
+    """
+
+    detail = "wallet_linked_to_another_account"
+
+    def __init__(self, *, org_id: str, user_id: str) -> None:
+        super().__init__(self.detail)
+        self.org_id = org_id
+        self.user_id = user_id
 
 
 class SiweRateLimited(SiweError):
@@ -638,6 +655,105 @@ class SiweService:
             requires_mfa=mfa_required,
         )
 
+    # Authenticated link (PRD FR-L1) -----------------------------------------
+    def link_wallet(
+        self,
+        *,
+        org_id: str,
+        user_id: str,
+        message: str,
+        signature: str,
+        ip: str | None = None,
+        user_agent: str | None = None,
+    ) -> SiweLinkWalletResult:
+        """Bind a proven wallet to the CALLER's account — never provisions.
+
+        Reuses the exact validation prefix of :meth:`verify` (statement,
+        chain allowlist, origin/domain binding, time window, signature
+        recovery, single-use nonce) so proof-of-ownership is identical to
+        sign-in. Divergences from ``verify`` (deliberate, PRD §6.2):
+
+        - the wallet binds to the AUTHENTICATED ``(org_id, user_id)`` — the
+          self-signup gate is irrelevant and ``provision_personal_org`` is
+          never called;
+        - no session is minted (the caller already holds a bearer) and no
+          login attempt / lockout state is recorded on success — a link is
+          not a login;
+        - a wallet already bound to THIS account is an idempotent no-op
+          (FR-L6); one bound to ANOTHER account raises
+          :class:`SiweWalletAlreadyLinked` for the merge flow (FR-M1).
+        """
+
+        parsed = parse_siwe_message(message)
+        if parsed.statement != SIWE_STATEMENT:
+            raise SiweMessageInvalid(f"statement must be exactly {SIWE_STATEMENT!r}")
+        if parsed.chain_id not in self._allowed_chain_ids:
+            raise SiweChainNotAllowed(f"chain {parsed.chain_id} is not allowlisted")
+        self._check_domain_binding(parsed, ip=ip, user_agent=user_agent)
+        self._check_time_window(parsed, ip=ip, user_agent=user_agent)
+        recovered = self._recover_signer(
+            message=message,
+            signature=signature,
+            parsed=parsed,
+            ip=ip,
+            user_agent=user_agent,
+        )
+        self._consume_nonce(parsed, ip=ip, user_agent=user_agent)
+
+        caller = self._identity_store.get_user(org_id=org_id, user_id=user_id)
+        if caller is None:
+            raise SiweUserNotProvisioned("caller identity not found")
+
+        checksummed = display_address(recovered)
+        existing = self._siwe_store.get_wallet_identity(address=recovered)
+        if existing is not None:
+            if existing.org_id == org_id and existing.user_id == user_id:
+                # FR-L6: already mine — idempotent success, no new row.
+                return SiweLinkWalletResult(
+                    status="already_linked",
+                    wallet_id=existing.wallet_id,
+                    address=checksummed,
+                    chain_id=existing.chain_id,
+                    chain_name=chain_display_name(existing.chain_id),
+                )
+            # FR-M1: owned by another account — the merge flow's trigger.
+            raise SiweWalletAlreadyLinked(
+                org_id=existing.org_id, user_id=existing.user_id
+            )
+
+        record = self._siwe_store.create_wallet_identity(
+            WalletIdentityRecord(
+                address=recovered,
+                org_id=org_id,
+                user_id=user_id,
+                chain_id=parsed.chain_id,
+            )
+        )
+        # Own audit action — NOT siwe.verify_succeeded and NOT a login
+        # attempt, so failed/successful links never pollute login history
+        # or lockout accounting.
+        self._identity_store.append_identity_audit(
+            self._audit_event(
+                org_id=org_id,
+                user=caller,
+                action="siwe.wallet_linked",
+                metadata={
+                    "address": checksummed,
+                    "chain_id": parsed.chain_id,
+                    "wallet_id": record.wallet_id,
+                },
+                ip=ip,
+                user_agent=user_agent,
+            )
+        )
+        return SiweLinkWalletResult(
+            status="linked",
+            wallet_id=record.wallet_id,
+            address=checksummed,
+            chain_id=parsed.chain_id,
+            chain_name=chain_display_name(parsed.chain_id),
+        )
+
     # Verify helpers ---------------------------------------------------------
     def _check_domain_binding(
         self, parsed: SiweMessage, *, ip: str | None, user_agent: str | None
@@ -966,6 +1082,7 @@ __all__ = [
     "SiweService",
     "SiweSignatureInvalid",
     "SiweUserNotProvisioned",
+    "SiweWalletAlreadyLinked",
     "build_siwe_message",
     "chain_display_name",
     "display_address",
