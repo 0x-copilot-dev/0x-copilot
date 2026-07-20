@@ -44,8 +44,12 @@ import {
 } from "./data/providerKeys";
 
 // DESIGN-SPEC §4 keychain note.
+// Honest storage claim (amended 2026-07-20): keys live TokenVault-encrypted in
+// the local database, NOT in the macOS Keychain — the OS keychain only gates
+// the encryption secrets when the user opts in (Key storage & app lock).
+// The exported name keeps its legacy "KEYCHAIN_NOTE" identity for hosts/tests.
 export const PROVIDER_KEYS_KEYCHAIN_NOTE =
-  "Keys stored in your macOS Keychain, encrypted at rest, never sent to a 0xCopilot server.";
+  "Keys are encrypted at rest in your local vault and never sent to a 0xCopilot server.";
 
 export interface ProviderKeysPageProps {
   /** Host-injected storage / validation seam (default: `createProviderKeysPort`). */
