@@ -5,10 +5,26 @@ Frozen wire contract (facade re-exposes these verbatim):
   GET    /v1/settings/provider-keys
       -> 200 {"keys": [{"provider", "key_hint", "updated_at"}]}
   PUT    /v1/settings/provider-keys/{provider}   body {"api_key": "..."}
-      -> 200 {"provider", "key_hint", "updated_at"}
-      -> 422 on unknown provider (path enum), 400 on format mismatch
+      -> 200 {"provider", "key_hint", "updated_at",
+              "live_check"?: "passed" | "skipped_unreachable"}
+      -> 422 on unknown provider (path enum), 400 on format mismatch or
+         a provider-rejected key ("api_key_rejected_by_provider")
   DELETE /v1/settings/provider-keys/{provider}
       -> 204
+  POST   /v1/settings/provider-keys/{provider}/validate
+         body {"api_key": "..."}
+      -> 200 {"valid": true,  "models": [...], "reason": null}
+      -> 200 {"valid": false, "models": null,  "reason": "invalid_key"}
+      -> 200 {"valid": null,  "models": null,
+              "reason": "provider_unreachable"}   (couldn't check —
+              NOT a failure verdict)
+
+The validate lane calls the provider's live listing endpoint with the
+submitted key (see ``live_validator.py``); the key is used for that one
+outbound call ONLY — never stored, never audited, never echoed. PUT
+keeps the format check as the gate, then best-effort live-checks:
+a provider-rejected key 400s, an unreachable provider still stores
+(offline-friendly) and reports ``live_check: "skipped_unreachable"``.
 
 ``key_hint`` is the ONLY key material on this surface — plaintext never
 appears in any response, log line, or audit row. Identity follows the
@@ -18,15 +34,22 @@ plus the trusted facade-headers envelope (query identity in dev).
 
 from __future__ import annotations
 
+from typing import Literal
+
 from copilot_service_contracts.scopes import RUNTIME_USE
 from fastapi import Depends, FastAPI, HTTPException, Query, Request, Response, status
 from pydantic import BaseModel, ConfigDict, Field
 
 from backend_app.auth import BackendServiceAuthenticator, ScopedIdentity
 from backend_app.identity.rbac import RequireScopes
+from backend_app.provider_keys.live_validator import (
+    LiveCheckStatus,
+    ProviderKeyLiveValidator,
+)
 from backend_app.provider_keys.service import (
     ProviderKeyFormatError,
     ProviderKeysService,
+    validate_api_key_format,
 )
 from backend_app.provider_keys.store import ProviderApiKeyRecord, ProviderName
 
@@ -58,6 +81,48 @@ class SetProviderKeyRequest(BaseModel):
     api_key: str = Field(..., min_length=1)
 
 
+class PutProviderKeyResponse(ProviderKeyResponse):
+    """PUT response: the stored summary plus a live-check note.
+
+    ``live_check`` is ``"passed"`` when the provider accepted the key,
+    ``"skipped_unreachable"`` when the provider couldn't be reached and
+    the key was stored anyway (offline-friendly). Omitted entirely
+    (``response_model_exclude_none``) when live validation is disabled,
+    which keeps the legacy three-field shape byte-identical.
+    """
+
+    live_check: Literal["passed", "skipped_unreachable"] | None = None
+
+
+class ValidateProviderKeyRequest(BaseModel):
+    """Body for the validate lane. The key is used for ONE outbound
+    probe and discarded — never stored, never audited."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    api_key: str = Field(..., min_length=1)
+
+
+class ValidateProviderKeyResponse(BaseModel):
+    """Tri-state live verdict — discriminate on ``valid``:
+
+    * ``true``  -> ``models`` lists the ids this key can reach (may be
+      empty where the authenticated probe isn't a model listing).
+    * ``false`` -> ``reason`` is ``"invalid_key"`` (provider said 401/403).
+    * ``null``  -> ``reason`` is ``"provider_unreachable"`` — the check
+      couldn't run; NOT a failure verdict.
+
+    All three keys are always present so clients never branch on key
+    existence. Never carries key material.
+    """
+
+    model_config = ConfigDict(extra="forbid")
+
+    valid: bool | None
+    models: list[str] | None = None
+    reason: Literal["invalid_key", "provider_unreachable"] | None = None
+
+
 # ---------------------------------------------------------------------------
 # Routes
 # ---------------------------------------------------------------------------
@@ -67,8 +132,14 @@ def register_provider_keys_routes(
     app: FastAPI,
     *,
     service: ProviderKeysService,
+    live_validator: ProviderKeyLiveValidator | None = None,
 ) -> None:
-    """Attach the three ``/v1/settings/provider-keys`` routes to ``app``."""
+    """Attach the ``/v1/settings/provider-keys`` routes to ``app``.
+
+    ``live_validator=None`` disables the live lane: PUT falls back to
+    the format-only gate (legacy behavior) and the validate route
+    answers ``provider_unreachable`` (couldn't check).
+    """
 
     @app.get(
         "/v1/settings/provider-keys",
@@ -88,17 +159,39 @@ def register_provider_keys_routes(
 
     @app.put(
         "/v1/settings/provider-keys/{provider}",
-        response_model=ProviderKeyResponse,
+        response_model=PutProviderKeyResponse,
+        response_model_exclude_none=True,
         dependencies=[Depends(RequireScopes(RUNTIME_USE))],
     )
-    def put_provider_key(
+    async def put_provider_key(
         request: Request,
         provider: ProviderName,
         body: SetProviderKeyRequest,
         org_id: str = Query(..., min_length=1),
         user_id: str = Query(..., min_length=1),
-    ) -> ProviderKeyResponse:
+    ) -> PutProviderKeyResponse:
         identity = _identity(request, org_id=org_id, user_id=user_id)
+        # Format check stays the gate — cheap, offline, and it keeps a
+        # clearly-wrong key from ever leaving this process.
+        try:
+            cleaned = validate_api_key_format(provider=provider, api_key=body.api_key)
+        except ProviderKeyFormatError as exc:
+            raise HTTPException(status.HTTP_400_BAD_REQUEST, str(exc)) from exc
+        # Best-effort live check: a provider-rejected key is a hard 400;
+        # an unreachable provider stores anyway (offline-friendly) and
+        # says so via ``live_check``.
+        live_check: Literal["passed", "skipped_unreachable"] | None = None
+        if live_validator is not None:
+            outcome = await live_validator.validate(provider=provider, api_key=cleaned)
+            if outcome.status is LiveCheckStatus.INVALID_KEY:
+                raise HTTPException(
+                    status.HTTP_400_BAD_REQUEST, "api_key_rejected_by_provider"
+                )
+            live_check = (
+                "passed"
+                if outcome.status is LiveCheckStatus.VALID
+                else "skipped_unreachable"
+            )
         try:
             saved = service.set_key(
                 org_id=identity.org_id,
@@ -110,7 +203,41 @@ def register_provider_keys_routes(
             )
         except ProviderKeyFormatError as exc:
             raise HTTPException(status.HTTP_400_BAD_REQUEST, str(exc)) from exc
-        return _to_response(saved)
+        return _to_put_response(saved, live_check=live_check)
+
+    @app.post(
+        "/v1/settings/provider-keys/{provider}/validate",
+        response_model=ValidateProviderKeyResponse,
+        dependencies=[Depends(RequireScopes(RUNTIME_USE))],
+    )
+    async def validate_provider_key(
+        request: Request,
+        provider: ProviderName,
+        body: ValidateProviderKeyRequest,
+        org_id: str = Query(..., min_length=1),
+        user_id: str = Query(..., min_length=1),
+    ) -> ValidateProviderKeyResponse:
+        """Live-check a key WITHOUT storing it. The submitted key feeds
+        exactly one outbound probe; no row is written, no audit event
+        carries material, and the response never echoes the key."""
+
+        _identity(request, org_id=org_id, user_id=user_id)
+        if live_validator is None:
+            return ValidateProviderKeyResponse(
+                valid=None, models=None, reason="provider_unreachable"
+            )
+        outcome = await live_validator.validate(provider=provider, api_key=body.api_key)
+        if outcome.status is LiveCheckStatus.VALID:
+            return ValidateProviderKeyResponse(
+                valid=True, models=list(outcome.model_ids), reason=None
+            )
+        if outcome.status is LiveCheckStatus.INVALID_KEY:
+            return ValidateProviderKeyResponse(
+                valid=False, models=None, reason="invalid_key"
+            )
+        return ValidateProviderKeyResponse(
+            valid=None, models=None, reason="provider_unreachable"
+        )
 
     @app.delete(
         "/v1/settings/provider-keys/{provider}",
@@ -153,6 +280,19 @@ def _to_response(record: ProviderApiKeyRecord) -> ProviderKeyResponse:
     )
 
 
+def _to_put_response(
+    record: ProviderApiKeyRecord,
+    *,
+    live_check: Literal["passed", "skipped_unreachable"] | None,
+) -> PutProviderKeyResponse:
+    return PutProviderKeyResponse(
+        provider=record.provider.value,
+        key_hint=record.key_hint,
+        updated_at=record.updated_at.isoformat(),
+        live_check=live_check,
+    )
+
+
 def _request_ip(request: Request) -> str | None:
     forwarded = request.headers.get("x-forwarded-for")
     if forwarded:
@@ -163,6 +303,9 @@ def _request_ip(request: Request) -> str | None:
 __all__ = [
     "ProviderKeyListResponse",
     "ProviderKeyResponse",
+    "PutProviderKeyResponse",
     "SetProviderKeyRequest",
+    "ValidateProviderKeyRequest",
+    "ValidateProviderKeyResponse",
     "register_provider_keys_routes",
 ]

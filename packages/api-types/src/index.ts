@@ -3937,6 +3937,9 @@ export type {
   ProviderKeyProvider,
   ProviderKeySummary,
   PutProviderKeyRequest,
+  PutProviderKeyResponse,
+  ValidateProviderKeyRequest,
+  ValidateProviderKeyResponse,
 } from "./providerKeys";
 // === end BYOK provider keys ===
 
