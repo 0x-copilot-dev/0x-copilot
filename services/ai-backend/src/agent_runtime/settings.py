@@ -53,6 +53,10 @@ class _EnvFields:
     # the worker's append wakes SSE adapters in a separate API process.
     EVENT_BUS_BACKEND = "RUNTIME_EVENT_BUS_BACKEND"
     ENABLE_LOCAL_MODELS = "RUNTIME_ENABLE_LOCAL_MODELS"
+    # Optional directory where the models.dev catalog source persists its
+    # last successful fetch (``models_dev.json``). Unset disables the disk
+    # cache tier — live data then falls straight back to the vendored snapshot.
+    MODEL_CATALOG_CACHE_DIR = "RUNTIME_MODEL_CATALOG_CACHE_DIR"
     STORE_BACKEND = "RUNTIME_STORE_BACKEND"
     DATABASE_URL = "DATABASE_URL"
     # Root directory for the ``file`` runtime store backend (JSONL folders +
@@ -192,6 +196,9 @@ class RuntimeSettings(BaseSettings):
     anthropic: ProviderSettings = Field(default_factory=ProviderSettings)
     gemini: ProviderSettings = Field(default_factory=ProviderSettings)
     openrouter: ProviderSettings = Field(default_factory=ProviderSettings)
+    # Disk-cache directory for the models.dev catalog source; ``None``
+    # disables the cache tier (see ``agent_runtime.api.models_dev_source``).
+    model_catalog_cache_dir: str | None = None
 
     @classmethod
     def load(
@@ -387,6 +394,7 @@ class RuntimeSettings(BaseSettings):
             anthropic=ProviderSettings(api_key=_o(v, E.ANTHROPIC_API_KEY)),
             gemini=ProviderSettings(api_key=_o(v, E.GOOGLE_API_KEY)),
             openrouter=ProviderSettings(api_key=_o(v, E.OPENROUTER_API_KEY)),
+            model_catalog_cache_dir=_o(v, E.MODEL_CATALOG_CACHE_DIR),
         )
 
     @classmethod

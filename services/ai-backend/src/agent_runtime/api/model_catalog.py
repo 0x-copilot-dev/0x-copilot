@@ -2,83 +2,65 @@
 
 One canonical builder consumed by both the picker route
 (:meth:`ConversationQueryService.list_models`) and workspace default-model
-validation (:class:`WorkspaceCoordinator`). Both previously assembled the
-same hard-coded list inline — the workspace side even noted the
-duplication was to dodge a circular import between the two coordinator
-modules. This neutral module breaks that cycle: both import *it*, so a
-model added here shows up in both the picker and the admin-default
+validation (:class:`WorkspaceCoordinator`). Both import *this* module, so a
+model that appears here shows up in both the picker and the admin-default
 allow-set without drift.
 
-OpenRouter models are appended when they exist in the curated set. Their
-availability is per-user BYOK, which this global (settings-only) layer
-cannot see, so they are always **selectable** — a run started without a
-stored OpenRouter key is guided to Settings by the run-create credential
-gate in :class:`ModelConfigResolver`, not by hiding the model here.
+Model metadata is **live**: :class:`ModelsDevCatalogSource` supplies it
+from https://models.dev with disk-cache and vendored-snapshot fallbacks
+(see :mod:`agent_runtime.api.models_dev_source`), replacing the previous
+hardcoded native + curated-OpenRouter lists. The settings-derived default
+model always remains the first catalog entry, so an offline boot with an
+empty source still produces a usable picker.
+
+``configured`` semantics are unchanged: native providers reflect whether a
+deployment env key is present; OpenRouter availability is per-user BYOK,
+which this global (settings-only) layer cannot see, so those entries are
+always **selectable** — a run started without a stored key is guided to
+Settings by the run-create credential gate in :class:`ModelConfigResolver`,
+not by hiding the model here. Providers with no deployment-level key
+settings at all (``groq``, ``xai``) report ``configured=False``.
 """
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+import threading
 
+from agent_runtime.api.models_dev_source import (
+    CatalogModelRecord,
+    ModelsDevCatalogSource,
+)
 from agent_runtime.settings import RuntimeSettings
 from runtime_api.schemas import ModelCatalogItem
-
-
-@dataclass(frozen=True)
-class _CuratedOpenRouterModel:
-    """One curated OpenRouter model — a ``vendor/model`` slug plus display copy."""
-
-    slug: str
-    name: str
-    description: str
 
 
 class ModelCatalog:
     """Assembles the catalog the model picker shows."""
 
-    # Curated OpenRouter starting set (a convenience/discovery aid — the
-    # picker also accepts an arbitrary ``vendor/model`` slug via its
-    # custom-model field). Slugs are OpenRouter's identifiers; refresh this
-    # list as models come and go — an unknown slug simply errors at call
-    # time, and the custom-model field always covers the long tail.
-    OPENROUTER_MODELS: tuple[_CuratedOpenRouterModel, ...] = (
-        _CuratedOpenRouterModel(
-            "openai/gpt-4o", "GPT-4o (OpenRouter)", "OpenAI GPT-4o via OpenRouter"
-        ),
-        _CuratedOpenRouterModel(
-            "anthropic/claude-3.7-sonnet",
-            "Claude 3.7 Sonnet (OpenRouter)",
-            "Anthropic Claude via OpenRouter",
-        ),
-        _CuratedOpenRouterModel(
-            "google/gemini-2.0-flash-001",
-            "Gemini 2.0 Flash (OpenRouter)",
-            "Google Gemini via OpenRouter",
-        ),
-        _CuratedOpenRouterModel(
-            "meta-llama/llama-3.3-70b-instruct",
-            "Llama 3.3 70B (OpenRouter)",
-            "Meta open model via OpenRouter",
-        ),
-        _CuratedOpenRouterModel(
-            "deepseek/deepseek-chat",
-            "DeepSeek Chat (OpenRouter)",
-            "DeepSeek via OpenRouter",
-        ),
-        _CuratedOpenRouterModel(
-            "mistralai/mistral-large",
-            "Mistral Large (OpenRouter)",
-            "Mistral via OpenRouter",
-        ),
-        _CuratedOpenRouterModel(
-            "qwen/qwen-2.5-72b-instruct",
-            "Qwen2.5 72B (OpenRouter)",
-            "Qwen open model via OpenRouter",
-        ),
-        _CuratedOpenRouterModel(
-            "x-ai/grok-2", "Grok 2 (OpenRouter)", "xAI Grok via OpenRouter"
-        ),
-    )
+    # Providers whose runs go through a native SDK path with reasoning
+    # passthrough. Reasoning for OpenAI-compat gateways (OpenRouter) is a
+    # follow-up, so their entries never advertise reasoning controls even
+    # when models.dev flags the underlying model as reasoning-capable.
+    NATIVE_REASONING_PROVIDERS = frozenset({"openai", "anthropic", "gemini"})
+    # Providers that are always selectable because their credentials are
+    # per-user BYOK — invisible at this settings-only layer.
+    ALWAYS_SELECTABLE_PROVIDERS = frozenset({"openrouter"})
+
+    _source: ModelsDevCatalogSource | None = None
+    _source_lock = threading.Lock()
+
+    @classmethod
+    def configure_source(cls, source: ModelsDevCatalogSource | None) -> None:
+        """Inject the metadata source (tests) or reset to lazy construction."""
+
+        with cls._source_lock:
+            cls._source = source
+
+    @classmethod
+    def reset_source(cls) -> None:
+        """Drop the shared source so the next build reconstructs from settings."""
+
+        cls.configure_source(None)
 
     @classmethod
     def display_name(cls, model_name: str) -> str:
@@ -96,77 +78,90 @@ class ModelCatalog:
 
     @classmethod
     def build(cls, settings: RuntimeSettings) -> tuple[ModelCatalogItem, ...]:
-        """Return the ordered catalog: default model, native curated set, OpenRouter."""
+        """Return the ordered catalog: default model first, then live source records.
+
+        Source records arrive deterministically ordered (provider asc,
+        release date desc, id asc). Callers that need id-uniqueness (the
+        picker route) deduplicate with last-definition-wins, so a richer
+        live record replaces the minimal default entry for the same id.
+        """
+
+        items = [cls._default_item(settings)]
+        for record in cls._source_for(settings).records():
+            items.append(cls._item_from_record(record, settings))
+        return tuple(items)
+
+    # ------------------------------------------------------------------
+    # Private helpers
+    # ------------------------------------------------------------------
+
+    @classmethod
+    def _source_for(cls, settings: RuntimeSettings) -> ModelsDevCatalogSource:
+        """Return the process-wide source, constructing it from settings once."""
+
+        with cls._source_lock:
+            if cls._source is None:
+                cls._source = ModelsDevCatalogSource(
+                    cache_dir=settings.model_catalog_cache_dir
+                )
+            return cls._source
+
+    @classmethod
+    def _default_item(cls, settings: RuntimeSettings) -> ModelCatalogItem:
+        """Entry for the settings-driven default model (always present, always first)."""
 
         default = settings.default_model
-        configured = {
-            "openai": settings.openai.is_configured,
-            "anthropic": settings.anthropic.is_configured,
-            "gemini": settings.gemini.is_configured,
-        }
-        items: list[ModelCatalogItem] = [
-            ModelCatalogItem(
-                id=default.model_name,
-                provider=default.provider,
-                model_name=default.model_name,
-                name=cls.display_name(default.model_name),
-                description="Runtime default model",
-                configured=configured.get(default.provider, False),
-                supports_streaming=default.supports_streaming,
-                supports_reasoning=default.reasoning is not None,
-                reasoning=default.reasoning.model_dump(mode="json")
-                if default.reasoning is not None
-                else None,
-            ),
-            ModelCatalogItem(
-                id="gpt-5.4-mini",
-                provider="openai",
-                model_name="gpt-5.4-mini",
-                name="GPT-5.4 Mini",
-                description="Compact OpenAI model",
-                configured=configured["openai"],
-                supports_streaming=True,
-                supports_attachments=True,
-                supports_reasoning=True,
-                reasoning={"enabled": True, "effort": "medium", "summary": "auto"},
-            ),
-            ModelCatalogItem(
-                id="claude-opus-4-7",
-                provider="anthropic",
-                model_name="claude-opus-4-7",
-                name="Claude Opus 4.7",
-                description="Anthropic reasoning model",
-                configured=configured["anthropic"],
-                supports_streaming=True,
-                supports_reasoning=True,
-            ),
-            ModelCatalogItem(
-                id="gemini-2.5-pro",
-                provider="gemini",
-                model_name="gemini-2.5-pro",
-                name="Gemini 2.5 Pro",
-                description="Google long-context model",
-                configured=configured["gemini"],
-                supports_streaming=True,
-                supports_attachments=True,
-            ),
-        ]
-        items.extend(
-            ModelCatalogItem(
-                id=model.slug,
-                provider="openrouter",
-                model_name=model.slug,
-                name=model.name,
-                description=model.description,
-                # Always selectable: BYOK availability is per-user and not
-                # visible at this settings-only layer. Reasoning passthrough
-                # for OpenRouter is a follow-up, so no reasoning controls.
-                configured=True,
-                supports_streaming=True,
-            )
-            for model in cls.OPENROUTER_MODELS
+        return ModelCatalogItem(
+            id=default.model_name,
+            provider=default.provider,
+            model_name=default.model_name,
+            name=cls.display_name(default.model_name),
+            description="Runtime default model",
+            configured=cls._configured(default.provider, settings),
+            supports_streaming=default.supports_streaming,
+            supports_reasoning=default.reasoning is not None,
+            reasoning=default.reasoning.model_dump(mode="json")
+            if default.reasoning is not None
+            else None,
         )
-        return tuple(items)
+
+    @classmethod
+    def _item_from_record(
+        cls, record: CatalogModelRecord, settings: RuntimeSettings
+    ) -> ModelCatalogItem:
+        """Map one source record onto the public catalog item shape."""
+
+        return ModelCatalogItem(
+            id=record.model_id,
+            provider=record.provider,
+            model_name=record.model_id,
+            name=record.display_name,
+            configured=cls._configured(record.provider, settings),
+            supports_streaming=True,
+            supports_attachments=record.supports_attachments,
+            supports_reasoning=record.supports_reasoning
+            and record.provider in cls.NATIVE_REASONING_PROVIDERS,
+            context_window=record.context_window,
+            max_output_tokens=record.max_output_tokens,
+            input_cost_per_mtok=record.input_cost_per_mtok,
+            output_cost_per_mtok=record.output_cost_per_mtok,
+            supports_tools=record.supports_tools,
+            release_date=record.release_date,
+        )
+
+    @classmethod
+    def _configured(cls, provider: str, settings: RuntimeSettings) -> bool:
+        """Whether the provider is usable without per-user setup, as far as settings can see."""
+
+        if provider in cls.ALWAYS_SELECTABLE_PROVIDERS:
+            return True
+        try:
+            return settings.provider_settings(provider).is_configured
+        except ValueError:
+            # Providers with no deployment-level key settings (groq, xai):
+            # only a per-user BYOK key could enable them, which this layer
+            # cannot see — report not-configured rather than guessing.
+            return False
 
 
 __all__ = ["ModelCatalog"]
