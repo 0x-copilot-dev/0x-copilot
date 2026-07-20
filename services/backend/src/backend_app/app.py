@@ -1336,8 +1336,10 @@ def create_app(
         # Surfaces the caller's wallet address + chain on /me/profile so the FE
         # renders honest identity instead of the @wallet.invalid placeholder.
         # getattr: degrades to a non-wallet profile if the auth block that sets
-        # app.state.siwe_store didn't run.
+        # app.state.siwe_store didn't run. oidc_store additionally feeds the
+        # linked_identities list (account-linking PRD FR-L4).
         siwe_store=getattr(app.state, "siwe_store", None),
+        oidc_store=getattr(app.state, "oidc_store", None),
     )
     register_me_preferences_routes(
         app,

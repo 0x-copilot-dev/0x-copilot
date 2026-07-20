@@ -61,6 +61,17 @@ class SiweStore(Protocol):
         wallet), or ``None`` for a non-wallet account.
         """
 
+    def list_wallets_by_user(
+        self, *, org_id: str, user_id: str
+    ) -> tuple[WalletIdentityRecord, ...]:
+        """All wallets linked to a user, oldest first.
+
+        Account-linking (PRD FR-L4): once a user can link multiple wallets, the
+        profile's "Linked accounts" list needs every wallet — the singular
+        ``get_wallet_identity_by_user`` remains for "the" profile wallet.
+        """
+        ...
+
 
 # ---------------------------------------------------------------------------
 # In-memory adapter
@@ -126,15 +137,19 @@ class InMemorySiweStore:
     def get_wallet_identity_by_user(
         self, *, org_id: str, user_id: str
     ) -> WalletIdentityRecord | None:
+        matches = self.list_wallets_by_user(org_id=org_id, user_id=user_id)
+        # First-linked wins (deterministic "the" profile wallet).
+        return matches[0] if matches else None
+
+    def list_wallets_by_user(
+        self, *, org_id: str, user_id: str
+    ) -> tuple[WalletIdentityRecord, ...]:
         matches = [
             row
             for row in self.wallet_identities.values()
             if row.org_id == org_id and row.user_id == user_id
         ]
-        if not matches:
-            return None
-        # First-linked wins (deterministic "the" profile wallet).
-        return min(matches, key=lambda row: row.created_at)
+        return tuple(sorted(matches, key=lambda row: row.created_at))
 
 
 # ---------------------------------------------------------------------------
@@ -256,6 +271,19 @@ class PostgresSiweStore:
             )
             row = cur.fetchone()
         return WalletIdentityRecord.model_validate(row) if row else None
+
+    def list_wallets_by_user(
+        self, *, org_id: str, user_id: str
+    ) -> tuple[WalletIdentityRecord, ...]:
+        with self._cursor(None) as cur:
+            cur.execute(
+                "SELECT * FROM wallet_identities "
+                "WHERE org_id = %s AND user_id = %s "
+                "ORDER BY created_at ASC",
+                (org_id, user_id),
+            )
+            rows = cur.fetchall()
+        return tuple(WalletIdentityRecord.model_validate(row) for row in rows)
 
 
 __all__ = [
