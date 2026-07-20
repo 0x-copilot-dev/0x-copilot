@@ -78,6 +78,32 @@ class RuntimeServiceAuthenticator:
         )
 
     @classmethod
+    def require_service_token(cls, request: Request) -> None:
+        """Service-token-only gate for internal routes with no tenant scope.
+
+        Used by the account-merge endpoint (PRD §6.4), whose absorbed /
+        survivor coordinates arrive in the body — per-tenant identity
+        headers are deliberately not required, so
+        :meth:`trusted_identity_from_request` (which demands them once a
+        token is configured) is the wrong gate. Mirrors its token logic
+        exactly: 401 on mismatch, 503 in production without a configured
+        token, open in dev when no token is set.
+        """
+
+        expected = cls._service_token()
+        supplied = request.headers.get(SERVICE_TOKEN_HEADER, "")
+        if expected:
+            if supplied != expected:
+                raise HTTPException(
+                    status.HTTP_401_UNAUTHORIZED, "Invalid service token"
+                )
+        elif cls._environment() == "production":
+            raise HTTPException(
+                status.HTTP_503_SERVICE_UNAVAILABLE,
+                "ENTERPRISE_SERVICE_TOKEN is not configured",
+            )
+
+    @classmethod
     def require_identity(cls, request: Request) -> TrustedRequestIdentity:
         """Strict identity resolver — never returns ``None``.
 
