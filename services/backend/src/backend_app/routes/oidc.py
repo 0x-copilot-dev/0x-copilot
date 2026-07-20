@@ -17,6 +17,7 @@ from backend_app.contracts import (
     OidcAuthorizeResult,
     OidcCallbackRequest,
     OidcCallbackResult,
+    OidcLinkCallbackResult,
     OidcProviderSummary,
     OidcProvidersResponse,
 )
@@ -25,6 +26,8 @@ from backend_app.identity import (
     IdTokenVerificationError,
     IdentityStore,
     OidcConfigError,
+    OidcEmailNotVerified,
+    OidcIdentityAlreadyLinked,
     OidcProviderDisabled,
     OidcService,
     OidcStateMismatch,
@@ -73,11 +76,16 @@ def register_oidc_routes(
 
     @app.post(
         "/internal/v1/auth/oidc/callback",
-        response_model=OidcCallbackResult,
+        # Union response: a sign-in flow returns OidcCallbackResult (session
+        # handoff); a link-bound flow returns OidcLinkCallbackResult (no
+        # session — the caller is already signed in, PRD FR-L2).
+        response_model=None,
         # SSO exit ramp: callback mints the session itself.
         dependencies=[Depends(public_route())],
     )
-    def callback(request: Request, payload: OidcCallbackRequest) -> OidcCallbackResult:
+    def callback(
+        request: Request, payload: OidcCallbackRequest
+    ) -> OidcCallbackResult | OidcLinkCallbackResult:
         BackendServiceAuthenticator.internal_scoped_identity(
             request, org_id="-", user_id="-"
         )
@@ -88,6 +96,21 @@ def register_oidc_routes(
                 ip=payload.ip,
                 user_agent=payload.user_agent,
             )
+        except OidcIdentityAlreadyLinked as exc:
+            # FR-M1 / D-01: the conflict is a merge trigger (owner not leaked).
+            raise HTTPException(
+                status.HTTP_409_CONFLICT,
+                {
+                    "code": "merge_required",
+                    "safe_message": (
+                        "This Google account already belongs to another "
+                        "0xCopilot account. Linking it will merge that "
+                        "account into this one."
+                    ),
+                },
+            ) from exc
+        except OidcEmailNotVerified as exc:
+            raise HTTPException(status.HTTP_400_BAD_REQUEST, str(exc)) from exc
         except AccountLocked as exc:
             headers = (
                 {"Retry-After": str(exc.retry_after_seconds)}

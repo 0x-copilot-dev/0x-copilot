@@ -18,7 +18,12 @@ from fastapi import Depends, FastAPI, HTTPException, Query, Request, status
 from pydantic import BaseModel, ConfigDict
 
 from backend_app.auth import BackendServiceAuthenticator
-from backend_app.contracts import SiweLinkWalletResult
+from backend_app.contracts import OidcAuthorizeResult, SiweLinkWalletResult
+from backend_app.identity.oidc import (
+    OidcConfigError,
+    OidcProviderDisabled,
+    OidcService,
+)
 from backend_app.identity.rbac import RequireScopes
 from backend_app.identity.siwe import (
     SiweError,
@@ -36,15 +41,23 @@ class LinkWalletRequest(BaseModel):
     signature: str
 
 
+class LinkGoogleStartRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    redirect_uri: str
+    return_to: str | None = None
+
+
 def register_me_identities_routes(
     app: FastAPI,
     *,
     siwe_service: SiweService | None = None,
+    oidc_service: OidcService | None = None,
 ) -> None:
     """Attach ``/internal/v1/me/identities/*``. No-op parts degrade honestly.
 
-    ``siwe_service`` is optional so deployments without the auth block (and
-    older test harnesses) keep booting; the wallet route then answers 503.
+    The services are optional so deployments without the auth block (and
+    older test harnesses) keep booting; the routes then answer 503.
     """
 
     @app.post(
@@ -101,5 +114,49 @@ def register_me_identities_routes(
             # Message/signature/nonce/origin failures — client mistakes, 400.
             raise HTTPException(status.HTTP_400_BAD_REQUEST, exc.detail) from exc
 
+    @app.post(
+        "/internal/v1/me/identities/google/link/start",
+        response_model=OidcAuthorizeResult,
+        dependencies=[Depends(RequireScopes(RUNTIME_USE))],
+    )
+    def link_google_start(
+        request: Request,
+        payload: LinkGoogleStartRequest,
+        org_id: str = Query(..., min_length=1),
+        user_id: str = Query(..., min_length=1),
+    ) -> OidcAuthorizeResult:
+        identity = BackendServiceAuthenticator.internal_scoped_identity(
+            request, org_id=org_id, user_id=user_id
+        )
+        if oidc_service is None:
+            raise HTTPException(
+                status.HTTP_503_SERVICE_UNAVAILABLE, "google_linking_unavailable"
+            )
+        try:
+            # The link binding is written server-side onto the state row from
+            # the VERIFIED identity (PRD FR-L2/L3) — the browser round-trip
+            # (and the public callback) never carry it. The callback's fork
+            # recovers it from the consumed row and attaches the identity to
+            # this caller instead of provisioning/signing-in.
+            return oidc_service.authorize(
+                org_id=identity.org_id,
+                provider_id="google",
+                redirect_uri=payload.redirect_uri,
+                return_to=payload.return_to,
+                ip=request.headers.get("x-forwarded-for"),
+                user_agent=request.headers.get("user-agent"),
+                link_org_id=identity.org_id,
+                link_user_id=identity.user_id,
+            )
+        except OidcProviderDisabled as exc:
+            raise HTTPException(status.HTTP_403_FORBIDDEN, str(exc)) from exc
+        except OidcConfigError as exc:
+            # Most commonly: Google OAuth is not configured on this deployment.
+            raise HTTPException(status.HTTP_400_BAD_REQUEST, str(exc)) from exc
 
-__all__ = ["LinkWalletRequest", "register_me_identities_routes"]
+
+__all__ = [
+    "LinkGoogleStartRequest",
+    "LinkWalletRequest",
+    "register_me_identities_routes",
+]

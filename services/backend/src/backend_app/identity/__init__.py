@@ -48,6 +48,8 @@ from backend_app.identity.google import (
 from backend_app.identity.oidc import (
     HttpxTokenEndpointClient,
     OidcConfigError,
+    OidcEmailNotVerified,
+    OidcIdentityAlreadyLinked,
     OidcProviderConfig,
     OidcProviderDisabled,
     OidcService,
@@ -284,6 +286,8 @@ __all__ = [
     "MfaStore",
     "MfaWebAuthnRejected",
     "OidcConfigError",
+    "OidcEmailNotVerified",
+    "OidcIdentityAlreadyLinked",
     "OidcProviderConfig",
     "OidcProviderDisabled",
     "OidcService",

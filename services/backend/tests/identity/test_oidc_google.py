@@ -620,3 +620,155 @@ class TestProvidersRoute:
         body = response.json()
         assert body["auth_url"].startswith(GOOGLE_AUTHORIZATION_ENDPOINT + "?")
         assert body["state"]
+
+
+# ---------------------------------------------------------------------------
+# Authenticated Google link (account-linking PRD FR-L2/L3/L6/M1)
+# ---------------------------------------------------------------------------
+
+
+class TestGoogleLink(GoogleFlowFixtureMixin):
+    """The link fork: attach-to-caller, email upgrade, no session, conflicts."""
+
+    _WALLET_EMAIL = "0x5aaeb6053f3e94c9b9a09f33669435e7ef1beaed@wallet.invalid"
+
+    def _seed_caller(self, ctx: dict[str, Any], *, email: str = _WALLET_EMAIL) -> None:
+        from backend_app.contracts import UserRecord
+
+        ctx["identity_store"].create_organization(
+            OrganizationRecord(
+                org_id="org_caller", display_name="Caller", slug="caller"
+            )
+        )
+        ctx["identity_store"].create_user(
+            UserRecord(
+                user_id="usr_caller",
+                org_id="org_caller",
+                primary_email=email,
+                display_name="0x5aAe…eAed",
+                email_verified_at=None,
+            )
+        )
+
+    def link_round_trip(
+        self,
+        service: OidcService,
+        ctx: dict[str, Any],
+        *,
+        subject: str = "gsub-link-123",
+        email: str | None = "alice.doe@gmail.example",
+        email_verified: bool | None = True,
+    ) -> Any:
+        authorize = service.authorize(
+            org_id="org_caller",
+            provider_id=GOOGLE_PROVIDER_ID,
+            redirect_uri="https://app.example/v1/auth/oidc/callback",
+            link_org_id="org_caller",
+            link_user_id="usr_caller",
+        )
+        auth_record = next(
+            row
+            for row in ctx["oidc_store"].authentications.values()
+            if row.state == authorize.state
+        )
+        # The link binding is persisted server-side on the state row.
+        assert auth_record.link_org_id == "org_caller"
+        assert auth_record.link_user_id == "usr_caller"
+        id_token = _sign_id_token(
+            ctx["private"],
+            kid=ctx["kid"],
+            subject=subject,
+            nonce=auth_record.nonce,
+            email=email,
+            email_verified=email_verified,
+            name="Alice Doe",
+        )
+        ctx["token_endpoint"].response = {
+            "id_token": id_token,
+            "access_token": "test-access-token",
+            "expires_in": 3600,
+        }
+        return service.callback(state=authorize.state, code="auth-code-from-google")
+
+    def test_link_attaches_identity_and_upgrades_placeholder_email(self) -> None:
+        service, ctx = self.build()
+        self._seed_caller(ctx)
+        result = self.link_round_trip(service, ctx)
+        assert result.linked is True
+        assert result.status == "linked"
+        assert result.user_id == "usr_caller"
+        assert result.email_upgraded is True
+        # The identity row binds to the CALLER — no new org/user provisioned.
+        ident = ctx["oidc_store"].get_identity_by_subject(
+            provider_id=GOOGLE_PROVIDER_ID, subject="gsub-link-123"
+        )
+        assert ident is not None
+        assert (ident.org_id, ident.user_id) == ("org_caller", "usr_caller")
+        # The wallet placeholder was upgraded to the VERIFIED Google email.
+        user = ctx["identity_store"].get_user(org_id="org_caller", user_id="usr_caller")
+        assert user is not None
+        assert user.primary_email == "alice.doe@gmail.example"
+        assert user.email_verified_at is not None
+        # Only the caller's user exists.
+        assert len(ctx["identity_store"].users) == 1
+
+    def test_link_mints_no_session(self) -> None:
+        service, ctx = self.build()
+        self._seed_caller(ctx)
+        self.link_round_trip(service, ctx)
+        # No session row was minted — the caller keeps their existing bearer.
+        assert ctx["sessions"]._store.sessions == {}  # noqa: SLF001
+
+    def test_link_requires_email_verified(self) -> None:
+        from backend_app.identity import OidcEmailNotVerified
+
+        service, ctx = self.build()
+        self._seed_caller(ctx)
+        with pytest.raises(OidcEmailNotVerified):
+            self.link_round_trip(service, ctx, email_verified=False)
+        # Nothing linked, email untouched.
+        user = ctx["identity_store"].get_user(org_id="org_caller", user_id="usr_caller")
+        assert user is not None and user.primary_email == self._WALLET_EMAIL
+
+    def test_link_keeps_real_email_untouched(self) -> None:
+        service, ctx = self.build()
+        self._seed_caller(ctx, email="caller@acme.com")
+        result = self.link_round_trip(service, ctx)
+        assert result.email_upgraded is False
+        user = ctx["identity_store"].get_user(org_id="org_caller", user_id="usr_caller")
+        assert user is not None and user.primary_email == "caller@acme.com"
+
+    def test_link_idempotent_when_already_mine(self) -> None:
+        service, ctx = self.build()
+        self._seed_caller(ctx)
+        first = self.link_round_trip(service, ctx)
+        assert first.status == "linked"
+        second = self.link_round_trip(service, ctx)
+        assert second.status == "already_linked"
+        # Still exactly one identity row for the subject.
+        rows = [
+            row
+            for row in ctx["oidc_store"].identities.values()
+            if row.subject == "gsub-link-123" and row.unlinked_at is None
+        ]
+        assert len(rows) == 1
+
+    def test_link_conflict_when_subject_owned_by_another_account(self) -> None:
+        from backend_app.contracts import OidcIdentityRecord
+        from backend_app.identity import OidcIdentityAlreadyLinked
+
+        service, ctx = self.build()
+        self._seed_caller(ctx)
+        # The Google subject already belongs to a DIFFERENT account.
+        ctx["oidc_store"].create_identity(
+            OidcIdentityRecord(
+                org_id="org_other",
+                user_id="usr_other",
+                provider_id=GOOGLE_PROVIDER_ID,
+                subject="gsub-link-123",
+            )
+        )
+        with pytest.raises(OidcIdentityAlreadyLinked) as exc_info:
+            self.link_round_trip(service, ctx)
+        assert exc_info.value.org_id == "org_other"
+        assert exc_info.value.user_id == "usr_other"

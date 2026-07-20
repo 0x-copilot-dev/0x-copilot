@@ -66,6 +66,14 @@ def register_me_routes(app: FastAPI) -> None:
     async def link_my_wallet(request: Request) -> dict[str, object]:
         return await _forward_me(request, "POST", "identities/wallet")
 
+    # Account-linking (PRD FR-L2): authenticated Google link start. Returns
+    # the IdP auth_url; the browser completes on the PUBLIC
+    # /v1/auth/oidc/callback, whose link intent is recovered server-side from
+    # the consumed state row.
+    @app.post("/v1/me/identities/google/link/start")
+    async def link_my_google_start(request: Request) -> dict[str, object]:
+        return await _forward_me(request, "POST", "identities/google/link/start")
+
     @app.get("/v1/me/preferences")
     async def get_my_preferences(request: Request) -> dict[str, object]:
         return await _forward_me(request, "GET", "preferences")

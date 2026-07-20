@@ -1452,6 +1452,11 @@ class OidcAuthenticationRecord(BackendContract):
     consumed_at: datetime | None = None
     ip: str | None = None
     user_agent: str | None = None
+    # Account-linking (PRD FR-L2): set by the AUTHENTICATED link-start to bind
+    # the flow to the caller; the public callback recovers the link intent from
+    # the consumed row. NULL = a plain sign-in flow (pre-0037 behavior).
+    link_org_id: str | None = None
+    link_user_id: str | None = None
 
     @field_validator("auth_id", "org_id", "provider_id")
     @classmethod
@@ -1536,6 +1541,25 @@ class OidcCallbackResult(BackendContract):
     # minted with the ``mfa:pending`` scope and the frontend must route
     # to the MFA prompt.
     requires_mfa: bool = False
+
+
+class OidcLinkCallbackResult(BackendContract):
+    """Returned by the callback for a LINK flow (PRD FR-L2).
+
+    Deliberately NOT an :class:`OidcCallbackResult` — linking never mints a
+    session (the caller already holds a bearer; the browser lands back in the
+    signed-in app). ``linked`` is the frontend's discriminator against the
+    sign-in shape. ``email_upgraded`` is True when the caller's placeholder
+    ``@wallet.invalid`` email was replaced by the verified Google address.
+    """
+
+    linked: bool = True
+    status: str  # "linked" | "already_linked"
+    user_id: str
+    provider_id: str
+    email: str | None = None
+    email_upgraded: bool = False
+    return_to: str | None = None
 
 
 class OidcProviderSummary(BackendContract):
