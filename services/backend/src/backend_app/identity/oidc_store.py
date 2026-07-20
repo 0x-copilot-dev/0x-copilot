@@ -54,6 +54,16 @@ class OidcStore(Protocol):
         self, *, provider_id: str, subject: str
     ) -> OidcIdentityRecord | None: ...
 
+    def list_identities_by_user(
+        self, *, org_id: str, user_id: str
+    ) -> tuple[OidcIdentityRecord, ...]:
+        """All non-unlinked OIDC identities linked to a user, oldest first.
+
+        Account-linking (PRD FR-L4): the profile's "Linked accounts" list needs
+        every provider identity a user holds, not just a by-subject lookup.
+        """
+        ...
+
     def update_identity_claims(
         self,
         *,
@@ -159,6 +169,18 @@ class InMemoryOidcStore:
             ):
                 return ident
         return None
+
+    def list_identities_by_user(
+        self, *, org_id: str, user_id: str
+    ) -> tuple[OidcIdentityRecord, ...]:
+        matches = [
+            ident
+            for ident in self.identities.values()
+            if ident.org_id == org_id
+            and ident.user_id == user_id
+            and ident.unlinked_at is None
+        ]
+        return tuple(sorted(matches, key=lambda ident: ident.linked_at))
 
     def update_identity_claims(
         self,
@@ -340,6 +362,24 @@ class PostgresOidcStore:
             )
             row = cur.fetchone()
         return _row_to_identity(row) if row else None
+
+    def list_identities_by_user(
+        self, *, org_id: str, user_id: str
+    ) -> tuple[OidcIdentityRecord, ...]:
+        # oidc_identities has a user_id index (0006); a user holds at most a
+        # handful of provider identities, so oldest-first in SQL is cheap.
+        with self._cursor(None) as cur:
+            cur.execute(
+                """
+                SELECT * FROM oidc_identities
+                WHERE org_id = %s AND user_id = %s
+                  AND unlinked_at IS NULL
+                ORDER BY linked_at ASC
+                """,
+                (org_id, user_id),
+            )
+            rows = cur.fetchall()
+        return tuple(_row_to_identity(row) for row in rows)
 
     def update_identity_claims(
         self,

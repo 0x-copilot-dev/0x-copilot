@@ -42,6 +42,7 @@ from backend_app.identity.siwe import (
     display_address,
     is_placeholder_email,
 )
+from backend_app.identity.oidc_store import OidcStore
 from backend_app.identity.siwe_store import SiweStore
 from backend_app.identity.store import IdentityStore
 
@@ -105,6 +106,24 @@ class WorkingHoursModel(BaseModel):
         return self
 
 
+class LinkedIdentityModel(BaseModel):
+    """One linked sign-in identity on the account (PRD FR-L4).
+
+    ``kind`` discriminates: ``wallet`` rows carry ``address``/``chain_*``;
+    ``oidc`` rows carry ``provider`` (e.g. ``google``) + the email seen at
+    link time. ``id`` is the row id a future unlink (FR-L5) targets.
+    """
+
+    kind: str  # "wallet" | "oidc"
+    id: str
+    provider: str | None = None
+    email: str | None = None
+    address: str | None = None
+    chain_id: int | None = None
+    chain_name: str | None = None
+    linked_at: str
+
+
 class UserProfileResponse(BaseModel):
     """Public-safe view of the user profile + identity."""
 
@@ -130,6 +149,11 @@ class UserProfileResponse(BaseModel):
     # Durable auth origin (``siwe`` / ``google`` / ``local`` / …) from the
     # membership record — drives the "Signed in with" indicator.
     auth_method: str | None = None
+    # Account-linking (PRD FR-L4): every sign-in identity linked to this
+    # account — the "Linked accounts" panel's data. The singular
+    # ``wallet_address`` fields above remain "the" profile wallet
+    # (first-linked) for existing consumers.
+    linked_identities: list[LinkedIdentityModel] = Field(default_factory=list)
 
 
 class UpdateUserProfileRequest(BaseModel):
@@ -201,13 +225,15 @@ def register_me_profile_routes(
     me_store: MeStore,
     identity_store: IdentityStore,
     siwe_store: SiweStore | None = None,
+    oidc_store: OidcStore | None = None,
 ) -> None:
     """Attach ``/internal/v1/me/profile`` GET + PUT to a backend FastAPI app.
 
-    ``siwe_store`` is optional so non-wallet deployments / older test harnesses
-    keep working; when present, the profile surfaces the caller's wallet
-    address + chain so the FE renders honest identity instead of the
-    ``@wallet.invalid`` placeholder email.
+    ``siwe_store`` / ``oidc_store`` are optional so non-wallet deployments /
+    older test harnesses keep working; when present, the profile surfaces the
+    caller's wallet address + chain (honest identity instead of the
+    ``@wallet.invalid`` placeholder) and the full ``linked_identities`` list
+    for the "Linked accounts" panel (PRD FR-L4).
     """
 
     @app.get(
@@ -230,7 +256,16 @@ def register_me_profile_routes(
         wallet, auth_method = _resolve_identity_extras(
             identity_store, siwe_store, identity.org_id, identity.user_id
         )
-        return _hydrate(user, record, wallet=wallet, auth_method=auth_method)
+        linked = _resolve_linked_identities(
+            siwe_store, oidc_store, identity.org_id, identity.user_id
+        )
+        return _hydrate(
+            user,
+            record,
+            wallet=wallet,
+            auth_method=auth_method,
+            linked_identities=linked,
+        )
 
     @app.put(
         "/internal/v1/me/profile",
@@ -328,7 +363,16 @@ def register_me_profile_routes(
         wallet, auth_method = _resolve_identity_extras(
             identity_store, siwe_store, identity.org_id, identity.user_id
         )
-        return _hydrate(refreshed_user, saved, wallet=wallet, auth_method=auth_method)
+        linked = _resolve_linked_identities(
+            siwe_store, oidc_store, identity.org_id, identity.user_id
+        )
+        return _hydrate(
+            refreshed_user,
+            saved,
+            wallet=wallet,
+            auth_method=auth_method,
+            linked_identities=linked,
+        )
 
 
 def _request_ip(request: Request) -> str | None:
@@ -361,6 +405,55 @@ def _resolve_identity_extras(
     return wallet, _resolve_auth_method(identity_store, org_id, user_id)
 
 
+def _resolve_linked_identities(
+    siwe_store: SiweStore | None,
+    oidc_store: OidcStore | None,
+    org_id: str,
+    user_id: str,
+) -> list[LinkedIdentityModel]:
+    """Every sign-in identity linked to the account, oldest first per kind.
+
+    Best-effort like the extras: a store failure or an absent store yields an
+    empty contribution rather than failing the profile read.
+    """
+
+    linked: list[LinkedIdentityModel] = []
+    if siwe_store is not None:
+        try:
+            for wallet in siwe_store.list_wallets_by_user(
+                org_id=org_id, user_id=user_id
+            ):
+                linked.append(
+                    LinkedIdentityModel(
+                        kind="wallet",
+                        id=wallet.wallet_id,
+                        address=display_address(wallet.address),
+                        chain_id=wallet.chain_id,
+                        chain_name=chain_display_name(wallet.chain_id),
+                        linked_at=wallet.created_at.isoformat(),
+                    )
+                )
+        except Exception:  # pragma: no cover - defensive
+            pass
+    if oidc_store is not None:
+        try:
+            for ident in oidc_store.list_identities_by_user(
+                org_id=org_id, user_id=user_id
+            ):
+                linked.append(
+                    LinkedIdentityModel(
+                        kind="oidc",
+                        id=ident.identity_id,
+                        provider=ident.provider_id,
+                        email=ident.email_at_link,
+                        linked_at=ident.linked_at.isoformat(),
+                    )
+                )
+        except Exception:  # pragma: no cover - defensive
+            pass
+    return linked
+
+
 def _resolve_auth_method(
     identity_store: IdentityStore, org_id: str, user_id: str
 ) -> str | None:
@@ -386,6 +479,7 @@ def _hydrate(
     *,
     wallet: Any = None,
     auth_method: str | None = None,
+    linked_identities: list[LinkedIdentityModel] | None = None,
 ) -> UserProfileResponse:
     """Materialise the response from the identity row + (maybe) sidecar.
 
@@ -420,6 +514,7 @@ def _hydrate(
         chain_id=chain_id,
         chain_name=chain_name,
         auth_method=auth_method,
+        linked_identities=linked_identities or [],
     )
 
 

@@ -2882,6 +2882,30 @@ export interface UserProfile {
   chain_name?: string | null;
   /** Durable auth origin — drives the "Signed in with" indicator. */
   auth_method?: WorkspaceMemberSource | string | null;
+  /**
+   * Account-linking (PRD FR-L4): every sign-in identity linked to this
+   * account — the "Linked accounts" panel's data. The singular
+   * `wallet_address` fields above remain "the" profile wallet (first-linked)
+   * for existing consumers. Optional so older servers stay compatible.
+   */
+  linked_identities?: readonly LinkedIdentity[];
+}
+
+/**
+ * One linked sign-in identity on the account. `kind` discriminates: `wallet`
+ * rows carry `address`/`chain_*`; `oidc` rows carry `provider` (e.g.
+ * `google`) + the email seen at link time. `id` is the row id a future
+ * unlink targets.
+ */
+export interface LinkedIdentity {
+  kind: "wallet" | "oidc" | string;
+  id: string;
+  provider?: string | null;
+  email?: string | null;
+  address?: string | null;
+  chain_id?: number | null;
+  chain_name?: string | null;
+  linked_at: string;
 }
 
 export type UserProfileTheme = "system" | "light" | "dark" | "slate";
