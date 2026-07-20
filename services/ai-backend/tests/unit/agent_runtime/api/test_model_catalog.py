@@ -12,9 +12,11 @@ def _settings() -> RuntimeSettings:
 
 class TestModelCatalog:
     def test_openrouter_models_present_and_selectable(self) -> None:
+        # OpenRouter entries now come from the models.dev source (vendored
+        # snapshot in unit tests) instead of a hardcoded constant.
         items = ModelCatalog.build(_settings())
         openrouter = [item for item in items if item.provider == "openrouter"]
-        assert len(openrouter) == len(ModelCatalog.OPENROUTER_MODELS)
+        assert openrouter, "snapshot must supply openrouter models"
         # BYOK availability is per-user and unknown here, so they are always
         # selectable (configured=True) and stream.
         assert all(item.configured for item in openrouter)

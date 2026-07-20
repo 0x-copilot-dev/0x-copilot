@@ -1238,6 +1238,16 @@ export interface ModelCatalogModel {
   supports_attachments?: boolean;
   supports_reasoning?: boolean;
   reasoning?: ModelReasoningHints | null;
+  /**
+   * models.dev-sourced metadata (optional additions — entries without
+   * live/cached/snapshot coverage, e.g. the runtime default model, omit them).
+   */
+  context_window?: number | null;
+  max_output_tokens?: number | null;
+  input_cost_per_mtok?: number | null;
+  output_cost_per_mtok?: number | null;
+  supports_tools?: boolean | null;
+  release_date?: string | null;
 }
 
 export interface ModelCatalogResponse {
