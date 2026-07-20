@@ -310,6 +310,17 @@ export function SettingsMount({
                 });
             }}
             onSignOut={onSignOut}
+            // Linked accounts (PRD FR-U1): the real list from /me/profile.
+            // Link CTAs stay hidden until the desktop link flows (system
+            // browser OAuth / wallet signing) are wired — props omitted.
+            linkedIdentities={profile?.linked_identities?.map((entry) => ({
+              kind: entry.kind,
+              id: entry.id,
+              provider: entry.provider ?? null,
+              email: entry.email ?? null,
+              address: entry.address ?? null,
+              chainName: entry.chain_name ?? null,
+            }))}
           />
         );
       case "appearance":

@@ -17,6 +17,7 @@ export {
 export {
   ProfilePage,
   type ProfileIdentityAnchor,
+  type ProfileLinkedIdentity,
   type ProfilePagePerson,
   type ProfilePageProps,
 } from "./ProfilePage";
