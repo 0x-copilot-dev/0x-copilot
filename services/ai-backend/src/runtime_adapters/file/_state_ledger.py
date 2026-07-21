@@ -37,33 +37,57 @@ class StateLedger:
 
     def __init__(self, path: Path) -> None:
         self._path = path
+        self._line_count = 0
 
     @property
     def path(self) -> Path:
         return self._path
 
+    @property
+    def line_count(self) -> int:
+        """Lines currently on disk — the append-only history size.
+
+        Tracked from the last :meth:`load_ops` plus every ``append_*`` /
+        :meth:`rewrite` since, so a boot-time compactor can decide — with no
+        extra disk read — when a fold table's log has bloated past its live
+        set. Drops to the record count after :meth:`rewrite`.
+        """
+        return self._line_count
+
     def append_put(self, record_json: dict) -> None:
         """Append a ``put`` op carrying one record's JSON snapshot."""
 
         JsonlIo.append_line(self._path, {_OP: _PUT, _RECORD: record_json})
+        self._line_count += 1
 
     def append_delete(self, key: str) -> None:
         """Append a ``delete`` op for one string key."""
 
         JsonlIo.append_line(self._path, {_OP: _DELETE, _KEY: key})
+        self._line_count += 1
 
     def rewrite(self, records_json: Iterable[dict]) -> None:
-        """Atomically replace the file with ``put`` ops for the given records."""
+        """Atomically replace the file with ``put`` ops for the given records.
 
+        The write is crash-safe (temp → fsync → ``os.replace``): a crash before
+        the rename leaves the prior committed log fully intact, so a compaction
+        that folds ``records_json`` from already-durable state can never lose
+        data. This is the compaction primitive.
+        """
+
+        records = list(records_json)
         JsonlIo.rewrite_lines(
-            self._path, ({_OP: _PUT, _RECORD: record} for record in records_json)
+            self._path, ({_OP: _PUT, _RECORD: record} for record in records)
         )
+        self._line_count = len(records)
 
     def load_ops(self) -> list[tuple[str, dict | str]]:
         """Return ordered ops: ``("put", record_json)`` / ``("delete", key)``."""
 
         ops: list[tuple[str, dict | str]] = []
+        line_count = 0
         for line in JsonlIo.iter_lines(self._path):
+            line_count += 1
             op = line.get(_OP)
             if op == _PUT:
                 record = line.get(_RECORD)
@@ -73,6 +97,7 @@ class StateLedger:
                 key = line.get(_KEY)
                 if isinstance(key, str):
                     ops.append((_DELETE, key))
+        self._line_count = line_count
         return ops
 
     def load_puts(self) -> list[dict]:
