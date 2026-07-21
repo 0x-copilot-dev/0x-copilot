@@ -154,6 +154,9 @@ describe("buildServiceEnv(ai-backend)", () => {
     // Store-agnostic wiring is unchanged.
     expect(env.OTEL_SDK_DISABLED).toBe("true");
     expect(env.RUNTIME_START_IN_PROCESS_WORKER).toBe("true");
+    // FTUE prereq: the packaged supervisor enables on-device local models so
+    // GET /v1/local-models/status reports enabled:true and the gate card lives.
+    expect(env.RUNTIME_ENABLE_LOCAL_MODELS).toBe("true");
     expect(env.RUNTIME_EVENT_BUS_BACKEND).toBe("in_memory");
     expect(env.MCP_BACKEND_REGISTRY_URL).toBe("http://127.0.0.1:8101");
     expect(env.SKILLS_BACKEND_REGISTRY_URL).toBe("http://127.0.0.1:8101");
@@ -185,6 +188,8 @@ describe("buildServiceEnv(ai-backend)", () => {
     // Auto-apply is off: migrations.ts owns the apply with the +psycopg URL.
     expect(env.RUNTIME_MIGRATIONS_AUTO_APPLY).toBe("false");
     expect(env.RUNTIME_FILE_STORE_ROOT).toBeUndefined();
+    // Local-models stay enabled regardless of the store backend.
+    expect(env.RUNTIME_ENABLE_LOCAL_MODELS).toBe("true");
   });
 });
 

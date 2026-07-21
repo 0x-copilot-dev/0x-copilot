@@ -261,6 +261,14 @@ export function buildServiceEnv(
         env.RUNTIME_MIGRATIONS_AUTO_APPLY = "false";
       }
       env.RUNTIME_START_IN_PROCESS_WORKER = "true";
+      // Enable the on-device local-models capability (/v1/local-models/*) for
+      // the PACKAGED desktop build. The ai-backend Pydantic default is False
+      // (settings.py:141) so web / self-host-cloud images stay off — this is a
+      // supervisor-scoped opt-in, mirroring the staging boot
+      // (tools/desktop-runtime/run-local.mjs). Without it a shipped desktop
+      // reports enabled:false and the FTUE gate's "Download the local model"
+      // card is dead. Kept a string ("true") like every other child env value.
+      env.RUNTIME_ENABLE_LOCAL_MODELS = "true";
       env.RUNTIME_EVENT_BUS_BACKEND = "in_memory";
       env.MCP_BACKEND_REGISTRY_URL = backendUrl;
       env.SKILLS_BACKEND_REGISTRY_URL = backendUrl;

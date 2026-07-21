@@ -1402,6 +1402,12 @@ export interface CreateRunRequest {
    * the model's configured defaults (no regression vs. pre-depth behaviour).
    */
   reasoning_depth?: ReasoningDepth | null;
+  /**
+   * Per-turn web-search toggle (composer Tools popover). Optional — when
+   * omitted the runtime applies its always-on default (`true`). An explicit
+   * `false` omits the built-in `web_search` tool for this run only.
+   */
+  web_search_enabled?: boolean;
   content?: RunContentPart[];
   attachments?: RunAttachmentRequest[];
   quote?: RunQuoteMetadata | null;

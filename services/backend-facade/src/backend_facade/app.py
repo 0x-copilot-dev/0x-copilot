@@ -79,6 +79,12 @@ class FacadeRunRequest(BaseModel):
     # literal union (anything else → 422). Declared here so Pydantic's
     # default ``extra="ignore"`` doesn't drop the field on ``model_dump``.
     reasoning_depth: str | None = None
+    # Per-turn web-search toggle (composer Tools popover). Forwarded verbatim to
+    # ai-backend, which validates it as a bool and threads it onto the run's
+    # AgentRuntimeContext. Declared here so Pydantic's ``extra="ignore"`` doesn't
+    # drop it on ``model_dump``; ``None`` (omitted) is excluded and ai-backend
+    # applies its always-on default (True).
+    web_search_enabled: bool | None = None
     content: list[dict[str, object]] | None = None
     attachments: list[dict[str, object]] | None = None
     quote: dict[str, object] | None = None

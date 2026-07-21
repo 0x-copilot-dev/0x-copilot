@@ -444,6 +444,12 @@ export function createRun(
      * regression vs. pre-depth behaviour).
      */
     reasoningDepth?: ReasoningDepth | null;
+    /**
+     * Per-turn web-search toggle (composer Tools popover). Omitted → runtime
+     * default (on). Pass `false` to disable the built-in web_search tool for
+     * this run only.
+     */
+    webSearchEnabled?: boolean;
     content?: CreateRunRequest["content"];
     attachments?: CreateRunRequest["attachments"];
     quote?: Record<string, unknown>;
@@ -460,6 +466,11 @@ export function createRun(
     user_input: userInput,
     model: options.model,
     reasoning_depth: options.reasoningDepth ?? null,
+    // Only send when explicitly disabled; omitting keeps the runtime default
+    // (on) and the wire back-compatible for every existing caller.
+    ...(options.webSearchEnabled === false
+      ? { web_search_enabled: false }
+      : {}),
     content: options.content,
     attachments: options.attachments,
     quote: options.quote,
