@@ -3,7 +3,8 @@
 Proves against a real database the two things in-memory analogues cannot:
   1. the three edge stores' hand-written Postgres INSERTs persist principal_id
      (a column/value-count slip would only surface here), satisfying the FK, and
-  2. the migration 0040 BACKFILL SQL fills each edge from its user 1:1.
+  2. the baseline schema ENFORCES the invariant: an edge without a principal
+     is impossible (NOT NULL + FK).
 
 Gated on BACKEND_MERGE_TEST_DATABASE_URL (shares the merge gate's cluster + CI
 job). Destructive — throwaway database.
@@ -131,66 +132,55 @@ class TestEdgePostgresAutoMint:
                 assert cur.fetchone()["principal_id"] == want
 
 
-class TestEdgeBackfillSql:
-    def test_0040_backfill_fills_every_edge_from_its_user(self, pool: Any) -> None:
-        org_id, user_id, oidc_pid, saml_pid = _seed_org_user_providers(pool, "bf")
-        want = f"prn_{user_id}"
+class TestEdgePrincipalNotNullEnforced:
+    def test_edges_without_principal_are_rejected_by_schema(self, pool: Any) -> None:
+        import psycopg
+
+        org_id, user_id, oidc_pid, saml_pid = _seed_org_user_providers(pool, "nn")
         now = datetime.now(timezone.utc)
-        wid = f"wid_{uuid.uuid4().hex[:8]}"
-        oid = f"oid_{uuid.uuid4().hex[:8]}"
-        sid = f"sid_{uuid.uuid4().hex[:8]}"
-        # Seed edges that PREDATE 0040: principal_id NULL (raw INSERT bypasses
-        # the store's dual-write).
-        with pool.connection() as conn, conn.cursor() as cur:
-            cur.execute(
+        inserts = (
+            (
                 "INSERT INTO wallet_identities (wallet_id, address, org_id, "
                 "user_id, chain_id, created_at, principal_id) "
                 "VALUES (%s,%s,%s,%s,%s,%s,NULL)",
-                (wid, "0x" + "b" * 40, org_id, user_id, 8453, now),
-            )
-            cur.execute(
+                (
+                    f"wid_{uuid.uuid4().hex[:8]}",
+                    "0x" + "b" * 40,
+                    org_id,
+                    user_id,
+                    8453,
+                    now,
+                ),
+            ),
+            (
                 "INSERT INTO oidc_identities (identity_id, org_id, user_id, "
                 "provider_id, subject, linked_at, principal_id) "
                 "VALUES (%s,%s,%s,%s,%s,%s,NULL)",
-                (oid, org_id, user_id, oidc_pid, "sub", now),
-            )
-            cur.execute(
+                (
+                    f"oid_{uuid.uuid4().hex[:8]}",
+                    org_id,
+                    user_id,
+                    oidc_pid,
+                    "sub-nn",
+                    now,
+                ),
+            ),
+            (
                 "INSERT INTO saml_identities (identity_id, org_id, user_id, "
                 "provider_id, name_id, name_id_format, linked_at, principal_id) "
                 "VALUES (%s,%s,%s,%s,%s,%s,%s,NULL)",
-                (sid, org_id, user_id, saml_pid, "nid", "fmt", now),
-            )
-            # The 0040 backfill, verbatim, for each edge.
-            for table in (
-                "wallet_identities",
-                "oidc_identities",
-                "saml_identities",
-            ):
-                cur.execute(
-                    f"""
-                    UPDATE {table} e SET principal_id = u.principal_id
-                    FROM users u
-                    WHERE e.org_id = u.org_id AND e.user_id = u.user_id
-                      AND e.principal_id IS NULL
-                    """
-                )
-        with pool.connection() as conn, conn.cursor() as cur:
-            for table, key, value in (
-                ("wallet_identities", "wallet_id", wid),
-                ("oidc_identities", "identity_id", oid),
-                ("saml_identities", "identity_id", sid),
-            ):
-                cur.execute(
-                    f"SELECT principal_id FROM {table} WHERE {key} = %s", (value,)
-                )
-                assert cur.fetchone()["principal_id"] == want
-                # FK resolves to a real principal.
-                cur.execute(
-                    f"""
-                    SELECT count(*) AS n FROM {table} e
-                    LEFT JOIN principals p ON e.principal_id = p.principal_id
-                    WHERE e.{key} = %s AND p.principal_id IS NULL
-                    """,
-                    (value,),
-                )
-                assert cur.fetchone()["n"] == 0
+                (
+                    f"sid_{uuid.uuid4().hex[:8]}",
+                    org_id,
+                    user_id,
+                    saml_pid,
+                    "nid-nn",
+                    "fmt",
+                    now,
+                ),
+            ),
+        )
+        for sql, params in inserts:
+            with pytest.raises(psycopg.errors.NotNullViolation):
+                with pool.connection() as conn, conn.cursor() as cur:
+                    cur.execute(sql, params)
