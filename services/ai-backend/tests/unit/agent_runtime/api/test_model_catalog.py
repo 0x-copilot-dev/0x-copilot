@@ -1,136 +1,260 @@
 """Model catalog SSOT — the one builder the picker and workspace validation share.
 
-``ModelCatalog.build`` is the single deduplication point. These tests lock
-in the two invariants it guarantees by construction — the runtime default is
-always present exactly once and first, and no id is ever double-listed — plus
-the metadata mapping the frontend picker relies on.
+``ModelCatalog.build`` is the single deduplication point. These tests lock in
+the invariants it guarantees by construction — the runtime default is always
+present exactly once and first, no id is ever double-listed, and only run-path
+providers ever reach the picker — plus the LiteLLM-sourced metadata mapping the
+frontend picker relies on. The metadata source is a curated product registry
+enriched from ``litellm.model_cost`` (:mod:`agent_runtime.api.litellm_model_source`);
+tests inject a deterministic ``model_cost`` map or a fake source so nothing
+touches LiteLLM's real table except the couple of pinned-version assertions.
 """
 
 from __future__ import annotations
 
 from collections import Counter
-from pathlib import Path
 
+from agent_runtime.api.litellm_model_source import (
+    CatalogModelRecord,
+    LitellmModelSource,
+    ModelDisplayName,
+    ProductModelRegistry,
+)
 from agent_runtime.api.model_catalog import ModelCatalog
-from agent_runtime.api.models_dev_source import ModelsDevCatalogSource
 from agent_runtime.settings import RuntimeSettings
-from tests.unit.agent_runtime.api.models_dev_fixtures import ModelsDevFixtureMixin
 
 
 def _settings() -> RuntimeSettings:
     return RuntimeSettings.load()
 
 
-class TestModelCatalog:
-    def test_openrouter_models_present_and_selectable(self) -> None:
-        # OpenRouter entries now come from the models.dev source (vendored
-        # snapshot in unit tests) instead of a hardcoded constant.
-        items = ModelCatalog.build(_settings())
-        openrouter = [item for item in items if item.provider == "openrouter"]
-        assert openrouter, "snapshot must supply openrouter models"
-        # BYOK availability is per-user and unknown here, so they are always
-        # selectable (configured=True) and stream.
-        assert all(item.configured for item in openrouter)
-        assert all(item.supports_streaming for item in openrouter)
-        # id and model_name are the OpenRouter vendor/model slug verbatim.
-        assert all(item.id == item.model_name for item in openrouter)
-        assert all("/" in item.id for item in openrouter)
+class _FakeSource:
+    """A stand-in ``CatalogModelSource`` returning fixed records (no LiteLLM)."""
 
-    def test_native_curated_models_preserved(self) -> None:
-        items = ModelCatalog.build(_settings())
-        ids = {item.id for item in items}
-        assert {"gpt-5.4-mini", "claude-opus-4-7", "gemini-2.5-pro"} <= ids
+    def __init__(self, records: tuple[CatalogModelRecord, ...]) -> None:
+        self._records = records
 
-    def test_openrouter_reasoning_off_for_round_one(self) -> None:
-        items = ModelCatalog.build(_settings())
-        openrouter = [item for item in items if item.provider == "openrouter"]
-        assert all(not item.supports_reasoning for item in openrouter)
-
-    def test_display_name_uppercases_gpt(self) -> None:
-        assert ModelCatalog.display_name("gpt-5.4-mini") == "GPT 5.4 Mini"
-        assert ModelCatalog.display_name("claude_opus-4-7") == "Claude Opus 4 7"
+    def records(self) -> tuple[CatalogModelRecord, ...]:
+        return self._records
 
 
-class TestCatalogSsotInvariants(ModelsDevFixtureMixin):
-    """``build`` guarantees id-uniqueness and a present, leading default."""
+class TestModelDisplayName:
+    """Display name is derived from the id — LiteLLM carries none."""
 
-    def test_no_duplicate_ids(self) -> None:
-        # The frontend keys picker rows by ``id``; a duplicate id would be a
-        # duplicate React key. ``build`` must return an id-unique tuple.
-        items = ModelCatalog.build(_settings())
-        counts = Counter(item.id for item in items)
-        duplicates = {model_id: n for model_id, n in counts.items() if n > 1}
-        assert duplicates == {}, duplicates
+    def test_derives_task_examples(self) -> None:
+        assert ModelDisplayName.derive("claude-opus-4-8") == "Claude Opus 4.8"
+        assert ModelDisplayName.derive("gpt-5.6") == "GPT-5.6"
+        assert ModelDisplayName.derive("gemini-2.5-pro") == "Gemini 2.5 Pro"
 
-    def test_default_model_present_exactly_once(self) -> None:
+    def test_uppercases_gpt_acronym_and_titlecases_words(self) -> None:
+        # ``gpt`` is a known acronym; the version token that follows it joins
+        # with a hyphen (vendor branding), other words join with spaces.
+        assert ModelDisplayName.derive("gpt-5.4-mini") == "GPT-5.4 Mini"
+        assert ModelDisplayName.derive("gpt-5") == "GPT-5"
+
+    def test_normalises_underscores_and_collapses_trailing_version(self) -> None:
+        # ``claude_opus`` == ``claude-opus``; a trailing run of bare integers
+        # (``-4-7``) collapses into a dotted version.
+        assert ModelDisplayName.derive("claude_opus-4-7") == "Claude Opus 4.7"
+        assert ModelDisplayName.derive("claude-haiku-4-5") == "Claude Haiku 4.5"
+
+    def test_single_trailing_integer_stays_spaced(self) -> None:
+        assert ModelDisplayName.derive("claude-sonnet-5") == "Claude Sonnet 5"
+        assert ModelDisplayName.derive("gemini-3-flash") == "Gemini 3 Flash"
+
+    def test_catalog_delegates_to_deriver(self) -> None:
+        assert ModelCatalog.display_name("gpt-5.6") == "GPT-5.6"
+
+
+class TestLitellmModelSource:
+    """The curated registry, enriched from an injected ``model_cost`` map."""
+
+    def test_enriches_registry_entry_from_litellm_row(self) -> None:
+        source = LitellmModelSource(
+            model_cost={
+                "claude-opus-4-8": {
+                    "input_cost_per_token": 5e-06,
+                    "output_cost_per_token": 2.5e-05,
+                    "max_input_tokens": 1_000_000,
+                    "max_output_tokens": 128_000,
+                    "supports_reasoning": True,
+                    "supports_function_calling": True,
+                    "supports_vision": True,
+                }
+            }
+        )
+        record = {r.model_id: r for r in source.records()}["claude-opus-4-8"]
+        assert record.provider == "anthropic"
+        assert record.display_name == "Claude Opus 4.8"
+        assert record.context_window == 1_000_000
+        assert record.max_output_tokens == 128_000
+        # USD/token -> USD/Mtok, no float drift.
+        assert record.input_cost_per_mtok == 5.0
+        assert record.output_cost_per_mtok == 25.0
+        assert record.supports_reasoning is True
+        assert record.supports_tools is True
+        assert record.supports_attachments is True
+
+    def test_context_window_falls_back_to_max_tokens(self) -> None:
+        source = LitellmModelSource(
+            model_cost={
+                "gpt-5": {
+                    "input_cost_per_token": 1.25e-06,
+                    "output_cost_per_token": 1e-05,
+                    "max_tokens": 272_000,
+                }
+            }
+        )
+        record = {r.model_id: r for r in source.records()}["gpt-5"]
+        assert record.context_window == 272_000
+
+    def test_pdf_input_counts_as_attachment_support(self) -> None:
+        source = LitellmModelSource(
+            model_cost={
+                "gpt-5.4-mini": {
+                    "input_cost_per_token": 7.5e-07,
+                    "output_cost_per_token": 4.5e-06,
+                    "supports_pdf_input": True,
+                }
+            }
+        )
+        record = {r.model_id: r for r in source.records()}["gpt-5.4-mini"]
+        assert record.supports_attachments is True
+
+    def test_gemini_3_flash_supplement_carries_it_when_litellm_lacks_it(self) -> None:
+        # Empty map: every native id falls through the LiteLLM lookup.
+        # gemini-3-flash must still be present — carried by the reviewed
+        # supplement, never silently dropped.
+        source = LitellmModelSource(model_cost={})
+        record = {r.model_id: r for r in source.records()}["gemini-3-flash"]
+        assert record.provider == "gemini"
+        assert record.context_window == 1_048_576
+        assert record.input_cost_per_mtok == 0.30
+        assert record.output_cost_per_mtok == 2.50
+        assert record.supports_reasoning is True
+        assert record.supports_tools is True
+
+    def test_unknown_model_yields_bare_record_never_dropped(self) -> None:
+        # No LiteLLM row and no supplement -> a metadata-less record, so a new
+        # registry entry is visible in the picker rather than vanishing.
+        source = LitellmModelSource(model_cost={})
+        record = {r.model_id: r for r in source.records()}["claude-opus-4-8"]
+        assert record.display_name == "Claude Opus 4.8"
+        assert record.context_window is None
+        assert record.input_cost_per_mtok is None
+
+    def test_covers_every_registry_entry(self) -> None:
+        ids = {r.model_id for r in LitellmModelSource(model_cost={}).records()}
+        for model_ids in ProductModelRegistry.NATIVE.values():
+            assert set(model_ids) <= ids
+        for slug, _name in ProductModelRegistry.OPENROUTER:
+            assert slug in ids
+
+    def test_records_ordered_provider_then_id(self) -> None:
+        records = LitellmModelSource(model_cost={}).records()
+        keys = [(r.provider, r.model_id) for r in records]
+        assert keys == sorted(keys)
+
+
+class TestModelCatalogBuild:
+    """``build`` invariants: default-first, id-unique, run-path-only providers."""
+
+    def test_default_present_exactly_once_and_first(self) -> None:
+        ModelCatalog.configure_source(LitellmModelSource(model_cost={}))
         settings = _settings()
         items = ModelCatalog.build(settings)
         ids = [item.id for item in items]
-        assert ids.count(settings.default_model.model_name) == 1
-
-    def test_default_model_is_first(self) -> None:
-        settings = _settings()
-        items = ModelCatalog.build(settings)
         assert items[0].id == settings.default_model.model_name
         assert items[0].provider == settings.default_model.provider
+        assert ids.count(settings.default_model.model_name) == 1
 
-    def test_default_present_and_first_even_with_empty_source(self) -> None:
-        # Offline boot with no cache/snapshot: the source yields nothing, yet
-        # the settings-derived default still anchors a usable catalog.
-        ModelCatalog.configure_source(
-            ModelsDevCatalogSource(snapshot_path=self.MISSING_PATH, auto_refresh=False)
+    def test_no_duplicate_ids(self) -> None:
+        ModelCatalog.configure_source(LitellmModelSource(model_cost={}))
+        items = ModelCatalog.build(_settings())
+        duplicates = {
+            model_id: n
+            for model_id, n in Counter(item.id for item in items).items()
+            if n > 1
+        }
+        assert duplicates == {}
+
+    def test_supports_provider_filters_out_of_allowlist_records(self) -> None:
+        # groq/xai are outside the run path's ``ModelConfigResolver`` allowlist;
+        # a source emitting them must never leak into the picker.
+        records = (
+            CatalogModelRecord(
+                provider="groq",
+                model_id="llama-3.3-70b-versatile",
+                display_name="Llama 3.3 70B",
+            ),
+            CatalogModelRecord(
+                provider="xai", model_id="grok-4.5", display_name="Grok 4.5"
+            ),
+            CatalogModelRecord(
+                provider="anthropic",
+                model_id="claude-opus-4-8",
+                display_name="Claude Opus 4.8",
+            ),
         )
-        settings = self.settings_with()
+        ModelCatalog.configure_source(_FakeSource(records))
+        items = ModelCatalog.build(_settings())
+        providers = {item.provider for item in items}
+        assert "groq" not in providers
+        assert "xai" not in providers
+        assert any(item.id == "claude-opus-4-8" for item in items)
+
+    def test_gemini_3_flash_reaches_the_catalog(self) -> None:
+        ModelCatalog.configure_source(LitellmModelSource(model_cost={}))
+        items = ModelCatalog.build(_settings())
+        assert any(item.id == "gemini-3-flash" for item in items)
+
+    def test_default_present_even_with_empty_source(self) -> None:
+        ModelCatalog.configure_source(_FakeSource(()))
+        settings = _settings()
         items = ModelCatalog.build(settings)
         assert len(items) == 1
         assert items[0].id == settings.default_model.model_name
-        assert items[0].provider == settings.default_model.provider
 
-    def test_default_not_double_listed_when_source_ships_it(
-        self, tmp_path: Path
-    ) -> None:
-        # The source carries the exact default (openai/gpt-5.4-mini) with rich
-        # metadata. The catalog must list it once, first, and carry the source's
-        # richer fields — not a second, minimal placeholder row.
-        settings = self.settings_with()
-        provider = settings.default_model.provider
-        model_name = settings.default_model.model_name
-        payload = {
-            provider: {
-                "id": provider,
-                "models": {
-                    model_name: {
-                        "id": model_name,
-                        "name": "GPT 5.4 Mini (live)",
-                        "release_date": "2026-01-01",
-                        "limit": {"context": 400_000, "output": 128_000},
-                        "cost": {"input": 0.25, "output": 2.0},
-                    },
-                    "gpt-other": {
-                        "id": "gpt-other",
-                        "name": "GPT Other",
-                        "release_date": "2026-02-01",
-                        "limit": {"context": 128_000},
-                    },
-                },
-            }
-        }
-        ModelCatalog.configure_source(self.source_with_snapshot(tmp_path, payload))
+    def test_richer_source_record_supersedes_default_placeholder(self) -> None:
+        settings = _settings()
+        default_id = settings.default_model.model_name
+        records = (
+            CatalogModelRecord(
+                provider=settings.default_model.provider,
+                model_id=default_id,
+                display_name="Default Live",
+                context_window=400_000,
+                input_cost_per_mtok=0.25,
+            ),
+        )
+        ModelCatalog.configure_source(_FakeSource(records))
         items = ModelCatalog.build(settings)
-
-        matching = [item for item in items if item.id == model_name]
+        matching = [item for item in items if item.id == default_id]
         assert len(matching) == 1, "default must not be double-listed"
-        default_item = matching[0]
-        assert items[0] is default_item, "default stays first after the merge"
-        # Richer live record wins over the minimal default placeholder.
-        assert default_item.context_window == 400_000
-        assert default_item.input_cost_per_mtok == 0.25
-        # And the sibling source model is still present.
-        assert any(item.id == "gpt-other" for item in items)
+        assert items[0] is matching[0], "default stays first after the merge"
+        assert matching[0].context_window == 400_000
+        assert matching[0].input_cost_per_mtok == 0.25
 
-    def test_build_is_idempotent_under_repeated_dedup(self) -> None:
-        # Re-running the same id-dedup over ``build``'s output is a no-op, i.e.
-        # the tuple is already collapsed — the picker route can consume it raw.
+
+class TestModelCatalogRealLitellm:
+    """A couple of assertions against the real (pinned) LiteLLM table."""
+
+    def test_native_product_models_present_with_metadata(self) -> None:
+        ModelCatalog.configure_source(LitellmModelSource())
+        items = {item.id: item for item in ModelCatalog.build(_settings())}
+        assert {"claude-opus-4-8", "gpt-5.6", "gemini-2.5-pro"} <= set(items)
+        opus = items["claude-opus-4-8"]
+        assert opus.name == "Claude Opus 4.8"
+        assert opus.input_cost_per_mtok == 5.0
+        assert opus.context_window == 1_000_000
+
+    def test_openrouter_present_selectable_and_reasoning_off(self) -> None:
+        ModelCatalog.configure_source(LitellmModelSource())
         items = ModelCatalog.build(_settings())
-        rededuped = tuple({item.id: item for item in items}.values())
-        assert [item.id for item in rededuped] == [item.id for item in items]
+        openrouter = [item for item in items if item.provider == "openrouter"]
+        assert openrouter, "registry must supply openrouter discovery models"
+        # BYOK availability is per-user and unknown here, so always selectable.
+        assert all(item.configured for item in openrouter)
+        # Reasoning passthrough for OpenAI-compat gateways is a follow-up.
+        assert all(not item.supports_reasoning for item in openrouter)
+        assert all(item.id == item.model_name for item in openrouter)
