@@ -81,7 +81,7 @@ import type {
   ProjectMembership,
   ProjectStreamEnvelope,
   ProjectSummary,
-} from "../../api/_projects-stub";
+} from "@0x-copilot/api-types";
 import { errorMessage } from "../../utils/errors";
 
 // The Members / Activity tab view-models aren't re-exported from the

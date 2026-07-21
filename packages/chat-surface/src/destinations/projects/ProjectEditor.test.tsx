@@ -15,8 +15,7 @@ import {
   type ProjectEditorValue,
 } from "./ProjectEditor";
 
-// TODO(merge): rewire to "@0x-copilot/api-types"
-import type { ProjectColorHue, ProjectIconEmoji } from "./_projects-stub";
+import type { ProjectColorHue, ProjectIconEmoji } from "@0x-copilot/api-types";
 
 const asProjectId = (s: string): ProjectId => s as unknown as ProjectId;
 const asSlug = (s: string): ProjectEditorConnectorSlug =>

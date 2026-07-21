@@ -42,8 +42,7 @@ import {
 
 import type { ProjectId } from "@0x-copilot/api-types";
 
-// TODO(merge): rewire to "@0x-copilot/api-types"
-import type { ProjectSummary } from "./_projects-stub";
+import type { ProjectSummary } from "@0x-copilot/api-types";
 
 // ===========================================================================
 // Public props

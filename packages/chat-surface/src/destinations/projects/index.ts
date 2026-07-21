@@ -6,9 +6,8 @@
 // `<ItemLink kind="project" id=…>` resolves without forcing a circular
 // dependency.
 //
-// Wire-type re-exports are forwarded from `_projects-stub.ts`; the
-// orchestrator rewires the stub to `@0x-copilot/api-types` at
-// merge time.
+// Wire-type re-exports come from the canonical `@0x-copilot/api-types`
+// Projects contract.
 
 import type { ProjectId } from "@0x-copilot/api-types";
 
@@ -129,18 +128,15 @@ export {
   type LivenessReport,
 } from "./archive-blocked-dialog";
 
-// Wire-type re-exports (forwarded from `_projects-stub.ts`; the
-// orchestrator rewires the stub to `@0x-copilot/api-types` at
-// merge time — see `_projects-stub.ts` header).
-//
-// TODO(merge): rewire to "@0x-copilot/api-types"
+// Wire-type re-exports — canonical Projects contract from
+// `@0x-copilot/api-types` (`packages/api-types/src/projects.ts`).
 export type {
   ProjectActivityCounts,
   ProjectColorHue,
   ProjectIconEmoji,
   ProjectRole,
   ProjectSummary,
-} from "./_projects-stub";
+} from "@0x-copilot/api-types";
 
 // ===========================================================================
 // ItemRef resolver registration (cross-audit §3.3)

@@ -18,17 +18,15 @@
 // directly. The transport singleton enforces this via the same-origin
 // Vite proxy → facade.
 //
-// Wire types live in `./_projects-stub` until P6-A's
-// `@0x-copilot/api-types/src/projects.ts` lands on main.
-//
-// TODO(merge): swap every `./_projects-stub` import for
-// `@0x-copilot/api-types`.
+// Wire types are the canonical Projects contract from
+// `@0x-copilot/api-types` (`packages/api-types/src/projects.ts`).
 
 import type { RequestIdentity } from "./config";
 import { httpDelete, httpGet, httpPatchQuery, httpPostQuery } from "./http";
 import { getAppTransport } from "./transport";
 import type {
-  AddProjectMemberRequest,
+  AddMemberRequest as AddProjectMemberRequest,
+  ChangeRoleRequest as UpdateProjectMemberRequest,
   CreateProjectRequest,
   ListProjectsFilters,
   Project,
@@ -39,11 +37,10 @@ import type {
   ProjectMembershipListResponse,
   ProjectSortKey,
   ProjectStreamEnvelope,
-  TransferProjectOwnershipRequest,
-  UpdateProjectMemberRequest,
+  TransferOwnershipRequest as TransferProjectOwnershipRequest,
   UpdateProjectRequest,
   UserId,
-} from "./_projects-stub";
+} from "@0x-copilot/api-types";
 
 const SSE_EVENT_NAME = "project_event";
 

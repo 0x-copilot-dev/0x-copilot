@@ -17,6 +17,7 @@ import {
 } from "vitest";
 
 import type {
+  ConversationId,
   Project,
   ProjectActivity,
   ProjectId,
@@ -26,8 +27,7 @@ import type {
   ProjectSummary,
   TenantId,
   UserId,
-} from "../../api/_projects-stub";
-import type { ConversationId } from "@0x-copilot/api-types";
+} from "@0x-copilot/api-types";
 
 // Mock the projectsApi module so the tests don't have to drive the real
 // fetch / SSE plumbing — that surface is covered in `projectsApi.test.ts`.
