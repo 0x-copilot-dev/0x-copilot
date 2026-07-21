@@ -698,7 +698,7 @@ export function ProjectsRoute({
           fontWeight: 600,
         }}
       >
-        ← Projects
+        ← All projects
       </button>
     );
 
@@ -750,10 +750,13 @@ export function ProjectsRoute({
       name: project.name,
       iconEmoji: project.icon_emoji,
       colorHue: project.color_hue,
+      description: project.description,
       status: project.status,
       ownerUserId: project.owner_user_id,
       ownerName: ownerNameFor(project, members),
       memberCount: project.counts.members,
+      chatCount: project.counts.chats,
+      fileCount: project.counts.library_items,
     };
     // Only the owner can mutate membership / transfer ownership. Under the
     // solo profile `viewer_role` is null → no management affordances.

@@ -1155,6 +1155,7 @@ export {
   ProjectDetailView,
   ProjectFilesTab,
   type ProjectDetail,
+  type ProjectDetailProfile,
   type ProjectDetailViewProps,
   type ProjectDetailTabId,
   type ProjectFileRow,
