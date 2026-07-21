@@ -161,4 +161,94 @@ describe("<ConnectModal>", () => {
     act(() => fireEvent.click(screen.getByTestId("connect-cancel")));
     expect(onClose).toHaveBeenCalled();
   });
+
+  describe("custom-server add", () => {
+    it("hides the custom affordance unless onAddCustomServer is supplied", () => {
+      renderModal();
+      expect(screen.queryByTestId("connect-catalog-custom")).toBeNull();
+    });
+
+    it("submits a plain URL (no OAuth client) and advances to the OAuth step", () => {
+      const onAddCustomServer = vi.fn();
+      renderModal({ onAddCustomServer, pending: true });
+      act(() => fireEvent.click(screen.getByTestId("connect-catalog-custom")));
+      const form = screen.getByTestId("connect-custom-form");
+      act(() =>
+        fireEvent.change(
+          within(form).getByPlaceholderText("https://mcp.example.com"),
+          {
+            target: { value: "https://mcp.example.com" },
+          },
+        ),
+      );
+      act(() => fireEvent.submit(form));
+      expect(onAddCustomServer).toHaveBeenCalledWith({
+        url: "https://mcp.example.com",
+        oauthClient: undefined,
+      });
+      // The OAuth spinner shows while the host authorizes.
+      expect(screen.getByTestId("connect-oauth")).toBeInTheDocument();
+    });
+
+    it("rejects a non-https URL without calling the host", () => {
+      const onAddCustomServer = vi.fn();
+      renderModal({ onAddCustomServer });
+      act(() => fireEvent.click(screen.getByTestId("connect-catalog-custom")));
+      const form = screen.getByTestId("connect-custom-form");
+      act(() =>
+        fireEvent.change(
+          within(form).getByPlaceholderText("https://mcp.example.com"),
+          {
+            target: { value: "ftp://nope" },
+          },
+        ),
+      );
+      act(() => fireEvent.submit(form));
+      expect(onAddCustomServer).not.toHaveBeenCalled();
+      expect(screen.getByTestId("connect-custom-error")).toHaveTextContent(
+        /https/i,
+      );
+    });
+
+    it("closes on a successful custom add (pending cleared, no error)", () => {
+      const onClose = vi.fn();
+      const onAddCustomServer = vi.fn();
+      const utils = render(
+        <ConnectModal
+          open
+          onClose={onClose}
+          catalog={CATALOG}
+          onConnect={vi.fn()}
+          onAddCustomServer={onAddCustomServer}
+          pending
+        />,
+      );
+      act(() => fireEvent.click(screen.getByTestId("connect-catalog-custom")));
+      const form = screen.getByTestId("connect-custom-form");
+      act(() =>
+        fireEvent.change(
+          within(form).getByPlaceholderText("https://mcp.example.com"),
+          {
+            target: { value: "https://mcp.example.com" },
+          },
+        ),
+      );
+      act(() => fireEvent.submit(form));
+      // Host clears pending with no error → the custom flow closes the modal.
+      act(() =>
+        utils.rerender(
+          <ConnectModal
+            open
+            onClose={onClose}
+            catalog={CATALOG}
+            onConnect={vi.fn()}
+            onAddCustomServer={onAddCustomServer}
+            pending={false}
+            error={null}
+          />,
+        ),
+      );
+      expect(onClose).toHaveBeenCalled();
+    });
+  });
 });
