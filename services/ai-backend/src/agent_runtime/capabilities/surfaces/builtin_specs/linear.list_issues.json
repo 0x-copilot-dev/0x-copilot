@@ -1,0 +1,14 @@
+{
+  "spec_version": 1,
+  "archetype": "table",
+  "source": { "server": "seed:linear", "tool": "list_issues" },
+  "title_path": "team.name",
+  "items_path": "issues",
+  "columns": [
+    { "label": "ID", "path": "identifier", "align": "start" },
+    { "label": "Title", "path": "title", "align": "start" },
+    { "label": "State", "path": "state.name", "format": "badge" },
+    { "label": "Assignee", "path": "assignee.displayName", "format": "user" },
+    { "label": "Updated", "path": "updatedAt", "format": "datetime" }
+  ]
+}

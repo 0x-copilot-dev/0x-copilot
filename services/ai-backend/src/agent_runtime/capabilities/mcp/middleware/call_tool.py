@@ -34,6 +34,8 @@ from agent_runtime.capabilities.mcp.middleware.cite_mcp import (
 from agent_runtime.capabilities.mcp.outcomes import McpToolCallOutcome
 from agent_runtime.capabilities.mcp.permissions import McpPermissionPolicy
 from agent_runtime.capabilities.mcp.registry import DynamicMcpRegistry
+from agent_runtime.capabilities.surfaces.config import SurfaceEmissionFlag
+from agent_runtime.capabilities.surfaces.projector import SurfaceProjector
 from agent_runtime.execution.contracts import AgentRuntimeContext
 
 _LOGGER = logging.getLogger(__name__)
@@ -204,11 +206,62 @@ class CallMcpTool:
                 exc_info=True,
             )
 
-        return McpToolCallResult.ok(
+        result = McpToolCallResult.ok(
             server_name=parsed_input.server_name,
             tool_name=parsed_input.tool_name,
             output=output,
         ).model_dump(mode="json", exclude_none=True)
+
+        # Generative-UI (PRD-02): project a SurfaceSpec envelope from the output
+        # and attach it alongside a top-level ``surface_uri`` mirror (the FE
+        # projector keys off ``payload.surface_uri``). Best-effort and gated by
+        # ``RUNTIME_SURFACE_EMISSION`` — a surface must never fail a tool call,
+        # and when disabled the payload is byte-for-byte unchanged.
+        self._attach_surface(
+            result=result,
+            server_name=parsed_input.server_name,
+            tool_name=parsed_input.tool_name,
+            output=output,
+            call_id=parsed_input.tool_call_id,
+        )
+        return result
+
+    @staticmethod
+    def _attach_surface(
+        *,
+        result: dict[str, Any],
+        server_name: str,
+        tool_name: str,
+        output: Mapping[str, Any],
+        call_id: str | None,
+    ) -> None:
+        """Attach ``surface`` + top-level ``surface_uri`` to a success result.
+
+        No-ops when emission is disabled (byte-compatible payload) or when the
+        projector declines (non-mapping output). Any exception is logged and
+        swallowed — surface projection is display-only and never blocks a tool.
+        """
+
+        if not SurfaceEmissionFlag.enabled():
+            return
+        try:
+            envelope = SurfaceProjector().resolve(
+                server_name,
+                tool_name,
+                output,
+                call_id=call_id or None,
+            )
+            if envelope is None:
+                return
+            result["surface"] = envelope.model_dump(mode="json", exclude_none=True)
+            result["surface_uri"] = envelope.surface_uri
+        except Exception:  # noqa: BLE001 - best-effort; never break MCP results
+            _LOGGER.warning(
+                "[surfaces] mcp.surface_raised server=%s tool=%s",
+                server_name,
+                tool_name,
+                exc_info=True,
+            )
 
     async def __call__(
         self,

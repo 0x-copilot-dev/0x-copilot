@@ -1,0 +1,22 @@
+{
+  "spec_version": 1,
+  "archetype": "record",
+  "source": { "server": "seed:atlassian", "tool": "get_issue" },
+  "title_path": "issue.fields.summary",
+  "subtitle_path": "issue.key",
+  "fields": [
+    {
+      "label": "Status",
+      "path": "issue.fields.status.name",
+      "format": "badge"
+    },
+    {
+      "label": "Assignee",
+      "path": "issue.fields.assignee.displayName",
+      "format": "user"
+    },
+    { "label": "Priority", "path": "issue.fields.priority.name" },
+    { "label": "Updated", "path": "issue.fields.updated", "format": "datetime" }
+  ],
+  "link": { "label": "Open in Jira", "url_path": "issue.self" }
+}

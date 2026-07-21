@@ -1,0 +1,13 @@
+{
+  "spec_version": 1,
+  "archetype": "timeline",
+  "source": { "server": "seed:intercom", "tool": "list_conversations" },
+  "title_path": "type",
+  "items_path": "conversations",
+  "columns": [
+    { "label": "Subject", "path": "source.subject", "align": "start" },
+    { "label": "State", "path": "state", "format": "badge" },
+    { "label": "Priority", "path": "priority", "format": "badge" },
+    { "label": "Updated", "path": "updated_at", "format": "datetime" }
+  ]
+}

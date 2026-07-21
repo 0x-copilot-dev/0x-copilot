@@ -1,0 +1,15 @@
+{
+  "spec_version": 1,
+  "archetype": "record",
+  "source": { "server": "seed:github", "tool": "get_issue" },
+  "title_path": "issue.title",
+  "subtitle_path": "issue.number",
+  "fields": [
+    { "label": "State", "path": "issue.state", "format": "badge" },
+    { "label": "Author", "path": "issue.user.login", "format": "user" },
+    { "label": "Assignee", "path": "issue.assignee.login", "format": "user" },
+    { "label": "Comments", "path": "issue.comments", "format": "number" },
+    { "label": "Updated", "path": "issue.updated_at", "format": "datetime" }
+  ],
+  "link": { "label": "Open on GitHub", "url_path": "issue.html_url" }
+}

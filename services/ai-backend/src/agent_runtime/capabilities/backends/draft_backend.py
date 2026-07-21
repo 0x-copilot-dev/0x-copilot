@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import logging
 import re
 from collections.abc import Awaitable, Callable
 from datetime import datetime, timezone
@@ -22,6 +23,14 @@ from deepagents.backends.protocol import (
 )
 
 from agent_runtime.api.constants import Keys, Values
+from agent_runtime.capabilities.surfaces.config import SurfaceEmissionFlag
+from agent_runtime.capabilities.surfaces.spec_models import (
+    SurfaceArchetype,
+    SurfaceDiff,
+    SurfaceEnvelope,
+    SurfaceFieldChange,
+    SurfaceState,
+)
 from agent_runtime.execution.contracts import StreamEventSource
 from agent_runtime.persistence.ports import DraftStorePort
 from agent_runtime.persistence.records import (
@@ -30,6 +39,14 @@ from agent_runtime.persistence.records import (
     DraftStatus,
 )
 from runtime_api.schemas import RunRecord, RuntimeApiEventType
+
+_LOGGER = logging.getLogger(__name__)
+
+# Stable surface URI scheme for the draft/email message surface (plan D3). One
+# URI per draft_id so every version of the same draft merges onto one FE tab.
+_DRAFT_SURFACE_SCHEME = "message://draft/"
+# Field label for a section whose heading is empty (pre-first-heading preamble).
+_INTRO_SECTION_LABEL = "(intro)"
 
 
 # After CompositeBackend strips the ``/drafts/`` prefix the inner path looks
@@ -405,6 +422,114 @@ def _run_sync(awaitable: Awaitable[Any]) -> Any:
     return loop.run_until_complete(awaitable)
 
 
+# -- surface projection (generative-UI PRD-02) --------------------------------
+
+
+def _section_changes(
+    prior_sections: list[dict[str, str]],
+    current_sections: list[dict[str, str]],
+) -> list[SurfaceFieldChange]:
+    """Diff two section lists into section-level before/after field changes.
+
+    Pairs sections by heading: a changed body yields ``old``/``new``, a new
+    heading yields ``old=None``, a dropped heading yields ``new=None``. Empty
+    headings (the pre-first-heading preamble) map to a stable non-empty label so
+    the change field stays valid.
+    """
+
+    prior_by = {section["heading"]: section["body"] for section in prior_sections}
+    current_by = {section["heading"]: section["body"] for section in current_sections}
+    changes: list[SurfaceFieldChange] = []
+    for heading, body in current_by.items():
+        old = prior_by.get(heading)
+        if old != body:
+            changes.append(
+                SurfaceFieldChange(
+                    field=heading or _INTRO_SECTION_LABEL, old=old, new=body
+                )
+            )
+    for heading, body in prior_by.items():
+        if heading not in current_by:
+            changes.append(
+                SurfaceFieldChange(
+                    field=heading or _INTRO_SECTION_LABEL, old=body, new=None
+                )
+            )
+    return changes
+
+
+def _draft_surface_envelope(
+    record: DraftRecord,
+    *,
+    prior: DraftRecord | None,
+) -> SurfaceEnvelope:
+    """Build the ``message`` surface envelope for a draft version.
+
+    ``state.data`` carries the send-shaped view ({to?, subject, sections, body});
+    ``diff.changes`` carries section-level before/after when a prior version
+    exists. No spec — the draft/email surface is a bespoke tier-1 message view,
+    not an archetype binding.
+    """
+
+    sections = _section_split(record.content_text)
+    data: dict[str, object] = {
+        "subject": record.title,
+        "sections": sections,
+        "body": record.content_text,
+    }
+    recipient = (record.target_metadata or {}).get("to")
+    if recipient is not None:
+        data["to"] = recipient
+
+    diff: SurfaceDiff | None = None
+    if prior is not None:
+        changes = _section_changes(_section_split(prior.content_text), sections)
+        if changes:
+            diff = SurfaceDiff(changes=changes)
+
+    return SurfaceEnvelope(
+        surface_uri=f"{_DRAFT_SURFACE_SCHEME}{record.draft_id}",
+        archetype=SurfaceArchetype.MESSAGE,
+        state=SurfaceState(spec=None, data=data),
+        diff=diff,
+    )
+
+
+async def _attach_draft_surface(
+    payload: dict[str, object],
+    record: DraftRecord,
+    store: DraftStorePort | None,
+) -> None:
+    """Attach ``surface`` + top-level ``surface_uri`` to a DRAFT_UPDATED payload.
+
+    Best-effort and gated by ``RUNTIME_SURFACE_EMISSION``: when disabled the
+    payload is byte-for-byte unchanged, and any failure is logged and swallowed
+    so a surface never blocks a draft emission. The prior version (for the diff)
+    is read from ``store`` when available on v2+.
+    """
+
+    if not SurfaceEmissionFlag.enabled():
+        return
+    try:
+        prior: DraftRecord | None = None
+        if store is not None and record.version > 1:
+            prior = await store.get_version(
+                org_id=record.org_id,
+                draft_id=record.draft_id,
+                version=record.version - 1,
+            )
+        envelope = _draft_surface_envelope(record, prior=prior)
+        payload["surface_uri"] = envelope.surface_uri
+        payload["surface"] = envelope.model_dump(mode="json", exclude_none=True)
+    except Exception:  # noqa: BLE001 - best-effort; never break draft emission
+        _LOGGER.warning(
+            "[surfaces] draft.surface_raised draft_id=%s version=%s",
+            record.draft_id,
+            record.version,
+            exc_info=True,
+        )
+
+
 # -- event emitter factory ----------------------------------------------------
 
 
@@ -412,18 +537,20 @@ def make_event_emitter(
     *,
     event_producer: object,
     run: RunRecord,
+    store: DraftStorePort | None = None,
 ) -> Callable[[DraftRecord], Awaitable[None]]:
     """Build the ``emit_event`` callback to inject into ``DraftBackend``.
 
     Kept as a free function so ``DraftBackend`` stays testable without a live
     producer. The returned closure calls ``append_api_event`` so every draft
     update travels through the same sequencing and redaction path as other
-    runtime events.
+    runtime events. When ``store`` is supplied, a generative-UI ``message``
+    surface envelope is attached (with a section-level diff on v2+).
     """
 
     async def _emit(record: DraftRecord) -> None:
         """Emit a draft-change event with the record payload to the run's event stream."""
-        payload = {
+        payload: dict[str, object] = {
             Keys.Field.RUN_ID: run.run_id,
             Keys.Field.CONVERSATION_ID: run.conversation_id,
             "draft_id": record.draft_id,
@@ -437,6 +564,7 @@ def make_event_emitter(
             Keys.Field.SUMMARY: _summary_for(record),
             Keys.Field.STATUS: Values.Status.COMPLETED,
         }
+        await _attach_draft_surface(payload, record, store)
         await event_producer.append_api_event(  # type: ignore[attr-defined]
             run=run,
             source=StreamEventSource.RUNTIME,

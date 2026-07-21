@@ -1,0 +1,20 @@
+{
+  "spec_version": 1,
+  "archetype": "table",
+  "source": { "server": "seed:sentry", "tool": "list_issues" },
+  "title_path": "project.slug",
+  "items_path": "issues",
+  "columns": [
+    { "label": "Issue", "path": "title", "align": "start" },
+    { "label": "Level", "path": "level", "format": "badge" },
+    { "label": "Events", "path": "count", "format": "number", "align": "end" },
+    {
+      "label": "Users",
+      "path": "userCount",
+      "format": "number",
+      "align": "end"
+    },
+    { "label": "Last seen", "path": "lastSeen", "format": "datetime" }
+  ],
+  "link": { "label": "Open in Sentry", "url_path": "permalink" }
+}
