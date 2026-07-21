@@ -17,6 +17,7 @@ from agent_runtime.execution.contracts import (
     ModelReasoningEffort,
     ModelThinkingMode,
 )
+from agent_runtime.execution.fake_model import FakeModelProvider
 from agent_runtime.execution.openai_compat import OpenAICompatibleProviders
 
 WEB_EXCLUDED_DEEP_AGENT_TOOLS = frozenset(
@@ -361,6 +362,12 @@ def build_chat_model(
     callers without a workspace context (e.g. the presentation layer's projection
     factory).
     """
+
+    # Hermetic-test affordance: an env-gated deterministic fake substitutes the
+    # concrete model at this single funnel, leaving the real graph + streaming
+    # executor untouched. Never active in a shipped deployment (see fake_model).
+    if FakeModelProvider.is_enabled():
+        return FakeModelProvider.build(model_config)
 
     kwargs: dict[str, object] = {"timeout": model_config.timeout_seconds}
     if model_config.reasoning is None or not model_config.reasoning.enabled:
