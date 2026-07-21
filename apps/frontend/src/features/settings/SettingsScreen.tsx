@@ -34,7 +34,6 @@ import { ModelAndBehavior } from "./sections/ModelAndBehavior";
 import { PrivacyAndData } from "./sections/PrivacyAndData";
 // BYOK — per-user model provider keys.
 import { ProviderKeys } from "./sections/ProviderKeys";
-import { LocalModels } from "./sections/LocalModels";
 import { getLocalModelsStatus } from "../../api/localModelsApi";
 import { useWorkspaceDefaults } from "./useWorkspaceDefaults";
 // PR 8.1 — WORKSPACE group sections.
@@ -375,9 +374,10 @@ export function SettingsScreen({
             <ModelAndBehavior workspaceDefaults={workspaceDefaults} />
           ) : null}
           {activeSection === "provider-keys" ? <ProviderKeys /> : null}
-          {activeSection === "local-models" && localModelsEnabled ? (
-            <LocalModels />
-          ) : null}
+          {/* local-models is served by the converged SettingsBinder →
+              chat-surface LocalModelsPage; App.tsx never routes it here (only
+              connectors/skills reach SettingsScreen). The legacy nav entry
+              below still deep-links to the binder via onSectionChange. */}
           {activeSection === "connectors" ? (
             <ConnectorsSettings connectors={connectors} />
           ) : null}

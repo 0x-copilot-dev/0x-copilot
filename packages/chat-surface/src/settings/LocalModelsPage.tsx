@@ -22,6 +22,7 @@ import { useState, type CSSProperties, type ReactElement } from "react";
 import type {
   LocalModelSummary,
   LocalModelsStatus,
+  PullLocalModelRequest,
 } from "@0x-copilot/api-types";
 import { Badge, Button } from "@0x-copilot/design-system";
 
@@ -53,6 +54,12 @@ export interface LocalModelsPageProps {
   readonly onDownloaded: (result: LocalModelDownloadResult) => void;
   /** Open the pull SSE stream (forwarded to the download modal). */
   readonly startPull: StartLocalModelPull;
+  /**
+   * Optional pre-download size probe (forwarded to the download modal's custom
+   * free-text path). Host wires it to `LocalModelsPort.size`; when omitted, a
+   * custom pull starts without a size heads-up (degrades gracefully).
+   */
+  readonly resolveSize?: (request: PullLocalModelRequest) => Promise<number>;
   /** Remove an installed model. */
   readonly onDelete: (name: string) => void;
   /** Run / select a model (host decides — e.g. set active in the picker). */
@@ -102,6 +109,7 @@ export function LocalModelsPage({
   onRecheck,
   onDownloaded,
   startPull,
+  resolveSize,
   onDelete,
   onRun,
   onSetDefault,
@@ -162,6 +170,7 @@ export function LocalModelsPage({
         onClose={() => setDownloadOpen(false)}
         availableModels={availableModels}
         startPull={startPull}
+        resolveSize={resolveSize}
         onFinish={(result) => {
           setDownloadOpen(false);
           onDownloaded(result);

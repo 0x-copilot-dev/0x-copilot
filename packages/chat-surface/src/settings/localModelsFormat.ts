@@ -30,6 +30,7 @@ export function formatEta(seconds: number): string {
 /** Friendly label for a raw Ollama pull status line. */
 export function humanStatus(status: string): string {
   if (status === "starting") return "Starting…";
+  if (status === "resolving") return "Checking size…";
   if (status.startsWith("pulling") || status === "downloading") {
     return "Downloading…";
   }

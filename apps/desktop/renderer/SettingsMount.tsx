@@ -43,8 +43,10 @@ import {
   ProviderKeysPage,
   SettingsSurface,
   ShortcutsPage,
+  LOCAL_MODEL_CATALOG,
   appearanceAttributes,
   createDeveloperTokensPort,
+  createLocalModelsPort,
   createModelsPort,
   createProviderKeysPort,
   type AppLockValue,
@@ -57,7 +59,6 @@ import {
   type RetentionChoice,
   type SettingsSectionSlug,
   type SettingsSurfaceController,
-  type StartLocalModelPull,
 } from "@0x-copilot/chat-surface";
 import type {
   LocalModelSummary,
@@ -141,14 +142,6 @@ const DEFAULT_APP_LOCK: AppLockValue = {
   encryptHistory: false,
   requireTouchId: false,
   lockAfter: "15m",
-};
-
-// Ollama probe is a stub until PR-6D wires the real runtime seam. Report "not
-// running" so the page shows the honest setup steps rather than a fake list.
-const STUB_OLLAMA_STATUS: LocalModelsStatus = {
-  enabled: true,
-  ollama_running: false,
-  ollama_version: null,
 };
 
 function makeNotificationDefaults(userId: string): NotificationDefaults {
@@ -243,15 +236,10 @@ function applyAppearance(value: AppearanceValue): void {
   root.setAttribute("data-reduce-motion", attrs["data-reduce-motion"]);
 }
 
-// The download seam is not wired on desktop yet (PR-6D). It is only reachable
-// once Ollama reports running, which the stub status never does — but the page
-// requires the prop, so provide an honest failing stub rather than a fake.
-const stubStartPull: StartLocalModelPull = (_request, handlers) => {
-  handlers.onError(
-    new Error("Local model downloads aren't wired in this build yet."),
-  );
-  return { close: () => undefined };
-};
+/** Best-effort error → message for the local-models card (no util on desktop). */
+function localModelsErrorMessage(err: unknown, fallback: string): string {
+  return err instanceof Error && err.message ? err.message : fallback;
+}
 
 // ---------------------------------------------------------------------------
 // SettingsMount
@@ -271,6 +259,10 @@ export function SettingsMount({
   const modelsPort = useMemo(() => createModelsPort(transport), [transport]);
   const developerTokensPort = useMemo(
     () => createDeveloperTokensPort(transport),
+    [transport],
+  );
+  const localModelsPort = useMemo(
+    () => createLocalModelsPort(transport),
     [transport],
   );
   const touchIdAvailable = transport.capabilities().nativeSecretStorage;
@@ -590,8 +582,45 @@ export function SettingsMount({
       });
   };
 
-  // Local models are read-only stubs for now (PR-6D wires the runtime).
-  const localModels: readonly LocalModelSummary[] = [];
+  // Local models (Ollama) — real wiring through the chat-surface port. `status`
+  // always answers; when Ollama isn't running the page shows its setup steps.
+  // Behaviourally identical to the web `SettingsBinder`.
+  const [localModelsStatus, setLocalModelsStatus] =
+    useState<LocalModelsStatus | null>(null);
+  const [localModels, setLocalModels] = useState<readonly LocalModelSummary[]>(
+    [],
+  );
+  const [localModelsError, setLocalModelsError] = useState<string | null>(null);
+
+  const refreshLocalModelsList = useCallback(() => {
+    localModelsPort
+      .list()
+      .then(setLocalModels)
+      .catch((err: unknown) =>
+        setLocalModelsError(
+          localModelsErrorMessage(err, "Could not list local models."),
+        ),
+      );
+  }, [localModelsPort]);
+
+  const recheckLocalModels = useCallback(() => {
+    setLocalModelsError(null);
+    localModelsPort
+      .status()
+      .then((next) => {
+        setLocalModelsStatus(next);
+        if (next.ollama_running) refreshLocalModelsList();
+      })
+      .catch((err: unknown) =>
+        setLocalModelsError(
+          localModelsErrorMessage(err, "Could not reach the local runtime."),
+        ),
+      );
+  }, [localModelsPort, refreshLocalModelsList]);
+
+  useEffect(() => {
+    recheckLocalModels();
+  }, [recheckLocalModels]);
 
   const renderSection = (
     slug: SettingsSectionSlug,
@@ -719,15 +748,36 @@ export function SettingsMount({
       case "models":
         return <ModelsPage port={modelsPort} onToast={toast} />;
       case "local-models":
+        // defaultLocalModelName stays null: default-local persistence is a
+        // separate slice (needs a backend field), so `onSetDefault` is omitted
+        // rather than faking success.
         return (
           <LocalModelsPage
-            status={STUB_OLLAMA_STATUS}
+            status={localModelsStatus}
             models={localModels}
+            availableModels={LOCAL_MODEL_CATALOG}
             defaultLocalModelName={null}
-            onRecheck={() => toast("Re-checking the local runtime…")}
-            onDownloaded={() => undefined}
-            startPull={stubStartPull}
-            onDelete={() => undefined}
+            loadError={localModelsError}
+            onRecheck={recheckLocalModels}
+            onDownloaded={() => refreshLocalModelsList()}
+            startPull={(request, handlers) =>
+              localModelsPort.pull(request.repo, request.quant, handlers)
+            }
+            resolveSize={(request) =>
+              localModelsPort
+                .size(request.repo, request.quant)
+                .then((size) => size.size_bytes)
+            }
+            onDelete={(name) => {
+              void localModelsPort
+                .remove(name)
+                .then(() => refreshLocalModelsList())
+                .catch((err: unknown) =>
+                  toast(
+                    localModelsErrorMessage(err, "Could not remove the model."),
+                  ),
+                );
+            }}
           />
         );
       case "model-behavior":
