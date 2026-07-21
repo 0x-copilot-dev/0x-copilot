@@ -109,12 +109,13 @@ jobs:
           ALTER DEFAULT PRIVILEGES IN SCHEMA public GRANT ALL ON SEQUENCES TO merge_app;
           SQL
 
-      - name: Run the backend live merge gate + RLS isolation
+      - name: Run the backend live merge gate + RLS isolation + principal backfill
         run: |
           cd services/backend
           PYTHONPATH="../../packages/service-contracts/src:src" python -m pytest \
             tests/integration/persistence/test_account_merge_live.py \
-            tests/integration/persistence/test_rls_isolation.py -q
+            tests/integration/persistence/test_rls_isolation.py \
+            tests/integration/persistence/test_principals_live.py -q
 
   ai-backend-merge-gate:
     runs-on: ubuntu-latest
