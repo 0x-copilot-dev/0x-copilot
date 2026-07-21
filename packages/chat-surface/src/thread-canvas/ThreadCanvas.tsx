@@ -41,9 +41,13 @@
 // canvas itself is controlled.
 
 import {
+  useCallback,
   useMemo,
+  useRef,
+  useState,
   type CSSProperties,
   type KeyboardEvent as ReactKeyboardEvent,
+  type PointerEvent as ReactPointerEvent,
   type ReactElement,
   type ReactNode,
 } from "react";
@@ -66,6 +70,19 @@ import { useEventProjector } from "./useEventProjector";
 export type ThreadMode = "studio" | "focus";
 
 const MODE_VALUES: readonly ThreadMode[] = ["studio", "focus"];
+
+/** Studio workspace-rail (chat/tabs column) width bounds, in px. */
+export const DEFAULT_RAIL_WIDTH = 360;
+export const MIN_RAIL_WIDTH = 300;
+export const MAX_RAIL_WIDTH = 760;
+/** Minimum width kept for the surface (center) column while dragging. */
+const MIN_SURFACE_WIDTH = 320;
+
+/** Clamp a rail width to the allowed range (a non-finite value → default). */
+export function clampRailWidth(width: number): number {
+  if (!Number.isFinite(width)) return DEFAULT_RAIL_WIDTH;
+  return Math.max(MIN_RAIL_WIDTH, Math.min(MAX_RAIL_WIDTH, Math.round(width)));
+}
 
 export interface ThreadCanvasProps {
   /** Current presentation slot. */
@@ -122,6 +139,18 @@ export interface ThreadCanvasProps {
    * is the single mode control (per the PR-3.5 seam note).
    */
   readonly showModeSwitcher?: boolean;
+  /**
+   * Width (px) of the Studio workspace rail (the chat/tabs column). Controlled
+   * by the host (`RunDestination` via `useRailWidth`, KeyValueStore-backed) so
+   * the width persists across sessions; defaults to `DEFAULT_RAIL_WIDTH` for
+   * standalone callers. Ignored in Focus mode (single centered column).
+   */
+  readonly railWidth?: number;
+  /**
+   * Fired with the new width when the user finishes dragging (or arrow-keys) the
+   * rail divider. Omit for a non-persistent, session-only resize.
+   */
+  readonly onRailWidthChange?: (width: number) => void;
 }
 
 const EMPTY_EVENTS: readonly RuntimeEventEnvelope[] = [];
@@ -151,10 +180,83 @@ export function ThreadCanvas(props: ThreadCanvasProps): ReactElement {
     onSnapToNow,
     rightRail,
     showModeSwitcher = true,
+    railWidth = DEFAULT_RAIL_WIDTH,
+    onRailWidthChange,
   } = props;
 
   // SINGLE projector — every consumer reads slices off this object.
   const projection = useEventProjector(events);
+
+  // Studio rail resize. `dragWidth` is a transient local override held only
+  // while the user drags the divider; on release we commit to the host (which
+  // persists) and fall back to the controlled `railWidth`. Callers without an
+  // `onRailWidthChange` keep the dragged width for the session.
+  const gridRef = useRef<HTMLDivElement | null>(null);
+  const [dragWidth, setDragWidth] = useState<number | null>(null);
+  const draggingRef = useRef(false);
+  const railWidthPx = clampRailWidth(dragWidth ?? railWidth);
+
+  const widthFromPointer = useCallback((clientX: number): number => {
+    const grid = gridRef.current;
+    if (grid === null) return DEFAULT_RAIL_WIDTH;
+    const rect = grid.getBoundingClientRect();
+    const dynamicMax = Math.min(MAX_RAIL_WIDTH, rect.width - MIN_SURFACE_WIDTH);
+    return Math.max(
+      MIN_RAIL_WIDTH,
+      Math.min(dynamicMax, Math.round(rect.right - clientX)),
+    );
+  }, []);
+
+  const handleResizeDown = useCallback(
+    (event: ReactPointerEvent<HTMLDivElement>): void => {
+      event.preventDefault();
+      draggingRef.current = true;
+      event.currentTarget.setPointerCapture(event.pointerId);
+      setDragWidth(widthFromPointer(event.clientX));
+    },
+    [widthFromPointer],
+  );
+
+  const handleResizeMove = useCallback(
+    (event: ReactPointerEvent<HTMLDivElement>): void => {
+      if (!draggingRef.current) return;
+      setDragWidth(widthFromPointer(event.clientX));
+    },
+    [widthFromPointer],
+  );
+
+  const handleResizeUp = useCallback(
+    (event: ReactPointerEvent<HTMLDivElement>): void => {
+      if (!draggingRef.current) return;
+      draggingRef.current = false;
+      event.currentTarget.releasePointerCapture(event.pointerId);
+      const next = widthFromPointer(event.clientX);
+      if (onRailWidthChange !== undefined) {
+        onRailWidthChange(next);
+        setDragWidth(null);
+      } else {
+        setDragWidth(next);
+      }
+    },
+    [onRailWidthChange, widthFromPointer],
+  );
+
+  const handleResizeKey = useCallback(
+    (event: ReactKeyboardEvent<HTMLDivElement>): void => {
+      // The rail is on the right, so ArrowLeft widens it (divider moves left).
+      const delta =
+        event.key === "ArrowLeft" ? 16 : event.key === "ArrowRight" ? -16 : 0;
+      if (delta === 0) return;
+      event.preventDefault();
+      const next = clampRailWidth(railWidthPx + delta);
+      if (onRailWidthChange !== undefined) {
+        onRailWidthChange(next);
+      } else {
+        setDragWidth(next);
+      }
+    },
+    [onRailWidthChange, railWidthPx],
+  );
 
   // Time-travel surface payload (frozen at scrub cursor in studio/focus).
   // Auto-derived for the active uri so the surface stays consistent
@@ -211,6 +313,7 @@ export function ThreadCanvas(props: ThreadCanvasProps): ReactElement {
 
   return (
     <div
+      ref={gridRef}
       data-testid="thread-canvas"
       data-conversation-id={conversationId}
       data-mode={mode}
@@ -218,7 +321,12 @@ export function ThreadCanvas(props: ThreadCanvasProps): ReactElement {
       data-has-active-surfaces={
         projection.surface.hasActiveSurfaces ? "true" : "false"
       }
-      style={gridStyleFor(mode)}
+      style={{
+        ...gridStyleFor(mode, railWidthPx),
+        // Kill the 300ms grid-template animation during an active drag so the
+        // rail tracks the pointer 1:1 (the animation is for mode switches).
+        ...(dragWidth !== null ? { transition: "none" } : null),
+      }}
     >
       {showModeSwitcher ? (
         <ModeSwitcherTabs mode={mode} onModeChange={onModeChange} />
@@ -251,6 +359,31 @@ export function ThreadCanvas(props: ThreadCanvasProps): ReactElement {
             onSuggestChanges={onSuggestChanges}
           />
         </div>
+
+        {/* Draggable divider between the surface and the rail — Studio only.
+            The 1px `handle` grid column carries the line; the inner span widens
+            the grab area to ~9px. Pointer capture keeps the drag alive off the
+            thin target; arrow keys nudge for keyboard users. */}
+        {showSurfaceColumn ? (
+          <div
+            role="separator"
+            aria-orientation="vertical"
+            aria-label="Resize workspace rail"
+            aria-valuenow={railWidthPx}
+            aria-valuemin={MIN_RAIL_WIDTH}
+            aria-valuemax={MAX_RAIL_WIDTH}
+            tabIndex={0}
+            data-testid="tc-rail-resizer"
+            data-dragging={dragWidth !== null ? "true" : "false"}
+            style={railHandleStyle(dragWidth !== null)}
+            onPointerDown={handleResizeDown}
+            onPointerMove={handleResizeMove}
+            onPointerUp={handleResizeUp}
+            onKeyDown={handleResizeKey}
+          >
+            <span style={railHandleHitStyle} aria-hidden="true" />
+          </div>
+        ) : null}
 
         <div
           data-testid="tc-chat-slot"
@@ -373,17 +506,19 @@ function ModeSwitcherTabs(props: ModeSwitcherTabsProps): ReactElement {
 // Styles (tokens only)
 // ============================================================
 
-function gridStyleFor(mode: ThreadMode): CSSProperties {
+function gridStyleFor(mode: ThreadMode, railWidthPx: number): CSSProperties {
   // Grid template adapts presentationally. Mode switch is a template
   // change, NOT a remount (PRD §3.3 — animation: 300ms grid-template
   // transition; the inner components are invariant).
   if (mode === "studio") {
+    // A 1px `handle` column between surface and chat carries the drag divider;
+    // the rail (chat column) width is user-controlled (`railWidthPx`).
     return {
       ...baseGridStyle,
-      gridTemplateColumns: "1fr 360px",
+      gridTemplateColumns: `minmax(0, 1fr) 1px ${railWidthPx}px`,
       gridTemplateRows: "auto auto 1fr auto auto",
       gridTemplateAreas:
-        '"switcher switcher" "tabs tabs" "surface chat" "swimlanes swimlanes" "mini mini"',
+        '"switcher switcher switcher" "tabs tabs tabs" "surface handle chat" "swimlanes swimlanes swimlanes" "mini mini mini"',
     };
   }
   // focus: chat-only column, surface column collapses.
@@ -418,22 +553,44 @@ const surfaceSlotStyle = (visible: boolean): CSSProperties => ({
   flexDirection: "column",
   minWidth: 0,
   minHeight: 0,
-  borderRight: "1px solid var(--color-border, #22252e)",
+  // The divider is the `handle` grid column (see railHandleStyle) — no border
+  // here, or it would double the line next to the handle.
   overflow: "auto",
   padding: 16,
 });
 
-const chatSlotStyle = (mode: ThreadMode): CSSProperties => ({
+const chatSlotStyle = (_mode: ThreadMode): CSSProperties => ({
   gridArea: "chat",
   display: "flex",
   flexDirection: "column",
   minWidth: 0,
   minHeight: 0,
   background: "var(--color-bg-elevated, #16181f)",
-  borderLeft:
-    mode === "studio" ? "1px solid var(--color-border, #22252e)" : "none",
   overflow: "hidden",
 });
+
+// Studio surface|rail divider. The 1px grid column is the visible line; the
+// inner hit span (below) widens the grab area. Turns accent while dragging.
+const railHandleStyle = (dragging: boolean): CSSProperties => ({
+  gridArea: "handle",
+  position: "relative",
+  alignSelf: "stretch",
+  background: dragging
+    ? "var(--color-accent, #5fb2ec)"
+    : "var(--color-border, #22252e)",
+  cursor: "col-resize",
+  touchAction: "none",
+  zIndex: 2,
+});
+
+const railHandleHitStyle: CSSProperties = {
+  position: "absolute",
+  top: 0,
+  bottom: 0,
+  left: -4,
+  right: -4,
+  cursor: "col-resize",
+};
 
 const swimlanesSlotStyle: CSSProperties = {
   gridArea: "swimlanes",

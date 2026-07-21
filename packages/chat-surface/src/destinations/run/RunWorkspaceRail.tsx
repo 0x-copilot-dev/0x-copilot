@@ -1,8 +1,9 @@
 // RunWorkspaceRail — the Run cockpit's tabbed right rail (PR-3.6).
 //
 // Source: docs/plan/desktop-redesign/phase-3/PRD.md
-//   §2 layout ("tabbed right rail `[Chat · Sources · Agents · Approvals]`")
-//   FR-3.10 (tab order + Chat default + tablist a11y)
+//   §2 layout ("tabbed right rail"); tab order follows the v3 mockup
+//     (copilot-v3.css): `[Chat · Agents · Approvals · Sources]`
+//   FR-3.10 (Chat default + tablist a11y)
 //   FR-3.11 (Chat hosts TcChat; Sources/Agents/Approvals REUSE the hoisted
 //            WorkspacePane tab bodies; Draft + Skills MUST NOT appear here)
 //   FR-3.12 (Agents "N live" / Approvals pending badges; per-tab empty copy)
@@ -64,8 +65,9 @@ import {
 import { isRunningStatus } from "../../workspace/workspaceHelpers";
 import type { RunMode } from "./useRunMode";
 
-/** The four rail tabs, in DESIGN-SPEC §2 order (Chat is default). */
-export type RunRailTabId = "chat" | "sources" | "agents" | "approvals";
+/** The four rail tabs, in v3 order — Chat · Agents · Approvals · Sources
+ *  (copilot-v3.css). Chat is the default. */
+export type RunRailTabId = "chat" | "agents" | "approvals" | "sources";
 
 const EMPTY_SOURCES: SourceEntryMap = new Map();
 const EMPTY_SUBAGENTS: SubagentSnapshotMap = new Map();
@@ -170,9 +172,9 @@ export function RunWorkspaceRail(props: RunWorkspaceRailProps): ReactElement {
   const agentsCount = subagents.size;
   const pendingApprovals = approvalsQueue.pending.length;
 
+  // v3 order (copilot-v3.css): Chat · Agents · Approvals · Sources.
   const tabItems: WorkspaceTabsItem<RunRailTabId>[] = [
     { id: "chat", label: "Chat" },
-    { id: "sources", label: "Sources" },
     {
       id: "agents",
       label: "Agents",
@@ -188,6 +190,7 @@ export function RunWorkspaceRail(props: RunWorkspaceRailProps): ReactElement {
             badge: approvalsBadge(pendingApprovals),
           },
         ]),
+    { id: "sources", label: "Sources" },
   ];
 
   return (

@@ -1,8 +1,8 @@
 // RunWorkspaceRail — tabbed right-rail tests (PR-3.6).
 //
 // Covers the FRs the rail owns:
-//   FR-3.10 — tab order `Chat · Sources · Agents · Approvals`, Chat default,
-//             role="tablist"/tab/tabpanel, arrow-key nav.
+//   FR-3.10 — tab order `Chat · Agents · Approvals · Sources` (v3), Chat
+//             default, role="tablist"/tab/tabpanel, arrow-key nav.
 //   FR-3.11 — Chat hosts the injected chatSlot; Sources/Agents/Approvals reuse
 //             the hoisted WorkspacePane bodies; Draft + Skills absent.
 //   FR-3.12 — Agents "N live" / Approvals pending badges when >0; per-tab empty
@@ -115,12 +115,12 @@ function tabLabels(): string[] {
 // ============================================================
 
 describe("RunWorkspaceRail — tabs (FR-3.10)", () => {
-  it("renders exactly Chat · Sources · Agents · Approvals, in order", () => {
+  it("renders exactly Chat · Agents · Approvals · Sources, in order", () => {
     render(<RunWorkspaceRail mode="studio" chatSlot={chatSlot()} />);
     const tabs = screen.getAllByRole("tab");
     expect(tabs).toHaveLength(4);
     // The `.atlas-workspace-tabs__label` span carries the plain tab label.
-    expect(tabLabels()).toEqual(["Chat", "Sources", "Agents", "Approvals"]);
+    expect(tabLabels()).toEqual(["Chat", "Agents", "Approvals", "Sources"]);
   });
 
   it("selects Chat by default and hosts the injected chatSlot in its panel", () => {
@@ -151,13 +151,14 @@ describe("RunWorkspaceRail — tabs (FR-3.10)", () => {
     fireEvent.keyDown(screen.getByRole("tab", { name: "Chat" }), {
       key: "ArrowRight",
     });
-    expect(screen.getByRole("tab", { name: "Sources" })).toHaveAttribute(
+    // v3 order: the tab after Chat is Agents.
+    expect(screen.getByRole("tab", { name: /Agents/ })).toHaveAttribute(
       "aria-selected",
       "true",
     );
     expect(screen.getByTestId("run-workspace-rail")).toHaveAttribute(
       "data-active-tab",
-      "sources",
+      "agents",
     );
   });
 });
@@ -214,7 +215,7 @@ describe("RunWorkspaceRail — body reuse + omissions (FR-3.11)", () => {
         approvalsQueue={approvalsQueue([approval()])}
       />,
     );
-    expect(tabLabels()).toEqual(["Chat", "Sources", "Agents", "Approvals"]);
+    expect(tabLabels()).toEqual(["Chat", "Agents", "Approvals", "Sources"]);
     expect(screen.queryByRole("tab", { name: /Draft/ })).toBeNull();
     expect(screen.queryByRole("tab", { name: /Skills/ })).toBeNull();
   });
@@ -385,7 +386,7 @@ describe("RunWorkspaceRail — scrubbed approvals gate (FR-3.15/3.16)", () => {
         scrubbed
       />,
     );
-    expect(tabLabels()).toEqual(["Chat", "Sources", "Agents"]);
+    expect(tabLabels()).toEqual(["Chat", "Agents", "Sources"]);
     expect(screen.queryByRole("tab", { name: /Approvals/ })).toBeNull();
     expect(screen.getByTestId("run-workspace-rail")).toHaveAttribute(
       "data-approvals-hidden",

@@ -83,6 +83,7 @@ import { RunEmptyState, type StartRunError } from "./RunEmptyState";
 import { RunHeader } from "./RunHeader";
 import { RunMultiSelect } from "./RunMultiSelect";
 import { RunWorkspaceRail } from "./RunWorkspaceRail";
+import { useRailWidth } from "./useRailWidth";
 import { useRunMode } from "./useRunMode";
 import { useRunSession } from "./useRunSession";
 
@@ -200,6 +201,8 @@ export function RunDestination(props: RunDestinationProps): ReactElement {
     enabled,
   });
   const { mode, setMode } = useRunMode({ conversationId, enabled });
+  // Persisted, draggable width of the Studio workspace rail (global preference).
+  const { width: railWidth, setWidth: setRailWidth } = useRailWidth();
 
   // Surface-tab strip state. `ThreadCanvas` takes `tabs`/`activeUri` as
   // host-controlled props; the shell owns them so a later PR can populate the
@@ -591,6 +594,9 @@ export function RunDestination(props: RunDestinationProps): ReactElement {
             // control (per the PR-3.5 seam note).
             rightRail={rightRail}
             showModeSwitcher={false}
+            // Draggable, persisted Studio rail width (useRailWidth → KV).
+            railWidth={railWidth}
+            onRailWidthChange={setRailWidth}
           />
         )}
       </div>
