@@ -49,12 +49,12 @@ export {
   resolveInstalledTag,
 } from "./localModelEngine";
 // === Phase FTUE-P3 — onboarding composer + starter chips + ack + launch ===
-export { OnboardingComposer, ONBOARDING_COMPOSER_COPY } from "./OnboardingComposer";
-export type { OnboardingComposerProps } from "./OnboardingComposer";
 export {
-  SuggestionChips,
-  FIRST_RUN_SUGGESTIONS,
-} from "./SuggestionChips";
+  OnboardingComposer,
+  ONBOARDING_COMPOSER_COPY,
+} from "./OnboardingComposer";
+export type { OnboardingComposerProps } from "./OnboardingComposer";
+export { SuggestionChips, FIRST_RUN_SUGGESTIONS } from "./SuggestionChips";
 export type {
   FirstRunSuggestion,
   SuggestionChipsProps,
@@ -83,3 +83,40 @@ export type {
   FirstRunLaunchResult,
 } from "./ports/FirstRunRunsPort";
 // === end Phase FTUE-P3 ===
+
+// === First-Run onboarding (P4 — tools popover) ===
+export { ToolsPopover, TOOLS_POPOVER_COPY } from "./ToolsPopover";
+export type { ToolsPopoverProps } from "./ToolsPopover";
+export {
+  ComposerToolsButton,
+  COMPOSER_TOOLS_BUTTON_COPY,
+} from "./ComposerToolsButton";
+export type { ComposerToolsButtonProps } from "./ComposerToolsButton";
+export {
+  projectFirstRunConnectors,
+  firstRunActiveToolCount,
+} from "./projectFirstRunConnectors";
+export type {
+  FirstRunConnectorProjection,
+  FirstRunConnectedConnector,
+  FirstRunInstallableConnector,
+} from "./projectFirstRunConnectors";
+export type { FirstRunConnectorsPort } from "./ports/FirstRunConnectorsPort";
+// === end First-Run onboarding (P4 — tools popover) ===
+// === First-Run onboarding (P4 — wallet chip) ===
+export { WalletChip, truncateAddress } from "./WalletChip";
+export type { WalletChipProps } from "./WalletChip";
+export type {
+  FirstRunProfilePort,
+  WalletProfileView,
+} from "./ports/FirstRunProfilePort";
+export {
+  FirstRunProfileProvider,
+  FirstRunWalletChip,
+  useFirstRunProfile,
+} from "./providers/FirstRunProfileProvider";
+export type {
+  FirstRunProfileProviderProps,
+  FirstRunProfileState,
+} from "./providers/FirstRunProfileProvider";
+// === end First-Run onboarding (P4 — wallet chip) ===

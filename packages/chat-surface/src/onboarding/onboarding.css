@@ -282,7 +282,6 @@
     transition: none;
   }
 }
-
 /* ===========================================================================
  * P2 — local-model gate card (FirstRunLocalCard). Appended to P1's stylesheet
  * per the one-stylesheet discipline; all values resolve design-system tokens.
@@ -294,6 +293,40 @@
 .fr-gcard__progress {
   display: flex;
   flex-direction: column;
+  gap: var(--space-sm);
+  width: 100%;
+}
+
+/* Mono status pill line, e.g. "Qwen 3 4B · 41%" / "on-device · ready". */
+.fr-gcard__status {
+  margin: 0;
+  font-family: var(--font-mono);
+  font-size: var(--font-size-2xs);
+  color: var(--color-text-muted);
+}
+
+/* Ollama-not-running honest setup steps. */
+.fr-gcard__setup {
+  margin: 0;
+  padding-left: 1.2em;
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2xs);
+  font-size: var(--font-size-sm);
+  color: var(--color-text-muted);
+}
+
+.fr-gcard__error {
+  margin: 0;
+  font-size: var(--font-size-xs);
+  color: var(--color-danger);
+}
+
+.fr-gcard__actions {
+  display: flex;
+  align-items: center;
+  gap: var(--space-sm);
+}
 /* ==========================================================================
  * Phase FTUE-P3 — onboarding composer (State B) + starter chips + ack (State C)
  * Appended per P1's "one stylesheet, one token map" note. Every color/size
@@ -371,8 +404,6 @@
   width: 100%;
 }
 
-/* Mono status pill line, e.g. "Qwen 3 4B · 41%" / "on-device · ready". */
-.fr-gcard__status {
 .fr-cerr__msg {
   min-width: 0;
   font-size: var(--font-size-xs);
@@ -443,18 +474,6 @@
   color: var(--color-text-muted);
 }
 
-/* Ollama-not-running honest setup steps. */
-.fr-gcard__setup {
-  margin: 0;
-  padding-left: 1.2em;
-  display: flex;
-  flex-direction: column;
-  gap: var(--space-2xs);
-  font-size: var(--font-size-sm);
-  color: var(--color-text-muted);
-}
-
-.fr-gcard__error {
 /* Jade check (SPEC: the success token, NOT the sky accent). */
 .ln__check {
   color: var(--color-success);
@@ -466,10 +485,6 @@
   color: var(--color-danger);
 }
 
-.fr-gcard__actions {
-  display: flex;
-  align-items: center;
-  gap: var(--space-sm);
 /* Reduced-motion: neutralize the chip hover transition. */
 [data-reduce-motion="1"] .fr-chip,
 [data-reduce-motion="always"] .fr-chip {
@@ -480,4 +495,33 @@
   .fr-chip {
     transition: none;
   }
+}
+
+/* P4 — wallet chip */
+.fr-wchip {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-xs);
+  padding: var(--space-2xs) var(--space-sm);
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-full);
+  background: var(--color-surface-muted);
+  font-family: var(--font-mono);
+  font-size: var(--font-size-2xs);
+  line-height: 1;
+  color: var(--color-text-muted);
+}
+
+/* Jade status dot (the success token, NOT the sky accent). */
+.fr-wchip__dot {
+  flex: 0 0 auto;
+  width: 6px;
+  height: 6px;
+  border-radius: var(--radius-full);
+  background: var(--color-success);
+}
+
+.fr-wchip__addr {
+  color: var(--color-text);
+  letter-spacing: 0.01em;
 }
