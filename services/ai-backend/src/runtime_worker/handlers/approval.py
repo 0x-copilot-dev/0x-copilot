@@ -225,8 +225,18 @@ class RuntimeApprovalHandler:
                 approval=approval,
                 decision=command.decision,
                 decided_by_user_id=getattr(command, "decided_by_user_id", None),
+                edits=getattr(command, "edits", None),
             )
             return
+        # PRD-09 — ``approve_with_edits`` is an approval variant. For the
+        # LangGraph-resume / batch path below it resumes exactly as a plain
+        # approve; the reviewer's edits are applied into the committed side
+        # effect on the draft-send / commit path, not the resume value. Coercing
+        # here keeps the batch primitive and resume payload (which only know
+        # approve/reject) crash-free. (v1 edit surfaces are message body +
+        # record fields — not MCP tool-call args, per PRD-09 non-goals.)
+        if command.decision is ApprovalDecision.APPROVE_WITH_EDITS:
+            command = command.model_copy(update={"decision": ApprovalDecision.APPROVED})
         approval_kind = StreamTextHelper.extract(
             metadata.get(self._Fields.APPROVAL_KIND)
         )
@@ -700,11 +710,21 @@ class RuntimeApprovalHandler:
         approval: object,
         decision: ApprovalDecision,
         decided_by_user_id: str | None,
+        edits: object | None = None,
     ) -> None:
         """Apply a draft-send approval: persist the new draft version, emit ``DRAFT_UPDATED``, and complete the run.
 
-        Approve → ``status=sent``; Reject → ``status=draft``. Skips silently when the draft
-        store is absent or the draft is no longer in ``send_pending_approval`` state.
+        Approve (or ``approve_with_edits``) → ``status=sent``; Reject →
+        ``status=draft``. Skips silently when the draft store is absent or the
+        draft is no longer in ``send_pending_approval`` state (idempotent: a
+        replay after the send observes ``status=sent`` and no-ops, so the send
+        cannot fire twice).
+
+        PRD-09 — for ``approve_with_edits`` the reviewer's edit deltas (``edits``)
+        are merged server-side INTO the committed draft version before it is
+        marked sent: ``body`` replaces the content, ``fields`` overlay the target
+        metadata. The client never sends a merged artifact — the base is always
+        the server-held pending draft.
         """
 
         from agent_runtime.persistence.records import DraftStatus  # noqa: PLC0415
@@ -717,10 +737,14 @@ class RuntimeApprovalHandler:
             return
         latest = await self._draft_store.latest(org_id=run.org_id, draft_id=draft_id)
         if latest is None or latest.status is not DraftStatus.SEND_PENDING_APPROVAL:
-            # State changed since the approval was posted (e.g. a concurrent discard).
+            # State changed since the approval was posted (e.g. a concurrent
+            # discard, or an already-applied send). Idempotent no-op.
             return
 
-        if decision is ApprovalDecision.APPROVED:
+        if decision in (
+            ApprovalDecision.APPROVED,
+            ApprovalDecision.APPROVE_WITH_EDITS,
+        ):
             terminal_status = DraftStatus.SENT
             audit_action = _AUDIT_DRAFT_SEND_COMPLETED
         elif decision is ApprovalDecision.REJECTED:
@@ -734,6 +758,11 @@ class RuntimeApprovalHandler:
             decided_by_user_id=decided_by_user_id or run.user_id,
             status=terminal_status,
         )
+        applied_edit_keys: list[str] = []
+        if decision is ApprovalDecision.APPROVE_WITH_EDITS and edits is not None:
+            next_record, applied_edit_keys = self._apply_edits_to_draft(
+                record=next_record, edits=edits
+            )
         persisted = await self._draft_store.insert_version(next_record)
         await self._emit_draft_updated(run=run, record=persisted)
         await self._write_draft_audit(
@@ -743,6 +772,8 @@ class RuntimeApprovalHandler:
             extra_metadata={
                 "approval_id": getattr(approval, "approval_id", None),
                 "decided_by_user_id": decided_by_user_id,
+                "edited": bool(applied_edit_keys),
+                "edited_keys": applied_edit_keys or None,
             },
         )
         # Rejection is a normal outcome — mark the run completed either way.
@@ -758,6 +789,37 @@ class RuntimeApprovalHandler:
             reason=TerminationReason.NORMAL_COMPLETION,
             summary="Run completed",
         )
+
+    @staticmethod
+    def _apply_edits_to_draft(
+        *,
+        record: object,
+        edits: object,
+    ) -> tuple[object, list[str]]:
+        """Merge reviewer edit deltas into a draft version (PRD-09), returning the edited keys.
+
+        ``body`` replaces the draft content; ``fields`` overlay the target
+        metadata. The base is the server-held draft ``record`` — the client's
+        deltas can only replace body/target-metadata values, never redirect the
+        draft (draft_id, org, connector all stay as persisted). Returns the
+        (possibly unchanged) record plus the list of applied edit keys for audit.
+        """
+
+        update: dict[str, object] = {}
+        applied: list[str] = []
+        body = getattr(edits, "body", None)
+        if body is not None:
+            update["content_text"] = body
+            applied.append("body")
+        fields = getattr(edits, "fields", None)
+        if fields:
+            merged = dict(getattr(record, "target_metadata", None) or {})
+            merged.update({str(key): value for key, value in fields.items()})
+            update["target_metadata"] = merged
+            applied.extend(f"fields.{key}" for key in fields)
+        if not update:
+            return record, applied
+        return record.model_copy(update=update), applied
 
     @staticmethod
     def _next_draft_version(

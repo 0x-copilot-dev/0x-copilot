@@ -235,12 +235,20 @@ class ApprovalDecision(StrEnum):
     fresh ``APPROVAL_REQUESTED`` payload so the originator can accept the
     edited form. The LangGraph harness is **not** resumed; the run remains
     in ``WAITING_FOR_APPROVAL`` until the new request is accepted or rejected.
+
+    ``APPROVE_WITH_EDITS`` (PRD-09) is an approval variant: the reviewer
+    approves AND supplies edit deltas (:class:`SurfaceEdits`) in the same
+    decision. The server re-derives the final payload = proposal ⊕ edits and
+    commits it through the gated commit executor. Unlike ``SUGGEST_EDIT`` it
+    does not re-ask — it commits immediately with the edits applied. The wire
+    value mirrors the frozen api-types contract (PRD-09a).
     """
 
     APPROVED = "approved"
     REJECTED = "rejected"
     FORWARDED = "forwarded"
     SUGGEST_EDIT = "suggest_edit"
+    APPROVE_WITH_EDITS = "approve_with_edits"
 
 
 class ApprovalStatus(StrEnum):

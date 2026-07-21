@@ -14,6 +14,7 @@ from pydantic import (
     model_validator,
 )
 
+from agent_runtime.capabilities.surfaces.commit import SurfaceEdits
 from agent_runtime.execution.contracts import JsonObject, RuntimeContract
 from agent_runtime.api.constants import Keys, Messages
 from agent_runtime.validation import ValueNormalizer
@@ -24,6 +25,11 @@ from runtime_api.schemas.common import (
     ApprovalReversible,
     ApprovalStatus,
 )
+
+# ``SurfaceEdits`` is defined in the domain (``capabilities.surfaces.commit``)
+# and re-exported through this schema module so the runtime-API request/command
+# schemas share the single source of truth (PRD-09a/09b). It is used below as
+# the type of ``ApprovalDecisionRequest.edits``.
 
 
 class _Fields:
@@ -66,6 +72,12 @@ class ApprovalDecisionRequest(RuntimeContract):
     # re-emitted ``APPROVAL_REQUESTED`` event carries the edits without an
     # extra fetch.
     edited_payload: JsonObject | None = None
+    # PRD-09 — required when ``decision == APPROVE_WITH_EDITS``; rejected
+    # otherwise. Carries the reviewer's edit *deltas* (body / fields /
+    # accepted_hunk_ids). The server re-derives the final committed payload =
+    # proposal ⊕ edits; the client never sends a merged artifact. Distinct from
+    # ``edited_payload`` (SUGGEST_EDIT re-asks; APPROVE_WITH_EDITS commits).
+    edits: SurfaceEdits | None = None
 
     @field_validator(_Fields.DECIDED_BY_USER_ID)
     @classmethod
@@ -111,6 +123,20 @@ class ApprovalDecisionRequest(RuntimeContract):
             # so callers don't silently lose an edit they intended to send.
             raise ValueError(
                 "edited_payload is only allowed when decision == 'suggest_edit'."
+            )
+        return self
+
+    @model_validator(mode="after")
+    def _validate_edits(self) -> "ApprovalDecisionRequest":
+        # Fail-closed axis (PRD-09): ``edits`` is inert unless the decision is
+        # explicitly ``approve_with_edits``. Sending edits with reject/approve is
+        # a client error, not a silently-ignored no-op.
+        is_approve_with_edits = self.decision is ApprovalDecision.APPROVE_WITH_EDITS
+        if is_approve_with_edits and self.edits is None:
+            raise ValueError("edits is required when decision == 'approve_with_edits'.")
+        if not is_approve_with_edits and self.edits is not None:
+            raise ValueError(
+                "edits is only allowed when decision == 'approve_with_edits'."
             )
         return self
 

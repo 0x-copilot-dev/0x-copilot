@@ -148,9 +148,15 @@ class WorkerAuditEmitter:
         reason: str | None = None,
     ) -> None:
         """Emit an ``approval_decision`` audit event for an approved or denied approval request."""
+        # ``APPROVE_WITH_EDITS`` (PRD-09) is an approval variant — it commits the
+        # (edited) proposal, so its audit outcome is success like a plain approve.
         outcome = (
             _Outcomes.SUCCESS
-            if decision is ApprovalDecision.APPROVED
+            if decision
+            in (
+                ApprovalDecision.APPROVED,
+                ApprovalDecision.APPROVE_WITH_EDITS,
+            )
             else _Outcomes.DENIED
         )
         metadata: dict[str, Any] = {
