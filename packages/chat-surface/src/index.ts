@@ -1283,3 +1283,36 @@ export {
   type ParsedTransportError,
 } from "./errors/transportError";
 // === end Transport error parsing ===
+
+// === Frontend parity v3 (PRD-A) — shared icon system ===
+// The single source of truth for line iconography across the shell (rail,
+// settings nav, ⌘K palette, destination rows). Glyphs ported byte-faithfully
+// from the v3 design `Icon` registry; render via <Icon name="…" />. No surface
+// should inline an <svg> again. See docs/plan/frontend-parity-v3/PRD-A-icon-system.md.
+export { Icon, type IconProps } from "./icons/Icon";
+export { ICON_PATHS, ICON_NAMES, hasIcon, type IconName } from "./icons/paths";
+// === end Frontend parity v3 (PRD-A) ===
+
+// === Frontend parity v3 (PRD-B) — run-status → chip presentation SSOT ===
+// One map from a run/conversation status to its StatusPill tone + label + dot,
+// so destinations can't disagree (done → jade, stopped → muted, dot on live
+// only). See docs/plan/frontend-parity-v3/PRD-B-tokens-and-status-tone.md.
+// Exposed as `runStatusTone` — `statusTone` is already taken by the Tools
+// destination's tool-health mapping (a different concept).
+export {
+  statusTone as runStatusTone,
+  type RunStatusPresentation,
+} from "./shell/statusTone";
+// === end Frontend parity v3 (PRD-B) ===
+
+// === Frontend parity v3 (PRD-D) — ⌘K static command launcher ===
+// The 13 v3 design commands shown on an empty query and merged above live
+// search hits, so ⌘K works as a keyboard launcher. Hosts map each `intent` to
+// navigation via CommandPalette's `onCommand`. See PRD-D-command-palette.md.
+export {
+  SHELL_COMMANDS,
+  filterShellCommands,
+  type ShellCommand,
+  type ShellCommandIntent,
+} from "./shell/shellCommands";
+// === end Frontend parity v3 (PRD-D) ===

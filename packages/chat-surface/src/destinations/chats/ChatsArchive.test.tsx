@@ -241,7 +241,8 @@ describe("ChatsArchive — row", () => {
       );
     };
     expect(toneFor("paused")).toBe("warning");
-    expect(toneFor("done")).toBe("muted");
+    // done → success (jade) per the PRD-B design schema (was grey/muted).
+    expect(toneFor("done")).toBe("ok");
     expect(toneFor("archived")).toBe("muted");
   });
 });

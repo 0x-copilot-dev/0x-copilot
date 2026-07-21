@@ -27,6 +27,7 @@ from backend_app.contracts import (
     LoginAttemptRecord,
     OrganizationMemberRecord,
     OrganizationRecord,
+    PrincipalRecord,
     RoleAssignmentRecord,
     RoleRecord,
     UserRecord,
@@ -34,6 +35,16 @@ from backend_app.contracts import (
 
 
 _LOGGER = logging.getLogger(__name__)
+
+
+def _default_principal_id(user_id: str) -> str:
+    """The 1:1 expand-stage principal id for a user (ADR 0001, migration 0039).
+
+    Deterministic ``prn_<user_id>`` so an app-created user and the migration
+    backfill agree on the same principal id — the auto-mint below is therefore
+    idempotent across the migration boundary.
+    """
+    return f"prn_{user_id}"
 
 
 def _now() -> datetime:
@@ -66,10 +77,20 @@ class IdentityStore(Protocol):
     ) -> OrganizationRecord: ...
     def delete_organization(self, *, org_id: str, conn: Any | None = None) -> bool: ...
 
+    # Principals (ADR 0001) ---------------------------------------------
+    def create_principal(
+        self, record: PrincipalRecord, *, conn: Any | None = None
+    ) -> PrincipalRecord: ...
+    def get_principal(self, *, principal_id: str) -> PrincipalRecord | None: ...
+
     # Users -------------------------------------------------------------
-    def create_user(
-        self, record: UserRecord, *, conn: Any | None = None
-    ) -> UserRecord: ...
+    def create_user(self, record: UserRecord, *, conn: Any | None = None) -> UserRecord:
+        """Insert a user. The adapter dual-writes ``principal_id`` (ADR 0001):
+        when the record does not carry one, it get-or-creates the 1:1
+        ``prn_<user_id>`` principal in the same scope so no new row is ever
+        left without a principal (expand-stage invariant)."""
+        ...
+
     def get_user(
         self,
         *,
@@ -215,6 +236,7 @@ class InMemoryIdentityStore:
     """Dict-backed adapter for tests and dev. Mirrors Postgres semantics."""
 
     organizations: dict[str, OrganizationRecord] = field(default_factory=dict)
+    principals: dict[str, PrincipalRecord] = field(default_factory=dict)
     users: dict[str, UserRecord] = field(default_factory=dict)
     members: dict[str, OrganizationMemberRecord] = field(default_factory=dict)
     roles: dict[str, RoleRecord] = field(default_factory=dict)
@@ -275,16 +297,45 @@ class InMemoryIdentityStore:
         _log_write("organizations", org_id, "delete")
         return True
 
+    # Principals (ADR 0001) ---------------------------------------------
+    def create_principal(
+        self, record: PrincipalRecord, *, conn: Any | None = None
+    ) -> PrincipalRecord:
+        del conn
+        self.principals[record.principal_id] = record
+        _log_write("principals", record.principal_id, "insert")
+        return record
+
+    def get_principal(self, *, principal_id: str) -> PrincipalRecord | None:
+        return self.principals.get(principal_id)
+
     # Users -------------------------------------------------------------
     def create_user(self, record: UserRecord, *, conn: Any | None = None) -> UserRecord:
-        del conn
         if self._active_user_email_exists(record.org_id, record.primary_email):
             raise ValueError(
                 f"user with email already exists in org: {record.primary_email}"
             )
+        record = self._ensure_principal(record, conn=conn)
         self.users[record.user_id] = record
         _log_write("users", record.org_id, "insert")
         return record
+
+    def _ensure_principal(
+        self, record: UserRecord, *, conn: Any | None = None
+    ) -> UserRecord:
+        """Dual-write the 1:1 principal (ADR 0001) — get-or-create ``prn_<user_id>``
+        when the caller did not supply one, and stamp it on the user."""
+        if record.principal_id is not None:
+            return record
+        principal_id = _default_principal_id(record.user_id)
+        if self.get_principal(principal_id=principal_id) is None:
+            self.create_principal(
+                PrincipalRecord(
+                    principal_id=principal_id, display_name=record.display_name
+                ),
+                conn=conn,
+            )
+        return record.model_copy(update={"principal_id": principal_id})
 
     def get_user(
         self,
@@ -809,16 +860,56 @@ class PostgresIdentityStore:
             _log_write("organizations", org_id, "delete")
         return bool(count)
 
+    # Principals (ADR 0001) ---------------------------------------------
+    def create_principal(
+        self, record: PrincipalRecord, *, conn: Any | None = None
+    ) -> PrincipalRecord:
+        with self._cursor(conn) as cur:
+            cur.execute(
+                """
+                INSERT INTO principals (
+                    principal_id, display_name, created_at, updated_at,
+                    absorbed_into_principal_id, merged_at
+                ) VALUES (%s,%s,%s,%s,%s,%s)
+                ON CONFLICT (principal_id) DO NOTHING
+                """,
+                (
+                    record.principal_id,
+                    record.display_name,
+                    record.created_at,
+                    record.updated_at,
+                    record.absorbed_into_principal_id,
+                    record.merged_at,
+                ),
+            )
+        _log_write("principals", record.principal_id, "insert")
+        return record
+
+    def get_principal(self, *, principal_id: str) -> PrincipalRecord | None:
+        with self._cursor(None) as cur:
+            cur.execute(
+                "SELECT * FROM principals WHERE principal_id = %s", (principal_id,)
+            )
+            row = cur.fetchone()
+        return _row_to_principal(row) if row else None
+
     # Users -------------------------------------------------------------
     def create_user(self, record: UserRecord, *, conn: Any | None = None) -> UserRecord:
+        # Keep the auto-minted principal + the user in ONE transaction. When no
+        # caller conn is supplied, open one and recurse so the two inserts are
+        # atomic (never a user without its principal).
+        if conn is None:
+            with self.transaction() as owned:
+                return self.create_user(record, conn=owned)
+        record = self._ensure_principal(record, conn=conn)
         with self._cursor(conn) as cur:
             cur.execute(
                 """
                 INSERT INTO users (
                     user_id, org_id, primary_email, email_verified_at,
                     display_name, status, is_service_account, last_seen_at,
-                    metadata, created_at, updated_at, deleted_at
-                ) VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s)
+                    metadata, created_at, updated_at, deleted_at, principal_id
+                ) VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s)
                 """,
                 (
                     record.user_id,
@@ -833,10 +924,27 @@ class PostgresIdentityStore:
                     record.created_at,
                     record.updated_at,
                     record.deleted_at,
+                    record.principal_id,
                 ),
             )
         _log_write("users", record.org_id, "insert")
         return record
+
+    def _ensure_principal(
+        self, record: UserRecord, *, conn: Any | None = None
+    ) -> UserRecord:
+        """Dual-write the 1:1 principal (ADR 0001): get-or-create ``prn_<user_id>``
+        when the caller did not supply one. Idempotent via ON CONFLICT."""
+        if record.principal_id is not None:
+            return record
+        principal_id = _default_principal_id(record.user_id)
+        self.create_principal(
+            PrincipalRecord(
+                principal_id=principal_id, display_name=record.display_name
+            ),
+            conn=conn,
+        )
+        return record.model_copy(update={"principal_id": principal_id})
 
     def get_user(
         self,
@@ -1446,6 +1554,10 @@ def _row_to_user(row: dict[str, Any]) -> UserRecord:
     return UserRecord.model_validate(
         {**row, "metadata": _coerce_json(row.get("metadata"))}
     )
+
+
+def _row_to_principal(row: dict[str, Any]) -> PrincipalRecord:
+    return PrincipalRecord.model_validate(row)
 
 
 def _row_to_member(row: dict[str, Any]) -> OrganizationMemberRecord:

@@ -38,6 +38,7 @@ import type {
 import { EmptyState } from "../../shell/EmptyState";
 import { PageHeader } from "../../shell/PageHeader";
 import { StatusPill, type StatusTone } from "../../shell/StatusPill";
+import { statusTone as runStatusTone } from "../../shell/statusTone";
 import { formatRelativeTime } from "../../util/time";
 
 // ===========================================================================
@@ -64,17 +65,10 @@ const SECTION_HEADINGS: Readonly<Record<ChatsSectionKey, string>> = {
 // muted. Only `--color-accent` is reserved for interactive accent; status
 // chips carry semantic tone, never decorative colour.
 
+// Delegate to the shell's status-tone SSOT so Chats and Activity can't disagree
+// (PRD-B). The design maps done → success (jade), not muted/grey.
 function statusTone(status: ChatArchiveStatus): StatusTone {
-  switch (status) {
-    case "running":
-      return "ok";
-    case "paused":
-      return "warning";
-    case "done":
-      return "muted";
-    case "archived":
-      return "muted";
-  }
+  return runStatusTone(status).tone;
 }
 
 function statusLabel(status: ChatArchiveStatus): string {

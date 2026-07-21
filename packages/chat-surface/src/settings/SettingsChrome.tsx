@@ -410,7 +410,10 @@ export function SettingsNavItem({
         backgroundColor: active ? "var(--color-surface-muted)" : "transparent",
         color: active ? "var(--color-text)" : "var(--color-text-muted)",
         font: "inherit",
-        fontSize: "var(--font-size-sm)",
+        // Design .set-nav__item is 12px (nearest token --font-size-xs 12.5px);
+        // the settings-item spec has NO rail-style accent left bar — the active
+        // affordance is bg + the accent-coloured icon (PRD-E).
+        fontSize: "var(--font-size-xs)",
         fontWeight: active
           ? "var(--font-weight-medium)"
           : "var(--font-weight-regular)",
@@ -422,24 +425,18 @@ export function SettingsNavItem({
       }}
       {...rest}
     >
-      {active ? (
-        <span
-          aria-hidden="true"
-          style={{
-            position: "absolute",
-            left: 0,
-            top: 6,
-            bottom: 6,
-            width: 2,
-            borderRadius: "var(--radius-full)",
-            backgroundColor: "var(--color-accent)",
-          }}
-        />
-      ) : null}
       {icon !== undefined ? (
         <span
           aria-hidden="true"
-          style={{ flex: "0 0 auto", display: "inline-flex", lineHeight: 1 }}
+          data-settings-nav-icon=""
+          style={{
+            flex: "0 0 auto",
+            display: "inline-flex",
+            lineHeight: 1,
+            // Active item tints its icon with the accent (design .set-nav__item
+            // [data-active] svg{color:var(--accent)}).
+            color: active ? "var(--color-accent)" : undefined,
+          }}
         >
           {icon}
         </span>

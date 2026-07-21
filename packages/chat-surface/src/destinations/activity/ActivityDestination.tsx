@@ -49,6 +49,7 @@ import { DocList } from "../../shell/DocList";
 import { EmptyState } from "../../shell/EmptyState";
 import { PageHeader } from "../../shell/PageHeader";
 import { StatusPill, type StatusTone } from "../../shell/StatusPill";
+import { statusTone as runStatusTone } from "../../shell/statusTone";
 import { formatRelativeTime } from "../../util/time";
 
 // ===========================================================================
@@ -78,18 +79,9 @@ export const ACTIVITY_RETENTION_LINK_COPY =
  * "info" call-to-action; done is neutral/muted.
  */
 export function activityStatusTone(status: ActivityRunStatus): StatusTone {
-  switch (status) {
-    case "running":
-      return "ok";
-    case "done":
-      return "muted";
-    case "paused":
-      return "warning";
-    case "stopped":
-      return "error";
-    case "needs_input":
-      return "info";
-  }
+  // Delegate to the shell status-tone SSOT (PRD-B): done → success (jade, not
+  // grey) and stopped → muted (not danger-red) — the design's semantics.
+  return runStatusTone(status).tone;
 }
 
 /** Human label for a run status — single source for chip + a11y. */

@@ -114,6 +114,21 @@ export interface ChatShellProps<TRoute> {
    */
   readonly contextPanel?: ReactNode | ContextPanelProps;
 
+  /**
+   * Optional account identity for the rail foot avatar (user initial). The
+   * host derives it (web `AuthContext`, desktop bootstrap identity); the shell
+   * only forwards it to `AppRail`. Absent = neutral glyph (PRD-C).
+   */
+  readonly railIdentity?: { readonly initial: string };
+
+  /**
+   * Optional per-destination badge counts (e.g. active runs on `run`). The host
+   * derives them from data it already holds (PRD-H); the shell forwards them to
+   * `AppRail`, which shows a badge only when the count > 0 and the destination
+   * isn't active. Absent = no badges.
+   */
+  readonly railBadges?: Partial<Record<ShellDestinationSlug, number>>;
+
   /** Main column content. */
   readonly children?: ReactNode;
 }
@@ -131,6 +146,8 @@ export function ChatShell<TRoute>({
   topbarLeaf,
   destinations,
   contextPanel,
+  railIdentity,
+  railBadges,
   children,
 }: ChatShellProps<TRoute>): ReactElement {
   const profile = useOptionalDeploymentProfile();
@@ -157,6 +174,8 @@ export function ChatShell<TRoute>({
               settingsActive={settingsActive ?? false}
               topbarLeaf={topbarLeaf}
               contextPanel={contextPanel}
+              railIdentity={railIdentity}
+              railBadges={railBadges}
             >
               {children}
             </ShellGrid>
@@ -176,6 +195,8 @@ interface ShellGridProps {
   readonly settingsActive: boolean;
   readonly topbarLeaf?: string | null;
   readonly contextPanel?: ReactNode | ContextPanelProps;
+  readonly railIdentity?: { readonly initial: string };
+  readonly railBadges?: Partial<Record<ShellDestinationSlug, number>>;
   readonly children?: ReactNode;
 }
 
@@ -188,6 +209,8 @@ function ShellGrid({
   settingsActive,
   topbarLeaf,
   contextPanel,
+  railIdentity,
+  railBadges,
   children,
 }: ShellGridProps): ReactElement {
   // Default to closed: the right rail has no destination-specific content
@@ -255,6 +278,8 @@ function ShellGrid({
         destinations={destinations}
         onNavigate={onNavigate}
         onOpenSettings={onOpenSettings}
+        identity={railIdentity}
+        badges={railBadges}
       />
       {fullBleed ? null : (
         <ContextPanelSlot

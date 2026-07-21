@@ -68,6 +68,7 @@ binders.
 
 ```
 src/
+  icons/          canonical line-icon SSOT: <Icon name/> + ICON_PATHS (rail, nav, ⌘K, rows)
   ports/          substrate ports (Transport / Router / KeyValueStore / …) + barrel
   providers/      React providers exposing each port via a hook
   storage/        web reference impls (LocalStorageKeyValueStore, WebSecretStorage)

@@ -24,15 +24,12 @@ import { useCallback, useMemo, type ReactElement } from "react";
 import {
   CommandPalette,
   type SettingsSectionSlug,
+  type ShellCommandIntent,
   type ShellDestinationSlug,
 } from "@0x-copilot/chat-surface";
 
 import { createDesktopPaletteSearchPort } from "./DesktopPaletteSearchPort";
-import {
-  PALETTE_COMMANDS,
-  isSettingsRoute,
-  settingsSectionFromRoute,
-} from "./palette-commands";
+import { isSettingsRoute, settingsSectionFromRoute } from "./palette-commands";
 
 /**
  * Host flow launchers for the palette's four `action` hits (DESIGN-SPEC §6).
@@ -117,6 +114,19 @@ export function PaletteHost({
     [actions],
   );
 
+  // ⌘K static command launcher (PRD-D). All command `section` slugs are valid
+  // SettingsSectionSlug values, so the cast is safe.
+  const handleCommand = useCallback(
+    (intent: ShellCommandIntent): void => {
+      if (intent.type === "navigate") {
+        onNavigateDestination(intent.slug);
+        return;
+      }
+      onOpenSettings(intent.section as SettingsSectionSlug);
+    },
+    [onNavigateDestination, onOpenSettings],
+  );
+
   // The palette's "No results → Connect a tool →" hint reuses the connect-tool
   // flow; unlike an action hit it does not auto-close, so close it here.
   const handleConnectToolHint = useCallback(() => {
@@ -133,7 +143,7 @@ export function PaletteHost({
         open={open}
         onRequestClose={handleClose}
         searchPort={searchPort}
-        starterActions={PALETTE_COMMANDS}
+        onCommand={handleCommand}
         onNavigate={handleNavigate}
         onRunAction={handleRunAction}
         onConnectToolHint={handleConnectToolHint}

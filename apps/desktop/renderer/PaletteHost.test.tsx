@@ -90,13 +90,17 @@ describe("<PaletteHost>", () => {
     expect(screen.queryByTestId("command-palette")).not.toBeNull();
   });
 
-  it("routes the 'Go to Tools' hit to the connectors slug (solo relabel) and closes", () => {
+  // PRD-D: the ⌘K launcher now uses the v3 design's static SHELL_COMMANDS, which
+  // NAVIGATE (to a rail destination or a Settings section) rather than firing
+  // desktop-specific modal flows. The `actions` launchers remain wired for
+  // backend `action`-kind search hits.
+
+  it("routes the 'Go to Tools' command to the connectors slug (solo relabel) and closes", () => {
     const { onNavigateDestination } = setup();
     openPalette();
-    // Present in the empty-query starter list (first 8 of PALETTE_COMMANDS).
     fireEvent.click(screen.getByText("Go to Tools"));
     expect(onNavigateDestination).toHaveBeenCalledWith("connectors");
-    // Activating a hit closes the palette.
+    // Activating a command closes the palette.
     expect(screen.queryByTestId("command-palette")).toBeNull();
   });
 
@@ -107,53 +111,53 @@ describe("<PaletteHost>", () => {
     expect(onOpenSettings).toHaveBeenCalledWith("appearance");
   });
 
-  it("opens Settings at the default section for the bare 'Open Settings' hit", async () => {
+  it("opens Settings at the profile section for 'Open Settings'", async () => {
     const { onOpenSettings } = setup();
     openPalette();
     typeQuery("Open Settings");
     fireEvent.click(await screen.findByText("Open Settings"));
-    expect(onOpenSettings).toHaveBeenCalledWith(undefined);
+    expect(onOpenSettings).toHaveBeenCalledWith("profile");
   });
 
-  it("launches the 'Add a provider key' action flow", async () => {
-    const { actions } = setup();
+  it("navigates 'Add a provider key' to Settings → provider-keys", async () => {
+    const { onOpenSettings } = setup();
     openPalette();
     typeQuery("provider key");
     fireEvent.click(await screen.findByText("Add a provider key"));
-    expect(actions.onAddProviderKey).toHaveBeenCalledTimes(1);
+    expect(onOpenSettings).toHaveBeenCalledWith("provider-keys");
   });
 
-  it("launches the 'Download a local model' action flow", async () => {
-    const { actions } = setup();
+  it("navigates 'Download a local model' to Settings → local-models", async () => {
+    const { onOpenSettings } = setup();
     openPalette();
     typeQuery("local model");
     fireEvent.click(await screen.findByText("Download a local model"));
-    expect(actions.onDownloadLocalModel).toHaveBeenCalledTimes(1);
+    expect(onOpenSettings).toHaveBeenCalledWith("local-models");
   });
 
-  it("launches the 'Connect a tool' action flow", async () => {
-    const { actions } = setup();
+  it("navigates 'Connect a tool' to the connectors destination", async () => {
+    const { onNavigateDestination } = setup();
     openPalette();
     typeQuery("Connect a tool");
     fireEvent.click(await screen.findByText("Connect a tool"));
-    expect(actions.onConnectTool).toHaveBeenCalledTimes(1);
+    expect(onNavigateDestination).toHaveBeenCalledWith("connectors");
   });
 
-  it("launches the 'New chat' action flow", async () => {
-    const { actions } = setup();
+  it("navigates 'New chat' to the Run destination", async () => {
+    const { onNavigateDestination } = setup();
     openPalette();
     typeQuery("New chat");
     fireEvent.click(await screen.findByText("New chat"));
-    expect(actions.onNewChat).toHaveBeenCalledTimes(1);
+    expect(onNavigateDestination).toHaveBeenCalledWith("run");
   });
 
-  it("runs the connect-tool flow from the empty-state 'Connect a tool →' hint and closes", async () => {
-    const { actions } = setup();
+  it("shows the 'No matches.' state when nothing matches", async () => {
+    setup();
     openPalette();
-    // A query with zero registry matches shows the "No results" hint.
     typeQuery("zzz-nothing-matches");
-    fireEvent.click(await screen.findByTestId("palette-connect-tool-hint"));
-    expect(actions.onConnectTool).toHaveBeenCalledTimes(1);
-    expect(screen.queryByTestId("command-palette")).toBeNull();
+    expect(await screen.findByTestId("palette-no-results")).toHaveTextContent(
+      "No matches.",
+    );
+    expect(screen.queryByTestId("palette-connect-tool-hint")).toBeNull();
   });
 });

@@ -120,7 +120,9 @@ export const SETTINGS_NAV_ITEMS: readonly SettingsNavItem[] = [
     group: "models",
     tag: "BYOK",
   },
-  { id: "models", label: "Models", icon: "sliders", group: "models" },
+  // Distinct icon from "Model & behavior" (sliders): the Models curation page
+  // is a chip-style catalog, so it takes `coin` to avoid a duplicate glyph (PRD-E).
+  { id: "models", label: "Models", icon: "coin", group: "models" },
   { id: "local-models", label: "Local models", icon: "chip", group: "models" },
   {
     id: "model-behavior",
