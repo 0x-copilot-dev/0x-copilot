@@ -59,6 +59,7 @@
    * 700; pin it to --font-weight-semibold inside UI surfaces so heading
    * text doesn't read as a different family next to the rest of the app
    * (root cause of the "+ menu vs GPT-5.4 Nano pill" mismatch). */
+  --font-size-3xs: 0.6rem; /* 9.6px — mono metadata micro-labels (FTUE fr-* meta/note/foot/ack, ~9–10.5px in SPEC) */
   --font-size-2xs: 0.7rem; /* 11.2px — badge, kbd */
   --font-size-xs: 0.78rem; /* 12.5px — hint, caption */
   --font-size-sm: 0.85rem; /* 13.6px — secondary body */
