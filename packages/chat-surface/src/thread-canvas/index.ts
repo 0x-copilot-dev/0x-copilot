@@ -8,6 +8,10 @@ export { TcSurfaceMount, type TcSurfaceMountProps } from "./TcSurfaceMount";
 // === Phase 2-B thread-canvas ===
 export {
   ThreadCanvas,
+  clampRailWidth,
+  DEFAULT_RAIL_WIDTH,
+  MIN_RAIL_WIDTH,
+  MAX_RAIL_WIDTH,
   type ThreadCanvasProps,
   type ThreadMode,
 } from "./ThreadCanvas";

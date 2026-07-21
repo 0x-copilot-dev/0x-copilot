@@ -204,3 +204,40 @@ hardening PR, so the paper trail matches what shipped:
   and tested.
 - **NFR-4 decrypt smoke** runs with the live embedded-Postgres gate (§8),
   which remains the production sign-off for both Postgres re-key executors.
+
+## 12. Live-gate execution record (§8 gate — EXECUTED)
+
+The live embedded-Postgres integration gate is now a repeatable command:
+
+    make test-merge-live        # tools/run-merge-live-gate.sh
+
+It provisions a disposable UTF-8 cluster, applies the real migrations, and
+runs: the backend saga end-to-end on the real schema (registry SQL,
+collision rules, FK-ordered MFA drops, session revocation, lineage,
+`account.merged` on both audit trails), the 0038 audit-immutability
+trigger (UPDATE/DELETE actually raise), failure-at-checkpoint → resume,
+the RLS-enforced caveat (proven real: a non-BYPASSRLS role matches zero
+rows), the backend C5 RLS isolation tests, and the ai-backend re-key with
+REAL AES-256-GCM envelope ciphertext — the NFR-4 decrypt smoke: moved rows
+decrypt under the survivor org's AAD and REFUSE the absorbed org's, decoy
+accounts untouched, `sequence_no` byte-identical, audit chains never
+rewritten, idempotent re-run.
+
+First executed 2026-07-21 (all green, stable across repeated runs) and now
+**wired into CI** as `.github/workflows/ci-merge-live-gate.yml` — two
+path-filtered jobs (backend + ai-backend) on a disposable `postgres:16`
+service, triggered by any change to either service's migrations, either
+re-key executor, or the live tests. The manual `make test-merge-live`
+remains for local runs.
+
+Findings folded back: the dormant RLS test had schema-rotted column names
+(fixed); the gate requires a UTF-8 cluster + `PYTHONUTF8=1` (yoyo reads the
+migrations' non-ASCII comments through the DB/client encoding). The
+`MigrationRunner` in BOTH services now pins yoyo to the psycopg3 driver
+(`postgresql+psycopg://`) — a bare `postgresql://` made yoyo import
+`psycopg2`, which the repo does not install; this was a latent fragility in
+the production migration path (the desktop env had been hand-passing
+`+psycopg` URLs to dodge it), not just a test concern. Known environmental
+note: three pre-existing ai-backend lock-free-append concurrency tests are
+sensitive to the local Postgres major version (compose pins postgres:17);
+they are not part of this gate.

@@ -1,6 +1,6 @@
-// Topbar model-picker render contract (FR-1.6). Moved down with the
-// component from apps/frontend (PR-1.2); the same assertions run from
-// chat-surface.
+// Composer model picker — v3 design (PR-4F). A quiet, grouped popover:
+// "Your keys" (cloud) + "Local · on-device", radio selection, footer
+// deep-links, custom-slug add. No search (that lives in Settings → Models).
 
 import type { ModelCatalogModel } from "@0x-copilot/api-types";
 import { fireEvent, render, screen } from "@testing-library/react";
@@ -26,10 +26,17 @@ const models: Array<ModelCatalogModel & { disabled?: boolean }> = [
     configured: false,
     disabled: true,
   },
+  {
+    id: "llama-3.3-70b",
+    provider: "ollama",
+    model_name: "llama-3.3-70b",
+    name: "Llama 3.3 70B",
+    configured: true,
+  },
 ];
 
-describe("ModelPill", () => {
-  it("renders the selected model name", () => {
+describe("ModelPill (v3)", () => {
+  it("renders the selected model name on the trigger", () => {
     render(
       <ModelPill
         models={models}
@@ -42,7 +49,7 @@ describe("ModelPill", () => {
     ).toBeInTheDocument();
   });
 
-  it("opens the menu on click and lists every option", () => {
+  it("groups models into Your keys and Local · on-device", () => {
     render(
       <ModelPill
         models={models}
@@ -51,15 +58,32 @@ describe("ModelPill", () => {
       />,
     );
     fireEvent.click(screen.getByRole("button", { name: /Model: GPT-5\.4/ }));
+    expect(screen.getByText("Your keys")).toBeInTheDocument();
+    expect(screen.getByText("Local · on-device")).toBeInTheDocument();
     expect(
       screen.getByRole("menuitemradio", { name: /GPT-5\.4/ }),
     ).toBeInTheDocument();
     expect(
-      screen.getByRole("menuitemradio", { name: /Claude Haiku/ }),
+      screen.getByRole("menuitemradio", { name: /Llama 3\.3 70B/ }),
     ).toBeInTheDocument();
+    // Sub-line renders the v3 idiom.
+    expect(screen.getByText(/OpenAI · your key/)).toBeInTheDocument();
+    expect(screen.getByText(/never leaves this machine/)).toBeInTheDocument();
   });
 
-  it("does not change selection when a disabled row is clicked", () => {
+  it("selects an enabled model and closes", () => {
+    const onChange = vi.fn();
+    render(
+      <ModelPill models={models} value="openai/gpt-5.4" onChange={onChange} />,
+    );
+    fireEvent.click(screen.getByRole("button", { name: /Model: GPT-5\.4/ }));
+    fireEvent.click(
+      screen.getByRole("menuitemradio", { name: /Llama 3\.3 70B/ }),
+    );
+    expect(onChange).toHaveBeenCalledWith("llama-3.3-70b");
+  });
+
+  it("does not select a disabled (needs-key) row", () => {
     const onChange = vi.fn();
     render(
       <ModelPill models={models} value="openai/gpt-5.4" onChange={onChange} />,
@@ -71,26 +95,76 @@ describe("ModelPill", () => {
     expect(onChange).not.toHaveBeenCalled();
   });
 
-  it("invokes onChange and closes when an enabled row is clicked", () => {
-    const onChange = vi.fn();
+  it("hides enabled:false models but keeps the current selection visible", () => {
+    const curated: Array<ModelCatalogModel & { disabled?: boolean }> = [
+      { ...models[0], enabled: true },
+      {
+        id: "openai/hidden",
+        provider: "openai",
+        model_name: "hidden",
+        name: "Hidden Model",
+        configured: true,
+        enabled: false,
+      },
+      {
+        id: "openai/selected-off",
+        provider: "openai",
+        model_name: "selected-off",
+        name: "Selected Off",
+        configured: true,
+        enabled: false,
+      },
+    ];
     render(
       <ModelPill
-        models={[
-          models[0],
-          { ...models[1], disabled: false, configured: true },
-        ]}
+        models={curated}
+        value="openai/selected-off"
+        onChange={() => undefined}
+      />,
+    );
+    fireEvent.click(
+      screen.getByRole("button", { name: /Model: Selected Off/ }),
+    );
+    expect(
+      screen.queryByRole("menuitemradio", { name: /Hidden Model/ }),
+    ).not.toBeInTheDocument();
+    expect(
+      screen.getByRole("menuitemradio", { name: /Selected Off/ }),
+    ).toBeInTheDocument();
+  });
+
+  it("renders footer deep-links and fires their callbacks", () => {
+    const onAddProviderKey = vi.fn();
+    const onGetLocalModels = vi.fn();
+    render(
+      <ModelPill
+        models={models}
         value="openai/gpt-5.4"
-        onChange={onChange}
+        onChange={() => undefined}
+        onAddProviderKey={onAddProviderKey}
+        onGetLocalModels={onGetLocalModels}
       />,
     );
     fireEvent.click(screen.getByRole("button", { name: /Model: GPT-5\.4/ }));
-    fireEvent.click(
-      screen.getByRole("menuitemradio", { name: /Claude Haiku/ }),
-    );
-    expect(onChange).toHaveBeenCalledWith("anthropic/claude-haiku");
+    fireEvent.click(screen.getByRole("button", { name: /Add a provider key/ }));
+    expect(onAddProviderKey).toHaveBeenCalled();
   });
 
-  it("respects disabled prop on the trigger", () => {
+  it("omits the footer when no deep-link callbacks are provided", () => {
+    render(
+      <ModelPill
+        models={models}
+        value="openai/gpt-5.4"
+        onChange={() => undefined}
+      />,
+    );
+    fireEvent.click(screen.getByRole("button", { name: /Model: GPT-5\.4/ }));
+    expect(
+      screen.queryByRole("button", { name: /Add a provider key/ }),
+    ).not.toBeInTheDocument();
+  });
+
+  it("respects the disabled prop on the trigger", () => {
     render(
       <ModelPill
         models={models}
@@ -102,20 +176,6 @@ describe("ModelPill", () => {
     expect(
       screen.getByRole("button", { name: /Model: GPT-5\.4/ }),
     ).toBeDisabled();
-  });
-
-  it("omits the custom-model field when onAddCustom is not provided", () => {
-    render(
-      <ModelPill
-        models={models}
-        value="openai/gpt-5.4"
-        onChange={() => undefined}
-      />,
-    );
-    fireEvent.click(screen.getByRole("button", { name: /Model: GPT-5\.4/ }));
-    expect(
-      screen.queryByPlaceholderText(/vendor\/model/),
-    ).not.toBeInTheDocument();
   });
 
   it("submits a custom OpenRouter slug via onAddCustom", () => {
@@ -134,115 +194,5 @@ describe("ModelPill", () => {
     });
     fireEvent.click(screen.getByRole("button", { name: /^Add$/ }));
     expect(onAddCustom).toHaveBeenCalledWith("deepseek/deepseek-r1");
-  });
-
-  // --- PR-3E: search + keyboard nav + grouping + enabled-only ---
-
-  it("filters the list by the search box", () => {
-    render(
-      <ModelPill
-        models={models}
-        value="openai/gpt-5.4"
-        onChange={() => undefined}
-      />,
-    );
-    fireEvent.click(screen.getByRole("button", { name: /Model: GPT-5\.4/ }));
-    fireEvent.change(
-      screen.getByRole("searchbox", { name: /search models/i }),
-      {
-        target: { value: "haiku" },
-      },
-    );
-    expect(
-      screen.queryByRole("menuitemradio", { name: /GPT-5\.4/ }),
-    ).not.toBeInTheDocument();
-    expect(
-      screen.getByRole("menuitemradio", { name: /Claude Haiku/ }),
-    ).toBeInTheDocument();
-  });
-
-  it("shows an empty state when nothing matches", () => {
-    render(
-      <ModelPill
-        models={models}
-        value="openai/gpt-5.4"
-        onChange={() => undefined}
-      />,
-    );
-    fireEvent.click(screen.getByRole("button", { name: /Model: GPT-5\.4/ }));
-    fireEvent.change(
-      screen.getByRole("searchbox", { name: /search models/i }),
-      {
-        target: { value: "zzz-nothing" },
-      },
-    );
-    expect(screen.getByText(/no models match/i)).toBeInTheDocument();
-  });
-
-  it("selects the highlighted model with arrow keys + Enter (skipping disabled)", () => {
-    const onChange = vi.fn();
-    const enabledModels: Array<ModelCatalogModel & { disabled?: boolean }> = [
-      { ...models[0] }, // openai/gpt-5.4 (selectable)
-      {
-        id: "openai/gpt-5.4-mini",
-        provider: "openai",
-        model_name: "gpt-5.4-mini",
-        name: "GPT-5.4 Mini",
-        configured: true,
-      },
-    ];
-    render(
-      <ModelPill
-        models={enabledModels}
-        value="openai/gpt-5.4"
-        onChange={onChange}
-      />,
-    );
-    fireEvent.click(screen.getByRole("button", { name: /Model: GPT-5\.4/ }));
-    const search = screen.getByRole("searchbox", { name: /search models/i });
-    // From the selected (index 0) → down to Mini → Enter.
-    fireEvent.keyDown(search, { key: "ArrowDown" });
-    fireEvent.keyDown(search, { key: "Enter" });
-    expect(onChange).toHaveBeenCalledWith("openai/gpt-5.4-mini");
-  });
-
-  it("hides enabled:false models but keeps the current selection visible", () => {
-    const curated: Array<ModelCatalogModel & { disabled?: boolean }> = [
-      { ...models[0], enabled: true },
-      {
-        id: "openai/hidden",
-        provider: "openai",
-        model_name: "hidden",
-        name: "Hidden Model",
-        configured: true,
-        enabled: false,
-      },
-      {
-        id: "openai/selected-but-off",
-        provider: "openai",
-        model_name: "selected-but-off",
-        name: "Selected Off",
-        configured: true,
-        enabled: false,
-      },
-    ];
-    render(
-      <ModelPill
-        models={curated}
-        value="openai/selected-but-off"
-        onChange={() => undefined}
-      />,
-    );
-    fireEvent.click(
-      screen.getByRole("button", { name: /Model: Selected Off/ }),
-    );
-    // enabled:false and not selected → hidden.
-    expect(
-      screen.queryByRole("menuitemradio", { name: /Hidden Model/ }),
-    ).not.toBeInTheDocument();
-    // enabled:false but IS the selection → still shown.
-    expect(
-      screen.getByRole("menuitemradio", { name: /Selected Off/ }),
-    ).toBeInTheDocument();
   });
 });

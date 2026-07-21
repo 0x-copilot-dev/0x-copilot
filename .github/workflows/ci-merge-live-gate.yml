@@ -1,0 +1,160 @@
+name: ci-merge-live-gate
+
+# The account-merge LIVE-Postgres gate (docs/plan/account-linking/PRD.md §8),
+# run automatically instead of by hand. In-memory analogues cannot prove the
+# things that break a real merge: raw re-key SQL against the actual schema,
+# FK-ordered deletes, the 0038 audit-immutability trigger firing, RLS
+# behavior, and — the crux — the ai-backend encryption-AAD re-wrap round-trip
+# (a row must decrypt under the survivor org and REFUSE the absorbed org).
+#
+# Deliberately cross-service: a migration in EITHER service, or a change to
+# either re-key executor, can break the one product operation, so both jobs
+# run when either surface changes.
+#
+# No production secrets, no third-party services — a disposable Postgres
+# service container only (CLAUDE.md: PR CI must not require prod secrets).
+
+on:
+  pull_request:
+    paths:
+      - "services/backend/migrations/**"
+      - "services/ai-backend/migrations/**"
+      - "services/backend/src/backend_app/identity/account_merge*.py"
+      - "services/ai-backend/src/runtime_adapters/**/account_merge.py"
+      - "services/*/tests/integration/persistence/**"
+      - "packages/service-contracts/**"
+      - "packages/audit-chain/**"
+      - ".github/workflows/ci-merge-live-gate.yml"
+  push:
+    branches:
+      - main
+    paths:
+      - "services/backend/migrations/**"
+      - "services/ai-backend/migrations/**"
+      - "services/backend/src/backend_app/identity/account_merge*.py"
+      - "services/ai-backend/src/runtime_adapters/**/account_merge.py"
+      - "services/*/tests/integration/persistence/**"
+      - "packages/service-contracts/**"
+      - "packages/audit-chain/**"
+      - ".github/workflows/ci-merge-live-gate.yml"
+  workflow_dispatch:
+
+concurrency:
+  group: ci-merge-live-gate-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  backend-merge-gate:
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_USER: merge
+          POSTGRES_PASSWORD: merge
+          POSTGRES_DB: merge_backend
+          # UTF-8 database: yoyo reads the migrations' non-ASCII comments
+          # through the DB/client encoding; a SQL_ASCII cluster fails on them.
+          POSTGRES_INITDB_ARGS: "--encoding=UTF8"
+          # Trust auth so the non-superuser RLS app role connects without a
+          # password (ephemeral CI DB, container network only).
+          POSTGRES_HOST_AUTH_METHOD: trust
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U merge"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 12
+    env:
+      PYTHONUTF8: "1"
+      BACKEND_MERGE_TEST_DATABASE_URL: postgresql://merge@localhost:5432/merge_backend
+      BACKEND_MERGE_TEST_APP_DATABASE_URL: postgresql://merge_app@localhost:5432/merge_backend
+      BACKEND_RLS_TEST_DATABASE_URL: postgresql://merge@localhost:5432/merge_backend
+      BACKEND_RLS_TEST_APP_DATABASE_URL: postgresql://merge_app@localhost:5432/merge_backend
+    steps:
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+
+      - uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6.3.0
+        with:
+          python-version: "3.13"
+          cache: pip
+          cache-dependency-path: services/backend/requirements.txt
+
+      - name: Install service deps (backend)
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install ./packages/service-contracts
+          python -m pip install ./packages/audit-chain
+          python -m pip install -r services/backend/requirements.txt --require-hashes
+
+      - name: Install psql client
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y --no-install-recommends postgresql-client
+
+      - name: Create non-superuser RLS app role
+        # Default privileges granted BEFORE the test fixture applies
+        # migrations, so tables the superuser creates inherit the grant. The
+        # role is intentionally NOT a superuser — that is what makes the RLS
+        # assertions real (superusers bypass RLS).
+        run: |
+          psql -h localhost -U merge -d merge_backend -v ON_ERROR_STOP=1 <<'SQL'
+          CREATE ROLE merge_app LOGIN;
+          GRANT USAGE ON SCHEMA public TO merge_app;
+          ALTER DEFAULT PRIVILEGES IN SCHEMA public GRANT ALL ON TABLES TO merge_app;
+          ALTER DEFAULT PRIVILEGES IN SCHEMA public GRANT ALL ON SEQUENCES TO merge_app;
+          SQL
+
+      - name: Run the backend live merge gate + RLS isolation
+        run: |
+          cd services/backend
+          PYTHONPATH="../../packages/service-contracts/src:src" python -m pytest \
+            tests/integration/persistence/test_account_merge_live.py \
+            tests/integration/persistence/test_rls_isolation.py -q
+
+  ai-backend-merge-gate:
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_USER: merge
+          POSTGRES_PASSWORD: merge
+          POSTGRES_DB: merge_runtime
+          POSTGRES_INITDB_ARGS: "--encoding=UTF8"
+          POSTGRES_HOST_AUTH_METHOD: trust
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U merge"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 12
+    env:
+      PYTHONUTF8: "1"
+      MERGE_LIVE_TEST_DATABASE_URL: postgresql://merge@localhost:5432/merge_runtime
+    steps:
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+
+      - uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6.3.0
+        with:
+          python-version: "3.13"
+          cache: pip
+          cache-dependency-path: services/ai-backend/requirements.txt
+
+      - name: Install service deps (ai-backend)
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install ./packages/service-contracts
+          python -m pip install ./packages/audit-chain
+          python -m pip install -r services/ai-backend/requirements.txt
+
+      - name: Run the ai-backend live re-key + AAD decrypt smoke (NFR-4)
+        run: |
+          cd services/ai-backend
+          PYTHONPATH="../../packages/service-contracts/src:src" python -m pytest \
+            tests/integration/persistence/test_account_merge_live.py -q

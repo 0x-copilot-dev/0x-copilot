@@ -124,9 +124,24 @@ class MigrationRunner:
             result[migration_id] = digest.hexdigest()
         return result
 
+    @staticmethod
+    def _yoyo_url(database_url: str) -> str:
+        """Force yoyo onto the psycopg3 driver.
+
+        yoyo selects its DB driver from the URL scheme: a bare
+        ``postgresql://`` (or ``postgres://``) makes it import ``psycopg2``,
+        which this repo deliberately does NOT install (psycopg3 only). Pinning
+        the scheme to ``postgresql+psycopg://`` selects psycopg3. No-op when a
+        driver is already specified.
+        """
+        for prefix in ("postgresql://", "postgres://"):
+            if database_url.startswith(prefix):
+                return "postgresql+psycopg://" + database_url[len(prefix) :]
+        return database_url
+
     @classmethod
     def _backend(cls, database_url: str) -> yoyo.backends.DatabaseBackend:
-        return yoyo.get_backend(database_url)
+        return yoyo.get_backend(cls._yoyo_url(database_url))
 
     @staticmethod
     def _parse_manifest(text: str) -> dict[str, str]:
