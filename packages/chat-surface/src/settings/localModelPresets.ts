@@ -19,13 +19,11 @@ import type { AvailableLocalModel } from "./DownloadLocalModelModal";
  * `repo`/`quant` resolve to the Ollama pull tag `hf.co/Qwen/Qwen3-4B-GGUF:Q8_0`.
  *
  * Quant choice: `Q8_0` (near-lossless 8-bit) is the LARGEST real quant the
- * official `Qwen/Qwen3-4B-GGUF` repo publishes — the closest honest match to
- * the mock's "~5.6 GB" headline. Verified Hugging Face sizes for this repo:
- * Q4_K_M 2,497,280,256 · Q5_K_M 2,889,513,184 · Q6_K 3,306,260,704 ·
- * Q8_0 4,280,404,704. No standard Qwen3-4B GGUF quant is 5.6 GB, so the gate
- * card's verbatim "Qwen 3 4B · 5.6 GB · free forever" copy (owned by P1's
- * frozen `FIRST_RUN_COPY.local.meta`) overstates the real ~4.3 GB — a product
- * copy decision to reconcile (PRD-P2 §9 open question #1), NOT a code bug: the
+ * official `Qwen/Qwen3-4B-GGUF` repo publishes. Verified Hugging Face sizes for
+ * this repo: Q4_K_M 2,497,280,256 · Q5_K_M 2,889,513,184 · Q6_K 3,306,260,704 ·
+ * Q8_0 4,280,404,704 (~4.3 GB). No standard Qwen3-4B GGUF quant is 5.6 GB, so
+ * the gate card copy (`FIRST_RUN_COPY.local.meta`) now shows the real "4.3 GB"
+ * — updated from the mock's "5.6 GB" per the product decision (PRD-P2 §9). The
  * live progress bar always uses the real `bytes_total` from the pull stream.
  */
 export const QWEN3_4B_PRESET: AvailableLocalModel = {

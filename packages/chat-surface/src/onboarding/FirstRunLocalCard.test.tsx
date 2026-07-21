@@ -56,7 +56,7 @@ describe("<FirstRunLocalCard>", () => {
     expect(card.textContent).toContain(FIRST_RUN_COPY.local.btn);
     expect(card.textContent).toContain(FIRST_RUN_COPY.local.note);
     // exact mock copy strings
-    expect(FIRST_RUN_COPY.local.meta).toBe("Qwen 3 4B · 5.6 GB · free forever");
+    expect(FIRST_RUN_COPY.local.meta).toBe("Qwen 3 4B · 4.3 GB · free forever");
     expect(FIRST_RUN_COPY.local.body).toBe(
       "Runs on this machine. Nothing you send ever leaves it.",
     );

@@ -107,7 +107,7 @@ export const FIRST_RUN_COPY = {
   },
   local: {
     title: "Download the local model",
-    meta: "Qwen 3 4B · 5.6 GB · free forever",
+    meta: "Qwen 3 4B · 4.3 GB · free forever",
     body: "Runs on this machine. Nothing you send ever leaves it.",
     btn: "Start download",
     note: "type your first prompt while it downloads",
