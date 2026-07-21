@@ -12,7 +12,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from enum import StrEnum
 
-from agent_runtime.capabilities.tools.cards import LoadedToolSpec
+from agent_runtime.capabilities.tools.cards import LoadedToolSpec, ToolSideEffect
 from agent_runtime.capabilities.tools.permissions import (
     ToolUsePolicyKind,
     ToolUsePolicyMode,
@@ -99,9 +99,30 @@ class ToolUsePolicyGate:
         snapshot: ToolUsePolicySnapshot,
         spec: LoadedToolSpec,
     ) -> ToolGateDecision:
-        """Run the policy lookup + branch."""
+        """Run the policy lookup + branch for a fully loaded tool spec."""
 
-        kind = kind_for_side_effects(spec.side_effects)
+        return cls.decide_for_side_effects(
+            snapshot=snapshot,
+            side_effects=spec.side_effects,
+        )
+
+    @classmethod
+    def decide_for_side_effects(
+        cls,
+        *,
+        snapshot: ToolUsePolicySnapshot,
+        side_effects: frozenset[ToolSideEffect],
+    ) -> ToolGateDecision:
+        """Run the policy lookup + branch from a raw side-effect set.
+
+        The side-effect-only entry point exists for callers that gate an
+        umbrella model tool (e.g. ``call_mcp_tool``) at run-start, where the
+        concrete per-invocation :class:`LoadedToolSpec` is not yet resolved but
+        the tool's coarse side-effect class is known. :meth:`decide` delegates
+        here so both entry points classify identically.
+        """
+
+        kind = kind_for_side_effects(side_effects)
         mode = snapshot.mode_for_kind(kind)
         if mode is ToolUsePolicyMode.BLOCK:
             return ToolGateDecision.reject(kind=kind)
