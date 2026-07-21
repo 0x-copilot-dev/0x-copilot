@@ -122,6 +122,18 @@ export interface AssistantComposerProps {
     text: string;
     attachments: ReadonlyArray<unknown>;
   }) => void | Promise<void>;
+  /**
+   * Optional error channel for a rejected async {@link onSubmit}. When the
+   * host's `onSubmit` returns a promise that rejects (a failed `POST
+   * /v1/agent/runs` — a missing provider key, a network error), the rejection
+   * is routed here instead of being swallowed as an unhandled rejection. This
+   * is the first-class replacement for a host having to wrap its own
+   * `try/catch` around the composer's dispatch (see #158). When absent the
+   * pre-existing behaviour is preserved (the rejection is still caught to
+   * avoid an unhandled rejection, and `onClearSkills` still fires only on a
+   * successful submit).
+   */
+  onSubmitError?: (error: unknown) => void;
   /** Stop-run handler. */
   onCancel?: () => void;
   /** Composer disabled (e.g. no active conversation row). */
@@ -192,6 +204,7 @@ export const AssistantComposer = forwardRef<
     controlsDisabled,
     running = false,
     onSubmit,
+    onSubmitError,
     onCancel,
     disabled = false,
     minRows = 3,
@@ -316,7 +329,14 @@ export const AssistantComposer = forwardRef<
         // content[]); the host's onSubmit reads them as runtime
         // CompleteAttachments downstream. Cast through unknown rather
         // than spreading so the structural superset stays intact.
-        void Promise.resolve(
+        //
+        // RETURN the promise (don't `void` it): the inner Composer captures
+        // it at its onSubmit call sites and `.catch`es a rejection into
+        // `onSubmitError` (threaded below) — the single mechanism, so no host
+        // has to re-wrap this in its own try/catch. `onClearSkills` still runs
+        // ONLY on a successful submit (the `.then` is skipped on rejection),
+        // so selected skills survive a failed send and a retry keeps them.
+        return Promise.resolve(
           onSubmit({
             text,
             attachments:
@@ -324,6 +344,7 @@ export const AssistantComposer = forwardRef<
           }),
         ).then(() => onClearSkills?.());
       }}
+      onSubmitError={onSubmitError}
       onCancel={onCancel}
       onInputKeyDown={handleInputKeyDown}
       hasTopBarContent={selectedSkills.length > 0}
