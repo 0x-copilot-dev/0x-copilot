@@ -14,7 +14,7 @@ SERVICE_CONTRACTS_PATH := ../../packages/service-contracts/src
 AUDIT_CHAIN_PATH := ../../packages/audit-chain/src
 SHARED_PYTHONPATH := src:$(SERVICE_CONTRACTS_PATH):$(AUDIT_CHAIN_PATH)
 
-.PHONY: help setup setup-node setup-python setup-hooks check-local-env check-provider-key dev prod prod-build check-prod-env docker-dev docker-dev-down desktop-install desktop-uninstall test
+.PHONY: help setup setup-node setup-python setup-hooks check-local-env check-provider-key dev prod prod-build check-prod-env docker-dev docker-dev-down desktop-install desktop-uninstall test test-merge-live
 
 help:
 	@echo "0xCopilot make targets"
@@ -181,6 +181,12 @@ prod-build:
 	docker build -f services/ai-backend/Dockerfile -t 0x-copilot-ai-backend:prod .
 	docker build -f services/backend-facade/Dockerfile -t 0x-copilot-backend-facade:prod .
 	docker build -f apps/frontend/Dockerfile -t 0x-copilot-frontend:prod .
+
+# The account-merge LIVE-Postgres gate (PRD docs/plan/account-linking §8):
+# disposable UTF-8 cluster + both services' live merge suites + RLS tests.
+# Needs local Postgres binaries (brew install postgresql).
+test-merge-live:
+	bash tools/run-merge-live-gate.sh
 
 test:
 	cd services/backend && PYTHONPATH=$(SHARED_PYTHONPATH) .venv/bin/python -m pytest tests/test_mcp_api_flow.py tests/test_skills_api_flow.py

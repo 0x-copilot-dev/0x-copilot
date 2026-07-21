@@ -204,3 +204,29 @@ hardening PR, so the paper trail matches what shipped:
   and tested.
 - **NFR-4 decrypt smoke** runs with the live embedded-Postgres gate (§8),
   which remains the production sign-off for both Postgres re-key executors.
+
+## 12. Live-gate execution record (§8 gate — EXECUTED)
+
+The live embedded-Postgres integration gate is now a repeatable command:
+
+    make test-merge-live        # tools/run-merge-live-gate.sh
+
+It provisions a disposable UTF-8 cluster, applies the real migrations, and
+runs: the backend saga end-to-end on the real schema (registry SQL,
+collision rules, FK-ordered MFA drops, session revocation, lineage,
+`account.merged` on both audit trails), the 0038 audit-immutability
+trigger (UPDATE/DELETE actually raise), failure-at-checkpoint → resume,
+the RLS-enforced caveat (proven real: a non-BYPASSRLS role matches zero
+rows), the backend C5 RLS isolation tests, and the ai-backend re-key with
+REAL AES-256-GCM envelope ciphertext — the NFR-4 decrypt smoke: moved rows
+decrypt under the survivor org's AAD and REFUSE the absorbed org's, decoy
+accounts untouched, `sequence_no` byte-identical, audit chains never
+rewritten, idempotent re-run.
+
+First executed 2026-07-21 (all green, stable across repeated runs).
+Findings folded back: the dormant RLS test had schema-rotted column names
+(fixed); the gate requires a UTF-8 cluster + `PYTHONUTF8=1` (yoyo reads the
+migrations' non-ASCII comments with the locale encoding); `psycopg2-binary`
+is a dev-only dependency of yoyo's plain-URL path. Known environmental note:
+three pre-existing ai-backend lock-free-append concurrency tests are
+sensitive to the local Postgres major version (compose pins postgres:17).
