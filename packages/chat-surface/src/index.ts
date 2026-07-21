@@ -1282,3 +1282,12 @@ export {
   type ParsedTransportError,
 } from "./errors/transportError";
 // === end Transport error parsing ===
+
+// === Frontend parity v3 (PRD-A) — shared icon system ===
+// The single source of truth for line iconography across the shell (rail,
+// settings nav, ⌘K palette, destination rows). Glyphs ported byte-faithfully
+// from the v3 design `Icon` registry; render via <Icon name="…" />. No surface
+// should inline an <svg> again. See docs/plan/frontend-parity-v3/PRD-A-icon-system.md.
+export { Icon, type IconProps } from "./icons/Icon";
+export { ICON_PATHS, ICON_NAMES, hasIcon, type IconName } from "./icons/paths";
+// === end Frontend parity v3 (PRD-A) ===
