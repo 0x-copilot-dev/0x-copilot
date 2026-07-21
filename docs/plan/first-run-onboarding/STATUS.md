@@ -20,11 +20,15 @@ Hosted trial: **SHELVED** (deferred; if revived, gated on holding ≥50k $CPILOT
 | P6       | Safe{Wallet} + Sheets connectors                | ⬜ todo (gated) | —   | Safe MCP + approval-gated signing; Sheets R/W — needs security sign-off                                                                                                                                                                                                                                      |
 | P7       | E2E parity + verification pass                  | ⬜ todo         | —   | live-stack per-journey; ui-design-reviewer vs `design-source/`                                                                                                                                                                                                                                               |
 
-## Decisions pending (block gated phases)
+## Open decisions / TODO (tracked)
 
-- [ ] ~~P5~~ (shelved): if revived — $CPILOT threshold (≥50k), on-chain holdings-check + caching, credit source, billing owner.
-- [ ] P6-Safe: signing UX, tx simulation, chain/amount guardrails (principle: propose-only agent, human signs, per-call approval). **Design-pass security review = needs-changes across all 3 lenses (1 critical, 8 high, 12 medium) — see `phases/security-review-safe-*.md`; resolve before any P6 code.**
-- [x] P2: `enable_local_models` enabled in the packaged supervisor (`service-env.ts`, merged). Preset = `Qwen/Qwen3-4B-GGUF` Q8_0 (4.28 GB, verified live). **OPEN (product copy):** the gate card shows the mock's verbatim "Qwen 3 4B · 5.6 GB" but no real quant is 5.6 GB — decide whether to keep the copy or show the real size (live progress already uses real `bytes_total`).
+- [ ] **P0 — key the flag by verified `claims.sub`, not renderer `workspaceId`.** WHY: today the flag is keyed by a renderer-supplied `workspaceId` that defaults to one shared value on desktop → two accounts on one machine share one flag (the 2nd wrongly skips onboarding); and caller-supplied identity must not be trusted (CLAUDE.md). Derive the key from the verified session in main. Low severity (UX boolean) → hardening, not a blocker.
+- [ ] **P6a — pick the tx-simulation provider.** Self-hosted `eth_call`/anvil-fork (no external key, lower fidelity) vs Tenderly (richer, paid + key). WHY: the Safe security review makes "decode calldata + simulate → show the real effect before signing" a MANDATORY fail-closed control (`phases/PRD-P6a-hardened.md` H1/H7); can't build it without choosing the provider.
+- [ ] **P6a — chain allowlist + bound-Safe store.** Decide where the user's authorized Safe(s) persist + a signing-chain allowlist (separate from the SIWE login list). WHY: the agent must only propose txs for the user's OWN Safe on an allowed chain — else a prompt injection could target an arbitrary Safe/chain (hardened design H4/M1).
+- [ ] **P6b — Google OAuth client owner.** Register a Google OAuth app (client id/secret + read+write scopes) and decide who owns it. WHY: a real Sheets read/write connector needs a registered OAuth app — operator setup, not code.
+- [ ] P6-Safe (rollup): the hardened design (`phases/PRD-P6a-hardened.md`) resolves the review's 1 critical + 8 high; the four items above are its remaining product/security/setup decisions. **No P6 code until they land.**
+- [x] ~~P2 — Qwen card copy~~ RESOLVED: card shows the real "4.3 GB" (Q8_0), test updated (commit `7282858d`).
+- [x] ~~P5~~ SHELVED: hosted trial → future ≥50k $CPILOT holder gate (README §7.1); if revived — threshold + on-chain holdings-check + credit source + billing owner.
 
 ## Verify-at-impl
 
