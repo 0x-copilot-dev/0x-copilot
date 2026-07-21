@@ -270,7 +270,12 @@ def is_placeholder_email(email: str | None) -> bool:
 
     if not email:
         return False
-    return email.lower().endswith(f"@{WALLET_PLACEHOLDER_EMAIL_DOMAIN}")
+    lowered = email.lower()
+    # Local device accounts use the same undeliverable-placeholder pattern
+    # (device-<id>@local.invalid); both must render as "no real email".
+    return lowered.endswith(f"@{WALLET_PLACEHOLDER_EMAIL_DOMAIN}") or lowered.endswith(
+        "@local.invalid"
+    )
 
 
 # ---------------------------------------------------------------------------
