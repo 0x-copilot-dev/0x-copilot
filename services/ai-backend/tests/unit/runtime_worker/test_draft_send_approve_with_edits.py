@@ -13,6 +13,7 @@ from types import SimpleNamespace
 import pytest
 
 from agent_runtime.capabilities.surfaces.commit import SurfaceEdits
+from agent_runtime.execution.errors import AgentRuntimeError
 from agent_runtime.persistence.records import DraftStatus
 from runtime_adapters.in_memory.draft_store import InMemoryDraftStore
 from runtime_api.schemas import (
@@ -100,7 +101,10 @@ async def _seed_pending(store: InMemoryDraftStore) -> None:
             status=DraftStatus.SEND_PENDING_APPROVAL,
             content_text="Original body.",
             target_connector="gmail",
-            target_metadata={"to": "vip@acme.test"},
+            # ``subject`` is part of the server-held proposal, so editing it is
+            # within the worker-side field allowlist (defense-in-depth guard);
+            # a field key absent here can never be introduced by a reviewer.
+            target_metadata={"to": "vip@acme.test", "subject": "Original subject"},
         )
     )
 
@@ -168,6 +172,33 @@ class TestDraftSendApproveWithEdits:
             "to": "vip@acme.test",
             "subject": "Revised subject",
         }
+
+    async def test_field_outside_allowlist_rejected_before_mutation(self) -> None:
+        # Defense in depth: a directly-enqueued command carrying a field key that
+        # is NOT part of the server-held proposal (bypassing the API-edge check)
+        # is rejected at the worker BEFORE any draft version is written — the
+        # reviewer's delta can never introduce a brand-new metadata key.
+        store = InMemoryDraftStore()
+        await _seed_pending(store)
+        handler, persistence = _handler(store)
+        handler.event_producer.append_api_event = _noop_emitter  # type: ignore[assignment]
+
+        with pytest.raises(AgentRuntimeError):
+            await handler._resolve_draft_send_approval(
+                run=_RUN_RECORD,
+                approval=_approval(draft_id=_draft_id(), draft_version=2),
+                decision=ApprovalDecision.APPROVE_WITH_EDITS,
+                decided_by_user_id="user_sarah",
+                edits=SurfaceEdits(fields={"assignee": "mallory"}),
+            )
+
+        # No mutation: the pending draft is untouched and no run/audit side effect fired.
+        latest = await store.latest(org_id="org_acme", draft_id=_draft_id())
+        assert latest is not None
+        assert latest.version == 2
+        assert latest.status is DraftStatus.SEND_PENDING_APPROVAL
+        assert persistence.audit_calls == []
+        assert persistence.run_status_updates == []
 
     async def test_replay_after_send_is_idempotent_no_op(self) -> None:
         store = InMemoryDraftStore()

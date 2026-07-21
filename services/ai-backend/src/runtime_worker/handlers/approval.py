@@ -813,7 +813,29 @@ class RuntimeApprovalHandler:
             applied.append("body")
         fields = getattr(edits, "fields", None)
         if fields:
-            merged = dict(getattr(record, "target_metadata", None) or {})
+            existing = dict(getattr(record, "target_metadata", None) or {})
+            # Defense in depth (PRD-09b review): re-assert the editable-fields
+            # allowlist at the WORKER, not only at the API edge. The coordinator
+            # already 422s unknown ``edits.fields`` keys, but a directly-enqueued
+            # (unvalidated) ``RuntimeApprovalResolvedCommand`` would bypass that
+            # check — so reject here too, BEFORE any draft mutation. The allowlist
+            # is the draft's explicit editable set when present, else the keys
+            # already in the server-held target_metadata: a reviewer delta may
+            # overwrite an existing field but can never introduce a new one.
+            allowlist = getattr(record, "editable_fields", None)
+            allowed = (
+                {str(key) for key in allowlist}
+                if allowlist is not None
+                else set(existing.keys())
+            )
+            unknown = sorted({str(key) for key in fields} - allowed)
+            if unknown:
+                raise AgentRuntimeError(
+                    RuntimeErrorCode.VALIDATION_ERROR,
+                    "One or more edited fields are not editable for this draft.",
+                    retryable=False,
+                )
+            merged = dict(existing)
             merged.update({str(key): value for key, value in fields.items()})
             update["target_metadata"] = merged
             applied.extend(f"fields.{key}" for key in fields)

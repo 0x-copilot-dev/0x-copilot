@@ -155,11 +155,16 @@ class TestApprovalDecisionRequestEditsValidators:
             )
 
 
+# Marks an approval as the draft-send / commit surface — the only edit-capable
+# kind, so ``approve_with_edits`` has somewhere to apply the reviewer's deltas.
+_DRAFT_SEND_KIND = {"kind": "draft_send"}
+
+
 class TestApproveWithEditsDecision:
     async def test_records_decision_edits_and_enqueues_command(self) -> None:
         store = InMemoryRuntimeApiStore()
         await _seed_run(store)
-        await _seed_approval(store)
+        await _seed_approval(store, metadata=_DRAFT_SEND_KIND)
         coordinator = _coordinator(store)
 
         response = await coordinator.record_approval_decision(
@@ -210,7 +215,9 @@ class TestApproveWithEditsDecision:
     async def test_field_edits_are_recorded_when_allowlisted(self) -> None:
         store = InMemoryRuntimeApiStore()
         await _seed_run(store)
-        await _seed_approval(store, metadata={"editable_fields": ["status"]})
+        await _seed_approval(
+            store, metadata={**_DRAFT_SEND_KIND, "editable_fields": ["status"]}
+        )
         coordinator = _coordinator(store)
 
         await coordinator.record_approval_decision(
@@ -230,8 +237,9 @@ class TestApproveWithEditsFailClosed:
     async def test_unknown_edit_field_rejected_422(self) -> None:
         store = InMemoryRuntimeApiStore()
         await _seed_run(store)
-        # No editable_fields declared ⇒ any fields edit is unknown.
-        await _seed_approval(store)
+        # Edit-capable approval, but no editable_fields declared ⇒ any fields
+        # edit is unknown and rejected by the field allowlist (not the kind gate).
+        await _seed_approval(store, metadata=_DRAFT_SEND_KIND)
         coordinator = _coordinator(store)
 
         with pytest.raises(RuntimeApiError) as exc:
@@ -248,6 +256,38 @@ class TestApproveWithEditsFailClosed:
         # Nothing was recorded or enqueued.
         assert _APPROVAL not in store.approval_decisions
         assert store.approval_commands == []
+
+    async def test_approve_with_edits_rejected_on_non_editable_kind_422(self) -> None:
+        # A LangGraph-resume / MCP-tool approval has NO commit-edit surface, so
+        # it must never carry edits. Before this gate the worker coerced
+        # ``approve_with_edits`` → ``approved`` and silently dropped the edits;
+        # now the reviewer gets an explicit 422 and nothing is applied/resumed.
+        store = InMemoryRuntimeApiStore()
+        await _seed_run(store)
+        await _seed_approval(store, metadata={"approval_kind": "mcp_tool"})
+        coordinator = _coordinator(store)
+
+        with pytest.raises(RuntimeApiError) as exc:
+            await coordinator.record_approval_decision(
+                org_id=_ORG,
+                approval_id=_APPROVAL,
+                request=ApprovalDecisionRequest(
+                    decision=ApprovalDecision.APPROVE_WITH_EDITS,
+                    decided_by_user_id=_USER,
+                    edits=SurfaceEdits(body="Reviewer-edited body."),
+                ),
+            )
+        assert exc.value.http_status == 422
+        # The reviewer got an error: edits were NOT silently applied, nothing was
+        # recorded or enqueued, and the run was NOT resumed as a plain approve.
+        assert _APPROVAL not in store.approval_decisions
+        assert store.approval_commands == []
+        resolved_events = [
+            evt
+            for evt in store.events_by_run[_RUN]
+            if evt.event_type == "approval_resolved"
+        ]
+        assert resolved_events == []
 
     async def test_unknown_approval_404(self) -> None:
         store = InMemoryRuntimeApiStore()
