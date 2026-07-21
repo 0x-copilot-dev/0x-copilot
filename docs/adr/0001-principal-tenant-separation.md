@@ -1,7 +1,7 @@
 # ADR 0001 — Separate principal (human) from tenant (workspace)
 
 Status: ACCEPTED · 2026-07-21 · Owner: identity
-Execution: staged expand → migrate → contract. **Stages 1 + 2a (Expand) delivered.**
+Execution: staged expand → migrate → contract. **Stages 1 + 2a delivered; Stage 2b superseded by the journey-driven model (schema baseline + device account) — see below.**
 
 ## Context
 
@@ -65,18 +65,41 @@ read path until its writer has been dual-writing long enough to be trusted.
   is a Stage 2b concern.
 - Covered by the live-Postgres gate (edge INSERT round-trip + 0040 backfill).
 
-**Stage 2b — CONTRACT: resolve via principal + "sign-in becomes link" (next, BEHAVIOR CHANGE — held for review).**
+**Stage 2b — resolve-via-principal (SUPERSEDED, 2026-07-21).**
 
-- Sign-in resolution reads identity → principal → the principal's personal
-  `(org, user)`.
-- **"Sign-in becomes link":** the public sign-in ramps (SIWE verify / OIDC
-  callback) must NOT read the caller's session — doing so is the #127
-  confused-deputy hole. So a signed-in user re-authenticating a new method is
-  routed by the CLIENT through the authenticated `/me/identities/*` link path
-  (which binds to the caller and is merge-aware), reusing the link machinery
-  shipped in #143. Add the regression test proving a public ramp cannot
-  absorb a caller's account.
-- Merge, when it runs, reconciles principals (`absorbed_into_principal_id`).
+On review this stage was mis-framed and is retired in favor of the
+journey-driven model below:
+
+- "Resolve sign-in via principal" was a no-op in the 1:1 model — pure
+  indirection on the authentication hot path that only earns its keep if
+  multi-workspace (Stage 3) ever lands. YAGNI; folded into Stage 3.
+- "Sign-in becomes link" was mostly the #143 authenticated link flow (UX,
+  not a migration stage); the #127 invariant (public ramps never read the
+  caller's session) stands on its own.
+
+**The journey-driven model (DELIVERED — schema baseline + local accounts).**
+
+The product decision that reshaped the roadmap: B2C, three login options
+(wallet / Google / "Use locally, no account"), local-first — the fracture
+scenario is a non-event because nothing lives on a server, and merge is a
+dormant repair tool, not steady-state machinery.
+
+- **Pre-launch schema squash (#165):** with zero installed deployments the
+  migration histories were squashed to one provably-equivalent baseline per
+  service (catalog-diffed: columns, constraints, indexes, triggers,
+  functions, grants, bootstrap rows). The principal model is native —
+  `principal_id` NOT NULL on users + every identity edge.
+- **The device account (#166, #167):** "Use locally" is a first-class
+  identity edge (`local_accounts`, deployment-wide singleton) on a real
+  principal with a real signed session, minted through a host-token-gated
+  route (localhost CSRF threat model; the facade forwards the caller's
+  token, never its own). D-decisions: D2 conflicts reject with a clear
+  message; D3 the profile is honest ("This device", never the placeholder);
+  D4-A every door opens the one device account.
+- Linking wallet/Google to any account (including the device account) stays
+  the #143 authenticated flow: an insert on the principal, never a merge.
+- Merge, if it ever runs, reconciles principals
+  (`absorbed_into_principal_id` — populated since Stage 1).
 
 **Stage 3 — CONTRACT (later, only if multi-workspace is pursued).**
 

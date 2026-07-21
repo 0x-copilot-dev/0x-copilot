@@ -89,6 +89,19 @@ import { createMainWindow } from "./window";
 
 applyBrandIdentity(app, { platform: process.platform });
 
+// Test-harness isolation: an explicit userData SUBDIR keeps a driven run
+// (tools/cli-testing) fully hermetic — its own boot secrets, embedded-PG
+// data dir and sessions — so it never touches (or wipes) a real install's
+// data. Must run before anything reads app.getPath("userData"). The
+// cli-testing driver has set this env for dev posture since it shipped;
+// honoring it here (all postures) makes that contract real.
+{
+  const subdir = process.env.COPILOT_DESKTOP_USER_DATA_SUBDIR ?? "";
+  if (subdir !== "" && !subdir.includes("..") && !subdir.includes("/")) {
+    app.setPath("userData", join(app.getPath("userData"), subdir));
+  }
+}
+
 registerAppProtocolPrivilege();
 
 let mainWindow: BrowserWindow | null = null;
