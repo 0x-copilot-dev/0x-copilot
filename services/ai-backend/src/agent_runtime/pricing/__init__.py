@@ -1,26 +1,23 @@
-"""Versioned pricing catalog and integer-only micro-USD cost computation."""
+"""Pricing: LiteLLM-sourced rates + integer micro-USD cost computation.
+
+Rates come from the installed ``litellm`` package (``LitellmRateSource``) with a
+reviewed override backstop (``PricingOverrideSource``), wrapped in the in-process
+``ModelPricingCatalog`` cache. ``CostCalculator`` is the integer micro-USD /
+banker's-rounding boundary for the final per-usage cost.
+"""
 
 from agent_runtime.pricing.calculator import CostCalculator
 from agent_runtime.pricing.catalog import ModelPricingCatalog
-from agent_runtime.pricing.composer import PricingComposer, PricingComposerError
-from agent_runtime.pricing.litellm_source import LiteLLMPricingSource
+from agent_runtime.pricing.litellm_source import LitellmRateSource
 from agent_runtime.pricing.overrides import (
     PricingOverrideLoadError,
     PricingOverrideSource,
 )
-from agent_runtime.pricing.refresh_loop import (
-    PricingRefreshLoop,
-    PricingRefreshLoopEnv,
-)
 
 __all__ = [
     "CostCalculator",
-    "LiteLLMPricingSource",
+    "LitellmRateSource",
     "ModelPricingCatalog",
-    "PricingComposer",
-    "PricingComposerError",
     "PricingOverrideLoadError",
     "PricingOverrideSource",
-    "PricingRefreshLoop",
-    "PricingRefreshLoopEnv",
 ]

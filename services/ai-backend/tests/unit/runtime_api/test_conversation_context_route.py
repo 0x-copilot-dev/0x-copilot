@@ -7,7 +7,6 @@ from datetime import datetime, timedelta, timezone
 from fastapi.testclient import TestClient
 
 from agent_runtime.persistence.records import (
-    ModelPricingRecord,
     RuntimeModelCallUsageRecord,
     RuntimeRunUsageRecord,
 )
@@ -20,12 +19,16 @@ from runtime_api.schemas import (
     CreateConversationRequest,
 )
 
+# gpt-5.4-mini is priced by the bundled litellm catalog (context window =
+# ``max_input_tokens`` 1_050_000). The query service now sources pricing from
+# litellm, so no store-seeded pricing row is needed.
+_GPT_5_4_MINI_CONTEXT_WINDOW = 1_050_000
+
 
 async def _bootstrap(
     *,
     org_id: str = "org_a",
     user_id: str = "user_1",
-    seed_pricing: bool = True,
 ) -> tuple[TestClient, InMemoryRuntimeApiStore, str]:
     store = InMemoryRuntimeApiStore()
     settings = RuntimeSettings.load(
@@ -39,18 +42,6 @@ async def _bootstrap(
     conv = await store.create_conversation(
         CreateConversationRequest(org_id=org_id, user_id=user_id, title="Demo")
     )
-    if seed_pricing:
-        await store.upsert_pricing(
-            ModelPricingRecord(
-                provider="openai",
-                model_name="gpt-5.4-mini",
-                effective_from=datetime.now(timezone.utc) - timedelta(days=10),
-                input_per_1m_micro_usd=1_000_000,
-                output_per_1m_micro_usd=2_000_000,
-                context_window_tokens=128_000,
-                pricing_version="2026-q1",
-            )
-        )
     return (
         TestClient(RuntimeApiAppFactory.create_app(ports=ports, settings=settings)),
         store,
@@ -69,6 +60,8 @@ def _seed_run(
     input_tokens: int = 1_000,
     output_tokens: int = 200,
     cached_input_tokens: int = 0,
+    model_provider: str = "openai",
+    model_name: str = "gpt-5.4-mini",
 ) -> None:
     store.run_usage[run_id] = RuntimeRunUsageRecord(
         id=run_id,
@@ -76,8 +69,8 @@ def _seed_run(
         user_id=user_id,
         conversation_id=conversation_id,
         run_id=run_id,
-        model_provider="openai",
-        model_name="gpt-5.4-mini",
+        model_provider=model_provider,
+        model_name=model_name,
         input_tokens=input_tokens,
         output_tokens=output_tokens,
         cached_input_tokens=cached_input_tokens,
@@ -123,9 +116,11 @@ class TestConversationContextRoute:
         assert body["current"]["last_run_id"] == "r-latest"
         assert body["current"]["input_tokens"] == 1_000
         assert body["current"]["output_tokens"] == 200
+        # context_window (1_050_000) - used (input 1_000 + cached 0) = 1_049_000;
+        # headroom = 1_049_000 * 100 // 1_050_000 = 99.
         assert body["current"]["headroom_pct"] == 99
-        assert body["current"]["available_tokens"] == 127_000
-        assert body["model"]["context_window_tokens"] == 128_000
+        assert body["current"]["available_tokens"] == 1_049_000
+        assert body["model"]["context_window_tokens"] == _GPT_5_4_MINI_CONTEXT_WINDOW
 
     async def test_picks_latest_run_when_multiple_exist(self) -> None:
         client, store, conv_id = await _bootstrap()
@@ -213,7 +208,9 @@ class TestConversationContextRoute:
         assert body["breakdown"]["by_subagent"][0]["subagent_id"] == "sub-x"
 
     async def test_unknown_model_returns_null_headroom(self) -> None:
-        client, store, conv_id = await _bootstrap(seed_pricing=False)
+        # A model litellm does not price (and no override covers) -> the
+        # unpriced path: no context window, so headroom/available are null.
+        client, store, conv_id = await _bootstrap()
         completed = datetime.now(timezone.utc) - timedelta(minutes=1)
         _seed_run(
             store,
@@ -221,6 +218,8 @@ class TestConversationContextRoute:
             run_id="r1",
             completed_at=completed,
             input_tokens=10_000,
+            model_provider="openai",
+            model_name="totally-unknown-model-xyz",
         )
         response = client.get(
             f"/v1/agent/conversations/{conv_id}/context",

@@ -350,7 +350,7 @@ class LlmEmbedRoutes:
         if injected is not None:
             return injected
         persistence = request.app.state.runtime_persistence
-        pricing_catalog = ModelPricingCatalog(persistence)
+        pricing_catalog = ModelPricingCatalog.from_litellm()
         return PostgresUsageRecorder(
             persistence=persistence, pricing_catalog=pricing_catalog
         )
