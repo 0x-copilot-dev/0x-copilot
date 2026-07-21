@@ -282,3 +282,173 @@
     transition: none;
   }
 }
+
+/* ==========================================================================
+ * Phase FTUE-P3 — onboarding composer (State B) + starter chips + ack (State C)
+ * Appended per P1's "one stylesheet, one token map" note. Every color/size
+ * resolves a design-system token; the only literals are the shared hero
+ * tracking (already declared above) and none new here. `.fr-compose`/`.fr-chips`
+ * /`.fr-chip`/`.fr-cerr`/`.fr-ack`/`.ln` map to SPEC §CSS inventory.
+ * ==========================================================================*/
+
+/* --- State B: composer surface (H1 · chips · error · AssistantComposer) ---- */
+.fr-compose {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-lg);
+}
+
+/* --- Starter chips: flex-wrap row of accent-icon pills --------------------- */
+.fr-chips {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-sm);
+}
+
+.fr-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-xs);
+  padding: var(--space-2xs) var(--space-md);
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-full);
+  background-color: var(--color-surface);
+  color: var(--color-text);
+  font: inherit;
+  font-size: var(--font-size-sm);
+  cursor: pointer;
+  transition:
+    border-color var(--duration-fast) var(--ease-standard),
+    background-color var(--duration-fast) var(--ease-standard);
+}
+
+.fr-chip:hover:not(:disabled) {
+  border-color: var(--color-border-strong);
+}
+
+.fr-chip:disabled {
+  opacity: 0.5;
+  cursor: default;
+}
+
+/* Leading glyph tinted with the app accent (sky) — one-accent discipline. */
+.fr-chip__ic {
+  display: inline-flex;
+  color: var(--color-accent);
+}
+
+/* --- Inline run-create error (keyless send etc.) — reuses StartRunError ----
+ * Mirrors RunComposer's notice but token-classed (chat-surface never inlines
+ * hex): actionable safe_message + a config-error "Add a key" CTA routing to the
+ * gate's KeyForm (onAddKey), not Settings. */
+.fr-cerr {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: var(--space-sm);
+  padding: var(--space-sm) var(--space-md);
+  border: 1px solid var(--color-danger);
+  border-radius: var(--radius-md);
+  background-color: var(--color-surface-muted);
+}
+
+.fr-cerr__row {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: var(--space-sm);
+  width: 100%;
+}
+
+.fr-cerr__msg {
+  min-width: 0;
+  font-size: var(--font-size-xs);
+  line-height: var(--line-height-tight);
+  color: var(--color-danger);
+}
+
+.fr-cerr__dismiss {
+  flex-shrink: 0;
+  appearance: none;
+  border: none;
+  background: transparent;
+  padding: 0;
+  font: inherit;
+  font-size: var(--font-size-sm);
+  line-height: 1;
+  color: var(--color-text-subtle);
+  cursor: pointer;
+}
+
+.fr-cerr__cta {
+  align-self: flex-start;
+  appearance: none;
+  border: 1px solid var(--color-accent);
+  border-radius: var(--radius-sm);
+  padding: var(--space-2xs) var(--space-md);
+  font: inherit;
+  font-size: var(--font-size-xs);
+  font-weight: var(--font-weight-semibold);
+  color: var(--color-accent-contrast);
+  background-color: var(--color-accent);
+  cursor: pointer;
+}
+
+/* --- State C: acknowledgment (centered, mono jade-check lines) ------------- */
+.fr-ack {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: var(--space-lg);
+  text-align: center;
+}
+
+.fr-ack__title {
+  margin: 0;
+  font-family: var(--font-display);
+  font-weight: var(--font-weight-semibold);
+  font-size: var(--font-size-2xl);
+  line-height: var(--line-height-tight);
+  letter-spacing: -0.015em; /* documented literal — tracking is not tokenized */
+  color: var(--color-text-strong);
+}
+
+.fr-ack__lines {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2xs);
+  align-items: flex-start;
+}
+
+.ln {
+  display: flex;
+  align-items: baseline;
+  gap: var(--space-xs);
+  margin: 0;
+  font-family: var(--font-mono);
+  font-size: var(--font-size-2xs);
+  color: var(--color-text-muted);
+}
+
+/* Jade check (SPEC: the success token, NOT the sky accent). */
+.ln__check {
+  color: var(--color-success);
+}
+
+.fr-ack__error {
+  margin: 0;
+  font-size: var(--font-size-xs);
+  color: var(--color-danger);
+}
+
+/* Reduced-motion: neutralize the chip hover transition. */
+[data-reduce-motion="1"] .fr-chip,
+[data-reduce-motion="always"] .fr-chip {
+  transition: none;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .fr-chip {
+    transition: none;
+  }
+}

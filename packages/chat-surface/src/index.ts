@@ -1429,3 +1429,40 @@ export {
   type FirstRunLocalCardCtx,
 } from "./onboarding";
 // === end First-Run onboarding (P1) ===
+
+// === First-Run onboarding (P3) — composer + chips + ack + launch ===
+// State B (`OnboardingComposer` mounts the real AssistantComposer under the
+// "What should we run first?" H1 + the 3 starter chips) and State C
+// (`Acknowledgment`), plus the run-create orchestration: `useFirstRunLaunch`
+// drives the two-step create through the host-injected `FirstRunRunsPort`
+// (create only — the handoff target owns streaming), the "Queued — starts when
+// the model lands" deferral, and the ~1.5s handoff. `firstRunAckLines` derives
+// the three verbatim echo lines. Fills P1's `renderComposer`/`renderAcknowledgment`
+// slots; bound by the desktop host (web binder deferred, as in P1).
+// Design: docs/plan/first-run-onboarding/design-source/SPEC.md.
+export {
+  OnboardingComposer,
+  ONBOARDING_COMPOSER_COPY,
+  SuggestionChips,
+  FIRST_RUN_SUGGESTIONS,
+  Acknowledgment,
+  FIRST_RUN_ACK_TITLES,
+  firstRunAckLines,
+  useFirstRunLaunch,
+  type OnboardingComposerProps,
+  type FirstRunSuggestion,
+  type SuggestionChipsProps,
+  type AcknowledgmentProps,
+  type AcknowledgmentVariant,
+  type FirstRunAckEngine,
+  type FirstRunToolsState,
+  type FirstRunAckLines,
+  type FirstRunLaunchPhase,
+  type FirstRunLaunchPayload,
+  type UseFirstRunLaunch,
+  type UseFirstRunLaunchOptions,
+  type FirstRunRunsPort,
+  type FirstRunCreateRunInput,
+  type FirstRunLaunchResult,
+} from "./onboarding";
+// === end First-Run onboarding (P3) ===

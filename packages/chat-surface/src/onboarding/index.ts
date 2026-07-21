@@ -29,3 +29,39 @@ export type {
   FirstRunKeyProvider,
   FirstRunCompleteReason,
 } from "./firstRun";
+
+// === Phase FTUE-P3 — onboarding composer + starter chips + ack + launch ===
+export { OnboardingComposer, ONBOARDING_COMPOSER_COPY } from "./OnboardingComposer";
+export type { OnboardingComposerProps } from "./OnboardingComposer";
+export {
+  SuggestionChips,
+  FIRST_RUN_SUGGESTIONS,
+} from "./SuggestionChips";
+export type {
+  FirstRunSuggestion,
+  SuggestionChipsProps,
+} from "./SuggestionChips";
+export { Acknowledgment, FIRST_RUN_ACK_TITLES } from "./Acknowledgment";
+export type {
+  AcknowledgmentProps,
+  AcknowledgmentVariant,
+} from "./Acknowledgment";
+export { firstRunAckLines } from "./firstRunAckLines";
+export type {
+  FirstRunAckEngine,
+  FirstRunToolsState,
+  FirstRunAckLines,
+} from "./firstRunAckLines";
+export { useFirstRunLaunch } from "./useFirstRunLaunch";
+export type {
+  FirstRunLaunchPhase,
+  FirstRunLaunchPayload,
+  UseFirstRunLaunch,
+  UseFirstRunLaunchOptions,
+} from "./useFirstRunLaunch";
+export type {
+  FirstRunRunsPort,
+  FirstRunCreateRunInput,
+  FirstRunLaunchResult,
+} from "./ports/FirstRunRunsPort";
+// === end Phase FTUE-P3 ===

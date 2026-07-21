@@ -144,6 +144,12 @@ export interface AssistantComposerProps {
    * Run rail passes 2 for the compact v3 "quiet" composer shell.
    */
   minRows?: number;
+  /**
+   * Empty-composer placeholder. Defaults to the chat "Type a message…"; the
+   * FTUE onboarding composer passes the SPEC hero placeholder. Optional so
+   * every existing call site is unchanged.
+   */
+  placeholder?: string;
 }
 
 /**
@@ -208,6 +214,7 @@ export const AssistantComposer = forwardRef<
     onCancel,
     disabled = false,
     minRows = 3,
+    placeholder = "Type a message…",
   },
   ref,
 ): ReactElement {
@@ -308,7 +315,7 @@ export const AssistantComposer = forwardRef<
       disabled={disabled}
       running={running}
       attachmentAdapter={attachmentAdapter}
-      placeholder="Type a message…"
+      placeholder={placeholder}
       // Phase 9 composer redesign: empty composer was a single-row sliver
       // — felt skeletal next to the welcome cards. 3 rows is the size the
       // user identified as "what it should look like" (matches the focused
