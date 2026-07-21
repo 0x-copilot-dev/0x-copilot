@@ -33,6 +33,7 @@ import {
   AppearancePage,
   DeveloperTokensPage,
   LocalModelsPage,
+  ModelsPage,
   ModelBehaviorPage,
   NotificationsPage,
   PrivacyPage,
@@ -42,6 +43,7 @@ import {
   ShortcutsPage,
   appearanceAttributes,
   createDeveloperTokensPort,
+  createModelsPort,
   createProviderKeysPort,
   type AppLockValue,
   type AppearanceValue,
@@ -253,6 +255,7 @@ export function SettingsMount({
     () => createProviderKeysPort(transport),
     [transport],
   );
+  const modelsPort = useMemo(() => createModelsPort(transport), [transport]);
   const developerTokensPort = useMemo(
     () => createDeveloperTokensPort(transport),
     [transport],
@@ -557,6 +560,8 @@ export function SettingsMount({
       // --- Models & keys --------------------------------------------------
       case "provider-keys":
         return <ProviderKeysPage port={providerKeysPort} onToast={toast} />;
+      case "models":
+        return <ModelsPage port={modelsPort} onToast={toast} />;
       case "local-models":
         return (
           <LocalModelsPage

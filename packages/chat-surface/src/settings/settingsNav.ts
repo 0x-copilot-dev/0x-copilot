@@ -28,6 +28,7 @@ export type SettingsSectionSlug =
   | "shortcuts"
   // Models & keys
   | "provider-keys"
+  | "models"
   | "local-models"
   | "model-behavior"
   // Data & privacy
@@ -119,6 +120,7 @@ export const SETTINGS_NAV_ITEMS: readonly SettingsNavItem[] = [
     group: "models",
     tag: "BYOK",
   },
+  { id: "models", label: "Models", icon: "sliders", group: "models" },
   { id: "local-models", label: "Local models", icon: "chip", group: "models" },
   {
     id: "model-behavior",
