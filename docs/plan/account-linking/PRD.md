@@ -223,10 +223,21 @@ decrypt under the survivor org's AAD and REFUSE the absorbed org's, decoy
 accounts untouched, `sequence_no` byte-identical, audit chains never
 rewritten, idempotent re-run.
 
-First executed 2026-07-21 (all green, stable across repeated runs).
+First executed 2026-07-21 (all green, stable across repeated runs) and now
+**wired into CI** as `.github/workflows/ci-merge-live-gate.yml` — two
+path-filtered jobs (backend + ai-backend) on a disposable `postgres:16`
+service, triggered by any change to either service's migrations, either
+re-key executor, or the live tests. The manual `make test-merge-live`
+remains for local runs.
+
 Findings folded back: the dormant RLS test had schema-rotted column names
 (fixed); the gate requires a UTF-8 cluster + `PYTHONUTF8=1` (yoyo reads the
-migrations' non-ASCII comments with the locale encoding); `psycopg2-binary`
-is a dev-only dependency of yoyo's plain-URL path. Known environmental note:
-three pre-existing ai-backend lock-free-append concurrency tests are
-sensitive to the local Postgres major version (compose pins postgres:17).
+migrations' non-ASCII comments through the DB/client encoding). The
+`MigrationRunner` in BOTH services now pins yoyo to the psycopg3 driver
+(`postgresql+psycopg://`) — a bare `postgresql://` made yoyo import
+`psycopg2`, which the repo does not install; this was a latent fragility in
+the production migration path (the desktop env had been hand-passing
+`+psycopg` URLs to dodge it), not just a test concern. Known environmental
+note: three pre-existing ai-backend lock-free-append concurrency tests are
+sensitive to the local Postgres major version (compose pins postgres:17);
+they are not part of this gate.
