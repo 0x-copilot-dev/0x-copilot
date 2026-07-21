@@ -29,7 +29,7 @@ import type {
   ProjectSummary,
   TenantId,
   UserId,
-} from "./_projects-stub";
+} from "@0x-copilot/api-types";
 
 const IDENTITY = { orgId: "org_test", userId: "user_test" };
 

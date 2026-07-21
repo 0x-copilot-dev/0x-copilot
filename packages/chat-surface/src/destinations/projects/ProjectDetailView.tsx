@@ -43,6 +43,7 @@ import {
 import { EmptyState } from "../../shell/EmptyState";
 import { ItemLink } from "../../refs/ItemLink";
 import { formatRelativeTime } from "../../util/time";
+import { SectionHeader } from "../_shared";
 
 import type {
   LibraryFileId,
@@ -73,11 +74,26 @@ export interface ProjectDetail {
   readonly iconEmoji?: string;
   /** Optional color hue (0..359) used for the icon tile background. */
   readonly colorHue?: number;
+  /** Optional short description shown under the name (v3 solo header). */
+  readonly description?: string;
   readonly status: ProjectStatus;
   readonly ownerUserId: string;
   readonly ownerName: string;
   readonly memberCount: number;
+  /** Optional chat count for the solo "Chats · N" section header. */
+  readonly chatCount?: number;
+  /** Optional file count for the solo "Files · M" section header. */
+  readonly fileCount?: number;
 }
+
+/**
+ * Surface profile (FR-G.5). The default solo profile renders the v3
+ * tab-less detail — a colour-tile header over `.sect-h` "Chats · N" /
+ * "Files · M" sections. The team profile keeps the full eight-tab model
+ * (Chats / Files / Todos / Inbox / Library / Routines / Members /
+ * Activity), gated rather than deleted, for the multi-user ACL product.
+ */
+export type ProjectDetailProfile = "solo" | "team";
 
 /** The eight tabs in the project detail view. The five cross-destination
  *  tabs (chats/todos/inbox/library/routines) proxy to other destinations
@@ -127,6 +143,13 @@ export type ProjectFilesResult = SectionResult<ReadonlyArray<ProjectFileRow>>;
 
 export interface ProjectDetailViewProps {
   readonly project: ProjectDetail;
+
+  /**
+   * Surface profile (FR-G.5). Defaults to `"solo"` — the v3 tab-less
+   * detail with `.sect-h` Chats / Files sections. Pass `"team"` to keep
+   * the eight-tab model for the multi-user ACL product.
+   */
+  readonly profile?: ProjectDetailProfile;
 
   /** Members tab data. Pass `null` while loading. */
   readonly members: ReadonlyArray<ProjectMember> | null;
@@ -233,14 +256,16 @@ function statusLabelFor(status: ProjectStatus): string {
 }
 
 function ProjectIconTile({
-  emoji,
   colorHue,
   name,
 }: {
-  emoji?: string;
   colorHue?: number;
   name: string;
 }): ReactElement {
+  // v3 design (FR-G.5): the header tile is the project colour + the name's
+  // first letter — NOT the emoji — so the detail matches the `.grid3` card
+  // tile on the list.
+  const initial = (name.trim()[0] ?? "?").toUpperCase();
   const bg =
     colorHue !== undefined
       ? `hsl(${colorHue} 60% 28% / 0.45)`
@@ -249,16 +274,20 @@ function ProjectIconTile({
     colorHue !== undefined
       ? `hsl(${colorHue} 60% 50% / 0.55)`
       : "var(--color-border)";
+  const fg =
+    colorHue !== undefined ? `hsl(${colorHue} 70% 82%)` : "var(--color-text)";
   const style: CSSProperties = {
     width: 44,
     height: 44,
     borderRadius: 10,
     backgroundColor: bg,
     border: `1px solid ${border}`,
+    color: fg,
     display: "flex",
     alignItems: "center",
     justifyContent: "center",
-    fontSize: "var(--font-size-2xl)",
+    fontSize: "var(--font-size-xl)",
+    fontWeight: 700,
     flexShrink: 0,
   };
   return (
@@ -269,7 +298,7 @@ function ProjectIconTile({
       data-testid="project-detail-icon"
       data-color-hue={colorHue ?? ""}
     >
-      {emoji !== undefined && emoji.length > 0 ? emoji : "📁"}
+      {initial}
     </div>
   );
 }
@@ -341,22 +370,22 @@ function ProjectDetailHeader({
     cursor: "pointer",
   };
 
-  // Status pill via inline element to keep the file standalone — the
-  // design-system StatusPill carries three tones and we map them above.
-  // We render an inline pill here that mirrors the DS look so the file
-  // has no hard dependency on CSS class definitions during unit tests.
+  // Status pill via inline element to keep the file standalone. Colours
+  // come from design-system status tokens (PRD-B) — never hard-coded rgb;
+  // `statusToneFor` maps the project status to the tone attribute the
+  // tests assert on (active→running, paused→ready, archived→idle).
   const statusBg =
     project.status === "active"
-      ? "rgba(34,197,94,0.12)"
+      ? "var(--color-success-bg)"
       : project.status === "paused"
-        ? "rgba(245,158,11,0.12)"
-        : "rgba(148,163,184,0.12)";
+        ? "var(--color-warning-bg)"
+        : "var(--color-surface-muted)";
   const statusFg =
     project.status === "active"
-      ? "rgb(74,222,128)"
+      ? "var(--color-success)"
       : project.status === "paused"
-        ? "rgb(251,191,36)"
-        : "rgb(148,163,184)";
+        ? "var(--color-warning)"
+        : "var(--color-text-subtle)";
   const statusPill: CSSProperties = {
     fontSize: "var(--font-size-2xs)",
     fontWeight: 600,
@@ -376,11 +405,7 @@ function ProjectDetailHeader({
       data-testid="project-detail-header"
       data-project-id={project.id}
     >
-      <ProjectIconTile
-        emoji={project.iconEmoji}
-        colorHue={project.colorHue}
-        name={project.name}
-      />
+      <ProjectIconTile colorHue={project.colorHue} name={project.name} />
       <div style={titleBlock}>
         <div style={nameStyle}>
           <span
@@ -412,6 +437,23 @@ function ProjectDetailHeader({
             {statusLabelFor(project.status)}
           </span>
         </div>
+        {project.description !== undefined && project.description.length > 0 ? (
+          <p
+            data-testid="project-detail-description"
+            style={{
+              margin: 0,
+              fontSize: "var(--font-size-sm)",
+              color: TEXT_SECONDARY,
+              overflow: "hidden",
+              textOverflow: "ellipsis",
+              display: "-webkit-box",
+              WebkitLineClamp: 2,
+              WebkitBoxOrient: "vertical",
+            }}
+          >
+            {project.description}
+          </p>
+        ) : null}
         <div style={metaStyle}>
           <span
             style={pillStyle}
@@ -765,6 +807,7 @@ function ProjectFileRowView({
 export function ProjectDetailView(props: ProjectDetailViewProps): ReactElement {
   const {
     project,
+    profile = "solo",
     members,
     activity,
     files,
@@ -899,11 +942,51 @@ export function ProjectDetailView(props: ProjectDetailViewProps): ReactElement {
     renderCrossDestinationTab,
   ]);
 
+  // Solo profile (FR-G.5): tab-less detail — the colour-tile header over
+  // `.sect-h` "Chats · N" / "Files · M" sections. Chats reuses the host's
+  // cross-destination slot (it owns the `filter[project_id]` list); Files
+  // reuses the same `ProjectFilesTab` 4-state machine (which degrades to a
+  // "coming soon" empty state when no source is wired).
+  const soloSections = (
+    <div
+      data-testid="project-detail-sections"
+      style={{ display: "flex", flexDirection: "column", gap: 20 }}
+    >
+      <section
+        aria-labelledby="project-section-chats"
+        data-testid="project-detail-section-chats"
+        style={{ display: "flex", flexDirection: "column", gap: 8 }}
+      >
+        <SectionHeader
+          headingId="project-section-chats"
+          count={project.chatCount}
+        >
+          Chats
+        </SectionHeader>
+        {renderCrossDestinationTab("chats", project.id)}
+      </section>
+      <section
+        aria-labelledby="project-section-files"
+        data-testid="project-detail-section-files"
+        style={{ display: "flex", flexDirection: "column", gap: 8 }}
+      >
+        <SectionHeader
+          headingId="project-section-files"
+          count={project.fileCount}
+        >
+          Files
+        </SectionHeader>
+        <ProjectFilesTab files={files} onRetry={onRetryFiles} now={now} />
+      </section>
+    </div>
+  );
+
   return (
     <section
       aria-label={`Project ${project.name}`}
       data-testid="project-detail-view"
       data-active-tab={active}
+      data-profile={profile}
       style={root}
     >
       <div style={container}>
@@ -912,8 +995,14 @@ export function ProjectDetailView(props: ProjectDetailViewProps): ReactElement {
           canManage={canManage}
           onRequestTransferOwnership={onRequestTransferOwnership}
         />
-        <TabsBar active={active} onSelect={handleSelectTab} />
-        {tabPanel}
+        {profile === "team" ? (
+          <>
+            <TabsBar active={active} onSelect={handleSelectTab} />
+            {tabPanel}
+          </>
+        ) : (
+          soloSections
+        )}
       </div>
     </section>
   );

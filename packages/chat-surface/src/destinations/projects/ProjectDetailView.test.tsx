@@ -96,15 +96,52 @@ describe("ProjectDetailView", () => {
     expect(screen.getByTestId("project-detail-member-count").textContent).toBe(
       "5 members",
     );
-    expect(screen.getByTestId("project-detail-icon").textContent).toBe("🚀");
+    // v3 (FR-G.5): the header tile shows the name's first letter on the
+    // project colour — not the emoji.
+    expect(screen.getByTestId("project-detail-icon").textContent).toBe("Q");
     expect(screen.getByTestId("project-detail-icon")).toHaveAttribute(
       "data-color-hue",
       "220",
     );
   });
 
-  it("renders all eight tabs in order (files after chats)", () => {
+  it("defaults to the solo profile: no tab bar, .sect-h Chats/Files sections (FR-G.5)", () => {
     renderView();
+    expect(screen.getByTestId("project-detail-view")).toHaveAttribute(
+      "data-profile",
+      "solo",
+    );
+    expect(screen.queryByTestId("project-detail-tabs")).not.toBeInTheDocument();
+    expect(
+      screen.getByTestId("project-detail-section-chats"),
+    ).toBeInTheDocument();
+    expect(
+      screen.getByTestId("project-detail-section-files"),
+    ).toBeInTheDocument();
+    // Chats section reuses the host's cross-destination slot.
+    expect(screen.getByTestId("stub-chats")).toBeInTheDocument();
+    // Files section renders the shared files machine (coming-soon by default).
+    expect(screen.getByTestId("project-files-tab")).toBeInTheDocument();
+  });
+
+  it("renders the Chats/Files section counts when provided (FR-G.5)", () => {
+    renderView({
+      project: { ...PROJECT, chatCount: 4, fileCount: 2 },
+    });
+    const chatsSection = screen.getByTestId("project-detail-section-chats");
+    const filesSection = screen.getByTestId("project-detail-section-files");
+    expect(
+      chatsSection.querySelector('[data-testid="section-header-count"]')
+        ?.textContent,
+    ).toBe("4");
+    expect(
+      filesSection.querySelector('[data-testid="section-header-count"]')
+        ?.textContent,
+    ).toBe("2");
+  });
+
+  it("renders all eight tabs in order (files after chats) under the team profile", () => {
+    renderView({ profile: "team" });
     const tabs = screen.getByTestId("project-detail-tabs");
     const buttons = tabs.querySelectorAll('[role="tab"]');
     const ids = Array.from(buttons).map((b) => b.getAttribute("data-testid"));
@@ -132,7 +169,7 @@ describe("ProjectDetailView", () => {
 
   it("switches active tab on click and notifies onTabChange (uncontrolled)", () => {
     const onTabChange = vi.fn();
-    renderView({ onTabChange });
+    renderView({ profile: "team", onTabChange });
     fireEvent.click(screen.getByTestId("project-detail-tab-todos"));
     expect(screen.getByTestId("project-detail-view")).toHaveAttribute(
       "data-active-tab",
@@ -144,7 +181,7 @@ describe("ProjectDetailView", () => {
 
   it("respects the controlled activeTab prop and does not switch internal state", () => {
     const onTabChange = vi.fn();
-    renderView({ activeTab: "library", onTabChange });
+    renderView({ profile: "team", activeTab: "library", onTabChange });
     expect(screen.getByTestId("project-detail-view")).toHaveAttribute(
       "data-active-tab",
       "library",
@@ -159,7 +196,7 @@ describe("ProjectDetailView", () => {
   });
 
   it("renders members tab content when active", () => {
-    renderView({ initialTab: "members" });
+    renderView({ profile: "team", initialTab: "members" });
     expect(
       screen.getByTestId("project-detail-panel-members"),
     ).toBeInTheDocument();
@@ -167,7 +204,7 @@ describe("ProjectDetailView", () => {
   });
 
   it("renders activity tab content when active", () => {
-    renderView({ initialTab: "activity" });
+    renderView({ profile: "team", initialTab: "activity" });
     expect(
       screen.getByTestId("project-detail-panel-activity"),
     ).toBeInTheDocument();
@@ -237,7 +274,7 @@ describe("ProjectDetailView", () => {
   });
 
   it("selecting the files tab renders the files panel", () => {
-    renderView();
+    renderView({ profile: "team" });
     fireEvent.click(screen.getByTestId("project-detail-tab-files"));
     expect(screen.getByTestId("project-detail-view")).toHaveAttribute(
       "data-active-tab",
@@ -358,14 +395,15 @@ describe("ProjectDetailView — files tab", () => {
   });
 
   it("renders no member/role chips in the files section (solo-safe)", async () => {
-    renderView({ initialTab: "files", files: { status: "ok", data: FILES } });
+    // Solo profile renders Files inline as a `.sect-h` section (no tab panel).
+    renderView({ files: { status: "ok", data: FILES } });
     await waitFor(() =>
       expect(screen.getByTestId("project-files-tab")).toHaveAttribute(
         "data-state",
         "ready",
       ),
     );
-    const panel = screen.getByTestId("project-detail-panel-files");
-    expect(panel.querySelector('[data-testid="status-pill"]')).toBeNull();
+    const section = screen.getByTestId("project-detail-section-files");
+    expect(section.querySelector('[data-testid="status-pill"]')).toBeNull();
   });
 });

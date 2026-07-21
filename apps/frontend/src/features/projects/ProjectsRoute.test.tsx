@@ -17,6 +17,7 @@ import {
 } from "vitest";
 
 import type {
+  ConversationId,
   Project,
   ProjectActivity,
   ProjectId,
@@ -26,8 +27,7 @@ import type {
   ProjectSummary,
   TenantId,
   UserId,
-} from "../../api/_projects-stub";
-import type { ConversationId } from "@0x-copilot/api-types";
+} from "@0x-copilot/api-types";
 
 // Mock the projectsApi module so the tests don't have to drive the real
 // fetch / SSE plumbing — that surface is covered in `projectsApi.test.ts`.
@@ -392,6 +392,45 @@ describe("ProjectsRoute render", () => {
       "data-item-count",
       "1",
     );
+  });
+
+  it("renders each project as a .grid3 card — colour tile + first letter + 'N chats · M files' (FR-G.4)", async () => {
+    projectsApiMocks.fetchProjects.mockResolvedValueOnce(
+      listResponse([
+        summary({
+          name: "quartz sprint",
+          description: "Ship the widget",
+          color_hue: 180,
+          counts: {
+            chats: 3,
+            todos_open: 0,
+            todos_done: 0,
+            inbox_items: 0,
+            library_items: 2,
+            routines_active: 0,
+            members: 1,
+          },
+        }),
+      ]),
+    );
+
+    render(<ProjectsRoute identity={IDENTITY} />);
+
+    await waitFor(() => {
+      expect(screen.getByTestId("projects-route-list")).toHaveClass(
+        "projects-grid3",
+      );
+    });
+
+    const row = screen.getByTestId("projects-route-row");
+    expect(row).toHaveClass("projects-card");
+    // The colour tile shows the uppercased first letter of the name.
+    const tile = row.querySelector(".proj-ic");
+    expect(tile?.textContent).toBe("Q");
+    expect(tile).toHaveAttribute("data-color-hue", "180");
+    // The description + counts line render.
+    expect(screen.getByText("Ship the widget")).toBeInTheDocument();
+    expect(screen.getByText("3 chats · 2 files")).toBeInTheDocument();
   });
 
   it("renders the empty state when the server returns no items", async () => {
@@ -843,8 +882,8 @@ describe("ProjectsRoute detail pane", () => {
     await renderAndOpen();
     await screen.findByTestId("project-detail-view");
 
-    fireEvent.click(screen.getByTestId("project-detail-tab-files"));
-
+    // Solo profile renders the Files section inline (no tab bar), so the
+    // coming-soon state is visible without a tab click.
     const filesTab = await screen.findByTestId("project-files-tab");
     expect(filesTab).toHaveAttribute("data-state", "unavailable");
     expect(screen.getByText("Project files coming soon")).toBeInTheDocument();
