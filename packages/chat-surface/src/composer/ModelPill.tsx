@@ -1,15 +1,8 @@
 import { Menu } from "@0x-copilot/design-system";
 import type { ModelCatalogModel } from "@0x-copilot/api-types";
-import {
-  useEffect,
-  useMemo,
-  useRef,
-  useState,
-  type KeyboardEvent as ReactKeyboardEvent,
-  type ReactElement,
-} from "react";
+import { useMemo, useRef, useState, type ReactElement } from "react";
 
-import { filterModels, groupModelsByProvider } from "../settings/data/models";
+import { providerLabel } from "../settings/data/models";
 
 export type ModelPillModel = ModelCatalogModel & { disabled?: boolean };
 
@@ -25,15 +18,33 @@ export interface ModelPillProps {
    * where custom slugs don't apply.
    */
   onAddCustom?: (slug: string) => void;
+  /** Footer deep-link → Settings → Provider keys (v3 "Add a provider key →"). */
+  onAddProviderKey?: () => void;
+  /** Footer deep-link → Settings → Local models (v3 "Get local models →"). */
+  onGetLocalModels?: () => void;
+}
+
+const LOCAL_PROVIDERS = new Set(["ollama"]);
+
+function isLocal(model: ModelPillModel): boolean {
+  return LOCAL_PROVIDERS.has(model.provider);
+}
+
+/** The mono sub-line under a row, in the v3 idiom. */
+function subLine(model: ModelPillModel): string {
+  if (isLocal(model)) return "local · never leaves this machine";
+  const label = providerLabel(model.provider);
+  return model.configured ? `${label} · your key` : `${label} · needs key`;
 }
 
 /**
- * Topbar model picker. A cmdk-style searchable, keyboard-navigable menu:
- * type to filter, ↑/↓ to move, Enter to pick, Esc to close. Rows are grouped
- * by provider and show name + reasoning + description. Only enabled models are
- * listed (the Settings → Models curation drives `enabled`); the current
- * selection always stays visible even if filtered/curated out. Rows flagged
- * `disabled` (no key configured) render but aren't selectable.
+ * Composer model picker (v3 design). A quiet, upward popover grouped into
+ * "Your keys" (configured cloud models) and "Local · on-device", with footer
+ * deep-links into Settings. Deliberately NOT searchable — the composer shows
+ * the short curated (enabled) list; the full catalog + search + toggles live
+ * in Settings → Models. Only enabled models are listed (`enabled !== false`;
+ * undefined = legacy curated-in), with the current selection always visible.
+ * Rows flagged `disabled` (no key) render but aren't selectable.
  */
 export function ModelPill({
   models,
@@ -41,72 +52,84 @@ export function ModelPill({
   onChange,
   disabled,
   onAddCustom,
+  onAddProviderKey,
+  onGetLocalModels,
 }: ModelPillProps): ReactElement {
   const [open, setOpen] = useState(false);
-  const [query, setQuery] = useState("");
   const [customSlug, setCustomSlug] = useState("");
-  const [activeIndex, setActiveIndex] = useState(0);
   const buttonRef = useRef<HTMLButtonElement>(null);
-  const searchRef = useRef<HTMLInputElement>(null);
 
   const selected =
     models.find((model) => model.id === value) ?? models[0] ?? null;
 
-  // Only enabled models are offered (undefined `enabled` = legacy/curated-in,
-  // so it shows); the current selection is always kept visible.
+  // Only enabled models are offered (undefined `enabled` = legacy/curated-in);
+  // the current selection is always kept visible even if curated out.
   const visible = useMemo(
     () => models.filter((m) => m.enabled !== false || m.id === value),
     [models, value],
   );
-  const filtered = useMemo(
-    () => filterModels(visible, query),
-    [visible, query],
-  );
-  const groups = useMemo(() => groupModelsByProvider(filtered), [filtered]);
-  // Flat selectable order for keyboard nav (skips disabled rows).
-  const selectable = useMemo(
-    () => filtered.filter((m) => !m.disabled),
-    [filtered],
-  );
-
-  // Reset highlight to the current selection (or top) whenever the list or
-  // open-state changes, and focus the search box on open.
-  useEffect(() => {
-    if (!open) {
-      setQuery("");
-      return;
-    }
-    const idx = selectable.findIndex((m) => m.id === value);
-    setActiveIndex(idx >= 0 ? idx : 0);
-    const raf = requestAnimationFrame(() => searchRef.current?.focus());
-    return () => cancelAnimationFrame(raf);
-  }, [open, value, selectable]);
+  const cloud = useMemo(() => visible.filter((m) => !isLocal(m)), [visible]);
+  const local = useMemo(() => visible.filter(isLocal), [visible]);
 
   const commit = (modelId: string): void => {
     onChange(modelId);
     setOpen(false);
   };
 
-  const onSearchKeyDown = (
-    event: ReactKeyboardEvent<HTMLInputElement>,
-  ): void => {
-    if (event.key === "ArrowDown") {
-      event.preventDefault();
-      setActiveIndex((i) => Math.min(i + 1, selectable.length - 1));
-    } else if (event.key === "ArrowUp") {
-      event.preventDefault();
-      setActiveIndex((i) => Math.max(i - 1, 0));
-    } else if (event.key === "Enter") {
-      event.preventDefault();
-      const pick = selectable[activeIndex];
-      if (pick) commit(pick.id);
-    } else if (event.key === "Escape") {
-      event.preventDefault();
-      setOpen(false);
-    }
+  const renderRow = (model: ModelPillModel): ReactElement => {
+    const active = model.id === value;
+    return (
+      <button
+        key={model.id}
+        type="button"
+        role="menuitemradio"
+        aria-checked={active}
+        disabled={model.disabled}
+        className="atlas-model-pill__item"
+        data-active={active || undefined}
+        data-off={model.disabled || undefined}
+        onClick={() => {
+          if (model.disabled) return;
+          commit(model.id);
+        }}
+      >
+        <span
+          className="atlas-model-pill__badge-lg"
+          aria-hidden="true"
+          data-local={isLocal(model) || undefined}
+        >
+          {isLocal(model) ? "◇" : model.provider.slice(0, 1).toUpperCase()}
+        </span>
+        <span className="atlas-model-pill__col">
+          <span className="atlas-model-pill__row">
+            <span className="atlas-model-pill__nm">{model.name}</span>
+            {model.supports_reasoning ? (
+              <span className="atlas-model-pill__badge" data-kind="reasoning">
+                reasoning
+              </span>
+            ) : null}
+          </span>
+          <span className="atlas-model-pill__sub">{subLine(model)}</span>
+        </span>
+        <span className="atlas-model-pill__rad" aria-hidden="true">
+          {active ? (
+            <svg viewBox="0 0 24 24" width="10" height="10" fill="none">
+              <polyline
+                points="5 12 10 17 19 7"
+                stroke="currentColor"
+                strokeWidth="3"
+                strokeLinecap="round"
+                strokeLinejoin="round"
+              />
+            </svg>
+          ) : null}
+        </span>
+      </button>
+    );
   };
 
-  const activeId = selectable[activeIndex]?.id;
+  const hasFooter =
+    onAddProviderKey !== undefined || onGetLocalModels !== undefined;
 
   return (
     <div className="atlas-model-pill__root">
@@ -149,80 +172,67 @@ export function ModelPill({
         align="left"
         className="atlas-model-pill__menu"
       >
-        <div className="atlas-model-pill__search">
-          <input
-            ref={searchRef}
-            type="text"
-            role="searchbox"
-            className="atlas-model-pill__search-input"
-            placeholder="Search models…"
-            aria-label="Search models"
-            value={query}
-            spellCheck={false}
-            autoComplete="off"
-            onChange={(event) => setQuery(event.target.value)}
-            onKeyDown={onSearchKeyDown}
-          />
-        </div>
-        {filtered.length === 0 ? (
-          <div className="atlas-model-pill__empty">No models match.</div>
+        {visible.length === 0 ? (
+          <div className="atlas-model-pill__empty">No models available.</div>
         ) : (
-          groups.map((group) => (
-            <div key={group.provider} className="atlas-model-pill__group">
-              <div className="atlas-model-pill__group-head" aria-hidden="true">
-                {group.label}
+          <>
+            {cloud.length > 0 ? (
+              <div className="atlas-model-pill__group">
+                <div
+                  className="atlas-model-pill__group-head"
+                  aria-hidden="true"
+                >
+                  Your keys
+                </div>
+                {cloud.map(renderRow)}
               </div>
-              {group.models.map((model) => {
-                const active = model.id === value;
-                const highlighted = model.id === activeId;
-                return (
-                  <button
-                    key={model.id}
-                    type="button"
-                    role="menuitemradio"
-                    aria-checked={active}
-                    disabled={model.disabled}
-                    className="atlas-model-pill__item"
-                    data-active={active || undefined}
-                    data-highlighted={highlighted || undefined}
-                    onMouseEnter={() => {
-                      const idx = selectable.findIndex(
-                        (m) => m.id === model.id,
-                      );
-                      if (idx >= 0) setActiveIndex(idx);
-                    }}
-                    onClick={() => {
-                      if (model.disabled) return;
-                      commit(model.id);
-                    }}
-                  >
-                    <span className="atlas-model-pill__col">
-                      <span className="atlas-model-pill__row">
-                        <strong>{model.name}</strong>
-                        {model.supports_reasoning ? (
-                          <span
-                            className="atlas-model-pill__badge"
-                            data-kind="reasoning"
-                          >
-                            reasoning
-                          </span>
-                        ) : null}
-                      </span>
-                      {model.description ? (
-                        <span className="atlas-model-pill__sub">
-                          {model.description}
-                        </span>
-                      ) : null}
-                    </span>
-                    <span className="atlas-model-pill__provider">
-                      {model.provider}
-                    </span>
-                  </button>
-                );
-              })}
-            </div>
-          ))
+            ) : null}
+            {local.length > 0 ? (
+              <div className="atlas-model-pill__group">
+                <div
+                  className="atlas-model-pill__group-head"
+                  aria-hidden="true"
+                >
+                  Local · on-device
+                </div>
+                {local.map(renderRow)}
+              </div>
+            ) : null}
+          </>
         )}
+        {hasFooter ? (
+          <div className="atlas-model-pill__footer">
+            {onAddProviderKey ? (
+              <a
+                className="atlas-model-pill__footer-link"
+                role="button"
+                tabIndex={0}
+                onClick={() => {
+                  setOpen(false);
+                  onAddProviderKey();
+                }}
+              >
+                Add a provider key →
+              </a>
+            ) : null}
+            {onAddProviderKey && onGetLocalModels ? (
+              <span className="atlas-model-pill__footer-sp" />
+            ) : null}
+            {onGetLocalModels ? (
+              <a
+                className="atlas-model-pill__footer-link"
+                role="button"
+                tabIndex={0}
+                onClick={() => {
+                  setOpen(false);
+                  onGetLocalModels();
+                }}
+              >
+                Get local models →
+              </a>
+            ) : null}
+          </div>
+        ) : null}
         {onAddCustom ? (
           <form
             className="atlas-model-pill__custom"
