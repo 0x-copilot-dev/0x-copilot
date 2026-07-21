@@ -882,8 +882,8 @@ describe("ProjectsRoute detail pane", () => {
     await renderAndOpen();
     await screen.findByTestId("project-detail-view");
 
-    fireEvent.click(screen.getByTestId("project-detail-tab-files"));
-
+    // Solo profile renders the Files section inline (no tab bar), so the
+    // coming-soon state is visible without a tab click.
     const filesTab = await screen.findByTestId("project-files-tab");
     expect(filesTab).toHaveAttribute("data-state", "unavailable");
     expect(screen.getByText("Project files coming soon")).toBeInTheDocument();
