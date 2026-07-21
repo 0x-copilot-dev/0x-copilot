@@ -28,6 +28,7 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
+import re
 import time
 from collections.abc import Awaitable, Callable, Coroutine, Mapping, Sequence
 from contextvars import ContextVar
@@ -44,6 +45,10 @@ from agent_runtime.capabilities.surfaces.store import (
     SpecKey,
     StoredSpec,
     SurfaceSpecStorePort,
+)
+from agent_runtime.observability.surface_specgen_metrics import (
+    RenderFallbackTier,
+    SurfaceSpecgenMetrics,
 )
 
 _LOGGER = logging.getLogger(__name__)
@@ -72,6 +77,62 @@ class _SafeUrl:
             return False
         candidate = value.strip().lower()
         return candidate.startswith(cls.SCHEMES)
+
+
+class _SpecBounds:
+    """Injection/dump ceilings for a generated spec's slot arrays (PRD-11).
+
+    The JSON Schema declares no ``maxItems`` on ``fields``/``columns``, and the
+    label ``maxLength`` (40) is already enforced by validation. These ceilings
+    sit generously above the SKILL's healthy 4–8 fields / 3–6 columns so the
+    injection lint only fires on an abusive *dump* (e.g. a model coaxed into
+    emitting all 40 keys of a flat object), never on a borderline-quality spec.
+    A false reject degrades to the tier-3 generic render — never to unsafe
+    output — so a conservative ceiling is safe.
+    """
+
+    MAX_FIELDS = 12
+    MAX_COLUMNS = 12
+
+
+class _LabelPatterns:
+    """Injection signatures a generated display label must not contain (PRD-11).
+
+    Labels are inert display text (escaped at render), but a label carrying a
+    URL, a markdown link, or an imperative-injection phrase is a signal the
+    model echoed untrusted sample text into a slot rather than choosing a clean
+    identifier — so the spec is rejected at generation. The SKILL constrains
+    legitimate labels to ≤3-word, sentence-case identifiers, so the
+    false-positive surface is negligible.
+    """
+
+    # A markdown link: ``[text](target)``.
+    MARKDOWN_LINK = re.compile(r"\[[^\]]*\]\([^)]*\)")
+    # A URL or explicit scheme (``http://``, ``https://``, ``javascript:``,
+    # ``data:``, ``www.``) anywhere in the label.
+    URL = re.compile(r"(?i)(https?://|www\.|\b[a-z][a-z0-9+.\-]*://|javascript:|data:)")
+    # Imperative / role-injection phrases (case-insensitive substrings).
+    INJECTION = (
+        "ignore",
+        "disregard",
+        "system:",
+        "assistant:",
+        "override previous",
+        "you must",
+    )
+
+    @classmethod
+    def classify(cls, label: str) -> str | None:
+        """Return the offending :class:`SpecLintCode`, or ``None`` when clean."""
+
+        if cls.MARKDOWN_LINK.search(label):
+            return SpecLintCode.LABEL_MARKDOWN_LINK
+        if cls.URL.search(label):
+            return SpecLintCode.LABEL_CONTAINS_URL
+        lowered = label.lower()
+        if any(token in lowered for token in cls.INJECTION):
+            return SpecLintCode.LABEL_INJECTION
+        return None
 
 
 @dataclass(frozen=True)
@@ -123,12 +184,35 @@ class GenFailure:
     attempts: int
 
 
+class SpecLintCode:
+    """Deterministic reason codes emitted by :meth:`SurfaceSpecLinter.lint_spec`.
+
+    Stable, low-cardinality tokens (mirrors ``ForwardInvalidReason`` /
+    ``FileStoreOp`` discipline) so callers, tests, and metrics share one
+    vocabulary. ``PATH_UNRESOLVED`` / ``URL_PATH_UNSAFE`` also tag the returns of
+    the original path-lint (:meth:`SurfaceSpecLinter.lint`).
+    """
+
+    PATH_UNRESOLVED = "path_unresolved"
+    URL_PATH_UNSAFE = "url_path_unsafe"
+    LABEL_CONTAINS_URL = "label_contains_url"
+    LABEL_MARKDOWN_LINK = "label_markdown_link"
+    LABEL_INJECTION = "label_injection"
+    FIELD_COUNT_EXCEEDED = "field_count_exceeded"
+
+
 @dataclass(frozen=True)
 class LintResult:
-    """Outcome of :class:`SurfaceSpecLinter`."""
+    """Outcome of :class:`SurfaceSpecLinter`.
+
+    ``code`` is a stable :class:`SpecLintCode` token on rejection (empty on
+    accept); ``reason`` is the human-readable, actionable message fed back to the
+    model on retry.
+    """
 
     ok: bool
     reason: str = ""
+    code: str = ""
 
 
 class DotPathResolver:
@@ -185,13 +269,45 @@ class SurfaceSpecLinter:
     """
 
     @classmethod
+    def lint_spec(cls, spec: SurfaceSpec, sample: object) -> LintResult:
+        """The full spec-injection lint (PRD-11): structural + content + paths.
+
+        Extends the original path-lint (:meth:`lint`) with two sample-free,
+        security-motivated checks, run first:
+
+        * **field-count bounds** — reject a spec whose ``fields``/``columns``
+          array dumps more slots than :class:`_SpecBounds` allows (an exfil /
+          resource signal), and
+        * **label content** — reject a spec whose any label carries a URL, a
+          markdown link, or an imperative-injection phrase (the model echoing
+          untrusted sample text into a slot; :class:`_LabelPatterns`).
+
+        Then delegates to :meth:`lint` for path resolution + the ``url_path``
+        http(s) kill-switch. Every rejection carries a stable
+        :class:`SpecLintCode`. This is the pass wired into generation and
+        available to a backend-registry write hook.
+        """
+
+        count_result = cls._lint_field_counts(spec)
+        if not count_result.ok:
+            return count_result
+        label_result = cls._lint_labels(spec)
+        if not label_result.ok:
+            return label_result
+        return cls.lint(spec, sample)
+
+    @classmethod
     def lint(cls, spec: SurfaceSpec, sample: object) -> LintResult:
         root_paths: list[tuple[str, str]] = [("title_path", spec.title_path)]
         if spec.subtitle_path is not None:
             root_paths.append(("subtitle_path", spec.subtitle_path))
         for name, path in root_paths:
             if not cls._resolves(sample, path):
-                return LintResult(False, f"{name} '{path}' does not resolve")
+                return LintResult(
+                    False,
+                    f"{name} '{path}' does not resolve",
+                    code=SpecLintCode.PATH_UNRESOLVED,
+                )
 
         item_ctx, items_error = cls._item_context(spec, sample)
         if items_error is not None:
@@ -205,15 +321,56 @@ class SurfaceSpecLinter:
             item_ctx, spec.group_by_path
         ):
             return LintResult(
-                False, f"group_by_path '{spec.group_by_path}' does not resolve"
+                False,
+                f"group_by_path '{spec.group_by_path}' does not resolve",
+                code=SpecLintCode.PATH_UNRESOLVED,
             )
         for slot in (*(spec.fields or ()), *(spec.columns or ())):
             if not cls._resolves(item_ctx, slot.path):
-                return LintResult(False, f"path '{slot.path}' does not resolve")
+                return LintResult(
+                    False,
+                    f"path '{slot.path}' does not resolve",
+                    code=SpecLintCode.PATH_UNRESOLVED,
+                )
         link_result = cls._lint_link(spec, item_ctx)
         if not link_result.ok:
             return link_result
         return cls._lint_link_all_rows(spec, sample)
+
+    @classmethod
+    def _lint_field_counts(cls, spec: SurfaceSpec) -> LintResult:
+        if spec.fields is not None and len(spec.fields) > _SpecBounds.MAX_FIELDS:
+            return LintResult(
+                False,
+                f"fields count {len(spec.fields)} exceeds the maximum "
+                f"{_SpecBounds.MAX_FIELDS}",
+                code=SpecLintCode.FIELD_COUNT_EXCEEDED,
+            )
+        if spec.columns is not None and len(spec.columns) > _SpecBounds.MAX_COLUMNS:
+            return LintResult(
+                False,
+                f"columns count {len(spec.columns)} exceeds the maximum "
+                f"{_SpecBounds.MAX_COLUMNS}",
+                code=SpecLintCode.FIELD_COUNT_EXCEEDED,
+            )
+        return LintResult(True)
+
+    @classmethod
+    def _lint_labels(cls, spec: SurfaceSpec) -> LintResult:
+        labels: list[str] = [
+            slot.label for slot in (*(spec.fields or ()), *(spec.columns or ()))
+        ]
+        if spec.link is not None:
+            labels.append(spec.link.label)
+        for label in labels:
+            code = _LabelPatterns.classify(label)
+            if code is not None:
+                return LintResult(
+                    False,
+                    f"label {label!r} contains disallowed content ({code})",
+                    code=code,
+                )
+        return LintResult(True)
 
     # A multi-row sample's first row can be clean while a later row carries a
     # javascript:/data: value at the same url_path. Sweep every row so the
@@ -240,6 +397,7 @@ class SurfaceSpecLinter:
                     False,
                     f"link.url_path '{spec.link.url_path}' resolves to a "
                     "non-http(s) value in at least one row",
+                    code=SpecLintCode.URL_PATH_UNSAFE,
                 )
         return LintResult(True)
 
@@ -257,7 +415,11 @@ class SurfaceSpecLinter:
         ):
             return (
                 None,
-                LintResult(False, f"items_path '{spec.items_path}' is not a list"),
+                LintResult(
+                    False,
+                    f"items_path '{spec.items_path}' is not a list",
+                    code=SpecLintCode.PATH_UNRESOLVED,
+                ),
             )
         if not items or not isinstance(items[0], Mapping):
             return (None, None)
@@ -270,12 +432,15 @@ class SurfaceSpecLinter:
         found, value = DotPathResolver.resolve(item_ctx, spec.link.url_path)
         if not found:
             return LintResult(
-                False, f"link.url_path '{spec.link.url_path}' does not resolve"
+                False,
+                f"link.url_path '{spec.link.url_path}' does not resolve",
+                code=SpecLintCode.PATH_UNRESOLVED,
             )
         if not _SafeUrl.is_safe(value):
             return LintResult(
                 False,
                 f"link.url_path '{spec.link.url_path}' must resolve to an http(s) URL",
+                code=SpecLintCode.URL_PATH_UNSAFE,
             )
         return LintResult(True)
 
@@ -460,9 +625,11 @@ class SurfaceSpecGenerator:
         *,
         completion: SpecCompletionPort,
         skill: SpecAuthoringSkill | None = None,
+        metrics: SurfaceSpecgenMetrics | None = None,
     ) -> None:
         self._completion = completion
         self._skill = skill or SpecAuthoringSkill.load()
+        self._metrics = metrics or SurfaceSpecgenMetrics()
 
     @property
     def skill_version(self) -> int:
@@ -547,7 +714,7 @@ class SurfaceSpecGenerator:
                 raw_output=result.raw_text,
                 result=result,
             )
-        lint = SurfaceSpecLinter.lint(spec, sample)
+        lint = SurfaceSpecLinter.lint_spec(spec, sample)
         if not lint.ok:
             return _AttemptOutcome(
                 spec=None,
@@ -589,6 +756,14 @@ class SurfaceSpecGenerator:
         result: SpecCompletionResult | None,
         duration_ms: int,
     ) -> None:
+        # Promote the structured metering line to counters (PRD-11): one
+        # ``surfaces_specgen_total{verdict}`` per attempt, plus token usage.
+        self._metrics.record_generation(verdict=verdict)
+        if result is not None:
+            self._metrics.record_tokens(
+                input_tokens=result.input_tokens,
+                output_tokens=result.output_tokens,
+            )
         _LOGGER.info(
             "%s attempt=%d server=%s tool=%s verdict=%s model=%s in_tokens=%s "
             "out_tokens=%s duration_ms=%d",
@@ -663,6 +838,7 @@ class SurfaceGenerationScheduler:
         model_id: str,
         schedule: ScheduleFn | None = None,
         max_per_run: int = _DEFAULT_MAX_PER_RUN,
+        metrics: SurfaceSpecgenMetrics | None = None,
     ) -> None:
         self._generator = generator
         self._store = store
@@ -670,8 +846,10 @@ class SurfaceGenerationScheduler:
         self._model_id = model_id
         self._schedule = schedule or self._default_schedule
         self._max_per_run = max(max_per_run, 0)
+        self._metrics = metrics or SurfaceSpecgenMetrics()
         self._seen: set[SpecKey] = set()
         self._scheduled = 0
+        self._budget_warned = False
         self._tasks: set[asyncio.Task[None]] = set()
 
     @property
@@ -696,6 +874,11 @@ class SurfaceGenerationScheduler:
         """
 
         try:
+            # Every spec-less envelope reaching here is a ladder miss that ships
+            # ``state.data`` only ⇒ the FE renders the tier-3 generic view. Count
+            # it as the render-fallback proxy (PRD-11) before dedup/cap, since a
+            # repeat shape still emits its own envelope and its own FE render.
+            self._metrics.record_render_fallback(tier=RenderFallbackTier.TIER3)
             key = SpecKey.build(
                 server=server,
                 tool=tool,
@@ -705,6 +888,7 @@ class SurfaceGenerationScheduler:
             if key in self._seen:
                 return
             if self._scheduled >= self._max_per_run:
+                self._warn_budget_exceeded(server=server, tool=tool)
                 return
             if self._store.get_stored(key) is not None or self._store.has_failure(key):
                 self._seen.add(key)
@@ -724,6 +908,26 @@ class SurfaceGenerationScheduler:
             _LOGGER.warning(
                 "%s schedule_failed server=%s tool=%s", _METER_PREFIX, server, tool
             )
+
+    def _warn_budget_exceeded(self, *, server: str, tool: str) -> None:
+        """Warn once when a run first exceeds ``SURFACE_SPEC_MAX_GEN_PER_RUN``.
+
+        The cap silently bounds cost; the alarm (PRD-11) makes an exhausted
+        budget visible in logs so a run generating an unusual number of distinct
+        shapes is diagnosable, without spamming a line per subsequent miss.
+        """
+
+        if self._budget_warned:
+            return
+        self._budget_warned = True
+        _LOGGER.warning(
+            "%s budget_exceeded max_per_run=%d server=%s tool=%s: further surface "
+            "spec generations this run are skipped",
+            _METER_PREFIX,
+            self._max_per_run,
+            server,
+            tool,
+        )
 
     async def _generate(
         self,
@@ -957,7 +1161,8 @@ def build_surface_generation_scheduler(
 
         model = build_chat_model_from_id(model_id)
         completion = LangChainSpecCompletion(model=model, model_id=model_id)
-    generator = SurfaceSpecGenerator(completion=completion)
+    metrics = SurfaceSpecgenMetrics()
+    generator = SurfaceSpecGenerator(completion=completion, metrics=metrics)
     return SurfaceGenerationScheduler(
         generator=generator,
         store=store,
@@ -965,6 +1170,7 @@ def build_surface_generation_scheduler(
         model_id=model_id,
         schedule=schedule,
         max_per_run=SurfaceGenerationScheduler.max_per_run_from_env(environ),
+        metrics=metrics,
     )
 
 
@@ -980,6 +1186,7 @@ __all__ = [
     "SpecAuthoringSkill",
     "SpecCompletionPort",
     "SpecCompletionResult",
+    "SpecLintCode",
     "SpecPromptBuilder",
     "SurfaceGenerationScheduler",
     "SurfaceSpecGenerator",

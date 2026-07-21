@@ -6,13 +6,21 @@ export {
 } from "./SaaSRendererAdapter";
 export {
   clearRegistry,
+  createSurfaceRegistry,
+  globalSurfaceRegistry,
   markBroken,
   registerAdapter,
   registerSurface,
   resolveAdapter,
   resolveSurface,
   unregisterAdapter,
+  type SurfaceRegistry,
 } from "./SurfaceRegistry";
+export {
+  SurfaceRegistryProvider,
+  useSurfaceRegistry,
+  type SurfaceRegistryProviderProps,
+} from "./SurfaceRegistryContext";
 export type { PendingDiff, SurfaceRendererProps } from "./types";
 
 // === Phase 4-B tier3-generic-diff ===
