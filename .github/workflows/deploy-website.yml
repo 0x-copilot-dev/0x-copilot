@@ -1,8 +1,9 @@
 name: deploy-website
 
 # Marketing site — static Astro build, published to the org GitHub Pages repo
-# (https://0x-copilot-dev.github.io/). Path-filtered so product changes never
-# trigger a site deploy, per the CI rules in CLAUDE.md.
+# (0x-copilot-dev.github.io) and served at https://0xcopilot.tech via the
+# published public/CNAME. Path-filtered so product changes never trigger a
+# site deploy, per the CI rules in CLAUDE.md.
 
 on:
   push:
@@ -44,20 +45,26 @@ jobs:
         run: npm run build --workspace @0x-copilot/website
 
       - name: Verify the build is intact
-        # CNAME is intentionally NOT published yet: a published CNAME makes
-        # GitHub redirect github.io → 0xcopilot.tech, and that domain's DNS
-        # is not live. When DNS is ready, rename public/CNAME.example →
-        # public/CNAME and re-add the CNAME checks here.
+        # 0xcopilot.tech DNS now points at GitHub Pages (4 A + 4 AAAA on @,
+        # www CNAME → 0x-copilot-dev.github.io.), so the site is served at the
+        # custom domain. public/CNAME must ship in dist/ and contain exactly
+        # that apex — without it GitHub drops the custom domain on the next
+        # force-push and stops serving HTTPS for it.
         run: |
           set -euo pipefail
           for f in index.html token.html docs.html media/app-run.png favicon.svg; do
             test -f "apps/website/dist/$f" || { echo "::error::missing dist/$f"; exit 1; }
           done
-          if [ -f apps/website/dist/CNAME ]; then
-            echo "::error::CNAME must not be published until 0xcopilot.tech DNS is live"
+          if [ ! -f apps/website/dist/CNAME ]; then
+            echo "::error::dist/CNAME missing — custom domain 0xcopilot.tech would be dropped"
             exit 1
           fi
-          echo "build OK"
+          got="$(tr -d '[:space:]' < apps/website/dist/CNAME)"
+          if [ "$got" != "0xcopilot.tech" ]; then
+            echo "::error::dist/CNAME is '$got', expected '0xcopilot.tech'"
+            exit 1
+          fi
+          echo "build OK (CNAME=0xcopilot.tech)"
 
       - name: Verify every referenced asset resolves at the deploy base
         # Regression guard: fetches what the pages actually request, not what
