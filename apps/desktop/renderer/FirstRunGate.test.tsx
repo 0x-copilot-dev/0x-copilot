@@ -3,8 +3,17 @@
 // not-complete → the onboarding surface; skip/complete persist the flag then
 // reveal children. The mount binds the shared FirstRunSurface to facade ports.
 
-import { act, cleanup, render, screen, waitFor } from "@testing-library/react";
+import {
+  act,
+  cleanup,
+  fireEvent,
+  render,
+  screen,
+  waitFor,
+} from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
+
+import { CHANNELS } from "@0x-copilot/chat-transport";
 
 import type { WindowBridge } from "../preload/window-bridge-types";
 import { FIRST_RUN_CHANNELS } from "../main/services/first-run-channels";
@@ -155,5 +164,53 @@ describe("FirstRunSurfaceMount", () => {
     await waitFor(() =>
       expect(screen.queryByTestId("first-run-local-card")).not.toBeNull(),
     );
+  });
+
+  it("mounts the P3 OnboardingComposer in the composer stage (not the placeholder)", () => {
+    // Empty bridge → catalog probes degrade to an empty catalog; the real
+    // composer still renders (never the P1 placeholder).
+    stubWindowBridge(makeBridge());
+    render(
+      <FirstRunSurfaceMount
+        workspaceId="org_acme"
+        onComplete={vi.fn()}
+        initialStage="ready"
+      />,
+    );
+    expect(screen.getByTestId("first-run-composer")).not.toBeNull();
+    expect(screen.queryByTestId("first-run-composer-placeholder")).toBeNull();
+  });
+
+  it("flips to the acknowledgment on send (create → onSent → ack)", async () => {
+    // Route the two-step create so the launch reaches `handoff`; the phase
+    // effect then flips the surface to the real Acknowledgment.
+    stubWindowBridge(
+      makeBridge({
+        [CHANNELS.transportRequest]: async (payload) => {
+          const path = (payload as { path?: string }).path;
+          if (path === "/v1/agent/conversations")
+            return { conversation_id: "conv_x" };
+          if (path === "/v1/agent/runs") return { run_id: "run_x" };
+          return {}; // provider-keys / local-models catalog probes
+        },
+      }),
+    );
+    render(
+      <FirstRunSurfaceMount
+        workspaceId="org_acme"
+        onComplete={vi.fn()}
+        initialStage="ready"
+      />,
+    );
+
+    fireEvent.change(screen.getByTestId("composer-textarea"), {
+      target: { value: "watch my wallet" },
+    });
+    fireEvent.click(screen.getByRole("button", { name: /Send message/i }));
+
+    await waitFor(() =>
+      expect(screen.queryByTestId("first-run-ack")).not.toBeNull(),
+    );
+    expect(screen.queryByTestId("first-run-ack-placeholder")).toBeNull();
   });
 });
