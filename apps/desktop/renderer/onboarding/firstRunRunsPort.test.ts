@@ -46,6 +46,7 @@ describe("createFirstRunRunsPort", () => {
     const result = await port.createFirstRun({
       userInput: "watch my wallet",
       model: null,
+      webSearchEnabled: true,
     });
 
     expect(calls).toHaveLength(2);
@@ -57,6 +58,7 @@ describe("createFirstRunRunsPort", () => {
     expect(calls[1].body).toEqual({
       conversation_id: "conv_1",
       user_input: "watch my wallet",
+      web_search_enabled: true,
     });
     expect(result).toEqual({ conversationId: "conv_1", runId: "run_1" });
   });
@@ -85,6 +87,7 @@ describe("createFirstRunRunsPort", () => {
       userInput: "explain this csv",
       model,
       attachments,
+      webSearchEnabled: true,
     });
 
     expect(calls[1].body).toEqual({
@@ -92,6 +95,48 @@ describe("createFirstRunRunsPort", () => {
       user_input: "explain this csv",
       model,
       attachments,
+      web_search_enabled: true,
+    });
+  });
+
+  it("threads web_search_enabled=false + request_context.connector_scopes (P4)", async () => {
+    const { transport, calls } = fakeTransport({
+      "/v1/agent/conversations": { conversation_id: "conv_p4" },
+      "/v1/agent/runs": { run_id: "run_p4" },
+    });
+
+    await createFirstRunRunsPort(transport).createFirstRun({
+      userInput: "no web, sheets on",
+      model: null,
+      webSearchEnabled: false,
+      connectorScopes: { "seed:sheets": [] },
+    });
+
+    expect(calls[1].body).toEqual({
+      conversation_id: "conv_p4",
+      user_input: "no web, sheets on",
+      web_search_enabled: false,
+      request_context: { connector_scopes: { "seed:sheets": [] } },
+    });
+  });
+
+  it("omits request_context when no connectors are active (P4)", async () => {
+    const { transport, calls } = fakeTransport({
+      "/v1/agent/conversations": { conversation_id: "conv_empty" },
+      "/v1/agent/runs": { run_id: "run_empty" },
+    });
+
+    await createFirstRunRunsPort(transport).createFirstRun({
+      userInput: "just web",
+      model: null,
+      webSearchEnabled: true,
+      connectorScopes: {},
+    });
+
+    expect(calls[1].body).toEqual({
+      conversation_id: "conv_empty",
+      user_input: "just web",
+      web_search_enabled: true,
     });
   });
 
@@ -104,6 +149,7 @@ describe("createFirstRunRunsPort", () => {
     await createFirstRunRunsPort(transport).createFirstRun({
       userInput: "   ",
       model: null,
+      webSearchEnabled: true,
     });
 
     expect(calls[0].body).toEqual({ title: "First run" });
@@ -119,6 +165,7 @@ describe("createFirstRunRunsPort", () => {
       createFirstRunRunsPort(transport).createFirstRun({
         userInput: "hi",
         model: null,
+        webSearchEnabled: true,
       }),
     ).rejects.toThrow(/conversation create returned no conversation_id/);
     // Only the conversation POST was attempted — the run POST never fired.

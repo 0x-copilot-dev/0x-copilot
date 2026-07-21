@@ -10,7 +10,11 @@ import type {
 import { useFirstRunLaunch } from "./useFirstRunLaunch";
 
 const RESULT: FirstRunLaunchResult = { conversationId: "c1", runId: "r1" };
-const PAYLOAD = { text: "watch my wallet", attachments: [] as const };
+const PAYLOAD = {
+  text: "watch my wallet",
+  attachments: [] as const,
+  webSearchEnabled: true,
+};
 
 function runsPort(
   createFirstRun: FirstRunRunsPort["createFirstRun"],
@@ -48,6 +52,8 @@ describe("useFirstRunLaunch", () => {
       userInput: "watch my wallet",
       model: null,
       attachments: [],
+      webSearchEnabled: true,
+      connectorScopes: undefined,
     });
     expect(result.current.phase).toBe("handoff");
     expect(onComplete).not.toHaveBeenCalled();
@@ -57,6 +63,35 @@ describe("useFirstRunLaunch", () => {
     });
     expect(onComplete).toHaveBeenCalledTimes(1);
     expect(onComplete).toHaveBeenCalledWith(RESULT);
+  });
+
+  it("threads webSearchEnabled=false + connectorScopes into createFirstRun (P4)", async () => {
+    const createFirstRun = vi.fn().mockResolvedValue(RESULT);
+    const { result } = renderHook(() =>
+      useFirstRunLaunch({
+        runs: runsPort(createFirstRun),
+        modelReady: true,
+        model: null,
+        onComplete: vi.fn(),
+      }),
+    );
+
+    await act(async () => {
+      result.current.launch({
+        text: "no web",
+        attachments: [],
+        webSearchEnabled: false,
+        connectorScopes: { "seed:sheets": [] },
+      });
+    });
+
+    expect(createFirstRun).toHaveBeenCalledWith({
+      userInput: "no web",
+      model: null,
+      attachments: [],
+      webSearchEnabled: false,
+      connectorScopes: { "seed:sheets": [] },
+    });
   });
 
   it("not ready → queued (no create) → modelReady flips → create fires → handoff", async () => {

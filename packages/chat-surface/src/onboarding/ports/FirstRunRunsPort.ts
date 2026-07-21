@@ -11,6 +11,7 @@
 // first-run port only needs to CREATE the run, not stream it.
 
 import type {
+  ConversationConnectorScopes,
   ModelSelectionRequest,
   RunAttachmentRequest,
 } from "@0x-copilot/api-types";
@@ -26,6 +27,22 @@ export interface FirstRunCreateRunInput {
    * a base64 `file` part is summarised by name/size only — model-invisible).
    */
   readonly attachments?: readonly RunAttachmentRequest[];
+  /**
+   * P4 — the composer Tools popover's per-run web-search toggle (SPEC `webOn`,
+   * default true). Threaded onto the run so an explicit `false` omits the
+   * built-in `web_search` tool for THIS run only (no regression to today's
+   * always-on default). The host binder maps it onto the run body's
+   * `web_search_enabled` field.
+   */
+  readonly webSearchEnabled: boolean;
+  /**
+   * P4 — per-run connector activation from the Tools popover (active connector
+   * ids → scopes). The FTUE has no conversation at toggle time, so the host
+   * seeds these into the created run's `request_context.connector_scopes`
+   * rather than PATCHing a not-yet-existent conversation. Omitted when the user
+   * activated no connectors.
+   */
+  readonly connectorScopes?: ConversationConnectorScopes;
 }
 
 export interface FirstRunLaunchResult {

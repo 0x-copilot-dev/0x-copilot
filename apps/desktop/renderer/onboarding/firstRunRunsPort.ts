@@ -63,12 +63,27 @@ export function createFirstRunRunsPort(transport: Transport): FirstRunRunsPort {
       const body: Record<string, unknown> = {
         conversation_id: conversationId,
         user_input: input.userInput,
+        // P4 — per-run web-search toggle from the composer Tools popover. The
+        // backend reads it TOP-LEVEL (`CreateRunRequest.web_search_enabled`,
+        // runs.py) and threads it onto `AgentRuntimeContext`; default true
+        // matches the historic always-on, an explicit false disables it for
+        // this run only.
+        web_search_enabled: input.webSearchEnabled,
       };
       if (input.model !== null) {
         body.model = input.model;
       }
       if (input.attachments !== undefined && input.attachments.length > 0) {
         body.attachments = input.attachments;
+      }
+      // P4 — active connectors from the Tools popover seed the run's
+      // `request_context.connector_scopes` (no conversation exists to PATCH at
+      // toggle time). Sent only when the user actually activated a connector.
+      if (
+        input.connectorScopes !== undefined &&
+        Object.keys(input.connectorScopes).length > 0
+      ) {
+        body.request_context = { connector_scopes: input.connectorScopes };
       }
 
       const run = await transport.request<CreateRunResponseLite>({
