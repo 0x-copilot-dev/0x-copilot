@@ -947,6 +947,7 @@ export {
   LOCAL_MODEL_CATALOG,
   LOCAL_MODEL_PULL_EVENT,
   DEFAULT_LOCAL_MODEL_QUANT,
+  localModelInstalledTag,
   formatBytes,
   formatEta,
   humanStatus,

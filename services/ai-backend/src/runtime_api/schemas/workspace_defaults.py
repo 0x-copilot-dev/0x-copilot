@@ -12,9 +12,9 @@ checkpoints) in one transaction. The value is not a direct column on the
 
 ``behavior_overrides`` is a closed JSONB blob with workspace-policy knobs
 (``system_prompt_override``, ``temperature``, ``citation_density``,
-``refusal_behavior``, ``default_reasoning_effort``, ``training_data_opt_out``).
-Pydantic strict-mode is the single validation point; the persistence layer reads
-known keys and ignores future ones.
+``refusal_behavior``, ``default_reasoning_effort``, ``default_local_model``,
+``training_data_opt_out``). Pydantic strict-mode is the single validation point;
+the persistence layer reads known keys and ignores future ones.
 """
 
 from __future__ import annotations
@@ -47,6 +47,7 @@ class _Fields:
     CITATION_DENSITY = "citation_density"
     REFUSAL_BEHAVIOR = "refusal_behavior"
     DEFAULT_REASONING_EFFORT = "default_reasoning_effort"
+    DEFAULT_LOCAL_MODEL = "default_local_model"
     TRAINING_DATA_OPT_OUT = "training_data_opt_out"
 
 
@@ -132,6 +133,11 @@ class EnabledModelsNormalizer:
 _SYSTEM_PROMPT_MAX_CHARS = 8 * 1024
 _TEMPERATURE_MIN = 0.0
 _TEMPERATURE_MAX = 1.0
+# The default-local-model id is a short Ollama tag / HF pull ref
+# (e.g. ``hf.co/Qwen/Qwen3-4B-GGUF:Q8_0``). 200 chars bounds a hostile
+# payload while sitting comfortably above any real tag (matches the
+# ``enabled_models`` per-id cap).
+_DEFAULT_LOCAL_MODEL_MAX_CHARS = 200
 
 
 class WorkspaceBehaviorOverrides(RuntimeContract):
@@ -139,9 +145,17 @@ class WorkspaceBehaviorOverrides(RuntimeContract):
 
     Every field is optional. ``training_data_opt_out`` defaults to
     ``False`` so an absent row matches "training is allowed (current
-    behaviour)". Five-of-six fields fall through to deployment
-    defaults when None; the sixth (``training_data_opt_out``) is a
+    behaviour)". Six-of-seven fields fall through to deployment
+    defaults when None; the seventh (``training_data_opt_out``) is a
     plain boolean with a deterministic default.
+
+    ``default_local_model`` is the workspace-default on-device model
+    (a plain Ollama tag / HF pull ref such as
+    ``hf.co/Qwen/Qwen3-4B-GGUF:Q8_0``); ``None`` means "no default
+    local model", which the Settings panel renders as no chip. It
+    lives here (not in the top-level ``default_model`` JSONB) so the
+    additive field needs no column / migration — the closed blob
+    already round-trips through the JSONB store.
 
     ``model_config = forbid`` rejects unknown keys at write — keeps
     the JSONB blob from accumulating drift over time.
@@ -161,6 +175,10 @@ class WorkspaceBehaviorOverrides(RuntimeContract):
     citation_density: CitationDensity | None = None
     refusal_behavior: RefusalBehavior | None = None
     default_reasoning_effort: ReasoningEffort | None = None
+    default_local_model: str | None = Field(
+        default=None,
+        max_length=_DEFAULT_LOCAL_MODEL_MAX_CHARS,
+    )
     training_data_opt_out: bool = False
 
     @field_validator(_Fields.SYSTEM_PROMPT_OVERRIDE, mode="before")
@@ -170,6 +188,17 @@ class WorkspaceBehaviorOverrides(RuntimeContract):
             return None
         if not isinstance(value, str):
             msg = "system_prompt_override must be a string"
+            raise ValueError(msg)
+        stripped = value.strip()
+        return stripped or None
+
+    @field_validator(_Fields.DEFAULT_LOCAL_MODEL, mode="before")
+    @classmethod
+    def _normalize_default_local_model(cls, value: object) -> str | None:
+        if value is None:
+            return None
+        if not isinstance(value, str):
+            msg = "default_local_model must be a string"
             raise ValueError(msg)
         stripped = value.strip()
         return stripped or None

@@ -695,6 +695,14 @@ export interface WorkspaceBehaviorOverrides {
   citation_density?: CitationDensity | null;
   refusal_behavior?: RefusalBehavior | null;
   default_reasoning_effort?: ReasoningEffort | null;
+  /**
+   * C2 — the workspace-default on-device model: a plain Ollama tag / HF
+   * pull ref (e.g. ``hf.co/Qwen/Qwen3-4B-GGUF:Q8_0``). ``null`` or omitted
+   * means "no default local model" (Settings renders no "default local"
+   * chip). Additive + optional; server tolerates omission (JSONB blob, no
+   * migration).
+   */
+  default_local_model?: string | null;
   training_data_opt_out?: boolean;
 }
 
