@@ -20,6 +20,7 @@ from backend_app.contracts import (
     OidcJwksCacheRecord,
     OidcRefreshTokenRecord,
 )
+from backend_app.identity.principals import with_default_principal
 
 
 def _now() -> datetime:
@@ -154,6 +155,7 @@ class InMemoryOidcStore:
         self, record: OidcIdentityRecord, *, conn: Any | None = None
     ) -> OidcIdentityRecord:
         del conn
+        record = with_default_principal(record)
         if any(
             ident.provider_id == record.provider_id
             and ident.subject == record.subject
@@ -347,13 +349,15 @@ class PostgresOidcStore:
     def create_identity(
         self, record: OidcIdentityRecord, *, conn: Any | None = None
     ) -> OidcIdentityRecord:
+        record = with_default_principal(record)
         with self._cursor(conn) as cur:
             cur.execute(
                 """
                 INSERT INTO oidc_identities (
                     identity_id, org_id, user_id, provider_id, subject,
-                    email_at_link, linked_at, unlinked_at, claims_snapshot
-                ) VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s)
+                    email_at_link, linked_at, unlinked_at, claims_snapshot,
+                    principal_id
+                ) VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s)
                 """,
                 (
                     record.identity_id,
@@ -365,6 +369,7 @@ class PostgresOidcStore:
                     record.linked_at,
                     record.unlinked_at,
                     json.dumps(record.claims_snapshot),
+                    record.principal_id,
                 ),
             )
         return record

@@ -81,3 +81,95 @@ class TestProvisioningCarriesPrincipal:
         # And the stored user (not just the returned copy) carries it.
         stored = store.get_user(org_id=user.org_id, user_id=user.user_id)
         assert stored is not None and stored.principal_id == user.principal_id
+
+
+# ---------------------------------------------------------------------------
+# Stage 2a — auth-identity EDGE tables dual-write the principal (ADR 0001).
+# ---------------------------------------------------------------------------
+
+_ADDR = "0x" + "a" * 40
+
+
+class TestIdentityEdgesDualWritePrincipal:
+    """Every auth-identity edge (wallet / OIDC / SAML) fills principal_id from
+    its user when a caller supplies none — the same 1:1 ``prn_<user_id>`` the
+    0040 backfill uses — and honors an explicit principal (the future
+    explicit-link path). No resolver reads it yet (that is Stage 2b)."""
+
+    def test_wallet_identity_auto_fills_principal(self) -> None:
+        from backend_app.contracts import WalletIdentityRecord
+        from backend_app.identity.siwe_store import InMemorySiweStore
+
+        rec = InMemorySiweStore().create_wallet_identity(
+            WalletIdentityRecord(
+                address=_ADDR, org_id="org_a", user_id="usr_a", chain_id=8453
+            )
+        )
+        assert rec.principal_id == "prn_usr_a"
+
+    def test_oidc_identity_auto_fills_principal(self) -> None:
+        from backend_app.contracts import OidcIdentityRecord
+        from backend_app.identity.oidc_store import InMemoryOidcStore
+
+        rec = InMemoryOidcStore().create_identity(
+            OidcIdentityRecord(
+                org_id="org_a", user_id="usr_a", provider_id="prov", subject="sub"
+            )
+        )
+        assert rec.principal_id == "prn_usr_a"
+
+    def test_saml_identity_auto_fills_principal(self) -> None:
+        from backend_app.contracts import SamlIdentityRecord
+        from backend_app.identity.saml_store import InMemorySamlStore
+
+        rec = InMemorySamlStore().create_identity(
+            SamlIdentityRecord(
+                org_id="org_a",
+                user_id="usr_a",
+                provider_id="prov",
+                name_id="nid",
+                name_id_format="fmt",
+            )
+        )
+        assert rec.principal_id == "prn_usr_a"
+
+    def test_explicit_principal_on_edge_is_honored(self) -> None:
+        from backend_app.contracts import WalletIdentityRecord
+        from backend_app.identity.siwe_store import InMemorySiweStore
+
+        rec = InMemorySiweStore().create_wallet_identity(
+            WalletIdentityRecord(
+                address="0x" + "b" * 40,
+                org_id="org_a",
+                user_id="usr_a",
+                chain_id=1,
+                principal_id="prn_shared",
+            )
+        )
+        assert rec.principal_id == "prn_shared"
+
+    def test_edge_principal_matches_the_users_principal(self) -> None:
+        # The edge's auto-filled principal is exactly the one create_user
+        # minted for that user — proving app writes are internally consistent
+        # (both sides use the same prn_<user_id> convention).
+        from backend_app.contracts import WalletIdentityRecord
+        from backend_app.identity.siwe_store import InMemorySiweStore
+
+        store, org_id = _store_with_org()
+        user = store.create_user(
+            UserRecord(
+                user_id="usr_c",
+                org_id=org_id,
+                primary_email="c@x.io",
+                display_name="C",
+            )
+        )
+        edge = InMemorySiweStore().create_wallet_identity(
+            WalletIdentityRecord(
+                address="0x" + "c" * 40,
+                org_id=org_id,
+                user_id="usr_c",
+                chain_id=1,
+            )
+        )
+        assert edge.principal_id == user.principal_id

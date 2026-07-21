@@ -18,6 +18,7 @@ from backend_app.contracts import (
     SamlAuthenticationStatus,
     SamlIdentityRecord,
 )
+from backend_app.identity.principals import with_default_principal
 
 
 def _now() -> datetime:
@@ -197,6 +198,7 @@ class InMemorySamlStore:
         self, record: SamlIdentityRecord, *, conn: Any | None = None
     ) -> SamlIdentityRecord:
         del conn
+        record = with_default_principal(record)
         if any(
             ident.provider_id == record.provider_id
             and ident.name_id == record.name_id
@@ -380,14 +382,15 @@ class PostgresSamlStore:
     def create_identity(
         self, record: SamlIdentityRecord, *, conn: Any | None = None
     ) -> SamlIdentityRecord:
+        record = with_default_principal(record)
         with self._cursor(conn) as cur:
             cur.execute(
                 """
                 INSERT INTO saml_identities (
                     identity_id, org_id, user_id, provider_id,
                     name_id, name_id_format, linked_at, unlinked_at,
-                    attributes_snapshot
-                ) VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s)
+                    attributes_snapshot, principal_id
+                ) VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s)
                 """,
                 (
                     record.identity_id,
@@ -399,6 +402,7 @@ class PostgresSamlStore:
                     record.linked_at,
                     record.unlinked_at,
                     json.dumps(record.attributes_snapshot),
+                    record.principal_id,
                 ),
             )
         return record
