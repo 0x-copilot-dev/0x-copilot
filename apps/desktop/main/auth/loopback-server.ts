@@ -53,6 +53,28 @@ export interface LoopbackHandoffHandle {
   close(): void;
 }
 
+/**
+ * SIWE PROOF (not a session) delivered to the loopback by the wallet page
+ * running in LINK mode (account-linking PRD FR-L1). The page signs the
+ * EIP-4361 message but does NOT verify/mint — it relays the raw
+ * `{ message, signature }` so the desktop main process can POST them to
+ * `/v1/me/identities/wallet` with the CALLER's bearer. No bearer ever rides
+ * this redirect (unlike the sign-in handoff).
+ */
+export interface LoopbackWalletProof {
+  readonly message: string;
+  readonly signature: string;
+  readonly state: string;
+}
+
+export interface LoopbackWalletProofHandle {
+  readonly port: number;
+  readonly redirectUri: string;
+  readonly proofPromise: Promise<LoopbackWalletProof>;
+  armState(state: string): void;
+  close(): void;
+}
+
 export interface RandomPortOptions {
   /** Bind attempts before giving up (default 5). */
   readonly attempts?: number;
@@ -332,6 +354,37 @@ function parseHandoffRedirect(
   };
 }
 
+function parseWalletProofRedirect(
+  url: URL,
+  expectedState: string,
+): ParseOutcome<LoopbackWalletProof> {
+  const error = url.searchParams.get("error");
+  if (error !== null) {
+    return { ok: false, message: `wallet link error: ${error}` };
+  }
+  const state = url.searchParams.get("state");
+  if (state === null) {
+    return { ok: false, message: "wallet proof missing state" };
+  }
+  if (state !== expectedState) {
+    return { ok: false, message: "wallet proof state mismatch" };
+  }
+  const message = url.searchParams.get("message");
+  const signature = url.searchParams.get("signature");
+  if (
+    message === null ||
+    message === "" ||
+    signature === null ||
+    signature === ""
+  ) {
+    return {
+      ok: false,
+      message: "wallet proof missing message or signature",
+    };
+  }
+  return { ok: true, value: { message, signature, state } };
+}
+
 export async function awaitLoopbackCode(
   options: AwaitLoopbackOptions,
 ): Promise<LoopbackHandle> {
@@ -362,6 +415,27 @@ export async function awaitLoopbackHandoff(
     port: inner.port,
     redirectUri: inner.redirectUri,
     handoffPromise: inner.resultPromise,
+    armState: inner.armState,
+    close: inner.close,
+  };
+}
+
+/**
+ * Loopback listener for the wallet LINK flow (PRD FR-L1). The link-mode
+ * wallet page redirects here with the raw SIWE `{ message, signature }`
+ * proof (state round-tripped) — never a bearer.
+ */
+export async function awaitLoopbackWalletProof(
+  options: AwaitLoopbackOptions,
+): Promise<LoopbackWalletProofHandle> {
+  const inner = await awaitLoopback<LoopbackWalletProof>(
+    options,
+    parseWalletProofRedirect,
+  );
+  return {
+    port: inner.port,
+    redirectUri: inner.redirectUri,
+    proofPromise: inner.resultPromise,
     armState: inner.armState,
     close: inner.close,
   };

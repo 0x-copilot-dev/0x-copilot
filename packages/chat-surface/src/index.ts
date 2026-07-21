@@ -730,6 +730,7 @@ export {
   type DestinationRowDescriptor,
   type NotificationsPageProps,
   type NotificationsPageTabSlug,
+  type LinkWalletOutcome,
   type ProfileIdentityAnchor,
   type ProfileLinkedIdentity,
   type ProfilePagePerson,

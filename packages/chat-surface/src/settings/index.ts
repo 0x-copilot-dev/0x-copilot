@@ -16,6 +16,7 @@ export {
 } from "./WebhookSecurityPage";
 export {
   ProfilePage,
+  type LinkWalletOutcome,
   type ProfileIdentityAnchor,
   type ProfileLinkedIdentity,
   type ProfilePagePerson,

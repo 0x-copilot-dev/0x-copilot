@@ -2,6 +2,7 @@ import type {
   ApiKeyListResponse,
   CreateApiKeyRequest,
   CreateApiKeyResponse,
+  LinkWalletResult,
   NotificationPreferencesResponse,
   PrivacySettingsResponse,
   ToolUsePolicyResponse,
@@ -47,6 +48,26 @@ export function startGoogleLink(
     // 0xCopilot account should merge into this one. Recorded server-side on
     // the state row; never defaulted to true.
     confirm_merge: options?.confirmMerge ?? false,
+  });
+}
+
+/**
+ * Link a wallet to the current account (PRD FR-L1). The SIWE `message` +
+ * `signature` prove control; the survivor account comes from the bearer.
+ * A wallet owned by another account throws `TransportHttpError` with
+ * `code === "merge_required"` (409) unless `confirmMerge` is set — the
+ * FR-U2 consent the caller passes only after the user confirms the merge.
+ * On a confirmed merge the result `status` is `"merged"`.
+ */
+export function linkWallet(
+  message: string,
+  signature: string,
+  confirmMerge = false,
+): Promise<LinkWalletResult> {
+  return httpJson<LinkWalletResult>("POST", "/v1/me/identities/wallet", {
+    message,
+    signature,
+    confirm_merge: confirmMerge,
   });
 }
 

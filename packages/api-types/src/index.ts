@@ -2934,6 +2934,88 @@ export interface LinkedIdentity {
   linked_at: string;
 }
 
+/**
+ * Request body for `POST /v1/me/identities/wallet` (account-linking FR-L1).
+ * The SIWE `message` + `signature` prove control of the wallet being
+ * linked; identity of the survivor account comes from the bearer, never
+ * the body. `confirm_merge` is the FR-U2 explicit consent that a wallet
+ * already owned by ANOTHER account should merge that account into this one
+ * — never defaulted to true; the client sets it only after the user
+ * confirms the merge dialog.
+ */
+export interface LinkWalletRequest {
+  message: string;
+  signature: string;
+  confirm_merge?: boolean;
+}
+
+/**
+ * Result of `POST /v1/me/identities/wallet`. `status` is `linked` for a
+ * fresh bind, `already_linked` for the idempotent no-op (FR-L6), and
+ * `merged` when a confirmed merge absorbed the wallet's prior account
+ * (FR-M1). Never mints a session — the caller already holds a bearer.
+ */
+export interface LinkWalletResult {
+  status: "linked" | "already_linked" | "merged" | string;
+  wallet_id: string;
+  address: string;
+  chain_id: number;
+  chain_name: string;
+}
+
+/**
+ * Result of `POST /v1/me/identities/google/link/start` (FR-L2). `auth_url`
+ * is the IdP consent URL to send the browser to; the flow completes on the
+ * public `/v1/auth/oidc/callback`, whose link intent is recovered
+ * server-side from the consumed `state` row.
+ */
+export interface LinkGoogleStartResult {
+  auth_url: string;
+  state: string;
+}
+
+/**
+ * Result of a Google LINK flow returned by `/v1/auth/oidc/callback` when
+ * the flow was link-bound (FR-L2). Distinguished from the sign-in handoff
+ * (`OidcCallbackResult`) by `linked: true` — a link never mints a session.
+ * `email_upgraded` is true when a wallet account's `@wallet.invalid`
+ * placeholder was replaced by the verified Google address.
+ */
+export interface OidcLinkCallbackResult {
+  linked: true;
+  status: "linked" | "already_linked" | string;
+  user_id: string;
+  provider_id: string;
+  email?: string | null;
+  email_upgraded?: boolean;
+  return_to?: string | null;
+}
+
+/**
+ * Structured `detail` object carried by account-linking error responses
+ * (409 for a merge trigger or the last-sign-in-method guard; 502 for a
+ * merge that must be retried). `code` is the stable discriminator the
+ * client branches on; `safe_message` is a user-safe explanation that never
+ * leaks the other account's identifiers.
+ */
+export interface LinkErrorDetail {
+  code:
+    | "merge_required"
+    | "last_sign_in_method"
+    | "merge_runtime_failed"
+    | "merge_not_allowed"
+    | string;
+  safe_message: string;
+}
+
+/** Machine-readable `code` values on a {@link LinkErrorDetail}. */
+export const LINK_ERROR_CODES = {
+  mergeRequired: "merge_required",
+  lastSignInMethod: "last_sign_in_method",
+  mergeRuntimeFailed: "merge_runtime_failed",
+  mergeNotAllowed: "merge_not_allowed",
+} as const;
+
 export type UserProfileTheme = "system" | "light" | "dark" | "slate";
 
 /** Mirrors `ACCENT_SCHEMES` in `@0x-copilot/design-system`. */

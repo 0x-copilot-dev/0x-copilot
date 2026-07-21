@@ -6,6 +6,7 @@ import {
   type SseSubscription,
   type TransportCapabilities,
   type TypedRequest,
+  TransportHttpError,
   UnauthorizedError,
 } from "../types";
 import { runSseStream } from "./sse";
@@ -160,7 +161,7 @@ export class WebTransport implements Transport {
       return JSON.parse(text) as TRes;
     }
     const body = await response.text();
-    const message = parseFastApiDetail(body) ?? body;
+    const { message, detail } = parseFastApiError(body, response.status);
     if (response.status === 401) {
       try {
         this.#onUnauthorized(response);
@@ -169,26 +170,43 @@ export class WebTransport implements Transport {
       }
       throw new UnauthorizedError(message);
     }
-    throw new Error(message || `Request failed with ${response.status}`);
+    throw new TransportHttpError(response.status, message, detail);
   }
 }
 
-// FastAPI / Starlette serialises errors as `{"detail": "…"}`. Pull the
-// message out so callers don't render raw JSON; non-JSON bodies (proxy
+// FastAPI / Starlette serialises errors as `{"detail": <string | object>}`.
+// Extract the best human-readable message so callers don't render raw
+// JSON, and keep the parsed detail so callers can branch on structured
+// codes (TransportHttpError.detail / .code). Non-JSON bodies (proxy
 // timeouts, HTML error pages) fall through to the verbatim text.
-function parseFastApiDetail(body: string): string | null {
+function parseFastApiError(
+  body: string,
+  status: number,
+): { message: string; detail: unknown } {
+  const fallback = body || `Request failed with ${status}`;
   if (!body || body[0] !== "{") {
-    return null;
+    return { message: fallback, detail: null };
   }
   try {
     const parsed = JSON.parse(body) as { detail?: unknown };
-    if (typeof parsed.detail === "string" && parsed.detail.trim() !== "") {
-      return parsed.detail;
+    const detail = parsed.detail ?? null;
+    if (typeof detail === "string" && detail.trim() !== "") {
+      return { message: detail, detail };
+    }
+    if (typeof detail === "object" && detail !== null) {
+      const safeMessage = (detail as { safe_message?: unknown }).safe_message;
+      return {
+        message:
+          typeof safeMessage === "string" && safeMessage.trim() !== ""
+            ? safeMessage
+            : fallback,
+        detail,
+      };
     }
   } catch {
     // not JSON; fall through
   }
-  return null;
+  return { message: fallback, detail: null };
 }
 
 function newRequestId(): string {

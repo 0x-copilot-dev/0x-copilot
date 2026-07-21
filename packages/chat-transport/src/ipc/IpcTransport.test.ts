@@ -1,8 +1,18 @@
 import { describe, expect, it, vi } from "vitest";
 
-import type { Session, TransportCapabilities } from "../types";
+import {
+  TransportHttpError,
+  UnauthorizedError,
+  type Session,
+  type TransportCapabilities,
+} from "../types";
 import { IpcTransport } from "./IpcTransport";
-import { CHANNELS, type StreamEventPayload } from "./rpc-protocol";
+import {
+  CHANNELS,
+  wrapTransportError,
+  wrapTransportValue,
+  type StreamEventPayload,
+} from "./rpc-protocol";
 import type { WindowBridge } from "./window-bridge";
 
 interface FakeBridge extends WindowBridge {
@@ -119,6 +129,48 @@ describe("IpcTransport.request", () => {
     await expect(
       transport.request({ method: "GET", path: "/x" }),
     ).rejects.toThrow("boom");
+  });
+
+  it("unwraps a success envelope from main", async () => {
+    const bridge = makeFakeBridge(async () =>
+      wrapTransportValue({ hello: "world" }),
+    );
+    const transport = makeTransport(bridge);
+    const res = await transport.request<{ hello: string }>({
+      method: "GET",
+      path: "/foo",
+    });
+    expect(res).toEqual({ hello: "world" });
+  });
+
+  it("rehydrates a structured HTTP error envelope as TransportHttpError", async () => {
+    const bridge = makeFakeBridge(async () =>
+      wrapTransportError({
+        status: 409,
+        message: "This wallet already belongs to another account.",
+        detail: { code: "merge_required", safe_message: "…" },
+      }),
+    );
+    const transport = makeTransport(bridge);
+    const err = await transport
+      .request({ method: "POST", path: "/v1/me/identities/wallet" })
+      .then(
+        () => null,
+        (e: unknown) => e,
+      );
+    expect(err).toBeInstanceOf(TransportHttpError);
+    expect((err as TransportHttpError).status).toBe(409);
+    expect((err as TransportHttpError).code).toBe("merge_required");
+  });
+
+  it("rehydrates a 401 envelope as UnauthorizedError", async () => {
+    const bridge = makeFakeBridge(async () =>
+      wrapTransportError({ status: 401, message: "expired", detail: null }),
+    );
+    const transport = makeTransport(bridge);
+    await expect(
+      transport.request({ method: "GET", path: "/x" }),
+    ).rejects.toBeInstanceOf(UnauthorizedError);
   });
 });
 

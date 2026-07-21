@@ -8,7 +8,11 @@ export type {
   TransportCapabilities,
   TypedRequest,
 } from "./types";
-export { UnauthorizedError } from "./types";
+export {
+  isTransportHttpError,
+  TransportHttpError,
+  UnauthorizedError,
+} from "./types";
 export { WebTransport, type WebTransportConfig } from "./web/WebTransport";
 export {
   buildEmailEventSchedule,
@@ -40,8 +44,15 @@ export {
   TransportRequestParamsSchema,
   TransportSubscribeParamsSchema,
   TransportUnsubscribeParamsSchema,
+  toTransportHttpErrorWire,
+  unwrapTransportResult,
+  wrapTransportError,
+  wrapTransportValue,
   AuthWorkspaceParamsSchema,
   AuthPosturePayloadSchema,
+  AuthLinkWalletParamsSchema,
+  AuthLinkOutcomeSchema,
+  LinkOutcomeStatusSchema,
   RendererSessionSchema,
   Tier2InstallPayloadSchema,
   Tier2UninstallPayloadSchema,
@@ -53,6 +64,9 @@ export {
   UpdateStatusPayloadSchema,
   type AuthWorkspaceParams,
   type AuthPosturePayload,
+  type AuthLinkWalletParams,
+  type AuthLinkOutcome,
+  type LinkOutcomeStatus,
   type BootPhase,
   type BootStatusPayload,
   type UpdateStatusKind,
@@ -65,7 +79,9 @@ export {
   type Tier2InstallPayload,
   type Tier2MarkBrokenPayload,
   type Tier2UninstallPayload,
+  type TransportHttpErrorWire,
   type TransportRequestParams,
+  type TransportRequestResult,
   type TransportSubscribeParams,
   type TransportUnsubscribeParams,
   type WindowBridge,
