@@ -10,6 +10,7 @@
   },
   "files": [],
   "include": [
+    "vitest.setup.ts",
     "main/**/*.ts",
     "main/**/*.tsx",
     "preload/**/*.ts",
