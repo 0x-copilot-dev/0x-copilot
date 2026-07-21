@@ -28,7 +28,7 @@ Hosted trial: **SHELVED** (deferred; if revived, gated on holding ≥50k $CPILOT
 
 ## Verify-at-impl
 
-- [ ] **P3 BLOCKER (not just verify):** CSV attach — the accept list (`features/chat/runtime/attachments/file.ts:15`, office+pdf only) rejects `.csv`; the `airdrop-claims.csv` fixture does not exist. P3 must extend BOTH host adapters (web + desktop `createDesktopAttachmentAdapter`) and author the CSV + its two host resolutions.
+- [x] **P3 CSV blocker — RESOLVED** (`ftue/p3-csv-prereq` merged): both accept lists widened, `airdrop-claims.csv` fixture + both host resolvers shipped (17 tests). **New finding → P3-full:** a base64 `file` content-part is model-INVISIBLE (`runtime_worker/handlers/run.py:1151-1174` only summarizes name/size; only the TEXT adapter inlines rows), so the "Explain a CSV" chip must route CSV through the TEXT adapter (rows model-readable), not the file-first onboarding adapter. Baked into the P3-full brief.
 - [ ] Finish catalog-driven model picker (`ModelPicker.tsx` hardcodes 3 models) so the gate/model popover is `/v1/agent/models`-driven.
 - [ ] Server `truncated_display_address` not exposed as a profile field — chip truncates client-side.
 
