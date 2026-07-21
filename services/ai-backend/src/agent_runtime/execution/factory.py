@@ -55,6 +55,10 @@ from agent_runtime.capabilities.tools.prior_results import (
     LoadPriorToolResultInput,
     LoadPriorToolResultTool,
 )
+from agent_runtime.capabilities.tools.tool_use_enforcement import (
+    ToolUsePolicyEnforcer,
+    ToolUsePolicyResolver,
+)
 from agent_runtime.prompts.runtime import (
     DEFAULT_INSTRUCTIONS,
     MCP_SERVER_CARDS_INSTRUCTIONS,
@@ -215,6 +219,17 @@ async def _assemble_harness(
             sandbox_execute_tool=runtime_dependencies.sandbox_execute_tool,
             runtime_context=runtime_context,
         )
+        # Enforce the per-(org, user) tool-use policy on the model tool surface.
+        # ``call_mcp_tool`` (and any future gated umbrella tool) is routed to
+        # the SAME human-approval interrupt for ask/require, blocked with a safe
+        # result for block, or left untouched for auto. Fails open to the
+        # deployment default snapshot (write=ask → the existing MCP approval)
+        # when no policy is configured, so an unconfigured run is unchanged.
+        enforced_tools = ToolUsePolicyEnforcer.enforce(
+            model_tools=model_tools,
+            snapshot=ToolUsePolicyResolver.resolve(runtime_context),
+        )
+        model_tools = enforced_tools.tools
         model_instructions = _instructions_with_capability_tools(
             instructions=_instructions_with_workspace(
                 instructions=_instructions_with_suggested_connectors(
@@ -279,7 +294,7 @@ async def _assemble_harness(
                 ),
                 memory_paths=_deepagents_memory_paths(memory_backend),
                 skill_directories=skill_directories,
-                interrupt_on=_native_interrupt_config(model_tools),
+                interrupt_on=enforced_tools.interrupt_on,
                 permissions=_workspace_write_permissions(workspace_writable),
                 checkpointer=runtime_checkpointer(),
                 extra_model_kwargs=extra_model_kwargs or None,
@@ -411,21 +426,6 @@ def _model_visible_tools(
     if sandbox_execute_tool is not None:
         model_tools.append(sandbox_execute_tool)
     return tuple(model_tools)
-
-
-def _native_interrupt_config(
-    model_tools: Sequence[object],
-) -> dict[str, object]:
-    """Return DeepAgents HITL policies for model-visible gated tools."""
-
-    tool_names = {str(getattr(tool, "name", "")).strip() for tool in model_tools}
-    if McpValues.ToolName.CALL_MCP_TOOL not in tool_names:
-        return {}
-    return {
-        McpValues.ToolName.CALL_MCP_TOOL: {
-            "allowed_decisions": ["approve", "edit", "reject"],
-        },
-    }
 
 
 #: Virtual prefix every host-folder mount lives under. A single ``interrupt``
