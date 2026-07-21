@@ -3,9 +3,10 @@ import { defineConfig } from "astro/config";
 import react from "@astrojs/react";
 
 /* The marketing site is published to the org Pages repo
- * (0x-copilot-dev.github.io) and served at the domain root:
- *   https://0x-copilot-dev.github.io/
- * (and later https://0xcopilot.tech once DNS is attached).
+ * (0x-copilot-dev.github.io) and served at the custom-domain root:
+ *   https://0xcopilot.tech/
+ * (published via public/CNAME; the org URL https://0x-copilot-dev.github.io/
+ * 301-redirects to it).
  *
  * SITE_BASE must be "/" for that. Getting it wrong 404s every stylesheet —
  * the page renders as unstyled HTML. deploy-website.yml sets SITE_BASE=/ and

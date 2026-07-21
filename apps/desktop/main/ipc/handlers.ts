@@ -28,6 +28,7 @@ import {
 } from "../connectors/schemas";
 import {
   AuthWorkspaceParamsSchema,
+  AuthLinkWalletParamsSchema,
   CHANNELS,
   EmptyParamsSchema,
   IpcValidationError,
@@ -35,6 +36,10 @@ import {
   TransportRequestParamsSchema,
   TransportSubscribeParamsSchema,
   TransportUnsubscribeParamsSchema,
+  toTransportHttpErrorWire,
+  wrapTransportError,
+  wrapTransportValue,
+  type AuthLinkOutcome,
   type Tier2BoundaryErrorPayload,
 } from "./schemas";
 
@@ -44,6 +49,13 @@ export interface AuthHandlers {
   signInWithGoogle(workspaceId: string): Promise<RendererSession>;
   /** "Connect wallet" (SIWE) — system browser + loopback handoff. */
   signInWithWallet(workspaceId: string): Promise<RendererSession>;
+  /** "Link Google" (PRD FR-L2) — authenticated system-browser OAuth link. */
+  linkGoogle(workspaceId: string): Promise<AuthLinkOutcome>;
+  /** "Link a wallet" (PRD FR-L1/M1) — authenticated system-browser SIWE link. */
+  linkWallet(
+    workspaceId: string,
+    confirmMerge: boolean,
+  ): Promise<AuthLinkOutcome>;
   signOut(workspaceId: string): Promise<void>;
   getSession(workspaceId: string): Promise<RendererSession | null>;
   refresh(workspaceId: string): Promise<RendererSession | null>;
@@ -147,7 +159,19 @@ export function registerIpcHandlers(deps: RegisterHandlersDeps): () => void {
       TransportRequestParamsSchema,
       raw,
     );
-    return bridge.request(params);
+    // Resolve with the transport-result envelope: Electron's rejection
+    // path flattens errors to a message string, which would strip the
+    // status + structured FastAPI detail hosts branch on (e.g. the
+    // account-linking 409 codes). Non-HTTP errors still reject unchanged.
+    try {
+      return wrapTransportValue(await bridge.request(params));
+    } catch (err) {
+      const wire = toTransportHttpErrorWire(err);
+      if (wire !== null) {
+        return wrapTransportError(wire);
+      }
+      throw err;
+    }
   });
 
   ipcMain.handle(
@@ -242,6 +266,29 @@ export function registerIpcHandlers(deps: RegisterHandlersDeps): () => void {
         raw,
       );
       return auth.signInWithWallet(params.workspaceId);
+    });
+
+    // Account-linking (PRD FR-L2): authenticated Google LINK. Returns only a
+    // renderer-safe outcome — the bearer never crosses IPC.
+    ipcMain.handle(CHANNELS.authLinkGoogle, async (_event, raw: unknown) => {
+      const params = parseOrThrow(
+        CHANNELS.authLinkGoogle,
+        AuthWorkspaceParamsSchema,
+        raw,
+      );
+      return auth.linkGoogle(params.workspaceId);
+    });
+
+    // Account-linking (PRD FR-L1/M1): authenticated wallet LINK. `confirmMerge`
+    // is the FR-U2 consent; the renderer re-invokes with it after the merge
+    // dialog. Returns only a renderer-safe outcome.
+    ipcMain.handle(CHANNELS.authLinkWallet, async (_event, raw: unknown) => {
+      const params = parseOrThrow(
+        CHANNELS.authLinkWallet,
+        AuthLinkWalletParamsSchema,
+        raw,
+      );
+      return auth.linkWallet(params.workspaceId, params.confirmMerge);
     });
 
     // User-initiated sign-out. The wired AuthService routes auth.signOut to the

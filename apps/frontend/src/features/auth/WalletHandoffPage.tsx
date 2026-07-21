@@ -77,17 +77,42 @@ export function buildHandoffRedirectUrl(
   return url.toString();
 }
 
+/**
+ * LINK mode (account-linking PRD FR-L1): append the raw SIWE proof to the
+ * loopback URL — NO bearer. The desktop main process reads `message` +
+ * `signature` (state already round-trips in the handoff target) and POSTs
+ * the link with the caller's own bearer.
+ */
+export function buildProofRedirectUrl(
+  handoffUrl: string,
+  proof: { message: string; signature: string },
+): string {
+  const url = new URL(handoffUrl);
+  url.searchParams.set("message", proof.message);
+  url.searchParams.set("signature", proof.signature);
+  return url.toString();
+}
+
 export interface WalletHandoffPageProps {
   /** Raw `?handoff=` query value — validated here, not trusted. */
   rawHandoff: string | null;
+  /**
+   * LINK mode (account-linking PRD FR-L1): sign-and-relay-the-PROOF instead
+   * of verify-and-relay-the-session. The desktop opens this page with
+   * `?mode=link` when the user links a wallet from Settings.
+   */
+  mode?: "sign-in" | "link";
   /** Injectable for tests; defaults to a hard navigation. */
   navigate?: (url: string) => void;
 }
 
 export function WalletHandoffPage(props: WalletHandoffPageProps): ReactElement {
-  const { rawHandoff, navigate } = props;
+  const { rawHandoff, mode = "sign-in", navigate } = props;
   const target = validateLoopbackHandoff(rawHandoff);
   const [done, setDone] = useState(false);
+  const isLink = mode === "link";
+
+  const go = navigate ?? ((url: string) => window.location.assign(url));
 
   const onSession = useCallback(
     (session: SiweSessionResponse): void => {
@@ -97,16 +122,34 @@ export function WalletHandoffPage(props: WalletHandoffPageProps): ReactElement {
       // while the loopback loads (and if the app already shut the
       // listener down, the user still gets a sensible page).
       setDone(true);
-      (navigate ?? ((url: string) => window.location.assign(url)))(redirect);
+      go(redirect);
     },
-    [target, navigate],
+    [target, go],
   );
+
+  const onProof = useCallback(
+    (proof: { message: string; signature: string }): void => {
+      if (target === null) return;
+      const redirect = buildProofRedirectUrl(target, proof);
+      setDone(true);
+      go(redirect);
+    },
+    [target, go],
+  );
+
+  const heading = isLink ? "Link your wallet" : "Sign in with your wallet";
+  const instruction = isLink
+    ? "Approve the connection and signature in your wallet. You’ll be sent back to the Atlas app to finish linking."
+    : "Approve the connection and signature in your wallet. You’ll be sent back to the Atlas app when it’s done.";
+  const doneText = isLink
+    ? "Wallet signed — return to the app to finish linking."
+    : "You’re signed in — return to the app.";
 
   return (
     <div className="wallet-page" data-testid="wallet-page">
       <Card className="wallet-page__card" tone="default">
         <header className="login-card__head">
-          <h2>Sign in with your wallet</h2>
+          <h2>{heading}</h2>
           {target === null ? (
             <p
               className="login-card__error"
@@ -117,17 +160,18 @@ export function WalletHandoffPage(props: WalletHandoffPageProps): ReactElement {
               the Atlas app and start wallet sign-in again.
             </p>
           ) : done ? (
-            <p data-testid="wallet-page-done">
-              You&rsquo;re signed in — return to the app.
-            </p>
+            <p data-testid="wallet-page-done">{doneText}</p>
           ) : (
-            <p>
-              Approve the connection and signature in your wallet. You&rsquo;ll
-              be sent back to the Atlas app when it&rsquo;s done.
-            </p>
+            <p>{instruction}</p>
           )}
         </header>
-        {target !== null && !done && <WalletSignIn onSession={onSession} />}
+        {target !== null &&
+          !done &&
+          (isLink ? (
+            <WalletSignIn onProof={onProof} />
+          ) : (
+            <WalletSignIn onSession={onSession} />
+          ))}
       </Card>
     </div>
   );

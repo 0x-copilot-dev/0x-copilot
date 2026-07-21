@@ -41,12 +41,12 @@ def admin_conn(database_url: str) -> Iterator[Any]:
     """Connection with BYPASSRLS for setup/teardown."""
 
     psycopg = pytest.importorskip("psycopg")
-    import yoyo
 
-    backend = yoyo.get_backend(database_url)
-    migrations = yoyo.read_migrations(str(MIGRATIONS_DIR))
-    with backend.lock():
-        backend.apply_migrations(backend.to_apply(migrations))
+    from backend_app.db.migrate import MigrationRunner
+
+    # Through the real runner (psycopg3 driver) — a bare yoyo.get_backend
+    # would import psycopg2, which this repo does not install.
+    MigrationRunner.apply(database_url)
 
     do_rls = (MIGRATIONS_DIR / "staged" / "do_rls.sql").read_text()
     undo_rls = (MIGRATIONS_DIR / "staged" / "undo_rls.sql").read_text()
@@ -126,11 +126,13 @@ class TestRlsRolesPolicy:
         with admin_conn.cursor() as cur:
             cur.execute(
                 """
-                INSERT INTO roles (role_id, org_id, name, description, system_managed,
-                                   permissions, created_at, updated_at)
-                VALUES (%s, NULL, %s, 'system role', TRUE, '[]'::jsonb, %s, %s)
+                INSERT INTO roles (role_id, org_id, name, display_name,
+                                   description, is_system, permission_scopes,
+                                   created_at, updated_at)
+                VALUES (%s, NULL, %s, %s, 'system role', TRUE, '[]'::jsonb,
+                        %s, %s)
                 """,
-                (role_id, f"sys-{role_id}", now, now),
+                (role_id, f"sys-{role_id}", f"sys-{role_id}", now, now),
             )
 
         try:

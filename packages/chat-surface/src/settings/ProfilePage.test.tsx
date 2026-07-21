@@ -1,4 +1,4 @@
-import { fireEvent, render, screen } from "@testing-library/react";
+import { fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { describe, expect, it, vi } from "vitest";
 
 import { ProfilePage, type ProfilePagePerson } from "./ProfilePage";
@@ -189,7 +189,7 @@ describe("<ProfilePage> linked accounts (PRD FR-U1)", () => {
   });
 
   it("shows link CTAs only when the host wires them, and hides Link Google once linked", () => {
-    const onLinkWallet = vi.fn();
+    const onLinkWallet = vi.fn(async () => ({ status: "linked" }) as const);
     const { rerender } = render(
       <ProfilePage
         person={WALLET_PERSON}
@@ -201,6 +201,7 @@ describe("<ProfilePage> linked accounts (PRD FR-U1)", () => {
     );
     fireEvent.click(screen.getByTestId("profile-link-wallet"));
     expect(onLinkWallet).toHaveBeenCalledTimes(1);
+    expect(onLinkWallet).toHaveBeenCalledWith({ confirmMerge: false });
     // Wallet person + no Google yet → the "add an email" phrasing.
     expect(screen.getByTestId("profile-link-google").textContent).toContain(
       "Add an email",
@@ -226,5 +227,146 @@ describe("<ProfilePage> linked accounts (PRD FR-U1)", () => {
     );
     expect(screen.queryByTestId("profile-link-wallet")).toBeNull();
     expect(screen.queryByTestId("profile-link-google")).toBeNull();
+  });
+});
+
+describe("<ProfilePage> unlink (PRD FR-U1/L5)", () => {
+  const LINKED = [
+    {
+      kind: "wallet",
+      id: "wid_1",
+      address: "0x5aAeb6053F3E94C9b9A09f33669435E7Ef1BeAed",
+      chainName: "Base",
+    },
+    {
+      kind: "oidc",
+      id: "oid_1",
+      provider: "google",
+      email: "sarah@gmail.test",
+    },
+  ] as const;
+
+  it("renders no Unlink control until the host wires onUnlinkIdentity", () => {
+    render(
+      <ProfilePage
+        person={PERSON}
+        onSignOut={() => undefined}
+        linkedIdentities={LINKED}
+      />,
+    );
+    expect(screen.queryByTestId("profile-unlink-wid_1")).toBeNull();
+  });
+
+  it("calls onUnlinkIdentity(kind, id) for the clicked row", async () => {
+    const onUnlinkIdentity = vi.fn(async () => undefined);
+    render(
+      <ProfilePage
+        person={PERSON}
+        onSignOut={() => undefined}
+        linkedIdentities={LINKED}
+        onUnlinkIdentity={onUnlinkIdentity}
+      />,
+    );
+    fireEvent.click(screen.getByTestId("profile-unlink-oid_1"));
+    expect(onUnlinkIdentity).toHaveBeenCalledWith("oidc", "oid_1");
+  });
+
+  it("surfaces the last-sign-in-method guard message next to the row", async () => {
+    const onUnlinkIdentity = vi.fn(async () => {
+      throw new Error(
+        "This is your only way to sign in. Link another method before removing it.",
+      );
+    });
+    render(
+      <ProfilePage
+        person={PERSON}
+        onSignOut={() => undefined}
+        linkedIdentities={[LINKED[0]]}
+        onUnlinkIdentity={onUnlinkIdentity}
+      />,
+    );
+    fireEvent.click(screen.getByTestId("profile-unlink-wid_1"));
+    const err = await screen.findByTestId("profile-unlink-error-wid_1");
+    expect(err).toHaveTextContent("only way to sign in");
+  });
+});
+
+describe("<ProfilePage> merge-confirm dialog (PRD FR-U2)", () => {
+  const person = WALLET_PERSON;
+
+  it("opens the dialog on merge_required and re-links with consent on confirm", async () => {
+    const onLinkWallet = vi
+      .fn()
+      // First attempt: the wallet belongs to another account.
+      .mockResolvedValueOnce({
+        status: "merge_required",
+        message: "This wallet already belongs to another account.",
+      })
+      // Confirmed attempt (re-signed by the host): the merge completes.
+      .mockResolvedValueOnce({ status: "merged" });
+
+    render(
+      <ProfilePage
+        person={person}
+        onSignOut={() => undefined}
+        linkedIdentities={[]}
+        onLinkWallet={onLinkWallet}
+      />,
+    );
+
+    fireEvent.click(screen.getByTestId("profile-link-wallet"));
+    // The explicit merge-confirm dialog appears with the server's reason.
+    const message = await screen.findByTestId("profile-merge-message");
+    expect(message).toHaveTextContent("already belongs to another account");
+
+    fireEvent.click(screen.getByTestId("profile-merge-confirm"));
+    // Second call carries the FR-U2 consent flag.
+    expect(onLinkWallet).toHaveBeenLastCalledWith({ confirmMerge: true });
+
+    // Dialog closes on a successful merge.
+    await waitFor(() =>
+      expect(screen.queryByTestId("profile-merge-message")).toBeNull(),
+    );
+    expect(onLinkWallet).toHaveBeenCalledTimes(2);
+  });
+
+  it("cancel closes the dialog without merging", async () => {
+    const onLinkWallet = vi
+      .fn()
+      .mockResolvedValueOnce({ status: "merge_required" });
+    render(
+      <ProfilePage
+        person={person}
+        onSignOut={() => undefined}
+        linkedIdentities={[]}
+        onLinkWallet={onLinkWallet}
+      />,
+    );
+    fireEvent.click(screen.getByTestId("profile-link-wallet"));
+    await screen.findByTestId("profile-merge-message");
+    fireEvent.click(screen.getByTestId("profile-merge-cancel"));
+    await waitFor(() =>
+      expect(screen.queryByTestId("profile-merge-message")).toBeNull(),
+    );
+    // Only the initial attempt ran — no merge without consent.
+    expect(onLinkWallet).toHaveBeenCalledTimes(1);
+  });
+
+  it("shows an inline error when a plain link fails", async () => {
+    const onLinkWallet = vi
+      .fn()
+      .mockResolvedValueOnce({ status: "error", message: "chain not allowed" });
+    render(
+      <ProfilePage
+        person={person}
+        onSignOut={() => undefined}
+        linkedIdentities={[]}
+        onLinkWallet={onLinkWallet}
+      />,
+    );
+    fireEvent.click(screen.getByTestId("profile-link-wallet"));
+    const err = await screen.findByTestId("profile-link-error");
+    expect(err).toHaveTextContent("chain not allowed");
+    expect(screen.queryByTestId("profile-merge-message")).toBeNull();
   });
 });
