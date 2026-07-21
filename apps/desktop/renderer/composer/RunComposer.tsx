@@ -4,15 +4,18 @@ import {
   useMemo,
   useRef,
   useState,
+  type CSSProperties,
   type ReactElement,
 } from "react";
 
 import {
   AssistantComposer,
   ComposerConnectorsButton,
+  parseTransportError,
   useTransport,
   type AssistantComposerPlusMenuSlotArgs,
   type CompleteAttachment,
+  type StartRunError,
 } from "@0x-copilot/chat-surface";
 import type { McpServer, Skill } from "@0x-copilot/api-types";
 
@@ -101,6 +104,14 @@ export function RunComposer(props: RunComposerProps): ReactElement {
   } = props;
 
   const transport = useTransport();
+
+  // The last run-create failure, surfaced inline above the composer. Without
+  // this the in-chat composer's `POST /v1/agent/runs` rejection was SWALLOWED
+  // (AssistantComposer's `onSubmit` promise is never `.catch`ed), so a keyless
+  // send was a silent dead end. Structured (safe_message / code) so a missing
+  // provider key shows an actionable "Add a provider key" CTA (onboarding), not
+  // nothing. Cleared on the next successful send or an explicit dismiss.
+  const [startError, setStartError] = useState<StartRunError | null>(null);
 
   // --- Skills (drive `/`-menu + skill pills) ---
   const [skills, setSkills] = useState<readonly Skill[]>([]);
@@ -413,50 +424,196 @@ export function RunComposer(props: RunComposerProps): ReactElement {
       if (atts.length > 0) {
         body.attachments = atts.map(toRunAttachment);
       }
-      await transport.request({
-        method: "POST",
-        path: "/v1/agent/runs",
-        body,
-      });
+      try {
+        await transport.request({
+          method: "POST",
+          path: "/v1/agent/runs",
+          body,
+        });
+        // A prior failure is resolved — clear the notice so it can't linger.
+        setStartError(null);
+      } catch (err: unknown) {
+        // Never swallow, and never dump the raw transport/IPC envelope: parse
+        // out the actionable `safe_message` + `code` so a missing provider key
+        // surfaces the one useful line + an "Add a provider key" CTA instead of
+        // a silent dead end (matches the empty-state composer, Issue 2).
+        const parsed = parseTransportError(err);
+        setStartError({
+          message:
+            parsed.safeMessage ??
+            "Couldn't start the run. Is the backend running and a model configured?",
+          code: parsed.code,
+          correlationId: parsed.correlationId,
+          raw: parsed.raw !== "" ? parsed.raw : undefined,
+        });
+      }
     },
     [conversationId, disabled, models, selectedModel, transport],
   );
 
   return (
-    <AssistantComposer
-      connectors={{ servers: [...servers], loading: serversLoading }}
-      skills={{ skills: [...skills], loading: skillsLoading }}
-      attachmentAdapter={attachmentAdapter}
-      filePicker={filePicker}
-      renderPlusMenu={renderPlusMenu}
-      skillInstructionPrompt={skillInstructionPrompt}
-      mcpServerInstructionPrompt={mcpServerInstructionPrompt}
-      onOpenMcpSettings={() => onShowConnectors?.()}
-      onOpenSkillsSettings={() => onOpenSkillsSettings?.()}
-      onShowConnectors={() => onShowConnectors?.()}
-      selectedSkills={selectedSkills}
-      onAttachSkill={handleAttachSkill}
-      onRemoveSkill={handleRemoveSkill}
-      onClearSkills={handleClearSkills}
-      connectorsTrigger={connectorsTrigger}
-      models={models}
-      selectedModel={selectedModel}
-      onModelChange={handleModelChange}
-      onAddCustomModel={handleAddCustomModel}
-      // The Fast/Balanced/Deep depth grid is intentionally hidden — the picker
-      // is a model list (Cursor/Claude shape), not a depth toggle.
-      depthVisible={false}
-      // Compact v3 "quiet" composer for the narrow Run rail — start at 2 rows
-      // instead of web's roomy 3 (paired with composer.css's auto-height shell).
-      minRows={2}
-      onSubmit={handleSubmit}
-      disabled={disabled}
-      onOpenSkillsPanel={() => onOpenSkillsSettings?.()}
-      // Surfaced for the "Set up your model" path; harmless if unused here.
-      onOpenDetailsPanel={onOpenModelSettings ? () => undefined : undefined}
-    />
+    <div data-testid="run-composer" style={runComposerRootStyle}>
+      {/* Onboarding backstop: a keyless (or otherwise failed) run-create used to
+          be swallowed here. Surface it above the composer with an actionable
+          "Add a provider key" CTA that deep-links into Settings → Provider keys
+          (the same path the empty-state composer offers). */}
+      {startError !== null ? (
+        <RunComposerErrorNotice
+          error={startError}
+          onOpenModelSettings={onOpenModelSettings}
+          onDismiss={() => setStartError(null)}
+        />
+      ) : null}
+      <AssistantComposer
+        connectors={{ servers: [...servers], loading: serversLoading }}
+        skills={{ skills: [...skills], loading: skillsLoading }}
+        attachmentAdapter={attachmentAdapter}
+        filePicker={filePicker}
+        renderPlusMenu={renderPlusMenu}
+        skillInstructionPrompt={skillInstructionPrompt}
+        mcpServerInstructionPrompt={mcpServerInstructionPrompt}
+        onOpenMcpSettings={() => onShowConnectors?.()}
+        onOpenSkillsSettings={() => onOpenSkillsSettings?.()}
+        onShowConnectors={() => onShowConnectors?.()}
+        selectedSkills={selectedSkills}
+        onAttachSkill={handleAttachSkill}
+        onRemoveSkill={handleRemoveSkill}
+        onClearSkills={handleClearSkills}
+        connectorsTrigger={connectorsTrigger}
+        models={models}
+        selectedModel={selectedModel}
+        onModelChange={handleModelChange}
+        onAddCustomModel={handleAddCustomModel}
+        // The Fast/Balanced/Deep depth grid is intentionally hidden — the picker
+        // is a model list (Cursor/Claude shape), not a depth toggle.
+        depthVisible={false}
+        // Compact v3 "quiet" composer for the narrow Run rail — start at 2 rows
+        // instead of web's roomy 3 (paired with composer.css's auto-height shell).
+        minRows={2}
+        onSubmit={handleSubmit}
+        disabled={disabled}
+        onOpenSkillsPanel={() => onOpenSkillsSettings?.()}
+        // Surfaced for the "Set up your model" path; harmless if unused here.
+        onOpenDetailsPanel={onOpenModelSettings ? () => undefined : undefined}
+      />
+    </div>
   );
 }
+
+// ---------------------------------------------------------------------------
+// Inline run-create error notice (onboarding backstop).
+//
+// The empty-state composer (RunEmptyState) already surfaces a start failure
+// with an "Add a provider key" CTA; the in-chat composer had no equivalent, so
+// a keyless send here was a silent dead end. This mirrors that treatment: the
+// actionable `safe_message` as the primary line, plus the config-error CTA that
+// routes into Settings → Provider keys. Presentation only — the host owns the
+// navigation via `onOpenModelSettings`.
+// ---------------------------------------------------------------------------
+
+interface RunComposerErrorNoticeProps {
+  readonly error: StartRunError;
+  /** Open Settings → Provider keys. When absent the CTA is hidden. */
+  readonly onOpenModelSettings?: () => void;
+  readonly onDismiss: () => void;
+}
+
+function RunComposerErrorNotice({
+  error,
+  onOpenModelSettings,
+  onDismiss,
+}: RunComposerErrorNoticeProps): ReactElement {
+  const isConfigError = error.code === "configuration_error";
+  return (
+    <div role="alert" data-testid="run-composer-error" style={noticeStyle}>
+      <div style={noticeRowStyle}>
+        <span
+          data-testid="run-composer-error-message"
+          style={noticeMessageStyle}
+        >
+          {error.message}
+        </span>
+        <button
+          type="button"
+          aria-label="Dismiss"
+          data-testid="run-composer-error-dismiss"
+          onClick={onDismiss}
+          style={noticeDismissStyle}
+        >
+          ×
+        </button>
+      </div>
+      {isConfigError && onOpenModelSettings !== undefined ? (
+        <button
+          type="button"
+          data-testid="run-composer-error-cta"
+          onClick={onOpenModelSettings}
+          style={noticeCtaStyle}
+        >
+          Add a provider key
+        </button>
+      ) : null}
+    </div>
+  );
+}
+
+const runComposerRootStyle: CSSProperties = {
+  display: "flex",
+  flexDirection: "column",
+  gap: 8,
+  minWidth: 0,
+};
+
+const noticeStyle: CSSProperties = {
+  display: "flex",
+  flexDirection: "column",
+  alignItems: "flex-start",
+  gap: 8,
+  padding: "8px 12px",
+  borderRadius: 10,
+  background: "var(--color-danger-soft, rgba(229,103,138,.12))",
+  border: "1px solid var(--color-danger, #e5678a)",
+};
+
+const noticeRowStyle: CSSProperties = {
+  display: "flex",
+  alignItems: "flex-start",
+  justifyContent: "space-between",
+  gap: 8,
+  width: "100%",
+};
+
+const noticeMessageStyle: CSSProperties = {
+  minWidth: 0,
+  fontSize: "var(--font-size-xs, 12px)",
+  lineHeight: 1.45,
+  color: "var(--color-danger, #e5678a)",
+};
+
+const noticeDismissStyle: CSSProperties = {
+  flexShrink: 0,
+  background: "transparent",
+  border: "none",
+  color: "var(--color-text-subtle, #7e7e84)",
+  fontSize: "var(--font-size-sm, 13px)",
+  lineHeight: 1,
+  cursor: "pointer",
+  fontFamily: "inherit",
+  padding: 0,
+};
+
+const noticeCtaStyle: CSSProperties = {
+  alignSelf: "flex-start",
+  background: "var(--color-accent, #5fb2ec)",
+  color: "var(--color-accent-contrast, #08131d)",
+  border: "1px solid var(--color-accent, #5fb2ec)",
+  borderRadius: 8,
+  padding: "6px 14px",
+  fontSize: "var(--font-size-xs, 12px)",
+  fontWeight: 600,
+  cursor: "pointer",
+  fontFamily: "inherit",
+};
 
 // --- Run-create wire mappers (CompleteAttachment → RunAttachmentRequest) ---
 
