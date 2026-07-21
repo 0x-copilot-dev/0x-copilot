@@ -22,6 +22,35 @@ function renderSurface(
   );
 }
 
+describe("SettingsSurface — PRD-E nav header + icons", () => {
+  it("renders the nav header with a profile-derived hint", () => {
+    renderSurface();
+    const tablist = screen.getByRole("tablist", { name: "Settings sections" });
+    expect(within(tablist).getByText("Settings")).toBeInTheDocument();
+    expect(within(tablist).getByText("Solo desktop")).toBeInTheDocument();
+  });
+
+  it("shows a team hint under the team profile", () => {
+    renderSurface({}, "team");
+    const tablist = screen.getByRole("tablist", { name: "Settings sections" });
+    expect(within(tablist).getByText("Team workspace")).toBeInTheDocument();
+  });
+
+  it("renders a nav icon per item when renderNavIcon is supplied", () => {
+    renderSurface({
+      renderNavIcon: (icon) => (
+        <span data-testid="nav-icon" data-icon={icon}>
+          i
+        </span>
+      ),
+    });
+    // Profile items (Profile / Appearance / Shortcuts / Provider keys / …) each
+    // get an icon; without renderNavIcon (the historic desktop mount) there were
+    // none.
+    expect(screen.getAllByTestId("nav-icon").length).toBeGreaterThan(3);
+  });
+});
+
 describe("SettingsSurface — shell & layout (FR-5.1 / FR-5.2 / FR-5.6)", () => {
   it("renders a labelled full-height Settings region (topbar-suppressed surface)", () => {
     renderSurface();

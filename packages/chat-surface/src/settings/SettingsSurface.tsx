@@ -152,8 +152,23 @@ const navStyle: CSSProperties = {
   gap: "var(--space-md)",
   padding: "var(--space-lg) var(--space-md)",
   borderRight: "1px solid var(--color-border)",
-  backgroundColor: "var(--color-surface)",
+  // Design .set-nav sits on --ink2 (= --color-bg-elevated), a step below the
+  // content surface (PRD-E) — was --color-surface (too light).
+  backgroundColor: "var(--color-bg-elevated)",
   overflowY: "auto",
+};
+
+// Nav header — design .set-nav__title + .set-nav__hint (PRD-E).
+const navTitleStyle: CSSProperties = {
+  fontSize: "var(--font-size-sm)",
+  fontWeight: "var(--font-weight-semibold)",
+  color: "var(--color-text)",
+  padding: "0 8px 2px",
+};
+const navHintStyle: CSSProperties = {
+  fontSize: "var(--font-size-2xs)",
+  color: "var(--color-text-subtle)",
+  padding: "0 8px",
 };
 
 const navGroupStyle: CSSProperties = {
@@ -373,6 +388,12 @@ export function SettingsSurface({
           onKeyDown={handleNavKeyDown}
           style={navStyle}
         >
+          <div aria-hidden="true">
+            <div style={navTitleStyle}>Settings</div>
+            <div style={navHintStyle}>
+              {profile === "team" ? "Team workspace" : "Solo desktop"}
+            </div>
+          </div>
           {groups.map((group) => {
             const expanded = isGroupExpanded(group);
             const groupItemsId = `${reactId}-group-${group.id}`;

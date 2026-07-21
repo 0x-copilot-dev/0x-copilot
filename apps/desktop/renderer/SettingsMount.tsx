@@ -32,6 +32,7 @@ import {
   AppLockPage,
   AppearancePage,
   DeveloperTokensPage,
+  Icon,
   LocalModelsPage,
   ModelsPage,
   ModelBehaviorPage,
@@ -663,6 +664,9 @@ export function SettingsMount({
       activeSlug={activeSection}
       onNavigate={onSectionChange}
       renderSection={renderSection}
+      // PRD-E: feed the shared Icon set so every nav item shows its design glyph
+      // (14×14, stroke 1.7). SettingsNavIcon is a subset of IconName.
+      renderNavIcon={(icon) => <Icon name={icon} size={14} />}
     />
   );
 }
