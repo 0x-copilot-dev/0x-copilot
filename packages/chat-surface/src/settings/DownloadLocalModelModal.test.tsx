@@ -178,6 +178,94 @@ describe("<DownloadLocalModelModal>", () => {
     act(() => captured!.onError(new Error("socket closed")));
     expect(screen.getByRole("alert")).toHaveTextContent(/interrupted/i);
   });
+
+  // --- Free-text "custom model" advanced path (legacy web parity) ----------
+
+  it("offers a custom free-text repo/quant affordance", () => {
+    renderModal();
+    expect(screen.getByTestId("download-custom")).toBeInTheDocument();
+    expect(screen.getByTestId("download-custom-repo")).toBeInTheDocument();
+    expect(screen.getByTestId("download-custom-quant")).toBeInTheDocument();
+  });
+
+  it("custom download starts the pull with the typed repo and quant", () => {
+    renderModal();
+    fireEvent.change(screen.getByTestId("download-custom-repo"), {
+      target: { value: "vendor/My-Model-GGUF" },
+    });
+    fireEvent.change(screen.getByTestId("download-custom-quant"), {
+      target: { value: "Q5_K_M" },
+    });
+    fireEvent.click(screen.getByTestId("download-custom-submit"));
+    expect(startPull).toHaveBeenCalledWith(
+      { repo: "vendor/My-Model-GGUF", quant: "Q5_K_M" },
+      expect.anything(),
+    );
+    expect(screen.getByRole("progressbar")).toBeInTheDocument();
+  });
+
+  it("custom download defaults the quant when left blank", () => {
+    renderModal();
+    fireEvent.change(screen.getByTestId("download-custom-repo"), {
+      target: { value: "vendor/My-Model-GGUF" },
+    });
+    fireEvent.change(screen.getByTestId("download-custom-quant"), {
+      target: { value: "  " },
+    });
+    fireEvent.click(screen.getByTestId("download-custom-submit"));
+    expect(startPull).toHaveBeenCalledWith(
+      { repo: "vendor/My-Model-GGUF", quant: "Q4_K_M" },
+      expect.anything(),
+    );
+  });
+
+  it("custom path probes size first when resolveSize is wired, then pulls", async () => {
+    const resolveSize = vi.fn().mockResolvedValue(1_234_000_000);
+    renderModal({ resolveSize });
+    fireEvent.change(screen.getByTestId("download-custom-repo"), {
+      target: { value: "vendor/My-Model-GGUF" },
+    });
+    fireEvent.click(screen.getByTestId("download-custom-submit"));
+    expect(resolveSize).toHaveBeenCalledWith({
+      repo: "vendor/My-Model-GGUF",
+      quant: "Q4_K_M",
+    });
+    // startPull only fires after the size probe resolves.
+    await act(async () => {
+      await Promise.resolve();
+    });
+    expect(startPull).toHaveBeenCalledWith(
+      { repo: "vendor/My-Model-GGUF", quant: "Q4_K_M" },
+      expect.anything(),
+    );
+  });
+
+  it("a failing size probe surfaces an error before streaming (never calls startPull)", async () => {
+    const resolveSize = vi.fn().mockRejectedValue(new Error("Model not found"));
+    renderModal({ resolveSize });
+    fireEvent.change(screen.getByTestId("download-custom-repo"), {
+      target: { value: "vendor/Missing-GGUF" },
+    });
+    fireEvent.click(screen.getByTestId("download-custom-submit"));
+    await act(async () => {
+      await Promise.resolve();
+    });
+    expect(startPull).not.toHaveBeenCalled();
+    expect(screen.getByRole("alert")).toHaveTextContent(/Model not found/);
+  });
+
+  it("catalog picks skip the size probe (they already carry sizeBytes)", () => {
+    const resolveSize = vi.fn().mockResolvedValue(1);
+    renderModal({ resolveSize });
+    pickFirst();
+    expect(resolveSize).not.toHaveBeenCalled();
+    expect(startPull).toHaveBeenCalledTimes(1);
+  });
+
+  it("hides the custom affordance when allowCustomModel is false", () => {
+    renderModal({ allowCustomModel: false });
+    expect(screen.queryByTestId("download-custom")).toBeNull();
+  });
 });
 
 function progressFrame(bytesCompleted: number): LocalModelPullEvent {

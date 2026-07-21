@@ -151,6 +151,16 @@ export {
   humanStatus,
   placementLabel,
 } from "./localModelsFormat";
+// Local-models data seam: the Transport-backed port (status/list/size/remove/
+// pull) + the curated "pick from available" catalog. Mirrors the providerKeys
+// port pattern; both hosts wire `createLocalModelsPort(transport)`.
+export {
+  createLocalModelsPort,
+  LOCAL_MODEL_CATALOG,
+  LOCAL_MODEL_PULL_EVENT,
+  DEFAULT_LOCAL_MODEL_QUANT,
+  type LocalModelsPort,
+} from "./data/localModels";
 // === end Phase 5 (PR-5.5) ===
 // === Phase 5 (PR-5.4) — Provider keys (BYOK) + Add-key flow ===
 // The page depends on an injected `ProviderKeysPort` (default:

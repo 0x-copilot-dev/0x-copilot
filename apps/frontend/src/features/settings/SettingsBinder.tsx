@@ -24,7 +24,11 @@
 //                                                            tokens; same concept)
 //   provider-keys           → provider-keys                 (chat-surface
 //                                                            `ProviderKeysPage`)
-//   local-models            → local-models                  (web `LocalModels`)
+//   local-models            → local-models                  (chat-surface
+//                                                            `LocalModelsPage` —
+//                                                            converged; the
+//                                                            legacy web section
+//                                                            was retired)
 //   model-and-behavior      → model-behavior                (web `ModelAndBehavior`)
 //   privacy-data            → privacy                        (web `PrivacyAndData`)
 //   notifications           → notifications                 (web `Notifications`)
@@ -48,20 +52,34 @@
 
 import {
   Icon,
+  LOCAL_MODEL_CATALOG,
+  LocalModelsPage,
   ProviderKeysPage,
   SettingsSurface,
+  createLocalModelsPort,
   createProviderKeysPort,
   type SettingsSectionSlug,
 } from "@0x-copilot/chat-surface";
 import type { Transport } from "@0x-copilot/chat-transport";
-import { useMemo, type ReactElement, type ReactNode } from "react";
+import type {
+  LocalModelSummary,
+  LocalModelsStatus,
+} from "@0x-copilot/api-types";
+import {
+  useCallback,
+  useEffect,
+  useMemo,
+  useState,
+  type ReactElement,
+  type ReactNode,
+} from "react";
 
 import type { RequestIdentity } from "../../api/config";
 import type { UserProfileState } from "../me/useUserProfile";
 import type { SettingsSection } from "./SettingsScreen";
+import { errorMessage } from "../../utils/errors";
 import { Appearance } from "./sections/Appearance";
 import { ApiKeys } from "./sections/ApiKeys";
-import { LocalModels } from "./sections/LocalModels";
 import { ModelAndBehavior } from "./sections/ModelAndBehavior";
 import { Notifications } from "./sections/Notifications";
 import { PrivacyAndData } from "./sections/PrivacyAndData";
@@ -165,7 +183,49 @@ export function SettingsBinder({
     () => createProviderKeysPort(transport),
     [transport],
   );
+  const localModelsPort = useMemo(
+    () => createLocalModelsPort(transport),
+    [transport],
+  );
   const workspaceDefaults = useWorkspaceDefaults(identity);
+
+  // Local models (Ollama) — real wiring through the shared chat-surface port.
+  // `status` always answers; when Ollama isn't running the page shows its setup
+  // steps. Behaviourally identical to the desktop `SettingsMount`.
+  const [localModelsStatus, setLocalModelsStatus] =
+    useState<LocalModelsStatus | null>(null);
+  const [localModels, setLocalModels] = useState<readonly LocalModelSummary[]>(
+    [],
+  );
+  const [localModelsError, setLocalModelsError] = useState<string | null>(null);
+
+  const refreshLocalModelsList = useCallback(() => {
+    localModelsPort
+      .list()
+      .then(setLocalModels)
+      .catch((err: unknown) =>
+        setLocalModelsError(errorMessage(err, "Could not list local models.")),
+      );
+  }, [localModelsPort]);
+
+  const recheckLocalModels = useCallback(() => {
+    setLocalModelsError(null);
+    localModelsPort
+      .status()
+      .then((next) => {
+        setLocalModelsStatus(next);
+        if (next.ollama_running) refreshLocalModelsList();
+      })
+      .catch((err: unknown) =>
+        setLocalModelsError(
+          errorMessage(err, "Could not reach the local runtime."),
+        ),
+      );
+  }, [localModelsPort, refreshLocalModelsList]);
+
+  useEffect(() => {
+    recheckLocalModels();
+  }, [recheckLocalModels]);
 
   // FR-F.5 (host-merge variant): the connected provider-keys row shows its
   // default model after reload by seeding `modelChips` from the workspace
@@ -205,7 +265,37 @@ export function SettingsBinder({
           />
         );
       case "local-models":
-        return <LocalModels />;
+        // defaultLocalModelName stays null: default-local persistence is a
+        // separate slice (needs a backend field), so `onSetDefault` is omitted
+        // rather than faking success. Free-text repo/quant download is preserved
+        // via the modal's custom path (`resolveSize` wired to the port).
+        return (
+          <LocalModelsPage
+            status={localModelsStatus}
+            models={localModels}
+            availableModels={LOCAL_MODEL_CATALOG}
+            defaultLocalModelName={null}
+            loadError={localModelsError}
+            onRecheck={recheckLocalModels}
+            onDownloaded={() => refreshLocalModelsList()}
+            startPull={(request, handlers) =>
+              localModelsPort.pull(request.repo, request.quant, handlers)
+            }
+            resolveSize={(request) =>
+              localModelsPort
+                .size(request.repo, request.quant)
+                .then((size) => size.size_bytes)
+            }
+            onDelete={(name) => {
+              void localModelsPort
+                .remove(name)
+                .then(() => refreshLocalModelsList())
+                .catch((err: unknown) =>
+                  toast(errorMessage(err, "Could not remove the model.")),
+                );
+            }}
+          />
+        );
       case "model-behavior":
         return <ModelAndBehavior workspaceDefaults={workspaceDefaults} />;
       // "models" (curation) — no web body yet; the surface renders its
