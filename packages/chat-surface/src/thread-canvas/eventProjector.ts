@@ -28,8 +28,16 @@
 //    Approvals from the runtime event payload using the local stub.
 //    TODO(merge): when P1-A ships, swap `_approvals-stub` import to
 //    `@0x-copilot/api-types`.
+// 5. **Surface-spec merge (PRD-04 / D4)**. Surfaces stream in via the
+//    `payload.surface` envelope (`{surface_uri, archetype, state:{spec?,data}}`)
+//    on `tool_result` / `draft_updated`; a spec may arrive LATER via
+//    `surface_spec_generated` and is merged into `surfaceState[uri].spec` by
+//    URI. The merge only ever writes the `spec` key, so a late spec never
+//    clobbers newer `data`. `surfaceTabs` is a pure derivation over the same
+//    single pass — NOT a second subscription. Legacy flat payloads
+//    (`payload.surface_uri` + `payload.state`) are still accepted unchanged.
 
-import type { RuntimeEventEnvelope } from "@0x-copilot/api-types";
+import type { RuntimeEventEnvelope, SurfaceSpec } from "@0x-copilot/api-types";
 
 // TODO(merge): replace import from "./_approvals-stub" with "@0x-copilot/api-types"
 import type { Approval, ApprovalState } from "./_approvals-stub";
@@ -49,8 +57,34 @@ export interface ProjectedState {
   readonly approvals: ReadonlyMap<string, Approval>;
   /** Per-surface latest state — surface-mount reads `surfaceState[uri]`. */
   readonly surfaceState: ReadonlyMap<string, SurfacePayload>;
+  /**
+   * Surface-tab strip data, ordered by last mutation (`lastSeq` desc) — the
+   * cockpit tab strip binds to this. Pure derivation over the single pass; one
+   * entry per surface URI (same-URI updates never duplicate). `archetype` is
+   * best-effort from the surface envelope / spec; `title` best-effort from the
+   * spec's `title_path` resolved against `data`, falling back to the URI tail.
+   */
+  readonly surfaceTabs: readonly SurfaceTab[];
   /** Highest `sequence_no` we've seen — useful for time-travel cursor. */
   readonly lastSequenceNo: number;
+}
+
+/**
+ * One surface-tab descriptor. `lastSeq` is the highest `sequence_no` of any
+ * event that mutated this surface (its data, spec, or spec-generation), which
+ * is what the strip orders by (newest first).
+ */
+export interface SurfaceTab {
+  readonly uri: string;
+  readonly archetype?: string;
+  readonly title?: string;
+  readonly lastSeq: number;
+}
+
+/** Per-URI derivation metadata tracked alongside `surfaceState`. */
+interface SurfaceMeta {
+  readonly archetype?: string;
+  readonly lastSeq: number;
 }
 
 /** One row in the right-rail Activity tab + the in-chat Activity entries. */
@@ -112,12 +146,15 @@ export interface ChatEntry {
  */
 export type SurfacePayload = Record<string, unknown>;
 
+const EMPTY_SURFACE_TABS: readonly SurfaceTab[] = [];
+
 const EMPTY_STATE: ProjectedState = {
   activity: [],
   beads: [],
   chat: [],
   approvals: new Map(),
   surfaceState: new Map(),
+  surfaceTabs: EMPTY_SURFACE_TABS,
   lastSequenceNo: -1,
 };
 
@@ -142,6 +179,7 @@ export function project(
   const chat: ChatEntry[] = [];
   const approvals = new Map<string, Approval>();
   const surfaceState = new Map<string, SurfacePayload>();
+  const surfaceMeta = new Map<string, SurfaceMeta>();
   let lastSequenceNo = -1;
 
   for (const event of events) {
@@ -152,7 +190,14 @@ export function project(
     if (event.sequence_no > lastSequenceNo) {
       lastSequenceNo = event.sequence_no;
     }
-    reduceEvent(event, { activity, beads, chat, approvals, surfaceState });
+    reduceEvent(event, {
+      activity,
+      beads,
+      chat,
+      approvals,
+      surfaceState,
+      surfaceMeta,
+    });
   }
 
   return {
@@ -161,6 +206,7 @@ export function project(
     chat,
     approvals,
     surfaceState,
+    surfaceTabs: buildSurfaceTabs(surfaceState, surfaceMeta),
     lastSequenceNo,
   };
 }
@@ -184,6 +230,7 @@ export function projectAt(
   const chat: ChatEntry[] = [];
   const approvals = new Map<string, Approval>();
   const surfaceState = new Map<string, SurfacePayload>();
+  const surfaceMeta = new Map<string, SurfaceMeta>();
   let lastSequenceNo = -1;
 
   for (const event of events) {
@@ -197,7 +244,14 @@ export function projectAt(
     if (event.sequence_no > lastSequenceNo) {
       lastSequenceNo = event.sequence_no;
     }
-    reduceEvent(event, { activity, beads, chat, approvals, surfaceState });
+    reduceEvent(event, {
+      activity,
+      beads,
+      chat,
+      approvals,
+      surfaceState,
+      surfaceMeta,
+    });
   }
 
   return {
@@ -206,8 +260,36 @@ export function projectAt(
     chat,
     approvals,
     surfaceState,
+    surfaceTabs: buildSurfaceTabs(surfaceState, surfaceMeta),
     lastSequenceNo,
   };
+}
+
+/**
+ * Pure selector: surface-tab strip for the cockpit, derived off the SAME
+ * canonical `RuntimeEventEnvelope[]` the single projection reads (FR-3.3). It
+ * is a focused surface-only pass — NOT a second `project()` / SSE subscription —
+ * mirroring `projectSubagents` / `projectApprovals`. `RunDestination` memoizes
+ * it against `session.events`; the ordering + shape match `project().surfaceTabs`
+ * exactly (both reuse `applySurfaceEvent` + `buildSurfaceTabs`).
+ */
+export function projectSurfaceTabs(
+  events: readonly RuntimeEventEnvelope[],
+): readonly SurfaceTab[] {
+  if (events.length === 0) {
+    return EMPTY_SURFACE_TABS;
+  }
+  const seen = new Set<string>();
+  const surfaceState = new Map<string, SurfacePayload>();
+  const surfaceMeta = new Map<string, SurfaceMeta>();
+  for (const event of events) {
+    if (seen.has(event.event_id)) {
+      continue;
+    }
+    seen.add(event.event_id);
+    applySurfaceEvent(event, surfaceState, surfaceMeta);
+  }
+  return buildSurfaceTabs(surfaceState, surfaceMeta);
 }
 
 /**
@@ -250,6 +332,7 @@ interface MutableState {
   readonly chat: ChatEntry[];
   readonly approvals: Map<string, Approval>;
   readonly surfaceState: Map<string, SurfacePayload>;
+  readonly surfaceMeta: Map<string, SurfaceMeta>;
 }
 
 /**
@@ -328,15 +411,11 @@ function reduceEvent(event: RuntimeEventEnvelope, state: MutableState): void {
     }
   }
 
-  // Surface state — `tool_result` and presentation/draft updates carry
-  // the new surface payload. We merge into the per-uri record.
-  if (surfaceUri !== undefined && isSurfaceMutation(event)) {
-    const merged: SurfacePayload = {
-      ...(state.surfaceState.get(surfaceUri) ?? {}),
-      ...(extractSurfacePayload(event) ?? {}),
-    };
-    state.surfaceState.set(surfaceUri, merged);
-  }
+  // Surface state — `tool_result` / draft / presentation carry the new
+  // surface payload (legacy flat OR the PRD-01 `payload.surface` envelope);
+  // `surface_spec_generated` merges a late spec by URI. Handled in one place so
+  // `project()` and the `projectSurfaceTabs` selector stay byte-identical.
+  applySurfaceEvent(event, state.surfaceState, state.surfaceMeta);
 }
 
 function isVisibleToUser(event: RuntimeEventEnvelope): boolean {
@@ -507,11 +586,13 @@ function nextApprovalState(event: RuntimeEventEnvelope): ApprovalState {
 }
 
 function extractSurfaceUri(event: RuntimeEventEnvelope): string | undefined {
-  const candidate = event.payload?.["surface_uri"];
-  if (typeof candidate === "string") {
-    return candidate;
+  const flat = event.payload?.["surface_uri"];
+  if (typeof flat === "string") {
+    return flat;
   }
-  return undefined;
+  // PRD-01 envelope: the uri rides under `payload.surface.surface_uri`.
+  const nested = readSurfaceEnvelope(event)?.uri;
+  return nested;
 }
 
 function extractSurfacePayload(
@@ -526,6 +607,158 @@ function extractSurfacePayload(
     return result as SurfacePayload;
   }
   return undefined;
+}
+
+// --- Surface projection (PRD-04) ------------------------------------------
+
+/** Read the PRD-01 `payload.surface` envelope, if present (else `undefined`). */
+function readSurfaceEnvelope(
+  event: RuntimeEventEnvelope,
+): { uri?: string; archetype?: string; state?: SurfacePayload } | undefined {
+  const surface = event.payload?.["surface"];
+  if (!surface || typeof surface !== "object") {
+    return undefined;
+  }
+  const record = surface as Record<string, unknown>;
+  const uri = record["surface_uri"];
+  const archetype = record["archetype"];
+  const state = record["state"];
+  return {
+    uri: typeof uri === "string" ? uri : undefined,
+    archetype: typeof archetype === "string" ? archetype : undefined,
+    state:
+      state && typeof state === "object"
+        ? (state as SurfacePayload)
+        : undefined,
+  };
+}
+
+/**
+ * Apply one event's surface effect into `surfaceState` + `surfaceMeta`.
+ *
+ * - `tool_result` / `draft_updated` / `presentation_updated`: merge the surface
+ *   payload (`{spec?, data}` from the envelope, or a legacy flat state object).
+ * - `surface_spec_generated`: merge ONLY the `spec` key so a late spec upgrades
+ *   the surface in place and never clobbers newer `data` (D4). Replay-idempotent
+ *   because the caller deduplicates by `event_id` and the writes are keyed.
+ */
+function applySurfaceEvent(
+  event: RuntimeEventEnvelope,
+  surfaceState: Map<string, SurfacePayload>,
+  surfaceMeta: Map<string, SurfaceMeta>,
+): void {
+  if (event.event_type === "surface_spec_generated") {
+    const uri = extractSurfaceUri(event);
+    if (uri === undefined) {
+      return;
+    }
+    const spec = event.payload?.["spec"];
+    if (!spec || typeof spec !== "object") {
+      return;
+    }
+    const prior = surfaceState.get(uri) ?? {};
+    // Spec merge only — `data` (if any) is preserved untouched.
+    surfaceState.set(uri, { ...prior, spec });
+    bumpSurfaceMeta(
+      surfaceMeta,
+      uri,
+      event.sequence_no,
+      pickString(event.payload, "archetype") ?? undefined,
+    );
+    return;
+  }
+
+  if (!isSurfaceMutation(event)) {
+    return;
+  }
+  const envelope = readSurfaceEnvelope(event);
+  const uri = envelope?.uri ?? extractSurfaceUri(event);
+  if (uri === undefined) {
+    return;
+  }
+  const incoming = envelope?.state ?? extractSurfacePayload(event);
+  const prior = surfaceState.get(uri) ?? {};
+  surfaceState.set(uri, { ...prior, ...(incoming ?? {}) });
+  bumpSurfaceMeta(surfaceMeta, uri, event.sequence_no, envelope?.archetype);
+}
+
+function bumpSurfaceMeta(
+  meta: Map<string, SurfaceMeta>,
+  uri: string,
+  sequenceNo: number,
+  archetype: string | undefined,
+): void {
+  const prior = meta.get(uri);
+  meta.set(uri, {
+    lastSeq:
+      prior === undefined ? sequenceNo : Math.max(prior.lastSeq, sequenceNo),
+    archetype: archetype ?? prior?.archetype,
+  });
+}
+
+/** Build the ordered surface-tab strip from the per-URI state + metadata. */
+function buildSurfaceTabs(
+  surfaceState: ReadonlyMap<string, SurfacePayload>,
+  surfaceMeta: ReadonlyMap<string, SurfaceMeta>,
+): readonly SurfaceTab[] {
+  if (surfaceState.size === 0) {
+    return EMPTY_SURFACE_TABS;
+  }
+  const tabs: SurfaceTab[] = [];
+  for (const [uri, payload] of surfaceState) {
+    const meta = surfaceMeta.get(uri);
+    tabs.push({
+      uri,
+      archetype: meta?.archetype,
+      title: surfaceTabTitle(uri, payload),
+      lastSeq: meta?.lastSeq ?? -1,
+    });
+  }
+  // Newest mutation first; ties keep insertion order (ES sort is stable).
+  tabs.sort((a, b) => b.lastSeq - a.lastSeq);
+  return tabs;
+}
+
+/**
+ * Best-effort tab title: resolve the spec's `title_path` against `data`; fall
+ * back to the URI tail. Never throws — this is display-only, over untrusted data.
+ */
+function surfaceTabTitle(uri: string, payload: SurfacePayload): string {
+  const spec = payload["spec"];
+  if (spec && typeof spec === "object") {
+    const titlePath = (spec as Partial<SurfaceSpec>).title_path;
+    if (typeof titlePath === "string" && titlePath !== "") {
+      const resolved = resolvePath(payload["data"], titlePath);
+      if (typeof resolved === "string" && resolved.trim() !== "") {
+        return resolved;
+      }
+      if (typeof resolved === "number" && Number.isFinite(resolved)) {
+        return String(resolved);
+      }
+    }
+  }
+  return uriTail(uri);
+}
+
+/** Resolve a dot-path (`a.b.0.c`) against a value. Identifiers + indices only. */
+function resolvePath(data: unknown, path: string): unknown {
+  let cursor: unknown = data;
+  for (const segment of path.split(".")) {
+    if (cursor === null || typeof cursor !== "object") {
+      return undefined;
+    }
+    cursor = (cursor as Record<string, unknown>)[segment];
+  }
+  return cursor;
+}
+
+/** `record://seed/get_issue/42` → `seed/get_issue/42`; degrades to the raw uri. */
+function uriTail(uri: string): string {
+  const sep = uri.indexOf("://");
+  if (sep < 0) {
+    return uri;
+  }
+  return uri.slice(sep + 3) || uri;
 }
 
 function schemeOf(uri: string): string {

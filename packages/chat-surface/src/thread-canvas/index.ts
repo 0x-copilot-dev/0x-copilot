@@ -3,7 +3,11 @@ export {
   type InlineDiffState,
   type TcInlineDiffProps,
 } from "./TcInlineDiff";
-export { TcSurfaceMount, type TcSurfaceMountProps } from "./TcSurfaceMount";
+export {
+  TcSurfaceMount,
+  type TcSurfaceMountProps,
+  type PendingDiffHandle,
+} from "./TcSurfaceMount";
 
 // === Phase 2-B thread-canvas ===
 export {
@@ -29,6 +33,12 @@ export {
   type TimelineConsumer,
 } from "./useEventProjector";
 // === end Phase 1 P1-B2 ===
+
+// === PRD-04 (genui) surface-tab selector ===
+// Pure selector over the single canonical run stream — surface-tab strip data
+// for the Run cockpit. No second subscription / projector (FR-3.3).
+export { projectSurfaceTabs, type SurfaceTab } from "./eventProjector";
+// === end PRD-04 (genui) ===
 
 // === Phase 2-C swimlanes ===
 export {
