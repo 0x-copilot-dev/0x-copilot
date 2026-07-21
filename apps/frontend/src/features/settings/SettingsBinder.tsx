@@ -58,6 +58,7 @@ import {
   SettingsSurface,
   createLocalModelsPort,
   createProviderKeysPort,
+  localModelInstalledTag,
   type SettingsSectionSlug,
 } from "@0x-copilot/chat-surface";
 import type { Transport } from "@0x-copilot/chat-transport";
@@ -239,6 +240,47 @@ export function SettingsBinder({
     return { [providerKey]: dm.model_name };
   }, [workspaceDefaults.defaults]);
 
+  // --- Local models: default-local persistence (C2) -----------------------
+  // The "default local" chip + "Set default" round-trip is backed by the SAME
+  // workspace-defaults contract as the default cloud model: `save()` does a
+  // read-merge-write (full-document replace) that stores the chosen Ollama tag
+  // in `behavior_overrides.default_local_model` WITHOUT clobbering sibling
+  // fields. `null` = no default → no chip (matches today). Behaviourally
+  // identical to the desktop SettingsMount.
+  const defaultLocalModelName =
+    workspaceDefaults.defaults?.behavior_overrides?.default_local_model ?? null;
+
+  const persistDefaultLocalModel = async (
+    name: string,
+    toast: (message: string) => void,
+  ): Promise<void> => {
+    const current = workspaceDefaults.defaults;
+    if (current === null) {
+      toast("Couldn't set the default — retry once settings finish loading.");
+      return;
+    }
+    try {
+      await workspaceDefaults.save({
+        default_model: current.default_model,
+        default_connectors: current.default_connectors,
+        retention_days: current.retention_days,
+        behavior_overrides: {
+          ...current.behavior_overrides,
+          default_local_model: name,
+        },
+        enabled_models: current.enabled_models,
+      });
+      toast(`Default local model set to ${name}.`);
+    } catch (err) {
+      toast(
+        errorMessage(
+          err,
+          "Saving the default local model failed — retry in a moment.",
+        ),
+      );
+    }
+  };
+
   const activeSlug = WEB_TO_SLUG[section];
 
   const renderSection = (
@@ -265,19 +307,31 @@ export function SettingsBinder({
           />
         );
       case "local-models":
-        // defaultLocalModelName stays null: default-local persistence is a
-        // separate slice (needs a backend field), so `onSetDefault` is omitted
-        // rather than faking success. Free-text repo/quant download is preserved
-        // via the modal's custom path (`resolveSize` wired to the port).
+        // C2: the "default local" chip + "Set default" + download's "use as
+        // default" toggle persist to workspace-defaults
+        // (behavior_overrides.default_local_model) via read-merge-PUT — real
+        // persistence, honest error toast on failure (no fake success).
+        // Behaviourally identical to the desktop SettingsMount (lockstep).
         return (
           <LocalModelsPage
             status={localModelsStatus}
             models={localModels}
             availableModels={LOCAL_MODEL_CATALOG}
-            defaultLocalModelName={null}
+            defaultLocalModelName={defaultLocalModelName}
             loadError={localModelsError}
             onRecheck={recheckLocalModels}
-            onDownloaded={() => refreshLocalModelsList()}
+            onDownloaded={(result) => {
+              if (result.setAsDefault) {
+                void persistDefaultLocalModel(
+                  localModelInstalledTag(result.model.repo, result.model.quant),
+                  toast,
+                );
+              }
+              refreshLocalModelsList();
+            }}
+            onSetDefault={(name) => {
+              void persistDefaultLocalModel(name, toast);
+            }}
             startPull={(request, handlers) =>
               localModelsPort.pull(request.repo, request.quant, handlers)
             }
