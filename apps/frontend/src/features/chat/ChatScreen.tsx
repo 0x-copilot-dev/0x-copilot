@@ -105,9 +105,11 @@ import { CitationsProvider } from "./components/citations/citationsContext";
 import { useArchivedSources } from "../sources/useArchivedSources";
 import { useWorkspacePaneAutoOpenSignal } from "./components/workspace/useWorkspacePaneAutoOpen";
 import {
+  messageFromError,
   scrollChatToCitation,
   scrollChatToEvent,
   useKeyValueStore,
+  useNotify,
 } from "@0x-copilot/chat-surface";
 import {
   readDepth as readDepthKv,
@@ -160,6 +162,14 @@ type SubmitMessageOptions = {
   sourceMessageId?: string | null;
   branchId?: string | null;
   optimisticMessageId?: string;
+  /**
+   * When true, a run-create failure is RE-THROWN (after resetting status)
+   * instead of being surfaced as an in-thread "Message failed" status item.
+   * The composer path sets this so the rejection flows to the composer's
+   * `onSubmitError` channel (a parsed toast) — one surface, not two. Other
+   * callers omit it and keep the in-thread status item.
+   */
+  rethrow?: boolean;
 };
 
 // SSE reconnect backoff. First failure keeps the original ~750ms feel so
@@ -330,6 +340,9 @@ export function ChatScreen({
   // (via setDepthLocal) AND the KV store so the substrate-portable path
   // is always populated.
   const kvStore = useKeyValueStore();
+  // In-app toast surface for failed action mutations (a rejected run-create).
+  // Safe no-op without a NotificationCenterProvider (tests, isolated mounts).
+  const notify = useNotify();
   const depth = depthLocal;
   const setDepth = useCallback(
     (next: ThinkingDepth): void => {
@@ -1043,6 +1056,14 @@ export function ChatScreen({
         );
         void refreshConversations();
       } catch (err) {
+        setStatus("Ready");
+        if (options.rethrow) {
+          // The composer path surfaces failures through the shared
+          // `onSubmitError` channel (a parsed toast) — don't ALSO append an
+          // in-thread "Message failed" status item. Re-throw so the rejection
+          // reaches the composer.
+          throw err;
+        }
         setItems((current) => [
           ...current,
           {
@@ -1052,7 +1073,6 @@ export function ChatScreen({
             text: errorMessage(err, "Could not send message"),
           },
         ]);
-        setStatus("Ready");
       }
     },
     [
@@ -1837,9 +1857,30 @@ export function ChatScreen({
         sourceId: null,
         runConfig: undefined,
       } as unknown as AppendMessage;
-      await submitUserMessage(append);
+      // `rethrow` so a run-create rejection escapes to the composer's
+      // `onSubmitError` channel (surfaced by `onComposerSubmitError` below)
+      // instead of being swallowed into a raw-envelope status item.
+      await submitUserMessage(append, { rethrow: true });
     },
     [submitUserMessage],
+  );
+
+  // The composer error channel: a rejected run-create (missing provider key,
+  // network error) surfaces as a toast with the parsed, actionable message —
+  // no more silent dead end / raw JSON envelope. Mirrors how the desktop
+  // RunComposer surfaces the same failure via `onSubmitError`.
+  const onComposerSubmitError = useCallback(
+    (err: unknown): void => {
+      notify({
+        tone: "error",
+        title: "Couldn't send message",
+        body:
+          messageFromError(err) ??
+          "Could not send message. Is the backend running and a model configured?",
+      });
+      setStatus("Ready");
+    },
+    [notify],
   );
 
   const onAttachComposerSkill = useCallback((skill: Skill): void => {
@@ -2026,6 +2067,7 @@ export function ChatScreen({
                       void onEditSave(sourceMessageId, text)
                     }
                     onSubmit={onComposerSubmit}
+                    onSubmitError={onComposerSubmitError}
                     onCancel={() => void onCancel()}
                     connectors={connectors}
                     skills={skills}
