@@ -1,6 +1,6 @@
 import type { ShellDestinationSlug } from "@0x-copilot/chat-surface";
 
-import type { SettingsSection } from "../features/settings/SettingsScreen";
+import type { SettingsSection } from "../features/settings/settingsSections";
 
 // Web-app route union. Settings + share are web-only concepts; the desktop
 // substrate's editor-area model (ArtifactRoute in @0x-copilot/

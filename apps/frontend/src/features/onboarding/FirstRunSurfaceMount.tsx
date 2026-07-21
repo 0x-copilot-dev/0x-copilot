@@ -182,6 +182,10 @@ export function FirstRunSurfaceMount({
       startLaunch({
         text: payload.text,
         attachments: toReadableRunAttachments(payload.attachments),
+        // Web-search default-on. The FTUE surface owns the Tools-popover `webOn`
+        // toggle; threading it into this web launch is a follow-up (desktop
+        // parity), so send the always-on default here.
+        webSearchEnabled: true,
       });
     },
     [launchPhase, resetLaunch, startLaunch],

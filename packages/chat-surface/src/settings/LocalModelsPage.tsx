@@ -26,7 +26,7 @@ import type {
 } from "@0x-copilot/api-types";
 import { Badge, Button } from "@0x-copilot/design-system";
 
-import { SetCard, SetNote, Krow, SecHead } from "./SettingsChrome";
+import { SetCard, SetNote, Krow, Frow, SecTitle } from "./SettingsChrome";
 import {
   DownloadLocalModelModal,
   type AvailableLocalModel,
@@ -68,10 +68,19 @@ export interface LocalModelsPageProps {
   readonly onSetDefault?: (name: string) => void;
 }
 
+// Section wrapper: the SecTitle heading above, then the sub-cards, stacked
+// (design `.set-sec` — the section title sits above its cards).
+const pageStyle: CSSProperties = {
+  display: "flex",
+  flexDirection: "column",
+  gap: "var(--space-lg)",
+};
+
 const listStyle: CSSProperties = {
   display: "flex",
   flexDirection: "column",
-  gap: "var(--space-sm)",
+  // Flat Krow rows divide with a top hairline — no inter-row gap (design).
+  gap: 0,
   margin: 0,
   padding: 0,
   listStyle: "none",
@@ -119,7 +128,7 @@ export function LocalModelsPage({
   let body: ReactElement;
   if (loadError) {
     body = (
-      <SetCard title="Local models">
+      <SetCard>
         <SetNote tone="danger" role="alert">
           {loadError}
         </SetNote>
@@ -136,7 +145,7 @@ export function LocalModelsPage({
     );
   } else if (status === null) {
     body = (
-      <SetCard title="Local models">
+      <SetCard>
         <p data-testid="local-models-loading">Checking the local runtime…</p>
       </SetCard>
     );
@@ -156,15 +165,12 @@ export function LocalModelsPage({
   }
 
   return (
-    <>
+    <div style={pageStyle} data-testid="local-models-page">
+      <SecTitle
+        title="Local models"
+        description="Run a model entirely on this machine — no key, no network, nothing leaves your box."
+      />
       {body}
-      <SetNote
-        icon={<span aria-hidden="true">🔒</span>}
-        data-testid="local-models-privacy-note"
-      >
-        Powered by your local runtime (Ollama). Inference uses your GPU/CPU —
-        private and offline.
-      </SetNote>
       <DownloadLocalModelModal
         open={downloadOpen}
         onClose={() => setDownloadOpen(false)}
@@ -176,7 +182,7 @@ export function LocalModelsPage({
           onDownloaded(result);
         }}
       />
-    </>
+    </div>
   );
 }
 
@@ -249,23 +255,17 @@ function RunningCard({
   readonly onSetDefault?: (name: string) => void;
 }): ReactElement {
   return (
-    <SetCard
-      title="Local models"
-      meta="Models installed on this machine. Downloaded models appear in the chat model picker."
-      actions={
-        <Button
-          variant="secondary"
-          onClick={onOpenDownload}
-          data-testid="local-models-get-another"
-        >
-          Get another model
-        </Button>
-      }
-    >
-      <SecHead>Installed</SecHead>
+    <SetCard title="Installed" meta={`${models.length} models`}>
+      <SetNote
+        icon={<span aria-hidden="true">🔒</span>}
+        data-testid="local-models-privacy-note"
+      >
+        Powered by your local runtime (Ollama). Inference uses your GPU/CPU —
+        private and offline.
+      </SetNote>
       {models.length === 0 ? (
         <SetNote data-testid="local-models-empty">
-          No local models yet. Download one above.
+          No local models yet. Download one below.
         </SetNote>
       ) : (
         <ul style={listStyle} data-testid="local-models-list">
@@ -282,6 +282,18 @@ function RunningCard({
           ))}
         </ul>
       )}
+      <Frow
+        label="Get another model"
+        hint="Downloaded models appear in the chat model picker."
+      >
+        <Button
+          variant="secondary"
+          onClick={onOpenDownload}
+          data-testid="local-models-get-another"
+        >
+          Download
+        </Button>
+      </Frow>
     </SetCard>
   );
 }

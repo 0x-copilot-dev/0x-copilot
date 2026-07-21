@@ -51,9 +51,10 @@ const segGroupStyle: CSSProperties = {
   alignItems: "center",
   gap: 2,
   padding: 2,
-  borderRadius: "var(--radius-md)",
+  // Design .seg — 7px group radius over the --panel ground.
+  borderRadius: "7px",
   border: "1px solid var(--color-border)",
-  backgroundColor: "var(--color-surface-muted)",
+  backgroundColor: "var(--color-surface)",
 };
 
 function segItemStyle(selected: boolean, disabled: boolean): CSSProperties {
@@ -68,9 +69,10 @@ function segItemStyle(selected: boolean, disabled: boolean): CSSProperties {
       ? "var(--font-weight-semibold)"
       : "var(--font-weight-medium)",
     cursor: disabled ? "not-allowed" : "pointer",
-    backgroundColor: selected ? "var(--color-surface)" : "transparent",
+    // Design: selected pill lifts to --panel3; no accent ring (the fill is the
+    // only affordance).
+    backgroundColor: selected ? "var(--color-surface-elevated)" : "transparent",
     color: selected ? "var(--color-text)" : "var(--color-text-muted)",
-    boxShadow: selected ? "0 0 0 1px var(--color-accent)" : "none",
     opacity: disabled ? 0.5 : 1,
     transition: "background-color var(--duration-fast) var(--ease-standard)",
   };
@@ -333,10 +335,10 @@ export function ProgressBar({
       data-testid="progress-bar"
       style={{
         width: "100%",
-        height: 6,
-        borderRadius: "var(--radius-full)",
-        backgroundColor: "var(--color-surface-muted)",
-        border: "1px solid var(--color-border)",
+        // Design .bar — 4px tall, 2px radius, no border, over --panel3.
+        height: 4,
+        borderRadius: 2,
+        backgroundColor: "var(--color-surface-elevated)",
         overflow: "hidden",
         ...style,
       }}

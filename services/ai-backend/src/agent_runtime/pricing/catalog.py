@@ -10,6 +10,7 @@ from __future__ import annotations
 
 from collections import OrderedDict
 from datetime import datetime, timedelta
+from pathlib import Path
 from typing import Protocol
 
 from agent_runtime.persistence.records import ModelPricingRecord
@@ -36,6 +37,23 @@ class ModelPricingCatalog:
         self._cache: OrderedDict[
             tuple[str, str, str, datetime], ModelPricingRecord | None
         ] = OrderedDict()
+
+    @classmethod
+    def from_litellm(
+        cls, *, overrides_path: Path | None = None
+    ) -> "ModelPricingCatalog":
+        """Build a catalog backed by the LiteLLM library rate source.
+
+        The single construction point for the production pricing catalog:
+        rates come from ``litellm.model_cost`` with the reviewed override
+        backstop, wrapped in this in-process cache.
+        """
+
+        from agent_runtime.pricing.litellm_source import (  # noqa: PLC0415 — break import cycle
+            LitellmRateSource,
+        )
+
+        return cls(LitellmRateSource(overrides_path=overrides_path))
 
     async def lookup(
         self,

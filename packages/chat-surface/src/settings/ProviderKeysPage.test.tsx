@@ -42,6 +42,27 @@ beforeEach(() => {
 });
 
 describe("<ProviderKeysPage>", () => {
+  it("uses the design IA: a 17px section heading over separate Connected / Add-a-provider cards", async () => {
+    render(
+      <ProviderKeysPage
+        port={makePort({ list: vi.fn().mockResolvedValue([SAVED_ANTHROPIC]) })}
+      />,
+    );
+    await screen.findByTestId("provider-row-anthropic");
+    // The section title is now the top-of-hierarchy <h1> (SecTitle), NOT a card
+    // title, and the sub-groups are separate cards with <h3> titles + meta.
+    expect(
+      screen.getByRole("heading", { level: 1, name: "Provider keys" }),
+    ).toBeInTheDocument();
+    expect(
+      screen.getByRole("heading", { level: 3, name: "Connected" }),
+    ).toBeInTheDocument();
+    expect(screen.getByText("1 active")).toBeInTheDocument();
+    expect(
+      screen.getByRole("heading", { level: 3, name: "Add a provider" }),
+    ).toBeInTheDocument();
+  });
+
   it("renders every provider as an Add-key row when nothing is stored", async () => {
     render(<ProviderKeysPage port={makePort()} />);
     await screen.findByTestId("provider-add-anthropic");

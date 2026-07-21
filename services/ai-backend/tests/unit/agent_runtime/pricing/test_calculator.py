@@ -1,14 +1,11 @@
-"""Unit tests for the B3 pricing calculator + YAML seed loader."""
+"""Unit tests for the integer micro-USD cost calculator (banker's rounding)."""
 
 from __future__ import annotations
 
 from datetime import datetime, timezone
 
-import pytest
-
 from agent_runtime.persistence.records import ModelPricingRecord
 from agent_runtime.pricing.calculator import CostCalculator
-from agent_runtime.pricing.seed_loader import PricingSeedLoader
 
 
 def _pricing(
@@ -19,12 +16,12 @@ def _pricing(
 ) -> ModelPricingRecord:
     return ModelPricingRecord(
         provider="anthropic",
-        model_name="claude-opus-4-7",
+        model_name="claude-opus-4-8",
         effective_from=datetime(2026, 1, 1, tzinfo=timezone.utc),
         input_per_1m_micro_usd=input_per_1m_micro_usd,
         output_per_1m_micro_usd=output_per_1m_micro_usd,
         cached_input_per_1m_micro_usd=cached_input_per_1m_micro_usd,
-        pricing_version="anthropic-2026-q1.v1",
+        pricing_version="litellm:1.93.0",
     )
 
 
@@ -89,8 +86,6 @@ class TestCostCalculator:
         assert cost == 0
 
     def test_round_half_to_even(self) -> None:
-        # 5 input tokens at $1 / 1M = 5 micro-USD exactly. Subdivide so the
-        # boundary lands on .5 to assert banker's rounding.
         # 1 token at $1.5 / 1M = 1.5 micro -> rounds to 2 (even).
         cost = CostCalculator.compute(
             input_tokens=1,
@@ -128,28 +123,3 @@ class TestCostCalculator:
             )
             assert cost >= previous
             previous = cost
-
-
-class TestPricingSeedLoader:
-    def test_anthropic_seed_loads_three_models(self) -> None:
-        records = PricingSeedLoader.load_all()
-        anthropic = [r for r in records if r.provider == "anthropic"]
-        assert len(anthropic) == 3
-        opus = next(r for r in anthropic if r.model_name == "claude-opus-4-7")
-        assert opus.input_per_1m_micro_usd == 15_000_000
-        assert opus.output_per_1m_micro_usd == 75_000_000
-        assert opus.cached_input_per_1m_micro_usd == 1_500_000
-        assert opus.context_window_tokens == 1_000_000
-        assert opus.pricing_version == "anthropic-2026-q1.v1"
-
-    def test_load_file_rejects_non_mapping(self, tmp_path) -> None:
-        path = tmp_path / "bad.yaml"
-        path.write_text("- just\n- a list\n")
-        with pytest.raises(ValueError):
-            list(PricingSeedLoader.load_file(path))
-
-    def test_all_seed_files_are_well_formed(self) -> None:
-        records = PricingSeedLoader.load_all()
-        # At least one row from each shipped provider seed.
-        providers = {r.provider for r in records}
-        assert {"anthropic", "openai", "google"}.issubset(providers)

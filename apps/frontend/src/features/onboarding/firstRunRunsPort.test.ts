@@ -50,6 +50,7 @@ describe("createFirstRunRunsPort", () => {
       IDENTITY,
       {
         model: null,
+        webSearchEnabled: true,
         attachments: undefined,
       },
     );
@@ -87,7 +88,7 @@ describe("createFirstRunRunsPort", () => {
       "conv_2",
       "explain this csv",
       IDENTITY,
-      { model, attachments },
+      { model, webSearchEnabled: true, attachments },
     );
   });
 

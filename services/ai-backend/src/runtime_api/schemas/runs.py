@@ -77,15 +77,16 @@ class ModelCatalogItem(RuntimeContract):
     supports_attachments: bool = False
     supports_reasoning: bool = False
     reasoning: JsonObject | None = None
-    # models.dev-sourced metadata (see agent_runtime.api.models_dev_source).
-    # All optional: entries without live/cached/snapshot coverage (e.g. the
-    # settings-driven default model) simply omit them.
+    # LiteLLM-sourced metadata (see agent_runtime.api.litellm_model_source).
+    # All optional: entries without a LiteLLM row or supplement (e.g. the
+    # settings-driven default model placeholder) simply omit them. There is no
+    # ``release_date`` — LiteLLM does not carry one, and the catalog no longer
+    # orders or curates by release date.
     context_window: int | None = None
     max_output_tokens: int | None = None
     input_cost_per_mtok: float | None = None
     output_cost_per_mtok: float | None = None
     supports_tools: bool | None = None
-    release_date: str | None = None
 
 
 class ModelCatalogResponse(RuntimeContract):

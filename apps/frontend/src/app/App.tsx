@@ -31,7 +31,7 @@ import { ChatsArchiveRoute } from "../features/chats/ChatsArchiveRoute";
 import { ProjectsRoute } from "../features/projects/ProjectsRoute";
 import { ActivityRoute } from "../features/activity/ActivityRoute";
 import { useActiveRunCount } from "../features/activity/useActiveRunCount";
-import { SkillsRoute } from "../features/skills/SkillsRoute";
+import { SkillsGateway } from "../features/skills/SkillsGateway";
 // `ConnectorsGateway` (the "Tools" destination) owns the in-destination
 // routing between the list (/connectors), the detail (/connectors/<id>), and
 // the webhooks sub-route. `TeamGateway` backs the team-profile `/team`
@@ -112,16 +112,11 @@ const AdapterReviewScreen = lazy(() =>
     default: m.AdapterReviewScreen,
   })),
 );
-const SettingsScreen = lazy(() =>
-  import("../features/settings/SettingsScreen").then((m) => ({
-    default: m.SettingsScreen,
-  })),
-);
-// PRD-E convergence — the web app now mounts the chat-surface `SettingsSurface`
-// (the SSOT settings shell + nav + icons) via this binder for every settings
-// section EXCEPT `connectors`/`skills`, which have no SSOT nav slot and stay on
-// the legacy `SettingsScreen` (MCP-server management + skill editor). Code-split
-// like `SettingsScreen` so it costs the main bundle nothing until navigated to.
+// PRD-E / PR-E.3 convergence — the web app mounts the chat-surface
+// `SettingsSurface` (the SSOT settings shell + nav + icons) via this binder for
+// EVERY settings section; the legacy `SettingsScreen` is retired (connectors →
+// Tools destination, skill editor → Skills destination's manage pane).
+// Code-split so it costs the main bundle nothing until navigated to.
 const SettingsBinder = lazy(() =>
   import("../features/settings/SettingsBinder").then((m) => ({
     default: m.SettingsBinder,
@@ -178,7 +173,7 @@ import {
 import { getAppTransport } from "../api/transport";
 import { HashRouter, migrateLegacySettingsPath } from "./HashRouter";
 import { ROOT_DESTINATION, foldedRedirectFor, type AppRoute } from "./routes";
-import type { SettingsSection } from "../features/settings/SettingsScreen";
+import type { SettingsSection } from "../features/settings/settingsSections";
 import { errorMessage } from "../utils/errors";
 import {
   PortProvider,
@@ -615,6 +610,25 @@ export function CopilotApp({
     }
   }, [foldedRedirect, router]);
 
+  // PR-E.3 — legacy `#/settings/connectors` / `#/settings/skills` deep-links
+  // redirect to their rail destinations (Tools / Skills own those surfaces now;
+  // the legacy SettingsScreen is retired). Same replace-semantics as the folded
+  // redirect above; the dispatch renders the loading fallback for the one
+  // transient frame.
+  const legacySettingsRedirect: AppRoute | null =
+    route.screen === "settings" &&
+    (route.section === "connectors" || route.section === "skills")
+      ? {
+          screen: "chat",
+          destination: route.section === "connectors" ? "connectors" : "tools",
+        }
+      : null;
+  useEffect(() => {
+    if (legacySettingsRedirect !== null) {
+      router.navigate(legacySettingsRedirect, { replace: true });
+    }
+  }, [legacySettingsRedirect, router]);
+
   useEffect(() => {
     if (window.location.pathname !== "/mcp/oauth/callback") {
       return;
@@ -688,8 +702,10 @@ export function CopilotApp({
           } else {
             setCompletedMcpAuthAction(null);
             setOauthStatus(`${server.display_name} is connected.`);
+            // PR-E.3 — land on the Tools destination (the connectors surface);
+            // the legacy Settings → Connectors screen is retired.
             router.navigate(
-              { screen: "settings", section: "connectors" },
+              { screen: "chat", destination: "connectors" },
               { replace: true },
             );
           }
@@ -807,14 +823,8 @@ export function CopilotApp({
   const openApprovalSettings = (): void => {
     router.navigate({ screen: "settings", section: "model-and-behavior" });
   };
-  // Skills Edit / New open the existing skill editor, which lives in
-  // Settings → Skills. `skillId` is accepted for forward-compat (deep-link to
-  // a specific skill) but the Settings section does not pre-select a skill yet
-  // — a Phase-5 Settings enhancement. `null` = create a new skill (FR-4.27 /
-  // FR-4.28).
-  const openSkillEditor = (_skillId?: string | null): void => {
-    router.navigate({ screen: "settings", section: "skills" });
-  };
+  // PR-E.3 — the skill editor now lives inside the Skills destination
+  // (`SkillsGateway`'s manage pane); no App-level navigation seam needed.
   // PRD-05 — the Run cockpit's empty-state "Set up your model" CTA + the
   // `configuration_error` "Add a provider key" CTA open Settings → Provider
   // keys. Only reached when the `runCockpitWeb` flag mounts `RunRoute`.
@@ -871,26 +881,13 @@ export function CopilotApp({
       );
     }
   } else if (route.screen === "settings") {
-    // PRD-E — `connectors`/`skills` have no SSOT nav slot (they are rail
-    // destinations; MCP-server management + the skill editor still live in the
-    // legacy screen), so they keep rendering `SettingsScreen`. Every other
-    // section mounts the converged chat-surface `SettingsSurface` via the binder.
+    // PR-E.3 — every settings section mounts the converged chat-surface
+    // `SettingsSurface` via the binder. The two legacy sections
+    // (`connectors`/`skills`) redirect to their rail destinations (see the
+    // `legacySettingsRedirect` effect); render the loading fallback for the
+    // one transient frame before the replace lands.
     if (route.section === "connectors" || route.section === "skills") {
-      body = (
-        <SettingsScreen
-          connectors={connectors}
-          skills={skills}
-          identity={identity}
-          profile={profile}
-          initialSection={route.section}
-          onBackToChat={() =>
-            router.navigate({ screen: "chat", destination: ROOT_DESTINATION })
-          }
-          onSectionChange={(section) =>
-            router.navigate({ screen: "settings", section })
-          }
-        />
-      );
+      body = <RouteLoadingFallback />;
     } else {
       body = (
         <SettingsBinder
@@ -1077,10 +1074,10 @@ export function CopilotApp({
       </section>
     );
   } else if (route.destination === "tools") {
-    // PR-4.11 — the "Skills" destination (slug `tools`, relabeled by the solo
-    // profile). `SkillsRoute` is the saved-workflow catalog backed by
-    // `/v1/skills`; Run starts a run + opens the Run cockpit (`openRun`),
-    // Edit/New open the skill editor (`openSkillEditor`, Settings → Skills).
+    // PR-4.11 / PR-E.3 — the "Skills" destination (slug `tools`, relabeled by
+    // the solo profile). `SkillsGateway` owns the in-destination routing:
+    // catalog (SkillsRoute; Run starts a run + opens the cockpit) ⇄ manage
+    // (the create/edit/delete skill editor — formerly legacy Settings → Skills).
     body = (
       <section
         data-testid="destination-outlet"
@@ -1088,11 +1085,7 @@ export function CopilotApp({
         style={{ height: "100%", overflow: "auto" }}
         aria-label="skills destination"
       >
-        <SkillsRoute
-          identity={identity}
-          onOpenRun={openRun}
-          onOpenSkillEditor={openSkillEditor}
-        />
+        <SkillsGateway identity={identity} onOpenRun={openRun} />
       </section>
     );
   } else if (route.destination === "team") {

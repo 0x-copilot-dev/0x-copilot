@@ -5,7 +5,6 @@ from collections.abc import Iterator
 import pytest
 
 from agent_runtime.api.model_catalog import ModelCatalog
-from agent_runtime.api.models_dev_source import ModelsDevCatalogSource
 from agent_runtime.capabilities.skills.sources import SkillSourceConfig
 from agent_runtime.execution.contracts import (
     AgentRuntimeContext,
@@ -21,17 +20,16 @@ from tests.unit.fakes import (
 
 
 @pytest.fixture(autouse=True)
-def offline_model_catalog_source() -> Iterator[None]:
-    """Keep unit tests off the network: the shared catalog source never auto-refreshes.
+def reset_model_catalog_source() -> Iterator[None]:
+    """Reset the shared catalog source after each test so injected fakes never leak.
 
     ``ModelCatalog.build`` lazily constructs a process-wide
-    ``ModelsDevCatalogSource`` whose default behaviour spawns a background
-    models.dev fetch. Unit tests must never touch the network, so every test
-    gets an injected no-auto-refresh source (snapshot/cache tiers only) and
-    the shared state is reset afterwards.
+    ``LitellmModelSource`` that reads LiteLLM's bundled, offline ``model_cost``
+    table — no network, so no offline guard is needed. Tests that inject a fake
+    source via ``ModelCatalog.configure_source`` rely on this teardown to drop
+    it again afterwards.
     """
 
-    ModelCatalog.configure_source(ModelsDevCatalogSource(auto_refresh=False))
     yield
     ModelCatalog.reset_source()
 

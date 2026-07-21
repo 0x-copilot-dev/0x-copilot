@@ -59,7 +59,7 @@
    * 700; pin it to --font-weight-semibold inside UI surfaces so heading
    * text doesn't read as a different family next to the rest of the app
    * (root cause of the "+ menu vs GPT-5.4 Nano pill" mismatch). */
-  --font-size-3xs: 0.6rem; /* 9.6px — mono metadata micro-labels (FTUE fr-* meta/note/foot/ack, ~9–10.5px in SPEC) */
+  --font-size-3xs: 0.5625rem; /* 9px — mono micro-labels: settings group header (.set-sec__head) + FTUE fr-* meta/note/foot/ack */
   --font-size-2xs: 0.7rem; /* 11.2px — badge, kbd */
   --font-size-xs: 0.78rem; /* 12.5px — hint, caption */
   --font-size-sm: 0.85rem; /* 13.6px — secondary body */
@@ -446,9 +446,16 @@ textarea {
   color: var(--color-text-muted);
 }
 
+/* design .cbtn--danger — text-only ember with a translucent border (not a
+   filled destructive button), faint danger wash on hover. */
 .ui-button--danger {
-  background: var(--color-danger-bg);
+  background: transparent;
+  border-color: color-mix(in srgb, var(--color-danger) 25%, transparent);
   color: var(--color-danger);
+}
+
+.ui-button--danger:hover {
+  background: color-mix(in srgb, var(--color-danger) 12%, transparent);
 }
 
 .ui-icon-button {
@@ -508,40 +515,40 @@ textarea {
   );
 }
 
-/* Compact chip (PRD-B, frontend-parity-v3). The v3 design's `.chip` hugs its
-   text (`1px 8px`); the old badge was ~26px tall with the heavy 650 weight,
-   reading as a button rather than a label. Slimmed to a semibold pill that hugs
-   content. */
+/* design `.chip` — mono, bordered, NO fill. A quiet outlined pill that hugs its
+   text; tone variants recolour the text + border, never a fill. */
 .ui-badge {
   align-items: center;
-  background: var(--color-surface-muted);
+  background: transparent;
+  border: 1px solid var(--color-border-strong);
   border-radius: var(--radius-full);
   color: var(--color-text-muted);
   display: inline-flex;
-  font-size: var(--font-size-xs);
+  font-family: var(--font-mono);
+  font-size: var(--font-size-2xs);
   font-weight: var(--font-weight-semibold);
   min-height: 0;
-  padding: 0.1rem 0.5rem;
+  padding: 2px 8px;
   white-space: nowrap;
 }
 
 .ui-badge--success {
-  background: var(--color-success-bg);
+  border-color: var(--color-success);
   color: var(--color-success);
 }
 
 .ui-badge--warning {
-  background: var(--color-warning-bg);
+  border-color: var(--color-warning);
   color: var(--color-warning);
 }
 
 .ui-badge--danger {
-  background: var(--color-danger-bg);
+  border-color: var(--color-danger);
   color: var(--color-danger);
 }
 
 .ui-badge--accent {
-  background: color-mix(in srgb, var(--color-accent), transparent 84%);
+  border-color: var(--color-accent);
   color: var(--color-accent-strong);
 }
 
@@ -549,12 +556,18 @@ textarea {
 .ui-select,
 .ui-textarea {
   background: var(--color-bg-elevated);
-  border: 1px solid var(--color-border);
-  border-radius: var(--radius-md);
   color: var(--color-text);
   outline: none;
-  padding: 0.72rem 0.9rem;
   width: 100%;
+}
+
+/* design .cin/.csel — quiet 6px radius, stronger hairline, tighter field
+   padding. The textarea keeps its taller multiline padding below. */
+.ui-input,
+.ui-select {
+  border: 1px solid var(--color-border-strong);
+  border-radius: var(--radius-sm);
+  padding: 7px 10px;
 }
 
 .ui-input:focus,
@@ -564,7 +577,10 @@ textarea {
 }
 
 .ui-textarea {
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-md);
   min-height: 7rem;
+  padding: 0.72rem 0.9rem;
   resize: vertical;
 }
 
@@ -597,35 +613,37 @@ textarea {
   opacity: 0;
 }
 
+/* design .ctog — 34×20 track, 14×14 knob; checked = solid accent fill with an
+   accent-ink knob (not a translucent accent wash). */
 .ui-switch span {
-  background: var(--color-surface-muted);
+  background: var(--color-surface-elevated);
   border: 1px solid var(--color-border);
   border-radius: var(--radius-full);
-  height: 1.5rem;
+  height: 20px;
   position: relative;
-  width: 2.7rem;
+  width: 34px;
 }
 
 .ui-switch span::after {
   background: var(--color-text-muted);
   border-radius: 50%;
   content: "";
-  height: 1rem;
-  left: 0.2rem;
+  height: 14px;
+  left: 3px;
   position: absolute;
-  top: 0.2rem;
+  top: 3px;
   transition: transform var(--duration-fast) var(--ease-standard);
-  width: 1rem;
+  width: 14px;
 }
 
 .ui-switch input:checked + span {
-  background: color-mix(in srgb, var(--color-accent), transparent 68%);
+  background: var(--color-accent);
   border-color: var(--color-accent);
 }
 
 .ui-switch input:checked + span::after {
-  background: var(--color-accent-strong);
-  transform: translateX(1.15rem);
+  background: var(--color-accent-contrast);
+  transform: translateX(14px);
 }
 
 /* PR 3.4.1 — bare variant: same track, no visible label. */

@@ -37,9 +37,10 @@ export interface SecHeadProps extends HTMLAttributes<HTMLDivElement> {
 
 const secHeadStyle: CSSProperties = {
   fontFamily: "var(--font-mono)",
-  fontSize: "var(--font-size-2xs)",
+  // Design .set-sec__head mono group header = 9px / .14em tracking.
+  fontSize: "var(--font-size-3xs)",
   fontWeight: "var(--font-weight-semibold)",
-  letterSpacing: "0.06em",
+  letterSpacing: "0.14em",
   textTransform: "uppercase",
   color: "var(--color-text-subtle)",
 };
@@ -52,6 +53,55 @@ export function SecHead({
   return (
     <div style={{ ...secHeadStyle, ...style }} {...rest}>
       {children}
+    </div>
+  );
+}
+
+// ---------------------------------------------------------------------------
+// SecTitle — the section heading level (design `.set-sec__head`). A 17px/600
+// h1 with an optional muted description below it, sitting ABOVE the cards.
+// This is the top of the type hierarchy the card h3 (12.5px) used to swallow —
+// restoring it gives each settings section a prominent title again.
+// ---------------------------------------------------------------------------
+
+export interface SecTitleProps extends Omit<
+  HTMLAttributes<HTMLElement>,
+  "title"
+> {
+  readonly title: ReactNode;
+  /** Muted description under the heading (design 12px / line-height 1.6). */
+  readonly description?: ReactNode;
+}
+
+const secTitleHeadingStyle: CSSProperties = {
+  margin: 0,
+  fontFamily: "var(--font-display)",
+  // Design .set-sec__head h1 = 17px; --font-size-xl (18px) is the closest token.
+  fontSize: "var(--font-size-xl)",
+  fontWeight: "var(--font-weight-semibold)",
+  letterSpacing: "-0.01em",
+  color: "var(--color-text)",
+};
+
+const secTitleDescStyle: CSSProperties = {
+  margin: "4px 0 0",
+  fontSize: "var(--font-size-xs)",
+  lineHeight: 1.6,
+  color: "var(--color-text-muted)",
+};
+
+export function SecTitle({
+  title,
+  description,
+  style,
+  ...rest
+}: SecTitleProps): ReactElement {
+  return (
+    <div style={style} {...rest}>
+      <h1 style={secTitleHeadingStyle}>{title}</h1>
+      {description !== undefined ? (
+        <p style={secTitleDescStyle}>{description}</p>
+      ) : null}
     </div>
   );
 }
@@ -77,7 +127,8 @@ export interface SetCardProps extends Omit<
 const setCardStyle: CSSProperties = {
   backgroundColor: "var(--color-surface)",
   border: "1px solid var(--color-border)",
-  borderRadius: "var(--radius-lg)",
+  // Design --r 8px (was --radius-lg 12px).
+  borderRadius: "var(--radius-md)",
   padding: "var(--space-lg)",
   display: "flex",
   flexDirection: "column",
@@ -94,7 +145,9 @@ const setCardHeadStyle: CSSProperties = {
 const setCardTitleStyle: CSSProperties = {
   margin: 0,
   fontFamily: "var(--font-display)",
-  fontSize: "var(--font-size-md)",
+  // Design .set-card head h3 = 12.5px (was --font-size-md 14px). The 17px
+  // section heading now lives above the cards via <SecTitle> (design hierarchy).
+  fontSize: "var(--font-size-xs)",
   fontWeight: "var(--font-weight-semibold)",
   letterSpacing: "-0.01em",
   color: "var(--color-text)",
@@ -170,12 +223,20 @@ function setNoteColors(tone: SetNoteTone): {
       };
     default:
       return {
-        bg: "var(--color-accent-soft)",
+        // Design --ink2 dark inset (not the accent-tinted soft fill).
+        bg: "var(--color-bg-elevated)",
         border: "var(--color-border)",
         text: "var(--color-text-muted)",
       };
   }
 }
+
+// Design `.set-note strong` — emphasized runs brighten to --tx (text-strong).
+// Scoped to the note via a data attribute (inline styles can't reach a
+// descendant <strong>; a scoped <style> is the established chat-surface idiom —
+// see AppRail / TcInlineDiff).
+const SET_NOTE_STRONG_CSS =
+  "[data-set-note] strong{color:var(--color-text-strong);font-weight:var(--font-weight-semibold);}";
 
 export function SetNote({
   icon,
@@ -188,6 +249,7 @@ export function SetNote({
   return (
     <div
       data-tone={tone}
+      data-set-note=""
       style={{
         display: "flex",
         alignItems: "flex-start",
@@ -197,12 +259,13 @@ export function SetNote({
         backgroundColor: c.bg,
         border: `1px solid ${c.border}`,
         color: c.text,
-        fontSize: "var(--font-size-xs)",
+        fontSize: "var(--font-size-2xs)",
         lineHeight: "var(--line-height-base)",
         ...style,
       }}
       {...rest}
     >
+      <style>{SET_NOTE_STRONG_CSS}</style>
       {icon !== undefined ? (
         <span aria-hidden="true" style={{ flex: "0 0 auto", lineHeight: 1 }}>
           {icon}
@@ -236,21 +299,22 @@ const frowStyle: CSSProperties = {
   alignItems: "center",
   justifyContent: "space-between",
   gap: "var(--space-lg)",
-  padding: "var(--space-sm) 0",
-  borderBottom: "1px solid var(--color-border)",
+  // Design .frow — 10px/14px padding, top hairline (rows divide from the top).
+  padding: "10px 14px",
+  borderTop: "1px solid var(--color-border)",
 };
 
 const frowLabelStyle: CSSProperties = {
-  fontSize: "var(--font-size-sm)",
+  fontSize: "var(--font-size-xs)",
   fontWeight: "var(--font-weight-medium)",
   color: "var(--color-text)",
 };
 
 const frowHintStyle: CSSProperties = {
   margin: "2px 0 0",
-  fontSize: "var(--font-size-xs)",
+  fontSize: "var(--font-size-2xs)",
   lineHeight: "var(--line-height-base)",
-  color: "var(--color-text-muted)",
+  color: "var(--color-text-subtle)",
 };
 
 export function Frow({
@@ -295,14 +359,15 @@ export interface KrowProps extends HTMLAttributes<HTMLDivElement> {
   readonly actions?: ReactNode;
 }
 
+// Design rows are FLAT — a top hairline divides them, no fill or radius (they
+// are not discrete cards). The list container drops its inter-row gap so rows
+// sit flush and the borders read as continuous dividers.
 const krowStyle: CSSProperties = {
   display: "flex",
   alignItems: "center",
   gap: "var(--space-md)",
-  padding: "var(--space-sm) var(--space-md)",
-  borderRadius: "var(--radius-md)",
-  border: "1px solid var(--color-border)",
-  backgroundColor: "var(--color-surface-muted)",
+  padding: "11px 14px",
+  borderTop: "1px solid var(--color-border)",
 };
 
 const krowLogoStyle: CSSProperties = {
@@ -313,13 +378,13 @@ const krowLogoStyle: CSSProperties = {
   width: 30,
   height: 30,
   borderRadius: "var(--radius-md)",
-  backgroundColor: "var(--color-surface)",
-  color: "var(--color-text-muted)",
+  backgroundColor: "var(--color-surface-elevated)",
+  color: "var(--color-text-strong)",
   overflow: "hidden",
 };
 
 const krowNameStyle: CSSProperties = {
-  fontSize: "var(--font-size-sm)",
+  fontSize: "var(--font-size-xs)",
   fontWeight: "var(--font-weight-medium)",
   color: "var(--color-text)",
 };
@@ -404,8 +469,9 @@ export function SettingsNavItem({
         alignItems: "center",
         gap: "var(--space-sm)",
         width: "100%",
-        padding: "7px 10px",
-        borderRadius: "var(--radius-md)",
+        // Design .set-nav__item — 6px/8px pad, 6px radius (was 7px/10px, --radius-md).
+        padding: "6px 8px",
+        borderRadius: "var(--radius-sm)",
         border: "1px solid transparent",
         backgroundColor: active ? "var(--color-surface-muted)" : "transparent",
         color: active ? "var(--color-text)" : "var(--color-text-muted)",

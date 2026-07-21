@@ -222,7 +222,10 @@ class RuntimeRunHandler:
         )
         self._runtime_streamer_explicit = runtime_streamer is not astream_runtime
         self.audit_emitter = WorkerAuditEmitter(persistence=self.persistence)
-        self.pricing_catalog = ModelPricingCatalog(self.persistence)
+        # Rates come from the LiteLLM library (`litellm.model_cost`) with the
+        # reviewed override backstop — not the DB catalog. `CostCalculator`
+        # remains the integer micro-USD rounding boundary downstream.
+        self.pricing_catalog = ModelPricingCatalog.from_litellm()
         self.budget_enforcer = BudgetEnforcer(self.persistence)
         self.budget_charger = BudgetCharger(self.persistence)
         # Default-built from collaborators so production gets the live impl;

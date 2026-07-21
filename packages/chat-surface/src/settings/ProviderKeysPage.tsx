@@ -36,7 +36,7 @@ import {
   AddProviderKeyModal,
   type AddProviderKeySubmit,
 } from "./AddProviderKeyModal";
-import { Frow, Krow, SecHead, SetCard, SetNote } from "./SettingsChrome";
+import { Frow, Krow, SecTitle, SetCard, SetNote } from "./SettingsChrome";
 import {
   PROVIDER_CATALOG,
   checkProviderKeyFormat,
@@ -94,6 +94,87 @@ const logoGlyphStyle: CSSProperties = {
   fontWeight: "var(--font-weight-semibold)",
 };
 
+// Colored brand marks for the known providers (design shows colored provider
+// logos, not a neutral first-letter glyph). Each fills the 30×30 krow chip with
+// the provider's brand colour; providers without an entry (Groq / xAI / any
+// other) fall through to the neutral first-letter fallback below.
+const brandTileStyle: CSSProperties = {
+  display: "flex",
+  alignItems: "center",
+  justifyContent: "center",
+  width: "100%",
+  height: "100%",
+};
+
+const PROVIDER_BRAND: Readonly<
+  Record<
+    string,
+    { readonly bg: string; readonly fg: string; readonly text: string }
+  >
+> = {
+  openai: { bg: "#10a37f", fg: "#ffffff", text: "O" },
+  anthropic: { bg: "#d97757", fg: "#ffffff", text: "A" },
+  openrouter: { bg: "#6467f2", fg: "#ffffff", text: "OR" },
+};
+
+// Google's canonical 4-colour "G" (same paths the sign-in button uses).
+function GoogleGlyph(): ReactElement {
+  return (
+    <svg width="18" height="18" viewBox="0 0 48 48" aria-hidden="true">
+      <path
+        fill="#EA4335"
+        d="M24 9.5c3.54 0 6.71 1.22 9.21 3.6l6.85-6.85C35.9 2.38 30.47 0 24 0 14.62 0 6.51 5.38 2.56 13.22l7.98 6.19C12.43 13.72 17.74 9.5 24 9.5z"
+      />
+      <path
+        fill="#4285F4"
+        d="M46.98 24.55c0-1.57-.15-3.09-.38-4.55H24v9.02h12.94c-.58 2.96-2.26 5.48-4.78 7.18l7.73 6c4.51-4.18 7.09-10.36 7.09-17.65z"
+      />
+      <path
+        fill="#FBBC05"
+        d="M10.53 28.59c-.48-1.45-.76-2.99-.76-4.59s.27-3.14.76-4.59l-7.98-6.19C.92 16.46 0 20.12 0 24c0 3.88.92 7.54 2.56 10.78l7.97-6.19z"
+      />
+      <path
+        fill="#34A853"
+        d="M24 48c6.48 0 11.93-2.13 15.89-5.81l-7.73-6c-2.15 1.45-4.92 2.3-8.16 2.3-6.26 0-11.57-4.22-13.47-9.91l-7.98 6.19C6.51 42.62 14.62 48 24 48z"
+      />
+    </svg>
+  );
+}
+
+function renderProviderLogo(entry: ProviderCatalogEntry): ReactNode {
+  if (entry.id === "google") {
+    return (
+      <span style={{ ...brandTileStyle, backgroundColor: "#ffffff" }}>
+        <GoogleGlyph />
+      </span>
+    );
+  }
+  const brand = PROVIDER_BRAND[entry.id];
+  if (brand !== undefined) {
+    return (
+      <span
+        style={{
+          ...brandTileStyle,
+          backgroundColor: brand.bg,
+          color: brand.fg,
+          fontFamily: "var(--font-display)",
+          fontSize:
+            brand.text.length > 1
+              ? "var(--font-size-xs)"
+              : "var(--font-size-sm)",
+          fontWeight: "var(--font-weight-semibold)",
+          letterSpacing: brand.text.length > 1 ? "-0.02em" : undefined,
+        }}
+      >
+        {brand.text}
+      </span>
+    );
+  }
+  // Neutral fallback (Groq / xAI / any other) — first-letter glyph on the
+  // default surface chip.
+  return <span style={logoGlyphStyle}>{entry.label.charAt(0)}</span>;
+}
+
 const nameRowStyle: CSSProperties = {
   display: "inline-flex",
   alignItems: "center",
@@ -103,13 +184,23 @@ const nameRowStyle: CSSProperties = {
 const listStyle: CSSProperties = {
   display: "flex",
   flexDirection: "column",
-  gap: "var(--space-sm)",
+  // Flat rows divide with a top hairline (Krow) — no inter-row gap, so the
+  // borders read as continuous dividers (design).
+  gap: 0,
 };
 
 const sectionStyle: CSSProperties = {
   display: "flex",
   flexDirection: "column",
   gap: "var(--space-sm)",
+};
+
+// Section wrapper: the SecTitle heading above, then the sub-cards, stacked
+// (design `.set-sec` — the section title sits above its cards).
+const pageStyle: CSSProperties = {
+  display: "flex",
+  flexDirection: "column",
+  gap: "var(--space-lg)",
 };
 
 const rowErrorStyle: CSSProperties = {
@@ -292,12 +383,11 @@ export function ProviderKeysPage({
 
   return (
     <>
-      <SetCard
-        title="Provider keys"
-        meta="Bring your own model provider keys. Runs call your provider directly with the key you store here."
-        data-testid="provider-keys-page"
-      >
-        <SetNote>{PROVIDER_KEYS_KEYCHAIN_NOTE}</SetNote>
+      <div style={pageStyle} data-testid="provider-keys-page">
+        <SecTitle
+          title="Provider keys"
+          description="Bring your own key. 0xCopilot talks to each provider directly — the key stays on your machine."
+        />
 
         {keys === null && loadError === null ? (
           <p
@@ -333,98 +423,91 @@ export function ProviderKeysPage({
           </div>
         ) : (
           <>
-            {connected.length > 0 ? (
-              <section style={sectionStyle}>
-                <SecHead>Connected</SecHead>
-                <div style={listStyle}>
-                  {connected.map(({ entry, summary }) => {
-                    const chip = chipFor(entry.id);
-                    return (
-                      <Krow
-                        key={entry.id}
-                        data-testid={`provider-row-${entry.id}`}
-                        logo={
-                          <span style={logoGlyphStyle}>
-                            {entry.label.charAt(0)}
-                          </span>
-                        }
-                        name={
-                          <span style={nameRowStyle}>
-                            <span>{entry.label}</span>
-                            {chip !== undefined ? (
-                              <Badge
-                                tone="success"
-                                data-testid={`provider-model-chip-${entry.id}`}
+            <SetCard title="Connected" meta={`${connected.length} active`}>
+              <SetNote>{PROVIDER_KEYS_KEYCHAIN_NOTE}</SetNote>
+              {connected.length > 0 ? (
+                <>
+                  <div style={listStyle}>
+                    {connected.map(({ entry, summary }) => {
+                      const chip = chipFor(entry.id);
+                      return (
+                        <Krow
+                          key={entry.id}
+                          data-testid={`provider-row-${entry.id}`}
+                          logo={renderProviderLogo(entry)}
+                          name={
+                            <span style={nameRowStyle}>
+                              <span>{entry.label}</span>
+                              {chip !== undefined ? (
+                                <Badge
+                                  tone="success"
+                                  data-testid={`provider-model-chip-${entry.id}`}
+                                >
+                                  {chip}
+                                </Badge>
+                              ) : null}
+                            </span>
+                          }
+                          sub={
+                            <>
+                              key {summary.key_hint} · updated{" "}
+                              {formatUpdated(summary.updated_at)}
+                            </>
+                          }
+                          actions={
+                            <>
+                              <Button
+                                type="button"
+                                variant="ghost"
+                                size="sm"
+                                aria-label={`Rotate ${entry.label} key`}
+                                onClick={() =>
+                                  setModal({ entry, mode: "rotate" })
+                                }
+                                data-testid={`provider-rotate-${entry.id}`}
                               >
-                                {chip}
-                              </Badge>
-                            ) : null}
-                          </span>
-                        }
-                        sub={
-                          <>
-                            key {summary.key_hint} · updated{" "}
-                            {formatUpdated(summary.updated_at)}
-                          </>
-                        }
-                        actions={
-                          <>
-                            <Button
-                              type="button"
-                              variant="ghost"
-                              size="sm"
-                              aria-label={`Rotate ${entry.label} key`}
-                              onClick={() =>
-                                setModal({ entry, mode: "rotate" })
-                              }
-                              data-testid={`provider-rotate-${entry.id}`}
-                            >
-                              Rotate
-                            </Button>
-                            <Button
-                              type="button"
-                              variant="ghost"
-                              size="sm"
-                              aria-label={`Remove ${entry.label} key`}
-                              disabled={removing[entry.id] === true}
-                              onClick={() => handleRemove(entry)}
-                              data-testid={`provider-remove-${entry.id}`}
-                            >
-                              <Icon name="trash" size={14} />
-                            </Button>
-                          </>
-                        }
-                      />
-                    );
-                  })}
-                </div>
-                {connected.map(({ entry }) =>
-                  rowErrors[entry.id] !== undefined ? (
-                    <p
-                      key={`err-${entry.id}`}
-                      role="alert"
-                      style={rowErrorStyle}
-                      data-testid={`provider-row-error-${entry.id}`}
-                    >
-                      {rowErrors[entry.id]}
-                    </p>
-                  ) : null,
-                )}
-              </section>
-            ) : null}
+                                Rotate
+                              </Button>
+                              <Button
+                                type="button"
+                                variant="ghost"
+                                size="sm"
+                                aria-label={`Remove ${entry.label} key`}
+                                disabled={removing[entry.id] === true}
+                                onClick={() => handleRemove(entry)}
+                                data-testid={`provider-remove-${entry.id}`}
+                              >
+                                <Icon name="trash" size={13} />
+                              </Button>
+                            </>
+                          }
+                        />
+                      );
+                    })}
+                  </div>
+                  {connected.map(({ entry }) =>
+                    rowErrors[entry.id] !== undefined ? (
+                      <p
+                        key={`err-${entry.id}`}
+                        role="alert"
+                        style={rowErrorStyle}
+                        data-testid={`provider-row-error-${entry.id}`}
+                      >
+                        {rowErrors[entry.id]}
+                      </p>
+                    ) : null,
+                  )}
+                </>
+              ) : null}
+            </SetCard>
 
-            <section style={sectionStyle}>
-              <SecHead>Add a provider</SecHead>
+            <SetCard title="Add a provider">
               <div style={listStyle}>
                 {available.map((entry) => (
                   <Krow
                     key={entry.id}
                     data-testid={`provider-available-${entry.id}`}
-                    logo={
-                      <span style={logoGlyphStyle}>
-                        {entry.label.charAt(0)}
-                      </span>
-                    }
+                    logo={renderProviderLogo(entry)}
                     name={<AddRowName entry={entry} />}
                     sub={entry.placeholder}
                     actions={
@@ -474,10 +557,10 @@ export function ProviderKeysPage({
                   </Button>
                 </Frow>
               </div>
-            </section>
+            </SetCard>
           </>
         )}
-      </SetCard>
+      </div>
 
       {modal !== null ? (
         <AddProviderKeyModal
