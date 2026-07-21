@@ -1,6 +1,7 @@
 # ADR 0001 — Separate principal (human) from tenant (workspace)
 
-Status: PROPOSED · 2026-07-21 · Owner: identity
+Status: ACCEPTED · 2026-07-21 · Owner: identity
+Execution: staged expand → migrate → contract. **Stage 1 (Expand) delivered.**
 
 ## Context
 
@@ -31,15 +32,41 @@ principal is a LINK, never a provision.
 - Product data stays keyed (org_id, user_id) — no mass re-key; user_id
   becomes a per-workspace projection of the principal.
 
-## Migration sketch (staged, reversible)
+## Execution — expand / migrate / contract (staged, reversible)
 
-1. `principals` table + `identities.principal_id` (backfill: one principal
-   per existing user; identities re-point).
-2. Sign-in ramps resolve via principal; "sign-in becomes link" when a live
-   session exists (kills new fractures immediately — shippable before the
-   rest).
-3. Workspace picker reads memberships via principal.
-4. Legacy fractured accounts: offer the existing merge engine.
+Parallel-change so every stage ships independently and no stage breaks a
+read path until its writer has been dual-writing long enough to be trusted.
+
+**Stage 1 — EXPAND (DELIVERED, migration 0039).**
+
+- `principals` table (one row per human; no `org_id` — a principal is above
+  tenancy, so it is outside RLS and the account-merge registry).
+- `users.principal_id` (nullable), backfilled 1:1 as `prn_<user_id>`;
+  absorbed users' principals carry `absorbed_into_principal_id` → the
+  survivor's principal, mirroring the user-level merge lineage.
+- The store DUAL-WRITES: `create_user` auto-mints `prn_<user_id>` when a
+  caller supplies none, so from here on no new user lands without a
+  principal. Deterministic id ⇒ app writes and the backfill agree.
+- NO read path changed. Bearer/session/facade/ai-backend still carry only
+  `(org_id, user_id)`. Fully contained in `services/backend` identity.
+- Covered by the live-Postgres gate (backfill SQL + Postgres auto-mint).
+
+**Stage 2 — MIGRATE (next).**
+
+- Auth-identity tables (`wallet_identities`, `oidc_identities`, …) gain
+  `principal_id`, backfilled from their user; writers set it.
+- Sign-in resolution reads identity → principal → the principal's personal
+  `(org, user)`. **"Sign-in becomes link":** when an authenticated session
+  already exists, a new-identity sign-in attaches to that principal instead
+  of provisioning — killing NEW fractures at the source.
+- Merge, when it runs, reconciles principals (`absorbed_into_principal_id`).
+
+**Stage 3 — CONTRACT (later, only if multi-workspace is pursued).**
+
+- `users` becomes the `(principal × org)` membership projection; the direct
+  identity→user coupling is dropped. Not required for the single-user
+  desktop, which stays one-principal / one-org / one-user throughout.
+- Legacy pre-migration fractures: offer the existing merge engine.
 
 ## Alternatives considered
 

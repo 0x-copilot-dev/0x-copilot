@@ -959,6 +959,7 @@ class _IdentityFields:
     NAME = "name"
     ORG_ID = "org_id"
     OUTCOME = "outcome"
+    PRINCIPAL_ID = "principal_id"
     PROVIDER_ID = "provider_id"
     ROLE_ID = "role_id"
     SLUG = "slug"
@@ -1078,9 +1079,40 @@ class OrganizationRecord(BackendContract):
         return text
 
 
+class PrincipalRecord(BackendContract):
+    """One human (principal/tenant separation, ADR 0001, migration 0039).
+
+    A principal is ABOVE orgs: auth identities and org memberships hang off it.
+    In the current single-org-per-user model there is exactly one principal per
+    ``users`` row (``prn_<user_id>``); the concept exists so that linking a
+    second sign-in method becomes attaching an identity to the SAME principal
+    rather than minting a second account. No ``org_id`` — a principal is not a
+    tenant-scoped row, so it is outside RLS and the account-merge registry.
+    """
+
+    principal_id: str = Field(default_factory=lambda: f"prn_{uuid4().hex}")
+    display_name: str | None = None
+    created_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
+    updated_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
+    # Principal-layer merge lineage, mirroring UserRecord.absorbed_into_user_id.
+    absorbed_into_principal_id: str | None = None
+    merged_at: datetime | None = None
+
+    @field_validator(_IdentityFields.PRINCIPAL_ID)
+    @classmethod
+    def _normalize_principal_id(cls, value: object) -> str:
+        return Validators.normalize_id(value)
+
+
 class UserRecord(BackendContract):
     user_id: str = Field(default_factory=lambda: f"usr_{uuid4().hex}")
     org_id: str
+    # Principal/tenant separation (ADR 0001, migration 0039). The human this
+    # membership belongs to. Nullable through the expand stage: backfilled 1:1
+    # for pre-migration rows, and dual-written on every new user by the store
+    # (auto-minted ``prn_<user_id>`` when a caller does not supply one). Stage 2
+    # points sign-in resolution at this column; no reader depends on it yet.
+    principal_id: str | None = None
     primary_email: str
     email_verified_at: datetime | None = None
     display_name: str

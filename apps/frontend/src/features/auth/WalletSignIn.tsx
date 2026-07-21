@@ -35,10 +35,14 @@ import { toWireAddress } from "../../utils/eip55";
 import { AuthContext } from "./AuthContext";
 import {
   discoverWalletProviders,
-  type Eip1193Provider,
   type WalletProviderCandidate,
 } from "./eip6963";
 import { buildSiweMessage, defaultExpirationTime } from "./siweMessage";
+import {
+  connectWallet as _connect,
+  isWalletUserRejection as _isUserRejection,
+  personalSignSiwe as _personalSign,
+} from "./walletProof";
 
 export const CHAIN_NOT_ALLOWED_MESSAGE =
   "Switch to a supported network (Ethereum, Base, Arbitrum, Robinhood Chain)";
@@ -60,12 +64,23 @@ export interface WalletSignInProps {
    * being adopted into AuthContext — the standalone wallet page uses
    * this to relay the bearer to the desktop loopback. */
   onSession?: (session: SiweSessionResponse) => void | Promise<void>;
+  /**
+   * LINK mode (account-linking PRD FR-L1): when set, the flow stops after
+   * signing and delivers the raw `{ message, signature }` PROOF here instead
+   * of verifying/minting a session — the desktop wallet page relays it to the
+   * loopback so main can POST the link with the caller's bearer. Takes
+   * precedence over `onSession` when both are somehow provided.
+   */
+  onProof?: (proof: {
+    message: string;
+    signature: string;
+  }) => void | Promise<void>;
   /** EIP-6963 collection window override (tests pass a small value). */
   discoveryWindowMs?: number;
 }
 
 export function WalletSignIn(props: WalletSignInProps): ReactElement {
-  const { onSession, discoveryWindowMs } = props;
+  const { onSession, onProof, discoveryWindowMs } = props;
   // Nullable on purpose: the standalone wallet page mounts without an
   // <AuthProvider> and always supplies `onSession`. The login screen
   // mounts inside the provider and relies on adoptSession.
@@ -140,6 +155,16 @@ export function WalletSignIn(props: WalletSignInProps): ReactElement {
           address,
         );
 
+        // LINK mode (PRD FR-L1): stop at the proof — do not verify/mint. The
+        // desktop wallet page relays it to the loopback so main links with the
+        // caller's bearer.
+        if (onProof) {
+          if (!aliveRef.current) return;
+          setStep({ kind: "done" });
+          await onProof({ message, signature });
+          return;
+        }
+
         setStep({ kind: "verifying", walletName });
         const session = await verifySiwe({ message, signature });
 
@@ -172,7 +197,7 @@ export function WalletSignIn(props: WalletSignInProps): ReactElement {
         busyRef.current = false;
       }
     },
-    [auth, onSession],
+    [auth, onSession, onProof],
   );
 
   return (
@@ -264,67 +289,6 @@ function _buttonLabel(step: WalletStep): string {
     default:
       return "Connect wallet";
   }
-}
-
-// ---------------------------------------------------------------------------
-// EIP-1193 plumbing
-// ---------------------------------------------------------------------------
-
-async function _connect(
-  provider: Eip1193Provider,
-): Promise<{ address: string; chainId: number }> {
-  const accounts = await provider.request({ method: "eth_requestAccounts" });
-  if (
-    !Array.isArray(accounts) ||
-    accounts.length === 0 ||
-    typeof accounts[0] !== "string"
-  ) {
-    throw new Error("wallet returned no accounts");
-  }
-  const address = accounts[0];
-
-  const chainHex = await provider.request({ method: "eth_chainId" });
-  const chainId =
-    typeof chainHex === "string" ? Number.parseInt(chainHex, 16) : Number.NaN;
-  if (!Number.isInteger(chainId) || chainId <= 0) {
-    throw new Error("wallet returned an invalid chain id");
-  }
-  return { address, chainId };
-}
-
-async function _personalSign(
-  provider: Eip1193Provider,
-  message: string,
-  address: string,
-): Promise<string> {
-  // personal_sign takes the hex-encoded UTF-8 message first, then the
-  // signing address (the reverse of eth_sign — a classic wallet gotcha).
-  const signature = await provider.request({
-    method: "personal_sign",
-    params: [_hexEncodeUtf8(message), address],
-  });
-  if (typeof signature !== "string" || !signature.startsWith("0x")) {
-    throw new Error("wallet returned an invalid signature");
-  }
-  return signature;
-}
-
-function _hexEncodeUtf8(text: string): string {
-  let hex = "0x";
-  for (const byte of new TextEncoder().encode(text)) {
-    hex += byte.toString(16).padStart(2, "0");
-  }
-  return hex;
-}
-
-/** EIP-1193 ProviderRpcError code 4001 — "User Rejected Request". */
-function _isUserRejection(err: unknown): boolean {
-  return (
-    typeof err === "object" &&
-    err !== null &&
-    "code" in err &&
-    (err as { code: unknown }).code === 4001
-  );
 }
 
 // ---------------------------------------------------------------------------

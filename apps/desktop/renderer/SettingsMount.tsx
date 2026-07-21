@@ -21,6 +21,7 @@
 // chat-surface sections stay framework-agnostic behind their props/ports.
 
 import {
+  useCallback,
   useEffect,
   useMemo,
   useState,
@@ -68,7 +69,14 @@ import type {
   UserProfile,
   WorkspaceDefaultsResponse,
 } from "@0x-copilot/api-types";
-import type { RendererSession, Transport } from "@0x-copilot/chat-transport";
+import {
+  CHANNELS,
+  isTransportHttpError,
+  type AuthLinkOutcome,
+  type RendererSession,
+  type Transport,
+} from "@0x-copilot/chat-transport";
+import type { LinkWalletOutcome } from "@0x-copilot/chat-surface";
 
 import { SECURE_STORAGE_CHANNELS } from "../main/services/secure-storage-channels";
 import { buildModelCatalog } from "./composer/desktopModelCatalog";
@@ -282,6 +290,80 @@ export function SettingsMount({
       cancelled = true;
     };
   }, [transport]);
+
+  // Account-linking (PRD FR-U1): re-fetch the profile after a link/unlink so
+  // the Linked-accounts panel reflects the change immediately.
+  const refreshProfile = useCallback(async (): Promise<void> => {
+    const loaded = await transport.request<UserProfile>({
+      method: "GET",
+      path: "/v1/me/profile",
+    });
+    setProfile(loaded);
+  }, [transport]);
+
+  // Unlink (PRD FR-L5): DELETE through the transport. A 409 last-sign-in-method
+  // guard surfaces as a TransportHttpError whose message ProfilePage shows.
+  const handleUnlinkIdentity = useCallback(
+    async (kind: string, id: string): Promise<void> => {
+      const wireKind = kind === "wallet" ? "wallet" : "oidc";
+      await transport.request<void>({
+        method: "DELETE",
+        path: `/v1/me/identities/${wireKind}/${encodeURIComponent(id)}`,
+      });
+      await refreshProfile().catch(() => undefined);
+    },
+    [transport, refreshProfile],
+  );
+
+  // Wallet link (PRD FR-L1/M1): drive the system-browser SIWE proof via main,
+  // then map the renderer-safe outcome into the shape ProfilePage's
+  // merge-confirm flow consumes. `confirmMerge` re-runs the whole flow (fresh
+  // signature) after the user consents.
+  const handleLinkWallet = useCallback(
+    async ({
+      confirmMerge,
+    }: {
+      confirmMerge: boolean;
+    }): Promise<LinkWalletOutcome> => {
+      const bridge = typeof window !== "undefined" ? window.bridge : undefined;
+      if (bridge === undefined) {
+        return { status: "error", message: "Wallet linking isn’t available." };
+      }
+      try {
+        const outcome = await bridge.ipc.invoke<AuthLinkOutcome>(
+          CHANNELS.authLinkWallet,
+          { workspaceId: session.workspaceId, confirmMerge },
+        );
+        if (
+          outcome.status === "linked" ||
+          outcome.status === "already_linked" ||
+          outcome.status === "merged"
+        ) {
+          await refreshProfile().catch(() => undefined);
+          return { status: outcome.status };
+        }
+        if (outcome.status === "merge_required") {
+          return {
+            status: "merge_required",
+            message: outcome.message ?? undefined,
+          };
+        }
+        return {
+          status: "error",
+          message: outcome.message ?? "Could not link that wallet.",
+        };
+      } catch (err) {
+        return {
+          status: "error",
+          message:
+            isTransportHttpError(err) || err instanceof Error
+              ? err.message
+              : "Could not link that wallet.",
+        };
+      }
+    },
+    [session.workspaceId, refreshProfile],
+  );
   const [appearance, setAppearance] =
     useState<AppearanceValue>(DEFAULT_APPEARANCE);
   const [modelBehavior, setModelBehavior] = useState<ModelBehaviorValue>(
@@ -530,16 +612,67 @@ export function SettingsMount({
             }}
             onSignOut={onSignOut}
             // Linked accounts (PRD FR-U1): the real list from /me/profile.
-            // Link CTAs stay hidden until the desktop link flows (system
-            // browser OAuth / wallet signing) are wired — props omitted.
-            linkedIdentities={profile?.linked_identities?.map((entry) => ({
-              kind: entry.kind,
-              id: entry.id,
-              provider: entry.provider ?? null,
-              email: entry.email ?? null,
-              address: entry.address ?? null,
-              chainName: entry.chain_name ?? null,
-            }))}
+            // Show the panel even when empty (matches web), so Link/Unlink are
+            // always reachable.
+            linkedIdentities={(profile?.linked_identities ?? []).map(
+              (entry) => ({
+                kind: entry.kind,
+                id: entry.id,
+                provider: entry.provider ?? null,
+                email: entry.email ?? null,
+                address: entry.address ?? null,
+                chainName: entry.chain_name ?? null,
+              }),
+            )}
+            // Unlink (FR-L5) — DELETE via transport; the last-method guard is
+            // surfaced honestly by ProfilePage from the thrown error message.
+            onUnlinkIdentity={handleUnlinkIdentity}
+            // Wallet link (FR-L1/M1) — system-browser SIWE proof + POST; owns
+            // the merge-confirm flow. Only wired when the native bridge exists.
+            onLinkWallet={
+              typeof window !== "undefined" && window.bridge !== undefined
+                ? handleLinkWallet
+                : undefined
+            }
+            // Google link (FR-L2) — system-browser OAuth; refresh + toast on
+            // completion. `onLinkGoogle` is fire-and-forget per the contract.
+            onLinkGoogle={
+              typeof window !== "undefined" && window.bridge !== undefined
+                ? () => {
+                    void window.bridge?.ipc
+                      .invoke<AuthLinkOutcome>(CHANNELS.authLinkGoogle, {
+                        workspaceId: session.workspaceId,
+                      })
+                      .then((outcome) => {
+                        if (
+                          outcome.status === "linked" ||
+                          outcome.status === "already_linked"
+                        ) {
+                          void refreshProfile().catch(() => undefined);
+                          toast(
+                            outcome.status === "linked"
+                              ? "Google account linked."
+                              : "That Google account was already linked.",
+                          );
+                        } else if (outcome.status === "merge_required") {
+                          toast(
+                            "That Google account belongs to another account. Link its wallet from here to merge them.",
+                          );
+                        } else {
+                          toast(
+                            outcome.message ??
+                              "Couldn’t link that Google account.",
+                          );
+                        }
+                      })
+                      .catch(() => {
+                        toast(
+                          "Couldn’t start Google linking. Please try again.",
+                        );
+                      });
+                  }
+                : undefined
+            }
           />
         );
       case "appearance":

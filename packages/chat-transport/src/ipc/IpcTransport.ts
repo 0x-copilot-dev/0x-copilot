@@ -6,7 +6,11 @@ import type {
   TransportCapabilities,
   TypedRequest,
 } from "../types";
-import { CHANNELS, type StreamEventPayload } from "./rpc-protocol";
+import {
+  CHANNELS,
+  unwrapTransportResult,
+  type StreamEventPayload,
+} from "./rpc-protocol";
 import type { WindowBridge } from "./window-bridge";
 
 export interface IpcTransportConfig {
@@ -85,7 +89,15 @@ export class IpcTransport implements Transport {
     // flagged for Phase 5.
     const { signal: _signal, ...payload } = req;
     void _signal;
-    return this.#bridge.ipc.invoke<TRes>(CHANNELS.transportRequest, payload);
+    // Main resolves with the transport-result envelope so structured HTTP
+    // failures (status + FastAPI detail) survive the IPC hop; unwrap
+    // rehydrates TransportHttpError / UnauthorizedError. Bare values from
+    // older mains / test doubles pass through unchanged.
+    const raw = await this.#bridge.ipc.invoke<unknown>(
+      CHANNELS.transportRequest,
+      payload,
+    );
+    return unwrapTransportResult<TRes>(raw);
   }
 
   subscribeServerSentEvents(opts: SseSubscribeOptions): SseSubscription {

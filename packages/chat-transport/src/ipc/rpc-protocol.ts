@@ -1,5 +1,7 @@
 import { z } from "zod";
 
+import { TransportHttpError, UnauthorizedError } from "../types";
+
 // Allowlisted IPC channel names. The preload (Agent 1-A) enforces this set
 // at the contextBridge boundary; main (handlers.ts) registers exactly these.
 // Both renderer and main import this constant — there is no other source.
@@ -32,6 +34,13 @@ export const CHANNELS = {
   // receives the bearer via the loopback redirect. Same
   // bearer-never-crosses-IPC rule as the other auth channels.
   authSignInWallet: "auth.sign-in-wallet",
+  // Account-linking (PRD FR-L1/L2) — authenticated LINK flows driven from
+  // Settings. Main opens the system browser (Google OAuth link / wallet
+  // signing), completes the link against the caller's existing session, and
+  // returns ONLY a renderer-safe outcome (status + provider). Same
+  // bearer-never-crosses-IPC rule as the sign-in channels.
+  authLinkGoogle: "auth.link-google",
+  authLinkWallet: "auth.link-wallet",
   authSignOut: "auth.sign-out",
   authRefresh: "auth.refresh",
   // Phase 6C tier-2 adapter lifecycle. Main owns the install pipeline
@@ -131,6 +140,40 @@ export const RendererSessionSchema = z
   })
   .strict();
 export type RendererSession = z.infer<typeof RendererSessionSchema>;
+
+// --- Account-linking IPC (PRD FR-L1/L2) ---------------------------------
+// Params for CHANNELS.authLinkWallet: which workspace + whether the user has
+// consented to a merge (FR-U2). Google link takes only the workspace.
+export const AuthLinkWalletParamsSchema = z
+  .object({
+    workspaceId: z.string().min(1).max(256),
+    confirmMerge: z.boolean(),
+  })
+  .strict();
+export type AuthLinkWalletParams = z.infer<typeof AuthLinkWalletParamsSchema>;
+
+// Renderer-safe outcome of a LINK flow — NO bearer, NO absorbed-account ids.
+// `merge_required` means the identity is owned by another account (FR-M1);
+// the renderer re-invokes with `confirmMerge: true` after the user consents.
+export const LinkOutcomeStatusSchema = z.enum([
+  "linked",
+  "already_linked",
+  "merged",
+  "merge_required",
+  "error",
+]);
+export type LinkOutcomeStatus = z.infer<typeof LinkOutcomeStatusSchema>;
+
+export const AuthLinkOutcomeSchema = z
+  .object({
+    status: LinkOutcomeStatusSchema,
+    provider: z.string().nullable().optional(),
+    emailUpgraded: z.boolean().optional(),
+    /** User-safe message for the `error` status (never leaks account ids). */
+    message: z.string().nullable().optional(),
+  })
+  .strict();
+export type AuthLinkOutcome = z.infer<typeof AuthLinkOutcomeSchema>;
 
 // === Phase 6C tier-2 lifecycle ===
 
@@ -253,6 +296,95 @@ export const StreamEventPayloadSchema = z.object({
   errorMessage: z.string().optional(),
 });
 export type StreamEventPayload = z.infer<typeof StreamEventPayloadSchema>;
+
+// === Transport request result envelope ===
+//
+// Electron's ipcMain.handle rejection path flattens thrown errors to a
+// mangled `message` string — structured HTTP failures (status + FastAPI
+// `detail`, e.g. the account-linking 409 `merge_required` /
+// `last_sign_in_method` codes) would not survive the hop. Main therefore
+// RESOLVES transport.request with this envelope; the renderer-side
+// IpcTransport unwraps it and rehydrates the typed error so renderer code
+// branches identically on web and desktop. Non-HTTP errors (network,
+// validation) still reject the invoke and flatten — they carry no
+// structure worth preserving.
+
+export interface TransportHttpErrorWire {
+  readonly status: number;
+  readonly message: string;
+  readonly detail: unknown;
+}
+
+const TRANSPORT_RESULT_KIND = "transport-result" as const;
+
+export type TransportRequestResult =
+  | {
+      readonly kind: typeof TRANSPORT_RESULT_KIND;
+      readonly ok: true;
+      readonly value: unknown;
+    }
+  | {
+      readonly kind: typeof TRANSPORT_RESULT_KIND;
+      readonly ok: false;
+      readonly error: TransportHttpErrorWire;
+    };
+
+export function wrapTransportValue(value: unknown): TransportRequestResult {
+  return { kind: TRANSPORT_RESULT_KIND, ok: true, value };
+}
+
+/**
+ * Wire-encode a typed HTTP error for the envelope, or null when the error
+ * carries no HTTP structure (caller should rethrow those unchanged).
+ */
+export function toTransportHttpErrorWire(
+  err: unknown,
+): TransportHttpErrorWire | null {
+  if (err instanceof TransportHttpError) {
+    return { status: err.status, message: err.message, detail: err.detail };
+  }
+  if (err instanceof UnauthorizedError) {
+    return { status: 401, message: err.message, detail: null };
+  }
+  return null;
+}
+
+export function wrapTransportError(
+  error: TransportHttpErrorWire,
+): TransportRequestResult {
+  return { kind: TRANSPORT_RESULT_KIND, ok: false, error };
+}
+
+function isTransportRequestResult(raw: unknown): raw is TransportRequestResult {
+  return (
+    typeof raw === "object" &&
+    raw !== null &&
+    (raw as { kind?: unknown }).kind === TRANSPORT_RESULT_KIND &&
+    typeof (raw as { ok?: unknown }).ok === "boolean"
+  );
+}
+
+/**
+ * Renderer-side inverse of the envelope: unwrap the value or throw the
+ * rehydrated typed error. Raw (non-envelope) values pass through verbatim
+ * so an older main / test double that returns the bare response keeps
+ * working.
+ */
+export function unwrapTransportResult<T>(raw: unknown): T {
+  if (!isTransportRequestResult(raw)) {
+    return raw as T;
+  }
+  if (raw.ok) {
+    return raw.value as T;
+  }
+  const { status, message, detail } = raw.error;
+  if (status === 401) {
+    throw new UnauthorizedError(message);
+  }
+  throw new TransportHttpError(status, message, detail);
+}
+
+// === end transport request result envelope ===
 
 // Thrown by handlers when an incoming IPC payload fails Zod validation.
 // Crosses the IPC boundary as a rejected promise (Electron serialises

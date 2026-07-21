@@ -27,6 +27,7 @@ import {
 } from "react";
 
 import { PageHeader } from "../shell/PageHeader";
+import { Modal } from "./Modal";
 
 /**
  * The account's identity anchor — the thing that *is* the account. Exactly one
@@ -79,6 +80,25 @@ export interface ProfileLinkedIdentity {
   readonly chainName?: string | null;
 }
 
+/**
+ * Outcome of a host wallet-link attempt (PRD FR-L1/M1/U2). The host runs
+ * the SIWE proof + `POST /v1/me/identities/wallet` and maps the response
+ * to one of these so the (substrate-agnostic) page can drive the
+ * merge-confirm flow without knowing any transport detail:
+ *   - `linked` / `already_linked` / `merged` → success, panel refreshes.
+ *   - `merge_required` → the wallet belongs to another account; the page
+ *     shows the merge-confirm dialog and, on confirm, re-invokes
+ *     `onLinkWallet({ confirmMerge: true })` (which MUST re-sign — the SIWE
+ *     nonce is single-use). `message` is the server's user-safe reason.
+ *   - `error` → surfaced inline (`message`).
+ *   - `cancelled` → the user dismissed the wallet prompt; quiet reset.
+ */
+export type LinkWalletOutcome =
+  | { readonly status: "linked" | "already_linked" | "merged" }
+  | { readonly status: "merge_required"; readonly message?: string }
+  | { readonly status: "error"; readonly message: string }
+  | { readonly status: "cancelled" };
+
 export interface ProfilePageProps {
   readonly person: ProfilePagePerson;
   /**
@@ -95,15 +115,27 @@ export interface ProfilePageProps {
    */
   readonly linkedIdentities?: readonly ProfileLinkedIdentity[];
   /**
-   * Start the link-a-wallet flow (SIWE proof). Optional — the CTA renders
-   * only when the host wires the flow.
+   * Run the link-a-wallet flow (PRD FR-L1). The host performs the SIWE
+   * proof + `POST /v1/me/identities/wallet` and resolves a
+   * {@link LinkWalletOutcome}; the page owns the merge-confirm dialog and
+   * re-invokes with `confirmMerge: true` on consent (FR-U2). Optional — the
+   * CTA renders only when the host wires the flow.
    */
-  readonly onLinkWallet?: () => void;
+  readonly onLinkWallet?: (options: {
+    readonly confirmMerge: boolean;
+  }) => Promise<LinkWalletOutcome>;
   /**
    * Start the link-Google flow (OAuth; also how a wallet account adds an
    * email). Optional — the CTA renders only when the host wires the flow.
    */
   readonly onLinkGoogle?: () => void;
+  /**
+   * Unlink a linked sign-in identity (PRD FR-L5). The host calls
+   * `DELETE /v1/me/identities/{kind}/{id}`; it MUST reject (throw) on the
+   * 409 last-sign-in-method guard, whose `Error.message` the page surfaces
+   * verbatim next to the row. Optional — Unlink renders only when wired.
+   */
+  readonly onUnlinkIdentity?: (kind: string, id: string) => Promise<void>;
 }
 
 // ---------------------------------------------------------------------------
@@ -263,6 +295,54 @@ const linkCtaStyle: CSSProperties = {
   cursor: "pointer",
 };
 
+// Unlink — a quiet, danger-toned text button trailing each linked row. Pushed
+// to the row's end so it reads as a per-row action, not a primary CTA.
+const unlinkButtonStyle: CSSProperties = {
+  marginLeft: "auto",
+  height: 28,
+  padding: "0 10px",
+  borderRadius: "var(--radius-sm, 6px)",
+  border: "1px solid var(--color-border, #232325)",
+  background: "transparent",
+  color: "var(--color-danger, #d96b6b)",
+  fontSize: "var(--font-size-xs, 12px)",
+  fontWeight: 600,
+  cursor: "pointer",
+};
+
+// Inline error line (unlink guard, link failure) — danger-toned, small.
+const inlineErrorStyle: CSSProperties = {
+  width: "100%",
+  fontSize: "var(--font-size-xs, 12px)",
+  color: "var(--color-danger, #d96b6b)",
+  lineHeight: 1.45,
+};
+
+// Merge-confirm dialog action buttons.
+const dialogCancelStyle: CSSProperties = {
+  height: 32,
+  padding: "0 14px",
+  borderRadius: "var(--radius-sm, 6px)",
+  border: "1px solid var(--color-border, #232325)",
+  background: "transparent",
+  color: "var(--color-text, #ededee)",
+  fontSize: "var(--font-size-sm, 13px)",
+  fontWeight: 600,
+  cursor: "pointer",
+};
+
+const dialogConfirmStyle: CSSProperties = {
+  height: 32,
+  padding: "0 14px",
+  borderRadius: "var(--radius-sm, 6px)",
+  border: "1px solid var(--color-danger, #d96b6b)",
+  background: "var(--color-danger, #d96b6b)",
+  color: "var(--color-danger-contrast, #1a0a0a)",
+  fontSize: "var(--font-size-sm, 13px)",
+  fontWeight: 600,
+  cursor: "pointer",
+};
+
 const signOutButtonStyle: CSSProperties = {
   height: 32,
   padding: "0 14px",
@@ -310,6 +390,21 @@ function signedInLabel(person: ProfilePagePerson): string {
 // Page
 // ---------------------------------------------------------------------------
 
+/** Wallet-link flow state owned by the page (host does the proof + POST). */
+type LinkState =
+  | { readonly kind: "idle" }
+  | { readonly kind: "busy" }
+  | { readonly kind: "confirm-merge"; readonly message: string }
+  | { readonly kind: "merging" }
+  | { readonly kind: "error"; readonly message: string };
+
+// Honest default copy for the merge-confirm dialog (PRD FR-U2). Shown when
+// the server sends no user-safe reason of its own.
+const DEFAULT_MERGE_MESSAGE =
+  "This wallet already belongs to another account. Linking it will move " +
+  "that account's data into this one and disable its separate login. This " +
+  "cannot be undone.";
+
 export function ProfilePage({
   person,
   onSaveDisplayName,
@@ -317,10 +412,86 @@ export function ProfilePage({
   linkedIdentities,
   onLinkWallet,
   onLinkGoogle,
+  onUnlinkIdentity,
 }: ProfilePageProps): ReactElement {
   const reactId = useId();
   const nameId = `${reactId}-display-name`;
   const anchorId = `${reactId}-anchor`;
+
+  // --- wallet-link + merge-confirm state ----------------------------------
+  const [linkState, setLinkState] = useState<LinkState>({ kind: "idle" });
+
+  const runWalletLink = useCallback(
+    async (confirmMerge: boolean): Promise<void> => {
+      if (onLinkWallet === undefined) return;
+      setLinkState({ kind: confirmMerge ? "merging" : "busy" });
+      try {
+        const outcome = await onLinkWallet({ confirmMerge });
+        switch (outcome.status) {
+          case "linked":
+          case "already_linked":
+          case "merged":
+          case "cancelled":
+            // The host refreshes the identity list on success; a cancel is a
+            // quiet reset. Either way, back to idle with the dialog closed.
+            setLinkState({ kind: "idle" });
+            break;
+          case "merge_required":
+            setLinkState({
+              kind: "confirm-merge",
+              message: outcome.message ?? DEFAULT_MERGE_MESSAGE,
+            });
+            break;
+          case "error":
+            setLinkState({ kind: "error", message: outcome.message });
+            break;
+        }
+      } catch (err) {
+        setLinkState({
+          kind: "error",
+          message:
+            err instanceof Error && err.message !== ""
+              ? err.message
+              : "Could not link that wallet. Please try again.",
+        });
+      }
+    },
+    [onLinkWallet],
+  );
+
+  const dismissMergeConfirm = useCallback(() => {
+    setLinkState({ kind: "idle" });
+  }, []);
+
+  // --- unlink state (per-identity busy + inline guard error) --------------
+  const [unlinkingId, setUnlinkingId] = useState<string | null>(null);
+  const [unlinkError, setUnlinkError] = useState<{
+    readonly id: string;
+    readonly message: string;
+  } | null>(null);
+
+  const handleUnlink = useCallback(
+    async (kind: string, id: string): Promise<void> => {
+      if (onUnlinkIdentity === undefined) return;
+      setUnlinkError(null);
+      setUnlinkingId(id);
+      try {
+        await onUnlinkIdentity(kind, id);
+        // Success: the host refreshes `linkedIdentities`, dropping this row.
+      } catch (err) {
+        setUnlinkError({
+          id,
+          message:
+            err instanceof Error && err.message !== ""
+              ? err.message
+              : "Could not unlink that sign-in method.",
+        });
+      } finally {
+        setUnlinkingId(null);
+      }
+    },
+    [onUnlinkIdentity],
+  );
 
   const canEditName = onSaveDisplayName !== undefined;
   const [displayName, setDisplayName] = useState<string>(
@@ -457,9 +628,10 @@ export function ProfilePage({
         </fieldset>
 
         {/* Linked accounts (PRD FR-U1): every sign-in identity on the account.
-            Rendered only when the host supplies the data; Link CTAs render
+            Rendered only when the host supplies the data; Link + Unlink render
             only when the host wires the flow (substrate-agnostic — callbacks
-            out, data in). Unlink ships with its backend (FR-L5, merge PR). */}
+            out, data in). Unlink surfaces the FR-L5 last-method guard honestly;
+            the wallet-link CTA owns the FR-U2 merge-confirm dialog below. */}
         {linkedIdentities !== undefined ? (
           <fieldset style={fieldsetStyle} data-testid="profile-linked-accounts">
             <legend style={legendStyle}>Linked accounts</legend>
@@ -468,53 +640,96 @@ export function ProfilePage({
                 No linked sign-in methods yet.
               </span>
             ) : (
-              linkedIdentities.map((identity) => (
-                <div
-                  key={identity.id}
-                  style={rowStyle}
-                  data-testid={`profile-linked-${identity.kind}`}
-                >
-                  {identity.kind === "wallet" ? (
-                    <>
-                      <span style={labelStyle}>Wallet</span>
-                      <input
-                        type="text"
-                        value={identity.address ?? ""}
-                        readOnly
-                        aria-readonly
-                        style={monoReadOnlyStyle}
-                      />
-                      {identity.chainName ? (
-                        <span style={chainChipStyle}>{identity.chainName}</span>
-                      ) : null}
-                    </>
-                  ) : (
-                    <>
-                      <span style={labelStyle}>
-                        {identity.provider === "google"
-                          ? "Google"
-                          : (identity.provider ?? "SSO")}
+              linkedIdentities.map((identity) => {
+                const busy = unlinkingId === identity.id;
+                return (
+                  <div
+                    key={identity.id}
+                    style={{ ...rowStyle, gap: 8 }}
+                    data-testid={`profile-linked-${identity.kind}`}
+                  >
+                    {identity.kind === "wallet" ? (
+                      <>
+                        <span style={labelStyle}>Wallet</span>
+                        <input
+                          type="text"
+                          value={identity.address ?? ""}
+                          readOnly
+                          aria-readonly
+                          style={monoReadOnlyStyle}
+                        />
+                        {identity.chainName ? (
+                          <span style={chainChipStyle}>
+                            {identity.chainName}
+                          </span>
+                        ) : null}
+                      </>
+                    ) : (
+                      <>
+                        <span style={labelStyle}>
+                          {identity.provider === "google"
+                            ? "Google"
+                            : (identity.provider ?? "SSO")}
+                        </span>
+                        <input
+                          type="text"
+                          value={identity.email ?? ""}
+                          readOnly
+                          aria-readonly
+                          style={readOnlyStyle}
+                        />
+                      </>
+                    )}
+                    {onUnlinkIdentity !== undefined ? (
+                      <button
+                        type="button"
+                        onClick={() => {
+                          void handleUnlink(identity.kind, identity.id);
+                        }}
+                        disabled={busy}
+                        aria-busy={busy}
+                        style={{
+                          ...unlinkButtonStyle,
+                          opacity: busy ? 0.6 : 1,
+                          cursor: busy ? "progress" : "pointer",
+                        }}
+                        data-testid={`profile-unlink-${identity.id}`}
+                        title="Remove this sign-in method"
+                      >
+                        {busy ? "Unlinking…" : "Unlink"}
+                      </button>
+                    ) : null}
+                    {unlinkError !== null && unlinkError.id === identity.id ? (
+                      <span
+                        style={inlineErrorStyle}
+                        role="alert"
+                        data-testid={`profile-unlink-error-${identity.id}`}
+                      >
+                        {unlinkError.message}
                       </span>
-                      <input
-                        type="text"
-                        value={identity.email ?? ""}
-                        readOnly
-                        aria-readonly
-                        style={readOnlyStyle}
-                      />
-                    </>
-                  )}
-                </div>
-              ))
+                    ) : null}
+                  </div>
+                );
+              })
             )}
             {onLinkWallet !== undefined ? (
               <button
                 type="button"
-                onClick={onLinkWallet}
-                style={linkCtaStyle}
+                onClick={() => {
+                  void runWalletLink(false);
+                }}
+                disabled={linkState.kind === "busy"}
+                aria-busy={linkState.kind === "busy"}
+                style={{
+                  ...linkCtaStyle,
+                  opacity: linkState.kind === "busy" ? 0.6 : 1,
+                  cursor: linkState.kind === "busy" ? "progress" : "pointer",
+                }}
                 data-testid="profile-link-wallet"
               >
-                Link a wallet
+                {linkState.kind === "busy"
+                  ? "Linking wallet…"
+                  : "Link a wallet"}
               </button>
             ) : null}
             {onLinkGoogle !== undefined &&
@@ -529,6 +744,15 @@ export function ProfilePage({
                   ? "Add an email — continue with Google"
                   : "Link Google"}
               </button>
+            ) : null}
+            {linkState.kind === "error" ? (
+              <span
+                style={inlineErrorStyle}
+                role="alert"
+                data-testid="profile-link-error"
+              >
+                {linkState.message}
+              </span>
             ) : null}
           </fieldset>
         ) : null}
@@ -559,6 +783,64 @@ export function ProfilePage({
           ) : null}
         </div>
       </form>
+
+      {/* Merge-confirm dialog (PRD FR-U2). Opened when a wallet link resolves
+          to `merge_required`; confirming re-runs the link with consent (the
+          host re-signs — the SIWE nonce is single-use). This is the ONLY
+          client entry to the account-merge saga — the Google callback never
+          merges (PRD §11 confused-deputy note). */}
+      <Modal
+        open={
+          linkState.kind === "confirm-merge" || linkState.kind === "merging"
+        }
+        onClose={() => {
+          // A merge in flight must not be dismissible mid-write.
+          if (linkState.kind !== "merging") dismissMergeConfirm();
+        }}
+        title="Merge this account?"
+        subtitle="account-linking · irreversible"
+        closeLabel="Cancel merge"
+        footer={
+          <>
+            <button
+              type="button"
+              onClick={dismissMergeConfirm}
+              disabled={linkState.kind === "merging"}
+              style={{
+                ...dialogCancelStyle,
+                opacity: linkState.kind === "merging" ? 0.6 : 1,
+              }}
+              data-testid="profile-merge-cancel"
+            >
+              Cancel
+            </button>
+            <button
+              type="button"
+              onClick={() => {
+                void runWalletLink(true);
+              }}
+              disabled={linkState.kind === "merging"}
+              aria-busy={linkState.kind === "merging"}
+              style={{
+                ...dialogConfirmStyle,
+                opacity: linkState.kind === "merging" ? 0.6 : 1,
+                cursor: linkState.kind === "merging" ? "progress" : "pointer",
+              }}
+              data-testid="profile-merge-confirm"
+            >
+              {linkState.kind === "merging"
+                ? "Merging…"
+                : "Link & merge accounts"}
+            </button>
+          </>
+        }
+      >
+        <p style={{ margin: 0 }} data-testid="profile-merge-message">
+          {linkState.kind === "confirm-merge"
+            ? linkState.message
+            : DEFAULT_MERGE_MESSAGE}
+        </p>
+      </Modal>
     </div>
   );
 }

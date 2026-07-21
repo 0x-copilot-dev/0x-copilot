@@ -197,11 +197,40 @@ hardening PR, so the paper trail matches what shipped:
 - **NFR-7 async job**: the merge runs synchronously per-request (runtime leg
   ≤60s HTTP budget), resumable at checkpoints; the async-job + progress UI
   shape is deferred with the client work below.
-- **Client surfaces pending**: the merge-confirm dialog, unlink buttons,
-  wallet-link CTA, and a proper browser landing page for the Google
-  callback are not yet wired in the apps; the API contracts (409
-  `merge_required`, `confirm_merge`, `DELETE /v1/me/identities/*`) are live
-  and tested.
+- **Client surfaces SHIPPED** (FR-U1/U2/NFR-7 client halves): the four
+  client gaps are now wired on both substrates.
+  - **Typed transport errors**: `chat-transport` now throws
+    `TransportHttpError` (status + structured FastAPI `detail`/`code`);
+    `WebTransport` parses it and the desktop IPC hop preserves it through a
+    resolve-envelope (`wrapTransportValue`/`wrapTransportError` →
+    `unwrapTransportResult`) so hosts branch identically on the 409 codes.
+    api-types adds `LinkWalletResult`, `OidcLinkCallbackResult`,
+    `LinkErrorDetail` + `LINK_ERROR_CODES`.
+  - **Merge-confirm dialog + unlink**: `chat-surface`'s `ProfilePage` owns the
+    explicit FR-U2 confirm (opened on `merge_required`; confirm re-invokes
+    `onLinkWallet({confirmMerge:true})`, which RE-SIGNS — the nonce is
+    single-use) and per-identity Unlink (FR-L5 last-method guard surfaced
+    from the thrown message). Web `Profile.tsx` has its own parallel
+    implementation (`WalletLinkFlow` + inline merge-confirm) since web renders
+    the legacy Settings; both host binders updated together.
+  - **Wallet-link CTA**: web uses an EIP-6963 signing flow
+    (`WalletLinkFlow`, shared primitives in `walletProof.ts`) → `meApi.linkWallet`;
+    desktop drives the system-browser wallet page in a new `?mode=link` proof
+    mode (`WalletHandoffPage`/`WalletSignIn onProof` → loopback proof relay →
+    `AuthService.linkWallet` POSTs with the caller's bearer). Google link:
+    web reuses `startGoogleLink`; desktop adds `AuthService.linkGoogle`
+    (authenticated system-browser OAuth, reads the outcome off the callback
+    redirect).
+  - **Google callback landing**: the facade `/v1/auth/oidc/callback`
+    302-redirects LINK outcomes (and the `merge_required` conflict) to a
+    same-origin `/oauth/link/callback` landing (relative `Location`, no PII in
+    the URL); the web SPA renders `GoogleLinkLanding` there. Sign-in JSON
+    handoffs (desktop loopback + web adopt) are byte-unchanged.
+  - Web `Profile.tsx` now shows the Linked-accounts panel even when empty
+    (parity with chat-surface).
+  - Deferred still: desktop wallet/Google link + web landing are unit-tested
+    but await the live embedded-Postgres smoke (§8) for end-to-end sign-off;
+    the merge saga itself remains synchronous (NFR-7 async-job shape deferred).
 - **NFR-4 decrypt smoke** runs with the live embedded-Postgres gate (§8),
   which remains the production sign-off for both Postgres re-key executors.
 

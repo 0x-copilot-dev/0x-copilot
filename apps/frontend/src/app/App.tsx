@@ -9,6 +9,7 @@ import { decideApproval } from "../api/agentApi";
 import type { RequestIdentity } from "../api/config";
 import { completeMcpOAuth } from "../api/mcpApi";
 import { AuthProvider, useAuth } from "../features/auth/AuthContext";
+import { GOOGLE_LINK_CALLBACK_PATH } from "../features/auth/googleLinkLanding";
 import {
   clearPendingMcpAuthAction,
   readPendingMcpAuthAction,
@@ -78,6 +79,11 @@ const LoginScreen = lazy(() =>
 );
 const MfaPrompt = lazy(() =>
   import("../features/auth/MfaPrompt").then((m) => ({ default: m.MfaPrompt })),
+);
+const GoogleLinkLanding = lazy(() =>
+  import("../features/auth/GoogleLinkLandingScreen").then((m) => ({
+    default: m.GoogleLinkLanding,
+  })),
 );
 const ChatScreen = lazy(() =>
   import("../features/chat/ChatScreen").then((m) => ({
@@ -337,6 +343,22 @@ export default function App(): ReactElement {
  */
 function AuthGate(): ReactElement {
   const auth = useAuth();
+
+  // Account-linking (PRD FR-L2): the Google LINK callback lands here after
+  // the facade redirects the outcome into product UI. Show the result screen
+  // regardless of auth-rehydration state — the sensitive link already
+  // happened server-side; this only communicates it, then routes the user
+  // back into the (authenticated) app.
+  if (
+    typeof window !== "undefined" &&
+    window.location.pathname === GOOGLE_LINK_CALLBACK_PATH
+  ) {
+    return (
+      <Suspense fallback={<RouteLoadingFallback />}>
+        <GoogleLinkLanding />
+      </Suspense>
+    );
+  }
 
   if (auth.status === "initial" || auth.status === "loading") {
     return (
