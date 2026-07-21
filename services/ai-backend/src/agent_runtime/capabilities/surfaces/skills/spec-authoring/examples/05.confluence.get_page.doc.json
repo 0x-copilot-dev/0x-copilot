@@ -1,0 +1,37 @@
+{
+  "tool_descriptor": {
+    "name": "get_page",
+    "description": "Fetch a Confluence wiki page.",
+    "input_schema": {
+      "type": "object",
+      "properties": { "page_id": { "type": "string" } }
+    },
+    "output_shape": {
+      "type": "object",
+      "properties": { "page": { "type": "object" } }
+    }
+  },
+  "sample_output": {
+    "page": {
+      "id": "123",
+      "title": "Runbook: Incident response",
+      "space": "ENG",
+      "version": { "when": "2026-07-19T12:00:00Z", "by": "Priya Rao" },
+      "excerpt": "How to triage, escalate, and resolve a production incident...",
+      "web_url": "https://acme.atlassian.net/wiki/spaces/ENG/pages/123"
+    }
+  },
+  "spec": {
+    "spec_version": 1,
+    "archetype": "doc",
+    "source": { "server": "seed:confluence", "tool": "get_page" },
+    "title_path": "page.title",
+    "subtitle_path": "page.space",
+    "fields": [
+      { "label": "Summary", "path": "page.excerpt" },
+      { "label": "Updated by", "path": "page.version.by", "format": "user" },
+      { "label": "Updated", "path": "page.version.when", "format": "datetime" }
+    ],
+    "link": { "label": "Open in Confluence", "url_path": "page.web_url" }
+  }
+}

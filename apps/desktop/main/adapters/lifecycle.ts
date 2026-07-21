@@ -6,6 +6,7 @@ import {
   markBrokenFromBoundary,
   type RegistryHostDeps,
 } from "./registry-host";
+import { classifyAdapterReview } from "./review-gate";
 
 // Phase 6C orchestrator. Listens to adapter_generated run events and Q6
 // boundary errors; drives the install pipeline through registry-host;
@@ -163,6 +164,7 @@ export function startTier2Lifecycle(
               source: payload.adapter_source,
               generatedAt: payload.generated_at,
               generatorModel: payload.generator_model,
+              reviewClass: classifyAdapterReview(payload.layout),
             },
             deps.host,
           ),
@@ -173,6 +175,19 @@ export function startTier2Lifecycle(
 
         if (settled.outcome === "value" && settled.value.ok) {
           attempts.delete(payload.scheme);
+          return;
+        }
+
+        // A declined consent (PRD-10 write gate) is a user decision, not a
+        // broken adapter: it is terminal for this generation and must NOT burn a
+        // retry slot or queue a regen (regenerating would re-prompt with the
+        // same answer). The `validated` gate=consent audit row was already
+        // written by installAdapter's recordFailure.
+        if (
+          settled.outcome === "value" &&
+          !settled.value.ok &&
+          settled.value.gate === "consent"
+        ) {
           return;
         }
 

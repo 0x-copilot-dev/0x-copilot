@@ -22,7 +22,6 @@ import {
 // import bundles to `undefined` under esbuild's interop.
 import { autoUpdater as electronAutoUpdater } from "electron-updater";
 
-import type { AdapterGeneratedPayload } from "@0x-copilot/api-types";
 import type {
   BootStatusPayload,
   Transport,
@@ -43,16 +42,22 @@ import {
 } from "./adapters/integrate";
 import {
   startTier2Lifecycle,
-  type LifecycleBoundaryEvent,
-  type LifecycleEventSource,
   type Tier2LifecycleHandle,
 } from "./adapters/lifecycle";
-import type { LifecycleEventsDeps } from "./adapters/lifecycle-events";
 import {
-  markBrokenFromBoundary,
-  type RegistryHostDeps,
-  type RendererDispatcher,
+  RunFeedLifecycleEventSource,
+  type LifecycleEventsDeps,
+} from "./adapters/lifecycle-events";
+import type {
+  RegistryHostDeps,
+  RendererDispatcher,
 } from "./adapters/registry-host";
+import {
+  createFileConsentAckStore,
+  createInstallReviewGate,
+  type InstallConsentRequest,
+  type InstallReviewGate,
+} from "./adapters/review-gate";
 import { AuthService, createFileAuthAuditLog, type AuthAuditLog } from "./auth";
 import {
   registerAppProtocolHandler,
@@ -88,6 +93,19 @@ import { TransportBridge } from "./transport-bridge";
 import { createMainWindow } from "./window";
 
 applyBrandIdentity(app, { platform: process.platform });
+
+// Test-harness isolation: an explicit userData SUBDIR keeps a driven run
+// (tools/cli-testing) fully hermetic — its own boot secrets, embedded-PG
+// data dir and sessions — so it never touches (or wipes) a real install's
+// data. Must run before anything reads app.getPath("userData"). The
+// cli-testing driver has set this env for dev posture since it shipped;
+// honoring it here (all postures) makes that contract real.
+{
+  const subdir = process.env.COPILOT_DESKTOP_USER_DATA_SUBDIR ?? "";
+  if (subdir !== "" && !subdir.includes("..") && !subdir.includes("/")) {
+    app.setPath("userData", join(app.getPath("userData"), subdir));
+  }
+}
 
 registerAppProtocolPrivilege();
 
@@ -127,20 +145,42 @@ const hasSingleInstanceLock = installSingleInstance(app, () => {
   mainWindow.focus();
 });
 
-// Pluggable tier-2 event source. Phase 6 ships a no-op stub — the wiring to
-// the live run-stream (subscribing to adapter_generated events) is Phase 7's
-// concern. Tests inject a real source.
-class StubLifecycleEventSource implements LifecycleEventSource {
-  onAdapterGenerated(
-    _handler: (p: AdapterGeneratedPayload) => void,
-  ): () => void {
-    return () => {};
-  }
-  onBoundaryError(
-    _handler: (info: LifecycleBoundaryEvent) => void,
-  ): () => void {
-    return () => {};
-  }
+// PRD-10 review gate wiring. Read-only generated adapters auto-install; a
+// write/diff-surface adapter requires a one-time consent acknowledgment,
+// surfaced through the desktop's native message-box (the same native-consent
+// posture the folder-grant picker uses). The acknowledgment persists per scheme
+// under userData so the prompt is genuinely one-time.
+function buildTier2ReviewGate(userDataDir: string): InstallReviewGate {
+  const store = createFileConsentAckStore({
+    filePath: join(userDataDir, "adapters", "consent-acknowledged.json"),
+    fs: {
+      readFile: (path) => readFile(path, "utf8"),
+      writeFile,
+      mkdir,
+    },
+  });
+  const prompt = async (request: InstallConsentRequest): Promise<boolean> => {
+    const parent =
+      mainWindow !== null && !mainWindow.isDestroyed() ? mainWindow : undefined;
+    const options: Electron.MessageBoxOptions = {
+      type: "warning",
+      buttons: ["Cancel", "Allow"],
+      defaultId: 1,
+      cancelId: 0,
+      title: "Install a generated view?",
+      message: `Allow a generated view for "${request.scheme}" that can render editable changes?`,
+      detail:
+        "This adapter was produced by the agent and renders a write/diff " +
+        "surface. Approving any change it shows still requires a separate " +
+        `confirmation. Generator: ${request.generatorModel}.`,
+      noLink: true,
+    };
+    const result = parent
+      ? await dialog.showMessageBox(parent, options)
+      : await dialog.showMessageBox(options);
+    return result.response === 1;
+  };
+  return createInstallReviewGate({ store, prompt });
 }
 
 class WindowDispatcher implements RendererDispatcher {
@@ -347,8 +387,8 @@ if (hasSingleInstanceLock) {
       supervisor.onStatus(sendBootStatus);
       supervisor
         .start()
-        .then(({ facadeUrl }) => {
-          wireTransportAndIpc(facadeUrl);
+        .then(({ facadeUrl, hostToken }) => {
+          wireTransportAndIpc(facadeUrl, hostToken);
         })
         .catch((err: unknown) => {
           // The supervisor already emitted a fatal BootStatus for the
@@ -373,11 +413,14 @@ if (hasSingleInstanceLock) {
 
 // Constructed only once the facade is reachable (supervised mode) or
 // immediately in dev mode. facadeUrl === undefined -> MockTransport.
-function wireTransportAndIpc(facadeUrl: string | undefined): void {
+function wireTransportAndIpc(
+  facadeUrl: string | undefined,
+  hostToken?: string,
+): void {
   const auditLog = createFileAuthAuditLog({
     filePath: join(app.getPath("userData"), "audit", "auth.log"),
   });
-  const authService = buildAuthService(auditLog, facadeUrl);
+  const authService = buildAuthService(auditLog, facadeUrl, hostToken);
   const transport = createTransport(authService, auditLog, facadeUrl);
 
   // AC9 — connector OAuth service. Only meaningful against a real facade
@@ -395,6 +438,11 @@ function wireTransportAndIpc(facadeUrl: string | undefined): void {
           },
         });
 
+  // PRD-10 — the real tier-2 lifecycle source. It observes `adapter_generated`
+  // events off the same run-feed SSE stream the UI consumes (the TransportBridge
+  // tap below) and live render failures off the renderer's boundary-error IPC.
+  const tier2Source = new RunFeedLifecycleEventSource();
+
   const transportBridge = new TransportBridge(
     (webContentsId, payload) => {
       const target = webContents.fromId(webContentsId);
@@ -402,10 +450,12 @@ function wireTransportAndIpc(facadeUrl: string | undefined): void {
         target.send(CHANNELS.streamEvent, payload);
       }
     },
-    { transport },
+    {
+      transport,
+      onRunFeedMessage: (raw) => tier2Source.feedStreamMessage(raw),
+    },
   );
 
-  const tier2Source = new StubLifecycleEventSource();
   const userDataDir = app.getPath("userData");
   const adapterDir = join(userDataDir, "adapters");
   const audit: LifecycleEventsDeps = {
@@ -423,6 +473,7 @@ function wireTransportAndIpc(facadeUrl: string | undefined): void {
     dispatcher,
     audit,
     installer: { fs: { writeFile, mkdir, unlink } },
+    reviewGate: buildTier2ReviewGate(userDataDir),
   };
 
   teardownIpcHandlers = registerIpcHandlers({
@@ -446,15 +497,15 @@ function wireTransportAndIpc(facadeUrl: string | undefined): void {
     },
     tier2: {
       onBoundaryError: (payload) => {
-        void markBrokenFromBoundary(
-          {
-            scheme: payload.scheme,
-            version: payload.version,
-            method: payload.method,
-            reason: payload.message,
-          },
-          hostDeps,
-        );
+        // Route through the lifecycle source so the boundary drives the demote
+        // path AND the per-scheme retry counter (handleBoundaryError), rather
+        // than calling markBrokenFromBoundary directly and skipping the counter.
+        tier2Source.feedBoundaryError({
+          scheme: payload.scheme,
+          version: payload.version,
+          method: payload.method,
+          reason: payload.message,
+        });
       },
     },
     // AC5 capability channels. Only wired when the subsystem constructed;
@@ -557,6 +608,7 @@ interface ActiveAuthService {
 function buildAuthService(
   authAudit: AuthAuditLog,
   facadeUrl: string | undefined,
+  hostToken?: string,
 ): ActiveAuthService {
   // Production posture (real install, incl. CLI launch where app.isPackaged is
   // false) forces mode away from "dev-mint" so OidcClient can never mint the
@@ -610,6 +662,7 @@ function buildAuthService(
   const service = new AuthService({
     mode,
     facadeBaseUrl,
+    hostToken,
     devPersonaSlug,
     oidc: oidcConfig,
     userDataDir: app.getPath("userData"),
@@ -620,10 +673,11 @@ function buildAuthService(
   });
 
   return {
-    // "Use locally, no account" — offered in every posture. In production posture
-    // (a real packaged install) it runs the production-safe local-key SIWE flow
-    // (a per-install keychain key, no dev IdP, no external service). In dev
-    // posture it keeps the dev-mint path so the `make dev` flow is unchanged.
+    // "Use locally, no account" — offered in every posture. In production
+    // posture it mints the DEVICE ACCOUNT via the host-token-gated
+    // /v1/auth/local/session (server-side singleton — same account across
+    // restarts/reinstalls, D4-A; no local key material). In dev posture it
+    // keeps the dev-mint path so the `make dev` flow is unchanged.
     signIn: (workspaceId) =>
       productionPosture
         ? service.signInLocal(workspaceId)

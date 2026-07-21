@@ -24,6 +24,12 @@ from agent_runtime.capabilities.citations import CitationLedger
 from agent_runtime.capabilities.conversation_ordinals import (
     ConversationOrdinalAllocator,
 )
+from agent_runtime.capabilities.surfaces import (
+    SurfaceGenerationScheduler,
+    SurfaceSpecStorePort,
+    build_surface_generation_scheduler,
+    build_surface_spec_store,
+)
 from agent_runtime.capabilities.tool_budget_guard import ToolBudgetGuard
 from agent_runtime.capabilities.tool_budget_middleware import ToolBudgetMiddleware
 from agent_runtime.execution.contracts import (
@@ -302,6 +308,16 @@ class RuntimeRunHandler:
             if citation_resolver is not None
             else None
         )
+        # Generative-UI (PRD-07): a run-scoped spec-generation scheduler, bound
+        # only when ``SURFACE_SPEC_MODEL`` is set. On a projector ladder miss the
+        # tool layer reaches it via the ContextVar and fires a fire-and-forget
+        # generation; ``surface_spec_generated`` then upgrades the surface.
+        surface_scheduler = self._build_surface_generation_scheduler(run)
+        surface_scheduler_token = (
+            SurfaceGenerationScheduler.bind_for_run(surface_scheduler)
+            if surface_scheduler is not None
+            else None
+        )
         logging.getLogger(__name__).info(
             "[citations] run.bind run=%s conv=%s allocator_seed=%d "
             "ledger=%s allocator=%s resolver=%s",
@@ -526,6 +542,8 @@ class RuntimeRunHandler:
             self.stream_event_mapper.update_processor.discard_metrics(run.run_id)
             raise
         finally:
+            if surface_scheduler_token is not None:
+                SurfaceGenerationScheduler.unbind(surface_scheduler_token)
             if resolver_token is not None:
                 CitationResolver.unbind(resolver_token)
             if allocator_token is not None:
@@ -975,12 +993,15 @@ class RuntimeRunHandler:
         """
 
         from agent_runtime.api.constants import Keys, Values  # noqa: PLC0415
+        from agent_runtime.capabilities.backends import (  # noqa: PLC0415
+            DraftSurfaceProjector,
+        )
         from agent_runtime.execution.contracts import StreamEventSource  # noqa: PLC0415
         from runtime_api.schemas import RuntimeApiEventType  # noqa: PLC0415
 
         async def _emit(record: object) -> None:
             # Lazy-attribute access keeps this file decoupled from DraftRecord.
-            payload = {
+            payload: dict[str, object] = {
                 Keys.Field.RUN_ID: command.run_id,
                 Keys.Field.CONVERSATION_ID: command.conversation_id,
                 "draft_id": getattr(record, "draft_id"),
@@ -993,6 +1014,11 @@ class RuntimeRunHandler:
                 Keys.Field.SUMMARY: f"Draft v{getattr(record, 'version')}: "
                 f"{getattr(record, 'title') or 'Untitled'}",
             }
+            # Generative-UI (PRD-02b): attach the same ``message`` surface the
+            # in-package emitter builds, so drafts written during the live run
+            # carry ``surface_uri`` + ``surface`` (section diff on v2+). Shared
+            # builder — no envelope duplication; best-effort + flag-gated.
+            await DraftSurfaceProjector.attach(payload, record, self.draft_store)  # type: ignore[arg-type]
             run = await self.persistence.get_run(
                 org_id=command.org_id, run_id=command.run_id
             )
@@ -1449,6 +1475,45 @@ class RuntimeRunHandler:
             store=self.citation_store,
             producer=self.event_producer,
             source=StreamEventSource.TOOL,
+        )
+
+    def _build_surface_generation_scheduler(
+        self, run: RunRecord
+    ) -> SurfaceGenerationScheduler | None:
+        """Build a run-scoped surface-spec generation scheduler, or ``None``.
+
+        Returns ``None`` (generation disabled) unless ``SURFACE_SPEC_MODEL`` is
+        set — the factory owns that gate. The store is selected by
+        ``SURFACE_SPEC_STORE_BACKEND`` (``memory`` default test, ``file`` desktop
+        single-user, ``backend`` team/web); an unset value preserves the prior
+        auto behaviour (durable file store when configured, else in-process).
+        The emit callback ships ``surface_spec_generated`` back onto the same
+        event producer every other emission uses, so the FE upgrades the surface
+        in place.
+        """
+
+        import os  # noqa: PLC0415 - local to keep the module import surface small
+
+        def _surface_store() -> SurfaceSpecStorePort:
+            return build_surface_spec_store(
+                environ=os.environ,
+                org_id=run.org_id,
+                user_id=run.user_id,
+            )
+
+        async def _emit(payload: Mapping[str, object]) -> None:
+            await self.event_producer.append_api_event(
+                run=run,
+                source=StreamEventSource.SYSTEM,
+                event_type=RuntimeApiEventType.SURFACE_SPEC_GENERATED,
+                summary="Prepared a view",
+                payload=dict(payload),
+            )
+
+        return build_surface_generation_scheduler(
+            store=_surface_store(),
+            emit=_emit,
+            environ=os.environ,
         )
 
     async def _bind_conversation_ordinal_allocator(

@@ -105,6 +105,16 @@ const SettingsScreen = lazy(() =>
     default: m.SettingsScreen,
   })),
 );
+// PRD-E convergence — the web app now mounts the chat-surface `SettingsSurface`
+// (the SSOT settings shell + nav + icons) via this binder for every settings
+// section EXCEPT `connectors`/`skills`, which have no SSOT nav slot and stay on
+// the legacy `SettingsScreen` (MCP-server management + skill editor). Code-split
+// like `SettingsScreen` so it costs the main bundle nothing until navigated to.
+const SettingsBinder = lazy(() =>
+  import("../features/settings/SettingsBinder").then((m) => ({
+    default: m.SettingsBinder,
+  })),
+);
 // P6.5-C2 — Project Templates gallery (sub-PRD §7.6). Top-level screen
 // (not a destination slug — §7.6 + §12 Q1: not on the rail), code-split
 // so the templates UI costs the main bundle nothing until the user
@@ -112,6 +122,15 @@ const SettingsScreen = lazy(() =>
 const TemplateGalleryRoute = lazy(() =>
   import("../features/project-templates/TemplateGalleryRoute").then((m) => ({
     default: m.TemplateGalleryRoute,
+  })),
+);
+// PRD-05 — the real Run cockpit binder, code-split so the RunDestination /
+// ThreadCanvas chunk costs the main bundle nothing while the `runCockpitWeb`
+// flag is OFF (its default). Loaded only when the flag gates the `run` slug
+// onto it (dispatch below), under the same `<Suspense>` as `body`.
+const RunRoute = lazy(() =>
+  import("../features/run/RunRoute").then((m) => ({
+    default: m.RunRoute,
   })),
 );
 
@@ -156,6 +175,15 @@ import {
   WebNotificationPort,
   type PortBundle,
 } from "../ports";
+// PRD-05 — register the web host's surface-renderer stack (tier-3 generic +
+// tier-1 SaaS + PRD-03 archetypes) once at module init, mirroring the desktop
+// bootstrap. Idempotent (registry replace semantics); no Tier2Bridge on web.
+import { registerSurfaces } from "./registerSurfaces";
+// PRD-05 — the `runCockpitWeb` flag (default OFF) gates the real RunDestination
+// cockpit vs the legacy ChatScreen under the `run` slug.
+import { isRunCockpitWebEnabled } from "./featureFlags";
+
+registerSurfaces();
 
 // Placeholder for a destination that exists in the shared slug union but has
 // no web surface yet. Renders an inert, unavailable section rather than
@@ -536,6 +564,10 @@ export function CopilotApp({
   // ⌘K palette open-state, lifted here so the shell topbar's single trigger
   // (ChatShell.onOpenCommandPalette) and the palette's ⌘K hotkey share one state.
   const [paletteOpen, setPaletteOpen] = useState(false);
+  // PRD-05 — read the `runCockpitWeb` flag once per mount (not a module const,
+  // so a devtools toggle / test seed takes effect on the next mount). OFF
+  // (default) keeps the legacy ChatScreen under `run`; ON mounts RunRoute.
+  const [runCockpitWebEnabled] = useState(() => isRunCockpitWebEnabled());
 
   useEffect(() => router.subscribe(setRoute), [router]);
 
@@ -687,17 +719,17 @@ export function CopilotApp({
 
   // ⌘K command launcher (PRD-D): map a command intent to real web navigation.
   // Navigate intents route through the rail handler; settings intents map the
-  // chat-surface section slug to the web `SettingsSection`. The only mismatch is
-  // `model-behavior` → `model-and-behavior`; the rest are identical (and PRD-E's
-  // settings convergence removes the mapping entirely).
+  // chat-surface section slug to the web `SettingsSection`. PRD-E's convergence
+  // mounts the SSOT `SettingsSurface` on web (via `SettingsBinder`) but keeps
+  // the web router's legacy section spellings for URL/back-compat, so the one
+  // remaining mismatch — `model-behavior` → `model-and-behavior` — stays; the
+  // binder maps it back to the SSOT slug. The other palette sections
+  // (`provider-keys`, `local-models`, `appearance`, `profile`) are identical.
   const handlePaletteCommand = (intent: ShellCommandIntent): void => {
     if (intent.type === "navigate") {
       handleRailNavigate(intent.slug);
       return;
     }
-    // All command sections are valid SettingsSection values (provider-keys,
-    // local-models, appearance, profile); only model-behavior is spelled
-    // differently on the legacy web screen.
     const section: SettingsSection =
       intent.section === "model-behavior"
         ? "model-and-behavior"
@@ -735,6 +767,12 @@ export function CopilotApp({
   // FR-4.28).
   const openSkillEditor = (_skillId?: string | null): void => {
     router.navigate({ screen: "settings", section: "skills" });
+  };
+  // PRD-05 — the Run cockpit's empty-state "Set up your model" CTA + the
+  // `configuration_error` "Add a provider key" CTA open Settings → Provider
+  // keys. Only reached when the `runCockpitWeb` flag mounts `RunRoute`.
+  const openModelSettings = (): void => {
+    router.navigate({ screen: "settings", section: "provider-keys" });
   };
 
   let body: ReactElement;
@@ -786,21 +824,40 @@ export function CopilotApp({
       );
     }
   } else if (route.screen === "settings") {
-    body = (
-      <SettingsScreen
-        connectors={connectors}
-        skills={skills}
-        identity={identity}
-        profile={profile}
-        initialSection={route.section}
-        onBackToChat={() =>
-          router.navigate({ screen: "chat", destination: ROOT_DESTINATION })
-        }
-        onSectionChange={(section) =>
-          router.navigate({ screen: "settings", section })
-        }
-      />
-    );
+    // PRD-E — `connectors`/`skills` have no SSOT nav slot (they are rail
+    // destinations; MCP-server management + the skill editor still live in the
+    // legacy screen), so they keep rendering `SettingsScreen`. Every other
+    // section mounts the converged chat-surface `SettingsSurface` via the binder.
+    if (route.section === "connectors" || route.section === "skills") {
+      body = (
+        <SettingsScreen
+          connectors={connectors}
+          skills={skills}
+          identity={identity}
+          profile={profile}
+          initialSection={route.section}
+          onBackToChat={() =>
+            router.navigate({ screen: "chat", destination: ROOT_DESTINATION })
+          }
+          onSectionChange={(section) =>
+            router.navigate({ screen: "settings", section })
+          }
+        />
+      );
+    } else {
+      body = (
+        <SettingsBinder
+          transport={getAppTransport()}
+          profile={profile}
+          identity={identity}
+          isAdmin={isAdmin}
+          section={route.section}
+          onNavigate={(section) =>
+            router.navigate({ screen: "settings", section })
+          }
+        />
+      );
+    }
   } else if (route.screen === "settings-p12") {
     // P12-C — Phase 12 settings pages
     // (`/settings/notification-defaults`, `/settings/security/webhooks`).
@@ -880,14 +937,19 @@ export function CopilotApp({
     // `routines`/`agents`/`memory`.
     body = <RouteLoadingFallback />;
   } else if (route.destination === "run") {
-    // PR-4.11 — the Run cockpit. On web the flagship Run destination is the
-    // working conversation surface (`ChatScreen`), which owns its own thread
-    // sidebar + composer. `run` is full-bleed in ChatShell (no ContextPanel /
-    // Topbar), so there is exactly one rail + one thread sidebar + one main
-    // pane (+ right rail). Reopen (Chats) / new-chat / skill-run / live-run all
-    // land here via `openRun`. `/` maps to `run` (ROOT_DESTINATION), so the
-    // legacy `/` bookmark keeps opening the chat cockpit.
-    body = (
+    // PR-4.11 / PRD-05 — the Run cockpit. Two mounts, one gated by the
+    // `runCockpitWeb` flag:
+    //   - flag ON  → the real `RunDestination` cockpit (chat-surface), bound by
+    //     the web `RunRoute` binder. It owns the Studio/Focus canvas, the
+    //     surface-tab center pane (archetype renderers), the workspace rail, and
+    //     the empty-state goal composer.
+    //   - flag OFF (default) → the legacy `ChatScreen`, BYTE-IDENTICAL to the
+    //     pre-PRD-05 path (no regression while the flag stays off).
+    // `run` is full-bleed in ChatShell (no ContextPanel / Topbar); `/` maps to
+    // `run` (ROOT_DESTINATION), so the legacy `/` bookmark keeps working.
+    body = runCockpitWebEnabled ? (
+      <RunRoute onOpenModelSettings={openModelSettings} />
+    ) : (
       <ChatScreen
         connectors={connectors}
         skills={skills}
@@ -1055,6 +1117,14 @@ export function CopilotApp({
             })
           }
           onOpenCommandPalette={() => setPaletteOpen(true)}
+          // PRD-C.2 / PRD-H.5 — feed the rail foot avatar the user's initial from
+          // the profile the shell already loads. The Run badge (activeRunCount)
+          // still needs a run-list source and is a documented follow-up.
+          railIdentity={
+            profile?.data?.display_name?.trim()
+              ? { initial: profile.data.display_name.trim().charAt(0) }
+              : undefined
+          }
         >
           <Suspense fallback={<RouteLoadingFallback />}>{body}</Suspense>
           {/*

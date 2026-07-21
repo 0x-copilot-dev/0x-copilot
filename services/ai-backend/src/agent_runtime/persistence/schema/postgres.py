@@ -1,7 +1,7 @@
 """PostgreSQL schema migration metadata for durable agent runtime persistence.
 
 The canonical SQL now lives in
-``services/ai-backend/migrations/0001_initial_runtime_persistence.sql`` and is
+``services/ai-backend/migrations/0001_runtime_baseline.sql`` and is
 applied by the yoyo-backed :class:`MigrationRunner`. The
 ``POSTGRES_AGENT_RUNTIME_MIGRATION_SQL`` constant is kept as a thin shim that
 reads the same file at module import so legacy callers (tests, catalog) see
@@ -54,17 +54,10 @@ def _migration_sql(filename: str) -> str:
     return (migrations_dir / filename).read_text()
 
 
-# Concatenation of the initial schema and subsequent forward migrations.
-# Historically these were separate code paths inside the legacy migrate();
-# they are now ordered yoyo migrations on disk. The combined string is
-# preserved here for backward compatibility with callers that inspect it.
-POSTGRES_AGENT_RUNTIME_MIGRATION_SQL = (
-    _migration_sql("0001_initial_runtime_persistence.sql")
-    + "\n"
-    + _migration_sql("0002_runtime_events_presentation.sql")
-    + "\n"
-    + _migration_sql("0003_audit_hardening.sql")
-)
+# The complete runtime schema. Since the pre-launch squash the canonical
+# SQL is the single 0001_runtime_baseline.sql (pg_dump-generated, catalog-verified);
+# the constant is preserved for callers that inspect the schema text.
+POSTGRES_AGENT_RUNTIME_MIGRATION_SQL = _migration_sql("0001_runtime_baseline.sql")
 
 
 class PostgresMigration(RuntimeContract):
@@ -79,7 +72,7 @@ class PostgresMigrationCatalog:
 
     @classmethod
     def initial_runtime_persistence(cls) -> PostgresMigration:
-        """Return the combined initial-schema migration (first three SQL files concatenated)."""
+        """Return the baseline schema migration (the squashed single SQL file)."""
         return PostgresMigration(
             migration_id=Values.MIGRATION_ID,
             sql=POSTGRES_AGENT_RUNTIME_MIGRATION_SQL.strip(),

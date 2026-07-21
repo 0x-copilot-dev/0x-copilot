@@ -207,6 +207,67 @@ describe("emailAdapter.renderDiff", () => {
   });
 });
 
+// PRD-06 — word-level diff inside the settled PENDING block.
+const WORD_DIFF_PENDING: EmailDiff = {
+  base: CURRENT,
+  pending: {
+    ...PENDING_DIFF.pending,
+    streaming: false,
+    before_body:
+      "Confirming the locked-price block from MSA §3.2: rate is $84.",
+    after_body: "Confirming the locked-price block from MSA §3.2: rate is $88.",
+  },
+};
+
+const WORD_DIFF_STREAMING: EmailDiff = {
+  base: CURRENT,
+  pending: {
+    ...WORD_DIFF_PENDING.pending,
+    streaming: true,
+    streamingBody: "Confirming the locked-price block from MSA §3.2: ",
+  },
+};
+
+describe("emailAdapter.renderDiff — word-level diff (PRD-06)", () => {
+  it("renders del/ins nodes for the before/after body inside the PENDING block", () => {
+    render(emailAdapter.renderDiff(WORD_DIFF_PENDING));
+    const body = screen.getByTestId("pending-body");
+    const diff = within(body).getByTestId("diff-text");
+    expect(diff).toBeInTheDocument();
+    // The changed token ($84 → $88) becomes a delete + insert pair.
+    expect(within(diff).getByTestId("diff-delete")).toHaveTextContent("$84.");
+    expect(within(diff).getByTestId("diff-insert")).toHaveTextContent("$88.");
+    // The unchanged prose is carried in equal runs.
+    expect(diff).toHaveTextContent("Confirming the locked-price block");
+  });
+
+  it("labels the diff with insertion/deletion totals for assistive tech", () => {
+    render(emailAdapter.renderDiff(WORD_DIFF_PENDING));
+    expect(screen.getByTestId("diff-text")).toHaveAccessibleName(
+      "1 insertion, 1 deletion",
+    );
+  });
+
+  it("keeps the streaming ghost (no diff yet) while pending.streaming is true", () => {
+    render(emailAdapter.renderDiff(WORD_DIFF_STREAMING));
+    // Still the ghost paragraph + cursor — the diff is deferred to the settled
+    // pending state even though before/after bodies are present.
+    expect(screen.queryByTestId("diff-text")).not.toBeInTheDocument();
+    expect(screen.getByTestId("streaming-cursor")).toBeInTheDocument();
+    expect(screen.getByTestId("pending-body")).toHaveTextContent(
+      WORD_DIFF_STREAMING.pending.streamingBody,
+    );
+  });
+
+  it("falls back to the plain ghost paragraph when no before/after body is supplied", () => {
+    render(emailAdapter.renderDiff(PENDING_DIFF));
+    expect(screen.queryByTestId("diff-text")).not.toBeInTheDocument();
+    expect(screen.getByTestId("pending-body")).toHaveTextContent(
+      PENDING_DIFF.pending.streamingBody,
+    );
+  });
+});
+
 describe("emailAdapter accessibility", () => {
   it("exposes the composer as a labelled form", () => {
     render(emailAdapter.renderCurrent(CURRENT));

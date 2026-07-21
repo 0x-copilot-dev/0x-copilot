@@ -119,8 +119,7 @@ class TestProductionManifestMatchesDirectory:
 
     def test_manifest_includes_initial_runtime_persistence(self) -> None:
         actual = MigrationRunner.actual_manifest()
-        assert "0001_initial_runtime_persistence" in actual
-        assert "0002_runtime_events_presentation" in actual
+        assert "0001_runtime_baseline" in actual
 
     def test_missing_manifest_raises_typed_error(
         self, monkeypatch: pytest.MonkeyPatch, tmp_path: Path

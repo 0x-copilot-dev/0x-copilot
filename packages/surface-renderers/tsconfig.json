@@ -1,5 +1,10 @@
 {
   "extends": "../../tsconfig.base.json",
+  "compilerOptions": {
+    "paths": {
+      "@0x-copilot/api-types": ["../api-types/src/index.ts"]
+    }
+  },
   "include": ["src"],
   "exclude": ["src/__lint-negatives__"]
 }

@@ -1,0 +1,30 @@
+# PRD-10 — Tier-2 completion: production worker (6C) + desktop lifecycle unstub (Phase 7) (Wave 4)
+
+**Goal:** finish the executable tier-2 path as the narrow escape hatch: ship the production Web-Worker bundle `Tier2Loader` expects, unstub the desktop lifecycle event source so `adapter_generated` events actually drive install, and gate write-driving generated adapters behind review. After the archetype system (Waves 1–2), this path serves only layouts the spec vocabulary can't express.
+
+**Depends on:** PRD-03 (registry stability). **Scope:** `packages/chat-surface`, `apps/desktop`. (`render_adapter_generator` tool registration is included; ai-backend touch is minimal.)
+
+## Scope — files
+
+| File                                                               | Change                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                 |
+| ------------------------------------------------------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| `packages/chat-surface/src/surfaces/tier2Worker.ts` (+ build glue) | NEW — the worker source implementing the protocol `Tier2Loader` already speaks (execute adapter_source in the worker global, return the serialized `Tier2JsonElement` tree; no DOM, no network — enforce by scrubbing worker globals before eval). Exported as a factory `createTier2WorkerFactory(): WorkerFactory` that builds the Worker from a same-package emitted chunk (desktop: bundled asset; web: Blob URL from the emitted source). Keep the loader's preemptive 100 ms terminate untouched |
+| `apps/desktop/renderer/bootstrap.tsx`                              | EXTEND — construct `Tier2Bridge` WITH `createTier2WorkerFactory()` (today it's constructed without one, so every tier-2 render boundary-errors)                                                                                                                                                                                                                                                                                                                                                        |
+| `apps/desktop/main/index.ts` + `main/adapters/lifecycle-events.ts` | EXTEND — replace `StubLifecycleEventSource` with a real source subscribed to the run event feed the main process already consumes, filtering `adapter_generated`, feeding the existing harvest→ast-allowlist→quality-gate→install pipeline (the pipeline is built; only its trigger is stubbed). The smoke-render executor now has a real worker factory to run against — un-refuse the D29 fail-closed check by wiring it                                                                             |
+| `services/ai-backend` (minimal)                                    | EXTEND — register `render_adapter_generator` as an internal capability invocable by the runtime when a surface's archetype is `null`/unexpressible AND a policy flag `RUNTIME_TIER2_GENERATION=true` (default false). NOT model-facing by default                                                                                                                                                                                                                                                      |
+| review gate                                                        | EXTEND — desktop install pipeline: adapters whose scheme would render a surface that carries diffs (write path) require `origin` review acknowledgment (a one-time consent dialog via the existing consent-card machinery) before `registerAdapter`; read-only schemes auto-install after quality gates. This implements the product open-question resolution (auto-gate read, human-gate write)                                                                                                       |
+
+## Acceptance criteria
+
+1. chat-surface unit: `Tier2Loader` with the real factory renders a known-good adapter_source fixture to the allowlisted element tree; a source that loops is terminated at ~100 ms and reports `onFailure` (existing tests un-skip/extend).
+2. Worker hygiene test: adapter source referencing `fetch`/`XMLHttpRequest`/`importScripts` fails (globals scrubbed), asserting the D28-equivalent boundary inside the worker.
+3. Desktop integration (vitest/electron harness per repo norms): an `adapter_generated` event on the feed → pipeline runs → `tier2.install` IPC → registry resolves the new scheme; `markBroken` demotion round-trip still works.
+4. Write-scheme fixture requires the consent path; read scheme installs silently.
+5. `RUNTIME_TIER2_GENERATION` default-off verified: no generator invocation in a normal run.
+6. Existing quality-gate tests (ast-allowlist, smoke-render) now pass wired (remove the "Refusing install fails-closed (D29)" skip only by satisfying it, not deleting it).
+
+## Non-goals / guardrails
+
+- No web tier-2 install path (desktop-only lifecycle stays; web tier-2 is future work — web renders those schemes via tier-3).
+- No expansion of the worker allowlist (`DEFAULT_TAGS`/`DS_COMPONENTS`/`ALLOWED_PROP_NAMES` unchanged in this PRD).
+- Do not route archetype-expressible surfaces through tier-2 — the projector prefers specs; tier-2 is the documented exception.

@@ -5,7 +5,45 @@ import type {
   RuntimeEventEnvelope,
 } from "@0x-copilot/api-types";
 
-import { project, projectAt, selectors } from "./eventProjector";
+import {
+  project,
+  projectAt,
+  projectSurfaceTabs,
+  selectors,
+} from "./eventProjector";
+
+const RECORD_SPEC = {
+  spec_version: 1,
+  archetype: "record",
+  source: { server: "seed", tool: "get_issue" },
+  title_path: "issue.title",
+};
+
+/** A `tool_result` carrying the PRD-01 `payload.surface` envelope. */
+function surfaceEnvelopeEvent(
+  uri: string,
+  opts: {
+    readonly archetype?: string;
+    readonly data?: unknown;
+    readonly spec?: unknown;
+    readonly overrides?: Partial<RuntimeEventEnvelope>;
+  } = {},
+): RuntimeEventEnvelope {
+  const state: Record<string, unknown> = { data: opts.data ?? {} };
+  if (opts.spec !== undefined) {
+    state.spec = opts.spec;
+  }
+  return makeEnvelope("tool_result", {
+    payload: {
+      surface: {
+        surface_uri: uri,
+        archetype: opts.archetype ?? "record",
+        state,
+      },
+    },
+    ...opts.overrides,
+  });
+}
 
 let nextSeq = 0;
 
@@ -289,6 +327,130 @@ describe("eventProjector.selectors", () => {
     ]);
     expect(selectors.surfaceFor(state, "sheet://x")).toEqual({ rows: 1 });
     expect(selectors.surfaceFor(state, "missing")).toBeUndefined();
+  });
+});
+
+describe("eventProjector — surface spec merge (PRD-04 / D4)", () => {
+  it("merges a late surface_spec_generated spec into surfaceState[uri] (envelope → spec)", () => {
+    nextSeq = 0;
+    const uri = "record://seed/get_issue/1";
+    const state = project([
+      surfaceEnvelopeEvent(uri, { data: { issue: { title: "Fix login" } } }),
+      makeEnvelope("surface_spec_generated", {
+        payload: { surface_uri: uri, archetype: "record", spec: RECORD_SPEC },
+      }),
+    ]);
+    const surface = state.surfaceState.get(uri) as Record<string, unknown>;
+    expect(surface).toBeDefined();
+    expect(surface.spec).toEqual(RECORD_SPEC);
+    // The spec merge NEVER clobbers the existing data.
+    expect(surface.data).toEqual({ issue: { title: "Fix login" } });
+  });
+
+  it("a late spec never clobbers newer data (data set after the spec survives)", () => {
+    nextSeq = 0;
+    const uri = "record://seed/get_issue/1";
+    const state = project([
+      surfaceEnvelopeEvent(uri, { data: { issue: { title: "v1" } } }),
+      makeEnvelope("surface_spec_generated", {
+        payload: { surface_uri: uri, archetype: "record", spec: RECORD_SPEC },
+      }),
+      // A newer tool_result carries fresh data but no spec.
+      surfaceEnvelopeEvent(uri, { data: { issue: { title: "v2" } } }),
+    ]);
+    const surface = state.surfaceState.get(uri) as Record<string, unknown>;
+    expect(surface.spec).toEqual(RECORD_SPEC);
+    expect(surface.data).toEqual({ issue: { title: "v2" } });
+  });
+
+  it("is idempotent on replay (dedup by event_id → same surfaceState + surfaceTabs)", () => {
+    nextSeq = 0;
+    const uri = "record://seed/get_issue/1";
+    const events = [
+      surfaceEnvelopeEvent(uri, { data: { issue: { title: "Fix login" } } }),
+      makeEnvelope("surface_spec_generated", {
+        payload: { surface_uri: uri, archetype: "record", spec: RECORD_SPEC },
+      }),
+    ];
+    const once = project(events);
+    const twice = project([...events, ...events]);
+    expect(twice.surfaceState.get(uri)).toEqual(once.surfaceState.get(uri));
+    expect(twice.surfaceTabs).toEqual(once.surfaceTabs);
+  });
+
+  it("still accepts the legacy flat surface payload unchanged", () => {
+    nextSeq = 0;
+    const state = project([
+      makeEnvelope("tool_result", {
+        payload: { surface_uri: "sheet://acme", state: { rows: 5 } },
+      }),
+    ]);
+    expect(state.surfaceState.get("sheet://acme")).toEqual({ rows: 5 });
+  });
+});
+
+describe("eventProjector.surfaceTabs (PRD-04)", () => {
+  it("derives one tab per surface uri, ordered by last mutation (newest first)", () => {
+    nextSeq = 0;
+    const a = "record://a";
+    const b = "record://b";
+    const c = "record://c";
+    const state = project([
+      surfaceEnvelopeEvent(a, { data: {} }), // seq 0
+      surfaceEnvelopeEvent(b, { data: {} }), // seq 1
+      surfaceEnvelopeEvent(c, { data: {} }), // seq 2
+      surfaceEnvelopeEvent(a, { data: {} }), // seq 3 → a bumped
+      surfaceEnvelopeEvent(b, { data: {} }), // seq 4 → b bumped
+      makeEnvelope("surface_spec_generated", {
+        payload: { surface_uri: c, archetype: "record", spec: RECORD_SPEC },
+      }), // seq 5 → c bumped
+    ]);
+    expect(state.surfaceTabs).toHaveLength(3);
+    expect(state.surfaceTabs.map((t) => t.uri)).toEqual([c, b, a]);
+    expect(state.surfaceTabs.map((t) => t.lastSeq)).toEqual([5, 4, 3]);
+  });
+
+  it("resolves the title from spec.title_path against data; falls back to the uri tail", () => {
+    nextSeq = 0;
+    const withSpec = "record://seed/get_issue/1";
+    const noSpec = "sheet://acme-42";
+    const state = project([
+      surfaceEnvelopeEvent(withSpec, {
+        data: { issue: { title: "Fix login" } },
+        spec: RECORD_SPEC,
+      }),
+      surfaceEnvelopeEvent(noSpec, { data: {} }),
+    ]);
+    const byUri = new Map(state.surfaceTabs.map((t) => [t.uri, t]));
+    expect(byUri.get(withSpec)?.title).toBe("Fix login");
+    expect(byUri.get(withSpec)?.archetype).toBe("record");
+    // No spec → fall back to the uri tail (everything after `://`).
+    expect(byUri.get(noSpec)?.title).toBe("acme-42");
+  });
+
+  it("projectSurfaceTabs matches project().surfaceTabs exactly (shared derivation)", () => {
+    nextSeq = 0;
+    const events = [
+      surfaceEnvelopeEvent("record://a", { data: {} }),
+      surfaceEnvelopeEvent("record://b", { data: {} }),
+      makeEnvelope("surface_spec_generated", {
+        payload: {
+          surface_uri: "record://a",
+          archetype: "record",
+          spec: RECORD_SPEC,
+        },
+      }),
+    ];
+    expect(projectSurfaceTabs(events)).toEqual(project(events).surfaceTabs);
+  });
+
+  it("returns no tabs for a stream with no surfaces", () => {
+    nextSeq = 0;
+    expect(projectSurfaceTabs([])).toEqual([]);
+    expect(
+      project([makeEnvelope("run_started", { display_title: "go" })])
+        .surfaceTabs,
+    ).toEqual([]);
   });
 });
 

@@ -30,8 +30,8 @@
 //   - Pure presentation: no fetch, no router calls, no SSE — the host
 //     (apps/frontend P6-C) wires those.
 //
-// `_projects-stub.ts` carries wire-types until P6-A1's api-types land.
-// Every import is marked `TODO(merge): rewire to "@0x-copilot/api-types"`.
+// Wire-types come from the canonical `@0x-copilot/api-types` Projects
+// contract.
 
 import {
   useMemo,
@@ -50,8 +50,7 @@ import { StatusPill, type StatusTone } from "../../shell/StatusPill";
 import { ItemLink } from "../../refs/ItemLink";
 import { formatRelativeTime } from "../../util/time";
 
-// TODO(merge): rewire to "@0x-copilot/api-types"
-import type { ProjectStatus, ProjectSummary } from "./_projects-stub";
+import type { ProjectStatus, ProjectSummary } from "@0x-copilot/api-types";
 
 // ===========================================================================
 // Filter slug

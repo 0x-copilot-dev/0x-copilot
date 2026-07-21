@@ -19,13 +19,19 @@ import {
   uninstallAdapterFile,
   type InstallerDeps,
 } from "./tier2-installer";
+import type { InstallReviewClass, InstallReviewGate } from "./review-gate";
 
 // Phase 6C registry-host. Main-side facade over the chat-surface registry.
 // Drives the Q1-Q5 install pipeline, then ships a tier2.install IPC to the
 // renderer. The renderer owns the actual registerAdapter call because
 // chat-surface's SurfaceRegistry is in-renderer module state.
 
-export type InstallGate = "schema" | "allowlist" | "smoke" | "compile";
+export type InstallGate =
+  | "schema"
+  | "allowlist"
+  | "smoke"
+  | "compile"
+  | "consent";
 
 export interface InstallOk {
   readonly ok: true;
@@ -55,6 +61,11 @@ export interface RegistryHostDeps {
   readonly audit: LifecycleEventsDeps;
   readonly installer: InstallerDeps;
   readonly smokeExecutor?: SmokeRenderExecutor;
+  // PRD-10 review gate. When present, a `write`-classified adapter must clear a
+  // one-time consent acknowledgment before it is registered. When absent, no
+  // consent step runs (read/write both auto-install) — production always wires
+  // it; tests opt in.
+  readonly reviewGate?: InstallReviewGate;
 }
 
 export interface InstallAdapterArgs {
@@ -63,6 +74,10 @@ export interface InstallAdapterArgs {
   readonly source: string;
   readonly generatedAt: string;
   readonly generatorModel: string;
+  // Read-only adapters auto-install; `write` adapters require consent (PRD-10).
+  // Defaults to `read` when omitted so callers that do not classify keep the
+  // pre-PRD-10 auto-install behaviour.
+  readonly reviewClass?: InstallReviewClass;
 }
 
 export interface MarkBrokenFromBoundaryArgs {
@@ -141,7 +156,28 @@ export async function installAdapter(
     );
   }
 
-  // Q1-Q4 all green. Persist source to disk, register the Q5 boundary
+  // Review gate (PRD-10) — a `write`/diff-surface adapter needs a one-time
+  // human consent acknowledgment before it is registered; read-only adapters
+  // auto-install. Runs AFTER the quality gates (never prompt for an adapter
+  // that would fail smoke) and BEFORE persist + the tier2.install dispatch, so
+  // a declined adapter is neither written to disk nor registered.
+  if (args.reviewClass === "write" && deps.reviewGate) {
+    const consented = await deps.reviewGate.requireConsent({
+      scheme: args.scheme,
+      version: args.version,
+      generatorModel: args.generatorModel,
+    });
+    if (!consented) {
+      return recordFailure(
+        args,
+        "consent",
+        "write-surface install declined by user",
+        deps,
+      );
+    }
+  }
+
+  // Q1-Q4 (+ consent for write) all green. Persist source to disk, register
   // wrap (the boundary listener forwards to markBrokenFromBoundary when
   // the renderer's error boundary trips), then dispatch tier2.install
   // to the renderer.

@@ -12,6 +12,7 @@ from runtime_api.schemas.approvals import (
     AssignedApproval,
     AssignedApprovalsResponse,
     McpApprovalMetadata,
+    SurfaceEdits,
     UNDO_WINDOW_SECONDS,
 )
 from runtime_api.schemas.commands import (
@@ -222,6 +223,7 @@ __all__ = [
     "AssignedApproval",
     "AssignedApprovalsResponse",
     "McpApprovalMetadata",
+    "SurfaceEdits",
     "UNDO_WINDOW_SECONDS",
     "ApiErrorResponse",
     "RuntimeRunCommand",

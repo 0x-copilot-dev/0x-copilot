@@ -1,0 +1,14 @@
+{
+  "spec_version": 1,
+  "archetype": "table",
+  "source": { "server": "seed:asana", "tool": "list_tasks" },
+  "title_path": "project.name",
+  "items_path": "tasks",
+  "columns": [
+    { "label": "Task", "path": "name", "align": "start" },
+    { "label": "Assignee", "path": "assignee.name", "format": "user" },
+    { "label": "Due", "path": "due_on", "format": "datetime" },
+    { "label": "Completed", "path": "completed", "format": "badge" }
+  ],
+  "link": { "label": "Open in Asana", "url_path": "permalink_url" }
+}

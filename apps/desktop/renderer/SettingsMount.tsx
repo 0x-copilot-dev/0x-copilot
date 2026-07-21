@@ -212,13 +212,17 @@ function personFromProfile(profile: UserProfile): ProfilePagePerson {
           chainId: profile.chain_id ?? null,
           chainLabel: profile.chain_name ?? null,
         }
-      : profile.email_is_placeholder === true
-        ? anchorFromEmail(profile.email, false)
-        : {
-            kind: "email",
-            email: profile.email,
-            verified: profile.email_verified_at !== null,
-          };
+      : profile.auth_method === "local"
+        ? // "Use locally" device account: anchored to this install — never
+          // surface the synthetic device-…@local.invalid placeholder (D3).
+          { kind: "device" }
+        : profile.email_is_placeholder === true
+          ? anchorFromEmail(profile.email, false)
+          : {
+              kind: "email",
+              email: profile.email,
+              verified: profile.email_verified_at !== null,
+            };
   return {
     user_id: profile.user_id,
     display_name: profile.display_name,

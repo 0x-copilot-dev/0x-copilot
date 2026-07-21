@@ -39,6 +39,7 @@ from backend_app.identity.store import PostgresIdentityStore
 from backend_app.notifications.store import PostgresNotificationPrefsStore
 from backend_app.policies.store import PostgresToolUsePolicyStore
 from backend_app.privacy.store import PostgresPrivacySettingsStore
+from backend_app.projects.store import PostgresProjectsStore
 from backend_app.provider_keys import PostgresProviderApiKeyStore
 from backend_app.settings.store import PostgresSettingsStore
 from backend_app.store import PostgresMcpStore, PostgresSkillStore
@@ -165,6 +166,7 @@ class TestDesktopKwargsWiring(DesktopEnvMixin):
         ("adapter_registry_store", PostgresAdapterRegistryStore),
         ("settings_store", PostgresSettingsStore),
         ("provider_api_keys_store", PostgresProviderApiKeyStore),
+        ("projects_store", PostgresProjectsStore),
     )
 
     def _kwargs(self, monkeypatch: pytest.MonkeyPatch) -> dict[str, object]:

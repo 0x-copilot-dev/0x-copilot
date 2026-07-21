@@ -47,6 +47,14 @@ export type ProfileIdentityAnchor =
       readonly address: string;
       readonly chainId: number | null;
       readonly chainLabel: string | null;
+    }
+  | {
+      /**
+       * "Use locally, no account" — the device account. No email, no wallet;
+       * the account is anchored to this install. Never renders the synthetic
+       * `@local.invalid` placeholder.
+       */
+      readonly kind: "device";
     };
 
 /**
@@ -373,6 +381,9 @@ function avatarContent(person: ProfilePagePerson): string {
   if (person.anchor.kind === "email") {
     return initials(person.anchor.email);
   }
+  if (person.anchor.kind === "device") {
+    return initials(name ?? "Local account");
+  }
   return WALLET_GLYPH;
 }
 
@@ -437,6 +448,18 @@ export function ProfilePage({
             setLinkState({ kind: "idle" });
             break;
           case "merge_required":
+            if (person.anchor.kind === "device") {
+              // D2: a local/device account REJECTS conflicts instead of
+              // offering the merge — that identity already belongs to
+              // another profile on this device.
+              setLinkState({
+                kind: "error",
+                message:
+                  "That sign-in method already belongs to another profile " +
+                  "on this device. Sign in with it directly instead.",
+              });
+              break;
+            }
             setLinkState({
               kind: "confirm-merge",
               message: outcome.message ?? DEFAULT_MERGE_MESSAGE,
@@ -456,7 +479,7 @@ export function ProfilePage({
         });
       }
     },
-    [onLinkWallet],
+    [onLinkWallet, person.anchor.kind],
   );
 
   const dismissMergeConfirm = useCallback(() => {
@@ -569,7 +592,7 @@ export function ProfilePage({
               readOnly={!canEditName}
               aria-readonly={!canEditName}
               maxLength={120}
-              placeholder={anchor.kind === "wallet" ? "Add a name" : undefined}
+              placeholder={anchor.kind !== "email" ? "Add a name" : undefined}
               style={canEditName ? inputStyle : readOnlyStyle}
               data-testid="profile-display-name"
             />
@@ -595,6 +618,27 @@ export function ProfilePage({
                 </span>
               ) : null}
             </div>
+          ) : anchor.kind === "device" ? (
+            <>
+              <div style={rowStyle}>
+                <label htmlFor={anchorId} style={labelStyle}>
+                  Account
+                </label>
+                <input
+                  id={anchorId}
+                  type="text"
+                  value="This device"
+                  readOnly
+                  aria-readonly
+                  style={readOnlyStyle}
+                  data-testid="profile-device-anchor"
+                />
+              </div>
+              <span style={noteStyle} data-testid="profile-device-note">
+                Local account — everything stays on this device. Link a wallet
+                or Google below to sign in with them too.
+              </span>
+            </>
           ) : (
             <>
               <div style={rowStyle}>
@@ -740,7 +784,8 @@ export function ProfilePage({
                 style={linkCtaStyle}
                 data-testid="profile-link-google"
               >
-                {person.anchor.kind === "wallet"
+                {person.anchor.kind === "wallet" ||
+                person.anchor.kind === "device"
                   ? "Add an email — continue with Google"
                   : "Link Google"}
               </button>

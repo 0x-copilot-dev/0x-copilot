@@ -85,6 +85,10 @@ class Keys:
         SUBAGENT_ID = "subagent_id"
         SUBAGENT_NAME = "subagent_name"
         SUMMARY = "summary"
+        # Generative-UI (PRD-02) — the surface envelope and its mirrored URI ride
+        # at the event-payload top level; the frontend projector keys off both.
+        SURFACE = "surface"
+        SURFACE_URI = "surface_uri"
         TASK_ID = "task_id"
         TITLE = "title"
         TOOL_CALL_ID = "tool_call_id"

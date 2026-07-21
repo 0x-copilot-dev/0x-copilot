@@ -9,12 +9,14 @@ on. This is the AC2 "Migration from the legacy desktop AI-runtime store" step
 > the default to `RUNTIME_STORE_BACKEND=file` +
 > `RUNTIME_FILE_STORE_ROOT=<userData>/agent-data/v1`;
 > `COPILOT_DESKTOP_FILE_STORE_V1=0` (or `false`/`off`) pins the legacy Postgres
-> store as an escape hatch. A first file boot starts a **fresh, empty** store —
-> existing Postgres conversations are preserved on disk but not shown until this
-> migration carries them across. Run it (with the flag pinned to Postgres, or on
-> a quiesced app) **before** letting the app settle on the file store, or run it
-> against the already-created file root to backfill history. This is the AC2
-> "Migration from the legacy desktop AI-runtime store" step.
+> store as an escape hatch. On an existing install with Postgres history, the
+> first file boot **carries that history across automatically** — the supervisor
+> runs this migration (`--on-boot`) before the ai-backend starts (see "Automatic
+> first-boot migration" below). Existing Postgres conversations are preserved on
+> disk throughout; on any migration failure the boot falls back to serving the
+> Postgres store, never an empty app. The manual flows below remain available for
+> operators who want to stage or verify the carry-over out of band. This is the
+> AC2 "Migration from the legacy desktop AI-runtime store" step.
 
 ## What it does
 
@@ -81,8 +83,48 @@ export COPILOT_DESKTOP_FILE_STORE_V1=1
 
 `--org-id` / `--user-id` are paired positionally and repeatable to migrate
 several tenants. On the single_user_desktop profile there is exactly one scope.
-(The scope flags are required for a Postgres source; an in-memory/file source can
-auto-discover scopes from its loaded conversations.)
+The scope flags are **optional for every source**: omit them and the migrator
+auto-discovers scopes — a Postgres source via
+`SELECT DISTINCT org_id, user_id FROM agent_conversations`
+(`PostgresRuntimeApiStore.list_conversation_scopes`), an in-memory/file source
+from its loaded conversations. Pass explicit scopes only to migrate a subset.
+
+## Automatic first-boot migration (`--on-boot`)
+
+For an unattended desktop first-file-boot, the migration runs itself. The
+`--on-boot` mode forces a Postgres source, auto-discovers **every** tenant scope
+(no `--org-id`/`--user-id`), migrates + verifies, and treats a fresh install with
+no AI schema as a clean no-op:
+
+```bash
+.venv/bin/python -m runtime_adapters.migrate \
+  --on-boot --source postgres --source-database-url "$AI_BACKEND_DATABASE_URL" \
+  --dest-root "$HOME/Library/Application Support/<app>/agent-data/v1"
+```
+
+Its exit code is a **fail-safe contract** for the desktop supervisor:
+
+| Exit | Meaning                                        | Supervisor action               |
+| ---- | ---------------------------------------------- | ------------------------------- |
+| `0`  | Migrated, or nothing to migrate (empty source) | Serve the **file** store        |
+| `2`  | Verify mismatch — import is not trustworthy    | Fall back to the Postgres store |
+| `1`  | Any other failure (unreachable source, disk)   | Fall back to the Postgres store |
+
+The supervisor only invokes `--on-boot` when it is safe to do so — the app is
+booting on the file store, the file store root is empty/new, and no prior boot
+has already migrated (a marker file inside the store root records completion).
+That gate is a pure decision (`apps/desktop/main/services/migration-policy.ts`
+`resolveMigrationDecision`); the impure detection (fs-empty probe in
+`file-store-facts.ts`, Postgres row-count in `pg-facts.ts`, marker read) and the
+boot brain (`boot-store-backend.ts` `resolveBootStoreBackend`) that ties them to
+the `--on-boot` runner (`migration-runner.ts`) live in the desktop supervisor.
+**Status:** shipped end to end. The supervisor resolves the effective store
+backend during the migrations phase (Postgres is up, ai-backend has not started):
+it probes the facts, runs `--on-boot` when the gate allows, writes the completion
+marker only on a clean import, and forces the Postgres store for the boot on any
+failure (via the `storeBackendOverride` seam in `service-env.ts`). Running
+`--on-boot` (or the scoped flow above) by hand remains available but is no longer
+required for an ordinary first-file boot.
 
 ## Guarantees & limits
 

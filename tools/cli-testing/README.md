@@ -22,6 +22,25 @@ supervised stack end-to-end, not mocks.
   `FINDINGS.md`). Git-ignored.
 - `run-config.local.json` — local config (e.g. Google client id). Git-ignored.
 
+## Journeys
+
+Scripted end-to-end runs over the driver's control API. Each journey spawns
+its own driver, runs hermetically in a throwaway userData subdir
+(`COPILOT_DESKTOP_USER_DATA_SUBDIR` — honored by the app main process in
+every posture), writes screenshots + `REPORT.md` under `runs/<ts>-<name>/`,
+and exits non-zero on failure.
+
+- `harness/journeys/local-account.mjs` — "Use locally, no account" → the
+  device account: 3-option gate → local mint → honest Settings profile
+  ("This device", no placeholder leak, both link CTAs) → sign-out →
+  re-entry. Needs a staged runtime;
+  `COPILOT_HOME=<dir containing runtime/<platform>-<arch>>`.
+
+```bash
+COPILOT_HOME="$PWD/../../apps/desktop/resources" \
+  node harness/journeys/local-account.mjs
+```
+
 ## Run
 
 ```bash

@@ -7,6 +7,7 @@ import {
   type Tier2WorkerRequest,
   type Tier2WorkerResponse,
 } from "./Tier2Loader";
+import { executeAdapterRender } from "./tier2Worker";
 
 class StubWorker implements Tier2WorkerLike {
   private listeners: {
@@ -358,6 +359,139 @@ describe("Tier2Loader — preemptive timeout", () => {
       vi.advanceTimersByTime(200);
     });
     expect(stub.current?.terminated).toBe(false);
+  });
+});
+
+// A worker that runs the REAL render core (`executeAdapterRender` — the exact
+// code the production worker executes) synchronously, delivering the result on
+// a microtask. jsdom cannot run a real Web Worker, so this drives the real
+// render path end-to-end through the loader without one.
+class RealCoreWorker implements Tier2WorkerLike {
+  private listeners = new Set<(event: { data: unknown }) => void>();
+  public terminated = false;
+  postMessage(value: unknown): void {
+    const response = executeAdapterRender(value as Tier2WorkerRequest);
+    queueMicrotask(() => {
+      for (const listener of this.listeners) listener({ data: response });
+    });
+  }
+  terminate(): void {
+    this.terminated = true;
+  }
+  addEventListener(
+    type: "message" | "error",
+    listener: (event: { data: unknown }) => void,
+  ): void {
+    if (type === "message") this.listeners.add(listener);
+  }
+  removeEventListener(
+    type: "message" | "error",
+    listener: (event: { data: unknown }) => void,
+  ): void {
+    if (type === "message") this.listeners.delete(listener);
+  }
+}
+
+const GENERATED_ADAPTER_SOURCE = [
+  'import * as React from "react";',
+  'import { tokens } from "@0x-copilot/design-system";',
+  "void tokens;",
+  "export const renderCurrent = (state) =>",
+  '  React.createElement("div", { "data-testid": "real-out" },',
+  '    React.createElement("strong", null, "Title:"),',
+  "    String(state && state.title));",
+  'export const renderDiff = (d) => React.createElement("div", null, "diff");',
+  'export const adapter = { scheme: "record", matches: () => true,',
+  "  renderCurrent: renderCurrent, renderDiff: renderDiff,",
+  '  metadata: { origin: "agent-generated", schemaVersion: 1 } };',
+].join("\n");
+
+describe("Tier2Loader — real render core (AC1)", () => {
+  it("renders a known-good adapter source through the real worker core", async () => {
+    const worker = new RealCoreWorker();
+    render(
+      <Tier2Loader
+        adapterSource={GENERATED_ADAPTER_SOURCE}
+        scheme="record"
+        version={1}
+        state={{ title: "Hello" }}
+        workerFactory={() => worker}
+      />,
+    );
+    const node = await screen.findByTestId("real-out");
+    expect(node.tagName.toLowerCase()).toBe("div");
+    expect(node).toHaveTextContent("Title:");
+    expect(node).toHaveTextContent("Hello");
+    expect(node.querySelector("strong")).not.toBeNull();
+  });
+
+  it("reports onFailure when the real core rejects a source touching fetch", async () => {
+    const failures: Array<{ reason: string }> = [];
+    const badSource = [
+      "export const renderCurrent = (s) => { fetch('http://x'); return null; };",
+      "export const renderDiff = (d) => null;",
+      'export const adapter = { scheme: "x", matches: () => true,',
+      "  renderCurrent: renderCurrent, renderDiff: renderDiff,",
+      '  metadata: { origin: "agent-generated", schemaVersion: 1 } };',
+    ].join("\n");
+    render(
+      <Tier2Loader
+        adapterSource={badSource}
+        scheme="x"
+        version={1}
+        state={{}}
+        workerFactory={() => new RealCoreWorker()}
+        onFailure={(reason) => failures.push({ reason })}
+      />,
+    );
+    await waitFor(() => expect(failures).toHaveLength(1));
+    expect(failures[0].reason).toBe("throw");
+  });
+});
+
+describe("Tier2Loader — looping source preemption (AC1)", () => {
+  beforeEach(() => {
+    vi.useFakeTimers();
+  });
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
+  it("terminates a worker whose source loops forever and reports timeout", async () => {
+    // A real infinite loop cannot be run on the test thread; the loader's
+    // preemptive boundary is `worker.terminate()` on the wall-clock budget,
+    // so a never-responding worker (the observable shape of `while(true){}`
+    // inside a real Worker) is the correct stand-in.
+    const failures: Array<{ reason: string }> = [];
+    const worker = new (class implements Tier2WorkerLike {
+      public terminated = false;
+      postMessage(): void {
+        /* never responds — models a source stuck in a loop */
+      }
+      terminate(): void {
+        this.terminated = true;
+      }
+      addEventListener(): void {}
+      removeEventListener(): void {}
+    })();
+    render(
+      <Tier2Loader
+        adapterSource={"while (true) {}"}
+        scheme="loop"
+        version={1}
+        state={{}}
+        budgetMs={100}
+        workerFactory={() => worker}
+        onFailure={(reason) => failures.push({ reason })}
+      />,
+    );
+    expect(worker.terminated).toBe(false);
+    await act(async () => {
+      vi.advanceTimersByTime(100);
+    });
+    expect(worker.terminated).toBe(true);
+    expect(failures).toHaveLength(1);
+    expect(failures[0].reason).toBe("timeout");
   });
 });
 

@@ -1,8 +1,8 @@
 """LIVE-Postgres tests for principal/tenant separation, stage 1 (ADR 0001).
 
 Two things in-memory analogues cannot prove:
-  1. the migration 0039 BACKFILL SQL is correct against the real schema
-     (per-user principals + survivor-linked lineage, FK-safe), and
+  1. the baseline schema ENFORCES the principal invariant (users.principal_id
+     is NOT NULL + FK — a row without a principal is impossible), and
   2. the Postgres ``create_user`` dual-writes the principal atomically and
      satisfies the real FK.
 
@@ -15,7 +15,6 @@ from __future__ import annotations
 import os
 import uuid
 from collections.abc import Iterator
-from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
@@ -81,90 +80,39 @@ class TestPostgresAutoMint:
             assert cur.fetchone()["principal_id"] == f"prn_{uid}"
 
 
-class TestBackfillSql:
-    def test_0039_backfill_links_absorbed_to_survivor(self, pool: Any) -> None:
-        # Seed rows that PREDATE the backfill: raw INSERT with principal_id
-        # NULL (bypassing the store's auto-mint), a survivor + an absorbed
-        # user, then run the exact 0039 backfill statements.
-        org_id = _mk_org(pool, "bf")
-        surv = f"usr_surv_{uuid.uuid4().hex[:8]}"
-        absb = f"usr_abs_{uuid.uuid4().hex[:8]}"
-        now = datetime.now(timezone.utc)
-        with pool.connection() as conn:
-            with conn.cursor() as cur:
-                for uid, absorbed, status in (
-                    (surv, None, "active"),
-                    (absb, surv, "disabled"),
-                ):
-                    cur.execute(
-                        """
-                        INSERT INTO users (user_id, org_id, primary_email,
-                            display_name, status, created_at, updated_at,
-                            absorbed_into_user_id, merged_at, principal_id)
-                        VALUES (%s,%s,%s,%s,%s, now(), now(), %s, %s, NULL)
-                        """,
-                        (
-                            uid,
-                            org_id,
-                            f"{uid}@x.io",
-                            uid,
-                            status,
-                            absorbed,
-                            None if absorbed is None else now,
-                        ),
-                    )
-                # The 0039 backfill, verbatim.
+class TestPrincipalNotNullEnforced:
+    def test_user_without_principal_is_rejected_by_schema(self, pool: Any) -> None:
+        # The pre-squash expand stage allowed NULL principal_id (backfilled by
+        # 0039). The baseline bakes the invariant in: the INSERT itself fails.
+        import psycopg
+
+        org_id = _mk_org(pool, "nn")
+        uid = f"usr_nn_{uuid.uuid4().hex[:8]}"
+        with pytest.raises(psycopg.errors.NotNullViolation):
+            with pool.connection() as conn, conn.cursor() as cur:
                 cur.execute(
                     """
-                    INSERT INTO principals (principal_id, display_name,
-                        created_at, updated_at)
-                    SELECT 'prn_' || user_id, display_name, created_at, created_at
-                    FROM users WHERE principal_id IS NULL
-                    ON CONFLICT (principal_id) DO NOTHING
-                    """
+                    INSERT INTO users (user_id, org_id, primary_email,
+                        display_name, status, created_at, updated_at,
+                        principal_id)
+                    VALUES (%s,%s,%s,%s,'active', now(), now(), NULL)
+                    """,
+                    (uid, org_id, f"{uid}@x.io", uid),
                 )
+
+    def test_principal_fk_rejects_unknown_principal(self, pool: Any) -> None:
+        import psycopg
+
+        org_id = _mk_org(pool, "fk")
+        uid = f"usr_fk_{uuid.uuid4().hex[:8]}"
+        with pytest.raises(psycopg.errors.ForeignKeyViolation):
+            with pool.connection() as conn, conn.cursor() as cur:
                 cur.execute(
-                    "UPDATE users SET principal_id = 'prn_' || user_id "
-                    "WHERE principal_id IS NULL"
-                )
-                cur.execute(
                     """
-                    UPDATE principals p
-                    SET absorbed_into_principal_id = 'prn_' || u.absorbed_into_user_id,
-                        merged_at = u.merged_at
-                    FROM users u
-                    WHERE p.principal_id = 'prn_' || u.user_id
-                      AND u.absorbed_into_user_id IS NOT NULL
-                    """
+                    INSERT INTO users (user_id, org_id, primary_email,
+                        display_name, status, created_at, updated_at,
+                        principal_id)
+                    VALUES (%s,%s,%s,%s,'active', now(), now(), %s)
+                    """,
+                    (uid, org_id, f"{uid}@x.io", uid, "prn_does_not_exist"),
                 )
-        with pool.connection() as conn, conn.cursor() as cur:
-            cur.execute(
-                "SELECT user_id, principal_id FROM users WHERE user_id = ANY(%s)",
-                ([surv, absb],),
-            )
-            by_user = {r["user_id"]: r["principal_id"] for r in cur.fetchall()}
-            assert by_user[surv] == f"prn_{surv}"
-            assert by_user[absb] == f"prn_{absb}"
-            # Absorbed principal's lineage points at the SURVIVOR's principal.
-            cur.execute(
-                "SELECT absorbed_into_principal_id FROM principals "
-                "WHERE principal_id = %s",
-                (f"prn_{absb}",),
-            )
-            assert cur.fetchone()["absorbed_into_principal_id"] == f"prn_{surv}"
-            cur.execute(
-                "SELECT absorbed_into_principal_id FROM principals "
-                "WHERE principal_id = %s",
-                (f"prn_{surv}",),
-            )
-            assert cur.fetchone()["absorbed_into_principal_id"] is None
-            # No orphans: every seeded user resolves to a real principal (FK).
-            cur.execute(
-                """
-                SELECT count(*) AS n FROM users u
-                LEFT JOIN principals p ON u.principal_id = p.principal_id
-                WHERE u.user_id = ANY(%s) AND p.principal_id IS NULL
-                """,
-                ([surv, absb],),
-            )
-            assert cur.fetchone()["n"] == 0

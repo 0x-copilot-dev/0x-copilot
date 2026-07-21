@@ -1,0 +1,18 @@
+{
+  "spec_version": 1,
+  "archetype": "record",
+  "source": { "server": "seed:linear", "tool": "get_issue" },
+  "title_path": "issue.title",
+  "subtitle_path": "issue.identifier",
+  "fields": [
+    { "label": "State", "path": "issue.state.name", "format": "badge" },
+    {
+      "label": "Assignee",
+      "path": "issue.assignee.displayName",
+      "format": "user"
+    },
+    { "label": "Priority", "path": "issue.priorityLabel" },
+    { "label": "Updated", "path": "issue.updatedAt", "format": "datetime" }
+  ],
+  "link": { "label": "Open in Linear", "url_path": "issue.url" }
+}

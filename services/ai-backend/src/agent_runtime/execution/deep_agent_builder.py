@@ -430,6 +430,94 @@ def build_chat_model(
     )
 
 
+def build_chat_model_from_id(
+    model_id: str,
+    *,
+    extra_kwargs: Mapping[str, object] | None = None,
+) -> BaseChatModel:
+    """Build a chat model from a ``[provider:]model_name`` id string.
+
+    A convenience over :func:`build_chat_model` for infrastructure callers that
+    carry a single model-id string rather than a full :class:`ModelConfig` — the
+    surface-spec generator (PRD-07) routes its nano/mini model through here, so it
+    inherits the same provider handling (OpenAI / Anthropic / Gemini native, plus
+    OpenRouter / Ollama compat) and the hermetic fake-model funnel for free.
+
+    Accepted forms: ``"anthropic:claude-haiku-4-5"`` (explicit provider) or a bare
+    ``"gpt-5-mini"`` / ``"claude-haiku-4-5"`` / ``"gemini-2.5-flash"`` whose
+    provider is inferred from the name.
+    """
+
+    config = SurfaceModelConfigFactory.from_id(model_id)
+    return build_chat_model(config, extra_kwargs=extra_kwargs)
+
+
+class SurfaceModelConfigFactory:
+    """Parse a ``[provider:]model`` id into a minimal :class:`ModelConfig`.
+
+    The config is deliberately small: temperature 0 (a mapping is a deterministic
+    classification, not a creative task), a tight output cap (specs are tiny), and
+    no streaming. Provider routing reuses the same aliases as the run-model
+    resolver so BYOK / OpenRouter / Ollama keep working.
+    """
+
+    _PROVIDER_ALIASES = {
+        "anthropic": "anthropic",
+        "claude": "anthropic",
+        "openai": "openai",
+        "gemini": "gemini",
+        "google": "gemini",
+        "google-genai": "gemini",
+        "openrouter": "openrouter",
+        "ollama": "ollama",
+    }
+    _MAX_INPUT_TOKENS = 200_000
+    _MAX_OUTPUT_TOKENS = 1_024
+    _TIMEOUT_SECONDS = 60.0
+
+    @classmethod
+    def from_id(cls, model_id: str) -> ModelConfig:
+        provider, model_name = cls._split(model_id.strip())
+        return ModelConfig(
+            provider=provider,
+            model_name=model_name,
+            max_input_tokens=cls._MAX_INPUT_TOKENS,
+            max_output_tokens=cls._MAX_OUTPUT_TOKENS,
+            timeout_seconds=cls._TIMEOUT_SECONDS,
+            temperature=0.0,
+            supports_streaming=False,
+        )
+
+    @classmethod
+    def _split(cls, model_id: str) -> tuple[str, str]:
+        if not model_id:
+            raise ValueError("model id must be a non-empty string")
+        if ":" in model_id:
+            prefix, rest = model_id.split(":", 1)
+            alias = prefix.strip().lower().replace("_", "-")
+            if alias in cls._PROVIDER_ALIASES and rest.strip():
+                return (cls._PROVIDER_ALIASES[alias], rest.strip())
+        inferred = cls._infer_provider(model_id)
+        if inferred is None:
+            raise ValueError(
+                f"cannot infer model provider from '{model_id}'; use 'provider:model'"
+            )
+        return (inferred, model_id)
+
+    @staticmethod
+    def _infer_provider(model_name: str) -> str | None:
+        normalized = model_name.lower().replace(" ", "-").replace("_", "-")
+        if normalized.startswith(("gpt-", "o1", "o3", "o4")):
+            return "openai"
+        if normalized.startswith("claude"):
+            return "anthropic"
+        if normalized.startswith("gemini"):
+            return "gemini"
+        if "/" in model_name:
+            return "openrouter"
+        return None
+
+
 def build_embeddings_model(
     *,
     provider: str,

@@ -1,0 +1,14 @@
+{
+  "spec_version": 1,
+  "archetype": "message",
+  "source": { "server": "seed:gmail", "tool": "get_message" },
+  "title_path": "message.subject",
+  "subtitle_path": "message.from",
+  "fields": [
+    { "label": "From", "path": "message.from", "format": "user" },
+    { "label": "To", "path": "message.to" },
+    { "label": "Date", "path": "message.date", "format": "datetime" },
+    { "label": "Snippet", "path": "message.snippet" }
+  ],
+  "link": { "label": "Open in Gmail", "url_path": "message.url" }
+}

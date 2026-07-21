@@ -121,6 +121,11 @@ from backend_app.identity.siwe import (
     ENV_SIWE_ORIGIN,
     parse_allowed_chain_ids,
 )
+from backend_app.identity.local_account_store import (
+    InMemoryLocalAccountStore,
+    LocalAccountStore,
+)
+from backend_app.identity.local_accounts import LocalAccountService
 from backend_app.identity.session_sweeper import SessionSweeper
 from backend_app.observability import (
     RequestContextMiddleware,
@@ -238,6 +243,7 @@ from backend_app.routes.health import register_health_routes
 from backend_app.routes.invitations import register_invitation_routes
 from backend_app.routes.lockouts import register_lockout_routes
 from backend_app.routes.login_email_first import register_login_email_first_routes
+from backend_app.routes.local_auth import register_local_auth_routes
 from backend_app.routes.siwe import register_siwe_routes
 from backend_app.routes.me import register_me_routes
 from backend_app.routes.me_preferences import register_me_preferences_routes
@@ -473,6 +479,7 @@ def create_app(
     saml_service: SamlService | None = None,
     saml_verifier: SamlVerifier | None = None,
     siwe_store: SiweStore | None = None,
+    local_account_store: LocalAccountStore | None = None,
     siwe_service: SiweService | None = None,
     account_merge_store: AccountMergeStore | None = None,
     merge_data_port: MergeDataPort | None = None,
@@ -499,6 +506,8 @@ def create_app(
     adapter_registry_service: object | None = None,
     adapter_registry_store: object | None = None,
     adapter_source_storage: object | None = None,
+    surface_specs_service: object | None = None,
+    surface_specs_store: object | None = None,
     todos_store: TodosStore | None = None,
     inbox_store: InboxStore | None = None,
     routines_store: RoutinesStore | None = None,
@@ -791,6 +800,27 @@ def create_app(
         )
         app.state.siwe_service = resolved_siwe_service
         register_siwe_routes(app, service=resolved_siwe_service)
+
+        # "Use locally, no account" (device account). Registered ONLY for
+        # the single-user desktop profile (or when a store is injected —
+        # the test hook): multi-tenant web deployments never expose the
+        # mint. The route itself is host-token-gated, fail-closed (see
+        # routes/local_auth.py for the localhost threat model).
+        if (
+            resolved_deployment.name == "single_user_desktop"
+            or local_account_store is not None
+        ):
+            resolved_local_account_store: LocalAccountStore = (
+                local_account_store or InMemoryLocalAccountStore()
+            )
+            app.state.local_account_store = resolved_local_account_store
+            resolved_local_account_service = LocalAccountService(
+                identity_store=resolved_identity_store,
+                local_store=resolved_local_account_store,
+                sessions=resolved_session_service,
+            )
+            app.state.local_account_service = resolved_local_account_service
+            register_local_auth_routes(app, service=resolved_local_account_service)
 
     @app.get("/v1/health", dependencies=[Depends(public_route())])
     def health() -> dict[str, object]:
@@ -2050,6 +2080,33 @@ def create_app(
     register_adapter_registry_routes(
         app,
         service=resolved_registry_service,  # type: ignore[arg-type]
+    )
+
+    # Generative-UI PRD-08 — durable, org-scoped SurfaceSpec registry. Internal
+    # only; the ai-backend ``BackendHttpSurfaceSpecStore`` is the sole client.
+    # In-memory store by default (tests + dev); the desktop/team wiring injects
+    # ``PostgresSurfaceSpecStore``.
+    from backend_app.surface_specs import (
+        InMemorySurfaceSpecStore,
+        SurfaceSpecService,
+        SurfaceSpecStore,
+        register_surface_specs_routes,
+    )
+
+    if surface_specs_service is not None:
+        resolved_surface_specs_service = surface_specs_service
+    else:
+        resolved_surface_specs_store: SurfaceSpecStore = (
+            surface_specs_store
+            if surface_specs_store is not None
+            else InMemorySurfaceSpecStore()
+        )  # type: ignore[assignment]
+        resolved_surface_specs_service = SurfaceSpecService(
+            store=resolved_surface_specs_store,
+        )
+    register_surface_specs_routes(
+        app,
+        service=resolved_surface_specs_service,  # type: ignore[arg-type]
     )
 
     # P7-A2 — Library blob storage (signed-URL upload/download). Bytes

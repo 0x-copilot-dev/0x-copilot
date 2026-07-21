@@ -52,19 +52,33 @@ import {
   useState,
   type CSSProperties,
   type ReactElement,
+  type ReactNode,
 } from "react";
 
-import type { ConversationId, RunId } from "@0x-copilot/api-types";
+import type {
+  ConversationId,
+  RunId,
+  SurfaceEdits,
+} from "@0x-copilot/api-types";
 
 import {
   humanTransportMessage,
   parseTransportError,
 } from "../../errors/transportError";
+// PRD-09c: the host-owned edit-on-surface overlay. Mounted OVER the pure adapter
+// via ThreadCanvas.editSlot → TcSurfaceMount; its submit reuses resolveApproval.
+import { EditOverlay } from "../../surfaces/edit/EditOverlay";
 import { useTransport } from "../../providers/TransportProvider";
 // PR-3.8: pure selector projecting parallel-subagent + fleet state off the
 // single canonical event stream (no second subscription / projector).
 import { projectSubagents } from "../../subagents";
-import { ThreadCanvas, TcChat, type TcTab } from "../../thread-canvas";
+import {
+  ThreadCanvas,
+  TcChat,
+  projectSurfaceTabs,
+  type TcTab,
+  type PendingDiffHandle,
+} from "../../thread-canvas";
 
 // PR-3.10: pure selector projecting approval state off the SAME single canonical
 // event stream (FR-3.3). Feeds the in-chat ApprovalCard/conf-card (TcChat) and
@@ -80,6 +94,10 @@ import {
 // (no separate host remount): the empty state binds a freshly-started run via
 // the `runId` seam, and the selector rebinds the session via `selectRun`.
 import { RunEmptyState, type StartRunError } from "./RunEmptyState";
+// PRD-04: pure selector projecting proposed surface diffs off the SAME single
+// canonical event stream (FR-3.3). Feeds the on-surface Approve/Reject controls
+// in TcSurfaceMount (via ThreadCanvas.pendingDiff); no second subscription.
+import { projectSurfaceDiffs } from "./_surfaceDiffs";
 import { RunHeader } from "./RunHeader";
 import { RunMultiSelect } from "./RunMultiSelect";
 import { RunWorkspaceRail } from "./RunWorkspaceRail";
@@ -90,6 +108,9 @@ import { useRunTranscript } from "./useRunTranscript";
 import { useRunSession } from "./useRunSession";
 
 const EMPTY_DECISIONS: ReadonlyMap<string, RunApprovalDecision> = new Map();
+const EMPTY_CLOSED_URIS: ReadonlySet<string> = new Set();
+/** Surface-tab strip cap (PRD-04 — "+N more" overflow lands later). */
+const MAX_SURFACE_TABS = 8;
 
 export interface RunDestinationProps {
   /** Conversation whose active/selected run the cockpit binds to. */
@@ -195,6 +216,11 @@ export function RunDestination(props: RunDestinationProps): ReactElement {
     setIsStartingRun(false);
     setStartedGoal(null);
     setStartError(null);
+    // PRD-04: a new conversation starts from a clean surface strip.
+    setPinnedUri(null);
+    setClosedUris(EMPTY_CLOSED_URIS);
+    // PRD-09c: never carry an open edit overlay across conversations.
+    setEditingDiffId(null);
   }, [conversationId]);
 
   const session = useRunSession({
@@ -206,20 +232,47 @@ export function RunDestination(props: RunDestinationProps): ReactElement {
   // Persisted, draggable width of the Studio workspace rail (global preference).
   const { width: railWidth, setWidth: setRailWidth } = useRailWidth();
 
-  // Surface-tab strip state. `ThreadCanvas` takes `tabs`/`activeUri` as
-  // host-controlled props; the shell owns them so a later PR can populate the
-  // strip from the projection / snap it to a scrubbed bead (PR-3.7) without the
-  // canvas re-deriving them. In PR-3.5 the strip starts empty and the surface
-  // pane shows its adapter placeholder until surfaces stream in.
-  const [tabs, setTabs] = useState<readonly TcTab[]>([]);
-  const [activeUri, setActiveUri] = useState<string>("");
+  // Surface-tab strip (PRD-04). `ThreadCanvas` takes `tabs`/`activeUri` as
+  // host-controlled props; the shell DERIVES them from the single projection —
+  // `projectSurfaceTabs` is a pure selector over `session.events` (the SAME
+  // array ThreadCanvas hands to `useEventProjector`), NOT a second subscription
+  // / projector (FR-3.3). `activeUri` auto-follows the newest surface while the
+  // user hasn't pinned; a manual tab click pins (below), a pending diff pulls
+  // focus, and the "follow live" affordance un-pins.
+  //
+  // `pinnedUri` = the tab the user manually opened (null → auto-follow live).
+  // `closedUris` = tabs the user dismissed (a stale pin/close self-heals once
+  // the URI leaves the projection — no per-conversation reset needed, though we
+  // clear both on run switch below for a clean surface).
+  const [pinnedUri, setPinnedUri] = useState<string | null>(null);
+  const [closedUris, setClosedUris] =
+    useState<ReadonlySet<string>>(EMPTY_CLOSED_URIS);
+
+  // PRD-09c: which pending surface diff (by `diffId === approvalId`) currently
+  // has the edit overlay open. `null` = no overlay. Opened by
+  // `handleSuggestChanges` (the PRD-04 passthrough this PRD fills); the overlay
+  // renders only while this matches the active pending diff, so a resolved diff
+  // (optimistic or server) closes it automatically.
+  const [editingDiffId, setEditingDiffId] = useState<string | null>(null);
 
   const handleActivateTab = useCallback((uri: string): void => {
-    setActiveUri(uri);
+    // A manual tab click pins — the strip stops auto-following newer surfaces
+    // until the user follows live again (or the pinned surface leaves the run).
+    setPinnedUri(uri);
   }, []);
   const handleCloseTab = useCallback((uri: string): void => {
-    setTabs((prev) => prev.filter((tab) => tab.uri !== uri));
-    setActiveUri((prev) => (prev === uri ? "" : prev));
+    setClosedUris((prev) => {
+      if (prev.has(uri)) {
+        return prev;
+      }
+      const next = new Set(prev);
+      next.add(uri);
+      return next;
+    });
+    setPinnedUri((prev) => (prev === uri ? null : prev));
+  }, []);
+  const handleFollowLive = useCallback((): void => {
+    setPinnedUri(null);
   }, []);
 
   // PR-3.7: scrub cursor + the surface tab it snaps to.
@@ -243,8 +296,7 @@ export function RunDestination(props: RunDestinationProps): ReactElement {
   const scrubIndex = useMemo(() => {
     const index = new Map<number, ScrubTarget>();
     for (const event of session.events) {
-      const rawUri = event.payload?.["surface_uri"];
-      const surfaceUri = typeof rawUri === "string" ? rawUri : undefined;
+      const surfaceUri = scrubUriOf(event);
       const parsed = Date.parse(event.created_at);
       index.set(event.sequence_no, {
         atMs: Number.isNaN(parsed) ? null : parsed,
@@ -254,27 +306,13 @@ export function RunDestination(props: RunDestinationProps): ReactElement {
     return index;
   }, [session.events]);
 
-  // PR-3.7 (FR-3.15) — `snapSet`: off-now, switch the active surface tab to the
-  // scrubbed bead's surface, opening the tab if the strip does not yet carry it
-  // (the tab-population wiring lands in a later PR; scrubbing must still be able
-  // to reveal a past surface). Setting `scrubbedSeq` is what surfaces the
-  // "Viewing…" banner, hides approvals, and disables the composer.
-  const handleScrub = useCallback(
-    (sequenceNo: number): void => {
-      setScrubbedSeq(sequenceNo);
-      const uri = scrubIndex.get(sequenceNo)?.surfaceUri;
-      if (uri === undefined || uri === "") {
-        return;
-      }
-      setActiveUri(uri);
-      setTabs((prev) =>
-        prev.some((tab) => tab.uri === uri)
-          ? prev
-          : [...prev, { uri, title: surfaceTabTitle(uri) }],
-      );
-    },
-    [scrubIndex],
-  );
+  // PR-3.7 (FR-3.15) — `snapSet`: off-now, `activeUri` derives to the scrubbed
+  // bead's surface (see the surface-tab derivation below), so scrubbing reveals
+  // a past surface without mutating strip state. Setting `scrubbedSeq` is what
+  // surfaces the "Viewing…" banner, hides approvals, and disables the composer.
+  const handleScrub = useCallback((sequenceNo: number): void => {
+    setScrubbedSeq(sequenceNo);
+  }, []);
 
   // PR-3.7 (FR-3.16) — snap-to-now: clear the cursor. That alone clears the
   // "Viewing…" banner and re-enables the composer + approvals (both read the
@@ -360,8 +398,10 @@ export function RunDestination(props: RunDestinationProps): ReactElement {
   const handleSelectRun = useCallback(
     (nextRunId: string): void => {
       setScrubbedSeq(null);
-      setTabs([]);
-      setActiveUri("");
+      setPinnedUri(null);
+      setClosedUris(EMPTY_CLOSED_URIS);
+      // PRD-09c: rebinding the cockpit to another run closes any open overlay.
+      setEditingDiffId(null);
       selectRun(nextRunId);
     },
     [selectRun],
@@ -481,7 +521,14 @@ export function RunDestination(props: RunDestinationProps): ReactElement {
   // the Transport port — a failure leaves the optimistic state (the trailing
   // SSE frame is the authority) rather than blocking the cockpit.
   const resolveApproval = useCallback(
-    (approvalId: string, decision: RunApprovalDecision): void => {
+    (
+      approvalId: string,
+      decision: RunApprovalDecision,
+      edits?: SurfaceEdits,
+    ): void => {
+      // Optimistic overlay uses the terminal decision ("approved"/"rejected");
+      // `approve_with_edits` resolves to `approved` server-side (api-types §PRD-09a),
+      // so an edited approval clears the diff the same way a plain approve does.
       setLocalDecisions((prev) => {
         if (prev.get(approvalId) === decision) {
           return prev;
@@ -490,11 +537,18 @@ export function RunDestination(props: RunDestinationProps): ReactElement {
         next.set(approvalId, decision);
         return next;
       });
+      // The wire decision carries the reviewer's edits when present; the server
+      // (ai-backend 09b) re-derives final = proposal ⊕ edits and never trusts a
+      // client-sent merged artifact. Plain approve/reject is unchanged.
+      const body =
+        edits !== undefined
+          ? { decision: "approve_with_edits", edits }
+          : { decision };
       void transport
         .request({
           method: "POST",
           path: `/v1/agent/approvals/${approvalId}/decision`,
-          body: { decision },
+          body,
         })
         .catch(() => {
           /* optimistic: SSE `approval_resolved` reconciles the truth */
@@ -511,6 +565,151 @@ export function RunDestination(props: RunDestinationProps): ReactElement {
     (approvalId: string): void => resolveApproval(approvalId, "rejected"),
     [resolveApproval],
   );
+  // PRD-09c: open the edit overlay for the surface whose diff the reviewer wants
+  // to change. This fills the PRD-04 passthrough — the overlay renders OVER the
+  // active surface (ThreadCanvas.editSlot) and submits `approve_with_edits`.
+  const handleSuggestChanges = useCallback((diffId: string): void => {
+    setEditingDiffId(diffId);
+  }, []);
+  // PRD-09c: commit the reviewer's edits — reuses the SAME resolveApproval POST
+  // machinery the plain approve/reject path uses, with the `approve_with_edits`
+  // decision + `edits` payload. Optimistically clears the diff (as `approved`);
+  // the trailing `approval_resolved` SSE frame reconciles the truth.
+  const handleSubmitEdits = useCallback(
+    (diffId: string, edits: SurfaceEdits): void => {
+      resolveApproval(diffId, "approved", edits);
+      setEditingDiffId(null);
+    },
+    [resolveApproval],
+  );
+  // PRD-09c: dismiss the overlay without committing — the pending diff (and its
+  // on-surface Approve/Reject/Suggest controls) returns unchanged. No POST.
+  const handleCancelEdits = useCallback((): void => {
+    setEditingDiffId(null);
+  }, []);
+
+  // PRD-04: proposed surface diffs, projected off the SAME `session.events`
+  // (FR-3.3 — no second subscription/projector). The SAME optimistic overlay the
+  // in-chat approvals use (`diffId === approvalId`) clears a just-decided diff
+  // before the trailing `approval_resolved` SSE frame lands.
+  const surfaceDiffProjection = useMemo(
+    () => projectSurfaceDiffs(session.events),
+    [session.events],
+  );
+  const openSurfaceDiffs = useMemo(
+    () =>
+      surfaceDiffProjection.diffs.filter(
+        (entry) => !localDecisions.has(entry.diffId),
+      ),
+    [surfaceDiffProjection, localDecisions],
+  );
+
+  // PRD-04: the surface-tab strip, derived from the single projection
+  // (`projectSurfaceTabs` — pure selector over the SAME array). Cap at
+  // MAX_SURFACE_TABS ("+N more" overflow lands later); drop dismissed tabs;
+  // newest mutation is first.
+  const surfaceTabList = useMemo(
+    () => projectSurfaceTabs(session.events),
+    [session.events],
+  );
+  const visibleSurfaceTabs = useMemo(
+    () =>
+      surfaceTabList
+        .filter((tab) => !closedUris.has(tab.uri))
+        .slice(0, MAX_SURFACE_TABS),
+    [surfaceTabList, closedUris],
+  );
+  const newestUri =
+    visibleSurfaceTabs.length > 0 ? visibleSurfaceTabs[0].uri : "";
+
+  // `activeUri` derivation (scrub wins → pin wins → a pending diff pulls focus →
+  // else follow the newest surface). A pin only holds while its surface is still
+  // on the strip, so run/conversation switches self-heal.
+  const effectivePin =
+    pinnedUri !== null &&
+    visibleSurfaceTabs.some((tab) => tab.uri === pinnedUri)
+      ? pinnedUri
+      : null;
+  const followDiffUri =
+    !isScrubbed && openSurfaceDiffs.length > 0
+      ? openSurfaceDiffs[0].uri
+      : undefined;
+  const scrubTargetUri =
+    scrubbedSeq !== null ? scrubIndex.get(scrubbedSeq)?.surfaceUri : undefined;
+  const activeUri =
+    isScrubbed && scrubTargetUri !== undefined && scrubTargetUri !== ""
+      ? scrubTargetUri
+      : (effectivePin ?? followDiffUri ?? newestUri);
+
+  const surfaceTabs = useMemo<readonly TcTab[]>(
+    () =>
+      visibleSurfaceTabs.map((tab) => ({
+        uri: tab.uri,
+        title: tab.title ?? tab.uri,
+        pinned: tab.uri === effectivePin,
+      })),
+    [visibleSurfaceTabs, effectivePin],
+  );
+
+  // The pending diff handed to the center pane — ONLY for the active surface,
+  // and never while scrubbed off-now (FR-3.15). It clears prop-driven: once the
+  // diff resolves (optimistic or server), it drops out of `openSurfaceDiffs`, so
+  // TcSurfaceMount receives `null` and hides the controls (no internal state).
+  const activeSurfaceDiff = isScrubbed
+    ? undefined
+    : openSurfaceDiffs.find((entry) => entry.uri === activeUri);
+  const pendingDiff = useMemo<PendingDiffHandle | null>(
+    () =>
+      activeSurfaceDiff === undefined
+        ? null
+        : {
+            diff: activeSurfaceDiff.diff,
+            meta: {
+              diffId: activeSurfaceDiff.diffId,
+              provenance: activeSurfaceDiff.provenance,
+              title: activeSurfaceDiff.title,
+              regionAnchorId: activeSurfaceDiff.uri,
+            },
+          },
+    [activeSurfaceDiff],
+  );
+
+  // PRD-09c: the edit overlay for the active surface — mounted OVER the pure
+  // adapter via ThreadCanvas.editSlot → TcSurfaceMount. Renders ONLY while the
+  // reviewer is editing THIS surface's diff (`editingDiffId === diffId`), so it
+  // closes automatically once the diff resolves (it drops out of
+  // `activeSurfaceDiff`) or the user scrubs off-now. The archetype is the uri
+  // scheme (`message://…` → "message", `record://…` → "record"); v1 edits
+  // message body + record fields (EditOverlay guards other archetypes).
+  const editSlot = useMemo<ReactNode>(() => {
+    if (
+      activeSurfaceDiff === undefined ||
+      editingDiffId === null ||
+      editingDiffId !== activeSurfaceDiff.diffId
+    ) {
+      return null;
+    }
+    const diffId = activeSurfaceDiff.diffId;
+    return (
+      <EditOverlay
+        archetype={schemeOf(activeSurfaceDiff.uri)}
+        diff={activeSurfaceDiff.diff}
+        title={activeSurfaceDiff.title}
+        onSubmit={(edits) => handleSubmitEdits(diffId, edits)}
+        onCancel={handleCancelEdits}
+      />
+    );
+  }, [activeSurfaceDiff, editingDiffId, handleSubmitEdits, handleCancelEdits]);
+
+  // PRD-04: "follow live" affordance — shown only when pinned to a surface that
+  // is not the newest (reuses the scrub-banner copy pattern). Un-pins on click.
+  const showFollowLive =
+    !isScrubbed &&
+    effectivePin !== null &&
+    newestUri !== "" &&
+    effectivePin !== newestUri;
+  const pinnedTabTitle =
+    visibleSurfaceTabs.find((tab) => tab.uri === effectivePin)?.title ?? "";
 
   const chatSlot = (
     <TcChat
@@ -590,6 +789,16 @@ export function RunDestination(props: RunDestinationProps): ReactElement {
         <RunViewingBanner atMs={viewingAtMs} onReturnToLive={handleSnapToNow} />
       ) : null}
 
+      {/* PRD-04: "follow live" affordance — the user pinned an older surface tab
+          while the run moved on to a newer one. Reuses the scrub-banner pattern;
+          "Follow live →" un-pins and resumes auto-follow. */}
+      {showFollowLive ? (
+        <RunFollowLiveBanner
+          pinnedTitle={pinnedTabTitle}
+          onFollowLive={handleFollowLive}
+        />
+      ) : null}
+
       <div data-testid="run-canvas-slot" style={canvasSlotStyle}>
         {/* PR-3.11 (FR-3.25): no active run → the empty/idle goal composer
             (never a blank ThreadCanvas / placeholder string). Submitting a goal
@@ -612,11 +821,25 @@ export function RunDestination(props: RunDestinationProps): ReactElement {
             runId={(session.runId as RunId | null) ?? null}
             events={session.events}
             onModeChange={setMode}
-            tabs={tabs}
+            tabs={surfaceTabs}
             activeUri={activeUri}
             onActivateTab={handleActivateTab}
             onCloseTab={handleCloseTab}
             transport={transport}
+            // PRD-04: the proposed surface diff for the active surface + the
+            // decision callbacks. ThreadCanvas forwards these to TcSurfaceMount,
+            // which renders the Approve/Reject/Suggest controls around the diff.
+            // onApprove/onReject reuse the SAME resolveApproval machinery the
+            // in-chat ApprovalCard uses (diffId === approvalId); onSuggestChanges
+            // is a no-op passthrough until PRD-09.
+            pendingDiff={pendingDiff}
+            onApprove={handleApprove}
+            onReject={handleReject}
+            onSuggestChanges={handleSuggestChanges}
+            // PRD-09c: the host-owned edit overlay for the active surface diff.
+            // Null unless the reviewer opened "Suggest changes"; when set it
+            // mounts OVER the pure adapter and submits `approve_with_edits`.
+            editSlot={editSlot}
             // PR-3.7: own the scrub cursor here; ThreadCanvas forwards it to the
             // mini-timeline (highlight + step/snap dispatch) and to the
             // SwimlaneScrubProvider (in-chat ghost banner + composer disable).
@@ -684,13 +907,34 @@ interface ScrubTarget {
   readonly surfaceUri: string | undefined;
 }
 
-/** A short, human tab title for a surface uri (`email://draft-1` → `draft-1`). */
-function surfaceTabTitle(uri: string): string {
-  const sep = uri.indexOf("://");
-  if (sep < 0) {
-    return uri;
+/**
+ * Read the surface uri an event touched, for the scrub index (`snapSet`
+ * target). Accepts both the legacy flat `payload.surface_uri` and the PRD-01
+ * `payload.surface.surface_uri` envelope so scrubbing snaps to the right surface
+ * regardless of wire shape.
+ */
+// PRD-09c: the surface archetype is the uri scheme — `message://server/tool/id`
+// → "message". Used to pick the EditOverlay's per-archetype form.
+function schemeOf(uri: string): string {
+  const idx = uri.indexOf("://");
+  return idx > 0 ? uri.slice(0, idx) : "";
+}
+
+function scrubUriOf(event: {
+  readonly payload?: Record<string, unknown>;
+}): string | undefined {
+  const flat = event.payload?.["surface_uri"];
+  if (typeof flat === "string") {
+    return flat;
   }
-  return uri.slice(sep + 3) || uri;
+  const surface = event.payload?.["surface"];
+  if (surface !== null && typeof surface === "object") {
+    const nested = (surface as Record<string, unknown>)["surface_uri"];
+    if (typeof nested === "string") {
+      return nested;
+    }
+  }
+  return undefined;
 }
 
 // PR-3.11 (FR-3.25): pull the new run id out of a `POST /v1/agent/runs`
@@ -751,6 +995,44 @@ function RunViewingBanner(props: RunViewingBannerProps): ReactElement {
         style={returnToLiveButtonStyle}
       >
         Return to live →
+      </button>
+    </div>
+  );
+}
+
+// ============================================================
+// PRD-04 — "follow live" affordance (pinned-tab escape hatch)
+// ============================================================
+//
+// When the user pins an older surface tab (a manual click) and the run moves on
+// to a newer surface, this `role="status"` strip offers the single way back to
+// auto-follow. It reuses the scrub-banner copy pattern (accent-soft fill,
+// "Follow live →") — distinct testids so it never collides with the scrub
+// banner (they are mutually exclusive: follow-live is gated to live/off-scrub).
+
+interface RunFollowLiveBannerProps {
+  readonly pinnedTitle: string;
+  readonly onFollowLive: () => void;
+}
+
+function RunFollowLiveBanner(props: RunFollowLiveBannerProps): ReactElement {
+  const { pinnedTitle, onFollowLive } = props;
+  return (
+    <div
+      role="status"
+      data-testid="run-follow-live-banner"
+      style={viewingBannerStyle}
+    >
+      <span data-testid="run-follow-live-label" style={viewingTextStyle}>
+        Pinned to {pinnedTitle || "a surface"} · the run has moved on
+      </span>
+      <button
+        type="button"
+        data-testid="run-follow-live"
+        onClick={onFollowLive}
+        style={returnToLiveButtonStyle}
+      >
+        Follow live →
       </button>
     </div>
   );

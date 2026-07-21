@@ -554,8 +554,68 @@ class StreamMessageProcessor:
             Keys.Field.STATUS: status,
             Keys.Field.OUTPUT: output or payload,
         }
+        cls._lift_surface_fields(result)
         cls.apply_tool_visibility(result)
         return result
+
+    @classmethod
+    def _lift_surface_fields(cls, result: JsonObject) -> None:
+        """Hoist the generative-UI surface envelope onto the event-payload top level.
+
+        PRD-02 attaches ``surface_uri`` + ``surface`` to the MCP tool return dict.
+        By the time a tool result reaches here that dict has been bucketed into
+        ``output`` — either with the surface spread at ``output``'s top level
+        (dict-shaped tool message) or, on the production path, JSON-serialised
+        into a single ``output.content`` string. The frontend event projector
+        reads the surface at the payload top level (``payload.surface_uri`` /
+        ``payload.surface``), so lift it there.
+
+        Defensive and best-effort: no-ops when ``output`` is not a dict or no
+        surface is present, so a plain tool result stays byte-for-byte unchanged.
+        A top-level surface is popped out of ``output`` to avoid duplication; a
+        surface embedded in the ``content`` string is copied (the string is the
+        model-facing output PRD-02 already writes and must stay intact).
+        """
+        output = result.get(Keys.Field.OUTPUT)
+        if not isinstance(output, dict):
+            return
+        lifted = cls._pop_surface_fields(output)
+        if not lifted:
+            lifted = cls._surface_fields_from_content(output.get(Keys.Field.CONTENT))
+        for key, value in lifted.items():
+            result[key] = value
+
+    @staticmethod
+    def _pop_surface_fields(output: JsonObject) -> JsonObject:
+        """Pop any top-level surface fields out of a dict-shaped tool ``output``."""
+        return {
+            key: output.pop(key)
+            for key in (Keys.Field.SURFACE_URI, Keys.Field.SURFACE)
+            if key in output
+        }
+
+    @staticmethod
+    def _surface_fields_from_content(content: object) -> JsonObject:
+        """Extract surface fields from a JSON-serialised tool ``content`` string.
+
+        Uses a raw ``json.loads`` (not ``payload_mapping``) so the envelope's
+        nested ``state.data`` — which may hold lists of objects — is preserved
+        verbatim rather than flattened. Returns an empty mapping on any parse
+        failure or when the content carries no surface.
+        """
+        if not isinstance(content, str) or not content.lstrip().startswith("{"):
+            return {}
+        try:
+            parsed = json.loads(content)
+        except (json.JSONDecodeError, ValueError):
+            return {}
+        if not isinstance(parsed, dict):
+            return {}
+        return {
+            key: parsed[key]
+            for key in (Keys.Field.SURFACE_URI, Keys.Field.SURFACE)
+            if key in parsed
+        }
 
     def tool_result_payload_with_state(
         self, run_id: str, payload: JsonObject
