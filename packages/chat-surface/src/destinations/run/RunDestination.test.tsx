@@ -937,3 +937,176 @@ describe("RunDestination — empty/idle + multi-run (PR-3.11 / FR-3.25/3.26)", (
     expect(screen.queryByTestId("run-multi-select")).toBeNull();
   });
 });
+
+// === PRD-04 — surface tabs + on-surface diffs (auto-follow / pin / decisions) ===
+//
+// Integration: surface tool_results populate the surface-tab strip off the ONE
+// canonical stream (FR-3.3); the center pane auto-follows the newest surface
+// until the user pins one (a manual tab click). An approval carrying a surface
+// diff renders the Approve/Reject controls over the diff; approving reuses the
+// SAME resolveApproval machinery the in-chat card uses and POSTs the decision.
+// Diff controls hide while scrubbed off-now (FR-3.15).
+
+/** A `tool_result` carrying the PRD-01 `payload.surface` envelope. */
+function surfaceToolResult(
+  uri: string,
+  id: string,
+  data: Record<string, unknown> = {},
+): Record<string, unknown> {
+  return event({
+    event_id: id,
+    event_type: "tool_result",
+    activity_kind: "tool",
+    payload: {
+      surface: { surface_uri: uri, archetype: "record", state: { data } },
+    },
+  });
+}
+
+/** An `approval_requested` proposing a diff on a surface. */
+function surfaceDiffApproval(
+  approvalId: string,
+  uri: string,
+): Record<string, unknown> {
+  return event({
+    event_type: "approval_requested",
+    activity_kind: "approval",
+    payload: {
+      approval_id: approvalId,
+      approval_kind: "tool_action",
+      display_name: "Update the record",
+      server_name: "LINEAR",
+      surface: {
+        surface_uri: uri,
+        archetype: "record",
+        state: { data: {} },
+        diff: { changes: [{ field: "title", old: "a", new: "b" }] },
+      },
+    },
+  });
+}
+
+function activeSurfaceTabUri(): string | null {
+  return (
+    screen
+      .getByTestId("tc-tabs")
+      .querySelector('[data-active="true"]')
+      ?.getAttribute("data-uri") ?? null
+  );
+}
+
+function surfaceTabCount(): number {
+  return screen.getByTestId("tc-tabs").querySelectorAll('[role="tab"]').length;
+}
+
+describe("RunDestination — surface tabs + on-surface diffs (PRD-04)", () => {
+  async function renderWithSession(): Promise<FakeTransport> {
+    seqCounter = 0;
+    const transport = new FakeTransport();
+    transport.requestHandler = async (req) =>
+      req.path.includes("/messages") ? { messages: [] } : runningRun("Goal");
+    renderRun(transport, makeStore());
+    await waitFor(() => expect(transport.sessionSub).toBeDefined());
+    return transport;
+  }
+
+  it("auto-opens the newest surface as tabs stream in", async () => {
+    const transport = await renderWithSession();
+    act(() => {
+      transport.emit(surfaceToolResult("record://a", "sa"));
+      transport.emit(surfaceToolResult("record://b", "sb"));
+    });
+    await waitFor(() => expect(surfaceTabCount()).toBe(2));
+    // Newest surface (b) auto-opens; no pin → no follow-live affordance.
+    expect(activeSurfaceTabUri()).toBe("record://b");
+    expect(screen.queryByTestId("run-follow-live-banner")).toBeNull();
+  });
+
+  it("pins on a manual tab click and un-pins via follow live", async () => {
+    const transport = await renderWithSession();
+    act(() => {
+      transport.emit(surfaceToolResult("record://a", "sa"));
+      transport.emit(surfaceToolResult("record://b", "sb"));
+    });
+    await waitFor(() => expect(activeSurfaceTabUri()).toBe("record://b"));
+
+    // Click the older tab → pins it (active follows the click, not the newest).
+    const olderTab = screen
+      .getByTestId("tc-tabs")
+      .querySelector('[data-uri="record://a"]') as HTMLElement;
+    act(() => {
+      fireEvent.click(olderTab);
+    });
+    expect(activeSurfaceTabUri()).toBe("record://a");
+    // A newer surface exists → the "follow live" affordance appears.
+    expect(
+      screen.getByTestId("run-follow-live-banner").getAttribute("role"),
+    ).toBe("status");
+
+    // Follow live → un-pins; active snaps back to the newest surface.
+    act(() => {
+      fireEvent.click(screen.getByTestId("run-follow-live"));
+    });
+    expect(screen.queryByTestId("run-follow-live-banner")).toBeNull();
+    expect(activeSurfaceTabUri()).toBe("record://b");
+  });
+
+  it("renders the on-surface diff controls and POSTs the decision on approve", async () => {
+    const transport = await renderWithSession();
+    act(() => {
+      transport.emit(surfaceToolResult("record://seed/get_issue/1", "surf-1"));
+      transport.emit(
+        surfaceDiffApproval("appr-1", "record://seed/get_issue/1"),
+      );
+    });
+
+    // The center pane shows the Approve/Reject/Suggest controls over the diff.
+    await screen.findByTestId("tc-surface-mount-controls");
+
+    act(() => {
+      fireEvent.click(screen.getByTestId("tc-surface-mount-approve"));
+    });
+
+    // Optimistic: the diff clears (controls gone) — prop-driven, no internal state.
+    await waitFor(() =>
+      expect(screen.queryByTestId("tc-surface-mount-controls")).toBeNull(),
+    );
+    // The host POSTed the decision through the Transport port (reuses the SAME
+    // resolveApproval machinery — diffId === approvalId).
+    await waitFor(() =>
+      expect(
+        transport.requests.some(
+          (r) =>
+            r.method === "POST" &&
+            r.path === "/v1/agent/approvals/appr-1/decision" &&
+            (r.body as { decision?: string } | undefined)?.decision ===
+              "approved",
+        ),
+      ).toBe(true),
+    );
+  });
+
+  it("hides the on-surface diff controls while scrubbed off-now (FR-3.15)", async () => {
+    const transport = await renderWithSession();
+    act(() => {
+      transport.emit(surfaceToolResult("record://seed/get_issue/1", "surf-1"));
+      transport.emit(
+        surfaceDiffApproval("appr-1", "record://seed/get_issue/1"),
+      );
+    });
+    await screen.findByTestId("tc-surface-mount-controls");
+
+    // Scrub to the surface's bead → the pending diff + its controls hide.
+    act(() => {
+      fireEvent.click(screen.getByTestId("tc-mini-timeline-bead-surf-1"));
+    });
+    expect(screen.getByTestId("run-viewing-banner")).not.toBeNull();
+    expect(screen.queryByTestId("tc-surface-mount-controls")).toBeNull();
+
+    // Snap back to now → controls restored.
+    act(() => {
+      fireEvent.click(screen.getByTestId("run-return-to-live"));
+    });
+    expect(screen.getByTestId("tc-surface-mount-controls")).not.toBeNull();
+  });
+});
