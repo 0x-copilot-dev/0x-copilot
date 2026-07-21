@@ -25,6 +25,7 @@ import {
   useRef,
   useState,
   type CSSProperties,
+  type FormEvent as ReactFormEvent,
   type KeyboardEvent as ReactKeyboardEvent,
   type ReactElement,
 } from "react";
@@ -33,10 +34,23 @@ import type {
   ConnectorAccessMode,
   ConnectorCatalogEntry,
   ConnectorSlug,
+  McpOAuthClientConfigRequest,
 } from "@0x-copilot/api-types";
-import { Button } from "@0x-copilot/design-system";
+import { Button, Field, TextInput } from "@0x-copilot/design-system";
 
 import { Modal, StepDots } from "../../settings/Modal";
+
+// ---------------------------------------------------------------------------
+// Custom-server add — the host implements the round-trip (create the MCP server
+// from a URL + optional pre-registered OAuth client, then kick off OAuth). The
+// modal owns only the form; this is the SSOT home for "add a custom MCP server"
+// (previously stranded in the web-only legacy Settings screen).
+// ---------------------------------------------------------------------------
+
+export interface CustomServerInput {
+  readonly url: string;
+  readonly oauthClient?: McpOAuthClientConfigRequest;
+}
 
 // ---------------------------------------------------------------------------
 // Permission choice — the connect flow only offers the two *granting* modes
@@ -96,12 +110,21 @@ export interface ConnectModalProps {
   readonly pending?: boolean;
   /** Inline OAuth/connect failure copy; rendered as a `role="alert"` node. */
   readonly error?: string | null;
+  /**
+   * Optional custom-server add. When provided, the catalog step offers an
+   * "Add a custom server" affordance that opens a URL form (+ advanced
+   * pre-registered OAuth client fields). On submit the host creates the MCP
+   * server and starts OAuth, reflecting progress via `pending` / `error`;
+   * success closes the modal. Omit to hide the affordance entirely.
+   */
+  readonly onAddCustomServer?: (input: CustomServerInput) => void;
 }
 
-type ConnectPhase = "catalog" | "oauth" | "permission";
+type ConnectPhase = "catalog" | "custom" | "oauth" | "permission";
 
 const PHASE_STEP: Record<ConnectPhase, number> = {
   catalog: 1,
+  custom: 1,
   oauth: 2,
   permission: 3,
 };
@@ -118,10 +141,14 @@ export function ConnectModal({
   onConnect,
   pending = false,
   error = null,
+  onAddCustomServer,
 }: ConnectModalProps): ReactElement | null {
   const [phase, setPhase] = useState<ConnectPhase>("catalog");
   const [selected, setSelected] = useState<ConnectorCatalogEntry | null>(null);
   const [permission, setPermission] = useState<ConnectPermission>("read");
+  // Which flow the OAuth step belongs to: a catalog pick advances to the
+  // permission choice on success; a custom-server add just closes.
+  const [flow, setFlow] = useState<"catalog" | "custom">("catalog");
 
   // Reset the flow whenever the modal is (re)opened.
   useEffect(() => {
@@ -129,30 +156,52 @@ export function ConnectModal({
       setPhase("catalog");
       setSelected(null);
       setPermission("read");
+      setFlow("catalog");
     }
   }, [open]);
 
-  // OAuth → permission advance is host-driven: once the host has cleared
-  // `pending` with no `error`, authorization succeeded and we reveal the
-  // permission choice. Errors keep us on the OAuth step (Back / Retry).
+  // OAuth success is host-driven: once the host has cleared `pending` with no
+  // `error`, authorization succeeded. A catalog pick reveals the permission
+  // choice; a custom-server add has no permission step, so it closes. Errors
+  // keep us on the OAuth step (Back / Retry).
   useEffect(() => {
     if (phase === "oauth" && !pending && error === null) {
-      setPhase("permission");
+      if (flow === "custom") {
+        onClose();
+      } else {
+        setPhase("permission");
+      }
     }
-  }, [phase, pending, error]);
+  }, [phase, pending, error, flow, onClose]);
 
   const handlePick = useCallback(
     (entry: ConnectorCatalogEntry) => {
       setSelected(entry);
       setPermission("read");
+      setFlow("catalog");
       setPhase("oauth");
       onSelectEntry?.(entry.slug);
     },
     [onSelectEntry],
   );
 
+  const openCustomForm = useCallback(() => {
+    setSelected(null);
+    setPhase("custom");
+  }, []);
+
+  const submitCustom = useCallback(
+    (input: CustomServerInput) => {
+      setFlow("custom");
+      setPhase("oauth");
+      onAddCustomServer?.(input);
+    },
+    [onAddCustomServer],
+  );
+
   const backToCatalog = useCallback(() => {
     setSelected(null);
+    setFlow("catalog");
     setPhase("catalog");
   }, []);
 
@@ -177,6 +226,15 @@ export function ConnectModal({
             Cancel
           </Button>
         ) : null}
+        {phase === "custom" ? (
+          <Button
+            variant="ghost"
+            onClick={backToCatalog}
+            data-testid="connect-back"
+          >
+            Back
+          </Button>
+        ) : null}
         {phase === "oauth" && error !== null ? (
           <>
             <Button
@@ -186,13 +244,17 @@ export function ConnectModal({
             >
               Back
             </Button>
-            <Button
-              variant="secondary"
-              onClick={retryOAuth}
-              data-testid="connect-retry"
-            >
-              Retry
-            </Button>
+            {/* A custom add can't be re-submitted without the form values, so
+                Retry is catalog-only; custom errors go Back to re-enter. */}
+            {flow === "catalog" ? (
+              <Button
+                variant="secondary"
+                onClick={retryOAuth}
+                data-testid="connect-retry"
+              >
+                Retry
+              </Button>
+            ) : null}
           </>
         ) : null}
         {phase === "oauth" && error === null ? (
@@ -230,7 +292,11 @@ export function ConnectModal({
   if (!open) return null;
 
   const subtitle =
-    selected !== null ? selected.display_name : "Bring a SaaS source in";
+    phase === "custom"
+      ? "Add a custom server"
+      : selected !== null
+        ? selected.display_name
+        : "Bring a SaaS source in";
 
   return (
     <Modal
@@ -242,8 +308,13 @@ export function ConnectModal({
       footer={footer}
     >
       {phase === "catalog" ? (
-        <CatalogStep catalog={catalog} onPick={handlePick} />
+        <CatalogStep
+          catalog={catalog}
+          onPick={handlePick}
+          onAddCustom={onAddCustomServer ? openCustomForm : undefined}
+        />
       ) : null}
+      {phase === "custom" ? <CustomServerStep onSubmit={submitCustom} /> : null}
       {phase === "oauth" ? (
         <OAuthStep name={selected?.display_name ?? "the tool"} error={error} />
       ) : null}
@@ -266,15 +337,50 @@ export function ConnectModal({
 function CatalogStep({
   catalog,
   onPick,
+  onAddCustom,
 }: {
   readonly catalog: readonly ConnectorCatalogEntry[];
   readonly onPick: (entry: ConnectorCatalogEntry) => void;
+  /** When set, a trailing "Add a custom server" row opens the URL form. */
+  readonly onAddCustom?: () => void;
 }): ReactElement {
+  const customRow =
+    onAddCustom !== undefined ? (
+      <li>
+        <button
+          type="button"
+          style={pickRowStyle}
+          onClick={onAddCustom}
+          data-testid="connect-catalog-custom"
+        >
+          <span aria-hidden="true" style={glyphStyle}>
+            ＋
+          </span>
+          <span style={{ flex: 1, minWidth: 0 }}>
+            <span style={pickNameStyle}>Add a custom server</span>
+            <span style={pickSubStyle}>
+              Any MCP server by URL — with optional OAuth client details.
+            </span>
+          </span>
+          <span aria-hidden="true" style={chevronStyle}>
+            ›
+          </span>
+        </button>
+      </li>
+    ) : null;
+
   if (catalog.length === 0) {
+    if (onAddCustom === undefined) {
+      return (
+        <p style={mutedNoteStyle} data-testid="connect-catalog-empty">
+          No connectors are available to add right now.
+        </p>
+      );
+    }
     return (
-      <p style={mutedNoteStyle} data-testid="connect-catalog-empty">
-        No connectors are available to add right now.
-      </p>
+      <ul style={listStyle} data-testid="connect-catalog-list">
+        {customRow}
+      </ul>
     );
   }
   return (
@@ -301,8 +407,207 @@ function CatalogStep({
           </button>
         </li>
       ))}
+      {customRow}
     </ul>
   );
+}
+
+// ---------------------------------------------------------------------------
+// Custom-server step — URL + optional pre-registered OAuth client. Ported from
+// the legacy web `ManualAddForm` so custom MCP add is now an SSOT capability of
+// the shared connect flow. Presentational: validates + fires `onSubmit`; the
+// host performs `addServer` + `authenticate`.
+// ---------------------------------------------------------------------------
+
+function CustomServerStep({
+  onSubmit,
+}: {
+  readonly onSubmit: (input: CustomServerInput) => void;
+}): ReactElement {
+  const [url, setUrl] = useState("");
+  const [clientId, setClientId] = useState("");
+  const [clientSecret, setClientSecret] = useState("");
+  const [scope, setScope] = useState("");
+  const [authorizationEndpoint, setAuthorizationEndpoint] = useState("");
+  const [tokenEndpoint, setTokenEndpoint] = useState("");
+  const [advancedOpen, setAdvancedOpen] = useState(false);
+  const [formError, setFormError] = useState<string | null>(null);
+
+  const handleSubmit = (event: ReactFormEvent<HTMLFormElement>): void => {
+    event.preventDefault();
+    const trimmedUrl = url.trim();
+    if (!trimmedUrl) return;
+    if (!isHttpsUrl(trimmedUrl)) {
+      setFormError("Server URL must be a valid https:// URL.");
+      return;
+    }
+    try {
+      const oauthClient = oauthClientFromForm({
+        clientId,
+        clientSecret,
+        scope,
+        authorizationEndpoint,
+        tokenEndpoint,
+      });
+      setFormError(null);
+      onSubmit({ url: trimmedUrl, oauthClient });
+    } catch (err) {
+      setFormError(
+        err instanceof Error ? err.message : "Could not add server.",
+      );
+    }
+  };
+
+  return (
+    <form
+      style={customFormStyle}
+      onSubmit={handleSubmit}
+      data-testid="connect-custom-form"
+    >
+      <Field label="Server URL" hint="HTTPS endpoint for the MCP server.">
+        <TextInput
+          type="url"
+          inputMode="url"
+          autoComplete="off"
+          spellCheck={false}
+          value={url}
+          onChange={(event) => setUrl(event.target.value)}
+          placeholder="https://mcp.example.com"
+          required
+        />
+      </Field>
+
+      <details
+        open={advancedOpen}
+        onToggle={(event) => setAdvancedOpen(event.currentTarget.open)}
+      >
+        <summary style={summaryStyle}>
+          Advanced — pre-registered OAuth client (servers without dynamic client
+          registration)
+        </summary>
+        <div style={advancedGridStyle}>
+          <Field label="OAuth client ID">
+            <TextInput
+              autoComplete="off"
+              value={clientId}
+              onChange={(event) => setClientId(event.target.value)}
+              placeholder="client_id"
+            />
+          </Field>
+          <Field label="OAuth client secret">
+            <TextInput
+              type="password"
+              autoComplete="new-password"
+              value={clientSecret}
+              onChange={(event) => setClientSecret(event.target.value)}
+              placeholder="client_secret"
+            />
+          </Field>
+          <Field label="OAuth scope">
+            <TextInput
+              autoComplete="off"
+              value={scope}
+              onChange={(event) => setScope(event.target.value)}
+              placeholder="e.g. mcp"
+            />
+          </Field>
+          <Field
+            label="Authorization endpoint"
+            hint="Override only when the server doesn't advertise OAuth metadata."
+          >
+            <TextInput
+              type="url"
+              autoComplete="off"
+              value={authorizationEndpoint}
+              onChange={(event) => setAuthorizationEndpoint(event.target.value)}
+              placeholder="https://auth.example.com/authorize"
+            />
+          </Field>
+          <Field label="Token endpoint" hint="Optional override.">
+            <TextInput
+              type="url"
+              autoComplete="off"
+              value={tokenEndpoint}
+              onChange={(event) => setTokenEndpoint(event.target.value)}
+              placeholder="https://auth.example.com/token"
+            />
+          </Field>
+        </div>
+      </details>
+
+      {formError !== null ? (
+        <p
+          style={alertNoteStyle}
+          role="alert"
+          data-testid="connect-custom-error"
+        >
+          {formError}
+        </p>
+      ) : null}
+
+      <Button variant="primary" type="submit" data-testid="connect-custom-add">
+        Add server
+      </Button>
+    </form>
+  );
+}
+
+function isHttpsUrl(value: string): boolean {
+  try {
+    const parsed = new URL(value);
+    return parsed.protocol === "https:" || parsed.protocol === "http:";
+  } catch {
+    return false;
+  }
+}
+
+function oauthClientFromForm({
+  clientId,
+  clientSecret,
+  scope,
+  authorizationEndpoint,
+  tokenEndpoint,
+}: {
+  clientId: string;
+  clientSecret: string;
+  scope: string;
+  authorizationEndpoint: string;
+  tokenEndpoint: string;
+}): McpOAuthClientConfigRequest | undefined {
+  const trimmedClientId = clientId.trim();
+  const trimmedClientSecret = clientSecret.trim();
+  const trimmedScope = scope.trim();
+  const trimmedAuthorizationEndpoint = authorizationEndpoint.trim();
+  const trimmedTokenEndpoint = tokenEndpoint.trim();
+  const hasOAuthConfig = [
+    trimmedClientId,
+    trimmedClientSecret,
+    trimmedScope,
+    trimmedAuthorizationEndpoint,
+    trimmedTokenEndpoint,
+  ].some(Boolean);
+  if (!hasOAuthConfig) {
+    return undefined;
+  }
+  if (!trimmedClientId) {
+    throw new Error(
+      "OAuth client ID is required when OAuth settings are provided.",
+    );
+  }
+  return {
+    client_id: trimmedClientId,
+    ...(trimmedClientSecret
+      ? {
+          client_secret: trimmedClientSecret,
+          token_endpoint_auth_method: "client_secret_post",
+        }
+      : { token_endpoint_auth_method: "none" }),
+    ...(trimmedScope ? { scope: trimmedScope } : {}),
+    ...(trimmedAuthorizationEndpoint
+      ? { authorization_endpoint: trimmedAuthorizationEndpoint }
+      : {}),
+    ...(trimmedTokenEndpoint ? { token_endpoint: trimmedTokenEndpoint } : {}),
+  };
 }
 
 // ---------------------------------------------------------------------------
@@ -559,4 +864,23 @@ const optionLabelStyle: CSSProperties = {
 const optionDescStyle: CSSProperties = {
   fontSize: "var(--font-size-xs)",
   color: "var(--color-text-muted)",
+};
+
+const customFormStyle: CSSProperties = {
+  display: "flex",
+  flexDirection: "column",
+  gap: "var(--space-md)",
+};
+
+const summaryStyle: CSSProperties = {
+  fontSize: "var(--font-size-xs)",
+  color: "var(--color-text-muted)",
+  cursor: "pointer",
+};
+
+const advancedGridStyle: CSSProperties = {
+  display: "flex",
+  flexDirection: "column",
+  gap: "var(--space-sm)",
+  marginTop: "var(--space-sm)",
 };
