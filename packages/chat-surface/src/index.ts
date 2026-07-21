@@ -1323,6 +1323,21 @@ export {
 } from "./destinations/_shared";
 // === end Frontend parity v3 (PRD-G) ===
 
+// === Generative UI (PRD-06) — word-level text diff ===
+// Dependency-free word diff (`wordDiff` → `DiffHunk[]`) + its presentational
+// renderer (`DiffText`), the VSCode/Cursor-style red/green inline diff for
+// text-shaped surfaces. Consumed by the surface-renderers email tier-1 renderer;
+// the `DiffHunk.id` + `DiffText.onHunkToggle` seam is what PRD-09 keys per-hunk
+// accept off of. See docs/plan/generative-ui/PRD-06-text-diff.md.
+export {
+  wordDiff,
+  WORD_DIFF_CHAR_CAP,
+  type DiffHunk,
+  type DiffHunkKind,
+} from "./textdiff/wordDiff";
+export { DiffText, type DiffTextProps } from "./textdiff/DiffText";
+// === end Generative UI (PRD-06) ===
+
 // === Frontend parity v3 (PRD-D) — ⌘K static command launcher ===
 // The 13 v3 design commands shown on an empty query and merged above live
 // search hits, so ⌘K works as a keyboard launcher. Hosts map each `intent` to
