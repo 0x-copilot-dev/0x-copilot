@@ -11,7 +11,7 @@ import type { RuntimeEventEnvelope } from "@0x-copilot/api-types";
 import type { Transport } from "@0x-copilot/chat-transport";
 
 import { TIER3_SCHEME } from "../surfaces/SaaSRendererAdapter";
-import { resolveAdapter } from "../surfaces/SurfaceRegistry";
+import { useSurfaceRegistry } from "../surfaces/SurfaceRegistryContext";
 import type { SaaSRendererAdapter } from "../surfaces/SaaSRendererAdapter";
 import type { PendingDiff } from "../surfaces/types";
 import { projectAt, type SurfacePayload } from "./eventProjector";
@@ -251,13 +251,17 @@ export function TcSurfaceMount(props: TcSurfaceMountProps): ReactElement {
     onSuggestChanges,
     editSlot,
   } = props;
+  // Resolve against the scoped registry (a SurfaceRegistryProvider above us),
+  // falling back to the process-global registry when none is provided — the
+  // default, behaviour-preserving path (PRD-11 registry scoping).
+  const registry = useSurfaceRegistry();
   const scheme = useMemo(() => schemeOf(uri), [uri]);
-  const primary = useMemo(() => resolveAdapter(uri), [uri]);
+  const primary = useMemo(() => registry.resolveAdapter(uri), [registry, uri]);
   // Probe the wildcard bucket directly. Per PRD §3.4 tier-3 "Always works"
   // — its matches() returns true universally — so passing the wildcard
   // sentinel URI is equivalent to passing the original URI for the
   // contractual tier-3 adapter.
-  const tier3 = useMemo(() => resolveAdapter(TIER3_URI), []);
+  const tier3 = useMemo(() => registry.resolveAdapter(TIER3_URI), [registry]);
   const placeholder = <FallbackEmpty scheme={scheme} />;
 
   // No surface tab is active yet — a run has started but the agent has not

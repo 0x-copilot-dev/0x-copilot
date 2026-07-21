@@ -191,6 +191,20 @@ export {
 export { TcSurfaceMount, type TcSurfaceMountProps } from "./thread-canvas";
 // === end Phase 0-A ===
 
+// === PRD-11 registry scoping groundwork ===
+// Isolated-instance factory + React scoping. Default remains the module-global
+// registry (zero behaviour change); a provider scopes a subtree for per-tenant
+// resolution later. See surfaces/SurfaceRegistry.ts header for the invariant.
+export {
+  createSurfaceRegistry,
+  globalSurfaceRegistry,
+  SurfaceRegistryProvider,
+  useSurfaceRegistry,
+  type SurfaceRegistry,
+  type SurfaceRegistryProviderProps,
+} from "./surfaces";
+// === end PRD-11 registry scoping groundwork ===
+
 // === Phase 4-B tier3 generic-diff ===
 export {
   GenericStructuredDiff,
