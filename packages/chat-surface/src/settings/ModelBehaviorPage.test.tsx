@@ -48,6 +48,31 @@ beforeEach(() => {
 });
 
 describe("<ModelBehaviorPage>", () => {
+  it("uses the design IA: a 17px section heading over Defaults / Approval policy / Spend guardrail cards", () => {
+    render(
+      <ModelBehaviorPage
+        value={BASE_VALUE}
+        onChange={vi.fn()}
+        controller={makeController()}
+        cloudModels={CLOUD}
+      />,
+    );
+    // The section title is the top-of-hierarchy <h1> (SecTitle); the blocks are
+    // separate cards with <h3> titles (no outer "Model & behavior" card).
+    expect(
+      screen.getByRole("heading", { level: 1, name: "Model & behavior" }),
+    ).toBeInTheDocument();
+    expect(
+      screen.getByRole("heading", { level: 3, name: "Defaults" }),
+    ).toBeInTheDocument();
+    expect(
+      screen.getByRole("heading", { level: 3, name: "Approval policy" }),
+    ).toBeInTheDocument();
+    expect(
+      screen.getByRole("heading", { level: 3, name: "Spend guardrail" }),
+    ).toBeInTheDocument();
+  });
+
   it("sources the default-model optgroups from props", () => {
     render(
       <ModelBehaviorPage

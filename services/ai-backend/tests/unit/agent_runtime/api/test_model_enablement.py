@@ -1,9 +1,12 @@
 """PR-2C — ModelEnablementResolver + EnabledModelsNormalizer.
 
-Pure, fast unit tests. The resolver's two invariants (local always
-enabled, workspace default always enabled) must hold in BOTH the
-explicit-selection and heuristic modes, or a user could curate
-themselves out of a working picker.
+Pure, fast unit tests. The resolver's two invariants (local always enabled,
+workspace default always enabled) must hold in BOTH the explicit-selection and
+uncurated modes, or a user could curate themselves out of a working picker.
+
+The uncurated default no longer trims by release date (LiteLLM carries none):
+the catalog is now a curated product set, so the uncurated picker simply enables
+the whole catalog.
 """
 
 from __future__ import annotations
@@ -22,7 +25,6 @@ def _item(
     model_id: str,
     provider: str,
     *,
-    release_date: str | None = None,
     model_name: str | None = None,
 ) -> ModelCatalogItem:
     return ModelCatalogItem(
@@ -31,7 +33,6 @@ def _item(
         model_name=model_name or model_id,
         name=model_id,
         configured=True,
-        release_date=release_date,
     )
 
 
@@ -40,11 +41,11 @@ def _catalog() -> tuple[ModelCatalogItem, ...]:
     # workspace default at any of them — DefaultModelSelection.model_name is a
     # normalized id and forbids the "vendor/model" slash form.
     return (
-        _item("gpt-a", "openai", release_date="2026-05-01"),
-        _item("gpt-b", "openai", release_date="2026-03-01"),
-        _item("gpt-c", "openai", release_date="2026-01-01"),
-        _item("claude-a", "anthropic", release_date="2026-04-01"),
-        _item("claude-b", "anthropic", release_date="2026-02-01"),
+        _item("gpt-a", "openai"),
+        _item("gpt-b", "openai"),
+        _item("gpt-c", "openai"),
+        _item("claude-a", "anthropic"),
+        _item("claude-b", "anthropic"),
         _item("llama-3.3-70b", "ollama"),
     )
 
@@ -83,41 +84,23 @@ class TestExplicitSelection:
         assert _enabled_ids(result) == {"claude-a", "llama-3.3-70b"}
 
 
-class TestHeuristic:
-    def test_enables_newest_two_per_provider_plus_local(self) -> None:
+class TestUncurated:
+    def test_enables_the_whole_catalog(self) -> None:
         result = ModelEnablementResolver.apply(
             _catalog(), enabled_models=None, default_model=None
         )
-        assert _enabled_ids(result) == {
-            "gpt-a",  # newest openai
-            "gpt-b",  # 2nd newest openai
-            "claude-a",  # newest anthropic
-            "claude-b",  # 2nd newest anthropic
-            "llama-3.3-70b",  # local always on
-        }
-        # The 3rd-newest openai is excluded.
-        assert "gpt-c" not in _enabled_ids(result)
+        # No curation -> the curated product catalog is itself the short list,
+        # so every model is enabled (no release-date trimming).
+        assert _enabled_ids(result) == {item.id for item in _catalog()}
 
-    def test_default_model_survives_even_if_not_newest(self) -> None:
+    def test_default_and_local_enabled_without_selection(self) -> None:
         result = ModelEnablementResolver.apply(
             _catalog(),
             enabled_models=None,
             default_model=DefaultModelSelection(provider="openai", model_name="gpt-c"),
         )
-        # gpt-c is the oldest openai (would be excluded by newest-2) but it is
-        # the workspace default, so it must be enabled.
         assert "gpt-c" in _enabled_ids(result)
-
-    def test_missing_release_dates_sort_last(self) -> None:
-        catalog = (
-            _item("p/no-date", "openai"),
-            _item("p/dated", "openai", release_date="2020-01-01"),
-        )
-        result = ModelEnablementResolver.apply(
-            catalog, enabled_models=None, default_model=None
-        )
-        # Only 2 openai models, both fit under newest-2 → both enabled.
-        assert _enabled_ids(result) == {"p/no-date", "p/dated"}
+        assert "llama-3.3-70b" in _enabled_ids(result)
 
 
 class TestEnabledModelsNormalizer:

@@ -8,7 +8,6 @@ from agent_runtime.api.user_policies_resolver import UserPoliciesResolverFactory
 from agent_runtime.capabilities.http_pool import BackendHttpPool
 from agent_runtime.observability.http_logging import LoggingConfigurator
 from agent_runtime.observability.otel import TelemetryBootstrap
-from agent_runtime.pricing import PricingRefreshLoop, PricingRefreshLoopEnv
 from agent_runtime.settings import RuntimeSettings
 from runtime_adapters.factory import RuntimeAdapterFactory
 from runtime_worker.dependencies import DefaultRuntimeDependenciesFactory
@@ -65,7 +64,6 @@ class RuntimeWorkerEntrypoint:
         rollup_loop: UsageRollupLoop | None = None
         retention_loop: RetentionSweeperLoop | None = None
         statement_collector: DbStatementMetricsCollector | None = None
-        pricing_refresh_loop: PricingRefreshLoop | None = None
         try:
             # One MCP discovery cache per worker process — shared by every
             # run/approval handler this worker spins up. API and worker run
@@ -160,24 +158,6 @@ class RuntimeWorkerEntrypoint:
                     "db_statement_metrics_collector_started",
                     metadata={"interval_seconds": statement_collector._interval},
                 )
-            # Opt-in (default off). When enabled the worker re-ingests LiteLLM pricing
-            # on a daily cadence; ``PRICING_REFRESH_AUTO_APPLY=true`` promotes diffs into
-            # writes (off by default — log-only).
-            if PricingRefreshLoopEnv.env_bool(
-                PricingRefreshLoopEnv.ENABLED, default=False
-            ):
-                pricing_refresh_loop = PricingRefreshLoop(
-                    persistence=async_ports.persistence,
-                )
-                await pricing_refresh_loop.start()
-                logger.info(
-                    "pricing_refresh_loop_started",
-                    metadata={
-                        "interval_seconds": pricing_refresh_loop._interval,
-                        "auto_apply": pricing_refresh_loop._auto_apply,
-                        "sanity_threshold": str(pricing_refresh_loop._sanity_threshold),
-                    },
-                )
             # Opt-in (default off). Stamps ``retention_until`` on historical rows
             # that pre-date retention policy enforcement. Runs once at startup.
             if RetentionBackfillJobEnv.env_bool(
@@ -195,8 +175,6 @@ class RuntimeWorkerEntrypoint:
                 poll_interval_seconds=settings.execution.worker_poll_interval_seconds,
             )
         finally:
-            if pricing_refresh_loop is not None:
-                await pricing_refresh_loop.stop()
             if statement_collector is not None:
                 await statement_collector.stop()
             if retention_loop is not None:

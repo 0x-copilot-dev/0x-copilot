@@ -60,7 +60,7 @@ class ConversationQueryService:
         self._event_store = event_store
         self._settings = settings
         self._model_resolver = model_resolver
-        self._pricing_catalog = ModelPricingCatalog(persistence)
+        self._pricing_catalog = ModelPricingCatalog.from_litellm()
 
     async def list_models(self, *, org_id: str | None = None) -> ModelCatalogResponse:
         """Return the model catalog with per-provider credential + enablement flags.

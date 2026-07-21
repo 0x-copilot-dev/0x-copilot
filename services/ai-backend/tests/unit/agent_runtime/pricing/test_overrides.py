@@ -256,24 +256,28 @@ class TestByKey(_YamlMixin):
 
 
 class TestRealOverrideFile:
-    """The migration override file shipped at Step 2 cutover must load clean."""
+    """The shipped override backstop must load clean.
 
-    def test_migration_override_file_loads(self) -> None:
+    Post-litellm-cutover the file holds a single entry: ``gemini-3-flash``,
+    the only product model LiteLLM 1.93.0 does not price. The stale migration
+    entries were dropped (LiteLLM carries their real provider prices).
+    """
+
+    def test_backstop_override_file_loads(self) -> None:
         records = PricingOverrideSource.load_all()
-        # Migration entries cover the 5 divergences from the compare_litellm CLI.
         keys = {(r.provider, r.model_name, r.region) for r in records}
-        assert ("anthropic", "claude-opus-4-7", "global") in keys
-        assert ("openai", "gpt-5", "global") in keys
-        assert ("openai", "gpt-5.4-mini", "global") in keys
-        assert ("google", "gemini-2.5-pro", "global") in keys
-        assert ("google", "gemini-2.5-flash", "global") in keys
+        # gemini-3-flash is the sole remaining override; the canonical slug is
+        # ``gemini`` (not ``google``).
+        assert ("gemini", "gemini-3-flash", "global") in keys
+        # The dropped stale entries must be gone.
+        assert ("anthropic", "claude-opus-4-7", "global") not in keys
+        assert ("openai", "gpt-5", "global") not in keys
 
-    def test_every_migration_override_has_a_reason(self) -> None:
-        # The reason field is the audit trail. If any entry is missing
-        # it the loader raises — so this test asserts the loader path
-        # succeeds, which transitively asserts the precondition.
+    def test_every_override_has_a_reason(self) -> None:
+        # The reason field is the audit trail. If any entry is missing it
+        # the loader raises — so a successful load transitively asserts the
+        # precondition. Each record routes through PricingOverrideSource, so
+        # ``pricing_source`` is "override" (never silently empty).
         records = PricingOverrideSource.load_all()
         assert len(records) > 0
-        # Each record's pricing_source is "override" — proves we routed
-        # through PricingOverrideSource, not e.g. silently empty.
         assert all(r.pricing_source == "override" for r in records)

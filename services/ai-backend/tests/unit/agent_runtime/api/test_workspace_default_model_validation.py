@@ -21,6 +21,7 @@ from __future__ import annotations
 
 import pytest
 
+from agent_runtime.api.litellm_model_source import CatalogModelRecord
 from agent_runtime.api.model_catalog import ModelCatalog
 from agent_runtime.execution.models import ModelConfigResolver
 from agent_runtime.settings import RuntimeSettings
@@ -47,6 +48,16 @@ _UNCONSTRUCTIBLE_ID_CHARS = ("/", "~", " ")
 
 def _settings() -> RuntimeSettings:
     return RuntimeSettings.load(environ={"OPENAI_API_KEY": "sk-test"})
+
+
+class _FakeSource:
+    """A stand-in ``CatalogModelSource`` returning fixed records (no LiteLLM)."""
+
+    def __init__(self, records: tuple[CatalogModelRecord, ...]) -> None:
+        self._records = records
+
+    def records(self) -> tuple[CatalogModelRecord, ...]:
+        return self._records
 
 
 def _coordinator(settings: RuntimeSettings) -> WorkspaceCoordinator:
@@ -130,10 +141,12 @@ class TestValidationRejections:
 class TestCatalogRunPathDivergenceClosed:
     """The catalog advertises only providers the run path can execute.
 
-    Formerly a pinned, failing-when-fixed divergence: the catalog surfaced
-    ``groq``/``xai`` models the run-path allowlist rejects. ``ModelCatalog.build``
-    now filters to ``ModelConfigResolver.supports_provider``, so the picker can
-    never show an un-runnable model. These assert the divergence stays closed.
+    Formerly a pinned, failing-when-fixed divergence: the models.dev source
+    surfaced ``groq``/``xai`` models the run-path allowlist rejects. The curated
+    LiteLLM registry lists only run-path providers, and ``ModelCatalog.build``
+    still filters to ``ModelConfigResolver.supports_provider`` as a defensive
+    guard, so the picker can never show an un-runnable model. These assert the
+    divergence stays closed.
     """
 
     def test_every_advertised_provider_normalizes(self) -> None:
@@ -148,30 +161,39 @@ class TestCatalogRunPathDivergenceClosed:
             ModelConfigResolver._normalize_provider(provider)
 
     def test_rejected_providers_absent_from_catalog(self) -> None:
-        # groq/xai are present in the models.dev source snapshot but must be
-        # filtered out of the catalog because the run path rejects them.
+        # The curated LiteLLM registry lists only run-path providers, so
+        # groq/xai are never advertised in the first place.
         settings = _settings()
         providers = {item.provider for item in ModelCatalog.build(settings)}
         assert "groq" not in providers
         assert "xai" not in providers
 
-    def test_source_still_carries_a_rejected_provider(self) -> None:
-        # Guard against a vacuous pass: prove the filter is doing work by
-        # confirming the underlying source (pre-filter) does ship a provider
-        # the run path rejects. If the snapshot ever drops groq/xai entirely,
-        # this skips rather than silently making the filter test meaningless.
+    def test_filter_removes_a_rejected_provider_from_any_source(self) -> None:
+        # Guard against a vacuous pass: prove the filter does real work by
+        # injecting a source that DOES ship a run-path-rejected provider and
+        # confirming ``build`` drops it while keeping an accepted one. (The real
+        # curated source never emits groq/xai, so the filter is exercised here
+        # with a fake source rather than relying on catalog contents.)
         settings = _settings()
-        source_providers = {
-            record.provider for record in ModelCatalog._source_for(settings).records()
-        }
-        rejected = {
-            p for p in source_providers if not ModelConfigResolver.supports_provider(p)
-        }
-        if not rejected:
-            pytest.skip("source snapshot shipped no run-path-rejected provider")
-        # Every rejected source provider is absent from the built catalog.
+        ModelCatalog.configure_source(
+            _FakeSource(
+                (
+                    CatalogModelRecord(
+                        provider="groq",
+                        model_id="llama-3.3-70b-versatile",
+                        display_name="Llama 3.3 70B",
+                    ),
+                    CatalogModelRecord(
+                        provider="anthropic",
+                        model_id="claude-opus-4-8",
+                        display_name="Claude Opus 4.8",
+                    ),
+                )
+            )
+        )
         catalog_providers = {item.provider for item in ModelCatalog.build(settings)}
-        assert rejected.isdisjoint(catalog_providers)
+        assert "groq" not in catalog_providers
+        assert "anthropic" in catalog_providers
 
     def test_every_native_catalog_entry_is_a_valid_workspace_default(self) -> None:
         # End-to-end: a constructible catalog entry (slash-free id) is always an

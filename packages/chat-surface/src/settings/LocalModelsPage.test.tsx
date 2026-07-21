@@ -54,6 +54,19 @@ function renderPage(overrides: Partial<LocalModelsPageProps> = {}) {
 }
 
 describe("<LocalModelsPage>", () => {
+  it("uses the design IA: a 17px section heading over an Installed card", () => {
+    renderPage();
+    // The section title is the top-of-hierarchy <h1> (SecTitle); the installed
+    // group is its own card with an <h3> title + "{n} models" meta.
+    expect(
+      screen.getByRole("heading", { level: 1, name: "Local models" }),
+    ).toBeInTheDocument();
+    expect(
+      screen.getByRole("heading", { level: 3, name: "Installed" }),
+    ).toBeInTheDocument();
+    expect(screen.getByText("2 models")).toBeInTheDocument();
+  });
+
   it("shows a probing state while status is null", () => {
     renderPage({ status: null });
     expect(screen.getByTestId("local-models-loading")).toBeInTheDocument();
