@@ -323,8 +323,26 @@ async function acquireSiweBearer(facadeBase) {
  *
  * SSE framing (runtime_api/sse/adapter.py): each frame is
  *   event: runtime_event\n id: <seq>\n data: <RuntimeEventEnvelope JSON>\n\n
- * The event kind lives in `data.event_type`. Upstream defaults follow=true, so
- * the stream stays open until the run reaches a terminal status.
+ * The event kind lives in `data.event_type`; the frame `id:` line and the
+ * payload's `sequence_no` both carry the monotonic per-run sequence.
+ *
+ * READ CONTRACT (terminal-gated, resumable): keep reading until a TERMINAL
+ * event (`run_completed`/`run_failed`/`run_cancelled`) is observed OR an overall
+ * deadline elapses — never stop at `final_response`, a single connection's close,
+ * or a short fixed window. A single SSE connection's body can END after
+ * `final_response` but BEFORE the trailing `run_completed` is emitted on that
+ * socket (observed on the slower GitHub macOS runner: the run streamed
+ * `run_started → reasoning → model_delta×N → final_response`, then the read
+ * window closed with no terminal event even though the run completed). When the
+ * body ends without a terminal event and deadline budget remains, we RECONNECT
+ * from the highest `sequence_no` seen (`after_sequence=<lastSeq>`, the documented
+ * resume model — no replay of already-seen events) and keep reading. Only the
+ * overall deadline or a terminal event ends the read.
+ *
+ * Non-throwing: a stream-open/transport failure is returned as `{ error }` (not
+ * thrown) so the caller records a diagnostic and clean teardown / --keep still
+ * run. On deadline timeout the full observed `events` sequence is returned so a
+ * real hang is diagnosable.
  */
 async function driveRunToStream(
   facadeBase,
@@ -378,68 +396,105 @@ async function driveRunToStream(
   const TERMINAL = new Set(["run_completed", "run_failed", "run_cancelled"]);
   const events = [];
   let terminal = null;
+  let lastSeq = 0; // highest sequence_no seen; drives after_sequence on reconnect
+  let error = null;
+  const deadline = Date.now() + streamTimeoutMs;
 
-  const controller = new AbortController();
-  const timer = setTimeout(() => controller.abort(), streamTimeoutMs);
-  try {
-    const streamRes = await fetch(
-      `${facadeBase}/v1/agent/runs/${runId}/stream?after_sequence=0`,
-      {
-        headers: {
-          authorization: `Bearer ${bearer}`,
-          accept: "text/event-stream",
-        },
-        signal: controller.signal,
+  // Terminal-gated resumable read: reconnect from `lastSeq` whenever a single
+  // connection's body ends without a terminal event, until terminal OR the
+  // overall deadline. `timedOut` distinguishes a real hang (deadline hit) from
+  // a clean run-completed for the caller's diagnostics.
+  let timedOut = false;
+  outer: while (terminal === null && Date.now() < deadline) {
+    error = null; // a successful reconnect clears a prior transient drop
+    const controller = new AbortController();
+    const remaining = deadline - Date.now();
+    const timer = setTimeout(
+      () => {
+        timedOut = true;
+        controller.abort();
       },
+      Math.max(1, remaining),
     );
-    if (!streamRes.ok) {
-      throw new Error(
-        `open stream HTTP ${streamRes.status}: ${(await streamRes.text()).slice(0, 200)}`,
+    try {
+      const streamRes = await fetch(
+        `${facadeBase}/v1/agent/runs/${runId}/stream?after_sequence=${lastSeq}`,
+        {
+          headers: {
+            authorization: `Bearer ${bearer}`,
+            accept: "text/event-stream",
+          },
+          signal: controller.signal,
+        },
       );
-    }
-    const decoder = new TextDecoder();
-    let buf = "";
-    outer: for await (const chunk of streamRes.body) {
-      buf += decoder.decode(chunk, { stream: true });
-      let idx;
-      while ((idx = buf.indexOf("\n\n")) !== -1) {
-        const frame = buf.slice(0, idx);
-        buf = buf.slice(idx + 2);
-        const data = frame
-          .split("\n")
-          .filter((line) => line.startsWith("data:"))
-          .map((line) => line.slice(5).replace(/^ /, ""))
-          .join("\n");
-        if (!data) continue;
-        let payload;
-        try {
-          payload = JSON.parse(data);
-        } catch {
-          continue; // partial/non-JSON frame — keep reading
-        }
-        const type = payload.event_type;
-        if (!type || type === "heartbeat") continue;
-        events.push(type);
-        if (TERMINAL.has(type)) {
-          terminal = type;
-          break outer;
+      if (!streamRes.ok) {
+        error = `open stream HTTP ${streamRes.status}: ${(await streamRes.text()).slice(0, 200)}`;
+        break outer; // transport-level failure — stop, stay non-throwing
+      }
+      const decoder = new TextDecoder();
+      let buf = "";
+      for await (const chunk of streamRes.body) {
+        buf += decoder.decode(chunk, { stream: true });
+        let idx;
+        while ((idx = buf.indexOf("\n\n")) !== -1) {
+          const frame = buf.slice(0, idx);
+          buf = buf.slice(idx + 2);
+          const data = frame
+            .split("\n")
+            .filter((line) => line.startsWith("data:"))
+            .map((line) => line.slice(5).replace(/^ /, ""))
+            .join("\n");
+          if (!data) continue;
+          let payload;
+          try {
+            payload = JSON.parse(data);
+          } catch {
+            continue; // partial/non-JSON frame — keep reading
+          }
+          const type = payload.event_type;
+          if (!type || type === "heartbeat") continue;
+          // Advance the resume cursor from real persisted events only, so an
+          // after_sequence reconnect never skips or replays an event.
+          const seq = Number(payload.sequence_no);
+          if (Number.isFinite(seq) && seq > lastSeq) lastSeq = seq;
+          events.push(type);
+          if (TERMINAL.has(type)) {
+            terminal = type;
+            break outer;
+          }
         }
       }
+      // Body ended without a terminal event. If deadline budget remains, the
+      // while-guard loops us back to reconnect from lastSeq; otherwise we exit.
+      // Small yield so a server that (pathologically) closes fast without
+      // holding the connection open cannot busy-spin the deadline window.
+      if (terminal === null && Date.now() < deadline) await sleep(100);
+    } catch (err) {
+      if (controller.signal.aborted) {
+        // Deadline abort (timedOut) or teardown — stop reading; the while-guard
+        // ends the loop. A non-deadline abort simply ends the read gracefully.
+        if (timedOut) break outer;
+      } else {
+        // Transport error mid-stream (e.g. connection reset). Record it and try
+        // to resume while deadline budget remains — a transient drop must not
+        // masquerade as "no run_completed". Small backoff so a fast-failing
+        // fetch cannot busy-loop the whole deadline window.
+        error = String(err.message ?? err);
+        if (Date.now() < deadline) await sleep(250);
+      }
+    } finally {
+      clearTimeout(timer);
+      controller.abort(); // release the upstream socket
     }
-  } catch (err) {
-    if (controller.signal.aborted) {
-      throw new Error(
-        `stream did not reach a terminal event within ${streamTimeoutMs / 1000}s; ` +
-          `saw [${events.join(", ")}]`,
-      );
-    }
-    throw err;
-  } finally {
-    clearTimeout(timer);
-    controller.abort(); // release the upstream socket
   }
 
-  return { runId, events, terminal };
+  if (terminal === null && !error && timedOut) {
+    error =
+      `stream did not reach a terminal event within ${streamTimeoutMs / 1000}s; ` +
+      `saw [${events.join(", ")}]`;
+  }
+
+  return { runId, events, terminal, error };
 }
 
 // ---------------------------------------------------------------------------
@@ -761,7 +816,7 @@ conn.close()
 
   if (bearer) {
     try {
-      const { runId, events, terminal } = await driveRunToStream(
+      const { runId, events, terminal, error } = await driveRunToStream(
         facadeBase,
         bearer,
       );
@@ -775,7 +830,8 @@ conn.close()
         ok
           ? `run ${runId} streamed ${events.length} events to ${terminal}`
           : `events=[${events.join(", ")}] terminal=${terminal ?? "none"}; ` +
-              `want >=1 model_delta + run_completed and no run_failed`,
+              `want >=1 model_delta + run_completed and no run_failed` +
+              (error ? `; read error: ${error}` : ""),
       );
     } catch (err) {
       record(
