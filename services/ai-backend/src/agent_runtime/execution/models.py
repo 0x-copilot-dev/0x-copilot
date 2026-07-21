@@ -41,6 +41,25 @@ class ModelSelection:
 class ModelConfigResolver:
     """Resolve request model settings against env-backed runtime settings."""
 
+    # The run path's provider allowlist — the single authority on which
+    # providers a run can actually execute. Maps every accepted alias to its
+    # canonical slug. ``_normalize_provider`` is the only consumer; the model
+    # catalog reuses :meth:`supports_provider` so the picker can never
+    # advertise a provider the run path would reject (SSOT: the catalog
+    # advertises only what the run path can serve).
+    PROVIDER_ALIASES: dict[str, str] = {
+        "anthropic": "anthropic",
+        "claude": "anthropic",
+        "gemini": "gemini",
+        "google": "gemini",
+        "google-genai": "gemini",
+        "openai": "openai",
+        # OpenAI-wire-compatible endpoints; resolve to the OpenAI client
+        # with a fixed base_url (see execution/openai_compat.py).
+        "openrouter": "openrouter",
+        "ollama": "ollama",
+    }
+
     def __init__(self, settings: RuntimeSettings) -> None:
         self.settings = settings
 
@@ -128,26 +147,32 @@ class ModelConfigResolver:
 
     @classmethod
     def _normalize_provider(cls, provider: str) -> str:
-        normalized = provider.strip().lower().replace("_", "-")
-        aliases = {
-            "anthropic": "anthropic",
-            "claude": "anthropic",
-            "gemini": "gemini",
-            "google": "gemini",
-            "google-genai": "gemini",
-            "openai": "openai",
-            # OpenAI-wire-compatible endpoints; resolve to the OpenAI client
-            # with a fixed base_url (see execution/openai_compat.py).
-            "openrouter": "openrouter",
-            "ollama": "ollama",
-        }
-        if normalized not in aliases:
+        canonical = cls.canonical_provider(provider)
+        if canonical is None:
             raise AgentRuntimeError(
                 RuntimeErrorCode.CONFIGURATION_ERROR,
                 f"Unsupported model provider '{provider}'.",
                 retryable=False,
             )
-        return aliases[normalized]
+        return canonical
+
+    @classmethod
+    def canonical_provider(cls, provider: str) -> str | None:
+        """Canonical slug for ``provider``, or ``None`` if the run path rejects it.
+
+        Non-raising sibling of :meth:`_normalize_provider`: callers outside the
+        run path (notably the model catalog) use this to filter to providers a
+        run can actually execute, without catching an exception.
+        """
+
+        normalized = provider.strip().lower().replace("_", "-")
+        return cls.PROVIDER_ALIASES.get(normalized)
+
+    @classmethod
+    def supports_provider(cls, provider: str) -> bool:
+        """Whether the run path can execute ``provider`` (any accepted alias)."""
+
+        return cls.canonical_provider(provider) is not None
 
     @classmethod
     def _infer_provider(cls, model_name: str | None) -> str | None:
