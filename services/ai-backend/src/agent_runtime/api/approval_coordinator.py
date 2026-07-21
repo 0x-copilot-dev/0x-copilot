@@ -50,6 +50,7 @@ from runtime_api.schemas import (
     RuntimeApiEventType,
     RuntimeApprovalResolvedCommand,
     RunRecord,
+    SurfaceEdits,
     UNDO_WINDOW_SECONDS,
 )
 
@@ -320,6 +321,11 @@ class ApprovalCoordinator:
             )
         if request.decision is ApprovalDecision.SUGGEST_EDIT:
             return await self._decide_suggest_edit(
+                approval=approval,
+                request=request,
+            )
+        if request.decision is ApprovalDecision.APPROVE_WITH_EDITS:
+            return await self._decide_approve_with_edits(
                 approval=approval,
                 request=request,
             )
@@ -756,6 +762,164 @@ class ApprovalCoordinator:
             decided_at=decision_record.decided_at,
             child_approval_id=child.approval_id,
         )
+
+    # Approval-metadata key holding the reviewer-editable field allowlist for a
+    # proposal (populated by the propose side for record-field surfaces). Absent
+    # ⇒ no fields are editable, so any ``edits.fields`` key is rejected 422.
+    _EDITABLE_FIELDS_METADATA_KEY = "editable_fields"
+
+    async def _decide_approve_with_edits(
+        self,
+        *,
+        approval: ApprovalRequestRecord,
+        request: ApprovalDecisionRequest,
+    ) -> ApprovalDecisionResponse:
+        """Approve a pending proposal AND merge the reviewer's edit deltas server-side.
+
+        The server re-derives the committed payload = proposal ⊕ edits; the
+        client never sends a merged artifact. Unknown ``edits.fields`` keys
+        (outside the proposal's editable allowlist) are rejected with 422 before
+        anything is persisted. The decision is recorded ``APPROVED`` with the
+        applied edits mirrored onto the ``APPROVAL_RESOLVED`` event and the audit
+        row; an ``APPROVE_WITH_EDITS`` resume command carrying the edits is
+        enqueued so the worker/commit executor commits the edited values. The
+        LangGraph harness resumes exactly as a plain approve — the edits flow
+        into the committed side effect in the commit path, never here.
+        """
+
+        # ``edits`` is guaranteed non-None by the request validator.
+        edits = request.edits
+        if edits is None:  # defensive — the validator enforces this
+            raise RuntimeApiError(
+                RuntimeErrorCode.VALIDATION_ERROR,
+                "edits is required for approve_with_edits.",
+                http_status=status.HTTP_422_UNPROCESSABLE_CONTENT,
+                retryable=False,
+            )
+        self._reject_unknown_edit_fields(approval=approval, edits=edits)
+        edited_payload = self._surface_edits_to_payload(edits)
+        record = await self._persistence.record_approval_decision(
+            record=ApprovalDecisionRecord(
+                approval_id=approval.approval_id,
+                run_id=approval.run_id,
+                conversation_id=approval.conversation_id,
+                org_id=approval.org_id,
+                user_id=approval.user_id,
+                status=ApprovalStatus.APPROVED,
+                decided_by_user_id=request.decided_by_user_id,
+                reason=request.reason,
+                answer=request.answer,
+                edited_payload=edited_payload,
+            )
+        )
+        run = await self._run_for_scope(
+            org_id=record.org_id,
+            user_id=record.user_id,
+            run_id=record.run_id,
+        )
+        approval_kind = approval.metadata.get(Keys.Field.APPROVAL_KIND)
+        resolved_payload: dict[str, object] = {
+            Keys.Field.APPROVAL_ID: record.approval_id,
+            Keys.Field.APPROVAL_KIND: approval_kind,
+            Keys.Field.STATUS: self._wire_status_for(
+                approval_kind=approval_kind,
+                record_status=record.status.value,
+            ),
+            Keys.Payload.MESSAGE: Messages.Event.APPROVAL_RESOLVED,
+            Keys.Field.DECISION: record.status.value,
+            # Mirror the applied edits so the resolution is audit-visible (PRD-09).
+            "edits": edited_payload,
+        }
+        batch_id = approval.metadata.get(Keys.Field.BATCH_ID)
+        if isinstance(batch_id, str) and batch_id:
+            resolved_payload[Keys.Field.BATCH_ID] = batch_id
+        batch_index = approval.metadata.get(Keys.Field.BATCH_INDEX)
+        if isinstance(batch_index, int) and not isinstance(batch_index, bool):
+            resolved_payload[Keys.Field.BATCH_INDEX] = batch_index
+        await self._event_producer.append_api_event(
+            run=run,
+            source=StreamEventSource.RUNTIME,
+            event_type=RuntimeApiEventType.APPROVAL_RESOLVED,
+            payload=resolved_payload,
+        )
+        await self._queue.enqueue_approval_resolved(
+            RuntimeApprovalResolvedCommand(
+                approval_id=record.approval_id,
+                run_id=record.run_id,
+                org_id=record.org_id,
+                decision=ApprovalDecision.APPROVE_WITH_EDITS,
+                answer=request.answer,
+                edits=edits,
+                decided_by_user_id=request.decided_by_user_id,
+                trace_propagation=QueueTracePropagator.inject(),
+            )
+        )
+        await self._persistence.write_audit_log(
+            event_type=self._audit_action_for_decision(record.status),
+            record={
+                "org_id": record.org_id,
+                "user_id": record.user_id,
+                "resource_type": "approval",
+                "resource_id": record.approval_id,
+                "run_id": record.run_id,
+                "outcome": "success",
+                "metadata": {
+                    "status": record.status.value,
+                    # ``edited_payload`` is stored for SIEM diff inspection; the
+                    # audit writer redacts metadata-encrypted JSONB.
+                    "edited_payload": edited_payload,
+                    "edited_payload_keys": sorted(edited_payload.keys()),
+                    "context": self._audit_context_for(
+                        conversation_id=record.conversation_id,
+                        run_id=record.run_id,
+                    ),
+                },
+            },
+        )
+        return ApprovalDecisionResponse(
+            approval_id=record.approval_id,
+            run_id=record.run_id,
+            status=record.status,
+            decided_at=record.decided_at,
+            undo_expires_at=self._undo_expires_at_for(approval=approval, record=record),
+        )
+
+    def _reject_unknown_edit_fields(
+        self,
+        *,
+        approval: ApprovalRequestRecord,
+        edits: SurfaceEdits,
+    ) -> None:
+        """Raise 422 when the reviewer edited a field outside the proposal's allowlist."""
+
+        if not edits.fields:
+            return
+        raw = approval.metadata.get(self._EDITABLE_FIELDS_METADATA_KEY)
+        editable = (
+            {str(key) for key in raw} if isinstance(raw, (list, tuple)) else set()
+        )
+        unknown = sorted(set(edits.fields.keys()) - editable)
+        if unknown:
+            raise RuntimeApiError(
+                RuntimeErrorCode.VALIDATION_ERROR,
+                "One or more edited fields are not editable for this approval.",
+                http_status=status.HTTP_422_UNPROCESSABLE_CONTENT,
+                retryable=False,
+                details={"unknown_fields": unknown},
+            )
+
+    @staticmethod
+    def _surface_edits_to_payload(edits: SurfaceEdits) -> dict[str, object]:
+        """Project reviewer edit deltas into a JSON-safe mirror for events + audit."""
+
+        payload: dict[str, object] = {}
+        if edits.body is not None:
+            payload["body"] = edits.body
+        if edits.fields:
+            payload["fields"] = dict(edits.fields)
+        if edits.accepted_hunk_ids is not None:
+            payload["accepted_hunk_ids"] = list(edits.accepted_hunk_ids)
+        return payload
 
     async def _decide_forwarded(
         self,
