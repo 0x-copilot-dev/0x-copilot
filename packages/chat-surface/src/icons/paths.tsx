@@ -52,7 +52,20 @@ export type IconName =
   | "doc"
   | "clock"
   | "play"
-  | "dots";
+  | "dots"
+  // rail destinations outside the v3 solo set (legacy/team rails). Not in the
+  // v3 design's `Icon` registry — carried over from the rail's own glyphs at the
+  // canonical stroke so the rail has one icon source for every slug it renders.
+  | "home"
+  | "agents"
+  | "library"
+  | "inbox"
+  | "todos"
+  | "team"
+  | "memory"
+  | "routines"
+  | "members"
+  | "billing";
 
 export const ICON_PATHS: Readonly<Record<IconName, ReactNode>> = {
   // ── rail destinations ───────────────────────────────────────────────────
@@ -186,6 +199,72 @@ export const ICON_PATHS: Readonly<Record<IconName, ReactNode>> = {
       <circle cx="5" cy="12" r="1.3" />
       <circle cx="12" cy="12" r="1.3" />
       <circle cx="19" cy="12" r="1.3" />
+    </>
+  ),
+  // ── rail destinations outside the v3 solo set ───────────────────────────
+  home: (
+    <>
+      <path d="M3 11l9-8 9 8" />
+      <path d="M5 10v10h14V10" />
+    </>
+  ),
+  agents: (
+    <>
+      <circle cx="12" cy="8" r="4" />
+      <path d="M4 21c0-4 4-7 8-7s8 3 8 7" />
+    </>
+  ),
+  library: (
+    <>
+      <path d="M4 5h6v14H4z" />
+      <path d="M14 5h6v14h-6z" />
+      <path d="M7 8h0M7 11h0" />
+    </>
+  ),
+  inbox: (
+    <>
+      <path d="M3 13h5l2 3h4l2-3h5" />
+      <path d="M3 13l3-8h12l3 8v6H3z" />
+    </>
+  ),
+  todos: (
+    <>
+      <path d="M4 6h16M4 12h16M4 18h10" />
+      <path d="M15 17l2 2 3-3" />
+    </>
+  ),
+  team: (
+    <>
+      <circle cx="9" cy="9" r="3" />
+      <circle cx="17" cy="10" r="2.5" />
+      <path d="M3 20c0-3 3-5 6-5s6 2 6 5" />
+      <path d="M14 20c0-2.2 1.5-4 3-4s3 1.8 3 4" />
+    </>
+  ),
+  memory: (
+    <>
+      <path d="M9 5a4 4 0 0 0-4 4v6a4 4 0 0 0 4 4h6a4 4 0 0 0 4-4V9a4 4 0 0 0-4-4z" />
+      <path d="M9 9h6M9 12h6M9 15h4" />
+    </>
+  ),
+  routines: (
+    <>
+      <circle cx="12" cy="12" r="8" />
+      <path d="M12 8v4l3 2" />
+    </>
+  ),
+  members: (
+    <>
+      <circle cx="9" cy="8" r="3" />
+      <circle cx="17" cy="9" r="2.5" />
+      <path d="M3 20c0-3 2.7-5 6-5s6 2 6 5" />
+      <path d="M15 20c0-2 1.3-3.5 3-3.5s3 1.5 3 3.5" />
+    </>
+  ),
+  billing: (
+    <>
+      <rect x="3" y="6" width="18" height="12" rx="2" />
+      <path d="M3 10h18" />
     </>
   ),
 };
