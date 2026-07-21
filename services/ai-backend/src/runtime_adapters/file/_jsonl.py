@@ -79,17 +79,27 @@ class JsonlIo:
     def append_lines(
         cls, path: Path, objs: Iterable[object], *, fsync: bool = True
     ) -> None:
-        """Append many JSON objects under one open handle + one fsync."""
+        """Append many JSON objects as ONE all-or-nothing fsynced write.
+
+        The whole batch is serialized into a single ``\\n``-terminated payload
+        and handed to one ``handle.write``, so the flush issues it as a single
+        buffered write followed by one ``os.fsync`` when ``fsync=True``. There is
+        therefore a *single* durability barrier for the entire batch: a process
+        crash leaves either all of the lines on disk or none — never a
+        durably-committed proper prefix, which a per-line append+fsync loop would
+        leave (one committed line per fsync). Lines are never torn relative to
+        one another; only the file's final line can be a torn tail, which the
+        read path drops.
+        """
 
         objs = list(objs)
         if not objs:
             return
         FileStoreLayout.ensure_dir(path.parent)
         existed = path.exists()
+        payload = "".join(f"{cls.dumps(obj)}\n" for obj in objs)
         with open(path, "a", encoding="utf-8") as handle:
-            for obj in objs:
-                handle.write(cls.dumps(obj))
-                handle.write("\n")
+            handle.write(payload)
             handle.flush()
             if fsync:
                 os.fsync(handle.fileno())

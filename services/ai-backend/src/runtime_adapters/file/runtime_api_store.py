@@ -526,19 +526,61 @@ class FileRuntimeApiStore:
         self._index.upsert_run(doc)
         self._telemetry.append_committed(kind="run", size=len(line))
 
+    def _event_stream_path(
+        self, envelope: RuntimeEventEnvelope, *, org_id: str
+    ) -> Path:
+        """Resolve the canonical JSONL stream a single envelope is appended to.
+
+        Main-agent events land in the run's ``events.jsonl``; a subagent event
+        (``task_id`` set) lands in its own per-subagent stream. Shared by the
+        single-event and batched-append paths so both route identically.
+        """
+
+        if envelope.task_id:
+            return self._layout.subagent_path(
+                org_id, envelope.conversation_id, envelope.task_id
+            )
+        return self._layout.events_path(org_id, envelope.conversation_id)
+
     def _persist_event(self, envelope: RuntimeEventEnvelope, *, org_id: str) -> None:
         doc = envelope.model_dump(mode="json")
         line = JsonlIo.dumps(doc)
-        if envelope.task_id:
-            path = self._layout.subagent_path(
-                org_id, envelope.conversation_id, envelope.task_id
-            )
-        else:
-            path = self._layout.events_path(org_id, envelope.conversation_id)
-        JsonlIo.append_line(path, doc)
+        JsonlIo.append_line(self._event_stream_path(envelope, org_id=org_id), doc)
         index_doc = {**doc, "org_id": org_id}
         self._index.insert_events([index_doc])
         self._telemetry.append_committed(kind="event", size=len(line))
+
+    def _persist_events_batch(
+        self, envelopes: Sequence[RuntimeEventEnvelope], *, org_id: str
+    ) -> None:
+        """Durably persist a whole event batch as one fsynced write per stream.
+
+        Every event in a batch shares one run (hence one conversation); in
+        practice they also share one target stream — coalesced ``MODEL_DELTA``
+        batches are all main-stream (``task_id is None``) — so this collapses to
+        a single ``open+write+fsync``. Grouping by stream only matters if a
+        producer ever mixes per-subagent ``task_id`` events into one batch, and
+        even then each stream is written all-or-nothing. The disposable catalog
+        index is updated in one commit *after* the durable JSONL write (JSONL is
+        canonical; a lost/torn index is rebuilt from it on reopen).
+        """
+
+        by_path: dict[Path, list[dict[str, Any]]] = {}
+        index_docs: list[dict[str, Any]] = []
+        sizes: list[int] = []
+        for envelope in envelopes:
+            doc = envelope.model_dump(mode="json")
+            path = self._event_stream_path(envelope, org_id=org_id)
+            by_path.setdefault(path, []).append(doc)
+            index_docs.append({**doc, "org_id": org_id})
+            sizes.append(len(JsonlIo.dumps(doc)))
+        # Durable commit: one fsynced append per target stream. This is the
+        # crash boundary — nothing in-memory is mutated until it returns.
+        for path, docs in by_path.items():
+            JsonlIo.append_lines(path, docs)
+        self._index.insert_events(index_docs)
+        for size in sizes:
+            self._telemetry.append_committed(kind="event", size=size)
 
     # ==================================================================
     # Replay from disk (open)
@@ -1461,36 +1503,50 @@ class FileRuntimeApiStore:
     # EventStorePort
     # ==================================================================
 
+    @staticmethod
+    def _envelope_for(
+        event: RuntimeEventDraft, *, sequence_no: int
+    ) -> RuntimeEventEnvelope:
+        """Seal a draft into an envelope at ``sequence_no``.
+
+        The single source of the draft→envelope projection (activity-kind
+        fallback included), shared by the single-event and batched-append paths
+        so a batch's envelopes are byte-identical to N sequential
+        :meth:`append_event` calls.
+        """
+
+        return RuntimeEventEnvelope(
+            run_id=event.run_id,
+            conversation_id=event.conversation_id,
+            sequence_no=sequence_no,
+            source=event.source,
+            event_type=event.event_type,
+            trace_id=event.trace_id,
+            parent_event_id=event.parent_event_id,
+            span_id=event.span_id,
+            parent_span_id=event.parent_span_id,
+            parent_task_id=event.parent_task_id,
+            task_id=event.task_id,
+            subagent_id=event.subagent_id,
+            display_title=event.display_title,
+            summary=event.summary,
+            status=event.status,
+            activity_kind=event.activity_kind
+            or RuntimeEventPresentationProjector.activity_kind_for(
+                event_type=event.event_type,
+                source=event.source,
+            ),
+            visibility=event.visibility,
+            redaction_state=event.redaction_state,
+            presentation=event.presentation,
+            payload=event.payload,
+            metadata=event.metadata,
+        )
+
     async def append_event(self, event: RuntimeEventDraft) -> RuntimeEventEnvelope:
         async with self._conversation_lock(event.conversation_id):
             events = self.events_by_run.setdefault(event.run_id, [])
-            envelope = RuntimeEventEnvelope(
-                run_id=event.run_id,
-                conversation_id=event.conversation_id,
-                sequence_no=len(events) + 1,
-                source=event.source,
-                event_type=event.event_type,
-                trace_id=event.trace_id,
-                parent_event_id=event.parent_event_id,
-                span_id=event.span_id,
-                parent_span_id=event.parent_span_id,
-                parent_task_id=event.parent_task_id,
-                task_id=event.task_id,
-                subagent_id=event.subagent_id,
-                display_title=event.display_title,
-                summary=event.summary,
-                status=event.status,
-                activity_kind=event.activity_kind
-                or RuntimeEventPresentationProjector.activity_kind_for(
-                    event_type=event.event_type,
-                    source=event.source,
-                ),
-                visibility=event.visibility,
-                redaction_state=event.redaction_state,
-                presentation=event.presentation,
-                payload=event.payload,
-                metadata=event.metadata,
-            )
+            envelope = self._envelope_for(event, sequence_no=len(events) + 1)
             events.append(envelope)
             self._persist_event(envelope, org_id=event.org_id)
             if event.run_id in self.runs:
@@ -1502,6 +1558,20 @@ class FileRuntimeApiStore:
     async def append_events_batch(
         self, events: Sequence[RuntimeEventDraft]
     ) -> Sequence[RuntimeEventEnvelope]:
+        """Append a whole event batch crash-atomically (all-or-nothing).
+
+        Parity with the Postgres adapter's single-transaction batch: the run's
+        monotonic ``sequence_no``s are assigned for the entire batch up front,
+        then every line is persisted through ONE fsynced append per target
+        stream *before* the in-memory materialized view and catalog index are
+        touched. A crash during the durable write therefore leaves either all of
+        the batch's events on disk or none — never a fsynced proper prefix, the
+        "partial coalesced flush" residue the previous per-event loop produced.
+        On success the in-memory ``events_by_run`` bucket, the index, and the
+        run's ``latest_sequence_no`` are advanced exactly as N sequential
+        :meth:`append_event` calls would leave them.
+        """
+
         if not events:
             return ()
         run_ids = {event.run_id for event in events}
@@ -1510,9 +1580,23 @@ class FileRuntimeApiStore:
                 "append_events_batch requires all events to share one run_id; "
                 f"saw {len(run_ids)}."
             )
-        envelopes: list[RuntimeEventEnvelope] = []
-        for event in events:
-            envelopes.append(await self.append_event(event))
+        first = events[0]
+        async with self._conversation_lock(first.conversation_id):
+            bucket = self.events_by_run.setdefault(first.run_id, [])
+            base = len(bucket)
+            envelopes = [
+                self._envelope_for(event, sequence_no=base + offset)
+                for offset, event in enumerate(events, start=1)
+            ]
+            # Durable commit first; only then advance the in-memory view so a
+            # failed/interrupted write leaves no phantom events behind.
+            self._persist_events_batch(envelopes, org_id=first.org_id)
+            bucket.extend(envelopes)
+            if first.run_id in self.runs:
+                await self.set_run_latest_sequence(
+                    run_id=first.run_id,
+                    latest_sequence_no=envelopes[-1].sequence_no,
+                )
         return tuple(envelopes)
 
     async def list_events_after(
