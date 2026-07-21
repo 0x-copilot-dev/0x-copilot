@@ -30,7 +30,14 @@ interface DepthDescriptor {
   readonly sub: string;
 }
 
-const MODELS: ReadonlyArray<ModelDescriptor> = [
+/* Last-resort fallback ONLY. The model list is host-injected via the
+ * `models` prop, sourced from the workspace catalog (`/v1/agent/models`
+ * → BYOK provider groups + Local). This constant is used only when a host
+ * mounts the picker without a catalog (e.g. a bare base `<Composer>` with
+ * no data wiring). It is a static, deliberately-unremarkable default — do
+ * NOT log or emit telemetry when it is used; a missing catalog is a host
+ * wiring gap, not a runtime event worth measuring. Keep it substrate-free. */
+const FALLBACK_MODELS: ReadonlyArray<ModelDescriptor> = [
   { id: "claude-opus-4-7", label: "Opus 4.7", family: "Claude" },
   { id: "claude-sonnet-4-6", label: "Sonnet 4.6", family: "Claude" },
   { id: "claude-haiku-4-5", label: "Haiku 4.5", family: "Claude" },
@@ -44,6 +51,15 @@ const DEPTHS: ReadonlyArray<DepthDescriptor> = [
 
 export interface ModelPickerProps {
   readonly open: boolean;
+  /**
+   * The model rows to render — the source of truth. Injected by the host
+   * from the workspace catalog (`/v1/agent/models`). When omitted or empty
+   * the picker falls back to a static built-in default (see
+   * {@link FALLBACK_MODELS}); every real consumer should inject a catalog so
+   * the popover reflects the user's actual BYOK + Local models rather than a
+   * hardcoded list.
+   */
+  readonly models?: ReadonlyArray<ModelDescriptor>;
   readonly selectedModel: string;
   readonly selectedDepth?: Depth;
   readonly onSelect: (modelId: string) => void;
@@ -55,6 +71,7 @@ export interface ModelPickerProps {
 export function ModelPicker(props: ModelPickerProps): ReactNode {
   const {
     open,
+    models,
     selectedModel,
     selectedDepth = "balanced",
     onSelect,
@@ -66,6 +83,12 @@ export function ModelPicker(props: ModelPickerProps): ReactNode {
   if (!open) {
     return null;
   }
+
+  /* Injected catalog is the source of truth. The hardcoded FALLBACK_MODELS
+   * is used only when a host mounts the picker with no catalog (empty array
+   * counts as "not injected"). No telemetry on the fallback path. */
+  const modelRows =
+    models !== undefined && models.length > 0 ? models : FALLBACK_MODELS;
 
   /* Selecting a model closes the popover — same as the design composer
    * behaviour. Depth chips do NOT close the popover; users frequently
@@ -102,7 +125,7 @@ export function ModelPicker(props: ModelPickerProps): ReactNode {
         </button>
       </div>
       <ul style={listStyle}>
-        {MODELS.map((m) => {
+        {modelRows.map((m) => {
           const selected = m.id === selectedModel;
           return (
             <li key={m.id} style={listItemStyle}>
@@ -163,8 +186,13 @@ export function ModelPicker(props: ModelPickerProps): ReactNode {
   return panel;
 }
 
+/**
+ * The static built-in fallback list. Hosts that need to seed a selection
+ * before their catalog resolves may read it, but the live picker should be
+ * driven by the injected `models` prop — this is not the source of truth.
+ */
 export function listModelDescriptors(): ReadonlyArray<ModelDescriptor> {
-  return MODELS;
+  return FALLBACK_MODELS;
 }
 
 export function listDepthDescriptors(): ReadonlyArray<DepthDescriptor> {
