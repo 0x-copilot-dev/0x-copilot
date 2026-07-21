@@ -13,6 +13,7 @@ export {
   AtlasFileAttachmentAdapter,
   AtlasImageAttachmentAdapter,
   AtlasTextAttachmentAdapter,
+  createOnboardingAttachmentAdapter,
   fileMatchesAccept,
   mimeTypeForFileName,
   type FileLike,

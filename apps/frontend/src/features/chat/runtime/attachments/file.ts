@@ -6,13 +6,23 @@ import type {
 } from "../types";
 
 /**
- * Atlas generic-file adapter. Carries office-document and PDF
- * attachments through the composer. Mirrors the implementation that
- * previously lived inline in `ChatScreen.tsx` so behavior is unchanged;
- * the reason it lives in its own module now is so the runtime layer
- * owns the full attachment-adapter surface (no more inline classes).
+ * Atlas generic-file adapter. Carries office-document, PDF, and CSV
+ * attachments through the composer as inline base64 data-URL `file`
+ * content parts (no server upload). Mirrors the implementation that
+ * previously lived inline in `ChatScreen.tsx`; the reason it lives in
+ * its own module now is so the runtime layer owns the full
+ * attachment-adapter surface (no more inline classes).
+ *
+ * `text/csv` (+ the `.csv` extension) is accepted here — in addition to
+ * the office/PDF set — so the FTUE "Explain a CSV" starter chip can
+ * pre-attach `airdrop-claims.csv` as a `file` part with
+ * `mime_type: text/csv`. Note the ChatScreen composite lists the text
+ * adapter before this one, so an OS-picked `text/csv` file still routes
+ * to the text adapter (unchanged); the FTUE onboarding composite
+ * (`createOnboardingAttachmentAdapter`) lists this file adapter first so
+ * the chip's CSV lands as a data-URL `file` part instead.
  */
-const OFFICE_ACCEPT =
+const FILE_ACCEPT =
   "application/pdf," +
   "application/msword," +
   "application/vnd.openxmlformats-officedocument.wordprocessingml.document," +
@@ -20,10 +30,11 @@ const OFFICE_ACCEPT =
   "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet," +
   "application/vnd.ms-powerpoint," +
   "application/vnd.openxmlformats-officedocument.presentationml.presentation," +
-  ".pdf,.doc,.docx,.xls,.xlsx,.ppt,.pptx";
+  "text/csv," +
+  ".pdf,.doc,.docx,.xls,.xlsx,.ppt,.pptx,.csv";
 
 export class AtlasFileAttachmentAdapter implements AttachmentAdapter {
-  public accept = OFFICE_ACCEPT;
+  public accept = FILE_ACCEPT;
 
   public async add({ file }: { file: File }): Promise<PendingAttachment> {
     return {
@@ -79,6 +90,8 @@ export function mimeTypeForFileName(fileName: string): string {
       return "application/vnd.ms-powerpoint";
     case "pptx":
       return "application/vnd.openxmlformats-officedocument.presentationml.presentation";
+    case "csv":
+      return "text/csv";
     default:
       return "";
   }
