@@ -1,7 +1,9 @@
 import type { CSSProperties, ReactElement, ReactNode } from "react";
 
 import {
+  DiffText,
   TcInlineDiff,
+  wordDiff,
   type SaaSRendererAdapter,
 } from "@0x-copilot/chat-surface";
 
@@ -26,6 +28,12 @@ export interface EmailDiffPending {
   readonly bodySuffix: string;
   readonly progressPercent?: number;
   readonly streaming?: boolean;
+  // PRD-06 word-diff payload. When both are present strings (and not streaming),
+  // the pending body renders `DiffText(wordDiff(before_body, after_body))` — the
+  // VSCode/Cursor-style red/green inline diff — instead of the plain ghost
+  // paragraph. Named per the PRD's `{before_body, after_body}` diff-payload keys.
+  readonly before_body?: string;
+  readonly after_body?: string;
 }
 
 export interface EmailDiff {
@@ -154,6 +162,18 @@ interface EmailDiffBodyProps {
   readonly diff: EmailDiff;
 }
 
+/** The word diff renders only once the edit has settled (not streaming) and both
+ * before/after bodies are present — otherwise the streaming ghost stands in. */
+function showWordDiff(
+  pending: EmailDiffPending,
+): pending is EmailDiffPending & { before_body: string; after_body: string } {
+  return (
+    !pending.streaming &&
+    typeof pending.before_body === "string" &&
+    typeof pending.after_body === "string"
+  );
+}
+
 function EmailDiffBody(props: EmailDiffBodyProps): ReactElement {
   const { diff } = props;
   const { pending } = diff;
@@ -177,8 +197,18 @@ function EmailDiffBody(props: EmailDiffBodyProps): ReactElement {
           <ProvenancePill provenance={pending.provenance} />
         </div>
         <div style={pendingBodyStyle} data-testid="pending-body">
-          <span>{pending.streamingBody}</span>
-          {pending.streaming ? <StreamingCursor /> : null}
+          {showWordDiff(pending) ? (
+            // Diff computes once on the settled pending state; while streaming we
+            // keep the ghost paragraph + cursor below (no diff yet).
+            <DiffText
+              hunks={wordDiff(pending.before_body, pending.after_body)}
+            />
+          ) : (
+            <>
+              <span>{pending.streamingBody}</span>
+              {pending.streaming ? <StreamingCursor /> : null}
+            </>
+          )}
         </div>
         {pending.streaming ? (
           <TcInlineDiff
