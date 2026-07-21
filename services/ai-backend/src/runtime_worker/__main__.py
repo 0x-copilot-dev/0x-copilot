@@ -46,6 +46,20 @@ class RuntimeWorkerEntrypoint:
         logger = LoggingConfigurator.get_logger("runtime_worker")
 
         async_ports = RuntimeAdapterFactory.from_settings(settings, role="worker")
+        # The file backend is single-writer and single-process: its queue claim
+        # is an in-process asyncio lock that cannot coordinate with a separate
+        # OS process, so a standalone worker against it would double-claim runs
+        # that the in-process worker (in runtime_api) is already draining. Fail
+        # fast rather than silently corrupt the single-writer invariant. The
+        # file store runs only under single_user_desktop, which executes runs
+        # in-process — never via this entrypoint.
+        if async_ports.backend == "file":
+            raise SystemExit(
+                "The standalone runtime worker does not support "
+                "RUNTIME_STORE_BACKEND=file. The file store is single-writer and "
+                "single-process (single_user_desktop); runs execute via the "
+                "in-process worker in runtime_api, not this process."
+            )
         await async_ports.lifecycle.open()
         await async_ports.lifecycle.migrate()
         rollup_loop: UsageRollupLoop | None = None
@@ -77,6 +91,7 @@ class RuntimeWorkerEntrypoint:
                 conversation_tool_ordinal_store=(
                     async_ports.conversation_tool_ordinal_store
                 ),
+                citation_store=async_ports.citation_store,
                 mcp_discovery_cache=mcp_discovery_cache,
                 user_policies_resolver=user_policies_resolver,
             )

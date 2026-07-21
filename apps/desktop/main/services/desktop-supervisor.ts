@@ -26,7 +26,7 @@ import {
 } from "./runtime-paths";
 import {
   buildServiceEnv,
-  isAiFileStoreV1Enabled,
+  resolveAiStoreBackend,
   UVICORN_MODULES,
 } from "./service-env";
 import { ServiceSupervisor, type AllocatedPorts } from "./supervisor";
@@ -62,10 +62,11 @@ export function createDesktopSupervisor(
   const runner = createCommandRunner();
   const logsDir = join(config.userDataDir, "logs");
   const fsAdapter = { readFile, writeFile, mkdir, rm, chmod };
-  // Read the file-store flag ONCE at supervisor construction (same env
-  // buildServiceEnv reads). When on, the ai-backend uses the file-native store
-  // and has no Postgres DB env, so its migration gate must be skipped.
-  const aiFileStoreEnabled = isAiFileStoreV1Enabled(processEnv);
+  // Resolve the ai-backend store backend ONCE at supervisor construction, from
+  // the SAME env buildServiceEnv reads (so the store branch and this gate can
+  // never diverge). File-native is the default; when it is active the ai-backend
+  // has no Postgres DB env, so its relational migration gate must be skipped.
+  const aiStoreBackend = resolveAiStoreBackend(processEnv);
 
   const envInputs = (
     ports: AllocatedPorts,
@@ -118,7 +119,7 @@ export function createDesktopSupervisor(
       // the ai-backend has no Postgres DB env, so scripts/migrate.py would fail
       // closed ("set RUNTIME_DATABASE_URL"); skip its gate. The backend keeps
       // its own Postgres migrations (identity/OAuth/vault) in every mode.
-      if (service === "ai-backend" && aiFileStoreEnabled) {
+      if (service === "ai-backend" && aiStoreBackend === "file") {
         return Promise.resolve();
       }
       return runMigrations({

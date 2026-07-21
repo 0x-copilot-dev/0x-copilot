@@ -15,14 +15,18 @@ See also:
 `runtime_adapters/factory.py` reads `RUNTIME_STORE_BACKEND` and returns a fully wired
 `RuntimeStoreBundle` (a struct with all port instances).
 
-| `RUNTIME_STORE_BACKEND` | Adapter class                  | When to use                                         |
-| ----------------------- | ------------------------------ | --------------------------------------------------- |
-| `in_memory`             | `InMemoryRuntimeApiStore`      | Tests; single-process dev without a DB              |
-| `in_memory_async`       | `AsyncInMemoryRuntimeApiStore` | Thin async wrapper over `in_memory`; same semantics |
-| `postgres`              | `PostgresRuntimeApiStore`      | Shared-store production; requires `DATABASE_URL`    |
+| `RUNTIME_STORE_BACKEND` | Adapter class                  | When to use                                                  |
+| ----------------------- | ------------------------------ | ------------------------------------------------------------ |
+| `in_memory`             | `InMemoryRuntimeApiStore`      | Tests; single-process dev without a DB                       |
+| `in_memory_async`       | `AsyncInMemoryRuntimeApiStore` | Thin async wrapper over `in_memory`; same semantics          |
+| `postgres`              | `PostgresRuntimeApiStore`      | Shared-store production; requires `DATABASE_URL`             |
+| `file`                  | `FileRuntimeApiStore`          | `single_user_desktop` only; local JSONL store, single-writer |
 
 The API process and the worker process must use **the same** `RUNTIME_STORE_BACKEND` value.
-Mixing `in_memory` API with `postgres` worker is not supported.
+Mixing `in_memory` API with `postgres` worker is not supported. The `file` backend is
+**single-process only**: its queue claim is an in-process lock, so the desktop runs the
+worker in-process (`start_in_process_worker` gates on the `single_user_desktop` profile,
+not the store backend) and the standalone `python -m runtime_worker` refuses it.
 
 ---
 

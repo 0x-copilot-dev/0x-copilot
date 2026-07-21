@@ -10,16 +10,17 @@ Variables marked **required in production** will cause startup to fail if unset 
 
 ## Core runtime
 
-| Variable                           | Default       | Description                                                                                                       |
-| ---------------------------------- | ------------- | ----------------------------------------------------------------------------------------------------------------- |
-| `BACKEND_ENVIRONMENT`              | `development` | `development` or `production`. Enables dev-only routes when `development`.                                        |
-| `RUNTIME_STORE_BACKEND`            | `in_memory`   | `in_memory`, `in_memory_async`, or `postgres`. See [architecture/03-adapters.md](../architecture/03-adapters.md). |
-| `RUNTIME_START_IN_PROCESS_WORKER`  | `false`       | Start a worker coroutine inside the API process (useful for local dev without a separate worker process).         |
-| `DATABASE_URL`                     | —             | Postgres connection URL. Required when `RUNTIME_STORE_BACKEND=postgres`.                                          |
-| `RUNTIME_AUTO_MIGRATE`             | `true`        | Run DB migrations at startup.                                                                                     |
-| `RUNTIME_WORKER_CONCURRENCY`       | `4`           | Number of concurrent claim loops in the worker process.                                                           |
-| `RUNTIME_WORKER_HEARTBEAT_SECONDS` | `30`          | How often the worker extends its claim lock.                                                                      |
-| `RUNTIME_CLAIM_LOCK_TTL_SECONDS`   | `300`         | How long a claim lock is held before it expires (allows crashed worker claims to be reclaimed).                   |
+| Variable                           | Default       | Description                                                                                                                                                                                                               |
+| ---------------------------------- | ------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `BACKEND_ENVIRONMENT`              | `development` | `development` or `production`. Enables dev-only routes when `development`.                                                                                                                                                |
+| `RUNTIME_STORE_BACKEND`            | `in_memory`   | `in_memory`, `in_memory_async`, `postgres`, or `file`. `file` is `single_user_desktop`-only and needs `RUNTIME_FILE_STORE_ROOT`. See [architecture/03-adapters.md](../architecture/03-adapters.md).                       |
+| `RUNTIME_START_IN_PROCESS_WORKER`  | `false`       | Start a worker coroutine inside the API process. Honored for single-process deployments only — in-memory dev/test and the `single_user_desktop` profile (any backend); server profiles run a dedicated worker regardless. |
+| `RUNTIME_FILE_STORE_ROOT`          | —             | Absolute root for the file-native store. Required when `RUNTIME_STORE_BACKEND=file`.                                                                                                                                      |
+| `DATABASE_URL`                     | —             | Postgres connection URL. Required when `RUNTIME_STORE_BACKEND=postgres`.                                                                                                                                                  |
+| `RUNTIME_AUTO_MIGRATE`             | `true`        | Run DB migrations at startup.                                                                                                                                                                                             |
+| `RUNTIME_WORKER_CONCURRENCY`       | `4`           | Number of concurrent claim loops in the worker process.                                                                                                                                                                   |
+| `RUNTIME_WORKER_HEARTBEAT_SECONDS` | `30`          | How often the worker extends its claim lock.                                                                                                                                                                              |
+| `RUNTIME_CLAIM_LOCK_TTL_SECONDS`   | `300`         | How long a claim lock is held before it expires (allows crashed worker claims to be reclaimed).                                                                                                                           |
 
 ---
 

@@ -19,6 +19,7 @@ from agent_runtime.api.ports import (
 from agent_runtime.execution.contracts import RuntimeErrorCode
 from agent_runtime.execution.errors import AgentRuntimeError
 from agent_runtime.persistence.ports import (
+    CitationStorePort,
     ConversationToolOrdinalStorePort,
     DraftStorePort,
     ShareStorePort,
@@ -103,6 +104,10 @@ def _build_file_ports(settings: RuntimeSettings) -> "RuntimePorts":
         # Pure projectors over the file store's file-backed materialized view.
         subagent_store=InMemorySubagentStore(file_store),
         source_store=InMemorySourceStore(citation_store),
+        # The DURABLE FileCitationStore — the SAME instance source_store reads —
+        # is now the write-side port too, so run citations persist to disk
+        # instead of an ephemeral in-memory sibling.
+        citation_store=citation_store,
     )
 
 
@@ -131,6 +136,13 @@ class RuntimePorts:
     # ``_role_connection``. Every other consumer should use the typed ports
     # above and stay backend-agnostic.
     postgres_store: PostgresRuntimeApiStore | None = None
+    # Backend-correct citation store for the run WRITE path. Every construction
+    # site sets it: the Postgres store itself (it satisfies CitationStorePort),
+    # the durable ``FileCitationStore`` for the file backend (the SAME instance
+    # ``source_store`` reads), or a shared ``InMemoryCitationStore``. Defaults
+    # None so any legacy constructor still works — the worker then falls back to
+    # its historical isinstance resolution.
+    citation_store: CitationStorePort | None = None
 
 
 class RuntimeAdapterFactory:
@@ -144,6 +156,7 @@ class RuntimeAdapterFactory:
         coordinator internals.  Every satellite store is freshly
         constructed so they share no state with other test instances.
         """
+        in_memory_citation = InMemoryCitationStore()
         return RuntimePorts(
             persistence=store,
             event_store=store,
@@ -154,7 +167,10 @@ class RuntimeAdapterFactory:
             share_store=InMemoryShareStore(),
             conversation_tool_ordinal_store=InMemoryConversationToolOrdinalStore(),
             subagent_store=InMemorySubagentStore(store),
-            source_store=InMemorySourceStore(InMemoryCitationStore()),
+            # One citation store shared by the read-side projector and the
+            # write-side port, so a run's citations are visible to Sources.
+            source_store=InMemorySourceStore(in_memory_citation),
+            citation_store=in_memory_citation,
         )
 
     @classmethod
@@ -178,6 +194,7 @@ class RuntimeAdapterFactory:
         # route to the async-native InMemoryRuntimeApiStore.
         if backend in {"in_memory_async", "in_memory"}:
             in_memory_store = InMemoryRuntimeApiStore()
+            in_memory_citation = InMemoryCitationStore()
             return RuntimePorts(
                 persistence=in_memory_store,
                 event_store=in_memory_store,
@@ -188,7 +205,9 @@ class RuntimeAdapterFactory:
                 share_store=InMemoryShareStore(),
                 conversation_tool_ordinal_store=InMemoryConversationToolOrdinalStore(),
                 subagent_store=InMemorySubagentStore(in_memory_store),
-                source_store=InMemorySourceStore(InMemoryCitationStore()),
+                # Shared instance: read-side projector and write-side port agree.
+                source_store=InMemorySourceStore(in_memory_citation),
+                citation_store=in_memory_citation,
             )
         if backend == "postgres":
             if settings.store.database_url is None:
@@ -216,6 +235,9 @@ class RuntimeAdapterFactory:
                 subagent_store=PostgresSubagentStore(postgres_store),
                 source_store=PostgresSourceStore(postgres_store),
                 postgres_store=postgres_store,
+                # The Postgres store IS a CitationStorePort — same instance the
+                # worker resolved historically, so write behavior is unchanged.
+                citation_store=postgres_store,
             )
         if backend == "file":
             return _build_file_ports(settings)
