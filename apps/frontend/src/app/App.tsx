@@ -1,7 +1,7 @@
 import { ThemeProvider } from "@0x-copilot/design-system";
 import type { McpServer } from "@0x-copilot/api-types";
 import type { ReactElement } from "react";
-import { Suspense, lazy, useEffect, useState } from "react";
+import { Suspense, lazy, useEffect, useMemo, useState } from "react";
 import "@0x-copilot/design-system/styles.css";
 import "streamdown/styles.css";
 import "../styles.css";
@@ -56,6 +56,17 @@ import { useUserProfile } from "../features/me/useUserProfile";
 import { UserProfileProvider } from "../features/me/UserProfileContext";
 import { DEFAULT_SETTINGS_SECTION } from "../features/settings/sections";
 import { useSkills } from "../features/skills/useSkills";
+// FTUE first-run gate (parity with the desktop `FirstRunGate`). Sits between the
+// authenticated boundary and the shell: a first-time user (no completion flag
+// for this identity) sees the shared onboarding surface until they finish or
+// skip; a returning user drops straight through to the shell. Host-owned gate;
+// the surface itself is the shared chat-surface component (mounted by the web
+// `FirstRunSurfaceMount` binder). Eager (not code-split) — the gate decision is
+// on the shell's hot path, and the onboarding surface's own chunk (styles +
+// slots) loads only when it actually renders.
+import { FirstRunGate } from "../features/onboarding/FirstRunGate";
+import { FirstRunSurfaceMount } from "../features/onboarding/FirstRunSurfaceMount";
+import { createWebFirstRunStore } from "../features/onboarding/firstRunStore";
 
 // Route-level code splitting. Each screen is its own Vite chunk so the
 // main bundle only carries the chrome + auth-gate decision tree; the
@@ -154,6 +165,7 @@ import {
   NotificationCenterProvider,
   SecretStorageProvider,
   ToastStack,
+  TransportProvider,
   WebSecretStorage,
   registerItemRefResolver,
   hasItemRefResolver,
@@ -520,6 +532,18 @@ export function CopilotApp({
   // (so AuthProvider can see it). Pull it from context here to pass
   // through to ChatShell — same instance, single source of truth.
   const keyValueStore = useKeyValueStore();
+  // FTUE — the per-identity first-run completion store, over the same
+  // substrate-bound KeyValueStore the shell already uses. Namespaced by
+  // org+user so two accounts on one browser profile each see their own first
+  // run. Drives the `FirstRunGate` wrapping the shell return below.
+  const firstRunStore = useMemo(
+    () =>
+      createWebFirstRunStore(keyValueStore, {
+        orgId: identity.orgId,
+        userId: identity.userId,
+      }),
+    [keyValueStore, identity.orgId, identity.userId],
+  );
   // PresenceSignal is local to CopilotApp — AuthProvider doesn't
   // need it (nothing in auth listens for tab visibility), so we don't have
   // to hoist it the way KeyValueStore was hoisted. Constructed once via
@@ -1119,54 +1143,77 @@ export function CopilotApp({
   // pane shows the fallback, matching how users expect a route transition
   // to behave in a shell-style app.
   return (
-    // PR-4.11 — the DeploymentProfile port drives the profile-gated shell rail
-    // (`destinationsForProfile`): the six-destination solo set by default, the
-    // nine-destination team set under `VITE_DEPLOYMENT_PROFILE=team`. Without
-    // this provider ChatShell falls back to the frozen legacy 12-destination
-    // `SHELL_DESTINATIONS` rail.
-    <DeploymentProfileProvider profile={DEPLOYMENT_PROFILE}>
-      <PortProvider ports={ports}>
-        <ChatShell
-          transport={getAppTransport()}
-          router={router}
-          keyValueStore={keyValueStore}
-          presenceSignal={presenceSignal}
-          activeDestination={activeDestination}
-          onNavigate={handleRailNavigate}
-          onOpenSettings={() =>
-            router.navigate({
-              screen: "settings",
-              section: DEFAULT_SETTINGS_SECTION,
-            })
-          }
-          onOpenCommandPalette={() => setPaletteOpen(true)}
-          // PRD-C.2 / PRD-H.5 — feed the rail foot avatar the user's initial from
-          // the profile the shell already loads. The Run badge (activeRunCount)
-          // still needs a run-list source and is a documented follow-up.
-          railIdentity={
-            profile?.data?.display_name?.trim()
-              ? { initial: profile.data.display_name.trim().charAt(0) }
-              : undefined
-          }
-          // Run badge: number of in-flight runs (hidden at 0; the rail also
-          // hides it while Run is the active destination). PRD-C.2 / PRD-H.5.
-          railBadges={activeRunCount > 0 ? { run: activeRunCount } : undefined}
-        >
-          <Suspense fallback={<RouteLoadingFallback />}>{body}</Suspense>
-          {/*
+    // FTUE — gate the whole shell behind first-run onboarding (parity with the
+    // desktop bootstrap's `FirstRunGate`). A first-time user sees the shared
+    // onboarding surface (full-screen, its own chrome) until they finish or
+    // skip; a returning user (flag set for this identity) renders the shell
+    // below unchanged. The surface renders OUTSIDE the shell providers by
+    // design — it needs only the app-root ThemeProvider + the module-singleton
+    // transport, not the rail/ports.
+    <FirstRunGate
+      store={firstRunStore}
+      renderFirstRun={(onComplete) => (
+        // The onboarding surface mounts OUTSIDE ChatShell (which normally
+        // provides the Transport port), so the app root injects it here — the
+        // deep composer subtree (ToolPicker / MentionPopover) reads it via
+        // `useTransport`. The binder itself stays substrate-clean: its data
+        // ports go through the typed `api/*` modules, not this transport.
+        <TransportProvider transport={getAppTransport()}>
+          <FirstRunSurfaceMount onComplete={onComplete} identity={identity} />
+        </TransportProvider>
+      )}
+    >
+      {/* PR-4.11 — the DeploymentProfile port drives the profile-gated shell rail
+      (`destinationsForProfile`): the six-destination solo set by default, the
+      nine-destination team set under `VITE_DEPLOYMENT_PROFILE=team`. Without
+      this provider ChatShell falls back to the frozen legacy 12-destination
+      `SHELL_DESTINATIONS` rail. */}
+      <DeploymentProfileProvider profile={DEPLOYMENT_PROFILE}>
+        <PortProvider ports={ports}>
+          <ChatShell
+            transport={getAppTransport()}
+            router={router}
+            keyValueStore={keyValueStore}
+            presenceSignal={presenceSignal}
+            activeDestination={activeDestination}
+            onNavigate={handleRailNavigate}
+            onOpenSettings={() =>
+              router.navigate({
+                screen: "settings",
+                section: DEFAULT_SETTINGS_SECTION,
+              })
+            }
+            onOpenCommandPalette={() => setPaletteOpen(true)}
+            // PRD-C.2 / PRD-H.5 — feed the rail foot avatar the user's initial from
+            // the profile the shell already loads. The Run badge (activeRunCount)
+            // still needs a run-list source and is a documented follow-up.
+            railIdentity={
+              profile?.data?.display_name?.trim()
+                ? { initial: profile.data.display_name.trim().charAt(0) }
+                : undefined
+            }
+            // Run badge: number of in-flight runs (hidden at 0; the rail also
+            // hides it while Run is the active destination). PRD-C.2 / PRD-H.5.
+            railBadges={
+              activeRunCount > 0 ? { run: activeRunCount } : undefined
+            }
+          >
+            <Suspense fallback={<RouteLoadingFallback />}>{body}</Suspense>
+            {/*
             P12-C — ⌘K palette host. Mounted once at the App root so the
             hotkey is global and every page renders one CommandPalette
             modal. The host owns the PaletteSearchPort that calls
             `/v1/palette/search` through the facade (sub-PRD §7.3).
           */}
-          <PaletteHost
-            identity={identity}
-            open={paletteOpen}
-            onOpenChange={setPaletteOpen}
-            onCommand={handlePaletteCommand}
-          />
-        </ChatShell>
-      </PortProvider>
-    </DeploymentProfileProvider>
+            <PaletteHost
+              identity={identity}
+              open={paletteOpen}
+              onOpenChange={setPaletteOpen}
+              onCommand={handlePaletteCommand}
+            />
+          </ChatShell>
+        </PortProvider>
+      </DeploymentProfileProvider>
+    </FirstRunGate>
   );
 }

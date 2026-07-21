@@ -126,6 +126,16 @@ vi.mock("../features/me/useUserProfile", () => ({
 vi.mock("../api/transport", () => ({
   getAppTransport: () => ({}),
 }));
+// FTUE first-run gate — these tests assert the signed-in shell dispatch, not
+// onboarding, so treat the gate as already completed for this identity. The
+// gate then renders the shell straight through (FirstRunSurfaceMount never
+// mounts). The gate/store/surface have their own dedicated suites.
+vi.mock("../features/onboarding/firstRunStore", () => ({
+  createWebFirstRunStore: () => ({
+    isComplete: () => true,
+    markComplete: vi.fn(),
+  }),
+}));
 
 // Keep every real chat-surface export (DeploymentProfileProvider, the KV/secret
 // stores, resolver helpers, destinationsForProfile) but swap ChatShell for a
