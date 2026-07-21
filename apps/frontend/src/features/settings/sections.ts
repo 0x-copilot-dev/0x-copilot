@@ -1,4 +1,4 @@
-import type { SettingsSection } from "./SettingsScreen";
+import type { SettingsSection } from "./settingsSections";
 
 // The complete list of valid settings-section slugs. PR 4.1 / 4.2 / 4.3
 // each grew the union independently, so the list lives here (not in

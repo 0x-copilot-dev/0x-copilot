@@ -77,7 +77,7 @@ import {
 
 import type { RequestIdentity } from "../../api/config";
 import type { UserProfileState } from "../me/useUserProfile";
-import type { SettingsSection } from "./SettingsScreen";
+import type { SettingsSection } from "./settingsSections";
 import { errorMessage } from "../../utils/errors";
 import { Appearance } from "./sections/Appearance";
 import { ApiKeys } from "./sections/ApiKeys";

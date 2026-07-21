@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import dataclasses
+import logging
 import os
 from contextlib import asynccontextmanager
 from typing import Any
@@ -42,6 +44,7 @@ from backend_app.contracts import (
     McpAuthStartResponse,
     McpCatalogResponse,
     McpServerListResponse,
+    McpServerRecord,
     McpServerResponse,
     OAuthTokenRequest,
     SkillListResponse,
@@ -156,6 +159,10 @@ from backend_app.connectors import (
     load_catalog,
     register_connector_routes,
     register_connector_sse_routes,
+)
+from backend_app.connectors.service import (
+    mcp_connector_slug,
+    mcp_upsert_input_from_server,
 )
 from backend_app.connectors.desktop_routes import (
     register_desktop_connector_routes,
@@ -299,12 +306,19 @@ from backend_app.service import (
 from backend_app.store import PostgresConnectionPool
 
 
+logger = logging.getLogger(__name__)
+
+
 class _AppServices:
     """Typed accessors for service singletons attached to app state."""
 
     @staticmethod
     def mcp(application: FastAPI) -> McpRegistryService:
         return application.state.mcp_service
+
+    @staticmethod
+    def connectors(application: FastAPI) -> ConnectorsService:
+        return application.state.connectors_service
 
     @staticmethod
     def skills(application: FastAPI) -> SkillRegistryService:
@@ -317,6 +331,84 @@ class _AppServices:
     @staticmethod
     def deploy_audit(application: FastAPI) -> DeployAuditService:
         return application.state.deploy_audit_service
+
+
+def _connector_write_through(
+    application: FastAPI,
+    record: McpServerRecord,
+    *,
+    action: str,
+    removed: bool = False,
+) -> None:
+    """Write-through an MCP mutation into the connectors read model (D1).
+
+    Called AFTER the MCP path's own transaction committed (row + token +
+    ``mcp_*`` audit all landed atomically in ``McpRegistryService``).
+    This projects the server record into the denormalized
+    ``/v1/connectors`` row, appends the destination-level ``connector.*``
+    audit row (atomically with the row — see
+    :meth:`ConnectorsService.write_through_from_mcp`), and publishes on
+    the tenant SSE channel so the web ConnectorsRoute's connect flow
+    completes off the stream.
+
+    Failure discipline: LOG-AND-CONTINUE, deliberately. The primary
+    mutation already committed in the MCP store; failing the request here
+    would report a false failure for a succeeded registration and leave
+    the client retrying an already-applied write. The authoritative audit
+    row is the MCP-side one (written in-transaction and already durable);
+    the connector row is a read-model projection that reconverges on the
+    next mutation because the upsert is idempotent on the natural key
+    ``(tenant_id, owner_user_id, slug)``. This mirrors the inbox routes'
+    post-commit-publish discipline (stream/projection work happens only
+    after the transaction landed and is not allowed to un-land it).
+    """
+
+    try:
+        service = _AppServices.connectors(application)
+        store: ConnectorsStore = application.state.connectors_store
+        existing = store.get_by_owner_and_slug(
+            tenant_id=record.org_id,
+            owner_user_id=record.user_id,
+            slug=mcp_connector_slug(record),
+        )
+        mcp_input = mcp_upsert_input_from_server(record, existing=existing)
+        if removed:
+            # The MCP row is gone; the connectors store models removal as
+            # ``status=disconnected`` (no soft-delete column — same shape
+            # as ConnectorsService.disconnect), with an honest reason.
+            mcp_input = dataclasses.replace(
+                mcp_input,
+                status="disconnected",
+                status_reason="mcp_server_deleted",
+            )
+        stored = service.write_through_from_mcp(
+            mcp_input=mcp_input,
+            actor_user_id=record.user_id,
+            action=action,
+            correlation_id=f"mcp:{record.server_id}",
+        )
+        bus = getattr(application.state, "connector_activity_bus", None)
+        if bus is not None:
+            # Sync publish: MCP handlers are plain ``def`` routes. The
+            # closed event enum has no ``connector.removed`` — deletion
+            # streams as a ``status_changed`` to ``disconnected``.
+            bus.publish_nowait(
+                org_id=stored.tenant_id,
+                user_id=stored.owner_user_id,
+                event_type=(
+                    "connector.created"
+                    if existing is None
+                    else "connector.status_changed"
+                ),
+                connector=stored.model_dump(mode="json", exclude={"vault_ref"}),
+            )
+    except Exception:  # noqa: BLE001 — see failure-discipline note above.
+        logger.exception(
+            "connectors write-through failed (server_id=%s action=%s); "
+            "/v1/connectors may lag the MCP registry until the next mutation",
+            record.server_id,
+            action,
+        )
 
 
 @asynccontextmanager
@@ -844,7 +936,16 @@ def create_app(
         payload = payload.model_copy(
             update={"org_id": identity.org_id, "user_id": identity.user_id}
         )
-        return _AppServices.mcp(app).create_server(payload)
+        response = _AppServices.mcp(app).create_server(payload)
+        # D1 write-through: /v1/connectors is the honest read model over
+        # custom (register-by-URL) MCP servers too. Post-commit,
+        # log-and-continue (see _connector_write_through).
+        stored = _AppServices.mcp(app).store.get_server(
+            org_id=identity.org_id, server_id=response.server_id
+        )
+        if stored is not None:
+            _connector_write_through(app, stored, action="connector.installed")
+        return response
 
     @app.get(
         "/v1/mcp/catalog",
@@ -872,7 +973,7 @@ def create_app(
             update={"org_id": identity.org_id, "user_id": identity.user_id}
         )
         try:
-            return _AppServices.mcp(app).install_from_catalog(payload)
+            response = _AppServices.mcp(app).install_from_catalog(payload)
         except ValueError as exc:
             message = str(exc)
             # 404 for unknown slug; 422 for the pre-registered-client gate
@@ -881,6 +982,13 @@ def create_app(
             if message.startswith("Unknown catalog entry"):
                 raise HTTPException(status.HTTP_404_NOT_FOUND, message) from exc
             raise HTTPException(status.HTTP_422_UNPROCESSABLE_ENTITY, message) from exc
+        # D1 write-through — same post-commit discipline as create_server.
+        stored = _AppServices.mcp(app).store.get_server(
+            org_id=identity.org_id, server_id=response.server_id
+        )
+        if stored is not None:
+            _connector_write_through(app, stored, action="connector.installed")
+        return response
 
     @app.get(
         "/v1/mcp/servers",
@@ -937,11 +1045,22 @@ def create_app(
         identity = BackendServiceAuthenticator.scoped_identity(
             request, org_id=org_id, user_id=user_id
         )
+        # Snapshot the record BEFORE deletion — the write-through needs
+        # it to locate + project the connector row after the MCP row is
+        # gone. ``deleted=True`` implies the record belonged to the
+        # verified caller (delete_server enforces the org+user match).
+        existing = _AppServices.mcp(app).store.get_server(
+            org_id=identity.org_id, server_id=server_id
+        )
         deleted = _AppServices.mcp(app).delete_server(
             org_id=identity.org_id, user_id=identity.user_id, server_id=server_id
         )
         if not deleted:
             raise HTTPException(status.HTTP_404_NOT_FOUND, "MCP server not found")
+        if existing is not None:
+            _connector_write_through(
+                app, existing, action="connector.removed", removed=True
+            )
         return Response(status_code=status.HTTP_204_NO_CONTENT)
 
     @app.patch(
@@ -960,7 +1079,7 @@ def create_app(
             request, org_id=org_id, user_id=user_id
         )
         try:
-            return _AppServices.mcp(app).update_server(
+            response = _AppServices.mcp(app).update_server(
                 org_id=identity.org_id,
                 user_id=identity.user_id,
                 server_id=server_id,
@@ -968,6 +1087,14 @@ def create_app(
             )
         except ValueError as exc:
             raise HTTPException(status.HTTP_404_NOT_FOUND, str(exc)) from exc
+        # D1 write-through — enable/disable flips the connector row's
+        # status honestly (disabled → disconnected + reason "disabled").
+        stored = _AppServices.mcp(app).store.get_server(
+            org_id=identity.org_id, server_id=server_id
+        )
+        if stored is not None:
+            _connector_write_through(app, stored, action="connector.updated")
+        return response
 
     @app.post(
         "/v1/mcp/servers/{server_id}/auth/start",
@@ -984,11 +1111,19 @@ def create_app(
             update={"org_id": identity.org_id, "user_id": identity.user_id}
         )
         try:
-            return _AppServices.mcp(app).start_auth(
+            response = _AppServices.mcp(app).start_auth(
                 server_id=server_id, request=payload
             )
         except ValueError as exc:
             raise HTTPException(status.HTTP_400_BAD_REQUEST, str(exc)) from exc
+        # D1 write-through — the OAuth round-trip is now in flight; the
+        # connector row shows ``disconnected`` + reason ``auth_pending``.
+        stored = _AppServices.mcp(app).store.get_server(
+            org_id=identity.org_id, server_id=server_id
+        )
+        if stored is not None:
+            _connector_write_through(app, stored, action="connector.updated")
+        return response
 
     @app.post(
         "/v1/mcp/servers/{server_id}/auth/skip",
@@ -1005,11 +1140,19 @@ def create_app(
             request, org_id=org_id, user_id=user_id
         )
         try:
-            return _AppServices.mcp(app).skip_auth(
+            response = _AppServices.mcp(app).skip_auth(
                 org_id=identity.org_id, user_id=identity.user_id, server_id=server_id
             )
         except ValueError as exc:
             raise HTTPException(status.HTTP_404_NOT_FOUND, str(exc)) from exc
+        # D1 write-through — auth_skipped projects to ``connected`` with
+        # an honest ``auth_skipped`` status_reason.
+        stored = _AppServices.mcp(app).store.get_server(
+            org_id=identity.org_id, server_id=server_id
+        )
+        if stored is not None:
+            _connector_write_through(app, stored, action="connector.connected")
+        return response
 
     @app.get(
         "/v1/mcp/oauth/callback",
@@ -1741,6 +1884,20 @@ def create_app(
         catalog=connector_catalog,
     )
     app.state.connectors_service = connectors_service
+
+    # PR-E.3 Decision D1 — MCP → connectors write-through, auth-complete
+    # leg. ``complete_auth`` has TWO entry points (the public web
+    # callback route above and the desktop OAuth coordinator below), so
+    # the write-through hangs off the service seam rather than either
+    # route: after the token lands, the connector row flips to
+    # ``connected`` and the tenant SSE channel gets the status change.
+    # The listener is post-commit + log-and-continue by contract (see
+    # ``_connector_write_through``). The remaining mutation points
+    # (register / install / patch / skip / delete) are wired directly in
+    # their route handlers because each has exactly one entry point.
+    _AppServices.mcp(app).auth_completed_listener = lambda record: (
+        _connector_write_through(app, record, action="connector.connected")
+    )
 
     # Phase 11 P11-A3 — Connectors destination webhook manager.
     # Webhooks are tenant-admin OR routine-owner per connectors-prd

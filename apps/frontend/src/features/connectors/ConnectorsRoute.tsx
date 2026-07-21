@@ -39,6 +39,7 @@ import {
   ConnectorsPanel,
   type ConnectorsFilterCounts,
   type ConnectorsFilterSlug,
+  type CustomServerInput,
 } from "@0x-copilot/chat-surface";
 import type {
   Connector,
@@ -59,6 +60,7 @@ import {
   startConnectorOAuth,
   streamConnectorEvents,
 } from "../../api/connectorsApi";
+import { createMcpServer, startMcpAuth } from "../../api/mcpApi";
 import { errorMessage } from "../../utils/errors";
 import { applyConnectorEnvelope } from "./adapters";
 
@@ -117,6 +119,12 @@ export function ConnectorsRoute({
   // on `[identity, state.kind]` — always sees the latest value without
   // re-subscribing.
   const connectingSlugRef = useRef<ConnectorSlug | null>(null);
+  // Custom-server add (D1) in flight. Unlike a catalog pick there is no slug
+  // to match against, so completion is the first `connector.created` (or
+  // connected `status_changed`) envelope observed while the custom add is
+  // pending — the backend's MCP-registration write-through emits it. A ref
+  // for the same reason as `connectingSlugRef`.
+  const customConnectRef = useRef(false);
 
   // Latest ready connectors, mirrored into a ref so the optimistic access-
   // mode revert can snapshot the prior mode and the connect flow can resolve
@@ -161,9 +169,24 @@ export function ConnectorsRoute({
   // it as a dependency without re-subscribing.
   const maybeCompleteConnect = useCallback(
     (envelope: ConnectorStreamEnvelope): void => {
+      const conn = envelope.connector;
+      // Custom-server add: no slug is known up front, so the first created/
+      // connected envelope while the add is pending resolves it (the modal
+      // then closes — the custom flow has no permission step).
+      if (customConnectRef.current) {
+        if (conn === undefined) return;
+        if (
+          envelope.event_type === "connector.created" ||
+          conn.status === "connected"
+        ) {
+          customConnectRef.current = false;
+          setConnectPending(false);
+          setConnectError(null);
+        }
+        return;
+      }
       const slug = connectingSlugRef.current;
       if (slug === null) return;
-      const conn = envelope.connector;
       if (conn === undefined || conn.slug !== slug) return;
       if (
         envelope.event_type === "connector.created" ||
@@ -262,6 +285,7 @@ export function ConnectorsRoute({
   // hardcoded Safe/Dune defaults — FR-4.24).
   const handleOpenConnect = useCallback(() => {
     connectingSlugRef.current = null;
+    customConnectRef.current = false;
     setConnectError(null);
     setConnectPending(false);
     setConnectOpen(true);
@@ -269,6 +293,7 @@ export function ConnectorsRoute({
 
   const handleCloseConnect = useCallback(() => {
     connectingSlugRef.current = null;
+    customConnectRef.current = false;
     setConnectOpen(false);
     setConnectPending(false);
     setConnectError(null);
@@ -340,6 +365,55 @@ export function ConnectorsRoute({
         connectingSlugRef.current = null;
         setConnectPending(false);
         setConnectError(errorMessage(error, "Could not start the OAuth flow."));
+      }
+    },
+    [identity],
+  );
+
+  // Custom-server add (Decision D1) — create the MCP server from the URL (+
+  // optional pre-registered OAuth client), then, mirroring
+  // `useConnectors.addServer`'s post-create guards, kick off the MCP OAuth
+  // round-trip in a popup so the modal stays alive. Completion signals:
+  //   • auth needed  → the SSE `connector.created` write-through envelope
+  //     clears `pending` (`maybeCompleteConnect`), which closes the modal.
+  //   • no auth      → the create alone completes; clear `pending` now.
+  const handleAddCustomServer = useCallback(
+    async (input: CustomServerInput): Promise<void> => {
+      connectingSlugRef.current = null;
+      customConnectRef.current = false;
+      setConnectError(null);
+      setConnectPending(true);
+      try {
+        const server = await createMcpServer(
+          input.url,
+          identity,
+          input.oauthClient,
+        );
+        const needsAuth =
+          server.auth_mode !== "none" &&
+          server.auth_state !== "auth_unsupported" &&
+          server.auth_state !== "authenticated";
+        if (!needsAuth) {
+          // Install alone completes the add — clear `pending` so the modal
+          // closes; the SSE write-through lands the row when it arrives.
+          setConnectPending(false);
+          return;
+        }
+        customConnectRef.current = true;
+        const auth = await startMcpAuth(server.server_id, identity);
+        // Keep the modal alive: authorize in a popup (same pattern as the
+        // catalog pick). The server-side callback flips the MCP server to
+        // authenticated and the connector write-through emits the SSE
+        // envelope that resolves the pending state.
+        if (typeof window !== "undefined") {
+          window.open(auth.auth_url, "_blank", "noopener,noreferrer");
+        }
+      } catch (error: unknown) {
+        customConnectRef.current = false;
+        setConnectPending(false);
+        setConnectError(
+          errorMessage(error, "Could not add the custom server."),
+        );
       }
     },
     [identity],
@@ -535,6 +609,9 @@ export function ConnectorsRoute({
         }}
         onConnect={(slug, permission) => {
           void handleConnectConfirm(slug, permission);
+        }}
+        onAddCustomServer={(input) => {
+          void handleAddCustomServer(input);
         }}
         pending={connectPending}
         error={connectError}

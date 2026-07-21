@@ -7,7 +7,7 @@ import json
 import os
 
 import yaml
-from typing import Any, Protocol
+from typing import Any, Callable, Protocol
 from urllib.error import HTTPError, URLError
 from urllib.parse import urlsplit
 from urllib.request import Request, urlopen
@@ -204,6 +204,15 @@ class McpRegistryService:
         self.oauth_client = oauth_client or HttpOAuthTokenExchanger()
         self.token_exchanger = token_exchanger or self.oauth_client
         self.auth_session_ttl = auth_session_ttl
+        # Post-commit observer invoked with the updated record after
+        # ``complete_auth`` lands. Wired at app composition time to the
+        # connectors destination's write-through (PR-E.3 Decision D1) so
+        # BOTH auth-completion entry points — the web callback route AND
+        # the desktop OAuth coordinator — flip the connector row to
+        # ``connected`` through one seam. The listener contract is
+        # log-and-continue: implementations MUST NOT raise (the MCP row
+        # + token already committed; see ``app.py`` for the rationale).
+        self.auth_completed_listener: Callable[[McpServerRecord], None] | None = None
 
     def create_server(self, request: CreateMcpServerRequest) -> McpServerResponse:
         display_name = request.display_name or self._display_name_from_url(request.url)
@@ -555,6 +564,11 @@ class McpRegistryService:
                 record, conn=conn, auth_state=McpAuthState.AUTHENTICATED
             )
             self._audit(updated, "mcp_auth_completed", conn=conn)
+        # Post-commit: notify the connectors write-through (if wired) so
+        # the denormalized ``/v1/connectors`` row flips to ``connected``
+        # for both the web callback and the desktop coordinator path.
+        if self.auth_completed_listener is not None:
+            self.auth_completed_listener(updated)
         return McpServerResponse.from_record(updated)
 
     def list_internal_cards(

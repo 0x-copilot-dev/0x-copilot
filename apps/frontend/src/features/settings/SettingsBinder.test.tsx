@@ -14,7 +14,7 @@ import { SETTINGS_NAV_ITEMS } from "@0x-copilot/chat-surface";
 
 import { SETTINGS_SECTIONS } from "./sections";
 import { isBinderSection, webSectionForSlug } from "./SettingsBinder";
-import type { SettingsSection } from "./SettingsScreen";
+import type { SettingsSection } from "./settingsSections";
 
 describe("SettingsBinder section mapping (FR-E.5)", () => {
   it("maps every SSOT nav slug to a valid web SettingsSection", () => {

@@ -21,6 +21,7 @@ import type {
   ConnectorListResponse,
   ConnectorSlug,
   ConnectorStreamEnvelope,
+  McpServer,
   TenantId,
   UserId,
 } from "@0x-copilot/api-types";
@@ -51,6 +52,24 @@ vi.mock("../../../api/connectorsApi", async () => {
     patchConnectorScopes: connectorsApiMocks.patchConnectorScopes,
     setConnectorAccessMode: connectorsApiMocks.setConnectorAccessMode,
     streamConnectorEvents: connectorsApiMocks.streamConnectorEvents,
+  };
+});
+
+// Hoisted mocks for mcpApi — the custom-server add path (Decision D1)
+// creates the MCP server + starts MCP OAuth; keep the route test off the
+// real HTTP surface.
+const mcpApiMocks = vi.hoisted(() => ({
+  createMcpServer: vi.fn(),
+  startMcpAuth: vi.fn(),
+}));
+vi.mock("../../../api/mcpApi", async () => {
+  const actual = await vi.importActual<typeof import("../../../api/mcpApi")>(
+    "../../../api/mcpApi",
+  );
+  return {
+    ...actual,
+    createMcpServer: mcpApiMocks.createMcpServer,
+    startMcpAuth: mcpApiMocks.startMcpAuth,
   };
 });
 
@@ -492,6 +511,188 @@ describe("ConnectorsRoute connect flow", () => {
         { access_mode: "read" },
       );
     });
+  });
+});
+
+// ===========================================================================
+// CUSTOM SERVER ADD — ConnectModal "Add a custom server" → create MCP server
+// → MCP OAuth popup → SSE write-through closes the flow (Decision D1)
+// ===========================================================================
+
+function mcpServer(overrides: Partial<McpServer> = {}): McpServer {
+  return {
+    server_id: "srv_custom",
+    name: "custom",
+    display_name: "Custom server",
+    url: "https://mcp.example.com/mcp",
+    transport: "http",
+    auth_mode: "oauth2",
+    auth_state: "auth_pending",
+    health: "healthy",
+    enabled: true,
+    oauth_client_configured: false,
+    created_at: "2026-05-01T00:00:00Z",
+    updated_at: "2026-05-01T00:00:00Z",
+    ...overrides,
+  };
+}
+
+describe("ConnectorsRoute custom server add", () => {
+  const originalOpen = window.open;
+
+  beforeEach(() => {
+    connectorsApiMocks.fetchConnectors.mockReset();
+    connectorsApiMocks.streamConnectorEvents.mockReset();
+    mcpApiMocks.createMcpServer.mockReset();
+    mcpApiMocks.startMcpAuth.mockReset();
+    window.open = vi.fn() as unknown as typeof window.open;
+  });
+  afterEach(() => {
+    window.open = originalOpen;
+    vi.clearAllMocks();
+  });
+
+  /** Open the modal, switch to the custom form, and submit `url`. */
+  async function submitCustomUrl(
+    url: string,
+    { clientId }: { clientId?: string } = {},
+  ): Promise<void> {
+    fireEvent.click(
+      screen.getAllByRole("button", { name: "Connect a tool" })[0],
+    );
+    fireEvent.click(screen.getByTestId("connect-catalog-custom"));
+    fireEvent.change(screen.getByPlaceholderText("https://mcp.example.com"), {
+      target: { value: url },
+    });
+    if (clientId !== undefined) {
+      fireEvent.change(screen.getByPlaceholderText("client_id"), {
+        target: { value: clientId },
+      });
+    }
+    fireEvent.click(screen.getByTestId("connect-custom-add"));
+  }
+
+  it("creates the server with url + oauth client, starts auth, and closes on the SSE write-through", async () => {
+    connectorsApiMocks.fetchConnectors.mockResolvedValueOnce(listResponse([]));
+    mcpApiMocks.createMcpServer.mockResolvedValueOnce(
+      mcpServer({ auth_mode: "oauth2", auth_state: "auth_pending" }),
+    );
+    mcpApiMocks.startMcpAuth.mockResolvedValueOnce({
+      server_id: "srv_custom",
+      auth_url: "https://example.com/mcp-auth",
+      expires_at: "2026-05-01T01:00:00Z",
+    });
+    const sse = captureStreamCallbacks();
+
+    render(<ConnectorsRoute identity={IDENTITY} />);
+    await waitFor(() => {
+      expect(connectorsApiMocks.streamConnectorEvents).toHaveBeenCalledTimes(1);
+    });
+
+    await submitCustomUrl("https://mcp.example.com/mcp", {
+      clientId: "cid_123",
+    });
+
+    await waitFor(() => {
+      expect(mcpApiMocks.createMcpServer).toHaveBeenCalledWith(
+        "https://mcp.example.com/mcp",
+        IDENTITY,
+        { client_id: "cid_123", token_endpoint_auth_method: "none" },
+      );
+    });
+
+    // Auth needed → the MCP OAuth round-trip starts in a popup while the
+    // modal shows the spinner.
+    await waitFor(() => {
+      expect(mcpApiMocks.startMcpAuth).toHaveBeenCalledWith(
+        "srv_custom",
+        IDENTITY,
+      );
+    });
+    expect(window.open).toHaveBeenCalledWith(
+      "https://example.com/mcp-auth",
+      "_blank",
+      "noopener,noreferrer",
+    );
+    expect(screen.getByTestId("connect-oauth")).toBeInTheDocument();
+
+    // The backend write-through emits connector.created; the custom flow has
+    // no permission step, so the modal closes.
+    act(() => {
+      sse.lastCall().onEvent(
+        envelope(
+          "connector.created",
+          connector({
+            id: "conn_custom" as ConnectorId,
+            slug: "custom" as ConnectorSlug,
+            display_name: "Custom server",
+            status: "connected",
+          }),
+          1,
+        ),
+      );
+    });
+    await waitFor(() => {
+      expect(screen.queryByTestId("connect-oauth")).not.toBeInTheDocument();
+    });
+    expect(screen.queryByTestId("connect-permission")).not.toBeInTheDocument();
+    expect(screen.queryByTestId("connect-custom-form")).not.toBeInTheDocument();
+  });
+
+  it("shows the modal alert when the create fails", async () => {
+    connectorsApiMocks.fetchConnectors.mockResolvedValueOnce(listResponse([]));
+    connectorsApiMocks.streamConnectorEvents.mockReturnValue({
+      close: vi.fn(),
+    });
+    mcpApiMocks.createMcpServer.mockRejectedValueOnce(
+      new Error("create_failed"),
+    );
+
+    render(<ConnectorsRoute identity={IDENTITY} />);
+    await waitFor(() => {
+      expect(screen.getByTestId("connectors-route")).toHaveAttribute(
+        "data-state",
+        "ready",
+      );
+    });
+
+    await submitCustomUrl("https://mcp.example.com/mcp");
+
+    await waitFor(() => {
+      expect(screen.getByTestId("connect-oauth-error")).toBeInTheDocument();
+    });
+    expect(screen.getByTestId("connect-oauth-error").textContent).toContain(
+      "create_failed",
+    );
+    expect(mcpApiMocks.startMcpAuth).not.toHaveBeenCalled();
+  });
+
+  it("clears pending immediately (modal closes) when the server needs no auth", async () => {
+    connectorsApiMocks.fetchConnectors.mockResolvedValueOnce(listResponse([]));
+    connectorsApiMocks.streamConnectorEvents.mockReturnValue({
+      close: vi.fn(),
+    });
+    mcpApiMocks.createMcpServer.mockResolvedValueOnce(
+      mcpServer({ auth_mode: "none", auth_state: "auth_unsupported" }),
+    );
+
+    render(<ConnectorsRoute identity={IDENTITY} />);
+    await waitFor(() => {
+      expect(screen.getByTestId("connectors-route")).toHaveAttribute(
+        "data-state",
+        "ready",
+      );
+    });
+
+    await submitCustomUrl("https://mcp.example.com/mcp");
+
+    // Install alone completes: no auth round-trip, spinner resolves, closed.
+    await waitFor(() => {
+      expect(screen.queryByTestId("connect-oauth")).not.toBeInTheDocument();
+    });
+    expect(mcpApiMocks.startMcpAuth).not.toHaveBeenCalled();
+    expect(window.open).not.toHaveBeenCalled();
+    expect(screen.queryByTestId("connect-custom-form")).not.toBeInTheDocument();
   });
 });
 
