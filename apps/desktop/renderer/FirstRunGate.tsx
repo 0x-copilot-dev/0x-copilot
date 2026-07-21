@@ -1,12 +1,19 @@
 import {
   useCallback,
   useEffect,
+  useMemo,
   useState,
   type ReactElement,
   type ReactNode,
 } from "react";
 
-import { BrandMark } from "@0x-copilot/chat-surface";
+import {
+  BrandMark,
+  FirstRunSurface,
+  createModelsPort,
+  createProviderKeysPort,
+} from "@0x-copilot/chat-surface";
+import { IpcTransport } from "@0x-copilot/chat-transport";
 
 import { FIRST_RUN_CHANNELS } from "../main/services/first-run-channels";
 // The preload bridge type exposes `invoke(channel: string, …)`, so it can reach
@@ -93,6 +100,75 @@ function FirstRunLoading(): ReactElement {
     <div className="fr-boot" data-testid="first-run-loading">
       <span className="fr-boot__spin" aria-hidden="true" />
     </div>
+  );
+}
+
+// Desktop transport capabilities (mirrors bootstrap.tsx's DESKTOP_CAPABILITIES;
+// kept local so this binder builds its own transport without a bootstrap import
+// cycle). The bearer is attached in main on every outbound request, so the
+// renderer holds an opaque "session for workspace X" handle only.
+const FIRST_RUN_CAPABILITIES = {
+  substrate: "desktop-webview" as const,
+  nativeSecretStorage: true,
+  fileSystemAccess: false,
+  clipboardWrite: false,
+  openExternal: false,
+};
+
+export interface FirstRunSurfaceMountProps {
+  /**
+   * Namespacing key for the per-install flag / transport (workspaceId). Used to
+   * re-key the IpcTransport so a workspace switch rebuilds it.
+   */
+  readonly workspaceId: string;
+  /**
+   * Called when the user finishes setup (BYOK connect handoff) or skips. The
+   * gate persists the flag and swaps to the workspace shell. Both skip and
+   * complete resolve to the same host action in P1 (flag set + reveal), matching
+   * journeys J2/J4; P3 will do run-create before completing.
+   */
+  readonly onComplete: () => void;
+}
+
+/**
+ * Desktop binder for the shared `FirstRunSurface` (P1). Builds an IpcTransport
+ * from `window.bridge`, derives the reused `ProviderKeysPort` / `ModelsPort`
+ * seams from it, and mounts the surface. BYOK save flows through the facade
+ * `/v1/settings/provider-keys` via the transport; skip/complete both call the
+ * gate's `onComplete` (persist the first-run flag + reveal the shell).
+ *
+ * The local-model card (P2) and the real composer/acknowledgment (P3) are left
+ * as the surface's internal placeholders here — this binder wires only the P1
+ * seams (providerKeys + models + skip/complete).
+ */
+export function FirstRunSurfaceMount({
+  workspaceId,
+  onComplete,
+}: FirstRunSurfaceMountProps): ReactElement {
+  const transport = useMemo(
+    () =>
+      new IpcTransport({
+        bridge: window.bridge,
+        bootstrapSession: { bearer: null },
+        bootstrapCapabilities: FIRST_RUN_CAPABILITIES,
+      }),
+    // Re-key on workspace change (see ChatShellForSession); the bearer is
+    // attached in main, so the handle is otherwise stable.
+    [workspaceId],
+  );
+  const providerKeys = useMemo(
+    () => createProviderKeysPort(transport),
+    [transport],
+  );
+  const models = useMemo(() => createModelsPort(transport), [transport]);
+
+  return (
+    <FirstRunSurface
+      providerKeys={providerKeys}
+      models={models}
+      onSkip={onComplete}
+      onComplete={onComplete}
+    />
   );
 }
 

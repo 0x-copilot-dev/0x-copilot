@@ -1394,3 +1394,33 @@ export {
   type ShellCommandAction,
 } from "./shell/shellCommands";
 // === end Frontend parity v3 (PRD-D) ===
+
+// === First-Run onboarding (P1) — gate surface + BYOK key form ===
+// Presentational SSOT for the FTUE gate (3-state machine: choice → dl → ready,
+// + sent → acknowledgment). I/O flows through the injected ProviderKeysPort /
+// ModelsPort; skip/complete are host callbacks (the host owns FirstRunStore
+// persistence). The dl/ready composer body (P3), the local-model card (P2), and
+// the acknowledgment (P3) are injected slots. Hosts import the stylesheet
+// directly: `@0x-copilot/chat-surface/src/onboarding/onboarding.css`.
+// Design: docs/plan/first-run-onboarding/design-source/SPEC.md.
+export {
+  FirstRunSurface,
+  Gate,
+  KeyForm,
+  FIRST_RUN_COPY,
+  FIRST_RUN_KEY_PROVIDERS,
+  checkFirstRunKeyFormat,
+  type FirstRunSurfaceProps,
+  type GateProps,
+  type KeyFormProps,
+  type KeyFormConnected,
+  type FirstRunStage,
+  type FirstRunEngine,
+  type FirstRunStore,
+  type FirstRunKeyProvider,
+  type FirstRunCompleteReason,
+  type FirstRunComposerCtx,
+  type FirstRunAckCtx,
+  type FirstRunLocalCardCtx,
+} from "./onboarding";
+// === end First-Run onboarding (P1) ===

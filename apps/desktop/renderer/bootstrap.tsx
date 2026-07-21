@@ -7,6 +7,10 @@ import "@0x-copilot/chat-surface/src/composer/composer.css";
 // fix as composer.css: without it the [Chat · Sources · Agents · Approvals]
 // tabs render as native gray buttons with no active state.
 import "@0x-copilot/chat-surface/src/workspace/workspace.css";
+// First-run (FTUE) gate surface — the shared `fr-*` classes (top bar, gate
+// cards, inline key form, footer). Same stranded-CSS fix as composer.css:
+// without it the onboarding gate renders unstyled.
+import "@0x-copilot/chat-surface/src/onboarding/onboarding.css";
 import "./desktop.css";
 
 import { StrictMode, useMemo, useState, type ReactElement } from "react";
@@ -35,7 +39,7 @@ import { registerAll as registerSurfaceRenderers } from "@0x-copilot/surface-ren
 
 import { BootGate } from "./BootProgress";
 import { DestinationOutlet } from "./DestinationOutlet";
-import { FirstRunGate, FirstRunPlaceholder } from "./FirstRunGate";
+import { FirstRunGate, FirstRunSurfaceMount } from "./FirstRunGate";
 import { PaletteHost } from "./PaletteHost";
 import { SettingsMount } from "./SettingsMount";
 import { DEFAULT_WORKSPACE_ID, SignInGate } from "./SignInGate";
@@ -96,13 +100,17 @@ export function App(): ReactElement {
             {(session, signOut) => (
               // First-run gate: a returning user (flag set) drops straight
               // through to the shell; a first-time user sees onboarding until
-              // they finish or skip. P0 renders a placeholder body; P1 swaps in
-              // the shared 3-state FirstRunSurface via `renderFirstRun`.
+              // they finish or skip. P1 mounts the shared 3-state
+              // FirstRunSurface (gate → composer → ack) via `renderFirstRun`;
+              // the binder wires the BYOK / models ports to the facade.
               <FirstRunGate
                 bridge={window.bridge}
                 workspaceId={session.workspaceId}
                 renderFirstRun={(onComplete) => (
-                  <FirstRunPlaceholder onComplete={onComplete} />
+                  <FirstRunSurfaceMount
+                    workspaceId={session.workspaceId}
+                    onComplete={onComplete}
+                  />
                 )}
               >
                 <ChatShellForSession
