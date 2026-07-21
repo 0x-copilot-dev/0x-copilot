@@ -205,4 +205,129 @@ describe("AppRail", () => {
       ).not.toBeInTheDocument();
     });
   });
+
+  describe("PRD-C parity — icons, tokens, badge, identity", () => {
+    const solo = destinationsForProfile("single_user_desktop");
+
+    function button(slug: ShellDestinationSlug): HTMLElement {
+      return destinationButtons().find(
+        (b) => b.getAttribute("data-destination") === slug,
+      )!;
+    }
+
+    it("renders the design glyphs for the drifted solo destinations", () => {
+      render(
+        <AppRail
+          activeDestination="run"
+          destinations={solo}
+          onNavigate={() => {}}
+        />,
+      );
+      // projects → rounded folder (not the old square folder path).
+      expect(button("projects").querySelector("path")).toHaveAttribute(
+        "d",
+        "M3 7a2 2 0 0 1 2-2h4l2 2h6a2 2 0 0 1 2 2v8a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z",
+      );
+      // connectors ("Tools") → power plug (not the node-graph).
+      expect(button("connectors").querySelector("path")).toHaveAttribute(
+        "d",
+        "M9 3v6M15 3v6M6 9h12v3a6 6 0 0 1-12 0z M12 18v3",
+      );
+      // tools ("Skills") → sparkle (not the wrench).
+      expect(button("tools").querySelector("path")).toHaveAttribute(
+        "d",
+        "M12 3l2.1 5.3L20 10l-5.9 1.7L12 17l-2.1-5.3L4 10l5.9-1.7z",
+      );
+      // icons render at the design stroke 1.7 / size 17.
+      const svg = button("projects").querySelector("svg")!;
+      expect(svg).toHaveAttribute("stroke-width", "1.7");
+      expect(svg).toHaveAttribute("width", "17");
+    });
+
+    it("puts the rail on the elevated bg and active items on surface-muted", () => {
+      render(
+        <AppRail
+          activeDestination="projects"
+          destinations={solo}
+          onNavigate={() => {}}
+        />,
+      );
+      const nav = screen.getByRole("navigation", {
+        name: /copilot destinations/i,
+      });
+      expect(nav.style.backgroundColor).toBe("var(--color-bg-elevated)");
+      expect(button("projects").style.background).toBe(
+        "var(--color-surface-muted)",
+      );
+      // inactive item is transparent.
+      expect(button("chats").style.background).toBe("transparent");
+    });
+
+    it("shows a Run badge only when the count > 0 and Run is not active", () => {
+      const { rerender } = render(
+        <AppRail
+          activeDestination="chats"
+          destinations={solo}
+          onNavigate={() => {}}
+          badges={{ run: 2 }}
+        />,
+      );
+      expect(
+        button("run").querySelector("[data-rail-badge]"),
+      ).toHaveTextContent("2");
+      // active Run hides the badge (design: shown only when off-workspace).
+      rerender(
+        <AppRail
+          activeDestination="run"
+          destinations={solo}
+          onNavigate={() => {}}
+          badges={{ run: 2 }}
+        />,
+      );
+      expect(
+        button("run").querySelector("[data-rail-badge]"),
+      ).not.toBeInTheDocument();
+      // zero → no badge.
+      rerender(
+        <AppRail
+          activeDestination="chats"
+          destinations={solo}
+          onNavigate={() => {}}
+          badges={{ run: 0 }}
+        />,
+      );
+      expect(
+        button("run").querySelector("[data-rail-badge]"),
+      ).not.toBeInTheDocument();
+    });
+
+    it("renders the user's initial in the avatar when identity is supplied", () => {
+      render(
+        <AppRail
+          activeDestination="run"
+          destinations={solo}
+          onNavigate={() => {}}
+          onOpenSettings={() => {}}
+          identity={{ initial: "sasha" }}
+        />,
+      );
+      const avatar = screen.getByRole("button", { name: "Account" });
+      expect(avatar).toHaveTextContent("S");
+      expect(avatar.style.background).toBe("var(--color-surface-elevated)");
+    });
+
+    it("falls back to a neutral user glyph without identity", () => {
+      render(
+        <AppRail
+          activeDestination="run"
+          destinations={solo}
+          onNavigate={() => {}}
+          onOpenSettings={() => {}}
+        />,
+      );
+      const avatar = screen.getByRole("button", { name: "Account" });
+      expect(avatar.querySelector("svg")).toBeInTheDocument();
+      expect(avatar).toHaveTextContent("");
+    });
+  });
 });
