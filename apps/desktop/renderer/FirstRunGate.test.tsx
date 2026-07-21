@@ -144,4 +144,16 @@ describe("FirstRunSurfaceMount", () => {
     });
     expect(onComplete).toHaveBeenCalledTimes(1);
   });
+
+  it("wires the P2 local-model card into the gate (renderLocalCard slot)", async () => {
+    // Bridge with no local-models handler → the status probe degrades; the card
+    // still renders in the choice-stage gate (never a blank slot).
+    stubWindowBridge(makeBridge());
+    render(
+      <FirstRunSurfaceMount workspaceId="org_acme" onComplete={vi.fn()} />,
+    );
+    await waitFor(() =>
+      expect(screen.queryByTestId("first-run-local-card")).not.toBeNull(),
+    );
+  });
 });

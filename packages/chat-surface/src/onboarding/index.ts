@@ -29,3 +29,22 @@ export type {
   FirstRunKeyProvider,
   FirstRunCompleteReason,
 } from "./firstRun";
+
+// === P2 — local-model card + curated preset (SSE download) ===
+export { FirstRunLocalCard } from "./FirstRunLocalCard";
+export type { FirstRunLocalCardProps } from "./FirstRunLocalCard";
+export {
+  useFirstRunLocalModel,
+  type FirstRunLocalStatus,
+  type UseFirstRunLocalModelResult,
+  type UseFirstRunLocalModelArgs,
+} from "./useFirstRunLocalModel";
+export {
+  createFirstRunLocalModelsPort,
+  type FirstRunLocalModelsPort,
+} from "./localModelsPort";
+export {
+  firstRunModelPillLabel,
+  pullPercent,
+  resolveInstalledTag,
+} from "./localModelEngine";
