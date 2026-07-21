@@ -1,0 +1,85 @@
+{
+  "cluster": "backend-identity",
+  "verdicts": [
+    {
+      "ref": "F1",
+      "title": "RBAC is default-permissive and nothing enables enforcement",
+      "type": "risk",
+      "severity": "high",
+      "verdict": "confirmed",
+      "note": "rbac.py:42 defaults RBAC_MODE to 'audit' (denies pass through unless is_enforce, rbac.py:155-160,175-180); grep found zero RBAC_MODE in deploy/, docker-compose, Makefile, or deployment_profile.py, and prod compose sets only BACKEND_ENVIRONMENT=production."
+    },
+    {
+      "ref": "F2",
+      "title": "PostgresSiweStore has zero production consumers",
+      "type": "dead-code",
+      "severity": "high",
+      "verdict": "confirmed",
+      "note": "desktop_app.py (the only Postgres root, targeted by docker-compose.prod.yml:105 via desktop_app:app) has no siwe reference; its kwargs dict (desktop_app.py:189-235) wires 20+ Postgres stores but not siwe_store, and siwe is absent from the 'accepted gap' list (154-173) though PostgresSiweStore exists (siwe_store.py:145), so app.py:723 falls back to InMemorySiweStore."
+    },
+    {
+      "ref": "F3",
+      "title": "SIWE EIP-4361 template hand-maintained in three places, docs say two",
+      "type": "ssot-violation",
+      "severity": "medium",
+      "verdict": "confirmed",
+      "note": "Byte-identical template copies verified in siwe.py:290-302, apps/frontend/src/features/auth/siweMessage.ts:30-41, and apps/desktop/main/auth/local-login.ts:78-91, while root CLAUDE.md documents only the siweMessage.ts + siwe.py pair."
+    },
+    {
+      "ref": "F4",
+      "title": "Compact HMAC bearer codec exists three times",
+      "type": "duplication",
+      "severity": "medium",
+      "verdict": "confirmed",
+      "note": "_BearerCodec sign+verify in sessions.py:88-141, sign-only in dev_idp/_sign.py:26-38, verify+sign in backend_facade/auth.py:382-413,502-511; dev_idp/routes.py:142-149 hand-types literal claim keys (incl. 'iat', absent from copilot_service_contracts.auth_claims) instead of the CLAIM_* constants."
+    },
+    {
+      "ref": "F5",
+      "title": "Two parallel dev-mint mechanisms with different security properties",
+      "type": "inconsistency",
+      "severity": "medium",
+      "verdict": "confirmed",
+      "note": "dev_idp/routes.py:35,141 mints a 365-day (_DEV_BEARER_TTL) session-less bearer with no sid claim, while routes/sessions.py:131-160 -> sessions.py:257-280 dev_mint issues a session-backed 24h (ttl_seconds=86400) bearer via create() gated by dev_mint_allowed."
+    },
+    {
+      "ref": "F6",
+      "title": "Backend image default CMD wires amnesiac in-memory identity",
+      "type": "risk",
+      "severity": "medium",
+      "verdict": "confirmed",
+      "note": "Dockerfile:31 CMD is backend_app.app:app whose defaults are InMemoryIdentityStore/InMemorySessionStore (app.py:493,402); the only production fail-closed guards are TokenVaultFactory and the email dispatcher (app.py:356) — no guard refuses in-memory identity/session stores, and only docker-compose.prod.yml:105 overrides CMD to desktop_app:app."
+    },
+    {
+      "ref": "F7",
+      "title": "settings/schema.sql duplicates migration 0033 DDL and is unread",
+      "type": "dead-code",
+      "severity": "low",
+      "verdict": "accepted",
+      "note": "Low severity accepted as-is without deep verification per instructions."
+    },
+    {
+      "ref": "F8",
+      "title": "RBAC dependency layer duplicated between backend and ai-backend",
+      "type": "duplication",
+      "severity": "low",
+      "verdict": "accepted",
+      "note": "Low severity accepted as-is without deep verification per instructions."
+    },
+    {
+      "ref": "F9",
+      "title": "LocalTokenVault.decrypt catches broad Exception, masks wrong-backend errors",
+      "type": "risk",
+      "severity": "low",
+      "verdict": "accepted",
+      "note": "Low severity accepted as-is without deep verification per instructions."
+    },
+    {
+      "ref": "F10",
+      "title": "Service-token compare uses != instead of compare_digest",
+      "type": "inconsistency",
+      "severity": "low",
+      "verdict": "accepted",
+      "note": "Low severity accepted as-is without deep verification per instructions."
+    }
+  ]
+}

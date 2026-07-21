@@ -1,0 +1,85 @@
+{
+  "cluster": "flow-desktop-boot",
+  "verdicts": [
+    {
+      "ref": "F1",
+      "title": "Packaged DMG/NSIS builds never ship staged web assets; wallet sign-in cannot work there",
+      "type": "risk",
+      "severity": "high",
+      "verdict": "confirmed",
+      "note": "stage.mjs writes web to <dest>/web (stage.mjs:726,771; default dest apps/desktop/resources at :94) and resolveRuntimePaths expects <base>/web (runtime-paths.ts:82), but electron-builder.yml:36-40 maps only resources/runtime, so packaged <resourcesPath>/web is never populated → wallet_page_routes.py:52-58 'not served' → /wallet.html 404 (wallet-login.ts:39)."
+    },
+    {
+      "ref": "F2",
+      "title": "Supervised ai-backend env omits BACKEND_BASE_URL, degrading desktop runs to Null resolvers",
+      "type": "risk",
+      "severity": "high",
+      "verdict": "confirmed",
+      "note": "service-env.ts ai-backend branch sets only MCP/SKILLS registry URLs (228-229), no BACKEND_BASE_URL; ProjectResolverFactory.default returns NullProjectResolver when BACKEND_BASE_URL unset (project_resolver.py:295-300); fix bcc65dbb (#114) is NOT an ancestor of the audit-base HEAD, so the bug is present at this base as claimed."
+    },
+    {
+      "ref": "F3",
+      "title": "Desktop boot implemented twice (run-local.mjs Node vs supervisor TS) and copies drifted",
+      "type": "duplication",
+      "severity": "high",
+      "verdict": "confirmed",
+      "note": "Material drift confirmed: initdb -U postgres -A trust (run-local.mjs:277-286) vs -U atlas --auth=scram-sha-256 (postgres.ts:169-176); DB names backend/ai_backend (run-local.mjs:313-314) vs atlas_backend/atlas_ai (service-env.ts:44-45); RUNTIME_ENABLE_LOCAL_MODELS only in run-local (420), SIWE_ORIGIN/RUNTIME_EVENT_BUS_BACKEND only in supervisor (service-env.ts:191,227); both 'exactly the way...' headline claims are false (run-local.mjs:3-4, README.md:4-6)."
+    },
+    {
+      "ref": "F4",
+      "title": "RUNTIME_ENABLE_LOCAL_MODELS documented in the boot contract but the real supervisor never sets it",
+      "type": "inconsistency",
+      "severity": "medium",
+      "verdict": "confirmed",
+      "note": "README.md:70 documents the flag as surfacing Settings→Local models and run-local.mjs:420 sets it, but grep of service-env.ts shows no RUNTIME_ENABLE_LOCAL_MODELS in the shipped ai-backend env."
+    },
+    {
+      "ref": "F5",
+      "title": "Documented dev supervised recipe boots into a posture whose default sign-in cannot succeed",
+      "type": "risk",
+      "severity": "medium",
+      "verdict": "confirmed",
+      "note": "COPILOT_RUNTIME_DIR recipe (README.md:252-257) supervises (boot-mode.ts:12-16) with children at *_ENVIRONMENT=production (service-env.ts:174,195,236) so dev-mint route is absent, yet without COPILOT_PRODUCTION=1 resolveAuthPosture yields dev-mint mode (posture.ts:24-28,44-50) and local sign-in routes to service.signIn/dev-mint (index.ts:549-551) → always fails; wallet/Google bypass OidcClient and stay usable, CLI sets COPILOT_PRODUCTION=1 and is unaffected."
+    },
+    {
+      "ref": "F6",
+      "title": "App/runtime identity and platform facts hand-synced across at least five files",
+      "type": "ssot-violation",
+      "severity": "medium",
+      "verdict": "confirmed",
+      "note": "com.0x-copilot.app in branding.ts:26 + electron-builder.yml:14 + mac-shell.mjs:44; '0xCopilot' in branding.ts:21 + electron-builder.yml:15 + paths.mjs:26; SUPPORTED_KEYS in paths.mjs:52-56 duplicates manifest keys; assemble-payload.mjs:26-33 SERVICES mirrors stage.mjs:56-72 (explicit 'Mirror' comment); APP_VERSION '0.1.0' SignInGate.tsx:26 mirrors package.json:3 — each carries a keep-in-sync comment."
+    },
+    {
+      "ref": "F7",
+      "title": "End users run a different Electron major than dev/CI/packaged ever exercises",
+      "type": "inconsistency",
+      "severity": "medium",
+      "verdict": "confirmed",
+      "note": "CLI pins electron 42.1.0 (tools/cli/package.json:26) and in payload mode electronBases=[pkgRoot,payload] (paths.mjs:102) so resolveElectronBinary (paths.mjs:137-153) resolves the CLI's own 42.x first, while the app is developed/tested/packaged against 43.1.1 (apps/desktop/package.json:46)."
+    },
+    {
+      "ref": "F8",
+      "title": "needsStage exported but has no caller",
+      "type": "dead-code",
+      "severity": "low",
+      "verdict": "accepted",
+      "note": "Low severity accepted as-is per policy (stage.mjs:49-51 dead export)."
+    },
+    {
+      "ref": "F9",
+      "title": "Boot-phase copy duplicated between main and renderer",
+      "type": "ssot-violation",
+      "severity": "low",
+      "verdict": "accepted",
+      "note": "Low severity accepted as-is per policy (supervisor.ts phase messages vs BootProgress.tsx step log)."
+    },
+    {
+      "ref": "F10",
+      "title": "Two different default-workspace fallbacks across the IPC boundary",
+      "type": "inconsistency",
+      "severity": "low",
+      "verdict": "accepted",
+      "note": "Low severity accepted as-is per policy (org_acme in SignInGate.tsx:19 vs wsp_unknown in index.ts:590)."
+    }
+  ]
+}

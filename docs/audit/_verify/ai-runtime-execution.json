@@ -1,0 +1,109 @@
+{
+  "cluster": "ai-runtime-execution",
+  "verdicts": [
+    {
+      "ref": "F1",
+      "title": "Per-tool call cap has 3+ divergent sources and a dead scaling path",
+      "type": "ssot-violation",
+      "severity": "high",
+      "verdict": "confirmed",
+      "note": "deep_agent_builder.py:44 bakes suffix cap=5; settings.py:117 defaults 6; models.py:120 copies onto ModelConfig then depth.py:127-130 scales it, but `.tool_call_budget` is only ever read at depth.py:129 (self-scaling) — no enforcement consumer; real cap is ToolBudgetRecord.max_calls_per_run=6 (in_memory/runtime_api_store.py:172); format_web_subagent_suffix(cap) is called with an arg only in tests."
+    },
+    {
+      "ref": "F2",
+      "title": "Async subagent lifecycle unreachable from production",
+      "type": "dead-code",
+      "severity": "high",
+      "verdict": "confirmed",
+      "note": "AsyncSubagentLifecycle/SubagentRunner/InMemoryAsyncTaskStore (runner.py), SubagentHandoffBuilder/Policy (handoff.py) and SubagentTask/SubagentResult contracts are imported only by delegation/subagents/__init__.py and tests (test_prd_acceptance.py, subagents/*); no src consumer — real delegation is the in-process deepagents task tool in atlas_task_tool.py."
+    },
+    {
+      "ref": "F3",
+      "title": "Domain imports the API layer (subagent_trace + pricing)",
+      "type": "boundary-violation",
+      "severity": "medium",
+      "verdict": "confirmed",
+      "note": "context/memory/subagent_trace.py:30-38 imports runtime_api.schemas + agent_runtime.api.ports and re-defines StreamTextHelper (subagent_trace.py:55) mirroring runtime_worker/stream_messages.py:12 to dodge the cycle; pricing/refresh_loop.py:22 and upsert_planner.py:16 import agent_runtime.api.ports.PersistencePort; test_import_boundaries.py only bans retired LEGACY_MODULE_PATHS, not domain→api direction."
+    },
+    {
+      "ref": "F4",
+      "title": "Supervisor prompt contradicts itself on checkpoint discipline",
+      "type": "inconsistency",
+      "severity": "medium",
+      "verdict": "confirmed",
+      "note": "prompts/runtime.py:20-25 still says 'emit a short progress checkpoint as a plain-text message before calling another tool' — the exact wording deep_agent_builder.py:36-44 documents as causing loop termination — while the layered suffix at deep_agent_builder.py:56-64 mandates 'Do NOT emit a checkpoint without an accompanying tool call'."
+    },
+    {
+      "ref": "F5",
+      "title": "Training opt-out weaker than presented",
+      "type": "risk",
+      "severity": "medium",
+      "verdict": "confirmed",
+      "note": "provider_kwargs.py:67 emits speculative header 'anthropic-disable-training' (comment 48-51 admits it is a canonical-to-be-updated placeholder); gemini entry is {} (line 73); _NO_PROVIDER_FLAG (line 55) is referenced only in its own comment and never wired, so the promised absent-flag warning never fires."
+    },
+    {
+      "ref": "F6",
+      "title": "runtime_config drops trace_metadata for root runs",
+      "type": "risk",
+      "severity": "medium",
+      "verdict": "confirmed",
+      "note": "runtime.py:59-61 nests `metadata.update(MetadataRedactor.redact(context.trace_metadata))` inside `if context.parent_trace_id is not None:`, so root runs drop it; the only test (test_runtime_observability.py:80) exercises make_harness with parent_trace_id set (line 56), pinning the child path only and leaving the root drop unasserted — consistent with the finding's substance."
+    },
+    {
+      "ref": "F7",
+      "title": "Assorted unreachable surface in execution (ConfiguredRuntimeGraph, feature_flags, helpers)",
+      "type": "dead-code",
+      "severity": "medium",
+      "verdict": "confirmed",
+      "note": "ConfiguredRuntimeGraph (graph.py:48) referenced only by __init__ re-export + test (line 185); langgraph.json uses create_graph→UnconfiguredRuntimeGraph; feature_flags round-trips (contracts.py:334, run_coordinator.py:572) but no src branch reads it; contracts.py:742 _normalize_scope and :750 _coerce_iterable have no callers (callers at :375/:395 use _normalize_scope_set)."
+    },
+    {
+      "ref": "F8",
+      "title": "Import-time global mutation + env reads in the domain",
+      "type": "risk",
+      "severity": "low",
+      "verdict": "accepted",
+      "note": "Low severity accepted as-is: monkey-patch at factory.py import + module-global checkpointer singleton reading os.environ (deep_agent_builder.py)."
+    },
+    {
+      "ref": "F9",
+      "title": "BudgetReservationManager docstring promises absent methods",
+      "type": "inconsistency",
+      "severity": "low",
+      "verdict": "accepted",
+      "note": "Low severity accepted as-is: reservations.py class carries only TTL/expires_at while docstring promises reserve/consume/release/reap."
+    },
+    {
+      "ref": "F10",
+      "title": "SubagentArtifactsBackend sync _run_sync deadlock latent",
+      "type": "risk",
+      "severity": "low",
+      "verdict": "accepted",
+      "note": "Low severity accepted as-is: subagent_trace.py sync BackendProtocol paths block on run_coroutine_threadsafe; latent because deepagents uses async paths."
+    },
+    {
+      "ref": "F11",
+      "title": "Duplicate token estimators and redaction stacks",
+      "type": "duplication",
+      "severity": "low",
+      "verdict": "accepted",
+      "note": "Low severity accepted as-is: token_budget.py vs budgets/estimator.py chars/4 estimators; tool_error_sanitizer vs observability redactor."
+    },
+    {
+      "ref": "F12",
+      "title": "ReasoningDepth wire values hand-duplicated three times",
+      "type": "ssot-violation",
+      "severity": "low",
+      "verdict": "accepted",
+      "note": "Low severity accepted as-is: depth.py StrEnum plus two TS unions in packages/api-types (index.ts, agents.ts)."
+    },
+    {
+      "ref": "F13",
+      "title": "PromptInjectionDetector is a 5-phrase substring blocklist",
+      "type": "bespoke-replaceable",
+      "severity": "low",
+      "verdict": "accepted",
+      "note": "Low severity accepted as-is: prompt_injection.py substring blocklist is defense-in-depth-only, trivially bypassed."
+    }
+  ]
+}

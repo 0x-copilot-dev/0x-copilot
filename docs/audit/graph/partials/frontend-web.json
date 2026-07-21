@@ -1,0 +1,341 @@
+{
+  "cluster": {
+    "id": "frontend-web",
+    "title": "Frontend Web App",
+    "kind": "cluster",
+    "paths": ["apps/frontend"],
+    "md": "docs/audit/clusters/10-frontend-web.md",
+    "summary": "Vite + React 19 web client (~102.5k LOC) that hosts the chat-surface SSOT shell: six-destination solo rail, host data binders, a large host-owned ChatScreen run cockpit, and web implementations of the substrate ports. Talks only to backend-facade over /v1 HTTP + SSE through a single WebTransport singleton. Disciplined architecture, but carries ~17.8k LOC of dead folded destinations, a web-only Settings that duplicates chat-surface's, and phantom workspace dependencies."
+  },
+  "nodes": [
+    {
+      "id": "frontend-web/app-shell",
+      "kind": "module",
+      "path": "apps/frontend/src/app",
+      "summary": "App.tsx providers + AuthGate + destination dispatch + MCP OAuth callback; HashRouter (Router-port impl); AppRoute union + folded-slug redirect map; keymap."
+    },
+    {
+      "id": "frontend-web/auth",
+      "kind": "module",
+      "path": "apps/frontend/src/features/auth",
+      "summary": "AuthContext state machine (bearer via SecretStorage, dev-IdP silent re-auth), LoginScreen (Google / SIWE wallet / local persona), MfaPrompt (WebAuthn), SIWE message builder + EIP-6963 discovery, wallet handoff page."
+    },
+    {
+      "id": "frontend-web/wallet-entry",
+      "kind": "route-group",
+      "path": "apps/frontend/wallet.html",
+      "summary": "Second Vite entry: standalone SIWE sign-in page that relays a minted bearer to the desktop app's loopback listener (walletEntry.tsx -> WalletHandoffPage)."
+    },
+    {
+      "id": "frontend-web/api-client",
+      "kind": "module",
+      "path": "apps/frontend/src/api",
+      "summary": "Typed /v1 client modules (agentApi, connectorsApi, projectsApi, meApi, authApi, mcpApi, localModelsApi, ...) + useResource hooks; 176 unique facade endpoints; includes 8 dead modules for folded destinations."
+    },
+    {
+      "id": "frontend-web/transport",
+      "kind": "module",
+      "path": "apps/frontend/src/api/transport.ts",
+      "summary": "Module-singleton WebTransport (from @0x-copilot/chat-transport) owning bearer attachment, 401 notification, and SSE; http.ts helpers route everything through it."
+    },
+    {
+      "id": "frontend-web/chat-cockpit",
+      "kind": "module",
+      "path": "apps/frontend/src/features/chat",
+      "summary": "ChatScreen (2.7k LOC) run cockpit + 157 components (thread, tools, workspace pane, details, composer adapters over chat-surface shells) + bespoke Atlas runtime (attachments, dictation, thread primitives)."
+    },
+    {
+      "id": "frontend-web/chat-model",
+      "kind": "module",
+      "path": "apps/frontend/src/features/chat/chatModel",
+      "summary": "Pure, replay-safe event reducers: chat items, citations, citation links, sources, subagents, drafts, approvals, MCP auth, run UI state (chatRunState)."
+    },
+    {
+      "id": "frontend-web/destination-binders",
+      "kind": "module",
+      "path": "apps/frontend/src/features",
+      "summary": "Live host binders: ChatsArchiveRoute, ActivityRoute (+activityApi composition), SkillsRoute, ProjectsRoute, TemplateGalleryRoute, TeamGateway, PaletteHost — fetch/compose product endpoints and mount chat-surface destination components."
+    },
+    {
+      "id": "frontend-web/connectors",
+      "kind": "module",
+      "path": "apps/frontend/src/features/connectors",
+      "summary": "Connectors destination: gateway (list/detail/webhooks), MCP install wizard overlay, per-chat connector scope hooks, webhooks route."
+    },
+    {
+      "id": "frontend-web/settings",
+      "kind": "module",
+      "path": "apps/frontend/src/features/settings",
+      "summary": "Web-only SettingsScreen + 17 section panels (profile, appearance, provider keys, local models, MFA, privacy, notifications, workspace/members/billing/audit) + P12 SettingsGateway. Duplicates chat-surface settings pages used by desktop."
+    },
+    {
+      "id": "frontend-web/profile-prefs",
+      "kind": "module",
+      "path": "apps/frontend/src/features/me",
+      "summary": "UserProfile / UserPreferences contexts + AppearanceContext (single writer for theme/density/motion attrs + debounced server save); share screens; workspace member helpers."
+    },
+    {
+      "id": "frontend-web/admin-adapter-review",
+      "kind": "module",
+      "path": "apps/frontend/src/admin/adapter-review",
+      "summary": "Admin-role-gated tier-2 adapter review queue/detail/preview with synthetic demo states."
+    },
+    {
+      "id": "frontend-web/ports",
+      "kind": "module",
+      "path": "apps/frontend/src/ports",
+      "summary": "Web implementations of chat-surface substrate ports: Badge, Notification (navigates via Router), FilePicker, Clipboard, PortProvider."
+    },
+    {
+      "id": "frontend-web/observability",
+      "kind": "module",
+      "path": "apps/frontend/src/observability",
+      "summary": "Light OTel API surface + idle-loaded SDK chunk exporting OTLP to the same-origin facade passthrough; attribute-allowlist span processor; global error handlers + ErrorBoundary."
+    },
+    {
+      "id": "frontend-web/dead-folded-features",
+      "kind": "module",
+      "path": "apps/frontend/src/features/home",
+      "summary": "DEAD (~17.8k LOC incl. api modules + tests): home, library, inbox, todos, routines, agents, memory, tools features folded out by PR-4.11; parked for the Phase-6C sweep; zero non-test importers."
+    },
+    {
+      "id": "frontend-web/build",
+      "kind": "tool",
+      "path": "apps/frontend/Dockerfile",
+      "summary": "Vite two-entry build (main + wallet) with route-level code splitting; Docker multi-stage -> nginx:8080 SPA; eslint substrate-boundary config; vitest+jsdom."
+    }
+  ],
+  "edges": [
+    {
+      "from": "frontend-web/app-shell",
+      "to": "chat-surface-core",
+      "kind": "import",
+      "label": "ChatShell + KV/Secret/Notification/DeploymentProfile providers + ShellDestinationSlug/Router types",
+      "evidence": "apps/frontend/src/app/App.tsx:122-138"
+    },
+    {
+      "from": "frontend-web/app-shell",
+      "to": "frontend-web/chat-cockpit",
+      "kind": "import",
+      "label": "lazy ChatScreen chunk mounted on the run destination",
+      "evidence": "apps/frontend/src/app/App.tsx:82-86,846-857"
+    },
+    {
+      "from": "frontend-web/app-shell",
+      "to": "frontend-web/destination-binders",
+      "kind": "import",
+      "label": "eager binder imports on the destination dispatch hot path",
+      "evidence": "apps/frontend/src/app/App.tsx:29-47"
+    },
+    {
+      "from": "frontend-web/app-shell",
+      "to": "frontend-web/settings",
+      "kind": "import",
+      "label": "lazy SettingsScreen + SettingsGateway routes",
+      "evidence": "apps/frontend/src/app/App.tsx:97-101,744-772"
+    },
+    {
+      "from": "frontend-web/app-shell",
+      "to": "frontend-web/ports",
+      "kind": "import",
+      "label": "PortProvider with Web{Badge,Notification,FilePicker,Clipboard}Port",
+      "evidence": "apps/frontend/src/app/App.tsx:144-150,481-499"
+    },
+    {
+      "from": "frontend-web/app-shell",
+      "to": "frontend-web/admin-adapter-review",
+      "kind": "import",
+      "label": "lazy AdapterReviewScreen behind admin role gate",
+      "evidence": "apps/frontend/src/app/App.tsx:92-96,697-743"
+    },
+    {
+      "from": "frontend-web/auth",
+      "to": "frontend-web/api-client",
+      "kind": "import",
+      "label": "authApi / devIdpApi / siweApi / mfaApi calls",
+      "evidence": "apps/frontend/src/features/auth/AuthContext.tsx:32-40"
+    },
+    {
+      "from": "frontend-web/auth",
+      "to": "chat-surface-core",
+      "kind": "import",
+      "label": "useKeyValueStore + useSecretStorage ports for persona slug + bearer",
+      "evidence": "apps/frontend/src/features/auth/AuthContext.tsx:49-54"
+    },
+    {
+      "from": "frontend-web/auth",
+      "to": "external:ethereum",
+      "kind": "ipc",
+      "label": "EIP-6963 provider discovery + EIP-1193 personal_sign for SIWE",
+      "evidence": "apps/frontend/src/features/auth/eip6963.ts:41-42"
+    },
+    {
+      "from": "frontend-web/auth",
+      "to": "external:google-oauth",
+      "kind": "http",
+      "label": "Continue-with-Google redirect via facade /v1/auth/oidc/google/start",
+      "evidence": "apps/frontend/src/features/auth/LoginScreen.tsx:8"
+    },
+    {
+      "from": "frontend-web/wallet-entry",
+      "to": "frontend-web/auth",
+      "kind": "import",
+      "label": "walletEntry.tsx renders WalletHandoffPage (SIWE flow only)",
+      "evidence": "apps/frontend/src/walletEntry.tsx:18"
+    },
+    {
+      "from": "desktop-app",
+      "to": "frontend-web/wallet-entry",
+      "kind": "http",
+      "label": "packaged desktop opens deployed /wallet.html for SIWE bearer handoff (URL contract)",
+      "evidence": "apps/frontend/src/walletEntry.tsx:1-10"
+    },
+    {
+      "from": "frontend-web/api-client",
+      "to": "frontend-web/transport",
+      "kind": "import",
+      "label": "all http.ts helpers + api modules route through getAppTransport()",
+      "evidence": "apps/frontend/src/api/http.ts:153-244"
+    },
+    {
+      "from": "frontend-web/transport",
+      "to": "shared-packages",
+      "kind": "import",
+      "label": "WebTransport + UnauthorizedError from @0x-copilot/chat-transport (undeclared in package.json)",
+      "evidence": "apps/frontend/src/api/transport.ts:1"
+    },
+    {
+      "from": "frontend-web/api-client",
+      "to": "backend-facade",
+      "kind": "http",
+      "label": "176 unique /v1/* endpoints (conversations, runs, approvals, MCP, auth, me, settings, palette, shares, audit, local-models)",
+      "evidence": "apps/frontend/src/api/agentApi.ts:93-590"
+    },
+    {
+      "from": "frontend-web/api-client",
+      "to": "backend-facade",
+      "kind": "sse",
+      "label": "run stream /v1/agent/runs/{id}/stream?after_sequence=N + inbox stream + local-model pull stream",
+      "evidence": "apps/frontend/src/api/agentApi.ts:607-649"
+    },
+    {
+      "from": "frontend-web/api-client",
+      "to": "backend-facade",
+      "kind": "http",
+      "label": "dev IdP mint POST /v1/dev/identity/mint (dev only, tree-shaken in prod)",
+      "evidence": "apps/frontend/src/api/devIdpApi.ts:50-52"
+    },
+    {
+      "from": "frontend-web/api-client",
+      "to": "shared-packages",
+      "kind": "contract",
+      "label": "@0x-copilot/api-types payload shapes (241 import sites app-wide)",
+      "evidence": "apps/frontend/package.json:14"
+    },
+    {
+      "from": "frontend-web/chat-cockpit",
+      "to": "frontend-web/chat-model",
+      "kind": "import",
+      "label": "runtime events fold through applyRuntimeEvent + citation/source/subagent/draft reducers",
+      "evidence": "apps/frontend/src/features/chat/ChatScreen.tsx:74-104"
+    },
+    {
+      "from": "frontend-web/chat-cockpit",
+      "to": "frontend-web/api-client",
+      "kind": "import",
+      "label": "createRun/streamRunEvents/decideApproval/listMessages etc.",
+      "evidence": "apps/frontend/src/features/chat/ChatScreen.tsx:28-41"
+    },
+    {
+      "from": "frontend-web/chat-cockpit",
+      "to": "chat-surface-core",
+      "kind": "import",
+      "label": "AssistantComposer shell adapter, citations registry + scroll helpers, ComposerHandle",
+      "evidence": "apps/frontend/src/features/chat/components/composer/AssistantComposer.tsx:23-31"
+    },
+    {
+      "from": "frontend-web/chat-model",
+      "to": "chat-surface-core",
+      "kind": "import",
+      "label": "citation registry/link-reducer cores wrapped by thin web shims",
+      "evidence": "apps/frontend/src/features/chat/chatModel/citationLinkReducer.ts:16-30"
+    },
+    {
+      "from": "frontend-web/destination-binders",
+      "to": "chat-surface-destinations",
+      "kind": "import",
+      "label": "ChatsArchive / ActivityDestination / SkillsDestination / ProjectsDestination mounted with host read models",
+      "evidence": "apps/frontend/src/features/chats/ChatsArchiveRoute.tsx:36"
+    },
+    {
+      "from": "frontend-web/destination-binders",
+      "to": "frontend-web/api-client",
+      "kind": "import",
+      "label": "binders compose canonical clients (listConversations + listAuditEvents -> Activity rows)",
+      "evidence": "apps/frontend/src/features/activity/api/activityApi.ts:33-36"
+    },
+    {
+      "from": "frontend-web/connectors",
+      "to": "frontend-web/api-client",
+      "kind": "import",
+      "label": "connectorsApi / mcpApi / webhooksApi",
+      "evidence": "apps/frontend/src/features/connectors/ConnectorsRoute.tsx:1-30"
+    },
+    {
+      "from": "frontend-web/settings",
+      "to": "frontend-web/api-client",
+      "kind": "import",
+      "label": "settingsApi, providerKeysApi, localModelsApi, mfaApi, workspaceApi, auditApi",
+      "evidence": "apps/frontend/src/features/settings/sections/ProviderKeys.tsx:1-20"
+    },
+    {
+      "from": "frontend-web/profile-prefs",
+      "to": "frontend-web/api-client",
+      "kind": "import",
+      "label": "meApi profile/preferences reads + debounced saves",
+      "evidence": "apps/frontend/src/features/me/useUserProfile.ts:1-20"
+    },
+    {
+      "from": "frontend-web/observability",
+      "to": "backend-facade",
+      "kind": "http",
+      "label": "OTLP trace export to same-origin /v1/telemetry/otlp/v1/traces",
+      "evidence": "apps/frontend/src/observability/otel-sdk.ts:152-168"
+    },
+    {
+      "from": "frontend-web/app-shell",
+      "to": "shared-packages",
+      "kind": "import",
+      "label": "@0x-copilot/design-system ThemeProvider + styles.css tokens",
+      "evidence": "apps/frontend/src/app/App.tsx:1-5"
+    },
+    {
+      "from": "frontend-web/dead-folded-features",
+      "to": "frontend-web/api-client",
+      "kind": "import",
+      "label": "dead routes import dead api modules (homeApi..toolsApi) — only remaining consumers",
+      "evidence": "apps/frontend/src/features/library/LibraryRoute.tsx:1-30"
+    },
+    {
+      "from": "frontend-web/build",
+      "to": "build-deploy",
+      "kind": "build",
+      "label": "ci-frontend.yml builds the Docker image; Dockerfile hand-copies chat-surface/chat-transport/api-types/design-system sources",
+      "evidence": "apps/frontend/Dockerfile:1-33"
+    },
+    {
+      "from": "frontend-web/build",
+      "to": "backend-facade",
+      "kind": "env",
+      "label": "BACKEND_FACADE_URL dev-proxy target for /v1 (default 127.0.0.1:8200)",
+      "evidence": "apps/frontend/vite.config.ts:28-30"
+    },
+    {
+      "from": "frontend-web/ports",
+      "to": "chat-surface-core",
+      "kind": "contract",
+      "label": "implements chat-surface Badge/Notification/FilePicker/Clipboard port interfaces",
+      "evidence": "apps/frontend/src/ports/index.ts:1-19"
+    }
+  ]
+}

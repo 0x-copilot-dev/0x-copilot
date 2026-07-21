@@ -1,0 +1,85 @@
+{
+  "cluster": "ai-runtime-worker",
+  "verdicts": [
+    {
+      "ref": "F1",
+      "title": "~3.2k LOC of jobs/ background workers wired to no entrypoint",
+      "type": "dead-code",
+      "severity": "high",
+      "verdict": "confirmed",
+      "note": "__main__.py:20-31 imports only retention_backfill/retention_sweeper/usage_rollup; grep over src shows RoutineSchedulerLoop/TodoExtractor/ProposalExtractor/TodoRecurrenceMaterializerLoop/ApprovalExpirySweeper (and build_default_sweeper) have zero non-test callers, while app.py:222 still mounts TodoExtractionsApiRouter over the unfilled table."
+    },
+    {
+      "ref": "F2",
+      "title": "Approval-resume completion skips usage/audit/budget/reconcile/timeout",
+      "type": "inconsistency",
+      "severity": "high",
+      "verdict": "confirmed",
+      "note": "approval.py grep shows no _record_run_usage/charge_run/emit_run_completed/_reconcile_inflight/asyncio.timeout; _complete_run_with_result (approval.py:577-628) only appends message + FINAL_RESPONSE + terminate, whereas run.py:545-572 additionally calls emit_run_completed + _record_run_usage (which charges budgets, run.py:720-732) and _stream_runtime wraps timeout at run.py:1302 vs _stream_resume (approval.py:552-575) unwrapped."
+    },
+    {
+      "ref": "F3",
+      "title": "Production worker strictly serial, cancel cannot preempt in-flight run",
+      "type": "risk",
+      "severity": "high",
+      "verdict": "confirmed",
+      "note": "run_forever (loop.py:164-170) awaits run_once inline (claims one, loop.py:118-126); concurrent run_until_idle/_claim_batch (loop.py:128-157) have no production callers — both entrypoints (app.py:825, __main__.py:179) call run_forever; streaming_executor.py has no CANCELLING status check and cancel.py:37-58 only flips status."
+    },
+    {
+      "ref": "F4",
+      "title": "Layering inversion: agent_runtime/runtime_api import runtime_worker",
+      "type": "boundary-violation",
+      "severity": "medium",
+      "verdict": "confirmed",
+      "note": "self_fork.py:27 and conversation_fork.py:25 runtime-import runtime_worker.audit.WorkerAuditEmitter; system_skills.py:30 imports BUILTIN_SKILLS_ROOT; tool_budget_guard.py:28 TYPE_CHECKING-imports ToolCallLedger — a real intra-service cycle against the 'agent_runtime = pure domain' split (not the cross-service hard rule, all three live inside services/ai-backend)."
+    },
+    {
+      "ref": "F5",
+      "title": "Run vs approval handler duplicated flows held in sync by hand",
+      "type": "duplication",
+      "severity": "medium",
+      "verdict": "confirmed",
+      "note": "_dependencies_for_resume (approval.py:484) docstring says 'Mirrors _dependencies_for_run', both build DraftBackend (run.py:935 / approval.py:527); _workspace_snapshot_emitter and DRAFT_UPDATED payload duplicated; approval.py:311/335/343 call RuntimeRunHandler private classmethods — confirmed, though the emitter is near-identical not literally 'byte-identical' (command.* vs run.*)."
+    },
+    {
+      "ref": "F6",
+      "title": "Nine near-identical env_float/env_int/env_bool copies + hand-rolled loops",
+      "type": "duplication",
+      "severity": "medium",
+      "verdict": "confirmed",
+      "note": "grep 'def env_float/env_int/env_bool' returns exactly 9 files (runtime_api_store.py, usage_rollup_loop.py, retention_backfill/routine_scheduler/todo_recurrence_materializer/approval_expiry_sweeper/retention_sweeper jobs, db_statement_metrics.py, refresh_loop.py) plus the tenth _positive_float/_positive_int variant at dependencies.py:182-200."
+    },
+    {
+      "ref": "F7",
+      "title": "Consent-card risk labels from tool-name substring heuristics",
+      "type": "risk",
+      "severity": "medium",
+      "verdict": "confirmed",
+      "note": "_connector_action_is_read_only (stream_events.py:910-918) checks only create/post/send/update/delete/write, so remove_member/merge_pr/drop_table/execute_query classify read_only=True -> risk_level='low' (817) and reversible=NOT_APPLICABLE (1028) with no readOnlyHint/destructiveHint override; _APPROVAL_IRREVERSIBLE_TOKENS (951-955) has zero references."
+    },
+    {
+      "ref": "F8",
+      "title": "Per-run in-memory state leaks in long-lived worker processes",
+      "type": "risk",
+      "severity": "medium",
+      "verdict": "confirmed",
+      "note": "StreamOrchestrator is a per-worker singleton (run.py:213), yet discard_ledger (stream_tools.py:109-113) pops only _ledgers/_reasoning_buffers and discard_metrics (stream_subagents.py:83-85) pops only _metrics_by_run — _tool_call_states/_tool_call_ids and the four _subagent_* dicts are never purged, and approval.py:177/408 _resumed_task_ids only grows."
+    },
+    {
+      "ref": "F9",
+      "title": "_validate_capability_mode guard can never raise",
+      "type": "dead-code",
+      "severity": "low",
+      "verdict": "accepted",
+      "note": "Low severity accepted as-is without deep verification."
+    },
+    {
+      "ref": "F10",
+      "title": "Two parallel bespoke RFC-5545 rrule evaluators + duplicated frozenset",
+      "type": "duplication",
+      "severity": "low",
+      "verdict": "accepted",
+      "note": "Low severity accepted as-is without deep verification."
+    }
+  ]
+}

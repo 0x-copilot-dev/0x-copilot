@@ -1,0 +1,85 @@
+{
+  "cluster": "desktop-distribution",
+  "verdicts": [
+    {
+      "ref": "F1",
+      "title": "CLI ships Electron 42.1.0 while desktop app builds/tests on 43.1.1",
+      "type": "ssot-violation",
+      "severity": "high",
+      "verdict": "confirmed",
+      "note": "tools/cli/package.json:26 pins electron 42.1.0 as the runtime dep; apps/desktop/package.json:46 pins 43.1.1 — a genuine Electron major skew between the npm-launched surface and what CI/electron-builder validate."
+    },
+    {
+      "ref": "F2",
+      "title": "Supervised boot contract implemented twice and drifted (wallet-page env)",
+      "type": "duplication",
+      "severity": "medium",
+      "verdict": "confirmed",
+      "note": "run-local.mjs backend/facade extraEnv (run-local.mjs:388-396,435-442) sets neither SIWE_ORIGIN nor FACADE_WEB_DIST_DIR that the supervisor sets at service-env.ts:191,242, and the smoke only hits /v1/auth/providers — so it no longer proves wallet-page serving despite README.md:5-7's 'exactly the processes' claim."
+    },
+    {
+      "ref": "F3",
+      "title": "SERVICES + SHARED_PACKAGES lists hand-mirrored between stager and payload assembler",
+      "type": "ssot-violation",
+      "severity": "medium",
+      "verdict": "confirmed",
+      "note": "assemble-payload.mjs:26-34 re-declares byte-identical per-service dir lists (incl. ai-backend config/skills) and shared packages that stage.mjs:56-77 owns, with an explicit 'Mirror tools/desktop-runtime/stage.mjs SERVICES' comment — real drift-prone duplication."
+    },
+    {
+      "ref": "F4",
+      "title": "Harness dev posture writes into real prod userData (phantom isolation)",
+      "type": "risk",
+      "severity": "medium",
+      "verdict": "confirmed",
+      "note": "COPILOT_DESKTOP_USER_DATA_SUBDIR is set only at driver.mjs:93 and has zero consumers repo-wide; apps/desktop never calls app.setPath('userData',...), using app.getPath('userData') directly (index.ts:177 etc.), so dev-posture smoke shares production userData."
+    },
+    {
+      "ref": "F5",
+      "title": "Manual unreproducible npm publish folds a gitignored credential into the public tarball",
+      "type": "risk",
+      "severity": "medium",
+      "verdict": "confirmed",
+      "note": "No publish workflow exists (no npm publish/NPM_TOKEN anywhere in .github/workflows); prepack's assemble-payload.mjs:207-208 copies gitignored apps/desktop/google-oauth.json — documented as containing id+secret at apps/desktop/.gitignore:15-18 — into the payload with no CI attestation."
+    },
+    {
+      "ref": "F6",
+      "title": "Third hand-copy of the SIWE EIP-4361 template in the harness",
+      "type": "ssot-violation",
+      "severity": "low",
+      "verdict": "accepted",
+      "note": "Low severity — accepted as-is per verification policy (siwe-session.mjs re-implements the template documented as a byte-identical pair in frontend/backend)."
+    },
+    {
+      "ref": "F7",
+      "title": "Zero behavioral tests + zero CI for the stager and destructive CLI code",
+      "type": "risk",
+      "severity": "medium",
+      "verdict": "confirmed",
+      "note": "No *.test.*/*.spec.* files in any of the three tool dirs; ci-desktop.yml:15-26 path filter omits tools/desktop-runtime/**, ci-cli.yml runs only check/smoke/manifest-check, and stage.mjs runs only in tag-triggered release-desktop.yml — leaving untested rmSync destructive logic at uninstall.mjs:206 and repair.mjs:119."
+    },
+    {
+      "ref": "F8",
+      "title": "Constant/path facts duplicated across files",
+      "type": "duplication",
+      "severity": "low",
+      "verdict": "accepted",
+      "note": "Low severity — accepted as-is per verification policy (cache/state paths, branding constants, and isSafeTarget duplicated with comments but no machine check)."
+    },
+    {
+      "ref": "F9",
+      "title": "Small dead surface in the CLI (needsStage, unused import, unused --yes)",
+      "type": "dead-code",
+      "severity": "low",
+      "verdict": "accepted",
+      "note": "Low severity — accepted as-is per verification policy (needsStage export, unused existsSync import, repair's unused --yes)."
+    },
+    {
+      "ref": "F10",
+      "title": "Stale 'broken wallet.html' comment + vestigial single-element loop in harness",
+      "type": "inconsistency",
+      "severity": "low",
+      "verdict": "accepted",
+      "note": "Low severity — accepted as-is per verification policy (siwe-session.mjs header claims wallet.html is still broken after FIX-VERIFICATION recorded it fixed)."
+    }
+  ]
+}

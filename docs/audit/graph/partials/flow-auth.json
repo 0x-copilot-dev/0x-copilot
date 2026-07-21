@@ -1,0 +1,192 @@
+{
+  "cluster": {
+    "id": "flow-auth",
+    "title": "Auth & Identity end-to-end",
+    "kind": "flow",
+    "paths": [
+      "services/backend/src/backend_app/identity",
+      "services/backend/src/backend_app/dev_idp",
+      "services/backend/src/backend_app/auth.py",
+      "services/backend/src/backend_app/provider_keys",
+      "services/backend-facade/src/backend_facade/auth.py",
+      "services/backend-facade/src/backend_facade/auth_routes.py",
+      "services/backend-facade/src/backend_facade/wallet_page_routes.py",
+      "services/ai-backend/src/runtime_api/auth.py",
+      "services/ai-backend/src/runtime_api/identity.py",
+      "services/ai-backend/src/agent_runtime/api/user_policies_resolver.py",
+      "apps/frontend/src/features/auth",
+      "apps/frontend/src/api/authApi.ts",
+      "apps/frontend/src/api/siweApi.ts",
+      "apps/desktop/main/auth",
+      "apps/desktop/main/posture.ts",
+      "apps/desktop/main/services/service-env.ts",
+      "packages/service-contracts/src/copilot_service_contracts"
+    ],
+    "md": "docs/audit/flows/auth-identity.md",
+    "summary": "End-to-end identity flow: six login ramps (dev IdP, Google OAuth, SIWE wallet/local-key, password/magic-link, SAML, API keys) all converge on one compact HMAC bearer verified by the facade, touched against backend session rows, and translated into service-token headers for backend and ai-backend; BYOK provider keys ride the same trust lanes. Verification is genuinely shared between dev and prod, but the HMAC path never checks exp, the session-binding kill-switch is enabled nowhere, and the bearer codec / SIWE template / dev-mint logic each exist in 2-3 hand-kept copies."
+  },
+  "nodes": [
+    {
+      "id": "flow-auth",
+      "kind": "flow",
+      "path": "docs/audit/flows/auth-identity.md",
+      "summary": "Auth & Identity end-to-end: login ramps -> HMAC bearer -> facade verify + session touch -> service-header forwarding to backend and ai-backend; desktop posture and BYOK key distribution included."
+    }
+  ],
+  "edges": [
+    {
+      "from": "frontend-web",
+      "to": "backend-facade",
+      "kind": "http",
+      "label": "auth surface: GET /v1/auth/session probe, POST /v1/auth/{login,siwe/*,mfa/*,logout}, dev auto-mint POST /v1/dev/identity/mint on 401",
+      "evidence": "apps/frontend/src/features/auth/AuthContext.tsx:231; apps/frontend/src/api/siweApi.ts:20-26"
+    },
+    {
+      "from": "frontend-web",
+      "to": "chat-surface-core",
+      "kind": "import",
+      "label": "KeyValueStore + SecretStorage ports for persona slug and bearer persistence",
+      "evidence": "apps/frontend/src/features/auth/AuthContext.tsx:50-54"
+    },
+    {
+      "from": "frontend-web",
+      "to": "external:ethereum",
+      "kind": "ipc",
+      "label": "EIP-6963 wallet discovery + personal_sign of the EIP-4361 message",
+      "evidence": "apps/frontend/src/features/auth/WalletSignIn.tsx:300-304"
+    },
+    {
+      "from": "backend-facade",
+      "to": "backend-identity",
+      "kind": "http",
+      "label": "auth proxying: /internal/v1/auth/{sessions/touch,oidc/*,siwe/*,saml/*,local/verify,magic-link/*,mfa/*,api-keys/verify} + dev IdP proxy /v1/dev/*",
+      "evidence": "services/backend-facade/src/backend_facade/auth.py:267-276; services/backend-facade/src/backend_facade/auth_routes.py:339-372; services/backend-facade/src/backend_facade/app.py:214-222"
+    },
+    {
+      "from": "backend-facade",
+      "to": "ai-runtime-api",
+      "kind": "http",
+      "label": "forwards verified identity as x-enterprise-* service headers on every agent route",
+      "evidence": "services/backend-facade/src/backend_facade/agents_routes.py:45-60; services/backend-facade/src/backend_facade/auth.py:367-379"
+    },
+    {
+      "from": "backend-facade",
+      "to": "shared-packages",
+      "kind": "contract",
+      "label": "copilot_service_contracts: header names + bearer claim names + REQUIRE_SESSION_BINDING env",
+      "evidence": "services/backend-facade/src/backend_facade/auth.py:18-30"
+    },
+    {
+      "from": "backend-identity",
+      "to": "shared-packages",
+      "kind": "contract",
+      "label": "copilot_service_contracts.auth_claims for sid/exp/org/user claim names",
+      "evidence": "services/backend/src/backend_app/identity/sessions.py:27-35"
+    },
+    {
+      "from": "ai-runtime-api",
+      "to": "shared-packages",
+      "kind": "contract",
+      "label": "copilot_service_contracts.headers for the trusted service-header envelope",
+      "evidence": "services/ai-backend/src/runtime_api/auth.py:9-16"
+    },
+    {
+      "from": "backend-identity",
+      "to": "external:google-oauth",
+      "kind": "http",
+      "label": "OIDC code exchange + JWKS against pinned Google endpoints; provider synthesized from GOOGLE_OAUTH_CLIENT_ID env",
+      "evidence": "services/backend/src/backend_app/identity/google.py:60-64"
+    },
+    {
+      "from": "ai-runtime-api",
+      "to": "backend-identity",
+      "kind": "http",
+      "label": "GET /internal/v1/policies/runtime returns decrypted BYOK provider_keys over the service-token lane",
+      "evidence": "services/ai-backend/src/agent_runtime/api/user_policies_resolver.py:100-110"
+    },
+    {
+      "from": "ai-runtime-worker",
+      "to": "backend-identity",
+      "kind": "http",
+      "label": "ProviderKeysHydrator re-fetches decrypted BYOK keys after run-context deserialization",
+      "evidence": "services/ai-backend/src/runtime_worker/handlers/run.py:176-179,809-811"
+    },
+    {
+      "from": "desktop-app",
+      "to": "backend-facade",
+      "kind": "http",
+      "label": "sign-in ramps: /v1/dev/identity/mint (dev), /v1/auth/oidc/google/{start,callback}, /v1/auth/siwe/{nonce,verify}, wallet.html, /v1/me/profile claims",
+      "evidence": "apps/desktop/main/auth/oidc-client.ts:113; apps/desktop/main/auth/google-login.ts:85-126; apps/desktop/main/auth/local-login.ts:119-150; apps/desktop/main/auth/wallet-login.ts:97"
+    },
+    {
+      "from": "desktop-app",
+      "to": "external:google-oauth",
+      "kind": "http",
+      "label": "system browser opens Google auth_url; loopback server receives ?state&code redirect",
+      "evidence": "apps/desktop/main/auth/google-login.ts:109-120"
+    },
+    {
+      "from": "desktop-app",
+      "to": "external:ethereum",
+      "kind": "ipc",
+      "label": "local login signs SIWE with a per-install viem secp256k1 key (chain 4663); wallet login delegates to browser wallet",
+      "evidence": "apps/desktop/main/auth/local-login.ts:109-147"
+    },
+    {
+      "from": "desktop-distribution",
+      "to": "desktop-app",
+      "kind": "env",
+      "label": "CLI sets COPILOT_PRODUCTION=1 so production posture holds despite app.isPackaged=false",
+      "evidence": "tools/cli/lib/launch.mjs:69; apps/desktop/main/posture.ts:24-28"
+    },
+    {
+      "from": "desktop-app",
+      "to": "backend-facade",
+      "kind": "env",
+      "label": "supervisor injects per-install ENTERPRISE_AUTH_SECRET/SERVICE_TOKEN, SIWE_ORIGIN=facade origin, FACADE_WEB_DIST_DIR, *_ENVIRONMENT=production",
+      "evidence": "apps/desktop/main/services/service-env.ts:161-162,191,236,242"
+    },
+    {
+      "from": "backend-facade",
+      "to": "frontend-web",
+      "kind": "file",
+      "label": "serves the built frontend wallet.html + assets same-origin for the desktop SIWE handoff (FACADE_WEB_DIST_DIR)",
+      "evidence": "services/backend-facade/src/backend_facade/wallet_page_routes.py:60-70"
+    },
+    {
+      "from": "frontend-web",
+      "to": "shared-packages",
+      "kind": "contract",
+      "label": "@0x-copilot/api-types payload shapes for SIWE/auth responses",
+      "evidence": "apps/frontend/src/api/siweApi.ts:8-13"
+    },
+    {
+      "from": "build-deploy",
+      "to": "backend-identity",
+      "kind": "env",
+      "label": "self-host compose pins BACKEND_ENVIRONMENT=production + ENTERPRISE_AUTH_SECRET/SERVICE_TOKEN + SIWE_ORIGIN/SIWE_ALLOWED_CHAIN_IDS",
+      "evidence": "deploy/self-host/docker-compose.prod.yml:116-127"
+    },
+    {
+      "from": "build-deploy",
+      "to": "ai-runtime-api",
+      "kind": "env",
+      "label": "RUNTIME_ENVIRONMENT=production + ENTERPRISE_SERVICE_TOKEN fail-closed gate",
+      "evidence": "deploy/self-host/docker-compose.prod.yml:157-168"
+    },
+    {
+      "from": "backend-identity",
+      "to": "backend-identity",
+      "kind": "db",
+      "label": "sessions / siwe nonces / oidc state / provider-key rows via identity stores (revocation + expiry enforced at the store)",
+      "evidence": "services/backend/src/backend_app/identity/session_store.py:99-111"
+    },
+    {
+      "from": "docs-corpus",
+      "to": "flow-auth",
+      "kind": "contract",
+      "label": "setup guides mirror the env contract (google-oauth-setup.md, wallet-login.md, dev-testing.md)",
+      "evidence": "CLAUDE.md End-user auth section; docs/deployment/google-oauth-setup.md"
+    }
+  ]
+}

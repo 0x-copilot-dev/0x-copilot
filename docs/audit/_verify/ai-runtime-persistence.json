@@ -1,0 +1,93 @@
+{
+  "cluster": "ai-runtime-persistence",
+  "verdicts": [
+    {
+      "ref": "F1",
+      "title": "PostgresRuntimeApiStore missing 3 PersistencePort approval methods",
+      "type": "risk",
+      "severity": "high",
+      "verdict": "confirmed",
+      "note": "grep of postgres/ shows zero occurrences of list_assigned_approvals/list_pending_expired_approvals/list_pending_approvals_for_membership_audit (all present in_memory:911/949/973 + file:1509/1539/1554); live path routes.py:354 -> approval_coordinator.py:140 calls persistence.list_assigned_approvals -> AttributeError on postgres; ApprovalExpirySweeper (approval_expiry_sweeper.py:232) never imported outside its own file."
+    },
+    {
+      "ref": "F2",
+      "title": "Citation store wiring split-brain on non-postgres backends",
+      "type": "risk",
+      "severity": "high",
+      "verdict": "confirmed",
+      "note": "RuntimePorts dataclass (factory.py:110-133) has no citation_store field; loop.py:76-80 isinstance(persistence, CitationStorePort) else throwaway InMemoryCitationStore; File/InMemory RuntimeApiStore lack insert_many_or_get (only postgres:5692 defines it) so isinstance fails and worker writes to a private store while API reads ports.source_store / a separate InMemoryCitationStore (app.py:650)."
+    },
+    {
+      "ref": "F3",
+      "title": "File adapter re-implements in-memory business logic verbatim",
+      "type": "duplication",
+      "severity": "high",
+      "verdict": "confirmed",
+      "note": "charge_budget is logic-identical between in_memory:1835-1868 and file:2473-2509 except async-with self._state_lock + _rewrite_budget_states(); the three runtime_api_store.py total 11087 LOC (in_memory 2283 + file 2924 + postgres 5880) while base.py shares only 404."
+    },
+    {
+      "ref": "F4",
+      "title": "PersistencePort is a ~90-method god interface (structural Protocol)",
+      "type": "complexity",
+      "severity": "high",
+      "verdict": "confirmed",
+      "note": "PersistencePort (ports.py:85-928) declares 79 async methods (finding's '~90' is an approximation, still unambiguously a god interface); it is a @runtime_checkable Protocol so incomplete impls boot cleanly (the exact mechanism behind F1); persistence/ports.py:89-351 shows the correct 7-role granularity."
+    },
+    {
+      "ref": "F5",
+      "title": "Retention/deletion semantics diverge per backend with no capability signal",
+      "type": "inconsistency",
+      "severity": "medium",
+      "verdict": "confirmed",
+      "note": "postgres sweep_retention_kind branches on 8 RetentionKinds (postgres:3649-4119); file only acts on MESSAGES + returns empty tallies with backfill_retention_until/recompute_retention_until_for_policy as 'return 0' stubs (file:2678,2716,2720); in_memory is an explicit no-op (in_memory:1027-1052); delete_user_history erases bytes on file (file:1696-1738) vs tombstones on postgres/in-memory per its own docstring."
+    },
+    {
+      "ref": "F6",
+      "title": "File-store product surfaces (export/import, search, health, verify) mounted nowhere",
+      "type": "dead-code",
+      "severity": "medium",
+      "verdict": "confirmed",
+      "note": "export_conversation/import_conversation/search_conversations/store_health/conversation_health/needs_repair_ids/verify_audit_log have no runtime_api route and no src consumer (only docstrings + an internal _index/_health call); only unit tests (test_conversation_search/test_export_import/test_audit_manifest) exercise them; export_import.py is 569 LOC."
+    },
+    {
+      "ref": "F7",
+      "title": "Todo-extraction/share-snapshot adapters + PERSISTENCE_TABLE_RECORDS + schema shim unwired",
+      "type": "dead-code",
+      "severity": "medium",
+      "verdict": "confirmed",
+      "note": "no src constructs InMemory/PostgresTodoExtractionStore and todo_extractor.py:145 extraction_store:object job is never wired into worker main/loop; InMemoryShareSnapshotStore has zero src refs (app.py:196-197 registers share_service as share_snapshot_port); PERSISTENCE_TABLE_RECORDS (records/__init__.py:94) has zero real consumers; schema/postgres.py (91 LOC) consumed only by test_postgres_schema.py."
+    },
+    {
+      "ref": "F8",
+      "title": "Layering inversion: canonical record models live in runtime_api/schemas",
+      "type": "boundary-violation",
+      "severity": "medium",
+      "verdict": "confirmed",
+      "note": "ConversationRecord/MessageRecord/RunRecord are defined in runtime_api/schemas/{runs,conversations}.py; 'pure domain' persistence imports upward (message_copy.py:27 from runtime_api.schemas import MessageRecord; base.py:8-14; file/runtime_api_store.py:120); 27 files under agent_runtime/ import runtime_api, contradicting the documented domain/presentation split in CLAUDE.md."
+    },
+    {
+      "ref": "F9",
+      "title": "Default tool budget seed hand-maintained in three places",
+      "type": "ssot-violation",
+      "severity": "low",
+      "verdict": "accepted",
+      "note": "Low severity accepted as written per verification policy."
+    },
+    {
+      "ref": "F10",
+      "title": "Test-only helpers and file-store extras sit unevenly on the shared surface",
+      "type": "inconsistency",
+      "severity": "low",
+      "verdict": "accepted",
+      "note": "Low severity accepted as written per verification policy."
+    },
+    {
+      "ref": "F11",
+      "title": "Desktop file-store data is plaintext-at-rest by design",
+      "type": "risk",
+      "severity": "low",
+      "verdict": "accepted",
+      "note": "Low severity accepted as written per verification policy."
+    }
+  ]
+}

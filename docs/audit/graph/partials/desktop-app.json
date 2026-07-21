@@ -1,0 +1,295 @@
+{
+  "cluster": {
+    "id": "desktop-app",
+    "title": "Desktop App (Electron)",
+    "kind": "cluster",
+    "paths": ["apps/desktop"],
+    "md": "docs/audit/clusters/13-desktop-app.md",
+    "summary": "Electron client that supervises an embedded PostgreSQL plus the three Python services from a bundled runtime, mounts the shared chat-surface ChatShell in a locked-down renderer (connect-src 'none'; all HTTP/SSE proxied over allowlisted IPC through main), and owns real end-user auth (Google/SIWE/local-key), folder-grant capabilities, and the tier-2 adapter pipeline. Structurally excellent and heavily tested, but carries large built-but-unwired subsystems (AC8 browser, AC5 broker env delivery) and web-duplicated projection/model-catalog logic."
+  },
+  "nodes": [
+    {
+      "id": "desktop-app/main-boot",
+      "kind": "process",
+      "path": "apps/desktop/main/index.ts",
+      "summary": "Composition root: app lifecycle, single-instance lock, app:// protocol + CSP, brand identity, dev/prod posture resolution, deep links, auto-update, and wiring of transport/auth/capability/connector/tier2 subsystems."
+    },
+    {
+      "id": "desktop-app/service-supervisor",
+      "kind": "module",
+      "path": "apps/desktop/main/services",
+      "summary": "Pure boot state machine + OS composition: keychain boot secrets, port allocation, embedded Postgres lifecycle, migration gates, curated per-service child envs, uvicorn child babysitting with crash-loop detection, health polling, rotating logs."
+    },
+    {
+      "id": "desktop-app/auth",
+      "kind": "module",
+      "path": "apps/desktop/main/auth",
+      "summary": "AuthService: Google system-browser+loopback OIDC, SIWE wallet-page flow, production-safe local-key SIWE, dev-mint (dev posture only), keychain session storage, JSONL auth audit, fail-closed boot session probe."
+    },
+    {
+      "id": "desktop-app/ipc",
+      "kind": "module",
+      "path": "apps/desktop/main/ipc",
+      "summary": "IPC surface: channel registration with Zod validation both directions, TransportBridge (IPC<->Transport with SSE subscription lifecycle), sandboxed preload allowlist with stateful boot/update channel replay."
+    },
+    {
+      "id": "desktop-app/capabilities",
+      "kind": "module",
+      "path": "apps/desktop/main/capabilities",
+      "summary": "AC5 folder grants: native picker (main owns paths), encrypted grant store, authenticated loopback FS broker (/v1/fs/*, /v1/runs/*), two-gate path validation, per-run grant snapshots. Gated by RUNTIME_ENABLE_DESKTOP_FILESYSTEM; token delivery to the AI worker is missing."
+    },
+    {
+      "id": "desktop-app/agent-browser",
+      "kind": "module",
+      "path": "apps/desktop/main/browser",
+      "summary": "AC8 agentic browser: supervised Playwright worker child, hardened loopback broker with replay protection, deny-by-default egress policy + anti-rebinding CONNECT proxy, profile isolation, staging. Built and tested but wired nowhere (no import from main, no worker build task)."
+    },
+    {
+      "id": "desktop-app/tier2-adapters",
+      "kind": "module",
+      "path": "apps/desktop/main/adapters",
+      "summary": "Phase-6 tier-2 adapter pipeline: schema validation, AST allowlist scan, vm sandbox, smoke render, on-disk installer, append-only lifecycle audit, retry budget, boundary-error demotion. Install path idles on a stub event source; harvest/download/loader/opt-out modules are consumer-less."
+    },
+    {
+      "id": "desktop-app/connectors",
+      "kind": "module",
+      "path": "apps/desktop/main/connectors",
+      "summary": "AC9 connector service: reconciled catalog via facade, system-browser OAuth connect with loopback + enterprise:// deep-link race demuxed by 256-bit state; only safe metadata crosses to the renderer."
+    },
+    {
+      "id": "desktop-app/renderer-shell",
+      "kind": "module",
+      "path": "apps/desktop/renderer",
+      "summary": "Renderer shell: mounts shared ChatShell, BootProgress gate, SignInGate (wallet/Google/local), SettingsMount binding every section, controlled cmd-K palette with static command registry, Tier2Bridge into the chat-surface registry."
+    },
+    {
+      "id": "desktop-app/renderer-binders",
+      "kind": "module",
+      "path": "apps/desktop/renderer/destinationBinders.tsx",
+      "summary": "Desktop-native destination binders (Chats/Activity/Connectors/Skills/Projects/Run): fetch via the IPC-proxied Transport and re-implement the web binders' pure projections (acknowledged duplication)."
+    },
+    {
+      "id": "desktop-app/renderer-composer",
+      "kind": "module",
+      "path": "apps/desktop/renderer/composer",
+      "summary": "Shared AssistantComposer bound to desktop substrate ports: file picker, attachment adapter, slash-menu prompts, hardcoded curated model catalog + BYOK/local readiness probes, run dispatch."
+    },
+    {
+      "id": "desktop-app/native-workspace-fs",
+      "kind": "module",
+      "path": "apps/desktop/native/workspace-fs",
+      "summary": "Optional C native addon for race-free filesystem ops, loaded best-effort by capabilities/host-fs.ts with a JS fallback when the .node binary is absent."
+    },
+    {
+      "id": "desktop-app/build-config",
+      "kind": "tool",
+      "path": "apps/desktop/esbuild.config.mjs",
+      "summary": "Build & packaging: three esbuild bundles (main CJS, preload CJS, renderer ESM), electron-builder config with extraResources runtime mapping and GH-release updater feed, eslint boundary bans (no apps/* sibling imports, no renderer fetch/electron)."
+    }
+  ],
+  "edges": [
+    {
+      "from": "desktop-app/main-boot",
+      "to": "desktop-app/service-supervisor",
+      "kind": "import",
+      "label": "createDesktopSupervisor + boot-mode gating; boot status fan-out to renderer",
+      "evidence": "apps/desktop/main/index.ts:262-296"
+    },
+    {
+      "from": "desktop-app/main-boot",
+      "to": "desktop-app/auth",
+      "kind": "import",
+      "label": "buildAuthService with posture-resolved mode; wires sign-in/out/refresh into IPC",
+      "evidence": "apps/desktop/main/index.ts:481-566"
+    },
+    {
+      "from": "desktop-app/main-boot",
+      "to": "desktop-app/ipc",
+      "kind": "import",
+      "label": "registerIpcHandlers(bridge, auth, tier2, capability, connectors)",
+      "evidence": "apps/desktop/main/index.ts:360-410"
+    },
+    {
+      "from": "desktop-app/renderer-shell",
+      "to": "desktop-app/ipc",
+      "kind": "ipc",
+      "label": "transport.* / auth.* / tier2.* / boot.status / update.status over allowlisted preload bridge",
+      "evidence": "apps/desktop/preload/bridge.ts:16-22; apps/desktop/renderer/SignInGate.tsx:60-131"
+    },
+    {
+      "from": "desktop-app/renderer-binders",
+      "to": "desktop-app/ipc",
+      "kind": "ipc",
+      "label": "transport.request via IpcTransport; connector.list-catalog / connector.connect",
+      "evidence": "apps/desktop/renderer/destinationBinders.tsx:379-451"
+    },
+    {
+      "from": "desktop-app/ipc",
+      "to": "backend-facade",
+      "kind": "http",
+      "label": "WebTransport /v1/* with main-attached bearer + 401 refresh-retry",
+      "evidence": "apps/desktop/main/index.ts:573-622"
+    },
+    {
+      "from": "desktop-app/ipc",
+      "to": "backend-facade",
+      "kind": "sse",
+      "label": "run event stream subscriptions proxied to transport.stream-event pushes",
+      "evidence": "apps/desktop/main/transport-bridge.ts:55-104"
+    },
+    {
+      "from": "desktop-app/auth",
+      "to": "backend-facade",
+      "kind": "http",
+      "label": "/v1/auth/oidc/google/*, /v1/auth/siwe/*, wallet.html, /v1/me/profile session probe",
+      "evidence": "apps/desktop/main/auth/google-login.ts:85-123; apps/desktop/main/auth/index.ts:359-377"
+    },
+    {
+      "from": "desktop-app/service-supervisor",
+      "to": "external:postgres",
+      "kind": "spawn",
+      "label": "embedded postgres: initdb, pg_ctl -w start, createdb via staged python+psycopg",
+      "evidence": "apps/desktop/main/services/postgres.ts"
+    },
+    {
+      "from": "desktop-app/service-supervisor",
+      "to": "backend-product",
+      "kind": "spawn",
+      "label": "spawns backend_app.desktop_app uvicorn child with curated env (DB URL, ENTERPRISE_* secrets, SIWE_ORIGIN)",
+      "evidence": "apps/desktop/main/services/desktop-supervisor.ts:133-157; apps/desktop/main/services/service-env.ts:167-193"
+    },
+    {
+      "from": "desktop-app/service-supervisor",
+      "to": "ai-runtime-api",
+      "kind": "spawn",
+      "label": "spawns runtime_api.app uvicorn child (in-process worker, postgres or file store selection)",
+      "evidence": "apps/desktop/main/services/service-env.ts:194-234"
+    },
+    {
+      "from": "desktop-app/service-supervisor",
+      "to": "backend-facade",
+      "kind": "spawn",
+      "label": "spawns backend_facade.app child (BACKEND_URL, AI_BACKEND_URL, FACADE_WEB_DIST_DIR) and health-gates /v1/health",
+      "evidence": "apps/desktop/main/services/service-env.ts:235-245; apps/desktop/main/services/health.ts"
+    },
+    {
+      "from": "ai-runtime-capabilities",
+      "to": "desktop-app/capabilities",
+      "kind": "http",
+      "label": "broker_client.py consumes /v1/fs/* + /v1/runs/* (expects DESKTOP_BROKER_URL/TOKEN — never delivered by supervisor: gap)",
+      "evidence": "services/ai-backend/src/agent_runtime/capabilities/desktop/broker_client.py:1-40; services/ai-backend/src/agent_runtime/capabilities/desktop/workspace_backend.py:123-124"
+    },
+    {
+      "from": "ai-runtime-worker",
+      "to": "desktop-app/agent-browser",
+      "kind": "http",
+      "label": "DesktopBrowserMcpProvider expects DESKTOP_BROWSER_BROKER_URL/TOKEN (subsystem unwired on desktop side)",
+      "evidence": "services/ai-backend/src/runtime_worker/dependencies.py:334-335; apps/desktop/main/browser/index.ts:3-5"
+    },
+    {
+      "from": "desktop-app/capabilities",
+      "to": "desktop-app/native-workspace-fs",
+      "kind": "import",
+      "label": "host-fs.ts loads the optional workspace_fs native addon (JS fallback when absent)",
+      "evidence": "apps/desktop/main/capabilities/host-fs.ts; apps/desktop/native/workspace-fs/index.cjs"
+    },
+    {
+      "from": "desktop-app/renderer-shell",
+      "to": "chat-surface-core",
+      "kind": "import",
+      "label": "ChatShell, ports (router/kv/presence), useShellShortcuts, Tier2Loader + registry",
+      "evidence": "apps/desktop/renderer/bootstrap.tsx:15-31; apps/desktop/renderer/Tier2Bridge.ts:3-11"
+    },
+    {
+      "from": "desktop-app/renderer-binders",
+      "to": "chat-surface-destinations",
+      "kind": "import",
+      "label": "ChatsArchive, ActivityDestination, ConnectorsDestination, SkillsDestination, ProjectsDestination, RunDestination",
+      "evidence": "apps/desktop/renderer/destinationBinders.tsx:22-34"
+    },
+    {
+      "from": "desktop-app/renderer-composer",
+      "to": "chat-surface-core",
+      "kind": "import",
+      "label": "AssistantComposer + composer ports; run dispatch POST /v1/agent/runs via transport",
+      "evidence": "apps/desktop/renderer/composer/RunComposer.tsx:9-15,314-316"
+    },
+    {
+      "from": "desktop-app/ipc",
+      "to": "shared-packages",
+      "kind": "contract",
+      "label": "chat-transport CHANNELS + Zod schemas single-sourced for main, preload and renderer",
+      "evidence": "apps/desktop/main/ipc/schemas.ts:1-37; packages/chat-transport/src/ipc/rpc-protocol.ts:6-58"
+    },
+    {
+      "from": "desktop-app/tier2-adapters",
+      "to": "shared-packages",
+      "kind": "contract",
+      "label": "adapter import allowlist JSON from service-contracts via @0x-copilot/api-types",
+      "evidence": "apps/desktop/main/adapters/ast-allowlist.ts:1-8"
+    },
+    {
+      "from": "desktop-app/renderer-shell",
+      "to": "desktop-app/tier2-adapters",
+      "kind": "ipc",
+      "label": "tier2.install/uninstall/mark-broken pushes down; tier2.boundary-error invoke up",
+      "evidence": "apps/desktop/renderer/Tier2Bridge.ts:50-138; apps/desktop/main/index.ts:376-388"
+    },
+    {
+      "from": "desktop-app/connectors",
+      "to": "backend-facade",
+      "kind": "http",
+      "label": "reconciled connector catalog + OAuth connect flows brokered through the facade",
+      "evidence": "apps/desktop/main/connectors/connector-service.ts; apps/desktop/main/index.ts:317-328"
+    },
+    {
+      "from": "desktop-app/main-boot",
+      "to": "external:github",
+      "kind": "http",
+      "label": "electron-updater GH Releases feed (packaged+signed only, install-on-quit)",
+      "evidence": "apps/desktop/main/updater.ts; apps/desktop/electron-builder.yml:81-86"
+    },
+    {
+      "from": "desktop-app/auth",
+      "to": "external:google-oauth",
+      "kind": "http",
+      "label": "system browser opened at Google authorization endpoint (PKCE, loopback redirect)",
+      "evidence": "apps/desktop/main/auth/google-login.ts:9-16"
+    },
+    {
+      "from": "desktop-app/auth",
+      "to": "external:ethereum",
+      "kind": "import",
+      "label": "viem: per-install local-identity key generation + SIWE message signing",
+      "evidence": "apps/desktop/main/auth/index.ts:1; apps/desktop/main/auth/local-login.ts:13-17"
+    },
+    {
+      "from": "desktop-distribution",
+      "to": "desktop-app/main-boot",
+      "kind": "env",
+      "label": "tools/cli launch.mjs sets COPILOT_PRODUCTION=1 consumed by posture.ts (fixes isPackaged=false dev-posture bug)",
+      "evidence": "tools/cli/lib/launch.mjs:69; apps/desktop/main/posture.ts:24-28"
+    },
+    {
+      "from": "desktop-app/service-supervisor",
+      "to": "desktop-distribution",
+      "kind": "file",
+      "label": "resolveRuntimePaths consumes the runtime tree staged by tools/desktop-runtime/stage.mjs",
+      "evidence": "apps/desktop/main/services/runtime-paths.ts:1-7"
+    },
+    {
+      "from": "desktop-app/build-config",
+      "to": "build-deploy",
+      "kind": "build",
+      "label": "electron-builder packaging (extraResources runtime mapping, publish config) + npm workspace scripts",
+      "evidence": "apps/desktop/electron-builder.yml; apps/desktop/package.json"
+    },
+    {
+      "from": "desktop-app/renderer-shell",
+      "to": "shared-packages",
+      "kind": "import",
+      "label": "IpcTransport from chat-transport; surface-renderers registerAll; design-system styles",
+      "evidence": "apps/desktop/renderer/bootstrap.tsx:1-33"
+    }
+  ]
+}

@@ -1,0 +1,101 @@
+{
+  "cluster": "backend-facade",
+  "verdicts": [
+    {
+      "ref": "F1",
+      "title": "Core /v1/agent/* + MCP + skills + usage surface skips session touch and token expiry",
+      "type": "risk",
+      "severity": "high",
+      "verdict": "confirmed",
+      "note": "app.py has 65 authenticate_request calls and 0 verify_with_touch (e.g. create_run at app.py:890, stream at app.py:1032); verify_identity_token never checks exp though CLAIM_EXPIRES_AT='exp' exists at packages/service-contracts/src/copilot_service_contracts/auth_claims.py:17, and no exp reference exists in facade src; docstring auth.py:199-200 'every facade route uses verify_with_touch' is false."
+    },
+    {
+      "ref": "F2",
+      "title": "/v1/admin/adapter_registry/candidates* registered twice; stronger-auth review module shadowed",
+      "type": "dead-code",
+      "severity": "medium",
+      "verdict": "confirmed",
+      "note": "Same three admin paths defined in adapter_registry_routes.py:79-131 (static authenticate_request) and adapter_review_routes.py:56-93 (verify_with_touch); app.py:132 registers registry before review at app.py:133, so Starlette first-match makes the touch-authenticated review handlers unreachable."
+    },
+    {
+      "ref": "F3",
+      "title": "Massive per-module helper copy-paste + three forwarding kernels",
+      "type": "duplication",
+      "severity": "medium",
+      "verdict": "confirmed",
+      "note": "grep confirms _raise_for_upstream in 20 files, _upstream_error_detail in 12, settings_for/_settings_for in 25, _safe_json in 12, _coerce_object_or_raise in 15, 8 modules with the SSE X-Accel-Buffering closure; me_routes.py:428-429 self-justifies its private _raise_for_upstream copy as circular-import avoidance and adapter_registry_routes.py:19 does a function-local forward_json import."
+    },
+    {
+      "ref": "F4",
+      "title": "atlas_pk_* API-key bearers 401 on the entire app.py surface",
+      "type": "risk",
+      "severity": "medium",
+      "verdict": "confirmed",
+      "note": "authenticate_request explicitly raises 401 for atlas_pk_ bearers at auth.py:207-211; only verify_with_touch handles them (auth.py:244-250), and app.py never calls verify_with_touch, so /v1/me/api-keys tokens cannot create conversations/runs."
+    },
+    {
+      "ref": "F5",
+      "title": "docs/reference/api-surface.md diverges badly while CLAUDE.md declares docs the source of truth",
+      "type": "ssot-violation",
+      "severity": "medium",
+      "verdict": "confirmed",
+      "note": "Doc lists /v1/api-keys* (real /v1/me/api-keys, me_routes.py:80), /v1/me/sessions* (real /v1/auth/sessions, auth_routes.py:51), /v1/auth/password-reset/* (real /v1/auth/password/reset, auth_routes.py:401), /v1/workspace/{providers,privacy}, and omits tools/connectors/inbox/palette/local-models/routines/projects entirely; CLAUDE.md:9 says reference docs are the source of truth."
+    },
+    {
+      "ref": "F6",
+      "title": "Root CLAUDE.md claims backend /internal/v1/* consumed only by ai-backend",
+      "type": "inconsistency",
+      "severity": "low",
+      "verdict": "accepted",
+      "note": "Low severity accepted as-is; facade demonstrably consumes many backend /internal/v1/* endpoints (auth_routes.py, audit_routes.py)."
+    },
+    {
+      "ref": "F7",
+      "title": "MFA management duplicated on /v1/auth/mfa/* and /v1/me/mfa/*",
+      "type": "duplication",
+      "severity": "low",
+      "verdict": "accepted",
+      "note": "Low severity accepted as-is."
+    },
+    {
+      "ref": "F8",
+      "title": "Legacy GET /v1/session and stale FACADE_DEV_ORG_ID/USER_ID env vars",
+      "type": "dead-code",
+      "severity": "low",
+      "verdict": "accepted",
+      "note": "Low severity accepted as-is."
+    },
+    {
+      "ref": "F9",
+      "title": "Dockerfile builds on python:3.14-slim vs repo's Python 3.13 convention",
+      "type": "inconsistency",
+      "severity": "low",
+      "verdict": "accepted",
+      "note": "Low severity accepted as-is."
+    },
+    {
+      "ref": "F10",
+      "title": "app.py is a 1,505-line monolith of bootstrap + boilerplate handlers",
+      "type": "refactor",
+      "severity": "medium",
+      "verdict": "confirmed",
+      "note": "app.py confirmed 1505 lines with the sole forward_json kernel at app.py:1322 and the circular-import dodge at adapter_registry_routes.py:19; handler count is 68 @app. decorators (finding's '85' is slightly inflated but not load-bearing to the refactor point)."
+    },
+    {
+      "ref": "F11",
+      "title": "_anonymous_service_headers sends service token with silent empty fallback",
+      "type": "inconsistency",
+      "severity": "low",
+      "verdict": "accepted",
+      "note": "Low severity accepted as-is."
+    },
+    {
+      "ref": "F12",
+      "title": "readiness checkers supported but none registered, /readyz == liveness",
+      "type": "dead-code",
+      "severity": "low",
+      "verdict": "accepted",
+      "note": "Low severity accepted as-is."
+    }
+  ]
+}

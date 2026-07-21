@@ -1,0 +1,109 @@
+{
+  "cluster": "ai-runtime-api",
+  "verdicts": [
+    {
+      "ref": "F1",
+      "title": "Circular layering — agent_runtime (\"pure domain\") imports runtime_api HTTP layer, and runtime_api imports runtime_worker",
+      "type": "boundary-violation",
+      "severity": "high",
+      "verdict": "confirmed",
+      "note": "20/32 agent_runtime/api modules import runtime_api.schemas|http.errors (run_coordinator.py:37, ports.py:44); capabilities/{citations,tool_budget_guard,draft_backend,render_adapter_generator/capability}, persistence/message_copy.py:27, context/memory/subagent_trace.py:32 also do; runtime_api/app.py:76,593 + system_skills.py:30 + api/{self_fork:27,conversation_fork:25,mcp_discovery_service:41} import runtime_worker (MD's 17/28 slightly undercounts, direction as claimed)"
+    },
+    {
+      "ref": "F2",
+      "title": "inbox_producer.py / inbox_fallback.py have no production consumers",
+      "type": "dead-code",
+      "severity": "medium",
+      "verdict": "confirmed",
+      "note": "HttpInboxProducer/InboxProducerFactory/InboxFallbackScheduler constructed nowhere in src/ outside their own modules (inbox_producer.py:336, inbox_fallback.py:159); runtime_worker uses a separate mirrored RoutineInboxProducerPort (routine_pre_fire_gate.py:162) not these; only test + docstring refs remain"
+    },
+    {
+      "ref": "F3",
+      "title": "Per-user inbox SSE cannot deliver across processes (in-memory bus only vs WEB_CONCURRENCY=4 + separate worker)",
+      "type": "risk",
+      "severity": "high",
+      "verdict": "confirmed",
+      "note": "sse/inbox_bus.py: InboxEventBus = InMemoryInboxBus with docstring admitting Postgres bus is a planned follow-up and cross-process publishes never reach subscribers; Dockerfile:7,34 runs gunicorn --workers ${WEB_CONCURRENCY:-4} uvicorn workers"
+    },
+    {
+      "ref": "F4",
+      "title": "RBAC defaults to log-only audit mode (set in no deploy config) and runtime_audit_appender hook is dead",
+      "type": "risk",
+      "severity": "high",
+      "verdict": "confirmed",
+      "note": "rbac.py:43 defaults RBAC_MODE to 'audit' (log-and-pass); repo-wide grep finds RBAC_MODE in no deploy/env config (deploy/self-host/docker-compose.prod.yml has none); runtime_audit_appender only read at rbac.py:223, assigned nowhere in src/"
+    },
+    {
+      "ref": "F5",
+      "title": "Usage aggregation logic exists in 4+ near-identical accumulate-into-bucket copies",
+      "type": "duplication",
+      "severity": "medium",
+      "verdict": "confirmed",
+      "note": "routes.py:1021,1058 _rows_by_day/_rows_by_model are the same defaultdict bucket loop with different keys; usage_service.py:95,137 rollup_user/connector_rows repeat it via _RollupBucket; agent_usage.py:106 _aggregate re-implements it with a comment admitting 'promote _aggregate to UsageQueryService' (agent_usage.py:36-41)"
+    },
+    {
+      "ref": "F6",
+      "title": "SSE adapter ignores per-backend fallback_poll_seconds; run stream sends no keepalive despite inbox docstring claiming parity",
+      "type": "inconsistency",
+      "severity": "medium",
+      "verdict": "confirmed",
+      "note": "adapter.py:24,68 hardcodes FALLBACK_POLL_SECONDS=2.0 and never reads event_bus.fallback_poll_seconds (event_bus.py:34; Postgres=10.0 postgres_event_bus.py:65); inbox_adapter.py:26-30 emits ': keepalive' every 25s claiming it matches the runtime SSE, but adapter.py follow-mode loop yields nothing between events (heartbeat_event at :57 fires only in the non-follow branch)"
+    },
+    {
+      "ref": "F7",
+      "title": "routes.py (1,776 LOC) mixes five router factories with real business logic bypassing the coordinator/service pattern",
+      "type": "complexity",
+      "severity": "medium",
+      "verdict": "confirmed",
+      "note": "routes.py is 1776 LOC with 5 router builders (RuntimeApiRouter:496, UsageApiRouter:1355, TodoExtractionsApiRouter:1429, BudgetApiRouter:1629, InternalRuntimeApiRouter:1739); UsageApiRoutes.usage_me:689 does persistence-port orchestration + cold-start synthesis inline and BudgetApiRoutes.create_budget:1493 constructs BudgetRecord against the port directly, unlike retention_routes.py"
+    },
+    {
+      "ref": "F8",
+      "title": "/readyz always reports ready (no readiness checkers registered)",
+      "type": "risk",
+      "severity": "low",
+      "verdict": "accepted",
+      "note": "low severity accepted as-is per protocol"
+    },
+    {
+      "ref": "F9",
+      "title": "Python version signals disagree (3.13 pyproject/CLAUDE.md vs 3.14 image vs pyright 3.11)",
+      "type": "inconsistency",
+      "severity": "low",
+      "verdict": "accepted",
+      "note": "low severity accepted as-is per protocol"
+    },
+    {
+      "ref": "F10",
+      "title": "Tracked junk in service root (Oops.rej, .coverage, duplicate env templates)",
+      "type": "dead-code",
+      "severity": "low",
+      "verdict": "accepted",
+      "note": "low severity accepted as-is per protocol"
+    },
+    {
+      "ref": "F11",
+      "title": "Accepted-by-design duplication: deployment-profile loader + RBAC helpers hand-mirrored across services",
+      "type": "ssot-violation",
+      "severity": "low",
+      "verdict": "accepted",
+      "note": "low severity accepted as-is per protocol"
+    },
+    {
+      "ref": "F12",
+      "title": "Dev-open identity fallback rests entirely on env discipline (RUNTIME_ENVIRONMENT/ENTERPRISE_SERVICE_TOKEN)",
+      "type": "risk",
+      "severity": "low",
+      "verdict": "accepted",
+      "note": "low severity accepted as-is per protocol"
+    },
+    {
+      "ref": "F13",
+      "title": "RequireAnyScope hardcodes 'admin:users' string literal despite ADMIN_USERS constant imported in same file",
+      "type": "ssot-violation",
+      "severity": "low",
+      "verdict": "accepted",
+      "note": "low severity accepted as-is per protocol"
+    }
+  ]
+}

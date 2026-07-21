@@ -1,0 +1,85 @@
+{
+  "cluster": "desktop-app",
+  "verdicts": [
+    {
+      "ref": "F1",
+      "title": "AC8 agentic-browser subsystem built/tested/documented but wired nowhere",
+      "type": "dead-code",
+      "severity": "high",
+      "verdict": "confirmed",
+      "note": "No non-test import of main/browser exists (grep of main/renderer/preload finds only 'system browser' OAuth refs); esbuild.config.mjs:10-53 emits only main/preload/renderer; no DESKTOP_BROWSER_BROKER_URL/TOKEN set in service-env.ts while dependencies.py:332-334 requires them; main/browser/index.ts:3-5 docstring falsely claims main builds it."
+    },
+    {
+      "ref": "F2",
+      "title": "AC5 capability broker token/URL never delivered to ai-backend child",
+      "type": "risk",
+      "severity": "high",
+      "verdict": "confirmed",
+      "note": "startCapabilitySubsystem mints the per-boot token (main/index.ts:167-207, comment admits 'slice 2 wiring') but service-env.ts sets no DESKTOP_BROKER_URL/TOKEN and its passthrough allowlist (service-env.ts:11-37) excludes them, while workspace_backend.py:123-124 waits for exactly those vars."
+    },
+    {
+      "ref": "F3",
+      "title": "Destination projections hand-duplicated between web and desktop",
+      "type": "duplication",
+      "severity": "medium",
+      "verdict": "confirmed",
+      "note": "bucketConversations/chatStatus/toArchiveRow (destinationBinders.tsx:125-183) match chatsApi.ts:71-140 byte-for-byte in the status switch; mapRunStatus/auditLabel/buildMetaIndex/projectActivityRows (destinationBinders.tsx:215-298) mirror activityApi.ts:56-147 — pure fns over api-types shapes; web copies are tested, desktop copies are not."
+    },
+    {
+      "ref": "F4",
+      "title": "Curated cloud-model catalog hardcoded again in desktop composer",
+      "type": "ssot-violation",
+      "severity": "medium",
+      "verdict": "confirmed",
+      "note": "desktopModelCatalog.ts:30-61 CURATED_CLOUD_MODELS mirrors ChatScreen.tsx:2561-2600 hardcoded list; the two already diverge (web has gpt-5.4-nano at ChatScreen.tsx:2561, desktop's list starts at gpt-5.4-mini)."
+    },
+    {
+      "ref": "F5",
+      "title": "Tier-2 harvest/download/loader/opt-out dormant; install path on stub source",
+      "type": "dead-code",
+      "severity": "medium",
+      "verdict": "confirmed",
+      "note": "harvest.ts/download.ts/loader.ts/opt-out.ts have no non-test consumers (only harvest.ts:1 and download.ts:1 import opt-out); StubLifecycleEventSource (main/index.ts:108-119) returns no-op unsubscribes and is the source wired at main/index.ts:340, so onAdapterGenerated never fires until Phase 7."
+    },
+    {
+      "ref": "F6",
+      "title": "Boot-secrets plaintext fallback is unconditional and unwarned",
+      "type": "inconsistency",
+      "severity": "medium",
+      "verdict": "confirmed",
+      "note": "boot-secrets.ts:103-116 persist() writes plaintext when safeStorage unavailable with no allowPlaintextFallback gate and no warning, whereas secret-storage.ts:157-169 throws unless #allowPlaintext and emits an audit warning."
+    },
+    {
+      "ref": "F7",
+      "title": "Triplicated hand-rolled primitives (blob envelope, env-flag parser, broker hardening)",
+      "type": "bespoke-replaceable",
+      "severity": "low-medium",
+      "verdict": "confirmed",
+      "note": "Three marker-prefixed blob envelopes (ATLASv1 secret-storage.ts:29-30, ATLASBOOTv1 boot-secrets.ts:44-45, ATLASCAPv1 grant-store.ts:20-21); three identical TRUTHY Sets (feature-gate.ts:16, browser/feature-gate.ts:12, service-env.ts:89); browser-broker.ts:4-7 explicitly acknowledges mirroring capabilities/broker.ts transport hardening."
+    },
+    {
+      "ref": "F8",
+      "title": "auth.get-posture channel + deep-link app-login branch unused",
+      "type": "dead-code",
+      "severity": "low",
+      "verdict": "accepted",
+      "note": "Low severity accepted as-is (main/ipc/handlers.ts:215; main/deep-links.ts:118-130)."
+    },
+    {
+      "ref": "F9",
+      "title": "browser tool-schemas hand-mirror Zod schemas in protocol.ts",
+      "type": "ssot-violation",
+      "severity": "low",
+      "verdict": "accepted",
+      "note": "Low severity accepted as-is (main/browser/tool-schemas.ts:3-6); only relevant if AC8 ships."
+    },
+    {
+      "ref": "F10",
+      "title": "Minor consolidation targets (duplicate allowPlaintext expr, per-mount probes)",
+      "type": "refactor",
+      "severity": "low",
+      "verdict": "accepted",
+      "note": "Low severity accepted as-is (main/index.ts allowPlaintext computed twice; RunBinder/RunComposer redundant readiness probes)."
+    }
+  ]
+}

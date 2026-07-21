@@ -1,0 +1,435 @@
+{
+  "cluster": {
+    "id": "flow-desktop-boot",
+    "title": "Desktop install & boot",
+    "kind": "flow",
+    "paths": [
+      "tools/cli",
+      "tools/desktop-runtime",
+      "apps/desktop/main",
+      "apps/desktop/preload",
+      "apps/desktop/renderer",
+      "apps/desktop/electron-builder.yml"
+    ],
+    "md": "docs/audit/flows/desktop-boot.md",
+    "summary": "End-to-end trace from `copilot` CLI install through runtime staging (pinned CPython + zonky Postgres + service source, ad-hoc signed), Electron main boot, the supervisor's secrets/ports/postgres/migrations/services/health phases, transport + auth-posture wiring, and the renderer's BootGate → SignInGate → ChatShell mount. Health is good overall (fail-closed staging and secrets, curated child envs, orphan reclaim), but the packaged DMG path drops the wallet web assets, the ai-backend env lacks BACKEND_BASE_URL at this base, and the run-local harness has drifted from the real supervisor."
+  },
+  "nodes": [
+    {
+      "id": "flow-desktop-boot",
+      "kind": "flow",
+      "path": "docs/audit/flows/desktop-boot.md",
+      "summary": "Desktop install & boot flow: copilot CLI -> staged runtime -> Electron supervisor -> embedded PG + 3 services -> renderer shell."
+    },
+    {
+      "id": "flow-desktop-boot/cli",
+      "kind": "tool",
+      "path": "tools/cli",
+      "summary": "`copilot` launcher: platform gate, payload/dev layout resolution, stage orchestration, doctor/repair/uninstall, Electron spawn with COPILOT_RUNTIME_DIR + COPILOT_PRODUCTION=1."
+    },
+    {
+      "id": "flow-desktop-boot/stage",
+      "kind": "tool",
+      "path": "tools/desktop-runtime/stage.mjs",
+      "summary": "Stages the self-contained runtime: sha256-verified CPython + Postgres downloads, per-service pip installs (--require-hashes), web assets, macOS ad-hoc signing, staging-manifest.json completion marker."
+    },
+    {
+      "id": "flow-desktop-boot/manifest",
+      "kind": "doc",
+      "path": "tools/desktop-runtime/manifest.json",
+      "summary": "Pinned url+sha256 inputs for python-build-standalone 3.13.14 and zonky embedded-postgres 17.10 per platform-arch."
+    },
+    {
+      "id": "flow-desktop-boot/payload-assembly",
+      "kind": "tool",
+      "path": "tools/cli/scripts/assemble-payload.mjs",
+      "summary": "Prepack: mirrors the monorepo subset (services src, shared py packages, stage.mjs, built desktop app, frontend dist, bundled google-oauth.json) into the npm payload."
+    },
+    {
+      "id": "flow-desktop-boot/mac-shell",
+      "kind": "tool",
+      "path": "tools/cli/lib/mac-shell.mjs",
+      "summary": "Clones Electron.app into a branded 0xCopilot.app shell (plist rewrite + icns swap + ad-hoc re-sign) so CLI launches present correctly in the Dock."
+    },
+    {
+      "id": "flow-desktop-boot/run-local-harness",
+      "kind": "tool",
+      "path": "tools/desktop-runtime/run-local.mjs",
+      "summary": "Headless Node harness that boots the staged runtime and smoke-tests health/providers/dev-IdP-absence; duplicates and has drifted from the real supervisor (F3)."
+    },
+    {
+      "id": "flow-desktop-boot/electron-main",
+      "kind": "process",
+      "path": "apps/desktop/main/index.ts",
+      "summary": "Electron main: single-instance lock, app:// protocol + CSP, boot window, supervise-or-dev decision, transport/auth/IPC wiring, ordered before-quit shutdown."
+    },
+    {
+      "id": "flow-desktop-boot/supervisor",
+      "kind": "module",
+      "path": "apps/desktop/main/services",
+      "summary": "ServiceSupervisor state machine (secrets -> ports -> postgres -> migrations -> services -> health -> ready) composed with real adapters in desktop-supervisor.ts; emits BootStatusPayload."
+    },
+    {
+      "id": "flow-desktop-boot/boot-secrets",
+      "kind": "store",
+      "path": "apps/desktop/main/services/boot-secrets.ts",
+      "summary": "Generate-once boot secrets (auth secret, service token, vault secret, pg password, audit HMAC key) persisted safeStorage-encrypted; unreadable blob is a fatal, never regenerated."
+    },
+    {
+      "id": "flow-desktop-boot/postgres-manager",
+      "kind": "module",
+      "path": "apps/desktop/main/services/postgres.ts",
+      "summary": "Embedded Postgres lifecycle: one-time initdb (scram, atlas superuser), orphaned-postmaster reclaim, pg_ctl -w start, database creation via staged python+psycopg."
+    },
+    {
+      "id": "flow-desktop-boot/service-env",
+      "kind": "module",
+      "path": "apps/desktop/main/services/service-env.ts",
+      "summary": "Curated child env builder: passthrough allowlist + per-service contract table (DB URLs, SIWE_ORIGIN, FACADE_WEB_DIST_DIR, registry URLs, file-store flag)."
+    },
+    {
+      "id": "flow-desktop-boot/python-service",
+      "kind": "module",
+      "path": "apps/desktop/main/services/python-service.ts",
+      "summary": "Per-child babysitter: uvicorn spawn, exponential-backoff restart, crash-loop fatal at >=5 crashes/5min, rotating logs, SIGTERM->SIGKILL stop."
+    },
+    {
+      "id": "flow-desktop-boot/auth-posture",
+      "kind": "module",
+      "path": "apps/desktop/main/posture.ts",
+      "summary": "Production-vs-dev posture (app.isPackaged OR COPILOT_PRODUCTION=1, dev overrides win); production forces mode away from dev-mint so the Sarah Chen persona can never mint."
+    },
+    {
+      "id": "flow-desktop-boot/auth-service",
+      "kind": "module",
+      "path": "apps/desktop/main/auth",
+      "summary": "Sign-in flows owned by main: dev-mint/local-key SIWE, Google via facade + loopback + system browser, wallet via facade-served wallet.html handoff; sessions in safeStorage, bearer never crosses IPC."
+    },
+    {
+      "id": "flow-desktop-boot/transport-bridge",
+      "kind": "module",
+      "path": "apps/desktop/main/transport-bridge.ts",
+      "summary": "IPC <-> Transport bridge: request proxy + SSE subscription lifecycle over WebTransport (bearer attached in main, withBearerRefresh 401 retry)."
+    },
+    {
+      "id": "flow-desktop-boot/preload-bridge",
+      "kind": "module",
+      "path": "apps/desktop/preload/bridge.ts",
+      "summary": "contextBridge `window.bridge` with a channel allowlist; boot/update status are stateful channels replayed to late subscribers."
+    },
+    {
+      "id": "flow-desktop-boot/renderer-bootstrap",
+      "kind": "module",
+      "path": "apps/desktop/renderer/bootstrap.tsx",
+      "summary": "Renderer composition: DeploymentProfileProvider(single_user_desktop) -> BootGate -> SignInGate -> ChatShell + DestinationOutlet + SettingsMount + PaletteHost over IpcTransport."
+    },
+    {
+      "id": "flow-desktop-boot/destination-binders",
+      "kind": "module",
+      "path": "apps/desktop/renderer/destinationBinders.tsx",
+      "summary": "Desktop-native binders feeding the chat-surface destination components via the Transport port; mirrors the web binders' projections without importing apps/frontend."
+    },
+    {
+      "id": "flow-desktop-boot/packaging",
+      "kind": "module",
+      "path": "apps/desktop/electron-builder.yml",
+      "summary": "electron-builder packaging: extraResources maps resources/runtime only (drops resources/web — F1), sign-nested.js pre-signs bundled Mach-Os, GitHub-releases update feed."
+    }
+  ],
+  "edges": [
+    {
+      "from": "flow-desktop-boot/cli",
+      "to": "flow-desktop-boot/stage",
+      "kind": "spawn",
+      "label": "spawn stage.mjs --dest ~/.0xcopilot --adhoc-sign",
+      "evidence": "tools/cli/lib/stage.mjs:67-83"
+    },
+    {
+      "from": "flow-desktop-boot/stage",
+      "to": "flow-desktop-boot/manifest",
+      "kind": "file",
+      "label": "reads pinned url+sha256 entries",
+      "evidence": "tools/desktop-runtime/stage.mjs:49,736-740"
+    },
+    {
+      "from": "flow-desktop-boot/stage",
+      "to": "external:github",
+      "kind": "http",
+      "label": "download python-build-standalone tarball (sha256-verified)",
+      "evidence": "tools/desktop-runtime/manifest.json:11"
+    },
+    {
+      "from": "flow-desktop-boot/stage",
+      "to": "external:maven-central",
+      "kind": "http",
+      "label": "download zonky embedded-postgres jar (sha256-verified)",
+      "evidence": "tools/desktop-runtime/manifest.json:40"
+    },
+    {
+      "from": "flow-desktop-boot/stage",
+      "to": "external:pypi",
+      "kind": "http",
+      "label": "pip install -r requirements.txt (--require-hashes for backend/facade)",
+      "evidence": "tools/desktop-runtime/stage.mjs:431-447"
+    },
+    {
+      "from": "flow-desktop-boot/stage",
+      "to": "backend-product",
+      "kind": "build",
+      "label": "copies services/backend src+migrations+scripts into the staged tree",
+      "evidence": "tools/desktop-runtime/stage.mjs:56-61,397-409"
+    },
+    {
+      "from": "flow-desktop-boot/stage",
+      "to": "ai-runtime-execution",
+      "kind": "build",
+      "label": "copies services/ai-backend src+migrations+config+skills into the staged tree",
+      "evidence": "tools/desktop-runtime/stage.mjs:67-72"
+    },
+    {
+      "from": "flow-desktop-boot/stage",
+      "to": "backend-facade",
+      "kind": "build",
+      "label": "copies services/backend-facade src into the staged tree",
+      "evidence": "tools/desktop-runtime/stage.mjs:62-66"
+    },
+    {
+      "from": "flow-desktop-boot/stage",
+      "to": "shared-packages",
+      "kind": "build",
+      "label": "pip installs packages/service-contracts + packages/audit-chain --no-deps",
+      "evidence": "tools/desktop-runtime/stage.mjs:74-77,450-452"
+    },
+    {
+      "from": "flow-desktop-boot/stage",
+      "to": "frontend-web",
+      "kind": "build",
+      "label": "stages apps/frontend/dist (wallet.html) to <dest>/web for the facade",
+      "evidence": "tools/desktop-runtime/stage.mjs:713-731"
+    },
+    {
+      "from": "flow-desktop-boot/payload-assembly",
+      "to": "desktop-app",
+      "kind": "build",
+      "label": "prepack builds and bundles apps/desktop/out into the npm payload",
+      "evidence": "tools/cli/scripts/assemble-payload.mjs:166-197"
+    },
+    {
+      "from": "flow-desktop-boot/payload-assembly",
+      "to": "frontend-web",
+      "kind": "build",
+      "label": "prepack builds apps/frontend and ships dist (wallet.html) in the payload",
+      "evidence": "tools/cli/scripts/assemble-payload.mjs:104-123,231-240"
+    },
+    {
+      "from": "flow-desktop-boot/cli",
+      "to": "flow-desktop-boot/mac-shell",
+      "kind": "import",
+      "label": "ensureBrandedShell before launch (macOS)",
+      "evidence": "tools/cli/bin/copilot.mjs:104-107"
+    },
+    {
+      "from": "flow-desktop-boot/cli",
+      "to": "desktop-app",
+      "kind": "spawn",
+      "label": "spawn electron <appDir> with COPILOT_RUNTIME_DIR + COPILOT_PRODUCTION=1",
+      "evidence": "tools/cli/lib/launch.mjs:58-74"
+    },
+    {
+      "from": "flow-desktop-boot/cli",
+      "to": "desktop-app",
+      "kind": "env",
+      "label": "COPILOT_PRODUCTION=1 drives production auth posture",
+      "evidence": "apps/desktop/main/posture.ts:24-28"
+    },
+    {
+      "from": "flow-desktop-boot/electron-main",
+      "to": "flow-desktop-boot/supervisor",
+      "kind": "import",
+      "label": "createDesktopSupervisor().start() when shouldSupervise",
+      "evidence": "apps/desktop/main/index.ts:262-290"
+    },
+    {
+      "from": "flow-desktop-boot/supervisor",
+      "to": "flow-desktop-boot/boot-secrets",
+      "kind": "import",
+      "label": "loadOrCreateBootSecrets (safeStorage blob)",
+      "evidence": "apps/desktop/main/services/desktop-supervisor.ts:87-92"
+    },
+    {
+      "from": "flow-desktop-boot/supervisor",
+      "to": "flow-desktop-boot/postgres-manager",
+      "kind": "import",
+      "label": "createPostgres + ensureDatabase(atlas_backend, atlas_ai)",
+      "evidence": "apps/desktop/main/services/supervisor.ts:137-146"
+    },
+    {
+      "from": "flow-desktop-boot/postgres-manager",
+      "to": "external:postgres",
+      "kind": "spawn",
+      "label": "initdb / pg_ctl -w start / stop of the embedded cluster",
+      "evidence": "apps/desktop/main/services/postgres.ts:104-120,168-178"
+    },
+    {
+      "from": "flow-desktop-boot/supervisor",
+      "to": "backend-product",
+      "kind": "spawn",
+      "label": "python scripts/migrate.py apply then uvicorn backend_app.desktop_app:app",
+      "evidence": "apps/desktop/main/services/desktop-supervisor.ts:116-157"
+    },
+    {
+      "from": "flow-desktop-boot/supervisor",
+      "to": "ai-runtime-api",
+      "kind": "spawn",
+      "label": "uvicorn runtime_api.app:app with RUNTIME_START_IN_PROCESS_WORKER=true",
+      "evidence": "apps/desktop/main/services/service-env.ts:38-41,226"
+    },
+    {
+      "from": "flow-desktop-boot/supervisor",
+      "to": "backend-facade",
+      "kind": "spawn",
+      "label": "uvicorn backend_facade.app:app with BACKEND_URL/AI_BACKEND_URL/FACADE_WEB_DIST_DIR",
+      "evidence": "apps/desktop/main/services/service-env.ts:235-244"
+    },
+    {
+      "from": "flow-desktop-boot/service-env",
+      "to": "backend-identity",
+      "kind": "env",
+      "label": "ENTERPRISE_AUTH_SECRET, SIWE_ORIGIN, GOOGLE_OAUTH_CLIENT_ID/SECRET into the backend child",
+      "evidence": "apps/desktop/main/services/service-env.ts:161-191"
+    },
+    {
+      "from": "flow-desktop-boot/service-env",
+      "to": "ai-runtime-persistence",
+      "kind": "env",
+      "label": "RUNTIME_STORE_BACKEND=postgres|file, RUNTIME_FILE_STORE_ROOT, RUNTIME_MIGRATIONS_AUTO_APPLY=false",
+      "evidence": "apps/desktop/main/services/service-env.ts:196-224"
+    },
+    {
+      "from": "flow-desktop-boot/supervisor",
+      "to": "backend-facade",
+      "kind": "http",
+      "label": "health gate GET /v1/health (90s budget) before ready",
+      "evidence": "apps/desktop/main/services/health.ts:28-51"
+    },
+    {
+      "from": "flow-desktop-boot/electron-main",
+      "to": "flow-desktop-boot/auth-posture",
+      "kind": "import",
+      "label": "resolveAuthPosture selects dev-mint vs fail-closed oidc mode",
+      "evidence": "apps/desktop/main/index.ts:490-493"
+    },
+    {
+      "from": "flow-desktop-boot/auth-service",
+      "to": "backend-facade",
+      "kind": "http",
+      "label": "GET /v1/auth/oidc/google/start + callback; wallet.html handoff; SIWE verify",
+      "evidence": "apps/desktop/main/auth/google-login.ts:85"
+    },
+    {
+      "from": "flow-desktop-boot/auth-service",
+      "to": "external:google-oauth",
+      "kind": "http",
+      "label": "system-browser Google consent via facade-brokered auth_url + loopback redirect",
+      "evidence": "apps/desktop/main/auth/google-login.ts:1-20"
+    },
+    {
+      "from": "flow-desktop-boot/auth-service",
+      "to": "external:ethereum",
+      "kind": "http",
+      "label": "SIWE wallet sign-in via facade-served wallet.html (EIP-6963 + personal_sign)",
+      "evidence": "apps/desktop/main/auth/wallet-login.ts:21-39"
+    },
+    {
+      "from": "flow-desktop-boot/transport-bridge",
+      "to": "backend-facade",
+      "kind": "http",
+      "label": "WebTransport request/SSE to facadeUrl, bearer attached in main",
+      "evidence": "apps/desktop/main/index.ts:581-588"
+    },
+    {
+      "from": "flow-desktop-boot/transport-bridge",
+      "to": "backend-facade",
+      "kind": "sse",
+      "label": "subscribeServerSentEvents relayed to renderer stream.event channel",
+      "evidence": "apps/desktop/main/transport-bridge.ts:55-84"
+    },
+    {
+      "from": "flow-desktop-boot/preload-bridge",
+      "to": "flow-desktop-boot/transport-bridge",
+      "kind": "ipc",
+      "label": "allowlisted invoke/on channels (transport, auth, boot.status)",
+      "evidence": "apps/desktop/preload/bridge.ts:47-87"
+    },
+    {
+      "from": "flow-desktop-boot/supervisor",
+      "to": "flow-desktop-boot/renderer-bootstrap",
+      "kind": "ipc",
+      "label": "BootStatusPayload on boot.status; BootGate blocks until phase=ready",
+      "evidence": "apps/desktop/main/index.ts:129-133"
+    },
+    {
+      "from": "flow-desktop-boot/renderer-bootstrap",
+      "to": "chat-surface-core",
+      "kind": "import",
+      "label": "mounts ChatShell + profile/destination SSOT from @0x-copilot/chat-surface",
+      "evidence": "apps/desktop/renderer/bootstrap.tsx:16-31"
+    },
+    {
+      "from": "flow-desktop-boot/destination-binders",
+      "to": "chat-surface-destinations",
+      "kind": "import",
+      "label": "binds Chats/Projects/Activity/Tools/Skills destination components over the Transport port",
+      "evidence": "apps/desktop/renderer/destinationBinders.tsx:22-34"
+    },
+    {
+      "from": "flow-desktop-boot/renderer-bootstrap",
+      "to": "shared-packages",
+      "kind": "contract",
+      "label": "IpcTransport + CHANNELS (boot.status) + BootStatusPayloadSchema from @0x-copilot/chat-transport",
+      "evidence": "packages/chat-transport/src/ipc/rpc-protocol.ts:52"
+    },
+    {
+      "from": "flow-desktop-boot/renderer-bootstrap",
+      "to": "shared-packages",
+      "kind": "import",
+      "label": "registerAll surface renderers + design-system styles",
+      "evidence": "apps/desktop/renderer/bootstrap.tsx:1,33"
+    },
+    {
+      "from": "flow-desktop-boot/packaging",
+      "to": "desktop-app",
+      "kind": "build",
+      "label": "extraResources maps resources/runtime -> resourcesPath/runtime (resources/web is dropped — F1)",
+      "evidence": "apps/desktop/electron-builder.yml:36-40"
+    },
+    {
+      "from": "flow-desktop-boot/packaging",
+      "to": "external:github",
+      "kind": "http",
+      "label": "electron-updater GitHub releases feed (packaged+signed builds only)",
+      "evidence": "apps/desktop/electron-builder.yml:83-86"
+    },
+    {
+      "from": "flow-desktop-boot/run-local-harness",
+      "to": "external:postgres",
+      "kind": "spawn",
+      "label": "initdb -U postgres -A trust + pg_ctl start (drifted from supervisor — F3)",
+      "evidence": "tools/desktop-runtime/run-local.mjs:271-304"
+    },
+    {
+      "from": "flow-desktop-boot/run-local-harness",
+      "to": "backend-facade",
+      "kind": "http",
+      "label": "smoke: /v1/health, /v1/auth/providers, dev-IdP absence",
+      "evidence": "tools/desktop-runtime/run-local.mjs:444-500"
+    },
+    {
+      "from": "flow-desktop-boot/electron-main",
+      "to": "desktop-distribution",
+      "kind": "file",
+      "label": "reads staged tree at COPILOT_RUNTIME_DIR/runtime/<platform>-<arch> (resource contract)",
+      "evidence": "apps/desktop/main/services/runtime-paths.ts:62-90"
+    }
+  ]
+}

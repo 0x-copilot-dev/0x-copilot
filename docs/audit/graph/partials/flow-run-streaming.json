@@ -1,0 +1,171 @@
+{
+  "cluster": {
+    "id": "flow-run-streaming",
+    "title": "Run lifecycle & streaming",
+    "kind": "flow",
+    "paths": [
+      "packages/chat-surface/src/destinations/run",
+      "packages/chat-surface/src/thread-canvas",
+      "packages/chat-transport/src",
+      "apps/frontend/src/features/chat",
+      "apps/frontend/src/api/agentApi.ts",
+      "services/backend-facade/src/backend_facade/app.py",
+      "services/ai-backend/src/runtime_api",
+      "services/ai-backend/src/agent_runtime/api",
+      "services/ai-backend/src/runtime_worker",
+      "services/ai-backend/src/runtime_adapters"
+    ],
+    "md": "docs/audit/flows/run-lifecycle-streaming.md",
+    "summary": "End-to-end run flow: goal composer POSTs a run through chat-transport and the facade into runtime_api's RunCoordinator, which seals AgentRuntimeContext and enqueues a worker command; the runtime_worker drives LangGraph, every step persists as a RuntimeEventEnvelope with monotonic sequence_no, Postgres NOTIFY wakes the API's SSE replay-loop, and clients resume via ?after_sequence. Backend pipeline is solid and single-sourced; weaknesses are serial worker dispatch (cancel starvation), a broken second SSE subscription in TcSwimlanes, three parallel client projection pipelines, and a hand-mirrored cross-language event-type contract that fails closed."
+  },
+  "nodes": [
+    {
+      "id": "flow-run-streaming",
+      "kind": "flow",
+      "path": "docs/audit/flows/run-lifecycle-streaming.md",
+      "summary": "Conversation/run create -> queue -> worker LangGraph execution -> sequence-numbered RuntimeEventEnvelope persistence -> NOTIFY-driven SSE with after_sequence resume -> client projection, plus approvals round trip and best-effort cancel."
+    }
+  ],
+  "edges": [
+    {
+      "from": "frontend-web",
+      "to": "chat-surface-destinations",
+      "kind": "import",
+      "label": "web App.tsx mounts RunDestination for the run slug",
+      "evidence": "apps/frontend/src/app/App.tsx:838"
+    },
+    {
+      "from": "desktop-app",
+      "to": "chat-surface-destinations",
+      "kind": "import",
+      "label": "desktop destinationBinders mounts RunDestination",
+      "evidence": "apps/desktop/renderer/destinationBinders.tsx:683"
+    },
+    {
+      "from": "chat-surface-destinations",
+      "to": "shared-packages",
+      "kind": "contract",
+      "label": "useRunSession consumes api-types envelope guard + Transport port (chat-transport)",
+      "evidence": "packages/chat-surface/src/destinations/run/useRunSession.ts:27-40"
+    },
+    {
+      "from": "chat-surface-destinations",
+      "to": "backend-facade",
+      "kind": "http",
+      "label": "POST /v1/agent/runs from RunDestination goal composer (via Transport)",
+      "evidence": "packages/chat-surface/src/destinations/run/RunDestination.tsx:306-317"
+    },
+    {
+      "from": "chat-surface-destinations",
+      "to": "backend-facade",
+      "kind": "sse",
+      "label": "GET /v1/agent/runs/{id}/stream?after_sequence=N, eventName runtime_event",
+      "evidence": "packages/chat-surface/src/destinations/run/useRunSession.ts:226-229"
+    },
+    {
+      "from": "chat-surface-core",
+      "to": "backend-facade",
+      "kind": "sse",
+      "label": "TcSwimlanes second per-run SSE subscription (broken: omits eventName)",
+      "evidence": "packages/chat-surface/src/thread-canvas/TcSwimlanes.tsx:157-166"
+    },
+    {
+      "from": "frontend-web",
+      "to": "backend-facade",
+      "kind": "sse",
+      "label": "legacy ChatScreen streamRunEvents with its own reconnect/backoff",
+      "evidence": "apps/frontend/src/api/agentApi.ts:607-676"
+    },
+    {
+      "from": "desktop-app",
+      "to": "shared-packages",
+      "kind": "ipc",
+      "label": "renderer IpcTransport -> main TransportBridge replays SSE subscriptions over IPC",
+      "evidence": "apps/desktop/main/transport-bridge.ts:54-84"
+    },
+    {
+      "from": "backend-facade",
+      "to": "ai-runtime-api",
+      "kind": "http",
+      "label": "forwards run create/get/events/cancel/approval-decision with server-stamped identity",
+      "evidence": "services/backend-facade/src/backend_facade/app.py:886-1103"
+    },
+    {
+      "from": "backend-facade",
+      "to": "ai-runtime-api",
+      "kind": "sse",
+      "label": "byte-level SSE passthrough of /runs/{id}/stream (timeout=None)",
+      "evidence": "services/backend-facade/src/backend_facade/app.py:1041-1069"
+    },
+    {
+      "from": "ai-runtime-api",
+      "to": "ai-runtime-persistence",
+      "kind": "db",
+      "label": "RunCoordinator persists run + user message and RUN_QUEUED via PersistencePort/EventStorePort",
+      "evidence": "services/ai-backend/src/agent_runtime/api/run_coordinator.py:178-206"
+    },
+    {
+      "from": "ai-runtime-api",
+      "to": "ai-runtime-worker",
+      "kind": "db",
+      "label": "RuntimeRunCommand/CancelCommand/ApprovalResolvedCommand enqueued on RuntimeQueuePort, claimed by worker loop",
+      "evidence": "services/ai-backend/src/agent_runtime/api/run_coordinator.py:207-217; services/ai-backend/src/runtime_worker/loop.py:141-157"
+    },
+    {
+      "from": "ai-runtime-api",
+      "to": "backend-identity",
+      "kind": "http",
+      "label": "user policies + BYOK provider-key snapshot resolved at run-create (keys split out before persistence)",
+      "evidence": "services/ai-backend/src/agent_runtime/api/run_coordinator.py:113-131"
+    },
+    {
+      "from": "ai-runtime-worker",
+      "to": "ai-runtime-execution",
+      "kind": "import",
+      "label": "RuntimeRunHandler builds deep-agent harness and streams via StreamingExecutor",
+      "evidence": "services/ai-backend/src/runtime_worker/handlers/run.py:356-381,1293-1326"
+    },
+    {
+      "from": "ai-runtime-execution",
+      "to": "external:openai",
+      "kind": "http",
+      "label": "streamed model calls per sealed model_profile (also anthropic/google/ollama via same resolver)",
+      "evidence": "services/ai-backend/src/runtime_worker/handlers/run.py:371-389"
+    },
+    {
+      "from": "ai-runtime-worker",
+      "to": "ai-runtime-persistence",
+      "kind": "db",
+      "label": "RuntimeEventProducer appends sequence-numbered envelopes (single projection of activity_kind/display_title/summary/status)",
+      "evidence": "services/ai-backend/src/agent_runtime/api/events.py:60-126"
+    },
+    {
+      "from": "ai-runtime-persistence",
+      "to": "external:postgres",
+      "kind": "db",
+      "label": "event INSERT + NOTIFY runtime_events_v1 '<run_id>:<seq>' in same transaction",
+      "evidence": "services/ai-backend/src/runtime_adapters/postgres/runtime_api_store.py:367-376"
+    },
+    {
+      "from": "ai-runtime-api",
+      "to": "external:postgres",
+      "kind": "db",
+      "label": "PostgresEventBus LISTEN loop wakes per-run SSE waiters (10s poll backstop)",
+      "evidence": "services/ai-backend/src/runtime_api/sse/postgres_event_bus.py:181-199"
+    },
+    {
+      "from": "ai-runtime-api",
+      "to": "ai-runtime-worker",
+      "kind": "spawn",
+      "label": "RUNTIME_START_IN_PROCESS_WORKER dev path spawns worker task in the API process (in-memory stores only)",
+      "evidence": "services/ai-backend/src/runtime_api/app.py:791-827"
+    },
+    {
+      "from": "ai-runtime-api",
+      "to": "shared-packages",
+      "kind": "contract",
+      "label": "RuntimeEventEnvelope + event-type/activity-kind enums hand-mirrored into api-types (no codegen)",
+      "evidence": "services/ai-backend/src/runtime_api/schemas/common.py:81-160; packages/api-types/src/index.ts:253-355"
+    }
+  ]
+}

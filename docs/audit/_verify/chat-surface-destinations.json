@@ -1,0 +1,85 @@
+{
+  "cluster": "chat-surface-destinations",
+  "verdicts": [
+    {
+      "ref": "F1",
+      "title": "~32k LOC: nine destination families have no live mount on either host",
+      "type": "dead-code",
+      "severity": "high",
+      "verdict": "confirmed",
+      "note": "HomeRoute/InboxRoute/TodosRoute/LibraryRoute/RoutinesRoute/MemoryGateway/ToolsRoute have zero non-test importers, AgentsRoute only appears in a comment, TeamRoute imports nothing from chat-surface (uses features/team/*); desktop renderSurface only mounts run/chats/projects/activity/connectors/tools→SkillsBinder and placeholders the rest (DestinationOutlet.tsx:172-193), yet index.ts:470-709 still exports every dead family."
+    },
+    {
+      "ref": "F2",
+      "title": "Transitional _*-stub.ts wire-type modules persist after canonical api-types landed",
+      "type": "ssot-violation",
+      "severity": "high",
+      "verdict": "confirmed",
+      "note": "api-types/src/{todos,projects,agents,inbox,library,routines}.ts all exist (e.g. TodoPriority at todos.ts:31 duplicated byte-identically in _todos-stub.ts:38), yet the live ProjectsRoute (mounted App.tsx:885) still imports from ../../api/_projects-stub (ProjectsRoute.tsx:84) whose types are all present in api-types/projects.ts:292-478."
+    },
+    {
+      "ref": "F3",
+      "title": "Web maintains a complete parallel Settings implementation",
+      "type": "duplication",
+      "severity": "high",
+      "verdict": "confirmed",
+      "note": "SettingsScreen.tsx is 1,405 LOC with a parallel sections/ dir (Appearance/LocalModels/ModelAndBehavior/Notifications/PrivacyAndData/Profile/ProviderKeys/Shortcuts) importing zero chat-surface settings symbols, while desktop mounts the full SettingsSurface + ten pages (SettingsMount.tsx:31-57); settingsNav.ts:11-13 claims it 'replaces' apps/frontend/.../settings/sections.ts which still exists on disk."
+    },
+    {
+      "ref": "F4",
+      "title": "Shared components built to replace web scaffolds finished but never adopted",
+      "type": "dead-code",
+      "severity": "medium",
+      "verdict": "confirmed",
+      "note": "WebhookCreateWizard (831 LOC) is only comment-referenced in apps while WebhooksRoute.tsx:420 keeps WebhookCreateWizardScaffold; ConnectorDetailView and TemplateGallery are only comment-referenced (ConnectorDetailRoute.tsx:14, TemplateGalleryRoute.tsx:6); WebhookSecurityPage, ChatsSidebar/ChatsDestination have zero apps importers; ProjectFilterChip's only usage-sites are the dead library/ family."
+    },
+    {
+      "ref": "F5",
+      "title": "Flagship Run cockpit is desktop-only; approval reducer exists twice",
+      "type": "inconsistency",
+      "severity": "medium",
+      "verdict": "confirmed",
+      "note": "web run slug mounts legacy ChatScreen (App.tsx:838-857) with RunDestination having zero web importers, and approvalProjection.ts:18-19 explicitly states its reduction 'mirrors the host-owned approval reducer in apps/frontend/.../chatModel' — which exists at features/chat/chatModel/approval.ts."
+    },
+    {
+      "ref": "F6",
+      "title": "Tolerant hand-rolled contract parsers re-derive server shapes; dead toError",
+      "type": "bespoke-replaceable",
+      "severity": "medium",
+      "verdict": "confirmed",
+      "note": "parseRunList accepts bare array/{runs}/{items} with snake or camel fields (useRunSession.ts:387-437) and runIdFromCreateResponse accepts run_id/runId/id flat-or-nested (RunDestination.tsx:660-679); toError is defined at useRunSession.ts:456 with no callers anywhere, while the stream path already uses the api-types isRuntimeEventEnvelope guard."
+    },
+    {
+      "ref": "F7",
+      "title": "Hardcoded per-provider model catalogs",
+      "type": "ssot-violation",
+      "severity": "medium",
+      "verdict": "confirmed",
+      "note": "PROVIDER_CATALOG hardcodes model lists (claude-opus-4, gpt-4o, gemini-2.5-pro) at providerKeys.ts:56-95, with divergent dead copies FALLBACK_MODELS at AgentEditor.tsx:224 (claude-opus-4-7) and model default at RoutineEditor.tsx:207 (claude-opus-4-7) — one instance of the repo's known divergent-model-list problem."
+    },
+    {
+      "ref": "F8",
+      "title": "Approval decisions are fire-and-forget; can show false receipt",
+      "type": "risk",
+      "severity": "medium",
+      "verdict": "confirmed",
+      "note": "resolveApproval sets the optimistic local decision then POSTs with .catch(() => {}) (RunDestination.tsx:459-468); the comment concedes 'a failure leaves the optimistic state (the trailing SSE frame is the authority)', so if the POST fails while the stream is also down no reconciling approval_resolved frame arrives and the consent card shows a permanent false approved/rejected receipt."
+    },
+    {
+      "ref": "F9",
+      "title": "Doc drift in packages/chat-surface/CLAUDE.md (skills listed as folded/legacy; settings claim)",
+      "type": "inconsistency",
+      "severity": "low",
+      "verdict": "accepted",
+      "note": "Low-severity doc-drift finding accepted as-is per verification protocol."
+    },
+    {
+      "ref": "F10",
+      "title": "Barrel-export accretion: index.ts exports full dead surface",
+      "type": "complexity",
+      "severity": "low",
+      "verdict": "accepted",
+      "note": "Low-severity barrel-bloat finding accepted as-is; consistent with confirmed F1/F4 dead exports."
+    }
+  ]
+}

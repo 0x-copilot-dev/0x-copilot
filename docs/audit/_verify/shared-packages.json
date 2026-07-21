@@ -1,0 +1,99 @@
+{
+  "cluster": "shared-packages",
+  "verdicts": [
+    {
+      "ref": "F1",
+      "title": "api-types is a ~9.6k-LOC hand-maintained dual-write with drift tests for only 4 enum tuples",
+      "type": "ssot-violation",
+      "severity": "high",
+      "verdict": "confirmed",
+      "note": "Dual-write is stated verbatim (SPEC.md:27-33, README.md:7) and the only cross-language check is test_api_type_contracts.py:15-31 which set-compares just RUNTIME_API_EVENT_TYPES/RUNTIME_EVENT_SOURCES/RUNTIME_ACTIVITY_KINDS/AGENT_RUN_STATUSES; backend files self-declare mirrors (home/routes.py:48). The '54 files' count is ~46 by grep, a minor overstatement that does not weaken the finding."
+    },
+    {
+      "ref": "F2",
+      "title": "All four tier-1 surface renderers are registered but unreachable at runtime (mounted by neither app)",
+      "type": "dead-code",
+      "severity": "medium",
+      "verdict": "refuted",
+      "note": "The thread-canvas subtree IS mounted by the desktop app: bootstrap.tsx:247 mounts DestinationOutlet whose default 'run' slug (AppRail.tsx:21 BRAND_DESTINATION='run') renders RunBinder->RunDestination.tsx:572 <ThreadCanvas> -> ThreadCanvas.tsx:244 <TcSurfaceMount> -> TcSurfaceMount.tsx:240 resolveAdapter, and registerAll() at bootstrap.tsx:45 populates exactly that registry — so the adapters are reachable when a run is active, not 'serve tests only'; the cited DestinationOutlet.tsx:23-24 comment describes RunDestination (PR-3.5, shipped) using ThreadCanvas, not future work."
+    },
+    {
+      "ref": "F3",
+      "title": "api-types reaches across the package boundary with a relative filesystem JSON import",
+      "type": "boundary-violation",
+      "severity": "medium",
+      "verdict": "confirmed",
+      "note": "adapterAllowlist.ts:10 imports ../../service-contracts/src/copilot_service_contracts/adapter_allowlist.json while api-types/package.json declares no service-contracts dependency (only devDeps at :12-15); service-contracts is Python-only (no npm package.json) so it can't even be a proper npm dep, and apps/frontend/Dockerfile:16 copies the src tree uncommented — a genuine invisible build contract."
+    },
+    {
+      "ref": "F4",
+      "title": "Accent/theme unions hand-duplicated between api-types and design-system",
+      "type": "ssot-violation",
+      "severity": "low",
+      "verdict": "accepted"
+    },
+    {
+      "ref": "F5",
+      "title": "Hand-rolled SSE parser only recognizes LF-LF frame boundaries",
+      "type": "risk",
+      "severity": "low",
+      "verdict": "accepted"
+    },
+    {
+      "ref": "F6",
+      "title": "IpcTransport hand-validates a shape its own zod schema already defines",
+      "type": "duplication",
+      "severity": "low",
+      "verdict": "accepted"
+    },
+    {
+      "ref": "F7",
+      "title": "Root docs claim audit-chain is 'shared Python + TS' but no TS implementation exists",
+      "type": "inconsistency",
+      "severity": "low",
+      "verdict": "accepted"
+    },
+    {
+      "ref": "F8",
+      "title": "surface-renderers hardcodes a dark-only hex palette + px type against the token-SoT rule",
+      "type": "inconsistency",
+      "severity": "low",
+      "verdict": "accepted"
+    },
+    {
+      "ref": "F9",
+      "title": "Six unreferenced font assets (~123KB) ship in design-system",
+      "type": "dead-code",
+      "severity": "low",
+      "verdict": "accepted"
+    },
+    {
+      "ref": "F10",
+      "title": "surface-renderers declares chat-transport as runtime dep whose only import is a lint-negative fixture",
+      "type": "dead-code",
+      "severity": "low",
+      "verdict": "accepted"
+    },
+    {
+      "ref": "F11",
+      "title": "api-types/src/index.ts is a 3,978-line monolith while newer contracts follow file-per-domain",
+      "type": "refactor",
+      "severity": "low",
+      "verdict": "accepted"
+    },
+    {
+      "ref": "F12",
+      "title": "Minor cross-language string duplication and stale comments",
+      "type": "inconsistency",
+      "severity": "low",
+      "verdict": "accepted"
+    },
+    {
+      "ref": "F13",
+      "title": "design-system has zero automated tests for behavioral primitives",
+      "type": "risk",
+      "severity": "low",
+      "verdict": "accepted"
+    }
+  ]
+}

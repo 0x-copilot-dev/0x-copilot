@@ -1,0 +1,349 @@
+{
+  "cluster": {
+    "id": "ai-runtime-capabilities",
+    "title": "AI Runtime — Capabilities (tools/MCP/skills/sandbox)",
+    "kind": "cluster",
+    "paths": ["services/ai-backend/src/agent_runtime/capabilities"],
+    "md": "docs/audit/clusters/02-ai-runtime-capabilities.md",
+    "summary": "The agent runtime's capability layer: MCP dynamic load/dispatch, skills, built-in tools, three code-execution subsystems, desktop workspace/browser bridges, and the cross-cutting per-call middleware (budget, error policy, retry, citations, display metadata). Well-typed and fail-closed, but ~16% of its 19k LOC is production-dead (render_adapter_generator, dynamic tool registry, in-process code sandbox, mcp/files) and it violates the agent_runtime pure-domain rule by importing runtime_api.schemas at runtime."
+  },
+  "nodes": [
+    {
+      "id": "ai-runtime-capabilities/mcp",
+      "kind": "module",
+      "path": "services/ai-backend/src/agent_runtime/capabilities/mcp",
+      "summary": "MCP contracts, provider-backed registry, load pipeline with TTL+LRU discovery cache, protocol-error classification, dispatcher-unwrap helper, and the three model-facing MCP tools (load_mcp_server, call_mcp_tool, auth_mcp)."
+    },
+    {
+      "id": "ai-runtime-capabilities/mcp-backend-provider",
+      "kind": "module",
+      "path": "services/ai-backend/src/agent_runtime/capabilities/mcp/backend_provider.py",
+      "summary": "HTTP adapter to backend's /internal/v1 MCP surface: server cards, auth sessions, JSON-RPC proxy client; synthesises display templates at descriptor build time."
+    },
+    {
+      "id": "ai-runtime-capabilities/tools",
+      "kind": "module",
+      "path": "services/ai-backend/src/agent_runtime/capabilities/tools",
+      "summary": "ToolCard/permission/privacy contracts and built-in tools (ask_a_question, suggest_mcp_connector, prior_results). Also contains the production-dead dynamic tool registry/loader/load_tool and in-process code sandbox."
+    },
+    {
+      "id": "ai-runtime-capabilities/skills",
+      "kind": "module",
+      "path": "services/ai-backend/src/agent_runtime/capabilities/skills",
+      "summary": "SKILL.md manifest parser, backend-backed virtual skill registry (HTTP cards + bundles), filesystem source discovery, access policy, load_skill tool."
+    },
+    {
+      "id": "ai-runtime-capabilities/citations",
+      "kind": "module",
+      "path": "services/ai-backend/src/agent_runtime/capabilities/citations.py",
+      "summary": "Two-lane citation system: CitationLedger [cN] tokens + source_ingested events for provider grounding; conversation-scoped [[N]] ordinals + citation_made events for tool calls (projection, capturing tool, resolver, ordinal allocator)."
+    },
+    {
+      "id": "ai-runtime-capabilities/tool-middleware",
+      "kind": "module",
+      "path": "services/ai-backend/src/agent_runtime/capabilities/tool_budget_guard.py",
+      "summary": "Per-call cross-cutting wrappers: budget admit/warn/reject (middleware + ContextVar guard + registry decorator), error-policy classification wrapper, retrying wrapper."
+    },
+    {
+      "id": "ai-runtime-capabilities/display-metadata",
+      "kind": "module",
+      "path": "services/ai-backend/src/agent_runtime/capabilities/middleware/display_metadata.py",
+      "summary": "Deterministic display-template synthesis from tool names/JSON schemas plus the _display_title/_display_summary args-schema wrap/strip machinery."
+    },
+    {
+      "id": "ai-runtime-capabilities/interpreter",
+      "kind": "module",
+      "path": "services/ai-backend/src/agent_runtime/capabilities/interpreter",
+      "summary": "AC6 Monty embedded interpreter: ports/contracts, HitlPolicyToolInvoker (budget -> interrupt approval -> dispatch), snapshot store, env-gated registration seam."
+    },
+    {
+      "id": "ai-runtime-capabilities/sandbox",
+      "kind": "module",
+      "path": "services/ai-backend/src/agent_runtime/capabilities/sandbox",
+      "summary": "AC7 remote sandbox: lifecycle service with TTL/leak detection, policy-enforced Deep Agents backend with command budget, workspace transfer/patch manifests, lazy LangSmith provider, run_in_sandbox tool."
+    },
+    {
+      "id": "ai-runtime-capabilities/desktop-workspace",
+      "kind": "module",
+      "path": "services/ai-backend/src/agent_runtime/capabilities/desktop",
+      "summary": "AC5 /workspace/ Deep Agents backend over the Electron capability broker: mount table over grants, read routes, approval-gated snapshot-before-write mutations, typed loopback HTTP client."
+    },
+    {
+      "id": "ai-runtime-capabilities/browser-mcp",
+      "kind": "module",
+      "path": "services/ai-backend/src/agent_runtime/capabilities/browser",
+      "summary": "AC8 desktop browser MCP provider/client over the browser broker loopback; side-effecting tools marked HIGH risk to ride the standard MCP HITL interrupt."
+    },
+    {
+      "id": "ai-runtime-capabilities/draft-backend",
+      "kind": "module",
+      "path": "services/ai-backend/src/agent_runtime/capabilities/backends/draft_backend.py",
+      "summary": "Deep Agents BackendProtocol over /drafts/ mapped to DraftStorePort with versioning and draft event emission."
+    },
+    {
+      "id": "ai-runtime-capabilities/auth-gate",
+      "kind": "module",
+      "path": "services/ai-backend/src/agent_runtime/capabilities/auth_gate.py",
+      "summary": "Connector reachability gate (built-in tools always authenticated; MCP servers checked by auth_state/enabled) used before draft sends and approval dispatch."
+    },
+    {
+      "id": "ai-runtime-capabilities/http-pool",
+      "kind": "module",
+      "path": "services/ai-backend/src/agent_runtime/capabilities/http_pool.py",
+      "summary": "Process-scoped pooled httpx.AsyncClient shared by all ai-backend -> backend/broker HTTP calls; closed on API/worker shutdown."
+    },
+    {
+      "id": "ai-runtime-capabilities/render-adapter-generator",
+      "kind": "module",
+      "path": "services/ai-backend/src/agent_runtime/capabilities/render_adapter_generator",
+      "summary": "Constrained-template React adapter codegen with import allowlist auditing. PRODUCTION-DEAD: consumed only by its own tests."
+    }
+  ],
+  "edges": [
+    {
+      "from": "ai-runtime-capabilities/mcp",
+      "to": "ai-runtime-capabilities/mcp-backend-provider",
+      "kind": "import",
+      "label": "registry provider + client factory",
+      "evidence": "services/ai-backend/src/runtime_worker/dependencies.py:11"
+    },
+    {
+      "from": "ai-runtime-capabilities/mcp-backend-provider",
+      "to": "backend-platform",
+      "kind": "http",
+      "label": "/internal/v1 MCP cards, auth sessions, JSON-RPC proxy (ENTERPRISE_SERVICE_TOKEN headers)",
+      "evidence": "services/ai-backend/src/agent_runtime/capabilities/mcp/backend_provider.py:62-131,427-440"
+    },
+    {
+      "from": "ai-runtime-capabilities/mcp-backend-provider",
+      "to": "external:mcp-servers",
+      "kind": "http",
+      "label": "real MCP servers reached via backend RPC proxy",
+      "evidence": "services/ai-backend/src/agent_runtime/capabilities/mcp/backend_provider.py:303-335"
+    },
+    {
+      "from": "ai-runtime-capabilities/skills",
+      "to": "backend-platform",
+      "kind": "http",
+      "label": "skill cards + bundle load over /internal/v1",
+      "evidence": "services/ai-backend/src/agent_runtime/capabilities/skills/virtual.py:88-120"
+    },
+    {
+      "from": "ai-runtime-capabilities/desktop-workspace",
+      "to": "desktop-app",
+      "kind": "http",
+      "label": "capability broker loopback /v1/fs/* + grants (DESKTOP_BROKER_URL/TOKEN)",
+      "evidence": "services/ai-backend/src/agent_runtime/capabilities/desktop/broker_client.py:56-90"
+    },
+    {
+      "from": "ai-runtime-capabilities/browser-mcp",
+      "to": "desktop-app",
+      "kind": "http",
+      "label": "browser broker loopback (DESKTOP_BROWSER_BROKER_URL/TOKEN)",
+      "evidence": "services/ai-backend/src/agent_runtime/capabilities/browser/desktop_browser_provider.py:246-276"
+    },
+    {
+      "from": "ai-runtime-capabilities/mcp-backend-provider",
+      "to": "ai-runtime-capabilities/http-pool",
+      "kind": "import",
+      "label": "shared pooled AsyncClient",
+      "evidence": "services/ai-backend/src/agent_runtime/capabilities/mcp/backend_provider.py:18"
+    },
+    {
+      "from": "ai-runtime-capabilities/skills",
+      "to": "ai-runtime-capabilities/http-pool",
+      "kind": "import",
+      "label": "shared pooled AsyncClient",
+      "evidence": "services/ai-backend/src/agent_runtime/capabilities/skills/virtual.py:18"
+    },
+    {
+      "from": "ai-runtime-capabilities/desktop-workspace",
+      "to": "ai-runtime-capabilities/http-pool",
+      "kind": "import",
+      "label": "shared pooled AsyncClient",
+      "evidence": "services/ai-backend/src/agent_runtime/capabilities/desktop/broker_client.py:51"
+    },
+    {
+      "from": "ai-runtime-capabilities/mcp-backend-provider",
+      "to": "ai-runtime-capabilities/display-metadata",
+      "kind": "import",
+      "label": "synthesise ToolDisplayTemplate per descriptor",
+      "evidence": "services/ai-backend/src/agent_runtime/capabilities/mcp/backend_provider.py:352-369"
+    },
+    {
+      "from": "ai-runtime-capabilities/mcp",
+      "to": "ai-runtime-capabilities/citations",
+      "kind": "import",
+      "label": "call_mcp_tool projects citations + appends [[N]] hint",
+      "evidence": "services/ai-backend/src/agent_runtime/capabilities/mcp/middleware/call_tool.py:13-16,135-198"
+    },
+    {
+      "from": "ai-runtime-capabilities/interpreter",
+      "to": "ai-runtime-capabilities/tool-middleware",
+      "kind": "import",
+      "label": "external calls charged against the same per-run ToolBudgetGuard",
+      "evidence": "services/ai-backend/src/runtime_worker/capability_tool_wiring.py:52-69"
+    },
+    {
+      "from": "ai-runtime-capabilities/browser-mcp",
+      "to": "ai-runtime-capabilities/mcp",
+      "kind": "import",
+      "label": "reuses McpServerCard/McpClient contracts",
+      "evidence": "services/ai-backend/src/agent_runtime/capabilities/browser/desktop_browser_provider.py:41-58"
+    },
+    {
+      "from": "ai-runtime-capabilities/tool-middleware",
+      "to": "ai-runtime-api",
+      "kind": "import",
+      "label": "BOUNDARY VIOLATION: runtime imports of runtime_api.schemas (RunRecord, RuntimeApiEventType) from domain modules",
+      "evidence": "services/ai-backend/src/agent_runtime/capabilities/tool_budget_guard.py:25"
+    },
+    {
+      "from": "ai-runtime-capabilities/citations",
+      "to": "ai-runtime-api",
+      "kind": "import",
+      "label": "BOUNDARY VIOLATION: runtime_api.schemas import in citations + late import in citation_resolver",
+      "evidence": "services/ai-backend/src/agent_runtime/capabilities/citations.py:22"
+    },
+    {
+      "from": "ai-runtime-capabilities/citations",
+      "to": "ai-runtime-persistence",
+      "kind": "import",
+      "label": "CitationRecord + CitationStorePort + ConversationToolOrdinalStorePort",
+      "evidence": "services/ai-backend/src/agent_runtime/capabilities/citations.py:21,27"
+    },
+    {
+      "from": "ai-runtime-capabilities/draft-backend",
+      "to": "ai-runtime-persistence",
+      "kind": "import",
+      "label": "DraftStorePort + DraftRecord",
+      "evidence": "services/ai-backend/src/agent_runtime/capabilities/backends/draft_backend.py:26-31"
+    },
+    {
+      "from": "ai-runtime-capabilities/tools",
+      "to": "ai-runtime-execution",
+      "kind": "import",
+      "label": "AgentRuntimeContext/RuntimeContract/typed errors",
+      "evidence": "services/ai-backend/src/agent_runtime/capabilities/tools/registry.py:11-12"
+    },
+    {
+      "from": "ai-runtime-capabilities/sandbox",
+      "to": "external:langsmith",
+      "kind": "import",
+      "label": "lazy LangSmith sandbox SDK provider",
+      "evidence": "services/ai-backend/src/agent_runtime/capabilities/sandbox/providers/langsmith.py:117"
+    },
+    {
+      "from": "ai-runtime-capabilities/interpreter",
+      "to": "external:monty",
+      "kind": "import",
+      "label": "lazy pydantic_monty interpreter dependency",
+      "evidence": "services/ai-backend/src/agent_runtime/capabilities/interpreter/__init__.py:3-5"
+    },
+    {
+      "from": "ai-runtime-capabilities/desktop-workspace",
+      "to": "external:deepagents",
+      "kind": "import",
+      "label": "BackendProtocol implementation",
+      "evidence": "services/ai-backend/src/agent_runtime/capabilities/desktop/workspace_backend.py:70-80"
+    },
+    {
+      "from": "ai-runtime-capabilities/tool-middleware",
+      "to": "external:langchain",
+      "kind": "import",
+      "label": "BaseTool wrapper classes",
+      "evidence": "services/ai-backend/src/agent_runtime/capabilities/tool_budget_guard.py:13"
+    },
+    {
+      "from": "ai-runtime-capabilities/mcp",
+      "to": "external:langgraph",
+      "kind": "import",
+      "label": "interrupt() HITL seam in auth_mcp / ask_a_question / InterruptApprovalGate",
+      "evidence": "services/ai-backend/src/agent_runtime/capabilities/mcp/middleware/auth_mcp.py:11"
+    },
+    {
+      "from": "ai-runtime-capabilities/mcp-backend-provider",
+      "to": "shared-packages",
+      "kind": "contract",
+      "label": "copilot_service_contracts.headers service-token header names",
+      "evidence": "services/ai-backend/src/agent_runtime/capabilities/mcp/backend_provider.py:11-15"
+    },
+    {
+      "from": "ai-runtime-capabilities/render-adapter-generator",
+      "to": "shared-packages",
+      "kind": "contract",
+      "label": "adapter_allowlist (dead-code chain)",
+      "evidence": "services/ai-backend/src/agent_runtime/capabilities/render_adapter_generator/capability.py:10"
+    },
+    {
+      "from": "ai-runtime-worker",
+      "to": "ai-runtime-capabilities/tool-middleware",
+      "kind": "import",
+      "label": "composes ToolErrorPolicy > ToolBudget > CitationCapturing registry stack per run",
+      "evidence": "services/ai-backend/src/runtime_worker/dependencies.py:129-131"
+    },
+    {
+      "from": "ai-runtime-worker",
+      "to": "ai-runtime-capabilities/interpreter",
+      "kind": "import",
+      "label": "CapabilityToolWiring builds gated run_code_mode / run_in_sandbox per run",
+      "evidence": "services/ai-backend/src/runtime_worker/capability_tool_wiring.py:133-230"
+    },
+    {
+      "from": "ai-runtime-worker",
+      "to": "ai-runtime-capabilities/desktop-workspace",
+      "kind": "import",
+      "label": "workspace_backend_wiring builds mount-bound /workspace/ backend",
+      "evidence": "services/ai-backend/src/runtime_worker/workspace_backend_wiring.py:89-123"
+    },
+    {
+      "from": "ai-runtime-worker",
+      "to": "ai-runtime-capabilities/citations",
+      "kind": "import",
+      "label": "binds ledger/resolver/ordinal allocator ContextVars per run",
+      "evidence": "services/ai-backend/src/runtime_worker/handlers/run.py (citation_resolver, citations, conversation_ordinals imports)"
+    },
+    {
+      "from": "ai-runtime-execution",
+      "to": "ai-runtime-capabilities/mcp",
+      "kind": "import",
+      "label": "factory builds McpLoader + load/call/auth MCP tools + discovery cache wiring",
+      "evidence": "services/ai-backend/src/agent_runtime/execution/factory.py (mcp.loader/middleware imports)"
+    },
+    {
+      "from": "ai-runtime-execution",
+      "to": "ai-runtime-capabilities/citations",
+      "kind": "import",
+      "label": "provider stream adapters call CitationLedger.cite for grounded sources",
+      "evidence": "services/ai-backend/src/agent_runtime/execution/providers/anthropic_stream_adapter.py:113"
+    },
+    {
+      "from": "ai-runtime-api",
+      "to": "ai-runtime-capabilities/auth-gate",
+      "kind": "import",
+      "label": "runtime_api app + draft service use CapabilityAuthGate",
+      "evidence": "services/ai-backend/src/runtime_api/app.py (auth_gate import)"
+    },
+    {
+      "from": "ai-runtime-api",
+      "to": "ai-runtime-capabilities/display-metadata",
+      "kind": "import",
+      "label": "presentation reads _display_* keys + McpDispatcherUnwrap",
+      "evidence": "services/ai-backend/src/agent_runtime/api/presentation.py (display_metadata, mcp.dispatcher imports)"
+    },
+    {
+      "from": "build-deploy",
+      "to": "ai-runtime-capabilities/sandbox",
+      "kind": "env",
+      "label": "RUNTIME_ENABLE_REMOTE_SANDBOX / RUNTIME_SANDBOX_* gates",
+      "evidence": "services/ai-backend/src/agent_runtime/capabilities/sandbox/config.py:28-35"
+    },
+    {
+      "from": "build-deploy",
+      "to": "ai-runtime-capabilities/interpreter",
+      "kind": "env",
+      "label": "RUNTIME_ENABLE_MONTY / ENTERPRISE_DEPLOYMENT_PROFILE / RUNTIME_INTERPRETER_PROVIDER gates",
+      "evidence": "services/ai-backend/src/agent_runtime/capabilities/interpreter/registration.py:78-88"
+    }
+  ]
+}

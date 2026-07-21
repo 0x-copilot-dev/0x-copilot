@@ -1,0 +1,248 @@
+{
+  "cluster": {
+    "id": "flow-contracts",
+    "title": "Contract & type propagation (SSOT audit)",
+    "kind": "flow",
+    "paths": [
+      "packages/api-types",
+      "packages/service-contracts",
+      "packages/chat-transport",
+      "packages/chat-surface/src/ports",
+      "services/ai-backend/src/runtime_api/schemas",
+      "services/backend/src/backend_app/contracts.py",
+      "apps/frontend/src/api",
+      "apps/desktop/preload",
+      "apps/desktop/main/services/service-env.ts"
+    ],
+    "md": "docs/audit/flows/contracts-and-types.md",
+    "summary": "Traces how app-facing payload shapes travel from Pydantic producers through the byte-forwarding facade into the hand-written api-types TS mirror, the payload-agnostic chat-transport, chat-surface, and both host apps. Nothing is generated and no CI diffs the mirror; core enums are verified in sync today but a dead frontend stub island has already drifted, and byte-exact contracts (SIWE template, desktop env names) are hand-synced in 3+ places."
+  },
+  "nodes": [
+    {
+      "id": "flow-contracts",
+      "kind": "flow",
+      "path": "docs/audit/flows/contracts-and-types.md",
+      "summary": "End-to-end contract/type propagation and SSOT audit across Python services, shared TS packages, and both host apps."
+    },
+    {
+      "id": "flow-contracts/api-types-mirror",
+      "kind": "package",
+      "path": "packages/api-types/src",
+      "summary": "9,231 LOC hand-written TS mirror of the public /v1 wire contract; server declared source of truth; no codegen, no CI drift check."
+    },
+    {
+      "id": "flow-contracts/service-contracts",
+      "kind": "package",
+      "path": "packages/service-contracts/src/copilot_service_contracts",
+      "summary": "Constants-only Python package: deployment-profile values/toggle keys, internal header names, RBAC scope catalog, adapter-allowlist JSON (the one genuine cross-language SSOT)."
+    },
+    {
+      "id": "flow-contracts/frontend-stub-island",
+      "kind": "module",
+      "path": "apps/frontend/src/api",
+      "summary": "Six _*-stub.ts hand-copies of api-types contracts plus their consuming legacy routes; unmounted dead island with confirmed drift (todos done vs status)."
+    },
+    {
+      "id": "flow-contracts/ipc-protocol",
+      "kind": "module",
+      "path": "packages/chat-transport/src/ipc/rpc-protocol.ts",
+      "summary": "Zod-validated IPC envelope + channel allowlist imported by desktop preload, main, and renderer; payload bodies deliberately unknown."
+    },
+    {
+      "id": "flow-contracts/siwe-template",
+      "kind": "module",
+      "path": "apps/frontend/src/features/auth/siweMessage.ts",
+      "summary": "Byte-exact EIP-4361 message template; hand-duplicated in backend siwe.py and desktop local-login.ts (three copies, docs claim two)."
+    },
+    {
+      "id": "flow-contracts/desktop-env-contract",
+      "kind": "module",
+      "path": "apps/desktop/main/services/service-env.ts",
+      "summary": "~20 env-var names hardcoded in TS that must match Python settings loaders; produced the shipped BACKEND_BASE_URL BYOK breakage."
+    }
+  ],
+  "edges": [
+    {
+      "from": "ai-runtime-api",
+      "to": "flow-contracts/api-types-mirror",
+      "kind": "contract",
+      "label": "runtime_api/schemas Pydantic enums+models hand-mirrored into api-types (44 event types, envelope, statuses)",
+      "evidence": "services/ai-backend/src/runtime_api/schemas/common.py:34; packages/api-types/src/index.ts:1379"
+    },
+    {
+      "from": "backend-product",
+      "to": "flow-contracts/api-types-mirror",
+      "kind": "contract",
+      "label": "backend_app contracts (MCP, provider keys, todos, settings, home/inbox) hand-mirrored into api-types",
+      "evidence": "services/backend/src/backend_app/contracts.py:148; packages/api-types/src/index.ts:16"
+    },
+    {
+      "from": "backend-facade",
+      "to": "flow-contracts/api-types-mirror",
+      "kind": "http",
+      "label": "facade forwards producer bytes without re-modeling (0 response BaseModels), so api-types mirrors the producers directly",
+      "evidence": "services/backend-facade/src/backend_facade/settings_routes.py:1"
+    },
+    {
+      "from": "flow-contracts/api-types-mirror",
+      "to": "chat-surface-core",
+      "kind": "import",
+      "label": "chat-surface consumes wire types from api-types (ActivityRunRow, provider keys, envelopes)",
+      "evidence": "packages/chat-surface/package.json:19; packages/chat-surface/src/destinations/activity/ActivityDestination.tsx:41"
+    },
+    {
+      "from": "flow-contracts/api-types-mirror",
+      "to": "frontend-web",
+      "kind": "import",
+      "label": "frontend api modules import request/response types; SSE frames validated with isRuntimeEventEnvelope",
+      "evidence": "apps/frontend/src/api/agentApi.ts:1"
+    },
+    {
+      "from": "flow-contracts/api-types-mirror",
+      "to": "desktop-app",
+      "kind": "import",
+      "label": "desktop renderer destinationBinders type payloads exclusively from api-types",
+      "evidence": "apps/desktop/renderer/destinationBinders.tsx:14"
+    },
+    {
+      "from": "shared-packages",
+      "to": "chat-surface-core",
+      "kind": "import",
+      "label": "chat-surface re-exports the chat-transport Transport port unchanged",
+      "evidence": "packages/chat-surface/src/ports/Transport.ts:1"
+    },
+    {
+      "from": "frontend-web",
+      "to": "shared-packages",
+      "kind": "import",
+      "label": "web host constructs singleton WebTransport from chat-transport",
+      "evidence": "apps/frontend/src/api/transport.ts:16"
+    },
+    {
+      "from": "desktop-app",
+      "to": "flow-contracts/ipc-protocol",
+      "kind": "ipc",
+      "label": "preload + main + renderer all import CHANNELS/zod schemas; body crosses IPC as z.unknown",
+      "evidence": "apps/desktop/preload/bridge.ts:3; apps/desktop/main/ipc/handlers.ts:31"
+    },
+    {
+      "from": "backend-identity",
+      "to": "flow-contracts/siwe-template",
+      "kind": "contract",
+      "label": "byte-exact EIP-4361 template re-parsed server-side; duplicated in frontend siweMessage.ts",
+      "evidence": "services/backend/src/backend_app/identity/siwe.py:291; apps/frontend/src/features/auth/siweMessage.ts:31"
+    },
+    {
+      "from": "desktop-app",
+      "to": "flow-contracts/siwe-template",
+      "kind": "contract",
+      "label": "third hand copy of the SIWE template in desktop local-login (undocumented)",
+      "evidence": "apps/desktop/main/auth/local-login.ts:79"
+    },
+    {
+      "from": "flow-contracts/service-contracts",
+      "to": "backend-platform",
+      "kind": "import",
+      "label": "deployment-profile constants + headers + scopes imported; ~200-LOC loader re-implemented per service",
+      "evidence": "services/backend/src/backend_app/deployment_profile.py:1"
+    },
+    {
+      "from": "flow-contracts/service-contracts",
+      "to": "backend-facade",
+      "kind": "import",
+      "label": "facade's own deployment-profile loader imports shared constants ('same module exists in each of the three services')",
+      "evidence": "services/backend-facade/src/backend_facade/deployment_profile.py:20"
+    },
+    {
+      "from": "flow-contracts/service-contracts",
+      "to": "ai-runtime-execution",
+      "kind": "import",
+      "label": "ai-backend deployment profile loader + adapter allowlist loaded from service-contracts",
+      "evidence": "services/ai-backend/src/agent_runtime/deployment/profile.py:1; packages/service-contracts/src/copilot_service_contracts/adapter_allowlist.py:30"
+    },
+    {
+      "from": "flow-contracts/api-types-mirror",
+      "to": "flow-contracts/service-contracts",
+      "kind": "file",
+      "label": "adapterAllowlist.ts imports service-contracts' adapter_allowlist.json by relative path — one JSON, two runtimes (genuine SSOT)",
+      "evidence": "packages/api-types/src/adapterAllowlist.ts:10"
+    },
+    {
+      "from": "flow-contracts/desktop-env-contract",
+      "to": "backend-platform",
+      "kind": "env",
+      "label": "desktop supervisor sets ~20 env names as string literals that Python settings loaders must match (BACKEND_BASE_URL breakage precedent)",
+      "evidence": "apps/desktop/main/services/service-env.ts:154"
+    },
+    {
+      "from": "flow-contracts/desktop-env-contract",
+      "to": "ai-runtime-api",
+      "kind": "env",
+      "label": "RUNTIME_STORE_BACKEND / RUNTIME_START_IN_PROCESS_WORKER / registry URLs passed by literal name",
+      "evidence": "apps/desktop/main/services/service-env.ts:204"
+    },
+    {
+      "from": "ai-runtime-capabilities",
+      "to": "backend-product",
+      "kind": "contract",
+      "label": "ai-backend re-declares MCP enums + McpServerCard for the /internal/v1 card feed (third copy of the MCP enum set)",
+      "evidence": "services/ai-backend/src/agent_runtime/capabilities/mcp/cards.py:45"
+    },
+    {
+      "from": "flow-contracts/frontend-stub-island",
+      "to": "flow-contracts/api-types-mirror",
+      "kind": "contract",
+      "label": "6 stub files duplicate api-types destination contracts with confirmed drift (todos done vs status); island is dead code",
+      "evidence": "apps/frontend/src/api/_todos-stub.ts:58; packages/api-types/src/todos.ts:114"
+    },
+    {
+      "from": "frontend-web",
+      "to": "backend-identity",
+      "kind": "http",
+      "label": "error contract is prose: FE shape-sniffs {detail} and regexes MCP OAuth-setup messages instead of typed codes",
+      "evidence": "apps/frontend/src/api/http.ts:47; apps/frontend/src/api/mcpErrors.ts:11"
+    },
+    {
+      "from": "backend-identity",
+      "to": "frontend-web",
+      "kind": "http",
+      "label": "dev persona catalog served from backend YAML via GET /v1/dev/personas (served-not-mirrored, good pattern)",
+      "evidence": "services/backend/src/backend_app/dev_idp/personas.py:1; apps/frontend/src/api/devIdpApi.ts:43"
+    },
+    {
+      "from": "build-deploy",
+      "to": "flow-contracts/api-types-mirror",
+      "kind": "build",
+      "label": "CI only typechecks api-types; no Pydantic-vs-TS drift detection exists",
+      "evidence": ".github/workflows/ci-frontend.yml:49"
+    },
+    {
+      "from": "build-deploy",
+      "to": "flow-contracts/service-contracts",
+      "kind": "build",
+      "label": "check_route_scopes.py enforces RBAC scope annotations across both Python services in CI",
+      "evidence": ".github/workflows/ci-ai-backend.yml:63; tools/check_route_scopes.py:1"
+    },
+    {
+      "from": "ai-runtime-worker",
+      "to": "flow-contracts/api-types-mirror",
+      "kind": "sse",
+      "label": "worker-emitted RuntimeEventEnvelope streams to clients; TS mirror + isRuntimeEventEnvelope guard validate at the SSE edge",
+      "evidence": "services/ai-backend/src/runtime_api/schemas/events.py:1065; apps/frontend/src/api/agentApi.ts:630"
+    },
+    {
+      "from": "backend-platform",
+      "to": "shared-packages",
+      "kind": "import",
+      "label": "audit-chain HMAC primitive consolidated into copilot_audit_chain with byte-compat fixtures (Python-only despite docs claiming TS)",
+      "evidence": "services/ai-backend/tests/unit/agent_runtime/observability/test_audit_chain_compat.py:1"
+    },
+    {
+      "from": "chat-surface-core",
+      "to": "frontend-web",
+      "kind": "contract",
+      "label": "UI DeploymentProfile ('single_user_desktop'|'team') re-hardcodes a backend profile value; 'team' has no backend counterpart",
+      "evidence": "packages/chat-surface/src/providers/DeploymentProfileProvider.tsx:15; apps/frontend/src/app/App.tsx:286"
+    }
+  ]
+}

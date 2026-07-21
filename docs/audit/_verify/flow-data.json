@@ -1,0 +1,109 @@
+{
+  "cluster": "flow-data",
+  "verdicts": [
+    {
+      "ref": "F1",
+      "title": "Backend product destinations are in-memory only; their schema.sql files are applied by nothing",
+      "type": "risk",
+      "severity": "high",
+      "verdict": "confirmed",
+      "note": "app.py:1555 (+ lines 119-263) defaults every product store to InMemory*Store; `class Postgres` grep returns NONE for all 12 modules (projects only has a NotImplementedError skeleton in projects/acl.py:243); no runner reads the schema.sql files and 0033_todo_series is absent."
+    },
+    {
+      "ref": "F2",
+      "title": "Privacy retention_days resolver hook has zero callers",
+      "type": "risk",
+      "severity": "high",
+      "verdict": "confirmed",
+      "note": "policy_resolver.py:59,89 defines the privacy_user_retention_days param; a repo-wide grep for `privacy_user_retention_days=` at the 7 RetentionPolicyResolver(...) construction sites returns empty — never passed."
+    },
+    {
+      "ref": "F3",
+      "title": "10 of 19 initial runtime tables have no writer anywhere",
+      "type": "dead-code",
+      "severity": "high",
+      "verdict": "confirmed",
+      "note": "Per-table `INSERT INTO <t>` grep = 0 for all 10 tables (runtime_events sanity = 1); runtime_memory_items' only writes are retention-sweep UPDATEs at postgres/runtime_api_store.py:3844,4074 (`_sweep_memory_items`), never an INSERT."
+    },
+    {
+      "ref": "F4",
+      "title": "On postgres deployments LangGraph checkpoints live in InMemorySaver; graph continuation does not survive worker restart",
+      "type": "risk",
+      "severity": "high",
+      "verdict": "confirmed",
+      "note": "deep_agent_builder.py:311-345 returns AsyncSqliteSaver only when RUNTIME_STORE_BACKEND=file; else _in_memory_checkpointer() (InMemorySaver), and per F3 runtime_checkpoints has zero INSERT writers."
+    },
+    {
+      "ref": "F5",
+      "title": "Legal hold is checked everywhere and settable nowhere",
+      "type": "risk",
+      "severity": "high",
+      "verdict": "confirmed",
+      "note": "runtime_legal_holds appears only as SELECT (postgres/runtime_api_store.py:3746-4141) and as a doc/METADATA_KEY in file/_deletion.py:57; grep for `INSERT INTO runtime_legal_holds` and any metadata legal_hold setter returns empty."
+    },
+    {
+      "ref": "F6",
+      "title": "identity_audit_events is the only unchained, untriggered audit stream",
+      "type": "inconsistency",
+      "severity": "medium",
+      "verdict": "confirmed",
+      "note": "0002_audit_hardening.sql:8-66 adds seq/prev_hash/signature + audit_writer role + BEFORE UPDATE OR DELETE triggers to mcp/skill; 0004_identity_foundation.sql:120-136 defines identity_audit_events with none of these, and 0016_siem_export only references it as an export source (no chain cols added)."
+    },
+    {
+      "ref": "F7",
+      "title": "Desktop physical purge does not cascade to LangGraph checkpoints",
+      "type": "risk",
+      "severity": "medium",
+      "verdict": "confirmed",
+      "note": "grep for delete_thread/adelete_thread across services/ai-backend/src returns zero call sites; checkpoints.sqlite3 is only created in deep_agent_builder.py:347 and never enters SessionEraser's deletion plan (file/_deletion.py)."
+    },
+    {
+      "ref": "F8",
+      "title": "No retention or pruning path for outbox rows, approvals, or tool invocations",
+      "type": "risk",
+      "severity": "medium",
+      "verdict": "confirmed",
+      "note": "RetentionKind (records/retention.py:36-43) covers only messages/events/context_payloads/checkpoints/memory_items; approval_expiry_sweeper.py:159-167 only enqueues status rejections; grep for `DELETE FROM runtime_outbox_events|runtime_tool_invocations|runtime_approval_batches` returns empty."
+    },
+    {
+      "ref": "F9",
+      "title": "Schema is maintained in two places and already drifting",
+      "type": "ssot-violation",
+      "severity": "medium",
+      "verdict": "confirmed",
+      "note": "todos/store.py:3-4 cites `0033_todo_series.sql` but the real 0033 is 0033_tenant_settings.sql (0033_todo_series absent); the 12 module schema.sql files have no applier, while backend_app/migrations.py:14-38 re-reads only the canonical migrations/ files."
+    },
+    {
+      "ref": "F10",
+      "title": "The yoyo MigrationRunner is duplicated nearly line-for-line across services",
+      "type": "duplication",
+      "severity": "low",
+      "verdict": "accepted",
+      "note": "Low severity — accepted without deep verification per instructions."
+    },
+    {
+      "ref": "F11",
+      "title": "packages/audit-chain documented as shared Python + TS but contains no TypeScript",
+      "type": "inconsistency",
+      "severity": "low",
+      "verdict": "accepted",
+      "note": "Low severity — accepted without deep verification per instructions."
+    },
+    {
+      "ref": "F12",
+      "title": "Session bearer persisted in localStorage",
+      "type": "risk",
+      "severity": "low",
+      "verdict": "accepted",
+      "note": "Low severity — accepted without deep verification per instructions."
+    },
+    {
+      "ref": "F13",
+      "title": "Two independent retention mechanisms in the file store",
+      "type": "refactor",
+      "severity": "low",
+      "verdict": "accepted",
+      "note": "Low severity — accepted without deep verification per instructions."
+    }
+  ]
+}

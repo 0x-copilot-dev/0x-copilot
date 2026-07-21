@@ -1,0 +1,85 @@
+{
+  "cluster": "flow-auth",
+  "verdicts": [
+    {
+      "ref": "F1",
+      "title": "Bearer `exp` is never verified on the HMAC path",
+      "type": "risk",
+      "severity": "high",
+      "verdict": "confirmed",
+      "note": "verify_identity_token (backend_facade/auth.py:382-412) has zero expiry logic (grep 'exp' hits only docstring auth.py:177) and sid-less bearers skip the touch fallback at auth.py:256-260, so expired/sid-less bearers pass on authenticate_request routes (auth.py:622-818) indefinitely."
+    },
+    {
+      "ref": "F2",
+      "title": "REQUIRE_SESSION_BINDING kill-switch implemented but enabled nowhere",
+      "type": "risk",
+      "severity": "medium",
+      "verdict": "confirmed",
+      "note": "Repo-wide the string appears only in the contract (auth_claims.py:24), the facade (auth.py:20,401,490,621), and tests; no deploy artifact sets it (deploy/self-host/docker-compose.prod.yml and apps/desktop/main/services/service-env.ts have no SESSION_BINDING)."
+    },
+    {
+      "ref": "F3",
+      "title": "Two parallel dev-mint implementations with divergent security semantics",
+      "type": "duplication",
+      "severity": "medium",
+      "verdict": "confirmed",
+      "note": "POST /v1/dev/identity/mint signs directly with no session row/sid and 365-day TTL (dev_idp/routes.py:35,111-164) while SessionService.dev_mint mints a real 24h session (identity/sessions.py:257-280); frontend devIdpApi.ts:51, desktop oidc-client.ts:113, and Makefile:124 all use the former."
+    },
+    {
+      "ref": "F4",
+      "title": "HMAC bearer codec hand-implemented three times, twice in the same service",
+      "type": "duplication",
+      "severity": "medium",
+      "verdict": "confirmed",
+      "note": "Facade _sign/_b64encode/verify_identity_token (backend_facade/auth.py:382-412,501-513), backend _BearerCodec (identity/sessions.py:88-141), and dev_idp/_sign.py:22-38 are three separate HMAC-SHA256 codecs, two of them inside services/backend."
+    },
+    {
+      "ref": "F5",
+      "title": "SIWE EIP-4361 template is an SSOT violation across three files and two languages",
+      "type": "ssot-violation",
+      "severity": "medium",
+      "verdict": "confirmed",
+      "note": "Template triplicated at siweMessage.ts:29-41, siwe.py:290-302, local-login.ts:78-91 plus statement 'Sign in to Copilot' at siweMessage.ts:16 / siwe.py:69 / local-login.ts:27, all with 'change all three together' comments; strict parser siwe.py:315-451 rejects drift and siweMessage.test.ts:52,68 pins only the frontend copy."
+    },
+    {
+      "ref": "F6",
+      "title": "Hand-rolled token + SIWE primitives where maintained libraries exist",
+      "type": "bespoke-replaceable",
+      "severity": "medium",
+      "verdict": "confirmed",
+      "note": "Bearer is hand-rolled HMAC even though pyjwt[crypto] is already a direct dep (requirements.in:23, used in identity/jwks.py); the ~140-line EIP-4361 parser (siwe.py:315-451) exists with no 'siwe' PyPI dep, and _TouchCache (auth.py:95-172) is a hand-rolled TTL-LRU with no cachetools dep."
+    },
+    {
+      "ref": "F7",
+      "title": "Dev-mode identity fallbacks trust caller-supplied identity",
+      "type": "risk",
+      "severity": "low",
+      "verdict": "accepted",
+      "note": "LOW severity accepted as-is per protocol; dev-only fallbacks fail closed under *_ENVIRONMENT=production."
+    },
+    {
+      "ref": "F8",
+      "title": "One deployment fact, three env vars",
+      "type": "inconsistency",
+      "severity": "low-medium",
+      "verdict": "confirmed",
+      "note": "BACKEND_ENVIRONMENT (backend_app/auth.py:99), RUNTIME_ENVIRONMENT (runtime_api/auth.py:127), and FACADE_ENVIRONMENT (backend_facade/auth.py:486) each default to 'development' and are read independently; prod artifacts set all three (docker-compose.prod.yml:116,157,222; service-env.ts:174,195,236) but no code cross-checks consistency."
+    },
+    {
+      "ref": "F9",
+      "title": "Frontend SIWE orchestration duplicated between WalletSignIn and LoginScreen",
+      "type": "duplication",
+      "severity": "low",
+      "verdict": "accepted",
+      "note": "LOW severity accepted as-is per protocol."
+    },
+    {
+      "ref": "F10",
+      "title": "auth_routes.py is a 974-line hand-proxy with three per-route auth conventions",
+      "type": "complexity",
+      "severity": "low",
+      "verdict": "accepted",
+      "note": "LOW severity accepted as-is per protocol; the three auth conventions (authenticate_request / verify_with_touch / _anonymous_service_headers) are confirmed present via grep of auth_routes.py."
+    }
+  ]
+}

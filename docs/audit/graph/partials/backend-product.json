@@ -1,0 +1,363 @@
+{
+  "cluster": {
+    "id": "backend-product",
+    "title": "Backend — Product Domain Modules",
+    "kind": "cluster",
+    "paths": [
+      "services/backend/src/backend_app/routes",
+      "services/backend/src/backend_app/library",
+      "services/backend/src/backend_app/connectors",
+      "services/backend/src/backend_app/projects",
+      "services/backend/src/backend_app/memory",
+      "services/backend/src/backend_app/webhooks",
+      "services/backend/src/backend_app/routines",
+      "services/backend/src/backend_app/inbox",
+      "services/backend/src/backend_app/tools",
+      "services/backend/src/backend_app/palette",
+      "services/backend/src/backend_app/home",
+      "services/backend/src/backend_app/agents",
+      "services/backend/src/backend_app/adapter_registry",
+      "services/backend/src/backend_app/todos",
+      "services/backend/src/backend_app/notifications",
+      "services/backend/src/backend_app/prompts"
+    ],
+    "md": "docs/audit/clusters/07-backend-product.md",
+    "summary": "The product-destination modules of services/backend (Todos, Inbox, Routines, Projects, Library, Memory, Agents, Tools, Connectors, Home, Palette, adapter registry, webhooks) plus the 29-file identity/settings/admin wire layer in routes/. Per-module engineering is strong (uniform store/service/routes layering, canonical project ACL, careful webhook/OAuth security), but the wiring layer is unfinished: all destination stores are in-memory in every deployment, the web connectors OAuth surface is a stub, and several sizeable modules (agent installs, palette refresh, notification gate, three SSE streams) have no production consumers or producers."
+  },
+  "nodes": [
+    {
+      "id": "backend-product/routes-identity-wire",
+      "kind": "route-group",
+      "path": "services/backend/src/backend_app/routes",
+      "summary": "/internal/v1/auth|me|workspace wire layer over backend-identity services (oidc, saml, scim, siwe, sessions, passwords, mfa, lockouts, invitations, members, workspace, profile, avatar)"
+    },
+    {
+      "id": "backend-product/routes-settings",
+      "kind": "route-group",
+      "path": "services/backend/src/backend_app/routes",
+      "summary": "Settings/policies routes (preferences, notifications, privacy, tool-use, api-keys, billing stub) with business logic inline at route layer; includes the aggregate /internal/v1/policies/runtime BYOK+policy snapshot"
+    },
+    {
+      "id": "backend-product/routes-audit-siem",
+      "kind": "route-group",
+      "path": "services/backend/src/backend_app/routes",
+      "summary": "Admin audit export/list, SIEM exporter controls, /healthz+/readyz probes"
+    },
+    {
+      "id": "backend-product/todos",
+      "kind": "module",
+      "path": "services/backend/src/backend_app/todos",
+      "summary": "Todos CRUD + subtasks + bulk + recurrence materialization; duplicates the RFC-5545-subset evaluator that also lives in ai-backend's worker"
+    },
+    {
+      "id": "backend-product/inbox",
+      "kind": "module",
+      "path": "services/backend/src/backend_app/inbox",
+      "summary": "Per-user inbox with ai-backend producer endpoint and a live SSE stream (one of only two destination streams with real publishers)"
+    },
+    {
+      "id": "backend-product/routines",
+      "kind": "module",
+      "path": "services/backend/src/backend_app/routines",
+      "summary": "Routines CRUD + quota + inbound webhook ingest (rotating secret, grace window, HMAC, CIDR allowlist)"
+    },
+    {
+      "id": "backend-product/projects",
+      "kind": "module",
+      "path": "services/backend/src/backend_app/projects",
+      "summary": "Projects CRUD + membership + atomic ownership transfer + templates; owns the canonical project ACL predicate consumed by every project-scoped destination"
+    },
+    {
+      "id": "backend-product/library",
+      "kind": "module",
+      "path": "services/backend/src/backend_app/library",
+      "summary": "Library metadata CRUD, hybrid BM25+vector+RRF search, signed-URL blob flow, chunking/embeddings, claim-pattern index-job queue"
+    },
+    {
+      "id": "backend-product/memory",
+      "kind": "module",
+      "path": "services/backend/src/backend_app/memory",
+      "summary": "Memory CRUD + proposals + search + SSE; deliberately rides Library's index queue and fusion primitives (good DRY)"
+    },
+    {
+      "id": "backend-product/agents",
+      "kind": "module",
+      "path": "services/backend/src/backend_app/agents",
+      "summary": "Agent catalog CRUD; installs.py (1,058 LOC install/override/fork module) is complete but never registered anywhere"
+    },
+    {
+      "id": "backend-product/tools",
+      "kind": "module",
+      "path": "services/backend/src/backend_app/tools",
+      "summary": "Tools catalog CRUD + invocations + usage; test-call 501 stub; SSE stream has no producers"
+    },
+    {
+      "id": "backend-product/connectors",
+      "kind": "module",
+      "path": "services/backend/src/backend_app/connectors",
+      "summary": "Connectors destination read-model; web OAuth aliases stubbed (auth.example URL / 503 callback, no row writer); desktop OAuth coordinator is the real path driving McpRegistryService"
+    },
+    {
+      "id": "backend-product/webhooks",
+      "kind": "module",
+      "path": "services/backend/src/backend_app/webhooks",
+      "summary": "Outbound webhook manager + HMAC signer constants + rotation worker (no production launcher)"
+    },
+    {
+      "id": "backend-product/home",
+      "kind": "module",
+      "path": "services/backend/src/backend_app/home",
+      "summary": "Morning-briefing aggregator reading sibling stores off app.state; SSE stream has no producers"
+    },
+    {
+      "id": "backend-product/palette",
+      "kind": "module",
+      "path": "services/backend/src/backend_app/palette",
+      "summary": "Cmd-K search over palette_index; refresh dispatcher exists but no destination ever writes, so search is always empty"
+    },
+    {
+      "id": "backend-product/adapter-registry",
+      "kind": "module",
+      "path": "services/backend/src/backend_app/adapter_registry",
+      "summary": "Tier-2 adapter candidate submit/review/promote with audit-chain rows and content-addressed source storage; has a real Postgres adapter + migration"
+    },
+    {
+      "id": "backend-product/notifications-store",
+      "kind": "store",
+      "path": "services/backend/src/backend_app/notifications",
+      "summary": "Typed notification-prefs store (routes live in routes/); dispatcher_gate.py is test-only dead code"
+    },
+    {
+      "id": "backend-product/prompts",
+      "kind": "module",
+      "path": "services/backend/src/backend_app/prompts",
+      "summary": "Preloaded skill markdown seeded into each user's skill registry by SkillRegistryService"
+    }
+  ],
+  "edges": [
+    {
+      "from": "backend-facade",
+      "to": "backend-product/todos",
+      "kind": "http",
+      "label": "proxies /v1/todos*",
+      "evidence": "services/backend-facade/src/backend_facade/todos_routes.py:1"
+    },
+    {
+      "from": "backend-facade",
+      "to": "backend-product/inbox",
+      "kind": "http",
+      "label": "proxies /v1/inbox* incl. SSE pass-through",
+      "evidence": "services/backend-facade/src/backend_facade/inbox_stream_routes.py:1"
+    },
+    {
+      "from": "backend-facade",
+      "to": "backend-product/projects",
+      "kind": "http",
+      "label": "proxies /v1/projects* + /v1/project-templates*",
+      "evidence": "services/backend-facade/src/backend_facade/projects_routes.py:1"
+    },
+    {
+      "from": "backend-facade",
+      "to": "backend-product/connectors",
+      "kind": "http",
+      "label": "proxies /v1/connectors* (incl. stubbed start-oauth)",
+      "evidence": "services/backend-facade/src/backend_facade/connector_routes.py:40-52"
+    },
+    {
+      "from": "backend-facade",
+      "to": "backend-product/palette",
+      "kind": "http",
+      "label": "proxies /v1/palette/search",
+      "evidence": "services/backend-facade/src/backend_facade/palette_routes.py:1"
+    },
+    {
+      "from": "backend-facade",
+      "to": "backend-product/routes-identity-wire",
+      "kind": "http",
+      "label": "auth/me/workspace flows re-exposed as public /v1/*",
+      "evidence": "services/backend-facade/src/backend_facade/auth_routes.py:1"
+    },
+    {
+      "from": "ai-runtime-api",
+      "to": "backend-product/routes-settings",
+      "kind": "http",
+      "label": "GET /internal/v1/policies/runtime at run start (policies + decrypted BYOK keys)",
+      "evidence": "services/backend/src/backend_app/routes/runtime_policies.py:1-21"
+    },
+    {
+      "from": "ai-runtime-api",
+      "to": "backend-product/inbox",
+      "kind": "http",
+      "label": "POST /internal/v1/inbox/items (agent_runtime/api/inbox_producer.py)",
+      "evidence": "services/backend/src/backend_app/inbox/internal_routes.py:1-6"
+    },
+    {
+      "from": "ai-runtime-worker",
+      "to": "backend-product/tools",
+      "kind": "http",
+      "label": "POST /internal/v1/tools/{id}/invocations + /error reporting",
+      "evidence": "services/backend/src/backend_app/tools/routes.py:162"
+    },
+    {
+      "from": "backend-product/routes-identity-wire",
+      "to": "backend-identity",
+      "kind": "import",
+      "label": "delegates to identity services (OidcService, SamlService, ScimService, SiweService, MfaService, sessions)",
+      "evidence": "services/backend/src/backend_app/routes/oidc.py:23"
+    },
+    {
+      "from": "backend-product/routes-settings",
+      "to": "backend-platform",
+      "kind": "import",
+      "label": "policies/privacy/api_keys stores + ProviderKeysService (TokenVault-backed)",
+      "evidence": "services/backend/src/backend_app/routes/runtime_policies.py:32-40"
+    },
+    {
+      "from": "backend-product/routes-audit-siem",
+      "to": "backend-platform",
+      "kind": "import",
+      "label": "audit_reader + siem_export control plane",
+      "evidence": "services/backend/src/backend_app/routes/audit_list.py:22"
+    },
+    {
+      "from": "backend-product/connectors",
+      "to": "backend-platform",
+      "kind": "import",
+      "label": "desktop OAuth coordinator drives McpRegistryService (state+PKCE+TokenVault)",
+      "evidence": "services/backend/src/backend_app/app.py:1683-1687"
+    },
+    {
+      "from": "backend-product/webhooks",
+      "to": "backend-platform",
+      "kind": "import",
+      "label": "secret encryption-at-rest via TokenVault",
+      "evidence": "services/backend/src/backend_app/app.py:1651-1656"
+    },
+    {
+      "from": "backend-product/routines",
+      "to": "backend-platform",
+      "kind": "import",
+      "label": "inbound webhook secrets encrypted via TokenVault",
+      "evidence": "services/backend/src/backend_app/routines/webhook.py:40"
+    },
+    {
+      "from": "backend-product/todos",
+      "to": "backend-product/projects",
+      "kind": "import",
+      "label": "canonical project ACL (ProjectMembershipPort)",
+      "evidence": "services/backend/src/backend_app/todos/service.py:33-36"
+    },
+    {
+      "from": "backend-product/memory",
+      "to": "backend-product/library",
+      "kind": "import",
+      "label": "reuses rrf_fuse/SearchHit/EmbeddingsClientPort + rides library_index_jobs queue",
+      "evidence": "services/backend/src/backend_app/memory/search.py:1-15"
+    },
+    {
+      "from": "backend-product/library",
+      "to": "backend-product/projects",
+      "kind": "import",
+      "label": "membership port shared via projects_service._membership_port",
+      "evidence": "services/backend/src/backend_app/app.py:1822"
+    },
+    {
+      "from": "backend-product/tools",
+      "to": "backend-product/projects",
+      "kind": "import",
+      "label": "membership port shared for ACL gate",
+      "evidence": "services/backend/src/backend_app/app.py:1908"
+    },
+    {
+      "from": "backend-product/palette",
+      "to": "backend-product/projects",
+      "kind": "import",
+      "label": "membership port for visibility filtering",
+      "evidence": "services/backend/src/backend_app/app.py:1930"
+    },
+    {
+      "from": "backend-product/routines",
+      "to": "backend-product/projects",
+      "kind": "import",
+      "label": "connector-allowlist inheritance bridge (monkey-patched in create_app)",
+      "evidence": "services/backend/src/backend_app/app.py:1808-1810"
+    },
+    {
+      "from": "backend-product/home",
+      "to": "backend-product/todos",
+      "kind": "import",
+      "label": "triage/timeline sections read todos store off app.state",
+      "evidence": "services/backend/src/backend_app/home/routes.py:12-16"
+    },
+    {
+      "from": "backend-product/home",
+      "to": "backend-product/inbox",
+      "kind": "import",
+      "label": "whats_new/live sections read inbox store off app.state",
+      "evidence": "services/backend/src/backend_app/home/routes.py:12-16"
+    },
+    {
+      "from": "backend-product/library",
+      "to": "ai-runtime-api",
+      "kind": "http",
+      "label": "EmbeddingsClientPort targets POST /internal/v1/llm/embed (Noop adapter wired today)",
+      "evidence": "services/backend/src/backend_app/library/search.py:13-18"
+    },
+    {
+      "from": "backend-product/routes-settings",
+      "to": "ai-runtime-api",
+      "kind": "http",
+      "label": "LivenessService AiBackendLivenessClient (AI_BACKEND_URL + service token)",
+      "evidence": "services/backend/src/backend_app/app.py:1721-1729"
+    },
+    {
+      "from": "backend-product/adapter-registry",
+      "to": "external:postgres",
+      "kind": "db",
+      "label": "PostgresAdapterRegistryStore over migrations/0031_adapter_registry.sql",
+      "evidence": "services/backend/src/backend_app/adapter_registry/store.py:1-5"
+    },
+    {
+      "from": "backend-product/routes-identity-wire",
+      "to": "shared-packages",
+      "kind": "import",
+      "label": "copilot_service_contracts scopes/headers constants",
+      "evidence": "services/backend/src/backend_app/routes/siem.py:26-27"
+    },
+    {
+      "from": "backend-product/inbox",
+      "to": "shared-packages",
+      "kind": "contract",
+      "label": "SSE envelopes hand-mirrored to packages/api-types (InboxEventEnvelope)",
+      "evidence": "services/backend/src/backend_app/inbox/sse.py:63"
+    },
+    {
+      "from": "frontend-web",
+      "to": "backend-product/connectors",
+      "kind": "http",
+      "label": "connectorsApi.ts calls start-oauth (currently returns stub URL)",
+      "evidence": "apps/frontend/src/api/connectorsApi.ts:1"
+    },
+    {
+      "from": "chat-surface-core",
+      "to": "backend-product/palette",
+      "kind": "http",
+      "label": "PaletteSearchPort -> /v1/palette/search (index never populated)",
+      "evidence": "packages/chat-surface/src/ports/PaletteSearchPort.ts:1"
+    },
+    {
+      "from": "backend-product/prompts",
+      "to": "backend-platform",
+      "kind": "import",
+      "label": "PRELOADED_SKILL_MARKDOWNS consumed by SkillRegistryService in backend_app/service.py",
+      "evidence": "services/backend/src/backend_app/service.py:1"
+    },
+    {
+      "from": "backend-product/todos",
+      "to": "ai-runtime-worker",
+      "kind": "contract",
+      "label": "RecurrenceRuleEvaluator grammar duplicated with runtime_worker todo_recurrence_materializer",
+      "evidence": "services/backend/src/backend_app/todos/service.py:58-66"
+    }
+  ]
+}

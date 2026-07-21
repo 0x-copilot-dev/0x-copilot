@@ -1,0 +1,209 @@
+{
+  "cluster": {
+    "id": "chat-surface-destinations",
+    "title": "Chat Surface — Destinations & Settings",
+    "kind": "cluster",
+    "paths": [
+      "packages/chat-surface/src/destinations",
+      "packages/chat-surface/src/settings"
+    ],
+    "md": "docs/audit/clusters/12-chat-surface-destinations.md",
+    "summary": "The destination surfaces (Run cockpit, Chats archive, Projects, Activity, Connectors/Tools, Skills) and the adaptive profile-gated Settings surface of the chat-surface SSOT interaction layer. The live sixth is high quality (single-projection Run cockpit, ports discipline, SSOT nav), but ~68% of the source LOC — nine folded destination families plus unadopted detail views/wizards — has no mount on either host, and the web host keeps parallel Settings/Run/webhook/team implementations."
+  },
+  "nodes": [
+    {
+      "id": "chat-surface-destinations/run",
+      "kind": "module",
+      "path": "packages/chat-surface/src/destinations/run",
+      "summary": "Run cockpit: RunDestination composition shell + useRunSession (SSE run stream, resume cursor) + useRunMode (Studio/Focus KV persistence) + pure approval/subagent projections; desktop-only mount"
+    },
+    {
+      "id": "chat-surface-destinations/chats",
+      "kind": "module",
+      "path": "packages/chat-surface/src/destinations/chats",
+      "summary": "ChatsArchive conversation archive (live on both hosts); legacy ChatsDestination/ChatsSidebar superseded and unmounted"
+    },
+    {
+      "id": "chat-surface-destinations/activity",
+      "kind": "module",
+      "path": "packages/chat-surface/src/destinations/activity",
+      "summary": "Day-grouped run-history feed absorbing the former Agents/Inbox/audit surfaces; live on both hosts"
+    },
+    {
+      "id": "chat-surface-destinations/projects",
+      "kind": "module",
+      "path": "packages/chat-surface/src/destinations/projects",
+      "summary": "ProjectsDestination + ProjectDetailView (live both hosts); editors, template gallery, and dialogs (~3.1k LOC) built but unadopted"
+    },
+    {
+      "id": "chat-surface-destinations/connectors",
+      "kind": "module",
+      "path": "packages/chat-surface/src/destinations/connectors",
+      "summary": "'Tools' surface: connector grid + AccessModeSegment + ConnectModal (live); ConnectorDetailView tabs + webhooks family (~3k LOC) unadopted"
+    },
+    {
+      "id": "chat-surface-destinations/skills",
+      "kind": "module",
+      "path": "packages/chat-surface/src/destinations/skills",
+      "summary": "Redesigned 'Skills' slug: card catalog of /v1/skills saved workflows; live on both hosts"
+    },
+    {
+      "id": "chat-surface-destinations/settings-surface",
+      "kind": "module",
+      "path": "packages/chat-surface/src/settings",
+      "summary": "SettingsSurface shell + settingsNav.ts SSOT (slug union, grouped nav, team profile gate) + SaveBar/Modal/chrome primitives"
+    },
+    {
+      "id": "chat-surface-destinations/settings-pages",
+      "kind": "module",
+      "path": "packages/chat-surface/src/settings",
+      "summary": "Ten section bodies (Profile, Appearance, Shortcuts, Provider keys, Local models, Model & behavior, Privacy, Notifications, App lock, Developer tokens); mounted by desktop only — web keeps a parallel implementation"
+    },
+    {
+      "id": "chat-surface-destinations/settings-data-ports",
+      "kind": "module",
+      "path": "packages/chat-surface/src/settings/data",
+      "summary": "Transport-backed adapters: createProviderKeysPort (/v1/settings/provider-keys, BYOK key_hint discipline) and createDeveloperTokensPort (/v1/me/api-keys)"
+    },
+    {
+      "id": "chat-surface-destinations/folded-destinations",
+      "kind": "module",
+      "path": "packages/chat-surface/src/destinations",
+      "summary": "DEAD: home, inbox, todos, agents, library, memory, routines, team, and the old MCP tools catalog (~32k LOC) — no mount on either host, reachable only via the barrel and their own tests"
+    },
+    {
+      "id": "chat-surface-destinations/wire-stubs",
+      "kind": "module",
+      "path": "packages/chat-surface/src/destinations",
+      "summary": "Transitional _*-stub.ts wire-type modules (7 files) with TODO(merge) markers; canonical api-types modules have landed but the rewire never happened"
+    }
+  ],
+  "edges": [
+    {
+      "from": "chat-surface-destinations/run",
+      "to": "chat-surface-core",
+      "kind": "import",
+      "label": "ThreadCanvas/TcChat, TransportProvider, projectSubagents, transportError",
+      "evidence": "packages/chat-surface/src/destinations/run/RunDestination.tsx:59-87"
+    },
+    {
+      "from": "chat-surface-destinations/run",
+      "to": "backend-facade",
+      "kind": "http",
+      "label": "GET/POST /v1/agent/runs, POST /v1/agent/approvals/{id}/decision (via Transport port)",
+      "evidence": "packages/chat-surface/src/destinations/run/RunDestination.tsx:312,463"
+    },
+    {
+      "from": "chat-surface-destinations/run",
+      "to": "backend-facade",
+      "kind": "sse",
+      "label": "GET /v1/agent/runs/{id}/stream?after_sequence=N (event: runtime_event)",
+      "evidence": "packages/chat-surface/src/destinations/run/useRunSession.ts:226-256"
+    },
+    {
+      "from": "chat-surface-destinations/run",
+      "to": "shared-packages",
+      "kind": "contract",
+      "label": "RuntimeEventEnvelope + isRuntimeEventEnvelope, AgentRunStatus from api-types",
+      "evidence": "packages/chat-surface/src/destinations/run/useRunSession.ts:27-33"
+    },
+    {
+      "from": "chat-surface-destinations/settings-data-ports",
+      "to": "backend-facade",
+      "kind": "http",
+      "label": "PUT/GET/DELETE /v1/settings/provider-keys*, /v1/me/api-keys* (via Transport port)",
+      "evidence": "packages/chat-surface/src/settings/data/providerKeys.ts:201-218"
+    },
+    {
+      "from": "chat-surface-destinations/settings-surface",
+      "to": "chat-surface-core",
+      "kind": "import",
+      "label": "DeploymentProfileProvider profile gate; ShortcutsPage derives from shell/shortcuts SSOT",
+      "evidence": "packages/chat-surface/src/settings/SettingsSurface.tsx:34; packages/chat-surface/src/settings/ShortcutsPage.tsx:23"
+    },
+    {
+      "from": "chat-surface-destinations/settings-pages",
+      "to": "shared-packages",
+      "kind": "contract",
+      "label": "providerKeys/localModels/settings wire types from api-types",
+      "evidence": "packages/chat-surface/src/settings/data/providerKeys.ts:18-22"
+    },
+    {
+      "from": "chat-surface-destinations/activity",
+      "to": "chat-surface-core",
+      "kind": "import",
+      "label": "ItemLink refs registry + shell primitives (PageHeader/DocList/StatusPill)",
+      "evidence": "packages/chat-surface/src/destinations/activity/ActivityDestination.tsx:48-53"
+    },
+    {
+      "from": "desktop-app",
+      "to": "chat-surface-destinations/run",
+      "kind": "import",
+      "label": "RunBinder mounts RunDestination for the run slug",
+      "evidence": "apps/desktop/renderer/DestinationOutlet.tsx:159-171"
+    },
+    {
+      "from": "desktop-app",
+      "to": "chat-surface-destinations/settings-pages",
+      "kind": "import",
+      "label": "SettingsMount renders SettingsSurface + all ten section bodies + data ports",
+      "evidence": "apps/desktop/renderer/SettingsMount.tsx:31-57"
+    },
+    {
+      "from": "desktop-app",
+      "to": "chat-surface-destinations/activity",
+      "kind": "import",
+      "label": "destinationBinders mounts Chats/Projects/Activity/Connectors/Skills destinations",
+      "evidence": "apps/desktop/renderer/destinationBinders.tsx:22-34"
+    },
+    {
+      "from": "frontend-web",
+      "to": "chat-surface-destinations/projects",
+      "kind": "import",
+      "label": "ProjectsRoute mounts ProjectsDestination + ProjectDetailView",
+      "evidence": "apps/frontend/src/features/projects/ProjectsRoute.tsx:50-56"
+    },
+    {
+      "from": "frontend-web",
+      "to": "chat-surface-destinations/chats",
+      "kind": "import",
+      "label": "ChatsArchiveRoute mounts ChatsArchive",
+      "evidence": "apps/frontend/src/features/chats/ChatsArchiveRoute.tsx:36"
+    },
+    {
+      "from": "frontend-web",
+      "to": "chat-surface-destinations/connectors",
+      "kind": "import",
+      "label": "ConnectorsRoute mounts ConnectorsDestination/ConnectorsPanel/ConnectModal; WebhooksRoute uses RevealOnce",
+      "evidence": "apps/frontend/src/features/connectors/ConnectorsRoute.tsx; apps/frontend/src/features/connectors/WebhooksRoute.tsx:19"
+    },
+    {
+      "from": "chat-surface-destinations/run",
+      "to": "chat-surface-core",
+      "kind": "file",
+      "label": "KeyValueStore port key chats.thread.<id>.run_mode",
+      "evidence": "packages/chat-surface/src/destinations/run/useRunMode.ts:44-49"
+    },
+    {
+      "from": "chat-surface-destinations/wire-stubs",
+      "to": "shared-packages",
+      "kind": "contract",
+      "label": "stubs re-export branded IDs from api-types while redeclaring wire shapes the canonical modules now own (SSOT violation F2)",
+      "evidence": "packages/chat-surface/src/destinations/todos/_todos-stub.ts:22-38"
+    },
+    {
+      "from": "chat-surface-destinations/skills",
+      "to": "shared-packages",
+      "kind": "contract",
+      "label": "SectionResult/SkillSummary/SkillId from api-types",
+      "evidence": "packages/chat-surface/src/destinations/skills/SkillsDestination.tsx:37-41"
+    },
+    {
+      "from": "chat-surface-destinations/folded-destinations",
+      "to": "chat-surface-core",
+      "kind": "import",
+      "label": "dead families still exported through the package barrel (index.ts phase blocks)",
+      "evidence": "packages/chat-surface/src/index.ts:463-717"
+    }
+  ]
+}
