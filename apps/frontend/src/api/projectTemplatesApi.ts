@@ -137,8 +137,8 @@ export interface SaveProjectAsTemplateRequest {
  * project. Wire shape is the standard `Project` from the Projects API.
  *
  * Typed as `{ id: ProjectId }` plus an index signature here so callers
- * can navigate to the new project without forcing a `_projects-stub`
- * import in this file. The Projects API surface lifts the full row.
+ * can navigate to the new project without importing the full `Project`
+ * wire-type in this file. The Projects API surface lifts the full row.
  */
 export interface ProjectTemplateForkResponse {
   readonly id: ProjectId;

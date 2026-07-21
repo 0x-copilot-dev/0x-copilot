@@ -41,8 +41,7 @@ import { EmptyState } from "../../shell/EmptyState";
 import { FilterTabs, type FilterTabOption } from "../../shell/FilterTabs";
 import { StatusPill, type StatusTone } from "../../shell/StatusPill";
 
-// TODO(merge): rewire to "@0x-copilot/api-types"
-import type { ProjectColorHue, ProjectIconEmoji } from "./_projects-stub";
+import type { ProjectColorHue, ProjectIconEmoji } from "@0x-copilot/api-types";
 
 // ── Tokens ───────────────────────────────────────────────────────────
 

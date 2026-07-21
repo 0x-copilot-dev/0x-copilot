@@ -1084,6 +1084,14 @@ export function CopilotApp({
             })
           }
           onOpenCommandPalette={() => setPaletteOpen(true)}
+          // PRD-C.2 / PRD-H.5 — feed the rail foot avatar the user's initial from
+          // the profile the shell already loads. The Run badge (activeRunCount)
+          // still needs a run-list source and is a documented follow-up.
+          railIdentity={
+            profile?.data?.display_name?.trim()
+              ? { initial: profile.data.display_name.trim().charAt(0) }
+              : undefined
+          }
         >
           <Suspense fallback={<RouteLoadingFallback />}>{body}</Suspense>
           {/*

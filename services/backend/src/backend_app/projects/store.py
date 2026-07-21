@@ -18,6 +18,8 @@ but invisible to the public list / get paths. The cleanup job in
 
 from __future__ import annotations
 
+import contextvars
+import json
 from collections.abc import Iterable
 from contextlib import contextmanager
 from dataclasses import dataclass, field
@@ -606,6 +608,629 @@ class InMemoryProjectsStore:
 
 
 # ---------------------------------------------------------------------------
+# Postgres adapter (PRD-H FR-H.3)
+# ---------------------------------------------------------------------------
+#
+# Durable projects store implementing the same :class:`ProjectsStore`
+# Protocol as :class:`InMemoryProjectsStore`, against the DDL in
+# ``schema.sql``. Selected in ``desktop_app.py`` alongside the other
+# Postgres adapters (the in-memory store stays the default for tests/dev).
+#
+# The :class:`ProjectsStore` Protocol methods take no ``conn`` argument
+# (the service composes ``with store.transaction(): store.write(...)``
+# without threading a connection). To keep the composed writes atomic on
+# ONE connection while staying safe under concurrent requests, the active
+# transaction connection is held in a :class:`contextvars.ContextVar` —
+# each request's execution context (sync handlers run in their own
+# thread-copied context via Starlette's threadpool) reads back the same
+# connection its ``transaction()`` opened, and unrelated requests never
+# share it. Outside a ``transaction()`` block each method checks out its
+# own short-lived pooled connection.
+#
+# Live-Postgres verification is DEFERRED (no live DB in this workstream):
+# RLS session-var wiring and audit-chain signing of ``project_audit_events``
+# are stubbed to the unsigned shape the in-memory adapter also uses. See
+# the PRD-H FR-H.3 note.
+
+_ACTIVE_PROJECTS_CONN: contextvars.ContextVar[Any] = contextvars.ContextVar(
+    "projects_active_conn", default=None
+)
+
+
+class PostgresProjectsStore:
+    """psycopg-backed projects store. Uses the shared backend pool.
+
+    ``pool`` is duck-typed (tests pass a fake) but in production it is the
+    shared ``PostgresConnectionPool``. Every query is scoped to
+    ``tenant_id`` in the application-side ``WHERE`` clause (the RLS policy
+    in ``schema.sql`` is the second wall).
+    """
+
+    def __init__(self, pool: Any) -> None:
+        self._pool = pool
+
+    # -- connection / transaction plumbing ----------------------------
+
+    @contextmanager
+    def transaction(self) -> Iterator[Any]:
+        """Open a transaction and publish its connection to the context.
+
+        Composed store writes inside the ``with`` block run on this one
+        connection so a partial failure rolls back every row together.
+        """
+
+        existing = _ACTIVE_PROJECTS_CONN.get()
+        if existing is not None:
+            # Re-entrant: already inside a transaction on this context.
+            yield existing
+            return
+        with self._pool.connection() as conn:
+            token = _ACTIVE_PROJECTS_CONN.set(conn)
+            try:
+                with conn.transaction():
+                    yield conn
+            finally:
+                _ACTIVE_PROJECTS_CONN.reset(token)
+
+    @contextmanager
+    def _cursor(self) -> Iterator[Any]:
+        """Yield a cursor on the active transaction conn, or a fresh one."""
+
+        active = _ACTIVE_PROJECTS_CONN.get()
+        if active is not None:
+            with active.cursor() as cur:
+                yield cur
+            return
+        with self._pool.connection() as owned:
+            with owned.cursor() as cur:
+                yield cur
+
+    # -- projects ------------------------------------------------------
+
+    def insert_project(self, record: ProjectRecord) -> ProjectRecord:
+        with self._cursor() as cur:
+            cur.execute(
+                """
+                INSERT INTO projects (
+                    id, tenant_id, owner_user_id, name, description,
+                    icon_emoji, color_hue, status, archived_at,
+                    last_activity_at, created_at, updated_at, deleted_at,
+                    default_connector_allowlist
+                ) VALUES (
+                    %s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s::jsonb
+                )
+                """,
+                (
+                    record.id,
+                    record.tenant_id,
+                    record.owner_user_id,
+                    record.name,
+                    record.description,
+                    record.icon_emoji,
+                    record.color_hue,
+                    record.status,
+                    record.archived_at,
+                    record.last_activity_at,
+                    record.created_at,
+                    record.updated_at,
+                    record.deleted_at,
+                    _jsonb(record.default_connector_allowlist),
+                ),
+            )
+        return record
+
+    def get_project(
+        self, *, tenant_id: str, project_id: str, include_deleted: bool = False
+    ) -> ProjectRecord | None:
+        clause = "" if include_deleted else " AND deleted_at IS NULL"
+        with self._cursor() as cur:
+            cur.execute(
+                f"SELECT * FROM projects WHERE tenant_id = %s AND id = %s{clause}",
+                (tenant_id, project_id),
+            )
+            row = cur.fetchone()
+        return _row_to_project(row) if row else None
+
+    def get_project_by_name(self, *, tenant_id: str, name: str) -> ProjectRecord | None:
+        with self._cursor() as cur:
+            cur.execute(
+                """
+                SELECT * FROM projects
+                WHERE tenant_id = %s AND lower(name) = lower(%s)
+                  AND deleted_at IS NULL
+                LIMIT 1
+                """,
+                (tenant_id, name.strip()),
+            )
+            row = cur.fetchone()
+        return _row_to_project(row) if row else None
+
+    def list_projects(
+        self,
+        *,
+        tenant_id: str,
+        owner_user_id: str | None = None,
+        member_user_id: str | None = None,
+        statuses: tuple[str, ...] | None = None,
+        q: str | None = None,
+        starred_by_user_id: str | None = None,
+        cursor: str | None = None,
+        limit: int = 50,
+        sort: str = "updated_at:desc",
+        include_deleted: bool = False,
+    ) -> tuple[tuple[ProjectRecord, ...], str | None]:
+        where: list[str] = ["p.tenant_id = %s"]
+        params: list[Any] = [tenant_id]
+        if not include_deleted:
+            where.append("p.deleted_at IS NULL")
+        if owner_user_id is not None:
+            where.append("p.owner_user_id = %s")
+            params.append(owner_user_id)
+        if member_user_id is not None:
+            where.append(
+                "EXISTS (SELECT 1 FROM project_memberships m "
+                "WHERE m.project_id = p.id AND m.tenant_id = p.tenant_id "
+                "AND m.user_id = %s)"
+            )
+            params.append(member_user_id)
+        if starred_by_user_id is not None:
+            where.append(
+                "EXISTS (SELECT 1 FROM project_stars s "
+                "WHERE s.project_id = p.id AND s.tenant_id = p.tenant_id "
+                "AND s.user_id = %s)"
+            )
+            params.append(starred_by_user_id)
+        if statuses is not None:
+            where.append("p.status = ANY(%s)")
+            params.append(list(statuses))
+        if q and q.strip():
+            where.append("(p.name || ' ' || p.description) ILIKE %s")
+            params.append(f"%{q.strip()}%")
+
+        order_by = _sql_order_by(sort)
+        offset = _decode_cursor(cursor)
+        # Fetch one extra row to compute the next cursor without COUNT(*).
+        sql = (
+            "SELECT p.* FROM projects p WHERE "
+            + " AND ".join(where)
+            + f" ORDER BY {order_by} OFFSET %s LIMIT %s"
+        )
+        params.extend([offset, limit + 1])
+        with self._cursor() as cur:
+            cur.execute(sql, tuple(params))
+            rows = cur.fetchall()
+        has_more = len(rows) > limit
+        page = tuple(_row_to_project(r) for r in rows[:limit])
+        next_cursor = str(offset + limit) if has_more else None
+        return page, next_cursor
+
+    def update_project(self, record: ProjectRecord) -> ProjectRecord:
+        with self._cursor() as cur:
+            cur.execute(
+                """
+                UPDATE projects SET
+                    name = %s, description = %s, icon_emoji = %s,
+                    color_hue = %s, status = %s, archived_at = %s,
+                    last_activity_at = %s, updated_at = %s, deleted_at = %s,
+                    default_connector_allowlist = %s::jsonb
+                WHERE tenant_id = %s AND id = %s
+                """,
+                (
+                    record.name,
+                    record.description,
+                    record.icon_emoji,
+                    record.color_hue,
+                    record.status,
+                    record.archived_at,
+                    record.last_activity_at,
+                    record.updated_at,
+                    record.deleted_at,
+                    _jsonb(record.default_connector_allowlist),
+                    record.tenant_id,
+                    record.id,
+                ),
+            )
+        return record
+
+    def soft_delete_project(self, *, tenant_id: str, project_id: str) -> bool:
+        now = _now()
+        with self._cursor() as cur:
+            cur.execute(
+                """
+                UPDATE projects SET deleted_at = %s, updated_at = %s
+                WHERE tenant_id = %s AND id = %s
+                """,
+                (now, now, tenant_id, project_id),
+            )
+            return bool(cur.rowcount)
+
+    # -- memberships ---------------------------------------------------
+
+    def insert_membership(
+        self, record: ProjectMembershipRecord
+    ) -> ProjectMembershipRecord:
+        with self._cursor() as cur:
+            cur.execute(
+                """
+                INSERT INTO project_memberships (
+                    project_id, user_id, tenant_id, role, added_at, added_by
+                ) VALUES (%s,%s,%s,%s,%s,%s)
+                ON CONFLICT (project_id, user_id) DO UPDATE SET
+                    role = EXCLUDED.role, added_by = EXCLUDED.added_by
+                """,
+                (
+                    record.project_id,
+                    record.user_id,
+                    record.tenant_id,
+                    record.role,
+                    record.added_at,
+                    record.added_by,
+                ),
+            )
+        return record
+
+    def get_membership(
+        self, *, tenant_id: str, project_id: str, user_id: str
+    ) -> ProjectMembershipRecord | None:
+        with self._cursor() as cur:
+            cur.execute(
+                """
+                SELECT * FROM project_memberships
+                WHERE tenant_id = %s AND project_id = %s AND user_id = %s
+                """,
+                (tenant_id, project_id, user_id),
+            )
+            row = cur.fetchone()
+        return _row_to_membership(row) if row else None
+
+    def list_memberships_for_project(
+        self,
+        *,
+        tenant_id: str,
+        project_id: str,
+        cursor: str | None = None,
+        limit: int = 50,
+    ) -> tuple[tuple[ProjectMembershipRecord, ...], str | None]:
+        offset = _decode_cursor(cursor)
+        with self._cursor() as cur:
+            cur.execute(
+                """
+                SELECT * FROM project_memberships
+                WHERE tenant_id = %s AND project_id = %s
+                ORDER BY added_at ASC, user_id ASC
+                OFFSET %s LIMIT %s
+                """,
+                (tenant_id, project_id, offset, limit + 1),
+            )
+            rows = cur.fetchall()
+        has_more = len(rows) > limit
+        page = tuple(_row_to_membership(r) for r in rows[:limit])
+        next_cursor = str(offset + limit) if has_more else None
+        return page, next_cursor
+
+    def list_memberships_for_user(
+        self, *, tenant_id: str, user_id: str
+    ) -> tuple[ProjectMembershipRecord, ...]:
+        with self._cursor() as cur:
+            cur.execute(
+                """
+                SELECT * FROM project_memberships
+                WHERE tenant_id = %s AND user_id = %s
+                """,
+                (tenant_id, user_id),
+            )
+            rows = cur.fetchall()
+        return tuple(_row_to_membership(r) for r in rows)
+
+    def update_membership_role(
+        self, *, tenant_id: str, project_id: str, user_id: str, role: str
+    ) -> ProjectMembershipRecord | None:
+        with self._cursor() as cur:
+            cur.execute(
+                """
+                UPDATE project_memberships SET role = %s
+                WHERE tenant_id = %s AND project_id = %s AND user_id = %s
+                RETURNING *
+                """,
+                (role, tenant_id, project_id, user_id),
+            )
+            row = cur.fetchone()
+        return _row_to_membership(row) if row else None
+
+    def delete_membership(
+        self, *, tenant_id: str, project_id: str, user_id: str
+    ) -> bool:
+        with self._cursor() as cur:
+            cur.execute(
+                """
+                DELETE FROM project_memberships
+                WHERE tenant_id = %s AND project_id = %s AND user_id = %s
+                """,
+                (tenant_id, project_id, user_id),
+            )
+            return bool(cur.rowcount)
+
+    # -- stars ---------------------------------------------------------
+
+    def upsert_star(self, record: ProjectStarRecord) -> ProjectStarRecord:
+        with self._cursor() as cur:
+            cur.execute(
+                """
+                INSERT INTO project_stars (tenant_id, user_id, project_id, created_at)
+                VALUES (%s,%s,%s,%s)
+                ON CONFLICT (tenant_id, user_id, project_id) DO NOTHING
+                """,
+                (
+                    record.tenant_id,
+                    record.user_id,
+                    record.project_id,
+                    record.created_at,
+                ),
+            )
+        return record
+
+    def delete_star(self, *, tenant_id: str, project_id: str, user_id: str) -> bool:
+        with self._cursor() as cur:
+            cur.execute(
+                """
+                DELETE FROM project_stars
+                WHERE tenant_id = %s AND user_id = %s AND project_id = %s
+                """,
+                (tenant_id, user_id, project_id),
+            )
+            return bool(cur.rowcount)
+
+    def is_starred(self, *, tenant_id: str, project_id: str, user_id: str) -> bool:
+        with self._cursor() as cur:
+            cur.execute(
+                """
+                SELECT 1 FROM project_stars
+                WHERE tenant_id = %s AND user_id = %s AND project_id = %s
+                """,
+                (tenant_id, user_id, project_id),
+            )
+            return cur.fetchone() is not None
+
+    # -- activity ------------------------------------------------------
+
+    def append_activity(
+        self, record: ProjectActivityRecord
+    ) -> ProjectActivityRecord | None:
+        with self._cursor() as cur:
+            cur.execute(
+                """
+                INSERT INTO project_activity (
+                    id, tenant_id, project_id, audit_id, actor_user_id,
+                    actor_display_name, action, kind, ref_kind, ref_id,
+                    preview, occurred_at
+                ) VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s)
+                ON CONFLICT (tenant_id, audit_id) DO NOTHING
+                RETURNING id
+                """,
+                (
+                    record.id,
+                    record.tenant_id,
+                    record.project_id,
+                    record.audit_id,
+                    record.actor_user_id,
+                    record.actor_display_name,
+                    record.action,
+                    record.kind,
+                    record.ref_kind,
+                    record.ref_id,
+                    record.preview,
+                    record.occurred_at,
+                ),
+            )
+            inserted = cur.fetchone()
+        # Idempotency: a replayed (tenant, audit_id) inserts nothing.
+        return record if inserted else None
+
+    def list_activity(
+        self,
+        *,
+        tenant_id: str,
+        project_id: str,
+        kinds: tuple[str, ...] | None = None,
+        cursor: str | None = None,
+        limit: int = 50,
+    ) -> tuple[tuple[ProjectActivityRecord, ...], str | None]:
+        where = ["tenant_id = %s", "project_id = %s"]
+        params: list[Any] = [tenant_id, project_id]
+        if kinds is not None:
+            where.append("kind = ANY(%s)")
+            params.append(list(kinds))
+        offset = _decode_cursor(cursor)
+        params.extend([offset, limit + 1])
+        with self._cursor() as cur:
+            cur.execute(
+                "SELECT * FROM project_activity WHERE "
+                + " AND ".join(where)
+                + " ORDER BY occurred_at DESC, id DESC OFFSET %s LIMIT %s",
+                tuple(params),
+            )
+            rows = cur.fetchall()
+        has_more = len(rows) > limit
+        page = tuple(_row_to_activity(r) for r in rows[:limit])
+        next_cursor = str(offset + limit) if has_more else None
+        return page, next_cursor
+
+    # -- counts --------------------------------------------------------
+
+    def get_counts(
+        self, *, tenant_id: str, project_id: str
+    ) -> ProjectActivityCounts | None:
+        with self._cursor() as cur:
+            cur.execute(
+                """
+                SELECT * FROM project_activity_counts
+                WHERE tenant_id = %s AND project_id = %s
+                """,
+                (tenant_id, project_id),
+            )
+            row = cur.fetchone()
+        return ProjectActivityCounts.model_validate(row) if row else None
+
+    def upsert_counts(self, record: ProjectActivityCounts) -> ProjectActivityCounts:
+        with self._cursor() as cur:
+            cur.execute(
+                """
+                INSERT INTO project_activity_counts (
+                    tenant_id, project_id, chats, todos_open, todos_done,
+                    inbox_items, library_items, routines_active, members,
+                    recomputed_at
+                ) VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s)
+                ON CONFLICT (tenant_id, project_id) DO UPDATE SET
+                    chats = EXCLUDED.chats,
+                    todos_open = EXCLUDED.todos_open,
+                    todos_done = EXCLUDED.todos_done,
+                    inbox_items = EXCLUDED.inbox_items,
+                    library_items = EXCLUDED.library_items,
+                    routines_active = EXCLUDED.routines_active,
+                    members = EXCLUDED.members,
+                    recomputed_at = EXCLUDED.recomputed_at
+                """,
+                (
+                    record.tenant_id,
+                    record.project_id,
+                    record.chats,
+                    record.todos_open,
+                    record.todos_done,
+                    record.inbox_items,
+                    record.library_items,
+                    record.routines_active,
+                    record.members,
+                    record.recomputed_at,
+                ),
+            )
+        return record
+
+    # -- audit ---------------------------------------------------------
+
+    def append_audit(self, record: ProjectAuditRecord) -> ProjectAuditRecord:
+        # Chain-signing (seq/prev_hash/signature/key_version) is DEFERRED —
+        # written NULL here to match the unsigned in-memory reference. See
+        # the module-level FR-H.3 note.
+        with self._cursor() as cur:
+            cur.execute(
+                """
+                INSERT INTO project_audit_events (
+                    audit_id, tenant_id, actor_user_id, action, target_kind,
+                    target_id, before_state, after_state, context,
+                    correlation_id, ts
+                ) VALUES (
+                    %s,%s,%s,%s,%s,%s,%s::jsonb,%s::jsonb,%s::jsonb,%s,%s
+                )
+                """,
+                (
+                    record.audit_id,
+                    record.tenant_id,
+                    record.actor_user_id,
+                    record.action,
+                    record.target_kind,
+                    record.target_id,
+                    _jsonb(record.before_state),
+                    _jsonb(record.after_state),
+                    _jsonb(record.context),
+                    record.correlation_id,
+                    record.ts,
+                ),
+            )
+        return record
+
+    def list_audit_for_project(
+        self, *, tenant_id: str, project_id: str
+    ) -> tuple[ProjectAuditRecord, ...]:
+        with self._cursor() as cur:
+            cur.execute(
+                """
+                SELECT * FROM project_audit_events
+                WHERE tenant_id = %s AND target_id = %s
+                ORDER BY ts ASC
+                """,
+                (tenant_id, project_id),
+            )
+            rows = cur.fetchall()
+        return tuple(_row_to_audit(r) for r in rows)
+
+
+# ---------------------------------------------------------------------------
+# Row mapping + Postgres helpers
+# ---------------------------------------------------------------------------
+
+
+def _jsonb(value: Any) -> str | None:
+    """Serialise a JSON-able value for a ``%s::jsonb`` placeholder.
+
+    ``None`` stays ``NULL`` (distinct from a JSON ``null``); everything
+    else is ``json.dumps``-ed so psycopg binds a text param the cast
+    turns into JSONB.
+    """
+
+    if value is None:
+        return None
+    return json.dumps(value)
+
+
+def _coerce_json(value: Any) -> Any:
+    if isinstance(value, (dict, list)):
+        return value
+    if isinstance(value, (bytes, bytearray)):
+        return json.loads(bytes(value).decode("utf-8"))
+    if isinstance(value, str):
+        return json.loads(value)
+    return value
+
+
+def _row_to_project(row: dict[str, Any]) -> ProjectRecord:
+    data = dict(row)
+    data["default_connector_allowlist"] = _coerce_json(
+        data.get("default_connector_allowlist")
+    )
+    return ProjectRecord.model_validate(data)
+
+
+def _row_to_membership(row: dict[str, Any]) -> ProjectMembershipRecord:
+    return ProjectMembershipRecord.model_validate(dict(row))
+
+
+def _row_to_activity(row: dict[str, Any]) -> ProjectActivityRecord:
+    return ProjectActivityRecord.model_validate(dict(row))
+
+
+def _row_to_audit(row: dict[str, Any]) -> ProjectAuditRecord:
+    data = dict(row)
+    for key in ("before_state", "after_state", "context"):
+        if data.get(key) is not None:
+            data[key] = _coerce_json(data[key])
+    # Drop chain columns the Pydantic model doesn't declare.
+    for key in ("seq", "prev_hash", "signature", "key_version"):
+        data.pop(key, None)
+    return ProjectAuditRecord.model_validate(data)
+
+
+def _sql_order_by(sort: str) -> str:
+    """Map the wire ``field:dir`` sort to a safe ``ORDER BY`` clause.
+
+    Only whitelisted sorts (``_VALID_SORTS``) are honoured; anything else
+    falls back to ``updated_at DESC`` — the column names are never
+    interpolated from raw user input.
+    """
+
+    if sort not in _VALID_SORTS:
+        sort = "updated_at:desc"
+    field_name, direction = sort.split(":", 1)
+    direction_sql = "DESC" if direction == "desc" else "ASC"
+    if field_name == "last_activity_at":
+        # NULLs LAST on DESC to match the in-memory epoch-substitution.
+        nulls = "NULLS LAST" if direction_sql == "DESC" else "NULLS FIRST"
+        return f"last_activity_at {direction_sql} {nulls}, id {direction_sql}"
+    if field_name == "name":
+        return f"lower(name) {direction_sql}, id {direction_sql}"
+    return f"{field_name} {direction_sql}, id {direction_sql}"
+
+
+# ---------------------------------------------------------------------------
 # Sort + cursor helpers
 # ---------------------------------------------------------------------------
 
@@ -678,6 +1303,7 @@ def iter_audit_rows_for_bulk(
 
 __all__ = [
     "InMemoryProjectsStore",
+    "PostgresProjectsStore",
     "ProjectActivityCounts",
     "ProjectActivityRecord",
     "ProjectAuditRecord",

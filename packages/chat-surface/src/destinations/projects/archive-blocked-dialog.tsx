@@ -23,9 +23,8 @@
 // established in this directory (cf. `transfer-ownership-dialog.tsx`).
 //
 // LivenessReport shape mirrors the PRD §3.3 / §3.4 wire contract. We
-// define a LOCAL stub here per the task brief; the orchestrator
-// rewires it to `@0x-copilot/api-types`'s `LivenessReport`
-// at merge time (same pattern as `_projects-stub.ts`).
+// define a LOCAL stub here per the task brief; it can be rewired to
+// `@0x-copilot/api-types`'s `LivenessReport` when convenient.
 
 import { useMemo, type CSSProperties, type ReactElement } from "react";
 

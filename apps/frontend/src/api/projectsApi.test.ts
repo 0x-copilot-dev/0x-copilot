@@ -29,7 +29,7 @@ import type {
   ProjectSummary,
   TenantId,
   UserId,
-} from "./_projects-stub";
+} from "@0x-copilot/api-types";
 
 const IDENTITY = { orgId: "org_test", userId: "user_test" };
 
@@ -535,7 +535,9 @@ describe("project member endpoints", () => {
       IDENTITY,
       "project_1" as ProjectId,
       "user_member" as UserId,
-      { role: "owner" },
+      // Member-patch promotes only to editor/viewer; owner goes through the
+      // ownership-transfer endpoint, so the patch role type excludes "owner".
+      { role: "editor" },
     );
 
     expect((fetchMock.mock.calls[0][1] as RequestInit).method).toBe("PATCH");

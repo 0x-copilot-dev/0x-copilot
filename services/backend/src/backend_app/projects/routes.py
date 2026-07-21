@@ -38,6 +38,11 @@ from backend_app.projects.service import (
     ProjectNotFound,
     ProjectsService,
 )
+from backend_app.projects.sse import (
+    InMemoryProjectActivityBus,
+    ProjectActivityBus,
+    register_projects_sse_route,
+)
 from backend_app.projects.store import (
     ProjectActivityCounts,
     ProjectMembershipRecord,
@@ -173,6 +178,7 @@ def register_projects_routes(
     *,
     service: ProjectsService,
     liveness_service: "LivenessService | None" = None,
+    activity_bus: "ProjectActivityBus | None" = None,
 ) -> None:
     """Attach ``/v1/projects`` routes to ``app``.
 
@@ -181,7 +187,19 @@ def register_projects_routes(
     pre-checks liveness and returns 409 with the full ``LivenessReport``
     body if the project has live work. When omitted (legacy tests), the
     archive endpoint behaves as Phase 6 shipped (soft-delete + 204).
+
+    ``activity_bus`` (PRD-H FR-H.2) is the tenant-scoped SSE fan-out for
+    ``GET /v1/projects/stream``. When omitted a fresh
+    :class:`InMemoryProjectActivityBus` is created per app and stashed on
+    ``app.state.projects_activity_bus`` — the mutation handlers publish to
+    it and the stream route reads from it. Every project mutation emits
+    one envelope on the caller's ``tenant_id`` channel so other sessions
+    in the tenant receive live updates.
     """
+
+    bus: ProjectActivityBus = activity_bus or InMemoryProjectActivityBus()
+    app.state.projects_activity_bus = bus
+    register_projects_sse_route(app, bus=bus)
 
     @app.get(
         "/v1/projects",
@@ -309,7 +327,14 @@ def register_projects_routes(
             raise HTTPException(
                 status.HTTP_400_BAD_REQUEST, str(exc) or "invalid_request"
             ) from exc
-        return _to_wire(record, viewer_role, starred, counts)
+        wire = _to_wire(record, viewer_role, starred, counts)
+        bus.publish(
+            tenant_id=identity.org_id,
+            event_type="project_created",
+            project_id=record.id,
+            payload=wire.model_dump(),
+        )
+        return wire
 
     @app.patch(
         "/v1/projects/{project_id}",
@@ -354,7 +379,23 @@ def register_projects_routes(
         viewer_role = "owner" if record.owner_user_id == identity.user_id else None
         starred = False  # PATCH doesn't return star; FE refetches if needed.
         counts = ProjectActivityCounts(tenant_id=identity.org_id, project_id=record.id)
-        return _to_wire(record, viewer_role, starred, counts)
+        wire = _to_wire(record, viewer_role, starred, counts)
+        # Distinguish archive / activate transitions from a plain edit so
+        # the FE can route the envelope (drop-vs-merge) without a refetch.
+        new_status = patch_dict.get("status")
+        if new_status == "archived":
+            update_event = "project_archived"
+        elif new_status == "active":
+            update_event = "project_activated"
+        else:
+            update_event = "project_updated"
+        bus.publish(
+            tenant_id=identity.org_id,
+            event_type=update_event,
+            project_id=record.id,
+            payload=wire.model_dump(),
+        )
+        return wire
 
     @app.delete(
         "/v1/projects/{project_id}",
@@ -400,6 +441,12 @@ def register_projects_routes(
             raise HTTPException(status.HTTP_404_NOT_FOUND, "project_not_found") from exc
         except ProjectForbidden as exc:
             raise HTTPException(status.HTTP_403_FORBIDDEN, "owner_only_writes") from exc
+        bus.publish(
+            tenant_id=identity.org_id,
+            event_type="project_deleted",
+            project_id=project_id,
+            payload={"project_id": project_id},
+        )
         return Response(status_code=status.HTTP_204_NO_CONTENT)
 
     @app.post(
@@ -426,7 +473,14 @@ def register_projects_routes(
             raise HTTPException(status.HTTP_404_NOT_FOUND, "project_not_found") from exc
         viewer_role = "owner" if record.owner_user_id == identity.user_id else None
         counts = ProjectActivityCounts(tenant_id=identity.org_id, project_id=record.id)
-        return _to_wire(record, viewer_role, False, counts)
+        wire = _to_wire(record, viewer_role, False, counts)
+        bus.publish(
+            tenant_id=identity.org_id,
+            event_type="project_activated",
+            project_id=record.id,
+            payload=wire.model_dump(),
+        )
+        return wire
 
     # -- members ------------------------------------------------------
 
@@ -504,7 +558,14 @@ def register_projects_routes(
                 else status.HTTP_400_BAD_REQUEST
             )
             raise HTTPException(http_code, code) from exc
-        return _membership_to_wire(row)
+        wire = _membership_to_wire(row)
+        bus.publish(
+            tenant_id=identity.org_id,
+            event_type="project_member_added",
+            project_id=project_id,
+            payload=wire.model_dump(),
+        )
+        return wire
 
     @app.patch(
         "/v1/projects/{project_id}/members/{member_user_id}",
@@ -543,7 +604,14 @@ def register_projects_routes(
             raise HTTPException(
                 status.HTTP_400_BAD_REQUEST, str(exc) or "invalid_request"
             ) from exc
-        return _membership_to_wire(row)
+        wire = _membership_to_wire(row)
+        bus.publish(
+            tenant_id=identity.org_id,
+            event_type="project_member_role_changed",
+            project_id=project_id,
+            payload=wire.model_dump(),
+        )
+        return wire
 
     @app.delete(
         "/v1/projects/{project_id}/members/{member_user_id}",
@@ -579,6 +647,12 @@ def register_projects_routes(
             raise HTTPException(
                 status.HTTP_409_CONFLICT, exc.code or "conflict"
             ) from exc
+        bus.publish(
+            tenant_id=identity.org_id,
+            event_type="project_member_removed",
+            project_id=project_id,
+            payload={"project_id": project_id, "user_id": target},
+        )
         return Response(status_code=status.HTTP_204_NO_CONTENT)
 
     # -- transfer -----------------------------------------------------
@@ -625,7 +699,14 @@ def register_projects_routes(
             raise HTTPException(http_code, code) from exc
         viewer_role = "owner" if record.owner_user_id == identity.user_id else "editor"
         counts = ProjectActivityCounts(tenant_id=identity.org_id, project_id=record.id)
-        return _to_wire(record, viewer_role, False, counts)
+        wire = _to_wire(record, viewer_role, False, counts)
+        bus.publish(
+            tenant_id=identity.org_id,
+            event_type="project_ownership_transferred",
+            project_id=record.id,
+            payload=wire.model_dump(),
+        )
+        return wire
 
     # Phase 6 product decision (user override 2026-05-18): admin force-transfer
     # is DEFERRED — flagged as a security hazard. Route registration commented
@@ -709,6 +790,12 @@ def register_projects_routes(
             )
         except ProjectNotFound as exc:
             raise HTTPException(status.HTTP_404_NOT_FOUND, "project_not_found") from exc
+        bus.publish(
+            tenant_id=identity.org_id,
+            event_type="project_starred",
+            project_id=project_id,
+            payload={"project_id": project_id, "user_id": identity.user_id},
+        )
         return Response(status_code=status.HTTP_204_NO_CONTENT)
 
     @app.post(
@@ -734,6 +821,12 @@ def register_projects_routes(
             )
         except ProjectNotFound as exc:
             raise HTTPException(status.HTTP_404_NOT_FOUND, "project_not_found") from exc
+        bus.publish(
+            tenant_id=identity.org_id,
+            event_type="project_unstarred",
+            project_id=project_id,
+            payload={"project_id": project_id, "user_id": identity.user_id},
+        )
         return Response(status_code=status.HTTP_204_NO_CONTENT)
 
 
