@@ -233,6 +233,31 @@ class TestInjection:
         assert result.ok is False
         assert "http" in result.reason
 
+    def test_linter_kills_javascript_url_in_a_later_row(self) -> None:
+        # items[0] is clean; a later row smuggles a javascript: value at the
+        # same url_path. The all-rows sweep must still reject the spec so the
+        # backend lint is sufficient on its own (not only the FE sanitiser).
+        sample = {
+            "board": "Sprint 42",
+            "issues": [
+                {"title": "first", "url": "https://linear.app/acme/ENG-1"},
+                {"title": "second", "url": "javascript:steal()"},
+            ],
+        }
+        candidate = {
+            "spec_version": 1,
+            "archetype": "table",
+            "source": {"server": "linear", "tool": "list_issues"},
+            "title_path": "board",
+            "items_path": "issues",
+            "columns": [{"label": "Title", "path": "title"}],
+            "link": {"label": "Open", "url_path": "url"},
+        }
+        spec = validate_surface_spec(candidate)
+        result = SurfaceSpecLinter.lint(spec, sample)
+        assert result.ok is False
+        assert "row" in result.reason
+
     async def test_generator_never_persists_a_hostile_link(self) -> None:
         # The fake model obeys the injected instruction on BOTH attempts; the
         # lint layer must still refuse it, yielding a GenFailure (no spec).

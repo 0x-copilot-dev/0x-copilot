@@ -172,9 +172,13 @@ class SurfaceSpecLinter:
     * Every ``*_path`` must resolve against its render context — title/subtitle
       against the root; columns/fields/group-by/link against the first item when
       ``items_path`` is present (the FE renders these per-row), else the root.
-    * A ``link.url_path`` that resolves must land on an ``http(s)`` string. This
-      is the structural injection kill-switch: a ``javascript:``/``data:`` value
-      fails here no matter what the model emitted (plan D9, AC3).
+    * A ``link.url_path`` that resolves must land on an ``http(s)`` string —
+      checked on the representative row AND swept across every row (a later row
+      could carry a ``javascript:``/``data:`` value at the same path). This is
+      the structural injection kill-switch: an unsafe value fails here no matter
+      what the model emitted (plan D9, AC3). The FE render sanitiser
+      (``surface-renderers/_shared/primitives``) re-checks per value as a
+      second, defence-in-depth layer.
     * An ``items_path`` must resolve to a list. When that list is empty there is
       nothing to render (and nothing to inject), so item-context checks are
       skipped rather than failing a legitimate sparse sample.
@@ -206,7 +210,38 @@ class SurfaceSpecLinter:
         for slot in (*(spec.fields or ()), *(spec.columns or ())):
             if not cls._resolves(item_ctx, slot.path):
                 return LintResult(False, f"path '{slot.path}' does not resolve")
-        return cls._lint_link(spec, item_ctx)
+        link_result = cls._lint_link(spec, item_ctx)
+        if not link_result.ok:
+            return link_result
+        return cls._lint_link_all_rows(spec, sample)
+
+    # A multi-row sample's first row can be clean while a later row carries a
+    # javascript:/data: value at the same url_path. Sweep every row so the
+    # backend lint is sufficient on its own; the FE sanitiser is a second layer.
+    _MAX_LINTED_ROWS = 500
+
+    @classmethod
+    def _lint_link_all_rows(cls, spec: SurfaceSpec, sample: object) -> LintResult:
+        if spec.link is None or spec.items_path is None:
+            return LintResult(True)
+        found, items = DotPathResolver.resolve(sample, spec.items_path)
+        if (
+            not found
+            or isinstance(items, (str, bytes))
+            or not isinstance(items, Sequence)
+        ):
+            return LintResult(True)  # shape already validated in _item_context
+        for item in items[: cls._MAX_LINTED_ROWS]:
+            if not isinstance(item, Mapping):
+                continue
+            resolved, value = DotPathResolver.resolve(item, spec.link.url_path)
+            if resolved and not _SafeUrl.is_safe(value):
+                return LintResult(
+                    False,
+                    f"link.url_path '{spec.link.url_path}' resolves to a "
+                    "non-http(s) value in at least one row",
+                )
+        return LintResult(True)
 
     @classmethod
     def _item_context(
