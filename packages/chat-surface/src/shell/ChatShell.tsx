@@ -129,6 +129,14 @@ export interface ChatShellProps<TRoute> {
    */
   readonly railBadges?: Partial<Record<ShellDestinationSlug, number>>;
 
+  /**
+   * Optional host-injected top-bar chip (FTUE P4 wallet chip), forwarded to the
+   * `Topbar`'s additive `walletChip` slot. Shown only on non-full-bleed
+   * destinations (where the shell Topbar renders). Absent = byte-identical to
+   * before.
+   */
+  readonly walletChip?: ReactNode;
+
   /** Main column content. */
   readonly children?: ReactNode;
 }
@@ -148,6 +156,7 @@ export function ChatShell<TRoute>({
   contextPanel,
   railIdentity,
   railBadges,
+  walletChip,
   children,
 }: ChatShellProps<TRoute>): ReactElement {
   const profile = useOptionalDeploymentProfile();
@@ -176,6 +185,7 @@ export function ChatShell<TRoute>({
               contextPanel={contextPanel}
               railIdentity={railIdentity}
               railBadges={railBadges}
+              walletChip={walletChip}
             >
               {children}
             </ShellGrid>
@@ -197,6 +207,7 @@ interface ShellGridProps {
   readonly contextPanel?: ReactNode | ContextPanelProps;
   readonly railIdentity?: { readonly initial: string };
   readonly railBadges?: Partial<Record<ShellDestinationSlug, number>>;
+  readonly walletChip?: ReactNode;
   readonly children?: ReactNode;
 }
 
@@ -211,6 +222,7 @@ function ShellGrid({
   contextPanel,
   railIdentity,
   railBadges,
+  walletChip,
   children,
 }: ShellGridProps): ReactElement {
   // Default to closed: the right rail has no destination-specific content
@@ -295,6 +307,7 @@ function ShellGrid({
             title={activeLabel}
             leaf={topbarLeaf ?? null}
             onOpenCommandPalette={onOpenCommandPalette}
+            walletChip={walletChip}
           />
         )}
         <div style={mainBodyStyle} data-testid="chat-shell-main">

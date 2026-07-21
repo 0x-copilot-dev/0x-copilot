@@ -66,6 +66,7 @@ interface MountOptions {
    * host path (no provider → the frozen legacy 12-destination rail).
    */
   readonly profile?: DeploymentProfile;
+  readonly walletChip?: React.ReactNode;
   readonly children?: React.ReactNode;
 }
 
@@ -76,6 +77,7 @@ function mount({
   settingsActive,
   topbarLeaf,
   profile,
+  walletChip,
   children,
 }: MountOptions = {}) {
   const shell = (
@@ -89,6 +91,7 @@ function mount({
       onOpenSettings={onOpenSettings}
       settingsActive={settingsActive}
       topbarLeaf={topbarLeaf ?? null}
+      walletChip={walletChip}
     >
       {children}
     </ChatShell>
@@ -304,5 +307,31 @@ describe("ChatShell", () => {
     expect(
       screen.getByRole("complementary", { name: /activity panel/i }),
     ).toBeInTheDocument();
+  });
+
+  // FTUE P4 — the additive `walletChip` slot is threaded to the Topbar.
+  it("forwards walletChip into the topbar slot on non-full-bleed destinations", () => {
+    mount({
+      activeDestination: "home",
+      walletChip: <span data-testid="wc">0x7f3C…a92C</span>,
+    });
+    expect(screen.getByTestId("topbar-wallet-chip")).toBeInTheDocument();
+    expect(screen.getByTestId("wc")).toHaveTextContent("0x7f3C…a92C");
+  });
+
+  it("renders no wallet-chip slot when walletChip is absent (layout unchanged)", () => {
+    mount({ activeDestination: "home" });
+    expect(screen.queryByTestId("topbar-wallet-chip")).toBeNull();
+  });
+
+  it("does not render walletChip on full-bleed chats (topbar suppressed)", () => {
+    // The shell Topbar — and thus its wallet slot — is suppressed on
+    // full-bleed destinations, so the chip never leaks onto ChatScreen.
+    mount({
+      activeDestination: "chats",
+      walletChip: <span data-testid="wc">0x7f3C…a92C</span>,
+    });
+    expect(screen.queryByTestId("topbar-wallet-chip")).toBeNull();
+    expect(screen.queryByTestId("wc")).toBeNull();
   });
 });

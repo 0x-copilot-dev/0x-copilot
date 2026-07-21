@@ -1,4 +1,4 @@
-import { type CSSProperties, type ReactElement } from "react";
+import { type CSSProperties, type ReactElement, type ReactNode } from "react";
 
 import { CommandPaletteTrigger } from "./CommandPaletteTrigger";
 import {
@@ -62,6 +62,13 @@ export interface TopbarProps {
    * palette-open behaviour and the ⌘K hotkey.
    */
   readonly onOpenCommandPalette?: () => void;
+  /**
+   * Optional host-injected chip rendered between the title group and the ⌘K
+   * command trigger (FTUE P4 wallet chip). The package stays substrate-agnostic
+   * — the host owns the port-fed content. Additive: when absent the topbar row
+   * is byte-identical to before (no wrapper node, no extra flex gap).
+   */
+  readonly walletChip?: ReactNode;
 }
 
 function resolveSubtitle(leaf: string | null | undefined): string | null {
@@ -76,6 +83,7 @@ export function Topbar({
   title,
   leaf,
   onOpenCommandPalette = () => {},
+  walletChip,
 }: TopbarProps): ReactElement {
   const resolvedTitle = title ?? TITLE_BY_SLUG[activeDestination];
   const subtitle = resolveSubtitle(leaf);
@@ -137,6 +145,18 @@ export function Topbar({
           </span>
         ) : null}
       </div>
+      {/* Additive FTUE P4 slot: the host-injected wallet chip sits between the
+          title group and the command trigger. Rendered ONLY when supplied, so
+          the wrapper (and its flex gap) never touches the byte-identical
+          no-chip layout. */}
+      {walletChip !== undefined && walletChip !== null ? (
+        <div
+          style={{ display: "flex", alignItems: "center", flex: "none" }}
+          data-testid="topbar-wallet-chip"
+        >
+          {walletChip}
+        </div>
+      ) : null}
       <CommandPaletteTrigger
         className={TRIGGER_CLASS}
         onOpen={onOpenCommandPalette}
