@@ -83,6 +83,14 @@ export type SettingsSection =
   // BYOK — per-user model provider keys. Distinct from "api-keys"
   // (Account group), which are Atlas bearer tokens.
   | "provider-keys"
+  // PRD-E convergence — SSOT nav slugs the legacy screen never had a route
+  // for. The web `SettingsBinder` mounts the chat-surface `SettingsSurface`,
+  // whose nav can navigate to the model-curation ("models") and desktop
+  // "app-lock" sections; both must parse as valid route sections so a nav
+  // click reflects to the URL. Web has no body for either yet (the surface
+  // shows its placeholder), but the slugs are routable.
+  | "models"
+  | "app-lock"
   // Round 2 — local Ollama models (desktop / self-host only; gated by a
   // server status probe).
   | "local-models"

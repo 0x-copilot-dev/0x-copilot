@@ -105,6 +105,16 @@ const SettingsScreen = lazy(() =>
     default: m.SettingsScreen,
   })),
 );
+// PRD-E convergence — the web app now mounts the chat-surface `SettingsSurface`
+// (the SSOT settings shell + nav + icons) via this binder for every settings
+// section EXCEPT `connectors`/`skills`, which have no SSOT nav slot and stay on
+// the legacy `SettingsScreen` (MCP-server management + skill editor). Code-split
+// like `SettingsScreen` so it costs the main bundle nothing until navigated to.
+const SettingsBinder = lazy(() =>
+  import("../features/settings/SettingsBinder").then((m) => ({
+    default: m.SettingsBinder,
+  })),
+);
 // P6.5-C2 — Project Templates gallery (sub-PRD §7.6). Top-level screen
 // (not a destination slug — §7.6 + §12 Q1: not on the rail), code-split
 // so the templates UI costs the main bundle nothing until the user
@@ -687,17 +697,17 @@ export function CopilotApp({
 
   // ⌘K command launcher (PRD-D): map a command intent to real web navigation.
   // Navigate intents route through the rail handler; settings intents map the
-  // chat-surface section slug to the web `SettingsSection`. The only mismatch is
-  // `model-behavior` → `model-and-behavior`; the rest are identical (and PRD-E's
-  // settings convergence removes the mapping entirely).
+  // chat-surface section slug to the web `SettingsSection`. PRD-E's convergence
+  // mounts the SSOT `SettingsSurface` on web (via `SettingsBinder`) but keeps
+  // the web router's legacy section spellings for URL/back-compat, so the one
+  // remaining mismatch — `model-behavior` → `model-and-behavior` — stays; the
+  // binder maps it back to the SSOT slug. The other palette sections
+  // (`provider-keys`, `local-models`, `appearance`, `profile`) are identical.
   const handlePaletteCommand = (intent: ShellCommandIntent): void => {
     if (intent.type === "navigate") {
       handleRailNavigate(intent.slug);
       return;
     }
-    // All command sections are valid SettingsSection values (provider-keys,
-    // local-models, appearance, profile); only model-behavior is spelled
-    // differently on the legacy web screen.
     const section: SettingsSection =
       intent.section === "model-behavior"
         ? "model-and-behavior"
@@ -786,21 +796,40 @@ export function CopilotApp({
       );
     }
   } else if (route.screen === "settings") {
-    body = (
-      <SettingsScreen
-        connectors={connectors}
-        skills={skills}
-        identity={identity}
-        profile={profile}
-        initialSection={route.section}
-        onBackToChat={() =>
-          router.navigate({ screen: "chat", destination: ROOT_DESTINATION })
-        }
-        onSectionChange={(section) =>
-          router.navigate({ screen: "settings", section })
-        }
-      />
-    );
+    // PRD-E — `connectors`/`skills` have no SSOT nav slot (they are rail
+    // destinations; MCP-server management + the skill editor still live in the
+    // legacy screen), so they keep rendering `SettingsScreen`. Every other
+    // section mounts the converged chat-surface `SettingsSurface` via the binder.
+    if (route.section === "connectors" || route.section === "skills") {
+      body = (
+        <SettingsScreen
+          connectors={connectors}
+          skills={skills}
+          identity={identity}
+          profile={profile}
+          initialSection={route.section}
+          onBackToChat={() =>
+            router.navigate({ screen: "chat", destination: ROOT_DESTINATION })
+          }
+          onSectionChange={(section) =>
+            router.navigate({ screen: "settings", section })
+          }
+        />
+      );
+    } else {
+      body = (
+        <SettingsBinder
+          transport={getAppTransport()}
+          profile={profile}
+          identity={identity}
+          isAdmin={isAdmin}
+          section={route.section}
+          onNavigate={(section) =>
+            router.navigate({ screen: "settings", section })
+          }
+        />
+      );
+    }
   } else if (route.screen === "settings-p12") {
     // P12-C — Phase 12 settings pages
     // (`/settings/notification-defaults`, `/settings/security/webhooks`).
