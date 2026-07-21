@@ -32,6 +32,7 @@ from backend_app.contracts import (
 )
 from backend_app.identity.invitations import design_role_alias_for
 from backend_app.identity.rbac import RequireScopes
+from backend_app.identity.siwe import is_placeholder_email
 from backend_app.identity.store import IdentityStore
 
 
@@ -50,6 +51,11 @@ class MemberResponse(BaseModel):
     user_id: str
     email: str
     email_verified_at: str | None
+    # Honest identity (mirrors ``/me/profile``): a SIWE/wallet member has no real
+    # email — ``email`` is the undeliverable ``<address>@wallet.invalid``
+    # placeholder. This flag tells the directory UI to render the wallet anchor
+    # instead of the fake address, so the members list never leaks it.
+    email_is_placeholder: bool = False
     display_name: str | None
     title: str | None = None
     role: MemberRoleSummary | None
@@ -115,6 +121,7 @@ def register_members_routes(app: FastAPI) -> None:
                     user_id=user.user_id,
                     email=user.primary_email,
                     email_verified_at=_iso_or_none(user.email_verified_at),
+                    email_is_placeholder=is_placeholder_email(user.primary_email),
                     display_name=user.display_name,
                     title=_user_title(user),
                     role=(
@@ -341,6 +348,7 @@ def _project_member(
         user_id=user.user_id,
         email=user.primary_email,
         email_verified_at=_iso_or_none(user.email_verified_at),
+        email_is_placeholder=is_placeholder_email(user.primary_email),
         display_name=user.display_name,
         title=_user_title(user),
         role=(

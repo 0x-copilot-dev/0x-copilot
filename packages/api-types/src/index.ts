@@ -798,6 +798,14 @@ export interface Member {
   user_id: string;
   email: string;
   email_verified_at: string | null;
+  /**
+   * Honest identity (mirrors `UserProfile.email_is_placeholder`): a
+   * SIWE/wallet member has no real email — `email` is the undeliverable
+   * `<address>@wallet.invalid` placeholder. When true the directory renders
+   * the wallet anchor instead of the fake address. Optional so older servers
+   * stay compatible (absent ⇒ treat as a real email).
+   */
+  email_is_placeholder?: boolean;
   display_name: string | null;
   title: string | null;
   role: MemberRoleSummary | null;

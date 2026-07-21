@@ -229,9 +229,14 @@ function MemberRow({
       <td>
         <div className="member-row__identity">
           <span className="member-row__name">
-            {member.display_name || member.email}
+            {member.display_name ||
+              (member.email_is_placeholder ? "Wallet account" : member.email)}
           </span>
-          <span className="member-row__email">{member.email}</span>
+          {/* Honest identity: never render the `<address>@wallet.invalid`
+              placeholder — a wallet member has no email. */}
+          <span className="member-row__email">
+            {member.email_is_placeholder ? "Wallet sign-in" : member.email}
+          </span>
           {member.title ? (
             <span className="member-row__title">{member.title}</span>
           ) : null}
