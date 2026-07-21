@@ -17,6 +17,13 @@ export interface StatusPillProps {
   readonly status: StatusTone;
   readonly label: string;
   readonly className?: string;
+  /**
+   * Whether to render the leading status dot. Defaults to `true` (the historic
+   * behaviour every caller relied on). The v3 design shows the dot only on LIVE
+   * run chips, so `statusTone(...).showDot` should be threaded here for run
+   * status chips (PRD-B FR-B.3).
+   */
+  readonly showDot?: boolean;
 }
 
 interface TonePalette {
@@ -25,31 +32,34 @@ interface TonePalette {
   readonly border: string;
 }
 
+// Tone → tokens. No hex fallbacks: the design-system tokens are always defined,
+// and the old fallbacks were the stale Claude-terracotta palette (#d97757 etc.),
+// which rendered the WRONG colour if a token ever failed to resolve (PRD-B).
 const PALETTE: Readonly<Record<StatusTone, TonePalette>> = {
   ok: {
-    fg: "var(--color-success, #6ec48c)",
-    bg: "var(--color-success-bg, #1a2f23)",
-    border: "var(--color-success, #6ec48c)",
+    fg: "var(--color-success)",
+    bg: "var(--color-success-bg)",
+    border: "var(--color-success)",
   },
   error: {
-    fg: "var(--color-danger, #d97777)",
-    bg: "var(--color-danger-bg, #321a1a)",
-    border: "var(--color-danger, #d97777)",
+    fg: "var(--color-danger)",
+    bg: "var(--color-danger-bg)",
+    border: "var(--color-danger)",
   },
   warning: {
-    fg: "var(--color-warning, #d9a857)",
-    bg: "var(--color-warning-bg, #322615)",
-    border: "var(--color-warning, #d9a857)",
+    fg: "var(--color-warning)",
+    bg: "var(--color-warning-bg)",
+    border: "var(--color-warning)",
   },
   info: {
-    fg: "var(--color-accent, #d97757)",
-    bg: "var(--color-bg-accent-subtle, #2a1a14)",
-    border: "var(--color-accent, #d97757)",
+    fg: "var(--color-accent)",
+    bg: "var(--color-bg-accent-subtle)",
+    border: "var(--color-accent)",
   },
   muted: {
-    fg: "var(--color-text-subtle, #7e7e84)",
-    bg: "var(--color-surface-muted, #222224)",
-    border: "var(--color-border, #232325)",
+    fg: "var(--color-text-subtle)",
+    bg: "var(--color-surface-muted)",
+    border: "var(--color-border)",
   },
 };
 
@@ -85,6 +95,7 @@ export function StatusPill({
   status,
   label,
   className,
+  showDot = true,
 }: StatusPillProps): ReactElement {
   return (
     <span
@@ -94,7 +105,7 @@ export function StatusPill({
       data-status={status}
       aria-label={`Status: ${label}`}
     >
-      <span aria-hidden="true" style={dotStyle(status)} />
+      {showDot ? <span aria-hidden="true" style={dotStyle(status)} /> : null}
       {label}
     </span>
   );

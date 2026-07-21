@@ -138,11 +138,13 @@ describe("groupActivityByDay", () => {
 });
 
 describe("activity status → tone / label", () => {
-  it("maps every status to a distinct tone (FR-4.15)", () => {
+  it("maps status to tone via the shared SSOT (PRD-B design semantics)", () => {
+    // done → success (jade), stopped → muted (off) — the design's schema, which
+    // corrects the earlier done→grey / stopped→red inversion.
     expect(activityStatusTone("running")).toBe("ok");
-    expect(activityStatusTone("done")).toBe("muted");
+    expect(activityStatusTone("done")).toBe("ok");
     expect(activityStatusTone("paused")).toBe("warning");
-    expect(activityStatusTone("stopped")).toBe("error");
+    expect(activityStatusTone("stopped")).toBe("muted");
     expect(activityStatusTone("needs_input")).toBe("info");
   });
 

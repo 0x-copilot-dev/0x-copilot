@@ -170,6 +170,14 @@
   --color-success-bg: #1a2f23;
   --color-warning: #e8b45e;
   --color-warning-bg: #322615;
+  /* Frontend parity v3 (PRD-B): the design's panel3 / line3 / tx2 had no
+     design-system equivalent, so consumers invented undefined vars (e.g. the
+     ⌘K row's `--color-surface-elevated` → hard-coded #2a2a2a). Define them here
+     so there is one honest target for the rail avatar tile, strong dividers,
+     and strong text. */
+  --color-surface-elevated: #1d1d23;
+  --color-border-stronger: rgba(255, 255, 255, 0.18);
+  --color-text-strong: #d4d4db;
 }
 
 /* Token aliases — semantic names used by various features that resolve
@@ -279,6 +287,10 @@
   --color-success-bg: #e8f8ef;
   --color-warning: #9a6400;
   --color-warning-bg: #fff4d8;
+  /* Frontend parity v3 (PRD-B) — light counterparts. */
+  --color-surface-elevated: #ebebee;
+  --color-border-stronger: rgba(10, 10, 14, 0.22);
+  --color-text-strong: #2a2a31;
 }
 
 :root[data-theme="slate"] {
@@ -301,6 +313,10 @@
   --color-success-bg: #153421;
   --color-warning: #f5c36f;
   --color-warning-bg: #3a2a15;
+  /* Frontend parity v3 (PRD-B) — slate counterparts. */
+  --color-surface-elevated: #2b3a4d;
+  --color-border-stronger: #68809b;
+  --color-text-strong: #d5deea;
 }
 
 * {
@@ -370,10 +386,18 @@ textarea {
   opacity: 0.48;
 }
 
+/* Dense row register (PRD-B, frontend-parity-v3). The base .ui-button keeps its
+   intentional 650 CTA weight (design-system CLAUDE.md), but the --sm tier is the
+   one that sits inside list rows / settings cards, where the v3 "quiet" system
+   is deliberately compact: ~20px tall, 6px radius, medium weight — matching the
+   design's .cbtn--sm (the audit flagged --sm as ~10px too tall + too heavy for
+   those rows). */
 .ui-button--sm {
-  font-size: var(--font-size-xs);
-  min-height: 2rem;
-  padding: 0.35rem 0.7rem;
+  border-radius: var(--radius-sm);
+  font-size: var(--font-size-2xs);
+  font-weight: var(--font-weight-medium);
+  min-height: 1.5rem;
+  padding: 0.25rem 0.55rem;
 }
 
 .ui-button--md {
@@ -471,6 +495,10 @@ textarea {
   );
 }
 
+/* Compact chip (PRD-B, frontend-parity-v3). The v3 design's `.chip` hugs its
+   text (`1px 8px`); the old badge was ~26px tall with the heavy 650 weight,
+   reading as a button rather than a label. Slimmed to a semibold pill that hugs
+   content. */
 .ui-badge {
   align-items: center;
   background: var(--color-surface-muted);
@@ -478,9 +506,9 @@ textarea {
   color: var(--color-text-muted);
   display: inline-flex;
   font-size: var(--font-size-xs);
-  font-weight: 650;
-  min-height: 1.65rem;
-  padding: 0.2rem 0.65rem;
+  font-weight: var(--font-weight-semibold);
+  min-height: 0;
+  padding: 0.1rem 0.5rem;
   white-space: nowrap;
 }
 

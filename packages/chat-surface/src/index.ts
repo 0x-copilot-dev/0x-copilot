@@ -1291,3 +1291,15 @@ export {
 export { Icon, type IconProps } from "./icons/Icon";
 export { ICON_PATHS, ICON_NAMES, hasIcon, type IconName } from "./icons/paths";
 // === end Frontend parity v3 (PRD-A) ===
+
+// === Frontend parity v3 (PRD-B) — run-status → chip presentation SSOT ===
+// One map from a run/conversation status to its StatusPill tone + label + dot,
+// so destinations can't disagree (done → jade, stopped → muted, dot on live
+// only). See docs/plan/frontend-parity-v3/PRD-B-tokens-and-status-tone.md.
+// Exposed as `runStatusTone` — `statusTone` is already taken by the Tools
+// destination's tool-health mapping (a different concept).
+export {
+  statusTone as runStatusTone,
+  type RunStatusPresentation,
+} from "./shell/statusTone";
+// === end Frontend parity v3 (PRD-B) ===
