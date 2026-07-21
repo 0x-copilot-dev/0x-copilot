@@ -82,7 +82,9 @@ COPILOT_FACADE_URL=http://127.0.0.1:8200 npm run dev --workspace @0x-copilot/des
 
 `COPILOT_FACADE_URL` selects `IpcTransport → WebTransport`; unset falls back
 to `MockTransport`. This plain path does **not** engage the service supervisor
-(no embedded Postgres) — that is the staged `COPILOT_RUNTIME_DIR` boot below.
+(no embedded Postgres) — for the REAL supervised app (embedded Postgres + all
+three services + Electron shell) from source in one command, use
+`make desktop-supervised` (see [Service supervisor](#service-supervisor-packaged--staged-runtime-boots) below).
 The live redesign walkthrough (boot → run → palette → shortcuts → settings) is
 [`SMOKE.md`](./SMOKE.md).
 
@@ -276,9 +278,38 @@ the `single_user_desktop` profile is what starts it (see AC2b:
 screen. The app holds a single-instance lock (two postmasters on one
 `pgdata/` would corrupt it); second launches re-focus the first window.
 
-Dev-run recipe against a staged runtime:
+**One command (build-from-source + run supervised).**
+`make desktop-supervised` (or `node tools/desktop-runtime/run-supervised.mjs`) is
+the single command that codifies the whole hand-assembly: it stages the host
+runtime (idempotent — a warm re-run stamp-skips the pip installs and only
+refreshes the cheap source copy; `--adhoc-sign` on macOS so unsigned arm64
+mach-o binaries still execute), then builds and launches the Electron shell
+against it with `COPILOT_RUNTIME_DIR` set, so the supervisor boots embedded
+postgres + all three services in production posture. It is the from-source
+dev-loop counterpart to the published `copilot` CLI, and the GUI counterpart to
+`run-local.mjs` (which boots the same backend topology headlessly, no window).
 
 ```bash
+make desktop-supervised
+# equivalently:
+node tools/desktop-runtime/run-supervised.mjs
+# fast path once staged (only main/renderer changed — skips staging):
+node tools/desktop-runtime/run-supervised.mjs --skip-stage
+# or via make:  make desktop-supervised ARGS="--skip-stage"
+```
+
+**Which command when:**
+
+| command                                          | postgres + 3 services                     | Electron GUI        | posture    |
+| ------------------------------------------------ | ----------------------------------------- | ------------------- | ---------- |
+| `make desktop-supervised` / `run-supervised.mjs` | yes (supervised)                          | yes                 | production |
+| `npm run dev --workspace @0x-copilot/desktop`    | no (MockTransport / `COPILOT_FACADE_URL`) | yes                 | dev-mint   |
+| `node tools/desktop-runtime/run-local.mjs`       | yes (supervised)                          | no (headless smoke) | production |
+
+Manual equivalent of what `run-supervised.mjs` automates (stage once, then run):
+
+```bash
+node tools/desktop-runtime/stage.mjs --platform darwin --arch arm64 --adhoc-sign
 COPILOT_RUNTIME_DIR="$PWD/apps/desktop/resources" \
   npm run dev --workspace @0x-copilot/desktop
 ```
