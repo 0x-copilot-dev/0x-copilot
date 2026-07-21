@@ -12,6 +12,7 @@ from agent_runtime.execution.contracts import (
 )
 from agent_runtime.execution.depth import DepthBudgetTable, ReasoningDepth
 from agent_runtime.execution.errors import AgentRuntimeError
+from agent_runtime.execution.fake_model import FakeModelProvider
 from agent_runtime.execution.openai_compat import OpenAICompatibleProviders
 from agent_runtime.settings import RuntimeSettings
 
@@ -78,7 +79,11 @@ class ModelConfigResolver:
         # machine. Treat it as always-satisfied so the BYOK gate doesn't
         # block it.
         compat = OpenAICompatibleProviders.get(provider)
-        keyless = compat is not None and not compat.requires_api_key
+        # The deterministic fake model needs no credential — mirror the keyless
+        # (local Ollama) branch so the BYOK gate never blocks a hermetic run.
+        keyless = (
+            compat is not None and not compat.requires_api_key
+        ) or FakeModelProvider.is_enabled()
         if (
             require_credentials
             and not provider_settings.is_configured

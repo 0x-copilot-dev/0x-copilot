@@ -83,9 +83,16 @@ class WebSearchToolRegistry:
 
 
 class EmptyMcpRegistry:
-    """MCP registry used until production MCP adapters are wired."""
+    """MCP registry used when no MCP providers are configured.
 
-    def list_available_servers(self, _context: object) -> Sequence[object]:
+    ``list_available_servers`` is ``async`` to honor the registry port contract
+    that :func:`agent_runtime.execution.factory.acreate_agent_runtime` awaits in
+    its bootstrap fan-out — the ``DynamicMcpRegistry`` sibling is async too. A
+    sync method here would raise ``TypeError: … awaitable is required`` for any
+    deployment without an MCP backend URL, silently breaking every run.
+    """
+
+    async def list_available_servers(self, _context: object) -> Sequence[object]:
         """Return an empty server list (no MCP servers configured)."""
         return ()
 
