@@ -734,6 +734,25 @@ export function CopilotApp({
       handleRailNavigate(intent.slug);
       return;
     }
+    if (intent.type === "action") {
+      // Web equivalents of the direct-launch commands. `new-chat` opens the Run
+      // cockpit's new-chat path; the rest deep-link to the surface that owns the
+      // action (web has no standalone add-key modal trigger from ⌘K yet).
+      switch (intent.action) {
+        case "new-chat":
+          openRun();
+          return;
+        case "add-provider-key":
+          router.navigate({ screen: "settings", section: "provider-keys" });
+          return;
+        case "download-local-model":
+          router.navigate({ screen: "settings", section: "local-models" });
+          return;
+        case "connect-tool":
+          handleRailNavigate("connectors");
+          return;
+      }
+    }
     const section: SettingsSection =
       intent.section === "model-behavior"
         ? "model-and-behavior"

@@ -19,9 +19,22 @@ import type { ShellDestinationSlug } from "./destinations";
  * either "go to a rail destination" or "open a Settings section". The host
  * interprets it (web router / desktop router), so the shell stays port-clean.
  */
+/**
+ * Direct-launch actions — commands that DO a thing rather than navigate to a
+ * page. The host maps each to its own action seam (desktop: the add-key /
+ * download-model / connect-tool / new-chat flows; web: its equivalents). Kept a
+ * closed union so a new action is a compile-time decision on every host.
+ */
+export type ShellCommandAction =
+  | "new-chat"
+  | "add-provider-key"
+  | "download-local-model"
+  | "connect-tool";
+
 export type ShellCommandIntent =
   | { readonly type: "navigate"; readonly slug: ShellDestinationSlug }
-  | { readonly type: "settings"; readonly section: string };
+  | { readonly type: "settings"; readonly section: string }
+  | { readonly type: "action"; readonly action: ShellCommandAction };
 
 export interface ShellCommand {
   readonly id: string;
@@ -60,7 +73,8 @@ export const SHELL_COMMANDS: readonly ShellCommand[] = [
     label: "New chat",
     keyword: "new run",
     icon: "plus",
-    intent: { type: "navigate", slug: "run" },
+    // Direct-launch: start a fresh run, not just navigate to the Run cockpit.
+    intent: { type: "action", action: "new-chat" },
   },
   {
     id: "cmd-activity",
@@ -88,21 +102,21 @@ export const SHELL_COMMANDS: readonly ShellCommand[] = [
     label: "Add a provider key",
     keyword: "BYOK",
     icon: "key",
-    intent: { type: "settings", section: "provider-keys" },
+    intent: { type: "action", action: "add-provider-key" },
   },
   {
     id: "cmd-local-model",
     label: "Download a local model",
     keyword: "local",
     icon: "chip",
-    intent: { type: "settings", section: "local-models" },
+    intent: { type: "action", action: "download-local-model" },
   },
   {
     id: "cmd-connect-tool",
     label: "Connect a tool",
     keyword: "connect",
     icon: "plug",
-    intent: { type: "navigate", slug: "connectors" },
+    intent: { type: "action", action: "connect-tool" },
   },
   {
     id: "cmd-behavior",

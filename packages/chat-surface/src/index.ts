@@ -1391,5 +1391,6 @@ export {
   filterShellCommands,
   type ShellCommand,
   type ShellCommandIntent,
+  type ShellCommandAction,
 } from "./shell/shellCommands";
 // === end Frontend parity v3 (PRD-D) ===
