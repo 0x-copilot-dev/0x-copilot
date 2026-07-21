@@ -198,7 +198,7 @@ function main() {
     if (!isStagedFresh(args.dest, key)) {
       fail(
         `--skip-stage given but no host-executable runtime is staged at ` +
-          `${path.relative(REPO_ROOT, args.dest)}/runtime/${key}. ` +
+          `${path.join(args.dest, "runtime", key)}. ` +
           `Run once without --skip-stage.`,
       );
     }
