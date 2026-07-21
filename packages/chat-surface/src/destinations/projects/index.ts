@@ -29,6 +29,7 @@ import {
   type ProjectFilterChipOption,
   type ProjectFilterChipProps,
 } from "./ProjectFilterChip";
+import { getCachedProjectName } from "./projectNameCache";
 
 // ===========================================================================
 // Re-exports (P6-B1 shell + P6-B2 detail + P6-A1 wire types)
@@ -128,6 +129,15 @@ export {
   type LivenessReport,
 } from "./archive-blocked-dialog";
 
+// Project-name cache — the host binder primes it from the loaded project
+// list so the `kind: "project"` ItemRef resolver (below) surfaces the real
+// project name instead of the generic "Project" label (FR-G.6).
+export {
+  cacheProjectName,
+  cacheProjectNames,
+  getCachedProjectName,
+} from "./projectNameCache";
+
 // Wire-type re-exports — canonical Projects contract from
 // `@0x-copilot/api-types` (`packages/api-types/src/projects.ts`).
 export type {
@@ -146,10 +156,15 @@ export type {
 // projectId }` route variant. Until then, the workspace route is the
 // stable fallback so `<ItemLink kind="project">` renders a real link
 // rather than the deleted-chip.
+//
+// FR-G.6 — the label is the real project name when the host has primed
+// the name cache (`cacheProjectNames`); it falls back to the generic
+// "Project" label on a cache miss (id we've never seen, or a link
+// rendered before the list loaded).
 
 if (!hasItemRefResolver("project")) {
   registerItemRefResolver("project", async (id: ProjectId) => ({
-    label: "Project",
+    label: getCachedProjectName(id as unknown as string) ?? "Project",
     icon: null,
     route: { kind: "workspace", workspaceId: id as unknown as string },
     breadcrumb: "Projects",

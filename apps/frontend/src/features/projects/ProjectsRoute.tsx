@@ -49,6 +49,7 @@ import {
 import {
   ProjectDetailView,
   ProjectsDestination,
+  cacheProjectNames,
   hasItemRefResolver,
   registerItemRefResolver,
   type ProjectDetail,
@@ -290,6 +291,17 @@ export function ProjectsRoute({
   );
   const [detail, setDetail] = useState<DetailState | null>(null);
   const [detailReloadToken, setDetailReloadToken] = useState(0);
+
+  // Prime the chat-surface project-name cache so cross-destination
+  // `<ItemLink kind="project">` links (chat / inbox / activity surfaces)
+  // resolve to the real project name instead of the generic "Project"
+  // label (FR-G.6). Runs on the loaded list + every SSE merge; the cache
+  // is a module-singleton, so the resolver reads whatever we've seen.
+  useEffect(() => {
+    if (state.kind === "ready") {
+      cacheProjectNames(state.items);
+    }
+  }, [state]);
 
   // ---- Initial fetch ------------------------------------------------
   useEffect(() => {
