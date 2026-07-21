@@ -38,9 +38,22 @@ E2E path now closed: MCP tool result → `SurfaceProjector` attaches `surface_ur
 
 **Verification:** ai-backend `tests/unit` **2976 passed**, 45 skipped; chat-surface **2152 passed**; 26 safety-invariant tests; dark-capabilities gate exit 0.
 
-## Wave 4 — escape hatch + hardening ⏳ IN PROGRESS
-- **PRD-10** tier-2 completion (production worker 6C + desktop lifecycle unstub + read/write install gate).
-- **PRD-11** eval harness + metering + spec injection lint + registry scoping.
+## Wave 4 — escape hatch + hardening ✅ DONE
+- **PRD-10** tier-2 completion — production Web Worker (`createTier2WorkerFactory`, globals scrubbed so fetch/XHR/importScripts fail), desktop lifecycle unstubbed end-to-end (`RunFeedLifecycleEventSource` → real AST + smoke-render pipeline → install), read/write install consent gate (write layouts require a one-time consent, read installs silently), `RUNTIME_TIER2_GENERATION` default-off, D29 fail-closed un-refused — `a804903b`.
+- **PRD-11** hardening — spec-level injection lint (named `SpecLintCode` reason codes), OTel metering counters (verified via `InMemoryMetricReader`), hermetic eval harness (22 real + 7 adversarial fixtures, replay model, baseline committed, `evals` marker excluded by default), registry-scoping factory + provider (default stays the module-global — zero behavior change) — `3be3632e`.
+
+---
+
+## ✅ ALL WAVES COMPLETE — PRD-01 … PRD-11 + hardening
+
+**Closing full-repo verification (integration branch):**
+- ai-backend `tests/unit` **3011 passed**, 45 skipped, 0 failed · backend surface_specs **42** · chat-surface **2178** · surface-renderers **164** · desktop tier-2 **203** (desktop full **961**, only the pre-existing `PaletteHost` jest-dom flake) · facade **230**.
+- Typecheck PASS: api-types, chat-surface, surface-renderers, frontend. Frontend build PASS.
+- dark-capabilities CI gate **exit 0**; migration manifest clean.
+- Only pre-existing environmental failures remain (local **Node 25** jsdom + a jest-dom matcher), proven identical at the merge-base — none introduced by this work.
+- Security-critical cores (spec generator, gated commit) each passed a **skeptical adversarial verification that hunted for a bypass** (injection kill-switch, no-live-model, fail-closed, idempotency) — both CONFIRMED with no holes.
+
+**Follow-ups (tracked, non-blocking):** wire `SurfaceCommitExecutor` onto the live draft-send/MCP-field-write path once a real send-connector exists; optionally rename `RUNTIME_TIER2_GENERATION` → `RUNTIME_ENABLE_TIER2_GENERATION` for mechanical dark-cap enforcement; grow the archetype library (event/timeline/dashboard/file) and curated builtin specs beyond the initial 12.
 
 ## Notes for future sessions
 - Worktree toolchain: run tests against worktree source using the main checkout's venv/node_modules. Python: `PYTHONPATH="src:../../packages/service-contracts/src"` + the main-checkout venv python. TS: shadow-symlink `node_modules/@0x-copilot/{api-types,chat-surface,surface-renderers,…} → worktree/packages/*` (gitignored) so cross-package imports resolve to worktree source; or a real `npm install` in a throwaway worktree for CI-equivalent runs.
