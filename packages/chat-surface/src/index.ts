@@ -224,6 +224,13 @@ export {
   type Tier2WorkerResponse,
   type Tier2JsonElement,
 } from "./surfaces/Tier2Loader";
+export {
+  createTier2WorkerFactory,
+  executeAdapterRender,
+  TIER2_WORKER_SOURCE,
+  TIER2_WORKER_DS_COMPONENT_NAMES,
+  type Tier2WorkerFactory,
+} from "./surfaces/tier2Worker";
 // === end Phase 6-A ===
 
 // === Phase 0-B ports facade ===

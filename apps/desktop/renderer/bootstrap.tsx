@@ -22,6 +22,7 @@ import {
   ToastStack,
   defaultDestinationForProfile,
   destinationsForProfile,
+  createTier2WorkerFactory,
   registerGenericStructuredDiff,
   useShellShortcuts,
   type DeploymentProfile,
@@ -53,7 +54,13 @@ function attachTier2BridgeOnce(): void {
   if (typeof window === "undefined") return;
   const win = window as unknown as { bridge?: unknown };
   if (!win.bridge) return;
-  new Tier2Bridge({ bridge: window.bridge }).attach();
+  // PRD-10: construct WITH the production worker factory. Before this, the
+  // bridge was built without one, so every tier-2 render hit Tier2Loader's
+  // `defaultWorkerFactory` and boundary-errored to tier-3.
+  new Tier2Bridge({
+    bridge: window.bridge,
+    workerFactory: createTier2WorkerFactory(),
+  }).attach();
   tier2BridgeAttached = true;
 }
 attachTier2BridgeOnce();

@@ -29,6 +29,7 @@ import type {
   SmokeMethod,
   SmokeRenderExecutor,
 } from "./quality-gate";
+import type { InstallReviewGate } from "./review-gate";
 
 let tmpDir: string;
 
@@ -118,6 +119,7 @@ function alwaysThrowSmoke(method: SmokeMethod): SmokeRenderExecutor {
 function deps(args: {
   smokeExecutor?: SmokeRenderExecutor;
   clock?: () => number;
+  reviewGate?: InstallReviewGate;
 }): {
   hostDeps: RegistryHostDeps;
   sends: Array<{ channel: string; payload: unknown }>;
@@ -132,6 +134,7 @@ function deps(args: {
     audit: audit(logPath),
     installer: { fs: { writeFile, mkdir, unlink } },
     smokeExecutor: args.smokeExecutor ?? alwaysOkSmoke(),
+    reviewGate: args.reviewGate,
   };
   return { hostDeps, sends, logPath };
 }
@@ -272,6 +275,81 @@ describe("installAdapter — Q1→Q5 pipeline", () => {
     );
     const events = await readLifecycleEvents({}, audit(logPath));
     expect(events[0].detail).toBe("model=render-adapter-generator/v1");
+  });
+});
+
+describe("installAdapter — PRD-10 review gate (AC4)", () => {
+  const args = {
+    scheme: "email",
+    version: 1,
+    source: GOOD_SOURCE,
+    generatedAt: "2026-05-17T00:00:00Z",
+    generatorModel: "render-adapter-generator/v1",
+  };
+
+  it("a read adapter installs silently (no consent prompt)", async () => {
+    const requireConsent = vi.fn(async () => true);
+    const { hostDeps, sends } = deps({ reviewGate: { requireConsent } });
+    const result = await installAdapter(
+      { ...args, reviewClass: "read" },
+      hostDeps,
+    );
+    expect(result.ok).toBe(true);
+    expect(requireConsent).not.toHaveBeenCalled();
+    expect(sends.find((s) => s.channel === "tier2.install")).toBeTruthy();
+  });
+
+  it("a write adapter requires consent and installs when granted", async () => {
+    const requireConsent = vi.fn(async () => true);
+    const { hostDeps, sends } = deps({ reviewGate: { requireConsent } });
+    const result = await installAdapter(
+      { ...args, reviewClass: "write" },
+      hostDeps,
+    );
+    expect(requireConsent).toHaveBeenCalledOnce();
+    expect(requireConsent).toHaveBeenCalledWith({
+      scheme: "email",
+      version: 1,
+      generatorModel: "render-adapter-generator/v1",
+    });
+    expect(result.ok).toBe(true);
+    expect(sends.find((s) => s.channel === "tier2.install")).toBeTruthy();
+  });
+
+  it("a declined write adapter is neither persisted nor dispatched", async () => {
+    const requireConsent = vi.fn(async () => false);
+    const { hostDeps, sends, logPath } = deps({
+      reviewGate: { requireConsent },
+    });
+    const result = await installAdapter(
+      { ...args, reviewClass: "write" },
+      hostDeps,
+    );
+    expect(result.ok).toBe(false);
+    if (!result.ok) expect(result.gate).toBe("consent");
+    expect(sends).toHaveLength(0);
+    // No source file was written.
+    await expect(
+      readFile(join(hostDeps.adapterDir, "email-v1.js"), "utf8"),
+    ).rejects.toThrow();
+    const events = await readLifecycleEvents({}, audit(logPath));
+    expect(events.map((e) => e.kind)).toEqual(["validated"]);
+    expect(events[0].detail).toMatch(/gate=consent/);
+  });
+
+  it("consent runs only AFTER the quality gates (a broken write adapter never prompts)", async () => {
+    const requireConsent = vi.fn(async () => true);
+    const { hostDeps } = deps({
+      smokeExecutor: alwaysThrowSmoke("renderCurrent"),
+      reviewGate: { requireConsent },
+    });
+    const result = await installAdapter(
+      { ...args, reviewClass: "write" },
+      hostDeps,
+    );
+    expect(result.ok).toBe(false);
+    if (!result.ok) expect(result.gate).toBe("smoke");
+    expect(requireConsent).not.toHaveBeenCalled();
   });
 });
 

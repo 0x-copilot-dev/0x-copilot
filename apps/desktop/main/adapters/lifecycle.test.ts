@@ -18,6 +18,7 @@ import {
 } from "./lifecycle";
 import type { RegistryHostDeps, RendererDispatcher } from "./registry-host";
 import type { SmokeRenderExecutor } from "./quality-gate";
+import type { InstallReviewGate } from "./review-gate";
 
 const GOOD_SOURCE = [
   "const adapter = {",
@@ -138,7 +139,10 @@ interface HostBundle {
   audit: LifecycleEventsDeps;
 }
 
-function makeHost(smoke?: SmokeRenderExecutor): HostBundle {
+function makeHost(
+  smoke?: SmokeRenderExecutor,
+  reviewGate?: InstallReviewGate,
+): HostBundle {
   const sends: Array<{ channel: string; payload: unknown }> = [];
   const dispatcher: RendererDispatcher = {
     send(channel, payload) {
@@ -175,6 +179,7 @@ function makeHost(smoke?: SmokeRenderExecutor): HostBundle {
         },
       },
       smokeExecutor: smoke ?? alwaysOkSmoke(),
+      reviewGate,
     },
     sends,
     audit,
@@ -422,6 +427,61 @@ describe("startTier2Lifecycle — per-attempt deadline", () => {
       host.audit,
     );
     expect(events[0].detail).toMatch(/attempt-timeout/);
+    handle.stop();
+  });
+});
+
+describe("startTier2Lifecycle — PRD-10 write-consent gate (AC4)", () => {
+  it("a write (form) adapter installs when consent is granted", async () => {
+    const requireConsent = vi.fn(async () => true);
+    const host = makeHost(undefined, { requireConsent });
+    const src = makeSource();
+    const handle = startTier2Lifecycle({
+      source: src.source,
+      host: host.hostDeps,
+    });
+    src.fireGenerated(payload({ layout: "form" }));
+    await handle.settled();
+    expect(requireConsent).toHaveBeenCalledOnce();
+    expect(host.sends.find((s) => s.channel === "tier2.install")).toBeTruthy();
+    handle.stop();
+  });
+
+  it("a read (table) adapter installs silently — no consent prompt", async () => {
+    const requireConsent = vi.fn(async () => true);
+    const host = makeHost(undefined, { requireConsent });
+    const src = makeSource();
+    const handle = startTier2Lifecycle({
+      source: src.source,
+      host: host.hostDeps,
+    });
+    src.fireGenerated(payload({ layout: "table" }));
+    await handle.settled();
+    expect(requireConsent).not.toHaveBeenCalled();
+    expect(host.sends.find((s) => s.channel === "tier2.install")).toBeTruthy();
+    handle.stop();
+  });
+
+  it("a declined write adapter does not install, burn the budget, or queue regen", async () => {
+    const requireConsent = vi.fn(async () => false);
+    const host = makeHost(undefined, { requireConsent });
+    const src = makeSource();
+    const handle = startTier2Lifecycle({
+      source: src.source,
+      host: host.hostDeps,
+    });
+    src.fireGenerated(payload({ layout: "form" }));
+    await handle.settled();
+    expect(
+      host.sends.find((s) => s.channel === "tier2.install"),
+    ).toBeUndefined();
+    // A user's "no" is terminal — not a retryable failure.
+    expect(handle.attempts("email")).toBe(0);
+    const regen = await readLifecycleEvents(
+      { scheme: "email", kind: "regen-queued" },
+      host.audit,
+    );
+    expect(regen).toHaveLength(0);
     handle.stop();
   });
 });

@@ -167,6 +167,29 @@ describe("Tier2Bridge — install / uninstall / mark-broken", () => {
   });
 });
 
+describe("Tier2Bridge — worker factory wiring (PRD-10)", () => {
+  it("threads the provided workerFactory into the mounted Tier2Loader", () => {
+    const { bridge, handlers } = makeBridge();
+    const workerFactory = () => {
+      throw new Error("factory should only be invoked by the loader effect");
+    };
+    const t2 = new Tier2Bridge({ bridge, workerFactory });
+    t2.attach();
+    handlers.get(CHANNELS.tier2Install)?.({
+      scheme: "email",
+      version: 1,
+      source: "module.exports={};",
+      generatedAt: "x",
+      generatorModel: "x",
+    });
+    const adapter = resolveAdapter("email://draft-1");
+    const element = adapter!.renderCurrent({ id: "x" }) as unknown as {
+      props: { workerFactory?: unknown };
+    };
+    expect(element.props.workerFactory).toBe(workerFactory);
+  });
+});
+
 describe("Tier2Bridge — boundary error forwarding", () => {
   it("on Tier2Loader.onFailure, sends tier2.boundary-error back to main", () => {
     const { bridge, handlers, invokeCalls } = makeBridge();
