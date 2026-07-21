@@ -1,46 +1,22 @@
 // CommandPalette — global ⌘K palette (substrate-shared).
 //
-// Source: team-memory-cmdk-prd.md §1.3 + §3.3 + §7.3; cross-audit §1.1
-// (ItemRef-routed entity hits) + §1.2 (port pattern).
+// Two layers (PRD-D):
+//   1. A static COMMAND LAUNCHER — `SHELL_COMMANDS` (the 13 v3 design commands).
+//      Shown on an empty query (so ⌘K works as a keyboard launcher without
+//      typing) and, once typing, filtered and shown ABOVE the search hits.
+//      Activating a command calls the host's `onCommand(intent)`.
+//   2. The live BACKEND SEARCH index — all entity/search data flows through
+//      `PaletteSearchPort.search()`. This component imports no fetch/transport
+//      primitive; hosts implement the port and pass it via `searchPort`.
 //
-// Substrate seam: ALL data flows through `PaletteSearchPort.search()`.
-// This component does not import a fetch / transport / IO primitive
-// directly. Web, desktop, and mobile hosts each implement the port and
-// pass it in via `searchPort`.
+// Keyboard: ↑↓ move selection across the flattened [commands, …hits] list
+// (wraps); Enter activates the selected item; ESC closes. Input autofocuses on
+// open. Search is debounced 150ms with a generation counter so a stale in-flight
+// query can't overwrite newer results.
 //
-// Behaviors:
-//   * `open` prop controls visibility — host owns it (the ⌘K hotkey
-//     hook flips it).
-//   * ESC + click on scrim → onRequestClose.
-//   * Input autofocuses on open.
-//   * Search is debounced 150ms; one in-flight call at a time (newer
-//     queries cancel older results via a generation counter).
-//   * Hits are grouped by kind: navigation / entity / action / command.
-//     Group headers render only when the group is non-empty.
-//   * Keyboard: ↑↓ moves selection across the *flattened* visible list
-//     (wraps); Enter activates the selected hit; ESC closes.
-//   * Empty q: shows starter actions from `starterActions` prop (host
-//     provides 4 quick-action hits).
-//   * Non-empty q with zero hits: shows the contextual "No results"
-//     empty state with a "Connect a tool →" hint that fires
-//     `onConnectToolHint?.()` when activated.
-//   * Entity-hit activation: the embedded <ItemLink> handles navigation
-//     via the registry. Enter on a selected entity hit triggers a
-//     programmatic click on that ItemLink (so router.navigate flows
-//     through the same resolver).
-//   * Non-entity dispatch: `navigation` hits call the optional
-//     `onNavigate(route, hit)` prop; `action` / `command` hits call the
-//     optional `onRunAction(action_token, hit)` prop; then the palette
-//     closes. Both props are additive — when a host omits them (the web
-//     PaletteHost does), non-entity hits are close-only, exactly as
-//     before.
-//
-// ARIA:
-//   * role="dialog" + aria-modal="true" on the scrim.
-//   * role="combobox" on the input + aria-controls + aria-expanded.
-//   * role="listbox" on the result list.
-//   * role="option" on each row (rendered by <PaletteHitRow>).
-//   * aria-activedescendant on the input mirrors the selected row's id.
+// ARIA: role="dialog"+aria-modal on the scrim; role="combobox" input;
+// role="listbox" list; role="option" rows; aria-activedescendant mirrors the
+// selected row id.
 
 import {
   useCallback,
@@ -60,55 +36,66 @@ import type {
   PaletteSearchResponse,
 } from "@0x-copilot/api-types";
 
+import { Icon } from "../icons/Icon";
 import type { PaletteSearchPort } from "../ports/PaletteSearchPort";
 import { useOptionalDeploymentProfile } from "../providers/DeploymentProfileProvider";
 
 import { PaletteHitRow } from "./PaletteHitRow";
+import {
+  SHELL_COMMANDS,
+  filterShellCommands,
+  type ShellCommand,
+  type ShellCommandIntent,
+} from "./shellCommands";
 
-// Placeholder copy is profile-aware: "the team" only makes sense on a team
-// deployment. Solo desktop drops it. Null profile (no provider) → solo copy.
-const PALETTE_PLACEHOLDER_TEAM =
-  "Search the team, your work, or run a command…";
-const PALETTE_PLACEHOLDER_SOLO = "Search your work, or run a command…";
+// Design placeholder (copilot.css .cmdk__in). Profile-neutral — the command
+// layer is the same everywhere; "the team" is only appended on a team profile.
+const PALETTE_PLACEHOLDER_SOLO = "Search commands, settings, tools…";
+const PALETTE_PLACEHOLDER_TEAM = "Search the team, commands, settings, tools…";
 
 export interface CommandPaletteProps {
   readonly open: boolean;
   readonly onRequestClose: () => void;
   readonly searchPort: PaletteSearchPort;
   /**
-   * Hits to show when the input is empty. Host typically passes 4
-   * quick-action hits (sub-PRD §7.3: "Search the team", "Open my todos",
-   * "Start a chat", "Open settings"). At most 8 are rendered.
+   * The static command launcher list. Defaults to the 13 v3 `SHELL_COMMANDS`.
    */
-  readonly starterActions: ReadonlyArray<PaletteHit>;
+  readonly commands?: readonly ShellCommand[];
+  /**
+   * Activated when a command row fires. The host maps the intent to real
+   * navigation (web router / desktop router). When omitted, a command is
+   * close-only (the palette still closes).
+   */
+  readonly onCommand?: (intent: ShellCommandIntent) => void;
   /** Ranking context forwarded to the port. */
   readonly context?: PaletteSearchContext;
   /** Soft cap on hits per search. Server may clamp further. */
   readonly limit?: number;
   /**
-   * Fired when the user clicks the "Connect a tool →" hint in the
-   * empty-results state. Optional — when omitted the hint is hidden.
-   */
-  readonly onConnectToolHint?: () => void;
-  /**
-   * Fired when a `navigation` hit is activated. Receives the hit's
-   * `route` and the full hit. Optional — when omitted, activating a
-   * navigation hit closes the palette with no other effect (the web
-   * `PaletteHost` relies on this close-only default). Desktop hosts pass
-   * this to route through the shell's `onNavigate(slug)`.
+   * Fired when a `navigation` search hit is activated. When omitted, activating
+   * such a hit closes the palette with no other effect.
    */
   readonly onNavigate?: (route: string, hit: PaletteHit) => void;
   /**
-   * Fired when an `action` or `command` hit is activated. Receives the
-   * hit's `action_token` and the full hit. Optional — when omitted,
-   * activating such a hit closes the palette with no other effect
-   * (close-only default, matching today's behavior).
+   * Fired when an `action`/`command` search hit is activated. When omitted,
+   * close-only.
    */
   readonly onRunAction?: (token: string, hit: PaletteHit) => void;
   /** Debounce window for the search input. Defaults to 150ms. */
   readonly debounceMs?: number;
+  /**
+   * @deprecated Superseded by the static command layer (`commands`). The
+   * empty-query view now shows `SHELL_COMMANDS`, not host starter actions.
+   * Kept optional so existing hosts compile; ignored.
+   */
+  readonly starterActions?: ReadonlyArray<PaletteHit>;
+  /** @deprecated The design empty/no-match state is "No matches." with no hint. */
+  readonly onConnectToolHint?: () => void;
 }
 
+// Search hits keep their kind grouping (Navigation / Entities / Actions);
+// `command`-kind backend hits are folded into "Actions" since the static
+// launcher now owns commands.
 const KIND_ORDER: ReadonlyArray<PaletteHitKind> = [
   "navigation",
   "entity",
@@ -118,7 +105,7 @@ const KIND_ORDER: ReadonlyArray<PaletteHitKind> = [
 
 const GROUP_LABELS: Readonly<Record<PaletteHitKind, string>> = {
   navigation: "Navigation",
-  entity: "Entities",
+  entity: "Results",
   action: "Actions",
   command: "Commands",
 };
@@ -129,10 +116,10 @@ export function CommandPalette({
   open,
   onRequestClose,
   searchPort,
-  starterActions,
+  commands = SHELL_COMMANDS,
+  onCommand,
   context,
   limit,
-  onConnectToolHint,
   onNavigate,
   onRunAction,
   debounceMs = 150,
@@ -146,12 +133,8 @@ export function CommandPalette({
   const [hasSearched, setHasSearched] = useState(false);
   const inputRef = useRef<HTMLInputElement | null>(null);
   const listRef = useRef<HTMLUListElement | null>(null);
-  // Generation counter so a stale in-flight search doesn't overwrite
-  // newer results. Increments on every dispatched query.
   const generationRef = useRef(0);
 
-  // Reset state when the palette opens/closes. We deliberately reset
-  // on close too so the next open starts at q="" with starter actions.
   useEffect(() => {
     if (!open) {
       setQuery("");
@@ -160,22 +143,19 @@ export function CommandPalette({
       setHasSearched(false);
       return;
     }
-    // Focus on next tick so the input is in the DOM.
     const handle = setTimeout(() => {
       inputRef.current?.focus();
     }, 0);
     return () => clearTimeout(handle);
   }, [open]);
 
-  // Debounced search.
+  // Debounced search (only when typing — the empty query shows commands only).
   useEffect(() => {
     if (!open) {
       return;
     }
     const trimmed = query.trim();
     if (trimmed.length === 0) {
-      // Empty input: starter actions are shown by the render path
-      // (no port call).
       setHits([]);
       setHasSearched(false);
       return;
@@ -186,7 +166,6 @@ export function CommandPalette({
         .search({ q: trimmed, context, limit })
         .then((res: PaletteSearchResponse) => {
           if (myGen !== generationRef.current) {
-            // A newer query is in flight; discard.
             return;
           }
           setHits(res.hits);
@@ -197,7 +176,6 @@ export function CommandPalette({
           if (myGen !== generationRef.current) {
             return;
           }
-          // Hard failure → empty list + "No results" hint state.
           setHits([]);
           setHasSearched(true);
           setSelectedIndex(0);
@@ -206,17 +184,21 @@ export function CommandPalette({
     return () => clearTimeout(handle);
   }, [open, query, searchPort, context, limit, debounceMs]);
 
-  // The flattened, ordered list shown to the user. When q is empty,
-  // starter actions; otherwise the port's hits (preserving order).
-  const visibleHits = useMemo<ReadonlyArray<PaletteHit>>(() => {
-    if (query.trim().length === 0) {
-      return starterActions.slice(0, 8);
-    }
-    return hits;
-  }, [query, hits, starterActions]);
+  const isEmptyQuery = query.trim().length === 0;
 
-  // Bucket hits by kind for group headers (rendering only — selection
-  // index runs over the flattened `visibleHits`).
+  // Command layer: on empty query, all commands; while typing, filtered by
+  // label+keyword. Shown above the search hits.
+  const commandRows = useMemo<ReadonlyArray<ShellCommand>>(
+    () => filterShellCommands(query, commands),
+    [query, commands],
+  );
+
+  // Search hits only appear once typing.
+  const searchHits = isEmptyQuery ? [] : hits;
+
+  // Flattened selectable list: [commands…, searchHits…].
+  const selectableCount = commandRows.length + searchHits.length;
+
   const grouped = useMemo<
     ReadonlyArray<readonly [PaletteHitKind, ReadonlyArray<PaletteHit>]>
   >(() => {
@@ -224,26 +206,23 @@ export function CommandPalette({
     for (const k of KIND_ORDER) {
       map.set(k, []);
     }
-    for (const hit of visibleHits) {
+    for (const hit of searchHits) {
       map.get(hit.kind)?.push(hit);
     }
     return KIND_ORDER.map((k) => [k, map.get(k) ?? []] as const).filter(
       ([, list]) => list.length > 0,
     );
-  }, [visibleHits]);
+  }, [searchHits]);
 
-  // Keep selection in range as the visible list changes.
   useEffect(() => {
-    if (selectedIndex >= visibleHits.length) {
+    if (selectedIndex >= selectableCount && selectableCount > 0) {
       setSelectedIndex(0);
     }
-  }, [visibleHits.length, selectedIndex]);
+  }, [selectableCount, selectedIndex]);
 
   const activateHit = useCallback(
     (hit: PaletteHit) => {
       if (hit.kind === "entity" && hit.target !== undefined) {
-        // Programmatically click the row's ItemLink so router.navigate
-        // flows through the shared registry resolver.
         const row = listRef.current?.querySelector<HTMLElement>(
           `[data-hit-id="${cssEscape(hit.id)}"] [data-testid="item-link"]`,
         );
@@ -251,9 +230,6 @@ export function CommandPalette({
           row.click();
         }
       } else if (hit.kind === "navigation" && hit.route !== undefined) {
-        // Non-entity dispatch is host-owned via optional callbacks. When
-        // the host passes none (e.g. the web PaletteHost), this is a
-        // no-op and the palette simply closes — today's behavior.
         onNavigate?.(hit.route, hit);
       } else if (
         (hit.kind === "action" || hit.kind === "command") &&
@@ -266,11 +242,29 @@ export function CommandPalette({
     [onNavigate, onRunAction, onRequestClose],
   );
 
-  // Selected row's DOM id (for aria-activedescendant).
+  const activateIndex = useCallback(
+    (index: number) => {
+      if (index < commandRows.length) {
+        onCommand?.(commandRows[index].intent);
+        onRequestClose();
+        return;
+      }
+      const hit = searchHits[index - commandRows.length];
+      if (hit !== undefined) {
+        activateHit(hit);
+      }
+    },
+    [commandRows, searchHits, onCommand, onRequestClose, activateHit],
+  );
+
   const selectedRowId = useMemo<string | undefined>(() => {
-    const hit = visibleHits[selectedIndex];
+    if (selectedIndex < commandRows.length) {
+      const cmd = commandRows[selectedIndex];
+      return cmd !== undefined ? commandDomId(cmd) : undefined;
+    }
+    const hit = searchHits[selectedIndex - commandRows.length];
     return hit !== undefined ? rowDomId(hit) : undefined;
-  }, [visibleHits, selectedIndex]);
+  }, [commandRows, searchHits, selectedIndex]);
 
   const onInputKeyDown = useCallback(
     (event: ReactKeyboardEvent<HTMLInputElement>) => {
@@ -279,41 +273,36 @@ export function CommandPalette({
         onRequestClose();
         return;
       }
-      if (visibleHits.length === 0) {
+      if (selectableCount === 0) {
         return;
       }
       if (event.key === "ArrowDown") {
         event.preventDefault();
-        setSelectedIndex((prev) => (prev + 1) % visibleHits.length);
+        setSelectedIndex((prev) => (prev + 1) % selectableCount);
         return;
       }
       if (event.key === "ArrowUp") {
         event.preventDefault();
         setSelectedIndex(
-          (prev) => (prev - 1 + visibleHits.length) % visibleHits.length,
+          (prev) => (prev - 1 + selectableCount) % selectableCount,
         );
         return;
       }
       if (event.key === "Enter") {
         event.preventDefault();
-        const hit = visibleHits[selectedIndex];
-        if (hit !== undefined) {
-          activateHit(hit);
-        }
+        activateIndex(selectedIndex);
       }
     },
-    [visibleHits, selectedIndex, activateHit, onRequestClose],
+    [selectableCount, selectedIndex, activateIndex, onRequestClose],
   );
 
   if (!open) {
     return null;
   }
 
-  const isEmptyQuery = query.trim().length === 0;
-  const showNoResults =
-    !isEmptyQuery && hasSearched && visibleHits.length === 0;
+  const showNoResults = !isEmptyQuery && hasSearched && selectableCount === 0;
 
-  // Running counter so each rendered row gets a stable index across groups.
+  // flatIdx runs across the command rows then the grouped search hits.
   let flatIdx = -1;
 
   return (
@@ -330,25 +319,28 @@ export function CommandPalette({
         onClick={(e) => e.stopPropagation()}
         data-testid="command-palette-card"
       >
-        <input
-          ref={inputRef}
-          type="text"
-          role="combobox"
-          aria-label="Search"
-          aria-expanded={true}
-          aria-controls={RESULTS_LIST_ID}
-          aria-autocomplete="list"
-          aria-activedescendant={selectedRowId}
-          value={query}
-          placeholder={placeholder}
-          onChange={(event) => {
-            setQuery(event.target.value);
-            setSelectedIndex(0);
-          }}
-          onKeyDown={onInputKeyDown}
-          style={inputStyle}
-          data-testid="command-palette-input"
-        />
+        <div style={inputRowStyle}>
+          <Icon name="search" size={15} style={searchIconStyle} />
+          <input
+            ref={inputRef}
+            type="text"
+            role="combobox"
+            aria-label="Search"
+            aria-expanded={true}
+            aria-controls={RESULTS_LIST_ID}
+            aria-autocomplete="list"
+            aria-activedescendant={selectedRowId}
+            value={query}
+            placeholder={placeholder}
+            onChange={(event) => {
+              setQuery(event.target.value);
+              setSelectedIndex(0);
+            }}
+            onKeyDown={onInputKeyDown}
+            style={inputStyle}
+            data-testid="command-palette-input"
+          />
+        </div>
         <ul
           ref={listRef}
           id={RESULTS_LIST_ID}
@@ -357,6 +349,32 @@ export function CommandPalette({
           style={listStyle}
           data-testid="command-palette-listbox"
         >
+          {/* Command launcher (flat, no header — design .cmdk__row). */}
+          {commandRows.map((cmd) => {
+            flatIdx++;
+            const isSelected = flatIdx === selectedIndex;
+            const idx = flatIdx;
+            return (
+              <li key={cmd.id} role="presentation" style={commandLiStyle}>
+                <button
+                  type="button"
+                  role="option"
+                  id={commandDomId(cmd)}
+                  aria-selected={isSelected}
+                  data-testid="palette-command"
+                  data-command-id={cmd.id}
+                  style={commandRowStyle(isSelected)}
+                  onClick={() => activateIndex(idx)}
+                  onMouseEnter={() => setSelectedIndex(idx)}
+                >
+                  <Icon name={cmd.icon} size={14} style={commandIconStyle} />
+                  <span style={commandLabelStyle}>{cmd.label}</span>
+                  <span style={commandKeywordStyle}>{cmd.keyword}</span>
+                </button>
+              </li>
+            );
+          })}
+          {/* Live search results, grouped by kind. */}
           {grouped.map(([kind, list]) => (
             <li key={kind} style={groupStyle} role="presentation">
               <div
@@ -390,26 +408,7 @@ export function CommandPalette({
               style={emptyStyle}
               data-testid="palette-no-results"
             >
-              <div>No results.</div>
-              {onConnectToolHint !== undefined ? (
-                <button
-                  type="button"
-                  onClick={onConnectToolHint}
-                  style={hintButtonStyle}
-                  data-testid="palette-connect-tool-hint"
-                >
-                  Connect a tool →
-                </button>
-              ) : null}
-            </li>
-          ) : null}
-          {isEmptyQuery && visibleHits.length === 0 ? (
-            <li
-              role="presentation"
-              style={emptyStyle}
-              data-testid="palette-empty"
-            >
-              <div>Start typing to search.</div>
+              <div>No matches.</div>
             </li>
           ) : null}
         </ul>
@@ -426,8 +425,10 @@ function rowDomId(hit: PaletteHit): string {
   return `palette-hit-${hit.id}`;
 }
 
-// Tiny CSS.escape polyfill (jsdom doesn't ship CSS.escape in older
-// versions, and we only need to defang the `hit_` id prefix's chars).
+function commandDomId(cmd: ShellCommand): string {
+  return `palette-cmd-${cmd.id}`;
+}
+
 function cssEscape(value: string): string {
   const css = (globalThis as { CSS?: { escape?: (s: string) => string } }).CSS;
   if (css?.escape !== undefined) {
@@ -437,39 +438,53 @@ function cssEscape(value: string): string {
 }
 
 // ---------------------------------------------------------------------------
-// Styles
+// Styles — design copilot.css `.cmdk*`
 // ---------------------------------------------------------------------------
 
 const scrimStyle: CSSProperties = {
   position: "fixed",
   inset: 0,
-  backgroundColor: "rgba(0, 0, 0, 0.45)",
+  backgroundColor: "rgba(4, 4, 6, 0.6)",
+  backdropFilter: "blur(2px)",
+  WebkitBackdropFilter: "blur(2px)",
   display: "flex",
   alignItems: "flex-start",
   justifyContent: "center",
-  paddingTop: "12vh",
-  zIndex: 1000,
+  paddingTop: "13vh",
+  zIndex: 80,
 };
 
 const cardStyle: CSSProperties = {
-  width: "min(640px, 92vw)",
-  maxHeight: "64vh",
-  backgroundColor: "var(--color-surface, #1a1a1a)",
-  color: "var(--color-text, #ededee)",
-  borderRadius: "var(--radius-md, 12px)",
-  border: "1px solid var(--color-border-strong, #2a2a2c)",
-  boxShadow: "0 24px 48px rgba(0, 0, 0, 0.4)",
+  width: "min(540px, 92vw)",
+  backgroundColor: "var(--color-surface)",
+  color: "var(--color-text)",
+  borderRadius: 11,
+  border: "1px solid var(--color-border-strong)",
+  boxShadow: "0 26px 70px -18px rgba(0, 0, 0, 0.8)",
   display: "flex",
   flexDirection: "column",
   overflow: "hidden",
 };
 
+const inputRowStyle: CSSProperties = {
+  display: "flex",
+  alignItems: "center",
+  gap: 10,
+  padding: "12px 14px",
+  borderBottom: "1px solid var(--color-border)",
+};
+
+const searchIconStyle: CSSProperties = {
+  color: "var(--color-text-subtle)",
+  flex: "none",
+};
+
 const inputStyle: CSSProperties = {
+  flex: 1,
   border: "none",
-  borderBottom: "1px solid var(--color-border, #2a2a2c)",
   outline: "none",
-  padding: "14px 16px",
-  fontSize: "var(--font-size-md, 15px)",
+  padding: 0,
+  fontSize: "var(--font-size-md)",
   background: "transparent",
   color: "inherit",
 };
@@ -477,8 +492,48 @@ const inputStyle: CSSProperties = {
 const listStyle: CSSProperties = {
   listStyle: "none",
   margin: 0,
-  padding: 6,
+  padding: 5,
+  maxHeight: 320,
   overflowY: "auto",
+};
+
+const commandLiStyle: CSSProperties = {
+  listStyle: "none",
+};
+
+function commandRowStyle(selected: boolean): CSSProperties {
+  return {
+    display: "flex",
+    alignItems: "center",
+    gap: 10,
+    width: "100%",
+    padding: "8px 10px",
+    border: "none",
+    borderRadius: "var(--radius-sm)",
+    background: selected ? "var(--color-surface-muted)" : "transparent",
+    color: "inherit",
+    cursor: "pointer",
+    font: "inherit",
+    textAlign: "left",
+  };
+}
+
+const commandIconStyle: CSSProperties = {
+  color: "var(--color-text-subtle)",
+  flex: "none",
+};
+
+const commandLabelStyle: CSSProperties = {
+  flex: 1,
+  fontSize: "var(--font-size-xs)",
+  color: "var(--color-text)",
+};
+
+const commandKeywordStyle: CSSProperties = {
+  fontFamily: "var(--font-mono)",
+  fontSize: 9.5,
+  color: "var(--color-text-subtle)",
+  whiteSpace: "nowrap",
 };
 
 const groupStyle: CSSProperties = {
@@ -488,10 +543,11 @@ const groupStyle: CSSProperties = {
 
 const groupHeaderStyle: CSSProperties = {
   padding: "6px 12px 2px 12px",
-  fontSize: "var(--font-size-xs, 11px)",
+  fontFamily: "var(--font-mono)",
+  fontSize: "var(--font-size-2xs)",
   textTransform: "uppercase",
-  letterSpacing: "0.04em",
-  color: "var(--color-text-subtle, #7e7e84)",
+  letterSpacing: "0.1em",
+  color: "var(--color-text-subtle)",
 };
 
 const groupListStyle: CSSProperties = {
@@ -506,17 +562,6 @@ const emptyStyle: CSSProperties = {
   alignItems: "flex-start",
   gap: 6,
   padding: "12px 16px",
-  color: "var(--color-text-subtle, #7e7e84)",
-  fontSize: "var(--font-size-sm, 13px)",
-};
-
-const hintButtonStyle: CSSProperties = {
-  background: "transparent",
-  border: "1px solid var(--color-border-strong, #2a2a2c)",
-  color: "var(--color-accent, #d97757)",
-  fontSize: "var(--font-size-sm, 13px)",
-  fontWeight: 600,
-  padding: "4px 10px",
-  borderRadius: "var(--radius-sm, 6px)",
-  cursor: "pointer",
+  color: "var(--color-text-subtle)",
+  fontSize: "var(--font-size-sm)",
 };

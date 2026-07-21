@@ -135,10 +135,12 @@ import {
   type ArtifactRoute,
   type DeploymentProfile,
   type ShellDestinationSlug,
+  type ShellCommandIntent,
 } from "@0x-copilot/chat-surface";
 import { getAppTransport } from "../api/transport";
 import { HashRouter, migrateLegacySettingsPath } from "./HashRouter";
 import { ROOT_DESTINATION, foldedRedirectFor, type AppRoute } from "./routes";
+import type { SettingsSection } from "../features/settings/SettingsScreen";
 import { errorMessage } from "../utils/errors";
 import {
   PortProvider,
@@ -661,6 +663,26 @@ export function CopilotApp({
     router.navigate({ screen: "chat", destination: slug });
   };
 
+  // ⌘K command launcher (PRD-D): map a command intent to real web navigation.
+  // Navigate intents route through the rail handler; settings intents map the
+  // chat-surface section slug to the web `SettingsSection`. The only mismatch is
+  // `model-behavior` → `model-and-behavior`; the rest are identical (and PRD-E's
+  // settings convergence removes the mapping entirely).
+  const handlePaletteCommand = (intent: ShellCommandIntent): void => {
+    if (intent.type === "navigate") {
+      handleRailNavigate(intent.slug);
+      return;
+    }
+    // All command sections are valid SettingsSection values (provider-keys,
+    // local-models, appearance, profile); only model-behavior is spelled
+    // differently on the legacy web screen.
+    const section: SettingsSection =
+      intent.section === "model-behavior"
+        ? "model-and-behavior"
+        : (intent.section as SettingsSection);
+    router.navigate({ screen: "settings", section });
+  };
+
   // PR-4.11 — host navigation seams the Phase-4 binders defer to the App
   // (each binder takes these as props so it stays decoupled from the
   // `AppRoute` union). The Run cockpit on web is the working conversation
@@ -1023,6 +1045,7 @@ export function CopilotApp({
             identity={identity}
             open={paletteOpen}
             onOpenChange={setPaletteOpen}
+            onCommand={handlePaletteCommand}
           />
         </ChatShell>
       </PortProvider>

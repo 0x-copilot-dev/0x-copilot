@@ -1303,3 +1303,15 @@ export {
   type RunStatusPresentation,
 } from "./shell/statusTone";
 // === end Frontend parity v3 (PRD-B) ===
+
+// === Frontend parity v3 (PRD-D) — ⌘K static command launcher ===
+// The 13 v3 design commands shown on an empty query and merged above live
+// search hits, so ⌘K works as a keyboard launcher. Hosts map each `intent` to
+// navigation via CommandPalette's `onCommand`. See PRD-D-command-palette.md.
+export {
+  SHELL_COMMANDS,
+  filterShellCommands,
+  type ShellCommand,
+  type ShellCommandIntent,
+} from "./shell/shellCommands";
+// === end Frontend parity v3 (PRD-D) ===
