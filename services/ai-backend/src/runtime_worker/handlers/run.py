@@ -24,6 +24,12 @@ from agent_runtime.capabilities.citations import CitationLedger
 from agent_runtime.capabilities.conversation_ordinals import (
     ConversationOrdinalAllocator,
 )
+from agent_runtime.capabilities.surfaces import (
+    FileSurfaceSpecStore,
+    InMemorySurfaceSpecStore,
+    SurfaceGenerationScheduler,
+    build_surface_generation_scheduler,
+)
 from agent_runtime.capabilities.tool_budget_guard import ToolBudgetGuard
 from agent_runtime.capabilities.tool_budget_middleware import ToolBudgetMiddleware
 from agent_runtime.execution.contracts import (
@@ -302,6 +308,16 @@ class RuntimeRunHandler:
             if citation_resolver is not None
             else None
         )
+        # Generative-UI (PRD-07): a run-scoped spec-generation scheduler, bound
+        # only when ``SURFACE_SPEC_MODEL`` is set. On a projector ladder miss the
+        # tool layer reaches it via the ContextVar and fires a fire-and-forget
+        # generation; ``surface_spec_generated`` then upgrades the surface.
+        surface_scheduler = self._build_surface_generation_scheduler(run)
+        surface_scheduler_token = (
+            SurfaceGenerationScheduler.bind_for_run(surface_scheduler)
+            if surface_scheduler is not None
+            else None
+        )
         logging.getLogger(__name__).info(
             "[citations] run.bind run=%s conv=%s allocator_seed=%d "
             "ledger=%s allocator=%s resolver=%s",
@@ -526,6 +542,8 @@ class RuntimeRunHandler:
             self.stream_event_mapper.update_processor.discard_metrics(run.run_id)
             raise
         finally:
+            if surface_scheduler_token is not None:
+                SurfaceGenerationScheduler.unbind(surface_scheduler_token)
             if resolver_token is not None:
                 CitationResolver.unbind(resolver_token)
             if allocator_token is not None:
@@ -1457,6 +1475,40 @@ class RuntimeRunHandler:
             store=self.citation_store,
             producer=self.event_producer,
             source=StreamEventSource.TOOL,
+        )
+
+    def _build_surface_generation_scheduler(
+        self, run: RunRecord
+    ) -> SurfaceGenerationScheduler | None:
+        """Build a run-scoped surface-spec generation scheduler, or ``None``.
+
+        Returns ``None`` (generation disabled) unless ``SURFACE_SPEC_MODEL`` is
+        set — the factory owns that gate. On success the store is the durable
+        file store when the desktop file backend is configured, else an
+        in-process store. The emit callback ships ``surface_spec_generated`` back
+        onto the same event producer every other emission uses, so the FE
+        upgrades the surface in place.
+        """
+
+        import os  # noqa: PLC0415 - local to keep the module import surface small
+
+        def _surface_store() -> InMemorySurfaceSpecStore | FileSurfaceSpecStore:
+            file_store = FileSurfaceSpecStore.from_env()
+            return file_store if file_store is not None else InMemorySurfaceSpecStore()
+
+        async def _emit(payload: Mapping[str, object]) -> None:
+            await self.event_producer.append_api_event(
+                run=run,
+                source=StreamEventSource.SYSTEM,
+                event_type=RuntimeApiEventType.SURFACE_SPEC_GENERATED,
+                summary="Prepared a view",
+                payload=dict(payload),
+            )
+
+        return build_surface_generation_scheduler(
+            store=_surface_store(),
+            emit=_emit,
+            environ=os.environ,
         )
 
     async def _bind_conversation_ordinal_allocator(

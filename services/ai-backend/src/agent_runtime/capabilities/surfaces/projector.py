@@ -3,16 +3,19 @@
 :class:`SurfaceProjector` turns a connector tool's output into a
 :class:`SurfaceEnvelope` — a ``surface_uri`` plus ``{spec?, data}`` — that rides
 inside the ``tool_result`` / ``draft_updated`` event payload. It is a *pure*
-function of its inputs: no I/O, no transport, no env reads. The only injected
-seam is an optional :class:`SurfaceSpecStorePort` (in-memory only in this PRD).
+function of its inputs: no I/O, no transport, no env reads. Two injected seams:
+an optional :class:`~agent_runtime.capabilities.surfaces.store.SurfaceSpecReadPort`
+(rung-2 cache read) and an optional :class:`SurfaceGenerationSchedulerPort`
+(rung-3 async generation, PRD-07).
 
 Spec-acquisition ladder (D4):
 
 1. **builtin** curated spec (packaged JSON, :mod:`agent_runtime...surfaces.builtin`)
-2. injected **store** (cached / later generated — in-memory impl here)
+2. injected **store** (cached / previously generated — in-memory or file)
 3. **miss** ⇒ envelope ships with ``state.data`` only (no spec) so the frontend
-   renders the tier-3 generic view immediately; a spec may arrive later via
-   ``surface_spec_generated`` and merge by URI (PRD-04 — not implemented here).
+   renders the tier-3 generic view immediately, AND (when a scheduler is wired)
+   async generation is scheduled; the generated spec arrives via
+   ``surface_spec_generated`` and merges by URI (PRD-04).
 
 The URI grammar is ``<archetype>://<server-slug>/<tool-or-resource>/<id>``; the
 id segment is derived from a common id field on the output, else a stable hash
@@ -35,6 +38,11 @@ from agent_runtime.capabilities.surfaces.spec_models import (
     SurfaceSpec,
     SurfaceState,
 )
+from agent_runtime.capabilities.surfaces.store import (
+    InMemorySurfaceSpecStore,
+    SurfaceSpecReadPort,
+    SurfaceSpecStorePort,
+)
 
 # Ordered id-bearing keys probed to build a stable URI segment (plan D3).
 _ID_FIELDS: tuple[str, ...] = ("id", "key", "identifier", "number")
@@ -48,51 +56,45 @@ _HASH_LEN = 12
 
 
 @runtime_checkable
-class SurfaceSpecStorePort(Protocol):
-    """Read seam for cached / generated specs (rung 2 of the ladder).
+class SurfaceGenerationSchedulerPort(Protocol):
+    """Rung-3 seam: schedule async generation for a ladder miss (PRD-07).
 
-    Deliberately synchronous: the projector is pure and non-blocking, and the
-    only implementation in this PRD is in-memory. Async-backed stores (file,
-    backend-http) are adapted behind this same shape in PRD-07/08.
+    Injected so the pure projector never imports the generation machinery or
+    touches an event loop. ``tool_descriptor`` is typed ``object`` (the projector
+    only forwards it); the scheduler expects a ``GenToolDescriptor``. Fully
+    best-effort: implementations must swallow their own errors.
     """
 
-    def get(self, *, server: str, tool: str) -> SurfaceSpec | None:
-        """Return a stored spec for ``(server, tool)`` or ``None``."""
+    def maybe_schedule(
+        self,
+        *,
+        server: str,
+        tool: str,
+        tool_descriptor: object,
+        output: object,
+        surface_uri: str,
+    ) -> None:
+        """Schedule generation for ``(server, tool)`` unless capped/deduped."""
         ...
-
-
-class InMemorySurfaceSpecStore:
-    """In-memory :class:`SurfaceSpecStorePort` for tests and single-process dev."""
-
-    def __init__(self) -> None:
-        self._specs: dict[tuple[str, str], SurfaceSpec] = {}
-
-    def put(self, spec: SurfaceSpec) -> None:
-        """Register ``spec`` under its own ``source`` server/tool."""
-        self._specs[self._key(spec.source.server, spec.source.tool)] = spec
-
-    def get(self, *, server: str, tool: str) -> SurfaceSpec | None:
-        """Return the stored spec for ``(server, tool)`` or ``None``."""
-        return self._specs.get(self._key(server, tool))
-
-    @staticmethod
-    def _key(server: str, tool: str) -> tuple[str, str]:
-        return (builtin.server_slug(server), builtin.tool_slug(tool))
 
 
 @dataclass(frozen=True)
 class SurfaceProjector:
     """Resolves a tool output into a :class:`SurfaceEnvelope` (or ``None``).
 
-    ``store`` is the optional rung-2 seam. ``enabled`` mirrors the
+    ``store`` is the optional rung-2 read seam. ``scheduler`` is the optional
+    rung-3 seam: on a ladder miss the projector attaches the data-only envelope
+    (tier-3 renders instantly) AND schedules async spec generation — never
+    blocking the tool-call path. ``enabled`` mirrors the
     ``RUNTIME_SURFACE_EMISSION`` flag: when ``False`` the projector
     short-circuits to ``None`` so payloads stay byte-for-byte identical to
     pre-surface behaviour. Read the flag at the emission chokepoint and pass it
     in — the projector itself never touches the environment.
     """
 
-    store: SurfaceSpecStorePort | None = None
+    store: SurfaceSpecReadPort | None = None
     enabled: bool = True
+    scheduler: SurfaceGenerationSchedulerPort | None = None
 
     def resolve(
         self,
@@ -101,13 +103,16 @@ class SurfaceProjector:
         output: object,
         *,
         call_id: str | None = None,
+        tool_descriptor: object | None = None,
     ) -> SurfaceEnvelope | None:
         """Return a surface envelope for a non-error tool output, or ``None``.
 
         ``None`` when emission is disabled or ``output`` is not a mapping
         (str/None/list scalars have no surface). A mapping always yields an
         envelope — with a spec when one is curated/stored, otherwise
-        ``state.data`` only for the tier-3 fallback.
+        ``state.data`` only for the tier-3 fallback, and (when a scheduler is
+        wired and the model is enabled) an async generation is scheduled so the
+        surface upgrades in place once ``surface_spec_generated`` lands.
         """
 
         if not self.enabled:
@@ -126,6 +131,14 @@ class SurfaceProjector:
             output=output,
             call_id=call_id,
         )
+        if spec is None and self.scheduler is not None:
+            self.scheduler.maybe_schedule(
+                server=server_name,
+                tool=tool_name,
+                tool_descriptor=tool_descriptor,
+                output=output,
+                surface_uri=surface_uri,
+            )
         return SurfaceEnvelope(
             surface_uri=surface_uri,
             archetype=archetype,
@@ -228,6 +241,8 @@ class SurfaceProjector:
 
 __all__ = [
     "InMemorySurfaceSpecStore",
+    "SurfaceGenerationSchedulerPort",
     "SurfaceProjector",
+    "SurfaceSpecReadPort",
     "SurfaceSpecStorePort",
 ]

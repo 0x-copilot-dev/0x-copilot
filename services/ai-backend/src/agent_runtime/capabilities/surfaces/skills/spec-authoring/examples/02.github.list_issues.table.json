@@ -1,0 +1,55 @@
+{
+  "tool_descriptor": {
+    "name": "list_issues",
+    "description": "List issues in a GitHub repository.",
+    "input_schema": {
+      "type": "object",
+      "properties": { "repo": { "type": "string" } }
+    },
+    "output_shape": {
+      "type": "object",
+      "properties": { "issues": { "type": "array" } }
+    }
+  },
+  "sample_output": {
+    "repository": { "full_name": "acme/web" },
+    "issues": [
+      {
+        "number": 1421,
+        "title": "Fix login redirect loop",
+        "state": "open",
+        "assignee": { "login": "schen" },
+        "updated_at": "2026-07-20T10:00:00Z",
+        "html_url": "https://github.com/acme/web/issues/1421"
+      },
+      {
+        "number": 1420,
+        "title": "Upgrade to Node 22",
+        "state": "closed",
+        "assignee": { "login": "mwong" },
+        "updated_at": "2026-07-19T08:30:00Z",
+        "html_url": "https://github.com/acme/web/issues/1420"
+      }
+    ]
+  },
+  "spec": {
+    "spec_version": 1,
+    "archetype": "table",
+    "source": { "server": "seed:github", "tool": "list_issues" },
+    "title_path": "repository.full_name",
+    "items_path": "issues",
+    "columns": [
+      {
+        "label": "Number",
+        "path": "number",
+        "format": "number",
+        "align": "end"
+      },
+      { "label": "Title", "path": "title", "align": "start" },
+      { "label": "State", "path": "state", "format": "badge" },
+      { "label": "Assignee", "path": "assignee.login", "format": "user" },
+      { "label": "Updated", "path": "updated_at", "format": "datetime" }
+    ],
+    "link": { "label": "Open on GitHub", "url_path": "html_url" }
+  }
+}

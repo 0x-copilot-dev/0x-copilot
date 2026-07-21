@@ -1,23 +1,54 @@
 """Generative-UI surface capability package.
 
 PRD-01 seeded this package with the SurfaceSpec pydantic mirror + validator
-(:mod:`spec_models`). PRD-02 adds backend **emission**: a builtin curated spec
+(:mod:`spec_models`). PRD-02 added backend **emission**: a builtin curated spec
 library (:mod:`builtin`), the pure-domain :class:`~.projector.SurfaceProjector`
 that turns tool output into a ``SurfaceEnvelope``, and the
-``RUNTIME_SURFACE_EMISSION`` flag (:mod:`config`). Renderers, the spec
-generator, and the spec-authoring skill land in later waves.
+``RUNTIME_SURFACE_EMISSION`` flag (:mod:`config`). PRD-07 adds the **generation
+subsystem**: the store adapters (:mod:`store`), the structural output-shape hash
+(:mod:`shape_hash`), and the cheap-model :class:`~.generator.SurfaceSpecGenerator`
+plus its run-scoped :class:`~.generator.SurfaceGenerationScheduler`, steered by
+the packaged ``spec-authoring`` skill.
 """
 
 from agent_runtime.capabilities.surfaces.config import SurfaceEmissionFlag
+from agent_runtime.capabilities.surfaces.generator import (
+    GenFailure,
+    GenToolDescriptor,
+    SpecAuthoringSkill,
+    SurfaceGenerationScheduler,
+    SurfaceSpecGenerator,
+    build_surface_generation_scheduler,
+)
 from agent_runtime.capabilities.surfaces.projector import (
-    InMemorySurfaceSpecStore,
+    SurfaceGenerationSchedulerPort,
     SurfaceProjector,
+)
+from agent_runtime.capabilities.surfaces.shape_hash import output_shape_hash
+from agent_runtime.capabilities.surfaces.store import (
+    FileSurfaceSpecStore,
+    InMemorySurfaceSpecStore,
+    SpecKey,
+    StoredSpec,
+    SurfaceSpecReadPort,
     SurfaceSpecStorePort,
 )
 
 __all__ = [
+    "FileSurfaceSpecStore",
+    "GenFailure",
+    "GenToolDescriptor",
     "InMemorySurfaceSpecStore",
+    "SpecAuthoringSkill",
+    "SpecKey",
+    "StoredSpec",
     "SurfaceEmissionFlag",
+    "SurfaceGenerationScheduler",
+    "SurfaceGenerationSchedulerPort",
     "SurfaceProjector",
+    "SurfaceSpecGenerator",
+    "SurfaceSpecReadPort",
     "SurfaceSpecStorePort",
+    "build_surface_generation_scheduler",
+    "output_shape_hash",
 ]

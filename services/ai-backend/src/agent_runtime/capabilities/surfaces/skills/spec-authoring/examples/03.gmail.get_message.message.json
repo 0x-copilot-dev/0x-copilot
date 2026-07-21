@@ -1,0 +1,38 @@
+{
+  "tool_descriptor": {
+    "name": "get_message",
+    "description": "Fetch a single Gmail message.",
+    "input_schema": {
+      "type": "object",
+      "properties": { "id": { "type": "string" } }
+    },
+    "output_shape": {
+      "type": "object",
+      "properties": { "message": { "type": "object" } }
+    }
+  },
+  "sample_output": {
+    "message": {
+      "id": "msg_1",
+      "from": "Sarah Chen <sarah@acme.com>",
+      "to": "team@acme.com",
+      "subject": "Q3 planning agenda",
+      "snippet": "Here is the agenda for our planning session on Thursday...",
+      "date": "2026-07-20T09:00:00Z",
+      "web_url": "https://mail.google.com/mail/u/0/#inbox/msg_1"
+    }
+  },
+  "spec": {
+    "spec_version": 1,
+    "archetype": "message",
+    "source": { "server": "seed:gmail", "tool": "get_message" },
+    "title_path": "message.subject",
+    "subtitle_path": "message.from",
+    "fields": [
+      { "label": "To", "path": "message.to", "format": "user" },
+      { "label": "Date", "path": "message.date", "format": "datetime" },
+      { "label": "Preview", "path": "message.snippet" }
+    ],
+    "link": { "label": "Open in Gmail", "url_path": "message.web_url" }
+  }
+}
