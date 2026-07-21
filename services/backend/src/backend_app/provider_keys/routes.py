@@ -60,13 +60,20 @@ from backend_app.provider_keys.store import ProviderApiKeyRecord, ProviderName
 
 
 class ProviderKeyResponse(BaseModel):
-    """One stored key, hint-only. NEVER carries plaintext."""
+    """One stored key, hint-only. NEVER carries plaintext.
+
+    ``default_model`` is the server's single-source projection of the model
+    chosen for this key (PRD-F PR-F.5). It is display-safe and omitted from
+    the wire when ``None`` (``response_model_exclude_none``), so the legacy
+    three-field shape stays byte-identical for keys stored without a model.
+    """
 
     model_config = ConfigDict(extra="forbid")
 
     provider: str
     key_hint: str
     updated_at: str
+    default_model: str | None = None
 
 
 class ProviderKeyListResponse(BaseModel):
@@ -79,6 +86,10 @@ class SetProviderKeyRequest(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     api_key: str = Field(..., min_length=1)
+    # Optional default-model pick to persist alongside the key (PRD-F PR-F.5).
+    # ADDITIVE: older clients omit it and any stored pick is preserved on
+    # rotation. Display-safe slug only — never key material.
+    default_model: str | None = None
 
 
 class PutProviderKeyResponse(ProviderKeyResponse):
@@ -144,6 +155,7 @@ def register_provider_keys_routes(
     @app.get(
         "/v1/settings/provider-keys",
         response_model=ProviderKeyListResponse,
+        response_model_exclude_none=True,
         dependencies=[Depends(RequireScopes(RUNTIME_USE))],
     )
     def list_provider_keys(
@@ -198,6 +210,7 @@ def register_provider_keys_routes(
                 user_id=identity.user_id,
                 provider=provider,
                 api_key=body.api_key,
+                default_model=body.default_model,
                 request_ip=_request_ip(request),
                 user_agent=request.headers.get("user-agent"),
             )
@@ -277,6 +290,7 @@ def _to_response(record: ProviderApiKeyRecord) -> ProviderKeyResponse:
         provider=record.provider.value,
         key_hint=record.key_hint,
         updated_at=record.updated_at.isoformat(),
+        default_model=record.default_model,
     )
 
 
@@ -289,6 +303,7 @@ def _to_put_response(
         provider=record.provider.value,
         key_hint=record.key_hint,
         updated_at=record.updated_at.isoformat(),
+        default_model=record.default_model,
         live_check=live_check,
     )
 

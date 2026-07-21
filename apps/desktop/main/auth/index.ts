@@ -274,6 +274,18 @@ export class AuthService {
     }
   }
 
+  // Renderer-driven cancel for the pending system-browser sign-in (the
+  // design's "Cancel" on the wallet-waiting screen and "Cancel — use a
+  // different method" on the Google screen). Closes the armed loopback so
+  // the pending sign-in promise rejects and the port frees. Idempotent:
+  // no-op when nothing is pending. Reuses the same slot the
+  // newest-click-wins replacement path uses — one cancel mechanism, two
+  // callers.
+  cancelPendingSignIn(): void {
+    this.#cancelPendingBrowserLogin?.();
+    this.#cancelPendingBrowserLogin = null;
+  }
+
   // "Use locally, no account" — the device account (production posture).
   // One host-token-gated POST mints a real session for the deployment's
   // single device account; the server-side singleton makes re-entry land on

@@ -64,9 +64,10 @@ export interface ProviderKeysPageProps {
    */
   readonly onToast?: (message: string) => void;
   /**
-   * Known default-model chips per provider slug. The summary contract carries
-   * no model field yet (PRD §5.5 drift), so the host may supply chips for
-   * server-loaded keys; in-session Add-flow choices are merged on top.
+   * Fallback default-model chips per provider slug. The summary now carries a
+   * server-projected `default_model` (PRD-F PR-F.5) which the row prefers;
+   * these chips only fill in for older servers / keys stored without a model.
+   * In-session Add-flow choices still win over both.
    */
   readonly modelChips?: Readonly<Record<string, string>>;
 }
@@ -201,7 +202,16 @@ export function ProviderKeysPage({
   const handleSubmit = useCallback(
     (target: ModalTarget) =>
       async ({ apiKey, model }: AddProviderKeySubmit): Promise<void> => {
-        const summary = await port.save(target.entry.id, apiKey);
+        // Persist the step-3 pick as THIS provider's default model (PR-F.5
+        // per-provider column) in the same PUT that stores the key. The server
+        // then projects it on `summary.default_model`, so the row chip is
+        // server-sourced and survives reload per-provider on BOTH hosts — the
+        // `modelChips` host hint becomes a legacy fallback, not the source.
+        const summary = await port.save(
+          target.entry.id,
+          apiKey,
+          model !== "" ? model : undefined,
+        );
         setKeys((prev) => [
           ...(prev ?? []).filter((key) => key.provider !== summary.provider),
           summary,
@@ -270,8 +280,15 @@ export function ProviderKeysPage({
     [port, onToast, removing],
   );
 
+  // Row model chip (PRD-F PR-F.5). The freshest in-session Add-flow pick wins;
+  // otherwise prefer the server's single-source `summary.default_model`
+  // projection, and fall back to the host-supplied `modelChips` only when the
+  // summary carries none (older servers / keys stored without a model).
   const chipFor = (slug: string): string | undefined =>
-    chosenModels[slug] ?? modelChips?.[slug];
+    chosenModels[slug] ??
+    summaryFor(slug)?.default_model ??
+    modelChips?.[slug] ??
+    undefined;
 
   return (
     <>

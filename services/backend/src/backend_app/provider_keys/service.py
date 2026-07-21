@@ -85,9 +85,18 @@ class ProviderKeysService:
         user_id: str,
         provider: ProviderName,
         api_key: str,
+        default_model: str | None = None,
         request_ip: str | None = None,
         user_agent: str | None = None,
     ) -> ProviderApiKeyRecord:
+        """Encrypt-on-write upsert.
+
+        ``default_model`` is the display-safe model slug to project on the
+        summary (PRD-F PR-F.5). ``None`` preserves any previously-stored pick
+        on rotation (the store COALESCEs), so old callers that never pass it
+        are unaffected.
+        """
+
         cleaned = validate_api_key_format(provider=provider, api_key=api_key)
         record = ProviderApiKeyRecord(
             org_id=org_id,
@@ -95,6 +104,7 @@ class ProviderKeysService:
             provider=provider,
             encrypted_key=self._token_vault.encrypt(cleaned),
             key_hint=key_hint_for(cleaned),
+            default_model=default_model,
         )
         with self._store.transaction() as conn:
             saved = self._store.upsert(record, conn=conn)

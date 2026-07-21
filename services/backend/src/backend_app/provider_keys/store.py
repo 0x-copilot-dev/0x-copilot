@@ -42,7 +42,12 @@ class ProviderName(StrEnum):
 
 class ProviderApiKeyRecord(BaseModel):
     """One ``provider_api_keys`` row. ``encrypted_key`` is an opaque
-    TokenVault envelope; ``key_hint`` is display-safe (last 4 chars)."""
+    TokenVault envelope; ``key_hint`` is display-safe (last 4 chars).
+
+    ``default_model`` is the display-safe model slug chosen for this key
+    (PRD-F PR-F.5) — never key material. ``None`` for keys stored without a
+    model (or by older clients); a rotation that omits it preserves the
+    previously-stored value (see ``upsert``)."""
 
     model_config = ConfigDict(extra="forbid", frozen=True)
 
@@ -51,6 +56,7 @@ class ProviderApiKeyRecord(BaseModel):
     provider: ProviderName
     encrypted_key: str
     key_hint: str
+    default_model: str | None = None
     created_at: datetime = Field(default_factory=_now)
     updated_at: datetime = Field(default_factory=_now)
 
@@ -139,8 +145,14 @@ class InMemoryProviderApiKeyStore:
         del conn
         key = (record.org_id, record.user_id, record.provider.value)
         existing = self.rows.get(key)
+        # A rotation that omits ``default_model`` preserves the stored pick —
+        # mirrors the ``created_at`` carry-over and the postgres COALESCE.
+        default_model = record.default_model
+        if default_model is None and existing is not None:
+            default_model = existing.default_model
         saved = record.model_copy(
             update={
+                "default_model": default_model,
                 "created_at": existing.created_at if existing else record.created_at,
                 "updated_at": _now(),
             }
@@ -204,7 +216,7 @@ class PostgresProviderApiKeyStore:
             cur.execute(
                 """
                 SELECT org_id, user_id, provider, encrypted_key, key_hint,
-                       created_at, updated_at
+                       default_model, created_at, updated_at
                 FROM provider_api_keys
                 WHERE org_id = %s AND user_id = %s AND provider = %s
                 """,
@@ -225,7 +237,7 @@ class PostgresProviderApiKeyStore:
             cur.execute(
                 """
                 SELECT org_id, user_id, provider, encrypted_key, key_hint,
-                       created_at, updated_at
+                       default_model, created_at, updated_at
                 FROM provider_api_keys
                 WHERE org_id = %s AND user_id = %s
                 ORDER BY provider
@@ -247,13 +259,18 @@ class PostgresProviderApiKeyStore:
                 """
                 INSERT INTO provider_api_keys (
                     org_id, user_id, provider, encrypted_key, key_hint,
-                    created_at, updated_at
-                ) VALUES (%s, %s, %s, %s, %s, %s, %s)
+                    default_model, created_at, updated_at
+                ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s)
                 ON CONFLICT (org_id, user_id, provider) DO UPDATE SET
                     encrypted_key = EXCLUDED.encrypted_key,
                     key_hint = EXCLUDED.key_hint,
+                    -- A rotation that omits the model preserves the stored
+                    -- pick; a fresh model overwrites it.
+                    default_model = COALESCE(
+                        EXCLUDED.default_model, provider_api_keys.default_model
+                    ),
                     updated_at = EXCLUDED.updated_at
-                RETURNING created_at
+                RETURNING created_at, default_model
                 """,
                 (
                     saved.org_id,
@@ -261,16 +278,21 @@ class PostgresProviderApiKeyStore:
                     saved.provider.value,
                     saved.encrypted_key,
                     saved.key_hint,
+                    saved.default_model,
                     saved.created_at,
                     saved.updated_at,
                 ),
             )
             returned = cur.fetchone()
         if returned is not None:
-            created_at = (
-                returned["created_at"] if isinstance(returned, dict) else returned[0]
+            if isinstance(returned, dict):
+                created_at = returned["created_at"]
+                default_model = returned["default_model"]
+            else:
+                created_at, default_model = returned[0], returned[1]
+            saved = saved.model_copy(
+                update={"created_at": created_at, "default_model": default_model}
             )
-            saved = saved.model_copy(update={"created_at": created_at})
         return saved
 
     def delete(

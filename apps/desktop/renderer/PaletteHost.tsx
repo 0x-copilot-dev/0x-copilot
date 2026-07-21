@@ -122,9 +122,15 @@ export function PaletteHost({
         onNavigateDestination(intent.slug);
         return;
       }
+      if (intent.type === "action") {
+        // Direct-launch commands fire the real desktop flow (add-key modal,
+        // model download, connect-tool, new run) rather than just navigating.
+        handleRunAction(intent.action);
+        return;
+      }
       onOpenSettings(intent.section as SettingsSectionSlug);
     },
-    [onNavigateDestination, onOpenSettings],
+    [onNavigateDestination, onOpenSettings, handleRunAction],
   );
 
   // The palette's "No results → Connect a tool →" hint reuses the connect-tool

@@ -34,6 +34,12 @@ export const CHANNELS = {
   // receives the bearer via the loopback redirect. Same
   // bearer-never-crosses-IPC rule as the other auth channels.
   authSignInWallet: "auth.sign-in-wallet",
+  // Cancel the pending system-browser sign-in (Google or wallet). Main
+  // closes the armed loopback listener so the pending sign-in promise
+  // rejects and the port frees — the renderer treats that rejection as a
+  // quiet return to the pick screen, not a failure. No-op when nothing is
+  // pending. Carries no payload and returns nothing.
+  authCancelSignIn: "auth.cancel-sign-in",
   // Account-linking (PRD FR-L1/L2) — authenticated LINK flows driven from
   // Settings. Main opens the system browser (Google OAuth link / wallet
   // signing), completes the link against the caller's existing session, and

@@ -90,7 +90,7 @@ const formStyle: CSSProperties = {
 };
 
 const fieldsetStyle: CSSProperties = {
-  border: "1px solid var(--color-border, #232325)",
+  border: "1px solid var(--color-border)",
   borderRadius: "var(--radius-sm, 6px)",
   padding: 12,
   display: "flex",
@@ -101,7 +101,7 @@ const fieldsetStyle: CSSProperties = {
 const legendStyle: CSSProperties = {
   fontSize: "var(--font-size-sm, 13px)",
   fontWeight: 600,
-  color: "var(--color-text, #ededee)",
+  color: "var(--color-text)",
   padding: "0 6px",
 };
 
@@ -114,12 +114,12 @@ const rowStyle: CSSProperties = {
 
 const labelStyle: CSSProperties = {
   fontSize: "var(--font-size-sm, 13px)",
-  color: "var(--color-text, #ededee)",
+  color: "var(--color-text)",
 };
 
 const helpStyle: CSSProperties = {
   fontSize: "var(--font-size-xs, 12px)",
-  color: "var(--color-text-muted, #b4b4b8)",
+  color: "var(--color-text-muted)",
 };
 
 const saveBarStyle: CSSProperties = {
@@ -132,9 +132,9 @@ const saveButtonStyle: CSSProperties = {
   height: 32,
   padding: "0 14px",
   borderRadius: "var(--radius-sm, 6px)",
-  border: "1px solid var(--color-accent, #d97757)",
-  backgroundColor: "var(--color-accent, #d97757)",
-  color: "var(--color-accent-contrast, #1a0f0a)",
+  border: "1px solid var(--color-accent)",
+  backgroundColor: "var(--color-accent)",
+  color: "var(--color-accent-contrast)",
   fontSize: "var(--font-size-sm, 13px)",
   fontWeight: 600,
   cursor: "pointer",

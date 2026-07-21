@@ -56,6 +56,12 @@ export const ThreadBody = forwardRef<
       text: string;
       attachments: ReadonlyArray<CompleteAttachment>;
     }) => void | Promise<void>;
+    /**
+     * Error channel for a rejected async {@link onSubmit}. Forwarded to the
+     * shared AssistantComposer's `onSubmitError` so a failed run-create is
+     * surfaced (a toast) instead of swallowed.
+     */
+    onSubmitError?: (error: unknown) => void;
     /** Stop-run handler. */
     onCancel?: () => void;
     connectors: {
@@ -131,6 +137,7 @@ export const ThreadBody = forwardRef<
     onEditCancel,
     onEditSave,
     onSubmit,
+    onSubmitError,
     onCancel,
     connectors,
     skills,
@@ -290,6 +297,7 @@ export const ThreadBody = forwardRef<
                 payload.attachments as ReadonlyArray<CompleteAttachment>,
             })
           }
+          onSubmitError={onSubmitError}
           onCancel={onCancel}
         />
       </div>

@@ -219,6 +219,51 @@ class TestPutProviderKey:
         assert _ANTHROPIC_KEY not in str(events[0].metadata)
 
 
+class TestDefaultModelProjection:
+    """PRD-F PR-F.5 — the summary projects ``default_model`` when a key was
+    stored with one, and omits it (byte-identical legacy shape) otherwise."""
+
+    def test_put_with_default_model_projects_it_on_summary(self) -> None:
+        client, _i, _p = _client()
+        put = client.put(
+            "/v1/settings/provider-keys/openai",
+            params=_params(),
+            json={"api_key": _OPENAI_KEY, "default_model": "gpt-4o"},
+        )
+        assert put.status_code == 200, put.text
+        assert put.json()["default_model"] == "gpt-4o"
+        listing = client.get("/v1/settings/provider-keys", params=_params()).json()
+        assert listing["keys"][0]["default_model"] == "gpt-4o"
+
+    def test_summary_omits_default_model_when_absent(self) -> None:
+        client, _i, _p = _client()
+        client.put(
+            "/v1/settings/provider-keys/openai",
+            params=_params(),
+            json={"api_key": _OPENAI_KEY},
+        )
+        listing = client.get("/v1/settings/provider-keys", params=_params()).json()
+        entry = listing["keys"][0]
+        # Null default is omitted, keeping the legacy three-field shape.
+        assert set(entry.keys()) == {"provider", "key_hint", "updated_at"}
+
+    def test_rotation_without_model_preserves_projected_default(self) -> None:
+        client, _i, _p = _client()
+        client.put(
+            "/v1/settings/provider-keys/openai",
+            params=_params(),
+            json={"api_key": _OPENAI_KEY, "default_model": "gpt-4o"},
+        )
+        # Rotate the key with no model (older client) — the pick survives.
+        rotated = client.put(
+            "/v1/settings/provider-keys/openai",
+            params=_params(),
+            json={"api_key": "sk-test-openai-0000000000000000009999"},
+        )
+        assert rotated.status_code == 200, rotated.text
+        assert rotated.json()["default_model"] == "gpt-4o"
+
+
 class TestDeleteProviderKey:
     def test_delete_removes_key(self) -> None:
         client, identity, _p = _client()

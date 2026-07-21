@@ -113,6 +113,29 @@ export interface PendingAttachment {
   readonly status: { readonly type: "pending" } | { readonly type: "running" };
 }
 
+/**
+ * Guard a possibly-async `onSubmit` return value. When the host's submit
+ * handler returns a promise, we attach a `.catch` so a rejected dispatch is
+ * (a) never an unhandled rejection and (b) forwarded to the host's opt-in
+ * `onSubmitError` channel. A synchronous (`void`) return is left untouched.
+ * With no `onSubmitError`, the catch is a no-op sink — the rejection is
+ * swallowed exactly as before, but without the console unhandled-rejection.
+ */
+function catchSubmitRejection(
+  result: void | Promise<void>,
+  onSubmitError?: (error: unknown) => void,
+): void {
+  if (
+    result !== undefined &&
+    result !== null &&
+    typeof (result as Promise<void>).then === "function"
+  ) {
+    void (result as Promise<void>).catch((error: unknown) => {
+      onSubmitError?.(error);
+    });
+  }
+}
+
 /** Discriminate pending vs. complete on the adapter return value. */
 function isPendingAttachment(
   attachment: CompleteAttachment | PendingAttachment,
@@ -242,8 +265,24 @@ export interface ComposerProps {
    * Submit handler with the full payload (text + attachments). Preferred
    * over {@link ComposerProps.onSend}. Reconciles P1-C's audit gap with the
    * old runtime composer.
+   *
+   * May return a promise: the host's dispatch (e.g. `POST /v1/agent/runs`)
+   * is usually async. The Composer captures the return value and, if it is a
+   * promise, attaches a `.catch` at every call site so a rejected submit is
+   * (a) never an unhandled rejection and (b) forwarded to
+   * {@link ComposerProps.onSubmitError} when the host opts in.
    */
-  readonly onSubmit?: (payload: ComposerSubmitPayload) => void;
+  readonly onSubmit?: (payload: ComposerSubmitPayload) => void | Promise<void>;
+  /**
+   * Optional error channel for a rejected async {@link ComposerProps.onSubmit}.
+   * When `onSubmit` returns a promise that rejects (a failed run-create,
+   * a network error), the Composer routes the rejection here instead of
+   * letting it become an unhandled rejection. Absent → the rejection is
+   * still caught (no unhandled rejection) but not surfaced, preserving the
+   * pre-existing behaviour. Fixes the class of bug where a host had to add
+   * its own per-call `.catch` around the composer's promise.
+   */
+  readonly onSubmitError?: (error: unknown) => void;
   /**
    * Host-owned attachment adapter. When supplied, drag-and-drop on the
    * composer body and the attach button become live — each dropped file is
@@ -378,6 +417,7 @@ function ComposerInner(
   const {
     onSend,
     onSubmit,
+    onSubmitError,
     attachmentAdapter,
     onCancel,
     running = false,
@@ -573,11 +613,18 @@ function ComposerInner(
       const completeOnly = attachments.filter(
         (a): a is CompleteAttachment => !isPendingAttachment(a),
       );
+      /* Capture the (possibly async) submit result and attach a rejection
+       * catch so a failed host dispatch never becomes an unhandled rejection
+       * and is surfaced through `onSubmitError` when the host opts in. The
+       * clear below still runs synchronously — the composer empties on send
+       * exactly as before; error handling is out-of-band. */
+      let submitResult: void | Promise<void> = undefined;
       if (onSubmit !== undefined) {
-        onSubmit({ text: trimmed, attachments: completeOnly });
+        submitResult = onSubmit({ text: trimmed, attachments: completeOnly });
       } else if (onSend !== undefined) {
         onSend(trimmed);
       }
+      catchSubmitRejection(submitResult, onSubmitError);
       flushSync(() => {
         setText("");
         setMention(null);
@@ -591,11 +638,13 @@ function ComposerInner(
     submittingRef.current = true;
     finaliseAttachments()
       .then((finalised) => {
+        let submitResult: void | Promise<void> = undefined;
         if (onSubmit !== undefined) {
-          onSubmit({ text: trimmed, attachments: finalised });
+          submitResult = onSubmit({ text: trimmed, attachments: finalised });
         } else if (onSend !== undefined) {
           onSend(trimmed);
         }
+        catchSubmitRejection(submitResult, onSubmitError);
         setText("");
         setMention(null);
         setAttachments([]);
@@ -613,6 +662,7 @@ function ComposerInner(
     onSend,
     onSkillCommand,
     onSubmit,
+    onSubmitError,
     running,
     text,
   ]);

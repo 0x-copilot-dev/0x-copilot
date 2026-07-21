@@ -90,10 +90,10 @@ describe("<PaletteHost>", () => {
     expect(screen.queryByTestId("command-palette")).not.toBeNull();
   });
 
-  // PRD-D: the ⌘K launcher now uses the v3 design's static SHELL_COMMANDS, which
-  // NAVIGATE (to a rail destination or a Settings section) rather than firing
-  // desktop-specific modal flows. The `actions` launchers remain wired for
-  // backend `action`-kind search hits.
+  // PRD-D: the ⌘K launcher uses the v3 design's static SHELL_COMMANDS. Most
+  // commands NAVIGATE (to a rail destination or a Settings section); the four
+  // direct-launch commands below fire the desktop `actions` seam instead
+  // (#182 made their intent `{type:"action"}`).
 
   it("routes the 'Go to Tools' command to the connectors slug (solo relabel) and closes", () => {
     const { onNavigateDestination } = setup();
@@ -119,36 +119,45 @@ describe("<PaletteHost>", () => {
     expect(onOpenSettings).toHaveBeenCalledWith("profile");
   });
 
-  it("navigates 'Add a provider key' to Settings → provider-keys", async () => {
-    const { onOpenSettings } = setup();
+  // Direct-launch commands (#182): these four fire the desktop action seam
+  // (add-key modal / model download / connect-tool / new run) instead of a
+  // bare navigation — the shellCommands intent is `{type:"action"}` and the
+  // host routes it through `actions.*`, never onOpenSettings/onNavigate.
+
+  it("launches 'Add a provider key' via the add-key action seam", async () => {
+    const { actions, onOpenSettings } = setup();
     openPalette();
     typeQuery("provider key");
     fireEvent.click(await screen.findByText("Add a provider key"));
-    expect(onOpenSettings).toHaveBeenCalledWith("provider-keys");
+    expect(actions.onAddProviderKey).toHaveBeenCalledTimes(1);
+    expect(onOpenSettings).not.toHaveBeenCalled();
   });
 
-  it("navigates 'Download a local model' to Settings → local-models", async () => {
-    const { onOpenSettings } = setup();
+  it("launches 'Download a local model' via the download action seam", async () => {
+    const { actions, onOpenSettings } = setup();
     openPalette();
     typeQuery("local model");
     fireEvent.click(await screen.findByText("Download a local model"));
-    expect(onOpenSettings).toHaveBeenCalledWith("local-models");
+    expect(actions.onDownloadLocalModel).toHaveBeenCalledTimes(1);
+    expect(onOpenSettings).not.toHaveBeenCalled();
   });
 
-  it("navigates 'Connect a tool' to the connectors destination", async () => {
-    const { onNavigateDestination } = setup();
+  it("launches 'Connect a tool' via the connect-tool action seam", async () => {
+    const { actions, onNavigateDestination } = setup();
     openPalette();
     typeQuery("Connect a tool");
     fireEvent.click(await screen.findByText("Connect a tool"));
-    expect(onNavigateDestination).toHaveBeenCalledWith("connectors");
+    expect(actions.onConnectTool).toHaveBeenCalledTimes(1);
+    expect(onNavigateDestination).not.toHaveBeenCalled();
   });
 
-  it("navigates 'New chat' to the Run destination", async () => {
-    const { onNavigateDestination } = setup();
+  it("launches 'New chat' via the new-chat action seam", async () => {
+    const { actions, onNavigateDestination } = setup();
     openPalette();
     typeQuery("New chat");
     fireEvent.click(await screen.findByText("New chat"));
-    expect(onNavigateDestination).toHaveBeenCalledWith("run");
+    expect(actions.onNewChat).toHaveBeenCalledTimes(1);
+    expect(onNavigateDestination).not.toHaveBeenCalled();
   });
 
   it("shows the 'No matches.' state when nothing matches", async () => {
