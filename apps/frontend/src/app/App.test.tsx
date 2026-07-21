@@ -333,10 +333,12 @@ describe("CopilotApp destination dispatch", () => {
     expect(window.location.hash).toBe("#model-and-behavior");
   });
 
-  it("passes onOpenSkillEditor to the Skills binder (Settings → Skills)", async () => {
+  it("Edit/New flips the Skills destination to its manage pane (PR-E.3)", async () => {
     renderAt("/tools");
     await screen.findByTestId("skills-stub");
 
+    // SkillsGateway hands the catalog an in-destination pane flip — no more
+    // navigation to the retired legacy Settings → Skills screen.
     const onOpenSkillEditor = captured.skills.onOpenSkillEditor as (
       id: string | null,
     ) => void;
@@ -344,10 +346,23 @@ describe("CopilotApp destination dispatch", () => {
       onOpenSkillEditor(null);
     });
 
+    expect(await screen.findByTestId("skills-manage-pane")).toBeInTheDocument();
+    // The URL stays on the destination — the pane rides local state.
+    expect(window.location.pathname).toBe("/tools");
+  });
+
+  it("redirects legacy /settings#skills → the Skills destination (PR-E.3)", async () => {
+    renderAt("/settings#skills");
     await waitFor(() => {
-      expect(window.location.pathname).toBe("/settings");
+      expect(window.location.pathname).toBe("/tools");
     });
-    expect(window.location.hash).toBe("#skills");
+  });
+
+  it("redirects legacy /settings#connectors → the Tools destination (PR-E.3)", async () => {
+    renderAt("/settings#connectors");
+    await waitFor(() => {
+      expect(window.location.pathname).toBe("/connectors");
+    });
   });
 });
 
