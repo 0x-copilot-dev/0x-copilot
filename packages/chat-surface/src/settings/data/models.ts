@@ -96,40 +96,42 @@ export function providerLabel(provider: string): string {
   return known[provider] ?? provider;
 }
 
-export interface ModelGroup {
+export interface ModelGroup<T extends ModelCatalogModel = CatalogModel> {
   readonly provider: string;
   readonly label: string;
-  readonly models: readonly CatalogModel[];
+  readonly models: readonly T[];
 }
+
+const PROVIDER_ORDER = [
+  "openai",
+  "anthropic",
+  "gemini",
+  "google",
+  "openrouter",
+  "groq",
+  "xai",
+  "ollama",
+];
 
 /**
  * Group catalog models by provider for display. Providers are ordered by a
  * stable priority (the common cloud providers first, local last), then any
  * unknown providers alphabetically; models keep their catalog order (already
- * newest-first from the server).
+ * newest-first from the server). Generic so callers keep any extra fields
+ * (e.g. the composer's per-row `disabled`).
  */
-export function groupModelsByProvider(
-  models: readonly CatalogModel[],
-): readonly ModelGroup[] {
-  const order = [
-    "openai",
-    "anthropic",
-    "gemini",
-    "google",
-    "openrouter",
-    "groq",
-    "xai",
-    "ollama",
-  ];
-  const byProvider = new Map<string, CatalogModel[]>();
+export function groupModelsByProvider<T extends ModelCatalogModel>(
+  models: readonly T[],
+): readonly ModelGroup<T>[] {
+  const byProvider = new Map<string, T[]>();
   for (const model of models) {
     const bucket = byProvider.get(model.provider);
     if (bucket) bucket.push(model);
     else byProvider.set(model.provider, [model]);
   }
   const rank = (provider: string): number => {
-    const index = order.indexOf(provider);
-    return index === -1 ? order.length : index;
+    const index = PROVIDER_ORDER.indexOf(provider);
+    return index === -1 ? PROVIDER_ORDER.length : index;
   };
   return [...byProvider.keys()]
     .sort((a, b) => rank(a) - rank(b) || a.localeCompare(b))
@@ -141,10 +143,10 @@ export function groupModelsByProvider(
 }
 
 /** Filter models by a case-insensitive query over id / name / provider. */
-export function filterModels(
-  models: readonly CatalogModel[],
+export function filterModels<T extends ModelCatalogModel>(
+  models: readonly T[],
   query: string,
-): readonly CatalogModel[] {
+): readonly T[] {
   const q = query.trim().toLowerCase();
   if (q === "") return models;
   return models.filter(
