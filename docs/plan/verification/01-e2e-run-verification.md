@@ -1,6 +1,6 @@
 # V1 — End-to-end run verification (the keystone)
 
-Status: **In progress** · Owner: runtime/platform · Phase 1 of the verification program.
+Status: **Shipped — verification program P0–P5 complete** · Owner: runtime/platform. See §7 for the phase→PR map.
 
 > Spec-first per [services/ai-backend/docs/CLAUDE.md](../../../services/ai-backend/docs/CLAUDE.md). Exact `path:line` injection points are filled from the seam map (companion investigation) before each component lands.
 
@@ -78,7 +78,7 @@ crashes in any deployment without an MCP backend URL; fixed here).
 - ✅ Negative test (no worker ⇒ run never completes) + fail-closed default (flag off by default; shipped desktop never sets/allowlists it) + unit coverage.
 - ✅ `EmptyMcpRegistry` async-contract fix + regression test.
 
-**Tier B — supervised-boot smoke (FAST-FOLLOW).** Boot the real supervised stack
+**Tier B — supervised-boot smoke (SHIPPED #153; hardened + green #172).** Boot the real supervised stack
 (embedded PG / file store, in-process worker, production-shaped API) via
 `run-local.mjs`, obtain a bearer (reuse `tools/cli-testing/harness/siwe-session.mjs`),
 `POST /v1/agent/runs` with the fake-model env, consume SSE, then assert both
@@ -88,8 +88,24 @@ Tier A (in-memory store) does not. _(Boot + auth: seam map §5; the fake-model e
 must be added to the desktop service-env allowlist for the supervised path —
 service-env.ts:11–36.)_
 
-Follow-on phases (tracked separately): P1 production posture _(seam map §6 —
-`posture.ts` + `COPILOT_PRODUCTION=1` already exist, so smaller than first
-feared)_, P2 file-store durability/migration completion, P3 model catalog +
-onboarding, P4 distribution/dev-loop/observability, P5 "no off-by-default without
-an e2e path" gate.
+## 7. Program status — phase → PR map
+
+The gap this program named (the real supervised topology exercised by zero tests)
+is closed, and the follow-on phases shipped:
+
+| Phase                                   | What shipped                                                                                                                                                                                                                    | PR(s)                                    |
+| --------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ---------------------------------------- |
+| **P0** keystone                         | Deterministic fake model + hermetic in-process run→stream test (caught the `EmptyMcpRegistry` async bug); file-store run→stream+durability variant                                                                              | #140, #147                               |
+| **P0** Tier B                           | Supervised-boot run→stream smoke (caught two Postgres-store bugs: `pg_notify` bind-param, `append_events_batch` `created_at`); read hardened to terminal-gated + resumable, drill green in CI                                   | #153, #172                               |
+| **P1** production posture               | Supervision is the authoritative production signal (fixed dev-posture-on-a-production-stack)                                                                                                                                    | #151                                     |
+| **P2** file-store durability/continuity | Verified run target + state-ledger compaction; queue compaction; crash-atomic `append_events_batch`; Postgres→file boot migration (engine → policy → CLI → **fail-safe supervisor wiring**); corruption + backup/restore drills | #147, #152, #159, #161, #173, #160, #170 |
+| **P3** model catalog + onboarding       | Catalog SSOT dedup; run-path provider divergence closed (un-runnable models filtered from the picker); in-chat keyless run-create CTA                                                                                           | #162, #171, #158                         |
+| **P4** observability                    | Run-executor decision log + `running\|external\|absent` readiness signal gating `/readyz` (a no-executor state is a red light, not a 68s hang)                                                                                  | #157                                     |
+| **P5** standing gate                    | "No dark capabilities" check + CI gate (no capability ships off-by-default without an e2e path)                                                                                                                                 | #160                                     |
+| repo-health                             | `typecheck-and-test` un-red-ed on main (`jest-dom` wired into the desktop typecheck)                                                                                                                                            | #169                                     |
+
+**Remaining (own initiatives):** P4 distribution/dev-loop; actual groq/xai run-path
+integration (a provider feature, deliberately not built — the catalog already
+excludes them); hardening `AssistantComposer`/`Composer` `onSubmit` with a
+first-class error channel in `chat-surface` so no host re-implements the `.catch`
+(a delicate SSOT-composer change, both surfaces — its own careful cycle).
