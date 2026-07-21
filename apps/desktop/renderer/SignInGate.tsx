@@ -138,15 +138,28 @@ export function SignInGate(props: SignInGateProps): ReactNode {
         })
         .catch((err: unknown) => {
           if (attempt !== attemptRef.current) return;
-          // A canceled flow rejects by design (main closed its loopback):
-          // land back on the pick screen quietly, not on the error screen.
+          // Sanitize main's error before showing it. Electron wraps IPC
+          // rejections as "Error invoking remote method 'X': <Name>: <msg>";
+          // strip that wrapper + the error-class name so the user never sees a
+          // raw stack-shaped string (e.g. the leaked
+          // "GoogleLoginError: oidc redirect error: access_denied").
+          const raw = err instanceof Error ? err.message : "";
+          const clean = raw
+            .replace(/^Error invoking remote method '[^']*':\s*/i, "")
+            .replace(/^[A-Za-z]+Error:\s*/, "")
+            .trim();
+          // A canceled flow rejects by design — whether the user hit the app's
+          // Cancel (prev.canceling) OR declined/closed the provider's own
+          // consent page (access_denied). Both land back on the pick screen
+          // quietly, not on the error screen.
+          const providerCanceled = /access_denied|cancell?ed/i.test(clean);
           setPhase((prev) =>
-            prev.kind === "signing-in" && prev.canceling
+            (prev.kind === "signing-in" && prev.canceling) || providerCanceled
               ? { kind: "anon" }
               : {
                   kind: "error",
                   method,
-                  message: err instanceof Error ? err.message : failMessage,
+                  message: clean || failMessage,
                 },
           );
         });

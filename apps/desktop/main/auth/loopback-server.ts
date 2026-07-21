@@ -116,7 +116,7 @@ const DEFAULT_SUCCESS_HTML =
 const DEFAULT_FAILURE_HTML =
   "<!doctype html><meta charset=utf-8><title>0xCopilot</title>" +
   '<body style="font-family:system-ui;padding:2rem">' +
-  "<h1>Sign-in failed.</h1><p>Check the 0xCopilot window for details.</p></body>";
+  "<h1>Sign-in didn’t complete.</h1><p>You can close this window and return to 0xCopilot.</p></body>";
 
 function defaultPickPort(): number {
   return (
@@ -227,14 +227,16 @@ async function awaitLoopback<T>(
       if (!outcome.ok) {
         res.statusCode = 400;
         res.setHeader("content-type", "text/html; charset=utf-8");
-        res.end(failureHtml);
-        rejectResult(new Error(outcome.message));
+        // Settle the promise only AFTER the page is flushed to the socket:
+        // settling triggers `close()` (server.close), which otherwise races the
+        // write so the browser gets a connection reset ("the page doesn't load"
+        // on cancel/error). The write callback fires once the response is sent.
+        res.end(failureHtml, () => rejectResult(new Error(outcome.message)));
         return;
       }
       res.statusCode = 200;
       res.setHeader("content-type", "text/html; charset=utf-8");
-      res.end(successHtml);
-      resolveResult(outcome.value);
+      res.end(successHtml, () => resolveResult(outcome.value));
     },
   );
 
