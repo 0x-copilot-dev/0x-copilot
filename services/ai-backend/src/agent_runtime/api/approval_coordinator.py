@@ -768,6 +768,30 @@ class ApprovalCoordinator:
     # ⇒ no fields are editable, so any ``edits.fields`` key is rejected 422.
     _EDITABLE_FIELDS_METADATA_KEY = "editable_fields"
 
+    # Commit-surface discriminator stored on ``ApprovalRequestRecord.metadata``
+    # (distinct from ``approval_kind``): only approvals whose ``kind`` names an
+    # edit-capable commit surface expose a server-side place to APPLY the
+    # reviewer's ``edits``. Today that is exactly the draft-send / commit path
+    # (worker ``_resolve_draft_send_approval`` → ``_apply_edits_to_draft``).
+    # Every other approval (LangGraph-resume / MCP-tool / mcp_auth /
+    # ask_a_question) resumes as a plain approve with NOWHERE to commit edits —
+    # the worker used to silently coerce ``approve_with_edits`` → ``approved``
+    # and drop the edits, so the reviewer believed an edit applied when it never
+    # did. We reject those at the edge (422) instead of dropping them silently.
+    _COMMIT_KIND_METADATA_KEY = "kind"
+    _EDIT_CAPABLE_COMMIT_KINDS = frozenset({"draft_send"})
+
+    @classmethod
+    def _approval_supports_edits(cls, approval: ApprovalRequestRecord) -> bool:
+        """Return whether this approval exposes a server-side commit-edit surface.
+
+        Only edit-capable kinds may carry reviewer ``edits``; for every other
+        kind the worker resumes as a plain approve with no place to apply edits.
+        """
+
+        commit_kind = approval.metadata.get(cls._COMMIT_KIND_METADATA_KEY)
+        return commit_kind in cls._EDIT_CAPABLE_COMMIT_KINDS
+
     async def _decide_approve_with_edits(
         self,
         *,
@@ -785,8 +809,21 @@ class ApprovalCoordinator:
         enqueued so the worker/commit executor commits the edited values. The
         LangGraph harness resumes exactly as a plain approve — the edits flow
         into the committed side effect in the commit path, never here.
+
+        Approvals with no commit-edit surface (everything except the edit-capable
+        kinds) are rejected 422 up front: they have nowhere to apply edits, so
+        accepting them would silently drop the reviewer's changes at the worker.
         """
 
+        # Fail closed on approval kinds that cannot commit edits — an explicit
+        # 422 for the reviewer rather than a silent no-op at the worker.
+        if not self._approval_supports_edits(approval):
+            raise RuntimeApiError(
+                RuntimeErrorCode.VALIDATION_ERROR,
+                "This approval type doesn't support edits.",
+                http_status=status.HTTP_422_UNPROCESSABLE_CONTENT,
+                retryable=False,
+            )
         # ``edits`` is guaranteed non-None by the request validator.
         edits = request.edits
         if edits is None:  # defensive — the validator enforces this
