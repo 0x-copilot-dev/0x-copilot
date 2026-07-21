@@ -25,10 +25,10 @@ from agent_runtime.capabilities.conversation_ordinals import (
     ConversationOrdinalAllocator,
 )
 from agent_runtime.capabilities.surfaces import (
-    FileSurfaceSpecStore,
-    InMemorySurfaceSpecStore,
     SurfaceGenerationScheduler,
+    SurfaceSpecStorePort,
     build_surface_generation_scheduler,
+    build_surface_spec_store,
 )
 from agent_runtime.capabilities.tool_budget_guard import ToolBudgetGuard
 from agent_runtime.capabilities.tool_budget_middleware import ToolBudgetMiddleware
@@ -1483,18 +1483,23 @@ class RuntimeRunHandler:
         """Build a run-scoped surface-spec generation scheduler, or ``None``.
 
         Returns ``None`` (generation disabled) unless ``SURFACE_SPEC_MODEL`` is
-        set — the factory owns that gate. On success the store is the durable
-        file store when the desktop file backend is configured, else an
-        in-process store. The emit callback ships ``surface_spec_generated`` back
-        onto the same event producer every other emission uses, so the FE
-        upgrades the surface in place.
+        set — the factory owns that gate. The store is selected by
+        ``SURFACE_SPEC_STORE_BACKEND`` (``memory`` default test, ``file`` desktop
+        single-user, ``backend`` team/web); an unset value preserves the prior
+        auto behaviour (durable file store when configured, else in-process).
+        The emit callback ships ``surface_spec_generated`` back onto the same
+        event producer every other emission uses, so the FE upgrades the surface
+        in place.
         """
 
         import os  # noqa: PLC0415 - local to keep the module import surface small
 
-        def _surface_store() -> InMemorySurfaceSpecStore | FileSurfaceSpecStore:
-            file_store = FileSurfaceSpecStore.from_env()
-            return file_store if file_store is not None else InMemorySurfaceSpecStore()
+        def _surface_store() -> SurfaceSpecStorePort:
+            return build_surface_spec_store(
+                environ=os.environ,
+                org_id=run.org_id,
+                user_id=run.user_id,
+            )
 
         async def _emit(payload: Mapping[str, object]) -> None:
             await self.event_producer.append_api_event(

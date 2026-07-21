@@ -499,6 +499,8 @@ def create_app(
     adapter_registry_service: object | None = None,
     adapter_registry_store: object | None = None,
     adapter_source_storage: object | None = None,
+    surface_specs_service: object | None = None,
+    surface_specs_store: object | None = None,
     todos_store: TodosStore | None = None,
     inbox_store: InboxStore | None = None,
     routines_store: RoutinesStore | None = None,
@@ -2050,6 +2052,33 @@ def create_app(
     register_adapter_registry_routes(
         app,
         service=resolved_registry_service,  # type: ignore[arg-type]
+    )
+
+    # Generative-UI PRD-08 — durable, org-scoped SurfaceSpec registry. Internal
+    # only; the ai-backend ``BackendHttpSurfaceSpecStore`` is the sole client.
+    # In-memory store by default (tests + dev); the desktop/team wiring injects
+    # ``PostgresSurfaceSpecStore``.
+    from backend_app.surface_specs import (
+        InMemorySurfaceSpecStore,
+        SurfaceSpecService,
+        SurfaceSpecStore,
+        register_surface_specs_routes,
+    )
+
+    if surface_specs_service is not None:
+        resolved_surface_specs_service = surface_specs_service
+    else:
+        resolved_surface_specs_store: SurfaceSpecStore = (
+            surface_specs_store
+            if surface_specs_store is not None
+            else InMemorySurfaceSpecStore()
+        )  # type: ignore[assignment]
+        resolved_surface_specs_service = SurfaceSpecService(
+            store=resolved_surface_specs_store,
+        )
+    register_surface_specs_routes(
+        app,
+        service=resolved_surface_specs_service,  # type: ignore[arg-type]
     )
 
     # P7-A2 — Library blob storage (signed-URL upload/download). Bytes

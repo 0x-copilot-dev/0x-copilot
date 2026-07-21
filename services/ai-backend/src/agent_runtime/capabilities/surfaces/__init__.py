@@ -11,6 +11,10 @@ plus its run-scoped :class:`~.generator.SurfaceGenerationScheduler`, steered by
 the packaged ``spec-authoring`` skill.
 """
 
+from agent_runtime.capabilities.surfaces.backend_store import (
+    BackendHttpSurfaceSpecStore,
+    build_surface_spec_store,
+)
 from agent_runtime.capabilities.surfaces.config import SurfaceEmissionFlag
 from agent_runtime.capabilities.surfaces.generator import (
     GenFailure,
@@ -35,6 +39,7 @@ from agent_runtime.capabilities.surfaces.store import (
 )
 
 __all__ = [
+    "BackendHttpSurfaceSpecStore",
     "FileSurfaceSpecStore",
     "GenFailure",
     "GenToolDescriptor",
@@ -50,5 +55,6 @@ __all__ = [
     "SurfaceSpecReadPort",
     "SurfaceSpecStorePort",
     "build_surface_generation_scheduler",
+    "build_surface_spec_store",
     "output_shape_hash",
 ]

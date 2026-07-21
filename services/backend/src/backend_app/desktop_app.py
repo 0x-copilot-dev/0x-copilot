@@ -40,6 +40,7 @@ from copilot_service_contracts.deployment_profile import (
 from fastapi import FastAPI
 
 from backend_app.adapter_registry.store import PostgresAdapterRegistryStore
+from backend_app.surface_specs.store import PostgresSurfaceSpecStore
 from backend_app.api_keys.store import PostgresApiKeyStore
 from backend_app.app import create_app
 from backend_app.deployment_profile import (
@@ -232,6 +233,7 @@ class DesktopComposer:
             # production email guard does not fire.
             "magic_link_globally_enabled": False,
             "adapter_registry_store": PostgresAdapterRegistryStore(pool),
+            "surface_specs_store": PostgresSurfaceSpecStore(pool),
             "settings_store": PostgresSettingsStore(pool),
             "provider_api_keys_store": PostgresProviderApiKeyStore(pool),
             # PR-B: live key validation is on for real desktop installs —
