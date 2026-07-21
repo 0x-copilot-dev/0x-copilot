@@ -1,0 +1,120 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://0xcopilot.tech/schemas/surface_spec.schema.json",
+  "title": "SurfaceSpec",
+  "description": "Declarative binding of a connector tool's output shape onto a generic archetype renderer's slots. Zero side-effectful members: no handlers, no free-form URLs (only typed url_path fields the host sanitises), no templates, no code. This is the injection-blast-radius guarantee (generative-UI plan D9).",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["spec_version", "archetype", "source", "title_path"],
+  "properties": {
+    "spec_version": {
+      "type": "integer",
+      "const": 1,
+      "description": "Schema contract version. Frozen at 1; a bump is an amendment to PRD-01."
+    },
+    "archetype": { "$ref": "#/$defs/archetype" },
+    "source": { "$ref": "#/$defs/source" },
+    "title_path": {
+      "$ref": "#/$defs/dotPath",
+      "description": "Dot-path to the surface headline in the tool output."
+    },
+    "subtitle_path": {
+      "$ref": "#/$defs/dotPath",
+      "description": "Optional dot-path to a secondary line under the title."
+    },
+    "fields": {
+      "type": "array",
+      "description": "Label/value pairs for record | message | doc archetypes.",
+      "items": { "$ref": "#/$defs/field" }
+    },
+    "columns": {
+      "type": "array",
+      "description": "Column definitions for table | board archetypes.",
+      "items": { "$ref": "#/$defs/column" }
+    },
+    "items_path": {
+      "$ref": "#/$defs/dotPath",
+      "description": "Dot-path to the array root for table | board | timeline archetypes."
+    },
+    "group_by_path": {
+      "$ref": "#/$defs/dotPath",
+      "description": "Dot-path used to bucket board lanes."
+    },
+    "link": { "$ref": "#/$defs/link" }
+  },
+  "$defs": {
+    "archetype": {
+      "type": "string",
+      "description": "The render family this spec binds to. Unknown values render as the tier-3 generic fallback rather than an error.",
+      "enum": [
+        "record",
+        "table",
+        "message",
+        "doc",
+        "board",
+        "event",
+        "timeline",
+        "dashboard",
+        "file",
+        "form"
+      ]
+    },
+    "format": {
+      "type": "string",
+      "description": "Presentation hint the renderer applies to a value. Purely visual; never fetches or executes.",
+      "enum": ["text", "number", "currency", "datetime", "badge", "user"]
+    },
+    "align": {
+      "type": "string",
+      "description": "Horizontal alignment for a table/board column.",
+      "enum": ["start", "end"]
+    },
+    "dotPath": {
+      "type": "string",
+      "minLength": 1,
+      "description": "A dotted accessor into the payload: identifier segments and array indices only (a.b.0.c). No expressions, functions, brackets, or code.",
+      "pattern": "^(?:[A-Za-z_][A-Za-z0-9_]*|[0-9]+)(?:\\.(?:[A-Za-z_][A-Za-z0-9_]*|[0-9]+))*$"
+    },
+    "source": {
+      "type": "object",
+      "additionalProperties": false,
+      "description": "The connector server + tool whose output shape this spec maps.",
+      "required": ["server", "tool"],
+      "properties": {
+        "server": { "type": "string", "minLength": 1 },
+        "tool": { "type": "string", "minLength": 1 }
+      }
+    },
+    "field": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["label", "path"],
+      "properties": {
+        "label": { "type": "string", "minLength": 1, "maxLength": 40 },
+        "path": { "$ref": "#/$defs/dotPath" },
+        "format": { "$ref": "#/$defs/format" }
+      }
+    },
+    "column": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["label", "path"],
+      "properties": {
+        "label": { "type": "string", "minLength": 1, "maxLength": 40 },
+        "path": { "$ref": "#/$defs/dotPath" },
+        "format": { "$ref": "#/$defs/format" },
+        "align": { "$ref": "#/$defs/align" }
+      }
+    },
+    "link": {
+      "type": "object",
+      "additionalProperties": false,
+      "description": "A single outbound link. url_path resolves into payload data and is host-sanitised at render; there are no free-form URLs.",
+      "required": ["label", "url_path"],
+      "properties": {
+        "label": { "type": "string", "minLength": 1 },
+        "url_path": { "$ref": "#/$defs/dotPath" }
+      }
+    }
+  }
+}

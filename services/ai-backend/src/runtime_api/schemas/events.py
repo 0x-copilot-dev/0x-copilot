@@ -64,6 +64,14 @@ class _Fields:
     PROSE_OFFSET = "prose_offset"
     PROSE_LENGTH = "prose_length"
     SOURCE_TOOL_CALL_ID = "source_tool_call_id"
+    # Generative-UI (PRD-01) — surface_spec_generated payload keys + title.
+    SURFACE_URI = "surface_uri"
+    ARCHETYPE = "archetype"
+    SPEC = "spec"
+    SPEC_VERSION = "spec_version"
+    GENERATOR_MODEL = "generator_model"
+    SKILL_VERSION = "skill_version"
+    SURFACE_PREPARED_TITLE = "Prepared a view"
 
 
 class RuntimeEventPresentationProjector:
@@ -142,6 +150,8 @@ class RuntimeEventPresentationProjector:
             return cls._sources_ingested_payload(payload)
         if event_type is RuntimeApiEventType.CITATION_MADE:
             return cls._citation_made_payload(payload)
+        if event_type is RuntimeApiEventType.SURFACE_SPEC_GENERATED:
+            return cls._surface_spec_generated_payload(payload)
         return payload
 
     @classmethod
@@ -238,6 +248,11 @@ class RuntimeEventPresentationProjector:
             return RuntimeActivityKind.MCP_AUTH
         if event_type is RuntimeApiEventType.DRAFT_UPDATED:
             return RuntimeActivityKind.DRAFT
+        if event_type is RuntimeApiEventType.SURFACE_SPEC_GENERATED:
+            # Generative-UI (PRD-01) — an out-of-band "prepared a view" note.
+            # Explicit so a TOOL-sourced emit can't reroute it into the tool
+            # bucket; the FE consumes it as a surface-state merge, not a card.
+            return RuntimeActivityKind.EVENT
         if event_type is RuntimeApiEventType.COMPRESSION_NOTE:
             # PR A1 — context-compression note. Renders as an inline
             # dim line ("Atlas summarised 3 older messages…") rather
@@ -434,6 +449,11 @@ class RuntimeEventPresentationProjector:
                 if isinstance(ordinal, int) and ordinal > 0:
                     return Messages.Event.citation_made_title(ordinal)
             return Messages.Event.CITATION_MADE
+        if event_type is RuntimeApiEventType.SURFACE_SPEC_GENERATED:
+            # Generative-UI (PRD-01). The user-facing message class lives in
+            # ``agent_runtime.api.constants`` (out of this PR's scope); the
+            # single-use title is inlined here until PRD-02 wires the emitter.
+            return _Fields.SURFACE_PREPARED_TITLE
         return None
 
     @classmethod
@@ -645,6 +665,36 @@ class RuntimeEventPresentationProjector:
             if isinstance(value, int) and value >= 0:
                 safe_link[offset_key] = value
         return {_Fields.LINK: safe_link}
+
+    @classmethod
+    def _surface_spec_generated_payload(cls, payload: JsonObject) -> JsonObject:
+        """Project ``surface_spec_generated`` payloads through a strict allow-list.
+
+        The async spec generator (PRD-07) is the intended emitter; we whitelist
+        defensively so a future caller cannot over-share. ``spec`` is the
+        SurfaceSpec dict — passed through only when it is an object (it was
+        schema-validated upstream, and the SurfaceSpec schema has no
+        side-effectful members, plan D9). PRD-01 freezes this projection; no
+        emitter exists yet.
+        """
+
+        safe_payload: JsonObject = {}
+        for text_key in (
+            _Fields.SURFACE_URI,
+            _Fields.ARCHETYPE,
+            _Fields.GENERATOR_MODEL,
+            _Fields.SKILL_VERSION,
+        ):
+            value = cls._text(payload.get(text_key))
+            if value is not None:
+                safe_payload[text_key] = value
+        spec_version = payload.get(_Fields.SPEC_VERSION)
+        if isinstance(spec_version, int) and not isinstance(spec_version, bool):
+            safe_payload[_Fields.SPEC_VERSION] = spec_version
+        spec = payload.get(_Fields.SPEC)
+        if isinstance(spec, dict):
+            safe_payload[_Fields.SPEC] = spec
+        return safe_payload
 
     @classmethod
     def _approval_requested_payload(cls, payload: JsonObject) -> JsonObject:

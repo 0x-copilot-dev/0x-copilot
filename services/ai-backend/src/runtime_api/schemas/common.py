@@ -186,6 +186,15 @@ class RuntimeApiEventType(StrEnum):
     # channel, persists to ``{userData}/adapters/{scheme}-v{n}.js``, and
     # hands the source to the local quality gate (6D).
     ADAPTER_GENERATED = "adapter_generated"
+    # Generative-UI (PRD-01) — the async spec generator produced a validated
+    # ``SurfaceSpec`` for a ``(server, tool, output_shape)``. Payload carries
+    # ``surface_uri`` / ``archetype`` / ``spec`` / ``spec_version`` /
+    # ``generator_model`` / ``skill_version``. Projects to
+    # ``RuntimeActivityKind.EVENT``; the FE projector merges ``spec`` into
+    # ``surfaceState[surface_uri]`` so the next render upgrades in place from
+    # tier-3 to the archetype view (plan D4). No emitter/renderer yet — PRD-01
+    # freezes the contract only.
+    SURFACE_SPEC_GENERATED = "surface_spec_generated"
 
     @classmethod
     def from_stream_event_type(
