@@ -64,9 +64,10 @@ export interface ProviderKeysPageProps {
    */
   readonly onToast?: (message: string) => void;
   /**
-   * Known default-model chips per provider slug. The summary contract carries
-   * no model field yet (PRD §5.5 drift), so the host may supply chips for
-   * server-loaded keys; in-session Add-flow choices are merged on top.
+   * Fallback default-model chips per provider slug. The summary now carries a
+   * server-projected `default_model` (PRD-F PR-F.5) which the row prefers;
+   * these chips only fill in for older servers / keys stored without a model.
+   * In-session Add-flow choices still win over both.
    */
   readonly modelChips?: Readonly<Record<string, string>>;
 }
@@ -270,8 +271,15 @@ export function ProviderKeysPage({
     [port, onToast, removing],
   );
 
+  // Row model chip (PRD-F PR-F.5). The freshest in-session Add-flow pick wins;
+  // otherwise prefer the server's single-source `summary.default_model`
+  // projection, and fall back to the host-supplied `modelChips` only when the
+  // summary carries none (older servers / keys stored without a model).
   const chipFor = (slug: string): string | undefined =>
-    chosenModels[slug] ?? modelChips?.[slug];
+    chosenModels[slug] ??
+    summaryFor(slug)?.default_model ??
+    modelChips?.[slug] ??
+    undefined;
 
   return (
     <>
