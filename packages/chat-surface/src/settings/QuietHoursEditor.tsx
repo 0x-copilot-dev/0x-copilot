@@ -85,7 +85,7 @@ export function validateQuietHoursWindow(
 }
 
 const fieldsetStyle: CSSProperties = {
-  border: "1px solid var(--color-border, #232325)",
+  border: "1px solid var(--color-border)",
   borderRadius: "var(--radius-sm, 6px)",
   padding: 12,
   display: "flex",
@@ -96,7 +96,7 @@ const fieldsetStyle: CSSProperties = {
 const legendStyle: CSSProperties = {
   fontSize: "var(--font-size-sm, 13px)",
   fontWeight: 600,
-  color: "var(--color-text, #ededee)",
+  color: "var(--color-text)",
   padding: "0 6px",
 };
 
@@ -109,7 +109,7 @@ const rowStyle: CSSProperties = {
 
 const labelStyle: CSSProperties = {
   fontSize: "var(--font-size-sm, 13px)",
-  color: "var(--color-text-muted, #b4b4b8)",
+  color: "var(--color-text-muted)",
   display: "inline-flex",
   alignItems: "center",
   gap: 6,
@@ -119,15 +119,15 @@ const inputStyle: CSSProperties = {
   height: 30,
   padding: "0 8px",
   borderRadius: "var(--radius-sm, 6px)",
-  border: "1px solid var(--color-border, #232325)",
-  background: "var(--color-surface, #18181a)",
-  color: "var(--color-text, #ededee)",
+  border: "1px solid var(--color-border)",
+  background: "var(--color-surface)",
+  color: "var(--color-text)",
   fontSize: "var(--font-size-sm, 13px)",
 };
 
 const errorStyle: CSSProperties = {
   fontSize: "var(--font-size-xs, 12px)",
-  color: "var(--color-danger, #f5826b)",
+  color: "var(--color-danger)",
 };
 
 export function QuietHoursEditor({
