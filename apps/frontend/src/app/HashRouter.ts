@@ -6,7 +6,7 @@ import {
   type ShellDestinationSlug,
 } from "@0x-copilot/chat-surface";
 
-import type { SettingsSection } from "../features/settings/SettingsScreen";
+import type { SettingsSection } from "../features/settings/settingsSections";
 import {
   DEFAULT_SETTINGS_SECTION,
   SETTINGS_SECTIONS,
