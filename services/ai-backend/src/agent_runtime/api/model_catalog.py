@@ -78,18 +78,38 @@ class ModelCatalog:
 
     @classmethod
     def build(cls, settings: RuntimeSettings) -> tuple[ModelCatalogItem, ...]:
-        """Return the ordered catalog: default model first, then live source records.
+        """Return the ordered, **id-unique** catalog: default model first, then live records.
 
-        Source records arrive deterministically ordered (provider asc,
-        release date desc, id asc). Callers that need id-uniqueness (the
-        picker route) deduplicate with last-definition-wins, so a richer
-        live record replaces the minimal default entry for the same id.
+        This is the single deduplication point every consumer relies on —
+        the picker route (:meth:`ConversationQueryService.list_models`) and
+        workspace default-model validation (:class:`WorkspaceCoordinator`)
+        both take the tuple verbatim, so neither has to re-deduplicate and
+        neither can drift from the other.
+
+        Two invariants hold **by construction**:
+
+        * ``settings.default_model`` is always present and always first. Its
+          entry is emitted before any source record, so its id occupies the
+          leading slot even when the live source is empty (offline boot).
+        * No id appears twice — in particular the default is never
+          double-listed when the source also ships the same model id. Source
+          records arrive deterministically ordered (provider asc, release
+          date desc, id asc); collapsing with last-definition-wins keeps the
+          default's leading position while upgrading its value to the richer
+          live record (context window, costs, capability flags) for the same
+          id. Downstream ids are keys, so the frontend picker — which keys
+          rows by ``id`` — never sees a duplicate key.
         """
 
         items = [cls._default_item(settings)]
         for record in cls._source_for(settings).records():
             items.append(cls._item_from_record(record, settings))
-        return tuple(items)
+        # Collapse by id, last-definition-wins. A dict comprehension keeps
+        # each id at its first-insertion position (so the default stays
+        # first) while replacing its value with the last same-id entry (so a
+        # richer live record supersedes the minimal default placeholder).
+        deduped = {item.id: item for item in items}
+        return tuple(deduped.values())
 
     # ------------------------------------------------------------------
     # Private helpers

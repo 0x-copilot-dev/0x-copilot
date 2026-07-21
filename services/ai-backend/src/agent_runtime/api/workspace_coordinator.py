@@ -200,9 +200,12 @@ class WorkspaceCoordinator:
         """Raise 422 when the requested default model provider or name is not in the catalog.
 
         Provider validation reuses ``ModelConfigResolver._normalize_provider``
-        (the same alias table the run path enforces). Model-name validation is done
-        against the same hardcoded catalog ``list_models`` exposes so the admin
-        default stays within the set the frontend picker shows.
+        (the same alias table the run path enforces). Model-name validation runs
+        against :meth:`ModelCatalog.build` — the single source of truth the
+        picker route also consumes — so the admin default can only be a model
+        the frontend picker actually shows. Because that catalog always
+        contains ``settings.default_model`` by construction, the runtime
+        default can never be rejected here.
         """
 
         try:
