@@ -76,10 +76,15 @@ vi.mock("../features/team/TeamGateway", () => ({
 vi.mock("../features/palette/PaletteHost", () => ({
   PaletteHost: () => null,
 }));
-// The settings screen is a redirect target (memory fold + retention link);
-// stub it so those tests don't pull the real Settings surface.
+// The settings surface is a redirect target (memory fold + retention link);
+// stub BOTH the legacy screen (connectors/skills sections) and the PRD-E
+// `SettingsBinder` (every other section) so those tests assert the dispatch
+// without pulling the real Settings surface + its data ports.
 vi.mock("../features/settings/SettingsScreen", () => ({
   SettingsScreen: () => <div data-testid="settings-stub" />,
+}));
+vi.mock("../features/settings/SettingsBinder", () => ({
+  SettingsBinder: () => <div data-testid="settings-stub" />,
 }));
 
 // Data hooks + transport — the App wires these but the stubs above ignore them.
