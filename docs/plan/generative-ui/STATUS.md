@@ -21,11 +21,14 @@ Branch: `claude/generative-ui-components-5b6ba7`. Integration is sequential-merg
 
 E2E path now closed: MCP tool result → `SurfaceProjector` attaches `surface_uri` + envelope → worker lifts to event-payload top level → `eventProjector` binds → `TcSurfaceMount` resolves the archetype renderer → on-surface approve/reject wired to the decision endpoint.
 
-## Wave 2 — long-tail generation ⏳ IN PROGRESS
-- **PRD-07** spec generator (nano/mini model + `spec-authoring` skill bundle, schema-constrained + path-lint + retry, async off render path) + `SurfaceSpecStorePort` (in-memory/file). — in progress (`gu/prd-07`)
-- **PRD-08** backend spec registry (org-scoped `/internal/v1/surfaces/specs`) + `BackendHttpSurfaceSpecStore`. — pending (after 07)
+## Wave 2 — long-tail generation ✅ DONE (verified)
+- **PRD-07** spec generator (nano/mini model + `spec-authoring` skill: SKILL.md + 6 few-shot examples; schema-constrained decode, path-lint + retry-once, async off render path, per-run cap) + `SurfaceSpecStorePort` (in-memory/file) — `e0177992`. **Adversarially verified CONFIRMED** on all 7 criteria (injection kill-switch driven with hostile inputs directly; no live model in CI; structured-output enforced; skill real).
+- **PRD-08** backend surface-spec registry (org-scoped `/internal/v1/surfaces/specs`, service-token + org/user header auth, 422 on invalid, override precedence) + `BackendHttpSurfaceSpecStore` (TTL cache) + `SURFACE_SPEC_STORE_BACKEND` selection — `cd8347a2`.
+- **Hardening** (`6df04901`): from the adversarial review — lint `link.url_path` across all rows, not just `items[0]`, so the backend kill-switch is sufficient on its own (FE sanitiser remains defence-in-depth).
 
-## Wave 3 — action safety ⏳ PENDING
+**Verification:** ai-backend `tests/unit` **2949 passed** (1 known-flaky wall-clock timing test, passes on re-run), 45 skipped; backend surface_specs **42 passed** (29 unit + 13 routes); dark-capabilities gate **exit 0**; migration manifest clean.
+
+## Wave 3 — action safety ⏳ IN PROGRESS
 - **PRD-09** edit-on-surface + gated commit (`approve_with_edits`, idempotency, precondition re-check, audit).
 
 ## Wave 4 — escape hatch + hardening ⏳ PENDING
