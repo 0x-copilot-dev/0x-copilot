@@ -1,5 +1,10 @@
 # Frontend Parity v3 — PRD suite
 
+> **Implementation status → [STATUS.md](STATUS.md).** Shipped so far: PRD-A, B, C,
+> D (✅) and PRD-E PR-E.1 (🟡). Remaining: E.2/E.3 (web settings convergence), F
+> (provider keys), G (destinations), H (backend). Every landed commit is green
+> and on the branch; the PRDs below are the spec for the rest.
+
 **Goal.** Bring the shipping product into parity with the imported Claude Design
 **0xCopilot App v3** (design project `73f810d9`, file `0xCopilot App v3.html`),
 across the seven surfaces audited (left rail, settings nav, provider keys, ⌘K
