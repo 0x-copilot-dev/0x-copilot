@@ -49,6 +49,19 @@ export const LOCAL_MODEL_PULL_EVENT = "local_model_pull";
 /** Default GGUF quant offered by the curated catalog + the custom-repo path. */
 export const DEFAULT_LOCAL_MODEL_QUANT = "Q4_K_M";
 
+/**
+ * The Ollama tag a pulled Hugging Face GGUF installs under —
+ * ``hf.co/{repo}:{quant}`` (backend `LocalModelsService.pull_events`). This is
+ * the value that appears as `LocalModelSummary.name` in the installed list, so
+ * both host binders build the default-local model name from a download result
+ * (`{repo, quant}`) through this ONE helper — keeping the "download → set as
+ * default" round-trip byte-identical across web + desktop (they can't share a
+ * binder, only this package).
+ */
+export function localModelInstalledTag(repo: string, quant: string): string {
+  return `hf.co/${repo}:${quant}`;
+}
+
 // ---------------------------------------------------------------------------
 // Curated catalog (DESIGN-SPEC §5 "pick from available", decision D-4).
 //

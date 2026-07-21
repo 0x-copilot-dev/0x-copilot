@@ -161,6 +161,7 @@ export {
   LOCAL_MODEL_CATALOG,
   LOCAL_MODEL_PULL_EVENT,
   DEFAULT_LOCAL_MODEL_QUANT,
+  localModelInstalledTag,
   type LocalModelsPort,
 } from "./data/localModels";
 // === end Phase 5 (PR-5.5) ===
