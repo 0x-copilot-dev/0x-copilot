@@ -27,12 +27,15 @@ import type {
   LocalModelPullEvent,
   PullLocalModelRequest,
 } from "@0x-copilot/api-types";
-import { Button, Toggle } from "@0x-copilot/design-system";
+import { Button, Field, TextInput, Toggle } from "@0x-copilot/design-system";
 
 import { Modal, StepDots } from "./Modal";
-import { Frow, SetNote } from "./SettingsChrome";
+import { Frow, SecHead, SetNote } from "./SettingsChrome";
 import { ProgressBar } from "./controls";
 import { formatBytes, formatEta, humanStatus } from "./localModelsFormat";
+
+/** GGUF quant the custom-repo path pre-fills (matches the catalog default). */
+const DEFAULT_QUANT = "Q4_K_M";
 
 // ---------------------------------------------------------------------------
 // Host seam (the callback/port injected by web / desktop)
@@ -93,6 +96,21 @@ export interface DownloadLocalModelModalProps {
   readonly onFinish: (result: LocalModelDownloadResult) => void;
   /** Default for the "Use as default local model" toggle (default: true). */
   readonly defaultUseAsDefault?: boolean;
+  /**
+   * Optional pre-download size probe (host → `GET /v1/local-models/size`,
+   * returning `size_bytes`). Used only for the custom-repo path (catalog picks
+   * already carry `sizeBytes`): it seeds the progress bar's denominator AND
+   * surfaces a missing repo/quant as an error BEFORE streaming gigabytes, just
+   * as the legacy web section did. Degrades gracefully — when absent, the custom
+   * pull starts immediately and the byte totals arrive from the stream; when it
+   * rejects, the flow shows a "couldn't find that model" error with Back/Retry.
+   */
+  readonly resolveSize?: (request: PullLocalModelRequest) => Promise<number>;
+  /**
+   * Whether the custom "advanced" free-text repo/quant affordance is offered
+   * (DESIGN-SPEC §5 power-user path — pull any HF GGUF). Default `true`.
+   */
+  readonly allowCustomModel?: boolean;
 }
 
 // ---------------------------------------------------------------------------
@@ -204,14 +222,21 @@ export function DownloadLocalModelModal({
   startPull,
   onFinish,
   defaultUseAsDefault = true,
+  resolveSize,
+  allowCustomModel = true,
 }: DownloadLocalModelModalProps): ReactElement | null {
   const [step, setStep] = useState<FlowStep>("pick");
   const [selected, setSelected] = useState<AvailableLocalModel | null>(null);
   const [progress, setProgress] = useState<PullProgress>(initialProgress);
   const [useAsDefault, setUseAsDefault] = useState(defaultUseAsDefault);
   const handleRef = useRef<LocalModelPullHandle | null>(null);
+  // Monotonic pull id: bumped on every close/reopen so an in-flight size probe
+  // that resolves late can't open a stream (or clobber state) for a pull the
+  // user already abandoned.
+  const pullSeqRef = useRef(0);
 
   const closeStream = useCallback(() => {
+    pullSeqRef.current += 1;
     handleRef.current?.close();
     handleRef.current = null;
   }, []);
@@ -233,41 +258,89 @@ export function DownloadLocalModelModal({
   const beginPull = useCallback(
     (model: AvailableLocalModel) => {
       closeStream();
+      const seq = pullSeqRef.current;
       setSelected(model);
       setProgress(initialProgress());
       setStep("progress");
-      handleRef.current = startPull(
-        { repo: model.repo, quant: model.quant },
-        {
-          onEvent: (event: LocalModelPullEvent) => {
-            setProgress((prev) => ({
-              status: event.status,
-              bytesTotal: event.bytes_total ?? prev.bytesTotal,
-              bytesCompleted: event.bytes_completed ?? prev.bytesCompleted,
-              speedBps: event.speed_bps ?? prev.speedBps,
-              etaSeconds: event.eta_seconds ?? prev.etaSeconds,
-              error: event.error ?? prev.error,
-              done: event.done || Boolean(event.error),
-            }));
-            if (event.error) {
+
+      const openStream = (resolved: AvailableLocalModel): void => {
+        if (pullSeqRef.current !== seq) return; // abandoned mid-probe
+        setSelected(resolved);
+        handleRef.current = startPull(
+          { repo: resolved.repo, quant: resolved.quant },
+          {
+            onEvent: (event: LocalModelPullEvent) => {
+              setProgress((prev) => ({
+                status: event.status,
+                bytesTotal: event.bytes_total ?? prev.bytesTotal,
+                bytesCompleted: event.bytes_completed ?? prev.bytesCompleted,
+                speedBps: event.speed_bps ?? prev.speedBps,
+                etaSeconds: event.eta_seconds ?? prev.etaSeconds,
+                error: event.error ?? prev.error,
+                done: event.done || Boolean(event.error),
+              }));
+              if (event.error) {
+                closeStream();
+              } else if (event.done) {
+                closeStream();
+                setStep("ready");
+              }
+            },
+            onError: () => {
               closeStream();
-            } else if (event.done) {
-              closeStream();
-              setStep("ready");
-            }
+              setProgress((prev) => ({
+                ...prev,
+                done: true,
+                error: "Download interrupted.",
+              }));
+            },
           },
-          onError: () => {
-            closeStream();
+        );
+      };
+
+      // Custom-repo picks arrive with no `sizeBytes`: when the host wired a
+      // size probe, resolve it first so we (a) show a heads-up size and (b) fail
+      // fast on a missing repo/quant BEFORE streaming (legacy web parity).
+      // Catalog picks already carry `sizeBytes`, so they skip the probe.
+      if (resolveSize && model.sizeBytes == null) {
+        setProgress((prev) => ({ ...prev, status: "resolving" }));
+        void resolveSize({ repo: model.repo, quant: model.quant })
+          .then((sizeBytes) => openStream({ ...model, sizeBytes }))
+          .catch((err: unknown) => {
+            if (pullSeqRef.current !== seq) return;
             setProgress((prev) => ({
               ...prev,
               done: true,
-              error: "Download interrupted.",
+              error:
+                err instanceof Error && err.message
+                  ? err.message
+                  : "Couldn’t find that model — check the repo and quant.",
             }));
-          },
-        },
-      );
+          });
+      } else {
+        openStream(model);
+      }
     },
-    [startPull, closeStream],
+    [startPull, closeStream, resolveSize],
+  );
+
+  // Advanced free-text path: pull any HF GGUF by repo + quant (DESIGN-SPEC §5,
+  // legacy web parity). Reuses `beginPull` so custom + catalog share one flow.
+  const beginCustomPull = useCallback(
+    (repo: string, quant: string) => {
+      const cleanRepo = repo.trim();
+      if (cleanRepo === "") return;
+      const cleanQuant = quant.trim() || DEFAULT_QUANT;
+      beginPull({
+        repo: cleanRepo,
+        quant: cleanQuant,
+        name: cleanRepo,
+        parameterSize: null,
+        sizeBytes: null,
+        note: `Custom · ${cleanQuant}`,
+      });
+    },
+    [beginPull],
   );
 
   const handleFinish = useCallback(() => {
@@ -333,7 +406,12 @@ export function DownloadLocalModelModal({
       footer={footer}
     >
       {step === "pick" ? (
-        <PickStep models={availableModels} onPick={beginPull} />
+        <PickStep
+          models={availableModels}
+          onPick={beginPull}
+          allowCustom={allowCustomModel}
+          onPickCustom={beginCustomPull}
+        />
       ) : null}
       {step === "progress" ? (
         <ProgressStep model={selected} progress={progress} />
@@ -356,52 +434,125 @@ export function DownloadLocalModelModal({
 function PickStep({
   models,
   onPick,
+  allowCustom,
+  onPickCustom,
 }: {
   readonly models: readonly AvailableLocalModel[];
   readonly onPick: (model: AvailableLocalModel) => void;
+  readonly allowCustom: boolean;
+  readonly onPickCustom: (repo: string, quant: string) => void;
 }): ReactElement {
-  if (models.length === 0) {
-    return (
-      <SetNote>
-        No models available to download right now. Check your local runtime is
-        reachable and try again.
-      </SetNote>
-    );
-  }
   return (
-    <ul style={listStyle} data-testid="download-pick-list">
-      {models.map((model) => {
-        const sub = [
-          model.parameterSize ?? null,
-          model.sizeBytes != null ? formatBytes(model.sizeBytes) : null,
-          model.note ?? null,
-        ]
-          .filter((part): part is string => Boolean(part))
-          .join(" · ");
-        return (
-          <li key={`${model.repo}:${model.quant}`}>
-            <button
-              type="button"
-              style={pickRowStyle(false)}
-              onClick={() => onPick(model)}
-              data-testid="download-pick-option"
-              data-repo={model.repo}
-            >
-              <span style={{ flex: 1, minWidth: 0 }}>
-                <span style={pickNameStyle}>{model.name}</span>
-                {sub ? <span style={pickSubStyle}>{sub}</span> : null}
-              </span>
-              <span
-                aria-hidden="true"
-                style={{ flex: "0 0 auto", color: "var(--color-text-muted)" }}
-              >
-                ↓
-              </span>
-            </button>
-          </li>
-        );
-      })}
-    </ul>
+    <div
+      style={{
+        display: "flex",
+        flexDirection: "column",
+        gap: "var(--space-lg)",
+      }}
+    >
+      {models.length === 0 ? (
+        <SetNote>
+          No curated models to suggest right now
+          {allowCustom ? " — enter a Hugging Face GGUF repo below." : "."}
+        </SetNote>
+      ) : (
+        <ul style={listStyle} data-testid="download-pick-list">
+          {models.map((model) => {
+            const sub = [
+              model.parameterSize ?? null,
+              model.sizeBytes != null ? formatBytes(model.sizeBytes) : null,
+              model.note ?? null,
+            ]
+              .filter((part): part is string => Boolean(part))
+              .join(" · ");
+            return (
+              <li key={`${model.repo}:${model.quant}`}>
+                <button
+                  type="button"
+                  style={pickRowStyle(false)}
+                  onClick={() => onPick(model)}
+                  data-testid="download-pick-option"
+                  data-repo={model.repo}
+                >
+                  <span style={{ flex: 1, minWidth: 0 }}>
+                    <span style={pickNameStyle}>{model.name}</span>
+                    {sub ? <span style={pickSubStyle}>{sub}</span> : null}
+                  </span>
+                  <span
+                    aria-hidden="true"
+                    style={{
+                      flex: "0 0 auto",
+                      color: "var(--color-text-muted)",
+                    }}
+                  >
+                    ↓
+                  </span>
+                </button>
+              </li>
+            );
+          })}
+        </ul>
+      )}
+      {allowCustom ? <CustomModelForm onSubmit={onPickCustom} /> : null}
+    </div>
+  );
+}
+
+// Advanced free-text path (DESIGN-SPEC §5): pull ANY Hugging Face GGUF by repo +
+// quant, preserving the legacy web power-user flow. Drives the same `startPull`
+// seam as a catalog pick (the parent's `onSubmit` → `beginCustomPull`).
+function CustomModelForm({
+  onSubmit,
+}: {
+  readonly onSubmit: (repo: string, quant: string) => void;
+}): ReactElement {
+  const [repo, setRepo] = useState("");
+  const [quant, setQuant] = useState(DEFAULT_QUANT);
+  const canSubmit = repo.trim() !== "";
+  return (
+    <div
+      data-testid="download-custom"
+      style={{
+        display: "flex",
+        flexDirection: "column",
+        gap: "var(--space-sm)",
+        paddingTop: "var(--space-sm)",
+        borderTop: "1px solid var(--color-border)",
+      }}
+    >
+      <SecHead>Custom model</SecHead>
+      <Field
+        label="Hugging Face GGUF repo"
+        hint="e.g. bartowski/Llama-3.2-1B-Instruct-GGUF"
+      >
+        <TextInput
+          value={repo}
+          placeholder="vendor/repo-GGUF"
+          spellCheck={false}
+          onChange={(event) => setRepo(event.target.value)}
+          data-testid="download-custom-repo"
+        />
+      </Field>
+      <Field label="Quantization" hint="Smaller = less memory, lower quality.">
+        <TextInput
+          value={quant}
+          placeholder={DEFAULT_QUANT}
+          spellCheck={false}
+          onChange={(event) => setQuant(event.target.value)}
+          data-testid="download-custom-quant"
+        />
+      </Field>
+      <div>
+        <Button
+          variant="secondary"
+          disabled={!canSubmit}
+          onClick={() => onSubmit(repo, quant)}
+          data-testid="download-custom-submit"
+        >
+          Download
+        </Button>
+      </div>
+    </div>
   );
 }
 
