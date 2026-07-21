@@ -387,6 +387,10 @@ class PostgresMergeData:
         ("wallet_identities", "retenant", "org_id", "user_id", ()),
         ("oidc_identities", "retenant", "org_id", "user_id", ()),
         ("saml_identities", "retenant", "org_id", "user_id", ()),
+        # The "Use locally" device edge (baseline schema): rides with the
+        # user like every other identity edge. The deployment-wide singleton
+        # index is unaffected by a retenant (row count unchanged).
+        ("local_accounts", "retenant", "org_id", "user_id", ()),
         ("scim_external_ids", "retenant", "org_id", "user_id", ()),
         ("mcp_servers", "retenant", "org_id", "user_id", ()),
         ("mcp_auth_sessions", "retenant", "org_id", "user_id", ()),

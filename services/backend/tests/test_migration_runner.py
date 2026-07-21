@@ -123,7 +123,7 @@ class TestProductionManifestMatchesDirectory:
 
     def test_manifest_has_at_least_initial_migration(self) -> None:
         actual = MigrationRunner.actual_manifest()
-        assert "0001_initial_mcp_skills" in actual
+        assert "0001_backend_baseline" in actual
 
     def test_missing_manifest_raises_typed_error(
         self, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
