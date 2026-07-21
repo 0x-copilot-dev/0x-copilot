@@ -94,6 +94,25 @@ class MigrationVerificationError(MigrationError):
 
 
 @runtime_checkable
+class ScopeDiscoverySource(Protocol):
+    """A source that can enumerate its own ``(org_id, user_id)`` tenant scopes.
+
+    The Postgres adapter satisfies this via ``list_conversation_scopes`` (a
+    ``SELECT DISTINCT org_id, user_id FROM agent_conversations``), which is how a
+    Postgres source migrates *every* tenant without hand-passed
+    ``--org-id``/``--user-id`` scopes. In-memory / file stores instead expose
+    their conversations as a ``.conversations`` mapping, so they auto-discover
+    without this method (see :meth:`StoreMigrator._resolve_scopes`).
+
+    An empty result is legitimate — a brand-new install with no history — and
+    yields a clean no-op migration, never an error. This makes the desktop
+    first-file-boot import safe to run unconditionally.
+    """
+
+    async def list_conversation_scopes(self) -> Sequence[tuple[str, str]]: ...
+
+
+@runtime_checkable
 class MigrationSourcePort(Protocol):
     """The exact slice of the runtime store port the migration reads from.
 
@@ -263,7 +282,7 @@ class StoreMigrator:
         ``dry_run`` — nothing was written to verify).
         """
 
-        resolved = self._resolve_scopes(scopes)
+        resolved = await self._resolve_scopes(scopes)
         outcomes: list[ConversationOutcome] = []
         written_any = False
 
@@ -309,7 +328,7 @@ class StoreMigrator:
     ) -> MigrationReport:
         """Run only the equality pass against an already-migrated destination."""
 
-        resolved = self._resolve_scopes(scopes)
+        resolved = await self._resolve_scopes(scopes)
         mismatches = tuple(await self._verify_scopes(resolved))
         report = self._build_report(
             resolved, [], dry_run=False, verified=not mismatches, mismatches=mismatches
@@ -323,7 +342,7 @@ class StoreMigrator:
     # Scope resolution
     # ==================================================================
 
-    def _resolve_scopes(
+    async def _resolve_scopes(
         self, scopes: Iterable[MigrationScope] | None
     ) -> tuple[MigrationScope, ...]:
         if scopes is not None:
@@ -331,21 +350,37 @@ class StoreMigrator:
             if not resolved:
                 raise MigrationError("no migration scopes were provided")
             return resolved
-        # Convenience auto-discovery: both in-memory and file stores expose a
-        # ``conversations`` mapping keyed by id. Postgres does not, so a Postgres
-        # source must be given explicit --org-id/--user-id scopes (the desktop
-        # supervisor always knows its single identity).
+        # Auto-discovery. A source that can enumerate its own tenant scopes (the
+        # Postgres adapter, via ``SELECT DISTINCT org_id, user_id FROM
+        # agent_conversations``) is queried directly — this is how a Postgres
+        # source migrates *every* tenant without hand-passed --org-id/--user-id.
+        # An empty result is legitimate (a brand-new install with no history) and
+        # yields a clean no-op migration, not an error.
+        if isinstance(self._source, ScopeDiscoverySource):
+            pairs = await self._source.list_conversation_scopes()
+            return self._dedupe_scopes(
+                MigrationScope(org_id=org, user_id=user) for org, user in pairs
+            )
+        # Fallback: in-memory and file stores expose a ``conversations`` mapping
+        # keyed by id, so their scopes are discoverable without a query.
         conversations = getattr(self._source, "conversations", None)
         if isinstance(conversations, Mapping):
-            discovered = {
+            return self._dedupe_scopes(
                 MigrationScope(org_id=c.org_id, user_id=c.user_id)
                 for c in conversations.values()
-            }
-            return tuple(sorted(discovered, key=lambda s: (s.org_id, s.user_id)))
+            )
         raise MigrationError(
             "source does not support scope auto-discovery; pass explicit "
             "(org_id, user_id) scopes (e.g. --org-id/--user-id on the CLI)"
         )
+
+    @staticmethod
+    def _dedupe_scopes(
+        scopes: Iterable[MigrationScope],
+    ) -> tuple[MigrationScope, ...]:
+        """Deterministically ordered, de-duplicated scope tuple."""
+
+        return tuple(sorted(set(scopes), key=lambda s: (s.org_id, s.user_id)))
 
     # ==================================================================
     # Per-conversation processing
@@ -784,5 +819,6 @@ __all__ = (
     "MigrationScope",
     "MigrationSourcePort",
     "MigrationVerificationError",
+    "ScopeDiscoverySource",
     "StoreMigrator",
 )
