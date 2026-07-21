@@ -214,8 +214,12 @@ class FileRuntimeApiStore:
         *,
         max_bytes: int = 0,
         retention_days: int = 0,
+        compaction_enabled: bool = True,
     ) -> None:
         self._layout = FileStoreLayout(Path(root))
+        # Boot-time bounded-growth compaction of the append-with-fold state
+        # ledgers (default ON; a kill switch for the persistence path).
+        self._compaction_enabled = compaction_enabled
         self._index = CatalogIndex(self._layout.index_db_path)
         # Structured logs + metrics for the store's key operations, and a live
         # record of "this chat needs repair" signals. Both are best-effort and
@@ -299,6 +303,11 @@ class FileRuntimeApiStore:
         self._queue_attempts: dict[str, int] = {}
         self._queue_available_at: dict[str, datetime] = {}
         self._queue_claims: dict[str, RuntimeWorkerClaim] = {}
+        # On-disk line count of the raw queue op-log, for boot compaction: the
+        # queue is append-only (enqueue + a status/attempts op per claim +
+        # terminal status) and never prunes completed/dead commands, so both its
+        # replay and every claim_next scan are O(history) without compaction.
+        self._queue_line_count = 0
 
         # ---- locks (in-process, single-writer) --------------------------
         self._conversation_locks: dict[str, asyncio.Lock] = {}
@@ -334,6 +343,13 @@ class FileRuntimeApiStore:
             raise
         self._load_state_from_disk()
         self._load_queue_from_disk()
+        # Boot is single-writer (nothing is serving yet): fold each bloated
+        # state ledger back to its live set so replay cost tracks live state,
+        # not total history. Crash-safe (atomic rewrite) and ratio-gated, so
+        # small/new stores are untouched. Never folds session streams (their
+        # monotonic sequence_no underpins stream resume) or the audit log.
+        self._compact_state_ledgers()
+        self._compact_queue_ledger()
         catalog_discarded = self._index.connect()
         if catalog_discarded:
             # The disposable catalog was torn and discarded — a rebuild from the
@@ -708,7 +724,9 @@ class FileRuntimeApiStore:
                 self._audit_chain_heads_by_org[org_id] = bytes.fromhex(signature_hex)
 
     def _load_queue_from_disk(self) -> None:
+        self._queue_line_count = 0
         for line in JsonlIo.iter_lines(self._layout.state_path(_Tables.QUEUE)):
+            self._queue_line_count += 1
             op = line.get("op")
             command_id = line.get("command_id")
             if not isinstance(command_id, str):
@@ -734,6 +752,174 @@ class FileRuntimeApiStore:
                 self._queue_attempts[command_id] = int(line.get("attempts") or 0)
         # Claims (lock ownership) are ephemeral — a restarted worker re-claims.
         self._queue_claims = {}
+
+    # ==================================================================
+    # Boot-time bounded-growth compaction (append-with-fold state ledgers)
+    # ==================================================================
+
+    # Compact a fold table only when its on-disk log has grown to at least
+    # COMPACT_MIN_LINES *and* at least COMPACT_RATIO× its live set. The floor
+    # stops churning small files every boot; the ratio targets genuinely
+    # bloated logs (superseded re-puts / tombstoned history). Conservative.
+    _COMPACT_MIN_LINES = 256
+    _COMPACT_RATIO = 2
+
+    def _compactable_tables(self) -> list[tuple[str, list]]:
+        """``(table, live records in canonical order)`` for every append-with-fold
+        ledger whose live set the store holds in memory after load.
+
+        Deliberately EXCLUDES: the whole-collection *rewrite* tables
+        (``budget_states``/``budget_reservations``/``retention_policies`` —
+        already self-compacting); the AUDIT_LOG (append-only immutable evidence
+        — folding would break the per-org ``seq``/signature chain); and the
+        QUEUE (a raw, non-``StateLedger`` op log — its own compactor is a
+        follow-up). Session streams (events/messages/runs) are never a state
+        ledger and are never touched.
+
+        Order matters for the ``load_puts`` list tables (``model_call_usage``,
+        ``pricing``): their live list is already in first-seen order, so
+        re-emitting it preserves the ordinal semantics reload rebuilds.
+        """
+
+        return [
+            (_Tables.APPROVALS, list(self.approval_requests.values())),
+            (_Tables.APPROVAL_DECISIONS, list(self.approval_decisions.values())),
+            (_Tables.APPROVAL_BATCHES, list(self.approval_batches.values())),
+            (_Tables.APPROVAL_BATCH_ITEMS, list(self.approval_batch_items.values())),
+            (_Tables.RUN_USAGE, list(self.run_usage.values())),
+            (_Tables.MODEL_CALL_USAGE, list(self.model_call_usage)),
+            (_Tables.PRICING, list(self.pricing_rows)),
+            (_Tables.USER_DAILY, list(self.user_daily_usage.values())),
+            (_Tables.ORG_DAILY, list(self.org_daily_usage.values())),
+            (_Tables.CONNECTOR_DAILY, list(self.connector_daily_usage.values())),
+            (_Tables.SUBAGENT_DAILY, list(self.subagent_daily_usage.values())),
+            (_Tables.PURPOSE_DAILY, list(self.purpose_daily_usage.values())),
+            (_Tables.BUDGETS, list(self.budgets.values())),
+            (_Tables.WORKSPACE_DEFAULTS, list(self.workspace_defaults.values())),
+        ]
+
+    @classmethod
+    def _should_compact(cls, line_count: int, live_count: int) -> bool:
+        return line_count >= cls._COMPACT_MIN_LINES and line_count >= (
+            cls._COMPACT_RATIO * max(live_count, 1)
+        )
+
+    def _compact_state_ledgers(self) -> None:
+        """Fold each bloated fold-table ledger back to its live set (boot only).
+
+        Reuses :meth:`StateLedger.rewrite` (atomic temp→fsync→``os.replace``):
+        a crash mid-compaction leaves the prior committed log fully intact, and
+        reload re-folds to the identical live state — compaction only discards
+        superseded/tombstoned history, never live data. Correct precisely
+        because the folded records come from already-durable state.
+        """
+
+        if not self._compaction_enabled:
+            return
+        for table, live in self._compactable_tables():
+            ledger = self._ledger(table)
+            before = ledger.line_count
+            if not self._should_compact(before, len(live)):
+                continue
+            # Best-effort maintenance: a failed rewrite (disk full, transient IO)
+            # must never brick open(). The rewrite is atomic, so a failure leaves
+            # the prior committed log fully intact — the store simply opens with
+            # the un-compacted (larger) ledger, and the next boot retries.
+            try:
+                ledger.rewrite(record.model_dump(mode="json") for record in live)
+            except Exception as exc:  # maintenance is best-effort — never break open()
+                self._telemetry.state_ledger_compaction_failed(
+                    table=table, reason=type(exc).__name__
+                )
+                continue
+            self._telemetry.state_ledger_compacted(
+                table=table, lines_before=before, lines_after=ledger.line_count
+            )
+
+    _QUEUE_TERMINAL = frozenset({OutboxStatus.COMPLETED, OutboxStatus.DEAD_LETTER})
+
+    def _compact_queue_ledger(self) -> None:
+        """Fold the raw queue op-log down to its LIVE commands at boot.
+
+        The queue is not a ``StateLedger`` — it is a raw op-log (an ``enqueue``
+        plus a ``status``/``attempts`` op per claim, then a terminal status) and
+        completed / dead-lettered commands are NEVER pruned, so both replay and
+        every ``claim_next`` scan grow O(history). At boot — single-writer,
+        before serving and before any claim, so no ephemeral ``CLAIMED`` state is
+        in flight — rewrite the log to only the non-terminal commands and drop
+        the terminal ones from the in-memory queue too, so this session's scans
+        are bounded immediately. Crash-safe (atomic rewrite) and best-effort — a
+        failure never breaks ``open()``.
+        """
+
+        if not self._compaction_enabled:
+            return
+        live = [
+            command_id
+            for command_id in self._queue_order
+            if self._queue_statuses.get(command_id) not in self._QUEUE_TERMINAL
+        ]
+        before = self._queue_line_count
+        if not self._should_compact(before, len(live)):
+            return
+        try:
+            self._rewrite_queue_ledger(live)
+        except Exception as exc:  # maintenance is best-effort — never break open()
+            self._telemetry.state_ledger_compaction_failed(
+                table=_Tables.QUEUE, reason=type(exc).__name__
+            )
+            return
+        # Drop terminal commands from the in-memory queue too (claim_next already
+        # skipped them); the live subset is preserved intact.
+        live_set = set(live)
+        self._queue_order = list(live)
+        for mapping in (
+            self._queue_payloads,
+            self._queue_statuses,
+            self._queue_attempts,
+            self._queue_available_at,
+        ):
+            for command_id in [k for k in mapping if k not in live_set]:
+                del mapping[command_id]
+        self._telemetry.state_ledger_compacted(
+            table=_Tables.QUEUE,
+            lines_before=before,
+            lines_after=self._queue_line_count,
+        )
+
+    def _rewrite_queue_ledger(self, live_command_ids: list[str]) -> None:
+        """Atomically replace ``queue.jsonl`` with the minimal op sequence that
+        reconstructs each live command's state (order, payload, status, attempts,
+        available_at) — mirroring ``_load_queue_from_disk``'s fold exactly."""
+
+        lines: list[dict[str, object]] = []
+        for command_id in live_command_ids:
+            available_at = self._queue_available_at[command_id].isoformat()
+            lines.append(
+                {
+                    "op": "enqueue",
+                    "command_id": command_id,
+                    "payload": self._queue_payloads[command_id],
+                    "available_at": available_at,
+                }
+            )
+            status = self._queue_statuses[command_id]
+            if status is not OutboxStatus.PENDING:
+                lines.append(
+                    {
+                        "op": "status",
+                        "command_id": command_id,
+                        "status": status.value,
+                        "available_at": available_at,
+                    }
+                )
+            attempts = self._queue_attempts[command_id]
+            if attempts:
+                lines.append(
+                    {"op": "attempts", "command_id": command_id, "attempts": attempts}
+                )
+        JsonlIo.rewrite_lines(self._layout.state_path(_Tables.QUEUE), lines)
+        self._queue_line_count = len(lines)
 
     @staticmethod
     def _parse_dt(value: object) -> datetime:
@@ -1044,6 +1230,71 @@ class FileRuntimeApiStore:
             self.conversations[conversation_id] = updated
             self._persist_conversation(updated)
         return updated
+
+    async def set_conversation_pinned(
+        self,
+        *,
+        org_id: str,
+        user_id: str,
+        conversation_id: str,
+        pinned: bool,
+        now: datetime,
+    ) -> ConversationRecord | None:
+        """Set the first-class ``pinned`` flag and persist it (PRD-H.4).
+
+        Idempotent: setting the flag to its current value is a no-op that
+        skips both the ``updated_at`` bump and the disk write, so a
+        redundant pin never reshuffles the newest-first sidebar order.
+        """
+
+        conversation = await self.get_conversation(
+            org_id=org_id, user_id=user_id, conversation_id=conversation_id
+        )
+        if conversation is None:
+            return None
+        if conversation.pinned == pinned:
+            return conversation
+        updated = conversation.model_copy(update={"pinned": pinned, "updated_at": now})
+        async with self._conversation_lock(conversation_id):
+            self.conversations[conversation_id] = updated
+            self._persist_conversation(updated)
+        return updated
+
+    async def get_latest_message_for_conversation(
+        self,
+        *,
+        org_id: str,
+        conversation_id: str,
+    ) -> MessageRecord | None:
+        """Return the newest non-deleted message for the Chats-list preview (PRD-H.4)."""
+
+        candidates = [
+            message
+            for message in self.messages.values()
+            if message.org_id == org_id
+            and message.conversation_id == conversation_id
+            and message.deleted_at is None
+        ]
+        if not candidates:
+            return None
+        return max(candidates, key=lambda message: message.created_at)
+
+    async def get_latest_run_for_conversation(
+        self,
+        *,
+        org_id: str,
+        conversation_id: str,
+    ) -> RunRecord | None:
+        """Return the newest run for a conversation regardless of status (PRD-H.4)."""
+
+        candidates = [
+            run
+            for run in self.runs.values()
+            if run.org_id == org_id and run.conversation_id == conversation_id
+        ]
+        if not candidates:
+            return None
+        return max(candidates, key=lambda run: run.created_at)
 
     # ==================================================================
     # PersistencePort — runs
@@ -2919,6 +3170,7 @@ class FileRuntimeApiStore:
 
     def _append_queue_op(self, op: dict[str, object]) -> None:
         JsonlIo.append_line(self._layout.state_path(_Tables.QUEUE), op)
+        self._queue_line_count += 1
 
 
 __all__ = ("FileRuntimeApiStore",)

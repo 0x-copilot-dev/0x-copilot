@@ -46,6 +46,8 @@ class FileStoreEvent:
     DELETION_COMPLETED = "file_store.deletion_completed"
     OBJECTS_COLLECTED = "file_store.session_payloads_removed"
     RETENTION_SWEEP_COMPLETED = "file_store.retention_compaction_completed"
+    STATE_COMPACTED = "file_store.state_ledger_compacted"
+    STATE_COMPACTION_FAILED = "file_store.state_ledger_compaction_failed"
 
 
 class FileStoreTelemetry:
@@ -103,6 +105,37 @@ class FileStoreTelemetry:
             catalog_rebuilt=catalog_rebuilt,
         )
         self._metrics.record_op(op=FileStoreOp.OPEN, outcome=FileStoreOutcome.OK)
+
+    def state_ledger_compacted(
+        self, *, table: str, lines_before: int, lines_after: int
+    ) -> None:
+        """A back-office state ledger was folded to its live set at boot.
+
+        ``table`` is a static table identifier (never an id/payload), so it is
+        safe to log; the counts quantify the reclaimed history.
+        """
+
+        self._emit(
+            FileStoreEvent.STATE_COMPACTED,
+            table=table,
+            lines_before=lines_before,
+            lines_after=lines_after,
+        )
+
+    def state_ledger_compaction_failed(self, *, table: str, reason: str) -> None:
+        """A best-effort boot compaction of one state ledger failed.
+
+        The store still opens and the un-compacted log stays valid and readable —
+        compaction is maintenance, never on the correctness path. ``reason`` is a
+        bounded error-class name (never a payload/path), safe to log.
+        """
+
+        self._emit(
+            FileStoreEvent.STATE_COMPACTION_FAILED,
+            table=table,
+            reason=reason,
+            level=logging.WARNING,
+        )
 
     def catalog_discarded(self) -> None:
         """The disposable SQLite catalog was torn and discarded on connect()."""

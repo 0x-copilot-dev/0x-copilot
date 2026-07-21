@@ -85,6 +85,8 @@ import { RunMultiSelect } from "./RunMultiSelect";
 import { RunWorkspaceRail } from "./RunWorkspaceRail";
 import { useRailWidth } from "./useRailWidth";
 import { useRunMode } from "./useRunMode";
+import { useRunSources } from "./useRunSources";
+import { useRunTranscript } from "./useRunTranscript";
 import { useRunSession } from "./useRunSession";
 
 const EMPTY_DECISIONS: ReadonlyMap<string, RunApprovalDecision> = new Map();
@@ -419,6 +421,34 @@ export function RunDestination(props: RunDestinationProps): ReactElement {
     [session.events],
   );
 
+  // The chat transcript: persisted history ⊕ the live streamed reply, projected
+  // off the SAME single event stream (FR-3.3). This binder closes the streaming
+  // gap — previously `projection.chat` was computed and dropped and TcChat
+  // rendered a stale one-time GET. TcChat now renders exactly `messages`, so the
+  // streamed reply appears live in BOTH Studio and Focus, no second fetch.
+  const { messages: transcriptMessages } = useRunTranscript({
+    conversationId: conversationId as unknown as string,
+    runId: session.runId,
+    runStatus: session.runStatus,
+    events: session.events,
+  });
+
+  // The Sources tab: persisted citations (GET /sources) ⊕ the live
+  // `source_ingested`/`sources_ingested` events off the SAME stream (FR-3.3) —
+  // mirrors the transcript binder. Without this the rail fell back to
+  // EMPTY_SOURCES, so the Sources tab was always empty despite a working
+  // backend citation pipeline.
+  const {
+    sources,
+    loading: sourcesLoading,
+    error: sourcesError,
+  } = useRunSources({
+    conversationId: conversationId as unknown as string,
+    runId: session.runId,
+    runStatus: session.runStatus,
+    events: session.events,
+  });
+
   // PR-3.10: the approval queue is projected off the SAME `session.events`
   // (FR-3.3 — no second subscription/projector). `localDecisions` overlays the
   // user's optimistic Approve/Reject so the in-chat card flips to its receipt
@@ -486,6 +516,7 @@ export function RunDestination(props: RunDestinationProps): ReactElement {
     <TcChat
       conversationId={conversationId as unknown as string}
       mode={mode}
+      messages={transcriptMessages}
       fleets={subagentProjection.fleets}
       // PR-3.10: in-chat ApprovalCard (Studio) / conf-card (Focus) + receipts.
       approvals={chatApprovals}
@@ -505,6 +536,9 @@ export function RunDestination(props: RunDestinationProps): ReactElement {
       mode={mode}
       chatSlot={chatSlot}
       subagents={subagentProjection.subagents}
+      sources={sources}
+      sourcesLoading={sourcesLoading}
+      sourcesError={sourcesError}
       approvalsQueue={approvalsQueue}
       onApprove={handleApprove}
       onReject={handleReject}

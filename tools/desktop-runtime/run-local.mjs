@@ -16,6 +16,13 @@
  *   5. health-gate all three, then smoke:
  *        GET /v1/health on backend, ai-backend, facade   (expect 200)
  *        GET {facade}/v1/auth/providers                  (expect 200 + providers list)
+ *        run smoke — sign in through the REAL SIWE ramp (no dev mint),
+ *          POST a conversation + run, and consume the run's SSE stream to a
+ *          terminal event. Hermetic: ai-backend runs RUNTIME_FAKE_MODEL=1
+ *          (deterministic fake streaming model, keyless, no network), so the
+ *          run genuinely executes through the worker + graph + streamer and
+ *          emits model_delta + run_completed with no key. Asserts >=1
+ *          model_delta, a terminal run_completed, and NO run_failed.
  *      No dev IdP anywhere: all three run *_ENVIRONMENT=production, where
  *      /v1/dev/* is never registered.
  *   6. clean shutdown: SIGTERM facade -> ai-backend -> backend, pg_ctl stop.
@@ -216,6 +223,226 @@ async function waitHealthy(entry, timeoutMs = 90000) {
 }
 
 // ---------------------------------------------------------------------------
+// hermetic run smoke: real SIWE sign-in -> POST run -> consume SSE stream
+// ---------------------------------------------------------------------------
+
+/** RFC-3339 without millis — the byte shape the backend SIWE parser expects. */
+function fmtTs(d) {
+  return d.toISOString().replace(/\.\d{3}Z$/, "Z");
+}
+
+/**
+ * Sign in through the REAL SIWE ramp (nonce -> EIP-4361 sign -> verify) and
+ * return a user bearer for the no-dev-mint facade. Mirrors the minimal flow in
+ * tools/cli-testing/harness/siwe-session.mjs with an ephemeral wallet; the
+ * single_user_desktop profile allows self-signup, so the first sign-in
+ * provisions the user.
+ *
+ * Origin binding: the desktop backend leaves SIWE_ORIGIN unset, so the verifier
+ * falls back to magic_link_base_url ("http://localhost:5173"); chain 1 is in the
+ * default SIWE_ALLOWED_CHAIN_IDS; the statement is baked into the backend.
+ */
+async function acquireSiweBearer(facadeBase) {
+  // viem is a workspace dependency (resolved by walking up to the repo-root
+  // node_modules); imported lazily so a missing install never gates the
+  // boot / health / providers checks above.
+  const { privateKeyToAccount, generatePrivateKey } =
+    await import("viem/accounts");
+  const account = privateKeyToAccount(generatePrivateKey());
+  const address = account.address;
+
+  const CHAIN_ID = 1;
+  const DOMAIN = "localhost:5173";
+  const URI = "http://localhost:5173";
+  const STATEMENT = "Sign in to Copilot"; // must match backend SIWE_STATEMENT
+
+  const nonceRes = await fetch(`${facadeBase}/v1/auth/siwe/nonce`, {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({ address, chain_id: CHAIN_ID }),
+    signal: AbortSignal.timeout(10000),
+  });
+  if (!nonceRes.ok) {
+    throw new Error(
+      `siwe nonce HTTP ${nonceRes.status}: ${(await nonceRes.text()).slice(0, 200)}`,
+    );
+  }
+  const nonceBody = await nonceRes.json();
+  const nonce = nonceBody.nonce ?? nonceBody.value;
+  if (!nonce) {
+    throw new Error(
+      `siwe nonce missing in ${JSON.stringify(nonceBody).slice(0, 200)}`,
+    );
+  }
+
+  const issuedAt = new Date(Date.now() - 5000);
+  const expiration = new Date(Date.now() + 9 * 60 * 1000);
+  const message =
+    `${DOMAIN} wants you to sign in with your Ethereum account:\n` +
+    `${address}\n` +
+    `\n` +
+    `${STATEMENT}\n` +
+    `\n` +
+    `URI: ${URI}\n` +
+    `Version: 1\n` +
+    `Chain ID: ${CHAIN_ID}\n` +
+    `Nonce: ${nonce}\n` +
+    `Issued At: ${fmtTs(issuedAt)}\n` +
+    `Expiration Time: ${fmtTs(expiration)}`;
+  const signature = await account.signMessage({ message });
+
+  const verifyRes = await fetch(`${facadeBase}/v1/auth/siwe/verify`, {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({ message, signature }),
+    signal: AbortSignal.timeout(10000),
+  });
+  if (!verifyRes.ok) {
+    throw new Error(
+      `siwe verify HTTP ${verifyRes.status}: ${(await verifyRes.text()).slice(0, 200)}`,
+    );
+  }
+  const verifyBody = await verifyRes.json();
+  if (!verifyBody.bearer_token) {
+    throw new Error(
+      `siwe verify returned no bearer_token: ${JSON.stringify(verifyBody).slice(0, 200)}`,
+    );
+  }
+  return {
+    bearer: verifyBody.bearer_token,
+    address,
+    userId: verifyBody.user_id,
+  };
+}
+
+/**
+ * Create a conversation + run and consume its SSE stream to a terminal event.
+ * Returns the observed `event_type` sequence. Hermetic because ai-backend runs
+ * RUNTIME_FAKE_MODEL=1 (fake streaming model, credential gate bypassed), so the
+ * real worker + Deep Agents graph + streamer produce genuine events with no key.
+ *
+ * SSE framing (runtime_api/sse/adapter.py): each frame is
+ *   event: runtime_event\n id: <seq>\n data: <RuntimeEventEnvelope JSON>\n\n
+ * The event kind lives in `data.event_type`. Upstream defaults follow=true, so
+ * the stream stays open until the run reaches a terminal status.
+ */
+async function driveRunToStream(
+  facadeBase,
+  bearer,
+  { streamTimeoutMs = 60000 } = {},
+) {
+  const authHeaders = {
+    authorization: `Bearer ${bearer}`,
+    "content-type": "application/json",
+  };
+
+  const convRes = await fetch(`${facadeBase}/v1/agent/conversations`, {
+    method: "POST",
+    headers: authHeaders,
+    body: JSON.stringify({ title: "Tier B run smoke" }),
+    signal: AbortSignal.timeout(15000),
+  });
+  if (!convRes.ok) {
+    throw new Error(
+      `create conversation HTTP ${convRes.status}: ${(await convRes.text()).slice(0, 200)}`,
+    );
+  }
+  const conversation = await convRes.json();
+  const conversationId = conversation.conversation_id;
+  if (!conversationId) {
+    throw new Error(
+      `no conversation_id in ${JSON.stringify(conversation).slice(0, 200)}`,
+    );
+  }
+
+  const runRes = await fetch(`${facadeBase}/v1/agent/runs`, {
+    method: "POST",
+    headers: authHeaders,
+    body: JSON.stringify({
+      conversation_id: conversationId,
+      user_input: "Say hello.",
+    }),
+    signal: AbortSignal.timeout(15000),
+  });
+  if (!runRes.ok) {
+    throw new Error(
+      `create run HTTP ${runRes.status}: ${(await runRes.text()).slice(0, 200)}`,
+    );
+  }
+  const run = await runRes.json();
+  const runId = run.run_id;
+  if (!runId) {
+    throw new Error(`no run_id in ${JSON.stringify(run).slice(0, 200)}`);
+  }
+
+  const TERMINAL = new Set(["run_completed", "run_failed", "run_cancelled"]);
+  const events = [];
+  let terminal = null;
+
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), streamTimeoutMs);
+  try {
+    const streamRes = await fetch(
+      `${facadeBase}/v1/agent/runs/${runId}/stream?after_sequence=0`,
+      {
+        headers: {
+          authorization: `Bearer ${bearer}`,
+          accept: "text/event-stream",
+        },
+        signal: controller.signal,
+      },
+    );
+    if (!streamRes.ok) {
+      throw new Error(
+        `open stream HTTP ${streamRes.status}: ${(await streamRes.text()).slice(0, 200)}`,
+      );
+    }
+    const decoder = new TextDecoder();
+    let buf = "";
+    outer: for await (const chunk of streamRes.body) {
+      buf += decoder.decode(chunk, { stream: true });
+      let idx;
+      while ((idx = buf.indexOf("\n\n")) !== -1) {
+        const frame = buf.slice(0, idx);
+        buf = buf.slice(idx + 2);
+        const data = frame
+          .split("\n")
+          .filter((line) => line.startsWith("data:"))
+          .map((line) => line.slice(5).replace(/^ /, ""))
+          .join("\n");
+        if (!data) continue;
+        let payload;
+        try {
+          payload = JSON.parse(data);
+        } catch {
+          continue; // partial/non-JSON frame — keep reading
+        }
+        const type = payload.event_type;
+        if (!type || type === "heartbeat") continue;
+        events.push(type);
+        if (TERMINAL.has(type)) {
+          terminal = type;
+          break outer;
+        }
+      }
+    }
+  } catch (err) {
+    if (controller.signal.aborted) {
+      throw new Error(
+        `stream did not reach a terminal event within ${streamTimeoutMs / 1000}s; ` +
+          `saw [${events.join(", ")}]`,
+      );
+    }
+    throw err;
+  } finally {
+    clearTimeout(timer);
+    controller.abort(); // release the upstream socket
+  }
+
+  return { runId, events, terminal };
+}
+
+// ---------------------------------------------------------------------------
 // main
 // ---------------------------------------------------------------------------
 
@@ -411,6 +638,14 @@ conn.close()
       RUNTIME_ENVIRONMENT: "production",
       RUNTIME_STORE_BACKEND: "postgres",
       RUNTIME_START_IN_PROCESS_WORKER: "true",
+      // Hermetic run smoke (step 5 below): the deterministic fake model
+      // (#140) makes runs execute with NO API key and NO network — it
+      // streams model_delta + reasoning + final_response and completes,
+      // and ModelConfigResolver treats fake mode as keyless so the
+      // "Missing API key" credential gate never fires. Fail-closed: the
+      // real desktop never sets this flag. Without it the run smoke would
+      // need a live provider key, which this hermetic harness must not.
+      RUNTIME_FAKE_MODEL: "1",
       // Migrations are a separate boot step (step 3 above) — the desktop
       // supervisor owns them, mirroring backend_app.desktop_app's contract.
       // Without this the store's startup auto-apply would re-enter yoyo with
@@ -501,6 +736,61 @@ conn.close()
     devMintOk,
     devMint ? `HTTP ${devMint.status}` : "request failed",
   );
+
+  // --- hermetic run smoke: sign in (real SIWE) then drive a run to stream ---
+  // Self-contained try/catch (like the dev-mint probe): a failure is recorded
+  // with diagnostics and surfaces in the summary/exit code, but never aborts
+  // the clean teardown or the --keep handoff below.
+  const facadeBase = `http://127.0.0.1:${facadePort}`;
+  let bearer = null;
+  try {
+    const session = await acquireSiweBearer(facadeBase);
+    bearer = session.bearer;
+    record(
+      "siwe wallet sign-in (production posture)",
+      true,
+      `user ${session.userId} (${session.address})`,
+    );
+  } catch (err) {
+    record(
+      "siwe wallet sign-in (production posture)",
+      false,
+      String(err.message ?? err),
+    );
+  }
+
+  if (bearer) {
+    try {
+      const { runId, events, terminal } = await driveRunToStream(
+        facadeBase,
+        bearer,
+      );
+      const sawDelta = events.includes("model_delta");
+      const sawCompleted = events.includes("run_completed");
+      const sawFailed = events.includes("run_failed");
+      const ok = sawDelta && sawCompleted && !sawFailed;
+      record(
+        "run stream smoke (hermetic fake model)",
+        ok,
+        ok
+          ? `run ${runId} streamed ${events.length} events to ${terminal}`
+          : `events=[${events.join(", ")}] terminal=${terminal ?? "none"}; ` +
+              `want >=1 model_delta + run_completed and no run_failed`,
+      );
+    } catch (err) {
+      record(
+        "run stream smoke (hermetic fake model)",
+        false,
+        String(err.message ?? err),
+      );
+    }
+  } else {
+    record(
+      "run stream smoke (hermetic fake model)",
+      false,
+      "skipped: no bearer from SIWE sign-in",
+    );
+  }
 
   if (args.keep) {
     log("");

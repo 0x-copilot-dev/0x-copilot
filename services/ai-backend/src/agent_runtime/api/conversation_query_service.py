@@ -145,9 +145,9 @@ class ConversationQueryService:
         )
         responses: list[ConversationResponse] = []
         for record in records:
-            responses.append(
-                await self._with_latest_run(record.to_response(), org_id=org_id)
-            )
+            projected = await self._with_latest_run(record.to_response(), org_id=org_id)
+            projected = await self._with_list_fields(projected, org_id=org_id)
+            responses.append(projected)
         return ConversationListResponse(
             conversations=tuple(responses),
             has_more=len(records) == bounded_limit,
@@ -332,6 +332,53 @@ class ConversationQueryService:
             else str(active.status),
             run_id=active.run_id,
         )
+
+    async def _with_list_fields(
+        self,
+        response: ConversationResponse,
+        *,
+        org_id: str,
+    ) -> ConversationResponse:
+        """Attach the Chats-list ``preview`` + ``model`` projections (PRD-H.4).
+
+        ``preview`` is the last visible message's text, trimmed to a short
+        snippet; ``model`` is the latest run's model name (any status), so
+        even a fully-completed conversation shows the model it last used.
+        Both stay ``None`` when the conversation has no messages / runs.
+        ``pinned`` needs no overlay — it rides along on the record.
+        """
+
+        latest_message = await self._persistence.get_latest_message_for_conversation(
+            org_id=org_id,
+            conversation_id=response.conversation_id,
+        )
+        latest_run = await self._persistence.get_latest_run_for_conversation(
+            org_id=org_id,
+            conversation_id=response.conversation_id,
+        )
+        preview = (
+            self._snippet(latest_message.content_text)
+            if latest_message is not None
+            else None
+        )
+        model = latest_run.model_name if latest_run is not None else None
+        return response.with_list_fields(preview=preview, model=model)
+
+    @staticmethod
+    def _snippet(text: str) -> str | None:
+        """Collapse whitespace and trim a message body to a one-line preview.
+
+        Returns ``None`` for empty/whitespace-only content so the row
+        hides the preview rather than rendering a blank line.
+        """
+
+        collapsed = " ".join(text.split())
+        if not collapsed:
+            return None
+        limit = Values.CONVERSATION_PREVIEW_MAX_LENGTH
+        if len(collapsed) <= limit:
+            return collapsed
+        return collapsed[: limit - 1].rstrip() + "…"
 
     async def _run_for_scope(self, *, org_id: str, user_id: str, run_id: str):
         """Return the run or raise 404 when it is absent or belongs to another user."""

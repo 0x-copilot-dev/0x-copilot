@@ -243,6 +243,65 @@ class TestAsyncAdapterParity:
         )
         assert [r.sequence_no for r in rows] == [3, 4, 5]
 
+    async def test_append_with_notify_after_append_does_not_raise(self) -> None:
+        """Regression: ``notify_after_append=True`` must not raise on either
+        the single-append or the batch-append path.
+
+        The bare ``NOTIFY chan, %s`` form takes no bind parameters, so psycopg's
+        extended protocol sends ``NOTIFY chan, $1`` and Postgres rejects it with
+        ``syntax error at or near "$1"``. This path is only reached when the
+        store is constructed with ``notify_after_append=True`` (the
+        cross-process SSE config used by the supervised desktop / postgres
+        store), which the default ``store`` fixture leaves off — so it was
+        uncovered until the supervised run-local smoke hit it. Guards the
+        pg_notify() fix on both append sites.
+        """
+
+        s = PostgresRuntimeApiStore(
+            os.environ["TEST_DATABASE_URL"],
+            pool_min_size=1,
+            pool_max_size=4,
+            pool_acquire_timeout_seconds=10.0,
+            notify_after_append=True,
+        )
+        await s.open()
+        try:
+            await s.migrate()
+            org_id, _user_id, run_id, conv_id = await _seed_run(s)
+
+            # single-append site
+            single = await s.append_event(
+                RuntimeEventDraft(
+                    run_id=run_id,
+                    conversation_id=conv_id,
+                    org_id=org_id,
+                    trace_id="trace",
+                    source=StreamEventSource.RUNTIME,
+                    event_type=RuntimeApiEventType.RUN_STARTED,
+                    payload={"message": "started"},
+                )
+            )
+            assert single.sequence_no == 1
+
+            # batch-append site
+            batch = await s.append_events_batch(
+                [
+                    RuntimeEventDraft(
+                        run_id=run_id,
+                        conversation_id=conv_id,
+                        org_id=org_id,
+                        trace_id="trace",
+                        source=StreamEventSource.RUNTIME,
+                        event_type=RuntimeApiEventType.MODEL_DELTA,
+                        payload={"delta": f"chunk-{i}"},
+                    )
+                    for i in range(3)
+                ]
+            )
+            assert [e.sequence_no for e in batch] == [2, 3, 4]
+        finally:
+            await s.close()
+
     async def test_create_approval_request_idempotent(
         self, store: PostgresRuntimeApiStore
     ) -> None:

@@ -32,19 +32,15 @@ from backend_app.contracts import (
     RoleRecord,
     UserRecord,
 )
+from backend_app.identity.principals import default_principal_id
 
 
 _LOGGER = logging.getLogger(__name__)
 
 
-def _default_principal_id(user_id: str) -> str:
-    """The 1:1 expand-stage principal id for a user (ADR 0001, migration 0039).
-
-    Deterministic ``prn_<user_id>`` so an app-created user and the migration
-    backfill agree on the same principal id — the auto-mint below is therefore
-    idempotent across the migration boundary.
-    """
-    return f"prn_{user_id}"
+# The ``prn_<user_id>`` convention lives in one place (identity.principals);
+# re-exported under the historical private name used across this module + tests.
+_default_principal_id = default_principal_id
 
 
 def _now() -> datetime:

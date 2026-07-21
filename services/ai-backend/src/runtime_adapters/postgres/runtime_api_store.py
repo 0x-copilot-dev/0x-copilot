@@ -166,6 +166,8 @@ class _Columns:
     ENABLED_MODELS = "enabled_models"
     UPDATED_BY_USER_ID = "updated_by_user_id"
     FOLDER = "folder"
+    # PRD-H.4 — first-class conversation pin flag (migration 0034).
+    PINNED = "pinned"
     PARENT_CONVERSATION_ID = "parent_conversation_id"
     # Conversation fork lineage column.
     FORKED_FROM_SHARE_ID = "forked_from_share_id"
@@ -1003,6 +1005,42 @@ class PostgresRuntimeApiStore:
             row = await cur.fetchone()
         return self._conversation_record(row) if row is not None else None
 
+    async def set_conversation_pinned(
+        self,
+        *,
+        org_id: str,
+        user_id: str,
+        conversation_id: str,
+        pinned: bool,
+        now: datetime,
+    ) -> ConversationRecord | None:
+        """Set the first-class ``pinned`` flag (PRD-H.4), idempotent on re-call.
+
+        ``updated_at`` is bumped only when the flag actually changes (via
+        ``IS DISTINCT FROM``) so a redundant pin does not reshuffle the
+        newest-first sidebar order. Returns ``None`` when no row matches
+        the (org, user, conversation) scope.
+        """
+
+        async with self._tenant_connection(org_id=org_id) as conn:
+            cur = await conn.execute(
+                """
+                UPDATE agent_conversations
+                   SET updated_at = CASE
+                           WHEN pinned IS DISTINCT FROM %s THEN %s
+                           ELSE updated_at
+                       END,
+                       pinned = %s
+                 WHERE id      = %s
+                   AND org_id  = %s
+                   AND user_id = %s
+                 RETURNING *
+                """,
+                (pinned, now, pinned, conversation_id, org_id, user_id),
+            )
+            row = await cur.fetchone()
+        return self._conversation_record(row) if row is not None else None
+
     async def list_messages(
         self,
         *,
@@ -1277,6 +1315,56 @@ class PostgresRuntimeApiStore:
             )
             row = await cur.fetchone()
         return self._run_record(row) if row is not None else None
+
+    async def get_latest_run_for_conversation(
+        self,
+        *,
+        org_id: str,
+        conversation_id: str,
+    ) -> RunRecord | None:
+        """Return the newest run for a conversation regardless of status (PRD-H.4).
+
+        Unlike :meth:`get_active_run_for_conversation`, no status filter —
+        the Chats-list ``model`` projection wants the last model used even
+        after the run completed.
+        """
+
+        async with self._tenant_connection(org_id=org_id) as conn:
+            cur = await conn.execute(
+                """
+                SELECT * FROM agent_runs
+                 WHERE org_id          = %s
+                   AND conversation_id = %s
+                 ORDER BY created_at DESC
+                 LIMIT 1
+                """,
+                (org_id, conversation_id),
+            )
+            row = await cur.fetchone()
+        return self._run_record(row) if row is not None else None
+
+    async def get_latest_message_for_conversation(
+        self,
+        *,
+        org_id: str,
+        conversation_id: str,
+    ) -> MessageRecord | None:
+        """Return the newest non-deleted message for the Chats-list preview (PRD-H.4)."""
+
+        async with self._tenant_connection(org_id=org_id) as conn:
+            cur = await conn.execute(
+                """
+                SELECT * FROM agent_messages
+                 WHERE org_id          = %s
+                   AND conversation_id = %s
+                   AND deleted_at IS NULL
+                 ORDER BY created_at DESC
+                 LIMIT 1
+                """,
+                (org_id, conversation_id),
+            )
+            row = await cur.fetchone()
+        return self._message_record(row) if row is not None else None
 
     async def update_run_status(
         self, *, run_id: str, status: AgentRunStatus
@@ -4941,11 +5029,20 @@ class PostgresRuntimeApiStore:
                 if self._notify_after_append:
                     # Fire NOTIFY inside the same transaction; if the
                     # INSERT rolls back the NOTIFY is silently discarded
-                    # by Postgres. Channel name is parameterised at
-                    # construction; payload is ``<run_id>:<sequence_no>``.
+                    # by Postgres. Payload is ``<run_id>:<sequence_no>``.
+                    #
+                    # Must use pg_notify(): the bare ``NOTIFY chan, %s``
+                    # form takes no bind parameters, so psycopg's extended
+                    # protocol sends ``NOTIFY chan, $1`` and Postgres rejects
+                    # it ("syntax error at or near \"$1\""). pg_notify() is
+                    # the function form that accepts bound arguments and keeps
+                    # the channel parameterised too.
                     await conn.execute(
-                        f"NOTIFY {self._notify_channel}, %s",
-                        (f"{envelope.run_id}:{envelope.sequence_no}",),
+                        "SELECT pg_notify(%s, %s)",
+                        (
+                            self._notify_channel,
+                            f"{envelope.run_id}:{envelope.sequence_no}",
+                        ),
                     )
         return envelope
 
@@ -5038,16 +5135,25 @@ class PostgresRuntimeApiStore:
                 # the same (org, kind, conversation). We fetch ttl_seconds
                 # directly so each row can compute its own expiry from its
                 # own created_at without another policy query.
+                #
+                # Sample the policy against a single "now" timestamp: the
+                # draft carries no ``created_at`` (that field lives on the
+                # built envelope, matching the single-append path which
+                # resolves retention against ``envelope.created_at``). Each
+                # envelope's default_factory stamps ~now() microseconds apart,
+                # so one shared sample is the correct basis for the delta,
+                # which is then re-anchored to each row's own created_at below.
+                _sample_created_at = datetime.now(timezone.utc)
                 _retention_sample = await self._resolve_retention_until(
                     conn,
                     org_id=event_org_id,
                     kind=RetentionKind.EVENTS,
                     conversation_id=first.conversation_id,
-                    created_at=first.created_at,
+                    created_at=_sample_created_at,
                 )
                 _event_ttl_seconds: int | None = None
                 if _retention_sample is not None:
-                    _event_ttl_delta = _retention_sample - first.created_at
+                    _event_ttl_delta = _retention_sample - _sample_created_at
                     _event_ttl_seconds = int(_event_ttl_delta.total_seconds())
 
                 envelopes: list[RuntimeEventEnvelope] = []
@@ -5171,10 +5277,12 @@ class PostgresRuntimeApiStore:
                     # One NOTIFY per batch — the payload carries the
                     # *highest* sequence number; SSE adapters always
                     # ``replay_events(after_sequence=N)`` so they pick up
-                    # everything in the batch in one round-trip.
+                    # everything in the batch in one round-trip. pg_notify()
+                    # (not bare ``NOTIFY chan, %s``) so the payload can be a
+                    # bound parameter — see the single-append site above.
                     await conn.execute(
-                        f"NOTIFY {self._notify_channel}, %s",
-                        (f"{first.run_id}:{last_sequence}",),
+                        "SELECT pg_notify(%s, %s)",
+                        (self._notify_channel, f"{first.run_id}:{last_sequence}"),
                     )
         return tuple(envelopes)
 
@@ -5389,6 +5497,9 @@ class PostgresRuntimeApiStore:
             deleted_at=row.get(_Columns.DELETED_AT),
             folder=row.get(_Columns.FOLDER),
             parent_conversation_id=row.get(_Columns.PARENT_CONVERSATION_ID),
+            # ``row.get`` keeps the hydrator forward-compatible with rows
+            # from databases pre-migration 0034 (returns False when absent).
+            pinned=bool(row.get(_Columns.PINNED, False)),
             forked_from_share_id=row.get(_Columns.FORKED_FROM_SHARE_ID),
         )
 

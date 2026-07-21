@@ -192,6 +192,72 @@ class TestFastApiRuntimeApi(FastApiRuntimeApiTestMixin):
             item["metadata"]["token"] == self.Values.SECRET for item in conversations
         )
 
+    async def test_list_projects_pinned_preview_and_model(self) -> None:
+        """PRD-H.4 — the list contract carries pinned/preview/model."""
+        client, _store = self.create_client()
+        conversation = await self.create_conversation(client)
+        conversation_id = conversation["conversation_id"]
+
+        # A never-run conversation: pinned defaults False, preview/model null.
+        listed = client.get(
+            "/v1/agent/conversations",
+            params={"org_id": self.Values.ORG_ID, "user_id": self.Values.USER_ID},
+        ).json()["conversations"]
+        row = next(r for r in listed if r["conversation_id"] == conversation_id)
+        assert row["pinned"] is False
+        assert row["preview"] is None
+        assert row["model"] is None
+
+        # Give it a run so preview + model project.
+        await self.create_run(client, conversation_id)
+        listed = client.get(
+            "/v1/agent/conversations",
+            params={"org_id": self.Values.ORG_ID, "user_id": self.Values.USER_ID},
+        ).json()["conversations"]
+        row = next(r for r in listed if r["conversation_id"] == conversation_id)
+        assert row["preview"] == self.Values.USER_INPUT
+        assert row["model"] == "gpt-5.4-mini"
+
+    async def test_pin_route_toggles_persists_and_is_tenant_scoped(self) -> None:
+        """PRD-H.4 — POST /pin toggles + persists; other users get 404."""
+        client, _store = self.create_client()
+        conversation = await self.create_conversation(client)
+        conversation_id = conversation["conversation_id"]
+        scope = {"org_id": self.Values.ORG_ID, "user_id": self.Values.USER_ID}
+
+        # A bare POST pins.
+        pinned = client.post(
+            f"/v1/agent/conversations/{conversation_id}/pin",
+            params=scope,
+            json={},
+        )
+        assert pinned.status_code == 200
+        assert pinned.json()["pinned"] is True
+
+        # Persisted across a fresh list read.
+        listed = client.get("/v1/agent/conversations", params=scope).json()[
+            "conversations"
+        ]
+        row = next(r for r in listed if r["conversation_id"] == conversation_id)
+        assert row["pinned"] is True
+
+        # Explicit unpin.
+        unpinned = client.post(
+            f"/v1/agent/conversations/{conversation_id}/pin",
+            params=scope,
+            json={"pinned": False},
+        )
+        assert unpinned.status_code == 200
+        assert unpinned.json()["pinned"] is False
+
+        # Another user in the same org cannot pin this chat.
+        intruder = client.post(
+            f"/v1/agent/conversations/{conversation_id}/pin",
+            params={"org_id": self.Values.ORG_ID, "user_id": "intruder_user"},
+            json={},
+        )
+        assert intruder.status_code == 404
+
     async def test_run_submission_is_idempotent_and_enqueues_worker_command(
         self,
     ) -> None:

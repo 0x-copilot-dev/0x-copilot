@@ -83,10 +83,11 @@ describe("ChatsArchive — states", () => {
     expect(screen.getAllByTestId("chats-skeleton-row").length).toBeGreaterThan(
       0,
     );
-    // "New chat" CTA is available even while loading.
-    expect(screen.getByTestId("page-header-primary-action")).toHaveTextContent(
-      "New chat",
+    // The surface opens with the `.pg-lead` intro (no 22px page title).
+    expect(screen.getByTestId("chats-lead")).toHaveTextContent(
+      "Every conversation with the agent",
     );
+    expect(screen.queryByTestId("page-header")).toBeNull();
   });
 
   it("renders an error state with a Retry action wired to onRetry", () => {
@@ -165,13 +166,29 @@ describe("ChatsArchive — sections", () => {
     ]);
   });
 
-  it("hides empty sections", () => {
+  it("hides empty Recent/Archived, but keeps Pinned (it hosts New chat)", () => {
     renderArchive({
       archive: okArchive({ recent: [makeRow()] }),
     });
     expect(screen.getByTestId("chats-section-recent")).toBeInTheDocument();
-    expect(screen.queryByTestId("chats-section-pinned")).toBeNull();
+    // Pinned always renders in the ready state — it carries the "＋ New chat"
+    // primary (FR-G.3) — but shows no rowlist when it has no rows.
+    expect(screen.getByTestId("chats-section-pinned")).toBeInTheDocument();
+    expect(screen.queryByTestId("chats-section-pinned-list")).toBeNull();
+    expect(screen.getByTestId("chats-new-chat")).toBeInTheDocument();
     expect(screen.queryByTestId("chats-section-archived")).toBeNull();
+  });
+
+  it("labels the archived section 'Archived · history' (FR-G.3)", () => {
+    renderArchive({
+      archive: okArchive({
+        archived: [makeRow({ id: "a1", status: "archived" })],
+      }),
+    });
+    const archived = screen.getByTestId("chats-section-archived");
+    expect(
+      within(archived).getByTestId("section-header-label"),
+    ).toHaveTextContent("Archived · history");
   });
 });
 
@@ -221,6 +238,63 @@ describe("ChatsArchive — row", () => {
       archive: okArchive({ recent: [makeRow({ model: "" })] }),
     });
     expect(screen.queryByTestId("chat-archive-row-model")).toBeNull();
+  });
+
+  it("renders the row gracefully when preview + model are both empty", () => {
+    renderArchive({
+      archive: okArchive({ recent: [makeRow({ preview: "", model: "" })] }),
+    });
+    const row = screen.getByTestId("chat-archive-row");
+    expect(within(row).getByTestId("chat-archive-row-title")).toHaveTextContent(
+      "Quarterly revenue analysis",
+    );
+    // No sub-line parts.
+    expect(screen.queryByTestId("chat-archive-row-preview")).toBeNull();
+    expect(screen.queryByTestId("chat-archive-row-model")).toBeNull();
+    expect(within(row).queryByTestId("row-sub")).toBeNull();
+  });
+
+  it("shows the brand mark for a live row and the chats glyph otherwise (FR-G.3)", () => {
+    renderArchive({
+      archive: okArchive({
+        recent: [
+          makeRow({ id: "live", status: "running" }),
+          makeRow({ id: "done", status: "done" }),
+        ],
+      }),
+    });
+    const rows = screen.getAllByTestId("chat-archive-row");
+    const liveRow = rows.find(
+      (r) => r.getAttribute("data-status") === "running",
+    )!;
+    const doneRow = rows.find((r) => r.getAttribute("data-status") === "done")!;
+
+    const liveIcon = within(liveRow).getByTestId("chat-archive-row-icon");
+    expect(liveIcon).toHaveAttribute("data-live", "true");
+    expect(liveIcon.querySelector('svg[viewBox="0 0 400 400"]')).not.toBeNull();
+
+    const doneIcon = within(doneRow).getByTestId("chat-archive-row-icon");
+    expect(doneIcon).toHaveAttribute("data-live", "false");
+    expect(doneIcon.querySelector('svg[viewBox="0 0 24 24"]')).not.toBeNull();
+  });
+
+  it("shows the status dot on a LIVE chip only (FR-G.3)", () => {
+    renderArchive({
+      archive: okArchive({
+        recent: [
+          makeRow({ id: "live", status: "running" }),
+          makeRow({ id: "done", status: "done" }),
+        ],
+      }),
+    });
+    const rows = screen.getAllByTestId("chat-archive-row");
+    const dotIn = (status: string): boolean => {
+      const rowEl = rows.find((r) => r.getAttribute("data-status") === status)!;
+      const pill = within(rowEl).getByTestId("status-pill");
+      return pill.querySelector('span[aria-hidden="true"]') !== null;
+    };
+    expect(dotIn("running")).toBe(true);
+    expect(dotIn("done")).toBe(false);
   });
 
   it("maps paused → warning and done/archived → muted tones", () => {
@@ -285,11 +359,13 @@ describe("ChatsArchive — callbacks", () => {
     expect(onReopen).not.toHaveBeenCalled();
   });
 
-  it("invokes onNewChat from the header primary action", () => {
+  it("invokes onNewChat from the Pinned-header primary action (FR-G.3)", () => {
     const { onNewChat } = renderArchive({
       archive: okArchive({ recent: [makeRow()] }),
     });
-    fireEvent.click(screen.getByTestId("page-header-primary-action"));
+    // "New chat" lives on the Pinned section header, not a top-right button.
+    const pinned = screen.getByTestId("chats-section-pinned");
+    fireEvent.click(within(pinned).getByTestId("chats-new-chat"));
     expect(onNewChat).toHaveBeenCalledTimes(1);
   });
 

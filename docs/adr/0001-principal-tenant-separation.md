@@ -1,7 +1,7 @@
 # ADR 0001 — Separate principal (human) from tenant (workspace)
 
 Status: ACCEPTED · 2026-07-21 · Owner: identity
-Execution: staged expand → migrate → contract. **Stage 1 (Expand) delivered.**
+Execution: staged expand → migrate → contract. **Stages 1 + 2a (Expand) delivered.**
 
 ## Context
 
@@ -51,14 +51,31 @@ read path until its writer has been dual-writing long enough to be trusted.
   `(org_id, user_id)`. Fully contained in `services/backend` identity.
 - Covered by the live-Postgres gate (backfill SQL + Postgres auto-mint).
 
-**Stage 2 — MIGRATE (next).**
+**Stage 2a — EXPAND the edges (DELIVERED, migration 0040).**
 
-- Auth-identity tables (`wallet_identities`, `oidc_identities`, …) gain
-  `principal_id`, backfilled from their user; writers set it.
+- The three durable auth-identity EDGES — `wallet_identities`,
+  `oidc_identities`, `saml_identities` — gain a nullable `principal_id`,
+  backfilled 1:1 from the owning user, plus the index Stage 2b will resolve
+  on. The stores DUAL-WRITE it (`with_default_principal`): a new edge fills
+  `principal_id` from its user unless a caller supplies one, so nothing lands
+  NULL going forward. Still no read path — inert like Stage 1.
+- Deliberately NOT touched: `oidc_authentications` / `saml_authentications`
+  are transient flow-state rows with no stable user binding for a plain
+  sign-in (only the link flow sets `link_user_id`); their principal binding
+  is a Stage 2b concern.
+- Covered by the live-Postgres gate (edge INSERT round-trip + 0040 backfill).
+
+**Stage 2b — CONTRACT: resolve via principal + "sign-in becomes link" (next, BEHAVIOR CHANGE — held for review).**
+
 - Sign-in resolution reads identity → principal → the principal's personal
-  `(org, user)`. **"Sign-in becomes link":** when an authenticated session
-  already exists, a new-identity sign-in attaches to that principal instead
-  of provisioning — killing NEW fractures at the source.
+  `(org, user)`.
+- **"Sign-in becomes link":** the public sign-in ramps (SIWE verify / OIDC
+  callback) must NOT read the caller's session — doing so is the #127
+  confused-deputy hole. So a signed-in user re-authenticating a new method is
+  routed by the CLIENT through the authenticated `/me/identities/*` link path
+  (which binds to the caller and is merge-aware), reusing the link machinery
+  shipped in #143. Add the regression test proving a public ramp cannot
+  absorb a caller's account.
 - Merge, when it runs, reconciles principals (`absorbed_into_principal_id`).
 
 **Stage 3 — CONTRACT (later, only if multi-workspace is pursued).**

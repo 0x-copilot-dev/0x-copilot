@@ -67,7 +67,8 @@ describe("ChatsDestination", () => {
     );
     fireEvent.click(screen.getByTestId("chat-archive-row"));
     expect(onReopen).toHaveBeenCalledWith("c9");
-    fireEvent.click(screen.getByTestId("page-header-primary-action"));
+    // "New chat" now lives on the Pinned section header (FR-G.3).
+    fireEvent.click(screen.getByTestId("chats-new-chat"));
     expect(onNewChat).toHaveBeenCalledTimes(1);
   });
 });

@@ -6,6 +6,8 @@ import {
   type ReactNode,
 } from "react";
 
+import type { Transport } from "@0x-copilot/chat-transport";
+
 import { Composer } from "../composer/Composer";
 import { MarkdownText, type MarkdownTextProps } from "../messages/MarkdownText";
 import { PlainText } from "../messages/PlainText";
@@ -124,9 +126,33 @@ function toTcChatMessage(message: ApiChatMessage): TcChatMessage {
   };
 }
 
+/**
+ * Fetch + normalize the durable conversation transcript. Extracted so BOTH
+ * TcChat's default-mount fallback and the Run cockpit's `useRunTranscript`
+ * binder resolve messages through ONE wire mapping.
+ */
+export async function fetchConversationMessages(
+  transport: Transport,
+  conversationId: string,
+): Promise<TcChatMessage[]> {
+  const res = await transport.request<ApiChatMessagesResponse>({
+    method: "GET",
+    path: `/v1/agent/conversations/${conversationId}/messages`,
+  });
+  return (res.messages ?? []).map(toTcChatMessage);
+}
+
 export interface TcChatProps {
   readonly conversationId: string;
   readonly mode: TcChatMode;
+  /**
+   * Host-provided transcript. When supplied, TcChat is fully presentational and
+   * renders exactly these messages — the Run cockpit's `useRunTranscript` binder
+   * feeds persisted history ⊕ the live streamed reply off the single event
+   * stream (FR-3.3). Omitted → the component falls back to a one-time GET of the
+   * conversation (standalone usage + the ThreadCanvas default mount).
+   */
+  readonly messages?: readonly TcChatMessage[];
   readonly onSend?: (text: string) => void;
   readonly portalTarget?: HTMLElement;
   /**
@@ -192,6 +218,7 @@ export function TcChat(props: TcChatProps): ReactElement {
   const {
     conversationId,
     mode,
+    messages: hostMessages,
     onSend,
     portalTarget,
     markdownComponents,
@@ -203,61 +230,41 @@ export function TcChat(props: TcChatProps): ReactElement {
   } = props;
   const transport = useTransport();
   const scrub = useSwimlaneScrub();
-  const [state, setState] = useState<LoadState>({ status: "idle" });
+  const hostFed = hostMessages !== undefined;
+  const [fetched, setFetched] = useState<LoadState>({ status: "idle" });
 
+  // Fallback fetch — ONLY when the host does not supply the transcript. The Run
+  // cockpit feeds `messages` via useRunTranscript (history ⊕ live stream), so
+  // this never runs there; it keeps standalone usage + the ThreadCanvas default
+  // mount working with a one-time GET.
   useEffect(() => {
+    if (hostFed) {
+      return;
+    }
     let cancelled = false;
-    setState({ status: "loading" });
-    transport
-      .request<ApiChatMessagesResponse>({
-        method: "GET",
-        path: `/v1/agent/conversations/${conversationId}/messages`,
-      })
-      .then((res) => {
-        if (cancelled) {
-          return;
-        }
-        setState({
-          status: "ready",
-          messages: (res.messages ?? []).map(toTcChatMessage),
-        });
+    setFetched({ status: "loading" });
+    fetchConversationMessages(transport, conversationId)
+      .then((messages) => {
+        if (!cancelled) setFetched({ status: "ready", messages });
       })
       .catch(() => {
-        if (cancelled) {
-          return;
-        }
-        setState({ status: "error" });
+        if (!cancelled) setFetched({ status: "error" });
       });
     return () => {
       cancelled = true;
     };
-  }, [conversationId, transport]);
+  }, [conversationId, transport, hostFed]);
+
+  const state: LoadState =
+    hostMessages !== undefined
+      ? { status: "ready", messages: hostMessages }
+      : fetched;
 
   // PR-3.10 — approvals are HIDDEN while scrubbed off-now (you cannot approve a
   // past state). The host also drops them from `approvals` when scrubbed, but
   // guarding on the scrub cursor here keeps standalone usage correct too.
   const scrubbedOffNow = scrub.scrubbedTo !== "now";
   const visibleApprovals = scrubbedOffNow ? EMPTY_APPROVALS : approvals;
-
-  if (mode === "focus") {
-    // PR-3.10 (FR-3.13/FR-3.22) — Focus collapses to Chat-only; a pending
-    // approval surfaces as a `.conf-card` confirmation card (a resolved one as
-    // its receipt) above the focus tabs.
-    return (
-      <div data-testid="tc-chat" data-mode="focus" style={focusContainerStyle}>
-        {visibleApprovals.length > 0 ? (
-          <div data-testid="tc-chat-conf-cards" style={confCardsWrapStyle}>
-            {visibleApprovals.map((approval) =>
-              approval.resolved
-                ? renderApprovalReceipt(approval)
-                : renderConfCard(approval, onApprove, onReject),
-            )}
-          </div>
-        ) : null}
-        <FocusTabs />
-      </div>
-    );
-  }
 
   const ghost = scrub.scrubbedTo !== "now";
   const ghostLabel =
@@ -275,6 +282,74 @@ export function TcChat(props: TcChatProps): ReactElement {
   // time-travelled conversation never shows a batch dispatched after the cut.
   const filteredFleets = filterFleetsByScrub(fleets, scrub.scrubbedTo);
 
+  // Focus and Studio render the SAME transcript + composer (single-mount,
+  // FR-3.9): the streamed reply, the ghost banner, and the composer are shared.
+  // They differ only in the wrapper (Focus centers the column) and the approval
+  // affordance (Focus `.conf-card`, Studio the 4-zone `ApprovalCard`).
+  const ghostBanner =
+    ghost && ghostLabel !== null ? (
+      <div
+        role="status"
+        data-testid="tc-chat-ghost-banner"
+        style={ghostBannerStyle}
+      >
+        Viewing {ghostLabel}
+      </div>
+    ) : null;
+
+  const transcript = (
+    <div data-testid="tc-chat-messages" style={messageListStyle(ghost)}>
+      <MessageListBody
+        state={state}
+        messages={filteredMessages}
+        fleets={filteredFleets}
+        markdownComponents={markdownComponents}
+      />
+    </div>
+  );
+
+  const composer = (
+    <div style={composerSlotStyle}>
+      {renderComposer !== undefined ? (
+        renderComposer({ disabled: ghost, placeholder: composerPlaceholder })
+      ) : (
+        <Composer
+          onSend={(text) => onSend?.(text)}
+          disabled={ghost}
+          placeholder={composerPlaceholder}
+          portalTarget={portalTarget}
+        />
+      )}
+    </div>
+  );
+
+  if (mode === "focus") {
+    return (
+      <div
+        data-testid="tc-chat"
+        data-mode="focus"
+        data-ghost={ghost ? "true" : "false"}
+        style={focusContainerStyle}
+        aria-live="polite"
+      >
+        {ghostBanner}
+        {transcript}
+        {/* Focus surfaces a pending approval as a `.conf-card` (resolved → its
+            receipt), between the transcript and the composer. */}
+        {visibleApprovals.length > 0 ? (
+          <div data-testid="tc-chat-conf-cards" style={confCardsWrapStyle}>
+            {visibleApprovals.map((approval) =>
+              approval.resolved
+                ? renderApprovalReceipt(approval)
+                : renderConfCard(approval, onApprove, onReject),
+            )}
+          </div>
+        ) : null}
+        {composer}
+      </div>
+    );
+  }
+
   return (
     <div
       data-testid="tc-chat"
@@ -283,23 +358,8 @@ export function TcChat(props: TcChatProps): ReactElement {
       style={chatContainerStyle()}
       aria-live="polite"
     >
-      {ghost && ghostLabel !== null ? (
-        <div
-          role="status"
-          data-testid="tc-chat-ghost-banner"
-          style={ghostBannerStyle}
-        >
-          Viewing {ghostLabel}
-        </div>
-      ) : null}
-      <div data-testid="tc-chat-messages" style={messageListStyle(ghost)}>
-        <MessageListBody
-          state={state}
-          messages={filteredMessages}
-          fleets={filteredFleets}
-          markdownComponents={markdownComponents}
-        />
-      </div>
+      {ghostBanner}
+      {transcript}
       {/* PR-3.10 (FR-3.22) — in-chat approvals sit between the transcript and
           the composer: pending ones render the 4-zone ApprovalCard, resolved
           ones their receipt. Outside the ghost-dimmed message list so they stay
@@ -313,18 +373,7 @@ export function TcChat(props: TcChatProps): ReactElement {
           )}
         </div>
       ) : null}
-      <div style={composerSlotStyle}>
-        {renderComposer !== undefined ? (
-          renderComposer({ disabled: ghost, placeholder: composerPlaceholder })
-        ) : (
-          <Composer
-            onSend={(text) => onSend?.(text)}
-            disabled={ghost}
-            placeholder={composerPlaceholder}
-            portalTarget={portalTarget}
-          />
-        )}
-      </div>
+      {composer}
     </div>
   );
 }
@@ -614,47 +663,6 @@ function filterFleetsByScrub(
   );
 }
 
-function FocusTabs(): ReactElement {
-  const [tab, setTab] = useState<"activity" | "approvals">("activity");
-  return (
-    <div style={focusInnerStyle}>
-      <div
-        role="tablist"
-        style={tabStripStyle}
-        data-testid="tc-chat-focus-tabs"
-      >
-        <button
-          type="button"
-          role="tab"
-          aria-selected={tab === "activity"}
-          onClick={() => setTab("activity")}
-          style={tabButtonStyle(tab === "activity")}
-          data-testid="tc-chat-tab-activity"
-        >
-          Activity
-        </button>
-        <button
-          type="button"
-          role="tab"
-          aria-selected={tab === "approvals"}
-          onClick={() => setTab("approvals")}
-          style={tabButtonStyle(tab === "approvals")}
-          data-testid="tc-chat-tab-approvals"
-        >
-          Approvals
-        </button>
-      </div>
-      <div
-        role="tabpanel"
-        style={tabPanelStyle}
-        data-testid="tc-chat-focus-panel"
-      >
-        {tab === "activity" ? "No recent activity." : "No pending approvals."}
-      </div>
-    </div>
-  );
-}
-
 function filterByScrub(
   state: LoadState,
   scrubbedTo: number | "now",
@@ -775,46 +783,22 @@ const fleetItemStyle: CSSProperties = {
   padding: 0,
 };
 
-// Focus mode: same flush-pane treatment as the studio container above.
+// Focus mode: the SAME transcript + composer as Studio, in a centered reading
+// column (v3 `.fx-col` max-width 730). Flush pane; flex column so the transcript
+// scrolls and the composer pins to the bottom.
 const focusContainerStyle: CSSProperties = {
+  display: "flex",
+  flexDirection: "column",
   height: "100%",
+  minHeight: 0,
+  width: "100%",
+  maxWidth: 760,
+  margin: "0 auto",
   background: "transparent",
   padding: 12,
   color: PALETTE.textHi,
-  fontFamily:
-    "ui-sans-serif, system-ui, -apple-system, 'Segoe UI', Roboto, sans-serif",
-};
-
-const focusInnerStyle: CSSProperties = {
-  display: "flex",
-  flexDirection: "column",
-  gap: 8,
-  height: "100%",
-};
-
-const tabStripStyle: CSSProperties = {
-  display: "flex",
-  gap: 4,
-  borderBottom: `1px solid ${PALETTE.cardBorder}`,
-};
-
-const tabButtonStyle = (selected: boolean): CSSProperties => ({
-  background: "transparent",
-  border: "none",
-  color: selected ? PALETTE.textHi : PALETTE.textLo,
-  padding: "8px 12px",
-  fontSize: "var(--font-size-sm)",
-  borderBottom: selected
-    ? "2px solid var(--color-accent)"
-    : "2px solid transparent",
-  cursor: "pointer",
-});
-
-const tabPanelStyle: CSSProperties = {
-  flex: 1,
-  color: PALETTE.textLo,
-  fontSize: "var(--font-size-sm)",
-  padding: 12,
+  fontSize: 13,
+  fontFamily: "var(--font-sans)",
 };
 
 // PR-3.10 — in-chat approvals (design-system tokens only; sky accent, jade

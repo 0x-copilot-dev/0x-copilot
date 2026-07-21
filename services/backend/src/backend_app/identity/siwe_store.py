@@ -17,6 +17,7 @@ from datetime import datetime, timezone
 from typing import Any, Protocol
 
 from backend_app.contracts import SiweNonceRecord, WalletIdentityRecord
+from backend_app.identity.principals import with_default_principal
 
 
 def _now() -> datetime:
@@ -130,6 +131,7 @@ class InMemorySiweStore:
         self, record: WalletIdentityRecord, *, conn: Any | None = None
     ) -> WalletIdentityRecord:
         del conn
+        record = with_default_principal(record)
         if any(
             row.address == record.address for row in self.wallet_identities.values()
         ):
@@ -247,12 +249,14 @@ class PostgresSiweStore:
     def create_wallet_identity(
         self, record: WalletIdentityRecord, *, conn: Any | None = None
     ) -> WalletIdentityRecord:
+        record = with_default_principal(record)
         with self._cursor(conn) as cur:
             cur.execute(
                 """
                 INSERT INTO wallet_identities (
-                    wallet_id, address, org_id, user_id, chain_id, created_at
-                ) VALUES (%s,%s,%s,%s,%s,%s)
+                    wallet_id, address, org_id, user_id, chain_id, created_at,
+                    principal_id
+                ) VALUES (%s,%s,%s,%s,%s,%s,%s)
                 """,
                 (
                     record.wallet_id,
@@ -261,6 +265,7 @@ class PostgresSiweStore:
                     record.user_id,
                     record.chain_id,
                     record.created_at,
+                    record.principal_id,
                 ),
             )
         return record

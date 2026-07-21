@@ -139,6 +139,11 @@ class ConversationRecord(RuntimeContract):
     deleted_at: datetime | None = None
     folder: str | None = None
     parent_conversation_id: str | None = None
+    # PRD-H.4 — first-class pin flag driving the Chats "Pinned" section.
+    # Defaults False so rows created before migration 0034 (and every
+    # non-pinned chat) fall to the Recent bucket. Toggled via the
+    # dedicated ``POST /v1/agent/conversations/{id}/pin`` route.
+    pinned: bool = False
     # PR 6.2 — fork lineage. Audit pointer to the share row that
     # authorised this conversation's creation. Non-FK so revoking the
     # share doesn't break the conversation. NULL on every non-forked row.
@@ -220,6 +225,7 @@ class ConversationRecord(RuntimeContract):
             deleted_at=self.deleted_at,
             folder=self.folder,
             parent_conversation_id=self.parent_conversation_id,
+            pinned=self.pinned,
             forked_from_share_id=self.forked_from_share_id,
             forked_from_message_id=self.forked_from_message_id,
         )
@@ -245,6 +251,16 @@ class ConversationResponse(RuntimeContract):
     deleted_at: datetime | None = None
     folder: str | None = None
     parent_conversation_id: str | None = None
+    # PRD-H.4 — first-class pin flag surfaced to the Chats list. Defaults
+    # False so old clients + non-pinned rows compile/behave unchanged.
+    pinned: bool = False
+    # PRD-H.4 — Chats-list projections, populated once per page by
+    # ``ConversationResponse.with_list_fields`` after the read (never
+    # persisted on the record). ``preview`` is the last user/assistant
+    # message snippet; ``model`` is the latest run's model name. Both
+    # nullable so older clients + never-run conversations are unaffected.
+    preview: str | None = None
+    model: str | None = None
     # PR 6.2 — fork lineage; NULL on every non-forked row.
     forked_from_share_id: str | None = None
     # PR A3 — self-fork lineage; NULL on every non-self-fork row.
@@ -276,6 +292,40 @@ class ConversationResponse(RuntimeContract):
                 "latest_run_id": run_id,
             }
         )
+
+    def with_list_fields(
+        self,
+        *,
+        preview: str | None,
+        model: str | None,
+    ) -> "ConversationResponse":
+        """Return a copy carrying the Chats-list ``preview`` + ``model`` projections.
+
+        Kept as a typed copy (not field mutation) for the same immutability
+        reason as :meth:`with_latest_run`. The list endpoint resolves the
+        last-message snippet and latest-run model once per row and overlays
+        them via this method; ``pinned`` already rides along on the record's
+        ``to_response`` so it needs no overlay.
+        """
+
+        return self.model_copy(
+            update={
+                "preview": preview,
+                "model": model,
+            }
+        )
+
+
+class PinConversationRequest(RuntimeContract):
+    """Body for ``POST /v1/agent/conversations/{id}/pin`` (PRD-H.4).
+
+    A single route handles both pin and unpin: ``pinned`` defaults to
+    ``True`` so a bare POST pins, and clients send ``{"pinned": false}``
+    to unpin. Idempotent — re-pinning an already-pinned chat is a no-op
+    that still returns the current row.
+    """
+
+    pinned: bool = True
 
 
 class ConversationListResponse(RuntimeContract):
