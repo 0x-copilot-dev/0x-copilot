@@ -182,3 +182,31 @@ class TestBootCompaction(BootCompactionMixin):
             assert _lines(path) == 1  # clean re-compaction replaced the temp
         finally:
             await reopened.close()
+
+    async def test_compaction_failure_never_bricks_open(
+        self, tmp_path, monkeypatch
+    ) -> None:
+        # Compaction is best-effort maintenance: a transient rewrite failure
+        # (disk full, IO error) must NOT fail store open(). The store opens with
+        # the un-compacted — still valid — log, and the next boot retries.
+        monkeypatch.setattr(FileRuntimeApiStore, "_COMPACT_MIN_LINES", 8)
+        root = tmp_path / "store"
+        path = FileStoreLayout(root).state_path(_WS)
+
+        store = FileRuntimeApiStore(root)
+        await store.open()
+        await self._bloat_workspace_defaults(store, org_id="org_x", times=20)
+        await store.close()
+
+        def _boom(self, _records):
+            raise OSError("disk full")
+
+        monkeypatch.setattr(StateLedger, "rewrite", _boom)
+
+        reopened = FileRuntimeApiStore(root)
+        await reopened.open()  # must NOT raise despite the failing rewrite
+        try:
+            assert list(reopened.workspace_defaults.keys()) == ["org_x"]  # intact
+            assert _lines(path) == 20  # un-compacted log preserved + readable
+        finally:
+            await reopened.close()

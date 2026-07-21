@@ -813,7 +813,17 @@ class FileRuntimeApiStore:
             before = ledger.line_count
             if not self._should_compact(before, len(live)):
                 continue
-            ledger.rewrite(record.model_dump(mode="json") for record in live)
+            # Best-effort maintenance: a failed rewrite (disk full, transient IO)
+            # must never brick open(). The rewrite is atomic, so a failure leaves
+            # the prior committed log fully intact — the store simply opens with
+            # the un-compacted (larger) ledger, and the next boot retries.
+            try:
+                ledger.rewrite(record.model_dump(mode="json") for record in live)
+            except Exception as exc:  # maintenance is best-effort — never break open()
+                self._telemetry.state_ledger_compaction_failed(
+                    table=table, reason=type(exc).__name__
+                )
+                continue
             self._telemetry.state_ledger_compacted(
                 table=table, lines_before=before, lines_after=ledger.line_count
             )
