@@ -656,7 +656,14 @@ app.on("before-quit", (event) => {
 });
 
 app.on("window-all-closed", () => {
-  if (process.platform !== "darwin") {
+  // When we supervise an embedded PostgreSQL + the Python services, closing the
+  // last window MUST quit on EVERY platform so `before-quit` tears the children
+  // and the postmaster down. Keeping a headless supervised app alive after the
+  // window closes (the macOS keep-in-dock convention) is what left orphaned
+  // Electron/postgres pids on CLI launches — `copilot` never returned. In
+  // non-supervised dev (MockTransport, no children) keep the standard macOS
+  // behavior.
+  if (process.platform !== "darwin" || supervisor !== null) {
     app.quit();
   }
 });
