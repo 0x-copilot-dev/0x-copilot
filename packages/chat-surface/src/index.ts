@@ -1489,3 +1489,25 @@ export {
   type FirstRunLaunchResult,
 } from "./onboarding";
 // === end First-Run onboarding (P3) ===
+
+// === First-Run onboarding (P4 — wallet chip) ===
+// Top-bar SIWE identity pill for the FirstRunSurface `walletChipSlot`:
+// `WalletChip` is pure/presentational (`0x{4}…{4}` + jade dot, `truncateAddress`
+// lives here because the server returns the FULL EIP-55 address);
+// `FirstRunProfileProvider`/`useFirstRunProfile` load the identity ONCE through
+// the host-injected `FirstRunProfilePort` (over `GET /v1/me/profile`);
+// `FirstRunWalletChip` is the connected sink both hosts drop into the slot.
+// Design: docs/plan/first-run-onboarding/design-source/SPEC.md.
+export {
+  WalletChip,
+  truncateAddress,
+  FirstRunProfileProvider,
+  FirstRunWalletChip,
+  useFirstRunProfile,
+  type WalletChipProps,
+  type FirstRunProfilePort,
+  type WalletProfileView,
+  type FirstRunProfileProviderProps,
+  type FirstRunProfileState,
+} from "./onboarding";
+// === end First-Run onboarding (P4 — wallet chip) ===

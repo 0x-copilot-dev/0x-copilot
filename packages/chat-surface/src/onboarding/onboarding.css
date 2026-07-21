@@ -294,6 +294,8 @@
 .fr-gcard__progress {
   display: flex;
   flex-direction: column;
+}
+
 /* ==========================================================================
  * Phase FTUE-P3 — onboarding composer (State B) + starter chips + ack (State C)
  * Appended per P1's "one stylesheet, one token map" note. Every color/size
@@ -373,6 +375,8 @@
 
 /* Mono status pill line, e.g. "Qwen 3 4B · 41%" / "on-device · ready". */
 .fr-gcard__status {
+}
+
 .fr-cerr__msg {
   min-width: 0;
   font-size: var(--font-size-xs);
@@ -455,6 +459,8 @@
 }
 
 .fr-gcard__error {
+}
+
 /* Jade check (SPEC: the success token, NOT the sky accent). */
 .ln__check {
   color: var(--color-success);
@@ -470,6 +476,8 @@
   display: flex;
   align-items: center;
   gap: var(--space-sm);
+}
+
 /* Reduced-motion: neutralize the chip hover transition. */
 [data-reduce-motion="1"] .fr-chip,
 [data-reduce-motion="always"] .fr-chip {
@@ -480,4 +488,38 @@
   .fr-chip {
     transition: none;
   }
+}
+
+/* ===========================================================================
+ * Phase FTUE-P4 — wallet chip (top-bar SIWE address pill + jade status dot).
+ * Rendered into the `.fr-top__chip` slot for wallet accounts; absent for
+ * email/Google. SPEC §Copy: `0x7f3C…a92C` + jade dot. One-accent discipline —
+ * the dot is the SUCCESS token, never the sky accent.
+ * ======================================================================== */
+.fr-wchip {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-xs);
+  padding: var(--space-2xs) var(--space-sm);
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-full);
+  background: var(--color-surface-muted);
+  font-family: var(--font-mono);
+  font-size: var(--font-size-2xs);
+  line-height: 1;
+  color: var(--color-text-muted);
+}
+
+/* Jade status dot (the success token, NOT the sky accent). */
+.fr-wchip__dot {
+  flex: 0 0 auto;
+  width: 6px;
+  height: 6px;
+  border-radius: var(--radius-full);
+  background: var(--color-success);
+}
+
+.fr-wchip__addr {
+  color: var(--color-text);
+  letter-spacing: 0.01em;
 }
