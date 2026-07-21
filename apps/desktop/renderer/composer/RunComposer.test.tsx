@@ -11,9 +11,9 @@ import type {
   TransportCapabilities,
   TypedRequest,
 } from "@0x-copilot/chat-transport";
-import { cleanup, render, waitFor } from "@testing-library/react";
+import { cleanup, fireEvent, render, waitFor } from "@testing-library/react";
 import { type ReactElement } from "react";
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 
 import { RunComposer } from "./RunComposer";
 import { createDesktopAttachmentAdapter } from "./desktopAttachmentAdapter";
@@ -103,6 +103,66 @@ function textarea(container: HTMLElement): HTMLTextAreaElement | null {
   );
 }
 
+const CONFIG_ERROR_MESSAGE =
+  "Missing API key for model provider 'openai'. Add one in Settings -> Provider keys.";
+
+// A transport whose mount GETs resolve normally but whose run-create POST
+// REJECTS — the keyless dead end. `rejection.message` is the stringified error
+// body both the web WebTransport and the desktop IPC bridge throw, so
+// parseTransportError has a real envelope to recover `code`/`safe_message` from.
+function fakeTransportRejectingRuns(
+  recorder: Recorder,
+  rejection: Error,
+): Transport {
+  return {
+    request: <TRes,>(req: TypedRequest): Promise<TRes> => {
+      recorder.calls.push(req);
+      if (req.method === "POST" && req.path === "/v1/agent/runs") {
+        return Promise.reject(rejection);
+      }
+      return Promise.resolve(payloadFor(req.path) as unknown as TRes);
+    },
+    subscribeServerSentEvents: (
+      _opts: SseSubscribeOptions,
+    ): SseSubscription => ({ close: () => undefined }),
+    getSession: (): Session => ({ bearer: null }),
+    capabilities: (): TransportCapabilities => ({
+      substrate: "desktop-webview",
+      nativeSecretStorage: true,
+      fileSystemAccess: false,
+      clipboardWrite: false,
+      openExternal: false,
+    }),
+  };
+}
+
+// The facade envelope for the missing-provider-key configuration error, wrapped
+// under `detail` exactly as the runtime → facade returns it.
+function configErrorEnvelope(): Error {
+  return new Error(
+    JSON.stringify({
+      detail: {
+        code: "configuration_error",
+        safe_message: CONFIG_ERROR_MESSAGE,
+        correlation_id: "abc123",
+      },
+    }),
+  );
+}
+
+// Type a goal into the base composer textarea and click AssistantComposer's
+// Send control (aria-label "Send message"; it drives the imperative submit()).
+function typeAndSend(container: HTMLElement, text: string): void {
+  const ta = textarea(container);
+  if (ta === null) throw new Error("composer textarea not mounted");
+  fireEvent.change(ta, { target: { value: text } });
+  const send = container.querySelector<HTMLButtonElement>(
+    "button[aria-label='Send message']",
+  );
+  if (send === null) throw new Error("composer send button not mounted");
+  fireEvent.click(send);
+}
+
 describe("RunComposer", () => {
   it("mounts the shared AssistantComposer (base composer textarea present)", async () => {
     const { container } = renderComposer();
@@ -144,6 +204,151 @@ describe("RunComposer", () => {
       expect(textarea(container)).not.toBeNull();
     });
     expect(textarea(container)?.disabled).toBe(true);
+  });
+
+  it("surfaces a missing-key run-create failure as an 'Add a provider key' CTA that routes to provider-key settings (no silent dead end)", async () => {
+    const recorder: Recorder = { calls: [] };
+    const onOpenModelSettings = vi.fn();
+    const { container } = render(
+      <TransportProvider
+        transport={fakeTransportRejectingRuns(recorder, configErrorEnvelope())}
+      >
+        <RunComposer
+          conversationId="conv-1"
+          disabled={false}
+          placeholder="Send a message…"
+          onOpenModelSettings={onOpenModelSettings}
+        />
+      </TransportProvider>,
+    );
+    await waitFor(() => {
+      expect(textarea(container)).not.toBeNull();
+    });
+    // No notice before a send — the default path is unchanged.
+    expect(
+      container.querySelector("[data-testid='run-composer-error']"),
+    ).toBeNull();
+
+    typeAndSend(container, "Draft the launch note");
+
+    // The rejection that used to be swallowed is now surfaced: the actionable
+    // safe_message as the primary line — never the raw JSON envelope.
+    const message = await waitFor(() => {
+      const m = container.querySelector(
+        "[data-testid='run-composer-error-message']",
+      );
+      expect(m).not.toBeNull();
+      return m as HTMLElement;
+    });
+    expect(message.textContent).toContain(
+      "Missing API key for model provider 'openai'",
+    );
+    expect(message.textContent).not.toContain("{");
+
+    // The config-error CTA deep-links into Settings → Provider keys.
+    const cta = container.querySelector(
+      "[data-testid='run-composer-error-cta']",
+    ) as HTMLButtonElement | null;
+    expect(cta).not.toBeNull();
+    fireEvent.click(cta as HTMLButtonElement);
+    expect(onOpenModelSettings).toHaveBeenCalledTimes(1);
+  });
+
+  it("shows the message but hides the provider-key CTA for a non-configuration failure", async () => {
+    const recorder: Recorder = { calls: [] };
+    const onOpenModelSettings = vi.fn();
+    const { container } = render(
+      <TransportProvider
+        transport={fakeTransportRejectingRuns(
+          recorder,
+          new Error(
+            JSON.stringify({
+              detail: { code: "internal_error", safe_message: "Server error." },
+            }),
+          ),
+        )}
+      >
+        <RunComposer
+          conversationId="conv-1"
+          disabled={false}
+          placeholder="Send a message…"
+          onOpenModelSettings={onOpenModelSettings}
+        />
+      </TransportProvider>,
+    );
+    await waitFor(() => {
+      expect(textarea(container)).not.toBeNull();
+    });
+
+    typeAndSend(container, "Do a thing");
+
+    await waitFor(() => {
+      expect(
+        container.querySelector("[data-testid='run-composer-error-message']")
+          ?.textContent,
+      ).toContain("Server error.");
+    });
+    // The provider-key CTA is gated to the configuration error only.
+    expect(
+      container.querySelector("[data-testid='run-composer-error-cta']"),
+    ).toBeNull();
+    expect(onOpenModelSettings).not.toHaveBeenCalled();
+  });
+
+  it("clears the run-create error notice once a later send succeeds", async () => {
+    const recorder: Recorder = { calls: [] };
+    // Reject only the first run-create POST; the retry resolves.
+    let firstPost = true;
+    const transport: Transport = {
+      request: <TRes,>(req: TypedRequest): Promise<TRes> => {
+        recorder.calls.push(req);
+        if (req.method === "POST" && req.path === "/v1/agent/runs") {
+          if (firstPost) {
+            firstPost = false;
+            return Promise.reject(configErrorEnvelope());
+          }
+          return Promise.resolve({ run_id: "run-1" } as unknown as TRes);
+        }
+        return Promise.resolve(payloadFor(req.path) as unknown as TRes);
+      },
+      subscribeServerSentEvents: (
+        _opts: SseSubscribeOptions,
+      ): SseSubscription => ({ close: () => undefined }),
+      getSession: (): Session => ({ bearer: null }),
+      capabilities: (): TransportCapabilities => ({
+        substrate: "desktop-webview",
+        nativeSecretStorage: true,
+        fileSystemAccess: false,
+        clipboardWrite: false,
+        openExternal: false,
+      }),
+    };
+    const { container } = render(
+      <TransportProvider transport={transport}>
+        <RunComposer
+          conversationId="conv-1"
+          disabled={false}
+          placeholder="Send a message…"
+        />
+      </TransportProvider>,
+    );
+    await waitFor(() => {
+      expect(textarea(container)).not.toBeNull();
+    });
+
+    typeAndSend(container, "first try");
+    await waitFor(() => {
+      expect(
+        container.querySelector("[data-testid='run-composer-error']"),
+      ).not.toBeNull();
+    });
+
+    typeAndSend(container, "second try");
+    await waitFor(() => {
+      expect(
+        container.querySelector("[data-testid='run-composer-error']"),
+      ).toBeNull();
+    });
   });
 });
 

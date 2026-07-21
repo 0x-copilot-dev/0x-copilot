@@ -874,6 +874,64 @@ describe("RunDestination — empty/idle + multi-run (PR-3.11 / FR-3.25/3.26)", (
     );
   });
 
+  it("surfaces a rejected start's missing-key config error as an 'Add a provider key' CTA that routes to provider-key settings (no silent dead end)", async () => {
+    const transport = new FakeTransport();
+    transport.requestHandler = async (req) =>
+      req.path.includes("/messages") ? { messages: [] } : { runs: [] };
+    const onOpenModelSettings = vi.fn();
+    // The keyless dead end: the host run-create rejects with the facade
+    // `configuration_error` envelope. The shell must parse the actionable
+    // `safe_message` + `code` out of it and guide the user to Provider keys —
+    // NOT sit on the composer with no feedback (the confirmed-live dead end).
+    const onStartRun = vi.fn(() =>
+      Promise.reject(
+        new Error(
+          JSON.stringify({
+            detail: {
+              code: "configuration_error",
+              safe_message:
+                "Missing API key for model provider 'openai'. Add one in Settings -> Provider keys.",
+              correlation_id: "cid-1",
+            },
+          }),
+        ),
+      ),
+    );
+
+    render(
+      <TransportProvider transport={transport}>
+        <KeyValueStoreProvider store={makeStore()}>
+          <RunDestination
+            conversationId={CONV}
+            onStartRun={onStartRun}
+            onOpenModelSettings={onOpenModelSettings}
+          />
+        </KeyValueStoreProvider>
+      </TransportProvider>,
+    );
+
+    await screen.findByTestId("run-empty-state");
+    fireEvent.change(screen.getByTestId("run-empty-goal-input"), {
+      target: { value: "Draft the launch note" },
+    });
+    act(() => {
+      fireEvent.click(screen.getByTestId("run-empty-submit"));
+    });
+
+    // The rejected start does NOT flip to a live canvas — the empty state stays,
+    // now carrying the actionable safe_message (never the raw JSON envelope).
+    const message = await screen.findByTestId("run-empty-error-message");
+    expect(message.textContent).toContain(
+      "Missing API key for model provider 'openai'",
+    );
+    expect(message.textContent).not.toContain("{");
+    expect(screen.queryByTestId("thread-canvas")).toBeNull();
+
+    // The config-error CTA opens Settings → Provider keys (the onboarding path).
+    fireEvent.click(screen.getByTestId("run-empty-error-cta"));
+    expect(onOpenModelSettings).toHaveBeenCalledTimes(1);
+  });
+
   it("mounts the multi-run selector for >1 run and auto-binds the live run (FR-3.26)", async () => {
     const transport = new FakeTransport();
     transport.requestHandler = async (req) =>

@@ -1,0 +1,69 @@
+name: ci-dark-capabilities-gate
+
+# P5 standing gate (docs/plan/verification/02-no-dark-capabilities-gate.md):
+# no capability ships off-by-default with no e2e/test path turning it ON — the
+# exact failure mode that shipped the AC2b worker-gate bug and the file-store
+# citation data-loss bug (built correct, gated OFF, never exercised on the ON
+# path, so every unit test + typecheck + review stayed green).
+#
+# The gate (tools/check_dark_capabilities.py) fails if any RUNTIME_*_BACKEND
+# selector or RUNTIME_ENABLE_* opt-in capability declared in the ai-backend
+# source is never referenced by any test or e2e harness. Pure stdlib — no
+# service deps — so it runs on every relevant PR in seconds.
+#
+# Enforced vs documented: the gate mechanically enforces the *floor* (a new
+# capability flag with NO referencing test at all fails CI). Proving the ON path
+# is actually *asserted* (not merely mentioned) is the reviewer checklist in the
+# policy doc — this gate makes skipping it visible, it does not replace it.
+
+on:
+  pull_request:
+    paths:
+      - "services/ai-backend/src/**"
+      - "services/ai-backend/tests/**"
+      - "tools/check_dark_capabilities.py"
+      - "tools/test_check_dark_capabilities.py"
+      - "tools/desktop-runtime/**"
+      - "tools/cli-testing/**"
+      - ".github/workflows/ci-dark-capabilities-gate.yml"
+  push:
+    branches:
+      - main
+    paths:
+      - "services/ai-backend/src/**"
+      - "services/ai-backend/tests/**"
+      - "tools/check_dark_capabilities.py"
+      - "tools/test_check_dark_capabilities.py"
+      - "tools/desktop-runtime/**"
+      - "tools/cli-testing/**"
+      - ".github/workflows/ci-dark-capabilities-gate.yml"
+  workflow_dispatch:
+
+concurrency:
+  group: ci-dark-capabilities-gate-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  dark-capabilities:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+
+      - uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6.3.0
+        with:
+          python-version: "3.13"
+
+      # The gate's own unit tests (predicate, scanning, waiver, real-tree
+      # baseline) — proves the guard works before we trust its verdict.
+      - name: Install pytest
+        run: python -m pip install --upgrade pip pytest
+
+      - name: Test the gate
+        run: python -m pytest tools/test_check_dark_capabilities.py -q
+
+      # The gate itself, over the real ai-backend source tree.
+      - name: Run the dark-capabilities gate
+        run: python tools/check_dark_capabilities.py

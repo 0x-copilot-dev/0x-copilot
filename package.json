@@ -12,5 +12,8 @@
   },
   "devDependencies": {
     "playwright": "1.61.1"
+  },
+  "overrides": {
+    "ws": "^8.21.1"
   }
 }

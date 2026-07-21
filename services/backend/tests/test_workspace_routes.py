@@ -213,6 +213,27 @@ class TestMembersDirectory:
         # System "employee" projects to design alias "member".
         assert roles["usr_priya"] == "member"
 
+    def test_wallet_member_is_flagged_placeholder_not_leaked(self) -> None:
+        # Honest identity: a wallet member's `<address>@wallet.invalid`
+        # placeholder must be flagged so the directory UI never shows it.
+        store = _seeded_store()
+        _add_member(
+            store, user_id="usr_admin", email="admin@acme.com", role_name="admin"
+        )
+        _add_member(
+            store,
+            user_id="usr_wallet",
+            email="0x5aaeb6053f3e94c9b9a09f33669435e7ef1beaed@wallet.invalid",
+            role_name="employee",
+        )
+        client = _client(store)
+        response = client.get("/internal/v1/workspace/members", params=_admin_params())
+        assert response.status_code == 200
+        by_id = {m["user_id"]: m for m in response.json()["members"]}
+        # The real-email admin is NOT flagged; the wallet member IS.
+        assert by_id["usr_admin"]["email_is_placeholder"] is False
+        assert by_id["usr_wallet"]["email_is_placeholder"] is True
+
     def test_change_role_revokes_and_assigns_new(self) -> None:
         store = _seeded_store()
         _add_member(

@@ -1,0 +1,97 @@
+name: desktop-supervised-boot-drill
+
+# Tier B of the verification program (docs/plan/verification/01-e2e-run-verification.md §6):
+# boot the REAL supervised desktop topology — embedded PostgreSQL + all three
+# Python services under the single_user_desktop production posture, an in-process
+# run worker, the facade HTTP proxy — and drive a run to a streamed completion
+# over real HTTP + SSE. This is the ONLY automated exercise of that topology;
+# the AC2b worker-gate bug and the citation data-loss bug both shipped because
+# 1,900+ unit tests, typecheck, and review all passed while the real supervised
+# path was never booted in CI.
+#
+# The harness (tools/desktop-runtime/run-local.mjs, as of #153) already asserts:
+#   - all three services reach /v1/health under deployment_profile=single_user_desktop
+#   - the dev IdP is ABSENT in production posture
+#   - a REAL SIWE wallet sign-in (no dev mint) yields a bearer
+#   - POST /v1/agent/runs + SSE stream reach a terminal run_completed with
+#     >=1 model_delta and NO run_failed, hermetically (RUNTIME_FAKE_MODEL=1 —
+#     no provider key, no network).
+#
+# WHY macOS-only, cadence-gated (NOT every PR):
+#   * The staged runtime (tools/desktop-runtime/manifest.json) ships only
+#     darwin/win32 bundles and run-local.mjs boots the darwin runtime only, so a
+#     Linux hosted runner cannot boot it. macOS runners are billed ~10x Linux
+#     minutes and staging pip-installs all three services (~10-15 min), so this
+#     runs on a schedule + on-demand + only when the supervised-boot surfaces
+#     change — the same cadence trade-off postgres-restore-drill.yml makes.
+#   * The always-on, every-PR net for the run→stream EXECUTION class is the
+#     in-process hermetic Tier A tests (services/ai-backend/tests/.../
+#     test_fake_model_run_stream{,_file}.py) that ci-ai-backend runs on every
+#     commit. Tier B adds the supervision/topology/real-HTTP+SSE coverage that
+#     an in-process store harness structurally cannot.
+
+on:
+  # MANUAL-ONLY until the harness read is hardened for the CI runner.
+  #
+  # The drill boots the real supervised stack correctly (postgres, migrations,
+  # all three services healthy, production-posture SIWE sign-in — 10/10 pass) and
+  # the run streams the full sequence (`run_started → reasoning → model_delta×N →
+  # final_response`). But on the slower GitHub macOS runner the SSE read window
+  # closed BEFORE the trailing `run_completed` (the product IS correct — Tier A
+  # `test_fake_model_run_stream{,_file}.py` and a local run both reach
+  # `run_completed`). This is a harness-timing gap, not a product bug.
+  #
+  # BEFORE re-enabling the pull_request / push / weekly-`schedule` triggers,
+  # harden `run-local.mjs`'s run→stream read to loop until a TERMINAL event
+  # (`run_completed`/`run_failed`) or a generous deadline, so a slow runner never
+  # yields a false negative. Tracked in docs/plan/verification/01-e2e-run-verification.md.
+  workflow_dispatch:
+
+concurrency:
+  group: desktop-supervised-boot-drill-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  supervised-boot-run-stream:
+    # Apple Silicon — the primary desktop target and the only host that can both
+    # download AND execute the staged darwin-arm64 runtime (host_exec=true).
+    runs-on: macos-14
+    timeout-minutes: 40
+    steps:
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: "22"
+          cache: npm
+
+      # Same download cache release-desktop.yml uses — keyed on the pinned
+      # runtime manifest so a re-pin busts it automatically.
+      - name: Cache desktop runtime downloads
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: ~/.cache/enterprise-desktop-runtime
+          key: desktop-runtime-${{ runner.os }}-arm64-${{ hashFiles('tools/desktop-runtime/manifest.json') }}
+          restore-keys: |
+            desktop-runtime-${{ runner.os }}-arm64-
+
+      # `npm ci` installs viem (run-local.mjs signs the SIWE message with an
+      # ephemeral wallet) and the rest of the workspace deps.
+      - name: Install Node dependencies
+        run: npm ci --no-audit --no-fund
+
+      # Downloads + extracts CPython + PostgreSQL and pip-installs all three
+      # services' wheels for THIS arch into apps/desktop/resources/runtime/
+      # darwin-arm64/ (host_exec=true). Ad-hoc code-signing so the freshly
+      # extracted mach-o binaries execute on the runner without a Developer ID.
+      - name: Stage self-contained runtime (darwin-arm64, ad-hoc signed)
+        run: node tools/desktop-runtime/stage.mjs --platform darwin --arch arm64 --adhoc-sign
+
+      # THE DRILL: boot the supervised stack and drive a real run to a streamed
+      # completion. run-local.mjs exits non-zero if ANY assertion fails (boot,
+      # health, providers, dev-IdP-absent, SIWE sign-in, or run→stream).
+      - name: Supervised boot + hermetic run→stream smoke
+        run: node tools/desktop-runtime/run-local.mjs
