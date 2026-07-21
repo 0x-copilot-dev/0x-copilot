@@ -467,6 +467,7 @@ describe("auth.* channels", () => {
           status: "linked" as const,
         }),
       ),
+      cancelPendingSignIn: vi.fn((): void => {}),
       signOut: vi.fn(async (_workspaceId: string): Promise<void> => {}),
       getSession: vi.fn(
         async (_workspaceId: string): Promise<RS | null> => null,
@@ -491,6 +492,7 @@ describe("auth.* channels", () => {
     expect(ipcMain.has(CHANNELS.authSignIn)).toBe(true);
     expect(ipcMain.has(CHANNELS.authSignInGoogle)).toBe(true);
     expect(ipcMain.has(CHANNELS.authSignInWallet)).toBe(true);
+    expect(ipcMain.has(CHANNELS.authCancelSignIn)).toBe(true);
     expect(ipcMain.has(CHANNELS.authLinkGoogle)).toBe(true);
     expect(ipcMain.has(CHANNELS.authLinkWallet)).toBe(true);
     expect(ipcMain.has(CHANNELS.authSignOut)).toBe(true);

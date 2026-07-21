@@ -70,7 +70,20 @@ describe("SignInGate", () => {
     }
     root = null;
     container.remove();
+    vi.useRealTimers();
   });
+
+  /** Advance past the design's post-sign-in "Signed in" beat (fake timers). */
+  function passDoneBeat(): void {
+    expect(
+      container.querySelector("[data-testid='sign-in-done']"),
+    ).not.toBeNull();
+    expect(container.textContent).toContain("Signed in");
+    expect(container.textContent).toContain("Opening your workspace…");
+    act(() => {
+      vi.advanceTimersByTime(900);
+    });
+  }
 
   async function mount(bridge: WindowBridge): Promise<void> {
     await act(async () => {
@@ -138,7 +151,8 @@ describe("SignInGate", () => {
     expect(container.textContent).toContain("No seed phrase, ever.");
   });
 
-  it("clicking Continue with a wallet invokes auth.sign-in-wallet and lands signed-in", async () => {
+  it("clicking Continue with a wallet invokes auth.sign-in-wallet, shows the done beat, and lands signed-in", async () => {
+    vi.useFakeTimers();
     const invoke = deferred();
     const bridge = makeBridge({
       [CHANNELS.authGetSession]: async () => null,
@@ -148,11 +162,16 @@ describe("SignInGate", () => {
     await mount(bridge);
 
     click("sign-in-wallet-button");
-    // While main drives the external wallet round-trip we show a waiting state.
+    // While main drives the external wallet round-trip we show a waiting state
+    // WITH the design's Cancel affordance.
     expect(
       container.querySelector("[data-testid='sign-in-waiting']"),
     ).not.toBeNull();
     expect(container.textContent).toContain("Waiting for your wallet…");
+    expect(
+      container.querySelector("[data-testid='sign-in-cancel-button']")
+        ?.textContent,
+    ).toBe("Cancel");
     expect(bridge.calls.at(-1)).toEqual({
       channel: CHANNELS.authSignInWallet,
       payload: { workspaceId: "org_acme" },
@@ -162,12 +181,14 @@ describe("SignInGate", () => {
       invoke.resolve(SESSION);
       await Promise.resolve();
     });
+    passDoneBeat();
     expect(
       container.querySelector("[data-testid='app']")?.textContent,
     ).toContain("sarah@acme.test");
   });
 
-  it("clicking Continue with Google invokes auth.sign-in-google and lands signed-in", async () => {
+  it("clicking Continue with Google invokes auth.sign-in-google, shows the done beat, and lands signed-in", async () => {
+    vi.useFakeTimers();
     const invoke = deferred();
     const bridge = makeBridge({
       [CHANNELS.authGetSession]: async () => null,
@@ -177,7 +198,12 @@ describe("SignInGate", () => {
     await mount(bridge);
 
     click("sign-in-google-button");
-    expect(container.textContent).toContain("Opening your browser…");
+    // Design `google` view copy + the backlink-style cancel.
+    expect(container.textContent).toContain("Authorizing with Google…");
+    expect(
+      container.querySelector("[data-testid='sign-in-cancel-button']")
+        ?.textContent,
+    ).toBe("Cancel — use a different method");
     expect(bridge.calls.at(-1)).toEqual({
       channel: CHANNELS.authSignInGoogle,
       payload: { workspaceId: "org_acme" },
@@ -187,12 +213,14 @@ describe("SignInGate", () => {
       invoke.resolve(SESSION);
       await Promise.resolve();
     });
+    passDoneBeat();
     expect(
       container.querySelector("[data-testid='app']")?.textContent,
     ).toContain("sarah@acme.test");
   });
 
-  it("using locally still invokes auth.sign-in", async () => {
+  it("using locally still invokes auth.sign-in (no cancel affordance)", async () => {
+    vi.useFakeTimers();
     const signIn = vi.fn(async () => SESSION);
     const bridge = makeBridge({
       [CHANNELS.authGetSession]: async () => null,
@@ -202,19 +230,55 @@ describe("SignInGate", () => {
 
     click("sign-in-button");
     expect(container.textContent).toContain("Setting up your workspace…");
+    // Local mints instantly on this device — nothing external to cancel.
+    expect(
+      container.querySelector("[data-testid='sign-in-cancel-button']"),
+    ).toBeNull();
     await act(async () => {
       await Promise.resolve();
     });
     expect(signIn).toHaveBeenCalledWith({ workspaceId: "org_acme" });
+    passDoneBeat();
     expect(container.querySelector("[data-testid='app']")).not.toBeNull();
   });
 
-  it("a failed Google sign-in shows the error with a retry that returns to the pick screen", async () => {
+  it("Cancel on the wallet wait closes the flow quietly — pick screen, no error", async () => {
+    const invoke = deferred();
+    const cancel = vi.fn(async () => undefined);
     const bridge = makeBridge({
       [CHANNELS.authGetSession]: async () => null,
-      [CHANNELS.authSignInGoogle]: async () => {
-        throw new Error("loopback redirect timed out");
-      },
+      [CHANNELS.authSignInWallet]: () =>
+        invoke.promise as Promise<RendererSession>,
+      [CHANNELS.authCancelSignIn]: cancel,
+    });
+    await mount(bridge);
+
+    click("sign-in-wallet-button");
+    click("sign-in-cancel-button");
+    expect(cancel).toHaveBeenCalled();
+
+    // Main closes the loopback → the pending sign-in promise rejects. A
+    // canceled flow must land back on pick, NOT on the failure screen.
+    await act(async () => {
+      invoke.reject(new Error("loopback closed before the redirect"));
+      await Promise.resolve();
+    });
+    expect(
+      container.querySelector("[data-testid='sign-in-wallet-button']"),
+    ).not.toBeNull();
+    expect(container.querySelector("[data-testid='sign-in-error']")).toBeNull();
+  });
+
+  it("a failed Google sign-in shows the design's gerr state — retry, wallet fallback, back to sign-in", async () => {
+    const googleSignIn = vi.fn(async () => {
+      throw new Error("loopback redirect timed out");
+    });
+    const walletInvoke = deferred();
+    const bridge = makeBridge({
+      [CHANNELS.authGetSession]: async () => null,
+      [CHANNELS.authSignInGoogle]: googleSignIn,
+      [CHANNELS.authSignInWallet]: () =>
+        walletInvoke.promise as Promise<RendererSession>,
     });
     await mount(bridge);
 
@@ -222,11 +286,67 @@ describe("SignInGate", () => {
     await act(async () => {
       await Promise.resolve();
     });
+    // Design gerr copy + the honest detail line.
+    expect(container.textContent).toContain("Google didn’t finish");
+    expect(container.textContent).toContain(
+      "The browser window closed or timed out before confirming.",
+    );
     const error = container.querySelector("[data-testid='sign-in-error']");
     expect(error?.textContent).toContain("loopback redirect timed out");
 
-    // Try again returns to the pick screen with all three options back.
+    // Try again retries GOOGLE (design), not the pick screen.
     click("sign-in-retry-button");
+    expect(googleSignIn).toHaveBeenCalledTimes(2);
+    await act(async () => {
+      await Promise.resolve();
+    });
+
+    // "Use a wallet instead" jumps straight into the wallet flow.
+    click("sign-in-wallet-fallback-button");
+    expect(bridge.calls.at(-1)?.channel).toBe(CHANNELS.authSignInWallet);
+    expect(container.textContent).toContain("Waiting for your wallet…");
+
+    // Cancel that, reject, and use the gerr backlink to reach pick.
+    await act(async () => {
+      walletInvoke.reject(new Error("closed"));
+      await Promise.resolve();
+    });
+    click("sign-in-back-button");
+    expect(
+      container.querySelector("[data-testid='sign-in-google-button']"),
+    ).not.toBeNull();
+  });
+
+  it("a failed wallet sign-in shows the design's werr state — retry retries, backlink returns to pick", async () => {
+    const walletSignIn = vi.fn(async () => {
+      throw new Error("wallet handoff state mismatch");
+    });
+    const bridge = makeBridge({
+      [CHANNELS.authGetSession]: async () => null,
+      [CHANNELS.authSignInWallet]: walletSignIn,
+    });
+    await mount(bridge);
+
+    click("sign-in-wallet-button");
+    await act(async () => {
+      await Promise.resolve();
+    });
+    // Design werr copy + honest detail.
+    expect(container.textContent).toContain("No response from your wallet");
+    expect(container.textContent).toContain("Nothing was signed.");
+    const error = container.querySelector("[data-testid='sign-in-error']");
+    expect(error?.textContent).toContain("wallet handoff state mismatch");
+
+    // Try again retries the WALLET flow (design), landing back on werr.
+    click("sign-in-retry-button");
+    expect(walletSignIn).toHaveBeenCalledTimes(2);
+    await act(async () => {
+      await Promise.resolve();
+    });
+    expect(container.textContent).toContain("No response from your wallet");
+
+    // The backlink is the way back to the pick screen.
+    click("sign-in-back-button");
     expect(
       container.querySelector("[data-testid='sign-in-wallet-button']"),
     ).not.toBeNull();
@@ -235,28 +355,6 @@ describe("SignInGate", () => {
     ).not.toBeNull();
     expect(
       container.querySelector("[data-testid='sign-in-button']"),
-    ).not.toBeNull();
-  });
-
-  it("a failed wallet sign-in shows the error with a retry that returns to the pick screen", async () => {
-    const bridge = makeBridge({
-      [CHANNELS.authGetSession]: async () => null,
-      [CHANNELS.authSignInWallet]: async () => {
-        throw new Error("wallet handoff state mismatch");
-      },
-    });
-    await mount(bridge);
-
-    click("sign-in-wallet-button");
-    await act(async () => {
-      await Promise.resolve();
-    });
-    const error = container.querySelector("[data-testid='sign-in-error']");
-    expect(error?.textContent).toContain("wallet handoff state mismatch");
-
-    click("sign-in-retry-button");
-    expect(
-      container.querySelector("[data-testid='sign-in-wallet-button']"),
     ).not.toBeNull();
   });
 

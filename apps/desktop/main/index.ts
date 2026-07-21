@@ -485,6 +485,7 @@ function wireTransportAndIpc(
         authService.signInWithGoogle(workspaceId),
       signInWithWallet: (workspaceId) =>
         authService.signInWithWallet(workspaceId),
+      cancelPendingSignIn: () => authService.cancelPendingSignIn(),
       linkGoogle: (workspaceId) => authService.linkGoogle(workspaceId),
       linkWallet: (workspaceId, confirmMerge) =>
         authService.linkWallet(workspaceId, confirmMerge),
@@ -585,6 +586,8 @@ interface ActiveAuthService {
   signInWithWallet(
     workspaceId: string,
   ): ReturnType<AuthService["signInWithWallet"]>;
+  /** Cancel the pending system-browser sign-in (wallet or Google). */
+  cancelPendingSignIn(): void;
   linkGoogle(workspaceId: string): ReturnType<AuthService["linkGoogle"]>;
   linkWallet(
     workspaceId: string,
@@ -684,6 +687,7 @@ function buildAuthService(
         : service.signIn(workspaceId),
     signInWithGoogle: (workspaceId) => service.signInWithGoogle(workspaceId),
     signInWithWallet: (workspaceId) => service.signInWithWallet(workspaceId),
+    cancelPendingSignIn: () => service.cancelPendingSignIn(),
     // Account-linking (PRD FR-L1/L2): authenticated LINK flows. The bearer is
     // pulled inside the service; only a renderer-safe outcome comes back.
     linkGoogle: (workspaceId) => service.linkGoogle(workspaceId),
