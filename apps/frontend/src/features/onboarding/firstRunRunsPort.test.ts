@@ -36,7 +36,7 @@ describe("createFirstRunRunsPort", () => {
       conversation_id: "conv_1",
     } as never);
 
-    const result = await createFirstRunRunsPort(IDENTITY).createFirstRun({
+    const result = await createFirstRunRunsPort(IDENTITY).createFirstRun({ webSearchEnabled: true,
       userInput: "watch my wallet",
       model: null,
     });
@@ -77,7 +77,7 @@ describe("createFirstRunRunsPort", () => {
       },
     ];
 
-    await createFirstRunRunsPort(IDENTITY).createFirstRun({
+    await createFirstRunRunsPort(IDENTITY).createFirstRun({ webSearchEnabled: true,
       userInput: "explain this csv",
       model,
       attachments,
@@ -97,7 +97,7 @@ describe("createFirstRunRunsPort", () => {
     } as never);
     vi.mocked(createRun).mockResolvedValue({ run_id: "run_3" } as never);
 
-    await createFirstRunRunsPort(IDENTITY).createFirstRun({
+    await createFirstRunRunsPort(IDENTITY).createFirstRun({ webSearchEnabled: true,
       userInput: "   ",
       model: null,
     });
@@ -114,7 +114,7 @@ describe("createFirstRunRunsPort", () => {
     vi.mocked(createRun).mockResolvedValue({ run_id: "run_4" } as never);
 
     const long = "a".repeat(120);
-    await createFirstRunRunsPort(IDENTITY).createFirstRun({
+    await createFirstRunRunsPort(IDENTITY).createFirstRun({ webSearchEnabled: true,
       userInput: long,
       model: null,
     });
@@ -130,7 +130,7 @@ describe("createFirstRunRunsPort", () => {
     } as never);
 
     await expect(
-      createFirstRunRunsPort(IDENTITY).createFirstRun({
+      createFirstRunRunsPort(IDENTITY).createFirstRun({ webSearchEnabled: true,
         userInput: "hi",
         model: null,
       }),

@@ -58,6 +58,10 @@ export function createFirstRunRunsPort(
 
       const run = await createRun(conversationId, input.userInput, identity, {
         model: input.model,
+        // P4: the FTUE Tools-popover web-search toggle. Threaded top-level on
+        // the run body (the field the backend actually reads); `createRun`
+        // omits it when true so the always-on default is preserved.
+        webSearchEnabled: input.webSearchEnabled,
         attachments:
           input.attachments !== undefined && input.attachments.length > 0
             ? [...input.attachments]
