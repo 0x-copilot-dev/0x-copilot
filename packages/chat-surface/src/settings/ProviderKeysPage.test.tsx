@@ -143,6 +143,36 @@ describe("<ProviderKeysPage>", () => {
     expect(chip).toHaveClass("ui-badge--success");
   });
 
+  it("prefers the summary's default_model over the modelChips fallback (PR-F.5)", async () => {
+    const summaryWithModel: ProviderKeySummary = {
+      ...SAVED_ANTHROPIC,
+      default_model: "claude-sonnet-4",
+    };
+    render(
+      <ProviderKeysPage
+        port={makePort({ list: vi.fn().mockResolvedValue([summaryWithModel]) })}
+        modelChips={{ anthropic: "claude-opus-4" }}
+      />,
+    );
+    const chip = await screen.findByTestId("provider-model-chip-anthropic");
+    // Server-projected default wins over the host-supplied fallback chip.
+    expect(chip).toHaveTextContent("claude-sonnet-4");
+    expect(chip).not.toHaveTextContent("claude-opus-4");
+    expect(chip).toHaveClass("ui-badge--success");
+  });
+
+  it("falls back to modelChips when the summary carries no default_model (PR-F.5)", async () => {
+    // Older server / key stored without a model → summary.default_model absent.
+    render(
+      <ProviderKeysPage
+        port={makePort({ list: vi.fn().mockResolvedValue([SAVED_ANTHROPIC]) })}
+        modelChips={{ anthropic: "claude-opus-4" }}
+      />,
+    );
+    const chip = await screen.findByTestId("provider-model-chip-anthropic");
+    expect(chip).toHaveTextContent("claude-opus-4");
+  });
+
   it("adds a key through the flow, storing the plaintext once and toasting", async () => {
     const port = makePort();
     const onToast = vi.fn();

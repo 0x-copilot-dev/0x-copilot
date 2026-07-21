@@ -120,6 +120,54 @@ class TestDecryptedKeys:
         assert keys == {"openrouter": _OPENROUTER_KEY}
 
 
+class TestDefaultModelProjection:
+    """PRD-F PR-F.5 — ``set_key`` persists the display-safe default-model pick
+    for projection on the summary; omitting it preserves any stored value."""
+
+    def test_set_key_persists_default_model(self) -> None:
+        service, store, _identity = _service()
+        saved = service.set_key(
+            org_id=_ORG,
+            user_id=_USER,
+            provider=ProviderName.OPENAI,
+            api_key=_OPENAI_KEY,
+            default_model="gpt-4o",
+        )
+        assert saved.default_model == "gpt-4o"
+        row = store.get(org_id=_ORG, user_id=_USER, provider=ProviderName.OPENAI)
+        assert row is not None
+        assert row.default_model == "gpt-4o"
+
+    def test_set_key_defaults_to_none(self) -> None:
+        service, _store, _identity = _service()
+        saved = service.set_key(
+            org_id=_ORG,
+            user_id=_USER,
+            provider=ProviderName.OPENAI,
+            api_key=_OPENAI_KEY,
+        )
+        assert saved.default_model is None
+
+    def test_rotation_without_model_preserves_stored_pick(self) -> None:
+        service, _store, _identity = _service()
+        service.set_key(
+            org_id=_ORG,
+            user_id=_USER,
+            provider=ProviderName.OPENAI,
+            api_key=_OPENAI_KEY,
+            default_model="gpt-4o",
+        )
+        # Older-client rotation: new key, no model → stored pick survives.
+        rotated = service.set_key(
+            org_id=_ORG,
+            user_id=_USER,
+            provider=ProviderName.OPENAI,
+            api_key="sk-test-openai-0000000000000000009999",
+        )
+        assert rotated.key_hint == "…9999"
+        assert rotated.default_model == "gpt-4o"
+
+
 class TestValidation:
     def test_rejects_too_short(self) -> None:
         with pytest.raises(ProviderKeyFormatError, match="api_key_too_short"):

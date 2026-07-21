@@ -18,6 +18,7 @@ def _record(
     provider: ProviderName = ProviderName.OPENAI,
     encrypted_key: str = "vault-envelope-ciphertext",
     key_hint: str = "…1234",
+    default_model: str | None = None,
     org_id: str = _ORG,
     user_id: str = _USER,
 ) -> ProviderApiKeyRecord:
@@ -27,6 +28,7 @@ def _record(
         provider=provider,
         encrypted_key=encrypted_key,
         key_hint=key_hint,
+        default_model=default_model,
     )
 
 
@@ -97,3 +99,37 @@ class TestInMemoryStoreRoundTrip:
         )
         remaining = store.list_for_user(org_id=_ORG, user_id=_USER)
         assert [record.provider.value for record in remaining] == ["anthropic"]
+
+
+class TestDefaultModelProjection:
+    """PRD-F PR-F.5 — the display-safe ``default_model`` round-trips and a
+    rotation that omits it preserves the previously-stored pick."""
+
+    def test_default_model_defaults_to_none(self) -> None:
+        store = InMemoryProviderApiKeyStore()
+        saved = store.upsert(_record())
+        assert saved.default_model is None
+        fetched = store.get(org_id=_ORG, user_id=_USER, provider=ProviderName.OPENAI)
+        assert fetched is not None
+        assert fetched.default_model is None
+
+    def test_default_model_round_trips(self) -> None:
+        store = InMemoryProviderApiKeyStore()
+        store.upsert(_record(default_model="gpt-4o"))
+        fetched = store.get(org_id=_ORG, user_id=_USER, provider=ProviderName.OPENAI)
+        assert fetched is not None
+        assert fetched.default_model == "gpt-4o"
+
+    def test_rotation_without_model_preserves_stored_pick(self) -> None:
+        store = InMemoryProviderApiKeyStore()
+        store.upsert(_record(default_model="gpt-4o", key_hint="…aaaa"))
+        # Rotate the key WITHOUT re-sending the model (older-client shape).
+        rotated = store.upsert(_record(key_hint="…bbbb"))
+        assert rotated.key_hint == "…bbbb"
+        assert rotated.default_model == "gpt-4o"
+
+    def test_rotation_with_new_model_overwrites(self) -> None:
+        store = InMemoryProviderApiKeyStore()
+        store.upsert(_record(default_model="gpt-4o"))
+        rotated = store.upsert(_record(default_model="o3"))
+        assert rotated.default_model == "o3"
