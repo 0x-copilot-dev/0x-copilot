@@ -103,3 +103,20 @@ export type {
 } from "./projectFirstRunConnectors";
 export type { FirstRunConnectorsPort } from "./ports/FirstRunConnectorsPort";
 // === end First-Run onboarding (P4 — tools popover) ===
+// === First-Run onboarding (P4 — wallet chip) ===
+export { WalletChip, truncateAddress } from "./WalletChip";
+export type { WalletChipProps } from "./WalletChip";
+export type {
+  FirstRunProfilePort,
+  WalletProfileView,
+} from "./ports/FirstRunProfilePort";
+export {
+  FirstRunProfileProvider,
+  FirstRunWalletChip,
+  useFirstRunProfile,
+} from "./providers/FirstRunProfileProvider";
+export type {
+  FirstRunProfileProviderProps,
+  FirstRunProfileState,
+} from "./providers/FirstRunProfileProvider";
+// === end First-Run onboarding (P4 — wallet chip) ===
