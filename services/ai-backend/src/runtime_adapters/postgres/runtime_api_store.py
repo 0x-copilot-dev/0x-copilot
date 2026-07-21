@@ -5029,11 +5029,20 @@ class PostgresRuntimeApiStore:
                 if self._notify_after_append:
                     # Fire NOTIFY inside the same transaction; if the
                     # INSERT rolls back the NOTIFY is silently discarded
-                    # by Postgres. Channel name is parameterised at
-                    # construction; payload is ``<run_id>:<sequence_no>``.
+                    # by Postgres. Payload is ``<run_id>:<sequence_no>``.
+                    #
+                    # Must use pg_notify(): the bare ``NOTIFY chan, %s``
+                    # form takes no bind parameters, so psycopg's extended
+                    # protocol sends ``NOTIFY chan, $1`` and Postgres rejects
+                    # it ("syntax error at or near \"$1\""). pg_notify() is
+                    # the function form that accepts bound arguments and keeps
+                    # the channel parameterised too.
                     await conn.execute(
-                        f"NOTIFY {self._notify_channel}, %s",
-                        (f"{envelope.run_id}:{envelope.sequence_no}",),
+                        "SELECT pg_notify(%s, %s)",
+                        (
+                            self._notify_channel,
+                            f"{envelope.run_id}:{envelope.sequence_no}",
+                        ),
                     )
         return envelope
 
@@ -5126,16 +5135,25 @@ class PostgresRuntimeApiStore:
                 # the same (org, kind, conversation). We fetch ttl_seconds
                 # directly so each row can compute its own expiry from its
                 # own created_at without another policy query.
+                #
+                # Sample the policy against a single "now" timestamp: the
+                # draft carries no ``created_at`` (that field lives on the
+                # built envelope, matching the single-append path which
+                # resolves retention against ``envelope.created_at``). Each
+                # envelope's default_factory stamps ~now() microseconds apart,
+                # so one shared sample is the correct basis for the delta,
+                # which is then re-anchored to each row's own created_at below.
+                _sample_created_at = datetime.now(timezone.utc)
                 _retention_sample = await self._resolve_retention_until(
                     conn,
                     org_id=event_org_id,
                     kind=RetentionKind.EVENTS,
                     conversation_id=first.conversation_id,
-                    created_at=first.created_at,
+                    created_at=_sample_created_at,
                 )
                 _event_ttl_seconds: int | None = None
                 if _retention_sample is not None:
-                    _event_ttl_delta = _retention_sample - first.created_at
+                    _event_ttl_delta = _retention_sample - _sample_created_at
                     _event_ttl_seconds = int(_event_ttl_delta.total_seconds())
 
                 envelopes: list[RuntimeEventEnvelope] = []
@@ -5259,10 +5277,12 @@ class PostgresRuntimeApiStore:
                     # One NOTIFY per batch — the payload carries the
                     # *highest* sequence number; SSE adapters always
                     # ``replay_events(after_sequence=N)`` so they pick up
-                    # everything in the batch in one round-trip.
+                    # everything in the batch in one round-trip. pg_notify()
+                    # (not bare ``NOTIFY chan, %s``) so the payload can be a
+                    # bound parameter — see the single-append site above.
                     await conn.execute(
-                        f"NOTIFY {self._notify_channel}, %s",
-                        (f"{first.run_id}:{last_sequence}",),
+                        "SELECT pg_notify(%s, %s)",
+                        (self._notify_channel, f"{first.run_id}:{last_sequence}"),
                     )
         return tuple(envelopes)
 
