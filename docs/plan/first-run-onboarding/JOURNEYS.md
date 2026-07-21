@@ -23,13 +23,9 @@ Boot gate (`BootGate`) → `SignInGate` picker ("Welcome to 0xCopilot": wallet /
 4. Send → `POST /v1/agent/conversations` → `POST /v1/agent/runs {conversation_id,user_input,model}` → SSE.
 5. **Ack** _"Starting your first run"_ → set flag → workspace.
 
-## J3 — Trial (explore) — depends on P5
+## J3 — Trial (explore) — SHELVED (not in v1)
 
-1. Gate → **25 free runs**. `POST /v1/trial/start` (idempotent; establishes per-user trial default model server-side).
-2. Composer "Haiku starter". Send → `POST /v1/agent/runs {…,model:"trial"}`.
-3. Credential gate resolves the app-owned credit iff `GET /v1/trial/status` ledger allows; decrement atomically.
-4. Exhaustion → typed `TRIAL_EXHAUSTED` → composer surfaces "add a key / download local" (re-enters J1/J2).
-5. **Ack** → set flag → workspace.
+Dropped from v1. If revived, it is **not** an open no-key trial: eligibility requires the SIWE-verified wallet to hold **≥ 50k $CPILOT** (server-side on-chain balance check), then the same run-create path as J2 against an app-owned credit + ledger. See README §7.1 for the parked design.
 
 ## J4 — Skip
 

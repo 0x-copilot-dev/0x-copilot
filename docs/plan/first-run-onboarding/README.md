@@ -6,7 +6,7 @@ Design source: Claude Design project **`Copilot`** (`73f810d9-7b77-4849-9087-f7f
 
 Scope decisions (locked with the requester):
 
-1. **Hosted "25 free runs" trial lane — BUILD** (app-owned/proxied credits + free-run ledger + per-user default model).
+1. **Hosted "25 free runs" trial lane — SHELVED (deferred).** The open no-key trial is dropped from v1. If revived, access is gated on **holding ≥ 50k $CPILOT** (on-chain balance check against the SIWE-verified wallet), never an anonymous free tier. The gate's trial escape-hatch is hidden in v1; the gate offers only the two real paths (local download, BYO key) plus Skip. Parked design in §7.1.
 2. **Safe{Wallet} + Google Sheets connectors — BUILD** (Safe MCP + wallet-signing path; Sheets read/write MCP).
 3. **Faithful shared build** — the full 3-state FTUE lives in `packages/chat-surface` behind ports, mounted by both the desktop and web hosts (SSOT architecture per `packages/chat-surface/CLAUDE.md`).
 
@@ -22,7 +22,7 @@ Sub: _"The only required choice — switch anytime."_ Two cards:
 
 - **Download the local model** — `Qwen 3 4B · 5.6 GB · free forever`, "Runs on this machine. Nothing you send ever leaves it." → primary **Start download** (streams %, and _"type your first prompt while it downloads"_).
 - **Bring your own key** — `Anthropic · OpenAI · OpenRouter`, "Frontier models, ready in ~30 seconds. Keys stay in your OS keychain." → **Add a key** reveals an inline form (provider tri-toggle → `sk-…` password → _"stored in your OS keychain — never uploaded"_ → **Connect**).
-- Escape hatch: _"just exploring? hosted starter — 25 free runs, no key →"_.
+- Escape hatch: ~~_"just exploring? hosted starter — 25 free runs, no key →"_~~ **hidden in v1** (trial lane shelved — see Scope). The gate shows only the two cards + Skip.
 
 ### State B — the composer: "What should we run first?"
 
@@ -32,7 +32,7 @@ The real app composer (textarea · attach · **model pill** · **tools pill** ·
 - _Draft a launch thread_ → "Draft a 6-post launch thread… Ask me 3 questions first, then write it."
 - _Explain a CSV_ → "Explain this CSV… chart the top movers." (pre-attaches `airdrop-claims.csv`)
 
-Popovers: **attach** (upload / screenshot / project files), **model** (Local · Haiku starter trial · BYO keys), **tools** (Web search toggle · Safe{Wallet}/Sheets/GitHub 1-click · Custom MCP), **key** (inline add-key).
+Popovers: **attach** (upload / screenshot / project files), **model** (Local · BYO keys), **tools** (Web search toggle · Safe{Wallet}/Sheets/GitHub 1-click · Custom MCP), **key** (inline add-key). _(The "Haiku starter trial" model row is hidden in v1 — trial shelved.)_
 
 ### State C — the acknowledgment: "Starting your first run"
 
@@ -64,7 +64,7 @@ The design's per-provider dot colors (Anthropic `#d97757` etc.) are _data_, not 
 ### 3.1 Where it mounts
 
 - **Presentational surface (SSOT):** `packages/chat-surface/src/onboarding/` — a new `FirstRunSurface` (+ `Gate`, `KeyForm`, `OnboardingComposer`, `Acknowledgment`, `WalletChip`, `SuggestionChips`) built from design-system tokens/primitives and the existing composer. All I/O via **ports** (no bare `fetch`/`window`/`localStorage` — eslint-banned in this package).
-- **Ports** (host-injected): `firstRunStore` (get/set completion flag), `providerKeys` (list/set/validate), `localModels` (status/pull SSE/list), `trial` (start/status), `runs` (createConversation/createRun/stream), `profile` (wallet chip), `connectors` (catalog/install/scope), `navigate`/`openSettings`/`complete`.
+- **Ports** (host-injected): `firstRunStore` (get/set completion flag), `providerKeys` (list/set/validate), `localModels` (status/pull SSE/list), `runs` (createConversation/createRun/stream), `profile` (wallet chip), `connectors` (catalog/install/scope), `navigate`/`openSettings`/`complete`. _(No `trial` port in v1 — shelved.)_
 - **Desktop host:** `apps/desktop/renderer/` binds the ports to the facade + main-process IPC and mounts the gate at the seam in `bootstrap.tsx` (between `SignInGate` signed-in and `ChatShellForSession`), modeled on `BootGate`/`SignInGate`.
 - **Web host:** `apps/frontend/src/features/onboarding/` binds the same ports to its API clients + `localStorage`.
 
@@ -102,7 +102,7 @@ Legend: ✅ exists on `main` · 🟡 partial · ❌ net-new.
 | Attachments (inline data-URL, no server upload)                                       | ✅                                               | `features/chat/runtime/attachments/*` — verify CSV accept path                               |
 | **First-run flag / gate**                                                             | ❌                                               | —                                                                                            |
 | **Curated "Qwen 3 4B" download preset**                                               | ❌ (pipeline exists; catalog host-injected `[]`) | `LocalModelsPage.tsx:99`                                                                     |
-| **Hosted trial lane** (credits + ledger + per-user default)                           | ❌                                               | —                                                                                            |
+| ~~Hosted trial lane~~ (SHELVED — future: ≥50k $CPILOT gate)                           | ⏸ deferred                                       | see §7.1                                                                                     |
 | **Safe{Wallet} MCP + signing path**                                                   | ❌                                               | only SIWE login exists                                                                       |
 | **Google Sheets read/write MCP**                                                      | ❌ (gdrive excludes cell edits)                  | `connectors/desktop_profiles.yaml:118`                                                       |
 | **Per-run web-search toggle**                                                         | ❌ (tool is always-on)                           | `runtime_worker/dependencies.py:53`                                                          |
@@ -115,7 +115,7 @@ Legend: ✅ exists on `main` · 🟡 partial · ❌ net-new.
 
 1. **Local-first (privacy):** launch → sign in → gate → _Start download_ (Qwen streams %) → composer appears immediately (model pill "Qwen 3 4B · 41%") → pick chip / type → send → ack _"Queued — starts when the model lands"_ → workspace; run auto-fires at 100%.
 2. **BYOK (~30s):** gate → _Add a key_ → provider → paste `sk-…` → live-validate → composer with real model → send → ack _"Starting your first run"_ → workspace.
-3. **Trial (explore):** gate → _25 free runs_ → composer "Haiku starter" → send → ack → workspace; each run decrements the free-run ledger; exhaustion routes to the gate's BYOK/local paths.
+3. ~~**Trial (explore)**~~ — **shelved in v1** (see §7.1). If revived, it becomes a token-holder path (≥50k $CPILOT), not an open no-key trial.
 4. **Skip:** _skip → workspace_ → flag set → Run cockpit's existing "Set up your model" empty-state.
 5. **Returning:** flag set → gate skipped → straight to workspace.
 
@@ -127,33 +127,34 @@ Full step/endpoint sequences per journey: [`JOURNEYS.md`](./JOURNEYS.md).
 
 Each phase = its own PRD (written at execution time) + `STATUS.md` tick. Frontend phases are substrate-shared (chat-surface) with desktop+web host bindings.
 
-| Phase  | Title                                                             | Size | Gates                                                                                       |
-| ------ | ----------------------------------------------------------------- | ---- | ------------------------------------------------------------------------------------------- |
-| **P0** | First-run flag + gate seam + skip                                 | S    | main-process `first-run.json` + IPC; web KV; `bootstrap.tsx` gate; skip path                |
-| **P1** | Gate surface + BYOK card + inline key form                        | M    | wired to `/v1/settings/provider-keys`; token-mapped CSS; `FirstRunSurface` scaffold         |
-| **P2** | Local-model card + curated Qwen 3 4B preset                       | M    | curated preset config; `enable_local_models` desktop-default decision; SSE progress in-gate |
-| **P3** | Onboarding composer + suggestion chips + first-run creation + ack | M    | mount `AssistantComposer`; shared `SuggestionChips`; two-step create; ack + handoff         |
-| **P4** | Wallet chip + Tools popover parity + web-search toggle            | M    | `/v1/me/profile` chip; reuse `ToolPicker`; new per-run web-search context flag              |
-| **P5** | **Hosted trial lane**                                             | L    | credits source + free-run ledger + enforcement + per-user default model — see §7.1          |
-| **P6** | **Safe{Wallet} + Sheets connectors**                              | L    | Safe MCP + approval-gated signing; Sheets read/write MCP — see §7.2 / §7.3                  |
-| **P7** | E2E parity pass + verification                                    | M    | per-journey live-stack tests; ui-design-reviewer parity audit vs the mock                   |
+| Phase  | Title                                                                    | Size | Gates                                                                                       |
+| ------ | ------------------------------------------------------------------------ | ---- | ------------------------------------------------------------------------------------------- |
+| **P0** | First-run flag + gate seam + skip                                        | S    | main-process `first-run.json` + IPC; web KV; `bootstrap.tsx` gate; skip path                |
+| **P1** | Gate surface + BYOK card + inline key form                               | M    | wired to `/v1/settings/provider-keys`; token-mapped CSS; `FirstRunSurface` scaffold         |
+| **P2** | Local-model card + curated Qwen 3 4B preset                              | M    | curated preset config; `enable_local_models` desktop-default decision; SSE progress in-gate |
+| **P3** | Onboarding composer + suggestion chips + first-run creation + ack        | M    | mount `AssistantComposer`; shared `SuggestionChips`; two-step create; ack + handoff         |
+| **P4** | Wallet chip + Tools popover parity + web-search toggle                   | M    | `/v1/me/profile` chip; reuse `ToolPicker`; new per-run web-search context flag              |
+| ~~P5~~ | ~~Hosted trial lane~~ — **SHELVED** (deferred; future ≥50k $CPILOT gate) | —    | not in v1 — parked design in §7.1                                                           |
+| **P6** | **Safe{Wallet} + Sheets connectors**                                     | L    | Safe MCP + approval-gated signing; Sheets read/write MCP — see §7.2 / §7.3                  |
+| **P7** | E2E parity pass + verification                                           | M    | per-journey live-stack tests; ui-design-reviewer parity audit vs the mock                   |
 
-**P0–P4 delivers a faithful, fully-working FTUE for local + BYOK + skip.** P5/P6 add the heavy, decision-gated subsystems.
+**P0–P4 delivers a faithful, fully-working FTUE for local + BYOK + skip.** P6 (Safe/Sheets) is the remaining heavy net-new; P5 (trial) is shelved.
 
 ---
 
 ## 7. Net-new backend design sketches
 
-### 7.1 Hosted trial lane (P5) — highest risk
+### 7.1 Hosted trial lane — SHELVED (parked design)
 
-Goal: keyless users get N (=25) real runs on an app-owned "Haiku starter" model, then convert to BYOK/local.
+**Not built in v1.** The open "25 free runs, no key" hatch is dropped. Parked here for if/when it is revived — and if revived it is a **token-holder benefit, not an anonymous free tier**:
 
-- **Credits source (DECISION):** app-owned provider key held server-side (an operator secret, never per-user) OR a metered proxy. Must never be exposed to the client or a run body.
-- **Ledger:** `trial_run_ledger(org_id,user_id,used,limit,reset_policy)` — a new backend store + migration. Decrement on run-create for the trial model; enforce atomically to prevent races/abuse.
-- **Enforcement point:** extend the credential gate (`execution/models.py`) so provider `= trial` resolves the app credential _iff_ ledger allows; on exhaustion raise a typed `TRIAL_EXHAUSTED` error the composer renders as "add a key / download local".
-- **Per-user default model:** new persisted per-user default (none exists server-side today) so the trial model sticks across the session.
-- **Abuse:** per-account + per-install rate limits; tie to a verified session (never anonymous). **Product/billing sign-off required** (this spends real inference money).
-- Facade: `POST /v1/trial/start`, `GET /v1/trial/status`.
+- **Eligibility gate (revised):** require the SIWE-verified wallet to hold **≥ 50k $CPILOT**. Check the on-chain balance server-side (read-only RPC `balanceOf` against the token contract on its chain) at trial-start and re-verify periodically; deny/expire when the balance drops below threshold. No anonymous access.
+- **Credits source:** app-owned provider key held server-side (operator secret, never per-user, never in a run body) or a metered proxy.
+- **Ledger:** `trial_run_ledger(org_id,user_id,used,limit,reset_policy)` — new store + migration; decrement atomically on trial-model run-create.
+- **Enforcement:** extend the credential gate (`execution/models.py`) so provider `= trial` resolves the app credential _iff_ (holdings ≥ threshold) **and** (ledger allows); on exhaustion/ineligibility raise a typed error the composer renders as "add a key / download local".
+- **Abuse:** tie to the verified wallet + per-install limits; the balance gate defeats sybil farming better than a pure per-account counter.
+- Facade (future): `POST /v1/trial/start`, `GET /v1/trial/status` (both behind the holdings check).
+- **Sign-off still required** before any build: token threshold, holdings-check RPC + caching, credit source, billing owner. Depends on the `$CPILOT` contract address (deliberately not hardcoded today — see the token memory).
 
 ### 7.2 Safe{Wallet} connector (P6) — highest risk
 
@@ -184,7 +185,7 @@ Existing entry needs a pre-registered OAuth app (`requires_pre_registered_client
 
 ## 8. Open decisions / risks (need sign-off before the gated phases)
 
-- **P5:** source of hosted credits (app key vs proxy), free-run limit + reset policy, billing owner, abuse controls. _(Business + security.)_
+- ~~**P5**~~ **(shelved):** if revived — $CPILOT holdings threshold (≥50k), on-chain holdings-check RPC + caching, credit source, billing owner. _(Business + security.)_
 - **P6 Safe:** signing UX, simulation, chain/amount guardrails. _(Security.)_ Principle: propose-only agent, human-signs, per-call approval.
 - **P2:** desktop default for `enable_local_models`; whether Qwen 3 4B (or a smaller default) is the shipped preset.
 - **Parity vs. reality:** connector _names_ in the mock (Safe/Sheets/GitHub) are being built to match; confirm no other mock connector is implied.

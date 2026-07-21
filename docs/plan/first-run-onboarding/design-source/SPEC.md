@@ -4,6 +4,8 @@
 
 > The mock renders inside a preview "mock window" (`.stage`/`.mw` with traffic-light chrome). That harness is **preview-only** — the real Electron app IS the OS window. Build only the inner `.fr` surface.
 
+> **v1 scope note:** the **hosted-trial escape hatch and the "Haiku starter" trial model row are SHELVED** — omit them in v1. Everything else in this spec is in scope. If the trial is revived it becomes a ≥50k $CPILOT holder path (README §7.1), not the open no-key trial drawn here. The trial copy below is retained as the design reference.
+
 ## State machine (`FirstRunApp`)
 
 State vars: `stage ∈ {choice, dl, ready}`, `engine ∈ {null, {kind:local}, {kind:key,name,color}, {kind:trial}}`, `pct` (download %), `keyOpen`, `draft`, `atts[]`, `open ∈ {null,attach,model,tools,key}`, `webOn` (default true), `conn[]`, `sent`.

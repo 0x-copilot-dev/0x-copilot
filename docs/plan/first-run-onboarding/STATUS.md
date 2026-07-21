@@ -4,7 +4,7 @@ Tracker for the FTUE program. Update on every merged PR. A phase is **done** onl
 
 ## Scope (locked)
 
-Hosted trial: **BUILD** · Safe{Wallet}+Sheets: **BUILD** · Placement: **faithful shared build in `packages/chat-surface`**.
+Hosted trial: **SHELVED** (deferred; if revived, gated on holding ≥50k $CPILOT — not an open no-key trial) · Safe{Wallet}+Sheets: **BUILD** · Placement: **faithful shared build in `packages/chat-surface`**.
 
 ## Phases
 
@@ -16,13 +16,13 @@ Hosted trial: **BUILD** · Safe{Wallet}+Sheets: **BUILD** · Placement: **faithf
 | P2       | Local-model card + Qwen 3 4B preset             | ⬜ todo         | —   | curated preset; `enable_local_models` default decision                  |
 | P3       | Onboarding composer + chips + run-create + ack  | ⬜ todo         | —   | reuse `AssistantComposer`; two-step create; handoff                     |
 | P4       | Wallet chip + Tools popover + web-search toggle | ⬜ todo         | —   | `/v1/me/profile` chip; per-run web-search flag                          |
-| P5       | Hosted trial lane                               | ⬜ todo (gated) | —   | credits + ledger + per-user default — needs product/billing sign-off    |
+| ~~P5~~   | ~~Hosted trial lane~~                           | ⏸ shelved       | —   | dropped from v1; future = ≥50k $CPILOT holder gate (README §7.1)        |
 | P6       | Safe{Wallet} + Sheets connectors                | ⬜ todo (gated) | —   | Safe MCP + approval-gated signing; Sheets R/W — needs security sign-off |
 | P7       | E2E parity + verification pass                  | ⬜ todo         | —   | live-stack per-journey; ui-design-reviewer vs `design-source/`          |
 
 ## Decisions pending (block gated phases)
 
-- [ ] P5: hosted-credit source (app key vs proxy), free-run limit + reset, billing owner, abuse controls.
+- [ ] ~~P5~~ (shelved): if revived — $CPILOT threshold (≥50k), on-chain holdings-check + caching, credit source, billing owner.
 - [ ] P6-Safe: signing UX, tx simulation, chain/amount guardrails (principle: propose-only agent, human signs, per-call approval).
 - [ ] P2: desktop `enable_local_models` default; Qwen 3 4B vs a lighter shipped preset.
 
