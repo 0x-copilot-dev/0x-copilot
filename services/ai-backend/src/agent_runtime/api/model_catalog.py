@@ -13,13 +13,21 @@ hardcoded native + curated-OpenRouter lists. The settings-derived default
 model always remains the first catalog entry, so an offline boot with an
 empty source still produces a usable picker.
 
+The catalog advertises **only** providers the run path can actually
+execute. :class:`ModelConfigResolver` (the run path) accepts a fixed
+provider allowlist; :meth:`ModelConfigResolver.supports_provider` is the
+authority. Source records for providers outside that allowlist (e.g. ``groq``,
+``xai`` from models.dev) are filtered out in :meth:`ModelCatalog.build`
+so the picker can never surface a model that would be rejected the moment a
+run starts. Adding a new provider is a run-path change (extend the allowlist),
+never a catalog-only change — that is what keeps the two surfaces from drifting.
+
 ``configured`` semantics are unchanged: native providers reflect whether a
 deployment env key is present; OpenRouter availability is per-user BYOK,
 which this global (settings-only) layer cannot see, so those entries are
 always **selectable** — a run started without a stored key is guided to
 Settings by the run-create credential gate in :class:`ModelConfigResolver`,
-not by hiding the model here. Providers with no deployment-level key
-settings at all (``groq``, ``xai``) report ``configured=False``.
+not by hiding the model here.
 """
 
 from __future__ import annotations
@@ -30,6 +38,7 @@ from agent_runtime.api.models_dev_source import (
     CatalogModelRecord,
     ModelsDevCatalogSource,
 )
+from agent_runtime.execution.models import ModelConfigResolver
 from agent_runtime.settings import RuntimeSettings
 from runtime_api.schemas import ModelCatalogItem
 
@@ -103,6 +112,14 @@ class ModelCatalog:
 
         items = [cls._default_item(settings)]
         for record in cls._source_for(settings).records():
+            # SSOT: never advertise a model the run path cannot execute. The
+            # models.dev source carries providers (groq, xai) that the run
+            # path's ``ModelConfigResolver`` provider allowlist rejects, so a
+            # user could otherwise pick a model that can never run. Filter to
+            # run-path-executable providers here — the one place the catalog
+            # is assembled — rather than papering over the divergence later.
+            if not ModelConfigResolver.supports_provider(record.provider):
+                continue
             items.append(cls._item_from_record(record, settings))
         # Collapse by id, last-definition-wins. A dict comprehension keeps
         # each id at its first-insertion position (so the default stays
@@ -178,9 +195,11 @@ class ModelCatalog:
         try:
             return settings.provider_settings(provider).is_configured
         except ValueError:
-            # Providers with no deployment-level key settings (groq, xai):
-            # only a per-user BYOK key could enable them, which this layer
-            # cannot see — report not-configured rather than guessing.
+            # Defensive: a run-path-executable provider with no deployment-level
+            # key settings would land here (only a per-user BYOK key could
+            # enable it, invisible to this settings-only layer) — report
+            # not-configured rather than guessing. Providers the run path
+            # rejects (groq, xai) are already filtered out before reaching here.
             return False
 
 

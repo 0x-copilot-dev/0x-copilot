@@ -10,10 +10,11 @@ The known, documented edges are asserted too:
 
 * Native providers (openai/anthropic/gemini) that the run path's provider
   allowlist accepts pass validation for every catalog entry.
-* ``groq`` / ``xai`` catalog entries are advertised by the catalog but rejected
-  here on the provider allowlist (``_normalize_provider``) — a pre-existing
-  cross-surface divergence tracked as follow-up, pinned here so a future fix
-  is a deliberate change with a failing-then-passing test.
+* The catalog now advertises **only** providers the run path can execute:
+  ``ModelCatalog.build`` filters source records to
+  ``ModelConfigResolver.supports_provider``. The previously-divergent
+  ``groq`` / ``xai`` entries never reach the picker, so the cross-surface
+  divergence is closed — every advertised provider normalizes.
 """
 
 from __future__ import annotations
@@ -33,8 +34,11 @@ from starlette import status
 
 from agent_runtime.api.workspace_coordinator import WorkspaceCoordinator
 
-# Providers the run path's ``_normalize_provider`` alias table accepts; the
-# catalog also advertises groq/xai, which the allowlist rejects (documented).
+# Providers the run path's ``_normalize_provider`` alias table accepts as a
+# workspace default via a constructible (slash-free) id. openrouter is also
+# run-path-executable but its ids are ``vendor/model`` slugs the
+# DefaultModelSelection normalizer forbids, so it is excluded from the
+# per-entry native-validation sweep below.
 _RUN_PATH_PROVIDERS = frozenset({"openai", "anthropic", "gemini"})
 # The DefaultModelSelection id normalizer forbids these characters, so those
 # model ids can never be constructed as a workspace default in the first place.
@@ -122,22 +126,65 @@ class TestValidationRejections:
             coordinator._validate_workspace_default_model(request)
         assert excinfo.value.http_status == status.HTTP_422_UNPROCESSABLE_CONTENT
 
-    def test_groq_entry_advertised_by_catalog_but_rejected_on_provider(self) -> None:
-        # Documents the known divergence: the catalog lists groq models, but
-        # the run-path provider allowlist does not accept "groq", so it cannot
-        # currently be a workspace default. A future SSOT-unification PR should
-        # flip this test to expect success.
+
+class TestCatalogRunPathDivergenceClosed:
+    """The catalog advertises only providers the run path can execute.
+
+    Formerly a pinned, failing-when-fixed divergence: the catalog surfaced
+    ``groq``/``xai`` models the run-path allowlist rejects. ``ModelCatalog.build``
+    now filters to ``ModelConfigResolver.supports_provider``, so the picker can
+    never show an un-runnable model. These assert the divergence stays closed.
+    """
+
+    def test_every_advertised_provider_normalizes(self) -> None:
+        # The SSOT contract: for every catalog entry, the run path's provider
+        # allowlist accepts the provider (``_normalize_provider`` does not raise).
         settings = _settings()
-        groq_items = [
-            item
-            for item in ModelCatalog.build(settings)
-            if item.provider == "groq"
-            and not any(ch in item.model_name for ch in _UNCONSTRUCTIBLE_ID_CHARS)
-        ]
-        if not groq_items:
-            pytest.skip("snapshot shipped no constructible groq entry")
+        providers = {item.provider for item in ModelCatalog.build(settings)}
+        assert providers, "catalog must not be empty"
+        for provider in providers:
+            # Must not raise — an un-normalizable provider would be an
+            # advertised-but-un-runnable model, the divergence this closes.
+            ModelConfigResolver._normalize_provider(provider)
+
+    def test_rejected_providers_absent_from_catalog(self) -> None:
+        # groq/xai are present in the models.dev source snapshot but must be
+        # filtered out of the catalog because the run path rejects them.
+        settings = _settings()
+        providers = {item.provider for item in ModelCatalog.build(settings)}
+        assert "groq" not in providers
+        assert "xai" not in providers
+
+    def test_source_still_carries_a_rejected_provider(self) -> None:
+        # Guard against a vacuous pass: prove the filter is doing work by
+        # confirming the underlying source (pre-filter) does ship a provider
+        # the run path rejects. If the snapshot ever drops groq/xai entirely,
+        # this skips rather than silently making the filter test meaningless.
+        settings = _settings()
+        source_providers = {
+            record.provider for record in ModelCatalog._source_for(settings).records()
+        }
+        rejected = {
+            p for p in source_providers if not ModelConfigResolver.supports_provider(p)
+        }
+        if not rejected:
+            pytest.skip("source snapshot shipped no run-path-rejected provider")
+        # Every rejected source provider is absent from the built catalog.
+        catalog_providers = {item.provider for item in ModelCatalog.build(settings)}
+        assert rejected.isdisjoint(catalog_providers)
+
+    def test_every_native_catalog_entry_is_a_valid_workspace_default(self) -> None:
+        # End-to-end: a constructible catalog entry (slash-free id) is always an
+        # acceptable workspace default — no advertised, run-path-supported model
+        # is rejected by the coordinator.
+        settings = _settings()
         coordinator = _coordinator(settings)
-        request = _request(groq_items[0].provider, groq_items[0].model_name)
-        with pytest.raises(RuntimeApiError) as excinfo:
-            coordinator._validate_workspace_default_model(request)
-        assert excinfo.value.http_status == status.HTTP_422_UNPROCESSABLE_CONTENT
+        checked = 0
+        for item in ModelCatalog.build(settings):
+            if any(ch in item.model_name for ch in _UNCONSTRUCTIBLE_ID_CHARS):
+                continue
+            coordinator._validate_workspace_default_model(
+                _request(item.provider, item.model_name)
+            )
+            checked += 1
+        assert checked >= 3
