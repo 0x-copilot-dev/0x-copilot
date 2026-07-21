@@ -13,6 +13,7 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 
 import type {
+  ConversationConnectorScopes,
   ModelSelectionRequest,
   RunAttachmentRequest,
 } from "@0x-copilot/api-types";
@@ -34,6 +35,13 @@ export type FirstRunLaunchPhase =
 export interface FirstRunLaunchPayload {
   readonly text: string;
   readonly attachments: readonly RunAttachmentRequest[];
+  /**
+   * P4 — the Tools popover's per-run web-search toggle at send time (default
+   * true is owned by the surface). Threaded onto `createFirstRun`.
+   */
+  readonly webSearchEnabled: boolean;
+  /** P4 — active connector scopes for this run (omitted when none active). */
+  readonly connectorScopes?: ConversationConnectorScopes;
 }
 
 export interface UseFirstRunLaunchOptions {
@@ -110,6 +118,8 @@ export function useFirstRunLaunch(
           userInput: payload.text,
           model: modelRef.current,
           attachments: payload.attachments,
+          webSearchEnabled: payload.webSearchEnabled,
+          connectorScopes: payload.connectorScopes,
         })
         .then((result) => {
           setPhase("handoff");

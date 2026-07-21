@@ -28,9 +28,11 @@ import {
   type FirstRunAckCtx,
   type FirstRunAckEngine,
   type FirstRunComposerCtx,
+  type FirstRunInstallableConnector,
   type FirstRunStage,
 } from "@0x-copilot/chat-surface";
 import { IpcTransport } from "@0x-copilot/chat-transport";
+import type { ConversationConnectorScopes } from "@0x-copilot/api-types";
 
 import { DesktopAnchoredPlusMenu } from "./composer/DesktopAnchoredPlusMenu";
 import { DesktopComposerFilePicker } from "./composer/DesktopComposerFilePicker";
@@ -45,9 +47,12 @@ import {
   resolveAirdropClaimsCsv,
 } from "./onboarding/airdropClaimsFixture";
 import { toReadableRunAttachments } from "./onboarding/firstRunAttachments";
+import { createFirstRunConnectorsPort } from "./onboarding/firstRunConnectorsPort";
+import { createFirstRunProfilePort } from "./onboarding/firstRunProfilePort";
 import { createFirstRunRunsPort } from "./onboarding/firstRunRunsPort";
 import { useOnboardingComposerModels } from "./onboarding/useOnboardingComposerModels";
 
+import { CONNECTOR_CHANNELS } from "../main/connectors/channels";
 import { FIRST_RUN_CHANNELS } from "../main/services/first-run-channels";
 // The preload bridge type exposes `invoke(channel: string, …)`, so it can reach
 // the app-local `first-run.*` channels (the chat-transport WindowBridge narrows
@@ -155,10 +160,11 @@ const FIRST_RUN_CAPABILITIES = {
 const onboardingFilePicker = new DesktopComposerFilePicker();
 const onboardingAttachmentAdapter = createDesktopAttachmentAdapter();
 
-/** P4 fills the real Tools popover + navigations; here they're intentional
- *  no-ops so the first-run composer stays minimal. */
+/** The first-run composer's `+`-menu / skills-settings navigations are
+ *  intentional no-ops — the FTUE's connector affordance is the P4 Tools popover
+ *  (wired via `connectorsPort` below), not these deep-links into Settings. */
 function noop(): void {
-  /* intentional no-op — P4 wires connectors/skills navigation */
+  /* intentional no-op — FTUE has no in-composer Settings navigation */
 }
 
 export interface FirstRunSurfaceMountProps {
@@ -222,6 +228,15 @@ export function FirstRunSurfaceMount({
     [transport],
   );
   const models = useMemo(() => createModelsPort(transport), [transport]);
+  // P4 — wallet-chip identity + the Tools popover's MCP connector surface.
+  const profilePort = useMemo(
+    () => createFirstRunProfilePort(transport),
+    [transport],
+  );
+  const connectorsPort = useMemo(
+    () => createFirstRunConnectorsPort(transport),
+    [transport],
+  );
   const localModelsPort = useMemo(
     () => createFirstRunLocalModelsPort(transport),
     [transport],
@@ -260,6 +275,14 @@ export function FirstRunSurfaceMount({
   const ackHandoffRef = useRef<(() => void) | null>(null);
   // The surface's `onSent` (flips to the ack), captured from the composer slot.
   const onSentRef = useRef<(() => void) | null>(null);
+  // P4 — the surface owns `webOn` + active-connector state; the composer ctx
+  // carries the latest values each render. We mirror them into refs (like
+  // `onSentRef`) so `handleSubmit` reads the value live at send time and the
+  // acknowledgment's tools line reflects the real toggle.
+  const webSearchRef = useRef(true);
+  const connectorScopesRef = useRef<ConversationConnectorScopes | undefined>(
+    undefined,
+  );
 
   const launch = useFirstRunLaunch({
     runs,
@@ -322,14 +345,36 @@ export function FirstRunSurfaceMount({
       startLaunch({
         text: payload.text,
         attachments: toReadableRunAttachments(payload.attachments),
+        webSearchEnabled: webSearchRef.current,
+        connectorScopes: connectorScopesRef.current,
       });
     },
     [launchPhase, resetLaunch, startLaunch],
   );
 
+  // P4 — featured 1-click connect. The renderer cannot open an external URL on
+  // desktop (main denies `window.open`); the connect flow is owned by MAIN,
+  // which binds a loopback + opens the system browser for the catalog slug
+  // (mirrors `ConnectorsBinder.connect`). No token crosses the bridge.
+  const handleConnectCatalog = useCallback(
+    (entry: FirstRunInstallableConnector): void => {
+      void window.bridge.ipc
+        .invoke(CONNECTOR_CHANNELS.connect, { slug: entry.slug })
+        .catch(() => {
+          // Workspace-authorize is best-effort here; first-use tool consent
+          // still lands as the run-time `mcp_auth_required` HITL card.
+        });
+    },
+    [],
+  );
+
   const renderComposer = useCallback(
     (ctx: FirstRunComposerCtx): ReactNode => {
       onSentRef.current = ctx.onSent;
+      // Capture the surface-owned Tools state for `handleSubmit` (live at send)
+      // and the acknowledgment's tools line.
+      webSearchRef.current = ctx.webSearchEnabled;
+      connectorScopesRef.current = ctx.connectorScopes;
       return (
         <OnboardingComposer
           connectors={{ servers: [], loading: false }}
@@ -350,6 +395,7 @@ export function FirstRunSurfaceMount({
           onSubmit={handleSubmit}
           startError={launchPhase === "error" ? launch.error : null}
           onDismissError={resetLaunch}
+          toolsTrigger={ctx.toolsTrigger}
           disabled={launchPhase === "starting"}
         />
       );
@@ -384,7 +430,7 @@ export function FirstRunSurfaceMount({
           }
         : { kind: "key", name: selectedModelName };
       const lines = firstRunAckLines(ackEngine, {
-        webOn: true,
+        webOn: webSearchRef.current,
         connectors: [],
       });
       // Variant maps off the launch phase (PRD-P3 §3.5): queued → "queued",
@@ -409,6 +455,9 @@ export function FirstRunSurfaceMount({
       <FirstRunSurface
         providerKeys={providerKeys}
         models={models}
+        profilePort={profilePort}
+        connectorsPort={connectorsPort}
+        onConnectCatalog={handleConnectCatalog}
         onSkip={onComplete}
         onComplete={onComplete}
         initialStage={initialStage}

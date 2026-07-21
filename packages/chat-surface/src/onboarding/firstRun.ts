@@ -130,7 +130,11 @@ export const FIRST_RUN_COPY = {
   },
   footer: {
     left: "v2.1.0 · local build",
+    // Footer-right is engine-keyed (SPEC §Copy strings · parity-audit medium):
+    // a BYOK/key engine surfaces `right`; a local (on-device) engine surfaces
+    // `rightLocal`. The hosted-starter variant is SHELVED in v1.
     right: "keys in OS keychain · runs via your provider",
+    rightLocal: "nothing leaves this machine",
   },
 } as const;
 

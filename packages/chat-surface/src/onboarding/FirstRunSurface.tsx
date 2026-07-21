@@ -27,10 +27,12 @@ import {
   useEffect,
   useMemo,
   useState,
+  type CSSProperties,
   type ReactElement,
   type ReactNode,
 } from "react";
 
+import type { ConversationConnectorScopes } from "@0x-copilot/api-types";
 import { Button } from "@0x-copilot/design-system";
 
 import { BrandMark } from "../shell/BrandMark";
@@ -44,6 +46,15 @@ import {
   type FirstRunKeyProvider,
   type FirstRunStage,
 } from "./firstRun";
+import { ComposerToolsButton } from "./ComposerToolsButton";
+import { ToolsPopover } from "./ToolsPopover";
+import type { FirstRunConnectorsPort } from "./ports/FirstRunConnectorsPort";
+import type { FirstRunProfilePort } from "./ports/FirstRunProfilePort";
+import type { FirstRunInstallableConnector } from "./projectFirstRunConnectors";
+import {
+  FirstRunProfileProvider,
+  FirstRunWalletChip,
+} from "./providers/FirstRunProfileProvider";
 
 // ---------------------------------------------------------------------------
 // Slot context types (P3 fills; P1 ships placeholders)
@@ -62,6 +73,24 @@ export interface FirstRunComposerCtx {
   readonly modelReady: boolean;
   /** The composer calls this after run-create → surface renders the ack. */
   readonly onSent: () => void;
+  // --- P4 tools wiring (present only when a `connectorsPort` is injected) ---
+  /**
+   * The connector-aware Tools trigger (`ComposerToolsButton` + its
+   * `ToolsPopover`) the host mounts into `AssistantComposer`'s `toolsTrigger`
+   * slot. `undefined` when no `connectorsPort` was injected (the composer's
+   * bottom bar then stays byte-identical to pre-P4).
+   */
+  readonly toolsTrigger?: ReactNode;
+  /**
+   * Per-run web-search toggle at render time (SPEC `webOn`, default true). The
+   * host threads this into `createFirstRun` on send.
+   */
+  readonly webSearchEnabled: boolean;
+  /**
+   * Active connector scopes for the run (active ids → scopes), or `undefined`
+   * when the user activated no connectors. Threaded into `createFirstRun`.
+   */
+  readonly connectorScopes?: ConversationConnectorScopes;
 }
 
 export interface FirstRunAckCtx {
@@ -80,8 +109,46 @@ export interface FirstRunSurfaceProps {
   readonly onSkip: () => void;
   /** Handoff (P3 does run-create first; P1 host = markComplete + navigate). */
   readonly onComplete: (engine: FirstRunEngine) => void;
-  /** P4 fills the wallet chip; P1 renders whatever the host injects (or nothing). */
+  /**
+   * P1 seam: an explicit wallet-chip node the host injects into the top bar.
+   * P4 supersedes it — when `profilePort` is provided the surface renders its
+   * own `FirstRunWalletChip` (fed by `useFirstRunProfile`) and this prop is
+   * ignored. Kept for hosts that mount a pre-built chip without the provider.
+   */
   readonly walletChipSlot?: ReactNode;
+  /**
+   * P4 — host-injected read of the signed-in identity (`GET /v1/me/profile`).
+   * When provided, the surface wraps itself in a `FirstRunProfileProvider` and
+   * fills the top-bar wallet slot with the connected `FirstRunWalletChip`
+   * (renders nothing for email/Google accounts — SIWE-only).
+   */
+  readonly profilePort?: FirstRunProfilePort;
+  /**
+   * P4 — host-injected MCP connector surface for the composer Tools popover.
+   * When provided, the surface owns `webOn` + `activeConnectorIds` and mounts
+   * the `ComposerToolsButton` + `ToolsPopover` into the composer via the
+   * composer ctx's `toolsTrigger`. Absent ⇒ no tools pill (pre-P4 composer).
+   */
+  readonly connectorsPort?: FirstRunConnectorsPort;
+  /**
+   * P4 — host handler for a 1-click connect of a catalog entry (mirrors
+   * `ChatScreen.onMcpInstallCatalog`; on desktop main opens the system browser
+   * for OAuth). Defaults to a `connectorsPort`-driven install → `beginAuth`
+   * when omitted.
+   */
+  readonly onConnectCatalog?: (entry: FirstRunInstallableConnector) => void;
+  /**
+   * P4 — host handler that opens the custom-MCP config form. Defaults to a
+   * no-op (the inline paste-a-config form is a host concern). Also the routing
+   * target for `requiresPreRegisteredClient` catalog rows.
+   */
+  readonly onAddCustom?: () => void;
+  /**
+   * P4 — host-owned portal root for the Tools popover (the package has no
+   * `document`). When omitted the popover renders inline, floated above the
+   * trigger.
+   */
+  readonly toolsPortalTarget?: HTMLElement;
   /** Footer left; default `FIRST_RUN_COPY.footer.left`. */
   readonly appVersion?: string;
   readonly keyProviders?: readonly FirstRunKeyProvider[];
@@ -162,6 +229,11 @@ export function FirstRunSurface({
   onSkip,
   onComplete,
   walletChipSlot,
+  profilePort,
+  connectorsPort,
+  onConnectCatalog,
+  onAddCustom,
+  toolsPortalTarget,
   appVersion,
   keyProviders,
   onStartLocalDownload,
@@ -175,6 +247,107 @@ export function FirstRunSurface({
   const [stage, setStage] = useState<FirstRunStage>(initialStage);
   const [engine, setEngine] = useState<FirstRunEngine>(null);
   const [sent, setSent] = useState(false);
+  // P4 — per-run Tools state owned by the surface (SPEC `webOn`, default true;
+  // `conn[]` held as active connector ids since the FTUE has no conversation
+  // to PATCH at toggle time).
+  const [webOn, setWebOn] = useState(true);
+  const [activeConnectorIds, setActiveConnectorIds] = useState<
+    readonly string[]
+  >([]);
+  const [toolsOpen, setToolsOpen] = useState(false);
+
+  const handleToggleConnector = useCallback(
+    (serverId: string, active: boolean): void => {
+      setActiveConnectorIds((prev) =>
+        active
+          ? prev.includes(serverId)
+            ? prev
+            : [...prev, serverId]
+          : prev.filter((id) => id !== serverId),
+      );
+    },
+    [],
+  );
+
+  // Default 1-click connect: mirror `ChatScreen.onMcpInstallCatalog` over the
+  // injected port (install → begin OAuth). A pre-registered vendor routes to
+  // the custom-config form (keyless install 422s). Hosts may override both via
+  // `onConnectCatalog` / `onAddCustom` (desktop opens the system browser).
+  const handleConnectCatalog = useCallback(
+    (entry: FirstRunInstallableConnector): void => {
+      if (onConnectCatalog) {
+        onConnectCatalog(entry);
+        return;
+      }
+      if (!connectorsPort) {
+        return;
+      }
+      if (entry.requiresPreRegisteredClient) {
+        onAddCustom?.();
+        return;
+      }
+      void connectorsPort
+        .installFromCatalog(entry.slug)
+        .then((server) => connectorsPort.beginAuth(server.server_id))
+        .catch(() => {
+          // The popover's "connect" is workspace-authorize only; a failed
+          // install surfaces later via the run-time `mcp_auth_required` card,
+          // so a swallow here keeps the FTUE composer unblocked.
+        });
+    },
+    [onConnectCatalog, onAddCustom, connectorsPort],
+  );
+
+  const handleAddCustom = useCallback((): void => {
+    onAddCustom?.();
+  }, [onAddCustom]);
+
+  // Active connector ids → the run's `request_context.connector_scopes` (active
+  // → `[]`, i.e. enabled with no extra scopes). Omitted entirely when nothing
+  // is active so a default run body carries no connector-scope payload.
+  const connectorScopes = useMemo<
+    ConversationConnectorScopes | undefined
+  >(() => {
+    if (activeConnectorIds.length === 0) {
+      return undefined;
+    }
+    const scopes: Record<string, readonly string[] | null> = {};
+    for (const id of activeConnectorIds) {
+      scopes[id] = [];
+    }
+    return scopes;
+  }, [activeConnectorIds]);
+
+  // The Tools trigger (button + popover) — built only when a connectors port is
+  // injected, then handed to the composer via the composer ctx's `toolsTrigger`.
+  const toolsTrigger = useMemo<ReactNode>(() => {
+    if (!connectorsPort) {
+      return undefined;
+    }
+    return (
+      <FirstRunToolsTrigger
+        port={connectorsPort}
+        open={toolsOpen}
+        onOpenChange={setToolsOpen}
+        webSearchEnabled={webOn}
+        onToggleWebSearch={setWebOn}
+        activeConnectorIds={activeConnectorIds}
+        onToggleConnector={handleToggleConnector}
+        onConnectCatalog={handleConnectCatalog}
+        onAddCustom={handleAddCustom}
+        portalTarget={toolsPortalTarget}
+      />
+    );
+  }, [
+    connectorsPort,
+    toolsOpen,
+    webOn,
+    activeConnectorIds,
+    handleToggleConnector,
+    handleConnectCatalog,
+    handleAddCustom,
+    toolsPortalTarget,
+  ]);
 
   const handleStartDownload = useCallback(() => {
     setEngine({ kind: "local", modelId: null });
@@ -210,8 +383,20 @@ export function FirstRunSurface({
       localModelPct,
       modelReady,
       onSent: () => setSent(true),
+      toolsTrigger,
+      webSearchEnabled: webOn,
+      connectorScopes,
     }),
-    [stage, engine, models, localModelPct, modelReady],
+    [
+      stage,
+      engine,
+      models,
+      localModelPct,
+      modelReady,
+      toolsTrigger,
+      webOn,
+      connectorScopes,
+    ],
   );
 
   const ackCtx = useMemo<FirstRunAckCtx>(
@@ -257,7 +442,24 @@ export function FirstRunSurface({
     );
   }
 
-  return (
+  // Wallet chip: P4's `profilePort` wins (connected `FirstRunWalletChip` under a
+  // provider); else the P1 injected node. `resolvedWalletChip` is always a
+  // defined element when either path is active, so the slot span renders.
+  const resolvedWalletChip: ReactNode = profilePort ? (
+    <FirstRunWalletChip />
+  ) : (
+    walletChipSlot
+  );
+
+  // Footer-right is engine-keyed (SPEC): a local (on-device) engine promises
+  // "nothing leaves this machine"; every other engine (or the pre-choice gate)
+  // keeps the BYOK-provider line.
+  const footerRight =
+    engine?.kind === "local"
+      ? FIRST_RUN_COPY.footer.rightLocal
+      : FIRST_RUN_COPY.footer.right;
+
+  const surface = (
     <div className="fr" data-testid="first-run-surface">
       <header className="fr-top">
         <span className="fr-brand" data-testid="first-run-brand">
@@ -269,9 +471,9 @@ export function FirstRunSurface({
             {FIRST_RUN_COPY.topbar.brandRest}
           </span>
         </span>
-        {walletChipSlot !== undefined ? (
+        {resolvedWalletChip !== undefined ? (
           <span className="fr-top__chip" data-testid="first-run-wallet-slot">
-            {walletChipSlot}
+            {resolvedWalletChip}
           </span>
         ) : null}
         <span className="fr-top__spacer" />
@@ -289,8 +491,101 @@ export function FirstRunSurface({
 
       <footer className="fr-foot" data-testid="first-run-footer">
         <span>{appVersion ?? FIRST_RUN_COPY.footer.left}</span>
-        <span>{FIRST_RUN_COPY.footer.right}</span>
+        <span>{footerRight}</span>
       </footer>
     </div>
   );
+
+  // When a profile port is injected, the whole surface reads the wallet-chip
+  // identity from ONE `FirstRunProfileProvider` (fetched once) so both the chip
+  // and any host chrome share the snapshot.
+  return profilePort ? (
+    <FirstRunProfileProvider port={profilePort}>
+      {surface}
+    </FirstRunProfileProvider>
+  ) : (
+    surface
+  );
 }
+
+// ---------------------------------------------------------------------------
+// P4 Tools trigger — `ComposerToolsButton` + its `ToolsPopover`, floated above
+// the button when no host portal target is supplied.
+// ---------------------------------------------------------------------------
+
+interface FirstRunToolsTriggerProps {
+  readonly port: FirstRunConnectorsPort;
+  readonly open: boolean;
+  readonly onOpenChange: (open: boolean) => void;
+  readonly webSearchEnabled: boolean;
+  readonly onToggleWebSearch: (next: boolean) => void;
+  readonly activeConnectorIds: readonly string[];
+  readonly onToggleConnector: (serverId: string, active: boolean) => void;
+  readonly onConnectCatalog: (entry: FirstRunInstallableConnector) => void;
+  readonly onAddCustom: () => void;
+  readonly portalTarget?: HTMLElement;
+}
+
+function FirstRunToolsTrigger(props: FirstRunToolsTriggerProps): ReactElement {
+  const {
+    port,
+    open,
+    onOpenChange,
+    webSearchEnabled,
+    onToggleWebSearch,
+    activeConnectorIds,
+    onToggleConnector,
+    onConnectCatalog,
+    onAddCustom,
+    portalTarget,
+  } = props;
+
+  // Badge count from surface state alone (web search + toggled connectors —
+  // each active id is by construction a connected row); the popover header
+  // recomputes the exact count against the loaded projection.
+  const activeCount = (webSearchEnabled ? 1 : 0) + activeConnectorIds.length;
+
+  const popover = (
+    <ToolsPopover
+      open={open}
+      onClose={() => onOpenChange(false)}
+      port={port}
+      webSearchEnabled={webSearchEnabled}
+      onToggleWebSearch={onToggleWebSearch}
+      activeConnectorIds={activeConnectorIds}
+      onToggleConnector={onToggleConnector}
+      onConnectCatalog={onConnectCatalog}
+      onAddCustom={onAddCustom}
+      portalTarget={portalTarget}
+    />
+  );
+
+  return (
+    <span style={triggerWrapStyle}>
+      <ComposerToolsButton
+        open={open}
+        onClick={() => onOpenChange(!open)}
+        activeCount={activeCount}
+      />
+      {portalTarget !== undefined ? (
+        popover
+      ) : (
+        <span style={floatWrapStyle}>{popover}</span>
+      )}
+    </span>
+  );
+}
+
+const triggerWrapStyle: CSSProperties = {
+  position: "relative",
+  display: "inline-flex",
+};
+
+// Inline (non-portaled) popover floats above the trigger, right-aligned, so it
+// never widens the composer bottom bar.
+const floatWrapStyle: CSSProperties = {
+  position: "absolute",
+  bottom: "calc(100% + 8px)",
+  right: 0,
+  zIndex: 50,
+};

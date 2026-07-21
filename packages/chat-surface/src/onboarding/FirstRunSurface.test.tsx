@@ -5,11 +5,64 @@
 import { fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { describe, expect, it, vi } from "vitest";
 
-import type { ProviderKeySummary } from "@0x-copilot/api-types";
+import type { McpServer, ProviderKeySummary } from "@0x-copilot/api-types";
 
 import { FirstRunSurface } from "./FirstRunSurface";
 import { FIRST_RUN_COPY } from "./firstRun";
+import type { FirstRunConnectorsPort } from "./ports/FirstRunConnectorsPort";
+import type {
+  FirstRunProfilePort,
+  WalletProfileView,
+} from "./ports/FirstRunProfilePort";
 import type { ProviderKeysPort } from "../settings/data/providerKeys";
+
+function fakeProfilePort(
+  view: Partial<WalletProfileView> = {},
+): FirstRunProfilePort {
+  return {
+    get: vi.fn(() =>
+      Promise.resolve({
+        walletAddress: null,
+        chainId: null,
+        chainName: null,
+        authMethod: null,
+        emailIsPlaceholder: false,
+        ...view,
+      }),
+    ),
+  };
+}
+
+function connectedServer(): McpServer {
+  return {
+    server_id: "seed:sheets",
+    name: "Google Sheets",
+    display_name: "Google Sheets",
+    url: "https://sheets.test/mcp",
+    transport: "http",
+    auth_mode: "oauth2",
+    auth_state: "authenticated",
+    health: "healthy",
+    enabled: true,
+    oauth_client_configured: true,
+    scopes_summary: "read & write workbooks",
+    created_at: "2026-01-01T00:00:00Z",
+    updated_at: "2026-01-01T00:00:00Z",
+  };
+}
+
+function fakeConnectorsPort(
+  over: Partial<FirstRunConnectorsPort> = {},
+): FirstRunConnectorsPort {
+  return {
+    listServers: vi.fn().mockResolvedValue([connectedServer()]),
+    listCatalog: vi.fn().mockResolvedValue([]),
+    installFromCatalog: vi.fn().mockResolvedValue(connectedServer()),
+    addCustomServer: vi.fn().mockResolvedValue(connectedServer()),
+    beginAuth: vi.fn().mockResolvedValue(undefined),
+    ...over,
+  };
+}
 
 function fakePort(save?: ProviderKeysPort["save"]): ProviderKeysPort {
   return {
@@ -179,6 +232,109 @@ describe("<FirstRunSurface>", () => {
     // Straight to the composer body — no gate.
     expect(screen.queryByTestId("first-run-gate")).toBeNull();
     expect(screen.getByTestId("first-run-composer-placeholder")).not.toBeNull();
+  });
+
+  // --- P4 integration ---------------------------------------------------
+
+  it("renders the connected FirstRunWalletChip from an injected profilePort (P4)", async () => {
+    renderSurface({
+      profilePort: fakeProfilePort({
+        walletAddress: "0x7f3C0000000000000000000000000000000000a92C",
+        chainName: "Ethereum",
+      }),
+    });
+    await waitFor(() =>
+      expect(screen.queryByTestId("first-run-wallet-chip")).not.toBeNull(),
+    );
+    // The chip truncates the full EIP-55 address to the SPEC `0x{4}…{4}` form.
+    expect(screen.getByTestId("first-run-wallet-chip").textContent).toContain(
+      "0x7f3C…a92C",
+    );
+  });
+
+  it("profilePort with no wallet (email/Google) renders no chip (P4)", async () => {
+    const port = fakeProfilePort({ walletAddress: null });
+    renderSurface({ profilePort: port });
+    await waitFor(() => expect(port.get).toHaveBeenCalled());
+    expect(screen.queryByTestId("first-run-wallet-chip")).toBeNull();
+  });
+
+  it("mounts the Tools trigger into the composer ctx when connectorsPort is set (P4)", () => {
+    let sawTrigger = false;
+    let ctxWebSearch: boolean | undefined;
+    render(
+      <FirstRunSurface
+        providerKeys={fakePort()}
+        onSkip={() => undefined}
+        onComplete={() => undefined}
+        initialStage="ready"
+        connectorsPort={fakeConnectorsPort()}
+        renderComposer={(ctx) => {
+          sawTrigger = ctx.toolsTrigger !== undefined;
+          ctxWebSearch = ctx.webSearchEnabled;
+          return <div data-testid="p3-composer">{ctx.toolsTrigger}</div>;
+        }}
+      />,
+    );
+    expect(sawTrigger).toBe(true);
+    // Web search defaults ON in the surface state.
+    expect(ctxWebSearch).toBe(true);
+    // The composer trigger button rendered.
+    expect(screen.getByTestId("first-run-tools-button")).not.toBeNull();
+  });
+
+  it("no connectorsPort ⇒ composer ctx toolsTrigger is undefined (pre-P4 shape)", () => {
+    let trigger: unknown = "sentinel";
+    render(
+      <FirstRunSurface
+        providerKeys={fakePort()}
+        onSkip={() => undefined}
+        onComplete={() => undefined}
+        initialStage="ready"
+        renderComposer={(ctx) => {
+          trigger = ctx.toolsTrigger;
+          return <div data-testid="p3-composer">composer</div>;
+        }}
+      />,
+    );
+    expect(trigger).toBeUndefined();
+  });
+
+  it("web-search toggle flips the composer ctx webSearchEnabled (P4)", () => {
+    let lastWebSearch: boolean | undefined;
+    render(
+      <FirstRunSurface
+        providerKeys={fakePort()}
+        onSkip={() => undefined}
+        onComplete={() => undefined}
+        initialStage="ready"
+        connectorsPort={fakeConnectorsPort()}
+        renderComposer={(ctx) => {
+          lastWebSearch = ctx.webSearchEnabled;
+          return <div data-testid="p3-composer">{ctx.toolsTrigger}</div>;
+        }}
+      />,
+    );
+    // Open the popover, then toggle web search OFF.
+    fireEvent.click(screen.getByTestId("first-run-tools-button"));
+    fireEvent.click(screen.getByTestId("first-run-tools-websearch"));
+    expect(lastWebSearch).toBe(false);
+  });
+
+  it("footer-right is engine-keyed: local engine → 'nothing leaves this machine' (P4)", () => {
+    renderSurface();
+    // choice stage (no engine) shows the default (key) right line.
+    expect(screen.getByTestId("first-run-footer").textContent).toContain(
+      FIRST_RUN_COPY.footer.right,
+    );
+    // Start the local download → engine becomes local → footer swaps.
+    fireEvent.click(screen.getByTestId("first-run-start-download"));
+    expect(screen.getByTestId("first-run-footer").textContent).toContain(
+      FIRST_RUN_COPY.footer.rightLocal,
+    );
+    expect(screen.getByTestId("first-run-footer").textContent).not.toContain(
+      FIRST_RUN_COPY.footer.right,
+    );
   });
 
   it("renders no raw hex in the surface except provider dot swatches", () => {
