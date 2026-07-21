@@ -124,8 +124,48 @@ describe("createProviderKeysPort", () => {
     });
   });
 
-  it("ships no validate seam (format check is the default gate)", () => {
-    const { transport } = fakeTransport(() => undefined);
-    expect(createProviderKeysPort(transport).validate).toBeUndefined();
+  it("validate POSTs to the /validate route and maps a valid verdict to models (PRD-F FR-F.4)", async () => {
+    const { transport, calls } = fakeTransport(() => ({
+      valid: true,
+      models: ["gpt-4o", "o3"],
+      reason: null,
+    }));
+    const result = await createProviderKeysPort(transport).validate!(
+      "openai",
+      FAKE_OPENAI,
+    );
+    expect(calls[0]).toMatchObject({
+      method: "POST",
+      path: "/v1/settings/provider-keys/openai/validate",
+      body: { api_key: FAKE_OPENAI },
+    });
+    expect(result).toEqual({ ok: true, models: ["gpt-4o", "o3"] });
+  });
+
+  it("validate maps an invalid_key verdict to ok:false", async () => {
+    const { transport } = fakeTransport(() => ({
+      valid: false,
+      models: null,
+      reason: "invalid_key",
+    }));
+    const result = await createProviderKeysPort(transport).validate!(
+      "openai",
+      FAKE_OPENAI,
+    );
+    expect(result.ok).toBe(false);
+    expect(result.error).toBeDefined();
+  });
+
+  it("validate treats provider_unreachable as ok (verify skipped, not failed)", async () => {
+    const { transport } = fakeTransport(() => ({
+      valid: null,
+      models: null,
+      reason: "provider_unreachable",
+    }));
+    const result = await createProviderKeysPort(transport).validate!(
+      "openai",
+      FAKE_OPENAI,
+    );
+    expect(result).toEqual({ ok: true });
   });
 });

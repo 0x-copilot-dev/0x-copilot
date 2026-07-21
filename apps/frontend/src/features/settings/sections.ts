@@ -18,6 +18,11 @@ export const SETTINGS_SECTIONS = [
   "model-and-behavior",
   // BYOK — per-user model provider keys (OpenAI / Anthropic / Google / OpenRouter).
   "provider-keys",
+  // PRD-E convergence — SSOT-only nav slugs reachable via the web
+  // `SettingsBinder` (chat-surface `SettingsSurface`). Web has no body yet
+  // (surface placeholder) but they must parse so nav clicks reflect to the URL.
+  "models",
+  "app-lock",
   // Round 2 — local (Ollama) models; only rendered on desktop/self-host.
   "local-models",
   "connectors",

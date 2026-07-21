@@ -112,9 +112,10 @@ def _seed_rows(pool: Any, org_id: str, user_id: str, *, wallet: str) -> None:
         with conn.cursor() as cur:
             cur.execute(
                 "INSERT INTO wallet_identities "
-                "(wallet_id, address, org_id, user_id, chain_id, created_at) "
-                "VALUES (%s, %s, %s, %s, 8453, now())",
-                (f"wid_{uuid.uuid4().hex}", wallet, org_id, user_id),
+                "(wallet_id, address, org_id, user_id, chain_id, created_at, "
+                "principal_id) "
+                "VALUES (%s, %s, %s, %s, 8453, now(), %s)",
+                (f"wid_{uuid.uuid4().hex}", wallet, org_id, user_id, f"prn_{user_id}"),
             )
             # Singleton class (survivor-wins).
             cur.execute(

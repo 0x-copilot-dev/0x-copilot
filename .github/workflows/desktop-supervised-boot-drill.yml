@@ -17,6 +17,13 @@ name: desktop-supervised-boot-drill
 #     >=1 model_delta and NO run_failed, hermetically (RUNTIME_FAKE_MODEL=1 —
 #     no provider key, no network).
 #
+# The run→stream read is TERMINAL-gated and resumable: it loops until a terminal
+# event (run_completed / run_failed / run_cancelled) or a generous 60s deadline,
+# reconnecting from the highest sequence_no (after_sequence=<lastSeq>) whenever a
+# single SSE connection's body ends before the terminal event. A slow runner can
+# no longer close the read window at final_response and yield a false negative
+# (the failure mode that kept this drill workflow_dispatch-only after #160).
+#
 # WHY macOS-only, cadence-gated (NOT every PR):
 #   * The staged runtime (tools/desktop-runtime/manifest.json) ships only
 #     darwin/win32 bundles and run-local.mjs boots the darwin runtime only, so a
@@ -31,20 +38,31 @@ name: desktop-supervised-boot-drill
 #     an in-process store harness structurally cannot.
 
 on:
-  # MANUAL-ONLY until the harness read is hardened for the CI runner.
-  #
-  # The drill boots the real supervised stack correctly (postgres, migrations,
-  # all three services healthy, production-posture SIWE sign-in — 10/10 pass) and
-  # the run streams the full sequence (`run_started → reasoning → model_delta×N →
-  # final_response`). But on the slower GitHub macOS runner the SSE read window
-  # closed BEFORE the trailing `run_completed` (the product IS correct — Tier A
-  # `test_fake_model_run_stream{,_file}.py` and a local run both reach
-  # `run_completed`). This is a harness-timing gap, not a product bug.
-  #
-  # BEFORE re-enabling the pull_request / push / weekly-`schedule` triggers,
-  # harden `run-local.mjs`'s run→stream read to loop until a TERMINAL event
-  # (`run_completed`/`run_failed`) or a generous deadline, so a slow runner never
-  # yields a false negative. Tracked in docs/plan/verification/01-e2e-run-verification.md.
+  # Auto-triggered again (#160 shipped it workflow_dispatch-only). The false
+  # negative that gated the triggers — on the slower GitHub macOS runner the SSE
+  # read window closed after `final_response` but BEFORE the trailing
+  # `run_completed` — is fixed: `run-local.mjs`'s run→stream read is now
+  # TERMINAL-gated and resumable. It loops until a terminal event
+  # (`run_completed`/`run_failed`/`run_cancelled`) or a generous 60s deadline,
+  # reconnecting from the highest `sequence_no` (`after_sequence=<lastSeq>`)
+  # whenever a single connection's body ends early, so a slow runner can no
+  # longer stop short at `final_response`. Tracked in
+  # docs/plan/verification/01-e2e-run-verification.md.
+  pull_request:
+    paths:
+      - "tools/desktop-runtime/**"
+      - ".github/workflows/desktop-supervised-boot-drill.yml"
+  push:
+    branches:
+      - main
+    paths:
+      - "tools/desktop-runtime/**"
+      - ".github/workflows/desktop-supervised-boot-drill.yml"
+  schedule:
+    # Weekly, Sundays 06:00 UTC — same cadence trade-off as
+    # postgres-restore-drill.yml. The staged runtime is deterministic, so a
+    # delayed run produces the same result.
+    - cron: "0 6 * * 0"
   workflow_dispatch:
 
 concurrency:

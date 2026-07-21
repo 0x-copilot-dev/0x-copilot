@@ -303,6 +303,13 @@ export interface ProjectSummary {
   readonly counts: ProjectActivityCounts;
   readonly last_activity_at: string | null;
   readonly updated_at: string;
+  /**
+   * Denormalized owner display name — server-projected for list-view perf
+   * so a row can render "owned by X" without a second identity lookup.
+   * Absent when the projection is unavailable (older payloads / stores that
+   * don't populate it); the UI degrades to no owner label.
+   */
+  readonly owner_display_name?: string;
 }
 
 /**
@@ -348,6 +355,34 @@ export interface ProjectActivity {
   readonly preview: string;
   /** ISO-8601 UTC. */
   readonly occurred_at: string;
+}
+
+// ---------------------------------------------------------------------------
+// List query axes (sort + filter)
+// ---------------------------------------------------------------------------
+
+/**
+ * Sort axis for `GET /v1/projects`. `field:direction`; the server keyset-
+ * paginates on the chosen axis and encodes the pointer into `next_cursor`.
+ */
+export type ProjectSortKey =
+  | "updated_at:desc"
+  | "updated_at:asc"
+  | "name:asc"
+  | "name:desc"
+  | "created_at:desc"
+  | "last_activity_at:desc";
+
+/**
+ * Multi-axis filter for `GET /v1/projects`. Each axis narrows the result
+ * set (AND across axes); cross-audit §1.5 multi-value OR semantics apply
+ * within an axis when the server accepts repeated values.
+ */
+export interface ListProjectsFilters {
+  readonly status?: ProjectStatus;
+  readonly owner_user_id?: UserId;
+  readonly member_user_id?: UserId;
+  readonly starred?: boolean;
 }
 
 // ---------------------------------------------------------------------------
@@ -459,34 +494,39 @@ export type ProjectStreamEventType =
   | "project_activity_appended";
 
 /**
+ * Discriminated payload union driven by `event_type`; producers are
+ * responsible for matching the right shape. The union is permissive (open)
+ * so adding a new event type stays forwards-compatible with old clients —
+ * they surface the envelope as a generic "something changed" signal.
+ * Membership / state-change envelopes carry only the small descriptor;
+ * clients refetch the full project on `project_member_added` for the
+ * current user (auto-add to rail).
+ */
+export type ProjectStreamPayload =
+  | Project
+  | ProjectSummary
+  | ProjectMembership
+  | ProjectActivity
+  | {
+      readonly project_id: ProjectId;
+      readonly user_id?: UserId;
+      readonly archived_at?: string;
+      readonly activated_at?: string;
+      readonly from_user_id?: UserId;
+      readonly to_user_id?: UserId;
+      readonly previous_owner_new_role?: ProjectRole;
+    };
+
+/**
  * SSE envelope. `sequence_no` is monotonic per stream; clients reconnect
  * via `?after_sequence=N` to resume without replay (matches the runtime
  * agent-events stream pattern from cross-audit §5.2).
- *
- * `payload` is a discriminated union driven by `event_type`; producers
- * are responsible for matching the right shape. The shape here is
- * permissive (open union) so adding a new event type is forwards-
- * compatible with old clients — they'll surface the envelope as a
- * generic "something changed" signal.
  */
 export interface ProjectStreamEnvelope {
   readonly sequence_no: number;
   readonly event_type: ProjectStreamEventType;
   readonly project_id: ProjectId;
-  readonly payload:
-    | Project
-    | ProjectSummary
-    | ProjectMembership
-    | ProjectActivity
-    | {
-        readonly project_id: ProjectId;
-        readonly user_id?: UserId;
-        readonly archived_at?: string;
-        readonly activated_at?: string;
-        readonly from_user_id?: UserId;
-        readonly to_user_id?: UserId;
-        readonly previous_owner_new_role?: ProjectRole;
-      };
+  readonly payload: ProjectStreamPayload;
   /** ISO-8601 UTC. */
   readonly emitted_at: string;
 }

@@ -16,6 +16,7 @@
 
 backend:
   organizations: 2
+  principals: 3
   users: 3
   roles: 4
   role_assignments: 3

@@ -386,3 +386,154 @@ class TestObjectCopy(_SeedMixin):
 
         await source.close()
         await dest.close()
+
+
+class _ScopeDiscoveringSource:
+    """A port-compatible source that enumerates its own tenant scopes.
+
+    This is the structural shape the Postgres adapter presents to the migrator:
+    the port read methods plus an async ``list_conversation_scopes`` (its
+    ``SELECT DISTINCT org_id, user_id FROM agent_conversations``). It wraps an
+    in-memory store and, crucially, does NOT expose a ``conversations`` mapping,
+    so the migrator's scope auto-discovery is forced down the
+    ``list_conversation_scopes`` branch — the path a real Postgres source takes.
+    """
+
+    def __init__(self, backing: InMemoryRuntimeApiStore) -> None:
+        self._backing = backing
+        self.scope_calls = 0
+
+    async def list_conversation_scopes(self) -> list[tuple[str, str]]:
+        self.scope_calls += 1
+        seen: set[tuple[str, str]] = {
+            (c.org_id, c.user_id) for c in self._backing.conversations.values()
+        }
+        return sorted(seen)
+
+    # --- MigrationSourcePort passthrough (deliberately no ``conversations``) ---
+    async def list_conversations(self, **kwargs):
+        return await self._backing.list_conversations(**kwargs)
+
+    async def get_conversation(self, **kwargs):
+        return await self._backing.get_conversation(**kwargs)
+
+    async def list_messages(self, **kwargs):
+        return await self._backing.list_messages(**kwargs)
+
+    async def get_run(self, **kwargs):
+        return await self._backing.get_run(**kwargs)
+
+    async def list_events_after(self, **kwargs):
+        return await self._backing.list_events_after(**kwargs)
+
+
+async def _seed_scope_conversation(store, *, org: str, user: str, title: str) -> str:
+    """Create one conversation + a user message for an arbitrary (org, user)."""
+
+    from runtime_api.schemas import MessageRecord
+
+    conversation = await store.create_conversation(
+        CreateConversationRequest(
+            org_id=org, user_id=user, assistant_id="assistant", metadata={}
+        )
+    )
+    cid = conversation.conversation_id
+    await store.append_message(
+        MessageRecord(
+            conversation_id=cid,
+            org_id=org,
+            role=MessageRole.USER,
+            content_text=f"hi from {title}",
+        )
+    )
+    return cid
+
+
+class TestPostgresScopeDiscovery(_SeedMixin):
+    """The migrator auto-discovers scopes from a Postgres-shaped source.
+
+    A Postgres source has no in-memory ``conversations`` mapping, so without
+    ``list_conversation_scopes`` the migrator could only run with hand-passed
+    ``--org-id``/``--user-id``. These tests pin the discovery branch: every
+    tenant is migrated from ``scopes=None``, and an empty source is a clean
+    no-op rather than an error.
+    """
+
+    async def test_discovers_and_migrates_every_tenant_scope(self, tmp_path) -> None:
+        backing = await _open_memory_store()
+        cid_a = await _seed_scope_conversation(
+            backing, org="org_a", user="user_a", title="A"
+        )
+        cid_b = await _seed_scope_conversation(
+            backing, org="org_b", user="user_b", title="B"
+        )
+        source = _ScopeDiscoveringSource(backing)
+        dest = await _open_file_store(tmp_path / "dst")
+
+        report = await StoreMigrator(source=source, dest=dest).migrate(verify=True)
+
+        # Both distinct tenants were discovered and migrated with no scopes hint.
+        assert source.scope_calls >= 1
+        assert report.verified is True
+        assert report.mismatches == ()
+        assert {(s.org_id, s.user_id) for s in report.scopes} == {
+            ("org_a", "user_a"),
+            ("org_b", "user_b"),
+        }
+        assert report.conversations_total == 2
+        assert report.conversations_migrated == 2
+
+        # Each tenant's conversation is readable in the destination under its own
+        # (org, user) scope.
+        dest_a = await dest.get_conversation(
+            org_id="org_a", user_id="user_a", conversation_id=cid_a
+        )
+        dest_b = await dest.get_conversation(
+            org_id="org_b", user_id="user_b", conversation_id=cid_b
+        )
+        assert dest_a is not None and dest_b is not None
+
+        await backing.close()
+        await dest.close()
+
+    async def test_empty_source_is_a_clean_no_op(self, tmp_path) -> None:
+        # Fresh install shape: discovery returns no scopes. This must be a
+        # migrated=0 no-op, never a MigrationError (the first-file-boot import
+        # relies on this to exit 0 when Postgres has no history).
+        backing = await _open_memory_store()
+        source = _ScopeDiscoveringSource(backing)
+        dest = await _open_file_store(tmp_path / "dst")
+
+        report = await StoreMigrator(source=source, dest=dest).migrate(verify=True)
+
+        assert source.scope_calls >= 1
+        assert report.conversations_total == 0
+        assert report.conversations_migrated == 0
+        assert report.mismatches == ()
+
+        await backing.close()
+        await dest.close()
+
+    async def test_duplicate_scope_pairs_are_deduped(self, tmp_path) -> None:
+        # A source that reports the same (org, user) twice must resolve to a
+        # single scope so the conversation is not read/migrated twice.
+        backing = await _open_memory_store()
+        await _seed_scope_conversation(backing, org="org_a", user="user_a", title="A")
+
+        class _Dupes(_ScopeDiscoveringSource):
+            async def list_conversation_scopes(self):
+                await super().list_conversation_scopes()
+                return [("org_a", "user_a"), ("org_a", "user_a")]
+
+        source = _Dupes(backing)
+        dest = await _open_file_store(tmp_path / "dst")
+
+        report = await StoreMigrator(source=source, dest=dest).migrate(verify=True)
+
+        assert report.scopes == (MigrationScope(org_id="org_a", user_id="user_a"),)
+        assert report.conversations_total == 1
+        assert report.conversations_migrated == 1
+        assert report.verified is True
+
+        await backing.close()
+        await dest.close()

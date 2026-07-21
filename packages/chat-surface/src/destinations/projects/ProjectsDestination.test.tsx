@@ -21,8 +21,7 @@ import type { ArtifactRoute, Router } from "../../routing/router";
 // throwing.
 import "./index";
 
-// TODO(merge): rewire to "@0x-copilot/api-types"
-import type { ProjectSummary } from "./_projects-stub";
+import type { ProjectSummary } from "@0x-copilot/api-types";
 
 import {
   ProjectsDestination,

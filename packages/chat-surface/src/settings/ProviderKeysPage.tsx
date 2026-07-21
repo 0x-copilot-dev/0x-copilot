@@ -181,6 +181,14 @@ export function ProviderKeysPage({
     [providers, summaryFor],
   );
 
+  // Only providers the backend actually accepts can be added — a `comingSoon`
+  // provider's "Add key" is disabled, and the generic "Add a key" CTA targets
+  // the first *addable* provider, so no path dead-ends in a 422 (PRD-F FR-F.6).
+  const addable = useMemo(
+    () => available.filter((entry) => entry.comingSoon !== true),
+    [available],
+  );
+
   const handleValidate = useCallback(
     (entry: ProviderCatalogEntry) =>
       (apiKey: string): Promise<ProviderKeyValidation> =>
@@ -407,13 +415,18 @@ export function ProviderKeysPage({
                         type="button"
                         variant="secondary"
                         size="sm"
-                        aria-label={`Add ${entry.label} key`}
+                        aria-label={
+                          entry.comingSoon === true
+                            ? `${entry.label} coming soon`
+                            : `Add ${entry.label} key`
+                        }
+                        disabled={entry.comingSoon === true}
                         onClick={() => setModal({ entry, mode: "add" })}
                         data-testid={`provider-add-${entry.id}`}
                         style={addKeyButtonStyle}
                       >
                         <Icon name="plus" size={14} />
-                        Add key
+                        {entry.comingSoon === true ? "Coming soon" : "Add key"}
                       </Button>
                     }
                   />
@@ -429,9 +442,9 @@ export function ProviderKeysPage({
                     variant="primary"
                     size="sm"
                     aria-label="Add a key"
-                    disabled={available.length === 0}
+                    disabled={addable.length === 0}
                     onClick={() => {
-                      const first = available[0];
+                      const first = addable[0];
                       if (first !== undefined) {
                         setModal({ entry: first, mode: "add" });
                       }
@@ -472,7 +485,9 @@ function AddRowName({ entry }: { entry: ProviderCatalogEntry }): ReactNode {
   return (
     <span style={nameRowStyle}>
       <span>{entry.label}</span>
-      <Badge tone="neutral">compatible</Badge>
+      <Badge tone="neutral">
+        {entry.comingSoon === true ? "coming soon" : "compatible"}
+      </Badge>
     </span>
   );
 }

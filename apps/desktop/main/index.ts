@@ -94,6 +94,19 @@ import { createMainWindow } from "./window";
 
 applyBrandIdentity(app, { platform: process.platform });
 
+// Test-harness isolation: an explicit userData SUBDIR keeps a driven run
+// (tools/cli-testing) fully hermetic — its own boot secrets, embedded-PG
+// data dir and sessions — so it never touches (or wipes) a real install's
+// data. Must run before anything reads app.getPath("userData"). The
+// cli-testing driver has set this env for dev posture since it shipped;
+// honoring it here (all postures) makes that contract real.
+{
+  const subdir = process.env.COPILOT_DESKTOP_USER_DATA_SUBDIR ?? "";
+  if (subdir !== "" && !subdir.includes("..") && !subdir.includes("/")) {
+    app.setPath("userData", join(app.getPath("userData"), subdir));
+  }
+}
+
 registerAppProtocolPrivilege();
 
 let mainWindow: BrowserWindow | null = null;
@@ -374,8 +387,8 @@ if (hasSingleInstanceLock) {
       supervisor.onStatus(sendBootStatus);
       supervisor
         .start()
-        .then(({ facadeUrl }) => {
-          wireTransportAndIpc(facadeUrl);
+        .then(({ facadeUrl, hostToken }) => {
+          wireTransportAndIpc(facadeUrl, hostToken);
         })
         .catch((err: unknown) => {
           // The supervisor already emitted a fatal BootStatus for the
@@ -400,11 +413,14 @@ if (hasSingleInstanceLock) {
 
 // Constructed only once the facade is reachable (supervised mode) or
 // immediately in dev mode. facadeUrl === undefined -> MockTransport.
-function wireTransportAndIpc(facadeUrl: string | undefined): void {
+function wireTransportAndIpc(
+  facadeUrl: string | undefined,
+  hostToken?: string,
+): void {
   const auditLog = createFileAuthAuditLog({
     filePath: join(app.getPath("userData"), "audit", "auth.log"),
   });
-  const authService = buildAuthService(auditLog, facadeUrl);
+  const authService = buildAuthService(auditLog, facadeUrl, hostToken);
   const transport = createTransport(authService, auditLog, facadeUrl);
 
   // AC9 — connector OAuth service. Only meaningful against a real facade
@@ -592,6 +608,7 @@ interface ActiveAuthService {
 function buildAuthService(
   authAudit: AuthAuditLog,
   facadeUrl: string | undefined,
+  hostToken?: string,
 ): ActiveAuthService {
   // Production posture (real install, incl. CLI launch where app.isPackaged is
   // false) forces mode away from "dev-mint" so OidcClient can never mint the
@@ -645,6 +662,7 @@ function buildAuthService(
   const service = new AuthService({
     mode,
     facadeBaseUrl,
+    hostToken,
     devPersonaSlug,
     oidc: oidcConfig,
     userDataDir: app.getPath("userData"),
@@ -655,10 +673,11 @@ function buildAuthService(
   });
 
   return {
-    // "Use locally, no account" — offered in every posture. In production posture
-    // (a real packaged install) it runs the production-safe local-key SIWE flow
-    // (a per-install keychain key, no dev IdP, no external service). In dev
-    // posture it keeps the dev-mint path so the `make dev` flow is unchanged.
+    // "Use locally, no account" — offered in every posture. In production
+    // posture it mints the DEVICE ACCOUNT via the host-token-gated
+    // /v1/auth/local/session (server-side singleton — same account across
+    // restarts/reinstalls, D4-A; no local key material). In dev posture it
+    // keeps the dev-mint path so the `make dev` flow is unchanged.
     signIn: (workspaceId) =>
       productionPosture
         ? service.signInLocal(workspaceId)

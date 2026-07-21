@@ -244,7 +244,7 @@ export function AddProviderKeyModal({
                 onClick={handleContinue}
                 data-testid="add-key-continue"
               >
-                Continue
+                Validate key
               </Button>
             ) : null}
             {step === 3 ? (

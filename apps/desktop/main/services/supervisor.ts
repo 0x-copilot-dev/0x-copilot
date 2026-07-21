@@ -112,7 +112,7 @@ export class ServiceSupervisor {
     return this.#state;
   }
 
-  async start(): Promise<{ facadeUrl: string }> {
+  async start(): Promise<{ facadeUrl: string; hostToken: string }> {
     if (this.#state !== "idle") {
       throw new Error(`supervisor.start() called in state "${this.#state}"`);
     }
@@ -190,7 +190,10 @@ export class ServiceSupervisor {
     this.#facadeUrl = `http://127.0.0.1:${ports.facade}`;
     this.#state = "ready";
     this.#emit({ phase: "ready", message: "Ready", percent: 100 });
-    return { facadeUrl: this.#facadeUrl };
+    // hostToken: the per-install ENTERPRISE_SERVICE_TOKEN. Handed to the auth
+    // layer so "Use locally" can mint the device-account session — the token
+    // is what proves the mint request comes from THIS app's main process.
+    return { facadeUrl: this.#facadeUrl, hostToken: secrets.serviceToken };
   }
 
   // Reverse boot order: facade -> ai-backend -> backend -> postgres.

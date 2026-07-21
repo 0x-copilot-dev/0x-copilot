@@ -2613,6 +2613,27 @@ class WalletIdentityRecord(BackendContract):
         return _normalize_wallet_address(value)
 
 
+class LocalAccountRecord(BackendContract):
+    """The "Use locally, no account" device entry — an identity edge like
+    wallet/oidc/saml, minus any external identity.
+
+    At most ONE row exists per deployment (DB singleton index): the device
+    account. Every "Use locally" resolves to it (D4-A: one account, N doors),
+    so losing client-side state can never fork a second empty account.
+    """
+
+    local_account_id: str = Field(default_factory=lambda: f"lac_{uuid4().hex}")
+    org_id: str
+    user_id: str
+    principal_id: str | None = None
+    created_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
+
+    @field_validator("local_account_id", "org_id", "user_id")
+    @classmethod
+    def _normalize_id(cls, value: object) -> str:
+        return Validators.normalize_id(value)
+
+
 class SiweNonceRequest(BackendContract):
     # ``address`` intentionally has NO format validator here: the service
     # validates and maps bad formats to 422 {"detail": "invalid_address"}
@@ -2649,6 +2670,22 @@ class SiweVerifyResult(BackendContract):
     expires_at: datetime
     return_to: str | None = None
     requires_mfa: bool = False
+
+
+class LocalSessionResult(BackendContract):
+    """Returned by the device-account session mint (``/v1/auth/local/session``).
+
+    Mirrors :class:`SiweVerifyResult` so every session-establishing login
+    path presents the same wire shape; ``created`` distinguishes the very
+    first "Use locally" (fresh account) from a re-entry.
+    """
+
+    user_id: str
+    org_id: str
+    session_id: str
+    bearer_token: str
+    expires_at: datetime
+    created: bool = False
 
 
 class AccountMergeState(StrEnum):

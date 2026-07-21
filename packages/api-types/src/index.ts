@@ -3570,6 +3570,22 @@ export interface SessionSelectResponse {
   expires_at: string;
 }
 
+/**
+ * POST /v1/auth/local/session — the "Use locally, no account" device-account
+ * mint (desktop-only; gated by the per-install host token, which only the
+ * desktop main process holds — never callable from a browser page).
+ * `created` distinguishes the very first "Use locally" from a re-entry into
+ * the one device account.
+ */
+export interface LocalSessionResult {
+  user_id: string;
+  org_id: string;
+  session_id: string;
+  bearer_token: string;
+  expires_at: string;
+  created: boolean;
+}
+
 // ---------------------------------------------------------------------------
 // PR 7.1 — admin audit log query (Settings → Members → Audit log)
 // ---------------------------------------------------------------------------
@@ -4075,6 +4091,7 @@ export type {
   ConnectorSlug,
   CreateProjectRequest,
   ForkProjectTemplateRequest,
+  ListProjectsFilters,
   LivenessDetail,
   LivenessDetailSource,
   LivenessReport,
@@ -4089,9 +4106,11 @@ export type {
   ProjectMembership,
   ProjectMembershipListResponse,
   ProjectRole,
+  ProjectSortKey,
   ProjectStatus,
   ProjectStreamEnvelope,
   ProjectStreamEventType,
+  ProjectStreamPayload,
   ProjectSummary,
   ProjectTemplate,
   ProjectTemplateListResponse,

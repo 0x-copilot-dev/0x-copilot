@@ -20,6 +20,8 @@ import type {
   ProviderKeySummary,
   PutProviderKeyRequest,
   UpdateWorkspaceDefaultsRequest,
+  ValidateProviderKeyRequest,
+  ValidateProviderKeyResponse,
   WorkspaceDefaultsResponse,
 } from "@0x-copilot/api-types";
 
@@ -50,6 +52,14 @@ export interface ProviderCatalogEntry {
    * affordance so the UI never silently pretends they persist.
    */
   readonly contractBacked: boolean;
+  /**
+   * True when the provider is in the catalog for discoverability but the
+   * backend `ProviderName` enum + `live_validator` do not accept it yet, so a
+   * `save()` would 422 (PRD-F FR-F.6, gap #5). The page renders the row but
+   * disables "Add key" so no CTA ever dead-ends in a 422. Widen the backend
+   * enum + validator + the DB CHECK migration to flip a provider off this flag.
+   */
+  readonly comingSoon?: boolean;
 }
 
 // Model lists are catalog defaults (DESIGN-SPEC §4 "per-provider MODELS"),
@@ -98,6 +108,7 @@ export const PROVIDER_CATALOG: readonly ProviderCatalogEntry[] = [
     placeholder: "gsk_…",
     keyPrefix: "gsk_",
     contractBacked: false,
+    comingSoon: true,
     models: ["llama-3.3-70b-versatile", "llama-3.1-8b-instant"],
   },
   {
@@ -106,6 +117,7 @@ export const PROVIDER_CATALOG: readonly ProviderCatalogEntry[] = [
     placeholder: "xai-…",
     keyPrefix: "xai-",
     contractBacked: false,
+    comingSoon: true,
     models: ["grok-4", "grok-3-mini"],
   },
 ];
@@ -230,6 +242,39 @@ export function createProviderKeysPort(transport: Transport): ProviderKeysPort {
         path: `/v1/settings/provider-keys/${encodeURIComponent(provider)}`,
         signal,
       });
+    },
+    async validate(provider, apiKey, signal) {
+      // Live probe (PRD-F FR-F.4): the key feeds exactly one outbound call
+      // and is never stored/echoed. Map the tri-state wire verdict onto the
+      // modal's `ProviderKeyValidation`:
+      //   valid === true  → advance, offering the real model ids.
+      //   valid === false → invalid_key → bounce to step 1 with an alert.
+      //   valid === null  → couldn't reach the provider; NOT a failure — let
+      //                     the flow continue (offline-friendly, save is the
+      //                     backstop), falling back to the catalog models.
+      const body: ValidateProviderKeyRequest = { api_key: apiKey };
+      const res = await transport.request<ValidateProviderKeyResponse>({
+        method: "POST",
+        path: `/v1/settings/provider-keys/${encodeURIComponent(provider)}/validate`,
+        body,
+        signal,
+      });
+      if (res.valid === true) {
+        return {
+          ok: true,
+          models: res.models ?? undefined,
+        };
+      }
+      if (res.valid === false) {
+        return {
+          ok: false,
+          error:
+            "That key was rejected by the provider — check you pasted the whole value.",
+        };
+      }
+      // provider_unreachable: verify skipped, not failed. Continue with the
+      // catalog's model list (the modal falls back when `models` is absent).
+      return { ok: true };
     },
     async saveDefaultModel(provider, modelName, signal) {
       // The key store speaks `google` (ProviderName); the runtime's model

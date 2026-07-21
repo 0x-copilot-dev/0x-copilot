@@ -1,23 +1,19 @@
 import { describe, expect, it, vi } from "vitest";
-import { privateKeyToAccount } from "viem/accounts";
 
 import { LocalLoginError, runLocalLogin } from "./local-login";
 
 const FACADE = "http://127.0.0.1:54321";
-// Deterministic well-known test key (hardhat account #0).
-const PK =
-  "0xac0974bec39a17e36ba4a6b4d238ff944bacb478cbed5efcae784d7bf4f2ff80" as const;
-const ADDRESS = privateKeyToAccount(PK).address;
+const HOST_TOKEN = "host-secret-abc";
 
 const HANDOFF = {
   user_id: "usr_local_1",
+  org_id: "org_local_1",
   session_id: "sess_1",
   bearer_token: "bearer-local-xyz",
   expires_at: "2999-01-01T00:00:00Z",
-  requires_mfa: false,
-  return_to: null,
+  created: true,
 };
-const PROFILE = { display_name: "Local User", email: null };
+const PROFILE = { display_name: "Local account", email: null };
 
 function jsonResponse(body: unknown, status = 200): Response {
   return new Response(JSON.stringify(body), {
@@ -42,12 +38,13 @@ function routedFetch(routes: Record<string, Handler>): typeof fetch {
 }
 
 describe("runLocalLogin", () => {
-  it("mints a session via the local-key SIWE ramp with a facade-origin message", async () => {
-    let verifyPayload: { message?: string; signature?: string } = {};
+  it("mints the device-account session with the host token", async () => {
+    let mintHeaders: Record<string, string> = {};
     const fetchMock = routedFetch({
-      "/v1/auth/siwe/nonce": () => jsonResponse({ nonce: "abcd1234efgh5678" }),
-      "/v1/auth/siwe/verify": (_url, init) => {
-        verifyPayload = JSON.parse(String(init?.body));
+      "/v1/auth/local/session": (_url, init) => {
+        mintHeaders = Object.fromEntries(
+          Object.entries((init?.headers ?? {}) as Record<string, string>),
+        );
         return jsonResponse(HANDOFF);
       },
       "/v1/me/profile": () => jsonResponse(PROFILE),
@@ -55,68 +52,57 @@ describe("runLocalLogin", () => {
 
     const session = await runLocalLogin("org_acme", {
       facadeBaseUrl: FACADE,
-      privateKey: PK,
+      hostToken: HOST_TOKEN,
       fetch: fetchMock,
     });
 
+    // The ONE thing that authorizes the mint: the per-install host secret.
+    expect(mintHeaders["x-enterprise-service-token"]).toBe(HOST_TOKEN);
     expect(session.accessToken).toBe("bearer-local-xyz");
     expect(session.refreshToken).toBeNull();
+    expect(session.expiresAt).toBe(Date.parse(HANDOFF.expires_at));
     expect(session.claims.sub).toBe("usr_local_1");
-
-    // The signed message uses the facade origin (must match SIWE_ORIGIN) + the
-    // frozen statement + the local address, in the strict EIP-4361 shape.
-    expect(verifyPayload.message).toContain(
-      "127.0.0.1:54321 wants you to sign in with your Ethereum account:",
-    );
-    expect(verifyPayload.message).toContain(ADDRESS);
-    expect(verifyPayload.message).toContain("Sign in to Copilot");
-    expect(verifyPayload.message).toContain("URI: http://127.0.0.1:54321");
-    // Robinhood Chain (the product's home EVM chain).
-    expect(verifyPayload.message).toContain("Chain ID: 4663");
-    expect(typeof verifyPayload.signature).toBe("string");
-    expect(verifyPayload.signature).toMatch(/^0x/);
   });
 
-  it("raises a staged error when the nonce request fails", async () => {
-    const fetchMock = routedFetch({
-      "/v1/auth/siwe/nonce": () => new Response("nope", { status: 500 }),
-    });
+  it("fails closed without a host token — no network call at all", async () => {
+    const fetchMock = vi.fn() as unknown as typeof fetch;
     await expect(
       runLocalLogin("org_acme", {
         facadeBaseUrl: FACADE,
-        privateKey: PK,
+        hostToken: "",
         fetch: fetchMock,
       }),
     ).rejects.toBeInstanceOf(LocalLoginError);
+    expect(fetchMock).not.toHaveBeenCalled();
   });
 
-  it("raises a staged error when verify rejects the signature", async () => {
+  it("surfaces a mint rejection (401 wrong token) as LocalLoginError", async () => {
     const fetchMock = routedFetch({
-      "/v1/auth/siwe/nonce": () => jsonResponse({ nonce: "abcd1234efgh5678" }),
-      "/v1/auth/siwe/verify": () =>
-        jsonResponse({ detail: "signature_invalid" }, 400),
+      "/v1/auth/local/session": () =>
+        new Response("invalid_host_token", { status: 401 }),
     });
     await expect(
       runLocalLogin("org_acme", {
         facadeBaseUrl: FACADE,
-        privateKey: PK,
+        hostToken: "wrong",
         fetch: fetchMock,
       }),
-    ).rejects.toMatchObject({ stage: "verify" });
+    ).rejects.toMatchObject({ stage: "mint" });
   });
 
-  it("rejects an MFA-required local identity", async () => {
+  it("falls back to a default TTL when expires_at is unparseable", async () => {
+    const NOW = 1_700_000_000_000;
     const fetchMock = routedFetch({
-      "/v1/auth/siwe/nonce": () => jsonResponse({ nonce: "abcd1234efgh5678" }),
-      "/v1/auth/siwe/verify": () =>
-        jsonResponse({ ...HANDOFF, requires_mfa: true }),
+      "/v1/auth/local/session": () =>
+        jsonResponse({ ...HANDOFF, expires_at: "not-a-date" }),
+      "/v1/me/profile": () => jsonResponse(PROFILE),
     });
-    await expect(
-      runLocalLogin("org_acme", {
-        facadeBaseUrl: FACADE,
-        privateKey: PK,
-        fetch: fetchMock,
-      }),
-    ).rejects.toMatchObject({ stage: "mfa" });
+    const session = await runLocalLogin("org_acme", {
+      facadeBaseUrl: FACADE,
+      hostToken: HOST_TOKEN,
+      fetch: fetchMock,
+      clock: () => NOW,
+    });
+    expect(session.expiresAt).toBe(NOW + 60 * 60 * 1000);
   });
 });

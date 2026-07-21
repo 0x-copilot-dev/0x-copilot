@@ -35,13 +35,19 @@ The routes:
 from __future__ import annotations
 
 import json
+from collections.abc import AsyncIterator
 
 import httpx
-from fastapi import FastAPI, HTTPException, Request, Response, status
+from fastapi import FastAPI, Header, HTTPException, Query, Request, Response, status
+from fastapi.responses import StreamingResponse
 
 from backend_facade.auth import FacadeAuthenticator
 from backend_facade.http_client import http_client
 from backend_facade.settings import FacadeSettings
+
+_SSE_MEDIA_TYPE = "text/event-stream"
+_SSE_STREAM_PATH = "/v1/projects/stream"
+_LAST_EVENT_ID_HEADER = "Last-Event-ID"
 
 
 def _encode_json(payload: object) -> bytes:
@@ -50,6 +56,64 @@ def _encode_json(payload: object) -> bytes:
 
 def register_projects_routes(app: FastAPI) -> None:
     """Attach ``/v1/projects`` proxy routes to a facade FastAPI app."""
+
+    # PRD-H FR-H.2 — Projects SSE pass-through proxy. Registered FIRST so
+    # the literal ``/v1/projects/stream`` path wins over the
+    # ``/v1/projects/{project_id}`` template (FastAPI matches in
+    # registration order). Mirrors the run-stream / inbox-stream proxy:
+    # the facade forwards upstream chunks unmodified so the SSE framing
+    # (``event:``/``id:``/``data:``) lands on the wire byte-for-byte.
+    @app.get(_SSE_STREAM_PATH)
+    async def stream_projects(
+        request: Request,
+        after_sequence: int = Query(0, ge=0),
+        last_event_id: str | None = Header(default=None, alias=_LAST_EVENT_ID_HEADER),
+    ) -> StreamingResponse:
+        backend_url = _settings_for(app).backend_url
+        client = http_client(app)
+        identity = await FacadeAuthenticator.verify_with_touch(
+            request, backend_url=backend_url, http_client=client
+        )
+        outbound_headers = dict(FacadeAuthenticator.service_headers(identity))
+        if last_event_id is not None:
+            outbound_headers[_LAST_EVENT_ID_HEADER] = last_event_id
+
+        # ``timeout=None`` keeps the stream open indefinitely; the pool's
+        # default timeout protects other callers.
+        upstream = await client.send(
+            client.build_request(
+                "GET",
+                f"{backend_url}{_SSE_STREAM_PATH}",
+                params={
+                    "org_id": identity.org_id,
+                    "user_id": identity.user_id,
+                    "after_sequence": after_sequence,
+                },
+                headers=outbound_headers,
+                timeout=None,
+            ),
+            stream=True,
+        )
+
+        if upstream.status_code >= 400:
+            await upstream.aread()
+            await upstream.aclose()
+            raise HTTPException(upstream.status_code, _upstream_error_detail(upstream))
+
+        async def event_stream() -> AsyncIterator[bytes]:
+            try:
+                async for chunk in upstream.aiter_bytes():
+                    if await request.is_disconnected():
+                        break
+                    yield chunk
+            finally:
+                await upstream.aclose()
+
+        return StreamingResponse(
+            event_stream(),
+            media_type=_SSE_MEDIA_TYPE,
+            headers={"X-Accel-Buffering": "no", "Cache-Control": "no-store"},
+        )
 
     @app.get("/v1/projects")
     async def list_projects(request: Request) -> dict[str, object]:
@@ -514,6 +578,26 @@ def _raise_for_upstream(response: httpx.Response) -> None:
         else:
             detail = payload if payload else "Upstream request failed"
     raise HTTPException(response.status_code, detail)
+
+
+def _upstream_error_detail(response: httpx.Response) -> object:
+    """Extract a faithful error detail from a failed upstream SSE open.
+
+    Mirrors ``inbox_stream_routes._upstream_error_detail`` — the facade is
+    a thin proxy and never invents its own error semantics.
+    """
+
+    detail: object
+    try:
+        payload = response.json()
+    except ValueError:
+        detail = response.text or "Upstream request failed"
+    else:
+        if isinstance(payload, dict) and "detail" in payload:
+            detail = payload["detail"]
+        else:
+            detail = payload if payload else "Upstream request failed"
+    return detail
 
 
 def _settings_for(app: FastAPI) -> FacadeSettings:

@@ -1,5 +1,5 @@
 import type { ProjectId } from "@0x-copilot/api-types";
-import { describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it } from "vitest";
 
 import { hasItemRefResolver, resolveItemRef } from "../../refs/registry";
 
@@ -9,13 +9,21 @@ import { hasItemRefResolver, resolveItemRef } from "../../refs/registry";
 // idempotent across the suite (the projects registration guards itself
 // with `hasItemRefResolver`).
 import "./index";
+import {
+  cacheProjectName,
+  __resetProjectNameCacheForTests,
+} from "./projectNameCache";
 
 describe("projects/index.ts — ItemRef resolver registration", () => {
+  afterEach(() => {
+    __resetProjectNameCacheForTests();
+  });
+
   it("registers a resolver for kind `project`", () => {
     expect(hasItemRefResolver("project")).toBe(true);
   });
 
-  it("resolves a project ref to a non-null route + 'Project' label", async () => {
+  it("falls back to the generic 'Project' label on a cache miss", async () => {
     const resolved = await resolveItemRef({
       kind: "project",
       id: "proj_abc" as ProjectId,
@@ -27,6 +35,22 @@ describe("projects/index.ts — ItemRef resolver registration", () => {
     // the workspace route is the stable fallback so <ItemLink> renders
     // a real link rather than the deleted-chip.
     expect(resolved!.route).not.toBeNull();
+    expect(resolved!.route).toMatchObject({
+      kind: "workspace",
+      workspaceId: "proj_abc",
+    });
+    expect(resolved!.breadcrumb).toBe("Projects");
+  });
+
+  it("surfaces the real project name once the cache is primed (FR-G.6)", async () => {
+    cacheProjectName("proj_abc", "Q3 Launch");
+    const resolved = await resolveItemRef({
+      kind: "project",
+      id: "proj_abc" as ProjectId,
+    });
+    expect(resolved).not.toBeNull();
+    expect(resolved!.label).toBe("Q3 Launch");
+    // Route + breadcrumb are unchanged by the name.
     expect(resolved!.route).toMatchObject({
       kind: "workspace",
       workspaceId: "proj_abc",

@@ -50,6 +50,7 @@ from backend_app.deployment_profile import (
 from backend_app.identity import SessionService
 from backend_app.identity.account_merge import PostgresMergeData
 from backend_app.identity.account_merge_store import PostgresAccountMergeStore
+from backend_app.identity.local_account_store import PostgresLocalAccountStore
 from backend_app.identity.avatar_store import PostgresAvatarStore
 from backend_app.identity.invitation_store import PostgresInvitationStore
 from backend_app.identity.lockout_store import PostgresLockoutStore
@@ -68,6 +69,7 @@ from backend_app.identity.store import PostgresIdentityStore
 from backend_app.notifications.store import PostgresNotificationPrefsStore
 from backend_app.policies.store import PostgresToolUsePolicyStore
 from backend_app.privacy.store import PostgresPrivacySettingsStore
+from backend_app.projects.store import PostgresProjectsStore
 from backend_app.provider_keys import PostgresProviderApiKeyStore
 from backend_app.service import McpRegistryService, SkillRegistryService
 from backend_app.settings.store import PostgresSettingsStore
@@ -163,7 +165,6 @@ class DesktopComposer:
         * ``routines_store``             # in-memory: no postgres adapter yet (desktop v1 accepted gap)
         * ``connectors_store``           # in-memory: no postgres adapter yet (desktop v1 accepted gap)
         * ``webhooks_store``             # in-memory: no postgres adapter yet (desktop v1 accepted gap)
-        * ``projects_store``             # in-memory: no postgres adapter yet (desktop v1 accepted gap)
         * ``project_templates_store``    # in-memory: no postgres adapter yet (desktop v1 accepted gap)
         * ``library_store``              # in-memory: no postgres adapter yet (desktop v1 accepted gap)
         * ``library_row_store``          # in-memory: no postgres adapter yet (desktop v1 accepted gap)
@@ -243,8 +244,18 @@ class DesktopComposer:
             # Account-merge engine (PRD §6.3): saga record + the privileged
             # re-key executor. The runtime (ai-backend) leg resolves from
             # AI_BACKEND_URL in create_app (the desktop supervisor exports it).
+            # "Use locally" device account: MUST be Postgres — an in-memory
+            # singleton would forget the device account on every restart and
+            # fork a fresh empty one (the exact footgun D4-A forbids).
+            "local_account_store": PostgresLocalAccountStore(pool),
             "account_merge_store": PostgresAccountMergeStore(pool),
             "merge_data_port": PostgresMergeData(pool),
+            # PRD-H FR-H.3 — durable projects store so projects survive a
+            # backend restart (was an in-memory desktop-v1 gap). In-memory
+            # stays the default for tests/dev via create_app. Live-Postgres
+            # verification of this adapter is deferred (no live DB in the
+            # parity workstream); the supervised-boot smoke exercises it.
+            "projects_store": PostgresProjectsStore(pool),
         }
 
     @classmethod
