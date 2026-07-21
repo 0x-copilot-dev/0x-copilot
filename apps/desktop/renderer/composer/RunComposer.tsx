@@ -105,12 +105,15 @@ export function RunComposer(props: RunComposerProps): ReactElement {
 
   const transport = useTransport();
 
-  // The last run-create failure, surfaced inline above the composer. Without
-  // this the in-chat composer's `POST /v1/agent/runs` rejection was SWALLOWED
-  // (AssistantComposer's `onSubmit` promise is never `.catch`ed), so a keyless
-  // send was a silent dead end. Structured (safe_message / code) so a missing
-  // provider key shows an actionable "Add a provider key" CTA (onboarding), not
-  // nothing. Cleared on the next successful send or an explicit dismiss.
+  // The last run-create failure, surfaced inline above the composer. The
+  // in-chat composer's `POST /v1/agent/runs` rejection used to be SWALLOWED
+  // (AssistantComposer's `onSubmit` promise was never `.catch`ed); that swallow
+  // is now fixed at the chat-surface SSOT, which routes a rejected submit to the
+  // composer's `onSubmitError` channel. We consume that channel (`handleSubmitError`
+  // below) instead of wrapping our own try/catch — one mechanism. Structured
+  // (safe_message / code) so a missing provider key shows an actionable "Add a
+  // provider key" CTA (onboarding), not nothing. Cleared on the next successful
+  // send or an explicit dismiss.
   const [startError, setStartError] = useState<StartRunError | null>(null);
 
   // --- Skills (drive `/`-menu + skill pills) ---
@@ -424,32 +427,35 @@ export function RunComposer(props: RunComposerProps): ReactElement {
       if (atts.length > 0) {
         body.attachments = atts.map(toRunAttachment);
       }
-      try {
-        await transport.request({
-          method: "POST",
-          path: "/v1/agent/runs",
-          body,
-        });
-        // A prior failure is resolved — clear the notice so it can't linger.
-        setStartError(null);
-      } catch (err: unknown) {
-        // Never swallow, and never dump the raw transport/IPC envelope: parse
-        // out the actionable `safe_message` + `code` so a missing provider key
-        // surfaces the one useful line + an "Add a provider key" CTA instead of
-        // a silent dead end (matches the empty-state composer, Issue 2).
-        const parsed = parseTransportError(err);
-        setStartError({
-          message:
-            parsed.safeMessage ??
-            "Couldn't start the run. Is the backend running and a model configured?",
-          code: parsed.code,
-          correlationId: parsed.correlationId,
-          raw: parsed.raw !== "" ? parsed.raw : undefined,
-        });
-      }
+      // Let a rejection propagate to `onSubmitError` (handleSubmitError) — the
+      // single chat-surface error channel — rather than catching it here. On
+      // success, clear any prior failure notice so it can't linger.
+      await transport.request({
+        method: "POST",
+        path: "/v1/agent/runs",
+        body,
+      });
+      setStartError(null);
     },
     [conversationId, disabled, models, selectedModel, transport],
   );
+
+  // The composer's error channel: a rejected run-create surfaces here instead
+  // of vanishing. Never dump the raw transport/IPC envelope — parse the
+  // actionable `safe_message` + `code` so a missing provider key shows the one
+  // useful line + an "Add a provider key" CTA (matches the empty-state
+  // composer, Issue 2).
+  const handleSubmitError = useCallback((err: unknown): void => {
+    const parsed = parseTransportError(err);
+    setStartError({
+      message:
+        parsed.safeMessage ??
+        "Couldn't start the run. Is the backend running and a model configured?",
+      code: parsed.code,
+      correlationId: parsed.correlationId,
+      raw: parsed.raw !== "" ? parsed.raw : undefined,
+    });
+  }, []);
 
   return (
     <div data-testid="run-composer" style={runComposerRootStyle}>
@@ -491,6 +497,7 @@ export function RunComposer(props: RunComposerProps): ReactElement {
         // instead of web's roomy 3 (paired with composer.css's auto-height shell).
         minRows={2}
         onSubmit={handleSubmit}
+        onSubmitError={handleSubmitError}
         disabled={disabled}
         onOpenSkillsPanel={() => onOpenSkillsSettings?.()}
         // Surfaced for the "Set up your model" path; harmless if unused here.

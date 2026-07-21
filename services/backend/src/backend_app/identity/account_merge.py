@@ -403,6 +403,28 @@ class PostgresMergeData:
         # UNIQUE (org_id, user_id, name): same-named skill → survivor wins.
         ("skills", "keyed", "org_id", "user_id", ("name",)),
         ("provider_api_keys", "keyed", "org_id", "user_id", ("provider",)),
+        # Generative-UI spec registry: the unique key (uq_surface_specs_key)
+        # is org-scoped, NOT user-scoped, and ``user_id`` is authorship
+        # provenance only (reads are org-wide; the API view omits it). So the
+        # merge treats it as org-keyed content: survivor wins per spec
+        # identity, the rest retenant with provenance left on the absorbed
+        # (soft-disabled, never deleted) author. Declaring user_id here would
+        # under-match the survivor-wins EXISTS in multi-user survivor orgs and
+        # abort the merge on the unique index instead.
+        (
+            "surface_specs",
+            "keyed",
+            "org_id",
+            None,
+            (
+                "server",
+                "tool",
+                "output_shape_hash",
+                "spec_schema_version",
+                "skill_version",
+                "origin",
+            ),
+        ),
         # user_id-only tables (no org column at all).
         (
             "notification_preferences",

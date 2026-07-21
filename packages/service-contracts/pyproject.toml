@@ -13,4 +13,9 @@ dependencies = []
 where = ["src"]
 
 [tool.setuptools.package-data]
-copilot_service_contracts = ["adapter_allowlist.json"]
+# Glob, not an enumerated list: a new runtime data file (e.g. the
+# surface_spec.schema.json added alongside adapter_allowlist.json) must not be
+# silently dropped from the wheel — that crash-loops every pip-installed
+# consumer (packaged desktop, Docker images) while PYTHONPATH-based dev/CI
+# keeps working.
+copilot_service_contracts = ["*.json"]
