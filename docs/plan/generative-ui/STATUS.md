@@ -28,12 +28,19 @@ E2E path now closed: MCP tool result → `SurfaceProjector` attaches `surface_ur
 
 **Verification:** ai-backend `tests/unit` **2949 passed** (1 known-flaky wall-clock timing test, passes on re-run), 45 skipped; backend surface_specs **42 passed** (29 unit + 13 routes); dark-capabilities gate **exit 0**; migration manifest clean.
 
-## Wave 3 — action safety ⏳ IN PROGRESS
-- **PRD-09** edit-on-surface + gated commit (`approve_with_edits`, idempotency, precondition re-check, audit).
+## Wave 3 — action safety ✅ DONE (adversarially verified)
+- **PRD-09a** contract — `approve_with_edits` + `SurfaceEdits` + `isSurfaceEdits` + facade passthrough — `765b2393`.
+- **PRD-09b** gated commit executor — server-side edit merge (`extra=forbid`, connector/scope from the server-held proposal only), idempotency (ledger claim before execute + `(draft_id,version)` CAS), precondition re-read before write (drift → abort + supersede), ordered audit chain, fail-closed — `c100a776`.
+- **PRD-09c** edit-on-surface overlay (message/record forms, body textarea + hunk-toggle over `DiffText`, wired to `approve_with_edits`) — `54bd58bf`.
+- **Adversarial pass on the commit gate: CONFIRMED — no defects, no security holes, no false claims.** Actively hunted a bypass across executor + coordinator + live worker path; none. Fail-closed, merge-integrity, idempotency, precondition, audit all traced through code + non-vacuous tests. Disclosed deviation (executor not wired to the live draft-send path — no real send-connector exists yet) opens no hole; live path is approval-gated + idempotent via the draft status machine + version CAS.
+- **Hardening follow-up** (in progress): explicit 422 for `edits` on non-editable approval kinds (was a silent drop) + worker-side field allowlist re-assert.
+- Deferred (blocked on there being a real connector): wire the executor onto the live draft-send / MCP-field-write path.
 
-## Wave 4 — escape hatch + hardening ⏳ PENDING
-- **PRD-10** tier-2 completion (production worker 6C + desktop lifecycle unstub).
-- **PRD-11** eval harness + metering + injection lint + registry scoping.
+**Verification:** ai-backend `tests/unit` **2976 passed**, 45 skipped; chat-surface **2152 passed**; 26 safety-invariant tests; dark-capabilities gate exit 0.
+
+## Wave 4 — escape hatch + hardening ⏳ IN PROGRESS
+- **PRD-10** tier-2 completion (production worker 6C + desktop lifecycle unstub + read/write install gate).
+- **PRD-11** eval harness + metering + spec injection lint + registry scoping.
 
 ## Notes for future sessions
 - Worktree toolchain: run tests against worktree source using the main checkout's venv/node_modules. Python: `PYTHONPATH="src:../../packages/service-contracts/src"` + the main-checkout venv python. TS: shadow-symlink `node_modules/@0x-copilot/{api-types,chat-surface,surface-renderers,…} → worktree/packages/*` (gitignored) so cross-package imports resolve to worktree source; or a real `npm install` in a throwaway worktree for CI-equivalent runs.
