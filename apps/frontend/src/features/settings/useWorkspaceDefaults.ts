@@ -86,6 +86,9 @@ export function useWorkspaceDefaults(
           previous?.behavior_overrides ?? {
             training_data_opt_out: false,
           },
+        // PR-2C — same optimistic carry as behavior_overrides: the request's
+        // curation when present, else the prior view, else null (uncurated).
+        enabled_models: next.enabled_models ?? previous?.enabled_models ?? null,
         updated_at: new Date().toISOString(),
         updated_by_user_id: previous?.updated_by_user_id ?? null,
       });

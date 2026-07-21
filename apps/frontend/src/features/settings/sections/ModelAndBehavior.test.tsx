@@ -27,6 +27,7 @@ const SEED: WorkspaceDefaultsResponse = {
   behavior_overrides: {
     training_data_opt_out: false,
   },
+  enabled_models: null,
   updated_at: "2026-05-05T16:00:00Z",
   updated_by_user_id: "marcus@acme.com",
 };

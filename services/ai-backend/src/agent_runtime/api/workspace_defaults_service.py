@@ -85,6 +85,7 @@ class WorkspaceDefaultsService:
             default_connectors=default_connectors,
             retention_days=retention_days,
             behavior_overrides=behavior_overrides,
+            enabled_models=record.enabled_models if record is not None else None,
             updated_at=record.updated_at if record is not None else None,
             updated_by_user_id=(
                 record.updated_by_user_id if record is not None else None
@@ -142,6 +143,7 @@ class WorkspaceDefaultsService:
             default_connectors=persisted.default_connectors,
             retention_days=request.retention_days,
             behavior_overrides=persisted.behavior_overrides,
+            enabled_models=persisted.enabled_models,
             updated_at=persisted.updated_at,
             updated_by_user_id=persisted.updated_by_user_id,
         )

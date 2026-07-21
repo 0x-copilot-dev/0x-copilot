@@ -69,6 +69,10 @@ class ModelCatalogItem(RuntimeContract):
     name: str
     description: str | None = None
     configured: bool
+    # PR-2C: whether this model is shown in the composer picker for the
+    # workspace (Settings → Models toggles curate it). Default True keeps the
+    # wire back-compatible for any consumer that predates the flag.
+    enabled: bool = True
     supports_streaming: bool = True
     supports_attachments: bool = False
     supports_reasoning: bool = False
