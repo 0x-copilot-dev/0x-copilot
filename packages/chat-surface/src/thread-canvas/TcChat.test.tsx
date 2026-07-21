@@ -268,30 +268,40 @@ describe("TcChat", () => {
     });
   });
 
-  it("renders focus mode as Activity / Approvals tabs and hides the composer", () => {
+  it("renders focus mode as the shared transcript + composer, not a stub", () => {
     const { transport } = makeTransport(() => Promise.resolve(SAMPLE_RESPONSE));
     render(
       withTransport(transport, <TcChat conversationId="c" mode="focus" />),
     );
     expect(screen.getByTestId("tc-chat")).toHaveAttribute("data-mode", "focus");
-    expect(screen.getByTestId("tc-chat-focus-tabs")).toBeInTheDocument();
-    expect(screen.queryByTestId("composer")).not.toBeInTheDocument();
+    // Focus is now a working chat — the same transcript + composer as Studio,
+    // not the old Activity/Approvals placeholder.
+    expect(screen.getByTestId("tc-chat-messages")).toBeInTheDocument();
+    expect(screen.getByTestId("composer")).toBeInTheDocument();
+    expect(screen.queryByTestId("tc-chat-focus-tabs")).not.toBeInTheDocument();
   });
 
-  it("switches between Activity and Approvals tabs in focus mode", () => {
-    const { transport } = makeTransport(() => Promise.resolve(SAMPLE_RESPONSE));
+  it("renders host-provided messages in focus without a fallback fetch", () => {
+    const { transport, record } = makeTransport(() =>
+      Promise.resolve(SAMPLE_RESPONSE),
+    );
+    const messages: TcChatMessage[] = [
+      {
+        message_id: "m1",
+        role: "user",
+        parts: [{ type: "text", text: "steer the run" }],
+      },
+    ];
     render(
-      withTransport(transport, <TcChat conversationId="c" mode="focus" />),
+      withTransport(
+        transport,
+        <TcChat conversationId="c" mode="focus" messages={messages} />,
+      ),
     );
-    const approvals = screen.getByTestId("tc-chat-tab-approvals");
-    expect(screen.getByTestId("tc-chat-focus-panel")).toHaveTextContent(
-      /recent activity/i,
-    );
-    fireEvent.click(approvals);
-    expect(approvals).toHaveAttribute("aria-selected", "true");
-    expect(screen.getByTestId("tc-chat-focus-panel")).toHaveTextContent(
-      /approvals/i,
-    );
+    // Host-fed transcript renders directly …
+    expect(screen.getByText("steer the run")).toBeInTheDocument();
+    // … and the one-time GET fallback never fires.
+    expect(record.calls).toHaveLength(0);
   });
 
   it("renders an error state when the message fetch rejects", async () => {

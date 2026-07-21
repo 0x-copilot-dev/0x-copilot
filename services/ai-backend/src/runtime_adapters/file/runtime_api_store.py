@@ -303,6 +303,11 @@ class FileRuntimeApiStore:
         self._queue_attempts: dict[str, int] = {}
         self._queue_available_at: dict[str, datetime] = {}
         self._queue_claims: dict[str, RuntimeWorkerClaim] = {}
+        # On-disk line count of the raw queue op-log, for boot compaction: the
+        # queue is append-only (enqueue + a status/attempts op per claim +
+        # terminal status) and never prunes completed/dead commands, so both its
+        # replay and every claim_next scan are O(history) without compaction.
+        self._queue_line_count = 0
 
         # ---- locks (in-process, single-writer) --------------------------
         self._conversation_locks: dict[str, asyncio.Lock] = {}
@@ -344,6 +349,7 @@ class FileRuntimeApiStore:
         # small/new stores are untouched. Never folds session streams (their
         # monotonic sequence_no underpins stream resume) or the audit log.
         self._compact_state_ledgers()
+        self._compact_queue_ledger()
         catalog_discarded = self._index.connect()
         if catalog_discarded:
             # The disposable catalog was torn and discarded — a rebuild from the
@@ -718,7 +724,9 @@ class FileRuntimeApiStore:
                 self._audit_chain_heads_by_org[org_id] = bytes.fromhex(signature_hex)
 
     def _load_queue_from_disk(self) -> None:
+        self._queue_line_count = 0
         for line in JsonlIo.iter_lines(self._layout.state_path(_Tables.QUEUE)):
+            self._queue_line_count += 1
             op = line.get("op")
             command_id = line.get("command_id")
             if not isinstance(command_id, str):
@@ -827,6 +835,91 @@ class FileRuntimeApiStore:
             self._telemetry.state_ledger_compacted(
                 table=table, lines_before=before, lines_after=ledger.line_count
             )
+
+    _QUEUE_TERMINAL = frozenset({OutboxStatus.COMPLETED, OutboxStatus.DEAD_LETTER})
+
+    def _compact_queue_ledger(self) -> None:
+        """Fold the raw queue op-log down to its LIVE commands at boot.
+
+        The queue is not a ``StateLedger`` — it is a raw op-log (an ``enqueue``
+        plus a ``status``/``attempts`` op per claim, then a terminal status) and
+        completed / dead-lettered commands are NEVER pruned, so both replay and
+        every ``claim_next`` scan grow O(history). At boot — single-writer,
+        before serving and before any claim, so no ephemeral ``CLAIMED`` state is
+        in flight — rewrite the log to only the non-terminal commands and drop
+        the terminal ones from the in-memory queue too, so this session's scans
+        are bounded immediately. Crash-safe (atomic rewrite) and best-effort — a
+        failure never breaks ``open()``.
+        """
+
+        if not self._compaction_enabled:
+            return
+        live = [
+            command_id
+            for command_id in self._queue_order
+            if self._queue_statuses.get(command_id) not in self._QUEUE_TERMINAL
+        ]
+        before = self._queue_line_count
+        if not self._should_compact(before, len(live)):
+            return
+        try:
+            self._rewrite_queue_ledger(live)
+        except Exception as exc:  # maintenance is best-effort — never break open()
+            self._telemetry.state_ledger_compaction_failed(
+                table=_Tables.QUEUE, reason=type(exc).__name__
+            )
+            return
+        # Drop terminal commands from the in-memory queue too (claim_next already
+        # skipped them); the live subset is preserved intact.
+        live_set = set(live)
+        self._queue_order = list(live)
+        for mapping in (
+            self._queue_payloads,
+            self._queue_statuses,
+            self._queue_attempts,
+            self._queue_available_at,
+        ):
+            for command_id in [k for k in mapping if k not in live_set]:
+                del mapping[command_id]
+        self._telemetry.state_ledger_compacted(
+            table=_Tables.QUEUE,
+            lines_before=before,
+            lines_after=self._queue_line_count,
+        )
+
+    def _rewrite_queue_ledger(self, live_command_ids: list[str]) -> None:
+        """Atomically replace ``queue.jsonl`` with the minimal op sequence that
+        reconstructs each live command's state (order, payload, status, attempts,
+        available_at) — mirroring ``_load_queue_from_disk``'s fold exactly."""
+
+        lines: list[dict[str, object]] = []
+        for command_id in live_command_ids:
+            available_at = self._queue_available_at[command_id].isoformat()
+            lines.append(
+                {
+                    "op": "enqueue",
+                    "command_id": command_id,
+                    "payload": self._queue_payloads[command_id],
+                    "available_at": available_at,
+                }
+            )
+            status = self._queue_statuses[command_id]
+            if status is not OutboxStatus.PENDING:
+                lines.append(
+                    {
+                        "op": "status",
+                        "command_id": command_id,
+                        "status": status.value,
+                        "available_at": available_at,
+                    }
+                )
+            attempts = self._queue_attempts[command_id]
+            if attempts:
+                lines.append(
+                    {"op": "attempts", "command_id": command_id, "attempts": attempts}
+                )
+        JsonlIo.rewrite_lines(self._layout.state_path(_Tables.QUEUE), lines)
+        self._queue_line_count = len(lines)
 
     @staticmethod
     def _parse_dt(value: object) -> datetime:
@@ -1137,6 +1230,71 @@ class FileRuntimeApiStore:
             self.conversations[conversation_id] = updated
             self._persist_conversation(updated)
         return updated
+
+    async def set_conversation_pinned(
+        self,
+        *,
+        org_id: str,
+        user_id: str,
+        conversation_id: str,
+        pinned: bool,
+        now: datetime,
+    ) -> ConversationRecord | None:
+        """Set the first-class ``pinned`` flag and persist it (PRD-H.4).
+
+        Idempotent: setting the flag to its current value is a no-op that
+        skips both the ``updated_at`` bump and the disk write, so a
+        redundant pin never reshuffles the newest-first sidebar order.
+        """
+
+        conversation = await self.get_conversation(
+            org_id=org_id, user_id=user_id, conversation_id=conversation_id
+        )
+        if conversation is None:
+            return None
+        if conversation.pinned == pinned:
+            return conversation
+        updated = conversation.model_copy(update={"pinned": pinned, "updated_at": now})
+        async with self._conversation_lock(conversation_id):
+            self.conversations[conversation_id] = updated
+            self._persist_conversation(updated)
+        return updated
+
+    async def get_latest_message_for_conversation(
+        self,
+        *,
+        org_id: str,
+        conversation_id: str,
+    ) -> MessageRecord | None:
+        """Return the newest non-deleted message for the Chats-list preview (PRD-H.4)."""
+
+        candidates = [
+            message
+            for message in self.messages.values()
+            if message.org_id == org_id
+            and message.conversation_id == conversation_id
+            and message.deleted_at is None
+        ]
+        if not candidates:
+            return None
+        return max(candidates, key=lambda message: message.created_at)
+
+    async def get_latest_run_for_conversation(
+        self,
+        *,
+        org_id: str,
+        conversation_id: str,
+    ) -> RunRecord | None:
+        """Return the newest run for a conversation regardless of status (PRD-H.4)."""
+
+        candidates = [
+            run
+            for run in self.runs.values()
+            if run.org_id == org_id and run.conversation_id == conversation_id
+        ]
+        if not candidates:
+            return None
+        return max(candidates, key=lambda run: run.created_at)
 
     # ==================================================================
     # PersistencePort — runs
@@ -3012,6 +3170,7 @@ class FileRuntimeApiStore:
 
     def _append_queue_op(self, op: dict[str, object]) -> None:
         JsonlIo.append_line(self._layout.state_path(_Tables.QUEUE), op)
+        self._queue_line_count += 1
 
 
 __all__ = ("FileRuntimeApiStore",)

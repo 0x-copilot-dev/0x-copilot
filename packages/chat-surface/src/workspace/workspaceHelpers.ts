@@ -17,10 +17,14 @@
 // `depth.ts` and `subagentHelpers.ts`). Provenance of each helper is noted
 // inline.
 
-import type {
-  SourceEntry,
-  SubagentEntry,
-  SubagentLifecycleStatus,
+import {
+  isSourceIngestedPayload,
+  isSourcesIngestedPayload,
+  type CitationSourceRef,
+  type RuntimeEventEnvelope,
+  type SourceEntry,
+  type SubagentEntry,
+  type SubagentLifecycleStatus,
 } from "@0x-copilot/api-types";
 
 // ── from apps/frontend/.../chatModel/sourcesReducer.ts ───────────────────
@@ -76,6 +80,138 @@ export function groupSourcesByConnector(
     return a.connector.localeCompare(b.connector);
   });
   return out;
+}
+
+// The Sources REDUCER (seed + live event fold) was previously host-only
+// (FR-1.25) because it projected the whole web app's stream. The Run cockpit
+// now projects the SAME single stream package-side (like projectSubagents /
+// projectApprovals / useRunTranscript), so the reducer is reproduced here
+// byte-for-byte and consumed by `useRunSources`.
+
+/** Empty conversation source map. */
+export function emptySourceMap(): SourceEntryMap {
+  return new Map();
+}
+
+/** Seed from the `GET .../sources` response — one row per unique doc. */
+export function seedSourceMap(entries: readonly SourceEntry[]): SourceEntryMap {
+  return new Map(entries.map((entry) => [keyFor(entry), entry]));
+}
+
+/**
+ * Fold one runtime event into the source map: `source_ingested` (one citation)
+ * and batched `sources_ingested` (many) merge each `CitationSourceRef` on
+ * `(source_connector, source_doc_id)`, bumping `citation_count`. Any other
+ * event returns the map unchanged (referential stability preserved on replay).
+ */
+export function applySourceEvent(
+  current: SourceEntryMap,
+  event: RuntimeEventEnvelope,
+): SourceEntryMap {
+  if (event.event_type === "source_ingested") {
+    if (!isSourceIngestedPayload(event.payload)) {
+      return current;
+    }
+    return mergeOne(current, event.payload.citation, event.created_at);
+  }
+  if (event.event_type === "sources_ingested") {
+    if (!isSourcesIngestedPayload(event.payload)) {
+      return current;
+    }
+    if (event.payload.citations.length === 0) {
+      return current;
+    }
+    let next = current;
+    for (const citation of event.payload.citations) {
+      next = mergeOne(next, citation, event.created_at);
+    }
+    return next;
+  }
+  return current;
+}
+
+function mergeOne(
+  current: SourceEntryMap,
+  citation: CitationSourceRef,
+  eventCreatedAt: string,
+): SourceEntryMap {
+  const key = keyForCitation(citation.source_connector, citation.source_doc_id);
+  const existing = current.get(key);
+  const next = mergeIncoming({
+    existing,
+    citation_id: citation.citation_id,
+    source_connector: citation.source_connector,
+    source_doc_id: citation.source_doc_id,
+    source_url: citation.source_url ?? null,
+    title: citation.title ?? null,
+    snippet: citation.snippet ?? null,
+    freshness_at: citation.freshness_at ?? null,
+    eventCreatedAt,
+  });
+  if (next === existing) {
+    return current;
+  }
+  const out = new Map(current);
+  out.set(key, next);
+  return out;
+}
+
+function keyFor(entry: SourceEntry): string {
+  return keyForCitation(entry.source_connector, entry.source_doc_id);
+}
+
+function keyForCitation(connector: string, docId: string): string {
+  return `${connector} ${docId}`;
+}
+
+function mergeIncoming(opts: {
+  existing: SourceEntry | undefined;
+  citation_id: string;
+  source_connector: string;
+  source_doc_id: string;
+  source_url: string | null;
+  title: string | null;
+  snippet: string | null;
+  freshness_at: string | null;
+  eventCreatedAt: string;
+}): SourceEntry {
+  if (opts.existing === undefined) {
+    return {
+      citation_id: opts.citation_id,
+      source_connector: opts.source_connector,
+      source_doc_id: opts.source_doc_id,
+      source_url: opts.source_url,
+      title: opts.title,
+      snippet: opts.snippet,
+      freshness_at: opts.freshness_at,
+      citation_count: 1,
+      last_cited_at: opts.eventCreatedAt,
+    };
+  }
+  const eventTs = Date.parse(opts.eventCreatedAt);
+  const existingTs = Date.parse(opts.existing.last_cited_at);
+  const isNewer = !Number.isNaN(eventTs) && eventTs >= existingTs;
+  return {
+    citation_id: isNewer ? opts.citation_id : opts.existing.citation_id,
+    source_connector: opts.existing.source_connector,
+    source_doc_id: opts.existing.source_doc_id,
+    source_url: opts.source_url ?? opts.existing.source_url,
+    title: opts.title ?? opts.existing.title,
+    snippet: opts.snippet ?? opts.existing.snippet,
+    freshness_at: latestIso(opts.freshness_at, opts.existing.freshness_at),
+    citation_count: opts.existing.citation_count + 1,
+    last_cited_at: isNewer ? opts.eventCreatedAt : opts.existing.last_cited_at,
+  };
+}
+
+function latestIso(a: string | null, b: string | null): string | null {
+  if (a === null) {
+    return b;
+  }
+  if (b === null) {
+    return a;
+  }
+  return Date.parse(a) >= Date.parse(b) ? a : b;
 }
 
 // ── from apps/frontend/.../chatModel/subagentReducer.ts ──────────────────

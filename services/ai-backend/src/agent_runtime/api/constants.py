@@ -170,6 +170,8 @@ class Keys:
         UPDATE_CONVERSATION = "update_conversation"
         DELETE_CONVERSATION = "delete_conversation"
         RESTORE_CONVERSATION = "restore_conversation"
+        # PRD-H.4 — pin/unpin a conversation (first-class ``pinned`` column).
+        PIN_CONVERSATION = "pin_conversation"
         # Workspace data lifecycle endpoints (export queue + audited delete-all).
         REQUEST_WORKSPACE_EXPORT = "request_workspace_export"
         DELETE_WORKSPACE_DATA = "delete_workspace_data"
@@ -191,6 +193,10 @@ class Values:
     DEFAULT_CONVERSATION_LIMIT = 30
     DEFAULT_MESSAGE_LIMIT = 50
     MAX_MESSAGE_LIMIT = 200
+    # PRD-H.4 — Chats-list ``preview`` snippet cap. Matches the sidebar's
+    # single-line truncation budget so the server never ships more text
+    # than the row can show.
+    CONVERSATION_PREVIEW_MAX_LENGTH = 140
     SSE_EVENT_NAME = "runtime_event"
     # Sentinel actor for system-driven approval rejections (expiry sweeper,
     # membership-revocation cascade). The audit emitter records ``actor_type=system``
@@ -324,6 +330,8 @@ class Messages:
         CONVERSATION_UPDATE = "conversation.update"
         CONVERSATION_DELETE = "conversation.delete"
         CONVERSATION_RESTORE = "conversation.restore"
+        # PRD-H.4 — pin/unpin toggle audit (metadata carries before/after pinned).
+        CONVERSATION_PIN = "conversation.pin"
         # Workspace behavior overrides audit. The ``WORKSPACE_BEHAVIOR_OVERRIDES_UPDATE``
         # action carries the full before/after blob. ``WORKSPACE_TRAINING_OPT_OUT_UPDATE``
         # is split out so compliance auditors can search by action name without

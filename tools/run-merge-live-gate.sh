@@ -68,7 +68,8 @@ echo "==> backend: live merge saga + RLS isolation"
   "$BACKEND_PY" -m pytest \
     tests/integration/persistence/test_account_merge_live.py \
     tests/integration/persistence/test_rls_isolation.py \
-    tests/integration/persistence/test_principals_live.py -q
+    tests/integration/persistence/test_principals_live.py \
+    tests/integration/persistence/test_principal_edges_live.py -q
 )
 
 echo "==> ai-backend: live re-key + envelope-AAD decrypt smoke"

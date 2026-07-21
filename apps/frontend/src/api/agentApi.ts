@@ -28,6 +28,7 @@ import type {
   MessageListResponse,
   ModelCatalogResponse,
   ModelSelectionRequest,
+  PinConversationRequest,
   ProjectId,
   ReasoningDepth,
   RecipientPreview,
@@ -286,6 +287,25 @@ export function updateConversation(
 ): Promise<Conversation> {
   return httpPatchQuery<Conversation>(
     `/v1/agent/conversations/${conversationId}`,
+    request,
+    identity,
+  );
+}
+
+/**
+ * PRD-H.4 — pin or unpin a conversation. A single route toggles both:
+ * `pinned: true` moves the chat into the Chats "Pinned" section (persisted
+ * as a first-class column), `pinned: false` returns it to Recent. Returns
+ * the updated conversation so the caller can reconcile its list in place.
+ */
+export function pinConversation(
+  conversationId: string,
+  pinned: boolean,
+  identity: RequestIdentity,
+): Promise<Conversation> {
+  const request: PinConversationRequest = { pinned };
+  return httpPostQuery<Conversation>(
+    `/v1/agent/conversations/${conversationId}/pin`,
     request,
     identity,
   );

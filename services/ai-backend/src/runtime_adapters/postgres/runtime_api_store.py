@@ -166,6 +166,8 @@ class _Columns:
     ENABLED_MODELS = "enabled_models"
     UPDATED_BY_USER_ID = "updated_by_user_id"
     FOLDER = "folder"
+    # PRD-H.4 — first-class conversation pin flag (migration 0034).
+    PINNED = "pinned"
     PARENT_CONVERSATION_ID = "parent_conversation_id"
     # Conversation fork lineage column.
     FORKED_FROM_SHARE_ID = "forked_from_share_id"
@@ -1003,6 +1005,42 @@ class PostgresRuntimeApiStore:
             row = await cur.fetchone()
         return self._conversation_record(row) if row is not None else None
 
+    async def set_conversation_pinned(
+        self,
+        *,
+        org_id: str,
+        user_id: str,
+        conversation_id: str,
+        pinned: bool,
+        now: datetime,
+    ) -> ConversationRecord | None:
+        """Set the first-class ``pinned`` flag (PRD-H.4), idempotent on re-call.
+
+        ``updated_at`` is bumped only when the flag actually changes (via
+        ``IS DISTINCT FROM``) so a redundant pin does not reshuffle the
+        newest-first sidebar order. Returns ``None`` when no row matches
+        the (org, user, conversation) scope.
+        """
+
+        async with self._tenant_connection(org_id=org_id) as conn:
+            cur = await conn.execute(
+                """
+                UPDATE agent_conversations
+                   SET updated_at = CASE
+                           WHEN pinned IS DISTINCT FROM %s THEN %s
+                           ELSE updated_at
+                       END,
+                       pinned = %s
+                 WHERE id      = %s
+                   AND org_id  = %s
+                   AND user_id = %s
+                 RETURNING *
+                """,
+                (pinned, now, pinned, conversation_id, org_id, user_id),
+            )
+            row = await cur.fetchone()
+        return self._conversation_record(row) if row is not None else None
+
     async def list_messages(
         self,
         *,
@@ -1277,6 +1315,56 @@ class PostgresRuntimeApiStore:
             )
             row = await cur.fetchone()
         return self._run_record(row) if row is not None else None
+
+    async def get_latest_run_for_conversation(
+        self,
+        *,
+        org_id: str,
+        conversation_id: str,
+    ) -> RunRecord | None:
+        """Return the newest run for a conversation regardless of status (PRD-H.4).
+
+        Unlike :meth:`get_active_run_for_conversation`, no status filter —
+        the Chats-list ``model`` projection wants the last model used even
+        after the run completed.
+        """
+
+        async with self._tenant_connection(org_id=org_id) as conn:
+            cur = await conn.execute(
+                """
+                SELECT * FROM agent_runs
+                 WHERE org_id          = %s
+                   AND conversation_id = %s
+                 ORDER BY created_at DESC
+                 LIMIT 1
+                """,
+                (org_id, conversation_id),
+            )
+            row = await cur.fetchone()
+        return self._run_record(row) if row is not None else None
+
+    async def get_latest_message_for_conversation(
+        self,
+        *,
+        org_id: str,
+        conversation_id: str,
+    ) -> MessageRecord | None:
+        """Return the newest non-deleted message for the Chats-list preview (PRD-H.4)."""
+
+        async with self._tenant_connection(org_id=org_id) as conn:
+            cur = await conn.execute(
+                """
+                SELECT * FROM agent_messages
+                 WHERE org_id          = %s
+                   AND conversation_id = %s
+                   AND deleted_at IS NULL
+                 ORDER BY created_at DESC
+                 LIMIT 1
+                """,
+                (org_id, conversation_id),
+            )
+            row = await cur.fetchone()
+        return self._message_record(row) if row is not None else None
 
     async def update_run_status(
         self, *, run_id: str, status: AgentRunStatus
@@ -5389,6 +5477,9 @@ class PostgresRuntimeApiStore:
             deleted_at=row.get(_Columns.DELETED_AT),
             folder=row.get(_Columns.FOLDER),
             parent_conversation_id=row.get(_Columns.PARENT_CONVERSATION_ID),
+            # ``row.get`` keeps the hydrator forward-compatible with rows
+            # from databases pre-migration 0034 (returns False when absent).
+            pinned=bool(row.get(_Columns.PINNED, False)),
             forked_from_share_id=row.get(_Columns.FORKED_FROM_SHARE_ID),
         )
 

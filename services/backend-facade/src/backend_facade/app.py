@@ -542,6 +542,26 @@ def create_app(
             identity=identity,
         )
 
+    # PRD-H.4 — pin / unpin a conversation (drives the Chats "Pinned" section).
+    # A bare POST pins; ``{"pinned": false}`` unpins. Tenant-scoped like the
+    # other conversation lifecycle routes.
+    @app.post("/v1/agent/conversations/{conversation_id}/pin")
+    async def pin_conversation(
+        request: Request,
+        conversation_id: str,
+        payload: dict[str, object] | None = None,
+    ) -> dict[str, object]:
+        identity = FacadeAuthenticator.authenticate_request(request)
+        return await forward_json(
+            app,
+            "POST",
+            f"/v1/agent/conversations/{conversation_id}/pin",
+            target="ai_backend",
+            params=identity.scoped_params(),
+            json=payload or {},
+            identity=identity,
+        )
+
     # PR 6.2 — recipient forks a shared chat into their own workspace.
     # Identity must be authenticated (no anonymous public link in v1);
     # the share token is the access grant, not the identity.

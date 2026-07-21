@@ -15,6 +15,8 @@ def test_openapi_includes_core_product_paths() -> None:
         "/v1/mcp/servers",
         "/v1/mcp/tools",
         "/v1/agent/conversations",
+        # PRD-H.4 — pin / unpin route proxied to ai-backend.
+        "/v1/agent/conversations/{conversation_id}/pin",
         "/v1/agent/runs",
         "/v1/agent/models",
         "/v1/skills",
