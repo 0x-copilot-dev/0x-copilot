@@ -1517,6 +1517,10 @@ class OidcIdentityRecord(BackendContract):
     identity_id: str = Field(default_factory=lambda: f"oid_{uuid4().hex}")
     org_id: str
     user_id: str
+    # Principal/tenant separation (ADR 0001, migration 0040): the human this
+    # identity belongs to. Nullable expand-stage column, backfilled 1:1 from
+    # users.principal_id and dual-written by the store. Unread until Stage 2b.
+    principal_id: str | None = None
     provider_id: str
     subject: str
     email_at_link: str | None = None
@@ -2135,6 +2139,10 @@ class SamlIdentityRecord(BackendContract):
     identity_id: str = Field(default_factory=lambda: f"sid_{uuid4().hex}")
     org_id: str
     user_id: str
+    # Principal/tenant separation (ADR 0001, migration 0040): the human this
+    # identity belongs to. Nullable expand-stage column, backfilled 1:1 from
+    # users.principal_id and dual-written by the store. Unread until Stage 2b.
+    principal_id: str | None = None
     provider_id: str
     name_id: str
     name_id_format: str
@@ -2586,6 +2594,11 @@ class WalletIdentityRecord(BackendContract):
     address: str
     org_id: str
     user_id: str
+    # Principal/tenant separation (ADR 0001, migration 0040). The human this
+    # identity belongs to — its user's principal. Nullable through the expand
+    # stage: backfilled 1:1 from users.principal_id and dual-written by the
+    # store (default prn_<user_id>). No resolver reads it yet (Stage 2b).
+    principal_id: str | None = None
     chain_id: int
     created_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
 
