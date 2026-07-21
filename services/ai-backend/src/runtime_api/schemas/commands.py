@@ -7,6 +7,7 @@ from uuid import uuid4
 
 from pydantic import Field
 
+from agent_runtime.capabilities.surfaces.commit import SurfaceEdits
 from agent_runtime.execution.contracts import AgentRuntimeContext, RuntimeContract
 from runtime_api.schemas.common import ApprovalDecision
 
@@ -53,6 +54,10 @@ class RuntimeApprovalResolvedCommand(RuntimeContract):
     org_id: str
     decision: ApprovalDecision
     answer: str | None = None
+    # PRD-09 — reviewer edit deltas, populated only for ``approve_with_edits``.
+    # The worker/commit executor re-derives the final payload = proposal ⊕ edits
+    # server-side; the client never sends a merged artifact.
+    edits: SurfaceEdits | None = None
     # Populated by the API service from the request, or by the expiry sweeper
     # as ``Values.SYSTEM_USER_ID`` for system-driven rejections (timeout /
     # membership cascade). The audit emitter promotes ``actor_type=system``

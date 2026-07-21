@@ -1,0 +1,19 @@
+{
+  "spec_version": 1,
+  "archetype": "record",
+  "source": { "server": "seed:github", "tool": "get_pull_request" },
+  "title_path": "pull_request.title",
+  "subtitle_path": "pull_request.number",
+  "fields": [
+    { "label": "State", "path": "pull_request.state", "format": "badge" },
+    { "label": "Author", "path": "pull_request.user.login", "format": "user" },
+    { "label": "Base", "path": "pull_request.base.ref" },
+    { "label": "Head", "path": "pull_request.head.ref" },
+    {
+      "label": "Updated",
+      "path": "pull_request.updated_at",
+      "format": "datetime"
+    }
+  ],
+  "link": { "label": "Open on GitHub", "url_path": "pull_request.html_url" }
+}

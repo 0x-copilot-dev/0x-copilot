@@ -1,0 +1,13 @@
+{
+  "spec_version": 1,
+  "archetype": "doc",
+  "source": { "server": "seed:notion", "tool": "get_page" },
+  "title_path": "page.title",
+  "subtitle_path": "page.author",
+  "items_path": "page.sections",
+  "fields": [
+    { "label": "Heading", "path": "heading" },
+    { "label": "Body", "path": "body" }
+  ],
+  "link": { "label": "Open in Notion", "url_path": "page.url" }
+}

@@ -11,7 +11,7 @@ import type { RuntimeEventEnvelope } from "@0x-copilot/api-types";
 import type { Transport } from "@0x-copilot/chat-transport";
 
 import { TIER3_SCHEME } from "../surfaces/SaaSRendererAdapter";
-import { resolveAdapter } from "../surfaces/SurfaceRegistry";
+import { useSurfaceRegistry } from "../surfaces/SurfaceRegistryContext";
 import type { SaaSRendererAdapter } from "../surfaces/SaaSRendererAdapter";
 import type { PendingDiff } from "../surfaces/types";
 import { projectAt, type SurfacePayload } from "./eventProjector";
@@ -82,6 +82,14 @@ export interface TcSurfaceMountProps {
   readonly onApprove?: (diffId: string) => void;
   readonly onReject?: (diffId: string) => void;
   readonly onSuggestChanges?: (diffId: string) => void;
+  /**
+   * PRD-09c edit-on-surface seam. When set, this host-owned node (the
+   * `EditOverlay`) mounts as an absolutely-positioned layer OVER the pure
+   * adapter, and the bottom Approve/Reject/Suggest controls are suppressed —
+   * the overlay owns its own Save/Cancel. Adapters stay input-free (D28): the
+   * edit UI lives here in the host slot, never inside `renderDiff`.
+   */
+  readonly editSlot?: ReactNode;
 }
 
 interface AdapterBoundaryProps {
@@ -234,15 +242,26 @@ function HostControls(props: HostControlsProps): ReactElement {
 }
 
 export function TcSurfaceMount(props: TcSurfaceMountProps): ReactElement {
-  const { uri, state, pendingDiff, onApprove, onReject, onSuggestChanges } =
-    props;
+  const {
+    uri,
+    state,
+    pendingDiff,
+    onApprove,
+    onReject,
+    onSuggestChanges,
+    editSlot,
+  } = props;
+  // Resolve against the scoped registry (a SurfaceRegistryProvider above us),
+  // falling back to the process-global registry when none is provided — the
+  // default, behaviour-preserving path (PRD-11 registry scoping).
+  const registry = useSurfaceRegistry();
   const scheme = useMemo(() => schemeOf(uri), [uri]);
-  const primary = useMemo(() => resolveAdapter(uri), [uri]);
+  const primary = useMemo(() => registry.resolveAdapter(uri), [registry, uri]);
   // Probe the wildcard bucket directly. Per PRD §3.4 tier-3 "Always works"
   // — its matches() returns true universally — so passing the wildcard
   // sentinel URI is equivalent to passing the original URI for the
   // contractual tier-3 adapter.
-  const tier3 = useMemo(() => resolveAdapter(TIER3_URI), []);
+  const tier3 = useMemo(() => registry.resolveAdapter(TIER3_URI), [registry]);
   const placeholder = <FallbackEmpty scheme={scheme} />;
 
   // No surface tab is active yet — a run has started but the agent has not
@@ -324,7 +343,10 @@ export function TcSurfaceMount(props: TcSurfaceMountProps): ReactElement {
     );
   };
 
-  const showControls = Boolean(pendingDiff);
+  // While the edit overlay is mounted it owns the interaction (Save/Cancel),
+  // so the bottom Approve/Reject/Suggest row is suppressed.
+  const isEditing = Boolean(editSlot);
+  const showControls = Boolean(pendingDiff) && !isEditing;
   const streamProgress = pendingDiff?.streamProgress;
   const streamPercent =
     typeof streamProgress === "number"
@@ -336,6 +358,7 @@ export function TcSurfaceMount(props: TcSurfaceMountProps): ReactElement {
       data-testid="tc-surface-mount"
       data-tier={chosenLabel}
       data-streaming={streamPercent !== null ? "true" : "false"}
+      data-editing={isEditing ? "true" : "false"}
       style={rootStyle}
     >
       {streamPercent !== null ? (
@@ -348,14 +371,22 @@ export function TcSurfaceMount(props: TcSurfaceMountProps): ReactElement {
           </span>
         </div>
       ) : null}
-      <div style={contentStyle}>
-        <AdapterBoundary
-          onError={handleBoundaryError}
-          fallback={placeholder}
-          errored={errored}
-        >
-          {renderedChild}
-        </AdapterBoundary>
+      <div style={surfaceLayerStyle}>
+        <div style={contentStyle}>
+          <AdapterBoundary
+            onError={handleBoundaryError}
+            fallback={placeholder}
+            errored={errored}
+          >
+            {renderedChild}
+          </AdapterBoundary>
+        </div>
+        {/* PRD-09c: the host-owned edit overlay layers OVER the pure adapter. */}
+        {isEditing ? (
+          <div data-testid="tc-surface-mount-edit-slot" style={editLayerStyle}>
+            {editSlot}
+          </div>
+        ) : null}
       </div>
       {showControls && pendingDiff ? (
         <HostControls
@@ -376,9 +407,26 @@ const rootStyle: CSSProperties = {
   width: "100%",
 };
 
+// Positioning context for the edit overlay layer, which absolutely covers the
+// adapter content while keeping it visible behind.
+const surfaceLayerStyle: CSSProperties = {
+  position: "relative",
+  display: "flex",
+  flexDirection: "column",
+  minHeight: 0,
+  flex: 1,
+};
+
 const contentStyle: CSSProperties = {
   display: "flex",
   flexDirection: "column",
+  minHeight: 0,
+};
+
+const editLayerStyle: CSSProperties = {
+  position: "absolute",
+  inset: 0,
+  display: "flex",
   minHeight: 0,
 };
 

@@ -186,6 +186,15 @@ class RuntimeApiEventType(StrEnum):
     # channel, persists to ``{userData}/adapters/{scheme}-v{n}.js``, and
     # hands the source to the local quality gate (6D).
     ADAPTER_GENERATED = "adapter_generated"
+    # Generative-UI (PRD-01) — the async spec generator produced a validated
+    # ``SurfaceSpec`` for a ``(server, tool, output_shape)``. Payload carries
+    # ``surface_uri`` / ``archetype`` / ``spec`` / ``spec_version`` /
+    # ``generator_model`` / ``skill_version``. Projects to
+    # ``RuntimeActivityKind.EVENT``; the FE projector merges ``spec`` into
+    # ``surfaceState[surface_uri]`` so the next render upgrades in place from
+    # tier-3 to the archetype view (plan D4). No emitter/renderer yet — PRD-01
+    # freezes the contract only.
+    SURFACE_SPEC_GENERATED = "surface_spec_generated"
 
     @classmethod
     def from_stream_event_type(
@@ -226,12 +235,20 @@ class ApprovalDecision(StrEnum):
     fresh ``APPROVAL_REQUESTED`` payload so the originator can accept the
     edited form. The LangGraph harness is **not** resumed; the run remains
     in ``WAITING_FOR_APPROVAL`` until the new request is accepted or rejected.
+
+    ``APPROVE_WITH_EDITS`` (PRD-09) is an approval variant: the reviewer
+    approves AND supplies edit deltas (:class:`SurfaceEdits`) in the same
+    decision. The server re-derives the final payload = proposal ⊕ edits and
+    commits it through the gated commit executor. Unlike ``SUGGEST_EDIT`` it
+    does not re-ask — it commits immediately with the edits applied. The wire
+    value mirrors the frozen api-types contract (PRD-09a).
     """
 
     APPROVED = "approved"
     REJECTED = "rejected"
     FORWARDED = "forwarded"
     SUGGEST_EDIT = "suggest_edit"
+    APPROVE_WITH_EDITS = "approve_with_edits"
 
 
 class ApprovalStatus(StrEnum):

@@ -191,6 +191,20 @@ export {
 export { TcSurfaceMount, type TcSurfaceMountProps } from "./thread-canvas";
 // === end Phase 0-A ===
 
+// === PRD-11 registry scoping groundwork ===
+// Isolated-instance factory + React scoping. Default remains the module-global
+// registry (zero behaviour change); a provider scopes a subtree for per-tenant
+// resolution later. See surfaces/SurfaceRegistry.ts header for the invariant.
+export {
+  createSurfaceRegistry,
+  globalSurfaceRegistry,
+  SurfaceRegistryProvider,
+  useSurfaceRegistry,
+  type SurfaceRegistry,
+  type SurfaceRegistryProviderProps,
+} from "./surfaces";
+// === end PRD-11 registry scoping groundwork ===
+
 // === Phase 4-B tier3 generic-diff ===
 export {
   GenericStructuredDiff,
@@ -210,6 +224,13 @@ export {
   type Tier2WorkerResponse,
   type Tier2JsonElement,
 } from "./surfaces/Tier2Loader";
+export {
+  createTier2WorkerFactory,
+  executeAdapterRender,
+  TIER2_WORKER_SOURCE,
+  TIER2_WORKER_DS_COMPONENT_NAMES,
+  type Tier2WorkerFactory,
+} from "./surfaces/tier2Worker";
 // === end Phase 6-A ===
 
 // === Phase 0-B ports facade ===
@@ -1326,6 +1347,40 @@ export {
   type RowProps,
 } from "./destinations/_shared";
 // === end Frontend parity v3 (PRD-G) ===
+
+// === Generative UI (PRD-06) — word-level text diff ===
+// Dependency-free word diff (`wordDiff` → `DiffHunk[]`) + its presentational
+// renderer (`DiffText`), the VSCode/Cursor-style red/green inline diff for
+// text-shaped surfaces. Consumed by the surface-renderers email tier-1 renderer;
+// the `DiffHunk.id` + `DiffText.onHunkToggle` seam is what PRD-09 keys per-hunk
+// accept off of. See docs/plan/generative-ui/PRD-06-text-diff.md.
+export {
+  wordDiff,
+  WORD_DIFF_CHAR_CAP,
+  type DiffHunk,
+  type DiffHunkKind,
+} from "./textdiff/wordDiff";
+export { DiffText, type DiffTextProps } from "./textdiff/DiffText";
+// === end Generative UI (PRD-06) ===
+
+// === Generative UI (PRD-09c) — edit-on-surface overlay ===
+// The host-owned edit UI that `TcSurfaceMount` mounts in its `editSlot` OVER the
+// pure adapter (adapters stay input-free — D28). `RunDestination` opens it from
+// the on-surface "Suggest changes" control and submits `approve_with_edits`
+// through the SAME resolveApproval POST machinery the plain approve/reject path
+// uses. `MessageEditForm` edits the body (+ PRD-06 hunk toggles → `accepted_hunk_ids`);
+// `RecordEditForm` edits changed fields → `fields`. `seedEdits` derives the
+// initial draft from the proposal. See docs/plan/generative-ui/PRD-09-edit-and-commit.md.
+export {
+  EditOverlay,
+  MessageEditForm,
+  RecordEditForm,
+  seedEdits,
+  type EditOverlayProps,
+  type MessageEditFormProps,
+  type RecordEditFormProps,
+} from "./surfaces/edit/EditOverlay";
+// === end Generative UI (PRD-09c) ===
 
 // === Frontend parity v3 (PRD-D) — ⌘K static command launcher ===
 // The 13 v3 design commands shown on an empty query and merged above live

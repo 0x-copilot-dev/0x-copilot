@@ -60,8 +60,15 @@ pythonpath = [
     "../../packages/audit-chain/src",
 ]
 asyncio_mode = "auto"
+# ``evals`` is excluded by default (here) so the standing `pytest` / CI
+# `pytest tests` run never invokes a live model. The hermetic replay-based eval
+# tests are ordinary unit tests (unmarked) and DO run; only the live-model
+# matrix under tests/evals/surfaces carries `@pytest.mark.evals`. Run it
+# explicitly with `pytest -m evals` (and `SURFACE_SPEC_MODEL` set).
+addopts = "-m 'not evals'"
 markers = [
     "postgres: conformance/integration case that requires a live PostgreSQL database (skipped by default in CI).",
+    "evals: live-model surface-spec eval matrix (EXCLUDED by default; run with `-m evals` and SURFACE_SPEC_MODEL set). Never runs in CI.",
 ]
 
 [tool.basedpyright]

@@ -12,6 +12,10 @@ import { registerSheetAdapter } from "./sheet";
 import { registerSlideAdapter } from "./slide";
 // === end Phase 4-F ===
 
+// === Wave 1 (PRD-03) archetype renderers ===
+import { registerArchetypeAdapters } from "./archetypes";
+// === end Wave 1 ===
+
 export {
   emailAdapter,
   registerEmailAdapter,
@@ -66,6 +70,49 @@ export {
 } from "./slide";
 // === end Phase 4-F ===
 
+// === Wave 1 (PRD-03) archetype renderers ===
+export {
+  ARCHETYPE_ADAPTERS,
+  registerArchetypeAdapters,
+  RecordRenderer,
+  RecordDiffRenderer,
+  recordAdapter,
+  TableRenderer,
+  TableDiffRenderer,
+  tableAdapter,
+  MessageRenderer,
+  MessageDiffRenderer,
+  messageAdapter,
+  DocRenderer,
+  DocDiffRenderer,
+  docAdapter,
+  BoardRenderer,
+  BoardDiffRenderer,
+  boardAdapter,
+} from "./archetypes";
+export {
+  formatValue,
+  isSafeHttpUrl,
+  resolvePath,
+  MAX_DISPLAY_CHARS,
+} from "./_shared/path";
+export {
+  changesFromDiff,
+  dataFromState,
+  specFromState,
+  type SurfaceArchetype,
+  type SurfaceColumn,
+  type SurfaceDiff,
+  type SurfaceEnvelope,
+  type SurfaceField,
+  type SurfaceFieldChange,
+  type SurfaceFieldFormat,
+  type SurfaceLink,
+  type SurfaceSpec,
+  type SurfaceState,
+} from "./_shared/specTypes";
+// === end Wave 1 ===
+
 export function registerAll(): void {
   registerEmailAdapter();
   // === Phase 4-D salesforce ===
@@ -77,4 +124,7 @@ export function registerAll(): void {
   // === Phase 4-F tier1-slides ===
   registerSlideAdapter();
   // === end Phase 4-F ===
+  // === Wave 1 (PRD-03) archetype renderers ===
+  registerArchetypeAdapters();
+  // === end Wave 1 ===
 }

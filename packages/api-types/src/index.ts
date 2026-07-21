@@ -294,6 +294,7 @@ export type RuntimeApiEventType =
   | "subagent_paused"
   | "subagent_resumed"
   | "adapter_generated"
+  | "surface_spec_generated"
   | "workspace_snapshot_captured";
 
 export const RUNTIME_EVENT_SOURCES = [
@@ -351,6 +352,7 @@ export const RUNTIME_API_EVENT_TYPES = [
   "subagent_paused",
   "subagent_resumed",
   "adapter_generated",
+  "surface_spec_generated",
   "workspace_snapshot_captured",
 ] as const satisfies readonly RuntimeApiEventType[];
 
@@ -380,11 +382,24 @@ export const RUNTIME_ACTIVITY_KINDS = [
 // `approval_requested` for the originator. The LangGraph harness is NOT
 // resumed — the run remains in `waiting_for_approval` until the child
 // reaches `approved` / `rejected`.
+//
+// PRD-09a (Wave 3) — "approve_with_edits" is the reviewer editing AND
+// approving in one action: the approver's `edits` (see `SurfaceEdits`)
+// are merged into the pending proposal SERVER-SIDE (ai-backend re-derives
+// final = proposal ⊕ edits; the client is never trusted to send the
+// merged artifact) and the commit proceeds. Distinct from "suggest_edit"
+// (which routes to a second user and creates a child row without
+// committing); "approve_with_edits" resolves to an `approved` terminal
+// status and commits the edited proposal. The present-imperative name
+// mirrors the `suggest_edit` precedent (both describe the reviewer's
+// action, not the resulting state). Additive — existing approve/reject
+// consumers are unaffected.
 export type ApprovalDecision =
   | "approved"
   | "rejected"
   | "forwarded"
-  | "suggest_edit";
+  | "suggest_edit"
+  | "approve_with_edits";
 export type ApprovalStatus =
   | "pending"
   | "approved"
@@ -1515,6 +1530,13 @@ export interface ApprovalDecisionRequest {
   // by the server otherwise. Empty objects are rejected too. The keys are
   // the tool-call argument names the approver edited.
   edited_payload?: Record<string, unknown> | null;
+  // PRD-09a (Wave 3) — the reviewer's edits, permitted only when
+  // `decision === "approve_with_edits"`. The server (ai-backend 09b)
+  // merges these into the pending proposal payload and re-derives the
+  // committed artifact; it never trusts a client-sent merged result.
+  // Shape is validated server-side (unknown edit keys ⇒ 422); the facade
+  // passes it through unchanged.
+  edits?: SurfaceEdits | null;
 }
 
 export interface ApprovalDecisionResponse {
@@ -1759,6 +1781,11 @@ export interface ToolResultPayload {
   safe_message?: string;
   error_code?: string;
   error_message?: string;
+  /** Generative-UI (PRD-01) — the surface projection for this tool result, when
+   * the backend resolved one. Absent ⇒ the FE renders the raw output (tier-3).
+   * The spec inside may itself be absent and arrive later via
+   * `surface_spec_generated` (merged by `surface_uri`). */
+  surface?: SurfaceEnvelope;
   [key: string]: unknown;
 }
 
@@ -1826,6 +1853,11 @@ export interface ApprovalResolvedPayload {
     | "suggest_edit"
     | string;
   decision?: ApprovalDecision;
+  // PRD-09a (Wave 3) — set when `decision === "approve_with_edits"`; the
+  // reviewer's applied edits mirrored back so the resolution is
+  // audit-visible without re-fetching the request. The terminal `status`
+  // stays "approved" (an edited approval still commits).
+  edits?: SurfaceEdits;
   message?: string;
   [key: string]: unknown;
 }
@@ -1921,6 +1953,11 @@ export interface RuntimeEventPayloadByType {
    * `{userData}/adapters/{scheme}-v{schema_version}.js`, and hands it to
    * the local quality gate (6D). */
   adapter_generated: AdapterGeneratedPayload;
+  /** Generative-UI (PRD-01) — emitted when the async spec generator produces a
+   * validated `SurfaceSpec` for a `(server, tool, output_shape)`. The projector
+   * merges `spec` into `surfaceState[surface_uri]` so the next render upgrades
+   * in place from tier-3 to the archetype view (plan D4). */
+  surface_spec_generated: SurfaceSpecGeneratedPayload;
   /** AC5 slice 3b — host write-through pre-image snapshot. Emitted by the
    * workspace backend BEFORE an approved overwrite/edit mutates a granted
    * host file: the prior bytes are stored content-addressed and this event
@@ -2004,6 +2041,168 @@ export interface AdapterGeneratedPayload {
   adapter_source: string;
   generated_at: string;
   generator_model: string;
+}
+
+// ---------------------------------------------------------------------------
+// Generative-UI SurfaceSpec contract (PRD-01). Mirrors the JSON Schema SSOT at
+// `packages/service-contracts/src/copilot_service_contracts/surface_spec.schema.json`
+// and the pydantic model in
+// `services/ai-backend/src/agent_runtime/capabilities/surfaces/spec_models.py`.
+// A cross-language parity test pins the pydantic model to the schema; keep this
+// mirror in step with both. The schema has zero side-effectful members — no
+// handlers, no free-form URLs (only `url_path` into payload data, host-sanitised
+// at render), no templates — which is the injection blast-radius bound (D9).
+// ---------------------------------------------------------------------------
+
+/** The render family a `SurfaceSpec` binds to (v1). A host may implement a
+ * subset; an unknown archetype renders the tier-3 generic fallback, never an
+ * error. */
+export type SurfaceArchetype =
+  | "record"
+  | "table"
+  | "message"
+  | "doc"
+  | "board"
+  | "event"
+  | "timeline"
+  | "dashboard"
+  | "file"
+  | "form";
+
+/** Runtime SSOT tuple for the archetype union — used by `isSurfaceSpec` /
+ * `isSurfaceEnvelope` and mirrors `SURFACE_ARCHETYPES` in service-contracts.
+ * Order matches the schema `$defs.archetype` enum. */
+export const SURFACE_ARCHETYPES = [
+  "record",
+  "table",
+  "message",
+  "doc",
+  "board",
+  "event",
+  "timeline",
+  "dashboard",
+  "file",
+  "form",
+] as const satisfies readonly SurfaceArchetype[];
+
+/** Purely visual presentation hint the renderer applies to a value. */
+export type SurfaceFieldFormat =
+  | "text"
+  | "number"
+  | "currency"
+  | "datetime"
+  | "badge"
+  | "user";
+
+/** Horizontal alignment for a table/board column. */
+export type SurfaceColumnAlign = "start" | "end";
+
+/** The connector server + tool whose output shape a spec maps. */
+export interface SurfaceSource {
+  server: string;
+  tool: string;
+}
+
+/** A label/value pair for record | message | doc archetypes. */
+export interface SurfaceField {
+  label: string;
+  path: string;
+  format?: SurfaceFieldFormat;
+}
+
+/** A column definition for table | board archetypes. */
+export interface SurfaceColumn {
+  label: string;
+  path: string;
+  format?: SurfaceFieldFormat;
+  align?: SurfaceColumnAlign;
+}
+
+/** A single outbound link. `url_path` resolves into payload data and is
+ * host-sanitised at render — there are no free-form URLs. */
+export interface SurfaceLink {
+  label: string;
+  url_path: string;
+}
+
+/** A schema-validated JSON document binding a tool's output shape onto an
+ * archetype's slots. `spec_version` is frozen at 1. Every `*_path` is a dotted
+ * accessor (identifier segments + array indices only, e.g. `a.b.0.c`). */
+export interface SurfaceSpec {
+  spec_version: 1;
+  archetype: SurfaceArchetype;
+  source: SurfaceSource;
+  title_path: string;
+  subtitle_path?: string;
+  fields?: readonly SurfaceField[];
+  columns?: readonly SurfaceColumn[];
+  items_path?: string;
+  group_by_path?: string;
+  link?: SurfaceLink;
+}
+
+/** One proposed field change carried inside a surface diff. Structurally
+ * compatible with the chat-surface `GenericFieldChange`. */
+export interface SurfaceFieldChange {
+  field: string;
+  old?: unknown;
+  new?: unknown;
+}
+
+/** The rendered state of a surface. `spec` absent ⇒ the host renders the tier-3
+ * generic view; a spec may arrive later via `surface_spec_generated` and be
+ * merged by `surface_uri`. `data` is untrusted tool output. */
+export interface SurfaceState {
+  spec?: SurfaceSpec;
+  data: unknown;
+}
+
+/** A proposed change to a surface, ridden by approval flows (PRD-09). */
+export interface SurfaceDiff {
+  spec?: SurfaceSpec;
+  changes: readonly SurfaceFieldChange[];
+}
+
+/** PRD-09a (Wave 3) — the reviewer's edits carried on an
+ * `approve_with_edits` decision (`ApprovalDecisionRequest.edits`) and
+ * mirrored back, audit-visible, on `approval_resolved`
+ * (`ApprovalResolvedPayload.edits`). All fields optional; every field the
+ * reviewer left untouched is simply absent.
+ *
+ * - `fields`   — per-field overrides for record/message archetypes,
+ *                keyed by the surface field path, value is the edited text.
+ * - `body`     — the edited free-text body (message/doc archetypes).
+ * - `accepted_hunk_ids` — the subset of PRD-06 diff hunks the reviewer
+ *                kept; hunks absent from this list are excluded from the
+ *                committed body.
+ *
+ * The server (ai-backend 09b) is the authority: it merges these into the
+ * pending proposal and re-derives the committed payload. This is the wire
+ * shape only — no merge semantics live here or in the facade. */
+export interface SurfaceEdits {
+  fields?: Record<string, string>;
+  body?: string;
+  accepted_hunk_ids?: string[];
+}
+
+/** What rides inside event payloads under the `surface` key. `surface_uri`
+ * grammar: `<archetype>://<server-slug>/<tool-or-resource>/<id>`. */
+export interface SurfaceEnvelope {
+  surface_uri: string;
+  archetype: SurfaceArchetype;
+  state: SurfaceState;
+  diff?: SurfaceDiff;
+}
+
+/** Payload of the `surface_spec_generated` run event. Mirrors the projector
+ * allow-list in `runtime_api/schemas/events.py`. */
+export interface SurfaceSpecGeneratedPayload {
+  surface_uri: string;
+  archetype: SurfaceArchetype;
+  spec: SurfaceSpec;
+  spec_version: number;
+  generator_model: string;
+  skill_version: string;
 }
 
 // PR 1.3 — Workspace-pane Draft artifact contracts. Mirrors
@@ -2096,6 +2295,9 @@ export interface DraftUpdatedPayload {
   user_id?: string;
   content_text?: string;
   created_at?: string;
+  /** Generative-UI (PRD-01) — the surface projection for this draft, when the
+   * backend resolved one (the draft/email path in plan D3). Absent ⇒ tier-3. */
+  surface?: SurfaceEnvelope;
 }
 
 // B7 — budget enforcement event payloads.
@@ -2609,6 +2811,77 @@ export function isMcpAuthRequiredPayload(
     typeof payload.server_id === "string" &&
     typeof payload.display_name === "string"
   );
+}
+
+// Generative-UI (PRD-01) — structural guards following the
+// `isRuntimeEventEnvelope` pattern. They check the required shape only; the
+// authoritative validator is the ai-backend `validate_surface_spec`.
+export function isSurfaceArchetype(value: unknown): value is SurfaceArchetype {
+  return (
+    typeof value === "string" &&
+    (SURFACE_ARCHETYPES as readonly string[]).includes(value)
+  );
+}
+
+export function isSurfaceSpec(value: unknown): value is SurfaceSpec {
+  if (!isPlainRecord(value)) {
+    return false;
+  }
+  const source = value.source;
+  return (
+    value.spec_version === 1 &&
+    isSurfaceArchetype(value.archetype) &&
+    isPlainRecord(source) &&
+    typeof source.server === "string" &&
+    typeof source.tool === "string" &&
+    typeof value.title_path === "string"
+  );
+}
+
+export function isSurfaceEnvelope(value: unknown): value is SurfaceEnvelope {
+  if (!isPlainRecord(value)) {
+    return false;
+  }
+  const state = value.state;
+  if (!isPlainRecord(state) || !("data" in state)) {
+    return false;
+  }
+  if (state.spec !== undefined && !isSurfaceSpec(state.spec)) {
+    return false;
+  }
+  return (
+    typeof value.surface_uri === "string" && isSurfaceArchetype(value.archetype)
+  );
+}
+
+/** PRD-09a (Wave 3) — structural guard for the reviewer-edits payload,
+ * following the `isSurfaceSpec` / `isSurfaceEnvelope` pattern. Checks the
+ * optional-field shapes only; the authoritative validator (unknown-key
+ * rejection, merge semantics) is ai-backend 09b. An empty object is a
+ * valid `SurfaceEdits` (every field optional). */
+export function isSurfaceEdits(value: unknown): value is SurfaceEdits {
+  if (!isPlainRecord(value)) {
+    return false;
+  }
+  const { fields, body, accepted_hunk_ids } = value;
+  if (
+    fields !== undefined &&
+    (!isPlainRecord(fields) ||
+      !Object.values(fields).every((entry) => typeof entry === "string"))
+  ) {
+    return false;
+  }
+  if (body !== undefined && typeof body !== "string") {
+    return false;
+  }
+  if (
+    accepted_hunk_ids !== undefined &&
+    (!Array.isArray(accepted_hunk_ids) ||
+      !accepted_hunk_ids.every((entry) => typeof entry === "string"))
+  ) {
+    return false;
+  }
+  return true;
 }
 
 export function isRuntimeApiEventType(

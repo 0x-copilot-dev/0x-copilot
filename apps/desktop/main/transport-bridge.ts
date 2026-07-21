@@ -26,16 +26,23 @@ export interface TransportBridgeOptions {
   // nothing else. Required so a wiring bug can't silently inject a
   // fixture into a shipped binary.
   readonly transport: Transport;
+  // PRD-10 tier-2 tap. When set, every SSE run-feed message is also forwarded
+  // here (in addition to the renderer) so the main-process tier-2 lifecycle can
+  // observe `adapter_generated` events off the same stream the UI consumes. A
+  // pure observer: it must never throw (a throw here would break UI delivery).
+  readonly onRunFeedMessage?: (raw: string) => void;
 }
 
 export class TransportBridge {
   readonly #transport: Transport;
   readonly #emit: StreamEventEmitter;
+  readonly #onRunFeedMessage?: (raw: string) => void;
   readonly #subscriptions = new Map<string, SubscriptionHandle>();
 
   constructor(emit: StreamEventEmitter, options: TransportBridgeOptions) {
     this.#transport = options.transport;
     this.#emit = emit;
+    this.#onRunFeedMessage = options.onRunFeedMessage;
   }
 
   async request<T>(req: TypedRequest): Promise<T> {
@@ -73,6 +80,14 @@ export class TransportBridge {
           kind: "message",
           message: raw,
         });
+        // PRD-10 tap — never let an observer failure break UI delivery.
+        if (this.#onRunFeedMessage) {
+          try {
+            this.#onRunFeedMessage(raw);
+          } catch {
+            // best-effort observer; swallow.
+          }
+        }
       },
       onError: (err: Error) => {
         this.#emit(webContentsId, {

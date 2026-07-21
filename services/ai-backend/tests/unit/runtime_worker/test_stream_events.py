@@ -1568,3 +1568,140 @@ async def test_chunk_without_supervisor_metadata_falls_back_to_raw_subgraph_id()
     ]
     assert len(reasoning) == 1
     assert reasoning[0]["parent_task_id"] == "legacy_subgraph_uuid"
+
+
+# --- Generative-UI surface lift (PRD-02b) ------------------------------------
+#
+# PRD-02 attaches ``surface_uri`` + ``surface`` to the MCP tool return dict.
+# ``tool_result_payload`` buckets every non-reserved field into ``output``, so
+# the surface must be hoisted back to the event-payload top level — the shape
+# the frontend event projector reads (``payload.surface_uri`` /
+# ``payload.surface``). Two carrier shapes reach the projector: a dict-shaped
+# tool message (surface spread at ``output`` top level) and the production
+# ToolMessage whose ``content`` is the JSON-serialised return dict.
+
+_SURFACE_ENVELOPE: dict[str, object] = {
+    "surface_uri": "record://linear/get_issue/ENG-1421",
+    "archetype": "record",
+    "state": {"data": {"issue": {"identifier": "ENG-1421"}}},
+}
+
+
+def test_tool_result_lifts_top_level_surface_out_of_output() -> None:
+    """A dict-shaped tool message carrying the surface at ``output`` top level
+    must yield an event payload with ``surface_uri`` + ``surface`` hoisted to the
+    top level and popped out of ``output`` (never duplicated)."""
+
+    payload = StreamMessageProcessor.tool_result_payload(
+        {
+            "type": "tool",
+            "name": "call_mcp_tool",
+            "tool_call_id": "call_surface_1",
+            "status": "success",
+            "output": {"issue": {"identifier": "ENG-1421"}},
+            "surface_uri": "record://linear/get_issue/ENG-1421",
+            "surface": _SURFACE_ENVELOPE,
+        }
+    )
+
+    assert payload["surface_uri"] == "record://linear/get_issue/ENG-1421"
+    assert payload["surface"] == _SURFACE_ENVELOPE
+    # Lifted, not duplicated: the surface no longer rides inside ``output``.
+    assert "surface_uri" not in payload["output"]
+    assert "surface" not in payload["output"]
+    # The real tool output survives the lift.
+    assert payload["output"]["output"] == {"issue": {"identifier": "ENG-1421"}}
+
+
+def test_tool_result_lifts_surface_from_json_string_content() -> None:
+    """Production path: the MCP return dict is JSON-serialised into
+    ``ToolMessage.content``. The surface must be lifted to the payload top level
+    while the model-facing ``content`` string is left intact."""
+
+    from langchain_core.messages import ToolMessage
+
+    return_dict = {
+        "server_name": "linear",
+        "tool_name": "get_issue",
+        "output": {"issue": {"identifier": "ENG-1421"}},
+        "surface_uri": "record://linear/get_issue/ENG-1421",
+        "surface": _SURFACE_ENVELOPE,
+    }
+    message = ToolMessage(
+        content=json.dumps(return_dict),
+        name="call_mcp_tool",
+        tool_call_id="call_surface_2",
+        status="success",
+    )
+
+    payload = StreamMessageProcessor.tool_result_payload(message)
+
+    assert payload["surface_uri"] == "record://linear/get_issue/ENG-1421"
+    assert payload["surface"] == _SURFACE_ENVELOPE
+    # ``content`` is the model-facing output PRD-02 writes; it stays intact.
+    assert json.loads(payload["output"]["content"]) == return_dict
+
+
+def test_tool_result_without_surface_is_unchanged() -> None:
+    """A structured tool result with no surface keeps ``output`` untouched and
+    gains no surface fields."""
+
+    payload = StreamMessageProcessor.tool_result_payload(
+        {
+            "type": "tool",
+            "name": "web_search",
+            "tool_call_id": "call_plain",
+            "status": "success",
+            "output": {"results": ["a", "b"]},
+        }
+    )
+
+    assert "surface_uri" not in payload
+    assert "surface" not in payload
+    assert payload["output"] == {"output": {"results": ["a", "b"]}}
+
+
+def test_tool_result_plain_string_content_is_unaffected() -> None:
+    """A plain-text (non-JSON) tool result never triggers a surface lift."""
+
+    payload = StreamMessageProcessor.tool_result_payload(
+        {
+            "type": "tool",
+            "name": "web_search",
+            "tool_call_id": "call_text",
+            "content": "connection refused",
+        }
+    )
+
+    assert "surface_uri" not in payload
+    assert "surface" not in payload
+    assert payload["output"] == {"content": "connection refused"}
+
+
+def test_tool_result_with_state_preserves_top_level_surface() -> None:
+    """``tool_result_payload_with_state`` re-wraps the payload; the top-level
+    surface must survive that pass."""
+
+    producer = object()
+    update_processor = StreamUpdateProcessor(event_producer=producer)  # type: ignore[arg-type]
+    processor = StreamMessageProcessor(
+        event_producer=producer, update_processor=update_processor
+    )  # type: ignore[arg-type]
+
+    base = StreamMessageProcessor.tool_result_payload(
+        {
+            "type": "tool",
+            "name": "call_mcp_tool",
+            "tool_call_id": "call_state_surface",
+            "status": "success",
+            "output": {"issue": {"identifier": "ENG-1421"}},
+            "surface_uri": "record://linear/get_issue/ENG-1421",
+            "surface": _SURFACE_ENVELOPE,
+        }
+    )
+    # No accumulated call state for this id ⇒ the enrichment returns the payload
+    # unchanged, which must still carry the lifted surface.
+    enriched = processor.tool_result_payload_with_state("run_123", base)
+
+    assert enriched["surface_uri"] == "record://linear/get_issue/ENG-1421"
+    assert enriched["surface"] == _SURFACE_ENVELOPE

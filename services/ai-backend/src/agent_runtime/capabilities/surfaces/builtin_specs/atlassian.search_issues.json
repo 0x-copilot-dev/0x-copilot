@@ -1,0 +1,18 @@
+{
+  "spec_version": 1,
+  "archetype": "table",
+  "source": { "server": "seed:atlassian", "tool": "search_issues" },
+  "title_path": "jql",
+  "items_path": "issues",
+  "columns": [
+    { "label": "Key", "path": "key", "align": "start" },
+    { "label": "Summary", "path": "fields.summary", "align": "start" },
+    { "label": "Status", "path": "fields.status.name", "format": "badge" },
+    {
+      "label": "Assignee",
+      "path": "fields.assignee.displayName",
+      "format": "user"
+    },
+    { "label": "Updated", "path": "fields.updated", "format": "datetime" }
+  ]
+}

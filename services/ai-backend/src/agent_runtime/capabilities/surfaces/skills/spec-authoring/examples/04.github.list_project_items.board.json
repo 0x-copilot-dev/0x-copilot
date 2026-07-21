@@ -1,0 +1,46 @@
+{
+  "tool_descriptor": {
+    "name": "list_project_items",
+    "description": "List items on a GitHub project board.",
+    "input_schema": {
+      "type": "object",
+      "properties": { "project": { "type": "string" } }
+    },
+    "output_shape": {
+      "type": "object",
+      "properties": { "items": { "type": "array" } }
+    }
+  },
+  "sample_output": {
+    "project": { "title": "Roadmap Q3" },
+    "items": [
+      {
+        "id": "it_1",
+        "title": "Ship SSO",
+        "status": "In progress",
+        "assignee": { "login": "schen" },
+        "url": "https://github.com/orgs/acme/projects/7?pane=issue&itemId=it_1"
+      },
+      {
+        "id": "it_2",
+        "title": "Billing v2",
+        "status": "Todo",
+        "assignee": { "login": "mwong" },
+        "url": "https://github.com/orgs/acme/projects/7?pane=issue&itemId=it_2"
+      }
+    ]
+  },
+  "spec": {
+    "spec_version": 1,
+    "archetype": "board",
+    "source": { "server": "seed:github", "tool": "list_project_items" },
+    "title_path": "project.title",
+    "items_path": "items",
+    "group_by_path": "status",
+    "columns": [
+      { "label": "Title", "path": "title", "align": "start" },
+      { "label": "Assignee", "path": "assignee.login", "format": "user" }
+    ],
+    "link": { "label": "Open item", "url_path": "url" }
+  }
+}

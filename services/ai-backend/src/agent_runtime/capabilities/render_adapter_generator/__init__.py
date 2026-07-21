@@ -10,6 +10,10 @@ from agent_runtime.capabilities.render_adapter_generator.capability import (
     AdapterCodegenError,
     RenderAdapterGenerator,
 )
+from agent_runtime.capabilities.render_adapter_generator.config import (
+    Tier2GenerationFlag,
+    should_invoke_tier2_generator,
+)
 from agent_runtime.capabilities.render_adapter_generator.models import (
     AdapterCodegenRequest,
     AdapterCodegenResult,
@@ -25,4 +29,6 @@ __all__ = [
     "LayoutTemplate",
     "RenderAdapterGenerator",
     "SampleState",
+    "Tier2GenerationFlag",
+    "should_invoke_tier2_generator",
 ]

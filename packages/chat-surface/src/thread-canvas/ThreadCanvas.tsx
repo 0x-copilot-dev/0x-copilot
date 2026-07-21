@@ -115,6 +115,13 @@ export interface ThreadCanvasProps {
   readonly onReject?: (diffId: string) => void;
   readonly onSuggestChanges?: (diffId: string) => void;
   /**
+   * PRD-09c edit-on-surface slot — forwarded verbatim to `TcSurfaceMount`, which
+   * mounts it as a host-owned overlay OVER the active surface's pure adapter.
+   * The host (`RunDestination`) builds the `EditOverlay` and opens it from
+   * `onSuggestChanges`. Omitted → no overlay (the default).
+   */
+  readonly editSlot?: ReactNode;
+  /**
    * Scrub cursor — null = live; number = a `sequence_no` to time-travel
    * the surface to. The host (ChatScreen) reconciles this with the
    * swimlane and mini-timeline UIs.
@@ -175,6 +182,7 @@ export function ThreadCanvas(props: ThreadCanvasProps): ReactElement {
     onApprove,
     onReject,
     onSuggestChanges,
+    editSlot,
     scrubbedSeq = null,
     onScrub,
     onSnapToNow,
@@ -357,6 +365,7 @@ export function ThreadCanvas(props: ThreadCanvasProps): ReactElement {
             onApprove={onApprove}
             onReject={onReject}
             onSuggestChanges={onSuggestChanges}
+            editSlot={editSlot}
           />
         </div>
 

@@ -124,6 +124,15 @@ const TemplateGalleryRoute = lazy(() =>
     default: m.TemplateGalleryRoute,
   })),
 );
+// PRD-05 — the real Run cockpit binder, code-split so the RunDestination /
+// ThreadCanvas chunk costs the main bundle nothing while the `runCockpitWeb`
+// flag is OFF (its default). Loaded only when the flag gates the `run` slug
+// onto it (dispatch below), under the same `<Suspense>` as `body`.
+const RunRoute = lazy(() =>
+  import("../features/run/RunRoute").then((m) => ({
+    default: m.RunRoute,
+  })),
+);
 
 // Single fallback used whenever a route chunk is in flight. Matches the
 // existing AuthGate "Loading session…" spinner shape so the user does
@@ -166,6 +175,15 @@ import {
   WebNotificationPort,
   type PortBundle,
 } from "../ports";
+// PRD-05 — register the web host's surface-renderer stack (tier-3 generic +
+// tier-1 SaaS + PRD-03 archetypes) once at module init, mirroring the desktop
+// bootstrap. Idempotent (registry replace semantics); no Tier2Bridge on web.
+import { registerSurfaces } from "./registerSurfaces";
+// PRD-05 — the `runCockpitWeb` flag (default OFF) gates the real RunDestination
+// cockpit vs the legacy ChatScreen under the `run` slug.
+import { isRunCockpitWebEnabled } from "./featureFlags";
+
+registerSurfaces();
 
 // Placeholder for a destination that exists in the shared slug union but has
 // no web surface yet. Renders an inert, unavailable section rather than
@@ -546,6 +564,10 @@ export function CopilotApp({
   // ⌘K palette open-state, lifted here so the shell topbar's single trigger
   // (ChatShell.onOpenCommandPalette) and the palette's ⌘K hotkey share one state.
   const [paletteOpen, setPaletteOpen] = useState(false);
+  // PRD-05 — read the `runCockpitWeb` flag once per mount (not a module const,
+  // so a devtools toggle / test seed takes effect on the next mount). OFF
+  // (default) keeps the legacy ChatScreen under `run`; ON mounts RunRoute.
+  const [runCockpitWebEnabled] = useState(() => isRunCockpitWebEnabled());
 
   useEffect(() => router.subscribe(setRoute), [router]);
 
@@ -746,6 +768,12 @@ export function CopilotApp({
   const openSkillEditor = (_skillId?: string | null): void => {
     router.navigate({ screen: "settings", section: "skills" });
   };
+  // PRD-05 — the Run cockpit's empty-state "Set up your model" CTA + the
+  // `configuration_error` "Add a provider key" CTA open Settings → Provider
+  // keys. Only reached when the `runCockpitWeb` flag mounts `RunRoute`.
+  const openModelSettings = (): void => {
+    router.navigate({ screen: "settings", section: "provider-keys" });
+  };
 
   let body: ReactElement;
   if (
@@ -909,14 +937,19 @@ export function CopilotApp({
     // `routines`/`agents`/`memory`.
     body = <RouteLoadingFallback />;
   } else if (route.destination === "run") {
-    // PR-4.11 — the Run cockpit. On web the flagship Run destination is the
-    // working conversation surface (`ChatScreen`), which owns its own thread
-    // sidebar + composer. `run` is full-bleed in ChatShell (no ContextPanel /
-    // Topbar), so there is exactly one rail + one thread sidebar + one main
-    // pane (+ right rail). Reopen (Chats) / new-chat / skill-run / live-run all
-    // land here via `openRun`. `/` maps to `run` (ROOT_DESTINATION), so the
-    // legacy `/` bookmark keeps opening the chat cockpit.
-    body = (
+    // PR-4.11 / PRD-05 — the Run cockpit. Two mounts, one gated by the
+    // `runCockpitWeb` flag:
+    //   - flag ON  → the real `RunDestination` cockpit (chat-surface), bound by
+    //     the web `RunRoute` binder. It owns the Studio/Focus canvas, the
+    //     surface-tab center pane (archetype renderers), the workspace rail, and
+    //     the empty-state goal composer.
+    //   - flag OFF (default) → the legacy `ChatScreen`, BYTE-IDENTICAL to the
+    //     pre-PRD-05 path (no regression while the flag stays off).
+    // `run` is full-bleed in ChatShell (no ContextPanel / Topbar); `/` maps to
+    // `run` (ROOT_DESTINATION), so the legacy `/` bookmark keeps working.
+    body = runCockpitWebEnabled ? (
+      <RunRoute onOpenModelSettings={openModelSettings} />
+    ) : (
       <ChatScreen
         connectors={connectors}
         skills={skills}

@@ -995,3 +995,441 @@ describe("RunDestination — empty/idle + multi-run (PR-3.11 / FR-3.25/3.26)", (
     expect(screen.queryByTestId("run-multi-select")).toBeNull();
   });
 });
+
+// === PRD-04 — surface tabs + on-surface diffs (auto-follow / pin / decisions) ===
+//
+// Integration: surface tool_results populate the surface-tab strip off the ONE
+// canonical stream (FR-3.3); the center pane auto-follows the newest surface
+// until the user pins one (a manual tab click). An approval carrying a surface
+// diff renders the Approve/Reject controls over the diff; approving reuses the
+// SAME resolveApproval machinery the in-chat card uses and POSTs the decision.
+// Diff controls hide while scrubbed off-now (FR-3.15).
+
+/** A `tool_result` carrying the PRD-01 `payload.surface` envelope. */
+function surfaceToolResult(
+  uri: string,
+  id: string,
+  data: Record<string, unknown> = {},
+): Record<string, unknown> {
+  return event({
+    event_id: id,
+    event_type: "tool_result",
+    activity_kind: "tool",
+    payload: {
+      surface: { surface_uri: uri, archetype: "record", state: { data } },
+    },
+  });
+}
+
+/** An `approval_requested` proposing a diff on a surface. */
+function surfaceDiffApproval(
+  approvalId: string,
+  uri: string,
+): Record<string, unknown> {
+  return event({
+    event_type: "approval_requested",
+    activity_kind: "approval",
+    payload: {
+      approval_id: approvalId,
+      approval_kind: "tool_action",
+      display_name: "Update the record",
+      server_name: "LINEAR",
+      surface: {
+        surface_uri: uri,
+        archetype: "record",
+        state: { data: {} },
+        diff: { changes: [{ field: "title", old: "a", new: "b" }] },
+      },
+    },
+  });
+}
+
+function activeSurfaceTabUri(): string | null {
+  return (
+    screen
+      .getByTestId("tc-tabs")
+      .querySelector('[data-active="true"]')
+      ?.getAttribute("data-uri") ?? null
+  );
+}
+
+function surfaceTabCount(): number {
+  return screen.getByTestId("tc-tabs").querySelectorAll('[role="tab"]').length;
+}
+
+describe("RunDestination — surface tabs + on-surface diffs (PRD-04)", () => {
+  async function renderWithSession(): Promise<FakeTransport> {
+    seqCounter = 0;
+    const transport = new FakeTransport();
+    transport.requestHandler = async (req) =>
+      req.path.includes("/messages") ? { messages: [] } : runningRun("Goal");
+    renderRun(transport, makeStore());
+    await waitFor(() => expect(transport.sessionSub).toBeDefined());
+    return transport;
+  }
+
+  it("auto-opens the newest surface as tabs stream in", async () => {
+    const transport = await renderWithSession();
+    act(() => {
+      transport.emit(surfaceToolResult("record://a", "sa"));
+      transport.emit(surfaceToolResult("record://b", "sb"));
+    });
+    await waitFor(() => expect(surfaceTabCount()).toBe(2));
+    // Newest surface (b) auto-opens; no pin → no follow-live affordance.
+    expect(activeSurfaceTabUri()).toBe("record://b");
+    expect(screen.queryByTestId("run-follow-live-banner")).toBeNull();
+  });
+
+  it("pins on a manual tab click and un-pins via follow live", async () => {
+    const transport = await renderWithSession();
+    act(() => {
+      transport.emit(surfaceToolResult("record://a", "sa"));
+      transport.emit(surfaceToolResult("record://b", "sb"));
+    });
+    await waitFor(() => expect(activeSurfaceTabUri()).toBe("record://b"));
+
+    // Click the older tab → pins it (active follows the click, not the newest).
+    const olderTab = screen
+      .getByTestId("tc-tabs")
+      .querySelector('[data-uri="record://a"]') as HTMLElement;
+    act(() => {
+      fireEvent.click(olderTab);
+    });
+    expect(activeSurfaceTabUri()).toBe("record://a");
+    // A newer surface exists → the "follow live" affordance appears.
+    expect(
+      screen.getByTestId("run-follow-live-banner").getAttribute("role"),
+    ).toBe("status");
+
+    // Follow live → un-pins; active snaps back to the newest surface.
+    act(() => {
+      fireEvent.click(screen.getByTestId("run-follow-live"));
+    });
+    expect(screen.queryByTestId("run-follow-live-banner")).toBeNull();
+    expect(activeSurfaceTabUri()).toBe("record://b");
+  });
+
+  it("renders the on-surface diff controls and POSTs the decision on approve", async () => {
+    const transport = await renderWithSession();
+    act(() => {
+      transport.emit(surfaceToolResult("record://seed/get_issue/1", "surf-1"));
+      transport.emit(
+        surfaceDiffApproval("appr-1", "record://seed/get_issue/1"),
+      );
+    });
+
+    // The center pane shows the Approve/Reject/Suggest controls over the diff.
+    await screen.findByTestId("tc-surface-mount-controls");
+
+    act(() => {
+      fireEvent.click(screen.getByTestId("tc-surface-mount-approve"));
+    });
+
+    // Optimistic: the diff clears (controls gone) — prop-driven, no internal state.
+    await waitFor(() =>
+      expect(screen.queryByTestId("tc-surface-mount-controls")).toBeNull(),
+    );
+    // The host POSTed the decision through the Transport port (reuses the SAME
+    // resolveApproval machinery — diffId === approvalId).
+    await waitFor(() =>
+      expect(
+        transport.requests.some(
+          (r) =>
+            r.method === "POST" &&
+            r.path === "/v1/agent/approvals/appr-1/decision" &&
+            (r.body as { decision?: string } | undefined)?.decision ===
+              "approved",
+        ),
+      ).toBe(true),
+    );
+  });
+
+  it("hides the on-surface diff controls while scrubbed off-now (FR-3.15)", async () => {
+    const transport = await renderWithSession();
+    act(() => {
+      transport.emit(surfaceToolResult("record://seed/get_issue/1", "surf-1"));
+      transport.emit(
+        surfaceDiffApproval("appr-1", "record://seed/get_issue/1"),
+      );
+    });
+    await screen.findByTestId("tc-surface-mount-controls");
+
+    // Scrub to the surface's bead → the pending diff + its controls hide.
+    act(() => {
+      fireEvent.click(screen.getByTestId("tc-mini-timeline-bead-surf-1"));
+    });
+    expect(screen.getByTestId("run-viewing-banner")).not.toBeNull();
+    expect(screen.queryByTestId("tc-surface-mount-controls")).toBeNull();
+
+    // Snap back to now → controls restored.
+    act(() => {
+      fireEvent.click(screen.getByTestId("run-return-to-live"));
+    });
+    expect(screen.getByTestId("tc-surface-mount-controls")).not.toBeNull();
+  });
+});
+
+// === PRD-09c — edit-on-surface overlay (Suggest changes → approve_with_edits) ===
+//
+// Integration: the on-surface "Suggest changes" control opens the host-owned
+// EditOverlay OVER the pure adapter (ThreadCanvas.editSlot → TcSurfaceMount).
+// The overlay's submit reuses the SAME resolveApproval POST machinery the plain
+// approve/reject path uses, with `{ decision: "approve_with_edits", edits }`.
+// Cancel returns to the pending diff (no POST). The plain approve path is
+// unchanged (no `edits`).
+
+/** An `approval_requested` proposing a MESSAGE-body diff on a `message://` surface. */
+function messageDiffApproval(
+  approvalId: string,
+  uri: string,
+): Record<string, unknown> {
+  return event({
+    event_type: "approval_requested",
+    activity_kind: "approval",
+    payload: {
+      approval_id: approvalId,
+      approval_kind: "tool_action",
+      display_name: "Send the renewal email",
+      server_name: "GMAIL",
+      surface: {
+        surface_uri: uri,
+        archetype: "message",
+        state: { data: {} },
+        diff: {
+          changes: [
+            { field: "message.subject", old: "Renewal", new: "Renewal terms" },
+            {
+              field: "message.body",
+              old: "Hi Jordan, the price holds.",
+              new: "Hi Maya, the price holds.",
+            },
+          ],
+        },
+      },
+    },
+  });
+}
+
+/** An `approval_requested` proposing a RECORD field diff on a `record://` surface. */
+function recordFieldDiffApproval(
+  approvalId: string,
+  uri: string,
+): Record<string, unknown> {
+  return event({
+    event_type: "approval_requested",
+    activity_kind: "approval",
+    payload: {
+      approval_id: approvalId,
+      approval_kind: "tool_action",
+      display_name: "Update the record",
+      server_name: "LINEAR",
+      surface: {
+        surface_uri: uri,
+        archetype: "record",
+        state: { data: {} },
+        diff: {
+          changes: [
+            { field: "title", old: "Old title", new: "New title" },
+            { field: "priority", old: "P2", new: "P1" },
+          ],
+        },
+      },
+    },
+  });
+}
+
+function decisionRequests(transport: FakeTransport, approvalId: string) {
+  return transport.requests.filter(
+    (r) =>
+      r.method === "POST" &&
+      r.path === `/v1/agent/approvals/${approvalId}/decision`,
+  );
+}
+
+describe("RunDestination — edit-on-surface (PRD-09c)", () => {
+  async function renderWithSession(): Promise<FakeTransport> {
+    seqCounter = 0;
+    const transport = new FakeTransport();
+    transport.requestHandler = async (req) =>
+      req.path.includes("/messages") ? { messages: [] } : runningRun("Goal");
+    renderRun(transport, makeStore());
+    await waitFor(() => expect(transport.sessionSub).toBeDefined());
+    return transport;
+  }
+
+  it("opens the edit overlay from Suggest changes for a message archetype", async () => {
+    const transport = await renderWithSession();
+    act(() => {
+      transport.emit(messageDiffApproval("appr-1", "message://gmail/send/1"));
+    });
+    await screen.findByTestId("tc-surface-mount-controls");
+
+    // No overlay until the reviewer asks to edit.
+    expect(screen.queryByTestId("surface-edit-overlay")).toBeNull();
+
+    act(() => {
+      fireEvent.click(screen.getByTestId("tc-surface-mount-suggest"));
+    });
+
+    // The message edit overlay mounts OVER the adapter…
+    const overlay = await screen.findByTestId("surface-edit-overlay");
+    expect(overlay.getAttribute("data-archetype")).toBe("message");
+    expect(screen.getByTestId("message-edit-form")).not.toBeNull();
+    // …seeded with the proposed body…
+    expect(
+      (screen.getByTestId("message-edit-body") as HTMLTextAreaElement).value,
+    ).toBe("Hi Maya, the price holds.");
+    // …and the bottom Approve/Reject/Suggest row is suppressed while editing.
+    expect(screen.queryByTestId("tc-surface-mount-controls")).toBeNull();
+    expect(
+      screen.getByTestId("tc-surface-mount").getAttribute("data-editing"),
+    ).toBe("true");
+  });
+
+  it("toggling a hunk excludes it and submit POSTs approve_with_edits with the edited body", async () => {
+    const transport = await renderWithSession();
+    act(() => {
+      transport.emit(messageDiffApproval("appr-1", "message://gmail/send/1"));
+    });
+    await screen.findByTestId("tc-surface-mount-controls");
+    act(() => {
+      fireEvent.click(screen.getByTestId("tc-surface-mount-suggest"));
+    });
+    await screen.findByTestId("surface-edit-overlay");
+
+    // Exclude the inserted hunk (h2) via the PRD-06 DiffText.
+    act(() => {
+      fireEvent.click(
+        within(screen.getByTestId("message-edit-hunks")).getByTestId(
+          "diff-insert",
+        ),
+      );
+    });
+    expect(
+      screen
+        .getByTestId("message-edit-hunk-status-h2")
+        .getAttribute("data-accepted"),
+    ).toBe("false");
+
+    // Edit the body, then submit.
+    act(() => {
+      fireEvent.change(screen.getByTestId("message-edit-body"), {
+        target: { value: "Hi Maya, price is locked." },
+      });
+    });
+    act(() => {
+      fireEvent.click(screen.getByTestId("surface-edit-submit"));
+    });
+
+    // The overlay closes and the diff clears optimistically (as approved).
+    await waitFor(() =>
+      expect(screen.queryByTestId("surface-edit-overlay")).toBeNull(),
+    );
+    await waitFor(() =>
+      expect(screen.queryByTestId("tc-surface-mount-controls")).toBeNull(),
+    );
+
+    // Exactly one decision POST, carrying approve_with_edits + the edited body
+    // and the kept-hunk subset (h2 excluded).
+    await waitFor(() =>
+      expect(decisionRequests(transport, "appr-1")).toHaveLength(1),
+    );
+    const body = decisionRequests(transport, "appr-1")[0].body as {
+      decision: string;
+      edits: {
+        body?: string;
+        accepted_hunk_ids?: string[];
+      };
+    };
+    expect(body.decision).toBe("approve_with_edits");
+    expect(body.edits.body).toBe("Hi Maya, price is locked.");
+    expect(body.edits.accepted_hunk_ids).toEqual(["h1"]);
+  });
+
+  it("submits record field edits as approve_with_edits.fields", async () => {
+    const transport = await renderWithSession();
+    act(() => {
+      transport.emit(
+        recordFieldDiffApproval("appr-2", "record://linear/get_issue/1"),
+      );
+    });
+    await screen.findByTestId("tc-surface-mount-controls");
+    act(() => {
+      fireEvent.click(screen.getByTestId("tc-surface-mount-suggest"));
+    });
+    const overlay = await screen.findByTestId("surface-edit-overlay");
+    expect(overlay.getAttribute("data-archetype")).toBe("record");
+
+    act(() => {
+      fireEvent.change(screen.getByTestId("record-edit-field-title"), {
+        target: { value: "Reviewed title" },
+      });
+    });
+    act(() => {
+      fireEvent.click(screen.getByTestId("surface-edit-submit"));
+    });
+
+    await waitFor(() =>
+      expect(decisionRequests(transport, "appr-2")).toHaveLength(1),
+    );
+    const body = decisionRequests(transport, "appr-2")[0].body as {
+      decision: string;
+      edits: { fields?: Record<string, string> };
+    };
+    expect(body.decision).toBe("approve_with_edits");
+    expect(body.edits.fields).toEqual({
+      title: "Reviewed title",
+      priority: "P1",
+    });
+  });
+
+  it("cancel restores the pending diff and POSTs nothing", async () => {
+    const transport = await renderWithSession();
+    act(() => {
+      transport.emit(messageDiffApproval("appr-3", "message://gmail/send/1"));
+    });
+    await screen.findByTestId("tc-surface-mount-controls");
+    act(() => {
+      fireEvent.click(screen.getByTestId("tc-surface-mount-suggest"));
+    });
+    await screen.findByTestId("surface-edit-overlay");
+
+    act(() => {
+      fireEvent.click(screen.getByTestId("surface-edit-cancel"));
+    });
+
+    // Overlay gone; the pending diff + its Approve/Reject/Suggest controls return.
+    expect(screen.queryByTestId("surface-edit-overlay")).toBeNull();
+    expect(screen.getByTestId("tc-surface-mount-controls")).not.toBeNull();
+    expect(screen.getByTestId("tc-surface-mount-suggest")).not.toBeNull();
+    // Cancel is inert — no decision POST fired.
+    expect(decisionRequests(transport, "appr-3")).toHaveLength(0);
+  });
+
+  it("leaves the plain approve path unchanged (no edits payload)", async () => {
+    const transport = await renderWithSession();
+    act(() => {
+      transport.emit(
+        recordFieldDiffApproval("appr-4", "record://linear/get_issue/1"),
+      );
+    });
+    await screen.findByTestId("tc-surface-mount-controls");
+
+    // Approve directly — no overlay.
+    act(() => {
+      fireEvent.click(screen.getByTestId("tc-surface-mount-approve"));
+    });
+
+    await waitFor(() =>
+      expect(decisionRequests(transport, "appr-4")).toHaveLength(1),
+    );
+    const body = decisionRequests(transport, "appr-4")[0].body as {
+      decision: string;
+      edits?: unknown;
+    };
+    expect(body.decision).toBe("approved");
+    expect(body.edits).toBeUndefined();
+    // The overlay never opened.
+    expect(screen.queryByTestId("surface-edit-overlay")).toBeNull();
+  });
+});

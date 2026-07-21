@@ -2,3 +2,4 @@
 # Do not hand-edit; CI will refuse if checksums drift from the
 # migrations/ directory.
 0001_backend_baseline sha256=bd591313a0a84b0dad0e0190434a57a044b9643e884b629761f238382d1cbeb4
+0041_surface_specs sha256=b34e7a5d55458a7b870000833f474bdf1b2e7f549fcf524ab83668fa50ba4ba8
