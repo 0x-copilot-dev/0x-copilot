@@ -3,6 +3,7 @@ export type {
   ConnectModalProps,
   ConnectPermission,
   ConnectPermissionOption,
+  CustomServerInput,
 } from "./ConnectModal";
 
 export {

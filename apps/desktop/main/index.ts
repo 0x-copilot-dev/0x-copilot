@@ -138,6 +138,12 @@ let capabilityService: CapabilityService | null = null;
 // dispatcher (registered eagerly at boot) can route connector OAuth callbacks
 // to it by state without re-registering the protocol handler.
 let connectorService: ConnectorService | null = null;
+// Held at module scope so the first-run IPC (registered eagerly at boot, BEFORE
+// the facade is reachable and the auth service exists) can derive the
+// per-account store key from the verified session once wireTransportAndIpc has
+// built the service. Null until then; the first-run handlers fall back to the
+// advisory workspaceId while it is null (see resolveFirstRunKey).
+let activeAuthService: ActiveAuthService | null = null;
 let latestBootStatus: BootStatusPayload | null = null;
 let updateHandle: AutoUpdateHandle | null = null;
 let latestUpdateStatus: UpdateStatusPayload | null = null;
@@ -317,8 +323,9 @@ function registerSecureStorageIpc(): void {
 }
 
 // Extract a non-empty workspaceId from a renderer IPC payload. Caller-supplied
-// identity is untrusted; we only accept it as a namespacing key for this
-// per-install UX flag (never as an auth claim).
+// identity is untrusted; we accept it ONLY as an advisory hint that selects
+// WHICH session to look up (never as the store key itself, and never as an auth
+// claim). The real key is derived from the verified session in resolveFirstRunKey.
 function readWorkspaceId(payload: unknown): string | null {
   if (typeof payload === "object" && payload !== null) {
     const wid = (payload as Record<string, unknown>).workspaceId;
@@ -327,25 +334,46 @@ function readWorkspaceId(payload: unknown): string | null {
   return null;
 }
 
+// Derive the per-account first-run store key from the VERIFIED session (its
+// hashed claims.sub), resolved in main via AuthService.accountKey. The
+// renderer-supplied workspaceId is advisory: it only selects which session to
+// look up and is NEVER trusted as the key itself.
+//
+// Fallback: when no verified session has loaded yet — the very first paint
+// before sign-in, or a cold auth service right at boot before
+// wireTransportAndIpc runs — accountKey is null, so we fall back to the
+// advisory workspaceId. This keeps the flag functional (rather than throwing)
+// for a not-yet-authenticated read; the authenticated write that marks
+// onboarding done later lands on the sub-keyed entry.
+async function resolveFirstRunKey(workspaceId: string): Promise<string> {
+  const key =
+    activeAuthService === null
+      ? null
+      : await activeAuthService.accountKey(workspaceId);
+  return key ?? workspaceId;
+}
+
 // Registers the first-run (FTUE) completion IPC. The renderer's FirstRunGate
 // reads `get` to decide whether to show onboarding, and writes `set` when the
-// user finishes/skips onboarding. Per-workspace, persisted chmod-600. A read
-// error yields `completed: false` so onboarding fails OPEN (never trap a user
-// past onboarding on a bad read).
+// user finishes/skips onboarding. Keyed per verified account (hashed claims.sub;
+// see resolveFirstRunKey), persisted chmod-600. A read error yields
+// `completed: false` so onboarding fails OPEN (never trap a user past onboarding
+// on a bad read).
 function registerFirstRunIpc(): void {
-  ipcMain.handle(FIRST_RUN_CHANNELS.get, (_event, payload) => {
+  ipcMain.handle(FIRST_RUN_CHANNELS.get, async (_event, payload) => {
     const workspaceId = readWorkspaceId(payload);
     if (workspaceId === null) return { completed: false };
     try {
+      const accountKey = await resolveFirstRunKey(workspaceId);
       return {
-        completed: loadFirstRunComplete(app.getPath("userData"), workspaceId),
+        completed: loadFirstRunComplete(app.getPath("userData"), accountKey),
       };
     } catch (err) {
       console.error("[first-run] read failed:", err);
       return { completed: false };
     }
   });
-  ipcMain.handle(FIRST_RUN_CHANNELS.set, (_event, payload) => {
+  ipcMain.handle(FIRST_RUN_CHANNELS.set, async (_event, payload) => {
     const workspaceId = readWorkspaceId(payload);
     if (workspaceId === null) {
       return { ok: false, error: "missing workspaceId" };
@@ -358,7 +386,8 @@ function registerFirstRunIpc(): void {
       (payload as Record<string, unknown>).completed === false
     );
     try {
-      saveFirstRunComplete(app.getPath("userData"), workspaceId, completed);
+      const accountKey = await resolveFirstRunKey(workspaceId);
+      saveFirstRunComplete(app.getPath("userData"), accountKey, completed);
       return { ok: true, completed };
     } catch (err) {
       console.error("[first-run] persist failed:", err);
@@ -481,6 +510,9 @@ function wireTransportAndIpc(
     filePath: join(app.getPath("userData"), "audit", "auth.log"),
   });
   const authService = buildAuthService(auditLog, facadeUrl, hostToken);
+  // Publish to module scope so the eagerly-registered first-run IPC can derive
+  // the per-account store key from the verified session.
+  activeAuthService = authService;
   const transport = createTransport(authService, auditLog, facadeUrl);
 
   // AC9 — connector OAuth service. Only meaningful against a real facade
@@ -664,6 +696,12 @@ interface ActiveAuthService {
   getBearer(workspaceId: string): Promise<string | null>;
   getBearerCachedSync(workspaceId: string): string | null;
   activeWorkspace(): string | null;
+  /**
+   * Stable, non-reversible key derived from the VERIFIED session's claims.sub,
+   * used to namespace main-process UX flags (first-run) per account. Null when
+   * no verified session is loaded.
+   */
+  accountKey(workspaceId: string): Promise<string | null>;
   /** Real install (no dev-mint, fail closed). Surfaced to the renderer. */
   isProductionPosture(): boolean;
 }
@@ -763,6 +801,7 @@ function buildAuthService(
     getBearerCachedSync: (workspaceId) =>
       service.getBearerCachedSync(workspaceId),
     activeWorkspace: () => service.activeWorkspace(),
+    accountKey: (workspaceId) => service.accountKey(workspaceId),
     isProductionPosture: () => productionPosture,
   };
 }
