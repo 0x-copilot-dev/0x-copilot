@@ -2,6 +2,7 @@ import {
   useCallback,
   useEffect,
   useMemo,
+  useRef,
   useState,
   type ReactElement,
   type ReactNode,
@@ -40,15 +41,35 @@ export interface SignInGateProps {
   ) => ReactNode;
 }
 
-/** Which option the user picked — drives the "waiting" copy. */
+/** Which option the user picked — drives the waiting/failure copy. */
 type SignInMethod = "wallet" | "google" | "local";
 
+/**
+ * Mirrors the "0xCopilot Login" design's view machine
+ * (pick · connecting/google · werr/gerr · done), adapted to the desktop's
+ * re-homed wallet architecture (the wallet picker + signature live in the
+ * system-browser wallet page, so the app renders waiting/failure/done):
+ *
+ * - `signing-in.canceling` — the user hit Cancel; the pending IPC promise
+ *   is about to reject (main closed the loopback) and that rejection must
+ *   land back on `anon` quietly, NOT on the error screen.
+ * - `done` — the design's post-sign-in beat ("Signed in / Opening your
+ *   workspace…") shown briefly before the shell mounts. Only entered from
+ *   an ACTIVE sign-in; a restored session skips it.
+ * - `error.method` — which flow failed, so the failure screen can render
+ *   the design's method-specific guidance (werr/gerr) instead of one
+ *   generic message. `null` = session-lookup failure (no method picked).
+ */
 type Phase =
   | { kind: "loading" }
   | { kind: "anon" }
-  | { kind: "signing-in"; method: SignInMethod }
+  | { kind: "signing-in"; method: SignInMethod; canceling: boolean }
+  | { kind: "done"; session: RendererSession }
   | { kind: "signed-in"; session: RendererSession }
-  | { kind: "error"; message: string };
+  | { kind: "error"; method: SignInMethod | null; message: string };
+
+/** Design's `done` beat duration before the workspace mounts. */
+const DONE_BEAT_MS = 900;
 
 export function SignInGate(props: SignInGateProps): ReactNode {
   const { bridge, children } = props;
@@ -71,6 +92,7 @@ export function SignInGate(props: SignInGateProps): ReactNode {
         if (cancelled) return;
         setPhase({
           kind: "error",
+          method: null,
           message: err instanceof Error ? err.message : "auth lookup failed",
         });
       });
@@ -79,27 +101,54 @@ export function SignInGate(props: SignInGateProps): ReactNode {
     };
   }, [bridge, workspaceId]);
 
+  // Attempt fencing: each sign-in click gets an id; a settled promise from
+  // a superseded attempt (canceled, replaced by another click) must not
+  // clobber the current phase. The done-beat timer is fenced the same way.
+  const attemptRef = useRef(0);
+  const doneTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  useEffect(() => {
+    return () => {
+      attemptRef.current += 1;
+      if (doneTimerRef.current !== null) clearTimeout(doneTimerRef.current);
+    };
+  }, []);
+
   // Every option drives the SAME IPC round-trip shape — main opens the
   // external flow (system browser / loopback) and returns a renderer-safe
-  // session (the bearer never crosses IPC). Only the "waiting" copy and the
-  // failure fallback differ per method.
+  // session (the bearer never crosses IPC). Only the waiting/failure copy
+  // differs per method. On success the design's `done` beat renders briefly
+  // before the workspace mounts.
   const startSignIn = useCallback(
     (
       method: SignInMethod,
       channel: (typeof CHANNELS)[keyof typeof CHANNELS],
       failMessage: string,
     ) => {
-      setPhase({ kind: "signing-in", method });
+      const attempt = ++attemptRef.current;
+      setPhase({ kind: "signing-in", method, canceling: false });
       bridge.ipc
         .invoke<RendererSession>(channel, { workspaceId })
         .then((session) => {
-          setPhase({ kind: "signed-in", session });
+          if (attempt !== attemptRef.current) return;
+          setPhase({ kind: "done", session });
+          doneTimerRef.current = setTimeout(() => {
+            if (attempt !== attemptRef.current) return;
+            setPhase({ kind: "signed-in", session });
+          }, DONE_BEAT_MS);
         })
         .catch((err: unknown) => {
-          setPhase({
-            kind: "error",
-            message: err instanceof Error ? err.message : failMessage,
-          });
+          if (attempt !== attemptRef.current) return;
+          // A canceled flow rejects by design (main closed its loopback):
+          // land back on the pick screen quietly, not on the error screen.
+          setPhase((prev) =>
+            prev.kind === "signing-in" && prev.canceling
+              ? { kind: "anon" }
+              : {
+                  kind: "error",
+                  method,
+                  message: err instanceof Error ? err.message : failMessage,
+                },
+          );
         });
     },
     [bridge, workspaceId],
@@ -117,7 +166,21 @@ export function SignInGate(props: SignInGateProps): ReactNode {
     startSignIn("local", CHANNELS.authSignIn, "sign-in failed");
   }, [startSignIn]);
 
-  const retry = useCallback(() => {
+  // The design's Cancel affordances (wallet-waiting "Cancel", Google
+  // "Cancel — use a different method"). Flag the phase first so the pending
+  // promise's rejection is treated as a quiet return, then ask main to
+  // close the loopback. Even if the IPC call itself failed, the flag makes
+  // the eventual timeout rejection land on `anon` instead of the error view.
+  const cancelSignIn = useCallback(() => {
+    setPhase((prev) =>
+      prev.kind === "signing-in" ? { ...prev, canceling: true } : prev,
+    );
+    bridge.ipc.invoke<void>(CHANNELS.authCancelSignIn, {}).catch(() => {
+      /* the canceling flag already routes the rejection to `anon` */
+    });
+  }, [bridge]);
+
+  const backToPick = useCallback(() => {
     setPhase({ kind: "anon" });
   }, []);
 
@@ -135,6 +198,7 @@ export function SignInGate(props: SignInGateProps): ReactNode {
       .catch((err: unknown) => {
         setPhase({
           kind: "error",
+          method: null,
           message: err instanceof Error ? err.message : "sign-out failed",
         });
       });
@@ -161,13 +225,49 @@ export function SignInGate(props: SignInGateProps): ReactNode {
       case "signing-in":
         return (
           <SignInChrome>
-            <WaitView {...WAIT_COPY[phase.method]} />
+            <WaitView
+              {...WAIT_COPY[phase.method]}
+              cancel={
+                phase.method === "local"
+                  ? undefined
+                  : {
+                      style: phase.method === "google" ? "backlink" : "button",
+                      label:
+                        phase.method === "google"
+                          ? "Cancel — use a different method"
+                          : "Cancel",
+                      disabled: phase.canceling,
+                      onCancel: cancelSignIn,
+                    }
+              }
+            />
           </SignInChrome>
         );
       case "error":
         return (
           <SignInChrome>
-            <ErrorView message={phase.message} onRetry={retry} />
+            {phase.method === "wallet" ? (
+              <WalletErrorView
+                message={phase.message}
+                onRetry={signInWithWallet}
+                onBack={backToPick}
+              />
+            ) : phase.method === "google" ? (
+              <GoogleErrorView
+                message={phase.message}
+                onRetry={signInWithGoogle}
+                onWalletInstead={signInWithWallet}
+                onBack={backToPick}
+              />
+            ) : (
+              <ErrorView message={phase.message} onRetry={backToPick} />
+            )}
+          </SignInChrome>
+        );
+      case "done":
+        return (
+          <SignInChrome>
+            <DoneView />
           </SignInChrome>
         );
       case "signed-in":
@@ -178,7 +278,8 @@ export function SignInGate(props: SignInGateProps): ReactNode {
     signInWithWallet,
     signInWithGoogle,
     signInLocally,
-    retry,
+    cancelSignIn,
+    backToPick,
     signOut,
     children,
   ]);
@@ -303,8 +404,10 @@ const WAIT_COPY: Record<SignInMethod, { title: string; subtitle: string }> = {
       "Approve the signature request in your wallet, then come back here.",
   },
   google: {
-    title: "Opening your browser…",
-    subtitle: "Finish signing in with Google in the browser window.",
+    // Design `google` view copy — the browser window is already opening
+    // when this renders (main fires /start + openExternal immediately).
+    title: "Authorizing with Google…",
+    subtitle: "Finish signing in from the browser window that just opened.",
   },
   local: {
     title: "Setting up your workspace…",
@@ -312,25 +415,163 @@ const WAIT_COPY: Record<SignInMethod, { title: string; subtitle: string }> = {
   },
 };
 
+/** Cancel affordance for a waiting view — the design's connecting-state
+ * ghost "Cancel" (wallet) and the Google backlink variant. */
+interface WaitCancel {
+  readonly style: "button" | "backlink";
+  readonly label: string;
+  readonly disabled: boolean;
+  onCancel(): void;
+}
+
 function WaitView({
   title,
   subtitle,
+  cancel,
 }: {
   title: string;
   subtitle?: string;
+  cancel?: WaitCancel;
 }): ReactElement {
   return (
     <div className="loginx-wait" data-testid="sign-in-waiting">
       <Spinner />
       <h1 className="loginx-title">{title}</h1>
       {subtitle !== undefined && <p className="loginx-sub">{subtitle}</p>}
+      {cancel !== undefined && (
+        <button
+          type="button"
+          className={
+            cancel.style === "backlink"
+              ? "loginx-backlink"
+              : "loginx-btn loginx-btn--ghost loginx-btn--sm"
+          }
+          onClick={cancel.onCancel}
+          disabled={cancel.disabled}
+          data-testid="sign-in-cancel-button"
+        >
+          {cancel.label}
+        </button>
+      )}
     </div>
   );
 }
 
 // ---------------------------------------------------------------------------
-// Error view — honest failure copy + a retry back to the pick screen.
+// Failure views — the design's method-specific werr/gerr states, plus the
+// generic fallback for session-lookup/local failures. The raw error detail
+// stays visible (mono line) — honest detail under design copy.
 // ---------------------------------------------------------------------------
+
+function WalletErrorView({
+  message,
+  onRetry,
+  onBack,
+}: {
+  message: string;
+  onRetry(): void;
+  onBack(): void;
+}): ReactElement {
+  return (
+    <div className="loginx-error">
+      <span className="loginx-error__badge" aria-hidden="true">
+        <AlertGlyph />
+      </span>
+      <header className="loginx-head">
+        <h1 className="loginx-title">No response from your wallet</h1>
+        <p className="loginx-sub">
+          The request was dismissed or timed out before your wallet approved it.
+          Nothing was signed.
+        </p>
+      </header>
+      <p
+        className="loginx-error__message"
+        role="alert"
+        data-testid="sign-in-error"
+      >
+        {message}
+      </p>
+      <div className="loginx-row">
+        <button
+          type="button"
+          className="loginx-btn"
+          onClick={onRetry}
+          data-testid="sign-in-retry-button"
+        >
+          Try again
+        </button>
+      </div>
+      <button
+        type="button"
+        className="loginx-backlink"
+        onClick={onBack}
+        data-testid="sign-in-back-button"
+      >
+        Back to sign-in
+      </button>
+    </div>
+  );
+}
+
+function GoogleErrorView({
+  message,
+  onRetry,
+  onWalletInstead,
+  onBack,
+}: {
+  message: string;
+  onRetry(): void;
+  onWalletInstead(): void;
+  onBack(): void;
+}): ReactElement {
+  return (
+    <div className="loginx-error">
+      <span className="loginx-error__badge" aria-hidden="true">
+        <AlertGlyph />
+      </span>
+      <header className="loginx-head">
+        <h1 className="loginx-title">Google didn&rsquo;t finish</h1>
+        <p className="loginx-sub">
+          The browser window closed or timed out before confirming. No account
+          was linked.
+        </p>
+      </header>
+      <p
+        className="loginx-error__message"
+        role="alert"
+        data-testid="sign-in-error"
+      >
+        {message}
+      </p>
+      <div className="loginx-row">
+        <button
+          type="button"
+          className="loginx-btn loginx-btn--ghost"
+          onClick={onWalletInstead}
+          data-testid="sign-in-wallet-fallback-button"
+        >
+          Use a wallet instead
+        </button>
+        <button
+          type="button"
+          className="loginx-btn"
+          onClick={onRetry}
+          data-testid="sign-in-retry-button"
+        >
+          Try again
+        </button>
+      </div>
+      <button
+        type="button"
+        className="loginx-backlink"
+        onClick={onBack}
+        data-testid="sign-in-back-button"
+      >
+        Back to sign-in
+      </button>
+    </div>
+  );
+}
 
 function ErrorView({
   message,
@@ -365,6 +606,33 @@ function ErrorView({
       >
         Try again
       </button>
+    </div>
+  );
+}
+
+// ---------------------------------------------------------------------------
+// Done beat — the design's post-sign-in confirmation shown briefly before
+// the workspace mounts (jade check, then auto-advance).
+// ---------------------------------------------------------------------------
+
+function DoneView(): ReactElement {
+  return (
+    <div className="loginx-wait" data-testid="sign-in-done">
+      <span className="loginx-done__badge" aria-hidden="true">
+        <svg
+          viewBox="0 0 24 24"
+          fill="none"
+          stroke="currentColor"
+          strokeWidth="1.7"
+          strokeLinecap="round"
+          strokeLinejoin="round"
+          focusable="false"
+        >
+          <path d="M5 12l5 5L20 7" />
+        </svg>
+      </span>
+      <h1 className="loginx-title">Signed in</h1>
+      <p className="loginx-sub">Opening your workspace…</p>
     </div>
   );
 }

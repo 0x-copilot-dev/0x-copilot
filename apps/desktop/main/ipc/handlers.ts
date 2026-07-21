@@ -49,6 +49,11 @@ export interface AuthHandlers {
   signInWithGoogle(workspaceId: string): Promise<RendererSession>;
   /** "Connect wallet" (SIWE) — system browser + loopback handoff. */
   signInWithWallet(workspaceId: string): Promise<RendererSession>;
+  /**
+   * Cancel the pending system-browser sign-in (wallet or Google). Closes
+   * the armed loopback so the pending sign-in promise rejects. Idempotent.
+   */
+  cancelPendingSignIn(): void;
   /** "Link Google" (PRD FR-L2) — authenticated system-browser OAuth link. */
   linkGoogle(workspaceId: string): Promise<AuthLinkOutcome>;
   /** "Link a wallet" (PRD FR-L1/M1) — authenticated system-browser SIWE link. */
@@ -268,6 +273,15 @@ export function registerIpcHandlers(deps: RegisterHandlersDeps): () => void {
       return auth.signInWithWallet(params.workspaceId);
     });
 
+    // Cancel the pending system-browser sign-in (wallet or Google). The
+    // renderer's Cancel affordances fire this; the pending sign-in channel
+    // then rejects (its loopback closed), which the renderer treats as a
+    // quiet return to the pick screen.
+    ipcMain.handle(CHANNELS.authCancelSignIn, async (_event, raw: unknown) => {
+      parseOrThrow(CHANNELS.authCancelSignIn, EmptyParamsSchema, raw ?? {});
+      auth.cancelPendingSignIn();
+    });
+
     // Account-linking (PRD FR-L2): authenticated Google LINK. Returns only a
     // renderer-safe outcome — the bearer never crosses IPC.
     ipcMain.handle(CHANNELS.authLinkGoogle, async (_event, raw: unknown) => {
@@ -417,6 +431,7 @@ export function registerIpcHandlers(deps: RegisterHandlersDeps): () => void {
         CHANNELS.authSignIn,
         CHANNELS.authSignInGoogle,
         CHANNELS.authSignInWallet,
+        CHANNELS.authCancelSignIn,
         CHANNELS.authSignOut,
         CHANNELS.authRefresh,
       );

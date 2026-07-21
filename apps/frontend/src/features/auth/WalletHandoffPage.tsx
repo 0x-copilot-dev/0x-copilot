@@ -139,8 +139,8 @@ export function WalletHandoffPage(props: WalletHandoffPageProps): ReactElement {
 
   const heading = isLink ? "Link your wallet" : "Sign in with your wallet";
   const instruction = isLink
-    ? "Approve the connection and signature in your wallet. You’ll be sent back to the Atlas app to finish linking."
-    : "Approve the connection and signature in your wallet. You’ll be sent back to the Atlas app when it’s done.";
+    ? "Approve the connection and signature in your wallet. You’ll be sent back to the 0xCopilot app to finish linking."
+    : "Approve the connection and signature in your wallet. You’ll be sent back to the 0xCopilot app when it’s done.";
   const doneText = isLink
     ? "Wallet signed — return to the app to finish linking."
     : "You’re signed in — return to the app.";
@@ -157,7 +157,7 @@ export function WalletHandoffPage(props: WalletHandoffPageProps): ReactElement {
               data-testid="wallet-page-bad-handoff"
             >
               This page was opened without a valid app handoff target. Return to
-              the Atlas app and start wallet sign-in again.
+              the 0xCopilot app and start wallet sign-in again.
             </p>
           ) : done ? (
             <p data-testid="wallet-page-done">{doneText}</p>
