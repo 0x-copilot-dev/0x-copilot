@@ -47,14 +47,13 @@ def database_url() -> str:
 @pytest.fixture(scope="module")
 def pool(database_url: str) -> Iterator[Any]:
     pytest.importorskip("psycopg")
-    import yoyo
 
+    from backend_app.db.migrate import MigrationRunner
     from backend_app.store import PostgresConnectionPool
 
-    backend = yoyo.get_backend(database_url)
-    migrations = yoyo.read_migrations(str(MIGRATIONS_DIR))
-    with backend.lock():
-        backend.apply_migrations(backend.to_apply(migrations))
+    # Through the real runner (psycopg3 driver, same path production uses) —
+    # never a bare yoyo.get_backend, which would pull in psycopg2.
+    MigrationRunner.apply(database_url)
 
     # The saga is tested in the CURRENT deployment posture: RLS dormant
     # (staged do_rls.sql not applied). The RLS-enforced caveat gets its own

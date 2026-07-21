@@ -147,3 +147,28 @@ class TestRenderManifest:
 # Sanity: the production migrations dir resolves to a real directory.
 def test_production_migrations_dir_exists() -> None:
     assert MIGRATIONS_DIR.is_dir(), MIGRATIONS_DIR
+
+
+class TestYoyoUrlDriverPinning:
+    """`_yoyo_url` must force psycopg3 so yoyo never imports psycopg2 (which
+    this repo does not install). Regression guard for the live-Postgres
+    gate + every production migration that receives a bare postgresql:// URL."""
+
+    def test_bare_postgresql_scheme_is_pinned_to_psycopg3(self) -> None:
+        assert (
+            MigrationRunner._yoyo_url("postgresql://u:p@h:5432/db")
+            == "postgresql+psycopg://u:p@h:5432/db"
+        )
+
+    def test_short_postgres_scheme_is_pinned_too(self) -> None:
+        assert (
+            MigrationRunner._yoyo_url("postgres://u@h/db")
+            == "postgresql+psycopg://u@h/db"
+        )
+
+    def test_already_pinned_url_is_unchanged(self) -> None:
+        url = "postgresql+psycopg://u@h/db"
+        assert MigrationRunner._yoyo_url(url) == url
+
+    def test_non_postgres_scheme_is_left_alone(self) -> None:
+        assert MigrationRunner._yoyo_url("sqlite:///tmp/x.db") == "sqlite:///tmp/x.db"
