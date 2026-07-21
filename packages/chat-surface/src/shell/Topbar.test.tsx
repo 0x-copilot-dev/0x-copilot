@@ -89,4 +89,51 @@ describe("Topbar", () => {
       screen.getByTestId("command-palette-trigger").click();
     }).not.toThrow();
   });
+
+  // FTUE P4 — additive `walletChip` slot.
+  it("renders the walletChip between the title group and the command trigger when supplied", () => {
+    render(
+      <Topbar
+        activeDestination="chats"
+        walletChip={<span data-testid="wc">0x7f3C…a92C</span>}
+      />,
+    );
+    const slot = screen.getByTestId("topbar-wallet-chip");
+    expect(slot).toBeInTheDocument();
+    expect(screen.getByTestId("wc")).toHaveTextContent("0x7f3C…a92C");
+
+    // DOM order: title group → wallet chip → command trigger.
+    const titleGroup = screen.getByTestId("topbar-title-group");
+    const trigger = screen.getByTestId("command-palette-trigger");
+    expect(
+      titleGroup.compareDocumentPosition(slot) &
+        Node.DOCUMENT_POSITION_FOLLOWING,
+    ).toBeTruthy();
+    expect(
+      slot.compareDocumentPosition(trigger) & Node.DOCUMENT_POSITION_FOLLOWING,
+    ).toBeTruthy();
+  });
+
+  it("renders NO wallet-chip slot when walletChip is absent (layout unchanged)", () => {
+    render(<Topbar activeDestination="chats" />);
+    expect(screen.queryByTestId("topbar-wallet-chip")).toBeNull();
+    // The row still carries exactly the pre-slot structure: the sizing
+    // <style>, the title group, and the command trigger — no extra node.
+    const bar = screen.getByRole("banner");
+    expect(bar.children).toHaveLength(3);
+    expect(screen.getByTestId("topbar-title-group")).toBeInTheDocument();
+    expect(screen.getByTestId("command-palette-trigger")).toBeInTheDocument();
+  });
+
+  it("adds exactly one node (the chip wrapper) when walletChip is supplied", () => {
+    const { rerender } = render(<Topbar activeDestination="chats" />);
+    expect(screen.getByRole("banner").children).toHaveLength(3);
+    rerender(
+      <Topbar
+        activeDestination="chats"
+        walletChip={<span data-testid="wc">chip</span>}
+      />,
+    );
+    expect(screen.getByRole("banner").children).toHaveLength(4);
+  });
 });

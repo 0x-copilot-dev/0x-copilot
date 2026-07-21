@@ -98,6 +98,13 @@ export interface AssistantComposerProps {
    * PR 3.4 — slot for the per-chat connectors trigger + its popover.
    */
   connectorsTrigger?: ReactNode;
+  /**
+   * FTUE P4 — additive slot for the connector-aware Tools trigger + its
+   * popover, rendered next to `connectorsTrigger` in the bottom bar. The host
+   * owns the DOM-bound portal (the package has no `document`). Additive: when
+   * unset the bottom bar is byte-identical to before.
+   */
+  toolsTrigger?: ReactNode;
   /** PR 8.0.1 — display name of the active model, surfaced in the
    *  composer footer hint row. */
   activeModelLabel?: string;
@@ -196,6 +203,7 @@ export const AssistantComposer = forwardRef<
     onRemoveSkill,
     onClearSkills,
     connectorsTrigger,
+    toolsTrigger,
     // activeModelLabel is still typed on the prop surface (callers haven't
     // been migrated) but the composer no longer surfaces it — the model
     // name lives in <ModelPill> only (Phase 9 dedup).
@@ -434,6 +442,7 @@ export const AssistantComposer = forwardRef<
               })}
             </div>
             {connectorsTrigger ?? null}
+            {toolsTrigger ?? null}
             <button
               type="button"
               className="aui-icon-button atlas-composer-mic"
