@@ -73,6 +73,23 @@ vi.mock("../features/connectors/ConnectorsGateway", () => ({
 vi.mock("../features/team/TeamGateway", () => ({
   TeamGateway: () => <div data-testid="team-stub" />,
 }));
+// PRD-05 — the real Run cockpit binder, stubbed so the flag-dispatch tests
+// assert WHICH surface the `run` slug mounts (legacy ChatScreen vs RunRoute)
+// without pulling the full RunDestination/ThreadCanvas tree. Lazy-imported in
+// App.tsx; vi.mock intercepts the dynamic import too.
+vi.mock("../features/run/RunRoute", () => ({
+  RunRoute: (props: Record<string, unknown>) => {
+    captured.run = props;
+    return <div data-testid="run-route-stub" />;
+  },
+}));
+// PRD-05 — the `runCockpitWeb` flag, mocked so the dispatch tests control it
+// deterministically (jsdom's localStorage is a no-op here). Default OFF; tests
+// flip it on via `vi.mocked(isRunCockpitWebEnabled).mockReturnValue(true)`.
+vi.mock("./featureFlags", () => ({
+  RUN_COCKPIT_WEB_FLAG_KEY: "enterprise.flags.run-cockpit-web",
+  isRunCockpitWebEnabled: vi.fn(() => false),
+}));
 vi.mock("../features/palette/PaletteHost", () => ({
   PaletteHost: () => null,
 }));
@@ -122,6 +139,7 @@ vi.mock("@0x-copilot/chat-surface", async (importOriginal) => {
 
 // Imported after the mocks so the mocked module graph is in force.
 import { CopilotApp } from "./App";
+import { isRunCockpitWebEnabled } from "./featureFlags";
 
 const IDENTITY = { orgId: "org_test", userId: "user_test" };
 
@@ -138,6 +156,10 @@ beforeEach(() => {
   for (const key of Object.keys(captured)) {
     delete captured[key];
   }
+  // PRD-05 — the `runCockpitWeb` flag is mocked (jsdom's localStorage here is a
+  // no-op stub); default it OFF so the legacy dispatch is the baseline. Tests
+  // opt into the cockpit by overriding the return value.
+  vi.mocked(isRunCockpitWebEnabled).mockReturnValue(false);
   seedLocation("/");
 });
 
@@ -365,5 +387,44 @@ describe("folded deep-link redirects (FR-4.31)", () => {
     });
     expect(window.location.hash).toBe("#privacy-data");
     expect(await screen.findByTestId("settings-stub")).toBeInTheDocument();
+  });
+});
+
+// ===========================================================================
+// PRD-05 — `runCockpitWeb` flag gates the `run` slug's surface
+// ===========================================================================
+
+describe("run-cockpit flag dispatch (PRD-05)", () => {
+  it("flag OFF (default) renders the legacy ChatScreen under /", async () => {
+    renderAt("/");
+    // AC2 — the legacy path is unchanged: `run` mounts ChatScreen, not RunRoute.
+    expect(await screen.findByTestId("run-cockpit")).toBeInTheDocument();
+    expect(screen.queryByTestId("run-route-stub")).toBeNull();
+  });
+
+  it("flag ON mounts the real RunDestination binder (RunRoute) under /", async () => {
+    vi.mocked(isRunCockpitWebEnabled).mockReturnValue(true);
+    renderAt("/");
+    // AC3 (dispatch half) — the flag swaps the legacy ChatScreen for RunRoute.
+    expect(await screen.findByTestId("run-route-stub")).toBeInTheDocument();
+    expect(screen.queryByTestId("run-cockpit")).toBeNull();
+    // The binder receives the model-settings navigation seam.
+    expect(typeof captured.run.onOpenModelSettings).toBe("function");
+  });
+
+  it("flag ON binder onOpenModelSettings navigates to Settings → Provider keys", async () => {
+    vi.mocked(isRunCockpitWebEnabled).mockReturnValue(true);
+    renderAt("/");
+    await screen.findByTestId("run-route-stub");
+
+    const onOpenModelSettings = captured.run.onOpenModelSettings as () => void;
+    act(() => {
+      onOpenModelSettings();
+    });
+
+    await waitFor(() => {
+      expect(window.location.pathname).toBe("/settings");
+    });
+    expect(window.location.hash).toBe("#provider-keys");
   });
 });
