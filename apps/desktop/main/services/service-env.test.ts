@@ -188,6 +188,54 @@ describe("buildServiceEnv(ai-backend)", () => {
   });
 });
 
+describe("buildServiceEnv(ai-backend) with storeBackendOverride", () => {
+  it("forces the file store even when the env resolves to Postgres", () => {
+    // Env opts OUT of file, but the supervisor has resolved the effective
+    // backend to file (post-migration) — the override must win.
+    const env = buildServiceEnv("ai-backend", {
+      ...inputs({ [AI_FILE_STORE_V1_FLAG]: "0" }),
+      storeBackendOverride: "file",
+    });
+    expect(env.RUNTIME_STORE_BACKEND).toBe("file");
+    expect(env.RUNTIME_FILE_STORE_ROOT).toBe(
+      join(USER_DATA_DIR, "agent-data", "v1"),
+    );
+    expect(env.DATABASE_URL).toBeUndefined();
+    expect(env.RUNTIME_DATABASE_URL).toBeUndefined();
+  });
+
+  it("forces the Postgres store (fail-safe fallback) even when the env resolves to file", () => {
+    // Env resolves to file (the default), but the migration could not be
+    // trusted, so the supervisor forces Postgres for this boot.
+    const env = buildServiceEnv("ai-backend", {
+      ...inputs({ [AI_FILE_STORE_V1_FLAG]: "1" }),
+      storeBackendOverride: "postgres",
+    });
+    expect(env.RUNTIME_STORE_BACKEND).toBe("postgres");
+    expect(env.DATABASE_URL).toContain("/atlas_ai");
+    expect(env.RUNTIME_DATABASE_URL).toContain("postgresql+psycopg://");
+    expect(env.RUNTIME_MIGRATIONS_AUTO_APPLY).toBe("false");
+    expect(env.RUNTIME_FILE_STORE_ROOT).toBeUndefined();
+  });
+
+  it("is ignored for non-ai-backend services", () => {
+    const env = buildServiceEnv("backend", {
+      ...inputs(),
+      storeBackendOverride: "postgres",
+    });
+    expect(env.DATABASE_URL).toContain("/atlas_backend");
+    expect(env.RUNTIME_STORE_BACKEND).toBeUndefined();
+  });
+
+  it("undefined preserves the env-resolved behaviour", () => {
+    const env = buildServiceEnv("ai-backend", {
+      ...inputs(),
+      storeBackendOverride: undefined,
+    });
+    expect(env.RUNTIME_STORE_BACKEND).toBe("file");
+  });
+});
+
 describe("resolveAiStoreBackend", () => {
   it("defaults to the file store for unset/empty/unrecognized values", () => {
     expect(resolveAiStoreBackend({})).toBe("file");
