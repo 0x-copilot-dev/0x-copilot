@@ -11,7 +11,7 @@ src/layouts/Base.astro       head, fonts, favicons
 src/styles/site.css          one dark design system, shared by both pages
 public/media/                app-run.png (real Run-cockpit shot) + og-cover.png (social)
 public/favicon.svg           turbine mark
-public/CNAME.example         custom domain — rename to CNAME once DNS is live
+public/CNAME                 custom domain — 0xcopilot.tech (shipped into dist/)
 ```
 
 ## Local
@@ -23,8 +23,9 @@ npm run build --workspace @0x-copilot/website   # → apps/website/dist
 
 ## Deploying
 
-Live at **https://0x-copilot-dev.github.io/** (org Pages repo
-[`0x-copilot-dev.github.io`](https://github.com/0x-copilot-dev/0x-copilot-dev.github.io)).
+Live at **https://0xcopilot.tech/** — custom domain in front of the org Pages repo
+[`0x-copilot-dev.github.io`](https://github.com/0x-copilot-dev/0x-copilot-dev.github.io)
+(the `0x-copilot-dev.github.io` URL 301-redirects to the apex).
 
 Push to `main` with anything under `apps/website/**` changed.
 [`deploy-website.yml`](../../.github/workflows/deploy-website.yml) builds with
@@ -36,13 +37,14 @@ that repo. Path-filtered, so product changes never trigger a site deploy.
 Hand-authored links are relative (`./token.html`, `./media/…`) so they resolve
 under both a root and a subpath deploy.
 
-### Custom domain (when DNS is ready)
+### Custom domain
 
-DNS for `0xcopilot.tech` → the four GitHub Pages `A` records on `@`, plus a
-`CNAME` on `www` → `0x-copilot-dev.github.io.`. Then rename
-`public/CNAME.example` → `public/CNAME`. **Never publish a CNAME before DNS
-resolves** — GitHub redirects the org URL to the custom domain and the site
-404s until it does.
+`0xcopilot.tech` is live. DNS at GoDaddy: the four GitHub Pages `A` records
+(`185.199.108–111.153`) and four `AAAA` (`2606:50c0:8000–8003::153`) on `@`,
+plus a `CNAME` on `www` → `0x-copilot-dev.github.io.`. `public/CNAME` holds the
+apex and is copied into `dist/`, so every deploy re-asserts the custom domain on
+the force-pushed Pages branch. **Don't delete `public/CNAME`** — GitHub drops the
+custom domain (and its HTTPS cert) on the next force-push without it.
 
 ## Design — dark / sky / turbine
 
