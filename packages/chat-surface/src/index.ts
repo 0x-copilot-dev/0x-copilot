@@ -1081,6 +1081,7 @@ export {
   ChatsArchive,
   type ChatsArchiveProps,
   CHATS_SECTION_ORDER,
+  CHATS_LEAD_COPY,
   type ChatsSectionKey,
   type ChatsDestinationProps,
 } from "./destinations/chats";
@@ -1304,6 +1305,23 @@ export {
   type RunStatusPresentation,
 } from "./shell/statusTone";
 // === end Frontend parity v3 (PRD-B) ===
+
+// === Frontend parity v3 (PRD-G) — list-surface primitives ===
+// The design row anatomy defined once — a `.pg-lead` intro, a `.sect-h` mono
+// section header, one bordered `.rowlist` card per group, and the `.lrow` row
+// (leading icon + title/chip/sub + mono meta) — so Activity / Chats / Projects
+// compose the same primitives and can't drift. See PRD-G-destination-parity.md.
+export {
+  PageLead,
+  SectionHeader,
+  RowList,
+  Row,
+  type PageLeadProps,
+  type SectionHeaderProps,
+  type RowListProps,
+  type RowProps,
+} from "./destinations/_shared";
+// === end Frontend parity v3 (PRD-G) ===
 
 // === Frontend parity v3 (PRD-D) — ⌘K static command launcher ===
 // The 13 v3 design commands shown on an empty query and merged above live

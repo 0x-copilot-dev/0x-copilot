@@ -20,12 +20,7 @@
 // The archive is pre-bucketed by the host binder from
 // `/v1/agent/conversations` (incl. archived) — see api-types `chats.ts`.
 
-import type {
-  CSSProperties,
-  KeyboardEvent as ReactKeyboardEvent,
-  ReactElement,
-  ReactNode,
-} from "react";
+import type { CSSProperties, ReactElement, ReactNode } from "react";
 
 import type {
   ChatArchiveRow,
@@ -34,12 +29,22 @@ import type {
   ConversationId,
   SectionResult,
 } from "@0x-copilot/api-types";
+import { Button } from "@0x-copilot/design-system";
 
+import { Icon } from "../../icons/Icon";
+import { BrandMark } from "../../shell/BrandMark";
 import { EmptyState } from "../../shell/EmptyState";
-import { PageHeader } from "../../shell/PageHeader";
 import { StatusPill, type StatusTone } from "../../shell/StatusPill";
 import { statusTone as runStatusTone } from "../../shell/statusTone";
 import { formatRelativeTime } from "../../util/time";
+import { PageLead } from "../_shared/PageLead";
+import { Row } from "../_shared/Row";
+import { RowList } from "../_shared/RowList";
+import { SectionHeader } from "../_shared/SectionHeader";
+
+/** The `.pg-lead` intro copy for the Chats surface. */
+export const CHATS_LEAD_COPY =
+  "Every conversation with the agent — each chat is a run you can reopen, continue, or archive.";
 
 // ===========================================================================
 // Section order (DESIGN-SPEC §3 — Chats: pinned / recent / archived)
@@ -54,7 +59,7 @@ export type ChatsSectionKey = (typeof CHATS_SECTION_ORDER)[number];
 const SECTION_HEADINGS: Readonly<Record<ChatsSectionKey, string>> = {
   pinned: "Pinned",
   recent: "Recent",
-  archived: "Archived",
+  archived: "Archived · history",
 };
 
 // ===========================================================================
@@ -169,7 +174,7 @@ export function ChatsArchive(props: ChatsArchiveProps): ReactElement {
   // === Loading ==========================================================
   if (archive === null) {
     return (
-      <Frame state="loading" subtitle="Loading…" newChatAction={newChatAction}>
+      <Frame state="loading">
         <div
           role="status"
           aria-label="Loading chats"
@@ -188,7 +193,7 @@ export function ChatsArchive(props: ChatsArchiveProps): ReactElement {
   // === Error ============================================================
   if (archive.status === "error") {
     return (
-      <Frame state="error" newChatAction={newChatAction}>
+      <Frame state="error">
         <div role="alert" data-testid="chats-error">
           <EmptyState
             title="Couldn't load chats"
@@ -207,7 +212,7 @@ export function ChatsArchive(props: ChatsArchiveProps): ReactElement {
   // === Unavailable ======================================================
   if (archive.status === "unavailable") {
     return (
-      <Frame state="unavailable" newChatAction={newChatAction}>
+      <Frame state="unavailable">
         <EmptyState
           title="Chats unavailable"
           body={
@@ -221,23 +226,17 @@ export function ChatsArchive(props: ChatsArchiveProps): ReactElement {
 
   // === Ready / empty ====================================================
   const data = archive.data;
-  const sections: ReadonlyArray<{
-    readonly key: ChatsSectionKey;
-    readonly rows: ReadonlyArray<ChatArchiveRow>;
-  }> = CHATS_SECTION_ORDER.map((key) => ({
-    key,
-    rows: (data?.[key] ?? []).slice(),
-  }));
+  const sectionRows = (key: ChatsSectionKey): ReadonlyArray<ChatArchiveRow> =>
+    (data?.[key] ?? []).slice();
 
-  const total = sections.reduce((sum, s) => sum + s.rows.length, 0);
+  const total = CHATS_SECTION_ORDER.reduce(
+    (sum, key) => sum + sectionRows(key).length,
+    0,
+  );
 
   if (total === 0) {
     return (
-      <Frame
-        state="empty"
-        subtitle="No conversations yet"
-        newChatAction={newChatAction}
-      >
+      <Frame state="empty">
         <div data-testid="chats-empty">
           <EmptyState
             title="Start your first run"
@@ -249,51 +248,47 @@ export function ChatsArchive(props: ChatsArchiveProps): ReactElement {
     );
   }
 
-  const subtitle = `${total} conversation${total === 1 ? "" : "s"}`;
-
   return (
-    <Frame state="ready" subtitle={subtitle} newChatAction={newChatAction}>
+    <Frame state="ready">
       <div
         style={sectionsStyle}
         data-testid="chats-sections"
         data-state="ready"
       >
-        {sections.map(({ key, rows }) =>
-          rows.length === 0 ? null : (
+        {CHATS_SECTION_ORDER.map((key) => {
+          const rows = sectionRows(key);
+          // Pinned always renders — it hosts the "＋ New chat" primary. Recent
+          // and Archived hide when empty (FR-G.3).
+          if (key !== "pinned" && rows.length === 0) return null;
+          return (
             <ChatsSection
               key={key}
               sectionKey={key}
               rows={rows}
               onReopen={onReopen}
+              onNewChat={key === "pinned" ? onNewChat : undefined}
               now={nowMs}
             />
-          ),
-        )}
+          );
+        })}
       </div>
     </Frame>
   );
 }
 
 // ===========================================================================
-// Frame — shared `.pg` shell (root + container + PageHeader)
+// Frame — shared `.pg` shell (root + container + `.pg-lead`)
 // ===========================================================================
+//
+// The v3 design opens the surface with the `.pg-lead` intro — the rail already
+// labels the screen, so there is NO 22px page title (README decision 1).
 
 interface FrameProps {
   readonly state: "loading" | "error" | "unavailable" | "empty" | "ready";
-  readonly subtitle?: string;
-  readonly newChatAction: {
-    readonly label: string;
-    readonly onClick: () => void;
-  };
   readonly children: ReactNode;
 }
 
-function Frame({
-  state,
-  subtitle,
-  newChatAction,
-  children,
-}: FrameProps): ReactElement {
+function Frame({ state, children }: FrameProps): ReactElement {
   return (
     <section
       aria-label="Chats destination"
@@ -302,14 +297,35 @@ function Frame({
       style={rootStyle}
     >
       <div style={containerStyle}>
-        <PageHeader
-          title="Chats"
-          subtitle={subtitle}
-          primaryAction={newChatAction}
-        />
+        <PageLead data-testid="chats-lead">{CHATS_LEAD_COPY}</PageLead>
         {children}
       </div>
     </section>
+  );
+}
+
+// ===========================================================================
+// NewChatButton — the small primary "＋ New chat" on the Pinned header
+// ===========================================================================
+
+function NewChatButton({
+  onClick,
+}: {
+  readonly onClick: () => void;
+}): ReactElement {
+  return (
+    <Button
+      type="button"
+      variant="primary"
+      size="sm"
+      onClick={onClick}
+      data-testid="chats-new-chat"
+      aria-label="New chat"
+      style={{ display: "inline-flex", alignItems: "center", gap: 6 }}
+    >
+      <Icon name="plus" size={14} />
+      New chat
+    </Button>
   );
 }
 
@@ -321,6 +337,8 @@ interface ChatsSectionProps {
   readonly sectionKey: ChatsSectionKey;
   readonly rows: ReadonlyArray<ChatArchiveRow>;
   readonly onReopen: (id: ConversationId) => void;
+  /** When set (Pinned only), renders the small primary "＋ New chat". */
+  readonly onNewChat?: () => void;
   readonly now: number;
 }
 
@@ -330,36 +348,11 @@ const sectionWrapStyle: CSSProperties = {
   gap: 10,
 };
 
-const sectionHeaderRowStyle: CSSProperties = {
-  display: "flex",
-  alignItems: "center",
-  gap: 8,
-};
-
-// `.sect-h` — mono, uppercase (DESIGN-SPEC §3).
-const sectionHeadingStyle: CSSProperties = {
-  margin: 0,
-  fontFamily: "var(--font-mono)",
-  fontSize: "var(--font-size-2xs, 11px)",
-  fontWeight: 600,
-  letterSpacing: 0.6,
-  textTransform: "uppercase",
-  color: "var(--color-text-muted, #b4b4b8)",
-};
-
-const listStyle: CSSProperties = {
-  display: "flex",
-  flexDirection: "column",
-  gap: 6,
-  margin: 0,
-  padding: 0,
-  listStyle: "none",
-};
-
 function ChatsSection({
   sectionKey,
   rows,
   onReopen,
+  onNewChat,
   now,
 }: ChatsSectionProps): ReactElement {
   const headingId = `chats-section-${sectionKey}-heading`;
@@ -371,37 +364,49 @@ function ChatsSection({
       data-row-count={rows.length}
       style={sectionWrapStyle}
     >
-      <div style={sectionHeaderRowStyle}>
-        <h2 id={headingId} style={sectionHeadingStyle}>
-          {SECTION_HEADINGS[sectionKey]}
-        </h2>
-        <StatusPill status="muted" label={String(rows.length)} />
-      </div>
-      <ul
-        style={listStyle}
-        aria-label={SECTION_HEADINGS[sectionKey]}
-        data-testid={`chats-section-${sectionKey}-list`}
+      <SectionHeader
+        headingId={headingId}
+        count={
+          rows.length > 0 ? (
+            <StatusPill
+              status="muted"
+              label={String(rows.length)}
+              showDot={false}
+            />
+          ) : undefined
+        }
+        action={
+          onNewChat !== undefined ? (
+            <NewChatButton onClick={onNewChat} />
+          ) : undefined
+        }
       >
-        {rows.map((row) => (
-          <li key={row.id} style={{ listStyle: "none" }}>
+        {SECTION_HEADINGS[sectionKey]}
+      </SectionHeader>
+      {rows.length > 0 ? (
+        <RowList<ChatArchiveRow>
+          items={rows}
+          keyFor={(row) => row.id}
+          ariaLabel={SECTION_HEADINGS[sectionKey]}
+          data-testid={`chats-section-${sectionKey}-list`}
+          renderRow={(row) => (
             <ChatArchiveRowView row={row} onReopen={onReopen} now={now} />
-          </li>
-        ))}
-      </ul>
+          )}
+        />
+      ) : null}
     </section>
   );
 }
 
 // ===========================================================================
-// ChatArchiveRowView — one conversation row (FR-4.6)
+// ChatArchiveRowView — one conversation row (FR-4.6 · FR-G.3)
 // ===========================================================================
 //
-// The whole row is the reopen target: `role="button"`, focusable, and
-// Enter/Space activate (DESIGN-SPEC §9 keyboard). We use an explicit
-// keydown handler (not a native <button>) so Enter/Space fire the same
-// path in jsdom and the browser, and so the rich row content (title,
-// chip, preview, mono model + time) composes without nested-interactive
-// concerns.
+// Built on the shared `.lrow` <Row>: a leading icon (live → brand mark in
+// success, else the chats glyph), the title + status chip, a body-font
+// sub-line ("preview · <mono>model</mono>", rendered gracefully when either is
+// empty), and a mono time. The whole row reopens the conversation on click and
+// Enter/Space (Row's activatable mode).
 
 interface ChatArchiveRowViewProps {
   readonly row: ChatArchiveRow;
@@ -409,125 +414,93 @@ interface ChatArchiveRowViewProps {
   readonly now: number;
 }
 
-const rowStyle: CSSProperties = {
-  display: "flex",
+// Live-run icon slot tint — the brand turbine reads as "live" in success.
+const liveIconStyle: CSSProperties = {
+  display: "inline-flex",
   alignItems: "center",
-  gap: 12,
-  padding: "10px 12px",
-  borderRadius: "var(--radius-sm, 6px)",
-  border: "1px solid var(--color-border, #232325)",
-  backgroundColor: "var(--color-bg-elevated, #161617)",
-  color: "var(--color-text, #ededee)",
-  cursor: "pointer",
-  textAlign: "left",
-  width: "100%",
-  boxSizing: "border-box",
+  justifyContent: "center",
+  color: "var(--color-success)",
 };
 
-const rowMainStyle: CSSProperties = {
-  display: "flex",
-  flexDirection: "column",
-  gap: 4,
-  flex: 1,
-  minWidth: 0,
-};
-
-const rowTitleRowStyle: CSSProperties = {
-  display: "flex",
-  alignItems: "center",
-  gap: 8,
-  minWidth: 0,
-};
-
-const rowTitleStyle: CSSProperties = {
-  fontSize: "var(--font-size-sm, 13px)",
-  fontWeight: 600,
-  color: "var(--color-text, #ededee)",
-  overflow: "hidden",
-  textOverflow: "ellipsis",
-  whiteSpace: "nowrap",
-  minWidth: 0,
-};
-
-const rowPreviewStyle: CSSProperties = {
-  fontSize: "var(--font-size-xs, 12px)",
-  color: "var(--color-text-muted, #b4b4b8)",
-  overflow: "hidden",
-  textOverflow: "ellipsis",
-  whiteSpace: "nowrap",
-};
-
-const rowMetaStyle: CSSProperties = {
-  display: "flex",
-  flexDirection: "column",
-  alignItems: "flex-end",
-  gap: 4,
-  flexShrink: 0,
-};
-
-const monoStyle: CSSProperties = {
+// Inline mono model marker within the body-font sub-line.
+const modelMonoStyle: CSSProperties = {
   fontFamily: "var(--font-mono)",
-  fontSize: "var(--font-size-2xs, 11px)",
-  color: "var(--color-text-muted, #b4b4b8)",
+  color: "var(--color-text-muted)",
   whiteSpace: "nowrap",
 };
+
+// Build the "preview · <mono>model</mono>" sub-line, degrading to whichever
+// parts are present. Returns undefined when both are empty (title + chip + time
+// only) so the row renders gracefully before PRD-H populates the metadata.
+function buildSubLine(preview: string, model: string): ReactNode {
+  const hasPreview = preview.length > 0;
+  const hasModel = model.length > 0;
+  if (!hasPreview && !hasModel) return undefined;
+  return (
+    <>
+      {hasPreview ? (
+        <span data-testid="chat-archive-row-preview">{preview}</span>
+      ) : null}
+      {hasPreview && hasModel ? " · " : null}
+      {hasModel ? (
+        <span style={modelMonoStyle} data-testid="chat-archive-row-model">
+          {model}
+        </span>
+      ) : null}
+    </>
+  );
+}
 
 function ChatArchiveRowView({
   row,
   onReopen,
   now,
 }: ChatArchiveRowViewProps): ReactElement {
-  const reopen = (): void => onReopen(row.id);
-  const onKeyDown = (event: ReactKeyboardEvent<HTMLDivElement>): void => {
-    if (
-      event.key === "Enter" ||
-      event.key === " " ||
-      event.key === "Spacebar"
-    ) {
-      // Space would otherwise scroll the page; Enter is a no-op default.
-      event.preventDefault();
-      reopen();
-    }
-  };
+  const isLive = row.status === "running";
+  const presentation = runStatusTone(row.status);
+
+  const icon = isLive ? (
+    <span
+      style={liveIconStyle}
+      data-testid="chat-archive-row-icon"
+      data-live="true"
+    >
+      <BrandMark size={18} />
+    </span>
+  ) : (
+    <span data-testid="chat-archive-row-icon" data-live="false">
+      <Icon name="chats" size={18} />
+    </span>
+  );
+
+  const chip = (
+    <StatusPill
+      status={statusTone(row.status)}
+      label={statusLabel(row.status)}
+      showDot={presentation.showDot}
+    />
+  );
+
+  const meta = (
+    <span data-testid="chat-archive-row-time">
+      {formatRelativeTime(row.updated_at, now)}
+    </span>
+  );
 
   return (
-    <div
-      role="button"
-      tabIndex={0}
-      aria-label={`Reopen ${row.title}`}
+    <Row
       data-testid="chat-archive-row"
       data-conversation-id={row.id}
       data-status={row.status}
       data-pinned={row.pinned ? "true" : "false"}
-      style={rowStyle}
-      onClick={reopen}
-      onKeyDown={onKeyDown}
-    >
-      <div style={rowMainStyle}>
-        <div style={rowTitleRowStyle}>
-          <span style={rowTitleStyle} data-testid="chat-archive-row-title">
-            {row.title}
-          </span>
-          <StatusPill
-            status={statusTone(row.status)}
-            label={statusLabel(row.status)}
-          />
-        </div>
-        <div style={rowPreviewStyle} data-testid="chat-archive-row-preview">
-          {row.preview}
-        </div>
-      </div>
-      <div style={rowMetaStyle}>
-        {row.model.length > 0 ? (
-          <span style={monoStyle} data-testid="chat-archive-row-model">
-            {row.model}
-          </span>
-        ) : null}
-        <span style={monoStyle} data-testid="chat-archive-row-time">
-          {formatRelativeTime(row.updated_at, now)}
-        </span>
-      </div>
-    </div>
+      icon={icon}
+      title={<span data-testid="chat-archive-row-title">{row.title}</span>}
+      chip={chip}
+      sub={buildSubLine(row.preview, row.model)}
+      meta={meta}
+      onActivate={() => onReopen(row.id)}
+      ariaLabel={`Reopen ${row.title}`}
+    />
   );
 }
 

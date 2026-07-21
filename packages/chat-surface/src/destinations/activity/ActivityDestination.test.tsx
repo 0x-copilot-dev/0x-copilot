@@ -229,6 +229,28 @@ describe("<ActivityDestination> — 4 states", () => {
     // `.act-day` class carried for design-spec fidelity.
     expect(dividers[0]).toHaveClass("act-day");
   });
+
+  it("renders ONE rowlist card per day (not per-row chips) — FR-G.2", () => {
+    renderActivity({
+      items: {
+        status: "ok",
+        data: [
+          row({ run_id: "r_today_a" as RunId, started_at: TODAY_ISO }),
+          row({ run_id: "r_today_b" as RunId, started_at: TODAY_LATER_ISO }),
+          row({ run_id: "r_yday" as RunId, started_at: YESTERDAY_ISO }),
+        ],
+      },
+    });
+    // Two days → exactly two rowlist cards.
+    expect(screen.getAllByTestId("activity-day-rowlist")).toHaveLength(2);
+  });
+
+  it("drops the 22px PageHeader title — the lead opens the surface (FR-G.2)", () => {
+    renderActivity({ items: { status: "ok", data: [] } });
+    expect(screen.queryByTestId("page-header")).toBeNull();
+    expect(screen.queryByTestId("page-header-title")).toBeNull();
+    expect(screen.getByTestId("activity-lead")).toBeInTheDocument();
+  });
 });
 
 // ===========================================================================
@@ -252,10 +274,61 @@ describe("<ActivityDestination> — rows", () => {
       onOpenRun,
     });
     const rowEl = screen.getByTestId("activity-row");
-    expect(rowEl.tagName).toBe("BUTTON");
+    // The shared Row renders a `role="button"` control (rich content, keyboard).
+    expect(rowEl).toHaveAttribute("role", "button");
     expect(rowEl).toHaveAttribute("data-open", "run");
     await userEvent.click(rowEl);
     expect(onOpenRun).toHaveBeenCalledWith("run_live");
+  });
+
+  it("a live row shows the brand mark (success); others show a clock (FR-G.2)", () => {
+    renderActivity({
+      items: {
+        status: "ok",
+        data: [
+          row({ run_id: "r_live" as RunId, status: "running", title: "Live" }),
+          row({ run_id: "r_done" as RunId, status: "done", title: "Done" }),
+        ],
+      },
+      onOpenRun: vi.fn(),
+    });
+    const rows = screen.getAllByTestId("activity-row");
+    const liveRow = rows.find(
+      (r) => r.getAttribute("data-status") === "running",
+    )!;
+    const doneRow = rows.find((r) => r.getAttribute("data-status") === "done")!;
+
+    const liveIcon = within(liveRow).getByTestId("activity-row-icon");
+    expect(liveIcon).toHaveAttribute("data-live", "true");
+    // BrandMark renders a 400×400 turbine <svg>.
+    expect(liveIcon.querySelector('svg[viewBox="0 0 400 400"]')).not.toBeNull();
+
+    const doneIcon = within(doneRow).getByTestId("activity-row-icon");
+    expect(doneIcon).toHaveAttribute("data-live", "false");
+    // Icon glyphs are authored on a 24×24 viewBox.
+    expect(doneIcon.querySelector('svg[viewBox="0 0 24 24"]')).not.toBeNull();
+  });
+
+  it("shows the dot on a LIVE chip only (FR-G.2)", () => {
+    renderActivity({
+      items: {
+        status: "ok",
+        data: [
+          row({ run_id: "r_live" as RunId, status: "running" }),
+          row({ run_id: "r_done" as RunId, status: "done" }),
+        ],
+      },
+      onOpenRun: vi.fn(),
+    });
+    const rows = screen.getAllByTestId("activity-row");
+    const dotIn = (status: string): boolean => {
+      const rowEl = rows.find((r) => r.getAttribute("data-status") === status)!;
+      const pill = within(rowEl).getByTestId("status-pill");
+      // The dot is the pill's only aria-hidden child span.
+      return pill.querySelector('span[aria-hidden="true"]') !== null;
+    };
+    expect(dotIn("running")).toBe(true);
+    expect(dotIn("done")).toBe(false);
   });
 
   it("a non-running row navigates through the run ItemLink resolver (FR-4.16)", async () => {

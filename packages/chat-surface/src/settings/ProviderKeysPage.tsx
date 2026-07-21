@@ -30,11 +30,13 @@ import {
 import type { ProviderKeySummary } from "@0x-copilot/api-types";
 import { Badge, Button } from "@0x-copilot/design-system";
 
+import { Icon } from "../icons/Icon";
+
 import {
   AddProviderKeyModal,
   type AddProviderKeySubmit,
 } from "./AddProviderKeyModal";
-import { Krow, SecHead, SetCard, SetNote } from "./SettingsChrome";
+import { Frow, Krow, SecHead, SetCard, SetNote } from "./SettingsChrome";
 import {
   PROVIDER_CATALOG,
   checkProviderKeyFormat,
@@ -113,6 +115,13 @@ const rowErrorStyle: CSSProperties = {
   margin: "2px 0 0",
   fontSize: "var(--font-size-xs)",
   color: "var(--color-danger)",
+};
+
+// "Add key" / "Add a key" buttons carry a leading icon before the label.
+const addKeyButtonStyle: CSSProperties = {
+  display: "inline-flex",
+  alignItems: "center",
+  gap: "var(--space-xs, 4px)",
 };
 
 export function ProviderKeysPage({
@@ -319,7 +328,7 @@ export function ProviderKeysPage({
                             <span>{entry.label}</span>
                             {chip !== undefined ? (
                               <Badge
-                                tone="neutral"
+                                tone="success"
                                 data-testid={`provider-model-chip-${entry.id}`}
                               >
                                 {chip}
@@ -337,7 +346,7 @@ export function ProviderKeysPage({
                           <>
                             <Button
                               type="button"
-                              variant="secondary"
+                              variant="ghost"
                               size="sm"
                               aria-label={`Rotate ${entry.label} key`}
                               onClick={() =>
@@ -349,14 +358,14 @@ export function ProviderKeysPage({
                             </Button>
                             <Button
                               type="button"
-                              variant="danger"
+                              variant="ghost"
                               size="sm"
                               aria-label={`Remove ${entry.label} key`}
                               disabled={removing[entry.id] === true}
                               onClick={() => handleRemove(entry)}
                               data-testid={`provider-remove-${entry.id}`}
                             >
-                              Remove
+                              <Icon name="trash" size={14} />
                             </Button>
                           </>
                         }
@@ -396,21 +405,45 @@ export function ProviderKeysPage({
                     actions={
                       <Button
                         type="button"
-                        variant="primary"
+                        variant="secondary"
                         size="sm"
                         aria-label={`Add ${entry.label} key`}
                         onClick={() => setModal({ entry, mode: "add" })}
                         data-testid={`provider-add-${entry.id}`}
+                        style={addKeyButtonStyle}
                       >
+                        <Icon name="plus" size={14} />
                         Add key
                       </Button>
                     }
                   />
                 ))}
               </div>
-              <SetNote data-testid="provider-compatible-note">
-                Another provider — any OpenAI-compatible endpoint works too.
-              </SetNote>
+              <div data-testid="provider-compatible-note">
+                <Frow
+                  label="Another provider"
+                  hint="Any OpenAI-compatible endpoint works too."
+                >
+                  <Button
+                    type="button"
+                    variant="primary"
+                    size="sm"
+                    aria-label="Add a key"
+                    disabled={available.length === 0}
+                    onClick={() => {
+                      const first = available[0];
+                      if (first !== undefined) {
+                        setModal({ entry: first, mode: "add" });
+                      }
+                    }}
+                    data-testid="provider-add-generic"
+                    style={addKeyButtonStyle}
+                  >
+                    <Icon name="key" size={14} />
+                    Add a key
+                  </Button>
+                </Frow>
+              </div>
             </section>
           </>
         )}

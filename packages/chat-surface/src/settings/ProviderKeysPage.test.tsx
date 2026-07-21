@@ -56,7 +56,53 @@ describe("<ProviderKeysPage>", () => {
       expect(screen.getByTestId(`provider-add-${slug}`)).toBeInTheDocument();
     }
     expect(screen.getByText(PROVIDER_KEYS_KEYCHAIN_NOTE)).toBeInTheDocument();
-    expect(screen.getByTestId("provider-compatible-note")).toBeInTheDocument();
+    // The generic CTA row replaces the plain note: a "Another provider" label +
+    // an OpenAI-compatible hint + a primary "Add a key" (PR-F.2).
+    const generic = screen.getByTestId("provider-compatible-note");
+    expect(generic).toHaveTextContent("Another provider");
+    expect(generic).toHaveTextContent(
+      "Any OpenAI-compatible endpoint works too.",
+    );
+    const genericAdd = screen.getByTestId("provider-add-generic");
+    expect(genericAdd).toHaveAttribute("aria-label", "Add a key");
+    expect(genericAdd).not.toBeDisabled();
+  });
+
+  it("per-empty-provider Add key is a neutral (secondary) button, not accent-filled", async () => {
+    render(<ProviderKeysPage port={makePort()} />);
+    const add = await screen.findByTestId("provider-add-openai");
+    expect(add).toHaveClass("ui-button--secondary");
+    expect(add).not.toHaveClass("ui-button--primary");
+  });
+
+  it("the generic primary Add-a-key opens the modal for the first available provider", async () => {
+    render(<ProviderKeysPage port={makePort()} />);
+    fireEvent.click(await screen.findByTestId("provider-add-generic"));
+    // Modal opens (its key input mounts) for the first catalog provider.
+    expect(await screen.findByTestId("add-key-input")).toBeInTheDocument();
+  });
+
+  it("disables the generic Add-a-key when every provider already has a key", async () => {
+    // Every catalog provider stored → nothing available to add.
+    const stored: ProviderKeySummary[] = [
+      "anthropic",
+      "openai",
+      "openrouter",
+      "google",
+      "groq",
+      "xai",
+    ].map((slug) => ({
+      provider: slug as ProviderKeySummary["provider"],
+      key_hint: "…real",
+      updated_at: "2026-07-18T00:00:00Z",
+    }));
+    render(
+      <ProviderKeysPage
+        port={makePort({ list: vi.fn().mockResolvedValue(stored) })}
+      />,
+    );
+    await screen.findByTestId("provider-row-openai");
+    expect(screen.getByTestId("provider-add-generic")).toBeDisabled();
   });
 
   it("shows the masked hint + Rotate/Remove for a stored provider and never reveals plaintext", async () => {
@@ -67,15 +113,34 @@ describe("<ProviderKeysPage>", () => {
     );
     await screen.findByTestId("provider-row-anthropic");
     expect(screen.getByText(/…7890/)).toBeInTheDocument();
-    expect(
-      screen.getByRole("button", { name: /rotate anthropic key/i }),
-    ).toBeInTheDocument();
-    expect(
-      screen.getByRole("button", { name: /remove anthropic key/i }),
-    ).toBeInTheDocument();
+    // Rotate is now a ghost button (PR-F.2).
+    const rotate = screen.getByRole("button", {
+      name: /rotate anthropic key/i,
+    });
+    expect(rotate).toHaveClass("ui-button--ghost");
+    // Remove is a ghost icon button (a trash glyph), keeping its aria-label.
+    const remove = screen.getByRole("button", {
+      name: /remove anthropic key/i,
+    });
+    expect(remove).toHaveClass("ui-button--ghost");
+    expect(remove).not.toHaveClass("ui-button--danger");
+    expect(remove).not.toHaveTextContent("Remove");
+    expect(remove.querySelector("svg")).not.toBeNull();
     // Stored provider drops out of the Add list; no password input on the page.
     expect(screen.queryByTestId("provider-add-anthropic")).toBeNull();
     expect(screen.queryByTestId("add-key-input")).toBeNull();
+  });
+
+  it("renders the model chip in the success tone on a connected row (PR-F.2)", async () => {
+    render(
+      <ProviderKeysPage
+        port={makePort({ list: vi.fn().mockResolvedValue([SAVED_ANTHROPIC]) })}
+        modelChips={{ anthropic: "claude-opus-4" }}
+      />,
+    );
+    const chip = await screen.findByTestId("provider-model-chip-anthropic");
+    expect(chip).toHaveTextContent("claude-opus-4");
+    expect(chip).toHaveClass("ui-badge--success");
   });
 
   it("adds a key through the flow, storing the plaintext once and toasting", async () => {
