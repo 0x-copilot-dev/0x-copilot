@@ -1338,6 +1338,25 @@ export {
 export { DiffText, type DiffTextProps } from "./textdiff/DiffText";
 // === end Generative UI (PRD-06) ===
 
+// === Generative UI (PRD-09c) — edit-on-surface overlay ===
+// The host-owned edit UI that `TcSurfaceMount` mounts in its `editSlot` OVER the
+// pure adapter (adapters stay input-free — D28). `RunDestination` opens it from
+// the on-surface "Suggest changes" control and submits `approve_with_edits`
+// through the SAME resolveApproval POST machinery the plain approve/reject path
+// uses. `MessageEditForm` edits the body (+ PRD-06 hunk toggles → `accepted_hunk_ids`);
+// `RecordEditForm` edits changed fields → `fields`. `seedEdits` derives the
+// initial draft from the proposal. See docs/plan/generative-ui/PRD-09-edit-and-commit.md.
+export {
+  EditOverlay,
+  MessageEditForm,
+  RecordEditForm,
+  seedEdits,
+  type EditOverlayProps,
+  type MessageEditFormProps,
+  type RecordEditFormProps,
+} from "./surfaces/edit/EditOverlay";
+// === end Generative UI (PRD-09c) ===
+
 // === Frontend parity v3 (PRD-D) — ⌘K static command launcher ===
 // The 13 v3 design commands shown on an empty query and merged above live
 // search hits, so ⌘K works as a keyboard launcher. Hosts map each `intent` to

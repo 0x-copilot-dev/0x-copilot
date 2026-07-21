@@ -1168,3 +1168,268 @@ describe("RunDestination — surface tabs + on-surface diffs (PRD-04)", () => {
     expect(screen.getByTestId("tc-surface-mount-controls")).not.toBeNull();
   });
 });
+
+// === PRD-09c — edit-on-surface overlay (Suggest changes → approve_with_edits) ===
+//
+// Integration: the on-surface "Suggest changes" control opens the host-owned
+// EditOverlay OVER the pure adapter (ThreadCanvas.editSlot → TcSurfaceMount).
+// The overlay's submit reuses the SAME resolveApproval POST machinery the plain
+// approve/reject path uses, with `{ decision: "approve_with_edits", edits }`.
+// Cancel returns to the pending diff (no POST). The plain approve path is
+// unchanged (no `edits`).
+
+/** An `approval_requested` proposing a MESSAGE-body diff on a `message://` surface. */
+function messageDiffApproval(
+  approvalId: string,
+  uri: string,
+): Record<string, unknown> {
+  return event({
+    event_type: "approval_requested",
+    activity_kind: "approval",
+    payload: {
+      approval_id: approvalId,
+      approval_kind: "tool_action",
+      display_name: "Send the renewal email",
+      server_name: "GMAIL",
+      surface: {
+        surface_uri: uri,
+        archetype: "message",
+        state: { data: {} },
+        diff: {
+          changes: [
+            { field: "message.subject", old: "Renewal", new: "Renewal terms" },
+            {
+              field: "message.body",
+              old: "Hi Jordan, the price holds.",
+              new: "Hi Maya, the price holds.",
+            },
+          ],
+        },
+      },
+    },
+  });
+}
+
+/** An `approval_requested` proposing a RECORD field diff on a `record://` surface. */
+function recordFieldDiffApproval(
+  approvalId: string,
+  uri: string,
+): Record<string, unknown> {
+  return event({
+    event_type: "approval_requested",
+    activity_kind: "approval",
+    payload: {
+      approval_id: approvalId,
+      approval_kind: "tool_action",
+      display_name: "Update the record",
+      server_name: "LINEAR",
+      surface: {
+        surface_uri: uri,
+        archetype: "record",
+        state: { data: {} },
+        diff: {
+          changes: [
+            { field: "title", old: "Old title", new: "New title" },
+            { field: "priority", old: "P2", new: "P1" },
+          ],
+        },
+      },
+    },
+  });
+}
+
+function decisionRequests(transport: FakeTransport, approvalId: string) {
+  return transport.requests.filter(
+    (r) =>
+      r.method === "POST" &&
+      r.path === `/v1/agent/approvals/${approvalId}/decision`,
+  );
+}
+
+describe("RunDestination — edit-on-surface (PRD-09c)", () => {
+  async function renderWithSession(): Promise<FakeTransport> {
+    seqCounter = 0;
+    const transport = new FakeTransport();
+    transport.requestHandler = async (req) =>
+      req.path.includes("/messages") ? { messages: [] } : runningRun("Goal");
+    renderRun(transport, makeStore());
+    await waitFor(() => expect(transport.sessionSub).toBeDefined());
+    return transport;
+  }
+
+  it("opens the edit overlay from Suggest changes for a message archetype", async () => {
+    const transport = await renderWithSession();
+    act(() => {
+      transport.emit(messageDiffApproval("appr-1", "message://gmail/send/1"));
+    });
+    await screen.findByTestId("tc-surface-mount-controls");
+
+    // No overlay until the reviewer asks to edit.
+    expect(screen.queryByTestId("surface-edit-overlay")).toBeNull();
+
+    act(() => {
+      fireEvent.click(screen.getByTestId("tc-surface-mount-suggest"));
+    });
+
+    // The message edit overlay mounts OVER the adapter…
+    const overlay = await screen.findByTestId("surface-edit-overlay");
+    expect(overlay.getAttribute("data-archetype")).toBe("message");
+    expect(screen.getByTestId("message-edit-form")).not.toBeNull();
+    // …seeded with the proposed body…
+    expect(
+      (screen.getByTestId("message-edit-body") as HTMLTextAreaElement).value,
+    ).toBe("Hi Maya, the price holds.");
+    // …and the bottom Approve/Reject/Suggest row is suppressed while editing.
+    expect(screen.queryByTestId("tc-surface-mount-controls")).toBeNull();
+    expect(
+      screen.getByTestId("tc-surface-mount").getAttribute("data-editing"),
+    ).toBe("true");
+  });
+
+  it("toggling a hunk excludes it and submit POSTs approve_with_edits with the edited body", async () => {
+    const transport = await renderWithSession();
+    act(() => {
+      transport.emit(messageDiffApproval("appr-1", "message://gmail/send/1"));
+    });
+    await screen.findByTestId("tc-surface-mount-controls");
+    act(() => {
+      fireEvent.click(screen.getByTestId("tc-surface-mount-suggest"));
+    });
+    await screen.findByTestId("surface-edit-overlay");
+
+    // Exclude the inserted hunk (h2) via the PRD-06 DiffText.
+    act(() => {
+      fireEvent.click(
+        within(screen.getByTestId("message-edit-hunks")).getByTestId(
+          "diff-insert",
+        ),
+      );
+    });
+    expect(
+      screen
+        .getByTestId("message-edit-hunk-status-h2")
+        .getAttribute("data-accepted"),
+    ).toBe("false");
+
+    // Edit the body, then submit.
+    act(() => {
+      fireEvent.change(screen.getByTestId("message-edit-body"), {
+        target: { value: "Hi Maya, price is locked." },
+      });
+    });
+    act(() => {
+      fireEvent.click(screen.getByTestId("surface-edit-submit"));
+    });
+
+    // The overlay closes and the diff clears optimistically (as approved).
+    await waitFor(() =>
+      expect(screen.queryByTestId("surface-edit-overlay")).toBeNull(),
+    );
+    await waitFor(() =>
+      expect(screen.queryByTestId("tc-surface-mount-controls")).toBeNull(),
+    );
+
+    // Exactly one decision POST, carrying approve_with_edits + the edited body
+    // and the kept-hunk subset (h2 excluded).
+    await waitFor(() =>
+      expect(decisionRequests(transport, "appr-1")).toHaveLength(1),
+    );
+    const body = decisionRequests(transport, "appr-1")[0].body as {
+      decision: string;
+      edits: {
+        body?: string;
+        accepted_hunk_ids?: string[];
+      };
+    };
+    expect(body.decision).toBe("approve_with_edits");
+    expect(body.edits.body).toBe("Hi Maya, price is locked.");
+    expect(body.edits.accepted_hunk_ids).toEqual(["h1"]);
+  });
+
+  it("submits record field edits as approve_with_edits.fields", async () => {
+    const transport = await renderWithSession();
+    act(() => {
+      transport.emit(
+        recordFieldDiffApproval("appr-2", "record://linear/get_issue/1"),
+      );
+    });
+    await screen.findByTestId("tc-surface-mount-controls");
+    act(() => {
+      fireEvent.click(screen.getByTestId("tc-surface-mount-suggest"));
+    });
+    const overlay = await screen.findByTestId("surface-edit-overlay");
+    expect(overlay.getAttribute("data-archetype")).toBe("record");
+
+    act(() => {
+      fireEvent.change(screen.getByTestId("record-edit-field-title"), {
+        target: { value: "Reviewed title" },
+      });
+    });
+    act(() => {
+      fireEvent.click(screen.getByTestId("surface-edit-submit"));
+    });
+
+    await waitFor(() =>
+      expect(decisionRequests(transport, "appr-2")).toHaveLength(1),
+    );
+    const body = decisionRequests(transport, "appr-2")[0].body as {
+      decision: string;
+      edits: { fields?: Record<string, string> };
+    };
+    expect(body.decision).toBe("approve_with_edits");
+    expect(body.edits.fields).toEqual({
+      title: "Reviewed title",
+      priority: "P1",
+    });
+  });
+
+  it("cancel restores the pending diff and POSTs nothing", async () => {
+    const transport = await renderWithSession();
+    act(() => {
+      transport.emit(messageDiffApproval("appr-3", "message://gmail/send/1"));
+    });
+    await screen.findByTestId("tc-surface-mount-controls");
+    act(() => {
+      fireEvent.click(screen.getByTestId("tc-surface-mount-suggest"));
+    });
+    await screen.findByTestId("surface-edit-overlay");
+
+    act(() => {
+      fireEvent.click(screen.getByTestId("surface-edit-cancel"));
+    });
+
+    // Overlay gone; the pending diff + its Approve/Reject/Suggest controls return.
+    expect(screen.queryByTestId("surface-edit-overlay")).toBeNull();
+    expect(screen.getByTestId("tc-surface-mount-controls")).not.toBeNull();
+    expect(screen.getByTestId("tc-surface-mount-suggest")).not.toBeNull();
+    // Cancel is inert — no decision POST fired.
+    expect(decisionRequests(transport, "appr-3")).toHaveLength(0);
+  });
+
+  it("leaves the plain approve path unchanged (no edits payload)", async () => {
+    const transport = await renderWithSession();
+    act(() => {
+      transport.emit(
+        recordFieldDiffApproval("appr-4", "record://linear/get_issue/1"),
+      );
+    });
+    await screen.findByTestId("tc-surface-mount-controls");
+
+    // Approve directly — no overlay.
+    act(() => {
+      fireEvent.click(screen.getByTestId("tc-surface-mount-approve"));
+    });
+
+    await waitFor(() =>
+      expect(decisionRequests(transport, "appr-4")).toHaveLength(1),
+    );
+    const body = decisionRequests(transport, "appr-4")[0].body as {
+      decision: string;
+      edits?: unknown;
+    };
+    expect(body.decision).toBe("approved");
+    expect(body.edits).toBeUndefined();
+    // The overlay never opened.
+    expect(screen.queryByTestId("surface-edit-overlay")).toBeNull();
+  });
+});

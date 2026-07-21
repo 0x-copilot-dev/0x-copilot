@@ -52,14 +52,22 @@ import {
   useState,
   type CSSProperties,
   type ReactElement,
+  type ReactNode,
 } from "react";
 
-import type { ConversationId, RunId } from "@0x-copilot/api-types";
+import type {
+  ConversationId,
+  RunId,
+  SurfaceEdits,
+} from "@0x-copilot/api-types";
 
 import {
   humanTransportMessage,
   parseTransportError,
 } from "../../errors/transportError";
+// PRD-09c: the host-owned edit-on-surface overlay. Mounted OVER the pure adapter
+// via ThreadCanvas.editSlot → TcSurfaceMount; its submit reuses resolveApproval.
+import { EditOverlay } from "../../surfaces/edit/EditOverlay";
 import { useTransport } from "../../providers/TransportProvider";
 // PR-3.8: pure selector projecting parallel-subagent + fleet state off the
 // single canonical event stream (no second subscription / projector).
@@ -211,6 +219,8 @@ export function RunDestination(props: RunDestinationProps): ReactElement {
     // PRD-04: a new conversation starts from a clean surface strip.
     setPinnedUri(null);
     setClosedUris(EMPTY_CLOSED_URIS);
+    // PRD-09c: never carry an open edit overlay across conversations.
+    setEditingDiffId(null);
   }, [conversationId]);
 
   const session = useRunSession({
@@ -237,6 +247,13 @@ export function RunDestination(props: RunDestinationProps): ReactElement {
   const [pinnedUri, setPinnedUri] = useState<string | null>(null);
   const [closedUris, setClosedUris] =
     useState<ReadonlySet<string>>(EMPTY_CLOSED_URIS);
+
+  // PRD-09c: which pending surface diff (by `diffId === approvalId`) currently
+  // has the edit overlay open. `null` = no overlay. Opened by
+  // `handleSuggestChanges` (the PRD-04 passthrough this PRD fills); the overlay
+  // renders only while this matches the active pending diff, so a resolved diff
+  // (optimistic or server) closes it automatically.
+  const [editingDiffId, setEditingDiffId] = useState<string | null>(null);
 
   const handleActivateTab = useCallback((uri: string): void => {
     // A manual tab click pins — the strip stops auto-following newer surfaces
@@ -383,6 +400,8 @@ export function RunDestination(props: RunDestinationProps): ReactElement {
       setScrubbedSeq(null);
       setPinnedUri(null);
       setClosedUris(EMPTY_CLOSED_URIS);
+      // PRD-09c: rebinding the cockpit to another run closes any open overlay.
+      setEditingDiffId(null);
       selectRun(nextRunId);
     },
     [selectRun],
@@ -502,7 +521,14 @@ export function RunDestination(props: RunDestinationProps): ReactElement {
   // the Transport port — a failure leaves the optimistic state (the trailing
   // SSE frame is the authority) rather than blocking the cockpit.
   const resolveApproval = useCallback(
-    (approvalId: string, decision: RunApprovalDecision): void => {
+    (
+      approvalId: string,
+      decision: RunApprovalDecision,
+      edits?: SurfaceEdits,
+    ): void => {
+      // Optimistic overlay uses the terminal decision ("approved"/"rejected");
+      // `approve_with_edits` resolves to `approved` server-side (api-types §PRD-09a),
+      // so an edited approval clears the diff the same way a plain approve does.
       setLocalDecisions((prev) => {
         if (prev.get(approvalId) === decision) {
           return prev;
@@ -511,11 +537,18 @@ export function RunDestination(props: RunDestinationProps): ReactElement {
         next.set(approvalId, decision);
         return next;
       });
+      // The wire decision carries the reviewer's edits when present; the server
+      // (ai-backend 09b) re-derives final = proposal ⊕ edits and never trusts a
+      // client-sent merged artifact. Plain approve/reject is unchanged.
+      const body =
+        edits !== undefined
+          ? { decision: "approve_with_edits", edits }
+          : { decision };
       void transport
         .request({
           method: "POST",
           path: `/v1/agent/approvals/${approvalId}/decision`,
-          body: { decision },
+          body,
         })
         .catch(() => {
           /* optimistic: SSE `approval_resolved` reconciles the truth */
@@ -532,11 +565,27 @@ export function RunDestination(props: RunDestinationProps): ReactElement {
     (approvalId: string): void => resolveApproval(approvalId, "rejected"),
     [resolveApproval],
   );
-  // PRD-04: onSuggestChanges is a no-op passthrough today (PRD-09 — edit on
-  // surface — fills it). Surfaced so the on-surface "Suggest changes" control is
-  // wired; it fires nothing until the edit path lands.
-  const handleSuggestChanges = useCallback((_diffId: string): void => {
-    /* PRD-09 fills this — no-op passthrough. */
+  // PRD-09c: open the edit overlay for the surface whose diff the reviewer wants
+  // to change. This fills the PRD-04 passthrough — the overlay renders OVER the
+  // active surface (ThreadCanvas.editSlot) and submits `approve_with_edits`.
+  const handleSuggestChanges = useCallback((diffId: string): void => {
+    setEditingDiffId(diffId);
+  }, []);
+  // PRD-09c: commit the reviewer's edits — reuses the SAME resolveApproval POST
+  // machinery the plain approve/reject path uses, with the `approve_with_edits`
+  // decision + `edits` payload. Optimistically clears the diff (as `approved`);
+  // the trailing `approval_resolved` SSE frame reconciles the truth.
+  const handleSubmitEdits = useCallback(
+    (diffId: string, edits: SurfaceEdits): void => {
+      resolveApproval(diffId, "approved", edits);
+      setEditingDiffId(null);
+    },
+    [resolveApproval],
+  );
+  // PRD-09c: dismiss the overlay without committing — the pending diff (and its
+  // on-surface Approve/Reject/Suggest controls) returns unchanged. No POST.
+  const handleCancelEdits = useCallback((): void => {
+    setEditingDiffId(null);
   }, []);
 
   // PRD-04: proposed surface diffs, projected off the SAME `session.events`
@@ -624,6 +673,33 @@ export function RunDestination(props: RunDestinationProps): ReactElement {
           },
     [activeSurfaceDiff],
   );
+
+  // PRD-09c: the edit overlay for the active surface — mounted OVER the pure
+  // adapter via ThreadCanvas.editSlot → TcSurfaceMount. Renders ONLY while the
+  // reviewer is editing THIS surface's diff (`editingDiffId === diffId`), so it
+  // closes automatically once the diff resolves (it drops out of
+  // `activeSurfaceDiff`) or the user scrubs off-now. The archetype is the uri
+  // scheme (`message://…` → "message", `record://…` → "record"); v1 edits
+  // message body + record fields (EditOverlay guards other archetypes).
+  const editSlot = useMemo<ReactNode>(() => {
+    if (
+      activeSurfaceDiff === undefined ||
+      editingDiffId === null ||
+      editingDiffId !== activeSurfaceDiff.diffId
+    ) {
+      return null;
+    }
+    const diffId = activeSurfaceDiff.diffId;
+    return (
+      <EditOverlay
+        archetype={schemeOf(activeSurfaceDiff.uri)}
+        diff={activeSurfaceDiff.diff}
+        title={activeSurfaceDiff.title}
+        onSubmit={(edits) => handleSubmitEdits(diffId, edits)}
+        onCancel={handleCancelEdits}
+      />
+    );
+  }, [activeSurfaceDiff, editingDiffId, handleSubmitEdits, handleCancelEdits]);
 
   // PRD-04: "follow live" affordance — shown only when pinned to a surface that
   // is not the newest (reuses the scrub-banner copy pattern). Un-pins on click.
@@ -760,6 +836,10 @@ export function RunDestination(props: RunDestinationProps): ReactElement {
             onApprove={handleApprove}
             onReject={handleReject}
             onSuggestChanges={handleSuggestChanges}
+            // PRD-09c: the host-owned edit overlay for the active surface diff.
+            // Null unless the reviewer opened "Suggest changes"; when set it
+            // mounts OVER the pure adapter and submits `approve_with_edits`.
+            editSlot={editSlot}
             // PR-3.7: own the scrub cursor here; ThreadCanvas forwards it to the
             // mini-timeline (highlight + step/snap dispatch) and to the
             // SwimlaneScrubProvider (in-chat ghost banner + composer disable).
@@ -833,6 +913,13 @@ interface ScrubTarget {
  * `payload.surface.surface_uri` envelope so scrubbing snaps to the right surface
  * regardless of wire shape.
  */
+// PRD-09c: the surface archetype is the uri scheme — `message://server/tool/id`
+// → "message". Used to pick the EditOverlay's per-archetype form.
+function schemeOf(uri: string): string {
+  const idx = uri.indexOf("://");
+  return idx > 0 ? uri.slice(0, idx) : "";
+}
+
 function scrubUriOf(event: {
   readonly payload?: Record<string, unknown>;
 }): string | undefined {
