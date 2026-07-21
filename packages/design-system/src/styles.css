@@ -166,8 +166,13 @@
      intentional shift from the old danger red). */
   --color-danger: #f0764f;
   --color-danger-bg: #2c1a12;
+  /* Ink placed ON a danger/success fill (badge text, filled buttons). Consumers
+     previously faked these via var(--color-…-contrast, #hex) fallbacks because
+     the tokens did not exist; defined here as the one honest target. */
+  --color-danger-contrast: #1d0d07;
   --color-success: #57c785;
   --color-success-bg: #1a2f23;
+  --color-success-contrast: #07160d;
   --color-warning: #e8b45e;
   --color-warning-bg: #322615;
   /* Frontend parity v3 (PRD-B): the design's panel3 / line3 / tx2 had no
@@ -190,6 +195,9 @@
  * downstream automatically. */
 :root {
   --color-accent-soft: color-mix(in srgb, var(--color-accent) 18%, transparent);
+  /* Accent-tinted hairline (the design's --accent-line = accent @ 35%). Used for
+     selected rows / active chips, matching --color-accent-soft's reflow model. */
+  --color-accent-line: color-mix(in srgb, var(--color-accent) 35%, transparent);
   --color-bg-accent-subtle: color-mix(
     in srgb,
     var(--color-accent) 8%,
@@ -283,8 +291,10 @@
   --color-accent-contrast: #f4faff;
   --color-danger: #b42318;
   --color-danger-bg: #fff0ef;
+  --color-danger-contrast: #ffffff;
   --color-success: #137a36;
   --color-success-bg: #e8f8ef;
+  --color-success-contrast: #ffffff;
   --color-warning: #9a6400;
   --color-warning-bg: #fff4d8;
   /* Frontend parity v3 (PRD-B) — light counterparts. */
@@ -309,8 +319,10 @@
   --color-accent-contrast: #08111c;
   --color-danger: #ff7a90;
   --color-danger-bg: #3a1922;
+  --color-danger-contrast: #2a0910;
   --color-success: #80d79e;
   --color-success-bg: #153421;
+  --color-success-contrast: #08190f;
   --color-warning: #f5c36f;
   --color-warning-bg: #3a2a15;
   /* Frontend parity v3 (PRD-B) — slate counterparts. */

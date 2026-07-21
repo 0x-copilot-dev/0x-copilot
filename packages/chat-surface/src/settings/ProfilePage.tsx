@@ -164,7 +164,7 @@ const formStyle: CSSProperties = {
 };
 
 const fieldsetStyle: CSSProperties = {
-  border: "1px solid var(--color-border, #232325)",
+  border: "1px solid var(--color-border)",
   borderRadius: "var(--radius-sm, 6px)",
   padding: 12,
   display: "flex",
@@ -175,7 +175,7 @@ const fieldsetStyle: CSSProperties = {
 const legendStyle: CSSProperties = {
   fontSize: "var(--font-size-sm, 13px)",
   fontWeight: 600,
-  color: "var(--color-text, #ededee)",
+  color: "var(--color-text)",
   padding: "0 6px",
 };
 
@@ -188,16 +188,16 @@ const rowStyle: CSSProperties = {
 
 const labelStyle: CSSProperties = {
   fontSize: "var(--font-size-sm, 13px)",
-  color: "var(--color-text-muted, #b4b4b8)",
+  color: "var(--color-text-muted)",
 };
 
 const inputStyle: CSSProperties = {
   height: 30,
   padding: "0 8px",
   borderRadius: "var(--radius-sm, 6px)",
-  border: "1px solid var(--color-border, #232325)",
-  background: "var(--color-surface, #18181a)",
-  color: "var(--color-text, #ededee)",
+  border: "1px solid var(--color-border)",
+  background: "var(--color-surface)",
+  color: "var(--color-text)",
   fontSize: "var(--font-size-sm, 13px)",
   flex: 1,
   minWidth: 200,
@@ -205,8 +205,8 @@ const inputStyle: CSSProperties = {
 
 const readOnlyStyle: CSSProperties = {
   ...inputStyle,
-  background: "var(--color-surface-muted, #222224)",
-  color: "var(--color-text-muted, #b4b4b8)",
+  background: "var(--color-surface-muted)",
+  color: "var(--color-text-muted)",
   cursor: "not-allowed",
 };
 
@@ -224,11 +224,11 @@ const avatarStyle: CSSProperties = {
   width: 56,
   height: 56,
   borderRadius: "var(--radius-full, 999px)",
-  background: "var(--color-surface-muted, #222224)",
+  background: "var(--color-surface-muted)",
   display: "inline-flex",
   alignItems: "center",
   justifyContent: "center",
-  color: "var(--color-text-muted, #b4b4b8)",
+  color: "var(--color-text-muted)",
   fontSize: "var(--font-size-md, 14px)",
   overflow: "hidden",
 };
@@ -238,9 +238,9 @@ const chipStyle: CSSProperties = {
   alignSelf: "flex-start",
   fontSize: "var(--font-size-xs, 12px)",
   fontWeight: 600,
-  color: "var(--color-text-muted, #b4b4b8)",
-  background: "var(--color-surface-muted, #222224)",
-  border: "1px solid var(--color-border, #232325)",
+  color: "var(--color-text-muted)",
+  background: "var(--color-surface-muted)",
+  border: "1px solid var(--color-border)",
   borderRadius: "var(--radius-full, 999px)",
   padding: "2px 10px",
 };
@@ -248,8 +248,8 @@ const chipStyle: CSSProperties = {
 const badgeStyle: CSSProperties = {
   fontSize: "var(--font-size-2xs, 11px)",
   fontWeight: 600,
-  color: "var(--color-success-contrast, #06210f)",
-  background: "var(--color-success, #4ea674)",
+  color: "var(--color-success-contrast)",
+  background: "var(--color-success)",
   borderRadius: "var(--radius-full, 999px)",
   padding: "2px 8px",
 };
@@ -257,16 +257,16 @@ const badgeStyle: CSSProperties = {
 const chainChipStyle: CSSProperties = {
   fontSize: "var(--font-size-2xs, 11px)",
   fontWeight: 600,
-  color: "var(--color-text-muted, #b4b4b8)",
-  background: "var(--color-surface-muted, #222224)",
-  border: "1px solid var(--color-border, #232325)",
+  color: "var(--color-text-muted)",
+  background: "var(--color-surface-muted)",
+  border: "1px solid var(--color-border)",
   borderRadius: "var(--radius-full, 999px)",
   padding: "2px 8px",
 };
 
 const noteStyle: CSSProperties = {
   fontSize: "var(--font-size-xs, 12px)",
-  color: "var(--color-text-subtle, #7e7e84)",
+  color: "var(--color-text-subtle)",
   lineHeight: 1.45,
 };
 
@@ -281,9 +281,9 @@ const saveButtonStyle: CSSProperties = {
   height: 32,
   padding: "0 14px",
   borderRadius: "var(--radius-sm, 6px)",
-  border: "1px solid var(--color-accent, #d97757)",
-  backgroundColor: "var(--color-accent, #d97757)",
-  color: "var(--color-accent-contrast, #1a0f0a)",
+  border: "1px solid var(--color-accent)",
+  backgroundColor: "var(--color-accent)",
+  color: "var(--color-accent-contrast)",
   fontSize: "var(--font-size-sm, 13px)",
   fontWeight: 600,
   cursor: "pointer",
@@ -295,9 +295,9 @@ const linkCtaStyle: CSSProperties = {
   height: 30,
   padding: "0 12px",
   borderRadius: "var(--radius-sm, 6px)",
-  border: "1px solid var(--color-border, #232325)",
+  border: "1px solid var(--color-border)",
   background: "transparent",
-  color: "var(--color-accent, #d97757)",
+  color: "var(--color-accent)",
   fontSize: "var(--font-size-sm, 13px)",
   fontWeight: 600,
   cursor: "pointer",
@@ -310,9 +310,9 @@ const unlinkButtonStyle: CSSProperties = {
   height: 28,
   padding: "0 10px",
   borderRadius: "var(--radius-sm, 6px)",
-  border: "1px solid var(--color-border, #232325)",
+  border: "1px solid var(--color-border)",
   background: "transparent",
-  color: "var(--color-danger, #d96b6b)",
+  color: "var(--color-danger)",
   fontSize: "var(--font-size-xs, 12px)",
   fontWeight: 600,
   cursor: "pointer",
@@ -322,7 +322,7 @@ const unlinkButtonStyle: CSSProperties = {
 const inlineErrorStyle: CSSProperties = {
   width: "100%",
   fontSize: "var(--font-size-xs, 12px)",
-  color: "var(--color-danger, #d96b6b)",
+  color: "var(--color-danger)",
   lineHeight: 1.45,
 };
 
@@ -331,9 +331,9 @@ const dialogCancelStyle: CSSProperties = {
   height: 32,
   padding: "0 14px",
   borderRadius: "var(--radius-sm, 6px)",
-  border: "1px solid var(--color-border, #232325)",
+  border: "1px solid var(--color-border)",
   background: "transparent",
-  color: "var(--color-text, #ededee)",
+  color: "var(--color-text)",
   fontSize: "var(--font-size-sm, 13px)",
   fontWeight: 600,
   cursor: "pointer",
@@ -343,9 +343,9 @@ const dialogConfirmStyle: CSSProperties = {
   height: 32,
   padding: "0 14px",
   borderRadius: "var(--radius-sm, 6px)",
-  border: "1px solid var(--color-danger, #d96b6b)",
-  background: "var(--color-danger, #d96b6b)",
-  color: "var(--color-danger-contrast, #1a0a0a)",
+  border: "1px solid var(--color-danger)",
+  background: "var(--color-danger)",
+  color: "var(--color-danger-contrast)",
   fontSize: "var(--font-size-sm, 13px)",
   fontWeight: 600,
   cursor: "pointer",
@@ -355,9 +355,9 @@ const signOutButtonStyle: CSSProperties = {
   height: 32,
   padding: "0 14px",
   borderRadius: "var(--radius-sm, 6px)",
-  border: "1px solid var(--color-border, #232325)",
+  border: "1px solid var(--color-border)",
   background: "transparent",
-  color: "var(--color-text, #ededee)",
+  color: "var(--color-text)",
   fontSize: "var(--font-size-sm, 13px)",
   fontWeight: 600,
   cursor: "pointer",
@@ -572,7 +572,7 @@ export function ProfilePage({
               <span
                 style={{
                   fontSize: "var(--font-size-xs, 12px)",
-                  color: "var(--color-text-subtle, #7e7e84)",
+                  color: "var(--color-text-subtle)",
                 }}
               >
                 Avatar upload is coming soon.
