@@ -394,6 +394,45 @@ describe("ProjectsRoute render", () => {
     );
   });
 
+  it("renders each project as a .grid3 card — colour tile + first letter + 'N chats · M files' (FR-G.4)", async () => {
+    projectsApiMocks.fetchProjects.mockResolvedValueOnce(
+      listResponse([
+        summary({
+          name: "quartz sprint",
+          description: "Ship the widget",
+          color_hue: 180,
+          counts: {
+            chats: 3,
+            todos_open: 0,
+            todos_done: 0,
+            inbox_items: 0,
+            library_items: 2,
+            routines_active: 0,
+            members: 1,
+          },
+        }),
+      ]),
+    );
+
+    render(<ProjectsRoute identity={IDENTITY} />);
+
+    await waitFor(() => {
+      expect(screen.getByTestId("projects-route-list")).toHaveClass(
+        "projects-grid3",
+      );
+    });
+
+    const row = screen.getByTestId("projects-route-row");
+    expect(row).toHaveClass("projects-card");
+    // The colour tile shows the uppercased first letter of the name.
+    const tile = row.querySelector(".proj-ic");
+    expect(tile?.textContent).toBe("Q");
+    expect(tile).toHaveAttribute("data-color-hue", "180");
+    // The description + counts line render.
+    expect(screen.getByText("Ship the widget")).toBeInTheDocument();
+    expect(screen.getByText("3 chats · 2 files")).toBeInTheDocument();
+  });
+
   it("renders the empty state when the server returns no items", async () => {
     projectsApiMocks.fetchProjects.mockResolvedValueOnce(listResponse([]));
     render(<ProjectsRoute identity={IDENTITY} />);
