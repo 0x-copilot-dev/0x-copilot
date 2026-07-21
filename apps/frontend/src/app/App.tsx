@@ -30,6 +30,7 @@ import { useConnectors } from "../features/connectors/useConnectors";
 import { ChatsArchiveRoute } from "../features/chats/ChatsArchiveRoute";
 import { ProjectsRoute } from "../features/projects/ProjectsRoute";
 import { ActivityRoute } from "../features/activity/ActivityRoute";
+import { useActiveRunCount } from "../features/activity/useActiveRunCount";
 import { SkillsRoute } from "../features/skills/SkillsRoute";
 // `ConnectorsGateway` (the "Tools" destination) owns the in-destination
 // routing between the list (/connectors), the detail (/connectors/<id>), and
@@ -507,6 +508,9 @@ export function CopilotApp({
   // (PRD 04: design-system ThemeProvider + document.documentElement
   // attrs + debounced server save).
   const profile = useUserProfile();
+  // PRD-C.2 / PRD-H.5 — the rail Run badge count. Derived (polled, best-effort)
+  // from the conversation list rather than a bespoke endpoint.
+  const activeRunCount = useActiveRunCount(identity);
   // Routing goes through the Router port (packages/chat-surface). HashRouter
   // owns every window.history / popstate / hashchange interaction on web;
   // the desktop substrate will swap in its own implementation without any
@@ -729,6 +733,25 @@ export function CopilotApp({
     if (intent.type === "navigate") {
       handleRailNavigate(intent.slug);
       return;
+    }
+    if (intent.type === "action") {
+      // Web equivalents of the direct-launch commands. `new-chat` opens the Run
+      // cockpit's new-chat path; the rest deep-link to the surface that owns the
+      // action (web has no standalone add-key modal trigger from ⌘K yet).
+      switch (intent.action) {
+        case "new-chat":
+          openRun();
+          return;
+        case "add-provider-key":
+          router.navigate({ screen: "settings", section: "provider-keys" });
+          return;
+        case "download-local-model":
+          router.navigate({ screen: "settings", section: "local-models" });
+          return;
+        case "connect-tool":
+          handleRailNavigate("connectors");
+          return;
+      }
     }
     const section: SettingsSection =
       intent.section === "model-behavior"
@@ -1125,6 +1148,9 @@ export function CopilotApp({
               ? { initial: profile.data.display_name.trim().charAt(0) }
               : undefined
           }
+          // Run badge: number of in-flight runs (hidden at 0; the rail also
+          // hides it while Run is the active destination). PRD-C.2 / PRD-H.5.
+          railBadges={activeRunCount > 0 ? { run: activeRunCount } : undefined}
         >
           <Suspense fallback={<RouteLoadingFallback />}>{body}</Suspense>
           {/*

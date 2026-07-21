@@ -23,10 +23,6 @@ describe("SHELL_COMMANDS", () => {
 
   it("maps the settings commands to valid section slugs", () => {
     const byLabel = Object.fromEntries(SHELL_COMMANDS.map((c) => [c.label, c]));
-    expect(byLabel["Add a provider key"].intent).toEqual({
-      type: "settings",
-      section: "provider-keys",
-    });
     expect(byLabel["Model & behavior"].intent).toEqual({
       type: "settings",
       section: "model-behavior",
@@ -34,6 +30,26 @@ describe("SHELL_COMMANDS", () => {
     expect(byLabel["Open Settings"].intent).toEqual({
       type: "settings",
       section: "profile",
+    });
+  });
+
+  it("routes the direct-launch commands through action intents", () => {
+    const byLabel = Object.fromEntries(SHELL_COMMANDS.map((c) => [c.label, c]));
+    expect(byLabel["New chat"].intent).toEqual({
+      type: "action",
+      action: "new-chat",
+    });
+    expect(byLabel["Add a provider key"].intent).toEqual({
+      type: "action",
+      action: "add-provider-key",
+    });
+    expect(byLabel["Download a local model"].intent).toEqual({
+      type: "action",
+      action: "download-local-model",
+    });
+    expect(byLabel["Connect a tool"].intent).toEqual({
+      type: "action",
+      action: "connect-tool",
     });
   });
 

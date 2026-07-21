@@ -43,6 +43,14 @@ export interface ProviderKeySummary {
   readonly key_hint: string;
   /** ISO-8601 timestamp of the last PUT for this provider. */
   readonly updated_at: string;
+  /**
+   * The model to seed the row's default-model chip with — the server's
+   * single-source projection of the default model chosen for this provider
+   * key. ADDITIVE superset (PRD-F PR-F.5): absent/`null` on older servers and
+   * on keys stored without a model, in which case clients fall back to their
+   * own model-chip hint. Never key material.
+   */
+  readonly default_model?: string | null;
 }
 
 /** `GET /v1/settings/provider-keys` response. */
@@ -56,6 +64,13 @@ export interface ListProviderKeysResponse {
  */
 export interface PutProviderKeyRequest {
   readonly api_key: string;
+  /**
+   * Optional default model to persist alongside the key so the server can
+   * project it back on `ProviderKeySummary.default_model`. ADDITIVE
+   * (PRD-F PR-F.5): older clients omit it and the stored default is
+   * preserved on rotation; never key material.
+   */
+  readonly default_model?: string | null;
 }
 
 /**
