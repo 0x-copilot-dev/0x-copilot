@@ -43,6 +43,7 @@ from agent_runtime.deployment import (
     log_profile,
     resolve_or_exit,
 )
+from copilot_service_contracts.deployment_profile import PROFILE_SINGLE_USER_DESKTOP
 from agent_runtime.execution.models import ModelConfigResolver
 from agent_runtime.observability.http_logging import (
     LoggingConfigurator,
@@ -793,18 +794,39 @@ class RuntimeApiAppFactory:
 
     @classmethod
     async def start_in_process_worker(cls, app: FastAPI) -> None:
-        """Run a same-process worker for local in-memory debugging."""
+        """Start the in-process run executor for single-process deployments.
+
+        Execution *topology*, not the store backend, decides whether the API
+        process runs its own worker. Two single-process deployments qualify and
+        MUST run the worker here (they supervise no separate worker process):
+
+        * in-memory dev/test (``make dev``, unit tests), and
+        * the ``single_user_desktop`` app (Postgres or file store).
+
+        Multi-process server profiles (``saas_multi_tenant``,
+        ``single_tenant_*``) run a dedicated ``runtime_worker`` process and MUST
+        NOT also start one in-process, or a claimed run would be processed twice.
+        The store backend is a stale proxy for "single process"; the file store
+        (durable, but single-writer and single-process) is exactly the case that
+        proxy got wrong.
+        """
 
         settings = getattr(app.state, "runtime_settings", None)
         if settings is None:
             return
-        if settings.store.backend not in {"in_memory", "in_memory_async"}:
-            return
         if not settings.execution.start_in_process_worker:
             return
-        ports = getattr(app.state, "runtime_ports", None) or getattr(
-            app.state, "runtime_ports", None
+        deployment = getattr(app.state, "deployment", None)
+        is_single_process_desktop = (
+            deployment is not None and deployment.name == PROFILE_SINGLE_USER_DESKTOP
         )
+        in_memory_backend = settings.store.backend in {
+            "in_memory",
+            "in_memory_async",
+        }
+        if not (in_memory_backend or is_single_process_desktop):
+            return
+        ports = getattr(app.state, "runtime_ports", None)
         if ports is None:
             return
         event_bus = getattr(app.state, "runtime_event_bus", None)
@@ -819,6 +841,7 @@ class RuntimeApiAppFactory:
             conversation_tool_ordinal_store=getattr(
                 ports, "conversation_tool_ordinal_store", None
             ),
+            citation_store=getattr(ports, "citation_store", None),
             mcp_discovery_cache=getattr(app.state, "mcp_discovery_cache", None),
             user_policies_resolver=getattr(
                 app.state, "runtime_user_policies_resolver", None

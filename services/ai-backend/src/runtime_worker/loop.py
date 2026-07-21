@@ -61,6 +61,7 @@ class RuntimeWorker:
         conversation_tool_ordinal_store: (
             "ConversationToolOrdinalStorePort | None"
         ) = None,
+        citation_store: "CitationStorePort | None" = None,
         mcp_discovery_cache: object | None = None,
         user_policies_resolver: object | None = None,
     ) -> None:
@@ -71,13 +72,18 @@ class RuntimeWorker:
         self.worker_id = worker_id or f"runtime-worker-{uuid4().hex[:8]}"
         self.lock_seconds = lock_seconds
         self.retry_delay_seconds = retry_delay_seconds
-        # Reuse the same pool when the adapter satisfies CitationStorePort (Postgres);
-        # fall back to an in-memory sibling for dev and unit tests.
-        citation_store: CitationStorePort = (
-            self.persistence
-            if isinstance(self.persistence, CitationStorePort)
-            else InMemoryCitationStore()
-        )
+        # Prefer an injected citation store: the composed RuntimePorts wire the
+        # backend-correct DURABLE store (the Postgres pool, or the file store's
+        # FileCitationStore). Fall back to the historical resolution when none is
+        # injected, so existing direct-construction call sites and tests keep
+        # their exact behavior (Postgres persistence satisfies CitationStorePort;
+        # everything else gets an in-memory sibling).
+        if citation_store is None:
+            citation_store = (
+                self.persistence
+                if isinstance(self.persistence, CitationStorePort)
+                else InMemoryCitationStore()
+            )
         # Defaults to an in-memory adapter for dev/tests; production injects a Postgres
         # adapter that shares the main connection pool.
         self.conversation_tool_ordinal_store: ConversationToolOrdinalStorePort = (

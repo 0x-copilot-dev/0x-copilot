@@ -73,36 +73,50 @@ export function migrateDatabaseUrl(opts: {
   return `postgresql+psycopg://${PG_SUPERUSER}:${password}@127.0.0.1:${opts.pgPort}/${opts.database}`;
 }
 
-// OPT-IN activation of the file-native AI runtime store: conversations, runs,
-// events, and subagent traces persist as JSONL folders under userData instead
-// of the Postgres `atlas_ai` database. Read ONCE at boot from the desktop
-// process env. Parsing mirrors capabilities/feature-gate.ts and fails closed —
-// only an explicit truthy value turns it on; anything else (unset/empty/"0"/
-// "false"/"off"/unrecognized) leaves it OFF, so the DEFAULT boot is
-// byte-identical to the Postgres store.
+// The file-native AI runtime store — conversations, runs, events, and subagent
+// traces persist as JSONL folders under userData instead of the Postgres
+// `atlas_ai` database — is the DEFAULT desktop store (see AC2b cutover). It is
+// the coherent substrate for a single-process desktop app: local-first,
+// inspectable on disk, no embedded RDBMS in the agent run path.
+// `COPILOT_DESKTOP_FILE_STORE_V1` is now an OVERRIDE, not an opt-in: an explicit
+// falsey value pins the legacy Postgres store (the rollback / escape hatch), an
+// explicit truthy value forces file, and unset resolves to file. Read ONCE at
+// boot from the desktop process env.
 //
-// This is OFF by default ON PURPOSE: there is NO Postgres->file migration yet.
-// Enabling the flag starts a FRESH file store; conversations already written to
-// Postgres are NOT visible under the file store until a migration exists.
+// Data continuity: a first file boot starts a FRESH store. Conversations
+// already written to the `atlas_ai` Postgres DB are preserved on disk but are
+// not shown until carried over with `python -m runtime_adapters.migrate` — or
+// pin Postgres via COPILOT_DESKTOP_FILE_STORE_V1=0. See
+// docs/operations/desktop-file-store-migration.md.
 export const AI_FILE_STORE_V1_FLAG = "COPILOT_DESKTOP_FILE_STORE_V1";
 
 const FILE_STORE_V1_TRUTHY = new Set(["1", "true", "yes", "on", "enabled"]);
+const FILE_STORE_V1_FALSEY = new Set(["0", "false", "no", "off", "disabled"]);
 
 /** Relative segments of the file store root under userData: `agent-data/v1`. */
 export const AI_FILE_STORE_V1_SEGMENTS = ["agent-data", "v1"] as const;
 
 /**
- * Whether the file-native AI runtime store is enabled. Fails closed: only an
- * explicit truthy value ("1"/"true"/"yes"/"on"/"enabled", case- and
- * space-tolerant) turns it on. Injectable env map so it is testable without
- * mutating `process.env`.
+ * Resolve the desktop ai-backend store backend from the process env. File-native
+ * is the DEFAULT; Postgres is opt-out. Deterministic and pure so BOTH consumers
+ * (buildServiceEnv's store branch and the supervisor's migration-skip gate)
+ * resolve identically off the same env — they can never diverge. Recognition is
+ * case- and space-tolerant:
+ *   - COPILOT_DESKTOP_FILE_STORE_V1 in {0,false,no,off,disabled} -> "postgres"
+ *   - COPILOT_DESKTOP_FILE_STORE_V1 in {1,true,yes,on,enabled}   -> "file"
+ *   - unset / empty / unrecognized                               -> "file"
+ * Injectable env map so it is testable without mutating `process.env`.
  */
-export function isAiFileStoreV1Enabled(
+export function resolveAiStoreBackend(
   env: Readonly<Record<string, string | undefined>>,
-): boolean {
+): "file" | "postgres" {
   const raw = env[AI_FILE_STORE_V1_FLAG];
-  if (raw === undefined) return false;
-  return FILE_STORE_V1_TRUTHY.has(raw.trim().toLowerCase());
+  if (raw !== undefined) {
+    const normalized = raw.trim().toLowerCase();
+    if (FILE_STORE_V1_FALSEY.has(normalized)) return "postgres";
+    if (FILE_STORE_V1_TRUTHY.has(normalized)) return "file";
+  }
+  return "file";
 }
 
 /**
@@ -199,7 +213,7 @@ export function buildServiceEnv(
     }
     case "ai-backend": {
       env.RUNTIME_ENVIRONMENT = "production";
-      if (isAiFileStoreV1Enabled(inputs.processEnv)) {
+      if (resolveAiStoreBackend(inputs.processEnv) === "file") {
         // OPT-IN file-native store (JSONL folders under userData) instead of
         // the Postgres `atlas_ai` DB. No relational DB env is set, so the
         // ai-backend migration gate is skipped in desktop-supervisor.ts.

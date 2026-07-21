@@ -241,16 +241,21 @@ boot error — never silently regenerated, because the postgres password and
 `logs/{backend,ai-backend,backend-facade}.log` (10 MB × 3 rotation),
 `logs/postgres.log`.
 
-**File-native AI store (opt-in)** — setting `COPILOT_DESKTOP_FILE_STORE_V1`
-truthy (`1`/`true`/`yes`/`on`/`enabled`) switches only the **ai-backend**
-runtime store from the Postgres `atlas_ai` DB to the file-native JSONL store
-under `<userData>/agent-data/v1` (`RUNTIME_STORE_BACKEND=file`; adapter
-provisions the tree `0o700`), and its Postgres migration gate is skipped.
-`backend`'s own Postgres (identity/OAuth/vault) is untouched. **Opt-in pending a
-Postgres→file migration**: it does not exist yet, so enabling the flag starts a
-**fresh** store — conversations already in Postgres are not visible under the
-file store until a migration is built. Default (flag unset/false) is
-byte-identical to the Postgres store.
+**File-native AI store (default)** — the **ai-backend** runtime store is the
+file-native JSONL store under `<userData>/agent-data/v1`
+(`RUNTIME_STORE_BACKEND=file`; adapter provisions the tree `0o700`), and its
+Postgres migration gate is skipped. `backend`'s own Postgres
+(identity/OAuth/vault) is untouched. `COPILOT_DESKTOP_FILE_STORE_V1` is an
+**override**, not an opt-in: a falsey value (`0`/`false`/`no`/`off`/`disabled`)
+pins the legacy Postgres `atlas_ai` store (the rollback / escape hatch), a
+truthy value forces file, and unset resolves to file. **Data continuity**: a
+first file boot starts a **fresh** store — conversations already written to the
+`atlas_ai` Postgres DB are preserved on disk but not shown until carried over
+with `python -m runtime_adapters.migrate` (see
+`docs/operations/desktop-file-store-migration.md`), or pin Postgres with
+`COPILOT_DESKTOP_FILE_STORE_V1=0`. The file backend rides the in-process worker;
+the `single_user_desktop` profile is what starts it (see AC2b:
+`docs/plan/desktop/agent-capabilities/03-ac2b-file-store-default-cutover.md`).
 
 **Crash policy**: children restart with 1s→2s→4s→…→30s backoff;
 ≥ 5 crashes in 5 minutes is a `FatalCrashLoop` surfaced on the boot

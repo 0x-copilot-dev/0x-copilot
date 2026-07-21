@@ -10,7 +10,7 @@ import {
   buildServiceEnv,
   databaseUrl,
   ENV_PASSTHROUGH_ALLOWLIST,
-  isAiFileStoreV1Enabled,
+  resolveAiStoreBackend,
   migrateDatabaseUrl,
   pythonPathValue,
   UVICORN_MODULES,
@@ -138,18 +138,20 @@ describe("buildServiceEnv(backend)", () => {
 });
 
 describe("buildServiceEnv(ai-backend)", () => {
-  it("produces the contract env table with its OWN database", () => {
+  it("defaults to the file-native store with no relational DB env", () => {
     const env = buildServiceEnv("ai-backend", inputs());
     expect(env.RUNTIME_ENVIRONMENT).toBe("production");
     expect(env.ENTERPRISE_DEPLOYMENT_PROFILE).toBe("single_user_desktop");
-    expect(env.RUNTIME_STORE_BACKEND).toBe("postgres");
-    expect(env.DATABASE_URL).toContain("postgresql://");
-    expect(env.DATABASE_URL).toContain("/atlas_ai");
-    // yoyo migrate URL uses the +psycopg driver marker.
-    expect(env.RUNTIME_DATABASE_URL).toContain("postgresql+psycopg://");
-    expect(env.RUNTIME_DATABASE_URL).toContain("/atlas_ai");
-    // Auto-apply is off: migrations.ts owns the apply with the +psycopg URL.
-    expect(env.RUNTIME_MIGRATIONS_AUTO_APPLY).toBe("false");
+    // File-native is the DEFAULT desktop store (AC2b cutover).
+    expect(env.RUNTIME_STORE_BACKEND).toBe("file");
+    expect(env.RUNTIME_FILE_STORE_ROOT).toBe(
+      join(USER_DATA_DIR, "agent-data", "v1"),
+    );
+    // No Postgres AI-DB env when file is active.
+    expect(env.DATABASE_URL).toBeUndefined();
+    expect(env.RUNTIME_DATABASE_URL).toBeUndefined();
+    expect(env.RUNTIME_MIGRATIONS_AUTO_APPLY).toBeUndefined();
+    // Store-agnostic wiring is unchanged.
     expect(env.OTEL_SDK_DISABLED).toBe("true");
     expect(env.RUNTIME_START_IN_PROCESS_WORKER).toBe("true");
     expect(env.RUNTIME_EVENT_BUS_BACKEND).toBe("in_memory");
@@ -167,25 +169,47 @@ describe("buildServiceEnv(ai-backend)", () => {
     // Backend-only settings do not leak.
     expect(env.MCP_TOKEN_VAULT_SECRET).toBeUndefined();
     expect(env.BACKEND_ENVIRONMENT).toBeUndefined();
-    // Default (flag off) uses Postgres — no file store env.
+  });
+
+  it("pins the Postgres store (full DB contract) on explicit opt-out", () => {
+    const env = buildServiceEnv(
+      "ai-backend",
+      inputs({ [AI_FILE_STORE_V1_FLAG]: "0" }),
+    );
+    expect(env.RUNTIME_STORE_BACKEND).toBe("postgres");
+    expect(env.DATABASE_URL).toContain("postgresql://");
+    expect(env.DATABASE_URL).toContain("/atlas_ai");
+    // yoyo migrate URL uses the +psycopg driver marker.
+    expect(env.RUNTIME_DATABASE_URL).toContain("postgresql+psycopg://");
+    expect(env.RUNTIME_DATABASE_URL).toContain("/atlas_ai");
+    // Auto-apply is off: migrations.ts owns the apply with the +psycopg URL.
+    expect(env.RUNTIME_MIGRATIONS_AUTO_APPLY).toBe("false");
     expect(env.RUNTIME_FILE_STORE_ROOT).toBeUndefined();
   });
 });
 
-describe("isAiFileStoreV1Enabled", () => {
-  it("enables only on an explicit truthy value (case/space-tolerant)", () => {
-    for (const raw of ["1", "true", "TRUE", " yes ", "On", "enabled"]) {
-      expect(isAiFileStoreV1Enabled({ [AI_FILE_STORE_V1_FLAG]: raw })).toBe(
-        true,
+describe("resolveAiStoreBackend", () => {
+  it("defaults to the file store for unset/empty/unrecognized values", () => {
+    expect(resolveAiStoreBackend({})).toBe("file");
+    for (const raw of ["", " ", "nope", "2", "maybe"]) {
+      expect(resolveAiStoreBackend({ [AI_FILE_STORE_V1_FLAG]: raw })).toBe(
+        "file",
       );
     }
   });
 
-  it("fails closed for unset/empty/falsey/unrecognized values", () => {
-    expect(isAiFileStoreV1Enabled({})).toBe(false);
-    for (const raw of ["", "0", "false", "off", "nope", "2"]) {
-      expect(isAiFileStoreV1Enabled({ [AI_FILE_STORE_V1_FLAG]: raw })).toBe(
-        false,
+  it("resolves an explicit truthy value to the file store", () => {
+    for (const raw of ["1", "true", "TRUE", " yes ", "On", "enabled"]) {
+      expect(resolveAiStoreBackend({ [AI_FILE_STORE_V1_FLAG]: raw })).toBe(
+        "file",
+      );
+    }
+  });
+
+  it("pins Postgres only on an explicit falsey value (rollback hatch)", () => {
+    for (const raw of ["0", "false", "FALSE", " off ", "no", "disabled"]) {
+      expect(resolveAiStoreBackend({ [AI_FILE_STORE_V1_FLAG]: raw })).toBe(
+        "postgres",
       );
     }
   });
@@ -241,8 +265,8 @@ describe("buildServiceEnv(ai-backend) with COPILOT_DESKTOP_FILE_STORE_V1", () =>
     expect(env.RUNTIME_STORE_BACKEND).toBeUndefined();
   });
 
-  it("falls back to Postgres for falsey flag values", () => {
-    for (const raw of ["", "0", "false", "off"]) {
+  it("pins Postgres for explicit falsey flag values (rollback hatch)", () => {
+    for (const raw of ["0", "false", "off", "no", "disabled"]) {
       const env = buildServiceEnv(
         "ai-backend",
         inputs({ [AI_FILE_STORE_V1_FLAG]: raw }),

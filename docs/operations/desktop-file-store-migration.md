@@ -5,12 +5,16 @@ in-memory) into the desktop **file** store **before** the file backend is turned
 on. This is the AC2 "Migration from the legacy desktop AI-runtime store" step
 (`docs/plan/desktop/agent-capabilities/02-ac2-file-session-store.md` §702).
 
-> **This tool changes no default.** The file store stays opt-in behind
-> `COPILOT_DESKTOP_FILE_STORE_V1` (which the desktop supervisor maps to
-> `RUNTIME_STORE_BACKEND=file` + `RUNTIME_FILE_STORE_ROOT=<userData>/agent-data/v1`).
-> Run the migration first so the file store is non-empty when you later flip the
-> flag. Flipping the flag without migrating still starts a **fresh, empty** file
-> store — the migration is what carries history across.
+> **The file store is the desktop default (AC2b).** The desktop supervisor maps
+> the default to `RUNTIME_STORE_BACKEND=file` +
+> `RUNTIME_FILE_STORE_ROOT=<userData>/agent-data/v1`;
+> `COPILOT_DESKTOP_FILE_STORE_V1=0` (or `false`/`off`) pins the legacy Postgres
+> store as an escape hatch. A first file boot starts a **fresh, empty** store —
+> existing Postgres conversations are preserved on disk but not shown until this
+> migration carries them across. Run it (with the flag pinned to Postgres, or on
+> a quiesced app) **before** letting the app settle on the file store, or run it
+> against the already-created file root to backfill history. This is the AC2
+> "Migration from the legacy desktop AI-runtime store" step.
 
 ## What it does
 
@@ -64,10 +68,14 @@ export PYTHONPATH="$PWD/../../packages/service-contracts/src:$PWD/../../packages
   --org-id "$ORG_ID" --user-id "$USER_ID" --verify-only
 ```
 
-Only a **clean verify** authorises turning the backend on. After a clean verify:
+The file backend is already the desktop default, so after a **clean verify** the
+migrated history is simply picked up on the next boot — no flag change is needed.
+(If you had pinned Postgres with `COPILOT_DESKTOP_FILE_STORE_V1=0` to run the
+migration against a live source, unset it — or set it truthy — to return to the
+file default:)
 
 ```bash
-# Enable the opt-in file backend (desktop supervisor reads this at boot).
+# Return to the file-native default (unset also works — file is the default).
 export COPILOT_DESKTOP_FILE_STORE_V1=1
 ```
 
