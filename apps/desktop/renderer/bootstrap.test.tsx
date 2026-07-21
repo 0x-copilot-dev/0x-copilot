@@ -139,6 +139,12 @@ describe("renderer bootstrap", () => {
           email: "sarah@acme.test",
         });
       }
+      // First-run gate (P0/P1): a returning user's flag is already complete, so
+      // the gate drops straight through to the shell these tests assert on. A
+      // first-time user's onboarding surface is covered by FirstRunGate.test.tsx.
+      if (channel === "first-run.get") {
+        return Promise.resolve({ completed: true });
+      }
       return Promise.resolve(null);
     });
 
@@ -237,6 +243,11 @@ describe("renderer bootstrap", () => {
           displayName: "Sarah",
           email: "sarah@acme.test",
         });
+      }
+      // Returning user — first-run flag complete, so the gate mounts the shell
+      // (Settings/Profile) this test drives.
+      if (channel === "first-run.get") {
+        return Promise.resolve({ completed: true });
       }
       // auth.sign-out (and anything else) resolves cleanly.
       return Promise.resolve(null);

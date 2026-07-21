@@ -1,0 +1,284 @@
+/* First-Run onboarding (FTUE) stylesheet for @0x-copilot/chat-surface.
+ *
+ * The onboarding surface (FirstRunSurface / Gate / KeyForm) emits `fr-*` class
+ * names. Hosts import this ONCE beside composer.css / workspace.css so the
+ * styles travel with the shared components (any host that skips it renders the
+ * gate unstyled). P1 OWNS this file; P2 (local card) and P3 (composer/ack)
+ * APPEND their `fr-*` classes here — one stylesheet, one token map.
+ *
+ * Token discipline (README §2, PRD-P1 §5): every color/size resolves a
+ * design-system `var(--…)` token — design-system is the SSOT. The ONLY literals
+ * are the three per-provider dot swatches (inline `style`, SPEC §Data — not the
+ * app accent) and the hero's `-0.015em` tracking (tracking is not tokenized).
+ * The smallest size token is `--font-size-2xs` (11.2px); the SPEC's 9–10.5px
+ * mono labels round UP to it (no `--font-size-3xs` exists — flagged in P1).
+ *
+ * Theme-aware for free: all colors are tokens, so dark/light/slate resolve from
+ * styles.css. Motion is gated under reduced-motion (R8). */
+
+/* --- Full-bleed surface (R6): fills the OS window, own internal scroll ------ */
+.fr {
+  display: flex;
+  flex-direction: column;
+  width: 100%;
+  min-height: 100vh;
+  overflow: auto;
+  background-color: var(--color-bg);
+  color: var(--color-text);
+  font-family: var(--font-sans);
+}
+
+/* --- Top bar: brand · wallet-chip slot · skip ------------------------------ */
+.fr-top {
+  display: flex;
+  align-items: center;
+  gap: var(--space-md);
+  padding: var(--space-md) var(--space-lg);
+  border-bottom: 1px solid var(--color-border);
+}
+
+.fr-brand {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-xs);
+}
+
+.fr-brand__name {
+  font-family: var(--font-display);
+  font-weight: var(--font-weight-semibold);
+  font-size: var(--font-size-md);
+  color: var(--color-text);
+}
+
+/* The "0x" lead in the app accent (sky) — one-accent discipline. */
+.fr-brand__zx {
+  color: var(--color-accent);
+}
+
+.fr-top__chip {
+  display: inline-flex;
+  align-items: center;
+}
+
+.fr-top__spacer {
+  flex: 1 1 auto;
+}
+
+/* Ghost skip link — muted, brightens on hover. */
+.fr-skiplink {
+  appearance: none;
+  border: none;
+  background: transparent;
+  padding: var(--space-2xs) var(--space-xs);
+  font: inherit;
+  font-size: var(--font-size-sm);
+  color: var(--color-text-muted);
+  cursor: pointer;
+  border-radius: var(--radius-sm);
+  transition: color var(--duration-fast) var(--ease-standard);
+}
+
+.fr-skiplink:hover {
+  color: var(--color-text);
+}
+
+/* --- Centered main column -------------------------------------------------- */
+.fr-main {
+  flex: 1 1 auto;
+  display: flex;
+  flex-direction: column;
+  justify-content: center;
+  gap: var(--space-xl);
+  width: min(640px, 92%);
+  margin-inline: auto;
+  padding-block: var(--space-2xl);
+}
+
+/* --- Hero -------------------------------------------------------------------*/
+.fr-hero {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-xs);
+}
+
+.fr-hero__title {
+  margin: 0;
+  font-family: var(--font-display);
+  font-weight: var(--font-weight-semibold);
+  font-size: var(--font-size-2xl);
+  line-height: var(--line-height-tight);
+  letter-spacing: -0.015em; /* documented literal — tracking is not tokenized */
+  color: var(--color-text-strong);
+}
+
+.fr-hero__sub {
+  margin: 0;
+  font-size: var(--font-size-sm);
+  color: var(--color-text-muted);
+}
+
+/* --- Gate: 2-col grid, stacks under ~560px --------------------------------- */
+.fr-gate {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: var(--space-lg);
+}
+
+@media (max-width: 560px) {
+  .fr-gate {
+    grid-template-columns: 1fr;
+  }
+}
+
+/* --- Gate card (radius 12 = --radius-lg) ------------------------------------*/
+.fr-gcard {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-sm);
+  padding: var(--space-xl);
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-lg);
+  background-color: var(--color-surface);
+}
+
+.fr-gcard__icon {
+  display: inline-flex;
+  color: var(--color-accent);
+}
+
+.fr-gcard__title {
+  margin: 0;
+  font-size: var(--font-size-md);
+  font-weight: var(--font-weight-semibold);
+  color: var(--color-text);
+}
+
+.fr-gcard__meta {
+  margin: 0;
+  font-family: var(--font-mono);
+  font-size: var(--font-size-2xs);
+  color: var(--color-text-muted);
+}
+
+.fr-gcard__body {
+  margin: 0;
+  font-size: var(--font-size-sm);
+  color: var(--color-text-muted);
+}
+
+.fr-gcard__note {
+  margin: 0;
+  font-family: var(--font-mono);
+  font-size: var(--font-size-2xs);
+  color: var(--color-text-subtle);
+}
+
+/* Push the CTA + note to the card foot so both cards align. */
+.fr-gcard__foot {
+  margin-top: auto;
+  padding-top: var(--space-sm);
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-xs);
+  align-items: flex-start;
+}
+
+/* --- Inline BYOK key form -------------------------------------------------- */
+.fr-kf {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-md);
+  width: 100%;
+  padding: var(--space-lg);
+  border-radius: var(--radius-md);
+  background-color: var(--color-surface-muted);
+}
+
+.fr-kf__prov {
+  align-self: flex-start;
+  max-width: 100%;
+}
+
+/* Provider tri-toggle option = leading swatch dot + label. */
+.fr-kf__opt {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-xs);
+}
+
+.fr-kf__dot {
+  display: inline-block;
+  width: 8px;
+  height: 8px;
+  border-radius: var(--radius-full);
+  /* background supplied inline from FirstRunKeyProvider.dotColor (SPEC §Data). */
+}
+
+/* Mono key input (the design's password field is monospaced). */
+.fr-kf__input {
+  font-family: var(--font-mono);
+}
+
+.fr-kf__note {
+  margin: 0;
+  font-family: var(--font-mono);
+  font-size: var(--font-size-2xs);
+  color: var(--color-text-subtle);
+}
+
+.fr-kf__error {
+  margin: 0;
+  font-size: var(--font-size-xs);
+  color: var(--color-danger);
+}
+
+.fr-kf__actions {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: var(--space-sm);
+}
+
+/* --- Deferred-phase slot placeholders (P2 local card / P3 composer+ack) ----
+ * Replaced by the injected slots; these are the P1 fallbacks only. */
+.fr-slot {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: var(--space-md);
+  padding: var(--space-xl);
+  border: 1px dashed var(--color-border);
+  border-radius: var(--radius-lg);
+  background-color: var(--color-surface);
+}
+
+.fr-slot__note {
+  margin: 0;
+  font-size: var(--font-size-sm);
+  color: var(--color-text-muted);
+}
+
+/* --- Footer: mono, space-between ------------------------------------------- */
+.fr-foot {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-md);
+  padding: var(--space-md) var(--space-lg);
+  border-top: 1px solid var(--color-border);
+  font-family: var(--font-mono);
+  font-size: var(--font-size-2xs);
+  color: var(--color-text-subtle);
+}
+
+/* --- Reduced motion (R8): neutralize transitions --------------------------- */
+[data-reduce-motion="1"] .fr-skiplink,
+[data-reduce-motion="always"] .fr-skiplink {
+  transition: none;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .fr-skiplink {
+    transition: none;
+  }
+}
