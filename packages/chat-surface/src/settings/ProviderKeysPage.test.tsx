@@ -186,7 +186,8 @@ describe("<ProviderKeysPage>", () => {
     fireEvent.click(await screen.findByTestId("add-key-submit"));
 
     await waitFor(() => expect(port.save).toHaveBeenCalledTimes(1));
-    expect(port.save).toHaveBeenCalledWith("openai", FAKE_KEY);
+    // The step-3 pick rides the same PUT (PR-F.5 per-provider default_model).
+    expect(port.save).toHaveBeenCalledWith("openai", FAKE_KEY, "gpt-4o");
     // Row flips to connected with the chosen model chip; onToast fires.
     await screen.findByTestId("provider-row-openai");
     expect(screen.getByTestId("provider-model-chip-openai")).toHaveTextContent(

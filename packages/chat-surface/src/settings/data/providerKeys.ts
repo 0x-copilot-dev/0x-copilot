@@ -181,11 +181,16 @@ export interface ProviderKeysPort {
   /**
    * `PUT /v1/settings/provider-keys/{provider}` — stores the plaintext key
    * exactly once (PUT body) and returns the masked summary. The plaintext is
-   * never returned or logged.
+   * never returned or logged. When `defaultModel` is provided it is persisted
+   * on the per-provider `default_model` column (PR-F.5), so the server projects
+   * it back on `ProviderKeySummary.default_model` and the row chip survives
+   * reload per-provider on both hosts. Omit (or pass `null`/`""`) to leave the
+   * stored default untouched — a rotation preserves the existing pick.
    */
   save(
     provider: string,
     apiKey: string,
+    defaultModel?: string | null,
     signal?: AbortSignal,
   ): Promise<ProviderKeySummary>;
   /** `DELETE /v1/settings/provider-keys/{provider}`. */
@@ -227,8 +232,16 @@ export function createProviderKeysPort(transport: Transport): ProviderKeysPort {
       });
       return res.keys;
     },
-    save(provider, apiKey, signal) {
-      const body: PutProviderKeyRequest = { api_key: apiKey };
+    save(provider, apiKey, defaultModel, signal) {
+      // Plaintext travels exactly once, in this PUT body. `default_model` is a
+      // display-safe slug (never key material) persisted per-provider so the
+      // summary can project it back.
+      const body: PutProviderKeyRequest =
+        defaultModel !== undefined &&
+        defaultModel !== null &&
+        defaultModel !== ""
+          ? { api_key: apiKey, default_model: defaultModel }
+          : { api_key: apiKey };
       return transport.request<ProviderKeySummary>({
         method: "PUT",
         path: `/v1/settings/provider-keys/${encodeURIComponent(provider)}`,

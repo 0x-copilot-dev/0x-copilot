@@ -446,6 +446,18 @@ export function SettingsMount({
     );
     return match ? match.id : dm.model_name;
   }, [mbCatalog, workspaceDefaults]);
+  // Legacy fallback for the provider-keys row chip, kept SYMMETRIC with the web
+  // binder so the two hosts render identically (closes the modelChips
+  // divergence). New keys carry `summary.default_model` (PR-F.5 per-provider
+  // column) and never hit this; a key stored before the per-provider write path
+  // has a null column, so it falls back to the single workspace default here.
+  // Key store speaks `google`; the model resolver speaks `gemini`.
+  const providerModelChips = useMemo<Readonly<Record<string, string>>>(() => {
+    const dm = workspaceDefaults?.default_model;
+    if (!dm || dm.provider === "" || dm.model_name === "") return {};
+    const providerKey = dm.provider === "gemini" ? "google" : dm.provider;
+    return { [providerKey]: dm.model_name };
+  }, [workspaceDefaults]);
   const mbCloudModels = useMemo(() => {
     const options: ModelBehaviorModelOption[] = mbCatalog.map((m) => ({
       value: m.id,
@@ -697,7 +709,13 @@ export function SettingsMount({
 
       // --- Models & keys --------------------------------------------------
       case "provider-keys":
-        return <ProviderKeysPage port={providerKeysPort} onToast={toast} />;
+        return (
+          <ProviderKeysPage
+            port={providerKeysPort}
+            onToast={toast}
+            modelChips={providerModelChips}
+          />
+        );
       case "models":
         return <ModelsPage port={modelsPort} onToast={toast} />;
       case "local-models":
