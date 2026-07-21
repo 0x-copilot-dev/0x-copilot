@@ -434,6 +434,9 @@ function wireTransportAndIpc(facadeUrl: string | undefined): void {
         authService.signInWithGoogle(workspaceId),
       signInWithWallet: (workspaceId) =>
         authService.signInWithWallet(workspaceId),
+      linkGoogle: (workspaceId) => authService.linkGoogle(workspaceId),
+      linkWallet: (workspaceId, confirmMerge) =>
+        authService.linkWallet(workspaceId, confirmMerge),
       signOut: (workspaceId) => authService.signOut(workspaceId),
       getSession: (workspaceId) => authService.getSession(workspaceId),
       refresh: (workspaceId) => authService.refresh(workspaceId),
@@ -531,6 +534,11 @@ interface ActiveAuthService {
   signInWithWallet(
     workspaceId: string,
   ): ReturnType<AuthService["signInWithWallet"]>;
+  linkGoogle(workspaceId: string): ReturnType<AuthService["linkGoogle"]>;
+  linkWallet(
+    workspaceId: string,
+    confirmMerge: boolean,
+  ): ReturnType<AuthService["linkWallet"]>;
   /**
    * User-initiated sign-out (renderer → IPC). Routes to the audited
    * signOutUserInitiated so a real sign-out is recorded; getSession eviction
@@ -622,6 +630,11 @@ function buildAuthService(
         : service.signIn(workspaceId),
     signInWithGoogle: (workspaceId) => service.signInWithGoogle(workspaceId),
     signInWithWallet: (workspaceId) => service.signInWithWallet(workspaceId),
+    // Account-linking (PRD FR-L1/L2): authenticated LINK flows. The bearer is
+    // pulled inside the service; only a renderer-safe outcome comes back.
+    linkGoogle: (workspaceId) => service.linkGoogle(workspaceId),
+    linkWallet: (workspaceId, confirmMerge) =>
+      service.linkWallet(workspaceId, confirmMerge),
     // User-initiated sign-out: route to the audited variant so a real sign-out
     // emits a 'sign-out' audit row. The raw service.signOut used by getSession
     // eviction stays audit-free (no user-sign-out event on a silent eviction).

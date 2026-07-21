@@ -7423,6 +7423,31 @@ p {
   margin-top: var(--space-xs);
 }
 
+/* Account-linking (PRD FR-U1) — one linked identity per row, its Unlink
+   button pushed to the end, with the last-method guard error beneath. */
+.me-form__linked-row {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2xs);
+  padding: var(--space-2xs) 0;
+}
+
+.me-form__linked-row .me-form__email-row {
+  flex-wrap: wrap;
+}
+
+.me-form__linked-row .me-form__email-row > button {
+  margin-left: auto;
+}
+
+.me-form__link-ctas {
+  align-items: center;
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-md);
+  margin-top: var(--space-xs);
+}
+
 /* PR 8.1 — two-card Profile structure (Identity + Sign-in & security)
    plus the Appearance Region & language card. The card title sits inside
    the design-system <Card> so it doesn't collide with the section h2. */

@@ -186,3 +186,125 @@ class TestGoogleStartWithoutOrg:
         body = response.json()
         assert body["auth_url"].startswith("https://accounts.google.com/")
         assert body["state"] == "state-123"
+
+
+class TestOidcCallbackLinkRedirect:
+    """Account-linking (PRD FR-L2): the callback redirects LINK outcomes into
+    the same-origin landing UI, but leaves SIGN-IN JSON handoffs untouched."""
+
+    def test_sign_in_result_still_returns_json_handoff(self, env, monkeypatch) -> None:
+        del env
+        # A sign-in result carries NO `linked` marker → the desktop loopback
+        # + web adopt paths must keep receiving the bearer JSON verbatim.
+        handoff = {
+            "user_id": "usr_1",
+            "session_id": "ses_1",
+            "bearer_token": "brr_1",
+            "expires_at": "2030-01-01T00:00:00Z",
+            "return_to": None,
+            "requires_mfa": False,
+        }
+
+        def _respond(**_kwargs) -> httpx.Response:
+            return httpx.Response(200, json=handoff)
+
+        _install_fake_backend(monkeypatch, response_factory=_respond)
+        response = _client().get(
+            "/v1/auth/oidc/callback",
+            params={"state": "s", "code": "c"},
+            follow_redirects=False,
+        )
+        assert response.status_code == 200
+        assert response.json() == handoff
+
+    def test_link_result_redirects_to_landing_with_outcome(
+        self, env, monkeypatch
+    ) -> None:
+        del env
+
+        def _respond(**_kwargs) -> httpx.Response:
+            return httpx.Response(
+                200,
+                json={
+                    "linked": True,
+                    "status": "linked",
+                    "user_id": "usr_1",
+                    "provider_id": "google",
+                    "email": "person@example.com",
+                    "email_upgraded": True,
+                    "return_to": "/settings#profile",
+                },
+            )
+
+        _install_fake_backend(monkeypatch, response_factory=_respond)
+        response = _client().get(
+            "/v1/auth/oidc/callback",
+            params={"state": "s", "code": "c"},
+            follow_redirects=False,
+        )
+        assert response.status_code == 302
+        location = response.headers["location"]
+        assert location.startswith("/oauth/link/callback?")
+        assert "link_status=linked" in location
+        assert "provider=google" in location
+        assert "email_upgraded=true" in location
+        assert "return_to=%2Fsettings%23profile" in location
+        # No PII (the email address) rides in the redirect URL.
+        assert "person%40example.com" not in location
+        assert "person@example.com" not in location
+
+    def test_merge_required_conflict_redirects_to_landing(
+        self, env, monkeypatch
+    ) -> None:
+        del env
+
+        def _respond(**_kwargs) -> httpx.Response:
+            return httpx.Response(
+                409,
+                json={
+                    "detail": {
+                        "code": "merge_required",
+                        "safe_message": "This Google account already belongs to another account.",
+                    }
+                },
+            )
+
+        _install_fake_backend(monkeypatch, response_factory=_respond)
+        response = _client().get(
+            "/v1/auth/oidc/callback",
+            params={"state": "s", "code": "c"},
+            follow_redirects=False,
+        )
+        assert response.status_code == 302
+        assert response.headers["location"] == (
+            "/oauth/link/callback?link_status=merge_required"
+        )
+
+    def test_unsafe_return_to_is_dropped_from_redirect(self, env, monkeypatch) -> None:
+        del env
+
+        def _respond(**_kwargs) -> httpx.Response:
+            return httpx.Response(
+                200,
+                json={
+                    "linked": True,
+                    "status": "already_linked",
+                    "user_id": "usr_1",
+                    "provider_id": "google",
+                    "email_upgraded": False,
+                    # An open-redirect attempt — must never reach the Location.
+                    "return_to": "https://evil.example/steal",
+                },
+            )
+
+        _install_fake_backend(monkeypatch, response_factory=_respond)
+        response = _client().get(
+            "/v1/auth/oidc/callback",
+            params={"state": "s", "code": "c"},
+            follow_redirects=False,
+        )
+        assert response.status_code == 302
+        location = response.headers["location"]
+        assert "evil.example" not in location
+        assert "return_to" not in location
+        assert "link_status=already_linked" in location

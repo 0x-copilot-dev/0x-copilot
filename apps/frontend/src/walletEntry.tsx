@@ -23,10 +23,15 @@ if (root === null) {
   throw new Error("Root element was not found");
 }
 
-const rawHandoff = new URLSearchParams(window.location.search).get("handoff");
+const params = new URLSearchParams(window.location.search);
+const rawHandoff = params.get("handoff");
+// LINK mode (account-linking PRD FR-L1) — the desktop opens
+// `/wallet.html?mode=link` to collect a proof for an authenticated wallet
+// link instead of minting a session.
+const mode = params.get("mode") === "link" ? "link" : "sign-in";
 
 createRoot(root).render(
   <StrictMode>
-    <WalletHandoffPage rawHandoff={rawHandoff} />
+    <WalletHandoffPage rawHandoff={rawHandoff} mode={mode} />
   </StrictMode>,
 );

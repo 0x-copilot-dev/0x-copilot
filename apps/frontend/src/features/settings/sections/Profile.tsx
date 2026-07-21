@@ -13,7 +13,9 @@ import { AccountSessionsPanel } from "../AccountSessionsPanel";
 import { useAuth } from "../../auth/AuthContext";
 import { AvatarUploadError, fileToAvatarBlob } from "./avatarPipeline";
 import { deleteMyAvatar, uploadMyAvatar } from "../../../api/avatarApi";
-import { startGoogleLink } from "../../../api/meApi";
+import { startGoogleLink, unlinkIdentity } from "../../../api/meApi";
+import { WalletLinkFlow } from "../../auth/WalletLinkFlow";
+import { buildGoogleLinkReturnTo } from "../../auth/googleLinkLanding";
 import { MfaPanel } from "./MfaPanel";
 import { errorMessage } from "../../../utils/errors";
 
@@ -53,7 +55,46 @@ export function Profile({
   const fileInputRef = useRef<HTMLInputElement | null>(null);
   const [savedAt, setSavedAt] = useState<string | null>(null);
   const [errorText, setErrorText] = useState<string | null>(null);
+  // Account-linking (PRD FR-L5): per-identity unlink busy + inline guard error.
+  const [unlinkingId, setUnlinkingId] = useState<string | null>(null);
+  const [unlinkError, setUnlinkError] = useState<{
+    id: string;
+    message: string;
+  } | null>(null);
   const auth = useAuth();
+
+  async function onUnlink(kind: "wallet" | "oidc", id: string): Promise<void> {
+    setUnlinkError(null);
+    setUnlinkingId(id);
+    try {
+      await unlinkIdentity(kind, id);
+      // The 409 last-sign-in-method guard throws; a success drops the row.
+      await profile.refresh().catch(() => undefined);
+    } catch (err) {
+      setUnlinkError({
+        id,
+        message: errorMessage(err, "Could not unlink that sign-in method."),
+      });
+    } finally {
+      setUnlinkingId(null);
+    }
+  }
+
+  function startGoogleLinkFlow(): void {
+    // Account-linking (PRD FR-L2): "add an email" / "link Google". The
+    // authenticated start binds the flow to this account server-side; the
+    // browser completes on the facade callback, which 302-redirects back to
+    // the in-app landing route with the outcome (see googleLinkLanding.ts).
+    void startGoogleLink(
+      window.location.origin + "/v1/auth/oidc/callback",
+      buildGoogleLinkReturnTo(),
+    )
+      .then((res) => window.location.assign(res.auth_url))
+      .catch((err: unknown) => {
+        setUnlinkError(null);
+        setErrorText(errorMessage(err, "Could not start Google linking."));
+      });
+  }
 
   useEffect(() => {
     if (!data) {
@@ -329,15 +370,7 @@ export function Profile({
               <button
                 type="button"
                 className="me-form__inline-link"
-                onClick={() => {
-                  // Account-linking (PRD FR-L2): "add an email" = link Google.
-                  // The authenticated start binds the flow to this account
-                  // server-side; the browser completes on the public callback.
-                  void startGoogleLink(
-                    window.location.origin + "/v1/auth/oidc/callback",
-                    window.location.pathname,
-                  ).then((res) => window.location.assign(res.auth_url));
-                }}
+                onClick={startGoogleLinkFlow}
                 title="Link a Google account to add a verified email"
               >
                 Add an email — continue with Google
@@ -364,31 +397,89 @@ export function Profile({
             </Field>
           )}
 
-          {data.linked_identities && data.linked_identities.length > 0 ? (
-            <Field label="Linked accounts">
-              {data.linked_identities.map((identity) => (
-                <div key={identity.id} className="me-form__email-row">
-                  {identity.kind === "wallet" ? (
-                    <>
-                      <code>{identity.address}</code>
-                      {identity.chain_name ? (
-                        <Badge tone="success">{identity.chain_name}</Badge>
-                      ) : null}
-                    </>
-                  ) : (
-                    <>
-                      <code>{identity.email ?? identity.provider}</code>
-                      <Badge tone="success">
-                        {identity.provider === "google"
-                          ? "Google"
-                          : (identity.provider ?? "SSO")}
-                      </Badge>
-                    </>
-                  )}
+          {/* Linked accounts (PRD FR-U1) — always shown (even empty), matching
+              chat-surface. Every sign-in identity, each with Unlink (FR-L5,
+              last-method guard surfaced), plus Link CTAs per kind. */}
+          <Field label="Linked accounts">
+            {data.linked_identities && data.linked_identities.length > 0 ? (
+              data.linked_identities.map((identity) => (
+                <div key={identity.id} className="me-form__linked-row">
+                  <div className="me-form__email-row">
+                    {identity.kind === "wallet" ? (
+                      <>
+                        <code>{identity.address}</code>
+                        {identity.chain_name ? (
+                          <Badge tone="success">{identity.chain_name}</Badge>
+                        ) : null}
+                      </>
+                    ) : (
+                      <>
+                        <code>{identity.email ?? identity.provider}</code>
+                        <Badge tone="success">
+                          {identity.provider === "google"
+                            ? "Google"
+                            : (identity.provider ?? "SSO")}
+                        </Badge>
+                      </>
+                    )}
+                    <Button
+                      type="button"
+                      variant="ghost"
+                      size="sm"
+                      onClick={() =>
+                        void onUnlink(
+                          identity.kind === "wallet" ? "wallet" : "oidc",
+                          identity.id,
+                        )
+                      }
+                      disabled={unlinkingId === identity.id}
+                      title="Remove this sign-in method"
+                      data-testid={`profile-unlink-${identity.id}`}
+                    >
+                      {unlinkingId === identity.id ? "Unlinking…" : "Unlink"}
+                    </Button>
+                  </div>
+                  {unlinkError && unlinkError.id === identity.id ? (
+                    <p
+                      className="app-error"
+                      role="alert"
+                      data-testid={`profile-unlink-error-${identity.id}`}
+                    >
+                      {unlinkError.message}
+                    </p>
+                  ) : null}
                 </div>
-              ))}
-            </Field>
-          ) : null}
+              ))
+            ) : (
+              <p className="settings-meta" data-testid="profile-linked-empty">
+                No additional sign-in methods linked yet.
+              </p>
+            )}
+            <div className="me-form__link-ctas">
+              {/* Any account can add a wallet (FR-L1); the flow owns the
+                  merge-confirm dialog (FR-U2). */}
+              <WalletLinkFlow
+                onLinked={() => void profile.refresh().catch(() => undefined)}
+              />
+              {/* Offer Google linking when no Google identity is present yet.
+                  Wallet accounts already have the inline "add an email" CTA
+                  above; this covers email/dev accounts adding Google. */}
+              {!isWallet &&
+              !(data.linked_identities ?? []).some(
+                (i) => i.provider === "google",
+              ) ? (
+                <button
+                  type="button"
+                  className="me-form__inline-link"
+                  onClick={startGoogleLinkFlow}
+                  data-testid="profile-link-google"
+                  title="Link a Google account"
+                >
+                  Link Google
+                </button>
+              ) : null}
+            </div>
+          </Field>
 
           <Field
             label="Job title"

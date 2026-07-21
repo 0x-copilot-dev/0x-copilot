@@ -12,6 +12,7 @@ from __future__ import annotations
 
 import os
 from typing import Any
+from urllib.parse import urlencode
 
 import httpx
 from copilot_service_contracts.headers import (
@@ -186,7 +187,7 @@ def register_auth_routes(app: FastAPI) -> None:
         code: str | None = Query(None),
         error: str | None = Query(None),
         error_description: str | None = Query(None),
-    ) -> dict[str, object]:
+    ) -> Response:
         if error or not code:
             # Surface the IdP's failure verbatim (without the bearer it would
             # have minted) so the frontend can show a useful message.
@@ -209,8 +210,32 @@ def register_auth_routes(app: FastAPI) -> None:
             headers=_anonymous_service_headers(org_id="-"),
             timeout=15,
         )
+        # Account-linking (PRD FR-L2): a LINK-bound callback completes in the
+        # browser and must land in product UI, not on raw JSON. Redirect link
+        # outcomes to the same-origin landing route with the result in the
+        # query string. SIGN-IN callbacks are unchanged — they keep returning
+        # the JSON bearer handoff the desktop loopback + web adopt paths
+        # consume (a sign-in result never carries `linked`).
+        if response.status_code == status.HTTP_200_OK:
+            body = response.json()
+            if isinstance(body, dict) and body.get("linked") is True:
+                return _link_landing_redirect(
+                    link_status=str(body.get("status") or "linked"),
+                    provider=body.get("provider_id"),
+                    email_upgraded=bool(body.get("email_upgraded")),
+                    return_to=body.get("return_to"),
+                )
+            return Response(content=response.content, media_type="application/json")
+        # A Google conflict (PRD FR-M1/§11) surfaces as 409 merge_required —
+        # for a browser link flow, land it in UI too rather than a JSON error
+        # page. (The merge itself runs through the authenticated wallet-link
+        # path; this only communicates the outcome.)
+        if response.status_code == status.HTTP_409_CONFLICT:
+            detail = _extract_upstream_detail(response)
+            if isinstance(detail, dict) and detail.get("code") == "merge_required":
+                return _link_landing_redirect(link_status="merge_required")
         _raise_for_upstream(response)
-        return response.json()
+        return Response(content=response.content, media_type="application/json")
 
     # ------------------------------------------------------------------
     # SAML 2.0 SSO (A5) — unauthenticated public surface.
@@ -954,14 +979,66 @@ def _bearer_from_request(request: Request) -> str | None:
 def _raise_for_upstream(response: httpx.Response) -> None:
     if response.status_code < 400:
         return
-    detail: Any
+    detail = _extract_upstream_detail(response)
+    raise HTTPException(response.status_code, detail or "Upstream auth error")
+
+
+def _extract_upstream_detail(response: httpx.Response) -> Any:
+    """The upstream's ``detail`` (str or structured dict), or the raw text."""
+
     try:
         body = response.json()
     except ValueError:
-        detail = response.text or "Upstream auth error"
-    else:
-        detail = body.get("detail") if isinstance(body, dict) else body
-    raise HTTPException(response.status_code, detail or "Upstream auth error")
+        return response.text or "Upstream auth error"
+    return body.get("detail") if isinstance(body, dict) else body
+
+
+# Account-linking (PRD FR-L2) — same-origin landing route the Google LINK
+# callback redirects into. Kept byte-identical to the frontend constant
+# ``GOOGLE_LINK_CALLBACK_PATH`` in
+# ``apps/frontend/src/features/auth/googleLinkLanding.ts``.
+_LINK_LANDING_PATH = "/oauth/link/callback"
+
+
+def _is_safe_relative_path(value: object) -> bool:
+    """A same-origin, non-protocol-relative in-app path — never an open
+    redirect target. Mirrors ``isSafeInAppPath`` on the frontend."""
+
+    return (
+        isinstance(value, str)
+        and value.startswith("/")
+        and not value.startswith("//")
+        and "://" not in value
+    )
+
+
+def _link_landing_redirect(
+    *,
+    link_status: str,
+    provider: object = None,
+    email_upgraded: bool | None = None,
+    return_to: object = None,
+) -> RedirectResponse:
+    """302 the browser to the in-app Google-link landing with the outcome in
+    the query string.
+
+    Emits a RELATIVE ``Location`` (``/oauth/link/callback?…``) so the browser
+    resolves it against the SPA origin it navigated from — not the facade's
+    proxied host. No PII rides in the URL: the email is conveyed only as the
+    ``email_upgraded`` boolean, never the address itself (privacy rule).
+    """
+
+    params: dict[str, str] = {"link_status": link_status}
+    if isinstance(provider, str) and provider:
+        params["provider"] = provider
+    if email_upgraded is not None:
+        params["email_upgraded"] = "true" if email_upgraded else "false"
+    if _is_safe_relative_path(return_to):
+        params["return_to"] = str(return_to)
+    return RedirectResponse(
+        url=f"{_LINK_LANDING_PATH}?{urlencode(params)}",
+        status_code=status.HTTP_302_FOUND,
+    )
 
 
 def settings_for(app: FastAPI) -> FacadeSettings:

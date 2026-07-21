@@ -2,8 +2,10 @@ import { generatePrivateKey } from "viem/accounts";
 
 import type { AuthAuditLog, SignInMode } from "./audit-log";
 import { runGoogleLogin } from "./google-login";
+import { runGoogleLink, type GoogleLinkResult } from "./google-link";
 import { runLocalLogin } from "./local-login";
 import { runWalletLogin } from "./wallet-login";
+import { runWalletLink, type WalletLinkResult } from "./wallet-link";
 import {
   OidcClient,
   type AuthMode,
@@ -38,6 +40,20 @@ export {
   runWalletLogin,
   type WalletLoginDeps,
 } from "./wallet-login";
+export {
+  GoogleLinkError,
+  runGoogleLink,
+  type GoogleLinkDeps,
+  type GoogleLinkResult,
+  type GoogleLinkStatus,
+} from "./google-link";
+export {
+  WalletLinkError,
+  runWalletLink,
+  type WalletLinkDeps,
+  type WalletLinkResult,
+  type WalletLinkStatus,
+} from "./wallet-link";
 export {
   LocalLoginError,
   runLocalLogin,
@@ -77,6 +93,10 @@ export interface AuthServiceConfig {
   readonly walletTimeoutMs?: number;
   /** Injectable for tests; defaults to the real local-key SIWE flow. */
   readonly localLoginFlow?: typeof runLocalLogin;
+  /** Injectable for tests; defaults to the real authenticated Google-link flow. */
+  readonly googleLinkFlow?: typeof runGoogleLink;
+  /** Injectable for tests; defaults to the real authenticated wallet-link flow. */
+  readonly walletLinkFlow?: typeof runWalletLink;
 }
 
 export interface RendererSession {
@@ -103,6 +123,8 @@ export class AuthService {
   readonly #googleLoginFlow: typeof runGoogleLogin;
   readonly #walletLoginFlow: typeof runWalletLogin;
   readonly #localLoginFlow: typeof runLocalLogin;
+  readonly #googleLinkFlow: typeof runGoogleLink;
+  readonly #walletLinkFlow: typeof runWalletLink;
   // One slot shared by every system-browser flow (Google, wallet): the
   // newest click always wins, whichever button it came from.
   #cancelPendingBrowserLogin: (() => void) | null = null;
@@ -129,6 +151,8 @@ export class AuthService {
     this.#googleLoginFlow = config.googleLoginFlow ?? runGoogleLogin;
     this.#walletLoginFlow = config.walletLoginFlow ?? runWalletLogin;
     this.#localLoginFlow = config.localLoginFlow ?? runLocalLogin;
+    this.#googleLinkFlow = config.googleLinkFlow ?? runGoogleLink;
+    this.#walletLinkFlow = config.walletLinkFlow ?? runWalletLink;
   }
 
   async signIn(workspaceId: string): Promise<RendererSession> {
@@ -177,6 +201,75 @@ export class AuthService {
         onCancelAvailable: onCancel,
       }),
     );
+  }
+
+  // "Link Google" (account-linking PRD FR-L2) — authenticated system-browser
+  // OAuth that attaches a Google identity to the CURRENT account. The caller's
+  // bearer authenticates the link/start POST and never leaves main; the flow
+  // returns only a renderer-safe outcome. Shares the newest-click-wins cancel
+  // slot with the sign-in browser flows.
+  async linkGoogle(workspaceId: string): Promise<GoogleLinkResult> {
+    const bearer = await this.getBearer(workspaceId);
+    if (bearer === null) {
+      throw new Error("Sign in before linking a Google account.");
+    }
+    return this.#runLinkViaSystemBrowser((onCancel) =>
+      this.#googleLinkFlow({
+        facadeBaseUrl: this.#config.facadeBaseUrl,
+        bearer,
+        openExternal: this.#config.openExternal,
+        fetch: this.#config.fetch,
+        timeoutMs: this.#config.googleTimeoutMs,
+        returnTo: "atlas-desktop",
+        onCancelAvailable: onCancel,
+      }),
+    );
+  }
+
+  // "Link a wallet" (account-linking PRD FR-L1/M1) — authenticated SIWE proof
+  // collected in the system browser (wallet page in link mode) then POSTed to
+  // the facade with the caller's bearer. `confirmMerge` is the FR-U2 consent
+  // the renderer sets only after the user confirms the merge dialog.
+  async linkWallet(
+    workspaceId: string,
+    confirmMerge: boolean,
+  ): Promise<WalletLinkResult> {
+    const bearer = await this.getBearer(workspaceId);
+    if (bearer === null) {
+      throw new Error("Sign in before linking a wallet.");
+    }
+    return this.#runLinkViaSystemBrowser((onCancel) =>
+      this.#walletLinkFlow({
+        facadeBaseUrl: this.#config.facadeBaseUrl,
+        bearer,
+        confirmMerge,
+        openExternal: this.#config.openExternal,
+        fetch: this.#config.fetch,
+        timeoutMs: this.#config.walletTimeoutMs,
+        onCancelAvailable: onCancel,
+      }),
+    );
+  }
+
+  // Shared cancel handling for the LINK browser flows (mirrors
+  // #signInViaSystemBrowser, but without the session persist/audit tail — a
+  // link mints no session). The newest browser flow (sign-in OR link) wins.
+  async #runLinkViaSystemBrowser<T>(
+    run: (onCancelAvailable: (cancel: () => void) => void) => Promise<T>,
+  ): Promise<T> {
+    this.#cancelPendingBrowserLogin?.();
+    this.#cancelPendingBrowserLogin = null;
+    let myCancel: (() => void) | null = null;
+    try {
+      return await run((cancel) => {
+        myCancel = cancel;
+        this.#cancelPendingBrowserLogin = cancel;
+      });
+    } finally {
+      if (myCancel !== null && this.#cancelPendingBrowserLogin === myCancel) {
+        this.#cancelPendingBrowserLogin = null;
+      }
+    }
   }
 
   // "Use locally, no account" — a genuinely local sign-in for the packaged app

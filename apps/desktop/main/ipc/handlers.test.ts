@@ -1,12 +1,14 @@
 import { describe, expect, it, vi } from "vitest";
 
-import type {
-  Session,
-  SseSubscribeOptions,
-  SseSubscription,
-  Transport,
-  TransportCapabilities,
-  TypedRequest,
+import {
+  TransportHttpError,
+  UnauthorizedError,
+  type Session,
+  type SseSubscribeOptions,
+  type SseSubscription,
+  type Transport,
+  type TransportCapabilities,
+  type TypedRequest,
 } from "@0x-copilot/chat-transport";
 
 import { TransportBridge } from "../transport-bridge";
@@ -57,9 +59,13 @@ class FakeTransport implements Transport {
     closed: boolean;
   }> = [];
   shouldThrowOnSubscribe = false;
+  requestError: unknown = null;
 
   async request<T>(req: TypedRequest): Promise<T> {
     this.requestCalls.push(req);
+    if (this.requestError !== null) {
+      throw this.requestError;
+    }
     return { ok: true, path: req.path } as T;
   }
 
@@ -141,15 +147,66 @@ describe("registerIpcHandlers — channel registration", () => {
 });
 
 describe("transport.request", () => {
-  it("validates and forwards to bridge.request", async () => {
+  it("validates and forwards to bridge.request inside a success envelope", async () => {
     const { ipcMain, transport } = setup();
     const res = (await ipcMain.invoke(CHANNELS.transportRequest, 1, {
       method: "GET",
       path: "/foo",
-    })) as { ok: boolean; path: string };
-    expect(res).toEqual({ ok: true, path: "/foo" });
+    })) as { kind: string; ok: boolean; value: { ok: boolean; path: string } };
+    // Envelope so the renderer's IpcTransport can rehydrate typed errors;
+    // the value is the raw transport response.
+    expect(res).toEqual({
+      kind: "transport-result",
+      ok: true,
+      value: { ok: true, path: "/foo" },
+    });
     expect(transport.requestCalls).toHaveLength(1);
     expect(transport.requestCalls[0].path).toBe("/foo");
+  });
+
+  it("wraps a TransportHttpError into a failure envelope (not a rejection)", async () => {
+    const { ipcMain, transport } = setup();
+    transport.requestError = new TransportHttpError(409, "already linked", {
+      code: "merge_required",
+      safe_message: "already linked",
+    });
+    const res = (await ipcMain.invoke(CHANNELS.transportRequest, 1, {
+      method: "POST",
+      path: "/v1/me/identities/wallet",
+    })) as {
+      kind: string;
+      ok: boolean;
+      error: { status: number; message: string; detail: unknown };
+    };
+    expect(res.kind).toBe("transport-result");
+    expect(res.ok).toBe(false);
+    expect(res.error.status).toBe(409);
+    expect(res.error.detail).toEqual({
+      code: "merge_required",
+      safe_message: "already linked",
+    });
+  });
+
+  it("wraps an UnauthorizedError into a 401 failure envelope", async () => {
+    const { ipcMain, transport } = setup();
+    transport.requestError = new UnauthorizedError("expired");
+    const res = (await ipcMain.invoke(CHANNELS.transportRequest, 1, {
+      method: "GET",
+      path: "/v1/me/profile",
+    })) as { ok: boolean; error: { status: number } };
+    expect(res.ok).toBe(false);
+    expect(res.error.status).toBe(401);
+  });
+
+  it("rethrows a non-HTTP error (network) so the invoke rejects", async () => {
+    const { ipcMain, transport } = setup();
+    transport.requestError = new Error("network down");
+    await expect(
+      ipcMain.invoke(CHANNELS.transportRequest, 1, {
+        method: "GET",
+        path: "/foo",
+      }),
+    ).rejects.toThrow("network down");
   });
 
   it("rejects malformed payload with IpcValidationError", async () => {
@@ -400,6 +457,16 @@ describe("auth.* channels", () => {
           email: null,
         }),
       ),
+      linkGoogle: vi.fn(async () => ({
+        status: "linked" as const,
+        provider: "google",
+        emailUpgraded: false,
+      })),
+      linkWallet: vi.fn(
+        async (_workspaceId: string, _confirmMerge: boolean) => ({
+          status: "linked" as const,
+        }),
+      ),
       signOut: vi.fn(async (_workspaceId: string): Promise<void> => {}),
       getSession: vi.fn(
         async (_workspaceId: string): Promise<RS | null> => null,
@@ -424,6 +491,8 @@ describe("auth.* channels", () => {
     expect(ipcMain.has(CHANNELS.authSignIn)).toBe(true);
     expect(ipcMain.has(CHANNELS.authSignInGoogle)).toBe(true);
     expect(ipcMain.has(CHANNELS.authSignInWallet)).toBe(true);
+    expect(ipcMain.has(CHANNELS.authLinkGoogle)).toBe(true);
+    expect(ipcMain.has(CHANNELS.authLinkWallet)).toBe(true);
     expect(ipcMain.has(CHANNELS.authSignOut)).toBe(true);
     expect(ipcMain.has(CHANNELS.authRefresh)).toBe(true);
     expect(ipcMain.has(CHANNELS.authGetSession)).toBe(true);
