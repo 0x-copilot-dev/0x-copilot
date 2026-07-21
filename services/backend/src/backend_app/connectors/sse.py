@@ -116,6 +116,52 @@ class InMemoryConnectorActivityBus:
         event_type: ConnectorEventType,
         connector: dict[str, Any] | None,
     ) -> ConnectorEventEnvelope:
+        envelope = self._append(
+            org_id=org_id,
+            user_id=user_id,
+            event_type=event_type,
+            connector=connector,
+        )
+        condition = self._conditions.get((org_id, user_id))
+        if condition is not None:
+            async with condition:
+                condition.notify_all()
+        return envelope
+
+    def publish_nowait(
+        self,
+        *,
+        org_id: str,
+        user_id: str,
+        event_type: ConnectorEventType,
+        connector: dict[str, Any] | None,
+    ) -> ConnectorEventEnvelope:
+        """Synchronous publish for callers outside the event loop.
+
+        The MCP mutation handlers are plain ``def`` routes (threadpool),
+        so the connectors write-through path cannot ``await``. This
+        appends to the ring buffer WITHOUT notifying waiters — the SSE
+        read loop polls with a ≤``WAIT_TIMEOUT_SECONDS`` slice, so the
+        appended envelope is picked up on the next slice. Same
+        synchronous-by-design rationale as the
+        :mod:`backend_app.projects.sse` bus publish.
+        """
+
+        return self._append(
+            org_id=org_id,
+            user_id=user_id,
+            event_type=event_type,
+            connector=connector,
+        )
+
+    def _append(
+        self,
+        *,
+        org_id: str,
+        user_id: str,
+        event_type: ConnectorEventType,
+        connector: dict[str, Any] | None,
+    ) -> ConnectorEventEnvelope:
         if event_type != "heartbeat" and connector is None:
             raise ValueError(
                 f"connector is required for event_type={event_type!r}; got None."
@@ -132,10 +178,6 @@ class InMemoryConnectorActivityBus:
             created_at=datetime.now(timezone.utc),
         )
         self._events[key].append(envelope)
-        condition = self._conditions.get(key)
-        if condition is not None:
-            async with condition:
-                condition.notify_all()
         return envelope
 
     async def wait(

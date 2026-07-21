@@ -36,6 +36,7 @@ from backend_app.connectors.store import (
     ConnectorsStore,
     McpUpsertInput,
 )
+from backend_app.contracts import McpAuthMode, McpAuthState, McpServerRecord
 
 
 def _now() -> datetime:
@@ -586,6 +587,114 @@ class ConnectorsService:
 
 
 # ---------------------------------------------------------------------------
+# MCP → connector projection (Decision D1 write-through, PR-E.3)
+# ---------------------------------------------------------------------------
+
+# Catalog installs use ``server_id = "seed:<slug>"``; strip the prefix so
+# the connector row's slug matches the connectors catalog + the FE's
+# installed-slug filtering. Custom (register-by-URL) servers fall back to
+# the registry's stable ``name``.
+_MCP_SEED_PREFIX = "seed:"
+
+
+def mcp_connector_slug(record: McpServerRecord) -> str:
+    """Connector-row slug for an MCP server record (stable natural key)."""
+
+    if record.server_id.startswith(_MCP_SEED_PREFIX):
+        return record.server_id[len(_MCP_SEED_PREFIX) :]
+    return record.name
+
+
+# Honest auth_state → connector status projection. The connector status
+# taxonomy is CLOSED (api-types ``ConnectorStatus``: connected /
+# disconnected / error / expired — connectors-prd §1.6), so states that
+# have no first-class value map into the closed set with a
+# ``status_reason`` carrying the precise MCP auth state:
+#
+# * ``authenticated``     → ``connected`` (token in vault, usable).
+# * ``auth_skipped``      → ``connected`` + reason (user chose no-auth use).
+# * no-auth servers       → ``connected`` (nothing to authenticate).
+# * ``auth_pending``      → ``disconnected`` + ``auth_pending`` (OAuth
+#   round-trip in flight; not usable yet — there is no "pending" status).
+# * ``unauthenticated``   → ``disconnected`` + ``unauthenticated``.
+# * ``auth_failed``       → ``error`` + ``auth_failed``.
+# * ``auth_unsupported``  → ``error`` + ``auth_unsupported``.
+# * disabled servers      → ``disconnected`` + ``disabled`` (wins over
+#   auth state — a disabled server is unusable regardless).
+_AUTH_STATE_TO_STATUS: dict[McpAuthState, tuple[str, str | None]] = {
+    McpAuthState.AUTHENTICATED: ("connected", None),
+    McpAuthState.AUTH_SKIPPED: ("connected", "auth_skipped"),
+    McpAuthState.AUTH_PENDING: ("disconnected", "auth_pending"),
+    McpAuthState.UNAUTHENTICATED: ("disconnected", "unauthenticated"),
+    McpAuthState.AUTH_FAILED: ("error", "auth_failed"),
+    McpAuthState.AUTH_UNSUPPORTED: ("error", "auth_unsupported"),
+}
+
+
+def project_mcp_status(record: McpServerRecord) -> tuple[str, str | None]:
+    """Map an MCP server's (enabled, auth_mode, auth_state) to connector status."""
+
+    if not record.enabled:
+        return "disconnected", "disabled"
+    if record.auth_mode == McpAuthMode.NONE:
+        return "connected", None
+    return _AUTH_STATE_TO_STATUS.get(
+        record.auth_state,
+        ("error", f"unknown_auth_state:{record.auth_state}"),
+    )
+
+
+def mcp_upsert_input_from_server(
+    record: McpServerRecord,
+    *,
+    existing: ConnectorRecord | None = None,
+) -> McpUpsertInput:
+    """Project an :class:`McpServerRecord` into the write-through input.
+
+    This is the service-layer projection the store deliberately does not
+    do (the store never sees ``McpServerRecord`` — see the
+    :class:`McpUpsertInput` docstring). ``existing`` is the current
+    connector row when known: its ``last_sync_at`` / ``last_error_at``
+    are preserved so an MCP-side write-through doesn't clobber the
+    refresh-worker's sync bookkeeping, and its ``id`` is re-used so the
+    destination row stays stable across upserts.
+    """
+
+    status, status_reason = project_mcp_status(record)
+    granted = status == "connected"
+    scope_values = record.required_scopes or record.default_scopes
+    scopes = tuple(
+        ConnectorScopeEntry(scope=scope, granted=granted, description="")
+        for scope in scope_values
+    )
+    last_sync_at = existing.last_sync_at if existing is not None else None
+    last_error_at = existing.last_error_at if existing is not None else None
+    if status == "connected" and record.auth_state == McpAuthState.AUTHENTICATED:
+        # An authenticated write-through means the OAuth exchange just
+        # succeeded — record it as the last successful sync point.
+        last_sync_at = record.updated_at
+    if status == "error":
+        last_error_at = _now()
+    return McpUpsertInput(
+        tenant_id=record.org_id,
+        slug=mcp_connector_slug(record),
+        owner_user_id=record.user_id,
+        display_name=record.display_name,
+        description=record.description,
+        status=status,
+        status_reason=status_reason,
+        scopes=scopes,
+        last_sync_at=last_sync_at,
+        last_error_at=last_error_at,
+        # Opaque pointer back to the vault's key space — the vault keys
+        # token envelopes by (server_id, org, user); the connector row
+        # never holds token bytes.
+        vault_ref=f"mcp:{record.server_id}",
+        existing_id=existing.id if existing is not None else None,
+    )
+
+
+# ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------
 
@@ -610,5 +719,8 @@ __all__ = [
     "ConnectorsService",
     "ConsumerProjectionPort",
     "load_catalog",
+    "mcp_connector_slug",
+    "mcp_upsert_input_from_server",
+    "project_mcp_status",
     "validate_status",
 ]
