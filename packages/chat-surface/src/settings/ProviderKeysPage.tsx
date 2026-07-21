@@ -36,7 +36,7 @@ import {
   AddProviderKeyModal,
   type AddProviderKeySubmit,
 } from "./AddProviderKeyModal";
-import { Frow, Krow, SecHead, SetCard, SetNote } from "./SettingsChrome";
+import { Frow, Krow, SecTitle, SetCard, SetNote } from "./SettingsChrome";
 import {
   PROVIDER_CATALOG,
   checkProviderKeyFormat,
@@ -193,6 +193,14 @@ const sectionStyle: CSSProperties = {
   display: "flex",
   flexDirection: "column",
   gap: "var(--space-sm)",
+};
+
+// Section wrapper: the SecTitle heading above, then the sub-cards, stacked
+// (design `.set-sec` — the section title sits above its cards).
+const pageStyle: CSSProperties = {
+  display: "flex",
+  flexDirection: "column",
+  gap: "var(--space-lg)",
 };
 
 const rowErrorStyle: CSSProperties = {
@@ -375,12 +383,11 @@ export function ProviderKeysPage({
 
   return (
     <>
-      <SetCard
-        title="Provider keys"
-        meta="Bring your own model provider keys. Runs call your provider directly with the key you store here."
-        data-testid="provider-keys-page"
-      >
-        <SetNote>{PROVIDER_KEYS_KEYCHAIN_NOTE}</SetNote>
+      <div style={pageStyle} data-testid="provider-keys-page">
+        <SecTitle
+          title="Provider keys"
+          description="Bring your own key. 0xCopilot talks to each provider directly — the key stays on your machine."
+        />
 
         {keys === null && loadError === null ? (
           <p
@@ -416,84 +423,85 @@ export function ProviderKeysPage({
           </div>
         ) : (
           <>
-            {connected.length > 0 ? (
-              <section style={sectionStyle}>
-                <SecHead>Connected</SecHead>
-                <div style={listStyle}>
-                  {connected.map(({ entry, summary }) => {
-                    const chip = chipFor(entry.id);
-                    return (
-                      <Krow
-                        key={entry.id}
-                        data-testid={`provider-row-${entry.id}`}
-                        logo={renderProviderLogo(entry)}
-                        name={
-                          <span style={nameRowStyle}>
-                            <span>{entry.label}</span>
-                            {chip !== undefined ? (
-                              <Badge
-                                tone="success"
-                                data-testid={`provider-model-chip-${entry.id}`}
+            <SetCard title="Connected" meta={`${connected.length} active`}>
+              <SetNote>{PROVIDER_KEYS_KEYCHAIN_NOTE}</SetNote>
+              {connected.length > 0 ? (
+                <>
+                  <div style={listStyle}>
+                    {connected.map(({ entry, summary }) => {
+                      const chip = chipFor(entry.id);
+                      return (
+                        <Krow
+                          key={entry.id}
+                          data-testid={`provider-row-${entry.id}`}
+                          logo={renderProviderLogo(entry)}
+                          name={
+                            <span style={nameRowStyle}>
+                              <span>{entry.label}</span>
+                              {chip !== undefined ? (
+                                <Badge
+                                  tone="success"
+                                  data-testid={`provider-model-chip-${entry.id}`}
+                                >
+                                  {chip}
+                                </Badge>
+                              ) : null}
+                            </span>
+                          }
+                          sub={
+                            <>
+                              key {summary.key_hint} · updated{" "}
+                              {formatUpdated(summary.updated_at)}
+                            </>
+                          }
+                          actions={
+                            <>
+                              <Button
+                                type="button"
+                                variant="ghost"
+                                size="sm"
+                                aria-label={`Rotate ${entry.label} key`}
+                                onClick={() =>
+                                  setModal({ entry, mode: "rotate" })
+                                }
+                                data-testid={`provider-rotate-${entry.id}`}
                               >
-                                {chip}
-                              </Badge>
-                            ) : null}
-                          </span>
-                        }
-                        sub={
-                          <>
-                            key {summary.key_hint} · updated{" "}
-                            {formatUpdated(summary.updated_at)}
-                          </>
-                        }
-                        actions={
-                          <>
-                            <Button
-                              type="button"
-                              variant="ghost"
-                              size="sm"
-                              aria-label={`Rotate ${entry.label} key`}
-                              onClick={() =>
-                                setModal({ entry, mode: "rotate" })
-                              }
-                              data-testid={`provider-rotate-${entry.id}`}
-                            >
-                              Rotate
-                            </Button>
-                            <Button
-                              type="button"
-                              variant="ghost"
-                              size="sm"
-                              aria-label={`Remove ${entry.label} key`}
-                              disabled={removing[entry.id] === true}
-                              onClick={() => handleRemove(entry)}
-                              data-testid={`provider-remove-${entry.id}`}
-                            >
-                              <Icon name="trash" size={13} />
-                            </Button>
-                          </>
-                        }
-                      />
-                    );
-                  })}
-                </div>
-                {connected.map(({ entry }) =>
-                  rowErrors[entry.id] !== undefined ? (
-                    <p
-                      key={`err-${entry.id}`}
-                      role="alert"
-                      style={rowErrorStyle}
-                      data-testid={`provider-row-error-${entry.id}`}
-                    >
-                      {rowErrors[entry.id]}
-                    </p>
-                  ) : null,
-                )}
-              </section>
-            ) : null}
+                                Rotate
+                              </Button>
+                              <Button
+                                type="button"
+                                variant="ghost"
+                                size="sm"
+                                aria-label={`Remove ${entry.label} key`}
+                                disabled={removing[entry.id] === true}
+                                onClick={() => handleRemove(entry)}
+                                data-testid={`provider-remove-${entry.id}`}
+                              >
+                                <Icon name="trash" size={13} />
+                              </Button>
+                            </>
+                          }
+                        />
+                      );
+                    })}
+                  </div>
+                  {connected.map(({ entry }) =>
+                    rowErrors[entry.id] !== undefined ? (
+                      <p
+                        key={`err-${entry.id}`}
+                        role="alert"
+                        style={rowErrorStyle}
+                        data-testid={`provider-row-error-${entry.id}`}
+                      >
+                        {rowErrors[entry.id]}
+                      </p>
+                    ) : null,
+                  )}
+                </>
+              ) : null}
+            </SetCard>
 
-            <section style={sectionStyle}>
-              <SecHead>Add a provider</SecHead>
+            <SetCard title="Add a provider">
               <div style={listStyle}>
                 {available.map((entry) => (
                   <Krow
@@ -549,10 +557,10 @@ export function ProviderKeysPage({
                   </Button>
                 </Frow>
               </div>
-            </section>
+            </SetCard>
           </>
         )}
-      </SetCard>
+      </div>
 
       {modal !== null ? (
         <AddProviderKeyModal

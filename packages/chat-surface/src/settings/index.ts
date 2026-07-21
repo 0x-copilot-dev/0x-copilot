@@ -97,12 +97,14 @@ export {
 } from "./Modal";
 export {
   SetCard,
+  SecTitle,
   SecHead,
   SetNote,
   Frow,
   Krow,
   SettingsNavItem,
   type SetCardProps,
+  type SecTitleProps,
   type SecHeadProps,
   type SetNoteProps,
   type SetNoteTone,

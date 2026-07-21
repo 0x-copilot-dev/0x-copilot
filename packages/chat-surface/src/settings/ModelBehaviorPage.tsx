@@ -37,7 +37,7 @@ import {
 import { Select, TextInput, Toggle } from "@0x-copilot/design-system";
 
 import { ApprovalPolicy, type ApprovalPolicyValue } from "./ApprovalPolicy";
-import { Frow, SecHead, SetCard, SetNote } from "./SettingsChrome";
+import { Frow, SecTitle, SetCard, SetNote } from "./SettingsChrome";
 import type { SettingsSurfaceController } from "./SettingsSurface";
 
 // ---------------------------------------------------------------------------
@@ -125,6 +125,14 @@ export interface ModelBehaviorPageProps {
 // Styles (token-only).
 // ---------------------------------------------------------------------------
 
+// Section wrapper: the SecTitle heading above, then the sub-cards, stacked
+// (design `.set-sec` — the section title sits above its cards).
+const pageStyle: CSSProperties = {
+  display: "flex",
+  flexDirection: "column",
+  gap: "var(--space-lg)",
+};
+
 const capRowStyle: CSSProperties = {
   display: "inline-flex",
   alignItems: "center",
@@ -210,69 +218,65 @@ export function ModelBehaviorPage({
     return () => controller.setDirty(null);
   }, [dirty, saving, controller]);
 
+  const secTitle = (
+    <SecTitle
+      title="Model & behavior"
+      description="How the agent thinks and how far it can go on its own."
+    />
+  );
+
   if (loading) {
     return (
-      <SetCard
-        title="Model & behavior"
-        meta="Default model, reasoning, approval policy, and spend."
-        data-testid="model-behavior-page"
-      >
-        <SetNote data-testid="model-behavior-loading">
-          Loading settings…
-        </SetNote>
-      </SetCard>
+      <div data-testid="model-behavior-page" style={pageStyle}>
+        {secTitle}
+        <SetCard>
+          <SetNote data-testid="model-behavior-loading">
+            Loading settings…
+          </SetNote>
+        </SetCard>
+      </div>
     );
   }
 
   if (error !== null) {
     return (
-      <SetCard
-        title="Model & behavior"
-        meta="Default model, reasoning, approval policy, and spend."
-        data-testid="model-behavior-page"
-      >
-        <div
-          role="alert"
-          data-testid="model-behavior-error"
-          style={{
-            display: "flex",
-            alignItems: "center",
-            justifyContent: "space-between",
-            gap: "var(--space-md)",
-            ...alertStyle,
-          }}
-        >
-          <span>{error}</span>
-          {onRetry !== undefined ? (
-            <button
-              type="button"
-              onClick={onRetry}
-              data-testid="model-behavior-retry"
-              style={retryButtonStyle}
-            >
-              Retry
-            </button>
-          ) : null}
-        </div>
-      </SetCard>
+      <div data-testid="model-behavior-page" style={pageStyle}>
+        {secTitle}
+        <SetCard>
+          <div
+            role="alert"
+            data-testid="model-behavior-error"
+            style={{
+              display: "flex",
+              alignItems: "center",
+              justifyContent: "space-between",
+              gap: "var(--space-md)",
+              ...alertStyle,
+            }}
+          >
+            <span>{error}</span>
+            {onRetry !== undefined ? (
+              <button
+                type="button"
+                onClick={onRetry}
+                data-testid="model-behavior-retry"
+                style={retryButtonStyle}
+              >
+                Retry
+              </button>
+            ) : null}
+          </div>
+        </SetCard>
+      </div>
     );
   }
 
   const hasAnyModel = cloudModels.length > 0 || localModels.length > 0;
 
   return (
-    <div
-      data-testid="model-behavior-page"
-      style={{
-        display: "flex",
-        flexDirection: "column",
-        gap: "var(--space-lg)",
-      }}
-    >
-      <SetCard
-        title="Model & behavior"
-        meta="The default model and how the agent reasons and reaches the web."
-      >
+    <div data-testid="model-behavior-page" style={pageStyle}>
+      {secTitle}
+      <SetCard title="Defaults">
         {saveError !== null ? (
           <p
             role="alert"
@@ -394,7 +398,6 @@ export function ModelBehaviorPage({
         meta="Cap what the agent can spend on model API calls."
         data-testid="spend-guardrail"
       >
-        <SecHead>Monthly limit</SecHead>
         <Frow
           label="Monthly API cap"
           hint="Across all provider keys. Leave blank for no cap."

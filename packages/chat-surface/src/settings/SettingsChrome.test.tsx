@@ -5,6 +5,7 @@ import {
   Frow,
   Krow,
   SecHead,
+  SecTitle,
   SetCard,
   SetNote,
   SettingsNavItem,
@@ -44,6 +45,26 @@ describe("<SecHead>", () => {
   it("renders its label text", () => {
     render(<SecHead>Account</SecHead>);
     expect(screen.getByText("Account")).toBeInTheDocument();
+  });
+});
+
+describe("<SecTitle>", () => {
+  it("renders the section title as a level-1 heading with an optional description", () => {
+    render(
+      <SecTitle title="Provider keys" description="Bring your own key." />,
+    );
+    expect(
+      screen.getByRole("heading", { level: 1, name: "Provider keys" }),
+    ).toBeInTheDocument();
+    expect(screen.getByText("Bring your own key.")).toBeInTheDocument();
+  });
+
+  it("omits the description paragraph when none is given", () => {
+    const { container } = render(<SecTitle title="Local models" />);
+    expect(
+      screen.getByRole("heading", { level: 1, name: "Local models" }),
+    ).toBeInTheDocument();
+    expect(container.querySelector("p")).toBeNull();
   });
 });
 
