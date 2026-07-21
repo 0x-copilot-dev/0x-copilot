@@ -14,7 +14,7 @@ SERVICE_CONTRACTS_PATH := ../../packages/service-contracts/src
 AUDIT_CHAIN_PATH := ../../packages/audit-chain/src
 SHARED_PYTHONPATH := src:$(SERVICE_CONTRACTS_PATH):$(AUDIT_CHAIN_PATH)
 
-.PHONY: help setup setup-node setup-python setup-hooks check-local-env check-provider-key dev prod prod-build check-prod-env docker-dev docker-dev-down desktop-install desktop-uninstall test test-merge-live
+.PHONY: help setup setup-node setup-python setup-hooks check-local-env check-provider-key dev prod prod-build check-prod-env docker-dev docker-dev-down desktop-install desktop-uninstall desktop-supervised test test-merge-live
 
 help:
 	@echo "0xCopilot make targets"
@@ -24,6 +24,7 @@ help:
 	@echo "  make dev              Run local end-to-end stack on 127.0.0.1"
 	@echo "  make docker-dev       Run Docker dev stack on http://127.0.0.1:8080"
 	@echo "  make docker-dev-down  Stop Docker dev stack"
+	@echo "  make desktop-supervised One command: stage runtime + build + launch the REAL supervised desktop app"
 	@echo "  make desktop-install    Build the copilot CLI from this checkout, install it globally, launch"
 	@echo "  make desktop-uninstall  Remove the copilot CLI, staged runtime, and local app data"
 	@echo "  make prod             Build production artifacts after prod env checks"
@@ -131,6 +132,18 @@ docker-dev: check-provider-key
 
 docker-dev-down:
 	docker compose -f docker-compose.dev.yml down
+
+# Build-from-source + run the REAL supervised desktop app (embedded postgres +
+# all three python services under single_user_desktop production posture + the
+# Electron shell) in ONE command. Stages the host runtime (idempotent), then
+# builds and launches the Electron shell against it with COPILOT_RUNTIME_DIR set
+# so the supervisor engages. This is the from-source dev-loop counterpart to the
+# published `copilot` CLI; use `make dev` for the non-supervised local stack and
+# `node tools/desktop-runtime/run-local.mjs` for the headless backend-only smoke.
+# Extra flags pass through, e.g.: make desktop-supervised ARGS="--skip-stage".
+desktop-supervised:
+	@test -d node_modules || (echo "Missing node_modules. Run: make setup" && exit 1)
+	node tools/desktop-runtime/run-supervised.mjs $(ARGS)
 
 # Desktop app via the copilot CLI (tools/cli). `npm pack` runs prepack, which
 # builds @0x-copilot/desktop + @0x-copilot/frontend and assembles the payload,
