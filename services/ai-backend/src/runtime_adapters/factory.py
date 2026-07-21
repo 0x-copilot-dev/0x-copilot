@@ -85,10 +85,16 @@ def _build_file_ports(settings: RuntimeSettings) -> "RuntimePorts":
     from runtime_adapters.in_memory.source_store import InMemorySourceStore
     from runtime_adapters.in_memory.subagent_store import InMemorySubagentStore
 
+    # Boot-time state-ledger compaction is ON by default; RUNTIME_FILE_STORE_
+    # COMPACTION=0/false/off is the kill switch for the persistence path.
+    compaction_enabled = os.environ.get(
+        "RUNTIME_FILE_STORE_COMPACTION", "true"
+    ).strip().lower() not in {"0", "false", "no", "off", "disabled"}
     file_store = FileRuntimeApiStore(
         root,
         max_bytes=settings.store.file_store_max_bytes,
         retention_days=settings.store.file_store_retention_days,
+        compaction_enabled=compaction_enabled,
     )
     layout = file_store.layout
     citation_store = FileCitationStore(layout)

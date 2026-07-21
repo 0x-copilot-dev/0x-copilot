@@ -214,8 +214,12 @@ class FileRuntimeApiStore:
         *,
         max_bytes: int = 0,
         retention_days: int = 0,
+        compaction_enabled: bool = True,
     ) -> None:
         self._layout = FileStoreLayout(Path(root))
+        # Boot-time bounded-growth compaction of the append-with-fold state
+        # ledgers (default ON; a kill switch for the persistence path).
+        self._compaction_enabled = compaction_enabled
         self._index = CatalogIndex(self._layout.index_db_path)
         # Structured logs + metrics for the store's key operations, and a live
         # record of "this chat needs repair" signals. Both are best-effort and
@@ -334,6 +338,12 @@ class FileRuntimeApiStore:
             raise
         self._load_state_from_disk()
         self._load_queue_from_disk()
+        # Boot is single-writer (nothing is serving yet): fold each bloated
+        # state ledger back to its live set so replay cost tracks live state,
+        # not total history. Crash-safe (atomic rewrite) and ratio-gated, so
+        # small/new stores are untouched. Never folds session streams (their
+        # monotonic sequence_no underpins stream resume) or the audit log.
+        self._compact_state_ledgers()
         catalog_discarded = self._index.connect()
         if catalog_discarded:
             # The disposable catalog was torn and discarded — a rebuild from the
@@ -734,6 +744,79 @@ class FileRuntimeApiStore:
                 self._queue_attempts[command_id] = int(line.get("attempts") or 0)
         # Claims (lock ownership) are ephemeral — a restarted worker re-claims.
         self._queue_claims = {}
+
+    # ==================================================================
+    # Boot-time bounded-growth compaction (append-with-fold state ledgers)
+    # ==================================================================
+
+    # Compact a fold table only when its on-disk log has grown to at least
+    # COMPACT_MIN_LINES *and* at least COMPACT_RATIO× its live set. The floor
+    # stops churning small files every boot; the ratio targets genuinely
+    # bloated logs (superseded re-puts / tombstoned history). Conservative.
+    _COMPACT_MIN_LINES = 256
+    _COMPACT_RATIO = 2
+
+    def _compactable_tables(self) -> list[tuple[str, list]]:
+        """``(table, live records in canonical order)`` for every append-with-fold
+        ledger whose live set the store holds in memory after load.
+
+        Deliberately EXCLUDES: the whole-collection *rewrite* tables
+        (``budget_states``/``budget_reservations``/``retention_policies`` —
+        already self-compacting); the AUDIT_LOG (append-only immutable evidence
+        — folding would break the per-org ``seq``/signature chain); and the
+        QUEUE (a raw, non-``StateLedger`` op log — its own compactor is a
+        follow-up). Session streams (events/messages/runs) are never a state
+        ledger and are never touched.
+
+        Order matters for the ``load_puts`` list tables (``model_call_usage``,
+        ``pricing``): their live list is already in first-seen order, so
+        re-emitting it preserves the ordinal semantics reload rebuilds.
+        """
+
+        return [
+            (_Tables.APPROVALS, list(self.approval_requests.values())),
+            (_Tables.APPROVAL_DECISIONS, list(self.approval_decisions.values())),
+            (_Tables.APPROVAL_BATCHES, list(self.approval_batches.values())),
+            (_Tables.APPROVAL_BATCH_ITEMS, list(self.approval_batch_items.values())),
+            (_Tables.RUN_USAGE, list(self.run_usage.values())),
+            (_Tables.MODEL_CALL_USAGE, list(self.model_call_usage)),
+            (_Tables.PRICING, list(self.pricing_rows)),
+            (_Tables.USER_DAILY, list(self.user_daily_usage.values())),
+            (_Tables.ORG_DAILY, list(self.org_daily_usage.values())),
+            (_Tables.CONNECTOR_DAILY, list(self.connector_daily_usage.values())),
+            (_Tables.SUBAGENT_DAILY, list(self.subagent_daily_usage.values())),
+            (_Tables.PURPOSE_DAILY, list(self.purpose_daily_usage.values())),
+            (_Tables.BUDGETS, list(self.budgets.values())),
+            (_Tables.WORKSPACE_DEFAULTS, list(self.workspace_defaults.values())),
+        ]
+
+    @classmethod
+    def _should_compact(cls, line_count: int, live_count: int) -> bool:
+        return line_count >= cls._COMPACT_MIN_LINES and line_count >= (
+            cls._COMPACT_RATIO * max(live_count, 1)
+        )
+
+    def _compact_state_ledgers(self) -> None:
+        """Fold each bloated fold-table ledger back to its live set (boot only).
+
+        Reuses :meth:`StateLedger.rewrite` (atomic temp→fsync→``os.replace``):
+        a crash mid-compaction leaves the prior committed log fully intact, and
+        reload re-folds to the identical live state — compaction only discards
+        superseded/tombstoned history, never live data. Correct precisely
+        because the folded records come from already-durable state.
+        """
+
+        if not self._compaction_enabled:
+            return
+        for table, live in self._compactable_tables():
+            ledger = self._ledger(table)
+            before = ledger.line_count
+            if not self._should_compact(before, len(live)):
+                continue
+            ledger.rewrite(record.model_dump(mode="json") for record in live)
+            self._telemetry.state_ledger_compacted(
+                table=table, lines_before=before, lines_after=ledger.line_count
+            )
 
     @staticmethod
     def _parse_dt(value: object) -> datetime:
