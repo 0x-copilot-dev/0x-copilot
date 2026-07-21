@@ -89,3 +89,42 @@ def test_distinct_bearer_tokens_yield_distinct_ai_backend_identity(monkeypatch) 
     assert captured[0].user_id == "user_alice"
     assert captured[1].org_id == "org_beta"
     assert captured[1].user_id == "user_bob"
+
+
+def test_pin_route_forwards_post_to_ai_backend(monkeypatch) -> None:
+    """PRD-H.4 — POST /conversations/{id}/pin proxies to ai-backend as POST."""
+    monkeypatch.setenv("ENTERPRISE_AUTH_SECRET", "test-auth-secret")
+    monkeypatch.setenv("ENTERPRISE_SERVICE_TOKEN", "test-service-token")
+
+    calls: list[dict[str, object]] = []
+
+    async def capture(app, method, path, *, target, identity, **kwargs):
+        calls.append(
+            {
+                "method": method,
+                "path": path,
+                "target": target,
+                "identity": identity,
+                "json": kwargs.get("json"),
+            }
+        )
+        return {"conversation_id": "conv_1", "pinned": True}
+
+    monkeypatch.setattr(facade_app, "forward_json", capture)
+    client = TestClient(create_app(FacadeSettings()))
+
+    response = client.post(
+        "/v1/agent/conversations/conv_1/pin",
+        headers={"authorization": _bearer("org_acme", "user_alice")},
+        json={"pinned": True},
+    )
+
+    assert response.status_code == 200
+    assert len(calls) == 1
+    call = calls[0]
+    assert call["method"] == "POST"
+    assert call["path"] == "/v1/agent/conversations/conv_1/pin"
+    assert call["target"] == "ai_backend"
+    assert call["json"] == {"pinned": True}
+    assert call["identity"].org_id == "org_acme"
+    assert call["identity"].user_id == "user_alice"

@@ -502,3 +502,129 @@ class TestRegenerateMessageConformance:
             store.runs[regenerated.run_id].runtime_context.trace_metadata["branch_id"]
             == "branch_retry"
         )
+
+
+class TestConversationPinConformance(_CrudSeedMixin):
+    """PRD-H.4 — pin toggle + list-field source helpers across backends."""
+
+    async def test_set_pinned_toggles_and_persists(self, store) -> None:
+        conversation = await self._new_conversation(store)
+        assert conversation.pinned is False
+
+        now = datetime(2026, 2, 1, tzinfo=timezone.utc)
+        pinned = await store.set_conversation_pinned(
+            org_id=self._ORG,
+            user_id=self._USER,
+            conversation_id=conversation.conversation_id,
+            pinned=True,
+            now=now,
+        )
+        assert pinned is not None
+        assert pinned.pinned is True
+
+        # Persisted: a fresh read reflects the flag.
+        reread = await store.get_conversation(
+            org_id=self._ORG,
+            user_id=self._USER,
+            conversation_id=conversation.conversation_id,
+        )
+        assert reread is not None
+        assert reread.pinned is True
+
+        # And it rides along on the list projection.
+        listed = await store.list_conversations(
+            org_id=self._ORG, user_id=self._USER, limit=50
+        )
+        row = next(
+            c for c in listed if c.conversation_id == conversation.conversation_id
+        )
+        assert row.pinned is True
+
+        # Unpin returns it to the default bucket.
+        unpinned = await store.set_conversation_pinned(
+            org_id=self._ORG,
+            user_id=self._USER,
+            conversation_id=conversation.conversation_id,
+            pinned=False,
+            now=now + timedelta(minutes=1),
+        )
+        assert unpinned is not None
+        assert unpinned.pinned is False
+
+    async def test_set_pinned_is_idempotent_no_updated_at_churn(self, store) -> None:
+        conversation = await self._new_conversation(store)
+        now = datetime(2026, 2, 2, tzinfo=timezone.utc)
+        first = await store.set_conversation_pinned(
+            org_id=self._ORG,
+            user_id=self._USER,
+            conversation_id=conversation.conversation_id,
+            pinned=True,
+            now=now,
+        )
+        assert first is not None
+        # Re-pin at a later timestamp: no-op must not reshuffle updated_at.
+        again = await store.set_conversation_pinned(
+            org_id=self._ORG,
+            user_id=self._USER,
+            conversation_id=conversation.conversation_id,
+            pinned=True,
+            now=now + timedelta(hours=1),
+        )
+        assert again is not None
+        assert again.pinned is True
+        assert again.updated_at == first.updated_at
+
+    async def test_set_pinned_is_scoped_by_user(self, store) -> None:
+        conversation = await self._new_conversation(store)
+        # A different user in the same org cannot pin someone else's chat.
+        result = await store.set_conversation_pinned(
+            org_id=self._ORG,
+            user_id="intruder",
+            conversation_id=conversation.conversation_id,
+            pinned=True,
+            now=datetime(2026, 2, 3, tzinfo=timezone.utc),
+        )
+        assert result is None
+        # The owner's row is untouched.
+        owner_view = await store.get_conversation(
+            org_id=self._ORG,
+            user_id=self._USER,
+            conversation_id=conversation.conversation_id,
+        )
+        assert owner_view is not None
+        assert owner_view.pinned is False
+
+    async def test_latest_message_and_run_projection_sources(self, store) -> None:
+        conversation, run = await self._new_run(store)
+        latest_message = await store.get_latest_message_for_conversation(
+            org_id=self._ORG,
+            conversation_id=conversation.conversation_id,
+        )
+        assert latest_message is not None
+        # The seeded run created a user message "hello".
+        assert latest_message.content_text == "hello"
+
+        latest_run = await store.get_latest_run_for_conversation(
+            org_id=self._ORG,
+            conversation_id=conversation.conversation_id,
+        )
+        assert latest_run is not None
+        assert latest_run.run_id == run.run_id
+        assert latest_run.model_name == "gpt-5.4-mini"
+
+    async def test_latest_message_and_run_none_when_empty(self, store) -> None:
+        conversation = await self._new_conversation(store)
+        assert (
+            await store.get_latest_message_for_conversation(
+                org_id=self._ORG,
+                conversation_id=conversation.conversation_id,
+            )
+            is None
+        )
+        assert (
+            await store.get_latest_run_for_conversation(
+                org_id=self._ORG,
+                conversation_id=conversation.conversation_id,
+            )
+            is None
+        )

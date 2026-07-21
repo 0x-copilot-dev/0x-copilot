@@ -9,5 +9,6 @@ export {
   ChatsArchive,
   type ChatsArchiveProps,
   CHATS_SECTION_ORDER,
+  CHATS_LEAD_COPY,
   type ChatsSectionKey,
 } from "./ChatsArchive";

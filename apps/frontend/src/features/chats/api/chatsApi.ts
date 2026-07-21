@@ -13,9 +13,15 @@
 // destination consumes, wrapped in the uniform `SectionResult` envelope
 // (ok / error) that Inbox / Projects / Connectors already use.
 //
-// Bucketing (FR-4.5): archived rows → `archived`; `metadata.pinned === true`
+// Bucketing (FR-4.5): archived rows → `archived`; `pinned === true`
 // (and not archived) → `pinned`; everything else → `recent`. Empty buckets
 // stay empty arrays and the destination hides the empty sections.
+//
+// PRD-H.4 — `pinned` / `preview` / `model` are now first-class projected
+// conversation-list fields (a real `pinned` column + read-time preview/model
+// projections). This binder reads those directly; the earlier `metadata.*`
+// reads were a §11 gap — nothing ever wrote them, so Pinned was always empty
+// and preview/model never rendered.
 
 import type {
   ChatArchiveRow,
@@ -26,7 +32,7 @@ import type {
   SectionResult,
 } from "@0x-copilot/api-types";
 
-import { listConversations } from "../../../api/agentApi";
+import { listConversations, pinConversation } from "../../../api/agentApi";
 import type { RequestIdentity } from "../../../api/config";
 import { errorMessage } from "../../../utils/errors";
 
@@ -142,31 +148,52 @@ function statusOf(conversation: Conversation): ChatArchiveStatus {
 }
 
 /**
- * Pinned is a client-facing archive concept the conversation row does not
- * yet carry as a first-class column, so we read it from `metadata.pinned`.
- * Absent/falsey → not pinned; the row falls to the Recent bucket.
+ * PRD-H.4 — `pinned` is now a first-class projected conversation field
+ * (backed by a real column). Absent/falsey → not pinned; the row falls to
+ * the Recent bucket. (Old `metadata.pinned` reads are gone — nothing wrote
+ * them, so Pinned was always empty.)
  */
 function isPinned(conversation: Conversation): boolean {
-  const metadata = conversation.metadata as { readonly pinned?: unknown };
-  return metadata?.pinned === true;
+  return conversation.pinned === true;
 }
 
 /**
- * One-line preview snippet. `/v1/agent/conversations` does not yet project a
- * last-turn snippet (PRD §11 gap), so we surface `metadata.preview` when the
- * server supplies it and otherwise render an empty preview — the destination
- * simply shows the title + chip + time in that case.
+ * One-line preview snippet, projected server-side from the last user/
+ * assistant message (PRD-H.4). `null`/absent → empty preview and the
+ * destination simply shows title + chip + time.
  */
 function previewOf(conversation: Conversation): string {
-  const metadata = conversation.metadata as { readonly preview?: unknown };
-  return typeof metadata?.preview === "string" ? metadata.preview : "";
+  return conversation.preview ?? "";
 }
 
 /**
- * Mono model tag. Not a first-class conversation column either; best-effort
- * from `metadata.model`. Empty string tells the row to hide the model tag.
+ * Mono model tag, projected server-side from the latest run's model
+ * (PRD-H.4). `null`/absent → empty string, which tells the row to hide the
+ * model tag.
  */
 function modelOf(conversation: Conversation): string {
-  const metadata = conversation.metadata as { readonly model?: unknown };
-  return typeof metadata?.model === "string" ? metadata.model : "";
+  return conversation.model ?? "";
+}
+
+/**
+ * PRD-H.4 — pin / unpin binder for the Chats archive. Delegates the HTTP
+ * call to the canonical `agentApi` client (network-layer rule) and returns
+ * the updated conversation so the destination can reconcile its buckets.
+ * Never throws: a transport failure resolves to a `status: "error"`
+ * `SectionResult` mirroring `fetchChatsArchive`.
+ */
+export async function setChatPinned(
+  conversationId: ConversationId,
+  pinned: boolean,
+  identity: RequestIdentity,
+): Promise<SectionResult<ChatArchiveRow>> {
+  try {
+    const updated = await pinConversation(conversationId, pinned, identity);
+    return { status: "ok", data: toArchiveRow(updated) };
+  } catch (error: unknown) {
+    return {
+      status: "error",
+      error: errorMessage(error, "Could not update pin."),
+    };
+  }
 }

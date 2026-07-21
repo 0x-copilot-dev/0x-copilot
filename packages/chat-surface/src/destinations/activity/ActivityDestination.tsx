@@ -30,12 +30,7 @@
 // come from `@0x-copilot/api-types` (PR-4.1, already merged) — never
 // re-declared here (FR-4.33).
 
-import {
-  useMemo,
-  type CSSProperties,
-  type ReactElement,
-  type ReactNode,
-} from "react";
+import { useMemo, type CSSProperties, type ReactElement } from "react";
 
 import type {
   ActivityRunRow,
@@ -44,13 +39,16 @@ import type {
   SectionResult,
 } from "@0x-copilot/api-types";
 
+import { Icon } from "../../icons/Icon";
 import { ItemLink } from "../../refs/ItemLink";
-import { DocList } from "../../shell/DocList";
+import { BrandMark } from "../../shell/BrandMark";
 import { EmptyState } from "../../shell/EmptyState";
-import { PageHeader } from "../../shell/PageHeader";
 import { StatusPill, type StatusTone } from "../../shell/StatusPill";
 import { statusTone as runStatusTone } from "../../shell/statusTone";
 import { formatRelativeTime } from "../../util/time";
+import { PageLead } from "../_shared/PageLead";
+import { Row } from "../_shared/Row";
+import { RowList } from "../_shared/RowList";
 
 // ===========================================================================
 // Copy (DESIGN-SPEC §3 — Activity) — exported so the host + tests assert the
@@ -285,7 +283,6 @@ export function ActivityDestination(
       style={rootStyle}
     >
       <div style={innerStyle} className="pg">
-        <PageHeader title="Activity" subtitle="Run history, grouped by day." />
         <ActivityLead onOpenRetentionSettings={onOpenRetentionSettings} />
         <div style={bodyStyle} data-testid="activity-body">
           {renderBody({ items, groups, onOpenRun, onRetry, now: nowMs })}
@@ -315,7 +312,7 @@ function ActivityLead({
   readonly onOpenRetentionSettings?: () => void;
 }): ReactElement {
   return (
-    <p className="pg-lead" style={leadStyle} data-testid="activity-lead">
+    <PageLead data-testid="activity-lead">
       <span>{ACTIVITY_LEAD_COPY} </span>
       {onOpenRetentionSettings !== undefined ? (
         <button
@@ -331,7 +328,7 @@ function ActivityLead({
           {ACTIVITY_RETENTION_LINK_COPY}
         </span>
       )}
-    </p>
+    </PageLead>
   );
 }
 
@@ -456,12 +453,15 @@ function DayGroup({
         data-day-key={group.key}
         style={dayDividerStyle}
       >
-        {group.label}
+        <span>{group.label}</span>
+        {/* `.act-day::after` — a hairline trailing the label to the row edge. */}
+        <span aria-hidden="true" style={dayHairlineStyle} />
       </h2>
-      <DocList<ActivityRunRow>
+      <RowList<ActivityRunRow>
         ariaLabel={`Runs on ${group.label}`}
         items={group.rows}
         keyFor={(row) => row.run_id}
+        data-testid="activity-day-rowlist"
         renderRow={(row) => (
           <ActivityRow row={row} onOpenRun={onOpenRun} now={now} />
         )}
@@ -486,76 +486,81 @@ function ActivityRow({
   const isRunning = row.status === "running";
   const tone = activityStatusTone(row.status);
   const statusLabel = activityStatusLabel(row.status);
+  const presentation = runStatusTone(row.status);
 
-  // Non-running rows navigate through the `"run"` ItemLink resolver
-  // (FR-4.16). The resolved label is the run's display title; while it
-  // resolves (or if the run was deleted) the projected `title` stands in
-  // via `deletedLabel`.
-  const title = isRunning ? (
-    <span style={titleStyle} data-testid="activity-row-title">
-      {row.title}
+  // Leading icon (`.lrow__ic`): a live run shows the brand turbine tinted with
+  // success; every other run shows a clock. Both live in the shared icon
+  // system — no surface re-inlines an <svg>.
+  const icon = isRunning ? (
+    <span
+      style={liveIconStyle}
+      data-testid="activity-row-icon"
+      data-live="true"
+    >
+      <BrandMark size={18} />
     </span>
   ) : (
-    <span style={titleLinkWrapStyle}>
-      <ItemLink
-        ref={{ kind: "run", id: row.run_id }}
-        deletedLabel={row.title}
-      />
+    <span data-testid="activity-row-icon" data-live="false">
+      <Icon name="clock" size={18} />
     </span>
   );
 
-  const inner: ReactNode = (
-    <>
-      <span style={mainColStyle}>
-        {title}
-        {row.meta.length > 0 ? (
-          <span style={metaStyle} data-testid="activity-row-meta">
-            {row.meta}
-          </span>
-        ) : null}
-      </span>
-      <StatusPill status={tone} label={statusLabel} />
-      <time
-        dateTime={row.started_at}
-        data-testid="activity-row-time"
-        style={timeStyle}
-      >
-        {formatRelativeTime(row.started_at, now)}
-      </time>
-    </>
+  // Non-running rows navigate through the `"run"` ItemLink resolver (FR-4.16).
+  // The resolved label is the run's display title; while it resolves (or if the
+  // run was deleted) the projected `title` stands in via `deletedLabel`.
+  const title = isRunning ? (
+    <span data-testid="activity-row-title">{row.title}</span>
+  ) : (
+    <ItemLink ref={{ kind: "run", id: row.run_id }} deletedLabel={row.title} />
   );
 
-  // Running rows are a single interactive control — click / Enter / Space
-  // jump into the live Run cockpit (FR-4.16, §9 keyboard).
-  if (isRunning && onOpenRun !== undefined) {
-    return (
-      <button
-        type="button"
-        data-testid="activity-row"
-        data-run-id={row.run_id}
-        data-status={row.status}
-        data-row-title={row.title}
-        data-open="run"
-        onClick={() => onOpenRun(row.run_id)}
-        aria-label={`Open running run: ${row.title}`}
-        style={runningRowStyle}
-      >
-        {inner}
-      </button>
-    );
-  }
+  // The tools/connectors line is BODY font (the row `sub`), not mono — the mono
+  // is reserved for the relative time in the right meta column.
+  const sub =
+    row.meta.length > 0 ? (
+      <span data-testid="activity-row-meta">{row.meta}</span>
+    ) : undefined;
+
+  const chip = (
+    <StatusPill
+      status={tone}
+      label={statusLabel}
+      showDot={presentation.showDot}
+    />
+  );
+
+  const meta = (
+    <time
+      dateTime={row.started_at}
+      data-testid="activity-row-time"
+      style={{ font: "inherit", color: "inherit" }}
+    >
+      {formatRelativeTime(row.started_at, now)}
+    </time>
+  );
+
+  const activate =
+    isRunning && onOpenRun !== undefined
+      ? () => onOpenRun(row.run_id)
+      : undefined;
 
   return (
-    <span
+    <Row
       data-testid="activity-row"
       data-run-id={row.run_id}
       data-status={row.status}
       data-row-title={row.title}
       data-open={isRunning ? "run" : "detail"}
-      style={staticRowStyle}
-    >
-      {inner}
-    </span>
+      icon={icon}
+      title={title}
+      chip={chip}
+      sub={sub}
+      meta={meta}
+      onActivate={activate}
+      ariaLabel={
+        activate !== undefined ? `Open running run: ${row.title}` : undefined
+      }
+    />
   );
 }
 
@@ -614,14 +619,6 @@ const innerStyle: CSSProperties = {
   gap: 12,
 };
 
-const leadStyle: CSSProperties = {
-  margin: 0,
-  fontSize: "var(--font-size-sm, 13px)",
-  lineHeight: 1.5,
-  color: "var(--color-text-muted, #b4b4b8)",
-  maxWidth: 620,
-};
-
 const leadLinkStyle: CSSProperties = {
   background: "transparent",
   border: "none",
@@ -652,83 +649,34 @@ const dayGroupStyle: CSSProperties = {
   gap: 8,
 };
 
-// `.act-day` — mono uppercase day divider (DESIGN-SPEC §3 / §9).
+// `.act-day` — mono uppercase day divider (~10px) with a trailing hairline
+// (the design `.act-day::after`) running from the label to the row edge.
 const dayDividerStyle: CSSProperties = {
   margin: 0,
-  paddingBottom: 6,
-  borderBottom: "1px solid var(--color-border, #232325)",
+  display: "flex",
+  alignItems: "center",
+  gap: 10,
   fontFamily: "var(--font-mono, ui-monospace, SFMono-Regular, monospace)",
-  fontSize: "var(--font-size-xs, 12px)",
+  fontSize: "var(--font-size-2xs, 10px)",
   fontWeight: 600,
   letterSpacing: 0.4,
   textTransform: "uppercase",
   color: "var(--color-text-subtle, #7e7e84)",
 };
 
-// Row inner layout — shared by the running (button) + non-running (span)
-// variants so both read identically.
-const rowLayout: CSSProperties = {
-  display: "flex",
-  alignItems: "center",
-  gap: 12,
-  width: "100%",
-  minWidth: 0,
-  boxSizing: "border-box",
-  textAlign: "left",
-};
-
-const runningRowStyle: CSSProperties = {
-  ...rowLayout,
-  background: "transparent",
-  border: "none",
-  padding: 0,
-  margin: 0,
-  font: "inherit",
-  color: "inherit",
-  cursor: "pointer",
-};
-
-const staticRowStyle: CSSProperties = {
-  ...rowLayout,
-};
-
-const mainColStyle: CSSProperties = {
-  display: "flex",
-  flexDirection: "column",
-  gap: 2,
+// The trailing hairline of `.act-day`.
+const dayHairlineStyle: CSSProperties = {
   flex: 1,
-  minWidth: 0,
+  height: 1,
+  background: "var(--color-border, #232325)",
 };
 
-const titleStyle: CSSProperties = {
-  fontSize: "var(--font-size-sm, 13px)",
-  fontWeight: 600,
-  color: "var(--color-text, #ededee)",
-  overflow: "hidden",
-  textOverflow: "ellipsis",
-  whiteSpace: "nowrap",
-};
-
-const titleLinkWrapStyle: CSSProperties = {
+// Live-run icon slot tint — the brand turbine reads as "live" in success.
+const liveIconStyle: CSSProperties = {
   display: "inline-flex",
-  minWidth: 0,
-  maxWidth: "100%",
-};
-
-const metaStyle: CSSProperties = {
-  fontFamily: "var(--font-mono, ui-monospace, SFMono-Regular, monospace)",
-  fontSize: "var(--font-size-xs, 12px)",
-  color: "var(--color-text-subtle, #7e7e84)",
-  overflow: "hidden",
-  textOverflow: "ellipsis",
-  whiteSpace: "nowrap",
-};
-
-const timeStyle: CSSProperties = {
-  fontFamily: "var(--font-mono, ui-monospace, SFMono-Regular, monospace)",
-  fontSize: "var(--font-size-xs, 12px)",
-  color: "var(--color-text-subtle, #7e7e84)",
-  flexShrink: 0,
+  alignItems: "center",
+  justifyContent: "center",
+  color: "var(--color-success)",
 };
 
 const skeletonRowStyle: CSSProperties = {

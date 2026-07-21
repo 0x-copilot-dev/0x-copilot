@@ -20,6 +20,7 @@ from runtime_api.auth import RuntimeServiceAuthenticator
 from runtime_api.http.routes import RuntimeApiRoutes
 from runtime_api.schemas import (
     ConversationResponse,
+    PinConversationRequest,
     UpdateConversationRequest,
     UpdateWorkspaceDefaultsRequest,
     WorkspaceDefaultsResponse,
@@ -108,6 +109,29 @@ class ConversationLifecycleRoutes:
         )
 
     @classmethod
+    async def pin_conversation(
+        cls,
+        request: Request,
+        conversation_id: str,
+        payload: PinConversationRequest,
+        org_id: str | None = Query(None, min_length=1),
+        user_id: str | None = Query(None, min_length=1),
+    ) -> ConversationResponse:
+        """Pin or unpin a conversation (PRD-H.4); returns the updated row."""
+        org_id, user_id = RuntimeApiRoutes.scoped_identity(
+            request, org_id=org_id, user_id=user_id
+        )
+        return await RuntimeApiRoutes.conversation_coordinator(
+            request
+        ).set_conversation_pinned(
+            org_id=org_id,
+            user_id=user_id,
+            conversation_id=conversation_id,
+            pinned=payload.pinned,
+            allow_admin_override=_is_admin(request),
+        )
+
+    @classmethod
     async def delete_conversation(
         cls,
         request: Request,
@@ -172,6 +196,13 @@ def register_workspace_defaults_routes(router: APIRouter) -> None:
         methods=["PATCH"],
         response_model=ConversationResponse,
         name=Keys.RouteName.UPDATE_CONVERSATION,
+    )
+    router.add_api_route(
+        "/conversations/{conversation_id}/pin",
+        ConversationLifecycleRoutes.pin_conversation,
+        methods=["POST"],
+        response_model=ConversationResponse,
+        name=Keys.RouteName.PIN_CONVERSATION,
     )
     router.add_api_route(
         "/conversations/{conversation_id}",

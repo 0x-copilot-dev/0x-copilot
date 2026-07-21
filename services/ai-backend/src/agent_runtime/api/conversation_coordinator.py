@@ -429,6 +429,65 @@ class ConversationCoordinator:
         )
         return restored.to_response()
 
+    async def set_conversation_pinned(
+        self,
+        *,
+        org_id: str,
+        user_id: str,
+        conversation_id: str,
+        pinned: bool,
+        allow_admin_override: bool = False,
+    ) -> ConversationResponse:
+        """Pin or unpin a conversation and emit a before/after audit row (PRD-H.4).
+
+        Idempotent: re-pinning an already-pinned chat returns the current
+        row unchanged. When ``allow_admin_override`` is set and the chat
+        belongs to another user, the admin path is taken and the override
+        is recorded in the audit metadata.
+        """
+
+        before, is_admin_override = await self._conversation_for_owner_or_admin(
+            org_id=org_id,
+            actor_user_id=user_id,
+            conversation_id=conversation_id,
+            allow_admin_override=allow_admin_override,
+        )
+        now = datetime.now(timezone.utc)
+        updated = await self._persistence.set_conversation_pinned(
+            org_id=org_id,
+            user_id=before.user_id,
+            conversation_id=conversation_id,
+            pinned=pinned,
+            now=now,
+        )
+        if updated is None:
+            raise RuntimeApiError(
+                RuntimeErrorCode.CAPABILITY_NOT_FOUND,
+                Messages.Error.CONVERSATION_NOT_FOUND,
+                http_status=status.HTTP_404_NOT_FOUND,
+                retryable=False,
+            )
+        audit_metadata: dict[str, object] = {
+            "conversation_id": conversation_id,
+            "pinned_before": before.pinned,
+            "pinned_after": updated.pinned,
+        }
+        if is_admin_override:
+            audit_metadata["override_by_admin"] = True
+            audit_metadata["conversation_owner_user_id"] = before.user_id
+        await self._persistence.write_audit_log(
+            event_type=Messages.Audit.CONVERSATION_PIN,
+            record={
+                "org_id": org_id,
+                "user_id": user_id,
+                "resource_type": "conversation",
+                "resource_id": conversation_id,
+                "outcome": "success",
+                "metadata": audit_metadata,
+            },
+        )
+        return updated.to_response()
+
     async def delete_user_history(
         self,
         *,

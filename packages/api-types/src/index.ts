@@ -534,6 +534,35 @@ export interface Conversation {
    * 0022.
    */
   forked_from_share_id?: string | null;
+  /**
+   * PRD-H.4 — first-class pin flag driving the Chats "Pinned" section.
+   * Projected from a real ``pinned`` column (migration 0034), not
+   * ``metadata`` — the metadata path was never written, so Pinned was
+   * always empty. Toggled via ``POST /v1/agent/conversations/{id}/pin``.
+   * Optional/defaulted so older server payloads compile unchanged.
+   */
+  pinned?: boolean;
+  /**
+   * PRD-H.4 — Chats-list read-time projections (not persisted on the
+   * row). ``preview`` is the last user/assistant message snippet;
+   * ``model`` is the latest run's model name. Both nullable so
+   * never-run / empty conversations and older server builds are
+   * unaffected.
+   */
+  preview?: string | null;
+  model?: string | null;
+}
+
+/**
+ * PRD-H.4 — body for ``POST /v1/agent/conversations/{id}/pin``.
+ *
+ * A single route pins and unpins: ``pinned`` defaults to ``true``
+ * server-side, so a bare POST pins; send ``{ pinned: false }`` to
+ * unpin. Idempotent — re-pinning an already-pinned chat is a no-op that
+ * still returns the current row.
+ */
+export interface PinConversationRequest {
+  pinned?: boolean;
 }
 
 /**
