@@ -1231,6 +1231,71 @@ class FileRuntimeApiStore:
             self._persist_conversation(updated)
         return updated
 
+    async def set_conversation_pinned(
+        self,
+        *,
+        org_id: str,
+        user_id: str,
+        conversation_id: str,
+        pinned: bool,
+        now: datetime,
+    ) -> ConversationRecord | None:
+        """Set the first-class ``pinned`` flag and persist it (PRD-H.4).
+
+        Idempotent: setting the flag to its current value is a no-op that
+        skips both the ``updated_at`` bump and the disk write, so a
+        redundant pin never reshuffles the newest-first sidebar order.
+        """
+
+        conversation = await self.get_conversation(
+            org_id=org_id, user_id=user_id, conversation_id=conversation_id
+        )
+        if conversation is None:
+            return None
+        if conversation.pinned == pinned:
+            return conversation
+        updated = conversation.model_copy(update={"pinned": pinned, "updated_at": now})
+        async with self._conversation_lock(conversation_id):
+            self.conversations[conversation_id] = updated
+            self._persist_conversation(updated)
+        return updated
+
+    async def get_latest_message_for_conversation(
+        self,
+        *,
+        org_id: str,
+        conversation_id: str,
+    ) -> MessageRecord | None:
+        """Return the newest non-deleted message for the Chats-list preview (PRD-H.4)."""
+
+        candidates = [
+            message
+            for message in self.messages.values()
+            if message.org_id == org_id
+            and message.conversation_id == conversation_id
+            and message.deleted_at is None
+        ]
+        if not candidates:
+            return None
+        return max(candidates, key=lambda message: message.created_at)
+
+    async def get_latest_run_for_conversation(
+        self,
+        *,
+        org_id: str,
+        conversation_id: str,
+    ) -> RunRecord | None:
+        """Return the newest run for a conversation regardless of status (PRD-H.4)."""
+
+        candidates = [
+            run
+            for run in self.runs.values()
+            if run.org_id == org_id and run.conversation_id == conversation_id
+        ]
+        if not candidates:
+            return None
+        return max(candidates, key=lambda run: run.created_at)
+
     # ==================================================================
     # PersistencePort — runs
     # ==================================================================

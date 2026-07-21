@@ -451,6 +451,52 @@ class PersistencePort(Protocol):
     ) -> ConversationRecord | None:
         """Clear ``deleted_at``; ``None`` if the row was already reaped."""
 
+    async def set_conversation_pinned(
+        self,
+        *,
+        org_id: str,
+        user_id: str,
+        conversation_id: str,
+        pinned: bool,
+        now: datetime,
+    ) -> ConversationRecord | None:
+        """Set the first-class ``pinned`` flag on one conversation (PRD-H.4).
+
+        Returns ``None`` when no row matches the (org, user, conversation)
+        scope. Idempotent: setting the flag to its current value is a
+        no-op that still returns the row. ``updated_at`` is bumped only
+        when the flag actually changes so a redundant pin does not
+        reshuffle the newest-first sidebar order.
+        """
+
+    async def get_latest_message_for_conversation(
+        self,
+        *,
+        org_id: str,
+        conversation_id: str,
+    ) -> MessageRecord | None:
+        """Return the most recent non-deleted message for a conversation (PRD-H.4).
+
+        Powers the Chats-list ``preview`` snippet. Ordered by
+        ``created_at`` descending; excludes soft-deleted rows. Returns
+        ``None`` for a conversation with no visible messages yet.
+        """
+
+    async def get_latest_run_for_conversation(
+        self,
+        *,
+        org_id: str,
+        conversation_id: str,
+    ) -> RunRecord | None:
+        """Return the most recent run for a conversation regardless of status (PRD-H.4).
+
+        Distinct from :meth:`get_active_run_for_conversation`, which
+        returns only non-terminal runs — this returns the newest run by
+        ``created_at`` even when it has completed, so the Chats-list
+        ``model`` projection reflects the last model used. ``None`` when
+        the conversation has never run.
+        """
+
     # ------------------------------------------------------------------
     # Usage + pricing.
     #
