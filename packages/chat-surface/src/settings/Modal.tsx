@@ -65,8 +65,9 @@ const stepDotsRow: CSSProperties = {
 
 function stepDotStyle(state: "done" | "active" | "future"): CSSProperties {
   return {
-    width: state === "active" ? 18 : 6,
-    height: 6,
+    // Design step dots — 5px dots, 16px active pill.
+    width: state === "active" ? 16 : 5,
+    height: 5,
     borderRadius: "var(--radius-full)",
     transition: "width var(--duration-fast) var(--ease-standard)",
     backgroundColor:
@@ -172,7 +173,8 @@ const logoStyle: CSSProperties = {
 const titleStyle: CSSProperties = {
   margin: 0,
   fontFamily: "var(--font-display)",
-  fontSize: "var(--font-size-lg)",
+  // Design modal title = 13.5px ≈ --font-size-sm (was --font-size-lg 16px).
+  fontSize: "var(--font-size-sm)",
   fontWeight: "var(--font-weight-semibold)",
   letterSpacing: "-0.01em",
   color: "var(--color-text)",
@@ -186,7 +188,8 @@ const subtitleStyle: CSSProperties = {
 };
 
 const bodyStyle: CSSProperties = {
-  padding: 18,
+  // Design modal body pad = 15px (was 18px).
+  padding: 15,
   display: "flex",
   flexDirection: "column",
   gap: "var(--space-md)",
@@ -200,8 +203,10 @@ const footStyle: CSSProperties = {
   alignItems: "center",
   justifyContent: "space-between",
   gap: 12,
-  padding: "14px 18px",
+  // Design modal foot = 12px/15px pad on the --ink2 inset ground.
+  padding: "12px 15px",
   borderTop: "1px solid var(--color-border)",
+  backgroundColor: "var(--color-bg-elevated)",
 };
 
 export function Modal({

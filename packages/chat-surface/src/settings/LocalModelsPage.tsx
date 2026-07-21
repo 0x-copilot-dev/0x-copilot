@@ -71,7 +71,8 @@ export interface LocalModelsPageProps {
 const listStyle: CSSProperties = {
   display: "flex",
   flexDirection: "column",
-  gap: "var(--space-sm)",
+  // Flat Krow rows divide with a top hairline — no inter-row gap (design).
+  gap: 0,
   margin: 0,
   padding: 0,
   listStyle: "none",

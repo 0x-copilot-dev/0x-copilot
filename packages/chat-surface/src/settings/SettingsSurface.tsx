@@ -212,7 +212,9 @@ const contentScrollStyle: CSSProperties = {
   flex: 1,
   minHeight: 0,
   overflowY: "auto",
-  padding: "var(--space-lg)",
+  // Design content padding — 26px top, 30px sides, 80px bottom gutter (was a
+  // uniform --space-lg 16px).
+  padding: "26px 30px 80px",
 };
 
 const contentInnerStyle: CSSProperties = {
@@ -221,7 +223,9 @@ const contentInnerStyle: CSSProperties = {
   margin: "0 auto",
   display: "flex",
   flexDirection: "column",
-  gap: "var(--space-lg)",
+  // Design card-to-card gap ≈ 13px (--space-md + --space-xs). A per-card
+  // marginBottom would stack on this flex gap, so the spacing lives here.
+  gap: "calc(var(--space-md) + var(--space-xs))",
   outline: "none",
 };
 
