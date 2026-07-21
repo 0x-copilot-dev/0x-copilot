@@ -69,13 +69,30 @@ from runtime_api.http.routes import (
     UsageApiRouter,
 )
 from runtime_api.rbac import public_route
-from runtime_api.routes.health import register_health_routes
+from runtime_api.routes.health import Checker, CheckResult, register_health_routes
 from runtime_api.sse.event_bus import (
     EventBusBackend,
     InMemoryEventBus,
 )
 from runtime_api.sse.postgres_event_bus import PostgresEventBus
 from runtime_worker import RuntimeWorker
+
+
+# Structured logger for run-executor topology decisions. A "no run executor"
+# state used to be invisible (the AC2b bug surfaced only as a 68s SSE hang);
+# every start/skip decision is now logged with its deciding signals so
+# "worker did NOT start" is greppable in the process logs.
+_STRUCTURED_LOGGER = LoggingConfigurator.get_logger("runtime_api.app")
+
+# Readiness/health value for the run executor.
+#   ``running``  — this process has a live in-process worker task.
+#   ``external`` — intentionally executor-less: a multi-process server profile
+#                  runs a dedicated ``runtime_worker`` process.
+#   ``absent``   — single-process deployment with NO live executor: the
+#                  red-light state (a queued run would hang forever).
+RUN_EXECUTOR_RUNNING = "running"
+RUN_EXECUTOR_EXTERNAL = "external"
+RUN_EXECUTOR_ABSENT = "absent"
 
 
 class RuntimeApiAppFactory:
@@ -209,10 +226,16 @@ class RuntimeApiAppFactory:
 
         @app.get("/v1/health", dependencies=[Depends(public_route())])
         async def health() -> dict[str, object]:
+            # ``run_executor`` is additive and does NOT gate this endpoint's
+            # status code — liveness probes (desktop-runtime + self-host
+            # healthchecks) rely on /v1/health staying 200. The fail-closed
+            # readiness gate lives on /readyz. This field just makes the
+            # executor topology visible so "absent" is never silent.
             return {
                 "service": "ai-backend",
                 "deployment_profile": resolved_deployment.name,
                 "feature_toggles_hash": resolved_deployment.toggles_hash(),
+                "run_executor": cls.classify_run_executor(app),
             }
 
         app.include_router(RuntimeApiRouter.create_router())
@@ -249,7 +272,14 @@ class RuntimeApiAppFactory:
         app.add_exception_handler(
             Exception, RuntimeApiErrorMapper.handle_unexpected_error
         )
-        register_health_routes(app)
+        # Readiness fails closed when this process should run its own run
+        # executor but none is alive (``run_executor == absent``). A
+        # ``single_user_desktop`` with no worker then reads NOT-ready on
+        # /readyz instead of silently healthy — the AC2b hang made visible.
+        register_health_routes(
+            app,
+            readiness_checkers=[cls._run_executor_readiness_checker(app)],
+        )
         return app
 
     @classmethod
@@ -793,6 +823,83 @@ class RuntimeApiAppFactory:
         await ports.lifecycle.close()
 
     @classmethod
+    def _is_single_process_topology(
+        cls, settings: RuntimeSettings | None, deployment: DeploymentProfile | None
+    ) -> bool:
+        """Whether THIS API process must run its own in-process run executor.
+
+        Execution *topology*, not the store backend, is the deciding signal.
+        Two single-process deployments qualify — they supervise no separate
+        worker process, so the run executor must live in this process:
+
+        * in-memory dev/test (``make dev``, unit tests), and
+        * the ``single_user_desktop`` app (Postgres or file store).
+
+        Everything else (``saas_multi_tenant``, ``single_tenant_*`` on a durable
+        store) is multi-process: a dedicated ``runtime_worker`` process runs the
+        executor and this API process is intentionally executor-less.
+
+        ``settings is None`` means the app never wired settings (a degenerate
+        boot); we cannot claim single-process, so return ``False``.
+        """
+
+        if settings is None:
+            return False
+        in_memory_backend = settings.store.backend in {
+            "in_memory",
+            "in_memory_async",
+        }
+        is_single_process_desktop = (
+            deployment is not None and deployment.name == PROFILE_SINGLE_USER_DESKTOP
+        )
+        return in_memory_backend or is_single_process_desktop
+
+    @classmethod
+    def classify_run_executor(cls, app: FastAPI) -> str:
+        """Classify this process's run-executor state for health/readiness.
+
+        Fail-closed: only report ``running`` when the in-process worker task
+        exists AND is still alive. A task that finished (crashed or exited)
+        is NOT ``running`` — it degrades to ``absent``/``external`` exactly as
+        if it had never started, so a dead executor never reads healthy.
+
+        * ``running``  — live in-process worker task.
+        * ``external`` — no in-process task, and the topology is multi-process
+          (a dedicated ``runtime_worker`` process owns the executor).
+        * ``absent``   — no live executor in a single-process deployment that
+          must run one: the red-light state a queued run would hang behind.
+        """
+
+        task = getattr(app.state, "runtime_in_process_worker_task", None)
+        if task is not None and not task.done():
+            return RUN_EXECUTOR_RUNNING
+        settings = getattr(app.state, "runtime_settings", None)
+        deployment = getattr(app.state, "deployment", None)
+        if cls._is_single_process_topology(settings, deployment):
+            return RUN_EXECUTOR_ABSENT
+        return RUN_EXECUTOR_EXTERNAL
+
+    @classmethod
+    def _run_executor_readiness_checker(cls, app: FastAPI) -> Checker:
+        """Readiness probe that fails closed on an ``absent`` run executor.
+
+        Evaluated at request time (not registration time), so it reads the
+        live worker-task state after lifespan startup has run. ``external`` and
+        ``running`` are both ready; only ``absent`` returns ``ok=False`` and
+        drives ``/readyz`` to 503.
+        """
+
+        def check() -> CheckResult:
+            state = cls.classify_run_executor(app)
+            return CheckResult(
+                name="run_executor",
+                ok=state != RUN_EXECUTOR_ABSENT,
+                detail=state,
+            )
+
+        return check
+
+    @classmethod
     async def start_in_process_worker(cls, app: FastAPI) -> None:
         """Start the in-process run executor for single-process deployments.
 
@@ -809,25 +916,57 @@ class RuntimeApiAppFactory:
         The store backend is a stale proxy for "single process"; the file store
         (durable, but single-writer and single-process) is exactly the case that
         proxy got wrong.
+
+        Every start/skip decision is logged with its deciding signals so a
+        "no run executor" state is explicit in the logs rather than surfacing
+        only as an SSE hang (the AC2b failure mode).
         """
 
         settings = getattr(app.state, "runtime_settings", None)
+        deployment = getattr(app.state, "deployment", None)
+
+        def _log_decision(*, started: bool, reason: str) -> None:
+            single_process = cls._is_single_process_topology(settings, deployment)
+            if started:
+                run_executor = RUN_EXECUTOR_RUNNING
+            elif single_process:
+                run_executor = RUN_EXECUTOR_ABSENT
+            else:
+                run_executor = RUN_EXECUTOR_EXTERNAL
+            fields = {
+                "started": started,
+                "reason": reason,
+                "run_executor": run_executor,
+                "deployment": deployment.name if deployment is not None else None,
+                "store_backend": (
+                    settings.store.backend if settings is not None else None
+                ),
+                "start_in_process_worker": (
+                    settings.execution.start_in_process_worker
+                    if settings is not None
+                    else None
+                ),
+            }
+            # A single-process deployment left executor-less is a misconfig the
+            # operator must see (WARNING); the intentional external/started
+            # cases are INFO.
+            if run_executor == RUN_EXECUTOR_ABSENT:
+                _STRUCTURED_LOGGER.warning("run_executor_decision", metadata=fields)
+            else:
+                _STRUCTURED_LOGGER.info("run_executor_decision", metadata=fields)
+
         if settings is None:
+            _log_decision(started=False, reason="no_settings")
             return
         if not settings.execution.start_in_process_worker:
+            _log_decision(started=False, reason="start_in_process_worker_disabled")
             return
-        deployment = getattr(app.state, "deployment", None)
-        is_single_process_desktop = (
-            deployment is not None and deployment.name == PROFILE_SINGLE_USER_DESKTOP
-        )
-        in_memory_backend = settings.store.backend in {
-            "in_memory",
-            "in_memory_async",
-        }
-        if not (in_memory_backend or is_single_process_desktop):
+        if not cls._is_single_process_topology(settings, deployment):
+            _log_decision(started=False, reason="multi_process_topology")
             return
         ports = getattr(app.state, "runtime_ports", None)
         if ports is None:
+            _log_decision(started=False, reason="no_ports")
             return
         event_bus = getattr(app.state, "runtime_event_bus", None)
         worker = RuntimeWorker(
@@ -853,6 +992,7 @@ class RuntimeApiAppFactory:
                 poll_interval_seconds=settings.execution.worker_poll_interval_seconds,
             )
         )
+        _log_decision(started=True, reason="started")
 
     @classmethod
     async def stop_in_process_worker(cls, app: FastAPI) -> None:
