@@ -30,6 +30,7 @@ import { useConnectors } from "../features/connectors/useConnectors";
 import { ChatsArchiveRoute } from "../features/chats/ChatsArchiveRoute";
 import { ProjectsRoute } from "../features/projects/ProjectsRoute";
 import { ActivityRoute } from "../features/activity/ActivityRoute";
+import { useActiveRunCount } from "../features/activity/useActiveRunCount";
 import { SkillsRoute } from "../features/skills/SkillsRoute";
 // `ConnectorsGateway` (the "Tools" destination) owns the in-destination
 // routing between the list (/connectors), the detail (/connectors/<id>), and
@@ -507,6 +508,9 @@ export function CopilotApp({
   // (PRD 04: design-system ThemeProvider + document.documentElement
   // attrs + debounced server save).
   const profile = useUserProfile();
+  // PRD-C.2 / PRD-H.5 — the rail Run badge count. Derived (polled, best-effort)
+  // from the conversation list rather than a bespoke endpoint.
+  const activeRunCount = useActiveRunCount(identity);
   // Routing goes through the Router port (packages/chat-surface). HashRouter
   // owns every window.history / popstate / hashchange interaction on web;
   // the desktop substrate will swap in its own implementation without any
@@ -1125,6 +1129,9 @@ export function CopilotApp({
               ? { initial: profile.data.display_name.trim().charAt(0) }
               : undefined
           }
+          // Run badge: number of in-flight runs (hidden at 0; the rail also
+          // hides it while Run is the active destination). PRD-C.2 / PRD-H.5.
+          railBadges={activeRunCount > 0 ? { run: activeRunCount } : undefined}
         >
           <Suspense fallback={<RouteLoadingFallback />}>{body}</Suspense>
           {/*
