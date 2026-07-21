@@ -9,12 +9,14 @@ on. This is the AC2 "Migration from the legacy desktop AI-runtime store" step
 > the default to `RUNTIME_STORE_BACKEND=file` +
 > `RUNTIME_FILE_STORE_ROOT=<userData>/agent-data/v1`;
 > `COPILOT_DESKTOP_FILE_STORE_V1=0` (or `false`/`off`) pins the legacy Postgres
-> store as an escape hatch. A first file boot starts a **fresh, empty** store —
-> existing Postgres conversations are preserved on disk but not shown until this
-> migration carries them across. Run it (with the flag pinned to Postgres, or on
-> a quiesced app) **before** letting the app settle on the file store, or run it
-> against the already-created file root to backfill history. This is the AC2
-> "Migration from the legacy desktop AI-runtime store" step.
+> store as an escape hatch. On an existing install with Postgres history, the
+> first file boot **carries that history across automatically** — the supervisor
+> runs this migration (`--on-boot`) before the ai-backend starts (see "Automatic
+> first-boot migration" below). Existing Postgres conversations are preserved on
+> disk throughout; on any migration failure the boot falls back to serving the
+> Postgres store, never an empty app. The manual flows below remain available for
+> operators who want to stage or verify the carry-over out of band. This is the
+> AC2 "Migration from the legacy desktop AI-runtime store" step.
 
 ## What it does
 
@@ -112,12 +114,17 @@ The supervisor only invokes `--on-boot` when it is safe to do so — the app is
 booting on the file store, the file store root is empty/new, and no prior boot
 has already migrated (a marker file inside the store root records completion).
 That gate is a pure decision (`apps/desktop/main/services/migration-policy.ts`
-`resolveMigrationDecision`); the impure detection (fs-empty probe, Postgres
-row-count, marker read) and the boot-step wiring + fallback live in the desktop
-supervisor. **Status:** the engine (`--on-boot`, Postgres scope discovery) and the
-boot-policy resolver have shipped; the supervisor boot-step wiring is the next
-step (see the tracking PR). Until it lands, run `--on-boot` (or the scoped flow
-above) manually to carry an existing install's history across.
+`resolveMigrationDecision`); the impure detection (fs-empty probe in
+`file-store-facts.ts`, Postgres row-count in `pg-facts.ts`, marker read) and the
+boot brain (`boot-store-backend.ts` `resolveBootStoreBackend`) that ties them to
+the `--on-boot` runner (`migration-runner.ts`) live in the desktop supervisor.
+**Status:** shipped end to end. The supervisor resolves the effective store
+backend during the migrations phase (Postgres is up, ai-backend has not started):
+it probes the facts, runs `--on-boot` when the gate allows, writes the completion
+marker only on a clean import, and forces the Postgres store for the boot on any
+failure (via the `storeBackendOverride` seam in `service-env.ts`). Running
+`--on-boot` (or the scoped flow above) by hand remains available but is no longer
+required for an ordinary first-file boot.
 
 ## Guarantees & limits
 
