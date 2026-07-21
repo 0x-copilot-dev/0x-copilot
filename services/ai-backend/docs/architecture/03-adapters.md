@@ -28,6 +28,13 @@ Mixing `in_memory` API with `postgres` worker is not supported. The `file` backe
 worker in-process (`start_in_process_worker` gates on the `single_user_desktop` profile,
 not the store backend) and the standalone `python -m runtime_worker` refuses it.
 
+The `file` backend's append-with-fold "state" ledgers (usage, approvals, budgets, …) are
+**compacted at boot**: `open()` folds any ledger whose on-disk log has grown past a ratio
+threshold back to its live set via the crash-safe `StateLedger.rewrite` (temp → fsync →
+`os.replace`), so replay cost tracks live state, not total history. The audit log
+(append-only evidence), the queue, and session event/message/run streams (monotonic
+`sequence_no`) are never folded. Kill switch: `RUNTIME_FILE_STORE_COMPACTION=0`.
+
 ---
 
 ## In-memory adapters (`runtime_adapters/in_memory/`)
