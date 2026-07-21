@@ -382,11 +382,24 @@ export const RUNTIME_ACTIVITY_KINDS = [
 // `approval_requested` for the originator. The LangGraph harness is NOT
 // resumed — the run remains in `waiting_for_approval` until the child
 // reaches `approved` / `rejected`.
+//
+// PRD-09a (Wave 3) — "approve_with_edits" is the reviewer editing AND
+// approving in one action: the approver's `edits` (see `SurfaceEdits`)
+// are merged into the pending proposal SERVER-SIDE (ai-backend re-derives
+// final = proposal ⊕ edits; the client is never trusted to send the
+// merged artifact) and the commit proceeds. Distinct from "suggest_edit"
+// (which routes to a second user and creates a child row without
+// committing); "approve_with_edits" resolves to an `approved` terminal
+// status and commits the edited proposal. The present-imperative name
+// mirrors the `suggest_edit` precedent (both describe the reviewer's
+// action, not the resulting state). Additive — existing approve/reject
+// consumers are unaffected.
 export type ApprovalDecision =
   | "approved"
   | "rejected"
   | "forwarded"
-  | "suggest_edit";
+  | "suggest_edit"
+  | "approve_with_edits";
 export type ApprovalStatus =
   | "pending"
   | "approved"
@@ -1517,6 +1530,13 @@ export interface ApprovalDecisionRequest {
   // by the server otherwise. Empty objects are rejected too. The keys are
   // the tool-call argument names the approver edited.
   edited_payload?: Record<string, unknown> | null;
+  // PRD-09a (Wave 3) — the reviewer's edits, permitted only when
+  // `decision === "approve_with_edits"`. The server (ai-backend 09b)
+  // merges these into the pending proposal payload and re-derives the
+  // committed artifact; it never trusts a client-sent merged result.
+  // Shape is validated server-side (unknown edit keys ⇒ 422); the facade
+  // passes it through unchanged.
+  edits?: SurfaceEdits | null;
 }
 
 export interface ApprovalDecisionResponse {
@@ -1833,6 +1853,11 @@ export interface ApprovalResolvedPayload {
     | "suggest_edit"
     | string;
   decision?: ApprovalDecision;
+  // PRD-09a (Wave 3) — set when `decision === "approve_with_edits"`; the
+  // reviewer's applied edits mirrored back so the resolution is
+  // audit-visible without re-fetching the request. The terminal `status`
+  // stays "approved" (an edited approval still commits).
+  edits?: SurfaceEdits;
   message?: string;
   [key: string]: unknown;
 }
@@ -2136,6 +2161,28 @@ export interface SurfaceState {
 export interface SurfaceDiff {
   spec?: SurfaceSpec;
   changes: readonly SurfaceFieldChange[];
+}
+
+/** PRD-09a (Wave 3) — the reviewer's edits carried on an
+ * `approve_with_edits` decision (`ApprovalDecisionRequest.edits`) and
+ * mirrored back, audit-visible, on `approval_resolved`
+ * (`ApprovalResolvedPayload.edits`). All fields optional; every field the
+ * reviewer left untouched is simply absent.
+ *
+ * - `fields`   — per-field overrides for record/message archetypes,
+ *                keyed by the surface field path, value is the edited text.
+ * - `body`     — the edited free-text body (message/doc archetypes).
+ * - `accepted_hunk_ids` — the subset of PRD-06 diff hunks the reviewer
+ *                kept; hunks absent from this list are excluded from the
+ *                committed body.
+ *
+ * The server (ai-backend 09b) is the authority: it merges these into the
+ * pending proposal and re-derives the committed payload. This is the wire
+ * shape only — no merge semantics live here or in the facade. */
+export interface SurfaceEdits {
+  fields?: Record<string, string>;
+  body?: string;
+  accepted_hunk_ids?: string[];
 }
 
 /** What rides inside event payloads under the `surface` key. `surface_uri`
@@ -2805,6 +2852,36 @@ export function isSurfaceEnvelope(value: unknown): value is SurfaceEnvelope {
   return (
     typeof value.surface_uri === "string" && isSurfaceArchetype(value.archetype)
   );
+}
+
+/** PRD-09a (Wave 3) — structural guard for the reviewer-edits payload,
+ * following the `isSurfaceSpec` / `isSurfaceEnvelope` pattern. Checks the
+ * optional-field shapes only; the authoritative validator (unknown-key
+ * rejection, merge semantics) is ai-backend 09b. An empty object is a
+ * valid `SurfaceEdits` (every field optional). */
+export function isSurfaceEdits(value: unknown): value is SurfaceEdits {
+  if (!isPlainRecord(value)) {
+    return false;
+  }
+  const { fields, body, accepted_hunk_ids } = value;
+  if (
+    fields !== undefined &&
+    (!isPlainRecord(fields) ||
+      !Object.values(fields).every((entry) => typeof entry === "string"))
+  ) {
+    return false;
+  }
+  if (body !== undefined && typeof body !== "string") {
+    return false;
+  }
+  if (
+    accepted_hunk_ids !== undefined &&
+    (!Array.isArray(accepted_hunk_ids) ||
+      !accepted_hunk_ids.every((entry) => typeof entry === "string"))
+  ) {
+    return false;
+  }
+  return true;
 }
 
 export function isRuntimeApiEventType(
