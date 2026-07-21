@@ -1490,3 +1490,30 @@ export {
   type FirstRunLaunchResult,
 } from "./onboarding";
 // === end First-Run onboarding (P3) ===
+
+// === First-Run onboarding (P4 — tools popover) ===
+// The connector-aware Tools popover that replaces the flat `ToolPicker` FOR the
+// FTUE: a built-in web-search toggle (default on), connected connectors with a
+// per-run active/paused toggle, curated 1-click "Connect" rows
+// (`requiresPreRegisteredClient` → host routes to the custom-config form), and
+// a Custom MCP entry. Data flows through the host-injected
+// `FirstRunConnectorsPort` (the existing `/v1/mcp/*` facade routes — NOT
+// rebuilt) and is classified by the pure `projectFirstRunConnectors` (a
+// chat-surface copy of the web app's `projectChatConnectors`, since `apps/*`
+// can't be imported). `ComposerToolsButton` is the composer trigger.
+// Design: docs/plan/first-run-onboarding/design-source/SPEC.md.
+export {
+  ToolsPopover,
+  TOOLS_POPOVER_COPY,
+  ComposerToolsButton,
+  COMPOSER_TOOLS_BUTTON_COPY,
+  projectFirstRunConnectors,
+  firstRunActiveToolCount,
+  type ToolsPopoverProps,
+  type ComposerToolsButtonProps,
+  type FirstRunConnectorProjection,
+  type FirstRunConnectedConnector,
+  type FirstRunInstallableConnector,
+  type FirstRunConnectorsPort,
+} from "./onboarding";
+// === end First-Run onboarding (P4 — tools popover) ===
