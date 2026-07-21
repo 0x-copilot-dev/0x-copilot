@@ -29,6 +29,16 @@ from uuid import uuid4
 
 from pydantic import BaseModel, ConfigDict, Field
 
+from copilot_audit_chain import AuditChainSigner
+
+# Reuse the backend's canonical connection-hardening primitives (same
+# deployable component) so the projects store stamps RLS session vars and
+# serialises audit-chain inserts through exactly one implementation:
+#   * ``_apply_rls_session_vars`` — SET LOCAL app.current_org_id / app.role
+#   * ``_take_audit_chain_lock``  — pg_advisory_xact_lock per (table, org)
+# See ``backend_app/store.py`` (PostgresMcpStore.append_audit / _connect).
+from backend_app.store import _apply_rls_session_vars, _take_audit_chain_lock
+
 
 def _now() -> datetime:
     return datetime.now(timezone.utc)
@@ -216,7 +226,9 @@ class ProjectsStore(Protocol):
     """Adapter contract for the Postgres + in-memory projects stores."""
 
     @contextmanager
-    def transaction(self) -> Iterator[None]: ...  # pragma: no cover
+    def transaction(  # pragma: no cover
+        self, *, org_id: str | None = None
+    ) -> Iterator[None]: ...
 
     # -- projects ------------------------------------------------------
 
@@ -352,11 +364,13 @@ class InMemoryProjectsStore:
     audits: list[ProjectAuditRecord] = field(default_factory=list)
 
     @contextmanager
-    def transaction(self) -> Iterator[None]:
+    def transaction(self, *, org_id: str | None = None) -> Iterator[None]:
         # Single-process in-memory; no actual transactional boundary.
         # The service layer still calls ``transaction()`` so the same
         # composition works against the Postgres adapter without a
-        # branch.
+        # branch. ``org_id`` is accepted (and ignored) for signature
+        # parity with the Postgres adapter, which stamps it as an RLS
+        # session var on the shared write connection.
         yield
 
     # -- projects ------------------------------------------------------
@@ -627,10 +641,18 @@ class InMemoryProjectsStore:
 # share it. Outside a ``transaction()`` block each method checks out its
 # own short-lived pooled connection.
 #
-# Live-Postgres verification is DEFERRED (no live DB in this workstream):
 # RLS session-var wiring and audit-chain signing of ``project_audit_events``
-# are stubbed to the unsigned shape the in-memory adapter also uses. See
-# the PRD-H FR-H.3 note.
+# are now live in this adapter (PRD-H.3 hardening):
+#   * ``transaction(org_id=...)`` and the fresh-connection path in
+#     ``_cursor(tenant_id=...)`` stamp ``app.current_org_id`` / ``app.role``
+#     so the tenant-isolation policies in ``schema.sql`` back the
+#     application-side ``WHERE tenant_id = %s`` scoping.
+#   * ``append_audit`` reads the per-tenant chain head under an advisory
+#     lock, then signs (seq / prev_hash / signature / key_version) through
+#     the shared :class:`AuditChainSigner` — the same path
+#     ``PostgresMcpStore.append_audit`` uses for ``mcp_audit_events``.
+# Live-Postgres SQL execution stays DEFERRED (no live DB in this
+# workstream): the supervised-boot smoke exercises the real RLS + chain.
 
 _ACTIVE_PROJECTS_CONN: contextvars.ContextVar[Any] = contextvars.ContextVar(
     "projects_active_conn", default=None
@@ -652,11 +674,19 @@ class PostgresProjectsStore:
     # -- connection / transaction plumbing ----------------------------
 
     @contextmanager
-    def transaction(self) -> Iterator[Any]:
+    def transaction(self, *, org_id: str | None = None) -> Iterator[Any]:
         """Open a transaction and publish its connection to the context.
 
         Composed store writes inside the ``with`` block run on this one
         connection so a partial failure rolls back every row together.
+
+        ``org_id`` (the caller's ``tenant_id``) is stamped as the
+        ``app.current_org_id`` RLS session var on the shared connection so
+        every composed write inside the block is backed by the
+        tenant-isolation policies in ``schema.sql`` — matching
+        :meth:`PostgresMcpStore.transaction`. ``app.role='api'`` is always
+        stamped. Defaults to ``None`` (no stamp) for signature parity with
+        the in-memory adapter and callers not yet passing a tenant.
         """
 
         existing = _ACTIVE_PROJECTS_CONN.get()
@@ -668,13 +698,23 @@ class PostgresProjectsStore:
             token = _ACTIVE_PROJECTS_CONN.set(conn)
             try:
                 with conn.transaction():
+                    # Stamp inside the transaction so the SET LOCAL scope
+                    # matches the composed writes' atomic unit.
+                    _apply_rls_session_vars(conn, org_id=org_id, role="api")
                     yield conn
             finally:
                 _ACTIVE_PROJECTS_CONN.reset(token)
 
     @contextmanager
-    def _cursor(self) -> Iterator[Any]:
-        """Yield a cursor on the active transaction conn, or a fresh one."""
+    def _cursor(self, *, tenant_id: str | None = None) -> Iterator[Any]:
+        """Yield a cursor on the active transaction conn, or a fresh one.
+
+        When a fresh (non-transaction) connection is checked out, stamp the
+        RLS session vars from ``tenant_id`` so standalone reads/writes are
+        tenant-scoped by the policy as well as the ``WHERE`` clause. Inside
+        a transaction the connection was already stamped by
+        :meth:`transaction`, so we don't restamp.
+        """
 
         active = _ACTIVE_PROJECTS_CONN.get()
         if active is not None:
@@ -682,13 +722,14 @@ class PostgresProjectsStore:
                 yield cur
             return
         with self._pool.connection() as owned:
+            _apply_rls_session_vars(owned, org_id=tenant_id, role="api")
             with owned.cursor() as cur:
                 yield cur
 
     # -- projects ------------------------------------------------------
 
     def insert_project(self, record: ProjectRecord) -> ProjectRecord:
-        with self._cursor() as cur:
+        with self._cursor(tenant_id=record.tenant_id) as cur:
             cur.execute(
                 """
                 INSERT INTO projects (
@@ -723,7 +764,7 @@ class PostgresProjectsStore:
         self, *, tenant_id: str, project_id: str, include_deleted: bool = False
     ) -> ProjectRecord | None:
         clause = "" if include_deleted else " AND deleted_at IS NULL"
-        with self._cursor() as cur:
+        with self._cursor(tenant_id=tenant_id) as cur:
             cur.execute(
                 f"SELECT * FROM projects WHERE tenant_id = %s AND id = %s{clause}",
                 (tenant_id, project_id),
@@ -732,7 +773,7 @@ class PostgresProjectsStore:
         return _row_to_project(row) if row else None
 
     def get_project_by_name(self, *, tenant_id: str, name: str) -> ProjectRecord | None:
-        with self._cursor() as cur:
+        with self._cursor(tenant_id=tenant_id) as cur:
             cur.execute(
                 """
                 SELECT * FROM projects
@@ -796,7 +837,7 @@ class PostgresProjectsStore:
             + f" ORDER BY {order_by} OFFSET %s LIMIT %s"
         )
         params.extend([offset, limit + 1])
-        with self._cursor() as cur:
+        with self._cursor(tenant_id=tenant_id) as cur:
             cur.execute(sql, tuple(params))
             rows = cur.fetchall()
         has_more = len(rows) > limit
@@ -805,7 +846,7 @@ class PostgresProjectsStore:
         return page, next_cursor
 
     def update_project(self, record: ProjectRecord) -> ProjectRecord:
-        with self._cursor() as cur:
+        with self._cursor(tenant_id=record.tenant_id) as cur:
             cur.execute(
                 """
                 UPDATE projects SET
@@ -834,7 +875,7 @@ class PostgresProjectsStore:
 
     def soft_delete_project(self, *, tenant_id: str, project_id: str) -> bool:
         now = _now()
-        with self._cursor() as cur:
+        with self._cursor(tenant_id=tenant_id) as cur:
             cur.execute(
                 """
                 UPDATE projects SET deleted_at = %s, updated_at = %s
@@ -849,7 +890,7 @@ class PostgresProjectsStore:
     def insert_membership(
         self, record: ProjectMembershipRecord
     ) -> ProjectMembershipRecord:
-        with self._cursor() as cur:
+        with self._cursor(tenant_id=record.tenant_id) as cur:
             cur.execute(
                 """
                 INSERT INTO project_memberships (
@@ -872,7 +913,7 @@ class PostgresProjectsStore:
     def get_membership(
         self, *, tenant_id: str, project_id: str, user_id: str
     ) -> ProjectMembershipRecord | None:
-        with self._cursor() as cur:
+        with self._cursor(tenant_id=tenant_id) as cur:
             cur.execute(
                 """
                 SELECT * FROM project_memberships
@@ -892,7 +933,7 @@ class PostgresProjectsStore:
         limit: int = 50,
     ) -> tuple[tuple[ProjectMembershipRecord, ...], str | None]:
         offset = _decode_cursor(cursor)
-        with self._cursor() as cur:
+        with self._cursor(tenant_id=tenant_id) as cur:
             cur.execute(
                 """
                 SELECT * FROM project_memberships
@@ -911,7 +952,7 @@ class PostgresProjectsStore:
     def list_memberships_for_user(
         self, *, tenant_id: str, user_id: str
     ) -> tuple[ProjectMembershipRecord, ...]:
-        with self._cursor() as cur:
+        with self._cursor(tenant_id=tenant_id) as cur:
             cur.execute(
                 """
                 SELECT * FROM project_memberships
@@ -925,7 +966,7 @@ class PostgresProjectsStore:
     def update_membership_role(
         self, *, tenant_id: str, project_id: str, user_id: str, role: str
     ) -> ProjectMembershipRecord | None:
-        with self._cursor() as cur:
+        with self._cursor(tenant_id=tenant_id) as cur:
             cur.execute(
                 """
                 UPDATE project_memberships SET role = %s
@@ -940,7 +981,7 @@ class PostgresProjectsStore:
     def delete_membership(
         self, *, tenant_id: str, project_id: str, user_id: str
     ) -> bool:
-        with self._cursor() as cur:
+        with self._cursor(tenant_id=tenant_id) as cur:
             cur.execute(
                 """
                 DELETE FROM project_memberships
@@ -953,7 +994,7 @@ class PostgresProjectsStore:
     # -- stars ---------------------------------------------------------
 
     def upsert_star(self, record: ProjectStarRecord) -> ProjectStarRecord:
-        with self._cursor() as cur:
+        with self._cursor(tenant_id=record.tenant_id) as cur:
             cur.execute(
                 """
                 INSERT INTO project_stars (tenant_id, user_id, project_id, created_at)
@@ -970,7 +1011,7 @@ class PostgresProjectsStore:
         return record
 
     def delete_star(self, *, tenant_id: str, project_id: str, user_id: str) -> bool:
-        with self._cursor() as cur:
+        with self._cursor(tenant_id=tenant_id) as cur:
             cur.execute(
                 """
                 DELETE FROM project_stars
@@ -981,7 +1022,7 @@ class PostgresProjectsStore:
             return bool(cur.rowcount)
 
     def is_starred(self, *, tenant_id: str, project_id: str, user_id: str) -> bool:
-        with self._cursor() as cur:
+        with self._cursor(tenant_id=tenant_id) as cur:
             cur.execute(
                 """
                 SELECT 1 FROM project_stars
@@ -996,7 +1037,7 @@ class PostgresProjectsStore:
     def append_activity(
         self, record: ProjectActivityRecord
     ) -> ProjectActivityRecord | None:
-        with self._cursor() as cur:
+        with self._cursor(tenant_id=record.tenant_id) as cur:
             cur.execute(
                 """
                 INSERT INTO project_activity (
@@ -1042,7 +1083,7 @@ class PostgresProjectsStore:
             params.append(list(kinds))
         offset = _decode_cursor(cursor)
         params.extend([offset, limit + 1])
-        with self._cursor() as cur:
+        with self._cursor(tenant_id=tenant_id) as cur:
             cur.execute(
                 "SELECT * FROM project_activity WHERE "
                 + " AND ".join(where)
@@ -1060,7 +1101,7 @@ class PostgresProjectsStore:
     def get_counts(
         self, *, tenant_id: str, project_id: str
     ) -> ProjectActivityCounts | None:
-        with self._cursor() as cur:
+        with self._cursor(tenant_id=tenant_id) as cur:
             cur.execute(
                 """
                 SELECT * FROM project_activity_counts
@@ -1072,7 +1113,7 @@ class PostgresProjectsStore:
         return ProjectActivityCounts.model_validate(row) if row else None
 
     def upsert_counts(self, record: ProjectActivityCounts) -> ProjectActivityCounts:
-        with self._cursor() as cur:
+        with self._cursor(tenant_id=record.tenant_id) as cur:
             cur.execute(
                 """
                 INSERT INTO project_activity_counts (
@@ -1108,18 +1149,44 @@ class PostgresProjectsStore:
     # -- audit ---------------------------------------------------------
 
     def append_audit(self, record: ProjectAuditRecord) -> ProjectAuditRecord:
-        # Chain-signing (seq/prev_hash/signature/key_version) is DEFERRED —
-        # written NULL here to match the unsigned in-memory reference. See
-        # the module-level FR-H.3 note.
-        with self._cursor() as cur:
+        # Per-tenant HMAC hash chain, signed through the shared
+        # :class:`AuditChainSigner` — same path as
+        # ``PostgresMcpStore.append_audit`` (``mcp_audit_events``). We take a
+        # per-(table, tenant) advisory xact lock, read the chain head, then
+        # sign seq/prev_hash/signature/key_version over the canonical
+        # business payload and insert. The chain columns are DB-only; the
+        # ``ProjectAuditRecord`` model (``extra='forbid'``) does not carry
+        # them, so the returned record is unchanged.
+        signer = AuditChainSigner.from_env(environment_env_var="BACKEND_ENVIRONMENT")
+        payload = _project_audit_payload(record)
+        with self._cursor(tenant_id=record.tenant_id) as cur:
+            _take_audit_chain_lock(
+                cur, table="project_audit_events", org_id=record.tenant_id
+            )
+            cur.execute(
+                """
+                SELECT seq, signature
+                  FROM project_audit_events
+                 WHERE tenant_id = %s
+                 ORDER BY seq DESC NULLS LAST
+                 LIMIT 1
+                """,
+                (record.tenant_id,),
+            )
+            head = cur.fetchone()
+            last_seq, prev_hash = _chain_head(head)
+            seq = last_seq + 1
+            sig = signer.sign(prev_hash=prev_hash, payload=payload)
             cur.execute(
                 """
                 INSERT INTO project_audit_events (
                     audit_id, tenant_id, actor_user_id, action, target_kind,
                     target_id, before_state, after_state, context,
-                    correlation_id, ts
+                    correlation_id, ts,
+                    seq, prev_hash, signature, key_version
                 ) VALUES (
-                    %s,%s,%s,%s,%s,%s,%s::jsonb,%s::jsonb,%s::jsonb,%s,%s
+                    %s,%s,%s,%s,%s,%s,%s::jsonb,%s::jsonb,%s::jsonb,%s,%s,
+                    %s,%s,%s,%s
                 )
                 """,
                 (
@@ -1134,6 +1201,10 @@ class PostgresProjectsStore:
                     _jsonb(record.context),
                     record.correlation_id,
                     record.ts,
+                    seq,
+                    sig.prev_hash,
+                    sig.signature,
+                    sig.key_version,
                 ),
             )
         return record
@@ -1141,7 +1212,7 @@ class PostgresProjectsStore:
     def list_audit_for_project(
         self, *, tenant_id: str, project_id: str
     ) -> tuple[ProjectAuditRecord, ...]:
-        with self._cursor() as cur:
+        with self._cursor(tenant_id=tenant_id) as cur:
             cur.execute(
                 """
                 SELECT * FROM project_audit_events
@@ -1196,6 +1267,46 @@ def _row_to_membership(row: dict[str, Any]) -> ProjectMembershipRecord:
 
 def _row_to_activity(row: dict[str, Any]) -> ProjectActivityRecord:
     return ProjectActivityRecord.model_validate(dict(row))
+
+
+def _project_audit_payload(record: ProjectAuditRecord) -> dict[str, Any]:
+    """Canonical business payload signed into the audit hash chain.
+
+    Mirrors the payload shape ``PostgresMcpStore.append_audit`` builds for
+    ``mcp_audit_events`` — the exact fields that must not change without
+    breaking verification. Chain columns (seq/prev_hash/signature/
+    key_version) are intentionally excluded; they live in the envelope the
+    :class:`AuditChainSigner` wraps around this payload.
+    """
+
+    return {
+        "audit_id": record.audit_id,
+        "tenant_id": record.tenant_id,
+        "actor_user_id": record.actor_user_id,
+        "action": record.action,
+        "target_kind": record.target_kind,
+        "target_id": record.target_id,
+        "before_state": record.before_state,
+        "after_state": record.after_state,
+        "context": record.context,
+        "correlation_id": record.correlation_id,
+        "ts": record.ts,
+    }
+
+
+def _chain_head(head: Any) -> tuple[int, bytes | None]:
+    """Read ``(last_seq, prev_hash)`` from the chain-head row (or empty chain).
+
+    ``head`` is the ``SELECT seq, signature ... ORDER BY seq DESC`` row (a
+    mapping) or ``None`` when the tenant's chain is empty. Matches the head
+    decoding in ``PostgresMcpStore.append_audit``.
+    """
+
+    if not head:
+        return 0, None
+    last_seq = int(head["seq"]) if head.get("seq") is not None else 0
+    prev_hash = bytes(head["signature"]) if head.get("signature") is not None else None
+    return last_seq, prev_hash
 
 
 def _row_to_audit(row: dict[str, Any]) -> ProjectAuditRecord:

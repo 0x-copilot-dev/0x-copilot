@@ -372,7 +372,7 @@ class ProjectsService:
         # The owner-membership row + project row are written in one
         # transaction so a partial failure can't leave a project with
         # no owner in the memberships table.
-        with self._store.transaction():
+        with self._store.transaction(org_id=tenant_id):
             stored = self._store.insert_project(record)
             self._store.insert_membership(
                 ProjectMembershipRecord(
@@ -463,7 +463,7 @@ class ProjectsService:
         before = _safe_dump(existing)
         after = _safe_dump(new_record)
         action = _action_for_transition(existing.status, new_record.status)
-        with self._store.transaction():
+        with self._store.transaction(org_id=tenant_id):
             stored = self._store.update_project(new_record)
             self._store.append_audit(
                 ProjectAuditRecord(
@@ -499,7 +499,7 @@ class ProjectsService:
             raise ProjectForbidden(project_id)
 
         before = _safe_dump(existing)
-        with self._store.transaction():
+        with self._store.transaction(org_id=tenant_id):
             self._store.soft_delete_project(tenant_id=tenant_id, project_id=project_id)
             self._store.append_audit(
                 ProjectAuditRecord(
@@ -536,7 +536,7 @@ class ProjectsService:
         restored = existing.model_copy(
             update={"deleted_at": None, "updated_at": _now()}
         )
-        with self._store.transaction():
+        with self._store.transaction(org_id=tenant_id):
             stored = self._store.update_project(restored)
             self._store.append_audit(
                 ProjectAuditRecord(
@@ -611,7 +611,7 @@ class ProjectsService:
             role=role,
             added_by=caller_user_id,
         )
-        with self._store.transaction():
+        with self._store.transaction(org_id=tenant_id):
             stored = self._store.insert_membership(record)
             _mirror_membership_to_port(
                 self._membership_port,
@@ -668,7 +668,7 @@ class ProjectsService:
         )
         if membership is None:
             raise ProjectNotFound(project_id)
-        with self._store.transaction():
+        with self._store.transaction(org_id=tenant_id):
             self._store.delete_membership(
                 tenant_id=tenant_id,
                 project_id=project_id,
@@ -728,7 +728,7 @@ class ProjectsService:
         if membership is None:
             raise ProjectNotFound(project_id)
         previous_role = membership.role
-        with self._store.transaction():
+        with self._store.transaction(org_id=tenant_id):
             updated = self._store.update_membership_role(
                 tenant_id=tenant_id,
                 project_id=project_id,
@@ -874,7 +874,7 @@ class ProjectsService:
         old_owner_user_id = existing.owner_user_id
         before = _safe_dump(existing)
 
-        with self._store.transaction():
+        with self._store.transaction(org_id=tenant_id):
             # Step 1: demote old owner FIRST (or remove if "none").
             # This is the only window where the project has no owner-
             # roled membership row — the next step (promote new owner)
