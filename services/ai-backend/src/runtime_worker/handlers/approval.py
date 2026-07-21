@@ -789,6 +789,10 @@ class RuntimeApprovalHandler:
 
     async def _emit_draft_updated(self, *, run: RunRecord, record: object) -> None:
         """Emit a ``DRAFT_UPDATED`` event carrying the persisted draft's new version and status."""
+        from agent_runtime.capabilities.backends import (  # noqa: PLC0415
+            DraftSurfaceProjector,
+        )
+
         payload: dict[str, object] = {
             "draft_id": record.draft_id,
             "version": record.version,
@@ -799,6 +803,11 @@ class RuntimeApprovalHandler:
             "citation_ids": list(record.citation_ids),
             "summary": f"Draft v{record.version}: {record.title or 'Untitled'}",
         }
+        # Generative-UI (PRD-02b): attach the same ``message`` surface the
+        # in-package emitter builds so a draft mutated across an approval carries
+        # ``surface_uri`` + ``surface`` (section diff on v2+). Shared builder — no
+        # envelope duplication; best-effort and gated by RUNTIME_SURFACE_EMISSION.
+        await DraftSurfaceProjector.attach(payload, record, self._draft_store)  # type: ignore[arg-type]
         await self.event_producer.append_api_event(
             run=run,
             source=StreamEventSource.RUNTIME,

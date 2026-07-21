@@ -975,12 +975,15 @@ class RuntimeRunHandler:
         """
 
         from agent_runtime.api.constants import Keys, Values  # noqa: PLC0415
+        from agent_runtime.capabilities.backends import (  # noqa: PLC0415
+            DraftSurfaceProjector,
+        )
         from agent_runtime.execution.contracts import StreamEventSource  # noqa: PLC0415
         from runtime_api.schemas import RuntimeApiEventType  # noqa: PLC0415
 
         async def _emit(record: object) -> None:
             # Lazy-attribute access keeps this file decoupled from DraftRecord.
-            payload = {
+            payload: dict[str, object] = {
                 Keys.Field.RUN_ID: command.run_id,
                 Keys.Field.CONVERSATION_ID: command.conversation_id,
                 "draft_id": getattr(record, "draft_id"),
@@ -993,6 +996,11 @@ class RuntimeRunHandler:
                 Keys.Field.SUMMARY: f"Draft v{getattr(record, 'version')}: "
                 f"{getattr(record, 'title') or 'Untitled'}",
             }
+            # Generative-UI (PRD-02b): attach the same ``message`` surface the
+            # in-package emitter builds, so drafts written during the live run
+            # carry ``surface_uri`` + ``surface`` (section diff on v2+). Shared
+            # builder — no envelope duplication; best-effort + flag-gated.
+            await DraftSurfaceProjector.attach(payload, record, self.draft_store)  # type: ignore[arg-type]
             run = await self.persistence.get_run(
                 org_id=command.org_id, run_id=command.run_id
             )

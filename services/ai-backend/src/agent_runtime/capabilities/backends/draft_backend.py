@@ -425,109 +425,132 @@ def _run_sync(awaitable: Awaitable[Any]) -> Any:
 # -- surface projection (generative-UI PRD-02) --------------------------------
 
 
-def _section_changes(
-    prior_sections: list[dict[str, str]],
-    current_sections: list[dict[str, str]],
-) -> list[SurfaceFieldChange]:
-    """Diff two section lists into section-level before/after field changes.
+class DraftSurfaceProjector:
+    """Builds and attaches the generative-UI ``message`` surface for a draft.
 
-    Pairs sections by heading: a changed body yields ``old``/``new``, a new
-    heading yields ``old=None``, a dropped heading yields ``new=None``. Empty
-    headings (the pre-first-heading preamble) map to a stable non-empty label so
-    the change field stays valid.
+    The single builder shared by every ``DRAFT_UPDATED`` emitter — the in-package
+    :func:`make_event_emitter` and the two production worker closures (run +
+    approval handlers) — so the envelope is constructed in exactly one place
+    (PRD-02b). Kept a class (not module helpers) per the service code rules.
     """
 
-    prior_by = {section["heading"]: section["body"] for section in prior_sections}
-    current_by = {section["heading"]: section["body"] for section in current_sections}
-    changes: list[SurfaceFieldChange] = []
-    for heading, body in current_by.items():
-        old = prior_by.get(heading)
-        if old != body:
-            changes.append(
-                SurfaceFieldChange(
-                    field=heading or _INTRO_SECTION_LABEL, old=old, new=body
-                )
+    @classmethod
+    async def attach(
+        cls,
+        payload: dict[str, object],
+        record: DraftRecord,
+        store: DraftStorePort | None,
+    ) -> None:
+        """Attach ``surface`` + top-level ``surface_uri`` to a DRAFT_UPDATED payload.
+
+        Best-effort and gated by ``RUNTIME_SURFACE_EMISSION``: when disabled the
+        payload is byte-for-byte unchanged, and any failure is logged and
+        swallowed so a surface never blocks a draft emission. The prior version
+        (for the diff) is read from ``store`` when available on v2+.
+        """
+
+        if not SurfaceEmissionFlag.enabled():
+            return
+        try:
+            prior = await cls._prior_version(record, store)
+            envelope = cls.envelope(record, prior=prior)
+            payload[Keys.Field.SURFACE_URI] = envelope.surface_uri
+            payload[Keys.Field.SURFACE] = envelope.model_dump(
+                mode="json", exclude_none=True
             )
-    for heading, body in prior_by.items():
-        if heading not in current_by:
-            changes.append(
-                SurfaceFieldChange(
-                    field=heading or _INTRO_SECTION_LABEL, old=body, new=None
-                )
+        except Exception:  # noqa: BLE001 - best-effort; never break draft emission
+            _LOGGER.warning(
+                "[surfaces] draft.surface_raised draft_id=%s version=%s",
+                getattr(record, "draft_id", None),
+                getattr(record, "version", None),
+                exc_info=True,
             )
-    return changes
 
-
-def _draft_surface_envelope(
-    record: DraftRecord,
-    *,
-    prior: DraftRecord | None,
-) -> SurfaceEnvelope:
-    """Build the ``message`` surface envelope for a draft version.
-
-    ``state.data`` carries the send-shaped view ({to?, subject, sections, body});
-    ``diff.changes`` carries section-level before/after when a prior version
-    exists. No spec — the draft/email surface is a bespoke tier-1 message view,
-    not an archetype binding.
-    """
-
-    sections = _section_split(record.content_text)
-    data: dict[str, object] = {
-        "subject": record.title,
-        "sections": sections,
-        "body": record.content_text,
-    }
-    recipient = (record.target_metadata or {}).get("to")
-    if recipient is not None:
-        data["to"] = recipient
-
-    diff: SurfaceDiff | None = None
-    if prior is not None:
-        changes = _section_changes(_section_split(prior.content_text), sections)
-        if changes:
-            diff = SurfaceDiff(changes=changes)
-
-    return SurfaceEnvelope(
-        surface_uri=f"{_DRAFT_SURFACE_SCHEME}{record.draft_id}",
-        archetype=SurfaceArchetype.MESSAGE,
-        state=SurfaceState(spec=None, data=data),
-        diff=diff,
-    )
-
-
-async def _attach_draft_surface(
-    payload: dict[str, object],
-    record: DraftRecord,
-    store: DraftStorePort | None,
-) -> None:
-    """Attach ``surface`` + top-level ``surface_uri`` to a DRAFT_UPDATED payload.
-
-    Best-effort and gated by ``RUNTIME_SURFACE_EMISSION``: when disabled the
-    payload is byte-for-byte unchanged, and any failure is logged and swallowed
-    so a surface never blocks a draft emission. The prior version (for the diff)
-    is read from ``store`` when available on v2+.
-    """
-
-    if not SurfaceEmissionFlag.enabled():
-        return
-    try:
-        prior: DraftRecord | None = None
-        if store is not None and record.version > 1:
-            prior = await store.get_version(
-                org_id=record.org_id,
-                draft_id=record.draft_id,
-                version=record.version - 1,
-            )
-        envelope = _draft_surface_envelope(record, prior=prior)
-        payload["surface_uri"] = envelope.surface_uri
-        payload["surface"] = envelope.model_dump(mode="json", exclude_none=True)
-    except Exception:  # noqa: BLE001 - best-effort; never break draft emission
-        _LOGGER.warning(
-            "[surfaces] draft.surface_raised draft_id=%s version=%s",
-            record.draft_id,
-            record.version,
-            exc_info=True,
+    @staticmethod
+    async def _prior_version(
+        record: DraftRecord, store: DraftStorePort | None
+    ) -> DraftRecord | None:
+        """Read the immediately-prior version for the diff, or ``None`` on v1/no-store."""
+        if store is None or record.version <= 1:
+            return None
+        return await store.get_version(
+            org_id=record.org_id,
+            draft_id=record.draft_id,
+            version=record.version - 1,
         )
+
+    @classmethod
+    def envelope(
+        cls,
+        record: DraftRecord,
+        *,
+        prior: DraftRecord | None,
+    ) -> SurfaceEnvelope:
+        """Build the ``message`` surface envelope for a draft version.
+
+        ``state.data`` carries the send-shaped view ({to?, subject, sections,
+        body}); ``diff.changes`` carries section-level before/after when a prior
+        version exists. No spec — the draft/email surface is a bespoke tier-1
+        message view, not an archetype binding.
+        """
+
+        sections = _section_split(record.content_text)
+        data: dict[str, object] = {
+            "subject": record.title,
+            "sections": sections,
+            "body": record.content_text,
+        }
+        recipient = (record.target_metadata or {}).get("to")
+        if recipient is not None:
+            data["to"] = recipient
+
+        diff: SurfaceDiff | None = None
+        if prior is not None:
+            changes = cls._section_changes(_section_split(prior.content_text), sections)
+            if changes:
+                diff = SurfaceDiff(changes=changes)
+
+        return SurfaceEnvelope(
+            surface_uri=f"{_DRAFT_SURFACE_SCHEME}{record.draft_id}",
+            archetype=SurfaceArchetype.MESSAGE,
+            state=SurfaceState(spec=None, data=data),
+            diff=diff,
+        )
+
+    @staticmethod
+    def _section_changes(
+        prior_sections: list[dict[str, str]],
+        current_sections: list[dict[str, str]],
+    ) -> list[SurfaceFieldChange]:
+        """Diff two section lists into section-level before/after field changes.
+
+        Pairs sections by heading: a changed body yields ``old``/``new``, a new
+        heading yields ``old=None``, a dropped heading yields ``new=None``. Empty
+        headings (the pre-first-heading preamble) map to a stable non-empty label
+        so the change field stays valid.
+        """
+
+        prior_by = {section["heading"]: section["body"] for section in prior_sections}
+        current_by = {
+            section["heading"]: section["body"] for section in current_sections
+        }
+        changes: list[SurfaceFieldChange] = []
+        for heading, body in current_by.items():
+            old = prior_by.get(heading)
+            if old != body:
+                changes.append(
+                    SurfaceFieldChange(
+                        field=heading or _INTRO_SECTION_LABEL, old=old, new=body
+                    )
+                )
+        for heading, body in prior_by.items():
+            if heading not in current_by:
+                changes.append(
+                    SurfaceFieldChange(
+                        field=heading or _INTRO_SECTION_LABEL, old=body, new=None
+                    )
+                )
+        return changes
 
 
 # -- event emitter factory ----------------------------------------------------
@@ -564,7 +587,7 @@ def make_event_emitter(
             Keys.Field.SUMMARY: _summary_for(record),
             Keys.Field.STATUS: Values.Status.COMPLETED,
         }
-        await _attach_draft_surface(payload, record, store)
+        await DraftSurfaceProjector.attach(payload, record, store)
         await event_producer.append_api_event(  # type: ignore[attr-defined]
             run=run,
             source=StreamEventSource.RUNTIME,
