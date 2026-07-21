@@ -136,3 +136,52 @@ def test_facade_omits_reasoning_depth_when_absent(
     assert response.status_code == 200, response.text
     assert len(captured) == 1
     assert "reasoning_depth" not in captured[0]
+
+
+def test_facade_forwards_web_search_disabled_verbatim(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The composer Tools popover's per-run web-search toggle rides the
+    run-start payload. ``FacadeRunRequest`` declares ``web_search_enabled``
+    explicitly so ``model_dump`` doesn't strip it; an explicit ``false``
+    reaches ai-backend, which omits the ``web_search`` tool for that run.
+    """
+
+    captured = _install_capturing_forwarder(monkeypatch)
+    client = TestClient(create_app(FacadeSettings()))
+
+    response = client.post(
+        "/v1/agent/runs",
+        headers={"authorization": _bearer()},
+        json={
+            "conversation_id": "conv_1",
+            "user_input": "go",
+            "web_search_enabled": False,
+        },
+    )
+
+    assert response.status_code == 200, response.text
+    assert len(captured) == 1
+    assert captured[0].get("web_search_enabled") is False
+
+
+def test_facade_omits_web_search_flag_when_absent(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """No-regression — when the toggle is untouched the facade sends no
+    ``web_search_enabled`` key, so ai-backend's always-on default (True)
+    applies. ``model_dump(exclude_none=True)`` drops the ``None`` default.
+    """
+
+    captured = _install_capturing_forwarder(monkeypatch)
+    client = TestClient(create_app(FacadeSettings()))
+
+    response = client.post(
+        "/v1/agent/runs",
+        headers={"authorization": _bearer()},
+        json={"conversation_id": "conv_1", "user_input": "go"},
+    )
+
+    assert response.status_code == 200, response.text
+    assert len(captured) == 1
+    assert "web_search_enabled" not in captured[0]

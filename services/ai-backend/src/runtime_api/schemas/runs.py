@@ -220,6 +220,11 @@ class CreateRunRequest(RuntimeContract):
     # its current defaults (semantically equivalent to ``balanced`` but
     # without forcing the field onto the wire).
     reasoning_depth: ReasoningDepth | None = None
+    # Per-turn web-search toggle from the composer Tools popover. Default True
+    # matches the historic always-on ``WebSearchToolRegistry`` — an explicit
+    # ``false`` omits the ``web_search`` tool for this run only. Threaded onto
+    # ``AgentRuntimeContext.web_search_enabled`` by the run coordinator.
+    web_search_enabled: bool = True
     content: tuple[RunContentPartRequest, ...] = ()
     attachments: tuple[RunAttachmentRequest, ...] = ()
     quote: RunQuoteRequest | None = None

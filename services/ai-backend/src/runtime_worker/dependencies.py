@@ -50,8 +50,18 @@ class WebSearchToolRegistry:
             "and external references. Returns result snippets with source links."
         )
 
-    def list_available_tools(self, _context: object) -> Sequence[object]:
-        """Return the web-search tool as the default built-in tool list."""
+    def list_available_tools(self, context: object) -> Sequence[object]:
+        """Return the built-in tool list, honoring the per-run web-search toggle.
+
+        The composer Tools popover can disable web search for a single turn; the
+        run's :class:`AgentRuntimeContext` carries ``web_search_enabled`` (default
+        ``True``). When it is ``False`` the ``web_search`` tool is omitted for that
+        run only. ``getattr`` defaults to ``True`` so any caller passing a bare
+        object / ``None`` (older tests, the capability-mode probe) keeps the
+        historic always-on behavior.
+        """
+        if not getattr(context, "web_search_enabled", True):
+            return ()
         return (self._web_search_tool(),)
 
     @classmethod
@@ -274,7 +284,12 @@ class DefaultRuntimeDependenciesFactory:
             return
         if self.settings.execution.allow_empty_capabilities:
             return
-        if WebSearchToolRegistry().list_available_tools(context):
+        # Deployment-level check: web search is ALWAYS composed into the tool
+        # registry (a configured capability source), independent of the per-run
+        # ``web_search_enabled`` toggle. Probe with ``None`` so a run that
+        # disables web search for its turn does not spuriously trip the
+        # production "no capability sources" guard.
+        if WebSearchToolRegistry().list_available_tools(None):
             return
         if self.settings.mcp.backend_registry_url is not None:
             return

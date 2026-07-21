@@ -570,6 +570,7 @@ class RunCoordinator:
             max_parallel_tasks=self._settings.execution.max_parallel_tasks,
             trace_metadata=trace_metadata,
             feature_flags=context.feature_flags,
+            web_search_enabled=request.web_search_enabled,
             workspace_behavior_overrides=workspace_behavior_overrides or {},
             user_policies_json=user_policies_json or {},
             provider_keys=provider_keys or {},

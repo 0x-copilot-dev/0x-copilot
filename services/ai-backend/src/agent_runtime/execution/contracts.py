@@ -332,6 +332,11 @@ class AgentRuntimeContext(RuntimeContract):
     max_parallel_tasks: PositiveInt = Field(default=4, le=100)
     trace_metadata: JsonObject = Field(default_factory=dict)
     feature_flags: frozenset[FeatureFlag] = Field(default_factory=frozenset)
+    # Per-run web-search toggle (composer Tools popover). Default True preserves
+    # the historic always-on behavior — when the user turns web search off for a
+    # turn the ``WebSearchToolRegistry`` omits the ``web_search`` tool for that
+    # run only. Purely a capability filter; nothing else keys off it.
+    web_search_enabled: bool = True
     # Workspace-level policy knobs (e.g. training opt-out, behavior overrides)
     # resolved at run-create and persisted verbatim in ``agent_runs``. Stored as
     # a generic ``JsonObject`` rather than a typed model to avoid importing
