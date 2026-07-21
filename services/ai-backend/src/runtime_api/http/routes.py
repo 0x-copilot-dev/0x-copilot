@@ -207,17 +207,18 @@ class RuntimeApiRoutes:
         )
 
     @classmethod
-    def list_models(
+    async def list_models(
         cls,
         request: Request,
         org_id: str | None = Query(None, min_length=1),
         user_id: str | None = Query(None, min_length=1),
     ) -> ModelCatalogResponse:
-        """Return the configured model catalog; sync because no I/O is needed."""
+        """Return the model catalog with per-workspace enablement flags (PR-2C)."""
 
-        # list_models is pure in-memory (no port calls) — keep sync.
-        cls.scoped_identity(request, org_id=org_id, user_id=user_id)
-        return cls.cqs(request).list_models()
+        # Async now: enablement reads the org's workspace-defaults row to stamp
+        # each item's ``enabled`` flag (catalog build itself stays in-memory).
+        scoped_org, _ = cls.scoped_identity(request, org_id=org_id, user_id=user_id)
+        return await cls.cqs(request).list_models(org_id=scoped_org)
 
     @classmethod
     async def create_run(

@@ -10,6 +10,7 @@ from __future__ import annotations
 
 from agent_runtime.api.constants import Messages, Values
 from agent_runtime.api.model_catalog import ModelCatalog
+from agent_runtime.api.model_enablement import ModelEnablementResolver
 from agent_runtime.api.ports import EventStorePort, PersistencePort
 from agent_runtime.api.usage_service import ConversationContextBuilder
 from agent_runtime.execution.contracts import RuntimeErrorCode
@@ -22,6 +23,7 @@ from runtime_api.schemas import (
     ConversationContextResponse,
     ConversationListResponse,
     ConversationResponse,
+    DefaultModelSelection,
     MessageListResponse,
     ModelCatalogResponse,
     RunStatusResponse,
@@ -60,22 +62,46 @@ class ConversationQueryService:
         self._model_resolver = model_resolver
         self._pricing_catalog = ModelPricingCatalog(persistence)
 
-    def list_models(self) -> ModelCatalogResponse:
-        """Return the model catalog with credential-availability flags per provider.
+    async def list_models(self, *, org_id: str | None = None) -> ModelCatalogResponse:
+        """Return the model catalog with per-provider credential + enablement flags.
 
-        The catalog is assembled in-process from ``RuntimeSettings``; the
-        ``configured`` flags reflect whether the provider API key is present at
-        startup. Duplicate model IDs are collapsed (last definition wins) to
-        guard against accidental double-registration of the default model.
+        The catalog is assembled in-process from ``RuntimeSettings`` (the
+        ``configured`` flags reflect provider-key presence at startup); each
+        item's ``enabled`` flag is then resolved from the org's workspace
+        ``enabled_models`` curation (PR-2C) — an explicit selection, or the
+        newest-per-provider default when the workspace hasn't curated. Duplicate
+        model IDs are collapsed (last definition wins) to guard against
+        accidental double-registration of the default model.
         """
 
         catalog = ModelCatalog.build(self._settings)
         # Deduplicate by id — the default model may coincide with a curated
         # entry; later (richer) definitions win, matching the prior behaviour.
-        unique_models = {item.id: item for item in catalog}
+        unique_models = tuple({item.id: item for item in catalog}.values())
+        defaults = (
+            await self._persistence.get_workspace_defaults(org_id=org_id)
+            if org_id is not None
+            else None
+        )
+        # The always-enabled default is the workspace default when set, else the
+        # runtime settings default — the model every run falls back to, so it
+        # must always be selectable regardless of curation.
+        effective_default = (
+            defaults.default_model
+            if defaults is not None and defaults.default_model is not None
+            else DefaultModelSelection(
+                provider=self._settings.default_model.provider,
+                model_name=self._settings.default_model.model_name,
+            )
+        )
+        enabled = ModelEnablementResolver.apply(
+            unique_models,
+            enabled_models=defaults.enabled_models if defaults is not None else None,
+            default_model=effective_default,
+        )
         return ModelCatalogResponse(
             default_model_id=self._settings.default_model.model_name,
-            models=tuple(unique_models.values()),
+            models=enabled,
         )
 
     async def get_conversation(

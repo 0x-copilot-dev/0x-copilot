@@ -598,6 +598,12 @@ export interface UpdateWorkspaceDefaultsRequest {
    * server tolerates omission via a default-factory.
    */
   behavior_overrides?: WorkspaceBehaviorOverrides;
+  /**
+   * PR-2C — the model ids/model_names this workspace has enabled in its
+   * pickers. `null` or omitted = no explicit curation (the server enables
+   * the newest models per configured provider); `[]` = everything disabled.
+   */
+  enabled_models?: readonly string[] | null;
 }
 
 export interface WorkspaceDefaultModel {
@@ -615,6 +621,8 @@ export interface WorkspaceDefaultsResponse {
    * + ``training_data_opt_out=false`` when no row exists).
    */
   behavior_overrides: WorkspaceBehaviorOverrides;
+  /** PR-2C — `null` when the workspace hasn't curated its model list. */
+  enabled_models: readonly string[] | null;
   updated_at: string | null;
   updated_by_user_id: string | null;
 }
@@ -1234,6 +1242,12 @@ export interface ModelCatalogModel {
   name: string;
   description?: string | null;
   configured: boolean;
+  /**
+   * PR-2C: whether this model is shown in the workspace's composer picker
+   * (Settings → Models toggles curate it). Optional/defaults-true for wire
+   * back-compat with consumers that predate the flag.
+   */
+  enabled?: boolean;
   supports_streaming?: boolean;
   supports_attachments?: boolean;
   supports_reasoning?: boolean;

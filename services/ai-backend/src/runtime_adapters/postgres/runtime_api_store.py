@@ -162,6 +162,8 @@ class _Columns:
     DEFAULT_CONNECTORS = "default_connectors"
     # Workspace-policy knobs JSONB column on workspace_defaults.
     BEHAVIOR_OVERRIDES = "behavior_overrides"
+    # Per-workspace model curation (JSON array | NULL) on workspace_defaults.
+    ENABLED_MODELS = "enabled_models"
     UPDATED_BY_USER_ID = "updated_by_user_id"
     FOLDER = "folder"
     PARENT_CONVERSATION_ID = "parent_conversation_id"
@@ -758,7 +760,7 @@ class PostgresRuntimeApiStore:
             cur = await conn.execute(
                 """
                 SELECT org_id, default_model, default_connectors,
-                       behavior_overrides,
+                       behavior_overrides, enabled_models,
                        updated_at, updated_by_user_id
                   FROM workspace_defaults
                  WHERE org_id = %s
@@ -793,23 +795,31 @@ class PostgresRuntimeApiStore:
             mode="json",
             exclude_none=True,
         )
+        # None (no curation) is stored as SQL NULL — distinct from an empty
+        # array (workspace disabled everything). Jsonb(None) yields NULL.
+        enabled_models_json = (
+            Jsonb(list(record.enabled_models))
+            if record.enabled_models is not None
+            else None
+        )
         now = record.updated_at or datetime.now(timezone.utc)
         async with self._tenant_connection(org_id=record.org_id) as conn:
             cur = await conn.execute(
                 """
                 INSERT INTO workspace_defaults
                        (org_id, default_model, default_connectors,
-                        behavior_overrides,
+                        behavior_overrides, enabled_models,
                         updated_at, updated_by_user_id)
-                VALUES (%s, %s, %s, %s, %s, %s)
+                VALUES (%s, %s, %s, %s, %s, %s, %s)
                 ON CONFLICT (org_id) DO UPDATE
                    SET default_model       = EXCLUDED.default_model,
                        default_connectors  = EXCLUDED.default_connectors,
                        behavior_overrides  = EXCLUDED.behavior_overrides,
+                       enabled_models      = EXCLUDED.enabled_models,
                        updated_at          = EXCLUDED.updated_at,
                        updated_by_user_id  = EXCLUDED.updated_by_user_id
                  RETURNING org_id, default_model, default_connectors,
-                           behavior_overrides,
+                           behavior_overrides, enabled_models,
                            updated_at, updated_by_user_id
                 """,
                 (
@@ -817,6 +827,7 @@ class PostgresRuntimeApiStore:
                     Jsonb(default_model_json),
                     Jsonb(default_connectors_json),
                     Jsonb(behavior_overrides_json),
+                    enabled_models_json,
                     now,
                     record.updated_by_user_id,
                 ),
@@ -864,6 +875,15 @@ class PostgresRuntimeApiStore:
                 # rather than crashing the read path. Old runs keep
                 # streaming.
                 behavior_overrides = WorkspaceBehaviorOverrides()
+        # enabled_models: SQL NULL → None (heuristic default); a JSON array →
+        # tuple. A forward-incompatible blob (non-list) degrades to None
+        # rather than crashing the read path — same posture as the columns above.
+        enabled_models_raw = row.get(_Columns.ENABLED_MODELS)
+        enabled_models: tuple[str, ...] | None = None
+        if isinstance(enabled_models_raw, list):
+            enabled_models = tuple(
+                str(entry) for entry in enabled_models_raw if isinstance(entry, str)
+            )
         return WorkspaceDefaultsRecord(
             org_id=str(row[_Columns.ORG_ID]),
             default_model=default_model,
@@ -872,6 +892,7 @@ class PostgresRuntimeApiStore:
             ),
             retention_days=None,
             behavior_overrides=behavior_overrides,
+            enabled_models=enabled_models,
             updated_at=row.get(_Columns.UPDATED_AT),
             updated_by_user_id=row.get(_Columns.UPDATED_BY_USER_ID),
         )

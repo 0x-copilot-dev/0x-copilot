@@ -39,6 +39,7 @@ class _Fields:
     DEFAULT_CONNECTORS = "default_connectors"
     RETENTION_DAYS = "retention_days"
     BEHAVIOR_OVERRIDES = "behavior_overrides"
+    ENABLED_MODELS = "enabled_models"
     PROVIDER = "provider"
     MODEL_NAME = "model_name"
     SYSTEM_PROMPT_OVERRIDE = "system_prompt_override"
@@ -73,6 +74,56 @@ class ReasoningEffort(StrEnum):
     LOW = "low"
     MEDIUM = "medium"
     HIGH = "high"
+
+
+# Bounds for the per-workspace enabled-models curation (PR-2C). A single
+# model id is short; the list is a curation, not a data dump. 500 ids is far
+# above any real provider catalog yet bounds a hostile payload.
+_MAX_ENABLED_MODEL_ID_LEN = 200
+_MAX_ENABLED_MODELS = 500
+
+
+class EnabledModelsNormalizer:
+    """Normalize the ``enabled_models`` curation list.
+
+    ``None`` is preserved verbatim — it means "no explicit curation", which
+    the enablement resolver reads as "apply the newest-per-provider default".
+    A present list is stripped, empty-rejected, order-preserving-deduped, and
+    capped. Ids are NOT validated against the live catalog: the catalog churns
+    and an unknown id is harmless (it simply matches no model).
+    """
+
+    @classmethod
+    def coerce(cls, value: object) -> tuple[str, ...] | None:
+        if value is None:
+            return None
+        if isinstance(value, str) or not isinstance(value, (list, tuple)):
+            msg = "enabled_models must be a list of model ids or null"
+            raise ValueError(msg)
+        seen: set[str] = set()
+        out: list[str] = []
+        for raw in value:
+            if not isinstance(raw, str):
+                msg = "enabled_models entries must be strings"
+                raise ValueError(msg)
+            model_id = raw.strip()
+            if not model_id:
+                msg = "enabled_models entries must not be empty"
+                raise ValueError(msg)
+            if len(model_id) > _MAX_ENABLED_MODEL_ID_LEN:
+                msg = (
+                    "enabled_models entries must be at most "
+                    f"{_MAX_ENABLED_MODEL_ID_LEN} characters"
+                )
+                raise ValueError(msg)
+            if model_id in seen:
+                continue
+            seen.add(model_id)
+            out.append(model_id)
+        if len(out) > _MAX_ENABLED_MODELS:
+            msg = f"enabled_models may list at most {_MAX_ENABLED_MODELS} ids"
+            raise ValueError(msg)
+        return tuple(out)
 
 
 # 8 KB cap on the system_prompt_override (see pr-4.3 §2.6). The cap
@@ -173,6 +224,10 @@ class WorkspaceDefaultsRecord(RuntimeContract):
     behavior_overrides: WorkspaceBehaviorOverrides = Field(
         default_factory=WorkspaceBehaviorOverrides
     )
+    # PR-2C: per-workspace model curation. ``None`` = no explicit curation
+    # (the enablement resolver applies the newest-per-provider default);
+    # a tuple = exactly the ids/model_names the workspace has enabled.
+    enabled_models: tuple[str, ...] | None = None
     updated_at: datetime | None = None
     updated_by_user_id: str | None = None
 
@@ -180,6 +235,11 @@ class WorkspaceDefaultsRecord(RuntimeContract):
     @classmethod
     def _normalize_org(cls, value: object) -> str:
         return ValueNormalizer.normalize_id(value, Keys.Field.ORG_ID)
+
+    @field_validator(_Fields.ENABLED_MODELS, mode="before")
+    @classmethod
+    def _coerce_enabled_models(cls, value: object) -> tuple[str, ...] | None:
+        return EnabledModelsNormalizer.coerce(value)
 
     @field_validator(_Fields.DEFAULT_CONNECTORS, mode="before")
     @classmethod
@@ -214,6 +274,7 @@ class WorkspaceDefaultsResponse(RuntimeContract):
     behavior_overrides: WorkspaceBehaviorOverrides = Field(
         default_factory=WorkspaceBehaviorOverrides
     )
+    enabled_models: tuple[str, ...] | None = None
     updated_at: datetime | None = None
     updated_by_user_id: str | None = None
 
@@ -239,11 +300,17 @@ class UpdateWorkspaceDefaultsRequest(RuntimeContract):
     behavior_overrides: WorkspaceBehaviorOverrides = Field(
         default_factory=WorkspaceBehaviorOverrides
     )
+    enabled_models: tuple[str, ...] | None = None
 
     @field_validator(_Fields.DEFAULT_CONNECTORS, mode="before")
     @classmethod
     def _coerce_connectors(cls, value: object) -> ConversationConnectorScopes:
         return ConnectorScopeValidator.coerce(value)
+
+    @field_validator(_Fields.ENABLED_MODELS, mode="before")
+    @classmethod
+    def _coerce_enabled_models(cls, value: object) -> tuple[str, ...] | None:
+        return EnabledModelsNormalizer.coerce(value)
 
     @field_validator(_Fields.BEHAVIOR_OVERRIDES, mode="before")
     @classmethod
@@ -266,6 +333,7 @@ RETENTION_DAYS_BOUNDS = (_MIN_RETENTION_DAYS, _MAX_RETENTION_DAYS)
 __all__: tuple[str, ...] = (
     "CitationDensity",
     "DefaultModelSelection",
+    "EnabledModelsNormalizer",
     "RETENTION_DAYS_BOUNDS",
     "ReasoningEffort",
     "RefusalBehavior",
@@ -296,6 +364,7 @@ def update_workspace_defaults_request_to_record(
         default_connectors=request.default_connectors,
         retention_days=request.retention_days,
         behavior_overrides=request.behavior_overrides,
+        enabled_models=request.enabled_models,
         updated_at=now,
         updated_by_user_id=actor_user_id,
     )

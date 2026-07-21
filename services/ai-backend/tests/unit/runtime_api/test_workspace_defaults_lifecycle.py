@@ -218,6 +218,81 @@ class TestWorkspaceDefaultsRoute(WorkspaceDefaultsFixtureMixin):
         assert response.status_code == 400, response.text
 
 
+class TestEnabledModelsCuration(WorkspaceDefaultsFixtureMixin):
+    """PR-2C — enabled_models persists and drives the /models enabled flag."""
+
+    def _put_with_enabled_models(
+        self, client: TestClient, enabled_models: object
+    ) -> dict[str, Any]:
+        payload = self._defaults_payload()
+        payload["enabled_models"] = enabled_models
+        response = client.put(
+            "/v1/agent/workspace/defaults",
+            headers=self._headers(permission_scopes=(RUNTIME_USE, ADMIN_USERS)),
+            json=payload,
+        )
+        assert response.status_code == 200, response.text
+        return response.json()
+
+    def test_put_get_round_trip_dedupes_and_persists(self) -> None:
+        client, store = self.create_client()
+        body = self._put_with_enabled_models(
+            client, ["gpt-5.4-mini", "gpt-5.4-mini", "claude-opus-4-7"]
+        )
+        # Order-preserving dedupe on the way in.
+        assert body["enabled_models"] == ["gpt-5.4-mini", "claude-opus-4-7"]
+        # Persisted as a tuple on the record.
+        assert store.workspace_defaults[self.Values.ORG_ID].enabled_models == (
+            "gpt-5.4-mini",
+            "claude-opus-4-7",
+        )
+        # And read back through GET.
+        got = client.get("/v1/agent/workspace/defaults", headers=self._headers())
+        assert got.json()["enabled_models"] == ["gpt-5.4-mini", "claude-opus-4-7"]
+
+    def test_get_defaults_to_null_when_uncurated(self) -> None:
+        client, _ = self.create_client()
+        got = client.get("/v1/agent/workspace/defaults", headers=self._headers())
+        assert got.json()["enabled_models"] is None
+
+    def test_put_rejects_empty_string_entry(self) -> None:
+        client, _ = self.create_client()
+        payload = self._defaults_payload()
+        payload["enabled_models"] = ["ok", "  "]
+        response = client.put(
+            "/v1/agent/workspace/defaults",
+            headers=self._headers(permission_scopes=(RUNTIME_USE, ADMIN_USERS)),
+            json=payload,
+        )
+        assert response.status_code == 400, response.text
+
+    def test_models_route_marks_only_curated_enabled(self) -> None:
+        client, _ = self.create_client()
+        # Curate to exactly the default model, so nothing else is enabled
+        # except local models (none configured here).
+        self._put_with_enabled_models(client, [self.Values.DEFAULT_MODEL_NAME])
+        response = client.get("/v1/agent/models", headers=self._headers())
+        assert response.status_code == 200, response.text
+        models = response.json()["models"]
+        enabled = [m["id"] for m in models if m.get("enabled")]
+        # The default model is always enabled and is in the curation.
+        assert self.Values.DEFAULT_MODEL_NAME in enabled
+        # Curation of one id must not enable the whole catalog.
+        assert len(enabled) < len(models)
+
+    def test_models_route_heuristic_when_uncurated(self) -> None:
+        client, _ = self.create_client()
+        # No PUT → enabled_models is None → newest-per-provider heuristic.
+        response = client.get("/v1/agent/models", headers=self._headers())
+        assert response.status_code == 200, response.text
+        models = response.json()["models"]
+        # Some models enabled, some not — the heuristic curates a short list.
+        assert any(m.get("enabled") for m in models)
+        # The runtime default model is always in the enabled set.
+        default_id = response.json()["default_model_id"]
+        assert any(m["id"] == default_id and m.get("enabled") for m in models)
+
+
 class TestCreateConversationDefaultsFallback(WorkspaceDefaultsFixtureMixin):
     def test_new_conversation_inherits_default_connectors(self) -> None:
         client, _ = self.create_client()
