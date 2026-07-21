@@ -29,13 +29,20 @@ INSERT INTO organizations (
     ('org_drill_b', 'Drill Org B', 'drill-b', 'saas', 'active', '{}'::jsonb, now(), now())
 ON CONFLICT (org_id) DO NOTHING;
 
+-- Principals first: users.principal_id is NOT NULL + FK (ADR 0001 baseline).
+INSERT INTO principals (principal_id, display_name, created_at, updated_at) VALUES
+    ('prn_usr_drill_a_admin', 'Drill Admin A',    now(), now()),
+    ('prn_usr_drill_a_emp',   'Drill Employee A', now(), now()),
+    ('prn_usr_drill_b_admin', 'Drill Admin B',    now(), now())
+ON CONFLICT (principal_id) DO NOTHING;
+
 INSERT INTO users (
     user_id, org_id, primary_email, display_name, status, is_service_account,
-    metadata, created_at, updated_at
+    metadata, created_at, updated_at, principal_id
 ) VALUES
-    ('usr_drill_a_admin', 'org_drill_a', 'admin@drill-a.example', 'Drill Admin A', 'active', false, '{}'::jsonb, now(), now()),
-    ('usr_drill_a_emp',   'org_drill_a', 'emp@drill-a.example',   'Drill Employee A', 'active', false, '{}'::jsonb, now(), now()),
-    ('usr_drill_b_admin', 'org_drill_b', 'admin@drill-b.example', 'Drill Admin B', 'active', false, '{}'::jsonb, now(), now())
+    ('usr_drill_a_admin', 'org_drill_a', 'admin@drill-a.example', 'Drill Admin A', 'active', false, '{}'::jsonb, now(), now(), 'prn_usr_drill_a_admin'),
+    ('usr_drill_a_emp',   'org_drill_a', 'emp@drill-a.example',   'Drill Employee A', 'active', false, '{}'::jsonb, now(), now(), 'prn_usr_drill_a_emp'),
+    ('usr_drill_b_admin', 'org_drill_b', 'admin@drill-b.example', 'Drill Admin B', 'active', false, '{}'::jsonb, now(), now(), 'prn_usr_drill_b_admin')
 ON CONFLICT (user_id) DO NOTHING;
 
 INSERT INTO role_assignments (

@@ -8,6 +8,13 @@
 // in-memory Storage when the ambient one is unusable, matching the real
 // Electron (Chromium) renderer where `localStorage` works. Cleared per test
 // so run-mode / KV state never leaks between cases.
+//
+// Also register `@testing-library/jest-dom`'s custom matchers
+// (`toHaveTextContent`, `toBeInTheDocument`, …) — importing the `/vitest`
+// entry both installs them on vitest's `expect` at runtime and augments the
+// `Assertion` interface so `tsc` sees them. This file is in `tsconfig.json`'s
+// `include`, so the augmentation reaches the desktop typecheck.
+import "@testing-library/jest-dom/vitest";
 import { beforeEach } from "vitest";
 
 function createMemoryStorage(): Storage {

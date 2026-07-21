@@ -1,5 +1,3 @@
-import { generatePrivateKey } from "viem/accounts";
-
 import type { AuthAuditLog, SignInMode } from "./audit-log";
 import { runGoogleLogin } from "./google-login";
 import { runGoogleLink, type GoogleLinkResult } from "./google-link";
@@ -93,6 +91,12 @@ export interface AuthServiceConfig {
   readonly walletTimeoutMs?: number;
   /** Injectable for tests; defaults to the real local-key SIWE flow. */
   readonly localLoginFlow?: typeof runLocalLogin;
+  /**
+   * Per-install host secret (ENTERPRISE_SERVICE_TOKEN) from the supervisor's
+   * boot secrets — required for the device-account mint ("Use locally").
+   * Absent in unsupervised dev shells, where signInLocal fails closed.
+   */
+  readonly hostToken?: string;
   /** Injectable for tests; defaults to the real authenticated Google-link flow. */
   readonly googleLinkFlow?: typeof runGoogleLink;
   /** Injectable for tests; defaults to the real authenticated wallet-link flow. */
@@ -109,8 +113,6 @@ export interface RendererSession {
 const BACKEND_KIND: ServerKind = "backend";
 const BACKEND_SERVER_ID = "facade";
 // Where the per-install local-identity private key is stored (SecretStorage,
-// keychain-encrypted). Distinct serverId from the session so both persist.
-const LOCAL_KEY_SERVER_ID = "local-identity";
 const REFRESH_WINDOW_MS = 60_000;
 
 export class AuthService {
@@ -272,19 +274,18 @@ export class AuthService {
     }
   }
 
-  // "Use locally, no account" — a genuinely local sign-in for the packaged app
-  // (production posture). Mints a per-install local Ethereum key (kept in the
-  // keychain) and drives the SIWE self-signup ramp in-process — no browser, no
-  // external wallet, no IdP. Stable identity across restarts (same key → same
-  // account). Distinct from dev-mint (which needs the dev IdP + seeds a dev
-  // persona); this uses the production-safe SIWE backend.
+  // "Use locally, no account" — the device account (production posture).
+  // One host-token-gated POST mints a real session for the deployment's
+  // single device account; the server-side singleton makes re-entry land on
+  // the SAME account across restarts and reinstalls (D4-A) — no local key
+  // material to lose. Distinct from dev-mint (which needs the dev IdP and
+  // seeds a dev persona); this is the production path.
   async signInLocal(workspaceId: string): Promise<RendererSession> {
     this.#storage.setActiveWorkspace(workspaceId);
-    const privateKey = await this.#getOrCreateLocalKey(workspaceId);
     try {
       const session = await this.#localLoginFlow(workspaceId, {
         facadeBaseUrl: this.#config.facadeBaseUrl,
-        privateKey,
+        hostToken: this.#config.hostToken ?? "",
         fetch: this.#config.fetch,
         clock: this.#config.clock,
       });
@@ -311,29 +312,6 @@ export class AuthService {
       });
       throw err;
     }
-  }
-
-  // Get-or-create the per-install local-identity key. Stored keychain-encrypted
-  // via SecretStorage under its own serverId so the local account is the SAME
-  // across restarts (a fresh key would orphan the previous local account).
-  async #getOrCreateLocalKey(workspaceId: string): Promise<`0x${string}`> {
-    const existing = (await this.#storage.get(
-      workspaceId,
-      BACKEND_KIND,
-      LOCAL_KEY_SERVER_ID,
-    )) as { privateKey?: unknown } | null;
-    if (
-      existing !== null &&
-      typeof existing.privateKey === "string" &&
-      existing.privateKey.startsWith("0x")
-    ) {
-      return existing.privateKey as `0x${string}`;
-    }
-    const privateKey = generatePrivateKey();
-    await this.#storage.set(workspaceId, BACKEND_KIND, LOCAL_KEY_SERVER_ID, {
-      privateKey,
-    });
-    return privateKey;
   }
 
   // Shared tail of every system-browser sign-in: cancel-the-previous,

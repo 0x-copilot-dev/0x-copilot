@@ -69,15 +69,13 @@ class ConversationQueryService:
         ``configured`` flags reflect provider-key presence at startup); each
         item's ``enabled`` flag is then resolved from the org's workspace
         ``enabled_models`` curation (PR-2C) — an explicit selection, or the
-        newest-per-provider default when the workspace hasn't curated. Duplicate
-        model IDs are collapsed (last definition wins) to guard against
-        accidental double-registration of the default model.
+        newest-per-provider default when the workspace hasn't curated.
+        ``ModelCatalog.build`` is the single source of truth and already
+        returns an id-unique tuple with the runtime default present exactly
+        once, so no further deduplication happens here.
         """
 
-        catalog = ModelCatalog.build(self._settings)
-        # Deduplicate by id — the default model may coincide with a curated
-        # entry; later (richer) definitions win, matching the prior behaviour.
-        unique_models = tuple({item.id: item for item in catalog}.values())
+        unique_models = ModelCatalog.build(self._settings)
         defaults = (
             await self._persistence.get_workspace_defaults(org_id=org_id)
             if org_id is not None

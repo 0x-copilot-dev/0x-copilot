@@ -397,6 +397,32 @@ def register_auth_routes(app: FastAPI) -> None:
         return response.json()
 
     # ------------------------------------------------------------------
+    # "Use locally, no account" (device account, desktop-only).
+    #
+    # SECURITY: unlike every other proxy here, the facade does NOT attach
+    # its own service token — that would make the facade a confused deputy
+    # (any browser tab could POST to this route and the facade would
+    # authenticate the mint itself). The CALLER's x-enterprise-service-token
+    # header is forwarded verbatim: the desktop main process holds the
+    # per-install host secret; browser pages cannot supply it. On non-
+    # desktop deployments the backend route does not exist → clean 404.
+    # ------------------------------------------------------------------
+
+    @app.post("/v1/auth/local/session")
+    async def local_session(request: Request) -> dict[str, object]:
+        backend_url = settings_for(app).backend_url
+        client = http_client(request.app)
+        response = await client.post(
+            f"{backend_url}/v1/auth/local/session",
+            headers={
+                SERVICE_TOKEN_HEADER: request.headers.get(SERVICE_TOKEN_HEADER, "")
+            },
+            timeout=10,
+        )
+        _raise_for_upstream(response)
+        return response.json()
+
+    # ------------------------------------------------------------------
     # Local password (A4) — login + reset surfaces.
     # ------------------------------------------------------------------
 

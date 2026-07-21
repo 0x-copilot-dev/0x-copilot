@@ -713,6 +713,46 @@ class PostgresRuntimeApiStore:
             rows = await cur.fetchall()
         return tuple(self._conversation_record(row) for row in rows)
 
+    async def list_conversation_scopes(self) -> tuple[tuple[str, str], ...]:
+        """Return every distinct ``(org_id, user_id)`` that owns a conversation.
+
+        Read-only, cross-tenant scope discovery consumed by the offline
+        file-store migration (``runtime_adapters.file.migration.StoreMigrator``):
+        it lets a Postgres source migrate *every* tenant without hand-passed
+        ``--org-id``/``--user-id`` scopes. Archived and soft-deleted
+        conversations are included (no status / ``deleted_at`` filter) so no
+        tenant's history is missed.
+
+        Returns an empty tuple when the ``agent_conversations`` relation does not
+        exist yet: a brand-new desktop install that has never run the Postgres AI
+        store has no schema, which correctly means "no scopes to migrate" (the
+        first-file-boot import treats this as a clean no-op rather than a crash).
+
+        Tenant-isolation note: this is a deliberate cross-tenant scan for an
+        operator / first-boot path. It must run under a connection that can see
+        every row — a superuser/owner (the desktop embedded Postgres) or a
+        ``BYPASSRLS`` role. On an RLS-*enforced* multi-tenant cluster the
+        ``tenant_isolation`` policy on ``agent_conversations`` (which has no
+        worker fallback) would otherwise hide rows from a session that has not
+        bound ``app.current_org_id``.
+        """
+
+        async with self._role_connection(self._role) as conn:
+            try:
+                cur = await conn.execute(
+                    """
+                    SELECT DISTINCT org_id, user_id
+                      FROM agent_conversations
+                     ORDER BY org_id, user_id
+                    """
+                )
+                rows = await cur.fetchall()
+            except psycopg_errors.UndefinedTable:
+                return ()
+        return tuple(
+            (str(row[_Columns.ORG_ID]), str(row[_Columns.USER_ID])) for row in rows
+        )
+
     async def update_conversation_connectors(
         self,
         *,

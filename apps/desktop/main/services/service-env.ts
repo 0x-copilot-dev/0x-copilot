@@ -148,6 +148,18 @@ export interface ServiceEnvInputs {
   readonly webDir?: string;
   /** Injectable for path-separator tests; defaults to the host's. */
   readonly pathDelimiter?: string;
+  /**
+   * Force the ai-backend store backend for THIS boot, bypassing
+   * `resolveAiStoreBackend(processEnv)`. The desktop supervisor sets it after
+   * the first-file-boot migration gate has run: `"file"` once the carry-over
+   * import has succeeded (or when a fresh/empty install stays on file), and
+   * `"postgres"` as the FAIL-SAFE fallback when the migration could not be
+   * trusted (verify mismatch / any error) — so a failed import serves the
+   * still-authoritative Postgres store this boot instead of an empty app.
+   * `undefined` (the default) preserves the env-resolved behaviour, so every
+   * other caller and the existing tests are unaffected.
+   */
+  readonly storeBackendOverride?: "file" | "postgres";
 }
 
 // Builds the FULL child environment for one supervised service: filtered
@@ -213,7 +225,12 @@ export function buildServiceEnv(
     }
     case "ai-backend": {
       env.RUNTIME_ENVIRONMENT = "production";
-      if (resolveAiStoreBackend(inputs.processEnv) === "file") {
+      // The override wins when the supervisor has resolved the effective backend
+      // for this boot (post-migration gate); otherwise fall back to the pure
+      // env resolution so buildServiceEnv and the supervisor stay single-sourced.
+      const aiBackend =
+        inputs.storeBackendOverride ?? resolveAiStoreBackend(inputs.processEnv);
+      if (aiBackend === "file") {
         // OPT-IN file-native store (JSONL folders under userData) instead of
         // the Postgres `atlas_ai` DB. No relational DB env is set, so the
         // ai-backend migration gate is skipped in desktop-supervisor.ts.

@@ -1,0 +1,85 @@
+name: file-store-backup-drill
+
+# Proves the file store's documented backup→restore procedure actually works.
+# The file store is the desktop *default* store, so "we can back it up and
+# restore it" is only a control once a passing drill exercises the whole loop
+# (CLAUDE.md §Compliance reviews: a control counts only when code, config,
+# tests, and docs all support it). This is the backup-integrity complement to
+# the corruption-recovery drill (test_corruption_recovery_drill.py, #160) and
+# mirrors the Postgres restore drill (postgres-restore-drill.yml).
+#
+# The drill is a hermetic pytest — no live services, no database container. It
+# seeds a real FileRuntimeApiStore, backs up the store root (catalog excluded),
+# destroys the live root, restores from the backup, reopens, and asserts full
+# fidelity plus that the disposable catalog rebuilds from the JSONL.
+#
+# Trigger surfaces:
+#   - Scheduled weekly (Sundays 06:00 UTC).
+#   - Any PR that touches the file store, its drill, or this workflow.
+#   - workflow_dispatch for ad-hoc operator runs.
+
+on:
+  pull_request:
+    paths:
+      - "services/ai-backend/src/runtime_adapters/file/**"
+      - "services/ai-backend/tests/unit/runtime_adapters/file/test_backup_restore_drill.py"
+      - ".github/workflows/file-store-backup-drill.yml"
+  push:
+    branches:
+      - main
+    paths:
+      - "services/ai-backend/src/runtime_adapters/file/**"
+      - "services/ai-backend/tests/unit/runtime_adapters/file/test_backup_restore_drill.py"
+      - ".github/workflows/file-store-backup-drill.yml"
+  schedule:
+    # Sundays 06:00 UTC. The drill is deterministic (tmp_path only), so a
+    # delayed misfire produces the same result.
+    - cron: "0 6 * * 0"
+  workflow_dispatch:
+
+concurrency:
+  group: file-store-backup-drill-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  backup-drill:
+    runs-on: ubuntu-latest
+
+    defaults:
+      run:
+        working-directory: services/ai-backend
+
+    steps:
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+
+      - uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6.3.0
+        with:
+          python-version: "3.13"
+
+      - name: Install ai-backend deps
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install -r requirements.txt
+
+      - name: Run the file-store backup→restore drill
+        env:
+          # Shared constants + audit-chain live outside the service tree and are
+          # wired via PYTHONPATH in dev / Docker builds; mirror that here so the
+          # drill can import the store without installing sibling services.
+          PYTHONPATH: "src:../../packages/service-contracts/src:../../packages/audit-chain/src"
+        run: |
+          python -m pytest \
+            tests/unit/runtime_adapters/file/test_backup_restore_drill.py -v
+
+      - name: Drill guidance on failure
+        if: failure()
+        run: |
+          echo "::error::File-store backup→restore drill failed."
+          echo "::error::The backup is a copy of the store root; the disposable"
+          echo "::error::index/catalog.sqlite3 is excluded and must rebuild from"
+          echo "::error::the canonical JSONL on reopen. If the on-disk layout"
+          echo "::error::(runtime_adapters/file/_paths.py) or the open/rebuild"
+          echo "::error::path changed, update the drill to match the new contract."

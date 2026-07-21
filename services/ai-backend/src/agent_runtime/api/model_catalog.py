@@ -13,13 +13,21 @@ hardcoded native + curated-OpenRouter lists. The settings-derived default
 model always remains the first catalog entry, so an offline boot with an
 empty source still produces a usable picker.
 
+The catalog advertises **only** providers the run path can actually
+execute. :class:`ModelConfigResolver` (the run path) accepts a fixed
+provider allowlist; :meth:`ModelConfigResolver.supports_provider` is the
+authority. Source records for providers outside that allowlist (e.g. ``groq``,
+``xai`` from models.dev) are filtered out in :meth:`ModelCatalog.build`
+so the picker can never surface a model that would be rejected the moment a
+run starts. Adding a new provider is a run-path change (extend the allowlist),
+never a catalog-only change — that is what keeps the two surfaces from drifting.
+
 ``configured`` semantics are unchanged: native providers reflect whether a
 deployment env key is present; OpenRouter availability is per-user BYOK,
 which this global (settings-only) layer cannot see, so those entries are
 always **selectable** — a run started without a stored key is guided to
 Settings by the run-create credential gate in :class:`ModelConfigResolver`,
-not by hiding the model here. Providers with no deployment-level key
-settings at all (``groq``, ``xai``) report ``configured=False``.
+not by hiding the model here.
 """
 
 from __future__ import annotations
@@ -30,6 +38,7 @@ from agent_runtime.api.models_dev_source import (
     CatalogModelRecord,
     ModelsDevCatalogSource,
 )
+from agent_runtime.execution.models import ModelConfigResolver
 from agent_runtime.settings import RuntimeSettings
 from runtime_api.schemas import ModelCatalogItem
 
@@ -78,18 +87,46 @@ class ModelCatalog:
 
     @classmethod
     def build(cls, settings: RuntimeSettings) -> tuple[ModelCatalogItem, ...]:
-        """Return the ordered catalog: default model first, then live source records.
+        """Return the ordered, **id-unique** catalog: default model first, then live records.
 
-        Source records arrive deterministically ordered (provider asc,
-        release date desc, id asc). Callers that need id-uniqueness (the
-        picker route) deduplicate with last-definition-wins, so a richer
-        live record replaces the minimal default entry for the same id.
+        This is the single deduplication point every consumer relies on —
+        the picker route (:meth:`ConversationQueryService.list_models`) and
+        workspace default-model validation (:class:`WorkspaceCoordinator`)
+        both take the tuple verbatim, so neither has to re-deduplicate and
+        neither can drift from the other.
+
+        Two invariants hold **by construction**:
+
+        * ``settings.default_model`` is always present and always first. Its
+          entry is emitted before any source record, so its id occupies the
+          leading slot even when the live source is empty (offline boot).
+        * No id appears twice — in particular the default is never
+          double-listed when the source also ships the same model id. Source
+          records arrive deterministically ordered (provider asc, release
+          date desc, id asc); collapsing with last-definition-wins keeps the
+          default's leading position while upgrading its value to the richer
+          live record (context window, costs, capability flags) for the same
+          id. Downstream ids are keys, so the frontend picker — which keys
+          rows by ``id`` — never sees a duplicate key.
         """
 
         items = [cls._default_item(settings)]
         for record in cls._source_for(settings).records():
+            # SSOT: never advertise a model the run path cannot execute. The
+            # models.dev source carries providers (groq, xai) that the run
+            # path's ``ModelConfigResolver`` provider allowlist rejects, so a
+            # user could otherwise pick a model that can never run. Filter to
+            # run-path-executable providers here — the one place the catalog
+            # is assembled — rather than papering over the divergence later.
+            if not ModelConfigResolver.supports_provider(record.provider):
+                continue
             items.append(cls._item_from_record(record, settings))
-        return tuple(items)
+        # Collapse by id, last-definition-wins. A dict comprehension keeps
+        # each id at its first-insertion position (so the default stays
+        # first) while replacing its value with the last same-id entry (so a
+        # richer live record supersedes the minimal default placeholder).
+        deduped = {item.id: item for item in items}
+        return tuple(deduped.values())
 
     # ------------------------------------------------------------------
     # Private helpers
@@ -158,9 +195,11 @@ class ModelCatalog:
         try:
             return settings.provider_settings(provider).is_configured
         except ValueError:
-            # Providers with no deployment-level key settings (groq, xai):
-            # only a per-user BYOK key could enable them, which this layer
-            # cannot see — report not-configured rather than guessing.
+            # Defensive: a run-path-executable provider with no deployment-level
+            # key settings would land here (only a per-user BYOK key could
+            # enable it, invisible to this settings-only layer) — report
+            # not-configured rather than guessing. Providers the run path
+            # rejects (groq, xai) are already filtered out before reaching here.
             return False
 
 

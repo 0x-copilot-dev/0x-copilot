@@ -49,6 +49,7 @@ from backend_app.deployment_profile import (
 from backend_app.identity import SessionService
 from backend_app.identity.account_merge import PostgresMergeData
 from backend_app.identity.account_merge_store import PostgresAccountMergeStore
+from backend_app.identity.local_account_store import PostgresLocalAccountStore
 from backend_app.identity.avatar_store import PostgresAvatarStore
 from backend_app.identity.invitation_store import PostgresInvitationStore
 from backend_app.identity.lockout_store import PostgresLockoutStore
@@ -241,6 +242,10 @@ class DesktopComposer:
             # Account-merge engine (PRD §6.3): saga record + the privileged
             # re-key executor. The runtime (ai-backend) leg resolves from
             # AI_BACKEND_URL in create_app (the desktop supervisor exports it).
+            # "Use locally" device account: MUST be Postgres — an in-memory
+            # singleton would forget the device account on every restart and
+            # fork a fresh empty one (the exact footgun D4-A forbids).
+            "local_account_store": PostgresLocalAccountStore(pool),
             "account_merge_store": PostgresAccountMergeStore(pool),
             "merge_data_port": PostgresMergeData(pool),
             # PRD-H FR-H.3 — durable projects store so projects survive a
