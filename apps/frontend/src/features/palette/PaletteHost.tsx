@@ -16,9 +16,9 @@ import { useCallback, useMemo, useState, type ReactElement } from "react";
 import {
   CommandPalette,
   useCommandPaletteHotkey,
+  type ShellCommandIntent,
 } from "@0x-copilot/chat-surface";
 import type {
-  PaletteHit,
   PaletteSearchRequest,
   PaletteSearchResponse,
 } from "@0x-copilot/api-types";
@@ -36,6 +36,11 @@ interface PaletteHostProps {
    */
   readonly open?: boolean;
   readonly onOpenChange?: (open: boolean) => void;
+  /**
+   * Maps a ⌘K command's intent to real navigation. App.tsx owns the router, so
+   * it supplies this. When omitted, commands are close-only (PRD-D).
+   */
+  readonly onCommand?: (intent: ShellCommandIntent) => void;
 }
 
 /**
@@ -53,50 +58,11 @@ export function createWebPaletteSearchPort(
   };
 }
 
-/**
- * Default starter actions shown when the input is empty. The host
- * owns these — chat-surface renders them; the server is consulted
- * once the user types.
- */
-const STARTER_ACTIONS: ReadonlyArray<PaletteHit> = [
-  {
-    id: "starter_search_team",
-    kind: "navigation",
-    title: "Search the team",
-    subtitle: "Find a person, role, or owner",
-    route: "/team",
-    score: 1,
-  },
-  {
-    id: "starter_open_todos",
-    kind: "navigation",
-    title: "Open my todos",
-    subtitle: "Today, overdue, and upcoming",
-    route: "/todos",
-    score: 1,
-  },
-  {
-    id: "starter_new_chat",
-    kind: "action",
-    title: "Start a chat",
-    subtitle: "Open the composer on a fresh conversation",
-    action_token: "start_new_chat",
-    score: 1,
-  },
-  {
-    id: "starter_open_settings",
-    kind: "navigation",
-    title: "Open settings",
-    subtitle: "Notifications, security, profile",
-    route: "/settings",
-    score: 1,
-  },
-];
-
 export function PaletteHost({
   identity,
   open: controlledOpen,
   onOpenChange,
+  onCommand,
 }: PaletteHostProps): ReactElement {
   const [internalOpen, setInternalOpen] = useState(false);
   const open = controlledOpen ?? internalOpen;
@@ -118,7 +84,7 @@ export function PaletteHost({
         open={open}
         onRequestClose={handleClose}
         searchPort={port}
-        starterActions={STARTER_ACTIONS}
+        onCommand={onCommand}
       />
     </div>
   );

@@ -8,10 +8,13 @@
 
 import { type CSSProperties, type ReactElement } from "react";
 
+import { Icon } from "../icons/Icon";
+
 export interface CommandPaletteTriggerProps {
   readonly onOpen: () => void;
   /** Optional override; defaults to "⌘K" on Apple, "Ctrl+K" elsewhere. */
   readonly hint?: string;
+  /** Defaults to "Search & commands" (design `.tb-search`). */
   readonly label?: string;
   readonly className?: string;
 }
@@ -49,10 +52,17 @@ const hintStyle: CSSProperties = {
   padding: "1px 6px",
 };
 
+const labelRowStyle: CSSProperties = {
+  display: "inline-flex",
+  alignItems: "center",
+  gap: 8,
+  minWidth: 0,
+};
+
 export function CommandPaletteTrigger({
   onOpen,
   hint,
-  label = "Search…",
+  label = "Search & commands",
   className,
 }: CommandPaletteTriggerProps): ReactElement {
   const resolvedHint = hint ?? defaultHint();
@@ -65,7 +75,14 @@ export function CommandPaletteTrigger({
       aria-label="Open command palette"
       data-testid="command-palette-trigger"
     >
-      <span>{label}</span>
+      <span style={labelRowStyle}>
+        <Icon
+          name="search"
+          size={13}
+          style={{ color: "var(--color-text-subtle)", flex: "none" }}
+        />
+        <span>{label}</span>
+      </span>
       <span style={hintStyle} aria-hidden="true">
         {resolvedHint}
       </span>

@@ -83,6 +83,7 @@ function renderPalette(args: {
   // the component sees no props — reproducing today's close-only default.
   onNavigate?: (route: string, hit: PaletteHit) => void;
   onRunAction?: (token: string, hit: PaletteHit) => void;
+  onCommand?: (intent: import("./shellCommands").ShellCommandIntent) => void;
 }): {
   rerender: (open: boolean) => void;
   onRequestClose: ReturnType<typeof vi.fn>;
@@ -101,10 +102,10 @@ function renderPalette(args: {
         open={open}
         onRequestClose={onRequestClose}
         searchPort={port}
-        starterActions={STARTER_ACTIONS}
         onConnectToolHint={args.onConnectToolHint}
         onNavigate={args.onNavigate}
         onRunAction={args.onRunAction}
+        onCommand={args.onCommand}
         debounceMs={1}
       />
     </RouterProvider>
@@ -125,19 +126,18 @@ describe("<CommandPalette>", () => {
     expect(screen.queryByTestId("command-palette")).toBeNull();
   });
 
-  it("opens when open flips to true and shows starter actions", async () => {
+  it("opens when open flips to true and shows the static command launcher", async () => {
     const { rerender } = renderPalette({ open: false });
     expect(screen.queryByTestId("command-palette")).toBeNull();
     rerender(true);
     await waitFor(() =>
       expect(screen.getByTestId("command-palette")).toBeInTheDocument(),
     );
-    // Both starter actions render under the Navigation group.
-    expect(screen.getByTestId("palette-group-header")).toHaveAttribute(
-      "data-group-kind",
-      "navigation",
-    );
-    expect(screen.getAllByTestId("palette-hit-row")).toHaveLength(2);
+    // Empty query shows the 13 static commands, flat (no group header).
+    const commands = screen.getAllByTestId("palette-command");
+    expect(commands).toHaveLength(13);
+    expect(commands[0]).toHaveTextContent("Go to Run");
+    expect(screen.queryByTestId("palette-group-header")).toBeNull();
   });
 
   it("calls onRequestClose on ESC", async () => {
@@ -159,33 +159,66 @@ describe("<CommandPalette>", () => {
     expect(onRequestClose).not.toHaveBeenCalled();
   });
 
-  it("ArrowDown moves selection and wraps", () => {
+  it("ArrowDown moves selection down the command list", () => {
     renderPalette({ open: true });
     const input = screen.getByTestId("command-palette-input");
-    // Two starter actions: indices 0,1.
     fireEvent.keyDown(input, { key: "ArrowDown" });
-    let rows = screen.getAllByTestId("palette-hit-row");
-    expect(rows[1]).toHaveAttribute("aria-selected", "true");
-    fireEvent.keyDown(input, { key: "ArrowDown" });
-    rows = screen.getAllByTestId("palette-hit-row");
-    // Wrapped back to index 0.
-    expect(rows[0]).toHaveAttribute("aria-selected", "true");
+    const cmds = screen.getAllByTestId("palette-command");
+    expect(cmds[1]).toHaveAttribute("aria-selected", "true");
   });
 
-  it("ArrowUp wraps from 0 to the last index", () => {
+  it("ArrowUp wraps from 0 to the last command", () => {
     renderPalette({ open: true });
     const input = screen.getByTestId("command-palette-input");
     fireEvent.keyDown(input, { key: "ArrowUp" });
-    const rows = screen.getAllByTestId("palette-hit-row");
-    expect(rows[rows.length - 1]).toHaveAttribute("aria-selected", "true");
+    const cmds = screen.getAllByTestId("palette-command");
+    expect(cmds[cmds.length - 1]).toHaveAttribute("aria-selected", "true");
   });
 
-  it("Enter activates the selected starter action via onActivate path", () => {
-    const { onRequestClose } = renderPalette({ open: true });
+  it("Enter on an empty query activates the first command via onCommand", () => {
+    const onCommand = vi.fn();
+    const { onRequestClose } = renderPalette({ open: true, onCommand });
     const input = screen.getByTestId("command-palette-input");
     fireEvent.keyDown(input, { key: "Enter" });
-    // Activating a navigation hit closes the palette via onRequestClose.
+    // First command is "Go to Run".
+    expect(onCommand).toHaveBeenCalledWith({ type: "navigate", slug: "run" });
     expect(onRequestClose).toHaveBeenCalled();
+  });
+
+  it("filters commands while typing and shows them above search hits", async () => {
+    const onCommand = vi.fn();
+    const entityHit: PaletteHit = {
+      id: "hit_e1",
+      kind: "action",
+      title: "Some action",
+      action_token: "x",
+      score: 0.5,
+    };
+    renderPalette({ open: true, hits: [entityHit], onCommand });
+    const input = screen.getByTestId("command-palette-input");
+    fireEvent.change(input, { target: { value: "proj" } });
+    await waitFor(() => {
+      const cmds = screen.getAllByTestId("palette-command");
+      // Only the matching command(s) remain — "Go to Projects".
+      expect(cmds.some((c) => c.textContent?.includes("Go to Projects"))).toBe(
+        true,
+      );
+    });
+    // A non-matching command is filtered out.
+    expect(
+      screen
+        .getAllByTestId("palette-command")
+        .some((c) => c.textContent?.includes("Appearance")),
+    ).toBe(false);
+    // Clicking the command fires onCommand with its intent.
+    const projectsCmd = screen
+      .getAllByTestId("palette-command")
+      .find((c) => c.textContent?.includes("Go to Projects"))!;
+    fireEvent.click(projectsCmd);
+    expect(onCommand).toHaveBeenCalledWith({
+      type: "navigate",
+      slug: "projects",
+    });
   });
 
   it("debounces the search call and forwards the query to the port", async () => {
@@ -230,20 +263,19 @@ describe("<CommandPalette>", () => {
     );
   });
 
-  it("renders the No-results state with a Connect-a-tool hint", async () => {
-    const onConnectToolHint = vi.fn();
-    renderPalette({
-      open: true,
-      hits: [],
-      onConnectToolHint,
-    });
+  it("renders the 'No matches.' state when nothing matches (commands + search)", async () => {
+    renderPalette({ open: true, hits: [] });
     const input = screen.getByTestId("command-palette-input");
-    fireEvent.change(input, { target: { value: "xyzzy" } });
+    // A query that matches no static command and returns no search hits.
+    fireEvent.change(input, { target: { value: "zzqqxx" } });
     await waitFor(() =>
       expect(screen.getByTestId("palette-no-results")).toBeInTheDocument(),
     );
-    fireEvent.click(screen.getByTestId("palette-connect-tool-hint"));
-    expect(onConnectToolHint).toHaveBeenCalledTimes(1);
+    expect(screen.getByTestId("palette-no-results")).toHaveTextContent(
+      "No matches.",
+    );
+    // The design has no "Connect a tool" affordance in the empty state.
+    expect(screen.queryByTestId("palette-connect-tool-hint")).toBeNull();
   });
 
   it("renders group headers per non-empty kind bucket", async () => {
@@ -478,7 +510,8 @@ describe("<CommandPalette>", () => {
     const input = screen.getByTestId(
       "command-palette-input",
     ) as HTMLInputElement;
-    const firstRow = screen.getAllByTestId("palette-hit-row")[0];
+    // Empty query → the first selectable is the first static command.
+    const firstRow = screen.getAllByTestId("palette-command")[0];
     expect(input.getAttribute("aria-activedescendant")).toBe(firstRow.id);
   });
 });
@@ -516,17 +549,17 @@ describe("<CommandPalette> placeholder is profile-aware", () => {
 
   it("drops 'the team' on single_user_desktop", () => {
     expect(placeholderFor("single_user_desktop")).toBe(
-      "Search your work, or run a command…",
+      "Search commands, settings, tools…",
     );
   });
 
   it("drops 'the team' when no provider is present (solo default)", () => {
-    expect(placeholderFor(null)).toBe("Search your work, or run a command…");
+    expect(placeholderFor(null)).toBe("Search commands, settings, tools…");
   });
 
   it("keeps 'the team' on a team deployment", () => {
     expect(placeholderFor("team")).toBe(
-      "Search the team, your work, or run a command…",
+      "Search the team, commands, settings, tools…",
     );
   });
 });

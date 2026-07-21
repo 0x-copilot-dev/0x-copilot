@@ -62,10 +62,14 @@ const rowBase: CSSProperties = {
   font: "inherit",
 };
 
+// Selected/hover row = the design's `.cmdk__row[data-on]` (bg --panel2, no
+// border). Previously referenced `--color-surface-elevated` — a token that did
+// not exist — so every selected row fell back to a hard-coded light-grey
+// #2a2a2a band (PRD-B). Now the design's surface-muted, borderless.
 const rowSelected: CSSProperties = {
   ...rowBase,
-  backgroundColor: "var(--color-surface-elevated, #2a2a2a)",
-  borderColor: "var(--color-border-strong, #3a3a3a)",
+  backgroundColor: "var(--color-surface-muted)",
+  borderColor: "transparent",
 };
 
 const titleStyle: CSSProperties = {
