@@ -370,3 +370,69 @@ describe("<ProfilePage> merge-confirm dialog (PRD FR-U2)", () => {
     expect(screen.queryByTestId("profile-merge-message")).toBeNull();
   });
 });
+
+// ---------------------------------------------------------------------------
+// "Use locally" device account (D2/D3): honest anchor + conflict rejection.
+// ---------------------------------------------------------------------------
+
+const DEVICE_PERSON: ProfilePagePerson = {
+  user_id: "user_device",
+  display_name: "Local account",
+  avatar_url: null,
+  anchor: { kind: "device" },
+  authMethod: "local",
+};
+
+describe("<ProfilePage> device account", () => {
+  it("renders the device anchor honestly — no placeholder email, no wallet row", () => {
+    render(<ProfilePage person={DEVICE_PERSON} onSignOut={vi.fn()} />);
+    expect(screen.getByTestId("profile-device-anchor")).toHaveValue(
+      "This device",
+    );
+    expect(screen.getByTestId("profile-device-note").textContent).toContain(
+      "stays on this device",
+    );
+    expect(screen.queryByTestId("profile-email")).toBeNull();
+    expect(screen.queryByTestId("profile-wallet-address")).toBeNull();
+    expect(screen.getByText("Signed in on this device")).toBeTruthy();
+  });
+
+  it("REJECTS a wallet-link conflict instead of offering the merge (D2)", async () => {
+    const onLinkWallet = vi
+      .fn()
+      .mockResolvedValue({ status: "merge_required" });
+    render(
+      <ProfilePage
+        person={DEVICE_PERSON}
+        onSignOut={vi.fn()}
+        linkedIdentities={[]}
+        onLinkWallet={onLinkWallet}
+      />,
+    );
+    fireEvent.click(screen.getByTestId("profile-link-wallet"));
+    await waitFor(() => {
+      expect(screen.getByTestId("profile-link-error").textContent).toContain(
+        "already belongs to another profile on this device",
+      );
+    });
+    // No merge-confirm dialog for device accounts.
+    expect(screen.queryByTestId("profile-merge-confirm")).toBeNull();
+    expect(onLinkWallet).toHaveBeenCalledTimes(1);
+  });
+
+  it("shows BOTH link CTAs for a device account", () => {
+    render(
+      <ProfilePage
+        person={DEVICE_PERSON}
+        onSignOut={vi.fn()}
+        linkedIdentities={[]}
+        onLinkWallet={vi.fn()}
+        onLinkGoogle={vi.fn()}
+      />,
+    );
+    expect(screen.getByTestId("profile-link-wallet")).toBeTruthy();
+    expect(screen.getByTestId("profile-link-google").textContent).toContain(
+      "continue with Google",
+    );
+  });
+});
