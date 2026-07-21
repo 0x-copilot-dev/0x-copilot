@@ -6,12 +6,17 @@ import { join } from "node:path";
 
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
+import type { AdapterGeneratedPayload } from "@0x-copilot/api-types";
+
 import {
   appendLifecycleEvent,
+  coerceAdapterGeneratedPayload,
   readLifecycleEvents,
+  RunFeedLifecycleEventSource,
   type LifecycleAuditEntry,
   type LifecycleEventsDeps,
 } from "./lifecycle-events";
+import type { LifecycleBoundaryEvent } from "./lifecycle";
 
 let tmpDir: string;
 
@@ -220,5 +225,100 @@ describe("readLifecycleEvents", () => {
     expect(all.map((e) => e.ts)).toEqual(
       Array.from({ length: 30 }, (_, i) => i),
     );
+  });
+});
+
+const GEN_PAYLOAD: AdapterGeneratedPayload = {
+  scheme: "record",
+  layout: "table",
+  schema_version: 3,
+  adapter_source: "module.exports = {};",
+  generated_at: "2026-05-17T00:00:00Z",
+  generator_model: "render-adapter-generator/v1",
+};
+
+function envelope(eventType: string, payload: unknown): string {
+  return JSON.stringify({
+    event_id: "evt_1",
+    run_id: "run_1",
+    conversation_id: "conv_1",
+    sequence_no: 7,
+    event_type: eventType,
+    activity_kind: "tool",
+    payload,
+    created_at: "2026-05-17T00:00:00Z",
+  });
+}
+
+describe("coerceAdapterGeneratedPayload", () => {
+  it("accepts a well-formed payload", () => {
+    expect(coerceAdapterGeneratedPayload({ ...GEN_PAYLOAD })).toEqual(
+      GEN_PAYLOAD,
+    );
+  });
+
+  it.each([
+    ["missing scheme", { ...GEN_PAYLOAD, scheme: undefined }],
+    ["empty scheme", { ...GEN_PAYLOAD, scheme: "" }],
+    ["unknown layout", { ...GEN_PAYLOAD, layout: "carousel" }],
+    ["non-number version", { ...GEN_PAYLOAD, schema_version: "3" }],
+    ["empty source", { ...GEN_PAYLOAD, adapter_source: "" }],
+    ["null", null],
+    ["not an object", "nope"],
+  ])("rejects %s", (_name, value) => {
+    expect(coerceAdapterGeneratedPayload(value)).toBeNull();
+  });
+});
+
+describe("RunFeedLifecycleEventSource", () => {
+  it("dispatches adapter_generated payloads from the run feed", () => {
+    const source = new RunFeedLifecycleEventSource();
+    const seen: AdapterGeneratedPayload[] = [];
+    source.onAdapterGenerated((p) => seen.push(p));
+    source.feedStreamMessage(envelope("adapter_generated", { ...GEN_PAYLOAD }));
+    expect(seen).toEqual([GEN_PAYLOAD]);
+  });
+
+  it("ignores non-adapter_generated events", () => {
+    const source = new RunFeedLifecycleEventSource();
+    const seen: AdapterGeneratedPayload[] = [];
+    source.onAdapterGenerated((p) => seen.push(p));
+    source.feedStreamMessage(envelope("tool_result", { any: "thing" }));
+    source.feedStreamMessage(envelope("final_response", {}));
+    expect(seen).toEqual([]);
+  });
+
+  it("ignores malformed JSON and malformed payloads without throwing", () => {
+    const source = new RunFeedLifecycleEventSource();
+    const seen: AdapterGeneratedPayload[] = [];
+    source.onAdapterGenerated((p) => seen.push(p));
+    expect(() => source.feedStreamMessage("not json{{{")).not.toThrow();
+    source.feedStreamMessage(
+      envelope("adapter_generated", { ...GEN_PAYLOAD, layout: "bogus" }),
+    );
+    expect(seen).toEqual([]);
+  });
+
+  it("fans a boundary error out to subscribers", () => {
+    const source = new RunFeedLifecycleEventSource();
+    const seen: LifecycleBoundaryEvent[] = [];
+    source.onBoundaryError((info) => seen.push(info));
+    const info: LifecycleBoundaryEvent = {
+      scheme: "record",
+      version: 3,
+      method: "renderCurrent",
+      reason: "TypeError",
+    };
+    source.feedBoundaryError(info);
+    expect(seen).toEqual([info]);
+  });
+
+  it("unsubscribes cleanly", () => {
+    const source = new RunFeedLifecycleEventSource();
+    const seen: AdapterGeneratedPayload[] = [];
+    const off = source.onAdapterGenerated((p) => seen.push(p));
+    off();
+    source.feedStreamMessage(envelope("adapter_generated", { ...GEN_PAYLOAD }));
+    expect(seen).toEqual([]);
   });
 });
