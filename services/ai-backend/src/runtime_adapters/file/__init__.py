@@ -49,6 +49,7 @@ from runtime_adapters.file.migration import (
     MigrationScope,
     MigrationSourcePort,
     MigrationVerificationError,
+    ScopeDiscoverySource,
     StoreMigrator,
 )
 from runtime_adapters.file.object_store import FileObjectStore, ObjectRef
@@ -98,5 +99,6 @@ __all__ = [
     "MigrationError",
     "MigrationVerificationError",
     "MigrationSourcePort",
+    "ScopeDiscoverySource",
     "ConversationOutcome",
 ]

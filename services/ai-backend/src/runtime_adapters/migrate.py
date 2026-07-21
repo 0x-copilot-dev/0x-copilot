@@ -24,6 +24,23 @@ Operator flow (see ``docs/operations/desktop-file-store-migration.md``):
 
 Only a clean verify authorises the backend flip. Any mismatch exits non-zero and
 leaves the source store authoritative.
+
+Desktop first-boot (``--on-boot``): the desktop supervisor runs this
+automatically on the first file-store boot to carry existing Postgres history
+across before ai-backend starts (see
+``docs/operations/desktop-file-store-migration.md`` and
+``apps/desktop/main/services/desktop-supervisor.ts``). ``--on-boot`` forces a
+Postgres source, auto-discovers every tenant scope (no ``--org-id``/``--user-id``
+needed — see ``PostgresRuntimeApiStore.list_conversation_scopes``), migrates +
+verifies, and treats a fresh install with no AI schema as a clean no-op. Exit
+codes are the supervisor's fallback contract:
+
+* ``0`` — migrated (or nothing to migrate); the file store is authoritative.
+* ``2`` — a verify mismatch: the import is NOT trustworthy.
+* ``1`` — any other failure (unreachable source, disk error, bad args).
+
+The supervisor maps any non-zero exit to "serve the Postgres store this boot"
+so a failed import never strands the user with an empty app.
 """
 
 from __future__ import annotations
@@ -89,6 +106,18 @@ def _build_arg_parser() -> argparse.ArgumentParser:
         action="store_true",
         help="Skip writing; only verify an already-migrated destination.",
     )
+    parser.add_argument(
+        "--on-boot",
+        action="store_true",
+        help=(
+            "Desktop first-file-boot mode: force a Postgres source, auto-discover "
+            "every tenant scope, migrate + verify, and treat a missing "
+            "agent_conversations table (fresh install, no AI schema) as 'nothing "
+            "to import' (clean exit 0). Used by the desktop supervisor; exits "
+            "non-zero ONLY on a real import/verify failure so the caller can fall "
+            "back to the Postgres store without stranding the user."
+        ),
+    )
     return parser
 
 
@@ -120,7 +149,71 @@ def _build_source(args: argparse.Namespace):
     return InMemoryRuntimeApiStore()
 
 
+async def _run_on_boot(args: argparse.Namespace) -> int:
+    """First-file-boot import: Postgres -> file, tenant-auto-discovered.
+
+    Safe by construction. Scope auto-discovery tolerates a missing
+    ``agent_conversations`` table (fresh install) and yields a clean no-op, so
+    only a *real* failure (bad source connection, a verify mismatch, a file-store
+    write error) returns non-zero. The desktop supervisor maps a non-zero exit to
+    "serve the Postgres store this boot" — never to an empty app.
+    """
+
+    if args.source != "postgres":
+        _print("error: --on-boot requires --source=postgres")
+        return 1
+    if not args.source_database_url:
+        _print("error: --source-database-url is required for --on-boot")
+        return 1
+
+    from runtime_adapters.postgres import PostgresRuntimeApiStore
+
+    # A boot-time probe/import: keep the pool tiny — it is opened, drained once,
+    # and closed within this short-lived process.
+    source = PostgresRuntimeApiStore(
+        args.source_database_url,
+        role="migrate",
+        pool_min_size=1,
+        pool_max_size=2,
+    )
+    dest = FileRuntimeApiStore(args.dest_root)
+
+    try:
+        await source.open()
+        await dest.open()
+    except Exception as exc:  # noqa: BLE001 - boot must degrade, never crash-loop
+        _print(f"ON-BOOT IMPORT FAILED: {type(exc).__name__}: {exc}")
+        # Best-effort cleanup of whatever opened before the failure.
+        for store in (dest, source):
+            try:
+                await store.close()
+            except Exception:  # noqa: BLE001 - cleanup is best-effort
+                pass
+        return 1
+
+    try:
+        migrator = StoreMigrator(source=source, dest=dest, progress=_print)
+        report = await migrator.migrate(scopes=None, verify=True)
+    except MigrationVerificationError as exc:
+        _print(f"VERIFY FAILED: {exc}")
+        return 2
+    except Exception as exc:  # noqa: BLE001 - boot must degrade, never crash-loop
+        # Any other failure (unreachable source, disk error) must not strand the
+        # user: report loudly and let the supervisor fall back to Postgres.
+        _print(f"ON-BOOT IMPORT FAILED: {type(exc).__name__}: {exc}")
+        return 1
+    finally:
+        await dest.close()
+        await source.close()
+
+    _print(report.summary_line())
+    return 0
+
+
 async def _run(args: argparse.Namespace) -> int:
+    if args.on_boot:
+        return await _run_on_boot(args)
+
     scopes = _resolve_scopes(args.org_id, args.user_id)
     source = _build_source(args)
     dest = FileRuntimeApiStore(args.dest_root)
