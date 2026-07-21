@@ -165,6 +165,7 @@ import {
   NotificationCenterProvider,
   SecretStorageProvider,
   ToastStack,
+  TransportProvider,
   WebSecretStorage,
   registerItemRefResolver,
   hasItemRefResolver,
@@ -1152,7 +1153,14 @@ export function CopilotApp({
     <FirstRunGate
       store={firstRunStore}
       renderFirstRun={(onComplete) => (
-        <FirstRunSurfaceMount onComplete={onComplete} />
+        // The onboarding surface mounts OUTSIDE ChatShell (which normally
+        // provides the Transport port), so the app root injects it here — the
+        // deep composer subtree (ToolPicker / MentionPopover) reads it via
+        // `useTransport`. The binder itself stays substrate-clean: its data
+        // ports go through the typed `api/*` modules, not this transport.
+        <TransportProvider transport={getAppTransport()}>
+          <FirstRunSurfaceMount onComplete={onComplete} identity={identity} />
+        </TransportProvider>
       )}
     >
       {/* PR-4.11 — the DeploymentProfile port drives the profile-gated shell rail
@@ -1162,46 +1170,48 @@ export function CopilotApp({
       `SHELL_DESTINATIONS` rail. */}
       <DeploymentProfileProvider profile={DEPLOYMENT_PROFILE}>
         <PortProvider ports={ports}>
-        <ChatShell
-          transport={getAppTransport()}
-          router={router}
-          keyValueStore={keyValueStore}
-          presenceSignal={presenceSignal}
-          activeDestination={activeDestination}
-          onNavigate={handleRailNavigate}
-          onOpenSettings={() =>
-            router.navigate({
-              screen: "settings",
-              section: DEFAULT_SETTINGS_SECTION,
-            })
-          }
-          onOpenCommandPalette={() => setPaletteOpen(true)}
-          // PRD-C.2 / PRD-H.5 — feed the rail foot avatar the user's initial from
-          // the profile the shell already loads. The Run badge (activeRunCount)
-          // still needs a run-list source and is a documented follow-up.
-          railIdentity={
-            profile?.data?.display_name?.trim()
-              ? { initial: profile.data.display_name.trim().charAt(0) }
-              : undefined
-          }
-          // Run badge: number of in-flight runs (hidden at 0; the rail also
-          // hides it while Run is the active destination). PRD-C.2 / PRD-H.5.
-          railBadges={activeRunCount > 0 ? { run: activeRunCount } : undefined}
-        >
-          <Suspense fallback={<RouteLoadingFallback />}>{body}</Suspense>
-          {/*
+          <ChatShell
+            transport={getAppTransport()}
+            router={router}
+            keyValueStore={keyValueStore}
+            presenceSignal={presenceSignal}
+            activeDestination={activeDestination}
+            onNavigate={handleRailNavigate}
+            onOpenSettings={() =>
+              router.navigate({
+                screen: "settings",
+                section: DEFAULT_SETTINGS_SECTION,
+              })
+            }
+            onOpenCommandPalette={() => setPaletteOpen(true)}
+            // PRD-C.2 / PRD-H.5 — feed the rail foot avatar the user's initial from
+            // the profile the shell already loads. The Run badge (activeRunCount)
+            // still needs a run-list source and is a documented follow-up.
+            railIdentity={
+              profile?.data?.display_name?.trim()
+                ? { initial: profile.data.display_name.trim().charAt(0) }
+                : undefined
+            }
+            // Run badge: number of in-flight runs (hidden at 0; the rail also
+            // hides it while Run is the active destination). PRD-C.2 / PRD-H.5.
+            railBadges={
+              activeRunCount > 0 ? { run: activeRunCount } : undefined
+            }
+          >
+            <Suspense fallback={<RouteLoadingFallback />}>{body}</Suspense>
+            {/*
             P12-C — ⌘K palette host. Mounted once at the App root so the
             hotkey is global and every page renders one CommandPalette
             modal. The host owns the PaletteSearchPort that calls
             `/v1/palette/search` through the facade (sub-PRD §7.3).
           */}
-          <PaletteHost
-            identity={identity}
-            open={paletteOpen}
-            onOpenChange={setPaletteOpen}
-            onCommand={handlePaletteCommand}
-          />
-        </ChatShell>
+            <PaletteHost
+              identity={identity}
+              open={paletteOpen}
+              onOpenChange={setPaletteOpen}
+              onCommand={handlePaletteCommand}
+            />
+          </ChatShell>
         </PortProvider>
       </DeploymentProfileProvider>
     </FirstRunGate>
