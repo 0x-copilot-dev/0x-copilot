@@ -1424,3 +1424,26 @@ export {
   type FirstRunLocalCardCtx,
 } from "./onboarding";
 // === end First-Run onboarding (P1) ===
+
+// === First-Run onboarding (P2) — local-model card + curated preset ===
+// The State-A "Download the local model" card, wired to the shipped local-model
+// SSE pipeline (`/v1/local-models/{status,pull,list}`). `FirstRunLocalCard`
+// fills P1's `renderLocalCard` slot; `useFirstRunLocalModel` drives the pull and
+// produces `localModelPct` (P1 flips `modelReady` at === 100);
+// `createFirstRunLocalModelsPort(transport)` is the shared Transport-backed
+// adapter. `QWEN3_4B_PRESET` is the curated download target (SSOT with Settings).
+export {
+  FirstRunLocalCard,
+  useFirstRunLocalModel,
+  createFirstRunLocalModelsPort,
+  firstRunModelPillLabel,
+  pullPercent,
+  resolveInstalledTag,
+  type FirstRunLocalCardProps,
+  type FirstRunLocalStatus,
+  type UseFirstRunLocalModelResult,
+  type UseFirstRunLocalModelArgs,
+  type FirstRunLocalModelsPort,
+} from "./onboarding";
+export { QWEN3_4B_PRESET, LOCAL_MODEL_PRESETS } from "./settings";
+// === end First-Run onboarding (P2) ===

@@ -282,3 +282,49 @@
     transition: none;
   }
 }
+
+/* ===========================================================================
+ * P2 — local-model gate card (FirstRunLocalCard). Appended to P1's stylesheet
+ * per the one-stylesheet discipline; all values resolve design-system tokens.
+ * (P3-full also appends here — keep these `fr-gcard__{progress,status,setup,
+ * error,actions}` selectors as one contiguous block for clean conflict merges.)
+ * =========================================================================== */
+
+/* Progress / setup / error column inside the local card's foot. */
+.fr-gcard__progress {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-sm);
+  width: 100%;
+}
+
+/* Mono status pill line, e.g. "Qwen 3 4B · 41%" / "on-device · ready". */
+.fr-gcard__status {
+  margin: 0;
+  font-family: var(--font-mono);
+  font-size: var(--font-size-2xs);
+  color: var(--color-text-muted);
+}
+
+/* Ollama-not-running honest setup steps. */
+.fr-gcard__setup {
+  margin: 0;
+  padding-left: 1.2em;
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2xs);
+  font-size: var(--font-size-sm);
+  color: var(--color-text-muted);
+}
+
+.fr-gcard__error {
+  margin: 0;
+  font-size: var(--font-size-xs);
+  color: var(--color-danger);
+}
+
+.fr-gcard__actions {
+  display: flex;
+  align-items: center;
+  gap: var(--space-sm);
+}

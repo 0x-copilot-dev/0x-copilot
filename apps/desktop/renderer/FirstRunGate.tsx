@@ -9,9 +9,13 @@ import {
 
 import {
   BrandMark,
+  FirstRunLocalCard,
   FirstRunSurface,
+  QWEN3_4B_PRESET,
+  createFirstRunLocalModelsPort,
   createModelsPort,
   createProviderKeysPort,
+  useFirstRunLocalModel,
 } from "@0x-copilot/chat-surface";
 import { IpcTransport } from "@0x-copilot/chat-transport";
 
@@ -131,15 +135,18 @@ export interface FirstRunSurfaceMountProps {
 }
 
 /**
- * Desktop binder for the shared `FirstRunSurface` (P1). Builds an IpcTransport
- * from `window.bridge`, derives the reused `ProviderKeysPort` / `ModelsPort`
- * seams from it, and mounts the surface. BYOK save flows through the facade
- * `/v1/settings/provider-keys` via the transport; skip/complete both call the
- * gate's `onComplete` (persist the first-run flag + reveal the shell).
+ * Desktop binder for the shared `FirstRunSurface` (P1 + P2). Builds an
+ * IpcTransport from `window.bridge`, derives the reused `ProviderKeysPort` /
+ * `ModelsPort` and the P2 `FirstRunLocalModelsPort` from it, and mounts the
+ * surface. BYOK save flows through the facade `/v1/settings/provider-keys` via
+ * the transport; skip/complete both call the gate's `onComplete` (persist the
+ * first-run flag + reveal the shell).
  *
- * The local-model card (P2) and the real composer/acknowledgment (P3) are left
- * as the surface's internal placeholders here — this binder wires only the P1
- * seams (providerKeys + models + skip/complete).
+ * P2 wiring: `useFirstRunLocalModel` drives the real `/v1/local-models/*` SSE
+ * pull; its `localModelPct` feeds P1's shared model-ready signal (ready at
+ * 100), `start` is the `onStartLocalDownload` seam, and `FirstRunLocalCard`
+ * fills the gate's `renderLocalCard` slot. The real composer/acknowledgment
+ * (P3) remain the surface's internal placeholders here.
  */
 export function FirstRunSurfaceMount({
   workspaceId,
@@ -161,6 +168,14 @@ export function FirstRunSurfaceMount({
     [transport],
   );
   const models = useMemo(() => createModelsPort(transport), [transport]);
+  const localModelsPort = useMemo(
+    () => createFirstRunLocalModelsPort(transport),
+    [transport],
+  );
+  const local = useFirstRunLocalModel({
+    port: localModelsPort,
+    preset: QWEN3_4B_PRESET,
+  });
 
   return (
     <FirstRunSurface
@@ -168,6 +183,16 @@ export function FirstRunSurfaceMount({
       models={models}
       onSkip={onComplete}
       onComplete={onComplete}
+      onStartLocalDownload={local.start}
+      localModelPct={local.localModelPct}
+      localDownloadDisabled={local.disabled}
+      renderLocalCard={(ctx) => (
+        <FirstRunLocalCard
+          state={local}
+          preset={QWEN3_4B_PRESET}
+          onStartDownload={ctx.onStartDownload}
+        />
+      )}
     />
   );
 }

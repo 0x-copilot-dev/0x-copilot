@@ -145,6 +145,8 @@ export {
   type StartLocalModelPull,
   type LocalModelDownloadResult,
 } from "./DownloadLocalModelModal";
+// Curated download catalog (P2) — one SSOT for the FTUE gate card + Settings.
+export { QWEN3_4B_PRESET, LOCAL_MODEL_PRESETS } from "./localModelPresets";
 export {
   formatBytes,
   formatEta,
