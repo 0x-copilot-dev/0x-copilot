@@ -1,3 +1,5 @@
+import { createHash } from "node:crypto";
+
 import type { AuthAuditLog, SignInMode } from "./audit-log";
 import { runGoogleLogin } from "./google-login";
 import { runGoogleLink, type GoogleLinkResult } from "./google-link";
@@ -470,6 +472,26 @@ export class AuthService {
 
   activeWorkspace(): string | null {
     return this.#storage.getActiveWorkspace();
+  }
+
+  // Stable, non-reversible per-account key for main-process-owned UX flags
+  // (the first-run / FTUE completion flag). Resolves the VERIFIED session via
+  // the ASYNC load path (#loadSession) — NOT a bare sync cache read, which is
+  // cold right after a restart — then returns a truncated SHA-256 of the
+  // verified `claims.sub`. Never returns the raw sub. Returns null when no
+  // verified session is loaded (no sub to key on), so the caller can fall back
+  // to a coarser namespacing key. The renderer never sees or supplies this key.
+  async accountKey(workspaceId: string): Promise<string | null> {
+    const session = await this.#loadSession(workspaceId);
+    if (session === null) return null;
+    const sub = session.claims.sub;
+    // A blank sub is not a verified identity (the OIDC fallback claims use "");
+    // refuse to key on it so unrelated blank-sub sessions never collide on the
+    // hash of the empty string.
+    if (sub.trim() === "") return null;
+    // Truncated to 128 bits: collision-safe for the handful of accounts on one
+    // install, and short enough to keep the on-disk key compact.
+    return createHash("sha256").update(sub, "utf8").digest("hex").slice(0, 32);
   }
 
   // Sync read of the in-memory bearer cache for WebTransport, whose Transport

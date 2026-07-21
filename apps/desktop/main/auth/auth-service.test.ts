@@ -1,4 +1,5 @@
 // @vitest-environment node
+import { createHash } from "node:crypto";
 import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -10,6 +11,10 @@ import { AuthService, type AuthSession } from "./index";
 import type { runGoogleLogin } from "./google-login";
 import type { runWalletLogin } from "./wallet-login";
 import type { SafeStorageLike } from "./secret-storage";
+import {
+  loadFirstRunComplete,
+  saveFirstRunComplete,
+} from "../services/first-run-store";
 
 function fakeSafeStorage(): SafeStorageLike {
   return {
@@ -642,6 +647,128 @@ describe("AuthService", () => {
       await service.signIn("org_acme");
       await service.signOut("org_acme");
       expect(audit.events.filter((e) => e.kind === "sign-out")).toEqual([]);
+    });
+  });
+
+  describe("accountKey — per-account first-run flag keying", () => {
+    // Truncated SHA-256 (128-bit) of the verified sub, mirroring
+    // AuthService.accountKey — used to assert the key is the HASH, never the
+    // raw sub.
+    function expectedKey(sub: string): string {
+      return createHash("sha256")
+        .update(sub, "utf8")
+        .digest("hex")
+        .slice(0, 32);
+    }
+
+    it("returns null when no verified session is stored", async () => {
+      const service = new AuthService({
+        mode: "dev-mint",
+        facadeBaseUrl: "http://127.0.0.1:8200",
+        userDataDir: tmp,
+        safeStorage: fakeSafeStorage(),
+        openExternal: async () => {},
+        fetch: vi.fn() as unknown as typeof fetch,
+      });
+      expect(await service.accountKey("org_acme")).toBeNull();
+    });
+
+    it("returns a stable hashed key for a verified session (never the raw sub)", async () => {
+      const service = new AuthService({
+        mode: "dev-mint",
+        facadeBaseUrl: "http://127.0.0.1:8200",
+        userDataDir: tmp,
+        safeStorage: fakeSafeStorage(),
+        openExternal: async () => {},
+        // devMintFetch's identity.user_id ("usr_sarah") becomes claims.sub.
+        fetch: devMintFetch("bearer-1"),
+      });
+      await service.signIn("org_acme");
+
+      const k1 = await service.accountKey("org_acme");
+      const k2 = await service.accountKey("org_acme");
+      expect(k1).toBe(k2); // stable across calls
+      expect(k1).toBe(expectedKey("usr_sarah")); // the hash, deterministic
+      expect(k1).toMatch(/^[0-9a-f]{32}$/u); // truncated sha256 hex
+      expect(k1).not.toContain("usr_sarah"); // never the raw sub
+    });
+
+    it("resolves the same key after a restart via the async load path (cold cache)", async () => {
+      const persist = new AuthService({
+        mode: "dev-mint",
+        facadeBaseUrl: "http://127.0.0.1:8200",
+        userDataDir: tmp,
+        safeStorage: fakeSafeStorage(),
+        openExternal: async () => {},
+        fetch: devMintFetch("bearer-1"),
+      });
+      await persist.signIn("org_acme");
+      const original = await persist.accountKey("org_acme");
+
+      // Fresh service over the same userDataDir: the in-memory cache is cold,
+      // so accountKey MUST go through #loadSession to read the persisted
+      // session (a bare sync cache read would return null here). No facade
+      // round-trip is involved — accountKey never probes.
+      const reboot = new AuthService({
+        mode: "dev-mint",
+        facadeBaseUrl: "http://127.0.0.1:8200",
+        userDataDir: tmp,
+        safeStorage: fakeSafeStorage(),
+        openExternal: async () => {},
+        fetch: vi.fn() as unknown as typeof fetch,
+      });
+      expect(await reboot.accountKey("org_acme")).toBe(original);
+    });
+
+    it("two verified subs on the SAME workspaceId get independent first-run flags", async () => {
+      // Two people share one install and the same default workspaceId
+      // ("org_acme"), but each signs in as a different verified identity. If
+      // the flag were keyed by workspaceId they would collide; keying by the
+      // hashed claims.sub keeps them isolated.
+      const alice = new AuthService({
+        mode: "dev-mint",
+        facadeBaseUrl: "http://127.0.0.1:8200",
+        userDataDir: tmp,
+        safeStorage: fakeSafeStorage(),
+        openExternal: async () => {},
+        fetch: vi.fn() as unknown as typeof fetch,
+        googleLoginFlow: vi.fn(
+          async (): Promise<AuthSession> =>
+            googleSession("bearer-a", "usr_alice"),
+        ) as unknown as typeof runGoogleLogin,
+      });
+      await alice.signInWithGoogle("org_acme");
+      const keyAlice = await alice.accountKey("org_acme");
+
+      const bob = new AuthService({
+        mode: "dev-mint",
+        facadeBaseUrl: "http://127.0.0.1:8200",
+        userDataDir: tmp,
+        safeStorage: fakeSafeStorage(),
+        openExternal: async () => {},
+        fetch: vi.fn() as unknown as typeof fetch,
+        googleLoginFlow: vi.fn(
+          async (): Promise<AuthSession> =>
+            googleSession("bearer-b", "usr_bob"),
+        ) as unknown as typeof runGoogleLogin,
+      });
+      await bob.signInWithGoogle("org_acme");
+      const keyBob = await bob.accountKey("org_acme");
+
+      expect(keyAlice).not.toBeNull();
+      expect(keyBob).not.toBeNull();
+      expect(keyAlice).not.toBe(keyBob);
+      if (keyAlice === null || keyBob === null) {
+        throw new Error(
+          "both account keys must resolve for a verified session",
+        );
+      }
+
+      // The store, keyed by accountKey, isolates the two accounts even though
+      // their workspaceId is identical.
+      saveFirstRunComplete(tmp, keyAlice, true);
+      expect(loadFirstRunComplete(tmp, keyAlice)).toBe(true);
+      expect(loadFirstRunComplete(tmp, keyBob)).toBe(false);
     });
   });
 });

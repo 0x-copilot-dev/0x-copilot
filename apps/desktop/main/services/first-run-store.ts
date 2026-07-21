@@ -1,13 +1,16 @@
-// First-run (FTUE) completion store — records, per workspace, whether the
+// First-run (FTUE) completion store — records, per account, whether the
 // onboarding gate has been completed (setup finished, first run sent, or
 // skipped). Persisted chmod-600 as JSON under userData/settings with NO
 // OS-keychain involvement: it is a UX flag, not a secret. Modeled on
 // `secure-storage-policy.ts`.
 //
-// Keyed by workspaceId (the RendererSession identity) so two accounts on one
-// install each see their own first run. A missing/unreadable/garbage file →
-// "not completed", so onboarding shows — the safe default is to never skip
-// onboarding on a bad read (the flag persists again on the next exit).
+// Keyed by an opaque `accountKey` derived in main from the VERIFIED session's
+// `claims.sub` (see AuthService.accountKey) — NOT the renderer-supplied
+// workspaceId, which is caller-controlled and defaults to one shared value on
+// desktop. So two accounts on one install each see their own first run. A
+// missing/unreadable/garbage file → "not completed", so onboarding shows — the
+// safe default is to never skip onboarding on a bad read (the flag persists
+// again on the next exit).
 
 import { mkdirSync, readFileSync, writeFileSync, chmodSync } from "node:fs";
 import { dirname, join } from "node:path";
@@ -33,7 +36,7 @@ export function firstRunStorePath(userDataDir: string): string {
   return join(userDataDir, ...STORE_RELATIVE_PATH);
 }
 
-/** completed: workspaceId → ISO timestamp of completion. */
+/** completed: accountKey → ISO timestamp of completion. */
 interface FirstRunFile {
   version: number;
   completed: Record<string, string>;
@@ -52,7 +55,7 @@ function readFile(userDataDir: string, fs: FirstRunFsSync): FirstRunFile {
       const completed = (parsed as { completed: Record<string, unknown> })
         .completed;
       // Keep only string-valued entries — a garbage value must not read as a
-      // completed workspace (it would silently skip onboarding).
+      // completed account (it would silently skip onboarding).
       const clean: Record<string, string> = {};
       for (const [key, value] of Object.entries(completed)) {
         if (typeof value === "string") clean[key] = value;
@@ -67,24 +70,24 @@ function readFile(userDataDir: string, fs: FirstRunFsSync): FirstRunFile {
 
 export function loadFirstRunComplete(
   userDataDir: string,
-  workspaceId: string,
+  accountKey: string,
   fs: FirstRunFsSync = NODE_FS_SYNC,
 ): boolean {
   const file = readFile(userDataDir, fs);
-  return Object.prototype.hasOwnProperty.call(file.completed, workspaceId);
+  return Object.prototype.hasOwnProperty.call(file.completed, accountKey);
 }
 
 export function saveFirstRunComplete(
   userDataDir: string,
-  workspaceId: string,
+  accountKey: string,
   completed: boolean,
   fs: FirstRunFsSync = NODE_FS_SYNC,
 ): void {
   const file = readFile(userDataDir, fs);
   if (completed) {
-    file.completed[workspaceId] = new Date().toISOString();
+    file.completed[accountKey] = new Date().toISOString();
   } else {
-    delete file.completed[workspaceId];
+    delete file.completed[accountKey];
   }
   const path = firstRunStorePath(userDataDir);
   fs.mkdirSync(dirname(path), { recursive: true });
