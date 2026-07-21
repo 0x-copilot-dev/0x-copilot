@@ -184,6 +184,20 @@ transport once the facade is healthy.
 Plain `npm run dev` is unchanged: no supervisor, `COPILOT_FACADE_URL`
 selects WebTransport (MockTransport otherwise).
 
+**Production posture is derived from the same signal.** `shouldSupervise` is the
+authoritative production-posture input: a supervised local stack is always
+production-configured (`main/services/service-env.ts` pins every child to
+`*_ENVIRONMENT=production`, so the dev IdP `/v1/dev/identity/mint` route is never
+registered there). `main/posture.ts#isProductionPosture` therefore returns true
+whenever the app supervises (`app.isPackaged` **or** a staged
+`COPILOT_RUNTIME_DIR`) OR `COPILOT_PRODUCTION=1` is set — unless an explicit dev
+override (`COPILOT_DEV=1` / `COPILOT_AUTH_MODE=dev-mint`) forces dev-mint. This
+keeps supervision and auth from diverging: the staged
+`COPILOT_RUNTIME_DIR=… npm run dev` recipe below runs real sign-in
+(`signInLocal` SIWE), not dev-mint, which would 404 against its own production
+stack. `COPILOT_PRODUCTION=1` alone (no `COPILOT_RUNTIME_DIR`) means production
+auth against an external facade with no local supervisor.
+
 **Runtime layout the supervisor expects** — this is EXACTLY what
 `tools/desktop-runtime/stage.mjs` produces and what the proven
 `tools/desktop-runtime/run-local.mjs` boots. `resolveRuntimePaths()` roots
