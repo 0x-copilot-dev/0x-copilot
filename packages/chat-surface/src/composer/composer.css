@@ -465,6 +465,48 @@
   padding: 6px 8px 4px;
 }
 
+/* PR-3E — searchable, keyboard-navigable model picker. */
+.atlas-model-pill__search {
+  padding: 4px 4px 6px;
+  border-bottom: 1px solid var(--color-border);
+  margin-bottom: 4px;
+}
+
+.atlas-model-pill__search-input {
+  width: 100%;
+  padding: 6px 8px;
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-sm, 6px);
+  background: var(--color-bg);
+  color: var(--color-text);
+  font: inherit;
+  font-size: var(--font-size-sm);
+}
+
+.atlas-model-pill__search-input:focus-visible {
+  outline: 2px solid var(--color-accent);
+  outline-offset: 1px;
+}
+
+.atlas-model-pill__group + .atlas-model-pill__group {
+  margin-top: 2px;
+}
+
+.atlas-model-pill__group-head {
+  font-size: var(--font-size-2xs);
+  font-weight: var(--font-weight-medium);
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  color: var(--color-text-muted);
+  padding: 6px 8px 2px;
+}
+
+.atlas-model-pill__empty {
+  padding: 12px 10px;
+  color: var(--color-text-muted);
+  font-size: var(--font-size-sm);
+}
+
 .atlas-model-pill__item {
   display: flex;
   align-items: center;
@@ -487,6 +529,11 @@
 
 .atlas-model-pill__item[data-active] {
   background: var(--color-surface-muted);
+}
+
+.atlas-model-pill__item[data-highlighted]:not([disabled]) {
+  background: var(--color-accent-soft);
+  box-shadow: inset 2px 0 0 var(--color-accent);
 }
 
 .atlas-model-pill__item[disabled] {
