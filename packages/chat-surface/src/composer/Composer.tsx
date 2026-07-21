@@ -17,7 +17,7 @@ import {
 import { flushSync } from "react-dom";
 
 import { MentionPopover, type MentionCandidate } from "./MentionPopover";
-import { ModelPicker, type Depth } from "./ModelPicker";
+import { ModelPicker, type Depth, type ModelDescriptor } from "./ModelPicker";
 import { ToolPicker } from "./ToolPicker";
 
 /* Shared composer for Studio / Focus / Auto.
@@ -351,6 +351,16 @@ export interface ComposerProps {
    * shows selected-skill pills inside its own topBar slot wrapper).
    */
   readonly hasTopBarContent?: boolean;
+  /**
+   * Host-injected model catalog for the built-in Model · Depth popover —
+   * the source of truth for the model rows (sourced from the workspace
+   * catalog, `/v1/agent/models`). When omitted, the popover falls back to a
+   * static built-in default; every real consumer should inject a
+   * catalog-backed list so the picker reflects the user's actual BYOK +
+   * Local models. Ignored when a `bottomBarRender` slot supplies its own
+   * model control (e.g. AssistantComposer's `ModelPill`).
+   */
+  readonly models?: ReadonlyArray<ModelDescriptor>;
 }
 
 interface MentionTriggerState {
@@ -390,6 +400,7 @@ function ComposerInner(
     maxRows = DEFAULT_MAX_ROWS,
     className,
     hasTopBarContent = false,
+    models,
   } = props;
 
   const isEdit = mode === "edit";
@@ -873,7 +884,7 @@ function ComposerInner(
     ? text.trim().length > 0
     : text.trim().length > 0 || attachments.length > 0;
   const canSend = hasSubmissionContent && !disabled && !running;
-  const modelLabel = labelForModel(model);
+  const modelLabel = labelForModel(model, models);
   const depthLabel = labelForDepth(depth);
 
   const slotCtx: ComposerSlotCtx = {
@@ -1168,6 +1179,7 @@ function ComposerInner(
         <div style={popoverHostStyle}>
           <ModelPicker
             open={true}
+            models={models}
             selectedModel={model}
             selectedDepth={depth}
             onSelect={setModel}
@@ -1202,7 +1214,16 @@ export const Composer = forwardRef<ComposerHandle, ComposerProps>(
 );
 Composer.displayName = "Composer";
 
-function labelForModel(id: string): string {
+function labelForModel(
+  id: string,
+  models?: ReadonlyArray<ModelDescriptor>,
+): string {
+  /* Injected catalog first — the composer pill must show the label for the
+   * host's actual model, not a hardcoded one. */
+  const injected = models?.find((m) => m.id === id);
+  if (injected !== undefined) {
+    return injected.label;
+  }
   if (id === "claude-opus-4-7") {
     return "Opus 4.7";
   }

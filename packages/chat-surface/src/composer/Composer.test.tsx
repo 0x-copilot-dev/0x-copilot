@@ -133,6 +133,34 @@ describe("Composer", () => {
     );
   });
 
+  it("drives the ModelPicker + pill label from an injected catalog, not the hardcoded fallback", () => {
+    render(
+      withTransport(
+        makeTransport(),
+        <Composer
+          onSend={() => {}}
+          initialModel="qwen3-4b"
+          models={[
+            { id: "qwen3-4b", label: "Qwen 3 4B", family: "Local" },
+            { id: "gpt-5", label: "GPT-5", family: "OpenAI" },
+          ]}
+        />,
+      ),
+    );
+    // Pill label reflects the injected model, not a hardcoded Claude label.
+    expect(screen.getByTestId("composer-model-toggle")).toHaveTextContent(
+      "Qwen 3 4B",
+    );
+    fireEvent.click(screen.getByTestId("composer-model-toggle"));
+    // Popover lists exactly the injected catalog — the fallback trio is gone.
+    expect(screen.getByText("GPT-5")).toBeInTheDocument();
+    expect(screen.queryByText("Opus 4.7")).not.toBeInTheDocument();
+    fireEvent.click(screen.getByTestId("model-picker-row-gpt-5"));
+    expect(screen.getByTestId("composer-model-toggle")).toHaveTextContent(
+      "GPT-5",
+    );
+  });
+
   it("opens the MentionPopover when '@' is typed at a word boundary", async () => {
     const transport = makeTransport(() =>
       Promise.resolve({

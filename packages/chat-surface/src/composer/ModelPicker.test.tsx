@@ -20,7 +20,7 @@ describe("ModelPicker", () => {
     expect(screen.queryByTestId("model-picker")).not.toBeInTheDocument();
   });
 
-  it("renders the three hardcoded models when open", () => {
+  it("renders the built-in fallback models when no catalog is injected", () => {
     render(
       <ModelPicker
         open={true}
@@ -32,6 +32,65 @@ describe("ModelPicker", () => {
     expect(screen.getByText("Opus 4.7")).toBeInTheDocument();
     expect(screen.getByText("Sonnet 4.6")).toBeInTheDocument();
     expect(screen.getByText("Haiku 4.5")).toBeInTheDocument();
+  });
+
+  it("renders EXACTLY the injected catalog models, not the fallback, when `models` is provided", () => {
+    /* The injected `models` prop is the source of truth (sourced from the
+     * workspace catalog / `/v1/agent/models`). The hardcoded fallback trio
+     * must NOT leak through when a host injects a real catalog. */
+    render(
+      <ModelPicker
+        open={true}
+        models={[
+          { id: "qwen3-4b", label: "Qwen 3 4B", family: "Local" },
+          { id: "gpt-5", label: "GPT-5", family: "OpenAI" },
+        ]}
+        selectedModel="qwen3-4b"
+        onSelect={() => {}}
+        onClose={() => {}}
+      />,
+    );
+    // The injected models are shown…
+    expect(screen.getByText("Qwen 3 4B")).toBeInTheDocument();
+    expect(screen.getByText("GPT-5")).toBeInTheDocument();
+    expect(screen.getByTestId("model-picker-row-qwen3-4b")).toBeInTheDocument();
+    // …and none of the hardcoded fallback trio bleed through.
+    expect(screen.queryByText("Opus 4.7")).not.toBeInTheDocument();
+    expect(screen.queryByText("Sonnet 4.6")).not.toBeInTheDocument();
+    expect(screen.queryByText("Haiku 4.5")).not.toBeInTheDocument();
+    expect(
+      screen.queryByTestId("model-picker-row-claude-opus-4-7"),
+    ).not.toBeInTheDocument();
+  });
+
+  it("falls back to the built-in list when `models` is an empty array", () => {
+    render(
+      <ModelPicker
+        open={true}
+        models={[]}
+        selectedModel="claude-opus-4-7"
+        onSelect={() => {}}
+        onClose={() => {}}
+      />,
+    );
+    expect(screen.getByText("Opus 4.7")).toBeInTheDocument();
+  });
+
+  it("fires onSelect with an injected model id and then onClose", () => {
+    const onSelect = vi.fn();
+    const onClose = vi.fn();
+    render(
+      <ModelPicker
+        open={true}
+        models={[{ id: "qwen3-4b", label: "Qwen 3 4B", family: "Local" }]}
+        selectedModel="qwen3-4b"
+        onSelect={onSelect}
+        onClose={onClose}
+      />,
+    );
+    fireEvent.click(screen.getByTestId("model-picker-row-qwen3-4b"));
+    expect(onSelect).toHaveBeenCalledWith("qwen3-4b");
+    expect(onClose).toHaveBeenCalledTimes(1);
   });
 
   it("marks the selected model with aria-selected=true and others false", () => {
