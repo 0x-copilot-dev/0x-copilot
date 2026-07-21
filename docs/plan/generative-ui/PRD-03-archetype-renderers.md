@@ -7,17 +7,17 @@
 
 ## Scope — files
 
-| File | Change |
-|---|---|
-| `src/_shared/path.ts` | NEW — `resolvePath(data, "a.b.0.c"): unknown` (dots + numeric indices only, ~40 LOC, total — returns undefined on any miss) + `formatValue(v, format?)` (text/number/currency/datetime/badge/user; locale-safe, `tabular-nums` numbers) |
-| `src/_shared/specTypes.ts` | NEW — re-export `SurfaceSpec`/`SurfaceEnvelope`/`SurfaceArchetype` from `@0x-copilot/api-types`; narrow helpers `specFromState(state)`, `dataFromState(state)` with defensive unknown-handling |
-| `src/archetypes/RecordRenderer.tsx` | NEW — scheme `record`. renderCurrent: title/subtitle header + label/value field grid (reuse the visual grammar of `OpportunityRenderer`); renderDiff: per-field before→after rows (reuse `OpportunityFieldRow` patterns — struck-through old, accent new, provenance pill) |
-| `src/archetypes/TableRenderer.tsx` | NEW — scheme `table`. Columns from spec, rows from `items_path`; ≥50-col windowing via the existing `sheet/_columns.ts` helper (import it); renderDiff: per-row change highlighting compatible with `SheetDiff` visual language |
-| `src/archetypes/MessageRenderer.tsx` | NEW — scheme `message`. Composer-card layout (to/subject/body from spec paths); renderDiff: pending body block (reuse the `EmailRenderer` PENDING treatment; PRD-06 upgrades it to word diff) |
-| `src/archetypes/DocRenderer.tsx` | NEW — scheme `doc`. Title + sections list (heading/body); renderDiff: changed-section highlight |
-| `src/archetypes/BoardRenderer.tsx` | NEW — scheme `board`. Lanes via `group_by_path`, cards via `items_path` + title/fields; renderDiff: moved/changed card badges |
-| `src/archetypes/index.ts` | NEW — `registerArchetypeAdapters()` registering the 5 above (metadata: `origin: "first-party"`, `schemaVersion: 1`, `matches: uri.startsWith("<scheme>://")`) |
-| `src/index.ts` | EXTEND — `registerAll()` additionally calls `registerArchetypeAdapters()`; export the new adapters + types |
+| File                                 | Change                                                                                                                                                                                                                                                                     |
+| ------------------------------------ | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `src/_shared/path.ts`                | NEW — `resolvePath(data, "a.b.0.c"): unknown` (dots + numeric indices only, ~40 LOC, total — returns undefined on any miss) + `formatValue(v, format?)` (text/number/currency/datetime/badge/user; locale-safe, `tabular-nums` numbers)                                    |
+| `src/_shared/specTypes.ts`           | NEW — re-export `SurfaceSpec`/`SurfaceEnvelope`/`SurfaceArchetype` from `@0x-copilot/api-types`; narrow helpers `specFromState(state)`, `dataFromState(state)` with defensive unknown-handling                                                                             |
+| `src/archetypes/RecordRenderer.tsx`  | NEW — scheme `record`. renderCurrent: title/subtitle header + label/value field grid (reuse the visual grammar of `OpportunityRenderer`); renderDiff: per-field before→after rows (reuse `OpportunityFieldRow` patterns — struck-through old, accent new, provenance pill) |
+| `src/archetypes/TableRenderer.tsx`   | NEW — scheme `table`. Columns from spec, rows from `items_path`; ≥50-col windowing via the existing `sheet/_columns.ts` helper (import it); renderDiff: per-row change highlighting compatible with `SheetDiff` visual language                                            |
+| `src/archetypes/MessageRenderer.tsx` | NEW — scheme `message`. Composer-card layout (to/subject/body from spec paths); renderDiff: pending body block (reuse the `EmailRenderer` PENDING treatment; PRD-06 upgrades it to word diff)                                                                              |
+| `src/archetypes/DocRenderer.tsx`     | NEW — scheme `doc`. Title + sections list (heading/body); renderDiff: changed-section highlight                                                                                                                                                                            |
+| `src/archetypes/BoardRenderer.tsx`   | NEW — scheme `board`. Lanes via `group_by_path`, cards via `items_path` + title/fields; renderDiff: moved/changed card badges                                                                                                                                              |
+| `src/archetypes/index.ts`            | NEW — `registerArchetypeAdapters()` registering the 5 above (metadata: `origin: "first-party"`, `schemaVersion: 1`, `matches: uri.startsWith("<scheme>://")`)                                                                                                              |
+| `src/index.ts`                       | EXTEND — `registerAll()` additionally calls `registerArchetypeAdapters()`; export the new adapters + types                                                                                                                                                                 |
 
 Archetypes `event | timeline | dashboard | file | form` are **out of this PRD** (follow-up PRDs may add them); unknown archetypes fall to tier-3 by design.
 

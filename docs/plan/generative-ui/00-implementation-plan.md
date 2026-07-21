@@ -11,7 +11,7 @@
 The product PRD assumed tier-2 = "agent writes adapter source." A code-level read changes this:
 `RenderAdapterGenerator` (`services/ai-backend/src/agent_runtime/capabilities/render_adapter_generator/capability.py`) **never calls an LLM** — `AdapterSourceBuilder.build()` deterministically stamps React.createElement source from a `LayoutTemplate` enum + a validated `SampleState`. The generative intelligence was never wired in, and it turns out it isn't needed where everyone assumed.
 
-**Decision D1 — the generative artifact is a *SurfaceSpec*, not component source.**
+**Decision D1 — the generative artifact is a _SurfaceSpec_, not component source.**
 
 A SurfaceSpec is a small, schema-validated JSON document that binds a connector tool's output shape to an archetype's slots:
 
@@ -23,26 +23,26 @@ A SurfaceSpec is a small, schema-validated JSON document that binds a connector 
   "title_path": "issue.title",
   "subtitle_path": "issue.identifier",
   "fields": [
-    { "label": "State",    "path": "issue.state.name" },
+    { "label": "State", "path": "issue.state.name" },
     { "label": "Assignee", "path": "issue.assignee.displayName" },
     { "label": "Priority", "path": "issue.priorityLabel" },
-    { "label": "Updated",  "path": "issue.updatedAt", "format": "datetime" }
+    { "label": "Updated", "path": "issue.updatedAt", "format": "datetime" }
   ],
   "link": { "label": "Open in Linear", "url_path": "issue.url" }
 }
 ```
 
-A **generic, first-party ArchetypeRenderer** (one `SaaSRendererAdapter` per archetype scheme: `record://`, `table://`, `message://`, `doc://`, `board://`, …) interprets `{spec, data, diff}` at render time. The renderer is hand-written, tested, design-system-native, pure-render (D28). The *spec* is what gets generated — by a cheap model guided by a skill (see §3).
+A **generic, first-party ArchetypeRenderer** (one `SaaSRendererAdapter` per archetype scheme: `record://`, `table://`, `message://`, `doc://`, `board://`, …) interprets `{spec, data, diff}` at render time. The renderer is hand-written, tested, design-system-native, pure-render (D28). The _spec_ is what gets generated — by a cheap model guided by a skill (see §3).
 
 Why this beats shipping generated TS on every axis the effort cares about:
 
-| Axis | Generated component source (old tier-2 default) | SurfaceSpec + generic renderer (new default) |
-|---|---|---|
-| **Cost** | 1–2k output tokens of TS per adapter; needs a capable model to write correct code | 300–800 output tokens of JSON; nano/mini-class model is sufficient; cached once per `(server, tool, output_shape_hash)` |
-| **Security** | Executable code → Web Worker sandbox, AST allowlist, smoke render, quality gates, install lifecycle | Data, not code. Schema validation is the entire gate. No execution surface. React text-node escaping renders payload data inert |
-| **Latency** | Worker round-trip per render; install pipeline before first paint | Pure synchronous render (<16 ms typical); zero added steady-state latency |
-| **Failure mode** | Broken adapter → boundary error → demote | Invalid spec → rejected at validation → tier-3 fallback; never a runtime crash class |
-| **Fixability** | Regenerate + re-gate code | Edit a JSON file or the skill; no deploy |
+| Axis             | Generated component source (old tier-2 default)                                                     | SurfaceSpec + generic renderer (new default)                                                                                    |
+| ---------------- | --------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------- |
+| **Cost**         | 1–2k output tokens of TS per adapter; needs a capable model to write correct code                   | 300–800 output tokens of JSON; nano/mini-class model is sufficient; cached once per `(server, tool, output_shape_hash)`         |
+| **Security**     | Executable code → Web Worker sandbox, AST allowlist, smoke render, quality gates, install lifecycle | Data, not code. Schema validation is the entire gate. No execution surface. React text-node escaping renders payload data inert |
+| **Latency**      | Worker round-trip per render; install pipeline before first paint                                   | Pure synchronous render (<16 ms typical); zero added steady-state latency                                                       |
+| **Failure mode** | Broken adapter → boundary error → demote                                                            | Invalid spec → rejected at validation → tier-3 fallback; never a runtime crash class                                            |
+| **Fixability**   | Regenerate + re-gate code                                                                           | Edit a JSON file or the skill; no deploy                                                                                        |
 
 The existing executable tier-2 pipeline (Tier2Loader worker, AST allowlist, quality gates, Tier2Bridge) is **kept, not deleted** — demoted to the escape hatch for genuinely custom layouts the archetype vocabulary can't express. It completes in Wave 4, not Wave 1.
 
@@ -117,12 +117,12 @@ This makes surface quality a **data problem, not a deploy problem**: a bad mappi
 
 **Model routing table:**
 
-| Job | Model class | Tokens (in/out) | Cost/unit | When |
-|---|---|---|---|---|
-| SurfaceSpec generation | nano/mini (`SURFACE_SPEC_MODEL`) | ~3–5k / 300–800 | ~$0.001–0.003 | once per (server, tool, shape); async |
-| Tier-2 element-tree/custom layout | small (Haiku-class) | ~6–10k / 1–2k | ~$0.01–0.05 | archetype vocabulary insufficient (rare, Wave 4) |
-| Tier-4 freeform canvas | user's frontier model | user-visible | user-initiated | product P4, out of scope here |
-| Skill authoring/iteration | frontier, offline | dev-time | dev-time | maintainers only |
+| Job                               | Model class                      | Tokens (in/out) | Cost/unit      | When                                             |
+| --------------------------------- | -------------------------------- | --------------- | -------------- | ------------------------------------------------ |
+| SurfaceSpec generation            | nano/mini (`SURFACE_SPEC_MODEL`) | ~3–5k / 300–800 | ~$0.001–0.003  | once per (server, tool, shape); async            |
+| Tier-2 element-tree/custom layout | small (Haiku-class)              | ~6–10k / 1–2k   | ~$0.01–0.05    | archetype vocabulary insufficient (rare, Wave 4) |
+| Tier-4 freeform canvas            | user's frontier model            | user-visible    | user-initiated | product P4, out of scope here                    |
+| Skill authoring/iteration         | frontier, offline                | dev-time        | dev-time       | maintainers only                                 |
 
 Fleet math: all 23 catalog connectors × top ~5 tools ≈ 115 specs ≈ **well under $1 one-time**, and the curated ones ship in-repo generated at dev time — runtime generation is only for the true long tail.
 
@@ -136,19 +136,19 @@ Fleet math: all 23 catalog connectors × top ~5 tools ≈ 115 specs ≈ **well u
 
 Dependency rule: **Wave 0 freezes every cross-PRD interface.** Wave 1 PRDs touch disjoint paths and may run fully in parallel. A PRD must not edit files outside its listed scope.
 
-| Wave | PRD | Title | Scope area | Depends on |
-|---|---|---|---|---|
-| 0 | [PRD-01](PRD-01-surface-contract.md) | Surface contract (schema + types + event) | service-contracts, api-types, ai-backend schemas | — |
-| 1 | [PRD-02](PRD-02-backend-emission.md) | Backend surface emission + builtin curated specs | ai-backend | 01 |
-| 1 | [PRD-03](PRD-03-archetype-renderers.md) | ArchetypeRenderer pack | surface-renderers, chat-surface (types only) | 01 |
-| 1 | [PRD-04](PRD-04-cockpit-wiring.md) | Cockpit wiring: tabs, activeUri, pendingDiff, decisions | chat-surface | 01 |
-| 1 | [PRD-05](PRD-05-web-registration.md) | Web host registration + flagged Run route | apps/frontend | 01 |
-| 1 | [PRD-06](PRD-06-text-diff.md) | Word-level text diff + email/doc renderDiff | chat-surface, surface-renderers | 01 |
-| 2 | [PRD-07](PRD-07-spec-generator.md) | Spec generator capability + spec-authoring skill + store port | ai-backend | 01, 02 |
-| 2 | [PRD-08](PRD-08-spec-registry.md) | Spec persistence: backend registry + backend-http adapter | backend, ai-backend client | 07 |
-| 3 | [PRD-09](PRD-09-edit-and-commit.md) | Edit-on-surface + commit gate (approve_with_edits) | api-types, facade, ai-backend, chat-surface | 01, 03, 04 |
-| 4 | [PRD-10](PRD-10-tier2-completion.md) | Tier-2 completion: worker 6C + lifecycle unstub | chat-surface, apps/desktop | 03 |
-| 4 | [PRD-11](PRD-11-hardening-evals.md) | Hardening: eval harness, metering, injection lint, registry scoping | ai-backend, chat-surface | 07 |
+| Wave | PRD                                     | Title                                                               | Scope area                                       | Depends on |
+| ---- | --------------------------------------- | ------------------------------------------------------------------- | ------------------------------------------------ | ---------- |
+| 0    | [PRD-01](PRD-01-surface-contract.md)    | Surface contract (schema + types + event)                           | service-contracts, api-types, ai-backend schemas | —          |
+| 1    | [PRD-02](PRD-02-backend-emission.md)    | Backend surface emission + builtin curated specs                    | ai-backend                                       | 01         |
+| 1    | [PRD-03](PRD-03-archetype-renderers.md) | ArchetypeRenderer pack                                              | surface-renderers, chat-surface (types only)     | 01         |
+| 1    | [PRD-04](PRD-04-cockpit-wiring.md)      | Cockpit wiring: tabs, activeUri, pendingDiff, decisions             | chat-surface                                     | 01         |
+| 1    | [PRD-05](PRD-05-web-registration.md)    | Web host registration + flagged Run route                           | apps/frontend                                    | 01         |
+| 1    | [PRD-06](PRD-06-text-diff.md)           | Word-level text diff + email/doc renderDiff                         | chat-surface, surface-renderers                  | 01         |
+| 2    | [PRD-07](PRD-07-spec-generator.md)      | Spec generator capability + spec-authoring skill + store port       | ai-backend                                       | 01, 02     |
+| 2    | [PRD-08](PRD-08-spec-registry.md)       | Spec persistence: backend registry + backend-http adapter           | backend, ai-backend client                       | 07         |
+| 3    | [PRD-09](PRD-09-edit-and-commit.md)     | Edit-on-surface + commit gate (approve_with_edits)                  | api-types, facade, ai-backend, chat-surface      | 01, 03, 04 |
+| 4    | [PRD-10](PRD-10-tier2-completion.md)    | Tier-2 completion: worker 6C + lifecycle unstub                     | chat-surface, apps/desktop                       | 03         |
+| 4    | [PRD-11](PRD-11-hardening-evals.md)     | Hardening: eval harness, metering, injection lint, registry scoping | ai-backend, chat-surface                         | 07         |
 
 Sub-agent guidance (repo norms): one PRD per agent, ≤~1000 LOC each; PRD-03 is split-friendly (one agent per archetype) if it runs long. Interface freeze: anything defined in PRD-01 is read-only for Waves 1+ — needed changes go back through a PRD-01 amendment, not a local edit.
 

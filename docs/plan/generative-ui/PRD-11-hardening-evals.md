@@ -7,6 +7,7 @@
 ## Scope
 
 **1. Eval harness (`services/ai-backend/tests/evals/surfaces/`)** — pytest-marked `evals` (excluded from default CI):
+
 - Corpus: ≥20 real-shaped fixtures `{tool_descriptor, sample_output}` across the catalog connectors + 5 adversarial (injection strings in values, 40-key flat objects, deep nesting, empty arrays, unicode/emoji keys).
 - Scorers (pure, deterministic): schema-valid rate; path-resolution rate; archetype-choice accuracy vs golden; label quality lint (length/case rules from SKILL.md); field-count sanity (4–8). Output: one JSON report per run `{model, skill_version, per-fixture scores, aggregate}` written to the evals dir.
 - Runner supports `SURFACE_SPEC_MODEL` matrix (run the same corpus against 2–3 configured cheap models locally) — this is the data for the model-routing choice, refreshed whenever the skill or model lineup changes.
