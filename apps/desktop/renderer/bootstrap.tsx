@@ -35,6 +35,7 @@ import { registerAll as registerSurfaceRenderers } from "@0x-copilot/surface-ren
 
 import { BootGate } from "./BootProgress";
 import { DestinationOutlet } from "./DestinationOutlet";
+import { FirstRunGate, FirstRunPlaceholder } from "./FirstRunGate";
 import { PaletteHost } from "./PaletteHost";
 import { SettingsMount } from "./SettingsMount";
 import { DEFAULT_WORKSPACE_ID, SignInGate } from "./SignInGate";
@@ -93,13 +94,25 @@ export function App(): ReactElement {
         <BootGate bridge={window.bridge}>
           <SignInGate bridge={window.bridge} workspaceId={DEFAULT_WORKSPACE_ID}>
             {(session, signOut) => (
-              <ChatShellForSession
-                session={session}
-                onSignOut={signOut}
-                router={router}
-                keyValueStore={keyValueStore}
-                presenceSignal={presenceSignal}
-              />
+              // First-run gate: a returning user (flag set) drops straight
+              // through to the shell; a first-time user sees onboarding until
+              // they finish or skip. P0 renders a placeholder body; P1 swaps in
+              // the shared 3-state FirstRunSurface via `renderFirstRun`.
+              <FirstRunGate
+                bridge={window.bridge}
+                workspaceId={session.workspaceId}
+                renderFirstRun={(onComplete) => (
+                  <FirstRunPlaceholder onComplete={onComplete} />
+                )}
+              >
+                <ChatShellForSession
+                  session={session}
+                  onSignOut={signOut}
+                  router={router}
+                  keyValueStore={keyValueStore}
+                  presenceSignal={presenceSignal}
+                />
+              </FirstRunGate>
             )}
           </SignInGate>
         </BootGate>

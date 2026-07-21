@@ -8,17 +8,17 @@ Hosted trial: **SHELVED** (deferred; if revived, gated on holding ≥50k $CPILOT
 
 ## Phases
 
-| Phase    | Title                                           | State           | PR  | Notes                                                                   |
-| -------- | ----------------------------------------------- | --------------- | --- | ----------------------------------------------------------------------- |
-| Research | Design import + codebase inventory              | ✅ done         | —   | 4 research sweeps; README §4 inventory                                  |
-| P0       | First-run flag + gate seam + skip               | ⬜ todo         | —   | main-process `first-run.json`+IPC; web KV; `bootstrap.tsx` seam         |
-| P1       | Gate surface + BYOK card + inline key form      | ⬜ todo         | —   | `/v1/settings/provider-keys`; `FirstRunSurface` scaffold                |
-| P2       | Local-model card + Qwen 3 4B preset             | ⬜ todo         | —   | curated preset; `enable_local_models` default decision                  |
-| P3       | Onboarding composer + chips + run-create + ack  | ⬜ todo         | —   | reuse `AssistantComposer`; two-step create; handoff                     |
-| P4       | Wallet chip + Tools popover + web-search toggle | ⬜ todo         | —   | `/v1/me/profile` chip; per-run web-search flag                          |
-| ~~P5~~   | ~~Hosted trial lane~~                           | ⏸ shelved       | —   | dropped from v1; future = ≥50k $CPILOT holder gate (README §7.1)        |
-| P6       | Safe{Wallet} + Sheets connectors                | ⬜ todo (gated) | —   | Safe MCP + approval-gated signing; Sheets R/W — needs security sign-off |
-| P7       | E2E parity + verification pass                  | ⬜ todo         | —   | live-stack per-journey; ui-design-reviewer vs `design-source/`          |
+| Phase    | Title                                           | State           | PR  | Notes                                                                                                                                                                                                            |
+| -------- | ----------------------------------------------- | --------------- | --- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Research | Design import + codebase inventory              | ✅ done         | —   | 4 research sweeps; README §4 inventory                                                                                                                                                                           |
+| P0       | First-run flag + gate seam + skip               | ✅ desktop code | —   | main `first-run.json`+IPC+preload; `FirstRunGate` seam+skip; store test; tsc+lint+166 tests green. Body is a placeholder → real 3-state surface in P1; web-host KV binding lands with the web onboarding feature |
+| P1       | Gate surface + BYOK card + inline key form      | ⬜ todo         | —   | `/v1/settings/provider-keys`; `FirstRunSurface` scaffold                                                                                                                                                         |
+| P2       | Local-model card + Qwen 3 4B preset             | ⬜ todo         | —   | curated preset; `enable_local_models` default decision                                                                                                                                                           |
+| P3       | Onboarding composer + chips + run-create + ack  | ⬜ todo         | —   | reuse `AssistantComposer`; two-step create; handoff                                                                                                                                                              |
+| P4       | Wallet chip + Tools popover + web-search toggle | ⬜ todo         | —   | `/v1/me/profile` chip; per-run web-search flag                                                                                                                                                                   |
+| ~~P5~~   | ~~Hosted trial lane~~                           | ⏸ shelved       | —   | dropped from v1; future = ≥50k $CPILOT holder gate (README §7.1)                                                                                                                                                 |
+| P6       | Safe{Wallet} + Sheets connectors                | ⬜ todo (gated) | —   | Safe MCP + approval-gated signing; Sheets R/W — needs security sign-off                                                                                                                                          |
+| P7       | E2E parity + verification pass                  | ⬜ todo         | —   | live-stack per-journey; ui-design-reviewer vs `design-source/`                                                                                                                                                   |
 
 ## Decisions pending (block gated phases)
 

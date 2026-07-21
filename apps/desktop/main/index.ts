@@ -82,6 +82,11 @@ import {
 import { createDesktopSupervisor } from "./services/desktop-supervisor";
 import { applyBundledGoogleOAuth } from "./services/google-oauth-default";
 import { SECURE_STORAGE_CHANNELS } from "./services/secure-storage-channels";
+import { FIRST_RUN_CHANNELS } from "./services/first-run-channels";
+import {
+  loadFirstRunComplete,
+  saveFirstRunComplete,
+} from "./services/first-run-store";
 import {
   gatedSafeStorage,
   loadSecureStorageMode,
@@ -311,11 +316,66 @@ function registerSecureStorageIpc(): void {
   });
 }
 
+// Extract a non-empty workspaceId from a renderer IPC payload. Caller-supplied
+// identity is untrusted; we only accept it as a namespacing key for this
+// per-install UX flag (never as an auth claim).
+function readWorkspaceId(payload: unknown): string | null {
+  if (typeof payload === "object" && payload !== null) {
+    const wid = (payload as Record<string, unknown>).workspaceId;
+    if (typeof wid === "string" && wid.length > 0) return wid;
+  }
+  return null;
+}
+
+// Registers the first-run (FTUE) completion IPC. The renderer's FirstRunGate
+// reads `get` to decide whether to show onboarding, and writes `set` when the
+// user finishes/skips onboarding. Per-workspace, persisted chmod-600. A read
+// error yields `completed: false` so onboarding fails OPEN (never trap a user
+// past onboarding on a bad read).
+function registerFirstRunIpc(): void {
+  ipcMain.handle(FIRST_RUN_CHANNELS.get, (_event, payload) => {
+    const workspaceId = readWorkspaceId(payload);
+    if (workspaceId === null) return { completed: false };
+    try {
+      return {
+        completed: loadFirstRunComplete(app.getPath("userData"), workspaceId),
+      };
+    } catch (err) {
+      console.error("[first-run] read failed:", err);
+      return { completed: false };
+    }
+  });
+  ipcMain.handle(FIRST_RUN_CHANNELS.set, (_event, payload) => {
+    const workspaceId = readWorkspaceId(payload);
+    if (workspaceId === null) {
+      return { ok: false, error: "missing workspaceId" };
+    }
+    // Default true: `set` is called to MARK onboarding done; an explicit
+    // `completed: false` resets it (used only by tests/dev).
+    const completed = !(
+      typeof payload === "object" &&
+      payload !== null &&
+      (payload as Record<string, unknown>).completed === false
+    );
+    try {
+      saveFirstRunComplete(app.getPath("userData"), workspaceId, completed);
+      return { ok: true, completed };
+    } catch (err) {
+      console.error("[first-run] persist failed:", err);
+      return {
+        ok: false,
+        error: err instanceof Error ? err.message : "unknown error",
+      };
+    }
+  });
+}
+
 if (hasSingleInstanceLock) {
   void app.whenReady().then(() => {
     startCrashReporter();
     secureStorageMode = loadSecureStorageMode(app.getPath("userData"));
     registerSecureStorageIpc();
+    registerFirstRunIpc();
     applyBrandDockIcon(app, {
       platform: process.platform,
       iconPngPath: join(__dirname, "icon.png"),

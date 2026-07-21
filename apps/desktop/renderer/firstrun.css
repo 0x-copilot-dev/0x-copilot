@@ -1,0 +1,146 @@
+/* First-run (FTUE) surface — P0 interim chrome.
+ *
+ * Token-mapped to the design-system SSOT (packages/design-system/src/styles.css):
+ * the design mock's --ink/--panel/--tx/--accent map 1:1 onto --color-bg/
+ * -surface/-text/-accent. P1 extends this file with the full gate/composer/ack
+ * parity styles; the shell here (top bar · centered main · footer) already
+ * matches the mock's .fr layout so P1 only fills the body. */
+
+.fr {
+  height: 100%;
+  display: flex;
+  flex-direction: column;
+  overflow: auto;
+  background: var(--color-bg);
+  color: var(--color-text);
+  font-family: var(--font-sans);
+}
+
+.fr-top {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 13px 18px;
+  flex: none;
+}
+
+.fr-brand {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  font-family: var(--font-display);
+  font-size: 12.5px;
+  font-weight: var(--font-weight-semibold);
+  color: var(--color-text);
+}
+
+.fr-zx {
+  color: var(--color-accent);
+}
+
+.fr-top__sp {
+  flex: 1;
+}
+
+.fr-skip {
+  font-family: var(--font-mono);
+  font-size: 10px;
+  color: var(--color-text-subtle);
+  border: 0;
+  background: none;
+  padding: 0;
+  cursor: pointer;
+}
+
+.fr-skip:hover {
+  color: var(--color-text);
+}
+
+.fr-main {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  justify-content: center;
+  gap: 12px;
+  width: min(640px, 92%);
+  margin: 0 auto;
+  padding: 6px 0 22px;
+}
+
+.fr-h1 {
+  margin: 0;
+  font-family: var(--font-display);
+  font-size: 23px;
+  line-height: var(--line-height-tight);
+  letter-spacing: -0.015em;
+  font-weight: var(--font-weight-semibold);
+  color: var(--color-text);
+}
+
+.fr-sub {
+  margin: 0;
+  font-size: 12.5px;
+  line-height: var(--line-height-body);
+  color: var(--color-text-muted);
+  max-width: 46ch;
+}
+
+.fr-cta {
+  margin-top: 4px;
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  border: 1px solid var(--color-accent);
+  background: var(--color-accent);
+  color: var(--color-accent-contrast);
+  border-radius: var(--radius-md);
+  padding: 8px 15px;
+  font-family: var(--font-display);
+  font-size: 12px;
+  font-weight: var(--font-weight-semibold);
+  cursor: pointer;
+  transition: filter var(--duration-fast) var(--ease-standard);
+}
+
+.fr-cta:hover {
+  background: var(--color-accent-strong);
+  border-color: var(--color-accent-strong);
+}
+
+.fr-foot {
+  flex: none;
+  display: flex;
+  justify-content: space-between;
+  padding: 0 18px 12px;
+  font-family: var(--font-mono);
+  font-size: 9.5px;
+  color: var(--color-text-subtle);
+}
+
+/* Loading — while the completion flag is read over IPC. */
+.fr-boot {
+  height: 100%;
+  display: grid;
+  place-items: center;
+  background: var(--color-bg);
+}
+
+.fr-boot__spin {
+  width: 20px;
+  height: 20px;
+  border-radius: 50%;
+  border: 2px solid var(--color-border-strong);
+  border-top-color: var(--color-accent);
+  animation: fr-spin 0.7s linear infinite;
+}
+
+@keyframes fr-spin {
+  to {
+    transform: rotate(360deg);
+  }
+}
+
+:root[data-reduce-motion="always"] .fr-boot__spin {
+  animation: none;
+}

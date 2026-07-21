@@ -8,18 +8,21 @@ import { CHANNELS, isAllowedChannel } from "@0x-copilot/chat-transport";
 // preload sandbox.
 import { isCapabilityChannel } from "../main/capabilities/channels";
 import { isConnectorChannel } from "../main/connectors/channels";
+import { isFirstRunChannel } from "../main/services/first-run-channels";
 import { isSecureStorageChannel } from "../main/services/secure-storage-channels";
 
 import type { WindowBridge } from "./window-bridge-types";
 
 // The full set of channels the renderer may reach over the bridge: the shared
-// transport/auth channels plus the app-local capability + connector channels.
+// transport/auth channels plus the app-local capability + connector +
+// secure-storage + first-run channels.
 function isBridgeChannel(channel: string): boolean {
   return (
     isAllowedChannel(channel) ||
     isCapabilityChannel(channel) ||
     isConnectorChannel(channel) ||
-    isSecureStorageChannel(channel)
+    isSecureStorageChannel(channel) ||
+    isFirstRunChannel(channel)
   );
 }
 
