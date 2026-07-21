@@ -81,8 +81,43 @@ export COPILOT_DESKTOP_FILE_STORE_V1=1
 
 `--org-id` / `--user-id` are paired positionally and repeatable to migrate
 several tenants. On the single_user_desktop profile there is exactly one scope.
-(The scope flags are required for a Postgres source; an in-memory/file source can
-auto-discover scopes from its loaded conversations.)
+The scope flags are **optional for every source**: omit them and the migrator
+auto-discovers scopes — a Postgres source via
+`SELECT DISTINCT org_id, user_id FROM agent_conversations`
+(`PostgresRuntimeApiStore.list_conversation_scopes`), an in-memory/file source
+from its loaded conversations. Pass explicit scopes only to migrate a subset.
+
+## Automatic first-boot migration (`--on-boot`)
+
+For an unattended desktop first-file-boot, the migration runs itself. The
+`--on-boot` mode forces a Postgres source, auto-discovers **every** tenant scope
+(no `--org-id`/`--user-id`), migrates + verifies, and treats a fresh install with
+no AI schema as a clean no-op:
+
+```bash
+.venv/bin/python -m runtime_adapters.migrate \
+  --on-boot --source postgres --source-database-url "$AI_BACKEND_DATABASE_URL" \
+  --dest-root "$HOME/Library/Application Support/<app>/agent-data/v1"
+```
+
+Its exit code is a **fail-safe contract** for the desktop supervisor:
+
+| Exit | Meaning                                        | Supervisor action               |
+| ---- | ---------------------------------------------- | ------------------------------- |
+| `0`  | Migrated, or nothing to migrate (empty source) | Serve the **file** store        |
+| `2`  | Verify mismatch — import is not trustworthy    | Fall back to the Postgres store |
+| `1`  | Any other failure (unreachable source, disk)   | Fall back to the Postgres store |
+
+The supervisor only invokes `--on-boot` when it is safe to do so — the app is
+booting on the file store, the file store root is empty/new, and no prior boot
+has already migrated (a marker file inside the store root records completion).
+That gate is a pure decision (`apps/desktop/main/services/migration-policy.ts`
+`resolveMigrationDecision`); the impure detection (fs-empty probe, Postgres
+row-count, marker read) and the boot-step wiring + fallback live in the desktop
+supervisor. **Status:** the engine (`--on-boot`, Postgres scope discovery) and the
+boot-policy resolver have shipped; the supervisor boot-step wiring is the next
+step (see the tracking PR). Until it lands, run `--on-boot` (or the scoped flow
+above) manually to carry an existing install's history across.
 
 ## Guarantees & limits
 
