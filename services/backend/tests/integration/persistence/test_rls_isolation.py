@@ -126,11 +126,13 @@ class TestRlsRolesPolicy:
         with admin_conn.cursor() as cur:
             cur.execute(
                 """
-                INSERT INTO roles (role_id, org_id, name, description, system_managed,
-                                   permissions, created_at, updated_at)
-                VALUES (%s, NULL, %s, 'system role', TRUE, '[]'::jsonb, %s, %s)
+                INSERT INTO roles (role_id, org_id, name, display_name,
+                                   description, is_system, permission_scopes,
+                                   created_at, updated_at)
+                VALUES (%s, NULL, %s, %s, 'system role', TRUE, '[]'::jsonb,
+                        %s, %s)
                 """,
-                (role_id, f"sys-{role_id}", now, now),
+                (role_id, f"sys-{role_id}", f"sys-{role_id}", now, now),
             )
 
         try:
