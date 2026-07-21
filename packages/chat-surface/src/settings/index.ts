@@ -175,6 +175,27 @@ export {
   type ProviderKeyValidation,
 } from "./data/providerKeys";
 // === end Phase 5 (PR-5.4) ===
+// === Phase 5 (PR-3D) — Models curation (Settings → Models) ===
+// The page reads the live catalog + persists the enabled set through an
+// injected `ModelsPort` (default: `createModelsPort(transport)`), which
+// read-merge-writes the workspace-defaults `enabled_models`.
+export {
+  ModelsPage,
+  MODELS_PAGE_NOTE,
+  type ModelsPageProps,
+} from "./ModelsPage";
+export {
+  createModelsPort,
+  groupModelsByProvider,
+  filterModels,
+  providerLabel,
+  priceLabel,
+  contextLabel,
+  type ModelsPort,
+  type CatalogModel,
+  type ModelGroup,
+} from "./data/models";
+// === end Phase 5 (PR-5.4) ===
 
 // === Phase 5 (PR-5.7) — Data & privacy (retention / memory / export / delete) ===
 // PrivacyPage fills the "privacy" SettingsSurface slot. Controlled +

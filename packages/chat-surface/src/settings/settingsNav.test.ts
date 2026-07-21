@@ -79,6 +79,7 @@ describe("settingsNav — group structure (FR-5.2)", () => {
     ]);
     expect(byId.models.items.map((i) => i.id)).toEqual([
       "provider-keys",
+      "models",
       "local-models",
       "model-behavior",
     ]);
