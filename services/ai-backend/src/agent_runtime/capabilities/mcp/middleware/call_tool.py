@@ -35,6 +35,10 @@ from agent_runtime.capabilities.mcp.outcomes import McpToolCallOutcome
 from agent_runtime.capabilities.mcp.permissions import McpPermissionPolicy
 from agent_runtime.capabilities.mcp.registry import DynamicMcpRegistry
 from agent_runtime.capabilities.surfaces.config import SurfaceEmissionFlag
+from agent_runtime.capabilities.surfaces.generator import (
+    GenToolDescriptor,
+    SurfaceGenerationScheduler,
+)
 from agent_runtime.capabilities.surfaces.projector import SurfaceProjector
 from agent_runtime.execution.contracts import AgentRuntimeContext
 
@@ -238,18 +242,23 @@ class CallMcpTool:
         """Attach ``surface`` + top-level ``surface_uri`` to a success result.
 
         No-ops when emission is disabled (byte-compatible payload) or when the
-        projector declines (non-mapping output). Any exception is logged and
-        swallowed — surface projection is display-only and never blocks a tool.
+        projector declines (non-mapping output). When a run-scoped generation
+        scheduler is bound (only when ``SURFACE_SPEC_MODEL`` is set), the
+        projector shares its store for rung-2 cache reads and schedules async
+        generation on a ladder miss. Any exception is logged and swallowed —
+        surface projection is display-only and never blocks a tool.
         """
 
         if not SurfaceEmissionFlag.enabled():
             return
         try:
-            envelope = SurfaceProjector().resolve(
+            projector, tool_descriptor = CallMcpTool._surface_projector(tool_name)
+            envelope = projector.resolve(
                 server_name,
                 tool_name,
                 output,
                 call_id=call_id or None,
+                tool_descriptor=tool_descriptor,
             )
             if envelope is None:
                 return
@@ -262,6 +271,25 @@ class CallMcpTool:
                 tool_name,
                 exc_info=True,
             )
+
+    @staticmethod
+    def _surface_projector(
+        tool_name: str,
+    ) -> tuple[SurfaceProjector, GenToolDescriptor | None]:
+        """Build the projector for this call, wiring generation when it is on.
+
+        With no active scheduler (generation disabled), returns a bare projector
+        — byte-for-byte the pre-PRD-07 behaviour. With one bound, shares its
+        store for cache reads and passes a minimal tool descriptor for the prompt.
+        """
+
+        scheduler = SurfaceGenerationScheduler.active()
+        if scheduler is None:
+            return (SurfaceProjector(), None)
+        return (
+            SurfaceProjector(store=scheduler.store, scheduler=scheduler),
+            GenToolDescriptor(name=tool_name),
+        )
 
     async def __call__(
         self,

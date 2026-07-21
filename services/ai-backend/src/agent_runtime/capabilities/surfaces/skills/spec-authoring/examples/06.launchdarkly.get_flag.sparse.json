@@ -1,0 +1,29 @@
+{
+  "tool_descriptor": {
+    "name": "get_flag",
+    "description": "Fetch a single feature flag.",
+    "input_schema": {
+      "type": "object",
+      "properties": { "key": { "type": "string" } }
+    },
+    "output_shape": {
+      "type": "object",
+      "properties": { "flag": { "type": "object" } }
+    }
+  },
+  "sample_output": {
+    "flag": {
+      "key": "new-checkout",
+      "enabled": true
+    }
+  },
+  "spec": {
+    "spec_version": 1,
+    "archetype": "record",
+    "source": { "server": "seed:launchdarkly", "tool": "get_flag" },
+    "title_path": "flag.key",
+    "fields": [
+      { "label": "Enabled", "path": "flag.enabled", "format": "badge" }
+    ]
+  }
+}
