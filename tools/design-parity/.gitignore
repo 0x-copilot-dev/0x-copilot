@@ -1,2 +1,16 @@
 # Regenerable live renders (run: vitest --config tools/design-parity/vitest.config.mjs)
 surfaces/*/live/
+
+# Regenerable measurement artifacts. `extract-computed.js` emits the design-*/
+# live-* computed-style dumps and `compare.mjs` emits a JSON mirror of each
+# report — all reproducible from the committed design harness + anchors, and
+# noisy in review (tens of thousands of lines of getComputedStyle output).
+#
+# Deliberately still COMMITTED, because they are the durable record and are not
+# reproducible from the tree alone:
+#   surfaces/*/anchors.json        hand-authored design↔live selector map
+#   surfaces/*/out/findings.json   the ranked punch-list
+#   surfaces/*/out/*.md            the human-readable reports + FINDINGS
+surfaces/*/out/design-*.json
+surfaces/*/out/live-*.json
+surfaces/*/out/report*.json

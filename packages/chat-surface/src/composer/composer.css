@@ -171,7 +171,13 @@
 }
 
 .aui-composer {
-  --composer-padding: 0.5rem;
+  /* v3 `.cmp` is ONE box with NO padding of its own — the textarea
+   * (10px 12px 4px) and the action row (6px 8px 8px) own their insets, so the
+   * draft text sits flush against the shell edge. Kept in sync with
+   * `containerStyle` in Composer.tsx, which authors the same values inline
+   * (the inline shorthand is what actually paints; these are the readable
+   * copy for anyone styling the shell from CSS). */
+  --composer-padding: 0;
   /* v3 `.cmp{border-radius:11px}` — the 24px pill read as an oversized card
    * in the ~360px Run rail. */
   --composer-radius: 11px;
@@ -186,12 +192,14 @@
    * made the empty composer ~half the rail's width tall. */
   --composer-shell-height: auto;
   background: var(--color-bg);
-  border: 1px solid var(--color-border);
+  /* v3 `.cmp{border:1px solid var(--line2)}` — the .06 hairline was invisible
+   * against the rail ground. */
+  border: 1px solid var(--color-border-strong);
   border-radius: var(--composer-radius);
   box-shadow: none;
   display: flex;
   flex-direction: column;
-  gap: 0.5rem;
+  gap: 0;
   margin: var(--space-sm) auto 0;
   max-width: var(--chat-content-width);
   box-sizing: border-box;
@@ -221,9 +229,16 @@
   padding-right: 10px;
 }
 
+/* v3 `.cmp:focus-within{border-color:var(--line3)}` — a quiet darkening of the
+ * hairline, NOT an accent ring. The old accent border + 2px glow made the
+ * composer the loudest thing on the surface the moment it took focus.
+ *
+ * The border is authored inline by Composer.tsx (see `containerStyle`), so a
+ * plain `border-color` here would lose to it. Flipping the custom property the
+ * inline shorthand reads is how the darkening lands without `!important`. */
 .aui-composer:focus-within {
-  border-color: color-mix(in srgb, var(--color-accent) 75%, transparent);
-  box-shadow: 0 0 0 2px color-mix(in srgb, var(--color-accent) 20%, transparent);
+  --composer-shell-border: var(--color-border-stronger);
+  box-shadow: none;
 }
 
 .aui-composer__dropzone {
@@ -253,33 +268,28 @@
   display: none;
 }
 
+/* Design `.cmp-row{display:flex;align-items:center;gap:5px;padding:6px 8px 8px}`.
+ * The inset lives here because the shell is padding-free (see `.aui-composer`).
+ * No `justify-content` — the right cluster's own `margin-left:auto` does the
+ * pushing, exactly as the design's `.cmp-hint{margin-left:auto}` used to. */
 .aui-composer-action-wrapper {
   align-items: center;
   display: flex;
-  gap: var(--space-sm);
-  justify-content: space-between;
-  min-height: 2rem;
+  gap: 5px;
   min-width: 0;
+  padding: 6px 8px 8px;
   position: relative;
 }
 
-.aui-composer-focus-meta {
-  color: var(--color-text-muted);
-  flex: 0 1 auto;
-  font-size: var(--font-size-2xs);
-  font-weight: var(--font-weight-regular);
-  min-width: 0;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-
+/* The static hint row is gone (owner ruling), and with it the `margin-left:auto`
+ * that used to right-align this cluster — so it owns the push itself. */
 .aui-composer-action-wrapper__right {
   align-items: center;
   display: flex;
-  flex: 0 1 auto;
-  gap: var(--space-sm);
+  flex: 0 0 auto;
+  gap: 5px;
   justify-content: flex-end;
+  margin-left: auto;
   min-width: 0;
 }
 
@@ -311,23 +321,17 @@
   padding: 0 0.28rem;
 }
 
+/* Left cluster: [+] → connectors → tools → model → depth, at the design's
+ * single 5px rhythm (`.cmp-row{gap:5px}`) with no divider — the eye groups
+ * these by shape, not by a hairline. */
 .aui-composer-tools {
   align-items: center;
   display: flex;
-  flex: 1 1 auto;
+  flex: 0 1 auto;
   flex-wrap: nowrap;
-  gap: var(--space-sm);
+  gap: 5px;
   min-width: 0;
   overflow: hidden;
-}
-
-.aui-composer-tools-spacer {
-  background: color-mix(in srgb, var(--color-border) 70%, transparent);
-  display: inline-block;
-  flex-shrink: 0;
-  height: 1.2rem;
-  margin: 0 var(--space-xs);
-  width: 1px;
 }
 
 .aui-plus-menu-root {
@@ -335,31 +339,34 @@
   position: relative;
 }
 
-/* v3 control tier: 28px rounded-square icons (copilot-v3.css `.cmp-ic`/
- * `.cmp-send`), not the 32px pill-round buttons. */
+/* v3 control tier. These carry `.ui-cicon` / `.ui-csend` in the markup, but
+ * design-system/styles.css is imported BEFORE this file (see
+ * apps/desktop/renderer/bootstrap.tsx) and the recipes are the same 0,1,0
+ * specificity — so anything the recipe sets must be re-stated here at the SAME
+ * value, or this file silently wins with a stale one. That is exactly how
+ * `.aui-icon-button`'s 36px minimums used to beat the 28px tier.
+ *
+ * Icon tier — design `.cmp-ic`: 26px square, 7px radius, 14px glyph. */
 .aui-composer-add-attachment,
-.aui-composer-send {
-  border-radius: var(--radius-md);
-  font-size: var(--font-size-md);
-  height: 28px;
-  min-height: 28px;
-  min-width: 28px;
-  padding: 0.25rem;
-  width: 28px;
+.atlas-composer-mic {
+  border-radius: 7px;
+  flex: none;
+  height: 26px;
+  min-height: 26px;
+  min-width: 26px;
+  padding: 0;
+  width: 26px;
 }
 
-/* Mic (voice input, disabled placeholder). Ported from the web baseline
- * (apps/frontend/src/styles.css:2059). Without this the button falls back
- * to `.aui-icon-button` (36px, radius-md) and breaks the 28px pill tier —
- * it must sit 4px shorter than the 32px send/`+` action tier. Placed AFTER
- * `.aui-icon-button` (line 128) so its 28px sizing wins on equal specificity. */
-.atlas-composer-mic {
+/* Send tier — design `.cmp-send`: 28px square, 8px radius, 14px glyph. */
+.aui-composer-send {
+  border-radius: var(--radius-md);
+  flex: none;
   height: 28px;
-  width: 28px;
   min-height: 28px;
   min-width: 28px;
   padding: 0;
-  flex-shrink: 0;
+  width: 28px;
 }
 
 /* Model picker pill (ModelPill.tsx). Ported from the web baseline
@@ -376,42 +383,49 @@
   position: relative;
 }
 
+/* The design's `.cmp-pill`, i.e. the shared `.ui-cpill` recipe. Restated at
+ * IDENTICAL values rather than left to the recipe alone: this file loads after
+ * design-system/styles.css at equal specificity, so a divergent value here
+ * would quietly beat `.ui-cpill` on whichever properties it names. Change one,
+ * change both.
+ *
+ * The trigger is transparent-on-transparent at rest and fills with the quiet
+ * panel on hover/open — it is NOT an accent control. Metadata type is
+ * JetBrains Mono 10px, the "quiet system" signature separating technical
+ * chrome from body sans. */
 .atlas-model-pill {
   display: inline-flex;
   align-items: center;
-  gap: var(--space-xs);
+  gap: 6px;
   padding: 0 8px;
   height: 26px;
-  background: var(--color-surface);
-  border: 1px solid var(--color-border);
-  border-radius: var(--radius-md);
-  color: var(--color-text);
-  /* v3 `.cmp-pill` — metadata is set in JetBrains Mono at 10px, the "quiet
-   * system" signature that separates data/technical chrome from body sans. */
+  min-width: 0;
+  background: transparent;
+  border: 1px solid transparent;
+  border-radius: 7px;
+  color: var(--color-text-muted);
   font-family: var(--font-mono);
-  font-size: 10px;
-  font-weight: var(--font-weight-medium);
+  font-size: var(--font-size-mono-10);
+  font-weight: var(--font-weight-regular);
+  letter-spacing: var(--tracking-normal);
+  white-space: nowrap;
   cursor: pointer;
-  outline: none;
-  transition:
-    border-color 120ms ease,
-    box-shadow 120ms ease;
   max-width: 100%;
 }
 
-.atlas-model-pill:hover:not([disabled]) {
-  border-color: color-mix(
-    in oklab,
-    var(--color-accent) 50%,
-    var(--color-border)
-  );
+.atlas-model-pill:hover:not([disabled]),
+.atlas-model-pill[data-open],
+.atlas-model-pill[aria-expanded="true"] {
+  background: var(--color-surface-muted);
+  color: var(--color-text);
+  border-color: var(--color-border);
 }
 
-.atlas-model-pill:focus-visible,
-.atlas-model-pill[aria-expanded="true"] {
-  border-color: var(--color-accent);
-  box-shadow: 0 0 0 3px
-    color-mix(in oklab, var(--color-accent) 22%, transparent);
+/* Keyboard affordance only — the open state above is a fill, not a ring
+ * (the accent ring the live pill grew is the drift this removes). */
+.atlas-model-pill:focus-visible {
+  outline: 2px solid var(--color-focus-ring);
+  outline-offset: 1px;
 }
 
 .atlas-model-pill[disabled] {
@@ -773,106 +787,42 @@
   top: 0;
 }
 
-.aui-composer__hint {
-  align-items: center;
-  border-top: 1px solid color-mix(in srgb, var(--color-border) 40%, transparent);
-  color: var(--color-text-subtle);
-  display: flex;
-  /* Desktop-rail divergence from the web copy (`flex-wrap: wrap`): at the
-   * ~330px rail card width a wrapped second line lands under the 2rem
-   * max-height + overflow:hidden guillotine and renders as a sliver of
-   * sliced glyph tops. One line, always; the meta span ellipsizes. */
-  flex-wrap: nowrap;
-  font-size: var(--font-size-2xs);
-  font-weight: var(--font-weight-regular);
-  gap: 0.5rem;
-  line-height: var(--line-height-tight);
-  /* Tightened vertical padding (Phase 9): 0.45rem top/bottom was
-   * adding ~14px on top of the composer + footer paddings below. The
-   * hint is auxiliary info — 0.3rem reads as a footer-strip without
-   * crowding the kbd glyphs. */
-  max-height: 2rem;
-  overflow: hidden;
-  padding: 0.3rem 0.75rem 0.25rem;
-  transition:
-    border-color 160ms ease,
-    max-height 160ms ease,
-    opacity 120ms ease,
-    padding 160ms ease;
-}
+/* The static `.aui-composer__hint` row (and its `__hint-grow` / `__hint-meta` /
+ * `__hint-sep` / kbd chrome) was deleted with the row itself — AssistantComposer
+ * now passes `hintRender={() => null}`. Nothing emits these classes; the
+ * transient `.aui-composer-slash-cue` toast above is unrelated and stays. */
 
-.aui-composer[data-focused="true"] .aui-composer__hint {
-  border-top-color: transparent;
-  max-height: 0;
-  opacity: 0;
-  padding-bottom: 0;
-  padding-top: 0;
-  pointer-events: none;
-}
-
-.aui-composer__hint kbd {
-  background: var(--color-bg-elevated);
-  border: 1px solid color-mix(in srgb, var(--color-border) 70%, transparent);
-  border-bottom-width: 2px;
-  border-radius: 4px;
-  color: var(--color-text-muted);
-  font-family: var(--font-mono, ui-monospace, "SF Mono", Menlo, monospace);
-  font-size: var(--font-size-2xs);
-  margin: 0 0.1rem;
-  padding: 0.05rem 0.35rem;
-}
-
-.aui-composer__hint-sep {
-  background: color-mix(in srgb, var(--color-border) 60%, transparent);
-  display: inline-block;
-  height: 0.85rem;
-  width: 1px;
-}
-
-.aui-composer__hint-grow {
-  flex: 1 1 auto;
-}
-
-/* The kbd hints (↵ send · ⇧+↵ new line · / skills) are the primary content —
- * they never shrink; the meta span below is the sole shrink target. */
-.aui-composer__hint > span:not(.aui-composer__hint-meta) {
-  flex-shrink: 0;
-}
-
-.aui-composer__hint-meta {
-  color: var(--color-text-muted);
-  /* The meta line ("Sources cited inline") is the shrink target on narrow
-   * rails: truncate with an ellipsis rather than wrapping into the clipped
-   * second line (see the nowrap note on .aui-composer__hint). */
-  min-width: 0;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-
-/* Solid bright-accent square (design mock `.cmp-send`): filled accent at all
- * times so the send action reads as the primary control; disabled just dims the
- * same solid square (design `.cmp-send:disabled{opacity:.35}`) rather than
- * becoming a ghost tint. The `--stop` variant below stays quiet-tinted. */
+/* Solid bright-accent square (design `.cmp-send`): filled accent at all times so
+ * the send action reads as the primary control; disabled just dims the same
+ * solid square (design `.cmp-send:disabled{opacity:.35}`) rather than becoming a
+ * ghost tint. The `--stop` variant below stays quiet-tinted.
+ *
+ * Borderless: the design's send has `border:0`. The 1px accent border used to
+ * sit on an accent fill, which only ever read as a slightly darker rim.
+ *
+ * Sizing note (real bug): this rule set `min-height/min-width: 2rem` and, being
+ * LATER in the file at equal 0,1,0 specificity, beat `.aui-composer-send`'s
+ * 28px — so send rendered 32px inside a 26px row. Fixed at the source: the two
+ * rules no longer disagree (no `!important`, no specificity arms race). */
 .aui-send-button {
   align-items: center;
   background: var(--color-accent);
-  border: 1px solid var(--color-accent);
+  border: 0;
   border-radius: var(--radius-md);
-  color: var(--color-accent-contrast, white);
+  color: var(--color-accent-ink, var(--color-accent-contrast, white));
   cursor: pointer;
   display: inline-flex;
   font: inherit;
   font-weight: var(--font-weight-semibold);
+  height: 28px;
   justify-content: center;
-  min-height: 2rem;
-  min-width: 2rem;
-  padding: 0.25rem;
+  padding: 0;
   text-decoration: none;
   transition:
     color 120ms ease,
     border-color 120ms ease,
     background 120ms ease;
+  width: 28px;
 }
 
 .aui-send-button:hover:not([disabled]):not(.aui-send-button--stop) {
@@ -886,13 +836,16 @@
 
 .aui-send-button[disabled] {
   cursor: not-allowed;
-  /* Dim the solid square (mock `.cmp-send:disabled`), not a ghost tint. */
-  opacity: 0.4;
+  /* Dim the solid square (design `.cmp-send:disabled{opacity:.35}`), not a
+   * ghost tint. */
+  opacity: 0.35;
 }
 
+/* The stop variant keeps a rim — the base is borderless now, so it states the
+ * whole shorthand rather than a colour that would paint nothing. */
 .aui-send-button--stop {
   background: color-mix(in srgb, var(--color-accent) 18%, transparent);
-  border-color: color-mix(in srgb, var(--color-accent) 55%, transparent);
+  border: 1px solid color-mix(in srgb, var(--color-accent) 55%, transparent);
   color: var(--color-accent);
 }
 

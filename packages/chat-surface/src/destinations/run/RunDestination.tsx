@@ -540,15 +540,25 @@ export function RunDestination(props: RunDestinationProps): ReactElement {
     (request: RunStartRequest): Promise<void> => {
       const goal = request.goal.trim();
       const hasAttachments = (request.attachments?.length ?? 0) > 0;
-      // Readiness gate (Issue 1): never fire a start that is guaranteed to fail
-      // with a configuration error. The composer disables itself when
-      // `modelReady` is false; this guards the keyboard path too.
-      if (isStartingRun || !modelReady) {
+      if (isStartingRun) {
         return Promise.resolve();
       }
       // The rich composer may send with an attachment and no text; only a truly
       // empty submit (no goal AND no attachments) is a no-op.
       if (goal === "" && !hasAttachments) {
+        return Promise.resolve();
+      }
+      // Readiness gate (Issue 1): never fire a start that is guaranteed to fail
+      // with a configuration error. The composer stays LIVE with no model
+      // configured — pressing send must not be a silent no-op, so answer in the
+      // composer's OWN inline error strip (the design's `.fr-cerr`) with the
+      // `configuration_error` code that drives its "Add a key" CTA, and skip the
+      // doomed network call entirely.
+      if (!modelReady) {
+        setStartError({
+          message: "No model configured — connect one to run.",
+          code: "configuration_error",
+        });
         return Promise.resolve();
       }
       // Tag this attempt; the conversation-reset effect bumps the ref, so a
@@ -1174,6 +1184,12 @@ export function RunDestination(props: RunDestinationProps): ReactElement {
               data-testid="run-empty-composer"
               style={emptyComposerOuterStyle}
             >
+              {/* Readiness is NOT a standing notice here: the rich composer
+                  stays live with no model configured, and a send answers in the
+                  composer's own inline error strip (handleStartRun sets a
+                  `configuration_error` start error → "Add a key" CTA). The
+                  plain `RunEmptyState` fallback below keeps its own setup
+                  notice, since it has no inline-error idiom of its own. */}
               <div style={emptyComposerColumnStyle}>
                 {renderEmptyComposer({
                   onStartRun: handleStartRun,
@@ -1183,15 +1199,6 @@ export function RunDestination(props: RunDestinationProps): ReactElement {
                   modelReady,
                   onOpenModelSettings,
                 })}
-                {/* Readiness gate: no model configured yet. The composer above
-                    is disabled by the host (ctx.modelReady); this states why and
-                    offers the one action that unblocks a run. */}
-                {!modelReady ? (
-                  <RunModelSetupNotice
-                    agentName={agentName}
-                    onOpenModelSettings={onOpenModelSettings}
-                  />
-                ) : null}
               </div>
             </div>
           ) : (
@@ -1468,45 +1475,6 @@ function RunFollowLiveBanner(props: RunFollowLiveBannerProps): ReactElement {
 }
 
 // ============================================================
-// Readiness gate — "connect a model" notice (rich empty composer)
-// ============================================================
-//
-// FR-1.x: the rich empty composer (`renderEmptyComposer`) always renders the
-// design's "What should we run first?" surface, but a run needs a usable model.
-// When none is configured the host disables the composer (ctx.modelReady) and
-// this honest note states why + offers the one action that unblocks a run,
-// rather than letting the user fire a start guaranteed to fail with a
-// configuration error. Mirrors `RunEmptyState`'s setup notice, restyled to sit
-// under the composer in the design frame.
-
-interface RunModelSetupNoticeProps {
-  readonly agentName?: string;
-  readonly onOpenModelSettings?: () => void;
-}
-
-function RunModelSetupNotice(props: RunModelSetupNoticeProps): ReactElement {
-  const { agentName = "the agent", onOpenModelSettings } = props;
-  return (
-    <div data-testid="run-empty-setup" role="note" style={setupNoticeStyle}>
-      <p style={setupNoticeTextStyle}>
-        Before {agentName} can run, connect a model — a cloud API key (OpenAI,
-        Anthropic, Google) or a local model. It takes a minute.
-      </p>
-      {onOpenModelSettings !== undefined ? (
-        <button
-          type="button"
-          data-testid="run-empty-setup-cta"
-          style={setupNoticeCtaStyle}
-          onClick={onOpenModelSettings}
-        >
-          Set up your model
-        </button>
-      ) : null}
-    </div>
-  );
-}
-
-// ============================================================
 // Styles (design-system tokens only)
 // ============================================================
 
@@ -1532,37 +1500,6 @@ const emptyComposerColumnStyle: CSSProperties = {
   width: "min(640px, 92%)",
   margin: "0 auto",
   padding: "22px 0",
-};
-
-const setupNoticeStyle: CSSProperties = {
-  display: "flex",
-  flexDirection: "column",
-  alignItems: "flex-start",
-  gap: 10,
-  padding: "12px 14px",
-  borderRadius: 10,
-  background: "var(--color-bg-elevated, #16181f)",
-  border: "1px solid var(--color-border, #2a2d31)",
-};
-
-const setupNoticeTextStyle: CSSProperties = {
-  margin: 0,
-  fontSize: "var(--font-size-sm, 13px)",
-  lineHeight: 1.5,
-  color: "var(--color-text, #f4f5f6)",
-};
-
-const setupNoticeCtaStyle: CSSProperties = {
-  alignSelf: "flex-start",
-  background: "var(--color-accent, #5fb2ec)",
-  color: "var(--color-accent-contrast, #08131d)",
-  border: "1px solid var(--color-accent, #5fb2ec)",
-  borderRadius: 8,
-  padding: "6px 14px",
-  fontSize: "var(--font-size-xs, 12px)",
-  fontWeight: 600,
-  cursor: "pointer",
-  fontFamily: "inherit",
 };
 
 const rootStyle: CSSProperties = {

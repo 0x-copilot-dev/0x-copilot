@@ -11,9 +11,9 @@
 // The cockpit owns the empty→live seam: on send this calls `ctx.onStartRun` with
 // the full selection (goal + model + attachments + web-search), and the cockpit
 // binds the fresh run via the `runId` seam WITHOUT remounting the shell
-// (FR-3.25). Submitting / error / readiness come down through `ctx` so the
-// composer disables, surfaces the actionable start error, and defers to the
-// "Set up your model" notice when no model is configured.
+// (FR-3.25). Submitting / error / readiness come down through `ctx`: the
+// composer only disables while a start is in flight, and an unconfigured model
+// surfaces as this composer's own inline error strip + "Add a key" CTA.
 
 import { useCallback, type ReactElement } from "react";
 
@@ -185,9 +185,12 @@ export function RunEmptyComposer(props: RunEmptyComposerProps): ReactElement {
       onDismissError={ctx.dismissError}
       // A configuration_error's "Add a key" CTA deep-links to Provider keys.
       onAddKey={ctx.onOpenModelSettings}
-      // Inert while a run is starting OR no model is configured yet — the
-      // cockpit's "Set up your model" notice below carries the setup CTA.
-      disabled={ctx.submitting || !ctx.modelReady}
+      // Inert ONLY while a run is starting. With no model configured the
+      // composer stays LIVE — the user can type and send, and the cockpit
+      // answers in this composer's own inline error strip (a
+      // `configuration_error` start error → "Add a key"), rather than greying
+      // the surface out behind a standing notice.
+      disabled={ctx.submitting}
     />
   );
 }
