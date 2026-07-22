@@ -1309,6 +1309,17 @@ export { type TcChatApproval } from "./thread-canvas";
 export type { McpAuthPort } from "./destinations/run";
 // === end WC-P5a (MCP-OAuth chat-surface half) ===
 
+// === WC-P6a — citation projection (in-chat chip resolution, AD-11) ===
+// `projectCitations` is a PURE selector over the single canonical run event
+// stream (a peer of `projectSubagents` / `projectApprovals`) — no second SSE
+// subscription / projector (FR-3.3). It reduces `session.events` into the run-
+// scoped `CitationsProvider` inputs (`[c<id>]` source registry + `[[N]]` link
+// registry + active/terminal run ids). `RunDestination` performs the wiring
+// (mounts the provider around the single TcChat, threads `markdownComponents`);
+// the host supplies the nav-aware chip renderer + `onOrdinalSelect`.
+export { projectCitations, type CitationProjection } from "./destinations/run";
+// === end WC-P6a ===
+
 // === Phase 3 (PR-3.11) run empty/multi-run ===
 // The two prototype-gap states `RunDestination` mounts internally: the
 // empty/idle goal composer (`RunEmptyState`, FR-3.25 — shown when the

@@ -50,6 +50,9 @@ import type { CompletedMcpAuthAction } from "../chat/mcpAuthAction";
 import { createWebMcpAuthPort } from "./webMcpAuthPort";
 import { RunComposer } from "./RunComposer";
 import { RunEmptyComposer } from "./RunEmptyComposer";
+// WC-P6a: the web citation chip renderer, threaded into the cockpit so in-chat
+// `[[N]]` / `[c<id>]` chips resolve against the `projectCitations` provider.
+import { runMarkdownComponents } from "./runMarkdownComponents";
 
 // The shared FTUE / onboarding-composer styles (hero · starter chips ·
 // composer). The empty-state composer reuses these `.fr-*` classes; import them
@@ -373,6 +376,10 @@ export function RunRoute({
         renderComposer={renderComposer}
         renderEmptyComposer={renderEmptyComposer}
         mcpAuthPort={mcpAuthPort}
+        // WC-P6a (AD-11): in-chat citation chips. The cockpit mounts the
+        // CitationsProvider (fed by projectCitations over session.events); these
+        // host wrappers resolve `[[N]]` / `[c<id>]` chips against it.
+        markdownComponents={runMarkdownComponents}
       />
     </section>
   );

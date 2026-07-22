@@ -70,6 +70,15 @@ import {
   humanTransportMessage,
   parseTransportError,
 } from "../../errors/transportError";
+// WC-P6a (AD-11): the run-scoped citation registry provider + the pure projection
+// that feeds it. `projectCitations` is a peer of `projectSubagents` /
+// `projectApprovals` — a pure selector over the SAME `session.events`, no second
+// SSE subscription / projector (FR-3.3). The provider is mounted around the single
+// TcChat so the host-supplied chip renderer (`markdownComponents`) resolves
+// `[[N]]` / `[c<id>]` chips against it; the chip node + nav stay host-owned.
+import { CitationsProvider } from "../../citations/CitationsContext";
+import type { MarkdownTextProps } from "../../messages/MarkdownText";
+import { projectCitations } from "./projectCitations";
 // PRD-09c: the host-owned edit-on-surface overlay. Mounted OVER the pure adapter
 // via ThreadCanvas.editSlot → TcSurfaceMount; its submit reuses resolveApproval.
 import { EditOverlay } from "../../surfaces/edit/EditOverlay";
@@ -294,6 +303,23 @@ export interface RunDestinationProps {
    * stash / `/mcp/oauth/callback` route stay host-owned (NFR-5).
    */
   readonly mcpAuthPort?: McpAuthPort;
+  /**
+   * WC-P6a (AD-11): the host-supplied markdown chip renderer, forwarded verbatim
+   * to the in-chat `TcChat` (its `components.a` slot routes the citation-remark
+   * plugin's `#cite-ord:` / `#cite:` anchors to the host's chip dispatcher). The
+   * cockpit mounts a `CitationsProvider` (fed by the pure `projectCitations`
+   * selector) around that TcChat, so the host chip wrappers resolve `[[N]]` /
+   * `[c<id>]` chips against the single event projection. Omitted → assistant
+   * markdown renders without resolved chips (unchanged from before).
+   */
+  readonly markdownComponents?: MarkdownTextProps["components"];
+  /**
+   * WC-P6a: optional nav callback fired when an `[[N]]` chip is clicked, with the
+   * resolved synthetic `citation_id` (`tool:<source_tool_call_id>`). Host-owned
+   * (nav is substrate) so the package never navigates; omitted → the chip falls
+   * back to plain anchor navigation (`#tool-call-<callId>`).
+   */
+  readonly onOrdinalSelect?: (citationId: string) => void;
 }
 
 export function RunDestination(props: RunDestinationProps): ReactElement {
@@ -309,6 +335,8 @@ export function RunDestination(props: RunDestinationProps): ReactElement {
     renderComposer,
     renderEmptyComposer,
     mcpAuthPort,
+    markdownComponents,
+    onOrdinalSelect,
   } = props;
 
   const transport = useTransport();
@@ -674,6 +702,15 @@ export function RunDestination(props: RunDestinationProps): ReactElement {
     [session.events],
   );
 
+  // WC-P6a (AD-11): the run-scoped citation registries, projected off the SAME
+  // `session.events` (FR-3.3 — no second subscription/projector). Feeds the
+  // `CitationsProvider` mounted around the single TcChat so the host chip
+  // renderer resolves `[[N]]` / `[c<id>]` chips against it.
+  const citationProjection = useMemo(
+    () => projectCitations(session.events),
+    [session.events],
+  );
+
   // The chat transcript: persisted history ⊕ the live streamed reply, projected
   // off the SAME single event stream (FR-3.3). This binder closes the streaming
   // gap — previously `projection.chat` was computed and dropped and TcChat
@@ -982,24 +1019,42 @@ export function RunDestination(props: RunDestinationProps): ReactElement {
   );
 
   const chatSlot = (
-    <TcChat
-      conversationId={conversationId as unknown as string}
-      mode={mode}
-      messages={transcriptMessages}
-      fleets={subagentProjection.fleets}
-      // PR-3.10: in-chat ApprovalCard (Studio) / conf-card (Focus) + receipts.
-      approvals={chatApprovals}
-      onApprove={handleApprove}
-      onReject={handleReject}
-      // WC-P5a (AD-6/AD-7): the MCP-OAuth launcher. TcChat renders the Connect
-      // card (→ this port) for `mcp_auth` gates / `mcp_discovery:` suggestions
-      // instead of Approve/Reject, keeping them off the `/decision` POST. Absent
-      // → the card renders inert (host wires the launcher in P5b).
-      mcpAuthPort={mcpAuthPort}
-      // Host composer seam: desktop mounts the full AssistantComposer here. The
-      // dispatch-injecting wrapper (§D3) makes its send bind the live session.
-      renderComposer={renderComposerWithDispatch}
-    />
+    // WC-P6a (AD-11): the citation registry provider wraps the ONE TcChat so the
+    // host-supplied `markdownComponents` chip wrappers resolve chips against the
+    // pure `projectCitations` output. The provider component is substrate-agnostic
+    // (pure React context); the nav-aware chip node + `onOrdinalSelect` stay
+    // host-owned. Omitting `markdownComponents` leaves chips unresolved (chip
+    // wrappers read the same context either way, so mounting it is always safe).
+    <CitationsProvider
+      citations={citationProjection.citations}
+      byRun={citationProjection.byRun}
+      terminalRuns={citationProjection.terminalRuns}
+      linksByRun={citationProjection.linksByRun}
+      activeRunId={citationProjection.activeRunId}
+      {...(onOrdinalSelect !== undefined ? { onOrdinalSelect } : {})}
+    >
+      <TcChat
+        conversationId={conversationId as unknown as string}
+        mode={mode}
+        messages={transcriptMessages}
+        // WC-P6a: the host chip dispatcher (`{ a: MarkdownLink }`) — resolves
+        // `[[N]]` / `[c<id>]` anchors against the provider above.
+        markdownComponents={markdownComponents}
+        fleets={subagentProjection.fleets}
+        // PR-3.10: in-chat ApprovalCard (Studio) / conf-card (Focus) + receipts.
+        approvals={chatApprovals}
+        onApprove={handleApprove}
+        onReject={handleReject}
+        // WC-P5a (AD-6/AD-7): the MCP-OAuth launcher. TcChat renders the Connect
+        // card (→ this port) for `mcp_auth` gates / `mcp_discovery:` suggestions
+        // instead of Approve/Reject, keeping them off the `/decision` POST. Absent
+        // → the card renders inert (host wires the launcher in P5b).
+        mcpAuthPort={mcpAuthPort}
+        // Host composer seam: desktop mounts the full AssistantComposer here. The
+        // dispatch-injecting wrapper (§D3) makes its send bind the live session.
+        renderComposer={renderComposerWithDispatch}
+      />
+    </CitationsProvider>
   );
   // PR-3.7 (FR-3.15/3.16): while scrubbed off-now, `scrubbed` tells the rail to
   // suppress the Approvals tab — you cannot approve a past state; snap-to-now
