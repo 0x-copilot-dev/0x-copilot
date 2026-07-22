@@ -322,6 +322,13 @@ export function RunDestination(props: RunDestinationProps): ReactElement {
   // no items-scan auto-resume, so head-resolution (`prev ?? head`, once per
   // conversation) can never re-bind the run anyway.
   const [cancellingRunId, setCancellingRunId] = useState<string | null>(null);
+  // WC-P4 (AD-9): the just-sent user turn, echoed optimistically in the
+  // transcript from dispatch until the run-start re-seed absorbs the persisted
+  // turn. Set here (the ONE dispatch), read by useRunTranscript; not rolled back
+  // on a failed send (the re-seed / next dispatch replaces it, the reset clears).
+  const [pendingUserMessage, setPendingUserMessage] = useState<string | null>(
+    null,
+  );
 
   // Monotonic token identifying the current start attempt. Bumped whenever the
   // conversation resets (below), so an in-flight start's async continuation can
@@ -343,6 +350,8 @@ export function RunDestination(props: RunDestinationProps): ReactElement {
     setStartError(null);
     // WC-P3: never carry an optimistic cancel across conversations.
     setCancellingRunId(null);
+    // WC-P4: never echo a prior conversation's user turn into a new one.
+    setPendingUserMessage(null);
     // PRD-04: a new conversation starts from a clean surface strip.
     setPinnedUri(null);
     setClosedUris(EMPTY_CLOSED_URIS);
@@ -488,6 +497,9 @@ export function RunDestination(props: RunDestinationProps): ReactElement {
       // Bridge the header until the run list re-resolves; an attachment-only
       // start has no goal text, so leave it null (→ "Untitled run" fallback).
       setStartedGoal(goal !== "" ? goal : null);
+      // WC-P4 (AD-9): echo the user's turn into the transcript at once, so the
+      // send is never a beat of silence before the run-start re-seed lands.
+      setPendingUserMessage(goal !== "" ? goal : null);
       const normalized: RunStartRequest = { ...request, goal };
       const start = onStartRun
         ? Promise.resolve(onStartRun(normalized))
@@ -653,6 +665,8 @@ export function RunDestination(props: RunDestinationProps): ReactElement {
     runId: session.runId,
     runStatus: session.runStatus,
     events: session.events,
+    // WC-P4 (AD-9): optimistic user echo until the run-start re-seed absorbs it.
+    pendingUserMessage,
   });
 
   // The Sources tab: persisted citations (GET /sources) ⊕ the live

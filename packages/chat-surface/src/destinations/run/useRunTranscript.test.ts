@@ -149,4 +149,63 @@ describe("useRunTranscript", () => {
       expect(result.current.messages[1].message_id).toBe("a1");
     });
   });
+
+  // WC-P4 (AD-9): optimistic user echo.
+  it("echoes the pending user message at the tail before the re-seed absorbs it", async () => {
+    const historyRef = {
+      current: {
+        messages: [
+          { message_id: "u1", role: "user", content_text: "do it" },
+          { message_id: "a1", role: "assistant", content_text: "done" },
+        ],
+      },
+    };
+    const { result } = renderHook(
+      () =>
+        useRunTranscript({
+          conversationId: "c",
+          // A run is bound (turn-N send) but the re-seed hasn't landed yet and no
+          // reply has streamed — the echo bridges that beat at the tail.
+          runId: "r-prev",
+          runStatus: "running",
+          events: [],
+          pendingUserMessage: "follow up",
+        }),
+      { wrapper: wrapper(makeTransport(historyRef)) },
+    );
+
+    await waitFor(() => expect(result.current.messages).toHaveLength(3));
+    const echo = result.current.messages[2];
+    expect(echo.role).toBe("user");
+    expect(echo.parts[0].text).toBe("follow up");
+  });
+
+  it("drops the echo once the re-seed carries the persisted user turn (no duplicate)", async () => {
+    const historyRef = {
+      current: {
+        // The run-start re-seed already absorbed the user's turn.
+        messages: [
+          { message_id: "u1", role: "user", content_text: "do it" },
+          { message_id: "u2", role: "user", content_text: "follow up" },
+        ],
+      },
+    };
+    const { result } = renderHook(
+      () =>
+        useRunTranscript({
+          conversationId: "c",
+          runId: "r2",
+          runStatus: "running",
+          events: [],
+          pendingUserMessage: "follow up",
+        }),
+      { wrapper: wrapper(makeTransport(historyRef)) },
+    );
+
+    // History has 2 messages; the echo must NOT add a 3rd (deduped).
+    await waitFor(() => expect(result.current.messages).toHaveLength(2));
+    expect(
+      result.current.messages.filter((m) => m.role === "user"),
+    ).toHaveLength(2);
+  });
 });

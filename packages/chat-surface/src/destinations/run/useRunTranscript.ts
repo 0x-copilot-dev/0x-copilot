@@ -45,6 +45,12 @@ const ACTIVE_RUN_STATUSES: ReadonlySet<AgentRunStatus> = new Set([
   "cancelling",
 ]);
 
+// WC-P4 (AD-9): stable id for the optimistic user echo. The projection never
+// emits user turns and the run stream carries none, so a freshly sent user
+// message would not appear until the run-start history re-seed lands — a beat of
+// "did my message send?" silence. The echo bridges that beat.
+const PENDING_USER_ECHO_ID = "pending-user-echo";
+
 export interface UseRunTranscriptOptions {
   readonly conversationId: string;
   /** Active run id (null = no run bound yet). Drives the re-seed boundary. */
@@ -53,6 +59,14 @@ export interface UseRunTranscriptOptions {
   readonly runStatus: AgentRunStatus | null;
   /** The single run event array (useRunSession.events). */
   readonly events: readonly RuntimeEventEnvelope[];
+  /**
+   * WC-P4 (AD-9) — the just-sent user turn, echoed optimistically at the tail
+   * (before the live reply) from the moment of dispatch until the run-start
+   * re-seed absorbs the persisted turn. Deduped against that re-seed (dropped
+   * once history's last user turn carries this text) and never rolled back on a
+   * failed send. Null/empty ⇒ no echo (e.g. an attachment-only send).
+   */
+  readonly pendingUserMessage?: string | null;
 }
 
 export interface UseRunTranscriptResult {
@@ -76,7 +90,8 @@ function isStreaming(message: TcChatMessage): boolean {
 export function useRunTranscript(
   options: UseRunTranscriptOptions,
 ): UseRunTranscriptResult {
-  const { conversationId, runId, runStatus, events } = options;
+  const { conversationId, runId, runStatus, events, pendingUserMessage } =
+    options;
   const transport = useTransport();
 
   const [history, setHistory] = useState<readonly TcChatMessage[]>([]);
@@ -128,23 +143,59 @@ export function useRunTranscript(
   const live = useMemo(() => projectChatMessages(events), [events]);
 
   const messages = useMemo<readonly TcChatMessage[]>(() => {
+    // The live in-flight reply to append after history (empty until the run
+    // streams, or dropped once the terminal re-seed already persisted it).
     const overlay = runId !== null && settledRunId !== runId;
-    if (!overlay || live.length === 0) {
+    let liveTail: readonly TcChatMessage[] = [];
+    if (overlay && live.length > 0) {
+      const liveMessage = live[0];
+      const last = history[history.length - 1];
+      // Already persisted (opening a completed run, or a race where the terminal
+      // re-seed beat the overlay drop): a finished reply whose text history's
+      // last assistant message already carries — don't double it.
+      const alreadyPersisted =
+        last !== undefined &&
+        last.role === "assistant" &&
+        !isStreaming(liveMessage) &&
+        messageText(liveMessage) !== "" &&
+        messageText(last) === messageText(liveMessage);
+      liveTail = alreadyPersisted ? [] : live;
+    }
+
+    // WC-P4 (AD-9): the optimistic user echo sits BETWEEN history and the live
+    // reply (a user turn precedes its assistant answer). Deduped against the
+    // run-start re-seed — once history's last user turn already carries this
+    // text, the persisted turn owns it and the echo drops (no duplicate).
+    //
+    // Gated on `runId !== null`: the echo shows only once a run is bound (i.e.
+    // the live transcript is on screen). A turn-1 send from the empty composer
+    // has runId=null until its run binds, and the cockpit's empty-state gate is
+    // transcript-emptiness aware — echoing pre-bind would flash the cockpit out
+    // of the "What should we run?" state (and strand a failed start with no
+    // error). Once the run binds, runId flips non-null and the echo appears
+    // exactly as the transcript becomes visible.
+    const echoText = runId !== null ? (pendingUserMessage?.trim() ?? "") : "";
+    let echo: readonly TcChatMessage[] = [];
+    if (echoText !== "") {
+      const lastUser = [...history].reverse().find((m) => m.role === "user");
+      const alreadyPersisted =
+        lastUser !== undefined && messageText(lastUser) === echoText;
+      if (!alreadyPersisted) {
+        echo = [
+          {
+            message_id: PENDING_USER_ECHO_ID,
+            role: "user",
+            parts: [{ type: "text", text: echoText }],
+          },
+        ];
+      }
+    }
+
+    if (echo.length === 0 && liveTail.length === 0) {
       return history;
     }
-    const liveMessage = live[0];
-    const last = history[history.length - 1];
-    // Already persisted (opening a completed run, or a race where the terminal
-    // re-seed beat the overlay drop): a finished reply whose text history's last
-    // assistant message already carries — don't double it.
-    const alreadyPersisted =
-      last !== undefined &&
-      last.role === "assistant" &&
-      !isStreaming(liveMessage) &&
-      messageText(liveMessage) !== "" &&
-      messageText(last) === messageText(liveMessage);
-    return alreadyPersisted ? history : [...history, ...live];
-  }, [history, live, runId, settledRunId]);
+    return [...history, ...echo, ...liveTail];
+  }, [history, live, runId, settledRunId, pendingUserMessage]);
 
   return { messages };
 }
