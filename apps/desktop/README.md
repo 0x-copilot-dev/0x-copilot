@@ -2,11 +2,16 @@
 
 [![ci-desktop](https://github.com/0x-copilot-dev/0x-copilot/actions/workflows/ci-desktop.yml/badge.svg)](https://github.com/0x-copilot-dev/0x-copilot/actions/workflows/ci-desktop.yml)
 
-0xCopilot Electron desktop client. The original 8-phase Atlas plan lives in
-[docs/plan/desktop/PRD.md](../../docs/plan/desktop/PRD.md); the shipped shell
-is the **6-destination solo redesign** —
-[docs/plan/desktop-redesign/PLAN.md](../../docs/plan/desktop-redesign/PLAN.md)
-is the current source of truth.
+The 0xCopilot desktop client. It is an Electron app that runs the whole
+0xCopilot stack on your own machine: it starts an embedded PostgreSQL database
+and the three backend services locally, then shows the chat workspace in a
+native window. Your runtime, data, and activity history stay on the device.
+
+**If you just want to install and use 0xCopilot,** you don't need this
+document — install it from your terminal with the
+[`@0x-copilot/cli`](../../tools/cli/README.md) package (`npm install -g
+@0x-copilot/cli`, then `copilot`). This README is a reference for developers
+working on or building the desktop app itself.
 
 ## Layout
 
@@ -18,17 +23,17 @@ out/          esbuild output (main/, preload/, renderer/)
 dist/         electron-builder output
 ```
 
-## Renderer wiring (the redesigned shell)
+## Renderer wiring (the app shell)
 
-`renderer/bootstrap.tsx` composes the shipped 6-destination solo shell. From
-the outside in:
+`renderer/bootstrap.tsx` composes the six-destination desktop shell. From the
+outside in:
 
 ```
-DeploymentProfileProvider  profile = "single_user_desktop" (team gated off)
+DeploymentProfileProvider  profile = "single_user_desktop" (team features gated off)
   BootGate                 supervised-boot progress screen (packaged/staged only)
     SignInGate             dev-mint / Google / wallet sign-in; bearer stays in main
       ChatShell            48px icon rail (6 destinations) + 46px topbar + rail-foot Settings/avatar
-        DestinationOutlet  active-slug → real surface (Run cockpit or a Phase-4 binder)
+        DestinationOutlet  active-slug → real surface (Run cockpit or a list binder)
         SettingsMount      full-height Settings surface when settingsActive
       PaletteHost          the global ⌘K command palette + topbar trigger
 ```
@@ -36,23 +41,22 @@ DeploymentProfileProvider  profile = "single_user_desktop" (team gated off)
 - **`DeploymentProfileProvider`** seeds the static `single_user_desktop`
   profile (the value is not bridged from main; a future `team` desktop build
   can supply it through the same `DeploymentProfile` port). `destinationsForProfile`
-  yields the six solo destinations — **Run · Chats · Projects · Activity ·
+  yields the six destinations — **Run · Chats · Projects · Activity ·
   Tools · Skills** — and `defaultDestinationForProfile` lands the app on
   **Run**.
-- **`ChatShell`** owns the rail/topbar chrome and reads the slug↔label SSOT
-  from `chat-surface`'s `destinations.ts`. The host owns navigation state
-  (`activeDestination`) and the `onOpenSettings` rail-foot wiring; Settings is
-  not a rail destination — it opens full height and suppresses the
+- **`ChatShell`** owns the rail/topbar chrome and reads the slug↔label source
+  of truth from `chat-surface`'s `destinations.ts`. The host owns navigation
+  state (`activeDestination`) and the `onOpenSettings` rail-foot wiring;
+  Settings is not a rail destination — it opens full height and suppresses the
   topbar/context/right-rail while active.
 - **`DestinationOutlet`** (`renderer/DestinationOutlet.tsx`) maps the active
   slug to its surface: `run` → the `RunDestination` cockpit; `chats` /
-  `projects` / `activity` / `connectors` (Tools) / `tools` (Skills) → the real
-  Phase-4 surfaces from `@0x-copilot/chat-surface`, each fed by a desktop
+  `projects` / `activity` / `connectors` (Tools) / `tools` (Skills) → the
+  list surfaces from `@0x-copilot/chat-surface`, each fed by a desktop
   binder in **`renderer/destinationBinders.tsx`** that fetches over the shell's
   `Transport` port (no `apps/frontend` import — that is a hard boundary). Any
   unexpected slug falls back to the sanctioned `DestinationPlaceholder`, and
-  the legacy `agents` / `inbox` slugs fold onto Activity. `DesktopPlaceholder`
-  is deleted — no scaffolding ships.
+  the legacy `agents` / `inbox` slugs fold onto Activity.
 - **`PaletteHost`** (`renderer/PaletteHost.tsx`) mounts exactly one
   `CommandPalette` over a **local static registry**
   (`renderer/palette-commands.ts` → `renderer/DesktopPaletteSearchPort.ts`, no
@@ -62,12 +66,12 @@ DeploymentProfileProvider  profile = "single_user_desktop" (team gated off)
   provider key / Download local model / Connect tool). The palette is
   **controlled** by bootstrap (`open`/`onOpenChange`) so `⌘K` is single-sourced.
 - **Keyboard shortcuts** come from `chat-surface`'s `useShellShortcuts`, driven
-  by the `shell/shortcuts.ts` chord SSOT. Bootstrap wires the five **global**
-  chords — `⌘N` new run, `⌘K` palette, `⌘,` Settings, `⌘⇧M` local-model
-  picker, `⌘⇧F` search Activity — with the input guard that keeps single-letter
-  chords from firing inside a composer (`⌘K` / `⌘,` stay exempt). The
-  **run-scoped** chords (`⌘M`/`⌘←`/`⌘→`/`⌘L`/`⌘.`/`⌘↵`/`⌘⌫`) are owned by the
-  Run cockpit's own listeners, live only while Run is active, and are
+  by the `shell/shortcuts.ts` chord source of truth. Bootstrap wires the five
+  **global** chords — `⌘N` new run, `⌘K` palette, `⌘,` Settings, `⌘⇧M`
+  local-model picker, `⌘⇧F` search Activity — with the input guard that keeps
+  single-letter chords from firing inside a composer (`⌘K` / `⌘,` stay exempt).
+  The **run-scoped** chords (`⌘M`/`⌘←`/`⌘→`/`⌘L`/`⌘.`/`⌘↵`/`⌘⌫`) are owned by
+  the Run cockpit's own listeners, live only while Run is active, and are
   deliberately left undefined at the shell level to avoid double-wiring.
 
 ## Running the renderer
@@ -85,7 +89,7 @@ to `MockTransport`. This plain path does **not** engage the service supervisor
 (no embedded Postgres) — for the REAL supervised app (embedded Postgres + all
 three services + Electron shell) from source in one command, use
 `make desktop-supervised` (see [Service supervisor](#service-supervisor-packaged--staged-runtime-boots) below).
-The live redesign walkthrough (boot → run → palette → shortcuts → settings) is
+The live end-to-end walkthrough (boot → run → palette → shortcuts → settings) is
 [`SMOKE.md`](./SMOKE.md).
 
 ## Run cockpit states
@@ -93,7 +97,7 @@ The live redesign walkthrough (boot → run → palette → shortcuts → settin
 `renderer/DestinationOutlet.tsx` mounts `RunDestination`
 (`@0x-copilot/chat-surface`) for the `run` slug. The cockpit binds to a
 conversation and resolves its runs over the Transport port, so it has two
-prototype-gap states beyond the live layout (Phase 3 / PR-3.11):
+states beyond the live run layout:
 
 - **Empty / idle** — no active run for the conversation. Instead of a blank
   canvas, it shows an honest goal composer (`RunEmptyState`, "Give it a
@@ -116,7 +120,7 @@ all land on the cockpit front door as an honest interim.
 - **main** and **preload** compile to **CommonJS** — Node-shaped, `__dirname` available, Electron's main-process loader resolves `@0x-copilot/*` workspace deps without an ESM/CJS interop dance.
 - **renderer** compiles to **ESM** via an esbuild bundle — browser-shaped, React 19 + chat-surface + chat-transport + surface-renderers bundled into one `out/renderer/bootstrap.js`.
 
-Two tsconfigs split the targets (`tsconfig.main.json` and `tsconfig.renderer.json`); `tsconfig.json` is the typecheck-only umbrella. This was validated in the Phase S spike — see [docs/plan/desktop/phase-0.5/S2-decision.md](../../docs/plan/desktop/phase-0.5/S2-decision.md).
+Two tsconfigs split the targets (`tsconfig.main.json` and `tsconfig.renderer.json`); `tsconfig.json` is the typecheck-only umbrella.
 
 ## Scripts
 
@@ -131,8 +135,7 @@ npm run dev --workspace @0x-copilot/desktop     # launches the GUI
 `dev` prefixes the child command with `ELECTRON_RUN_AS_NODE=` (empty,
 which unsets it) because CI / agent harnesses sometimes set
 `ELECTRON_RUN_AS_NODE=1`, in which case Electron behaves as plain Node
-and `require('electron')` returns a path string instead of the API (S2
-decision report friction note 1).
+and `require('electron')` returns a path string instead of the API.
 
 ## Sign-in
 
@@ -270,8 +273,7 @@ first file boot starts a **fresh** store — conversations already written to th
 with `python -m runtime_adapters.migrate` (see
 `docs/operations/desktop-file-store-migration.md`), or pin Postgres with
 `COPILOT_DESKTOP_FILE_STORE_V1=0`. The file backend rides the in-process worker;
-the `single_user_desktop` profile is what starts it (see AC2b:
-`docs/plan/desktop/agent-capabilities/03-ac2b-file-store-default-cutover.md`).
+the `single_user_desktop` profile is what starts it.
 
 **Crash policy**: children restart with 1s→2s→4s→…→30s backoff;
 ≥ 5 crashes in 5 minutes is a `FatalCrashLoop` surfaced on the boot
@@ -317,8 +319,7 @@ COPILOT_RUNTIME_DIR="$PWD/apps/desktop/resources" \
 ## Terminal distribution (the `copilot` CLI)
 
 [`tools/cli`](../../tools/cli) publishes `@0x-copilot/cli`, which installs and
-launches this app from the terminal with **no DMG/installer and no signing
-credentials**:
+launches this app from the terminal:
 
 ```bash
 npm install -g @0x-copilot/cli   # or: bun add -g @0x-copilot/cli
@@ -326,15 +327,12 @@ copilot                          # stages the runtime, then launches this app
 ```
 
 It is a thin wrapper over the exact dev-run recipe above: it stages the runtime
-with `tools/desktop-runtime/stage.mjs --adhoc-sign` (credential-free ad-hoc
-signing so unsigned binaries run on Apple Silicon) into `~/.0xcopilot`, then
+with `tools/desktop-runtime/stage.mjs --adhoc-sign` into `~/.0xcopilot`, then
 spawns `electron <appDir>` with `COPILOT_RUNTIME_DIR` pointed there — which flips
-`shouldSupervise()` on, so the same supervisor path boots the runtime. Because
-the app runs as a spawned process (not a distributed `.app`/`.exe`) and
-npm/curl-staged files never carry the quarantine / Mark-of-the-Web marker,
-Gatekeeper/SmartScreen never gate it. `main/updater.ts` auto-no-ops (unpackaged
-→ `app.isPackaged` is false), so the CLI channel simply updates via
-`npm i -g …@latest`. See [tools/cli/README.md](../../tools/cli/README.md).
+`shouldSupervise()` on, so the same supervisor path boots the runtime.
+`main/updater.ts` auto-no-ops (unpackaged → `app.isPackaged` is false), so the
+CLI channel simply updates via `npm i -g …@latest`. See
+[tools/cli/README.md](../../tools/cli/README.md).
 
 ## Brand identity (name + icons)
 
@@ -421,15 +419,14 @@ This must fail. The renderer's CSP is delivered per response by the
 and includes `connect-src 'none'`. If a network request succeeds, the
 CSP is not being applied — investigate the protocol handler first.
 
-## Shipped state (desktop redesign)
+## Summary of what's implemented
 
-The renderer ships the full 6-destination solo shell (see **Renderer wiring**
+The renderer ships the full six-destination shell (see **Renderer wiring**
 above): the profile-gated rail, the Run cockpit mounted through the real
-`DestinationOutlet` (no `DesktopPlaceholder`), the Phase-4 list surfaces, the
-solo Settings surface (BYOK + local models + approval policy, team sections
-gated off), the `⌘K` command palette, and the `DESIGN-SPEC.md` §6 keyboard
-shortcuts. Sign-in (dev-mint / Google / wallet), secret storage, the service
-supervisor, packaging, signing, and auto-update are all wired (see the
-sections above). The live end-to-end walkthrough is [`SMOKE.md`](./SMOKE.md).
-
-The bootstrap now renders under `<StrictMode>` (`renderer/bootstrap.tsx`).
+`DestinationOutlet`, the list surfaces, the Settings surface (BYOK + local
+models + approval policy, team sections gated off), the `⌘K` command palette,
+and the keyboard shortcuts. Sign-in (dev-mint / Google / wallet), secret
+storage, the service supervisor, packaging, signing, and auto-update are all
+wired (see the sections above). The live end-to-end walkthrough is
+[`SMOKE.md`](./SMOKE.md). The bootstrap renders under `<StrictMode>`
+(`renderer/bootstrap.tsx`).

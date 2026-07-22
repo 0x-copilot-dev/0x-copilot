@@ -6,7 +6,7 @@
 [![npm](https://img.shields.io/npm/v/@0x-copilot/cli?logo=npm&color=cb3837&label=%400x-copilot%2Fcli)](https://www.npmjs.com/package/@0x-copilot/cli)
 [![license: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
 [![platform](https://img.shields.io/badge/platform-macOS%20%7C%20Windows-lightgrey)](tools/cli#requirements)
-[![local-first](https://img.shields.io/badge/local--first-BYOK-6f42c1)](#local-first-by-design)
+[![local-first](https://img.shields.io/badge/local--first-bring_your_own_key-6f42c1)](#local-first-by-design)
 
 Copilot lives on your machine, moves through your files and tools, and quietly
 takes care of the work. You can check in, change direction, or leave it running
@@ -22,7 +22,7 @@ copilot
 Requires Node.js 20+ on macOS (Apple Silicon or Intel) or Windows x64. Prefer
 Bun? Install with `bun add -g @0x-copilot/cli`.
 
-![0xCopilot desktop workspace](apps/website/public/media/welcome.png)
+![0xCopilot desktop workspace](apps/website/public/media/app-run.png)
 
 ## How Copilot handles your day
 

@@ -7,7 +7,8 @@ are target backend responsibilities that should land here as those features are
 implemented.
 
 See `ARCHITECTURE.md` for module ownership and `TESTING.md` for the service test
-strategy. Internal service routes are specified in `docs/specs/internal-api.md`.
+strategy. Internal service routes are specified in
+`docs/reference/internal-api.md`.
 
 ## Local Environment
 
@@ -22,8 +23,8 @@ python -m pip install --upgrade pip
 python -m pip install -r requirements.txt
 ```
 
-Use Python 3.11 or newer; the Docker image and local development target Python
-3.13.
+Use Python 3.13 or newer for local development (this service requires `>=3.13`);
+the Docker image is built on `python:3.14-slim-bookworm`.
 
 Run tests:
 
@@ -56,7 +57,9 @@ per-server OAuth client fields when creating or updating the MCP registration:
 Client secrets are stored through the backend token vault and are not returned in
 public MCP server responses.
 
-Build the service image from this directory:
+Build the service image from the repository root (the build context must be the
+repo root — the Dockerfile copies shared packages such as
+`packages/service-contracts`):
 
 ```bash
 docker build -f services/backend/Dockerfile -t 0x-copilot-backend .
