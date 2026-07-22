@@ -14,7 +14,10 @@ import type {
   ProviderKeySummary,
   PutProviderKeyRequest,
 } from "@0x-copilot/api-types";
-import type { ProviderKeysPort } from "@0x-copilot/chat-surface";
+import type {
+  ProviderKeysPort,
+  SaveProviderKeyOptions,
+} from "@0x-copilot/chat-surface";
 
 import {
   deleteProviderKey,
@@ -39,11 +42,16 @@ export function createFirstRunProviderKeysPort(): ProviderKeysPort {
     save(
       provider: string,
       apiKey: string,
-      defaultModel?: string | null,
+      options?: SaveProviderKeyOptions,
     ): Promise<ProviderKeySummary> {
       // Plaintext travels exactly once, in this PUT body. `default_model` is a
       // display-safe slug (never key material) persisted per-provider so the
       // summary can project it back; omit it to preserve the stored default.
+      // The FTUE gate only adds native provider keys, so `baseUrl` / `label`
+      // (the `openai_compatible` custom-endpoint fields, decision D-2) never
+      // arrive here — but reading them off `options` keeps this port a faithful
+      // `ProviderKeysPort` implementation.
+      const defaultModel = options?.defaultModel;
       const request: PutProviderKeyRequest =
         defaultModel !== undefined &&
         defaultModel !== null &&

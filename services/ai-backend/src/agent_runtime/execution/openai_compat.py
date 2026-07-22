@@ -97,6 +97,16 @@ class OpenAICompatibleEndpoint:
         return value or None
 
 
+# Runtime slug for the USER-SUPPLIED custom OpenAI-compatible endpoint (BYOK
+# decision D-2). Unlike the static registry entries below, its ``base_url`` is
+# per-user and arrives at run time on ``AgentRuntimeContext.provider_endpoints``
+# — so it is deliberately NOT a ``_REGISTRY`` row. Recognition is by this
+# constant. Wire-aligned with the backend ``ProviderName.OPENAI_COMPATIBLE``
+# value and the ``ModelConfigResolver`` canonical slug (no cross-service import
+# — the string is the shared contract).
+CUSTOM_OPENAI_COMPATIBLE_PROVIDER = "openai_compatible"
+
+
 class OpenAICompatibleProviders:
     """Registry of OpenAI-wire-compatible provider endpoints."""
 
@@ -136,9 +146,26 @@ class OpenAICompatibleProviders:
 
     @classmethod
     def is_compatible(cls, provider: str) -> bool:
-        """Whether ``provider`` routes through the OpenAI-compatible client."""
+        """Whether ``provider`` routes through the OpenAI-compatible client.
 
-        return provider in cls._REGISTRY
+        Includes the custom ``openai_compatible`` slug even though it has no
+        static registry row — it, too, is reached via ChatOpenAI with a
+        per-run ``base_url`` and Chat-Completions only.
+        """
+
+        return provider in cls._REGISTRY or cls.is_custom(provider)
+
+    @classmethod
+    def is_custom(cls, provider: str) -> bool:
+        """Whether ``provider`` is the user-supplied custom endpoint (D-2).
+
+        The custom slug carries no fixed ``base_url`` — it is resolved per-run
+        from ``AgentRuntimeContext.provider_endpoints`` and injected via the
+        model-kwargs lane — so callers must NOT expect :meth:`get` to return an
+        endpoint for it.
+        """
+
+        return provider == CUSTOM_OPENAI_COMPATIBLE_PROVIDER
 
     @classmethod
     def slugs(cls) -> tuple[str, ...]:
@@ -147,4 +174,8 @@ class OpenAICompatibleProviders:
         return tuple(cls._REGISTRY)
 
 
-__all__ = ["OpenAICompatibleEndpoint", "OpenAICompatibleProviders"]
+__all__ = [
+    "CUSTOM_OPENAI_COMPATIBLE_PROVIDER",
+    "OpenAICompatibleEndpoint",
+    "OpenAICompatibleProviders",
+]

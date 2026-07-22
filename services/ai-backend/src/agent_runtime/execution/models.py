@@ -13,7 +13,10 @@ from agent_runtime.execution.contracts import (
 from agent_runtime.execution.depth import DepthBudgetTable, ReasoningDepth
 from agent_runtime.execution.errors import AgentRuntimeError
 from agent_runtime.execution.fake_model import FakeModelProvider
-from agent_runtime.execution.openai_compat import OpenAICompatibleProviders
+from agent_runtime.execution.openai_compat import (
+    CUSTOM_OPENAI_COMPATIBLE_PROVIDER,
+    OpenAICompatibleProviders,
+)
 from agent_runtime.settings import RuntimeSettings
 
 
@@ -58,6 +61,13 @@ class ModelConfigResolver:
         # with a fixed base_url (see execution/openai_compat.py).
         "openrouter": "openrouter",
         "ollama": "ollama",
+        # User-supplied custom OpenAI-compatible endpoint (BYOK decision D-2).
+        # ``canonical_provider`` normalizes ``_``→``-``, so the incoming
+        # ``openai_compatible`` slug arrives here as ``openai-compatible``; it
+        # canonicalizes back to the underscore form the store + provider_keys +
+        # provider_endpoints maps all key on. Its base_url is resolved per-run,
+        # not from the static registry.
+        "openai-compatible": CUSTOM_OPENAI_COMPATIBLE_PROVIDER,
     }
 
     def __init__(self, settings: RuntimeSettings) -> None:

@@ -340,6 +340,24 @@ body {
   background: var(--color-bg);
   color: var(--color-text);
   font-family: var(--font-sans);
+  /* v3 "quiet" base body size. The design anchors general body text at ~13px
+   * (copilot.css `body{font-size:13px}`); until now `body` set NO font-size, so
+   * every text node WITHOUT an explicit size fell back to the user-agent 16px
+   * default — the documented app-wide drift ("our global base is larger").
+   *
+   * `--font-size-sm` (0.85rem ≈ 13.6px, the "secondary body" / quiet step) is
+   * the closest token on the existing scale to the design's 13px, so we reuse
+   * it rather than mint a new value or an ad-hoc px.
+   *
+   * WHY THIS IS SCOPED, NOT A BLIND GLOBAL OVERRIDE: this changes only the
+   * *inherited* default for un-annotated text. It deliberately does NOT touch
+   * the rem anchor (`html`/`:root` stays at the UA 16px), so every rem-based
+   * token — the whole --font-size-* scale, --space-*, --radius-* — keeps its
+   * exact geometry. Components that set `font-size: var(--font-size-*)`
+   * (chat prose via TcChat, activity, shell, settings, surface-renderers'
+   * explicit px) already override inheritance and are unaffected; only bare
+   * text that previously rendered at 16px now renders at the quiet base. */
+  font-size: var(--font-size-sm);
   margin: 0;
 }
 

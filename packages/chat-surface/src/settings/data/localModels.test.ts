@@ -16,6 +16,7 @@ import type { LocalModelPullHandlers } from "../DownloadLocalModelModal";
 import {
   LOCAL_MODEL_CATALOG,
   LOCAL_MODEL_PULL_EVENT,
+  QWEN3_4B_PRESET,
   createLocalModelsPort,
 } from "./localModels";
 
@@ -182,5 +183,33 @@ describe("LOCAL_MODEL_CATALOG", () => {
     expect(
       LOCAL_MODEL_CATALOG.some((m) => m.name.includes("Llama 3.3 70B")),
     ).toBe(true);
+  });
+
+  it("is deduped by Ollama install tag (repo + quant)", () => {
+    const tags = LOCAL_MODEL_CATALOG.map((m) => `${m.repo}:${m.quant}`);
+    expect(new Set(tags).size).toBe(tags.length);
+  });
+
+  it("includes the FTUE first-run default as a member (no drift)", () => {
+    // The onboarding gate and the Settings modal read ONE curated list; the
+    // first-run default must be a member so neither surface loses it.
+    expect(LOCAL_MODEL_CATALOG).toContain(QWEN3_4B_PRESET);
+  });
+});
+
+describe("QWEN3_4B_PRESET", () => {
+  it("pins the real Qwen3-4B GGUF repo, quant, and verified byte size", () => {
+    expect(QWEN3_4B_PRESET.repo).toBe("Qwen/Qwen3-4B-GGUF");
+    expect(QWEN3_4B_PRESET.quant).toBe("Q8_0");
+    expect(QWEN3_4B_PRESET.name).toBe("Qwen 3 4B");
+    expect(QWEN3_4B_PRESET.parameterSize).toBe("4B");
+    // Verified Hugging Face Q8_0 byte count (Qwen3-4B-Q8_0.gguf).
+    expect(QWEN3_4B_PRESET.sizeBytes).toBe(4_280_404_704);
+  });
+
+  it("resolves to a valid Ollama HF pull tag", () => {
+    expect(`hf.co/${QWEN3_4B_PRESET.repo}:${QWEN3_4B_PRESET.quant}`).toBe(
+      "hf.co/Qwen/Qwen3-4B-GGUF:Q8_0",
+    );
   });
 });

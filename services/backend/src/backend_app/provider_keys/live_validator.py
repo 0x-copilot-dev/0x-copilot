@@ -40,6 +40,11 @@ from enum import StrEnum
 import httpx
 from pydantic import BaseModel, ConfigDict
 
+from backend_app.provider_keys.ssrf_guard import (
+    SsrfBlockReason,
+    SsrfGuard,
+    SsrfValidationError,
+)
 from backend_app.provider_keys.store import ProviderName
 
 
@@ -91,16 +96,39 @@ class ProviderKeyLiveValidator:
         *,
         client_factory: Callable[[], httpx.AsyncClient] | None = None,
         timeout_seconds: float = _DEFAULT_TIMEOUT_SECONDS,
+        ssrf_guard: SsrfGuard | None = None,
     ) -> None:
         self._client_factory = client_factory
         self._timeout_seconds = timeout_seconds
+        # Applied to the custom ``openai_compatible`` slug's user-supplied
+        # base_url right before the probe fetch (defense-in-depth — routes also
+        # guard, but validate() is the actual outbound-fetch site). ``None``
+        # blocks every custom probe (fails closed) so a mis-wired deployment
+        # never fetches an unguarded URL.
+        self._ssrf_guard = ssrf_guard
 
     async def validate(
-        self, *, provider: ProviderName, api_key: str
+        self,
+        *,
+        provider: ProviderName,
+        api_key: str,
+        base_url: str | None = None,
     ) -> ProviderKeyLiveCheckResult:
-        """One authenticated probe → typed outcome. Never raises."""
+        """One authenticated probe → typed outcome. Never raises.
 
-        url = self._ENDPOINTS[provider]
+        ``base_url`` is required for the ``openai_compatible`` custom provider
+        (the probe target is ``{base_url}/models``) and ignored for the four
+        native providers, whose endpoints are fixed in ``_ENDPOINTS``.
+        """
+
+        try:
+            url = self._probe_url(provider=provider, base_url=base_url)
+        except SsrfValidationError:
+            # Blocked/missing custom base_url — never fetch. Reported as
+            # "couldn't check" (never a false "valid"), matching the tri-state.
+            return ProviderKeyLiveCheckResult(
+                status=LiveCheckStatus.PROVIDER_UNREACHABLE
+            )
         headers = self._auth_headers(provider=provider, api_key=api_key)
         client = (
             self._client_factory()
@@ -122,6 +150,23 @@ class ProviderKeyLiveValidator:
     # ------------------------------------------------------------------
     # Internals
     # ------------------------------------------------------------------
+
+    def _probe_url(self, *, provider: ProviderName, base_url: str | None) -> str:
+        """Resolve the probe URL, applying the SSRF guard for the custom slug.
+
+        Raises :class:`SsrfValidationError` when the custom endpoint is missing
+        its base_url, has no guard wired, or the guard rejects it — so the
+        caller fails closed to ``PROVIDER_UNREACHABLE`` without any fetch.
+        """
+
+        if provider is not ProviderName.OPENAI_COMPATIBLE:
+            return self._ENDPOINTS[provider]
+        if not base_url or self._ssrf_guard is None:
+            raise SsrfValidationError(SsrfBlockReason.MISSING_HOST)
+        self._ssrf_guard.check(base_url)
+        # ``{base_url}/models`` is the OpenAI-compatible listing endpoint; the
+        # guard validated the host so appending a fixed path can't re-point it.
+        return f"{base_url.rstrip('/')}/models"
 
     def _auth_headers(self, *, provider: ProviderName, api_key: str) -> dict[str, str]:
         if provider is ProviderName.ANTHROPIC:

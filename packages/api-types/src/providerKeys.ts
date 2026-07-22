@@ -27,12 +27,19 @@
  * `openrouter` is an OpenAI-wire-compatible gateway (300+ models via
  * `vendor/model` slugs); the runtime routes it through the OpenAI client
  * with a fixed base URL and the Responses API disabled.
+ *
+ * `openai_compatible` (decision D-2) is the ONE generic slug for a
+ * user-supplied custom OpenAI-compatible endpoint: unlike the four native
+ * providers it carries a user-supplied `base_url` + `label`, and the runtime
+ * routes it through the OpenAI client with that per-user base URL. ADDITIVE
+ * union member — exhaustive client switches must add a case.
  */
 export type ProviderKeyProvider =
   | "openai"
   | "anthropic"
   | "google"
-  | "openrouter";
+  | "openrouter"
+  | "openai_compatible";
 
 /**
  * One stored key, as returned by list and PUT. `key_hint` is a masked
@@ -51,6 +58,17 @@ export interface ProviderKeySummary {
    * own model-chip hint. Never key material.
    */
   readonly default_model?: string | null;
+  /**
+   * Custom OpenAI-compatible endpoint URL (decision D-2). Present only for the
+   * `openai_compatible` provider; `null`/absent for the four native providers.
+   * Display-safe — never key material. SSRF-validated server-side on write.
+   */
+  readonly base_url?: string | null;
+  /**
+   * Human display name for the custom endpoint (e.g. `"My vLLM"`). Present only
+   * for the `openai_compatible` provider; `null`/absent otherwise.
+   */
+  readonly label?: string | null;
 }
 
 /** `GET /v1/settings/provider-keys` response. */
@@ -71,6 +89,16 @@ export interface PutProviderKeyRequest {
    * preserved on rotation; never key material.
    */
   readonly default_model?: string | null;
+  /**
+   * Custom OpenAI-compatible endpoint URL (decision D-2). REQUIRED in practice
+   * when the path provider is `openai_compatible` — the server 400s a custom
+   * PUT that omits it — and ignored for native providers. SSRF-guarded
+   * server-side (https + public in hosted; loopback/private allowed only on
+   * the single-user desktop). Never key material.
+   */
+  readonly base_url?: string | null;
+  /** Human display name for the custom endpoint. `openai_compatible` only. */
+  readonly label?: string | null;
 }
 
 /**
@@ -91,6 +119,12 @@ export interface PutProviderKeyResponse extends ProviderKeySummary {
  */
 export interface ValidateProviderKeyRequest {
   readonly api_key: string;
+  /**
+   * Probe target for the `openai_compatible` custom slug (decision D-2): the
+   * live check hits `{base_url}/models`. REQUIRED for that provider (the server
+   * 400s without it), ignored for native providers whose endpoints are fixed.
+   */
+  readonly base_url?: string | null;
 }
 
 /**
