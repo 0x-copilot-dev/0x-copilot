@@ -24,10 +24,12 @@ Authorization (cross-audit §1.3, connectors-prd §6.1):
 
 Audit (connectors-prd §6.2):
 
-* ``connector.connected`` (write-through-from-mcp: auth complete / skip)
+* ``connector.connected`` (write-through-from-mcp: auth complete / skip +
+  the internal test-token upsert landing a valid token)
 * ``connector.installed`` / ``connector.updated`` / ``connector.removed``
   (write-through-from-mcp: register-by-URL + catalog install / PATCH +
-  auth start / DELETE — wired in ``backend_app.app``)
+  auth start [public **and** internal chat-driven route] / DELETE —
+  wired in ``backend_app.app``)
 * ``connector.disconnected`` / ``connector.token_refreshed`` /
   ``connector.error`` / ``connector.scope_added`` / ``connector.scope_removed``
 
