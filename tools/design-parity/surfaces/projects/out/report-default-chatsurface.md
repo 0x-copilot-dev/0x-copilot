@@ -1,13 +1,13 @@
-# Design-parity report — projects (desktop host) · `default-chatsurface`
+# Design-parity report — `default-chatsurface`
 
 Design baseline (source of truth) vs live app, by computed style.
 
 - Design: `surfaces/projects/out/design-default-chatsurface.json`
 - Live: `surfaces/projects/out/live-default-chatsurface.json`
 
-**Summary:** 🔴 HIGH 13 · 🟠 MEDIUM 26 · 🟡 LOW 35 · ⚪ INFO 8
+**Summary:** 🔴 HIGH 9 · 🟠 MEDIUM 26 · 🟡 LOW 35 · ⚪ INFO 8
 
-## 🔴 HIGH (13)
+## 🔴 HIGH (9)
 
 | Element                  | Group        | Property        | Design → Live                                                  |
 | ------------------------ | ------------ | --------------- | -------------------------------------------------------------- |
@@ -16,14 +16,10 @@ Design baseline (source of truth) vs live app, by computed style.
 | `default.card.icon`      | Project card | fontSize        | 13px → 16px (+3.0px)                                           |
 | `default.card.icon`      | Project card | color           | rgb(212, 212, 219) (--tx2) → rgb(236, 236, 241) (--tx)         |
 | `default.card.icon`      | Project card | backgroundColor | rgb(29, 29, 35) (--panel3) → rgb(29, 79, 114)                  |
-| `default.card.icon`      | Project card | borderColor     | rgb(212, 212, 219) (--tx2) → rgb(236, 236, 241) (--tx)         |
 | `default.card.name.link` | Project card | color           | rgb(236, 236, 241) (--tx) → rgb(95, 178, 236) (--accent/--sky) |
-| `default.card.name.link` | Project card | borderColor     | rgb(236, 236, 241) (--tx) → rgb(95, 178, 236) (--accent/--sky) |
 | `default.card.desc`      | Project card | color           | rgb(100, 100, 109) (--mut2) → rgb(152, 152, 159) (--mut)       |
-| `default.card.desc`      | Project card | borderColor     | rgb(100, 100, 109) (--mut2) → rgb(152, 152, 159) (--mut)       |
 | `default.card.meta`      | Project card | fontFamily      | typeface class changed (mono → sans)                           |
 | `default.card.meta`      | Project card | color           | rgb(100, 100, 109) (--mut2) → rgb(152, 152, 159) (--mut)       |
-| `default.card.meta`      | Project card | borderColor     | rgb(100, 100, 109) (--mut2) → rgb(152, 152, 159) (--mut)       |
 
 ## 🟠 MEDIUM (26)
 

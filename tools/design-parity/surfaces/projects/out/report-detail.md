@@ -1,33 +1,30 @@
-# Design-parity report — projects · `detail`
+# Design-parity report — `detail`
 
 Design baseline (source of truth) vs live app, by computed style.
 
 - Design: `surfaces/projects/out/design-detail.json`
 - Live: `surfaces/projects/out/live-detail.json`
 
-**Summary:** 🔴 HIGH 26 · 🟠 MEDIUM 42 · 🟡 LOW 48 · ⚪ INFO 12
+**Summary:** 🔴 HIGH 23 · 🟠 MEDIUM 42 · 🟡 LOW 48 · ⚪ INFO 12
 
-## 🔴 HIGH (26)
+## 🔴 HIGH (23)
 
 | Element                   | Group         | Property        | Design → Live                                                                                                  |
 | ------------------------- | ------------- | --------------- | -------------------------------------------------------------------------------------------------------------- |
 | `detail.backlink`         | Detail header | fontFamily      | typeface class changed (mono → sans)                                                                           |
 | `detail.backlink`         | Detail header | fontSize        | 11px → 13px (+2.0px)                                                                                           |
 | `detail.backlink`         | Detail header | color           | rgb(152, 152, 159) (--mut) → rgb(95, 178, 236) (--accent/--sky)                                                |
-| `detail.backlink`         | Detail header | borderColor     | rgb(152, 152, 159) (--mut) → rgb(95, 178, 236) (--accent/--sky)                                                |
 | `detail.icon`             | Detail header | fontSize        | 13px → 18px (+5.0px)                                                                                           |
 | `detail.icon`             | Detail header | color           | rgb(212, 212, 219) (--tx2) → rgb(177, 215, 241)                                                                |
 | `detail.icon`             | Detail header | backgroundColor | rgb(29, 29, 35) (--panel3) → rgba(29, 79, 114, 0.45)                                                           |
 | `detail.icon`             | Detail header | borderColor     | rgb(212, 212, 219) (--tx2) → rgba(51, 140, 204, 0.55)                                                          |
 | `detail.desc`             | Detail header | fontSize        | 11px → 13.6px (+2.6px)                                                                                         |
 | `detail.desc`             | Detail header | color           | rgb(100, 100, 109) (--mut2) → rgb(152, 152, 159) (--mut)                                                       |
-| `detail.desc`             | Detail header | borderColor     | rgb(100, 100, 109) (--mut2) → rgb(152, 152, 159) (--mut)                                                       |
 | `detail.rowlist.chats`    | Sections      | backgroundColor | rgb(17, 17, 20) (--panel) → rgba(0, 0, 0, 0) (transparent)                                                     |
 | `detail.rowlist.chats`    | Sections      | borderColor     | rgba(255, 255, 255, 0.06) (--line) → rgb(236, 236, 241) (--tx)                                                 |
 | `detail.chatrow`          | Chat row      | borderColor     | rgb(236, 236, 241) rgb(236, 236, 241) rgba(255, 255, 255, 0.06) rgb(236, 236, 241) → rgb(236, 236, 241) (--tx) |
 | `detail.chatrow.icon`     | Chat row      | missing-in-live | present in design, ABSENT in live                                                                              |
 | `detail.chatrow.name`     | Chat row      | color           | rgb(236, 236, 241) (--tx) → rgb(95, 178, 236) (--accent/--sky)                                                 |
-| `detail.chatrow.name`     | Chat row      | borderColor     | rgb(236, 236, 241) (--tx) → rgb(95, 178, 236) (--accent/--sky)                                                 |
 | `detail.chatrow.chip`     | Chat row      | missing-in-live | present in design, ABSENT in live                                                                              |
 | `detail.chatrow.sub`      | Chat row      | missing-in-live | present in design, ABSENT in live                                                                              |
 | `detail.chatrow.sub.mono` | Chat row      | missing-in-live | present in design, ABSENT in live                                                                              |

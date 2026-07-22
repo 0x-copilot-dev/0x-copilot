@@ -208,8 +208,20 @@ for (const label of labels) {
   // style diffs (design is source of truth)
   const ds = d.styles || {};
   const ls = l.styles || {};
+  // An element with no border still reports a borderColor — CSS resolves it to
+  // `currentColor`, so it merely restates the `color` row that is already being
+  // reported. Left in, it manufactures a phantom HIGH (colour diffs are HIGH) for
+  // every borderless element: 11 of Projects' 48 HIGH rows and 4 of rail-badge's 7
+  // were this single artifact. Suppress it only when NEITHER side draws a border —
+  // if one side does, `borderWidth`/`borderStyle` report the real difference.
+  const noBorder = (s) =>
+    (s.borderStyle ?? "").split(" ").every((v) => v === "none") ||
+    (s.borderWidth ?? "").split(" ").every((v) => v === "0px");
+  const borderColorIsNoise = noBorder(ds) && noBorder(ls);
+
   for (const prop of Object.keys(ds)) {
     if (!(prop in ls)) continue;
+    if (prop === "borderColor" && borderColorIsNoise) continue;
     const c = classify(prop, ds[prop], ls[prop]);
     if (c)
       findings.push({

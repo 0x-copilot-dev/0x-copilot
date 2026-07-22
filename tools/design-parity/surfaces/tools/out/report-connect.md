@@ -5,9 +5,9 @@ Design baseline (source of truth) vs live app, by computed style.
 - Design: `surfaces/tools/out/design-connect.json`
 - Live: `surfaces/tools/out/live-connect.json`
 
-**Summary:** 🔴 HIGH 27 · 🟠 MEDIUM 70 · 🟡 LOW 63 · ⚪ INFO 18
+**Summary:** 🔴 HIGH 24 · 🟠 MEDIUM 70 · 🟡 LOW 63 · ⚪ INFO 18
 
-## 🔴 HIGH (27)
+## 🔴 HIGH (24)
 
 | Element                     | Group              | Property        | Design → Live                                                                                                           |
 | --------------------------- | ------------------ | --------------- | ----------------------------------------------------------------------------------------------------------------------- |
@@ -22,20 +22,17 @@ Design baseline (source of truth) vs live app, by computed style.
 | `default.row.sub`           | Row                | fontFamily      | typeface class changed (mono → sans)                                                                                    |
 | `default.row.sub`           | Row                | fontSize        | 11px → 13.6px (+2.6px)                                                                                                  |
 | `default.row.sub`           | Row                | color           | rgb(100, 100, 109) (--mut2) → rgb(152, 152, 159) (--mut)                                                                |
-| `default.row.sub`           | Row                | borderColor     | rgb(100, 100, 109) (--mut2) → rgb(152, 152, 159) (--mut)                                                                |
 | `default.seg`               | Permission control | backgroundColor | rgb(17, 17, 20) (--panel) → rgb(9, 9, 11)                                                                               |
 | `default.seg.selected`      | Permission control | backgroundColor | rgb(29, 29, 35) (--panel3) → rgb(13, 13, 16)                                                                            |
 | `default.seg.read.selected` | Permission control | backgroundColor | rgb(29, 29, 35) (--panel3) → rgb(13, 13, 16)                                                                            |
 | `connect.scrim`             | Connect modal      | backgroundColor | rgba(4, 4, 6, 0.66) → rgba(0, 0, 0, 0.54)                                                                               |
 | `connect.modal.logo`        | Connect modal      | color           | rgb(212, 212, 219) (--tx2) → rgb(152, 152, 159) (--mut)                                                                 |
 | `connect.modal.logo`        | Connect modal      | backgroundColor | rgb(29, 29, 35) (--panel3) → rgb(22, 22, 26) (--panel2)                                                                 |
-| `connect.modal.logo`        | Connect modal      | borderColor     | rgb(212, 212, 219) (--tx2) → rgb(152, 152, 159) (--mut)                                                                 |
 | `connect.catalog.row`       | Catalog            | backgroundColor | rgb(13, 13, 16) → rgb(22, 22, 26) (--panel2)                                                                            |
 | `connect.catalog.row`       | Catalog            | borderColor     | rgba(255, 255, 255, 0.1) (--line2) → rgba(255, 255, 255, 0.06) (--line)                                                 |
 | `connect.catalog.row.logo`  | Catalog            | fontSize        | 11px → 13.6px (+2.6px)                                                                                                  |
 | `connect.catalog.row.logo`  | Catalog            | color           | rgb(212, 212, 219) (--tx2) → rgb(152, 152, 159) (--mut)                                                                 |
 | `connect.catalog.row.logo`  | Catalog            | backgroundColor | rgb(29, 29, 35) (--panel3) → rgb(17, 17, 20) (--panel)                                                                  |
-| `connect.catalog.row.logo`  | Catalog            | borderColor     | rgb(212, 212, 219) (--tx2) → rgb(152, 152, 159) (--mut)                                                                 |
 | `connect.custom.mcp.row`    | Catalog            | backgroundColor | rgb(13, 13, 16) → rgb(22, 22, 26) (--panel2)                                                                            |
 | `connect.custom.mcp.row`    | Catalog            | borderColor     | rgba(255, 255, 255, 0.1) (--line2) → rgba(255, 255, 255, 0.06) (--line)                                                 |
 

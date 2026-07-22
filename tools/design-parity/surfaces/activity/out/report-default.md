@@ -1,13 +1,13 @@
-# Design-parity report — activity · `default`
+# Design-parity report — `default`
 
 Design baseline (source of truth) vs live app, by computed style.
 
 - Design: `surfaces/activity/out/design-default.json`
 - Live: `surfaces/activity/out/live-default.json`
 
-**Summary:** 🔴 HIGH 20 · 🟠 MEDIUM 52 · 🟡 LOW 68 · ⚪ INFO 11
+**Summary:** 🔴 HIGH 19 · 🟠 MEDIUM 52 · 🟡 LOW 68 · ⚪ INFO 11
 
-## 🔴 HIGH (20)
+## 🔴 HIGH (19)
 
 | Element            | Group    | Property        | Design → Live                                                                                                  |
 | ------------------ | -------- | --------------- | -------------------------------------------------------------------------------------------------------------- |
@@ -15,7 +15,6 @@ Design baseline (source of truth) vs live app, by computed style.
 | `row.live`         | Row/live | borderColor     | rgb(236, 236, 241) rgb(236, 236, 241) rgba(255, 255, 255, 0.06) rgb(236, 236, 241) → rgb(236, 236, 241) (--tx) |
 | `row.live.ic`      | Row/live | color           | rgb(87, 199, 133) (--jade) → rgb(152, 152, 159) (--mut)                                                        |
 | `row.live.ic`      | Row/live | backgroundColor | rgb(29, 29, 35) (--panel3) → rgba(0, 0, 0, 0) (transparent)                                                    |
-| `row.live.ic`      | Row/live | borderColor     | rgb(87, 199, 133) (--jade) → rgb(152, 152, 159) (--mut)                                                        |
 | `row.live.chip`    | Row/live | fontFamily      | typeface class changed (mono → sans)                                                                           |
 | `row.live.chip`    | Row/live | backgroundColor | rgba(0, 0, 0, 0) (transparent) → rgb(26, 47, 35)                                                               |
 | `row.live.chip`    | Row/live | borderColor     | rgba(87, 199, 133, 0.25) → rgb(87, 199, 133) (--jade)                                                          |

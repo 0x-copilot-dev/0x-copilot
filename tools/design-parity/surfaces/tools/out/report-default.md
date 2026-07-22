@@ -5,9 +5,9 @@ Design baseline (source of truth) vs live app, by computed style.
 - Design: `surfaces/tools/out/design-default.json`
 - Live: `surfaces/tools/out/live-default.json`
 
-**Summary:** 🔴 HIGH 15 · 🟠 MEDIUM 48 · 🟡 LOW 44 · ⚪ INFO 10
+**Summary:** 🔴 HIGH 14 · 🟠 MEDIUM 48 · 🟡 LOW 44 · ⚪ INFO 10
 
-## 🔴 HIGH (15)
+## 🔴 HIGH (14)
 
 | Element                     | Group              | Property        | Design → Live                                                                                                           |
 | --------------------------- | ------------------ | --------------- | ----------------------------------------------------------------------------------------------------------------------- |
@@ -22,7 +22,6 @@ Design baseline (source of truth) vs live app, by computed style.
 | `default.row.sub`           | Row                | fontFamily      | typeface class changed (mono → sans)                                                                                    |
 | `default.row.sub`           | Row                | fontSize        | 11px → 13.6px (+2.6px)                                                                                                  |
 | `default.row.sub`           | Row                | color           | rgb(100, 100, 109) (--mut2) → rgb(152, 152, 159) (--mut)                                                                |
-| `default.row.sub`           | Row                | borderColor     | rgb(100, 100, 109) (--mut2) → rgb(152, 152, 159) (--mut)                                                                |
 | `default.seg`               | Permission control | backgroundColor | rgb(17, 17, 20) (--panel) → rgb(9, 9, 11)                                                                               |
 | `default.seg.selected`      | Permission control | backgroundColor | rgb(29, 29, 35) (--panel3) → rgb(13, 13, 16)                                                                            |
 | `default.seg.read.selected` | Permission control | backgroundColor | rgb(29, 29, 35) (--panel3) → rgb(13, 13, 16)                                                                            |

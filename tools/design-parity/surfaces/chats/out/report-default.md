@@ -1,26 +1,24 @@
-# Design-parity report — chats · `default`
+# Design-parity report — `default`
 
 Design baseline (source of truth) vs live app, by computed style.
 
 - Design: `surfaces/chats/out/design-default.json`
 - Live: `surfaces/chats/out/live-default.json`
 
-**Summary:** 🔴 HIGH 17 · 🟠 MEDIUM 59 · 🟡 LOW 64 · ⚪ INFO 10
+**Summary:** 🔴 HIGH 15 · 🟠 MEDIUM 59 · 🟡 LOW 64 · ⚪ INFO 10
 
-## 🔴 HIGH (17)
+## 🔴 HIGH (15)
 
 | Element                | Group         | Property        | Design → Live                                                           |
 | ---------------------- | ------------- | --------------- | ----------------------------------------------------------------------- |
 | `topbar.title`         | Shell         | missing-in-live | present in design, ABSENT in live                                       |
 | `row.running.ic`       | Row (running) | color           | rgb(87, 199, 133) (--jade) → rgb(152, 152, 159) (--mut)                 |
 | `row.running.ic`       | Row (running) | backgroundColor | rgb(29, 29, 35) (--panel3) → rgba(0, 0, 0, 0) (transparent)             |
-| `row.running.ic`       | Row (running) | borderColor     | rgb(87, 199, 133) (--jade) → rgb(152, 152, 159) (--mut)                 |
 | `chip.running`         | Status pills  | fontFamily      | typeface class changed (mono → sans)                                    |
 | `chip.running`         | Status pills  | backgroundColor | rgba(0, 0, 0, 0) (transparent) → rgb(26, 47, 35)                        |
 | `chip.running`         | Status pills  | borderColor     | rgba(87, 199, 133, 0.25) → rgb(87, 199, 133) (--jade)                   |
 | `chip.running.dot`     | Status pills  | fontFamily      | typeface class changed (mono → sans)                                    |
 | `row.running.sub.mono` | Row (running) | color           | rgb(100, 100, 109) (--mut2) → rgb(152, 152, 159) (--mut)                |
-| `row.running.sub.mono` | Row (running) | borderColor     | rgb(100, 100, 109) (--mut2) → rgb(152, 152, 159) (--mut)                |
 | `row.done.ic`          | Row (done)    | backgroundColor | rgb(29, 29, 35) (--panel3) → rgba(0, 0, 0, 0) (transparent)             |
 | `chip.paused`          | Status pills  | fontFamily      | typeface class changed (mono → sans)                                    |
 | `chip.paused`          | Status pills  | backgroundColor | rgba(0, 0, 0, 0) (transparent) → rgb(50, 38, 21)                        |

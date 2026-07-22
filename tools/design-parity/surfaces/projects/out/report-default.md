@@ -1,13 +1,13 @@
-# Design-parity report — projects · `default`
+# Design-parity report — `default`
 
 Design baseline (source of truth) vs live app, by computed style.
 
 - Design: `surfaces/projects/out/design-default.json`
 - Live: `surfaces/projects/out/live-default.json`
 
-**Summary:** 🔴 HIGH 9 · 🟠 MEDIUM 28 · 🟡 LOW 29 · ⚪ INFO 4
+**Summary:** 🔴 HIGH 8 · 🟠 MEDIUM 28 · 🟡 LOW 29 · ⚪ INFO 4
 
-## 🔴 HIGH (9)
+## 🔴 HIGH (8)
 
 | Element                | Group        | Property        | Design → Live                                                  |
 | ---------------------- | ------------ | --------------- | -------------------------------------------------------------- |
@@ -18,7 +18,6 @@ Design baseline (source of truth) vs live app, by computed style.
 | `default.card.icon`    | Project card | backgroundColor | rgb(29, 29, 35) (--panel3) → rgba(29, 79, 114, 0.45)           |
 | `default.card.icon`    | Project card | borderColor     | rgb(212, 212, 219) (--tx2) → rgba(51, 140, 204, 0.55)          |
 | `default.card.desc`    | Project card | color           | rgb(100, 100, 109) (--mut2) → rgb(152, 152, 159) (--mut)       |
-| `default.card.desc`    | Project card | borderColor     | rgb(100, 100, 109) (--mut2) → rgb(152, 152, 159) (--mut)       |
 | `default.card.meta`    | Project card | fontFamily      | typeface class changed (mono → sans)                           |
 
 ## 🟠 MEDIUM (28)

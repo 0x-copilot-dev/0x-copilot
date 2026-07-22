@@ -5,17 +5,15 @@ Design baseline (source of truth) vs live app, by computed style.
 - Design: `surfaces/rail-badge/out/design-nobadge.json`
 - Live: `surfaces/rail-badge/out/live-nobadge.json`
 
-**Summary:** 🔴 HIGH 7 · 🟠 MEDIUM 41 · 🟡 LOW 7 · ⚪ INFO 13
+**Summary:** 🔴 HIGH 5 · 🟠 MEDIUM 41 · 🟡 LOW 7 · ⚪ INFO 13
 
-## 🔴 HIGH (7)
+## 🔴 HIGH (5)
 
 | Element           | Group       | Property        | Design → Live                                                                                                  |
 | ----------------- | ----------- | --------------- | -------------------------------------------------------------------------------------------------------------- |
 | `shell.body.grid` | Shell frame | backgroundColor | rgba(0, 0, 0, 0) (transparent) → rgb(9, 9, 11)                                                                 |
 | `rail.brand`      | Rail        | color           | rgb(236, 236, 241) (--tx) → rgb(95, 178, 236) (--accent/--sky)                                                 |
-| `rail.brand`      | Rail        | borderColor     | rgb(236, 236, 241) (--tx) → rgb(95, 178, 236) (--accent/--sky)                                                 |
 | `rail.brand.mark` | Rail        | color           | rgb(236, 236, 241) (--tx) → rgb(95, 178, 236) (--accent/--sky)                                                 |
-| `rail.brand.mark` | Rail        | borderColor     | rgb(236, 236, 241) (--tx) → rgb(95, 178, 236) (--accent/--sky)                                                 |
 | `rail.foot`       | Rail foot   | borderColor     | rgb(236, 236, 241) (--tx) → rgba(255, 255, 255, 0.06) rgb(236, 236, 241) rgb(236, 236, 241) rgb(236, 236, 241) |
 | `rail.me`         | Rail foot   | borderColor     | rgba(255, 255, 255, 0.1) (--line2) → rgb(212, 212, 219) (--tx2)                                                |
 
