@@ -4,14 +4,17 @@ Conservative on purpose: we'd rather over-estimate (and get a false-Deny
 that the user can resolve by raising their budget) than under-estimate
 and silently bust a hard cap. Heuristics:
 
-- Input tokens: prompt characters / 4 plus a 5% safety margin. We don't
-  pull tiktoken into the base image — the estimator runs in the request
-  hot path and the budget compare-and-swap absorbs ±10% drift.
-- Output tokens: ``model_profile.max_output_tokens`` when set, else
-  ``RuntimeSettings.default_max_input_tokens // 2`` as a coarse cap.
-- Cost: ``BudgetEstimator.cost_micro_usd_for(tokens, pricing)`` reuses
-  :class:`CostCalculator` from the pricing module so the unit price math
-  is shared with the post-run charge path.
+- Input tokens: supplied by the caller already counted (the worker uses
+  ``litellm.token_counter`` over the real first-call messages, falling back
+  to a char/4 heuristic). The estimator adds a 5% safety margin on top to
+  absorb cross-tokenizer drift; the budget compare-and-swap absorbs the
+  residual. The estimator itself takes **no** litellm dependency — counting
+  lives in the worker behind ``TokenCounterPort`` so this stays a pure
+  cost-math boundary.
+- Output tokens: ``model_profile.max_output_tokens`` when set, else a coarse
+  4096-token fallback cap.
+- Cost: reuses :class:`CostCalculator` from the pricing module so the unit
+  price math is shared with the post-run charge path.
 """
 
 from __future__ import annotations
@@ -42,17 +45,17 @@ class BudgetEstimator:
     def estimate(
         cls,
         *,
-        prompt_chars: int,
+        input_tokens: int,
         max_output_tokens: int | None,
         pricing: ModelPricingRecord | None,
     ) -> BudgetEstimate:
-        # Tokenizer-free estimate: 1 token ≈ 4 chars for English prose.
-        # Real prompts are mixed-language and have JSON/code, so the
-        # safety multiplier covers the common cases. Tokenizers vary
-        # ±15% across providers; we eat that variance via the multiplier
-        # plus the post-run charge being keyed on observed tokens, not
-        # the estimate.
-        input_tokens = max(1, int((prompt_chars / 4) * _INPUT_TOKEN_SAFETY_MULT))
+        # ``input_tokens`` arrives already counted (litellm.token_counter over
+        # the real first-call messages, or a char/4 fallback). We add the 5%
+        # safety margin here: tokenizers vary across providers and the offline
+        # tiktoken approximation used for non-OpenAI models drifts, so the
+        # multiplier keeps the estimate biased conservative. The post-run charge
+        # is keyed on observed tokens, not this estimate.
+        input_tokens = max(1, int(input_tokens * _INPUT_TOKEN_SAFETY_MULT))
         output_tokens = (
             max_output_tokens
             if max_output_tokens is not None and max_output_tokens > 0

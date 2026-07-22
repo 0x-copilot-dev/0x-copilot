@@ -19,6 +19,8 @@ empty ``lookup_budgets_for_run`` result — zero added latency.
 
 from __future__ import annotations
 
+import inspect
+from collections.abc import Awaitable, Callable
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from typing import Union
@@ -67,6 +69,11 @@ class BudgetPreflightDeny:
 
 BudgetDecision = Union[BudgetPreflightAllow, BudgetPreflightWarn, BudgetPreflightDeny]
 
+# Either a concrete estimate, or a zero-arg (optionally async) provider that is
+# resolved ONLY when the tenant has active budgets — so the no-budget hot path
+# (single-user desktop) pays nothing for tokenization.
+EstimateProvider = Callable[[], "BudgetEstimate | Awaitable[BudgetEstimate]"]
+
 
 class BudgetEnforcer:
     """Run preflight against all budgets matching ``(org_id, user_id)``.
@@ -85,9 +92,17 @@ class BudgetEnforcer:
         org_id: str,
         user_id: str,
         run_id: str,
-        estimate: BudgetEstimate,
+        estimate: "BudgetEstimate | EstimateProvider",
         now: datetime | None = None,
     ) -> BudgetDecision:
+        """Classify a run against active budgets.
+
+        ``estimate`` is either a concrete :class:`BudgetEstimate` or a zero-arg
+        provider (sync or async). The provider is resolved **only** after we
+        confirm the tenant has at least one active budget, so a tenant with no
+        budgets never pays for the estimate (message read + tokenization).
+        """
+
         if now is None:
             now = datetime.now(timezone.utc)
         budgets = await self._persistence.lookup_budgets_for_run(
@@ -99,13 +114,17 @@ class BudgetEnforcer:
         if not active:
             return BudgetPreflightAllow()
 
+        resolved_estimate = await self._resolve_estimate(estimate)
+
         # First pass: classify each budget independently.
         decisions: list[BudgetDecision] = []
         for entry in active:
             window = BudgetPeriodCalculator.window(entry.budget.period, now=now)
             current_micro, current_tokens = self._current_spend(entry)
-            est_micro = estimate.cost_micro_usd or 0
-            est_tokens = estimate.input_tokens + estimate.output_tokens
+            est_micro = resolved_estimate.cost_micro_usd or 0
+            est_tokens = (
+                resolved_estimate.input_tokens + resolved_estimate.output_tokens
+            )
             within_micro = self._within_micro_limit(
                 budget=entry.budget,
                 current_micro=current_micro,
@@ -134,7 +153,7 @@ class BudgetEnforcer:
                         budget=entry.budget,
                         current_micro_usd=current_micro,
                         current_tokens=current_tokens,
-                        estimated_micro_usd=estimate.cost_micro_usd,
+                        estimated_micro_usd=resolved_estimate.cost_micro_usd,
                         estimated_tokens=est_tokens,
                         reservations=(),
                     )
@@ -145,13 +164,26 @@ class BudgetEnforcer:
                     budget=entry.budget,
                     current_micro_usd=current_micro,
                     current_tokens=current_tokens,
-                    estimated_micro_usd=estimate.cost_micro_usd,
+                    estimated_micro_usd=resolved_estimate.cost_micro_usd,
                     estimated_tokens=est_tokens,
                 )
             )
 
         # Second pass: most restrictive wins (Deny > Warn > Allow).
         return self._aggregate(decisions)
+
+    @staticmethod
+    async def _resolve_estimate(
+        estimate: "BudgetEstimate | EstimateProvider",
+    ) -> BudgetEstimate:
+        """Resolve a concrete estimate or a (sync/async) estimate provider."""
+
+        if isinstance(estimate, BudgetEstimate):
+            return estimate
+        produced = estimate()
+        if inspect.isawaitable(produced):
+            return await produced
+        return produced
 
     @classmethod
     def _aggregate(cls, decisions: list[BudgetDecision]) -> BudgetDecision:
