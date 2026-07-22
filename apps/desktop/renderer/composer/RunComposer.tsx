@@ -9,13 +9,15 @@ import {
   AssistantComposer,
   ComposerConnectorsButton,
   parseTransportError,
-  useTransport,
   type CompleteAttachment,
+  type ComposerConnectorsPort,
+  type ProviderKeysPort,
   type RunStartRequest,
   type StartRunError,
 } from "@0x-copilot/chat-surface";
 
 import { modelSelectionForId } from "./desktopModelCatalog";
+import { useDesktopComposerTools } from "./useDesktopComposerTools";
 import { createDesktopAttachmentAdapter } from "./desktopAttachmentAdapter";
 import { DesktopComposerFilePicker } from "./DesktopComposerFilePicker";
 import {
@@ -53,6 +55,19 @@ export interface RunComposerProps {
   readonly onOpenSkillsSettings?: () => void;
   /** Open Settings → Provider keys (BYOK model setup). */
   readonly onOpenModelSettings?: () => void;
+  /**
+   * MCP connector surface for the inline Tools popover. When provided, the
+   * composer's connectors trigger becomes the connector-aware Tools popover
+   * (web-search toggle + connected rows + 1-click connect + Custom MCP) instead
+   * of the flat "open the Tools surface" button. Omitted ⇒ the plain button.
+   */
+  readonly connectorsPort?: ComposerConnectorsPort;
+  /**
+   * Provider-keys surface for the model pill's inline "Add a provider key" form.
+   * When provided, the model popover opens the inline `KeyForm` sub-view instead
+   * of deep-linking to Settings.
+   */
+  readonly providerKeysPort?: ProviderKeysPort;
 }
 
 /**
@@ -79,9 +94,9 @@ export function RunComposer(props: RunComposerProps): ReactElement {
     onShowConnectors,
     onOpenSkillsSettings,
     onOpenModelSettings,
+    connectorsPort,
+    providerKeysPort,
   } = props;
-
-  const transport = useTransport();
 
   // The last run-create failure, surfaced inline above the composer. The
   // in-chat composer's `POST /v1/agent/runs` rejection used to be SWALLOWED
@@ -114,7 +129,20 @@ export function RunComposer(props: RunComposerProps): ReactElement {
     renderPlusMenu,
   } = useRunComposerBindings();
 
-  const connectorsTrigger = (
+  // Inline Tools popover (when a connectors port is injected): owns the per-run
+  // web-search toggle + active connector ids, and yields the trigger node + the
+  // run-body values (`webSearchEnabled` / `connectorScopes`) threaded on submit.
+  // The popover's "Custom MCP" / pre-registered rows route to the Tools surface.
+  const { toolsTrigger, webSearchEnabled, connectorScopes } =
+    useDesktopComposerTools({
+      connectorsPort,
+      disabled,
+      onAddCustom: onShowConnectors,
+    });
+
+  // With a connectors port → the connector-aware Tools popover; without one →
+  // the historical flat button that opens the Tools destination.
+  const connectorsTrigger = toolsTrigger ?? (
     <ComposerConnectorsButton
       activeCount={activeConnectorCount}
       open={false}
@@ -148,6 +176,15 @@ export function RunComposer(props: RunComposerProps): ReactElement {
                 toRunAttachment,
               ) as unknown as RunStartRequest["attachments"])
             : undefined,
+        // Tools popover selections: web_search defaults on at the runtime, so
+        // only an explicit opt-OUT is meaningful; active connector ids become
+        // request_context.connector_scopes (buildRunCreateBody applies both).
+        webSearchEnabled,
+        connectorScopes:
+          connectorScopes !== undefined &&
+          Object.keys(connectorScopes).length > 0
+            ? connectorScopes
+            : undefined,
       };
       // Route through the cockpit's ONE dispatch (§D3): it starts the run AND
       // binds the live session, so this 2nd/Nth message streams exactly like the
@@ -157,7 +194,14 @@ export function RunComposer(props: RunComposerProps): ReactElement {
       await dispatch(request);
       setStartError(null);
     },
-    [disabled, dispatch, models, selectedModel],
+    [
+      disabled,
+      dispatch,
+      models,
+      selectedModel,
+      webSearchEnabled,
+      connectorScopes,
+    ],
   );
 
   // The composer's error channel: a rejected run-create surfaces here instead
@@ -206,6 +250,9 @@ export function RunComposer(props: RunComposerProps): ReactElement {
         onRemoveSkill={handleRemoveSkill}
         onClearSkills={handleClearSkills}
         connectorsTrigger={connectorsTrigger}
+        // Inline "Add a provider key" form inside the model popover (host-owned
+        // provider-keys surface); unset ⇒ the pill keeps its deep-link.
+        providerKeysPort={providerKeysPort}
         models={models}
         selectedModel={selectedModel}
         onModelChange={handleModelChange}

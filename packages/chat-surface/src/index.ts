@@ -1449,6 +1449,7 @@ export {
   type GateProps,
   type KeyFormProps,
   type KeyFormConnected,
+  type KeyFormFormatCheck,
   type FirstRunStage,
   type FirstRunEngine,
   type FirstRunStore,
@@ -1544,6 +1545,9 @@ export {
   type FirstRunInstallableConnector,
   type FirstRunConnectorsPort,
 } from "./onboarding";
+// Neutral alias for host composer-chrome wiring (chat/run reuse the FTUE Tools
+// popover's port, so the shape is the same — the alias is just a non-FTUE name).
+export type { FirstRunConnectorsPort as ComposerConnectorsPort } from "./onboarding";
 // === end First-Run onboarding (P4 — tools popover) ===
 // === First-Run onboarding (P4 — wallet chip) ===
 // Top-bar SIWE identity pill for the FirstRunSurface `walletChipSlot`:

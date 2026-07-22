@@ -21,10 +21,13 @@ import {
   ComposerConnectorsButton,
   FIRST_RUN_SUGGESTIONS,
   OnboardingComposer,
+  type ComposerConnectorsPort,
+  type ProviderKeysPort,
   type RunEmptyComposerCtx,
 } from "@0x-copilot/chat-surface";
 
 import { modelSelectionForId } from "./desktopModelCatalog";
+import { useDesktopComposerTools } from "./useDesktopComposerTools";
 import { createDesktopAttachmentAdapter } from "./desktopAttachmentAdapter";
 import { DesktopComposerFilePicker } from "./DesktopComposerFilePicker";
 import {
@@ -52,10 +55,29 @@ export interface RunEmptyComposerProps {
   readonly onShowConnectors?: () => void;
   /** Navigate to the Skills surface. */
   readonly onOpenSkills?: () => void;
+  /**
+   * MCP connector surface for the inline Tools popover. When provided, the
+   * composer's Tools trigger becomes the connector-aware popover (web-search
+   * toggle + connected rows + 1-click connect + Custom MCP). Omitted ⇒ the plain
+   * "open the Tools surface" button.
+   */
+  readonly connectorsPort?: ComposerConnectorsPort;
+  /**
+   * Provider-keys surface for the model pill's inline "Add a provider key" form.
+   * When provided, the model popover opens the inline `KeyForm` sub-view instead
+   * of the `onAddKey` deep-link.
+   */
+  readonly providerKeysPort?: ProviderKeysPort;
 }
 
 export function RunEmptyComposer(props: RunEmptyComposerProps): ReactElement {
-  const { ctx, onShowConnectors, onOpenSkills } = props;
+  const {
+    ctx,
+    onShowConnectors,
+    onOpenSkills,
+    connectorsPort,
+    providerKeysPort,
+  } = props;
 
   const {
     skills,
@@ -84,9 +106,20 @@ export function RunEmptyComposer(props: RunEmptyComposerProps): ReactElement {
     [],
   );
 
+  // Inline Tools popover (when a connectors port is injected): owns the per-run
+  // web-search toggle + active connector ids, and yields the trigger node + the
+  // values threaded into the start-run payload. Disabled while a run is starting.
+  const { toolsTrigger, webSearchEnabled, connectorScopes } =
+    useDesktopComposerTools({
+      connectorsPort,
+      disabled: ctx.submitting,
+      onAddCustom: onShowConnectors,
+    });
+
   // Send → start the first run through the cockpit seam. The model pill's
-  // selection and the composer attachments become the run body; web-search
-  // stays on by default (runtime default). The cockpit owns the empty→live
+  // selection and the composer attachments become the run body; the Tools
+  // popover threads the per-run web-search toggle + active connector scopes
+  // (RunStartRequest already carries them). The cockpit owns the empty→live
   // binding + the submitting/error state (surfaced back through `ctx`).
   const { onStartRun } = ctx;
   const handleSubmit = useCallback(
@@ -103,15 +136,16 @@ export function RunEmptyComposer(props: RunEmptyComposerProps): ReactElement {
         goal: text,
         model,
         attachments: runAttachments.length > 0 ? runAttachments : undefined,
-        webSearchEnabled: true,
+        webSearchEnabled,
+        connectorScopes,
       });
     },
-    [models, selectedModel, onStartRun],
+    [models, selectedModel, onStartRun, webSearchEnabled, connectorScopes],
   );
 
-  // Tools pill — opens the full Tools surface (MCP + non-MCP), mirroring the
-  // in-chat RunComposer's connectors trigger. Disabled while a run is starting.
-  const connectorsTrigger = (
+  // With a connectors port → the connector-aware Tools popover; without one →
+  // the historical flat button that opens the Tools destination.
+  const connectorsTrigger = toolsTrigger ?? (
     <ComposerConnectorsButton
       activeCount={activeConnectorCount}
       open={false}
@@ -137,6 +171,9 @@ export function RunEmptyComposer(props: RunEmptyComposerProps): ReactElement {
       onRemoveSkill={onRemoveSkill}
       onClearSkills={onClearSkills}
       toolsTrigger={connectorsTrigger}
+      // Inline "Add a provider key" form inside the model popover (host-owned
+      // provider-keys surface); unset ⇒ the pill keeps its `onAddKey` deep-link.
+      providerKeysPort={providerKeysPort}
       models={models}
       selectedModel={selectedModel}
       onModelChange={onModelChange}

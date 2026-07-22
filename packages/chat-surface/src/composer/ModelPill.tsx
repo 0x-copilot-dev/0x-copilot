@@ -3,8 +3,65 @@ import type { ModelCatalogModel } from "@0x-copilot/api-types";
 import { useMemo, useRef, useState, type ReactElement } from "react";
 
 import { providerLabel } from "../settings/data/models";
+import {
+  checkProviderKeyFormat,
+  PROVIDER_CATALOG,
+  providerCatalogEntry,
+  type ProviderKeysPort,
+} from "../settings/data/providerKeys";
+import type { FirstRunKeyProvider } from "../onboarding/firstRun";
+import {
+  KeyForm,
+  type KeyFormConnected,
+  type KeyFormFormatCheck,
+} from "../onboarding/KeyForm";
 
 export type ModelPillModel = ModelCatalogModel & { disabled?: boolean };
+
+// The BYOK provider rows offered by the inline add-key sub-view (contract §1).
+// Derived from the shared `PROVIDER_CATALOG` so the composer and Settings never
+// drift: only contract-backed, shippable providers (no coming-soon, no custom
+// endpoint). `dotColor`/`meta` are the KeyForm tri-toggle's presentation data —
+// swatches are the FTUE hexes (SPEC §Data) with a token fallback.
+const KEY_PROVIDER_DOT: Record<string, string> = {
+  anthropic: "#d97757",
+  openai: "#6aa88f",
+  openrouter: "#9a7fd6",
+  google: "#4285f4",
+};
+
+const MODEL_PILL_KEY_PROVIDERS: readonly FirstRunKeyProvider[] =
+  PROVIDER_CATALOG.filter(
+    (entry) =>
+      entry.contractBacked &&
+      entry.comingSoon !== true &&
+      entry.isCustom !== true,
+  ).map((entry) => ({
+    id: entry.id,
+    label: entry.label,
+    meta: entry.models[0] ?? "",
+    dotColor: KEY_PROVIDER_DOT[entry.id] ?? "var(--color-text-muted)",
+    placeholder: entry.placeholder,
+    keyPrefix: entry.keyPrefix,
+  }));
+
+// Generic format check for the inline add-key flow — bridges the KeyForm's
+// `FirstRunKeyProvider` row back onto the shared `checkProviderKeyFormat` so the
+// composer's verdicts match Settings exactly (no FTUE-specific coupling).
+const modelPillFormatCheck: KeyFormFormatCheck = (provider, apiKey) => {
+  const entry = providerCatalogEntry(provider.id) ?? {
+    id: provider.id,
+    label: provider.label,
+    placeholder: provider.placeholder,
+    keyPrefix: provider.keyPrefix,
+    models: [],
+    contractBacked: true,
+  };
+  const result = checkProviderKeyFormat(entry, apiKey);
+  return result.ok
+    ? { ok: true }
+    : { ok: false, error: result.error ?? "Enter a valid key." };
+};
 
 export interface ModelPillProps {
   models: ModelPillModel[];
@@ -22,6 +79,20 @@ export interface ModelPillProps {
   onAddProviderKey?: () => void;
   /** Footer deep-link → Settings → Local models (v3 "Get local models →"). */
   onGetLocalModels?: () => void;
+  /**
+   * When provided, the "Add a provider key" footer opens an inline `<KeyForm>`
+   * sub-view INSIDE this popover instead of firing `onAddProviderKey` — the key
+   * is saved through this port and the popover closes on connect. When omitted,
+   * the footer keeps the deep-link behaviour (`onAddProviderKey`). The two are
+   * mutually preferred: `providerKeysPort` wins when both are set.
+   */
+  providerKeysPort?: ProviderKeysPort;
+  /**
+   * Fired after a successful inline add-key connect (the refresh seam). The host
+   * re-reads its model catalog so the freshly-keyed provider's models appear and
+   * can be selected. Optional — the sub-view still closes without it.
+   */
+  onProviderKeyAdded?: (result: KeyFormConnected) => void;
 }
 
 const LOCAL_PROVIDERS = new Set(["ollama"]);
@@ -54,10 +125,20 @@ export function ModelPill({
   onAddCustom,
   onAddProviderKey,
   onGetLocalModels,
+  providerKeysPort,
+  onProviderKeyAdded,
 }: ModelPillProps): ReactElement {
   const [open, setOpen] = useState(false);
+  const [addKeyOpen, setAddKeyOpen] = useState(false);
   const [customSlug, setCustomSlug] = useState("");
   const buttonRef = useRef<HTMLButtonElement>(null);
+
+  // Closing the popover always resets the add-key sub-view so it never re-opens
+  // to a stale form on the next open.
+  const closeMenu = (): void => {
+    setOpen(false);
+    setAddKeyOpen(false);
+  };
 
   const selected =
     models.find((model) => model.id === value) ?? models[0] ?? null;
@@ -73,7 +154,7 @@ export function ModelPill({
 
   const commit = (modelId: string): void => {
     onChange(modelId);
-    setOpen(false);
+    closeMenu();
   };
 
   const renderRow = (model: ModelPillModel): ReactElement => {
@@ -128,8 +209,116 @@ export function ModelPill({
     );
   };
 
-  const hasFooter =
-    onAddProviderKey !== undefined || onGetLocalModels !== undefined;
+  // The add-key affordance shows for either the deep-link callback OR an inline
+  // port; the inline port takes precedence when both are supplied.
+  const hasAddKey =
+    providerKeysPort !== undefined || onAddProviderKey !== undefined;
+  const hasFooter = hasAddKey || onGetLocalModels !== undefined;
+
+  const handleAddKeyClick = (): void => {
+    if (providerKeysPort !== undefined) {
+      setAddKeyOpen(true);
+      return;
+    }
+    closeMenu();
+    onAddProviderKey?.();
+  };
+
+  const renderMenuBody = (): ReactElement => (
+    <>
+      {visible.length === 0 ? (
+        <div className="atlas-model-pill__empty">No models available.</div>
+      ) : (
+        <>
+          {cloud.length > 0 ? (
+            <div className="atlas-model-pill__group">
+              <div className="atlas-model-pill__group-head" aria-hidden="true">
+                Your keys
+              </div>
+              {cloud.map(renderRow)}
+            </div>
+          ) : null}
+          {local.length > 0 ? (
+            <div className="atlas-model-pill__group">
+              <div className="atlas-model-pill__group-head" aria-hidden="true">
+                Local · on-device
+              </div>
+              {local.map(renderRow)}
+            </div>
+          ) : null}
+        </>
+      )}
+      {hasFooter ? (
+        <div className="atlas-model-pill__footer">
+          {hasAddKey ? (
+            <a
+              className="atlas-model-pill__footer-link"
+              role="button"
+              tabIndex={0}
+              onClick={handleAddKeyClick}
+            >
+              Add a provider key →
+            </a>
+          ) : null}
+          {hasAddKey && onGetLocalModels ? (
+            <span className="atlas-model-pill__footer-sp" />
+          ) : null}
+          {onGetLocalModels ? (
+            <a
+              className="atlas-model-pill__footer-link"
+              role="button"
+              tabIndex={0}
+              onClick={() => {
+                closeMenu();
+                onGetLocalModels();
+              }}
+            >
+              Get local models →
+            </a>
+          ) : null}
+        </div>
+      ) : null}
+      {onAddCustom ? (
+        <form
+          className="atlas-model-pill__custom"
+          onSubmit={(event) => {
+            event.preventDefault();
+            const slug = customSlug.trim();
+            if (!slug) return;
+            onAddCustom(slug);
+            setCustomSlug("");
+            closeMenu();
+          }}
+        >
+          <label
+            className="atlas-model-pill__custom-label"
+            htmlFor="atlas-model-pill-custom"
+          >
+            Custom OpenRouter model
+          </label>
+          <div className="atlas-model-pill__custom-row">
+            <input
+              id="atlas-model-pill-custom"
+              type="text"
+              className="atlas-model-pill__custom-input"
+              placeholder="vendor/model — e.g. anthropic/claude-3.7-sonnet"
+              value={customSlug}
+              spellCheck={false}
+              autoComplete="off"
+              onChange={(event) => setCustomSlug(event.target.value)}
+            />
+            <button
+              type="submit"
+              className="atlas-model-pill__custom-add"
+              disabled={!customSlug.trim()}
+            >
+              Add
+            </button>
+          </div>
+        </form>
+      ) : null}
+    </>
+  );
 
   return (
     <div className="atlas-model-pill__root">
@@ -141,7 +330,12 @@ export function ModelPill({
         aria-expanded={open}
         aria-label={selected ? `Model: ${selected.name}` : "Select a model"}
         disabled={disabled}
-        onClick={() => setOpen((current) => !current)}
+        onClick={() =>
+          setOpen((current) => {
+            if (current) setAddKeyOpen(false);
+            return !current;
+          })
+        }
         data-tooltip="Choose model"
         data-tooltip-placement="bottom"
       >
@@ -166,112 +360,39 @@ export function ModelPill({
       </button>
       <Menu
         open={open}
-        onClose={() => setOpen(false)}
+        onClose={closeMenu}
         anchorRef={buttonRef}
         side="up"
         align="left"
         className="atlas-model-pill__menu"
       >
-        {visible.length === 0 ? (
-          <div className="atlas-model-pill__empty">No models available.</div>
-        ) : (
-          <>
-            {cloud.length > 0 ? (
-              <div className="atlas-model-pill__group">
-                <div
-                  className="atlas-model-pill__group-head"
-                  aria-hidden="true"
-                >
-                  Your keys
-                </div>
-                {cloud.map(renderRow)}
-              </div>
-            ) : null}
-            {local.length > 0 ? (
-              <div className="atlas-model-pill__group">
-                <div
-                  className="atlas-model-pill__group-head"
-                  aria-hidden="true"
-                >
-                  Local · on-device
-                </div>
-                {local.map(renderRow)}
-              </div>
-            ) : null}
-          </>
-        )}
-        {hasFooter ? (
-          <div className="atlas-model-pill__footer">
-            {onAddProviderKey ? (
-              <a
-                className="atlas-model-pill__footer-link"
-                role="button"
-                tabIndex={0}
-                onClick={() => {
-                  setOpen(false);
-                  onAddProviderKey();
-                }}
-              >
-                Add a provider key →
-              </a>
-            ) : null}
-            {onAddProviderKey && onGetLocalModels ? (
-              <span className="atlas-model-pill__footer-sp" />
-            ) : null}
-            {onGetLocalModels ? (
-              <a
-                className="atlas-model-pill__footer-link"
-                role="button"
-                tabIndex={0}
-                onClick={() => {
-                  setOpen(false);
-                  onGetLocalModels();
-                }}
-              >
-                Get local models →
-              </a>
-            ) : null}
-          </div>
-        ) : null}
-        {onAddCustom ? (
-          <form
-            className="atlas-model-pill__custom"
-            onSubmit={(event) => {
-              event.preventDefault();
-              const slug = customSlug.trim();
-              if (!slug) return;
-              onAddCustom(slug);
-              setCustomSlug("");
-              setOpen(false);
-            }}
-          >
-            <label
-              className="atlas-model-pill__custom-label"
-              htmlFor="atlas-model-pill-custom"
+        {addKeyOpen && providerKeysPort !== undefined ? (
+          <div className="atlas-model-pill__addkey">
+            <button
+              type="button"
+              className="atlas-model-pill__addkey-back"
+              onClick={() => setAddKeyOpen(false)}
             >
-              Custom OpenRouter model
-            </label>
-            <div className="atlas-model-pill__custom-row">
-              <input
-                id="atlas-model-pill-custom"
-                type="text"
-                className="atlas-model-pill__custom-input"
-                placeholder="vendor/model — e.g. anthropic/claude-3.7-sonnet"
-                value={customSlug}
-                spellCheck={false}
-                autoComplete="off"
-                onChange={(event) => setCustomSlug(event.target.value)}
-              />
-              <button
-                type="submit"
-                className="atlas-model-pill__custom-add"
-                disabled={!customSlug.trim()}
-              >
-                Add
-              </button>
-            </div>
-          </form>
-        ) : null}
+              ← Back
+            </button>
+            <KeyForm
+              port={providerKeysPort}
+              providers={MODEL_PILL_KEY_PROVIDERS}
+              formatCheck={modelPillFormatCheck}
+              placeholder="sk-…  paste your API key"
+              note="stored securely in your keychain — never uploaded"
+              connectLabel="Connect"
+              onCancel={() => setAddKeyOpen(false)}
+              onConnected={(result) => {
+                setAddKeyOpen(false);
+                closeMenu();
+                onProviderKeyAdded?.(result);
+              }}
+            />
+          </div>
+        ) : (
+          <>{renderMenuBody()}</>
+        )}
       </Menu>
     </div>
   );

@@ -106,3 +106,61 @@ describe("createRun — reasoning_depth wire field (P1-C §16)", () => {
     }
   });
 });
+
+describe("createRun — composer Tools popover (web-search + connector scopes)", () => {
+  it("sends web_search_enabled: false ONLY on an explicit opt-out", async () => {
+    stubOkFetch();
+    await createRun(
+      "conv_001",
+      "hello",
+      { orgId: "org_001", userId: "user_001" },
+      { webSearchEnabled: false },
+    );
+    expect(lastBody?.web_search_enabled).toBe(false);
+  });
+
+  it("omits web_search_enabled when enabled (runtime default is on)", async () => {
+    stubOkFetch();
+    await createRun(
+      "conv_001",
+      "hello",
+      { orgId: "org_001", userId: "user_001" },
+      { webSearchEnabled: true },
+    );
+    expect(lastBody).not.toBeNull();
+    expect(lastBody).not.toHaveProperty("web_search_enabled");
+  });
+
+  it("maps active connectorScopes onto request_context.connector_scopes", async () => {
+    stubOkFetch();
+    await createRun(
+      "conv_001",
+      "hello",
+      { orgId: "org_001", userId: "user_001" },
+      { connectorScopes: { "srv-1": [], "srv-2": ["read"] } },
+    );
+    expect(lastBody?.request_context).toEqual({
+      connector_scopes: { "srv-1": [], "srv-2": ["read"] },
+    });
+  });
+
+  it("omits request_context when no connectors are active (empty map)", async () => {
+    stubOkFetch();
+    await createRun(
+      "conv_001",
+      "hello",
+      { orgId: "org_001", userId: "user_001" },
+      { connectorScopes: {} },
+    );
+    expect(lastBody).not.toHaveProperty("request_context");
+  });
+
+  it("omits request_context when connectorScopes is not provided", async () => {
+    stubOkFetch();
+    await createRun("conv_001", "hello", {
+      orgId: "org_001",
+      userId: "user_001",
+    });
+    expect(lastBody).not.toHaveProperty("request_context");
+  });
+});

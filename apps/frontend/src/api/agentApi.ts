@@ -14,6 +14,7 @@ import type {
   CreateRunResponse,
   CreateShareRequest,
   CreateShareResponse,
+  ConversationConnectorScopes,
   ConversationConnectorScopesResponse,
   Draft,
   ForkRequest,
@@ -450,6 +451,12 @@ export function createRun(
      * this run only.
      */
     webSearchEnabled?: boolean;
+    /**
+     * Per-run active connector scopes (composer Tools popover). Threaded onto
+     * `request_context.connector_scopes`. Omitted / empty → no connector-scope
+     * payload (the wire stays back-compatible for callers that don't set it).
+     */
+    connectorScopes?: ConversationConnectorScopes;
     content?: CreateRunRequest["content"];
     attachments?: CreateRunRequest["attachments"];
     quote?: Record<string, unknown>;
@@ -470,6 +477,12 @@ export function createRun(
     // (on) and the wire back-compatible for every existing caller.
     ...(options.webSearchEnabled === false
       ? { web_search_enabled: false }
+      : {}),
+    // Only send `request_context` when the composer activated connectors; an
+    // empty map is equivalent to "no scopes" and would just bloat the body.
+    ...(options.connectorScopes !== undefined &&
+    Object.keys(options.connectorScopes).length > 0
+      ? { request_context: { connector_scopes: options.connectorScopes } }
       : {}),
     content: options.content,
     attachments: options.attachments,

@@ -19,7 +19,11 @@ import {
   type ReactNode,
 } from "react";
 
-import type { McpServer, ModelCatalogModel, Skill } from "@0x-copilot/api-types";
+import type {
+  McpServer,
+  ModelCatalogModel,
+  Skill,
+} from "@0x-copilot/api-types";
 
 import {
   AssistantComposer,
@@ -28,6 +32,8 @@ import {
   type ComposerHandle,
 } from "../composer";
 import type { FilePickerPort } from "../ports/FilePickerPort";
+import type { ProviderKeysPort } from "../settings/data/providerKeys";
+import type { KeyFormConnected } from "./KeyForm";
 import type { StartRunError } from "../destinations/run";
 import {
   FIRST_RUN_SUGGESTIONS,
@@ -44,8 +50,14 @@ export const ONBOARDING_COMPOSER_COPY = {
 
 export interface OnboardingComposerProps {
   // --- host substrate wiring (identical shapes to RunComposer → AssistantComposer) ---
-  readonly connectors: { readonly servers: readonly McpServer[]; readonly loading: boolean };
-  readonly skills: { readonly skills: readonly Skill[]; readonly loading: boolean };
+  readonly connectors: {
+    readonly servers: readonly McpServer[];
+    readonly loading: boolean;
+  };
+  readonly skills: {
+    readonly skills: readonly Skill[];
+    readonly loading: boolean;
+  };
   readonly attachmentAdapter?: AttachmentAdapter;
   readonly filePicker: FilePickerPort;
   readonly renderPlusMenu: (a: AssistantComposerPlusMenuSlotArgs) => ReactNode;
@@ -64,6 +76,14 @@ export interface OnboardingComposerProps {
   readonly selectedModel: string;
   readonly onModelChange: (id: string) => void;
   readonly onAddCustomModel?: (slug: string) => void;
+  /**
+   * When set, the composer's ModelPill "Add a provider key" opens an inline
+   * `<KeyForm>` sub-view inside the model popover (saved through this port).
+   * Forwarded verbatim to {@link AssistantComposer}.
+   */
+  readonly providerKeysPort?: ProviderKeysPort;
+  /** Refresh seam fired after a successful inline add-key connect. */
+  readonly onProviderKeyAdded?: (result: KeyFormConnected) => void;
 
   // --- first-run specifics ---
   readonly suggestions?: readonly FirstRunSuggestion[];
@@ -110,6 +130,8 @@ function OnboardingComposerInner(
     selectedModel,
     onModelChange,
     onAddCustomModel,
+    providerKeysPort,
+    onProviderKeyAdded,
     suggestions = FIRST_RUN_SUGGESTIONS,
     resolveAttachment,
     onSubmit,
@@ -165,9 +187,16 @@ function OnboardingComposerInner(
       />
 
       {startError !== null ? (
-        <div className="fr-cerr" role="alert" data-testid="first-run-composer-error">
+        <div
+          className="fr-cerr"
+          role="alert"
+          data-testid="first-run-composer-error"
+        >
           <div className="fr-cerr__row">
-            <span className="fr-cerr__msg" data-testid="first-run-composer-error-message">
+            <span
+              className="fr-cerr__msg"
+              data-testid="first-run-composer-error-message"
+            >
               {startError.message}
             </span>
             {onDismissError ? (
@@ -197,7 +226,10 @@ function OnboardingComposerInner(
 
       <AssistantComposer
         ref={setComposerRef}
-        connectors={{ servers: [...connectors.servers], loading: connectors.loading }}
+        connectors={{
+          servers: [...connectors.servers],
+          loading: connectors.loading,
+        }}
         skills={{ skills: [...skills.skills], loading: skills.loading }}
         attachmentAdapter={attachmentAdapter}
         filePicker={filePicker}
@@ -216,6 +248,8 @@ function OnboardingComposerInner(
         selectedModel={selectedModel}
         onModelChange={onModelChange}
         onAddCustomModel={onAddCustomModel}
+        providerKeysPort={providerKeysPort}
+        onProviderKeyAdded={onProviderKeyAdded}
         depthVisible={false}
         // Hero surface — web's roomy 3 rows (not the narrow Run rail's 2).
         minRows={3}

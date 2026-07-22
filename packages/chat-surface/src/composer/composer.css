@@ -690,9 +690,11 @@
 }
 
 .aui-plus-menu {
+  /* Design `.pop` chrome (copilot-v3.css): elevated panel, hairline border,
+   * 10px radius, deep drop shadow. Tokenized so theme/accent stay coherent. */
   background: var(--color-bg-elevated);
   border: 1px solid var(--color-border);
-  border-radius: var(--radius-lg);
+  border-radius: 10px;
   box-shadow: 0 18px 48px rgb(0 0 0 / 0.32);
   /* Portaled to <body> — reference design-system tokens explicitly so
    * the popup matches the rest of the app regardless of where it
@@ -851,12 +853,16 @@
   white-space: nowrap;
 }
 
+/* Solid bright-accent square (design mock `.cmp-send`): filled accent at all
+ * times so the send action reads as the primary control; disabled just dims the
+ * same solid square (design `.cmp-send:disabled{opacity:.35}`) rather than
+ * becoming a ghost tint. The `--stop` variant below stays quiet-tinted. */
 .aui-send-button {
   align-items: center;
-  background: color-mix(in srgb, var(--color-accent) 18%, transparent);
-  border: 1px solid color-mix(in srgb, var(--color-accent) 35%, transparent);
+  background: var(--color-accent);
+  border: 1px solid var(--color-accent);
   border-radius: var(--radius-md);
-  color: color-mix(in srgb, var(--color-accent) 75%, var(--color-text-subtle));
+  color: var(--color-accent-contrast, white);
   cursor: pointer;
   display: inline-flex;
   font: inherit;
@@ -873,22 +879,18 @@
 }
 
 .aui-send-button:hover:not([disabled]):not(.aui-send-button--stop) {
-  background: color-mix(in srgb, var(--color-accent) 88%, white);
+  background: var(
+    --color-accent-strong,
+    color-mix(in srgb, var(--color-accent) 88%, white)
+  );
   color: var(--color-accent-contrast, white);
-  border-color: var(--color-accent);
-}
-
-.aui-send-button:not([disabled]):not(.aui-send-button--stop) {
-  background: var(--color-accent);
-  color: var(--color-accent-contrast, white);
-  border-color: var(--color-accent);
+  border-color: var(--color-accent-strong, var(--color-accent));
 }
 
 .aui-send-button[disabled] {
   cursor: not-allowed;
-  /* Subtle dimming — the tinted base already signals "not ready"; full
-   * opacity 0.5 would push it back into invisibility. */
-  opacity: 0.85;
+  /* Dim the solid square (mock `.cmp-send:disabled`), not a ghost tint. */
+  opacity: 0.4;
 }
 
 .aui-send-button--stop {
@@ -1001,15 +1003,28 @@
   text-align: left;
 }
 
+/* Design `.pop-row`: 24px icon lozenge + title + mono subtitle, 7px radius,
+ * hover `--color-surface-muted` (inherited from the shared
+ * `.aui-trigger-popover__item:hover` rule above). */
 .aui-plus-menu__item {
-  grid-template-columns: 16px 1fr;
-  gap: 0 var(--space-sm);
+  grid-template-columns: 24px 1fr;
+  gap: 0 9px;
   align-items: center;
+  padding: var(--space-2xs);
+  border-radius: 7px;
 }
 
 .aui-plus-menu__item > .aui-plus-menu__icon {
-  grid-row: 1;
+  grid-row: 1 / span 2;
   grid-column: 1;
+  /* The lozenge: a 24px rounded tile behind the 14px glyph (padding shrinks
+   * the inline SVG's rendered viewBox via border-box). */
+  box-sizing: border-box;
+  width: 24px;
+  height: 24px;
+  padding: 5px;
+  border-radius: 6px;
+  background: var(--color-surface-muted);
   color: var(--color-text-muted);
 }
 
@@ -1020,15 +1035,17 @@
    * next to the rest of the app's 600-weight UI titles. Pin to the
    * design-system token. Size + line-height also tokenized so popups
    * stay coherent if the type scale shifts. */
-  font-size: var(--font-size-md);
-  font-weight: var(--font-weight-semibold);
+  font-size: var(--font-size-sm);
+  font-weight: var(--font-weight-medium);
   line-height: var(--line-height-snug);
 }
 
 .aui-plus-menu__item > span {
   grid-row: 2;
   grid-column: 2;
-  font-size: var(--font-size-xs);
+  font-family: var(--font-mono);
+  font-size: var(--font-size-3xs);
+  color: var(--color-text-muted);
   line-height: var(--line-height-snug);
 }
 
@@ -1045,4 +1062,125 @@
 .aui-trigger-popover__item span {
   color: var(--color-text-muted);
   font-size: var(--font-size-xs);
+}
+
+/* ===========================================================================
+ * Inline BYOK add-key (ModelPill sub-view) — composer-chrome parity.
+ *
+ * The ModelPill's "Add a provider key" footer opens the shared <KeyForm> INSIDE
+ * the model popover (chat/run). onboarding.css is NOT loaded there, so the
+ * `.fr-kf` / `.gbtn` rules are duplicated here (byte-parallel with
+ * onboarding.css). Kept in sync with apps/frontend/src/styles.css.
+ * =========================================================================== */
+
+/* --- ModelPill add-key sub-view wrapper --- */
+.atlas-model-pill__addkey {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-sm);
+  padding: var(--space-sm);
+  min-width: 17rem;
+}
+
+.atlas-model-pill__addkey-back {
+  align-self: flex-start;
+  border: 0;
+  background: transparent;
+  color: var(--color-text-muted);
+  font-family: var(--font-mono);
+  font-size: var(--font-size-xs);
+  cursor: pointer;
+  padding: 0;
+}
+
+.atlas-model-pill__addkey-back:hover {
+  color: var(--color-text);
+}
+
+/* --- Bespoke gate buttons (design .gbtn / .gbtn--pri) --- */
+.gbtn {
+  align-self: flex-start;
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  border: 1px solid var(--color-border-stronger);
+  background: var(--color-surface-elevated);
+  color: var(--color-text);
+  border-radius: var(--radius-md);
+  padding: 7px 13px;
+  font-family: var(--font-display);
+  font-weight: var(--font-weight-semibold);
+  font-size: 11.5px;
+  cursor: pointer;
+  transition: border-color var(--duration-fast) var(--ease-standard);
+}
+
+.gbtn:hover:not(:disabled) {
+  border-color: var(--color-accent);
+}
+
+.gbtn:disabled {
+  opacity: 0.5;
+  cursor: default;
+}
+
+.gbtn--pri {
+  background: var(--color-accent);
+  border-color: var(--color-accent);
+  color: var(--color-accent-contrast);
+}
+
+.gbtn--pri:hover:not(:disabled) {
+  filter: brightness(1.08);
+}
+
+/* --- Inline BYOK key form (design .fr-kf: bare flex column, no panel) --- */
+.fr-kf {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-sm);
+  width: 100%;
+}
+
+.fr-kf__prov {
+  align-self: flex-start;
+  max-width: 100%;
+}
+
+.fr-kf__opt {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-xs);
+}
+
+.fr-kf__dot {
+  display: inline-block;
+  width: 8px;
+  height: 8px;
+  border-radius: var(--radius-full);
+  /* background supplied inline from FirstRunKeyProvider.dotColor. */
+}
+
+.fr-kf__input {
+  font-family: var(--font-mono);
+}
+
+.fr-kf__note {
+  margin: 0;
+  font-family: var(--font-mono);
+  font-size: var(--font-size-3xs);
+  color: var(--color-text-subtle);
+}
+
+.fr-kf__error {
+  margin: 0;
+  font-size: var(--font-size-xs);
+  color: var(--color-danger);
+}
+
+.fr-kf__actions {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: var(--space-sm);
 }

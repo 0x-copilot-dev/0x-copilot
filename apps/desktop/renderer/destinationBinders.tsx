@@ -20,6 +20,7 @@
 import {
   useCallback,
   useEffect,
+  useMemo,
   useRef,
   useState,
   type ReactElement,
@@ -33,6 +34,7 @@ import {
   RunDestination,
   SkillsDestination,
   buildRunCreateBody,
+  createProviderKeysPort,
   messageFromError,
   useNotify,
   useTransport,
@@ -76,6 +78,7 @@ import { CONNECTOR_CHANNELS } from "../main/connectors/channels";
 // substrate ports. Same-app imports, allowed.
 import { RunComposer } from "./composer/RunComposer";
 import { RunEmptyComposer } from "./composer/RunEmptyComposer";
+import { createComposerConnectorsPort } from "./composer/composerConnectorsPort";
 
 // ---------------------------------------------------------------------------
 // Shared load hook — drives the 4-state machine (loading / ok / empty / error)
@@ -610,6 +613,17 @@ export function RunBinder({
   readonly onOpenSkills?: () => void;
 }): ReactElement {
   const transport = useTransport();
+  // Composer chrome ports: the inline Tools popover's MCP surface (the shared
+  // `/v1/mcp/*` adapter) + the model pill's inline "Add a provider key" form
+  // surface. Both are stable per transport, so memoize.
+  const connectorsPort = useMemo(
+    () => createComposerConnectorsPort(transport),
+    [transport],
+  );
+  const providerKeysPort = useMemo(
+    () => createProviderKeysPort(transport),
+    [transport],
+  );
   // Idempotency key for a new chat's first send — minted once per new-chat
   // intent (below) and cleared once a conversation exists. The outlet keys this
   // binder by conversationId, so a new chat gets a fresh binder (and a fresh
@@ -733,9 +747,11 @@ export function RunBinder({
         ctx={ctx}
         onShowConnectors={onOpenConnectors}
         onOpenSkills={onOpenSkills}
+        connectorsPort={connectorsPort}
+        providerKeysPort={providerKeysPort}
       />
     ),
-    [onOpenConnectors, onOpenSkills],
+    [onOpenConnectors, onOpenSkills, connectorsPort, providerKeysPort],
   );
 
   // Composer parity (PRD: desktop-composer-parity): mount the shared
@@ -757,9 +773,17 @@ export function RunBinder({
         onShowConnectors={onOpenConnectors}
         onOpenSkillsSettings={onOpenSkills}
         onOpenModelSettings={onOpenModelSettings}
+        connectorsPort={connectorsPort}
+        providerKeysPort={providerKeysPort}
       />
     ),
-    [onOpenConnectors, onOpenSkills, onOpenModelSettings],
+    [
+      onOpenConnectors,
+      onOpenSkills,
+      onOpenModelSettings,
+      connectorsPort,
+      providerKeysPort,
+    ],
   );
 
   return (

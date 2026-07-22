@@ -22,6 +22,8 @@ import {
 import type { FilePickerPort } from "../ports/FilePickerPort";
 import type { ThinkingDepth } from "./depth";
 import { ModelPill } from "./ModelPill";
+import type { ProviderKeysPort } from "../settings/data/providerKeys";
+import type { KeyFormConnected } from "../onboarding/KeyForm";
 import { ThinkingDepthControl } from "./ThinkingDepthControl";
 import { ComposerPlusMenu, type ComposerMenuView } from "./ComposerPlusMenu";
 import { fileAttachmentAccept } from "./fileAttachmentAccept";
@@ -114,6 +116,14 @@ export interface AssistantComposerProps {
   onModelChange?: (id: string) => void;
   /** Register + select an arbitrary OpenRouter `vendor/model` slug. */
   onAddCustomModel?: (slug: string) => void;
+  /**
+   * When set, the ModelPill's "Add a provider key" footer opens an inline
+   * `<KeyForm>` sub-view inside the model popover (saved through this port),
+   * instead of the deep-link. Forwarded verbatim to {@link ModelPill}.
+   */
+  providerKeysPort?: ProviderKeysPort;
+  /** Refresh seam fired after a successful inline add-key connect (see ModelPill). */
+  onProviderKeyAdded?: (result: KeyFormConnected) => void;
   depth?: ThinkingDepth;
   onDepthChange?: (depth: ThinkingDepth) => void;
   depthVisible?: boolean;
@@ -212,6 +222,8 @@ export const AssistantComposer = forwardRef<
     selectedModel,
     onModelChange,
     onAddCustomModel,
+    providerKeysPort,
+    onProviderKeyAdded,
     depth,
     onDepthChange,
     depthVisible,
@@ -478,6 +490,8 @@ export const AssistantComposer = forwardRef<
                 onChange={onModelChange}
                 disabled={controlsDisabled}
                 onAddCustom={onAddCustomModel}
+                providerKeysPort={providerKeysPort}
+                onProviderKeyAdded={onProviderKeyAdded}
               />
             ) : null}
             {depth !== undefined && onDepthChange ? (
@@ -522,15 +536,11 @@ export const AssistantComposer = forwardRef<
         // NOT gate on `running` (or any other run-state flag); hiding
         // shortcuts mid-flight makes the composer look broken. See
         // apps/frontend/CLAUDE.md → "Composer hint row".
+        //
+        // The `↵ send` / `⇧+↵ new line` keyboard hints are dropped to match the
+        // design mock (its composer shows no send/newline hint). The `/ skills`
+        // cue and the "Sources cited inline" mode flag stay.
         <div className="aui-composer__hint" aria-hidden="false">
-          <span>
-            <kbd>↵</kbd> send
-          </span>
-          <span className="aui-composer__hint-sep" aria-hidden="true" />
-          <span>
-            <kbd>⇧</kbd>+<kbd>↵</kbd> new line
-          </span>
-          <span className="aui-composer__hint-sep" aria-hidden="true" />
           <span>
             <kbd>/</kbd> skills
           </span>
