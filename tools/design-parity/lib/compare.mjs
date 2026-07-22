@@ -56,6 +56,12 @@ const BOX = new Set([
   "gap",
   "borderWidth",
   "borderRadius",
+  // Depth/emphasis carriers. A selection RING drawn as a box-shadow and a lost
+  // backdrop blur are visual defects of the same weight as a padding change, so
+  // they classify MEDIUM rather than falling through to the LOW default.
+  "boxShadow",
+  "backdropFilter",
+  "textDecorationLine",
 ]);
 const LAYOUT = new Set([
   "display",

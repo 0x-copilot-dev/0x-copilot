@@ -41,6 +41,14 @@
     "flexGrow",
     "flexWrap",
     "opacity",
+    // Depth + motion. Added after the Tools audit found real drift the diff could
+    // not see: an accent selection RING and a missing modal-scrim BLUR were both
+    // source-confirmed only, because these four properties were never captured.
+    // A parity harness that silently cannot see a property reports false parity.
+    "boxShadow",
+    "backdropFilter",
+    "transition",
+    "textDecorationLine",
     // layout size (noisy)
     "width",
     "height",
