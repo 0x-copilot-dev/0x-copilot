@@ -32,7 +32,7 @@ tools/design-parity/
 | Surface              | Design spec                  | Parity report                                               | States                                                                                      |
 | -------------------- | ---------------------------- | ----------------------------------------------------------- | ------------------------------------------------------------------------------------------- |
 | **first-run** (FTUE) | `surfaces/first-run/design/` | `surfaces/first-run/out/report.md` (gate: 12 HIGH / 30 MED) | gate ✅ · composer/ack TODO                                                                 |
-| **login**            | `surfaces/login/design/`     | — (design spec vendored; live render TODO)                  | pick · wallets · connecting · werr · sign · google · gerr · done (all render via `?state=`) |
+| **login**            | `surfaces/login/design/`     | `surfaces/login/out/report.md` (36 HIGH / 31 MED) + [`FINDINGS.md`](surfaces/login/out/FINDINGS.md) | pick·connecting·sign·done ✅ · werr/gerr/google = design-only (live has no recovery views) |
 
 ## Using it for the surface you're working on
 

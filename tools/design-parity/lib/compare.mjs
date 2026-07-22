@@ -240,7 +240,8 @@ const SEV_LABEL = {
   low: "🟡 LOW",
   info: "⚪ INFO",
 };
-let md = `# Design-parity report — first-run · \`${state}\`\n\n`;
+const surface = flag("surface");
+let md = `# Design-parity report — ${surface ? surface + " · " : ""}\`${state}\`\n\n`;
 md += `Design baseline (source of truth) vs live app, by computed style.\n\n`;
 md += `- Design: \`${designPath}\`\n- Live: \`${livePath}\`\n\n`;
 md += `**Summary:** `;

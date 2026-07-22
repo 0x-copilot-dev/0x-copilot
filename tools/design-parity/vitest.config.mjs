@@ -10,7 +10,7 @@ export default defineConfig({
   root: fileURLToPath(new URL(".", import.meta.url)),
   test: {
     environment: "jsdom",
-    include: ["lib/render-live.test.tsx"],
+    include: ["lib/render-live.test.tsx", "lib/render-live-login.test.tsx"],
     // Long-ish: pulls the chat-surface barrel through esbuild once.
     testTimeout: 60000,
   },

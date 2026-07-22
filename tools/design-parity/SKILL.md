@@ -129,8 +129,10 @@ Tune thresholds/weights in `classify()`.
   extended (composer needs the vendored `copilot-v3.css` `.cmp`/`.pop` rules; ack needs
   a click-through to `sent`), and (b) the live harness to render those states (drive
   with `@testing-library` `fireEvent`, or pass `initialStage`), then extend `anchors.json`.
-- **login**: the design baseline is vendored and all 8 states render via `?state=`
-  (`pick`/`wallets`/`connecting`/`werr`/`sign`/`google`/`gerr`/`done`). TODO: the LIVE
-  render (`apps/frontend` `LoginScreen` + `WalletSignIn` — needs the auth-provider
-  context faked) + `anchors.json` + a report. High value: the `connecting`/`werr`/
-  `gerr` states are the low-fidelity waiting/error screens flagged in earlier review.
+- **login**: FULLY WIRED. Design baseline (8 states via `?state=`) + live render
+  (`lib/render-live-login.test.tsx` renders `apps/frontend` `LoginScreen`'s `SignInCard`
+  with mocked auth/SIWE/EIP-6963 to 6 state HTMLs) + `anchors.json` + `out/report.md`
+  (36 HIGH / 31 MED) + `out/FINDINGS.md`. Headline: the live app has NO dedicated
+  wallet-error (`werr`) or Google recovery views — errors are an inline `.login-card__error`
+  (cleared immediately on wallet failures) and Google is a bare redirect; the design's
+  recovery screens have no live analog.
