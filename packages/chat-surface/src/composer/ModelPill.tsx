@@ -232,7 +232,10 @@ export function ModelPill({
         <>
           {cloud.length > 0 ? (
             <div className="atlas-model-pill__group">
-              <div className="atlas-model-pill__group-head" aria-hidden="true">
+              <div
+                className="atlas-model-pill__group-head ui-section-label"
+                aria-hidden="true"
+              >
                 Your keys
               </div>
               {cloud.map(renderRow)}
@@ -240,7 +243,10 @@ export function ModelPill({
           ) : null}
           {local.length > 0 ? (
             <div className="atlas-model-pill__group">
-              <div className="atlas-model-pill__group-head" aria-hidden="true">
+              <div
+                className="atlas-model-pill__group-head ui-section-label"
+                aria-hidden="true"
+              >
                 Local · on-device
               </div>
               {local.map(renderRow)}
@@ -291,7 +297,7 @@ export function ModelPill({
           }}
         >
           <label
-            className="atlas-model-pill__custom-label"
+            className="atlas-model-pill__custom-label ui-section-label"
             htmlFor="atlas-model-pill-custom"
           >
             Custom OpenRouter model

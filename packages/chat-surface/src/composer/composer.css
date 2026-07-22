@@ -472,12 +472,12 @@
   margin-top: 2px;
 }
 
+/* Layout only — type + muted color come from the shared .ui-section-label
+ * recipe (design-system), so "Your keys" / "Local · on-device" match every
+ * other section label app-wide. Was the mono 0.13em outlier the user spotted;
+ * moving to the recipe also styles this label on web (design-system is imported
+ * on both hosts), fixing the web copy that never had this rule. */
 .atlas-model-pill__group-head {
-  font-family: var(--font-mono);
-  font-size: var(--font-size-2xs);
-  letter-spacing: 0.13em;
-  text-transform: uppercase;
-  color: var(--color-text-muted);
   padding: 8px 9px 4px;
 }
 
@@ -604,13 +604,9 @@
   border-top: 1px solid var(--color-border);
 }
 
+/* Layout only — type + muted color from the .ui-section-label recipe. */
 .atlas-model-pill__custom-label {
   display: block;
-  font-size: var(--font-size-2xs);
-  font-weight: var(--font-weight-medium);
-  letter-spacing: 0.06em;
-  text-transform: uppercase;
-  color: var(--color-text-muted);
   margin-bottom: 6px;
 }
 
