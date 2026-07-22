@@ -1,0 +1,75 @@
+{
+  "wrap": {
+    "matched": true,
+    "tag": "div",
+    "cls": "empty",
+    "text": "No response from MetaMask",
+    "styles": {
+      "fontSize": "13px",
+      "textAlign": "center",
+      "color": "rgb(152, 152, 159)",
+      "padding": "26px 0px"
+    }
+  },
+  "title": {
+    "matched": true,
+    "tag": "h3",
+    "text": "No response from MetaMask",
+    "styles": {
+      "fontSize": "13.5px",
+      "fontWeight": "600",
+      "lineHeight": "16.2px",
+      "letterSpacing": "-0.135px",
+      "textAlign": "center",
+      "color": "rgb(236, 236, 241)"
+    }
+  },
+  "body": {
+    "matched": true,
+    "tag": "p",
+    "styles": {
+      "fontSize": "12px",
+      "textAlign": "center",
+      "color": "rgb(152, 152, 159)"
+    }
+  },
+  "btn.secondary": {
+    "matched": true,
+    "tag": "button",
+    "cls": "cbtn",
+    "text": "Choose another wallet",
+    "styles": {
+      "fontSize": "12px",
+      "fontWeight": "500",
+      "color": "rgb(236, 236, 241)",
+      "borderColor": "rgba(255, 255, 255, 0.1)",
+      "borderRadius": "6px",
+      "padding": "9px 12px"
+    }
+  },
+  "btn.primary": {
+    "matched": true,
+    "tag": "button",
+    "cls": "cbtn cbtn--pri",
+    "text": "Try again",
+    "styles": {
+      "fontSize": "12px",
+      "fontWeight": "600",
+      "color": "rgb(8, 19, 29)",
+      "backgroundColor": "rgb(95, 178, 236)",
+      "borderRadius": "6px",
+      "padding": "9px 12px"
+    }
+  },
+  "backlink": {
+    "matched": true,
+    "tag": "button",
+    "cls": "backlink",
+    "text": "Back to sign-in",
+    "styles": {
+      "fontFamily": "JetBrains Mono",
+      "fontSize": "11px",
+      "color": "rgb(152, 152, 159)"
+    }
+  }
+}
