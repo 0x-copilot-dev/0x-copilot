@@ -191,7 +191,7 @@ describe("renderer bootstrap", () => {
     ).not.toBeNull();
 
     // The destination outlet renders the real Run cockpit (PR-6.7), not a
-    // phase placeholder: its root + header + idle empty-state are present.
+    // phase placeholder: its root + header + idle empty composer are present.
     const outlet = root.querySelector("[data-testid='destination-outlet']");
     expect(outlet).not.toBeNull();
     expect(outlet?.getAttribute("data-destination")).toBe("run");
@@ -199,8 +199,13 @@ describe("renderer bootstrap", () => {
       root.querySelector("[data-testid='run-destination']"),
     ).not.toBeNull();
     expect(root.querySelector("[data-testid='run-header']")).not.toBeNull();
+    // No active run → the design's "What should we run first?" rich composer
+    // (RunBinder injects `renderEmptyComposer`), not the plain goal card.
     expect(
-      root.querySelector("[data-testid='run-empty-state']"),
+      root.querySelector("[data-testid='run-empty-composer']"),
+    ).not.toBeNull();
+    expect(
+      root.querySelector("[data-testid='first-run-composer']"),
     ).not.toBeNull();
     // No phase placeholder anywhere in the mounted shell.
     expect(
