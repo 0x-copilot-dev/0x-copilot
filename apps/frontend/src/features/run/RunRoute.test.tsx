@@ -260,6 +260,12 @@ describe("RunRoute (PRD-05)", () => {
       within(record).getByText("Fix login redirect loop"),
     ).toBeInTheDocument();
     expect(within(record).getByText("In Progress")).toBeInTheDocument();
+
+    // WC-P1 keystone: the reopened cockpit now fills the `renderComposer` slot,
+    // so a SECOND (turn-N) in-chat message has a live composer + send path — the
+    // web bug where a 2nd message was inert is closed. Before P1 the cockpit
+    // mounted only the empty composer and this element did not exist.
+    expect(await screen.findByTestId("run-composer")).toBeInTheDocument();
   });
 
   it("mounts the design's rich empty composer ('What should we run first?') when there is no active run", async () => {

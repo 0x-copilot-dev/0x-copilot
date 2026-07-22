@@ -44,6 +44,7 @@ import {
 import type { ConversationId } from "@0x-copilot/api-types";
 
 import type { RequestIdentity } from "../../api/config";
+import { RunComposer } from "./RunComposer";
 import { RunEmptyComposer } from "./RunEmptyComposer";
 
 // The shared FTUE / onboarding-composer styles (hero · starter chips ·
@@ -193,6 +194,24 @@ export function RunRoute({
     [identity],
   );
 
+  // P1 keystone: the in-chat (turn-N) composer. The cockpit injects `dispatch`
+  // (start run + bind session) into the ctx; RunComposer routes send through it,
+  // so a 2nd message streams exactly like the first (no more inert turn-N).
+  const renderComposer = useCallback(
+    (ctx: {
+      readonly disabled: boolean;
+      readonly placeholder: string;
+      readonly dispatch: (request: RunStartRequest) => Promise<void>;
+    }) => (
+      <RunComposer
+        ctx={ctx}
+        identity={identity}
+        onOpenModelSettings={onOpenModelSettings}
+      />
+    ),
+    [identity, onOpenModelSettings],
+  );
+
   // A new chat (no conversation yet) mounts the cockpit against a "new" sentinel:
   // its head/transcript GETs 404 harmlessly (head resolution is best-effort) and
   // the empty composer shows until the first send creates the real conversation.
@@ -215,6 +234,7 @@ export function RunRoute({
         onStartRun={handleStartRun}
         modelReady={modelReady}
         onOpenModelSettings={onOpenModelSettings}
+        renderComposer={renderComposer}
         renderEmptyComposer={renderEmptyComposer}
       />
     </section>
