@@ -68,11 +68,28 @@
   --font-size-xl: 1.125rem; /* 18.0px — section title */
   --font-size-2xl: 1.4rem; /* 22.4px — page heading */
   --font-size-3xl: 2rem; /* 32.0px — display heading */
+  --font-size-mono-10: 0.625rem; /* 10px — canonical small-mono pill metadata (atlas-model-pill, fr-wchip); deliberately off the main ladder */
 
   --font-weight-regular: 400;
   --font-weight-medium: 500;
   --font-weight-semibold: 600;
   --font-weight-bold: 700;
+
+  /* Tracking / letter-spacing tier — the same single-source-of-truth
+   * discipline as the size and weight tiers above. Before this scale, 17
+   * magic-number letter-spacings (11 positive, 6 negative) drifted across the
+   * app for the SAME type roles — e.g. one uppercase 2xs "section label"
+   * rendered at 0.04 / 0.06 / 0.13em depending on which selector you hit.
+   * Every heading / label / eyebrow / caption recipe resolves to exactly one
+   * of these steps; components reference --tracking-*, never a raw em. */
+  --tracking-tighter: -0.03em; /* large display / global h3 (folds -0.03, -0.04) */
+  --tracking-tight: -0.02em; /* default heading tightening (folds -0.015, -0.02, -0.025) */
+  --tracking-snug: -0.01em; /* 2xl heads, logos, item names (folds -0.01) */
+  --tracking-normal: 0; /* item titles / body (folds 0, unset) */
+  --tracking-caption: 0.01em; /* meta / caption / small mono (folds 0.005, 0.01, 0.02) */
+  --tracking-label: 0.05em; /* uppercase section labels (folds 0.04, 0.05, 0.06) */
+  --tracking-eyebrow: 0.1em; /* eyebrows / kickers (folds 0.08, 0.1, 0.11) */
+  --tracking-mono-caps: 0.12em; /* 3xs mono caps (folds 0.12, 0.13) */
 
   --line-height-tight: 1.2;
   --line-height-snug: 1.35;
@@ -1044,4 +1061,131 @@ textarea {
   :root[data-reduce-motion="auto"] .ds-popover-content[data-state="closed"] {
     animation: none;
   }
+}
+
+/* ===========================================================================
+ * Typographic + pill RECIPES (design-system SSOT)
+ *
+ * The token tiers above (--font-size-*, --font-weight-*, --tracking-*) are the
+ * atoms; these classes are the COMPOSED roles. Before them, every consumer
+ * hand-assembled the same role from raw tokens and drifted — one uppercase 2xs
+ * "section label" existed at 0.04 / 0.06 / 0.13em × 4 weights across the app.
+ * Reach for a recipe class (or its React wrapper in index.tsx) instead of
+ * re-composing font-size + weight + tracking + transform by hand.
+ * See SKILL.md for the intent → recipe map. Enforced by stylelint
+ * (declaration-strict-value on font-size + letter-spacing).
+ * ======================================================================== */
+
+/* Eyebrow / kicker — uppercase label ABOVE a heading. */
+.ui-eyebrow {
+  font-size: var(--font-size-2xs);
+  font-weight: var(--font-weight-bold);
+  letter-spacing: var(--tracking-eyebrow);
+  text-transform: uppercase;
+  color: var(--color-text-muted);
+}
+
+/* Section / group label — uppercase micro-label heading a group of rows. */
+.ui-section-label {
+  font-size: var(--font-size-2xs);
+  font-weight: var(--font-weight-semibold);
+  letter-spacing: var(--tracking-label);
+  text-transform: uppercase;
+  color: var(--color-text-muted);
+}
+
+/* Mono caps — 3xs monospace uppercase micro-label (dividers, mono group heads). */
+.ui-mono-caps {
+  font-family: var(--font-mono);
+  font-size: var(--font-size-3xs);
+  letter-spacing: var(--tracking-mono-caps);
+  text-transform: uppercase;
+  color: var(--color-text-muted);
+}
+
+/* Item / card / row title — md, semibold, flat tracking. */
+.ui-item-title {
+  font-size: var(--font-size-md);
+  font-weight: var(--font-weight-semibold);
+  letter-spacing: var(--tracking-normal);
+}
+
+/* Caption / meta — small secondary text with a hair of tracking. */
+.ui-caption {
+  font-size: var(--font-size-xs);
+  font-weight: var(--font-weight-medium);
+  letter-spacing: var(--tracking-caption);
+  color: var(--color-text-muted);
+}
+
+/* Heading — display face, semibold, negative tracking. Level sets the size +
+ * how tight. Use on the element or via <Heading level>. */
+.ui-heading {
+  font-weight: var(--font-weight-semibold);
+  letter-spacing: var(--tracking-tight);
+  line-height: var(--line-height-tight);
+}
+.ui-heading--1 {
+  font-size: var(--font-size-3xl);
+  letter-spacing: var(--tracking-tighter);
+}
+.ui-heading--2 {
+  font-size: var(--font-size-2xl);
+  letter-spacing: var(--tracking-snug);
+}
+.ui-heading--3 {
+  font-size: var(--font-size-xl);
+  letter-spacing: var(--tracking-snug);
+}
+
+/* Pill — the canonical rounded status/selection chip. Seeds off .ui-status-pill
+ * (dot + tone) but generalised: tone variants + an --active accent-fill state.
+ * Collapses aui-status-pill / me-radio-pill / settings-pill / ui-connector-chip
+ * / aui-attachment-pill into one recipe. */
+.ui-pill {
+  align-items: center;
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-full);
+  color: var(--color-text-muted);
+  display: inline-flex;
+  font-size: var(--font-size-2xs);
+  font-weight: var(--font-weight-medium);
+  letter-spacing: var(--tracking-normal);
+  gap: 0.4rem;
+  line-height: 1;
+  padding: 0.25rem 0.6rem;
+  white-space: nowrap;
+}
+.ui-pill--active {
+  border-color: color-mix(in oklab, var(--color-accent) 40%, transparent);
+  background: color-mix(in oklab, var(--color-accent) 12%, transparent);
+  color: var(--color-text);
+}
+.ui-pill__dot {
+  width: 0.4rem;
+  height: 0.4rem;
+  border-radius: var(--radius-full);
+  background: currentColor;
+  flex: 0 0 auto;
+}
+
+/* Accent chip — one canonical accent-tinted chip (skills, citations). The
+ * --inline modifier switches to em units so it flows inside prose. */
+.ui-chip--accent {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.3rem;
+  border-radius: var(--radius-full);
+  padding: 0.15rem 0.5rem;
+  font-size: var(--font-size-2xs);
+  font-weight: var(--font-weight-medium);
+  letter-spacing: var(--tracking-normal);
+  border: 1px solid color-mix(in oklab, var(--color-accent) 40%, transparent);
+  background: color-mix(in oklab, var(--color-accent) 12%, transparent);
+  color: var(--color-text);
+}
+.ui-chip--accent.ui-chip--inline {
+  padding: 0.1em 0.4em;
+  font-size: 0.85em;
+  border-radius: 0.5em;
 }

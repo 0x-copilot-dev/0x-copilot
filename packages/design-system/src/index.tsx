@@ -322,6 +322,101 @@ export function StatusPill({
   );
 }
 
+/* ---------------------------------------------------------------------------
+ * Typographic recipes — the COMPOSED text roles (see styles.css `.ui-*` +
+ * SKILL.md). Reach for these instead of hand-composing font-size + weight +
+ * tracking + transform, which is how the same role drifted across the app.
+ * Each wrapper is a thin element + recipe class; `as` picks the tag so the
+ * recipe never dictates document semantics.
+ * ------------------------------------------------------------------------ */
+
+type TextElementTag = "span" | "p" | "div" | "label" | "legend";
+
+/** Eyebrow / kicker — uppercase label above a heading. */
+export function Eyebrow({
+  as: Tag = "span",
+  className,
+  ...props
+}: HTMLAttributes<HTMLElement> & { as?: TextElementTag }): ReactElement {
+  return <Tag className={classNames("ui-eyebrow", className)} {...props} />;
+}
+
+/** Section / group label — uppercase micro-label heading a group. */
+export function SectionLabel({
+  as: Tag = "div",
+  className,
+  ...props
+}: HTMLAttributes<HTMLElement> & { as?: TextElementTag }): ReactElement {
+  return (
+    <Tag className={classNames("ui-section-label", className)} {...props} />
+  );
+}
+
+/** Caption / meta — small secondary text. */
+export function Caption({
+  as: Tag = "span",
+  className,
+  ...props
+}: HTMLAttributes<HTMLElement> & { as?: TextElementTag }): ReactElement {
+  return <Tag className={classNames("ui-caption", className)} {...props} />;
+}
+
+/** Item / card / row title — md semibold, flat tracking. */
+export function ItemTitle({
+  as: Tag = "div",
+  className,
+  ...props
+}: HTMLAttributes<HTMLElement> & { as?: TextElementTag }): ReactElement {
+  return <Tag className={classNames("ui-item-title", className)} {...props} />;
+}
+
+/** Heading — display face, negative tracking; level sets size + tightness. */
+export function Heading({
+  level,
+  className,
+  ...props
+}: HTMLAttributes<HTMLHeadingElement> & {
+  level: 1 | 2 | 3;
+}): ReactElement {
+  const Tag = `h${level}` as "h1" | "h2" | "h3";
+  return (
+    <Tag
+      className={classNames("ui-heading", `ui-heading--${level}`, className)}
+      {...props}
+    />
+  );
+}
+
+/**
+ * Pill — canonical rounded status/selection chip. Generalises StatusPill:
+ * optional leading dot + an `active` accent-fill state. `tone` is advisory
+ * (muted default); pass `active` for the selected/accent state.
+ */
+export function Pill({
+  active = false,
+  dot = false,
+  className,
+  children,
+  ...props
+}: HTMLAttributes<HTMLSpanElement> & {
+  active?: boolean;
+  dot?: boolean;
+}): ReactElement {
+  return (
+    <span
+      className={classNames(
+        "ui-pill",
+        active ? "ui-pill--active" : undefined,
+        className,
+      )}
+      {...props}
+    >
+      {dot ? <span className="ui-pill__dot" aria-hidden="true" /> : null}
+      {children}
+    </span>
+  );
+}
+
 /**
  * Brand-aware connector glyph mapping. The set is small and curated:
  * the top connectors that have recognisable monograms or simple shapes
