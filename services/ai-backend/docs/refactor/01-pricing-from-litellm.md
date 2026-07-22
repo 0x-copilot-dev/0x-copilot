@@ -1,6 +1,6 @@
 # Consolidate model names, pricing/budgets, and token counting onto litellm
 
-**Status:** In progress · **Directive:** replace the home-grown model-catalog / pricing / token implementations with the LangChain-compatible **litellm** library. (This doc also resolves the dangling reference in `config/pricing_overrides.yaml`.)
+**Status:** All three slices done (pricing, catalog, token counting) · **Directive:** replace the home-grown model-catalog / pricing / token implementations with the LangChain-compatible **litellm** library. (This doc also resolves the dangling reference in `config/pricing_overrides.yaml`.)
 
 ## Why this is now safe (investigation, 2026-07-21)
 
@@ -44,11 +44,18 @@ The team originally **vendored** litellm's `model_prices.json` and refused to im
 
 1. **Pricing → litellm library.** Import litellm; `LiteLLMPricingSource`/catalog reads `litellm.model_cost`; `CostCalculator` keeps integer-micro-USD wrapping litellm rates; drop stale overrides (keep gemini-3-flash); delete seeds/refresh/compare/upsert. Verify cost/budget tests + charge parity.
 2. **Model catalog → litellm.** `ModelCatalog.build` sources from litellm (name-from-id, capabilities, ctx); retire models.dev source + snapshot; new ordering/enablement without release_date; preserve the `supports_provider` filter + settings-default-first + Ollama merge. Verify `/v1/agent/models` + admin default validation.
-3. **Token counting → litellm.** `BudgetEstimator` pre-run estimate uses `litellm.token_counter`; post-run stays provider-usage. Verify preflight tests + hermetic (pre-cache tiktoken; no network in CI).
+3. **Token counting → litellm.** ✅ **Done.** The pre-run budget preflight now counts the REAL first-call input via `litellm.token_counter` behind a `TokenCounterPort` (`budgets/token_counter.py`); the estimator (`budgets/estimator.py`) is token-native (`estimate(input_tokens=…)`, 1.05 safety margin retained); post-run charging is untouched (provider-reported usage stays authoritative). Preflight is gated on active-budget existence via a lazy estimate provider in `BudgetEnforcer.preflight`, so the no-budget desktop path never reads messages or tokenizes. Fallback chain: `litellm.token_counter` → char/4 heuristic → `max_input_tokens` context-window proxy → outer fail-open Allow.
+
+### Slice 3 offline guardrails (the keystone)
+
+- **`pricing/litellm_runtime.py::apply_offline_litellm_config()`** — idempotent; sets `LITELLM_LOCAL_MODEL_COST_MAP=True` (via `os.environ.setdefault`, **before** the first lazy `import litellm`) + `litellm.disable_hf_tokenizer_download = True`. Every litellm entry point routes through it: both `_model_cost_table` sites (`pricing/litellm_source.py`, `api/litellm_model_source.py`) and `LitellmTokenCounter`. Pricing, catalog, and counting therefore share ONE offline posture.
+- **Why:** without it, (1) llama/cohere/openrouter-llama slugs trigger a `Tokenizer.from_pretrained("Xenova/…")` HuggingFace download that retries several times before falling back to tiktoken — a multi-second stall + hard network dependency that hangs the fully-local desktop; (2) the first `model_cost`/`token_counter` access attempts a remote fetch of `model_prices_and_context_window.json` (~1.3s + a WARNING, non-deterministic on networked CI). Both are eliminated. A socket-blocked hermetic test (`tests/unit/agent_runtime/budgets/test_token_counter_offline.py`) monkeypatches litellm's HF-tokenizer entrypoint to raise and proves counting still succeeds offline for openai/claude/gemini/ollama-llama.
+- **Decision — estimate the FIRST model call, not the full context window.** The old proxy (`max_input_tokens * 4` chars) reserved ~a whole context window, so token-limited budgets near-always Denied the first run. Accurate counting Allows small runs; multi-step overspend is caught by post-run reconciliation (the charger consumes reservations + applies observed usage) and the next run's preflight — the same single-call model already used for the output cap. **Behavioural change:** tenants relying on the old over-Deny will now see small runs Allowed (a correctness fix; covered by an explicit test).
+- **Cross-tokenizer approximation.** With `disable_hf=True`, claude/gemini/llama are counted with tiktoken (cl100k/o200k), not their native tokenizers — an offline approximation, strictly better than char/4. The 1.05 margin + `max_output_tokens` + single-call model keep the estimate biased conservative for hard caps.
 
 ## Risks / guardrails
 
-- **Hermetic CI:** `litellm.token_counter` fetches tiktoken BPE on first use — pre-cache or vendor; `litellm.model_cost` is bundled (offline-safe).
-- **Float→int:** litellm returns float USD; the integer-micro-USD calculator must remain the rounding boundary.
+- **Hermetic CI:** `litellm.token_counter` no longer fetches anything — the offline guardrail disables the HF tokenizer download and `litellm.model_cost` is pinned to the bundled table. Proven by a socket-blocked test.
+- **Float→int:** litellm returns float USD; the integer-micro-USD calculator must remain the rounding boundary (unchanged — the estimator delegates cost math to `CostCalculator`).
 - **Coverage regressions:** anything litellm lacks (gemini-3-flash today) lives in the override/supplement — never silently 0/None a cost or drop a model.
-- Verify each slice against the full ai-backend unit suite (currently ~3061) + the cost/budget/catalog tests specifically.
+- Verify each slice against the full ai-backend unit suite + the cost/budget/catalog tests specifically.

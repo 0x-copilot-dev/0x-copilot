@@ -117,7 +117,10 @@ jobs:
             tests/integration/persistence/test_rls_isolation.py \
             tests/integration/persistence/test_principals_live.py \
             tests/integration/persistence/test_principal_edges_live.py \
-            tests/integration/persistence/test_local_account_live.py -q
+            tests/integration/persistence/test_local_account_live.py \
+            tests/integration/persistence/test_projects_store_live.py \
+            tests/integration/persistence/test_connectors_store_live.py \
+            tests/integration/persistence/test_provider_default_model_live.py -q
 
   ai-backend-merge-gate:
     runs-on: ubuntu-latest
@@ -160,4 +163,5 @@ jobs:
         run: |
           cd services/ai-backend
           PYTHONPATH="../../packages/service-contracts/src:src" python -m pytest \
-            tests/integration/persistence/test_account_merge_live.py -q
+            tests/integration/persistence/test_account_merge_live.py \
+            tests/integration/persistence/test_conversation_pin_live.py -q

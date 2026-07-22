@@ -21,9 +21,9 @@ def _pricing() -> ModelPricingRecord:
 
 class TestBudgetEstimator:
     def test_estimate_input_includes_safety_margin(self) -> None:
-        # 4_000 chars / 4 chars-per-tok = 1_000 tokens, * 1.05 = 1_050.
+        # 1_000 counted input tokens * 1.05 safety margin = 1_050.
         result = BudgetEstimator.estimate(
-            prompt_chars=4_000,
+            input_tokens=1_000,
             max_output_tokens=512,
             pricing=_pricing(),
         )
@@ -32,7 +32,7 @@ class TestBudgetEstimator:
 
     def test_estimate_output_uses_explicit_max_when_set(self) -> None:
         result = BudgetEstimator.estimate(
-            prompt_chars=4_000,
+            input_tokens=1_000,
             max_output_tokens=2_048,
             pricing=_pricing(),
         )
@@ -40,7 +40,7 @@ class TestBudgetEstimator:
 
     def test_estimate_output_falls_back_when_max_unset(self) -> None:
         result = BudgetEstimator.estimate(
-            prompt_chars=4_000,
+            input_tokens=1_000,
             max_output_tokens=None,
             pricing=_pricing(),
         )
@@ -48,7 +48,7 @@ class TestBudgetEstimator:
 
     def test_cost_is_none_when_pricing_missing(self) -> None:
         result = BudgetEstimator.estimate(
-            prompt_chars=4_000,
+            input_tokens=1_000,
             max_output_tokens=512,
             pricing=None,
         )
@@ -58,7 +58,7 @@ class TestBudgetEstimator:
         # 1_050 input * $1/1M + 512 output * $2/1M
         # = 1_050 + 1_024 = 2_074 micro_usd (roughly).
         result = BudgetEstimator.estimate(
-            prompt_chars=4_000,
+            input_tokens=1_000,
             max_output_tokens=512,
             pricing=_pricing(),
         )
@@ -66,10 +66,10 @@ class TestBudgetEstimator:
         assert result.cost_micro_usd >= 1_500
         assert result.cost_micro_usd <= 3_000
 
-    def test_zero_prompt_chars_still_returns_at_least_one_token(self) -> None:
-        # Prevents divide-by-zero / log oddities when callers pass 0.
+    def test_zero_input_tokens_still_returns_at_least_one_token(self) -> None:
+        # Prevents log oddities / a zero-token estimate when callers pass 0.
         result = BudgetEstimator.estimate(
-            prompt_chars=0,
+            input_tokens=0,
             max_output_tokens=128,
             pricing=_pricing(),
         )

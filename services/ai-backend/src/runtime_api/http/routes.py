@@ -75,7 +75,11 @@ from runtime_api.schemas.usage import (
     UsageTotals,
 )
 from agent_runtime.budgets.period import BudgetPeriodCalculator
-from agent_runtime.persistence.records import BudgetRecord, BudgetStatus
+from agent_runtime.persistence.records import (
+    BudgetRecord,
+    BudgetScope,
+    BudgetStatus,
+)
 from runtime_api.http.workspace import register_workspace_feed_routes
 from runtime_api.sse.adapter import RuntimeSseAdapter
 from runtime_api.sse.event_bus import RuntimeEventBus
@@ -1452,15 +1456,47 @@ class TodoExtractionsApiRouter:
 
 
 class BudgetApiRoutes:
-    """Admin CRUD + per-user remaining-headroom endpoints for B7 budgets.
+    """CRUD + per-user remaining-headroom endpoints for B7 budgets.
 
-    Admin endpoints (``GET/POST/PATCH/DELETE /v1/budgets``) are gated by
-    the same `RuntimeServiceAuthenticator` flow used by other v1/agent
-    routes; the actual ``admin:budgets`` scope check will land in A10
-    when the scope catalog ships. ``/v1/budgets/me`` is open to any
-    authenticated user — it only returns budgets that match their
+    Authorization (D4): ``GET /v1/budgets`` (whole-org enumeration) requires
+    ``admin:budgets``. Writes (``POST/PATCH/DELETE``) are scope-aware: a caller
+    may create / edit / delete their OWN ``scope=user`` budget without any admin
+    scope (the self-service path), but every ``scope=org`` budget — or a
+    ``scope=user`` budget owned by someone else — requires ``admin:budgets`` and
+    is rejected with an explicit 403 that fires **independently of
+    ``RBAC_MODE``** (the route-level ``RequireScopes`` is audit-gated on
+    desktop/dev, so it is not a real control on its own). ``/v1/budgets/me`` is
+    open to any authenticated user — it only returns budgets that match their
     ``(org_id, user_id)``.
     """
+
+    @classmethod
+    def _authorize_budget_write(
+        cls,
+        request: Request,
+        *,
+        scope: BudgetScope,
+        target_user_id: str | None,
+        caller_user_id: str,
+    ) -> None:
+        """Gate a budget mutation; raise 403 unless self-scoped or admin.
+
+        A ``scope=user`` budget whose ``user_id`` is the caller is the
+        self-service path — allowed for any authenticated caller. Every other
+        target (org-scoped, or a user budget owned by someone else) demands the
+        ``admin:budgets`` scope on the caller's VERIFIED permission set, and the
+        403 is raised here in the handler so it holds even under
+        ``RBAC_MODE=audit`` (where the route-level dependency only logs).
+        """
+        if scope == BudgetScope.USER and target_user_id == caller_user_id:
+            return
+        identity = RuntimeServiceAuthenticator.trusted_identity_from_request(request)
+        scopes = identity.permission_scopes if identity is not None else ()
+        if ADMIN_BUDGETS not in scopes:
+            raise HTTPException(
+                status.HTTP_403_FORBIDDEN,
+                "admin:budgets scope required to manage this budget.",
+            )
 
     @classmethod
     async def list_budgets(
@@ -1491,10 +1527,23 @@ class BudgetApiRoutes:
         org_id, user_id = RuntimeApiRoutes.scoped_identity(
             request, org_id=org_id, user_id=user_id
         )
+        # A self-service ``scope=user`` create may omit ``user_id`` — default it
+        # to the authenticated caller (the authoritative server identity), so the
+        # client never has to supply its own id. An admin targeting another user
+        # passes ``user_id`` explicitly and is gated below.
+        target_user_id = payload.user_id
+        if payload.scope == BudgetScope.USER and target_user_id is None:
+            target_user_id = user_id
+        cls._authorize_budget_write(
+            request,
+            scope=payload.scope,
+            target_user_id=target_user_id,
+            caller_user_id=user_id,
+        )
         persistence = request.app.state.runtime_persistence
         record = BudgetRecord(
             org_id=org_id,
-            user_id=payload.user_id,
+            user_id=target_user_id,
             scope=payload.scope,
             period=payload.period,
             enforcement=payload.enforcement,
@@ -1519,13 +1568,19 @@ class BudgetApiRoutes:
         user_id: str | None = Query(None, min_length=1),
     ) -> BudgetView:
         """Patch mutable budget fields; raises 404 when the budget is not found."""
-        org_id, _ = RuntimeApiRoutes.scoped_identity(
+        org_id, caller_user_id = RuntimeApiRoutes.scoped_identity(
             request, org_id=org_id, user_id=user_id
         )
         persistence = request.app.state.runtime_persistence
         existing = await persistence.get_budget(org_id=org_id, budget_id=budget_id)
         if existing is None:
             raise HTTPException(status.HTTP_404_NOT_FOUND, "budget not found")
+        cls._authorize_budget_write(
+            request,
+            scope=existing.scope,
+            target_user_id=existing.user_id,
+            caller_user_id=caller_user_id,
+        )
         update: dict[str, object] = {"updated_at": datetime.now(timezone.utc)}
         if payload.enforcement is not None:
             update["enforcement"] = payload.enforcement
@@ -1548,11 +1603,22 @@ class BudgetApiRoutes:
         user_id: str | None = Query(None, min_length=1),
     ) -> dict[str, str]:
         """Delete a budget by id; idempotent when the budget does not exist."""
-        org_id, _ = RuntimeApiRoutes.scoped_identity(
+        org_id, caller_user_id = RuntimeApiRoutes.scoped_identity(
             request, org_id=org_id, user_id=user_id
         )
         persistence = request.app.state.runtime_persistence
-        await persistence.delete_budget(org_id=org_id, budget_id=budget_id)
+        existing = await persistence.get_budget(org_id=org_id, budget_id=budget_id)
+        # Idempotent: an absent budget is a no-op delete (nothing to authorize
+        # or remove). A present budget is authorized against ITS scope/user_id
+        # so a non-admin can only delete their own user-scoped cap.
+        if existing is not None:
+            cls._authorize_budget_write(
+                request,
+                scope=existing.scope,
+                target_user_id=existing.user_id,
+                caller_user_id=caller_user_id,
+            )
+            await persistence.delete_budget(org_id=org_id, budget_id=budget_id)
         return {"status": "deleted"}
 
     @classmethod
@@ -1632,9 +1698,16 @@ class BudgetApiRouter:
 
     @classmethod
     def create_router(cls) -> APIRouter:
-        """Assemble and return the ``/v1/budgets`` router with per-route admin scopes."""
-        # A10: ``runtime:use`` covers the /me self-service route. Admin
-        # CRUD adds ``admin:budgets`` per-route.
+        """Assemble and return the ``/v1/budgets`` router.
+
+        ``runtime:use`` (router-level) covers every route. ``GET /v1/budgets``
+        (whole-org enumeration) additionally requires ``admin:budgets``. The
+        write routes (POST/PATCH/DELETE) carry NO route-level admin dependency —
+        their authorization is scope-aware and lives in the handler
+        (``_authorize_budget_write``): self user-scoped writes are allowed, and
+        org-scoped writes raise an explicit 403 that holds regardless of
+        ``RBAC_MODE`` (the route-level ``RequireScopes`` only logs under audit).
+        """
         router = APIRouter(
             prefix="/v1/budgets",
             tags=["budgets"],
@@ -1654,7 +1727,7 @@ class BudgetApiRouter:
             methods=["POST"],
             response_model=BudgetView,
             name=Keys.RouteName.BUDGETS_CREATE,
-            dependencies=[Depends(RequireScopes(ADMIN_BUDGETS))],
+            # Authorization is scope-aware in the handler (self vs admin:budgets).
         )
         router.add_api_route(
             "/me",
@@ -1670,14 +1743,14 @@ class BudgetApiRouter:
             methods=["PATCH"],
             response_model=BudgetView,
             name=Keys.RouteName.BUDGETS_UPDATE,
-            dependencies=[Depends(RequireScopes(ADMIN_BUDGETS))],
+            # Authorization is scope-aware in the handler (self vs admin:budgets).
         )
         router.add_api_route(
             "/{budget_id}",
             BudgetApiRoutes.delete_budget,
             methods=["DELETE"],
             name=Keys.RouteName.BUDGETS_DELETE,
-            dependencies=[Depends(RequireScopes(ADMIN_BUDGETS))],
+            # Authorization is scope-aware in the handler (self vs admin:budgets).
         )
         return router
 

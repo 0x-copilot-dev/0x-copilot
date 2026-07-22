@@ -49,12 +49,15 @@ import {
   createLocalModelsPort,
   createModelsPort,
   createProviderKeysPort,
+  createSpendGuardrailPort,
   localModelInstalledTag,
   type AppLockValue,
   type AppearanceValue,
   type KeychainProtectionValue,
   type ModelBehaviorModelOption,
   type ModelBehaviorValue,
+  type SpendGuardrailPort,
+  type SpendGuardrailValue,
   type ProfileIdentityAnchor,
   type ProfilePagePerson,
   type RetentionChoice,
@@ -133,11 +136,21 @@ const DEFAULT_APPEARANCE: AppearanceValue = {
 
 const DEFAULT_MODEL_BEHAVIOR: ModelBehaviorValue = {
   defaultModel: null,
-  reasoningDepth: "auto",
+  // `null` == "Auto": no persisted default → the runtime baseline (D1).
+  reasoningDepth: null,
   webAccess: true,
   approvalPolicy: { readOnly: "auto", write: "require", danger: "require" },
   spend: { monthlyCapUsd: null, pauseAtCap: false },
 };
+
+const NO_SPEND: SpendGuardrailValue = {
+  monthlyCapUsd: null,
+  pauseAtCap: false,
+};
+
+function spendEquals(a: SpendGuardrailValue, b: SpendGuardrailValue): boolean {
+  return a.monthlyCapUsd === b.monthlyCapUsd && a.pauseAtCap === b.pauseAtCap;
+}
 
 const DEFAULT_APP_LOCK: AppLockValue = {
   encryptHistory: false,
@@ -561,6 +574,110 @@ export function SettingsMount({
       );
     }
   };
+
+  // --- Model & behavior: reasoning-depth (D1) + web-access (D3) defaults ----
+  // Both persist to ``behavior_overrides`` via the SAME read-merge-PUT pattern
+  // as the default (cloud/local) model — a full-document replace that never
+  // clobbers sibling fields. Kept byte-identical to how the web SettingsBinder
+  // will bind the shared ModelBehaviorPage in D5 so the two hosts stay lockstep.
+  const mbReasoningDepth =
+    workspaceDefaults?.behavior_overrides?.default_reasoning_depth ?? null;
+  const mbWebAccess =
+    workspaceDefaults?.behavior_overrides?.web_access_default ?? true;
+
+  const persistBehaviorOverride = async (
+    patch: Partial<WorkspaceDefaultsResponse["behavior_overrides"]>,
+    toast: (message: string) => void,
+    okMessage: string,
+  ): Promise<void> => {
+    if (workspaceDefaults === null) {
+      toast("Couldn't save — retry once settings finish loading.");
+      return;
+    }
+    const body: UpdateWorkspaceDefaultsRequest = {
+      default_model: workspaceDefaults.default_model,
+      default_connectors: workspaceDefaults.default_connectors,
+      retention_days: workspaceDefaults.retention_days,
+      behavior_overrides: { ...workspaceDefaults.behavior_overrides, ...patch },
+      enabled_models: workspaceDefaults.enabled_models,
+    };
+    try {
+      const updated = await transport.request<WorkspaceDefaultsResponse>({
+        method: "PUT",
+        path: "/v1/agent/workspace/defaults",
+        body,
+      });
+      setWorkspaceDefaults(updated);
+      toast(okMessage);
+    } catch {
+      toast("Saving that setting failed — retry in a moment.");
+    }
+  };
+
+  // --- Model & behavior: spend guardrail (D4) -----------------------------
+  // The monthly API cap + pause-at-cap toggle bind to the B7 budget engine via
+  // the shared SpendGuardrailPort (GET /v1/budgets/me → POST/PATCH/DELETE). The
+  // cap uses the ModelBehaviorPage SaveBar (a deferred Save, not autosave, since
+  // it is a text field); an honest error surfaces on failure — never a fake
+  // success or a fabricated $0 cap on a load error.
+  const spendPort: SpendGuardrailPort = useMemo(
+    () => createSpendGuardrailPort(transport),
+    [transport],
+  );
+  const [spend, setSpend] = useState<SpendGuardrailValue>(NO_SPEND);
+  const [spendBaseline, setSpendBaseline] =
+    useState<SpendGuardrailValue | null>(null);
+  const [spendSaving, setSpendSaving] = useState(false);
+  const [spendSaveError, setSpendSaveError] = useState<string | null>(null);
+  const [spendLoadError, setSpendLoadError] = useState<string | null>(null);
+
+  const loadSpend = useCallback(() => {
+    let cancelled = false;
+    setSpendLoadError(null);
+    void spendPort
+      .read()
+      .then((snap) => {
+        if (cancelled) return;
+        const value: SpendGuardrailValue = {
+          monthlyCapUsd: snap.monthlyCapUsd,
+          pauseAtCap: snap.pauseAtCap,
+        };
+        setSpend(value);
+        setSpendBaseline(value);
+      })
+      .catch(() => {
+        if (cancelled) return;
+        // Honest failure — never a fabricated $0 cap. The page shows Retry.
+        setSpendBaseline(null);
+        setSpendLoadError("Couldn't load your spend cap. Retry?");
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [spendPort]);
+  useEffect(() => loadSpend(), [loadSpend]);
+
+  const spendDirty =
+    spendBaseline !== null && !spendEquals(spend, spendBaseline);
+
+  const saveSpend = async (toast: (message: string) => void): Promise<void> => {
+    setSpendSaving(true);
+    setSpendSaveError(null);
+    try {
+      await spendPort.save(spend);
+      setSpendBaseline(spend);
+      toast(
+        spend.monthlyCapUsd === null
+          ? "Monthly spend cap cleared."
+          : `Monthly spend cap saved ($${spend.monthlyCapUsd}).`,
+      );
+    } catch {
+      setSpendSaveError("Saving the spend cap failed — retry in a moment.");
+    } finally {
+      setSpendSaving(false);
+    }
+  };
+
   const [retention, setRetention] = useState<RetentionChoice>("forever");
   const [memoryEnabled, setMemoryEnabled] = useState(true);
   const [notifications, setNotifications] = useState<NotificationDefaults>(() =>
@@ -842,17 +959,55 @@ export function SettingsMount({
       case "model-behavior":
         return (
           <ModelBehaviorPage
-            // The default-model field is server-backed (workspace defaults);
-            // the remaining knobs stay local until their persistence lands.
-            value={{ ...modelBehavior, defaultModel: mbDefaultValue }}
+            // Default model / reasoning depth / web access are server-backed
+            // (workspace defaults, autosaved via read-merge-PUT). The spend cap
+            // is server-backed too (the B7 budget engine) but deferred behind
+            // the SaveBar. Approval policy stays local until its persistence
+            // lands (out of D1/D3/D4 scope).
+            value={{
+              ...modelBehavior,
+              defaultModel: mbDefaultValue,
+              reasoningDepth: mbReasoningDepth,
+              webAccess: mbWebAccess,
+              spend,
+            }}
             cloudModels={mbCloudModels}
             onChange={(patch) => {
               if (patch.defaultModel !== undefined) {
                 void persistDefaultModel(patch.defaultModel, toast);
               }
+              if (patch.reasoningDepth !== undefined) {
+                void persistBehaviorOverride(
+                  { default_reasoning_depth: patch.reasoningDepth },
+                  toast,
+                  "Reasoning depth saved.",
+                );
+              }
+              if (patch.webAccess !== undefined) {
+                void persistBehaviorOverride(
+                  { web_access_default: patch.webAccess },
+                  toast,
+                  patch.webAccess
+                    ? "Web access enabled by default."
+                    : "Web access off by default.",
+                );
+              }
+              if (patch.spend !== undefined) {
+                setSpend(patch.spend);
+              }
               setModelBehavior((prev) => ({ ...prev, ...patch }));
             }}
             controller={controller}
+            // Spend-cap SaveBar contract (deferred save, honest errors).
+            dirty={spendDirty}
+            saving={spendSaving}
+            saveError={spendSaveError}
+            error={spendLoadError}
+            onRetry={loadSpend}
+            onSave={() => void saveSpend(toast)}
+            onDiscard={() => {
+              if (spendBaseline !== null) setSpend(spendBaseline);
+            }}
           />
         );
 

@@ -171,3 +171,54 @@ def test_skill_source_type_includes_system_value() -> None:
         updated_at=datetime.now(timezone.utc),
     )
     assert response.source_type is SkillSourceType.SYSTEM
+
+
+def test_preloaded_seed_tolerates_concurrent_duplicate(monkeypatch) -> None:
+    """First-boot race (two concurrent first requests both seed): the loser's
+    unique-constraint violation (SQLSTATE 23505) is swallowed — losing the race
+    IS success, the winner seeded identical manifest content. Regression for
+    the fresh-desktop-stage 500 on the first GET /v1/skills."""
+    store = InMemorySkillStore()
+    service = SkillRegistryService(store=store)
+    service._seeded_scopes.clear()
+
+    class _DupError(Exception):
+        sqlstate = "23505"
+
+    original_create = store.create_skill
+    raised = {"n": 0}
+
+    def racing_create(record, *, conn=None):
+        # The peer "wins" the first insert: raise the duplicate once, then
+        # behave normally for the remaining manifests.
+        if raised["n"] == 0:
+            raised["n"] += 1
+            raise _DupError("duplicate key value violates unique constraint")
+        return original_create(record, conn=conn)
+
+    monkeypatch.setattr(store, "create_skill", racing_create)
+
+    # Must NOT raise — and the list still serves the seeded scope.
+    listed = service.list_skills(org_id="org_race", user_id="user_race")
+    assert raised["n"] == 1
+    assert any(s.source_type == "preloaded" for s in listed.skills)
+
+
+def test_preloaded_seed_propagates_non_duplicate_errors(monkeypatch) -> None:
+    """Only the duplicate-key case is tolerated; a real store failure during
+    seeding must propagate untouched."""
+    store = InMemorySkillStore()
+    service = SkillRegistryService(store=store)
+    service._seeded_scopes.clear()
+
+    def broken_create(record, *, conn=None):
+        raise RuntimeError("disk on fire")
+
+    monkeypatch.setattr(store, "create_skill", broken_create)
+
+    try:
+        service.list_skills(org_id="org_boom", user_id="user_boom")
+    except RuntimeError as exc:
+        assert "disk on fire" in str(exc)
+    else:
+        raise AssertionError("non-duplicate seeding errors must propagate")

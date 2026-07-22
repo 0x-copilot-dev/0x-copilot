@@ -1,6 +1,7 @@
 """Budget enforcement package: period math, estimation, preflight, and atomic charge.
 
 Modules: ``period`` (UTC window calculation), ``estimator`` (pre-run cost estimate),
+``token_counter`` (pre-run input-token counting via litellm, behind a port),
 ``enforcer`` (preflight: lookup → reserve → Allow/Warn/Deny), ``charger`` (post-run
 CAS charge), ``reservations`` (concurrent-run reservation management).
 """
@@ -16,6 +17,11 @@ from agent_runtime.budgets.enforcer import (
 from agent_runtime.budgets.estimator import BudgetEstimate, BudgetEstimator
 from agent_runtime.budgets.period import BudgetPeriodCalculator
 from agent_runtime.budgets.reservations import BudgetReservationManager
+from agent_runtime.budgets.token_counter import (
+    CharHeuristicTokenCounter,
+    LitellmTokenCounter,
+    TokenCounterPort,
+)
 
 __all__ = [
     "BudgetCharger",
@@ -28,4 +34,7 @@ __all__ = [
     "BudgetPreflightDeny",
     "BudgetPreflightWarn",
     "BudgetReservationManager",
+    "CharHeuristicTokenCounter",
+    "LitellmTokenCounter",
+    "TokenCounterPort",
 ]

@@ -26,6 +26,8 @@ function fakeTransport(): Transport {
   const request = (async (req: TypedRequest) => {
     if (req.path === "/v1/settings/provider-keys") return { keys: [] };
     if (req.path === "/v1/me/api-keys") return { keys: [] };
+    // D4 — the Model & behavior spend card reads the caller's monthly cap.
+    if (req.path === "/v1/budgets/me") return { currency: "USD", budgets: [] };
     if (req.path === "/v1/me/profile") {
       return {
         user_id: "usr_local",

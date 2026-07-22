@@ -247,6 +247,16 @@ export {
   type ReasoningDepth,
   type SpendGuardrailValue,
 } from "./ModelBehaviorPage";
+// D4 — Spend-guardrail data seam: the Transport-backed port bound to the B7
+// budget engine at /v1/budgets (the caller's user/month cap). Owns the
+// dollars↔micro-USD conversion; both hosts wire `createSpendGuardrailPort`.
+export {
+  createSpendGuardrailPort,
+  capUsdToMicro,
+  microToCapUsd,
+  type SpendGuardrailPort,
+  type SpendGuardrailSnapshot,
+} from "./data/spendGuardrail";
 export {
   ApprovalPolicy,
   READ_ONLY_APPROVAL_OPTIONS,
