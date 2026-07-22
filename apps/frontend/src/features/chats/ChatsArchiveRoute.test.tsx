@@ -182,7 +182,9 @@ describe("ChatsArchiveRoute", () => {
     await waitFor(() => {
       expect(screen.getByTestId("chats-sections")).toBeInTheDocument();
     });
-    fireEvent.click(screen.getByTestId("page-header-primary-action")); // New chat
+    // "New chat" moved off the PageHeader primary action: it now lives on the
+    // Pinned section header (chat-surface `chats-new-chat`, FR-G.3).
+    fireEvent.click(screen.getByTestId("chats-new-chat"));
 
     await waitFor(() => {
       expect(agentApiMocks.createConversation).toHaveBeenCalledWith(IDENTITY);

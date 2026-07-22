@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import time
 
 from backend_app.connectors.sse import (
     Constants,
@@ -127,6 +128,121 @@ class TestSseFraming:
             assert b'"event_type":"connector.created"' in frame
 
         asyncio.run(exercise())
+
+
+class TestLoopBoundWakeup:
+    """PRD-I I2 — bound-loop publish_nowait wakes waiters immediately."""
+
+    POLL_SLICE = Constants.Cadence.WAIT_TIMEOUT_SECONDS
+
+    def test_bound_bus_wakes_waiter_well_under_the_poll_slice(self) -> None:
+        bus = InMemoryConnectorActivityBus()
+
+        async def exercise() -> float:
+            bus.bind_loop(asyncio.get_running_loop())
+            started = time.monotonic()
+            waiter = asyncio.ensure_future(
+                bus.wait(org_id="org_a", user_id="usr_1", timeout=self.POLL_SLICE)
+            )
+            await asyncio.sleep(0.05)  # let the waiter register + block
+            # Publish from a worker thread — same shape as the threadpool
+            # ``def`` MCP route driving the write-through glue.
+            await asyncio.to_thread(
+                bus.publish_nowait,
+                org_id="org_a",
+                user_id="usr_1",
+                event_type="connector.created",
+                connector=_payload(),
+            )
+            await waiter
+            return time.monotonic() - started
+
+        elapsed = asyncio.run(exercise())
+        assert elapsed < 1.0, f"wakeup took {elapsed:.2f}s (poll-slice fallback?)"
+
+    def test_unbound_bus_keeps_legacy_poll_slice_semantics(self) -> None:
+        bus = InMemoryConnectorActivityBus()
+
+        async def exercise() -> float:
+            assert not bus.loop_bound
+            started = time.monotonic()
+            waiter = asyncio.ensure_future(
+                bus.wait(org_id="org_a", user_id="usr_1", timeout=0.3)
+            )
+            await asyncio.sleep(0.05)
+            envelope = await asyncio.to_thread(
+                bus.publish_nowait,
+                org_id="org_a",
+                user_id="usr_1",
+                event_type="connector.created",
+                connector=_payload(),
+            )
+            assert envelope.sequence_no == 1  # append unchanged
+            await waiter
+            return time.monotonic() - started
+
+        elapsed = asyncio.run(exercise())
+        # No wakeup: the waiter runs out its full timeout slice.
+        assert elapsed >= 0.3
+
+    def test_no_cross_tenant_wakeup(self) -> None:
+        bus = InMemoryConnectorActivityBus()
+
+        async def exercise() -> float:
+            bus.bind_loop(asyncio.get_running_loop())
+            started = time.monotonic()
+            waiter = asyncio.ensure_future(
+                bus.wait(org_id="org_b", user_id="usr_1", timeout=0.5)
+            )
+            await asyncio.sleep(0.05)
+            await asyncio.to_thread(
+                bus.publish_nowait,
+                org_id="org_a",
+                user_id="usr_1",
+                event_type="connector.created",
+                connector=_payload(),
+            )
+            await waiter
+            return time.monotonic() - started
+
+        elapsed = asyncio.run(exercise())
+        # The org_b waiter must NOT be woken by org_a's publish.
+        assert elapsed >= 0.5
+
+    def test_closed_loop_degrades_to_poll_slice_without_failing_publish(self) -> None:
+        """NFR-I.1 — a dead bound loop never fails the mutation path."""
+
+        bus = InMemoryConnectorActivityBus()
+        loop = asyncio.new_event_loop()
+        loop.close()
+        bus.bind_loop(loop)
+        envelope = bus.publish_nowait(
+            org_id="org_a",
+            user_id="usr_1",
+            event_type="connector.created",
+            connector=_payload(),
+        )
+        assert envelope.sequence_no == 1
+        rows = list(bus.list_after(org_id="org_a", user_id="usr_1", after_sequence=0))
+        assert len(rows) == 1
+
+    def test_unbind_restores_legacy_semantics(self) -> None:
+        bus = InMemoryConnectorActivityBus()
+        loop = asyncio.new_event_loop()
+        try:
+            bus.bind_loop(loop)
+            assert bus.loop_bound
+            bus.unbind_loop()
+            assert not bus.loop_bound
+            envelope = bus.publish_nowait(
+                org_id="org_a",
+                user_id="usr_1",
+                event_type="connector.created",
+                connector=_payload(),
+            )
+            assert envelope.sequence_no == 1
+        finally:
+            loop.close()
 
 
 class TestLastEventIdResolver:

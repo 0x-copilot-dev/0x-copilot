@@ -107,6 +107,42 @@ class InMemoryConnectorActivityBus:
         self._conditions: dict[tuple[str, str], asyncio.Condition] = defaultdict(
             asyncio.Condition
         )
+        # PRD-I I2 — serving loop bound ONCE at composition (app lifespan
+        # startup). ``None`` = unbound = legacy poll-slice semantics.
+        self._loop: asyncio.AbstractEventLoop | None = None
+        # Strong refs to in-flight notify tasks (fire-and-forget tasks
+        # are GC-eligible without one — asyncio docs' standard pattern).
+        self._notify_tasks: set[asyncio.Task[None]] = set()
+
+    def bind_loop(self, loop: asyncio.AbstractEventLoop) -> None:
+        """Bind the serving event loop for immediate waiter wakeup (I2).
+
+        Called ONCE from the app lifespan startup — the lifespan owns the
+        loop, so binding happens at composition time, never by sniffing
+        for a running loop at publish time. When bound,
+        :meth:`publish_nowait` wakes async waiters via
+        ``loop.call_soon_threadsafe`` instead of leaving them to the
+        ≤5 s poll slice. When unbound (unit tests, non-server contexts)
+        behavior is byte-identical to the legacy poll-slice pickup.
+        """
+
+        self._loop = loop
+
+    def unbind_loop(self) -> None:
+        """Drop the loop binding (app lifespan shutdown).
+
+        The bus is a process-global singleton that can outlive one app's
+        loop (tests build many apps); unbinding restores legacy
+        semantics rather than leaving a dangling closed-loop reference.
+        """
+
+        self._loop = None
+
+    @property
+    def loop_bound(self) -> bool:
+        """True when a serving loop is bound (composition observability)."""
+
+        return self._loop is not None
 
     async def publish(
         self,
@@ -140,19 +176,69 @@ class InMemoryConnectorActivityBus:
 
         The MCP mutation handlers are plain ``def`` routes (threadpool),
         so the connectors write-through path cannot ``await``. This
-        appends to the ring buffer WITHOUT notifying waiters — the SSE
-        read loop polls with a ≤``WAIT_TIMEOUT_SECONDS`` slice, so the
-        appended envelope is picked up on the next slice. Same
-        synchronous-by-design rationale as the
-        :mod:`backend_app.projects.sse` bus publish.
+        appends to the ring buffer, then — when a serving loop is bound
+        (see :meth:`bind_loop`) — schedules an immediate waiter wakeup
+        on that loop via ``call_soon_threadsafe`` (PRD-I I2). When
+        unbound, waiters are NOT notified and the SSE read loop's
+        ≤``WAIT_TIMEOUT_SECONDS`` poll slice picks the envelope up —
+        the original synchronous-by-design semantics (same rationale as
+        the :mod:`backend_app.projects.sse` bus publish).
+
+        Failure discipline: wakeup scheduling must never fail the
+        publish (the envelope is already appended and durable in the
+        ring buffer); a dead/closed loop degrades to poll-slice pickup.
         """
 
-        return self._append(
+        envelope = self._append(
             org_id=org_id,
             user_id=user_id,
             event_type=event_type,
             connector=connector,
         )
+        self._schedule_wakeup(org_id=org_id, user_id=user_id)
+        return envelope
+
+    def _schedule_wakeup(self, *, org_id: str, user_id: str) -> None:
+        """Wake the channel's waiters on the bound loop, if any.
+
+        Thread-safe: callable from threadpool workers. The condition
+        lookup happens on the LOOP thread (inside the scheduled
+        callback), where waiters register — so there is no cross-thread
+        race on the conditions dict.
+        """
+
+        loop = self._loop
+        if loop is None:
+            return
+        try:
+            loop.call_soon_threadsafe(self._notify_channel_on_loop, (org_id, user_id))
+        except RuntimeError:
+            # Loop already closed (singleton outlived an app instance
+            # that never unbound). The envelope is appended; waiters
+            # fall back to the poll slice — never fail the publish.
+            logger.debug(
+                "connector bus wakeup skipped: bound loop is closed "
+                "(org_id=%s user_id=%s)",
+                org_id,
+                user_id,
+            )
+
+    def _notify_channel_on_loop(self, key: tuple[str, str]) -> None:
+        """Loop-thread callback: notify exactly this channel's waiters."""
+
+        condition = self._conditions.get(key)
+        if condition is None:
+            # No subscriber ever waited on this channel — nothing to
+            # wake; the ring buffer replay serves any later subscriber.
+            return
+        task = asyncio.ensure_future(self._notify(condition))
+        self._notify_tasks.add(task)
+        task.add_done_callback(self._notify_tasks.discard)
+
+    @staticmethod
+    async def _notify(condition: asyncio.Condition) -> None:
+        async with condition:
+            condition.notify_all()
 
     def _append(
         self,
