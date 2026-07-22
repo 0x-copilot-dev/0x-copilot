@@ -1,0 +1,58 @@
+{
+  "surface": "run-empty",
+  "note": "design↔live element correspondence for the Run cockpit's empty state — the design's 'What should we run first?' composer stage (copilot-firstrun.jsx at ?state=key) vs the live OnboardingComposer the cockpit mounts via renderEmptyComposer. The load-bearing, genuinely-comparable elements are the hero H1 + the starter chips (onboarding.css `.fr-*`, the surface this change introduces). The composer CHROME (textarea/model pill/send) is the app's SHARED AssistantComposer (aui-*/atlas-*), NOT a reimplementation of the mock's simplified `.cmp-*` composer, so those anchors are marked expectDivergence — filed as INFO, not defects.",
+  "states": ["composer"],
+  "elements": [
+    {
+      "label": "hero.h1",
+      "group": "Hero",
+      "design": ".fr-hero h1",
+      "live": ".fr-hero__title"
+    },
+    {
+      "label": "chips",
+      "group": "Chips",
+      "design": ".fr-chips",
+      "live": ".fr-chips"
+    },
+    {
+      "label": "chip",
+      "group": "Chips",
+      "design": ".fr-chip",
+      "live": ".fr-chip"
+    },
+    {
+      "label": "chip.icon",
+      "group": "Chips",
+      "design": ".fr-chip svg",
+      "live": ".fr-chip__ic svg"
+    },
+    {
+      "label": "composer.box",
+      "group": "Composer",
+      "design": ".cmp",
+      "live": ".aui-composer",
+      "expectDivergence": "live mounts the app's SHARED AssistantComposer (aui-*), not a reimplementation of the mock's simplified `.cmp` box — intended (the composer is shared across chat + run)"
+    },
+    {
+      "label": "composer.textarea",
+      "group": "Composer",
+      "design": ".cmp textarea",
+      "live": "[data-testid=\"composer-textarea\"]"
+    },
+    {
+      "label": "composer.send",
+      "group": "Composer",
+      "design": ".cmp-send",
+      "live": ".aui-composer-send",
+      "expectDivergence": "shared AssistantComposer send button, not the mock's bespoke `.cmp-send`"
+    },
+    {
+      "label": "model.pill",
+      "group": "Composer",
+      "design": ".cmp-pill",
+      "live": ".atlas-model-pill",
+      "expectDivergence": "shared AssistantComposer model pill, not the mock's bespoke `.cmp-pill`"
+    }
+  ]
+}

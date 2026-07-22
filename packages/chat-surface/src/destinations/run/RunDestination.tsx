@@ -49,6 +49,7 @@ import {
   useCallback,
   useEffect,
   useMemo,
+  useRef,
   useState,
   type CSSProperties,
   type ReactElement,
@@ -56,7 +57,10 @@ import {
 } from "react";
 
 import type {
+  ConversationConnectorScopes,
   ConversationId,
+  ModelSelectionRequest,
+  RunAttachmentRequest,
   RunId,
   SurfaceEdits,
 } from "@0x-copilot/api-types";
@@ -112,6 +116,55 @@ const EMPTY_CLOSED_URIS: ReadonlySet<string> = new Set();
 /** Surface-tab strip cap (PRD-04 — "+N more" overflow lands later). */
 const MAX_SURFACE_TABS = 8;
 
+/**
+ * The full payload the empty-state composer starts a run with. `goal` is the
+ * user_input; the rest are the design's rich-composer selections (model pill,
+ * attachments, Tools popover). A bare `{ goal }` — what the plain fallback
+ * composer sends — keeps the historical "conversation + goal only" body, so a
+ * host that never surfaces the rich composer is byte-unchanged. The host binder
+ * (`onStartRun`) maps this to the `POST /v1/agent/runs` body; identity is always
+ * derived server-side from the verified session, never sent by the client.
+ */
+export interface RunStartRequest {
+  readonly goal: string;
+  /** Resolved model selection (model pill). Omitted → runtime default. */
+  readonly model?: ModelSelectionRequest | null;
+  /** Composer attachments already mapped to the run-create wire shape. */
+  readonly attachments?: readonly RunAttachmentRequest[];
+  /**
+   * Per-run web-search toggle (Tools popover). Omitted → runtime default (on);
+   * an explicit `false` drops the built-in web_search tool for this run.
+   */
+  readonly webSearchEnabled?: boolean;
+  /** Active connector scopes (Tools popover) → `request_context`. */
+  readonly connectorScopes?: ConversationConnectorScopes;
+}
+
+/**
+ * Context handed to the host-injected empty-state composer slot
+ * (`renderEmptyComposer`). The host mounts the design's "What should we run
+ * first?" rich composer (hero + starter chips + AssistantComposer) bound to its
+ * substrate ports, and calls `onStartRun` with the full selection on send. The
+ * cockpit keeps owning the empty→live transition: `onStartRun` binds the fresh
+ * run via the `runId` seam, so the composer swaps for the live layout WITHOUT a
+ * shell remount (FR-3.25). Submitting/error/readiness are cockpit-owned and
+ * forwarded here so the composer reflects them (disable, inline error, setup).
+ */
+export interface RunEmptyComposerCtx {
+  /** Start a run from the composer selection; binds the fresh run live. */
+  readonly onStartRun: (request: RunStartRequest) => void;
+  /** `true` while the run POST is in flight (disable the composer/send). */
+  readonly submitting: boolean;
+  /** Last start failure (safe_message + code), surfaced inline; `null` = none. */
+  readonly startError: StartRunError | null;
+  /** Clear the inline error (dismiss / next successful send). */
+  readonly dismissError: () => void;
+  /** `false` when no model provider is configured (BYOK key nor local model). */
+  readonly modelReady: boolean;
+  /** Open Settings → Provider keys (setup / configuration_error CTA). */
+  readonly onOpenModelSettings?: () => void;
+}
+
 export interface RunDestinationProps {
   /** Conversation whose active/selected run the cockpit binds to. */
   readonly conversationId: ConversationId;
@@ -137,17 +190,29 @@ export interface RunDestinationProps {
    */
   readonly goal?: string | null;
   /**
-   * PR-3.11 (FR-3.25): start a run from the empty-state goal composer. The host
-   * owns run creation (identity + model), returning the new `runId` (or `null`
-   * on failure). When unset, the shell falls back to a default `POST
-   * /v1/agent/runs` through the Transport port (identity is derived from the
-   * verified session, never sent by the client). Either way the returned id is
-   * bound back into `useRunSession` via the `runId` seam, so empty→live never
-   * remounts the shell.
+   * PR-3.11 (FR-3.25): start a run from the empty-state composer. The host owns
+   * run creation (identity + model), returning the new `runId` (or `null` on
+   * failure). It receives the full {@link RunStartRequest} — a bare `{ goal }`
+   * from the plain fallback composer, or the rich selection (model, attachments,
+   * Tools) from the design composer (`renderEmptyComposer`). When unset, the
+   * shell falls back to a default `POST /v1/agent/runs` through the Transport
+   * port (identity is derived from the verified session, never sent by the
+   * client). Either way the returned id is bound back into `useRunSession` via
+   * the `runId` seam, so empty→live never remounts the shell.
    */
   readonly onStartRun?: (
-    goal: string,
+    request: RunStartRequest,
   ) => Promise<string | null> | string | null;
+  /**
+   * Host-injected empty-state composer slot (FR-3.25). When provided and there
+   * is no active run, the cockpit renders the design's "What should we run
+   * first?" rich composer here (hero + starter chips + AssistantComposer, model
+   * pill, Tools, attach, send) instead of the plain goal card — the host mounts
+   * the shared `OnboardingComposer` bound to its substrate ports and wires the
+   * send to `ctx.onStartRun`. Omitted → the plain `RunEmptyState` fallback (so
+   * a substrate without composer wiring still gets an honest goal box).
+   */
+  readonly renderEmptyComposer?: (ctx: RunEmptyComposerCtx) => ReactNode;
   /**
    * Readiness gate (Issue 1): `false` when NO model provider is configured (no
    * BYOK key and no local model), so the empty-state composer shows a "Set up
@@ -188,6 +253,7 @@ export function RunDestination(props: RunDestinationProps): ReactElement {
     modelReady = true,
     onOpenModelSettings,
     renderComposer,
+    renderEmptyComposer,
   } = props;
 
   const transport = useTransport();
@@ -209,9 +275,20 @@ export function RunDestination(props: RunDestinationProps): ReactElement {
   // empty→live transition never flashes the idle placeholder for a run we named.
   const [startedGoal, setStartedGoal] = useState<string | null>(null);
 
+  // Monotonic token identifying the current start attempt. Bumped whenever the
+  // conversation resets (below), so an in-flight start's async continuation can
+  // detect that the cockpit moved on and drop its result — mirroring
+  // `useRunSession`'s `cancelled` guard. Without it, a run POST that resolves
+  // AFTER the user navigated to another conversation would bind that run into
+  // the wrong conversation (a rare load-time race today; a real leak later).
+  const startTokenRef = useRef(0);
+
   // A new conversation clears the last-started run so a stale id never streams
   // against it (mirrors `useRunSession`'s own per-conversation reset).
   useEffect(() => {
+    // Invalidate any in-flight start so its late continuation can't re-bind a
+    // run into this now-different conversation.
+    startTokenRef.current += 1;
     setStartedRunId(null);
     setIsStartingRun(false);
     setStartedGoal(null);
@@ -335,29 +412,46 @@ export function RunDestination(props: RunDestinationProps): ReactElement {
   // bound via `setStartedRunId`, which feeds the `runId` seam and flips the
   // cockpit live in place (no shell remount).
   const { selectRun } = session;
-  const handleStartGoal = useCallback(
-    (goal: string): void => {
-      const trimmed = goal.trim();
+  const handleStartRun = useCallback(
+    (request: RunStartRequest): void => {
+      const goal = request.goal.trim();
+      const hasAttachments = (request.attachments?.length ?? 0) > 0;
       // Readiness gate (Issue 1): never fire a start that is guaranteed to fail
       // with a configuration error. The composer disables itself when
       // `modelReady` is false; this guards the keyboard path too.
-      if (trimmed === "" || isStartingRun || !modelReady) {
+      if (isStartingRun || !modelReady) {
         return;
       }
+      // The rich composer may send with an attachment and no text; only a truly
+      // empty submit (no goal AND no attachments) is a no-op.
+      if (goal === "" && !hasAttachments) {
+        return;
+      }
+      // Tag this attempt; the conversation-reset effect bumps the ref, so a
+      // continuation that runs after a conversation switch drops its result.
+      const startToken = startTokenRef.current;
       setIsStartingRun(true);
       setStartError(null);
-      setStartedGoal(trimmed);
+      // Bridge the header until the run list re-resolves; an attachment-only
+      // start has no goal text, so leave it null (→ "Untitled run" fallback).
+      setStartedGoal(goal !== "" ? goal : null);
+      const normalized: RunStartRequest = { ...request, goal };
       const start = onStartRun
-        ? Promise.resolve(onStartRun(trimmed))
+        ? Promise.resolve(onStartRun(normalized))
         : transport
             .request<unknown>({
               method: "POST",
               path: "/v1/agent/runs",
-              body: { conversation_id: conversationId, user_input: trimmed },
+              body: buildRunCreateBody(conversationId, normalized),
             })
             .then((payload) => runIdFromCreateResponse(payload));
       void start
         .then((newRunId) => {
+          // The cockpit switched conversations mid-flight — drop this result so
+          // it can't stream a stale run into the new conversation.
+          if (startToken !== startTokenRef.current) {
+            return;
+          }
           if (newRunId !== null && newRunId !== undefined && newRunId !== "") {
             setStartedRunId(newRunId as RunId);
           } else {
@@ -370,6 +464,9 @@ export function RunDestination(props: RunDestinationProps): ReactElement {
           }
         })
         .catch((err: unknown) => {
+          if (startToken !== startTokenRef.current) {
+            return;
+          }
           // Never swallow, and never dump the raw transport envelope: parse out
           // the actionable `safe_message` + `code` so the composer shows the
           // one useful line (e.g. "Missing API key…") and a CTA, with the raw
@@ -385,11 +482,25 @@ export function RunDestination(props: RunDestinationProps): ReactElement {
           });
         })
         .finally(() => {
+          if (startToken !== startTokenRef.current) {
+            return;
+          }
           setIsStartingRun(false);
         });
     },
     [conversationId, isStartingRun, modelReady, onStartRun, transport],
   );
+
+  // The plain fallback composer (`RunEmptyState`) sends a bare goal string; wrap
+  // it into the shared `RunStartRequest` seam.
+  const handleStartGoal = useCallback(
+    (goal: string): void => handleStartRun({ goal }),
+    [handleStartRun],
+  );
+
+  // Clear the inline start error (dismiss / retry) — handed to the empty-state
+  // composer via `RunEmptyComposerCtx.dismissError`.
+  const clearStartError = useCallback((): void => setStartError(null), []);
 
   // PR-3.11 (FR-3.26): bind the cockpit to another run. `selectRun` wins over
   // the started/explicit run in `useRunSession`, so the event projector, tabs,
@@ -420,12 +531,14 @@ export function RunDestination(props: RunDestinationProps): ReactElement {
       return listed;
     }
     if (session.runId !== null && session.runId === startedRunId) {
-      return startedGoal;
+      // An attachment-only start has no goal text (`startedGoal === null`); a
+      // run IS attached, so the header must still claim it — "STANDBY" over a
+      // subscribed run is a lie (design review) — hence the generic fallback,
+      // never null (null → idle copy).
+      return startedGoal ?? "Untitled run";
     }
     // A run IS attached but carries no goal text (explicit runId binding, or
-    // a list entry without a goal). The header must still claim the run —
-    // "STANDBY" over a subscribed run is a lie (design review) — so fall back
-    // to an honest generic title rather than null (null → idle copy).
+    // a list entry without a goal). Same honest generic title rather than null.
     if (session.runId !== null) {
       return "Untitled run";
     }
@@ -800,20 +913,50 @@ export function RunDestination(props: RunDestinationProps): ReactElement {
       ) : null}
 
       <div data-testid="run-canvas-slot" style={canvasSlotStyle}>
-        {/* PR-3.11 (FR-3.25): no active run → the empty/idle goal composer
-            (never a blank ThreadCanvas / placeholder string). Submitting a goal
-            starts a run and binds it via the `runId` seam (`handleStartGoal` →
+        {/* PR-3.11 (FR-3.25): no active run → the empty/idle composer (never a
+            blank ThreadCanvas / placeholder string). When the host injects
+            `renderEmptyComposer`, the cockpit shows the design's "What should we
+            run first?" rich composer (hero + starter chips + AssistantComposer);
+            otherwise the plain `RunEmptyState` goal card. Either way, submitting
+            starts a run and binds it via the `runId` seam (`handleStartRun` →
             `setStartedRunId`), so the live layout below mounts IN PLACE — the
             shell (this outer div + header) never remounts. */}
         {session.runId === null ? (
-          <RunEmptyState
-            agentName={agentName}
-            onSubmitGoal={handleStartGoal}
-            submitting={isStartingRun}
-            error={startError}
-            setupRequired={!modelReady}
-            onOpenModelSettings={onOpenModelSettings}
-          />
+          renderEmptyComposer !== undefined ? (
+            <div
+              data-testid="run-empty-composer"
+              style={emptyComposerOuterStyle}
+            >
+              <div style={emptyComposerColumnStyle}>
+                {renderEmptyComposer({
+                  onStartRun: handleStartRun,
+                  submitting: isStartingRun,
+                  startError,
+                  dismissError: clearStartError,
+                  modelReady,
+                  onOpenModelSettings,
+                })}
+                {/* Readiness gate: no model configured yet. The composer above
+                    is disabled by the host (ctx.modelReady); this states why and
+                    offers the one action that unblocks a run. */}
+                {!modelReady ? (
+                  <RunModelSetupNotice
+                    agentName={agentName}
+                    onOpenModelSettings={onOpenModelSettings}
+                  />
+                ) : null}
+              </div>
+            </div>
+          ) : (
+            <RunEmptyState
+              agentName={agentName}
+              onSubmitGoal={handleStartGoal}
+              submitting={isStartingRun}
+              error={startError}
+              setupRequired={!modelReady}
+              onOpenModelSettings={onOpenModelSettings}
+            />
+          )
         ) : (
           <ThreadCanvas
             mode={mode}
@@ -960,6 +1103,45 @@ function runIdFromCreateResponse(payload: unknown): string | null {
   return null;
 }
 
+/**
+ * Build the `POST /v1/agent/runs` body from a {@link RunStartRequest}. Only the
+ * selected fields are attached, so a bare `{ goal }` (the plain fallback
+ * composer) yields the historical "conversation + goal only" body — byte-
+ * unchanged for hosts that never surface the rich composer. Identity (org/user)
+ * is derived server-side from the verified session, never sent by the client.
+ *
+ * Exported so the host binders (desktop `RunBinder`, web `RunRoute`) that own
+ * the POST build the SAME shape as the shell's default path — one body builder,
+ * no drift.
+ */
+export function buildRunCreateBody(
+  conversationId: ConversationId,
+  request: RunStartRequest,
+): Record<string, unknown> {
+  const body: Record<string, unknown> = {
+    conversation_id: conversationId,
+    user_input: request.goal,
+  };
+  if (request.model !== null && request.model !== undefined) {
+    body.model = request.model;
+  }
+  if (request.attachments !== undefined && request.attachments.length > 0) {
+    body.attachments = request.attachments;
+  }
+  // web_search defaults to on at the runtime; only an explicit opt-OUT is worth
+  // sending (an explicit `true` is the runtime default, so it is omitted).
+  if (request.webSearchEnabled === false) {
+    body.web_search_enabled = false;
+  }
+  if (
+    request.connectorScopes !== undefined &&
+    Object.keys(request.connectorScopes).length > 0
+  ) {
+    body.request_context = { connector_scopes: request.connectorScopes };
+  }
+  return body;
+}
+
 /** Format the viewed moment as `HH:MM` (24h); generic when there is no time. */
 function formatViewingTime(atMs: number | null): string {
   if (atMs === null) {
@@ -1039,8 +1221,102 @@ function RunFollowLiveBanner(props: RunFollowLiveBannerProps): ReactElement {
 }
 
 // ============================================================
+// Readiness gate — "connect a model" notice (rich empty composer)
+// ============================================================
+//
+// FR-1.x: the rich empty composer (`renderEmptyComposer`) always renders the
+// design's "What should we run first?" surface, but a run needs a usable model.
+// When none is configured the host disables the composer (ctx.modelReady) and
+// this honest note states why + offers the one action that unblocks a run,
+// rather than letting the user fire a start guaranteed to fail with a
+// configuration error. Mirrors `RunEmptyState`'s setup notice, restyled to sit
+// under the composer in the design frame.
+
+interface RunModelSetupNoticeProps {
+  readonly agentName?: string;
+  readonly onOpenModelSettings?: () => void;
+}
+
+function RunModelSetupNotice(props: RunModelSetupNoticeProps): ReactElement {
+  const { agentName = "the agent", onOpenModelSettings } = props;
+  return (
+    <div data-testid="run-empty-setup" role="note" style={setupNoticeStyle}>
+      <p style={setupNoticeTextStyle}>
+        Before {agentName} can run, connect a model — a cloud API key (OpenAI,
+        Anthropic, Google) or a local model. It takes a minute.
+      </p>
+      {onOpenModelSettings !== undefined ? (
+        <button
+          type="button"
+          data-testid="run-empty-setup-cta"
+          style={setupNoticeCtaStyle}
+          onClick={onOpenModelSettings}
+        >
+          Set up your model
+        </button>
+      ) : null}
+    </div>
+  );
+}
+
+// ============================================================
 // Styles (design-system tokens only)
 // ============================================================
+
+// Rich empty composer frame — a scrollable, vertically-centered 640px column
+// (mirrors the design's `.fr-main`; self-contained inline styles so the frame
+// never depends on onboarding.css being loaded, while the injected composer's
+// own `.fr-*` internals do).
+const emptyComposerOuterStyle: CSSProperties = {
+  height: "100%",
+  width: "100%",
+  minHeight: 0,
+  overflow: "auto",
+  display: "flex",
+  flexDirection: "column",
+};
+
+const emptyComposerColumnStyle: CSSProperties = {
+  flex: "1 1 auto",
+  display: "flex",
+  flexDirection: "column",
+  justifyContent: "center",
+  gap: 16,
+  width: "min(640px, 92%)",
+  margin: "0 auto",
+  padding: "22px 0",
+};
+
+const setupNoticeStyle: CSSProperties = {
+  display: "flex",
+  flexDirection: "column",
+  alignItems: "flex-start",
+  gap: 10,
+  padding: "12px 14px",
+  borderRadius: 10,
+  background: "var(--color-bg-elevated, #16181f)",
+  border: "1px solid var(--color-border, #2a2d31)",
+};
+
+const setupNoticeTextStyle: CSSProperties = {
+  margin: 0,
+  fontSize: "var(--font-size-sm, 13px)",
+  lineHeight: 1.5,
+  color: "var(--color-text, #f4f5f6)",
+};
+
+const setupNoticeCtaStyle: CSSProperties = {
+  alignSelf: "flex-start",
+  background: "var(--color-accent, #5fb2ec)",
+  color: "var(--color-accent-contrast, #08131d)",
+  border: "1px solid var(--color-accent, #5fb2ec)",
+  borderRadius: 8,
+  padding: "6px 14px",
+  fontSize: "var(--font-size-xs, 12px)",
+  fontWeight: 600,
+  cursor: "pointer",
+  fontFamily: "inherit",
+};
 
 const rootStyle: CSSProperties = {
   display: "flex",

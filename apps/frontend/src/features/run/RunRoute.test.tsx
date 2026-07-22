@@ -11,14 +11,7 @@
 // substrate-boundary eslint rules are off — importing the chat-transport port
 // types + registry helpers for setup is intentional and sanctioned.
 
-import {
-  act,
-  fireEvent,
-  render,
-  screen,
-  waitFor,
-  within,
-} from "@testing-library/react";
+import { act, render, screen, waitFor, within } from "@testing-library/react";
 import type { ReactElement } from "react";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 
@@ -37,7 +30,26 @@ import type {
 } from "@0x-copilot/chat-transport";
 
 import { registerSurfaces } from "../../app/registerSurfaces";
+import type { RequestIdentity } from "../../api/config";
 import { RunRoute } from "./RunRoute";
+
+// jsdom ships no IntersectionObserver; the rich empty composer's AssistantComposer
+// caret path wants one. A no-op keeps the tree renderable.
+class NoopIntersectionObserver {
+  observe(): void {}
+  unobserve(): void {}
+  disconnect(): void {}
+  takeRecords(): unknown[] {
+    return [];
+  }
+}
+if (typeof globalThis.IntersectionObserver === "undefined") {
+  (
+    globalThis as unknown as { IntersectionObserver: unknown }
+  ).IntersectionObserver = NoopIntersectionObserver;
+}
+
+const IDENTITY: RequestIdentity = { orgId: "org-1", userId: "user-1" };
 
 // PRD-01 golden `record` fixture (linear_get_issue), inlined so the test does
 // not deep-import package internals (the fixture is not on a public barrel).
@@ -143,7 +155,7 @@ function renderRoute(transport: Transport): ReturnType<typeof render> {
   const ui: ReactElement = (
     <TransportProvider transport={transport}>
       <KeyValueStoreProvider store={makeStore()}>
-        <RunRoute />
+        <RunRoute identity={IDENTITY} />
       </KeyValueStoreProvider>
     </TransportProvider>
   );
@@ -227,7 +239,7 @@ describe("RunRoute (PRD-05)", () => {
     expect(within(record).getByText("In Progress")).toBeInTheDocument();
   });
 
-  it("wires onStartRun — starts a run from the empty composer and binds it live", async () => {
+  it("mounts the design's rich empty composer ('What should we run first?') when there is no active run", async () => {
     const transport = new FakeTransport();
     transport.requestHandler = async (req) => {
       if (req.path === "/v1/agent/conversations" && req.method === "GET") {
@@ -239,9 +251,6 @@ describe("RunRoute (PRD-05)", () => {
       if (req.path.includes("/messages")) {
         return { messages: [] };
       }
-      if (req.method === "POST" && req.path === "/v1/agent/runs") {
-        return { run_id: "run-new" };
-      }
       if (req.path === "/v1/agent/runs" && req.method === "GET") {
         return { runs: [] }; // no prior runs → empty-state composer
       }
@@ -250,33 +259,19 @@ describe("RunRoute (PRD-05)", () => {
 
     renderRoute(transport);
 
-    // Empty/idle: the goal composer, no ThreadCanvas.
-    await screen.findByTestId("run-empty-state");
+    // No active run → the design's rich composer (hero + starter chips), NOT the
+    // plain "Give it a goal" card and NOT a blank canvas.
+    const hero = await screen.findByTestId("first-run-composer-h1");
+    expect(hero.textContent).toBe("What should we run first?");
+    expect(screen.getByTestId("first-run-chip-watch-wallet")).not.toBeNull();
+    expect(screen.queryByTestId("run-empty-goal-input")).toBeNull();
     expect(screen.queryByTestId("thread-canvas")).toBeNull();
 
-    fireEvent.change(screen.getByTestId("run-empty-goal-input"), {
-      target: { value: "Draft the launch note" },
-    });
-    act(() => {
-      fireEvent.click(screen.getByTestId("run-empty-submit"));
-    });
-
-    // The binder's onStartRun POSTed the run (conversation + goal only)…
-    await waitFor(() =>
-      expect(
-        transport.requests.some(
-          (r) =>
-            r.method === "POST" &&
-            r.path === "/v1/agent/runs" &&
-            (r.body as { conversation_id?: string } | undefined)
-              ?.conversation_id === "conv-1",
-        ),
-      ).toBe(true),
-    );
-    // …and the freshly-started run drives the session's SSE tail (empty→live).
-    await screen.findByTestId("thread-canvas");
-    await waitFor(() =>
-      expect(transport.sessionSub?.path).toBe("/v1/agent/runs/run-new/stream"),
-    );
+    // The most-recent conversation was reused — no fabricated one was created.
+    expect(
+      transport.requests.some(
+        (r) => r.method === "POST" && r.path === "/v1/agent/conversations",
+      ),
+    ).toBe(false);
   });
 });

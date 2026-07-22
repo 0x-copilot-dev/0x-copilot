@@ -28,11 +28,25 @@
 
 import { useCallback, useEffect, useState, type ReactElement } from "react";
 
-import { RunDestination, useTransport } from "@0x-copilot/chat-surface";
+import {
+  RunDestination,
+  buildRunCreateBody,
+  useTransport,
+  type RunEmptyComposerCtx,
+  type RunStartRequest,
+} from "@0x-copilot/chat-surface";
 import type {
   ConversationId,
   ConversationListResponse,
 } from "@0x-copilot/api-types";
+
+import type { RequestIdentity } from "../../api/config";
+import { RunEmptyComposer } from "./RunEmptyComposer";
+
+// The shared FTUE / onboarding-composer styles (hero · starter chips ·
+// composer). The empty-state composer reuses these `.fr-*` classes; import them
+// here so the run chunk carries them even without the onboarding chunk loaded.
+import "@0x-copilot/chat-surface/src/onboarding/onboarding.css";
 
 export interface RunRouteProps {
   /**
@@ -42,9 +56,14 @@ export interface RunRouteProps {
    * never navigates directly.
    */
   readonly onOpenModelSettings?: () => void;
+  /** Signed-in identity — threaded to the empty composer's live model catalog. */
+  readonly identity: RequestIdentity;
 }
 
-export function RunRoute({ onOpenModelSettings }: RunRouteProps): ReactElement {
+export function RunRoute({
+  onOpenModelSettings,
+  identity,
+}: RunRouteProps): ReactElement {
   const transport = useTransport();
   const [conversationId, setConversationId] = useState<ConversationId | null>(
     null,
@@ -134,21 +153,34 @@ export function RunRoute({ onOpenModelSettings }: RunRouteProps): ReactElement {
     };
   }, [transport]);
 
-  // Start a run from the empty-state goal composer. Host owns run creation; the
-  // POST carries only conversation + goal (identity comes from the bearer).
+  // Start a run from the empty-state composer. Host owns run creation; one body
+  // builder (shared with the shell default + desktop binder) turns a bare
+  // `{ goal }` into "conversation + goal only" and the rich composer's selection
+  // (model / attachments / web-search) into the full body. Identity comes from
+  // the verified bearer server-side, never sent by the client.
   const handleStartRun = useCallback(
-    async (goal: string): Promise<string | null> => {
+    async (request: RunStartRequest): Promise<string | null> => {
       if (conversationId === null) {
         return null;
       }
       const run = await transport.request<{ readonly run_id?: string }>({
         method: "POST",
         path: "/v1/agent/runs",
-        body: { conversation_id: conversationId, user_input: goal },
+        body: buildRunCreateBody(conversationId, request),
       });
       return run.run_id ?? null;
     },
     [transport, conversationId],
+  );
+
+  // Empty-state composer (FR-3.25): the design's "What should we run first?"
+  // rich composer, mounted when there is no active run. Send binds the fresh
+  // run live (no shell remount).
+  const renderEmptyComposer = useCallback(
+    (ctx: RunEmptyComposerCtx) => (
+      <RunEmptyComposer ctx={ctx} identity={identity} />
+    ),
+    [identity],
   );
 
   // Full-bleed: the `run` slug owns full height in ChatShell (no topbar /
@@ -174,6 +206,7 @@ export function RunRoute({ onOpenModelSettings }: RunRouteProps): ReactElement {
         onStartRun={handleStartRun}
         modelReady={modelReady}
         onOpenModelSettings={onOpenModelSettings}
+        renderEmptyComposer={renderEmptyComposer}
       />
     </section>
   );

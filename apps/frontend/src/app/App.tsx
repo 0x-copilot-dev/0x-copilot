@@ -992,7 +992,7 @@ export function CopilotApp({
     // `run` is full-bleed in ChatShell (no ContextPanel / Topbar); `/` maps to
     // `run` (ROOT_DESTINATION), so the legacy `/` bookmark keeps working.
     body = runCockpitWebEnabled ? (
-      <RunRoute onOpenModelSettings={openModelSettings} />
+      <RunRoute onOpenModelSettings={openModelSettings} identity={identity} />
     ) : (
       <ChatScreen
         connectors={connectors}

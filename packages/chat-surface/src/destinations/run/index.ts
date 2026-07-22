@@ -7,7 +7,13 @@
 // the host hooks (`useRunSession` PR-3.3, `useRunMode` PR-3.4) it builds on.
 
 // === PR-3.5 — cockpit shell ===
-export { RunDestination, type RunDestinationProps } from "./RunDestination";
+export {
+  RunDestination,
+  buildRunCreateBody,
+  type RunDestinationProps,
+  type RunStartRequest,
+  type RunEmptyComposerCtx,
+} from "./RunDestination";
 export { RunHeader, type RunHeaderProps } from "./RunHeader";
 
 // === PR-3.6 — tabbed right rail (Chat · Sources · Agents · Approvals) ===

@@ -1,8 +1,5 @@
 import {
   useCallback,
-  useEffect,
-  useMemo,
-  useRef,
   useState,
   type CSSProperties,
   type ReactElement,
@@ -13,25 +10,18 @@ import {
   ComposerConnectorsButton,
   parseTransportError,
   useTransport,
-  type AssistantComposerPlusMenuSlotArgs,
   type CompleteAttachment,
   type StartRunError,
 } from "@0x-copilot/chat-surface";
-import type { McpServer, Skill } from "@0x-copilot/api-types";
 
-import {
-  buildModelCatalog,
-  defaultSelectedModelId,
-  modelSelectionForId,
-  type CatalogModel,
-} from "./desktopModelCatalog";
+import { modelSelectionForId } from "./desktopModelCatalog";
 import { createDesktopAttachmentAdapter } from "./desktopAttachmentAdapter";
-import { DesktopAnchoredPlusMenu } from "./DesktopAnchoredPlusMenu";
 import { DesktopComposerFilePicker } from "./DesktopComposerFilePicker";
 import {
   mcpServerInstructionPrompt,
   skillInstructionPrompt,
 } from "./composerPrompts";
+import { useRunComposerBindings } from "./useRunComposerBindings";
 
 // Substrate-bound singletons — one hidden-input file picker and one
 // single-stage attachment adapter per renderer. Both are stateless, so a module
@@ -56,25 +46,6 @@ export interface RunComposerProps {
   readonly onOpenSkillsSettings?: () => void;
   /** Open Settings → Provider keys (BYOK model setup). */
   readonly onOpenModelSettings?: () => void;
-}
-
-interface SkillsResponse {
-  readonly skills?: readonly Skill[];
-}
-interface McpServersResponse {
-  readonly servers?: readonly McpServer[];
-}
-interface ProviderKeysResponse {
-  readonly keys?: readonly { readonly provider?: string }[];
-}
-interface WorkspaceDefaultsResponseLite {
-  readonly default_model?: {
-    readonly provider?: string;
-    readonly model_name?: string;
-  } | null;
-}
-interface LocalModelsResponse {
-  readonly models?: readonly { readonly name?: string }[];
 }
 
 /**
@@ -116,284 +87,25 @@ export function RunComposer(props: RunComposerProps): ReactElement {
   // send or an explicit dismiss.
   const [startError, setStartError] = useState<StartRunError | null>(null);
 
-  // --- Skills (drive `/`-menu + skill pills) ---
-  const [skills, setSkills] = useState<readonly Skill[]>([]);
-  const [skillsLoading, setSkillsLoading] = useState(true);
-  const [selectedSkills, setSelectedSkills] = useState<readonly Skill[]>([]);
-
-  // --- MCP servers (connections shown in the `+` menu) ---
-  const [servers, setServers] = useState<readonly McpServer[]>([]);
-  const [serversLoading, setServersLoading] = useState(true);
-
-  // --- Model catalog inputs ---
-  const [configuredProviders, setConfiguredProviders] = useState<
-    ReadonlySet<string>
-  >(new Set());
-  const [providersKnown, setProvidersKnown] = useState(false);
-  const [localModelNames, setLocalModelNames] = useState<readonly string[]>([]);
-  const [customModels, setCustomModels] = useState<readonly CatalogModel[]>([]);
-  const [selectedModel, setSelectedModel] = useState<string>("");
-  const [workspaceDefault, setWorkspaceDefault] = useState<{
-    readonly provider: string;
-    readonly model_name: string;
-  } | null>(null);
-  // Seed-once guards: the persisted workspace default wins over the curated
-  // fallback exactly once, and never over an explicit user pick.
-  const seededDefaultRef = useRef(false);
-  const userPickedRef = useRef(false);
-
-  useEffect(() => {
-    let cancelled = false;
-    void transport
-      .request<SkillsResponse>({ method: "GET", path: "/v1/skills" })
-      .then((res) => {
-        if (!cancelled) setSkills(res.skills ?? []);
-      })
-      .catch(() => {
-        if (!cancelled) setSkills([]);
-      })
-      .finally(() => {
-        if (!cancelled) setSkillsLoading(false);
-      });
-    return () => {
-      cancelled = true;
-    };
-  }, [transport]);
-
-  useEffect(() => {
-    let cancelled = false;
-    void transport
-      .request<McpServersResponse>({ method: "GET", path: "/v1/mcp/servers" })
-      .then((res) => {
-        if (!cancelled) setServers(res.servers ?? []);
-      })
-      .catch(() => {
-        if (!cancelled) setServers([]);
-      })
-      .finally(() => {
-        if (!cancelled) setServersLoading(false);
-      });
-    return () => {
-      cancelled = true;
-    };
-  }, [transport]);
-
-  useEffect(() => {
-    let cancelled = false;
-    void transport
-      .request<ProviderKeysResponse>({
-        method: "GET",
-        path: "/v1/settings/provider-keys",
-      })
-      .then((res) => {
-        if (cancelled) return;
-        const providers = new Set<string>();
-        for (const key of res.keys ?? []) {
-          if (key.provider) providers.add(key.provider);
-          // The key store speaks `google`; the curated catalog (and the
-          // runtime's model resolver) speak `gemini`. Alias so a Google key
-          // actually lights up the Gemini rows.
-          if (key.provider === "google") providers.add("gemini");
-        }
-        setConfiguredProviders(providers);
-        setProvidersKnown(true);
-      })
-      .catch(() => {
-        // Probe failed → leave `providersKnown` false so the catalog fails open
-        // (a configured user is never blocked; run-start error is the backstop).
-      });
-    return () => {
-      cancelled = true;
-    };
-  }, [transport]);
-
-  useEffect(() => {
-    let cancelled = false;
-    void transport
-      .request<LocalModelsResponse>({ method: "GET", path: "/v1/local-models" })
-      .then((res) => {
-        if (cancelled) return;
-        const names = (res.models ?? [])
-          .map((m) => m.name)
-          .filter((n): n is string => typeof n === "string" && n.length > 0);
-        setLocalModelNames(names);
-      })
-      .catch(() => {
-        // Local models are optional/server-gated (404 when off) → empty list.
-        if (!cancelled) setLocalModelNames([]);
-      });
-    return () => {
-      cancelled = true;
-    };
-  }, [transport]);
-
-  useEffect(() => {
-    let cancelled = false;
-    void transport
-      .request<WorkspaceDefaultsResponseLite>({
-        method: "GET",
-        path: "/v1/agent/workspace/defaults",
-      })
-      .then((res) => {
-        if (cancelled) return;
-        const dm = res.default_model;
-        if (
-          dm &&
-          typeof dm.provider === "string" &&
-          dm.provider !== "" &&
-          typeof dm.model_name === "string" &&
-          dm.model_name !== ""
-        ) {
-          setWorkspaceDefault({
-            provider: dm.provider,
-            model_name: dm.model_name,
-          });
-        }
-      })
-      .catch(() => {
-        // Defaults are optional — the curated fallback selection stands.
-      });
-    return () => {
-      cancelled = true;
-    };
-  }, [transport]);
-
-  const models = useMemo<CatalogModel[]>(() => {
-    const base = buildModelCatalog({
-      configuredProviders,
-      providersKnown,
-      localModelNames,
-    });
-    const merged = [...base, ...customModels];
-    // The persisted workspace default may live outside the curated set (e.g.
-    // the Add-key wizard's gpt-4o). Surface it as a synthetic entry so it is
-    // visible and selectable, with the same configured-gating as curated rows.
-    if (workspaceDefault !== null) {
-      const listed = merged.some(
-        (m) =>
-          m.provider === workspaceDefault.provider &&
-          m.model_name === workspaceDefault.model_name,
-      );
-      if (!listed) {
-        const configured =
-          !providersKnown || configuredProviders.has(workspaceDefault.provider);
-        merged.push({
-          id: workspaceDefault.model_name,
-          provider: workspaceDefault.provider,
-          model_name: workspaceDefault.model_name,
-          name: workspaceDefault.model_name,
-          description: "Workspace default",
-          configured,
-          supports_streaming: true,
-          disabled: !configured,
-        });
-      }
-    }
-    return merged;
-  }, [
-    configuredProviders,
-    providersKnown,
-    localModelNames,
-    customModels,
-    workspaceDefault,
-  ]);
-
-  // Selection resolution — ONE writer so the workspace-default seed and the
-  // keep-valid fallback cannot race each other's stale closures:
-  //   1. seed the persisted default exactly once, when present and usable;
-  //   2. otherwise keep a valid current pick;
-  //   3. otherwise fall back to the first usable model.
-  useEffect(() => {
-    setSelectedModel((current) => {
-      if (
-        !userPickedRef.current &&
-        !seededDefaultRef.current &&
-        workspaceDefault !== null
-      ) {
-        const dm = models.find(
-          (m) =>
-            m.provider === workspaceDefault.provider &&
-            m.model_name === workspaceDefault.model_name,
-        );
-        // An unusable default (key removed since) stays unseeded so a later
-        // configured flip can still seed it; the fallback keeps things honest.
-        if (dm && dm.configured && dm.disabled !== true) {
-          seededDefaultRef.current = true;
-          return dm.id;
-        }
-      }
-      return current !== "" && models.some((m) => m.id === current)
-        ? current
-        : defaultSelectedModelId(models);
-    });
-  }, [models, workspaceDefault]);
-
-  const handleModelChange = useCallback((id: string): void => {
-    userPickedRef.current = true;
-    setSelectedModel(id);
-  }, []);
-
-  const handleAddCustomModel = useCallback((slug: string): void => {
-    const trimmed = slug.trim();
-    if (trimmed === "") return;
-    setCustomModels((prev) =>
-      prev.some((m) => m.id === trimmed)
-        ? prev
-        : [
-            ...prev,
-            {
-              id: trimmed,
-              provider: "openrouter",
-              model_name: trimmed,
-              name: trimmed,
-              description: "Custom OpenRouter model",
-              configured: true,
-              supports_streaming: true,
-            },
-          ],
-    );
-    setSelectedModel(trimmed);
-  }, []);
-
-  const handleAttachSkill = useCallback((skill: Skill): void => {
-    setSelectedSkills((current) =>
-      current.some((s) => s.skill_id === skill.skill_id)
-        ? current
-        : [...current, skill],
-    );
-  }, []);
-  const handleRemoveSkill = useCallback((skillId: string): void => {
-    setSelectedSkills((current) =>
-      current.filter((s) => s.skill_id !== skillId),
-    );
-  }, []);
-  const handleClearSkills = useCallback((): void => {
-    setSelectedSkills([]);
-  }, []);
-
-  const renderPlusMenu = useCallback(
-    ({
-      open,
-      anchorRef,
-      onDismiss,
-      children,
-    }: AssistantComposerPlusMenuSlotArgs): ReactElement => (
-      <DesktopAnchoredPlusMenu
-        open={open}
-        anchorRef={anchorRef}
-        onDismiss={onDismiss}
-      >
-        {children}
-      </DesktopAnchoredPlusMenu>
-    ),
-    [],
-  );
-
-  // "N active for this chat" — the count reflected on the connectors trigger.
-  const activeConnectorCount = useMemo(
-    () => servers.filter((s) => s.enabled).length,
-    [servers],
-  );
+  // Shared Run-cockpit composer data (skills, MCP servers, model catalog +
+  // selection, `+`-menu) — the SAME source the empty-state `RunEmptyComposer`
+  // reads, so the two never drift.
+  const {
+    skills,
+    skillsLoading,
+    selectedSkills,
+    onAttachSkill: handleAttachSkill,
+    onRemoveSkill: handleRemoveSkill,
+    onClearSkills: handleClearSkills,
+    servers,
+    serversLoading,
+    activeConnectorCount,
+    models,
+    selectedModel,
+    onModelChange: handleModelChange,
+    onAddCustomModel: handleAddCustomModel,
+    renderPlusMenu,
+  } = useRunComposerBindings();
 
   const connectorsTrigger = (
     <ComposerConnectorsButton
