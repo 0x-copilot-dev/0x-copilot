@@ -23,7 +23,7 @@ import {
   type ReactElement,
 } from "react";
 
-import { Button, TextInput } from "@0x-copilot/design-system";
+import { TextInput } from "@0x-copilot/design-system";
 
 import { SegmentedControl } from "../settings/controls";
 import type { ProviderKeysPort } from "../settings/data/providerKeys";
@@ -183,27 +183,25 @@ export function KeyForm({
 
       <div className="fr-kf__actions">
         {onCancel !== undefined ? (
-          <Button
+          <button
             type="button"
-            variant="ghost"
-            size="sm"
+            className="gbtn"
             onClick={onCancel}
             data-testid="first-run-key-cancel"
           >
             Cancel
-          </Button>
+          </button>
         ) : null}
-        <Button
+        <button
           type="button"
-          variant="primary"
-          size="sm"
+          className="gbtn gbtn--pri"
           disabled={connecting || apiKey.trim().length === 0}
           aria-disabled={connecting}
           onClick={handleConnect}
           data-testid="first-run-key-connect"
         >
           {connecting ? "Connecting…" : FIRST_RUN_COPY.keyForm.btn}
-        </Button>
+        </button>
       </div>
     </div>
   );
