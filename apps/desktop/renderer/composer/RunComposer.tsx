@@ -11,6 +11,7 @@ import {
   parseTransportError,
   useTransport,
   type CompleteAttachment,
+  type RunStartRequest,
   type StartRunError,
 } from "@0x-copilot/chat-surface";
 
@@ -30,8 +31,14 @@ const filePicker = new DesktopComposerFilePicker();
 const attachmentAdapter = createDesktopAttachmentAdapter();
 
 export interface RunComposerProps {
-  /** Conversation the run dispatch targets. */
-  readonly conversationId: string;
+  /**
+   * The cockpit's ONE dispatch (§D3), injected via the renderComposer ctx. The
+   * in-chat send routes through here so it starts the run AND binds the live
+   * session (2nd/Nth message streams like the first); a rejection surfaces in
+   * this composer's own error notice. The cockpit owns which conversation the
+   * run targets, so this composer no longer needs a conversation id.
+   */
+  readonly dispatch: (request: RunStartRequest) => Promise<void>;
   /**
    * Off-live (scrubbed) gate handed down by the Run cockpit through the
    * `renderComposer` seam. When true the composer is read-only — you can't send
@@ -66,7 +73,7 @@ export interface RunComposerProps {
  */
 export function RunComposer(props: RunComposerProps): ReactElement {
   const {
-    conversationId,
+    dispatch,
     disabled,
     placeholder,
     onShowConnectors,
@@ -129,27 +136,28 @@ export function RunComposer(props: RunComposerProps): ReactElement {
       const atts = attachments as ReadonlyArray<CompleteAttachment>;
       if (trimmed === "" && atts.length === 0) return;
       const model = modelSelectionForId(models, selectedModel);
-      const body: Record<string, unknown> = {
-        conversation_id: conversationId,
-        user_input: text,
+      const request: RunStartRequest = {
+        goal: text,
+        model,
+        attachments:
+          atts.length > 0
+            ? // The map produces the run-attachment wire shape the composer has
+              // always posted; the cast bridges the loosely-typed mapper to the
+              // shared RunStartRequest contract.
+              (atts.map(
+                toRunAttachment,
+              ) as unknown as RunStartRequest["attachments"])
+            : undefined,
       };
-      if (model !== null) {
-        body.model = model;
-      }
-      if (atts.length > 0) {
-        body.attachments = atts.map(toRunAttachment);
-      }
-      // Let a rejection propagate to `onSubmitError` (handleSubmitError) — the
-      // single chat-surface error channel — rather than catching it here. On
-      // success, clear any prior failure notice so it can't linger.
-      await transport.request({
-        method: "POST",
-        path: "/v1/agent/runs",
-        body,
-      });
+      // Route through the cockpit's ONE dispatch (§D3): it starts the run AND
+      // binds the live session, so this 2nd/Nth message streams exactly like the
+      // first (the old in-chat POST discarded its run id and never bound). A
+      // rejection propagates to `onSubmitError` (handleSubmitError) — the single
+      // error channel — rather than being caught here; success clears any notice.
+      await dispatch(request);
       setStartError(null);
     },
-    [conversationId, disabled, models, selectedModel, transport],
+    [disabled, dispatch, models, selectedModel],
   );
 
   // The composer's error channel: a rejected run-create surfaces here instead

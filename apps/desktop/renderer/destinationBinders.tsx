@@ -690,9 +690,15 @@ export function RunBinder({
   // us the ghost/scrub `disabled` + placeholder; RunComposer owns the substrate
   // ports (attachments, `/`-menu, connectors, model picker) and run dispatch.
   const renderComposer = useCallback(
-    (ctx: { readonly disabled: boolean; readonly placeholder: string }) => (
+    (ctx: {
+      readonly disabled: boolean;
+      readonly placeholder: string;
+      // §D3 — the cockpit injects its ONE dispatch into the composer ctx; the
+      // in-chat send routes through it so it binds the live session.
+      readonly dispatch: (request: RunStartRequest) => Promise<void>;
+    }) => (
       <RunComposer
-        conversationId={activeConversationId as unknown as string}
+        dispatch={ctx.dispatch}
         disabled={ctx.disabled}
         placeholder={ctx.placeholder}
         onShowConnectors={onOpenConnectors}
@@ -700,7 +706,7 @@ export function RunBinder({
         onOpenModelSettings={onOpenModelSettings}
       />
     ),
-    [activeConversationId, onOpenConnectors, onOpenSkills, onOpenModelSettings],
+    [onOpenConnectors, onOpenSkills, onOpenModelSettings],
   );
 
   return (
