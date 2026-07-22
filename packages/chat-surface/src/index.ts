@@ -975,6 +975,12 @@ export {
   type ModelBehaviorModelOption,
   type ReasoningDepth,
   type SpendGuardrailValue,
+  // D4 — Spend-guardrail port (bound to /v1/budgets; owns $↔micro-USD).
+  createSpendGuardrailPort,
+  capUsdToMicro,
+  microToCapUsd,
+  type SpendGuardrailPort,
+  type SpendGuardrailSnapshot,
   type ApprovalPolicyProps,
   type ApprovalPolicyValue,
   type ReadOnlyApprovalMode,

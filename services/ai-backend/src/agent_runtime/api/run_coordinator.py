@@ -108,7 +108,14 @@ class RunCoordinator:
                 request=request, conversation=conversation_for_scope
             )
 
+        # Seed the workspace-persisted defaults the request omits: default
+        # model, reasoning depth (D1), and web access (D3). Each is a self-
+        # contained applier mirroring the existing default-model shape (they
+        # consult the workspace-defaults record only when the corresponding
+        # field is absent, so an explicit per-turn pick always wins).
         request = await self._apply_workspace_default_model(request=request)
+        request = await self._apply_workspace_default_reasoning_depth(request=request)
+        request = await self._apply_web_access_default(request=request)
 
         (
             workspace_overrides,
@@ -428,6 +435,52 @@ class RunCoordinator:
         )
         return request.model_copy(update={"model": merged})
 
+    async def _apply_workspace_default_reasoning_depth(
+        self, *, request: CreateRunRequest
+    ) -> CreateRunRequest:
+        """Seed ``reasoning_depth`` from the workspace default when omitted (D1).
+
+        Precedence: an explicit per-turn ``reasoning_depth`` (composer / agent /
+        routine) always wins; only a request that omits it consults the
+        workspace-persisted ``default_reasoning_depth``. ``None`` on the default
+        (== Auto) is a no-op, leaving the runtime baseline in place. Mirrors the
+        self-contained shape of ``_apply_workspace_default_model``.
+        """
+        if request.reasoning_depth is not None:
+            return request
+        if request.org_id is None:
+            return request
+        record = await self._workspace_defaults().get_record(org_id=request.org_id)
+        if record is None:
+            return request
+        depth = record.behavior_overrides.default_reasoning_depth
+        if depth is None:
+            return request
+        return request.model_copy(update={"reasoning_depth": depth})
+
+    async def _apply_web_access_default(
+        self, *, request: CreateRunRequest
+    ) -> CreateRunRequest:
+        """Seed ``web_search_enabled`` from the workspace default when omitted (D3).
+
+        The request field is tri-state: a non-``None`` value is the explicit
+        per-turn choice and always wins. Only an omitted flag (``None``)
+        consults the workspace-persisted ``web_access_default``; when that too
+        is unset the flag stays ``None`` and is coalesced to the historic
+        always-on ``True`` at seal time.
+        """
+        if request.web_search_enabled is not None:
+            return request
+        if request.org_id is None:
+            return request
+        record = await self._workspace_defaults().get_record(org_id=request.org_id)
+        if record is None:
+            return request
+        default = record.behavior_overrides.web_access_default
+        if default is None:
+            return request
+        return request.model_copy(update={"web_search_enabled": default})
+
     async def _resolve_user_policies(
         self, *, org_id: str, user_id: str
     ) -> dict[str, object]:
@@ -570,7 +623,14 @@ class RunCoordinator:
             max_parallel_tasks=self._settings.execution.max_parallel_tasks,
             trace_metadata=trace_metadata,
             feature_flags=context.feature_flags,
-            web_search_enabled=request.web_search_enabled,
+            # Coalesce the tri-state per-turn flag: an unset flag (no per-turn
+            # pick AND no workspace default) keeps the historic always-on
+            # behaviour, so the strict context bool never receives ``None``.
+            web_search_enabled=(
+                request.web_search_enabled
+                if request.web_search_enabled is not None
+                else True
+            ),
             workspace_behavior_overrides=workspace_behavior_overrides or {},
             user_policies_json=user_policies_json or {},
             provider_keys=provider_keys or {},

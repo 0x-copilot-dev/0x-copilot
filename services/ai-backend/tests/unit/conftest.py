@@ -23,11 +23,14 @@ from tests.unit.fakes import (
 def reset_model_catalog_source() -> Iterator[None]:
     """Reset the shared catalog source after each test so injected fakes never leak.
 
-    ``ModelCatalog.build`` lazily constructs a process-wide
-    ``LitellmModelSource`` that reads LiteLLM's bundled, offline ``model_cost``
-    table — no network, so no offline guard is needed. Tests that inject a fake
-    source via ``ModelCatalog.configure_source`` rely on this teardown to drop
-    it again afterwards.
+    ``ModelCatalog.build`` lazily constructs a process-wide ``LitellmModelSource``
+    that reads LiteLLM's ``model_cost`` table. That access now routes through
+    ``apply_offline_litellm_config`` (pins the bundled cost map via
+    ``LITELLM_LOCAL_MODEL_COST_MAP`` + disables the HuggingFace tokenizer
+    download), so both the catalog and the pre-run token counter stay offline
+    and deterministic — no first-access remote cost-map fetch. Tests that inject
+    a fake source via ``ModelCatalog.configure_source`` rely on this teardown to
+    drop it again afterwards.
     """
 
     yield

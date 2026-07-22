@@ -148,6 +148,61 @@ class TestBehaviorOverridesRoundTrip(BehaviorOverridesFixtureMixin):
         for key, value in overrides.items():
             assert body["behavior_overrides"][key] == value, (key, value)
 
+    def test_put_round_trips_reasoning_depth_and_web_access(self) -> None:
+        # D1 + D3 — the canonical reasoning-depth default and the web-access
+        # default persist and read back verbatim.
+        client, _ = self.create_client()
+        overrides = {
+            "default_reasoning_depth": "deep",
+            "web_access_default": False,
+        }
+        put = client.put(
+            "/v1/agent/workspace/defaults",
+            headers=self._headers(permission_scopes=(RUNTIME_USE, ADMIN_USERS)),
+            json=self._put_payload(behavior_overrides=overrides),
+        )
+        assert put.status_code == 200, put.text
+        get = client.get("/v1/agent/workspace/defaults", headers=self._headers())
+        body = get.json()
+        assert body["behavior_overrides"]["default_reasoning_depth"] == "deep"
+        assert body["behavior_overrides"]["web_access_default"] is False
+
+    def test_legacy_reasoning_effort_reconciles_to_depth_on_read(self) -> None:
+        # D1 — a row carrying only the legacy ``default_reasoning_effort``
+        # (written by the still-live web panel) reads back with the canonical
+        # ``default_reasoning_depth`` backfilled (high -> deep) so run-create
+        # consumes it, with zero data migration.
+        client, _ = self.create_client()
+        put = client.put(
+            "/v1/agent/workspace/defaults",
+            headers=self._headers(permission_scopes=(RUNTIME_USE, ADMIN_USERS)),
+            json=self._put_payload(
+                behavior_overrides={"default_reasoning_effort": "high"},
+            ),
+        )
+        assert put.status_code == 200, put.text
+        get = client.get("/v1/agent/workspace/defaults", headers=self._headers())
+        overrides = get.json()["behavior_overrides"]
+        assert overrides["default_reasoning_effort"] == "high"
+        assert overrides["default_reasoning_depth"] == "deep"
+
+    def test_explicit_depth_wins_over_legacy_effort(self) -> None:
+        # An explicit canonical depth always wins over a legacy effort value.
+        client, _ = self.create_client()
+        put = client.put(
+            "/v1/agent/workspace/defaults",
+            headers=self._headers(permission_scopes=(RUNTIME_USE, ADMIN_USERS)),
+            json=self._put_payload(
+                behavior_overrides={
+                    "default_reasoning_effort": "high",
+                    "default_reasoning_depth": "fast",
+                },
+            ),
+        )
+        assert put.status_code == 200, put.text
+        get = client.get("/v1/agent/workspace/defaults", headers=self._headers())
+        assert get.json()["behavior_overrides"]["default_reasoning_depth"] == "fast"
+
     def test_put_rejects_unknown_override_key(self) -> None:
         client, _ = self.create_client()
         response = client.put(

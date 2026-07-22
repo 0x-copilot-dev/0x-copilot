@@ -12,9 +12,11 @@ checkpoints) in one transaction. The value is not a direct column on the
 
 ``behavior_overrides`` is a closed JSONB blob with workspace-policy knobs
 (``system_prompt_override``, ``temperature``, ``citation_density``,
-``refusal_behavior``, ``default_reasoning_effort``, ``default_local_model``,
-``training_data_opt_out``). Pydantic strict-mode is the single validation point;
-the persistence layer reads known keys and ignores future ones.
+``refusal_behavior``, ``default_reasoning_effort`` (legacy),
+``default_reasoning_depth`` (canonical), ``web_access_default``,
+``default_local_model``, ``training_data_opt_out``). Pydantic strict-mode is
+the single validation point; the persistence layer reads known keys and ignores
+future ones.
 """
 
 from __future__ import annotations
@@ -23,9 +25,16 @@ from datetime import datetime
 from enum import StrEnum
 from typing import Any
 
-from pydantic import ConfigDict, Field, ValidationInfo, field_validator
+from pydantic import (
+    ConfigDict,
+    Field,
+    ValidationInfo,
+    field_validator,
+    model_validator,
+)
 
 from agent_runtime.execution.contracts import JsonObject, RuntimeContract
+from agent_runtime.execution.depth import ReasoningDepth
 from agent_runtime.api.constants import Keys
 from agent_runtime.validation import ValueNormalizer
 from runtime_api.schemas.conversations import (
@@ -47,6 +56,8 @@ class _Fields:
     CITATION_DENSITY = "citation_density"
     REFUSAL_BEHAVIOR = "refusal_behavior"
     DEFAULT_REASONING_EFFORT = "default_reasoning_effort"
+    DEFAULT_REASONING_DEPTH = "default_reasoning_depth"
+    WEB_ACCESS_DEFAULT = "web_access_default"
     DEFAULT_LOCAL_MODEL = "default_local_model"
     TRAINING_DATA_OPT_OUT = "training_data_opt_out"
 
@@ -70,11 +81,31 @@ class RefusalBehavior(StrEnum):
 
 
 class ReasoningEffort(StrEnum):
-    """Depth of chain-of-thought reasoning the model applies before responding."""
+    """Legacy depth-of-reasoning preset (retired vocabulary).
+
+    Superseded by the canonical :class:`ReasoningDepth`
+    (``fast``/``balanced``/``deep``) which is the ONE wire vocabulary the
+    runtime consumes at run-create. The legacy web ``ModelAndBehavior`` panel
+    still writes ``default_reasoning_effort`` (low/medium/high); a model-level
+    ``before`` validator reconciles it into ``default_reasoning_depth`` so the
+    stored value actually governs runs. Retired fully in D5 when the web panel
+    converges onto the shared ``ModelBehaviorPage``.
+    """
 
     LOW = "low"
     MEDIUM = "medium"
     HIGH = "high"
+
+
+# Legacy ``default_reasoning_effort`` (low/medium/high) → canonical
+# ``default_reasoning_depth`` (fast/balanced/deep). Used by the model-level
+# reconciliation validator so a row written by the legacy web panel is
+# consumed as a depth at run-create without a data migration.
+_LEGACY_EFFORT_TO_DEPTH: dict[str, ReasoningDepth] = {
+    ReasoningEffort.LOW.value: ReasoningDepth.FAST,
+    ReasoningEffort.MEDIUM.value: ReasoningDepth.BALANCED,
+    ReasoningEffort.HIGH.value: ReasoningDepth.DEEP,
+}
 
 
 # Bounds for the per-workspace enabled-models curation (PR-2C). A single
@@ -157,6 +188,20 @@ class WorkspaceBehaviorOverrides(RuntimeContract):
     additive field needs no column / migration — the closed blob
     already round-trips through the JSONB store.
 
+    ``default_reasoning_depth`` (D1) is the canonical workspace-default
+    reasoning depth in the runtime vocabulary (``fast``/``balanced``/``deep``).
+    ``None`` == "Auto": no persisted default → the run-create seam leaves
+    ``reasoning_depth`` unset and the runtime keeps its baseline. It supersedes
+    the legacy ``default_reasoning_effort`` (low/medium/high), which is
+    reconciled into this field by :meth:`_reconcile_legacy_reasoning_effort`
+    so a row written by the still-live web panel governs runs with no
+    migration.
+
+    ``web_access_default`` (D3) is the persisted default for the per-run
+    ``web_search_enabled`` flag. ``None`` == unset (the run-create seam falls
+    back to the historic always-on default); ``True``/``False`` seed a run that
+    omits the per-turn flag.
+
     ``model_config = forbid`` rejects unknown keys at write — keeps
     the JSONB blob from accumulating drift over time.
     """
@@ -174,12 +219,43 @@ class WorkspaceBehaviorOverrides(RuntimeContract):
     )
     citation_density: CitationDensity | None = None
     refusal_behavior: RefusalBehavior | None = None
+    # Legacy vocabulary — still written by the web ModelAndBehavior panel
+    # (retired in D5). Reconciled into ``default_reasoning_depth`` below.
     default_reasoning_effort: ReasoningEffort | None = None
+    # Canonical run-create vocabulary. None == Auto (no persisted default).
+    default_reasoning_depth: ReasoningDepth | None = None
+    # D3 — persisted default for the per-run web_search toggle. None == unset.
+    web_access_default: bool | None = None
     default_local_model: str | None = Field(
         default=None,
         max_length=_DEFAULT_LOCAL_MODEL_MAX_CHARS,
     )
     training_data_opt_out: bool = False
+
+    @model_validator(mode="before")
+    @classmethod
+    def _reconcile_legacy_reasoning_effort(cls, data: object) -> object:
+        """Backfill ``default_reasoning_depth`` from a legacy effort value.
+
+        When a row (or PUT body) carries the legacy
+        ``default_reasoning_effort`` (low/medium/high) but no explicit
+        ``default_reasoning_depth``, translate it (low→fast, medium→balanced,
+        high→deep) so the stored value is consumed at run-create. An explicit
+        ``default_reasoning_depth`` always wins — the legacy key is only a
+        fallback. Runs cleanly against old JSONB rows with zero migration.
+        """
+
+        if not isinstance(data, dict):
+            return data
+        if data.get(_Fields.DEFAULT_REASONING_DEPTH) is not None:
+            return data
+        legacy = data.get(_Fields.DEFAULT_REASONING_EFFORT)
+        if legacy is None:
+            return data
+        mapped = _LEGACY_EFFORT_TO_DEPTH.get(str(legacy).strip().lower())
+        if mapped is None:
+            return data
+        return {**data, _Fields.DEFAULT_REASONING_DEPTH: mapped}
 
     @field_validator(_Fields.SYSTEM_PROMPT_OVERRIDE, mode="before")
     @classmethod

@@ -694,7 +694,29 @@ export interface WorkspaceBehaviorOverrides {
   temperature?: number | null;
   citation_density?: CitationDensity | null;
   refusal_behavior?: RefusalBehavior | null;
+  /**
+   * Legacy reasoning-effort preset (low/medium/high) — still written by the
+   * web `ModelAndBehavior` panel. Superseded by `default_reasoning_depth`
+   * (D1): the server reconciles a legacy effort into a canonical depth at
+   * read/run-create. Retired in D5 when the web panel converges onto the
+   * shared `ModelBehaviorPage`.
+   */
   default_reasoning_effort?: ReasoningEffort | null;
+  /**
+   * D1 — the canonical workspace-default reasoning depth in the runtime
+   * vocabulary (`fast`/`balanced`/`deep`). `null` or omitted == "Auto": no
+   * persisted default, so a run that omits `reasoning_depth` keeps the runtime
+   * baseline. Consumed at run-create; supersedes `default_reasoning_effort`.
+   * Additive + optional (JSONB blob, no migration).
+   */
+  default_reasoning_depth?: ReasoningDepth | null;
+  /**
+   * D3 — persisted default for the per-run web-search toggle. `undefined` /
+   * omitted == unset (run-create falls back to the historic always-on
+   * default); `true`/`false` seed a run that omits the per-turn flag. Additive
+   * + optional (JSONB blob, no migration).
+   */
+  web_access_default?: boolean;
   /**
    * C2 — the workspace-default on-device model: a plain Ollama tag / HF
    * pull ref (e.g. ``hf.co/Qwen/Qwen3-4B-GGUF:Q8_0``). ``null`` or omitted
@@ -2352,6 +2374,47 @@ export interface BudgetMeRow {
 export interface BudgetMeResponse {
   currency: "USD";
   budgets: BudgetMeRow[];
+}
+
+/**
+ * Mirror of `BudgetView` (`services/ai-backend/src/runtime_api/schemas/budgets.py`).
+ * The read shape returned by the write routes (`POST` / `PATCH /v1/budgets`).
+ */
+export interface BudgetView {
+  id: string;
+  org_id: string;
+  user_id: string | null;
+  scope: BudgetScope;
+  period: BudgetPeriod;
+  enforcement: BudgetEnforcement;
+  limit_micro_usd: number | null;
+  limit_tokens: number | null;
+  status: BudgetStatus;
+  created_at: string;
+  updated_at: string;
+  created_by_user_id: string;
+}
+
+/**
+ * Mirror of `BudgetCreateRequest`. Body for `POST /v1/budgets`. `user_id` is
+ * required in practice for `scope='user'` (the caller's own id) and null for
+ * `scope='org'`. Dollars are converted to `limit_micro_usd` by the caller.
+ */
+export interface BudgetCreateRequest {
+  user_id?: string | null;
+  scope: BudgetScope;
+  period: BudgetPeriod;
+  enforcement: BudgetEnforcement;
+  limit_micro_usd?: number | null;
+  limit_tokens?: number | null;
+}
+
+/** Mirror of `BudgetUpdateRequest`. Body for `PATCH /v1/budgets/{id}`. */
+export interface BudgetUpdateRequest {
+  enforcement?: BudgetEnforcement | null;
+  limit_micro_usd?: number | null;
+  limit_tokens?: number | null;
+  status?: BudgetStatus | null;
 }
 
 export interface BudgetWarningPayload {
