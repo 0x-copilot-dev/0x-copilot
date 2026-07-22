@@ -1076,6 +1076,61 @@ describe("RunDestination — empty/idle + multi-run (PR-3.11 / FR-3.25/3.26)", (
     expect(screen.queryByTestId("run-empty-setup")).toBeNull();
   });
 
+  it("claims an attachment-only start with an honest 'Untitled run' header, never idle STANDBY", async () => {
+    const transport = new FakeTransport();
+    transport.requestHandler = async (req) =>
+      req.path.includes("/messages") ? { messages: [] } : { runs: [] };
+    const onStartRun = vi.fn(async () => "att-run");
+
+    render(
+      <TransportProvider transport={transport}>
+        <KeyValueStoreProvider store={makeStore()}>
+          <RunDestination
+            conversationId={CONV}
+            onStartRun={onStartRun}
+            renderEmptyComposer={(ctx) => (
+              <button
+                type="button"
+                data-testid="att-send"
+                onClick={() =>
+                  ctx.onStartRun({
+                    goal: "",
+                    attachments: [
+                      { id: "a1", type: "file", name: "x.csv", content: [] },
+                    ],
+                  })
+                }
+              >
+                Send
+              </button>
+            )}
+          />
+        </KeyValueStoreProvider>
+      </TransportProvider>,
+    );
+
+    await screen.findByTestId("att-send");
+    act(() => {
+      fireEvent.click(screen.getByTestId("att-send"));
+    });
+
+    // The attachment-only run is accepted (goal-less send is not a no-op) and
+    // the header claims it — a generic title + ACTIVE kicker, not the idle lie.
+    await screen.findByTestId("thread-canvas");
+    expect(onStartRun).toHaveBeenCalledWith({
+      goal: "",
+      attachments: [{ id: "a1", type: "file", name: "x.csv", content: [] }],
+    });
+    await waitFor(() =>
+      expect(screen.getByTestId("run-header-goal").textContent).toBe(
+        "Untitled run",
+      ),
+    );
+    expect(screen.getByTestId("run-header-kicker").textContent).toBe(
+      "ACTIVE RUN",
+    );
+  });
+
   it("mounts the multi-run selector for >1 run and auto-binds the live run (FR-3.26)", async () => {
     const transport = new FakeTransport();
     transport.requestHandler = async (req) =>

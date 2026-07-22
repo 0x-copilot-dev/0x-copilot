@@ -1,0 +1,42 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>design-parity · run-empty (composer) · DESIGN baseline</title>
+    <link rel="preconnect" href="https://fonts.googleapis.com" />
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+    <link
+      href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;500;700&display=swap"
+      rel="stylesheet"
+    />
+    <!-- copilot-v3.css @imports copilot.css, so this pulls the shared tokens +
+         base + the .cmp* composer / .pop* popover rules the "What should we run
+         first?" composer stage needs. Then this surface's fr-* stylesheet.
+         Served from the tools/design-parity root so ../../../design-kit resolves. -->
+    <link rel="stylesheet" href="../../../design-kit/copilot-v3.css" />
+    <link rel="stylesheet" href="copilot-firstrun.css" />
+  </head>
+  <body>
+    <div id="app-root"></div>
+
+    <script
+      src="https://unpkg.com/react@18.3.1/umd/react.development.js"
+      crossorigin="anonymous"
+    ></script>
+    <script
+      src="https://unpkg.com/react-dom@18.3.1/umd/react-dom.development.js"
+      crossorigin="anonymous"
+    ></script>
+    <script
+      src="https://unpkg.com/@babel/standalone@7.29.0/babel.min.js"
+      crossorigin="anonymous"
+    ></script>
+
+    <!-- Shared kit stubs (Icon/Mark/useTweaks with ?state= override), then the
+         real design component. Load with ?state=key to seed the composer stage
+         ("What should we run first?" — engine chosen, no gate). -->
+    <script type="text/babel" src="../../../design-kit/stubs.js"></script>
+    <script type="text/babel" src="copilot-firstrun.jsx"></script>
+  </body>
+</html>

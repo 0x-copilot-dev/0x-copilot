@@ -49,6 +49,7 @@ import {
   useCallback,
   useEffect,
   useMemo,
+  useRef,
   useState,
   type CSSProperties,
   type ReactElement,
@@ -274,9 +275,20 @@ export function RunDestination(props: RunDestinationProps): ReactElement {
   // empty→live transition never flashes the idle placeholder for a run we named.
   const [startedGoal, setStartedGoal] = useState<string | null>(null);
 
+  // Monotonic token identifying the current start attempt. Bumped whenever the
+  // conversation resets (below), so an in-flight start's async continuation can
+  // detect that the cockpit moved on and drop its result — mirroring
+  // `useRunSession`'s `cancelled` guard. Without it, a run POST that resolves
+  // AFTER the user navigated to another conversation would bind that run into
+  // the wrong conversation (a rare load-time race today; a real leak later).
+  const startTokenRef = useRef(0);
+
   // A new conversation clears the last-started run so a stale id never streams
   // against it (mirrors `useRunSession`'s own per-conversation reset).
   useEffect(() => {
+    // Invalidate any in-flight start so its late continuation can't re-bind a
+    // run into this now-different conversation.
+    startTokenRef.current += 1;
     setStartedRunId(null);
     setIsStartingRun(false);
     setStartedGoal(null);
@@ -415,6 +427,9 @@ export function RunDestination(props: RunDestinationProps): ReactElement {
       if (goal === "" && !hasAttachments) {
         return;
       }
+      // Tag this attempt; the conversation-reset effect bumps the ref, so a
+      // continuation that runs after a conversation switch drops its result.
+      const startToken = startTokenRef.current;
       setIsStartingRun(true);
       setStartError(null);
       // Bridge the header until the run list re-resolves; an attachment-only
@@ -432,6 +447,11 @@ export function RunDestination(props: RunDestinationProps): ReactElement {
             .then((payload) => runIdFromCreateResponse(payload));
       void start
         .then((newRunId) => {
+          // The cockpit switched conversations mid-flight — drop this result so
+          // it can't stream a stale run into the new conversation.
+          if (startToken !== startTokenRef.current) {
+            return;
+          }
           if (newRunId !== null && newRunId !== undefined && newRunId !== "") {
             setStartedRunId(newRunId as RunId);
           } else {
@@ -444,6 +464,9 @@ export function RunDestination(props: RunDestinationProps): ReactElement {
           }
         })
         .catch((err: unknown) => {
+          if (startToken !== startTokenRef.current) {
+            return;
+          }
           // Never swallow, and never dump the raw transport envelope: parse out
           // the actionable `safe_message` + `code` so the composer shows the
           // one useful line (e.g. "Missing API key…") and a CTA, with the raw
@@ -459,6 +482,9 @@ export function RunDestination(props: RunDestinationProps): ReactElement {
           });
         })
         .finally(() => {
+          if (startToken !== startTokenRef.current) {
+            return;
+          }
           setIsStartingRun(false);
         });
     },
@@ -505,12 +531,14 @@ export function RunDestination(props: RunDestinationProps): ReactElement {
       return listed;
     }
     if (session.runId !== null && session.runId === startedRunId) {
-      return startedGoal;
+      // An attachment-only start has no goal text (`startedGoal === null`); a
+      // run IS attached, so the header must still claim it — "STANDBY" over a
+      // subscribed run is a lie (design review) — hence the generic fallback,
+      // never null (null → idle copy).
+      return startedGoal ?? "Untitled run";
     }
     // A run IS attached but carries no goal text (explicit runId binding, or
-    // a list entry without a goal). The header must still claim the run —
-    // "STANDBY" over a subscribed run is a lie (design review) — so fall back
-    // to an honest generic title rather than null (null → idle copy).
+    // a list entry without a goal). Same honest generic title rather than null.
     if (session.runId !== null) {
       return "Untitled run";
     }
