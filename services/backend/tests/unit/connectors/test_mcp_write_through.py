@@ -314,6 +314,113 @@ class TestSseEmission:
         assert events[-1].connector["status"] == "connected"
 
 
+class TestInternalRoutes:
+    """PRD-I I1 — the ai-backend-driven internal routes write through too."""
+
+    def _internal_start_auth(self, client: TestClient, server_id: str) -> None:
+        resp = client.post(
+            f"/internal/v1/mcp/servers/{server_id}/auth/start",
+            json={
+                "org_id": ORG,
+                "user_id": USER,
+                "redirect_uri": "http://localhost:5173/mcp/oauth/callback",
+            },
+        )
+        assert resp.status_code == 200, resp.text
+
+    def test_internal_start_auth_projects_auth_pending(self) -> None:
+        client, app, _ = _make_app()
+        created = _register(client)
+        self._internal_start_auth(client, created["server_id"])
+        row = _connectors(client)[0]
+        assert row["status"] == "disconnected"
+        assert row["status_reason"] == "auth_pending"
+        actions = [a.action for a in app.state.connectors_store.audits]
+        assert "connector.updated" in actions
+
+    def test_internal_start_auth_publishes_status_changed(self) -> None:
+        client, app, _ = _make_app()
+        created = _register(client)
+        self._internal_start_auth(client, created["server_id"])
+        events = _events(app)
+        assert events[-1].event_type == "connector.status_changed"
+        assert events[-1].connector["status_reason"] == "auth_pending"
+
+    def test_complete_auth_after_internal_start_converges_connected(self) -> None:
+        client, app, mcp_store = _make_app()
+        created = _register(client)
+        self._internal_start_auth(client, created["server_id"])
+        state = next(iter(mcp_store.auth_sessions.keys()))
+        resp = client.get(
+            "/v1/mcp/oauth/callback", params={"state": state, "code": "oauth_code"}
+        )
+        assert resp.status_code == 200, resp.text
+        row = _connectors(client)[0]
+        assert row["status"] == "connected"
+        assert row["status_reason"] is None
+        actions = [a.action for a in app.state.connectors_store.audits]
+        assert "connector.connected" in actions
+
+    def test_internal_test_token_projects_connected(self) -> None:
+        client, app, _ = _make_app()
+        created = _register(client)
+        resp = client.post(
+            f"/internal/v1/mcp/servers/{created['server_id']}/test-token",
+            params=_q(),
+            json={"access_token": "test-access-token"},
+        )
+        assert resp.status_code == 200, resp.text
+        row = _connectors(client)[0]
+        assert row["status"] == "connected"
+        assert row["status_reason"] is None
+        actions = [a.action for a in app.state.connectors_store.audits]
+        assert "connector.connected" in actions
+
+    def test_internal_routes_respect_tenant_isolation(self) -> None:
+        client, app, _ = _make_app()
+        created = _register(client)
+        self._internal_start_auth(client, created["server_id"])
+        # The other tenant sees neither the row nor the SSE events.
+        assert _connectors(client, org=OTHER_ORG, user=OTHER_USER) == []
+        assert _events(app, org=OTHER_ORG, user=OTHER_USER) == []
+
+    def test_internal_start_auth_for_other_tenants_server_is_404(self) -> None:
+        client, app, _ = _make_app()
+        created = _register(client)
+        resp = client.post(
+            f"/internal/v1/mcp/servers/{created['server_id']}/auth/start",
+            json={
+                "org_id": OTHER_ORG,
+                "user_id": OTHER_USER,
+                "redirect_uri": "http://localhost:5173/mcp/oauth/callback",
+            },
+        )
+        assert resp.status_code in (400, 404), resp.text
+        # No write-through happened for either tenant's read model.
+        assert _connectors(client, org=OTHER_ORG, user=OTHER_USER) == []
+        row = _connectors(client)[0]
+        assert row["status_reason"] == "unauthenticated"
+
+    def test_internal_write_through_failure_never_fails_the_request(self) -> None:
+        """NFR-I.1 — same log-and-continue discipline on internal routes."""
+
+        client, app, _ = _make_app()
+        created = _register(client)
+
+        class ExplodingService:
+            def write_through_from_mcp(self, **kwargs):
+                raise RuntimeError("connectors store down")
+
+        app.state.connectors_service = ExplodingService()
+        self._internal_start_auth(client, created["server_id"])  # asserts 200
+        resp = client.post(
+            f"/internal/v1/mcp/servers/{created['server_id']}/test-token",
+            params=_q(),
+            json={"access_token": "test-access-token"},
+        )
+        assert resp.status_code == 200, resp.text
+
+
 class TestTenantIsolation:
     def test_other_tenant_never_sees_the_connector(self) -> None:
         client, app, _ = _make_app()
@@ -322,6 +429,29 @@ class TestTenantIsolation:
         assert _connectors(client, org=OTHER_ORG, user=OTHER_USER) == []
         # The SSE channel is (org, user)-scoped too.
         assert _events(app, org=OTHER_ORG, user=OTHER_USER) == []
+
+
+class TestLifespanLoopBinding:
+    """PRD-I I2 — the app lifespan binds/unbinds the SSE bus loop once."""
+
+    def test_lifespan_binds_then_unbinds_the_connector_bus(self) -> None:
+        client, app, _ = _make_app()
+        bus = app.state.connector_activity_bus
+        assert not bus.loop_bound  # no lifespan yet
+        with client:
+            assert bus.loop_bound
+        assert not bus.loop_bound  # unbound on shutdown
+
+    def test_mutation_under_running_lifespan_still_write_throughs(self) -> None:
+        """NFR-I.2 — the wakeup path adds no failure mode to the mutation."""
+
+        client, app, _ = _make_app()
+        with client:
+            _register(client)
+            rows = _connectors(client)
+            assert len(rows) == 1
+            events = _events(app)
+            assert [e.event_type for e in events] == ["connector.created"]
 
 
 class TestFailureDiscipline:
