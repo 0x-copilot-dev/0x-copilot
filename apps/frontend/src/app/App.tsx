@@ -1024,6 +1024,8 @@ export function CopilotApp({
         onConversationCreated={openConversation}
         onOpenModelSettings={openModelSettings}
         identity={identity}
+        oauthStatus={oauthStatus}
+        completedMcpAuthAction={completedMcpAuthAction}
       />
     ) : (
       <ChatScreen
