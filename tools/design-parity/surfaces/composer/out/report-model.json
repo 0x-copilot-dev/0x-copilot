@@ -1,0 +1,2385 @@
+{
+  "state": "model",
+  "counts": {
+    "high": 64,
+    "medium": 106,
+    "low": 88,
+    "info": 43
+  },
+  "findings": [
+    {
+      "label": "cmp.frame",
+      "group": "A · Composer frame",
+      "severity": "high",
+      "kind": "style",
+      "prop": "borderColor",
+      "detail": "rgba(255, 255, 255, 0.1) (--line2) → rgba(255, 255, 255, 0.06) (--line)"
+    },
+    {
+      "label": "cmp.textarea",
+      "group": "A · Composer frame",
+      "severity": "high",
+      "kind": "style",
+      "prop": "backgroundColor",
+      "detail": "rgba(0, 0, 0, 0) (transparent) → rgb(13, 13, 16)"
+    },
+    {
+      "label": "cmp.textarea",
+      "group": "A · Composer frame",
+      "severity": "high",
+      "kind": "style",
+      "prop": "borderColor",
+      "detail": "rgb(236, 236, 241) (--tx) → rgba(255, 255, 255, 0.06) (--line)"
+    },
+    {
+      "label": "cmp.attach.icon",
+      "group": "A · Composer bottom row",
+      "severity": "high",
+      "kind": "missing-in-live",
+      "detail": "present in design, ABSENT in live"
+    },
+    {
+      "label": "cmp.model.pill",
+      "group": "A · Model pill (trigger)",
+      "severity": "high",
+      "kind": "style",
+      "prop": "backgroundColor",
+      "detail": "rgb(22, 22, 26) (--panel2) → rgb(17, 17, 20) (--panel)"
+    },
+    {
+      "label": "cmp.model.pill",
+      "group": "A · Model pill (trigger)",
+      "severity": "high",
+      "kind": "style",
+      "prop": "borderColor",
+      "detail": "rgba(255, 255, 255, 0.06) (--line) → rgb(95, 178, 236) (--accent/--sky)"
+    },
+    {
+      "label": "cmp.model.dot",
+      "group": "A · Model pill (trigger)",
+      "severity": "high",
+      "kind": "style",
+      "prop": "backgroundColor",
+      "detail": "rgb(217, 119, 87) → rgb(95, 178, 236) (--accent/--sky)"
+    },
+    {
+      "label": "cmp.model.caret",
+      "group": "A · Model pill (trigger)",
+      "severity": "high",
+      "kind": "style",
+      "prop": "color",
+      "detail": "rgb(236, 236, 241) (--tx) → rgb(152, 152, 159) (--mut)"
+    },
+    {
+      "label": "cmp.model.caret",
+      "group": "A · Model pill (trigger)",
+      "severity": "high",
+      "kind": "style",
+      "prop": "borderColor",
+      "detail": "rgb(236, 236, 241) (--tx) → rgb(152, 152, 159) (--mut)"
+    },
+    {
+      "label": "cmp.model.pill.open",
+      "group": "A · Model pill (trigger)",
+      "severity": "high",
+      "kind": "style",
+      "prop": "backgroundColor",
+      "detail": "rgb(22, 22, 26) (--panel2) → rgb(17, 17, 20) (--panel)"
+    },
+    {
+      "label": "cmp.model.pill.open",
+      "group": "A · Model pill (trigger)",
+      "severity": "high",
+      "kind": "style",
+      "prop": "borderColor",
+      "detail": "rgba(255, 255, 255, 0.06) (--line) → rgb(95, 178, 236) (--accent/--sky)"
+    },
+    {
+      "label": "cmp.tools.pill",
+      "group": "A · Tools pill",
+      "severity": "high",
+      "kind": "style",
+      "prop": "fontFamily",
+      "detail": "typeface class changed (mono → sans)"
+    },
+    {
+      "label": "cmp.tools.pill",
+      "group": "A · Tools pill",
+      "severity": "high",
+      "kind": "style",
+      "prop": "fontSize",
+      "detail": "10px → 12.48px (+2.5px)"
+    },
+    {
+      "label": "cmp.tools.pill",
+      "group": "A · Tools pill",
+      "severity": "high",
+      "kind": "style",
+      "prop": "borderColor",
+      "detail": "rgba(0, 0, 0, 0) (transparent) → rgba(255, 255, 255, 0.06) (--line)"
+    },
+    {
+      "label": "cmp.tools.icon",
+      "group": "A · Tools pill",
+      "severity": "high",
+      "kind": "style",
+      "prop": "fontFamily",
+      "detail": "typeface class changed (mono → sans)"
+    },
+    {
+      "label": "cmp.tools.icon",
+      "group": "A · Tools pill",
+      "severity": "high",
+      "kind": "style",
+      "prop": "fontSize",
+      "detail": "10px → 13.6px (+3.6px)"
+    },
+    {
+      "label": "cmp.tools.label",
+      "group": "A · Tools pill",
+      "severity": "high",
+      "kind": "style",
+      "prop": "fontFamily",
+      "detail": "typeface class changed (mono → sans)"
+    },
+    {
+      "label": "cmp.tools.label",
+      "group": "A · Tools pill",
+      "severity": "high",
+      "kind": "style",
+      "prop": "fontSize",
+      "detail": "10px → 12.48px (+2.5px)"
+    },
+    {
+      "label": "cmp.tools.count",
+      "group": "A · Tools pill",
+      "severity": "high",
+      "kind": "style",
+      "prop": "fontFamily",
+      "detail": "typeface class changed (mono → sans)"
+    },
+    {
+      "label": "cmp.tools.count",
+      "group": "A · Tools pill",
+      "severity": "high",
+      "kind": "style",
+      "prop": "color",
+      "detail": "rgb(100, 100, 109) (--mut2) → rgb(95, 178, 236) (--accent/--sky)"
+    },
+    {
+      "label": "cmp.tools.count",
+      "group": "A · Tools pill",
+      "severity": "high",
+      "kind": "style",
+      "prop": "backgroundColor",
+      "detail": "rgba(0, 0, 0, 0) (transparent) → color(srgb 0.372549 0.698039 0.92549 / 0.18)"
+    },
+    {
+      "label": "cmp.tools.count",
+      "group": "A · Tools pill",
+      "severity": "high",
+      "kind": "style",
+      "prop": "borderColor",
+      "detail": "rgb(100, 100, 109) (--mut2) → rgb(95, 178, 236) (--accent/--sky)"
+    },
+    {
+      "label": "cmp.hint",
+      "group": "A · Hint",
+      "severity": "high",
+      "kind": "style",
+      "prop": "fontFamily",
+      "detail": "typeface class changed (mono → sans)"
+    },
+    {
+      "label": "cmp.hint",
+      "group": "A · Hint",
+      "severity": "high",
+      "kind": "style",
+      "prop": "fontSize",
+      "detail": "9px → 11.2px (+2.2px)"
+    },
+    {
+      "label": "cmp.hint",
+      "group": "A · Hint",
+      "severity": "high",
+      "kind": "style",
+      "prop": "borderColor",
+      "detail": "rgb(100, 100, 109) (--mut2) → color(srgb 1 1 1 / 0.0235294) rgb(100, 100, 109) rgb(100, 100, 109) rgb(100, 100, 109)"
+    },
+    {
+      "label": "cmp.send.btn",
+      "group": "A · Send",
+      "severity": "high",
+      "kind": "style",
+      "prop": "borderColor",
+      "detail": "rgb(8, 19, 29) (--accent-ink) → rgb(95, 178, 236) (--accent/--sky)"
+    },
+    {
+      "label": "cmp.send.icon",
+      "group": "A · Send",
+      "severity": "high",
+      "kind": "missing-in-live",
+      "detail": "present in design, ABSENT in live"
+    },
+    {
+      "label": "pop.scrim",
+      "group": "B · Popover frame",
+      "severity": "high",
+      "kind": "missing-in-live",
+      "detail": "present in design, ABSENT in live"
+    },
+    {
+      "label": "pop.frame",
+      "group": "B · Popover frame",
+      "severity": "high",
+      "kind": "style",
+      "prop": "backgroundColor",
+      "detail": "rgb(17, 17, 20) (--panel) → rgb(13, 13, 16)"
+    },
+    {
+      "label": "pop.frame",
+      "group": "B · Popover frame",
+      "severity": "high",
+      "kind": "style",
+      "prop": "borderColor",
+      "detail": "rgba(255, 255, 255, 0.1) (--line2) → rgba(255, 255, 255, 0.06) (--line)"
+    },
+    {
+      "label": "pop.header",
+      "group": "B · Popover header",
+      "severity": "high",
+      "kind": "missing-in-live",
+      "detail": "present in design, ABSENT in live"
+    },
+    {
+      "label": "pop.header.meta",
+      "group": "B · Popover header",
+      "severity": "high",
+      "kind": "missing-in-live",
+      "detail": "present in design, ABSENT in live"
+    },
+    {
+      "label": "pop.list",
+      "group": "B · Popover frame",
+      "severity": "high",
+      "kind": "style",
+      "prop": "backgroundColor",
+      "detail": "rgba(0, 0, 0, 0) (transparent) → rgb(13, 13, 16)"
+    },
+    {
+      "label": "pop.list",
+      "group": "B · Popover frame",
+      "severity": "high",
+      "kind": "style",
+      "prop": "borderColor",
+      "detail": "rgb(236, 236, 241) (--tx) → rgba(255, 255, 255, 0.06) (--line)"
+    },
+    {
+      "label": "pop.group.keys",
+      "group": "B · Group headings",
+      "severity": "high",
+      "kind": "style",
+      "prop": "fontFamily",
+      "detail": "typeface class changed (mono → sans)"
+    },
+    {
+      "label": "pop.group.keys",
+      "group": "B · Group headings",
+      "severity": "high",
+      "kind": "style",
+      "prop": "fontSize",
+      "detail": "8.5px → 11.2px (+2.7px)"
+    },
+    {
+      "label": "pop.group.keys",
+      "group": "B · Group headings",
+      "severity": "high",
+      "kind": "style",
+      "prop": "color",
+      "detail": "rgb(100, 100, 109) (--mut2) → rgb(152, 152, 159) (--mut)"
+    },
+    {
+      "label": "pop.group.keys",
+      "group": "B · Group headings",
+      "severity": "high",
+      "kind": "style",
+      "prop": "borderColor",
+      "detail": "rgb(100, 100, 109) (--mut2) → rgb(152, 152, 159) (--mut)"
+    },
+    {
+      "label": "pop.group.local",
+      "group": "B · Group headings",
+      "severity": "high",
+      "kind": "style",
+      "prop": "fontFamily",
+      "detail": "typeface class changed (mono → sans)"
+    },
+    {
+      "label": "pop.group.local",
+      "group": "B · Group headings",
+      "severity": "high",
+      "kind": "style",
+      "prop": "fontSize",
+      "detail": "8.5px → 11.2px (+2.7px)"
+    },
+    {
+      "label": "pop.group.local",
+      "group": "B · Group headings",
+      "severity": "high",
+      "kind": "style",
+      "prop": "color",
+      "detail": "rgb(100, 100, 109) (--mut2) → rgb(152, 152, 159) (--mut)"
+    },
+    {
+      "label": "pop.group.local",
+      "group": "B · Group headings",
+      "severity": "high",
+      "kind": "style",
+      "prop": "borderColor",
+      "detail": "rgb(100, 100, 109) (--mut2) → rgb(152, 152, 159) (--mut)"
+    },
+    {
+      "label": "pop.row",
+      "group": "B · Rows",
+      "severity": "high",
+      "kind": "style",
+      "prop": "backgroundColor",
+      "detail": "rgba(0, 0, 0, 0) (transparent) → rgb(22, 22, 26) (--panel2)"
+    },
+    {
+      "label": "pop.row.badge",
+      "group": "B · Rows",
+      "severity": "high",
+      "kind": "style",
+      "prop": "color",
+      "detail": "rgb(212, 212, 219) (--tx2) → rgb(152, 152, 159) (--mut)"
+    },
+    {
+      "label": "pop.row.badge",
+      "group": "B · Rows",
+      "severity": "high",
+      "kind": "style",
+      "prop": "backgroundColor",
+      "detail": "rgb(29, 29, 35) (--panel3) → rgb(22, 22, 26) (--panel2)"
+    },
+    {
+      "label": "pop.row.badge",
+      "group": "B · Rows",
+      "severity": "high",
+      "kind": "style",
+      "prop": "borderColor",
+      "detail": "rgb(212, 212, 219) (--tx2) → rgb(152, 152, 159) (--mut)"
+    },
+    {
+      "label": "pop.row.name",
+      "group": "B · Rows",
+      "severity": "high",
+      "kind": "style",
+      "prop": "fontSize",
+      "detail": "12px → 14px (+2.0px)"
+    },
+    {
+      "label": "pop.row.sub",
+      "group": "B · Rows",
+      "severity": "high",
+      "kind": "style",
+      "prop": "color",
+      "detail": "rgb(100, 100, 109) (--mut2) → rgb(152, 152, 159) (--mut)"
+    },
+    {
+      "label": "pop.row.sub",
+      "group": "B · Rows",
+      "severity": "high",
+      "kind": "style",
+      "prop": "borderColor",
+      "detail": "rgb(100, 100, 109) (--mut2) → rgb(152, 152, 159) (--mut)"
+    },
+    {
+      "label": "pop.row.radio",
+      "group": "B · Rows",
+      "severity": "high",
+      "kind": "style",
+      "prop": "color",
+      "detail": "rgb(8, 19, 29) (--accent-ink) → rgb(255, 255, 255)"
+    },
+    {
+      "label": "pop.row.radioCheck",
+      "group": "B · Rows",
+      "severity": "high",
+      "kind": "style",
+      "prop": "color",
+      "detail": "rgb(8, 19, 29) (--accent-ink) → rgb(255, 255, 255)"
+    },
+    {
+      "label": "pop.row.radioCheck",
+      "group": "B · Rows",
+      "severity": "high",
+      "kind": "style",
+      "prop": "borderColor",
+      "detail": "rgb(8, 19, 29) (--accent-ink) → rgb(255, 255, 255)"
+    },
+    {
+      "label": "pop.rowSelected",
+      "group": "B · Rows",
+      "severity": "high",
+      "kind": "style",
+      "prop": "backgroundColor",
+      "detail": "rgba(0, 0, 0, 0) (transparent) → rgb(22, 22, 26) (--panel2)"
+    },
+    {
+      "label": "pop.rowUnselected.radio",
+      "group": "B · Rows",
+      "severity": "high",
+      "kind": "style",
+      "prop": "color",
+      "detail": "rgb(8, 19, 29) (--accent-ink) → rgb(255, 255, 255)"
+    },
+    {
+      "label": "pop.rowUnselected.radio",
+      "group": "B · Rows",
+      "severity": "high",
+      "kind": "style",
+      "prop": "borderColor",
+      "detail": "rgba(255, 255, 255, 0.18) (--line3) → rgba(255, 255, 255, 0.1) (--line2)"
+    },
+    {
+      "label": "pop.rowLocal.badge",
+      "group": "B · Rows (local)",
+      "severity": "high",
+      "kind": "style",
+      "prop": "color",
+      "detail": "rgb(212, 212, 219) (--tx2) → rgb(152, 152, 159) (--mut)"
+    },
+    {
+      "label": "pop.rowLocal.badge",
+      "group": "B · Rows (local)",
+      "severity": "high",
+      "kind": "style",
+      "prop": "backgroundColor",
+      "detail": "rgb(29, 29, 35) (--panel3) → rgb(22, 22, 26) (--panel2)"
+    },
+    {
+      "label": "pop.rowLocal.badge",
+      "group": "B · Rows (local)",
+      "severity": "high",
+      "kind": "style",
+      "prop": "borderColor",
+      "detail": "rgb(212, 212, 219) (--tx2) → rgb(152, 152, 159) (--mut)"
+    },
+    {
+      "label": "pop.rowLocal.badgeIcon",
+      "group": "B · Rows (local)",
+      "severity": "high",
+      "kind": "missing-in-live",
+      "detail": "present in design, ABSENT in live"
+    },
+    {
+      "label": "pop.rowLocal.sub",
+      "group": "B · Rows (local)",
+      "severity": "high",
+      "kind": "style",
+      "prop": "color",
+      "detail": "rgb(100, 100, 109) (--mut2) → rgb(152, 152, 159) (--mut)"
+    },
+    {
+      "label": "pop.rowLocal.sub",
+      "group": "B · Rows (local)",
+      "severity": "high",
+      "kind": "style",
+      "prop": "borderColor",
+      "detail": "rgb(100, 100, 109) (--mut2) → rgb(152, 152, 159) (--mut)"
+    },
+    {
+      "label": "pop.footer",
+      "group": "B · Footer",
+      "severity": "high",
+      "kind": "style",
+      "prop": "backgroundColor",
+      "detail": "rgb(13, 13, 16) → rgb(9, 9, 11)"
+    },
+    {
+      "label": "pop.footer.spacer",
+      "group": "B · Footer",
+      "severity": "high",
+      "kind": "missing-in-live",
+      "detail": "present in design, ABSENT in live"
+    },
+    {
+      "label": "pop.footer.linkLocal",
+      "group": "B · Footer",
+      "severity": "high",
+      "kind": "missing-in-live",
+      "detail": "present in design, ABSENT in live"
+    },
+    {
+      "label": "cmp.frame",
+      "group": "A · Composer frame",
+      "severity": "medium",
+      "kind": "style",
+      "prop": "fontSize",
+      "detail": "13px → 13.6px (+0.6px)"
+    },
+    {
+      "label": "cmp.frame",
+      "group": "A · Composer frame",
+      "severity": "medium",
+      "kind": "style",
+      "prop": "display",
+      "detail": "block → flex"
+    },
+    {
+      "label": "cmp.frame",
+      "group": "A · Composer frame",
+      "severity": "medium",
+      "kind": "style",
+      "prop": "flexDirection",
+      "detail": "row → column"
+    },
+    {
+      "label": "cmp.frame",
+      "group": "A · Composer frame",
+      "severity": "medium",
+      "kind": "style",
+      "prop": "padding",
+      "detail": "0px → 10px"
+    },
+    {
+      "label": "cmp.frame",
+      "group": "A · Composer frame",
+      "severity": "medium",
+      "kind": "style",
+      "prop": "margin",
+      "detail": "0px → 8px 0px 0px 0px"
+    },
+    {
+      "label": "cmp.frame",
+      "group": "A · Composer frame",
+      "severity": "medium",
+      "kind": "style",
+      "prop": "borderRadius",
+      "detail": "11px → 12px"
+    },
+    {
+      "label": "cmp.frame",
+      "group": "A · Composer frame",
+      "severity": "medium",
+      "kind": "style",
+      "prop": "gap",
+      "detail": "normal → 6px"
+    },
+    {
+      "label": "cmp.textarea",
+      "group": "A · Composer frame",
+      "severity": "medium",
+      "kind": "style",
+      "prop": "fontSize",
+      "detail": "12.5px → 13px (+0.5px)"
+    },
+    {
+      "label": "cmp.textarea",
+      "group": "A · Composer frame",
+      "severity": "medium",
+      "kind": "style",
+      "prop": "padding",
+      "detail": "10px 12px 4px 12px → 10px 12px"
+    },
+    {
+      "label": "cmp.textarea",
+      "group": "A · Composer frame",
+      "severity": "medium",
+      "kind": "style",
+      "prop": "borderWidth",
+      "detail": "0px → 1px"
+    },
+    {
+      "label": "cmp.textarea",
+      "group": "A · Composer frame",
+      "severity": "medium",
+      "kind": "style",
+      "prop": "borderRadius",
+      "detail": "0px → 8px"
+    },
+    {
+      "label": "cmp.row",
+      "group": "A · Composer bottom row",
+      "severity": "medium",
+      "kind": "style",
+      "prop": "fontSize",
+      "detail": "13px → 13.6px (+0.6px)"
+    },
+    {
+      "label": "cmp.row",
+      "group": "A · Composer bottom row",
+      "severity": "medium",
+      "kind": "style",
+      "prop": "justifyContent",
+      "detail": "normal → space-between"
+    },
+    {
+      "label": "cmp.row",
+      "group": "A · Composer bottom row",
+      "severity": "medium",
+      "kind": "style",
+      "prop": "padding",
+      "detail": "6px 8px 8px 8px → 0px"
+    },
+    {
+      "label": "cmp.row",
+      "group": "A · Composer bottom row",
+      "severity": "medium",
+      "kind": "style",
+      "prop": "gap",
+      "detail": "5px → 8px"
+    },
+    {
+      "label": "cmp.attach.btn",
+      "group": "A · Composer bottom row",
+      "severity": "medium",
+      "kind": "style",
+      "prop": "fontSize",
+      "detail": "13.3333px → 14px (+0.7px)"
+    },
+    {
+      "label": "cmp.attach.btn",
+      "group": "A · Composer bottom row",
+      "severity": "medium",
+      "kind": "style",
+      "prop": "display",
+      "detail": "grid → flex"
+    },
+    {
+      "label": "cmp.attach.btn",
+      "group": "A · Composer bottom row",
+      "severity": "medium",
+      "kind": "style",
+      "prop": "justifyContent",
+      "detail": "normal → center"
+    },
+    {
+      "label": "cmp.attach.btn",
+      "group": "A · Composer bottom row",
+      "severity": "medium",
+      "kind": "style",
+      "prop": "padding",
+      "detail": "1px 6px → 4px"
+    },
+    {
+      "label": "cmp.attach.btn",
+      "group": "A · Composer bottom row",
+      "severity": "medium",
+      "kind": "style",
+      "prop": "borderRadius",
+      "detail": "7px → 8px"
+    },
+    {
+      "label": "cmp.model.pill",
+      "group": "A · Model pill (trigger)",
+      "severity": "medium",
+      "kind": "style",
+      "prop": "fontWeight",
+      "detail": "400 → 500"
+    },
+    {
+      "label": "cmp.model.pill",
+      "group": "A · Model pill (trigger)",
+      "severity": "medium",
+      "kind": "style",
+      "prop": "display",
+      "detail": "flex → inline-flex"
+    },
+    {
+      "label": "cmp.model.pill",
+      "group": "A · Model pill (trigger)",
+      "severity": "medium",
+      "kind": "style",
+      "prop": "borderRadius",
+      "detail": "7px → 8px"
+    },
+    {
+      "label": "cmp.model.pill",
+      "group": "A · Model pill (trigger)",
+      "severity": "medium",
+      "kind": "style",
+      "prop": "gap",
+      "detail": "6px → 4px"
+    },
+    {
+      "label": "cmp.model.dot",
+      "group": "A · Model pill (trigger)",
+      "severity": "medium",
+      "kind": "style",
+      "prop": "fontWeight",
+      "detail": "400 → 500"
+    },
+    {
+      "label": "cmp.model.dot",
+      "group": "A · Model pill (trigger)",
+      "severity": "medium",
+      "kind": "style",
+      "prop": "borderRadius",
+      "detail": "50% → 999px"
+    },
+    {
+      "label": "cmp.model.label",
+      "group": "A · Model pill (trigger)",
+      "severity": "medium",
+      "kind": "style",
+      "prop": "fontWeight",
+      "detail": "400 → 500"
+    },
+    {
+      "label": "cmp.model.caret",
+      "group": "A · Model pill (trigger)",
+      "severity": "medium",
+      "kind": "style",
+      "prop": "fontSize",
+      "detail": "10px → 11.2px (+1.2px)"
+    },
+    {
+      "label": "cmp.model.caret",
+      "group": "A · Model pill (trigger)",
+      "severity": "medium",
+      "kind": "style",
+      "prop": "fontWeight",
+      "detail": "400 → 500"
+    },
+    {
+      "label": "cmp.model.pill.open",
+      "group": "A · Model pill (trigger)",
+      "severity": "medium",
+      "kind": "style",
+      "prop": "fontWeight",
+      "detail": "400 → 500"
+    },
+    {
+      "label": "cmp.model.pill.open",
+      "group": "A · Model pill (trigger)",
+      "severity": "medium",
+      "kind": "style",
+      "prop": "display",
+      "detail": "flex → inline-flex"
+    },
+    {
+      "label": "cmp.model.pill.open",
+      "group": "A · Model pill (trigger)",
+      "severity": "medium",
+      "kind": "style",
+      "prop": "borderRadius",
+      "detail": "7px → 8px"
+    },
+    {
+      "label": "cmp.model.pill.open",
+      "group": "A · Model pill (trigger)",
+      "severity": "medium",
+      "kind": "style",
+      "prop": "gap",
+      "detail": "6px → 4px"
+    },
+    {
+      "label": "cmp.tools.pill",
+      "group": "A · Tools pill",
+      "severity": "medium",
+      "kind": "style",
+      "prop": "padding",
+      "detail": "0px 8px → 4px 10px"
+    },
+    {
+      "label": "cmp.tools.pill",
+      "group": "A · Tools pill",
+      "severity": "medium",
+      "kind": "style",
+      "prop": "borderRadius",
+      "detail": "7px → 999px"
+    },
+    {
+      "label": "cmp.tools.count",
+      "group": "A · Tools pill",
+      "severity": "medium",
+      "kind": "style",
+      "prop": "fontSize",
+      "detail": "10px → 11.2px (+1.2px)"
+    },
+    {
+      "label": "cmp.tools.count",
+      "group": "A · Tools pill",
+      "severity": "medium",
+      "kind": "style",
+      "prop": "fontWeight",
+      "detail": "400 → 600"
+    },
+    {
+      "label": "cmp.tools.count",
+      "group": "A · Tools pill",
+      "severity": "medium",
+      "kind": "style",
+      "prop": "display",
+      "detail": "block → flex"
+    },
+    {
+      "label": "cmp.tools.count",
+      "group": "A · Tools pill",
+      "severity": "medium",
+      "kind": "style",
+      "prop": "justifyContent",
+      "detail": "normal → center"
+    },
+    {
+      "label": "cmp.tools.count",
+      "group": "A · Tools pill",
+      "severity": "medium",
+      "kind": "style",
+      "prop": "alignItems",
+      "detail": "normal → center"
+    },
+    {
+      "label": "cmp.tools.count",
+      "group": "A · Tools pill",
+      "severity": "medium",
+      "kind": "style",
+      "prop": "padding",
+      "detail": "0px → 0px 4px"
+    },
+    {
+      "label": "cmp.tools.count",
+      "group": "A · Tools pill",
+      "severity": "medium",
+      "kind": "style",
+      "prop": "borderRadius",
+      "detail": "0px → 999px"
+    },
+    {
+      "label": "cmp.hint",
+      "group": "A · Hint",
+      "severity": "medium",
+      "kind": "style",
+      "prop": "display",
+      "detail": "block → flex"
+    },
+    {
+      "label": "cmp.hint",
+      "group": "A · Hint",
+      "severity": "medium",
+      "kind": "style",
+      "prop": "alignItems",
+      "detail": "normal → center"
+    },
+    {
+      "label": "cmp.hint",
+      "group": "A · Hint",
+      "severity": "medium",
+      "kind": "style",
+      "prop": "padding",
+      "detail": "0px 3px 0px 0px → 4.8px 12px 4px 12px"
+    },
+    {
+      "label": "cmp.hint",
+      "group": "A · Hint",
+      "severity": "medium",
+      "kind": "style",
+      "prop": "margin",
+      "detail": "0px 0px 0px 220.531px → 0px"
+    },
+    {
+      "label": "cmp.hint",
+      "group": "A · Hint",
+      "severity": "medium",
+      "kind": "style",
+      "prop": "borderWidth",
+      "detail": "0px → 1px 0px 0px 0px"
+    },
+    {
+      "label": "cmp.hint",
+      "group": "A · Hint",
+      "severity": "medium",
+      "kind": "style",
+      "prop": "gap",
+      "detail": "normal → 8px"
+    },
+    {
+      "label": "cmp.send.btn",
+      "group": "A · Send",
+      "severity": "medium",
+      "kind": "style",
+      "prop": "fontWeight",
+      "detail": "400 → 600"
+    },
+    {
+      "label": "cmp.send.btn",
+      "group": "A · Send",
+      "severity": "medium",
+      "kind": "style",
+      "prop": "display",
+      "detail": "grid → flex"
+    },
+    {
+      "label": "cmp.send.btn",
+      "group": "A · Send",
+      "severity": "medium",
+      "kind": "style",
+      "prop": "justifyContent",
+      "detail": "normal → center"
+    },
+    {
+      "label": "cmp.send.btn",
+      "group": "A · Send",
+      "severity": "medium",
+      "kind": "style",
+      "prop": "padding",
+      "detail": "1px 6px → 4px"
+    },
+    {
+      "label": "cmp.send.btn",
+      "group": "A · Send",
+      "severity": "medium",
+      "kind": "style",
+      "prop": "borderWidth",
+      "detail": "0px → 1px"
+    },
+    {
+      "label": "pop.frame",
+      "group": "B · Popover frame",
+      "severity": "medium",
+      "kind": "style",
+      "prop": "fontSize",
+      "detail": "13px → 14px (+1.0px)"
+    },
+    {
+      "label": "pop.frame",
+      "group": "B · Popover frame",
+      "severity": "medium",
+      "kind": "style",
+      "prop": "display",
+      "detail": "block → grid"
+    },
+    {
+      "label": "pop.frame",
+      "group": "B · Popover frame",
+      "severity": "medium",
+      "kind": "style",
+      "prop": "padding",
+      "detail": "0px → 4px"
+    },
+    {
+      "label": "pop.frame",
+      "group": "B · Popover frame",
+      "severity": "medium",
+      "kind": "style",
+      "prop": "borderRadius",
+      "detail": "10px → 8px"
+    },
+    {
+      "label": "pop.frame",
+      "group": "B · Popover frame",
+      "severity": "medium",
+      "kind": "style",
+      "prop": "gap",
+      "detail": "normal → 4px"
+    },
+    {
+      "label": "pop.list",
+      "group": "B · Popover frame",
+      "severity": "medium",
+      "kind": "style",
+      "prop": "fontSize",
+      "detail": "13px → 14px (+1.0px)"
+    },
+    {
+      "label": "pop.list",
+      "group": "B · Popover frame",
+      "severity": "medium",
+      "kind": "style",
+      "prop": "display",
+      "detail": "block → grid"
+    },
+    {
+      "label": "pop.list",
+      "group": "B · Popover frame",
+      "severity": "medium",
+      "kind": "style",
+      "prop": "padding",
+      "detail": "0px 5px 5px 5px → 4px"
+    },
+    {
+      "label": "pop.list",
+      "group": "B · Popover frame",
+      "severity": "medium",
+      "kind": "style",
+      "prop": "borderWidth",
+      "detail": "0px → 1px"
+    },
+    {
+      "label": "pop.list",
+      "group": "B · Popover frame",
+      "severity": "medium",
+      "kind": "style",
+      "prop": "borderRadius",
+      "detail": "0px → 8px"
+    },
+    {
+      "label": "pop.list",
+      "group": "B · Popover frame",
+      "severity": "medium",
+      "kind": "style",
+      "prop": "gap",
+      "detail": "normal → 4px"
+    },
+    {
+      "label": "pop.group.keys",
+      "group": "B · Group headings",
+      "severity": "medium",
+      "kind": "style",
+      "prop": "fontWeight",
+      "detail": "400 → 600"
+    },
+    {
+      "label": "pop.group.local",
+      "group": "B · Group headings",
+      "severity": "medium",
+      "kind": "style",
+      "prop": "fontWeight",
+      "detail": "400 → 600"
+    },
+    {
+      "label": "pop.row",
+      "group": "B · Rows",
+      "severity": "medium",
+      "kind": "style",
+      "prop": "fontSize",
+      "detail": "13px → 14px (+1.0px)"
+    },
+    {
+      "label": "pop.row",
+      "group": "B · Rows",
+      "severity": "medium",
+      "kind": "style",
+      "prop": "justifyContent",
+      "detail": "normal → space-between"
+    },
+    {
+      "label": "pop.row",
+      "group": "B · Rows",
+      "severity": "medium",
+      "kind": "style",
+      "prop": "padding",
+      "detail": "6px → 8px 10px"
+    },
+    {
+      "label": "pop.row",
+      "group": "B · Rows",
+      "severity": "medium",
+      "kind": "style",
+      "prop": "borderRadius",
+      "detail": "7px → 6px"
+    },
+    {
+      "label": "pop.row",
+      "group": "B · Rows",
+      "severity": "medium",
+      "kind": "style",
+      "prop": "gap",
+      "detail": "9px → 8px"
+    },
+    {
+      "label": "pop.row.badge",
+      "group": "B · Rows",
+      "severity": "medium",
+      "kind": "style",
+      "prop": "fontSize",
+      "detail": "10px → 11.2px (+1.2px)"
+    },
+    {
+      "label": "pop.row.meta",
+      "group": "B · Rows",
+      "severity": "medium",
+      "kind": "style",
+      "prop": "fontSize",
+      "detail": "13px → 14px (+1.0px)"
+    },
+    {
+      "label": "pop.row.meta",
+      "group": "B · Rows",
+      "severity": "medium",
+      "kind": "style",
+      "prop": "display",
+      "detail": "block → flex"
+    },
+    {
+      "label": "pop.row.meta",
+      "group": "B · Rows",
+      "severity": "medium",
+      "kind": "style",
+      "prop": "flexDirection",
+      "detail": "row → column"
+    },
+    {
+      "label": "pop.row.meta",
+      "group": "B · Rows",
+      "severity": "medium",
+      "kind": "style",
+      "prop": "flexGrow",
+      "detail": "flex-grow 1 → 0 (affects vertical fill / button placement)"
+    },
+    {
+      "label": "pop.row.meta",
+      "group": "B · Rows",
+      "severity": "medium",
+      "kind": "style",
+      "prop": "gap",
+      "detail": "normal → 2px"
+    },
+    {
+      "label": "pop.row.name",
+      "group": "B · Rows",
+      "severity": "medium",
+      "kind": "style",
+      "prop": "fontWeight",
+      "detail": "500 → 400"
+    },
+    {
+      "label": "pop.row.name",
+      "group": "B · Rows",
+      "severity": "medium",
+      "kind": "style",
+      "prop": "gap",
+      "detail": "6px → 4px"
+    },
+    {
+      "label": "pop.row.nameText",
+      "group": "B · Rows",
+      "severity": "medium",
+      "kind": "style",
+      "prop": "fontSize",
+      "detail": "12px → 13.6px (+1.6px)"
+    },
+    {
+      "label": "pop.row.nameText",
+      "group": "B · Rows",
+      "severity": "medium",
+      "kind": "style",
+      "prop": "fontWeight",
+      "detail": "500 → 400"
+    },
+    {
+      "label": "pop.row.sub",
+      "group": "B · Rows",
+      "severity": "medium",
+      "kind": "style",
+      "prop": "fontSize",
+      "detail": "9.5px → 11.2px (+1.7px)"
+    },
+    {
+      "label": "pop.row.sub",
+      "group": "B · Rows",
+      "severity": "medium",
+      "kind": "style",
+      "prop": "display",
+      "detail": "inline → block"
+    },
+    {
+      "label": "pop.row.radio",
+      "group": "B · Rows",
+      "severity": "medium",
+      "kind": "style",
+      "prop": "fontSize",
+      "detail": "13px → 14px (+1.0px)"
+    },
+    {
+      "label": "pop.row.radioCheck",
+      "group": "B · Rows",
+      "severity": "medium",
+      "kind": "style",
+      "prop": "fontSize",
+      "detail": "13px → 14px (+1.0px)"
+    },
+    {
+      "label": "pop.rowSelected",
+      "group": "B · Rows",
+      "severity": "medium",
+      "kind": "style",
+      "prop": "fontSize",
+      "detail": "13px → 14px (+1.0px)"
+    },
+    {
+      "label": "pop.rowSelected",
+      "group": "B · Rows",
+      "severity": "medium",
+      "kind": "style",
+      "prop": "justifyContent",
+      "detail": "normal → space-between"
+    },
+    {
+      "label": "pop.rowSelected",
+      "group": "B · Rows",
+      "severity": "medium",
+      "kind": "style",
+      "prop": "padding",
+      "detail": "6px → 8px 10px"
+    },
+    {
+      "label": "pop.rowSelected",
+      "group": "B · Rows",
+      "severity": "medium",
+      "kind": "style",
+      "prop": "borderRadius",
+      "detail": "7px → 6px"
+    },
+    {
+      "label": "pop.rowSelected",
+      "group": "B · Rows",
+      "severity": "medium",
+      "kind": "style",
+      "prop": "gap",
+      "detail": "9px → 8px"
+    },
+    {
+      "label": "pop.rowUnselected",
+      "group": "B · Rows",
+      "severity": "medium",
+      "kind": "style",
+      "prop": "fontSize",
+      "detail": "13px → 14px (+1.0px)"
+    },
+    {
+      "label": "pop.rowUnselected",
+      "group": "B · Rows",
+      "severity": "medium",
+      "kind": "style",
+      "prop": "justifyContent",
+      "detail": "normal → space-between"
+    },
+    {
+      "label": "pop.rowUnselected",
+      "group": "B · Rows",
+      "severity": "medium",
+      "kind": "style",
+      "prop": "padding",
+      "detail": "6px → 8px 10px"
+    },
+    {
+      "label": "pop.rowUnselected",
+      "group": "B · Rows",
+      "severity": "medium",
+      "kind": "style",
+      "prop": "borderRadius",
+      "detail": "7px → 6px"
+    },
+    {
+      "label": "pop.rowUnselected",
+      "group": "B · Rows",
+      "severity": "medium",
+      "kind": "style",
+      "prop": "gap",
+      "detail": "9px → 8px"
+    },
+    {
+      "label": "pop.rowUnselected.radio",
+      "group": "B · Rows",
+      "severity": "medium",
+      "kind": "style",
+      "prop": "fontSize",
+      "detail": "13px → 14px (+1.0px)"
+    },
+    {
+      "label": "pop.rowLocal",
+      "group": "B · Rows (local)",
+      "severity": "medium",
+      "kind": "style",
+      "prop": "fontSize",
+      "detail": "13px → 14px (+1.0px)"
+    },
+    {
+      "label": "pop.rowLocal",
+      "group": "B · Rows (local)",
+      "severity": "medium",
+      "kind": "style",
+      "prop": "justifyContent",
+      "detail": "normal → space-between"
+    },
+    {
+      "label": "pop.rowLocal",
+      "group": "B · Rows (local)",
+      "severity": "medium",
+      "kind": "style",
+      "prop": "padding",
+      "detail": "6px → 8px 10px"
+    },
+    {
+      "label": "pop.rowLocal",
+      "group": "B · Rows (local)",
+      "severity": "medium",
+      "kind": "style",
+      "prop": "borderRadius",
+      "detail": "7px → 6px"
+    },
+    {
+      "label": "pop.rowLocal",
+      "group": "B · Rows (local)",
+      "severity": "medium",
+      "kind": "style",
+      "prop": "gap",
+      "detail": "9px → 8px"
+    },
+    {
+      "label": "pop.rowLocal.badge",
+      "group": "B · Rows (local)",
+      "severity": "medium",
+      "kind": "style",
+      "prop": "fontSize",
+      "detail": "10px → 11.2px (+1.2px)"
+    },
+    {
+      "label": "pop.rowLocal.sub",
+      "group": "B · Rows (local)",
+      "severity": "medium",
+      "kind": "style",
+      "prop": "fontSize",
+      "detail": "9.5px → 11.2px (+1.7px)"
+    },
+    {
+      "label": "pop.rowLocal.sub",
+      "group": "B · Rows (local)",
+      "severity": "medium",
+      "kind": "style",
+      "prop": "display",
+      "detail": "inline → block"
+    },
+    {
+      "label": "pop.footer",
+      "group": "B · Footer",
+      "severity": "medium",
+      "kind": "style",
+      "prop": "fontSize",
+      "detail": "13px → 14px (+1.0px)"
+    },
+    {
+      "label": "pop.footer.linkAdd",
+      "group": "B · Footer",
+      "severity": "medium",
+      "kind": "style",
+      "prop": "fontSize",
+      "detail": "9.5px → 11.2px (+1.7px)"
+    },
+    {
+      "label": "cmp.frame",
+      "group": "A · Composer frame",
+      "severity": "low",
+      "kind": "style",
+      "prop": "lineHeight",
+      "detail": "19.5px → normal"
+    },
+    {
+      "label": "cmp.frame",
+      "group": "A · Composer frame",
+      "severity": "low",
+      "kind": "style",
+      "prop": "height",
+      "detail": "77.375px → 168.734px"
+    },
+    {
+      "label": "cmp.textarea",
+      "group": "A · Composer frame",
+      "severity": "low",
+      "kind": "style",
+      "prop": "width",
+      "detail": "638px → 618px"
+    },
+    {
+      "label": "cmp.textarea",
+      "group": "A · Composer frame",
+      "severity": "low",
+      "kind": "style",
+      "prop": "height",
+      "detail": "33.375px → 78.5px"
+    },
+    {
+      "label": "cmp.textarea",
+      "group": "A · Composer frame",
+      "severity": "low",
+      "kind": "style",
+      "prop": "borderStyle",
+      "detail": "none → solid"
+    },
+    {
+      "label": "cmp.row",
+      "group": "A · Composer bottom row",
+      "severity": "low",
+      "kind": "style",
+      "prop": "lineHeight",
+      "detail": "19.5px → normal"
+    },
+    {
+      "label": "cmp.row",
+      "group": "A · Composer bottom row",
+      "severity": "low",
+      "kind": "style",
+      "prop": "width",
+      "detail": "638px → 618px"
+    },
+    {
+      "label": "cmp.row",
+      "group": "A · Composer bottom row",
+      "severity": "low",
+      "kind": "style",
+      "prop": "height",
+      "detail": "42px → 32px"
+    },
+    {
+      "label": "cmp.attach.btn",
+      "group": "A · Composer bottom row",
+      "severity": "low",
+      "kind": "style",
+      "prop": "width",
+      "detail": "26px → 28px"
+    },
+    {
+      "label": "cmp.attach.btn",
+      "group": "A · Composer bottom row",
+      "severity": "low",
+      "kind": "style",
+      "prop": "height",
+      "detail": "26px → 28px"
+    },
+    {
+      "label": "cmp.model.pill",
+      "group": "A · Model pill (trigger)",
+      "severity": "low",
+      "kind": "style",
+      "prop": "width",
+      "detail": "149px → 146px"
+    },
+    {
+      "label": "cmp.model.label",
+      "group": "A · Model pill (trigger)",
+      "severity": "low",
+      "kind": "style",
+      "prop": "lineHeight",
+      "detail": "normal → 10px"
+    },
+    {
+      "label": "cmp.model.label",
+      "group": "A · Model pill (trigger)",
+      "severity": "low",
+      "kind": "style",
+      "prop": "height",
+      "detail": "13px → 10px"
+    },
+    {
+      "label": "cmp.model.caret",
+      "group": "A · Model pill (trigger)",
+      "severity": "low",
+      "kind": "style",
+      "prop": "width",
+      "detail": "11px → 12px"
+    },
+    {
+      "label": "cmp.model.caret",
+      "group": "A · Model pill (trigger)",
+      "severity": "low",
+      "kind": "style",
+      "prop": "height",
+      "detail": "11px → 12px"
+    },
+    {
+      "label": "cmp.model.pill.open",
+      "group": "A · Model pill (trigger)",
+      "severity": "low",
+      "kind": "style",
+      "prop": "width",
+      "detail": "149px → 146px"
+    },
+    {
+      "label": "cmp.tools.pill",
+      "group": "A · Tools pill",
+      "severity": "low",
+      "kind": "style",
+      "prop": "lineHeight",
+      "detail": "normal → 12.48px"
+    },
+    {
+      "label": "cmp.tools.pill",
+      "group": "A · Tools pill",
+      "severity": "low",
+      "kind": "style",
+      "prop": "width",
+      "detail": "89px → 89.1562px"
+    },
+    {
+      "label": "cmp.tools.icon",
+      "group": "A · Tools pill",
+      "severity": "low",
+      "kind": "style",
+      "prop": "lineHeight",
+      "detail": "normal → 13.6px"
+    },
+    {
+      "label": "cmp.tools.icon",
+      "group": "A · Tools pill",
+      "severity": "low",
+      "kind": "style",
+      "prop": "width",
+      "detail": "11px → 8.20312px"
+    },
+    {
+      "label": "cmp.tools.icon",
+      "group": "A · Tools pill",
+      "severity": "low",
+      "kind": "style",
+      "prop": "height",
+      "detail": "11px → 13.5938px"
+    },
+    {
+      "label": "cmp.tools.icon",
+      "group": "A · Tools pill",
+      "severity": "low",
+      "kind": "tag",
+      "detail": "<svg> → <span> (semantic/default-style change)"
+    },
+    {
+      "label": "cmp.tools.label",
+      "group": "A · Tools pill",
+      "severity": "low",
+      "kind": "style",
+      "prop": "lineHeight",
+      "detail": "normal → 12.48px"
+    },
+    {
+      "label": "cmp.tools.label",
+      "group": "A · Tools pill",
+      "severity": "low",
+      "kind": "style",
+      "prop": "width",
+      "detail": "30px → 30.9531px"
+    },
+    {
+      "label": "cmp.tools.label",
+      "group": "A · Tools pill",
+      "severity": "low",
+      "kind": "style",
+      "prop": "height",
+      "detail": "13px → 12.4844px"
+    },
+    {
+      "label": "cmp.tools.count",
+      "group": "A · Tools pill",
+      "severity": "low",
+      "kind": "style",
+      "prop": "lineHeight",
+      "detail": "normal → 11.2px"
+    },
+    {
+      "label": "cmp.tools.count",
+      "group": "A · Tools pill",
+      "severity": "low",
+      "kind": "style",
+      "prop": "width",
+      "detail": "18px → 16px"
+    },
+    {
+      "label": "cmp.tools.count",
+      "group": "A · Tools pill",
+      "severity": "low",
+      "kind": "style",
+      "prop": "height",
+      "detail": "13px → 16px"
+    },
+    {
+      "label": "cmp.hint",
+      "group": "A · Hint",
+      "severity": "low",
+      "kind": "style",
+      "prop": "width",
+      "detail": "89.4688px → 618px"
+    },
+    {
+      "label": "cmp.hint",
+      "group": "A · Hint",
+      "severity": "low",
+      "kind": "style",
+      "prop": "height",
+      "detail": "13.5px → 24.2344px"
+    },
+    {
+      "label": "cmp.hint",
+      "group": "A · Hint",
+      "severity": "low",
+      "kind": "style",
+      "prop": "borderStyle",
+      "detail": "none → solid none none none"
+    },
+    {
+      "label": "cmp.hint",
+      "group": "A · Hint",
+      "severity": "low",
+      "kind": "tag",
+      "detail": "<span> → <div> (semantic/default-style change)"
+    },
+    {
+      "label": "cmp.send.btn",
+      "group": "A · Send",
+      "severity": "low",
+      "kind": "style",
+      "prop": "opacity",
+      "detail": "0.35 → 0.4"
+    },
+    {
+      "label": "cmp.send.btn",
+      "group": "A · Send",
+      "severity": "low",
+      "kind": "style",
+      "prop": "width",
+      "detail": "28px → 32px"
+    },
+    {
+      "label": "cmp.send.btn",
+      "group": "A · Send",
+      "severity": "low",
+      "kind": "style",
+      "prop": "height",
+      "detail": "28px → 32px"
+    },
+    {
+      "label": "cmp.send.btn",
+      "group": "A · Send",
+      "severity": "low",
+      "kind": "style",
+      "prop": "borderStyle",
+      "detail": "none → solid"
+    },
+    {
+      "label": "pop.frame",
+      "group": "B · Popover frame",
+      "severity": "low",
+      "kind": "style",
+      "prop": "lineHeight",
+      "detail": "19.5px → 18.9px"
+    },
+    {
+      "label": "pop.frame",
+      "group": "B · Popover frame",
+      "severity": "low",
+      "kind": "style",
+      "prop": "width",
+      "detail": "300px → 306.766px"
+    },
+    {
+      "label": "pop.frame",
+      "group": "B · Popover frame",
+      "severity": "low",
+      "kind": "style",
+      "prop": "height",
+      "detail": "335.25px → 265.688px"
+    },
+    {
+      "label": "pop.list",
+      "group": "B · Popover frame",
+      "severity": "low",
+      "kind": "style",
+      "prop": "lineHeight",
+      "detail": "19.5px → 18.9px"
+    },
+    {
+      "label": "pop.list",
+      "group": "B · Popover frame",
+      "severity": "low",
+      "kind": "style",
+      "prop": "width",
+      "detail": "298px → 306.766px"
+    },
+    {
+      "label": "pop.list",
+      "group": "B · Popover frame",
+      "severity": "low",
+      "kind": "style",
+      "prop": "height",
+      "detail": "264px → 265.688px"
+    },
+    {
+      "label": "pop.list",
+      "group": "B · Popover frame",
+      "severity": "low",
+      "kind": "style",
+      "prop": "borderStyle",
+      "detail": "none → solid"
+    },
+    {
+      "label": "pop.group.keys",
+      "group": "B · Group headings",
+      "severity": "low",
+      "kind": "style",
+      "prop": "lineHeight",
+      "detail": "12.75px → 15.12px"
+    },
+    {
+      "label": "pop.group.keys",
+      "group": "B · Group headings",
+      "severity": "low",
+      "kind": "style",
+      "prop": "letterSpacing",
+      "detail": "1.105px → 0.56px"
+    },
+    {
+      "label": "pop.group.keys",
+      "group": "B · Group headings",
+      "severity": "low",
+      "kind": "style",
+      "prop": "width",
+      "detail": "288px → 296.766px"
+    },
+    {
+      "label": "pop.group.keys",
+      "group": "B · Group headings",
+      "severity": "low",
+      "kind": "style",
+      "prop": "height",
+      "detail": "24.75px → 27.1094px"
+    },
+    {
+      "label": "pop.group.local",
+      "group": "B · Group headings",
+      "severity": "low",
+      "kind": "style",
+      "prop": "lineHeight",
+      "detail": "12.75px → 15.12px"
+    },
+    {
+      "label": "pop.group.local",
+      "group": "B · Group headings",
+      "severity": "low",
+      "kind": "style",
+      "prop": "letterSpacing",
+      "detail": "1.105px → 0.56px"
+    },
+    {
+      "label": "pop.group.local",
+      "group": "B · Group headings",
+      "severity": "low",
+      "kind": "style",
+      "prop": "width",
+      "detail": "288px → 296.766px"
+    },
+    {
+      "label": "pop.group.local",
+      "group": "B · Group headings",
+      "severity": "low",
+      "kind": "style",
+      "prop": "height",
+      "detail": "24.75px → 27.1094px"
+    },
+    {
+      "label": "pop.row",
+      "group": "B · Rows",
+      "severity": "low",
+      "kind": "style",
+      "prop": "lineHeight",
+      "detail": "19.5px → 18.9px"
+    },
+    {
+      "label": "pop.row",
+      "group": "B · Rows",
+      "severity": "low",
+      "kind": "style",
+      "prop": "width",
+      "detail": "288px → 296.766px"
+    },
+    {
+      "label": "pop.row",
+      "group": "B · Rows",
+      "severity": "low",
+      "kind": "style",
+      "prop": "height",
+      "detail": "49.5px → 52.4531px"
+    },
+    {
+      "label": "pop.row.meta",
+      "group": "B · Rows",
+      "severity": "low",
+      "kind": "style",
+      "prop": "lineHeight",
+      "detail": "19.5px → 18.9px"
+    },
+    {
+      "label": "pop.row.meta",
+      "group": "B · Rows",
+      "severity": "low",
+      "kind": "style",
+      "prop": "width",
+      "detail": "219px → 190.641px"
+    },
+    {
+      "label": "pop.row.meta",
+      "group": "B · Rows",
+      "severity": "low",
+      "kind": "style",
+      "prop": "height",
+      "detail": "37.5px → 36.4531px"
+    },
+    {
+      "label": "pop.row.name",
+      "group": "B · Rows",
+      "severity": "low",
+      "kind": "style",
+      "prop": "lineHeight",
+      "detail": "18px → 18.9px"
+    },
+    {
+      "label": "pop.row.name",
+      "group": "B · Rows",
+      "severity": "low",
+      "kind": "style",
+      "prop": "width",
+      "detail": "219px → 190.641px"
+    },
+    {
+      "label": "pop.row.name",
+      "group": "B · Rows",
+      "severity": "low",
+      "kind": "style",
+      "prop": "height",
+      "detail": "18px → 18.3438px"
+    },
+    {
+      "label": "pop.row.nameText",
+      "group": "B · Rows",
+      "severity": "low",
+      "kind": "style",
+      "prop": "width",
+      "detail": "106.344px → 115.953px"
+    },
+    {
+      "label": "pop.row.nameText",
+      "group": "B · Rows",
+      "severity": "low",
+      "kind": "style",
+      "prop": "height",
+      "detail": "18px → 18.3438px"
+    },
+    {
+      "label": "pop.row.sub",
+      "group": "B · Rows",
+      "severity": "low",
+      "kind": "style",
+      "prop": "lineHeight",
+      "detail": "14.25px → 15.12px"
+    },
+    {
+      "label": "pop.row.sub",
+      "group": "B · Rows",
+      "severity": "low",
+      "kind": "style",
+      "prop": "width",
+      "detail": "auto → 190.641px"
+    },
+    {
+      "label": "pop.row.sub",
+      "group": "B · Rows",
+      "severity": "low",
+      "kind": "style",
+      "prop": "height",
+      "detail": "auto → 15.1094px"
+    },
+    {
+      "label": "pop.row.radio",
+      "group": "B · Rows",
+      "severity": "low",
+      "kind": "style",
+      "prop": "lineHeight",
+      "detail": "19.5px → 18.9px"
+    },
+    {
+      "label": "pop.row.radioCheck",
+      "group": "B · Rows",
+      "severity": "low",
+      "kind": "style",
+      "prop": "lineHeight",
+      "detail": "19.5px → 18.9px"
+    },
+    {
+      "label": "pop.row.radioCheck",
+      "group": "B · Rows",
+      "severity": "low",
+      "kind": "style",
+      "prop": "width",
+      "detail": "9px → 10px"
+    },
+    {
+      "label": "pop.row.radioCheck",
+      "group": "B · Rows",
+      "severity": "low",
+      "kind": "style",
+      "prop": "height",
+      "detail": "9px → 10px"
+    },
+    {
+      "label": "pop.rowSelected",
+      "group": "B · Rows",
+      "severity": "low",
+      "kind": "style",
+      "prop": "lineHeight",
+      "detail": "19.5px → 18.9px"
+    },
+    {
+      "label": "pop.rowSelected",
+      "group": "B · Rows",
+      "severity": "low",
+      "kind": "style",
+      "prop": "width",
+      "detail": "288px → 296.766px"
+    },
+    {
+      "label": "pop.rowSelected",
+      "group": "B · Rows",
+      "severity": "low",
+      "kind": "style",
+      "prop": "height",
+      "detail": "49.5px → 52.4531px"
+    },
+    {
+      "label": "pop.rowUnselected",
+      "group": "B · Rows",
+      "severity": "low",
+      "kind": "style",
+      "prop": "lineHeight",
+      "detail": "19.5px → 18.9px"
+    },
+    {
+      "label": "pop.rowUnselected",
+      "group": "B · Rows",
+      "severity": "low",
+      "kind": "style",
+      "prop": "width",
+      "detail": "288px → 296.766px"
+    },
+    {
+      "label": "pop.rowUnselected",
+      "group": "B · Rows",
+      "severity": "low",
+      "kind": "style",
+      "prop": "height",
+      "detail": "49.5px → 52.4531px"
+    },
+    {
+      "label": "pop.rowUnselected.radio",
+      "group": "B · Rows",
+      "severity": "low",
+      "kind": "style",
+      "prop": "lineHeight",
+      "detail": "19.5px → 18.9px"
+    },
+    {
+      "label": "pop.rowLocal",
+      "group": "B · Rows (local)",
+      "severity": "low",
+      "kind": "style",
+      "prop": "lineHeight",
+      "detail": "19.5px → 18.9px"
+    },
+    {
+      "label": "pop.rowLocal",
+      "group": "B · Rows (local)",
+      "severity": "low",
+      "kind": "style",
+      "prop": "width",
+      "detail": "288px → 296.766px"
+    },
+    {
+      "label": "pop.rowLocal",
+      "group": "B · Rows (local)",
+      "severity": "low",
+      "kind": "style",
+      "prop": "height",
+      "detail": "49.5px → 52.4531px"
+    },
+    {
+      "label": "pop.rowLocal.sub",
+      "group": "B · Rows (local)",
+      "severity": "low",
+      "kind": "style",
+      "prop": "lineHeight",
+      "detail": "14.25px → 15.12px"
+    },
+    {
+      "label": "pop.rowLocal.sub",
+      "group": "B · Rows (local)",
+      "severity": "low",
+      "kind": "style",
+      "prop": "width",
+      "detail": "auto → 221.766px"
+    },
+    {
+      "label": "pop.rowLocal.sub",
+      "group": "B · Rows (local)",
+      "severity": "low",
+      "kind": "style",
+      "prop": "height",
+      "detail": "auto → 15.1094px"
+    },
+    {
+      "label": "pop.footer",
+      "group": "B · Footer",
+      "severity": "low",
+      "kind": "style",
+      "prop": "lineHeight",
+      "detail": "19.5px → 18.9px"
+    },
+    {
+      "label": "pop.footer",
+      "group": "B · Footer",
+      "severity": "low",
+      "kind": "style",
+      "prop": "width",
+      "detail": "298px → 296.766px"
+    },
+    {
+      "label": "pop.footer",
+      "group": "B · Footer",
+      "severity": "low",
+      "kind": "style",
+      "prop": "height",
+      "detail": "33.25px → 34.1094px"
+    },
+    {
+      "label": "pop.footer.linkAdd",
+      "group": "B · Footer",
+      "severity": "low",
+      "kind": "style",
+      "prop": "lineHeight",
+      "detail": "14.25px → 15.12px"
+    },
+    {
+      "label": "pop.footer.linkAdd",
+      "group": "B · Footer",
+      "severity": "low",
+      "kind": "style",
+      "prop": "width",
+      "detail": "114.031px → 134.438px"
+    },
+    {
+      "label": "pop.footer.linkAdd",
+      "group": "B · Footer",
+      "severity": "low",
+      "kind": "style",
+      "prop": "height",
+      "detail": "14.25px → 15.1094px"
+    },
+    {
+      "label": "cmp.frame",
+      "group": "A · Composer frame",
+      "severity": "info",
+      "kind": "copy",
+      "prop": "text",
+      "detail": "“Model this chatYour keysAClaude Sonnet 4.5Anthropic · your k…” → “+⚙Tools1Claude Sonnet 4.5↑/ skillsSources cited inline”"
+    },
+    {
+      "label": "cmp.row",
+      "group": "A · Composer bottom row",
+      "severity": "info",
+      "kind": "copy",
+      "prop": "text",
+      "detail": "“Claude Sonnet 4.5Tools7/7⏎ send · ⇧⏎ line” → “+⚙Tools1Claude Sonnet 4.5↑”"
+    },
+    {
+      "label": "cmp.attach.btn",
+      "group": "A · Composer bottom row",
+      "severity": "info",
+      "kind": "copy",
+      "prop": "text",
+      "detail": "“” → “+”"
+    },
+    {
+      "label": "cmp.tools.pill",
+      "group": "A · Tools pill",
+      "severity": "info",
+      "kind": "copy",
+      "prop": "text",
+      "detail": "“Tools7/7” → “⚙Tools1”"
+    },
+    {
+      "label": "cmp.tools.icon",
+      "group": "A · Tools pill",
+      "severity": "info",
+      "kind": "copy",
+      "prop": "text",
+      "detail": "“” → “⚙”"
+    },
+    {
+      "label": "cmp.tools.count",
+      "group": "A · Tools pill",
+      "severity": "info",
+      "kind": "copy",
+      "prop": "text",
+      "detail": "“7/7” → “1”"
+    },
+    {
+      "label": "cmp.hint",
+      "group": "A · Hint",
+      "severity": "info",
+      "kind": "copy",
+      "prop": "text",
+      "detail": "“⏎ send · ⇧⏎ line” → “/ skillsSources cited inline”"
+    },
+    {
+      "label": "cmp.send.btn",
+      "group": "A · Send",
+      "severity": "info",
+      "kind": "copy",
+      "prop": "text",
+      "detail": "“” → “↑”"
+    },
+    {
+      "label": "pop.frame",
+      "group": "B · Popover frame",
+      "severity": "info",
+      "kind": "copy",
+      "prop": "text",
+      "detail": "“Model this chatYour keysAClaude Sonnet 4.5Anthropic · your k…” → “Your keysAClaude Sonnet 4.5reasoningAnthropic · your keyOGPT…”"
+    },
+    {
+      "label": "pop.list",
+      "group": "B · Popover frame",
+      "severity": "info",
+      "kind": "copy",
+      "prop": "text",
+      "detail": "“Your keysAClaude Sonnet 4.5Anthropic · your keyOGPT-5OpenAI …” → “Your keysAClaude Sonnet 4.5reasoningAnthropic · your keyOGPT…”"
+    },
+    {
+      "label": "pop.row",
+      "group": "B · Rows",
+      "severity": "info",
+      "kind": "copy",
+      "prop": "text",
+      "detail": "“AClaude Sonnet 4.5Anthropic · your key” → “AClaude Sonnet 4.5reasoningAnthropic · your key”"
+    },
+    {
+      "label": "pop.row.meta",
+      "group": "B · Rows",
+      "severity": "info",
+      "kind": "copy",
+      "prop": "text",
+      "detail": "“Claude Sonnet 4.5Anthropic · your key” → “Claude Sonnet 4.5reasoningAnthropic · your key”"
+    },
+    {
+      "label": "pop.row.name",
+      "group": "B · Rows",
+      "severity": "info",
+      "kind": "copy",
+      "prop": "text",
+      "detail": "“Claude Sonnet 4.5” → “Claude Sonnet 4.5reasoning”"
+    },
+    {
+      "label": "pop.rowSelected",
+      "group": "B · Rows",
+      "severity": "info",
+      "kind": "copy",
+      "prop": "text",
+      "detail": "“AClaude Sonnet 4.5Anthropic · your key” → “AClaude Sonnet 4.5reasoningAnthropic · your key”"
+    },
+    {
+      "label": "pop.rowUnselected",
+      "group": "B · Rows",
+      "severity": "info",
+      "kind": "copy",
+      "prop": "text",
+      "detail": "“OGPT-5OpenAI · your key” → “OGPT-5.4OpenAI · your key”"
+    },
+    {
+      "label": "pop.rowLocal",
+      "group": "B · Rows (local)",
+      "severity": "info",
+      "kind": "copy",
+      "prop": "text",
+      "detail": "“Llama 3.3 70B42 GB · never leaves this machine” → “◇Llama 3.3 70Blocal · never leaves this machine”"
+    },
+    {
+      "label": "pop.rowLocal.badge",
+      "group": "B · Rows (local)",
+      "severity": "info",
+      "kind": "copy",
+      "prop": "text",
+      "detail": "“” → “◇”"
+    },
+    {
+      "label": "pop.rowLocal.sub",
+      "group": "B · Rows (local)",
+      "severity": "info",
+      "kind": "copy",
+      "prop": "text",
+      "detail": "“42 GB · never leaves this machine” → “local · never leaves this machine”"
+    },
+    {
+      "label": "pop.footer",
+      "group": "B · Footer",
+      "severity": "info",
+      "kind": "copy",
+      "prop": "text",
+      "detail": "“Add a provider key →Get local models →” → “Add a provider key →”"
+    },
+    {
+      "label": "mic-button",
+      "group": "C · Live-only",
+      "severity": "info",
+      "kind": "extra-in-live",
+      "detail": "present in live, not in design map"
+    },
+    {
+      "label": "mic-icon",
+      "group": "C · Live-only",
+      "severity": "info",
+      "kind": "extra-in-live",
+      "detail": "present in live, not in design map"
+    },
+    {
+      "label": "tools-spacer",
+      "group": "C · Live-only",
+      "severity": "info",
+      "kind": "extra-in-live",
+      "detail": "present in live, not in design map"
+    },
+    {
+      "label": "row-reasoning-badge",
+      "group": "C · Live-only",
+      "severity": "info",
+      "kind": "extra-in-live",
+      "detail": "present in live, not in design map"
+    },
+    {
+      "label": "model-menu-group-cloud",
+      "group": "C · Live-only",
+      "severity": "info",
+      "kind": "extra-in-live",
+      "detail": "present in live, not in design map"
+    },
+    {
+      "label": "model-menu-group-local",
+      "group": "C · Live-only",
+      "severity": "info",
+      "kind": "extra-in-live",
+      "detail": "present in live, not in design map"
+    },
+    {
+      "label": "plus-root",
+      "group": "C · Live-only wrappers",
+      "severity": "info",
+      "kind": "extra-in-live",
+      "detail": "present in live, not in design map"
+    },
+    {
+      "label": "tools-cluster",
+      "group": "C · Live-only wrappers",
+      "severity": "info",
+      "kind": "extra-in-live",
+      "detail": "present in live, not in design map"
+    },
+    {
+      "label": "tools-trigger-wrap",
+      "group": "C · Live-only wrappers",
+      "severity": "info",
+      "kind": "extra-in-live",
+      "detail": "present in live, not in design map"
+    },
+    {
+      "label": "model-pill-root",
+      "group": "C · Live-only wrappers",
+      "severity": "info",
+      "kind": "extra-in-live",
+      "detail": "present in live, not in design map"
+    },
+    {
+      "label": "send-wrap",
+      "group": "C · Live-only wrappers",
+      "severity": "info",
+      "kind": "extra-in-live",
+      "detail": "present in live, not in design map"
+    },
+    {
+      "label": "bottombar-slot",
+      "group": "C · Live-only wrappers",
+      "severity": "info",
+      "kind": "extra-in-live",
+      "detail": "present in live, not in design map"
+    },
+    {
+      "label": "hint-slot",
+      "group": "C · Live-only wrappers",
+      "severity": "info",
+      "kind": "extra-in-live",
+      "detail": "present in live, not in design map"
+    },
+    {
+      "label": "hint-skills",
+      "group": "C · Hint internals (live-only)",
+      "severity": "info",
+      "kind": "extra-in-live",
+      "detail": "present in live, not in design map"
+    },
+    {
+      "label": "hint-kbd",
+      "group": "C · Hint internals (live-only)",
+      "severity": "info",
+      "kind": "extra-in-live",
+      "detail": "present in live, not in design map"
+    },
+    {
+      "label": "hint-grow",
+      "group": "C · Hint internals (live-only)",
+      "severity": "info",
+      "kind": "extra-in-live",
+      "detail": "present in live, not in design map"
+    },
+    {
+      "label": "hint-meta",
+      "group": "C · Hint internals (live-only)",
+      "severity": "info",
+      "kind": "extra-in-live",
+      "detail": "present in live, not in design map"
+    },
+    {
+      "label": "hero-title",
+      "group": "C · FTUE frame (covered by surfaces/run-empty)",
+      "severity": "info",
+      "kind": "extra-in-live",
+      "detail": "present in live, not in design map"
+    },
+    {
+      "label": "chips-row",
+      "group": "C · FTUE frame (covered by surfaces/run-empty)",
+      "severity": "info",
+      "kind": "extra-in-live",
+      "detail": "present in live, not in design map"
+    },
+    {
+      "label": "chip-wallet",
+      "group": "C · FTUE frame (covered by surfaces/run-empty)",
+      "severity": "info",
+      "kind": "extra-in-live",
+      "detail": "present in live, not in design map"
+    },
+    {
+      "label": "chip-thread",
+      "group": "C · FTUE frame (covered by surfaces/run-empty)",
+      "severity": "info",
+      "kind": "extra-in-live",
+      "detail": "present in live, not in design map"
+    },
+    {
+      "label": "chip-csv",
+      "group": "C · FTUE frame (covered by surfaces/run-empty)",
+      "severity": "info",
+      "kind": "extra-in-live",
+      "detail": "present in live, not in design map"
+    },
+    {
+      "label": "chip-icon",
+      "group": "C · FTUE frame (covered by surfaces/run-empty)",
+      "severity": "info",
+      "kind": "extra-in-live",
+      "detail": "present in live, not in design map"
+    },
+    {
+      "label": "chip-label",
+      "group": "C · FTUE frame (covered by surfaces/run-empty)",
+      "severity": "info",
+      "kind": "extra-in-live",
+      "detail": "present in live, not in design map"
+    }
+  ]
+}

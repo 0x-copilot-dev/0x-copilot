@@ -1,0 +1,965 @@
+[
+  {
+    "severity": "HIGH",
+    "element": "A \u00b7 bottom row \u00b7 DOM order",
+    "property": "child order",
+    "design": ".cmp-row = attach \u2192 MODEL pill \u2192 TOOLS pill \u2192 hint(margin-left:auto) \u2192 send (5 children, one row)",
+    "live": ".aui-composer-action-wrapper = [+ \u2192 TOOLS \u2192 mic \u2192 divider \u2192 MODEL pill] [send]; hint is a separate row below",
+    "fixFile": "packages/chat-surface/src/composer/AssistantComposer.tsx:457",
+    "fix": "Move `{toolsTrigger ?? null}` to AFTER the <ModelPill> block (or move <ModelPill> to directly after .aui-plus-menu-root) so the order is attach \u2192 model \u2192 tools."
+  },
+  {
+    "severity": "HIGH",
+    "element": "A \u00b7 hint",
+    "property": "placement",
+    "design": "inline <span class=\"cmp-hint\"> inside .cmp-row, pushed right by margin-left:auto, no border",
+    "live": "separate <div class=\"aui-composer__hint\"> row with border-top, full 618px width, own padding",
+    "fixFile": "packages/chat-surface/src/composer/AssistantComposer.tsx:543",
+    "fix": "Render the hint as the last flex child of .aui-composer-action-wrapper with margin-left:auto instead of through Composer's hint slot."
+  },
+  {
+    "severity": "HIGH",
+    "element": "B \u00b7 model menu (WEB host only)",
+    "property": "stylesheet coverage",
+    "design": "badge / name / radio / footer are fully styled",
+    "live": ".atlas-model-pill__badge-lg, __nm, __rad, __footer, __footer-link, __footer-sp, __empty have ZERO rules on web \u2014 those elements render unstyled",
+    "fixFile": "apps/frontend/src/styles.css:7236",
+    "fix": "Make apps/frontend import packages/chat-surface/src/composer/composer.css and delete the private copy; web never loads composer.css today (apps/frontend/src/app/App.tsx:5-7)."
+  },
+  {
+    "severity": "HIGH",
+    "element": "A \u00b7 model pill trigger",
+    "property": "backgroundColor",
+    "design": "transparent",
+    "live": "rgb(17,17,20) var(--color-surface)",
+    "fixFile": "packages/chat-surface/src/composer/composer.css:385",
+    "fix": "background: transparent \u2014 the fill belongs to :hover/[data-open] only; today the pill reads as permanently active."
+  },
+  {
+    "severity": "HIGH",
+    "element": "A \u00b7 model pill trigger",
+    "property": "borderColor",
+    "design": "transparent",
+    "live": "rgba(255,255,255,0.06) var(--color-border)",
+    "fixFile": "packages/chat-surface/src/composer/composer.css:386",
+    "fix": "border: 1px solid transparent; add var(--color-border) only on hover/open."
+  },
+  {
+    "severity": "HIGH",
+    "element": "A \u00b7 model pill trigger",
+    "property": "color",
+    "design": "rgb(152,152,159) --mut",
+    "live": "rgb(236,236,241) --tx",
+    "fixFile": "packages/chat-surface/src/composer/composer.css:388",
+    "fix": "color: var(--color-text-muted)"
+  },
+  {
+    "severity": "HIGH",
+    "element": "A \u00b7 model pill trigger (open)",
+    "property": "backgroundColor",
+    "design": "rgb(22,22,26) --panel2",
+    "live": "rgb(17,17,20) --color-surface (unchanged from rest state)",
+    "fixFile": "packages/chat-surface/src/composer/composer.css:410",
+    "fix": "Add background: var(--color-surface-muted) to the [aria-expanded=\"true\"] rule."
+  },
+  {
+    "severity": "HIGH",
+    "element": "A \u00b7 model pill trigger (open)",
+    "property": "borderColor / ring",
+    "design": "rgba(255,255,255,0.06) --line, no ring",
+    "live": "rgb(95,178,236) --color-accent + box-shadow 0 0 0 3px accent-22%",
+    "fixFile": "packages/chat-surface/src/composer/composer.css:411",
+    "fix": "Split the selector: keep the accent border+ring for :focus-visible, set border-color: var(--color-border) for [aria-expanded=\"true\"]."
+  },
+  {
+    "severity": "HIGH",
+    "element": "A \u00b7 model pill dot",
+    "property": "backgroundColor",
+    "design": "per-provider brand colour \u2014 rgb(217,119,87) for Anthropic",
+    "live": "rgb(95,178,236) var(--color-accent) for every provider",
+    "fixFile": "packages/chat-surface/src/composer/composer.css:426",
+    "fix": "Thread a per-model colour onto ModelPillModel and set it inline as the design does (copilot-composer2.jsx:373 style={{background: model.color}})."
+  },
+  {
+    "severity": "HIGH",
+    "element": "A \u00b7 tools pill",
+    "property": "fontFamily",
+    "design": "mono (JetBrains Mono)",
+    "live": "sans (var(--font-sans))",
+    "fixFile": "packages/chat-surface/src/onboarding/ComposerToolsButton.tsx:66",
+    "fix": "fontFamily: \"var(--font-mono)\" \u2014 the control is 100% inline CSSProperties, no stylesheet can reach it."
+  },
+  {
+    "severity": "HIGH",
+    "element": "A \u00b7 tools pill",
+    "property": "fontSize",
+    "design": "10px",
+    "live": "12.48px (var(--font-size-xs))",
+    "fixFile": "packages/chat-surface/src/onboarding/ComposerToolsButton.tsx:67",
+    "fix": "fontSize: \"var(--font-size-mono-10)\""
+  },
+  {
+    "severity": "HIGH",
+    "element": "A \u00b7 tools pill",
+    "property": "borderColor",
+    "design": "transparent until hover/open",
+    "live": "var(--color-border) always",
+    "fixFile": "packages/chat-surface/src/onboarding/ComposerToolsButton.tsx:62",
+    "fix": "border: \"1px solid transparent\"; add --color-border only on hover / data-open."
+  },
+  {
+    "severity": "HIGH",
+    "element": "A \u00b7 tools pill icon",
+    "property": "element type",
+    "design": "11x11 <svg> plug icon (Icon.plug)",
+    "live": "<span> containing the literal text character \"\u2699\" at 13.6px",
+    "fixFile": "packages/chat-surface/src/onboarding/ComposerToolsButton.tsx:44",
+    "fix": "Replace the \"\u2699\" glyph with the 11px plug icon from the chat-surface icons SSOT."
+  },
+  {
+    "severity": "HIGH",
+    "element": "A \u00b7 tools pill count",
+    "property": "color / backgroundColor",
+    "design": "rgb(100,100,109) --mut2 on transparent, plain inline text",
+    "live": "rgb(95,178,236) --color-accent on color(srgb .37 .70 .93 / .18) accent-soft, 999px pill",
+    "fixFile": "packages/chat-surface/src/onboarding/ComposerToolsButton.tsx:87",
+    "fix": "Drop the accent pill entirely: background transparent, color var(--color-text-subtle), no border-radius/padding."
+  },
+  {
+    "severity": "HIGH",
+    "element": "A \u00b7 tools pill count",
+    "property": "text (semantics)",
+    "design": "\"7/7\" \u2014 on / total",
+    "live": "\"1\" \u2014 active count only",
+    "fixFile": "packages/chat-surface/src/onboarding/ComposerToolsButton.tsx:45",
+    "fix": "Render `${activeCount}/${totalCount}`; the badge currently hides the denominator so the user cannot tell how many tools exist."
+  },
+  {
+    "severity": "HIGH",
+    "element": "A \u00b7 attach (+) button icon",
+    "property": "presence",
+    "design": "14x14 paperclip <svg> (CIcon.clip)",
+    "live": "ABSENT \u2014 the button contains the literal text character \"+\"",
+    "fixFile": "packages/chat-surface/src/composer/AssistantComposer.tsx:422",
+    "fix": "Render the 14px clip icon from the icons SSOT instead of the \"+\" text node."
+  },
+  {
+    "severity": "HIGH",
+    "element": "A \u00b7 send button icon",
+    "property": "presence",
+    "design": "14x14 paper-plane <svg> (Icon.send)",
+    "live": "ABSENT \u2014 the button contains the literal text character \"\u2191\"",
+    "fixFile": "packages/chat-surface/src/composer/AssistantComposer.tsx:602",
+    "fix": "Render the 14px send icon from the icons SSOT instead of the \"\u2191\" text node."
+  },
+  {
+    "severity": "HIGH",
+    "element": "A \u00b7 send button",
+    "property": "width / height",
+    "design": "28px x 28px",
+    "live": "32px x 32px",
+    "fixFile": "packages/chat-surface/src/composer/composer.css:857",
+    "fix": "Source-order bug: .aui-composer-send{height:28px;min-height:28px} at composer.css:341 is beaten by .aui-send-button{min-height:2rem;min-width:2rem} at :857 (same 0,1,0 specificity, later in file). Delete min-height/min-width from .aui-send-button."
+  },
+  {
+    "severity": "HIGH",
+    "element": "A \u00b7 hint",
+    "property": "fontFamily",
+    "design": "mono",
+    "live": "sans (no font-family declared, inherits)",
+    "fixFile": "packages/chat-surface/src/composer/composer.css:786",
+    "fix": "font-family: var(--font-mono)"
+  },
+  {
+    "severity": "HIGH",
+    "element": "A \u00b7 hint",
+    "property": "fontSize",
+    "design": "9px",
+    "live": "11.2px (var(--font-size-2xs))",
+    "fixFile": "packages/chat-surface/src/composer/composer.css:786",
+    "fix": "font-size: var(--font-size-3xs) (9px)"
+  },
+  {
+    "severity": "HIGH",
+    "element": "A \u00b7 hint",
+    "property": "borderWidth",
+    "design": "0",
+    "live": "1px 0 0 0, color-mix(--color-border 40%)",
+    "fixFile": "packages/chat-surface/src/composer/composer.css:778",
+    "fix": "Remove the border-top \u2014 the design's hint is bare inline text in the control row, not a footer strip."
+  },
+  {
+    "severity": "HIGH",
+    "element": "C \u00b7 composer shell",
+    "property": "borderColor",
+    "design": "rgba(255,255,255,0.10) --line2",
+    "live": "rgba(255,255,255,0.06) --color-border",
+    "fixFile": "packages/chat-surface/src/composer/Composer.tsx:1460",
+    "fix": "border: \"1px solid var(--color-border-strong)\" \u2014 inline containerStyle beats the whole .aui-composer CSS block."
+  },
+  {
+    "severity": "HIGH",
+    "element": "C \u00b7 textarea",
+    "property": "backgroundColor",
+    "design": "transparent",
+    "live": "rgb(13,13,16) var(--color-bg-elevated)",
+    "fixFile": "packages/chat-surface/src/composer/Composer.tsx:1472",
+    "fix": "background: \"transparent\" \u2014 the design's textarea is flush inside the shell, not an inset card."
+  },
+  {
+    "severity": "HIGH",
+    "element": "C \u00b7 textarea",
+    "property": "borderWidth / borderColor",
+    "design": "0 / none",
+    "live": "1px solid var(--color-border)",
+    "fixFile": "packages/chat-surface/src/composer/Composer.tsx:1474",
+    "fix": "border: 0"
+  },
+  {
+    "severity": "HIGH",
+    "element": "B \u00b7 popover header (.pop__h)",
+    "property": "presence",
+    "design": "header row \"Model\", 12px/600, display font, padding 11px 12px 7px, gap 8px, height 36px",
+    "live": "ABSENT \u2014 renderMenuBody() starts at the first group",
+    "fixFile": "packages/chat-surface/src/composer/ModelPill.tsx:227",
+    "fix": "Add the header row. Note .atlas-model-pill__head already exists at composer.css:459 and is emitted by nothing \u2014 it is the orphaned rule for exactly this element (and is font-weight:500 where the design is 600)."
+  },
+  {
+    "severity": "HIGH",
+    "element": "B \u00b7 popover header meta (.pop__h .meta)",
+    "property": "presence",
+    "design": "\"this chat\" scope caption, mono 9px, --mut2, margin-left:auto",
+    "live": "ABSENT",
+    "fixFile": "packages/chat-surface/src/composer/ModelPill.tsx:227",
+    "fix": "Add it \u2014 it is the only affordance telling the user the model choice is scoped to the conversation."
+  },
+  {
+    "severity": "HIGH",
+    "element": "B \u00b7 popover scrim (.pop-scrim)",
+    "property": "presence",
+    "design": "fixed inset:0 z-index:70 click-out layer",
+    "live": "ABSENT \u2014 <Menu> dismisses via a window pointerdown listener, renders no scrim",
+    "fixFile": "packages/design-system/src/index.tsx:706",
+    "fix": "Add a scrim element to the Menu primitive, or get explicit sign-off that the listener is an acceptable behavioural substitute."
+  },
+  {
+    "severity": "HIGH",
+    "element": "B \u00b7 menu frame",
+    "property": "display / gap",
+    "design": "block, gap normal",
+    "live": "grid, gap 4px \u2014 LEAKED from the un-overridden .ui-dropdown__menu primitive",
+    "fixFile": "packages/design-system/src/styles.css:778",
+    "fix": "Add display:block; gap:0 to .atlas-model-pill__menu (composer.css:450) \u2014 the pill class overrides only min-width/padding/background/border/radius/shadow, so display:grid, gap, font, line-height, color and z-index all leak through."
+  },
+  {
+    "severity": "HIGH",
+    "element": "B \u00b7 menu frame",
+    "property": "fontSize",
+    "design": "13px",
+    "live": "14px (var(--font-size-md)) \u2014 leaked from the primitive",
+    "fixFile": "packages/design-system/src/styles.css:775",
+    "fix": "Add font-size: 13px to .atlas-model-pill__menu; this one leak drives the +1px on every row, radio and footer measurement."
+  },
+  {
+    "severity": "HIGH",
+    "element": "B \u00b7 menu frame",
+    "property": "backgroundColor",
+    "design": "rgb(17,17,20) --panel",
+    "live": "rgb(13,13,16) --color-bg-elevated",
+    "fixFile": "packages/chat-surface/src/composer/composer.css:453",
+    "fix": "background: var(--color-surface)"
+  },
+  {
+    "severity": "HIGH",
+    "element": "B \u00b7 menu frame",
+    "property": "borderColor",
+    "design": "rgba(255,255,255,0.10) --line2",
+    "live": "rgba(255,255,255,0.06) --color-border",
+    "fixFile": "packages/chat-surface/src/composer/composer.css:454",
+    "fix": "border-color: var(--color-border-strong)"
+  },
+  {
+    "severity": "HIGH",
+    "element": "B \u00b7 menu scroll region (.pop__list)",
+    "property": "max-height / overflow",
+    "design": "max-height:264px; overflow:auto on the list, overflow:hidden on the frame",
+    "live": "NEITHER \u2014 no max-height and no overflow anywhere; live collapses frame+list into one node",
+    "fixFile": "packages/chat-surface/src/composer/composer.css:450",
+    "fix": "Add an inner scroll region (max-height:264px; overflow:auto) and overflow:hidden on the frame; today a long model list grows the popover past the viewport with no scroll."
+  },
+  {
+    "severity": "HIGH",
+    "element": "B \u00b7 menu frame",
+    "property": "box-shadow",
+    "design": "0 18px 50px -12px rgba(0,0,0,0.75)",
+    "live": "0 18px 48px rgb(0 0 0 / 0.32) \u2014 the literal fallback, because --shadow-md is NOT DEFINED anywhere in the repo",
+    "fixFile": "packages/chat-surface/src/composer/composer.css:456",
+    "fix": "Either define --shadow-md in packages/design-system/src/styles.css or inline the design shadow. Same undefined token also at apps/frontend/src/styles.css:7309."
+  },
+  {
+    "severity": "HIGH",
+    "element": "B \u00b7 group headings",
+    "property": "fontFamily",
+    "design": "mono",
+    "live": "sans \u2014 .ui-section-label declares no font-family",
+    "fixFile": "packages/design-system/src/styles.css:1089",
+    "fix": "Stop composing .ui-section-label on the model-menu group heads (ModelPill.tsx:236, :247); author a mono uppercase variant or add a mono recipe."
+  },
+  {
+    "severity": "HIGH",
+    "element": "B \u00b7 group headings",
+    "property": "fontSize",
+    "design": "8.5px",
+    "live": "11.2px (var(--font-size-2xs))",
+    "fixFile": "packages/design-system/src/styles.css:1090",
+    "fix": "8.5px \u2014 no token exists for this step; nearest is --font-size-3xs (9px). Add a token or snap to 3xs deliberately."
+  },
+  {
+    "severity": "HIGH",
+    "element": "B \u00b7 group headings",
+    "property": "color",
+    "design": "rgb(100,100,109) --mut2",
+    "live": "rgb(152,152,159) --mut",
+    "fixFile": "packages/design-system/src/styles.css:1094",
+    "fix": "color: var(--color-text-subtle)"
+  },
+  {
+    "severity": "HIGH",
+    "element": "B \u00b7 group headings",
+    "property": "fontWeight",
+    "design": "400",
+    "live": "600 (--font-weight-semibold)",
+    "fixFile": "packages/design-system/src/styles.css:1091",
+    "fix": "font-weight: var(--font-weight-regular)"
+  },
+  {
+    "severity": "HIGH",
+    "element": "B \u00b7 selected row",
+    "property": "backgroundColor",
+    "design": "transparent \u2014 selection is shown ONLY by the filled radio",
+    "live": "rgb(22,22,26) var(--color-surface-muted)",
+    "fixFile": "packages/chat-surface/src/composer/composer.css:592",
+    "fix": "Delete the .atlas-model-pill__item[data-active]{background} rule; keep :hover at :588. Today the active row is indistinguishable from a hovered row."
+  },
+  {
+    "severity": "HIGH",
+    "element": "B \u00b7 row badge (.lg)",
+    "property": "backgroundColor",
+    "design": "rgb(29,29,35) --panel3",
+    "live": "rgb(22,22,26) var(--color-surface-muted)",
+    "fixFile": "packages/chat-surface/src/composer/composer.css:497",
+    "fix": "background: var(--color-surface-elevated) (#1d1d23 == --panel3)"
+  },
+  {
+    "severity": "HIGH",
+    "element": "B \u00b7 row badge (.lg)",
+    "property": "color",
+    "design": "rgb(212,212,219) --tx2",
+    "live": "rgb(152,152,159) var(--color-text-muted)",
+    "fixFile": "packages/chat-surface/src/composer/composer.css:498",
+    "fix": "color: var(--color-text-strong) (#d4d4db == --tx2)"
+  },
+  {
+    "severity": "HIGH",
+    "element": "B \u00b7 row sub-line",
+    "property": "color",
+    "design": "rgb(100,100,109) --mut2",
+    "live": "rgb(152,152,159) var(--color-text-muted)",
+    "fixFile": "packages/chat-surface/src/composer/composer.css:670",
+    "fix": "color: var(--color-text-subtle) \u2014 note the same selector is authored twice (composer.css:511 and :668); :668 wins for color, so both must be edited or collapsed."
+  },
+  {
+    "severity": "HIGH",
+    "element": "B \u00b7 local row sub-line",
+    "property": "text",
+    "design": "\"42 GB \u00b7 never leaves this machine\" \u2014 shows the model's on-disk size",
+    "live": "\"local \u00b7 never leaves this machine\" \u2014 no size",
+    "fixFile": "packages/chat-surface/src/composer/ModelPill.tsx:106",
+    "fix": "Thread a size field onto ModelPillModel and print `${size} \u00b7 never leaves this machine`; the size is the whole point of the line."
+  },
+  {
+    "severity": "HIGH",
+    "element": "B \u00b7 local row badge icon",
+    "property": "presence",
+    "design": "13x13 <svg> chip icon (Icon.chip)",
+    "live": "ABSENT \u2014 the badge contains the literal text character \"\u25c7\"",
+    "fixFile": "packages/chat-surface/src/composer/ModelPill.tsx:182",
+    "fix": "Render the chip icon from the icons SSOT instead of the \"\u25c7\" glyph."
+  },
+  {
+    "severity": "HIGH",
+    "element": "B \u00b7 radio check",
+    "property": "color",
+    "design": "rgb(8,19,29) --accent-ink",
+    "live": "rgb(255,255,255) \u2014 --color-accent-ink IS NOT DEFINED anywhere, so the #fff fallback always paints",
+    "fixFile": "packages/chat-surface/src/composer/composer.css:529",
+    "fix": "color: var(--color-accent-contrast) \u2014 that is the real token (#08131d, design-system/styles.css:182)."
+  },
+  {
+    "severity": "HIGH",
+    "element": "B \u00b7 radio (idle)",
+    "property": "borderColor",
+    "design": "rgba(255,255,255,0.18) --line3",
+    "live": "rgba(255,255,255,0.10) var(--color-border-strong)",
+    "fixFile": "packages/chat-surface/src/composer/composer.css:525",
+    "fix": "border: 1.5px solid var(--color-border-stronger)"
+  },
+  {
+    "severity": "HIGH",
+    "element": "B \u00b7 footer",
+    "property": "backgroundColor",
+    "design": "rgb(13,13,16) --ink2",
+    "live": "rgb(9,9,11) var(--color-bg)",
+    "fixFile": "packages/chat-surface/src/composer/composer.css:548",
+    "fix": "background: var(--color-bg-elevated) (#0d0d10 == --ink2)"
+  },
+  {
+    "severity": "HIGH",
+    "element": "B \u00b7 footer spacer + \"Get local models \u2192\" link",
+    "property": "presence",
+    "design": "flex spacer (.sp, flex:1) + second link, pushing the two links to opposite ends",
+    "live": "NEITHER renders \u2014 both are gated on onGetLocalModels, which AssistantComposer.tsx:487-495 never passes and no host supplies (repo-wide grep: only ModelPill's own declaration)",
+    "fixFile": "packages/chat-surface/src/composer/AssistantComposer.tsx:487",
+    "fix": "Thread onGetLocalModels from both hosts through AssistantComposer into ModelPill; today the local-models deep-link is a dead affordance and .atlas-model-pill__footer-sp (composer.css:568) is a dead rule."
+  },
+  {
+    "severity": "HIGH",
+    "element": "A \u00b7 mic button",
+    "property": "presence (live-only)",
+    "design": "no such control in .cmp-row",
+    "live": "disabled .atlas-composer-mic voice button, 28x28, plus a 16x16 svg",
+    "fixFile": "packages/chat-surface/src/composer/AssistantComposer.tsx:458",
+    "fix": "Delete the button (it is permanently disabled / \"coming soon\") or gate it behind a prop both hosts leave off; also delete composer.css:356."
+  },
+  {
+    "severity": "HIGH",
+    "element": "A \u00b7 tools divider",
+    "property": "presence (live-only)",
+    "design": "no divider in .cmp-row",
+    "live": ".aui-composer-tools-spacer \u2014 1px x 1.2rem hairline, color-mix(--color-border 70%), margin 0 .25rem",
+    "fixFile": "packages/chat-surface/src/composer/AssistantComposer.tsx:485",
+    "fix": "Delete the span and the rule at composer.css:324."
+  },
+  {
+    "severity": "HIGH",
+    "element": "B \u00b7 reasoning capability chip",
+    "property": "presence (live-only)",
+    "design": "row is badge \u00b7 name \u00b7 sub \u00b7 radio only",
+    "live": ".atlas-model-pill__badge[data-kind=\"reasoning\"] \u2014 accent-tinted 999px pill, 11.2px/500, tracking .05em, lowercase",
+    "fixFile": "packages/chat-surface/src/composer/ModelPill.tsx:188",
+    "fix": "Remove the chip (and composer.css:673) or get the owner to add it to the design; it also widens every cloud row."
+  },
+  {
+    "severity": "MEDIUM",
+    "element": "A \u00b7 bottom row",
+    "property": "gap",
+    "design": "5px",
+    "live": "8px (var(--space-sm))",
+    "fixFile": "packages/chat-surface/src/composer/composer.css:259",
+    "fix": "gap: 5px (no token at this step; --space-xs is 4px)"
+  },
+  {
+    "severity": "MEDIUM",
+    "element": "A \u00b7 bottom row",
+    "property": "padding",
+    "design": "6px 8px 8px 8px",
+    "live": "0px \u2014 the inset was moved onto the shell (padding:10)",
+    "fixFile": "packages/chat-surface/src/composer/composer.css:256",
+    "fix": "Restore padding: 6px 8px 8px on the row and drop the shell's blanket padding:10 (Composer.tsx:1462)."
+  },
+  {
+    "severity": "MEDIUM",
+    "element": "A \u00b7 bottom row",
+    "property": "justifyContent",
+    "design": "normal \u2014 only the hint's margin-left:auto pushes",
+    "live": "space-between (plus a __right wrapper)",
+    "fixFile": "packages/chat-surface/src/composer/composer.css:260",
+    "fix": "Once the hint is inline (see order finding), drop justify-content:space-between and the .aui-composer-action-wrapper__right wrapper."
+  },
+  {
+    "severity": "MEDIUM",
+    "element": "A \u00b7 attach (+) button",
+    "property": "width / height",
+    "design": "26px x 26px",
+    "live": "28px x 28px",
+    "fixFile": "packages/chat-surface/src/composer/composer.css:340",
+    "fix": "height/width/min-height/min-width: 26px"
+  },
+  {
+    "severity": "MEDIUM",
+    "element": "A \u00b7 attach (+) button",
+    "property": "borderRadius",
+    "design": "7px",
+    "live": "8px (var(--radius-md))",
+    "fixFile": "packages/chat-surface/src/composer/composer.css:342",
+    "fix": "border-radius: 7px (no token; --radius-sm is 6, --radius-md is 8)"
+  },
+  {
+    "severity": "MEDIUM",
+    "element": "A \u00b7 attach (+) button",
+    "property": "padding",
+    "design": "1px 6px",
+    "live": "4px (0.25rem)",
+    "fixFile": "packages/chat-surface/src/composer/composer.css:345",
+    "fix": "padding: 1px 6px (moot once the glyph becomes a sized 14px SVG)"
+  },
+  {
+    "severity": "MEDIUM",
+    "element": "A \u00b7 model pill trigger",
+    "property": "borderRadius",
+    "design": "7px",
+    "live": "8px (var(--radius-md))",
+    "fixFile": "packages/chat-surface/src/composer/composer.css:387",
+    "fix": "border-radius: 7px"
+  },
+  {
+    "severity": "MEDIUM",
+    "element": "A \u00b7 model pill trigger",
+    "property": "gap",
+    "design": "6px",
+    "live": "4px (var(--space-xs))",
+    "fixFile": "packages/chat-surface/src/composer/composer.css:382",
+    "fix": "gap: 6px"
+  },
+  {
+    "severity": "MEDIUM",
+    "element": "A \u00b7 model pill trigger",
+    "property": "fontWeight",
+    "design": "400",
+    "live": "500 (--font-weight-medium)",
+    "fixFile": "packages/chat-surface/src/composer/composer.css:393",
+    "fix": "font-weight: var(--font-weight-regular); also drop the duplicate 500 on __name (composer.css:433)."
+  },
+  {
+    "severity": "MEDIUM",
+    "element": "A \u00b7 model pill name",
+    "property": "max-width",
+    "design": "118px (.cmp-pill .lb)",
+    "live": "none \u2014 truncation is width-driven only",
+    "fixFile": "packages/chat-surface/src/composer/composer.css:432",
+    "fix": "max-width: 118px"
+  },
+  {
+    "severity": "MEDIUM",
+    "element": "A \u00b7 model pill caret",
+    "property": "width / height / fontSize",
+    "design": "11x11, inherits 10px",
+    "live": "12x12, font-size overridden to 11.2px (--font-size-2xs)",
+    "fixFile": "packages/chat-surface/src/composer/ModelPill.tsx:356",
+    "fix": "width=\"11\" height=\"11\" and delete the font-size override at composer.css:443."
+  },
+  {
+    "severity": "MEDIUM",
+    "element": "A \u00b7 tools pill",
+    "property": "borderRadius",
+    "design": "7px",
+    "live": "999px (var(--radius-full))",
+    "fixFile": "packages/chat-surface/src/onboarding/ComposerToolsButton.tsx:63",
+    "fix": "borderRadius: 7"
+  },
+  {
+    "severity": "MEDIUM",
+    "element": "A \u00b7 tools pill",
+    "property": "padding / height",
+    "design": "0 8px, height 26px",
+    "live": "4px 10px (height falls out at 26px incidentally)",
+    "fixFile": "packages/chat-surface/src/onboarding/ComposerToolsButton.tsx:64",
+    "fix": "padding: \"0 8px\", height: 26 \u2014 pin the height rather than relying on line-height."
+  },
+  {
+    "severity": "MEDIUM",
+    "element": "A \u00b7 tools pill count",
+    "property": "fontSize / fontWeight / shape",
+    "design": "10px mono, weight 400, no box",
+    "live": "11.2px sans, weight 600, 16x16 inline-flex, padding 0 4px, radius 999px",
+    "fixFile": "packages/chat-surface/src/onboarding/ComposerToolsButton.tsx:81",
+    "fix": "Replace badgeStyle with plain inline mono text at var(--font-size-mono-10)/400."
+  },
+  {
+    "severity": "MEDIUM",
+    "element": "A \u00b7 send button",
+    "property": "borderWidth",
+    "design": "0",
+    "live": "1px solid var(--color-accent)",
+    "fixFile": "packages/chat-surface/src/composer/composer.css:860",
+    "fix": "border: 0"
+  },
+  {
+    "severity": "MEDIUM",
+    "element": "A \u00b7 send button",
+    "property": "opacity (disabled)",
+    "design": "0.35",
+    "live": "0.4",
+    "fixFile": "packages/chat-surface/src/composer/composer.css:888",
+    "fix": "opacity: 0.35"
+  },
+  {
+    "severity": "MEDIUM",
+    "element": "C \u00b7 composer shell",
+    "property": "borderRadius",
+    "design": "11px",
+    "live": "12px",
+    "fixFile": "packages/chat-surface/src/composer/Composer.tsx:1461",
+    "fix": "borderRadius: 11"
+  },
+  {
+    "severity": "MEDIUM",
+    "element": "C \u00b7 composer shell",
+    "property": "padding / gap",
+    "design": "padding 0, gap normal (children own their insets)",
+    "live": "padding 10, gap 6",
+    "fixFile": "packages/chat-surface/src/composer/Composer.tsx:1462",
+    "fix": "padding: 0, gap: 0 \u2014 and restore the row/textarea insets (see bottom-row padding finding)."
+  },
+  {
+    "severity": "MEDIUM",
+    "element": "C \u00b7 textarea",
+    "property": "fontSize",
+    "design": "12.5px",
+    "live": "13px",
+    "fixFile": "packages/chat-surface/src/composer/Composer.tsx:1452",
+    "fix": "TEXTAREA_FONT_SIZE_PX = 12.5"
+  },
+  {
+    "severity": "MEDIUM",
+    "element": "C \u00b7 textarea",
+    "property": "lineHeight",
+    "design": "1.55 (19.375px)",
+    "live": "1.5 (19.5px)",
+    "fixFile": "packages/chat-surface/src/composer/Composer.tsx:1477",
+    "fix": "lineHeight: 1.55"
+  },
+  {
+    "severity": "MEDIUM",
+    "element": "C \u00b7 textarea",
+    "property": "padding",
+    "design": "10px 12px 4px",
+    "live": "10px 12px",
+    "fixFile": "packages/chat-surface/src/composer/Composer.tsx:1476",
+    "fix": "padding: \"10px 12px 4px\""
+  },
+  {
+    "severity": "MEDIUM",
+    "element": "C \u00b7 textarea",
+    "property": "borderRadius",
+    "design": "0",
+    "live": "8px",
+    "fixFile": "packages/chat-surface/src/composer/Composer.tsx:1475",
+    "fix": "borderRadius: 0"
+  },
+  {
+    "severity": "MEDIUM",
+    "element": "C \u00b7 textarea",
+    "property": "max-height",
+    "design": "130px",
+    "live": "176px (8 rows)",
+    "fixFile": "packages/chat-surface/src/composer/Composer.tsx:1457",
+    "fix": "DEFAULT_MAX_ROWS tuned so max-height lands at 130px (design .cmp textarea{max-height:130px})."
+  },
+  {
+    "severity": "MEDIUM",
+    "element": "B \u00b7 menu frame",
+    "property": "width",
+    "design": "fixed 300px (<Pop width={300}>)",
+    "live": "306.77px, content-driven \u2014 min-width:280px in CSS plus an INLINE min-width:<anchor width>px and max-width:min(32rem, 100vw-2rem)",
+    "fixFile": "packages/chat-surface/src/composer/composer.css:451",
+    "fix": "width: 300px on .atlas-model-pill__menu; the popover width currently varies with the longest model name."
+  },
+  {
+    "severity": "MEDIUM",
+    "element": "B \u00b7 menu frame",
+    "property": "borderRadius",
+    "design": "10px",
+    "live": "8px (var(--radius-md))",
+    "fixFile": "packages/chat-surface/src/composer/composer.css:455",
+    "fix": "border-radius: 10px"
+  },
+  {
+    "severity": "MEDIUM",
+    "element": "B \u00b7 menu frame",
+    "property": "padding",
+    "design": "0 on the frame; 0 5px 5px on the list",
+    "live": "4px on the single collapsed node",
+    "fixFile": "packages/chat-surface/src/composer/composer.css:452",
+    "fix": "padding: 0 on the frame; move 0 5px 5px onto the new inner list region."
+  },
+  {
+    "severity": "MEDIUM",
+    "element": "B \u00b7 menu frame",
+    "property": "lineHeight",
+    "design": "19.5px (1.5)",
+    "live": "18.9px (--line-height-snug 1.35) \u2014 leaked from .ui-dropdown__menu",
+    "fixFile": "packages/design-system/src/styles.css:777",
+    "fix": "line-height: 1.5 on .atlas-model-pill__menu"
+  },
+  {
+    "severity": "MEDIUM",
+    "element": "B \u00b7 rows",
+    "property": "padding",
+    "design": "6px",
+    "live": "8px 10px",
+    "fixFile": "packages/chat-surface/src/composer/composer.css:578",
+    "fix": "padding: 6px (this is most of the 49.5px \u2192 52.45px row-height drift)"
+  },
+  {
+    "severity": "MEDIUM",
+    "element": "B \u00b7 rows",
+    "property": "gap",
+    "design": "9px",
+    "live": "8px (var(--space-sm))",
+    "fixFile": "packages/chat-surface/src/composer/composer.css:576",
+    "fix": "gap: 9px"
+  },
+  {
+    "severity": "MEDIUM",
+    "element": "B \u00b7 rows",
+    "property": "borderRadius",
+    "design": "7px",
+    "live": "6px (var(--radius-sm))",
+    "fixFile": "packages/chat-surface/src/composer/composer.css:580",
+    "fix": "border-radius: 7px"
+  },
+  {
+    "severity": "MEDIUM",
+    "element": "B \u00b7 row middle column",
+    "property": "flexGrow",
+    "design": "1 (.pop-row .m{flex:1}) \u2014 the column does the pushing",
+    "live": "0 \u2014 no flex declared, so the row falls back to justify-content:space-between",
+    "fixFile": "packages/chat-surface/src/composer/composer.css:648",
+    "fix": "flex: 1 1 auto on .atlas-model-pill__col; this is what makes the row's space-between hack unnecessary and restores the 219px column width (live 190.64px)."
+  },
+  {
+    "severity": "MEDIUM",
+    "element": "B \u00b7 row name line (.nm)",
+    "property": "fontSize / fontWeight / gap",
+    "design": "12px / 500 / 6px",
+    "live": "14px (inherited) / 400 / 4px",
+    "fixFile": "packages/chat-surface/src/composer/composer.css:655",
+    "fix": "Add font-size:12px; font-weight:var(--font-weight-medium); gap:6px to .atlas-model-pill__row."
+  },
+  {
+    "severity": "MEDIUM",
+    "element": "B \u00b7 row name text (.txt / __nm)",
+    "property": "fontSize / fontWeight",
+    "design": "12px / 500 (inherits .nm)",
+    "live": "13.6px (var(--font-size-sm)) / 400",
+    "fixFile": "packages/chat-surface/src/composer/composer.css:504",
+    "fix": "Drop the font-size override so it inherits the 12px name line, and set font-weight:500."
+  },
+  {
+    "severity": "MEDIUM",
+    "element": "B \u00b7 row sub-line",
+    "property": "fontSize",
+    "design": "9.5px",
+    "live": "11.2px (var(--font-size-2xs))",
+    "fixFile": "packages/chat-surface/src/composer/composer.css:669",
+    "fix": "9.5px \u2014 no token at this step. Collapse the duplicate .atlas-model-pill__sub blocks (composer.css:511 and :668) while editing."
+  },
+  {
+    "severity": "MEDIUM",
+    "element": "B \u00b7 row badge (.lg)",
+    "property": "fontSize",
+    "design": "10px (sans, font-family: var(--body))",
+    "live": "11.2px (var(--font-size-2xs))",
+    "fixFile": "packages/chat-surface/src/composer/composer.css:499",
+    "fix": "font-size: 10px (raw \u2014 --font-size-mono-10 is the mono step, and this badge is sans)."
+  },
+  {
+    "severity": "MEDIUM",
+    "element": "B \u00b7 footer link",
+    "property": "fontSize",
+    "design": "9.5px",
+    "live": "11.2px (var(--font-size-2xs))",
+    "fixFile": "packages/chat-surface/src/composer/composer.css:553",
+    "fix": "9.5px \u2014 no token at this step."
+  },
+  {
+    "severity": "MEDIUM",
+    "element": "B \u00b7 group headings",
+    "property": "letterSpacing",
+    "design": "0.13em (1.105px)",
+    "live": "0.05em (0.56px) via --tracking-label",
+    "fixFile": "packages/design-system/src/styles.css:1092",
+    "fix": "Use --tracking-mono-caps (0.12em), the closest step on the tracking scale."
+  },
+  {
+    "severity": "MEDIUM",
+    "element": "B \u00b7 radio check glyph",
+    "property": "width / height",
+    "design": "9x9",
+    "live": "10x10",
+    "fixFile": "packages/chat-surface/src/composer/ModelPill.tsx:197",
+    "fix": "width=\"9\" height=\"9\""
+  },
+  {
+    "severity": "MEDIUM",
+    "element": "B \u00b7 menu frame",
+    "property": "z-index",
+    "design": "71 (scrim 70)",
+    "live": "50, written INLINE by the primitive",
+    "fixFile": "packages/design-system/src/index.tsx:771",
+    "fix": "Change the primitive or pass a style override \u2014 a class cannot beat the inline zIndex."
+  },
+  {
+    "severity": "MEDIUM",
+    "element": "B \u00b7 menu frame",
+    "property": "position / anchor",
+    "design": "absolute; bottom: calc(100% + 8px); left: 0 \u2014 anchored to the COMPOSER's left edge",
+    "live": "position:fixed with left = pill.getBoundingClientRect().left \u2014 anchored to the PILL",
+    "fixFile": "packages/design-system/src/index.tsx:770",
+    "fix": "Anchor the model menu to the composer element rather than the pill (pass the composer ref as anchorRef, or add a menu-offset option)."
+  },
+  {
+    "severity": "MEDIUM",
+    "element": "B \u00b7 menu frame",
+    "property": "animation",
+    "design": "popin 0.14s ease (fade + 5px rise)",
+    "live": "none",
+    "fixFile": "packages/chat-surface/src/composer/composer.css:450",
+    "fix": "Add the popin keyframe to .atlas-model-pill__menu."
+  },
+  {
+    "severity": "LOW",
+    "element": "A \u00b7 attach (+) button",
+    "property": ":hover / [data-open]",
+    "design": "color --tx, background --panel2, border-color --line",
+    "live": "background --color-surface-muted, color --color-text; border stays transparent",
+    "fixFile": "packages/chat-surface/src/composer/composer.css:144",
+    "fix": "Add border-color: var(--color-border) to the hover/open state."
+  },
+  {
+    "severity": "LOW",
+    "element": "A \u00b7 model pill trigger",
+    "property": ":hover",
+    "design": "background --panel2, color --tx, border-color --line",
+    "live": "only border-color: color-mix(in oklab, accent 50%, border)",
+    "fixFile": "packages/chat-surface/src/composer/composer.css:402",
+    "fix": "Replace the accent-mix hover with the design's fill/text/border triple."
+  },
+  {
+    "severity": "LOW",
+    "element": "A \u00b7 send button",
+    "property": ":hover background",
+    "design": "var(--accent-hi)",
+    "live": "var(--color-accent-strong, color-mix(accent 88%, white))",
+    "fixFile": "packages/chat-surface/src/composer/composer.css:879",
+    "fix": "Map --accent-hi to an explicit token rather than a color-mix fallback."
+  },
+  {
+    "severity": "LOW",
+    "element": "C \u00b7 composer shell",
+    "property": ":focus-within",
+    "design": "border-color: --line3 (a quiet darkening)",
+    "live": "border-color color-mix(accent 75%) + box-shadow 0 0 0 2px accent-20% ring",
+    "fixFile": "packages/chat-surface/src/composer/composer.css:224",
+    "fix": "border-color: var(--color-border-stronger); drop the accent ring."
+  },
+  {
+    "severity": "LOW",
+    "element": "B \u00b7 dead rule .atlas-model-pill__head",
+    "property": "unused CSS",
+    "design": "n/a",
+    "live": "styles a popover header that is never rendered; also font-weight:500 where the design header is 600",
+    "fixFile": "packages/chat-surface/src/composer/composer.css:459",
+    "fix": "Delete, or repurpose it when the header from the header-missing finding is added."
+  },
+  {
+    "severity": "LOW",
+    "element": "B \u00b7 dead rule .atlas-model-pill__row > strong",
+    "property": "unused CSS",
+    "design": "n/a",
+    "live": "ModelPill.tsx emits __nm, never <strong>",
+    "fixFile": "packages/chat-surface/src/composer/composer.css:661",
+    "fix": "Delete (both copies \u2014 also apps/frontend/src/styles.css:7420)."
+  },
+  {
+    "severity": "LOW",
+    "element": "B \u00b7 dead rule .atlas-model-pill__provider",
+    "property": "unused CSS",
+    "design": "n/a",
+    "live": "not emitted anywhere",
+    "fixFile": "packages/chat-surface/src/composer/composer.css:684",
+    "fix": "Delete (both copies)."
+  },
+  {
+    "severity": "LOW",
+    "element": "A \u00b7 dead rule .aui-composer-focus-meta",
+    "property": "unused CSS",
+    "design": "n/a",
+    "live": "the focus-meta line was dropped in Phase 9 (AssistantComposer.tsx:507-510); no element emits the class",
+    "fixFile": "packages/chat-surface/src/composer/composer.css:266",
+    "fix": "Delete (both copies)."
+  },
+  {
+    "severity": "LOW",
+    "element": "A \u00b7 dead rule .aui-composer__hint-sep",
+    "property": "unused CSS",
+    "design": "n/a",
+    "live": "the hint row is `/ skills` \u00b7 grow \u00b7 meta \u2014 no separator element",
+    "fixFile": "packages/chat-surface/src/composer/composer.css:825",
+    "fix": "Delete (both copies)."
+  },
+  {
+    "severity": "LOW",
+    "element": "B \u00b7 duplicate .atlas-model-pill__sub blocks",
+    "property": "maintenance hazard",
+    "design": "n/a",
+    "live": "authored twice in the same file at :511 and :668, same specificity; :668 wins for font-size/color while :511's font-family/margin-top/ellipsis survive",
+    "fixFile": "packages/chat-surface/src/composer/composer.css:511",
+    "fix": "Collapse into one block \u2014 any half-edit today produces a half-applied change."
+  },
+  {
+    "severity": "LOW",
+    "element": "C \u00b7 hand-rolled pills",
+    "property": "design-system recipe bypass",
+    "design": "n/a",
+    "live": ".atlas-model-pill, .atlas-model-pill__badge and ComposerToolsButton's inline triggerStyle/badgeStyle each re-implement the same pill shape; .ui-pill (design-system/styles.css:1145) and .ui-chip--accent (:1174) are consumed by none of them",
+    "fixFile": "packages/design-system/src/styles.css:1145",
+    "fix": "Migrate the three onto the recipes so they cannot drift apart again."
+  },
+  {
+    "severity": "LOW",
+    "element": "A \u00b7 hint <kbd>",
+    "property": "chrome",
+    "design": "plain mono text, no kbd treatment",
+    "live": "bordered <kbd> chip: --color-bg-elevated fill, 4px radius, 2px bottom border, 1px sides",
+    "fixFile": "packages/chat-surface/src/composer/composer.css:813",
+    "fix": "Drop the <kbd> chrome (or the <kbd> element at AssistantComposer.tsx:545)."
+  },
+  {
+    "severity": "INFO",
+    "element": "A \u00b7 hint",
+    "property": "text",
+    "design": "\"\u23ce send \u00b7 \u21e7\u23ce line\"",
+    "live": "\"/ skills\" + \"Sources cited inline\"",
+    "fixFile": "packages/chat-surface/src/composer/AssistantComposer.tsx:543",
+    "fix": "Product call, not a CSS fix: AssistantComposer.tsx:539-541 deliberately dropped the send/newline hint to \"match the design mock\", but the mock at copilot-composer2.jsx:390 does show it. Reconcile with the owner."
+  },
+  {
+    "severity": "INFO",
+    "element": "A/B \u00b7 live-only layout wrappers",
+    "property": "extra DOM",
+    "design": "flat .cmp-row / .pop__list",
+    "live": ".aui-plus-menu-root, .aui-composer-tools, .atlas-model-pill__root, .aui-composer-action-wrapper__right, composer-bottombar-slot, composer-hint-slot, .atlas-model-pill__group x2",
+    "fixFile": "packages/chat-surface/src/composer/AssistantComposer.tsx:406",
+    "fix": "No visual impact once the metric findings land; noted because they are what forces the nth-of-type anchor selectors and the group margin-top:2px rule (composer.css:471)."
+  },
+  {
+    "severity": "INFO",
+    "element": "Design-system type ladder",
+    "property": "missing mono steps",
+    "design": "8.5px (group heads), 9px (hint, header meta), 9.5px (sub-lines, footer links)",
+    "live": "ladder has --font-size-3xs 9px and --font-size-2xs 11.2px only",
+    "fixFile": "packages/design-system/src/styles.css:62",
+    "fix": "Closing the group-heading / sub-line / footer-link findings exactly requires two new tokens (8.5 and 9.5) or a deliberate snap to --font-size-3xs. Decide before the restyle, not during."
+  },
+  {
+    "severity": "INFO",
+    "element": "C \u00b7 web/desktop stylesheet fork",
+    "property": "duplicate ownership",
+    "design": "n/a",
+    "live": "web loads apps/frontend/src/styles.css and NEVER composer.css; desktop loads composer.css and NEVER apps/frontend/src/styles.css. The two hosts render genuinely different composers today (pill: mono 10px/26px/8px-radius vs sans 12.5px/28px/999px; +/send: 28px squircle vs 32px round; shell radius 11px vs 24px; connectors button 28px vs 36px; hint nowrap vs wrap).",
+    "fixFile": "apps/frontend/src/app/App.tsx:7",
+    "fix": "Import packages/chat-surface/src/composer/composer.css in apps/frontend and delete its private copy \u2014 otherwise every finding above must be fixed twice."
+  }
+]

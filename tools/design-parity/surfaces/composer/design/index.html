@@ -1,0 +1,130 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>design-parity · composer + model popover · DESIGN baseline</title>
+    <link rel="preconnect" href="https://fonts.googleapis.com" />
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+    <link
+      href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;500;700&display=swap"
+      rel="stylesheet"
+    />
+    <!-- copilot-v3.css @imports copilot.css, so this single link pulls the shared
+         v2 "quiet" tokens + base AND the .cmp* composer / .pop* popover / .ctog--sm
+         rules that copilot-composer2.jsx renders. Nothing else is needed — there is
+         no surface-specific stylesheet for the composer. Served from the
+         tools/design-parity root so ../../../design-kit resolves. -->
+    <link rel="stylesheet" href="../../../design-kit/copilot-v3.css" />
+    <style>
+      /* Harness-only frame. Not part of the measured subtree: every anchor is
+         scoped to `.cmp` / `.pop`. The composer + its popovers open UPWARD
+         (`.pop { bottom: calc(100% + 8px) }`), so pin the composer to the bottom
+         of the viewport and give the popover ~420px of headroom. */
+      body {
+        background: var(--ink);
+      }
+      #app-root {
+        min-height: 100vh;
+        display: flex;
+        align-items: flex-end;
+        justify-content: center;
+        padding: 460px 24px 40px;
+      }
+      .parity-stage {
+        width: 640px;
+        max-width: 100%;
+      }
+    </style>
+  </head>
+  <body>
+    <div id="app-root"></div>
+
+    <script
+      src="https://unpkg.com/react@18.3.1/umd/react.development.js"
+      crossorigin="anonymous"
+    ></script>
+    <script
+      src="https://unpkg.com/react-dom@18.3.1/umd/react-dom.development.js"
+      crossorigin="anonymous"
+    ></script>
+    <script
+      src="https://unpkg.com/@babel/standalone@7.29.0/babel.min.js"
+      crossorigin="anonymous"
+    ></script>
+
+    <!-- 1. Shared kit stubs (Icon proxy / Mark / useTweaks). Loaded first so the
+            REAL Icon + Mark from copilot-data.jsx below win. -->
+    <script type="text/babel" src="../../../design-kit/stubs.js"></script>
+    <!-- 2. The design's real icon set + mock data (PROVIDERS / CONNECTORS /
+            LOCAL_INSTALLED / PROJECT_FILES) that copilot-composer2.jsx reads as
+            free globals. -->
+    <script type="text/babel" src="copilot-data.jsx"></script>
+    <!-- 3. THE canonical design composer: renders the .cmp bottom row AND the
+            .pop model / tools / attach popovers. Ends with
+            Object.assign(window, { RunComposer }). -->
+    <script type="text/babel" src="copilot-composer2.jsx"></script>
+
+    <!-- 4. Harness bootstrap. RunComposer keeps popover state internally in
+            useState, so states are driven by clicking the real trigger button
+            after mount:
+              (no ?state)     → closed composer row
+              ?state=model    → .pop model popover open
+              ?state=tools    → .pop tools & connections popover open
+              ?state=attach   → .pop attach popover open
+            `document.documentElement[data-parity-ready]` flips to "1" once the
+            requested state is painted AND the 0.14s `popin` animation is done,
+            so extractors never read a mid-animation opacity/transform. -->
+    <script type="text/babel">
+      (function () {
+        const params = new URLSearchParams(window.location.search);
+        const state = params.get("state") || "";
+        const TRIGGER = {
+          model: 'button[title="Choose model"]',
+          tools: 'button[title="Tools & connections"]',
+          attach: 'button[title="Attach files"]',
+        };
+
+        function Stage() {
+          // data-theme="dark" is the :root default in copilot.css; declaring it
+          // explicitly pins the container to dark even if a future light default
+          // lands, and matches how the app shell stamps the theme.
+          return (
+            <div className="parity-stage" data-theme="dark">
+              <window.RunComposer onSend={() => {}} navigate={() => {}} />
+            </div>
+          );
+        }
+
+        ReactDOM.createRoot(document.getElementById("app-root")).render(
+          <Stage />,
+        );
+
+        const markReady = () =>
+          document.documentElement.setAttribute("data-parity-ready", "1");
+
+        let frames = 0;
+        const tick = () => {
+          const cmp = document.querySelector(".cmp .cmp-row");
+          if (!cmp) {
+            if (frames++ < 120) requestAnimationFrame(tick);
+            else markReady();
+            return;
+          }
+          const sel = TRIGGER[state];
+          if (!sel) return markReady();
+          const btn = document.querySelector(sel);
+          if (!btn) {
+            if (frames++ < 120) requestAnimationFrame(tick);
+            else markReady();
+            return;
+          }
+          btn.click();
+          // let React commit the popover, then let `popin` (0.14s) settle
+          requestAnimationFrame(() => setTimeout(markReady, 350));
+        };
+        requestAnimationFrame(tick);
+      })();
+    </script>
+  </body>
+</html>
