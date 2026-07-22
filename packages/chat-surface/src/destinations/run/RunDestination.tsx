@@ -1033,6 +1033,10 @@ export function RunDestination(props: RunDestinationProps): ReactElement {
         agentName={agentName}
         mode={mode}
         onModeChange={setMode}
+        // WC-P6b: the `● working` pulse chip, derived from the single event
+        // projection's run status (no second subscription — FR-3.3). Live →
+        // pulses; terminal / null → absent.
+        runStatus={session.runStatus}
       />
 
       {/* PR-3.11 (FR-3.26): the multi-run selector. It renders NOTHING for a

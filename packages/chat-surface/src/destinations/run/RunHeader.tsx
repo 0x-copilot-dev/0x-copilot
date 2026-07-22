@@ -22,6 +22,8 @@ import {
   type ReactNode,
 } from "react";
 
+import type { AgentRunStatus } from "@0x-copilot/api-types";
+
 import type { RunMode } from "./useRunMode";
 
 /** Canonical order for the segmented control + arrow-key cycling. */
@@ -62,11 +64,38 @@ export interface RunHeaderProps {
   readonly onModeChange: (mode: RunMode) => void;
   /**
    * Seam (PR-3.7 timeline / PR-3.9 streaming): an optional status node rendered
-   * beside the goal — e.g. a `● working` chip or the `VIEWING 11:43` scrub
-   * label. Unset in PR-3.5.
+   * beside the goal — e.g. the `VIEWING 11:43` scrub label. Unset in PR-3.5.
    */
   readonly status?: ReactNode;
+  /**
+   * WC-P6b — the bound run's own status, threaded from `useRunSession.runStatus`.
+   * A live/active run (queued · running · waiting · cancelling) renders the
+   * pulsing `● working` chip beside the goal (DESIGN-SPEC §2 `.ws-side` header);
+   * a terminal run (or `null`) renders nothing, so the header stops pulsing the
+   * moment the run settles. Pure presentation — the value is derived upstream
+   * from the single event projection, never a second subscription (FR-3.3).
+   */
+  readonly runStatus?: AgentRunStatus | null;
 }
+
+/** Active (in-flight) run states that pulse the header dot; every other status
+ *  (or `null`) is settled and shows no dot. `cancelling` still counts as active
+ *  — the run is winding down, not done. Mirrors the cockpit's cancellable set. */
+const ACTIVE_PULSE_STATUSES: ReadonlySet<AgentRunStatus> = new Set([
+  "queued",
+  "running",
+  "waiting_for_approval",
+  "cancelling",
+]);
+
+/** Per-state label for the pulse chip — the design's `● working` chip, honest in
+ *  each active sub-state so the header never says "working" while queued/waiting. */
+const PULSE_LABELS: Partial<Record<AgentRunStatus, string>> = {
+  queued: "queued",
+  running: "working",
+  waiting_for_approval: "waiting",
+  cancelling: "cancelling",
+};
 
 const ACTIVE_KICKER = "ACTIVE RUN";
 const DEFAULT_AGENT_NAME = "Agent";
@@ -79,6 +108,7 @@ export function RunHeader(props: RunHeaderProps): ReactElement {
     mode,
     onModeChange,
     status,
+    runStatus = null,
   } = props;
 
   // A run is "active" only when it carries a real goal. Deriving BOTH the goal
@@ -110,6 +140,7 @@ export function RunHeader(props: RunHeaderProps): ReactElement {
           <h2 data-testid="run-header-goal" style={goalStyle}>
             {goalText}
           </h2>
+          <RunStatusPulse runStatus={runStatus} />
           {status !== undefined && status !== null ? (
             <span data-testid="run-header-status">{status}</span>
           ) : null}
@@ -182,6 +213,77 @@ function ModeSegmentedControl(props: ModeSegmentedControlProps): ReactElement {
     </div>
   );
 }
+
+// ============================================================
+// Run status pulse (WC-P6b)
+// ============================================================
+//
+// The design's `● working` chip: a sky-accent dot that pulses while the run is
+// in flight, plus a per-state label. Terminal / null → the whole chip is absent,
+// so the header stops pulsing the instant the run settles. The pulse ring lives
+// in a scoped `<style>` (the package owns no keyframe primitive — same pattern
+// as ConnectModal / AddProviderKeyModal) and is zeroed under reduced-motion so
+// it honours `prefers-reduced-motion` and the app's `[data-reduce-motion]` gate
+// (FR-3.24 checklist).
+
+const PULSE_STYLE = `
+.run-header-pulse-dot {
+  animation: run-header-pulse 1.6s ease-out infinite;
+}
+@keyframes run-header-pulse {
+  0% { box-shadow: 0 0 0 0 var(--color-accent-soft, rgba(95,178,236,.45)); }
+  70% { box-shadow: 0 0 0 5px rgba(95,178,236,0); }
+  100% { box-shadow: 0 0 0 0 rgba(95,178,236,0); }
+}
+[data-reduce-motion="always"] .run-header-pulse-dot { animation: none; }
+@media (prefers-reduced-motion: reduce) { .run-header-pulse-dot { animation: none; } }
+`;
+
+function RunStatusPulse({
+  runStatus,
+}: {
+  readonly runStatus: AgentRunStatus | null;
+}): ReactElement | null {
+  if (runStatus === null || !ACTIVE_PULSE_STATUSES.has(runStatus)) {
+    return null;
+  }
+  const label = PULSE_LABELS[runStatus] ?? "working";
+  return (
+    <span
+      data-testid="run-header-status-pulse"
+      data-run-status={runStatus}
+      style={pulseChipStyle}
+    >
+      <style>{PULSE_STYLE}</style>
+      <span
+        aria-hidden="true"
+        className="run-header-pulse-dot"
+        data-testid="run-header-pulse-dot"
+        style={pulseDotStyle}
+      />
+      {label}
+    </span>
+  );
+}
+
+const pulseChipStyle: CSSProperties = {
+  flexShrink: 0,
+  display: "inline-flex",
+  alignItems: "center",
+  gap: 6,
+  fontFamily: "var(--font-mono)",
+  fontSize: "var(--font-size-2xs, 11px)",
+  letterSpacing: "0.06em",
+  textTransform: "uppercase",
+  color: "var(--color-text-muted, #9aa0a6)",
+};
+
+const pulseDotStyle: CSSProperties = {
+  width: 7,
+  height: 7,
+  borderRadius: "50%",
+  background: "var(--color-accent, #5fb2ec)",
+};
 
 // ============================================================
 // Styles (design-system tokens only)
