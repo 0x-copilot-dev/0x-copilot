@@ -240,6 +240,13 @@ class LitellmRateSource:
 
     def _model_cost_table(self) -> Mapping[str, Mapping[str, object]]:
         if self._model_cost is None:
+            # Shared offline posture (pins the bundled cost map, disables the HF
+            # tokenizer download) so pricing, catalog, and counting never fetch.
+            from agent_runtime.pricing.litellm_runtime import (  # noqa: PLC0415
+                apply_offline_litellm_config,
+            )
+
+            apply_offline_litellm_config()
             import litellm  # noqa: PLC0415 — lazy: keep import graph light, litellm is heavy
 
             self._model_cost = litellm.model_cost

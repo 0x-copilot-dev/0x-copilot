@@ -13,10 +13,14 @@ from agent_runtime.api.presentation_templates import _ErrorMessage
 from agent_runtime.budgets import (
     BudgetCharger,
     BudgetEnforcer,
+    BudgetEstimate,
     BudgetEstimator,
     BudgetPreflightAllow,
     BudgetPreflightDeny,
     BudgetPreflightWarn,
+    CharHeuristicTokenCounter,
+    LitellmTokenCounter,
+    TokenCounterPort,
 )
 from agent_runtime.api.mcp_discovery_service import McpDiscoveryService
 from agent_runtime.capabilities.citation_resolver import CitationResolver
@@ -174,6 +178,7 @@ class RuntimeRunHandler:
         usage_recorder: UsageRecorder | None = None,
         mcp_discovery_cache: object | None = None,
         user_policies_resolver: UserPoliciesResolver | None = None,
+        token_counter: TokenCounterPort | None = None,
     ) -> None:
         self.persistence: PersistencePort = persistence
         self.event_store: EventStorePort = event_store
@@ -228,6 +233,12 @@ class RuntimeRunHandler:
         self.pricing_catalog = ModelPricingCatalog.from_litellm()
         self.budget_enforcer = BudgetEnforcer(self.persistence)
         self.budget_charger = BudgetCharger(self.persistence)
+        # Pre-run input-token counter for the budget preflight. Defaults to the
+        # litellm counter (offline-configured); tests inject a deterministic fake.
+        # ``CharHeuristicTokenCounter`` is the second tier of the fallback chain
+        # (litellm miss → char/4 → context-window proxy → fail-open Allow).
+        self.token_counter: TokenCounterPort = token_counter or LitellmTokenCounter()
+        self._char_token_counter: TokenCounterPort = CharHeuristicTokenCounter()
         # Default-built from collaborators so production gets the live impl;
         # tests inject ``InMemoryUsageRecorder`` to assert records directly.
         self.usage_recorder: UsageRecorder = usage_recorder or PostgresUsageRecorder(
@@ -597,33 +608,22 @@ class RuntimeRunHandler:
         run: RunRecord,
         command: RuntimeRunCommand,
     ):
-        """Estimate the run's spend and check it against active budgets; fails open on transient errors."""
+        """Estimate the run's spend and check it against active budgets; fails open on transient errors.
+
+        The estimate is built **lazily** and handed to the enforcer, which
+        resolves it only when the tenant has active budgets — so the no-budget
+        hot path (single-user desktop) never reads messages or tokenizes. When
+        budgets exist, the input-token count comes from the REAL first-call
+        messages via ``token_counter`` (litellm, offline). The whole method is
+        the outermost fail-open tier of the fallback chain.
+        """
 
         try:
-            pricing = await self.pricing_catalog.lookup(
-                provider=run.model_provider,
-                model_name=run.model_name,
-                region="global",
-                at=datetime.now(timezone.utc),
-            )
-            model_profile = command.runtime_context.model_profile
-            # Conservative proxy: 4 chars/token × configured input window.
-            # Over-estimating delays a true Deny; it never silently busts a hard cap.
-            # ``max_input_tokens`` and ``max_output_tokens`` are first-class
-            # fields on ``ModelConfig`` — depth-scaled values land here via
-            # ``DepthBudgetTable.apply`` at run-create, so this is the single
-            # read site for the post-mapped output cap.
-            prompt_chars = model_profile.max_input_tokens * 4
-            estimate = BudgetEstimator.estimate(
-                prompt_chars=prompt_chars,
-                max_output_tokens=model_profile.max_output_tokens,
-                pricing=pricing,
-            )
             return await self.budget_enforcer.preflight(
                 org_id=command.org_id,
                 user_id=command.user_id,
                 run_id=command.run_id,
-                estimate=estimate,
+                estimate=lambda: self._build_preflight_estimate(run, command),
             )
         except Exception:
             logging.getLogger(__name__).warning(
@@ -632,6 +632,112 @@ class RuntimeRunHandler:
                 exc_info=True,
             )
             return BudgetPreflightAllow()
+
+    async def _build_preflight_estimate(
+        self,
+        run: RunRecord,
+        command: RuntimeRunCommand,
+    ) -> BudgetEstimate:
+        """Assemble the real first-call messages, count input tokens, and price the run.
+
+        Resolved by the enforcer only when active budgets exist. ``pricing`` may
+        be ``None`` (unpriced model) — the estimator handles that. ``max_output_tokens``
+        is a first-class ``ModelConfig`` field; depth-scaled values land there via
+        ``DepthBudgetTable.apply`` at run-create, so this is the single read site
+        for the post-mapped output cap.
+        """
+
+        pricing = await self.pricing_catalog.lookup(
+            provider=run.model_provider,
+            model_name=run.model_name,
+            region="global",
+            at=datetime.now(timezone.utc),
+        )
+        model_profile = command.runtime_context.model_profile
+        input_tokens = await self._preflight_input_tokens(run, command, model_profile)
+        return BudgetEstimator.estimate(
+            input_tokens=input_tokens,
+            max_output_tokens=model_profile.max_output_tokens,
+            pricing=pricing,
+        )
+
+    async def _preflight_input_tokens(
+        self,
+        run: RunRecord,
+        command: RuntimeRunCommand,
+        model_profile: object,
+    ) -> int:
+        """Count the first model call's input tokens with a defence-in-depth fallback chain.
+
+        ``litellm.token_counter`` (real tokenizer where bundled, offline tiktoken
+        approximation otherwise) → char/4 heuristic over the same assembled text →
+        the model's ``max_input_tokens`` context-window proxy (the pre-slice-3
+        conservative worst-case). Each tier runs only when the prior yields no
+        positive count. A hard failure (message read, etc.) bubbles to the
+        caller's fail-open guard.
+        """
+
+        messages = await self._assemble_base_messages(command, run)
+        # 1. litellm token_counter. Bare ``model_name`` routes to the provider's
+        #    real tokenizer where litellm bundles one (openai/anthropic/gemini)
+        #    and to an offline tiktoken approximation otherwise — always
+        #    token-based, never char/4, and network-free under the guardrail.
+        counted = self._safe_count(self.token_counter, run.model_name, messages)
+        if counted is not None and counted > 0:
+            return counted
+        # 2. char/4 heuristic over the same assembled message text.
+        heuristic = self._safe_count(self._char_token_counter, run.model_name, messages)
+        if heuristic is not None and heuristic > 0:
+            return heuristic
+        # 3. Context-window proxy: the model's full input window. Guarantees a
+        #    positive, over-biased estimate when both counters come up empty.
+        return getattr(model_profile, "max_input_tokens", 1)
+
+    @staticmethod
+    def _safe_count(
+        counter: TokenCounterPort,
+        model: str,
+        messages: Sequence[Mapping[str, str]],
+    ) -> int | None:
+        """Call a token counter, absorbing any error into ``None`` so the chain continues."""
+
+        try:
+            return counter.count(model=model, messages=messages)
+        except Exception:
+            logging.getLogger(__name__).debug(
+                "preflight_token_count_failed", exc_info=True
+            )
+            return None
+
+    async def _assemble_base_messages(
+        self,
+        command: RuntimeRunCommand,
+        run: RunRecord,
+    ) -> list[dict[str, str]]:
+        """Assemble the base first-call message dicts (no prior-tool-context injection).
+
+        The shared core of :meth:`_messages_for_run`: load the conversation
+        history, follow the parent chain to the run's user message, and render
+        each USER/ASSISTANT/SYSTEM message to a ``{role, content}`` dict. The
+        budget preflight reuses this to count the REAL first-call input without
+        paying for the tool-observation index it does not need.
+        """
+
+        records = await self.persistence.list_messages(
+            org_id=command.org_id,
+            conversation_id=command.conversation_id,
+            limit=200,
+        )
+        selected = self._selected_message_chain(records, run.user_message_id)
+        return [
+            {
+                self._Fields.ROLE: message.role.value,
+                self._Fields.CONTENT: self._message_content_for_runtime(message),
+            }
+            for message in selected
+            if message.role
+            in {MessageRole.USER, MessageRole.ASSISTANT, MessageRole.SYSTEM}
+        ]
 
     async def _reject_run_for_budget(
         self,
@@ -760,28 +866,9 @@ class RuntimeRunHandler:
         tool_observation_index: ToolObservationIndex | None = None,
     ) -> tuple[dict[str, str], ...]:
         """Build the message list for the LLM call, optionally injecting prior tool-result context."""
-        records = await self.persistence.list_messages(
-            org_id=command.org_id,
-            conversation_id=command.conversation_id,
-            limit=200,
-        )
-        selected = self._selected_message_chain(records, run.user_message_id)
-        messages = [
-            {
-                self._Fields.ROLE: message.role.value,
-                self._Fields.CONTENT: self._message_content_for_runtime(message),
-            }
-            for message in selected
-            if message.role
-            in {MessageRole.USER, MessageRole.ASSISTANT, MessageRole.SYSTEM}
-        ]
-        observations = (
-            tool_observation_index
-            or await self._tool_observation_index_from_selected(
-                command,
-                run,
-                selected,
-            )
+        messages = await self._assemble_base_messages(command, run)
+        observations = tool_observation_index or await self._tool_observation_index(
+            command, run
         )
         if observations.prompt_context is not None:
             self._insert_prior_tool_context(messages, observations.prompt_context)
