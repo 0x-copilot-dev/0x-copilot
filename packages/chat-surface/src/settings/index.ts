@@ -83,6 +83,16 @@ export {
   type SettingsNavItem as SettingsNavItemModel,
   type SettingsProfileGate,
 } from "./settingsNav";
+// D5 — slug → page ownership SSOT (guards nav-entry-without-a-page and
+// page-without-a-route; enforced at compile time by the exhaustive Record and
+// at runtime by settingsPages.test.ts).
+export {
+  SETTINGS_PAGE_OWNERSHIP,
+  settingsPageOwner,
+  chatSurfaceOwnedSlugs,
+  hostOwnedSlugs,
+  type SettingsPageOwner,
+} from "./settingsPages";
 // === end Phase 5 (PR-5.1) ===
 
 // === Phase 5 (PR-5.2) — settings design primitives (tokenized) ===
@@ -272,6 +282,17 @@ export {
   type WriteApprovalMode,
   type DangerApprovalMode,
 } from "./ApprovalPolicy";
+// D5 — Approval-policy data seam: the Transport-backed port bound to the per-
+// user tool-use policy at /v1/me/policies/tool-use (the store the runtime
+// enforces at run-start, D2). Owns the UI-axis↔wire-kind mapping + defensive
+// clamp; both hosts wire `createToolUsePolicyPort` (web/desktop lockstep).
+export {
+  createToolUsePolicyPort,
+  approvalPolicyFromResponse,
+  toolUsePolicyRequestFromValue,
+  DEFAULT_APPROVAL_POLICY,
+  type ApprovalPolicyPort,
+} from "./data/toolUsePolicy";
 // === end Phase 5 (PR-5.6) ===
 
 // === Phase 5 (PR-5.9) — Advanced group (Key storage & app lock · Developer

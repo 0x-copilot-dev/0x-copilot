@@ -5,10 +5,8 @@ import type {
   LinkWalletResult,
   NotificationPreferencesResponse,
   PrivacySettingsResponse,
-  ToolUsePolicyResponse,
   UpdateNotificationPreferencesRequest,
   UpdatePrivacySettingsRequest,
-  UpdateToolUsePolicyRequest,
   UpdateUserPreferencesRequest,
   UpdateUserProfileRequest,
   UserPreferences,
@@ -97,21 +95,6 @@ export function updateMyPreferences(
   patch: UpdateUserPreferencesRequest,
 ): Promise<UserPreferences> {
   return httpJson<UserPreferences>("PUT", "/v1/me/preferences", patch);
-}
-
-// PR B1 / 8.0.3d — tool-use policy (per-user override).
-export function getMyToolUsePolicy(): Promise<ToolUsePolicyResponse> {
-  return httpJson<ToolUsePolicyResponse>("GET", "/v1/me/policies/tool-use");
-}
-
-export function updateMyToolUsePolicy(
-  patch: UpdateToolUsePolicyRequest,
-): Promise<ToolUsePolicyResponse> {
-  return httpJson<ToolUsePolicyResponse>(
-    "PUT",
-    "/v1/me/policies/tool-use",
-    patch,
-  );
 }
 
 // PR B2 / 8.0.3f — privacy & data settings (per-user override).
