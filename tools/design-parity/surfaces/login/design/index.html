@@ -3,18 +3,18 @@
   <head>
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
-    <title>design-parity · first-run · DESIGN baseline</title>
+    <title>design-parity · login · DESIGN baseline</title>
     <link rel="preconnect" href="https://fonts.googleapis.com" />
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
     <link
       href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;500;700&display=swap"
       rel="stylesheet"
     />
-    <!-- Shared design tokens/base (design-kit) + this surface's fr-* stylesheet,
-         vendored from Claude Design project 73f810d9. Served from the
-         tools/design-parity root so ../../design-kit resolves. -->
+    <!-- Login styling lives entirely in the shared design-kit copilot.css
+         (.login-* / .mrow / .empty / .sig-* / .cbtn / .backlink / .mw). Served
+         from the tools/design-parity root so ../../../design-kit resolves.
+         Render a specific state with ?state=pick|wallets|connecting|werr|sign|google|gerr|done. -->
     <link rel="stylesheet" href="../../../design-kit/copilot.css" />
-    <link rel="stylesheet" href="copilot-firstrun.css" />
   </head>
   <body>
     <div id="app-root"></div>
@@ -32,9 +32,9 @@
       crossorigin="anonymous"
     ></script>
 
-    <!-- Shared kit stubs first (Icon/Mark/useTweaks globals), then the real
-         design component, which self-mounts into #app-root. -->
+    <!-- Shared kit stubs first (Icon/Mark globals), then the real design
+         component, which self-mounts into #app-root. -->
     <script type="text/babel" src="../../../design-kit/stubs.js"></script>
-    <script type="text/babel" src="copilot-firstrun.jsx"></script>
+    <script type="text/babel" src="copilot-login.jsx"></script>
   </body>
 </html>

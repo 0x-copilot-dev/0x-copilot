@@ -35,11 +35,14 @@ names for the same element, so alignment is a hand-authored `{label, design, liv
 
 ### 1. Get the design baseline (once per surface)
 
-Vendor the design source with the `DesignSync` tool (`get_file`) into
-`surfaces/<name>/design/`: the component `.jsx`, its `.css`, and the token/base CSS
-(`copilot.css`). Build a self-contained `index.html` that links those + React/Babel
-UMD from CDN + minimal `stubs.js` for any design-kit globals (Icon/Mark/useTweaks…).
-Drive states via a `?state=` query param. (See `surfaces/first-run/design/`.)
+Vendor the surface's design source with the `DesignSync` tool (`get_file`) into
+`surfaces/<name>/design/`: the component `.jsx` and any surface-specific `.css`. The
+shared tokens/base (`design-kit/copilot.css`) + kit stubs (`design-kit/stubs.js`)
+already exist — link them with `../../../design-kit/…`. Build a self-contained
+`index.html` (shared kit + surface css + React/Babel UMD from CDN + the `.jsx`) that
+renders states via a `?state=` query param. See `surfaces/first-run/design/` (stub
+`useTweaks` drives state) or `surfaces/login/design/` (a `?state=`-seeded initial
+view). Refresh shared source via `design-kit/REFRESH.md`.
 
 ### 2. Render the live surface
 
@@ -55,11 +58,14 @@ node_modules/.bin/vitest run --config tools/design-parity/vitest.config.mjs
 
 ### 3. Extract computed styles (both sides)
 
-Serve each side over HTTP (Babel loads `src=` via XHR — `file://` won't work):
+Serve the **design-parity root** over HTTP (Babel loads `src=` via XHR — `file://`
+won't work; the design harness links `../../../design-kit`, so serve from the root,
+not the surface dir):
 
 ```bash
-cd tools/design-parity/surfaces/<name>/design && python3 -m http.server 8099   # design
-cd tools/design-parity/surfaces/<name>/live   && python3 -m http.server 8098   # live
+cd tools/design-parity && python3 -m http.server 8099
+# design: http://127.0.0.1:8099/surfaces/<name>/design/index.html[?state=…]
+# live:   http://127.0.0.1:8099/surfaces/<name>/live/<state>.html
 ```
 
 Open each in a browser (the in-app **Browser** tool, or Playwright/DevTools), then run
@@ -97,7 +103,7 @@ Tune thresholds/weights in `classify()`.
 
 ## Add a new surface
 
-1. `DesignSync get_file` the mock's jsx/css/tokens → `surfaces/<name>/design/`, build `index.html` + `stubs.js`.
+1. `DesignSync get_file` the mock's jsx (+ any surface-specific css) → `surfaces/<name>/design/`, build `index.html` linking `../../../design-kit/copilot.css` + `../../../design-kit/stubs.js` (shared). Refresh shared tokens via `design-kit/REFRESH.md`.
 2. Add a render block to `lib/render-live.test.tsx` (or a new test) that mounts the live component with fake ports and writes `surfaces/<name>/live/<state>.html`.
 3. Author `surfaces/<name>/anchors.json` — the `{label, design, live}` map (+ `expectDivergence` for known-good deltas). Tip: render the live side first, outline its DOM/classes, then write the live selectors.
 4. Run steps 3–4 above.
@@ -123,3 +129,8 @@ Tune thresholds/weights in `classify()`.
   extended (composer needs the vendored `copilot-v3.css` `.cmp`/`.pop` rules; ack needs
   a click-through to `sent`), and (b) the live harness to render those states (drive
   with `@testing-library` `fireEvent`, or pass `initialStage`), then extend `anchors.json`.
+- **login**: the design baseline is vendored and all 8 states render via `?state=`
+  (`pick`/`wallets`/`connecting`/`werr`/`sign`/`google`/`gerr`/`done`). TODO: the LIVE
+  render (`apps/frontend` `LoginScreen` + `WalletSignIn` — needs the auth-provider
+  context faked) + `anchors.json` + a report. High value: the `connecting`/`werr`/
+  `gerr` states are the low-fidelity waiting/error screens flagged in earlier review.
