@@ -137,6 +137,41 @@ describe("HashRouter", () => {
     }
   });
 
+  describe("conversation runId deep-link (§D1)", () => {
+    it("round-trips a conversation route with a runId", () => {
+      const route: ArtifactRoute = {
+        kind: "conversation",
+        conversationId: "conv-1",
+        runId: "run-9",
+      };
+      setHash("#/convo/conv-1/run-9");
+      router = new HashRouter();
+      expect(router.current()).toEqual(route);
+
+      router.dispose();
+      setHash("");
+      router = new HashRouter({ initialRoute: route });
+      expect(globalThis.window.location.hash).toBe("#/convo/conv-1/run-9");
+      expect(router.current()).toEqual(route);
+    });
+
+    it("decodes a bare conversation hash without a runId (back-compat)", () => {
+      setHash("#/convo/conv-1");
+      router = new HashRouter();
+      const current = router.current();
+      expect(current).toEqual({
+        kind: "conversation",
+        conversationId: "conv-1",
+      });
+      // runId is absent (undefined), not null/empty — old hashes are unaffected.
+      expect(
+        current !== null && current.kind === "conversation"
+          ? current.runId
+          : "unreachable",
+      ).toBeUndefined();
+    });
+  });
+
   describe("navigate", () => {
     it("writes the hash", () => {
       router = new HashRouter();

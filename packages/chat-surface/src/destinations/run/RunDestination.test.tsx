@@ -1,8 +1,9 @@
 // RunDestination — cockpit-shell composition tests (PR-3.5).
 //
 // The shell is exercised through the same port fakes the pieces use: a
-// Transport that resolves the run list + captures SSE subscriptions, and a
-// Map-backed KeyValueStore for the Studio/Focus mode. The assertions cover the
+// Transport that resolves the conversation head (`latest_run_id`) + captures SSE
+// subscriptions, and a Map-backed KeyValueStore for the Studio/Focus mode. The
+// assertions cover the
 // PR-3.5 contract: header (kicker + goal) + ThreadCanvas render from the session,
 // the header segmented control toggles + persists the mode, and a stream error
 // surfaces a non-blocking Retry banner (FR-3.32) without unmounting the canvas.
@@ -18,7 +19,7 @@ import {
 import { type ReactElement } from "react";
 import { describe, expect, it, vi } from "vitest";
 
-import type { ConversationId } from "@0x-copilot/api-types";
+import type { ConversationId, RunId } from "@0x-copilot/api-types";
 import type {
   Session,
   SseSubscribeOptions,
@@ -159,8 +160,17 @@ function renderRun(
   return render(ui);
 }
 
+// A conversation-head projection whose current (live) run is run-1
+// (desktop-run-identity §D2). The cockpit resolves the run from the head field
+// `latest_run_id`; `runs`/`goal` are carried for readability but are IGNORED by
+// the source — `session.runs` stays empty and the header derives "Untitled run"
+// until the runs-list endpoint lands (Phase 6).
 function runningRun(goal: string) {
-  return { runs: [{ run_id: "run-1", status: "running", goal }] };
+  return {
+    latest_run_id: "run-1",
+    latest_run_id_any_status: "run-1",
+    runs: [{ run_id: "run-1", status: "running", goal }],
+  };
 }
 
 /**
@@ -217,9 +227,12 @@ describe("RunDestination — shell composition", () => {
     expect(screen.getByTestId("run-header-kicker").textContent).toBe(
       "ACTIVE RUN",
     );
+    // The head field carries only a run id (no goal), so a head-resolved run
+    // shows the honest generic title — never idle STANDBY. The run's real goal
+    // arrives with the runs-list in Phase 6.
     await waitFor(() =>
       expect(screen.getByTestId("run-header-goal").textContent).toBe(
-        "Ship the renewal batch",
+        "Untitled run",
       ),
     );
     // The resolved run binds the session's SSE tail (canonical event source).
@@ -776,7 +789,13 @@ describe("RunDestination — approvals (PR-3.10 / FR-3.21/3.22)", () => {
 // run the shell mounts the run selector (FR-3.26); picking a run rebinds the
 // session's SSE tail without remounting the ThreadCanvas.
 
+// A conversation head whose current (live) run is run-a. `runs` is carried for
+// readability only — the source binds run-a from `latest_run_id` and keeps
+// `session.runs` empty this phase (the runs-list + RunMultiSelect data source
+// lands in Phase 6).
 const TWO_RUNS = {
+  latest_run_id: "run-a",
+  latest_run_id_any_status: "run-a",
   runs: [
     {
       run_id: "run-a",
@@ -1131,44 +1150,60 @@ describe("RunDestination — empty/idle + multi-run (PR-3.11 / FR-3.25/3.26)", (
     );
   });
 
-  it("mounts the multi-run selector for >1 run and auto-binds the live run (FR-3.26)", async () => {
+  it("auto-binds the conversation's head (live) run; the multi-run selector stays empty until the runs-list lands (Phase 6)", async () => {
     const transport = new FakeTransport();
     transport.requestHandler = async (req) =>
       req.path.includes("/messages") ? { messages: [] } : TWO_RUNS;
     renderRun(transport, makeStore());
 
-    // Two runs → the selector mounts; the live (running) run auto-binds.
-    await screen.findByTestId("run-multi-select");
-    expect(screen.getByTestId("run-select-run-a")).not.toBeNull();
-    expect(screen.getByTestId("run-select-run-b")).not.toBeNull();
-    expect(
-      screen.getByTestId("run-select-run-a").getAttribute("aria-selected"),
-    ).toBe("true");
+    // The head resolves the live run (run-a); the live cockpit renders (not the
+    // empty composer) and binds run-a's SSE tail.
+    await screen.findByTestId("thread-canvas");
     await waitFor(() =>
       expect(transport.sessionSub?.path).toBe("/v1/agent/runs/run-a/stream"),
     );
-    // The live layout renders (not the empty composer).
-    expect(screen.getByTestId("thread-canvas")).not.toBeNull();
     expect(screen.queryByTestId("run-empty-state")).toBeNull();
+    // `session.runs` stays empty this phase (the runs-list + RunMultiSelect data
+    // source lands in Phase 6), so the selector renders NO chrome yet — even
+    // though the conversation actually has more than one run.
+    expect(screen.queryByTestId("run-multi-select")).toBeNull();
   });
 
-  it("selecting another run rebinds the session's SSE tail without remounting the canvas", async () => {
+  it("rebinds the session's SSE tail to another run via the runId seam without remounting the canvas (FR-3.26)", async () => {
+    // The runs-list-backed RunMultiSelect UI is inert this phase (session.runs is
+    // empty), so multi-run selection is exercised through the ONE `boundRunId`
+    // sink directly — here the `runId` deep-link seam, the same setter
+    // `selectRun`/`bindRun`/head all funnel through (§D3). This protects the
+    // shell-level invariant: rebinding the active run rebinds the stream WITHOUT
+    // remounting the ThreadCanvas.
     const transport = new FakeTransport();
     transport.requestHandler = async (req) =>
-      req.path.includes("/messages") ? { messages: [] } : TWO_RUNS;
-    renderRun(transport, makeStore());
+      req.path.includes("/messages") ? { messages: [] } : { runs: [] };
+    const store = makeStore();
 
-    await screen.findByTestId("run-multi-select");
+    const view = render(
+      <TransportProvider transport={transport}>
+        <KeyValueStoreProvider store={store}>
+          <RunDestination conversationId={CONV} runId={"run-a" as RunId} />
+        </KeyValueStoreProvider>
+      </TransportProvider>,
+    );
+
+    await screen.findByTestId("thread-canvas");
     await waitFor(() =>
       expect(transport.sessionSub?.path).toBe("/v1/agent/runs/run-a/stream"),
     );
     const canvasBefore = screen.getByTestId("thread-canvas");
     const runASub = transport.sessionSub;
 
-    // Pick the other run.
-    act(() => {
-      fireEvent.click(screen.getByTestId("run-select-run-b"));
-    });
+    // Rebind to another run through the runId seam.
+    view.rerender(
+      <TransportProvider transport={transport}>
+        <KeyValueStoreProvider store={store}>
+          <RunDestination conversationId={CONV} runId={"run-b" as RunId} />
+        </KeyValueStoreProvider>
+      </TransportProvider>,
+    );
 
     // The session rebinds to run-b's stream (a fresh sub; run-a's is closed)…
     await waitFor(() =>
@@ -1177,9 +1212,6 @@ describe("RunDestination — empty/idle + multi-run (PR-3.11 / FR-3.25/3.26)", (
     expect(runASub?.closed).toBe(true);
     // …and the ThreadCanvas is the SAME node — no gratuitous cockpit remount.
     expect(screen.getByTestId("thread-canvas")).toBe(canvasBefore);
-    expect(
-      screen.getByTestId("run-select-run-b").getAttribute("aria-selected"),
-    ).toBe("true");
   });
 
   it("shows no multi-run selector for a single run", async () => {
