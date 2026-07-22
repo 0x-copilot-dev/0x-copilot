@@ -61,6 +61,14 @@ export interface RunRouteProps {
    */
   readonly conversationId?: ConversationId | null;
   /**
+   * WC-P2 — called once the lazy ensure-conversation-on-run mints a NEW
+   * conversation (a first send from a fresh chat). The host promotes the URL
+   * from `/` to `/run/<conversationId>` so a refresh / back / share targets the
+   * same thread. Host-owned because the URL is substrate (App owns the router);
+   * the cockpit keeps binding from its own `conversationId` state either way.
+   */
+  readonly onConversationCreated?: (conversationId: ConversationId) => void;
+  /**
    * Open Settings → Provider keys. Threaded to the cockpit's empty-state
    * composer for the "Set up your model" CTA and the `configuration_error`
    * "Add a provider key" CTA. Host-owned so the substrate-agnostic package
@@ -73,6 +81,7 @@ export interface RunRouteProps {
 
 export function RunRoute({
   conversationId: propConversationId = null,
+  onConversationCreated,
   onOpenModelSettings,
   identity,
 }: RunRouteProps): ReactElement {
@@ -177,11 +186,16 @@ export function RunRoute({
       });
       const createdId = run.conversation_id;
       if (typeof createdId === "string" && createdId !== "") {
+        // Bind locally (immediate re-key, works even without a host callback)
+        // AND notify the host so it promotes the URL to /run/<id> (WC-P2). The
+        // URL round-trip feeds propConversationId back as the same id, so the
+        // reopen effect no-ops — no double remount.
         setConversationId(createdId as ConversationId);
+        onConversationCreated?.(createdId as ConversationId);
       }
       return run.run_id ?? null;
     },
-    [transport, conversationId],
+    [transport, conversationId, onConversationCreated],
   );
 
   // Empty-state composer (FR-3.25): the design's "What should we run first?"

@@ -11,9 +11,16 @@
 // substrate-boundary eslint rules are off — importing the chat-transport port
 // types + registry helpers for setup is intentional and sanctioned.
 
-import { act, render, screen, waitFor, within } from "@testing-library/react";
+import {
+  act,
+  fireEvent,
+  render,
+  screen,
+  waitFor,
+  within,
+} from "@testing-library/react";
 import type { ReactElement } from "react";
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import {
   KeyValueStoreProvider,
@@ -156,6 +163,7 @@ function makeStore() {
 function renderRoute(
   transport: Transport,
   conversationId?: string,
+  onConversationCreated?: (id: ConversationId) => void,
 ): ReturnType<typeof render> {
   const ui: ReactElement = (
     <TransportProvider transport={transport}>
@@ -167,6 +175,7 @@ function renderRoute(
               ? null
               : (conversationId as ConversationId)
           }
+          onConversationCreated={onConversationCreated}
         />
       </KeyValueStoreProvider>
     </TransportProvider>
@@ -299,5 +308,77 @@ describe("RunRoute (PRD-05)", () => {
         (r) => r.method === "POST" && r.path === "/v1/agent/conversations",
       ),
     ).toBe(false);
+  });
+
+  // WC-P2 (AD-10): a new chat has no conversation until the first send mints one
+  // (ensure-conversation-on-run). The host must be told the created id so it can
+  // promote the URL from `/` to `/run/<id>` (reopen / refresh / share target it).
+  it("calls onConversationCreated when a new chat's first send mints a conversation", async () => {
+    const transport = new FakeTransport();
+    transport.requestHandler = async (req) => {
+      if (req.path === "/v1/settings/provider-keys") {
+        return { keys: [{ id: "k1" }] }; // configured → modelReady stays true
+      }
+      if (req.path === "/v1/agent/models") {
+        return {
+          models: [
+            {
+              id: "gpt-5.4",
+              provider: "openai",
+              model_name: "gpt-5.4",
+              name: "GPT-5.4",
+              configured: true,
+              supports_streaming: true,
+            },
+          ],
+        };
+      }
+      if (req.path.includes("/messages")) return { messages: [] };
+      // Ensure-conversation-on-run: the first send POSTs a run with NO
+      // conversation_id + an idempotency key; the server mints + returns both.
+      // (Checked BEFORE the runs-list GET — both paths end with "/runs".)
+      if (req.method === "POST" && req.path === "/v1/agent/runs") {
+        return { run_id: "run-new", conversation_id: "conv-new" };
+      }
+      if (req.path.endsWith("/runs")) return { runs: [] };
+      return {}; // head GET → no active run → empty composer
+    };
+    const onConversationCreated = vi.fn();
+
+    // New chat — no conversationId prop (the `/` entry, not `/run/<id>`).
+    const { container } = renderRoute(
+      transport,
+      undefined,
+      onConversationCreated,
+    );
+
+    await screen.findByTestId("first-run-composer-h1");
+    const input = container.querySelector<HTMLTextAreaElement>(
+      "[data-testid='composer-textarea']",
+    );
+    expect(input).not.toBeNull();
+    fireEvent.change(input as HTMLTextAreaElement, {
+      target: { value: "Ship the renewal batch" },
+    });
+    fireEvent.click(
+      container.querySelector(
+        "button[aria-label='Send message']",
+      ) as HTMLButtonElement,
+    );
+
+    // The first send POSTed a run with no conversation_id + an idempotency key…
+    await waitFor(() => {
+      const post = transport.requests.find(
+        (r) => r.method === "POST" && r.path === "/v1/agent/runs",
+      );
+      expect(post).toBeDefined();
+      const body = post?.body as Record<string, unknown> | undefined;
+      expect(body?.conversation_id).toBeUndefined();
+      expect(body?.conversation_idempotency_key).toBeDefined();
+    });
+    // …and the host was notified with the created id so App can promote the URL.
+    await waitFor(() =>
+      expect(onConversationCreated).toHaveBeenCalledWith("conv-new"),
+    );
   });
 });

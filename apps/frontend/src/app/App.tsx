@@ -1,5 +1,5 @@
 import { ThemeProvider } from "@0x-copilot/design-system";
-import type { McpServer } from "@0x-copilot/api-types";
+import type { ConversationId, McpServer } from "@0x-copilot/api-types";
 import type { ReactElement } from "react";
 import { Suspense, lazy, useEffect, useMemo, useState } from "react";
 import "@0x-copilot/design-system/styles.css";
@@ -811,8 +811,32 @@ export function CopilotApp({
   // that specific thread inside the cockpit is a Phase-3 Run-screen concern —
   // `ChatScreen` opens its most-recent thread today; threading the id through
   // is a one-line follow-up once the cockpit accepts an initial conversation.
-  const openRun = (_idOrRunId?: string): void => {
-    router.navigate({ screen: "chat", destination: "run" });
+  // WC-P2 (AD-10) — conversation-identity nav for the Run cockpit. The `run`
+  // destination is the root, so a bound conversation lives at `/run/<id>` (via
+  // the subPath slot) while a fresh new run stays at `/`. App owns the URL (the
+  // router is substrate); the cockpit binds from the `conversationId` it is
+  // handed. `openConversation` targets a specific thread (reopen / created);
+  // `openNewRun` starts a blank one. Mirrors the desktop outlet's
+  // openConversation/openNewRun (apps/desktop/renderer/bootstrap.tsx).
+  const openConversation = (conversationId: string): void => {
+    router.navigate({
+      screen: "chat",
+      destination: "run",
+      subPath: conversationId,
+    });
+  };
+  const openNewRun = (): void => {
+    router.navigate({ screen: "chat", destination: "run", subPath: null });
+  };
+  // Reopen (Chats) / project-chat (Projects) / live-run (Activity) / skill-run
+  // (Skills) all pass a conversationId → open that thread; the id-less ⌘K
+  // new-chat starts a blank run (AD-10: openRun(id) → openConversation).
+  const openRun = (idOrRunId?: string): void => {
+    if (idOrRunId !== undefined && idOrRunId !== "") {
+      openConversation(idOrRunId);
+    } else {
+      openNewRun();
+    }
   };
   // Activity's retention/export/delete link → Settings → Privacy & data
   // (FR-4.17).
@@ -992,7 +1016,15 @@ export function CopilotApp({
     // `run` is full-bleed in ChatShell (no ContextPanel / Topbar); `/` maps to
     // `run` (ROOT_DESTINATION), so the legacy `/` bookmark keeps working.
     body = runCockpitWebEnabled ? (
-      <RunRoute onOpenModelSettings={openModelSettings} identity={identity} />
+      // WC-P2: the run destination's subPath IS the bound conversation id
+      // (`/run/<id>`); null for a fresh new run (`/`). `onConversationCreated`
+      // promotes the URL once a first send mints the conversation.
+      <RunRoute
+        conversationId={(route.subPath ?? null) as ConversationId | null}
+        onConversationCreated={openConversation}
+        onOpenModelSettings={openModelSettings}
+        identity={identity}
+      />
     ) : (
       <ChatScreen
         connectors={connectors}
