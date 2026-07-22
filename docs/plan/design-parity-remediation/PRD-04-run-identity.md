@@ -38,7 +38,8 @@ Every row below was opened and read in this worktree (branch `claude/design-pari
 | **DISPUTED (partly)** — brief calls `App.tsx:266-273` a "rival hardcoded-label Project resolver". It is a _dead_ rival. | `apps/frontend/src/app/App.tsx:266-273` vs `packages/chat-surface/src/destinations/projects/index.ts:166-172` and `packages/chat-surface/src/index.ts:550` | The barrel re-exports `./destinations/projects`, so its registration (label = `getCachedProjectName(id) ?? "Project"`) runs at import, before `App.tsx`'s guard. `hasItemRefResolver("project")` is already true → the App.tsx body **never executes**. Same for `apps/frontend/src/features/projects/ProjectsRoute.tsx:104-110` (`library_file`, shadowed by `destinations/library/index.ts:91`). The smell is real; the _shadowing_ runs the other way. Both blocks are unreachable code to delete. |
 | `ItemLink` overrides the row's title typography with link styling                                                       | `packages/chat-surface/src/refs/ItemLink.tsx:68-76`, `:181`, `:189`                                                                                        | `linkStyle` sets `color: var(--color-accent, #d97757)` and `fontSize: var(--font-size-sm, 13px)` on the `<a>`, inside a `Row` title span that the design specifies as 12.5px / 500 / `--color-text`.                                                                                                                                                                                                                                                                                                  |
 | The parity report never measured this, because no anchor binds a done-row title                                         | `tools/design-parity/surfaces/activity/anchors.json` (full anchor list)                                                                                    | Anchors exist for `row.live.name` but there is **no** `row.done.name`. The 7 broken titles are literally unmeasured by `out/report-default.md`.                                                                                                                                                                                                                                                                                                                                                       |
-| The measured title anchor is off-spec on weight                                                                         | `tools/design-parity/surfaces/activity/out/report-default.md:64` and `packages/chat-surface/src/destinations/_shared/Row.tsx:96-104`                       | MEDIUM row: `row.live.name fontWeight 500 → 600`. `titleStyle` uses `var(--font-weight-semibold)` (= 600, `packages/design-system/src/styles.css:75`) where the design says 500.                                                                                                                                                                                                                                                                                                                      |
+| The measured title anchor is off-spec on weight — **PRD-08 owns the fix** (C9)                                          | `tools/design-parity/surfaces/activity/out/report-default.md:63` and `packages/chat-surface/src/destinations/_shared/Row.tsx:96-104`                       | MEDIUM row: `row.live.name fontWeight 500 → 600` (re-verified on the regenerated report — the row moved from `:64` to `:63`). `titleStyle` uses `var(--font-weight-semibold)` (= 600, `packages/design-system/src/styles.css:75`) where the design says 500. **PRD-08 owns `_shared/Row.tsx` for the whole program (README C9) and has already absorbed this line** (PRD-08 Evidence `:84`, Scope `:560-563`). Recorded here only as the reason the new `row.done.name` anchor is worth adding.       |
+| The accent-link colour is one line with app-wide blast radius (README G11)                                              | `packages/chat-surface/src/refs/ItemLink.tsx:72`, `:75`, `:82`, `:84`; `tools/design-parity/surfaces/projects/out/AUDIT.md:492-505` (R9)                   | CONFIRMED by opening both. `linkStyle` sets `color: var(--color-accent, #d97757)` (`:72`) and `fontSize: var(--font-size-sm, 13px)` (`:75`); `deletedStyle` repeats both (`:82`, `:84`). Projects AUDIT calls `:72` "the widest-blast-radius single line in this audit" — every destination rendering an `ItemLink` inherits it, incl. the desktop project-card name, which the design paints 14px/600 `--tx` (`copilot-app.jsx:406-412`, quoted at `AUDIT.md:178`).                                  |
 | Web `ItemLink` navigation cannot work at all                                                                            | `apps/frontend/src/app/App.tsx:1200-1202`, `apps/frontend/src/app/routes.ts:29-70`, `apps/frontend/src/app/HashRouter.ts:204-262`                          | `ChatShell` receives the web `HashRouter`, whose union `AppRoute` is `{screen:…}`-tagged and has **no** `run`/`workspace` member. `ItemLink` calls `router.navigate({kind:"run", runId})`; `pathForRoute` matches no `route.screen` branch and falls through to `return { path: "/settings", hash: route.section === DEFAULT_SETTINGS_SECTION ? "" : "#"+route.section }` → `/settings#undefined`.                                                                                                    |
 | Desktop `ItemLink` navigation is a URL-only no-op                                                                       | `apps/desktop/renderer/bootstrap.tsx:105-115`, `:222-236`                                                                                                  | `conversationIdFromRoute` returns non-null only for `kind === "conversation" \|\| "chat"`; the router subscription binds/switches destination only for those two kinds. A `{kind:"run"}` navigate serializes to `run://<id>` (`packages/chat-surface/src/routing/HashRouter.ts:173`) and changes nothing on screen.                                                                                                                                                                                   |
 | The _running_ row's working handler deep-links the wrong id on web                                                      | `ActivityDestination.tsx:542-545`, `apps/frontend/src/app/App.tsx:821-840`                                                                                 | `onOpenRun(row.run_id)` → `openRun(idOrRunId)` → `openConversation(idOrRunId)` → `/run/<runId>`. The cockpit binds by conversation id.                                                                                                                                                                                                                                                                                                                                                                |
@@ -85,13 +86,22 @@ equivalents already exist and are exact: `--font-size-xs: 0.78rem` (**12.5px**,
 Three intents follow, and they are all violated today:
 
 1. **The title is text, not a link.** There is no anchor, no accent colour, no
-   `text-decoration`, nothing at 13px. `--color-accent` (`#5fb2ec` default,
-   `styles.css:180`) never appears on a row name in the design.
+   `text-decoration`, nothing at 13px. `--color-accent` (`#5fb2ec` default, verified at
+   `packages/design-system/src/styles.css:180`) never appears on a row name in the design.
+   The design's accent (`--accent: var(--sky)` = `#5fb2ec`, `copilot.css:20`, `:26`) is
+   spent on **state**, not on entity names: the sky status chip (`.chip--sky`,
+   `copilot.css:595-597`), a streaming step (`.srow .st.stream`, `:913-914`), a pending
+   plan-step icon (`:1205-1206`), the active settings-nav icon (`:1810-1811`). The one
+   blanket rule — `a { color: var(--accent) }` (`copilot.css:127-129`) — never fires on a
+   list row, because the design's rows are `<button className="lrow">`, not anchors.
 2. **The row is the click target** (`.lrow { cursor: pointer }`, `copilot.css:1594`;
    `.lrow:hover { background: var(--panel2) }`, `:1601`). Navigation is a row affordance,
    not a word-sized hit area inside it.
 3. **Weight is 500**, not 600. The parity report's `row.live.name fontWeight 500 → 600`
-   (`report-default.md:64`) is the same rule measured on the one row we render correctly.
+   (`report-default.md:63`) is the same rule measured on the one row we render correctly.
+   **PRD-08 lands that change** — it owns `_shared/Row.tsx` for the program (README C9).
+   This PRD's job at the same anchor is narrower and upstream of it: stop `ItemLink` from
+   overriding whatever weight/size/colour `Row` sets.
 
 The design's done rows are inert (`isLive ? navigate(…) : null`) only because the mock has
 no run-detail surface. The product has one, so this PRD makes every row activate — that is
@@ -172,6 +182,31 @@ the web host (adds a translation layer whose only job is to hide that the two un
 disagree); making the web `HashRouter` accept `ArtifactRoute` (widens the host union with
 routes the web app has no screens for).
 
+### The accent-link policy — stated once, here (README G11)
+
+README G11 assigns the app-wide accent-link policy to this PRD because this PRD owns
+`refs/ItemLink.tsx`. It is stated here so no sibling PRD has to re-decide it:
+
+> **An `ItemRef` link declares no colour and no font-size.** `ItemLink` renders a bare
+> `<a>`/`<span>` that inherits `color`, `font-size` and `font-weight` from whatever slot
+> it sits in — `Row`'s `titleStyle`, a card name, a cell. Accent is reserved for the
+> affordances the design spends it on (status chips, live/streaming indicators, active
+> nav) and is never applied to an entity name.
+
+Concretely: `linkStyle` loses `color` (`ItemLink.tsx:72`) and `fontSize` (`:75`);
+`deletedStyle` loses both (`:82`, `:84`); nothing replaces them. This is deliberately
+**not** a new `.ui-link` recipe — `packages/design-system/src/styles.css` has no `.ui-*`
+link recipe today (only `.ui-link-button`, a CTA, at `:411`/`:463`), and minting one
+would re-introduce the exact override this PRD deletes. Inheritance is the recipe.
+
+Two adjacent items from the same audit findings stay with their owners and are **not**
+in this PRD's scope: the `.ui-backlink` recipe promoted from `.loginx-back` (verified at
+`apps/frontend/src/styles.css:9043-9062`; Projects `AUDIT.md:492-505`, R9's
+back-affordance half) belongs to **PRD-10**, which owns
+`_shared/BackLink`; and the inline-`CSSProperties` hover chrome on project cards and chat
+rows (`AUDIT.md:507-517`, R10 — `ProjectsDestination.tsx:376,456-458`) belongs to
+**PRD-10**, with the shared row-hover recipe `.ui-list-row` owned by **PRD-08**.
+
 ### Seam C — an Activity row addresses a conversation
 
 `ActivityRunRow` gains `readonly conversation_id: ConversationId`
@@ -184,6 +219,13 @@ The duplicated projection is hoisted to
 wire→view-model projections already live in the destination). Both hosts import it. That
 is what guarantees the new field is stamped identically on both, instead of being added
 twice and drifting.
+
+**This PRD owns that module for the program (README C7).** PRD-03 originally proposed it
+at `src/projections/activity.ts` and has dropped it (PRD-03 `:130`, `:248`, `:274`);
+PRD-08's four references to a "PRD-06 shared Activity projection" have been retargeted
+here (README C7/C21, PRD-08 `:208-209`, `:627`, `:666-669`). PRD-08 later supplies the
+real meta strings from `destinations/activity/meta.ts` **through** this projector — it
+adds a consumer, it does not fork the module.
 
 `onOpenRun` widens to `(target: { conversationId: ConversationId; runId: RunId }) => void`
 and fires for **every** row (`ActivityDestination.tsx:542-545`), matching the design's
@@ -201,6 +243,13 @@ No route, table, column, index, or authorization rule changes. `ActivityRunRow` 
 projected client-side from `GET /v1/agent/conversations` + `GET /v1/audit`; both fields
 already cross the wire.
 
+**Migration ids: none consumed.** This PRD claims no id from the program's pre-assigned
+table (README C18). High-water marks re-verified on disk in this worktree:
+`services/backend/migrations` highest is `0045_provider_api_keys_custom_endpoint.sql`,
+`services/ai-backend/migrations` contains only `0001_runtime_baseline.sql`. This PRD adds
+no `.sql` file and therefore does not touch either `MANIFEST.lock`, so
+`tools/check_migration_manifest.py` is unaffected by it.
+
 ## Scope
 
 **`packages/api-types`**
@@ -211,14 +260,14 @@ already cross the wire.
 **`packages/chat-surface`**
 
 - `src/refs/registry.ts` — delete `label` from `ItemRefResolved`; replace the async resolver API with the sync `registerItemRoute` / `resolveItemRoute` / `hasItemRoute` / `unregisterItemRoute` / `__resetItemRouteRegistryForTests`; keep the `AlreadyRegistered` / `NotRegistered` error classes.
-- `src/refs/ItemLink.tsx` — required `label`; drop `deletedLabel`, the effect, the skeleton and the error state; unregistered kind → plain `<span>`; remove `linkStyle`'s `fontSize` and `color` overrides so the title inherits `Row`'s typography.
+- `src/refs/ItemLink.tsx` — required `label`; drop `deletedLabel`, the effect (`:99`), the skeleton (`:135`) and the error state; unregistered kind → plain `<span>`; **apply the accent-link policy app-wide** — delete `linkStyle`'s `color` (`:72`) and `fontSize` (`:75`) and `deletedStyle`'s `color` (`:82`) and `fontSize` (`:84`), so every `ItemLink` on every destination inherits its container's typography (README G11). No replacement recipe is minted.
 - `src/refs/ItemLink.test.tsx`, `src/refs/index.ts`, `src/index.ts` — export surface + tests follow the rename.
 - `src/destinations/{home,inbox,tools,memory,projects,library,routines,team,todos}/index.ts` — delete the 11 `registerItemRefResolver` blocks (this is where `label: "Run"` dies).
 - `src/destinations/activity/ActivityDestination.tsx` — plain-text title for all rows; `onOpenRun` signature; every row activates; drop the `ItemLink` import.
 - `src/destinations/activity/activityProjection.ts` **(new)** — hoisted `buildMetaIndex` + `projectActivityRows`, stamping `conversation_id`.
 - `src/destinations/activity/activityProjection.test.ts` **(new)** — projection unit tests incl. the `conversation_id` stamp and the `"Untitled run"` fallback.
 - `src/destinations/activity/ActivityDestination.test.tsx` — replace the ItemLink-navigation test (`:334`) with a row-activation test.
-- `src/destinations/_shared/Row.tsx` — `titleStyle.fontWeight` → `var(--font-weight-medium)` (see Dependencies: yields to a sibling PRD if one owns this file's typography).
+- `src/destinations/_shared/Row.tsx` — **not touched by this PRD.** The `titleStyle.fontWeight` 600 → 500 change is **PRD-08's** (README C9; absorbed at PRD-08 Scope `:560-563`). This PRD only stops `ItemLink` from overriding whatever `Row` sets.
 - `src/shell/{ActivityList,RightRailTabs,ApprovalsTabContent,DocList,PaletteHitRow}.tsx` — pass `label`.
 - `src/destinations/{home/sections/TodayTimeline,home/sections/InFlightStrip,inbox/InboxDestination,inbox/InboxDetail,todos/TodosDestination,projects/ProjectsDestination,projects/ProjectDetailView,library/LibraryDestination,library/LibraryDetailView,memory/MemoryDestination,memory/MemoryDetailView,memory/MemoryProposalCard,memory/MemoryProposalToast,routines/RoutinesDestination,routines/RoutinesPanel,routines/RoutineDetail,team/PersonDetailView,tools/UsedByTab,tools/ToolInvocationsTable,connectors/ReadAuditTab}.tsx` — pass `label` (compiler-enumerated; most already hold the name).
 
@@ -248,28 +297,42 @@ already cross the wire.
   `routines/RoutineDetail.tsx:639` (run history: id, status, trigger, time), `tools/ToolInvocationsTable.tsx:202`
   and `connectors/ReadAuditTab.tsx:123` (caller refs), `memory/MemoryDestination.tsx:611`
   and `memory/MemoryDetailView.tsx:282` (`project_id` only) — write the noun at the call
-  site. Making their row wire-types carry a display name is a separate PRD.
+  site. Making their row wire-types carry a display name belongs to no PRD in this
+  thirteen-PRD suite — it is future work, not a hand-off to a sibling.
 - **No deletion of `projects/projectNameCache.ts`.** With Seam A it stops being a resolver
   hack and becomes an ordinary call-site helper for the `project_id`-only sites above.
 - **No run-detail surface.** Every Activity row will open the Run cockpit bound to its
   conversation. A dedicated read-only completed-run view is out of scope.
 - **No status-chip work.** `StatusPill`'s divergence from `.chip` is the largest cluster in
-  `surfaces/activity/out/report-default.md` (HIGH-1) and belongs to its own PRD.
-- **No Activity pagination / server-side `GET /v1/activity`.** The client-side compose of
-  conversations + audit stays as-is; only where it _lives_ changes.
+  `surfaces/activity/out/report-default.md` (HIGH-1) and belongs to **PRD-02**, which lands
+  before this PRD in the same wave (README hot-file order for `ActivityDestination.tsx`:
+  02 → 04 → 08).
+- **No `_shared/Row.tsx` change of any kind** — title weight, padding, `trailing` slot,
+  icon-tile background, `.ui-list-row` hover, 15px glyph sizing. **PRD-08 owns the file**
+  for the whole program (README C9, G2, G5).
+- **No Activity pagination and no server-side run history.** The client-side compose of
+  conversations + audit stays as-is; only where it _lives_ changes. `GET /v1/agent/runs`,
+  its keyset cursor and history tombstoning are **PRD-05**.
+- **No Activity run-meta counters** (tools/subagents/tokens strings, the
+  `runtime_tool_invocations` writer, `destinations/activity/meta.ts`) — **PRD-08**. This
+  PRD's projector carries whatever meta string the caller already produces.
+- **No lead-copy, empty-state, page-padding or day-divider work on Activity** — **PRD-08**
+  (README G4, G5).
+- **No `.ui-backlink` recipe and no project-card hover chrome** — **PRD-10** (README G11's
+  R9 back-affordance half and R10; see the accent-link policy section).
 - **No change to `ArtifactRoute` or either host's route union.**
 - **No backend, facade, or database change of any kind.**
 
 ## Risks & rollback
 
-| Risk                                                                                                                                                                                                                                                               | Guard                                                                                                                                                                                                                                                                                                                                                                                                                                                                     |
-| ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| Required `label` touches ~30 call sites; a wrong label ships silently.                                                                                                                                                                                             | `tsc` forces each site; existing per-destination suites assert rendered text — `packages/chat-surface/src/refs/ItemLink.test.tsx`, `destinations/inbox/InboxDestination.test.tsx`, `destinations/todos/TodosDestination.test.tsx`, `destinations/library/LibraryDestination.test.tsx`, `destinations/routines/RoutineDetail.test.tsx`, `shell/PaletteHitRow.test.tsx`. Run `npm run test --workspace @0x-copilot/chat-surface` before and after and diff the failure set. |
-| Moving registration to hosts means a kind nobody registers renders inert text instead of throwing. That is intentional but silences a class of wiring bug.                                                                                                         | Add `hasItemRoute` coverage: a chat-surface test that asserts the registry is **empty** after importing the barrel (registration is host-only now), plus one test per host asserting its table covers every `ItemKind` the host's surfaces emit.                                                                                                                                                                                                                          |
-| Web `openRun` currently accepts the run id; changing the argument could break the ⌘K blank-run path.                                                                                                                                                               | `apps/frontend/src/app/App.tsx:833-840` keeps its `undefined` → `openNewRun()` branch; `apps/frontend/src/features/palette/__tests__/PaletteHost.test.tsx` guards it (known-flaky under Node 25/jsdom — record the pre-change result).                                                                                                                                                                                                                                    |
-| Hoisting the projection changes desktop behaviour subtly (the web copy sorts with `localeCompare` on meta labels; both sort rows by `startedAtMs` with an `Number.isNaN` guard the desktop copy lacks — `activityApi.ts:126-129` vs `destinationBinders.tsx:324`). | `activityProjection.test.ts` pins the web copy's behaviour (the stricter one, with the NaN guard) as canonical; desktop gains the guard.                                                                                                                                                                                                                                                                                                                                  |
-| `Row.tsx` `fontWeight` is shared by Chats / Projects / Library / Tools rows.                                                                                                                                                                                       | The design uses one `.lrow__name` recipe for all of them (`copilot.css:1635`), so 500 is right everywhere; if a sibling PRD owns this file, drop the line (Dependencies).                                                                                                                                                                                                                                                                                                 |
-| Rollback                                                                                                                                                                                                                                                           | Three independent reverts: Seam C alone restores the old `onOpenRun`; Seam A+B are one commit touching only `refs/` + registration sites and revert cleanly because no data model changed. Nothing is persisted, migrated, or feature-flagged.                                                                                                                                                                                                                            |
+| Risk                                                                                                                                                                                                                                                               | Guard                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                            |
+| ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Required `label` touches ~30 call sites; a wrong label ships silently.                                                                                                                                                                                             | `tsc` forces each site; existing per-destination suites assert rendered text — `packages/chat-surface/src/refs/ItemLink.test.tsx`, `destinations/inbox/InboxDestination.test.tsx`, `destinations/todos/TodosDestination.test.tsx`, `destinations/library/LibraryDestination.test.tsx`, `destinations/routines/RoutineDetail.test.tsx`, `shell/PaletteHitRow.test.tsx`. Run `npm run test --workspace @0x-copilot/chat-surface` before and after and diff the failure set.                                        |
+| Moving registration to hosts means a kind nobody registers renders inert text instead of throwing. That is intentional but silences a class of wiring bug.                                                                                                         | Add `hasItemRoute` coverage: a chat-surface test that asserts the registry is **empty** after importing the barrel (registration is host-only now), plus one test per host asserting its table covers every `ItemKind` the host's surfaces emit.                                                                                                                                                                                                                                                                 |
+| Web `openRun` currently accepts the run id; changing the argument could break the ⌘K blank-run path.                                                                                                                                                               | `apps/frontend/src/app/App.tsx:833-840` keeps its `undefined` → `openNewRun()` branch; `apps/frontend/src/features/palette/__tests__/PaletteHost.test.tsx` guards it. It is known-flaky under Node 25/jsdom; if it fails, its test id must already be listed in `docs/plan/design-parity-remediation/baseline-failures.txt` (DoD 14) — this PRD may not add it there.                                                                                                                                            |
+| Hoisting the projection changes desktop behaviour subtly (the web copy sorts with `localeCompare` on meta labels; both sort rows by `startedAtMs` with an `Number.isNaN` guard the desktop copy lacks — `activityApi.ts:126-129` vs `destinationBinders.tsx:324`). | `activityProjection.test.ts` pins the web copy's behaviour (the stricter one, with the NaN guard) as canonical; desktop gains the guard.                                                                                                                                                                                                                                                                                                                                                                         |
+| Deleting `linkStyle`'s `color`/`fontSize` changes every `ItemLink` on every destination at once, not just Activity — that is the point (G11), but it is the widest blast radius in this PRD.                                                                       | The affected destinations all have committed suites asserting rendered text: `destinations/inbox/InboxDestination.test.tsx`, `destinations/todos/TodosDestination.test.tsx`, `destinations/library/LibraryDestination.test.tsx`, `destinations/routines/RoutineDetail.test.tsx`, `shell/PaletteHitRow.test.tsx`. DoD 10 greps both style objects to zero colour/size declarations; the Projects harness (`surfaces/projects/out/report-default-chatsurface.md`) re-measures the desktop card name independently. |
+| Rollback                                                                                                                                                                                                                                                           | Three independent reverts: Seam C alone restores the old `onOpenRun`; Seam A+B are one commit touching only `refs/` + registration sites and revert cleanly because no data model changed. Nothing is persisted, migrated, or feature-flagged.                                                                                                                                                                                                                                                                   |
 
 ## Definition of Done
 
@@ -281,41 +344,71 @@ already cross the wire.
 6. `packages/chat-surface/src/destinations/activity/activityProjection.test.ts` asserts that a conversation with `latest_run_id` set projects a row whose `conversation_id === conversation.conversation_id` and whose `run_id === conversation.latest_run_id` (i.e. the two are distinct fields), and that a conversation with `title: "   "` projects `title: "Untitled run"`.
 7. `apps/desktop/renderer/destinationBinders.test.tsx` asserts that activating an Activity row calls the binder's `onOpenRun` with the row's `conversation_id` — the argument is no longer discarded (guards `destinationBinders.tsx:367`).
 8. **Regression guard (the inverted ACT-06).** In `tools/design-parity/lib/render-live-activity.test.tsx`, the `ACT-06` describe block is rewritten to render `ActivityDestination` with **no** `"run"` route registered and assert `linkLabels` is empty **and** that all 7 previously-hidden titles (`"Weekly treasury reconciliation"`, `"Draft investor update"`, `"Rebalance LP positions"`, `"Triage new GitHub issues"`, `"Summarize Discord AMA"`, `"Vendor invoice batch"`, `"Competitor launch digest"`) are each found by `screen.getByText`. The old assertions `expect(linkLabels).toEqual(Array.from({length:7}, () => "Run"))` and the `queryByText(title) === null` loop are deleted, not skipped.
-9. **Design value pinned numerically.** `tools/design-parity/surfaces/activity/anchors.json` gains anchor `row.done.name` mapping design `.rowlist .lrow:nth-child(2) .lrow__name` ↔ live `section[data-day-key="2026-07-16"] li:nth-child(2) [data-testid="row-title"]`, and after re-running the harness (`node_modules/.bin/vitest run --config tools/design-parity/vitest.config.mjs lib/render-live-activity.test.tsx`, then extract + `node lib/compare.mjs …` per `tools/design-parity/SKILL.md`) the regenerated `surfaces/activity/out/report-default.md` shows, for `row.done.name`, **`fontSize` 12.5px design vs 12.48px live**, **`fontWeight` 500 on both sides**, and **no `color` row** — i.e. 0 HIGH and 0 MEDIUM rows for `row.done.name` other than the known global `+0.6px` root-font-size skew.
-10. The same regenerated report shows `row.live.name | fontWeight` **absent** from the MEDIUM table (was `500 → 600` at `report-default.md:64`).
+9. **Design value pinned numerically.** `tools/design-parity/surfaces/activity/anchors.json` gains anchor `row.done.name` mapping design `.rowlist .lrow:nth-child(2) .lrow__name` ↔ live `section[data-day-key="2026-07-16"] li:nth-child(2) [data-testid="row-title"]` — pinning the literal `.lrow__name { font-size: 12.5px }` at `tools/design-parity/design-kit/app-v3/copilot.css:1636`. After regenerating per `tools/design-parity/SKILL.md` (`node_modules/.bin/vitest run --config tools/design-parity/vitest.config.mjs lib/render-live-activity.test.tsx`, then extract + `node lib/compare.mjs …`), this command prints **`0`**:
+
+   ```bash
+   jq '[.findings[]
+        | select(.label == "row.done.name" and (.prop == "color" or .prop == "fontSize"))]
+       | length' tools/design-parity/surfaces/activity/out/report-default.json
+   ```
+
+   The `color` row disappears because the title stops being an accent `<a>` and inherits `--color-text` `#ececf1`; the `fontSize` row never appears because live computes `--font-size-xs` `0.78rem` = **12.48px** against the design's **12.5px**, a 0.02px delta under the comparator's 0.4px `fontSize` threshold (`tools/design-parity/lib/compare.mjs:89-110`). **`fontWeight` is deliberately excluded from the selector**: `row.done.name` will still report `500 → 600` until **PRD-08** lands `titleStyle.fontWeight` → `var(--font-weight-medium)` in `_shared/Row.tsx` (README C9). The `display`/`alignItems`/`gap` rows are structural (the design puts the chip inside `.lrow__name`, live puts it beside the title span — `anchors.json:3`) and are likewise excluded; note that `expectDivergence` cannot be used to silence them, because `lib/compare.mjs:172` consults it only for presence divergences, never for style rows.
+
+10. **The accent-link policy leaves no residue (README G11).** `grep -nE '(color|fontSize):' packages/chat-surface/src/refs/ItemLink.tsx` returns **0 lines** (on `main` it returns exactly 6: `:63`, `:64`, `:72`, `:75`, `:82`, `:84`). No file under `packages/design-system/src/` gains a `.ui-link` rule: `grep -rn '\.ui-link[^-]' packages/design-system/src/styles.css` returns **0 lines**.
 11. `npm run typecheck --workspace @0x-copilot/api-types` passes.
 12. `npm run typecheck --workspace @0x-copilot/chat-surface && npm run lint --workspace @0x-copilot/chat-surface` passes.
 13. `npm run typecheck --workspace @0x-copilot/frontend && npm run typecheck --workspace @0x-copilot/desktop` passes.
-14. `npm run test --workspace @0x-copilot/chat-surface`, `npm run test --workspace @0x-copilot/api-types`, `npm run test --workspace @0x-copilot/frontend`, `npm run test --workspace @0x-copilot/desktop` pass, with the sole permitted exception of failures recorded as pre-existing in the same PR description (capture the baseline on `origin/main` first).
+14. `npm run test --workspace @0x-copilot/chat-surface`, `npm run test --workspace @0x-copilot/api-types`, `npm run test --workspace @0x-copilot/frontend` and `npm run test --workspace @0x-copilot/desktop` each exit **0**, **or** the ids of the failing tests are byte-identical to the lines of `docs/plan/design-parity-remediation/baseline-failures.txt` — a file this PR does **not** modify (`git diff --exit-code -- docs/plan/design-parity-remediation/baseline-failures.txt` exits 0). (README DoD-Q2.)
 15. `grep -rn 'ItemLink' packages/chat-surface/src/destinations/activity/` returns **0 lines**.
-16. A chat-surface test asserts `hasItemRoute(k) === false` for every `ItemKind` after importing `@0x-copilot/chat-surface` alone — proving the package no longer registers routes on import.
+16. `packages/chat-surface/src/refs/registry.test.ts` contains a test that imports `@0x-copilot/chat-surface` (the barrel, nothing else) and asserts `hasItemRoute(k) === false` for every member of `ItemKind` — proving the package no longer registers routes on import.
+17. `packages/api-types/src/activity.test.ts` contains an assertion that an `ActivityRunRow` literal omitting `conversation_id` is a type error (`// @ts-expect-error missing conversation_id`) and that a complete literal type-checks, and `npm run typecheck --workspace @0x-copilot/api-types` exits **0** (item 11 runs the command; this item names the assertion that makes it meaningful).
+18. `apps/frontend/src/app/itemRoutes.test.ts` and `apps/desktop/renderer/itemRoutes.test.ts` each assert that the host's table returns a non-null route for every `ItemKind` that host's surfaces emit, and that every returned web route satisfies `AppRoute` / every returned desktop route satisfies `ArtifactRoute` (type-level, so `/settings#undefined` is unreachable by construction).
 
 ## Dependencies
 
-**Must land first:** none. This PRD is self-contained (no backend, facade, or schema
-change) and does not consume any sibling PRD's output.
+**Wave: 1.** Order inside the wave is `PRD-02 ‖ PRD-03 → PRD-04` (README "Corrected
+implementation order"). The PRD's original "Must land first: none" is **superseded**.
 
-**Coordinate with:**
+**Must land first:**
 
-- Any sibling PRD that owns `packages/chat-surface/src/destinations/_shared/Row.tsx`
-  typography (the `fontWeight 500 → 600` MEDIUM at `report-default.md:64` and the
-  `Row.tsx:96-104` `titleStyle`). If one exists, **drop the `Row.tsx` line from this PRD's
-  Scope and DoD 10**; keep everything else.
-- Any sibling PRD that hoists the duplicated Activity projection out of
-  `activityApi.ts` / `destinationBinders.tsx`. If one lands first, this PRD reduces to
-  adding `conversation_id` to the already-shared module (Scope's
-  `activityProjection.ts` bullet collapses; DoD 6 still applies).
-- The Activity status-chip PRD (`StatusPill` vs `.chip`, HIGH-1 in
-  `surfaces/activity/out/report-default.md`) also edits `ActivityDestination.tsx` — expect
-  a merge in `ActivityRow`. Land whichever is ready first; the conflict is textual, not
-  semantic.
+- **PRD-03 (host binding contract)** — README's index makes 04 depend on 03. PRD-03
+  establishes the total shell/destination binding types and the per-host conformance
+  tests that this PRD's two new `itemRoutes` tables plug into, and it edits both host
+  binders (`apps/frontend/src/app/App.tsx`, `apps/desktop/renderer/destinationBinders.tsx`)
+  before this PRD does. PRD-03 has already **dropped** its `src/projections/activity.ts`
+  proposal in favour of this PRD (README C7; PRD-03 `:130`, `:248`, `:274`), so there is no
+  duplicate projection to reconcile.
+- **PRD-02 (status chip)** — it edits `ActivityDestination.tsx` first
+  (README hot-file order for that file: **02 → 04 → 08**). This is a sequencing
+  requirement, not an API one: PRD-02 rewrites `StatusPill`/`statusTone`, this PRD
+  rewrites the title and `onOpenRun` in the same `ActivityRow`.
+
+**Must land after this PRD (do not re-specify their work here):**
+
+- **PRD-08 (Activity surface)** owns `packages/chat-surface/src/destinations/_shared/Row.tsx`
+  for the whole program (README C9) — including the `titleStyle.fontWeight` 600 → 500 this
+  PRD originally proposed, which PRD-08 has absorbed. PRD-08 also owns `.ui-list-row`, row
+  padding `11px 14px`, the 15px glyph rule, the icon-tile background, the lead copy and the
+  day divider (README G2, G4, G5). It consumes this PRD's
+  `destinations/activity/activityProjection.ts` and feeds it real meta from
+  `destinations/activity/meta.ts` (PRD-08 `:208-209`, `:627`, `:666-669`). File order:
+  `activity.ts` **04 → 05 → 08**; `ActivityDestination.tsx` **02 → 04 → 08**.
+- **PRD-05 (run history backend)** adds `GET /v1/agent/runs` + keyset paging and moves
+  Activity off the `updated_at` spine (README C19). It edits `packages/api-types/src/activity.ts`
+  after this PRD.
+- **PRD-10 (Projects surface)** owns `_shared/BackLink` / the `.ui-backlink` recipe and the
+  project-card interactive chrome (README G11's R9/R10 remainder). It consumes — and must
+  not restate — the accent-link policy this PRD fixes in `ItemLink.tsx`.
+
+**Migrations:** none. This PRD claims no id from README C18's table; on disk `services/backend`
+is at `0045` and `services/ai-backend` at `0001`.
 
 **This unblocks:**
 
-- Wire denormalization for id-only `ItemRef` call sites (the Non-goal above) — that PRD
-  becomes purely additive once `label` is caller-owned.
+- Wire denormalization for id-only `ItemRef` call sites (the Non-goal above) — that future
+  work becomes purely additive once `label` is caller-owned.
 - Any surface that wants a real cross-destination link on web: today every `ItemLink`
-  click on web lands on `/settings#undefined`, so Seam B is a precondition for Chats,
-  Projects, Library and Todos cross-links being usable at all.
+  click on web lands on `/settings#undefined`, so Seam B is a precondition for **PRD-09**
+  (Chats), **PRD-10** (Projects), and the Library/Todos cross-links being usable at all.
 - Deep-linkable completed runs (`/run/<conversationId>` from Activity), which a
   read-only run-detail surface would build on.

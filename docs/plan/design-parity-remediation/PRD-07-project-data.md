@@ -40,7 +40,7 @@ The design sells it as "group related chats, files, and context"
 | No writer path for a project file exists in-product                        | `backend/library/upload_routes.py:281,348` vs `backend-facade/library_routes.py:50-215`                                                                                  | CONFIRMED. `POST /v1/library/files/upload-grant` + `…/finalize` exist on backend; the facade proxies only list / get / pages / patch / search / delete. No app can upload a file at all today.                                                                                                                                                                                                                                                                                                                                                                                       |
 | The web host binds `fileCount` to the wrong field                          | `ProjectsRoute.tsx:758-759`                                                                                                                                              | CONFIRMED. `chatCount: project.counts.chats`, `fileCount: project.counts.library_items` — `library_items` is all three library kinds (file + page + dataset), not "files". Both are structurally 0 today.                                                                                                                                                                                                                                                                                                                                                                            |
 | Desktop has no project detail at all                                       | `apps/desktop/renderer/destinationBinders.tsx:542-568`                                                                                                                   | CONFIRMED. `ProjectsBinder` renders `<ProjectsDestination items={result} onRetry={retry}/>` — no `focusedProjectId`, no `renderDetail`. Anything fixed only in `ProjectsRoute.tsx` is invisible on desktop.                                                                                                                                                                                                                                                                                                                                                                          |
-| The chat-row projection is duplicated and already divergent                | `apps/frontend/src/features/chats/api/chatsApi.ts:104-118` vs `apps/desktop/renderer/destinationBinders.tsx:169-183`                                                     | CONFIRMED. Two `toArchiveRow` implementations; web reads the first-class `conversation.pinned`, desktop reads `metadata.pinned`. Any third caller (this PRD) must not become a third copy.                                                                                                                                                                                                                                                                                                                                                                                           |
+| The chat-row projection is duplicated and already divergent                | `apps/frontend/src/features/chats/api/chatsApi.ts:104-118` vs `apps/desktop/renderer/destinationBinders.tsx:169-183`                                                     | CONFIRMED, re-verified in this tree (`grep -rn toArchiveRow apps packages` → `chatsApi.ts:90,104,192` and `destinationBinders.tsx:169,193`, nothing else). Web reads the first-class `conversation.pinned`, desktop reads `metadata.pinned`. The SSOT is PRD-03's `toChatArchiveRow` in `packages/chat-surface/src/projections/chats.ts` (README C8); this PRD consumes it and must not become a third copy.                                                                                                                                                                         |
 | `ProjectDetailView` already has the right props and states                 | `ProjectDetailView.tsx:135-172, 553-700, 946-978`                                                                                                                        | CONFIRMED. `files?: SectionResult<ProjectFileRow[]> \| null` with a 4-state machine (`undefined` → "coming soon", `null` → skeleton, error/unavailable/empty/ready), and `soloSections` renders `SectionHeader count={project.chatCount}` / `count={project.fileCount}`. The view is not the problem.                                                                                                                                                                                                                                                                                |
 
 ## Design intent
@@ -93,7 +93,8 @@ uppercase, `var(--mut2)`, `margin: 22px 0 10px`.
 Two mock artifacts that are **not** spec: the design's `Files · 12` sits over a
 hard-coded 4-row array, so its header/list disagreement is fixture noise; and
 `.proj-ic` overrides the per-project colour with `background: var(--panel3) !important`
-(`copilot.css:1698-1710`), which is PRD-05's problem, not this one.
+(`copilot.css:1698-1710`), which is **PRD-10**'s problem, not this one (PRD-10 D3 keeps
+the per-project hue and records the three tile-colour rows as `expectDivergence`).
 
 ## Architectural decision
 
@@ -102,7 +103,11 @@ Three seams change. None of them is "write to the counts table".
 ### Seam 1 — `agent_conversations.project_id` (the missing link)
 
 Everything else is impossible without it. `ai-backend` migration
-`0002_conversation_project.sql`:
+**`0003_conversation_project.sql`** (README migration table / C18 — `0002` is PRD-05's
+`0002_run_history_index.sql`, `0004` is PRD-09's). Verified high-water mark on disk in
+this tree: `ls services/ai-backend/migrations` → `0001_runtime_baseline.sql` (+ rollback)
+and `MANIFEST.lock` only. Re-run `tools/check_migration_manifest.py --write` in the same
+commit as the migration.
 
 ```sql
 ALTER TABLE agent_conversations ADD COLUMN project_id text;
@@ -128,6 +133,10 @@ have no project, and inventing one would be a lie.
   `{"counts": {"a": 3, "b": 0}}`. `org_id`/`user_id` come from the verified identity
   exactly as `list_conversations` does (`routes.py:124`) — `project_ids` is a filter,
   never an authorization input. 200 with zeros for unknown ids; 422 for >100 ids.
+  **Register the literal `/counts` path before any `/{conversation_id}` route** in both
+  `runtime_api/http/routes.py` and the facade — FastAPI matches in registration order and
+  the path param is an unconstrained `str` (same hazard the README flags for
+  `/v1/agent/runs/active_count`). Wave order on both files is 05 → 07 → 09 → 12.
 
 **Rejected:** storing the project in `metadata` JSONB. It is already how desktop reads
 `pinned` (`destinationBinders.tsx:172`) and it is exactly why `pinned` had to be
@@ -136,8 +145,12 @@ a column with an index.
 
 ### Seam 2 — counts are computed on read, by the service that owns the rows; the counter table is deleted
 
-Delete `project_activity_counts` (migration `0046_drop_project_activity_counts.sql`,
-rollback recreates it verbatim from `0043_projects.sql:223-244`), delete
+Delete `project_activity_counts` (migration **`0047_drop_project_activity_counts.sql`**
+— README migration table / C18; `0046` is PRD-06's `0046_connector_access_mode.sql`.
+Verified high-water mark on disk: `ls services/backend/migrations` tops out at
+`0045_provider_api_keys_custom_endpoint.sql`. Re-run
+`tools/check_migration_manifest.py --write` in the same commit), whose
+rollback recreates the table verbatim from `0043_projects.sql:223-244`; delete
 `get_counts`/`upsert_counts` from the `ProjectsStore` protocol and both adapters, and
 delete the `counts` dict from `InMemoryProjectsStore`. Keep the `ProjectActivityCounts`
 **model** — it stays as the computed wire shape.
@@ -213,11 +226,20 @@ Delete the hand-rolled `renderCrossDestinationTab("chats", …)` branch
 (`ProjectsRoute.tsx:462-465`) — it calls a route that does not exist.
 
 `ProjectDetailView` gains `chats?: SectionResult<ReadonlyArray<ChatArchiveRow>> | null`
-with the same 4-state contract as `files`, and renders it with the **same** section
-component `ChatsArchive` already uses (`ChatsArchive.tsx:351-403` → `_shared/Row` +
-`_shared/RowList`), extracted to `destinations/chats/ChatsSection.tsx` so there is one
-row anatomy, not two. Heading count = `rows.length`, per `copilot-app.jsx:363`;
-`ProjectDetail.chatCount` stops being read in the solo profile (it stays for the card).
+with the same 4-state contract as `files`, replacing the host-injected
+`renderCrossDestinationTab("chats", project.id)` call in the solo profile
+(`ProjectDetailView.tsx:957-968`). Heading count = `rows.length`, per
+`copilot-app.jsx:363`; `ProjectDetail.chatCount` stops being read in the solo profile
+(it stays for the card).
+
+**No `destinations/chats/ChatsSection.tsx` is extracted (README C16).** The row and
+section _markup_ — `SectionHeader` + `_shared/RowList` + `_shared/Row` with the design's
+icon / chip / sub / meta slots — is **PRD-10 D6**'s, and `ChatsArchive.tsx` belongs to
+PRD-09, which rewrites it. PRD-07 lands the prop, the 4-state machine and the data, and
+renders the ready state through the existing `_shared/RowList` / `_shared/Row`
+primitives (the same components PRD-10 D6 specifies) so PRD-10 restyles one call site
+rather than deleting a component this PRD invented. PRD-07 must not restyle those
+primitives, and must not touch `ChatsArchive.tsx`.
 
 Both hosts feed it through one new port, so desktop is not a copy of web:
 
@@ -236,8 +258,10 @@ export interface ProjectDataPort {
 Both implementations are thin and boring, and neither invents an endpoint:
 
 - chats → `GET /v1/agent/conversations?filter[project_id]=<id>&include_archived=true`,
-  mapped by the **shared** conversation→`ChatArchiveRow` projection that PRD-03 moves
-  into `chat-surface` (do not add a third `toArchiveRow`).
+  mapped by PRD-03's shared per-row projector `toChatArchiveRow`
+  (`packages/chat-surface/src/projections/chats.ts`, README C8 — PRD-03 ships the
+  per-row function only; bucketing/paging is PRD-09's). Do not add a third
+  `toArchiveRow`.
 - files → `GET /v1/library?filter[project_id]=<id>&filter[kind]=file&limit=50`,
   mapping `LibraryFile` → `ProjectFileRow`: `id`, `name`, `fileKind` =
   `file_kind` label, `updatedAt` = `updated_at`, `sizeLabel` from `size_bytes`. The
@@ -260,11 +284,12 @@ visibility, and library's project-membership predicate is the canonical one.
 - `src/projects.ts` — `ProjectActivityCounts.chats: number | null`; add `files: number`;
   promote `ProjectFileRow` (id: `LibraryFileId`, name, file_kind, updated_at, size_bytes).
 - `src/index.ts` — `Conversation.project_id?: string | null`; `ConversationListFilters`
-  gains `project_id`.
+  gains `project_id`. (Shared file; wave order 05 → **07** → 09 → 12.)
 
 **`services/ai-backend`**
 
-- `migrations/0002_conversation_project.sql` (+ `.rollback.sql`) — column + partial index.
+- `migrations/0003_conversation_project.sql` (+ `.rollback.sql`) — column + partial index
+  (C18), plus the `MANIFEST.lock` rewrite in the same commit.
 - `src/runtime_api/schemas/conversations.py` — `project_id` on `ConversationRecord`
   and `UpdateConversationRequest` (it already exists on `CreateConversationRequest:65`).
 - `src/agent_runtime/api/conversation_coordinator.py` — persist `project_id` on create;
@@ -278,8 +303,8 @@ visibility, and library's project-membership predicate is the canonical one.
 
 **`services/backend`**
 
-- `migrations/0046_drop_project_activity_counts.sql` (+ rollback) and the matching
-  edit to `src/backend_app/projects/schema.sql:223-244, 356`.
+- `migrations/0047_drop_project_activity_counts.sql` (+ rollback, + `MANIFEST.lock`) and
+  the matching edit to `src/backend_app/projects/schema.sql:223-244, 356`.
 - `src/backend_app/projects/store.py` — delete `get_counts`/`upsert_counts` from the
   protocol and both adapters and the in-memory `counts` dict; keep the
   `ProjectActivityCounts` model, add `files`, make `chats` `int | None`.
@@ -299,27 +324,41 @@ visibility, and library's project-membership predicate is the canonical one.
 **`packages/chat-surface`**
 
 - `src/ports/ProjectDataPort.ts` (+ export from `ports/index.ts`) — the new port.
-- `src/destinations/chats/ChatsSection.tsx` — extract the section+row renderer from
-  `ChatsArchive.tsx:351-403` so Projects reuses it verbatim.
 - `src/destinations/projects/ProjectDetailView.tsx` — `chats` prop + 4-state machine;
-  solo Chats section renders `ChatsSection`; heading counts from list length; drop the
-  `renderCrossDestinationTab("chats")` path in the solo profile.
+  solo Chats section renders the ready rows through the existing `_shared/RowList` /
+  `_shared/Row`; heading counts from list length; drop the
+  `renderCrossDestinationTab("chats")` path in the solo profile
+  (`ProjectDetailView.tsx:957-968`). **Data + props only** — the row anatomy and the
+  section chrome are PRD-10 D6's (C16); file order is 07 → **10 owns**.
 - `src/destinations/projects/ProjectsDestination.tsx` — card meta reads
-  `counts.files`, hides the chats segment when `counts.chats === null`.
+  `counts.files`, hides the chats segment when `counts.chats === null`. Data binding +
+  the meta line's content and its two type tokens only; the card's outer anatomy (hit
+  area, `ProjectIconTile`, padding, grid) is PRD-10 D1–D3/D7, which owns this file
+  (order 02 → 03 → **07** → 10).
+- **Not in scope:** `src/destinations/chats/*` — PRD-09 owns `ChatsArchive.tsx` and
+  PRD-07 extracts no `ChatsSection.tsx` (C16).
 
 **`apps/frontend`**
 
 - `src/api/projectsApi.ts` — delete `fetchProjectActivity` (calls a nonexistent route).
 - `src/features/projects/ProjectDataPort.ts` (new) — web implementation over
   `/v1/agent/conversations` + `/v1/library`.
-- `src/features/projects/ProjectsRoute.tsx` — remove the hand-rolled chat list
+- `src/features/projects/ProjectsRoute.tsx` — PRD-10 Scope also deletes the hand-rolled
+  `<ul>` at `:641-673` as part of its scaffold deletion (D1/D6). PRD-07 lands first and
+  removes it here because its data source disappears with `fetchProjectActivity`; if
+  PRD-10 has already landed, PRD-07 removes only the fetch. Concretely: remove the
+  hand-rolled chat list
   (`:624-673`) and the activity fetch (`:462-465`); pass the port; bind `fileCount` to
   `counts.files`.
 
 **`apps/desktop`**
 
-- `renderer/destinationBinders.tsx` — the same port implementation over the shared
-  `Transport`; pass `focusedProjectId` + `renderDetail` so the detail exists on desktop.
+- `renderer/destinationBinders.tsx` — the same `ProjectDataPort` implementation over the
+  shared `Transport`, bound into `ProjectsBinder`. **Making the desktop detail reachable
+  (`focusedProjectId` + `renderDetail`) is PRD-10** (D1/Scope, guarded by PRD-10 DoD 9)
+  over PRD-03's shared Projects binder — PRD-07 does not pass those props. This file has
+  eight claimants; PRD-07 edits it in wave 2, **after PRD-08** (which deletes the audit
+  fan-out block).
 
 **`tools/design-parity`**
 
@@ -333,16 +372,21 @@ visibility, and library's project-membership predicate is the canonical one.
   (`app.py:2133`); files are lost on restart. That is the Library destination's problem,
   not Projects'. This PRD's read binding is correct either way, and the Files section
   degrades to its existing "No files yet" empty state — never a lie. Tracked separately
-  as _PRD-Library-Persistence_ (adapter + `0047_library.sql` + the upload-grant/finalize
+  as _PRD-Library-Persistence_ (adapter + a library migration on the next free
+  `services/backend` id — `0046` is PRD-06's and `0047` is this PRD's, so `0048`
+  or later — plus the upload-grant/finalize
   facade proxy). Do not ship a fake writer to make this PRD look finished.
 - **No file upload UI.** No writer path exists through the facade
   (`library_routes.py:50-215`); adding one is the same successor PRD.
 - **No activity projector.** `project_activity` stays unwritten and
   `GET /v1/projects/{id}/activity` stays nonexistent. This PRD _stops calling_ it; it
   does not build it. The team-profile `ProjectActivityTab` receives `[]`.
-- **No visual/token work.** The `.sect-h` 9.5px drift (FINDINGS RC-7), the four
-  divergent monogram tiles (RC-2), `.pg-lead` (RC-5), the `.pg` page shell (RC-9) and
-  the accent-coloured navigation (RC-8) belong to PRD-05.
+- **No visual/token work.** The four divergent monogram tiles (RC-2), `.pg-lead`
+  (RC-5), the `.pg` page shell (RC-9) and the accent-coloured navigation (RC-8) belong
+  to **PRD-10** (C21 corrects this PRD's "PRD-05"); the `.sect-h` 9.5px drift (RC-7) is
+  **PRD-01**'s `.ui-mono-caps` migration, applied to the label element and not to the
+  `sect-h` wrapper (C13). The project chat rows' status chip is **PRD-02**'s component,
+  rendered by PRD-10's markup — this PRD only supplies the `status` field on each row.
 - **No auto-filing.** Nothing infers a chat's project from context. `project_id` is set
   explicitly by the caller; how the composer offers that choice is a product decision.
 - **No cross-tenant or admin rollups.** Counts are viewer-scoped exactly as the
@@ -358,11 +402,11 @@ visibility, and library's project-membership predicate is the canonical one.
 | Computed-on-read makes the projects list slow at scale                   | Each source is one grouped read per page; the only Postgres one (library, once it has an adapter) has `library_files_project_idx`. The change _removes_ today's 2N queries (`service.py:302-313`).                                                              |
 | Three ai-backend adapters drift on the new column                        | `services/ai-backend/tests/unit/runtime_adapters/` already runs the same contract suite over in-memory/file/postgres; the new filter + count get a case in each.                                                                                                |
 | Deleting `renderCrossDestinationTab("chats")` regresses the team profile | The slot stays for `todos/inbox/library/routines`; only the `chats` branch is removed, and only the solo profile stops calling it. `ProjectDetailView.test.tsx` covers both profiles.                                                                           |
-| Extracting `ChatsSection` regresses the Chats surface                    | `packages/chat-surface/src/destinations/chats/ChatsArchive.test.tsx` is the regression guard and must pass unchanged (no edits to its assertions).                                                                                                              |
+| Racing PRD-10 in `ProjectDetailView.tsx` / `ProjectsDestination.tsx`     | Wave order is fixed (C16, README hot-file table): PRD-07 lands the props/data in wave 2, PRD-10 owns the markup in wave 4. PRD-07 extracts no `ChatsSection.tsx` and touches no `destinations/chats/*` file, so there is nothing for PRD-10 or PRD-09 to undo.  |
 
-**Rollback:** three independent reverts. (1) `0046` rollback restores the counts table;
+**Rollback:** three independent reverts. (1) `0047` rollback restores the counts table;
 the code path that read it is gone, so restoring the table alone is inert — revert the
-`service.py` commit with it. (2) `0002` rollback drops `project_id`; conversations are
+`service.py` commit with it. (2) `0003` rollback drops `project_id`; conversations are
 unaffected because the column is nullable and nothing else reads it. (3) The client
 seams revert to the previous commit; `ProjectDetailView` degrades to its existing
 "coming soon" states when the port is absent (`files === undefined` at
@@ -373,38 +417,56 @@ seams revert to the previous commit; `ProjectDetailView` degrades to its existin
 1. `cd services/ai-backend && .venv/bin/python -m pytest tests/unit/runtime_api/test_conversation_project_filter.py` passes, asserting: a conversation created with `project_id="p1"` is returned by `GET /v1/agent/conversations?project_id=p1`, is **not** returned for `project_id=p2`, and round-trips `project_id` through `GET /v1/agent/conversations/{id}`.
 2. The same test asserts `GET /v1/agent/conversations/counts?project_ids=p1,p2` returns `{"counts": {"p1": 3, "p2": 0}}` for a fixture of 3 conversations on `p1`, and that a caller from a different `user_id` gets `{"p1": 0}` — proving the count is identity-scoped, not `project_ids`-scoped.
 3. The identical assertions run against all three adapters: `cd services/ai-backend && .venv/bin/python -m pytest tests/unit/runtime_adapters -k project_id` passes for `in_memory`, `file` and `postgres`.
-4. `services/ai-backend/migrations/0002_conversation_project.sql` creates `idx_agent_conversations_project` and its `.rollback.sql` drops both column and index; `cd services/ai-backend && .venv/bin/python -m pytest tests/ -k migration` passes.
+4. `services/ai-backend/migrations/0003_conversation_project.sql` creates `idx_agent_conversations_project` and its `.rollback.sql` drops both column and index; `cd services/ai-backend && .venv/bin/python -m pytest tests/ -k migration` passes, and `python tools/check_migration_manifest.py` exits 0 (the `MANIFEST.lock` rewrite is in the same commit).
 5. `cd services/backend-facade && .venv/bin/python -m pytest tests/test_forwarder.py -k project_id` passes, asserting `POST /v1/agent/conversations` with `{"project_id": "p1"}` forwards `project_id` upstream (today it is silently dropped by `FacadeConversationRequest`).
 6. `cd services/backend-facade && .venv/bin/python -m pytest tests/test_projects_proxy.py` passes with two new cases: `counts.chats` is populated from the batched ai-backend call, and `counts.chats === null` (HTTP 200, not 5xx) when that call raises.
 7. `cd services/backend && .venv/bin/python -m pytest tests/test_projects_service.py` passes, asserting `list_projects` returns `counts.files == 2` for a project holding 2 library files + 1 library page, and `counts.library_items == 3`.
-8. `grep -rn "upsert_counts\|get_counts\|project_activity_counts" services/backend/src` returns **zero** hits outside `services/backend/migrations/0046_drop_project_activity_counts.rollback.sql`.
-9. `grep -rn "fetchProjectActivity" apps/frontend/src` returns zero hits, and `grep -rn "renderCrossDestinationTab(\"chats\"\|toArchiveRow" apps/frontend/src apps/desktop packages/chat-surface/src` shows exactly **one** `toArchiveRow` definition, in `packages/chat-surface/src`.
-10. `packages/chat-surface/src/destinations/projects/ProjectDetailView.test.tsx` asserts that with `chats={{status:"ok", data:[row]}}` the solo profile renders `[data-testid="chat-archive-row-model"]` and a `StatusPill` inside `[data-testid="project-detail-section-chats"]` — the exact three fields (`status`, `model`, time) the old activity-fed list could not carry.
-11. The same test asserts the Chats heading count equals the number of rendered rows (design `copilot-app.jsx:363` — `Chats · {chats.length}`), and that with `files={{status:"ok", data:[…12 rows]}}` and `counts_by_kind.file === 12` the Files heading reads `12`.
-12. **Design value pinned numerically:** a test in `ProjectsDestination.test.tsx` asserts the card meta element resolves to `font-size: 11px`, `font-family: var(--font-mono)`, `color: #64646d` (`--color-text-subtle`, byte-identical to the design's `--mut2`, `copilot.css:19`) and text `"3 chats · 12 files"` for `counts: {chats: 3, files: 12, …}`.
-13. **Regression guard for this PRD's bug:** `ProjectsDestination.test.tsx` asserts that a project with `counts: {chats: null, files: 4}` renders `"4 files"` and does **not** render the substring `"0 chats"` — a fabricated zero must never reach the card again.
-14. `packages/chat-surface/src/destinations/chats/ChatsArchive.test.tsx` passes with **no edits to its assertions** after `ChatsSection` is extracted.
-15. `apps/desktop/renderer/destinationBinders.test.tsx` asserts `ProjectsBinder` passes both `focusedProjectId` and `renderDetail` to `ProjectsDestination`, so the detail state is reachable on desktop.
-16. `npm run typecheck --workspace @0x-copilot/api-types && npm run typecheck --workspace @0x-copilot/frontend && npm run typecheck --workspace @0x-copilot/desktop` all pass with `chats: number | null`.
-17. Re-running the projects parity harness (see `tools/design-parity/SKILL.md`) with `fetchProjectActivity` no longer mocked produces `surfaces/projects/out/report-detail.md` with **0 `missing-in-live` rows** for the anchor group `detail.chatrow.*` (`.icon`, `.chip`, `.sub`, `.sub .mono`, `.time`) — 5 HIGH rows eliminated.
+8. `grep -rn "upsert_counts\|get_counts\|project_activity_counts" services/backend/src` returns **zero** hits, and the only file matching `grep -rln project_activity_counts services/backend` is `services/backend/migrations/0047_drop_project_activity_counts.rollback.sql`.
+9. Three greps, each with a stated expected output: (a) `grep -rn "fetchProjectActivity" apps/frontend/src tools/design-parity` returns zero lines; (b) `grep -rln "toChatArchiveRow" apps/frontend/src/features/projects apps/desktop/renderer` lists both host `ProjectDataPort` implementations, proving each consumes PRD-03's shared projector; (c) `grep -rn "function toArchiveRow\|const toArchiveRow\|function toChatArchiveRow" apps packages` returns at most the three pre-existing definitions — `apps/frontend/src/features/chats/api/chatsApi.ts:104`, `apps/desktop/renderer/destinationBinders.tsx:169` (both deleted later by PRD-09) and `packages/chat-surface/src/projections/chats.ts` (PRD-03's) — i.e. this PRD adds **no** new row projection.
+10. `packages/chat-surface/src/destinations/projects/ProjectDetailView.test.tsx` asserts that with `chats={{status:"ok", data:[row]}}` on the solo profile, `[data-testid="project-detail-section-chats"]` contains exactly one `[data-testid="chat-archive-row"]`, and that row's rendered text contains `row.title`, `row.model` and the formatted `row.updatedAt` — the three fields the activity-fed list could not carry (`ProjectActivityRecord`, `store.py:149-173`, has none of them). The row's _anatomy_ (icon slot, chip placement, `.lrow` padding) is asserted by PRD-10 DoD 17/18, not here.
+11. The same test asserts (a) the Chats `SectionHeader` count equals the number of rendered `[data-testid="chat-archive-row"]` elements for a 3-row fixture (design `copilot-app.jsx:363` — `Chats · {chats.length}`), and (b) with `files={{status:"ok", data:[…12 rows]}}` the Files `SectionHeader` renders `12`, sourced from the same response's `counts_by_kind.file` so header and list cannot disagree.
+12. **Design value pinned numerically:** `packages/chat-surface/src/destinations/projects/ProjectsDestination.test.tsx` asserts that for `counts: {chats: 3, files: 12, …}` the card meta element's `textContent` is exactly `"3 chats · 12 files"` (U+00B7 separator, `copilot-app.jsx:422-424`) and its style object is `fontFamily: "var(--font-mono)"`, `color: "var(--color-text-subtle)"` and `fontSize: "var(--font-size-2xs)"` — verified in this tree: `--color-text-subtle: #64646d` (`packages/design-system/src/styles.css:178`) is byte-identical to the design's `--mut2` (`copilot.css:19`), and `--font-size-2xs: 0.7rem` = 11.2px (`styles.css:63`) against the design's `.lrow__sub` 11px (`copilot.css:1643-1648`) — a 0.2px delta, below the comparator's 0.4px flag threshold (`tools/design-parity/lib/compare.mjs:98-99`), so no new rung is minted. The rest of the card's anatomy is PRD-10's.
+13. **Regression guard for this PRD's bug (fails on `main`):** `ProjectsDestination.test.tsx` asserts that a project with `counts: {chats: null, files: 4}` renders the substring `"4 files"` and that the card's `textContent` does **not** contain `"0 chats"` — a fabricated zero must never reach the card again.
+14. `grep -rn "ChatsSection" packages/chat-surface/src apps` returns **zero** matches, and `git diff --exit-code -- packages/chat-surface/src/destinations/chats/` reports no change: this PRD extracts no chats section component and does not touch PRD-09's files (C16).
+15. `apps/desktop/renderer/destinationBinders.test.tsx` asserts that the desktop `ProjectDataPort.listProjectChats("p1")` issues exactly one `Transport` request whose path contains `filter[project_id]=p1`, and that the returned row carries `model` and `status` (i.e. it is mapped by `toChatArchiveRow`, not by a local projection). Desktop _reachability_ of the detail view (`focusedProjectId` + `renderDetail`) is PRD-10 DoD 9, not this PRD.
+16. `npm run typecheck --workspace @0x-copilot/api-types && npm run typecheck --workspace @0x-copilot/frontend && npm run typecheck --workspace @0x-copilot/desktop` all exit 0 with `chats: number | null`.
+17. The projects harness measures the real path instead of a mock: `grep -rn "fetchProjectActivity" tools/design-parity` returns zero lines (it is mocked today at `lib/render-live-projects.test.tsx:79` and `:334`) and `lib/render-live-projects.test.tsx` feeds the detail state from `ProjectDataPort` fixtures. Regenerating `tools/design-parity/surfaces/projects/out/report-detail.md` (procedure: `tools/design-parity/SKILL.md`) on this PR's **merge base** and on this PR adds **no** line under the `## HIGH` heading — `git diff --exit-code` on the regenerated report shows removals and rewrites only. The `detail.chatrow.*` anchors flipping from `missing-in-live` to matched is PRD-10 DoD 17's gate; this PRD's obligation is that the data is there for it.
 18. `make test` passes at the repo root.
 
 ## Dependencies
 
+This PRD is **wave 2**, and inside wave 2 it lands **after PRD-08** (README
+implementation order): both edit `apps/desktop/renderer/destinationBinders.tsx`, and
+PRD-08 deletes the audit fan-out block PRD-07 would otherwise re-touch.
+
 **Must land first**
 
 - **PRD-03 (host binder seam / shared conversation projection).** This PRD's chat list
-  consumes the shared conversation→`ChatArchiveRow` projection. If PRD-03 has not moved
-  it into `chat-surface`, PRD-07 must move it as part of its own scope — it must not
-  become the third copy alongside `chatsApi.ts:104` and `destinationBinders.tsx:169`.
-- **PRD-02 (status chip).** The chip rendered in the project chat rows is PRD-02's
-  component; PRD-07 renders it, it does not define it.
+  consumes PRD-03's per-row projector `toChatArchiveRow`
+  (`packages/chat-surface/src/projections/chats.ts`). Per README C8, PRD-03 ships the
+  **per-row function only** — bucketing, fetching and paging are PRD-09's, so PRD-07
+  must not consume or re-derive a `bucketConversations`. If PRD-03 has not landed,
+  PRD-07 moves the per-row projector as part of its own scope; it must not become the
+  third copy alongside `chatsApi.ts:104` and `destinationBinders.tsx:169`.
+- **PRD-02 (status chip).** The `status` value PRD-07 puts on each `ChatArchiveRow` is
+  rendered as PRD-02's chip once PRD-10 D6 lands the row markup. PRD-07 supplies the
+  field; it neither defines nor styles the chip.
+- **PRD-05 (run history backend) — order only.** No behavioural dependency, but PRD-05
+  edits the same five files first: `packages/api-types/src/index.ts`,
+  `agent_runtime/api/conversation_query_service.py`, `runtime_api/http/routes.py`,
+  `runtime_adapters/*/runtime_api_store.py` and `backend_facade/app.py`
+  (order 05 → **07** → 09 → 12).
 
 **Independent but adjacent**
 
-- PRD-05 (Projects visual parity: `.sect-h`, monogram tile, `.pg-lead`, page shell).
-  Touches the same files — sequence PRD-05 after this one to avoid conflicts in
-  `ProjectDetailView.tsx` and `ProjectsRoute.tsx`.
+- **PRD-10 (Projects surface: `_shared/Page`, `BackLink`, `ProjectIconTile`, one
+  Projects list, `.ui-grid3`, and the detail row markup).** C21 corrects this PRD's
+  earlier "PRD-05" references. PRD-10 is wave 4 and **owns the markup** in
+  `ProjectDetailView.tsx` and `ProjectsDestination.tsx` (C16); PRD-07 lands the props
+  and the data first and does not restyle. PRD-10 also owns the desktop detail's
+  reachability and the `icon_emoji` → monogram fix.
+- **PRD-09 (Chats surface)** owns `ChatsArchive.tsx` and deletes both host copies of the
+  row projection. PRD-07 touches no `destinations/chats/*` file.
 
 **This unblocks**
 

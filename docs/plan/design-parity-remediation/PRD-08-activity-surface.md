@@ -30,13 +30,20 @@ a way a user can name.
    header's clothes. The class attribute literally says `act-day sect-h`: it claims to be
    both, and it is styled as the wrong one.
 5. **The leading icon column stops reading as a column.** The design's 28×28 tile sits on a
-   `--panel3` surface with a 7px radius. Ours has no background at all, and the jade "this
-   run is live" tint is applied to an inner `<span>` wrapped around the glyph — so it
-   colours the turbine and never reaches the tile it was meant to colour.
+   `--panel3` surface with a 7px radius, and forces the glyph inside it to 15×15. Ours has
+   no background at all, renders the glyph at 18px, and the jade "this run is live" tint is
+   applied to an inner `<span>` wrapped around the glyph — so it colours the turbine and
+   never reaches the tile it was meant to colour.
 6. **Four of the five states have never been specified.** The design has exactly one state
    (populated). We ship five. Two of them are inventions no one reviewed — including
    "No activity yet", which PRD-05's data path makes the _default_ screen for a user with
    fifty completed runs, and an "unavailable" branch no binder can construct.
+7. **The page introduces itself with a third of the sentence, and underlines the rest.**
+   The design's lead is three sentences and links exactly the phrase "Settings → Privacy".
+   Ours keeps one sentence, drops the "most recent first" ordering promise, and makes the
+   **entire final sentence** the link — ~322px of underlined accent text in a 12px muted
+   paragraph. Under it, every row and the page shell itself are ~2px tighter than designed
+   on every axis, so the surface reads denser than the mock at the same zoom.
 
 ## Evidence
 
@@ -65,7 +72,7 @@ Every row opened and read in this worktree on `claude/design-parity-audit-7ec82a
 | **DISPUTED — the audit prescribes the wrong tile token**                                           | `AUDIT.md` R3 says `background: var(--color-surface-muted)`; `packages/design-system/src/styles.css:171, 201`                                             | The design's tile is `--panel3 #1d1d23` (`copilot.css:12, 1623`). `--color-surface-muted` is `#16161a` = the design's `--panel2` — which is _also_ the hover colour (`copilot.css:1601-1603`). Using it for the tile would make the tile vanish on hover. The exact match is **`--color-surface-elevated: #1d1d23`** (`styles.css:201`; light `#ebebee` = `copilot.css:76`). `packages/chat-surface/src/onboarding/onboarding.css:15` already documents this mapping. **The code wins; the audit's R3 is wrong.** |
 | The divider wears both classes                                                                     | `ActivityDestination.tsx:451`                                                                                                                             | CONFIRMED, verbatim: `className="act-day sect-h"`. Inert today (neither class has a rule), but it declares the confusion the inline style then implements.                                                                                                                                                                                                                                                                                                                                                        |
 | The divider is styled as a section label                                                           | `ActivityDestination.tsx:654-666`                                                                                                                         | CONFIRMED. `fontWeight: 600` (`:659`), `letterSpacing: 0.4` (`:660`), `textTransform: "uppercase"` (`:661`), `fontSize: var(--font-size-2xs)` = 11.2px. Design `.act-day` is weight 400, no tracking, no transform, 10px.                                                                                                                                                                                                                                                                                         |
-| Explicit-date dividers lose the weekday and gain a year                                            | `ActivityDestination.tsx:136-142`                                                                                                                         | CONFIRMED. `Intl.DateTimeFormat(locale, { year:"numeric", month:"short", day:"numeric" })` → "Jul 14, 2026". Design fixture: `"Mon, Jul 14"` (`copilot-data.jsx:646`).                                                                                                                                                                                                                                                                                                                                            |
+| Explicit-date dividers lose the weekday and gain a year                                            | `ActivityDestination.tsx:136-142`                                                                                                                         | CONFIRMED. `Intl.DateTimeFormat(locale, { year:"numeric", month:"short", day:"numeric" })` → "Jul 14, 2026". Design fixture: `"Mon, Jul 14"` (`copilot-data.jsx:648` — the audit's `:646` is off by two).                                                                                                                                                                                                                                                                                                         |
 | Row time is relative                                                                               | `ActivityDestination.tsx:532-540` → `packages/chat-surface/src/util/time.ts:24-53`                                                                        | CONFIRMED. `formatRelativeTime(row.started_at, now)` inside a semantic `<time dateTime>`. Measured text `"11:44" → "46m ago"`, width `31.5px → 47.05px` (`report-default.md:144, 176`).                                                                                                                                                                                                                                                                                                                           |
 | The time column is content-sized on both sides — no alignment argument either way                  | `copilot.css:1655-1659` (`.lrow__time { flex: none }`); `Row.tsx:114-120` (`flex: "0 0 auto"`)                                                            | CONFIRMED. The audit's refutation of the "variable width breaks the column" claim holds. Format choice is a legibility decision, not a layout one.                                                                                                                                                                                                                                                                                                                                                                |
 | Relative time is what the _old_ PRD specified                                                      | `docs/plan/desktop-redesign/phase-4/PRD.md:113, 133`                                                                                                      | CONFIRMED — FR-4.4/FR-4.15 specify `formatRelativeTime`. This is design-vs-PRD drift, and this PRD resolves it in the design's favour (see D3).                                                                                                                                                                                                                                                                                                                                                                   |
@@ -74,6 +81,13 @@ Every row opened and read in this worktree on `claude/design-parity-audit-7ec82a
 | …and no client ever produces `"paused"` either                                                     | `packages/api-types/src/activity.ts:46-52`; `activityApi.ts:56-71`; `destinationBinders.tsx:242-258`                                                      | CONFIRMED. `ACTIVITY_RUN_STATUSES` declares `paused`, but both `mapRunStatus` implementations fold `waiting_for_approval → needs_input` and never emit `paused`. It is unreachable at **both** layers — a value with no producer.                                                                                                                                                                                                                                                                                 |
 | The design's "paused" _is_ waiting-for-approval                                                    | `copilot-data.jsx:625-630`                                                                                                                                | CONFIRMED. `{ title:"Rebalance LP positions", meta:"paused — needed your approval on a swap", status:"paused" }`. The design's own copy names the runtime state.                                                                                                                                                                                                                                                                                                                                                  |
 | A second label source already exists and is bypassed                                               | `packages/chat-surface/src/shell/statusTone.ts:40-56` vs `ActivityDestination.tsx:86-98`                                                                  | CONFIRMED. `statusTone()` returns `{tone, label, showDot}` with `paused → warning "Paused"`, `needs_input → info "Needs you"`; `ActivityDestination` calls `runStatusTone()` for the tone (`:487`) but re-derives the label itself (`:488` → `activityStatusLabel`). Two label sources, one component.                                                                                                                                                                                                            |
+| Row title weight is semibold; the design is medium                                                 | `Row.tsx:96-104`; `styles.css:74-75`                                                                                                                      | CONFIRMED (audit MEDIUM-4). `titleStyle.fontWeight = var(--font-weight-semibold)` = 600 vs `.lrow__name { font-weight: 500 }` (`copilot.css:1637`). `--font-weight-medium: 500` already exists (`styles.css:74`). PRD-04 raised this and yields the line to this PRD under README C9.                                                                                                                                                                                                                             |
+| Row padding undershoots on both axes                                                               | `Row.tsx:55-66` (`rowStyle`); `copilot.css:1586`                                                                                                          | CONFIRMED (audit MEDIUM-3). `padding: "10px 12px"` vs `.lrow { padding: 11px 14px }`. Row `gap: var(--space-md)` = 12px **does** match `.lrow { gap: 12px }` (`copilot.css:1585`) — no finding there.                                                                                                                                                                                                                                                                                                             |
+| The Activity page shell undershoots too, and no shared `.pg` primitive exists yet                  | `ActivityDestination.tsx:611-621` (`innerStyle`); `copilot.css:1552-1555`                                                                                 | CONFIRMED. `padding: "16px 20px 32px"`, `maxWidth: 960` vs `.pg { padding: 20px 24px 40px; max-width: 960px }`. `packages/chat-surface/src/destinations/_shared/Page.tsx` does not exist on `main` — PRD-10 creates it, with Projects as its only consumer.                                                                                                                                                                                                                                                       |
+| The lead paragraph is one sentence of three, and the whole last sentence is the link               | `ActivityDestination.tsx:59`, `:65-66`, rendered `:315-331`; `copilot-app.jsx:26-38`                                                                      | CONFIRMED (audit MEDIUM-8). `ACTIVITY_LEAD_COPY = "Everything the agent has done."`; the design's lead is three sentences and links only the phrase "Settings → Privacy" (`copilot-app.jsx:31-37`). `page.lead.link` width `auto → 321.97px`. The audit's own correction: the link **colour is right** on both sides (`rgb(95,178,236)`), so there is no colour finding here.                                                                                                                                     |
+| **DISPUTED — the glyph inside the tile: JSX says 18, the design's own CSS says 15**                | `copilot-app.jsx:28` (`<Mark size={18}/>`) vs `copilot.css:1627-1630` (`.lrow__ic svg {width:15px;height:15px}`)                                          | The Activity `AUDIT.md` N2 argues live's 18px "honours author intent" and says do not fix. The harness compares **computed** styles, and the design's computed value is **15px** — CSS beats the SVG width/height attributes. README G2 assigns the fix here. **This PRD sizes the glyph to 15px** (D5/D6) so the measured surfaces agree; the 18px `size=` props stay as authored and are overridden by the recipe, exactly as the design does it.                                                               |
+| Deleting the icon wrapper spans orphans two committed anchors                                      | `ActivityDestination.tsx:497, :503`; `tools/design-parity/surfaces/activity/anchors.json` (`row.live.ic.svg`, `row.done.ic.svg`)                          | CONFIRMED. Both anchors bind live through `[data-testid="activity-row-icon"] svg`, a testid carried only by the wrapper spans D5 deletes. They must be rebound to `[data-testid="row-icon"] svg` in the same commit or the harness silently reports `missing-in-live`.                                                                                                                                                                                                                                            |
+| The parity harness fixture still declares a `paused` row                                           | `tools/design-parity/lib/render-live-activity.test.tsx:116-117`                                                                                           | CONFIRMED. `status: "paused"` — D2 removes that member, so the fixture fails `tsc` until it moves to `needs_input`. It is also where the new counter fields get their values.                                                                                                                                                                                                                                                                                                                                     |
 | **CORRECTION — the audit's `copilot.css` line numbers are wrong throughout**                       | `tools/design-parity/design-kit/app-v3/copilot.css` is 2909 lines; `copilot-v3.css` (789 lines, the file `index.html:16` links) `@import`s it             | The audit cites `.lrow:hover` at `copilot.css:287`, `.lrow__ic` at `:289`, `.act-day` at `:300`. The real lines are **1601-1603**, **1617-1626**, **1683-1697**. `copilot-v3.css` only redefines `.lrow` under a `.sd` (sidebar) scope at `:783`. All literal _values_ the audit quotes are correct; only its line anchors are not. This PRD cites the verified lines.                                                                                                                                            |
 
 ## Design intent
@@ -128,7 +142,22 @@ color: var(--mut2)`. Every row reserves the trailing 16px; only the navigable on
 **Icon tile** — `.lrow__ic` (`copilot.css:1617-1626`): `28×28`, `border-radius: 7px`,
 `display: grid; place-items: center`, `background: var(--panel3)` `#1d1d23`,
 `color: var(--mut)` `#98989f`, `flex: none`. The live row overrides only the **tile's**
-`color` to `var(--jade)` `#57c785` (`copilot-app.jsx:65-67`).
+`color` to `var(--jade)` `#57c785` (`copilot-app.jsx:65-67`). The glyph inside it is forced
+to `15×15` by `.lrow__ic svg` (`copilot.css:1627-1630`), whatever the `size=` prop says.
+
+**Row geometry** — `.lrow` (`copilot.css:1582-1594`): `padding: 11px 14px`, `gap: 12px`,
+`display: flex; align-items: center`. `.lrow__name` (`copilot.css:1635-1639`):
+`font-size: 12.5px`, `font-weight: 500`, `color: var(--tx)`.
+
+**Page shell + lead** — `.pg` (`copilot.css:1552-1555`): `padding: 20px 24px 40px`,
+`max-width: 960px`. `.pg-lead` (`copilot.css:1556-1562`): `font-size: 12px`,
+`color: var(--mut)`, `margin: -2px 0 18px`, `max-width: 72ch`, `line-height: 1.6`. The lead
+copy is three sentences, and the anchor wraps **only** the phrase `Settings → Privacy`
+(`copilot-app.jsx:26-38`):
+
+> Everything the agent has done, most recent first. This is the record the old build buried
+> in an "audit log" — here it's a place you visit. Retention, export, and delete live in
+> [Settings → Privacy].
 
 **Day divider** — `.act-day` (`copilot.css:1683-1697`): `font-family: var(--mono)`,
 `font-size: 10px`, `color: var(--mut2)`, `margin: 18px 0 8px`, `display: flex`,
@@ -176,8 +205,9 @@ plain `int` because approvals have been persisted since `0001` — zero there is
 **Integers on the wire, string in the shell.** `packages/api-types/src/activity.ts:63-70`
 already states the rule for `started_at` ("never pre-formatted on the wire"); the same rule
 governs here. The composer is one exported function in `packages/chat-surface`
-(`destinations/activity/meta.ts`), consumed by the shared projector PRD-06 lands, so both
-hosts produce byte-identical strings from one implementation:
+(`destinations/activity/meta.ts`), consumed by the shared projector **PRD-04** lands at
+`packages/chat-surface/src/destinations/activity/activityProjection.ts` (README C7/C21), so
+both hosts produce byte-identical strings from one implementation:
 
 ```
 formatActivityMeta({connector_count, step_count, pending_approval_count}) →
@@ -371,12 +401,23 @@ new `--radius-tile: 7px` token belongs to PRD-01 if it wants one).
 
 `Row` gains `readonly iconTone?: "default" | "success"`, applied to the **slot's** `color`.
 `ActivityDestination` passes `iconTone={isRunning ? "success" : "default"}` and
-`liveIconStyle` (`ActivityDestination.tsx:675-680`) plus its wrapper span
-(`:494-500`) are **deleted** — the wrapper is the bug, not a thing to restyle.
+`liveIconStyle` (`ActivityDestination.tsx:675-680`) plus **both** wrapper spans — the live
+one (`:494-500`) and the historic one (`:503-505`) — are **deleted**; the glyph becomes a
+direct child of `Row`'s slot. The wrapper is the bug, not a thing to restyle. Because both
+wrappers carry `data-testid="activity-row-icon"`, the two committed anchors that bind
+through it (`row.live.ic.svg`, `row.done.ic.svg`) are rebound to
+`[data-testid="row-icon"] svg` in the same commit (see Scope → `tools/design-parity`).
 
 Token choice per the DISPUTED evidence row: `--color-surface-elevated` (`#1d1d23`), not
 `--color-surface-muted` (`#16161a`), because the latter is the hover colour from D6 and the
-tile must survive hover.
+tile must survive hover. README C10 ratifies this mapping as the program-wide one.
+
+**Glyph size (README G2).** The design forces `.lrow__ic svg { width:15px; height:15px }`
+(`copilot.css:1627-1630`); live renders 18px because `Row.tsx:68-79` sizes the slot and
+nothing sizes the glyph. An inline `CSSProperties` object cannot reach a descendant, so this
+rides in D6's recipe rather than in `Row`'s style object — the same reason hover does. The
+`size={18}` props at the call sites stay as authored and are overridden by the recipe,
+exactly as the design overrides its own `<Mark size={18}/>`.
 
 ### D6 — Hover lives in a `.ui-list-row` recipe in **design-system**
 
@@ -407,6 +448,11 @@ possible:
 .ui-list-row[role="button"]:hover,
 .ui-list-row[role="button"]:focus-visible {
   background: var(--color-surface-muted);
+}
+/* `.lrow__ic svg` (copilot.css:1627-1630) — the tile forces its glyph to 15px. */
+.ui-list-row [data-testid="row-icon"] svg {
+  width: 15px;
+  height: 15px;
 }
 ```
 
@@ -442,10 +488,56 @@ The `DaySkeleton` reuses `dayDividerStyle` (`:576`) and inherits the fix for fre
 | State                      | Decision                                                                                                                                                                                                                                                                                                                                                                                                                                           |
 | -------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | `loading` (`:352-367`)     | **Keep as-is.** Two skeleton day-groups, `role="status" aria-busy`. The design has no loading state because it has no data layer; a live feed must have one.                                                                                                                                                                                                                                                                                       |
-| `error` (`:370-384`)       | **Keep, and widen Retry.** `role="alert"` + `EmptyState` + Retry is right. The hole is that Retry exists _only_ here — a successfully-loaded but stale list has no refresh control. Move Retry into the page header region so it renders in `error`, `empty`, and `ready`. Nothing else changes.                                                                                                                                                   |
+| `error` (`:370-384`)       | **Keep, and widen Retry.** `role="alert"` + `EmptyState` + Retry is right. The hole is that Retry exists _only_ here — a successfully-loaded but stale list has no refresh control. Move Retry into the page header region, under a stable `data-testid="activity-retry"`, so it renders in `error`, `empty`, and `ready` (DoD 19). Nothing else changes.                                                                                          |
 | `unavailable` (`:387-398`) | **Delete.** Unreachable — no binder constructs `status:"unavailable"` (`activityApi.ts:196-224`, `destinationBinders.tsx:322-348`) — and Activity is not a licensable capability that can be off for a workspace. `SectionResult.status` keeps the member for other surfaces; Activity stops branching on it and folds it into `error` (an unavailable Activity _is_ a failure to load). Deleting a wrong abstraction beats keeping a dead branch. |
 | `empty` (`:401-410`)       | **Keep, fix the copy's truthfulness dependency.** PRD-05 makes this state honest by making finished runs reachable; until then it lies. Copy becomes "Nothing here yet — start a run and it'll show up, grouped by day." (drops the "The agent hasn't run anything yet" assertion, which the client cannot know).                                                                                                                                  |
 | `ready`                    | The design's only state; D1-D7 apply.                                                                                                                                                                                                                                                                                                                                                                                                              |
+
+### D9 — Row geometry and title weight land here, once, for every list destination
+
+This PRD owns `_shared/Row.tsx` for the whole program (README C9), so the two remaining
+measured row defects are fixed in the same diff rather than by three PRDs touching the file
+after it:
+
+- **Title weight.** `titleStyle.fontWeight` → `var(--font-weight-medium)` (= 500,
+  `styles.css:74`), matching `.lrow__name { font-weight: 500 }` (`copilot.css:1637`).
+  Absorbed from PRD-04, whose own Dependencies offer the line to whoever owns this file.
+  The design uses one `.lrow__name` recipe for Activity, Chats, Projects, Library and Tools,
+  so 500 is right at every call site — that is why it belongs on the primitive.
+- **Row padding.** `rowStyle.padding` → `"11px 14px"` (`copilot.css:1586`). `gap` already
+  matches at 12px and is not touched.
+
+**Page padding (README G5) is fixed at the literal, not by a new primitive.** Activity's
+`innerStyle` (`ActivityDestination.tsx:611-621`) takes `padding: "20px 24px 40px"`;
+`maxWidth: 960` is already correct. The `_shared/Page` primitive belongs to **PRD-10**,
+which lands two waves later with Projects as its only consumer. Activity is named there as
+`Page`'s **second consumer**: because this PRD has already set the identical literals,
+PRD-10's substitution of `<Page>` for `innerStyle` is a no-op on computed styles and the
+Activity parity report cannot move under it. This PRD does not create, import, or pre-empt
+`Page`.
+
+### D10 — The lead paragraph is restored to three sentences, and only the phrase is a link
+
+README G4. `ACTIVITY_LEAD_COPY` (`ActivityDestination.tsx:59`) becomes the design's first two
+sentences verbatim (`copilot-app.jsx:27-30`), restoring the **"most recent first"** ordering
+promise — which is exactly the promise PRD-05 makes true. The third sentence splits so the
+anchor wraps only the phrase, as in the design (`copilot-app.jsx:31-37`):
+
+```ts
+export const ACTIVITY_LEAD_COPY =
+  'Everything the agent has done, most recent first. This is the record the old build buried in an "audit log" — here it\'s a place you visit.';
+export const ACTIVITY_RETENTION_PREFIX_COPY =
+  "Retention, export, and delete live in ";
+export const ACTIVITY_RETENTION_LINK_COPY = "Settings → Privacy";
+```
+
+`ActivityLead` (`:310-332`) renders prefix + link + `"."`. The link/no-link fork
+(`onOpenRetentionSettings` present or not) is unchanged, and both branches keep their
+existing testids (`activity-retention-link` / `activity-retention-copy`) so
+`anchors.json`'s `page.lead.link` binding survives. `ACTIVITY_RETENTION_LINK_COPY` is
+re-exported from `destinations/activity/index.ts` and `src/index.ts` already
+(`index.ts:1155-1156`), so the new constant joins them and the host tests that assert the
+copy (`ActivityDestination.test.tsx:390-391, :408`) update to the new strings.
 
 ## Scope
 
@@ -457,17 +549,23 @@ The `DaySkeleton` reuses `dayDividerStyle` (`:576`) and inherits the fix for fre
 
 ### `packages/design-system`
 
-- `src/styles.css` — add the `.ui-list-row` recipe (D6). No token additions; `--font-size-mono-10`
-  (`:71`), `--tracking-normal` (`:88`), `--color-surface-elevated` (`:201`),
-  `--color-surface-muted` (`:171`) all already exist.
+- `src/styles.css` — add the `.ui-list-row` recipe, including the 15px glyph rule (D6/D5).
+  No token additions; `--font-size-mono-10` (`:71`), `--tracking-normal` (`:88`),
+  `--font-weight-medium` (`:74`), `--color-surface-elevated` (`:201`),
+  `--color-surface-muted` (`:171`), `--color-success` (`:191`) all already exist. Merge order
+  for this file is **01 → 02 → 08 → 11 → 10** (README, hot-file table).
 
 ### `packages/chat-surface`
 
-- `src/destinations/_shared/Row.tsx` — `trailing` slot + always-reserved 16px (D4);
-  `iconTone` prop; `iconSlotStyle` background/radius/grid (D5); emit
-  `className="ui-list-row"` and move `cursor` out of the inline object (D6).
+- `src/destinations/_shared/Row.tsx` — this PRD **owns the file** for the program (README C9).
+  `trailing` slot + always-reserved 16px (D4); `iconTone` prop; `iconSlotStyle`
+  background/radius/grid (D5); emit `className="ui-list-row"` and move `cursor` out of the
+  inline object (D6); `titleStyle.fontWeight` → `var(--font-weight-medium)` and
+  `rowStyle.padding` → `"11px 14px"` (D9). PRD-09 (overflow `⋯` slot) and PRD-11
+  (`subFont`, `iconSize`) stack their props on the post-PRD-08 file, in that order.
 - `src/destinations/_shared/Row.test.tsx` — new: trailing renders, slot reserved when
-  empty, `iconTone="success"` tints the slot not a child, `ui-list-row` present.
+  empty, `iconTone="success"` tints the slot not a child, `ui-list-row` present, title
+  weight 500, padding `11px 14px`.
 - `src/util/time.ts` — add `formatClockTime` (D3).
 - `src/util/time.test.ts` — pin the design value under a fixed locale + timeZone.
 - `src/destinations/activity/meta.ts` — **new**: `formatActivityMeta` (D1), the single
@@ -478,8 +576,14 @@ The `DaySkeleton` reuses `dayDividerStyle` (`:576`) and inherits the fix for fre
   (`:86-98`) in favour of `statusTone().label` (D2); `dayLabel` weekday/year (D7);
   `dayDividerStyle` weight/tracking/transform/size (D7); `className="act-day"` (`:451`, D7);
   `formatClockTime` at `:538` (D3); `trailing` chevron + `iconTone` (D4/D5); delete
-  `liveIconStyle` (`:675-680`) and its wrapper span (`:494-500`) (D5); delete the
-  `unavailable` branch (`:387-398`), move Retry out of the error branch, retune empty copy (D8).
+  `liveIconStyle` (`:675-680`) and **both** icon wrapper spans (`:494-500`, `:503-505`) (D5);
+  delete the `unavailable` branch (`:387-398`), move Retry out of the error branch behind a
+  `data-testid="activity-retry"`, retune empty copy (D8); `innerStyle.padding` →
+  `"20px 24px 40px"` (D9); lead copy split + `ACTIVITY_RETENTION_PREFIX_COPY` (D10).
+  Merge order for this file is **02 → 04 → 08** (README, hot-file table).
+- `src/destinations/activity/index.ts`, `src/index.ts` — export
+  `ACTIVITY_RETENTION_PREFIX_COPY` beside the two existing copy constants
+  (`src/index.ts:1155-1156`) (D10).
 - `src/destinations/activity/ActivityDestination.test.tsx` — update + add the regression
   guards in DoD.
 - `src/shell/statusTone.ts` — `needs_input` → `warning` (D2).
@@ -497,7 +601,19 @@ The `DaySkeleton` reuses `dayDividerStyle` (`:576`) and inherits the fix for fre
 - `src/runtime_worker/tool_call_ledger.py` — populate `connector_slug` (`:41-43`) (D1b).
 - `tests/unit/runtime_adapters/test_store_conformance.py` — extend for the new port methods.
 - `tests/unit/runtime_api/…` — counter projection + `pending_approval_count` semantics.
-- **No migration.** Tables and indexes exist (`0001:586-607, 947, 1039-1041`).
+- **No migration.** Tables and indexes exist (`0001:586-607, 947, 1039-1041`). Verified on
+  disk in this worktree: `services/ai-backend/migrations/` contains only
+  `0001_runtime_baseline.sql` (+ rollback), and `services/backend/migrations/` tops out at
+  `0045_provider_api_keys_custom_endpoint.sql`. README C18 assigns this PRD **no id**;
+  `git diff --stat services/*/migrations/` must stay empty (DoD 17), which also means
+  `tools/check_migration_manifest.py` has nothing to re-write for this PRD.
+- Merge order for `conversation_query_service.py` and
+  `runtime_adapters/*/runtime_api_store.py` follows the **wave order** (README §Corrected
+  implementation order): PRD-05 → **PRD-08** → PRD-07 → PRD-09 → PRD-12. The hot-file table
+  lists `05 → 07 → 08 → …` for those two files, which contradicts Wave 2's explicit
+  "PRD-08 → PRD-07"; the wave order governs, because PRD-07 is sequenced after PRD-08
+  precisely so it re-touches `destinationBinders.tsx` after this PRD deletes the audit
+  fan-out.
 
 ### `services/backend-facade`
 
@@ -508,28 +624,37 @@ The `DaySkeleton` reuses `dayDividerStyle` (`:576`) and inherits the fix for fre
 
 - `src/features/activity/api/activityApi.ts` — delete `auditLabel`, `buildMetaIndex`, the
   `listAuditEvents` call, and the `.catch(() => [])` (`:211`) (D1c). What remains folds into
-  PRD-06's shared projector.
+  **PRD-04**'s shared projector (`destinations/activity/activityProjection.ts`).
 - `src/features/activity/ActivityRoute.tsx` / `.test.tsx` — drop audit mocking; assert the
   audit endpoint is never called.
 
 ### `apps/desktop`
 
 - `renderer/destinationBinders.tsx` — delete the duplicated `auditLabel`/`buildMetaIndex`
-  (`:260-290`), the `/v1/audit` request (`:337-344`) and its `.catch` (D1c).
+  (`:260-290`), the `/v1/audit` request (`:337-344`) and its `.catch` (D1c). This is the
+  program's hottest file (eight claimants); PRD-08 is the **Wave 2 first mover** in it and
+  PRD-07 stacks on the post-PRD-08 file.
 - `renderer/destinationBinders.test.tsx` — same assertions as web, from the same fixtures.
 
 ### `tools/design-parity`
 
 - `surfaces/activity/anchors.json` — bind `row.live.chevron` → `[data-status="running"]
 [data-testid="row-trailing"] svg` and `row.done.spacer` → the non-running row's
-  `[data-testid="row-trailing"]`; both are `live: null` today.
-- `lib/render-live-activity.test.tsx` — fixture carries the counter fields.
+  `[data-testid="row-trailing"]`; both are `live: null` today. Rebind `row.live.ic.svg` and
+  `row.done.ic.svg` from `[data-testid="activity-row-icon"] svg` to
+  `[data-testid="row-icon"] svg` — D5 deletes the wrapper that carried the old testid.
+- `lib/render-live-activity.test.tsx` — fixture carries the counter fields, and its
+  `status: "paused"` row (`:116-117`) becomes `needs_input` (D2).
+- `surfaces/activity/out/*` — regenerate report + extracts in the same commit (README §6:
+  the committed reports are the graded artefact).
+- **Do not edit `tools/design-parity/vitest.config.mjs`** — it globs `lib/render-live*.test.tsx`
+  and is a merge point for every PRD in flight.
 
 ## Non-goals
 
 - **The status-chip recipe.** `StatusPill`'s filled/uppercase/sans chip vs the design's
-  hairline mono outline is 12 of the surface's 20 measured HIGH rows and belongs to the chip
-  PRD (`AUDIT.md` R1, and PRD-09 names it PRD-02). This PRD changes `needs_input`'s **tone
+  hairline mono outline is the largest HIGH cluster on this surface and belongs to
+  **PRD-02** (`AUDIT.md` R1). This PRD changes `needs_input`'s **tone
   token** and the **label source** only — not the chip's geometry, family, weight, casing,
   or fill.
 - **The global type scale.** `--font-size-2xs` collapsing the design's 10px and 10.5px rungs
@@ -537,12 +662,19 @@ The `DaySkeleton` reuses `dayDividerStyle` (`:576`) and inherits the fix for fre
   no token definition.
 - **Run history, per-run rows, `started_at` correctness, ordering.** PRD-05. This PRD reads
   what that endpoint serves.
-- **Run titles and click-through routing.** PRD-04.
+- **Run titles, `ItemLink`, the app-wide accent-link policy, and click-through routing.**
+  PRD-04.
 - **Moving the projection into `packages/chat-surface` and cutting the binders over.**
-  PRD-06 owns the shared projector; this PRD supplies `formatActivityMeta` for it to call
-  and deletes the audit halves it is replacing.
-- **The topbar subtitle** ("every action the agent has taken") — a shell-registry gap
-  affecting all six destinations (`AUDIT.md` HIGH-4).
+  **PRD-04** owns the shared projector at
+  `packages/chat-surface/src/destinations/activity/activityProjection.ts` (README C7); this
+  PRD supplies `formatActivityMeta` for it to call and deletes the audit halves it is
+  replacing.
+- **The topbar subtitle** ("every action the agent has taken", `AUDIT.md` HIGH-4) — closed by
+  **PRD-09 D5** via `DestinationMeta.sublabel` for all six destinations (README C15). Not a
+  nameless shell PRD; not this one.
+- **The `_shared/Page` primitive.** PRD-10 creates it; Activity is named there as its second
+  consumer and adopts it in PRD-10's wave. This PRD only sets Activity's `innerStyle`
+  padding to the same literals so the swap is a computed-style no-op (D9).
 - **The outcome clause** — "balanced", "saved to Local files", "3 labeled, 1 escalated",
   "you rejected 2 of 6 payouts". No persisted field carries it, and no field is one query
   away. Inventing prose on the surface whose job is to be the record would be the exact
@@ -567,7 +699,9 @@ The `DaySkeleton` reuses `dayDividerStyle` (`:576`) and inherits the fix for fre
 | Two grouped queries per Activity page regress list latency                                                                                                         | Both hit existing covering indexes and are bounded by the page's `limit ≤ 200` run ids                                                                                                                                                                                          | Return `None` counters (skip the aggregates) without a contract change.                                                           |
 | Wall-clock time in a non-h23 locale widens the time column                                                                                                         | `.lrow__time`/`row-meta` are content-sized on both sides (`copilot.css:1655-1659`; `Row.tsx:114-120`) — verified, not assumed                                                                                                                                                   | `formatClockTime` is a one-line swap back to `formatRelativeTime` at `ActivityDestination.tsx:538`.                               |
 | Deleting the `unavailable` branch removes a state some future binder wants                                                                                         | `SectionResult.status` keeps the member (`api-types/src/refs.ts:110`); only Activity's branch goes                                                                                                                                                                              | Re-add the branch; it is 12 lines.                                                                                                |
-| Existing Activity tests assert relative time, Title-Case labels, and the audit fetch                                                                               | `packages/chat-surface/src/destinations/activity/ActivityDestination.test.tsx:368-372`; `apps/frontend/src/features/activity/ActivityRoute.test.tsx:320, 372, 394`; `apps/desktop/renderer/destinationBinders.test.tsx` — all in scope and updated deliberately, not deleted    | —                                                                                                                                 |
+| Title weight 500 + padding `11px 14px` land on every `Row` consumer at once (Activity, Chats, Projects, Library, Tools, Skills)                                    | The design uses one `.lrow__name`/`.lrow` recipe for all of them (`copilot.css:1582-1639`), so the values are right everywhere; `Row.test.tsx` pins them and the chats + tools parity reports are re-run after this PRD (README C12 sequencing)                                 | Two one-line reverts in `rowStyle`/`titleStyle`; independent of D4/D5/D6.                                                         |
+| Deleting the icon wrapper spans silently orphans `row.live.ic.svg` / `row.done.ic.svg` — the harness reports `missing-in-live`, which reads like a regression      | The anchor rebinding is in the same commit (Scope → `tools/design-parity`), and DoD 20 asserts **zero** `missing-in-live` findings on the Activity report                                                                                                                       | Re-add the wrapper spans; the anchors' old selectors still exist in git history.                                                  |
+| Existing Activity tests assert relative time, Title-Case labels, the lead copy, and the audit fetch                                                                | `packages/chat-surface/src/destinations/activity/ActivityDestination.test.tsx:368-372`; `apps/frontend/src/features/activity/ActivityRoute.test.tsx:320, 372, 394`; `apps/desktop/renderer/destinationBinders.test.tsx` — all in scope and updated deliberately, not deleted    | —                                                                                                                                 |
 
 ## Definition of Done
 
@@ -604,10 +738,9 @@ pending_approval_count:0})` === `""`, and that `ActivityDestination` renders **n
 9. The same file asserts a row one calendar year older renders a divider containing the year,
    and a row in the current year does not.
 10. `packages/chat-surface/src/destinations/_shared/Row.test.tsx` asserts the row element
-    carries `className` containing `ui-list-row`, and that
-    `packages/design-system/src/styles.css` contains a
-    `.ui-list-row[role="button"]:hover` rule whose `background` is
-    `var(--color-surface-muted)`.
+    carries `className` containing `ui-list-row`, and
+    `grep -c 'background: var(--color-surface-muted);' <(sed -n '/^\.ui-list-row\[role="button"\]:hover/,/}/p' packages/design-system/src/styles.css)`
+    prints `1`.
 11. The same file asserts `iconTone="success"` sets `color: var(--color-success)` on
     `[data-testid="row-icon"]` **itself** (not a descendant), that the slot's `background` is
     `var(--color-surface-elevated)` and `border-radius` is `7px`, and
@@ -635,23 +768,46 @@ pending_approval_count:0})` === `""`, and that `ActivityDestination` renders **n
     including a test that a completed MCP tool call writes one
     `runtime_tool_invocations` row whose `connector_slug` equals the resolved MCP server
     slug, and a native tool call writes one row with `connector_slug=None`.
-17. `git diff --stat services/ai-backend/migrations/` is empty — the aggregates use
-    `idx_runtime_tool_invocations_org_run_started` and
-    `idx_runtime_approval_requests_org_run_status`, which already exist.
+17. `git diff --stat services/ai-backend/migrations/ services/backend/migrations/` prints
+    nothing — the aggregates use `idx_runtime_tool_invocations_org_run_started` and
+    `idx_runtime_approval_requests_org_run_status`, which already exist, and README C18
+    assigns this PRD no migration id.
 18. `grep -n 'data-testid="activity-unavailable"' packages/chat-surface/src/destinations/activity/ActivityDestination.tsx`
-    returns nothing, and a test asserts `status:"unavailable"` renders the **error** branch
-    with a working Retry.
-19. A test asserts the Retry control is present in the `ready` state (not only in `error`).
-20. The design-parity report for `activity` shows **0 HIGH rows** for anchor group `Row/live`
-    on `row.live.ic` and **no `missing-in-live` rows** for `row.live.chevron` /
-    `row.done.spacer`, and **0 MEDIUM** on `day.head` for `fontSize` / `fontWeight` /
-    `letterSpacing` / `textTransform` (re-run per
-    `/Users/parthpahwa/Documents/work/enterprise-search/.claude/worktrees/adoring-rosalind-939b76/tools/design-parity/SKILL.md`,
-    after updating `surfaces/activity/anchors.json` to bind the two previously-`null` anchors).
-21. `node_modules/.bin/vitest run --config tools/design-parity/vitest.config.mjs` passes
-    (the live-render harness still renders the real component).
-22. `npm run typecheck --workspace @0x-copilot/frontend`, `--workspace @0x-copilot/desktop`,
-    and the `chat-surface` + `design-system` suites all pass.
+    returns nothing, and `ActivityDestination.test.tsx` asserts that `status:"unavailable"`
+    renders `[data-testid="activity-error"]` and `[data-testid="activity-retry"]`.
+19. `ActivityDestination.test.tsx` asserts `[data-testid="activity-retry"]` is in the
+    document for `status:"ok"` (the `ready` state), in the same test file's `error` case, and
+    in its `empty` case. **Regression guard: on `main` the Retry control exists only on the
+    `error` branch (`ActivityDestination.tsx:376-380`), so the `ready` assertion fails.**
+20. Regenerate the Activity report per `tools/design-parity/SKILL.md` (after the
+    `anchors.json` edits in Scope), then
+    `python3 -c "import json,sys; f=json.load(open('tools/design-parity/surfaces/activity/out/report-default.json'))['findings']; bad=[x for x in f if (x['label']=='row.live.ic' and x['severity']=='high') or (x['kind']=='missing-in-live' and x['label'] in ('row.live.chevron','row.done.spacer','row.live.ic.svg','row.done.ic.svg')) or (x['label']=='day.head' and x['severity']=='medium' and x.get('prop') in ('fontSize','fontWeight','letterSpacing','textTransform')) or (x['label']=='row.live.name' and x.get('prop')=='fontWeight') or (x['label'] in ('row.live','page.container') and x.get('prop')=='padding')]; print(len(bad))"`
+    prints `0`.
+21. `node_modules/.bin/vitest run --config tools/design-parity/vitest.config.mjs` exits 0
+    (the live-render harness still renders the real component), and
+    `git diff --exit-code -- tools/design-parity/vitest.config.mjs` shows no change.
+22. `npm run typecheck` exits 0 for workspaces `@0x-copilot/frontend`,
+    `@0x-copilot/desktop`, `@0x-copilot/chat-surface`, `@0x-copilot/api-types` and
+    `@0x-copilot/design-system`, and `npm run test --workspace @0x-copilot/chat-surface`
+    exits 0. `packages/design-system` has **only** a `typecheck` script (verified:
+    `packages/design-system/package.json` `scripts` = `{"typecheck": "tsc -p tsconfig.json"}`),
+    so there is no design-system test suite to run — DoD 10/11 cover its rendered effect.
+23. `packages/chat-surface/src/destinations/_shared/Row.test.tsx` asserts the row title's
+    computed `fontWeight` is `"500"` and the row's computed `padding` is `"11px 14px"` —
+    pinning `.lrow__name { font-weight: 500 }` (`copilot.css:1637`) and
+    `.lrow { padding: 11px 14px }` (`copilot.css:1586`). **Regression guard: `titleStyle`
+    is `var(--font-weight-semibold)` = 600 and `rowStyle.padding` is `10px 12px` on `main`.**
+24. `grep -c 'width: 15px' <(sed -n '/^\.ui-list-row \[data-testid="row-icon"\] svg/,/}/p' packages/design-system/src/styles.css)`
+    prints `1`, and `ActivityDestination.test.tsx` asserts the running row's icon svg is a
+    direct descendant of `[data-testid="row-icon"]` with no intervening
+    `[data-testid="activity-row-icon"]` wrapper.
+25. `ActivityDestination.test.tsx` asserts `[data-testid="activity-lead"]` has text content
+    containing `"most recent first"`, and that `[data-testid="activity-retention-link"]` has
+    text content exactly `"Settings → Privacy"` (not the whole sentence). **Regression guard
+    for the swallowed-sentence link (`AUDIT.md` MEDIUM-8).**
+26. `grep -n 'padding: "16px 20px 32px"' packages/chat-surface/src/destinations/activity/ActivityDestination.tsx`
+    returns nothing, and `ActivityDestination.test.tsx` asserts the page container's computed
+    `padding` is `"20px 24px 40px"` (`.pg`, `copilot.css:1553`).
 
 ## Dependencies
 
@@ -662,28 +818,43 @@ pending_approval_count:0})` === `""`, and that `ActivityDestination` renders **n
   a facade-side `GET /v1/activity` composite for the meta counters (PRD-05 §Non-goals,
   "PRD-07"): the counters ride on `GET /v1/agent/runs`, for the reason PRD-05 itself gives —
   the facade must not own product projection.
-- **PRD-04 (run identity)** — soft. Without it every row title is "Run", so the meta line and
-  chevron land on rows the user still cannot identify. Not a code conflict.
-- **PRD-06 (shared Activity projection in `chat-surface`)** — coordinate. PRD-06 owns the
-  single projector and the binder cut-over; this PRD supplies `formatActivityMeta` for it to
-  call and deletes the audit halves (`activityApi.ts:76-125, 211`;
-  `destinationBinders.tsx:260-290, 337-344`) that PRD-06 is replacing. **Land PRD-06 first
-  or in the same batch** — the deletions are the same lines.
+- **PRD-04 (run identity + the shared Activity projection)** — hard on both counts, and it is
+  the PRD earlier drafts of this document called "PRD-06" (README C7/C21; corrected
+  throughout). PRD-04 owns
+  `packages/chat-surface/src/destinations/activity/activityProjection.ts` and the binder
+  cut-over; this PRD supplies `formatActivityMeta` for it to call and deletes the audit
+  halves (`activityApi.ts:76-125, 211`; `destinationBinders.tsx:260-290, 337-344`) that
+  PRD-04 is replacing — **the deletions are the same lines**, so PRD-04 lands first (it is
+  Wave 1; this PRD is Wave 2). PRD-04 also gives rows real titles; without it the meta line
+  and chevron land on rows the user still cannot identify. PRD-04 **drops** its
+  `Row.tsx` `titleStyle.fontWeight` line and this PRD absorbs it (README C9, D9), and PRD-04
+  owns `ItemLink` and the app-wide accent-link policy (README G11).
+- **PRD-02 (status chip)** — ordering dependency, not a design one. PRD-02 rewrites
+  `packages/chat-surface/src/shell/statusTone.ts` wholesale, and D2 edits one line in it, so
+  the sequence is **01 → 02 → 08** (README C12) and the chats + activity parity harnesses are
+  re-run only after this PRD. D2's `needs_input → warning` tone change is correct under both
+  the current `StatusPill` and PRD-02's replacement; the chip's geometry, family, weight,
+  casing and fill remain PRD-02's.
 - **PRD-01 (tokens)** — soft. Consumes `--font-size-mono-10`, `--tracking-normal`,
-  `--color-surface-elevated`, `--color-surface-muted`, all of which exist on `main` today.
-  Nothing here blocks on PRD-01, and nothing here defines a token.
-
-**Explicitly not a dependency:** the chip PRD (PRD-02). D2's `needs_input → warning` tone
-change is a one-line edit in `statusTone.ts` and is correct under both the current
-`StatusPill` and its replacement.
+  `--font-weight-medium`, `--color-surface-elevated`, `--color-surface-muted`,
+  `--color-success`, all of which exist on `main` today (verified in
+  `packages/design-system/src/styles.css:71, 74, 88, 171, 191, 201`). Nothing here blocks on
+  PRD-01, and nothing here defines a token. `styles.css` merge order is
+  **01 → 02 → 08 → 11 → 10**.
 
 **This PRD unblocks:**
 
 - The Activity surface's parity close-out — after this, the remaining measured HIGHs on
-  `activity` are the chip cluster (PRD-02) and the topbar subtitle (shell registry).
+  `activity` are the chip cluster (PRD-02) and the topbar subtitle (PRD-09 D5, README C15).
 - A truthful per-run tool ledger. D1b makes `runtime_tool_invocations` live, which is the
   prerequisite for per-run cost/step attribution, the compliance answer to "what did this run
   actually touch", and the deletion of the dead
   `runtime_worker/audit.py:194` emitter.
 - The `Row` trailing slot and `.ui-list-row` recipe are consumed by Chats, Tools, and Skills
-  for the same "which rows are navigable" defect.
+  for the same "which rows are navigable" defect. This PRD is scheduled **before PRD-09,
+  PRD-11 and PRD-10** precisely so those three add their props (`⋯` overflow slot; `subFont`
+  / `iconSize`) to the post-PRD-08 `Row.tsx` rather than racing it (README C9, wave order).
+- **PRD-07** stacks on the post-PRD-08 `apps/desktop/renderer/destinationBinders.tsx`, after
+  this PRD deletes the audit fan-out block (README, Wave 2 rationale).
+- **PRD-10**'s `_shared/Page`: Activity is its second consumer, and the swap is a
+  computed-style no-op because D9 already sets `.pg`'s literals here.

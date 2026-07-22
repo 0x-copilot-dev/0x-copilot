@@ -20,33 +20,47 @@ capability works on one host and not the other, the fix is a port/binder seam in
 
 ## The PRDs
 
-| ID  | Title                                                    | Wave | Depends on (corrected) | Owns                                                                                                          |
-| --- | -------------------------------------------------------- | ---- | ---------------------- | ------------------------------------------------------------------------------------------------------------- |
-| 01  | [Design token foundation](PRD-01-design-tokens.md)       | 0    | —                      | `styles.css` token tier: accent seed/derived split, `--font-size-sm` 13px, mono micro-ladder, `--color-scrim` |
-| 02  | [Status chip recipe](PRD-02-chip-recipe.md)              | 1    | 01                     | `.ui-badge` chip-exactness, `StatusPill` rewrite, one status-label SSOT                                       |
-| 03  | [Host binding contract](PRD-03-host-binder-contract.md)  | 1    | —                      | Total shell/destination binding types + per-host conformance tests, shared chats projector                    |
-| 04  | [Run identity](PRD-04-run-identity.md)                   | 1    | 03                     | `ItemRef` registry split (label→caller, routes→host), Activity projection, `ItemLink`                         |
-| 05  | [Run history backend](PRD-05-run-history-backend.md)     | 0    | —                      | `GET /v1/agent/runs`, keyset cursor, `ActiveAgentRunStatus` narrowing, history tombstoning                    |
-| 06  | [Connector access mode](PRD-06-connector-access-mode.md) | 0    | —                      | `access_mode` column + PATCH + **all** enforcement, `ConnectorAccessPort`                                     |
-| 07  | [Project data](PRD-07-project-data.md)                   | 2    | 02, 03, 05(order only) | `agent_conversations.project_id`, computed rollups, project-scoped chats/files reads                          |
-| 08  | [Activity surface](PRD-08-activity-surface.md)           | 2    | 04, 05                 | **`_shared/Row.tsx`**, `.ui-list-row`, run meta counters, `runtime_tool_invocations` writer                   |
-| 09  | [Chats surface](PRD-09-chats-surface.md)                 | 3    | 02, 03, 08             | `useChatsArchive`, bucket+cursor list contract, conversations SSE, **topbar/full-bleed split**                |
-| 10  | [Projects surface](PRD-10-projects-surface.md)           | 4    | 03, 07, 08             | `_shared/Page` + `BackLink` + `ProjectIconTile`, one Projects list, `.ui-grid3`                               |
-| 11  | [Tools surface](PRD-11-tools-surface.md)                 | 3    | 01, 03, 06, 09         | Tools → row-list vocabulary, `AppIcon` tile, `useConnectFlow`, **`ConnectModal` on both hosts**               |
-| 12  | [Rail & Settings](PRD-12-rail-settings.md)               | 3    | 03, 05, 09             | **`railBadges` deletion + `useActiveRunCount`**, `active_count` endpoint, rail chrome, `settingsActive`       |
-| 13  | [Dead code + orphan guard](PRD-13-dead-code.md)          | 4    | 09, 10                 | `ChatsSidebar`/`ChatsDestination` deletion, `tools/check_orphan_destinations.py` + CI gate                    |
+| ID  | Title                                                    | Wave | Depends on (corrected) | Owns                                                                                                                                                 |
+| --- | -------------------------------------------------------- | ---- | ---------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------- |
+| 01  | [Design token foundation](PRD-01-design-tokens.md)       | 0    | —                      | `styles.css` token tier: accent seed/derived split, `--font-size-sm` 13px, mono micro-ladder, `--color-scrim`                                        |
+| 02  | [Status chip recipe](PRD-02-chip-recipe.md)              | 1    | 01                     | `.ui-badge` chip-exactness, `StatusPill` rewrite, one status-label SSOT                                                                              |
+| 03  | [Host binding contract](PRD-03-host-binder-contract.md)  | 1    | —                      | Total shell/destination binding types + per-host conformance tests, shared chats projector                                                           |
+| 04  | [Run identity](PRD-04-run-identity.md)                   | 1    | 03                     | `ItemRef` registry split (label→caller, routes→host), Activity projection, `ItemLink`                                                                |
+| 05  | [Run history backend](PRD-05-run-history-backend.md)     | 0    | —                      | `GET /v1/agent/runs`, keyset cursor, `ActiveAgentRunStatus` narrowing, history tombstoning                                                           |
+| 06  | [Connector access mode](PRD-06-connector-access-mode.md) | 0    | —                      | `access_mode` column + PATCH + **all** enforcement, `ConnectorAccessPort`                                                                            |
+| 07  | [Project data](PRD-07-project-data.md)                   | 2    | 02, 03, 05(order only) | `agent_conversations.project_id`, computed rollups, project-scoped chats/files reads                                                                 |
+| 08  | [Activity surface](PRD-08-activity-surface.md)           | 2    | 04, 05                 | **`_shared/Row.tsx`**, `.ui-list-row`, run meta counters, `runtime_tool_invocations` writer                                                          |
+| 09  | [Chats surface](PRD-09-chats-surface.md)                 | 3    | 02, 03, 08             | `useChatsArchive`, bucket+cursor list contract, conversations SSE, **topbar/full-bleed split**                                                       |
+| 10  | [Projects surface](PRD-10-projects-surface.md)           | 4    | 03, 07, 08             | `_shared/Page` + `BackLink` + `ProjectIconTile`, one Projects list, `.ui-grid3`                                                                      |
+| 11  | [Tools surface](PRD-11-tools-surface.md)                 | 3    | 01, 03, 06, **08**, 09 | Tools → row-list vocabulary, `AppIcon` tile, `useConnectFlow`, **`ConnectModal` on both hosts**, modal shell                                         |
+| 12  | [Rail & Settings](PRD-12-rail-settings.md)               | 3    | 03, 05, 09             | **`railBadges` deletion + `useActiveRunCount`**, `active_count` endpoint, rail chrome, `settingsActive`, **desktop appearance persistence (G7, D9)** |
+| 13  | [Dead code + orphan guard](PRD-13-dead-code.md)          | 4    | **01**, **08**, 09, 10 | `ChatsSidebar`/`ChatsDestination` deletion, `tools/check_orphan_destinations.py` + CI gate                                                           |
 
 ---
 
 ## Corrected implementation order
 
 ```
-Wave 0  ── PRD-01 ‖ PRD-05 ‖ PRD-06                (disjoint; land together)
+Wave 0  ── [prologue: commit baseline-failures.txt]  (see below — blocks every DoD-Q2 item)
+        ── PRD-01 ‖ PRD-05 ‖ PRD-06                (disjoint; land together)
 Wave 1  ── PRD-02 ‖ PRD-03  →  PRD-04
 Wave 2  ── PRD-08            →  PRD-07              (both touch destinationBinders.tsx)
 Wave 3  ── PRD-09            →  PRD-11 ‖ PRD-12
 Wave 4  ── PRD-10            →  PRD-13
 ```
+
+**The wave order is unchanged by reconciliation.** Every "must land first" declared in the
+reconciled PRDs resolves to an earlier wave or to an earlier position inside the same wave;
+no PRD depends on one scheduled after it. Three dependency edges were _added_ during
+reconciliation and are already satisfied by the existing waves: 11 → 08 (`Row.tsx` stacking),
+13 → 08 (`ActivityDestination.tsx` stacking for the fourth `sect-h` stamp), 13 → 01 (C13
+label/wrapper ordering). They are reflected in the table above.
+
+**Wave-0 prologue — `baseline-failures.txt`.** Six PRDs (01, 03, 04, 10, 12, 13) gate a DoD
+item on `docs/plan/design-parity-remediation/baseline-failures.txt` **and each asserts its own
+PR does not modify it**, so no PRD creates it and the file does not exist on disk. Capture it
+on `origin/main` and commit it before Wave 0 lands, or every DoD-Q2-shaped item is
+unrunnable. This is a program-level chore, not a PRD.
 
 Rationale for the non-obvious edges:
 
@@ -92,15 +106,21 @@ Rationale for the non-obvious edges:
 | `.../destinations/projects/ProjectDetailView.tsx`                 | 07, 10                         | 07 → **10 owns** the markup (C16)                                             |
 | `.../destinations/chats/ChatsArchive.tsx`                         | 02, 07, 09                     | 02 → **09 owns**; 07 drops the extraction (C16)                               |
 | `packages/api-types/src/index.ts`                                 | 05, 07, 09, 12                 | 05 → 07 → 09 → 12                                                             |
-| `packages/api-types/src/activity.ts`                              | 04, 05, 08                     | 04 → 05 → 08                                                                  |
-| `services/ai-backend/.../conversation_query_service.py`           | 05, 07, 08, 09, 12             | 05 → 07 → 08 → 09 → 12                                                        |
+| `packages/api-types/src/activity.ts`                              | 04, 05, 08                     | **05 → 04 → 08** (corrected: 05 is Wave 0, 04 is Wave 1)                      |
+| `services/ai-backend/.../conversation_query_service.py`           | 05, 07, 08, 09, 12             | **05 → 08 → 07 → 09 → 12** (corrected: Wave 2 is 08 → 07)                     |
 | `services/ai-backend/src/runtime_api/http/routes.py`              | 05, 07, 09, 12                 | same; **register literal paths before `/{run_id}`**                           |
-| `services/ai-backend/src/runtime_adapters/*/runtime_api_store.py` | 05, 07, 08, 09, 12             | same; conformance suite is the guard                                          |
+| `services/ai-backend/src/runtime_adapters/*/runtime_api_store.py` | 05, 07, 08, 09, 12             | **05 → 08 → 07 → 09 → 12** (corrected, same reason)                           |
 | `services/backend-facade/src/backend_facade/app.py`               | 05, 07, 09, 12                 | same                                                                          |
 
-**Migration ids — pre-assigned (C18).** On disk today: `services/backend` highest is
-`0045`, `services/ai-backend` has only `0001`. `MANIFEST.lock` is checksum-guarded by
-`tools/check_migration_manifest.py`, so two PRDs cannot both claim the same id.
+**Migration ids — pre-assigned (C18).** Re-verified on disk 2026-07-23 by listing both
+directories: `services/backend/migrations` tops out at
+`0045_provider_api_keys_custom_endpoint.sql`; `services/ai-backend/migrations` contains only
+`0001_runtime_baseline.sql` (+ rollback) and `MANIFEST.lock`. Every assigned id below is
+unique across the suite and strictly above its service's high-water mark.
+`MANIFEST.lock` is checksum-guarded by `tools/check_migration_manifest.py` — which lives at
+the **repo root**, not under any service (`python tools/check_migration_manifest.py`, run from
+the root). PRD-09 DoD 6 still spells it `cd services/ai-backend && .venv/bin/python
+tools/check_migration_manifest.py`; that path does not exist and the item will ENOENT.
 
 | Service      | Id     | PRD | File                                    |
 | ------------ | ------ | --- | --------------------------------------- |
@@ -192,6 +212,119 @@ Each of these must be rewritten in its PRD before implementation.
 | DoD-Q10 | 13 / 12    | "…counts byte-identical to the pre-change report (17/59/64/10)"                                                                                           | "Regenerating the chats report on this PR's merge base and on this PR produces byte-identical HIGH/MEDIUM/LOW/INFO counts" — i.e. a delta against _this PR's_ base, not against a number frozen before PRD-01/02/09.                                                          |
 | DoD-Q11 | 05 / 17    | "…**On `main`** the equivalent conversation-list path returns at most 1."                                                                                 | Prose, not a check. Keep it as a note under the DoD item; the checkable half is the 8-entry / 3-date assertion.                                                                                                                                                               |
 | DoD-Q12 | 11 / 13    | "0 HIGH rows for the groups Section header, List, Row and Permission control — **down from 15 HIGH total today**"                                         | The "15 today" clause is only true pre-PRD-06/PRD-01. State the absolute target only, and cite the baseline report path + git sha instead of a number.                                                                                                                        |
+
+---
+
+## Reconciliation status — verified 2026-07-23
+
+Thirteen agents applied the register above to their PRD bodies concurrently. The suite was
+then re-read end to end and every ruling checked mechanically (greps over all thirteen PRDs,
+plus `ls` on both migration directories). **APPLIED** means the losing PRD deleted its copy
+_and_ the winning PRD specifies it. **OUTSTANDING** means it does not.
+
+### Conflict register
+
+| #   | Status  | Note                                                                                                                                                                               |
+| --- | ------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| C1  | APPLIED | PRD-03 `:19,:122-123,:239,:249,:264,:273,:315` disclaim it; PRD-12 D1(c) + Scope + DoD 5–7 specify it.                                                                             |
+| C2  | APPLIED | PRD-03 `:144` declares `{displayName} \| null`; PRD-12 `:313` defers the prop shape and keeps only the in-`AppRail` semantics. PRD-12's stale "with `{initial}`" risk row is gone. |
+| C3  | APPLIED | PRD-03 `:216-219,:271,:328` ship nothing under `services/`; PRD-06 owns column + route + port + all three enforcement gates.                                                       |
+| C4  | APPLIED | PRD-06 `:202,:241,:309` delete the fallback; PRD-11 `:523,:599` defer to it. No PRD "keeps" it.                                                                                    |
+| C5  | APPLIED | PRD-03 `:120,:251,:272,:316` disclaim; PRD-11 D4 mounts it on both hosts.                                                                                                          |
+| C6  | APPLIED | PRD-03 declares the destination out of scope; PRD-06 `:200-205` and PRD-11 `:479,:599` both record the `06 → 11` order.                                                            |
+| C7  | APPLIED | PRD-03 `:130,:250,:276` dropped `src/projections/activity.ts`; PRD-04 `:267-268` creates `destinations/activity/activityProjection.ts`; PRD-05/08/12 all retargeted off "PRD-06".  |
+| C8  | APPLIED | PRD-03 `:243` ships `toChatArchiveRow` only and greps `bucketConversations` to 0; PRD-09 `:112` owns bucketing. The `conversationToArchiveRow` naming drift is also gone.          |
+| C9  | APPLIED | PRD-08 `:498,:560` owns the file and absorbed PRD-04's weight line; 04 disclaims (`:270,:310`), 09 (`:217`) and 11 (`:477`) stack in the stated order.                             |
+| C10 | APPLIED | PRD-10 D3 `:242-252` now uses `--color-surface-elevated` and its DoD 3 greps `color-surface-muted` to 0 in `ProjectIconTile.tsx`. PRD-06/08/11 agree on the mapping.               |
+| C11 | APPLIED | `--font-size-mono-105` appears in no PRD. PRD-01 mints `--font-size-mono-10-5`; PRD-02 DoD 1 asserts it adds no type token.                                                        |
+| C12 | APPLIED | 01 = size+weight, 02 = chip-exactness, 08 D2 = the `needs_input` tone flip. PRD-02 `:337-338` explicitly freezes the tone column.                                                  |
+| C13 | APPLIED | PRD-01 decision C targets `SectionHeader.tsx:69-75` (the `<h2>`) and DoD 7 asserts the wrapper does **not** carry the class; PRD-13 `:260` deletes the wrapper class.              |
+| C14 | APPLIED | PRD-09 `:181-184,:218` owns the split; PRD-12 `:289` defines no set. PRD-03 `:288` records "do not pre-empt".                                                                      |
+| C15 | APPLIED | PRD-08 `:672-674` names PRD-09 D5 / `DestinationMeta.sublabel` explicitly.                                                                                                         |
+| C16 | APPLIED | PRD-07 `:235,:339,:405` + DoD 14 (`grep "ChatsSection"` → 0) extract nothing; PRD-10 D6 owns the markup.                                                                           |
+| C17 | APPLIED | PRD-09 `:272` neither deletes nor teaches it; PRD-13 owns the deletion, the barrel edit and the guard.                                                                             |
+| C18 | APPLIED | Ids unique and above high-water — see the corrected block above. Every PRD re-verified the marks itself. **Caveat:** PRD-09 DoD 6 uses a non-existent tool path (noted above).     |
+| C19 | APPLIED | PRD-09 `:324` lists PRD-05 as a hard predecessor with the `updated_at` rationale; PRD-05 records the reverse edge.                                                                 |
+| C20 | APPLIED | PRD-13 DoD 12 is now a merge-base delta; the frozen `17/59/64/10` survives only as a labelled-stale citation.                                                                      |
+| C21 | APPLIED | Zero generic cross-references survive except PRD-06's (below). Every "PRD-NN" in the suite resolves to an existing document about what the citing text claims.                     |
+
+Also from the register's tail: **PRD-10's `--space-grid-gap` / `.ui-grid3` ownership** APPLIED
+(PRD-01 lists both as non-goals); **`expectDivergence` spelling** APPLIED (PRD-10 `:282,:509`,
+PRD-09 `:226`, PRD-01 `:426` all use the exact key); **PRD-03 "must land first: none"**
+APPLIED (`:323`, qualified by C3/C5/C6). **PRD-06's "must land first: none — touches no file
+the sibling PRDs own" is OUTSTANDING** (see below).
+
+### Gaps
+
+| #   | Status                      | Note                                                                                                                                                                                                                                                                            |
+| --- | --------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| G1  | APPLIED                     | PRD-09 D7 `:202-208`, Scope `:216`, DoD 14. Removed from its non-goals.                                                                                                                                                                                                         |
+| G2  | APPLIED                     | PRD-08 D5/D6 `:415,:452-455`, DoD 24. The `AUDIT.md` N2 disagreement is recorded as a DISPUTED row (`:88`), not silently dropped.                                                                                                                                               |
+| G3  | **APPLIED, INVERTED**       | PRD-01 decision F resolves it as a documented **no-change** ruling: `--color-bg #09090b` == the design's `--ink`; `#050506` is the mock's stage. See the correction below.                                                                                                      |
+| G4  | APPLIED                     | PRD-08 D10 `:521`, `ACTIVITY_RETENTION_PREFIX_COPY`, DoD 25.                                                                                                                                                                                                                    |
+| G5  | **PARTIAL**                 | Row padding `11px 14px` and Activity's page padding are APPLIED in PRD-08 (D9). The "name Activity as `Page`'s second consumer" half is OUTSTANDING — see the orphan below.                                                                                                     |
+| G6  | APPLIED                     | PRD-10 D4 decides `Page` ships **left-aligned, no `margin: 0 auto`**, records **no** `expectDivergence`, and pins it in DoD 5. PRD-09 `:277` defers to that ruling.                                                                                                             |
+| G7  | APPLIED                     | Folded into **PRD-12 as D9** (`useAppearanceSettings`, mounted at the desktop renderer root, DoD 22–24). **No PRD-14 is created.** PRD-01 `:503,:661` still route it to a "new PRD-14 or PRD-12" — stale text, correct outcome.                                                 |
+| G8  | APPLIED (premise corrected) | PRD-13 §3 extends the guard to `src/shell/**` and measures the result: **zero** new orphans. PRD-13 `:65-66` falsifies both of G8's factual claims against the code; the residual (no host supplies `activity`/`approvals`) is routed to PRD-03 as a binding-totality question. |
+| G9  | APPLIED                     | PRD-01 decision E `:388,:440`, DoD 16. PRD-11 `:436` and PRD-09 forbid a local patch.                                                                                                                                                                                           |
+| G10 | APPLIED                     | PRD-11 D8 `:431-436`, Design intent `:204`, DoD 18.                                                                                                                                                                                                                             |
+| G11 | APPLIED                     | PRD-04 `:185-187` states the policy once; Scope `:263` deletes all four declarations; DoD 10 greps them to zero. PRD-10 `:531`-area non-goal retargets to PRD-04.                                                                                                               |
+| G12 | N/A — harness backlog       | Unchanged. Not a product PRD.                                                                                                                                                                                                                                                   |
+
+### Definition-of-Done rewrites
+
+| #       | Status            | Note                                                                                                                                                    |
+| ------- | ----------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| DoD-Q1  | APPLIED           | PRD-03 item 5 — committed `bindingContract.test-d.ts` + `@ts-expect-error`; cites `apps/desktop/tsconfig.json:12-18` proving the file is typechecked.   |
+| DoD-Q2  | APPLIED (blocked) | PRD-04 item 14 uses the prescribed form, as do 01/03/10/12/13. **All six are unrunnable until the Wave-0 prologue commits `baseline-failures.txt`.**    |
+| DoD-Q3  | APPLIED           | PRD-02 item 11 drops the disjunction; verified `packages/design-system/package.json` has exactly `{"typecheck":"tsc -p tsconfig.json"}`.                |
+| DoD-Q4  | APPLIED           | PRD-02 item 16 — `git diff --exit-code -- …/first-run/out/report.md`, no line added under `## HIGH`.                                                    |
+| DoD-Q5  | APPLIED           | PRD-05 item 16 — named test iterating the existing 8-member `AGENT_RUN_STATUSES` tuple (`api-types/src/index.ts:219-228`).                              |
+| DoD-Q6  | APPLIED           | PRD-06 items 17 + 18(a)(b) — split into a fixture-shape grep and two `python3 -c` predicates over `report-default.json`, with the real JSON keys named. |
+| DoD-Q7  | APPLIED           | PRD-08 item 19 — `[data-testid="activity-retry"]` in `ok` / `error` / `empty`, with the fails-on-`main` citation `ActivityDestination.tsx:376-380`.     |
+| DoD-Q8  | APPLIED           | PRD-09 item 8(b)(c)(e) automates the SSE flip, the archive/unarchive round trip and `loadMore`; the manual pass is demoted to a release-checklist line. |
+| DoD-Q9  | APPLIED           | PRD-10 item 15 — runnable `diff <(awk …) <(awk …)`, expected empty, exit 0, plus the reason no state-name normalisation is needed.                      |
+| DoD-Q10 | APPLIED           | PRD-13 item 12 — regenerate on the merge base and on HEAD, `diff` the count headings.                                                                   |
+| DoD-Q11 | APPLIED           | PRD-05 item 17 — named test with the 8-entry / 3-date / non-increasing assertions; the "on `main`" clause demoted to an explicit non-check note.        |
+| DoD-Q12 | APPLIED           | PRD-11 item 13 — absolute target only, via `awk`/`grep -cE` over the four groups, plus a merge-base artefact command. (The frozen "15 today" was 14.)   |
+
+**Sampled beyond the twelve.** Every PRD's DoD was re-read for the banned forms
+("passes", "no new X", "unchanged", "verify by temporarily", "manual acceptance", frozen
+parity totals). None survive as a gate. The remaining "passes" occurrences are all
+`pytest <named file>` / `npm run typecheck` invocations with a named assertion attached,
+which are exit-code checks in substance. No DoD item in the suite gates on an absolute
+HIGH/MEDIUM count. PRD-02 `:61-62`, PRD-10's DISPUTED evidence row and PRD-12 `:70` keep
+counts only as explicitly-labelled, re-derivable evidence, and PRD-10 DoD 19 is a standing
+bar against re-freezing them.
+
+### Corrections the reconciliation forced on this README
+
+1. **G3 is resolved the other way.** PRD-01 opened `styles.css:168` and `copilot.css:8,105,
+160-168,179,386` and found `--color-bg: #09090b` is byte-identical to the design's `--ink`,
+   which is what the mock paints the app window with (`.mw`, `.main`). `#050506` is the
+   **stage** behind a fake 1220×840 window (`body:105`, `.stage:160-168`) — a surface a
+   real full-screen app does not have. `grep -rn "050506" tools/design-parity/surfaces/*/out/report-*.md`
+   returns **0 rows**; projects RC-11 was an inference, not a measurement. G3 is therefore a
+   **no-change ruling** plus a pinning comment and a DoD gate (PRD-01 item 17) so nobody
+   "fixes" it later. This README's G3 row said "assign to PRD-01" and implied a value change;
+   the code wins.
+2. **The hot-file order for `activity.ts` and the two ai-backend files was wrong** and is
+   corrected in the table above (`05 → 04 → 08`; `05 → 08 → 07 → 09 → 12`). Both rows
+   contradicted the wave plan; the wave plan governs.
+3. **Desktop's connector CTA is not dead.** PRD-06 `:30` and PRD-11 `:50` both record the
+   correction against `destinationBinders.tsx:485-486`.
+
+### OUTSTANDING — must be closed before implementation starts
+
+| #   | Item                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                   | Owner to assign                             |
+| --- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ | ------------------------------------------- |
+| O1  | **`baseline-failures.txt` is orphaned.** Six PRDs gate on it; all six assert their PR does not modify it; none creates it; it is not on disk. Wave-0 prologue, above.                                                                                                                                                                                                                                                                                                                                  | Program owner (pre-Wave-0 commit)           |
+| O2  | **`ActivityDestination` → `<Page>` is orphaned (both sides deleted it).** PRD-08 `:510-516,:675-677`: "This PRD does not create, import, or pre-empt `Page` … Activity adopts it **in PRD-10's wave**." PRD-10 `:314-322,:531-532`: "PRD-10 ships the primitive and **does not edit `ActivityDestination`** … Named owner: **PRD-08**." Circular deferral — nobody performs the swap, and no DoD asserts it. G5's second half is unclosed.                                                             | PRD-10 (add the Activity swap to its Scope) |
+| O3  | **The `sect.*` anchors retarget is orphaned.** PRD-01 `:355-361` hands the one-line `surfaces/chats/anchors.json:41-42` retarget (`section-header-label` → `section-header`) to "PRD-09 for chats, PRD-10 for projects". PRD-09's anchors Scope (`:226`) covers only `topbar.*`; PRD-10's (`:509`) covers only the projects card. Neither accepts it, so the `sect.* margin` report row can never clear. PRD-01 pins it with a unit test instead (DoD 18).                                             | PRD-09 (chats anchors file)                 |
+| O4  | **PRD-06's Dependencies section is unreconciled.** `:341` still reads "Must land first: none — … touches no file the sibling design-parity PRDs own", which this README explicitly refutes; `:343` still says "the Tools styling PRD" instead of PRD-11; the section records neither the `06 → 11` order on `ConnectorsDestination.tsx`/`AccessModeSegment.test.tsx` nor its Wave-0 slot. The C4/C5/C6 rulings **are** applied in PRD-06's body (`:200-205`) — only the Dependencies section is stale. | PRD-06                                      |
+| O5  | **PRD-10 `:621` misstates PRD-01.** It lists PRD-01 as owning "`--color-bg` `#09090b` → `#050506` (README G3)". PRD-01 decision F rules the opposite (no change). Delete the clause from PRD-10's dependency bullet.                                                                                                                                                                                                                                                                                   | PRD-10                                      |
+| O6  | **PRD-09 DoD 6 cites a non-existent tool path.** `cd services/ai-backend && .venv/bin/python tools/check_migration_manifest.py` — `services/ai-backend/tools/` does not exist. Use `python tools/check_migration_manifest.py` from the repo root, as PRD-05/06/07 do.                                                                                                                                                                                                                                  | PRD-09                                      |
+| O7  | **Cosmetic, non-blocking.** PRD-01 `:503,:661` still route G7 to "a new PRD-14 or a fold into PRD-12" — PRD-12 D9 has taken it; three `PRD-14` mentions remain in the suite and resolve to nothing. PRD-12 `:447` still lists "`railIdentity` shape" in its `ChatShell.tsx` scope row, which C2 gave to PRD-03 (PRD-12 only deletes PRD-03's shim). PRD-07 `:456` writes the ai-backend hot-file order as `05 → 07 → 09 → 12`, omitting 08.                                                            | 01, 12, 07                                  |
 
 ---
 
