@@ -118,7 +118,10 @@ describe("<FirstRunSurface>", () => {
     renderSurface();
     const foot = screen.getByTestId("first-run-footer");
     expect(foot.textContent).toContain(FIRST_RUN_COPY.footer.left);
-    expect(foot.textContent).toContain(FIRST_RUN_COPY.footer.right);
+    // Pre-choice gate promises "nothing leaves this machine" (design default);
+    // the "keys in OS keychain" line only appears once a key engine is chosen.
+    expect(foot.textContent).toContain(FIRST_RUN_COPY.footer.rightLocal);
+    expect(foot.textContent).not.toContain(FIRST_RUN_COPY.footer.right);
   });
 
   it("honors a custom appVersion in the footer", () => {
@@ -321,19 +324,29 @@ describe("<FirstRunSurface>", () => {
     expect(lastWebSearch).toBe(false);
   });
 
-  it("footer-right is engine-keyed: local engine → 'nothing leaves this machine' (P4)", () => {
+  it("footer-right is engine-keyed: key engine → keychain line, else → 'nothing leaves this machine' (P4)", async () => {
     renderSurface();
-    // choice stage (no engine) shows the default (key) right line.
-    expect(screen.getByTestId("first-run-footer").textContent).toContain(
-      FIRST_RUN_COPY.footer.right,
-    );
-    // Start the local download → engine becomes local → footer swaps.
+    const foot = () => screen.getByTestId("first-run-footer").textContent;
+    // choice stage (no engine) → privacy line, not the keychain line.
+    expect(foot()).toContain(FIRST_RUN_COPY.footer.rightLocal);
+    expect(foot()).not.toContain(FIRST_RUN_COPY.footer.right);
+    // Local download → local engine → still privacy line.
     fireEvent.click(screen.getByTestId("first-run-start-download"));
-    expect(screen.getByTestId("first-run-footer").textContent).toContain(
-      FIRST_RUN_COPY.footer.rightLocal,
-    );
-    expect(screen.getByTestId("first-run-footer").textContent).not.toContain(
-      FIRST_RUN_COPY.footer.right,
+    expect(foot()).toContain(FIRST_RUN_COPY.footer.rightLocal);
+    expect(foot()).not.toContain(FIRST_RUN_COPY.footer.right);
+  });
+
+  it("footer-right shows the keychain line once a key engine is connected (P4)", async () => {
+    renderSurface();
+    fireEvent.click(screen.getByTestId("first-run-add-key"));
+    fireEvent.change(screen.getByTestId("first-run-key-input"), {
+      target: { value: "sk-ant-unit-test-placeholder-not-real" },
+    });
+    fireEvent.click(screen.getByTestId("first-run-key-connect"));
+    await waitFor(() =>
+      expect(screen.getByTestId("first-run-footer").textContent).toContain(
+        FIRST_RUN_COPY.footer.right,
+      ),
     );
   });
 

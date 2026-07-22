@@ -451,13 +451,15 @@ export function FirstRunSurface({
     walletChipSlot
   );
 
-  // Footer-right is engine-keyed (SPEC): a local (on-device) engine promises
-  // "nothing leaves this machine"; every other engine (or the pre-choice gate)
-  // keeps the BYOK-provider line.
+  // Footer-right is engine-keyed (SPEC + design): the "keys in OS keychain"
+  // line is only truthful once a BYOK *key* engine is chosen. The pre-choice
+  // gate and the local (on-device) engine both promise "nothing leaves this
+  // machine" — the design's gate default. Only a `key` engine shows the
+  // keychain line.
   const footerRight =
-    engine?.kind === "local"
-      ? FIRST_RUN_COPY.footer.rightLocal
-      : FIRST_RUN_COPY.footer.right;
+    engine?.kind === "key"
+      ? FIRST_RUN_COPY.footer.right
+      : FIRST_RUN_COPY.footer.rightLocal;
 
   const surface = (
     <div className="fr" data-testid="first-run-surface">

@@ -46,7 +46,7 @@ export function FirstRunLocalCard({
   return (
     <section className="fr-gcard" data-testid="first-run-local-card">
       <span className="fr-gcard__icon" aria-hidden="true">
-        <Icon name="download" size={20} />
+        <Icon name="chip" size={20} />
       </span>
       <h2 className="fr-gcard__title">{FIRST_RUN_COPY.local.title}</h2>
       <p className="fr-gcard__meta">{FIRST_RUN_COPY.local.meta}</p>
