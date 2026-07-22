@@ -31,13 +31,19 @@ def _now() -> datetime:
 
 class ProviderName(StrEnum):
     """Closed set of providers the runtime supports — wire-aligned with
-    the CHECK constraint in migrations 0034 (openai/anthropic/google) and
-    0036 (openrouter)."""
+    the CHECK constraint in migrations 0034 (openai/anthropic/google),
+    0036 (openrouter) and 0045 (openai_compatible).
+
+    ``OPENAI_COMPATIBLE`` (decision D-2) is the ONE generic member backing the
+    "any OpenAI-compatible endpoint" custom add-flow: a single per-user endpoint
+    whose ``base_url`` + display ``label`` are user-supplied and live in the two
+    nullable columns below. The four native providers never populate them."""
 
     OPENAI = "openai"
     ANTHROPIC = "anthropic"
     GOOGLE = "google"
     OPENROUTER = "openrouter"
+    OPENAI_COMPATIBLE = "openai_compatible"
 
 
 class ProviderApiKeyRecord(BaseModel):
@@ -47,7 +53,13 @@ class ProviderApiKeyRecord(BaseModel):
     ``default_model`` is the display-safe model slug chosen for this key
     (PRD-F PR-F.5) — never key material. ``None`` for keys stored without a
     model (or by older clients); a rotation that omits it preserves the
-    previously-stored value (see ``upsert``)."""
+    previously-stored value (see ``upsert``).
+
+    ``base_url`` + ``label`` (decision D-2) are populated ONLY for the
+    ``openai_compatible`` custom endpoint — the user-supplied endpoint and a
+    display name. Both are display-safe (never key material) and stay ``None``
+    for the four native providers. Like ``default_model`` they are preserved on
+    a rotation that omits them (COALESCE)."""
 
     model_config = ConfigDict(extra="forbid", frozen=True)
 
@@ -57,6 +69,8 @@ class ProviderApiKeyRecord(BaseModel):
     encrypted_key: str
     key_hint: str
     default_model: str | None = None
+    base_url: str | None = None
+    label: str | None = None
     created_at: datetime = Field(default_factory=_now)
     updated_at: datetime = Field(default_factory=_now)
 
@@ -145,14 +159,23 @@ class InMemoryProviderApiKeyStore:
         del conn
         key = (record.org_id, record.user_id, record.provider.value)
         existing = self.rows.get(key)
-        # A rotation that omits ``default_model`` preserves the stored pick —
-        # mirrors the ``created_at`` carry-over and the postgres COALESCE.
+        # A rotation that omits ``default_model`` / ``base_url`` / ``label``
+        # preserves the stored value — mirrors the ``created_at`` carry-over and
+        # the postgres COALESCE.
         default_model = record.default_model
         if default_model is None and existing is not None:
             default_model = existing.default_model
+        base_url = record.base_url
+        if base_url is None and existing is not None:
+            base_url = existing.base_url
+        label = record.label
+        if label is None and existing is not None:
+            label = existing.label
         saved = record.model_copy(
             update={
                 "default_model": default_model,
+                "base_url": base_url,
+                "label": label,
                 "created_at": existing.created_at if existing else record.created_at,
                 "updated_at": _now(),
             }
@@ -216,7 +239,7 @@ class PostgresProviderApiKeyStore:
             cur.execute(
                 """
                 SELECT org_id, user_id, provider, encrypted_key, key_hint,
-                       default_model, created_at, updated_at
+                       default_model, base_url, label, created_at, updated_at
                 FROM provider_api_keys
                 WHERE org_id = %s AND user_id = %s AND provider = %s
                 """,
@@ -237,7 +260,7 @@ class PostgresProviderApiKeyStore:
             cur.execute(
                 """
                 SELECT org_id, user_id, provider, encrypted_key, key_hint,
-                       default_model, created_at, updated_at
+                       default_model, base_url, label, created_at, updated_at
                 FROM provider_api_keys
                 WHERE org_id = %s AND user_id = %s
                 ORDER BY provider
@@ -259,18 +282,22 @@ class PostgresProviderApiKeyStore:
                 """
                 INSERT INTO provider_api_keys (
                     org_id, user_id, provider, encrypted_key, key_hint,
-                    default_model, created_at, updated_at
-                ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s)
+                    default_model, base_url, label, created_at, updated_at
+                ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
                 ON CONFLICT (org_id, user_id, provider) DO UPDATE SET
                     encrypted_key = EXCLUDED.encrypted_key,
                     key_hint = EXCLUDED.key_hint,
-                    -- A rotation that omits the model preserves the stored
-                    -- pick; a fresh model overwrites it.
+                    -- A rotation that omits the model / endpoint preserves the
+                    -- stored value; a fresh value overwrites it.
                     default_model = COALESCE(
                         EXCLUDED.default_model, provider_api_keys.default_model
                     ),
+                    base_url = COALESCE(
+                        EXCLUDED.base_url, provider_api_keys.base_url
+                    ),
+                    label = COALESCE(EXCLUDED.label, provider_api_keys.label),
                     updated_at = EXCLUDED.updated_at
-                RETURNING created_at, default_model
+                RETURNING created_at, default_model, base_url, label
                 """,
                 (
                     saved.org_id,
@@ -279,6 +306,8 @@ class PostgresProviderApiKeyStore:
                     saved.encrypted_key,
                     saved.key_hint,
                     saved.default_model,
+                    saved.base_url,
+                    saved.label,
                     saved.created_at,
                     saved.updated_at,
                 ),
@@ -288,10 +317,22 @@ class PostgresProviderApiKeyStore:
             if isinstance(returned, dict):
                 created_at = returned["created_at"]
                 default_model = returned["default_model"]
+                base_url = returned["base_url"]
+                label = returned["label"]
             else:
-                created_at, default_model = returned[0], returned[1]
+                created_at, default_model, base_url, label = (
+                    returned[0],
+                    returned[1],
+                    returned[2],
+                    returned[3],
+                )
             saved = saved.model_copy(
-                update={"created_at": created_at, "default_model": default_model}
+                update={
+                    "created_at": created_at,
+                    "default_model": default_model,
+                    "base_url": base_url,
+                    "label": label,
+                }
             )
         return saved
 

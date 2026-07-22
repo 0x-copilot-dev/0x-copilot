@@ -51,6 +51,7 @@ from backend_app.provider_keys.service import (
     ProviderKeysService,
     validate_api_key_format,
 )
+from backend_app.provider_keys.ssrf_guard import SsrfGuard, SsrfValidationError
 from backend_app.provider_keys.store import ProviderApiKeyRecord, ProviderName
 
 
@@ -63,9 +64,11 @@ class ProviderKeyResponse(BaseModel):
     """One stored key, hint-only. NEVER carries plaintext.
 
     ``default_model`` is the server's single-source projection of the model
-    chosen for this key (PRD-F PR-F.5). It is display-safe and omitted from
-    the wire when ``None`` (``response_model_exclude_none``), so the legacy
-    three-field shape stays byte-identical for keys stored without a model.
+    chosen for this key (PRD-F PR-F.5). ``base_url`` + ``label`` (decision D-2)
+    are the user-supplied endpoint + display name for the ``openai_compatible``
+    custom provider — display-safe, never key material. All three are omitted
+    from the wire when ``None`` (``response_model_exclude_none``), so the legacy
+    three-field shape stays byte-identical for the native providers.
     """
 
     model_config = ConfigDict(extra="forbid")
@@ -74,6 +77,8 @@ class ProviderKeyResponse(BaseModel):
     key_hint: str
     updated_at: str
     default_model: str | None = None
+    base_url: str | None = None
+    label: str | None = None
 
 
 class ProviderKeyListResponse(BaseModel):
@@ -90,6 +95,12 @@ class SetProviderKeyRequest(BaseModel):
     # ADDITIVE: older clients omit it and any stored pick is preserved on
     # rotation. Display-safe slug only — never key material.
     default_model: str | None = None
+    # Decision D-2 — the custom OpenAI-compatible endpoint. ``base_url`` is
+    # REQUIRED in practice when the path provider is ``openai_compatible``
+    # (enforced in the route, not the schema, so native providers stay
+    # additive); ``label`` is the display name. Both are display-safe.
+    base_url: str | None = None
+    label: str | None = None
 
 
 class PutProviderKeyResponse(ProviderKeyResponse):
@@ -112,6 +123,9 @@ class ValidateProviderKeyRequest(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     api_key: str = Field(..., min_length=1)
+    # Decision D-2 — probe target for the ``openai_compatible`` custom slug
+    # (``{base_url}/models``). Required for that provider; ignored otherwise.
+    base_url: str | None = None
 
 
 class ValidateProviderKeyResponse(BaseModel):
@@ -144,12 +158,19 @@ def register_provider_keys_routes(
     *,
     service: ProviderKeysService,
     live_validator: ProviderKeyLiveValidator | None = None,
+    ssrf_guard: SsrfGuard | None = None,
 ) -> None:
     """Attach the ``/v1/settings/provider-keys`` routes to ``app``.
 
     ``live_validator=None`` disables the live lane: PUT falls back to
     the format-only gate (legacy behavior) and the validate route
     answers ``provider_unreachable`` (couldn't check).
+
+    ``ssrf_guard`` validates the user-supplied ``base_url`` of the
+    ``openai_compatible`` custom provider (decision D-2) at BOTH validate and
+    store time. ``None`` means the custom flow is unavailable on this
+    deployment: any ``openai_compatible`` request 400s (``custom_endpoint_
+    unavailable``) — fail closed, never store or probe an unguarded URL.
     """
 
     @app.get(
@@ -169,6 +190,30 @@ def register_provider_keys_routes(
             keys=[_to_response(record) for record in records]
         )
 
+    def _require_custom_base_url(provider: ProviderName, base_url: str | None) -> None:
+        """Validate the custom slug's base_url, or 400. No-op for native slugs.
+
+        The single gate for decision D-2's SSRF surface on the request path: it
+        runs BEFORE any probe or store, so a rejected URL never leaves the
+        process. The 400 detail is a machine-readable reason code — never the
+        URL, host, or a resolved IP.
+        """
+
+        if provider is not ProviderName.OPENAI_COMPATIBLE:
+            return
+        if ssrf_guard is None:
+            raise HTTPException(
+                status.HTTP_400_BAD_REQUEST, "custom_endpoint_unavailable"
+            )
+        if not base_url or not base_url.strip():
+            raise HTTPException(status.HTTP_400_BAD_REQUEST, "base_url_required")
+        try:
+            ssrf_guard.check(base_url)
+        except SsrfValidationError as exc:
+            raise HTTPException(
+                status.HTTP_400_BAD_REQUEST, f"base_url_rejected:{exc.reason.value}"
+            ) from exc
+
     @app.put(
         "/v1/settings/provider-keys/{provider}",
         response_model=PutProviderKeyResponse,
@@ -183,6 +228,9 @@ def register_provider_keys_routes(
         user_id: str = Query(..., min_length=1),
     ) -> PutProviderKeyResponse:
         identity = _identity(request, org_id=org_id, user_id=user_id)
+        # Custom endpoint: require + SSRF-guard the base_url before anything
+        # touches it (probe or store).
+        _require_custom_base_url(provider, body.base_url)
         # Format check stays the gate — cheap, offline, and it keeps a
         # clearly-wrong key from ever leaving this process.
         try:
@@ -194,7 +242,9 @@ def register_provider_keys_routes(
         # says so via ``live_check``.
         live_check: Literal["passed", "skipped_unreachable"] | None = None
         if live_validator is not None:
-            outcome = await live_validator.validate(provider=provider, api_key=cleaned)
+            outcome = await live_validator.validate(
+                provider=provider, api_key=cleaned, base_url=body.base_url
+            )
             if outcome.status is LiveCheckStatus.INVALID_KEY:
                 raise HTTPException(
                     status.HTTP_400_BAD_REQUEST, "api_key_rejected_by_provider"
@@ -211,6 +261,8 @@ def register_provider_keys_routes(
                 provider=provider,
                 api_key=body.api_key,
                 default_model=body.default_model,
+                base_url=body.base_url,
+                label=body.label,
                 request_ip=_request_ip(request),
                 user_agent=request.headers.get("user-agent"),
             )
@@ -235,11 +287,16 @@ def register_provider_keys_routes(
         carries material, and the response never echoes the key."""
 
         _identity(request, org_id=org_id, user_id=user_id)
+        # Custom endpoint: reject an unsafe/missing base_url with a clear 400
+        # before probing (rather than a murky "unreachable").
+        _require_custom_base_url(provider, body.base_url)
         if live_validator is None:
             return ValidateProviderKeyResponse(
                 valid=None, models=None, reason="provider_unreachable"
             )
-        outcome = await live_validator.validate(provider=provider, api_key=body.api_key)
+        outcome = await live_validator.validate(
+            provider=provider, api_key=body.api_key, base_url=body.base_url
+        )
         if outcome.status is LiveCheckStatus.VALID:
             return ValidateProviderKeyResponse(
                 valid=True, models=list(outcome.model_ids), reason=None
@@ -291,6 +348,8 @@ def _to_response(record: ProviderApiKeyRecord) -> ProviderKeyResponse:
         key_hint=record.key_hint,
         updated_at=record.updated_at.isoformat(),
         default_model=record.default_model,
+        base_url=record.base_url,
+        label=record.label,
     )
 
 
@@ -304,6 +363,8 @@ def _to_put_response(
         key_hint=record.key_hint,
         updated_at=record.updated_at.isoformat(),
         default_model=record.default_model,
+        base_url=record.base_url,
+        label=record.label,
         live_check=live_check,
     )
 

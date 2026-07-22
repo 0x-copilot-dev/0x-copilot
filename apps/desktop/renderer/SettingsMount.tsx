@@ -50,7 +50,11 @@ import {
   createModelsPort,
   createProviderKeysPort,
   createSpendGuardrailPort,
+  createToolUsePolicyPort,
   localModelInstalledTag,
+  DEFAULT_APPROVAL_POLICY,
+  type ApprovalPolicyPort,
+  type ApprovalPolicyValue,
   type AppLockValue,
   type AppearanceValue,
   type KeychainProtectionValue,
@@ -139,7 +143,12 @@ const DEFAULT_MODEL_BEHAVIOR: ModelBehaviorValue = {
   // `null` == "Auto": no persisted default → the runtime baseline (D1).
   reasoningDepth: null,
   webAccess: true,
-  approvalPolicy: { readOnly: "auto", write: "require", danger: "require" },
+  // Seed with the deployment fail-open posture (read=auto, write=ask,
+  // destructive=require) — the SAME `_DEFAULT_MODES` the runtime uses when the
+  // policy lane is unconfigured (D5/D-5). The real per-user policy is fetched
+  // on mount and replaces this; it is NOT the hardcoded `write:require` the
+  // desktop used to seed (which diverged from the backend `write:ask`).
+  approvalPolicy: DEFAULT_APPROVAL_POLICY,
   spend: { monthlyCapUsd: null, pauseAtCap: false },
 };
 
@@ -678,6 +687,50 @@ export function SettingsMount({
     }
   };
 
+  // --- Model & behavior: approval policy (D5) -----------------------------
+  // The 3-axis approval policy binds to the per-user tool-use policy at
+  // /v1/me/policies/tool-use — the SAME store the runtime enforces at run-start
+  // (D2). GET seeds the axes on mount; each edit PUTs the atomic 3-axis replace
+  // through the shared port. Behaviourally identical to the web SettingsBinder
+  // (same `createToolUsePolicyPort`, each host binds its own transport).
+  const toolUsePolicyPort: ApprovalPolicyPort = useMemo(
+    () => createToolUsePolicyPort(transport),
+    [transport],
+  );
+  const [approvalPolicy, setApprovalPolicy] = useState<ApprovalPolicyValue>(
+    DEFAULT_APPROVAL_POLICY,
+  );
+  useEffect(() => {
+    let cancelled = false;
+    void toolUsePolicyPort
+      .read()
+      .then((value: ApprovalPolicyValue) => {
+        if (!cancelled) setApprovalPolicy(value);
+      })
+      .catch(() => {
+        // Fail open: keep the deployment-default seed (the runtime falls open
+        // to the same posture). Never fabricate a "saved" state on a load error.
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [toolUsePolicyPort]);
+
+  const persistApprovalPolicy = async (
+    next: ApprovalPolicyValue,
+    toast: (message: string) => void,
+  ): Promise<void> => {
+    const previous = approvalPolicy;
+    setApprovalPolicy(next); // optimistic
+    try {
+      await toolUsePolicyPort.save(next);
+      toast("Approval policy saved.");
+    } catch {
+      setApprovalPolicy(previous); // rollback — never a fake success
+      toast("Saving the approval policy failed — retry in a moment.");
+    }
+  };
+
   const [retention, setRetention] = useState<RetentionChoice>("forever");
   const [memoryEnabled, setMemoryEnabled] = useState(true);
   const [notifications, setNotifications] = useState<NotificationDefaults>(() =>
@@ -960,15 +1013,16 @@ export function SettingsMount({
         return (
           <ModelBehaviorPage
             // Default model / reasoning depth / web access are server-backed
-            // (workspace defaults, autosaved via read-merge-PUT). The spend cap
-            // is server-backed too (the B7 budget engine) but deferred behind
-            // the SaveBar. Approval policy stays local until its persistence
-            // lands (out of D1/D3/D4 scope).
+            // (workspace defaults, autosaved via read-merge-PUT). Approval
+            // policy is server-backed too (per-user tool-use policy, D5). The
+            // spend cap is server-backed (the B7 budget engine) but deferred
+            // behind the SaveBar. All five knobs now round-trip to a real store.
             value={{
               ...modelBehavior,
               defaultModel: mbDefaultValue,
               reasoningDepth: mbReasoningDepth,
               webAccess: mbWebAccess,
+              approvalPolicy,
               spend,
             }}
             cloudModels={mbCloudModels}
@@ -991,6 +1045,9 @@ export function SettingsMount({
                     ? "Web access enabled by default."
                     : "Web access off by default.",
                 );
+              }
+              if (patch.approvalPolicy !== undefined) {
+                void persistApprovalPolicy(patch.approvalPolicy, toast);
               }
               if (patch.spend !== undefined) {
                 setSpend(patch.spend);

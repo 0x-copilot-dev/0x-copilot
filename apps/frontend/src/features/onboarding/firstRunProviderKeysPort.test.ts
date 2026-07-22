@@ -48,7 +48,9 @@ describe("createFirstRunProviderKeysPort", () => {
   it("save() includes default_model when provided", async () => {
     vi.mocked(putProviderKey).mockResolvedValue(SUMMARY);
     const port = createFirstRunProviderKeysPort();
-    await port.save("openai", "sk-abcdefghijklmnop", "gpt-5.2");
+    await port.save("openai", "sk-abcdefghijklmnop", {
+      defaultModel: "gpt-5.2",
+    });
     expect(putProviderKey).toHaveBeenCalledWith("openai", {
       api_key: "sk-abcdefghijklmnop",
       default_model: "gpt-5.2",
@@ -58,7 +60,7 @@ describe("createFirstRunProviderKeysPort", () => {
   it("save() ignores an empty-string default_model", async () => {
     vi.mocked(putProviderKey).mockResolvedValue(SUMMARY);
     const port = createFirstRunProviderKeysPort();
-    await port.save("openai", "sk-abcdefghijklmnop", "");
+    await port.save("openai", "sk-abcdefghijklmnop", { defaultModel: "" });
     expect(putProviderKey).toHaveBeenCalledWith("openai", {
       api_key: "sk-abcdefghijklmnop",
     });

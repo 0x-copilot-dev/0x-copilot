@@ -820,6 +820,11 @@ export {
   resolveSettingsSlug,
   showSoloFooter,
   settingsNavItem,
+  // D5 — slug → page ownership SSOT (nav-entry↔page bijection guard).
+  SETTINGS_PAGE_OWNERSHIP,
+  settingsPageOwner,
+  chatSurfaceOwnedSlugs,
+  hostOwnedSlugs,
   type SettingsSurfaceProps,
   type SettingsSurfaceController,
   type SettingsDirtyState,
@@ -830,6 +835,7 @@ export {
   type SettingsNavIcon,
   type SettingsNavItemModel,
   type SettingsProfileGate,
+  type SettingsPageOwner,
 } from "./settings";
 // === end Phase 5 (PR-5.1) ===
 
@@ -924,12 +930,16 @@ export {
   checkProviderKeyFormat,
   providerCatalogEntry,
   PROVIDER_CATALOG,
+  CUSTOM_ENDPOINT_ENTRY,
   type ProviderKeysPageProps,
   type AddProviderKeyModalProps,
   type AddProviderKeySubmit,
+  type AddProviderKeyValidateContext,
   type ProviderKeysPort,
   type ProviderCatalogEntry,
   type ProviderKeyValidation,
+  type SaveProviderKeyOptions,
+  type ValidateProviderKeyOptions,
   // Models curation (PR-3D)
   ModelsPage,
   MODELS_PAGE_NOTE,
@@ -981,6 +991,13 @@ export {
   microToCapUsd,
   type SpendGuardrailPort,
   type SpendGuardrailSnapshot,
+  // D5 — Approval-policy port (bound to /v1/me/policies/tool-use; owns the
+  // UI-axis↔wire-kind mapping). Both hosts wire `createToolUsePolicyPort`.
+  createToolUsePolicyPort,
+  approvalPolicyFromResponse,
+  toolUsePolicyRequestFromValue,
+  DEFAULT_APPROVAL_POLICY,
+  type ApprovalPolicyPort,
   type ApprovalPolicyProps,
   type ApprovalPolicyValue,
   type ReadOnlyApprovalMode,
@@ -1460,7 +1477,7 @@ export {
   type UseFirstRunLocalModelArgs,
   type FirstRunLocalModelsPort,
 } from "./onboarding";
-export { QWEN3_4B_PRESET, LOCAL_MODEL_PRESETS } from "./settings";
+export { QWEN3_4B_PRESET } from "./settings";
 // === end First-Run onboarding (P2) ===
 // === First-Run onboarding (P3) — composer + chips + ack + launch ===
 // State B (`OnboardingComposer` mounts the real AssistantComposer under the

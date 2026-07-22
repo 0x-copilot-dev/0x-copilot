@@ -40,6 +40,15 @@ import {
 export interface AddProviderKeySubmit {
   readonly apiKey: string;
   readonly model: string;
+  /** Custom OpenAI-compatible endpoint URL (decision D-2) — `isCustom` only. */
+  readonly baseUrl?: string;
+  /** Custom endpoint display name (decision D-2) — `isCustom` only. */
+  readonly label?: string;
+}
+
+/** Extra probe context passed to `onValidate` for the custom endpoint (D-2). */
+export interface AddProviderKeyValidateContext {
+  readonly baseUrl?: string;
 }
 
 export interface AddProviderKeyModalProps {
@@ -48,13 +57,21 @@ export interface AddProviderKeyModalProps {
   readonly provider: ProviderCatalogEntry;
   /** "add" (new key) vs "rotate" (replace an existing one) — affects copy only. */
   readonly mode?: "add" | "rotate";
+  /** Pre-fill for a custom endpoint's Base URL (rotate keeps the stored one). */
+  readonly initialBaseUrl?: string | null;
+  /** Pre-fill for a custom endpoint's Label (rotate keeps the stored one). */
+  readonly initialLabel?: string | null;
   readonly onClose: () => void;
   /**
    * Step-2 validation. Resolves `{ ok: true, models? }` to advance to step 3,
    * or `{ ok: false, error }` to bounce back to step 1 with an inline alert and
-   * no stored key. Defaults to the pure `checkProviderKeyFormat`.
+   * no stored key. Defaults to the pure `checkProviderKeyFormat`. For a custom
+   * endpoint the `context.baseUrl` is the probe target.
    */
-  readonly onValidate?: (apiKey: string) => Promise<ProviderKeyValidation>;
+  readonly onValidate?: (
+    apiKey: string,
+    context?: AddProviderKeyValidateContext,
+  ) => Promise<ProviderKeyValidation>;
   /**
    * Step-3 store — receives the plaintext key exactly once. Resolve to finish
    * (the modal calls `onClose`); reject to keep the flow open with an alert.
@@ -119,12 +136,17 @@ export function AddProviderKeyModal({
   open,
   provider,
   mode = "add",
+  initialBaseUrl,
+  initialLabel,
   onClose,
   onValidate,
   onSubmit,
 }: AddProviderKeyModalProps): ReactElement {
+  const isCustom = provider.isCustom === true;
   const [step, setStep] = useState<Step>(1);
   const [apiKey, setApiKey] = useState("");
+  const [baseUrl, setBaseUrl] = useState("");
+  const [label, setLabel] = useState("");
   const [model, setModel] = useState("");
   const [models, setModels] = useState<readonly string[]>(provider.models);
   const [error, setError] = useState<string | null>(null);
@@ -135,11 +157,13 @@ export function AddProviderKeyModal({
     if (!open) return;
     setStep(1);
     setApiKey("");
+    setBaseUrl(initialBaseUrl ?? "");
+    setLabel(initialLabel ?? "");
     setModel("");
     setModels(provider.models);
     setError(null);
     setSubmitting(false);
-  }, [open, provider]);
+  }, [open, provider, initialBaseUrl, initialLabel]);
 
   const runValidate = useCallback(
     async (candidate: string) => {
@@ -147,7 +171,10 @@ export function AddProviderKeyModal({
       setStep(2);
       try {
         const result = onValidate
-          ? await onValidate(candidate)
+          ? await onValidate(
+              candidate,
+              isCustom ? { baseUrl: baseUrl.trim() } : undefined,
+            )
           : checkProviderKeyFormat(provider, candidate);
         if (!result.ok) {
           setStep(1);
@@ -166,20 +193,35 @@ export function AddProviderKeyModal({
         setError(toMessage(err, "Could not validate the key. Try again."));
       }
     },
-    [onValidate, provider],
+    [onValidate, provider, isCustom, baseUrl],
   );
+
+  // A custom endpoint needs its Base URL + Label before the key can be checked.
+  const step1Ready =
+    apiKey.trim().length > 0 &&
+    (!isCustom || (baseUrl.trim().length > 0 && label.trim().length > 0));
 
   const handleContinue = useCallback(() => {
     const candidate = apiKey.trim();
     if (candidate.length === 0) return;
+    if (
+      isCustom &&
+      (baseUrl.trim().length === 0 || label.trim().length === 0)
+    ) {
+      return;
+    }
     void runValidate(candidate);
-  }, [apiKey, runValidate]);
+  }, [apiKey, baseUrl, label, isCustom, runValidate]);
 
   const handleAdd = useCallback(() => {
     if (submitting) return;
     setSubmitting(true);
     setError(null);
-    onSubmit({ apiKey: apiKey.trim(), model })
+    onSubmit({
+      apiKey: apiKey.trim(),
+      model,
+      ...(isCustom ? { baseUrl: baseUrl.trim(), label: label.trim() } : {}),
+    })
       .then(() => {
         onClose();
       })
@@ -187,7 +229,11 @@ export function AddProviderKeyModal({
         setError(toMessage(err, "Could not save the key."));
         setSubmitting(false);
       });
-  }, [apiKey, model, onSubmit, onClose, submitting]);
+  }, [apiKey, model, baseUrl, label, isCustom, onSubmit, onClose, submitting]);
+
+  // The default-model pick is optional for a custom endpoint (the gateway may
+  // define its own default); native providers still require a selection.
+  const modelRequired = !isCustom;
 
   const title =
     mode === "rotate"
@@ -240,7 +286,7 @@ export function AddProviderKeyModal({
                 type="button"
                 variant="primary"
                 size="sm"
-                disabled={apiKey.trim().length === 0}
+                disabled={!step1Ready}
                 onClick={handleContinue}
                 data-testid="add-key-continue"
               >
@@ -252,7 +298,7 @@ export function AddProviderKeyModal({
                 type="button"
                 variant="primary"
                 size="sm"
-                disabled={submitting || model.length === 0}
+                disabled={submitting || (modelRequired && model.length === 0)}
                 aria-disabled={submitting}
                 onClick={handleAdd}
                 data-testid="add-key-submit"
@@ -268,6 +314,36 @@ export function AddProviderKeyModal({
 
       {step === 1 ? (
         <div style={bodyBlockStyle}>
+          {isCustom ? (
+            <>
+              <Field
+                label="Base URL"
+                hint="Your OpenAI-compatible endpoint, e.g. https://my-host/v1. Validated for safety before it is stored."
+              >
+                <TextInput
+                  type="url"
+                  inputMode="url"
+                  spellCheck={false}
+                  autoComplete="off"
+                  value={baseUrl}
+                  placeholder="https://my-host/v1"
+                  onChange={(event) => setBaseUrl(event.target.value)}
+                  data-testid="add-key-base-url"
+                />
+              </Field>
+              <Field label="Label" hint="A name to recognise this endpoint by.">
+                <TextInput
+                  type="text"
+                  spellCheck={false}
+                  autoComplete="off"
+                  value={label}
+                  placeholder="My vLLM"
+                  onChange={(event) => setLabel(event.target.value)}
+                  data-testid="add-key-label"
+                />
+              </Field>
+            </>
+          ) : null}
           <Field
             label={`${provider.label} API key`}
             hint="Sent to your provider to validate, then stored encrypted. Only the last 4 characters are ever shown again."
@@ -318,18 +394,35 @@ export function AddProviderKeyModal({
             Key validated. Choose the model runs use by default — you can change
             it any time in Model &amp; behavior.
           </p>
-          <Field label="Default model">
-            <Select
-              value={model}
-              onChange={(event) => setModel(event.target.value)}
-              data-testid="add-key-model"
-            >
-              {models.map((name) => (
-                <option key={name} value={name}>
-                  {name}
-                </option>
-              ))}
-            </Select>
+          <Field
+            label={modelRequired ? "Default model" : "Default model (optional)"}
+          >
+            {models.length > 0 ? (
+              <Select
+                value={model}
+                onChange={(event) => setModel(event.target.value)}
+                data-testid="add-key-model"
+              >
+                {models.map((name) => (
+                  <option key={name} value={name}>
+                    {name}
+                  </option>
+                ))}
+              </Select>
+            ) : (
+              // No model list from the probe (a custom endpoint that doesn't
+              // list, or an offline save) — a free-text default keeps the
+              // power-user path open without inventing model ids.
+              <TextInput
+                type="text"
+                spellCheck={false}
+                autoComplete="off"
+                value={model}
+                placeholder="e.g. llama-3.1-70b"
+                onChange={(event) => setModel(event.target.value)}
+                data-testid="add-key-model-freetext"
+              />
+            )}
           </Field>
           {error !== null ? (
             <p role="alert" style={errorStyle} data-testid="add-key-error">

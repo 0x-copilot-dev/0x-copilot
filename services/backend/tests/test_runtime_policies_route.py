@@ -214,3 +214,60 @@ class TestProviderKeysSection:
         )
         assert response.status_code == 200
         assert response.json()["provider_keys"] is None
+
+
+class TestProviderEndpointsSection:
+    """Decision D-2 — the aggregate carries the NON-secret ``base_url`` of a
+    stored custom OpenAI-compatible endpoint (never the key) for the runtime."""
+
+    _CUSTOM_KEY = "sk-custom-gateway-000000000000000000abcd"
+    _BASE_URL = "https://vllm.public.example/v1"
+
+    def _client(self) -> TestClient:
+        from backend_app.provider_keys.ssrf_guard import SsrfGuard
+        from backend_app.provider_keys.store import InMemoryProviderApiKeyStore
+        from backend_app.token_vault import LocalTokenVault
+
+        def resolver(host: str) -> tuple[str, ...]:
+            return {"vllm.public.example": ("93.184.216.34",)}[host]
+
+        app = create_app(
+            configure_logging_on_create=False,
+            configure_telemetry_on_create=False,
+            identity_store=_seeded_identity(),
+            provider_api_keys_store=InMemoryProviderApiKeyStore(),
+            token_vault=LocalTokenVault(
+                secret="test-vault-secret-32-chars-min-length-yes"
+            ),
+            provider_key_ssrf_guard=SsrfGuard(
+                allow_private_networks=False, resolver=resolver
+            ),
+        )
+        return TestClient(app)
+
+    def test_absent_when_no_custom_endpoint(self) -> None:
+        client = self._client()
+        response = client.get("/internal/v1/policies/runtime", params=_params())
+        assert response.status_code == 200, response.text
+        assert response.json()["provider_endpoints"] is None
+
+    def test_custom_endpoint_projects_base_url_not_key(self) -> None:
+        client = self._client()
+        put = client.put(
+            "/v1/settings/provider-keys/openai_compatible",
+            params=_params(),
+            json={
+                "api_key": self._CUSTOM_KEY,
+                "base_url": self._BASE_URL,
+                "label": "My vLLM",
+            },
+        )
+        assert put.status_code == 200, put.text
+        response = client.get("/internal/v1/policies/runtime", params=_params())
+        assert response.status_code == 200, response.text
+        body = response.json()
+        assert body["provider_endpoints"] == {"openai_compatible": self._BASE_URL}
+        # The decrypted key rides the separate secret lane; the base_url lane
+        # never carries it.
+        assert self._CUSTOM_KEY not in str(body["provider_endpoints"])
+        assert body["provider_keys"] == {"openai_compatible": self._CUSTOM_KEY}

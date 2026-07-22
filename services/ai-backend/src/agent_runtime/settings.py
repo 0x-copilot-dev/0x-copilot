@@ -237,6 +237,13 @@ class RuntimeSettings(BaseSettings):
         # rather than raising here.
         if provider == "ollama":
             return ProviderSettings()
+        # Custom OpenAI-compatible endpoint (BYOK decision D-2): no deployment
+        # env credential — it is satisfied by the user's stored BYOK key
+        # (``user_key_providers``). Empty settings (``is_configured`` False) so
+        # the credential gate falls through to the user-key branch and still
+        # fails closed when no key is stored.
+        if provider == "openai_compatible":
+            return ProviderSettings()
         raise ValueError(f"Unsupported model provider: {provider}")
 
     def resolved_event_bus_backend(self) -> str:

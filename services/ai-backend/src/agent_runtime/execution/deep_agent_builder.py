@@ -16,7 +16,9 @@ from agent_runtime.execution.contracts import (
     ModelConfig,
     ModelReasoningEffort,
     ModelThinkingMode,
+    RuntimeErrorCode,
 )
+from agent_runtime.execution.errors import AgentRuntimeError
 from agent_runtime.execution.fake_model import FakeModelProvider
 from agent_runtime.execution.openai_compat import OpenAICompatibleProviders
 
@@ -381,6 +383,7 @@ def build_chat_model(
     if model_config.max_output_tokens is not None:
         kwargs["max_tokens"] = model_config.max_output_tokens
     compat = OpenAICompatibleProviders.get(model_config.provider)
+    is_custom_compat = OpenAICompatibleProviders.is_custom(model_config.provider)
     if compat is not None:
         # OpenAI-wire-compatible gateway (OpenRouter today): a fixed
         # base_url and CHAT-COMPLETIONS ONLY. ``use_responses_api`` MUST be
@@ -403,6 +406,15 @@ def build_chat_model(
             # Keyless local runtime (Ollama). ChatOpenAI rejects an empty
             # api_key, so pass a sentinel the endpoint ignores.
             kwargs["api_key"] = "ollama"
+    elif is_custom_compat:
+        # User-supplied custom OpenAI-compatible endpoint (BYOK decision D-2).
+        # Same Chat-Completions-only posture as the registry gateways, but the
+        # ``base_url`` + ``api_key`` are per-run and arrive via ``extra_kwargs``
+        # (from ``user_policy_model_kwargs`` — the endpoint map + BYOK key).
+        # We must NOT apply ``_openai_model_kwargs`` for the same /responses
+        # reason as above. The fail-closed guard after the merge ensures we
+        # never silently fall through to api.openai.com without a base_url.
+        kwargs["use_responses_api"] = False
     elif model_config.provider == "openai":
         kwargs.update(_openai_model_kwargs(model_config))
     elif model_config.provider == "anthropic":
@@ -422,6 +434,18 @@ def build_chat_model(
                 kwargs[key] = merged
             else:
                 kwargs[key] = value
+
+    # Fail closed: a custom endpoint with no resolved ``base_url`` must ERROR,
+    # never silently construct a client pointed at api.openai.com with the
+    # user's key (the internal-lane resolver can degrade the endpoint map to
+    # empty on partial config — that must surface, not mis-route).
+    if is_custom_compat and not kwargs.get("base_url"):
+        raise AgentRuntimeError(
+            RuntimeErrorCode.CONFIGURATION_ERROR,
+            "Custom OpenAI-compatible endpoint is missing its base URL. "
+            "Re-add it in Settings -> Provider keys.",
+            retryable=False,
+        )
 
     return init_chat_model(
         model_config.model_name,
