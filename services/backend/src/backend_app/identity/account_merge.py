@@ -425,6 +425,33 @@ class PostgresMergeData:
                 "origin",
             ),
         ),
+        # Projects (0043): ``owner_user_id`` is LOAD-BEARING (owner-writes
+        # ACL), so unlike surface_specs the owner must move with the row —
+        # a project left on the soft-disabled absorbed user would be
+        # owner-orphaned. Survivor wins per (tenant, name) — matching
+        # projects_tenant_name_unique; the lower(name) functional index can
+        # collide on a case-variant duplicate, which aborts (and rolls
+        # back) the merge step rather than corrupting — acceptable for the
+        # single-member absorbed org the saga guarantees. A dropped
+        # absorbed project CASCADEs its memberships/stars/activity/counts,
+        # mirroring the skills survivor-wins doctrine.
+        ("projects", "keyed", "tenant_id", "owner_user_id", ("name",)),
+        # Membership rows ride with the absorbed USER; if the survivor is
+        # already a member of the same project, their row wins. The
+        # one-owner partial unique is preserved: a project has exactly one
+        # owner row before and after the user-column retenant.
+        ("project_memberships", "keyed", "tenant_id", "user_id", ("project_id",)),
+        ("project_stars", "keyed", "tenant_id", "user_id", ("project_id",)),
+        # Activity projection + counts follow their PROJECT (tenant-only
+        # retenant): leaving them on the retired org would RLS-hide a live
+        # project's history. No collisions possible — audit_id and
+        # project_id are globally unique. ``actor_user_id`` stays as
+        # provenance on the absorbed author (nullable, loose).
+        ("project_activity", "retenant", "tenant_id", None, ()),
+        ("project_activity_counts", "retenant", "tenant_id", None, ()),
+        # Templates: same load-bearing-owner shape as projects, no unique
+        # name constraint — plain retenant.
+        ("project_templates", "retenant", "tenant_id", "owner_user_id", ()),
         # user_id-only tables (no org column at all).
         (
             "notification_preferences",
@@ -459,7 +486,9 @@ class PostgresMergeData:
     # DELIBERATELY LEFT IN PLACE (the registry test enforces that every
     # tenant table is either in _SPECS or named here with its reason):
     # - identity_audit_events / mcp_audit_events / skill_audit_events /
-    #   todo_audit_events / adapter_registry_audit_events / login_attempts:
+    #   todo_audit_events / adapter_registry_audit_events /
+    #   project_audit_events (hash-chained: seq/prev_hash/signature — a
+    #   re-key would break chain verification) / login_attempts:
     #   append-only history stays where it happened (NFR-5).
     # - sessions: die by revocation in the saga's step 3, never adopted.
     # - organizations / users / organization_members / role_assignments:
@@ -482,6 +511,7 @@ class PostgresMergeData:
             "skill_audit_events",
             "todo_audit_events",
             "adapter_registry_audit_events",
+            "project_audit_events",
             "login_attempts",
             "sessions",
             "organizations",
