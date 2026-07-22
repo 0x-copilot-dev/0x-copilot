@@ -1,6 +1,7 @@
 // @vitest-environment jsdom
 import {
   TransportProvider,
+  type ComposerConnectorsPort,
   type RunEmptyComposerCtx,
 } from "@0x-copilot/chat-surface";
 import type {
@@ -78,13 +79,28 @@ function makeCtx(over: Partial<RunEmptyComposerCtx> = {}): RunEmptyComposerCtx {
   };
 }
 
-function renderEmpty(ctx: RunEmptyComposerCtx): { container: HTMLElement } {
+function renderEmpty(
+  ctx: RunEmptyComposerCtx,
+  connectorsPort?: ComposerConnectorsPort,
+): { container: HTMLElement } {
   const ui: ReactElement = (
     <TransportProvider transport={fakeTransport()}>
-      <RunEmptyComposer ctx={ctx} />
+      <RunEmptyComposer ctx={ctx} connectorsPort={connectorsPort} />
     </TransportProvider>
   );
   return render(ui);
+}
+
+// A connectors port whose reads resolve to an empty MCP surface — enough to
+// mount the Tools popover (empty state; no connect/auth exercised).
+function fakeConnectorsPort(): ComposerConnectorsPort {
+  return {
+    listServers: () => Promise.resolve([]),
+    listCatalog: () => Promise.resolve([]),
+    installFromCatalog: () => Promise.reject(new Error("unused")),
+    addCustomServer: () => Promise.reject(new Error("unused")),
+    beginAuth: () => Promise.resolve(),
+  };
 }
 
 function textarea(container: HTMLElement): HTMLTextAreaElement | null {
@@ -159,6 +175,48 @@ describe("RunEmptyComposer", () => {
     const { container } = renderEmpty(makeCtx({ modelReady: false }));
     await waitFor(() => expect(textarea(container)).not.toBeNull());
     expect(textarea(container)?.disabled).toBe(true);
+  });
+
+  it("mounts the inline Tools popover trigger when a connectorsPort is provided", async () => {
+    const { container } = renderEmpty(makeCtx(), fakeConnectorsPort());
+    await waitFor(() => expect(textarea(container)).not.toBeNull());
+    expect(
+      container.querySelector("[data-testid='first-run-tools-button']"),
+    ).not.toBeNull();
+  });
+
+  it("threads webSearchEnabled=false into the start-run payload when web search is toggled off", async () => {
+    const ctx = makeCtx();
+    const { container } = renderEmpty(ctx, fakeConnectorsPort());
+    await waitFor(() => expect(textarea(container)).not.toBeNull());
+
+    fireEvent.click(
+      container.querySelector(
+        "[data-testid='first-run-tools-button']",
+      ) as HTMLButtonElement,
+    );
+    const toggle = await waitFor(() => {
+      const t = container.querySelector(
+        "[data-testid='first-run-tools-websearch']",
+      );
+      expect(t).not.toBeNull();
+      return t as HTMLButtonElement;
+    });
+    fireEvent.click(toggle);
+
+    const ta = textarea(container) as HTMLTextAreaElement;
+    fireEvent.change(ta, { target: { value: "Run offline please" } });
+    fireEvent.click(
+      container.querySelector<HTMLButtonElement>(
+        "button[aria-label='Send message']",
+      ) as HTMLButtonElement,
+    );
+
+    await waitFor(() => {
+      expect(ctx.onStartRun).toHaveBeenCalledTimes(1);
+    });
+    const arg = (ctx.onStartRun as ReturnType<typeof vi.fn>).mock.calls[0][0];
+    expect(arg.webSearchEnabled).toBe(false);
   });
 
   it("surfaces the cockpit's start error inline", async () => {

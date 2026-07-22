@@ -43,11 +43,28 @@ export interface KeyFormConnected {
   readonly modelId: string | null; // resolved later (P3 composer model pill)
 }
 
+/** Pure client-side format verdict — same shape `checkFirstRunKeyFormat` returns. */
+export type KeyFormFormatCheck = (
+  provider: FirstRunKeyProvider,
+  apiKey: string,
+) => { readonly ok: true } | { readonly ok: false; readonly error: string };
+
 export interface KeyFormProps {
   /** Reuse the existing provider-keys seam (never a bare fetch). */
   readonly port: ProviderKeysPort;
   /** Provider rows for the tri-toggle. Default `FIRST_RUN_KEY_PROVIDERS`. */
   readonly providers?: readonly FirstRunKeyProvider[];
+  /**
+   * Masked-input placeholder. Default `FIRST_RUN_COPY.keyForm.placeholder`, so
+   * the FTUE gate is byte-identical; ModelPill (chat/run) passes generic copy.
+   */
+  readonly placeholder?: string;
+  /** Sub-note under the input. Default `FIRST_RUN_COPY.keyForm.note`. */
+  readonly note?: string;
+  /** Primary-button label. Default `FIRST_RUN_COPY.keyForm.btn` ("Connect"). */
+  readonly connectLabel?: string;
+  /** Pre-flight format check. Default `checkFirstRunKeyFormat`. */
+  readonly formatCheck?: KeyFormFormatCheck;
   /** Fired once, after a successful `port.save`. → surface: engine=key, stage=ready. */
   readonly onConnected: (result: KeyFormConnected) => void;
   readonly onCancel?: () => void;
@@ -62,6 +79,10 @@ function toMessage(err: unknown, fallback: string): string {
 export function KeyForm({
   port,
   providers = FIRST_RUN_KEY_PROVIDERS,
+  placeholder = FIRST_RUN_COPY.keyForm.placeholder,
+  note = FIRST_RUN_COPY.keyForm.note,
+  connectLabel = FIRST_RUN_COPY.keyForm.btn,
+  formatCheck = checkFirstRunKeyFormat,
   onConnected,
   onCancel,
 }: KeyFormProps): ReactElement {
@@ -95,7 +116,7 @@ export function KeyForm({
 
   const handleConnect = useCallback(() => {
     if (connecting || provider === null) return;
-    const format = checkFirstRunKeyFormat(provider, apiKey);
+    const format = formatCheck(provider, apiKey);
     if (!format.ok) {
       setError(format.error);
       return;
@@ -120,7 +141,7 @@ export function KeyForm({
         setError(toMessage(err, "Could not connect that key. Try again."));
         setConnecting(false);
       });
-  }, [apiKey, connecting, onConnected, port, provider]);
+  }, [apiKey, connecting, formatCheck, onConnected, port, provider]);
 
   if (provider === null) return <></>;
 
@@ -155,7 +176,7 @@ export function KeyForm({
         autoComplete="new-password"
         spellCheck={false}
         value={apiKey}
-        placeholder={FIRST_RUN_COPY.keyForm.placeholder}
+        placeholder={placeholder}
         aria-label={`${provider.label} API key`}
         onChange={(event) => setApiKey(event.target.value)}
         onKeyDown={(event) => {
@@ -168,7 +189,7 @@ export function KeyForm({
       />
 
       <p className="fr-kf__note" data-testid="first-run-key-note">
-        {FIRST_RUN_COPY.keyForm.note}
+        {note}
       </p>
 
       {error !== null ? (
@@ -200,7 +221,7 @@ export function KeyForm({
           onClick={handleConnect}
           data-testid="first-run-key-connect"
         >
-          {connecting ? "Connecting…" : FIRST_RUN_COPY.keyForm.btn}
+          {connecting ? "Connecting…" : connectLabel}
         </button>
       </div>
     </div>

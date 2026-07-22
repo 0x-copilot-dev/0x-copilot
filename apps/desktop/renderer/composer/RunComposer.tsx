@@ -11,10 +11,13 @@ import {
   parseTransportError,
   useTransport,
   type CompleteAttachment,
+  type ComposerConnectorsPort,
+  type ProviderKeysPort,
   type StartRunError,
 } from "@0x-copilot/chat-surface";
 
 import { modelSelectionForId } from "./desktopModelCatalog";
+import { useDesktopComposerTools } from "./useDesktopComposerTools";
 import { createDesktopAttachmentAdapter } from "./desktopAttachmentAdapter";
 import { DesktopComposerFilePicker } from "./DesktopComposerFilePicker";
 import {
@@ -46,6 +49,19 @@ export interface RunComposerProps {
   readonly onOpenSkillsSettings?: () => void;
   /** Open Settings → Provider keys (BYOK model setup). */
   readonly onOpenModelSettings?: () => void;
+  /**
+   * MCP connector surface for the inline Tools popover. When provided, the
+   * composer's connectors trigger becomes the connector-aware Tools popover
+   * (web-search toggle + connected rows + 1-click connect + Custom MCP) instead
+   * of the flat "open the Tools surface" button. Omitted ⇒ the plain button.
+   */
+  readonly connectorsPort?: ComposerConnectorsPort;
+  /**
+   * Provider-keys surface for the model pill's inline "Add a provider key" form.
+   * When provided, the model popover opens the inline `KeyForm` sub-view instead
+   * of deep-linking to Settings.
+   */
+  readonly providerKeysPort?: ProviderKeysPort;
 }
 
 /**
@@ -72,6 +88,8 @@ export function RunComposer(props: RunComposerProps): ReactElement {
     onShowConnectors,
     onOpenSkillsSettings,
     onOpenModelSettings,
+    connectorsPort,
+    providerKeysPort,
   } = props;
 
   const transport = useTransport();
@@ -107,7 +125,20 @@ export function RunComposer(props: RunComposerProps): ReactElement {
     renderPlusMenu,
   } = useRunComposerBindings();
 
-  const connectorsTrigger = (
+  // Inline Tools popover (when a connectors port is injected): owns the per-run
+  // web-search toggle + active connector ids, and yields the trigger node + the
+  // run-body values (`webSearchEnabled` / `connectorScopes`) threaded on submit.
+  // The popover's "Custom MCP" / pre-registered rows route to the Tools surface.
+  const { toolsTrigger, webSearchEnabled, connectorScopes } =
+    useDesktopComposerTools({
+      connectorsPort,
+      disabled,
+      onAddCustom: onShowConnectors,
+    });
+
+  // With a connectors port → the connector-aware Tools popover; without one →
+  // the historical flat button that opens the Tools destination.
+  const connectorsTrigger = toolsTrigger ?? (
     <ComposerConnectorsButton
       activeCount={activeConnectorCount}
       open={false}
@@ -139,6 +170,18 @@ export function RunComposer(props: RunComposerProps): ReactElement {
       if (atts.length > 0) {
         body.attachments = atts.map(toRunAttachment);
       }
+      // Tools popover selections (mirrors `buildRunCreateBody`): web_search
+      // defaults on at the runtime, so only an explicit opt-OUT is worth
+      // sending; active connector ids become `request_context.connector_scopes`.
+      if (webSearchEnabled === false) {
+        body.web_search_enabled = false;
+      }
+      if (
+        connectorScopes !== undefined &&
+        Object.keys(connectorScopes).length > 0
+      ) {
+        body.request_context = { connector_scopes: connectorScopes };
+      }
       // Let a rejection propagate to `onSubmitError` (handleSubmitError) — the
       // single chat-surface error channel — rather than catching it here. On
       // success, clear any prior failure notice so it can't linger.
@@ -149,7 +192,15 @@ export function RunComposer(props: RunComposerProps): ReactElement {
       });
       setStartError(null);
     },
-    [conversationId, disabled, models, selectedModel, transport],
+    [
+      conversationId,
+      disabled,
+      models,
+      selectedModel,
+      transport,
+      webSearchEnabled,
+      connectorScopes,
+    ],
   );
 
   // The composer's error channel: a rejected run-create surfaces here instead
@@ -198,6 +249,9 @@ export function RunComposer(props: RunComposerProps): ReactElement {
         onRemoveSkill={handleRemoveSkill}
         onClearSkills={handleClearSkills}
         connectorsTrigger={connectorsTrigger}
+        // Inline "Add a provider key" form inside the model popover (host-owned
+        // provider-keys surface); unset ⇒ the pill keeps its deep-link.
+        providerKeysPort={providerKeysPort}
         models={models}
         selectedModel={selectedModel}
         onModelChange={handleModelChange}

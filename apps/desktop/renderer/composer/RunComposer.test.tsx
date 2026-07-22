@@ -1,6 +1,7 @@
 // @vitest-environment jsdom
 import {
   TransportProvider,
+  type ComposerConnectorsPort,
   type CompleteAttachment,
 } from "@0x-copilot/chat-surface";
 import type {
@@ -348,6 +349,100 @@ describe("RunComposer", () => {
       expect(
         container.querySelector("[data-testid='run-composer-error']"),
       ).toBeNull();
+    });
+  });
+});
+
+// A connectors port whose reads resolve to an empty MCP surface — enough to
+// mount the Tools popover (it shows its empty state, no connect/auth needed).
+function fakeConnectorsPort(): ComposerConnectorsPort {
+  return {
+    listServers: () => Promise.resolve([]),
+    listCatalog: () => Promise.resolve([]),
+    installFromCatalog: () =>
+      Promise.reject(new Error("unused in these tests")),
+    addCustomServer: () => Promise.reject(new Error("unused in these tests")),
+    beginAuth: () => Promise.resolve(),
+  };
+}
+
+describe("RunComposer inline Tools popover", () => {
+  it("renders the connector-aware Tools button (not the flat connectors button) when a connectorsPort is provided", async () => {
+    const { container } = renderComposer({
+      connectorsPort: fakeConnectorsPort(),
+    });
+    await waitFor(() => {
+      expect(textarea(container)).not.toBeNull();
+    });
+    expect(
+      container.querySelector("[data-testid='first-run-tools-button']"),
+    ).not.toBeNull();
+  });
+
+  it("falls back to the flat connectors button when no connectorsPort is provided", async () => {
+    const { container } = renderComposer();
+    await waitFor(() => {
+      expect(textarea(container)).not.toBeNull();
+    });
+    expect(
+      container.querySelector("[data-testid='first-run-tools-button']"),
+    ).toBeNull();
+  });
+
+  it("threads an explicit web_search_enabled=false into the run body when web search is toggled off", async () => {
+    const { recorder, container } = renderComposer({
+      connectorsPort: fakeConnectorsPort(),
+    });
+    await waitFor(() => {
+      expect(textarea(container)).not.toBeNull();
+    });
+
+    // Open the popover, then turn the default-on web-search toggle OFF.
+    fireEvent.click(
+      container.querySelector(
+        "[data-testid='first-run-tools-button']",
+      ) as HTMLButtonElement,
+    );
+    const toggle = await waitFor(() => {
+      const t = container.querySelector(
+        "[data-testid='first-run-tools-websearch']",
+      );
+      expect(t).not.toBeNull();
+      return t as HTMLButtonElement;
+    });
+    fireEvent.click(toggle);
+
+    typeAndSend(container, "Summarize without the web");
+
+    await waitFor(() => {
+      const post = recorder.calls.find(
+        (c) => c.method === "POST" && c.path === "/v1/agent/runs",
+      );
+      expect(post).toBeDefined();
+      expect((post?.body as Record<string, unknown>).web_search_enabled).toBe(
+        false,
+      );
+    });
+  });
+
+  it("omits web_search_enabled from the run body when web search stays on (runtime default)", async () => {
+    const { recorder, container } = renderComposer({
+      connectorsPort: fakeConnectorsPort(),
+    });
+    await waitFor(() => {
+      expect(textarea(container)).not.toBeNull();
+    });
+
+    typeAndSend(container, "Do the thing");
+
+    await waitFor(() => {
+      const post = recorder.calls.find(
+        (c) => c.method === "POST" && c.path === "/v1/agent/runs",
+      );
+      expect(post).toBeDefined();
+      expect(
+        "web_search_enabled" in (post?.body as Record<string, unknown>),
+      ).toBe(false);
     });
   });
 });

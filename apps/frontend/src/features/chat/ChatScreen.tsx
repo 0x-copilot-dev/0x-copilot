@@ -2,6 +2,7 @@ import type {
   ApprovalDecision,
   ApprovalForwardTarget,
   Conversation,
+  ConversationConnectorScopes,
   CreateRunRequest,
   Message,
   ModelCatalogModel,
@@ -44,16 +45,9 @@ import { updateMyPreferences } from "../../api/meApi";
 import { listLocalModels } from "../../api/localModelsApi";
 import { isOAuthSetupRequired } from "../../api/mcpErrors";
 import { ConnectorSuggestionCard } from "../connectors/ConnectorConsentCard";
-import { ConnectorPopover } from "../connectors/ConnectorPopover";
 import { McpOverlay } from "../connectors/mcp/McpOverlay";
 import type { ConnectorState } from "../connectors/useConnectors";
-import { useConversationConnectors } from "../connectors/useConversationConnectors";
-import {
-  activeCount as activeConnectorCount,
-  projectChatConnectors,
-} from "../connectors/projectConnectors";
 import type { SkillState } from "../skills/useSkills";
-import { ComposerConnectorsButton } from "./components/composer/ComposerConnectorsButton";
 import {
   DetailsPanelHost,
   type DetailsPanelKind,
@@ -110,7 +104,13 @@ import {
   scrollChatToEvent,
   useKeyValueStore,
   useNotify,
+  type ComposerConnectorsPort,
+  type FirstRunInstallableConnector,
+  type ProviderKeysPort,
 } from "@0x-copilot/chat-surface";
+import { ChatToolsTrigger } from "./components/composer/ChatToolsTrigger";
+import { createComposerConnectorsPort } from "../connectors/composerConnectorsPort";
+import { createFirstRunProviderKeysPort } from "../onboarding/firstRunProviderKeysPort";
 import {
   readDepth as readDepthKv,
   writeConversationDepth,
@@ -957,6 +957,38 @@ export function ChatScreen({
     ],
   );
 
+  // Composer Tools popover per-run state (SPEC `webOn`, default true; connectors
+  // held as active ids since a toggle is per-turn intent, threaded into the
+  // run-create body — no per-toggle PATCH, the FTUE model). Declared before
+  // `submitUserMessage` so the send closure can read the current selection.
+  const [webSearchEnabled, setWebSearchEnabled] = useState(true);
+  const [activeConnectorIds, setActiveConnectorIds] = useState<
+    readonly string[]
+  >([]);
+  const [toolsOpen, setToolsOpen] = useState(false);
+  // Close the popover + reset the per-run tool selection when the conversation
+  // switches (active connectors / web-search default are per-turn intent).
+  useEffect(() => {
+    setToolsOpen(false);
+    setActiveConnectorIds([]);
+    setWebSearchEnabled(true);
+  }, [conversationId]);
+  // Active connector ids → the run's `request_context.connector_scopes` (active →
+  // `[]`, i.e. enabled with no extra scopes). Undefined when nothing is active so
+  // a default run body carries no connector-scope payload.
+  const toolConnectorScopes = useMemo<
+    ConversationConnectorScopes | undefined
+  >(() => {
+    if (activeConnectorIds.length === 0) {
+      return undefined;
+    }
+    const scopes: Record<string, readonly string[] | null> = {};
+    for (const id of activeConnectorIds) {
+      scopes[id] = [];
+    }
+    return scopes;
+  }, [activeConnectorIds]);
+
   const submitUserMessage = useCallback(
     async (
       message: AppendMessage,
@@ -1024,6 +1056,11 @@ export function ChatScreen({
             // workaround from before the wire field landed.
             model: modelSelectionForId(allModels, selectedModelId),
             reasoningDepth: depth,
+            // Composer Tools popover — per-turn web-search + connector scopes.
+            // `createRun` only sends web_search_enabled on an explicit `false`,
+            // and request_context.connector_scopes only when non-empty.
+            webSearchEnabled,
+            connectorScopes: toolConnectorScopes,
             attachments,
             content,
             quote,
@@ -1086,6 +1123,8 @@ export function ChatScreen({
       allModels,
       selectedModelId,
       startEventStream,
+      webSearchEnabled,
+      toolConnectorScopes,
     ],
   );
 
@@ -1630,9 +1669,7 @@ export function ChatScreen({
   // save callbacks live here.
   const [editingMessageId, setEditingMessageId] = useState<string | null>(null);
 
-  // PR 2.1 — current conversation row + per-chat connector glyphs feed
-  // for the topbar pills. Read-only here; ConnectorPopover (PR 3.4)
-  // owns the write paths into useConversationConnectors.patch.
+  // Current conversation row (title / folder / project chip in the topbar).
   const currentConversation = useMemo(
     () =>
       conversationId === null
@@ -1642,89 +1679,78 @@ export function ChatScreen({
           ) ?? null),
     [conversationId, conversations],
   );
-  const conversationScopes = useConversationConnectors(
-    currentConversation,
-    identity,
+  // --- Composer-chrome parity: the inline Tools popover (web-search toggle +
+  // Connected rows + 1-click Installable + Custom-MCP) that supersedes the flat
+  // ComposerConnectorsButton. The per-run `webSearchEnabled` / `activeConnectorIds`
+  // state + `toolConnectorScopes` memo live ABOVE `submitUserMessage` (which reads
+  // them on send); the port + handlers + trigger node are assembled here.
+  const composerConnectorsPort = useMemo<ComposerConnectorsPort>(
+    () => createComposerConnectorsPort(identity),
+    [identity],
   );
-  // PR 3.4 — projection of the workspace-installed catalog + per-chat
-  // overrides into the four-state row vocabulary the popover renders.
-  // Memoised so the popover doesn't re-mount its keyboard-nav handler
-  // on every parent render.
-  // PR 4.4.6 — the per-chat popover only shows **Connected** connectors
-  // (installed AND authorized). Catalog availability lives in Settings →
-  // Manage MCP servers; the chat surface never renders disconnected /
-  // workspace-off rows. ``projectChatConnectors`` filters then projects.
-  const connectorRows = useMemo(
-    () => projectChatConnectors(connectors.servers, conversationScopes.scopes),
-    [connectors.servers, conversationScopes.scopes],
-  );
-  const connectorsActiveCount = useMemo(
-    () => activeConnectorCount(connectorRows),
-    [connectorRows],
-  );
-
-  // PR 3.4 — single open-state owner for the per-chat ConnectorPopover.
-  // The popover is anchored to the composer button (the topbar pill was
-  // removed — connectors live in the composer only). Boolean is
-  // sufficient now that there's a single anchor.
-  const [connectorsOpen, setConnectorsOpen] = useState(false);
-  const composerConnectorsRef = useRef<HTMLButtonElement | null>(null);
-  const closeConnectorsPopover = useCallback(
-    () => setConnectorsOpen(false),
+  const providerKeysPort = useMemo<ProviderKeysPort>(
+    () => createFirstRunProviderKeysPort(),
     [],
   );
-  const onComposerConnectorsOpen = useCallback(
-    () => setConnectorsOpen((prev) => !prev),
+
+  const onToggleToolConnector = useCallback(
+    (serverId: string, active: boolean): void => {
+      setActiveConnectorIds((prev) =>
+        active
+          ? prev.includes(serverId)
+            ? prev
+            : [...prev, serverId]
+          : prev.filter((id) => id !== serverId),
+      );
+    },
     [],
   );
-  // Close the popover when the conversation switches — the rows are
-  // about to change underneath the user, and the per-chat scopes would
-  // momentarily disagree with the open popover's state.
-  useEffect(() => {
-    setConnectorsOpen(false);
-  }, [conversationId]);
 
-  const renderConnectorPopover = useCallback(
-    (
-      triggerRef: React.RefObject<HTMLElement | null>,
-      placement: "down" | "up",
-    ) => (
-      <ConnectorPopover
-        open
-        onClose={closeConnectorsPopover}
-        triggerRef={triggerRef}
-        rows={connectorRows}
-        onToggle={(serverId, nextScopes) => {
-          void conversationScopes
-            .patch({ [serverId]: nextScopes ?? null })
-            .catch(() => {
-              // Hook surfaces the error string; it renders inline.
-            });
-        }}
-        onConnect={(serverId) => {
-          void connectors.authenticate(serverId);
-        }}
-        onEnableInSettings={() => {
-          closeConnectorsPopover();
-          onOpenSettings("connectors");
-        }}
-        onManage={() => onOpenSettings("connectors")}
-        placement={placement}
-        error={conversationScopes.error}
-        readOnly={currentConversation === null}
-        runInProgress={activeRunId !== null}
+  // 1-click connect: mirror `onMcpInstallCatalog` — a pre-registered vendor opens
+  // the custom-config overlay (keyless install 422s); else install → begin OAuth.
+  const onToolConnectCatalog = useCallback(
+    (entry: FirstRunInstallableConnector): void => {
+      if (entry.requiresPreRegisteredClient) {
+        setChatMcpOverlay({ open: true, slug: entry.slug });
+        return;
+      }
+      void composerConnectorsPort
+        .installFromCatalog(entry.slug)
+        .then((server) => composerConnectorsPort.beginAuth(server.server_id))
+        .catch(() => {
+          // Workspace-authorize only; a failed install surfaces later via the
+          // run-time `mcp_auth_required` card, so a swallow keeps the composer
+          // unblocked (identical posture to FirstRunToolsTrigger).
+        });
+    },
+    [composerConnectorsPort],
+  );
+
+  const toolsTrigger = useMemo(
+    () => (
+      <ChatToolsTrigger
+        port={composerConnectorsPort}
+        open={toolsOpen}
+        onOpenChange={setToolsOpen}
+        webSearchEnabled={webSearchEnabled}
+        onToggleWebSearch={setWebSearchEnabled}
+        activeConnectorIds={activeConnectorIds}
+        onToggleConnector={onToggleToolConnector}
+        onConnectCatalog={onToolConnectCatalog}
+        onAddCustom={() => onOpenSettings("connectors")}
       />
     ),
     [
-      closeConnectorsPopover,
-      connectorRows,
-      conversationScopes,
-      connectors,
+      composerConnectorsPort,
+      toolsOpen,
+      webSearchEnabled,
+      activeConnectorIds,
+      onToggleToolConnector,
+      onToolConnectCatalog,
       onOpenSettings,
-      currentConversation,
-      activeRunId,
     ],
   );
+
   const selectedModel = useMemo(
     () => allModels.find((model) => model.id === selectedModelId) ?? null,
     [allModels, selectedModelId],
@@ -2090,19 +2116,8 @@ export function ChatScreen({
                       })
                     }
                     runIndicator={runIndicator}
-                    connectorsTrigger={
-                      <span className="atlas-connectors-anchor atlas-connectors-anchor--composer">
-                        <ComposerConnectorsButton
-                          ref={composerConnectorsRef}
-                          activeCount={connectorsActiveCount}
-                          open={connectorsOpen}
-                          onClick={onComposerConnectorsOpen}
-                        />
-                        {connectorsOpen
-                          ? renderConnectorPopover(composerConnectorsRef, "up")
-                          : null}
-                      </span>
-                    }
+                    toolsTrigger={toolsTrigger}
+                    providerKeysPort={providerKeysPort}
                     activeModelLabel={selectedModel?.name}
                     models={allModels}
                     selectedModel={selectedModelId}

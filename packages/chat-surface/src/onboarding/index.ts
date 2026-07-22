@@ -15,7 +15,11 @@ export { Gate } from "./Gate";
 export type { GateProps } from "./Gate";
 
 export { KeyForm } from "./KeyForm";
-export type { KeyFormProps, KeyFormConnected } from "./KeyForm";
+export type {
+  KeyFormProps,
+  KeyFormConnected,
+  KeyFormFormatCheck,
+} from "./KeyForm";
 
 export {
   FIRST_RUN_COPY,

@@ -203,8 +203,14 @@ describe("RunRoute (PRD-05)", () => {
       if (req.path.includes("/messages")) {
         return { messages: [] };
       }
-      if (req.path === "/v1/agent/runs" && req.method === "GET") {
-        return { runs: [{ run_id: "run-1", status: "running", goal: "Ship" }] };
+      // Run-identity (desktop-run-identity §D2 / PR #211): the cockpit resolves
+      // the active run from the conversation detail's `latest_run_id`, not the
+      // now-dead GET /v1/agent/runs auto-resolve.
+      if (
+        req.path === "/v1/agent/conversations/conv-1" &&
+        req.method === "GET"
+      ) {
+        return { conversation_id: "conv-1", latest_run_id: "run-1" };
       }
       return {};
     };

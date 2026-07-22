@@ -17,7 +17,13 @@
 // the shared home for these is the package component's own contract, and the
 // projections operate only on `@0x-copilot/api-types` shapes.
 
-import { useCallback, useEffect, useState, type ReactElement } from "react";
+import {
+  useCallback,
+  useEffect,
+  useMemo,
+  useState,
+  type ReactElement,
+} from "react";
 
 import {
   ActivityDestination,
@@ -27,6 +33,7 @@ import {
   RunDestination,
   SkillsDestination,
   buildRunCreateBody,
+  createProviderKeysPort,
   messageFromError,
   useNotify,
   useTransport,
@@ -70,6 +77,7 @@ import { CONNECTOR_CHANNELS } from "../main/connectors/channels";
 // substrate ports. Same-app imports, allowed.
 import { RunComposer } from "./composer/RunComposer";
 import { RunEmptyComposer } from "./composer/RunEmptyComposer";
+import { createComposerConnectorsPort } from "./composer/composerConnectorsPort";
 
 // ---------------------------------------------------------------------------
 // Shared load hook — drives the 4-state machine (loading / ok / empty / error)
@@ -568,6 +576,17 @@ export function RunBinder({
   readonly onOpenSkills?: () => void;
 }): ReactElement {
   const transport = useTransport();
+  // Composer chrome ports: the inline Tools popover's MCP surface (the shared
+  // `/v1/mcp/*` adapter) + the model pill's inline "Add a provider key" form
+  // surface. Both are stable per transport, so memoize.
+  const connectorsPort = useMemo(
+    () => createComposerConnectorsPort(transport),
+    [transport],
+  );
+  const providerKeysPort = useMemo(
+    () => createProviderKeysPort(transport),
+    [transport],
+  );
   const [conversationId, setConversationId] = useState<ConversationId | null>(
     null,
   );
@@ -680,9 +699,11 @@ export function RunBinder({
         ctx={ctx}
         onShowConnectors={onOpenConnectors}
         onOpenSkills={onOpenSkills}
+        connectorsPort={connectorsPort}
+        providerKeysPort={providerKeysPort}
       />
     ),
-    [onOpenConnectors, onOpenSkills],
+    [onOpenConnectors, onOpenSkills, connectorsPort, providerKeysPort],
   );
 
   // Composer parity (PRD: desktop-composer-parity): mount the shared
@@ -698,9 +719,18 @@ export function RunBinder({
         onShowConnectors={onOpenConnectors}
         onOpenSkillsSettings={onOpenSkills}
         onOpenModelSettings={onOpenModelSettings}
+        connectorsPort={connectorsPort}
+        providerKeysPort={providerKeysPort}
       />
     ),
-    [activeConversationId, onOpenConnectors, onOpenSkills, onOpenModelSettings],
+    [
+      activeConversationId,
+      onOpenConnectors,
+      onOpenSkills,
+      onOpenModelSettings,
+      connectorsPort,
+      providerKeysPort,
+    ],
   );
 
   return (

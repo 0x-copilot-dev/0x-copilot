@@ -15,7 +15,12 @@ import { useMyProfile } from "../../../auth/useMyProfile";
 import { AssistantMessage } from "../messages/AssistantMessage";
 import { UserEditComposer } from "../messages/UserEditComposer";
 import { UserMessage } from "../messages/UserMessage";
-import { PlainText, type ComposerHandle } from "@0x-copilot/chat-surface";
+import {
+  PlainText,
+  type ComposerHandle,
+  type KeyFormConnected,
+  type ProviderKeysPort,
+} from "@0x-copilot/chat-surface";
 import { firstNameFromDisplayName } from "../../utils/greeting";
 import {
   Message,
@@ -106,6 +111,20 @@ export const ThreadBody = forwardRef<
     onClearSkills?: () => void;
     onOpenSources?: (citationId: string) => void;
     connectorsTrigger?: ReactNode;
+    /**
+     * Composer-chrome parity — the inline Tools popover trigger
+     * (`ComposerToolsButton` + `ToolsPopover`) that supersedes `connectorsTrigger`.
+     * Rendered in the composer bottom bar next to the model pill.
+     */
+    toolsTrigger?: ReactNode;
+    /**
+     * When set, the model pill's "Add a provider key" opens an inline
+     * `<KeyForm>` sub-view inside the popover (saved via the port) instead of the
+     * deep-link. Forwarded verbatim to the shared AssistantComposer → ModelPill.
+     */
+    providerKeysPort?: ProviderKeysPort;
+    /** Refresh seam fired after a successful inline add-key connect. */
+    onProviderKeyAdded?: (result: KeyFormConnected) => void;
     activeModelLabel?: string;
     models?: Array<ModelCatalogModel & { disabled?: boolean }>;
     selectedModel?: string;
@@ -158,6 +177,9 @@ export const ThreadBody = forwardRef<
     onClearSkills,
     onOpenSources,
     connectorsTrigger,
+    toolsTrigger,
+    providerKeysPort,
+    onProviderKeyAdded,
     activeModelLabel,
     models,
     selectedModel,
@@ -279,6 +301,9 @@ export const ThreadBody = forwardRef<
           onRemoveSkill={onRemoveSkill}
           onClearSkills={onClearSkills}
           connectorsTrigger={connectorsTrigger}
+          toolsTrigger={toolsTrigger}
+          providerKeysPort={providerKeysPort}
+          onProviderKeyAdded={onProviderKeyAdded}
           activeModelLabel={activeModelLabel}
           models={models}
           selectedModel={selectedModel}
