@@ -208,12 +208,23 @@ class RuntimeRequestContext(RuntimeContract):
 class CreateRunRequest(RuntimeContract):
     """Request to create a queued runtime run for one user message."""
 
-    conversation_id: str
+    # desktop-run-identity §D3 — optional. An omitted/blank conversation_id is a
+    # new-chat send: the route's ensure-conversation step get-or-creates the
+    # conversation (idempotency-keyed) and binds the run to it in ONE call.
+    conversation_id: str | None = None
     org_id: str | None = None
     user_id: str | None = None
     user_input: str
     content_format: str = Values.DEFAULT_CONTENT_FORMAT
     idempotency_key: str | None = None
+    # desktop-run-identity §D3 — server-authoritative ensure-conversation-on-run.
+    # A new-chat first send omits conversation_id and instead carries a stable
+    # conversation_idempotency_key (minted ONCE per new-chat intent). The route
+    # get-or-creates the conversation under that key, so concurrent/retried first
+    # sends collapse to ONE conversation (kills the duplicate-conversation race).
+    # conversation_title is an optional human title for that lazily-created chat.
+    conversation_idempotency_key: str | None = None
+    conversation_title: str | None = None
     model: ModelSelectionRequest | None = None
     # Composer's Fast / Balanced / Deep selection for this turn. Allowlisted
     # to the three :class:`ReasoningDepth` literals — anything else is a
@@ -243,10 +254,12 @@ class CreateRunRequest(RuntimeContract):
     runtime_context: AgentRuntimeContext | None = Field(default=None, exclude=True)
     request_options: JsonObject = Field(default_factory=dict)
 
-    @field_validator(Keys.Field.CONVERSATION_ID)
+    @field_validator(Keys.Field.CONVERSATION_ID, mode="before")
     @classmethod
-    def _normalize_conversation_id(cls, value: object) -> str:
-        return ValueNormalizer.normalize_id(value, Keys.Field.CONVERSATION_ID)
+    def _normalize_conversation_id(cls, value: object) -> str | None:
+        # Optional now (desktop-run-identity §D3): an omitted/blank value signals a
+        # new-chat send, resolved by the route's ensure-conversation step.
+        return ValueNormalizer.normalize_optional_id(value, Keys.Field.CONVERSATION_ID)
 
     @field_validator(Keys.Field.ORG_ID, Keys.Field.USER_ID, mode="before")
     @classmethod
@@ -265,6 +278,18 @@ class CreateRunRequest(RuntimeContract):
     def _normalize_idempotency_key(cls, value: object) -> str | None:
         return ValueNormalizer.normalize_optional_id(value, Keys.Field.IDEMPOTENCY_KEY)
 
+    @field_validator("conversation_idempotency_key", mode="before")
+    @classmethod
+    def _normalize_conversation_idempotency_key(cls, value: object) -> str | None:
+        return ValueNormalizer.normalize_optional_id(
+            value, "conversation_idempotency_key"
+        )
+
+    @field_validator("conversation_title", mode="before")
+    @classmethod
+    def _normalize_conversation_title(cls, value: object) -> str | None:
+        return ValueNormalizer.normalize_optional_text(value, "conversation_title")
+
     @field_validator(_Fields.REQUEST_OPTIONS, mode="before")
     @classmethod
     def _redact_request_options(cls, value: object) -> JsonObject:
@@ -280,6 +305,13 @@ class CreateRunRequest(RuntimeContract):
         if self.org_id is None or self.user_id is None:
             raise ValueError(
                 "org_id and user_id are required when runtime_context is omitted"
+            )
+        # desktop-run-identity §D3 — a new-chat run (no conversation_id) MUST carry
+        # a stable conversation_idempotency_key so the route's ensure-conversation
+        # get-or-create is de-duplicated (one conversation per new-chat intent).
+        if self.conversation_id is None and self.conversation_idempotency_key is None:
+            raise ValueError(
+                "conversation_idempotency_key is required when conversation_id is omitted"
             )
         return self
 

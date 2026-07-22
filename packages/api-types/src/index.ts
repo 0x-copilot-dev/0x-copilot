@@ -1430,12 +1430,28 @@ export interface RuntimeRequestContext {
 export type ReasoningDepth = "fast" | "balanced" | "deep";
 
 export interface CreateRunRequest {
-  conversation_id: string;
+  /**
+   * desktop-run-identity §D3 — optional. Omit it for a new-chat first send and
+   * supply `conversation_idempotency_key` instead; the server get-or-creates the
+   * conversation and binds the run to it in one call, returning the resolved id
+   * on {@link CreateRunResponse}. Existing callers that always send a real id are
+   * unaffected.
+   */
+  conversation_id?: string | null;
   org_id: string;
   user_id: string;
   user_input: string;
   content_format?: string;
   idempotency_key?: string | null;
+  /**
+   * desktop-run-identity §D3 — stable key that de-duplicates the lazy
+   * conversation create. REQUIRED when `conversation_id` is omitted; mint it
+   * once per new-chat intent (not per send, not reused across chats) so
+   * concurrent/retried first sends collapse to ONE conversation.
+   */
+  conversation_idempotency_key?: string | null;
+  /** desktop-run-identity §D3 — optional human title for a lazily-created chat. */
+  conversation_title?: string | null;
   model?: ModelSelectionRequest | null;
   /**
    * Per-turn reasoning depth. Optional — when null/absent the runtime keeps
