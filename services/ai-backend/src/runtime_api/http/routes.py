@@ -246,7 +246,43 @@ class RuntimeApiRoutes:
                     ),
                 }
             )
+        # desktop-run-identity §D3 — server-authoritative ensure-conversation-on-run.
+        # A new-chat send omits conversation_id and carries a conversation_idempotency_key
+        # instead; get-or-create the conversation here (once, idempotently) and bind the
+        # run to it, so the client makes a SINGLE call and never races two conversations.
+        if payload.conversation_id is None:
+            payload = await cls._ensure_conversation_for_run(request, payload)
         return await cls.run_coordinator(request).create_run(payload)
+
+    @classmethod
+    async def _ensure_conversation_for_run(
+        cls, request: Request, payload: CreateRunRequest
+    ) -> CreateRunRequest:
+        """Get-or-create the conversation a new-chat run binds to (desktop-run-identity §D3).
+
+        The schema guarantees ``conversation_idempotency_key`` is present when
+        ``conversation_id`` is absent; that key makes the create idempotent, so
+        concurrent or retried first sends collapse to ONE conversation (kills the
+        duplicate-"Desktop session" race). Reuses the full ConversationCoordinator
+        path (connector-default seeding + ``conversation_created`` audit), so a
+        run-path chat is indistinguishable from one made via POST /conversations.
+        """
+        if payload.org_id is None or payload.user_id is None:
+            raise HTTPException(
+                status.HTTP_400_BAD_REQUEST,
+                "org_id and user_id are required to start a new conversation",
+            )
+        conversation = await cls.conversation_coordinator(request).create_conversation(
+            CreateConversationRequest(
+                org_id=payload.org_id,
+                user_id=payload.user_id,
+                title=payload.conversation_title,
+                idempotency_key=payload.conversation_idempotency_key,
+            )
+        )
+        return payload.model_copy(
+            update={"conversation_id": conversation.conversation_id}
+        )
 
     @classmethod
     async def get_run(

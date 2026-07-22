@@ -4,12 +4,14 @@ from datetime import datetime, timedelta, timezone
 from typing import Any
 
 from fastapi.testclient import TestClient
+from pydantic import ValidationError
 
 from agent_runtime.execution.contracts import StreamEventSource
 from runtime_api.app import RuntimeApiAppFactory
 from runtime_api.schemas import (
     AgentRunStatus,
     ApprovalRequestRecord,
+    CreateRunRequest,
     RuntimeApiEventType,
 )
 from agent_runtime.api.events import RuntimeEventProducer
@@ -218,6 +220,49 @@ class TestFastApiRuntimeApi(FastApiRuntimeApiTestMixin):
         assert row["preview"] == self.Values.USER_INPUT
         assert row["model"] == "gpt-5.4-mini"
 
+    async def test_head_run_id_any_status_survives_completion_on_list_and_get(
+        self,
+    ) -> None:
+        """desktop-run-identity §D2 — ``latest_run_id_any_status`` resolves the
+        conversation's head run on BOTH the list and the get endpoint, and —
+        unlike the active-only ``latest_run_id`` — stays populated once the run
+        reaches a terminal state, so a client reopening a finished conversation
+        can still bind its last run (kills the "NO ACTIVE RUN" reopen bug)."""
+        client, store = self.create_client()
+        conversation = await self.create_conversation(client)
+        conversation_id = conversation["conversation_id"]
+        scope = {"org_id": self.Values.ORG_ID, "user_id": self.Values.USER_ID}
+
+        def list_row() -> dict[str, Any]:
+            listed = client.get("/v1/agent/conversations", params=scope).json()[
+                "conversations"
+            ]
+            return next(r for r in listed if r["conversation_id"] == conversation_id)
+
+        def get_row() -> dict[str, Any]:
+            return client.get(
+                f"/v1/agent/conversations/{conversation_id}", params=scope
+            ).json()
+
+        # Never-run conversation: the head-run id is null on both endpoints.
+        assert list_row()["latest_run_id_any_status"] is None
+        assert get_row()["latest_run_id_any_status"] is None
+
+        # After a (non-terminal) run: both the active id and the head id resolve
+        # to it, identically on the list and get shapes.
+        run = await self.create_run(client, conversation_id)
+        run_id = run["run_id"]
+        for row in (list_row(), get_row()):
+            assert row["latest_run_id_any_status"] == run_id
+            assert row["latest_run_id"] == run_id
+
+        # Once the run COMPLETES: the active-only projection drops to null, but
+        # the head id PERSISTS on both endpoints — the property reopen depends on.
+        await store.update_run_status(run_id=run_id, status=AgentRunStatus.COMPLETED)
+        for row in (list_row(), get_row()):
+            assert row["latest_run_id"] is None
+            assert row["latest_run_id_any_status"] == run_id
+
     async def test_pin_route_toggles_persists_and_is_tenant_scoped(self) -> None:
         """PRD-H.4 — POST /pin toggles + persists; other users get 404."""
         client, _store = self.create_client()
@@ -257,6 +302,78 @@ class TestFastApiRuntimeApi(FastApiRuntimeApiTestMixin):
             json={},
         )
         assert intruder.status_code == 404
+
+    async def test_new_chat_run_ensures_conversation_idempotently(self) -> None:
+        """desktop-run-identity §D3 — a run with NO conversation_id but a
+        conversation_idempotency_key server-side get-or-creates the conversation
+        and binds the run to it in ONE call; the same key never duplicates."""
+        client, _store = self.create_client()
+
+        def new_chat_body(*, run_idem: str) -> dict[str, Any]:
+            return {
+                "org_id": self.Values.ORG_ID,
+                "user_id": self.Values.USER_ID,
+                "user_input": self.Values.USER_INPUT,
+                "content_format": "text",
+                "idempotency_key": run_idem,
+                "conversation_idempotency_key": "new-chat-intent-1",
+                "conversation_title": "First chat",
+                "model": {"provider": "openai", "model_name": "gpt-5.4-mini"},
+                "request_context": {
+                    "roles": ["employee"],
+                    "permission_scopes": ["search:read"],
+                },
+            }
+
+        # First send: creates the conversation + the run, returns the new id.
+        first = client.post("/v1/agent/runs", json=new_chat_body(run_idem="r1"))
+        assert first.status_code == 200
+        conversation_id = first.json()["conversation_id"]
+        assert conversation_id  # a real, server-minted id
+
+        # The conversation really exists and carried the supplied title.
+        got = client.get(
+            f"/v1/agent/conversations/{conversation_id}",
+            params={"org_id": self.Values.ORG_ID, "user_id": self.Values.USER_ID},
+        )
+        assert got.status_code == 200
+        assert got.json()["title"] == "First chat"
+
+        # Second send with the SAME conversation_idempotency_key (still no
+        # conversation_id, distinct run key) reuses the SAME conversation — never
+        # a duplicate (kills the "two Desktop session" race, desktop-run-identity §D3).
+        second = client.post("/v1/agent/runs", json=new_chat_body(run_idem="r2"))
+        assert second.status_code == 200
+        assert second.json()["conversation_id"] == conversation_id
+
+        listed = client.get(
+            "/v1/agent/conversations",
+            params={"org_id": self.Values.ORG_ID, "user_id": self.Values.USER_ID},
+        ).json()["conversations"]
+        assert [c["conversation_id"] for c in listed].count(conversation_id) == 1
+        assert len(listed) == 1
+
+    def test_new_chat_run_requires_conversation_idempotency_key(self) -> None:
+        """desktop-run-identity §D3 — a new-chat run (no conversation_id) is valid
+        WITH a conversation_idempotency_key and a validation error WITHOUT one: the
+        de-dup key is mandatory so concurrent first sends can't create two chats.
+        Unit-level on the contract (the HTTP route is RBAC-gated separately)."""
+        # New-chat shape is valid when the de-dup key is present.
+        new_chat = CreateRunRequest(
+            org_id="o",
+            user_id="u",
+            user_input="hi",
+            conversation_idempotency_key="new-chat-1",
+        )
+        assert new_chat.conversation_id is None
+
+        # Omitting BOTH conversation_id and the key is rejected at the contract.
+        try:
+            CreateRunRequest(org_id="o", user_id="u", user_input="hi")
+        except ValidationError as exc:
+            assert "conversation_idempotency_key" in str(exc)
+        else:
+            raise AssertionError("expected a validation error for the missing key")
 
     async def test_run_submission_is_idempotent_and_enqueues_worker_command(
         self,

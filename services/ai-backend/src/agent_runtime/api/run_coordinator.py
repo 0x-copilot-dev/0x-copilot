@@ -185,11 +185,23 @@ class RunCoordinator:
                 http_status=status.HTTP_400_BAD_REQUEST,
                 retryable=False,
             )
-        conversation = conversation_for_scope or await self._conversation_for_scope(
-            org_id=context.org_id,
-            user_id=context.user_id,
-            conversation_id=request.conversation_id,
-        )
+        if conversation_for_scope is not None:
+            conversation = conversation_for_scope
+        elif request.conversation_id is None:
+            # The route ensures a conversation before create_run (desktop-run-identity
+            # §D3); a None here means a direct coordinator caller skipped that step.
+            raise RuntimeApiError(
+                RuntimeErrorCode.VALIDATION_ERROR,
+                "conversation_id must be resolved before run creation.",
+                http_status=status.HTTP_400_BAD_REQUEST,
+                retryable=False,
+            )
+        else:
+            conversation = await self._conversation_for_scope(
+                org_id=context.org_id,
+                user_id=context.user_id,
+                conversation_id=request.conversation_id,
+            )
         (
             run,
             user_message,
@@ -358,7 +370,11 @@ class RunCoordinator:
         Returns ``None`` for anonymous or partially-formed requests; the conversation
         is resolved later in ``_persist_and_enqueue`` in those cases.
         """
-        if request.org_id is None or request.user_id is None:
+        if (
+            request.org_id is None
+            or request.user_id is None
+            or request.conversation_id is None
+        ):
             return None
         return await self._conversation_for_scope(
             org_id=request.org_id,

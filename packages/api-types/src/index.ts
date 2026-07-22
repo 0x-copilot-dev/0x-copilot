@@ -525,6 +525,15 @@ export interface Conversation {
    */
   latest_run_status?: AgentRunStatus | null;
   latest_run_id?: string | null;
+  /**
+   * desktop-run-identity §D2 — id of the most-recent run of ANY status.
+   * Unlike `latest_run_id` (a non-terminal active run only; `null` once the
+   * run completes), this stays populated for finished conversations, so the
+   * Run cockpit can resolve and bind a conversation's head run on reopen from
+   * either the list or the get endpoint. Optional/`null` for never-run rows
+   * and older server builds.
+   */
+  latest_run_id_any_status?: string | null;
   /** PR A3 — id of the message this conversation was self-forked from
    * ("retry from here" / "fork to new chat"). Mutually exclusive with
    * forked_from_share_id (declared below); both nullable for non-fork
@@ -1421,12 +1430,28 @@ export interface RuntimeRequestContext {
 export type ReasoningDepth = "fast" | "balanced" | "deep";
 
 export interface CreateRunRequest {
-  conversation_id: string;
+  /**
+   * desktop-run-identity §D3 — optional. Omit it for a new-chat first send and
+   * supply `conversation_idempotency_key` instead; the server get-or-creates the
+   * conversation and binds the run to it in one call, returning the resolved id
+   * on {@link CreateRunResponse}. Existing callers that always send a real id are
+   * unaffected.
+   */
+  conversation_id?: string | null;
   org_id: string;
   user_id: string;
   user_input: string;
   content_format?: string;
   idempotency_key?: string | null;
+  /**
+   * desktop-run-identity §D3 — stable key that de-duplicates the lazy
+   * conversation create. REQUIRED when `conversation_id` is omitted; mint it
+   * once per new-chat intent (not per send, not reused across chats) so
+   * concurrent/retried first sends collapse to ONE conversation.
+   */
+  conversation_idempotency_key?: string | null;
+  /** desktop-run-identity §D3 — optional human title for a lazily-created chat. */
+  conversation_title?: string | null;
   model?: ModelSelectionRequest | null;
   /**
    * Per-turn reasoning depth. Optional — when null/absent the runtime keeps
