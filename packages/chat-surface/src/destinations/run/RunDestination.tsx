@@ -239,6 +239,16 @@ export interface RunDestinationProps {
   readonly renderComposer?: (ctx: {
     readonly disabled: boolean;
     readonly placeholder: string;
+    /**
+     * desktop-run-identity §D3 — the cockpit's ONE dispatch. The injected in-chat
+     * composer calls this to start a run; it binds the live session (via
+     * `useRunSession.bindRun`) exactly like the empty-state composer, so turn 1 and
+     * turn N share a single path and a 2nd message can never run unbound (the bug
+     * where the in-chat composer POSTed a run whose id the cockpit never saw).
+     * Takes the rich {@link RunStartRequest} so the in-chat composer can carry
+     * attachments through the same path.
+     */
+    readonly dispatch: (request: RunStartRequest) => void;
   }) => ReactElement | null;
 }
 
@@ -302,7 +312,10 @@ export function RunDestination(props: RunDestinationProps): ReactElement {
 
   const session = useRunSession({
     conversationId,
-    runId: startedRunId ?? explicitRunId,
+    // Only a deep-linked / host-supplied runId seeds the session; a freshly
+    // dispatched run binds through `session.bindRun` (the ONE sink, §D3), not this
+    // prop — so the empty→live and turn-N transitions share the same binding path.
+    runId: explicitRunId,
     enabled,
   });
   const { mode, setMode } = useRunMode({ conversationId, enabled });
@@ -411,7 +424,7 @@ export function RunDestination(props: RunDestinationProps): ReactElement {
   // so the client sends only the conversation + the goal. The returned id is
   // bound via `setStartedRunId`, which feeds the `runId` seam and flips the
   // cockpit live in place (no shell remount).
-  const { selectRun } = session;
+  const { selectRun, bindRun } = session;
   const handleStartRun = useCallback(
     (request: RunStartRequest): void => {
       const goal = request.goal.trim();
@@ -454,6 +467,11 @@ export function RunDestination(props: RunDestinationProps): ReactElement {
           }
           if (newRunId !== null && newRunId !== undefined && newRunId !== "") {
             setStartedRunId(newRunId as RunId);
+            // The ONE bind sink (§D3): binding here is what flips the session live
+            // for BOTH the empty-state and the in-chat composer, so a 2nd message
+            // streams exactly like the first. setStartedRunId only bridges the
+            // header goal; useRunSession no longer reads it as the run source.
+            bindRun(newRunId);
           } else {
             // The POST resolved but carried no run id — surface it rather than
             // sitting on the composer with no feedback.
@@ -488,7 +506,7 @@ export function RunDestination(props: RunDestinationProps): ReactElement {
           setIsStartingRun(false);
         });
     },
-    [conversationId, isStartingRun, modelReady, onStartRun, transport],
+    [conversationId, isStartingRun, modelReady, onStartRun, transport, bindRun],
   );
 
   // The plain fallback composer (`RunEmptyState`) sends a bare goal string; wrap
@@ -824,6 +842,20 @@ export function RunDestination(props: RunDestinationProps): ReactElement {
   const pinnedTabTitle =
     visibleSurfaceTabs.find((tab) => tab.uri === effectivePin)?.title ?? "";
 
+  // desktop-run-identity §D3 — inject the ONE dispatch into the in-chat composer's
+  // ctx. TcChat keeps calling renderComposer with {disabled, placeholder}; this
+  // wrapper adds `dispatch` (handleStartRun) so the injected composer starts a run
+  // through the SAME path + bind sink as the empty-state composer. Both composers
+  // share one send path — a 2nd message can never run unbound (kills that bug).
+  const renderComposerWithDispatch = useMemo(
+    () =>
+      renderComposer === undefined
+        ? undefined
+        : (ctx: { readonly disabled: boolean; readonly placeholder: string }) =>
+            renderComposer({ ...ctx, dispatch: handleStartRun }),
+    [renderComposer, handleStartRun],
+  );
+
   const chatSlot = (
     <TcChat
       conversationId={conversationId as unknown as string}
@@ -834,8 +866,9 @@ export function RunDestination(props: RunDestinationProps): ReactElement {
       approvals={chatApprovals}
       onApprove={handleApprove}
       onReject={handleReject}
-      // Host composer seam: desktop mounts the full AssistantComposer here.
-      renderComposer={renderComposer}
+      // Host composer seam: desktop mounts the full AssistantComposer here. The
+      // dispatch-injecting wrapper (§D3) makes its send bind the live session.
+      renderComposer={renderComposerWithDispatch}
     />
   );
   // PR-3.7 (FR-3.15/3.16): while scrubbed off-now, `scrubbed` tells the rail to
@@ -918,10 +951,15 @@ export function RunDestination(props: RunDestinationProps): ReactElement {
             `renderEmptyComposer`, the cockpit shows the design's "What should we
             run first?" rich composer (hero + starter chips + AssistantComposer);
             otherwise the plain `RunEmptyState` goal card. Either way, submitting
-            starts a run and binds it via the `runId` seam (`handleStartRun` →
-            `setStartedRunId`), so the live layout below mounts IN PLACE — the
-            shell (this outer div + header) never remounts. */}
-        {session.runId === null ? (
+            starts a run and binds it via the ONE sink (`handleStartRun` →
+            `session.bindRun`, §D3), so the live layout below mounts IN PLACE — the
+            shell (this outer div + header) never remounts.
+
+            Gate on transcript-emptiness, NOT just `runId === null` (§D3): reopening
+            a FINISHED conversation loads its transcript (by conversationId) while the
+            head run is still resolving, so it shows the thread — never a false "NO
+            ACTIVE RUN" over a conversation that already has messages. */}
+        {session.runId === null && transcriptMessages.length === 0 ? (
           renderEmptyComposer !== undefined ? (
             <div
               data-testid="run-empty-composer"

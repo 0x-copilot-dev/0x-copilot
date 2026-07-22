@@ -25,7 +25,6 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 
 import {
-  AGENT_RUN_STATUSES,
   isRuntimeEventEnvelope,
   type AgentRunStatus,
   type RuntimeApiEventType,
@@ -38,14 +37,6 @@ import { useTransport } from "../../providers/TransportProvider";
 // SSE reader defaults an omitted `eventName` to "message", which would silently
 // match nothing against the real stream — so the name is passed explicitly.
 const RUNTIME_EVENT_NAME = "runtime_event";
-
-/** Non-terminal run states — used to prefer a "live" run when auto-resolving. */
-const NON_TERMINAL_STATUSES: readonly AgentRunStatus[] = [
-  "queued",
-  "running",
-  "waiting_for_approval",
-  "cancelling",
-];
 
 /**
  * Session lifecycle phase, independent of the run's own {@link AgentRunStatus}.
@@ -113,10 +104,28 @@ export interface RunSession {
   readonly retry: () => void;
   /** Bind the cockpit to a different run from {@link RunSession.runs}. */
   readonly selectRun: (runId: string) => void;
+  /**
+   * The single run-binding sink (desktop-run-identity §D3). The cockpit's one
+   * dispatch calls this with the freshly-created run id so a send — turn 1 or
+   * turn N — always binds + streams; passing `null` unbinds. Every binding path
+   * (dispatch / selectRun / deep-link / head) funnels through here.
+   */
+  readonly bindRun: (runId: string | null) => void;
 }
 
 const EMPTY_EVENTS: readonly RuntimeEventEnvelope[] = [];
 const EMPTY_RUNS: readonly RunListItem[] = [];
+
+/**
+ * The conversation "head" projection this hook resolves the active run from
+ * (desktop-run-identity §D2). `latest_run_id` is a live/non-terminal run only
+ * (null once it completes); `latest_run_id_any_status` survives completion, so a
+ * reopened finished conversation still hands us a run id to bind + stream.
+ */
+interface ConversationHead {
+  readonly latest_run_id?: string | null;
+  readonly latest_run_id_any_status?: string | null;
+}
 
 export function useRunSession(options: UseRunSessionOptions): RunSession {
   const {
@@ -127,8 +136,16 @@ export function useRunSession(options: UseRunSessionOptions): RunSession {
   const transport = useTransport();
 
   // ---- run resolution -----------------------------------------------------
-  const [runs, setRuns] = useState<readonly RunListItem[]>(EMPTY_RUNS);
-  const [selectedRunId, setSelectedRunId] = useState<string | null>(null);
+  // The active run is a single ``boundRunId``, written ONLY through ``bindRun`` —
+  // a fresh dispatch, a manual ``selectRun``, a deep-linked ``runId`` prop, or the
+  // server-resolved conversation head. There is NO precedence coalescing in the
+  // render path (the old ``selectedRunId ?? explicitRunId ?? autoResolved`` trap):
+  // the last bind wins, so a fresh send after a manual selection is never shadowed
+  // (desktop-run-identity §D3). ``runs`` backs the multi-run selector; it stays
+  // empty until the runs-list endpoint lands (Phase 6) — the dead ``GET /v1/agent/
+  // runs`` auto-resolve (that route is POST-only → 405) is gone.
+  const [runs] = useState<readonly RunListItem[]>(EMPTY_RUNS);
+  const [boundRunId, setBoundRunId] = useState<string | null>(null);
   const [isResolving, setIsResolving] = useState(false);
   const [resolveError, setResolveError] = useState<Error | null>(null);
   const [resolveNonce, setResolveNonce] = useState(0);
@@ -146,52 +163,69 @@ export function useRunSession(options: UseRunSessionOptions): RunSession {
   const seenSequenceRef = useRef<Set<number>>(new Set());
   const latestSequenceRef = useRef(0);
 
-  const autoResolvedRunId = useMemo(() => pickActiveRunId(runs), [runs]);
-  // Precedence: explicit user selection > explicit prop > auto-resolved latest.
-  const activeRunId = selectedRunId ?? explicitRunId ?? autoResolvedRunId;
+  // The ONE sink. Every run binding (dispatch / selectRun / deep-link / head)
+  // funnels through here, so the render path reads exactly ``boundRunId`` and a
+  // new bind always wins over a stale one.
+  const bindRun = useCallback((next: string | null): void => {
+    setBoundRunId(next);
+  }, []);
 
-  // Switching conversation clears any selection + stale run list so a stale run
-  // is never streamed against the new conversation.
+  const activeRunId = boundRunId;
+
+  // Switching conversation clears the bound run so a stale run is never streamed
+  // against the new conversation; the head-resolution effect below then binds this
+  // conversation's own head run (if any).
   useEffect(() => {
-    setSelectedRunId(null);
-    setRuns(EMPTY_RUNS);
+    setBoundRunId(null);
     setResolveError(null);
   }, [conversationId]);
 
-  // Resolve the conversation's run list via the Transport port. Runs in the
-  // background even when an explicit `runId` is supplied, so the multi-run
-  // selector still has data.
+  // A deep-linked / host-supplied ``runId`` binds directly. Kept as an effect (not
+  // render-path precedence) so it funnels through the one ``boundRunId`` sink.
+  useEffect(() => {
+    if (explicitRunId !== null) {
+      setBoundRunId(explicitRunId);
+    }
+  }, [explicitRunId]);
+
+  // Resolve the conversation's HEAD run from server truth (desktop-run-identity §D2)
+  // — ``latest_run_id`` (a live, non-terminal run) else ``latest_run_id_any_status``
+  // (survives completion). This replaces the dead ``GET /v1/agent/runs`` auto-resolve.
+  // It binds ONLY when nothing is bound yet, so a dispatch or an explicit runId is
+  // never clobbered by a late head resolution — and it lets reopening a FINISHED
+  // conversation bind + stream its last run (kills the "NO ACTIVE RUN" reopen bug).
   useEffect(() => {
     if (!enabled) {
       return;
     }
     let cancelled = false;
     setIsResolving(true);
-    setResolveError(null);
     void transport
-      .request<unknown>({
+      .request<ConversationHead>({
         method: "GET",
-        path: "/v1/agent/runs",
-        query: { conversation_id: conversationId },
+        path: `/v1/agent/conversations/${conversationId}`,
       })
-      .then((payload) => {
+      .then((conv) => {
         if (cancelled) {
           return;
         }
-        setRuns(parseRunList(payload));
+        const head =
+          conv.latest_run_id ?? conv.latest_run_id_any_status ?? null;
+        if (head !== null) {
+          // Only when nothing has bound since the conversation switched — a
+          // dispatch / selection / deep-link always wins over the head.
+          setBoundRunId((prev) => prev ?? head);
+        }
       })
       .catch((err: unknown) => {
         if (cancelled) {
           return;
         }
-        // The run list is a best-effort enhancement — it only backs the
-        // multi-run selector. Some deployments do not expose a run-list
-        // endpoint (there is no `GET /v1/agent/runs`), so a failure here MUST
-        // degrade to "no prior runs" (the empty/idle cockpit), never a blocking
-        // error: starting a run (POST) and streaming it (GET …/stream) are
-        // independent of listing.
-        void err;
-        setRuns(EMPTY_RUNS);
+        // A never-run conversation returns 200 with a null head (→ idle composer,
+        // no error). A genuine failure (network / 5xx / 404) surfaces a NON-blocking
+        // retryable error banner while the empty composer stays available below — it
+        // never blocks starting a run (retry() re-resolves + binds).
+        setResolveError(toError(err));
       })
       .finally(() => {
         if (!cancelled) {
@@ -295,8 +329,9 @@ export function useRunSession(options: UseRunSessionOptions): RunSession {
     setResolveNonce((nonce) => nonce + 1);
   }, []);
 
+  // selectRun is the same sink as bindRun (a manual pick is just another bind).
   const selectRun = useCallback((next: string) => {
-    setSelectedRunId(next);
+    setBoundRunId(next);
   }, []);
 
   return {
@@ -310,6 +345,7 @@ export function useRunSession(options: UseRunSessionOptions): RunSession {
     error,
     retry,
     selectRun,
+    bindRun,
   };
 }
 
@@ -352,105 +388,6 @@ function runStatusFromEventType(
     default:
       return null;
   }
-}
-
-function pickActiveRunId(runs: readonly RunListItem[]): string | null {
-  if (runs.length === 0) {
-    return null;
-  }
-  const live = runs.filter(
-    (run) => run.status !== null && NON_TERMINAL_STATUSES.includes(run.status),
-  );
-  const pool = live.length > 0 ? live : runs;
-  let best = pool[0];
-  let bestMillis = startedAtMillis(best);
-  for (let i = 1; i < pool.length; i += 1) {
-    const millis = startedAtMillis(pool[i]);
-    if (millis >= bestMillis) {
-      best = pool[i];
-      bestMillis = millis;
-    }
-  }
-  return best.runId;
-}
-
-function startedAtMillis(item: RunListItem): number {
-  if (item.startedAt === null) {
-    return Number.NEGATIVE_INFINITY;
-  }
-  const parsed = Date.parse(item.startedAt);
-  return Number.isNaN(parsed) ? Number.NEGATIVE_INFINITY : parsed;
-}
-
-// Tolerant run-list parser: accepts a bare array, `{ runs: [...] }`, or
-// `{ items: [...] }`, and snake_case or camelCase item fields.
-function parseRunList(payload: unknown): readonly RunListItem[] {
-  const raw = runListArray(payload);
-  const out: RunListItem[] = [];
-  for (const entry of raw) {
-    const item = parseRunListItem(entry);
-    if (item !== null) {
-      out.push(item);
-    }
-  }
-  return out;
-}
-
-function runListArray(payload: unknown): readonly unknown[] {
-  if (Array.isArray(payload)) {
-    return payload;
-  }
-  const record = asRecord(payload);
-  if (record === null) {
-    return [];
-  }
-  if (Array.isArray(record.runs)) {
-    return record.runs;
-  }
-  if (Array.isArray(record.items)) {
-    return record.items;
-  }
-  return [];
-}
-
-function parseRunListItem(value: unknown): RunListItem | null {
-  const record = asRecord(value);
-  if (record === null) {
-    return null;
-  }
-  const runId = asString(record.run_id) ?? asString(record.runId);
-  if (runId === null) {
-    return null;
-  }
-  return {
-    runId,
-    goal:
-      asString(record.goal) ??
-      asString(record.title) ??
-      asString(record.summary),
-    status: asRunStatus(record.status),
-    startedAt:
-      asString(record.started_at) ??
-      asString(record.startedAt) ??
-      asString(record.created_at),
-  };
-}
-
-function asRecord(value: unknown): Record<string, unknown> | null {
-  return typeof value === "object" && value !== null
-    ? (value as Record<string, unknown>)
-    : null;
-}
-
-function asString(value: unknown): string | null {
-  return typeof value === "string" ? value : null;
-}
-
-function asRunStatus(value: unknown): AgentRunStatus | null {
-  return typeof value === "string" &&
-    (AGENT_RUN_STATUSES as readonly string[]).includes(value)
-    ? (value as AgentRunStatus)
-    : null;
 }
 
 function toError(value: unknown): Error {

@@ -2,9 +2,12 @@
 //
 // Everything the hook touches is a Transport-port call, so the whole surface
 // is exercised through a purpose-built in-memory fake: `FakeTransport`
-// implements `Transport`, resolves the run list from a swappable handler, and
-// captures every SSE subscription so a test can drive `onMessage`/`onError`
-// by hand and assert the resume cursor (`?after_sequence=N`) on re-subscribe.
+// implements `Transport`, resolves the conversation head (`latest_run_id` /
+// `latest_run_id_any_status`, from `GET /v1/agent/conversations/{id}`) via a
+// swappable handler, and captures every SSE subscription so a test can drive
+// `onMessage`/`onError` by hand and assert the resume cursor (`?after_sequence=N`)
+// on re-subscribe. The dead `GET /v1/agent/runs` auto-resolve (a POST-only route
+// → 405) is gone; run resolution is the conversation head only (desktop-run-identity §D2).
 
 import { act, renderHook, waitFor } from "@testing-library/react";
 import { createElement, type ReactNode } from "react";
@@ -43,9 +46,8 @@ const CAPABILITIES: TransportCapabilities = {
 };
 
 class FakeTransport implements Transport {
-  requestHandler: (req: TypedRequest) => Promise<unknown> = async () => ({
-    runs: [],
-  });
+  // Neutral default: a conversation head with no run → the idle/empty cockpit.
+  requestHandler: (req: TypedRequest) => Promise<unknown> = async () => ({});
   readonly requests: TypedRequest[] = [];
   readonly subs: CapturedSub[] = [];
 
@@ -134,59 +136,51 @@ function renderRunSession(
 // --- tests -----------------------------------------------------------------
 
 describe("useRunSession — run resolution", () => {
-  it("resolves the run list via GET /v1/agent/runs scoped to the conversation", async () => {
+  it("binds the conversation head run resolved from GET /v1/agent/conversations/{id}", async () => {
     const transport = new FakeTransport();
-    transport.requestHandler = async () => ({
-      runs: [{ run_id: "run-1", status: "running", goal: "Ship it" }],
-    });
+    // The head projection carries the live run id (desktop-run-identity §D2).
+    transport.requestHandler = async () => ({ latest_run_id: "run-1" });
 
     const { result } = renderRunSession(transport, {
       conversationId: "conv-1",
     });
 
-    await waitFor(() => expect(result.current.runs).toHaveLength(1));
-    const listRequest = transport.requests.find(
-      (req) => req.path === "/v1/agent/runs",
+    await waitFor(() => expect(result.current.runId).toBe("run-1"));
+    const headRequest = transport.requests.find(
+      (req) => req.path === "/v1/agent/conversations/conv-1",
     );
-    expect(listRequest?.method).toBe("GET");
-    expect(listRequest?.query).toEqual({ conversation_id: "conv-1" });
-    expect(result.current.runs[0]).toEqual({
-      runId: "run-1",
-      status: "running",
-      goal: "Ship it",
-      startedAt: null,
-    });
-    expect(result.current.runId).toBe("run-1");
+    expect(headRequest?.method).toBe("GET");
+    // The dead runs-list route (POST-only → 405) is never called anymore.
+    expect(
+      transport.requests.some((req) => req.path === "/v1/agent/runs"),
+    ).toBe(false);
+    // The multi-run list stays empty until the runs-list endpoint lands (Phase 6).
+    expect(result.current.runs).toEqual([]);
   });
 
-  it("auto-selects the live (non-terminal) run when several exist", async () => {
+  it("falls back to latest_run_id_any_status for a reopened finished conversation", async () => {
     const transport = new FakeTransport();
+    // A finished conversation has no live run (`latest_run_id: null`), but its
+    // last run survives on the any-status head — so reopening it still binds +
+    // streams that run (kills the "NO ACTIVE RUN" reopen bug, Bug 3).
     transport.requestHandler = async () => ({
-      runs: [
-        {
-          run_id: "run-done",
-          status: "completed",
-          started_at: "2026-01-01T00:00:00Z",
-        },
-        {
-          run_id: "run-live",
-          status: "running",
-          started_at: "2026-01-02T00:00:00Z",
-        },
-      ],
+      latest_run_id: null,
+      latest_run_id_any_status: "run-done",
     });
 
     const { result } = renderRunSession(transport, {
       conversationId: "conv-1",
     });
 
-    await waitFor(() => expect(result.current.runs).toHaveLength(2));
-    expect(result.current.runId).toBe("run-live");
+    await waitFor(() => expect(result.current.runId).toBe("run-done"));
+    await waitFor(() =>
+      expect(transport.activeSub?.path).toBe("/v1/agent/runs/run-done/stream"),
+    );
   });
 
-  it("reports idle with no run when the conversation has no runs", async () => {
+  it("reports idle with no run when the conversation head has no run", async () => {
     const transport = new FakeTransport();
-    transport.requestHandler = async () => ({ runs: [] });
+    transport.requestHandler = async () => ({}); // no latest_run_id / any-status
 
     const { result } = renderRunSession(transport, {
       conversationId: "conv-1",
@@ -197,9 +191,9 @@ describe("useRunSession — run resolution", () => {
     expect(transport.subs).toHaveLength(0);
   });
 
-  it("streams an explicit runId even before the list resolves (empty→live)", async () => {
+  it("streams an explicit runId even before the head resolves (empty→live)", async () => {
     const transport = new FakeTransport();
-    transport.requestHandler = async () => ({ runs: [] });
+    transport.requestHandler = async () => ({}); // head carries no run
 
     const { result } = renderRunSession(transport, {
       conversationId: "conv-1",
@@ -209,6 +203,37 @@ describe("useRunSession — run resolution", () => {
     expect(result.current.runId).toBe("run-new");
     await waitFor(() => expect(transport.activeSub).toBeDefined());
     expect(transport.activeSub?.path).toBe("/v1/agent/runs/run-new/stream");
+  });
+
+  it("a fresh bind after a manual selectRun wins — no precedence trap (§D3)", async () => {
+    const transport = new FakeTransport();
+    transport.requestHandler = async () => ({ latest_run_id: "run-head" });
+
+    const { result } = renderRunSession(transport, {
+      conversationId: "conv-1",
+    });
+    // Head resolution binds the conversation's current run…
+    await waitFor(() => expect(result.current.runId).toBe("run-head"));
+
+    // …a manual selection rebinds…
+    act(() => {
+      result.current.selectRun("run-b");
+    });
+    expect(result.current.runId).toBe("run-b");
+
+    // …and a later dispatch (bindRun) STILL wins over that selection. The old
+    // `selectedRunId ?? explicitRunId ?? autoResolved` precedence would have
+    // shadowed the fresh run; the single `boundRunId` sink makes last-write-win,
+    // so a send after a manual pick never runs unbound (Bug 1).
+    act(() => {
+      result.current.bindRun("run-dispatched");
+    });
+    expect(result.current.runId).toBe("run-dispatched");
+    await waitFor(() =>
+      expect(transport.activeSub?.path).toBe(
+        "/v1/agent/runs/run-dispatched/stream",
+      ),
+    );
   });
 });
 
@@ -229,7 +254,7 @@ describe("useRunSession — lifecycle status", () => {
     expect(result.current.status).toBe("resolving");
 
     await act(async () => {
-      resolveRuns({ runs: [{ run_id: "run-1", status: "running" }] });
+      resolveRuns({ latest_run_id: "run-1" });
     });
 
     // Subscribed, no event projected yet → connecting (FR-3.33).
@@ -245,9 +270,7 @@ describe("useRunSession — lifecycle status", () => {
 describe("useRunSession — event accumulation", () => {
   it("grows append-only by reference and dedupes by sequence_no", async () => {
     const transport = new FakeTransport();
-    transport.requestHandler = async () => ({
-      runs: [{ run_id: "run-1", status: "running" }],
-    });
+    transport.requestHandler = async () => ({ latest_run_id: "run-1" });
 
     const { result } = renderRunSession(transport, {
       conversationId: "conv-1",
@@ -272,18 +295,18 @@ describe("useRunSession — event accumulation", () => {
     expect(result.current.latestSequenceNo).toBe(2);
   });
 
-  it("derives runStatus from lifecycle events, falling back to the list", async () => {
+  it("derives runStatus from lifecycle events (the head carries no status to fall back to this phase)", async () => {
     const transport = new FakeTransport();
-    transport.requestHandler = async () => ({
-      runs: [{ run_id: "run-1", status: "running" }],
-    });
+    transport.requestHandler = async () => ({ latest_run_id: "run-1" });
 
     const { result } = renderRunSession(transport, {
       conversationId: "conv-1",
     });
     await waitFor(() => expect(result.current.status).toBe("connecting"));
-    // Falls back to the list entry until an event refines it.
-    expect(result.current.runStatus).toBe("running");
+    // The head field carries only a run id — no status — and `runs` is empty
+    // this phase, so runStatus is null until a lifecycle event refines it (the
+    // runs-list status fallback lands in Phase 6).
+    expect(result.current.runStatus).toBeNull();
 
     transport.emit(
       transport.activeSub,
@@ -300,9 +323,7 @@ describe("useRunSession — event accumulation", () => {
 describe("useRunSession — error + retry (FR-3.32)", () => {
   it("surfaces an SSE error, preserves events, then resumes from the cursor", async () => {
     const transport = new FakeTransport();
-    transport.requestHandler = async () => ({
-      runs: [{ run_id: "run-1", status: "running" }],
-    });
+    transport.requestHandler = async () => ({ latest_run_id: "run-1" });
 
     const { result } = renderRunSession(transport, {
       conversationId: "conv-1",
@@ -334,44 +355,50 @@ describe("useRunSession — error + retry (FR-3.32)", () => {
     expect(result.current.events).toHaveLength(2);
   });
 
-  it("degrades to empty/idle (not a blocking error) when run resolution fails — the list is best-effort", async () => {
+  it("surfaces a retryable error when head resolution fails, then binds on retry", async () => {
     const transport = new FakeTransport();
+    let failNext = true;
     transport.requestHandler = async () => {
-      throw new Error("list failed");
+      if (failNext) {
+        throw new Error("head fetch failed");
+      }
+      return { latest_run_id: "run-1" };
     };
 
     const { result } = renderRunSession(transport, {
       conversationId: "conv-1",
     });
 
-    // The run list only backs the multi-run selector and some deployments do
-    // not expose a run-list endpoint, so a resolution failure MUST degrade to
-    // "no prior runs" (the empty/idle cockpit), never a blocking error —
-    // starting a run (POST) and streaming it (…/stream) are independent.
-    await waitFor(() => expect(result.current.status).toBe("idle"));
-    expect(result.current.error).toBeNull();
+    // Run resolution is now the conversation-head GET — a core endpoint, not the
+    // old best-effort runs-list — so a failure surfaces as a non-blocking,
+    // retryable error: no run bound, no stream opened, `runs` empty. (The cockpit
+    // still lets the user start a run: RunDestination shows the empty composer
+    // regardless of this error, and the banner is non-blocking — see
+    // RunDestination's error-banner test.)
+    await waitFor(() => expect(result.current.status).toBe("error"));
+    expect(result.current.error?.message).toBe("head fetch failed");
     expect(result.current.runId).toBeNull();
     expect(result.current.runs).toEqual([]);
+    expect(transport.subs).toHaveLength(0);
+
+    // Retry re-resolves the head; this time it binds + streams the run.
+    failNext = false;
+    act(() => {
+      result.current.retry();
+    });
+    await waitFor(() => expect(result.current.runId).toBe("run-1"));
+    expect(result.current.error).toBeNull();
+    expect(transport.activeSub?.path).toBe("/v1/agent/runs/run-1/stream");
   });
 });
 
 describe("useRunSession — multi-run selection (FR-3.26)", () => {
   it("rebinds the stream to the selected run and resets accumulated events", async () => {
     const transport = new FakeTransport();
-    transport.requestHandler = async () => ({
-      runs: [
-        {
-          run_id: "run-a",
-          status: "running",
-          started_at: "2026-01-02T00:00:00Z",
-        },
-        {
-          run_id: "run-b",
-          status: "completed",
-          started_at: "2026-01-01T00:00:00Z",
-        },
-      ],
-    });
+    // The head binds run-a; a manual `selectRun` then rebinds to another run id
+    // directly (multi-run selection funnels through the same `boundRunId` sink —
+    // `session.runs` stays empty until the runs-list endpoint lands, Phase 6).
+    transport.requestHandler = async () => ({ latest_run_id: "run-a" });
 
     const { result } = renderRunSession(transport, {
       conversationId: "conv-1",
@@ -399,7 +426,7 @@ describe("useRunSession — multi-run selection (FR-3.26)", () => {
 describe("useRunSession — enabled gate", () => {
   it("neither resolves nor subscribes when disabled", async () => {
     const transport = new FakeTransport();
-    const spy = vi.fn(async () => ({ runs: [{ run_id: "run-1" }] }));
+    const spy = vi.fn(async () => ({ latest_run_id: "run-1" }));
     transport.requestHandler = spy;
 
     const { result } = renderRunSession(transport, {
