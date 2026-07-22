@@ -1147,7 +1147,10 @@ export {
 // streaming / approvals / empty+multi-run seams left in the shell.
 export {
   RunDestination,
+  buildRunCreateBody,
   type RunDestinationProps,
+  type RunStartRequest,
+  type RunEmptyComposerCtx,
   RunHeader,
   type RunHeaderProps,
 } from "./destinations/run";

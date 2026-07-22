@@ -31,7 +31,7 @@ import type {
 import { KeyValueStoreProvider } from "../../providers/KeyValueStoreProvider";
 import { TransportProvider } from "../../providers/TransportProvider";
 import type { KeyValueStore } from "../../storage/key-value-store";
-import { RunDestination } from "./RunDestination";
+import { RunDestination, buildRunCreateBody } from "./RunDestination";
 import { runModeKey } from "./useRunMode";
 
 const CONV = "conv-1" as ConversationId;
@@ -862,7 +862,9 @@ describe("RunDestination — empty/idle + multi-run (PR-3.11 / FR-3.25/3.26)", (
     });
 
     await screen.findByTestId("thread-canvas");
-    expect(onStartRun).toHaveBeenCalledWith("Do the thing");
+    // The plain fallback composer sends a bare goal, wrapped into the shared
+    // RunStartRequest seam (no model/attachments from the plain box).
+    expect(onStartRun).toHaveBeenCalledWith({ goal: "Do the thing" });
     // The host callback supplied the run id — the shell did NOT POST itself.
     expect(
       transport.requests.some(
@@ -930,6 +932,148 @@ describe("RunDestination — empty/idle + multi-run (PR-3.11 / FR-3.25/3.26)", (
     // The config-error CTA opens Settings → Provider keys (the onboarding path).
     fireEvent.click(screen.getByTestId("run-empty-error-cta"));
     expect(onOpenModelSettings).toHaveBeenCalledTimes(1);
+  });
+
+  // -------------------------------------------------------------------------
+  // renderEmptyComposer — the design's "What should we run first?" rich empty
+  // composer slot (host mounts OnboardingComposer; the shell keeps the seam).
+  // -------------------------------------------------------------------------
+
+  it("mounts the injected rich empty composer (not the plain goal card) when there is no active run", async () => {
+    const transport = new FakeTransport();
+    transport.requestHandler = async (req) =>
+      req.path.includes("/messages") ? { messages: [] } : { runs: [] };
+
+    render(
+      <TransportProvider transport={transport}>
+        <KeyValueStoreProvider store={makeStore()}>
+          <RunDestination
+            conversationId={CONV}
+            renderEmptyComposer={() => (
+              <div data-testid="rich-empty-composer">
+                What should we run first?
+              </div>
+            )}
+          />
+        </KeyValueStoreProvider>
+      </TransportProvider>,
+    );
+
+    // The design composer renders; the plain fallback card does NOT.
+    await screen.findByTestId("rich-empty-composer");
+    expect(screen.queryByTestId("run-empty-state")).toBeNull();
+    expect(screen.queryByTestId("thread-canvas")).toBeNull();
+  });
+
+  it("the rich composer's onStartRun forwards the full payload and binds empty→live without a shell remount", async () => {
+    const transport = new FakeTransport();
+    transport.requestHandler = async (req) =>
+      req.path.includes("/messages") ? { messages: [] } : { runs: [] };
+    const onStartRun = vi.fn(async () => "rich-run");
+    const richPayload = {
+      goal: "Watch my wallet",
+      model: { provider: "anthropic", model_name: "claude-sonnet-4-5" },
+      attachments: [
+        {
+          id: "att-1",
+          type: "file",
+          name: "airdrop-claims.csv",
+          content: [],
+        },
+      ],
+      webSearchEnabled: false,
+    };
+
+    render(
+      <TransportProvider transport={transport}>
+        <KeyValueStoreProvider store={makeStore()}>
+          <RunDestination
+            conversationId={CONV}
+            onStartRun={onStartRun}
+            renderEmptyComposer={(ctx) => (
+              <button
+                type="button"
+                data-testid="rich-send"
+                onClick={() => ctx.onStartRun(richPayload)}
+              >
+                Send
+              </button>
+            )}
+          />
+        </KeyValueStoreProvider>
+      </TransportProvider>,
+    );
+
+    await screen.findByTestId("rich-send");
+    const rootBefore = screen.getByTestId("run-destination");
+    act(() => {
+      fireEvent.click(screen.getByTestId("rich-send"));
+    });
+
+    // Empty → live in place (same shell DOM node), driven by the rich payload.
+    await screen.findByTestId("thread-canvas");
+    expect(screen.getByTestId("run-destination")).toBe(rootBefore);
+    // The host onStartRun received the rich selection (goal trimmed + model +
+    // attachments + web-search toggle) — not a bare string.
+    expect(onStartRun).toHaveBeenCalledWith(richPayload);
+    await waitFor(() =>
+      expect(transport.sessionSub?.path).toBe("/v1/agent/runs/rich-run/stream"),
+    );
+  });
+
+  it("shows the readiness setup notice (with CTA) alongside the rich composer when no model is configured", async () => {
+    const transport = new FakeTransport();
+    transport.requestHandler = async (req) =>
+      req.path.includes("/messages") ? { messages: [] } : { runs: [] };
+    const onOpenModelSettings = vi.fn();
+
+    render(
+      <TransportProvider transport={transport}>
+        <KeyValueStoreProvider store={makeStore()}>
+          <RunDestination
+            conversationId={CONV}
+            modelReady={false}
+            onOpenModelSettings={onOpenModelSettings}
+            renderEmptyComposer={(ctx) => (
+              <div data-testid="rich-empty-composer">
+                {String(ctx.modelReady)}
+              </div>
+            )}
+          />
+        </KeyValueStoreProvider>
+      </TransportProvider>,
+    );
+
+    // The composer still renders (design frame), but a "Set up your model"
+    // notice explains why it's inert and routes to Provider keys.
+    await screen.findByTestId("rich-empty-composer");
+    expect(screen.getByTestId("rich-empty-composer").textContent).toBe("false");
+    await screen.findByTestId("run-empty-setup");
+    fireEvent.click(screen.getByTestId("run-empty-setup-cta"));
+    expect(onOpenModelSettings).toHaveBeenCalledTimes(1);
+  });
+
+  it("hides the setup notice once a model is ready", async () => {
+    const transport = new FakeTransport();
+    transport.requestHandler = async (req) =>
+      req.path.includes("/messages") ? { messages: [] } : { runs: [] };
+
+    render(
+      <TransportProvider transport={transport}>
+        <KeyValueStoreProvider store={makeStore()}>
+          <RunDestination
+            conversationId={CONV}
+            modelReady
+            renderEmptyComposer={() => (
+              <div data-testid="rich-empty-composer">ready</div>
+            )}
+          />
+        </KeyValueStoreProvider>
+      </TransportProvider>,
+    );
+
+    await screen.findByTestId("rich-empty-composer");
+    expect(screen.queryByTestId("run-empty-setup")).toBeNull();
   });
 
   it("mounts the multi-run selector for >1 run and auto-binds the live run (FR-3.26)", async () => {
@@ -1431,5 +1575,62 @@ describe("RunDestination — edit-on-surface (PRD-09c)", () => {
     expect(body.edits).toBeUndefined();
     // The overlay never opened.
     expect(screen.queryByTestId("surface-edit-overlay")).toBeNull();
+  });
+});
+
+// The shared run-create body builder (used by the shell default + both host
+// binders) — one place that maps a RunStartRequest to the POST body.
+describe("buildRunCreateBody", () => {
+  it("keeps a bare goal to 'conversation + goal only' (byte-unchanged legacy body)", () => {
+    expect(buildRunCreateBody(CONV, { goal: "Ship it" })).toEqual({
+      conversation_id: CONV,
+      user_input: "Ship it",
+    });
+  });
+
+  it("attaches a non-default model selection (journey: model pill → run body)", () => {
+    const model = { provider: "anthropic", model_name: "claude-sonnet-4-5" };
+    expect(buildRunCreateBody(CONV, { goal: "Go", model })).toEqual({
+      conversation_id: CONV,
+      user_input: "Go",
+      model,
+    });
+  });
+
+  it("attaches composer attachments only when present", () => {
+    const attachments = [
+      { id: "a1", type: "file", name: "airdrop-claims.csv", content: [] },
+    ];
+    const body = buildRunCreateBody(CONV, { goal: "Explain", attachments });
+    expect(body.attachments).toBe(attachments);
+    expect(
+      buildRunCreateBody(CONV, { goal: "x", attachments: [] }).attachments,
+    ).toBeUndefined();
+  });
+
+  it("only sends web_search_enabled on an explicit opt-out (true is the runtime default)", () => {
+    expect(
+      buildRunCreateBody(CONV, { goal: "x", webSearchEnabled: false })
+        .web_search_enabled,
+    ).toBe(false);
+    expect(
+      buildRunCreateBody(CONV, { goal: "x", webSearchEnabled: true })
+        .web_search_enabled,
+    ).toBeUndefined();
+    expect(
+      buildRunCreateBody(CONV, { goal: "x" }).web_search_enabled,
+    ).toBeUndefined();
+  });
+
+  it("nests active connector scopes under request_context, omitting an empty map", () => {
+    const scopes = { "safe-wallet": [] };
+    expect(
+      buildRunCreateBody(CONV, { goal: "x", connectorScopes: scopes })
+        .request_context,
+    ).toEqual({ connector_scopes: scopes });
+    expect(
+      buildRunCreateBody(CONV, { goal: "x", connectorScopes: {} })
+        .request_context,
+    ).toBeUndefined();
   });
 });
