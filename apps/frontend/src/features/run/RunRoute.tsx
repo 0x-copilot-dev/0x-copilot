@@ -202,6 +202,9 @@ export function RunRoute({
       readonly disabled: boolean;
       readonly placeholder: string;
       readonly dispatch: (request: RunStartRequest) => Promise<void>;
+      // WC-P3 — cockpit-owned run state + cancel; RunComposer swaps send↔Stop.
+      readonly running: boolean;
+      readonly onCancel: () => void;
     }) => (
       <RunComposer
         ctx={ctx}

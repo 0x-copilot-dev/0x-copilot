@@ -57,6 +57,7 @@ import {
 } from "react";
 
 import type {
+  AgentRunStatus,
   ConversationConnectorScopes,
   ConversationId,
   ModelSelectionRequest,
@@ -113,6 +114,17 @@ import { useRunSession } from "./useRunSession";
 
 const EMPTY_DECISIONS: ReadonlyMap<string, RunApprovalDecision> = new Map();
 const EMPTY_CLOSED_URIS: ReadonlySet<string> = new Set();
+
+// WC-P3 (AD-4): a run is still cancellable in these non-terminal states — the
+// in-chat composer shows Stop instead of send. `cancelling` is already
+// stopping, so it is excluded from the Stop-visible set (the button hides the
+// moment cancel is in flight). Mirrors useRunTranscript/useRunSources'
+// ACTIVE_RUN_STATUSES (kept local to avoid coupling on an internal const).
+const CANCELLABLE_RUN_STATUSES: ReadonlySet<AgentRunStatus> = new Set([
+  "queued",
+  "running",
+  "waiting_for_approval",
+]);
 /** Surface-tab strip cap (PRD-04 — "+N more" overflow lands later). */
 const MAX_SURFACE_TABS = 8;
 
@@ -250,6 +262,19 @@ export interface RunDestinationProps {
      * await — a rejection routes to the composer's own error notice.
      */
     readonly dispatch: (request: RunStartRequest) => Promise<void>;
+    /**
+     * WC-P3 (AD-4) — true while the bound run is cancellable; the injected
+     * composer swaps its send button for Stop. Cockpit-derived from
+     * `useRunSession.runStatus` (optimistically false the instant Stop is
+     * pressed), so both substrates light up cancel with no dedicated port.
+     */
+    readonly running: boolean;
+    /**
+     * WC-P3 (AD-4) — cancel the bound run. Best-effort Transport POST; the
+     * cockpit owns the optimistic settle + the trailing `run_cancelled`
+     * reconciliation, so the composer only has to wire this to its Stop control.
+     */
+    readonly onCancel: () => void;
   }) => ReactElement | null;
 }
 
@@ -285,6 +310,18 @@ export function RunDestination(props: RunDestinationProps): ReactElement {
   // header until the run list re-resolves to carry the run's own goal — so the
   // empty→live transition never flashes the idle placeholder for a run we named.
   const [startedGoal, setStartedGoal] = useState<string | null>(null);
+  // WC-P3 (AD-4/AD-5): the run the user just pressed Stop on. Set optimistically
+  // so `running` flips false in the SAME tick — the Stop button doesn't sit
+  // there looking dead between the click and the trailing `run_cancelling` /
+  // `run_cancelled` SSE frame that makes runStatus terminal. Scoped by run id
+  // (compared against the bound run) so it self-clears when a new run binds; the
+  // conversation-reset effect also clears it. We deliberately do NOT clear
+  // `boundRunId` (unlike ChatScreen's items model): the cockpit mounts the empty
+  // "What should we run?" state whenever `session.runId === null`, so clearing it
+  // would flash away the very conversation being cancelled — and the cockpit has
+  // no items-scan auto-resume, so head-resolution (`prev ?? head`, once per
+  // conversation) can never re-bind the run anyway.
+  const [cancellingRunId, setCancellingRunId] = useState<string | null>(null);
 
   // Monotonic token identifying the current start attempt. Bumped whenever the
   // conversation resets (below), so an in-flight start's async continuation can
@@ -304,6 +341,8 @@ export function RunDestination(props: RunDestinationProps): ReactElement {
     setIsStartingRun(false);
     setStartedGoal(null);
     setStartError(null);
+    // WC-P3: never carry an optimistic cancel across conversations.
+    setCancellingRunId(null);
     // PRD-04: a new conversation starts from a clean surface strip.
     setPinnedUri(null);
     setClosedUris(EMPTY_CLOSED_URIS);
@@ -708,6 +747,39 @@ export function RunDestination(props: RunDestinationProps): ReactElement {
     (approvalId: string): void => resolveApproval(approvalId, "rejected"),
     [resolveApproval],
   );
+
+  // WC-P3 (AD-4): the in-chat composer shows Stop while the bound run is
+  // cancellable and no cancel is in flight (server `cancelling` state OR our
+  // optimistic overlay for THIS run). `cancellingRunId` is compared to the bound
+  // run so a stale flag from a prior run can never suppress Stop on a new one.
+  const boundRunId = session.runId;
+  const running =
+    boundRunId !== null &&
+    session.runStatus !== null &&
+    CANCELLABLE_RUN_STATUSES.has(session.runStatus) &&
+    cancellingRunId !== boundRunId;
+
+  // Cancel the bound run — cockpit-owned, no dedicated port (AD-4). Optimistically
+  // flips `running` false via `cancellingRunId` (Stop hides at once), then POSTs
+  // cancel best-effort through the Transport port, mirroring `resolveApproval`: a
+  // failure leaves the optimistic state and the trailing `run_cancelled` SSE frame
+  // is the authority. We keep `boundRunId` bound (AD-5) so the transcript stays and
+  // the terminal frame reconciles it — Stop cannot re-arm (running stays false
+  // while this run is bound, and nothing re-binds it).
+  const handleCancel = useCallback((): void => {
+    if (boundRunId === null) {
+      return;
+    }
+    setCancellingRunId(boundRunId);
+    void transport
+      .request({
+        method: "POST",
+        path: `/v1/agent/runs/${boundRunId}/cancel`,
+      })
+      .catch(() => {
+        /* optimistic: the SSE `run_cancelled` frame reconciles the truth */
+      });
+  }, [boundRunId, transport]);
   // PRD-09c: open the edit overlay for the surface whose diff the reviewer wants
   // to change. This fills the PRD-04 passthrough — the overlay renders OVER the
   // active surface (ThreadCanvas.editSlot) and submits `approve_with_edits`.
@@ -859,13 +931,21 @@ export function RunDestination(props: RunDestinationProps): ReactElement {
   // wrapper adds `dispatch` (handleStartRun) so the injected composer starts a run
   // through the SAME path + bind sink as the empty-state composer. Both composers
   // share one send path — a 2nd message can never run unbound (kills that bug).
+  // WC-P3 (AD-4): the same wrapper hands down the cockpit-owned run state
+  // (`running`) + `onCancel`, so the injected composer swaps send↔Stop without a
+  // dedicated port — lighting up cancel on BOTH substrates.
   const renderComposerWithDispatch = useMemo(
     () =>
       renderComposer === undefined
         ? undefined
         : (ctx: { readonly disabled: boolean; readonly placeholder: string }) =>
-            renderComposer({ ...ctx, dispatch: handleStartRun }),
-    [renderComposer, handleStartRun],
+            renderComposer({
+              ...ctx,
+              dispatch: handleStartRun,
+              running,
+              onCancel: handleCancel,
+            }),
+    [renderComposer, handleStartRun, running, handleCancel],
   );
 
   const chatSlot = (

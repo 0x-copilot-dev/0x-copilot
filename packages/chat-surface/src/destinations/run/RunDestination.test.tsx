@@ -1722,3 +1722,121 @@ describe("buildRunCreateBody", () => {
     ).toBeUndefined();
   });
 });
+
+// WC-P3 (AD-4/AD-5): the cockpit derives `running` from the run stream and owns
+// cancel — the injected in-chat composer only swaps send↔Stop and fires onCancel.
+// The gating risk (R1) is a re-arm: after Stop, nothing may resurrect the button.
+describe("RunDestination — cancel/stop (WC-P3)", () => {
+  function runLifecycle(sequenceNo: number, eventType: string) {
+    return {
+      event_id: `life-${sequenceNo}`,
+      run_id: "run-1",
+      conversation_id: "conv-1",
+      sequence_no: sequenceNo,
+      event_type: eventType,
+      activity_kind: "run",
+      payload: {},
+      created_at: "2026-07-22T10:00:00.000Z",
+    };
+  }
+
+  // Mount the cockpit with a probe composer that exposes the cockpit-derived
+  // `running` + wires Stop to `onCancel` — the exact seam the web/desktop
+  // RunComposer binds.
+  function renderWithComposer(transport: FakeTransport) {
+    const ui: ReactElement = (
+      <TransportProvider transport={transport}>
+        <KeyValueStoreProvider store={makeStore()}>
+          <RunDestination
+            conversationId={CONV}
+            renderComposer={(ctx) => (
+              <div
+                data-testid="composer-probe"
+                data-running={String(ctx.running)}
+              >
+                {ctx.running ? (
+                  <button
+                    type="button"
+                    data-testid="stop-btn"
+                    onClick={ctx.onCancel}
+                  >
+                    Stop
+                  </button>
+                ) : null}
+              </div>
+            )}
+          />
+        </KeyValueStoreProvider>
+      </TransportProvider>
+    );
+    return render(ui);
+  }
+
+  it("shows Stop while running, POSTs cancel best-effort, and does not re-arm", async () => {
+    const transport = new FakeTransport();
+    transport.requestHandler = async (req) => {
+      if (req.path.includes("/messages")) return { messages: [] };
+      // Runs-list empty so runStatus starts from events, not the runs fallback —
+      // this makes the null→running transition (below) observable.
+      if (req.path.endsWith("/runs")) return { runs: [] };
+      // Head binds run-1 (desktop-run-identity §D2).
+      return { latest_run_id: "run-1", latest_run_id_any_status: "run-1" };
+    };
+
+    renderWithComposer(transport);
+
+    // The head binds run-1 and opens the session tail; the in-chat composer mounts.
+    await waitFor(() => expect(transport.sessionSub).toBeDefined());
+    const probe = await screen.findByTestId("composer-probe");
+
+    // No lifecycle frame yet → runStatus null → not running → no Stop.
+    expect(probe.getAttribute("data-running")).toBe("false");
+
+    // run_started → runStatus "running" → the composer shows Stop.
+    act(() => {
+      transport.sessionSub?.onMessage?.(
+        JSON.stringify(runLifecycle(1, "run_started")),
+      );
+    });
+    await waitFor(() =>
+      expect(
+        screen.getByTestId("composer-probe").getAttribute("data-running"),
+      ).toBe("true"),
+    );
+    expect(screen.getByTestId("stop-btn")).not.toBeNull();
+
+    // Press Stop → best-effort cancel POST + the button hides in the same tick
+    // (optimistic; the trailing run_cancelled frame is the authority).
+    fireEvent.click(screen.getByTestId("stop-btn"));
+    await waitFor(() =>
+      expect(
+        transport.requests.some(
+          (r) =>
+            r.method === "POST" && r.path === "/v1/agent/runs/run-1/cancel",
+        ),
+      ).toBe(true),
+    );
+    expect(
+      screen.getByTestId("composer-probe").getAttribute("data-running"),
+    ).toBe("false");
+
+    // A late frame that re-derives "running" must NOT resurrect Stop — the
+    // optimistic cancel is scoped to the bound run (AD-5 no-resurrect / R1).
+    act(() => {
+      transport.sessionSub?.onMessage?.(
+        JSON.stringify(runLifecycle(2, "run_started")),
+      );
+    });
+    await waitFor(() =>
+      expect(
+        screen.getByTestId("composer-probe").getAttribute("data-running"),
+      ).toBe("false"),
+    );
+    expect(screen.queryByTestId("stop-btn")).toBeNull();
+
+    // boundRunId stays bound (AD-5): the run's stream is still the session tail,
+    // so cancel never flashed the cockpit back to the empty "What should we run?"
+    // state — the conversation being cancelled stays on screen.
+    expect(transport.sessionSub?.path).toBe("/v1/agent/runs/run-1/stream");
+  });
+});

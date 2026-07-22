@@ -62,6 +62,10 @@ export interface RunComposerCtx {
   readonly disabled: boolean;
   readonly placeholder: string;
   readonly dispatch: (request: RunStartRequest) => Promise<void>;
+  /** WC-P3 — true while the bound run is cancellable; the composer shows Stop. */
+  readonly running: boolean;
+  /** WC-P3 — cancel the bound run (cockpit-owned best-effort POST). */
+  readonly onCancel: () => void;
 }
 
 export interface RunComposerProps {
@@ -175,6 +179,10 @@ export function RunComposer({
         // The cockpit owns the ghost/scrub disable + placeholder (passed in via ctx).
         disabled={ctx.disabled}
         placeholder={ctx.placeholder}
+        // WC-P3: the cockpit derives run state + owns cancel; the composer just
+        // swaps send↔Stop and fires onCancel (AssistantComposer renders Stop).
+        running={ctx.running}
+        onCancel={ctx.onCancel}
       />
     </div>
   );
