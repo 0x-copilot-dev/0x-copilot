@@ -381,7 +381,10 @@ describe("<ActivityRoute>", () => {
     );
 
     const rowEl = screen.getByTestId("activity-row");
-    expect(rowEl.tagName).toBe("BUTTON");
+    // The shared chat-surface <Row> renders an activatable `role="button"`
+    // div (not a native <button>) so nested links compose — mirror its own
+    // suite's assertion rather than pinning the tag name.
+    expect(rowEl).toHaveAttribute("role", "button");
     await userEvent.click(rowEl);
     expect(onOpenRun).toHaveBeenCalledWith("run_live" as RunId);
   });
