@@ -1,0 +1,135 @@
+{
+  "surface": "first-run",
+  "note": "design↔live element correspondence for the FTUE. The design mock and the live app use different class names for the same elements; this map aligns them so the extractor + comparator can diff label-for-label. `expectDivergence` marks a KNOWN, accepted difference so the report files it as INFO, not a defect.",
+  "states": ["gate"],
+  "elements": [
+    {
+      "label": "topbar.brand",
+      "group": "Top bar",
+      "design": ".fr-top .brand",
+      "live": ".fr-brand"
+    },
+    {
+      "label": "topbar.brand.zx",
+      "group": "Top bar",
+      "design": ".fr-top .brand .zx",
+      "live": ".fr-brand__zx"
+    },
+    {
+      "label": "topbar.walletChip",
+      "group": "Top bar",
+      "design": ".fr-wchip",
+      "live": ".fr-wchip",
+      "expectDivergence": "harness limitation — the live gate renders the chip only when a profilePort supplies a wallet address; not wired in this render"
+    },
+    {
+      "label": "topbar.skip",
+      "group": "Top bar",
+      "design": ".fr-skiplink",
+      "live": ".fr-skiplink"
+    },
+    {
+      "label": "hero.h1",
+      "group": "Hero",
+      "design": ".fr-hero h1",
+      "live": ".fr-hero__title"
+    },
+    {
+      "label": "hero.sub",
+      "group": "Hero",
+      "design": ".fr-hero .sub",
+      "live": ".fr-hero__sub"
+    },
+    {
+      "label": "gate.grid",
+      "group": "Gate",
+      "design": ".fr-gate",
+      "live": ".fr-gate"
+    },
+    {
+      "label": "card.local",
+      "group": "Gate card",
+      "design": ".fr-gate .fr-gcard:nth-child(1)",
+      "live": "[data-testid=\"first-run-local-card\"]"
+    },
+    {
+      "label": "card.local.title",
+      "group": "Gate card",
+      "design": ".fr-gate .fr-gcard:nth-child(1) b",
+      "live": "[data-testid=\"first-run-local-card\"] .fr-gcard__title"
+    },
+    {
+      "label": "card.local.meta",
+      "group": "Gate card",
+      "design": ".fr-gate .fr-gcard:nth-child(1) .meta",
+      "live": "[data-testid=\"first-run-local-card\"] .fr-gcard__meta"
+    },
+    {
+      "label": "card.local.body",
+      "group": "Gate card",
+      "design": ".fr-gate .fr-gcard:nth-child(1) p",
+      "live": "[data-testid=\"first-run-local-card\"] .fr-gcard__body"
+    },
+    {
+      "label": "card.local.note",
+      "group": "Gate card",
+      "design": ".fr-gate .fr-gcard:nth-child(1) .note",
+      "live": "[data-testid=\"first-run-local-card\"] .fr-gcard__note"
+    },
+    {
+      "label": "btn.primary",
+      "group": "Gate card",
+      "design": ".gbtn--pri",
+      "live": "[data-testid=\"first-run-start-download\"]"
+    },
+    {
+      "label": "card.key.title",
+      "group": "Gate card",
+      "design": ".fr-gate .fr-gcard:nth-child(2) b",
+      "live": "[data-testid=\"first-run-key-card\"] .fr-gcard__title"
+    },
+    {
+      "label": "card.key.meta",
+      "group": "Gate card",
+      "design": ".fr-gate .fr-gcard:nth-child(2) .meta",
+      "live": "[data-testid=\"first-run-key-card\"] .fr-gcard__meta"
+    },
+    {
+      "label": "card.key.body",
+      "group": "Gate card",
+      "design": ".fr-gate .fr-gcard:nth-child(2) p",
+      "live": "[data-testid=\"first-run-key-card\"] .fr-gcard__body"
+    },
+    {
+      "label": "btn.secondary",
+      "group": "Gate card",
+      "design": ".fr-gate .fr-gcard:nth-child(2) .gbtn",
+      "live": "[data-testid=\"first-run-add-key\"]"
+    },
+    {
+      "label": "trial.link",
+      "group": "Gate",
+      "design": ".fr-try",
+      "live": ".fr-try",
+      "expectDivergence": "hosted-trial lane deliberately SHELVED in v1 (README §7.1) — correct that the live app omits it"
+    },
+    {
+      "label": "footer",
+      "group": "Footer",
+      "design": ".fr-foot",
+      "live": ".fr-foot"
+    },
+    {
+      "label": "footer.left",
+      "group": "Footer",
+      "design": ".fr-foot span:nth-child(1)",
+      "live": ".fr-foot span:nth-child(1)"
+    },
+    {
+      "label": "footer.right",
+      "group": "Footer",
+      "design": ".fr-foot span:nth-child(2)",
+      "live": ".fr-foot span:nth-child(2)"
+    }
+  ]
+}

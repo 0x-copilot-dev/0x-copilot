@@ -2,7 +2,7 @@
   "name": "@0x-copilot/desktop",
   "version": "0.1.0",
   "private": true,
-  "description": "Electron desktop client for the Atlas / 0x-copilot product.",
+  "description": "0xCopilot Electron desktop client.",
   "main": "./out/main/index.js",
   "scripts": {
     "typecheck": "tsc -p tsconfig.json --noEmit",

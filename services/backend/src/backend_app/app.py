@@ -267,6 +267,7 @@ from backend_app.provider_keys import (
     ProviderApiKeyStore,
     ProviderKeyLiveValidator,
     ProviderKeysService,
+    SsrfGuard,
     register_provider_keys_routes,
 )
 from backend_app.routes.me_identities import register_me_identities_routes
@@ -628,6 +629,7 @@ def create_app(
     settings_store: SettingsStore | None = None,
     provider_api_keys_store: ProviderApiKeyStore | None = None,
     provider_key_live_validator: ProviderKeyLiveValidator | None = None,
+    provider_key_ssrf_guard: SsrfGuard | None = None,
     enable_provider_key_live_validation: bool = False,
     liveness_service: LivenessService | None = None,
     palette_store: PaletteStorePort | None = None,
@@ -1728,6 +1730,16 @@ def create_app(
             token_vault=provider_keys_vault,
         )
         app.state.provider_keys_service = provider_keys_service
+        # Decision D-2 — SSRF guard for the custom OpenAI-compatible endpoint's
+        # user-supplied base_url. PROFILE-AWARE: only the single-user desktop
+        # (the endpoint runs on the user's own machine) may point at
+        # loopback/private/http; every hosted/team profile is https-and-public
+        # only, blocking cloud-metadata + internal ranges + DNS-rebinding.
+        # Tests inject a guard carrying a fake resolver to stay hermetic.
+        custom_endpoint_ssrf_guard = provider_key_ssrf_guard or SsrfGuard(
+            allow_private_networks=(resolved_deployment.name == "single_user_desktop")
+        )
+        app.state.provider_key_ssrf_guard = custom_endpoint_ssrf_guard
         # PR-B live validation: OFF by default so a bare ``create_app()``
         # (every unit test) can never make an outbound provider call —
         # PR CI must not require live third-party services. The two real
@@ -1736,13 +1748,16 @@ def create_app(
         # (``desktop_app.build_create_app_kwargs``). Tests that want the
         # lane inject ``provider_key_live_validator`` (MockTransport).
         resolved_live_validator = provider_key_live_validator or (
-            ProviderKeyLiveValidator() if enable_provider_key_live_validation else None
+            ProviderKeyLiveValidator(ssrf_guard=custom_endpoint_ssrf_guard)
+            if enable_provider_key_live_validation
+            else None
         )
         app.state.provider_key_live_validator = resolved_live_validator
         register_provider_keys_routes(
             app,
             service=provider_keys_service,
             live_validator=resolved_live_validator,
+            ssrf_guard=custom_endpoint_ssrf_guard,
         )
     # PR 8.0.5 — single aggregate runtime-policies route consumed by
     # ai-backend at run start. Composes the same two stores above into

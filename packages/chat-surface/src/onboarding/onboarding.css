@@ -6,13 +6,18 @@
  * gate unstyled). P1 OWNS this file; P2 (local card) and P3 (composer/ack)
  * APPEND their `fr-*` classes here — one stylesheet, one token map.
  *
- * Token discipline (README §2, PRD-P1 §5): every color/size resolves a
- * design-system `var(--…)` token — design-system is the SSOT. The ONLY literals
- * are the three per-provider dot swatches (inline `style`, SPEC §Data — not the
- * app accent) and the hero's `-0.015em` tracking (tracking is not tokenized).
- * The SPEC's 9–10.5px mono micro-labels (meta 9.5 / note 9 / foot 9.5 /
- * ack 10.5) resolve `--font-size-3xs` (9.6px), added to design-system for
- * exactly this scale; `--font-size-2xs` (11.2px) stays for badges/kbd.
+ * Parity discipline (design SSOT = copilot-firstrun.css + copilot.css):
+ * every value matches the design's exact per-element value. Colors ALWAYS
+ * resolve a design-system token whose value equals the design value:
+ *   --tx  #ececf1 → --color-text            --mut  #98989f → --color-text-muted
+ *   --tx2 #d4d4db → --color-text-strong     --mut2 #64646d → --color-text-subtle
+ *   --panel  #111114 → --color-surface      --panel2 #16161a → --color-surface-muted
+ *   --panel3 #1d1d23 → --color-surface-elevated
+ *   --line  .06 → --color-border            --line2 .10 → --color-border-strong
+ *   --line3 .18 → --color-border-stronger   --jade → --color-success
+ *   --accent → --color-accent               --accent-ink → --color-accent-contrast
+ * Font-size / spacing / radius match the design value; where no token equals it
+ * exactly, a commented px literal is used (design's type ramp is off the ladder).
  *
  * Theme-aware for free: all colors are tokens, so dark/light/slate resolve from
  * styles.css. Motion is gated under reduced-motion (R8). */
@@ -29,25 +34,25 @@
   font-family: var(--font-sans);
 }
 
-/* --- Top bar: brand · wallet-chip slot · skip ------------------------------ */
+/* --- Top bar: brand · wallet-chip slot · skip (design: no bottom border) ---- */
 .fr-top {
   display: flex;
   align-items: center;
-  gap: var(--space-md);
-  padding: var(--space-md) var(--space-lg);
-  border-bottom: 1px solid var(--color-border);
+  gap: 10px; /* design-exact; off the space ladder (sm 8 / md 12) */
+  padding: 13px 18px; /* design-exact */
+  flex: none;
 }
 
 .fr-brand {
   display: inline-flex;
   align-items: center;
-  gap: var(--space-xs);
+  gap: 7px; /* design-exact; off the space ladder */
 }
 
 .fr-brand__name {
   font-family: var(--font-display);
   font-weight: var(--font-weight-semibold);
-  font-size: var(--font-size-md);
+  font-size: var(--font-size-xs); /* 12.5px */
   color: var(--color-text);
 }
 
@@ -65,17 +70,16 @@
   flex: 1 1 auto;
 }
 
-/* Ghost skip link — muted, brightens on hover. */
+/* Ghost skip link — mono micro-label, muted, brightens on hover (no pad/radius). */
 .fr-skiplink {
   appearance: none;
   border: none;
   background: transparent;
-  padding: var(--space-2xs) var(--space-xs);
-  font: inherit;
-  font-size: var(--font-size-sm);
+  padding: 0;
+  font-family: var(--font-mono);
+  font-size: 10px; /* design-exact; off the type ladder */
   color: var(--color-text-muted);
   cursor: pointer;
-  border-radius: var(--radius-sm);
   transition: color var(--duration-fast) var(--ease-standard);
 }
 
@@ -89,40 +93,42 @@
   display: flex;
   flex-direction: column;
   justify-content: center;
-  gap: var(--space-xl);
+  gap: var(--space-lg); /* 16px */
   width: min(640px, 92%);
   margin-inline: auto;
-  padding-block: var(--space-2xl);
+  padding: 6px 0 22px; /* design-exact */
 }
 
 /* --- Hero -------------------------------------------------------------------*/
 .fr-hero {
   display: flex;
   flex-direction: column;
-  gap: var(--space-xs);
+  gap: 7px; /* design-exact; mirrors the design h1's 7px margin-bottom */
 }
 
 .fr-hero__title {
   margin: 0;
   font-family: var(--font-display);
   font-weight: var(--font-weight-semibold);
-  font-size: var(--font-size-2xl);
-  line-height: var(--line-height-tight);
+  font-size: 23px; /* design-exact; off the type ladder (2xl is 22.4px) */
+  line-height: var(--line-height-tight); /* 1.2 */
   letter-spacing: -0.015em; /* documented literal — tracking is not tokenized */
-  color: var(--color-text-strong);
+  color: var(--color-text);
 }
 
 .fr-hero__sub {
   margin: 0;
-  font-size: var(--font-size-sm);
+  font-size: var(--font-size-xs); /* 12.5px */
   color: var(--color-text-muted);
+  line-height: 1.55; /* design-exact */
 }
 
 /* --- Gate: 2-col grid, stacks under ~560px --------------------------------- */
 .fr-gate {
   display: grid;
   grid-template-columns: 1fr 1fr;
-  gap: var(--space-lg);
+  gap: 10px; /* design-exact; off the space ladder */
+  align-items: stretch;
 }
 
 @media (max-width: 560px) {
@@ -133,12 +139,13 @@
 
 /* --- Gate card (radius 12 = --radius-lg) ------------------------------------*/
 .fr-gcard {
+  text-align: left;
   display: flex;
   flex-direction: column;
-  gap: var(--space-sm);
-  padding: var(--space-xl);
+  gap: 7px; /* design-exact; off the space ladder */
+  padding: 15px 16px; /* design-exact */
   border: 1px solid var(--color-border);
-  border-radius: var(--radius-lg);
+  border-radius: var(--radius-lg); /* 12px */
   background-color: var(--color-surface);
 }
 
@@ -149,7 +156,8 @@
 
 .fr-gcard__title {
   margin: 0;
-  font-size: var(--font-size-md);
+  font-family: var(--font-display);
+  font-size: 13px; /* design-exact; off the type ladder (md is 14px) */
   font-weight: var(--font-weight-semibold);
   color: var(--color-text);
 }
@@ -157,42 +165,82 @@
 .fr-gcard__meta {
   margin: 0;
   font-family: var(--font-mono);
-  font-size: var(--font-size-3xs);
-  color: var(--color-text-muted);
+  font-size: 9.5px; /* design-exact; off the type ladder (3xs is 9px) */
+  color: var(--color-text-subtle);
 }
 
 .fr-gcard__body {
   margin: 0;
-  font-size: var(--font-size-sm);
+  font-size: 11.5px; /* design-exact; off the type ladder */
   color: var(--color-text-muted);
+  line-height: 1.5;
+  flex: 1;
 }
 
 .fr-gcard__note {
   margin: 0;
   font-family: var(--font-mono);
-  font-size: var(--font-size-3xs);
+  font-size: var(--font-size-3xs); /* 9px */
   color: var(--color-text-subtle);
 }
 
-/* Push the CTA + note to the card foot so both cards align. */
+/* Push the CTA + note to the card foot so both cards align (design keeps the
+ * gbtn align-self:flex-start with the note below at the card's 7px rhythm). */
 .fr-gcard__foot {
   margin-top: auto;
-  padding-top: var(--space-sm);
   display: flex;
   flex-direction: column;
-  gap: var(--space-xs);
+  gap: 7px; /* design-exact; matches the card's 7px rhythm */
   align-items: flex-start;
 }
 
-/* --- Inline BYOK key form -------------------------------------------------- */
+/* --- Bespoke gate buttons (design .gbtn / .gbtn--pri) -----------------------
+ * NOT the shared design-system <Button> (used app-wide). Copied faithfully from
+ * copilot-firstrun.css so the FTUE CTAs match the design pixel-for-pixel. */
+.gbtn {
+  align-self: flex-start;
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  border: 1px solid var(--color-border-stronger); /* --line3 */
+  background: var(--color-surface-elevated); /* --panel3 */
+  color: var(--color-text);
+  border-radius: var(--radius-md); /* 8px */
+  padding: 7px 13px; /* design-exact */
+  font-family: var(--font-display);
+  font-weight: var(--font-weight-semibold);
+  font-size: 11.5px; /* design-exact; off the type ladder */
+  cursor: pointer;
+  transition: border-color var(--duration-fast) var(--ease-standard);
+}
+
+.gbtn:hover:not(:disabled) {
+  border-color: var(--color-accent);
+}
+
+.gbtn:disabled {
+  opacity: 0.5;
+  cursor: default;
+}
+
+.gbtn--pri {
+  background: var(--color-accent);
+  border-color: var(--color-accent);
+  color: var(
+    --color-accent-contrast
+  ); /* --accent-ink (design literal #0b0a0e) */
+}
+
+.gbtn--pri:hover:not(:disabled) {
+  filter: brightness(1.08);
+}
+
+/* --- Inline BYOK key form (design .fr-kf: bare flex column, no panel) ------- */
 .fr-kf {
   display: flex;
   flex-direction: column;
-  gap: var(--space-md);
+  gap: var(--space-sm); /* 8px */
   width: 100%;
-  padding: var(--space-lg);
-  border-radius: var(--radius-md);
-  background-color: var(--color-surface-muted);
 }
 
 .fr-kf__prov {
@@ -223,7 +271,7 @@
 .fr-kf__note {
   margin: 0;
   font-family: var(--font-mono);
-  font-size: var(--font-size-3xs);
+  font-size: var(--font-size-3xs); /* 9px */
   color: var(--color-text-subtle);
 }
 
@@ -259,27 +307,30 @@
   color: var(--color-text-muted);
 }
 
-/* --- Footer: mono, space-between ------------------------------------------- */
+/* --- Footer: mono, space-between, no top border ---------------------------- */
 .fr-foot {
+  flex: none;
   display: flex;
   align-items: center;
   justify-content: space-between;
   gap: var(--space-md);
-  padding: var(--space-md) var(--space-lg);
-  border-top: 1px solid var(--color-border);
+  padding: 0 18px 12px; /* design-exact */
   font-family: var(--font-mono);
-  font-size: var(--font-size-3xs);
+  font-size: 9.5px; /* design-exact; off the type ladder (3xs is 9px) */
   color: var(--color-text-subtle);
 }
 
 /* --- Reduced motion (R8): neutralize transitions --------------------------- */
 [data-reduce-motion="1"] .fr-skiplink,
-[data-reduce-motion="always"] .fr-skiplink {
+[data-reduce-motion="always"] .fr-skiplink,
+[data-reduce-motion="1"] .gbtn,
+[data-reduce-motion="always"] .gbtn {
   transition: none;
 }
 
 @media (prefers-reduced-motion: reduce) {
-  .fr-skiplink {
+  .fr-skiplink,
+  .gbtn {
     transition: none;
   }
 }
@@ -331,9 +382,7 @@
 /* ==========================================================================
  * Phase FTUE-P3 — onboarding composer (State B) + starter chips + ack (State C)
  * Appended per P1's "one stylesheet, one token map" note. Every color/size
- * resolves a design-system token; the only literals are the shared hero
- * tracking (already declared above) and none new here. `.fr-compose`/`.fr-chips`
- * /`.fr-chip`/`.fr-cerr`/`.fr-ack`/`.ln` map to SPEC §CSS inventory.
+ * resolves a design-system token or a commented design-exact literal.
  * ==========================================================================*/
 
 /* --- State B: composer surface (H1 · chips · error · AssistantComposer) ---- */
@@ -347,28 +396,31 @@
 .fr-chips {
   display: flex;
   flex-wrap: wrap;
-  gap: var(--space-sm);
+  gap: 7px; /* design-exact; off the space ladder */
 }
 
 .fr-chip {
   display: inline-flex;
   align-items: center;
-  gap: var(--space-xs);
-  padding: var(--space-2xs) var(--space-md);
+  gap: 7px; /* design-exact */
+  padding: 6px 12px; /* design-exact */
   border: 1px solid var(--color-border);
   border-radius: var(--radius-full);
-  background-color: var(--color-surface);
-  color: var(--color-text);
-  font: inherit;
-  font-size: var(--font-size-sm);
+  background: none;
+  color: var(--color-text-strong); /* --tx2 */
+  font-family: inherit;
+  font-size: 11px; /* design-exact; off the type ladder (2xs is 11.2px) */
   cursor: pointer;
   transition:
     border-color var(--duration-fast) var(--ease-standard),
-    background-color var(--duration-fast) var(--ease-standard);
+    background-color var(--duration-fast) var(--ease-standard),
+    color var(--duration-fast) var(--ease-standard);
 }
 
 .fr-chip:hover:not(:disabled) {
-  border-color: var(--color-border-strong);
+  border-color: var(--color-border-stronger); /* --line3 */
+  color: var(--color-text);
+  background: var(--color-surface); /* --panel */
 }
 
 .fr-chip:disabled {
@@ -380,6 +432,11 @@
 .fr-chip__ic {
   display: inline-flex;
   color: var(--color-accent);
+}
+
+.fr-chip__ic svg {
+  width: 12px;
+  height: 12px;
 }
 
 /* --- Inline run-create error (keyless send etc.) — reuses StartRunError ----
@@ -444,40 +501,44 @@
   display: flex;
   flex-direction: column;
   align-items: center;
-  gap: var(--space-lg);
+  gap: var(--space-xs); /* 4px */
   text-align: center;
 }
 
 .fr-ack__title {
-  margin: 0;
+  margin: 14px 0 2px; /* design-exact */
   font-family: var(--font-display);
   font-weight: var(--font-weight-semibold);
-  font-size: var(--font-size-2xl);
+  font-size: var(--font-size-lg); /* 16px */
   line-height: var(--line-height-tight);
-  letter-spacing: -0.015em; /* documented literal — tracking is not tokenized */
-  color: var(--color-text-strong);
+  color: var(--color-text);
 }
 
 .fr-ack__lines {
   display: flex;
   flex-direction: column;
-  gap: var(--space-2xs);
+  gap: var(--space-xs); /* 4px — design ack line rhythm */
   align-items: flex-start;
 }
 
 .ln {
   display: flex;
-  align-items: baseline;
-  gap: var(--space-xs);
+  align-items: center;
+  gap: 7px; /* design-exact */
   margin: 0;
   font-family: var(--font-mono);
-  font-size: var(--font-size-3xs);
+  font-size: 10.5px; /* design-exact; off the type ladder */
   color: var(--color-text-muted);
 }
 
 /* Jade check (SPEC: the success token, NOT the sky accent). */
 .ln__check {
   color: var(--color-success);
+}
+
+.ln__check svg {
+  width: 11px;
+  height: 11px;
 }
 
 .fr-ack__error {
@@ -498,19 +559,19 @@
   }
 }
 
-/* P4 — wallet chip */
+/* P4 — wallet chip (design .fr-wchip: mono 10px, tx2, line2 border, no fill) */
 .fr-wchip {
   display: inline-flex;
   align-items: center;
-  gap: var(--space-xs);
-  padding: var(--space-2xs) var(--space-sm);
-  border: 1px solid var(--color-border);
+  gap: 6px; /* design-exact */
+  padding: 4px 10px; /* design-exact */
+  border: 1px solid var(--color-border-strong); /* --line2 */
   border-radius: var(--radius-full);
-  background: var(--color-surface-muted);
+  background: none;
   font-family: var(--font-mono);
-  font-size: var(--font-size-3xs);
+  font-size: 10px; /* design-exact; off the type ladder */
   line-height: 1;
-  color: var(--color-text-muted);
+  color: var(--color-text-strong); /* --tx2 */
 }
 
 /* Jade status dot (the success token, NOT the sky accent). */

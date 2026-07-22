@@ -17,6 +17,11 @@ from backend_app.provider_keys.service import (
     ProviderKeyFormatError,
     ProviderKeysService,
 )
+from backend_app.provider_keys.ssrf_guard import (
+    SsrfBlockReason,
+    SsrfGuard,
+    SsrfValidationError,
+)
 from backend_app.provider_keys.store import (
     InMemoryProviderApiKeyStore,
     PostgresProviderApiKeyStore,
@@ -37,5 +42,8 @@ __all__ = [
     "ProviderKeyLiveValidator",
     "ProviderKeysService",
     "ProviderName",
+    "SsrfBlockReason",
+    "SsrfGuard",
+    "SsrfValidationError",
     "register_provider_keys_routes",
 ]

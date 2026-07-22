@@ -77,15 +77,13 @@ describe("<ProviderKeysPage>", () => {
       expect(screen.getByTestId(`provider-add-${slug}`)).toBeInTheDocument();
     }
     expect(screen.getByText(PROVIDER_KEYS_KEYCHAIN_NOTE)).toBeInTheDocument();
-    // The generic CTA row replaces the plain note: a "Another provider" label +
-    // an OpenAI-compatible hint + a primary "Add a key" (PR-F.2).
+    // The generic CTA row: a "Another provider" label + an OpenAI-compatible
+    // hint + a primary "Add a custom endpoint" (decision D-2).
     const generic = screen.getByTestId("provider-compatible-note");
     expect(generic).toHaveTextContent("Another provider");
-    expect(generic).toHaveTextContent(
-      "Any OpenAI-compatible endpoint works too.",
-    );
+    expect(generic).toHaveTextContent("OpenAI-compatible endpoint");
     const genericAdd = screen.getByTestId("provider-add-generic");
-    expect(genericAdd).toHaveAttribute("aria-label", "Add a key");
+    expect(genericAdd).toHaveAttribute("aria-label", "Add a custom endpoint");
     expect(genericAdd).not.toBeDisabled();
   });
 
@@ -96,33 +94,32 @@ describe("<ProviderKeysPage>", () => {
     expect(add).not.toHaveClass("ui-button--primary");
   });
 
-  it("the generic primary Add-a-key opens the modal for the first available provider", async () => {
+  it("the generic Add-a-custom-endpoint opens the custom-endpoint modal (base URL + label)", async () => {
     render(<ProviderKeysPage port={makePort()} />);
     fireEvent.click(await screen.findByTestId("provider-add-generic"));
-    // Modal opens (its key input mounts) for the first catalog provider.
-    expect(await screen.findByTestId("add-key-input")).toBeInTheDocument();
+    // The custom modal mounts the Base URL + Label fields BEFORE the key
+    // (decision D-2), not a bare native-provider key input.
+    expect(await screen.findByTestId("add-key-base-url")).toBeInTheDocument();
+    expect(screen.getByTestId("add-key-label")).toBeInTheDocument();
+    expect(screen.getByTestId("add-key-input")).toBeInTheDocument();
   });
 
-  it("disables the generic Add-a-key when every provider already has a key", async () => {
-    // Every catalog provider stored → nothing available to add.
+  it("disables the generic Add-a-custom-endpoint once a custom endpoint is connected (single-endpoint MVP)", async () => {
     const stored: ProviderKeySummary[] = [
-      "anthropic",
-      "openai",
-      "openrouter",
-      "google",
-      "groq",
-      "xai",
-    ].map((slug) => ({
-      provider: slug as ProviderKeySummary["provider"],
-      key_hint: "…real",
-      updated_at: "2026-07-18T00:00:00Z",
-    }));
+      {
+        provider: "openai_compatible",
+        key_hint: "…real",
+        updated_at: "2026-07-18T00:00:00Z",
+        base_url: "https://my-host/v1",
+        label: "My vLLM",
+      },
+    ];
     render(
       <ProviderKeysPage
         port={makePort({ list: vi.fn().mockResolvedValue(stored) })}
       />,
     );
-    await screen.findByTestId("provider-row-openai");
+    await screen.findByTestId("provider-row-openai_compatible");
     expect(screen.getByTestId("provider-add-generic")).toBeDisabled();
   });
 
@@ -208,7 +205,11 @@ describe("<ProviderKeysPage>", () => {
 
     await waitFor(() => expect(port.save).toHaveBeenCalledTimes(1));
     // The step-3 pick rides the same PUT (PR-F.5 per-provider default_model).
-    expect(port.save).toHaveBeenCalledWith("openai", FAKE_KEY, "gpt-4o");
+    expect(port.save).toHaveBeenCalledWith("openai", FAKE_KEY, {
+      defaultModel: "gpt-4o",
+      baseUrl: undefined,
+      label: undefined,
+    });
     // Row flips to connected with the chosen model chip; onToast fires.
     await screen.findByTestId("provider-row-openai");
     expect(screen.getByTestId("provider-model-chip-openai")).toHaveTextContent(
@@ -293,5 +294,70 @@ describe("<ProviderKeysPage>", () => {
     fireEvent.click(screen.getByTestId("provider-keys-retry"));
     await screen.findByTestId("provider-add-openai");
     expect(list).toHaveBeenCalledTimes(2);
+  });
+
+  describe("custom OpenAI-compatible endpoint (decision D-2)", () => {
+    it("adds a custom endpoint, carrying base_url + label through save", async () => {
+      const save = vi.fn<ProviderKeysPort["save"]>().mockResolvedValue({
+        provider: "openai_compatible" as ProviderKeySummary["provider"],
+        key_hint: "…real",
+        updated_at: "2026-07-18T00:00:00Z",
+        base_url: "https://my-host/v1",
+        label: "My vLLM",
+      });
+      const validate = vi
+        .fn<NonNullable<ProviderKeysPort["validate"]>>()
+        .mockResolvedValue({ ok: true, models: [] });
+      const port = makePort({ save, validate });
+      render(<ProviderKeysPage port={port} />);
+
+      fireEvent.click(await screen.findByTestId("provider-add-generic"));
+      fireEvent.change(await screen.findByTestId("add-key-base-url"), {
+        target: { value: "https://my-host/v1" },
+      });
+      fireEvent.change(screen.getByTestId("add-key-label"), {
+        target: { value: "My vLLM" },
+      });
+      fireEvent.change(screen.getByTestId("add-key-input"), {
+        target: { value: FAKE_KEY },
+      });
+      fireEvent.click(screen.getByTestId("add-key-continue"));
+      fireEvent.click(await screen.findByTestId("add-key-submit"));
+
+      await waitFor(() => expect(save).toHaveBeenCalledTimes(1));
+      expect(validate).toHaveBeenCalledWith("openai_compatible", FAKE_KEY, {
+        baseUrl: "https://my-host/v1",
+      });
+      expect(save).toHaveBeenCalledWith("openai_compatible", FAKE_KEY, {
+        defaultModel: undefined,
+        baseUrl: "https://my-host/v1",
+        label: "My vLLM",
+      });
+      // The connected row shows the user's label + endpoint host.
+      const row = await screen.findByTestId("provider-row-openai_compatible");
+      expect(row).toHaveTextContent("My vLLM");
+      expect(row).toHaveTextContent("my-host");
+    });
+
+    it("renders a connected custom endpoint from the list with label + host", async () => {
+      const stored: ProviderKeySummary[] = [
+        {
+          provider: "openai_compatible",
+          key_hint: "…9f2a",
+          updated_at: "2026-07-18T00:00:00Z",
+          base_url: "https://vllm.example/v1",
+          label: "Home vLLM",
+        },
+      ];
+      render(
+        <ProviderKeysPage
+          port={makePort({ list: vi.fn().mockResolvedValue(stored) })}
+        />,
+      );
+      const row = await screen.findByTestId("provider-row-openai_compatible");
+      expect(row).toHaveTextContent("Home vLLM");
+      expect(row).toHaveTextContent("vllm.example");
+      expect(row).toHaveTextContent("…9f2a");
+    });
   });
 });

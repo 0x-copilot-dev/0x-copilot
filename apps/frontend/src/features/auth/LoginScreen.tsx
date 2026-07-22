@@ -36,11 +36,10 @@
  * new links can be requested from the UI.
  */
 
-import { Button, Card } from "@0x-copilot/design-system";
 import { BrandMark, useKeyValueStore } from "@0x-copilot/chat-surface";
 import type { WorkspaceCandidate } from "@0x-copilot/api-types";
 import type { ReactElement } from "react";
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 
 import { listAuthProviders } from "../../api/authApi";
 import { mintDevBearer } from "../../api/devIdpApi";
@@ -197,6 +196,15 @@ type WalletView =
       message: string;
     }
   | { kind: "verifying"; walletName: string }
+  // Wallet failure recovery — design `werr` view. Lands here (a persistent
+  // VIEW) instead of a self-clearing inline error, so the failure is actually
+  // visible and offers a Try-again / Choose-another path.
+  | { kind: "error"; walletName: string; message: string }
+  // Google is a full-page redirect, so the waiting view flashes just before
+  // navigation; the error view is only reachable if the callback returns to
+  // this route with an error signal (see `_readGoogleError`).
+  | { kind: "google_wait" }
+  | { kind: "google_error"; message: string }
   | { kind: "done" };
 
 interface SignInCardProps {
@@ -207,9 +215,20 @@ interface SignInCardProps {
 function SignInCard({ googleLogin, returnTo }: SignInCardProps): ReactElement {
   const auth = useAuth();
   const kvStore = useKeyValueStore();
-  const [view, setView] = useState<WalletView>({ kind: "pick" });
+  // Seed the Google-error recovery view if the login route was reached with an
+  // error signal in the URL (see `_readGoogleError` + the TODO on the facade
+  // OIDC callback below).
+  const [view, setView] = useState<WalletView>(() => {
+    const gErr = _readGoogleError();
+    return gErr === null
+      ? { kind: "pick" }
+      : { kind: "google_error", message: gErr };
+  });
   const [error, setError] = useState<string | null>(null);
   const [localBusy, setLocalBusy] = useState(false);
+  // The wallet last selected — so the error view's "Try again" can re-run the
+  // whole connect→sign flow (design `werr` retries `pickWallet(wallet)`).
+  const selectedWalletRef = useRef<WalletProviderCandidate | null>(null);
 
   const reset = useCallback(() => {
     setError(null);
@@ -230,6 +249,7 @@ function SignInCard({ googleLogin, returnTo }: SignInCardProps): ReactElement {
   const selectWallet = useCallback(
     async (candidate: WalletProviderCandidate): Promise<void> => {
       const walletName = candidate.info.name;
+      selectedWalletRef.current = candidate;
       setError(null);
       setView({ kind: "connecting", walletName });
       try {
@@ -257,11 +277,22 @@ function SignInCard({ googleLogin, returnTo }: SignInCardProps): ReactElement {
           message,
         });
       } catch (err) {
-        _handleWalletError(err, setError, reset);
+        _handleWalletError(err, walletName, setView, reset);
       }
     },
     [reset],
   );
+
+  // Retry from the wallet-error view — re-run the connect flow for the wallet
+  // that just failed (design `werr` → `pickWallet(wallet, true)`).
+  const retryWallet = useCallback((): void => {
+    const candidate = selectedWalletRef.current;
+    if (candidate === null) {
+      reset();
+      return;
+    }
+    void selectWallet(candidate);
+  }, [reset, selectWallet]);
 
   // --- Wallet: personal_sign + verify + session handoff ------------------
   const signAndContinue = useCallback(async (): Promise<void> => {
@@ -281,7 +312,7 @@ function SignInCard({ googleLogin, returnTo }: SignInCardProps): ReactElement {
         requires_mfa: session.requires_mfa,
       });
     } catch (err) {
-      _handleWalletError(err, setError, reset);
+      _handleWalletError(err, walletName, setView, reset);
     }
   }, [auth, reset, view]);
 
@@ -311,13 +342,16 @@ function SignInCard({ googleLogin, returnTo }: SignInCardProps): ReactElement {
     }
   }, [auth, kvStore, localBusy]);
 
-  // --- Google: navigate to the OIDC start URL ----------------------------
+  // --- Google: show the "authorizing" view, then redirect to OIDC start --
   const continueWithGoogle = useCallback((): void => {
+    // Flash the design's "Authorizing with Google…" waiting view for the
+    // instant before the browser navigates away.
+    setView({ kind: "google_wait" });
     window.location.assign(buildGoogleStartUrl(returnTo));
   }, [returnTo]);
 
   return (
-    <Card className="loginx-card" tone="default">
+    <div className="loginx-card">
       <CopilotMark />
 
       {view.kind === "pick" && (
@@ -373,9 +407,60 @@ function SignInCard({ googleLogin, returnTo }: SignInCardProps): ReactElement {
         />
       )}
 
+      {view.kind === "error" && (
+        <WErrView
+          walletName={view.walletName}
+          message={view.message}
+          onChooseAnother={() => void openWallets()}
+          onRetry={retryWallet}
+          onBack={reset}
+        />
+      )}
+
+      {view.kind === "google_wait" && <GoogleWaitView onCancel={reset} />}
+
+      {view.kind === "google_error" && (
+        <GErrView
+          message={view.message}
+          onUseWallet={() => void openWallets()}
+          onRetry={continueWithGoogle}
+          onBack={reset}
+        />
+      )}
+
       {view.kind === "done" && <DoneView />}
-    </Card>
+    </div>
   );
+}
+
+/**
+ * Read a Google sign-in error signalled back on the login route.
+ *
+ * TODO(auth): the facade OIDC callback (`GET /v1/auth/oidc/callback`,
+ * services/backend-facade/.../auth_routes.py) currently *raises 400* on an
+ * IdP error, so the browser lands on that facade error page — it never
+ * returns to this SPA route. Until that callback is changed to redirect a
+ * failed SIGN-IN back here with an error param (e.g.
+ * `/login?login_error=google&error_description=…`, mirroring the LINK flow's
+ * `/oauth/link/callback?link_status=…` landing), the `google_error` view is
+ * only reachable via that param and stays dormant in production. The reader
+ * below is intentionally forgiving so wiring the redirect later is a
+ * backend-only change.
+ */
+function _readGoogleError(): string | null {
+  if (typeof window === "undefined") return null;
+  try {
+    const params = new URL(window.location.href).searchParams;
+    const signal = params.get("login_error") ?? params.get("auth_error");
+    if (signal !== "google") return null;
+    return (
+      params.get("error_description") ??
+      params.get("error") ??
+      "Google sign-in didn’t finish."
+    );
+  } catch {
+    return null;
+  }
 }
 
 // ---------------------------------------------------------------------------
@@ -493,9 +578,9 @@ function OptionButton({
       </span>
       <span className="loginx-opt__body">
         <span className="loginx-opt__label">{label}</span>
-        <span className="loginx-opt__sub">
+        <small className="loginx-opt__sub">
           {busy ? "One moment…" : subtitle}
-        </span>
+        </small>
       </span>
       <span className="loginx-opt__chev" aria-hidden="true">
         <ChevronRight />
@@ -614,18 +699,22 @@ function ConnectingView({
   return (
     <div className="loginx-wait" data-testid="wallet-connecting">
       <Spinner />
-      <h1 className="loginx-title">
+      <h3 className="loginx-title">
         {verifying ? "Verifying signature…" : `Waiting for ${walletName}…`}
-      </h1>
+      </h3>
       <p className="loginx-sub">
         {verifying
           ? "Confirming your signature with the server."
           : "Approve the connection request in the extension."}
       </p>
       {!verifying && (
-        <Button type="button" variant="ghost" size="sm" onClick={onCancel}>
+        <button
+          type="button"
+          className="cbtn cbtn--ghost cbtn--sm"
+          onClick={onCancel}
+        >
           Cancel
-        </Button>
+        </button>
       )}
     </div>
   );
@@ -684,18 +773,17 @@ function SignView({
       )}
 
       <div className="loginx-actions">
-        <Button type="button" variant="ghost" size="md" onClick={onCancel}>
+        <button type="button" className="cbtn" onClick={onCancel}>
           Cancel
-        </Button>
-        <Button
+        </button>
+        <button
           type="button"
-          variant="primary"
-          size="md"
+          className="cbtn cbtn--pri"
           onClick={onSign}
           data-testid="wallet-sign-submit"
         >
-          Sign &amp; continue
-        </Button>
+          <CheckGlyph /> Sign &amp; continue
+        </button>
       </div>
     </>
   );
@@ -711,8 +799,131 @@ function DoneView(): ReactElement {
       <span className="loginx-done__check" aria-hidden="true">
         <CheckGlyph />
       </span>
-      <h1 className="loginx-title">Signed in</h1>
+      <h3 className="loginx-title">Signed in</h3>
       <p className="loginx-sub">Opening your workspace…</p>
+    </div>
+  );
+}
+
+// ---------------------------------------------------------------------------
+// Wallet-error recovery (design `werr`) + Google waiting/error (design
+// `google`/`gerr`). Persistent VIEWS, not self-clearing inline errors.
+// ---------------------------------------------------------------------------
+
+function WErrView({
+  walletName,
+  message,
+  onChooseAnother,
+  onRetry,
+  onBack,
+}: {
+  walletName: string;
+  message: string;
+  onChooseAnother(): void;
+  onRetry(): void;
+  onBack(): void;
+}): ReactElement {
+  return (
+    <div className="loginx-wait" data-testid="wallet-error" role="alert">
+      <span className="loginx-wait__warn" aria-hidden="true">
+        <WarnGlyph />
+      </span>
+      <h3 className="loginx-title">No response from {walletName}</h3>
+      <p className="loginx-sub">{message} Nothing was signed.</p>
+      <div className="loginx-actions">
+        <button
+          type="button"
+          className="cbtn"
+          onClick={onChooseAnother}
+          data-testid="wallet-error-choose"
+        >
+          Choose another wallet
+        </button>
+        <button
+          type="button"
+          className="cbtn cbtn--pri"
+          onClick={onRetry}
+          data-testid="wallet-error-retry"
+        >
+          Try again
+        </button>
+      </div>
+      <button
+        type="button"
+        className="loginx-back"
+        onClick={onBack}
+        data-testid="wallet-error-back"
+      >
+        <span aria-hidden="true">‹</span> Back to sign-in
+      </button>
+    </div>
+  );
+}
+
+function GoogleWaitView({ onCancel }: { onCancel(): void }): ReactElement {
+  return (
+    <div className="loginx-wait" data-testid="google-wait">
+      <Spinner />
+      <h3 className="loginx-title">Authorizing with Google…</h3>
+      <p className="loginx-sub">
+        Finish signing in from the browser window that just opened.
+      </p>
+      <button
+        type="button"
+        className="loginx-back"
+        onClick={onCancel}
+        data-testid="google-wait-cancel"
+      >
+        Cancel — use a different method
+      </button>
+    </div>
+  );
+}
+
+function GErrView({
+  message,
+  onUseWallet,
+  onRetry,
+  onBack,
+}: {
+  message: string;
+  onUseWallet(): void;
+  onRetry(): void;
+  onBack(): void;
+}): ReactElement {
+  return (
+    <div className="loginx-wait" data-testid="google-error" role="alert">
+      <span className="loginx-wait__warn" aria-hidden="true">
+        <WarnGlyph />
+      </span>
+      <h3 className="loginx-title">Google didn&rsquo;t finish</h3>
+      <p className="loginx-sub">{message} No account was linked.</p>
+      <div className="loginx-actions">
+        <button
+          type="button"
+          className="cbtn"
+          onClick={onUseWallet}
+          data-testid="google-error-wallet"
+        >
+          Use a wallet instead
+        </button>
+        <button
+          type="button"
+          className="cbtn cbtn--pri"
+          onClick={onRetry}
+          data-testid="google-error-retry"
+        >
+          Try again
+        </button>
+      </div>
+      <button
+        type="button"
+        className="loginx-back"
+        onClick={onBack}
+        data-testid="google-error-back"
+      >
+        <span aria-hidden="true">‹</span> Back to sign-in
+      </button>
     </div>
   );
 }
@@ -780,7 +991,8 @@ function isUserRejection(err: unknown): boolean {
 
 function _handleWalletError(
   err: unknown,
-  setError: (message: string | null) => void,
+  walletName: string,
+  setView: (view: WalletView) => void,
   reset: () => void,
 ): void {
   if (isUserRejection(err)) {
@@ -789,8 +1001,11 @@ function _handleWalletError(
     return;
   }
   const detail = errorMessage(err, "wallet sign-in failed");
-  setError(detail === "chain_not_allowed" ? CHAIN_NOT_ALLOWED_MESSAGE : detail);
-  reset();
+  const message =
+    detail === "chain_not_allowed" ? CHAIN_NOT_ALLOWED_MESSAGE : detail;
+  // Land on the persistent error VIEW (design `werr`) — NOT a self-clearing
+  // inline error. This is what makes a wallet failure actually visible.
+  setView({ kind: "error", walletName, message });
 }
 
 function shortenAddress(address: string): string {
@@ -826,7 +1041,7 @@ function MagicLinkCallbackStep({
   }, [auth, token, consumed]);
 
   return (
-    <Card className="loginx-card" tone="default">
+    <div className="loginx-card">
       <CopilotMark />
       <header className="loginx-head">
         <h1 className="loginx-title">Signing you in…</h1>
@@ -839,19 +1054,18 @@ function MagicLinkCallbackStep({
             <p role="alert" className="login-card__error">
               {error}
             </p>
-            <Button
+            <button
               type="button"
-              variant="primary"
-              size="md"
+              className="cbtn cbtn--pri"
               onClick={onError}
               data-testid="login-magic-cb-back"
             >
               Try again
-            </Button>
+            </button>
           </>
         )}
       </header>
-    </Card>
+    </div>
   );
 }
 
@@ -867,12 +1081,12 @@ function WorkspacePickStep(): ReactElement {
 
   if (pick === null) {
     return (
-      <Card className="loginx-card" tone="muted">
+      <div className="loginx-card">
         <CopilotMark />
         <p className="loginx-sub">
           Workspace pick state expired. Please request a new link.
         </p>
-      </Card>
+      </div>
     );
   }
 
@@ -890,7 +1104,7 @@ function WorkspacePickStep(): ReactElement {
   };
 
   return (
-    <Card className="loginx-card" tone="default">
+    <div className="loginx-card">
       <CopilotMark />
       <header className="loginx-head">
         <h1 className="loginx-title">Pick a workspace</h1>
@@ -922,7 +1136,7 @@ function WorkspacePickStep(): ReactElement {
           {error}
         </p>
       )}
-    </Card>
+    </div>
   );
 }
 
@@ -1075,6 +1289,25 @@ function CheckGlyph(): ReactElement {
       focusable="false"
     >
       <path d="m5 12.5 4.5 4.5L19 7" />
+    </svg>
+  );
+}
+
+/** Triangle warning glyph (ember) for the wallet/Google error screens. */
+function WarnGlyph(): ReactElement {
+  return (
+    <svg
+      viewBox="0 0 24 24"
+      fill="none"
+      stroke="currentColor"
+      strokeWidth="1.7"
+      strokeLinecap="round"
+      strokeLinejoin="round"
+      focusable="false"
+    >
+      <path d="M10.29 3.86 1.82 18a2 2 0 0 0 1.71 3h16.94a2 2 0 0 0 1.71-3L13.71 3.86a2 2 0 0 0-3.42 0Z" />
+      <path d="M12 9v4" />
+      <path d="M12 17h.01" />
     </svg>
   );
 }

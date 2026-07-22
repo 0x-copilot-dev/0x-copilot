@@ -269,6 +269,7 @@ async def _assemble_harness(
                     provider=runtime_context.model_profile.provider,
                     user_policies_json=runtime_context.user_policies_json or None,
                     provider_keys=runtime_context.provider_keys or None,
+                    provider_endpoints=runtime_context.provider_endpoints or None,
                 )
             )
         except RegionUnavailableError as exc:

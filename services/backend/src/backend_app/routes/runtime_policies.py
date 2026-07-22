@@ -94,6 +94,12 @@ class RuntimePolicyResponse(BaseModel):
     # the provider-keys service isn't wired). This field ONLY rides the
     # service-token internal lane; the facade never exposes this route.
     provider_keys: dict[str, str] | None = None
+    # Decision D-2 — ``{provider: base_url}`` for providers carrying a custom
+    # OpenAI-compatible endpoint (``openai_compatible`` today). NON-secret (a
+    # base_url is not key material), so — unlike ``provider_keys`` — it is
+    # persistable and rides the runtime context verbatim. ``None`` when the
+    # user has no custom endpoint or the service isn't wired.
+    provider_endpoints: dict[str, str] | None = None
 
 
 # ---------------------------------------------------------------------------
@@ -135,6 +141,11 @@ def register_runtime_policies_routes(
                 user_id=identity.user_id,
             ),
             provider_keys=_compose_provider_keys(
+                service=provider_keys_service,
+                org_id=identity.org_id,
+                user_id=identity.user_id,
+            ),
+            provider_endpoints=_compose_provider_endpoints(
                 service=provider_keys_service,
                 org_id=identity.org_id,
                 user_id=identity.user_id,
@@ -181,6 +192,21 @@ def _compose_provider_keys(
         return None
     keys = service.decrypted_keys(org_id=org_id, user_id=user_id)
     return keys or None
+
+
+def _compose_provider_endpoints(
+    *,
+    service: ProviderKeysService | None,
+    org_id: str,
+    user_id: str,
+) -> dict[str, str] | None:
+    """NON-secret ``{provider: base_url}`` for stored custom endpoints —
+    ``None`` when the user has none (or the service isn't wired)."""
+
+    if service is None:
+        return None
+    endpoints = service.endpoint_base_urls(org_id=org_id, user_id=user_id)
+    return endpoints or None
 
 
 def _compose_privacy(

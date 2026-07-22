@@ -21,7 +21,8 @@ The installer:
 5. waits for the gateway to report healthy and prints the URL.
 
 Then open **http://localhost:8080/**, connect a wallet (or enable Google — see
-below), and add a model provider key in **Settings → Providers**.
+below), and add a model provider key in **Settings → Models & keys → Provider
+keys**.
 
 > The images are published to GHCR. If the packages are still **private**, log in
 > first, then re-run the installer:
@@ -30,7 +31,8 @@ below), and add a model provider key in **Settings → Providers**.
 > echo <GITHUB_PAT_with_read:packages> | docker login ghcr.io -u <github-username> --password-stdin
 > ```
 >
-> Making the four `0x-copilot-*` packages public removes this step for everyone.
+> This login is only needed while the images are private; once the packages are
+> public, `docker compose pull` works without authenticating.
 
 ## Manual install
 
@@ -53,7 +55,7 @@ docker compose -f docker-compose.prod.yml up -d
 | `AUDIT_HMAC_KEY`                                          | yes      | Tamper-evident audit chain key, hex ≥ 32 bytes. `openssl rand -hex 32`.                                              |
 | `POSTGRES_PASSWORD`                                       | yes      | Use a URL-safe value. `openssl rand -hex 24`. Changing it after first boot orphans the volume.                       |
 | `SIWE_ORIGIN`                                             | yes      | Exact public origin the browser loads from (`scheme://host[:port]`, no trailing slash). Must match for wallet login. |
-| `SIWE_ALLOWED_CHAIN_IDS`                                  | no       | Comma-separated chain ids. Default `1,8453,42161,4663` (Ethereum, Base, Arbitrum, …).                                |
+| `SIWE_ALLOWED_CHAIN_IDS`                                  | no       | Comma-separated chain ids. Default `1,8453,42161,4663` (Ethereum, Base, Arbitrum One, Robinhood Chain).              |
 | `GOOGLE_OAUTH_CLIENT_ID` / `GOOGLE_OAUTH_CLIENT_SECRET`   | no       | Enables "Continue with Google". Register redirect `${SIWE_ORIGIN}/v1/auth/oidc/google/callback`.                     |
 | `OPENAI_API_KEY` / `ANTHROPIC_API_KEY` / `GOOGLE_API_KEY` | no       | BYOK — users add keys in Settings; set here only for a shared fallback.                                              |
 | `OPENROUTER_API_KEY`                                      | no       | BYOK OpenRouter — users add keys in Settings; set here only for a shared fallback.                                   |

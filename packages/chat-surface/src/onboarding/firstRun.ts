@@ -129,7 +129,7 @@ export const FIRST_RUN_COPY = {
     skip: "skip — open the workspace →",
   },
   footer: {
-    left: "v2.1.0 · local build",
+    left: "v0.1.0 · local build",
     // Footer-right is engine-keyed (SPEC §Copy strings · parity-audit medium):
     // a BYOK/key engine surfaces `right`; a local (on-device) engine surfaces
     // `rightLocal`. The hosted-starter variant is SHELVED in v1.

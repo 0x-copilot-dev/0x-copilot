@@ -1,0 +1,54 @@
+{
+  "state": "gate",
+  "counts": {
+    "high": 1,
+    "low": 2,
+    "info": 3
+  },
+  "findings": [
+    {
+      "label": "btn.primary",
+      "group": "Gate card",
+      "severity": "high",
+      "kind": "style",
+      "prop": "color",
+      "detail": "rgb(11, 10, 14) (#0b0a0e (literal near-black)) → rgb(8, 19, 29) (--accent-ink)"
+    },
+    {
+      "label": "card.local.title",
+      "group": "Gate card",
+      "severity": "low",
+      "kind": "tag",
+      "detail": "<b> → <h2> (semantic/default-style change)"
+    },
+    {
+      "label": "card.key.title",
+      "group": "Gate card",
+      "severity": "low",
+      "kind": "tag",
+      "detail": "<b> → <h2> (semantic/default-style change)"
+    },
+    {
+      "label": "topbar.walletChip",
+      "group": "Top bar",
+      "severity": "info",
+      "kind": "missing-in-live",
+      "detail": "expected: harness limitation — the live gate renders the chip only when a profilePort supplies a wallet address; not wired in this render"
+    },
+    {
+      "label": "trial.link",
+      "group": "Gate",
+      "severity": "info",
+      "kind": "missing-in-live",
+      "detail": "expected: hosted-trial lane deliberately SHELVED in v1 (README §7.1) — correct that the live app omits it"
+    },
+    {
+      "label": "footer.right",
+      "group": "Footer",
+      "severity": "info",
+      "kind": "copy",
+      "prop": "text",
+      "detail": "“nothing leaves this machine” → “keys in OS keychain · runs via your provider”"
+    }
+  ]
+}

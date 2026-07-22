@@ -1,0 +1,216 @@
+{
+  "surface": "login",
+  "note": "design↔live element map for the login surface, one row per state.label. Design = vendored Claude Design copilot-login.jsx (.login-*/.sig-*/.empty). Live = apps/frontend LoginScreen SignInCard (.loginx-* + design-system ui-card/ui-button). Labels are state-prefixed so the comparator diffs the merged design-login.json vs live-login.json. The werr.* rows are DESIGN-ONLY on purpose (the live app has NO dedicated wallet-error recovery view — errors render inline as .login-card__error, cleared immediately on wallet failures; Google is a bare window redirect with no in-app waiting/error view). Those flag as 🔴 missing-in-live and are the headline structural gap.",
+  "states": ["pick", "connecting", "sign", "done", "werr(design-only)"],
+  "elements": [
+    {
+      "label": "pick.card",
+      "group": "Pick",
+      "design": ".login-card",
+      "live": ".loginx-card"
+    },
+    {
+      "label": "pick.title",
+      "group": "Pick",
+      "design": ".login-card h1",
+      "live": ".loginx-title"
+    },
+    {
+      "label": "pick.sub",
+      "group": "Pick",
+      "design": ".login-card .sub",
+      "live": ".loginx-sub"
+    },
+    {
+      "label": "pick.opts",
+      "group": "Pick",
+      "design": ".login-opts",
+      "live": ".loginx-options"
+    },
+    {
+      "label": "pick.opt.primary",
+      "group": "Pick",
+      "design": ".login-opt--pri",
+      "live": "[data-testid=\"login-option-wallet\"]"
+    },
+    {
+      "label": "pick.opt.primary.label",
+      "group": "Pick",
+      "design": ".login-opt--pri .lx",
+      "live": "[data-testid=\"login-option-wallet\"] .loginx-opt__label"
+    },
+    {
+      "label": "pick.opt.primary.sub",
+      "group": "Pick",
+      "design": ".login-opt--pri .lx small",
+      "live": "[data-testid=\"login-option-wallet\"] .loginx-opt__sub"
+    },
+    {
+      "label": "pick.opt.primary.icon",
+      "group": "Pick",
+      "design": ".login-opt--pri .ic",
+      "live": "[data-testid=\"login-option-wallet\"] .loginx-opt__icon"
+    },
+    {
+      "label": "pick.opt.google",
+      "group": "Pick",
+      "design": ".login-opts .login-opt:nth-child(2)",
+      "live": "[data-testid=\"login-google\"]"
+    },
+    {
+      "label": "pick.opt.local",
+      "group": "Pick",
+      "design": ".login-opts .login-opt:nth-child(4)",
+      "live": "[data-testid=\"login-option-local\"]"
+    },
+    {
+      "label": "pick.divider",
+      "group": "Pick",
+      "design": ".login-div",
+      "live": ".loginx-divider"
+    },
+    {
+      "label": "pick.foot",
+      "group": "Pick",
+      "design": ".login-foot",
+      "live": ".loginx-note"
+    },
+    {
+      "label": "pick.ver",
+      "group": "Pick",
+      "design": ".login-ver",
+      "live": ".loginx-version"
+    },
+
+    {
+      "label": "connecting.wrap",
+      "group": "Connecting (waiting)",
+      "design": ".empty",
+      "live": ".loginx-wait"
+    },
+    {
+      "label": "connecting.title",
+      "group": "Connecting (waiting)",
+      "design": ".empty h3",
+      "live": ".loginx-wait .loginx-title"
+    },
+    {
+      "label": "connecting.body",
+      "group": "Connecting (waiting)",
+      "design": ".empty p",
+      "live": ".loginx-wait .loginx-sub"
+    },
+    {
+      "label": "connecting.cancel",
+      "group": "Connecting (waiting)",
+      "design": ".empty .cbtn",
+      "live": ".loginx-wait .cbtn"
+    },
+
+    {
+      "label": "sign.title",
+      "group": "Sign",
+      "design": ".login-card h1",
+      "live": ".loginx-title"
+    },
+    {
+      "label": "sign.sub",
+      "group": "Sign",
+      "design": ".login-card .sub",
+      "live": ".loginx-sub"
+    },
+    {
+      "label": "sign.addr",
+      "group": "Sign",
+      "design": ".sig-addr",
+      "live": ".loginx-addr"
+    },
+    {
+      "label": "sign.addr.hex",
+      "group": "Sign",
+      "design": ".sig-addr .a",
+      "live": ".loginx-addr__hex"
+    },
+    {
+      "label": "sign.addr.meta",
+      "group": "Sign",
+      "design": ".sig-addr .w",
+      "live": ".loginx-addr__meta"
+    },
+    {
+      "label": "sign.msg",
+      "group": "Sign",
+      "design": ".sig-msg",
+      "live": ".loginx-message",
+      "expectDivergence": "TEXT differs by design — live renders the REAL frozen EIP-4361 SIWE message; the mock showed a simplified preview. The computed-STYLE diff (color/bg) is the real finding."
+    },
+    {
+      "label": "sign.btn.cancel",
+      "group": "Sign",
+      "design": ".login-row .cbtn:not(.cbtn--pri)",
+      "live": ".loginx-actions .cbtn:not(.cbtn--pri)"
+    },
+    {
+      "label": "sign.btn.primary",
+      "group": "Sign",
+      "design": ".login-row .cbtn--pri",
+      "live": "[data-testid=\"wallet-sign-submit\"]"
+    },
+
+    {
+      "label": "done.wrap",
+      "group": "Done",
+      "design": ".empty",
+      "live": ".loginx-done"
+    },
+    {
+      "label": "done.title",
+      "group": "Done",
+      "design": ".empty h3",
+      "live": ".loginx-done .loginx-title"
+    },
+    {
+      "label": "done.body",
+      "group": "Done",
+      "design": ".empty p",
+      "live": ".loginx-done .loginx-sub"
+    },
+
+    {
+      "label": "werr.wrap",
+      "group": "Wallet error (DESIGN-ONLY)",
+      "design": ".empty",
+      "live": "— (no live view)"
+    },
+    {
+      "label": "werr.title",
+      "group": "Wallet error (DESIGN-ONLY)",
+      "design": ".empty h3",
+      "live": "— (no live view)"
+    },
+    {
+      "label": "werr.body",
+      "group": "Wallet error (DESIGN-ONLY)",
+      "design": ".empty p",
+      "live": "— (no live view)"
+    },
+    {
+      "label": "werr.btn.secondary",
+      "group": "Wallet error (DESIGN-ONLY)",
+      "design": ".login-row .cbtn:not(.cbtn--pri)",
+      "live": "— (no live view)"
+    },
+    {
+      "label": "werr.btn.primary",
+      "group": "Wallet error (DESIGN-ONLY)",
+      "design": ".login-row .cbtn--pri",
+      "live": "— (no live view)"
+    },
+    {
+      "label": "werr.backlink",
+      "group": "Wallet error (DESIGN-ONLY)",
+      "design": ".backlink",
+      "live": "— (no live view)"
+    }
+  ]
+}

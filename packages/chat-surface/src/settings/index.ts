@@ -83,6 +83,16 @@ export {
   type SettingsNavItem as SettingsNavItemModel,
   type SettingsProfileGate,
 } from "./settingsNav";
+// D5 — slug → page ownership SSOT (guards nav-entry-without-a-page and
+// page-without-a-route; enforced at compile time by the exhaustive Record and
+// at runtime by settingsPages.test.ts).
+export {
+  SETTINGS_PAGE_OWNERSHIP,
+  settingsPageOwner,
+  chatSurfaceOwnedSlugs,
+  hostOwnedSlugs,
+  type SettingsPageOwner,
+} from "./settingsPages";
 // === end Phase 5 (PR-5.1) ===
 
 // === Phase 5 (PR-5.2) — settings design primitives (tokenized) ===
@@ -147,8 +157,6 @@ export {
   type StartLocalModelPull,
   type LocalModelDownloadResult,
 } from "./DownloadLocalModelModal";
-// Curated download catalog (P2) — one SSOT for the FTUE gate card + Settings.
-export { QWEN3_4B_PRESET, LOCAL_MODEL_PRESETS } from "./localModelPresets";
 export {
   formatBytes,
   formatEta,
@@ -158,9 +166,14 @@ export {
 // Local-models data seam: the Transport-backed port (status/list/size/remove/
 // pull) + the curated "pick from available" catalog. Mirrors the providerKeys
 // port pattern; both hosts wire `createLocalModelsPort(transport)`.
+//
+// `LOCAL_MODEL_CATALOG` is the ONE SSOT curated list read by BOTH the Settings
+// download modal and (via `QWEN3_4B_PRESET`, a distinguished member) the FTUE
+// first-run gate — so the two surfaces can never drift.
 export {
   createLocalModelsPort,
   LOCAL_MODEL_CATALOG,
+  QWEN3_4B_PRESET,
   LOCAL_MODEL_PULL_EVENT,
   DEFAULT_LOCAL_MODEL_QUANT,
   localModelInstalledTag,
@@ -180,15 +193,19 @@ export {
   AddProviderKeyModal,
   type AddProviderKeyModalProps,
   type AddProviderKeySubmit,
+  type AddProviderKeyValidateContext,
 } from "./AddProviderKeyModal";
 export {
   createProviderKeysPort,
   checkProviderKeyFormat,
   providerCatalogEntry,
   PROVIDER_CATALOG,
+  CUSTOM_ENDPOINT_ENTRY,
   type ProviderKeysPort,
   type ProviderCatalogEntry,
   type ProviderKeyValidation,
+  type SaveProviderKeyOptions,
+  type ValidateProviderKeyOptions,
 } from "./data/providerKeys";
 // === end Phase 5 (PR-5.4) ===
 // === Phase 5 (PR-3D) — Models curation (Settings → Models) ===
@@ -247,6 +264,16 @@ export {
   type ReasoningDepth,
   type SpendGuardrailValue,
 } from "./ModelBehaviorPage";
+// D4 — Spend-guardrail data seam: the Transport-backed port bound to the B7
+// budget engine at /v1/budgets (the caller's user/month cap). Owns the
+// dollars↔micro-USD conversion; both hosts wire `createSpendGuardrailPort`.
+export {
+  createSpendGuardrailPort,
+  capUsdToMicro,
+  microToCapUsd,
+  type SpendGuardrailPort,
+  type SpendGuardrailSnapshot,
+} from "./data/spendGuardrail";
 export {
   ApprovalPolicy,
   READ_ONLY_APPROVAL_OPTIONS,
@@ -259,6 +286,17 @@ export {
   type WriteApprovalMode,
   type DangerApprovalMode,
 } from "./ApprovalPolicy";
+// D5 — Approval-policy data seam: the Transport-backed port bound to the per-
+// user tool-use policy at /v1/me/policies/tool-use (the store the runtime
+// enforces at run-start, D2). Owns the UI-axis↔wire-kind mapping + defensive
+// clamp; both hosts wire `createToolUsePolicyPort` (web/desktop lockstep).
+export {
+  createToolUsePolicyPort,
+  approvalPolicyFromResponse,
+  toolUsePolicyRequestFromValue,
+  DEFAULT_APPROVAL_POLICY,
+  type ApprovalPolicyPort,
+} from "./data/toolUsePolicy";
 // === end Phase 5 (PR-5.6) ===
 
 // === Phase 5 (PR-5.9) — Advanced group (Key storage & app lock · Developer

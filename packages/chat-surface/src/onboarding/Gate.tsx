@@ -12,8 +12,6 @@
 
 import { useState, type ReactElement, type ReactNode } from "react";
 
-import { Button } from "@0x-copilot/design-system";
-
 import { Icon } from "../icons/Icon";
 import type { ProviderKeysPort } from "../settings/data/providerKeys";
 import { KeyForm, type KeyFormConnected } from "./KeyForm";
@@ -61,22 +59,21 @@ function FirstRunLocalCard({
   return (
     <section className="fr-gcard" data-testid="first-run-local-card">
       <span className="fr-gcard__icon" aria-hidden="true">
-        <Icon name="download" size={20} />
+        <Icon name="chip" size={20} />
       </span>
       <h2 className="fr-gcard__title">{FIRST_RUN_COPY.local.title}</h2>
       <p className="fr-gcard__meta">{FIRST_RUN_COPY.local.meta}</p>
       <p className="fr-gcard__body">{FIRST_RUN_COPY.local.body}</p>
       <div className="fr-gcard__foot">
-        <Button
+        <button
           type="button"
-          variant="primary"
-          size="sm"
+          className="gbtn gbtn--pri"
           disabled={disabled}
           onClick={onStartDownload}
           data-testid="first-run-start-download"
         >
           {FIRST_RUN_COPY.local.btn}
-        </Button>
+        </button>
         <p className="fr-gcard__note">{FIRST_RUN_COPY.local.note}</p>
       </div>
     </section>
@@ -128,15 +125,14 @@ export function Gate({
               onCancel={() => setKeyOpen(false)}
             />
           ) : (
-            <Button
+            <button
               type="button"
-              variant="secondary"
-              size="sm"
+              className="gbtn"
               onClick={() => setKeyOpen(true)}
               data-testid="first-run-add-key"
             >
               {FIRST_RUN_COPY.key.btn}
-            </Button>
+            </button>
           )}
         </div>
       </section>

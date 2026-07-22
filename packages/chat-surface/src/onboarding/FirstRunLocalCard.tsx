@@ -15,8 +15,6 @@
 
 import type { ReactElement, ReactNode } from "react";
 
-import { Button } from "@0x-copilot/design-system";
-
 import { Icon } from "../icons/Icon";
 import { ProgressBar } from "../settings/controls";
 import type { AvailableLocalModel } from "../settings/DownloadLocalModelModal";
@@ -48,7 +46,7 @@ export function FirstRunLocalCard({
   return (
     <section className="fr-gcard" data-testid="first-run-local-card">
       <span className="fr-gcard__icon" aria-hidden="true">
-        <Icon name="download" size={20} />
+        <Icon name="chip" size={20} />
       </span>
       <h2 className="fr-gcard__title">{FIRST_RUN_COPY.local.title}</h2>
       <p className="fr-gcard__meta">{FIRST_RUN_COPY.local.meta}</p>
@@ -91,9 +89,9 @@ function LocalCardFoot({
     // Brief: keep the CTA visible but inert until the probe resolves.
     return (
       <>
-        <Button type="button" variant="primary" size="sm" disabled>
+        <button type="button" className="gbtn gbtn--pri" disabled>
           {FIRST_RUN_COPY.local.btn}
-        </Button>
+        </button>
         <p className="fr-gcard__note">{FIRST_RUN_COPY.local.note}</p>
       </>
     );
@@ -117,15 +115,14 @@ function LocalCardFoot({
   }
   return (
     <>
-      <Button
+      <button
         type="button"
-        variant="primary"
-        size="sm"
+        className="gbtn gbtn--pri"
         onClick={onStartDownload}
         data-testid="first-run-start-download"
       >
         {FIRST_RUN_COPY.local.btn}
-      </Button>
+      </button>
       <p className="fr-gcard__note">{FIRST_RUN_COPY.local.note}</p>
     </>
   );
@@ -176,15 +173,14 @@ function Errored({
       >
         Couldn&rsquo;t download {preset.name}: {state.error ?? "unknown error"}
       </p>
-      <Button
+      <button
         type="button"
-        variant="secondary"
-        size="sm"
+        className="gbtn"
         onClick={state.retry}
         data-testid="first-run-local-retry"
       >
         Retry
-      </Button>
+      </button>
     </div>
   );
 }
@@ -218,25 +214,23 @@ function OllamaSetup({
         <li>Come back here and re-check.</li>
       </ol>
       <FootActions>
-        <Button
+        <button
           type="button"
-          variant="secondary"
-          size="sm"
+          className="gbtn"
           onClick={onRecheck}
           data-testid="first-run-local-recheck"
         >
           Re-check
-        </Button>
+        </button>
         {onOpenLocalModelSettings ? (
-          <Button
+          <button
             type="button"
-            variant="ghost"
-            size="sm"
+            className="gbtn"
             onClick={onOpenLocalModelSettings}
             data-testid="first-run-local-open-settings"
           >
             Open settings
-          </Button>
+          </button>
         ) : null}
       </FootActions>
     </div>

@@ -34,6 +34,7 @@ import {
   type ReactElement,
 } from "react";
 
+import type { ReasoningDepth } from "@0x-copilot/api-types";
 import { Select, TextInput, Toggle } from "@0x-copilot/design-system";
 
 import { ApprovalPolicy, type ApprovalPolicyValue } from "./ApprovalPolicy";
@@ -44,16 +45,25 @@ import type { SettingsSurfaceController } from "./SettingsSurface";
 // Vocabulary.
 // ---------------------------------------------------------------------------
 
-/** Reasoning depth (DESIGN-SPEC §4). */
-export type ReasoningDepth = "auto" | "quick" | "standard" | "deep";
+/**
+ * Reasoning depth (DESIGN-SPEC §4). The wire vocabulary is the runtime's
+ * canonical `ReasoningDepth` (`fast`/`balanced`/`deep`, imported from
+ * api-types — the single source of truth shared with the composer + run
+ * schema). "Auto" is NOT a fourth enum value: it is the `null` sentinel meaning
+ * "no persisted default → the runtime baseline", so the field is
+ * `ReasoningDepth | null` and the Select maps `null ↔ ""` for the DOM exactly
+ * like the Default-model field. The design's Auto/Quick/Standard/Deep labels
+ * sit over the values null/fast/balanced/deep.
+ */
+export type { ReasoningDepth };
 
 export const REASONING_DEPTHS: ReadonlyArray<{
-  readonly value: ReasoningDepth;
+  readonly value: ReasoningDepth | null;
   readonly label: string;
 }> = [
-  { value: "auto", label: "Auto" },
-  { value: "quick", label: "Quick" },
-  { value: "standard", label: "Standard" },
+  { value: null, label: "Auto" },
+  { value: "fast", label: "Quick" },
+  { value: "balanced", label: "Standard" },
   { value: "deep", label: "Deep" },
 ];
 
@@ -66,7 +76,8 @@ export interface SpendGuardrailValue {
 export interface ModelBehaviorValue {
   /** Default model id — matches a supplied option value, or null for none. */
   readonly defaultModel: string | null;
-  readonly reasoningDepth: ReasoningDepth;
+  /** Canonical depth, or `null` for "Auto" (no persisted default). */
+  readonly reasoningDepth: ReasoningDepth | null;
   readonly webAccess: boolean;
   readonly approvalPolicy: ApprovalPolicyValue;
   readonly spend: SpendGuardrailValue;
@@ -353,15 +364,16 @@ export function ModelBehaviorPage({
             id={reasoningId}
             data-testid="reasoning-depth-select"
             aria-label="Reasoning depth"
-            value={value.reasoningDepth}
+            value={value.reasoningDepth ?? ""}
             onChange={(event) =>
               onChange({
-                reasoningDepth: event.currentTarget.value as ReasoningDepth,
+                reasoningDepth:
+                  (event.currentTarget.value as ReasoningDepth | "") || null,
               })
             }
           >
             {REASONING_DEPTHS.map((depth) => (
-              <option key={depth.value} value={depth.value}>
+              <option key={depth.value ?? "auto"} value={depth.value ?? ""}>
                 {depth.label}
               </option>
             ))}

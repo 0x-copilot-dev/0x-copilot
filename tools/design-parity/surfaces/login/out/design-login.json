@@ -1,0 +1,414 @@
+{
+  "pick.card": {
+    "matched": true,
+    "tag": "div",
+    "cls": "login-card",
+    "text": "Welcome to 0xCopilot…",
+    "styles": {
+      "fontFamily": "-apple-system",
+      "fontSize": "13px",
+      "textAlign": "center",
+      "color": "rgb(236, 236, 241)",
+      "display": "flex",
+      "flexDirection": "column",
+      "width": "372px"
+    }
+  },
+  "pick.title": {
+    "matched": true,
+    "tag": "h1",
+    "text": "Welcome to Copilot",
+    "styles": {
+      "fontFamily": "-apple-system",
+      "fontSize": "18px",
+      "fontWeight": "600",
+      "lineHeight": "21.6px",
+      "letterSpacing": "-0.18px",
+      "textAlign": "center",
+      "color": "rgb(236, 236, 241)"
+    }
+  },
+  "pick.sub": {
+    "matched": true,
+    "tag": "p",
+    "styles": {
+      "fontFamily": "-apple-system",
+      "fontSize": "12px",
+      "fontWeight": "400",
+      "lineHeight": "19.8px",
+      "textAlign": "center",
+      "color": "rgb(152, 152, 159)"
+    }
+  },
+  "pick.opts": {
+    "matched": true,
+    "styles": { "display": "flex", "flexDirection": "column", "gap": "8px" }
+  },
+  "pick.opt.primary": {
+    "matched": true,
+    "tag": "button",
+    "cls": "login-opt login-opt--pri",
+    "text": "Continue with a wallet",
+    "styles": {
+      "fontFamily": "-apple-system",
+      "fontSize": "13px",
+      "fontWeight": "500",
+      "color": "rgb(8, 19, 29)",
+      "backgroundColor": "rgb(95, 178, 236)",
+      "padding": "10px 12px",
+      "borderWidth": "1px",
+      "borderColor": "rgba(0, 0, 0, 0)",
+      "borderRadius": "9px",
+      "gap": "11px",
+      "alignItems": "center"
+    }
+  },
+  "pick.opt.primary.label": {
+    "matched": true,
+    "tag": "span",
+    "styles": {
+      "fontSize": "13px",
+      "fontWeight": "500",
+      "color": "rgb(8, 19, 29)"
+    }
+  },
+  "pick.opt.primary.sub": {
+    "matched": true,
+    "tag": "small",
+    "styles": {
+      "fontFamily": "JetBrains Mono",
+      "fontSize": "10px",
+      "color": "rgba(8, 19, 29, 0.6)"
+    }
+  },
+  "pick.opt.primary.icon": {
+    "matched": true,
+    "styles": {
+      "backgroundColor": "rgba(8, 19, 29, 0.14)",
+      "borderRadius": "7px",
+      "width": "28px",
+      "display": "grid"
+    }
+  },
+  "pick.opt.google": {
+    "matched": true,
+    "tag": "button",
+    "cls": "login-opt",
+    "styles": {
+      "fontSize": "13px",
+      "fontWeight": "500",
+      "color": "rgb(236, 236, 241)",
+      "backgroundColor": "rgb(17, 17, 20)",
+      "padding": "10px 12px",
+      "borderWidth": "1px",
+      "borderColor": "rgba(255, 255, 255, 0.1)",
+      "borderRadius": "9px",
+      "gap": "11px"
+    }
+  },
+  "pick.opt.local": {
+    "matched": true,
+    "tag": "button",
+    "cls": "login-opt",
+    "styles": {
+      "fontSize": "13px",
+      "fontWeight": "500",
+      "color": "rgb(236, 236, 241)",
+      "backgroundColor": "rgb(17, 17, 20)",
+      "padding": "10px 12px",
+      "borderWidth": "1px",
+      "borderColor": "rgba(255, 255, 255, 0.1)",
+      "borderRadius": "9px"
+    }
+  },
+  "pick.divider": {
+    "matched": true,
+    "tag": "div",
+    "cls": "login-div",
+    "text": "or",
+    "styles": {
+      "fontFamily": "JetBrains Mono",
+      "fontSize": "9px",
+      "letterSpacing": "1.08px",
+      "textTransform": "uppercase",
+      "color": "rgb(100, 100, 109)"
+    }
+  },
+  "pick.foot": {
+    "matched": true,
+    "tag": "div",
+    "cls": "login-foot",
+    "styles": {
+      "fontFamily": "-apple-system",
+      "fontSize": "10.5px",
+      "lineHeight": "17.325px",
+      "textAlign": "center",
+      "color": "rgb(100, 100, 109)"
+    }
+  },
+  "pick.ver": {
+    "matched": true,
+    "tag": "div",
+    "cls": "login-ver",
+    "styles": {
+      "fontFamily": "JetBrains Mono",
+      "fontSize": "9px",
+      "color": "rgb(100, 100, 109)",
+      "gap": "14px"
+    }
+  },
+  "connecting.wrap": {
+    "matched": true,
+    "tag": "div",
+    "cls": "empty",
+    "text": "Waiting for MetaMask…",
+    "styles": {
+      "fontFamily": "-apple-system",
+      "fontSize": "13px",
+      "lineHeight": "19.5px",
+      "textAlign": "center",
+      "color": "rgb(152, 152, 159)",
+      "display": "block",
+      "padding": "30px 0px"
+    }
+  },
+  "connecting.title": {
+    "matched": true,
+    "tag": "h3",
+    "text": "Waiting for MetaMask…",
+    "styles": {
+      "fontFamily": "-apple-system",
+      "fontSize": "13.5px",
+      "fontWeight": "600",
+      "lineHeight": "16.2px",
+      "letterSpacing": "-0.135px",
+      "textAlign": "center",
+      "color": "rgb(236, 236, 241)"
+    }
+  },
+  "connecting.body": {
+    "matched": true,
+    "tag": "p",
+    "styles": {
+      "fontFamily": "-apple-system",
+      "fontSize": "12px",
+      "lineHeight": "19.2px",
+      "textAlign": "center",
+      "color": "rgb(152, 152, 159)"
+    }
+  },
+  "connecting.cancel": {
+    "matched": true,
+    "tag": "button",
+    "cls": "cbtn cbtn--ghost cbtn--sm",
+    "text": "Cancel",
+    "styles": {
+      "fontSize": "11.5px",
+      "fontWeight": "500",
+      "color": "rgb(152, 152, 159)",
+      "display": "inline-flex",
+      "padding": "4px 9px",
+      "borderRadius": "6px"
+    }
+  },
+  "sign.title": {
+    "matched": true,
+    "tag": "h1",
+    "text": "Signature request",
+    "styles": {
+      "fontSize": "18px",
+      "fontWeight": "600",
+      "lineHeight": "21.6px",
+      "letterSpacing": "-0.18px",
+      "textAlign": "center",
+      "color": "rgb(236, 236, 241)"
+    }
+  },
+  "sign.sub": {
+    "matched": true,
+    "tag": "p",
+    "styles": {
+      "fontSize": "12px",
+      "textAlign": "center",
+      "color": "rgb(152, 152, 159)"
+    }
+  },
+  "sign.addr": {
+    "matched": true,
+    "tag": "div",
+    "cls": "sig-addr",
+    "styles": {
+      "backgroundColor": "rgb(17, 17, 20)",
+      "borderColor": "rgba(255, 255, 255, 0.1)",
+      "borderRadius": "8px",
+      "padding": "10px 12px",
+      "display": "flex"
+    }
+  },
+  "sign.addr.hex": {
+    "matched": true,
+    "tag": "span",
+    "styles": {
+      "fontFamily": "JetBrains Mono",
+      "fontSize": "12px",
+      "color": "rgb(236, 236, 241)"
+    }
+  },
+  "sign.addr.meta": {
+    "matched": true,
+    "tag": "span",
+    "styles": {
+      "fontFamily": "JetBrains Mono",
+      "fontSize": "10px",
+      "color": "rgb(100, 100, 109)"
+    }
+  },
+  "sign.msg": {
+    "matched": true,
+    "tag": "div",
+    "cls": "sig-msg",
+    "styles": {
+      "fontFamily": "JetBrains Mono",
+      "fontSize": "11px",
+      "lineHeight": "18.7px",
+      "color": "rgb(212, 212, 219)",
+      "backgroundColor": "rgb(13, 13, 16)",
+      "borderColor": "rgba(255, 255, 255, 0.06)",
+      "borderRadius": "8px",
+      "padding": "11px 13px"
+    }
+  },
+  "sign.btn.cancel": {
+    "matched": true,
+    "tag": "button",
+    "cls": "cbtn",
+    "text": "Cancel",
+    "styles": {
+      "fontSize": "12px",
+      "fontWeight": "500",
+      "color": "rgb(236, 236, 241)",
+      "borderColor": "rgba(255, 255, 255, 0.1)",
+      "borderRadius": "6px",
+      "padding": "9px 12px"
+    }
+  },
+  "sign.btn.primary": {
+    "matched": true,
+    "tag": "button",
+    "cls": "cbtn cbtn--pri",
+    "text": "Sign & continue",
+    "styles": {
+      "fontSize": "12px",
+      "fontWeight": "600",
+      "color": "rgb(8, 19, 29)",
+      "backgroundColor": "rgb(95, 178, 236)",
+      "borderRadius": "6px",
+      "padding": "9px 12px"
+    }
+  },
+  "done.wrap": {
+    "matched": true,
+    "tag": "div",
+    "cls": "empty",
+    "styles": {
+      "textAlign": "center",
+      "color": "rgb(152, 152, 159)",
+      "padding": "30px 0px"
+    }
+  },
+  "done.title": {
+    "matched": true,
+    "tag": "h3",
+    "text": "Signed in",
+    "styles": {
+      "fontSize": "13.5px",
+      "fontWeight": "600",
+      "lineHeight": "16.2px",
+      "letterSpacing": "-0.135px",
+      "textAlign": "center",
+      "color": "rgb(236, 236, 241)"
+    }
+  },
+  "done.body": {
+    "matched": true,
+    "tag": "p",
+    "styles": {
+      "fontSize": "12px",
+      "textAlign": "center",
+      "color": "rgb(152, 152, 159)"
+    }
+  },
+  "werr.wrap": {
+    "matched": true,
+    "tag": "div",
+    "cls": "empty",
+    "text": "No response from MetaMask",
+    "styles": {
+      "fontSize": "13px",
+      "textAlign": "center",
+      "color": "rgb(152, 152, 159)",
+      "padding": "26px 0px"
+    }
+  },
+  "werr.title": {
+    "matched": true,
+    "tag": "h3",
+    "text": "No response from MetaMask",
+    "styles": {
+      "fontSize": "13.5px",
+      "fontWeight": "600",
+      "lineHeight": "16.2px",
+      "letterSpacing": "-0.135px",
+      "textAlign": "center",
+      "color": "rgb(236, 236, 241)"
+    }
+  },
+  "werr.body": {
+    "matched": true,
+    "tag": "p",
+    "styles": {
+      "fontSize": "12px",
+      "textAlign": "center",
+      "color": "rgb(152, 152, 159)"
+    }
+  },
+  "werr.btn.secondary": {
+    "matched": true,
+    "tag": "button",
+    "cls": "cbtn",
+    "text": "Choose another wallet",
+    "styles": {
+      "fontSize": "12px",
+      "fontWeight": "500",
+      "color": "rgb(236, 236, 241)",
+      "borderColor": "rgba(255, 255, 255, 0.1)",
+      "borderRadius": "6px",
+      "padding": "9px 12px"
+    }
+  },
+  "werr.btn.primary": {
+    "matched": true,
+    "tag": "button",
+    "cls": "cbtn cbtn--pri",
+    "text": "Try again",
+    "styles": {
+      "fontSize": "12px",
+      "fontWeight": "600",
+      "color": "rgb(8, 19, 29)",
+      "backgroundColor": "rgb(95, 178, 236)",
+      "borderRadius": "6px",
+      "padding": "9px 12px"
+    }
+  },
+  "werr.backlink": {
+    "matched": true,
+    "tag": "button",
+    "cls": "backlink",
+    "text": "Back to sign-in",
+    "styles": {
+      "fontFamily": "JetBrains Mono",
+      "fontSize": "11px",
+      "color": "rgb(152, 152, 159)"
+    }
+  }
+}

@@ -1,0 +1,2 @@
+# Regenerable live renders (run: vitest --config tools/design-parity/vitest.config.mjs)
+surfaces/*/live/

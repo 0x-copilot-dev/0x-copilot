@@ -1,0 +1,160 @@
+{
+  "card": {
+    "matched": true,
+    "tag": "div",
+    "cls": "login-card",
+    "text": "Welcome to 0xCopilot…",
+    "styles": {
+      "fontFamily": "-apple-system",
+      "fontSize": "13px",
+      "textAlign": "center",
+      "color": "rgb(236, 236, 241)",
+      "display": "flex",
+      "flexDirection": "column",
+      "width": "372px"
+    }
+  },
+  "title": {
+    "matched": true,
+    "tag": "h1",
+    "text": "Welcome to Copilot",
+    "styles": {
+      "fontFamily": "-apple-system",
+      "fontSize": "18px",
+      "fontWeight": "600",
+      "lineHeight": "21.6px",
+      "letterSpacing": "-0.18px",
+      "textAlign": "center",
+      "color": "rgb(236, 236, 241)"
+    }
+  },
+  "sub": {
+    "matched": true,
+    "tag": "p",
+    "styles": {
+      "fontFamily": "-apple-system",
+      "fontSize": "12px",
+      "fontWeight": "400",
+      "lineHeight": "19.8px",
+      "textAlign": "center",
+      "color": "rgb(152, 152, 159)"
+    }
+  },
+  "opts": {
+    "matched": true,
+    "styles": { "display": "flex", "flexDirection": "column", "gap": "8px" }
+  },
+  "opt.primary": {
+    "matched": true,
+    "tag": "button",
+    "cls": "login-opt login-opt--pri",
+    "text": "Continue with a wallet",
+    "styles": {
+      "fontFamily": "-apple-system",
+      "fontSize": "13px",
+      "fontWeight": "500",
+      "color": "rgb(8, 19, 29)",
+      "backgroundColor": "rgb(95, 178, 236)",
+      "padding": "10px 12px",
+      "borderWidth": "1px",
+      "borderColor": "rgba(0, 0, 0, 0)",
+      "borderRadius": "9px",
+      "gap": "11px",
+      "alignItems": "center"
+    }
+  },
+  "opt.primary.label": {
+    "matched": true,
+    "tag": "span",
+    "styles": {
+      "fontSize": "13px",
+      "fontWeight": "500",
+      "color": "rgb(8, 19, 29)"
+    }
+  },
+  "opt.primary.sub": {
+    "matched": true,
+    "tag": "small",
+    "styles": {
+      "fontFamily": "JetBrains Mono",
+      "fontSize": "10px",
+      "color": "rgba(8, 19, 29, 0.6)"
+    }
+  },
+  "opt.primary.icon": {
+    "matched": true,
+    "styles": {
+      "backgroundColor": "rgba(8, 19, 29, 0.14)",
+      "borderRadius": "7px",
+      "width": "28px",
+      "display": "grid"
+    }
+  },
+  "opt.google": {
+    "matched": true,
+    "tag": "button",
+    "cls": "login-opt",
+    "styles": {
+      "fontSize": "13px",
+      "fontWeight": "500",
+      "color": "rgb(236, 236, 241)",
+      "backgroundColor": "rgb(17, 17, 20)",
+      "padding": "10px 12px",
+      "borderWidth": "1px",
+      "borderColor": "rgba(255, 255, 255, 0.1)",
+      "borderRadius": "9px",
+      "gap": "11px"
+    }
+  },
+  "opt.local": {
+    "matched": true,
+    "tag": "button",
+    "cls": "login-opt",
+    "styles": {
+      "fontSize": "13px",
+      "fontWeight": "500",
+      "color": "rgb(236, 236, 241)",
+      "backgroundColor": "rgb(17, 17, 20)",
+      "padding": "10px 12px",
+      "borderWidth": "1px",
+      "borderColor": "rgba(255, 255, 255, 0.1)",
+      "borderRadius": "9px"
+    }
+  },
+  "divider": {
+    "matched": true,
+    "tag": "div",
+    "cls": "login-div",
+    "text": "or",
+    "styles": {
+      "fontFamily": "JetBrains Mono",
+      "fontSize": "9px",
+      "letterSpacing": "1.08px",
+      "textTransform": "uppercase",
+      "color": "rgb(100, 100, 109)"
+    }
+  },
+  "foot": {
+    "matched": true,
+    "tag": "div",
+    "cls": "login-foot",
+    "styles": {
+      "fontFamily": "-apple-system",
+      "fontSize": "10.5px",
+      "lineHeight": "17.325px",
+      "textAlign": "center",
+      "color": "rgb(100, 100, 109)"
+    }
+  },
+  "ver": {
+    "matched": true,
+    "tag": "div",
+    "cls": "login-ver",
+    "styles": {
+      "fontFamily": "JetBrains Mono",
+      "fontSize": "9px",
+      "color": "rgb(100, 100, 109)",
+      "gap": "14px"
+    }
+  }
+}

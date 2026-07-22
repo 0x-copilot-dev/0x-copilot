@@ -399,6 +399,13 @@ class LitellmModelSource:
 
     def _model_cost_table(self) -> Mapping[str, Mapping[str, object]]:
         if self._model_cost is None:
+            # Same offline guardrail as the pricing source: pin the bundled cost
+            # map + disable the HF tokenizer download before touching litellm.
+            from agent_runtime.pricing.litellm_runtime import (  # noqa: PLC0415
+                apply_offline_litellm_config,
+            )
+
+            apply_offline_litellm_config()
             import litellm  # noqa: PLC0415 — lazy: keep import graph light, litellm is heavy
 
             self._model_cost = litellm.model_cost
