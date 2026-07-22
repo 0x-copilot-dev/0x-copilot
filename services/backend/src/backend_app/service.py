@@ -75,6 +75,25 @@ from backend_app.store import (
 from backend_app.token_vault import TokenVault, TokenVaultFactory
 
 
+def _is_unique_violation(ex: Exception) -> bool:
+    """True iff ``ex`` is a database unique-constraint violation.
+
+    Detected via SQLSTATE 23505 (``sqlstate`` attribute on psycopg errors)
+    rather than an isinstance check, so the service layer stays free of a
+    hard driver import and the in-memory store (which never raises this)
+    is unaffected. Walks ``__cause__`` because store adapters may re-raise
+    with context.
+    """
+    seen: set[int] = set()
+    current: BaseException | None = ex
+    while current is not None and id(current) not in seen:
+        seen.add(id(current))
+        if getattr(current, "sqlstate", None) == "23505":
+            return True
+        current = current.__cause__ or current.__context__
+    return False
+
+
 def _catalog_entry_response(entry: CatalogEntry) -> McpCatalogEntryResponse:
     """Project a code-side ``CatalogEntry`` to its wire shape."""
 
@@ -1114,9 +1133,19 @@ class SkillRegistryService:
                     compatibility=manifest.compatibility,
                     metadata=manifest.metadata,
                 )
-                with self.store.transaction() as conn:
-                    self.store.create_skill(record, conn=conn)
-                    self._audit(record, "skill_preloaded", conn=conn)
+                try:
+                    with self.store.transaction() as conn:
+                        self.store.create_skill(record, conn=conn)
+                        self._audit(record, "skill_preloaded", conn=conn)
+                except Exception as ex:
+                    # First-boot seeding race: two concurrent first requests
+                    # both pass the get-by-name check (TOCTOU) and the loser
+                    # hits the (org_id, user_id, name) unique constraint. The
+                    # winner seeded identical manifest content, so losing is
+                    # success — swallow ONLY the duplicate-key case; anything
+                    # else propagates untouched.
+                    if not _is_unique_violation(ex):
+                        raise
                 continue
             if existing.source_type is not SkillSourceType.PRELOADED:
                 continue

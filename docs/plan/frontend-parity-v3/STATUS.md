@@ -40,3 +40,11 @@ and pushed. This file is the hand-off state for any agent continuing the work.
   point `@0x-copilot/*` at `../../packages/*/src` (see PRD work log), or rely on CI.
 - The prettier pre-commit hook reformats then aborts the first commit; stage +
   commit twice with the same message.
+
+## PRD-I / PRD-J execution log
+
+- **PRD-I (all)** + **J1 (main green)** — merged PR #197: internal-route write-through, immediate SSE wakeup (lifespan-bound), `PostgresConnectorsStore` (migration `0044_connectors`, signing + RLS), main's 4 reds root-caused + fixed. Backend 1865 / frontend 1333 / chat-surface 2356 green.
+- **Urgent** — PR #196: `importlib-metadata 9.0.0→8.7.0` (desktop staging ResolutionImpossible; verified against the user runtime python).
+- **J3 (fresh stage + live pass)** — staged from post-#197 main; supervised boot green. **Projects 500 GONE** (root cause = missing projects DDL; fixed by main's `0043_projects` + restage). **Found + fixed live:** first-boot seeding race in `_ensure_preloaded_skills` (concurrent first `GET /v1/skills` → loser 500s on the unique constraint; now SQLSTATE-23505-tolerant + 2 regression tests). FTUE first-run gate verified intercepting before the shell (parallel workstream, working).
+- **Scoped follow-ups (deliberate, not bandaided):** desktop custom-MCP add — the desktop connect flow is IPC/main-process-owned (no ConnectModal mount), needs its own slice (IPC channel + main handler + coordinator auth + panel affordance); desktop skill-editor parity — the editor is an `apps/frontend` component, needs a chat-surface home first. Projects-bus immediate wakeup — port its sleep-poll stream to the connectors wait shape, then reuse `bind_loop`.
+- **J2 (live-PG gate)** — agent in flight: four `*_live.py` suites + local execution + `run-merge-live-gate.sh` wiring.
