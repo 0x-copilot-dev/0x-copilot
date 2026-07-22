@@ -43,6 +43,7 @@ from backend_app.adapter_registry.store import PostgresAdapterRegistryStore
 from backend_app.surface_specs.store import PostgresSurfaceSpecStore
 from backend_app.api_keys.store import PostgresApiKeyStore
 from backend_app.app import create_app
+from backend_app.connectors.store import PostgresConnectorsStore
 from backend_app.deployment_profile import (
     DeploymentProfile,
     DeploymentProfileLoader,
@@ -163,7 +164,6 @@ class DesktopComposer:
         * ``todos_store``                # in-memory: no postgres adapter yet (desktop v1 accepted gap)
         * ``inbox_store``                # in-memory: no postgres adapter yet (desktop v1 accepted gap)
         * ``routines_store``             # in-memory: no postgres adapter yet (desktop v1 accepted gap)
-        * ``connectors_store``           # in-memory: no postgres adapter yet (desktop v1 accepted gap)
         * ``webhooks_store``             # in-memory: no postgres adapter yet (desktop v1 accepted gap)
         * ``project_templates_store``    # in-memory: no postgres adapter yet (desktop v1 accepted gap)
         * ``library_store``              # in-memory: no postgres adapter yet (desktop v1 accepted gap)
@@ -256,6 +256,14 @@ class DesktopComposer:
             # verification of this adapter is deferred (no live DB in the
             # parity workstream); the supervised-boot smoke exercises it.
             "projects_store": PostgresProjectsStore(pool),
+            # PRD-I FR-I3.3 — durable connectors read model so the
+            # /v1/connectors rows (and their audit chain) survive a backend
+            # restart instead of silently re-diverging from the persistent
+            # MCP registry (the exact split-brain PR #193 exists to
+            # prevent). In-memory stays the default for tests/dev via
+            # create_app. Live-Postgres verification of this adapter is
+            # deferred to PRD-J J2; the supervised-boot smoke exercises it.
+            "connectors_store": PostgresConnectorsStore(pool),
         }
 
     @classmethod

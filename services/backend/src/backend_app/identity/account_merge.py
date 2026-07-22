@@ -395,6 +395,13 @@ class PostgresMergeData:
         ("mcp_servers", "retenant", "org_id", "user_id", ()),
         ("mcp_auth_sessions", "retenant", "org_id", "user_id", ()),
         ("mcp_auth_connections", "retenant", "org_id", "user_id", ()),
+        # Connectors destination (0043): denormalized read model over
+        # mcp_servers + token_vault meta. It must move WITH the mcp_servers
+        # rows it mirrors (both retenant) or the read model re-diverges from
+        # the MCP truth after a merge — the exact split-brain the
+        # write-through exists to prevent. No unique key on
+        # (tenant, owner, slug), so a plain retenant cannot collide.
+        ("connectors", "retenant", "tenant_id", "owner_user_id", ()),
         ("api_keys", "retenant", "org_id", "user_id", ()),
         ("todos", "retenant", "tenant_id", "owner_user_id", ()),
         ("todo_series", "retenant", "tenant_id", "owner_user_id", ()),
@@ -459,8 +466,11 @@ class PostgresMergeData:
     # DELIBERATELY LEFT IN PLACE (the registry test enforces that every
     # tenant table is either in _SPECS or named here with its reason):
     # - identity_audit_events / mcp_audit_events / skill_audit_events /
-    #   todo_audit_events / adapter_registry_audit_events / login_attempts:
-    #   append-only history stays where it happened (NFR-5).
+    #   todo_audit_events / adapter_registry_audit_events /
+    #   connector_audit_events / login_attempts:
+    #   append-only history stays where it happened (NFR-5) — and the
+    #   connector chain's per-tenant seq/prev_hash signing would break if
+    #   rows were re-keyed across tenants.
     # - sessions: die by revocation in the saga's step 3, never adopted.
     # - organizations / users / organization_members / role_assignments:
     #   the absorbed org is retired with its sole member soft-disabled; the
@@ -482,6 +492,7 @@ class PostgresMergeData:
             "skill_audit_events",
             "todo_audit_events",
             "adapter_registry_audit_events",
+            "connector_audit_events",
             "login_attempts",
             "sessions",
             "organizations",
