@@ -283,7 +283,12 @@ class ConnectorsService:
         the inbox/todos paths.
         """
 
-        with self._store.transaction():
+        # ``org_id`` stamps ``app.current_org_id`` on the shared write
+        # connection so the 0044 RLS WITH CHECK policies pass for a
+        # non-superuser role — same discipline as ``ProjectsService``
+        # (proven live by test_connectors_store_live.py; without it the
+        # INSERT dies with "violates row-level security policy").
+        with self._store.transaction(org_id=mcp_input.tenant_id):
             record = self._store.upsert_from_mcp_registration(mcp_input)
             self._store.append_audit(
                 ConnectorAuditRecord(
@@ -333,7 +338,7 @@ class ConnectorsService:
         )
         before_state = _safe_dump(existing)
         after_state = _safe_dump(new_record)
-        with self._store.transaction():
+        with self._store.transaction(org_id=tenant_id):
             stored = self._store.update_connector(new_record)
             self._store.append_audit(
                 ConnectorAuditRecord(
@@ -381,7 +386,7 @@ class ConnectorsService:
         )
         before_state = _safe_dump(existing)
         after_state = _safe_dump(new_record)
-        with self._store.transaction():
+        with self._store.transaction(org_id=tenant_id):
             stored = self._store.update_connector(new_record)
             self._store.append_audit(
                 ConnectorAuditRecord(
@@ -439,7 +444,7 @@ class ConnectorsService:
         )
         before_state = _safe_dump(existing)
         after_state = _safe_dump(new_record)
-        with self._store.transaction():
+        with self._store.transaction(org_id=tenant_id):
             stored = self._store.update_connector(new_record)
             if added:
                 self._store.append_audit(
@@ -498,7 +503,7 @@ class ConnectorsService:
         )
         before_state = _safe_dump(existing)
         after_state = _safe_dump(new_record)
-        with self._store.transaction():
+        with self._store.transaction(org_id=tenant_id):
             stored = self._store.update_connector(new_record)
             self._store.append_audit(
                 ConnectorAuditRecord(
