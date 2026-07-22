@@ -159,6 +159,8 @@ export {
 } from "./DownloadLocalModelModal";
 export {
   formatBytes,
+  // PRD-P8 §5 — the FTUE card's shared-unit "2.4 / 4.3 GB" byte line.
+  formatBytesPair,
   formatEta,
   humanStatus,
   placementLabel,

@@ -961,6 +961,7 @@ export {
   DEFAULT_LOCAL_MODEL_QUANT,
   localModelInstalledTag,
   formatBytes,
+  formatBytesPair,
   formatEta,
   humanStatus,
   placementLabel,

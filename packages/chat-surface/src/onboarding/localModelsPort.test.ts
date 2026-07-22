@@ -113,6 +113,43 @@ describe("createFirstRunLocalModelsPort", () => {
     );
   });
 
+  it("startRuntime() POSTs /v1/local-models/runtime/start and returns the status", async () => {
+    const request = vi.fn(async () => ({
+      enabled: true,
+      ollama_running: true,
+      ollama_version: "0.6.2",
+      runtime_state: "running",
+      runtime_managed: true,
+    })) as unknown as <T>(req: TypedRequest) => Promise<T>;
+    const port = createFirstRunLocalModelsPort(fakeTransport({ request }));
+
+    const status = await port.startRuntime();
+
+    expect(status.runtime_state).toBe("running");
+    expect(status.runtime_managed).toBe(true);
+    expect(request).toHaveBeenCalledWith(
+      expect.objectContaining({
+        method: "POST",
+        path: "/v1/local-models/runtime/start",
+      }),
+    );
+  });
+
+  it("startRuntime() forwards the abort signal and propagates a 404 gate", async () => {
+    const controller = new AbortController();
+    const request = vi.fn(() =>
+      Promise.reject(new Error("404 CONFIGURATION_ERROR")),
+    ) as unknown as <T>(req: TypedRequest) => Promise<T>;
+    const port = createFirstRunLocalModelsPort(fakeTransport({ request }));
+
+    await expect(port.startRuntime(controller.signal)).rejects.toThrow(
+      "CONFIGURATION_ERROR",
+    );
+    expect(request).toHaveBeenCalledWith(
+      expect.objectContaining({ signal: controller.signal }),
+    );
+  });
+
   it("pull() opens the SSE lane with repo/quant and yields parsed frames until done", async () => {
     const sinks: FakeSse[] = [];
     const port = createFirstRunLocalModelsPort(fakeTransport({ sinks }));
@@ -146,6 +183,34 @@ describe("createFirstRunLocalModelsPort", () => {
     await consume;
     expect(received.map((f) => f.sequence_no)).toEqual([1, 2]);
     expect(sinks[0].close).toHaveBeenCalledTimes(1);
+  });
+
+  it("pull() does not treat a frame with NO `error` key as a terminal error", async () => {
+    const sinks: FakeSse[] = [];
+    const port = createFirstRunLocalModelsPort(fakeTransport({ sinks }));
+
+    const received: LocalModelPullEvent[] = [];
+    const consume = (async () => {
+      for await (const frame of port.pull(PRESET)) received.push(frame);
+    })();
+
+    await Promise.resolve();
+    await Promise.resolve();
+    const { onMessage } = sinks[0].opts;
+    // `isLocalModelPullEvent` admits this (only sequence_no/status/done are
+    // required), so a truncated or legacy frame reaches the consumer with
+    // `error === undefined`. Closing the stream on it would end a healthy pull.
+    onMessage(
+      JSON.stringify({ sequence_no: 1, status: "pulling", done: false }),
+    );
+    onMessage(
+      JSON.stringify(
+        pullFrame({ sequence_no: 2, done: true, status: "success" }),
+      ),
+    );
+
+    await consume;
+    expect(received.map((f) => f.sequence_no)).toEqual([1, 2]);
   });
 
   it("pull() throws when the transport reports an SSE error", async () => {

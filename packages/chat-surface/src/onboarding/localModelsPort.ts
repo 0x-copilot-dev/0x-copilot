@@ -29,9 +29,15 @@ const PULL_EVENT_NAME = "local_model_pull";
  *  - `status()` — `GET /v1/local-models/status` (always 200; the gate reads
  *    `enabled` / `ollama_running` to decide the card's sub-state).
  *  - `list()`   — `GET /v1/local-models`; used post-pull to resolve the
- *    installed Ollama tag name.
+ *    installed Ollama tag name, and on probe for the already-installed
+ *    short-circuit.
  *  - `pull()`   — `GET /v1/local-models/pull` (SSE); an async stream of
  *    `LocalModelPullEvent` frames the hook reduces into `localModelPct`.
+ *  - `startRuntime()` — `POST /v1/local-models/runtime/start` (PRD-P8 §4.3);
+ *    starts (or restarts) the runtime on the host and answers with the
+ *    resulting status. Idempotent — already-running is a success. It 404s
+ *    unless the deployment permits this server to manage the runtime process,
+ *    the same server-authoritative gate reported as `runtime_managed`.
  */
 export interface FirstRunLocalModelsPort {
   status(signal?: AbortSignal): Promise<LocalModelsStatus>;
@@ -40,6 +46,7 @@ export interface FirstRunLocalModelsPort {
     preset: AvailableLocalModel,
     signal?: AbortSignal,
   ): AsyncIterable<LocalModelPullEvent>;
+  startRuntime(signal?: AbortSignal): Promise<LocalModelsStatus>;
 }
 
 function isLocalModelPullEvent(value: unknown): value is LocalModelPullEvent {
@@ -79,6 +86,13 @@ export function createFirstRunLocalModelsPort(
         signal,
       });
       return res.models;
+    },
+    startRuntime(signal) {
+      return transport.request<LocalModelsStatus>({
+        method: "POST",
+        path: "/v1/local-models/runtime/start",
+        signal,
+      });
     },
     async *pull(preset, signal) {
       const queue: LocalModelPullEvent[] = [];
@@ -128,7 +142,16 @@ export function createFirstRunLocalModelsPort(
           while (queue.length > 0) {
             const frame = queue.shift() as LocalModelPullEvent;
             yield frame;
-            if (frame.done || frame.error !== null) return;
+            // Nullish, not just `null`: `isLocalModelPullEvent` only requires
+            // sequence_no/status/done, so a truncated or legacy frame can
+            // arrive with no `error` key at all. `!== null` would read that as
+            // a terminal error frame and close a perfectly healthy stream —
+            // which the hook then classifies as a break and retries, forever.
+            if (
+              frame.done ||
+              (frame.error !== null && frame.error !== undefined)
+            )
+              return;
           }
           if (closed) {
             if (streamError) throw streamError;

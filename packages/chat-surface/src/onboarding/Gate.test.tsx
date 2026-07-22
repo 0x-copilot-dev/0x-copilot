@@ -1,11 +1,17 @@
 // Gate — State A (PRD-P1 §6.1). Both cards render with verbatim copy;
 // "Start download" fires onStartDownload; "Add a key" reveals the inline
 // KeyForm; a renderLocalCard slot replaces the default local card.
+//
+// PRD-P8 D4 splits the single advance callback in two — `onStartDownload`
+// (explicit click: start the pull AND advance) and `onContinue` (D4a: advance
+// only, without restarting an in-flight pull). The Gate's job is to hand BOTH
+// to the slot as independent seams; conflating them is what made states ③/④
+// unreachable.
 
 import { fireEvent, render, screen } from "@testing-library/react";
 import { describe, expect, it, vi } from "vitest";
 
-import { Gate } from "./Gate";
+import { Gate, type FirstRunLocalCardCtx } from "./Gate";
 import { FIRST_RUN_COPY } from "./firstRun";
 import type { ProviderKeysPort } from "../settings/data/providerKeys";
 
@@ -87,5 +93,57 @@ describe("<Gate>", () => {
     const slot = screen.getByTestId("p2-local-card");
     expect(slot.getAttribute("data-pct")).toBe("42");
     expect(renderLocalCard).toHaveBeenCalledTimes(1);
+  });
+
+  // --- PRD-P8 D4 / D4a — the two advance seams --------------------------
+
+  /** A slot card exposing both ctx callbacks as buttons. */
+  function slotCard(ctx: FirstRunLocalCardCtx) {
+    return (
+      <div data-testid="p8-local-card">
+        <button
+          type="button"
+          data-testid="p8-start"
+          onClick={ctx.onStartDownload}
+        >
+          start
+        </button>
+        <button
+          type="button"
+          data-testid="p8-continue"
+          onClick={ctx.onContinue}
+        >
+          continue
+        </button>
+      </div>
+    );
+  }
+
+  it("hands the slot Continue → as a seam SEPARATE from Start download (D4a)", () => {
+    const onStartDownload = vi.fn();
+    const onContinue = vi.fn();
+    renderGate({ renderLocalCard: slotCard, onStartDownload, onContinue });
+
+    fireEvent.click(screen.getByTestId("p8-continue"));
+    expect(onContinue).toHaveBeenCalledTimes(1);
+    // Continuing must NOT be mistaken for asking for a download — that is what
+    // would restart a pull already in flight.
+    expect(onStartDownload).not.toHaveBeenCalled();
+
+    fireEvent.click(screen.getByTestId("p8-start"));
+    expect(onStartDownload).toHaveBeenCalledTimes(1);
+    expect(onContinue).toHaveBeenCalledTimes(1);
+  });
+
+  it("defaults onContinue to an inert callback when the host wires none", () => {
+    const onStartDownload = vi.fn();
+    renderGate({ renderLocalCard: slotCard, onStartDownload });
+
+    // A slot that renders D4a's action against a host that has not wired it
+    // must be harmless — never a throw, never a phantom download.
+    expect(() =>
+      fireEvent.click(screen.getByTestId("p8-continue")),
+    ).not.toThrow();
+    expect(onStartDownload).not.toHaveBeenCalled();
   });
 });

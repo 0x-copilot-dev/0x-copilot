@@ -8,7 +8,9 @@
 //   • Bring your own key — always P1's: header copy + inline `KeyForm` reveal.
 //
 // Presentational: all I/O via the injected `ProviderKeysPort` (KeyForm). The
-// local card's `onStartDownload` is a host/surface callback — no I/O here.
+// local card's `onStartDownload` / `onContinue` are host/surface callbacks — no
+// I/O here. PRD-P8 D4: those two are SEPARATE seams so an auto-started pull can
+// keep the gate mounted (see `FirstRunLocalCardCtx`).
 
 import { useState, type ReactElement, type ReactNode } from "react";
 
@@ -18,12 +20,22 @@ import { KeyForm, type KeyFormConnected } from "./KeyForm";
 import { FIRST_RUN_COPY, type FirstRunKeyProvider } from "./firstRun";
 
 /**
- * Slot context handed to a `renderLocalCard` override (P2). Carries the
- * start-download callback (→ surface stage=dl), the P2 progress feed, and the
- * disabled flag — everything P2's SSE-aware card needs, nothing more.
+ * Slot context handed to a `renderLocalCard` override (P2/P8). Carries the two
+ * advance callbacks, the progress feed, and the disabled flag — everything the
+ * SSE-aware card needs, nothing more.
+ *
+ * PRD-P8 D4 splits the single P2 callback in two, because "start the pull" and
+ * "move the user off the gate" are different events:
+ *   • `onStartDownload` — an EXPLICIT "Start download" click. Starts the pull
+ *     AND advances (today's behaviour, unchanged).
+ *   • `onContinue` — D4a's "Continue →". Advances only. A pull the hook
+ *     auto-started on runtime detection must call NEITHER, so `stage` stays
+ *     `"choice"`, the card stays mounted, and states ③/④ are reachable.
  */
 export interface FirstRunLocalCardCtx {
   readonly onStartDownload: () => void;
+  /** D4a — advance to the composer without (re)starting an in-flight pull. */
+  readonly onContinue: () => void;
   readonly localModelPct: number | null;
   readonly disabled: boolean;
 }
@@ -34,6 +46,12 @@ export interface GateProps {
   readonly keyProviders?: readonly FirstRunKeyProvider[];
   /** → surface: engine=local, stage=dl (P2 wires SSE). */
   readonly onStartDownload: () => void;
+  /**
+   * P8 D4a → surface: engine=local + advance, WITHOUT firing the host's
+   * `onStartLocalDownload`. Optional (the P1 default card has no such
+   * affordance); omitted ⇒ the slot ctx gets an inert callback.
+   */
+  readonly onContinue?: () => void;
   /** → surface: engine=key, stage=ready. */
   readonly onKeyConnected: (r: KeyFormConnected) => void;
   /** P1 may disable the local download until P2's pipeline default lands. */
@@ -42,6 +60,11 @@ export interface GateProps {
   readonly localModelPct?: number | null;
   /** P2 replaces the whole local `.fr-gcard`; when absent P1's default renders. */
   readonly renderLocalCard?: (ctx: FirstRunLocalCardCtx) => ReactNode;
+}
+
+/** Stable inert `onContinue` for hosts that don't wire D4a (P1 default card). */
+function noContinue(): void {
+  /* no D4a affordance without a slot that renders one */
 }
 
 /**
@@ -84,6 +107,7 @@ export function Gate({
   keyPort,
   keyProviders,
   onStartDownload,
+  onContinue,
   onKeyConnected,
   localDownloadDisabled = false,
   localModelPct = null,
@@ -95,6 +119,7 @@ export function Gate({
     renderLocalCard !== undefined ? (
       renderLocalCard({
         onStartDownload,
+        onContinue: onContinue ?? noContinue,
         localModelPct,
         disabled: localDownloadDisabled,
       })

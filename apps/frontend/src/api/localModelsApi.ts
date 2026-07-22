@@ -5,6 +5,7 @@
 //   GET    /v1/local-models/size?repo=&quant=   → LocalModelSize
 //   GET    /v1/local-models/pull?repo=&quant=   → SSE stream of LocalModelPullEvent
 //   DELETE /v1/local-models/{name}              → 204
+//   POST   /v1/local-models/runtime/start       → LocalModelsStatus (PRD-P8 §4.3)
 //
 // Identity is the bearer header — the facade derives (org_id, user_id) from
 // the verified session, so no identity query params (same convention as
@@ -38,6 +39,20 @@ export function getLocalModelSize(
     repo,
     quant,
   });
+}
+
+/**
+ * PRD-P8 §4.3 — start (or restart) the local runtime on the serving host.
+ *
+ * Server-authoritative: the route 404s unless the deployment permits this
+ * server to manage the runtime process (the same gate reported as
+ * `LocalModelsStatus.runtime_managed`), which on the web deployment it does
+ * not. The web port still exposes it so ONE `FirstRunLocalModelsPort` shape
+ * serves both hosts; the card never renders the button when `runtime_managed`
+ * is false, so the 404 is a fail-closed backstop, not a normal path.
+ */
+export function startLocalModelRuntime(): Promise<LocalModelsStatus> {
+  return httpJson<LocalModelsStatus>("POST", "/v1/local-models/runtime/start");
 }
 
 export async function deleteLocalModel(name: string): Promise<void> {

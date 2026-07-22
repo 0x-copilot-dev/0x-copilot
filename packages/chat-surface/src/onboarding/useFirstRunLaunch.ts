@@ -1,10 +1,24 @@
-// useFirstRunLaunch — the FTUE run-create + handoff state machine (PRD-P3 §3.4).
+// useFirstRunLaunch — the FTUE run-create + handoff state machine (PRD-P3 §3.4,
+// PRD-P8 §7).
 //
 // Orchestrates the two-step first-run create through the host-injected
 // `FirstRunRunsPort`, the "Queued — starts when the model lands" deferral (send
 // accepted while a local model still downloads → fire when it lands), the
 // `StartRunError` surfacing (via the shared `parseTransportError`), and the
 // ~1.5s handoff hold before `onComplete(result)`.
+//
+// PRD-P8 §7 kills the permanent queued hang. `queued` used to be a one-way door:
+// no timeout, no failure input, and `launch()` refused every re-submit, so a
+// runtime that died mid-download parked the user on "Queued — starts when the
+// model lands" forever. Two precise changes fix it:
+//   • `modelBlocked` — while queued and the awaited model demonstrably cannot
+//     arrive, the phase exits to `blocked`, an actionable state the UI can
+//     render honestly. If the model later lands anyway, the held payload still
+//     fires (the deferral survives the detour).
+//   • the double-launch guard is narrowed to the two phases that actually own a
+//     conversation — `starting` (create in flight) and `handoff` (create
+//     succeeded). A fast double-Enter still creates exactly one run; a user
+//     whose download stalled can re-submit.
 //
 // Substrate-clean: no `fetch`/IPC here — the port is the only I/O seam. The one
 // timer (`setTimeout`) is the handoff hold; `reset()` cancels it so a Skip /
@@ -29,6 +43,7 @@ export type FirstRunLaunchPhase =
   | "composing" // no send yet
   | "starting" // create in flight (model ready)
   | "queued" // send accepted, waiting for a downloading local model
+  | "blocked" // queued, but the awaited model is NOT coming (P8 §7)
   | "handoff" // created + within the ~1.5s hold before onComplete
   | "error";
 
@@ -52,6 +67,16 @@ export interface UseFirstRunLaunchOptions {
    * host binder threads it here.
    */
   readonly modelReady: boolean;
+  /**
+   * PRD-P8 §7 — the awaited local model demonstrably cannot arrive right now:
+   * the local-model hook's `blocked !== null` (terminal pull error) or
+   * `runtime === "stopped"` (the daemon died). While `queued`, a truthy value
+   * exits the wait to `blocked` instead of hanging forever.
+   *
+   * OPTIONAL: omit it and the queued hold keeps its pre-P8 behaviour, so every
+   * existing caller compiles and behaves unchanged.
+   */
+  readonly modelBlocked?: boolean;
   /** Resolved model selection for the run body (null → runtime default). */
   readonly model: ModelSelectionRequest | null;
   /** Fired exactly once at handoff with the created run. */
@@ -63,7 +88,12 @@ export interface UseFirstRunLaunchOptions {
 export interface UseFirstRunLaunch {
   readonly phase: FirstRunLaunchPhase;
   readonly error: StartRunError | null;
-  /** Accepts the mapped run attachments; guards against double-launch. */
+  /**
+   * Accepts the mapped run attachments. Swallowed only while a create is in
+   * flight (`starting`) or has already succeeded (`handoff`) — the precise
+   * double-launch guard. Re-submitting from `error`, `queued` or `blocked` is
+   * legitimate and re-arms the deferral.
+   */
   readonly launch: (payload: FirstRunLaunchPayload) => void;
   /** Cancels any pending handoff timer + returns to `composing`. */
   readonly reset: () => void;
@@ -141,9 +171,14 @@ export function useFirstRunLaunch(
 
   const launch = useCallback(
     (payload: FirstRunLaunchPayload): void => {
-      // Double-launch guard: mirrors RunDestination's isStartingRun guard —
-      // a fast double-Enter can't spawn two conversations.
-      if (phaseRef.current !== "composing") {
+      // Double-launch guard (PRD-P8 §7 narrows it, keeping its ORIGINAL
+      // purpose): mirrors RunDestination's isStartingRun guard — a fast
+      // double-Enter can't spawn two conversations. Only the two phases that
+      // own a create swallow the second call: `starting` (in flight) and
+      // `handoff` (already created). `error`, `queued` and `blocked` own no
+      // conversation, so a re-submit from them is a legitimate retry — that is
+      // the escape hatch for a user whose download stalled.
+      if (phaseRef.current === "starting" || phaseRef.current === "handoff") {
         return;
       }
       pendingRef.current = payload;
@@ -151,19 +186,40 @@ export function useFirstRunLaunch(
         startCreate(payload);
       } else {
         // Download in flight → hold; the effect fires the create when the
-        // model lands (pct → 100 flips `modelReady`).
+        // model lands (pct → 100 flips `modelReady`). If it demonstrably is not
+        // coming, the blocked-exit effect below takes over.
         setPhase("queued");
       }
     },
     [startCreate, setPhase],
   );
 
-  // Queued → the model landed: fire the deferred create exactly once.
+  // The model landed: fire the deferred create exactly once. `blocked` is
+  // included on purpose — a stalled download that recovers (Ollama restarted →
+  // pull resumes → lands) still honours the send the user already made.
   useEffect(() => {
-    if (phase === "queued" && options.modelReady && pendingRef.current) {
+    if (
+      (phase === "queued" || phase === "blocked") &&
+      options.modelReady &&
+      pendingRef.current
+    ) {
       startCreate(pendingRef.current);
     }
   }, [phase, options.modelReady, startCreate]);
+
+  // Queued + the model demonstrably is NOT landing → leave the infinite wait
+  // for a state the UI can act on (honest ack title, re-submit, restart the
+  // runtime, or switch to a key). The payload stays pending so a recovery is
+  // still a single gesture-free send.
+  useEffect(() => {
+    if (
+      phase === "queued" &&
+      options.modelBlocked === true &&
+      !options.modelReady
+    ) {
+      setPhase("blocked");
+    }
+  }, [phase, options.modelBlocked, options.modelReady, setPhase]);
 
   const reset = useCallback((): void => {
     if (timerRef.current !== null) {
