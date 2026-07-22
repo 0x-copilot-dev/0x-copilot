@@ -298,15 +298,13 @@ describe("<ProviderKeysPage>", () => {
 
   describe("custom OpenAI-compatible endpoint (decision D-2)", () => {
     it("adds a custom endpoint, carrying base_url + label through save", async () => {
-      const save = vi
-        .fn<ProviderKeysPort["save"]>()
-        .mockResolvedValue({
-          provider: "openai_compatible" as ProviderKeySummary["provider"],
-          key_hint: "…real",
-          updated_at: "2026-07-18T00:00:00Z",
-          base_url: "https://my-host/v1",
-          label: "My vLLM",
-        });
+      const save = vi.fn<ProviderKeysPort["save"]>().mockResolvedValue({
+        provider: "openai_compatible" as ProviderKeySummary["provider"],
+        key_hint: "…real",
+        updated_at: "2026-07-18T00:00:00Z",
+        base_url: "https://my-host/v1",
+        label: "My vLLM",
+      });
       const validate = vi
         .fn<NonNullable<ProviderKeysPort["validate"]>>()
         .mockResolvedValue({ ok: true, models: [] });

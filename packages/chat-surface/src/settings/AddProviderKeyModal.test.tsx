@@ -6,7 +6,10 @@ import { fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { describe, expect, it, vi } from "vitest";
 
 import { AddProviderKeyModal } from "./AddProviderKeyModal";
-import { CUSTOM_ENDPOINT_ENTRY, providerCatalogEntry } from "./data/providerKeys";
+import {
+  CUSTOM_ENDPOINT_ENTRY,
+  providerCatalogEntry,
+} from "./data/providerKeys";
 
 const OPENAI = providerCatalogEntry("openai")!;
 const FAKE_KEY = "sk-unit-test-placeholder-not-a-real-key";

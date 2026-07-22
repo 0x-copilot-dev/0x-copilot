@@ -575,7 +575,9 @@ export function ProviderKeysPage({
                     // Base URL + Label before the key. Disabled only when one is
                     // already connected (single-endpoint MVP — the row above
                     // carries Rotate/Remove).
-                    disabled={summaryFor(CUSTOM_ENDPOINT_ENTRY.id) !== undefined}
+                    disabled={
+                      summaryFor(CUSTOM_ENDPOINT_ENTRY.id) !== undefined
+                    }
                     onClick={() =>
                       setModal({ entry: CUSTOM_ENDPOINT_ENTRY, mode: "add" })
                     }

@@ -135,11 +135,15 @@ describe("createProviderKeysPort", () => {
       base_url: "https://my-host/v1",
       label: "My vLLM",
     }));
-    await createProviderKeysPort(transport).save("openai_compatible", FAKE_OPENAI, {
-      defaultModel: "llama-3.1-70b",
-      baseUrl: "https://my-host/v1",
-      label: "My vLLM",
-    });
+    await createProviderKeysPort(transport).save(
+      "openai_compatible",
+      FAKE_OPENAI,
+      {
+        defaultModel: "llama-3.1-70b",
+        baseUrl: "https://my-host/v1",
+        label: "My vLLM",
+      },
+    );
     expect(calls[0]).toMatchObject({
       method: "PUT",
       path: "/v1/settings/provider-keys/openai_compatible",

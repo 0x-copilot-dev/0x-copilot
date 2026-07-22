@@ -204,7 +204,10 @@ export function AddProviderKeyModal({
   const handleContinue = useCallback(() => {
     const candidate = apiKey.trim();
     if (candidate.length === 0) return;
-    if (isCustom && (baseUrl.trim().length === 0 || label.trim().length === 0)) {
+    if (
+      isCustom &&
+      (baseUrl.trim().length === 0 || label.trim().length === 0)
+    ) {
       return;
     }
     void runValidate(candidate);
@@ -217,9 +220,7 @@ export function AddProviderKeyModal({
     onSubmit({
       apiKey: apiKey.trim(),
       model,
-      ...(isCustom
-        ? { baseUrl: baseUrl.trim(), label: label.trim() }
-        : {}),
+      ...(isCustom ? { baseUrl: baseUrl.trim(), label: label.trim() } : {}),
     })
       .then(() => {
         onClose();
