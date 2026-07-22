@@ -25,6 +25,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 
 import {
+  AGENT_RUN_STATUSES,
   isRuntimeEventEnvelope,
   type AgentRunStatus,
   type RuntimeApiEventType,
@@ -127,6 +128,46 @@ interface ConversationHead {
   readonly latest_run_id_any_status?: string | null;
 }
 
+/** GET /v1/agent/conversations/{id}/runs — the multi-run selector's data (Phase 6). */
+interface RunSummaryPayload {
+  readonly run_id?: string | null;
+  readonly status?: string | null;
+  readonly model_name?: string | null;
+  readonly created_at?: string | null;
+  readonly started_at?: string | null;
+}
+interface RunListPayload {
+  readonly runs?: readonly RunSummaryPayload[] | null;
+}
+
+function asRunStatus(value: unknown): AgentRunStatus | null {
+  return typeof value === "string" &&
+    (AGENT_RUN_STATUSES as readonly string[]).includes(value)
+    ? (value as AgentRunStatus)
+    : null;
+}
+
+function parseRuns(payload: RunListPayload): readonly RunListItem[] {
+  const out: RunListItem[] = [];
+  for (const entry of payload.runs ?? []) {
+    const runId = typeof entry.run_id === "string" ? entry.run_id : "";
+    if (runId === "") {
+      continue;
+    }
+    out.push({
+      runId,
+      // The summary carries no goal text; use the model name as a lightweight
+      // label when present (the selector falls back to a generic run label).
+      goal: typeof entry.model_name === "string" ? entry.model_name : null,
+      status: asRunStatus(entry.status),
+      startedAt:
+        (typeof entry.started_at === "string" ? entry.started_at : null) ??
+        (typeof entry.created_at === "string" ? entry.created_at : null),
+    });
+  }
+  return out;
+}
+
 export function useRunSession(options: UseRunSessionOptions): RunSession {
   const {
     conversationId,
@@ -141,10 +182,10 @@ export function useRunSession(options: UseRunSessionOptions): RunSession {
   // server-resolved conversation head. There is NO precedence coalescing in the
   // render path (the old ``selectedRunId ?? explicitRunId ?? autoResolved`` trap):
   // the last bind wins, so a fresh send after a manual selection is never shadowed
-  // (desktop-run-identity §D3). ``runs`` backs the multi-run selector; it stays
-  // empty until the runs-list endpoint lands (Phase 6) — the dead ``GET /v1/agent/
-  // runs`` auto-resolve (that route is POST-only → 405) is gone.
-  const [runs] = useState<readonly RunListItem[]>(EMPTY_RUNS);
+  // (desktop-run-identity §D3). ``runs`` backs the multi-run selector, populated
+  // from GET /v1/agent/conversations/{id}/runs (Phase 6) — the durable replacement
+  // for the dead ``GET /v1/agent/runs`` auto-resolve (that route is POST-only → 405).
+  const [runs, setRuns] = useState<readonly RunListItem[]>(EMPTY_RUNS);
   const [boundRunId, setBoundRunId] = useState<string | null>(null);
   const [isResolving, setIsResolving] = useState(false);
   const [resolveNonce, setResolveNonce] = useState(0);
@@ -176,6 +217,7 @@ export function useRunSession(options: UseRunSessionOptions): RunSession {
   // conversation's own head run (if any).
   useEffect(() => {
     setBoundRunId(null);
+    setRuns(EMPTY_RUNS);
   }, [conversationId]);
 
   // A deep-linked / host-supplied ``runId`` binds directly. Kept as an effect (not
@@ -226,6 +268,35 @@ export function useRunSession(options: UseRunSessionOptions): RunSession {
       .finally(() => {
         if (!cancelled) {
           setIsResolving(false);
+        }
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [transport, conversationId, enabled, resolveNonce]);
+
+  // Populate the multi-run selector from the runs-list endpoint (Phase 6),
+  // alongside head resolution. Best-effort: a failure (never-run conversation,
+  // the "new" sentinel id, a transient error) leaves an empty selector, which
+  // renders nothing for <=1 run. Does NOT drive binding — that stays boundRunId.
+  useEffect(() => {
+    if (!enabled) {
+      return;
+    }
+    let cancelled = false;
+    void transport
+      .request<RunListPayload>({
+        method: "GET",
+        path: `/v1/agent/conversations/${conversationId}/runs`,
+      })
+      .then((payload) => {
+        if (!cancelled) {
+          setRuns(parseRuns(payload));
+        }
+      })
+      .catch(() => {
+        if (!cancelled) {
+          setRuns(EMPTY_RUNS);
         }
       });
     return () => {

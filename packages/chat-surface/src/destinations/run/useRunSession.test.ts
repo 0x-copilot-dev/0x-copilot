@@ -241,16 +241,21 @@ describe("useRunSession — lifecycle status", () => {
   it("moves resolving → connecting → streaming as it binds and receives events", async () => {
     const transport = new FakeTransport();
     let resolveRuns: (value: unknown) => void = () => {};
-    transport.requestHandler = () =>
-      new Promise((resolve) => {
-        resolveRuns = resolve;
-      });
+    // The head GET drives resolving→connecting; keep it deferred. The parallel
+    // runs-list GET (Phase 6, multi-run selector) resolves immediately + empty so
+    // it doesn't interfere with the lifecycle assertion.
+    transport.requestHandler = (req) =>
+      req.path.endsWith("/runs")
+        ? Promise.resolve({ runs: [] })
+        : new Promise((resolve) => {
+            resolveRuns = resolve;
+          });
 
     const { result } = renderRunSession(transport, {
       conversationId: "conv-1",
     });
 
-    // Request in flight, no run yet → resolving.
+    // Head request in flight, no run yet → resolving.
     expect(result.current.status).toBe("resolving");
 
     await act(async () => {
@@ -391,6 +396,41 @@ describe("useRunSession — error + retry (FR-3.32)", () => {
 });
 
 describe("useRunSession — multi-run selection (FR-3.26)", () => {
+  it("populates runs from the runs-list endpoint newest-first (Phase 6)", async () => {
+    const transport = new FakeTransport();
+    transport.requestHandler = async (req) =>
+      req.path.endsWith("/runs")
+        ? {
+            runs: [
+              {
+                run_id: "run-a",
+                status: "running",
+                model_name: "gpt-5.4",
+                created_at: "2026-05-17T10:00:00.000Z",
+              },
+              {
+                run_id: "run-b",
+                status: "completed",
+                model_name: "gpt-5.4",
+                created_at: "2026-05-17T09:00:00.000Z",
+              },
+            ],
+          }
+        : { latest_run_id: "run-a" };
+
+    const { result } = renderRunSession(transport, {
+      conversationId: "conv-1",
+    });
+
+    await waitFor(() =>
+      expect(result.current.runs.map((r) => r.runId)).toEqual([
+        "run-a",
+        "run-b",
+      ]),
+    );
+    expect(result.current.runs[0].status).toBe("running");
+  });
+
   it("rebinds the stream to the selected run and resets accumulated events", async () => {
     const transport = new FakeTransport();
     // The head binds run-a; a manual `selectRun` then rebinds to another run id
