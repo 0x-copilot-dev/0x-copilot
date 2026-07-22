@@ -1150,7 +1150,7 @@ describe("RunDestination — empty/idle + multi-run (PR-3.11 / FR-3.25/3.26)", (
     );
   });
 
-  it("auto-binds the conversation's head (live) run; the multi-run selector stays empty until the runs-list lands (Phase 6)", async () => {
+  it("auto-binds the conversation's head (live) run and populates the multi-run selector (Phase 6)", async () => {
     const transport = new FakeTransport();
     transport.requestHandler = async (req) =>
       req.path.includes("/messages") ? { messages: [] } : TWO_RUNS;
@@ -1163,10 +1163,11 @@ describe("RunDestination — empty/idle + multi-run (PR-3.11 / FR-3.25/3.26)", (
       expect(transport.sessionSub?.path).toBe("/v1/agent/runs/run-a/stream"),
     );
     expect(screen.queryByTestId("run-empty-state")).toBeNull();
-    // `session.runs` stays empty this phase (the runs-list + RunMultiSelect data
-    // source lands in Phase 6), so the selector renders NO chrome yet — even
-    // though the conversation actually has more than one run.
-    expect(screen.queryByTestId("run-multi-select")).toBeNull();
+    // Phase 6: the runs-list endpoint populates `session.runs`, so the multi-run
+    // selector now renders (this conversation has two runs).
+    await waitFor(() =>
+      expect(screen.queryByTestId("run-multi-select")).not.toBeNull(),
+    );
   });
 
   it("rebinds the session's SSE tail to another run via the runId seam without remounting the canvas (FR-3.26)", async () => {
