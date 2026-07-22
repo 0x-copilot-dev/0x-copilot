@@ -1,6 +1,10 @@
 # Remaining workstreams — principal-engineer implementation plan
 
-Current-state-aware plans (read-only planning fan-out, post the A1/B/C/D2/cosmetic/litellm-1+2 merges). D5 (web convergence) is the lead-held capstone: mount chat-surface ModelBehaviorPage on web AFTER D1/D3/D4, retire legacy ModelAndBehavior, wire desktop ApprovalPolicy→/v1/me/policies/tool-use, add a slug↔page invariant test. Order: (litellm-3, B3) independent ∥ ; Model&behavior D1/D3/D4 (backend parallel, frontend serialized on ModelBehaviorPage+both binders); D5 capstone last.
+> **Status (2026-07-22):** ✅ **SHIPPED since this plan was written** — **litellm slice-3** (tokens, PR #200) and **D1 reasoning-depth + D3 web-access + D4 spend-cap** (PR #201). The D1/D3/D4/slice-3 sections below are kept for the record but are **DONE**.
+>
+> **Still remaining:** **B3** (custom OpenAI-compatible endpoint), **D5** (web-convergence capstone), the two housekeeping items (global ~13px base size; reconcile `LOCAL_MODEL_CATALOG`↔`LOCAL_MODEL_PRESETS`), and the flagged follow-up (grant `admin:budgets` to `role_system_admin` — a backend migration — so org-scoped _team_ budgets work under enforce; the solo self-service cap already works).
+
+Current-state-aware plans (read-only planning fan-out, post the A1/B/C/D2/cosmetic/litellm-1+2 merges). D5 (web convergence) is the lead-held capstone: mount chat-surface ModelBehaviorPage on web AFTER D1/D3/D4, retire legacy ModelAndBehavior, wire desktop ApprovalPolicy→/v1/me/policies/tool-use, add a slug↔page invariant test.
 
 ---
 
