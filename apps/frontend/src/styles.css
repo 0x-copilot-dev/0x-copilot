@@ -8669,13 +8669,83 @@ body.login-body {
   padding: var(--space-2xl) var(--space-lg);
 }
 
+/* Design .login-card is a BORDERLESS, transparent, centred floating card
+ * (no panel bg / border / radius / padding) — NOT the design-system Card. */
 .loginx-card {
   width: 100%;
-  max-width: 26rem;
-  padding: var(--space-2xl);
+  max-width: 372px; /* design-exact; off the token ladder */
+  padding: 0;
+  border: 0;
+  border-radius: 0;
+  background: transparent;
+  box-shadow: none;
+  text-align: center;
   display: flex;
   flex-direction: column;
   gap: var(--space-lg);
+}
+
+/* ===== Bespoke login buttons (.cbtn) — copied faithfully from the design
+ * copilot.css .cbtn family. NOT the shared design-system <Button> (which is
+ * used app-wide). Colours are design-system tokens whose values equal the
+ * design's --line2/--accent/--mut/etc. ===== */
+.cbtn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  padding: 6px 11px;
+  border-radius: var(--radius-sm); /* 6px */
+  border: 1px solid var(--color-border-strong); /* --line2 */
+  background: transparent;
+  color: var(--color-text);
+  font-family: inherit;
+  font-size: 12px; /* design-exact; off the token ladder */
+  font-weight: var(--font-weight-medium);
+  cursor: pointer;
+  white-space: nowrap;
+  transition:
+    background 0.12s ease,
+    border-color 0.12s ease;
+}
+.cbtn:hover:not(:disabled) {
+  background: var(--color-surface-muted); /* --panel2 */
+  border-color: var(--color-border-stronger); /* --line3 */
+}
+.cbtn:focus-visible {
+  outline: 2px solid var(--color-focus-ring);
+  outline-offset: 2px;
+}
+.cbtn svg {
+  width: 13px;
+  height: 13px;
+}
+.cbtn--pri {
+  background: var(--color-accent);
+  color: var(--color-accent-contrast);
+  border-color: transparent;
+  font-weight: var(--font-weight-semibold);
+}
+.cbtn--pri:hover:not(:disabled) {
+  background: var(--color-accent-strong);
+  border-color: transparent;
+}
+.cbtn--ghost {
+  background: transparent;
+  border-color: transparent;
+  color: var(--color-text-muted); /* --mut */
+}
+.cbtn--ghost:hover:not(:disabled) {
+  background: var(--color-surface-muted);
+  color: var(--color-text);
+}
+.cbtn--sm {
+  padding: 4px 9px;
+  font-size: 11.5px; /* design-exact; off the token ladder */
+}
+.cbtn:disabled {
+  opacity: 0.45;
+  cursor: not-allowed;
 }
 
 /* The canonical 0xCopilot turbine (BrandMark) */
@@ -8694,7 +8764,7 @@ body.login-body {
 }
 .loginx-title {
   margin: 0;
-  font-size: var(--font-size-2xl);
+  font-size: var(--font-size-xl); /* 18px — design .login-card h1 */
   font-weight: var(--font-weight-semibold);
   letter-spacing: -0.02em;
   line-height: 1.2;
@@ -8705,8 +8775,8 @@ body.login-body {
 .loginx-sub {
   margin: 0;
   color: var(--color-text-muted);
-  font-size: var(--font-size-sm);
-  line-height: 1.5;
+  font-size: 12px; /* design-exact; off the token ladder */
+  line-height: 1.65;
 }
 
 /* Option stack */
@@ -8719,14 +8789,16 @@ body.login-body {
 .loginx-opt {
   display: flex;
   align-items: center;
-  gap: var(--space-md);
+  gap: 11px; /* design-exact; off the token ladder */
   width: 100%;
-  padding: var(--space-md);
-  border: 1px solid var(--color-border);
-  border-radius: var(--radius-md);
+  padding: 10px 12px; /* design-exact; off the token ladder */
+  border: 1px solid var(--color-border-strong); /* --line2 */
+  border-radius: 9px; /* design-exact; off the token ladder */
   background: var(--color-surface);
   color: var(--color-text);
-  font: inherit;
+  font-family: inherit;
+  font-size: 13px; /* design-exact; off the token ladder */
+  font-weight: var(--font-weight-medium);
   text-align: left;
   cursor: pointer;
   transition:
@@ -8734,8 +8806,8 @@ body.login-body {
     background-color 0.12s ease;
 }
 .loginx-opt:hover:not(:disabled) {
-  border-color: var(--color-border-strong, var(--color-accent));
-  background: var(--color-surface-2, var(--color-surface));
+  border-color: var(--color-border-stronger); /* --line3 */
+  background: var(--color-surface-muted);
 }
 .loginx-opt:focus-visible {
   outline: 2px solid var(--color-focus-ring);
@@ -8757,23 +8829,26 @@ body.login-body {
   border-color: transparent;
 }
 .loginx-opt[data-variant="primary"] .loginx-opt__sub {
-  color: color-mix(
-    in srgb,
-    var(--color-accent-contrast, var(--color-bg)) 78%,
-    transparent
-  );
+  color: color-mix(in srgb, var(--color-accent-contrast) 60%, transparent);
 }
 
 .loginx-opt__icon {
   flex: 0 0 auto;
   display: grid;
   place-items: center;
-  width: 1.75rem;
-  height: 1.75rem;
+  width: 28px; /* design-exact; off the token ladder */
+  height: 28px; /* design-exact; off the token ladder */
+  border-radius: 7px; /* design-exact; off the token ladder */
+  background: var(--color-surface-elevated); /* --panel3 */
+  color: var(--color-text-strong); /* --tx2 */
+}
+.loginx-opt[data-variant="primary"] .loginx-opt__icon {
+  background: color-mix(in srgb, var(--color-accent-contrast) 14%, transparent);
+  color: var(--color-accent-contrast);
 }
 .loginx-opt__glyph {
-  width: 1.25rem;
-  height: 1.25rem;
+  width: 15px; /* design-exact; off the token ladder */
+  height: 15px; /* design-exact; off the token ladder */
 }
 .loginx-opt__body {
   display: flex;
@@ -8783,39 +8858,42 @@ body.login-body {
   flex: 1 1 auto;
 }
 .loginx-opt__label {
-  font-size: var(--font-size-sm);
-  font-weight: var(--font-weight-semibold);
+  font-size: 13px; /* design-exact; off the token ladder */
+  font-weight: var(--font-weight-medium);
 }
 .loginx-opt__sub {
-  font-size: var(--font-size-xs);
-  color: var(--color-text-subtle);
+  display: block;
+  font-family: var(--font-mono);
+  font-size: 10px; /* design-exact; off the token ladder */
+  font-weight: var(--font-weight-regular);
+  color: var(--color-text-subtle); /* --mut2 */
+  margin-top: 1px;
 }
 .loginx-opt__chev {
   flex: 0 0 auto;
   display: grid;
   place-items: center;
-  color: var(--color-text-subtle);
+  color: var(--color-text-subtle); /* --mut2 */
 }
 .loginx-opt__chev svg {
-  width: 1.1rem;
-  height: 1.1rem;
+  width: 14px; /* design-exact; off the token ladder */
+  height: 14px; /* design-exact; off the token ladder */
 }
 .loginx-opt[data-variant="primary"] .loginx-opt__chev {
-  color: color-mix(
-    in srgb,
-    var(--color-accent-contrast, var(--color-bg)) 80%,
-    transparent
-  );
+  color: color-mix(in srgb, var(--color-accent-contrast) 60%, transparent);
 }
 
 /* Divider */
 .loginx-divider {
   display: flex;
   align-items: center;
-  gap: var(--space-md);
-  color: var(--color-text-subtle);
-  font-size: var(--font-size-xs);
-  padding: var(--space-2xs) 0;
+  gap: 10px; /* design-exact; off the token ladder */
+  margin: 15px 0 7px; /* design-exact; off the token ladder */
+  font-family: var(--font-mono);
+  font-size: var(--font-size-3xs); /* 9px */
+  color: var(--color-text-subtle); /* --mut2 */
+  text-transform: uppercase;
+  letter-spacing: 0.12em;
 }
 .loginx-divider::before,
 .loginx-divider::after {
@@ -8834,32 +8912,39 @@ body.login-body {
 }
 .loginx-note {
   margin: 0;
-  font-size: var(--font-size-xs);
-  line-height: 1.5;
-  color: var(--color-text-muted);
+  font-size: 10.5px; /* design-exact; off the token ladder */
+  line-height: 1.65;
+  color: var(--color-text-subtle); /* --mut2 */
 }
 .loginx-note strong {
-  color: var(--color-text);
-  font-weight: var(--font-weight-semibold);
+  color: var(--color-text-muted); /* --mut */
+  font-weight: var(--font-weight-medium);
 }
 .loginx-version {
   margin: 0;
+  display: flex;
+  justify-content: center;
+  gap: 14px; /* design-exact; off the token ladder */
   font-family: var(--font-mono);
-  font-size: var(--font-size-2xs);
-  color: var(--color-text-subtle);
+  font-size: var(--font-size-3xs); /* 9px */
+  color: var(--color-text-subtle); /* --mut2 */
   letter-spacing: 0.01em;
 }
 
 /* Back link */
 .loginx-back {
   align-self: flex-start;
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
   border: 0;
   background: transparent;
-  color: var(--color-text-muted);
-  font: inherit;
-  font-size: var(--font-size-sm);
+  color: var(--color-text-muted); /* --mut */
+  font-family: var(--font-mono);
+  font-size: 11px; /* design-exact; off the token ladder */
   cursor: pointer;
   padding: 0;
+  margin-bottom: 14px; /* design .backlink */
 }
 .loginx-back:hover {
   color: var(--color-text);
@@ -8882,12 +8967,12 @@ body.login-body {
 .loginx-wallet-row {
   display: flex;
   align-items: center;
-  gap: var(--space-md);
+  gap: 10px; /* design .mrow */
   width: 100%;
-  padding: var(--space-md);
-  border: 1px solid var(--color-border);
+  padding: 10px; /* design .mrow */
+  border: 1px solid var(--color-border-strong); /* --line2 */
   border-radius: var(--radius-md);
-  background: var(--color-surface);
+  background: var(--color-surface-muted);
   color: var(--color-text);
   font: inherit;
   text-align: left;
@@ -8971,22 +9056,63 @@ body.login-body {
   line-height: 1.5;
 }
 
-/* Connecting / verifying */
+/* Connecting / verifying / wallet-error / google-error — design .empty:
+ * a centred BLOCK (not flex), muted text, small h3-scale title. */
 .loginx-wait {
-  display: flex;
-  flex-direction: column;
-  align-items: center;
-  gap: var(--space-sm);
+  display: block;
   text-align: center;
-  padding: var(--space-md) 0;
+  padding: 30px 0; /* design .empty inline */
+  color: var(--color-text-muted); /* --mut */
+}
+/* Small h3-scale headings (13.5px) for waiting/done/error — NOT the 18px
+ * .loginx-title used on pick/sign. Design .empty h3. */
+.loginx-wait .loginx-title,
+.loginx-done .loginx-title {
+  font-size: 13.5px; /* design-exact; off the token ladder */
+  font-weight: var(--font-weight-semibold);
+  line-height: 1.2;
+  color: var(--color-text); /* --tx */
+  margin-top: 14px;
+  margin-bottom: 4px;
+}
+.loginx-wait .loginx-sub,
+.loginx-done .loginx-sub {
+  font-size: 12px; /* design .empty p */
+  line-height: 1.6;
+  max-width: 340px;
+  margin-left: auto;
+  margin-right: auto;
+}
+/* Ember warning glyph on the wallet/Google error screens. */
+.loginx-wait__warn {
+  display: inline-flex;
+  color: var(--color-danger); /* --ember */
+  font-size: 26px; /* design werr/gerr inline */
+}
+.loginx-wait__warn svg {
+  width: 26px;
+  height: 26px;
+}
+/* Button row (sign / werr / gerr) + lone cancel spacing inside .loginx-wait. */
+.loginx-wait .loginx-actions {
+  margin-top: 18px;
+}
+.loginx-wait > .cbtn {
+  margin-top: 18px;
+}
+.loginx-wait .loginx-back {
+  align-self: auto;
+  margin-top: 14px;
+  margin-bottom: 0;
 }
 .loginx-spinner {
-  width: 1.75rem;
-  height: 1.75rem;
+  display: inline-block;
+  width: 24px; /* design connecting spin */
+  height: 24px;
   border-radius: 999px;
-  border: 2px solid var(--color-border);
+  border: 2px solid var(--color-border-strong); /* --line2 */
   border-top-color: var(--color-accent);
-  animation: loginx-spin 0.8s linear infinite;
+  animation: loginx-spin 0.7s linear infinite;
 }
 @keyframes loginx-spin {
   to {
@@ -8999,16 +9125,17 @@ body.login-body {
   }
 }
 
-/* Signature review */
+/* Signature review — design .sig-addr / .sig-msg */
 .loginx-addr {
   display: flex;
   align-items: center;
-  gap: var(--space-sm);
-  padding: var(--space-sm) var(--space-md);
-  border: 1px solid var(--color-border);
+  gap: 9px; /* design-exact; off the token ladder */
+  margin-top: 16px;
+  padding: 10px 12px; /* design-exact; off the token ladder */
+  border: 1px solid var(--color-border-strong); /* --line2 */
   border-radius: var(--radius-md);
-  background: var(--color-surface-2, var(--color-surface));
-  flex-wrap: wrap;
+  background: var(--color-surface); /* --panel */
+  text-align: left;
 }
 .loginx-addr__dot {
   width: 0.55rem;
@@ -9019,23 +9146,26 @@ body.login-body {
 }
 .loginx-addr__hex {
   font-family: var(--font-mono);
-  font-size: var(--font-size-sm);
+  font-size: 12px; /* design-exact; off the token ladder */
   color: var(--color-text);
 }
 .loginx-addr__meta {
-  font-size: var(--font-size-xs);
-  color: var(--color-text-subtle);
+  margin-left: auto;
+  font-family: var(--font-mono);
+  font-size: 10px; /* design-exact; off the token ladder */
+  color: var(--color-text-subtle); /* --mut2 */
 }
 .loginx-message {
-  margin: 0;
-  padding: var(--space-md);
-  border: 1px solid var(--color-border);
+  margin: 12px 0 0;
+  text-align: left;
+  padding: 11px 13px; /* design-exact; off the token ladder */
+  border: 1px solid var(--color-border); /* --line */
   border-radius: var(--radius-md);
-  background: var(--color-surface-2, var(--color-surface));
+  background: #0d0d10; /* design --ink2; off the token ladder */
   font-family: var(--font-mono);
-  font-size: var(--font-size-2xs);
-  line-height: 1.55;
-  color: var(--color-text-muted);
+  font-size: 11px; /* design-exact; off the token ladder */
+  line-height: 1.7;
+  color: var(--color-text-strong); /* --tx2 */
   white-space: pre-wrap;
   word-break: break-word;
   max-height: 12rem;
@@ -9043,32 +9173,27 @@ body.login-body {
 }
 .loginx-actions {
   display: flex;
-  gap: var(--space-sm);
-  justify-content: flex-end;
+  gap: var(--space-sm); /* 8px */
+  margin-top: 16px;
+}
+.loginx-actions .cbtn {
+  flex: 1 1 0;
+  justify-content: center;
+  padding: 9px 12px; /* design .login-row .cbtn */
 }
 
-/* Done */
+/* Done — design .empty (block, muted) + bare jade check (no circle). */
 .loginx-done {
-  display: flex;
-  flex-direction: column;
-  align-items: center;
-  gap: var(--space-sm);
+  display: block;
   text-align: center;
-  padding: var(--space-md) 0;
+  padding: 30px 0;
+  color: var(--color-text-muted); /* --mut */
 }
 .loginx-done__check {
-  display: grid;
-  place-items: center;
-  width: 2.5rem;
-  height: 2.5rem;
-  border-radius: 999px;
-  background: var(
-    --color-success-bg,
-    color-mix(in srgb, var(--color-success) 16%, transparent)
-  );
-  color: var(--color-success);
+  display: inline-flex;
+  color: var(--color-success); /* --jade */
 }
 .loginx-done__check svg {
-  width: 1.4rem;
-  height: 1.4rem;
+  width: 30px; /* design-exact; off the token ladder */
+  height: 30px;
 }

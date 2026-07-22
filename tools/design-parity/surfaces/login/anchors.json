@@ -104,7 +104,7 @@
       "label": "connecting.cancel",
       "group": "Connecting (waiting)",
       "design": ".empty .cbtn",
-      "live": ".loginx-wait .ui-button"
+      "live": ".loginx-wait .cbtn"
     },
 
     {
@@ -148,7 +148,7 @@
       "label": "sign.btn.cancel",
       "group": "Sign",
       "design": ".login-row .cbtn:not(.cbtn--pri)",
-      "live": ".loginx-actions .ui-button--ghost"
+      "live": ".loginx-actions .cbtn:not(.cbtn--pri)"
     },
     {
       "label": "sign.btn.primary",
