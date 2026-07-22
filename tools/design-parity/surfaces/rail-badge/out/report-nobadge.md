@@ -5,7 +5,7 @@ Design baseline (source of truth) vs live app, by computed style.
 - Design: `surfaces/rail-badge/out/design-nobadge.json`
 - Live: `surfaces/rail-badge/out/live-nobadge.json`
 
-**Summary:** 🔴 HIGH 5 · 🟠 MEDIUM 41 · 🟡 LOW 7 · ⚪ INFO 13
+**Summary:** 🔴 HIGH 5 · 🟠 MEDIUM 38 · 🟡 LOW 17 · ⚪ INFO 13
 
 ## 🔴 HIGH (5)
 
@@ -17,12 +17,10 @@ Design baseline (source of truth) vs live app, by computed style.
 | `rail.foot`       | Rail foot   | borderColor     | rgb(236, 236, 241) (--tx) → rgba(255, 255, 255, 0.06) rgb(236, 236, 241) rgb(236, 236, 241) rgb(236, 236, 241) |
 | `rail.me`         | Rail foot   | borderColor     | rgba(255, 255, 255, 0.1) (--line2) → rgb(212, 212, 219) (--tx2)                                                |
 
-## 🟠 MEDIUM (41)
+## 🟠 MEDIUM (38)
 
 | Element              | Group             | Property       | Design → Live           |
 | -------------------- | ----------------- | -------------- | ----------------------- |
-| `shell.body.grid`    | Shell frame       | fontSize       | 13px → 13.6px (+0.6px)  |
-| `rail.container`     | Rail              | fontSize       | 13px → 13.6px (+0.6px)  |
 | `rail.container`     | Rail              | gap            | 2px → normal            |
 | `rail.brand`         | Rail              | display        | grid → flex             |
 | `rail.brand`         | Rail              | justifyContent | normal → center         |
@@ -49,7 +47,6 @@ Design baseline (source of truth) vs live app, by computed style.
 | `rail.item.active`   | Active state      | display        | grid → flex             |
 | `rail.item.active`   | Active state      | justifyContent | normal → center         |
 | `rail.item.active`   | Active state      | padding        | 1px 6px → 0px           |
-| `rail.foot`          | Rail foot         | fontSize       | 13px → 13.6px (+0.6px)  |
 | `rail.foot`          | Rail foot         | padding        | 0px → 8px 0px 0px 0px   |
 | `rail.foot`          | Rail foot         | margin         | 455px 0px 0px 0px → 0px |
 | `rail.foot`          | Rail foot         | borderWidth    | 0px → 1px 0px 0px 0px   |
@@ -63,17 +60,27 @@ Design baseline (source of truth) vs live app, by computed style.
 | `rail.me`            | Rail foot         | borderWidth    | 1px → 0px               |
 | `rail.me`            | Rail foot         | borderRadius   | 50% → 999px             |
 
-## 🟡 LOW (7)
+## 🟡 LOW (17)
 
-| Element           | Group       | Property    | Design → Live               |
-| ----------------- | ----------- | ----------- | --------------------------- |
-| `shell.body.grid` | Shell frame | lineHeight  | 19.5px → normal             |
-| `shell.body.grid` | Shell frame | width       | 1218px → 1220px             |
-| `rail.container`  | Rail        | lineHeight  | 19.5px → normal             |
-| `rail.foot`       | Rail foot   | lineHeight  | 19.5px → normal             |
-| `rail.foot`       | Rail foot   | height      | 65px → 75px                 |
-| `rail.foot`       | Rail foot   | borderStyle | none → solid none none none |
-| `rail.me`         | Rail foot   | borderStyle | solid → none                |
+| Element              | Group             | Property    | Design → Live                                                       |
+| -------------------- | ----------------- | ----------- | ------------------------------------------------------------------- |
+| `shell.body.grid`    | Shell frame       | lineHeight  | 19.5px → normal                                                     |
+| `shell.body.grid`    | Shell frame       | width       | 1218px → 1220px                                                     |
+| `rail.container`     | Rail              | lineHeight  | 19.5px → normal                                                     |
+| `rail.brand`         | Rail              | transition  | all → background-color 0.12s, color 0.12s                           |
+| `rail.item.run`      | Destination items | transition  | background 0.12s, color 0.12s → background-color 0.12s, color 0.12s |
+| `rail.item.chats`    | Destination items | transition  | background 0.12s, color 0.12s → background-color 0.12s, color 0.12s |
+| `rail.item.projects` | Destination items | transition  | background 0.12s, color 0.12s → background-color 0.12s, color 0.12s |
+| `rail.item.activity` | Destination items | transition  | background 0.12s, color 0.12s → background-color 0.12s, color 0.12s |
+| `rail.item.tools`    | Destination items | transition  | background 0.12s, color 0.12s → background-color 0.12s, color 0.12s |
+| `rail.item.skills`   | Destination items | transition  | background 0.12s, color 0.12s → background-color 0.12s, color 0.12s |
+| `rail.item.active`   | Active state      | transition  | background 0.12s, color 0.12s → background-color 0.12s, color 0.12s |
+| `rail.foot`          | Rail foot         | lineHeight  | 19.5px → normal                                                     |
+| `rail.foot`          | Rail foot         | height      | 65px → 75px                                                         |
+| `rail.foot`          | Rail foot         | borderStyle | none → solid none none none                                         |
+| `rail.foot.settings` | Rail foot         | transition  | background 0.12s, color 0.12s → background-color 0.12s, color 0.12s |
+| `rail.me`            | Rail foot         | transition  | all → background-color 0.12s, color 0.12s                           |
+| `rail.me`            | Rail foot         | borderStyle | solid → none                                                        |
 
 ## ⚪ INFO (13)
 

@@ -62,13 +62,26 @@
   --font-size-3xs: 0.5625rem; /* 9px — mono micro-labels: settings group header (.set-sec__head) + FTUE fr-* meta/note/foot/ack */
   --font-size-2xs: 0.7rem; /* 11.2px — badge, kbd */
   --font-size-xs: 0.78rem; /* 12.5px — hint, caption */
-  --font-size-sm: 0.85rem; /* 13.6px — secondary body */
+  --font-size-sm: 0.8125rem; /* 13px — secondary body + the inherited body base (design copilot.css:104 `body{font-size:13px}`) */
   --font-size-md: 0.875rem; /* 14.0px — UI label / item title */
   --font-size-lg: 1rem; /* 16.0px — body */
   --font-size-xl: 1.125rem; /* 18.0px — section title */
   --font-size-2xl: 1.4rem; /* 22.4px — page heading */
   --font-size-3xl: 2rem; /* 32.0px — display heading */
-  --font-size-mono-10: 0.625rem; /* 10px — canonical small-mono pill metadata (atlas-model-pill, fr-wchip); deliberately off the main ladder */
+
+  /* MONO MICRO-LADDER — the design's mono metadata register is a HALF-PIXEL
+   * ladder (8.5 / 9 / 9.5 / 10 / 10.5 / 11) that the sans t-shirt scale above
+   * cannot express, so these rungs sit deliberately OFF the main ladder and are
+   * named by their px value: a call site cannot mis-pick a rung whose name is
+   * the number it wanted. Do NOT reach into --font-size-3xs / --font-size-2xs
+   * for mono metadata — those are sans rungs that happen to be nearby, and
+   * reaching for them is exactly how `.sect-h` shipped at 11.2px.
+   * (--font-size-3xs 9px covers the ladder's 9px rung; --font-size-2xs 11.2px
+   * covers its 11px rung within 0.2px.) */
+  --font-size-mono-8-5: 0.53125rem; /* 8.5px — rail count badge (copilot.css:353 .rbadge) */
+  --font-size-mono-9-5: 0.59375rem; /* 9.5px — section head (copilot.css:1565 .sect-h), .cmdk__row, .sheet-h */
+  --font-size-mono-10: 0.625rem; /* 10px — canonical small-mono pill metadata (atlas-model-pill, fr-wchip, .side-h, .act-day) */
+  --font-size-mono-10-5: 0.65625rem; /* 10.5px — status chip (copilot.css:580 .chip), row time (copilot.css:1657 .lrow__time) */
 
   --font-weight-regular: 400;
   --font-weight-medium: 500;
@@ -164,7 +177,16 @@
 :root,
 :root[data-theme="dark"] {
   color-scheme: dark;
-  /* v2 "quiet" near-black neutral ladder. */
+  /* v2 "quiet" near-black neutral ladder.
+   *
+   * --color-bg is PINNED to the design's `--ink` (copilot.css:8 `#09090b`) —
+   * byte-for-byte, deliberately. Do NOT "fix" it to the mock's `#050506`: that
+   * value is the mock's STAGE (copilot.css:105 `body`, :160-168 `.stage`), the
+   * radial-gradient backdrop the mock centres a fake 1220x840 window on. The
+   * application window itself is painted `var(--ink)` (copilot.css:179 `.mw`,
+   * :386 `.main`), and a real full-screen desktop/web app has no stage behind
+   * it. Retargeting this token would move the app canvas off --ink and break
+   * the nine design rules that paint it. */
   --color-bg: #09090b;
   --color-bg-elevated: #0d0d10;
   --color-surface: #111114;
@@ -176,10 +198,14 @@
   --color-text: #ececf1;
   --color-text-muted: #98989f;
   --color-text-subtle: #64646d;
-  /* Brand sky is the default accent; jade = success, amber = warning. */
-  --color-accent: #5fb2ec;
-  --color-accent-strong: #8cc8f4;
-  --color-accent-contrast: #08131d;
+  /* ACCENT — DERIVED tier. This theme block is one of the THREE sole writers of
+     the public --color-accent* tier; the hue comes from the private
+     --accent-seed* tier (the [data-accent] blocks below). On a dark ground the
+     seed IS the accent, so the derivation is the identity function. See the
+     "ACCENT SEED TIER" comment below for the contract. */
+  --color-accent: var(--accent-seed);
+  --color-accent-strong: var(--accent-seed-strong);
+  --color-accent-contrast: var(--accent-seed-ink);
   /* Ember is the single destructive colour (v2 locked decision — an
      intentional shift from the old danger red). */
   --color-danger: #f0764f;
@@ -238,54 +264,85 @@
    * register, distinct from the sky primary. */
   --color-ember: #f0764f;
   --color-ember-bg: #2c1a12;
+
+  /* Scrim — the veil behind a modal / command palette / overlay. Deliberately
+   * declared HERE on bare :root and NOT inside a theme block: a scrim darkens
+   * whatever is BEHIND it, so it is ground-independent by construction (the
+   * design never overrides it either — the [data-theme="light"] block at
+   * copilot.css:70-83 touches neither `.scrim` nor `.cmdk-scrim`).
+   * Values: copilot.css:2226 (`.scrim` background) and :2227 (its blur). The
+   * design's second scrim (`.cmdk-scrim`, :2461-2465) differs only in alpha
+   * (0.60 vs 0.66) — folded to one value, because 0.06 alpha is imperceptible
+   * and a second token would just be a second thing to drift. */
+  --color-scrim: rgba(4, 4, 6, 0.66);
+  --blur-scrim: 2px;
 }
 
-/* Accent swatches — picked in Settings → Appearance.
-   Layered on top of the scheme so a swatch override wins regardless of theme. */
+/* ===========================================================================
+ * ACCENT SEED TIER — hue only. Picked in Settings → Appearance.
+ *
+ * THE CONTRACT (the fix for the accent-collapse bug, and the thing to grep in
+ * review): a [data-accent] block writes ONLY the private --accent-seed* tier
+ * and NEVER --color-accent / --color-accent-strong / --color-accent-contrast.
+ * The three [data-theme] blocks are the SOLE writers of that public tier.
+ *
+ * WHY. Before this split, BOTH [data-accent="…"] and [data-theme="…"] wrote
+ * --color-accent at identical specificity (0,2,0), so which one won was a
+ * property of SOURCE ORDER — and the theme blocks came later. Nine accent
+ * swatches therefore collapsed to exactly one colour in light and one in slate
+ * (measured: rail-badge/out/AUDIT.md:155). The user's stored preference was
+ * being honoured all the way to `data-accent` on <html>; the stylesheet threw
+ * it away. Two writers for one variable is the defect; one writer per tier is
+ * the fix, and it is structural rather than order-dependent.
+ *
+ * Adding a swatch = one block here. Adding a theme = one derivation block
+ * above. Cost is O(accents + themes), never O(accents x themes).
+ * ======================================================================== */
+:root,
 :root[data-accent="sky"] {
-  --color-accent: #5fb2ec;
-  --color-accent-strong: #8cc8f4;
-  --color-accent-contrast: #08131d;
+  --accent-seed: #5fb2ec;
+  --accent-seed-strong: #8cc8f4;
+  --accent-seed-ink: #08131d;
 }
 :root[data-accent="atlas-orange"] {
-  --color-accent: #d97757;
-  --color-accent-strong: #e2876a;
-  --color-accent-contrast: #1a0f0a;
+  --accent-seed: #d97757;
+  --accent-seed-strong: #e2876a;
+  --accent-seed-ink: #1a0f0a;
 }
 :root[data-accent="gold"] {
-  --color-accent: #d8b46a;
-  --color-accent-strong: #f0ca7a;
-  --color-accent-contrast: #1c160a;
+  --accent-seed: #d8b46a;
+  --accent-seed-strong: #f0ca7a;
+  --accent-seed-ink: #1c160a;
 }
 :root[data-accent="amber"] {
-  --color-accent: #f0b450;
-  --color-accent-strong: #f7c66f;
-  --color-accent-contrast: #1f1408;
+  --accent-seed: #f0b450;
+  --accent-seed-strong: #f7c66f;
+  --accent-seed-ink: #1f1408;
 }
 :root[data-accent="red"] {
-  --color-accent: #e26a6a;
-  --color-accent-strong: #ec8585;
-  --color-accent-contrast: #1d0a0a;
+  --accent-seed: #e26a6a;
+  --accent-seed-strong: #ec8585;
+  --accent-seed-ink: #1d0a0a;
 }
 :root[data-accent="lime"] {
-  --color-accent: #a4c878;
-  --color-accent-strong: #b9d791;
-  --color-accent-contrast: #0f1607;
+  --accent-seed: #a4c878;
+  --accent-seed-strong: #b9d791;
+  --accent-seed-ink: #0f1607;
 }
 :root[data-accent="teal"] {
-  --color-accent: #6cc5b3;
-  --color-accent-strong: #8ad5c5;
-  --color-accent-contrast: #07171a;
+  --accent-seed: #6cc5b3;
+  --accent-seed-strong: #8ad5c5;
+  --accent-seed-ink: #07171a;
 }
 :root[data-accent="blue"] {
-  --color-accent: #7bb7ff;
-  --color-accent-strong: #9ecaff;
-  --color-accent-contrast: #08111c;
+  --accent-seed: #7bb7ff;
+  --accent-seed-strong: #9ecaff;
+  --accent-seed-ink: #08111c;
 }
 :root[data-accent="violet"] {
-  --color-accent: #a78bd6;
-  --color-accent-strong: #bda4e3;
-  --color-accent-contrast: #110a1c;
+  --accent-seed: #a78bd6;
+  --accent-seed-strong: #bda4e3;
+  --accent-seed-ink: #110a1c;
 }
 
 :root[data-theme="light"] {
@@ -303,9 +360,23 @@
      cream bg; re-derived for the neutral ground). */
   --color-text-muted: #56565d;
   --color-text-subtle: #86868d;
-  /* Darkened brand sky for legible accent text/borders on the light ground. */
-  --color-accent: #1f6fb0;
-  --color-accent-strong: #185a94;
+  /* ACCENT — DERIVED tier (sole writer; see the ACCENT SEED TIER contract).
+     The seeds are tuned for a near-black ground and sit at ~2:1 on #f4f4f6 /
+     #ffffff, which is why this block previously hard-coded a single darkened
+     sky (#1f6fb0) — legible, but it also silently discarded the user's swatch.
+     Instead of one hand-tuned hex we darken the SEED toward near-black in
+     oklab (perceptual lightness), so every swatch keeps its hue AND clears the
+     contrast floor. The ink on the fill flips to near-white, exactly as the
+     design does (copilot.css:82 — the light block's ONLY accent write).
+     The mix percentages are TUNED against tools/design-parity/lib/
+     accent-matrix.mjs, which asserts contrast(accent, bg) >= 3.0 and
+     contrast(accent-contrast, accent) >= 4.5 in all 27 accent x theme cells.
+     At 60%/46% the worst light cell is `amber` — 4.62:1 on the ground and
+     4.82:1 for the ink on the fill. (Measured alternatives: 62% put amber's ink
+     at 4.54:1, too thin a margin to survive a rounding change; 58% cleared
+     5.05:1 but cost visible chroma. Re-run the gate after any change here.) */
+  --color-accent: color-mix(in oklab, var(--accent-seed) 60%, #0a0a0e);
+  --color-accent-strong: color-mix(in oklab, var(--accent-seed) 46%, #0a0a0e);
   --color-accent-contrast: #f4faff;
   --color-danger: #b42318;
   --color-danger-bg: #fff0ef;
@@ -332,9 +403,14 @@
   --color-text: #eef4fb;
   --color-text-muted: #a7b4c2;
   --color-text-subtle: #718094;
-  --color-accent: #7bb7ff;
-  --color-accent-strong: #9ecaff;
-  --color-accent-contrast: #08111c;
+  /* ACCENT — DERIVED tier (sole writer; see the ACCENT SEED TIER contract).
+     Slate is a dark ground, so the derivation is identical to dark: the seed IS
+     the accent. Note the behaviour change this is: slate used to pin #7bb7ff —
+     i.e. it silently forced the `blue` swatch on every slate user regardless of
+     their pick. Slate now honours the pick. That is the fix, not a regression. */
+  --color-accent: var(--accent-seed);
+  --color-accent-strong: var(--accent-seed-strong);
+  --color-accent-contrast: var(--accent-seed-ink);
   --color-danger: #ff7a90;
   --color-danger-bg: #3a1922;
   --color-danger-contrast: #2a0910;
@@ -357,14 +433,20 @@ body {
   background: var(--color-bg);
   color: var(--color-text);
   font-family: var(--font-sans);
-  /* v3 "quiet" base body size. The design anchors general body text at ~13px
-   * (copilot.css `body{font-size:13px}`); until now `body` set NO font-size, so
-   * every text node WITHOUT an explicit size fell back to the user-agent 16px
-   * default — the documented app-wide drift ("our global base is larger").
+  /* v3 "quiet" base body size. The design anchors general body text at a literal
+   * 13px (copilot.css:104 `body{font-size:13px}`); before this token existed on
+   * `body` at all, every text node WITHOUT an explicit size fell back to the
+   * user-agent 16px default — the documented app-wide drift ("our global base is
+   * larger").
    *
-   * `--font-size-sm` (0.85rem ≈ 13.6px, the "secondary body" / quiet step) is
-   * the closest token on the existing scale to the design's 13px, so we reuse
-   * it rather than mint a new value or an ad-hoc px.
+   * `--font-size-sm` IS that base, and it is exactly 13px (0.8125rem). It used
+   * to be 0.85rem = 13.6px, which was documented as "the closest token on the
+   * existing scale" — an approximation with no referent anywhere in the design,
+   * and the single largest source of measured drift in the parity harness (55
+   * rows across five surfaces). The token was retuned rather than joined by a
+   * new `--font-size-base` rung: 148 call sites already write
+   * `var(--font-size-sm, 13px)` (vs 2 writing 14px), so 13px is what the
+   * codebase already believed this token meant — only the number was wrong.
    *
    * WHY THIS IS SCOPED, NOT A BLIND GLOBAL OVERRIDE: this changes only the
    * *inherited* default for un-annotated text. It deliberately does NOT touch
@@ -419,10 +501,18 @@ textarea {
    * formatting). Default is the md tier; --sm/--lg override below. */
   font-size: var(--font-size-md);
   line-height: var(--line-height-tight);
-  /* Heavier than --font-weight-semibold (600) for the call-to-action
-   * register. Kept as 650 for the brand vocabulary (sits between
-   * semibold and bold; intentional — the app's "press me" affordance). */
-  font-weight: 650;
+  /* The quiet base weight; emphasis is the TONE variant's job, not the base's.
+   *
+   * Was 650 (a brand "press me" literal predating the v3 design). PRD-01 gave
+   * `.ui-button--primary` the design's 600, which INVERTED the hierarchy: a
+   * primary button rendered LIGHTER than a secondary still inheriting 650.
+   * The v3 design is unambiguous — `.cbtn { font-weight: 500 }` and
+   * `.cbtn--pri { font-weight: 600 }` (design-kit/app-v3/copilot.css) — so the
+   * base adopts 500 and the TONE variant owns the emphasis. This deletes a
+   * special case rather than adding one: size tiers control size, tone controls
+   * weight. Revert both this line and `.ui-button--primary` together if the 650
+   * brand exception is reinstated. */
+  font-weight: var(--font-weight-medium);
   gap: var(--space-sm);
   justify-content: center;
   text-decoration: none;
@@ -459,10 +549,18 @@ textarea {
   padding: 0.75rem 1.1rem;
 }
 
+/* TONE BEATS SIZE TIER. --primary re-asserts the weight so a small primary CTA
+   is not quietly demoted to the dense-row register by .ui-button--sm above.
+   Without this line, `--primary --sm` computed 500 (size tier wins on source
+   order at equal specificity) where the design draws 600 — measured as
+   `btn.newChat fontWeight 600 -> 500` on the Chats surface. This is the exact
+   shape of the design's .cbtn--pri (copilot.css:491-496), and it is the reason
+   .cbtn--sm (:567-570) can safely change padding + font-size ONLY. */
 .ui-button--primary,
 .ui-link-button {
   background: var(--color-accent);
   color: var(--color-accent-contrast);
+  font-weight: var(--font-weight-semibold);
 }
 
 .ui-button--primary:hover,
@@ -560,8 +658,12 @@ textarea {
   color: var(--color-text-muted);
   display: inline-flex;
   font-family: var(--font-mono);
-  font-size: var(--font-size-2xs);
-  font-weight: var(--font-weight-semibold);
+  /* Mono metadata register — the design's `.chip` is 10.5px (copilot.css:580)
+     and sets NO weight, so it inherits the 500 of its context. This recipe used
+     --font-size-2xs (11.2px, a SANS rung) + semibold, which is how every chip in
+     the app shipped 0.7px too big and 100 too heavy. */
+  font-size: var(--font-size-mono-10-5);
+  font-weight: var(--font-weight-medium);
   min-height: 0;
   padding: 2px 8px;
   white-space: nowrap;
@@ -695,9 +797,14 @@ textarea {
   }
 }
 
+/* One scrim, one token. This backdrop, chat-surface's Modal, EditOverlay and the
+   ⌘K palette were four independent veils with three different colours; they all
+   resolve --color-scrim / --blur-scrim now (design `.scrim`, copilot.css:2223). */
 .ui-dialog-backdrop {
   align-items: center;
-  background: rgb(0 0 0 / 0.54);
+  backdrop-filter: blur(var(--blur-scrim));
+  -webkit-backdrop-filter: blur(var(--blur-scrim));
+  background: var(--color-scrim);
   display: flex;
   inset: 0;
   justify-content: center;
@@ -1072,8 +1179,22 @@ textarea {
  * "section label" existed at 0.04 / 0.06 / 0.13em × 4 weights across the app.
  * Reach for a recipe class (or its React wrapper in index.tsx) instead of
  * re-composing font-size + weight + tracking + transform by hand.
- * See SKILL.md for the intent → recipe map. Enforced by stylelint
- * (declaration-strict-value on font-size + letter-spacing).
+ * See SKILL.md for the intent → recipe map.
+ *
+ * ENFORCEMENT — what actually exists. There is NO stylelint gate in this repo
+ * (an earlier version of this comment and of SKILL.md claimed a strict-value
+ * rule on font-size + letter-spacing; `find . -name "*stylelint*"` returns
+ * nothing and no workflow, pre-commit hook or package.json references it). An
+ * unenforced rule that claims to be enforced is worse than no rule, so the
+ * claim is gone and the gates below are the real ones:
+ *   - tools/design-parity/lib/render-live-tokens.test.tsx — parses THIS file and
+ *     pins the token contract (base size, the mono ladder, the scrim, and the
+ *     one-writer-per-accent-variable rule).
+ *   - tools/design-parity/lib/accent-matrix.mjs --check — resolves all 9 accents
+ *     x 3 themes in a real browser and fails on collapse or on a contrast floor.
+ *   - the per-surface parity harnesses, which measure computed styles.
+ * Standing up stylelint + baselining the ~400 existing raw values is its own
+ * change; until then, review is the gate for raw font-size / letter-spacing.
  * ======================================================================== */
 
 /* Eyebrow / kicker — uppercase label ABOVE a heading. */
@@ -1094,13 +1215,53 @@ textarea {
   color: var(--color-text-muted);
 }
 
-/* Mono caps — 3xs monospace uppercase micro-label (dividers, mono group heads). */
+/* Mono caps — monospace uppercase micro-label (dividers, mono group heads, the
+ * section head that indexes a list). 9.5px = the design's `.sect-h`
+ * (copilot.css:1565); it sets no weight, so the label inherits 400 rather than
+ * shouting at semibold. Per-role colour is the ONE documented override a
+ * consumer may add on top (`.sect-h` wants --color-text-subtle = the design's
+ * --mut2; this recipe's other consumer, the login divider, wants --mut). */
 .ui-mono-caps {
   font-family: var(--font-mono);
-  font-size: var(--font-size-3xs);
+  font-size: var(--font-size-mono-9-5);
+  /* Pinned, NOT omitted. The design's `.sect-h` sets no weight because it is a
+     <div> that inherits 400 — but this recipe is tag-agnostic and its section-
+     head consumer is an <h2>, whose UA default is `bold`. Leaving the weight
+     unset would make the recipe's output depend on the tag it lands on, which
+     is precisely the drift the recipe tier exists to prevent (measured: the
+     <h2> resolved 700 against the design's 400). */
+  font-weight: var(--font-weight-regular);
   letter-spacing: var(--tracking-mono-caps);
   text-transform: uppercase;
   color: var(--color-text-muted);
+}
+
+/* The design's mono-caps role has TWO registers, not one: 9.5px for the heads
+ * that index a surface (.sect-h, .cmdk__row, .sheet-h) and 9px for the quieter
+ * ones inside a panel (.login-div copilot.css:2681, .tl-lbl, .set-nav__grp,
+ * .srow, .notif-head). The base recipe is the 9.5px register; this modifier is
+ * the 9px one. Naming the second register beats letting a consumer hand-write a
+ * font-size to get back to it — that is how the role fragmented last time. */
+.ui-mono-caps--9 {
+  font-size: var(--font-size-3xs);
+}
+
+/* Section head — the BLOCK RHYTHM of a `.sect-h` group (copilot.css:1569-1573:
+ * `margin: 22px 0 10px` with `:first-child{margin-top:0}`). Layout only, and
+ * deliberately so: this class goes on the WRAPPER, which also carries the count
+ * pill and the right-aligned action slot (the Chats "＋ New chat" primary), so a
+ * type recipe here would mono-uppercase a CTA. The label's TYPE comes from
+ * .ui-mono-caps on the <h2> inside. The :first-child rule is why this is a class
+ * and not an inline style — a selector-dependent margin cannot be expressed
+ * inline at all. */
+.ui-section-head {
+  align-items: center;
+  display: flex;
+  gap: var(--space-sm);
+  margin: 22px 0 10px;
+}
+.ui-section-head:first-child {
+  margin-top: 0;
 }
 
 /* Item / card / row title — md, semibold, flat tracking. */

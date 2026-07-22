@@ -660,3 +660,147 @@ re-measure):**
 - **The desktop accent-persistence work** (`SettingsMount.tsx` apply-on-mount) — unassigned;
   README §Gaps **G7** is settled: it is **PRD-12 D9** (no PRD-14 exists). Its user-visible
   payoff is nine working accents, which does not exist until this PRD lands.
+
+## Implementation record
+
+Landed on `claude/design-parity-audit-7ec82a` (working tree; merge base
+`5c890515`, branch tip before this change `c0cbd609`). **DoD: 18 / 18 MET.**
+
+### What landed
+
+The accent tier was split into a **private seed tier** and a **public derived tier**. The nine
+`:root[data-accent="…"]` blocks (`packages/design-system/src/styles.css:302-346`) now write only
+`--accent-seed` / `--accent-seed-strong` / `--accent-seed-ink`; the three `[data-theme]` blocks are
+the **sole writers** of `--color-accent` / `-strong` / `-contrast` (`styles.css:206-208` dark,
+`:378-380` light, `:411-413` slate). That ends the same-specificity collision that collapsed nine
+swatches to one colour under `light` and one under `slate`. Light derives via
+`color-mix(in oklab, var(--accent-seed) 60%/46%, #0a0a0e)` with `#f4faff` ink. Cost is O(A+T),
+not a 9xN matrix.
+
+Alongside it: `--font-size-sm` retuned to the design's literal 13px (`styles.css:65`,
+`0.8125rem`); a mono micro-ladder added (`:81-84`, `8.5 / 9.5 / 10 / 10.5px`) with `.ui-mono-caps`
+and `.ui-badge` repointed onto it; four independent scrims collapsed onto `--color-scrim` +
+`--blur-scrim` (`:277-278`, matching design `copilot.css:2226-2227`) and consumed by `Modal.tsx`,
+`EditOverlay.tsx`, `CommandPalette.tsx` and `.ui-dialog-backdrop`; `.ui-button--primary` re-asserts
+semibold so tone beats size tier (`:551-556`); `.ui-section-head` carries the design's 22px/10px
+block rhythm (`:1249-1257`); `--color-bg` pinned unchanged at `#09090b` with the reasoning inline.
+
+Two new gates ship: `tools/design-parity/lib/render-live-tokens.test.tsx` (19 named `it()`s that
+parse the shipping `styles.css`) and `tools/design-parity/lib/accent-matrix.mjs` (9x3 cells resolved
+in real Chromium, asserting per-theme distinctness plus WCAG 3.0/4.5 floors).
+
+### DoD status
+
+All 18 items verified MET, each by running the item's own command rather than trusting the
+implementation claim. Items 1, 3, 4, 8, 16 and 17 were additionally **mutation-tested** — the
+guard was made to fail by reintroducing the defect, then restored — so they are demonstrated
+regression guards, not tautologies. Item 7's "fails on `main`" claim was independently reproduced
+by running the new test against `git show main:…SectionHeader.tsx` (4 of 8 cases fail).
+
+Wording defects found in the DoD text itself (all cosmetic; none changed a verdict):
+
+- **Items 5, 10, 11** say "on the merge base". The five audited surfaces **do not exist** at
+  `5c890515` — they were added on this branch. The correct pre-change reference is branch tip
+  `c0cbd609`. Re-derived there, the baselines are exact: 55 `13.6px` rows, 6 `sect.*` rows,
+  1 `connect.scrim` row.
+- **Item 5**'s `$(git merge-base …)..HEAD` form can only pass _after_ the orchestrator commits;
+  today it prints zero paths. The workflow-independent form
+  (`git diff --name-only $(git merge-base HEAD origin/main) -G'font-size-sm' -- packages apps`)
+  prints exactly the one expected path, `packages/design-system/src/styles.css`.
+- **Item 1**'s `expect(0.8125 * 16).toBe(13)` is a compile-time constant. The load-bearing
+  assertions are the sibling `soleDeclaration()` / `remToPx()` checks.
+- **Item 7**'s three `grep -c` probes count comment lines; the real code placement was confirmed
+  by reading the file.
+
+### Deviations from the PRD
+
+1. **`.ui-mono-caps` pins `font-weight: var(--font-weight-regular)`** — the PRD said to drop the
+   weight ("the design's `.sect-h` sets no weight, so it inherits 400"). True for the design's
+   `<div>`, false for our `<h2>`: after removing the override the live element resolved **700**
+   (UA heading default) and the harness reported `sect.* fontWeight 400 → 700`, a regression on the
+   exact rows the PRD set out to fix. A tag-dependent recipe output is precisely the drift the
+   recipe tier exists to prevent, so the weight is now part of the recipe.
+2. **New `.ui-mono-caps--9` modifier + two files outside declared Scope**
+   (`apps/frontend/src/features/auth/LoginScreen.tsx`, `apps/frontend/src/styles.css`).
+   Repointing the shared recipe 9px → 9.5px silently pushed its _other_ consumer, the login
+   divider, off the design (`copilot.css:2682` = 9px). The design has **two** mono-caps registers,
+   so the second was named as a modifier rather than regressing login or hand-writing a raw size.
+3. **Light-accent mix is 60% / 46%**, not the PRD's placeholder 62% / 48% — the PRD explicitly
+   says to tune against the matrix gate. At 62% the worst cell (light/amber) had ink-on-accent
+   4.54:1, only 0.04 above the floor; at 58% chroma visibly collapsed. 60/46 yields 4.82:1 worst
+   ink and 4.62:1 worst on-ground.
+4. **`accent-matrix.mjs` reads colours back through a 1x1 canvas.** An unregistered custom
+   property computes to its _unevaluated_ `color-mix(…)` text, and on a real property it computes
+   to `oklab(…)`, which no contrast formula consumes. The canvas is the engine's own oklab→sRGB
+   conversion — the colour the user actually sees.
+5. **DoD 5 documentation caveat.** `SKILL.md` and `CLAUDE.md` name `--font-size-sm` in prose. They
+   are documentation the PRD's own Scope requires updating, not consumers. Verified: neither file
+   adds or removes a line containing `font-size-sm`, so `-G` correctly excludes both and the
+   unfiltered command already prints exactly one path. No `':!*.md'` exclusion is needed.
+6. **Decision E understates its blast radius, shipped as written.**
+   `.ui-button--primary { font-weight: semibold }` fixes `--primary --sm` (500 → 600) as intended,
+   but it _also_ lowers every md/lg primary button from the base `.ui-button`'s intentional **650**
+   CTA weight to 600. DoD 16 pins the literal 600, so 650 was not substituted. See Open items.
+
+### Regression surface (all commands re-run at close-out)
+
+| Command                                                                             | Result                                                    |
+| ----------------------------------------------------------------------------------- | --------------------------------------------------------- |
+| `vitest run --root packages/chat-surface`                                           | **PASS** — 231 files, 2443 tests, exit 0                  |
+| `npm run test --workspace @0x-copilot/desktop`                                      | **PASS** — 90 files, 1063 tests + 1 todo, exit 0          |
+| `vitest run --config tools/design-parity/vitest.config.mjs`                         | **PASS** — 9 files, 39 tests, exit 0                      |
+| `node tools/design-parity/lib/accent-matrix.mjs --check`                            | **PASS** — 27 cells, 9 distinct accents per theme, exit 0 |
+| `npm run typecheck` — design-system / chat-surface / frontend / api-types / desktop | **PASS** — all exit 0                                     |
+| `npm run build --workspace @0x-copilot/frontend`                                    | **PASS** — exit 0                                         |
+| `eslint` on the 7 files this PRD changed                                            | **PASS** — exit 0                                         |
+| Full 9-state design-parity re-measure (both sides re-extracted)                     | **PASS** — all 9 reports byte-reproduce                   |
+
+`packages/design-system` has no test files and no `test` script — `vitest --root` there exits 1
+with "No test files found". That is the package's standing shape, not a failure; its gate is
+`typecheck`, which passes.
+
+**Parity movement**, re-derived independently by re-extracting _both_ sides for all nine states
+and diffing HIGH rows with whitespace normalised:
+
+- **HIGH 122 → 119**, with **0 rows added** and exactly 3 removed:
+  `connect.scrim backgroundColor` (scrim token) and `default.connect.cta fontSize` x2 (13px base).
+- **MEDIUM 411 → 369.** Note the implementer reported a 420 baseline; the number actually committed
+  at `c0cbd609` is **411**. The discrepancy is a baseline-derivation difference (they re-derived
+  under the current extractor after it gained `boxShadow`/`backdropFilter`/`transition`/
+  `textDecorationLine`), not a measurement error. Direction and HIGH movement are unaffected.
+
+The out-of-scope login divider change was verified by direct probe, since the login surface cannot
+run the standard pipeline (its `anchors.json` carries a `"— (no live view)"` placeholder that
+crashes live extraction — pre-existing, untouched here). Design `.login-div` and live
+`.loginx-divider` match exactly on `fontSize` (9px), `letterSpacing` (1.08px), `fontWeight` (400),
+`textTransform`, `fontFamily` and `color`. A counterfactual probe confirms the modifier is
+load-bearing: removing `ui-mono-caps--9` at runtime moves the element to 9.5px.
+
+### Known-red, NOT caused by this PRD
+
+`npm run lint` fails in both `@0x-copilot/chat-surface` (6 files, `no-restricted-globals` on
+`document`) and `@0x-copilot/frontend` (2 files, `no-restricted-imports` on
+`@0x-copilot/chat-transport`). All 8 offending files are **unmodified relative to both `HEAD` and
+the merge base** (`git diff --stat` empty for each), and every file this PRD _did_ touch lints
+clean. Pre-existing debt; flagged, not absorbed.
+
+### Open items
+
+- **Decision E's md/lg regression (deviation 6).** Primary buttons at md/lg drop 650 → 600. DoD 16
+  pins 600 so it shipped as specified, but a reviewer should confirm the CTA weight loss is
+  intended, or follow up with a size-aware rule.
+- **Two untokenized scrims remain**, outside DoD 6's literal grep set:
+  `packages/chat-surface/src/destinations/projects/ProjectMembersTab.tsx:217` and
+  `apps/frontend/src/features/settings/workspace.css:280`, both `rgba(0, 0, 0, 0.55)` on
+  `inset: 0` backdrops, both missing the 2px blur. DoD 6 enumerates three known-bad strings rather
+  than asserting the role, so a fourth colour evades it.
+- **`accent-matrix.mjs` has no CI wiring** — it is a standalone command referenced by no workflow
+  or npm script. DoD 9 only demands the command, so this is a durability gap, not an unmet item.
+  The `[d]` drift baseline in `out/accent-matrix.expected.json` needs `--write` after any future
+  `styles.css` edit.
+- **The regenerated reports are not prettier-padded** (the committed ones at `c0cbd609` are). The
+  pre-commit `prettier` hook will reformat them at commit time. Verified harmless: every DoD grep
+  matches in both padded and unpadded table form.
+- **Item 8's "byte-unchanged `vitest.config.mjs`"** is true of this PRD (empty diff vs `HEAD`) but
+  not of the branch vs `main` — the `include` glob this PRD relies on was introduced earlier on
+  this branch by `67c55204`.

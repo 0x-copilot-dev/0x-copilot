@@ -434,7 +434,10 @@ const overlayStyle: CSSProperties = {
   alignItems: "stretch",
   justifyContent: "center",
   padding: 16,
-  background: "var(--color-scrim, rgba(8, 10, 14, 0.6))",
+  // No fallback — --color-scrim is a real design-system token now. This site
+  // used to fall back to rgba(8,10,14,0.6) while Modal fell back to
+  // rgb(0 0 0/0.54): two different colours for one role.
+  background: "var(--color-scrim)",
   zIndex: 5,
   overflow: "auto",
 };

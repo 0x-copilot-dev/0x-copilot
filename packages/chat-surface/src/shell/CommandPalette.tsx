@@ -444,9 +444,11 @@ function cssEscape(value: string): string {
 const scrimStyle: CSSProperties = {
   position: "fixed",
   inset: 0,
-  backgroundColor: "rgba(4, 4, 6, 0.6)",
-  backdropFilter: "blur(2px)",
-  WebkitBackdropFilter: "blur(2px)",
+  // The design's `.cmdk-scrim` (copilot.css:2461-2465) used to be copied here as
+  // literals; it is the same role as `.scrim`, so it resolves the same token.
+  backgroundColor: "var(--color-scrim)",
+  backdropFilter: "blur(var(--blur-scrim))",
+  WebkitBackdropFilter: "blur(var(--blur-scrim))",
   display: "flex",
   alignItems: "flex-start",
   justifyContent: "center",

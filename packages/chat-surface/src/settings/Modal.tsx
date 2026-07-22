@@ -138,11 +138,12 @@ export interface ModalProps {
 const scrimStyle: CSSProperties = {
   position: "fixed",
   inset: 0,
-  // Token-first: prefer a `--color-scrim` token if the design system adds one.
-  // The design system has no scrim token yet — its own `.ui-dialog-backdrop`
-  // veil is `rgb(0 0 0 / 0.54)`, so we degrade to that exact value rather than
-  // a light-flipping surface token (a scrim must stay dark in both themes).
-  backgroundColor: "var(--color-scrim, rgb(0 0 0 / 0.54))",
+  // The design system now owns the scrim (design `.scrim`, copilot.css:2223).
+  // No fallback: a `var(--x, …)` on a token that exists is dead code that would
+  // hide the next regression instead of surfacing it.
+  backgroundColor: "var(--color-scrim)",
+  backdropFilter: "blur(var(--blur-scrim))",
+  WebkitBackdropFilter: "blur(var(--blur-scrim))",
   display: "flex",
   alignItems: "center",
   justifyContent: "center",

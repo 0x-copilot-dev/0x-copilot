@@ -8994,7 +8994,10 @@ body.login-body {
 }
 
 /* Divider */
-/* Layout only — type comes from the shared .ui-mono-caps recipe (design-system).
+/* Layout only — type comes from the shared `.ui-mono-caps .ui-mono-caps--9`
+ * recipe pair (design-system): the --9 modifier selects the design's quieter
+ * 9px mono-caps register (`.login-div`, copilot.css:2681), as opposed to the
+ * 9.5px section-head register the base recipe carries.
  * color kept: subtle (--mut2) differs from the recipe's muted. */
 .loginx-divider {
   display: flex;

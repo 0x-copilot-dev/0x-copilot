@@ -16,31 +16,56 @@ from raw tokens by hand. Doing so is exactly how the same "section label" ended 
 
 > **Never write a raw `font-size` or `letter-spacing` value.** Use a `--font-size-*`
 > / `--tracking-*` token, or — better — a recipe class / React wrapper below.
-> A stylelint gate (`declaration-strict-value`) fails CI on raw `px`/`em` for those
-> two properties. If you truly need an off-ladder value, add a token first.
+> If you truly need an off-ladder value, add a token first.
+
+**What actually enforces this.** There is **no stylelint gate** in this repo — earlier
+versions of this file and of `styles.css` claimed a strict-value rule on `font-size` +
+`letter-spacing`, and it does not exist (`find . -name "*stylelint*"` returns nothing; no workflow, pre-commit
+hook, or `package.json` references it). The rule above is real; the gate was fiction, and
+a rule that claims to be enforced but is not is worse than no rule. The gates that DO
+run:
+
+| Gate                                                     | What it pins                                                                                                   |
+| -------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------- |
+| `tools/design-parity/lib/render-live-tokens.test.tsx`    | Parses `styles.css`: base size = 13px, the mono micro-ladder rungs, the scrim token, one-writer-per-accent-var |
+| `node tools/design-parity/lib/accent-matrix.mjs --check` | All 9 accents × 3 themes resolve distinctly, with contrast floors                                              |
+| the per-surface parity harnesses                         | Computed styles of the shipping DOM vs the design mock                                                         |
+
+Raw `font-size` / `letter-spacing` in a consumer is caught by **review**, not by CI.
+Standing up stylelint (and baselining the ~400 existing raw values) is its own change.
 
 ## Intent → recipe
 
 Pick by the ROLE the text plays, not by how big it looks.
 
-| You are styling…                                         | Use (CSS class)                                          | Or (React)                  | Resolves to                                         |
-| -------------------------------------------------------- | -------------------------------------------------------- | --------------------------- | --------------------------------------------------- |
-| An **eyebrow / kicker** above a heading                  | `.ui-eyebrow`                                            | `<Eyebrow as="span">`       | 2xs · bold · `--tracking-eyebrow` · UPPERCASE       |
-| A **section / group label** (heads a group of rows)      | `.ui-section-label`                                      | `<SectionLabel as="div">`   | 2xs · semibold · `--tracking-label` · UPPERCASE     |
-| A **mono caps** micro-label (dividers, mono group heads) | `.ui-mono-caps`                                          | —                           | 3xs · mono · `--tracking-mono-caps` · UPPERCASE     |
-| A **page / section heading**                             | `.ui-heading .ui-heading--{1,2,3}`                       | `<Heading level={1\|2\|3}>` | 3xl/2xl/xl · semibold · negative tracking           |
-| An **item / card / row title**                           | `.ui-item-title`                                         | `<ItemTitle as="div">`      | md · semibold · `--tracking-normal`                 |
-| **Caption / meta** (secondary small text)                | `.ui-caption`                                            | `<Caption as="span">`       | xs · medium · `--tracking-caption`                  |
-| A **status / selection pill**                            | `.ui-pill` (+ `.ui-pill--active`, `.ui-pill__dot`)       | `<Pill active dot>`         | rounded-full · hairline · tone + accent-fill states |
-| A **live/ready status pill with a dot**                  | —                                                        | `<StatusPill tone label>`   | the pre-existing running/ready/idle variant         |
-| An **accent-tinted chip** (skills, citations)            | `.ui-chip--accent` (+ `.ui-chip--inline` for prose flow) | —                           | accent 12% fill / 40% border · rounded-full         |
+| You are styling…                                                 | Use (CSS class)                                          | Or (React)                  | Resolves to                                                                  |
+| ---------------------------------------------------------------- | -------------------------------------------------------- | --------------------------- | ---------------------------------------------------------------------------- |
+| An **eyebrow / kicker** above a heading                          | `.ui-eyebrow`                                            | `<Eyebrow as="span">`       | 2xs · bold · `--tracking-eyebrow` · UPPERCASE                                |
+| A **section / group label** (heads a group of rows)              | `.ui-section-label`                                      | `<SectionLabel as="div">`   | 2xs · semibold · `--tracking-label` · UPPERCASE                              |
+| A **mono caps** section head (indexes a list/surface)            | `.ui-mono-caps`                                          | —                           | `--font-size-mono-9-5` · mono · regular · `--tracking-mono-caps` · UPPERCASE |
+| The **quieter** mono caps register (dividers, panel group heads) | `.ui-mono-caps .ui-mono-caps--9`                         | —                           | same, at `--font-size-3xs` (9px)                                             |
+| The **wrapper** around a section head (label + count + action)   | `.ui-section-head`                                       | —                           | flex row · `margin: 22px 0 10px` · `:first-child{margin-top:0}`              |
+| A **page / section heading**                                     | `.ui-heading .ui-heading--{1,2,3}`                       | `<Heading level={1\|2\|3}>` | 3xl/2xl/xl · semibold · negative tracking                                    |
+| An **item / card / row title**                                   | `.ui-item-title`                                         | `<ItemTitle as="div">`      | md · semibold · `--tracking-normal`                                          |
+| **Caption / meta** (secondary small text)                        | `.ui-caption`                                            | `<Caption as="span">`       | xs · medium · `--tracking-caption`                                           |
+| A **status / selection pill**                                    | `.ui-pill` (+ `.ui-pill--active`, `.ui-pill__dot`)       | `<Pill active dot>`         | rounded-full · hairline · tone + accent-fill states                          |
+| A **live/ready status pill with a dot**                          | —                                                        | `<StatusPill tone label>`   | the pre-existing running/ready/idle variant                                  |
+| An **accent-tinted chip** (skills, citations)                    | `.ui-chip--accent` (+ `.ui-chip--inline` for prose flow) | —                           | accent 12% fill / 40% border · rounded-full                                  |
+| A **bordered mono metadata chip** (design `.chip`)               | `.ui-badge` (+ `--success/--warning/--danger/--accent`)  | —                           | `--font-size-mono-10-5` · mono · medium · hairline border, NO fill           |
 
 ## Tokens (when no recipe fits)
 
 Reach for a raw token only when you're building a genuinely new composition.
 
-- **Sizes** — `--font-size-3xs … --font-size-3xl` (9→32px). Plus `--font-size-mono-10`
-  (10px) for small-mono pill metadata.
+- **Sizes (sans ladder)** — `--font-size-3xs … --font-size-3xl` (9→32px). The `sm` rung
+  is the app's inherited **base**: exactly 13px, the design's `body` size.
+- **Sizes (mono micro-ladder)** — the design's mono metadata register is a half-pixel
+  ladder the sans t-shirt scale cannot express, so it has its own rungs, named by px:
+  `--font-size-mono-8-5` (rail count badge), `--font-size-mono-9-5` (section heads, ⌘K
+  rows), `--font-size-mono-10` (small pill metadata, side heads), `--font-size-mono-10-5`
+  (status chips, row timestamps). **Do not reach into `--font-size-3xs` / `-2xs` for mono
+  metadata** — they are sans rungs that merely sit nearby, and doing so is exactly how the
+  section head shipped 18% too large.
 - **Weights** — `--font-weight-regular/medium/semibold/bold` (400/500/600/700). Never a
   numeric literal (a `<strong>` 700 next to the app's 600 reads as a different family
   on macOS — the original "+ menu vs pill" bug).
@@ -53,9 +78,9 @@ Reach for a raw token only when you're building a genuinely new composition.
   (one place) — do not fork a near-copy.
 - **New role the table doesn't cover?** Add a recipe here (class in `styles.css` +
   optional wrapper in `index.tsx` + a row above), don't inline it in a consumer.
-- **Off-ladder value genuinely required** (rare)? Add the token first, then use it, and
-  leave a one-line `/* stylelint-disable-next-line … -- why */` only if even a token
-  won't do (e.g. a `clamp()` display size).
+- **Off-ladder value genuinely required** (rare)? Add the token first, then use it. If
+  even a token won't do (e.g. a `clamp()` display size), keep the literal and leave a
+  one-line comment saying why — that comment is what review looks for.
 
 ## Boundary
 

@@ -1,0 +1,279 @@
+{
+  "note": "Resolved --color-accent* per data-accent x data-theme cell, read from a real Chromium against packages/design-system/src/styles.css. Regenerate: node tools/design-parity/lib/accent-matrix.mjs --write",
+  "floors": {
+    "contrastAccentOnBg": 3,
+    "contrastInkOnAccent": 4.5
+  },
+  "cells": [
+    {
+      "theme": "dark",
+      "accent": "sky",
+      "colorAccent": "rgb(95, 178, 236)",
+      "colorAccentStrong": "rgb(140, 200, 244)",
+      "colorAccentContrast": "rgb(8, 19, 29)",
+      "colorBg": "rgb(9, 9, 11)",
+      "contrastAccentOnBg": 8.59,
+      "contrastInkOnAccent": 8.09
+    },
+    {
+      "theme": "dark",
+      "accent": "atlas-orange",
+      "colorAccent": "rgb(217, 119, 87)",
+      "colorAccentStrong": "rgb(226, 135, 106)",
+      "colorAccentContrast": "rgb(26, 15, 10)",
+      "colorBg": "rgb(9, 9, 11)",
+      "contrastAccentOnBg": 6.37,
+      "contrastInkOnAccent": 6.02
+    },
+    {
+      "theme": "dark",
+      "accent": "gold",
+      "colorAccent": "rgb(216, 180, 106)",
+      "colorAccentStrong": "rgb(240, 202, 122)",
+      "colorAccentContrast": "rgb(28, 22, 10)",
+      "colorBg": "rgb(9, 9, 11)",
+      "contrastAccentOnBg": 10.1,
+      "contrastInkOnAccent": 9.12
+    },
+    {
+      "theme": "dark",
+      "accent": "amber",
+      "colorAccent": "rgb(240, 180, 80)",
+      "colorAccentStrong": "rgb(247, 198, 111)",
+      "colorAccentContrast": "rgb(31, 20, 8)",
+      "colorBg": "rgb(9, 9, 11)",
+      "contrastAccentOnBg": 10.75,
+      "contrastInkOnAccent": 9.77
+    },
+    {
+      "theme": "dark",
+      "accent": "red",
+      "colorAccent": "rgb(226, 106, 106)",
+      "colorAccentStrong": "rgb(236, 133, 133)",
+      "colorAccentContrast": "rgb(29, 10, 10)",
+      "colorBg": "rgb(9, 9, 11)",
+      "contrastAccentOnBg": 6.16,
+      "contrastInkOnAccent": 5.91
+    },
+    {
+      "theme": "dark",
+      "accent": "lime",
+      "colorAccent": "rgb(164, 200, 120)",
+      "colorAccentStrong": "rgb(185, 215, 145)",
+      "colorAccentContrast": "rgb(15, 22, 7)",
+      "colorBg": "rgb(9, 9, 11)",
+      "contrastAccentOnBg": 10.53,
+      "contrastInkOnAccent": 9.76
+    },
+    {
+      "theme": "dark",
+      "accent": "teal",
+      "colorAccent": "rgb(108, 197, 179)",
+      "colorAccentStrong": "rgb(138, 213, 197)",
+      "colorAccentContrast": "rgb(7, 23, 26)",
+      "colorBg": "rgb(9, 9, 11)",
+      "contrastAccentOnBg": 9.73,
+      "contrastInkOnAccent": 8.96
+    },
+    {
+      "theme": "dark",
+      "accent": "blue",
+      "colorAccent": "rgb(123, 183, 255)",
+      "colorAccentStrong": "rgb(158, 202, 255)",
+      "colorAccentContrast": "rgb(8, 17, 28)",
+      "colorBg": "rgb(9, 9, 11)",
+      "contrastAccentOnBg": 9.53,
+      "contrastInkOnAccent": 9.09
+    },
+    {
+      "theme": "dark",
+      "accent": "violet",
+      "colorAccent": "rgb(167, 139, 214)",
+      "colorAccentStrong": "rgb(189, 164, 227)",
+      "colorAccentContrast": "rgb(17, 10, 28)",
+      "colorBg": "rgb(9, 9, 11)",
+      "contrastAccentOnBg": 6.92,
+      "contrastInkOnAccent": 6.74
+    },
+    {
+      "theme": "light",
+      "accent": "sky",
+      "colorAccent": "rgb(60, 104, 137)",
+      "colorAccentStrong": "rgb(48, 80, 106)",
+      "colorAccentContrast": "rgb(244, 250, 255)",
+      "colorBg": "rgb(244, 244, 246)",
+      "contrastAccentOnBg": 5.41,
+      "contrastInkOnAccent": 5.65
+    },
+    {
+      "theme": "light",
+      "accent": "atlas-orange",
+      "colorAccent": "rgb(126, 72, 57)",
+      "colorAccentStrong": "rgb(96, 57, 47)",
+      "colorAccentContrast": "rgb(244, 250, 255)",
+      "colorBg": "rgb(244, 244, 246)",
+      "contrastAccentOnBg": 6.65,
+      "contrastInkOnAccent": 6.95
+    },
+    {
+      "theme": "light",
+      "accent": "gold",
+      "colorAccent": "rgb(124, 105, 68)",
+      "colorAccentStrong": "rgb(95, 81, 55)",
+      "colorAccentContrast": "rgb(244, 250, 255)",
+      "colorBg": "rgb(244, 244, 246)",
+      "contrastAccentOnBg": 4.83,
+      "contrastInkOnAccent": 5.04
+    },
+    {
+      "theme": "light",
+      "accent": "amber",
+      "colorAccent": "rgb(137, 105, 56)",
+      "colorAccentStrong": "rgb(104, 81, 47)",
+      "colorAccentContrast": "rgb(244, 250, 255)",
+      "colorBg": "rgb(244, 244, 246)",
+      "contrastAccentOnBg": 4.62,
+      "contrastInkOnAccent": 4.82
+    },
+    {
+      "theme": "light",
+      "accent": "red",
+      "colorAccent": "rgb(131, 66, 67)",
+      "colorAccentStrong": "rgb(100, 52, 54)",
+      "colorAccentContrast": "rgb(244, 250, 255)",
+      "colorBg": "rgb(244, 244, 246)",
+      "contrastAccentOnBg": 6.77,
+      "contrastInkOnAccent": 7.07
+    },
+    {
+      "theme": "light",
+      "accent": "lime",
+      "colorAccent": "rgb(96, 116, 75)",
+      "colorAccentStrong": "rgb(74, 89, 61)",
+      "colorAccentContrast": "rgb(244, 250, 255)",
+      "colorBg": "rgb(244, 244, 246)",
+      "contrastAccentOnBg": 4.67,
+      "contrastInkOnAccent": 4.87
+    },
+    {
+      "theme": "light",
+      "accent": "teal",
+      "colorAccent": "rgb(67, 114, 106)",
+      "colorAccentStrong": "rgb(53, 87, 83)",
+      "colorAccentContrast": "rgb(244, 250, 255)",
+      "colorBg": "rgb(244, 244, 246)",
+      "contrastAccentOnBg": 4.96,
+      "contrastInkOnAccent": 5.18
+    },
+    {
+      "theme": "light",
+      "accent": "blue",
+      "colorAccent": "rgb(74, 107, 148)",
+      "colorAccentStrong": "rgb(58, 82, 113)",
+      "colorAccentContrast": "rgb(244, 250, 255)",
+      "colorBg": "rgb(244, 244, 246)",
+      "contrastAccentOnBg": 5,
+      "contrastInkOnAccent": 5.22
+    },
+    {
+      "theme": "light",
+      "accent": "violet",
+      "colorAccent": "rgb(98, 83, 126)",
+      "colorAccentStrong": "rgb(75, 64, 97)",
+      "colorAccentContrast": "rgb(244, 250, 255)",
+      "colorBg": "rgb(244, 244, 246)",
+      "contrastAccentOnBg": 6.25,
+      "contrastInkOnAccent": 6.53
+    },
+    {
+      "theme": "slate",
+      "accent": "sky",
+      "colorAccent": "rgb(95, 178, 236)",
+      "colorAccentStrong": "rgb(140, 200, 244)",
+      "colorAccentContrast": "rgb(8, 19, 29)",
+      "colorBg": "rgb(16, 20, 26)",
+      "contrastAccentOnBg": 7.97,
+      "contrastInkOnAccent": 8.09
+    },
+    {
+      "theme": "slate",
+      "accent": "atlas-orange",
+      "colorAccent": "rgb(217, 119, 87)",
+      "colorAccentStrong": "rgb(226, 135, 106)",
+      "colorAccentContrast": "rgb(26, 15, 10)",
+      "colorBg": "rgb(16, 20, 26)",
+      "contrastAccentOnBg": 5.92,
+      "contrastInkOnAccent": 6.02
+    },
+    {
+      "theme": "slate",
+      "accent": "gold",
+      "colorAccent": "rgb(216, 180, 106)",
+      "colorAccentStrong": "rgb(240, 202, 122)",
+      "colorAccentContrast": "rgb(28, 22, 10)",
+      "colorBg": "rgb(16, 20, 26)",
+      "contrastAccentOnBg": 9.37,
+      "contrastInkOnAccent": 9.12
+    },
+    {
+      "theme": "slate",
+      "accent": "amber",
+      "colorAccent": "rgb(240, 180, 80)",
+      "colorAccentStrong": "rgb(247, 198, 111)",
+      "colorAccentContrast": "rgb(31, 20, 8)",
+      "colorBg": "rgb(16, 20, 26)",
+      "contrastAccentOnBg": 9.98,
+      "contrastInkOnAccent": 9.77
+    },
+    {
+      "theme": "slate",
+      "accent": "red",
+      "colorAccent": "rgb(226, 106, 106)",
+      "colorAccentStrong": "rgb(236, 133, 133)",
+      "colorAccentContrast": "rgb(29, 10, 10)",
+      "colorBg": "rgb(16, 20, 26)",
+      "contrastAccentOnBg": 5.72,
+      "contrastInkOnAccent": 5.91
+    },
+    {
+      "theme": "slate",
+      "accent": "lime",
+      "colorAccent": "rgb(164, 200, 120)",
+      "colorAccentStrong": "rgb(185, 215, 145)",
+      "colorAccentContrast": "rgb(15, 22, 7)",
+      "colorBg": "rgb(16, 20, 26)",
+      "contrastAccentOnBg": 9.77,
+      "contrastInkOnAccent": 9.76
+    },
+    {
+      "theme": "slate",
+      "accent": "teal",
+      "colorAccent": "rgb(108, 197, 179)",
+      "colorAccentStrong": "rgb(138, 213, 197)",
+      "colorAccentContrast": "rgb(7, 23, 26)",
+      "colorBg": "rgb(16, 20, 26)",
+      "contrastAccentOnBg": 9.04,
+      "contrastInkOnAccent": 8.96
+    },
+    {
+      "theme": "slate",
+      "accent": "blue",
+      "colorAccent": "rgb(123, 183, 255)",
+      "colorAccentStrong": "rgb(158, 202, 255)",
+      "colorAccentContrast": "rgb(8, 17, 28)",
+      "colorBg": "rgb(16, 20, 26)",
+      "contrastAccentOnBg": 8.85,
+      "contrastInkOnAccent": 9.09
+    },
+    {
+      "theme": "slate",
+      "accent": "violet",
+      "colorAccent": "rgb(167, 139, 214)",
+      "colorAccentStrong": "rgb(189, 164, 227)",
+      "colorAccentContrast": "rgb(17, 10, 28)",
+      "colorBg": "rgb(16, 20, 26)",
+      "contrastAccentOnBg": 6.43,
+      "contrastInkOnAccent": 6.74
+    }
+  ]
+}

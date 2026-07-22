@@ -5,7 +5,7 @@ Design baseline (source of truth) vs live app, by computed style.
 - Design: `surfaces/projects/out/design-default.json`
 - Live: `surfaces/projects/out/live-default.json`
 
-**Summary:** 🔴 HIGH 8 · 🟠 MEDIUM 28 · 🟡 LOW 29 · ⚪ INFO 4
+**Summary:** 🔴 HIGH 8 · 🟠 MEDIUM 24 · 🟡 LOW 30 · ⚪ INFO 4
 
 ## 🔴 HIGH (8)
 
@@ -20,21 +20,17 @@ Design baseline (source of truth) vs live app, by computed style.
 | `default.card.desc`    | Project card | color           | rgb(100, 100, 109) (--mut2) → rgb(152, 152, 159) (--mut)       |
 | `default.card.meta`    | Project card | fontFamily      | typeface class changed (mono → sans)                           |
 
-## 🟠 MEDIUM (28)
+## 🟠 MEDIUM (24)
 
 | Element                  | Group        | Property       | Design → Live                                              |
 | ------------------------ | ------------ | -------------- | ---------------------------------------------------------- |
-| `default.page.container` | Layout       | fontSize       | 13px → 13.6px (+0.6px)                                     |
 | `default.page.container` | Layout       | flexGrow       | flex-grow 1 → 0 (affects vertical fill / button placement) |
 | `default.page.container` | Layout       | padding        | 20px 24px 40px 24px → 24px                                 |
-| `default.grid`           | Layout       | fontSize       | 13px → 13.6px (+0.6px)                                     |
 | `default.grid`           | Layout       | gap            | 10px → 12px                                                |
-| `default.card`           | Project card | fontSize       | 13px → 13.6px (+0.6px)                                     |
 | `default.card`           | Project card | display        | block → flex                                               |
 | `default.card`           | Project card | flexDirection  | row → column                                               |
 | `default.card`           | Project card | padding        | 13px → 0px                                                 |
 | `default.card`           | Project card | borderRadius   | 8px → 12px                                                 |
-| `default.card.hitarea`   | Project card | fontSize       | 13px → 13.6px (+0.6px)                                     |
 | `default.card.hitarea`   | Project card | display        | block → flex                                               |
 | `default.card.hitarea`   | Project card | flexDirection  | row → column                                               |
 | `default.card.hitarea`   | Project card | alignItems     | normal → flex-start                                        |
@@ -53,39 +49,40 @@ Design baseline (source of truth) vs live app, by computed style.
 | `default.card.meta`      | Project card | fontSize       | 11px → 12px (+1.0px)                                       |
 | `default.card.meta`      | Project card | margin         | 10px 0px 0px 0px → 2px 0px 0px 0px                         |
 
-## 🟡 LOW (29)
+## 🟡 LOW (30)
 
-| Element                  | Group        | Property    | Design → Live                                     |
-| ------------------------ | ------------ | ----------- | ------------------------------------------------- |
-| `default.page.container` | Layout       | lineHeight  | 19.5px → normal                                   |
-| `default.page.container` | Layout       | width       | 960px → 1040px                                    |
-| `default.page.container` | Layout       | height      | 754px → 760px                                     |
-| `default.page.container` | Layout       | tag         | <div> → <section> (semantic/default-style change) |
-| `default.grid`           | Layout       | lineHeight  | 19.5px → normal                                   |
-| `default.grid`           | Layout       | width       | 912px → 992px                                     |
-| `default.grid`           | Layout       | height      | 113px → 168px                                     |
-| `default.card`           | Project card | lineHeight  | 19.5px → normal                                   |
-| `default.card`           | Project card | textAlign   | left → start                                      |
-| `default.card`           | Project card | width       | 297.328px → 322.656px                             |
-| `default.card`           | Project card | height      | 113px → 168px                                     |
-| `default.card`           | Project card | tag         | <button> → <div> (semantic/default-style change)  |
-| `default.card.hitarea`   | Project card | lineHeight  | 19.5px → normal                                   |
-| `default.card.hitarea`   | Project card | width       | 297.328px → 320.656px                             |
-| `default.card.hitarea`   | Project card | height      | 113px → 123px                                     |
-| `default.card.hitarea`   | Project card | borderStyle | solid → none                                      |
-| `default.card.icon`      | Project card | lineHeight  | 19.5px → normal                                   |
-| `default.card.icon`      | Project card | borderStyle | none → solid                                      |
-| `default.card.name`      | Project card | lineHeight  | 21px → normal                                     |
-| `default.card.name`      | Project card | height      | 21px → 17px                                       |
-| `default.card.name`      | Project card | tag         | <div> → <span> (semantic/default-style change)    |
-| `default.card.desc`      | Project card | lineHeight  | 16.5px → normal                                   |
-| `default.card.desc`      | Project card | width       | 269.328px → 125.578px                             |
-| `default.card.desc`      | Project card | height      | 16.5px → 15px                                     |
-| `default.card.desc`      | Project card | tag         | <div> → <span> (semantic/default-style change)    |
-| `default.card.meta`      | Project card | lineHeight  | 16.5px → normal                                   |
-| `default.card.meta`      | Project card | width       | 269.328px → 91.7969px                             |
-| `default.card.meta`      | Project card | height      | 16.5px → 15px                                     |
-| `default.card.meta`      | Project card | tag         | <div> → <span> (semantic/default-style change)    |
+| Element                  | Group        | Property    | Design → Live                                                                                                                                                                            |
+| ------------------------ | ------------ | ----------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `default.page.container` | Layout       | lineHeight  | 19.5px → normal                                                                                                                                                                          |
+| `default.page.container` | Layout       | width       | 960px → 1040px                                                                                                                                                                           |
+| `default.page.container` | Layout       | height      | 754px → 760px                                                                                                                                                                            |
+| `default.page.container` | Layout       | tag         | <div> → <section> (semantic/default-style change)                                                                                                                                        |
+| `default.grid`           | Layout       | lineHeight  | 19.5px → normal                                                                                                                                                                          |
+| `default.grid`           | Layout       | width       | 912px → 992px                                                                                                                                                                            |
+| `default.grid`           | Layout       | height      | 113px → 168px                                                                                                                                                                            |
+| `default.card`           | Project card | lineHeight  | 19.5px → normal                                                                                                                                                                          |
+| `default.card`           | Project card | textAlign   | left → start                                                                                                                                                                             |
+| `default.card`           | Project card | width       | 297.328px → 322.656px                                                                                                                                                                    |
+| `default.card`           | Project card | height      | 113px → 168px                                                                                                                                                                            |
+| `default.card`           | Project card | tag         | <button> → <div> (semantic/default-style change)                                                                                                                                         |
+| `default.card.hitarea`   | Project card | lineHeight  | 19.5px → normal                                                                                                                                                                          |
+| `default.card.hitarea`   | Project card | transition  | all → background-color 0.12s cubic-bezier(0.2, 0, 0, 1), border-color 0.12s cubic-bezier(0.2, 0, 0, 1), color 0.12s cubic-bezier(0.2, 0, 0, 1), opacity 0.12s cubic-bezier(0.2, 0, 0, 1) |
+| `default.card.hitarea`   | Project card | width       | 297.328px → 320.656px                                                                                                                                                                    |
+| `default.card.hitarea`   | Project card | height      | 113px → 123px                                                                                                                                                                            |
+| `default.card.hitarea`   | Project card | borderStyle | solid → none                                                                                                                                                                             |
+| `default.card.icon`      | Project card | lineHeight  | 19.5px → normal                                                                                                                                                                          |
+| `default.card.icon`      | Project card | borderStyle | none → solid                                                                                                                                                                             |
+| `default.card.name`      | Project card | lineHeight  | 21px → normal                                                                                                                                                                            |
+| `default.card.name`      | Project card | height      | 21px → 17px                                                                                                                                                                              |
+| `default.card.name`      | Project card | tag         | <div> → <span> (semantic/default-style change)                                                                                                                                           |
+| `default.card.desc`      | Project card | lineHeight  | 16.5px → normal                                                                                                                                                                          |
+| `default.card.desc`      | Project card | width       | 269.328px → 125.578px                                                                                                                                                                    |
+| `default.card.desc`      | Project card | height      | 16.5px → 15px                                                                                                                                                                            |
+| `default.card.desc`      | Project card | tag         | <div> → <span> (semantic/default-style change)                                                                                                                                           |
+| `default.card.meta`      | Project card | lineHeight  | 16.5px → normal                                                                                                                                                                          |
+| `default.card.meta`      | Project card | width       | 269.328px → 91.7969px                                                                                                                                                                    |
+| `default.card.meta`      | Project card | height      | 16.5px → 15px                                                                                                                                                                            |
+| `default.card.meta`      | Project card | tag         | <div> → <span> (semantic/default-style change)                                                                                                                                           |
 
 ## ⚪ INFO (4)
 
