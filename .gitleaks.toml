@@ -1,0 +1,25 @@
+# gitleaks configuration for 0x-copilot.
+#
+# `useDefault = true` keeps the FULL upstream gitleaks ruleset — this file only
+# ADDS a narrow allowlist for a single, well-known **test fixture**, it never
+# disables a detector or exempts a directory (which would risk hiding a real
+# leak in tests).
+#
+# `test-vault-secret-32-chars-min-length-yes` is the deterministic
+# `LocalTokenVault` secret used verbatim across the backend test-suite
+# (services/backend/tests/test_provider_keys_routes.py,
+# test_routines_webhook.py, and the provider-keys custom-endpoint tests). It is
+# not a credential — the TokenVault requires a >=32-char key, so the fixture
+# spells that out. gitleaks-action only scans a PR's *new* commits, so any test
+# file that re-introduces this constant trips `generic-api-key` even though the
+# identical string is already on main; this allowlist makes the intent explicit
+# and durable instead of relying on scan-range luck.
+
+[extend]
+useDefault = true
+
+[allowlist]
+description = "Known non-secret test fixtures"
+regexes = [
+  '''test-vault-secret-32-chars-min-length-yes''',
+]
