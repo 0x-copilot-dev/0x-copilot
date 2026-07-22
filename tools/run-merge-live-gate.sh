@@ -1,9 +1,12 @@
 #!/usr/bin/env bash
-# The account-merge LIVE-Postgres gate (docs/plan/account-linking/PRD.md §8),
+# The LIVE-Postgres gate (docs/plan/account-linking/PRD.md §8 + PRD-J FR-J2),
 # as one repeatable command: spins a disposable UTF-8 Postgres cluster, runs
-# both services' live merge suites (real schema, real RLS scripts, real
-# envelope-AAD ciphertext) plus the backend RLS isolation test, and tears the
-# cluster down. Requires local Postgres binaries (initdb/pg_ctl/psql — e.g.
+# both services' live suites (real schema, real RLS scripts, real
+# envelope-AAD ciphertext, chain-signed audit rows), and tears the
+# cluster down. Covers the account-merge saga, principal/tenant invariants,
+# RLS isolation, and — per PRD-J J2 — the projects store, connectors store,
+# provider default_model (0042), and the conversation pin projection.
+# Requires local Postgres binaries (initdb/pg_ctl/psql — e.g.
 # `brew install postgresql`).
 #
 #   make test-merge-live      # or: bash tools/run-merge-live-gate.sh
@@ -56,7 +59,7 @@ BACKEND_URL="postgresql://postgres@127.0.0.1:$PORT/merge_backend_gate"
 BACKEND_APP_URL="postgresql://merge_gate_app@127.0.0.1:$PORT/merge_backend_gate"
 RUNTIME_URL="postgresql://postgres@127.0.0.1:$PORT/merge_runtime_gate"
 
-echo "==> backend: live merge saga + RLS isolation"
+echo "==> backend: live merge saga + RLS isolation + projects/connectors/provider-keys (J2)"
 (
   cd "$ROOT/services/backend"
   PYTHONUTF8=1 \
@@ -70,17 +73,21 @@ echo "==> backend: live merge saga + RLS isolation"
     tests/integration/persistence/test_rls_isolation.py \
     tests/integration/persistence/test_principals_live.py \
     tests/integration/persistence/test_principal_edges_live.py \
-    tests/integration/persistence/test_local_account_live.py -q
+    tests/integration/persistence/test_local_account_live.py \
+    tests/integration/persistence/test_projects_store_live.py \
+    tests/integration/persistence/test_connectors_store_live.py \
+    tests/integration/persistence/test_provider_default_model_live.py -q
 )
 
-echo "==> ai-backend: live re-key + envelope-AAD decrypt smoke"
+echo "==> ai-backend: live re-key + envelope-AAD decrypt smoke + conversation pin (J2)"
 (
   cd "$ROOT/services/ai-backend"
   PYTHONUTF8=1 \
   PYTHONPATH="src:$SHARED_PATH" \
   MERGE_LIVE_TEST_DATABASE_URL="$RUNTIME_URL" \
   "$AI_PY" -m pytest \
-    tests/integration/persistence/test_account_merge_live.py -q
+    tests/integration/persistence/test_account_merge_live.py \
+    tests/integration/persistence/test_conversation_pin_live.py -q
 )
 
 echo "==> merge live gate: PASS"
