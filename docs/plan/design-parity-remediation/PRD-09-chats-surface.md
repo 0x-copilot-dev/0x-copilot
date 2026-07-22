@@ -263,6 +263,23 @@ Scope guard: this PRD touches **only** `modelMonoStyle`'s `color`. Every other C
 - `src/backend_facade/conversation_stream_routes.py` — **new**, pass-through SSE proxy copied from `inbox_stream_routes.py`. Register the literal `/v1/agent/conversations/stream` **before** `/v1/agent/conversations/{conversation_id}` in the facade as well as in ai-backend — FastAPI matches in registration order and the path param is an unconstrained `str` (same hazard the program flags for PRD-05's `/runs` collection and PRD-12's `/runs/active_count`).
 - `tests/` — proxy + param-forwarding tests.
 
+## Addendum — `sect.*` anchor retarget (README O3)
+
+PRD-01 hands the chats anchor edit to "PRD-09 for chats"; PRD-09's anchors scope covered
+only `topbar.*`, so it was never accepted and the `sect.* margin` report row can never
+clear. **PRD-09 accepts it** — one line, in a file this PRD already edits.
+
+Scope addition:
+| File | Why |
+| --- | --- |
+| `tools/design-parity/surfaces/chats/anchors.json:41-42` | Retarget `section-header-label` → `section-header`: PRD-01 moves the `.ui-mono-caps` recipe onto the LABEL element (README C13), so the label anchor no longer maps to the element carrying the margin. |
+
+DoD addition:
+
+- `tools/design-parity/surfaces/chats/anchors.json` maps the `sect.*` label anchor to the
+  label element, and the regenerated `chats` report contains **no** `sect.*` row whose
+  property is `margin`.
+
 ## Non-goals
 
 - **Chip / row / type-scale styling** (`AUDIT.md` numbering) — RC-1 (`StatusPill` → `.ui-badge`) → **PRD-02**; RC-2 + RC-13 (icon tile fill, jade tint level) → **PRD-08**; RC-5/6/7/8 (type ladder, section-head rung, body 13.6→13px, weight inflation) → **PRD-01**; RC-11 (`formatRelativeTime` prose widening the time column) → **PRD-08**'s row vocabulary. This PRD adds a topbar, an overflow control and one colour deletion; it adds **no** token.
@@ -299,7 +316,9 @@ Scope guard: this PRD touches **only** `modelMonoStyle`'s `color`. Every other C
 3. `services/ai-backend/tests/unit/runtime_api/test_fastapi_runtime_api.py` asserts that `GET /v1/agent/conversations` sent **without** `bucket` and `cursor` returns a payload whose top-level keys are exactly `{"conversations", "has_more"}` (no `next_cursor` key) and whose `[c["id"] for c in conversations]` equals the fixture's `updated_at DESC, id DESC` order — i.e. the legacy caller sees no change.
 4. `services/ai-backend/tests/unit/runtime_api/test_conversation_stream_routes.py` asserts an `org_b`-scoped subscriber to `GET /v1/agent/conversations/stream` receives zero envelopes for `org_a` conversations (0 frames read before the first heartbeat).
 5. `tests/unit/runtime_adapters/test_store_conformance.py` asserts, for all three adapters, that `update_run_status(run_id, CANCELLED)` raises the parent conversation's `updated_at`, and that a subsequent `list_conversations(cursor=<pre-cancel watermark>)` returns that conversation.
-6. `services/ai-backend/migrations/0004_conversation_keyset.sql` and `0004_conversation_keyset.rollback.sql` both exist (id per README C18; `ls services/ai-backend/migrations` shows `0001` as the only pre-program migration), and `cd services/ai-backend && .venv/bin/python tools/check_migration_manifest.py` exits 0.
+6. `services/ai-backend/migrations/0004_conversation_keyset.sql` and `0004_conversation_keyset.rollback.sql` both exist (id per README C18; `ls services/ai-backend/migrations` shows `0001` as the only pre-program migration), and `cd services/ai-backend && .venv/bin/python ../../tools/check_migration_manifest.py` exits 0
+   (the tool lives at the REPO ROOT — `services/ai-backend/tools/` does not exist; PRD-05/06/07
+   already invoke it this way).
 7. `cd services/backend-facade && .venv/bin/python -m pytest tests/` passes with a test asserting `bucket` and `cursor` are forwarded verbatim to ai-backend, and one asserting the `/v1/agent/conversations/stream` proxy returns `content-type: text/event-stream` with the upstream body unmodified.
 8. `packages/chat-surface/src/destinations/chats/useChatsArchive.test.tsx` asserts, against a fake `Transport`: (a) three bucket-scoped requests on mount; (b) `loadMore("archived")` appends to the archived bucket and issues no second page-1 request (assert on the fake's recorded call list); (c) a `conversation_changed` SSE envelope flipping `latest_run_status` from `running` to `completed` re-renders the row's status as `done` **with no additional transport call**; (d) `setPinned(id,true)` moves the row to `pinned` optimistically and rolls back on a rejected request; (e) `setArchived(id,true)` moves the row to `archived` and `setArchived(id,false)` returns it to `recent`, each issuing exactly one `PATCH`. _(Rewritten per README DoD-Q8 — items (b), (c), (e) are the automated replacement for the old manual-acceptance item.)_
 9. `packages/chat-surface/src/destinations/_shared/Row.test.tsx` asserts that (a) the overflow trigger is in the document without any pointer interaction — it is persistently rendered, not hover-revealed (see D2) — and (b) clicking the overflow button, and clicking a `role="menuitem"` inside it, do **not** invoke `onActivate`.

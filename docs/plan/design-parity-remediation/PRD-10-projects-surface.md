@@ -508,6 +508,29 @@ the README's stated high-water marks. The reserved ids in the README's assignmen
 | `lib/render-live-projects.test.tsx`                      | Update selectors; keep all three states so convergence is _provable_ rather than asserted.                                                                                                                                                                                                                                                 |
 | `surfaces/projects/anchors.json`, `anchors-desktop.json` | Retarget live selectors onto the shared card; add **`expectDivergence`** (exact key, `lib/compare.mjs:172`) on the three tile-colour rows and a live-side `note` on the create/filter chrome. Do **not** edit `tools/design-parity/vitest.config.mjs` — it globs `lib/render-live*.test.tsx` and is a merge point for every PRD in flight. |
 
+## Addendum — Activity adopts `_shared/Page` (README O2)
+
+Reconciliation left this owned by NOBODY: PRD-08 deferred it to "PRD-10's wave" and
+PRD-10 disclaimed editing `ActivityDestination`, so the swap vanished and README G5's
+second half stayed open. **PRD-10 owns it**, because PRD-10 ships the primitive and a
+primitive whose first sibling caller is never migrated is just more dead code — exactly
+what this program exists to delete.
+
+Scope addition:
+| File | Why |
+| --- | --- |
+| `packages/chat-surface/src/destinations/activity/ActivityDestination.tsx` | Replace the hand-rolled `.pg` page shell with `<Page>`; no other change. |
+| `packages/chat-surface/src/destinations/activity/ActivityDestination.test.tsx` | Pin the swap. |
+
+DoD addition (numbered continuing this PRD's list):
+
+- `grep -c 'maxWidth' packages/chat-surface/src/destinations/activity/ActivityDestination.tsx`
+  prints `0`, and the file imports `Page` from `../_shared/Page`.
+- `ActivityDestination.test.tsx` asserts the rendered root carries the `Page` primitive's
+  `data-page` attribute, so a future hand-rolled shell fails the test.
+- The `activity` parity report is regenerated and `git diff` shows **no line added under
+  any `## HIGH` heading** (this is a shell swap, not a visual change).
+
 ## Non-goals
 
 - **`GET /v1/projects/{id}/files`, project counts, and the chat-row payload** — PRD-07. This
@@ -618,7 +641,9 @@ Per the README's corrected order, PRD-10 is **Wave 4** and its hard predecessors
   extract `ChatsSection.tsx` and does not render project-detail rows.
 - **PRD-01 (design tokens)** — Wave 0. Owns `--font-size-sm` → 13px, `SectionHeader`'s
   size/weight/tracking (applied to the **label element**, not the `.sect-h` wrapper — README
-  C13), `--color-bg` `#09090b` → `#050506` (README G3) and `--color-scrim`. It does **not**
+  C13) and `--color-scrim`. It does **not** change `--color-bg`: PRD-01 decision F ruled
+  README G3 INVALID — `--color-bg` already equals the design's `--ink`, and `#050506` is the
+  mock's stage colour, not the app canvas (0 report rows reference it). It does **not**
   mint `--space-grid-gap` — PRD-10 owns that token (README, _Wrong or unsupportable declared
   dependencies_), and the earlier "if PRD-01 introduces it, use theirs" hedge is deleted.
 

@@ -354,7 +354,7 @@ mock while the website ships the other mark is the failure mode being avoided.
 ### D9 — Desktop appearance loads at boot and persists, through the seam that already exists
 
 Absorbed from README **G7** (rail-badge `AUDIT.md:229`), which no PRD owned. It is folded here
-rather than into a new PRD-14 because it is the same shell-boot seam D1/D2 already touch, and
+rather than into a separate PRD because it is the same shell-boot seam D1/D2 already touch, and
 because **PRD-01's headline fix is unobservable without it**: desktop mounts no
 `ThemeProvider` (`ast-allowlist.ts:18`), so `:root[data-accent]` is the only accent mechanism,
 and today no accent survives a relaunch.
@@ -438,22 +438,22 @@ path — precisely what this decision refuses.
 
 ### `packages/chat-surface`
 
-| File                                               | Reason                                                                                                                                                                                   |
-| -------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `src/shell/useActiveRunCount.ts` (new)             | The one active-run-count hook: Transport + PresenceSignal + run-activity bus.                                                                                                            |
-| `src/shell/useActiveRunCount.test.ts` (new)        | 401→0, other errors→last value, visible-only interval, bus-triggered revalidation.                                                                                                       |
-| `src/shell/runActivityBus.tsx` (new)               | Publish/subscribe context + inert no-op fallback.                                                                                                                                        |
-| `src/shell/runActivityBus.test.tsx` (new)          | Subscribe/unsubscribe, no-provider fallback does not throw.                                                                                                                              |
-| `src/shell/ChatShell.tsx`                          | Mount the bus; call the hook; feed `AppRail.badges`; forward `settingsActive`; delete `railBadges`; `railIdentity` shape; `data-active-destination`.                                     |
-| `src/shell/ChatShell.test.tsx`                     | Badge-from-transport, settings highlight forwarding, root attribute rename.                                                                                                              |
-| `src/shell/AppRail.tsx`                            | `settingsActive` prop, one-active semantics, `9+` cap, identity shape + tooltip + no uppercase, foot/avatar/spacing literals, comment rewrite.                                           |
-| `src/shell/AppRail.test.tsx`                       | New assertions + update the two `identity` tests (`:304-330`) to the new shape.                                                                                                          |
-| `src/destinations/run/useRunSession.ts`            | Publish to the bus on `runId` / run-status transitions.                                                                                                                                  |
-| `src/destinations/run/useRunSession.test.ts`       | Assert exactly one publish per transition.                                                                                                                                               |
-| `src/settings/useAppearanceSettings.ts` (new)      | D9: boot-load + persist controller over `Transport` + `KeyValueStore`, composing the existing `appearanceAttributes` + `splitAppearancePersistence`. No `document` reference.            |
-| `src/settings/useAppearanceSettings.test.ts` (new) | D9: boot load applies attributes; contract fields PUT; off-contract fields go to `KeyValueStore`; PUT failure keeps the optimistic value and sets `error`; the 300ms debounce coalesces. |
-| `src/settings/index.ts`                            | Export the controller beside `appearanceAttributes` / `splitAppearancePersistence` (`:31-32`).                                                                                           |
-| `src/index.ts`                                     | New barrel block exporting the bus provider and the D9 controller (hosts do not need the run-count hook).                                                                                |
+| File                                               | Reason                                                                                                                                                                                                                         |
+| -------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| `src/shell/useActiveRunCount.ts` (new)             | The one active-run-count hook: Transport + PresenceSignal + run-activity bus.                                                                                                                                                  |
+| `src/shell/useActiveRunCount.test.ts` (new)        | 401→0, other errors→last value, visible-only interval, bus-triggered revalidation.                                                                                                                                             |
+| `src/shell/runActivityBus.tsx` (new)               | Publish/subscribe context + inert no-op fallback.                                                                                                                                                                              |
+| `src/shell/runActivityBus.test.tsx` (new)          | Subscribe/unsubscribe, no-provider fallback does not throw.                                                                                                                                                                    |
+| `src/shell/ChatShell.tsx`                          | Mount the bus; call the hook; feed `AppRail.badges`; forward `settingsActive`; delete `railBadges`; `data-active-destination`. (`railIdentity`'s `{displayName}` shape is declared by PRD-03 — C2; consumed here, not re-cut.) |
+| `src/shell/ChatShell.test.tsx`                     | Badge-from-transport, settings highlight forwarding, root attribute rename.                                                                                                                                                    |
+| `src/shell/AppRail.tsx`                            | `settingsActive` prop, one-active semantics, `9+` cap, identity shape + tooltip + no uppercase, foot/avatar/spacing literals, comment rewrite.                                                                                 |
+| `src/shell/AppRail.test.tsx`                       | New assertions + update the two `identity` tests (`:304-330`) to the new shape.                                                                                                                                                |
+| `src/destinations/run/useRunSession.ts`            | Publish to the bus on `runId` / run-status transitions.                                                                                                                                                                        |
+| `src/destinations/run/useRunSession.test.ts`       | Assert exactly one publish per transition.                                                                                                                                                                                     |
+| `src/settings/useAppearanceSettings.ts` (new)      | D9: boot-load + persist controller over `Transport` + `KeyValueStore`, composing the existing `appearanceAttributes` + `splitAppearancePersistence`. No `document` reference.                                                  |
+| `src/settings/useAppearanceSettings.test.ts` (new) | D9: boot load applies attributes; contract fields PUT; off-contract fields go to `KeyValueStore`; PUT failure keeps the optimistic value and sets `error`; the 300ms debounce coalesces.                                       |
+| `src/settings/index.ts`                            | Export the controller beside `appearanceAttributes` / `splitAppearancePersistence` (`:31-32`).                                                                                                                                 |
+| `src/index.ts`                                     | New barrel block exporting the bus provider and the D9 controller (hosts do not need the run-count hook).                                                                                                                      |
 
 ### `packages/api-types`
 

@@ -500,7 +500,7 @@ the mechanism is an `expectDivergence` entry on that surface's `page.container`
   (`packages/chat-surface/src/settings/AppearancePage.tsx:212`) is exported and unit-tested
   (`AppearancePage.test.tsx:204-209`) with **zero host call sites** — `SettingsMount.tsx`
   applies on change only, never on mount. Real bug, different seam (host bootstrap).
-  **README §Gaps G7 records that no PRD owned it and routes it to a new PRD-14 or a fold into
+  **README §Gaps G7 recorded that no PRD owned it; it is now settled as **PRD-12 D9** (folded into
   PRD-12 — it is explicitly not this PRD's.** Note the interaction: until it lands, this
   PRD's headline fix (nine working accents) is observable on web, and on desktop only after
   an in-session accent change.
@@ -658,5 +658,5 @@ re-measure):**
 - **PRD-13 (dead code)** — deletes the vestigial `sect-h` class this PRD deliberately leaves
   on the `SectionHeader` wrapper (README C13).
 - **The desktop accent-persistence work** (`SettingsMount.tsx` apply-on-mount) — unassigned;
-  README §Gaps **G7** routes it to a new PRD-14 or a fold into **PRD-12**. Its user-visible
+  README §Gaps **G7** is settled: it is **PRD-12 D9** (no PRD-14 exists). Its user-visible
   payoff is nine working accents, which does not exist until this PRD lands.

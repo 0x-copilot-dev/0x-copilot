@@ -136,7 +136,7 @@ have no project, and inventing one would be a lie.
   **Register the literal `/counts` path before any `/{conversation_id}` route** in both
   `runtime_api/http/routes.py` and the facade — FastAPI matches in registration order and
   the path param is an unconstrained `str` (same hazard the README flags for
-  `/v1/agent/runs/active_count`). Wave order on both files is 05 → 07 → 09 → 12.
+  `/v1/agent/runs/active_count`). Wave order on both files is 05 → 08 → 07 → 09 → 12.
 
 **Rejected:** storing the project in `metadata` JSONB. It is already how desktop reads
 `pinned` (`destinationBinders.tsx:172`) and it is exactly why `pinned` had to be

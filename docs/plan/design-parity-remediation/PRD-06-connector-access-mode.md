@@ -339,8 +339,12 @@ export interface ConnectorAccessPort {
 
 ## Dependencies
 
-**Must land first:** none — this PRD is self-contained across `backend` → `facade` → `api-types` → `chat-surface` → both hosts, and touches no file the sibling design-parity PRDs own.
+**Wave 0**, alongside PRD-01 and PRD-05 (README §Final wave order). The three are disjoint and land together.
 
-**Ordering note:** the Tools styling PRD (segment tokens: `--panel`/`--panel3`, `7px`/`5px` radii, `5px 12px` padding) edits `AccessModeSegment.tsx`'s style objects while this PRD edits only its call sites and tests. Land this one first if they collide — a truthful `data-value` is a prerequisite for the styling PRD's `.seg.selected` anchors to measure anything real (today those anchors only exist because the harness fakes a selection, per Evidence).
+**Must land first:** none. This PRD is self-contained across `backend` → `facade` → `api-types` → `chat-surface` → both hosts.
+
+**Corrects an earlier claim.** This PRD previously asserted it "touches no file the sibling design-parity PRDs own". That is false and the README refutes it: `ConnectorsDestination.tsx` is rewritten by three PRDs (README C6, resolved **06 → 11**), `access_mode ?? "off"` is contested with PRD-11 (C4, resolved in favour of **this PRD** — PRD-11's Non-goals defer to DoD 13), and this PRD owns the connector access-mode backend outright after PRD-03 deleted its duplicate (C3).
+
+**Ordering note:** **PRD-11** (Tools surface) is the styling PRD — it edits `AccessModeSegment.tsx`'s style objects (`--panel`/`--panel3`, `7px`/`5px` radii, `5px 12px` padding) while this PRD edits only its call sites and tests. **This PRD lands first** (Wave 0 vs PRD-11's Wave 3): a truthful `data-value` is a prerequisite for PRD-11's `.seg.selected` anchors to measure anything real — today those anchors exist only because the harness fakes a selection (see Evidence).
 
 **This unblocks:** any per-connector authority work that needs a durable authority field — connector-scoped project allowlists, the Activity surface's "which tool acted under whose authority" attribution, and admin-level org-wide connector policy (which will extend `set_access_mode`'s authorization rule rather than introduce a second store).
