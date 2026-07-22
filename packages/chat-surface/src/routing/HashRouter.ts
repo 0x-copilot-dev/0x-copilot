@@ -162,8 +162,14 @@ function fromParsed(
   switch (scheme) {
     case ARTIFACT_SCHEMES.chat:
       return { kind: "chat", conversationId: body };
-    case ARTIFACT_SCHEMES.conversation:
-      return { kind: "conversation", conversationId: body };
+    case ARTIFACT_SCHEMES.conversation: {
+      // §D1 — `convo://{conversationId}` or `convo://{conversationId}/{runId}`.
+      // A bare conversation id (no runId) stays backward-compatible.
+      const [conversationId, runId] = splitOnce(body, "/");
+      return runId === null
+        ? { kind: "conversation", conversationId }
+        : { kind: "conversation", conversationId, runId };
+    }
     case ARTIFACT_SCHEMES.run:
       return { kind: "run", runId: body };
     case ARTIFACT_SCHEMES.subagent: {
@@ -222,8 +228,12 @@ function serializeRoute(route: ArtifactRoute | null): string {
 function serializeBody(route: ArtifactRoute): string {
   switch (route.kind) {
     case "chat":
-    case "conversation":
       return route.conversationId;
+    case "conversation":
+      // §D1 — optional runId deep-link → `#/convo/{conversationId}/{runId}`.
+      return route.runId !== undefined
+        ? `${route.conversationId}/${route.runId}`
+        : route.conversationId;
     case "run":
       return route.runId;
     case "subagent":

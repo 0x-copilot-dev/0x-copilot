@@ -5,7 +5,15 @@
 // need to "open an artifact" navigate via `ArtifactRoute`.
 export type ArtifactRoute =
   | { readonly kind: "chat"; readonly conversationId: string }
-  | { readonly kind: "conversation"; readonly conversationId: string }
+  | {
+      // desktop-run-identity §D1 — the canonical cockpit route. `runId` is an
+      // OPTIONAL deep-link to a specific/historical run within the conversation;
+      // omitted → the cockpit binds the conversation's current head run. (`chat`
+      // above stays a tolerated alias; consumers handle both identically.)
+      readonly kind: "conversation";
+      readonly conversationId: string;
+      readonly runId?: string;
+    }
   | { readonly kind: "run"; readonly runId: string }
   | {
       readonly kind: "subagent";
