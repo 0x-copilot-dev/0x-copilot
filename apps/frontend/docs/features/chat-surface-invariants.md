@@ -79,9 +79,9 @@ suppresses the pulse.
 
 ## 2. Composer hint row
 
-The `↵ send · ⇧+↵ new line · / skills · model · Sources cited inline`
-strip in `<AssistantComposer>` is **stateless info** — it must render
-whether or not a run is active.
+The composer hint strip in `<AssistantComposer>` — now `/ skills ·
+Sources cited inline` — is **stateless info** — it must render whether
+or not a run is active.
 
 **Do not gate the `hint` prop on `running`** (or any other run-state
 flag). Hiding it during a run was a real shipped regression; the user is
@@ -89,5 +89,13 @@ mid-flight, can't see their shortcuts, and the composer looks broken. If
 you add a new hint or change the strip, render it unconditionally and let
 the affordance itself reflect availability (e.g. disable a button — don't
 unmount the row).
+
+The `↵ send` / `⇧+↵ new line` keyboard hints and the duplicated `model`
+name were **intentionally removed** from this strip to match the Claude
+Design composer mock (its composer shows no send/newline hint, and the
+model name is one-source-of-truth in the `ModelPill` above the row).
+Don't "restore" them as a regression fix — the removal is deliberate; see
+the `hintRender` comment in
+[`packages/chat-surface/src/composer/AssistantComposer.tsx`](../../../../packages/chat-surface/src/composer/AssistantComposer.tsx).
 
 Source: composer components live under [`src/features/chat/components/composer/`](../../src/features/chat/components/composer/).
