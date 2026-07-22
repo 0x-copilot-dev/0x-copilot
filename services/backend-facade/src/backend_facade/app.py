@@ -450,6 +450,7 @@ def create_app(
         request: Request,
         conversation_id: str,
         limit: int = Query(50, ge=1, le=200),
+        before: str | None = None,
         include_deleted: bool = False,
     ) -> dict[str, object]:
         identity = FacadeAuthenticator.authenticate_request(request)
@@ -459,7 +460,7 @@ def create_app(
             f"/v1/agent/conversations/{conversation_id}/messages",
             target="ai_backend",
             params=identity.scoped_params(
-                {"limit": limit, "include_deleted": include_deleted}
+                {"limit": limit, "before": before, "include_deleted": include_deleted}
             ),
             identity=identity,
         )

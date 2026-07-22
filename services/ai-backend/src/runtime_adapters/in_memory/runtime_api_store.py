@@ -273,9 +273,15 @@ class InMemoryRuntimeApiStore:
         org_id: str,
         conversation_id: str,
         limit: int,
+        before_created_at: datetime | None = None,
+        before_message_id: str | None = None,
         include_deleted: bool = False,
     ) -> Sequence[MessageRecord]:
-        """Return messages ordered by creation time."""
+        """Return the most-recent ``limit`` messages older than the keyset, ASC.
+
+        Filters ``self.messages`` on the composite ``(created_at, message_id)``
+        keyset, takes the newest ``limit`` (DESC), then reverses to ascending.
+        """
 
         records = [
             message
@@ -284,7 +290,19 @@ class InMemoryRuntimeApiStore:
         ]
         if not include_deleted:
             records = [message for message in records if message.deleted_at is None]
-        return tuple(sorted(records, key=lambda message: message.created_at)[:limit])
+        if before_created_at is not None and before_message_id is not None:
+            keyset = (before_created_at, before_message_id)
+            records = [
+                message
+                for message in records
+                if (message.created_at, message.message_id) < keyset
+            ]
+        newest_first = sorted(
+            records,
+            key=lambda message: (message.created_at, message.message_id),
+            reverse=True,
+        )[:limit]
+        return tuple(reversed(newest_first))
 
     async def append_message(self, message: MessageRecord) -> MessageRecord:
         """Append a runtime-created message."""

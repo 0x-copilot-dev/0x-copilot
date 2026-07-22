@@ -41,6 +41,47 @@ function sourceEvent(docId: string, seq: number): RuntimeEventEnvelope {
   } as unknown as RuntimeEventEnvelope;
 }
 
+function runtimeEvent(
+  eventType: string,
+  seq: number,
+  payload: Record<string, unknown>,
+): RuntimeEventEnvelope {
+  return {
+    event_id: `e${seq}`,
+    run_id: "r1",
+    sequence_no: seq,
+    event_type: eventType,
+    created_at: new Date(1_700_000_000_000 + seq * 1000).toISOString(),
+    payload,
+  } as unknown as RuntimeEventEnvelope;
+}
+
+// WC-P6c — a cited tool call (citation_made → tool_call/tool_result) that the
+// CitationProjector didn't recognise as a source.
+function citedToolCallEvents(callId: string): RuntimeEventEnvelope[] {
+  return [
+    runtimeEvent("tool_call", 1, {
+      call_id: callId,
+      tool_name: "web_search",
+      args: { query: "acme" },
+    }),
+    runtimeEvent("tool_result", 2, {
+      call_id: callId,
+      tool_name: "web_search",
+      summary: "one result",
+    }),
+    runtimeEvent("citation_made", 3, {
+      link: {
+        conversation_ordinal: 1,
+        message_id: "m1",
+        prose_offset: 0,
+        prose_length: 5,
+        source_tool_call_id: callId,
+      },
+    }),
+  ];
+}
+
 function seededSource(docId: string, count = 1) {
   return {
     ...citation(docId),
@@ -145,6 +186,39 @@ describe("useRunSources", () => {
       // Settled → seed is authoritative (count 1), NOT seed(1) + live(1) = 2.
       expect(result.current.sources.get("gdrive a")?.citation_count).toBe(1);
       expect(result.current.sources.size).toBe(1);
+    });
+  });
+
+  it("folds a cited tool call (citation_made) into Sources — and keeps it after settle", async () => {
+    const sourcesRef: { current: unknown[] } = { current: [] };
+    const events = citedToolCallEvents("call_x");
+    const { result, rerender } = renderHook(
+      (props: { runStatus: AgentRunStatus }) =>
+        useRunSources({
+          conversationId: "c",
+          runId: "r1",
+          runStatus: props.runStatus,
+          events,
+        }),
+      {
+        wrapper: wrapper(makeTransport(sourcesRef)),
+        initialProps: { runStatus: "running" as AgentRunStatus },
+      },
+    );
+    // Cited tool call surfaces as a synthetic tool-source row (GET /sources is
+    // empty — the projector didn't recognise it).
+    await waitFor(() => {
+      const row = result.current.sources.get("web tool-call:call_x");
+      expect(row?.snippet).toBe("one result");
+      expect(row?.citation_count).toBe(1);
+    });
+
+    // Run completes: the row must SURVIVE settle (it is never in GET /sources).
+    rerender({ runStatus: "completed" });
+    await waitFor(() => {
+      expect(result.current.sources.get("web tool-call:call_x")?.snippet).toBe(
+        "one result",
+      );
     });
   });
 });

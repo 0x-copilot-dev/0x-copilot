@@ -293,7 +293,7 @@ describe("CopilotApp destination dispatch", () => {
     expect(await screen.findByTestId(testid)).toBeInTheDocument();
   });
 
-  it("wires Chats onOpenRun → navigate to the Run destination", async () => {
+  it("wires Chats onOpenRun → open that conversation in the Run cockpit (WC-P2)", async () => {
     renderAt("/chats");
     await screen.findByTestId("chats-stub");
 
@@ -302,10 +302,13 @@ describe("CopilotApp destination dispatch", () => {
       onOpenRun("conv_1");
     });
 
-    // Run is ROOT_DESTINATION, which round-trips to "/".
+    // WC-P2: reopen targets the specific thread — the run destination (root)
+    // carries the conversation id in its subPath slot, so the URL is
+    // /run/<id>, not the id-less "/". This is what lets a reopened chat bind
+    // its own conversation instead of the most-recent one.
     expect(ROOT_DESTINATION).toBe("run");
     await waitFor(() => {
-      expect(window.location.pathname).toBe("/");
+      expect(window.location.pathname).toBe("/run/conv_1");
     });
     expect(await screen.findByTestId("run-cockpit")).toBeInTheDocument();
   });

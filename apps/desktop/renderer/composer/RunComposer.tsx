@@ -49,6 +49,14 @@ export interface RunComposerProps {
   readonly disabled: boolean;
   /** Placeholder text (mirrors the cockpit's live/ghost copy). */
   readonly placeholder: string;
+  /**
+   * WC-P3 (AD-4) — true while the bound run is cancellable; the composer swaps
+   * its send button for Stop. Cockpit-derived + owned (optimistically false the
+   * instant Stop is pressed), handed down through the renderComposer ctx.
+   */
+  readonly running?: boolean;
+  /** WC-P3 (AD-4) — cancel the bound run (cockpit-owned best-effort POST). */
+  readonly onCancel?: () => void;
   /** Navigate to the Tools (connectors) surface — MCP + non-MCP visibility. */
   readonly onShowConnectors?: () => void;
   /** Navigate to the Skills surface. */
@@ -91,6 +99,8 @@ export function RunComposer(props: RunComposerProps): ReactElement {
     dispatch,
     disabled,
     placeholder,
+    running = false,
+    onCancel,
     onShowConnectors,
     onOpenSkillsSettings,
     onOpenModelSettings,
@@ -266,6 +276,9 @@ export function RunComposer(props: RunComposerProps): ReactElement {
         onSubmit={handleSubmit}
         onSubmitError={handleSubmitError}
         disabled={disabled}
+        // WC-P3: cockpit-owned run state + cancel — swaps send↔Stop.
+        running={running}
+        onCancel={onCancel}
         onOpenSkillsPanel={() => onOpenSkillsSettings?.()}
         // Surfaced for the "Set up your model" path; harmless if unused here.
         onOpenDetailsPanel={onOpenModelSettings ? () => undefined : undefined}

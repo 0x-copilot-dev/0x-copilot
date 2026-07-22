@@ -29,6 +29,7 @@
 import {
   useCallback,
   useEffect,
+  useMemo,
   useRef,
   useState,
   type ReactElement,
@@ -44,7 +45,14 @@ import {
 import type { ConversationId } from "@0x-copilot/api-types";
 
 import type { RequestIdentity } from "../../api/config";
+import { installMcpServer, skipMcpAuth, startMcpAuth } from "../../api/mcpApi";
+import type { CompletedMcpAuthAction } from "../chat/mcpAuthAction";
+import { createWebMcpAuthPort } from "./webMcpAuthPort";
+import { RunComposer } from "./RunComposer";
 import { RunEmptyComposer } from "./RunEmptyComposer";
+// WC-P6a: the web citation chip renderer, threaded into the cockpit so in-chat
+// `[[N]]` / `[c<id>]` chips resolve against the `projectCitations` provider.
+import { runMarkdownComponents } from "./runMarkdownComponents";
 
 // The shared FTUE / onboarding-composer styles (hero · starter chips ·
 // composer). The empty-state composer reuses these `.fr-*` classes; import them
@@ -60,6 +68,14 @@ export interface RunRouteProps {
    */
   readonly conversationId?: ConversationId | null;
   /**
+   * WC-P2 — called once the lazy ensure-conversation-on-run mints a NEW
+   * conversation (a first send from a fresh chat). The host promotes the URL
+   * from `/` to `/run/<conversationId>` so a refresh / back / share targets the
+   * same thread. Host-owned because the URL is substrate (App owns the router);
+   * the cockpit keeps binding from its own `conversationId` state either way.
+   */
+  readonly onConversationCreated?: (conversationId: ConversationId) => void;
+  /**
    * Open Settings → Provider keys. Threaded to the cockpit's empty-state
    * composer for the "Set up your model" CTA and the `configuration_error`
    * "Add a provider key" CTA. Host-owned so the substrate-agnostic package
@@ -68,12 +84,30 @@ export interface RunRouteProps {
   readonly onOpenModelSettings?: () => void;
   /** Signed-in identity — threaded to the empty composer's live model catalog. */
   readonly identity: RequestIdentity;
+  /**
+   * WC-P5b (AD-8) — the mid-run MCP-OAuth resume signal, minted by App's
+   * `/mcp/oauth/callback` effect and threaded into BOTH the cockpit and the
+   * legacy ChatScreen (the callback is shared, not duplicated). When set, the
+   * resume effect below maps its `runId` back to a conversation
+   * (`GET /v1/agent/runs/{run_id}`) and re-opens it; `useRunSession` then
+   * self-resumes the stream from its cursor — no resume code in the cockpit.
+   */
+  readonly completedMcpAuthAction?: CompletedMcpAuthAction | null;
+  /**
+   * WC-P5b — a human-readable OAuth status line from the callback (e.g.
+   * "<connector> is connected." / an error). Accepted so the host wires the same
+   * value it threads into ChatScreen; the cockpit surfaces run state itself, so
+   * this is currently informational only (reserved for a future status affordance).
+   */
+  readonly oauthStatus?: string | null;
 }
 
 export function RunRoute({
   conversationId: propConversationId = null,
+  onConversationCreated,
   onOpenModelSettings,
   identity,
+  completedMcpAuthAction = null,
 }: RunRouteProps): ReactElement {
   const transport = useTransport();
   const [conversationId, setConversationId] = useState<ConversationId | null>(
@@ -84,6 +118,13 @@ export function RunRoute({
   useEffect(() => {
     setConversationId(propConversationId);
   }, [propConversationId]);
+  // Keep the bound conversation id reachable from the (stable) MCP-OAuth launcher
+  // without re-memoising it on every conversation switch: `beginAuth` reads the
+  // latest id through this ref to resolve the active run for the stash (AD-8).
+  const conversationIdRef = useRef<ConversationId | null>(conversationId);
+  useEffect(() => {
+    conversationIdRef.current = conversationId;
+  }, [conversationId]);
   // Readiness gate (Issue 1 parity): default true (fail-open) so a configured
   // user never flashes the setup CTA on load; flip to false only once the probe
   // CONFIRMS neither a BYOK key nor a running local model exists. A probe error
@@ -176,12 +217,108 @@ export function RunRoute({
       });
       const createdId = run.conversation_id;
       if (typeof createdId === "string" && createdId !== "") {
+        // Bind locally (immediate re-key, works even without a host callback)
+        // AND notify the host so it promotes the URL to /run/<id> (WC-P2). The
+        // URL round-trip feeds propConversationId back as the same id, so the
+        // reopen effect no-ops — no double remount.
         setConversationId(createdId as ConversationId);
+        onConversationCreated?.(createdId as ConversationId);
       }
       return run.run_id ?? null;
     },
-    [transport, conversationId],
+    [transport, conversationId, onConversationCreated],
   );
+
+  // WC-P5b (AD-6): the web MCP-OAuth launcher for the in-chat `mcp_auth` Connect
+  // card. Stable across conversation switches (it reads the bound id through
+  // `conversationIdRef`), so the cockpit never remounts on a rebind. The redirect
+  // + `sessionStorage` stash + `/mcp/oauth/callback` route stay host-owned here;
+  // `beginAuth` resolves the conversation's active run from its head (the seam
+  // `useRunSession` reads) so the resume can map run→conversation on return.
+  const mcpAuthPort = useMemo(
+    () =>
+      createWebMcpAuthPort({
+        resolveActiveRunId: async () => {
+          const conv = conversationIdRef.current;
+          if (conv === null || (conv as string) === "new") {
+            return null;
+          }
+          try {
+            const head = await transport.request<{
+              readonly latest_run_id?: string | null;
+            }>({ method: "GET", path: `/v1/agent/conversations/${conv}` });
+            return head.latest_run_id ?? null;
+          } catch {
+            // Head unresolved (404 on a brand-new conversation, transient error) →
+            // no run to stash; the launcher still starts OAuth, it just cannot
+            // self-resume. Never throw into the card.
+            return null;
+          }
+        },
+        startAuth: async (serverId) =>
+          (await startMcpAuth(serverId, identity)).auth_url,
+        recordSkip: async (serverId) => {
+          await skipMcpAuth(serverId, identity);
+        },
+        installConnector: async (slug) =>
+          (await installMcpServer(slug, identity)).server_id,
+        // The redirect / `window.location` assignment is the host's job (NFR-5).
+        redirect: (url) => {
+          window.location.href = url;
+        },
+      }),
+    [transport, identity],
+  );
+
+  // WC-P5b (AD-8) — mid-run MCP-OAuth resume. When the callback mints a
+  // `completedMcpAuthAction`, the stash carries the run id only; map it back to
+  // its conversation and re-open that thread so the cockpit rebinds. We do NOT
+  // re-implement streaming — `useRunSession` self-resumes from its cursor once
+  // the conversation is bound. R2 degrade: a lost/terminated run (GET 404s, or
+  // returns no conversation) resolves to landing on the conversation transcript
+  // (or, if fully unresolvable, staying put) — never a hung stream.
+  useEffect(() => {
+    if (
+      completedMcpAuthAction === null ||
+      completedMcpAuthAction.runId === null
+    ) {
+      return;
+    }
+    const runId = completedMcpAuthAction.runId;
+    let cancelled = false;
+    void (async () => {
+      try {
+        const run = await transport.request<{
+          readonly conversation_id?: string;
+        }>({ method: "GET", path: `/v1/agent/runs/${runId}` });
+        if (cancelled) {
+          return;
+        }
+        const resolvedConversationId = run.conversation_id;
+        if (
+          typeof resolvedConversationId === "string" &&
+          resolvedConversationId !== ""
+        ) {
+          // Bind locally (immediate re-key) AND notify the host so it promotes
+          // the URL to /run/<id> — the same pattern the lazy new-chat create
+          // uses. `useRunSession` head-resolves the run and streams if it is
+          // still live, or shows the terminal transcript if it finished during
+          // the redirect (R2) — either way, no hung stream.
+          setConversationId(resolvedConversationId as ConversationId);
+          onConversationCreated?.(resolvedConversationId as ConversationId);
+        }
+        // No conversation_id → nothing to bind; leave the cockpit on its current
+        // view rather than opening a stream we cannot resolve.
+      } catch {
+        // R2: the run/approval row was lost (e.g. a backend restart dropped the
+        // in-memory run) → swallow. The cockpit stays on its current view; never
+        // a throw, never a hung stream.
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [completedMcpAuthAction, transport, onConversationCreated]);
 
   // Empty-state composer (FR-3.25): the design's "What should we run first?"
   // rich composer, mounted when there is no active run. Send binds the fresh
@@ -191,6 +328,27 @@ export function RunRoute({
       <RunEmptyComposer ctx={ctx} identity={identity} />
     ),
     [identity],
+  );
+
+  // P1 keystone: the in-chat (turn-N) composer. The cockpit injects `dispatch`
+  // (start run + bind session) into the ctx; RunComposer routes send through it,
+  // so a 2nd message streams exactly like the first (no more inert turn-N).
+  const renderComposer = useCallback(
+    (ctx: {
+      readonly disabled: boolean;
+      readonly placeholder: string;
+      readonly dispatch: (request: RunStartRequest) => Promise<void>;
+      // WC-P3 — cockpit-owned run state + cancel; RunComposer swaps send↔Stop.
+      readonly running: boolean;
+      readonly onCancel: () => void;
+    }) => (
+      <RunComposer
+        ctx={ctx}
+        identity={identity}
+        onOpenModelSettings={onOpenModelSettings}
+      />
+    ),
+    [identity, onOpenModelSettings],
   );
 
   // A new chat (no conversation yet) mounts the cockpit against a "new" sentinel:
@@ -215,7 +373,13 @@ export function RunRoute({
         onStartRun={handleStartRun}
         modelReady={modelReady}
         onOpenModelSettings={onOpenModelSettings}
+        renderComposer={renderComposer}
         renderEmptyComposer={renderEmptyComposer}
+        mcpAuthPort={mcpAuthPort}
+        // WC-P6a (AD-11): in-chat citation chips. The cockpit mounts the
+        // CitationsProvider (fed by projectCitations over session.events); these
+        // host wrappers resolve `[[N]]` / `[c<id>]` chips against it.
+        markdownComponents={runMarkdownComponents}
       />
     </section>
   );

@@ -765,11 +765,16 @@ export function RunBinder({
       // §D3 — the cockpit injects its ONE dispatch into the composer ctx; the
       // in-chat send routes through it so it binds the live session.
       readonly dispatch: (request: RunStartRequest) => Promise<void>;
+      // WC-P3 — cockpit-owned run state + cancel; the composer swaps send↔Stop.
+      readonly running: boolean;
+      readonly onCancel: () => void;
     }) => (
       <RunComposer
         dispatch={ctx.dispatch}
         disabled={ctx.disabled}
         placeholder={ctx.placeholder}
+        running={ctx.running}
+        onCancel={ctx.onCancel}
         onShowConnectors={onOpenConnectors}
         onOpenSkillsSettings={onOpenSkills}
         onOpenModelSettings={onOpenModelSettings}

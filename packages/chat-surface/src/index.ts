@@ -1294,6 +1294,32 @@ export {
 export { type TcChatApproval } from "./thread-canvas";
 // === end Phase 3 (PR-3.10) ===
 
+// === WC-P5a (MCP-OAuth chat-surface half) ===
+// The chat-surface half of mid-run MCP-OAuth (docs/plan/web-convergence/PRD.md
+// AD-6/AD-7). `McpAuthPort` is the TYPE the host implements (web launcher over
+// `createComposerConnectorsPort`; desktop over Electron IPC) — chat-surface
+// defines it and the in-chat `mcp_auth` Connect card (`TcChat`) calls it, but the
+// full-page redirect / `sessionStorage` stash / `/mcp/oauth/callback` route never
+// enter this package (NFR-1/NFR-5). `RunDestination.mcpAuthPort` threads it to the
+// card; a `mcp_auth` gate / `mcp_discovery:` suggestion resolves through this port
+// (`beginAuth`/`skipAuth`), NEVER the `resolveApproval` `/decision` POST (which
+// 404s on discovery). The `approvalKind` carried on `RunApproval`/`TcChatApproval`
+// (above) is what the card branches on. The host launcher + OAuth resume land in
+// P5b (apps/frontend), NOT here.
+export type { McpAuthPort } from "./destinations/run";
+// === end WC-P5a (MCP-OAuth chat-surface half) ===
+
+// === WC-P6a — citation projection (in-chat chip resolution, AD-11) ===
+// `projectCitations` is a PURE selector over the single canonical run event
+// stream (a peer of `projectSubagents` / `projectApprovals`) — no second SSE
+// subscription / projector (FR-3.3). It reduces `session.events` into the run-
+// scoped `CitationsProvider` inputs (`[c<id>]` source registry + `[[N]]` link
+// registry + active/terminal run ids). `RunDestination` performs the wiring
+// (mounts the provider around the single TcChat, threads `markdownComponents`);
+// the host supplies the nav-aware chip renderer + `onOrdinalSelect`.
+export { projectCitations, type CitationProjection } from "./destinations/run";
+// === end WC-P6a ===
+
 // === Phase 3 (PR-3.11) run empty/multi-run ===
 // The two prototype-gap states `RunDestination` mounts internally: the
 // empty/idle goal composer (`RunEmptyState`, FR-3.25 — shown when the

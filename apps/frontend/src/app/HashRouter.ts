@@ -203,14 +203,20 @@ function routeFromLocation(): AppRoute {
 
 function pathForRoute(route: AppRoute): { path: string; hash: string } {
   if (route.screen === "chat") {
+    const sub = route.subPath ?? null;
     // Round-trip the root destination as `/` so external bookmarks /
-    // copy-paste keep the legacy entry URL. Every other destination
-    // lives at `/<slug>` and may carry an in-destination subPath
-    // (P12-C — `/team/<id>`, `/memory/<id>`, `/memory/proposals`).
-    if (route.destination === ROOT_DESTINATION) {
+    // copy-paste keep the legacy entry URL — but ONLY when it carries no
+    // subPath. WC-P2: the Run cockpit (the root destination) at a bound
+    // conversation round-trips as `/run/<conversationId>` so reopen / refresh /
+    // back / share targets that thread; a fresh new run (no subPath) stays `/`.
+    // Every other destination lives at `/<slug>` and may carry an
+    // in-destination subPath (P12-C — `/team/<id>`, `/memory/<id>`).
+    if (
+      route.destination === ROOT_DESTINATION &&
+      (sub === null || sub.length === 0)
+    ) {
       return { path: "/", hash: "" };
     }
-    const sub = route.subPath ?? null;
     if (sub === null || sub.length === 0) {
       return { path: `/${route.destination}`, hash: "" };
     }

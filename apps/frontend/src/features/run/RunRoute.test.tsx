@@ -11,9 +11,16 @@
 // substrate-boundary eslint rules are off — importing the chat-transport port
 // types + registry helpers for setup is intentional and sanctioned.
 
-import { act, render, screen, waitFor, within } from "@testing-library/react";
+import {
+  act,
+  fireEvent,
+  render,
+  screen,
+  waitFor,
+  within,
+} from "@testing-library/react";
 import type { ReactElement } from "react";
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import {
   KeyValueStoreProvider,
@@ -33,6 +40,7 @@ import type { ConversationId } from "@0x-copilot/api-types";
 
 import { registerSurfaces } from "../../app/registerSurfaces";
 import type { RequestIdentity } from "../../api/config";
+import type { CompletedMcpAuthAction } from "../chat/mcpAuthAction";
 import { RunRoute } from "./RunRoute";
 
 // jsdom ships no IntersectionObserver; the rich empty composer's AssistantComposer
@@ -156,6 +164,8 @@ function makeStore() {
 function renderRoute(
   transport: Transport,
   conversationId?: string,
+  onConversationCreated?: (id: ConversationId) => void,
+  completedMcpAuthAction?: CompletedMcpAuthAction | null,
 ): ReturnType<typeof render> {
   const ui: ReactElement = (
     <TransportProvider transport={transport}>
@@ -167,6 +177,8 @@ function renderRoute(
               ? null
               : (conversationId as ConversationId)
           }
+          onConversationCreated={onConversationCreated}
+          completedMcpAuthAction={completedMcpAuthAction}
         />
       </KeyValueStoreProvider>
     </TransportProvider>
@@ -260,6 +272,12 @@ describe("RunRoute (PRD-05)", () => {
       within(record).getByText("Fix login redirect loop"),
     ).toBeInTheDocument();
     expect(within(record).getByText("In Progress")).toBeInTheDocument();
+
+    // WC-P1 keystone: the reopened cockpit now fills the `renderComposer` slot,
+    // so a SECOND (turn-N) in-chat message has a live composer + send path — the
+    // web bug where a 2nd message was inert is closed. Before P1 the cockpit
+    // mounted only the empty composer and this element did not exist.
+    expect(await screen.findByTestId("run-composer")).toBeInTheDocument();
   });
 
   it("mounts the design's rich empty composer ('What should we run first?') when there is no active run", async () => {
@@ -293,5 +311,204 @@ describe("RunRoute (PRD-05)", () => {
         (r) => r.method === "POST" && r.path === "/v1/agent/conversations",
       ),
     ).toBe(false);
+  });
+
+  // WC-P2 (AD-10): a new chat has no conversation until the first send mints one
+  // (ensure-conversation-on-run). The host must be told the created id so it can
+  // promote the URL from `/` to `/run/<id>` (reopen / refresh / share target it).
+  it("calls onConversationCreated when a new chat's first send mints a conversation", async () => {
+    const transport = new FakeTransport();
+    transport.requestHandler = async (req) => {
+      if (req.path === "/v1/settings/provider-keys") {
+        return { keys: [{ id: "k1" }] }; // configured → modelReady stays true
+      }
+      if (req.path === "/v1/agent/models") {
+        return {
+          models: [
+            {
+              id: "gpt-5.4",
+              provider: "openai",
+              model_name: "gpt-5.4",
+              name: "GPT-5.4",
+              configured: true,
+              supports_streaming: true,
+            },
+          ],
+        };
+      }
+      if (req.path.includes("/messages")) return { messages: [] };
+      // Ensure-conversation-on-run: the first send POSTs a run with NO
+      // conversation_id + an idempotency key; the server mints + returns both.
+      // (Checked BEFORE the runs-list GET — both paths end with "/runs".)
+      if (req.method === "POST" && req.path === "/v1/agent/runs") {
+        return { run_id: "run-new", conversation_id: "conv-new" };
+      }
+      if (req.path.endsWith("/runs")) return { runs: [] };
+      return {}; // head GET → no active run → empty composer
+    };
+    const onConversationCreated = vi.fn();
+
+    // New chat — no conversationId prop (the `/` entry, not `/run/<id>`).
+    const { container } = renderRoute(
+      transport,
+      undefined,
+      onConversationCreated,
+    );
+
+    await screen.findByTestId("first-run-composer-h1");
+    const input = container.querySelector<HTMLTextAreaElement>(
+      "[data-testid='composer-textarea']",
+    );
+    expect(input).not.toBeNull();
+    fireEvent.change(input as HTMLTextAreaElement, {
+      target: { value: "Ship the renewal batch" },
+    });
+    fireEvent.click(
+      container.querySelector(
+        "button[aria-label='Send message']",
+      ) as HTMLButtonElement,
+    );
+
+    // The first send POSTed a run with no conversation_id + an idempotency key…
+    await waitFor(() => {
+      const post = transport.requests.find(
+        (r) => r.method === "POST" && r.path === "/v1/agent/runs",
+      );
+      expect(post).toBeDefined();
+      const body = post?.body as Record<string, unknown> | undefined;
+      expect(body?.conversation_id).toBeUndefined();
+      expect(body?.conversation_idempotency_key).toBeDefined();
+    });
+    // …and the host was notified with the created id so App can promote the URL.
+    await waitFor(() =>
+      expect(onConversationCreated).toHaveBeenCalledWith("conv-new"),
+    );
+  });
+
+  // WC-P5b (AD-8): mid-run MCP-OAuth resume. App navigates back to the run root
+  // (dropping the conversation from the URL) and mints a `completedMcpAuthAction`
+  // carrying the run id ONLY. The binder maps run→conversation via
+  // `GET /v1/agent/runs/{run_id}` and re-opens that conversation so the cockpit
+  // rebinds; `useRunSession` then self-resumes the stream from its cursor.
+  it("resolves run→conversation from a completedMcpAuthAction and opens that conversation", async () => {
+    const transport = new FakeTransport();
+    transport.requestHandler = async (req) => {
+      if (req.path === "/v1/settings/provider-keys") {
+        return { keys: [{ id: "k1" }] };
+      }
+      // The resume GET: run id → its conversation. (`/runs/run-oauth` does not
+      // end with `/runs`, so it never collides with the runs-list branch.)
+      if (req.method === "GET" && req.path === "/v1/agent/runs/run-oauth") {
+        return { conversation_id: "conv-resumed", status: "running" };
+      }
+      if (req.path.includes("/messages")) return { messages: [] };
+      // POST-run guard BEFORE any endsWith("/runs") GET branch (both end "/runs").
+      if (req.method === "POST" && req.path === "/v1/agent/runs") return {};
+      if (req.path.endsWith("/runs")) return { runs: [] };
+      return {}; // head GET → no active run for the "new" mount
+    };
+    const onConversationCreated = vi.fn();
+    const completed: CompletedMcpAuthAction = {
+      approvalId: "mcp_auth:run-oauth:seed:linear",
+      serverId: "seed:linear",
+      runId: "run-oauth",
+      createdAt: "2026-07-22T10:00:00.000Z",
+      completedAt: "2026-07-22T10:01:00.000Z",
+    };
+
+    // Mount at the run root (no conversationId), exactly as App does on OAuth return.
+    renderRoute(transport, undefined, onConversationCreated, completed);
+
+    // The binder resolved run→conversation and re-opened the thread so the
+    // cockpit rebinds (URL promotes to /run/conv-resumed).
+    await waitFor(() =>
+      expect(onConversationCreated).toHaveBeenCalledWith("conv-resumed"),
+    );
+    expect(
+      transport.requests.some(
+        (r) => r.method === "GET" && r.path === "/v1/agent/runs/run-oauth",
+      ),
+    ).toBe(true);
+    // Resume NEVER POSTs a `/decision` for an `mcp_auth` gate (AD-7).
+    expect(transport.requests.some((r) => r.path.includes("/approvals/"))).toBe(
+      false,
+    );
+  });
+
+  // R2 degrade: the run terminated during the redirect (or its row was lost to a
+  // backend restart). Resolving still yields a conversation → land on it (the
+  // completed transcript), never a hung stream.
+  it("degrades to landing on the conversation when the resumed run has terminated", async () => {
+    const transport = new FakeTransport();
+    transport.requestHandler = async (req) => {
+      if (req.path === "/v1/settings/provider-keys") {
+        return { keys: [{ id: "k1" }] };
+      }
+      if (req.method === "GET" && req.path === "/v1/agent/runs/run-done") {
+        // Terminal status, but still a resolvable conversation.
+        return { conversation_id: "conv-done", status: "completed" };
+      }
+      if (req.path.includes("/messages")) return { messages: [] };
+      if (req.method === "POST" && req.path === "/v1/agent/runs") return {};
+      if (req.path.endsWith("/runs")) return { runs: [] };
+      return {};
+    };
+    const onConversationCreated = vi.fn();
+    const completed: CompletedMcpAuthAction = {
+      approvalId: "mcp_auth:run-done:seed:linear",
+      serverId: "seed:linear",
+      runId: "run-done",
+      createdAt: "2026-07-22T10:00:00.000Z",
+      completedAt: "2026-07-22T10:01:00.000Z",
+    };
+
+    renderRoute(transport, undefined, onConversationCreated, completed);
+
+    // Still lands on the conversation (transcript), no throw.
+    await waitFor(() =>
+      expect(onConversationCreated).toHaveBeenCalledWith("conv-done"),
+    );
+    expect(await screen.findByTestId("run-route")).toBeInTheDocument();
+  });
+
+  // R2 degrade: the run/approval row was fully lost (GET 404s). No conversation
+  // to resolve → the resume swallows the error, opens nothing, and the cockpit
+  // stays rendered — never a throw, never a hung stream.
+  it("degrades without throwing when the resumed run cannot be resolved", async () => {
+    const transport = new FakeTransport();
+    transport.requestHandler = async (req) => {
+      if (req.path === "/v1/settings/provider-keys") {
+        return { keys: [{ id: "k1" }] };
+      }
+      if (req.method === "GET" && req.path === "/v1/agent/runs/run-lost") {
+        throw new Error("404 run not found");
+      }
+      if (req.path.includes("/messages")) return { messages: [] };
+      if (req.method === "POST" && req.path === "/v1/agent/runs") return {};
+      if (req.path.endsWith("/runs")) return { runs: [] };
+      return {};
+    };
+    const onConversationCreated = vi.fn();
+    const completed: CompletedMcpAuthAction = {
+      approvalId: "mcp_auth:run-lost:seed:linear",
+      serverId: "seed:linear",
+      runId: "run-lost",
+      createdAt: "2026-07-22T10:00:00.000Z",
+      completedAt: "2026-07-22T10:01:00.000Z",
+    };
+
+    renderRoute(transport, undefined, onConversationCreated, completed);
+
+    // The failing resolve was attempted…
+    await waitFor(() =>
+      expect(
+        transport.requests.some(
+          (r) => r.method === "GET" && r.path === "/v1/agent/runs/run-lost",
+        ),
+      ).toBe(true),
+    );
+    // …but no conversation was opened, and the cockpit is still rendered.
+    expect(onConversationCreated).not.toHaveBeenCalled();
+    expect(screen.getByTestId("run-route")).toBeInTheDocument();
   });
 });

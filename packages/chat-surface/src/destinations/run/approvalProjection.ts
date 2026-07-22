@@ -53,6 +53,13 @@ export interface RunApproval {
   /** Optional sub-line (from `payload.message` / `payload.summary`). */
   readonly summary: string | null;
   readonly approvalKind: RunApprovalKind;
+  /**
+   * WC-P5a (AD-7): the connector `server_id` from the approval payload, threaded
+   * so the in-chat `mcp_auth` Connect card can call `McpAuthPort.beginAuth`/
+   * `skipAuth(serverId)`. Present on `mcp_auth` gates + `mcp_discovery:`
+   * suggestions (both `mcp_auth_required` events); null on plain tool approvals.
+   */
+  readonly serverId: string | null;
   /** Vendor·access pill ({ vendor: "SLACK", access: "ACTION" }); null when unknown. */
   readonly category: {
     readonly vendor: string;
@@ -95,6 +102,15 @@ const EMPTY_QUEUE: ApprovalsQueueProjection = { pending: [], recent: [] };
 
 const APPROVAL_REQUESTED = "approval_requested";
 const APPROVAL_RESOLVED = "approval_resolved";
+// WC-P5a (AD-7): the mid-run connector-auth gate + catalog suggestion both ride
+// the backend `mcp_auth_required` event (never `approval_requested`), carrying
+// `approval_kind: "mcp_auth"` and an `approval_id` that is either the blocking
+// `mcp_auth:<run_id>:<server_id>` or the suggestion `mcp_discovery:<run_id>:…`.
+// We reduce it exactly like `approval_requested` (open a pending row) so the
+// in-chat `mcp_auth` Connect card can render off the SAME single projection
+// (FR-3.3); its resolution is a host `mcp_auth_resolved` decision after OAuth
+// returns (P5b), never the `/decision` POST this projection's consumers own.
+const MCP_AUTH_REQUIRED = "mcp_auth_required";
 
 const DEFAULT_REASON =
   "The agent paused here — it won't sign until you approve.";
@@ -105,6 +121,7 @@ interface MutableApproval {
   reason: string;
   summary: string | null;
   approvalKind: RunApprovalKind;
+  serverId: string | null;
   category: { vendor: string; access: string } | null;
   params: ActivityParam[];
   target: string | null;
@@ -142,7 +159,10 @@ export function projectApprovals(
     }
     seen.add(event.event_id);
 
-    if (event.event_type === APPROVAL_REQUESTED) {
+    if (
+      event.event_type === APPROVAL_REQUESTED ||
+      event.event_type === MCP_AUTH_REQUIRED
+    ) {
       reduceRequested(event, byId, order);
     } else if (event.event_type === APPROVAL_RESOLVED) {
       reduceResolved(event, byId);
@@ -226,7 +246,10 @@ function reduceRequested(
       event.summary ??
       existing?.summary ??
       null,
-    approvalKind: mapApprovalKind(payload.approval_kind),
+    approvalKind: resolveApprovalKind(event),
+    // WC-P5a (AD-7): the connector target of an `mcp_auth` gate / `mcp_discovery`
+    // suggestion — the arg the Connect card hands to `McpAuthPort.beginAuth`.
+    serverId: stringField(payload.server_id) ?? existing?.serverId ?? null,
     category: buildCategory(event),
     params: buildParams(payload.arguments),
     target: buildTarget(payload.arguments),
@@ -266,6 +289,7 @@ function freeze(m: MutableApproval): RunApproval {
     reason: m.reason,
     summary: m.summary,
     approvalKind: m.approvalKind,
+    serverId: m.serverId,
     category: m.category,
     params: m.params,
     target: m.target,
@@ -327,6 +351,22 @@ function mapApprovalKind(value: unknown): RunApprovalKind {
     default:
       return "unknown";
   }
+}
+
+/**
+ * WC-P5a (AD-7): the approval's kind, defaulting an `mcp_auth_required` event to
+ * `mcp_auth` when its payload omits `approval_kind`. The backend already stamps
+ * `approval_kind: "mcp_auth"` on these events (`stream_events.payload_with_action_id`),
+ * so this is a belt-and-suspenders default that keeps the Connect card's
+ * recognition (`approvalKind === "mcp_auth"`) robust to a stripped payload rather
+ * than mis-rendering the auth gate as a `/decision` Approve/Reject card.
+ */
+function resolveApprovalKind(event: RuntimeEventEnvelope): RunApprovalKind {
+  const kind = mapApprovalKind(event.payload.approval_kind);
+  if (kind === "unknown" && event.event_type === MCP_AUTH_REQUIRED) {
+    return "mcp_auth";
+  }
+  return kind;
 }
 
 function buildCategory(

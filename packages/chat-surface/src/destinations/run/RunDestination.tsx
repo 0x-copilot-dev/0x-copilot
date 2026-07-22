@@ -57,11 +57,13 @@ import {
 } from "react";
 
 import type {
+  AgentRunStatus,
   ConversationConnectorScopes,
   ConversationId,
   ModelSelectionRequest,
   RunAttachmentRequest,
   RunId,
+  SourceEntry,
   SurfaceEdits,
 } from "@0x-copilot/api-types";
 
@@ -69,6 +71,15 @@ import {
   humanTransportMessage,
   parseTransportError,
 } from "../../errors/transportError";
+// WC-P6a (AD-11): the run-scoped citation registry provider + the pure projection
+// that feeds it. `projectCitations` is a peer of `projectSubagents` /
+// `projectApprovals` — a pure selector over the SAME `session.events`, no second
+// SSE subscription / projector (FR-3.3). The provider is mounted around the single
+// TcChat so the host-supplied chip renderer (`markdownComponents`) resolves
+// `[[N]]` / `[c<id>]` chips against it; the chip node + nav stay host-owned.
+import { CitationsProvider } from "../../citations/CitationsContext";
+import type { MarkdownTextProps } from "../../messages/MarkdownText";
+import { projectCitations } from "./projectCitations";
 // PRD-09c: the host-owned edit-on-surface overlay. Mounted OVER the pure adapter
 // via ThreadCanvas.editSlot → TcSurfaceMount; its submit reuses resolveApproval.
 import { EditOverlay } from "../../surfaces/edit/EditOverlay";
@@ -93,6 +104,12 @@ import {
   toApprovalsQueue,
   type RunApprovalDecision,
 } from "./approvalProjection";
+// WC-P5a (AD-6/AD-7): the host-supplied MCP-OAuth launcher port TYPE. Threaded
+// through to `TcChat` so the in-chat `mcp_auth` Connect card starts OAuth via the
+// host (redirect/stash/callback stay host-owned, P5b) instead of the `/decision`
+// POST. Optional — hosts that have not wired a launcher pass nothing and the card
+// degrades to an inert (but visible) gate.
+import type { McpAuthPort } from "./mcpAuthPort";
 // PR-3.11: the two prototype-gap states — the empty/idle goal composer
 // (FR-3.25) and the multi-run selector (FR-3.26). Both mount inside this shell
 // (no separate host remount): the empty state binds a freshly-started run via
@@ -105,6 +122,7 @@ import { projectSurfaceDiffs } from "./_surfaceDiffs";
 import { RunHeader } from "./RunHeader";
 import { RunMultiSelect } from "./RunMultiSelect";
 import { RunWorkspaceRail } from "./RunWorkspaceRail";
+import type { SourceRowSlot } from "../../workspace";
 import { useRailWidth } from "./useRailWidth";
 import { useRunMode } from "./useRunMode";
 import { useRunSources } from "./useRunSources";
@@ -113,6 +131,17 @@ import { useRunSession } from "./useRunSession";
 
 const EMPTY_DECISIONS: ReadonlyMap<string, RunApprovalDecision> = new Map();
 const EMPTY_CLOSED_URIS: ReadonlySet<string> = new Set();
+
+// WC-P3 (AD-4): a run is still cancellable in these non-terminal states — the
+// in-chat composer shows Stop instead of send. `cancelling` is already
+// stopping, so it is excluded from the Stop-visible set (the button hides the
+// moment cancel is in flight). Mirrors useRunTranscript/useRunSources'
+// ACTIVE_RUN_STATUSES (kept local to avoid coupling on an internal const).
+const CANCELLABLE_RUN_STATUSES: ReadonlySet<AgentRunStatus> = new Set([
+  "queued",
+  "running",
+  "waiting_for_approval",
+]);
 /** Surface-tab strip cap (PRD-04 — "+N more" overflow lands later). */
 const MAX_SURFACE_TABS = 8;
 
@@ -250,7 +279,59 @@ export interface RunDestinationProps {
      * await — a rejection routes to the composer's own error notice.
      */
     readonly dispatch: (request: RunStartRequest) => Promise<void>;
+    /**
+     * WC-P3 (AD-4) — true while the bound run is cancellable; the injected
+     * composer swaps its send button for Stop. Cockpit-derived from
+     * `useRunSession.runStatus` (optimistically false the instant Stop is
+     * pressed), so both substrates light up cancel with no dedicated port.
+     */
+    readonly running: boolean;
+    /**
+     * WC-P3 (AD-4) — cancel the bound run. Best-effort Transport POST; the
+     * cockpit owns the optimistic settle + the trailing `run_cancelled`
+     * reconciliation, so the composer only has to wire this to its Stop control.
+     */
+    readonly onCancel: () => void;
   }) => ReactElement | null;
+  /**
+   * WC-P5a (AD-6/AD-7): host launcher for the mid-run `mcp_auth` Connect card.
+   * Forwarded verbatim to `TcChat.mcpAuthPort`; when an approval is an `mcp_auth`
+   * gate / `mcp_discovery:` suggestion the in-chat card renders Connect / Skip
+   * wired to this port (`beginAuth` / `skipAuth`) instead of Approve/Reject, so
+   * the connector-auth gate NEVER resolves via the `/decision` POST (`mcp_auth`
+   * resolves via a host `mcp_auth_resolved` decision after OAuth returns — P5b;
+   * a `mcp_discovery:` row is not persisted, so `/decision` 404s). Omitted → the
+   * card degrades to an inert (but visible) gate. The redirect / `sessionStorage`
+   * stash / `/mcp/oauth/callback` route stay host-owned (NFR-5).
+   */
+  readonly mcpAuthPort?: McpAuthPort;
+  /**
+   * WC-P6a (AD-11): the host-supplied markdown chip renderer, forwarded verbatim
+   * to the in-chat `TcChat` (its `components.a` slot routes the citation-remark
+   * plugin's `#cite-ord:` / `#cite:` anchors to the host's chip dispatcher). The
+   * cockpit mounts a `CitationsProvider` (fed by the pure `projectCitations`
+   * selector) around that TcChat, so the host chip wrappers resolve `[[N]]` /
+   * `[c<id>]` chips against the single event projection. Omitted → assistant
+   * markdown renders without resolved chips (unchanged from before).
+   */
+  readonly markdownComponents?: MarkdownTextProps["components"];
+  /**
+   * WC-P6a: optional nav callback fired when an `[[N]]` chip is clicked, with the
+   * resolved synthetic `citation_id` (`tool:<source_tool_call_id>`). Host-owned
+   * (nav is substrate) so the package never navigates; omitted → the chip falls
+   * back to plain anchor navigation (`#tool-call-<callId>`).
+   */
+  readonly onOrdinalSelect?: (citationId: string) => void;
+  /**
+   * WC-P6c (FR-9): Sources-tab rail seams, threaded verbatim to
+   * `RunWorkspaceRail`. `onSelectSource` / `onJumpToChatSource` are host-owned
+   * nav (scroll the transcript to the cited chip); `SourceRowComponent` lets the
+   * web host inject its hover-preview-wired row. All optional — omitted → the
+   * rail renders the plain `SourceRow` with no nav (unchanged).
+   */
+  readonly onSelectSource?: (source: SourceEntry) => void;
+  readonly onJumpToChatSource?: (source: SourceEntry) => void;
+  readonly SourceRowComponent?: SourceRowSlot;
 }
 
 export function RunDestination(props: RunDestinationProps): ReactElement {
@@ -265,6 +346,12 @@ export function RunDestination(props: RunDestinationProps): ReactElement {
     onOpenModelSettings,
     renderComposer,
     renderEmptyComposer,
+    mcpAuthPort,
+    markdownComponents,
+    onOrdinalSelect,
+    onSelectSource,
+    onJumpToChatSource,
+    SourceRowComponent,
   } = props;
 
   const transport = useTransport();
@@ -285,6 +372,25 @@ export function RunDestination(props: RunDestinationProps): ReactElement {
   // header until the run list re-resolves to carry the run's own goal — so the
   // empty→live transition never flashes the idle placeholder for a run we named.
   const [startedGoal, setStartedGoal] = useState<string | null>(null);
+  // WC-P3 (AD-4/AD-5): the run the user just pressed Stop on. Set optimistically
+  // so `running` flips false in the SAME tick — the Stop button doesn't sit
+  // there looking dead between the click and the trailing `run_cancelling` /
+  // `run_cancelled` SSE frame that makes runStatus terminal. Scoped by run id
+  // (compared against the bound run) so it self-clears when a new run binds; the
+  // conversation-reset effect also clears it. We deliberately do NOT clear
+  // `boundRunId` (unlike ChatScreen's items model): the cockpit mounts the empty
+  // "What should we run?" state whenever `session.runId === null`, so clearing it
+  // would flash away the very conversation being cancelled — and the cockpit has
+  // no items-scan auto-resume, so head-resolution (`prev ?? head`, once per
+  // conversation) can never re-bind the run anyway.
+  const [cancellingRunId, setCancellingRunId] = useState<string | null>(null);
+  // WC-P4 (AD-9): the just-sent user turn, echoed optimistically in the
+  // transcript from dispatch until the run-start re-seed absorbs the persisted
+  // turn. Set here (the ONE dispatch), read by useRunTranscript; not rolled back
+  // on a failed send (the re-seed / next dispatch replaces it, the reset clears).
+  const [pendingUserMessage, setPendingUserMessage] = useState<string | null>(
+    null,
+  );
 
   // Monotonic token identifying the current start attempt. Bumped whenever the
   // conversation resets (below), so an in-flight start's async continuation can
@@ -304,6 +410,10 @@ export function RunDestination(props: RunDestinationProps): ReactElement {
     setIsStartingRun(false);
     setStartedGoal(null);
     setStartError(null);
+    // WC-P3: never carry an optimistic cancel across conversations.
+    setCancellingRunId(null);
+    // WC-P4: never echo a prior conversation's user turn into a new one.
+    setPendingUserMessage(null);
     // PRD-04: a new conversation starts from a clean surface strip.
     setPinnedUri(null);
     setClosedUris(EMPTY_CLOSED_URIS);
@@ -449,6 +559,9 @@ export function RunDestination(props: RunDestinationProps): ReactElement {
       // Bridge the header until the run list re-resolves; an attachment-only
       // start has no goal text, so leave it null (→ "Untitled run" fallback).
       setStartedGoal(goal !== "" ? goal : null);
+      // WC-P4 (AD-9): echo the user's turn into the transcript at once, so the
+      // send is never a beat of silence before the run-start re-seed lands.
+      setPendingUserMessage(goal !== "" ? goal : null);
       const normalized: RunStartRequest = { ...request, goal };
       const start = onStartRun
         ? Promise.resolve(onStartRun(normalized))
@@ -604,6 +717,15 @@ export function RunDestination(props: RunDestinationProps): ReactElement {
     [session.events],
   );
 
+  // WC-P6a (AD-11): the run-scoped citation registries, projected off the SAME
+  // `session.events` (FR-3.3 — no second subscription/projector). Feeds the
+  // `CitationsProvider` mounted around the single TcChat so the host chip
+  // renderer resolves `[[N]]` / `[c<id>]` chips against it.
+  const citationProjection = useMemo(
+    () => projectCitations(session.events),
+    [session.events],
+  );
+
   // The chat transcript: persisted history ⊕ the live streamed reply, projected
   // off the SAME single event stream (FR-3.3). This binder closes the streaming
   // gap — previously `projection.chat` was computed and dropped and TcChat
@@ -614,6 +736,8 @@ export function RunDestination(props: RunDestinationProps): ReactElement {
     runId: session.runId,
     runStatus: session.runStatus,
     events: session.events,
+    // WC-P4 (AD-9): optimistic user echo until the run-start re-seed absorbs it.
+    pendingUserMessage,
   });
 
   // The Sources tab: persisted citations (GET /sources) ⊕ the live
@@ -708,6 +832,39 @@ export function RunDestination(props: RunDestinationProps): ReactElement {
     (approvalId: string): void => resolveApproval(approvalId, "rejected"),
     [resolveApproval],
   );
+
+  // WC-P3 (AD-4): the in-chat composer shows Stop while the bound run is
+  // cancellable and no cancel is in flight (server `cancelling` state OR our
+  // optimistic overlay for THIS run). `cancellingRunId` is compared to the bound
+  // run so a stale flag from a prior run can never suppress Stop on a new one.
+  const boundRunId = session.runId;
+  const running =
+    boundRunId !== null &&
+    session.runStatus !== null &&
+    CANCELLABLE_RUN_STATUSES.has(session.runStatus) &&
+    cancellingRunId !== boundRunId;
+
+  // Cancel the bound run — cockpit-owned, no dedicated port (AD-4). Optimistically
+  // flips `running` false via `cancellingRunId` (Stop hides at once), then POSTs
+  // cancel best-effort through the Transport port, mirroring `resolveApproval`: a
+  // failure leaves the optimistic state and the trailing `run_cancelled` SSE frame
+  // is the authority. We keep `boundRunId` bound (AD-5) so the transcript stays and
+  // the terminal frame reconciles it — Stop cannot re-arm (running stays false
+  // while this run is bound, and nothing re-binds it).
+  const handleCancel = useCallback((): void => {
+    if (boundRunId === null) {
+      return;
+    }
+    setCancellingRunId(boundRunId);
+    void transport
+      .request({
+        method: "POST",
+        path: `/v1/agent/runs/${boundRunId}/cancel`,
+      })
+      .catch(() => {
+        /* optimistic: the SSE `run_cancelled` frame reconciles the truth */
+      });
+  }, [boundRunId, transport]);
   // PRD-09c: open the edit overlay for the surface whose diff the reviewer wants
   // to change. This fills the PRD-04 passthrough — the overlay renders OVER the
   // active surface (ThreadCanvas.editSlot) and submits `approve_with_edits`.
@@ -859,29 +1016,60 @@ export function RunDestination(props: RunDestinationProps): ReactElement {
   // wrapper adds `dispatch` (handleStartRun) so the injected composer starts a run
   // through the SAME path + bind sink as the empty-state composer. Both composers
   // share one send path — a 2nd message can never run unbound (kills that bug).
+  // WC-P3 (AD-4): the same wrapper hands down the cockpit-owned run state
+  // (`running`) + `onCancel`, so the injected composer swaps send↔Stop without a
+  // dedicated port — lighting up cancel on BOTH substrates.
   const renderComposerWithDispatch = useMemo(
     () =>
       renderComposer === undefined
         ? undefined
         : (ctx: { readonly disabled: boolean; readonly placeholder: string }) =>
-            renderComposer({ ...ctx, dispatch: handleStartRun }),
-    [renderComposer, handleStartRun],
+            renderComposer({
+              ...ctx,
+              dispatch: handleStartRun,
+              running,
+              onCancel: handleCancel,
+            }),
+    [renderComposer, handleStartRun, running, handleCancel],
   );
 
   const chatSlot = (
-    <TcChat
-      conversationId={conversationId as unknown as string}
-      mode={mode}
-      messages={transcriptMessages}
-      fleets={subagentProjection.fleets}
-      // PR-3.10: in-chat ApprovalCard (Studio) / conf-card (Focus) + receipts.
-      approvals={chatApprovals}
-      onApprove={handleApprove}
-      onReject={handleReject}
-      // Host composer seam: desktop mounts the full AssistantComposer here. The
-      // dispatch-injecting wrapper (§D3) makes its send bind the live session.
-      renderComposer={renderComposerWithDispatch}
-    />
+    // WC-P6a (AD-11): the citation registry provider wraps the ONE TcChat so the
+    // host-supplied `markdownComponents` chip wrappers resolve chips against the
+    // pure `projectCitations` output. The provider component is substrate-agnostic
+    // (pure React context); the nav-aware chip node + `onOrdinalSelect` stay
+    // host-owned. Omitting `markdownComponents` leaves chips unresolved (chip
+    // wrappers read the same context either way, so mounting it is always safe).
+    <CitationsProvider
+      citations={citationProjection.citations}
+      byRun={citationProjection.byRun}
+      terminalRuns={citationProjection.terminalRuns}
+      linksByRun={citationProjection.linksByRun}
+      activeRunId={citationProjection.activeRunId}
+      {...(onOrdinalSelect !== undefined ? { onOrdinalSelect } : {})}
+    >
+      <TcChat
+        conversationId={conversationId as unknown as string}
+        mode={mode}
+        messages={transcriptMessages}
+        // WC-P6a: the host chip dispatcher (`{ a: MarkdownLink }`) — resolves
+        // `[[N]]` / `[c<id>]` anchors against the provider above.
+        markdownComponents={markdownComponents}
+        fleets={subagentProjection.fleets}
+        // PR-3.10: in-chat ApprovalCard (Studio) / conf-card (Focus) + receipts.
+        approvals={chatApprovals}
+        onApprove={handleApprove}
+        onReject={handleReject}
+        // WC-P5a (AD-6/AD-7): the MCP-OAuth launcher. TcChat renders the Connect
+        // card (→ this port) for `mcp_auth` gates / `mcp_discovery:` suggestions
+        // instead of Approve/Reject, keeping them off the `/decision` POST. Absent
+        // → the card renders inert (host wires the launcher in P5b).
+        mcpAuthPort={mcpAuthPort}
+        // Host composer seam: desktop mounts the full AssistantComposer here. The
+        // dispatch-injecting wrapper (§D3) makes its send bind the live session.
+        renderComposer={renderComposerWithDispatch}
+      />
+    </CitationsProvider>
   );
   // PR-3.7 (FR-3.15/3.16): while scrubbed off-now, `scrubbed` tells the rail to
   // suppress the Approvals tab — you cannot approve a past state; snap-to-now
@@ -896,6 +1084,11 @@ export function RunDestination(props: RunDestinationProps): ReactElement {
       sources={sources}
       sourcesLoading={sourcesLoading}
       sourcesError={sourcesError}
+      // WC-P6c (FR-9): Sources-tab seams — host-owned nav + the web preview-wired
+      // row. Optional; omitted → the plain SourceRow with no nav.
+      onSelectSource={onSelectSource}
+      onJumpToChatSource={onJumpToChatSource}
+      SourceRowComponent={SourceRowComponent}
       approvalsQueue={approvalsQueue}
       onApprove={handleApprove}
       onReject={handleReject}
@@ -915,6 +1108,10 @@ export function RunDestination(props: RunDestinationProps): ReactElement {
         agentName={agentName}
         mode={mode}
         onModeChange={setMode}
+        // WC-P6b: the `● working` pulse chip, derived from the single event
+        // projection's run status (no second subscription — FR-3.3). Live →
+        // pulses; terminal / null → absent.
+        runStatus={session.runStatus}
       />
 
       {/* PR-3.11 (FR-3.26): the multi-run selector. It renders NOTHING for a

@@ -114,6 +114,61 @@ describe("projectApprovals", () => {
       "a-2",
     ]);
   });
+
+  // WC-P5a (AD-7): the mid-run connector-auth gate + catalog suggestion ride the
+  // `mcp_auth_required` event (never `approval_requested`); the projection reduces
+  // it like a request so the in-chat Connect card renders off the ONE stream, and
+  // carries `serverId` for `McpAuthPort.beginAuth`.
+  function mcpAuthRequired(
+    approvalId: string,
+    serverId: string,
+  ): RuntimeEventEnvelope {
+    return envelope({
+      event_type: "mcp_auth_required" as RuntimeEventEnvelope["event_type"],
+      payload: {
+        approval_id: approvalId,
+        approval_kind: "mcp_auth",
+        server_id: serverId,
+        server_name: serverId,
+        display_name: "Linear",
+        message: "MCP authentication required",
+      },
+    });
+  }
+
+  it("opens a pending mcp_auth approval from a `mcp_auth_required` event with serverId", () => {
+    seq = 0;
+    const projection = projectApprovals([
+      mcpAuthRequired("mcp_auth:run-1:linear", "linear"),
+    ]);
+    expect(projection.pending).toHaveLength(1);
+    const approval = projection.pending[0];
+    expect(approval.approvalId).toBe("mcp_auth:run-1:linear");
+    expect(approval.approvalKind).toBe("mcp_auth");
+    expect(approval.serverId).toBe("linear");
+  });
+
+  it("defaults a `mcp_auth_required` event with no approval_kind to mcp_auth", () => {
+    seq = 0;
+    const projection = projectApprovals([
+      envelope({
+        event_type: "mcp_auth_required" as RuntimeEventEnvelope["event_type"],
+        payload: {
+          approval_id: "mcp_discovery:run-1:seed:linear",
+          server_id: "linear",
+          display_name: "Linear",
+        },
+      }),
+    ]);
+    expect(projection.pending[0].approvalKind).toBe("mcp_auth");
+    expect(projection.pending[0].serverId).toBe("linear");
+  });
+
+  it("leaves serverId null for a plain (non-connector) approval", () => {
+    seq = 0;
+    const projection = projectApprovals([requested("a-1")]);
+    expect(projection.pending[0].serverId).toBeNull();
+  });
 });
 
 describe("overlayApprovalDecisions", () => {

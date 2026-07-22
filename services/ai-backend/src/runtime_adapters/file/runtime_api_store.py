@@ -1125,15 +1125,37 @@ class FileRuntimeApiStore:
         org_id: str,
         conversation_id: str,
         limit: int,
+        before_created_at: datetime | None = None,
+        before_message_id: str | None = None,
         include_deleted: bool = False,
     ) -> Sequence[MessageRecord]:
-        docs = self._index.list_messages(
-            org_id=org_id,
-            conversation_id=conversation_id,
-            limit=limit,
-            include_deleted=include_deleted,
-        )
-        return tuple(MessageRecord.model_validate_json(doc) for doc in docs)
+        """Return the most-recent ``limit`` messages older than the keyset, ASC.
+
+        Reads the authoritative in-memory ``self.messages`` map (fully loaded
+        from disk on open), filters on the composite ``(created_at, message_id)``
+        keyset, takes the newest ``limit`` (DESC), then reverses to ascending.
+        """
+
+        records = [
+            message
+            for message in self.messages.values()
+            if message.org_id == org_id and message.conversation_id == conversation_id
+        ]
+        if not include_deleted:
+            records = [message for message in records if message.deleted_at is None]
+        if before_created_at is not None and before_message_id is not None:
+            keyset = (before_created_at, before_message_id)
+            records = [
+                message
+                for message in records
+                if (message.created_at, message.message_id) < keyset
+            ]
+        newest_first = sorted(
+            records,
+            key=lambda message: (message.created_at, message.message_id),
+            reverse=True,
+        )[:limit]
+        return tuple(reversed(newest_first))
 
     async def append_message(self, message: MessageRecord) -> MessageRecord:
         async with self._conversation_lock(message.conversation_id):

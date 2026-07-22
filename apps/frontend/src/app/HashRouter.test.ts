@@ -142,6 +142,60 @@ describe("HashRouter", () => {
     expect(window.location.hash).toBe("");
   });
 
+  // WC-P2 (AD-10 / R6) — the Run cockpit (root destination) round-trips a bound
+  // conversation as `/run/<id>` via the subPath slot; a fresh run (no subPath)
+  // stays at the legacy `/`. The URL model must not collide with the root
+  // special-case and must survive a full serialize→parse round-trip.
+  it("writes /run/<conversationId> for the root destination with a subPath", () => {
+    setLocation("/", "");
+    const router = new HashRouter();
+    router.navigate({
+      screen: "chat",
+      destination: ROOT_DESTINATION,
+      subPath: "conv-42",
+    });
+    expect(window.location.pathname).toBe("/run/conv-42");
+    expect(window.location.hash).toBe("");
+  });
+
+  it("keeps the root at '/' when the run destination has no subPath", () => {
+    setLocation("/run/conv-9", "");
+    const router = new HashRouter();
+    router.navigate({
+      screen: "chat",
+      destination: ROOT_DESTINATION,
+      subPath: null,
+    });
+    expect(window.location.pathname).toBe("/");
+  });
+
+  it("round-trips /run/<conversationId> back to the run route with its subPath", () => {
+    setLocation("/run/conv-42", "");
+    const router = new HashRouter();
+    expect(router.current()).toEqual({
+      screen: "chat",
+      destination: ROOT_DESTINATION,
+      subPath: "conv-42",
+    });
+  });
+
+  it("round-trips a path-like conversation id without double-encoding", () => {
+    setLocation("/", "");
+    const router = new HashRouter();
+    router.navigate({
+      screen: "chat",
+      destination: ROOT_DESTINATION,
+      subPath: "org/abc-123",
+    });
+    expect(window.location.pathname).toBe("/run/org/abc-123");
+    // Re-parse the URL we just wrote — the structural `/` survives.
+    expect(new HashRouter().current()).toEqual({
+      screen: "chat",
+      destination: ROOT_DESTINATION,
+      subPath: "org/abc-123",
+    });
+  });
+
   it("navigate() pushes a new history entry and notifies subscribers", () => {
     setLocation("/", "");
     const router = new HashRouter();

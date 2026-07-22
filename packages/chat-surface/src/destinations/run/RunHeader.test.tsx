@@ -86,4 +86,59 @@ describe("RunHeader", () => {
     expect(screen.getByTestId("run-header-status")).not.toBeNull();
     expect(screen.getByTestId("probe").textContent).toBe("working");
   });
+
+  // WC-P6b — the `● working` pulse chip is driven by `runStatus`.
+  it("renders the pulsing status dot for an active run, with a per-state label", () => {
+    const { rerender } = render(
+      <RunHeader
+        goal="G"
+        mode="studio"
+        onModeChange={() => {}}
+        runStatus="running"
+      />,
+    );
+    expect(screen.getByTestId("run-header-pulse-dot")).not.toBeNull();
+    expect(screen.getByTestId("run-header-status-pulse").textContent).toContain(
+      "working",
+    );
+
+    rerender(
+      <RunHeader
+        goal="G"
+        mode="studio"
+        onModeChange={() => {}}
+        runStatus="waiting_for_approval"
+      />,
+    );
+    expect(screen.getByTestId("run-header-pulse-dot")).not.toBeNull();
+    expect(screen.getByTestId("run-header-status-pulse").textContent).toContain(
+      "waiting",
+    );
+  });
+
+  it("shows NO pulse dot for a terminal run or when runStatus is null/absent", () => {
+    const { rerender } = render(
+      <RunHeader
+        goal="G"
+        mode="studio"
+        onModeChange={() => {}}
+        runStatus="completed"
+      />,
+    );
+    expect(screen.queryByTestId("run-header-pulse-dot")).toBeNull();
+
+    rerender(
+      <RunHeader
+        goal="G"
+        mode="studio"
+        onModeChange={() => {}}
+        runStatus={null}
+      />,
+    );
+    expect(screen.queryByTestId("run-header-pulse-dot")).toBeNull();
+
+    // Absent prop (default) → no dot either.
+    rerender(<RunHeader goal="G" mode="studio" onModeChange={() => {}} />);
+    expect(screen.queryByTestId("run-header-pulse-dot")).toBeNull();
+  });
 });
