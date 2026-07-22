@@ -25,12 +25,20 @@
 //     and NO pull.
 //   • Every failure has a way out (PRD-P8 D1). `runtime_unreachable` keeps the
 //     progress, flips the runtime to "stopped" and re-arms so the download
-//     resumes by itself once the daemon answers again. `transient` retries with
-//     capped exponential backoff (1s → 30s) from `phase = "reconnecting"`.
-//     `terminal` (and any UNCLASSIFIED failure) sets `blocked` with a message
-//     and waits for `resume()`. There is deliberately no state where progress
-//     is frozen with no signal and no path forward — that hang is the bug this
-//     PRD exists to kill.
+//     resumes by itself once the daemon answers again — on a DELAY, because a
+//     daemon that answers `/api/version` while refusing `/api/pull` otherwise
+//     re-armed and re-failed in the same microtask turn, forever, at hundreds
+//     of requests per second. That lane is rate-limited but never exhausted
+//     (§6 wants the resume to happen however long the runtime is down).
+//     `transient` retries with capped exponential backoff (1s → 30s) from
+//     `phase = "reconnecting"`, for a BOUNDED number of attempts
+//     (`MAX_TRANSIENT_RETRIES`) — an unbounded
+//     retry loop behind a spinner tells the user just as little as a frozen
+//     bar, so a link that never recovers ends in `blocked`, not in perpetual
+//     reconnection. `terminal` (and any UNCLASSIFIED failure) sets `blocked`
+//     with a message and waits for `resume()`. There is deliberately no state
+//     where progress is frozen with no signal and no path forward — that hang
+//     is the bug this PRD exists to kill.
 //
 // Substrate-agnostic: all I/O goes through the injected
 // `FirstRunLocalModelsPort` + the `PresenceSignal` port. The bare
@@ -47,6 +55,7 @@ import type {
 
 import { usePresenceSignal } from "../providers/PresenceSignalProvider";
 import type { AvailableLocalModel } from "../settings/DownloadLocalModelModal";
+import { FIRST_RUN_COPY } from "./firstRun";
 import type { FirstRunLocalModelsPort } from "./localModelsPort";
 import {
   INITIAL_PULL_PROGRESS,
@@ -126,7 +135,36 @@ const FAST_POLL_WINDOW_MS = 120_000;
 const SLOW_POLL_MS = 15_000;
 
 /** Used when a break carries no server message (a torn stream, a throw). */
-const FALLBACK_FAILURE_MESSAGE = "Download interrupted.";
+const FALLBACK_FAILURE_MESSAGE = FIRST_RUN_COPY.local.interrupted;
+
+/**
+ * How many CONSECUTIVE `transient` retries the hook spends before it stops
+ * reconnecting and says so.
+ *
+ * PRD-P8 §6 capped the retry DELAY (1s → 30s) but left the ATTEMPT count
+ * unbounded, so a permanently broken proxy — one that accepts the connection
+ * and tears it down every time — reconnected forever behind a `reconnecting`
+ * spinner and the user was never told. Unbounded retry is the same silent dead
+ * end as a frozen bar; it just animates.
+ *
+ * Six comes from the backoff schedule, not from taste: 1 + 2 + 4 + 8 + 16 + 30
+ * ≈ 61s of self-healing before the user is involved. The blips auto-retry
+ * exists to cover — a Wi-Fi handover, a proxy recycling, an Ollama stream
+ * hiccup — are over well inside a minute, so the cap does not fire for them; a
+ * link that has failed six times across a full minute is not blipping. One
+ * minute is also about as long as a silent spinner stays believable.
+ *
+ * The budget is spent per unit of FORWARD PROGRESS, not per download: any frame
+ * carrying more bytes than the pull has ever proved refunds it in full (see
+ * `progressHighWaterRef`). A 4.3 GB pull over a flaky link legitimately breaks
+ * far more than six times while still finishing, and hard-blocking a download
+ * that is visibly working would be its own dishonest dead end.
+ *
+ * At the cap the hook lands in `blocked` — the state that already carries a
+ * message and the manual `resume()` escape (design state ④'s "Resume
+ * download"), so no new UI is required for it to be actionable.
+ */
+const MAX_TRANSIENT_RETRIES = 6;
 
 export function useFirstRunLocalModel({
   port,
@@ -176,6 +214,21 @@ export function useFirstRunLocalModel({
   const restartControllerRef = useRef<AbortController | null>(null);
   const retryTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const retryAttemptRef = useRef(0);
+  /**
+   * The most bytes this download has ever proved. Only a frame that beats it
+   * counts as forward progress and refunds the transient-retry budget, so a
+   * stream that keeps re-delivering the same prefix and dying cannot buy itself
+   * unlimited retries.
+   */
+  const progressHighWaterRef = useRef(0);
+  /**
+   * Consecutive `runtime_unreachable` breaks since this download last got
+   * anywhere. Deliberately SEPARATE from `retryAttemptRef`: this lane is
+   * rate-limited but never exhausted (PRD-P8 §6 requires a download to resume
+   * by itself however long the daemon stays down), so spending the transient
+   * budget on a daemon restart would be wrong.
+   */
+  const unreachableAttemptRef = useRef(0);
   const pollStartedAtRef = useRef(Date.now());
   /** Set after `beginPull` is defined; breaks the retry ↔ pull cycle. */
   const beginPullRef = useRef<() => boolean>(() => false);
@@ -291,9 +344,41 @@ export function useFirstRunLocalModel({
       if (kind === "runtime_unreachable") {
         // Keep the progress; the daemon coming back resumes it (state ④).
         setRuntime("stopped");
-        setPhase(idleAgain);
-        setAutoStartArmed(true);
-      } else if (kind === "transient") {
+        // `reconnecting`, not `idle`, for the same reason the transient lane
+        // uses it: a retry IS scheduled, so saying "idle" would be a silent
+        // regression to state ②'s "Start download" — the card would quietly
+        // un-start a download the user did start, with no explanation. When
+        // the daemon really is down the card renders ④ regardless (it keys on
+        // `runtime === "stopped"` before the phase), so this only changes what
+        // the pathological "version answers, pull refuses" case looks like:
+        // ③-reconnecting, which is exactly what is happening.
+        setPhase("reconnecting");
+        // Re-arm on the SAME capped backoff the transient lane uses, NOT in
+        // this tick. Arming synchronously was an unbounded, unthrottled hammer
+        // whenever the daemon answers `/api/version` but refuses `/api/pull` —
+        // a wedged daemon, a restart in flight, an exhausted connection pool.
+        // `fail` re-probes itself, that probe answered "running" in the same
+        // microtask turn, the auto-start effect re-opened the pull with zero
+        // delay, and the new pull broke the same way: measured at 400+ pulls
+        // with ZERO wall-clock elapsed, `blocked` still null and a spinner on
+        // screen. The rate limit bites in exactly that case and nowhere else:
+        // when the runtime really is down, the poll's own probe re-arms within
+        // its 3s cadence, so a genuine restart still resumes as fast as it did.
+        //
+        // The budget here is never SPENT (no cap, unlike `transient`) — §6
+        // requires the download to resume on its own however long the runtime
+        // stays down. Only the rate is bounded.
+        const delay = backoffDelayMs(unreachableAttemptRef.current);
+        unreachableAttemptRef.current += 1;
+        clearRetryTimer();
+        retryTimerRef.current = setTimeout(() => {
+          retryTimerRef.current = null;
+          setAutoStartArmed(true);
+        }, delay);
+      } else if (
+        kind === "transient" &&
+        retryAttemptRef.current < MAX_TRANSIENT_RETRIES
+      ) {
         setPhase("reconnecting");
         const delay = backoffDelayMs(retryAttemptRef.current);
         retryAttemptRef.current += 1;
@@ -302,6 +387,16 @@ export function useFirstRunLocalModel({
           retryTimerRef.current = null;
           beginPullRef.current();
         }, delay);
+      } else if (kind === "transient") {
+        // Budget spent. Stop reconnecting and SAY so — this is the branch that
+        // keeps a permanently broken link from spinning forever in silence.
+        // The kind stays `transient` (that is what the failures were); what
+        // changed is that the hook has stopped absorbing them on the user's
+        // behalf. `blocked` carries the message and gives the card its
+        // "Resume download" action, which resets the budget.
+        clearRetryTimer();
+        setBlocked({ kind, message: FIRST_RUN_COPY.local.retriesExhausted });
+        setPhase(idleAgain);
       } else {
         setBlocked({ kind, message: safeMessage });
         setPhase(idleAgain);
@@ -358,6 +453,20 @@ export function useFirstRunLocalModel({
           if (frame.error !== null && frame.error !== undefined) {
             fail(frame.error, frame.error_kind);
             return;
+          }
+          // Genuinely new bytes refund the transient-retry budget: a link that
+          // is moving the download forward has earned the full allowance again,
+          // however many times it has already broken. Strictly-greater against
+          // a high-water mark, not "any frame with bytes", so a stream that
+          // replays the same prefix before dying buys nothing.
+          const got = frame.bytes_completed;
+          if (typeof got === "number" && got > progressHighWaterRef.current) {
+            progressHighWaterRef.current = got;
+            retryAttemptRef.current = 0;
+            // Same refund for the unreachable lane's rate limit: a daemon that
+            // came back and is moving bytes has earned an immediate resume the
+            // next time it dies, not a 30s wait inherited from the last outage.
+            unreachableAttemptRef.current = 0;
           }
           setProgress((prev) =>
             reducePullProgress(frame, activePreset.sizeBytes, prev),
@@ -478,11 +587,13 @@ export function useFirstRunLocalModel({
   // no button and no download, forever.
   const start = useCallback((): void => {
     retryAttemptRef.current = 0;
+    unreachableAttemptRef.current = 0;
     setAutoStartArmed(!beginPull());
   }, [beginPull]);
 
   const resume = useCallback((): void => {
     retryAttemptRef.current = 0;
+    unreachableAttemptRef.current = 0;
     setBlocked(null);
     setAutoStartArmed(!beginPull());
   }, [beginPull]);

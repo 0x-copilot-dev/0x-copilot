@@ -410,7 +410,7 @@ describe("<FirstRunSurface> — PRD-P8 stage + honesty rules", () => {
   }
 
   /** A slot card that exposes D4a's "Continue →" as a clickable affordance. */
-  const continueCard = (ctx: { readonly onContinue: () => void }) => (
+  const continueCard = (ctx: { readonly onContinue?: () => void }) => (
     <button type="button" data-testid="p8-continue" onClick={ctx.onContinue}>
       Continue
     </button>
@@ -557,8 +557,51 @@ describe("<FirstRunSurface> — PRD-P8 stage + honesty rules", () => {
     fireEvent.click(screen.getByTestId("first-run-placeholder-send"));
 
     const ack = screen.getByTestId("first-run-ack-placeholder");
-    expect(ack.textContent).toBe(FIRST_RUN_ACK_STALLED.title);
+    expect(ack.textContent).toContain(FIRST_RUN_ACK_STALLED.title);
     expect(ack.textContent).not.toContain(FIRST_RUN_ACK_TITLES.queued);
+  });
+
+  it("the stalled ack carries a note AND an action, so it is not a nicer-worded dead end (§7)", () => {
+    renderP8({ initialStage: "dl", localModelBlocked: true });
+    fireEvent.click(screen.getByTestId("first-run-placeholder-send"));
+
+    expect(screen.getByTestId("first-run-ack-note").textContent).toBe(
+      FIRST_RUN_ACK_STALLED.note,
+    );
+    const action = screen.getByTestId("first-run-ack-back");
+    expect(action.textContent).toBe(FIRST_RUN_ACK_STALLED.action);
+
+    // And the action really returns the user to the composer, where
+    // `useFirstRunLaunch.launch()` accepts a re-submit from `blocked`.
+    fireEvent.click(action);
+    expect(screen.getByTestId("first-run-composer-placeholder")).not.toBeNull();
+  });
+
+  it("a queued ack renders NO action — only the stalled state has one", () => {
+    renderP8({ initialStage: "dl" });
+    fireEvent.click(screen.getByTestId("first-run-placeholder-send"));
+    expect(screen.queryByTestId("first-run-ack-note")).toBeNull();
+    expect(screen.queryByTestId("first-run-ack-back")).toBeNull();
+  });
+
+  it("a stalled ack does NOT hand off, and resumes the handoff once the block clears (§7)", () => {
+    // Completing here would drop the user into the workspace on the strength
+    // of a run that never started — the same lie as the old queued title, told
+    // by the navigation instead of the copy.
+    const onComplete = vi.fn();
+    const { update } = renderP8({
+      initialStage: "dl",
+      localModelBlocked: true,
+      onComplete,
+    });
+    fireEvent.click(screen.getByTestId("first-run-placeholder-send"));
+    expect(screen.getByTestId("first-run-ack-placeholder")).not.toBeNull();
+    expect(onComplete).not.toHaveBeenCalled();
+
+    // The runtime came back and the pull resumed: the ack is a normal wait
+    // again and the held send proceeds with no further gesture.
+    update({ localModelBlocked: false });
+    expect(onComplete).toHaveBeenCalledTimes(1);
   });
 
   it("an unblocked queued send still reads as queued (§7 regression guard)", () => {

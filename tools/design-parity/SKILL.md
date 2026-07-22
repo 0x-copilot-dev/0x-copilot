@@ -92,6 +92,27 @@ annotated with their design-token name (`rgb(236,236,241) (--tx)`), so a token s
 reads directly. INFO covers expected divergences (declared in `anchors.json` via
 `expectDivergence`) + copy differences.
 
+### Declaring an expected divergence
+
+`expectDivergence` on an anchor takes two forms:
+
+```jsonc
+"expectDivergence": "reason"                    // PRESENCE, either direction
+"expectDivergence": { "absent": "…", "extra": "…", "text": "…", "color": "…" }
+```
+
+The object form is **scoped**: `absent`/`extra` are the two presence directions,
+`text` is a copy difference, and any other key is a computed-style property whose
+diff is expected. Only the declared keys drop to INFO — every other property on that
+element still scores normally, so one intended delta can never launder a whole
+element's drift. The reason string is printed in the report next to the measured
+delta, so an INFO row still says exactly what differs and why.
+
+**Get this right or the report is worthless.** A deliberate product decision filed as
+a defect wastes the reader's time; drift filed as intent hides a real bug. Cite the
+decision (PRD §, ADR, a code comment) in the reason — if you cannot cite one, it is
+drift.
+
 ## Severity model (in `lib/compare.mjs`)
 
 - 🔴 **HIGH** — wrong typeface class (mono↔sans), font-size Δ ≥ 2px, any color/token swap, an element present in design but absent in live (unless `expectDivergence`).
@@ -173,14 +194,59 @@ in `design-kit/` — fetch it per `design-kit/REFRESH.md` and link it in the har
   target the surface subtree (`.fr…`), so the frame never pollutes the diff.
 - Layout-dependent `width`/`height` are captured but treated as noise (they vary with
   the container); typography/color/spacing/border are container-independent and load-bearing.
+- **Pin the layout on BOTH sides — the extraction viewport is not yours.** A headless
+  context reports `innerWidth: 0`, so `html`/`body` are 0px wide: every `max-width`
+  media query matches (you silently measure the mobile layout) and every
+  percentage-derived width collapses. Measured, not assumed: the design mock at
+  `innerWidth: 0` rendered `.mw` at **2px** and `.ol-main` at **0px**, leaving the card
+  overflowing at 166px with its watch line wrapped to 4 rows. Pin the geometry you mean
+  to measure in each side's own `<style>` block:
+  - live — `render-live-ollama.test.tsx` pins the gate to two columns, so the card
+    resolves its real 315px column instead of a folded 640px one;
+  - design — `surfaces/first-run/design/ollama.html` pins `.mw` / `.ol-main` / `.ol-grid`
+    (with `!important`, to beat the harness block's inline styles) to the mock's catalog
+    geometry, so the card is a deterministic 304px in single-card mode too.
+
+  Both were verified at `innerWidth: 0`. `lib/render-live.test.tsx` (the gate harness)
+  has the same latent exposure and is deliberately NOT changed — that would invalidate
+  the committed gate baseline; re-pin it when that baseline is next regenerated.
+
+- **No backticks inside the harness's inlined `<style>`/HTML comments.** `shell()` is a
+  JS template literal; a stray backtick in a CSS comment terminates it and the failure
+  surfaces as an unrelated `ReferenceError`.
 
 ## Coverage / TODO
 
-- **first-run**: the **gate** state is fully wired (design + live harness + anchors +
-  report). The **composer** and **ack** states need: (a) the design harness `?state=`
-  extended (composer needs the vendored `copilot-v3.css` `.cmp`/`.pop` rules; ack needs
-  a click-through to `sent`), and (b) the live harness to render those states (drive
-  with `@testing-library` `fireEvent`, or pass `initialStage`), then extend `anchors.json`.
+- **first-run · gate**: fully wired (design + live harness + anchors + report).
+- **first-run · Ollama runtime states (PRD-P8)**: BOTH SIDES RENDERABLE + ANCHORED;
+  extract/compare not yet run, so there is no `out/report-ollama-*.md` yet.
+  - Design: `surfaces/first-run/design/ollama.html?state=…` renders exactly ONE card
+    for `not-installed` · `installed` · `downloading` · `stopped` (verified). The mock's
+    `.ok` line has no `?state=` — reach it from `?state=not-installed` by clicking
+    `Get Ollama ↗`. `?state=fail` is the DROPPED "Download failed" state (PRD-P8 D1)
+    and is deliberately unmapped.
+  - Live: `lib/render-live-ollama.test.tsx` renders the REAL `FirstRunLocalCard` to
+    `surfaces/first-run/live/ollama-{not-installed,detected,installed,downloading,stopped}.html`
+    by constructing the hook result directly (the card is presentational — no ports, no
+    fake SSE, no fake timers). `detected` is the one state that needs a TRANSITION, so
+    the harness uses `render`/`rerender`.
+  - Anchors: `surfaces/first-run/anchors-ollama.json` (SEPARATE from `anchors.json` —
+    per-state labels would collide with the gate's `card.local.*`). **Filter `elements`
+    by the `state` field** when building an extraction spec; a few selectors legitimately
+    match in more than one state.
+  - Declared-intent deltas (do NOT re-file as defects): D5 4.3 GB vs the mock's 5.6 GB ·
+    D4a-1 the live ③ "Continue →" · D4a-2 the ③ note tail · the `.ok` colour
+    (`--color-success` vs the mock's literal `#6aa88f`). Everything else scores normally —
+    including the ③ `.dling` type/weight/colour and the ② Start button's missing leading
+    icon, which ARE drift.
+  - TODO: run steps 3–4 per state → `out/design-ollama-<state>.json` /
+    `out/live-ollama-<state>.json` / `out/report-ollama-<state>.md`. Two known blind
+    spots are recorded in `anchors-ollama.json`'s `blindSpots` (both concern the
+    `.watch` dot, which is a pseudo-element live and an unstyled 0×0 span in the mock).
+- **first-run · composer / ack**: still TODO — (a) extend the design harness `?state=`
+  (composer needs the vendored `copilot-v3.css` `.cmp`/`.pop` rules; ack needs a
+  click-through to `sent`), (b) render those states live (`fireEvent`, or an
+  `initialStage` prop), then extend `anchors.json`.
 - **login**: FULLY WIRED. Design baseline (8 states via `?state=`) + live render
   (`lib/render-live-login.test.tsx` renders `apps/frontend` `LoginScreen`'s `SignInCard`
   with mocked auth/SIWE/EIP-6963 to 6 state HTMLs) + `anchors.json` + `out/report.md`
@@ -188,3 +254,5 @@ in `design-kit/` — fetch it per `design-kit/REFRESH.md` and link it in the har
   wallet-error (`werr`) or Google recovery views — errors are an inline `.login-card__error`
   (cleared immediately on wallet failures) and Google is a bare redirect; the design's
   recovery screens have no live analog.
+- **run-empty**: FULLY WIRED (`lib/render-live-run-empty.test.tsx` + `anchors.json` +
+  `out/report.md`, 9 HIGH / 23 MED, + `out/FINDINGS.md`).

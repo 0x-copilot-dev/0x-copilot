@@ -1,0 +1,290 @@
+{
+  "surface": "first-run · Ollama runtime states",
+  "prd": "docs/plan/first-run-onboarding/phases/PRD-P8-ollama-runtime-states.md",
+  "note": "design↔live element correspondence for PRD-P8's runtime-state FOOT of the first-run local-model card. Kept SEPARATE from anchors.json (which maps the whole `gate` screen) because these anchors are per-state and their labels would collide with the gate's `card.local.*` set. The card HEADER (icon/title/meta/body) is identical in every state and is already scored by anchors.json; only `card` + `card.meta` are repeated here, `card.meta` because it carries the D5 divergence and `card` because it gives each per-state report its box/type context.",
+  "states": [
+    "not-installed",
+    "detected",
+    "installed",
+    "downloading",
+    "stopped"
+  ],
+  "designUrl": "surfaces/first-run/design/ollama.html?state=<state>",
+  "liveUrl": "surfaces/first-run/live/ollama-<state>.html",
+  "usage": "?state= is REQUIRED on the design side — without it the mock renders all five catalog columns and every `.fr-gcard` selector below would resolve to the first one. FILTER `elements` by the `state` field when building an extraction spec: a few selectors (`.fr-dep .acts .gbtn--pri`, `.fr-dep .watch`) legitimately match in more than one state, so an unfiltered spec would cross-align labels. Labels are state-prefixed and therefore globally unique, so one anchors file drives all five reports.",
+  "designStateNotes": {
+    "detected": "the mock has NO `?state=detected`. Load `?state=not-installed` and CLICK the `Get Ollama ↗` button — the vendored jsx flips its local `rt` to \"found\", which is the only way its `.ok` line renders.",
+    "fail": "`?state=fail` exists in the vendored mock but is the DROPPED \"Download failed\" state (PRD-P8 D1 deletes the red terminal branch). It has no live analog and is deliberately unmapped."
+  },
+  "blindSpots": [
+    "The `.watch` leading dot is a `::before` pseudo-element in the live CSS (onboarding.css `.fr-dep .watch::before`), and `getComputedStyle(el)` per-element extraction cannot address a pseudo-element. See the `not-installed.watch.dot` anchor.",
+    "The mock draws the watch dot ONLY in state ① (a `<span class=\"d\">`); its state ④ watch line has no dot at all. The live `::before` applies to BOTH watch lines, so live ④ shows a dot the mock does not. The extractor cannot see either dot, so this delta will never appear in a report — it is recorded here instead. PRD-P8 §5 specifies the dot for ① only, so live ④ is a (cosmetic, unscored) divergence."
+  ],
+  "elements": [
+    {
+      "label": "not-installed.card",
+      "state": "not-installed",
+      "group": "① not installed",
+      "design": ".fr-gcard",
+      "live": "[data-testid=\"first-run-local-card\"]"
+    },
+    {
+      "label": "not-installed.card.meta",
+      "state": "not-installed",
+      "group": "① not installed",
+      "design": ".fr-gcard .meta",
+      "live": "[data-testid=\"first-run-local-card\"] .fr-gcard__meta",
+      "expectDivergence": {
+        "text": "PRD-P8 D5 — the mock's \"5.6 GB\" is not a real Qwen3-4B GGUF quant size; 4.3 GB is the verified Q8_0 figure (4,280,404,704 B). Frozen: honesty over parity."
+      }
+    },
+    {
+      "label": "not-installed.foot",
+      "state": "not-installed",
+      "group": "① not installed",
+      "design": ".fr-gcard__foot",
+      "live": "[data-testid=\"first-run-local-foot\"]",
+      "expectDivergence": {
+        "extra": "live-only wrapper. The mock lets the card's own flex column space the foot; the live card wraps it in `.fr-gcard__foot` (margin-top:auto) so the two gate cards' CTAs align at unequal body heights, and so the whole foot can be ONE role=\"status\" aria-live region (PRD-P8 §5) — states ①→detected and ③→④ change with no user action and must be announced."
+      }
+    },
+    {
+      "label": "not-installed.dep",
+      "state": "not-installed",
+      "group": "① not installed",
+      "design": ".fr-gcard .fr-dep",
+      "live": "[data-testid=\"first-run-local-watch\"]"
+    },
+    {
+      "label": "not-installed.acts",
+      "state": "not-installed",
+      "group": "① not installed",
+      "design": ".fr-dep .acts",
+      "live": "[data-testid=\"first-run-local-watch\"] .acts"
+    },
+    {
+      "label": "not-installed.action",
+      "state": "not-installed",
+      "group": "① not installed",
+      "design": ".fr-dep .acts .gbtn--pri",
+      "live": "[data-testid=\"first-run-local-get-ollama\"]"
+    },
+    {
+      "label": "not-installed.watch",
+      "state": "not-installed",
+      "group": "① not installed",
+      "design": ".fr-dep .watch",
+      "live": "[data-testid=\"first-run-local-watch\"] .watch"
+    },
+    {
+      "label": "not-installed.watch.dot",
+      "state": "not-installed",
+      "group": "① not installed",
+      "design": ".fr-dep .watch .d",
+      "live": "[data-testid=\"first-run-local-watch\"] .watch .d",
+      "expectDivergence": {
+        "absent": "not a visual divergence, a MEASUREMENT one — both dots are unmeasurable here. The live dot is a `::before` pseudo-element (onboarding.css `.fr-dep .watch::before`, 6px, --color-text-subtle), which per-element getComputedStyle cannot address; the mock's `<span class=\"d\">` has NO matching CSS rule in the vendored stylesheet at all and measures 0×0. PRD-P8 §5 specifies a 6px dot for this line, so the live rendering is the intended one."
+      }
+    },
+
+    {
+      "label": "detected.dep",
+      "state": "detected",
+      "group": "① → detected",
+      "design": ".fr-gcard .fr-dep",
+      "live": "[data-testid=\"first-run-local-foot\"] .fr-dep"
+    },
+    {
+      "label": "detected.ok",
+      "state": "detected",
+      "group": "① → detected",
+      "design": ".fr-dep .ok",
+      "live": "[data-testid=\"first-run-local-detected\"]",
+      "expectDivergence": {
+        "color": "the mock hard-codes the literal #6aa88f (jade); no design-system token equals it exactly, so the live rule uses --color-success — the same substitution `.ln__check` already makes. Recorded in onboarding.css's PRD-P8 header block. Every OTHER property on this line (size, weight, gap) is scored normally and is NOT covered by this declaration."
+      }
+    },
+    {
+      "label": "detected.ok.icon",
+      "state": "detected",
+      "group": "① → detected",
+      "design": ".fr-dep .ok svg",
+      "live": "[data-testid=\"first-run-local-detected\"] svg"
+    },
+
+    {
+      "label": "installed.card.meta",
+      "state": "installed",
+      "group": "② installed",
+      "design": ".fr-gcard .meta",
+      "live": "[data-testid=\"first-run-local-card\"] .fr-gcard__meta",
+      "expectDivergence": {
+        "text": "PRD-P8 D5 — see not-installed.card.meta."
+      }
+    },
+    {
+      "label": "installed.foot",
+      "state": "installed",
+      "group": "② installed",
+      "design": ".fr-gcard__foot",
+      "live": "[data-testid=\"first-run-local-foot\"]",
+      "expectDivergence": {
+        "extra": "live-only wrapper — see not-installed.foot."
+      }
+    },
+    {
+      "label": "installed.action",
+      "state": "installed",
+      "group": "② installed",
+      "design": ".fr-gcard > .gbtn--pri",
+      "live": "[data-testid=\"first-run-start-download\"]"
+    },
+    {
+      "label": "installed.action.icon",
+      "state": "installed",
+      "group": "② installed",
+      "design": ".fr-gcard > .gbtn--pri svg",
+      "live": "[data-testid=\"first-run-start-download\"] svg"
+    },
+    {
+      "label": "installed.note",
+      "state": "installed",
+      "group": "② installed",
+      "design": ".fr-gcard > .note",
+      "live": "[data-testid=\"first-run-local-foot\"] .fr-gcard__note"
+    },
+
+    {
+      "label": "downloading.card.meta",
+      "state": "downloading",
+      "group": "③ downloading",
+      "design": ".fr-gcard .meta",
+      "live": "[data-testid=\"first-run-local-card\"] .fr-gcard__meta",
+      "expectDivergence": {
+        "text": "PRD-P8 D5 — see not-installed.card.meta."
+      }
+    },
+    {
+      "label": "downloading.dep",
+      "state": "downloading",
+      "group": "③ downloading",
+      "design": ".fr-gcard .fr-dep",
+      "live": "[data-testid=\"first-run-local-progress\"]"
+    },
+    {
+      "label": "downloading.dling",
+      "state": "downloading",
+      "group": "③ downloading",
+      "design": ".fr-dep .dling",
+      "live": "[data-testid=\"first-run-local-progress\"] .dling"
+    },
+    {
+      "label": "downloading.spin",
+      "state": "downloading",
+      "group": "③ downloading",
+      "design": ".fr-dep .dling .spin",
+      "live": "[data-testid=\"first-run-local-progress\"] .dling .spin"
+    },
+    {
+      "label": "downloading.prog",
+      "state": "downloading",
+      "group": "③ downloading",
+      "design": ".fr-dep .ol-prog",
+      "live": "[data-testid=\"first-run-local-bar\"]"
+    },
+    {
+      "label": "downloading.prog.fill",
+      "state": "downloading",
+      "group": "③ downloading",
+      "design": ".fr-dep .ol-prog span",
+      "live": "[data-testid=\"first-run-local-bar\"] .ol-prog__fill",
+      "expectDivergence": {
+        "width": "fixture arithmetic, not a style delta. The mock hard-codes width:42% (42% of a 5.6 GB total that does not exist); the live fixture sets the honest completed/total = 2.4 / 4.3 GB = 56%. The fill's SKIN (height, radius, background, transition) is scored normally."
+      }
+    },
+    {
+      "label": "downloading.note",
+      "state": "downloading",
+      "group": "③ downloading",
+      "design": ".fr-dep .note",
+      "live": "[data-testid=\"first-run-local-note\"]",
+      "expectDivergence": {
+        "text": "TWO declared deltas in one line. (a) PRD-P8 D5 — \"2.4 / 5.6 GB\" → \"2.4 / 4.3 GB\", the verified Q8_0 total. (b) PRD-P8 D4a-2 — the tail reads \"downloading in the background\", not the mock's \"type your first prompt while it lands\": D4 keeps the user ON the gate while an auto-started pull runs, and there is no composer there, so the mock's line would be a lie. The mock's wording IS used verbatim once the user has advanced (composer/ack)."
+      }
+    },
+    {
+      "label": "downloading.acts",
+      "state": "downloading",
+      "group": "③ downloading",
+      "design": ".fr-dep .acts",
+      "live": "[data-testid=\"first-run-local-progress\"] .acts",
+      "expectDivergence": {
+        "extra": "PRD-P8 D4a-1 — the mock's ③ foot has no action row because the mock has already auto-advanced the user to the composer (~1.4s after detection). D4 deliberately does not steal the stage, so the card stays mounted and the user needs a way forward."
+      }
+    },
+    {
+      "label": "downloading.action",
+      "state": "downloading",
+      "group": "③ downloading",
+      "design": ".fr-dep .acts .gbtn--pri",
+      "live": "[data-testid=\"first-run-local-continue\"]",
+      "expectDivergence": {
+        "extra": "PRD-P8 D4a-1 — the \"Continue →\" button. It is the MINIMUM affordance that makes D4 navigable (advance without restarting the in-flight pull); the mock has no analog. Hosts wire it through the Gate slot's `ctx.onContinue`, and the card renders no button when it is omitted. NOTE: the live fixture passes `onContinue` itself, so this report measures the CORRECTLY-WIRED card — an unwired host is a host-test concern (FirstRunGate / FirstRunSurfaceMount), never something a parity report can catch."
+      }
+    },
+
+    {
+      "label": "stopped.card.meta",
+      "state": "stopped",
+      "group": "④ runtime stopped",
+      "design": ".fr-gcard .meta",
+      "live": "[data-testid=\"first-run-local-card\"] .fr-gcard__meta",
+      "expectDivergence": {
+        "text": "PRD-P8 D5 — see not-installed.card.meta."
+      }
+    },
+    {
+      "label": "stopped.dep",
+      "state": "stopped",
+      "group": "④ runtime stopped",
+      "design": ".fr-gcard .fr-dep",
+      "live": "[data-testid=\"first-run-local-stopped\"]"
+    },
+    {
+      "label": "stopped.dling",
+      "state": "stopped",
+      "group": "④ runtime stopped",
+      "design": ".fr-dep .dling.warn",
+      "live": "[data-testid=\"first-run-local-stopped-msg\"]"
+    },
+    {
+      "label": "stopped.dling.icon",
+      "state": "stopped",
+      "group": "④ runtime stopped",
+      "design": ".fr-dep .dling.warn svg",
+      "live": "[data-testid=\"first-run-local-stopped-msg\"] svg"
+    },
+    {
+      "label": "stopped.acts",
+      "state": "stopped",
+      "group": "④ runtime stopped",
+      "design": ".fr-dep .acts",
+      "live": "[data-testid=\"first-run-local-stopped\"] .acts"
+    },
+    {
+      "label": "stopped.action",
+      "state": "stopped",
+      "group": "④ runtime stopped",
+      "design": ".fr-dep .acts .gbtn--pri",
+      "live": "[data-testid=\"first-run-local-restart\"]",
+      "note": "live renders this ONLY when the server reports runtime_managed (PRD-P8 §5); the live fixture pins the DESKTOP posture (runtimeManaged: true), which is the only posture the mock draws. On web / containerised self-host the button is correctly absent and the foot degrades to the instructional watch line — a state the mock has no column for."
+    },
+    {
+      "label": "stopped.watch",
+      "state": "stopped",
+      "group": "④ runtime stopped",
+      "design": ".fr-dep .watch",
+      "live": "[data-testid=\"first-run-local-stopped-watch\"]"
+    }
+  ]
+}

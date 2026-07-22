@@ -1527,7 +1527,14 @@ export {
   FIRST_RUN_SUGGESTIONS,
   Acknowledgment,
   FIRST_RUN_ACK_TITLES,
+  FIRST_RUN_ACK_STALLED,
   firstRunAckLines,
+  // P8 §7 — ack-state derivation for hosts that render `Acknowledgment`
+  // themselves (both of them): phase → state, and the state's title/note/action.
+  firstRunAckStateForPhase,
+  firstRunAckTitle,
+  firstRunAckNote,
+  firstRunAckAction,
   useFirstRunLaunch,
   type OnboardingComposerProps,
   type FirstRunSuggestion,
@@ -1537,6 +1544,7 @@ export {
   type FirstRunAckEngine,
   type FirstRunToolsState,
   type FirstRunAckLines,
+  type FirstRunAckState,
   type FirstRunLaunchPhase,
   type FirstRunLaunchPayload,
   type UseFirstRunLaunch,

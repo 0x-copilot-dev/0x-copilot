@@ -50,7 +50,12 @@ import type { ProviderKeysPort } from "../settings/data/providerKeys";
 import type { ModelsPort } from "../settings/data/models";
 import { Gate, type FirstRunLocalCardCtx } from "./Gate";
 import type { KeyFormConnected } from "./KeyForm";
-import { firstRunAckTitle, type FirstRunAckState } from "./firstRunAckLines";
+import {
+  firstRunAckAction,
+  firstRunAckNote,
+  firstRunAckTitle,
+  type FirstRunAckState,
+} from "./firstRunAckLines";
 import {
   FIRST_RUN_COPY,
   type FirstRunEngine,
@@ -245,11 +250,6 @@ function AckPlaceholder({
 }: {
   readonly ctx: FirstRunAckCtx;
 }): ReactElement {
-  // P1 hands off immediately (one-shot); P3 owns the real ack + ~1.5s timing.
-  const { onComplete } = ctx;
-  useEffect(() => {
-    onComplete();
-  }, [onComplete]);
   // P8 §7 — "Queued — starts when the model lands" is only true while the model
   // still can land; a blocked download gets the honest stalled title instead.
   const ackState: FirstRunAckState = ctx.modelReady
@@ -257,11 +257,46 @@ function AckPlaceholder({
     : ctx.modelBlocked
       ? "stalled"
       : "queued";
+  const stalled = ackState === "stalled";
+  const note = firstRunAckNote(ackState);
+  const action = firstRunAckAction(ackState);
+
+  // P1 hands off immediately (one-shot); P3 owns the real ack + ~1.5s timing.
+  //
+  // P8 §7 adds the one exception: a STALLED ack must not hand off. Completing
+  // here would drop the user into the workspace on the strength of a run that
+  // never started — the same lie as the old "Queued" title, just told by the
+  // navigation instead of the copy. The effect re-runs if the model lands after
+  // all (`stalled` flips false), so a recovery still completes with no gesture.
+  const { onComplete, onBack } = ctx;
+  useEffect(() => {
+    if (stalled) return;
+    onComplete();
+  }, [stalled, onComplete]);
+
   return (
     <div className="fr-slot" data-testid="first-run-ack-placeholder">
       <p className="fr-slot__note" data-ack-state={ackState}>
         {firstRunAckTitle(ackState)}
       </p>
+      {note !== null ? (
+        <p className="fr-slot__note" data-testid="first-run-ack-note">
+          {note}
+        </p>
+      ) : null}
+      {/* Omitted-means-no-button, exactly as `FirstRunLocalCard` does it: only
+       * the stalled state has an action, so only it renders a control. */}
+      {action !== null ? (
+        <Button
+          type="button"
+          variant="primary"
+          size="sm"
+          onClick={onBack}
+          data-testid="first-run-ack-back"
+        >
+          {action}
+        </Button>
+      ) : null}
     </div>
   );
 }

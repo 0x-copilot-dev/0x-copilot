@@ -26,6 +26,7 @@ import type {
 import type { PresenceSignal, PresenceState } from "../ports/PresenceSignal";
 import { PresenceSignalProvider } from "../providers/PresenceSignalProvider";
 import type { AvailableLocalModel } from "../settings/DownloadLocalModelModal";
+import { FIRST_RUN_COPY } from "./firstRun";
 import type { FirstRunLocalModelsPort } from "./localModelsPort";
 import {
   useFirstRunLocalModel,
@@ -774,6 +775,67 @@ describe("useFirstRunLocalModel — failure kinds (PRD-P8 D1)", () => {
     expect(result.current.localModelPct).toBe(25);
   });
 
+  it("a daemon that answers /api/version but refuses /api/pull is rate-limited, not hammered", async () => {
+    // The pathological `runtime_unreachable` shape, and the one the happy-path
+    // test above cannot see: the STATUS probe keeps answering "running" (the
+    // version endpoint is up) while every pull ConnectErrors (a wedged daemon,
+    // a restart in flight, an exhausted connection pool).
+    //
+    // `fail` re-probes itself, so arming the auto-start effect in the same tick
+    // meant that probe answered "running" in the same microtask turn, the
+    // effect re-opened the pull with no delay, and the new pull broke the same
+    // way. Measured before the fix: 400+ pulls opened with ZERO wall-clock
+    // elapsed, `blocked` still null, a spinner on screen. The transient lane
+    // had a bounded delay; this one had none at all.
+    let pulls = 0;
+    const port: FirstRunLocalModelsPort = {
+      status: () => Promise.resolve(RUNNING),
+      list: () => Promise.resolve([]),
+      pull: () => {
+        pulls += 1;
+        // A runaway guard, so a regression fails the assertion below instead
+        // of hanging the suite (which is what it did when first reproduced).
+        if (pulls > 500) throw new Error(`runaway: ${pulls} pulls`);
+        return (async function* () {
+          yield frame({
+            sequence_no: 1,
+            status: "error",
+            error: "Ollama request failed: /api/pull",
+            error_kind: "runtime_unreachable",
+          });
+        })();
+      },
+      startRuntime: () => Promise.resolve(RUNNING),
+    };
+
+    const { result } = mount(port);
+    await settle();
+    act(() => result.current.start());
+    await settle(0);
+    expect(pulls).toBe(1); // no free retry inside the failure's own turn
+
+    // Re-armed on the same schedule the transient lane uses: 1s, then 2s…
+    await settle(1_000);
+    expect(pulls).toBe(2);
+    await settle(2_000);
+    expect(pulls).toBe(3);
+
+    // …so a full minute of wall clock buys a handful of attempts, not
+    // hundreds of thousands. This is the assertion the old code could not pass.
+    await settle(60_000);
+    expect(pulls).toBeGreaterThan(3); // still resuming on its own (§6)
+    expect(pulls).toBeLessThanOrEqual(10);
+
+    // And it is never hard-blocked: §6 requires a daemon that comes back to
+    // resume the download by itself, however long it was down.
+    expect(result.current.blocked).toBeNull();
+    // Nor is the wait silent. Between attempts the card must not fall back to
+    // state ②'s "Start download" — that would quietly un-start a download the
+    // user did start. `reconnecting` says what is true and keeps the bar.
+    expect(["downloading", "reconnecting"]).toContain(result.current.phase);
+    expect(result.current.localModelPct).not.toBeNull();
+  });
+
   it("a transient break reconnects with capped exponential backoff", async () => {
     const h = harness(RUNNING);
     const { result } = await downloadingAt25(h);
@@ -818,6 +880,147 @@ describe("useFirstRunLocalModel — failure kinds (PRD-P8 D1)", () => {
     expect(h.calls.pull).toBe(2); // 1s is no longer enough
     await settle(FIRST_BACKOFF_MS);
     expect(h.calls.pull).toBe(3);
+  });
+
+  // --- the retry BUDGET (PRD-P8 §6) ---------------------------------------
+  //
+  // The backoff bounds the DELAY between retries; these bound the NUMBER of
+  // them. Unbounded retry is the same dead end as a frozen bar — it just
+  // animates: a permanently broken proxy (one that accepts the connection and
+  // tears it down every time) reconnected forever and the user was never told.
+
+  /** The delays `backoffDelayMs` produces, one per retry the budget allows. */
+  const BACKOFF_SCHEDULE_MS = [1_000, 2_000, 4_000, 8_000, 16_000, 30_000];
+  const MAX_TRANSIENT_RETRIES = BACKOFF_SCHEDULE_MS.length;
+
+  /** Break pull #`index` the way a flaky link does: transient, no new bytes. */
+  async function breakTransiently(h: Harness, index: number): Promise<void> {
+    await act(async () => {
+      h.stream(index).push(
+        frame({
+          sequence_no: 100 + index,
+          status: "error",
+          error: "stream ended early",
+          error_kind: "transient",
+        }),
+      );
+      await vi.advanceTimersByTimeAsync(0);
+    });
+  }
+
+  /** Spend the entire allowance without ever moving a byte forward. */
+  async function burnTheBudget(h: Harness): Promise<void> {
+    for (let attempt = 0; attempt < MAX_TRANSIENT_RETRIES; attempt += 1) {
+      await breakTransiently(h, attempt);
+      await settle(BACKOFF_SCHEDULE_MS[attempt]);
+    }
+  }
+
+  it("spends the whole retry budget before involving the user — a real blip stays invisible", async () => {
+    const h = harness(RUNNING);
+    const { result } = await downloadingAt25(h);
+
+    for (let attempt = 0; attempt < MAX_TRANSIENT_RETRIES; attempt += 1) {
+      await breakTransiently(h, attempt);
+      // Below the cap the hook absorbs the break: reconnecting, never blocked.
+      expect(result.current.phase).toBe("reconnecting");
+      expect(result.current.blocked).toBeNull();
+
+      await settle(BACKOFF_SCHEDULE_MS[attempt]);
+      expect(h.calls.pull).toBe(attempt + 2);
+      expect(result.current.phase).toBe("downloading");
+      expect(result.current.localModelPct).toBe(25); // nothing thrown away
+    }
+  });
+
+  it("stops reconnecting AT the cap and says so — never an unbounded silent spin", async () => {
+    const h = harness(RUNNING);
+    const { result } = await downloadingAt25(h);
+    await burnTheBudget(h);
+
+    const pullsAtCap = h.calls.pull;
+    expect(pullsAtCap).toBe(MAX_TRANSIENT_RETRIES + 1);
+
+    // One more break, with nothing left to spend.
+    await breakTransiently(h, MAX_TRANSIENT_RETRIES);
+
+    expect(result.current.phase).not.toBe("reconnecting");
+    expect(result.current.blocked).not.toBeNull();
+    expect(result.current.blocked?.message).toBe(
+      FIRST_RUN_COPY.local.retriesExhausted,
+    );
+    // The honesty requirement: whatever it says, it must be renderable and it
+    // must not promise a reconnect that is no longer coming.
+    expect(result.current.blocked?.message.trim().length).toBeGreaterThan(0);
+    expect(result.current.blocked?.message).not.toMatch(/reconnect/i);
+    expect(hasAWayForward(result.current)).toBe(true);
+    expect(result.current.localModelPct).toBe(25);
+
+    // And it really has stopped: no retry ever fires again, however long we
+    // wait. This is the assertion the unbounded loop could not pass.
+    await settle(FAST_POLL_WINDOW_MS + SLOW_POLL_MS);
+    expect(h.calls.pull).toBe(pullsAtCap);
+
+    // The manual escape (design state ④'s "Resume download") still works and
+    // re-arms the allowance.
+    act(() => result.current.resume());
+    expect(result.current.blocked).toBeNull();
+    expect(result.current.phase).toBe("downloading");
+    expect(h.calls.pull).toBe(pullsAtCap + 1);
+  });
+
+  it("forward progress refunds the budget — a long flaky download that IS working is never hard-blocked", async () => {
+    // A 4.3 GB pull over a bad link legitimately breaks far more than six
+    // times while still finishing. Capping the download rather than the
+    // consecutive-failure streak would be its own dishonest dead end.
+    const h = harness(RUNNING);
+    const { result } = await downloadingAt25(h);
+    await burnTheBudget(h);
+
+    // The retry that finally downloads something NEW resets the allowance…
+    await act(async () => {
+      h.stream(MAX_TRANSIENT_RETRIES).push(
+        frame({ sequence_no: 200, bytes_completed: 150, bytes_total: 200 }),
+      );
+      await vi.advanceTimersByTimeAsync(0);
+    });
+    expect(result.current.localModelPct).toBe(75);
+
+    // …so the next break reconnects instead of blocking, and does so from the
+    // FIRST backoff step rather than the ceiling.
+    await breakTransiently(h, MAX_TRANSIENT_RETRIES);
+    expect(result.current.blocked).toBeNull();
+    expect(result.current.phase).toBe("reconnecting");
+    await settle(BACKOFF_SCHEDULE_MS[0]);
+    expect(result.current.phase).toBe("downloading");
+    expect(h.calls.pull).toBe(MAX_TRANSIENT_RETRIES + 2);
+  });
+
+  it("re-delivering bytes it already had buys a broken stream no extra retries", async () => {
+    // The refund is keyed on a high-water mark, not on "a frame arrived":
+    // a server that replays the same prefix and dies every time is not making
+    // progress, and must still hit the cap.
+    const h = harness(RUNNING);
+    const { result } = await downloadingAt25(h); // proves 50 bytes
+
+    for (let attempt = 0; attempt < MAX_TRANSIENT_RETRIES; attempt += 1) {
+      await act(async () => {
+        h.stream(attempt).push(
+          frame({
+            sequence_no: 300 + attempt,
+            bytes_completed: 50, // exactly what was already proved
+            bytes_total: 200,
+          }),
+        );
+        await vi.advanceTimersByTimeAsync(0);
+      });
+      await breakTransiently(h, attempt);
+      await settle(BACKOFF_SCHEDULE_MS[attempt]);
+    }
+
+    await breakTransiently(h, MAX_TRANSIENT_RETRIES);
+    expect(result.current.blocked).not.toBeNull();
+    expect(result.current.phase).not.toBe("reconnecting");
   });
 
   it("a terminal failure blocks with the server's message, never auto-retries, and resume() is the way out", async () => {

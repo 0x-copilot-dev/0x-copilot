@@ -17,7 +17,7 @@ tools/design-parity/
   lib/
     extract-computed.js       browser-context getComputedStyle walker (anchor-mapped)
     compare.mjs               node diff → severity-ranked report (token-annotated colors)
-    render-live.test.tsx      vitest+jsdom renders the REAL app component to static HTML
+    render-live*.test.tsx     vitest+jsdom renders the REAL app component to static HTML
   surfaces/
     <name>/
       design/                 vendored Claude Design mock (jsx + surface css + index.html harness)
@@ -29,10 +29,11 @@ tools/design-parity/
 
 ## Surfaces
 
-| Surface              | Design spec                  | Parity report                                                                                       | States                                                                                     |
-| -------------------- | ---------------------------- | --------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------ |
-| **first-run** (FTUE) | `surfaces/first-run/design/` | `surfaces/first-run/out/report.md` (gate: 12 HIGH / 30 MED)                                         | gate ✅ · composer/ack TODO                                                                |
-| **login**            | `surfaces/login/design/`     | `surfaces/login/out/report.md` (36 HIGH / 31 MED) + [`FINDINGS.md`](surfaces/login/out/FINDINGS.md) | pick·connecting·sign·done ✅ · werr/gerr/google = design-only (live has no recovery views) |
+| Surface              | Design spec                  | Parity report                                                                                              | States                                                                                           |
+| -------------------- | ---------------------------- | ---------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------ |
+| **first-run** (FTUE) | `surfaces/first-run/design/` | `surfaces/first-run/out/report.md` (gate: 12 HIGH / 30 MED)                                                | gate ✅ · Ollama states ①–④ renderable + anchored (`anchors-ollama.json`) ✅ · composer/ack TODO |
+| **login**            | `surfaces/login/design/`     | `surfaces/login/out/report.md` (36 HIGH / 31 MED) + [`FINDINGS.md`](surfaces/login/out/FINDINGS.md)        | pick·connecting·sign·done ✅ · werr/gerr/google = design-only (live has no recovery views)       |
+| **run-empty**        | `surfaces/run-empty/design/` | `surfaces/run-empty/out/report.md` (9 HIGH / 23 MED) + [`FINDINGS.md`](surfaces/run-empty/out/FINDINGS.md) | composer ✅                                                                                      |
 
 ## Using it for the surface you're working on
 

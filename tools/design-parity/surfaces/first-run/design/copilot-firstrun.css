@@ -1,4 +1,4 @@
-/* first-run (FTUE) — fr-*  ·  design source of truth (project 73f810d9) */
+/* first-run (FTUE) — fr-*  ·  design source of truth (projects 73f810d9 + ceb081f6) */
 .fr {
   height: 100%;
   display: flex;
@@ -280,4 +280,165 @@
   font-family: var(--mono);
   font-size: 9.5px;
   color: var(--mut2);
+}
+
+/* --- PRD-P8 re-vendor: the Ollama-states foot vocabulary --------------------
+ * From `copilot-firstrun.css` in project ceb081f6 (mock "0xCopilot First Run -
+ * Ollama States"). These rules were absent from the earlier vendor, so the
+ * parity harness could not score states ①–④ at all. */
+.fr-dep {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  border-top: 1px dashed var(--line);
+  padding-top: 10px;
+}
+.fr-dep .dl {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  font-size: 11.5px;
+  font-weight: 600;
+  color: var(--tx);
+}
+.fr-dep .dl .d {
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: oklch(0.8 0.13 75);
+  flex: none;
+  box-shadow: 0 0 0 3px oklch(0.8 0.13 75 / 0.15);
+}
+.fr-dep .dl .s {
+  font-weight: 400;
+  color: var(--mut);
+}
+.fr-dep .acts {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+.fr-dep .watch {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 10.5px;
+  color: var(--mut);
+  line-height: 1.4;
+}
+.fr-dep .ok {
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+  font-size: 11.5px;
+  font-weight: 600;
+  color: #6aa88f;
+}
+.fr-dep .ok svg {
+  width: 12px;
+  height: 12px;
+}
+
+/* ollama states comparison */
+.ol-main {
+  display: flex;
+  flex-direction: column;
+  gap: 20px;
+  width: min(940px, 94%);
+  margin: 0 auto;
+  padding: 14px 0 30px;
+}
+.ol-grid {
+  display: grid;
+  grid-template-columns: 1fr 1fr 1fr;
+  gap: 14px;
+  align-items: stretch;
+}
+.ol-col {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+.ol-col .fr-gcard {
+  flex: 1;
+}
+.ol-tag {
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+  font-family: var(--mono);
+  font-size: 10px;
+  color: var(--tx2);
+}
+.ol-tag .d {
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  flex: none;
+}
+.ol-tag .d.off {
+  background: var(--mut2);
+  box-shadow: 0 0 0 3px oklch(0.6 0 0 / 0.12);
+}
+.ol-tag .d.on {
+  background: var(--jade);
+  box-shadow: 0 0 0 3px oklch(0.75 0.13 155 / 0.18);
+}
+.ol-tag .d.fail {
+  background: var(--ember);
+  box-shadow: 0 0 0 3px rgba(240, 118, 79, 0.16);
+}
+.ol-tag .d.warn {
+  background: var(--amber);
+  box-shadow: 0 0 0 3px rgba(232, 180, 94, 0.16);
+}
+.ol-prog {
+  height: 5px;
+  border-radius: 99px;
+  background: var(--panel3);
+  overflow: hidden;
+}
+.ol-prog span {
+  display: block;
+  height: 100%;
+  border-radius: 99px;
+  background: var(--accent);
+}
+.ol-prog span.err {
+  background: var(--ember);
+}
+.dling {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 11.5px;
+  font-weight: 600;
+  color: var(--tx);
+  line-height: 1.4;
+}
+.dling svg {
+  width: 13px;
+  height: 13px;
+  flex: none;
+}
+.dling.err {
+  color: var(--ember);
+}
+.dling.warn {
+  color: var(--amber);
+}
+.dling .spin {
+  width: 12px;
+  height: 12px;
+  border: 2px solid var(--line2);
+  border-top-color: var(--accent);
+  border-radius: 50%;
+  animation: spin 0.7s linear infinite;
+  display: inline-block;
+  flex: none;
+}
+@keyframes spin {
+  to {
+    transform: rotate(360deg);
+  }
 }

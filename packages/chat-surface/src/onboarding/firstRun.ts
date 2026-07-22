@@ -162,6 +162,40 @@ export const FIRST_RUN_COPY = {
       "start Ollama again — the download resumes on its own",
     /** ④ terminal-error action (`terminal` kind, no auto-retry). */
     resume: "Resume download",
+    /**
+     * A break the server did not classify, or one with no message at all (a
+     * torn stream, a transport throw). Client-authored, so it lives here with
+     * the rest of the card copy rather than as a literal in the hook.
+     */
+    interrupted: "Download interrupted.",
+    /**
+     * The `transient` retry budget is spent (PRD-P8 §6's cap). The auto-retry
+     * lane has stopped, so this must NOT promise a reconnect — it says what is
+     * true (the bytes are safe) and leaves the way out to `Resume download`.
+     */
+    retriesExhausted:
+      "The download keeps dropping — nothing already downloaded is lost",
+  },
+  /**
+   * PRD-P8 §7 — the acknowledgment's THIRD state.
+   *
+   * Only the new strings live here: `starting` / `queued` remain in
+   * `FIRST_RUN_ACK_TITLES` (`Acknowledgment.tsx`), so no ack string ever has
+   * two homes. `firstRunAckLines.ts` composes the two sources.
+   */
+  ack: {
+    stalled: {
+      /**
+       * Replaces "Queued — starts when the model lands" when the model
+       * demonstrably is NOT landing. It names the state (held), names the
+       * reason (the download stopped), and promises nothing.
+       */
+      title: "Held — the model isn't downloading",
+      /** Both real ways out, plus the reassurance that nothing was lost. */
+      note: "Restart Ollama or add a key — your prompt is saved.",
+      /** The action that makes the state actionable (`FirstRunAckCtx.onBack`). */
+      action: "Back to the composer",
+    },
   },
   key: {
     title: "Bring your own key",

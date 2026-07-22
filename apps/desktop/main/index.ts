@@ -87,6 +87,7 @@ import {
   loadFirstRunComplete,
   saveFirstRunComplete,
 } from "./services/first-run-store";
+import { registerOllamaDownloadIpc } from "./services/ollama-download";
 import {
   gatedSafeStorage,
   loadSecureStorageMode,
@@ -396,6 +397,13 @@ function registerFirstRunIpc(): void {
         error: err instanceof Error ? err.message : "unknown error",
       };
     }
+  });
+  // PRD-P8 §8 — the local-model card's "Get Ollama ↗". Argument-free by
+  // design: the destination is a constant owned by main, so this cannot become
+  // a generic "open any URL" escape hatch around the window-open denial below.
+  registerOllamaDownloadIpc({
+    ipcMain,
+    openExternal: (url) => shell.openExternal(url),
   });
 }
 

@@ -97,10 +97,17 @@ describe("<Gate>", () => {
 
   // --- PRD-P8 D4 / D4a — the two advance seams --------------------------
 
-  /** A slot card exposing both ctx callbacks as buttons. */
+  /**
+   * A slot card exposing both ctx callbacks as buttons. It mirrors
+   * `FirstRunLocalCard`'s own rule — render "Continue →" only when the callback
+   * exists — so the assertions below are about what a real host would see.
+   */
   function slotCard(ctx: FirstRunLocalCardCtx) {
     return (
-      <div data-testid="p8-local-card">
+      <div
+        data-testid="p8-local-card"
+        data-continue={ctx.onContinue === undefined ? "absent" : "wired"}
+      >
         <button
           type="button"
           data-testid="p8-start"
@@ -108,13 +115,15 @@ describe("<Gate>", () => {
         >
           start
         </button>
-        <button
-          type="button"
-          data-testid="p8-continue"
-          onClick={ctx.onContinue}
-        >
-          continue
-        </button>
+        {ctx.onContinue !== undefined ? (
+          <button
+            type="button"
+            data-testid="p8-continue"
+            onClick={ctx.onContinue}
+          >
+            continue
+          </button>
+        ) : null}
       </div>
     );
   }
@@ -135,15 +144,33 @@ describe("<Gate>", () => {
     expect(onContinue).toHaveBeenCalledTimes(1);
   });
 
-  it("defaults onContinue to an inert callback when the host wires none", () => {
+  it("leaves ctx.onContinue UNDEFINED when the host wires none, so no dead button renders", () => {
     const onStartDownload = vi.fn();
     renderGate({ renderLocalCard: slotCard, onStartDownload });
 
-    // A slot that renders D4a's action against a host that has not wired it
-    // must be harmless — never a throw, never a phantom download.
-    expect(() =>
-      fireEvent.click(screen.getByTestId("p8-continue")),
-    ).not.toThrow();
+    // The card's contract is "omitted means no button" — it never renders a
+    // control that cannot work. A stable inert fallback would defeat that: the
+    // slot would always see a defined callback and always render "Continue →",
+    // which would then silently do nothing on every click.
+    expect(
+      screen.getByTestId("p8-local-card").getAttribute("data-continue"),
+    ).toBe("absent");
+    expect(screen.queryByTestId("p8-continue")).toBeNull();
     expect(onStartDownload).not.toHaveBeenCalled();
+  });
+
+  it("hands the slot a DEFINED onContinue as soon as the host wires one", () => {
+    const onContinue = vi.fn();
+    renderGate({
+      renderLocalCard: slotCard,
+      onStartDownload: vi.fn(),
+      onContinue,
+    });
+
+    expect(
+      screen.getByTestId("p8-local-card").getAttribute("data-continue"),
+    ).toBe("wired");
+    fireEvent.click(screen.getByTestId("p8-continue"));
+    expect(onContinue).toHaveBeenCalledTimes(1);
   });
 });

@@ -543,6 +543,15 @@
   height: 11px;
 }
 
+/* P8 §7 — the stalled ack's sub-line. Muted, not danger: the model not landing
+   is a held state with a way out, never an error (PRD-P8 D1 — no red terminal
+   state anywhere in this flow). */
+.fr-ack__note {
+  margin: 0;
+  font-size: var(--font-size-xs);
+  color: var(--color-text-muted);
+}
+
 .fr-ack__error {
   margin: 0;
   font-size: var(--font-size-xs);

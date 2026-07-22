@@ -14,6 +14,7 @@
 // nor the ack title may keep claiming the download is in flight.
 
 import { FIRST_RUN_ACK_TITLES } from "./Acknowledgment";
+import { FIRST_RUN_COPY } from "./firstRun";
 import type { FirstRunLaunchPhase } from "./useFirstRunLaunch";
 
 // Named `FirstRunAckEngine` (not `FirstRunEngine`) to avoid colliding with the
@@ -48,16 +49,13 @@ export interface FirstRunAckLines {
  * PRD-P8 §7 copy for the third ack state: the send was accepted, the model is
  * NOT arriving, and the user needs something true plus a way out.
  *
- * NEW STRINGS — deliberately a local constant, not `FIRST_RUN_COPY` /
- * `FIRST_RUN_ACK_TITLES`: `firstRun.ts` and `Acknowledgment.tsx` are owned by
- * other streams this wave. Promoting `title` into `FIRST_RUN_ACK_TITLES` (as a
- * third `AcknowledgmentVariant`) is the tracked follow-up; until then a host
- * renders `note` through `Acknowledgment`'s existing `error` slot.
+ * The strings themselves live in `FIRST_RUN_COPY.ack.stalled` with the rest of
+ * the FTUE copy (PRD-P8 §5's "no inline literals" rule); this is the named
+ * re-export the launch lane reads, so `starting`/`queued` (owned by
+ * `FIRST_RUN_ACK_TITLES`) and `stalled` are reachable from one module without
+ * either string gaining a second home.
  */
-export const FIRST_RUN_ACK_STALLED = {
-  title: "Held — the model isn't downloading",
-  note: "Restart Ollama or add a key — your prompt is saved.",
-} as const;
+export const FIRST_RUN_ACK_STALLED = FIRST_RUN_COPY.ack.stalled;
 
 /**
  * Which title the acknowledgment should carry. Mirrors `AcknowledgmentVariant`
@@ -83,12 +81,44 @@ export function firstRunAckStateForPhase(
   return "starting";
 }
 
-/** The title string for an ack state (the two shipped titles + P8's stalled). */
+/**
+ * The title string for an ack state (the two shipped titles + P8's stalled).
+ *
+ * A single map lookup: `FIRST_RUN_ACK_TITLES.stalled` IS
+ * `FIRST_RUN_COPY.ack.stalled.title` (a reference, not a copy), so the string
+ * still has exactly one home and `Acknowledgment` — which renders the title from
+ * the same map — cannot drift from this.
+ */
 export function firstRunAckTitle(state: FirstRunAckState): string {
-  if (state === "stalled") {
-    return FIRST_RUN_ACK_STALLED.title;
-  }
   return FIRST_RUN_ACK_TITLES[state];
+}
+
+/**
+ * The sub-line under the title, or `null` when the state needs none.
+ *
+ * Only `stalled` has one, and it is load-bearing rather than decorative: the
+ * title says the model is not coming, and this says what to do about it. A
+ * `starting`/`queued` ack deliberately stays silent — the three echo lines are
+ * the whole body there.
+ */
+export function firstRunAckNote(state: FirstRunAckState): string | null {
+  return state === "stalled" ? FIRST_RUN_ACK_STALLED.note : null;
+}
+
+/**
+ * The label for the ack's action, or `null` when the state has none.
+ *
+ * `stalled` is the ONLY ack state with an action, and it must have one: it is
+ * the terminus of a send that will not complete by itself, so without a control
+ * the honest title would just be a nicer-worded dead end. The action is bound to
+ * `FirstRunAckCtx.onBack`, which un-sends the surface and re-opens the composer
+ * (`useFirstRunLaunch.launch` accepts a re-submit from `blocked` by design).
+ *
+ * Mirrors `FirstRunLocalCardProps`' omitted-means-no-button rule: a state with
+ * no action returns `null`, so no caller can render a control that does nothing.
+ */
+export function firstRunAckAction(state: FirstRunAckState): string | null {
+  return state === "stalled" ? FIRST_RUN_ACK_STALLED.action : null;
 }
 
 function modelSuffix(engine: FirstRunAckEngine): string {

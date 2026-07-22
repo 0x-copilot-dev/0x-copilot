@@ -31,11 +31,21 @@ import { FIRST_RUN_COPY, type FirstRunKeyProvider } from "./firstRun";
  *   • `onContinue` — D4a's "Continue →". Advances only. A pull the hook
  *     auto-started on runtime detection must call NEITHER, so `stage` stays
  *     `"choice"`, the card stays mounted, and states ③/④ are reachable.
+ *
+ * `onContinue` is OPTIONAL here for the same reason it is optional on
+ * `FirstRunLocalCardProps`: the card renders "Continue →" only when it is
+ * defined ("never a dead button"). Substituting a stable inert fallback would
+ * defeat that check — a slot forwarding `ctx.onContinue` would always receive a
+ * defined callback and render a control that silently does nothing.
  */
 export interface FirstRunLocalCardCtx {
   readonly onStartDownload: () => void;
-  /** D4a — advance to the composer without (re)starting an in-flight pull. */
-  readonly onContinue: () => void;
+  /**
+   * D4a — advance to the composer without (re)starting an in-flight pull.
+   * `undefined` when the host wired no `onContinue`; pass it straight through
+   * to the card, which then renders no button.
+   */
+  readonly onContinue?: () => void;
   readonly localModelPct: number | null;
   readonly disabled: boolean;
 }
@@ -49,7 +59,8 @@ export interface GateProps {
   /**
    * P8 D4a → surface: engine=local + advance, WITHOUT firing the host's
    * `onStartLocalDownload`. Optional (the P1 default card has no such
-   * affordance); omitted ⇒ the slot ctx gets an inert callback.
+   * affordance); omitted ⇒ `ctx.onContinue` is `undefined` too, so a slot card
+   * renders no "Continue →". `FirstRunSurface` always supplies one.
    */
   readonly onContinue?: () => void;
   /** → surface: engine=key, stage=ready. */
@@ -60,11 +71,6 @@ export interface GateProps {
   readonly localModelPct?: number | null;
   /** P2 replaces the whole local `.fr-gcard`; when absent P1's default renders. */
   readonly renderLocalCard?: (ctx: FirstRunLocalCardCtx) => ReactNode;
-}
-
-/** Stable inert `onContinue` for hosts that don't wire D4a (P1 default card). */
-function noContinue(): void {
-  /* no D4a affordance without a slot that renders one */
 }
 
 /**
@@ -119,7 +125,10 @@ export function Gate({
     renderLocalCard !== undefined ? (
       renderLocalCard({
         onStartDownload,
-        onContinue: onContinue ?? noContinue,
+        // Passed through UNSUBSTITUTED: a slot card decides whether to render
+        // "Continue →" by asking whether this is defined, so an inert stand-in
+        // would hand every host a button that goes nowhere.
+        onContinue,
         localModelPct,
         disabled: localDownloadDisabled,
       })
