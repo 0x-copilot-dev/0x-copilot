@@ -522,15 +522,11 @@ export const AssistantComposer = forwardRef<
         // NOT gate on `running` (or any other run-state flag); hiding
         // shortcuts mid-flight makes the composer look broken. See
         // apps/frontend/CLAUDE.md → "Composer hint row".
+        //
+        // The `↵ send` / `⇧+↵ new line` keyboard hints are dropped to match the
+        // design mock (its composer shows no send/newline hint). The `/ skills`
+        // cue and the "Sources cited inline" mode flag stay.
         <div className="aui-composer__hint" aria-hidden="false">
-          <span>
-            <kbd>↵</kbd> send
-          </span>
-          <span className="aui-composer__hint-sep" aria-hidden="true" />
-          <span>
-            <kbd>⇧</kbd>+<kbd>↵</kbd> new line
-          </span>
-          <span className="aui-composer__hint-sep" aria-hidden="true" />
           <span>
             <kbd>/</kbd> skills
           </span>

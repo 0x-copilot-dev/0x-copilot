@@ -2246,12 +2246,16 @@ p {
  * indistinguishable from the icon-only tray — the user reading an empty
  * composer couldn't tell where the primary action was. Now disabled = a
  * faint accent-tinted ghost; enabled = full accent. */
+/* Solid bright-accent square (design mock `.cmp-send`): filled accent at all
+ * times so the send action reads as the primary control; disabled just dims the
+ * same solid square (design `.cmp-send:disabled{opacity:.35}`) rather than
+ * becoming a ghost tint. The `--stop` variant below stays quiet-tinted. */
 .aui-send-button {
   align-items: center;
-  background: color-mix(in srgb, var(--color-accent) 18%, transparent);
-  border: 1px solid color-mix(in srgb, var(--color-accent) 35%, transparent);
+  background: var(--color-accent);
+  border: 1px solid var(--color-accent);
   border-radius: var(--radius-md);
-  color: color-mix(in srgb, var(--color-accent) 75%, var(--color-text-subtle));
+  color: var(--color-accent-contrast, white);
   cursor: pointer;
   display: inline-flex;
   font: inherit;
@@ -2268,28 +2272,18 @@ p {
 }
 
 .aui-send-button:hover:not([disabled]):not(.aui-send-button--stop) {
-  background: color-mix(in srgb, var(--color-accent) 88%, white);
+  background: var(
+    --color-accent-strong,
+    color-mix(in srgb, var(--color-accent) 88%, white)
+  );
   color: var(--color-accent-contrast, white);
-  border-color: var(--color-accent);
-}
-
-/* Primary-action treatment for the enabled send button (Phase 9 composer
- * redesign). Filled accent so the eye locates the action before any
- * other element in the toolbar. The "quiet send / loud run-state" intent
- * from the old design is preserved by the cancel/stop variant below
- * (still tinted, not filled), which signals "running is the expected
- * state, not emergency". */
-.aui-send-button:not([disabled]):not(.aui-send-button--stop) {
-  background: var(--color-accent);
-  color: var(--color-accent-contrast, white);
-  border-color: var(--color-accent);
+  border-color: var(--color-accent-strong, var(--color-accent));
 }
 
 .aui-send-button[disabled] {
   cursor: not-allowed;
-  /* Subtle dimming — the tinted base already signals "not ready"; full
-   * opacity 0.5 would push it back into invisibility. */
-  opacity: 0.85;
+  /* Dim the solid square (mock `.cmp-send:disabled`), not a ghost tint. */
+  opacity: 0.4;
 }
 
 /* Stop = same circle, icon flips to a square. The design uses a quiet
