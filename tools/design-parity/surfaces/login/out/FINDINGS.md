@@ -7,7 +7,7 @@ Interpretation of [`report.md`](./report.md) (the full machine table: **36 HIGH 
 
 ## 1. Structural gaps — the root of the "wallet/Google waiting & error" feedback
 
-These are missing *screens*, not style drift, and they're the highest-priority fixes:
+These are missing _screens_, not style drift, and they're the highest-priority fixes:
 
 - **No wallet-error recovery screen.** The design has a dedicated `werr` view (icon +
   "No response from MetaMask" + **Try again** / **Choose another wallet** / **Back to
@@ -27,19 +27,19 @@ These are missing *screens*, not style drift, and they're the highest-priority f
 The live resolves to **design-system rem font-sizes** + **design-system `ui-card`/
 `ui-button`**, drifting from the design's hand-tuned **px** + bespoke `.login-*`/`.cbtn`:
 
-| Where | Design → Live |
-|---|---|
-| Title (all states) | 18px → **22.4px** |
-| Sub / body copy | 12px → 13.6px; `.empty`/card body 13px → 16px |
-| Primary-option **sub** | **mono 10px → sans 12.48px** |
-| "or" **divider** | **mono 9px UPPERCASE (1.08px tracking) → sans 12.48px lowercase** |
-| Address **meta** (`sign`) | **mono 10px → sans 12.48px** |
-| Version line | mono 9px → 11.2px |
-| Option padding / radius | 10×12 / 9px → 12 / 8px |
-| Google/local border | `--line2` → `--line` (fainter) |
-| SIWE message color | `--tx2` → `--mut` (dimmer); bg `--ink2` → `--panel2` |
-| Sign buttons | `.cbtn` 12px/500–600 · r6 · 9×12 → `ui-button--md` **14px/650** · r8 · 8.8×14.4 |
-| Card | borderless floating → **design-system `Card`**: bg `--panel`, 1px `--line`, **16px radius, 32px padding** |
+| Where                     | Design → Live                                                                                             |
+| ------------------------- | --------------------------------------------------------------------------------------------------------- |
+| Title (all states)        | 18px → **22.4px**                                                                                         |
+| Sub / body copy           | 12px → 13.6px; `.empty`/card body 13px → 16px                                                             |
+| Primary-option **sub**    | **mono 10px → sans 12.48px**                                                                              |
+| "or" **divider**          | **mono 9px UPPERCASE (1.08px tracking) → sans 12.48px lowercase**                                         |
+| Address **meta** (`sign`) | **mono 10px → sans 12.48px**                                                                              |
+| Version line              | mono 9px → 11.2px                                                                                         |
+| Option padding / radius   | 10×12 / 9px → 12 / 8px                                                                                    |
+| Google/local border       | `--line2` → `--line` (fainter)                                                                            |
+| SIWE message color        | `--tx2` → `--mut` (dimmer); bg `--ink2` → `--panel2`                                                      |
+| Sign buttons              | `.cbtn` 12px/500–600 · r6 · 9×12 → `ui-button--md` **14px/650** · r8 · 8.8×14.4                           |
+| Card                      | borderless floating → **design-system `Card`**: bg `--panel`, 1px `--line`, **16px radius, 32px padding** |
 
 Note (INFO, not a defect): the live `sign` screen shows the **real** frozen EIP-4361
 SIWE message; the mock showed a simplified preview. Live is more accurate there.

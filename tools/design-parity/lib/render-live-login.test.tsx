@@ -32,7 +32,15 @@ import {
   screen,
   waitFor,
 } from "@testing-library/react";
-import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import {
+  afterEach,
+  beforeAll,
+  beforeEach,
+  describe,
+  expect,
+  it,
+  vi,
+} from "vitest";
 
 import { AuthProvider } from "../../../apps/frontend/src/features/auth/AuthContext";
 import { LoginScreen } from "../../../apps/frontend/src/features/auth/LoginScreen";
@@ -131,9 +139,7 @@ const hangOnConnect = async ({
 };
 
 function renderLogin(): void {
-  render(
-    h(AuthProvider, { persistBearer: false }, h(LoginScreen, {})),
-  );
+  render(h(AuthProvider, { persistBearer: false }, h(LoginScreen, {})));
 }
 
 /** Click the wallet option and wait for the EIP-6963-discovered row. */
@@ -258,7 +264,9 @@ describe("live login — SignInCard states → static HTML", () => {
     renderLogin();
     await openWalletPicker();
     fireEvent.click(screen.getByTestId("wallet-provider-io.metamask"));
-    fireEvent.click(await screen.findByTestId("wallet-sign-submit", {}, { timeout: 4000 }));
+    fireEvent.click(
+      await screen.findByTestId("wallet-sign-submit", {}, { timeout: 4000 }),
+    );
     await screen.findByTestId("wallet-done", {}, { timeout: 4000 });
     writeState("done", captureCard());
   });

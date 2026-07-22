@@ -108,11 +108,63 @@ Tune thresholds/weights in `classify()`.
 3. Author `surfaces/<name>/anchors.json` — the `{label, design, live}` map (+ `expectDivergence` for known-good deltas). Tip: render the live side first, outline its DOM/classes, then write the live selectors.
 4. Run steps 3–4 above.
 
+## Delegate to an agent (copy-paste prompt)
+
+To have an agent produce a parity report for a surface, fill the four `<…>` blanks
+and hand it this. It's self-contained — the agent loads this skill and follows it.
+
+```
+Run a design-parity check for the <SURFACE> surface (e.g. "settings", "add-keys").
+Repo root: <ROOT>. Load the `design-parity` skill and follow its 4 steps; commit to
+a branch when done. Do NOT run npm/rm against the MAIN checkout's node_modules.
+
+1. DESIGN: DesignSync get_file from project 73f810d9-7b77-4849-9087-f7f8e366c48a —
+   <DESIGN JSX/CSS files> → tools/design-parity/surfaces/<SURFACE>/design/. Build an
+   index.html linking ../../../design-kit/copilot.css + ../../../design-kit/stubs.js
+   (copilot.css already has most component styles; if a class is missing, fetch that
+   section per design-kit/REFRESH.md). Drive multiple states with ?state= if needed.
+2. LIVE: write tools/design-parity/lib/render-live-<SURFACE>.test.tsx that renders the
+   REAL app component <LIVE COMPONENT PATH> with faked ports/context (crib the mocking
+   from the nearest existing *.test.tsx next to it), wrapped with the real
+   packages/design-system/src/styles.css + the surface's stylesheet, writing
+   surfaces/<SURFACE>/live/<state>.html. Add the file to vitest.config.mjs `include`.
+   Run it from the MAIN checkout (has node_modules):
+   (cd <MAIN> && node_modules/.bin/vitest run --config <ROOT>/tools/design-parity/vitest.config.mjs)
+3. EXTRACT: cd tools/design-parity && python3 -m http.server 8099. Open each side in a
+   browser; run lib/extract-computed.js in the page with the anchor list; save both to
+   surfaces/<SURFACE>/out/{design,live}-<state>.json.
+4. COMPARE: write surfaces/<SURFACE>/anchors.json (design↔live selector map), then
+   node lib/compare.mjs surfaces/<SURFACE>/out/design-<state>.json
+   surfaces/<SURFACE>/out/live-<state>.json --anchors surfaces/<SURFACE>/anchors.json
+   --out surfaces/<SURFACE>/out/report.md. Report HIGH/MED counts + any missing screens.
+```
+
+Source hints for common surfaces:
+
+| Surface             | DesignSync file(s)                                                                                                                 | Live component                                                                                                                               |
+| ------------------- | ---------------------------------------------------------------------------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------- |
+| **settings**        | `copilot-settings.jsx` + `settings.css` (`.set-*`)                                                                                 | `packages/chat-surface/src/settings/SettingsSurface.tsx` (+ section bodies)                                                                  |
+| **add-keys** (BYOK) | it's the `.fr-kf` block in `copilot-firstrun.jsx` (FTUE key form) **or** the Settings Provider-keys card in `copilot-settings.jsx` | `packages/chat-surface/src/onboarding/KeyForm.tsx` (FTUE) **or** `settings/.../ProviderKeysPage` (Settings) — pick which "add keys" you mean |
+| **loading / boot**  | `copilot-loading.jsx` (`.boot-*`)                                                                                                  | `apps/desktop` boot screen                                                                                                                   |
+
+Heavier surfaces (settings/run cockpit) also need `copilot-v3.css` (`.cmp`/`.pop`/`.ws3`)
+in `design-kit/` — fetch it per `design-kit/REFRESH.md` and link it in the harness.
+
 ## Toolchain notes
 
 - **Worktrees have no `node_modules`.** Symlink the main checkout's:
   `ln -s <main-checkout>/node_modules node_modules` (it's gitignored). Then vitest,
   and `@0x-copilot/*` workspace resolution, work from the worktree.
+  - ⚠️ **DANGER — clean the symlink up carefully.** While this symlink exists,
+    prettier writes its cache through it and can create a symlink cycle
+    (`node_modules/.cache/prettier` → …), which then makes commits fail with
+    `ELOOP: too many symbolic links`. Worse, a careless `rm -rf` around the symlink
+    can leave the MAIN checkout's `node_modules` as a **self-referential symlink**
+    (`node_modules -> node_modules`), nuking the real dir (recover with `npm install`).
+    Safe removal: `rm node_modules` (plain `rm`, no `-rf`, no trailing slash — it's a
+    symlink; `rm -rf node_modules/` would delete the TARGET's contents). If a commit
+    hits `ELOOP`, `ls -ld <main>/node_modules` — if it's a self-symlink, `rm` it and
+    `npm install`. Prefer running vitest from the MAIN checkout to avoid all this.
 - The extractor is browser-agnostic: it runs under the in-app Browser `javascript_tool`,
   Playwright `page.evaluate`, or pasted into DevTools. Only the _rendering_ differs.
 - `anchors.json` alignment is by design (the two sides genuinely use different class
