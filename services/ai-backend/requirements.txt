@@ -23,7 +23,7 @@ fastapi==0.139.2
 filetype==1.2.0
 frozenlist==1.8.0
 google-auth==2.56.0
-google-genai==1.74.0
+google-genai==2.12.1
 googleapis-common-protos==1.75.0
 grpcio==1.82.1
 gunicorn==26.0.0
