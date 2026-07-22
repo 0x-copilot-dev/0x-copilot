@@ -25,6 +25,7 @@ import { useTransport } from "../../providers/TransportProvider";
 import {
   applySourceEvent,
   emptySourceMap,
+  foldCitedToolSources,
   seedSourceMap,
   type SourceEntryMap,
 } from "../../workspace/workspaceHelpers";
@@ -120,7 +121,13 @@ export function useRunSources(
 
   const sources = useMemo<SourceEntryMap>(() => {
     const overlay = runId !== null && settledRunId !== runId;
-    return overlay ? events.reduce(applySourceEvent, seed) : seed;
+    // `source_ingested`/`sources_ingested` are re-seeded from GET /sources once
+    // the run settles (persisted), so their live fold only overlays an active
+    // run. Cited-tool rows (`citation_made` → unrecognised tool calls) are NEVER
+    // persisted into GET /sources, so they are always folded from the events —
+    // otherwise they would vanish the moment the run settles (WC-P6c).
+    const withIngested = overlay ? events.reduce(applySourceEvent, seed) : seed;
+    return foldCitedToolSources(withIngested, events);
   }, [seed, events, runId, settledRunId]);
 
   return { sources, loading, error };

@@ -18,8 +18,11 @@
 // inline.
 
 import {
+  isCitationMadePayload,
   isSourceIngestedPayload,
   isSourcesIngestedPayload,
+  isToolCallPayload,
+  isToolResultPayload,
   type CitationSourceRef,
   type RuntimeEventEnvelope,
   type SourceEntry,
@@ -212,6 +215,272 @@ function latestIso(a: string | null, b: string | null): string | null {
     return a;
   }
   return Date.parse(a) >= Date.parse(b) ? a : b;
+}
+
+// ── Cited-tool sources (WC-P6c) ───────────────────────────────────────────
+//
+// `citation_made` carries a `CitationLink` (an ordinal → `source_tool_call_id`
+// pointer), NOT a `CitationSourceRef` — so, unlike `source_ingested`, it cannot
+// fold per-event through `applySourceEvent`. The cited row's connector / title /
+// snippet live on the cited tool invocation (a `tool_call` + `tool_result` earlier
+// in the SAME run stream). This whole-events fold reproduces the host-owned
+// `chatModel/citedToolSources` projection over raw events (the same byte-for-byte
+// reproduction discipline this file already applies) so the cockpit's Sources tab
+// surfaces cited tool calls the CitationProjector did NOT recognise as sources —
+// the common MCP / DuckDuckGo case, where no `source_ingested` fires — matching
+// the legacy web chat. Rows already present (a richer `source_ingested`
+// `CitationSourceRef`) win on key collision. The synthetic `tool:` / `tool-call:`
+// id + doc prefixes keep the two paths from key-colliding.
+
+/** Synthetic citation-id prefix — keeps tool-call rows off legacy row keys. */
+export const TOOL_CITATION_ID_PREFIX = "tool:";
+/** Synthetic source_doc_id prefix — keeps the dedup key stable. */
+export const TOOL_DOC_ID_PREFIX = "tool-call:";
+const CITED_TOOL_SNIPPET_MAX = 280;
+
+/** Compact view of a tool invocation, coalesced from its stream events. */
+interface ToolCallSnapshot {
+  readonly tool_name: string;
+  readonly args: Record<string, unknown> | null;
+  readonly result: string | null;
+  readonly result_is_error: boolean;
+}
+
+const TOOL_ERROR_STATUSES: ReadonlySet<string> = new Set([
+  "failed",
+  "timed_out",
+  "abandoned",
+  "cancelled",
+]);
+
+/** Index the run's `tool_call` / `tool_result` events by `call_id`. First
+ *  `tool_call` wins the name/args; the `tool_result` supplies the snippet + error
+ *  flag. Mirrors the host `toolInvocationIndex`, sourced from raw events. */
+function toolIndexFromEvents(
+  events: readonly RuntimeEventEnvelope[],
+): Map<string, ToolCallSnapshot> {
+  const index = new Map<string, ToolCallSnapshot>();
+  for (const event of events) {
+    if (event.event_type === "tool_call") {
+      if (!isToolCallPayload(event.payload)) {
+        continue;
+      }
+      const callId = event.payload.call_id;
+      if (index.has(callId)) {
+        continue;
+      }
+      index.set(callId, {
+        tool_name: event.payload.tool_name,
+        args: isRecord(event.payload.args) ? event.payload.args : null,
+        result: null,
+        result_is_error: false,
+      });
+      continue;
+    }
+    if (event.event_type === "tool_result") {
+      if (!isToolResultPayload(event.payload)) {
+        continue;
+      }
+      const callId = event.payload.call_id;
+      const status =
+        typeof event.payload.status === "string" ? event.payload.status : "";
+      const isError =
+        TOOL_ERROR_STATUSES.has(status) ||
+        typeof event.payload.error_message === "string";
+      const result = toolResultText(event.payload);
+      const existing = index.get(callId);
+      index.set(callId, {
+        tool_name:
+          existing?.tool_name ?? event.payload.tool_name ?? "tool call",
+        args: existing?.args ?? null,
+        result,
+        result_is_error: isError,
+      });
+    }
+  }
+  return index;
+}
+
+/** The human-readable result text for a tool_result — the backend's own summary
+ *  first, then a safe message, then a compact stringification of the output. */
+function toolResultText(payload: Record<string, unknown>): string | null {
+  const summary =
+    stringValue(payload.summary) ?? stringValue(payload.safe_message);
+  if (summary !== null) {
+    return summary;
+  }
+  const output = payload.output;
+  if (isRecord(output) && Object.keys(output).length > 0) {
+    try {
+      return JSON.stringify(output);
+    } catch {
+      return null;
+    }
+  }
+  return null;
+}
+
+/**
+ * Union cited-tool-call rows into `base`. Buckets `citation_made` links by their
+ * `source_tool_call_id` (count = number of chips pointing at the call), projects
+ * each into a synthetic `SourceEntry` from the tool index, and merges — a row
+ * already keyed in `base` (a richer `source_ingested` row) wins. Returns `base`
+ * unchanged (referential stability) when there is nothing to add.
+ */
+export function foldCitedToolSources(
+  base: SourceEntryMap,
+  events: readonly RuntimeEventEnvelope[],
+): SourceEntryMap {
+  const counts = new Map<string, number>();
+  for (const event of events) {
+    if (event.event_type !== "citation_made") {
+      continue;
+    }
+    if (!isCitationMadePayload(event.payload)) {
+      continue;
+    }
+    const callId = event.payload.link.source_tool_call_id;
+    // Empty `source_tool_call_id` is a hallucinated ordinal — the chip renders
+    // `?` and the projection skips it rather than inventing a row.
+    if (typeof callId !== "string" || callId === "") {
+      continue;
+    }
+    counts.set(callId, (counts.get(callId) ?? 0) + 1);
+  }
+  if (counts.size === 0) {
+    return base;
+  }
+  const toolIndex = toolIndexFromEvents(events);
+  let out: Map<string, SourceEntry> | null = null;
+  for (const [callId, count] of counts) {
+    const entry = toCitedToolSource(callId, count, toolIndex.get(callId));
+    const key = keyForCitation(entry.source_connector, entry.source_doc_id);
+    if (base.has(key)) {
+      continue;
+    }
+    if (out === null) {
+      out = new Map(base);
+    }
+    out.set(key, entry);
+  }
+  return out ?? base;
+}
+
+function toCitedToolSource(
+  callId: string,
+  count: number,
+  snapshot: ToolCallSnapshot | undefined,
+): SourceEntry {
+  const toolName = snapshot?.tool_name ?? "tool call";
+  // MCP wrapper calls expose themselves as `call_tool` with the real server/tool
+  // in args — derive the connector from `server_name` so the row groups under
+  // e.g. `linear`, not `mcp`.
+  let connector = connectorFromToolName(toolName);
+  if (toolName === "call_tool" && snapshot?.args) {
+    const serverName = stringValue(snapshot.args.server_name);
+    if (serverName !== null) {
+      connector = serverName.toLowerCase();
+    }
+  }
+  return {
+    citation_id: `${TOOL_CITATION_ID_PREFIX}${callId}`,
+    source_connector: connector,
+    source_doc_id: `${TOOL_DOC_ID_PREFIX}${callId}`,
+    source_url: null,
+    title: citedToolTitle(toolName, snapshot),
+    snippet: citedToolSnippet(snapshot),
+    freshness_at: null,
+    citation_count: count,
+    last_cited_at: "",
+  };
+}
+
+/** Derive a connector slug from a tool name (MCP `<server>.<tool>` → `<server>`;
+ *  `web_search` → `web`; control-plane `load_`/`call_` → `mcp`; else `tool`). */
+function connectorFromToolName(toolName: string): string {
+  const dot = toolName.indexOf(".");
+  if (dot > 0) {
+    return toolName.slice(0, dot).toLowerCase();
+  }
+  if (toolName === "web_search") {
+    return "web";
+  }
+  if (toolName.startsWith("load_") || toolName.startsWith("call_")) {
+    return "mcp";
+  }
+  return "tool";
+}
+
+function citedToolTitle(
+  toolName: string,
+  snapshot: ToolCallSnapshot | undefined,
+): string {
+  if (toolName === "call_tool" && snapshot?.args) {
+    const serverName = stringValue(snapshot.args.server_name);
+    const innerToolName = stringValue(snapshot.args.tool_name);
+    if (serverName !== null && innerToolName !== null) {
+      const inner = isRecord(snapshot.args.arguments)
+        ? summarizeArgs(snapshot.args.arguments)
+        : null;
+      const head = `${serverName}.${innerToolName}`;
+      return inner === null ? head : `${head} — ${inner}`;
+    }
+  }
+  if (snapshot?.args) {
+    const argsSummary = summarizeArgs(snapshot.args);
+    if (argsSummary !== null) {
+      return `${toolName} — ${argsSummary}`;
+    }
+  }
+  return toolName;
+}
+
+function citedToolSnippet(
+  snapshot: ToolCallSnapshot | undefined,
+): string | null {
+  if (snapshot === undefined) {
+    return null;
+  }
+  if (snapshot.result_is_error) {
+    return "(tool call failed)";
+  }
+  if (snapshot.result === null || snapshot.result.length === 0) {
+    return null;
+  }
+  const trimmed = snapshot.result.trim();
+  if (trimmed.length <= CITED_TOOL_SNIPPET_MAX) {
+    return trimmed;
+  }
+  return `${trimmed.slice(0, CITED_TOOL_SNIPPET_MAX).trimEnd()}…`;
+}
+
+function summarizeArgs(args: Record<string, unknown>): string | null {
+  for (const key of [
+    "query",
+    "q",
+    "search",
+    "name",
+    "title",
+    "subject",
+    "tool_name",
+  ]) {
+    const value = args[key];
+    if (typeof value === "string" && value.trim().length > 0) {
+      const trimmed = value.trim();
+      return trimmed.length > 64
+        ? `${trimmed.slice(0, 64).trimEnd()}…`
+        : trimmed;
+    }
+  }
+  return null;
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+
+function stringValue(value: unknown): string | null {
+  return typeof value === "string" && value.length > 0 ? value : null;
 }
 
 // ── from apps/frontend/.../chatModel/subagentReducer.ts ──────────────────

@@ -63,6 +63,7 @@ import type {
   ModelSelectionRequest,
   RunAttachmentRequest,
   RunId,
+  SourceEntry,
   SurfaceEdits,
 } from "@0x-copilot/api-types";
 
@@ -121,6 +122,7 @@ import { projectSurfaceDiffs } from "./_surfaceDiffs";
 import { RunHeader } from "./RunHeader";
 import { RunMultiSelect } from "./RunMultiSelect";
 import { RunWorkspaceRail } from "./RunWorkspaceRail";
+import type { SourceRowSlot } from "../../workspace";
 import { useRailWidth } from "./useRailWidth";
 import { useRunMode } from "./useRunMode";
 import { useRunSources } from "./useRunSources";
@@ -320,6 +322,16 @@ export interface RunDestinationProps {
    * back to plain anchor navigation (`#tool-call-<callId>`).
    */
   readonly onOrdinalSelect?: (citationId: string) => void;
+  /**
+   * WC-P6c (FR-9): Sources-tab rail seams, threaded verbatim to
+   * `RunWorkspaceRail`. `onSelectSource` / `onJumpToChatSource` are host-owned
+   * nav (scroll the transcript to the cited chip); `SourceRowComponent` lets the
+   * web host inject its hover-preview-wired row. All optional — omitted → the
+   * rail renders the plain `SourceRow` with no nav (unchanged).
+   */
+  readonly onSelectSource?: (source: SourceEntry) => void;
+  readonly onJumpToChatSource?: (source: SourceEntry) => void;
+  readonly SourceRowComponent?: SourceRowSlot;
 }
 
 export function RunDestination(props: RunDestinationProps): ReactElement {
@@ -337,6 +349,9 @@ export function RunDestination(props: RunDestinationProps): ReactElement {
     mcpAuthPort,
     markdownComponents,
     onOrdinalSelect,
+    onSelectSource,
+    onJumpToChatSource,
+    SourceRowComponent,
   } = props;
 
   const transport = useTransport();
@@ -1069,6 +1084,11 @@ export function RunDestination(props: RunDestinationProps): ReactElement {
       sources={sources}
       sourcesLoading={sourcesLoading}
       sourcesError={sourcesError}
+      // WC-P6c (FR-9): Sources-tab seams — host-owned nav + the web preview-wired
+      // row. Optional; omitted → the plain SourceRow with no nav.
+      onSelectSource={onSelectSource}
+      onJumpToChatSource={onJumpToChatSource}
+      SourceRowComponent={SourceRowComponent}
       approvalsQueue={approvalsQueue}
       onApprove={handleApprove}
       onReject={handleReject}
