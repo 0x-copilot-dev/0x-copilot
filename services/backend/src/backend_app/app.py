@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import dataclasses
 import logging
 import os
@@ -416,9 +417,19 @@ async def _lifespan(application: FastAPI):
     sweeper = getattr(application.state, "session_sweeper", None)
     if sweeper is not None:
         await sweeper.start()
+    # PRD-I I2 — bind the serving loop to the connectors activity bus at
+    # composition time (the lifespan owns the loop), so the threadpool
+    # write-through publishes wake SSE waiters immediately instead of
+    # waiting out the ≤5 s poll slice. Unbound (tests without lifespan,
+    # non-server contexts) keeps the legacy poll-slice semantics.
+    connector_bus = getattr(application.state, "connector_activity_bus", None)
+    if connector_bus is not None:
+        connector_bus.bind_loop(asyncio.get_running_loop())
     try:
         yield
     finally:
+        if connector_bus is not None:
+            connector_bus.unbind_loop()
         if sweeper is not None:
             await sweeper.stop()
         PostgresConnectionPool.close_shared()
@@ -1268,11 +1279,22 @@ def create_app(
             update={"org_id": identity.org_id, "user_id": identity.user_id}
         )
         try:
-            return _AppServices.mcp(app).start_auth(
+            response = _AppServices.mcp(app).start_auth(
                 server_id=server_id, request=payload
             )
         except ValueError as exc:
             raise HTTPException(status.HTTP_400_BAD_REQUEST, str(exc)) from exc
+        # D1 write-through (PRD-I I1) — chat-driven connects start auth
+        # through THIS route; the connector row must show the OAuth
+        # round-trip in flight (``disconnected`` + ``auth_pending``)
+        # exactly like the public /v1 auth/start route. Same glue, same
+        # post-commit log-and-continue discipline — no forked projection.
+        stored = _AppServices.mcp(app).store.get_server(
+            org_id=identity.org_id, server_id=server_id
+        )
+        if stored is not None:
+            _connector_write_through(app, stored, action="connector.updated")
+        return response
 
     @app.post(
         "/internal/v1/mcp/servers/{server_id}/client-session",
@@ -1345,7 +1367,7 @@ def create_app(
             request, org_id=org_id, user_id=user_id
         )
         try:
-            return _AppServices.mcp(app).upsert_token_for_test(
+            response = _AppServices.mcp(app).upsert_token_for_test(
                 org_id=identity.org_id,
                 user_id=identity.user_id,
                 server_id=server_id,
@@ -1353,6 +1375,15 @@ def create_app(
             )
         except ValueError as exc:
             raise HTTPException(status.HTTP_404_NOT_FOUND, str(exc)) from exc
+        # D1 write-through (PRD-I I1) — a valid token just landed and
+        # the MCP row flipped to ``authenticated``; project the honest
+        # ``connected`` state (same action as the auth-complete leg).
+        stored = _AppServices.mcp(app).store.get_server(
+            org_id=identity.org_id, server_id=server_id
+        )
+        if stored is not None:
+            _connector_write_through(app, stored, action="connector.connected")
+        return response
 
     @app.post(
         "/v1/skills",

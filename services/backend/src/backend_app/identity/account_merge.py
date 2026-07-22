@@ -395,6 +395,13 @@ class PostgresMergeData:
         ("mcp_servers", "retenant", "org_id", "user_id", ()),
         ("mcp_auth_sessions", "retenant", "org_id", "user_id", ()),
         ("mcp_auth_connections", "retenant", "org_id", "user_id", ()),
+        # Connectors destination (0043): denormalized read model over
+        # mcp_servers + token_vault meta. It must move WITH the mcp_servers
+        # rows it mirrors (both retenant) or the read model re-diverges from
+        # the MCP truth after a merge — the exact split-brain the
+        # write-through exists to prevent. No unique key on
+        # (tenant, owner, slug), so a plain retenant cannot collide.
+        ("connectors", "retenant", "tenant_id", "owner_user_id", ()),
         ("api_keys", "retenant", "org_id", "user_id", ()),
         ("todos", "retenant", "tenant_id", "owner_user_id", ()),
         ("todo_series", "retenant", "tenant_id", "owner_user_id", ()),
@@ -487,8 +494,9 @@ class PostgresMergeData:
     # tenant table is either in _SPECS or named here with its reason):
     # - identity_audit_events / mcp_audit_events / skill_audit_events /
     #   todo_audit_events / adapter_registry_audit_events /
-    #   project_audit_events (hash-chained: seq/prev_hash/signature — a
-    #   re-key would break chain verification) / login_attempts:
+    #   project_audit_events / connector_audit_events (both hash-chained:
+    #   per-tenant seq/prev_hash/signature — a re-key would break chain
+    #   verification) / login_attempts:
     #   append-only history stays where it happened (NFR-5).
     # - sessions: die by revocation in the saga's step 3, never adopted.
     # - organizations / users / organization_members / role_assignments:
@@ -512,6 +520,7 @@ class PostgresMergeData:
             "todo_audit_events",
             "adapter_registry_audit_events",
             "project_audit_events",
+            "connector_audit_events",
             "login_attempts",
             "sessions",
             "organizations",
