@@ -201,6 +201,7 @@ function LocalCardFoot({
         onClick={onStartDownload}
         data-testid="first-run-start-download"
       >
+        <Icon name="download" size={13} />
         {COPY.btn}
       </button>
       <p className="fr-gcard__note">{COPY.note}</p>

@@ -26,7 +26,11 @@
       "state": "not-installed",
       "group": "① not installed",
       "design": ".fr-gcard",
-      "live": "[data-testid=\"first-run-local-card\"]"
+      "live": "[data-testid=\"first-run-local-card\"]",
+      "expectDivergence": {
+        "fontSize": "HARNESS ARTIFACT, no visual effect: the mock's base font-size is 13px and the live fixture inherits 13.6px (0.85rem). Every text node in this card sets its own size (title 13, meta 9.5, body 11.5, note 9, dling/ok 11.5, watch 10.5), so this is the inherited base only and renders nothing.",
+        "flexGrow": "HARNESS ARTIFACT: the mock's `.ol-col .fr-gcard{flex:1}` is CATALOG chrome that equalises the five comparison columns. The live card is not in that grid."
+      }
     },
     {
       "label": "not-installed.card.meta",
@@ -53,21 +57,31 @@
       "state": "not-installed",
       "group": "① not installed",
       "design": ".fr-gcard .fr-dep",
-      "live": "[data-testid=\"first-run-local-watch\"]"
+      "live": "[data-testid=\"first-run-local-watch\"]",
+      "expectDivergence": {
+        "fontSize": "HARNESS ARTIFACT, no visual effect: the mock's base font-size is 13px and the live fixture inherits 13.6px (0.85rem). Every text node in this card sets its own size (title 13, meta 9.5, body 11.5, note 9, dling/ok 11.5, watch 10.5), so this is the inherited base only and renders nothing."
+      }
     },
     {
       "label": "not-installed.acts",
       "state": "not-installed",
       "group": "① not installed",
       "design": ".fr-dep .acts",
-      "live": "[data-testid=\"first-run-local-watch\"] .acts"
+      "live": "[data-testid=\"first-run-local-watch\"] .acts",
+      "expectDivergence": {
+        "fontSize": "HARNESS ARTIFACT, no visual effect: the mock's base font-size is 13px and the live fixture inherits 13.6px (0.85rem). Every text node in this card sets its own size (title 13, meta 9.5, body 11.5, note 9, dling/ok 11.5, watch 10.5), so this is the inherited base only and renders nothing.",
+        "flexWrap": "live-only, deliberate: the shipped card is narrower than the mock's catalog column, so the action row wraps instead of overflowing."
+      }
     },
     {
       "label": "not-installed.action",
       "state": "not-installed",
       "group": "① not installed",
       "design": ".fr-dep .acts .gbtn--pri",
-      "live": "[data-testid=\"first-run-local-get-ollama\"]"
+      "live": "[data-testid=\"first-run-local-get-ollama\"]",
+      "expectDivergence": {
+        "color": "PRE-EXISTING, verified at 5c890515 (before this branch): `.gbtn--pri` uses --color-accent-contrast, commented in onboarding.css as \"design literal #0b0a0e\". The mock hard-codes the literal; the FTUE tokenized it repo-wide for every primary gate button, not just these states. rgb(11,10,14) vs rgb(8,19,29) — both near-black on the accent fill. Not PRD-P8 drift; changing it would be a separate, surface-wide decision."
+      }
     },
     {
       "label": "not-installed.watch",
@@ -86,13 +100,15 @@
         "absent": "not a visual divergence, a MEASUREMENT one — both dots are unmeasurable here. The live dot is a `::before` pseudo-element (onboarding.css `.fr-dep .watch::before`, 6px, --color-text-subtle), which per-element getComputedStyle cannot address; the mock's `<span class=\"d\">` has NO matching CSS rule in the vendored stylesheet at all and measures 0×0. PRD-P8 §5 specifies a 6px dot for this line, so the live rendering is the intended one."
       }
     },
-
     {
       "label": "detected.dep",
       "state": "detected",
       "group": "① → detected",
       "design": ".fr-gcard .fr-dep",
-      "live": "[data-testid=\"first-run-local-foot\"] .fr-dep"
+      "live": "[data-testid=\"first-run-local-foot\"] .fr-dep",
+      "expectDivergence": {
+        "fontSize": "HARNESS ARTIFACT, no visual effect: the mock's base font-size is 13px and the live fixture inherits 13.6px (0.85rem). Every text node in this card sets its own size (title 13, meta 9.5, body 11.5, note 9, dling/ok 11.5, watch 10.5), so this is the inherited base only and renders nothing."
+      }
     },
     {
       "label": "detected.ok",
@@ -101,7 +117,8 @@
       "design": ".fr-dep .ok",
       "live": "[data-testid=\"first-run-local-detected\"]",
       "expectDivergence": {
-        "color": "the mock hard-codes the literal #6aa88f (jade); no design-system token equals it exactly, so the live rule uses --color-success — the same substitution `.ln__check` already makes. Recorded in onboarding.css's PRD-P8 header block. Every OTHER property on this line (size, weight, gap) is scored normally and is NOT covered by this declaration."
+        "color": "the mock hard-codes the literal #6aa88f (jade); no design-system token equals it exactly, so the live rule uses --color-success — the same substitution `.ln__check` already makes. Recorded in onboarding.css's PRD-P8 header block. Every OTHER property on this line (size, weight, gap) is scored normally and is NOT covered by this declaration.",
+        "borderColor": "Same single decision as this element's `color` — the icon and border inherit `currentColor`. The mock hard-codes #6aa88f (a muted jade) and no design-system token equals it; the live rule uses --color-success, the substitution `.ln__check` already makes."
       }
     },
     {
@@ -109,9 +126,12 @@
       "state": "detected",
       "group": "① → detected",
       "design": ".fr-dep .ok svg",
-      "live": "[data-testid=\"first-run-local-detected\"] svg"
+      "live": "[data-testid=\"first-run-local-detected\"] svg",
+      "expectDivergence": {
+        "color": "Same single decision as this element's `color` — the icon and border inherit `currentColor`. The mock hard-codes #6aa88f (a muted jade) and no design-system token equals it; the live rule uses --color-success, the substitution `.ln__check` already makes.",
+        "borderColor": "Same single decision as this element's `color` — the icon and border inherit `currentColor`. The mock hard-codes #6aa88f (a muted jade) and no design-system token equals it; the live rule uses --color-success, the substitution `.ln__check` already makes."
+      }
     },
-
     {
       "label": "installed.card.meta",
       "state": "installed",
@@ -137,14 +157,21 @@
       "state": "installed",
       "group": "② installed",
       "design": ".fr-gcard > .gbtn--pri",
-      "live": "[data-testid=\"first-run-start-download\"]"
+      "live": "[data-testid=\"first-run-start-download\"]",
+      "expectDivergence": {
+        "color": "PRE-EXISTING, verified at 5c890515 (before this branch): `.gbtn--pri` uses --color-accent-contrast, commented in onboarding.css as \"design literal #0b0a0e\". The mock hard-codes the literal; the FTUE tokenized it repo-wide for every primary gate button, not just these states. rgb(11,10,14) vs rgb(8,19,29) — both near-black on the accent fill. Not PRD-P8 drift; changing it would be a separate, surface-wide decision."
+      }
     },
     {
       "label": "installed.action.icon",
       "state": "installed",
       "group": "② installed",
       "design": ".fr-gcard > .gbtn--pri svg",
-      "live": "[data-testid=\"first-run-start-download\"] svg"
+      "live": "[data-testid=\"first-run-start-download\"] svg",
+      "expectDivergence": {
+        "color": "PRE-EXISTING, verified at 5c890515 (before this branch): `.gbtn--pri` uses --color-accent-contrast, commented in onboarding.css as \"design literal #0b0a0e\". The mock hard-codes the literal; the FTUE tokenized it repo-wide for every primary gate button, not just these states. rgb(11,10,14) vs rgb(8,19,29) — both near-black on the accent fill. Not PRD-P8 drift; changing it would be a separate, surface-wide decision.",
+        "borderColor": "PRE-EXISTING, verified at 5c890515 (before this branch): `.gbtn--pri` uses --color-accent-contrast, commented in onboarding.css as \"design literal #0b0a0e\". The mock hard-codes the literal; the FTUE tokenized it repo-wide for every primary gate button, not just these states. rgb(11,10,14) vs rgb(8,19,29) — both near-black on the accent fill. Not PRD-P8 drift; changing it would be a separate, surface-wide decision."
+      }
     },
     {
       "label": "installed.note",
@@ -153,7 +180,6 @@
       "design": ".fr-gcard > .note",
       "live": "[data-testid=\"first-run-local-foot\"] .fr-gcard__note"
     },
-
     {
       "label": "downloading.card.meta",
       "state": "downloading",
@@ -169,7 +195,10 @@
       "state": "downloading",
       "group": "③ downloading",
       "design": ".fr-gcard .fr-dep",
-      "live": "[data-testid=\"first-run-local-progress\"]"
+      "live": "[data-testid=\"first-run-local-progress\"]",
+      "expectDivergence": {
+        "fontSize": "HARNESS ARTIFACT, no visual effect: the mock's base font-size is 13px and the live fixture inherits 13.6px (0.85rem). Every text node in this card sets its own size (title 13, meta 9.5, body 11.5, note 9, dling/ok 11.5, watch 10.5), so this is the inherited base only and renders nothing."
+      }
     },
     {
       "label": "downloading.dling",
@@ -183,14 +212,20 @@
       "state": "downloading",
       "group": "③ downloading",
       "design": ".fr-dep .dling .spin",
-      "live": "[data-testid=\"first-run-local-progress\"] .dling .spin"
+      "live": "[data-testid=\"first-run-local-progress\"] .dling .spin",
+      "expectDivergence": {
+        "borderRadius": "visually identical: 50% and 999px both render a circle on a square element."
+      }
     },
     {
       "label": "downloading.prog",
       "state": "downloading",
       "group": "③ downloading",
       "design": ".fr-dep .ol-prog",
-      "live": "[data-testid=\"first-run-local-bar\"]"
+      "live": "[data-testid=\"first-run-local-bar\"]",
+      "expectDivergence": {
+        "fontSize": "HARNESS ARTIFACT, no visual effect: the mock's base font-size is 13px and the live fixture inherits 13.6px (0.85rem). Every text node in this card sets its own size (title 13, meta 9.5, body 11.5, note 9, dling/ok 11.5, watch 10.5), so this is the inherited base only and renders nothing."
+      }
     },
     {
       "label": "downloading.prog.fill",
@@ -199,7 +234,8 @@
       "design": ".fr-dep .ol-prog span",
       "live": "[data-testid=\"first-run-local-bar\"] .ol-prog__fill",
       "expectDivergence": {
-        "width": "fixture arithmetic, not a style delta. The mock hard-codes width:42% (42% of a 5.6 GB total that does not exist); the live fixture sets the honest completed/total = 2.4 / 4.3 GB = 56%. The fill's SKIN (height, radius, background, transition) is scored normally."
+        "width": "fixture arithmetic, not a style delta. The mock hard-codes width:42% (42% of a 5.6 GB total that does not exist); the live fixture sets the honest completed/total = 2.4 / 4.3 GB = 56%. The fill's SKIN (height, radius, background, transition) is scored normally.",
+        "fontSize": "HARNESS ARTIFACT, no visual effect: the mock's base font-size is 13px and the live fixture inherits 13.6px (0.85rem). Every text node in this card sets its own size (title 13, meta 9.5, body 11.5, note 9, dling/ok 11.5, watch 10.5), so this is the inherited base only and renders nothing."
       }
     },
     {
@@ -232,7 +268,6 @@
         "extra": "PRD-P8 D4a-1 — the \"Continue →\" button. It is the MINIMUM affordance that makes D4 navigable (advance without restarting the in-flight pull); the mock has no analog. Hosts wire it through the Gate slot's `ctx.onContinue`, and the card renders no button when it is omitted. NOTE: the live fixture passes `onContinue` itself, so this report measures the CORRECTLY-WIRED card — an unwired host is a host-test concern (FirstRunGate / FirstRunSurfaceMount), never something a parity report can catch."
       }
     },
-
     {
       "label": "stopped.card.meta",
       "state": "stopped",
@@ -248,7 +283,10 @@
       "state": "stopped",
       "group": "④ runtime stopped",
       "design": ".fr-gcard .fr-dep",
-      "live": "[data-testid=\"first-run-local-stopped\"]"
+      "live": "[data-testid=\"first-run-local-stopped\"]",
+      "expectDivergence": {
+        "fontSize": "HARNESS ARTIFACT, no visual effect: the mock's base font-size is 13px and the live fixture inherits 13.6px (0.85rem). Every text node in this card sets its own size (title 13, meta 9.5, body 11.5, note 9, dling/ok 11.5, watch 10.5), so this is the inherited base only and renders nothing."
+      }
     },
     {
       "label": "stopped.dling",
@@ -269,7 +307,11 @@
       "state": "stopped",
       "group": "④ runtime stopped",
       "design": ".fr-dep .acts",
-      "live": "[data-testid=\"first-run-local-stopped\"] .acts"
+      "live": "[data-testid=\"first-run-local-stopped\"] .acts",
+      "expectDivergence": {
+        "fontSize": "HARNESS ARTIFACT, no visual effect: the mock's base font-size is 13px and the live fixture inherits 13.6px (0.85rem). Every text node in this card sets its own size (title 13, meta 9.5, body 11.5, note 9, dling/ok 11.5, watch 10.5), so this is the inherited base only and renders nothing.",
+        "flexWrap": "live-only, deliberate: the shipped card is narrower than the mock's catalog column, so the action row wraps instead of overflowing."
+      }
     },
     {
       "label": "stopped.action",
@@ -277,7 +319,10 @@
       "group": "④ runtime stopped",
       "design": ".fr-dep .acts .gbtn--pri",
       "live": "[data-testid=\"first-run-local-restart\"]",
-      "note": "live renders this ONLY when the server reports runtime_managed (PRD-P8 §5); the live fixture pins the DESKTOP posture (runtimeManaged: true), which is the only posture the mock draws. On web / containerised self-host the button is correctly absent and the foot degrades to the instructional watch line — a state the mock has no column for."
+      "note": "live renders this ONLY when the server reports runtime_managed (PRD-P8 §5); the live fixture pins the DESKTOP posture (runtimeManaged: true), which is the only posture the mock draws. On web / containerised self-host the button is correctly absent and the foot degrades to the instructional watch line — a state the mock has no column for.",
+      "expectDivergence": {
+        "color": "PRE-EXISTING, verified at 5c890515 (before this branch): `.gbtn--pri` uses --color-accent-contrast, commented in onboarding.css as \"design literal #0b0a0e\". The mock hard-codes the literal; the FTUE tokenized it repo-wide for every primary gate button, not just these states. rgb(11,10,14) vs rgb(8,19,29) — both near-black on the accent fill. Not PRD-P8 drift; changing it would be a separate, surface-wide decision."
+      }
     },
     {
       "label": "stopped.watch",

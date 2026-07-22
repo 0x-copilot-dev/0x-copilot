@@ -635,9 +635,9 @@
 
 .fr-dep .acts {
   display: flex;
-  flex-wrap: wrap;
+  flex-wrap: wrap; /* live-only: the card is narrower than the mock's column */
   align-items: center;
-  gap: var(--space-sm); /* 8px */
+  gap: 10px; /* design-exact; off the space ladder (sm is 8px) */
 }
 
 /* "we're watching for it" micro-line: leading 6px dot + muted 10.5px text. The
@@ -664,24 +664,32 @@
 .fr-dep .ok {
   display: inline-flex;
   align-items: center;
-  gap: 6px; /* design-exact */
+  gap: 7px; /* design-exact */
   margin: 0;
-  font-size: 10.5px; /* design-exact; off the type ladder */
+  font-size: 11.5px; /* design-exact; off the type ladder */
+  font-weight: var(--font-weight-semibold); /* design 600 */
+  /* The mock hard-codes #6aa88f (a muted jade); no token equals it exactly, so
+   * this makes the same substitution `.ln__check` already does. Declared in
+   * anchors-ollama.json so the parity report files it as INFO, not drift. */
   color: var(--color-success);
 }
 
 .fr-dep .ok svg {
   flex: 0 0 auto;
+  width: 12px; /* design-exact */
+  height: 12px;
 }
 
 /* Downloading headline; `.warn` is the same row in the ④ amber tone. */
 .dling {
   display: inline-flex;
   align-items: center;
-  gap: 7px; /* design-exact */
+  gap: 8px; /* design-exact */
   margin: 0;
-  font-size: 10.5px; /* design-exact; off the type ladder */
-  color: var(--color-text-muted); /* --mut */
+  font-size: 11.5px; /* design-exact; off the type ladder */
+  font-weight: var(--font-weight-semibold); /* design 600 */
+  line-height: 1.4; /* design-exact */
+  color: var(--color-text); /* --tx */
 }
 
 .dling.warn {
@@ -690,14 +698,16 @@
 
 .dling svg {
   flex: 0 0 auto;
+  width: 13px; /* design-exact */
+  height: 13px;
 }
 
 /* Indeterminate ring — the pull is alive even when the bar has not moved. */
 .dling .spin {
   flex: 0 0 auto;
-  width: 11px;
-  height: 11px;
-  border: 1.5px solid var(--color-border-stronger); /* --line3 */
+  width: 12px; /* design-exact */
+  height: 12px;
+  border: 2px solid var(--color-border-strong); /* --line2 */
   border-top-color: var(--color-accent);
   border-radius: var(--radius-full);
   animation: fr-dep-spin 700ms linear infinite;

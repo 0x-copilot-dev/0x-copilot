@@ -1,0 +1,260 @@
+{
+  "state": "not-installed",
+  "counts": {
+    "low": 20,
+    "info": 12
+  },
+  "findings": [
+    {
+      "label": "not-installed.card",
+      "group": "① not installed",
+      "severity": "low",
+      "kind": "style",
+      "prop": "lineHeight",
+      "detail": "19.5px → normal"
+    },
+    {
+      "label": "not-installed.card",
+      "group": "① not installed",
+      "severity": "low",
+      "kind": "style",
+      "prop": "width",
+      "detail": "304px → 315px"
+    },
+    {
+      "label": "not-installed.card",
+      "group": "① not installed",
+      "severity": "low",
+      "kind": "style",
+      "prop": "height",
+      "detail": "193.75px → 203.5px"
+    },
+    {
+      "label": "not-installed.card",
+      "group": "① not installed",
+      "severity": "low",
+      "kind": "tag",
+      "detail": "<div> → <section> (semantic/default-style change)"
+    },
+    {
+      "label": "not-installed.card.meta",
+      "group": "① not installed",
+      "severity": "low",
+      "kind": "style",
+      "prop": "lineHeight",
+      "detail": "14.25px → normal"
+    },
+    {
+      "label": "not-installed.card.meta",
+      "group": "① not installed",
+      "severity": "low",
+      "kind": "style",
+      "prop": "width",
+      "detail": "270px → 281px"
+    },
+    {
+      "label": "not-installed.card.meta",
+      "group": "① not installed",
+      "severity": "low",
+      "kind": "style",
+      "prop": "height",
+      "detail": "14.25px → 13px"
+    },
+    {
+      "label": "not-installed.card.meta",
+      "group": "① not installed",
+      "severity": "low",
+      "kind": "tag",
+      "detail": "<span> → <p> (semantic/default-style change)"
+    },
+    {
+      "label": "not-installed.dep",
+      "group": "① not installed",
+      "severity": "low",
+      "kind": "style",
+      "prop": "lineHeight",
+      "detail": "19.5px → normal"
+    },
+    {
+      "label": "not-installed.dep",
+      "group": "① not installed",
+      "severity": "low",
+      "kind": "style",
+      "prop": "width",
+      "detail": "270px → 281px"
+    },
+    {
+      "label": "not-installed.dep",
+      "group": "① not installed",
+      "severity": "low",
+      "kind": "style",
+      "prop": "height",
+      "detail": "53px → 60px"
+    },
+    {
+      "label": "not-installed.acts",
+      "group": "① not installed",
+      "severity": "low",
+      "kind": "style",
+      "prop": "lineHeight",
+      "detail": "19.5px → normal"
+    },
+    {
+      "label": "not-installed.acts",
+      "group": "① not installed",
+      "severity": "low",
+      "kind": "style",
+      "prop": "width",
+      "detail": "270px → 281px"
+    },
+    {
+      "label": "not-installed.acts",
+      "group": "① not installed",
+      "severity": "low",
+      "kind": "style",
+      "prop": "height",
+      "detail": "42px → 29px"
+    },
+    {
+      "label": "not-installed.action",
+      "group": "① not installed",
+      "severity": "low",
+      "kind": "style",
+      "prop": "width",
+      "detail": "95.9219px → 102.812px"
+    },
+    {
+      "label": "not-installed.action",
+      "group": "① not installed",
+      "severity": "low",
+      "kind": "style",
+      "prop": "height",
+      "detail": "42px → 29px"
+    },
+    {
+      "label": "not-installed.watch",
+      "group": "① not installed",
+      "severity": "low",
+      "kind": "style",
+      "prop": "lineHeight",
+      "detail": "14.7px → normal"
+    },
+    {
+      "label": "not-installed.watch",
+      "group": "① not installed",
+      "severity": "low",
+      "kind": "style",
+      "prop": "width",
+      "detail": "164.078px → 281px"
+    },
+    {
+      "label": "not-installed.watch",
+      "group": "① not installed",
+      "severity": "low",
+      "kind": "style",
+      "prop": "height",
+      "detail": "29.375px → 12px"
+    },
+    {
+      "label": "not-installed.watch",
+      "group": "① not installed",
+      "severity": "low",
+      "kind": "tag",
+      "detail": "<span> → <p> (semantic/default-style change)"
+    },
+    {
+      "label": "not-installed.card",
+      "group": "① not installed",
+      "severity": "info",
+      "kind": "copy",
+      "prop": "text",
+      "detail": "“Download the local modelQwen 3 4B · 5.6 GB · free foreverRun…” → “Download the local modelQwen 3 4B · 4.3 GB · free foreverRun…”"
+    },
+    {
+      "label": "not-installed.card",
+      "group": "① not installed",
+      "severity": "info",
+      "kind": "style",
+      "prop": "fontSize",
+      "detail": "expected: HARNESS ARTIFACT, no visual effect: the mock's base font-size is 13px and the live fixture inherits 13.6px (0.85rem). Every text node in this card sets its own size (title 13, meta 9.5, body 11.5, note 9, dling/ok 11.5, watch 10.5), so this is the inherited base only and renders nothing. — 13px → 13.6px (+0.6px)"
+    },
+    {
+      "label": "not-installed.card",
+      "group": "① not installed",
+      "severity": "info",
+      "kind": "style",
+      "prop": "flexGrow",
+      "detail": "expected: HARNESS ARTIFACT: the mock's `.ol-col .fr-gcard{flex:1}` is CATALOG chrome that equalises the five comparison columns. The live card is not in that grid. — flex-grow 1 → 0 (affects vertical fill / button placement)"
+    },
+    {
+      "label": "not-installed.card.meta",
+      "group": "① not installed",
+      "severity": "info",
+      "kind": "copy",
+      "prop": "text",
+      "detail": "expected: PRD-P8 D5 — the mock's \"5.6 GB\" is not a real Qwen3-4B GGUF quant size; 4.3 GB is the verified Q8_0 figure (4,280,404,704 B). Frozen: honesty over parity. — “Qwen 3 4B · 5.6 GB · free forever” → “Qwen 3 4B · 4.3 GB · free forever”"
+    },
+    {
+      "label": "not-installed.foot",
+      "group": "① not installed",
+      "severity": "info",
+      "kind": "extra-in-live",
+      "detail": "expected: live-only wrapper. The mock lets the card's own flex column space the foot; the live card wraps it in `.fr-gcard__foot` (margin-top:auto) so the two gate cards' CTAs align at unequal body heights, and so the whole foot can be ONE role=\"status\" aria-live region (PRD-P8 §5) — states ①→detected and ③→④ change with no user action and must be announced."
+    },
+    {
+      "label": "not-installed.dep",
+      "group": "① not installed",
+      "severity": "info",
+      "kind": "copy",
+      "prop": "text",
+      "detail": "“Get Ollama ↗ download starts once it's detected” → “Get Ollama ↗download starts once it's detected”"
+    },
+    {
+      "label": "not-installed.dep",
+      "group": "① not installed",
+      "severity": "info",
+      "kind": "style",
+      "prop": "fontSize",
+      "detail": "expected: HARNESS ARTIFACT, no visual effect: the mock's base font-size is 13px and the live fixture inherits 13.6px (0.85rem). Every text node in this card sets its own size (title 13, meta 9.5, body 11.5, note 9, dling/ok 11.5, watch 10.5), so this is the inherited base only and renders nothing. — 13px → 13.6px (+0.6px)"
+    },
+    {
+      "label": "not-installed.acts",
+      "group": "① not installed",
+      "severity": "info",
+      "kind": "copy",
+      "prop": "text",
+      "detail": "“Get Ollama ↗ download starts once it's detected” → “Get Ollama ↗”"
+    },
+    {
+      "label": "not-installed.acts",
+      "group": "① not installed",
+      "severity": "info",
+      "kind": "style",
+      "prop": "fontSize",
+      "detail": "expected: HARNESS ARTIFACT, no visual effect: the mock's base font-size is 13px and the live fixture inherits 13.6px (0.85rem). Every text node in this card sets its own size (title 13, meta 9.5, body 11.5, note 9, dling/ok 11.5, watch 10.5), so this is the inherited base only and renders nothing. — 13px → 13.6px (+0.6px)"
+    },
+    {
+      "label": "not-installed.acts",
+      "group": "① not installed",
+      "severity": "info",
+      "kind": "style",
+      "prop": "flexWrap",
+      "detail": "expected: live-only, deliberate: the shipped card is narrower than the mock's catalog column, so the action row wraps instead of overflowing. — nowrap → wrap"
+    },
+    {
+      "label": "not-installed.action",
+      "group": "① not installed",
+      "severity": "info",
+      "kind": "style",
+      "prop": "color",
+      "detail": "expected: PRE-EXISTING, verified at 5c890515 (before this branch): `.gbtn--pri` uses --color-accent-contrast, commented in onboarding.css as \"design literal #0b0a0e\". The mock hard-codes the literal; the FTUE tokenized it repo-wide for every primary gate button, not just these states. rgb(11,10,14) vs rgb(8,19,29) — both near-black on the accent fill. Not PRD-P8 drift; changing it would be a separate, surface-wide decision. — rgb(11, 10, 14) (#0b0a0e (literal near-black)) → rgb(8, 19, 29) (--accent-ink)"
+    },
+    {
+      "label": "not-installed.watch.dot",
+      "group": "① not installed",
+      "severity": "info",
+      "kind": "missing-in-live",
+      "detail": "expected: not a visual divergence, a MEASUREMENT one — both dots are unmeasurable here. The live dot is a `::before` pseudo-element (onboarding.css `.fr-dep .watch::before`, 6px, --color-text-subtle), which per-element getComputedStyle cannot address; the mock's `<span class=\"d\">` has NO matching CSS rule in the vendored stylesheet at all and measures 0×0. PRD-P8 §5 specifies a 6px dot for this line, so the live rendering is the intended one."
+    }
+  ]
+}
