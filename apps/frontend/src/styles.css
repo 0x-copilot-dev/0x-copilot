@@ -19,7 +19,7 @@ p {
 h1,
 h2,
 h3 {
-  letter-spacing: -0.03em;
+  letter-spacing: var(--tracking-tighter);
 }
 
 p {
@@ -347,7 +347,7 @@ p {
 .reasoning-markdown :where(h1, h2, h3, h4, h5, h6) {
   color: var(--color-text);
   font-weight: var(--font-weight-semibold);
-  letter-spacing: -0.02em;
+  letter-spacing: var(--tracking-tight);
   line-height: 1.3;
   margin: var(--space-lg) 0 var(--space-sm);
 }
@@ -496,13 +496,11 @@ p {
   white-space: nowrap;
 }
 
+/* Layout only — type comes from the shared .ui-eyebrow recipe (design-system).
+ * color kept: subtle differs from the recipe's muted. */
 .app-eyebrow {
   color: var(--color-text-subtle);
   display: inline-flex;
-  font-size: var(--font-size-2xs);
-  font-weight: 800;
-  letter-spacing: 0.11em;
-  text-transform: uppercase;
 }
 
 .app-error {
@@ -625,7 +623,7 @@ p {
   color: var(--color-text-subtle);
   font-size: var(--font-size-2xs);
   font-weight: var(--font-weight-bold);
-  letter-spacing: 0.1em;
+  letter-spacing: var(--tracking-eyebrow);
   text-transform: uppercase;
 }
 
@@ -635,7 +633,7 @@ p {
   display: inline-flex;
   font-size: var(--font-size-md);
   font-weight: var(--font-weight-semibold);
-  letter-spacing: -0.01em;
+  letter-spacing: var(--tracking-snug);
   gap: var(--space-sm);
   min-width: 0;
 }
@@ -655,7 +653,7 @@ p {
   font-weight: var(--font-weight-bold);
   height: 1.625rem;
   justify-content: center;
-  letter-spacing: -0.04em;
+  letter-spacing: var(--tracking-tighter);
   width: 1.625rem;
 }
 
@@ -736,7 +734,7 @@ p {
   font-size: var(--font-size-2xs);
   font-weight: var(--font-weight-medium);
   height: 1.1rem;
-  letter-spacing: 0.02em;
+  letter-spacing: var(--tracking-caption);
   padding: 0 0.35rem;
 }
 
@@ -1070,12 +1068,9 @@ p {
 }
 
 .aui-user-card__menu-heading {
+  /* Layout + color only — type comes from the shared .ui-section-label recipe. */
   color: var(--color-text-subtle);
-  font-size: var(--font-size-2xs);
-  font-weight: var(--font-weight-semibold);
-  letter-spacing: 0.04em;
   margin: 0;
-  text-transform: uppercase;
 }
 
 .aui-user-card__menu-error {
@@ -1290,7 +1285,7 @@ p {
   color: var(--color-text-subtle);
   font-size: var(--font-size-2xs);
   font-weight: var(--font-weight-semibold);
-  letter-spacing: 0.04em;
+  letter-spacing: var(--tracking-label);
   margin: 0 0 0.25rem;
   padding: 0 0.625rem;
   text-transform: none;
@@ -1447,7 +1442,7 @@ p {
 .aui-welcome__greeting {
   font-size: clamp(1.75rem, 3.6vw, 2.25rem);
   font-weight: var(--font-weight-semibold);
-  letter-spacing: -0.025em;
+  letter-spacing: var(--tracking-tight);
   line-height: 1.1;
   margin: 0;
 }
@@ -1498,12 +1493,11 @@ p {
   }
 }
 
+/* Layout only — type comes from the shared .ui-eyebrow recipe (design-system).
+ * color kept: subtle differs from the recipe's muted; the [data-category]
+ * overrides below still win on specificity. */
 .aui-welcome-card__eyebrow {
   color: var(--color-text-subtle);
-  font-size: var(--font-size-2xs);
-  font-weight: var(--font-weight-semibold);
-  letter-spacing: 0.1em;
-  text-transform: uppercase;
 }
 
 .aui-welcome-card__eyebrow[data-category="draft"] {
@@ -3446,7 +3440,7 @@ p {
   font-size: var(--font-size-2xs);
   font-weight: var(--font-weight-bold);
   gap: 0.4rem;
-  letter-spacing: 0.06em;
+  letter-spacing: var(--tracking-label);
   padding: 0.3rem 0.55rem;
   text-transform: uppercase;
 }
@@ -3484,7 +3478,7 @@ p {
 .atlas-approval-card__params .aui-activity-card__param dt {
   color: var(--color-text-muted);
   font-weight: var(--font-weight-semibold);
-  letter-spacing: 0.06em;
+  letter-spacing: var(--tracking-label);
   text-transform: uppercase;
 }
 
@@ -3771,7 +3765,7 @@ p {
 
 .aui-question-card__chip-flag {
   font-size: var(--font-size-2xs);
-  letter-spacing: 0.02em;
+  letter-spacing: var(--tracking-caption);
   opacity: 0.75;
   text-transform: uppercase;
 }
@@ -3947,7 +3941,7 @@ p {
 .settings-chrome__crumb {
   color: var(--color-text-muted);
   font-size: var(--font-size-sm);
-  letter-spacing: 0.005em;
+  letter-spacing: var(--tracking-caption);
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
@@ -4713,7 +4707,7 @@ p {
 .auth-screen__header h1 {
   margin: 0 0 var(--space-xs);
   font-size: var(--font-size-2xl);
-  letter-spacing: -0.01em;
+  letter-spacing: var(--tracking-snug);
 }
 
 .auth-screen__header p {
@@ -4754,7 +4748,7 @@ p {
   color: var(--color-text-subtle);
   font-size: var(--font-size-xs);
   text-transform: uppercase;
-  letter-spacing: 0.08em;
+  letter-spacing: var(--tracking-eyebrow);
 }
 
 .auth-screen__divider::before,
@@ -4956,7 +4950,7 @@ p {
   font-size: var(--font-size-sm);
   margin: 0;
   text-transform: uppercase;
-  letter-spacing: 0.04em;
+  letter-spacing: var(--tracking-label);
 }
 
 .details-panel__row {
@@ -4991,7 +4985,7 @@ p {
   color: var(--color-text-muted);
   font-size: var(--font-size-2xs);
   text-transform: uppercase;
-  letter-spacing: 0.04em;
+  letter-spacing: var(--tracking-label);
 }
 
 .details-panel__metric dd {
@@ -5056,7 +5050,7 @@ p {
   font-weight: var(--font-weight-medium);
   text-transform: uppercase;
   font-size: var(--font-size-2xs);
-  letter-spacing: 0.04em;
+  letter-spacing: var(--tracking-label);
 }
 
 .details-panel__row--no-cost td:last-child {
@@ -5212,9 +5206,7 @@ p {
 }
 
 .atlas-sources-strip__label {
-  font-size: var(--font-size-2xs);
-  letter-spacing: 0.06em;
-  text-transform: uppercase;
+  /* Layout + color only — type comes from the shared .ui-section-label recipe. */
   color: var(--color-text-subtle);
   margin-right: 4px;
 }
@@ -5440,16 +5432,12 @@ p {
 }
 
 .atlas-workspace-tab__group-header {
+  /* Layout only — type + muted color come from the shared .ui-section-label recipe. */
   align-items: center;
   border-top: 1px solid color-mix(in srgb, var(--color-border) 40%, transparent);
-  color: var(--color-text-muted);
   display: flex;
-  font-size: var(--font-size-2xs);
-  font-weight: var(--font-weight-semibold);
   gap: 8px;
-  letter-spacing: 0.04em;
   padding: 10px 4px 6px;
-  text-transform: uppercase;
 }
 
 .atlas-workspace-tab__group:first-child .atlas-workspace-tab__group-header {
@@ -6009,7 +5997,7 @@ p {
   font-size: var(--font-size-md);
   grid-column: 2;
   grid-row: 1;
-  letter-spacing: 0;
+  letter-spacing: var(--tracking-normal);
   text-transform: none;
 }
 
@@ -6097,7 +6085,7 @@ p {
   display: flex;
   gap: 8px;
   font-size: var(--font-size-2xs);
-  letter-spacing: 0.04em;
+  letter-spacing: var(--tracking-label);
   text-transform: uppercase;
 }
 
@@ -6622,7 +6610,7 @@ p {
   font-weight: var(--font-weight-semibold);
   margin: 0 0 4px;
   text-transform: uppercase;
-  letter-spacing: 0.05em;
+  letter-spacing: var(--tracking-label);
   color: var(--color-text-muted);
 }
 
@@ -7123,11 +7111,8 @@ p {
 }
 
 .atlas-connector-row__badge {
+  /* Layout + accent tone only — type comes from the shared .ui-section-label recipe. */
   flex: none;
-  font-size: var(--font-size-2xs);
-  font-weight: var(--font-weight-semibold);
-  letter-spacing: 0.04em;
-  text-transform: uppercase;
   padding: 2px 6px;
   border-radius: var(--radius-full, 999px);
   background: color-mix(in srgb, var(--color-accent) 16%, transparent);
@@ -7327,7 +7312,7 @@ p {
 .atlas-model-pill__head {
   font-size: var(--font-size-2xs);
   font-weight: var(--font-weight-medium);
-  letter-spacing: 0.06em;
+  letter-spacing: var(--tracking-label);
   text-transform: uppercase;
   color: var(--color-text-muted);
   padding: 6px 8px 4px;
@@ -7437,6 +7422,7 @@ p {
    * design-system tokens so weight matches the rest of the UI titles. */
   font-size: var(--font-size-md);
   font-weight: var(--font-weight-semibold);
+  letter-spacing: var(--tracking-normal);
   line-height: var(--line-height-snug);
 }
 
@@ -7452,7 +7438,7 @@ p {
   border-radius: 999px;
   background: color-mix(in oklab, var(--color-accent) 16%, transparent);
   color: var(--color-accent);
-  letter-spacing: 0.04em;
+  letter-spacing: var(--tracking-label);
   text-transform: lowercase;
 }
 
@@ -7533,7 +7519,7 @@ p {
   color: var(--color-text-subtle);
   font-size: var(--font-size-2xs);
   font-weight: var(--font-weight-semibold);
-  letter-spacing: 0.06em;
+  letter-spacing: var(--tracking-label);
   margin: var(--space-md) 0 var(--space-xs) var(--space-sm);
   text-transform: uppercase;
 }
@@ -7587,7 +7573,7 @@ p {
 .me-form__card-title {
   font-size: var(--font-size-md);
   font-weight: var(--font-weight-semibold);
-  letter-spacing: 0.005em;
+  letter-spacing: var(--tracking-normal);
   margin: 0 0 var(--space-md);
 }
 
@@ -7727,7 +7713,7 @@ p {
   border-radius: var(--radius-sm);
   display: inline-block;
   font-family: var(--font-mono, ui-monospace, SFMono-Regular, monospace);
-  letter-spacing: 0.05em;
+  letter-spacing: var(--tracking-label);
   padding: 0.4rem 0.6rem;
   word-break: break-all;
 }
@@ -7941,12 +7927,9 @@ p {
 }
 
 .me-shortcuts-category {
+  /* Layout + color only — type comes from the shared .ui-section-label recipe. */
   color: var(--color-text-subtle);
-  font-size: var(--font-size-2xs);
-  font-weight: var(--font-weight-semibold);
-  letter-spacing: 0.06em;
   margin: 0;
-  text-transform: uppercase;
 }
 
 .me-shortcuts-list {
@@ -8002,11 +7985,8 @@ p {
 
 .me-notifications-grid__label,
 .me-notifications-grid__channel {
+  /* Layout + color only — type comes from the shared .ui-section-label recipe. */
   color: var(--color-text-subtle);
-  font-size: var(--font-size-2xs);
-  font-weight: var(--font-weight-semibold);
-  letter-spacing: 0.04em;
-  text-transform: uppercase;
 }
 
 .me-notifications-grid__event {
@@ -8231,7 +8211,7 @@ p {
   padding: 0;
   font-size: var(--font-size-2xs);
   text-transform: uppercase;
-  letter-spacing: 0.06em;
+  letter-spacing: var(--tracking-label);
   color: var(--color-text-subtle, #7e7e84);
 }
 .share-popover__fieldset[disabled] {
@@ -8328,11 +8308,11 @@ body.login-body {
   place-items: center;
   font-weight: var(--font-weight-bold);
   font-size: var(--font-size-md);
-  letter-spacing: -0.02em;
+  letter-spacing: var(--tracking-tight);
 }
 .login-brand__name {
   font-weight: var(--font-weight-semibold);
-  letter-spacing: -0.01em;
+  letter-spacing: var(--tracking-snug);
 }
 
 .login-brand__body {
@@ -8342,7 +8322,7 @@ body.login-body {
 .login-brand__eyebrow {
   font-size: var(--font-size-xs);
   text-transform: uppercase;
-  letter-spacing: 0.08em;
+  letter-spacing: var(--tracking-eyebrow);
   color: var(--color-text-subtle);
   margin-bottom: var(--space-md);
 }
@@ -8350,7 +8330,7 @@ body.login-body {
   margin: 0 0 var(--space-md);
   font-size: clamp(1.6rem, 3.5vw, 2.4rem);
   line-height: 1.15;
-  letter-spacing: -0.025em;
+  letter-spacing: var(--tracking-tight);
   color: var(--color-text);
 }
 .login-brand__h em {
@@ -8421,7 +8401,7 @@ body.login-body {
 .login-card__head h2 {
   margin: 0 0 var(--space-xs);
   font-size: var(--font-size-2xl);
-  letter-spacing: -0.01em;
+  letter-spacing: var(--tracking-snug);
 }
 .login-card__head p {
   margin: 0;
@@ -8485,7 +8465,7 @@ body.login-body {
   font: inherit;
   font-size: var(--font-size-sm);
   font-weight: var(--font-weight-medium);
-  letter-spacing: 0.01em;
+  letter-spacing: var(--tracking-caption);
   cursor: pointer;
 }
 :root[data-theme="light"] .login-google-btn {
@@ -8547,7 +8527,7 @@ body.login-body {
   font: inherit;
   font-size: var(--font-size-sm);
   font-weight: var(--font-weight-medium);
-  letter-spacing: 0.01em;
+  letter-spacing: var(--tracking-caption);
   cursor: pointer;
 }
 .login-wallet-btn:hover:not(:disabled) {
@@ -8668,16 +8648,13 @@ body.login-body {
   font-size: var(--font-size-sm);
 }
 .login-discovery__badge {
+  /* Layout + accent tone only — type comes from the shared .ui-section-label recipe. */
   align-self: flex-start;
-  font-size: var(--font-size-2xs);
   padding: 0.2rem 0.5rem;
   border-radius: 999px;
   border: 1px solid color-mix(in srgb, var(--color-accent) 50%, transparent);
   background: color-mix(in srgb, var(--color-accent) 12%, transparent);
   color: var(--color-accent);
-  text-transform: uppercase;
-  letter-spacing: 0.06em;
-  font-weight: var(--font-weight-semibold);
 }
 .login-discovery--blocked {
   border-color: color-mix(
@@ -8731,7 +8708,7 @@ body.login-body {
   display: grid;
   place-items: center;
   font-weight: var(--font-weight-bold);
-  letter-spacing: -0.02em;
+  letter-spacing: var(--tracking-tight);
 }
 .login-pick__col {
   display: flex;
@@ -8899,7 +8876,7 @@ body.login-body {
   margin: 0;
   font-size: var(--font-size-xl); /* 18px — design .login-card h1 */
   font-weight: var(--font-weight-semibold);
-  letter-spacing: -0.02em;
+  letter-spacing: var(--tracking-tight);
   line-height: 1.2;
 }
 .loginx-zx {
@@ -9017,16 +8994,14 @@ body.login-body {
 }
 
 /* Divider */
+/* Layout only — type comes from the shared .ui-mono-caps recipe (design-system).
+ * color kept: subtle (--mut2) differs from the recipe's muted. */
 .loginx-divider {
   display: flex;
   align-items: center;
   gap: 10px; /* design-exact; off the token ladder */
   margin: 15px 0 7px; /* design-exact; off the token ladder */
-  font-family: var(--font-mono);
-  font-size: var(--font-size-3xs); /* 9px */
   color: var(--color-text-subtle); /* --mut2 */
-  text-transform: uppercase;
-  letter-spacing: 0.12em;
 }
 .loginx-divider::before,
 .loginx-divider::after {
@@ -9061,7 +9036,7 @@ body.login-body {
   font-family: var(--font-mono);
   font-size: var(--font-size-3xs); /* 9px */
   color: var(--color-text-subtle); /* --mut2 */
-  letter-spacing: 0.01em;
+  letter-spacing: var(--tracking-caption);
 }
 
 /* Back link */

@@ -85,7 +85,9 @@ export function UserCard({
       >
         <DevPersonaSwitcher />
         <div className="aui-user-card__menu-section">
-          <p className="aui-user-card__menu-heading">Workspaces</p>
+          <p className="aui-user-card__menu-heading ui-section-label">
+            Workspaces
+          </p>
           <WorkspacePicker
             currentOrgId={orgId}
             onSwitch={(nextOrgId) => {

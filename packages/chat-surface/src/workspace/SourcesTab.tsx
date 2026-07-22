@@ -161,7 +161,7 @@ export function SourcesTab({
             className="atlas-workspace-tab__group"
             aria-label={`${humanizeConnector(group.connector)} sources`}
           >
-            <header className="atlas-workspace-tab__group-header">
+            <header className="atlas-workspace-tab__group-header ui-section-label">
               <span>{humanizeConnector(group.connector)}</span>
               <span className="atlas-workspace-tab__group-count">
                 {group.total}

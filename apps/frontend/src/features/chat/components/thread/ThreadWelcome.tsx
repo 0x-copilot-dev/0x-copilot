@@ -45,7 +45,7 @@ export function ThreadWelcome({
               onClick={() => onSelectSuggestion?.(suggestion.prompt)}
             >
               <span
-                className="aui-welcome-card__eyebrow"
+                className="aui-welcome-card__eyebrow ui-eyebrow"
                 data-category={suggestion.category}
               >
                 {CATEGORY_LABEL[suggestion.category]}

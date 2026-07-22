@@ -38,7 +38,9 @@ export function MessageSourcesStrip({
       role="list"
       aria-label="Sources cited in this answer"
     >
-      <span className="atlas-sources-strip__label">Sources</span>
+      <span className="atlas-sources-strip__label ui-section-label">
+        Sources
+      </span>
       {ordered.map((citation) => (
         <button
           key={citation.citation_id}

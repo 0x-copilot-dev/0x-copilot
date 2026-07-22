@@ -368,7 +368,7 @@ export function DiscoveryCard({
         </div>
         {data.sso_enforced && (
           <span
-            className="login-discovery__badge"
+            className="login-discovery__badge ui-section-label"
             data-testid="login-discovery-sso-enforced"
           >
             SSO enforced

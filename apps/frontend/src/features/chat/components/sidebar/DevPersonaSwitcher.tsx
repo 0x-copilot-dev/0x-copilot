@@ -78,7 +78,9 @@ export function DevPersonaSwitcher(): ReactElement | null {
 
   return (
     <div className="aui-user-card__menu-section aui-user-card__dev-persona">
-      <p className="aui-user-card__menu-heading">Dev persona</p>
+      <p className="aui-user-card__menu-heading ui-section-label">
+        Dev persona
+      </p>
       <select
         aria-label="Dev persona"
         className="aui-user-card__dev-persona-select"
