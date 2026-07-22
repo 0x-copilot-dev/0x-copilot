@@ -2,45 +2,56 @@
 //
 // This is APP code, not `@0x-copilot/chat-surface` (which is browser-primitive
 // free and bans `localStorage`). A small localStorage-read constant is the
-// sanctioned Wave-1 flag mechanism here — the app has no other flag registry
-// yet, and the PRD explicitly permits it.
+// sanctioned flag mechanism here — the app has no other flag registry yet, and
+// the PRD explicitly permits it.
 //
-// `runCockpitWeb` gates the web `run` slug: OFF (default) keeps the legacy
-// `ChatScreen`; ON mounts the real `RunDestination` cockpit (`features/run/
-// RunRoute`). Default OFF — flipping it is a product decision after Wave-1
-// verification (PRD-05 §Non-goals). Two independent opt-ins, both fail-safe:
-//   - build-time: `VITE_RUN_COCKPIT_WEB=true` (statically inlined by Vite);
-//   - runtime:    `localStorage["enterprise.flags.run-cockpit-web"] === "true"`.
+// `runCockpitWeb` gates the web `run` slug. **WC-P7: flipped ON by default** —
+// the real `RunDestination` cockpit (`features/run/RunRoute`) is now the web
+// `run` surface. It is the single-source-of-truth interaction layer shared with
+// the desktop app, so converging web onto it collapses two run surfaces into
+// one. The web-convergence program (WC-P0…P6) closed the 6 MUST-FIX parity gaps
+// vs the legacy `ChatScreen` (turn-N composer, reopen/new-chat nav, cancel,
+// MCP-OAuth mid-run, optimistic echo) before this flip.
+//
+// The legacy `ChatScreen` stays in the tree as an INSTANT ROLLBACK (AD-13):
+// two independent, fail-safe OPT-OUTS force it back under the `run` slug —
+//   - build-time: `VITE_RUN_COCKPIT_WEB=false` (statically inlined by Vite);
+//   - runtime:    `localStorage["enterprise.flags.run-cockpit-web"] === "false"`.
+// Anything other than an explicit "false" keeps the cockpit ON (so a storage
+// failure or an absent value fails toward the new default, not the legacy path).
 
-/** localStorage key for the runtime `runCockpitWeb` opt-in. */
+/** localStorage key for the runtime `runCockpitWeb` opt-out. */
 export const RUN_COCKPIT_WEB_FLAG_KEY = "enterprise.flags.run-cockpit-web";
 
-function readEnvFlag(): boolean {
+/** Build-time opt-out: `VITE_RUN_COCKPIT_WEB=false` rolls back to ChatScreen. */
+function readEnvOptOut(): boolean {
   const value =
     typeof import.meta !== "undefined"
       ? import.meta.env?.VITE_RUN_COCKPIT_WEB
       : undefined;
-  return value === "true" || value === true;
+  return value === "false" || value === false;
 }
 
-function readLocalStorageFlag(key: string): boolean {
+/** Runtime opt-out: the localStorage key set to the string "false". */
+function readLocalStorageOptOut(key: string): boolean {
   try {
     return (
       typeof window !== "undefined" &&
-      window.localStorage.getItem(key) === "true"
+      window.localStorage.getItem(key) === "false"
     );
   } catch {
-    // Private mode / storage disabled → treat the flag as off (fail-safe).
+    // Private mode / storage disabled → no opt-out signal → cockpit stays ON.
     return false;
   }
 }
 
 /**
- * Whether the real Run cockpit (`RunDestination`) should replace the legacy
- * `ChatScreen` under the web `run` slug. Read live (not a module constant) so a
- * devtools toggle or a per-test seed takes effect on the next `CopilotApp`
- * mount without a rebuild.
+ * Whether the real Run cockpit (`RunDestination`) mounts under the web `run`
+ * slug. **Default ON (WC-P7).** Read live (not a module constant) so a devtools
+ * opt-out toggle or a per-test seed takes effect on the next `CopilotApp` mount
+ * without a rebuild. Only an explicit "false" (env or localStorage) rolls back
+ * to the legacy `ChatScreen`.
  */
 export function isRunCockpitWebEnabled(): boolean {
-  return readEnvFlag() || readLocalStorageFlag(RUN_COCKPIT_WEB_FLAG_KEY);
+  return !readEnvOptOut() && !readLocalStorageOptOut(RUN_COCKPIT_WEB_FLAG_KEY);
 }

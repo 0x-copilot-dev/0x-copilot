@@ -1,15 +1,58 @@
-// PRD-05 — the `runCockpitWeb` flag must be OFF by default (Non-goals: flipping
-// it is a product decision after Wave-1 verification).
+// WC-P7 — the `runCockpitWeb` flag is flipped ON by default; the legacy
+// `ChatScreen` is reachable only via an explicit fail-safe opt-out.
 
-import { describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it } from "vitest";
 
-import { isRunCockpitWebEnabled } from "./featureFlags";
+import {
+  RUN_COCKPIT_WEB_FLAG_KEY,
+  isRunCockpitWebEnabled,
+} from "./featureFlags";
 
-describe("isRunCockpitWebEnabled (PRD-05)", () => {
-  it("defaults OFF when neither the env flag nor localStorage opts in", () => {
-    // `VITE_RUN_COCKPIT_WEB` is unset in the test env and jsdom's localStorage
-    // is a no-op stub, so the localStorage read fails safe. The default must be
-    // OFF so the legacy `ChatScreen` path stays the baseline.
+// jsdom's `localStorage` here is a no-op stub whose methods are not spy-able, so
+// swap the whole object via a property descriptor and restore it after each test.
+const originalDescriptor = Object.getOwnPropertyDescriptor(
+  window,
+  "localStorage",
+);
+
+function stubLocalStorage(getItem: (key: string) => string | null): void {
+  Object.defineProperty(window, "localStorage", {
+    configurable: true,
+    value: { getItem },
+  });
+}
+
+afterEach(() => {
+  if (originalDescriptor !== undefined) {
+    Object.defineProperty(window, "localStorage", originalDescriptor);
+  }
+});
+
+describe("isRunCockpitWebEnabled (WC-P7)", () => {
+  it("defaults ON when there is no opt-out signal", () => {
+    stubLocalStorage(() => null);
+    expect(isRunCockpitWebEnabled()).toBe(true);
+  });
+
+  it("rolls back to ChatScreen when localStorage opts out with 'false'", () => {
+    stubLocalStorage((key) =>
+      key === RUN_COCKPIT_WEB_FLAG_KEY ? "false" : null,
+    );
     expect(isRunCockpitWebEnabled()).toBe(false);
+  });
+
+  it("stays ON for any non-'false' value (fails toward the new default)", () => {
+    // A stale opt-in ("true") or garbage value must NOT be read as an opt-out.
+    stubLocalStorage((key) =>
+      key === RUN_COCKPIT_WEB_FLAG_KEY ? "true" : null,
+    );
+    expect(isRunCockpitWebEnabled()).toBe(true);
+  });
+
+  it("stays ON when localStorage throws (private mode / storage disabled)", () => {
+    stubLocalStorage(() => {
+      throw new Error("storage disabled");
+    });
+    expect(isRunCockpitWebEnabled()).toBe(true);
   });
 });
