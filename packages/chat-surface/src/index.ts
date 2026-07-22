@@ -1460,7 +1460,7 @@ export {
   type UseFirstRunLocalModelArgs,
   type FirstRunLocalModelsPort,
 } from "./onboarding";
-export { QWEN3_4B_PRESET, LOCAL_MODEL_PRESETS } from "./settings";
+export { QWEN3_4B_PRESET } from "./settings";
 // === end First-Run onboarding (P2) ===
 // === First-Run onboarding (P3) — composer + chips + ack + launch ===
 // State B (`OnboardingComposer` mounts the real AssistantComposer under the

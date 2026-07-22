@@ -147,8 +147,6 @@ export {
   type StartLocalModelPull,
   type LocalModelDownloadResult,
 } from "./DownloadLocalModelModal";
-// Curated download catalog (P2) — one SSOT for the FTUE gate card + Settings.
-export { QWEN3_4B_PRESET, LOCAL_MODEL_PRESETS } from "./localModelPresets";
 export {
   formatBytes,
   formatEta,
@@ -158,9 +156,14 @@ export {
 // Local-models data seam: the Transport-backed port (status/list/size/remove/
 // pull) + the curated "pick from available" catalog. Mirrors the providerKeys
 // port pattern; both hosts wire `createLocalModelsPort(transport)`.
+//
+// `LOCAL_MODEL_CATALOG` is the ONE SSOT curated list read by BOTH the Settings
+// download modal and (via `QWEN3_4B_PRESET`, a distinguished member) the FTUE
+// first-run gate — so the two surfaces can never drift.
 export {
   createLocalModelsPort,
   LOCAL_MODEL_CATALOG,
+  QWEN3_4B_PRESET,
   LOCAL_MODEL_PULL_EVENT,
   DEFAULT_LOCAL_MODEL_QUANT,
   localModelInstalledTag,

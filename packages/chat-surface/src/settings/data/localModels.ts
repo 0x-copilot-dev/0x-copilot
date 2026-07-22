@@ -63,11 +63,44 @@ export function localModelInstalledTag(repo: string, quant: string): string {
 }
 
 // ---------------------------------------------------------------------------
+// Qwen 3 4B — the curated first-run local model (FTUE P2 default).
+//
+// This is the ONE curated on-device model the product ships as the first-run
+// default, and it is a distinguished member of `LOCAL_MODEL_CATALOG` below.
+// The FTUE gate card (`FirstRunLocalCard`) imports this single preset directly
+// (it offers exactly the default, not the whole catalog); the Settings download
+// modal reaches it as a catalog entry. Keeping it a named member of the one
+// catalog is what stops onboarding and Settings from drifting apart.
+//
+// `repo`/`quant` resolve to the Ollama pull tag `hf.co/Qwen/Qwen3-4B-GGUF:Q8_0`.
+//
+// Quant choice: `Q8_0` (near-lossless 8-bit) is the LARGEST real quant the
+// official `Qwen/Qwen3-4B-GGUF` repo publishes. Verified Hugging Face sizes for
+// this repo: Q4_K_M 2,497,280,256 · Q5_K_M 2,889,513,184 · Q6_K 3,306,260,704 ·
+// Q8_0 4,280,404,704 (~4.3 GB). No standard Qwen3-4B GGUF quant is 5.6 GB, so
+// the gate card copy (`FIRST_RUN_COPY.local.meta`) now shows the real "4.3 GB"
+// — updated from the mock's "5.6 GB" per the product decision (PRD-P2 §9). The
+// live progress bar always uses the real `bytes_total` from the pull stream.
+// ---------------------------------------------------------------------------
+
+export const QWEN3_4B_PRESET: AvailableLocalModel = {
+  repo: "Qwen/Qwen3-4B-GGUF",
+  quant: "Q8_0",
+  name: "Qwen 3 4B",
+  parameterSize: "4B",
+  sizeBytes: 4_280_404_704, // verified HF Q8_0 byte count (~4.3 GB)
+  note: "runs on this machine · free forever",
+};
+
+// ---------------------------------------------------------------------------
 // Curated catalog (DESIGN-SPEC §5 "pick from available", decision D-4).
 //
-// A small set of popular open models the modal offers as one-click picks, so
-// the converged flow no longer forces the web legacy's free-text-only path.
-// The power-user free-text path still lives in the modal (custom repo / quant).
+// The SINGLE source of truth for the curated one-click local models offered
+// across BOTH surfaces: the Settings download modal (`LocalModelsPage`
+// `availableModels`) and — via `QWEN3_4B_PRESET` — the FTUE first-run gate. A
+// small set of popular open models the modal offers as one-click picks, so the
+// converged flow no longer forces the web legacy's free-text-only path. The
+// power-user free-text path still lives in the modal (custom repo / quant).
 //
 // `repo` is the Hugging Face GGUF repo Ollama pulls via `hf.co/{repo}:{quant}`
 // (backend `LocalModelsService.pull_events`); `quant` is a GGUF quant token
@@ -76,6 +109,7 @@ export function localModelInstalledTag(repo: string, quant: string): string {
 // frame) — the modal never probes size for a catalog pick, so an estimate is
 // fine; the real byte totals arrive from the pull stream. Notes call out the
 // hardware envelope honestly so a laptop user doesn't pick a 70B by mistake.
+// Ordered by ascending download size.
 // ---------------------------------------------------------------------------
 
 export const LOCAL_MODEL_CATALOG: readonly AvailableLocalModel[] = [
@@ -87,6 +121,8 @@ export const LOCAL_MODEL_CATALOG: readonly AvailableLocalModel[] = [
     sizeBytes: 2_019_000_000,
     note: "small · fast · runs on most laptops",
   },
+  // The FTUE first-run default — a distinguished member of the one catalog.
+  QWEN3_4B_PRESET,
   {
     repo: "bartowski/phi-4-GGUF",
     quant: DEFAULT_LOCAL_MODEL_QUANT,
