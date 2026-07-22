@@ -35,9 +35,11 @@ import { Icon } from "../icons/Icon";
 import {
   AddProviderKeyModal,
   type AddProviderKeySubmit,
+  type AddProviderKeyValidateContext,
 } from "./AddProviderKeyModal";
 import { Frow, Krow, SecTitle, SetCard, SetNote } from "./SettingsChrome";
 import {
+  CUSTOM_ENDPOINT_ENTRY,
   PROVIDER_CATALOG,
   checkProviderKeyFormat,
   type ProviderCatalogEntry,
@@ -86,6 +88,16 @@ function toMessage(err: unknown, fallback: string): string {
 function formatUpdated(iso: string): string {
   const date = new Date(iso);
   return Number.isNaN(date.getTime()) ? iso : date.toLocaleDateString();
+}
+
+// Display the host of a custom endpoint's base_url (never a path/query). `URL`
+// is a WHATWG standard global (not `window`), so this stays substrate-agnostic.
+function hostOf(baseUrl: string): string {
+  try {
+    return new URL(baseUrl).host || baseUrl;
+  } catch {
+    return baseUrl;
+  }
 }
 
 const logoGlyphStyle: CSSProperties = {
@@ -255,7 +267,10 @@ export function ProviderKeysPage({
 
   const connected = useMemo(
     () =>
-      providers
+      // Include the custom endpoint (decision D-2) so a stored
+      // `openai_compatible` key surfaces as a Connected row even though it is
+      // not part of the fixed `providers` catalog.
+      [...providers, CUSTOM_ENDPOINT_ENTRY]
         .map((entry) => ({ entry, summary: summaryFor(entry.id) }))
         .filter(
           (
@@ -273,36 +288,37 @@ export function ProviderKeysPage({
     [providers, summaryFor],
   );
 
-  // Only providers the backend actually accepts can be added — a `comingSoon`
-  // provider's "Add key" is disabled, and the generic "Add a key" CTA targets
-  // the first *addable* provider, so no path dead-ends in a 422 (PRD-F FR-F.6).
-  const addable = useMemo(
-    () => available.filter((entry) => entry.comingSoon !== true),
-    [available],
-  );
-
   const handleValidate = useCallback(
     (entry: ProviderCatalogEntry) =>
-      (apiKey: string): Promise<ProviderKeyValidation> =>
+      (
+        apiKey: string,
+        context?: AddProviderKeyValidateContext,
+      ): Promise<ProviderKeyValidation> =>
         port.validate
-          ? port.validate(entry.id, apiKey)
+          ? port.validate(entry.id, apiKey, { baseUrl: context?.baseUrl })
           : Promise.resolve(checkProviderKeyFormat(entry, apiKey)),
     [port],
   );
 
   const handleSubmit = useCallback(
     (target: ModalTarget) =>
-      async ({ apiKey, model }: AddProviderKeySubmit): Promise<void> => {
+      async ({
+        apiKey,
+        model,
+        baseUrl,
+        label,
+      }: AddProviderKeySubmit): Promise<void> => {
         // Persist the step-3 pick as THIS provider's default model (PR-F.5
         // per-provider column) in the same PUT that stores the key. The server
         // then projects it on `summary.default_model`, so the row chip is
         // server-sourced and survives reload per-provider on BOTH hosts — the
         // `modelChips` host hint becomes a legacy fallback, not the source.
-        const summary = await port.save(
-          target.entry.id,
-          apiKey,
-          model !== "" ? model : undefined,
-        );
+        // `baseUrl`/`label` are set only for the custom endpoint (D-2).
+        const summary = await port.save(target.entry.id, apiKey, {
+          defaultModel: model !== "" ? model : undefined,
+          baseUrl,
+          label,
+        });
         setKeys((prev) => [
           ...(prev ?? []).filter((key) => key.provider !== summary.provider),
           summary,
@@ -437,7 +453,15 @@ export function ProviderKeysPage({
                           logo={renderProviderLogo(entry)}
                           name={
                             <span style={nameRowStyle}>
-                              <span>{entry.label}</span>
+                              {/* Custom endpoints show the user's label; native
+                                  providers show the brand name. */}
+                              <span>
+                                {entry.isCustom === true &&
+                                summary.label != null &&
+                                summary.label !== ""
+                                  ? summary.label
+                                  : entry.label}
+                              </span>
                               {chip !== undefined ? (
                                 <Badge
                                   tone="success"
@@ -450,6 +474,11 @@ export function ProviderKeysPage({
                           }
                           sub={
                             <>
+                              {entry.isCustom === true &&
+                              summary.base_url != null &&
+                              summary.base_url !== ""
+                                ? `${hostOf(summary.base_url)} · `
+                                : null}
                               key {summary.key_hint} · updated{" "}
                               {formatUpdated(summary.updated_at)}
                             </>
@@ -535,25 +564,26 @@ export function ProviderKeysPage({
               <div data-testid="provider-compatible-note">
                 <Frow
                   label="Another provider"
-                  hint="Any OpenAI-compatible endpoint works too."
+                  hint="Point at any OpenAI-compatible endpoint (a self-hosted vLLM, LiteLLM, or gateway)."
                 >
                   <Button
                     type="button"
                     variant="primary"
                     size="sm"
-                    aria-label="Add a key"
-                    disabled={addable.length === 0}
-                    onClick={() => {
-                      const first = addable[0];
-                      if (first !== undefined) {
-                        setModal({ entry: first, mode: "add" });
-                      }
-                    }}
+                    aria-label="Add a custom endpoint"
+                    // A real custom-endpoint flow (decision D-2): captures a
+                    // Base URL + Label before the key. Disabled only when one is
+                    // already connected (single-endpoint MVP — the row above
+                    // carries Rotate/Remove).
+                    disabled={summaryFor(CUSTOM_ENDPOINT_ENTRY.id) !== undefined}
+                    onClick={() =>
+                      setModal({ entry: CUSTOM_ENDPOINT_ENTRY, mode: "add" })
+                    }
                     data-testid="provider-add-generic"
                     style={addKeyButtonStyle}
                   >
                     <Icon name="key" size={14} />
-                    Add a key
+                    Add a custom endpoint
                   </Button>
                 </Frow>
               </div>
@@ -567,6 +597,18 @@ export function ProviderKeysPage({
           open
           provider={modal.entry}
           mode={modal.mode}
+          // Rotating a custom endpoint keeps its stored URL + label (the user
+          // is only replacing the key), pre-filled from the summary.
+          initialBaseUrl={
+            modal.entry.isCustom === true
+              ? summaryFor(modal.entry.id)?.base_url
+              : undefined
+          }
+          initialLabel={
+            modal.entry.isCustom === true
+              ? summaryFor(modal.entry.id)?.label
+              : undefined
+          }
           onClose={() => setModal(null)}
           onValidate={handleValidate(modal.entry)}
           onSubmit={handleSubmit(modal)}

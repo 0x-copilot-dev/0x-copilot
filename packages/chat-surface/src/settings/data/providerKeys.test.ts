@@ -6,6 +6,7 @@ import { describe, expect, it, vi } from "vitest";
 
 import type { Transport, TypedRequest } from "../../ports/Transport";
 import {
+  CUSTOM_ENDPOINT_ENTRY,
   PROVIDER_CATALOG,
   checkProviderKeyFormat,
   createProviderKeysPort,
@@ -85,6 +86,17 @@ describe("PROVIDER_CATALOG", () => {
     expect(providerCatalogEntry("xai")?.contractBacked).toBe(false);
     expect(providerCatalogEntry("openai")?.contractBacked).toBe(true);
   });
+
+  it("keeps the custom endpoint OUT of the fixed catalog but resolvable (D-2)", () => {
+    // Not one of the six fixed Add rows…
+    expect(PROVIDER_CATALOG.map((entry) => entry.id)).not.toContain(
+      "openai_compatible",
+    );
+    // …but resolvable by slug and marked isCustom.
+    const custom = providerCatalogEntry("openai_compatible");
+    expect(custom).toBe(CUSTOM_ENDPOINT_ENTRY);
+    expect(custom?.isCustom).toBe(true);
+  });
 });
 
 describe("createProviderKeysPort", () => {
@@ -112,6 +124,61 @@ describe("createProviderKeysPort", () => {
       method: "PUT",
       path: "/v1/settings/provider-keys/openai",
       body: { api_key: FAKE_OPENAI },
+    });
+  });
+
+  it("save carries base_url + label for the custom endpoint (D-2)", async () => {
+    const { transport, calls } = fakeTransport(() => ({
+      provider: "openai_compatible",
+      key_hint: "…real",
+      updated_at: "x",
+      base_url: "https://my-host/v1",
+      label: "My vLLM",
+    }));
+    await createProviderKeysPort(transport).save("openai_compatible", FAKE_OPENAI, {
+      defaultModel: "llama-3.1-70b",
+      baseUrl: "https://my-host/v1",
+      label: "My vLLM",
+    });
+    expect(calls[0]).toMatchObject({
+      method: "PUT",
+      path: "/v1/settings/provider-keys/openai_compatible",
+      body: {
+        api_key: FAKE_OPENAI,
+        default_model: "llama-3.1-70b",
+        base_url: "https://my-host/v1",
+        label: "My vLLM",
+      },
+    });
+  });
+
+  it("save omits empty base_url/label so a rotation preserves them", async () => {
+    const { transport, calls } = fakeTransport(() => ({
+      provider: "openai",
+      key_hint: "…real",
+      updated_at: "x",
+    }));
+    await createProviderKeysPort(transport).save("openai", FAKE_OPENAI, {
+      baseUrl: "",
+      label: null,
+    });
+    expect(calls[0]?.body).toEqual({ api_key: FAKE_OPENAI });
+  });
+
+  it("validate carries base_url for the custom endpoint probe (D-2)", async () => {
+    const { transport, calls } = fakeTransport(() => ({
+      valid: true,
+      models: ["llama-3.1-70b"],
+      reason: null,
+    }));
+    const port = createProviderKeysPort(transport);
+    await port.validate?.("openai_compatible", FAKE_OPENAI, {
+      baseUrl: "https://my-host/v1",
+    });
+    expect(calls[0]).toMatchObject({
+      method: "POST",
+      path: "/v1/settings/provider-keys/openai_compatible/validate",
+      body: { api_key: FAKE_OPENAI, base_url: "https://my-host/v1" },
     });
   });
 

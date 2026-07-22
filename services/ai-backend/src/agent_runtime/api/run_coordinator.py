@@ -21,6 +21,7 @@ from agent_runtime.api.suggestible_connectors_resolver import (
 )
 from agent_runtime.api.user_policies_resolver import (
     NullUserPoliciesResolver,
+    ProviderEndpointsParser,
     ProviderKeysParser,
     UserPoliciesResolver,
 )
@@ -132,9 +133,13 @@ class RunCoordinator:
         )
         # BYOK keys must never reach a persisted surface: split them out of
         # the snapshot before the remainder is sealed into the (persisted)
-        # ``user_policies_json`` context field.
+        # ``user_policies_json`` context field. The NON-secret custom-endpoint
+        # base_url map is split into its own persistable field too (D-2).
         provider_keys, user_policies_json = ProviderKeysParser.split(
             user_policies_snapshot
+        )
+        provider_endpoints, user_policies_json = ProviderEndpointsParser.split(
+            user_policies_json
         )
         return await self._persist_and_enqueue(
             request=request,
@@ -142,6 +147,7 @@ class RunCoordinator:
             workspace_overrides=workspace_overrides,
             user_policies_json=user_policies_json,
             provider_keys=provider_keys,
+            provider_endpoints=provider_endpoints,
             suggested_connectors=suggested_connectors,
         )
 
@@ -154,6 +160,7 @@ class RunCoordinator:
         user_policies_json: dict[str, object],
         suggested_connectors: tuple[CatalogSuggestionCard, ...],
         provider_keys: dict[str, str] | None = None,
+        provider_endpoints: dict[str, str] | None = None,
     ) -> CreateRunResponse:
         """Seal the runtime context, persist the run, and enqueue the worker command.
 
@@ -167,6 +174,7 @@ class RunCoordinator:
             workspace_behavior_overrides=workspace_overrides,
             user_policies_json=user_policies_json,
             provider_keys=provider_keys,
+            provider_endpoints=provider_endpoints,
             suggested_connectors=suggested_connectors,
         )
         context = request.runtime_context
@@ -528,6 +536,7 @@ class RunCoordinator:
         workspace_behavior_overrides: dict[str, object] | None = None,
         user_policies_json: dict[str, object] | None = None,
         provider_keys: dict[str, str] | None = None,
+        provider_endpoints: dict[str, str] | None = None,
         suggested_connectors: tuple[CatalogSuggestionCard, ...] = (),
     ) -> CreateRunRequest:
         """Build a sealed ``AgentRuntimeContext`` and attach it to the request.
@@ -539,6 +548,9 @@ class RunCoordinator:
         ``provider_keys`` (BYOK) rides the in-memory, serialization-excluded
         context field; only its provider slugs feed the model resolver's
         credential gate so a user key satisfies credentials without an env key.
+        ``provider_endpoints`` (D-2) is the NON-secret custom-endpoint base_url
+        map; it rides the persistable context field and injects ``base_url`` for
+        the custom slug at model construction.
         """
         try:
             model = request.model
@@ -634,6 +646,7 @@ class RunCoordinator:
             workspace_behavior_overrides=workspace_behavior_overrides or {},
             user_policies_json=user_policies_json or {},
             provider_keys=provider_keys or {},
+            provider_endpoints=provider_endpoints or {},
         )
         return request.model_copy(update={"runtime_context": runtime_context})
 

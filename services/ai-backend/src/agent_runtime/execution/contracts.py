@@ -359,6 +359,13 @@ class AgentRuntimeContext(RuntimeContract):
     provider_keys: dict[str, str] = Field(
         default_factory=dict, exclude=True, repr=False
     )
+    # Per-user custom OpenAI-compatible endpoint base URLs (normalized provider
+    # slug -> base_url), resolved at run-create from the backend aggregate
+    # (BYOK decision D-2). NON-secret — a base_url is not key material — so
+    # (unlike ``provider_keys``) it is persisted verbatim in the run record and
+    # survives the queue round-trip WITHOUT re-hydration. Consumed in
+    # ``user_policy_model_kwargs`` to inject ``base_url`` for the custom slug.
+    provider_endpoints: dict[str, str] = Field(default_factory=dict)
 
     @field_validator("user_id", "org_id")
     @classmethod

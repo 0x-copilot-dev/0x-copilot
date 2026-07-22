@@ -218,6 +218,50 @@ class ProviderKeysParser:
         return keys, sanitized
 
 
+class ProviderEndpointsParser:
+    """Split the NON-secret ``provider_endpoints`` map out of a snapshot (D-2).
+
+    The backend aggregate returns ``{provider: base_url}`` for stored custom
+    OpenAI-compatible endpoints as an optional top-level field. Unlike
+    ``provider_keys`` this is not a secret, so it does NOT need the
+    serialization-exclude + hydrate dance — it rides the persistable
+    ``AgentRuntimeContext.provider_endpoints`` field. Splitting it here keeps
+    ``user_policies_json`` free of the endpoint map (single home for the value)
+    and mirrors :class:`ProviderKeysParser` for symmetry.
+
+    Provider slugs are normalized the same way as the key parser
+    (``google`` → ``gemini``) so a base_url and its key always key on the same
+    slug. Malformed entries are dropped silently — a broken row degrades to
+    "no custom endpoint", never blocks run-start.
+    """
+
+    SNAPSHOT_KEY = "provider_endpoints"
+    _PROVIDER_ALIASES: Mapping[str, str] = {"google": "gemini"}
+
+    @classmethod
+    def split(cls, snapshot: JsonObject) -> tuple[dict[str, str], JsonObject]:
+        """Return ``(provider_endpoints, snapshot_without_endpoints)``."""
+
+        if cls.SNAPSHOT_KEY not in snapshot:
+            return {}, snapshot
+        sanitized: JsonObject = {
+            key: value for key, value in snapshot.items() if key != cls.SNAPSHOT_KEY
+        }
+        raw = snapshot.get(cls.SNAPSHOT_KEY)
+        if not isinstance(raw, Mapping):
+            return {}, sanitized
+        endpoints: dict[str, str] = {}
+        for provider, base_url in raw.items():
+            if not isinstance(provider, str) or not isinstance(base_url, str):
+                continue
+            slug = provider.strip().lower()
+            value = base_url.strip()
+            if not slug or not value:
+                continue
+            endpoints[cls._PROVIDER_ALIASES.get(slug, slug)] = value
+        return endpoints, sanitized
+
+
 class ProviderKeysHydrator:
     """Re-attach non-persisted provider keys to a queue-deserialised context.
 
@@ -296,6 +340,7 @@ class UserPoliciesResolverFactory:
 __all__ = [
     "HttpUserPoliciesResolver",
     "NullUserPoliciesResolver",
+    "ProviderEndpointsParser",
     "ProviderKeysHydrator",
     "ProviderKeysParser",
     "UserPoliciesResolver",

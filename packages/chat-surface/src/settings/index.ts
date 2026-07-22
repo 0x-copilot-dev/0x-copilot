@@ -193,15 +193,19 @@ export {
   AddProviderKeyModal,
   type AddProviderKeyModalProps,
   type AddProviderKeySubmit,
+  type AddProviderKeyValidateContext,
 } from "./AddProviderKeyModal";
 export {
   createProviderKeysPort,
   checkProviderKeyFormat,
   providerCatalogEntry,
   PROVIDER_CATALOG,
+  CUSTOM_ENDPOINT_ENTRY,
   type ProviderKeysPort,
   type ProviderCatalogEntry,
   type ProviderKeyValidation,
+  type SaveProviderKeyOptions,
+  type ValidateProviderKeyOptions,
 } from "./data/providerKeys";
 // === end Phase 5 (PR-5.4) ===
 // === Phase 5 (PR-3D) — Models curation (Settings → Models) ===

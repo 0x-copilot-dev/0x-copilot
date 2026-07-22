@@ -60,6 +60,14 @@ export interface ProviderCatalogEntry {
    * enum + validator + the DB CHECK migration to flip a provider off this flag.
    */
   readonly comingSoon?: boolean;
+  /**
+   * True for the ONE generic "any OpenAI-compatible endpoint" entry (decision
+   * D-2, slug `openai_compatible`). The Add flow captures a user-supplied Base
+   * URL + Label before the key, and the port carries them to
+   * `PUT/validate` so the run routes to that endpoint. Not a normal Add row —
+   * it is reached via the "Another provider" affordance.
+   */
+  readonly isCustom?: boolean;
 }
 
 // Model lists are catalog defaults (DESIGN-SPEC §4 "per-provider MODELS"),
@@ -122,10 +130,29 @@ export const PROVIDER_CATALOG: readonly ProviderCatalogEntry[] = [
   },
 ];
 
+/**
+ * The generic custom OpenAI-compatible endpoint entry (decision D-2). Kept OUT
+ * of `PROVIDER_CATALOG` (it is not a fixed provider with a known key prefix or
+ * model list) and surfaced only via the "Another provider" affordance. Its
+ * `models` are empty — the Add flow offers the endpoint's probed models, or a
+ * free-text entry when the probe returns none. No `keyPrefix`: a custom gateway
+ * may legitimately issue an `sk-…` token, so the client format check stays
+ * length-only (the backend also relaxes the prefix gate for this slug).
+ */
+export const CUSTOM_ENDPOINT_ENTRY: ProviderCatalogEntry = {
+  id: "openai_compatible",
+  label: "Custom endpoint",
+  placeholder: "sk-… or any bearer token",
+  contractBacked: true,
+  isCustom: true,
+  models: [],
+};
+
 export function providerCatalogEntry(
   slug: string,
   catalog: readonly ProviderCatalogEntry[] = PROVIDER_CATALOG,
 ): ProviderCatalogEntry | undefined {
+  if (slug === CUSTOM_ENDPOINT_ENTRY.id) return CUSTOM_ENDPOINT_ENTRY;
   return catalog.find((entry) => entry.id === slug);
 }
 
@@ -175,23 +202,42 @@ export function checkProviderKeyFormat(
 // Port — the host-callback seam the page depends on.
 // ---------------------------------------------------------------------------
 
+/**
+ * Options for {@link ProviderKeysPort.save}. `defaultModel` persists the
+ * per-provider default (PR-F.5). `baseUrl` + `label` carry the custom
+ * OpenAI-compatible endpoint (decision D-2) — set only for the
+ * `openai_compatible` slug. All are optional and additive.
+ */
+export interface SaveProviderKeyOptions {
+  readonly defaultModel?: string | null;
+  readonly baseUrl?: string | null;
+  readonly label?: string | null;
+  readonly signal?: AbortSignal;
+}
+
+/** Options for {@link ProviderKeysPort.validate}. `baseUrl` is the custom
+ * endpoint's probe target (decision D-2); set only for `openai_compatible`. */
+export interface ValidateProviderKeyOptions {
+  readonly baseUrl?: string | null;
+  readonly signal?: AbortSignal;
+}
+
 export interface ProviderKeysPort {
   /** `GET /v1/settings/provider-keys` — masked summaries only. */
   list(signal?: AbortSignal): Promise<readonly ProviderKeySummary[]>;
   /**
    * `PUT /v1/settings/provider-keys/{provider}` — stores the plaintext key
    * exactly once (PUT body) and returns the masked summary. The plaintext is
-   * never returned or logged. When `defaultModel` is provided it is persisted
-   * on the per-provider `default_model` column (PR-F.5), so the server projects
-   * it back on `ProviderKeySummary.default_model` and the row chip survives
-   * reload per-provider on both hosts. Omit (or pass `null`/`""`) to leave the
-   * stored default untouched — a rotation preserves the existing pick.
+   * never returned or logged. `options.defaultModel` persists the per-provider
+   * `default_model` column (PR-F.5); `options.baseUrl`/`options.label` carry the
+   * custom OpenAI-compatible endpoint (D-2). An omitted `defaultModel`/`baseUrl`/
+   * `label` (or `null`/`""`) leaves the stored value untouched — a rotation
+   * preserves the existing pick.
    */
   save(
     provider: string,
     apiKey: string,
-    defaultModel?: string | null,
-    signal?: AbortSignal,
+    options?: SaveProviderKeyOptions,
   ): Promise<ProviderKeySummary>;
   /** `DELETE /v1/settings/provider-keys/{provider}`. */
   remove(provider: string, signal?: AbortSignal): Promise<void>;
@@ -199,12 +245,13 @@ export interface ProviderKeysPort {
    * Optional live validation. When absent, the modal uses
    * `checkProviderKeyFormat` (the default Transport adapter ships no validate
    * endpoint, so it omits this — validation is the format check, and the real
-   * server check happens on `save`).
+   * server check happens on `save`). `options.baseUrl` is the custom endpoint's
+   * probe target for the `openai_compatible` slug (D-2).
    */
   validate?(
     provider: string,
     apiKey: string,
-    signal?: AbortSignal,
+    options?: ValidateProviderKeyOptions,
   ): Promise<ProviderKeyValidation>;
   /**
    * Persist the Add-flow's step-3 model pick as the workspace default model
@@ -232,21 +279,32 @@ export function createProviderKeysPort(transport: Transport): ProviderKeysPort {
       });
       return res.keys;
     },
-    save(provider, apiKey, defaultModel, signal) {
-      // Plaintext travels exactly once, in this PUT body. `default_model` is a
-      // display-safe slug (never key material) persisted per-provider so the
-      // summary can project it back.
-      const body: PutProviderKeyRequest =
+    save(provider, apiKey, options) {
+      // Plaintext travels exactly once, in this PUT body. `default_model`,
+      // `base_url` and `label` are display-safe (never key material). Only
+      // non-empty values are sent so a rotation preserves the stored ones.
+      const body: PutProviderKeyRequest = { api_key: apiKey };
+      const defaultModel = options?.defaultModel;
+      if (
         defaultModel !== undefined &&
         defaultModel !== null &&
         defaultModel !== ""
-          ? { api_key: apiKey, default_model: defaultModel }
-          : { api_key: apiKey };
+      ) {
+        (body as { default_model?: string }).default_model = defaultModel;
+      }
+      const baseUrl = options?.baseUrl;
+      if (baseUrl !== undefined && baseUrl !== null && baseUrl !== "") {
+        (body as { base_url?: string }).base_url = baseUrl;
+      }
+      const label = options?.label;
+      if (label !== undefined && label !== null && label !== "") {
+        (body as { label?: string }).label = label;
+      }
       return transport.request<ProviderKeySummary>({
         method: "PUT",
         path: `/v1/settings/provider-keys/${encodeURIComponent(provider)}`,
         body,
-        signal,
+        signal: options?.signal,
       });
     },
     async remove(provider, signal) {
@@ -256,7 +314,7 @@ export function createProviderKeysPort(transport: Transport): ProviderKeysPort {
         signal,
       });
     },
-    async validate(provider, apiKey, signal) {
+    async validate(provider, apiKey, options) {
       // Live probe (PRD-F FR-F.4): the key feeds exactly one outbound call
       // and is never stored/echoed. Map the tri-state wire verdict onto the
       // modal's `ProviderKeyValidation`:
@@ -266,11 +324,18 @@ export function createProviderKeysPort(transport: Transport): ProviderKeysPort {
       //                     the flow continue (offline-friendly, save is the
       //                     backstop), falling back to the catalog models.
       const body: ValidateProviderKeyRequest = { api_key: apiKey };
+      if (
+        options?.baseUrl !== undefined &&
+        options.baseUrl !== null &&
+        options.baseUrl !== ""
+      ) {
+        (body as { base_url?: string }).base_url = options.baseUrl;
+      }
       const res = await transport.request<ValidateProviderKeyResponse>({
         method: "POST",
         path: `/v1/settings/provider-keys/${encodeURIComponent(provider)}/validate`,
         body,
-        signal,
+        signal: options?.signal,
       });
       if (res.valid === true) {
         return {

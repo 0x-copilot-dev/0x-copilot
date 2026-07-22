@@ -34,6 +34,8 @@ import os
 from dataclasses import dataclass
 from typing import Mapping
 
+from agent_runtime.execution.openai_compat import CUSTOM_OPENAI_COMPATIBLE_PROVIDER
+
 
 # Map of LangChain ``init_chat_model`` provider slugs (post normalisation
 # in :class:`ModelConfigResolver`) to the kwarg overrides we apply when
@@ -163,8 +165,9 @@ def user_policy_model_kwargs(
     provider: str,
     user_policies_json: Mapping[str, object] | None,
     provider_keys: Mapping[str, str] | None = None,
+    provider_endpoints: Mapping[str, str] | None = None,
 ) -> dict[str, object]:
-    """Return opt-out, region routing, and BYOK key kwargs for one user.
+    """Return opt-out, region routing, BYOK key, and custom-endpoint kwargs.
 
     Composes with :func:`workspace_model_kwargs` at the call site:
     user opt-out is a one-way ratchet (cannot be silently disabled
@@ -175,7 +178,13 @@ def user_policy_model_kwargs(
     mapping (normalized provider slug -> plaintext key). When the active
     provider has a stored user key it is injected as ``api_key``, which
     ``init_chat_model`` forwards to the provider client — taking precedence
-    over any deployment env key the SDK would otherwise read. The returned
+    over any deployment env key the SDK would otherwise read.
+
+    ``provider_endpoints`` is the NON-secret ``AgentRuntimeContext.
+    provider_endpoints`` map (slug -> base_url). For the custom
+    ``openai_compatible`` slug (BYOK decision D-2) the stored base_url is
+    injected as ``base_url`` so the run reaches the user's own endpoint; the
+    guard in ``build_chat_model`` fails closed if it is absent. The returned
     dict must never be logged or persisted by callers.
     """
 
@@ -199,6 +208,13 @@ def user_policy_model_kwargs(
             # to route to the default region — mapped above to
             # RegionUnavailableError so we never silently mis-route.
             out["base_url"] = base_url
+    # Custom OpenAI-compatible endpoint (D-2): the user-supplied base_url wins
+    # for the custom slug (region routing never targets it). ``base_url`` was
+    # SSRF-validated at store time in the backend.
+    if provider == CUSTOM_OPENAI_COMPATIBLE_PROVIDER:
+        endpoint = (provider_endpoints or {}).get(provider)
+        if isinstance(endpoint, str) and endpoint:
+            out["base_url"] = endpoint
     api_key = (provider_keys or {}).get(provider)
     if isinstance(api_key, str) and api_key:
         out["api_key"] = api_key
