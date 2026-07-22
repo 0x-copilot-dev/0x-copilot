@@ -1,0 +1,249 @@
+/* =========================================================================
+   0xCopilot — solo desktop app · v2 "quiet" system
+   Near-black neutrals · hairlines · system UI type · mono metadata
+   ONE accent (sky) · jade = live/success only · ember = destructive only
+   Design source of truth: Claude Design project 73f810d9 (copilot.css).
+   Vendored here as the design baseline for the design-parity harness.
+   ========================================================================= */
+
+:root {
+  --ink: #09090b;
+  --ink2: #0d0d10;
+  --panel: #111114;
+  --panel2: #16161a;
+  --panel3: #1d1d23;
+  --line: rgba(255, 255, 255, 0.06);
+  --line2: rgba(255, 255, 255, 0.1);
+  --line3: rgba(255, 255, 255, 0.18);
+  --tx: #ececf1;
+  --tx2: #d4d4db;
+  --mut: #98989f;
+  --mut2: #64646d;
+  --sky: #5fb2ec;
+  --sky-lo: #4593d8;
+  --sky-hi: #8cc8f4;
+  --jade: #57c785;
+  --ember: #f0764f;
+  --amber: #e8b45e;
+  --violet: #a98be0;
+  --accent: var(--sky);
+  --accent-hi: var(--sky-hi);
+  --accent-lo: var(--sky-lo);
+  --accent-ink: #08131d;
+  --accent-soft: rgba(95, 178, 236, 0.1);
+  --accent-line: rgba(95, 178, 236, 0.35);
+  --disp:
+    -apple-system, BlinkMacSystemFont, "SF Pro Text", "Segoe UI", system-ui,
+    sans-serif;
+  --body:
+    -apple-system, BlinkMacSystemFont, "SF Pro Text", "Segoe UI", system-ui,
+    sans-serif;
+  --mono: "JetBrains Mono", ui-monospace, SFMono-Regular, monospace;
+  --r: 8px;
+  --r-lg: 12px;
+  --r-sm: 6px;
+  --pad: 13px;
+  --gap: 10px;
+}
+[data-accent="jade"] {
+  --accent: var(--jade);
+  --accent-hi: #7fdca3;
+  --accent-lo: #3fa96c;
+  --accent-ink: #07160d;
+  --accent-soft: rgba(87, 199, 133, 0.1);
+  --accent-line: rgba(87, 199, 133, 0.35);
+}
+[data-accent="ember"] {
+  --accent: var(--ember);
+  --accent-hi: #ff9576;
+  --accent-lo: #d85e3b;
+  --accent-ink: #1d0d07;
+  --accent-soft: rgba(240, 118, 79, 0.1);
+  --accent-line: rgba(240, 118, 79, 0.35);
+}
+[data-accent="violet"] {
+  --accent: var(--violet);
+  --accent-hi: #c4adf0;
+  --accent-lo: #8b6bc8;
+  --accent-ink: #120a1e;
+  --accent-soft: rgba(169, 139, 224, 0.1);
+  --accent-line: rgba(169, 139, 224, 0.35);
+}
+
+[data-theme="light"] {
+  --ink: #f4f4f6;
+  --ink2: #ececef;
+  --panel: #ffffff;
+  --panel2: #f6f6f8;
+  --panel3: #ebebee;
+  --line: rgba(10, 10, 14, 0.07);
+  --line2: rgba(10, 10, 14, 0.12);
+  --line3: rgba(10, 10, 14, 0.22);
+  --tx: #141419;
+  --tx2: #2a2a31;
+  --mut: #5f5f68;
+  --mut2: #8f8f97;
+  --accent-ink: #f4faff;
+}
+
+[data-density="compact"] {
+  --pad: 10px;
+  --gap: 7px;
+}
+[data-density="spacious"] {
+  --pad: 18px;
+  --gap: 14px;
+}
+
+* {
+  box-sizing: border-box;
+}
+html,
+body {
+  margin: 0;
+  height: 100%;
+}
+body {
+  background: #050506;
+  color: var(--tx);
+  font-family: var(--body);
+  font-size: 13px;
+  line-height: 1.5;
+  -webkit-font-smoothing: antialiased;
+}
+h1,
+h2,
+h3,
+h4 {
+  font-family: var(--disp);
+  letter-spacing: -0.01em;
+  line-height: 1.2;
+  margin: 0;
+  font-weight: 600;
+  text-wrap: balance;
+}
+p {
+  margin: 0;
+  text-wrap: pretty;
+}
+a {
+  color: var(--accent);
+  text-decoration: none;
+}
+a:hover {
+  color: var(--accent-hi);
+}
+button {
+  font-family: inherit;
+  color: inherit;
+}
+.mono {
+  font-family: var(--mono);
+}
+.zx {
+  color: var(--accent);
+}
+::selection {
+  background: var(--accent-soft);
+}
+:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+}
+[data-reduce-motion="1"] * {
+  animation-duration: 0.001s !important;
+  transition-duration: 0.001s !important;
+}
+
+/* ===== Desk + window (mock chrome — not part of the app surface) ===== */
+.stage {
+  min-height: 100vh;
+  display: grid;
+  place-items: center;
+  padding: 24px;
+  background:
+    radial-gradient(
+      900px 520px at 50% -12%,
+      rgba(95, 178, 236, 0.05),
+      transparent 60%
+    ),
+    #050506;
+}
+.mw {
+  width: 1220px;
+  height: 840px;
+  max-width: 97vw;
+  max-height: 94vh;
+  display: flex;
+  flex-direction: column;
+  border-radius: 12px;
+  overflow: hidden;
+  background: var(--ink);
+  color: var(--tx);
+  border: 1px solid var(--line2);
+  box-shadow:
+    0 0 0 1px rgba(0, 0, 0, 0.7),
+    0 40px 100px -30px rgba(0, 0, 0, 0.8);
+}
+.mw-bar {
+  height: 38px;
+  flex: none;
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 0 13px;
+  background: var(--ink2);
+  border-bottom: 1px solid var(--line);
+  position: relative;
+}
+.mw-dots {
+  display: flex;
+  gap: 8px;
+  z-index: 2;
+}
+.mw-dot {
+  width: 11px;
+  height: 11px;
+  border-radius: 50%;
+  border: 0.5px solid rgba(0, 0, 0, 0.2);
+  cursor: default;
+}
+.mw-dot.r {
+  background: #ff5f57;
+}
+.mw-dot.y {
+  background: #febc2e;
+}
+.mw-dot.g {
+  background: #28c840;
+}
+.mw-title {
+  position: absolute;
+  inset: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 7px;
+  font-size: 12px;
+  color: var(--mut);
+  pointer-events: none;
+}
+.mw-title b {
+  color: var(--tx2);
+  font-weight: 600;
+}
+
+.spin {
+  width: 14px;
+  height: 14px;
+  border: 2px solid var(--line2);
+  border-top-color: var(--accent);
+  border-radius: 50%;
+  animation: spin 0.7s linear infinite;
+  display: inline-block;
+}
+@keyframes spin {
+  to {
+    transform: rotate(360deg);
+  }
+}
