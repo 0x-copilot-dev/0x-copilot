@@ -126,7 +126,9 @@ from runtime_api.schemas.runs import (
     RunContentPartRequest,
     RunQuoteRequest,
     RunRecord,
+    RunListResponse,
     RunStatusResponse,
+    RunSummaryResponse,
     RuntimeRequestContext,
 )
 from runtime_api.schemas.workspace import (
@@ -200,7 +202,9 @@ __all__ = [
     "CreateRunRequest",
     "RunRecord",
     "CreateRunResponse",
+    "RunListResponse",
     "RunStatusResponse",
+    "RunSummaryResponse",
     "CancelRunRequest",
     "CancelRunResponse",
     "RuntimeEventPresentationProjector",

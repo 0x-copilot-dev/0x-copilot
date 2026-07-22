@@ -21,6 +21,7 @@ import {
   useCallback,
   useEffect,
   useMemo,
+  useRef,
   useState,
   type ReactElement,
 } from "react";
@@ -123,8 +124,15 @@ function errorText(error: unknown): string {
 // Shared nav callbacks the shell threads down from bootstrap. Each surface
 // picks the subset it needs.
 export interface DestinationBinderCallbacks {
-  /** Switch the active destination to Run (reopen / open-run / run-skill). */
+  /** Switch the active destination to Run (open-run / run-skill / new chat). */
   readonly onOpenRun?: () => void;
+  /**
+   * Reopen a specific conversation from Chats — navigate to its Run route with
+   * the real conversation id (so the cockpit resolves that conversation's
+   * transcript + latest run, not a placeholder). Distinct from `onOpenRun`,
+   * which only lands on the cockpit front door without an id.
+   */
+  readonly onOpenConversation?: (id: ConversationId) => void;
   /** Open Settings → Privacy & retention (Activity's retention link). */
   readonly onOpenRetentionSettings?: () => void;
   /** Open Settings → Model & behavior (Tools' approval-policy note). */
@@ -206,6 +214,7 @@ async function loadChats(
 
 export function ChatsBinder({
   onOpenRun,
+  onOpenConversation,
 }: DestinationBinderCallbacks): ReactElement {
   const transport = useTransport();
   const load = useCallback(() => loadChats(transport), [transport]);
@@ -213,7 +222,11 @@ export function ChatsBinder({
   return (
     <ChatsArchive
       archive={result}
-      onReopen={() => onOpenRun?.()}
+      // Reopen threads the row's REAL conversation id into the cockpit (the
+      // Chats surface hands it to `onReopen`), so the cockpit resolves that
+      // conversation's transcript + latest run instead of dropping to the
+      // empty "NO ACTIVE RUN" state. New chat lands on the cockpit front door.
+      onReopen={(id) => onOpenConversation?.(id)}
       onNewChat={() => onOpenRun?.()}
       onRetry={retry}
     />
@@ -554,20 +567,44 @@ export function ProjectsBinder(): ReactElement {
   return <ProjectsDestination items={result} onRetry={retry} />;
 }
 
-// The Run cockpit. The desktop has no server-side "active conversation" concept
-// (the PR-3.5 seam left a placeholder id), but the cockpit's chat transcript,
-// run list, and run creation are ALL keyed on a real `conversationId`. So the
-// binder resolves one up front — reuse the most-recent conversation, else
-// create a fresh "Desktop session" — and binds the cockpit to it. Runs then
-// start against that real conversation (POST works, 404-placeholder gone), and
-// `TcChat` loads its messages (`/v1/agent/conversations/{id}/messages`, 200).
+// A stable idempotency key for a NEW chat's first send. Uniqueness per new-chat
+// intent is all the server's partial-unique conversation index needs to collapse
+// a concurrent/double-tap create into a single conversation row.
+function mintNewChatIdempotencyKey(): string {
+  const c = globalThis.crypto;
+  if (c !== undefined && typeof c.randomUUID === "function") {
+    return c.randomUUID();
+  }
+  // Fallback (test/JS env without Web Crypto). Uniqueness within one session is
+  // sufficient for the server-side idempotency collapse.
+  return `new-chat-${Date.now().toString(36)}-${Math.floor(Math.random() * 1e6).toString(36)}`;
+}
+
+// The Run cockpit. Conversation identity is THREADED FROM THE NAV (Router URL →
+// bootstrap → outlet), not self-resolved here. The old racy mount effect (a
+// `GET conversations?limit=1`-else-`POST {title:"Desktop session"}` heuristic)
+// created duplicate conversations on concurrent mounts and is gone
+// (desktop-run-identity §D3). A brand-new chat carries a `null` conversationId;
+// the conversation is created LAZILY on the first send via the server-authoritative
+// atomic ensure-conversation-on-run path — one `POST /v1/agent/runs` that omits
+// `conversation_id` and carries a stable `conversation_idempotency_key`. When the
+// server returns the created id we hand it back through `onConversationCreated`;
+// the host navigates, the outlet re-keys this binder by the real id, and the
+// cockpit remounts + head-resolves the just-created run so it streams.
 export function RunBinder({
-  conversationId: fallbackConversationId,
+  conversationId,
+  onConversationCreated,
   onOpenModelSettings,
   onOpenConnectors,
   onOpenSkills,
 }: {
-  readonly conversationId: ConversationId;
+  /** The active conversation from the nav; `null` = a brand-new chat. */
+  readonly conversationId: ConversationId | null;
+  /**
+   * The first send of a NEW chat created this conversation server-side — the
+   * host navigates to it (the outlet then re-keys + remounts this binder).
+   */
+  readonly onConversationCreated?: (id: ConversationId) => void;
   /** Open Settings → Provider keys (readiness setup CTA / config-error CTA). */
   readonly onOpenModelSettings?: () => void;
   /** Navigate to the Tools (connectors) surface — composer connections view. */
@@ -587,9 +624,11 @@ export function RunBinder({
     () => createProviderKeysPort(transport),
     [transport],
   );
-  const [conversationId, setConversationId] = useState<ConversationId | null>(
-    null,
-  );
+  // Idempotency key for a new chat's first send — minted once per new-chat
+  // intent (below) and cleared once a conversation exists. The outlet keys this
+  // binder by conversationId, so a new chat gets a fresh binder (and a fresh
+  // ref); the reset effect is a belt-and-braces guard for an in-place change.
+  const newChatIdempotencyKeyRef = useRef<string | null>(null);
   // Readiness gate (Issue 1): does the user have a usable model — a BYOK
   // provider key OR a running local model? Default true (fail-open) so we never
   // flash the setup CTA on load for a user who IS configured; flip to false only
@@ -640,54 +679,63 @@ export function RunBinder({
     };
   }, [transport]);
 
+  // Belt-and-braces: once a conversation exists, drop any minted new-chat key.
+  // (The outlet re-keys this binder on the id change so it normally remounts
+  // with a fresh ref anyway; this covers an in-place prop change.)
   useEffect(() => {
-    let cancelled = false;
-    void (async () => {
-      try {
-        const list = await transport.request<ConversationListResponse>({
-          method: "GET",
-          path: "/v1/agent/conversations",
-          query: { limit: 1 },
-        });
-        const existing = list.conversations?.[0]?.conversation_id;
-        const resolved =
-          existing ??
-          (
-            await transport.request<{ readonly conversation_id: string }>({
-              method: "POST",
-              path: "/v1/agent/conversations",
-              body: { title: "Desktop session" },
-            })
-          ).conversation_id;
-        if (!cancelled) {
-          setConversationId(resolved as ConversationId);
-        }
-      } catch {
-        if (!cancelled) {
-          setConversationId(fallbackConversationId);
-        }
-      }
-    })();
-    return () => {
-      cancelled = true;
-    };
-  }, [transport, fallbackConversationId]);
+    if (conversationId !== null) {
+      newChatIdempotencyKeyRef.current = null;
+    }
+  }, [conversationId]);
 
-  const activeConversationId = conversationId ?? fallbackConversationId;
+  // A brand-new chat has no conversation yet, but the cockpit still needs a
+  // stable id to bind its head/transcript GETs against — pass a sentinel. Those
+  // GETs 404 harmlessly (head resolution is best-effort/silent) and the cockpit
+  // shows its empty composer until the first send creates the real conversation.
+  const boundConversationId: ConversationId =
+    conversationId ?? ("new" as ConversationId);
+
   const handleStartRun = useCallback(
     async (request: RunStartRequest): Promise<string | null> => {
+      // Existing conversation → the historical path: POST a run against it.
       // One body builder (shared with the shell default + the web binder): a
       // bare `{ goal }` stays "conversation + goal only"; the rich composer adds
       // model / attachments / web-search / connector scopes. Identity is derived
       // server-side from the verified session, never sent by the client.
-      const run = await transport.request<{ readonly run_id: string }>({
+      if (conversationId !== null) {
+        const run = await transport.request<{ readonly run_id: string }>({
+          method: "POST",
+          path: "/v1/agent/runs",
+          body: buildRunCreateBody(conversationId, request),
+        });
+        return run.run_id ?? null;
+      }
+      // New chat → create the conversation AND start the run in one server-side
+      // transaction (ensure-conversation-on-run). Build the shared run body, then
+      // drop `conversation_id` and carry a stable idempotency key so a double-tap
+      // collapses to a single conversation row. Read back both ids and surface
+      // the created conversation so the host navigates (→ re-key → remount).
+      if (newChatIdempotencyKeyRef.current === null) {
+        newChatIdempotencyKeyRef.current = mintNewChatIdempotencyKey();
+      }
+      const body = buildRunCreateBody(boundConversationId, request);
+      delete body.conversation_id;
+      body.conversation_idempotency_key = newChatIdempotencyKeyRef.current;
+      const run = await transport.request<{
+        readonly run_id: string;
+        readonly conversation_id?: string;
+      }>({
         method: "POST",
         path: "/v1/agent/runs",
-        body: buildRunCreateBody(activeConversationId, request),
+        body,
       });
+      const createdId = run.conversation_id;
+      if (typeof createdId === "string" && createdId !== "") {
+        onConversationCreated?.(createdId as ConversationId);
+      }
       return run.run_id ?? null;
     },
-    [transport, activeConversationId],
+    [transport, conversationId, boundConversationId, onConversationCreated],
   );
 
   // Empty-state composer (FR-3.25): the design's "What should we run first?"
@@ -711,9 +759,15 @@ export function RunBinder({
   // us the ghost/scrub `disabled` + placeholder; RunComposer owns the substrate
   // ports (attachments, `/`-menu, connectors, model picker) and run dispatch.
   const renderComposer = useCallback(
-    (ctx: { readonly disabled: boolean; readonly placeholder: string }) => (
+    (ctx: {
+      readonly disabled: boolean;
+      readonly placeholder: string;
+      // §D3 — the cockpit injects its ONE dispatch into the composer ctx; the
+      // in-chat send routes through it so it binds the live session.
+      readonly dispatch: (request: RunStartRequest) => Promise<void>;
+    }) => (
       <RunComposer
-        conversationId={activeConversationId as unknown as string}
+        dispatch={ctx.dispatch}
         disabled={ctx.disabled}
         placeholder={ctx.placeholder}
         onShowConnectors={onOpenConnectors}
@@ -724,7 +778,6 @@ export function RunBinder({
       />
     ),
     [
-      activeConversationId,
       onOpenConnectors,
       onOpenSkills,
       onOpenModelSettings,
@@ -735,7 +788,7 @@ export function RunBinder({
 
   return (
     <RunDestination
-      conversationId={activeConversationId}
+      conversationId={boundConversationId}
       onStartRun={handleStartRun}
       modelReady={modelReady}
       onOpenModelSettings={onOpenModelSettings}

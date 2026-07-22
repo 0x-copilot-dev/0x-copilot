@@ -1338,6 +1338,23 @@ class FileRuntimeApiStore:
             return None
         return max(candidates, key=lambda run: run.created_at)
 
+    async def list_runs_for_conversation(
+        self,
+        *,
+        org_id: str,
+        conversation_id: str,
+        limit: int,
+    ) -> tuple[RunRecord, ...]:
+        """Return the conversation's runs newest-first (any status), capped at ``limit``."""
+
+        candidates = [
+            run
+            for run in self.runs.values()
+            if run.org_id == org_id and run.conversation_id == conversation_id
+        ]
+        candidates.sort(key=lambda run: run.created_at, reverse=True)
+        return tuple(candidates[: max(0, limit)])
+
     # ==================================================================
     # PersistencePort — runs
     # ==================================================================

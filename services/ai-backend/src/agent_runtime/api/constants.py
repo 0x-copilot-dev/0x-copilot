@@ -130,6 +130,7 @@ class Keys:
         GET_CONVERSATION_CONTEXT = "get_conversation_context"
         GET_EVENTS = "get_events"
         GET_MESSAGES = "get_messages"
+        GET_CONVERSATION_RUNS = "get_conversation_runs"
         GET_RUN = "get_run"
         LIST_CONVERSATIONS = "list_conversations"
         LIST_MODELS = "list_models"

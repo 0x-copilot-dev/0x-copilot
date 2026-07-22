@@ -263,6 +263,54 @@ class TestFastApiRuntimeApi(FastApiRuntimeApiTestMixin):
             assert row["latest_run_id"] is None
             assert row["latest_run_id_any_status"] == run_id
 
+    async def test_list_conversation_runs_returns_newest_first(self) -> None:
+        """desktop-run-identity §D2 (Phase 6) — GET /conversations/{id}/runs lists
+        the conversation's runs newest-first for the multi-run selector, tenant-scoped."""
+        client, _store = self.create_client()
+        conversation = await self.create_conversation(client)
+        conversation_id = conversation["conversation_id"]
+        scope = {"org_id": self.Values.ORG_ID, "user_id": self.Values.USER_ID}
+
+        # No runs yet → empty list.
+        empty = client.get(
+            f"/v1/agent/conversations/{conversation_id}/runs", params=scope
+        )
+        assert empty.status_code == 200
+        assert empty.json()["runs"] == []
+
+        # Three runs (distinct run idempotency keys so they don't dedupe).
+        run_ids: list[str] = []
+        for i in range(3):
+            resp = client.post(
+                "/v1/agent/runs",
+                json={
+                    **self.run_payload(conversation_id),
+                    "idempotency_key": f"run-{i}",
+                },
+            )
+            assert resp.status_code == 200
+            run_ids.append(resp.json()["run_id"])
+
+        listed = client.get(
+            f"/v1/agent/conversations/{conversation_id}/runs", params=scope
+        )
+        assert listed.status_code == 200
+        runs = listed.json()["runs"]
+        assert len(runs) == 3
+        assert {r["run_id"] for r in runs} == set(run_ids)
+        # Newest-first: created_at is non-increasing, each summary carries a model.
+        times = [r["created_at"] for r in runs]
+        assert times == sorted(times, reverse=True)
+        assert all(r["model_name"] for r in runs)
+        assert all(r["status"] == "queued" for r in runs)
+
+        # Tenant scope: another user in the org can't read this conversation's runs.
+        intruder = client.get(
+            f"/v1/agent/conversations/{conversation_id}/runs",
+            params={"org_id": self.Values.ORG_ID, "user_id": "intruder_user"},
+        )
+        assert intruder.status_code == 404
+
     async def test_pin_route_toggles_persists_and_is_tenant_scoped(self) -> None:
         """PRD-H.4 — POST /pin toggles + persists; other users get 404."""
         client, _store = self.create_client()
