@@ -355,7 +355,7 @@ describe("useRunSession — error + retry (FR-3.32)", () => {
     expect(result.current.events).toHaveLength(2);
   });
 
-  it("surfaces a retryable error when head resolution fails, then binds on retry", async () => {
+  it("stays idle (best-effort) when head resolution fails, then binds on retry", async () => {
     const transport = new FakeTransport();
     let failNext = true;
     transport.requestHandler = async () => {
@@ -369,14 +369,12 @@ describe("useRunSession — error + retry (FR-3.32)", () => {
       conversationId: "conv-1",
     });
 
-    // Run resolution is now the conversation-head GET — a core endpoint, not the
-    // old best-effort runs-list — so a failure surfaces as a non-blocking,
-    // retryable error: no run bound, no stream opened, `runs` empty. (The cockpit
-    // still lets the user start a run: RunDestination shows the empty composer
-    // regardless of this error, and the banner is non-blocking — see
-    // RunDestination's error-banner test.)
-    await waitFor(() => expect(result.current.status).toBe("error"));
-    expect(result.current.error?.message).toBe("head fetch failed");
+    // Head resolution only picks which EXISTING run to bind, so a failure is
+    // best-effort: no run bound, no stream, and NO cockpit error (the user didn't
+    // act). RunDestination still shows the empty composer so a run can be started;
+    // only run-stream failures surface a banner.
+    await waitFor(() => expect(result.current.status).toBe("idle"));
+    expect(result.current.error).toBeNull();
     expect(result.current.runId).toBeNull();
     expect(result.current.runs).toEqual([]);
     expect(transport.subs).toHaveLength(0);

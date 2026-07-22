@@ -147,7 +147,6 @@ export function useRunSession(options: UseRunSessionOptions): RunSession {
   const [runs] = useState<readonly RunListItem[]>(EMPTY_RUNS);
   const [boundRunId, setBoundRunId] = useState<string | null>(null);
   const [isResolving, setIsResolving] = useState(false);
-  const [resolveError, setResolveError] = useState<Error | null>(null);
   const [resolveNonce, setResolveNonce] = useState(0);
 
   // ---- live stream --------------------------------------------------------
@@ -177,7 +176,6 @@ export function useRunSession(options: UseRunSessionOptions): RunSession {
   // conversation's own head run (if any).
   useEffect(() => {
     setBoundRunId(null);
-    setResolveError(null);
   }, [conversationId]);
 
   // A deep-linked / host-supplied ``runId`` binds directly. Kept as an effect (not
@@ -217,15 +215,13 @@ export function useRunSession(options: UseRunSessionOptions): RunSession {
           setBoundRunId((prev) => prev ?? head);
         }
       })
-      .catch((err: unknown) => {
-        if (cancelled) {
-          return;
-        }
-        // A never-run conversation returns 200 with a null head (→ idle composer,
-        // no error). A genuine failure (network / 5xx / 404) surfaces a NON-blocking
-        // retryable error banner while the empty composer stays available below — it
-        // never blocks starting a run (retry() re-resolves + binds).
-        setResolveError(toError(err));
+      .catch(() => {
+        // Best-effort: head resolution only picks which EXISTING run to bind. A
+        // failure (never-run conversation, transient error, or a not-yet-created
+        // placeholder id) leaves the idle composer available — it never surfaces a
+        // banner (the user didn't act) and never blocks starting a run. retry()
+        // re-attempts via resolveNonce; run-STREAM failures (sseError) are the only
+        // resolution errors worth surfacing.
       })
       .finally(() => {
         if (!cancelled) {
@@ -299,18 +295,8 @@ export function useRunSession(options: UseRunSessionOptions): RunSession {
       }
       return events.length > 0 ? "streaming" : "connecting";
     }
-    if (resolveError !== null) {
-      return "error";
-    }
     return isResolving ? "resolving" : "idle";
-  }, [
-    enabled,
-    activeRunId,
-    sseError,
-    events.length,
-    resolveError,
-    isResolving,
-  ]);
+  }, [enabled, activeRunId, sseError, events.length, isResolving]);
 
   const runStatus = useMemo<AgentRunStatus | null>(() => {
     if (runStatusFromEvents !== null) {
@@ -320,11 +306,12 @@ export function useRunSession(options: UseRunSessionOptions): RunSession {
     return listed?.status ?? null;
   }, [runStatusFromEvents, runs, activeRunId]);
 
-  const error = sseError ?? (activeRunId === null ? resolveError : null);
+  // Only run-STREAM failures surface as a cockpit error; head-resolution failures
+  // are best-effort (see the head effect) and leave the idle composer available.
+  const error = sseError;
 
   const retry = useCallback(() => {
     setSseError(null);
-    setResolveError(null);
     setConnectNonce((nonce) => nonce + 1);
     setResolveNonce((nonce) => nonce + 1);
   }, []);
@@ -388,11 +375,4 @@ function runStatusFromEventType(
     default:
       return null;
   }
-}
-
-function toError(value: unknown): Error {
-  if (value instanceof Error) {
-    return value;
-  }
-  return new Error(typeof value === "string" ? value : "run resolution failed");
 }
