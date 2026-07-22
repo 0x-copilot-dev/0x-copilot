@@ -525,6 +525,15 @@ export interface Conversation {
    */
   latest_run_status?: AgentRunStatus | null;
   latest_run_id?: string | null;
+  /**
+   * desktop-run-identity §D2 — id of the most-recent run of ANY status.
+   * Unlike `latest_run_id` (a non-terminal active run only; `null` once the
+   * run completes), this stays populated for finished conversations, so the
+   * Run cockpit can resolve and bind a conversation's head run on reopen from
+   * either the list or the get endpoint. Optional/`null` for never-run rows
+   * and older server builds.
+   */
+  latest_run_id_any_status?: string | null;
   /** PR A3 — id of the message this conversation was self-forked from
    * ("retry from here" / "fork to new chat"). Mutually exclusive with
    * forked_from_share_id (declared below); both nullable for non-fork

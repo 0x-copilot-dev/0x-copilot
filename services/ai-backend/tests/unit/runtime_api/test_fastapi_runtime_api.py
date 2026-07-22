@@ -218,6 +218,49 @@ class TestFastApiRuntimeApi(FastApiRuntimeApiTestMixin):
         assert row["preview"] == self.Values.USER_INPUT
         assert row["model"] == "gpt-5.4-mini"
 
+    async def test_head_run_id_any_status_survives_completion_on_list_and_get(
+        self,
+    ) -> None:
+        """desktop-run-identity §D2 — ``latest_run_id_any_status`` resolves the
+        conversation's head run on BOTH the list and the get endpoint, and —
+        unlike the active-only ``latest_run_id`` — stays populated once the run
+        reaches a terminal state, so a client reopening a finished conversation
+        can still bind its last run (kills the "NO ACTIVE RUN" reopen bug)."""
+        client, store = self.create_client()
+        conversation = await self.create_conversation(client)
+        conversation_id = conversation["conversation_id"]
+        scope = {"org_id": self.Values.ORG_ID, "user_id": self.Values.USER_ID}
+
+        def list_row() -> dict[str, Any]:
+            listed = client.get("/v1/agent/conversations", params=scope).json()[
+                "conversations"
+            ]
+            return next(r for r in listed if r["conversation_id"] == conversation_id)
+
+        def get_row() -> dict[str, Any]:
+            return client.get(
+                f"/v1/agent/conversations/{conversation_id}", params=scope
+            ).json()
+
+        # Never-run conversation: the head-run id is null on both endpoints.
+        assert list_row()["latest_run_id_any_status"] is None
+        assert get_row()["latest_run_id_any_status"] is None
+
+        # After a (non-terminal) run: both the active id and the head id resolve
+        # to it, identically on the list and get shapes.
+        run = await self.create_run(client, conversation_id)
+        run_id = run["run_id"]
+        for row in (list_row(), get_row()):
+            assert row["latest_run_id_any_status"] == run_id
+            assert row["latest_run_id"] == run_id
+
+        # Once the run COMPLETES: the active-only projection drops to null, but
+        # the head id PERSISTS on both endpoints — the property reopen depends on.
+        await store.update_run_status(run_id=run_id, status=AgentRunStatus.COMPLETED)
+        for row in (list_row(), get_row()):
+            assert row["latest_run_id"] is None
+            assert row["latest_run_id_any_status"] == run_id
+
     async def test_pin_route_toggles_persists_and_is_tenant_scoped(self) -> None:
         """PRD-H.4 — POST /pin toggles + persists; other users get 404."""
         client, _store = self.create_client()

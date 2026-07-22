@@ -271,6 +271,14 @@ class ConversationResponse(RuntimeContract):
     # ``ConversationResponse.with_latest_run`` after the read.
     latest_run_status: str | None = None
     latest_run_id: str | None = None
+    # desktop-run-identity §D2 — the most-recent run of ANY status. Unlike
+    # ``latest_run_id`` (a non-terminal active run only; ``None`` once the run
+    # completes), this carries the latest run regardless of status, so a client
+    # reopening a FINISHED conversation can still resolve and bind its last run
+    # (the durable O(1) "which run is this conversation's head" signal). The
+    # list-fields projection populates it from the run already fetched for
+    # ``model`` — no extra query. Optional so older clients are unaffected.
+    latest_run_id_any_status: str | None = None
 
     def with_latest_run(
         self,
@@ -298,20 +306,25 @@ class ConversationResponse(RuntimeContract):
         *,
         preview: str | None,
         model: str | None,
+        latest_run_id_any_status: str | None = None,
     ) -> "ConversationResponse":
-        """Return a copy carrying the Chats-list ``preview`` + ``model`` projections.
+        """Return a copy carrying the Chats-list ``preview`` + ``model`` + head-run projections.
 
         Kept as a typed copy (not field mutation) for the same immutability
         reason as :meth:`with_latest_run`. The list endpoint resolves the
-        last-message snippet and latest-run model once per row and overlays
+        last-message snippet + latest-run (any status) once per row and overlays
         them via this method; ``pinned`` already rides along on the record's
-        ``to_response`` so it needs no overlay.
+        ``to_response`` so it needs no overlay. ``latest_run_id_any_status``
+        (desktop-run-identity §D2) is the latest run's id regardless of status —
+        the same run row whose ``model_name`` feeds ``model`` — so a finished
+        conversation still hands the client a run id to bind on reopen.
         """
 
         return self.model_copy(
             update={
                 "preview": preview,
                 "model": model,
+                "latest_run_id_any_status": latest_run_id_any_status,
             }
         )
 

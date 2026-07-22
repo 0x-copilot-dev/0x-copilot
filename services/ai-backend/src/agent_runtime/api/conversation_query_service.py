@@ -116,7 +116,14 @@ class ConversationQueryService:
             user_id=user_id,
             conversation_id=conversation_id,
         )
-        return await self._with_latest_run(conversation.to_response(), org_id=org_id)
+        # desktop-run-identity §D2 — GET /conversations/{id} carries the SAME
+        # projection as the list path (active-run overlay + preview/model +
+        # ``latest_run_id_any_status``), so a client reopening a conversation
+        # resolves its head run from either endpoint with an identical shape.
+        projected = await self._with_latest_run(
+            conversation.to_response(), org_id=org_id
+        )
+        return await self._with_list_fields(projected, org_id=org_id)
 
     async def list_conversations(
         self,
@@ -360,7 +367,14 @@ class ConversationQueryService:
             else None
         )
         model = latest_run.model_name if latest_run is not None else None
-        return response.with_list_fields(preview=preview, model=model)
+        # desktop-run-identity §D2 — surface the head run's id (any status) from
+        # the SAME run row we already fetched for ``model``; previously discarded.
+        latest_run_id_any_status = latest_run.run_id if latest_run is not None else None
+        return response.with_list_fields(
+            preview=preview,
+            model=model,
+            latest_run_id_any_status=latest_run_id_any_status,
+        )
 
     @staticmethod
     def _snippet(text: str) -> str | None:
