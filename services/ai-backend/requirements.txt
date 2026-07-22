@@ -115,7 +115,7 @@ urllib3==2.7.0
 uuid_utils==0.17.0
 uvicorn==0.51.0
 wcmatch==11.0
-websockets==15.0.1
+websockets==16.1.1
 wrapt==2.2.2
 xxhash==3.8.1
 yarl==1.24.2
