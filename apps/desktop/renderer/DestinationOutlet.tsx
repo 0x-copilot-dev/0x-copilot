@@ -36,14 +36,6 @@ import {
 // defensive/legacy navigation to either slug resolves to the Activity surface
 // rather than dead-ending.
 
-// The conversation the Run cockpit binds to when the host does not supply one.
-// PR-3.11 landed the cockpit's empty/idle + multi-run states, so an empty run
-// list against this default id renders the honest goal composer (start a run)
-// rather than a bare idle cockpit. Threading the *real* active conversation
-// (Chats → reopen-into-Run) is still deferred. `useRunSession` resolves this
-// conversation's runs over the Transport port.
-const DESKTOP_DEFAULT_CONVERSATION_ID = "desktop-default" as ConversationId;
-
 // Slugs the outlet folds onto another destination before rendering. Activity is
 // the recast of the old audit-log + agents + inbox surfaces.
 const FOLDED_DESTINATIONS: Partial<
@@ -77,18 +69,31 @@ export interface DestinationOutletProps {
   /** The shell's active destination slug (host-controlled). */
   readonly destination: ShellDestinationSlug;
   /**
-   * Conversation the Run cockpit binds to. Optional so bootstrap (which has no
-   * active-conversation concept yet) mounts the outlet unchanged; defaults to
-   * {@link DESKTOP_DEFAULT_CONVERSATION_ID}.
+   * The active conversation the Run cockpit binds to. `null` (or omitted) = a
+   * brand-new chat with no conversation yet (the cockpit shows its empty
+   * composer; the first send creates the conversation). Threaded from the nav
+   * (Router URL → bootstrap `activeConversationId`); there is no hardcoded
+   * default anymore.
    */
-  readonly conversationId?: ConversationId;
+  readonly conversationId?: ConversationId | null;
   /**
-   * Navigate the shell to the Run cockpit. Wired by bootstrap to the shell's
-   * `handleNavigate("run")`. The Phase-4 surfaces call it for reopen /
-   * open-run / run-skill (an honest interim — desktop has no per-conversation
-   * run binding yet, so all three land on the cockpit front door).
+   * Navigate the shell to the Run cockpit (no conversation id). Wired by
+   * bootstrap to a new-run intent. The Phase-4 surfaces call it for open-run /
+   * run-skill / new chat — the cockpit front door for STARTING a run.
    */
   readonly onOpenRun?: () => void;
+  /**
+   * Reopen a specific conversation (Chats → Run) with its REAL id. Bootstrap
+   * navigates the Router to the conversation route; the outlet re-keys the
+   * cockpit on the id so it resolves that conversation's transcript + run.
+   */
+  readonly onOpenConversation?: (id: ConversationId) => void;
+  /**
+   * The first send of a new chat created this conversation server-side.
+   * Bootstrap navigates to it (updating the URL + active conversation), which
+   * re-keys the cockpit onto the just-created conversation.
+   */
+  readonly onConversationCreated?: (id: ConversationId) => void;
   /** Open Settings → Privacy & retention (Activity's retention link). */
   readonly onOpenRetentionSettings?: () => void;
   /** Open Settings → Model & behavior (Tools' approval-policy note). */
@@ -110,8 +115,10 @@ export interface DestinationOutletProps {
 
 export function DestinationOutlet({
   destination,
-  conversationId = DESKTOP_DEFAULT_CONVERSATION_ID,
+  conversationId = null,
   onOpenRun,
+  onOpenConversation,
+  onConversationCreated,
   onOpenRetentionSettings,
   onOpenApprovalSettings,
   onOpenModelSettings,
@@ -131,6 +138,8 @@ export function DestinationOutlet({
       {renderSurface(resolved, {
         conversationId,
         onOpenRun,
+        onOpenConversation,
+        onConversationCreated,
         onOpenRetentionSettings,
         onOpenApprovalSettings,
         onOpenModelSettings,
@@ -142,8 +151,10 @@ export function DestinationOutlet({
 }
 
 interface SurfaceContext {
-  readonly conversationId: ConversationId;
+  readonly conversationId: ConversationId | null;
   readonly onOpenRun?: () => void;
+  readonly onOpenConversation?: (id: ConversationId) => void;
+  readonly onConversationCreated?: (id: ConversationId) => void;
   readonly onOpenRetentionSettings?: () => void;
   readonly onOpenApprovalSettings?: () => void;
   readonly onOpenModelSettings?: () => void;
@@ -159,19 +170,28 @@ function renderSurface(
     case "run":
       // Transport / KeyValueStore come from the providers `ChatShell`
       // installs above this outlet, so only the conversation binding is
-      // threaded. `enabled` defaults to true — the outlet only mounts this
-      // for the `run` slug, so the session + ⌘M handler are live exactly
-      // while Run is active.
+      // threaded. The `key` is load-bearing: it forces a CLEAN remount when the
+      // bound conversation changes (reopen-from-Chats, or a new chat's first
+      // send resolving to a real id), so the cockpit head-resolves the new
+      // conversation instead of trying to bind across an identity change. A
+      // brand-new chat (null) keys on the `"new"` sentinel.
       return (
         <RunBinder
+          key={ctx.conversationId ?? "new"}
           conversationId={ctx.conversationId}
+          onConversationCreated={ctx.onConversationCreated}
           onOpenModelSettings={ctx.onOpenModelSettings}
           onOpenConnectors={ctx.onOpenConnectors}
           onOpenSkills={ctx.onOpenSkills}
         />
       );
     case "chats":
-      return <ChatsBinder onOpenRun={ctx.onOpenRun} />;
+      return (
+        <ChatsBinder
+          onOpenRun={ctx.onOpenRun}
+          onOpenConversation={ctx.onOpenConversation}
+        />
+      );
     case "projects":
       return <ProjectsBinder />;
     case "activity":

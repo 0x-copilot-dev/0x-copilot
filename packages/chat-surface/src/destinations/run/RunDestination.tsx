@@ -246,9 +246,10 @@ export interface RunDestinationProps {
      * turn N share a single path and a 2nd message can never run unbound (the bug
      * where the in-chat composer POSTed a run whose id the cockpit never saw).
      * Takes the rich {@link RunStartRequest} so the in-chat composer can carry
-     * attachments through the same path.
+     * attachments through the same path, and returns a promise the composer can
+     * await — a rejection routes to the composer's own error notice.
      */
-    readonly dispatch: (request: RunStartRequest) => void;
+    readonly dispatch: (request: RunStartRequest) => Promise<void>;
   }) => ReactElement | null;
 }
 
@@ -426,19 +427,19 @@ export function RunDestination(props: RunDestinationProps): ReactElement {
   // cockpit live in place (no shell remount).
   const { selectRun, bindRun } = session;
   const handleStartRun = useCallback(
-    (request: RunStartRequest): void => {
+    (request: RunStartRequest): Promise<void> => {
       const goal = request.goal.trim();
       const hasAttachments = (request.attachments?.length ?? 0) > 0;
       // Readiness gate (Issue 1): never fire a start that is guaranteed to fail
       // with a configuration error. The composer disables itself when
       // `modelReady` is false; this guards the keyboard path too.
       if (isStartingRun || !modelReady) {
-        return;
+        return Promise.resolve();
       }
       // The rich composer may send with an attachment and no text; only a truly
       // empty submit (no goal AND no attachments) is a no-op.
       if (goal === "" && !hasAttachments) {
-        return;
+        return Promise.resolve();
       }
       // Tag this attempt; the conversation-reset effect bumps the ref, so a
       // continuation that runs after a conversation switch drops its result.
@@ -458,7 +459,11 @@ export function RunDestination(props: RunDestinationProps): ReactElement {
               body: buildRunCreateBody(conversationId, normalized),
             })
             .then((payload) => runIdFromCreateResponse(payload));
-      void start
+      // Return the promise so the in-chat composer can await it and route a
+      // rejection to its own error notice (§D3). The empty-state composer does
+      // NOT await — it reads `startError` (set below) instead — so its caller
+      // swallows the rejection to avoid an unhandled promise.
+      return start
         .then((newRunId) => {
           // The cockpit switched conversations mid-flight — drop this result so
           // it can't stream a stale run into the new conversation.
@@ -498,6 +503,8 @@ export function RunDestination(props: RunDestinationProps): ReactElement {
             correlationId: parsed.correlationId,
             raw: parsed.raw !== "" ? parsed.raw : undefined,
           });
+          // Re-throw so the in-chat composer's onSubmitError channel fires too.
+          throw err;
         })
         .finally(() => {
           if (startToken !== startTokenRef.current) {
@@ -512,7 +519,12 @@ export function RunDestination(props: RunDestinationProps): ReactElement {
   // The plain fallback composer (`RunEmptyState`) sends a bare goal string; wrap
   // it into the shared `RunStartRequest` seam.
   const handleStartGoal = useCallback(
-    (goal: string): void => handleStartRun({ goal }),
+    (goal: string): void => {
+      // The empty-state composer reads `startError` for failures, so swallow the
+      // rejection here to avoid an unhandled promise (the in-chat composer awaits
+      // handleStartRun directly and routes rejections to its own notice — §D3).
+      void handleStartRun({ goal }).catch(() => {});
+    },
     [handleStartRun],
   );
 

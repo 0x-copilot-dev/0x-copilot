@@ -25,6 +25,8 @@ from runtime_api.schemas import (
     ConversationResponse,
     DefaultModelSelection,
     MessageListResponse,
+    RunListResponse,
+    RunSummaryResponse,
     ModelCatalogResponse,
     RunStatusResponse,
     RuntimeEventReplayResponse,
@@ -184,6 +186,48 @@ class ConversationQueryService:
         return MessageListResponse(
             conversation_id=conversation_id,
             messages=tuple(record.to_response() for record in records),
+            has_more=len(records) == bounded_limit,
+        )
+
+    async def list_runs_for_conversation(
+        self,
+        *,
+        org_id: str,
+        user_id: str,
+        conversation_id: str,
+        limit: int = Values.DEFAULT_CONVERSATION_LIMIT,
+    ) -> RunListResponse:
+        """Return the conversation's runs newest-first for the multi-run selector.
+
+        Gated on a successful conversation scope check (a run outside the caller's
+        scope 404s rather than leaking). Backs the Run cockpit's ``RunMultiSelect``
+        (desktop-run-identity §D2, Phase 6) — the durable replacement for the dead
+        ``GET /v1/agent/runs`` auto-resolve the client used to attempt.
+        """
+
+        await self._conversation_for_scope(
+            org_id=org_id,
+            user_id=user_id,
+            conversation_id=conversation_id,
+        )
+        bounded_limit = min(max(1, limit), Values.MAX_MESSAGE_LIMIT)
+        records = await self._persistence.list_runs_for_conversation(
+            org_id=org_id,
+            conversation_id=conversation_id,
+            limit=bounded_limit,
+        )
+        return RunListResponse(
+            runs=tuple(
+                RunSummaryResponse(
+                    run_id=record.run_id,
+                    status=record.status,
+                    model_name=record.model_name,
+                    created_at=record.created_at,
+                    started_at=record.started_at,
+                    completed_at=record.completed_at,
+                )
+                for record in records
+            ),
             has_more=len(records) == bounded_limit,
         )
 

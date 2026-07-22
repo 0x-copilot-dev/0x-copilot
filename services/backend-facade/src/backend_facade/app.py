@@ -464,6 +464,22 @@ def create_app(
             identity=identity,
         )
 
+    @app.get("/v1/agent/conversations/{conversation_id}/runs")
+    async def get_conversation_runs(
+        request: Request,
+        conversation_id: str,
+        limit: int = Query(50, ge=1, le=200),
+    ) -> dict[str, object]:
+        identity = FacadeAuthenticator.authenticate_request(request)
+        return await forward_json(
+            app,
+            "GET",
+            f"/v1/agent/conversations/{conversation_id}/runs",
+            target="ai_backend",
+            params=identity.scoped_params({"limit": limit}),
+            identity=identity,
+        )
+
     @app.get("/v1/agent/conversations/{conversation_id}/context")
     async def get_conversation_context(
         request: Request,

@@ -42,6 +42,7 @@ from runtime_api.schemas import (
     CreateRunResponse,
     HistoryDeletionResponse,
     MessageListResponse,
+    RunListResponse,
     ModelCatalogResponse,
     RuntimeRequestContext,
     RuntimeEventReplayResponse,
@@ -162,6 +163,24 @@ class RuntimeApiRoutes:
             conversation_id=conversation_id,
             limit=limit,
             include_deleted=include_deleted,
+        )
+
+    @classmethod
+    async def get_conversation_runs(
+        cls,
+        request: Request,
+        conversation_id: str,
+        org_id: str | None = Query(None, min_length=1),
+        user_id: str | None = Query(None, min_length=1),
+        limit: int = Query(50, ge=1, le=200),
+    ) -> RunListResponse:
+        """Return the conversation's runs newest-first for the multi-run selector."""
+        org_id, user_id = cls.scoped_identity(request, org_id=org_id, user_id=user_id)
+        return await cls.cqs(request).list_runs_for_conversation(
+            org_id=org_id,
+            user_id=user_id,
+            conversation_id=conversation_id,
+            limit=limit,
         )
 
     @classmethod
@@ -576,6 +595,13 @@ class RuntimeApiRouter:
             methods=["GET"],
             response_model=MessageListResponse,
             name=Keys.RouteName.GET_MESSAGES,
+        )
+        router.add_api_route(
+            "/conversations/{conversation_id}/runs",
+            RuntimeApiRoutes.get_conversation_runs,
+            methods=["GET"],
+            response_model=RunListResponse,
+            name=Keys.RouteName.GET_CONVERSATION_RUNS,
         )
         router.add_api_route(
             "/conversations/{conversation_id}/context",
