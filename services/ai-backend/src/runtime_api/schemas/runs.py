@@ -429,6 +429,29 @@ class RunStatusResponse(RuntimeContract):
     latest_sequence_no: NonNegativeInt = 0
 
 
+class RunSummaryResponse(RuntimeContract):
+    """Compact run entry for a conversation's multi-run selector (Phase 6).
+
+    Deliberately lighter than :class:`RunStatusResponse` — the selector only
+    needs to label + order runs (id, status, model, timestamps), not the full
+    inspection shape.
+    """
+
+    run_id: str
+    status: AgentRunStatus
+    model_name: str
+    created_at: datetime
+    started_at: datetime | None = None
+    completed_at: datetime | None = None
+
+
+class RunListResponse(RuntimeContract):
+    """A conversation's runs, newest-first (desktop-run-identity §D2, Phase 6)."""
+
+    runs: tuple[RunSummaryResponse, ...]
+    has_more: bool = False
+
+
 class CancelRunRequest(RuntimeContract):
     """Request to cancel long-running work."""
 

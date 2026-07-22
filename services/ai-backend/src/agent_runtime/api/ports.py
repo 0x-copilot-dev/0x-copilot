@@ -497,6 +497,21 @@ class PersistencePort(Protocol):
         the conversation has never run.
         """
 
+    async def list_runs_for_conversation(
+        self,
+        *,
+        org_id: str,
+        conversation_id: str,
+        limit: int,
+    ) -> tuple[RunRecord, ...]:
+        """Return the conversation's runs newest-first (any status), capped at ``limit``.
+
+        Backs the Run cockpit's multi-run selector (desktop-run-identity §D2,
+        Phase 6). Rides the same ``(org_id, conversation_id, created_at DESC)``
+        index the single-run head queries use. Empty when the conversation has
+        never run.
+        """
+
     # ------------------------------------------------------------------
     # Usage + pricing.
     #

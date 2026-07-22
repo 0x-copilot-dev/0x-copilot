@@ -1383,6 +1383,29 @@ class PostgresRuntimeApiStore:
             row = await cur.fetchone()
         return self._run_record(row) if row is not None else None
 
+    async def list_runs_for_conversation(
+        self,
+        *,
+        org_id: str,
+        conversation_id: str,
+        limit: int,
+    ) -> tuple[RunRecord, ...]:
+        """Return the conversation's runs newest-first (any status), capped at ``limit``."""
+
+        async with self._tenant_connection(org_id=org_id) as conn:
+            cur = await conn.execute(
+                """
+                SELECT * FROM agent_runs
+                 WHERE org_id          = %s
+                   AND conversation_id = %s
+                 ORDER BY created_at DESC
+                 LIMIT %s
+                """,
+                (org_id, conversation_id, limit),
+            )
+            rows = await cur.fetchall()
+        return tuple(self._run_record(row) for row in rows)
+
     async def get_latest_message_for_conversation(
         self,
         *,

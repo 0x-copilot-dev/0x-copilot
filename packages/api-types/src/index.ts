@@ -1502,6 +1502,29 @@ export interface RunStatus {
   latest_sequence_no: number;
 }
 
+/**
+ * desktop-run-identity §D2 (Phase 6) — a compact run entry for the Run cockpit's
+ * multi-run selector. Deliberately lighter than {@link RunStatus}: enough to
+ * label + order runs, not the full inspection shape.
+ */
+export interface RunSummary {
+  run_id: string;
+  status: AgentRunStatus;
+  model_name: string;
+  created_at: string;
+  started_at?: string | null;
+  completed_at?: string | null;
+}
+
+/**
+ * A conversation's runs, newest-first — `GET /v1/agent/conversations/{id}/runs`
+ * (the durable replacement for the removed `GET /v1/agent/runs` auto-resolve).
+ */
+export interface RunListResponse {
+  runs: RunSummary[];
+  has_more?: boolean;
+}
+
 export interface CancelRunRequest {
   reason?: string | null;
   requested_by_user_id: string;
