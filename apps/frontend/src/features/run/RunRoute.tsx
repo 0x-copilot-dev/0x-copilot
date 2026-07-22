@@ -26,7 +26,13 @@
 // provides (WebTransport → facade) is the sanctioned substrate access, exactly
 // as the desktop binder reads its IPC-backed port.
 
-import { useCallback, useEffect, useState, type ReactElement } from "react";
+import {
+  useCallback,
+  useEffect,
+  useRef,
+  useState,
+  type ReactElement,
+} from "react";
 
 import {
   RunDestination,
@@ -35,10 +41,7 @@ import {
   type RunEmptyComposerCtx,
   type RunStartRequest,
 } from "@0x-copilot/chat-surface";
-import type {
-  ConversationId,
-  ConversationListResponse,
-} from "@0x-copilot/api-types";
+import type { ConversationId } from "@0x-copilot/api-types";
 
 import type { RequestIdentity } from "../../api/config";
 import { RunEmptyComposer } from "./RunEmptyComposer";
@@ -49,6 +52,13 @@ import { RunEmptyComposer } from "./RunEmptyComposer";
 import "@0x-copilot/chat-surface/src/onboarding/onboarding.css";
 
 export interface RunRouteProps {
+  /**
+   * The conversation to reopen (Chats → Run), or `null`/absent for a NEW chat
+   * (created lazily on the first send). Host-supplied so the id lives in the web
+   * app's nav (mirrors the desktop outlet's `conversationId`); when the host
+   * threads a new id, the cockpit re-keys onto it.
+   */
+  readonly conversationId?: ConversationId | null;
   /**
    * Open Settings → Provider keys. Threaded to the cockpit's empty-state
    * composer for the "Set up your model" CTA and the `configuration_error`
@@ -61,53 +71,30 @@ export interface RunRouteProps {
 }
 
 export function RunRoute({
+  conversationId: propConversationId = null,
   onOpenModelSettings,
   identity,
 }: RunRouteProps): ReactElement {
   const transport = useTransport();
   const [conversationId, setConversationId] = useState<ConversationId | null>(
-    null,
+    propConversationId,
   );
+  // Reopen: follow the host-supplied conversation id when it changes. A new chat
+  // created lazily below keeps propConversationId null, so this never clobbers it.
+  useEffect(() => {
+    setConversationId(propConversationId);
+  }, [propConversationId]);
   // Readiness gate (Issue 1 parity): default true (fail-open) so a configured
   // user never flashes the setup CTA on load; flip to false only once the probe
   // CONFIRMS neither a BYOK key nor a running local model exists. A probe error
   // also fails open — the run-start error surfacing is the backstop.
   const [modelReady, setModelReady] = useState(true);
 
-  // Resolve a real conversation to bind the cockpit to: reuse the most-recent,
-  // else create a fresh "Web session". Mirrors the desktop RunBinder.
-  useEffect(() => {
-    let cancelled = false;
-    void (async () => {
-      try {
-        const list = await transport.request<ConversationListResponse>({
-          method: "GET",
-          path: "/v1/agent/conversations",
-          query: { limit: 1 },
-        });
-        const existing = list.conversations?.[0]?.conversation_id;
-        const resolved =
-          existing ??
-          (
-            await transport.request<{ readonly conversation_id: string }>({
-              method: "POST",
-              path: "/v1/agent/conversations",
-              body: { title: "Web session" },
-            })
-          ).conversation_id;
-        if (!cancelled) {
-          setConversationId(resolved as ConversationId);
-        }
-      } catch {
-        // Leave `conversationId` null → the loading placeholder stays. Starting
-        // a run requires a real conversation, so we never mount the cockpit
-        // against a fabricated id; navigating away and back retries.
-      }
-    })();
-    return () => {
-      cancelled = true;
-    };
-  }, [transport]);
+  // A new chat has NO conversation until the first send creates it lazily (via
+  // ensure-conversation-on-run) — no mount-time create, so no duplicate-conversation
+  // race (Phase 5b). The idempotency key is minted once per new-chat intent so a
+  // double-tap collapses to a single conversation row server-side.
+  const newChatKeyRef = useRef<string | null>(null);
 
   // Model readiness probe (mirrors the desktop RunBinder): a BYOK provider key
   // OR a running local model with at least one pulled model counts as ready.
@@ -160,14 +147,37 @@ export function RunRoute({
   // the verified bearer server-side, never sent by the client.
   const handleStartRun = useCallback(
     async (request: RunStartRequest): Promise<string | null> => {
-      if (conversationId === null) {
-        return null;
+      // Existing conversation → POST a run against it.
+      if (conversationId !== null) {
+        const run = await transport.request<{ readonly run_id?: string }>({
+          method: "POST",
+          path: "/v1/agent/runs",
+          body: buildRunCreateBody(conversationId, request),
+        });
+        return run.run_id ?? null;
       }
-      const run = await transport.request<{ readonly run_id?: string }>({
+      // New chat → create the conversation AND start the run in one server-side
+      // transaction (ensure-conversation-on-run): drop `conversation_id`, carry a
+      // stable idempotency key, read back both ids, and bind the created
+      // conversation so the cockpit re-keys onto it (head resolution binds the run).
+      if (newChatKeyRef.current === null) {
+        newChatKeyRef.current = mintNewChatIdempotencyKey();
+      }
+      const body = buildRunCreateBody("new" as ConversationId, request);
+      delete body.conversation_id;
+      body.conversation_idempotency_key = newChatKeyRef.current;
+      const run = await transport.request<{
+        readonly run_id?: string;
+        readonly conversation_id?: string;
+      }>({
         method: "POST",
         path: "/v1/agent/runs",
-        body: buildRunCreateBody(conversationId, request),
+        body,
       });
+      const createdId = run.conversation_id;
+      if (typeof createdId === "string" && createdId !== "") {
+        setConversationId(createdId as ConversationId);
+      }
       return run.run_id ?? null;
     },
     [transport, conversationId],
@@ -183,18 +193,16 @@ export function RunRoute({
     [identity],
   );
 
+  // A new chat (no conversation yet) mounts the cockpit against a "new" sentinel:
+  // its head/transcript GETs 404 harmlessly (head resolution is best-effort) and
+  // the empty composer shows until the first send creates the real conversation.
+  // Keying by the conversation id means the lazy create cleanly REMOUNTS the
+  // cockpit onto the new conversation, where head resolution binds the fresh run.
+  const boundConversationId: ConversationId =
+    conversationId ?? ("new" as ConversationId);
+
   // Full-bleed: the `run` slug owns full height in ChatShell (no topbar /
   // context / right rail). RunDestination is itself height:100%.
-  if (conversationId === null) {
-    return (
-      <section
-        aria-label="Run destination"
-        data-testid="run-route-loading"
-        style={{ height: "100%", width: "100%", minHeight: 0 }}
-      />
-    );
-  }
-
   return (
     <section
       aria-label="Run destination"
@@ -202,7 +210,8 @@ export function RunRoute({
       style={{ height: "100%", width: "100%", minHeight: 0 }}
     >
       <RunDestination
-        conversationId={conversationId}
+        key={boundConversationId}
+        conversationId={boundConversationId}
         onStartRun={handleStartRun}
         modelReady={modelReady}
         onOpenModelSettings={onOpenModelSettings}
@@ -210,4 +219,17 @@ export function RunRoute({
       />
     </section>
   );
+}
+
+// Mint a stable idempotency key for a new-chat first send (mirrors the desktop
+// binder). The server collapses concurrent/retried first sends with the same key
+// to a single conversation row.
+function mintNewChatIdempotencyKey(): string {
+  const c = globalThis.crypto;
+  if (c !== undefined && typeof c.randomUUID === "function") {
+    return c.randomUUID();
+  }
+  // Fallback (test/JS env without Web Crypto). Uniqueness within one session is
+  // sufficient for the server-side idempotency collapse.
+  return `new-chat-${Date.now().toString(36)}-${Math.floor(Math.random() * 1e6).toString(36)}`;
 }

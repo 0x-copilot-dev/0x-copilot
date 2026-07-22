@@ -29,6 +29,8 @@ import type {
   TypedRequest,
 } from "@0x-copilot/chat-transport";
 
+import type { ConversationId } from "@0x-copilot/api-types";
+
 import { registerSurfaces } from "../../app/registerSurfaces";
 import type { RequestIdentity } from "../../api/config";
 import { RunRoute } from "./RunRoute";
@@ -151,11 +153,21 @@ function makeStore() {
   };
 }
 
-function renderRoute(transport: Transport): ReturnType<typeof render> {
+function renderRoute(
+  transport: Transport,
+  conversationId?: string,
+): ReturnType<typeof render> {
   const ui: ReactElement = (
     <TransportProvider transport={transport}>
       <KeyValueStoreProvider store={makeStore()}>
-        <RunRoute identity={IDENTITY} />
+        <RunRoute
+          identity={IDENTITY}
+          conversationId={
+            conversationId === undefined
+              ? null
+              : (conversationId as ConversationId)
+          }
+        />
       </KeyValueStoreProvider>
     </TransportProvider>
   );
@@ -194,32 +206,37 @@ describe("RunRoute (PRD-05)", () => {
   it("mounts RunDestination and renders a PRD-01 record envelope as the Record archetype", async () => {
     const transport = new FakeTransport();
     transport.requestHandler = async (req) => {
-      if (req.path === "/v1/agent/conversations" && req.method === "GET") {
-        return { conversations: [{ conversation_id: "conv-1" }] };
-      }
       if (req.path === "/v1/settings/provider-keys") {
         return { keys: [{ id: "k1" }] }; // configured → modelReady stays true
       }
       if (req.path.includes("/messages")) {
         return { messages: [] };
       }
-      // Run-identity (desktop-run-identity §D2 / PR #211): the cockpit resolves
-      // the active run from the conversation detail's `latest_run_id`, not the
-      // now-dead GET /v1/agent/runs auto-resolve.
-      if (
-        req.path === "/v1/agent/conversations/conv-1" &&
-        req.method === "GET"
-      ) {
-        return { conversation_id: "conv-1", latest_run_id: "run-1" };
+      // Runs-list (multi-run selector): conv-1 has the running run.
+      if (req.path.endsWith("/conversations/conv-1/runs")) {
+        return {
+          runs: [
+            {
+              run_id: "run-1",
+              status: "running",
+              model_name: "gpt-5.4",
+              created_at: "2026-07-20T10:00:00.000Z",
+            },
+          ],
+        };
+      }
+      // The conversation head resolves the active run → the cockpit binds it.
+      if (req.path.endsWith("/conversations/conv-1")) {
+        return { latest_run_id: "run-1" };
       }
       return {};
     };
 
-    renderRoute(transport);
+    renderRoute(transport, "conv-1");
 
-    // The binder resolves the conversation, then mounts the real cockpit.
+    // The binder mounts the real cockpit for the reopened conversation.
     await screen.findByTestId("run-destination");
-    // No fabricated conversation was created — the most-recent one was reused.
+    // No conversation was fabricated on mount (the racy self-create is gone).
     expect(
       transport.requests.some(
         (r) => r.method === "POST" && r.path === "/v1/agent/conversations",
@@ -248,22 +265,19 @@ describe("RunRoute (PRD-05)", () => {
   it("mounts the design's rich empty composer ('What should we run first?') when there is no active run", async () => {
     const transport = new FakeTransport();
     transport.requestHandler = async (req) => {
-      if (req.path === "/v1/agent/conversations" && req.method === "GET") {
-        return { conversations: [{ conversation_id: "conv-1" }] };
-      }
       if (req.path === "/v1/settings/provider-keys") {
         return { keys: [{ id: "k1" }] };
       }
       if (req.path.includes("/messages")) {
         return { messages: [] };
       }
-      if (req.path === "/v1/agent/runs" && req.method === "GET") {
+      if (req.path.endsWith("/runs")) {
         return { runs: [] }; // no prior runs → empty-state composer
       }
-      return {};
+      return {}; // head GET → no latest_run_id → no active run
     };
 
-    renderRoute(transport);
+    renderRoute(transport, "conv-1");
 
     // No active run → the design's rich composer (hero + starter chips), NOT the
     // plain "Give it a goal" card and NOT a blank canvas.
