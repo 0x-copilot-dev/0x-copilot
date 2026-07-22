@@ -1,6 +1,25 @@
 # Regenerable live renders (run: vitest --config tools/design-parity/vitest.config.mjs)
 surfaces/*/live/
 
+# Regenerable measurement artifacts.
+#
+# These are OUTPUTS of the pipeline, not inputs: `extract-playwright.mjs` writes
+# the design-/live- computed-style profiles from anchors.json, and compare.mjs
+# writes report-*.json alongside its markdown twin. Re-running the harness
+# reproduces them byte-for-byte, so versioning them adds hundreds of noisy files
+# that no one reads and that conflict on every re-measure.
+#
+# What IS tracked, deliberately:
+#   anchors.json          hand-authored design<->live map — the real input
+#   *.md (report/FINDINGS/AUDIT)  the human-readable findings
+#   lib/render-live-*.test.tsx    hand-written harnesses that produce the live side
+# Trade-off to know: without the JSON you cannot diff two runs without
+# re-rendering both sides. That is cheap (one vitest run + the extractor), which
+# is why regeneration wins over version control here.
+surfaces/*/out/design-*.json
+surfaces/*/out/live-*.json
+surfaces/*/out/report*.json
+
 # Throwaway probe/driver scripts.
 #
 # These MUST be written inside the repo tree: node resolves `playwright` by
@@ -15,3 +34,9 @@ surfaces/*/live/
 *.tmp.mjs
 scratch/
 probe*.mjs
+
+# Stronger version of the same rule: a surface directory holds DATA (anchors,
+# reports, vendored design source) — never executable scripts. Durable tooling
+# belongs in lib/, where it is reviewed, reused and named. Anything an agent
+# leaves behind under surfaces/ is by definition a one-off.
+surfaces/**/*.mjs
