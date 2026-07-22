@@ -1840,3 +1840,144 @@ describe("RunDestination — cancel/stop (WC-P3)", () => {
     expect(transport.sessionSub?.path).toBe("/v1/agent/runs/run-1/stream");
   });
 });
+
+// === WC-P5a — mid-run MCP-OAuth Connect card (AD-6/AD-7) ===
+//
+// Integration: a scripted backend `mcp_auth_required` event surfaces the in-chat
+// Connect card off the ONE canonical stream (the projection now reduces
+// `mcp_auth_required` like `approval_requested`). Connect invokes the injected
+// `McpAuthPort.beginAuth(serverId)` — NOT the `/decision` POST a normal approval
+// resolves through (which 404s on a `mcp_discovery:` suggestion / mis-resolves the
+// gate). A plain `tool_action` approval still POSTs `/decision` (regression guard).
+
+/** A backend `mcp_auth_required` event (blocking gate or catalog suggestion). */
+function mcpAuthRequired(
+  approvalId: string,
+  serverId: string,
+): Record<string, unknown> {
+  return event({
+    event_type: "mcp_auth_required",
+    activity_kind: "mcp_auth",
+    payload: {
+      approval_id: approvalId,
+      approval_kind: "mcp_auth",
+      server_id: serverId,
+      server_name: serverId,
+      display_name: "Linear",
+      message: "MCP authentication required",
+    },
+  });
+}
+
+describe("RunDestination — MCP-OAuth Connect card (WC-P5a / AD-7)", () => {
+  function renderRunWithPort(port: {
+    beginAuth: (id: string) => void;
+    skipAuth: (id: string) => void;
+    installFromCatalog: (slug: string) => void;
+  }): { transport: FakeTransport } {
+    const transport = new FakeTransport();
+    transport.requestHandler = async (req) =>
+      req.path.includes("/messages")
+        ? { messages: [] }
+        : runningRun("Connect the connector");
+    render(
+      <TransportProvider transport={transport}>
+        <KeyValueStoreProvider store={makeStore()}>
+          <RunDestination conversationId={CONV} mcpAuthPort={port} />
+        </KeyValueStoreProvider>
+      </TransportProvider>,
+    );
+    return { transport };
+  }
+
+  it("renders the Connect card from a `mcp_auth_required` event and never POSTs `/decision`", async () => {
+    seqCounter = 0;
+    const beginAuth = vi.fn();
+    const skipAuth = vi.fn();
+    const { transport } = renderRunWithPort({
+      beginAuth,
+      skipAuth,
+      installFromCatalog: vi.fn(),
+    });
+    await waitFor(() => expect(transport.sessionSub).toBeDefined());
+    act(() => {
+      transport.emit(mcpAuthRequired("mcp_auth:run-1:linear", "linear"));
+    });
+
+    const connect = await screen.findByTestId(
+      "tc-chat-mcp-connect-mcp_auth:run-1:linear",
+    );
+    // Connect → the injected port, keyed by the payload's server_id.
+    act(() => {
+      fireEvent.click(connect);
+    });
+    expect(beginAuth).toHaveBeenCalledWith("linear");
+    act(() => {
+      fireEvent.click(
+        screen.getByTestId("tc-chat-mcp-skip-mcp_auth:run-1:linear"),
+      );
+    });
+    expect(skipAuth).toHaveBeenCalledWith("linear");
+    // The cockpit NEVER POSTed a decision for the auth gate (AD-7).
+    expect(transport.requests.some((r) => r.path.includes("/decision"))).toBe(
+      false,
+    );
+    // …and the standard Approve/Reject card was not used.
+    expect(
+      screen.queryByTestId("tc-chat-approval-approve-mcp_auth:run-1:linear"),
+    ).toBeNull();
+  });
+
+  it("recognises a `mcp_discovery:` suggestion and routes Connect to the port, not `/decision`", async () => {
+    seqCounter = 0;
+    const beginAuth = vi.fn();
+    const { transport } = renderRunWithPort({
+      beginAuth,
+      skipAuth: vi.fn(),
+      installFromCatalog: vi.fn(),
+    });
+    await waitFor(() => expect(transport.sessionSub).toBeDefined());
+    act(() => {
+      transport.emit(
+        mcpAuthRequired("mcp_discovery:run-1:seed:linear", "linear"),
+      );
+    });
+
+    const connect = await screen.findByTestId(
+      "tc-chat-mcp-connect-mcp_discovery:run-1:seed:linear",
+    );
+    act(() => {
+      fireEvent.click(connect);
+    });
+    expect(beginAuth).toHaveBeenCalledWith("linear");
+    expect(transport.requests.some((r) => r.path.includes("/decision"))).toBe(
+      false,
+    );
+  });
+
+  it("still POSTs `/decision` for a plain tool_action approval (no regression)", async () => {
+    seqCounter = 0;
+    const { transport } = renderRunWithPort({
+      beginAuth: vi.fn(),
+      skipAuth: vi.fn(),
+      installFromCatalog: vi.fn(),
+    });
+    await waitFor(() => expect(transport.sessionSub).toBeDefined());
+    act(() => {
+      transport.emit(approvalRequested("appr-1"));
+    });
+    await screen.findByTestId("tc-chat-approval-approve-appr-1");
+    act(() => {
+      fireEvent.click(screen.getByTestId("tc-chat-approval-approve-appr-1"));
+    });
+    await waitFor(() =>
+      expect(
+        transport.requests.some(
+          (r) =>
+            r.method === "POST" &&
+            r.path === "/v1/agent/approvals/appr-1/decision",
+        ),
+      ).toBe(true),
+    );
+  });
+});

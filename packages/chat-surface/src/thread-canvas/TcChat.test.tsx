@@ -19,6 +19,7 @@ import type {
 } from "@0x-copilot/chat-transport";
 
 import type { FleetProjection } from "../subagents";
+import type { McpAuthPort } from "../destinations/run/mcpAuthPort";
 import { TransportProvider } from "../providers/TransportProvider";
 import { SwimlaneScrubProvider } from "./SwimlaneScrubContext";
 import {
@@ -504,6 +505,8 @@ function approval(overrides: Partial<TcChatApproval> = {}): TcChatApproval {
     title: "Post to #launch-aurora",
     reason: "Copilot is asking before it writes outside this chat.",
     summary: "Posts the launch note to #launch-aurora",
+    approvalKind: "tool_action",
+    serverId: null,
     category: { vendor: "SLACK", access: "ACTION" },
     params: [{ label: "channel", value: "#launch-aurora" }],
     resolved: false,
@@ -618,5 +621,216 @@ describe("TcChat approvals (PR-3.10 / FR-3.22)", () => {
     );
     expect(screen.queryByTestId("tc-chat-approval-appr-1")).toBeNull();
     expect(screen.queryByTestId("tc-chat-approvals")).toBeNull();
+  });
+});
+
+// WC-P5a (AD-6/AD-7) — the mid-run MCP-OAuth Connect card. An `mcp_auth` gate (or
+// a `mcp_discovery:` catalog suggestion) renders Connect / Skip wired to the host
+// `McpAuthPort`, NOT the Approve/Reject → `/decision` path (which resolves only
+// `mcp_tool`/`tool_action`/`ask_a_question`). TcChat never POSTs — resolution is
+// the injected port; a normal approval is unaffected (regression guard).
+function mcpAuthApproval(
+  overrides: Partial<TcChatApproval> = {},
+): TcChatApproval {
+  return approval({
+    approvalId: "mcp_auth:run_1:linear",
+    title: "Connect Linear",
+    reason: "Sign in to Linear so Copilot can read your issues.",
+    summary: "MCP authentication required",
+    approvalKind: "mcp_auth",
+    serverId: "linear",
+    category: { vendor: "Linear", access: "ACTION" },
+    params: [],
+    ...overrides,
+  });
+}
+
+function makePort(): {
+  port: McpAuthPort;
+  beginAuth: ReturnType<typeof vi.fn>;
+  skipAuth: ReturnType<typeof vi.fn>;
+  installFromCatalog: ReturnType<typeof vi.fn>;
+} {
+  const beginAuth = vi.fn();
+  const skipAuth = vi.fn();
+  const installFromCatalog = vi.fn();
+  return {
+    port: { beginAuth, skipAuth, installFromCatalog },
+    beginAuth,
+    skipAuth,
+    installFromCatalog,
+  };
+}
+
+describe("TcChat MCP-OAuth Connect card (WC-P5a / AD-7)", () => {
+  it("renders a Connect / Skip card for an `mcp_auth` gate, not Approve/Reject", () => {
+    const { transport } = makeTransport(() => Promise.resolve(SAMPLE_RESPONSE));
+    const { port } = makePort();
+    render(
+      withTransport(
+        transport,
+        <TcChat
+          conversationId="c"
+          mode="studio"
+          approvals={[mcpAuthApproval()]}
+          mcpAuthPort={port}
+        />,
+      ),
+    );
+    // The Connect card renders (with Connect + Skip)…
+    expect(
+      screen.getByTestId("tc-chat-mcp-auth-mcp_auth:run_1:linear"),
+    ).toHaveTextContent("Connect Linear");
+    expect(
+      screen.getByTestId("tc-chat-mcp-connect-mcp_auth:run_1:linear"),
+    ).toHaveTextContent("Connect");
+    expect(
+      screen.getByTestId("tc-chat-mcp-skip-mcp_auth:run_1:linear"),
+    ).toHaveTextContent("Skip");
+    // …and NOT the Approve/Reject `/decision` card.
+    expect(
+      screen.queryByTestId("tc-chat-approval-approve-mcp_auth:run_1:linear"),
+    ).toBeNull();
+    expect(
+      screen.queryByTestId("tc-chat-approval-reject-mcp_auth:run_1:linear"),
+    ).toBeNull();
+  });
+
+  it("Connect calls beginAuth(serverId), Skip calls skipAuth(serverId); onApprove/onReject never fire", () => {
+    const { transport, record } = makeTransport(() =>
+      Promise.resolve(SAMPLE_RESPONSE),
+    );
+    const { port, beginAuth, skipAuth } = makePort();
+    const onApprove = vi.fn();
+    const onReject = vi.fn();
+    render(
+      withTransport(
+        transport,
+        <TcChat
+          conversationId="c"
+          mode="studio"
+          approvals={[mcpAuthApproval()]}
+          onApprove={onApprove}
+          onReject={onReject}
+          mcpAuthPort={port}
+        />,
+      ),
+    );
+    fireEvent.click(
+      screen.getByTestId("tc-chat-mcp-connect-mcp_auth:run_1:linear"),
+    );
+    expect(beginAuth).toHaveBeenCalledWith("linear");
+    fireEvent.click(
+      screen.getByTestId("tc-chat-mcp-skip-mcp_auth:run_1:linear"),
+    );
+    expect(skipAuth).toHaveBeenCalledWith("linear");
+    // The connector-auth gate NEVER resolves via the `/decision` handlers.
+    expect(onApprove).not.toHaveBeenCalled();
+    expect(onReject).not.toHaveBeenCalled();
+    // TcChat itself opened no transport request (host owns the redirect).
+    expect(record.calls.some((c) => c.path.includes("/decision"))).toBe(false);
+  });
+
+  it("recognises a `mcp_discovery:` suggestion as a Connect card too", () => {
+    const { transport } = makeTransport(() => Promise.resolve(SAMPLE_RESPONSE));
+    const { port, beginAuth } = makePort();
+    const onApprove = vi.fn();
+    render(
+      withTransport(
+        transport,
+        <TcChat
+          conversationId="c"
+          mode="studio"
+          approvals={[
+            // A suggestion carries the `mcp_discovery:` id prefix; even if its
+            // kind were stripped, the prefix routes it to the Connect card.
+            mcpAuthApproval({
+              approvalId: "mcp_discovery:run_1:seed:linear",
+              approvalKind: "unknown",
+              serverId: "linear",
+            }),
+          ]}
+          onApprove={onApprove}
+          mcpAuthPort={port}
+        />,
+      ),
+    );
+    expect(
+      screen.getByTestId("tc-chat-mcp-auth-mcp_discovery:run_1:seed:linear"),
+    ).not.toBeNull();
+    fireEvent.click(
+      screen.getByTestId("tc-chat-mcp-connect-mcp_discovery:run_1:seed:linear"),
+    );
+    expect(beginAuth).toHaveBeenCalledWith("linear");
+    expect(onApprove).not.toHaveBeenCalled();
+  });
+
+  it("renders the Connect card in Focus mode too", () => {
+    const { transport } = makeTransport(() => Promise.resolve(SAMPLE_RESPONSE));
+    const { port } = makePort();
+    render(
+      withTransport(
+        transport,
+        <TcChat
+          conversationId="c"
+          mode="focus"
+          approvals={[mcpAuthApproval()]}
+          mcpAuthPort={port}
+        />,
+      ),
+    );
+    expect(
+      screen.getByTestId("tc-chat-mcp-connect-mcp_auth:run_1:linear"),
+    ).not.toBeNull();
+    // Not the Focus `.conf-card` Approve/Reject variant.
+    expect(
+      screen.queryByTestId("tc-chat-conf-card-mcp_auth:run_1:linear"),
+    ).toBeNull();
+  });
+
+  it("degrades gracefully with no port wired (buttons render but are inert)", () => {
+    const { transport, record } = makeTransport(() =>
+      Promise.resolve(SAMPLE_RESPONSE),
+    );
+    render(
+      withTransport(
+        transport,
+        <TcChat
+          conversationId="c"
+          mode="studio"
+          approvals={[mcpAuthApproval()]}
+        />,
+      ),
+    );
+    const connect = screen.getByTestId(
+      "tc-chat-mcp-connect-mcp_auth:run_1:linear",
+    );
+    expect(connect).toBeDisabled();
+    // Clicking an inert Connect never throws and never POSTs anything.
+    fireEvent.click(connect);
+    expect(record.calls.some((c) => c.path.includes("/decision"))).toBe(false);
+  });
+
+  it("still routes a normal tool_action approval through Approve/Reject (no regression)", () => {
+    const { transport } = makeTransport(() => Promise.resolve(SAMPLE_RESPONSE));
+    const { port } = makePort();
+    const onApprove = vi.fn();
+    render(
+      withTransport(
+        transport,
+        <TcChat
+          conversationId="c"
+          mode="studio"
+          approvals={[approval()]}
+          onApprove={onApprove}
+          mcpAuthPort={port}
+        />,
+      ),
+    );
+    // A tool_action approval keeps the Approve/Reject `/decision` card…
+    fireEvent.click(screen.getByTestId("tc-chat-approval-approve-appr-1"));
+    expect(onApprove).toHaveBeenCalledWith("appr-1");
+    // …and never the Connect card.
+    expect(screen.queryByTestId("tc-chat-mcp-auth-appr-1")).toBeNull();
   });
 });

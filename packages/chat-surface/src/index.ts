@@ -1294,6 +1294,21 @@ export {
 export { type TcChatApproval } from "./thread-canvas";
 // === end Phase 3 (PR-3.10) ===
 
+// === WC-P5a (MCP-OAuth chat-surface half) ===
+// The chat-surface half of mid-run MCP-OAuth (docs/plan/web-convergence/PRD.md
+// AD-6/AD-7). `McpAuthPort` is the TYPE the host implements (web launcher over
+// `createComposerConnectorsPort`; desktop over Electron IPC) — chat-surface
+// defines it and the in-chat `mcp_auth` Connect card (`TcChat`) calls it, but the
+// full-page redirect / `sessionStorage` stash / `/mcp/oauth/callback` route never
+// enter this package (NFR-1/NFR-5). `RunDestination.mcpAuthPort` threads it to the
+// card; a `mcp_auth` gate / `mcp_discovery:` suggestion resolves through this port
+// (`beginAuth`/`skipAuth`), NEVER the `resolveApproval` `/decision` POST (which
+// 404s on discovery). The `approvalKind` carried on `RunApproval`/`TcChatApproval`
+// (above) is what the card branches on. The host launcher + OAuth resume land in
+// P5b (apps/frontend), NOT here.
+export type { McpAuthPort } from "./destinations/run";
+// === end WC-P5a (MCP-OAuth chat-surface half) ===
+
 // === Phase 3 (PR-3.11) run empty/multi-run ===
 // The two prototype-gap states `RunDestination` mounts internally: the
 // empty/idle goal composer (`RunEmptyState`, FR-3.25 — shown when the

@@ -31,6 +31,14 @@ import {
   ApprovalReceipt,
   type ActivityParam,
 } from "../approvals";
+// WC-P5a (AD-6/AD-7) — the MCP-OAuth launcher port TYPE + the approval-kind
+// union. `McpAuthPort` is a pure interface (no runtime code), so this type-only
+// import adds no substrate coupling and no module cycle (the value edge runs the
+// other way: `RunDestination` → `TcChat`). `ApprovalsQueueItem["approvalKind"]`
+// is the SSOT kind union carried through the `RunApproval → TcChatApproval`
+// boundary so the card can branch a `mcp_auth` gate off the `/decision` path.
+import type { McpAuthPort } from "../destinations/run/mcpAuthPort";
+import type { ApprovalsQueueItem } from "../workspace";
 import { useSwimlaneScrub } from "./SwimlaneScrubContext";
 
 export type TcChatMode = "studio" | "focus";
@@ -49,6 +57,19 @@ export interface TcChatApproval {
   readonly reason: string;
   /** Optional sub-line. */
   readonly summary: string | null;
+  /**
+   * WC-P5a (AD-7): the approval category, carried through from `RunApproval` so
+   * the card can branch. `mcp_auth` renders the Connect card (→ `McpAuthPort`),
+   * distinct from the `mcp_tool` / `tool_action` / `ask_a_question` Approve/Reject
+   * card (→ host `/decision` POST). SSOT: the rail's `ApprovalsQueueItem`.
+   */
+  readonly approvalKind: ApprovalsQueueItem["approvalKind"];
+  /**
+   * WC-P5a (AD-7): connector `server_id` for the Connect card's
+   * `McpAuthPort.beginAuth(serverId)` / `skipAuth(serverId)`. Present on
+   * `mcp_auth` gates + `mcp_discovery:` suggestions; null on plain approvals.
+   */
+  readonly serverId: string | null;
   /** Vendor·access pill; null when unknown. */
   readonly category: {
     readonly vendor: string;
@@ -62,6 +83,23 @@ export interface TcChatApproval {
   readonly decision: "approved" | "rejected" | null;
   /** Dispatch time (epoch ms) — the conversation anchor. */
   readonly createdAtMs: number | null;
+}
+
+// WC-P5a (AD-7): the `mcp_discovery:` prefix on an approval id marks a catalog
+// suggestion — a UI hint from `McpDiscoveryService` that is NEVER persisted as an
+// ApprovalRequest row, so a `/decision` POST 404s. Both the blocking `mcp_auth`
+// gate and this suggestion arrive as `mcp_auth_required` events carrying
+// `approval_kind: "mcp_auth"`, so `approvalKind === "mcp_auth"` already recognises
+// the whole family; the prefix check is a defensive belt-and-suspenders in case a
+// suggestion ever arrives with a stripped/unknown kind. Either way it routes to
+// the Connect card + `McpAuthPort`, never `onApprove`/`onReject`.
+const MCP_DISCOVERY_APPROVAL_PREFIX = "mcp_discovery:";
+
+function isMcpAuthApproval(approval: TcChatApproval): boolean {
+  return (
+    approval.approvalKind === "mcp_auth" ||
+    approval.approvalId.startsWith(MCP_DISCOVERY_APPROVAL_PREFIX)
+  );
 }
 
 export interface TcChatMessagePart {
@@ -184,6 +222,17 @@ export interface TcChatProps {
   /** Reject the approval (host owns the POST); fires on Reject / `⌘⌫`. */
   readonly onReject?: (approvalId: string) => void;
   /**
+   * WC-P5a (AD-6/AD-7): host launcher for the `mcp_auth` Connect card. When an
+   * approval's `approvalKind === "mcp_auth"` (or its id is `mcp_discovery:`-
+   * prefixed), the card renders a Connect / Skip pair wired to this port instead
+   * of Approve/Reject — Connect → `beginAuth(serverId)`, Skip → `skipAuth(serverId)`
+   * — so the connector-auth gate NEVER resolves through `onApprove`/`onReject`'s
+   * `/decision` POST (which 404s on discovery and mis-resolves the gate). Omitted
+   * → the Connect card still renders (the gate stays visible) but its actions are
+   * inert; the host wires this in P5b. Non-`mcp_auth` approvals ignore the port.
+   */
+  readonly mcpAuthPort?: McpAuthPort;
+  /**
    * Composer slot override. When supplied, the cockpit renders the host's
    * composer in place of the bare base `<Composer>` — the seam the desktop
    * host uses to mount the full `AssistantComposer` (attachments, `/`-menu,
@@ -204,6 +253,11 @@ const EMPTY_FLEETS: readonly FleetProjection[] = [];
 const EMPTY_APPROVALS: readonly TcChatApproval[] = [];
 const APPROVAL_REASSURANCE =
   "You're always asked before Copilot acts outside this chat.";
+// WC-P5a (AD-7): the Connect card's persistent rule line. Connecting starts an
+// OAuth flow in a new tab (the host owns the redirect); nothing is shared until
+// you approve on the vendor's consent screen.
+const MCP_AUTH_REASSURANCE =
+  "Connecting opens the vendor's sign-in — Copilot never sees your password.";
 
 type LoadState =
   | { readonly status: "idle" }
@@ -226,6 +280,7 @@ export function TcChat(props: TcChatProps): ReactElement {
     approvals = EMPTY_APPROVALS,
     onApprove,
     onReject,
+    mcpAuthPort,
     renderComposer,
   } = props;
   const transport = useTransport();
@@ -341,7 +396,9 @@ export function TcChat(props: TcChatProps): ReactElement {
             {visibleApprovals.map((approval) =>
               approval.resolved
                 ? renderApprovalReceipt(approval)
-                : renderConfCard(approval, onApprove, onReject),
+                : isMcpAuthApproval(approval)
+                  ? renderMcpAuthConnectCard(approval, mcpAuthPort)
+                  : renderConfCard(approval, onApprove, onReject),
             )}
           </div>
         ) : null}
@@ -369,7 +426,9 @@ export function TcChat(props: TcChatProps): ReactElement {
           {visibleApprovals.map((approval) =>
             approval.resolved
               ? renderApprovalReceipt(approval)
-              : renderStudioApprovalCard(approval, onApprove, onReject),
+              : isMcpAuthApproval(approval)
+                ? renderMcpAuthConnectCard(approval, mcpAuthPort)
+                : renderStudioApprovalCard(approval, onApprove, onReject),
           )}
         </div>
       ) : null}
@@ -417,6 +476,65 @@ function renderStudioApprovalCard(
               style={approvalApproveButtonStyle}
             >
               Approve <span aria-hidden="true">⌘↵</span>
+            </button>
+          </>
+        }
+      />
+    </div>
+  );
+}
+
+// WC-P5a (AD-7) — the `mcp_auth` Connect card. Reuses the hoisted 4-zone
+// `ApprovalCard` frame but swaps Approve/Reject for Connect/Skip wired to the
+// host `McpAuthPort`, NOT `onApprove`/`onReject`: a connector-auth gate resolves
+// via OAuth (a host `mcp_auth_resolved` decision after the redirect returns, P5b)
+// and a `mcp_discovery:` suggestion is never a persisted approval row, so a
+// `/decision` POST would 404 (AD-7). Rendered in BOTH Studio and Focus (the
+// connector-auth affordance is mode-agnostic). When no port is wired, or the
+// payload carried no `server_id`, the actions render disabled — the gate stays
+// visible but inert (never a crash, never a `/decision` fallback).
+function renderMcpAuthConnectCard(
+  approval: TcChatApproval,
+  mcpAuthPort?: McpAuthPort,
+): ReactNode {
+  const serverId = approval.serverId;
+  const actionable = mcpAuthPort !== undefined && serverId !== null;
+  return (
+    <div
+      key={`mcp-auth-${approval.approvalId}`}
+      data-testid={`tc-chat-mcp-auth-${approval.approvalId}`}
+      data-approval-id={approval.approvalId}
+      data-server-id={serverId ?? ""}
+    >
+      <ApprovalCard
+        title={approval.title}
+        reason={approval.reason}
+        category={approval.category}
+        params={[...approval.params]}
+        reassurance={MCP_AUTH_REASSURANCE}
+        actions={
+          <>
+            <button
+              type="button"
+              data-testid={`tc-chat-mcp-skip-${approval.approvalId}`}
+              disabled={!actionable}
+              onClick={() =>
+                serverId !== null ? mcpAuthPort?.skipAuth(serverId) : undefined
+              }
+              style={approvalRejectButtonStyle}
+            >
+              Skip
+            </button>
+            <button
+              type="button"
+              data-testid={`tc-chat-mcp-connect-${approval.approvalId}`}
+              disabled={!actionable}
+              onClick={() =>
+                serverId !== null ? mcpAuthPort?.beginAuth(serverId) : undefined
+              }
+              style={approvalApproveButtonStyle}
+            >
+              Connect
             </button>
           </>
         }

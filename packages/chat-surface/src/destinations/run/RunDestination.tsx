@@ -94,6 +94,12 @@ import {
   toApprovalsQueue,
   type RunApprovalDecision,
 } from "./approvalProjection";
+// WC-P5a (AD-6/AD-7): the host-supplied MCP-OAuth launcher port TYPE. Threaded
+// through to `TcChat` so the in-chat `mcp_auth` Connect card starts OAuth via the
+// host (redirect/stash/callback stay host-owned, P5b) instead of the `/decision`
+// POST. Optional — hosts that have not wired a launcher pass nothing and the card
+// degrades to an inert (but visible) gate.
+import type { McpAuthPort } from "./mcpAuthPort";
 // PR-3.11: the two prototype-gap states — the empty/idle goal composer
 // (FR-3.25) and the multi-run selector (FR-3.26). Both mount inside this shell
 // (no separate host remount): the empty state binds a freshly-started run via
@@ -276,6 +282,18 @@ export interface RunDestinationProps {
      */
     readonly onCancel: () => void;
   }) => ReactElement | null;
+  /**
+   * WC-P5a (AD-6/AD-7): host launcher for the mid-run `mcp_auth` Connect card.
+   * Forwarded verbatim to `TcChat.mcpAuthPort`; when an approval is an `mcp_auth`
+   * gate / `mcp_discovery:` suggestion the in-chat card renders Connect / Skip
+   * wired to this port (`beginAuth` / `skipAuth`) instead of Approve/Reject, so
+   * the connector-auth gate NEVER resolves via the `/decision` POST (`mcp_auth`
+   * resolves via a host `mcp_auth_resolved` decision after OAuth returns — P5b;
+   * a `mcp_discovery:` row is not persisted, so `/decision` 404s). Omitted → the
+   * card degrades to an inert (but visible) gate. The redirect / `sessionStorage`
+   * stash / `/mcp/oauth/callback` route stay host-owned (NFR-5).
+   */
+  readonly mcpAuthPort?: McpAuthPort;
 }
 
 export function RunDestination(props: RunDestinationProps): ReactElement {
@@ -290,6 +308,7 @@ export function RunDestination(props: RunDestinationProps): ReactElement {
     onOpenModelSettings,
     renderComposer,
     renderEmptyComposer,
+    mcpAuthPort,
   } = props;
 
   const transport = useTransport();
@@ -972,6 +991,11 @@ export function RunDestination(props: RunDestinationProps): ReactElement {
       approvals={chatApprovals}
       onApprove={handleApprove}
       onReject={handleReject}
+      // WC-P5a (AD-6/AD-7): the MCP-OAuth launcher. TcChat renders the Connect
+      // card (→ this port) for `mcp_auth` gates / `mcp_discovery:` suggestions
+      // instead of Approve/Reject, keeping them off the `/decision` POST. Absent
+      // → the card renders inert (host wires the launcher in P5b).
+      mcpAuthPort={mcpAuthPort}
       // Host composer seam: desktop mounts the full AssistantComposer here. The
       // dispatch-injecting wrapper (§D3) makes its send bind the live session.
       renderComposer={renderComposerWithDispatch}

@@ -55,6 +55,9 @@ export {
   type ApprovalProjection,
 } from "./approvalProjection";
 
+// === WC-P5a — MCP-OAuth launcher port TYPE (AD-6) ===
+export type { McpAuthPort } from "./mcpAuthPort";
+
 // === Phase 3 (PR-3.11) run empty/multi-run ===
 export {
   RunEmptyState,
