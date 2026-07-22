@@ -14,7 +14,7 @@ from typing import Any
 import httpx
 
 from runtime_api.local_models.ollama_client import LocalModelError
-from runtime_api.schemas.local_models import LocalModelSize
+from runtime_api.schemas.local_models import LocalModelErrorKind, LocalModelSize
 
 
 class HfGgufResolver:
@@ -54,7 +54,11 @@ class HfGgufResolver:
             if best is None or size > best[1]:
                 best = (path, size)
         if best is None:
-            raise LocalModelError(f"No '{quant}' GGUF found in '{repo}'")
+            # Genuinely terminal: the repo answered and has no such GGUF.
+            raise LocalModelError(
+                f"No '{quant}' GGUF found in '{repo}'",
+                kind=LocalModelErrorKind.TERMINAL,
+            )
         return LocalModelSize(
             repo=repo, quant=quant, filename=best[0], size_bytes=best[1]
         )
@@ -70,8 +74,30 @@ class HfGgufResolver:
             response.raise_for_status()
             data = response.json()
         except (httpx.HTTPError, ValueError) as exc:
-            raise LocalModelError(f"Could not read model files for '{repo}'") from exc
+            raise LocalModelError(
+                f"Could not read model files for '{repo}'",
+                kind=self._classify(exc),
+            ) from exc
         return data if isinstance(data, list) else []
+
+    @staticmethod
+    def _classify(exc: BaseException) -> LocalModelErrorKind:
+        """PRD-P8 §4.1 for the Hugging Face hop.
+
+        Deliberately *not* ``OllamaErrorClassifier``: this hop talks to
+        huggingface.co, so a refused connection says nothing about the local
+        runtime and must never be reported as ``runtime_unreachable`` — that
+        would make the client render "Ollama stopped responding" because a CDN
+        blipped. A reachability or timeout failure here is a network blip
+        (``transient``, safe to retry); a status code or an unparseable body is
+        an answer we will get again (``terminal``).
+        """
+
+        if isinstance(exc, httpx.HTTPStatusError | ValueError):
+            return LocalModelErrorKind.TERMINAL
+        if isinstance(exc, httpx.TransportError):
+            return LocalModelErrorKind.TRANSIENT
+        return LocalModelErrorKind.TERMINAL
 
     @staticmethod
     def _entry_size(entry: Mapping[str, Any]) -> int:

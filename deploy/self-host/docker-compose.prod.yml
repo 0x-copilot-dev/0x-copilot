@@ -182,6 +182,19 @@ services:
       # container can reach a host Ollama.
       RUNTIME_ENABLE_LOCAL_MODELS: ${LOCAL_MODELS_ENABLED:-false}
       OLLAMA_BASE_URL: ${OLLAMA_BASE_URL:-http://host.docker.internal:11434/v1}
+      # Runtime MANAGEMENT (binary detection + process spawn) is pinned OFF and
+      # is deliberately NOT operator-settable here. ai-backend runs inside this
+      # container; OLLAMA_BASE_URL above points at the *host*, so the container
+      # can neither see the host's Ollama binary nor usefully spawn one — a
+      # spawn would start a second Ollama inside this container, which nothing
+      # would ever talk to. With the flag off, /v1/local-models/status honestly
+      # reports runtime_state:"unknown" instead of guessing about a filesystem
+      # it cannot see, and the UI renders instructions rather than a "Restart
+      # Ollama" button that could not work. Only the desktop app (which runs
+      # ai-backend as a child process on the user's own machine, against a
+      # loopback Ollama) sets this true. Start/stop Ollama on the host yourself:
+      #   ollama serve
+      RUNTIME_LOCAL_MODELS_MANAGE_RUNTIME: "false"
     depends_on:
       postgres:
         condition: service_healthy

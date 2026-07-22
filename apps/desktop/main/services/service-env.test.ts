@@ -157,6 +157,10 @@ describe("buildServiceEnv(ai-backend)", () => {
     // FTUE prereq: the packaged supervisor enables on-device local models so
     // GET /v1/local-models/status reports enabled:true and the gate card lives.
     expect(env.RUNTIME_ENABLE_LOCAL_MODELS).toBe("true");
+    // PRD-P8 D2: desktop is the ONLY deployment allowed to detect and start the
+    // user's Ollama binary. Without it the first-run card cannot distinguish
+    // "not installed" from "stopped" and Restart Ollama has nothing to call.
+    expect(env.RUNTIME_LOCAL_MODELS_MANAGE_RUNTIME).toBe("true");
     expect(env.RUNTIME_EVENT_BUS_BACKEND).toBe("in_memory");
     expect(env.MCP_BACKEND_REGISTRY_URL).toBe("http://127.0.0.1:8101");
     expect(env.SKILLS_BACKEND_REGISTRY_URL).toBe("http://127.0.0.1:8101");
@@ -190,6 +194,31 @@ describe("buildServiceEnv(ai-backend)", () => {
     expect(env.RUNTIME_FILE_STORE_ROOT).toBeUndefined();
     // Local-models stay enabled regardless of the store backend.
     expect(env.RUNTIME_ENABLE_LOCAL_MODELS).toBe("true");
+    expect(env.RUNTIME_LOCAL_MODELS_MANAGE_RUNTIME).toBe("true");
+  });
+
+  it("never grants runtime management to the sibling services", () => {
+    // The flag authorises a process spawn on the user's machine. Only the
+    // ai-backend child (which owns /v1/local-models/*) may carry it; backend
+    // and facade must not, so a misread of the shared env can never widen it.
+    for (const name of ["backend", "backend-facade"] as const) {
+      const env = buildServiceEnv(name, inputs());
+      expect(env.RUNTIME_LOCAL_MODELS_MANAGE_RUNTIME).toBeUndefined();
+      expect(env.RUNTIME_ENABLE_LOCAL_MODELS).toBeUndefined();
+    }
+  });
+
+  it("does not let a hostile process env inject the runtime-management flag", () => {
+    // The flag is set by the supervisor, never passed through: it is not on
+    // ENV_PASSTHROUGH_ALLOWLIST, so its value is always the supervisor's.
+    expect(ENV_PASSTHROUGH_ALLOWLIST).not.toContain(
+      "RUNTIME_LOCAL_MODELS_MANAGE_RUNTIME",
+    );
+    const env = buildServiceEnv(
+      "backend-facade",
+      inputs({ RUNTIME_LOCAL_MODELS_MANAGE_RUNTIME: "true" }),
+    );
+    expect(env.RUNTIME_LOCAL_MODELS_MANAGE_RUNTIME).toBeUndefined();
   });
 });
 

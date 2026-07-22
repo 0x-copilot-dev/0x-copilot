@@ -106,6 +106,25 @@ Variables marked **required in production** will cause startup to fail if unset 
 
 ---
 
+## Local models (Ollama)
+
+| Variable                              | Default | Description                                                                                                                                                                                                                                        |
+| ------------------------------------- | ------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `RUNTIME_ENABLE_LOCAL_MODELS`         | `false` | Expose the `/v1/local-models/*` management API. `/status` always answers; every other route 404s while this is false. Set by the desktop runtime and self-host.                                                                                    |
+| `RUNTIME_LOCAL_MODELS_MANAGE_RUNTIME` | `false` | Allow this server to detect the host's `ollama` binary and spawn `ollama serve` (PRD-P8 D2). Gates `POST /v1/local-models/runtime/start` (404 while false) and `LocalModelsStatus.runtime_state`, which stays `unknown` while false. Desktop-only. |
+
+`runtime_state` derivation (server-side, single source of truth):
+
+| Condition                     | `runtime_state` |
+| ----------------------------- | --------------- |
+| feature disabled              | `unknown`       |
+| daemon answers `/api/version` | `running`       |
+| `MANAGE_RUNTIME` off          | `unknown`       |
+| binary found on this machine  | `stopped`       |
+| otherwise                     | `not_installed` |
+
+---
+
 ## Local dev only
 
 | Variable                            | Default | Description                                                        |

@@ -26,6 +26,24 @@ services:
       OPENAI_API_KEY: ${OPENAI_API_KEY:-}
       ANTHROPIC_API_KEY: ${ANTHROPIC_API_KEY:-}
       GOOGLE_API_KEY: ${GOOGLE_API_KEY:-}
+      # Local models (Ollama) — OFF by default, no file edit needed to flip:
+      #   LOCAL_MODELS_ENABLED=true make docker-dev
+      # On, /v1/local-models/* is live, so Settings -> Local models and the
+      # first-run "Download the local model" card can be exercised here instead
+      # of only in a staged desktop boot. Needs Ollama running on the HOST; on
+      # Linux also add to this service:
+      #   extra_hosts: ["host.docker.internal:host-gateway"]
+      RUNTIME_ENABLE_LOCAL_MODELS: ${LOCAL_MODELS_ENABLED:-false}
+      OLLAMA_BASE_URL: ${OLLAMA_BASE_URL:-http://host.docker.internal:11434/v1}
+      # Runtime management (detect the Ollama binary + spawn it) is pinned off:
+      # ai-backend is a container here and OLLAMA_BASE_URL points at the host,
+      # so it can neither see nor usefully spawn the host's binary — /status
+      # honestly reports runtime_state "unknown". Consequence for developers:
+      # this stack reaches the "installed / downloading" card states but NOT
+      # "not installed" / "stopped". For those, run ai-backend natively via
+      # `make dev` with RUNTIME_LOCAL_MODELS_MANAGE_RUNTIME=true in
+      # services/ai-backend/.env (see services/ai-backend/env_example).
+      RUNTIME_LOCAL_MODELS_MANAGE_RUNTIME: "false"
     ports:
       - "8000:8000"
     depends_on:
