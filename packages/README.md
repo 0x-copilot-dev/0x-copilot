@@ -8,8 +8,18 @@ duplication.
 
 - `api-types`: TypeScript contracts for app-facing API payloads and runtime
   event shapes.
+- `audit-chain`: Tamper-evident audit-chain primitives — HMAC hash-chain signing
+  and verification — shared by the Python services (`backend`, `ai-backend`).
+- `chat-surface`: Single-source-of-truth chat/interaction UI surface (composer,
+  messages, approvals, destinations) mounted by both web and desktop.
+- `chat-transport`: Transport client for agent runs, events, and streaming, with
+  web and IPC transports plus a mock for tests.
 - `design-system`: React theme, shared UI primitives, and CSS tokens used by
   the frontend.
+- `service-contracts`: Constants-only Python package for stable internal service
+  contracts, shared across services via `PYTHONPATH`.
+- `surface-renderers`: React renderers for agent output surfaces (email, sheet,
+  slide, Salesforce archetypes).
 
 ## Planned Packages
 

@@ -5,17 +5,13 @@ client-side state, but they do not own backend orchestration or persistence.
 
 ## Current Apps
 
-- `frontend`: Shipping web app built with React, TypeScript, and Vite. It calls
-  `backend-facade` over `/v1/*` and imports shared contracts from
-  `@0x-copilot/api-types`.
-
-## Planned Apps
-
-- `mac`: Planned native macOS client.
-- `windows`: Planned native Windows client.
-
-Planned apps are part of the target architecture only. Do not add shared
-client abstractions for them until a concrete implementation needs them.
+- `frontend`: `@0x-copilot/frontend` — shipping web app built with React,
+  TypeScript, and Vite. It calls `backend-facade` over `/v1/*` and imports
+  shared contracts from `@0x-copilot/api-types`.
+- `desktop`: `@0x-copilot/desktop` — the flagship shipping product, an Electron
+  desktop client installed via the `copilot` CLI.
+- `website`: `@0x-copilot/website` — the Astro marketing site for
+  `0xcopilot.tech`, deployed to GitHub Pages.
 
 ## Engineering Rules
 

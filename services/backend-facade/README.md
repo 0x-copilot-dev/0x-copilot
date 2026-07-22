@@ -4,8 +4,8 @@ Product-facing API facade for 0xCopilot apps. It shapes app responses,
 proxies service calls, and owns client-compatible streaming surfaces.
 
 See `ARCHITECTURE.md` for the forwarding matrix, `TESTING.md` for test
-guidance, and `docs/specs/product-api-surface.md` for the current app-facing
-route surface.
+guidance, and `docs/reference/api-surface.md` for the current app-facing
+route surface (start at `docs/README.md` for the full doc index).
 
 ## Local Environment
 
@@ -20,8 +20,9 @@ python -m pip install --upgrade pip
 python -m pip install -r requirements.txt
 ```
 
-Use Python 3.11 or newer; the Docker image and local development target Python
-3.13.
+Use Python 3.13 or newer; `pyproject.toml` requires `>=3.13` and local
+development targets Python 3.13. The Docker image builds on
+`python:3.14-slim-bookworm`.
 
 Run tests:
 

@@ -2,21 +2,21 @@
 
 Python backend workspace for the agent runtime layer.
 
-This backend now contains the implemented agent runtime foundation for dynamic tools, skills, MCP loading, context and memory management, subagents, streaming, the narrow FastAPI runtime API, replayable runtime events, and persistence contracts/schema. Future implementation agents should read the architecture docs, relevant technical spec, testing guidance, and engineering rules before changing runtime behavior.
+This backend is the agent-runtime layer of 0xCopilot — the local-first, bring-your-own-key personal AI agent desktop app ("Put your day on autopilot."). It plans and executes multi-step runs across the user's files and connected tools, and pauses for approval before it acts. The service implements the runtime foundation for dynamic tools, skills, MCP loading, context and memory management, subagents, streaming, the narrow FastAPI runtime API, replayable runtime events, and persistence contracts/schema. Read the architecture docs, the relevant technical spec, testing guidance, and engineering rules before changing runtime behavior.
 
 ## Workspace Context
 
 `services/ai-backend` is one component inside the larger `0x-copilot` workspace. It is not the whole product.
 
-The workspace is intended to become one GitHub monorepo with multiple deployable components. This service's canonical path is `services/ai-backend`.
+The workspace is a shipping monorepo of independently deployable components. This service's canonical path is `services/ai-backend`.
 
-Planned sibling components:
+Sibling components, all present today:
 
-- `services/backend-facade`: stable product-facing API layer that frontend and native apps call.
-- `services/backend`: core backend services for persistence, auth integration, permissions, admin workflows, and jobs.
-- `apps/frontend`: web work surface for enterprise search and agent interaction.
-- `apps/windows`: Windows desktop client.
-- `apps/mac`: macOS desktop client.
+- `services/backend-facade`: the product-facing API layer that the frontend and desktop app call.
+- `services/backend`: core backend for persistence, auth integration, permissions, and jobs.
+- `apps/frontend`: the Vite + React web work surface for agent interaction.
+- `apps/desktop`: the single Electron client; it supervises an embedded PostgreSQL plus the three Python services from a bundled runtime.
+- `apps/website`: the `0xcopilot.tech` marketing site.
 
 This service owns AI orchestration concerns only: Deep Agents runtime, LangGraph execution, LangChain tool wiring, dynamic tool and MCP loading, skills, context/memory management, subagents, streaming, and typed agent contracts. Product API boundaries should flow through `backend-facade`; durable product state and non-agent backend concerns should live in `backend`.
 
@@ -26,31 +26,30 @@ Read the workspace architecture before changing runtime APIs:
 - `../../docs/architecture/service-boundaries.md`
 - `../../docs/decisions/0001-monorepo-with-deployable-services.md`
 
-## What 0xCopilot Means Here
+## What This Service Does
 
-Enterprise search is the user-facing entry point for a broader enterprise work surface. It should help executives and employees ask natural-language questions, find context, understand source-backed answers, and eventually take action across the systems where work already lives.
+0xCopilot is a local-first, bring-your-own-key personal AI agent that runs entirely on the user's machine: an embedded PostgreSQL, three Python services, and an Electron shell. The user brings their own OpenAI, Anthropic, or Google key; the agent works across the user's files and connected apps and pauses for approval before it acts.
 
-In this project, enterprise search means:
+`ai-backend` is the AI orchestration layer of that product — FastAPI + LangGraph + Deep Agents. It is the piece that plans and executes multi-step runs. Concretely it:
 
-- Searching across Slack, Google Workspace, Atlassian, internal APIs, MCP servers, and future enterprise knowledge indexes.
-- Respecting user, organization, connector, document, and action permissions before any capability is visible to the model.
-- Returning grounded answers with source context, confidence signals, and enough traceability for users to trust the result.
-- Dynamically loading tools, skills, MCP servers, memories, and subagents so the agent has the right capability without bloating every prompt.
-- Managing long-running work through context compression, summarization, memory, streaming updates, and subagent delegation.
-- Serving non-engineer users first: the system should hide backend complexity and present a clear work surface.
+- Plans and drives multi-step runs across the user's files, MCP servers, and connected tools.
+- Pauses for approval before the agent takes a consequential action.
+- Respects user, connector, document, and action permissions before any capability is visible to the model.
+- Dynamically loads tools, skills, MCP servers, memories, and subagents so the agent has the right capability without bloating every prompt.
+- Manages long-running work through context compression, summarization, memory, streaming updates, and subagent delegation.
 
-The long-term product is closer to a trusted operating layer for enterprise work than a simple keyword search box.
+It is not an enterprise-search product and not a multi-tenant SaaS. Tenant auth, billing, and durable product state live in `backend`; the product-facing API is `backend-facade`.
 
 ## Stack
 
 - Python
-- FastAPI for the narrow runtime HTTP API while `backend-facade` is not implemented
+- FastAPI for the narrow runtime HTTP API (apps reach it through `backend-facade`, never directly)
 - PostgreSQL-compatible runtime persistence schema, with deterministic in-memory ports for unit tests and local development
 - LangChain for LLM integrations, tools, retrievers, and agent building blocks
 - LangGraph for stateful agent workflows and graph orchestration
 - Deep agents for longer-running research, planning, and multi-step agent behavior
 - Pydantic for typed contracts and validation at IO boundaries
-- Vector search and retrieval components for enterprise knowledge search
+- An internal embeddings endpoint powering Library indexing and retrieval, so runs can be grounded in the user's own files and content
 
 ## Documentation Workflow
 
@@ -58,18 +57,13 @@ Start here:
 
 - `docs/README.md` for the documentation index
 - `docs/architecture/` for current architecture, runtime contracts, package structure, and data flows
-- `docs/specs/` for implemented technical architecture and typed contracts
-- `docs/testing/` for unit test strategy, edge cases, and fixtures
-- `docs/rules/` for engineering rules every agent must follow
+- `docs/guides/` and `docs/reference/` for implementation guides and reference material
 
-Each feature implementation must include focused unit tests, edge-case coverage, and Pydantic contracts where data crosses runtime, tool, MCP, memory, subagent, or streaming boundaries.
+Each feature should include focused unit tests, edge-case coverage, and Pydantic contracts where data crosses runtime, tool, MCP, memory, subagent, or streaming boundaries.
 
-## Repo Rules
+## Engineering Rules
 
-Rules for future agents live in two places:
-
-- `docs/rules/` contains human-readable engineering rules for this backend.
-- `../../.cursor/rules/` contains Cursor rule files scoped to `services/ai-backend`.
+Engineering rules for this backend live in `CLAUDE.md` (this service) and, mirrored for Cursor, in `../../.cursor/rules/` (files scoped to `services/ai-backend`).
 
 Core rules:
 
@@ -115,7 +109,7 @@ GOOGLE_API_KEY=
 RUNTIME_DEFAULT_PROVIDER=openai
 RUNTIME_DEFAULT_MODEL=gpt-5.4-mini
 RUNTIME_DEFAULT_TEMPERATURE=0
-RUNTIME_DEFAULT_TIMEOUT_SECONDS=60
+RUNTIME_DEFAULT_TIMEOUT_SECONDS=180
 RUNTIME_MAX_RETRIES=2
 RUNTIME_MAX_PARALLEL_RUNS=4
 RUNTIME_MAX_PARALLEL_SUBAGENTS=4
@@ -128,10 +122,11 @@ RUNTIME_START_IN_PROCESS_WORKER=true
 # Recommended 50 once measured on staging.
 RUNTIME_DELTA_COALESCE_WINDOW_MS=0
 RUNTIME_DELTA_COALESCE_MAX_CHUNKS=64
-# P2 — SSE bus. ``in_memory`` is the legacy single-process default;
-# ``postgres`` enables Postgres LISTEN/NOTIFY for cross-process SSE
-# wakeups (drops p50 SSE delivery from ~1s to ~50ms in multi-process
-# deploys; needs DATABASE_URL configured).
+# P2 — SSE bus. Default is ``auto`` (resolves to ``postgres`` when
+# DATABASE_URL is configured, else ``in_memory``). Dev pins ``in_memory``
+# here for single-process runs; ``postgres`` enables LISTEN/NOTIFY for
+# cross-process SSE wakeups (drops p50 SSE delivery from ~1s to ~50ms in
+# multi-process deploys; needs DATABASE_URL configured).
 RUNTIME_EVENT_BUS_BACKEND=in_memory
 ```
 
@@ -263,4 +258,4 @@ events as provider chunks arrive, then `final_response` and `run_completed`.
 
 ## Intended Direction
 
-This backend hosts the AI orchestration layer for an enterprise work surface: one place connected through future Slack, Google Workspace, Atlassian, internal API, MCP, and enterprise knowledge adapters. The runtime currently provides the typed harness and fake-driven tests needed to add those adapters deliberately.
+This backend hosts the AI orchestration layer for 0xCopilot's local-first desktop agent: the runtime that reaches the user's files and connected apps through MCP servers and tool adapters, always behind an approval gate. It currently provides the typed harness and fake-driven tests needed to add those adapters deliberately.
