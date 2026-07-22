@@ -35,6 +35,11 @@ and exits non-zero on failure.
   ("This device", no placeholder leak, both link CTAs) → sign-out →
   re-entry. Needs a staged runtime;
   `COPILOT_HOME=<dir containing runtime/<platform>-<arch>>`.
+- `harness/journeys/first-run-j{1,2,4,5}-*.mjs` — the First-Run (FTUE)
+  verification journeys (P7): J1 local-first, J2 BYOK, J4 skip, J5 returning.
+  Scaffolds that assert everything reachable without a live model / real key /
+  P4 tools and mark the rest `BLOCKED`. Coverage map + how-to-run:
+  `harness/journeys/JOURNEYS-P7.md`.
 
 ```bash
 COPILOT_HOME="$PWD/../../apps/desktop/resources" \
