@@ -2,6 +2,7 @@
 import {
   TransportProvider,
   type CompleteAttachment,
+  type RunStartRequest,
 } from "@0x-copilot/chat-surface";
 import type {
   Session,
@@ -43,6 +44,11 @@ interface Recorder {
   readonly calls: TypedRequest[];
 }
 
+// Phase 5b: RunComposer no longer POSTs its own run — it routes every send
+// through the cockpit's ONE `dispatch` (injected via the renderComposer ctx),
+// which starts AND binds the run. The transport here only serves the composer's
+// mount GETs (skills / MCP servers / provider keys / local models / workspace
+// defaults); run-create success/failure is modeled on the `dispatch` mock.
 function fakeTransport(recorder: Recorder): Transport {
   return {
     request: <TRes,>(req: TypedRequest): Promise<TRes> => {
@@ -81,12 +87,20 @@ function payloadFor(path: string): Record<string, unknown> {
 
 function renderComposer(
   props: Partial<React.ComponentProps<typeof RunComposer>> = {},
-): { recorder: Recorder; container: HTMLElement } {
+): {
+  recorder: Recorder;
+  container: HTMLElement;
+  dispatch: ReturnType<typeof vi.fn>;
+} {
   const recorder: Recorder = { calls: [] };
+  // Default dispatch resolves (a successful send); tests override it to reject.
+  const dispatch = vi.fn(
+    async (_request: RunStartRequest): Promise<void> => {},
+  );
   const ui: ReactElement = (
     <TransportProvider transport={fakeTransport(recorder)}>
       <RunComposer
-        conversationId="conv-1"
+        dispatch={dispatch}
         disabled={false}
         placeholder="Send a message…"
         {...props}
@@ -94,7 +108,7 @@ function renderComposer(
     </TransportProvider>
   );
   const { container } = render(ui);
-  return { recorder, container };
+  return { recorder, container, dispatch };
 }
 
 function textarea(container: HTMLElement): HTMLTextAreaElement | null {
@@ -106,38 +120,10 @@ function textarea(container: HTMLElement): HTMLTextAreaElement | null {
 const CONFIG_ERROR_MESSAGE =
   "Missing API key for model provider 'openai'. Add one in Settings -> Provider keys.";
 
-// A transport whose mount GETs resolve normally but whose run-create POST
-// REJECTS — the keyless dead end. `rejection.message` is the stringified error
-// body both the web WebTransport and the desktop IPC bridge throw, so
-// parseTransportError has a real envelope to recover `code`/`safe_message` from.
-function fakeTransportRejectingRuns(
-  recorder: Recorder,
-  rejection: Error,
-): Transport {
-  return {
-    request: <TRes,>(req: TypedRequest): Promise<TRes> => {
-      recorder.calls.push(req);
-      if (req.method === "POST" && req.path === "/v1/agent/runs") {
-        return Promise.reject(rejection);
-      }
-      return Promise.resolve(payloadFor(req.path) as unknown as TRes);
-    },
-    subscribeServerSentEvents: (
-      _opts: SseSubscribeOptions,
-    ): SseSubscription => ({ close: () => undefined }),
-    getSession: (): Session => ({ bearer: null }),
-    capabilities: (): TransportCapabilities => ({
-      substrate: "desktop-webview",
-      nativeSecretStorage: true,
-      fileSystemAccess: false,
-      clipboardWrite: false,
-      openExternal: false,
-    }),
-  };
-}
-
 // The facade envelope for the missing-provider-key configuration error, wrapped
-// under `detail` exactly as the runtime → facade returns it.
+// under `detail` exactly as the runtime → facade returns it. `dispatch` rejects
+// with this (the run-create failure now lives inside the cockpit dispatch), so
+// parseTransportError has a real envelope to recover `code`/`safe_message` from.
 function configErrorEnvelope(): Error {
   return new Error(
     JSON.stringify({
@@ -206,21 +192,37 @@ describe("RunComposer", () => {
     expect(textarea(container)?.disabled).toBe(true);
   });
 
+  it("routes a send through the cockpit dispatch with the RunStartRequest (goal + model), not its own POST", async () => {
+    const { recorder, container, dispatch } = renderComposer();
+    await waitFor(() => {
+      expect(textarea(container)).not.toBeNull();
+    });
+
+    typeAndSend(container, "Draft the launch note");
+
+    await waitFor(() => {
+      expect(dispatch).toHaveBeenCalledTimes(1);
+    });
+    const request = dispatch.mock.calls[0][0] as RunStartRequest;
+    expect(request).toMatchObject({ goal: "Draft the launch note" });
+    // A configured provider (openai) resolves a concrete model selection.
+    expect(request.model).toBeTruthy();
+    // The composer never POSTs its own run — the dispatch owns run creation.
+    expect(
+      recorder.calls.some(
+        (c) => c.method === "POST" && c.path === "/v1/agent/runs",
+      ),
+    ).toBe(false);
+  });
+
   it("surfaces a missing-key run-create failure as an 'Add a provider key' CTA that routes to provider-key settings (no silent dead end)", async () => {
-    const recorder: Recorder = { calls: [] };
     const onOpenModelSettings = vi.fn();
-    const { container } = render(
-      <TransportProvider
-        transport={fakeTransportRejectingRuns(recorder, configErrorEnvelope())}
-      >
-        <RunComposer
-          conversationId="conv-1"
-          disabled={false}
-          placeholder="Send a message…"
-          onOpenModelSettings={onOpenModelSettings}
-        />
-      </TransportProvider>,
-    );
+    // The cockpit dispatch rejects (keyless run-create) — the rejection routes
+    // to the composer's onSubmitError channel instead of vanishing.
+    const dispatch = vi.fn(async (): Promise<void> => {
+      throw configErrorEnvelope();
+    });
+    const { container } = renderComposer({ dispatch, onOpenModelSettings });
     await waitFor(() => {
       expect(textarea(container)).not.toBeNull();
     });
@@ -255,27 +257,15 @@ describe("RunComposer", () => {
   });
 
   it("shows the message but hides the provider-key CTA for a non-configuration failure", async () => {
-    const recorder: Recorder = { calls: [] };
     const onOpenModelSettings = vi.fn();
-    const { container } = render(
-      <TransportProvider
-        transport={fakeTransportRejectingRuns(
-          recorder,
-          new Error(
-            JSON.stringify({
-              detail: { code: "internal_error", safe_message: "Server error." },
-            }),
-          ),
-        )}
-      >
-        <RunComposer
-          conversationId="conv-1"
-          disabled={false}
-          placeholder="Send a message…"
-          onOpenModelSettings={onOpenModelSettings}
-        />
-      </TransportProvider>,
-    );
+    const dispatch = vi.fn(async (): Promise<void> => {
+      throw new Error(
+        JSON.stringify({
+          detail: { code: "internal_error", safe_message: "Server error." },
+        }),
+      );
+    });
+    const { container } = renderComposer({ dispatch, onOpenModelSettings });
     await waitFor(() => {
       expect(textarea(container)).not.toBeNull();
     });
@@ -296,42 +286,15 @@ describe("RunComposer", () => {
   });
 
   it("clears the run-create error notice once a later send succeeds", async () => {
-    const recorder: Recorder = { calls: [] };
-    // Reject only the first run-create POST; the retry resolves.
-    let firstPost = true;
-    const transport: Transport = {
-      request: <TRes,>(req: TypedRequest): Promise<TRes> => {
-        recorder.calls.push(req);
-        if (req.method === "POST" && req.path === "/v1/agent/runs") {
-          if (firstPost) {
-            firstPost = false;
-            return Promise.reject(configErrorEnvelope());
-          }
-          return Promise.resolve({ run_id: "run-1" } as unknown as TRes);
-        }
-        return Promise.resolve(payloadFor(req.path) as unknown as TRes);
-      },
-      subscribeServerSentEvents: (
-        _opts: SseSubscribeOptions,
-      ): SseSubscription => ({ close: () => undefined }),
-      getSession: (): Session => ({ bearer: null }),
-      capabilities: (): TransportCapabilities => ({
-        substrate: "desktop-webview",
-        nativeSecretStorage: true,
-        fileSystemAccess: false,
-        clipboardWrite: false,
-        openExternal: false,
-      }),
-    };
-    const { container } = render(
-      <TransportProvider transport={transport}>
-        <RunComposer
-          conversationId="conv-1"
-          disabled={false}
-          placeholder="Send a message…"
-        />
-      </TransportProvider>,
-    );
+    // Reject only the first dispatch (run-create); the retry resolves.
+    let firstSend = true;
+    const dispatch = vi.fn(async (): Promise<void> => {
+      if (firstSend) {
+        firstSend = false;
+        throw configErrorEnvelope();
+      }
+    });
+    const { container } = renderComposer({ dispatch });
     await waitFor(() => {
       expect(textarea(container)).not.toBeNull();
     });

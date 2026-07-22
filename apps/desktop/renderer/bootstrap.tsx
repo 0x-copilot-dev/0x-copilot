@@ -13,7 +13,14 @@ import "@0x-copilot/chat-surface/src/workspace/workspace.css";
 import "@0x-copilot/chat-surface/src/onboarding/onboarding.css";
 import "./desktop.css";
 
-import { StrictMode, useMemo, useState, type ReactElement } from "react";
+import {
+  StrictMode,
+  useCallback,
+  useEffect,
+  useMemo,
+  useState,
+  type ReactElement,
+} from "react";
 import { createRoot } from "react-dom/client";
 
 import {
@@ -29,6 +36,8 @@ import {
   createTier2WorkerFactory,
   registerGenericStructuredDiff,
   useShellShortcuts,
+  type ArtifactRoute,
+  type ConversationId,
   type DeploymentProfile,
   type SettingsSectionSlug,
   type ShellDestinationSlug,
@@ -87,6 +96,23 @@ const DESKTOP_CAPABILITIES = {
 // `team` desktop build eventually needs a real value a preload bridge can
 // supply it here without touching chat-surface.
 const DESKTOP_DEPLOYMENT_PROFILE: DeploymentProfile = "single_user_desktop";
+
+// The active conversation the Run cockpit binds to is DURABLE IDENTITY carried
+// in the Router URL (desktop-run-identity §D1/FR-3). Both the canonical
+// `conversation` route and the deprecated `chat` alias address a conversation;
+// every other route kind (or an empty hash) means "no bound conversation" → a
+// brand-new chat. `null` (not a placeholder id) is the honest empty binding.
+function conversationIdFromRoute(
+  route: ArtifactRoute | null,
+): ConversationId | null {
+  if (
+    route !== null &&
+    (route.kind === "conversation" || route.kind === "chat")
+  ) {
+    return route.conversationId as ConversationId;
+  }
+  return null;
+}
 
 export function App(): ReactElement {
   const router = useMemo(() => new HashRouter(), []);
@@ -178,16 +204,65 @@ function ChatShellForSession(props: ChatShellForSessionProps): ReactElement {
   // now controlled (`open`/`onOpenChange`) and no longer mounts its own
   // `useCommandPaletteHotkey` — exactly one ⌘K listener remains.
   const [paletteOpen, setPaletteOpen] = useState(false);
+  // desktop-run-identity Phase 5b (FR-3/FR-4): the active conversation the Run
+  // cockpit binds to, seeded from the Router URL (deep-link / relaunch) and kept
+  // in sync with it below. `null` = a brand-new chat (no conversation yet — the
+  // cockpit shows its empty composer; the first send creates one). This is the
+  // ONLY conversation-identity state; there is no mount-time self-create.
+  const [activeConversationId, setActiveConversationId] =
+    useState<ConversationId | null>(() =>
+      conversationIdFromRoute(props.router.current()),
+    );
 
   const destinations = useMemo(
     () => destinationsForProfile(DESKTOP_DEPLOYMENT_PROFILE),
     [],
   );
 
+  // Keep the bound conversation in sync with the Router URL — a `conversation`/
+  // `chat` route (deep-link, back/forward, or our own `openConversation`
+  // navigate) binds that conversation and lands the shell on Run.
+  useEffect(() => {
+    const unsubscribe = props.router.subscribe((route) => {
+      if (
+        route !== null &&
+        (route.kind === "conversation" || route.kind === "chat")
+      ) {
+        setActiveConversationId(route.conversationId as ConversationId);
+        setActiveDestination("run");
+        setSettingsActive(false);
+      }
+    });
+    return unsubscribe;
+  }, [props.router]);
+
   const handleNavigate = (slug: ShellDestinationSlug): void => {
     setSettingsActive(false);
     setActiveDestination(slug);
   };
+
+  // Reopen a specific conversation (Chats → Run, or a new chat's first send that
+  // resolved to a real id): bind it, land on Run, and write the durable identity
+  // to the URL. The Router subscription mirrors the same state (idempotent).
+  const openConversation = useCallback(
+    (id: ConversationId): void => {
+      setActiveConversationId(id);
+      setActiveDestination("run");
+      setSettingsActive(false);
+      props.router.navigate({ kind: "conversation", conversationId: id });
+    },
+    [props.router],
+  );
+
+  // Start a NEW chat: clear the bound conversation (so the cockpit shows its
+  // empty composer) and land on Run. No conversation is created here — the first
+  // send does that lazily (idempotency-keyed), then navigates via
+  // `onConversationCreated`.
+  const openNewRun = useCallback((): void => {
+    setActiveConversationId(null);
+    setActiveDestination("run");
+    setSettingsActive(false);
+  }, []);
 
   // PR-6.4: open Settings, optionally focused on a section (undefined → default).
   const handleOpenSettings = (section?: SettingsSectionSlug): void => {
@@ -209,12 +284,10 @@ function ChatShellForSession(props: ChatShellForSessionProps): ReactElement {
   // owner (FR-6.13 is satisfied by the cockpit's own handlers, not by bootstrap).
   const shortcutCallbacks = useMemo<ShellShortcutCallbacks>(
     () => ({
-      // ⌘N — start/open a new run. Honest interim: routes to the Run cockpit
-      // (the front door for starting a run), matching PR-6.4's new-chat path.
-      onNewRun: () => {
-        setSettingsActive(false);
-        setActiveDestination("run");
-      },
+      // ⌘N — start a NEW chat: clears the bound conversation and lands on the
+      // Run cockpit (the front door for starting a run), so the first send
+      // creates a fresh conversation rather than appending to the current one.
+      onNewRun: openNewRun,
       // ⌘K — toggle the palette. A single toggle per press proves single
       // sourcing; a duplicate listener would toggle twice (net no-op).
       onOpenPalette: () => setPaletteOpen((prev) => !prev),
@@ -236,7 +309,7 @@ function ChatShellForSession(props: ChatShellForSessionProps): ReactElement {
         setActiveDestination("activity");
       },
     }),
-    [],
+    [openNewRun],
   );
   useShellShortcuts(shortcutCallbacks);
 
@@ -274,10 +347,18 @@ function ChatShellForSession(props: ChatShellForSessionProps): ReactElement {
         ) : (
           <DestinationOutlet
             destination={activeDestination}
-            // Reopen / open-run / run-skill land on the Run cockpit (the
-            // desktop has no per-conversation run binding yet — honest
-            // interim, matching ⌘N / new-chat above).
+            // The active conversation the cockpit binds to (durable identity
+            // from the Router URL). `null` → a brand-new chat's empty composer.
+            conversationId={activeConversationId}
+            // Plain "show the Run cockpit" navigation (keeps the current
+            // conversation) — Activity's open-run, Skills' run-skill, Chats'
+            // New chat. Dedicated new-chat intents (⌘N / palette) use openNewRun.
             onOpenRun={() => handleNavigate("run")}
+            // Chats → reopen threads the REAL conversation id (navigate to its
+            // Run route); a new chat's first send that resolved to a real id
+            // navigates the same way. Both bind the cockpit onto that id.
+            onOpenConversation={openConversation}
+            onConversationCreated={openConversation}
             // Activity's retention link + Tools' approval-policy note deep-link
             // into the real Settings sections (reachable today, PR-5.9 / 6.4).
             onOpenRetentionSettings={() => handleOpenSettings("privacy")}
@@ -309,7 +390,7 @@ function ChatShellForSession(props: ChatShellForSessionProps): ReactElement {
         onNavigateDestination={handleNavigate}
         onOpenSettings={handleOpenSettings}
         actions={{
-          onNewChat: () => handleNavigate("run"),
+          onNewChat: openNewRun,
           onAddProviderKey: () => handleOpenSettings("provider-keys"),
           onDownloadLocalModel: () => handleOpenSettings("local-models"),
           onConnectTool: () => handleNavigate("connectors"),
