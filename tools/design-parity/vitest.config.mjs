@@ -22,7 +22,11 @@ export default defineConfig({
   },
   test: {
     environment: "jsdom",
-    include: ["lib/render-live.test.tsx", "lib/render-live-login.test.tsx"],
+    include: [
+      "lib/render-live.test.tsx",
+      "lib/render-live-login.test.tsx",
+      "lib/render-live-run-empty.test.tsx",
+    ],
     // Long-ish: pulls the chat-surface barrel through esbuild once.
     testTimeout: 60000,
   },

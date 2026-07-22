@@ -26,11 +26,14 @@ import {
   ProjectsDestination,
   RunDestination,
   SkillsDestination,
+  buildRunCreateBody,
   messageFromError,
   useNotify,
   useTransport,
   type ConnectorsFilterSlug,
   type ProjectSummary,
+  type RunEmptyComposerCtx,
+  type RunStartRequest,
 } from "@0x-copilot/chat-surface";
 import type { Transport } from "@0x-copilot/chat-transport";
 import type {
@@ -61,9 +64,12 @@ import type {
 // bundle into the renderer). The connect flow is owned by Electron MAIN
 // (loopback binding + system browser); the renderer only asks by slug.
 import { CONNECTOR_CHANNELS } from "../main/connectors/channels";
-// Composer parity: the desktop Run cockpit's in-chat composer (shared
-// AssistantComposer bound to desktop substrate ports). Same-app import, allowed.
+// Composer parity: the desktop Run cockpit's in-chat composer (steer an active
+// run) + empty-state composer (the design's "What should we run first?" surface
+// — start the first run). Both share `AssistantComposer` bound to desktop
+// substrate ports. Same-app imports, allowed.
 import { RunComposer } from "./composer/RunComposer";
+import { RunEmptyComposer } from "./composer/RunEmptyComposer";
 
 // ---------------------------------------------------------------------------
 // Shared load hook — drives the 4-state machine (loading / ok / empty / error)
@@ -650,15 +656,33 @@ export function RunBinder({
 
   const activeConversationId = conversationId ?? fallbackConversationId;
   const handleStartRun = useCallback(
-    async (goal: string): Promise<string | null> => {
+    async (request: RunStartRequest): Promise<string | null> => {
+      // One body builder (shared with the shell default + the web binder): a
+      // bare `{ goal }` stays "conversation + goal only"; the rich composer adds
+      // model / attachments / web-search / connector scopes. Identity is derived
+      // server-side from the verified session, never sent by the client.
       const run = await transport.request<{ readonly run_id: string }>({
         method: "POST",
         path: "/v1/agent/runs",
-        body: { conversation_id: activeConversationId, user_input: goal },
+        body: buildRunCreateBody(activeConversationId, request),
       });
       return run.run_id ?? null;
     },
     [transport, activeConversationId],
+  );
+
+  // Empty-state composer (FR-3.25): the design's "What should we run first?"
+  // rich composer, mounted when there is no active run. Shares the in-chat
+  // composer's model/skill/tool bindings; send binds the fresh run live.
+  const renderEmptyComposer = useCallback(
+    (ctx: RunEmptyComposerCtx) => (
+      <RunEmptyComposer
+        ctx={ctx}
+        onShowConnectors={onOpenConnectors}
+        onOpenSkills={onOpenSkills}
+      />
+    ),
+    [onOpenConnectors, onOpenSkills],
   );
 
   // Composer parity (PRD: desktop-composer-parity): mount the shared
@@ -686,6 +710,7 @@ export function RunBinder({
       modelReady={modelReady}
       onOpenModelSettings={onOpenModelSettings}
       renderComposer={renderComposer}
+      renderEmptyComposer={renderEmptyComposer}
     />
   );
 }
