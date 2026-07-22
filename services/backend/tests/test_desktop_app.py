@@ -19,6 +19,7 @@ from fastapi.testclient import TestClient
 from backend_app.adapter_registry.store import PostgresAdapterRegistryStore
 from backend_app.api_keys.store import PostgresApiKeyStore
 from backend_app.app import create_app
+from backend_app.connectors.store import PostgresConnectorsStore
 from backend_app.deployment_profile import DeploymentProfileLoader
 from backend_app.desktop_app import DesktopComposer, DesktopEnvironmentError
 from backend_app.identity import SessionService
@@ -167,6 +168,7 @@ class TestDesktopKwargsWiring(DesktopEnvMixin):
         ("settings_store", PostgresSettingsStore),
         ("provider_api_keys_store", PostgresProviderApiKeyStore),
         ("projects_store", PostgresProjectsStore),
+        ("connectors_store", PostgresConnectorsStore),
     )
 
     def _kwargs(self, monkeypatch: pytest.MonkeyPatch) -> dict[str, object]:
