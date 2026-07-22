@@ -16,7 +16,7 @@ import type { SettingsSurfaceController } from "./SettingsSurface";
 
 const BASE_VALUE: ModelBehaviorValue = {
   defaultModel: null,
-  reasoningDepth: "auto",
+  reasoningDepth: null,
   webAccess: false,
   approvalPolicy: { readOnly: "auto", write: "require", danger: "require" },
   spend: { monthlyCapUsd: null, pauseAtCap: false },
@@ -151,12 +151,21 @@ describe("<ModelBehaviorPage>", () => {
       />,
     );
     const select = getSelect("reasoning-depth-select");
+    // Auto maps to the empty DOM value (null sentinel); the rest are the
+    // canonical runtime depths under the design's Quick/Standard/Deep labels.
     expect(
       Array.from(select.querySelectorAll("option")).map((o) => o.value),
-    ).toEqual(["auto", "quick", "standard", "deep"]);
+    ).toEqual(["", "fast", "balanced", "deep"]);
+    expect(
+      Array.from(select.querySelectorAll("option")).map((o) => o.textContent),
+    ).toEqual(["Auto", "Quick", "Standard", "Deep"]);
 
     fireEvent.change(select, { target: { value: "deep" } });
     expect(onChange).toHaveBeenCalledWith({ reasoningDepth: "deep" });
+
+    // Selecting Auto (empty value) reports null.
+    fireEvent.change(select, { target: { value: "" } });
+    expect(onChange).toHaveBeenCalledWith({ reasoningDepth: null });
   });
 
   it("reports web-access toggles", () => {

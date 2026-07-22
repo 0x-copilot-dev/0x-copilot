@@ -9,12 +9,26 @@ so a real run seals and enqueues.
 
 from __future__ import annotations
 
-from runtime_api.schemas import CreateRunRequest
+from runtime_api.schemas import (
+    CreateRunRequest,
+    WorkspaceBehaviorOverrides,
+    WorkspaceDefaultsRecord,
+)
 from tests.unit.agent_runtime.api.test_run_coordinator_byok import (
     _ORG_ID,
     _USER_ID,
     ByokCoordinatorMixin,
 )
+
+
+async def _seed_web_access_default(store, *, value: bool | None) -> None:
+    """Persist a workspace ``web_access_default`` for the BYOK harness org."""
+    await store.upsert_workspace_defaults(
+        record=WorkspaceDefaultsRecord(
+            org_id=_ORG_ID,
+            behavior_overrides=WorkspaceBehaviorOverrides(web_access_default=value),
+        )
+    )
 
 
 def _run_request(
@@ -32,14 +46,17 @@ def _run_request(
     return CreateRunRequest(**kwargs)
 
 
-def test_create_run_request_web_search_defaults_true() -> None:
+def test_create_run_request_web_search_omitted_is_none() -> None:
+    # D3 tri-state: an omitted per-turn flag reads as None at the schema so the
+    # run coordinator can distinguish "no pick" (seed the workspace default,
+    # else coalesce to always-on True) from an explicit True/False.
     request = CreateRunRequest(
         conversation_id="conv_1",
         org_id="org_1",
         user_id="user_1",
         user_input="hi",
     )
-    assert request.web_search_enabled is True
+    assert request.web_search_enabled is None
 
 
 class TestWebSearchToggleThreadsToContext(ByokCoordinatorMixin):
@@ -54,6 +71,60 @@ class TestWebSearchToggleThreadsToContext(ByokCoordinatorMixin):
 
     async def test_disabled_flag_flows_onto_sealed_context(self) -> None:
         run_coordinator, store, conversation_id = await self._build(with_key=True)
+
+        await run_coordinator.create_run(
+            _run_request(conversation_id, web_search_enabled=False)
+        )
+
+        assert store.run_commands[0].runtime_context.web_search_enabled is False
+
+
+class TestWebAccessDefaultSeeding(ByokCoordinatorMixin):
+    """D3 — an omitted per-turn flag is seeded from the workspace default."""
+
+    async def test_omitted_seeds_persisted_false(self) -> None:
+        run_coordinator, store, conversation_id = await self._build(with_key=True)
+        await _seed_web_access_default(store, value=False)
+
+        await run_coordinator.create_run(
+            _run_request(conversation_id, web_search_enabled=None)
+        )
+
+        assert store.run_commands[0].runtime_context.web_search_enabled is False
+
+    async def test_omitted_seeds_persisted_true(self) -> None:
+        run_coordinator, store, conversation_id = await self._build(with_key=True)
+        await _seed_web_access_default(store, value=True)
+
+        await run_coordinator.create_run(
+            _run_request(conversation_id, web_search_enabled=None)
+        )
+
+        assert store.run_commands[0].runtime_context.web_search_enabled is True
+
+    async def test_omitted_with_unset_default_coalesces_to_true(self) -> None:
+        run_coordinator, store, conversation_id = await self._build(with_key=True)
+        await _seed_web_access_default(store, value=None)
+
+        await run_coordinator.create_run(
+            _run_request(conversation_id, web_search_enabled=None)
+        )
+
+        assert store.run_commands[0].runtime_context.web_search_enabled is True
+
+    async def test_explicit_true_overrides_persisted_false(self) -> None:
+        run_coordinator, store, conversation_id = await self._build(with_key=True)
+        await _seed_web_access_default(store, value=False)
+
+        await run_coordinator.create_run(
+            _run_request(conversation_id, web_search_enabled=True)
+        )
+
+        assert store.run_commands[0].runtime_context.web_search_enabled is True
+
+    async def test_explicit_false_overrides_persisted_true(self) -> None:
+        run_coordinator, store, conversation_id = await self._build(with_key=True)
+        await _seed_web_access_default(store, value=True)
 
         await run_coordinator.create_run(
             _run_request(conversation_id, web_search_enabled=False)
