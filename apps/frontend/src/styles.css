@@ -7370,13 +7370,17 @@ p {
   border-top: 1px solid var(--color-border);
 }
 
+/* Layout only — type + muted color come from the shared .ui-section-label
+ * recipe (design-system, imported on web + desktop). Kept byte-parallel with
+ * packages/chat-surface/src/composer/composer.css. The group-head rule below
+ * was previously MISSING from this web copy, so "Your keys"/"Local · on-device"
+ * rendered unstyled on web; the recipe now supplies its type and this rule its
+ * padding. */
+.atlas-model-pill__group-head {
+  padding: 8px 9px 4px;
+}
 .atlas-model-pill__custom-label {
   display: block;
-  font-size: var(--font-size-2xs);
-  font-weight: var(--font-weight-medium);
-  letter-spacing: 0.06em;
-  text-transform: uppercase;
-  color: var(--color-text-muted);
   margin-bottom: 6px;
 }
 
