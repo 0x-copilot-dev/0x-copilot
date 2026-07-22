@@ -1,4 +1,4 @@
-# Design-parity report — `default`
+# Design-parity report — chats · `default`
 
 Design baseline (source of truth) vs live app, by computed style.
 

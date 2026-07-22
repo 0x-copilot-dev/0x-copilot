@@ -8,16 +8,17 @@
  * WHICH component is "the live Projects surface" is not one answer — the two
  * hosts diverge, and that divergence is itself a finding:
  *
- *   • WEB (apps/frontend/src/features/projects/ProjectsRoute.tsx:840-947)
+ *   • WEB (apps/frontend/src/features/projects/ProjectsRoute.tsx:843-844)
  *     renders its OWN host-side scaffold for the un-focused list
- *     (`.projects-grid3` / `.projects-card`, CSS at ProjectsRoute.tsx:961-1050).
- *     `<ProjectsDestination>` is mounted ONLY when a project is focused
- *     (ProjectsRoute.tsx:822-829) purely to host the `renderDetail` slot.
- *     The header comment states the reason at ProjectsRoute.tsx:19-23:
- *     the card name in the package grid is an `<ItemLink kind="project">`
- *     whose resolver used to render the literal label "Project".
+ *     (`.projects-grid3` / `.projects-card`, scoped <style> string at
+ *     ProjectsRoute.tsx:963-1050). `<ProjectsDestination>` is mounted ONLY
+ *     when a project is focused (ProjectsRoute.tsx:824-828) purely to host the
+ *     `renderDetail` slot. The header comment states the reason at
+ *     ProjectsRoute.tsx:20-27: the card name in the package grid is an
+ *     `<ItemLink kind="project">` whose resolver used to render the literal
+ *     label "Project".
  *
- *   • DESKTOP (apps/desktop/renderer/destinationBinders.tsx:563-568) mounts
+ *   • DESKTOP (apps/desktop/renderer/destinationBinders.tsx:567) mounts
  *     `<ProjectsDestination items={result} onRetry={retry} />` — the
  *     chat-surface CardGrid — with NO detail slot, no filter/create/star
  *     callbacks. Desktop therefore has no project detail view at all.
@@ -31,10 +32,11 @@
  *                             extra, so the comparator can diff the other host
  *                             against the same design anchors.
  *
- * Fixtures mirror design-kit/app-v3/copilot-data.jsx PROJECTS (3 rows:
- * Launch Week 3 chats/12 files, Treasury 3/20, Growth 2/7) and the CHATS rows
- * belonging to the first project, so row counts + string lengths match the
- * design side (computed styles depend on real content).
+ * Fixtures mirror design-kit/app-v3/copilot-data.jsx:797-821 PROJECTS (3 rows:
+ * Launch Week 3 chats/12 files, Treasury 3/20, Growth 2/7 — names, descriptions
+ * and counts copied verbatim) and the CHATS rows with `project: "launch"`
+ * (copilot-data.jsx:724-794), so row counts + string lengths match the design
+ * side (computed styles depend on real content).
  *
  * Run: node_modules/.bin/vitest run --config tools/design-parity/vitest.config.mjs \
  *        lib/render-live-projects.test.tsx
@@ -380,7 +382,7 @@ it("renders the live Project detail (ProjectDetailView, solo profile) → detail
 
 // ===========================================================================
 // default-chatsurface — the DESKTOP host's list (ProjectsDestination CardGrid)
-// (apps/desktop/renderer/destinationBinders.tsx:563-568). Extra state: the
+// (apps/desktop/renderer/destinationBinders.tsx:567). Extra state: the
 // same design anchors can be diffed against the other host.
 // ===========================================================================
 it("renders the live ProjectsDestination card grid (desktop host) → default-chatsurface.html", async () => {
