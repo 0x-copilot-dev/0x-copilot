@@ -1087,23 +1087,36 @@ class PostgresRuntimeApiStore:
         org_id: str,
         conversation_id: str,
         limit: int,
+        before_created_at: datetime | None = None,
+        before_message_id: str | None = None,
         include_deleted: bool = False,
     ) -> Sequence[MessageRecord]:
-        """Return messages ordered by creation time."""
+        """Return the most-recent ``limit`` messages older than the keyset, ASC.
+
+        Orders by the composite keyset ``(created_at, id)`` DESC (``id`` is the
+        message-id column) so ties are stable, takes the newest ``limit``, then
+        reverses to ascending. ``id`` is the persisted ``message_id`` column.
+        """
 
         deleted_filter = "" if include_deleted else "AND deleted_at IS NULL"
+        params: list[object] = [org_id, conversation_id]
+        keyset_filter = ""
+        if before_created_at is not None and before_message_id is not None:
+            keyset_filter = "AND (created_at, id) < (%s, %s)"
+            params.extend([before_created_at, before_message_id])
+        params.append(limit)
         async with self._tenant_connection(org_id=org_id) as conn:
             cur = await conn.execute(
                 f"""
                 SELECT * FROM agent_messages
-                WHERE org_id = %s AND conversation_id = %s {deleted_filter}
-                ORDER BY created_at ASC
+                WHERE org_id = %s AND conversation_id = %s {deleted_filter} {keyset_filter}
+                ORDER BY created_at DESC, id DESC
                 LIMIT %s
                 """,
-                (org_id, conversation_id, limit),
+                params,
             )
             rows = await cur.fetchall()
-        return tuple(self._message_record(row) for row in rows)
+        return tuple(self._message_record(row) for row in reversed(rows))
 
     async def append_message(self, message: MessageRecord) -> MessageRecord:
         """Append a runtime-created message."""

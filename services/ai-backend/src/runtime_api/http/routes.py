@@ -153,15 +153,21 @@ class RuntimeApiRoutes:
         org_id: str | None = Query(None, min_length=1),
         user_id: str | None = Query(None, min_length=1),
         limit: int = Query(50, ge=1, le=200),
+        before: str | None = Query(None),
         include_deleted: bool = False,
     ) -> MessageListResponse:
-        """Return paginated messages for a conversation."""
+        """Return the most-recent window of messages, ASC, with a keyset cursor.
+
+        ``before`` is an opaque cursor (from a prior response's ``next_cursor``)
+        that pages backwards to strictly-older messages.
+        """
         org_id, user_id = cls.scoped_identity(request, org_id=org_id, user_id=user_id)
         return await cls.cqs(request).list_messages(
             org_id=org_id,
             user_id=user_id,
             conversation_id=conversation_id,
             limit=limit,
+            before=before,
             include_deleted=include_deleted,
         )
 

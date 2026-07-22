@@ -200,6 +200,67 @@ class TestMessageOrderingConformance(_CrudSeedMixin):
         assert texts == ["msg-0", "msg-1", "msg-2"]
 
 
+class TestMessageKeysetWindowConformance(_CrudSeedMixin):
+    """list_messages returns the most-recent window (ASC) with keyset paging.
+
+    AD-12 / NFR-7: a long conversation's newest turns must be reachable. The
+    port returns the TAIL (newest ``limit``), reversed to ascending, and pages
+    backwards through the ``(before_created_at, before_message_id)`` keyset.
+    """
+
+    async def _seed(self, store, conversation, *, count):
+        base = datetime(2026, 1, 1, tzinfo=timezone.utc)
+        for offset in range(count):
+            await store.append_message(
+                MessageRecord(
+                    conversation_id=conversation.conversation_id,
+                    org_id=self._ORG,
+                    role=MessageRole.USER,
+                    content_text=f"msg-{offset:02d}",
+                    created_at=base + timedelta(seconds=offset),
+                )
+            )
+
+    async def test_returns_newest_window_ascending_when_truncated(self, store) -> None:
+        conversation = await self._new_conversation(store)
+        await self._seed(store, conversation, count=10)
+        page = await store.list_messages(
+            org_id=self._ORG,
+            conversation_id=conversation.conversation_id,
+            limit=3,
+        )
+        texts = [m.content_text for m in page]
+        # The TAIL (newest three), not the head, in ascending order.
+        assert texts == ["msg-07", "msg-08", "msg-09"]
+        # Ascending: created_at is non-decreasing and the last row is newest.
+        created = [m.created_at for m in page]
+        assert created == sorted(created)
+        assert page[-1].content_text == "msg-09"
+
+    async def test_before_keyset_returns_strictly_older_page_ascending(
+        self, store
+    ) -> None:
+        conversation = await self._new_conversation(store)
+        await self._seed(store, conversation, count=10)
+        first = await store.list_messages(
+            org_id=self._ORG,
+            conversation_id=conversation.conversation_id,
+            limit=3,
+        )
+        oldest = first[0]  # ASC → oldest of the newest window (msg-07)
+        older = await store.list_messages(
+            org_id=self._ORG,
+            conversation_id=conversation.conversation_id,
+            limit=3,
+            before_created_at=oldest.created_at,
+            before_message_id=oldest.message_id,
+        )
+        older_texts = [m.content_text for m in older]
+        # Strictly older than the prior window's oldest, still ascending.
+        assert older_texts == ["msg-04", "msg-05", "msg-06"]
+        assert all(m.created_at < oldest.created_at for m in older)
+
+
 class TestEventOrderingConformance(_CrudSeedMixin):
     """Event sequence is monotonic, contiguous, and cursor-replayable."""
 

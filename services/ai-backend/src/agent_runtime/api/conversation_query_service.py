@@ -8,6 +8,9 @@ state; returns typed Pydantic responses for HTTP routes and the SSE adapter.
 
 from __future__ import annotations
 
+import base64
+from datetime import datetime
+
 from agent_runtime.api.constants import Messages, Values
 from agent_runtime.api.model_catalog import ModelCatalog
 from agent_runtime.api.model_enablement import ModelEnablementResolver
@@ -32,6 +35,51 @@ from runtime_api.schemas import (
     RuntimeEventReplayResponse,
 )
 from starlette import status
+
+
+class MessageCursor:
+    """Opaque keyset cursor codec for message-history pagination.
+
+    Encodes the ``(created_at, message_id)`` keyset of the OLDEST message in a
+    returned page so a follow-up request can fetch strictly-older messages. The
+    query service owns encode/decode; the persistence port receives the DECODED
+    keyset so the adapters never re-parse the token.
+
+    ``decode`` is deliberately tolerant: a malformed or empty token is treated
+    as "no cursor" (returns ``None``) so a bad client value degrades to the
+    most-recent window rather than raising a 500.
+    """
+
+    _SEPARATOR = "|"
+
+    @staticmethod
+    def encode(created_at: datetime, message_id: str) -> str:
+        """Return a base64url token over ``f"{created_at.isoformat()}|{message_id}"``."""
+
+        raw = f"{created_at.isoformat()}{MessageCursor._SEPARATOR}{message_id}"
+        return base64.urlsafe_b64encode(raw.encode("utf-8")).decode("ascii")
+
+    @staticmethod
+    def decode(token: str | None) -> tuple[datetime, str] | None:
+        """Decode a cursor to ``(created_at, message_id)``, or ``None`` if malformed.
+
+        ``UnicodeError`` and ``binascii.Error`` are both ``ValueError``
+        subclasses, so a single ``except ValueError`` covers a non-ascii token,
+        bad base64 padding, and an unparseable timestamp.
+        """
+
+        if not token or not token.strip():
+            return None
+        try:
+            raw = base64.urlsafe_b64decode(token.encode("ascii")).decode("utf-8")
+            created_at_iso, separator, message_id = raw.partition(
+                MessageCursor._SEPARATOR
+            )
+            if not separator or not message_id:
+                return None
+            return datetime.fromisoformat(created_at_iso), message_id
+        except ValueError:
+            return None
 
 
 class ConversationQueryService:
@@ -167,9 +215,19 @@ class ConversationQueryService:
         user_id: str,
         conversation_id: str,
         limit: int = Values.DEFAULT_MESSAGE_LIMIT,
+        before: str | None = None,
         include_deleted: bool = False,
     ) -> MessageListResponse:
-        """Return ordered message history, gated on a successful conversation scope check."""
+        """Return the most-recent window of message history, ASC, with a keyset cursor.
+
+        Gated on a successful conversation scope check. The returned
+        ``messages`` array stays oldest-first (ASC) so transcript consumers can
+        read it in array order. ``before`` is an opaque :class:`MessageCursor`;
+        when present it selects the page strictly older than its keyset, and a
+        malformed/empty token is tolerated as "no cursor" (most-recent window).
+        ``next_cursor`` encodes the OLDEST returned message's keyset when older
+        messages remain (``has_more``), else ``None``.
+        """
 
         await self._conversation_for_scope(
             org_id=org_id,
@@ -177,16 +235,28 @@ class ConversationQueryService:
             conversation_id=conversation_id,
         )
         bounded_limit = min(max(1, limit), Values.MAX_MESSAGE_LIMIT)
+        keyset = MessageCursor.decode(before)
         records = await self._persistence.list_messages(
             org_id=org_id,
             conversation_id=conversation_id,
             limit=bounded_limit,
+            before_created_at=keyset[0] if keyset is not None else None,
+            before_message_id=keyset[1] if keyset is not None else None,
             include_deleted=include_deleted,
+        )
+        has_more = len(records) == bounded_limit
+        # ``records`` is ASC, so ``records[0]`` is the oldest in this window; its
+        # keyset is what a follow-up ``before`` request pages backwards from.
+        next_cursor = (
+            MessageCursor.encode(records[0].created_at, records[0].message_id)
+            if has_more and records
+            else None
         )
         return MessageListResponse(
             conversation_id=conversation_id,
             messages=tuple(record.to_response() for record in records),
-            has_more=len(records) == bounded_limit,
+            next_cursor=next_cursor,
+            has_more=has_more,
         )
 
     async def list_runs_for_conversation(

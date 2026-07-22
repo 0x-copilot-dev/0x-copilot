@@ -133,9 +133,19 @@ class PersistencePort(Protocol):
         org_id: str,
         conversation_id: str,
         limit: int,
+        before_created_at: datetime | None = None,
+        before_message_id: str | None = None,
         include_deleted: bool = False,
     ) -> Sequence[MessageRecord]:
-        """Return ordered conversation messages."""
+        """Return up to ``limit`` messages OLDER than the keyset, in ASC order.
+
+        The keyset is the composite ``(before_created_at, before_message_id)``.
+        When it is given, only records with
+        ``(created_at, message_id) < (before_created_at, before_message_id)``
+        are considered; when it is ``None``, the most-recent ``limit`` messages
+        are returned. Either way the result is the newest ``limit`` of the
+        eligible rows, reversed to ascending (oldest-first) before returning.
+        """
 
     async def append_message(self, message: MessageRecord) -> MessageRecord:
         """Append a message created outside the initial API run transaction."""

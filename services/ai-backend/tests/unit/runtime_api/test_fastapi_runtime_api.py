@@ -12,6 +12,8 @@ from runtime_api.schemas import (
     AgentRunStatus,
     ApprovalRequestRecord,
     CreateRunRequest,
+    MessageRecord,
+    MessageRole,
     RuntimeApiEventType,
 )
 from agent_runtime.api.events import RuntimeEventProducer
@@ -137,6 +139,95 @@ class FastApiRuntimeApiTestMixin:
         ):
             chunks.append(chunk)
         return "".join(chunks)
+
+
+class TestMessageHistoryWindow(FastApiRuntimeApiTestMixin):
+    """GET /messages returns the most-recent window (ASC) with a keyset cursor.
+
+    AD-12 / NFR-7: past-the-limit newest turns were previously unreachable
+    (ORDER BY created_at ASC LIMIT returned the OLDEST N). The window is now the
+    tail; the response array stays ASC so transcript consumers are unaffected.
+    """
+
+    async def _seed_messages(self, store, conversation_id: str, *, count: int) -> None:
+        base = datetime(2026, 1, 1, tzinfo=timezone.utc)
+        for offset in range(count):
+            await store.append_message(
+                MessageRecord(
+                    conversation_id=conversation_id,
+                    org_id=self.Values.ORG_ID,
+                    role=MessageRole.USER,
+                    content_text=f"msg-{offset:02d}",
+                    created_at=base + timedelta(seconds=offset),
+                )
+            )
+
+    def _get_messages(self, client, conversation_id: str, **params):
+        return client.get(
+            f"/v1/agent/conversations/{conversation_id}/messages",
+            params={
+                "org_id": self.Values.ORG_ID,
+                "user_id": self.Values.USER_ID,
+                **params,
+            },
+        )
+
+    async def test_returns_newest_window_ascending_with_cursor(self) -> None:
+        client, store = self.create_client()
+        conversation_id = (await self.create_conversation(client))["conversation_id"]
+        await self._seed_messages(store, conversation_id, count=10)
+
+        response = self._get_messages(client, conversation_id, limit=3)
+        assert response.status_code == 200
+        body = response.json()
+        texts = [m["content_text"] for m in body["messages"]]
+        # The newest three (the tail), ascending — NOT the oldest three.
+        assert texts == ["msg-07", "msg-08", "msg-09"]
+        assert body["has_more"] is True
+        assert body["next_cursor"] is not None
+
+    async def test_next_cursor_is_none_when_not_truncated(self) -> None:
+        client, store = self.create_client()
+        conversation_id = (await self.create_conversation(client))["conversation_id"]
+        await self._seed_messages(store, conversation_id, count=3)
+
+        body = self._get_messages(client, conversation_id, limit=50).json()
+        assert [m["content_text"] for m in body["messages"]] == [
+            "msg-00",
+            "msg-01",
+            "msg-02",
+        ]
+        assert body["has_more"] is False
+        assert body["next_cursor"] is None
+
+    async def test_cursor_round_trip_returns_strictly_older_page(self) -> None:
+        client, store = self.create_client()
+        conversation_id = (await self.create_conversation(client))["conversation_id"]
+        await self._seed_messages(store, conversation_id, count=10)
+
+        first = self._get_messages(client, conversation_id, limit=3).json()
+        cursor = first["next_cursor"]
+        assert cursor is not None
+
+        older = self._get_messages(
+            client, conversation_id, limit=3, before=cursor
+        ).json()
+        older_texts = [m["content_text"] for m in older["messages"]]
+        # The page strictly older than msg-07, still ascending.
+        assert older_texts == ["msg-04", "msg-05", "msg-06"]
+
+    async def test_malformed_cursor_falls_back_to_most_recent_window(self) -> None:
+        client, store = self.create_client()
+        conversation_id = (await self.create_conversation(client))["conversation_id"]
+        await self._seed_messages(store, conversation_id, count=10)
+
+        response = self._get_messages(
+            client, conversation_id, limit=3, before="!!!not-a-cursor!!!"
+        )
+        # A bad cursor degrades to the most-recent window — never a 500.
+        assert response.status_code == 200
+        texts = [m["content_text"] for m in response.json()["messages"]]
+        assert texts == ["msg-07", "msg-08", "msg-09"]
 
 
 class TestFastApiRuntimeApi(FastApiRuntimeApiTestMixin):
