@@ -18,7 +18,7 @@ Covers:
   primitives) and RLS session-var stamping, mirroring
   ``tests/test_projects_store_selection.py`` (PR #182).
 * **Migration chain (FR-I3.1)** — the connectors DDL is in the versioned
-  migration chain (``0043_connectors``), not just module-local schema.
+  migration chain (``0044_connectors``), not just module-local schema.
 
 Live-Postgres SQL execution is DEFERRED to PRD-J J2 — these tests drive
 the adapter's Python paths against a fake psycopg pool.
@@ -220,19 +220,19 @@ class TestStoreSelection:
 class TestMigrationChain:
     """FR-I3.1 — connectors DDL lives in the versioned migration chain."""
 
-    def test_0043_connectors_is_in_the_manifest(self) -> None:
-        assert "0043_connectors" in MigrationRunner.expected_manifest()
+    def test_0044_connectors_is_in_the_manifest(self) -> None:
+        assert "0044_connectors" in MigrationRunner.expected_manifest()
 
     def test_0043_creates_both_tables_and_has_rollback(self) -> None:
         migrations_dir = MigrationRunner.migrations_dir()
-        up = (migrations_dir / "0043_connectors.sql").read_text()
+        up = (migrations_dir / "0044_connectors.sql").read_text()
         assert "CREATE TABLE IF NOT EXISTS connectors" in up
         assert "CREATE TABLE IF NOT EXISTS connector_audit_events" in up
         # Chain columns + RLS from day one.
         for chain_col in ("seq", "prev_hash", "signature", "key_version"):
             assert chain_col in up
         assert "ENABLE ROW LEVEL SECURITY" in up
-        down = (migrations_dir / "0043_connectors.rollback.sql").read_text()
+        down = (migrations_dir / "0044_connectors.rollback.sql").read_text()
         assert "DROP TABLE IF EXISTS connector_audit_events" in down
         assert "DROP TABLE IF EXISTS connectors" in down
 

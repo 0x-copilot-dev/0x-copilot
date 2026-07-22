@@ -428,7 +428,7 @@ class InMemoryConnectorsStore:
 #
 # Durable connectors store implementing the same :class:`ConnectorsStore`
 # Protocol as :class:`InMemoryConnectorsStore`, against the DDL in
-# ``schema.sql`` (migration ``0043_connectors``). Selected in
+# ``schema.sql`` (migration ``0044_connectors``). Selected in
 # ``desktop_app.py`` alongside the other Postgres adapters (the in-memory
 # store stays the default for tests/dev).
 #
