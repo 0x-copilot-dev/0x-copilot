@@ -302,12 +302,18 @@ function Row({
         <div className="atlas-connector-row__title">
           <span className="atlas-connector-row__name">{row.display_name}</span>
           {isDisconnected && (
-            <span className="atlas-connector-row__badge" aria-hidden="true">
+            <span
+              className="atlas-connector-row__badge ui-section-label"
+              aria-hidden="true"
+            >
               Not connected
             </span>
           )}
           {isWorkspaceOff && (
-            <span className="atlas-connector-row__badge" aria-hidden="true">
+            <span
+              className="atlas-connector-row__badge ui-section-label"
+              aria-hidden="true"
+            >
               Off · Workspace
             </span>
           )}

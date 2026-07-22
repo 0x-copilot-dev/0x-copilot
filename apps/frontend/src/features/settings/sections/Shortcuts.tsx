@@ -128,7 +128,9 @@ export function Shortcuts(): ReactElement {
         }
         return (
           <Card key={category} className="me-shortcuts-card">
-            <h3 className="me-shortcuts-category">{category}</h3>
+            <h3 className="me-shortcuts-category ui-section-label">
+              {category}
+            </h3>
             <ul className="me-shortcuts-list">
               {rows.map((entry) => {
                 const override = overrides[entry.id];

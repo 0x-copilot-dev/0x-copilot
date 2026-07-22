@@ -459,7 +459,7 @@
 .atlas-model-pill__head {
   font-size: var(--font-size-2xs);
   font-weight: var(--font-weight-medium);
-  letter-spacing: 0.06em;
+  letter-spacing: var(--tracking-label);
   text-transform: uppercase;
   color: var(--color-text-muted);
   padding: 6px 8px 4px;
@@ -661,6 +661,7 @@
 .atlas-model-pill__row > strong {
   font-size: var(--font-size-md);
   font-weight: var(--font-weight-semibold);
+  letter-spacing: var(--tracking-normal);
   line-height: var(--line-height-snug);
 }
 
@@ -676,7 +677,7 @@
   border-radius: 999px;
   background: color-mix(in oklab, var(--color-accent) 16%, transparent);
   color: var(--color-accent);
-  letter-spacing: 0.04em;
+  letter-spacing: var(--tracking-label);
   text-transform: lowercase;
 }
 

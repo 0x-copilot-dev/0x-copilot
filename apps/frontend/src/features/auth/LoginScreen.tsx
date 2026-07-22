@@ -513,7 +513,7 @@ function PickView({
           />
         )}
 
-        <div className="loginx-divider" role="separator">
+        <div className="loginx-divider ui-mono-caps" role="separator">
           <span>or</span>
         </div>
 

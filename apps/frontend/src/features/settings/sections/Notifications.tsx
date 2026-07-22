@@ -105,7 +105,7 @@ export function Notifications(): ReactElement {
               <span
                 key={channel}
                 role="columnheader"
-                className="me-notifications-grid__channel"
+                className="me-notifications-grid__channel ui-section-label"
               >
                 {CHANNEL_LABELS[channel]}
               </span>

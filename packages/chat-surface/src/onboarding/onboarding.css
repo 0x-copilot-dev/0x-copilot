@@ -110,9 +110,11 @@
   margin: 0;
   font-family: var(--font-display);
   font-weight: var(--font-weight-semibold);
-  font-size: 23px; /* design-exact; off the type ladder (2xl is 22.4px) */
+  font-size: var(
+    --font-size-2xl
+  ); /* was 23px; converged to the 2xl token (22.4px) */
   line-height: var(--line-height-tight); /* 1.2 */
-  letter-spacing: -0.015em; /* documented literal — tracking is not tokenized */
+  letter-spacing: -0.015em; /* documented literal — no matching tracking token */
   color: var(--color-text);
 }
 
@@ -569,7 +571,9 @@
   border-radius: var(--radius-full);
   background: none;
   font-family: var(--font-mono);
-  font-size: 10px; /* design-exact; off the type ladder */
+  font-size: var(
+    --font-size-mono-10
+  ); /* 10px — canonical small-mono pill token */
   line-height: 1;
   color: var(--color-text-strong); /* --tx2 */
 }
@@ -585,5 +589,5 @@
 
 .fr-wchip__addr {
   color: var(--color-text);
-  letter-spacing: 0.01em;
+  letter-spacing: var(--tracking-caption);
 }

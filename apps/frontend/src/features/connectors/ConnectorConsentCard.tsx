@@ -15,7 +15,7 @@ export function ConnectorSuggestionCard({
 }): ReactElement {
   return (
     <Card className="connector-suggestion-card">
-      <span className="app-eyebrow">Connectors that could help</span>
+      <span className="app-eyebrow ui-eyebrow">Connectors that could help</span>
       <div className="connector-suggestion-card__list">
         {servers.map((server) => (
           <div

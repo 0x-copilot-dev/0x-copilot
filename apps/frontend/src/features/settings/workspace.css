@@ -14,7 +14,7 @@
   color: var(--color-text-subtle);
   font-size: var(--font-size-2xs);
   font-weight: var(--font-weight-semibold);
-  letter-spacing: 0.06em;
+  letter-spacing: var(--tracking-label);
   margin-top: var(--space-md);
   padding: 0 var(--space-md);
   text-transform: uppercase;
@@ -58,7 +58,7 @@
   color: var(--color-text-subtle);
   font-size: var(--font-size-2xs);
   font-weight: var(--font-weight-semibold);
-  letter-spacing: 0.06em;
+  letter-spacing: var(--tracking-label);
   text-transform: uppercase;
 }
 
@@ -95,7 +95,7 @@
   color: var(--color-text-subtle);
   font-size: var(--font-size-2xs);
   font-weight: var(--font-weight-semibold);
-  letter-spacing: 0.06em;
+  letter-spacing: var(--tracking-label);
   padding: 0 var(--space-xs);
   text-transform: uppercase;
 }
@@ -209,7 +209,7 @@
   color: var(--color-text-subtle);
   font-size: var(--font-size-2xs);
   font-weight: var(--font-weight-semibold);
-  letter-spacing: 0.06em;
+  letter-spacing: var(--tracking-label);
   text-transform: uppercase;
 }
 
