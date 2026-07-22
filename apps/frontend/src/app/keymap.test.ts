@@ -2,6 +2,19 @@ import { renderHook } from "@testing-library/react";
 import { describe, expect, it, vi } from "vitest";
 import { isTypingTarget, useKeymap } from "./keymap";
 
+/**
+ * KeyboardEvent.code for the keys these tests press. Real browser keydown
+ * events always carry `code`; tinykeys v4 rejects any event without it
+ * (`isKeyboardEvent` guards on `key && code && getModifierState`), so the
+ * synthetic events must include it to be honest stand-ins.
+ */
+function codeFor(key: string): string {
+  if (key === "\\") {
+    return "Backslash";
+  }
+  return /^[a-z]$/i.test(key) ? `Key${key.toUpperCase()}` : key;
+}
+
 function pressKey(
   key: string,
   modifier: { ctrl?: boolean; meta?: boolean } = {},
@@ -9,6 +22,7 @@ function pressKey(
 ): boolean {
   const event = new KeyboardEvent("keydown", {
     key,
+    code: codeFor(key),
     ctrlKey: !!modifier.ctrl,
     metaKey: !!modifier.meta,
     bubbles: true,

@@ -15,6 +15,8 @@ declare module "tinykeys" {
     event?: "keydown" | "keyup";
     capture?: boolean;
     timeout?: number;
+    /** v4: predicate deciding which keyboard events to drop before matching. */
+    ignore?: (event: KeyboardEvent) => boolean;
   }
   export function tinykeys(
     target: Window | HTMLElement,

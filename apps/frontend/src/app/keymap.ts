@@ -73,7 +73,16 @@ export function useKeymap(bindings: KeymapBindings): void {
         }
       };
     }
-    return tinykeys(window, wrapped);
+    // tinykeys v4 introduced a default `ignore` that silently drops any event
+    // whose target is an input/select/textarea/contenteditable (unless it is
+    // the listener target itself). That default runs BEFORE our wrapper, so a
+    // `bypassInputFocus: true` binding could never fire while the user is
+    // typing — the exact case it exists for (⌘K → focus search). Override it
+    // so input-focus policy lives in ONE place (the wrapper above); keep the
+    // useful parts of the default (held-key repeat + IME composition).
+    return tinykeys(window, wrapped, {
+      ignore: (event) => event.repeat || event.isComposing,
+    });
   }, [bindings]);
 }
 
