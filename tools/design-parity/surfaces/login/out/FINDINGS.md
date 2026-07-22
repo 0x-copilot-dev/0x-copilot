@@ -57,3 +57,15 @@ SIWE message; the mock showed a simplified preview. Live is more accurate there.
 
 Regenerate after changes: see `../../../SKILL.md` (render `lib/render-live-login.test.tsx`,
 extract both sides, `lib/compare.mjs`).
+
+---
+
+## ✅ AFTER — verified 2026-07-22 (parity applied)
+
+Implemented in `apps/frontend` (LoginScreen.tsx + styles.css `.loginx-*`). Re-rendered + re-extracted:
+
+- **pick** — borderless card ✓, title 18px (was 22.4) ✓, sub 12px ✓, option-sub **mono 10px** ✓, divider **mono 9px UPPERCASE** ✓, foot 10.5px ✓, version mono 9px ✓, options 10×12/r9/`--line2` ✓.
+- **connecting** — title **H3 13.5px** (was 22.4px h1) ✓, body 12px ✓, Cancel **`.cbtn--ghost--sm`** r6 (was `ui-button`) ✓.
+- **structural** — added the `werr` recovery view + stopped `reset()` wiping the error; added Google `google_wait`/`google_error` views; sign buttons → `.cbtn`. (Google error view is dormant until the facade OIDC callback redirects failed sign-in to the SPA — a backend follow-up, noted in code.)
+
+All frontend tests green (AuthContext 18/18); the live render harness 7/7.

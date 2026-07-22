@@ -1,87 +1,72 @@
 {
   "topbar.brand": {
     "matched": true,
-    "cls": "fr-brand",
-    "text": "0xCopilot",
+    "cls": "fr-brand__name",
     "styles": {
       "fontFamily": "-apple-system",
-      "fontSize": "16px",
-      "fontWeight": "400",
-      "lineHeight": "normal",
-      "letterSpacing": "normal",
+      "fontSize": "12.48px",
+      "fontWeight": "600",
       "color": "rgb(236, 236, 241)",
-      "backgroundColor": "rgba(0, 0, 0, 0)",
-      "padding": "0px",
-      "borderWidth": "0px",
-      "borderColor": "rgb(236, 236, 241)",
-      "borderRadius": "0px",
-      "gap": "4px"
+      "gap": "7px"
     }
   },
   "topbar.brand.zx": {
     "matched": true,
-    "text": "0x",
     "styles": {
-      "fontSize": "14px",
+      "fontSize": "12.48px",
       "fontWeight": "600",
       "color": "rgb(95, 178, 236)"
     }
   },
   "topbar.walletChip": {
     "matched": false,
-    "note": "absent in live gate — chip needs a profilePort with a wallet address"
+    "note": "chip needs a profilePort (harness limitation)"
   },
   "topbar.skip": {
     "matched": true,
-    "text": "skip — open the workspace →",
     "styles": {
-      "fontFamily": "-apple-system",
-      "fontSize": "13.6px",
-      "fontWeight": "400",
+      "fontFamily": "JetBrains Mono",
+      "fontSize": "10px",
       "color": "rgb(152, 152, 159)",
-      "padding": "2px 4px",
-      "borderRadius": "6px"
+      "padding": "0px",
+      "borderRadius": "0px"
     }
   },
   "hero.h1": {
     "matched": true,
-    "cls": "fr-hero__title",
-    "text": "First, give it a model.",
     "styles": {
       "fontFamily": "-apple-system",
-      "fontSize": "22.4px",
+      "fontSize": "23px",
       "fontWeight": "600",
-      "lineHeight": "26.88px",
-      "letterSpacing": "-0.336px",
-      "color": "rgb(212, 212, 219)",
-      "margin": "0px"
+      "lineHeight": "27.6px",
+      "letterSpacing": "-0.345px",
+      "color": "rgb(236, 236, 241)",
+      "margin": "0px 0px 7px 0px"
     }
   },
   "hero.sub": {
     "matched": true,
-    "text": "The only required choice — switch anytime.",
     "styles": {
       "fontFamily": "-apple-system",
-      "fontSize": "13.6px",
+      "fontSize": "12.48px",
       "fontWeight": "400",
-      "lineHeight": "normal",
+      "lineHeight": "19.344px",
       "color": "rgb(152, 152, 159)"
     }
   },
   "gate.grid": {
     "matched": true,
-    "styles": { "display": "grid", "gap": "16px", "alignItems": "normal" }
+    "styles": { "display": "grid", "gap": "10px", "alignItems": "stretch" }
   },
   "card.local": {
     "matched": true,
-    "tag": "section",
     "styles": {
       "backgroundColor": "rgb(17, 17, 20)",
-      "padding": "24px",
+      "padding": "15px 16px",
       "borderWidth": "1px",
       "borderColor": "rgba(255, 255, 255, 0.06)",
       "borderRadius": "12px",
-      "gap": "8px",
+      "gap": "7px",
       "display": "flex",
       "flexDirection": "column"
     }
@@ -89,31 +74,29 @@
   "card.local.title": {
     "matched": true,
     "tag": "h2",
-    "text": "Download the local model",
     "styles": {
       "fontFamily": "-apple-system",
-      "fontSize": "14px",
+      "fontSize": "13px",
       "fontWeight": "600",
       "color": "rgb(236, 236, 241)"
     }
   },
   "card.local.meta": {
     "matched": true,
-    "text": "Qwen 3 4B · 4.3 GB · free forever",
     "styles": {
       "fontFamily": "JetBrains Mono",
-      "fontSize": "9px",
-      "color": "rgb(152, 152, 159)"
+      "fontSize": "9.5px",
+      "color": "rgb(100, 100, 109)"
     }
   },
   "card.local.body": {
     "matched": true,
     "styles": {
       "fontFamily": "-apple-system",
-      "fontSize": "13.6px",
-      "lineHeight": "normal",
+      "fontSize": "11.5px",
+      "lineHeight": "17.25px",
       "color": "rgb(152, 152, 159)",
-      "flexGrow": "0"
+      "flexGrow": "1"
     }
   },
   "card.local.note": {
@@ -126,26 +109,25 @@
   },
   "btn.primary": {
     "matched": true,
-    "cls": "ui-button ui-button--primary ui-button--sm",
-    "text": "Start download",
+    "cls": "gbtn gbtn--pri",
     "styles": {
       "fontFamily": "-apple-system",
-      "fontSize": "11.2px",
-      "fontWeight": "500",
+      "fontSize": "11.5px",
+      "fontWeight": "600",
       "color": "rgb(8, 19, 29)",
       "backgroundColor": "rgb(95, 178, 236)",
-      "padding": "4px 8.8px",
+      "padding": "7px 13px",
       "borderWidth": "1px",
-      "borderColor": "rgba(0, 0, 0, 0)",
-      "borderRadius": "6px",
-      "gap": "8px"
+      "borderColor": "rgb(95, 178, 236)",
+      "borderRadius": "8px",
+      "gap": "6px"
     }
   },
   "card.key.title": {
     "matched": true,
     "tag": "h2",
     "styles": {
-      "fontSize": "14px",
+      "fontSize": "13px",
       "fontWeight": "600",
       "color": "rgb(236, 236, 241)"
     }
@@ -154,56 +136,54 @@
     "matched": true,
     "styles": {
       "fontFamily": "JetBrains Mono",
-      "fontSize": "9px",
-      "color": "rgb(152, 152, 159)"
+      "fontSize": "9.5px",
+      "color": "rgb(100, 100, 109)"
     }
   },
   "card.key.body": {
     "matched": true,
     "styles": {
-      "fontSize": "13.6px",
-      "lineHeight": "normal",
+      "fontSize": "11.5px",
+      "lineHeight": "17.25px",
       "color": "rgb(152, 152, 159)"
     }
   },
   "btn.secondary": {
     "matched": true,
-    "cls": "ui-button ui-button--secondary ui-button--sm",
-    "text": "Add a key",
+    "cls": "gbtn",
     "styles": {
       "fontFamily": "-apple-system",
-      "fontSize": "11.2px",
-      "fontWeight": "500",
+      "fontSize": "11.5px",
+      "fontWeight": "600",
       "color": "rgb(236, 236, 241)",
-      "backgroundColor": "rgb(22, 22, 26)",
-      "padding": "4px 8.8px",
+      "backgroundColor": "rgb(29, 29, 35)",
+      "padding": "7px 13px",
       "borderWidth": "1px",
-      "borderColor": "rgba(255, 255, 255, 0.06)",
-      "borderRadius": "6px",
-      "gap": "8px"
+      "borderColor": "rgba(255, 255, 255, 0.18)",
+      "borderRadius": "8px",
+      "gap": "6px"
     }
   },
   "trial.link": {
     "matched": false,
-    "note": "absent in live — hosted-trial lane deliberately SHELVED (correct divergence)"
+    "note": "hosted-trial lane deliberately SHELVED"
   },
   "footer": {
     "matched": true,
     "styles": {
       "fontFamily": "JetBrains Mono",
-      "fontSize": "9px",
+      "fontSize": "9.5px",
       "color": "rgb(100, 100, 109)",
       "justifyContent": "space-between",
-      "padding": "12px 16px",
-      "borderWidth": "1px 0px 0px 0px"
+      "padding": "0px 18px 12px 18px",
+      "borderWidth": "0px"
     }
   },
   "footer.left": {
     "matched": true,
-    "text": "v2.1.0 · local build",
     "styles": {
       "fontFamily": "JetBrains Mono",
-      "fontSize": "9px",
+      "fontSize": "9.5px",
       "color": "rgb(100, 100, 109)"
     }
   },
@@ -212,7 +192,7 @@
     "text": "keys in OS keychain · runs via your provider",
     "styles": {
       "fontFamily": "JetBrains Mono",
-      "fontSize": "9px",
+      "fontSize": "9.5px",
       "color": "rgb(100, 100, 109)"
     }
   }
