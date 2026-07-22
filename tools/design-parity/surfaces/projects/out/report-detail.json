@@ -1,0 +1,1013 @@
+{
+  "state": "detail",
+  "counts": {
+    "high": 26,
+    "medium": 42,
+    "low": 48,
+    "info": 12
+  },
+  "findings": [
+    {
+      "label": "detail.backlink",
+      "group": "Detail header",
+      "severity": "high",
+      "kind": "style",
+      "prop": "fontFamily",
+      "detail": "typeface class changed (mono → sans)"
+    },
+    {
+      "label": "detail.backlink",
+      "group": "Detail header",
+      "severity": "high",
+      "kind": "style",
+      "prop": "fontSize",
+      "detail": "11px → 13px (+2.0px)"
+    },
+    {
+      "label": "detail.backlink",
+      "group": "Detail header",
+      "severity": "high",
+      "kind": "style",
+      "prop": "color",
+      "detail": "rgb(152, 152, 159) (--mut) → rgb(95, 178, 236) (--accent/--sky)"
+    },
+    {
+      "label": "detail.backlink",
+      "group": "Detail header",
+      "severity": "high",
+      "kind": "style",
+      "prop": "borderColor",
+      "detail": "rgb(152, 152, 159) (--mut) → rgb(95, 178, 236) (--accent/--sky)"
+    },
+    {
+      "label": "detail.icon",
+      "group": "Detail header",
+      "severity": "high",
+      "kind": "style",
+      "prop": "fontSize",
+      "detail": "13px → 18px (+5.0px)"
+    },
+    {
+      "label": "detail.icon",
+      "group": "Detail header",
+      "severity": "high",
+      "kind": "style",
+      "prop": "color",
+      "detail": "rgb(212, 212, 219) (--tx2) → rgb(177, 215, 241)"
+    },
+    {
+      "label": "detail.icon",
+      "group": "Detail header",
+      "severity": "high",
+      "kind": "style",
+      "prop": "backgroundColor",
+      "detail": "rgb(29, 29, 35) (--panel3) → rgba(29, 79, 114, 0.45)"
+    },
+    {
+      "label": "detail.icon",
+      "group": "Detail header",
+      "severity": "high",
+      "kind": "style",
+      "prop": "borderColor",
+      "detail": "rgb(212, 212, 219) (--tx2) → rgba(51, 140, 204, 0.55)"
+    },
+    {
+      "label": "detail.desc",
+      "group": "Detail header",
+      "severity": "high",
+      "kind": "style",
+      "prop": "fontSize",
+      "detail": "11px → 13.6px (+2.6px)"
+    },
+    {
+      "label": "detail.desc",
+      "group": "Detail header",
+      "severity": "high",
+      "kind": "style",
+      "prop": "color",
+      "detail": "rgb(100, 100, 109) (--mut2) → rgb(152, 152, 159) (--mut)"
+    },
+    {
+      "label": "detail.desc",
+      "group": "Detail header",
+      "severity": "high",
+      "kind": "style",
+      "prop": "borderColor",
+      "detail": "rgb(100, 100, 109) (--mut2) → rgb(152, 152, 159) (--mut)"
+    },
+    {
+      "label": "detail.rowlist.chats",
+      "group": "Sections",
+      "severity": "high",
+      "kind": "style",
+      "prop": "backgroundColor",
+      "detail": "rgb(17, 17, 20) (--panel) → rgba(0, 0, 0, 0) (transparent)"
+    },
+    {
+      "label": "detail.rowlist.chats",
+      "group": "Sections",
+      "severity": "high",
+      "kind": "style",
+      "prop": "borderColor",
+      "detail": "rgba(255, 255, 255, 0.06) (--line) → rgb(236, 236, 241) (--tx)"
+    },
+    {
+      "label": "detail.chatrow",
+      "group": "Chat row",
+      "severity": "high",
+      "kind": "style",
+      "prop": "borderColor",
+      "detail": "rgb(236, 236, 241) rgb(236, 236, 241) rgba(255, 255, 255, 0.06) rgb(236, 236, 241) → rgb(236, 236, 241) (--tx)"
+    },
+    {
+      "label": "detail.chatrow.icon",
+      "group": "Chat row",
+      "severity": "high",
+      "kind": "missing-in-live",
+      "detail": "present in design, ABSENT in live"
+    },
+    {
+      "label": "detail.chatrow.name",
+      "group": "Chat row",
+      "severity": "high",
+      "kind": "style",
+      "prop": "color",
+      "detail": "rgb(236, 236, 241) (--tx) → rgb(95, 178, 236) (--accent/--sky)"
+    },
+    {
+      "label": "detail.chatrow.name",
+      "group": "Chat row",
+      "severity": "high",
+      "kind": "style",
+      "prop": "borderColor",
+      "detail": "rgb(236, 236, 241) (--tx) → rgb(95, 178, 236) (--accent/--sky)"
+    },
+    {
+      "label": "detail.chatrow.chip",
+      "group": "Chat row",
+      "severity": "high",
+      "kind": "missing-in-live",
+      "detail": "present in design, ABSENT in live"
+    },
+    {
+      "label": "detail.chatrow.sub",
+      "group": "Chat row",
+      "severity": "high",
+      "kind": "missing-in-live",
+      "detail": "present in design, ABSENT in live"
+    },
+    {
+      "label": "detail.chatrow.sub.mono",
+      "group": "Chat row",
+      "severity": "high",
+      "kind": "missing-in-live",
+      "detail": "present in design, ABSENT in live"
+    },
+    {
+      "label": "detail.chatrow.time",
+      "group": "Chat row",
+      "severity": "high",
+      "kind": "missing-in-live",
+      "detail": "present in design, ABSENT in live"
+    },
+    {
+      "label": "detail.rowlist.files",
+      "group": "Sections",
+      "severity": "high",
+      "kind": "style",
+      "prop": "backgroundColor",
+      "detail": "rgb(17, 17, 20) (--panel) → rgba(0, 0, 0, 0) (transparent)"
+    },
+    {
+      "label": "detail.rowlist.files",
+      "group": "Sections",
+      "severity": "high",
+      "kind": "style",
+      "prop": "borderColor",
+      "detail": "rgba(255, 255, 255, 0.06) (--line) → rgb(236, 236, 241) (--tx)"
+    },
+    {
+      "label": "detail.filerow",
+      "group": "File row",
+      "severity": "high",
+      "kind": "missing-in-live",
+      "detail": "present in design, ABSENT in live"
+    },
+    {
+      "label": "detail.filerow.name",
+      "group": "File row",
+      "severity": "high",
+      "kind": "missing-in-live",
+      "detail": "present in design, ABSENT in live"
+    },
+    {
+      "label": "detail.filerow.sub",
+      "group": "File row",
+      "severity": "high",
+      "kind": "missing-in-live",
+      "detail": "present in design, ABSENT in live"
+    },
+    {
+      "label": "default.page.container",
+      "group": "Layout",
+      "severity": "medium",
+      "kind": "style",
+      "prop": "fontSize",
+      "detail": "13px → 13.6px (+0.6px)"
+    },
+    {
+      "label": "default.page.container",
+      "group": "Layout",
+      "severity": "medium",
+      "kind": "style",
+      "prop": "flexGrow",
+      "detail": "flex-grow 1 → 0 (affects vertical fill / button placement)"
+    },
+    {
+      "label": "default.page.container",
+      "group": "Layout",
+      "severity": "medium",
+      "kind": "style",
+      "prop": "padding",
+      "detail": "20px 24px 40px 24px → 24px"
+    },
+    {
+      "label": "detail.backlink",
+      "group": "Detail header",
+      "severity": "medium",
+      "kind": "style",
+      "prop": "fontWeight",
+      "detail": "400 → 600"
+    },
+    {
+      "label": "detail.backlink",
+      "group": "Detail header",
+      "severity": "medium",
+      "kind": "style",
+      "prop": "display",
+      "detail": "inline-flex → inline-block"
+    },
+    {
+      "label": "detail.backlink",
+      "group": "Detail header",
+      "severity": "medium",
+      "kind": "style",
+      "prop": "alignItems",
+      "detail": "center → normal"
+    },
+    {
+      "label": "detail.backlink",
+      "group": "Detail header",
+      "severity": "medium",
+      "kind": "style",
+      "prop": "padding",
+      "detail": "0px → 0px 0px 12px 0px"
+    },
+    {
+      "label": "detail.backlink",
+      "group": "Detail header",
+      "severity": "medium",
+      "kind": "style",
+      "prop": "margin",
+      "detail": "0px 0px 14px 0px → 0px"
+    },
+    {
+      "label": "detail.backlink",
+      "group": "Detail header",
+      "severity": "medium",
+      "kind": "style",
+      "prop": "gap",
+      "detail": "6px → normal"
+    },
+    {
+      "label": "detail.icon",
+      "group": "Detail header",
+      "severity": "medium",
+      "kind": "style",
+      "prop": "fontWeight",
+      "detail": "600 → 700"
+    },
+    {
+      "label": "detail.icon",
+      "group": "Detail header",
+      "severity": "medium",
+      "kind": "style",
+      "prop": "display",
+      "detail": "grid → flex"
+    },
+    {
+      "label": "detail.icon",
+      "group": "Detail header",
+      "severity": "medium",
+      "kind": "style",
+      "prop": "justifyContent",
+      "detail": "normal → center"
+    },
+    {
+      "label": "detail.icon",
+      "group": "Detail header",
+      "severity": "medium",
+      "kind": "style",
+      "prop": "borderWidth",
+      "detail": "0px → 1px"
+    },
+    {
+      "label": "detail.icon",
+      "group": "Detail header",
+      "severity": "medium",
+      "kind": "style",
+      "prop": "borderRadius",
+      "detail": "8px → 10px"
+    },
+    {
+      "label": "detail.desc",
+      "group": "Detail header",
+      "severity": "medium",
+      "kind": "style",
+      "prop": "display",
+      "detail": "block → flow-root"
+    },
+    {
+      "label": "detail.desc",
+      "group": "Detail header",
+      "severity": "medium",
+      "kind": "style",
+      "prop": "margin",
+      "detail": "1px 0px 0px 0px → 0px"
+    },
+    {
+      "label": "detail.secth.chats",
+      "group": "Sections",
+      "severity": "medium",
+      "kind": "style",
+      "prop": "fontSize",
+      "detail": "9.5px → 11.2px (+1.7px)"
+    },
+    {
+      "label": "detail.secth.chats",
+      "group": "Sections",
+      "severity": "medium",
+      "kind": "style",
+      "prop": "fontWeight",
+      "detail": "400 → 600"
+    },
+    {
+      "label": "detail.secth.chats",
+      "group": "Sections",
+      "severity": "medium",
+      "kind": "style",
+      "prop": "margin",
+      "detail": "22px 0px 10px 0px → 0px"
+    },
+    {
+      "label": "detail.rowlist.chats",
+      "group": "Sections",
+      "severity": "medium",
+      "kind": "style",
+      "prop": "fontSize",
+      "detail": "13px → 13.6px (+0.6px)"
+    },
+    {
+      "label": "detail.rowlist.chats",
+      "group": "Sections",
+      "severity": "medium",
+      "kind": "style",
+      "prop": "display",
+      "detail": "flex → block"
+    },
+    {
+      "label": "detail.rowlist.chats",
+      "group": "Sections",
+      "severity": "medium",
+      "kind": "style",
+      "prop": "flexDirection",
+      "detail": "column → row"
+    },
+    {
+      "label": "detail.rowlist.chats",
+      "group": "Sections",
+      "severity": "medium",
+      "kind": "style",
+      "prop": "borderWidth",
+      "detail": "1px → 0px"
+    },
+    {
+      "label": "detail.rowlist.chats",
+      "group": "Sections",
+      "severity": "medium",
+      "kind": "style",
+      "prop": "borderRadius",
+      "detail": "8px → 0px"
+    },
+    {
+      "label": "detail.chatrow",
+      "group": "Chat row",
+      "severity": "medium",
+      "kind": "style",
+      "prop": "fontSize",
+      "detail": "13px → 13.6px (+0.6px)"
+    },
+    {
+      "label": "detail.chatrow",
+      "group": "Chat row",
+      "severity": "medium",
+      "kind": "style",
+      "prop": "display",
+      "detail": "flex → list-item"
+    },
+    {
+      "label": "detail.chatrow",
+      "group": "Chat row",
+      "severity": "medium",
+      "kind": "style",
+      "prop": "alignItems",
+      "detail": "center → normal"
+    },
+    {
+      "label": "detail.chatrow",
+      "group": "Chat row",
+      "severity": "medium",
+      "kind": "style",
+      "prop": "padding",
+      "detail": "11px 14px → 8px 0px"
+    },
+    {
+      "label": "detail.chatrow",
+      "group": "Chat row",
+      "severity": "medium",
+      "kind": "style",
+      "prop": "borderWidth",
+      "detail": "0px 0px 1px 0px → 0px"
+    },
+    {
+      "label": "detail.chatrow",
+      "group": "Chat row",
+      "severity": "medium",
+      "kind": "style",
+      "prop": "gap",
+      "detail": "12px → normal"
+    },
+    {
+      "label": "detail.chatrow.name",
+      "group": "Chat row",
+      "severity": "medium",
+      "kind": "style",
+      "prop": "fontSize",
+      "detail": "12.5px → 13px (+0.5px)"
+    },
+    {
+      "label": "detail.chatrow.name",
+      "group": "Chat row",
+      "severity": "medium",
+      "kind": "style",
+      "prop": "fontWeight",
+      "detail": "500 → 400"
+    },
+    {
+      "label": "detail.chatrow.name",
+      "group": "Chat row",
+      "severity": "medium",
+      "kind": "style",
+      "prop": "display",
+      "detail": "flex → inline-block"
+    },
+    {
+      "label": "detail.chatrow.name",
+      "group": "Chat row",
+      "severity": "medium",
+      "kind": "style",
+      "prop": "alignItems",
+      "detail": "center → normal"
+    },
+    {
+      "label": "detail.chatrow.name",
+      "group": "Chat row",
+      "severity": "medium",
+      "kind": "style",
+      "prop": "gap",
+      "detail": "8px → normal"
+    },
+    {
+      "label": "detail.secth.files",
+      "group": "Sections",
+      "severity": "medium",
+      "kind": "style",
+      "prop": "fontSize",
+      "detail": "9.5px → 11.2px (+1.7px)"
+    },
+    {
+      "label": "detail.secth.files",
+      "group": "Sections",
+      "severity": "medium",
+      "kind": "style",
+      "prop": "fontWeight",
+      "detail": "400 → 600"
+    },
+    {
+      "label": "detail.secth.files",
+      "group": "Sections",
+      "severity": "medium",
+      "kind": "style",
+      "prop": "margin",
+      "detail": "22px 0px 10px 0px → 0px"
+    },
+    {
+      "label": "detail.rowlist.files",
+      "group": "Sections",
+      "severity": "medium",
+      "kind": "style",
+      "prop": "fontSize",
+      "detail": "13px → 13.6px (+0.6px)"
+    },
+    {
+      "label": "detail.rowlist.files",
+      "group": "Sections",
+      "severity": "medium",
+      "kind": "style",
+      "prop": "borderWidth",
+      "detail": "1px → 0px"
+    },
+    {
+      "label": "detail.rowlist.files",
+      "group": "Sections",
+      "severity": "medium",
+      "kind": "style",
+      "prop": "borderRadius",
+      "detail": "8px → 0px"
+    },
+    {
+      "label": "detail.rowlist.files",
+      "group": "Sections",
+      "severity": "medium",
+      "kind": "style",
+      "prop": "gap",
+      "detail": "normal → 8px"
+    },
+    {
+      "label": "default.page.container",
+      "group": "Layout",
+      "severity": "low",
+      "kind": "style",
+      "prop": "lineHeight",
+      "detail": "19.5px → normal"
+    },
+    {
+      "label": "default.page.container",
+      "group": "Layout",
+      "severity": "low",
+      "kind": "style",
+      "prop": "width",
+      "detail": "960px → 1040px"
+    },
+    {
+      "label": "default.page.container",
+      "group": "Layout",
+      "severity": "low",
+      "kind": "style",
+      "prop": "height",
+      "detail": "754px → 760px"
+    },
+    {
+      "label": "default.page.container",
+      "group": "Layout",
+      "severity": "low",
+      "kind": "tag",
+      "detail": "<div> → <section> (semantic/default-style change)"
+    },
+    {
+      "label": "detail.backlink",
+      "group": "Detail header",
+      "severity": "low",
+      "kind": "style",
+      "prop": "width",
+      "detail": "98.2031px → 87.0312px"
+    },
+    {
+      "label": "detail.backlink",
+      "group": "Detail header",
+      "severity": "low",
+      "kind": "style",
+      "prop": "height",
+      "detail": "14px → 28px"
+    },
+    {
+      "label": "detail.icon",
+      "group": "Detail header",
+      "severity": "low",
+      "kind": "style",
+      "prop": "lineHeight",
+      "detail": "19.5px → normal"
+    },
+    {
+      "label": "detail.icon",
+      "group": "Detail header",
+      "severity": "low",
+      "kind": "style",
+      "prop": "width",
+      "detail": "32px → 44px"
+    },
+    {
+      "label": "detail.icon",
+      "group": "Detail header",
+      "severity": "low",
+      "kind": "style",
+      "prop": "height",
+      "detail": "32px → 44px"
+    },
+    {
+      "label": "detail.icon",
+      "group": "Detail header",
+      "severity": "low",
+      "kind": "style",
+      "prop": "borderStyle",
+      "detail": "none → solid"
+    },
+    {
+      "label": "detail.icon",
+      "group": "Detail header",
+      "severity": "low",
+      "kind": "tag",
+      "detail": "<span> → <div> (semantic/default-style change)"
+    },
+    {
+      "label": "detail.title",
+      "group": "Detail header",
+      "severity": "low",
+      "kind": "style",
+      "prop": "lineHeight",
+      "detail": "21.6px → normal"
+    },
+    {
+      "label": "detail.title",
+      "group": "Detail header",
+      "severity": "low",
+      "kind": "style",
+      "prop": "letterSpacing",
+      "detail": "-0.18px → normal"
+    },
+    {
+      "label": "detail.title",
+      "group": "Detail header",
+      "severity": "low",
+      "kind": "style",
+      "prop": "width",
+      "detail": "116.469px → 112.672px"
+    },
+    {
+      "label": "detail.title",
+      "group": "Detail header",
+      "severity": "low",
+      "kind": "style",
+      "prop": "height",
+      "detail": "21.5938px → 21px"
+    },
+    {
+      "label": "detail.title",
+      "group": "Detail header",
+      "severity": "low",
+      "kind": "tag",
+      "detail": "<h2> → <span> (semantic/default-style change)"
+    },
+    {
+      "label": "detail.desc",
+      "group": "Detail header",
+      "severity": "low",
+      "kind": "style",
+      "prop": "lineHeight",
+      "detail": "16.5px → 21.08px"
+    },
+    {
+      "label": "detail.desc",
+      "group": "Detail header",
+      "severity": "low",
+      "kind": "style",
+      "prop": "width",
+      "detail": "116.469px → 822px"
+    },
+    {
+      "label": "detail.desc",
+      "group": "Detail header",
+      "severity": "low",
+      "kind": "style",
+      "prop": "height",
+      "detail": "16.5px → 21.0625px"
+    },
+    {
+      "label": "detail.desc",
+      "group": "Detail header",
+      "severity": "low",
+      "kind": "tag",
+      "detail": "<div> → <p> (semantic/default-style change)"
+    },
+    {
+      "label": "detail.secth.chats",
+      "group": "Sections",
+      "severity": "low",
+      "kind": "style",
+      "prop": "lineHeight",
+      "detail": "14.25px → normal"
+    },
+    {
+      "label": "detail.secth.chats",
+      "group": "Sections",
+      "severity": "low",
+      "kind": "style",
+      "prop": "width",
+      "detail": "912px → 40.3281px"
+    },
+    {
+      "label": "detail.secth.chats",
+      "group": "Sections",
+      "severity": "low",
+      "kind": "style",
+      "prop": "height",
+      "detail": "14.25px → 13px"
+    },
+    {
+      "label": "detail.secth.chats",
+      "group": "Sections",
+      "severity": "low",
+      "kind": "tag",
+      "detail": "<div> → <h2> (semantic/default-style change)"
+    },
+    {
+      "label": "detail.rowlist.chats",
+      "group": "Sections",
+      "severity": "low",
+      "kind": "style",
+      "prop": "lineHeight",
+      "detail": "19.5px → normal"
+    },
+    {
+      "label": "detail.rowlist.chats",
+      "group": "Sections",
+      "severity": "low",
+      "kind": "style",
+      "prop": "width",
+      "detail": "912px → 880px"
+    },
+    {
+      "label": "detail.rowlist.chats",
+      "group": "Sections",
+      "severity": "low",
+      "kind": "style",
+      "prop": "height",
+      "detail": "187.75px → 96px"
+    },
+    {
+      "label": "detail.rowlist.chats",
+      "group": "Sections",
+      "severity": "low",
+      "kind": "style",
+      "prop": "borderStyle",
+      "detail": "solid → none"
+    },
+    {
+      "label": "detail.rowlist.chats",
+      "group": "Sections",
+      "severity": "low",
+      "kind": "tag",
+      "detail": "<div> → <ul> (semantic/default-style change)"
+    },
+    {
+      "label": "detail.chatrow",
+      "group": "Chat row",
+      "severity": "low",
+      "kind": "style",
+      "prop": "lineHeight",
+      "detail": "19.5px → normal"
+    },
+    {
+      "label": "detail.chatrow",
+      "group": "Chat row",
+      "severity": "low",
+      "kind": "style",
+      "prop": "textAlign",
+      "detail": "left → start"
+    },
+    {
+      "label": "detail.chatrow",
+      "group": "Chat row",
+      "severity": "low",
+      "kind": "style",
+      "prop": "width",
+      "detail": "910px → 880px"
+    },
+    {
+      "label": "detail.chatrow",
+      "group": "Chat row",
+      "severity": "low",
+      "kind": "style",
+      "prop": "height",
+      "detail": "62.25px → 32px"
+    },
+    {
+      "label": "detail.chatrow",
+      "group": "Chat row",
+      "severity": "low",
+      "kind": "style",
+      "prop": "borderStyle",
+      "detail": "none none solid none → none"
+    },
+    {
+      "label": "detail.chatrow",
+      "group": "Chat row",
+      "severity": "low",
+      "kind": "tag",
+      "detail": "<button> → <li> (semantic/default-style change)"
+    },
+    {
+      "label": "detail.chatrow.name",
+      "group": "Chat row",
+      "severity": "low",
+      "kind": "style",
+      "prop": "lineHeight",
+      "detail": "18.75px → normal"
+    },
+    {
+      "label": "detail.chatrow.name",
+      "group": "Chat row",
+      "severity": "low",
+      "kind": "style",
+      "prop": "width",
+      "detail": "811.094px → 296.938px"
+    },
+    {
+      "label": "detail.chatrow.name",
+      "group": "Chat row",
+      "severity": "low",
+      "kind": "style",
+      "prop": "height",
+      "detail": "19.75px → 16px"
+    },
+    {
+      "label": "detail.chatrow.name",
+      "group": "Chat row",
+      "severity": "low",
+      "kind": "tag",
+      "detail": "<span> → <button> (semantic/default-style change)"
+    },
+    {
+      "label": "detail.secth.files",
+      "group": "Sections",
+      "severity": "low",
+      "kind": "style",
+      "prop": "lineHeight",
+      "detail": "14.25px → normal"
+    },
+    {
+      "label": "detail.secth.files",
+      "group": "Sections",
+      "severity": "low",
+      "kind": "style",
+      "prop": "width",
+      "detail": "912px → 40.3281px"
+    },
+    {
+      "label": "detail.secth.files",
+      "group": "Sections",
+      "severity": "low",
+      "kind": "style",
+      "prop": "height",
+      "detail": "14.25px → 13px"
+    },
+    {
+      "label": "detail.secth.files",
+      "group": "Sections",
+      "severity": "low",
+      "kind": "tag",
+      "detail": "<div> → <h2> (semantic/default-style change)"
+    },
+    {
+      "label": "detail.rowlist.files",
+      "group": "Sections",
+      "severity": "low",
+      "kind": "style",
+      "prop": "lineHeight",
+      "detail": "19.5px → normal"
+    },
+    {
+      "label": "detail.rowlist.files",
+      "group": "Sections",
+      "severity": "low",
+      "kind": "style",
+      "prop": "width",
+      "detail": "912px → 880px"
+    },
+    {
+      "label": "detail.rowlist.files",
+      "group": "Sections",
+      "severity": "low",
+      "kind": "style",
+      "prop": "height",
+      "detail": "246px → 156px"
+    },
+    {
+      "label": "detail.rowlist.files",
+      "group": "Sections",
+      "severity": "low",
+      "kind": "style",
+      "prop": "borderStyle",
+      "detail": "solid → none"
+    },
+    {
+      "label": "detail.rowlist.files",
+      "group": "Sections",
+      "severity": "low",
+      "kind": "tag",
+      "detail": "<div> → <section> (semantic/default-style change)"
+    },
+    {
+      "label": "default.page.container",
+      "group": "Layout",
+      "severity": "info",
+      "kind": "copy",
+      "prop": "text",
+      "detail": "“All projectsLLaunch WeekGTM for the v2 launchChats · 3Launch…” → “Projects3 activeAllActiveArchivedStarred← All projectsLLaunc…”"
+    },
+    {
+      "label": "detail.backlink",
+      "group": "Detail header",
+      "severity": "info",
+      "kind": "copy",
+      "prop": "text",
+      "detail": "“All projects” → “← All projects”"
+    },
+    {
+      "label": "detail.secth.chats",
+      "group": "Sections",
+      "severity": "info",
+      "kind": "copy",
+      "prop": "text",
+      "detail": "“Chats · 3” → “Chats”"
+    },
+    {
+      "label": "detail.rowlist.chats",
+      "group": "Sections",
+      "severity": "info",
+      "kind": "copy",
+      "prop": "text",
+      "detail": "“Launch Week ops runningStreaming the launch thread · Claude …” → “Launch Week ops — Streaming the launch threadInvestor update…”"
+    },
+    {
+      "label": "detail.chatrow",
+      "group": "Chat row",
+      "severity": "info",
+      "kind": "copy",
+      "prop": "text",
+      "detail": "“Launch Week ops runningStreaming the launch thread · Claude …” → “Launch Week ops — Streaming the launch thread”"
+    },
+    {
+      "label": "detail.chatrow.name",
+      "group": "Chat row",
+      "severity": "info",
+      "kind": "copy",
+      "prop": "text",
+      "detail": "“Launch Week ops” → “Launch Week ops — Streaming the launch thread”"
+    },
+    {
+      "label": "detail.secth.files",
+      "group": "Sections",
+      "severity": "info",
+      "kind": "copy",
+      "prop": "text",
+      "detail": "“Files · 12” → “Files”"
+    },
+    {
+      "label": "detail.rowlist.files",
+      "group": "Sections",
+      "severity": "info",
+      "kind": "copy",
+      "prop": "text",
+      "detail": "“tokenomics.xlsxSheets · edited 2d agolaunch-brief.mdDoc · ed…” → “Project files coming soonThis workspace doesn't expose a pro…”"
+    },
+    {
+      "label": "detail.x.pageheader",
+      "group": "Live-only chrome",
+      "severity": "info",
+      "kind": "extra-in-live",
+      "detail": "present in live, not in design map"
+    },
+    {
+      "label": "detail.x.filtertabs",
+      "group": "Live-only chrome",
+      "severity": "info",
+      "kind": "extra-in-live",
+      "detail": "present in live, not in design map"
+    },
+    {
+      "label": "detail.x.status",
+      "group": "Live-only chrome",
+      "severity": "info",
+      "kind": "extra-in-live",
+      "detail": "present in live, not in design map"
+    },
+    {
+      "label": "detail.x.owner",
+      "group": "Live-only chrome",
+      "severity": "info",
+      "kind": "extra-in-live",
+      "detail": "present in live, not in design map"
+    }
+  ]
+}

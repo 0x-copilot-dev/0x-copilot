@@ -1,2 +1,17 @@
 # Regenerable live renders (run: vitest --config tools/design-parity/vitest.config.mjs)
 surfaces/*/live/
+
+# Throwaway probe/driver scripts.
+#
+# These MUST be written inside the repo tree: node resolves `playwright` by
+# walking UP to the root node_modules, so a scratch script in /tmp cannot import
+# it. That makes stray scratch files a standing risk of being committed, so the
+# convention is a name/dir the repo ignores by default:
+#   *.tmp.mjs      one-off checks next to whatever they are checking
+#   scratch/       anything larger
+#   probe*.mjs     ad-hoc "what does this state actually render" probes
+# The durable harness lives in lib/ and is tracked; if a probe is worth keeping,
+# promote it into lib/ with a real name instead of un-ignoring it here.
+*.tmp.mjs
+scratch/
+probe*.mjs

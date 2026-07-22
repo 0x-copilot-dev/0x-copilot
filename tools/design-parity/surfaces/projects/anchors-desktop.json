@@ -1,0 +1,79 @@
+{
+  "surface": "projects (desktop host)",
+  "note": "Second anchor map, needed because the two hosts render DIFFERENT Projects lists against the SAME design state. Design side is identical to anchors.json's `default` rows (app-v3 ProjectsSurface list). Live side is the chat-surface CardGrid that apps/desktop/renderer/destinationBinders.tsx:563-568 mounts — <ProjectsDestination items={result} onRetry={retry} /> with NO renderDetail/focusedProjectId, so the desktop host has no project-detail state to measure at all (that absence is reported in FINDINGS.md, not here). Kept out of anchors.json so the web report is not polluted with false missing-in-live rows: both files share the same design selectors, and one anchors file can carry only one `live` selector per label.",
+  "states": ["default-chatsurface"],
+  "elements": [
+    {
+      "label": "default.page.container",
+      "group": "Layout",
+      "design": ".pg",
+      "live": "[data-testid=\"projects-destination\"]"
+    },
+    {
+      "label": "default.page.lead",
+      "group": "Layout",
+      "design": ".pg-lead",
+      "live": ""
+    },
+    {
+      "label": "default.grid",
+      "group": "Layout",
+      "design": ".grid3",
+      "live": "[data-testid=\"card-grid\"]"
+    },
+    {
+      "label": "default.card",
+      "group": "Project card",
+      "design": ".grid3 .proj-card:nth-child(1)",
+      "live": "[data-testid=\"project-card\"]"
+    },
+    {
+      "label": "default.card.icon",
+      "group": "Project card",
+      "design": ".grid3 .proj-card:nth-child(1) .proj-ic",
+      "live": "[data-testid=\"project-card-icon\"]"
+    },
+    {
+      "label": "default.card.name",
+      "group": "Project card",
+      "design": ".grid3 .proj-card:nth-child(1) .proj-ic + div",
+      "live": "[data-testid=\"project-card-name\"]"
+    },
+    {
+      "label": "default.card.name.link",
+      "group": "Project card",
+      "design": ".grid3 .proj-card:nth-child(1) .proj-ic + div",
+      "live": "[data-testid=\"project-card-name\"] [data-testid=\"item-link\"]"
+    },
+    {
+      "label": "default.card.desc",
+      "group": "Project card",
+      "design": ".grid3 .proj-card:nth-child(1) > .lrow__sub:nth-child(2)",
+      "live": "[data-testid=\"project-card-description\"]"
+    },
+    {
+      "label": "default.card.meta",
+      "group": "Project card",
+      "design": ".grid3 .proj-card:nth-child(1) > .lrow__sub:nth-child(3)",
+      "live": "[data-testid=\"project-card-counts\"]"
+    },
+    {
+      "label": "default.x.card.statuspill",
+      "group": "Live-only chrome",
+      "design": "",
+      "live": "[data-testid=\"status-pill\"]"
+    },
+    {
+      "label": "default.x.pageheader",
+      "group": "Live-only chrome",
+      "design": "",
+      "live": "[data-testid=\"page-header-title\"]"
+    },
+    {
+      "label": "default.x.filtertabs",
+      "group": "Live-only chrome",
+      "design": "",
+      "live": "[data-testid=\"filter-tabs\"]"
+    }
+  ]
+}

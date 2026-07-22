@@ -1,0 +1,161 @@
+{
+  "surface": "projects",
+  "note": "DESIGN-SIDE ONLY scaffold produced by the design-reading step. Selectors were validated against the live DESIGN render at http://127.0.0.1:8112/design-kit/app-v3/index.html?dest=projects&state=<state> (detail needs --delay 1500 because the harness reaches it by clicking .grid3 .proj-card:nth-child(1)). The `live` field is intentionally absent — the next step fills it in and renames this to anchors.json.",
+  "states": ["default", "detail"],
+  "elements": [
+    {
+      "label": "card.name",
+      "group": "Project card",
+      "state": "default",
+      "design": ".grid3 .proj-card:nth-child(1) .proj-ic + div",
+      "what": "project title inside the card; UNCLASSED div carrying inline font-family:var(--disp);font-weight:600;font-size:14px (copilot-app.jsx:178)"
+    },
+    {
+      "label": "card.icon",
+      "group": "Project card",
+      "state": "default",
+      "design": ".grid3 .proj-card:nth-child(1) .proj-ic",
+      "what": "32x32 r8 initial tile. Inline background:p.color is DEAD — copilot.css:302 sets background:var(--panel3)!important, so computed bg is rgb(29,29,35) for every project"
+    },
+    {
+      "label": "card",
+      "group": "Project card",
+      "state": "default",
+      "design": ".grid3 .proj-card:nth-child(1)",
+      "what": "<button class=\"card proj-card\">; padding var(--pad)=13px, border 1px var(--line), radius var(--r)=8px, bg var(--panel); hover -> line2 border + panel2 bg"
+    },
+    {
+      "label": "card.desc",
+      "group": "Project card",
+      "state": "default",
+      "design": ".grid3 .proj-card:nth-child(1) > .lrow__sub:nth-child(2)",
+      "what": "description line; .lrow__sub 11px/var(--mut2) but inline-overridden to font-family:var(--body) + margin-top:10px (copilot-app.jsx:180)"
+    },
+    {
+      "label": "card.meta",
+      "group": "Project card",
+      "state": "default",
+      "design": ".grid3 .proj-card:nth-child(1) > .lrow__sub:nth-child(3)",
+      "what": "'3 chats · 12 files' counts line; keeps .lrow__sub MONO family, inline margin-top:10px only (copilot-app.jsx:181)"
+    },
+    {
+      "label": "grid",
+      "group": "Layout",
+      "state": "default",
+      "design": ".grid3",
+      "what": "3-up card grid, repeat(3,1fr) gap 10px (copilot.css:298); collapses to 1fr under 900px (copilot.css:299)"
+    },
+    {
+      "label": "page.lead",
+      "group": "Layout",
+      "state": "default",
+      "design": ".pg-lead",
+      "what": "12px var(--mut) lead paragraph, margin -2px 0 18px, max-width 72ch, line-height 1.6 (copilot.css:281)"
+    },
+    {
+      "label": "page.container",
+      "group": "Layout",
+      "state": "default",
+      "design": ".pg",
+      "what": "surface page frame: padding 20px 24px 40px, max-width 960px (copilot.css:280) + inline flex:1;min-height:0;overflow:auto"
+    },
+    {
+      "label": "detail.title",
+      "group": "Detail header",
+      "state": "detail",
+      "design": ".pg h2",
+      "what": "project name; h2 base is var(--disp)/600/letter-spacing -.01em, inline font-size:18px (copilot-app.jsx:154)"
+    },
+    {
+      "label": "detail.icon",
+      "group": "Detail header",
+      "state": "detail",
+      "design": ".pg .proj-ic",
+      "what": "same 32px initial tile as the card; inline p.color again suppressed by the !important in copilot.css:302"
+    },
+    {
+      "label": "detail.desc",
+      "group": "Detail header",
+      "state": "detail",
+      "design": ".pg h2 + .lrow__sub",
+      "what": "project description under the title, inline font-family:var(--body) override of the mono .lrow__sub"
+    },
+    {
+      "label": "detail.backlink",
+      "group": "Detail header",
+      "state": "detail",
+      "design": ".pg .backlink",
+      "what": "'< All projects' back button: mono 11px var(--mut), no border/padding, margin-bottom 14px, 13px svg (copilot.css:305-307)"
+    },
+    {
+      "label": "detail.secth",
+      "group": "Sections",
+      "state": "detail",
+      "design": ".pg > div:nth-child(3)",
+      "what": "'Chats · 3' section head: .sect-h mono 9.5px, letter-spacing .12em (=1.14px), uppercase, var(--mut2), margin 22px 0 10px (copilot.css:282)"
+    },
+    {
+      "label": "detail.rowlist.chats",
+      "group": "Sections",
+      "state": "detail",
+      "design": ".pg > div:nth-child(4)",
+      "what": ".rowlist card: column flex, 1px var(--line) border, r8, overflow hidden, bg var(--panel) (copilot.css:284)"
+    },
+    {
+      "label": "detail.chatrow",
+      "group": "Chat row",
+      "state": "detail",
+      "design": ".pg > div:nth-child(4) .lrow:nth-child(1)",
+      "what": "<button class=\"lrow\"> 11px/14px padding, 12px gap, bottom hairline, hover panel2; navigates to Run (copilot-app.jsx:115)"
+    },
+    {
+      "label": "detail.chatrow.icon",
+      "group": "Chat row",
+      "state": "detail",
+      "design": ".pg > div:nth-child(4) .lrow:nth-child(1) .lrow__ic",
+      "what": "28px r8 panel3 tile; for a RUNNING chat it holds the 18px brand <Mark> gradient svg and takes inline color:var(--jade) — otherwise Icon.chats (copilot-app.jsx:116)"
+    },
+    {
+      "label": "detail.chatrow.name",
+      "group": "Chat row",
+      "state": "detail",
+      "design": ".pg > div:nth-child(4) .lrow:nth-child(1) .lrow__name",
+      "what": "12.5px/500 var(--tx) flex row, gap 8px to the status chip (copilot.css:292)"
+    },
+    {
+      "label": "detail.chatrow.chip",
+      "group": "Chat row",
+      "state": "detail",
+      "design": ".pg > div:nth-child(4) .lrow:nth-child(1) .chip",
+      "what": "status pill, mono 10.5px, r999, chip--ok jade / chip--warn amber / chip--off mut2; inline padding:1px 8px OVERRIDES the css 2px 8px; contains a 6px .dotk when running"
+    },
+    {
+      "label": "detail.chatrow.sub",
+      "group": "Chat row",
+      "state": "detail",
+      "design": ".pg > div:nth-child(4) .lrow:nth-child(1) .lrow__sub",
+      "what": "preview line, inline font-family:var(--body) override; embeds a .mono span for the model name (copilot-app.jsx:119)"
+    },
+    {
+      "label": "detail.chatrow.time",
+      "group": "Chat row",
+      "state": "detail",
+      "design": ".pg > div:nth-child(4) .lrow:nth-child(1) .lrow__time",
+      "what": "right-aligned relative time, mono 10.5px var(--mut2) (copilot.css:295)"
+    },
+    {
+      "label": "detail.filerow",
+      "group": "File row",
+      "state": "detail",
+      "design": ".pg > div:nth-child(6) .lrow:nth-child(1)",
+      "what": "file row is a DIV (not a button) with inline cursor:default — deliberately NON-interactive (copilot-app.jsx:161)"
+    },
+    {
+      "label": "detail.filerow.name",
+      "group": "File row",
+      "state": "detail",
+      "design": ".pg > div:nth-child(6) .lrow:nth-child(1) .lrow__name",
+      "what": "filename; its .lrow__sub sibling keeps the DEFAULT mono family (no inline body override, unlike chat rows) and there is no time column"
+    }
+  ]
+}

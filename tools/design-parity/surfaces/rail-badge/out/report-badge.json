@@ -1,0 +1,601 @@
+{
+  "state": "badge",
+  "counts": {
+    "high": 7,
+    "medium": 45,
+    "low": 9,
+    "info": 13
+  },
+  "findings": [
+    {
+      "label": "shell.body.grid",
+      "group": "Shell frame",
+      "severity": "high",
+      "kind": "style",
+      "prop": "backgroundColor",
+      "detail": "rgba(0, 0, 0, 0) (transparent) → rgb(9, 9, 11)"
+    },
+    {
+      "label": "rail.brand",
+      "group": "Rail",
+      "severity": "high",
+      "kind": "style",
+      "prop": "color",
+      "detail": "rgb(236, 236, 241) (--tx) → rgb(95, 178, 236) (--accent/--sky)"
+    },
+    {
+      "label": "rail.brand",
+      "group": "Rail",
+      "severity": "high",
+      "kind": "style",
+      "prop": "borderColor",
+      "detail": "rgb(236, 236, 241) (--tx) → rgb(95, 178, 236) (--accent/--sky)"
+    },
+    {
+      "label": "rail.brand.mark",
+      "group": "Rail",
+      "severity": "high",
+      "kind": "style",
+      "prop": "color",
+      "detail": "rgb(236, 236, 241) (--tx) → rgb(95, 178, 236) (--accent/--sky)"
+    },
+    {
+      "label": "rail.brand.mark",
+      "group": "Rail",
+      "severity": "high",
+      "kind": "style",
+      "prop": "borderColor",
+      "detail": "rgb(236, 236, 241) (--tx) → rgb(95, 178, 236) (--accent/--sky)"
+    },
+    {
+      "label": "rail.foot",
+      "group": "Rail foot",
+      "severity": "high",
+      "kind": "style",
+      "prop": "borderColor",
+      "detail": "rgb(236, 236, 241) (--tx) → rgba(255, 255, 255, 0.06) rgb(236, 236, 241) rgb(236, 236, 241) rgb(236, 236, 241)"
+    },
+    {
+      "label": "rail.me",
+      "group": "Rail foot",
+      "severity": "high",
+      "kind": "style",
+      "prop": "borderColor",
+      "detail": "rgba(255, 255, 255, 0.1) (--line2) → rgb(212, 212, 219) (--tx2)"
+    },
+    {
+      "label": "shell.body.grid",
+      "group": "Shell frame",
+      "severity": "medium",
+      "kind": "style",
+      "prop": "fontSize",
+      "detail": "13px → 13.6px (+0.6px)"
+    },
+    {
+      "label": "rail.container",
+      "group": "Rail",
+      "severity": "medium",
+      "kind": "style",
+      "prop": "fontSize",
+      "detail": "13px → 13.6px (+0.6px)"
+    },
+    {
+      "label": "rail.container",
+      "group": "Rail",
+      "severity": "medium",
+      "kind": "style",
+      "prop": "gap",
+      "detail": "2px → normal"
+    },
+    {
+      "label": "rail.brand",
+      "group": "Rail",
+      "severity": "medium",
+      "kind": "style",
+      "prop": "display",
+      "detail": "grid → flex"
+    },
+    {
+      "label": "rail.brand",
+      "group": "Rail",
+      "severity": "medium",
+      "kind": "style",
+      "prop": "justifyContent",
+      "detail": "normal → center"
+    },
+    {
+      "label": "rail.brand",
+      "group": "Rail",
+      "severity": "medium",
+      "kind": "style",
+      "prop": "padding",
+      "detail": "1px 6px → 0px"
+    },
+    {
+      "label": "rail.brand",
+      "group": "Rail",
+      "severity": "medium",
+      "kind": "style",
+      "prop": "margin",
+      "detail": "0px 0px 10px 0px → 0px"
+    },
+    {
+      "label": "rail.item.run",
+      "group": "Destination items",
+      "severity": "medium",
+      "kind": "style",
+      "prop": "display",
+      "detail": "grid → flex"
+    },
+    {
+      "label": "rail.item.run",
+      "group": "Destination items",
+      "severity": "medium",
+      "kind": "style",
+      "prop": "justifyContent",
+      "detail": "normal → center"
+    },
+    {
+      "label": "rail.item.run",
+      "group": "Destination items",
+      "severity": "medium",
+      "kind": "style",
+      "prop": "padding",
+      "detail": "1px 6px → 0px"
+    },
+    {
+      "label": "rail.badge",
+      "group": "Notification badge",
+      "severity": "medium",
+      "kind": "style",
+      "prop": "display",
+      "detail": "grid → flex"
+    },
+    {
+      "label": "rail.badge",
+      "group": "Notification badge",
+      "severity": "medium",
+      "kind": "style",
+      "prop": "justifyContent",
+      "detail": "normal → center"
+    },
+    {
+      "label": "rail.badge.absence",
+      "group": "Notification badge",
+      "severity": "medium",
+      "kind": "style",
+      "prop": "display",
+      "detail": "grid → flex"
+    },
+    {
+      "label": "rail.badge.absence",
+      "group": "Notification badge",
+      "severity": "medium",
+      "kind": "style",
+      "prop": "justifyContent",
+      "detail": "normal → center"
+    },
+    {
+      "label": "rail.item.chats",
+      "group": "Destination items",
+      "severity": "medium",
+      "kind": "style",
+      "prop": "display",
+      "detail": "grid → flex"
+    },
+    {
+      "label": "rail.item.chats",
+      "group": "Destination items",
+      "severity": "medium",
+      "kind": "style",
+      "prop": "justifyContent",
+      "detail": "normal → center"
+    },
+    {
+      "label": "rail.item.chats",
+      "group": "Destination items",
+      "severity": "medium",
+      "kind": "style",
+      "prop": "padding",
+      "detail": "1px 6px → 0px"
+    },
+    {
+      "label": "rail.item.projects",
+      "group": "Destination items",
+      "severity": "medium",
+      "kind": "style",
+      "prop": "display",
+      "detail": "grid → flex"
+    },
+    {
+      "label": "rail.item.projects",
+      "group": "Destination items",
+      "severity": "medium",
+      "kind": "style",
+      "prop": "justifyContent",
+      "detail": "normal → center"
+    },
+    {
+      "label": "rail.item.projects",
+      "group": "Destination items",
+      "severity": "medium",
+      "kind": "style",
+      "prop": "padding",
+      "detail": "1px 6px → 0px"
+    },
+    {
+      "label": "rail.item.activity",
+      "group": "Destination items",
+      "severity": "medium",
+      "kind": "style",
+      "prop": "display",
+      "detail": "grid → flex"
+    },
+    {
+      "label": "rail.item.activity",
+      "group": "Destination items",
+      "severity": "medium",
+      "kind": "style",
+      "prop": "justifyContent",
+      "detail": "normal → center"
+    },
+    {
+      "label": "rail.item.activity",
+      "group": "Destination items",
+      "severity": "medium",
+      "kind": "style",
+      "prop": "padding",
+      "detail": "1px 6px → 0px"
+    },
+    {
+      "label": "rail.item.tools",
+      "group": "Destination items",
+      "severity": "medium",
+      "kind": "style",
+      "prop": "display",
+      "detail": "grid → flex"
+    },
+    {
+      "label": "rail.item.tools",
+      "group": "Destination items",
+      "severity": "medium",
+      "kind": "style",
+      "prop": "justifyContent",
+      "detail": "normal → center"
+    },
+    {
+      "label": "rail.item.tools",
+      "group": "Destination items",
+      "severity": "medium",
+      "kind": "style",
+      "prop": "padding",
+      "detail": "1px 6px → 0px"
+    },
+    {
+      "label": "rail.item.skills",
+      "group": "Destination items",
+      "severity": "medium",
+      "kind": "style",
+      "prop": "display",
+      "detail": "grid → flex"
+    },
+    {
+      "label": "rail.item.skills",
+      "group": "Destination items",
+      "severity": "medium",
+      "kind": "style",
+      "prop": "justifyContent",
+      "detail": "normal → center"
+    },
+    {
+      "label": "rail.item.skills",
+      "group": "Destination items",
+      "severity": "medium",
+      "kind": "style",
+      "prop": "padding",
+      "detail": "1px 6px → 0px"
+    },
+    {
+      "label": "rail.item.active",
+      "group": "Active state",
+      "severity": "medium",
+      "kind": "style",
+      "prop": "display",
+      "detail": "grid → flex"
+    },
+    {
+      "label": "rail.item.active",
+      "group": "Active state",
+      "severity": "medium",
+      "kind": "style",
+      "prop": "justifyContent",
+      "detail": "normal → center"
+    },
+    {
+      "label": "rail.item.active",
+      "group": "Active state",
+      "severity": "medium",
+      "kind": "style",
+      "prop": "padding",
+      "detail": "1px 6px → 0px"
+    },
+    {
+      "label": "rail.foot",
+      "group": "Rail foot",
+      "severity": "medium",
+      "kind": "style",
+      "prop": "fontSize",
+      "detail": "13px → 13.6px (+0.6px)"
+    },
+    {
+      "label": "rail.foot",
+      "group": "Rail foot",
+      "severity": "medium",
+      "kind": "style",
+      "prop": "padding",
+      "detail": "0px → 8px 0px 0px 0px"
+    },
+    {
+      "label": "rail.foot",
+      "group": "Rail foot",
+      "severity": "medium",
+      "kind": "style",
+      "prop": "margin",
+      "detail": "455px 0px 0px 0px → 0px"
+    },
+    {
+      "label": "rail.foot",
+      "group": "Rail foot",
+      "severity": "medium",
+      "kind": "style",
+      "prop": "borderWidth",
+      "detail": "0px → 1px 0px 0px 0px"
+    },
+    {
+      "label": "rail.foot",
+      "group": "Rail foot",
+      "severity": "medium",
+      "kind": "style",
+      "prop": "gap",
+      "detail": "5px → 6px"
+    },
+    {
+      "label": "rail.foot.settings",
+      "group": "Rail foot",
+      "severity": "medium",
+      "kind": "style",
+      "prop": "display",
+      "detail": "grid → flex"
+    },
+    {
+      "label": "rail.foot.settings",
+      "group": "Rail foot",
+      "severity": "medium",
+      "kind": "style",
+      "prop": "justifyContent",
+      "detail": "normal → center"
+    },
+    {
+      "label": "rail.foot.settings",
+      "group": "Rail foot",
+      "severity": "medium",
+      "kind": "style",
+      "prop": "padding",
+      "detail": "1px 6px → 0px"
+    },
+    {
+      "label": "rail.me",
+      "group": "Rail foot",
+      "severity": "medium",
+      "kind": "style",
+      "prop": "display",
+      "detail": "grid → flex"
+    },
+    {
+      "label": "rail.me",
+      "group": "Rail foot",
+      "severity": "medium",
+      "kind": "style",
+      "prop": "justifyContent",
+      "detail": "normal → center"
+    },
+    {
+      "label": "rail.me",
+      "group": "Rail foot",
+      "severity": "medium",
+      "kind": "style",
+      "prop": "padding",
+      "detail": "1px 6px → 0px"
+    },
+    {
+      "label": "rail.me",
+      "group": "Rail foot",
+      "severity": "medium",
+      "kind": "style",
+      "prop": "borderWidth",
+      "detail": "1px → 0px"
+    },
+    {
+      "label": "rail.me",
+      "group": "Rail foot",
+      "severity": "medium",
+      "kind": "style",
+      "prop": "borderRadius",
+      "detail": "50% → 999px"
+    },
+    {
+      "label": "shell.body.grid",
+      "group": "Shell frame",
+      "severity": "low",
+      "kind": "style",
+      "prop": "lineHeight",
+      "detail": "19.5px → normal"
+    },
+    {
+      "label": "shell.body.grid",
+      "group": "Shell frame",
+      "severity": "low",
+      "kind": "style",
+      "prop": "width",
+      "detail": "1218px → 1220px"
+    },
+    {
+      "label": "rail.container",
+      "group": "Rail",
+      "severity": "low",
+      "kind": "style",
+      "prop": "lineHeight",
+      "detail": "19.5px → normal"
+    },
+    {
+      "label": "rail.badge",
+      "group": "Notification badge",
+      "severity": "low",
+      "kind": "style",
+      "prop": "lineHeight",
+      "detail": "normal → 13px"
+    },
+    {
+      "label": "rail.badge.absence",
+      "group": "Notification badge",
+      "severity": "low",
+      "kind": "style",
+      "prop": "lineHeight",
+      "detail": "normal → 13px"
+    },
+    {
+      "label": "rail.foot",
+      "group": "Rail foot",
+      "severity": "low",
+      "kind": "style",
+      "prop": "lineHeight",
+      "detail": "19.5px → normal"
+    },
+    {
+      "label": "rail.foot",
+      "group": "Rail foot",
+      "severity": "low",
+      "kind": "style",
+      "prop": "height",
+      "detail": "65px → 75px"
+    },
+    {
+      "label": "rail.foot",
+      "group": "Rail foot",
+      "severity": "low",
+      "kind": "style",
+      "prop": "borderStyle",
+      "detail": "none → solid none none none"
+    },
+    {
+      "label": "rail.me",
+      "group": "Rail foot",
+      "severity": "low",
+      "kind": "style",
+      "prop": "borderStyle",
+      "detail": "solid → none"
+    },
+    {
+      "label": "shell.body.grid",
+      "group": "Shell frame",
+      "severity": "info",
+      "kind": "copy",
+      "prop": "text",
+      "detail": "“Run1ChatsProjectsActivityToolsSkillsSettingsSChatsevery conv…” → “[data-component=\"app-rail\"] .rail-btn { transition: backgrou…”"
+    },
+    {
+      "label": "rail.container",
+      "group": "Rail",
+      "severity": "info",
+      "kind": "copy",
+      "prop": "text",
+      "detail": "“Run1ChatsProjectsActivityToolsSkillsSettingsS” → “[data-component=\"app-rail\"] .rail-btn { transition: backgrou…”"
+    },
+    {
+      "label": "rail.item.run",
+      "group": "Destination items",
+      "severity": "info",
+      "kind": "copy",
+      "prop": "text",
+      "detail": "“Run1” → “1”"
+    },
+    {
+      "label": "rail.item.run.label",
+      "group": "Destination items",
+      "severity": "info",
+      "kind": "missing-in-live",
+      "detail": "expected: the design ships a `.rl` text span that is `display:none` (copilot.css:69) — zero visual footprint, present only as dead markup from an earlier labelled-rail iteration. The live rail carries the same affordance on the button itself via `title` + `aria-label` (AppRail.tsx:262-263), which is strictly better for assistive tech. Absence is intentional and unmeasurable; INFO, not drift."
+    },
+    {
+      "label": "rail.item.chats",
+      "group": "Destination items",
+      "severity": "info",
+      "kind": "copy",
+      "prop": "text",
+      "detail": "“Chats” → “”"
+    },
+    {
+      "label": "rail.item.projects",
+      "group": "Destination items",
+      "severity": "info",
+      "kind": "copy",
+      "prop": "text",
+      "detail": "“Projects” → “”"
+    },
+    {
+      "label": "rail.item.activity",
+      "group": "Destination items",
+      "severity": "info",
+      "kind": "copy",
+      "prop": "text",
+      "detail": "“Activity” → “”"
+    },
+    {
+      "label": "rail.item.tools",
+      "group": "Destination items",
+      "severity": "info",
+      "kind": "copy",
+      "prop": "text",
+      "detail": "“Tools” → “”"
+    },
+    {
+      "label": "rail.item.skills",
+      "group": "Destination items",
+      "severity": "info",
+      "kind": "copy",
+      "prop": "text",
+      "detail": "“Skills” → “”"
+    },
+    {
+      "label": "rail.item.active",
+      "group": "Active state",
+      "severity": "info",
+      "kind": "copy",
+      "prop": "text",
+      "detail": "“Chats” → “”"
+    },
+    {
+      "label": "rail.item.active.bar",
+      "group": "Active state",
+      "severity": "info",
+      "kind": "extra-in-live",
+      "detail": "present in live, not in design map"
+    },
+    {
+      "label": "rail.foot",
+      "group": "Rail foot",
+      "severity": "info",
+      "kind": "copy",
+      "prop": "text",
+      "detail": "“SettingsS” → “S”"
+    },
+    {
+      "label": "rail.foot.settings",
+      "group": "Rail foot",
+      "severity": "info",
+      "kind": "copy",
+      "prop": "text",
+      "detail": "“Settings” → “”"
+    }
+  ]
+}

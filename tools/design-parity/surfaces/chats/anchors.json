@@ -1,0 +1,190 @@
+{
+  "surface": "chats",
+  "note": "design↔live element correspondence for the v3 Chats destination. DESIGN = design-kit/app-v3/copilot-app.jsx:111-143 (ChatRow + ChatsSurface over the CHATS fixture in copilot-data.jsx:192-201), styled by copilot.css:280-295 / 108-118. LIVE = packages/chat-surface/src/destinations/chats/ChatsArchive.tsx:168 (NOT ChatsDestination.tsx — that file is mounted by neither host, see FINDINGS), rendered by lib/render-live-chats.test.tsx into surfaces/chats/live/default.html. The live tree carries only 4 class hooks (.pg-lead, .sect-h, .rowlist, .ui-button) — every other style is an inline CSSProperties object — so live selectors are data-testid driven. Design structural selectors use :nth-child against `.pg`'s literal child order (p.pg-lead(1), header div(2), rowlist Pinned(3), sect-h Recent(4), rowlist Recent(5), sect-h Archived(6), rowlist Archived(7)) because the design's heads/lists carry no distinguishing class. INLINE design styles are part of the baseline and captured deliberately (.pg flex:1/overflow:auto; header div margin-bottom:14px; Pinned .sect-h margin:0; .cbtn--pri margin-left:auto; every .chip padding:1px 8px; every .lrow__sub font-family:var(--body); the running .lrow__ic color:var(--jade)). Two anchors intentionally have NO live selector — see their expectDivergence / FINDINGS.",
+  "states": ["default"],
+  "elements": [
+    {
+      "label": "topbar.title",
+      "group": "Shell",
+      "state": "default",
+      "design": ".topbar .tb-title h1",
+      "what": "Destination title 'Chats' with the subtitle 'every conversation with the agent' beside it (TITLES, copilot-app.jsx:237). .tb-title h1 = 13.5px/600, --disp, letter-spacing -.01em; the sibling .sub is 11.5px --mut2 (copilot.css:80-82). NO live counterpart: `chats` is in FULL_BLEED_DESTINATIONS (ChatShell.tsx:43-47) and the shell suppresses the Topbar for full-bleed destinations (ChatShell.tsx:236-237, 304-311); neither host substitutes one. Left unmatched deliberately so compare.mjs reports it as HIGH."
+    },
+    {
+      "label": "page.container",
+      "group": "Page",
+      "state": "default",
+      "design": ".pg",
+      "live": "[data-testid=\"chats-archive\"] > div",
+      "what": "Surface scroll container. Design .pg = padding 20px 24px 40px, max-width 960px (copilot.css:280) + inline flex:1/min-height:0/overflow:auto (copilot-app.jsx:130). Live containerStyle = maxWidth 960, padding '24px 28px 96px', display flex column gap 20 (ChatsArchive.tsx:147-156); the scroll/flex duties moved up to the `section` rootStyle (ChatsArchive.tsx:134-144)."
+    },
+    {
+      "label": "page.lead",
+      "group": "Page",
+      "state": "default",
+      "design": ".pg-lead",
+      "live": "[data-testid=\"chats-lead\"]",
+      "what": "Intro paragraph. Design: 12px / line-height 1.6 / --mut / margin -2px 0 18px / max-width 72ch (copilot.css:281). Live: PageLead.tsx:21-27 uses var(--font-size-xs) + var(--line-height-loose) + var(--color-text-muted), margin 0 (spacing delegated to the container's gap:20)."
+    },
+    {
+      "label": "header.row",
+      "group": "Header",
+      "state": "default",
+      "design": ".pg > div:nth-child(2)",
+      "live": "[data-testid=\"chats-section-pinned\"] [data-testid=\"section-header\"]",
+      "what": "The flex row pairing the Pinned section head with the New-chat CTA. Design: an unclassed wrapper div with inline display:flex/align-items:center/margin-bottom:14px around the .sect-h (copilot-app.jsx:132). Live: SectionHeader.tsx:63-68 IS that flex row (the wrapper and the .sect-h are the same node), gap var(--space-sm), no margin — vertical rhythm comes from the section wrapper's gap:10 (ChatsArchive.tsx:345-349)."
+    },
+    {
+      "label": "sect.pinned",
+      "group": "Sections",
+      "state": "default",
+      "design": ".pg > div:nth-child(2) > .sect-h",
+      "live": "[data-testid=\"chats-section-pinned\"] [data-testid=\"section-header-label\"]",
+      "what": "'Pinned' section head. Design .sect-h = mono 9.5px, letter-spacing .12em, uppercase, --mut2 (copilot.css:282); inline margin:0 because it lives inside the flex header. Live: headingStyle at SectionHeader.tsx:37-45 on an <h2> — mono, var(--font-size-2xs), var(--font-weight-semibold), same tracking/uppercase/subtle colour."
+    },
+    {
+      "label": "btn.newChat",
+      "group": "Header",
+      "state": "default",
+      "design": ".pg .cbtn--pri",
+      "live": "[data-testid=\"chats-new-chat\"]",
+      "what": "Primary 'New chat'. Design .cbtn + .cbtn--pri + .cbtn--sm = accent fill, --accent-ink, weight 600, padding 4px 9px, font-size 11.5px, radius --r-sm (copilot.css:94/97/110); inline margin-left:auto. Live: design-system <Button variant=primary size=sm> → .ui-button.ui-button--primary.ui-button--sm (ChatsArchive.tsx:317-329), right-aligned by SectionHeader's actionSlotStyle marginInlineStart:auto (SectionHeader.tsx:47-51)."
+    },
+    {
+      "label": "list.pinned",
+      "group": "Lists",
+      "state": "default",
+      "design": ".pg > .rowlist:nth-child(3)",
+      "live": "[data-testid=\"chats-section-pinned-list\"]",
+      "what": "Pinned list card (1 row). Design .rowlist = column flex, 1px --line border, radius --r (8px), overflow hidden, --panel background (copilot.css:284). Live: RowList.tsx renders a <ul> with the same border/radius/overflow/background tokens."
+    },
+    {
+      "label": "row.running",
+      "group": "Row (running)",
+      "state": "default",
+      "design": ".pg > .rowlist:nth-child(3) > .lrow",
+      "live": "[data-testid=\"chats-section-pinned-list\"] [data-testid=\"chat-archive-row\"]",
+      "what": "The pinned/running chat row. Design .lrow = flex, gap 12, padding 11px 14px, bottom hairline, transparent bg, font:inherit, cursor pointer (copilot.css:285) on a real <button>. Live: Row.tsx rowStyle:55-66 = flex, gap var(--space-md), padding '10px 12px', on a role=button <div> (Row.tsx:147-160); the hairline moved to the <li> (RowList.tsx)."
+    },
+    {
+      "label": "row.running.ic",
+      "group": "Row (running)",
+      "state": "default",
+      "design": ".pg > .rowlist:nth-child(3) > .lrow .lrow__ic",
+      "live": "[data-testid=\"chats-section-pinned-list\"] [data-testid=\"row-icon\"]",
+      "what": "The 28×28 icon TILE. Design: 28×28, radius 7, background --panel3, colour --mut, + inline color:var(--jade) while running (copilot.css:289, copilot-app.jsx:116). Live: Row.tsx iconSlotStyle:70-79 — same 28×28 + radius, but NO background, and the jade tint is applied one level DOWN on the live wrapper span (ChatsArchive.tsx:418-423), so a `color` diff at this anchor is a nesting artifact — the true glyph colour is measured at row.running.ic.svg."
+    },
+    {
+      "label": "row.running.ic.svg",
+      "group": "Row (running)",
+      "state": "default",
+      "design": ".pg > .rowlist:nth-child(3) > .lrow .lrow__ic svg",
+      "live": "[data-testid=\"chats-section-pinned-list\"] [data-testid=\"chat-archive-row-icon\"][data-live=\"true\"] svg",
+      "what": "Running rows swap the chat glyph for the brand <Mark size={18}/> (viewBox '0 0 400 400'). In the design `.lrow__ic svg{width:15px;height:15px}` (copilot.css:290) beats the width=18 attribute, so it renders 15×15 in jade currentColor. Live renders the same BrandMark (ChatsArchive.tsx:468) but there is no `.lrow__ic svg` size rule, so the 18 attribute stands."
+    },
+    {
+      "label": "row.running.name",
+      "group": "Row (running)",
+      "state": "default",
+      "design": ".pg > .rowlist:nth-child(3) > .lrow .lrow__name",
+      "live": "[data-testid=\"chats-section-pinned-list\"] [data-testid=\"row-title\"]",
+      "what": "Title line 'Launch Week ops'. Design .lrow__name = 12.5px / weight 500 / --tx AND itself display:flex gap 8 so the chip sits inline (copilot.css:292). Live splits those duties: the FONT lives on Row.tsx titleStyle:96-104 (var(--font-size-xs), var(--font-weight-semibold)) and the FLEX on the unlabelled titleRowStyle parent (Row.tsx:89-94) — so display/flex/gap diffs at this anchor are a nesting artifact; the typography diff is real."
+    },
+    {
+      "label": "chip.running",
+      "group": "Status pills",
+      "state": "default",
+      "design": ".pg > .rowlist:nth-child(3) > .lrow .chip--ok",
+      "live": "[data-testid=\"chats-section-pinned-list\"] [data-testid=\"status-pill\"][data-status=\"ok\"]",
+      "what": "'running' pill. Design .chip = mono 10.5px, radius 999px, 1px --line2 border, transparent background, gap 5, + .chip--ok jade text / rgba(87,199,133,.25) border; inline padding:1px 8px overrides the base 2px 8px (copilot.css:112/114). Live: StatusPill.tsx pillStyle:66-84 — height 20, padding '0 8px', var(--font-size-2xs), weight 600, letter-spacing .3px, textTransform uppercase, backgroundColor var(--color-success-bg), border 1px solid var(--color-success)."
+    },
+    {
+      "label": "chip.running.dot",
+      "group": "Status pills",
+      "state": "default",
+      "design": ".pg > .rowlist:nth-child(3) > .lrow .chip--ok .dotk",
+      "live": "[data-testid=\"chats-section-pinned-list\"] [data-testid=\"status-pill\"][data-status=\"ok\"] > span:first-child",
+      "what": "The 6×6 currentColor dot rendered ONLY for status==='running' (copilot.css:118, copilot-app.jsx:118) — the single real-time affordance in Chats, static in the mock. Live: StatusPill.tsx dotStyle:86-92, gated by showDot from statusTone (ChatsArchive.tsx:476-482). Exactly one exists on both sides."
+    },
+    {
+      "label": "row.running.sub",
+      "group": "Row (running)",
+      "state": "default",
+      "design": ".pg > .rowlist:nth-child(3) > .lrow .lrow__sub",
+      "live": "[data-testid=\"chats-section-pinned-list\"] [data-testid=\"row-sub\"]",
+      "what": "Preview line. Design: 11px --mut2, margin-top 1 (copilot.css:293); CSS defaults it to var(--mono) but the INLINE font-family:var(--body) on every ChatRow flips it to the body face. Live: Row.tsx subStyle:106-112 — var(--font-size-2xs), var(--color-text-subtle), body font by inheritance, spacing via the main column's gap:2 (Row.tsx:81-87)."
+    },
+    {
+      "label": "row.running.sub.mono",
+      "group": "Row (running)",
+      "state": "default",
+      "design": ".pg > .rowlist:nth-child(3) > .lrow .lrow__sub .mono",
+      "live": "[data-testid=\"chats-section-pinned-list\"] [data-testid=\"chat-archive-row-model\"]",
+      "what": "Model name re-monospaced inside the body-font sub-line (.mono, copilot.css:42). Live: modelMonoStyle at ChatsArchive.tsx:426-430 (var(--font-mono) + var(--color-text-muted)). All 8 rows carry one on both sides, including local models."
+    },
+    {
+      "label": "row.running.time",
+      "group": "Row (running)",
+      "state": "default",
+      "design": ".pg > .rowlist:nth-child(3) > .lrow .lrow__time",
+      "live": "[data-testid=\"chats-section-pinned-list\"] [data-testid=\"row-meta\"]",
+      "what": "Relative timestamp. Design 'now' — mono 10.5px --mut2, flex:none (copilot.css:295); the fixture vocabulary is relative/coarse: now / 2h / 3h / 1d / Mon. Live: Row.tsx metaStyle:114-120 (var(--font-mono), var(--font-size-2xs), var(--color-text-subtle)), text produced by util/time.ts formatRelativeTime."
+    },
+    {
+      "label": "sect.recent",
+      "group": "Sections",
+      "state": "default",
+      "design": ".pg > .sect-h:nth-child(4)",
+      "live": "[data-testid=\"chats-section-recent\"] [data-testid=\"section-header-label\"]",
+      "what": "'Recent' section head — no inline override in the design, so the full .sect-h margin 22px 0 10px applies (copilot.css:282); that 22px is what separates the three list cards. Live has margin 0 and relies on sectionsStyle gap:24 (ChatsArchive.tsx:158-162) + sectionWrapStyle gap:10."
+    },
+    {
+      "label": "row.done.ic",
+      "group": "Row (done)",
+      "state": "default",
+      "design": ".pg > .rowlist:nth-child(5) > .lrow:nth-child(1) .lrow__ic",
+      "live": "[data-testid=\"chats-section-recent-list\"] [data-testid=\"row-list-item\"]:nth-child(1) [data-testid=\"row-icon\"]",
+      "what": "Non-live row icon tile on 'Weekly treasury reconciliation': no inline colour, so it stays --mut and renders Icon.chats. The jade-vs-mut contrast against row.running.ic IS the liveness signal at row level; the tile background (--panel3 in the design) is what makes it read as a tile at all."
+    },
+    {
+      "label": "chip.paused",
+      "group": "Status pills",
+      "state": "default",
+      "design": ".pg > .rowlist:nth-child(5) > .lrow:nth-child(3) .chip--warn",
+      "live": "[data-testid=\"chats-section-recent-list\"] [data-testid=\"status-pill\"][data-status=\"warning\"]",
+      "what": "'paused' pill on 'Rebalance LP positions' (3rd Recent row) — .chip--warn = --amber text, rgba(232,180,94,.25) border, transparent fill, no dot (copilot.css:116). Live: StatusPill warning tone (var(--color-warning) fg, var(--color-warning-bg) fill, solid var(--color-warning) border). Paused stays inside Recent on both sides."
+    },
+    {
+      "label": "sect.archived",
+      "group": "Sections",
+      "state": "default",
+      "design": ".pg > .sect-h:nth-child(6)",
+      "live": "[data-testid=\"chats-section-archived\"] [data-testid=\"section-header-label\"]",
+      "what": "'Archived · history' section head — note the middot qualifier, not a bare 'Archived'. Live copy matches byte-for-byte (SECTION_HEADINGS, ChatsArchive.tsx:59-63). Archived chats stay on the same page on both sides."
+    },
+    {
+      "label": "chip.archived",
+      "group": "Status pills",
+      "state": "default",
+      "design": ".pg > .rowlist:nth-child(7) > .lrow:nth-child(1) .chip--off",
+      "live": "[data-testid=\"chats-section-archived-list\"] [data-testid=\"row-list-item\"]:nth-child(1) [data-testid=\"status-pill\"][data-status=\"muted\"]",
+      "what": "'archived' pill on 'Competitor launch digest' — .chip--off = --mut2 text inheriting the base --line2 border and transparent fill (copilot.css:117). Live: StatusPill muted tone (var(--color-text-subtle) fg, var(--color-surface-muted) fill, var(--color-border) border)."
+    },
+    {
+      "label": "sect.count.pill",
+      "group": "Sections",
+      "state": "default",
+      "design": ".pg .sect-h .chip",
+      "live": "[data-testid=\"chats-section-pinned\"] [data-testid=\"section-header-count\"] [data-testid=\"status-pill\"]",
+      "what": "LIVE-ONLY probe. The live SectionHeader renders a muted count pill after every section label (ChatsArchive.tsx:369-376) — 3 of them, which is why live has 11 status-pills against the design's 8 chips. The design has no chip inside any .sect-h, so the design selector is expected to miss and compare.mjs reports this as extra-in-live (INFO)."
+    },
+    {
+      "label": "rail.badge",
+      "group": "Shell",
+      "state": "default",
+      "design": ".rail .rbadge",
+      "expectDivergence": "OUT OF HARNESS SCOPE, not drift: the rail is ChatShell chrome, not part of the Chats destination component this harness renders (render-live-chats.test.tsx mounts ChatsArchive alone). The live rail badge is measured by the sibling harness lib/render-live-rail-badge.test.tsx.",
+      "what": "The '1' active-run badge on the rail's Run item, present on every non-Run destination (copilot-app.jsx:299, copilot.css:73 — accent fill, --accent-ink, mono 8.5px/700, min-width 13px, 13px tall, absolute top:3/right:3). It is how Chats signals a run is still live elsewhere."
+    }
+  ]
+}
