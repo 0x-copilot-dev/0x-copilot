@@ -125,6 +125,19 @@ export interface AssistantComposerProps {
   providerKeysPort?: ProviderKeysPort;
   /** Refresh seam fired after a successful inline add-key connect (see ModelPill). */
   onProviderKeyAdded?: (result: KeyFormConnected) => void;
+  /**
+   * Model-popover footer deep-link → Settings → Local models. Host-owned
+   * navigation (the package never navigates). Forwarded verbatim to
+   * {@link ModelPill}; when unset the footer link is not rendered.
+   */
+  onGetLocalModels?: () => void;
+  /**
+   * On-disk byte sizes of installed LOCAL models, keyed by name/id — the host
+   * binder's join of `GET /v1/local-models` onto the model catalog. Forwarded
+   * verbatim to {@link ModelPill}, where it turns a local row's sub-line into
+   * the design's "42 GB · never leaves this machine".
+   */
+  localModelSizes?: Readonly<Record<string, number>>;
   depth?: ThinkingDepth;
   onDepthChange?: (depth: ThinkingDepth) => void;
   depthVisible?: boolean;
@@ -225,6 +238,8 @@ export const AssistantComposer = forwardRef<
     onAddCustomModel,
     providerKeysPort,
     onProviderKeyAdded,
+    onGetLocalModels,
+    localModelSizes,
     depth,
     onDepthChange,
     depthVisible,
@@ -476,6 +491,8 @@ export const AssistantComposer = forwardRef<
                 onAddCustom={onAddCustomModel}
                 providerKeysPort={providerKeysPort}
                 onProviderKeyAdded={onProviderKeyAdded}
+                onGetLocalModels={onGetLocalModels}
+                localModelSizes={localModelSizes}
               />
             ) : null}
             {depth !== undefined && onDepthChange ? (

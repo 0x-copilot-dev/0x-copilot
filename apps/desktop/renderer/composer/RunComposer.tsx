@@ -64,6 +64,12 @@ export interface RunComposerProps {
   /** Open Settings → Provider keys (BYOK model setup). */
   readonly onOpenModelSettings?: () => void;
   /**
+   * Open Settings → Local models. Drives the model popover's "Get local models
+   * →" footer link — the on-device sibling of `onOpenModelSettings`. Host-owned
+   * navigation; omitted ⇒ the link is not rendered.
+   */
+  readonly onGetLocalModels?: () => void;
+  /**
    * MCP connector surface for the inline Tools popover. When provided, the
    * composer's connectors trigger becomes the connector-aware Tools popover
    * (web-search toggle + connected rows + 1-click connect + Custom MCP) instead
@@ -104,6 +110,7 @@ export function RunComposer(props: RunComposerProps): ReactElement {
     onShowConnectors,
     onOpenSkillsSettings,
     onOpenModelSettings,
+    onGetLocalModels,
     connectorsPort,
     providerKeysPort,
   } = props;
@@ -136,6 +143,7 @@ export function RunComposer(props: RunComposerProps): ReactElement {
     selectedModel,
     onModelChange: handleModelChange,
     onAddCustomModel: handleAddCustomModel,
+    localModelSizes,
     renderPlusMenu,
   } = useRunComposerBindings();
 
@@ -263,10 +271,17 @@ export function RunComposer(props: RunComposerProps): ReactElement {
         // Inline "Add a provider key" form inside the model popover (host-owned
         // provider-keys surface); unset ⇒ the pill keeps its deep-link.
         providerKeysPort={providerKeysPort}
+        // Model popover footer → Settings → Local models. Same deep-link idiom
+        // as the provider-keys CTA, just the other half of the picker.
+        onGetLocalModels={onGetLocalModels}
         models={models}
         selectedModel={selectedModel}
         onModelChange={handleModelChange}
         onAddCustomModel={handleAddCustomModel}
+        // `GET /v1/local-models` sizes, joined by name in the shared binder, so
+        // a local row in the model popover reads the design's
+        // "42 GB · never leaves this machine" instead of the placeholder.
+        localModelSizes={localModelSizes}
         // The Fast/Balanced/Deep depth grid is intentionally hidden — the picker
         // is a model list (Cursor/Claude shape), not a depth toggle.
         depthVisible={false}

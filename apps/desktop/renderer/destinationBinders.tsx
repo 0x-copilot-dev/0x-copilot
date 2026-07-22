@@ -595,6 +595,7 @@ export function RunBinder({
   conversationId,
   onConversationCreated,
   onOpenModelSettings,
+  onOpenLocalModelSettings,
   onOpenConnectors,
   onOpenSkills,
 }: {
@@ -607,6 +608,8 @@ export function RunBinder({
   readonly onConversationCreated?: (id: ConversationId) => void;
   /** Open Settings → Provider keys (readiness setup CTA / config-error CTA). */
   readonly onOpenModelSettings?: () => void;
+  /** Open Settings → Local models (model popover's "Get local models →"). */
+  readonly onOpenLocalModelSettings?: () => void;
   /** Navigate to the Tools (connectors) surface — composer connections view. */
   readonly onOpenConnectors?: () => void;
   /** Navigate to the Skills surface — composer skills settings. */
@@ -749,9 +752,16 @@ export function RunBinder({
         onOpenSkills={onOpenSkills}
         connectorsPort={connectorsPort}
         providerKeysPort={providerKeysPort}
+        onGetLocalModels={onOpenLocalModelSettings}
       />
     ),
-    [onOpenConnectors, onOpenSkills, connectorsPort, providerKeysPort],
+    [
+      onOpenConnectors,
+      onOpenSkills,
+      onOpenLocalModelSettings,
+      connectorsPort,
+      providerKeysPort,
+    ],
   );
 
   // Composer parity (PRD: desktop-composer-parity): mount the shared
@@ -778,6 +788,7 @@ export function RunBinder({
         onShowConnectors={onOpenConnectors}
         onOpenSkillsSettings={onOpenSkills}
         onOpenModelSettings={onOpenModelSettings}
+        onGetLocalModels={onOpenLocalModelSettings}
         connectorsPort={connectorsPort}
         providerKeysPort={providerKeysPort}
       />
@@ -786,6 +797,7 @@ export function RunBinder({
       onOpenConnectors,
       onOpenSkills,
       onOpenModelSettings,
+      onOpenLocalModelSettings,
       connectorsPort,
       providerKeysPort,
     ],

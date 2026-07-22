@@ -105,6 +105,12 @@ export interface DestinationOutletProps {
    */
   readonly onOpenModelSettings?: () => void;
   /**
+   * Open Settings → Local models. The Run composers' model popover footer
+   * ("Get local models →") uses it — the sibling of `onOpenModelSettings`, for
+   * the on-device half of the picker.
+   */
+  readonly onOpenLocalModelSettings?: () => void;
+  /**
    * Navigate to the Tools (connectors) surface. The Run composer's connectors
    * trigger + `+`-menu "show connectors" use it for the MCP + non-MCP view.
    */
@@ -122,6 +128,7 @@ export function DestinationOutlet({
   onOpenRetentionSettings,
   onOpenApprovalSettings,
   onOpenModelSettings,
+  onOpenLocalModelSettings,
   onOpenConnectors,
   onOpenSkills,
 }: DestinationOutletProps): ReactElement {
@@ -143,6 +150,7 @@ export function DestinationOutlet({
         onOpenRetentionSettings,
         onOpenApprovalSettings,
         onOpenModelSettings,
+        onOpenLocalModelSettings,
         onOpenConnectors,
         onOpenSkills,
       })}
@@ -158,6 +166,7 @@ interface SurfaceContext {
   readonly onOpenRetentionSettings?: () => void;
   readonly onOpenApprovalSettings?: () => void;
   readonly onOpenModelSettings?: () => void;
+  readonly onOpenLocalModelSettings?: () => void;
   readonly onOpenConnectors?: () => void;
   readonly onOpenSkills?: () => void;
 }
@@ -181,6 +190,7 @@ function renderSurface(
           conversationId={ctx.conversationId}
           onConversationCreated={ctx.onConversationCreated}
           onOpenModelSettings={ctx.onOpenModelSettings}
+          onOpenLocalModelSettings={ctx.onOpenLocalModelSettings}
           onOpenConnectors={ctx.onOpenConnectors}
           onOpenSkills={ctx.onOpenSkills}
         />

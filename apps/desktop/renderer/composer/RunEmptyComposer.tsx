@@ -68,6 +68,12 @@ export interface RunEmptyComposerProps {
    * of the `onAddKey` deep-link.
    */
   readonly providerKeysPort?: ProviderKeysPort;
+  /**
+   * Open Settings → Local models. Drives the model popover's "Get local models
+   * →" footer link — the on-device sibling of the "Add a provider key" link.
+   * Host-owned navigation; omitted ⇒ the link is not rendered.
+   */
+  readonly onGetLocalModels?: () => void;
 }
 
 export function RunEmptyComposer(props: RunEmptyComposerProps): ReactElement {
@@ -77,6 +83,7 @@ export function RunEmptyComposer(props: RunEmptyComposerProps): ReactElement {
     onOpenSkills,
     connectorsPort,
     providerKeysPort,
+    onGetLocalModels,
   } = props;
 
   const {
@@ -93,6 +100,7 @@ export function RunEmptyComposer(props: RunEmptyComposerProps): ReactElement {
     selectedModel,
     onModelChange,
     onAddCustomModel,
+    localModelSizes,
     renderPlusMenu,
   } = useRunComposerBindings();
 
@@ -174,10 +182,17 @@ export function RunEmptyComposer(props: RunEmptyComposerProps): ReactElement {
       // Inline "Add a provider key" form inside the model popover (host-owned
       // provider-keys surface); unset ⇒ the pill keeps its `onAddKey` deep-link.
       providerKeysPort={providerKeysPort}
+      // Model popover footer → Settings → Local models. Same deep-link idiom as
+      // the provider-keys CTA, just the other half of the picker.
+      onGetLocalModels={onGetLocalModels}
       models={models}
       selectedModel={selectedModel}
       onModelChange={onModelChange}
       onAddCustomModel={onAddCustomModel}
+      // `GET /v1/local-models` sizes, joined by name in the shared binder, so a
+      // local row in the model popover reads the design's
+      // "42 GB · never leaves this machine" instead of the placeholder "local".
+      localModelSizes={localModelSizes}
       suggestions={FIRST_RUN_SUGGESTIONS}
       resolveAttachment={resolveAttachment}
       onSubmit={handleSubmit}
