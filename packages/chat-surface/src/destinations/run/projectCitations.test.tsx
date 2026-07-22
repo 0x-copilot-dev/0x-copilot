@@ -37,7 +37,7 @@ function envelope(
     run_id: "run-1",
     conversation_id: "conv-1",
     sequence_no: seq,
-    activity_kind: "result",
+    activity_kind: "tool",
     payload: {},
     created_at: new Date(1_716_000_000_000 + seq * 1000).toISOString(),
     ...overrides,

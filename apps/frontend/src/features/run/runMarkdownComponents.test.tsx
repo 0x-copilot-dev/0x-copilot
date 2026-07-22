@@ -20,7 +20,7 @@ function citationMade(ordinal: number, callId: string): RuntimeEventEnvelope {
     run_id: "run-1",
     conversation_id: "conv-1",
     sequence_no: 1,
-    activity_kind: "result",
+    activity_kind: "tool",
     event_type: "citation_made",
     payload: {
       link: {
