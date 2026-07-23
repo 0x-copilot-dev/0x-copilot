@@ -42,6 +42,11 @@ from runtime_api.schemas.common import (
     RuntimeEventVisibility,
 )
 
+# PRD-D3 — hard cap for row-set text the projector lets through (hold reasons,
+# row titles, change field names / string values). Rendered UI text is treated
+# as plain, length-capped strings; the domain validator caps the source too.
+_ROWSET_TEXT_MAX = 200
+
 
 class _Fields:
     """Field name constants for presentation model validators and key references."""
@@ -1001,7 +1006,35 @@ class RuntimeEventPresentationProjector:
         target = cls._op_ref(payload.get(_LedgerKeys.Field.TARGET))
         if target is not None:
             safe_payload[_LedgerKeys.Field.TARGET] = target
+        # PRD-D3 — a row-set stage carries the ``rows`` count + the ``agent_holds``
+        # (each rebuilt from its own ``{row_key, reason}`` allow-list; reasons are
+        # rendered UI text, so length-capped + kept as plain strings).
+        rows = payload.get(_LedgerKeys.Field.ROWS)
+        if isinstance(rows, int) and not isinstance(rows, bool):
+            safe_payload[_LedgerKeys.Field.ROWS] = rows
+        holds = payload.get(_LedgerKeys.Field.AGENT_HOLDS)
+        if isinstance(holds, (list, tuple)):
+            safe_payload[_LedgerKeys.Field.AGENT_HOLDS] = [
+                hold
+                for hold in (cls._agent_hold(raw) for raw in holds)
+                if hold is not None
+            ]
         return safe_payload
+
+    @classmethod
+    def _agent_hold(cls, value: object) -> JsonObject | None:
+        """Rebuild one ``{row_key, reason}`` agent-hold from its own allow-list."""
+
+        if not isinstance(value, dict):
+            return None
+        row_key = cls._text(value.get(_LedgerKeys.Field.ROW_KEY))
+        reason = cls._text(value.get(_LedgerKeys.Field.REASON))
+        if row_key is None or reason is None:
+            return None
+        return {
+            _LedgerKeys.Field.ROW_KEY: row_key,
+            _LedgerKeys.Field.REASON: reason[:_ROWSET_TEXT_MAX],
+        }
 
     @classmethod
     def _revision_added_payload(cls, payload: JsonObject) -> JsonObject:
@@ -1035,7 +1068,70 @@ class RuntimeEventPresentationProjector:
                 for span in (cls._authorship_span(raw) for raw in spans)
                 if span is not None
             ]
+        # PRD-D3 — the additive inline ``rowset`` (full row content). Each row is
+        # rebuilt from its own allow-list so nothing extra rides the ledger row.
+        rowset = cls._rowset(payload.get(_LedgerKeys.Field.ROWSET))
+        if rowset is not None:
+            safe_payload[_LedgerKeys.Field.ROWSET] = rowset
         return safe_payload
+
+    @classmethod
+    def _rowset(cls, value: object) -> JsonObject | None:
+        """Rebuild ``{rows: [StagedRow…]}`` from a strict per-field allow-list."""
+
+        if not isinstance(value, dict):
+            return None
+        raw_rows = value.get(_LedgerKeys.Field.ROWS)
+        if not isinstance(raw_rows, (list, tuple)):
+            return None
+        rows = [row for row in (cls._staged_row(raw) for raw in raw_rows) if row]
+        return {_LedgerKeys.Field.ROWS: rows}
+
+    @classmethod
+    def _staged_row(cls, value: object) -> JsonObject | None:
+        """Rebuild one ``{row_key, title, target_args, changes}`` staged row."""
+
+        if not isinstance(value, dict):
+            return None
+        row_key = cls._text(value.get(_LedgerKeys.Field.ROW_KEY))
+        title = cls._text(value.get(_LedgerKeys.Field.TITLE))
+        if row_key is None or title is None:
+            return None
+        row: JsonObject = {
+            _LedgerKeys.Field.ROW_KEY: row_key[:_ROWSET_TEXT_MAX],
+            _LedgerKeys.Field.TITLE: title[:_ROWSET_TEXT_MAX],
+        }
+        target_args = value.get(_LedgerKeys.Field.TARGET_ARGS)
+        if isinstance(target_args, dict):
+            # Connector args are the server-held WYSIWYG unit — passed through as a
+            # JSON object (keys coerced to str); the client never re-sends them.
+            row[_LedgerKeys.Field.TARGET_ARGS] = {
+                str(key): val for key, val in target_args.items()
+            }
+        changes = value.get(_LedgerKeys.Field.CHANGES)
+        if isinstance(changes, (list, tuple)):
+            row[_LedgerKeys.Field.CHANGES] = [
+                change
+                for change in (cls._row_change(raw) for raw in changes)
+                if change is not None
+            ]
+        return row
+
+    @classmethod
+    def _row_change(cls, value: object) -> JsonObject | None:
+        """Rebuild one ``{field, old?, new?}`` field diff from its allow-list."""
+
+        if not isinstance(value, dict):
+            return None
+        field_name = cls._text(value.get(_LedgerKeys.Field.FIELD))
+        if field_name is None:
+            return None
+        change: JsonObject = {_LedgerKeys.Field.FIELD: field_name[:_ROWSET_TEXT_MAX]}
+        if _LedgerKeys.Field.OLD in value:
+            change[_LedgerKeys.Field.OLD] = value.get(_LedgerKeys.Field.OLD)
+        if _LedgerKeys.Field.NEW in value:
+            change[_LedgerKeys.Field.NEW] = value.get(_LedgerKeys.Field.NEW)
+        return change
 
     @classmethod
     def _authorship_span(cls, value: object) -> JsonObject | None:
@@ -1082,8 +1178,21 @@ class RuntimeEventPresentationProjector:
         scope = payload.get(_LedgerKeys.Field.SCOPE)
         if isinstance(scope, dict):
             rev = scope.get(_LedgerKeys.Field.REV)
+            row_keys = scope.get(_LedgerKeys.Field.ROW_KEYS)
             if isinstance(rev, int) and not isinstance(rev, bool):
                 safe_payload[_LedgerKeys.Field.SCOPE] = {_LedgerKeys.Field.REV: rev}
+            elif isinstance(row_keys, (list, tuple)):
+                # PRD-D3 — a row-scoped decision. Only string row keys survive.
+                safe_payload[_LedgerKeys.Field.SCOPE] = {
+                    _LedgerKeys.Field.ROW_KEYS: [
+                        key[:_ROWSET_TEXT_MAX]
+                        for key in row_keys
+                        if isinstance(key, str) and key
+                    ]
+                }
+        # PRD-D3 — ``apply: true`` marks the apply-scoped approve (freezes the set).
+        if payload.get(_LedgerKeys.Field.APPLY) is True:
+            safe_payload[_LedgerKeys.Field.APPLY] = True
         return safe_payload
 
     @classmethod
@@ -1120,7 +1229,46 @@ class RuntimeEventPresentationProjector:
         )
         if decided_by is not None:
             safe_payload[_LedgerKeys.Field.DECIDED_BY] = decided_by
+        # PRD-D3 — the applied row set + per-row outcomes (partial-apply). Each
+        # ``row_results`` entry is rebuilt from its own ``{row_key, outcome, detail?}``
+        # allow-list; nothing else survives.
+        row_keys = payload.get(_LedgerKeys.Field.ROW_KEYS)
+        if isinstance(row_keys, (list, tuple)):
+            safe_payload[_LedgerKeys.Field.ROW_KEYS] = [
+                key[:_ROWSET_TEXT_MAX]
+                for key in row_keys
+                if isinstance(key, str) and key
+            ]
+        row_results = payload.get(_LedgerKeys.Field.ROW_RESULTS)
+        if isinstance(row_results, (list, tuple)):
+            safe_payload[_LedgerKeys.Field.ROW_RESULTS] = [
+                entry
+                for entry in (cls._row_result(raw) for raw in row_results)
+                if entry is not None
+            ]
         return safe_payload
+
+    @classmethod
+    def _row_result(cls, value: object) -> JsonObject | None:
+        """Rebuild one ``{row_key, outcome, detail?}`` row result from its allow-list."""
+
+        if not isinstance(value, dict):
+            return None
+        row_key = cls._text(value.get(_LedgerKeys.Field.ROW_KEY))
+        outcome = cls._text(value.get(_LedgerKeys.Field.OUTCOME))
+        if row_key is None or outcome not in (
+            _LedgerValues.ROW_OUTCOME_APPLIED,
+            _LedgerValues.ROW_OUTCOME_FAILED,
+        ):
+            return None
+        result: JsonObject = {
+            _LedgerKeys.Field.ROW_KEY: row_key[:_ROWSET_TEXT_MAX],
+            _LedgerKeys.Field.OUTCOME: outcome,
+        }
+        detail = cls._text(value.get(_LedgerKeys.Field.DETAIL))
+        if detail is not None:
+            result[_LedgerKeys.Field.DETAIL] = detail[:_ROWSET_TEXT_MAX]
+        return result
 
     @classmethod
     def _write_applied_failure(cls, value: object) -> JsonObject | None:

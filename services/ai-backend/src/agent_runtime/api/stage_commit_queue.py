@@ -37,8 +37,13 @@ class RuntimeStageCommitQueue:
         conversation_id: str,
         rev: int,
         decision_seq: int,
+        row_keys: tuple[str, ...] | None = None,
     ) -> None:
-        """Enqueue one durable commit command for an approved ``(stage_id, rev)``."""
+        """Enqueue one durable commit command for an approved ``(stage_id, rev)``.
+
+        ``row_keys`` (PRD-D3) is the approved row set for a bulk apply, or ``None``
+        for a single-artifact (D1/D2) commit.
+        """
 
         await self.queue.enqueue_stage_commit(
             RuntimeStageCommitCommand(
@@ -49,6 +54,7 @@ class RuntimeStageCommitQueue:
                 conversation_id=conversation_id,
                 rev=rev,
                 decision_seq=decision_seq,
+                row_keys=row_keys,
                 trace_propagation=QueueTracePropagator.inject(),
             )
         )
