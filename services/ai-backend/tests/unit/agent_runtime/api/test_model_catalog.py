@@ -208,6 +208,15 @@ class TestModelCatalogBuild:
         items = ModelCatalog.build(_settings())
         assert any(item.id == "gemini-3-flash" for item in items)
 
+    def test_every_item_is_chat_kind(self) -> None:
+        # The curated catalog is chat-only; the ``kind`` default flows through so
+        # a chat picker filtering ``kind == "chat"`` never drops a real model, and
+        # a non-chat model could never masquerade as a selectable chat model.
+        ModelCatalog.configure_source(LitellmModelSource(model_cost={}))
+        items = ModelCatalog.build(_settings())
+        assert items, "catalog must be non-empty"
+        assert all(item.kind == "chat" for item in items)
+
     def test_default_present_even_with_empty_source(self) -> None:
         ModelCatalog.configure_source(_FakeSource(()))
         settings = _settings()
@@ -234,6 +243,51 @@ class TestModelCatalogBuild:
         assert items[0] is matching[0], "default stays first after the merge"
         assert matching[0].context_window == 400_000
         assert matching[0].input_cost_per_mtok == 0.25
+
+
+class TestModelCatalogByokConfigured:
+    """``configured`` reflects the caller's BYOK keys, not just deployment env keys.
+
+    This is the M1 fix: the picker's "your key" badge is computed from the same
+    credential sources the run-create gate accepts (env key OR the caller's stored
+    BYOK key), so a user who has added an OpenAI key in Settings sees their models
+    as selectable — and the badge can never disagree with what a run actually does.
+    """
+
+    def test_caller_byok_key_flips_only_that_provider_to_configured(
+        self, monkeypatch
+    ) -> None:
+        # No deployment env keys → native providers are unconfigured by default,
+        # so the flip we assert is attributable purely to the BYOK argument.
+        for var in (
+            "OPENAI_API_KEY",
+            "ANTHROPIC_API_KEY",
+            "GOOGLE_API_KEY",
+            "OPENROUTER_API_KEY",
+        ):
+            monkeypatch.setenv(var, "")
+        ModelCatalog.configure_source(LitellmModelSource(model_cost={}))
+        settings = _settings()
+
+        without = {i.id: i for i in ModelCatalog.build(settings)}
+        anthropic_ids = [
+            i for i, item in without.items() if item.provider == "anthropic"
+        ]
+        assert anthropic_ids, "registry must ship anthropic models"
+        assert all(without[i].configured is False for i in anthropic_ids)
+
+        with_key = {
+            i.id: i
+            for i in ModelCatalog.build(
+                settings, user_key_providers=frozenset({"anthropic"})
+            )
+        }
+        # The caller's anthropic BYOK key makes exactly the anthropic models usable…
+        assert all(with_key[i].configured is True for i in anthropic_ids)
+        # …and leaves providers the caller has no key for untouched.
+        openai_ids = [i for i, item in with_key.items() if item.provider == "openai"]
+        assert openai_ids, "default model is openai — must be present"
+        assert all(with_key[i].configured is False for i in openai_ids)
 
 
 class TestModelCatalogRealLitellm:

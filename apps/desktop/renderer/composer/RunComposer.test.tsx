@@ -77,6 +77,23 @@ function payloadFor(path: string): Record<string, unknown> {
   if (path.includes("/v1/settings/provider-keys")) {
     return { keys: [{ provider: "openai" }] };
   }
+  if (path.includes("/v1/agent/models")) {
+    // The one backend catalog with a configured OpenAI model → the synthetic
+    // workspace-default (gpt-4o, below) resolves as configured and seeds.
+    return {
+      default_model_id: "gpt-5.4-mini",
+      models: [
+        {
+          id: "gpt-5.4-mini",
+          provider: "openai",
+          model_name: "gpt-5.4-mini",
+          name: "GPT-5.4 Mini",
+          configured: true,
+          supports_streaming: true,
+        },
+      ],
+    };
+  }
   if (path.includes("/v1/local-models")) return { models: [] };
   if (path.includes("/v1/agent/workspace/defaults")) {
     // The persisted wizard pick: an OpenAI model OUTSIDE the curated set, so
@@ -158,13 +175,13 @@ describe("RunComposer", () => {
     });
   });
 
-  it("fetches skills, MCP servers, provider keys, and local models on mount", async () => {
+  it("fetches skills, MCP servers, the model catalog, and local models on mount", async () => {
     const { recorder } = renderComposer();
     await waitFor(() => {
       const paths = recorder.calls.map((c) => c.path);
       expect(paths).toContain("/v1/skills");
       expect(paths).toContain("/v1/mcp/servers");
-      expect(paths).toContain("/v1/settings/provider-keys");
+      expect(paths).toContain("/v1/agent/models");
       expect(paths).toContain("/v1/local-models");
     });
   });

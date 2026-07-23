@@ -1486,6 +1486,16 @@ export interface ModelSelectionRequest {
   reasoning?: ModelReasoningHints | null;
 }
 
+/**
+ * Capability class of a catalog model. Chat pickers render only `"chat"` rows,
+ * so a non-chat model (embedding/image/audio) can never be offered as a chat
+ * model even if a future catalog source emits one. The curated catalog ships
+ * only chat models today, so every item is `"chat"`; the field exists to make
+ * "chat-only" an enforceable invariant on the consumer rather than an implicit
+ * property of the current source.
+ */
+export type ModelKind = "chat" | "embedding" | "image" | "audio";
+
 export interface ModelCatalogModel {
   id: string;
   provider: string;
@@ -1493,6 +1503,11 @@ export interface ModelCatalogModel {
   name: string;
   description?: string | null;
   configured: boolean;
+  /**
+   * Capability class — chat pickers filter to `"chat"`. Optional/defaults
+   * `"chat"` for wire back-compat with consumers that predate the field.
+   */
+  kind?: ModelKind;
   /**
    * PR-2C: whether this model is shown in the workspace's composer picker
    * (Settings → Models toggles curate it). Optional/defaults-true for wire

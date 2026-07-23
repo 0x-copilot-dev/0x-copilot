@@ -22,6 +22,7 @@ from agent_runtime.api.conversation_coordinator import ConversationCoordinator
 from agent_runtime.api.conversation_query_service import ConversationQueryService
 from agent_runtime.api.run_coordinator import RunCoordinator
 from agent_runtime.api.usage_service import UsageQueryService
+from agent_runtime.api.user_policies_resolver import ProviderKeysParser
 from agent_runtime.api.workspace_coordinator import WorkspaceCoordinator
 from runtime_api.auth import RuntimeServiceAuthenticator
 from runtime_api.rbac import RequireAnyScope, RequireScopes
@@ -325,12 +326,44 @@ class RuntimeApiRoutes:
         org_id: str | None = Query(None, min_length=1),
         user_id: str | None = Query(None, min_length=1),
     ) -> ModelCatalogResponse:
-        """Return the model catalog with per-workspace enablement flags (PR-2C)."""
+        """Return the model catalog with per-workspace enablement + BYOK credential flags."""
 
-        # Async now: enablement reads the org's workspace-defaults row to stamp
-        # each item's ``enabled`` flag (catalog build itself stays in-memory).
-        scoped_org, _ = cls.scoped_identity(request, org_id=org_id, user_id=user_id)
-        return await cls.cqs(request).list_models(org_id=scoped_org)
+        # Enablement reads the org's workspace-defaults row to stamp each item's
+        # ``enabled`` flag; ``configured`` additionally reflects the caller's own
+        # stored BYOK keys, resolved from the SAME per-(org, user) policies
+        # resolver the run-create credential gate uses — so the picker's "your
+        # key" badge and the gate can never disagree.
+        scoped_org, scoped_user = cls.scoped_identity(
+            request, org_id=org_id, user_id=user_id
+        )
+        user_key_providers = await cls._user_key_providers(
+            request, org_id=scoped_org, user_id=scoped_user
+        )
+        return await cls.cqs(request).list_models(
+            org_id=scoped_org, user_key_providers=user_key_providers
+        )
+
+    @classmethod
+    async def _user_key_providers(
+        cls, request: Request, *, org_id: str, user_id: str
+    ) -> frozenset[str]:
+        """Provider slugs the caller has a stored BYOK key for.
+
+        Reads the same ``runtime_user_policies_resolver`` wired for run-create,
+        then splits the snapshot with :class:`ProviderKeysParser` (normalizing
+        ``google`` → ``gemini``). Returns an empty set when the resolver is absent
+        (test wiring) or the trusted-backend lane yields no keys — the catalog
+        then reflects env keys only, never a false "your key" badge. The extra
+        round-trip per catalog fetch is acceptable for correctness; a per-request
+        cache is a documented follow-up.
+        """
+
+        resolver = getattr(request.app.state, "runtime_user_policies_resolver", None)
+        if resolver is None:
+            return frozenset()
+        snapshot = await resolver.resolve(org_id=org_id, user_id=user_id)
+        keys, _ = ProviderKeysParser.split(snapshot)
+        return frozenset(keys)
 
     @classmethod
     async def create_run(

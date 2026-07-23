@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from datetime import datetime, timezone
+from typing import Literal
 
 from pydantic import (
     ConfigDict,
@@ -69,6 +70,12 @@ class ModelCatalogItem(RuntimeContract):
     name: str
     description: str | None = None
     configured: bool
+    # Capability class — chat pickers filter to "chat". The curated catalog ships
+    # only chat models, so this is always "chat" today (the schema default flows
+    # through ``ModelCatalog.build`` unchanged); the field makes "chat-only" an
+    # enforceable invariant on the consumer rather than an implicit property of
+    # the current source. A future non-chat source record must set it explicitly.
+    kind: Literal["chat", "embedding", "image", "audio"] = "chat"
     # PR-2C: whether this model is shown in the composer picker for the
     # workspace (Settings → Models toggles curate it). Default True keeps the
     # wire back-compatible for any consumer that predates the flag.

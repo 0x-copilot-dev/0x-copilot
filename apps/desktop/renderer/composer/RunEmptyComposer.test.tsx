@@ -44,6 +44,23 @@ function payloadFor(path: string): Record<string, unknown> {
   if (path.includes("/v1/settings/provider-keys")) {
     return { keys: [{ provider: "openai" }] };
   }
+  if (path.includes("/v1/agent/models")) {
+    // The one backend catalog — a configured model so the picker has a
+    // selectable default and a send resolves a concrete `model`.
+    return {
+      default_model_id: "gpt-5.4-mini",
+      models: [
+        {
+          id: "gpt-5.4-mini",
+          provider: "openai",
+          model_name: "gpt-5.4-mini",
+          name: "GPT-5.4 Mini",
+          configured: true,
+          supports_streaming: true,
+        },
+      ],
+    };
+  }
   if (path.includes("/v1/local-models")) return { models: [] };
   if (path.includes("/v1/agent/workspace/defaults")) return {};
   return {};
