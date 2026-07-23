@@ -399,13 +399,27 @@ afterEach(() => {
 // ===========================================================================
 // default — the WEB host's un-focused project list
 // ===========================================================================
-it("renders the live Projects list (web host scaffold) → default.html", async () => {
-  render(h(ProjectsRoute, { identity: IDENTITY }));
+it("renders the live Projects list (web host → shared ProjectsDestination) → default.html", async () => {
+  // PRD-10 D1: the web host no longer renders a bespoke scaffold — it mounts the
+  // SHARED `<ProjectsDestination>` for the list, so `default` and
+  // `default-chatsurface` are the SAME component (DoD 15).
+  const router = {
+    current: () => ({ kind: "workspace", workspaceId: "launch" }),
+    navigate: () => undefined,
+    subscribe: () => () => undefined,
+  };
+  render(
+    h(
+      RouterProvider as never,
+      { router } as never,
+      h(ProjectsRoute, { identity: IDENTITY }),
+    ),
+  );
 
   await waitFor(() => {
-    expect(screen.queryByTestId("projects-route-list")).not.toBeNull();
+    expect(screen.queryByTestId("card-grid")).not.toBeNull();
   });
-  expect(screen.getAllByTestId("projects-route-row")).toHaveLength(3);
+  expect(screen.getAllByTestId("project-card")).toHaveLength(3);
 
   writeState("default", captureRoute());
 });
@@ -432,9 +446,10 @@ it("renders the live Project detail (ProjectDetailView, solo profile) → detail
   );
 
   await waitFor(() => {
-    expect(screen.getAllByTestId("projects-route-open").length).toBe(3);
+    expect(screen.getAllByTestId("project-card").length).toBe(3);
   });
-  fireEvent.click(screen.getAllByTestId("projects-route-open")[0]!);
+  // The whole card is the hit area (PRD-10 D2) — clicking it focuses the project.
+  fireEvent.click(screen.getAllByTestId("project-card")[0]!);
 
   await waitFor(() => {
     expect(screen.queryByTestId("project-detail-view")).not.toBeNull();
@@ -475,13 +490,22 @@ it("renders the live ProjectsDestination card grid (desktop host) → default-ch
       { router } as never,
       h(ProjectsDestination, {
         items,
-        // PRD-03: the desktop host has no project-detail flow — the disabled
-        // binding is the explicit statement of that (was a silent omission).
-        detail: { mode: "disabled" },
+        // PRD-10 DoD 9: desktop now enables the detail binding (focus starts
+        // null → the LIST renders). Passing the same callback set the web host
+        // passes keeps the two hosts rendering identical list markup (DoD 15).
+        detail: {
+          mode: "enabled",
+          focusedProjectId: null,
+          onCloseDetail: () => undefined,
+          renderDetail: () => null,
+        },
         counts: { all: 3, active: 3, archived: 0, starred: 0 },
+        onOpenProject: () => undefined,
         onCreateProject: () => undefined,
         onStarProject: () => undefined,
         onArchiveProject: () => undefined,
+        onActivateProject: () => undefined,
+        onDeleteProject: () => undefined,
         now: Date.parse("2026-07-21T12:00:00Z"),
       }),
     ),
@@ -490,9 +514,11 @@ it("renders the live ProjectsDestination card grid (desktop host) → default-ch
   await waitFor(() => {
     expect(screen.getAllByTestId("project-card").length).toBe(3);
   });
-  // ItemLink resolves asynchronously (useEffect) — wait for the real names.
+  // The card name is a plain span now (PRD-10 D2 — a link inside a button is
+  // invalid), so wait on the shared ProjectIconTile monogram instead of an
+  // ItemLink.
   await waitFor(() => {
-    expect(screen.getAllByTestId("item-link").length).toBe(3);
+    expect(screen.getAllByTestId("project-card-icon").length).toBe(3);
   });
 
   const el = document.querySelector('[data-testid="projects-destination"]');

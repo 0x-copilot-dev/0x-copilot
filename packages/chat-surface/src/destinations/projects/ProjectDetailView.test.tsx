@@ -8,6 +8,7 @@ import {
 import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
 
 import { RouterProvider } from "../../providers/RouterProvider";
+import { DeploymentProfileProvider } from "../../providers/DeploymentProfileProvider";
 import type { ArtifactRoute, Router } from "../../routing/router";
 import { registerItemRoute, unregisterItemRoute } from "../../refs/registry";
 import { formatRelativeTime } from "../../util/time";
@@ -532,5 +533,78 @@ describe("ProjectDetailView — chats section (PRD-07)", () => {
     expect(
       within(section).getByTestId("section-header-count").textContent,
     ).toBe("9");
+  });
+});
+
+// ===========================================================================
+// PRD-10 — page chrome (D3 tile / D5 back-link / D6 title tracking) +
+// profile-from-port (D8). DoD 11.
+// ===========================================================================
+
+function renderWithProfile(profile: "team" | "single_user_desktop"): void {
+  render(
+    <RouterProvider router={makeRouter()}>
+      <DeploymentProfileProvider profile={profile}>
+        {/* NO `profile` prop — the view must derive it from the port. */}
+        <ProjectDetailView
+          project={PROJECT}
+          members={[]}
+          activity={[]}
+          canManage={false}
+          renderCrossDestinationTab={() => null}
+        />
+      </DeploymentProfileProvider>
+    </RouterProvider>,
+  );
+}
+
+describe("ProjectDetailView — PRD-10 chrome + profile-from-port (DoD 11)", () => {
+  it("renders the identity tile at 32px, not 44px", () => {
+    renderView();
+    const icon = screen.getByTestId("project-detail-icon");
+    expect(icon.style.width).toBe("32px");
+    expect(icon.style.height).toBe("32px");
+  });
+
+  it("pins the design tracking (--tracking-snug) on the detail title", () => {
+    renderView();
+    expect(screen.getByTestId("project-detail-name").style.letterSpacing).toBe(
+      "var(--tracking-snug)",
+    );
+  });
+
+  it("renders the shared BackLink when onBack is supplied and calls it on click", () => {
+    const onBack = vi.fn();
+    renderView({ onBack });
+    const back = screen.getByTestId("back-link");
+    expect(back).toBeInTheDocument();
+    fireEvent.click(back);
+    expect(onBack).toHaveBeenCalledTimes(1);
+  });
+
+  it("omits the BackLink when onBack is not supplied", () => {
+    renderView();
+    expect(screen.queryByTestId("back-link")).not.toBeInTheDocument();
+  });
+
+  it("derives the eight-tab team view from the DeploymentProfile port (no profile prop)", () => {
+    // NB: the provider prop is `profile` (the PRD's `value=` was a doc typo; the
+    // code is ground truth). With value "team" and no explicit `profile` prop the
+    // eight-tab bar renders.
+    renderWithProfile("team");
+    expect(screen.getByTestId("project-detail-view")).toHaveAttribute(
+      "data-profile",
+      "team",
+    );
+    expect(screen.getByTestId("project-detail-tabs")).toBeInTheDocument();
+  });
+
+  it("stays on the solo sections under single_user_desktop (no profile prop)", () => {
+    renderWithProfile("single_user_desktop");
+    expect(screen.getByTestId("project-detail-view")).toHaveAttribute(
+      "data-profile",
+      "solo",
+    );
+    expect(screen.queryByTestId("project-detail-tabs")).not.toBeInTheDocument();
   });
 });

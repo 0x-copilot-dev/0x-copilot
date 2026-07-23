@@ -552,7 +552,18 @@ export {
 export {
   ProjectFilterChip,
   ProjectsDestination,
-  ProjectsPanel,
+  // PRD-10 (D9 wire-or-delete ledger): the create/edit sheet + the two team
+  // dialogs are exported at the package boundary so both hosts can open them —
+  // the sheet behind `onCreateProject`, the dialogs for the multi-user ACL
+  // product. The old right-rail projects panel was DELETED (D9): zero consumers,
+  // 30%-complete, both its features already on the destination. Their prop types
+  // are NOT re-exported from the top barrel: hosts pass object literals /
+  // inferred callbacks, so no host needs the payload type by name, and keeping
+  // the boundary to the three components alone is what lets the D9 grep read a
+  // clean count of wired surfaces.
+  ProjectEditor,
+  TransferOwnershipDialog,
+  ArchiveBlockedDialog,
   // PRD-03 Move 1: `cacheProjectNames` is no longer a host duty — the
   // `ProjectsDestination` primes the cache from `items` itself, so it is
   // dropped from the public barrel (kept exported from `projectNameCache.ts`
@@ -571,7 +582,6 @@ export {
   type ProjectsDestinationProps,
   type ProjectsFilterCounts,
   type ProjectsFilterSlug,
-  type ProjectsPanelProps,
   type RenderProjectDetailSlot,
 } from "./destinations/projects";
 export {

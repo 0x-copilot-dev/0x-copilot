@@ -42,8 +42,20 @@ import {
 
 import { EmptyState } from "../../shell/EmptyState";
 import { ItemLink } from "../../refs/ItemLink";
+import { Icon } from "../../icons/Icon";
+import { StatusPill } from "../../shell/StatusPill";
+import { statusTone as runStatusTone } from "../../shell/statusTone";
 import { formatRelativeTime } from "../../util/time";
-import { RowList, Row, SectionHeader } from "../_shared";
+import {
+  BackLink,
+  Page,
+  ProjectIconTile,
+  RowList,
+  Row,
+  SectionHeader,
+} from "../_shared";
+import { useOptionalDeploymentProfile } from "../../providers/DeploymentProfileProvider";
+import { TransferOwnershipDialog } from "./transfer-ownership-dialog";
 
 import type {
   ChatArchiveRow,
@@ -131,11 +143,23 @@ export interface ProjectDetailViewProps {
   readonly project: ProjectDetail;
 
   /**
-   * Surface profile (FR-G.5). Defaults to `"solo"` — the v3 tab-less
-   * detail with `.sect-h` Chats / Files sections. Pass `"team"` to keep
-   * the eight-tab model for the multi-user ACL product.
+   * Surface profile (D8). When omitted, it is derived from the
+   * `DeploymentProfile` port (`useOptionalDeploymentProfile()`): `"team"` → the
+   * eight-tab view, `"single_user_desktop"` or no provider → the v3 solo
+   * sections. The explicit prop is kept as a TEST override and takes precedence
+   * over the port. Neither host passes it in production — they wrap the shell in
+   * `DeploymentProfileProvider`.
    */
   readonly profile?: ProjectDetailProfile;
+
+  /** Back control (D5). When supplied, the shared `<BackLink>` renders above the
+   *  header and calls this on click. The back control belongs to the detail view
+   *  (not the host) so both hosts get the design's quiet mono link for free. */
+  readonly onBack?: () => void;
+
+  /** Team-profile ownership transfer (D9). When supplied, the transfer trigger
+   *  opens the `<TransferOwnershipDialog>` and this performs the API call. */
+  readonly onTransferOwnership?: (newOwnerUserId: string) => Promise<void>;
 
   /** Members tab data. Pass `null` while loading. */
   readonly members: ReadonlyArray<ProjectMember> | null;
@@ -262,54 +286,6 @@ function statusLabelFor(status: ProjectStatus): string {
   }
 }
 
-function ProjectIconTile({
-  colorHue,
-  name,
-}: {
-  colorHue?: number;
-  name: string;
-}): ReactElement {
-  // v3 design (FR-G.5): the header tile is the project colour + the name's
-  // first letter — NOT the emoji — so the detail matches the `.grid3` card
-  // tile on the list.
-  const initial = (name.trim()[0] ?? "?").toUpperCase();
-  const bg =
-    colorHue !== undefined
-      ? `hsl(${colorHue} 60% 28% / 0.45)`
-      : "var(--color-border-strong)";
-  const border =
-    colorHue !== undefined
-      ? `hsl(${colorHue} 60% 50% / 0.55)`
-      : "var(--color-border)";
-  const fg =
-    colorHue !== undefined ? `hsl(${colorHue} 70% 82%)` : "var(--color-text)";
-  const style: CSSProperties = {
-    width: 44,
-    height: 44,
-    borderRadius: 10,
-    backgroundColor: bg,
-    border: `1px solid ${border}`,
-    color: fg,
-    display: "flex",
-    alignItems: "center",
-    justifyContent: "center",
-    fontSize: "var(--font-size-xl)",
-    fontWeight: 700,
-    flexShrink: 0,
-  };
-  return (
-    <div
-      style={style}
-      role="img"
-      aria-label={`${name} icon`}
-      data-testid="project-detail-icon"
-      data-color-hue={colorHue ?? ""}
-    >
-      {initial}
-    </div>
-  );
-}
-
 // ── Header ───────────────────────────────────────────────────────────
 
 interface HeaderProps {
@@ -337,14 +313,24 @@ function ProjectDetailHeader({
     flex: 1,
     minWidth: 0,
   };
-  const nameStyle: CSSProperties = {
-    fontSize: "var(--font-size-xl)",
-    fontWeight: 600,
-    color: TEXT_PRIMARY,
+  const nameRowStyle: CSSProperties = {
     display: "flex",
     alignItems: "center",
     gap: 10,
     flexWrap: "wrap",
+  };
+  // `.pg h2` (design copilot-app.jsx:404) + the global `h1-h4` tracking
+  // (`copilot.css:113-121`, `letter-spacing:-0.01em`) — the detail title picked
+  // up `-0.01em` from that rule; live drops it, so pin `--tracking-snug` (D6).
+  const nameStyle: CSSProperties = {
+    margin: 0,
+    fontSize: "var(--font-size-xl)",
+    fontWeight: "var(--font-weight-semibold)",
+    letterSpacing: "var(--tracking-snug)",
+    color: TEXT_PRIMARY,
+    overflow: "hidden",
+    textOverflow: "ellipsis",
+    whiteSpace: "nowrap",
   };
   const metaStyle: CSSProperties = {
     fontSize: "var(--font-size-sm)",
@@ -412,19 +398,16 @@ function ProjectDetailHeader({
       data-testid="project-detail-header"
       data-project-id={project.id}
     >
-      <ProjectIconTile colorHue={project.colorHue} name={project.name} />
+      <ProjectIconTile
+        colorHue={project.colorHue}
+        name={project.name}
+        testId="project-detail-icon"
+      />
       <div style={titleBlock}>
-        <div style={nameStyle}>
-          <span
-            data-testid="project-detail-name"
-            style={{
-              overflow: "hidden",
-              textOverflow: "ellipsis",
-              whiteSpace: "nowrap",
-            }}
-          >
+        <div style={nameRowStyle}>
+          <h2 data-testid="project-detail-name" style={nameStyle}>
             {project.name}
-          </span>
+          </h2>
           <span
             style={statusPill}
             data-testid="project-detail-status"
@@ -945,34 +928,56 @@ function ProjectChatsList({
         data-testid="project-chats-list"
         ariaLabel="Project chats"
         keyFor={(row) => row.id}
-        renderRow={(row) => (
-          <Row
-            data-testid="chat-archive-row"
-            data-chat-id={row.id}
-            data-status={row.status}
-            title={row.title}
-            sub={
-              row.model !== "" ? (
-                <>
-                  {row.preview !== "" ? `${row.preview} · ` : ""}
-                  <span
-                    data-testid="chat-archive-row-model"
-                    style={{ fontFamily: "var(--font-mono)" }}
-                  >
-                    {row.model}
-                  </span>
-                </>
-              ) : (
-                row.preview
-              )
-            }
-            meta={formatRelativeTime(row.updated_at, now)}
-            onActivate={
-              onOpenChat !== undefined ? () => onOpenChat(row.id) : undefined
-            }
-            ariaLabel={`Open chat ${row.title}`}
-          />
-        )}
+        renderRow={(row) => {
+          // PRD-10 D6: the project chat row is the design's `.lrow` anatomy —
+          // leading 28×28 icon slot (`.lrow__ic`), title, inline run-status chip
+          // (`.chip`), body sub-line (preview · mono model), mono time. The
+          // status chip + icon come from the shared run-status vocabulary (the
+          // same PRD-02 chip Chats uses), so a project chat row and an archive
+          // chat row read identically.
+          const presentation = runStatusTone(row.status);
+          return (
+            <Row
+              data-testid="chat-archive-row"
+              data-chat-id={row.id}
+              data-status={row.status}
+              icon={
+                <span data-testid="chat-archive-row-icon">
+                  <Icon name="chats" size={18} />
+                </span>
+              }
+              iconTone={row.status === "running" ? "success" : "default"}
+              title={row.title}
+              chip={
+                <StatusPill
+                  status={presentation.tone}
+                  label={presentation.label}
+                  showDot={presentation.showDot}
+                />
+              }
+              sub={
+                row.model !== "" ? (
+                  <>
+                    {row.preview !== "" ? `${row.preview} · ` : ""}
+                    <span
+                      data-testid="chat-archive-row-model"
+                      style={{ fontFamily: "var(--font-mono)" }}
+                    >
+                      {row.model}
+                    </span>
+                  </>
+                ) : (
+                  row.preview
+                )
+              }
+              meta={formatRelativeTime(row.updated_at, now)}
+              onActivate={
+                onOpenChat !== undefined ? () => onOpenChat(row.id) : undefined
+              }
+              ariaLabel={`Open chat ${row.title}`}
+            />
+          );
+        }}
       />
     </section>
   );
@@ -983,7 +988,9 @@ function ProjectChatsList({
 export function ProjectDetailView(props: ProjectDetailViewProps): ReactElement {
   const {
     project,
-    profile = "solo",
+    profile: profileProp,
+    onBack,
+    onTransferOwnership,
     members,
     activity,
     files,
@@ -1003,10 +1010,25 @@ export function ProjectDetailView(props: ProjectDetailViewProps): ReactElement {
     onRequestTransferOwnership,
   } = props;
 
+  // Profile from the DeploymentProfile port (D8): `"team"` → eight-tab view,
+  // `"single_user_desktop"` / no provider → solo. The explicit `profile` prop is
+  // a test override and wins when supplied.
+  const deploymentProfile = useOptionalDeploymentProfile();
+  const profile: ProjectDetailProfile =
+    profileProp ?? (deploymentProfile === "team" ? "team" : "solo");
+
   const [uncontrolledTab, setUncontrolledTab] = useState<ProjectDetailTabId>(
     initialTab ?? "chats",
   );
   const active = controlledTab ?? uncontrolledTab;
+
+  // Team-profile ownership transfer dialog (D9). Opened by the header trigger;
+  // rendered here so the callback is no longer a dangling half-feature.
+  const [transferOpen, setTransferOpen] = useState(false);
+  const handleRequestTransfer = (): void => {
+    setTransferOpen(true);
+    onRequestTransferOwnership?.();
+  };
 
   const handleSelectTab = (next: ProjectDetailTabId): void => {
     if (controlledTab === undefined) setUncontrolledTab(next);
@@ -1024,12 +1046,7 @@ export function ProjectDetailView(props: ProjectDetailViewProps): ReactElement {
     flexDirection: "column",
     overflow: "auto",
   };
-  const container: CSSProperties = {
-    width: "100%",
-    maxWidth: 1000,
-    margin: "0 auto",
-    padding: "24px 28px 48px",
-    boxSizing: "border-box",
+  const pageStyle: CSSProperties = {
     display: "flex",
     flexDirection: "column",
     gap: 16,
@@ -1194,11 +1211,12 @@ export function ProjectDetailView(props: ProjectDetailViewProps): ReactElement {
       data-profile={profile}
       style={root}
     >
-      <div style={container}>
+      <Page style={pageStyle}>
+        {onBack !== undefined ? <BackLink onBack={onBack} /> : null}
         <ProjectDetailHeader
           project={project}
           canManage={canManage}
-          onRequestTransferOwnership={onRequestTransferOwnership}
+          onRequestTransferOwnership={handleRequestTransfer}
         />
         {profile === "team" ? (
           <>
@@ -1208,7 +1226,23 @@ export function ProjectDetailView(props: ProjectDetailViewProps): ReactElement {
         ) : (
           soloSections
         )}
-      </div>
+      </Page>
+      {/* Team-profile ownership transfer (D9) — rendered here so the trigger
+          callback is a real feature, not a dangling half-wire. Gated on the
+          team profile + manage permission. */}
+      {profile === "team" && canManage ? (
+        <TransferOwnershipDialog
+          open={transferOpen}
+          onClose={() => setTransferOpen(false)}
+          projectName={project.name}
+          currentOwnerUserId={project.ownerUserId}
+          candidates={members ?? []}
+          onTransfer={async (newOwnerUserId) => {
+            await onTransferOwnership?.(newOwnerUserId);
+            setTransferOpen(false);
+          }}
+        />
+      ) : null}
     </section>
   );
 }

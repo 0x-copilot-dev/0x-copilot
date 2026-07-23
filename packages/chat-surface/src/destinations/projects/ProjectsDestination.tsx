@@ -1,37 +1,29 @@
-// Projects — destination shell (P6-B1).
+// Projects — destination shell (PRD-10).
 //
-// Pure-presentation list view per projects-prd §3.2:
+// The ONE Projects list, mounted on BOTH hosts (web `apps/frontend`, desktop
+// `apps/desktop`). Before PRD-10 the web app rendered its own bespoke grid and
+// only mounted this component as a `renderDetail` host; that fork drifted from
+// this card within a release of the reason for it being fixed. D1 deletes the
+// web scaffold; this is the single card implementation.
 //
-//   1. PageHeader (cross-audit §1.6 shape) — title, subtitle with counts
-//      (active / archived / mine), "New project" primary action.
-//   2. FilterTabs — status axis: All / Active / Archived / Starred
-//      (projects-prd §3.2 #2 minus "mine" which lands in P6-B2 once
-//      caller identity wiring is plumbed). Selected slug + counts driven
-//      by host.
-//   3. CardGrid body — one card per project. Each card surfaces:
-//        - icon + name + ⭐ starred indicator + viewer-role chip
-//        - description (1 line, truncated)
-//        - StatusPill (active / archived)
-//        - ItemLink chips for activity counts (chats / todos / library /
-//          routines) — chips ARE links; clicking opens the destination
-//          filtered to this project (§9 cross-destination filter pattern).
+// Anatomy, to the design (`copilot-app.jsx:386-425`, `copilot.css:1672-1720`):
+//   * `<Page>` (960px column, left-aligned) + `<PageLead>` — NO 22px page title
+//     (the topbar already labels the screen; D4). The old `<PageHeader>` is gone
+//     from every branch.
+//   * a fixed 3-up `.grid3` (`CardGrid variant="grid3"`, D7) of cards. Each card
+//     is ONE `<button className="ui-card ui-card--proj">` hit area (D2), so the
+//     whole tile navigates; the lifecycle actions (star / archive / delete) live
+//     in a hover/focus-revealed overlay OUTSIDE the button in DOM order, so they
+//     stay keyboard reachable.
+//   * the identity tile is the shared `<ProjectIconTile>` (D3) — the name's
+//     monogram on the per-project hue, NEVER `icon_emoji` (which the server
+//     defaults to 📁 for every project — the desktop emoji-wall bug).
+//   * the create affordance moves to the filter row as a right-aligned quiet
+//     control (D4) — a deliberate divergence from the mock, which pre-populates
+//     projects and ships no create control.
 //
-// Mirrors P5-B1's Routines shell shape (loading skeleton -> SectionResult
-// error/unavailable branches -> ready). Same render-prop seam for the
-// detail pane (P6-B2 layers detail; P6-B3 layers activity tab — both
-// ship later as separate files).
-//
-// Hard correctness rules:
-//   - SP-1 primitives only (PageHeader / FilterTabs / CardGrid / StatusPill
-//     / EmptyState / ItemLink). No custom buttons.
-//   - ItemLink for every cross-destination ref (project itself, activity
-//     count chips). Direct router.navigate from rows is forbidden
-//     (cross-audit §1.1 + §3.3).
-//   - Pure presentation: no fetch, no router calls, no SSE — the host
-//     (apps/frontend P6-C) wires those.
-//
-// Wire-types come from the canonical `@0x-copilot/api-types` Projects
-// contract.
+// Pure presentation: no fetch, no router, no SSE — the host wires those and owns
+// focus (`detail` binding + `onOpenProject`).
 
 import {
   useEffect,
@@ -48,20 +40,18 @@ import { cacheProjectNames } from "./projectNameCache";
 import { CardGrid } from "../../shell/CardGrid";
 import { EmptyState } from "../../shell/EmptyState";
 import { FilterTabs, type FilterTabOption } from "../../shell/FilterTabs";
-import { PageHeader } from "../../shell/PageHeader";
 import { StatusPill, type StatusTone } from "../../shell/StatusPill";
-import { ItemLink } from "../../refs/ItemLink";
-import { formatRelativeTime } from "../../util/time";
+import { Page, PageLead, ProjectIconTile } from "../_shared";
 
 import type { ProjectStatus, ProjectSummary } from "@0x-copilot/api-types";
+
+// The design's lead paragraph copy (copilot-app.jsx:391-394).
+const PROJECTS_LEAD_COPY =
+  "Group related chats, files, and context. Open a project to see its conversations and working files.";
 
 // ===========================================================================
 // Filter slug
 // ===========================================================================
-//
-// Single source of truth for the status filter axis. The slugs match
-// projects-prd §3.2 #2 except "mine" (deferred to P6-B2 once viewer-role
-// wiring is plumbed). "all" is the default (no server filter).
 
 export type ProjectsFilterSlug = "all" | "active" | "archived" | "starred";
 
@@ -89,8 +79,8 @@ export type ProjectsFilterCounts = Readonly<Record<ProjectsFilterSlug, number>>;
 // Public props
 // ===========================================================================
 
-/** Slot for P6-B2's detail / P6-B3's activity pane. Rendered in place of
- *  the grid body when `focusedProjectId` is set. */
+/** Slot for the detail / activity pane. Rendered in place of the grid body
+ *  when `focusedProjectId` is set. */
 export type RenderProjectDetailSlot = (props: {
   readonly projectId: ProjectId;
   readonly onClose: () => void;
@@ -101,11 +91,6 @@ export interface ProjectsDestinationProps {
    * Server-projected list result. `null` = loading skeleton; `error`
    * shows the destination-level error empty-state with retry; `ok`
    * renders the filtered list.
-   *
-   * `items` is wrapped in `SectionResult` even though `/v1/projects` is
-   * a non-aggregating endpoint (cross-audit §2.3 only mandates the
-   * wrapper for aggregators) — same rationale as Inbox / Routines: a
-   * uniform "couldn't load" branch without inventing a second error path.
    */
   readonly items?: SectionResult<ReadonlyArray<ProjectSummary>> | null;
 
@@ -116,15 +101,21 @@ export interface ProjectsDestinationProps {
   /** Per-filter counts. When omitted, chips render without count chips. */
   readonly counts?: ProjectsFilterCounts;
 
-  /** "New project" CTA — pivots the host into the editor (P6-B2). */
+  /** "New project" CTA — a deliberate live-only divergence (D4). Rendered as a
+   *  right-aligned quiet control on the filter row when supplied. */
   readonly onCreateProject?: () => void;
 
-  /** Per-row hover actions — wired by the host (P6-C) so the shell stays
-   *  pure presentation. */
+  /** Card click → focus the project (the whole card is the hit area, D2). The
+   *  host owns `focusedProjectId` and the detail fetch. */
+  readonly onOpenProject?: (id: ProjectId) => void;
+
+  /** Per-card lifecycle actions — wired by the host so the shell stays pure
+   *  presentation. `onDeleteProject` is the one genuinely new prop (D1). */
   readonly onArchiveProject?: (id: ProjectId) => void;
   readonly onActivateProject?: (id: ProjectId) => void;
   readonly onStarProject?: (id: ProjectId) => void;
   readonly onUnstarProject?: (id: ProjectId) => void;
+  readonly onDeleteProject?: (id: ProjectId) => void;
 
   /** Retry callback when `items.status === "error"`. */
   readonly onRetry?: () => void;
@@ -132,10 +123,8 @@ export interface ProjectsDestinationProps {
   /**
    * Total detail binding (PRD-03 Move 2). `{ mode: "disabled" }` is an
    * explicit, reviewable statement that the host has no project-detail flow
-   * yet — it replaces silently omitting `renderDetail`/`focusedProjectId`,
-   * which left the detail branch dead code. `{ mode: "enabled", … }` carries
-   * the focused id + slot + close callback together, so a half-wired detail
-   * cannot typecheck.
+   * yet; `{ mode: "enabled", … }` carries the focused id + slot + close callback
+   * together.
    */
   readonly detail: ProjectsDetailBinding;
 
@@ -156,17 +145,16 @@ export function ProjectsDestination(
     onFilterChange,
     counts,
     onCreateProject,
+    onOpenProject,
     onArchiveProject,
     onActivateProject,
     onStarProject,
     onUnstarProject,
+    onDeleteProject,
     onRetry,
     detail,
-    now,
   } = props;
 
-  // Collapse the total `detail` binding back to the local render inputs. A
-  // `disabled` host has no detail slot; an `enabled` host carries all three.
   const renderDetail =
     detail.mode === "enabled" ? detail.renderDetail : undefined;
   const focusedProjectId =
@@ -175,18 +163,15 @@ export function ProjectsDestination(
     detail.mode === "enabled" ? detail.onCloseDetail : undefined;
 
   // Prime the cross-destination project-name cache from the loaded list so
-  // `<ItemLink kind="project">` on other surfaces renders the real name instead
-  // of the generic "Project" fallback (PRD-03 Move 1). This was a host duty with
-  // no decision in it — the destination already holds the `{ id, name }` list —
-  // so priming moved into the package and desktop's "Project" fallback is fixed
-  // without the host having to remember a `cacheProjectNames` call.
+  // `<ItemLink kind="project">` on other surfaces renders the real name (PRD-03
+  // Move 1). Desktop never primed it before, so every desktop project link read
+  // the literal "Project"; converging on this component fixes both hosts.
   useEffect(() => {
     if (items !== null && items.status === "ok" && items.data !== undefined) {
       cacheProjectNames(items.data);
     }
   }, [items]);
 
-  // === Filter chip options (single source of truth) =====================
   const filterOptions = useMemo<
     ReadonlyArray<FilterTabOption<ProjectsFilterSlug>>
   >(
@@ -203,7 +188,6 @@ export function ProjectsDestination(
     if (onFilterChange !== undefined) onFilterChange(next);
   };
 
-  // === Styles ===========================================================
   const rootStyle: CSSProperties = {
     width: "100%",
     height: "100%",
@@ -215,12 +199,7 @@ export function ProjectsDestination(
     flexDirection: "column",
     overflow: "auto",
   };
-  const containerStyle: CSSProperties = {
-    width: "100%",
-    maxWidth: 1000,
-    margin: "0 auto",
-    padding: "24px 28px 48px",
-    boxSizing: "border-box",
+  const pageStyle: CSSProperties = {
     display: "flex",
     flexDirection: "column",
     gap: 16,
@@ -235,14 +214,14 @@ export function ProjectsDestination(
         data-state="loading"
         style={rootStyle}
       >
-        <div style={containerStyle}>
-          <PageHeader title="Projects" subtitle="Loading…" />
-          <CardGrid ariaLabel="Projects loading skeleton">
+        <Page style={pageStyle}>
+          <PageLead>{PROJECTS_LEAD_COPY}</PageLead>
+          <CardGrid ariaLabel="Projects loading skeleton" variant="grid3">
             {Array.from({ length: 6 }).map((_, i) => (
               <CardSkeleton key={i} index={i} />
             ))}
           </CardGrid>
-        </div>
+        </Page>
       </section>
     );
   }
@@ -256,8 +235,8 @@ export function ProjectsDestination(
         data-state="error"
         style={rootStyle}
       >
-        <div style={containerStyle}>
-          <PageHeader title="Projects" />
+        <Page style={pageStyle}>
+          <PageLead>{PROJECTS_LEAD_COPY}</PageLead>
           <EmptyState
             title="Could not load projects"
             body={items.error ?? "Network error — try again."}
@@ -267,7 +246,7 @@ export function ProjectsDestination(
                 : undefined
             }
           />
-        </div>
+        </Page>
       </section>
     );
   }
@@ -280,8 +259,8 @@ export function ProjectsDestination(
         data-state="unavailable"
         style={rootStyle}
       >
-        <div style={containerStyle}>
-          <PageHeader title="Projects" />
+        <Page style={pageStyle}>
+          <PageLead>{PROJECTS_LEAD_COPY}</PageLead>
           <EmptyState
             title="Projects unavailable"
             body={
@@ -289,25 +268,13 @@ export function ProjectsDestination(
               "This destination is not enabled for your workspace."
             }
           />
-        </div>
+        </Page>
       </section>
     );
   }
 
   // === Ready state ======================================================
   const rows = items.data ?? [];
-
-  // Counts for the PageHeader subtitle.
-  const activeCount =
-    counts?.active ?? rows.filter((p) => p.status === "active").length;
-  const archivedCount =
-    counts?.archived ?? rows.filter((p) => p.status === "archived").length;
-
-  const subtitle =
-    rows.length === 0
-      ? "Group related work under shared ACL"
-      : `${activeCount} active${archivedCount > 0 ? ` · ${archivedCount} archived` : ""}`;
-
   const showingDetail = renderDetail !== undefined && focusedProjectId !== null;
 
   return (
@@ -319,66 +286,88 @@ export function ProjectsDestination(
       data-filter={filter}
       style={rootStyle}
     >
-      <div style={containerStyle}>
-        <PageHeader
-          title="Projects"
-          subtitle={subtitle}
-          primaryAction={
-            onCreateProject !== undefined
-              ? { label: "New project", onClick: onCreateProject }
-              : undefined
-          }
-        />
-
-        <FilterTabs<ProjectsFilterSlug>
-          value={filter}
-          onChange={handleFilterChange}
-          options={filterOptions}
-          ariaLabel="Projects status filter"
-          idPrefix="projects"
-        />
-
-        {showingDetail ? (
-          <div
-            data-testid="projects-detail-slot"
-            data-focused-project-id={focusedProjectId!}
-          >
-            {renderDetail!({
-              projectId: focusedProjectId!,
-              onClose: () => {
-                if (onCloseDetail !== undefined) onCloseDetail();
-              },
-            })}
+      {showingDetail ? (
+        // The detail slot renders `ProjectDetailView`, which supplies its OWN
+        // `<Page>` column (D4) — so the destination does NOT wrap it in a second
+        // Page (that would double the 960px cap + `20px 24px 40px` padding).
+        <div
+          data-testid="projects-detail-slot"
+          data-focused-project-id={focusedProjectId!}
+        >
+          {renderDetail!({
+            projectId: focusedProjectId!,
+            onClose: () => {
+              if (onCloseDetail !== undefined) onCloseDetail();
+            },
+          })}
+        </div>
+      ) : (
+        <Page style={pageStyle}>
+          <PageLead>{PROJECTS_LEAD_COPY}</PageLead>
+          <div style={filterRowStyle}>
+            <FilterTabs<ProjectsFilterSlug>
+              value={filter}
+              onChange={handleFilterChange}
+              options={filterOptions}
+              ariaLabel="Projects status filter"
+              idPrefix="projects"
+            />
+            {/* The create affordance — a deliberate live-only divergence from
+                the mock (D4). Right-aligned quiet control on the filter row. */}
+            {onCreateProject !== undefined ? (
+              <button
+                type="button"
+                className="ui-button ui-button--sm"
+                data-testid="projects-create"
+                onClick={onCreateProject}
+                style={createButtonStyle}
+              >
+                New project
+              </button>
+            ) : null}
           </div>
-        ) : rows.length === 0 ? (
-          <EmptyState
-            title="No projects yet"
-            body="Group related chats, todos, runs, and saved artifacts under a shared ACL. Create the first one to get started."
-            action={
-              onCreateProject !== undefined
-                ? { label: "New project", onClick: onCreateProject }
-                : undefined
-            }
-          />
-        ) : (
-          <CardGrid ariaLabel="Projects">
-            {rows.map((project) => (
-              <ProjectCard
-                key={project.id}
-                project={project}
-                onArchiveProject={onArchiveProject}
-                onActivateProject={onActivateProject}
-                onStarProject={onStarProject}
-                onUnstarProject={onUnstarProject}
-                now={now ?? Date.now()}
-              />
-            ))}
-          </CardGrid>
-        )}
-      </div>
+          {rows.length === 0 ? (
+            <EmptyState
+              title="No projects yet"
+              body="Group related chats, files, and context under a shared project. Create the first one to get started."
+              action={
+                onCreateProject !== undefined
+                  ? { label: "New project", onClick: onCreateProject }
+                  : undefined
+              }
+            />
+          ) : (
+            <CardGrid ariaLabel="Projects" variant="grid3">
+              {rows.map((project) => (
+                <ProjectCard
+                  key={project.id}
+                  project={project}
+                  onOpenProject={onOpenProject}
+                  onArchiveProject={onArchiveProject}
+                  onActivateProject={onActivateProject}
+                  onStarProject={onStarProject}
+                  onUnstarProject={onUnstarProject}
+                  onDeleteProject={onDeleteProject}
+                />
+              ))}
+            </CardGrid>
+          )}
+        </Page>
+      )}
     </section>
   );
 }
+
+const filterRowStyle: CSSProperties = {
+  display: "flex",
+  alignItems: "center",
+  gap: 12,
+};
+
+const createButtonStyle: CSSProperties = {
+  marginInlineStart: "auto",
+  flexShrink: 0,
+};
 
 // ===========================================================================
 // ProjectCard — one card in the grid
@@ -386,229 +375,255 @@ export function ProjectsDestination(
 
 interface ProjectCardProps {
   readonly project: ProjectSummary;
+  readonly onOpenProject?: (id: ProjectId) => void;
   readonly onArchiveProject?: (id: ProjectId) => void;
   readonly onActivateProject?: (id: ProjectId) => void;
   readonly onStarProject?: (id: ProjectId) => void;
   readonly onUnstarProject?: (id: ProjectId) => void;
-  readonly now: number;
+  readonly onDeleteProject?: (id: ProjectId) => void;
 }
 
 function ProjectCard({
   project,
+  onOpenProject,
   onArchiveProject,
   onActivateProject,
   onStarProject,
   onUnstarProject,
-  now,
+  onDeleteProject,
 }: ProjectCardProps): ReactElement {
-  const cardStyle: CSSProperties = {
-    display: "flex",
-    flexDirection: "column",
-    gap: 10,
-    padding: 14,
-    borderRadius: "var(--radius-md, 12px)",
-    border: "1px solid var(--color-border, #232325)",
-    backgroundColor: "var(--color-surface, #1a1a1c)",
-    color: "var(--color-text, #ededee)",
-    boxSizing: "border-box",
-    minWidth: 0,
-  };
-  const headStyle: CSSProperties = {
-    display: "flex",
-    alignItems: "center",
-    gap: 8,
-    minWidth: 0,
-  };
-  const iconStyle: CSSProperties = {
-    width: 28,
-    height: 28,
-    borderRadius: "var(--radius-sm, 6px)",
-    backgroundColor: `hsl(${project.color_hue}, 60%, 28%)`,
-    color: "var(--color-text, #ededee)",
-    display: "inline-flex",
-    alignItems: "center",
-    justifyContent: "center",
-    fontSize: "var(--font-size-lg)",
-    flexShrink: 0,
-  };
-  const nameStyle: CSSProperties = {
-    flex: 1,
-    minWidth: 0,
-    fontSize: "var(--font-size-sm, 13px)",
-    fontWeight: 600,
-    overflow: "hidden",
-    textOverflow: "ellipsis",
-    whiteSpace: "nowrap",
-  };
-  const descStyle: CSSProperties = {
-    fontSize: "var(--font-size-xs, 12px)",
-    color: "var(--color-text-muted, #b4b4b8)",
-    overflow: "hidden",
-    textOverflow: "ellipsis",
-    whiteSpace: "nowrap",
-  };
-  const metaStyle: CSSProperties = {
-    display: "flex",
-    alignItems: "center",
-    gap: 6,
-    flexWrap: "wrap",
-    fontSize: "var(--font-size-xs, 12px)",
-    color: "var(--color-text-muted, #b4b4b8)",
-  };
-  const actionRowStyle: CSSProperties = {
-    display: "flex",
-    alignItems: "center",
-    gap: 4,
-    marginLeft: "auto",
-    flexShrink: 0,
-  };
-  const actionButtonStyle: CSSProperties = {
-    background: "transparent",
-    border: "none",
-    color: "var(--color-text-subtle, #7e7e84)",
-    cursor: "pointer",
-    fontSize: "var(--font-size-xs, 12px)",
-    padding: "2px 6px",
-  };
-  const starButtonStyle: CSSProperties = {
-    ...actionButtonStyle,
-    color: project.viewer_starred
-      ? "var(--color-warning, #d9a857)"
-      : "var(--color-text-subtle, #7e7e84)",
-  };
-
   const isActive = project.status === "active";
-  const lastActivity = project.last_activity_at;
 
   return (
-    <article
-      style={cardStyle}
-      data-testid="project-card"
+    <div
+      className="ui-proj-card"
+      style={cardWrapperStyle}
+      data-testid="project-card-wrapper"
       data-project-id={project.id}
       data-status={project.status}
       data-viewer-starred={project.viewer_starred ? "true" : "false"}
     >
-      <div style={headStyle}>
-        <span
-          style={iconStyle}
-          aria-hidden="true"
-          data-testid="project-card-icon"
-        >
-          {project.icon_emoji}
-        </span>
-        {/* Project name is the canonical ItemLink to the project — clicking
-            opens the project detail in this destination (cross-audit §1.1).
-            The chip is rendered inline so the entire card name acts as a
-            link without a custom anchor. */}
-        <span style={nameStyle} data-testid="project-card-name">
-          <ItemLink
-            ref={{ kind: "project", id: project.id }}
-            label={project.name}
-            className="projects-card-name-link"
+      {/* The whole card is one hit area (D2). Border/radius/padding live HERE so
+          the measured `default.card` and `default.card.hitarea` collapse onto
+          the same element. */}
+      <button
+        type="button"
+        className="ui-card ui-card--proj"
+        style={cardButtonStyle}
+        data-testid="project-card"
+        data-project-id={project.id}
+        onClick={
+          onOpenProject !== undefined
+            ? () => onOpenProject(project.id)
+            : undefined
+        }
+        aria-label={`Open project ${project.name}`}
+      >
+        <div style={headStyle}>
+          <ProjectIconTile
+            name={project.name}
+            colorHue={project.color_hue}
+            testId="project-card-icon"
           />
-        </span>
-        <StatusPill
-          status={statusTone(project.status)}
-          label={statusLabel(project.status)}
-        />
-        <div style={actionRowStyle}>
-          {onStarProject !== undefined && !project.viewer_starred ? (
-            <button
-              type="button"
-              data-testid="project-card-star"
-              onClick={() => onStarProject(project.id)}
-              style={starButtonStyle}
-              aria-label={`Star ${project.name}`}
-            >
-              ☆
-            </button>
-          ) : null}
-          {onUnstarProject !== undefined && project.viewer_starred ? (
-            <button
-              type="button"
-              data-testid="project-card-unstar"
-              onClick={() => onUnstarProject(project.id)}
-              style={starButtonStyle}
-              aria-label={`Unstar ${project.name}`}
-            >
-              ★
-            </button>
-          ) : null}
-          {isActive && onArchiveProject !== undefined ? (
-            <button
-              type="button"
-              data-testid="project-card-archive"
-              onClick={() => onArchiveProject(project.id)}
-              style={actionButtonStyle}
-              aria-label={`Archive ${project.name}`}
-            >
-              Archive
-            </button>
-          ) : null}
-          {!isActive && onActivateProject !== undefined ? (
-            <button
-              type="button"
-              data-testid="project-card-activate"
-              onClick={() => onActivateProject(project.id)}
-              style={actionButtonStyle}
-              aria-label={`Activate ${project.name}`}
-            >
-              Activate
-            </button>
-          ) : null}
-        </div>
-      </div>
-
-      {project.description.length > 0 ? (
-        <div style={descStyle} data-testid="project-card-description">
-          {project.description}
-        </div>
-      ) : null}
-
-      <div style={metaStyle} data-testid="project-card-meta">
-        {/* Owner chip — display-only (Team destination owns the
-            person ItemLink; we don't render <ItemLink kind="person"> here
-            unless the owner UserId is the canonical viewer's spec target;
-            projects-prd §3.2 row shape carries ownerChip as plain text). */}
-        {project.owner_display_name !== undefined ? (
-          <span data-testid="project-card-owner">
-            {project.owner_display_name}
+          {/* Plain span, not an <ItemLink> — a link inside a button is invalid,
+              and the card itself owns navigation (D2). */}
+          <span style={nameStyle} data-testid="project-card-name">
+            {project.name}
           </span>
+          <StatusPill
+            status={statusTone(project.status)}
+            label={statusLabel(project.status)}
+          />
+        </div>
+
+        {project.description.length > 0 ? (
+          <div style={descStyle} data-testid="project-card-description">
+            {project.description}
+          </div>
         ) : null}
-        {/* Viewer role chip — only shown when the caller is a member. */}
-        {project.viewer_role !== null ? (
-          <StatusPill status="muted" label={project.viewer_role} />
-        ) : null}
-        {lastActivity !== null ? (
-          <span data-testid="project-card-last-activity">
-            {formatRelativeTime(lastActivity, now)}
+
+        <div style={metaRowStyle}>
+          {/* Viewer role chip — live-only chrome kept from the web scaffold (D1),
+              conditioned on `viewer_role !== null` so `single_user_desktop`
+              (which returns a null role) shows no empty strip. */}
+          {project.viewer_role !== null ? (
+            <span
+              data-testid="project-card-role"
+              data-role={project.viewer_role}
+            >
+              <StatusPill status="muted" label={project.viewer_role} />
+            </span>
+          ) : null}
+          {/* Counts line — the design's mono `.lrow__sub`
+              (copilot-app.jsx:422-424): `{chats} chats · {files} files`.
+              `counts.files` is library `kind='file'` only. The chats segment is
+              HIDDEN when `counts.chats === null` so a fabricated "0 chats" never
+              reaches the card (PRD-07 DoD 13). */}
+          <span
+            data-testid="project-card-counts"
+            style={{
+              fontFamily: "var(--font-mono)",
+              color: "var(--color-text-subtle)",
+              fontSize: "var(--font-size-2xs)",
+            }}
+          >
+            {project.counts.chats !== null
+              ? `${project.counts.chats} chats · ${project.counts.files} files`
+              : `${project.counts.files} files`}
           </span>
+        </div>
+      </button>
+
+      {/* Lifecycle actions — OUTSIDE the button in DOM order (D2), so they keep
+          tab order and stay keyboard reachable; `position:absolute` is visual
+          only. Revealed on `:hover` / `:focus-within` via `.ui-proj-card`. */}
+      <div className="ui-proj-card__actions" style={actionsOverlayStyle}>
+        {onStarProject !== undefined && !project.viewer_starred ? (
+          <button
+            type="button"
+            data-testid="project-card-star"
+            onClick={() => onStarProject(project.id)}
+            style={actionButtonStyle}
+            aria-label={`Star ${project.name}`}
+          >
+            ☆
+          </button>
         ) : null}
-        {/* Counts line — the design's mono `.lrow__sub`
-            (copilot-app.jsx:422-424): `{chats} chats · {files} files`.
-            `counts.files` is library `kind='file'` only (distinct from
-            `library_items`, which counts file + page + dataset). The chats
-            segment is HIDDEN when `counts.chats === null` (the facade could not
-            fill it from ai-backend) so a fabricated "0 chats" never reaches the
-            card (PRD-07 DoD 13). Only the meta line's content + its two type
-            tokens (mono family, subtle colour, 2xs size) are PRD-07's; the
-            card's outer anatomy is PRD-10's. */}
-        <span
-          data-testid="project-card-counts"
-          style={{
-            fontFamily: "var(--font-mono)",
-            color: "var(--color-text-subtle)",
-            fontSize: "var(--font-size-2xs)",
-          }}
-        >
-          {project.counts.chats !== null
-            ? `${project.counts.chats} chats · ${project.counts.files} files`
-            : `${project.counts.files} files`}
-        </span>
+        {onUnstarProject !== undefined && project.viewer_starred ? (
+          <button
+            type="button"
+            data-testid="project-card-unstar"
+            onClick={() => onUnstarProject(project.id)}
+            style={starActiveButtonStyle}
+            aria-label={`Unstar ${project.name}`}
+          >
+            ★
+          </button>
+        ) : null}
+        {isActive && onArchiveProject !== undefined ? (
+          <button
+            type="button"
+            data-testid="project-card-archive"
+            onClick={() => onArchiveProject(project.id)}
+            style={actionButtonStyle}
+            aria-label={`Archive ${project.name}`}
+          >
+            Archive
+          </button>
+        ) : null}
+        {!isActive && onActivateProject !== undefined ? (
+          <button
+            type="button"
+            data-testid="project-card-activate"
+            onClick={() => onActivateProject(project.id)}
+            style={actionButtonStyle}
+            aria-label={`Activate ${project.name}`}
+          >
+            Activate
+          </button>
+        ) : null}
+        {onDeleteProject !== undefined ? (
+          <button
+            type="button"
+            data-testid="project-card-delete"
+            onClick={() => onDeleteProject(project.id)}
+            style={actionButtonStyle}
+            aria-label={`Delete ${project.name}`}
+          >
+            Delete
+          </button>
+        ) : null}
       </div>
-    </article>
+    </div>
   );
 }
+
+const cardWrapperStyle: CSSProperties = {
+  position: "relative",
+  minWidth: 0,
+  display: "flex",
+};
+
+// `.card.proj-card` (copilot.css:737-742, :1711-1716): the button IS the card —
+// border / radius / padding here so the hit area collapses onto the card element.
+const cardButtonStyle: CSSProperties = {
+  display: "flex",
+  flexDirection: "column",
+  gap: 10,
+  width: "100%",
+  minWidth: 0,
+  padding: "var(--space-card-pad)",
+  borderRadius: "var(--radius-md)",
+  border: "1px solid var(--color-border)",
+  backgroundColor: "var(--color-surface)",
+  color: "var(--color-text)",
+  boxSizing: "border-box",
+  // The design `.card` has no shadow; the `.ui-card` recipe adds one, so
+  // override it inline (radius + padding are already overridden above).
+  boxShadow: "none",
+  textAlign: "left",
+  font: "inherit",
+  cursor: "pointer",
+};
+
+const headStyle: CSSProperties = {
+  display: "flex",
+  alignItems: "center",
+  gap: 12,
+  minWidth: 0,
+};
+
+const nameStyle: CSSProperties = {
+  flex: 1,
+  minWidth: 0,
+  fontFamily: "var(--font-sans)",
+  fontSize: "var(--font-size-sm)",
+  fontWeight: "var(--font-weight-semibold)",
+  color: "var(--color-text)",
+  overflow: "hidden",
+  textOverflow: "ellipsis",
+  whiteSpace: "nowrap",
+};
+
+const descStyle: CSSProperties = {
+  fontSize: "var(--font-size-2xs)",
+  color: "var(--color-text-muted)",
+  overflow: "hidden",
+  textOverflow: "ellipsis",
+  whiteSpace: "nowrap",
+};
+
+const metaRowStyle: CSSProperties = {
+  display: "flex",
+  alignItems: "center",
+  gap: 8,
+  flexWrap: "wrap",
+  minWidth: 0,
+};
+
+const actionsOverlayStyle: CSSProperties = {
+  position: "absolute",
+  top: 8,
+  right: 8,
+  display: "flex",
+  alignItems: "center",
+  gap: 4,
+};
+
+const actionButtonStyle: CSSProperties = {
+  background: "var(--color-surface-elevated)",
+  border: "1px solid var(--color-border)",
+  borderRadius: "var(--radius-sm)",
+  color: "var(--color-text-subtle)",
+  cursor: "pointer",
+  fontSize: "var(--font-size-2xs)",
+  padding: "2px 6px",
+};
+
+const starActiveButtonStyle: CSSProperties = {
+  ...actionButtonStyle,
+  color: "var(--color-warning)",
+};
 
 // ===========================================================================
 // Helpers
@@ -619,9 +634,6 @@ const STATUS_TONE: Readonly<Record<ProjectStatus, StatusTone>> = {
   archived: "muted",
 };
 
-// Lowercase to match the design's chip vocabulary (PRD-02). `active`/`archived`
-// are project statuses, not run statuses, so they keep their own map — but in
-// the same lowercase register as every other chip.
 const STATUS_LABEL: Readonly<Record<ProjectStatus, string>> = {
   active: "active",
   archived: "archived",
@@ -641,10 +653,10 @@ function statusLabel(status: ProjectStatus): string {
 
 function CardSkeleton({ index }: { index: number }): ReactElement {
   const style: CSSProperties = {
-    height: 116,
-    borderRadius: "var(--radius-md, 12px)",
-    border: "1px solid var(--color-border, #232325)",
-    backgroundColor: "var(--color-surface-muted, #222224)",
+    height: 96,
+    borderRadius: "var(--radius-md)",
+    border: "1px solid var(--color-border)",
+    backgroundColor: "var(--color-surface-muted)",
     opacity: 0.5,
   };
   return (

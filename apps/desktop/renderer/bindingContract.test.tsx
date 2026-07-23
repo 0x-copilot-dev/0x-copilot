@@ -30,10 +30,7 @@ import { type ReactElement } from "react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
 import { ActivityBinder } from "./destinationBinders";
-import {
-  DESKTOP_PROJECTS_DETAIL,
-  buildDesktopShellBinding,
-} from "./shellBinding";
+import { buildDesktopShellBinding } from "./shellBinding";
 
 afterEach(() => {
   cleanup();
@@ -161,16 +158,16 @@ describe("desktop shell binding — manifest conformance (DoD 6)", () => {
     }
   });
 
-  it("declares its opt-outs literally (walletChip / topbarLeaf / projects detail)", () => {
+  it("declares its opt-outs literally (walletChip / topbarLeaf)", () => {
     const binding = buildDesktopShellBinding(
       { displayName: "Sarah Chen" },
       false,
     );
     expect(binding.walletChip).toBeNull();
     expect(binding.topbarLeaf).toBeNull();
-    // Closing the desktop project-detail gap is a diff on this literal, not a
-    // discovery that a prop was never passed.
-    expect(DESKTOP_PROJECTS_DETAIL.mode).toBe("disabled");
+    // The desktop project-detail gap is CLOSED (PRD-10 DoD 9): `ProjectsBinder`
+    // builds the `enabled` binding inline, so there is no longer a
+    // `DESKTOP_PROJECTS_DETAIL = { mode: "disabled" }` opt-out const to assert.
   });
 });
 

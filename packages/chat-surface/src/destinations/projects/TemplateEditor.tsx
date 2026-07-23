@@ -28,6 +28,7 @@ import {
 
 import { EmptyState } from "../../shell/EmptyState";
 import { StatusPill, type StatusTone } from "../../shell/StatusPill";
+import { projectHueRamp } from "../_shared";
 
 import type { ProjectTemplateId } from "./TemplateGallery";
 
@@ -147,6 +148,8 @@ function SnapshotPreview({
     color: TEXT_FAINT,
     marginTop: 2,
   };
+  // PRD-10 D3 — the ONE shared hue ramp (no `hsl(...)` literal in this dir).
+  const snapshotIconRamp = projectHueRamp(snapshot.colorHue ?? 200);
   return (
     <div
       data-testid="template-editor-snapshot-preview"
@@ -167,8 +170,9 @@ function SnapshotPreview({
               width: 36,
               height: 36,
               borderRadius: 8,
-              backgroundColor: `hsl(${snapshot.colorHue ?? 200}, 55%, 35%)`,
-              color: ACCENT_CONTRAST,
+              backgroundColor: snapshotIconRamp.background,
+              border: snapshotIconRamp.border,
+              color: snapshotIconRamp.color,
               display: "inline-flex",
               alignItems: "center",
               justifyContent: "center",

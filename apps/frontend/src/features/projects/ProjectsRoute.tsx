@@ -15,13 +15,17 @@
 //   4. Proxies state changes (archive / activate / star / unstar /
 //      delete) back to the backend, optimistically driving the
 //      SSE-merged local list while the server confirms.
-//   5. Renders a host-side scaffold list (real names + archive / activate
-//      / star / delete affordances) for the un-focused view. The list
-//      still uses the scaffold — not `<ProjectsDestination>`'s card grid —
-//      because the card name is a `<ItemLink kind="project">` whose stub
-//      resolver renders the literal label "Project" (real per-project
-//      names await the resolver upgrade); the scaffold keeps names honest.
-//   6. Detail binder (PR-4.4b / FR-4.11–4.13): a row's "Open" affordance
+//   5. Mounts the SHARED `<ProjectsDestination>` for BOTH the list and the
+//      detail (PRD-10 D1). The old host-side scaffold grid + its scoped grid
+//      stylesheet are DELETED: there is exactly one Projects list and it lives in
+//      `chat-surface`. The recorded reason for the fork (the `<ItemLink
+//      kind="project">` stub resolving to the literal "Project") was invalidated
+//      when the name cache landed in this same file — the destination now primes
+//      it from `items` itself, so both hosts render real names. Web keeps its
+//      filter / counts / star / archive / activate / delete / create affordances
+//      by passing the props the destination already declares; the shared card
+//      renders the `viewer_role` chip (conditioned on `viewer_role !== null`).
+//   6. Detail binder (PR-4.4b / FR-4.11–4.13): a row's click focuses a project
 //      focuses a project and lazy-loads project + members + activity, then
 //      mounts `<ProjectDetailView>` through `<ProjectsDestination>`'s own
 //      `renderDetail` / `focusedProjectId` slot. The Files tab degrades to
@@ -48,9 +52,12 @@ import {
 
 import {
   ProjectDetailView,
+  ProjectEditor,
   ProjectsDestination,
   type ProjectDetail,
   type ProjectDetailViewProps,
+  type ProjectsFilterCounts,
+  type ProjectsFilterSlug,
 } from "@0x-copilot/chat-surface";
 import type {
   ChatArchiveRow,
@@ -63,6 +70,7 @@ import type { RequestIdentity } from "../../api/config";
 import {
   activateProject,
   archiveProject,
+  createProject,
   deleteProject,
   fetchProject,
   fetchProjectMembers,
@@ -76,8 +84,11 @@ import {
 // project-activity read (which called a route that never existed).
 import { createWebProjectDataPort } from "./ProjectDataPort";
 import type {
+  CreateProjectRequest,
   Project,
   ProjectActivity as ProjectActivityRecord,
+  ProjectColorHue,
+  ProjectIconEmoji,
   ProjectId,
   ProjectListResponse,
   ProjectMembership,
@@ -286,6 +297,16 @@ export function ProjectsRoute({
   );
   const [detail, setDetail] = useState<DetailState | null>(null);
   const [detailReloadToken, setDetailReloadToken] = useState(0);
+
+  // Status filter (PRD-10 D1 — the shared destination renders the filter tabs;
+  // the HOST owns the filter state, the filtered slice, and the per-slug counts,
+  // since `ProjectsDestination` renders whatever `items` it is handed).
+  const [filter, setFilter] = useState<ProjectsFilterSlug>("all");
+
+  // Create sheet (PRD-10 D4/D9 — the create affordance is a deliberate live-only
+  // divergence from the mock; `ProjectEditor` is the sheet it opens).
+  const [createOpen, setCreateOpen] = useState(false);
+  const [createError, setCreateError] = useState<string | null>(null);
 
   // PRD-03 Move 1: priming the cross-destination project-name cache is no
   // longer a host duty — `ProjectsDestination` primes it from `items` in an
@@ -543,73 +564,62 @@ export function ProjectsRoute({
     [identity],
   );
 
-  // ---- Render -------------------------------------------------------
-  if (state.kind === "error") {
-    return (
-      <section
-        aria-label="Projects destination"
-        data-testid="projects-route"
-        data-state="error"
-        style={{
-          height: "100%",
-          width: "100%",
-          display: "flex",
-          alignItems: "center",
-          justifyContent: "center",
-          padding: 24,
-          boxSizing: "border-box",
-          backgroundColor: "var(--color-bg)",
-          color: "var(--color-text)",
-        }}
-      >
-        <div
-          role="alert"
-          data-testid="projects-route-error"
-          style={{
-            border: "1px solid var(--color-border)",
-            borderRadius: 12,
-            backgroundColor: "var(--color-surface)",
-            padding: 32,
-            display: "flex",
-            flexDirection: "column",
-            alignItems: "center",
-            gap: 12,
-            maxWidth: 480,
-          }}
-        >
-          <div style={{ fontSize: 14, fontWeight: 600 }}>
-            Could not load projects
-          </div>
-          <div
-            style={{ fontSize: 13, color: "var(--color-text-muted)" }}
-            data-testid="projects-route-error-message"
-          >
-            {state.message}
-          </div>
-          <button
-            type="button"
-            data-testid="projects-route-retry"
-            onClick={() => setReloadToken((t) => t + 1)}
-            style={{
-              height: 32,
-              padding: "0 14px",
-              borderRadius: 8,
-              border: "1px solid var(--color-border-strong)",
-              backgroundColor: "transparent",
-              color: "var(--color-accent)",
-              fontSize: 13,
-              fontWeight: 600,
-              cursor: "pointer",
-            }}
-          >
-            Retry
-          </button>
-        </div>
-      </section>
-    );
-  }
+  const handleCreate = useCallback(
+    async (payload: {
+      readonly name: string;
+      readonly description: string;
+      readonly iconEmoji: CreateProjectRequest["icon_emoji"];
+      readonly colorHue: CreateProjectRequest["color_hue"];
+    }): Promise<void> => {
+      setCreateError(null);
+      try {
+        const created = await createProject(identity, {
+          name: payload.name,
+          description: payload.description,
+          icon_emoji: payload.iconEmoji,
+          color_hue: payload.colorHue,
+        });
+        setState((prev) => mergeUpdated(prev, toSummary(created)));
+        setCreateOpen(false);
+      } catch (error: unknown) {
+        setCreateError(errorMessage(error, "Could not create project."));
+        throw error;
+      }
+    },
+    [identity],
+  );
 
+  // ---- Render -------------------------------------------------------
+  //
+  // ONE shared `<ProjectsDestination>` renders every state (PRD-10 D1): the
+  // destination owns the loading skeleton, the error empty-state (with retry),
+  // the "no projects yet" empty state, the card grid, and — through its
+  // `renderDetail` slot — the focused detail. The host owns data (fetch / SSE /
+  // mutations), the status-filter STATE, the filtered slice + counts, and the
+  // create sheet.
   const items = state.kind === "ready" ? state.items : [];
+
+  const counts: ProjectsFilterCounts = {
+    all: items.length,
+    active: items.filter((p) => p.status === "active").length,
+    archived: items.filter((p) => p.status === "archived").length,
+    starred: items.filter((p) => p.viewer_starred).length,
+  };
+  const filteredItems =
+    filter === "all"
+      ? items
+      : filter === "starred"
+        ? items.filter((p) => p.viewer_starred)
+        : items.filter((p) => p.status === filter);
+
+  // `items` prop shape: `null` = loading skeleton; `{status:"error"}` = the
+  // destination's error empty-state; `{status:"ok"}` = the filtered card grid.
+  const listItems: SectionResult<ReadonlyArray<ProjectSummary>> | null =
+    state.kind === "loading"
+      ? null
+      : state.kind === "error"
+        ? { status: "error", error: state.message }
+        : { status: "ok", data: filteredItems };
 
   // Cross-destination tab slot (FR-4.12), used only by the team profile's
   // Todos / Inbox / Library / Routines tabs. PRD-07 deleted the hand-rolled
@@ -721,34 +731,27 @@ export function ProjectsRoute({
     // solo profile `viewer_role` is null → no management affordances.
     const canManage = project.viewer_role === "owner";
 
+    // The back control belongs to `ProjectDetailView` now (PRD-10 D5): it renders
+    // the shared `<BackLink>` (mono 11px muted link + chevron) from `onBack`, so
+    // the host no longer hand-rolls the accent-blue 13px button. The transient
+    // loading/error states above keep a plain host back affordance.
     return (
-      <div>
-        {backButton}
-        <ProjectDetailView
-          project={projectDetail}
-          members={members.map(toDetailMember)}
-          activity={activity.map(toDetailActivity)}
-          chats={chats}
-          files={files}
-          onRetryChats={() => setDetailReloadToken((t) => t + 1)}
-          onRetryFiles={() => setDetailReloadToken((t) => t + 1)}
-          onOpenChat={(conversationId: ConversationId) =>
-            onOpenRun?.(conversationId)
-          }
-          canManage={canManage}
-          renderCrossDestinationTab={(tab) => renderCrossDestinationTab(tab)}
-        />
-      </div>
+      <ProjectDetailView
+        project={projectDetail}
+        onBack={onClose}
+        members={members.map(toDetailMember)}
+        activity={activity.map(toDetailActivity)}
+        chats={chats}
+        files={files}
+        onRetryChats={() => setDetailReloadToken((t) => t + 1)}
+        onRetryFiles={() => setDetailReloadToken((t) => t + 1)}
+        onOpenChat={(conversationId: ConversationId) =>
+          onOpenRun?.(conversationId)
+        }
+        canManage={canManage}
+        renderCrossDestinationTab={(tab) => renderCrossDestinationTab(tab)}
+      />
     );
-  };
-
-  // The controlled list result handed to `<ProjectsDestination>` so its
-  // ready-state detail slot renders (the loading / error branches never
-  // reach `renderDetail`). We only mount the destination once a project
-  // is focused; the un-focused list stays the host-side scaffold below.
-  const detailSection: SectionResult<ReadonlyArray<ProjectSummary>> = {
-    status: "ok",
-    data: items,
   };
 
   return (
@@ -761,8 +764,9 @@ export function ProjectsRoute({
       style={{
         height: "100%",
         width: "100%",
-        overflow: "auto",
-        padding: 24,
+        minHeight: 0,
+        display: "flex",
+        flexDirection: "column",
         boxSizing: "border-box",
       }}
     >
@@ -771,7 +775,7 @@ export function ProjectsRoute({
           role="status"
           data-testid="projects-route-pending-error"
           style={{
-            marginBottom: 16,
+            margin: "12px 16px 0",
             padding: 12,
             border: "1px solid var(--color-border-strong)",
             borderRadius: 8,
@@ -782,246 +786,98 @@ export function ProjectsRoute({
           {pendingError}
         </div>
       )}
-      {focusedProjectId !== null ? (
-        // Detail pane — mounted through the destination's own detail slot
-        // (FR-4.11). PRD-03: the slot is now one total `detail` binding; web
-        // declares `mode: "enabled"` and carries the focused id + slot together.
-        <ProjectsDestination
-          items={detailSection}
-          detail={{
-            mode: "enabled",
-            focusedProjectId,
-            onCloseDetail: () => setFocusedProjectId(null),
-            renderDetail: ({ onClose }) => renderProjectDetail(onClose),
-          }}
-        />
-      ) : state.kind === "loading" ? (
-        <div data-testid="projects-route-loading" style={{ fontSize: 13 }}>
-          Loading projects…
-        </div>
-      ) : items.length === 0 ? (
+      {/* The ONE Projects list (PRD-10 D1). Web passes the full callback set the
+          destination declares; the shared card owns the tile / name / counts /
+          role chip / lifecycle overlay. `detail` is `enabled`: a card click
+          focuses a project and the detail renders in the destination's own slot. */}
+      <ProjectsDestination
+        items={listItems}
+        filter={filter}
+        counts={counts}
+        onFilterChange={setFilter}
+        onOpenProject={setFocusedProjectId}
+        onArchiveProject={(id) => void handleArchive(id)}
+        onActivateProject={(id) => void handleActivate(id)}
+        onStarProject={(id) => void handleStar(id, false)}
+        onUnstarProject={(id) => void handleStar(id, true)}
+        onDeleteProject={(id) => void handleDelete(id)}
+        onCreateProject={() => setCreateOpen(true)}
+        onRetry={() => setReloadToken((t) => t + 1)}
+        detail={{
+          mode: "enabled",
+          focusedProjectId,
+          onCloseDetail: () => setFocusedProjectId(null),
+          renderDetail: ({ onClose }) => renderProjectDetail(onClose),
+        }}
+      />
+      {createOpen ? (
         <div
-          data-testid="projects-route-empty"
-          style={{ fontSize: 13, color: "var(--color-text-muted)" }}
+          data-testid="projects-create-overlay"
+          style={{
+            position: "fixed",
+            inset: 0,
+            zIndex: 40,
+            display: "flex",
+            alignItems: "center",
+            justifyContent: "center",
+            background: "var(--color-scrim, rgba(0,0,0,0.5))",
+            padding: 24,
+            boxSizing: "border-box",
+          }}
         >
-          No projects yet.
-        </div>
-      ) : (
-        <>
-          <style>{PROJECTS_GRID_CSS}</style>
-          <div data-testid="projects-route-list" className="projects-grid3">
-            {items.map((project) => {
-              const initial = (project.name.trim()[0] ?? "?").toUpperCase();
-              // PRD-07 — the design's "N files" is library `kind='file'` only
-              // (`counts.files`), NOT `library_items` (file + page + dataset).
-              // `counts.chats` is `null` when the facade could not fill it; the
-              // chats segment is hidden then (never a fabricated "0 chats").
-              const filesCount = project.counts.files;
-              const chatsCount = project.counts.chats;
-              return (
-                <div
-                  key={project.id}
-                  data-testid="projects-route-row"
-                  data-project-id={project.id}
-                  data-project-status={project.status}
-                  className="projects-card"
-                >
-                  {/* The card body is the primary "open" affordance — the
-                      whole tile+name+meta block navigates into the detail
-                      pane. The lifecycle actions live in the footer below
-                      so no button nests inside another. */}
-                  <button
-                    type="button"
-                    data-testid="projects-route-open"
-                    data-project-id={project.id}
-                    className="projects-card__open"
-                    onClick={() => setFocusedProjectId(project.id)}
-                  >
-                    <span
-                      className="proj-ic"
-                      aria-hidden="true"
-                      data-color-hue={project.color_hue}
-                      style={{
-                        backgroundColor: `hsl(${project.color_hue} 60% 28% / 0.45)`,
-                        border: `1px solid hsl(${project.color_hue} 60% 50% / 0.55)`,
-                        color: `hsl(${project.color_hue} 70% 82%)`,
-                      }}
-                    >
-                      {initial}
-                    </span>
-                    <span className="projects-card__name">{project.name}</span>
-                    {project.description.length > 0 ? (
-                      <span className="projects-card__desc">
-                        {project.description}
-                      </span>
-                    ) : null}
-                    <span className="projects-card__meta">
-                      {chatsCount !== null
-                        ? `${chatsCount} chat${chatsCount === 1 ? "" : "s"} · ${filesCount} file${filesCount === 1 ? "" : "s"}`
-                        : `${filesCount} file${filesCount === 1 ? "" : "s"}`}
-                    </span>
-                  </button>
-                  {/* Member/role chip — FR-4.13: rendered ONLY when the
-                      viewer is a member (`viewer_role !== null`). Under the
-                      `single_user_desktop` profile the server returns a null
-                      `viewer_role`, so the chip is absent (not an empty
-                      strip). */}
-                  {project.viewer_role !== null ? (
-                    <span
-                      data-testid="projects-route-role-chip"
-                      data-role={project.viewer_role}
-                      className="projects-card__role"
-                    >
-                      {project.viewer_role}
-                    </span>
-                  ) : null}
-                  <div className="projects-card__actions">
-                    <button
-                      type="button"
-                      data-testid="projects-route-star"
-                      data-project-id={project.id}
-                      onClick={() => {
-                        void handleStar(project.id, project.viewer_starred);
-                      }}
-                    >
-                      {project.viewer_starred ? "Unstar" : "Star"}
-                    </button>
-                    {project.status === "active" ? (
-                      <button
-                        type="button"
-                        data-testid="projects-route-archive"
-                        data-project-id={project.id}
-                        onClick={() => {
-                          void handleArchive(project.id);
-                        }}
-                      >
-                        Archive
-                      </button>
-                    ) : (
-                      <button
-                        type="button"
-                        data-testid="projects-route-activate"
-                        data-project-id={project.id}
-                        onClick={() => {
-                          void handleActivate(project.id);
-                        }}
-                      >
-                        Activate
-                      </button>
-                    )}
-                    <button
-                      type="button"
-                      data-testid="projects-route-delete"
-                      data-project-id={project.id}
-                      onClick={() => {
-                        void handleDelete(project.id);
-                      }}
-                    >
-                      Delete
-                    </button>
-                  </div>
-                </div>
-              );
-            })}
+          <div
+            style={{
+              width: "100%",
+              maxWidth: 560,
+              maxHeight: "90vh",
+              overflow: "auto",
+              background: "var(--color-surface)",
+              border: "1px solid var(--color-border)",
+              borderRadius: 12,
+            }}
+          >
+            {createError !== null ? (
+              <div
+                role="alert"
+                data-testid="projects-create-error"
+                style={{
+                  padding: "10px 16px",
+                  color: "var(--color-text-muted)",
+                  fontSize: 13,
+                }}
+              >
+                {createError}
+              </div>
+            ) : null}
+            <ProjectEditor
+              value={{
+                id: "" as unknown as ProjectId,
+                name: "",
+                description: "",
+                iconEmoji: "📁" as unknown as ProjectIconEmoji,
+                colorHue: 210 as unknown as ProjectColorHue,
+                defaultConnectorAllowlist: null,
+              }}
+              availableConnectors={[]}
+              onCancel={() => {
+                setCreateOpen(false);
+                setCreateError(null);
+              }}
+              onSave={async (payload) => {
+                await handleCreate({
+                  name: payload.name,
+                  description: payload.description,
+                  iconEmoji: payload.iconEmoji,
+                  colorHue: payload.colorHue,
+                });
+              }}
+            />
           </div>
-        </>
-      )}
+        </div>
+      ) : null}
     </section>
   );
 }
-
-// The design `.grid3` project-card grid (FR-G.4): a 3-column grid that
-// collapses to a single column below 900px, one bordered card per project
-// (colour tile + first letter + name + description + "N chats · M files").
-// Kept as a scoped <style> string because the surrounding surface styles
-// inline — this is the one rule that needs a media query.
-const PROJECTS_GRID_CSS = `
-.projects-grid3 {
-  display: grid;
-  grid-template-columns: repeat(3, 1fr);
-  gap: 12px;
-  margin: 0;
-  padding: 0;
-  list-style: none;
-}
-@media (max-width: 900px) {
-  .projects-grid3 { grid-template-columns: 1fr; }
-}
-.projects-card {
-  display: flex;
-  flex-direction: column;
-  border: 1px solid var(--color-border);
-  border-radius: 12px;
-  background: var(--color-surface);
-  overflow: hidden;
-  min-width: 0;
-}
-.projects-card__open {
-  display: flex;
-  flex-direction: column;
-  align-items: flex-start;
-  gap: 6px;
-  width: 100%;
-  padding: 14px 14px 10px;
-  border: none;
-  background: transparent;
-  color: inherit;
-  text-align: left;
-  cursor: pointer;
-}
-.projects-card__open:hover { background: var(--color-surface-elevated); }
-.proj-ic {
-  width: 32px;
-  height: 32px;
-  border-radius: 8px;
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  font-size: 14px;
-  font-weight: 700;
-  flex-shrink: 0;
-}
-.projects-card__name {
-  font-size: var(--font-size-md, 14px);
-  font-weight: 600;
-  color: var(--color-text);
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-  max-width: 100%;
-}
-.projects-card__desc {
-  font-size: 12px;
-  color: var(--color-text-muted);
-  display: -webkit-box;
-  -webkit-line-clamp: 2;
-  -webkit-box-orient: vertical;
-  overflow: hidden;
-}
-.projects-card__meta {
-  font-size: 12px;
-  color: var(--color-text-subtle);
-  margin-top: 2px;
-}
-.projects-card__role {
-  align-self: flex-start;
-  margin: 0 14px 4px;
-  padding: 1px 8px;
-  border-radius: 999px;
-  border: 1px solid var(--color-border-strong);
-  font-size: 11px;
-  font-weight: 600;
-  text-transform: capitalize;
-}
-.projects-card__actions {
-  display: flex;
-  gap: 6px;
-  flex-wrap: wrap;
-  padding: 8px 14px 12px;
-  border-top: 1px solid var(--color-border);
-  margin-top: auto;
-}
-`;
 
 // ===========================================================================
 // State reducers — extracted so they remain pure + testable.

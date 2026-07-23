@@ -16,7 +16,6 @@ import {
   type ProjectsFilterSlug,
   type RenderProjectDetailSlot,
 } from "./ProjectsDestination";
-import { ProjectsPanel, type ProjectsPanelProps } from "./ProjectsPanel";
 import {
   ProjectFilterChip,
   type ProjectFilterChipOption,
@@ -34,8 +33,6 @@ export {
   type ProjectsFilterSlug,
   type RenderProjectDetailSlot,
 };
-
-export { ProjectsPanel, type ProjectsPanelProps };
 
 export {
   ProjectFilterChip,

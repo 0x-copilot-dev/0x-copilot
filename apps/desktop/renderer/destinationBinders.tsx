@@ -31,6 +31,8 @@ import {
   ChatsArchive,
   ConnectModal,
   ConnectorsDestination,
+  ProjectDetailView,
+  ProjectEditor,
   ProjectsDestination,
   RunDestination,
   SkillsDestination,
@@ -46,6 +48,8 @@ import {
   type ConnectorAccessPort,
   type CustomServerInput,
   type ProjectDataPort,
+  type ProjectDetail,
+  type ProjectDetailProfile,
   type ProjectSummary,
   type RunEmptyComposerCtx,
   type RunStartRequest,
@@ -63,9 +67,12 @@ import type {
   ConversationId,
   ConversationListResponse,
   DesktopConnectorCatalogResponse,
+  ChatArchiveRow,
   LibraryFile,
   LibraryListResponse,
+  ProjectColorHue,
   ProjectFileRow,
+  ProjectIconEmoji,
   ProjectId,
   RunHistoryResponse,
   RunId,
@@ -88,7 +95,6 @@ import { RunComposer } from "./composer/RunComposer";
 import { RunEmptyComposer } from "./composer/RunEmptyComposer";
 import { createComposerConnectorsPort } from "./composer/composerConnectorsPort";
 import { isSurfacesV2Enabled } from "./featureFlags";
-import { DESKTOP_PROJECTS_DETAIL } from "./shellBinding";
 
 // ---------------------------------------------------------------------------
 // Shared load hook — drives the 4-state machine (loading / ok / empty / error)
@@ -547,22 +553,225 @@ async function loadProjects(
   return { status: "ok", data: response?.items ?? [] };
 }
 
-export function ProjectsBinder(): ReactElement {
+// A blank editor value for the CREATE sheet (D4/D9). The design ships no create
+// control, but a desktop product needs a way to make its first project (the
+// deliberate live-only divergence recorded in PRD-10 D4). `ProjectEditor` is the
+// create/edit sheet `onCreateProject` was always meant to open (D9 ledger); for
+// create we seed a blank value whose `id` is a throwaway placeholder — the server
+// mints the real id on `POST /v1/projects` and the list refetches.
+function blankProjectEditorValue(): {
+  readonly id: ProjectId;
+  readonly name: string;
+  readonly description: string;
+  readonly iconEmoji: ProjectIconEmoji;
+  readonly colorHue: ProjectColorHue;
+  readonly defaultConnectorAllowlist: null;
+} {
+  return {
+    id: "" as unknown as ProjectId,
+    name: "",
+    description: "",
+    iconEmoji: "📁" as unknown as ProjectIconEmoji,
+    colorHue: 210 as unknown as ProjectColorHue,
+    defaultConnectorAllowlist: null,
+  };
+}
+
+export function ProjectsBinder({
+  onOpenConversation,
+}: Pick<DestinationBinderCallbacks, "onOpenConversation"> = {}): ReactElement {
   const transport = useTransport();
   const load = useCallback(() => loadProjects(transport), [transport]);
   const { result, retry } = useSectionLoad(load);
-  // Desktop has no project-detail flow yet: the disabled binding is the
-  // EXPLICIT statement of that gap (PRD-03 Move 2). Making the detail reachable
-  // (`focusedProjectId` + `renderDetail`) is PRD-10 (DoD 9); PRD-07 lands the
-  // `ProjectDataPort` that will feed that detail's Chats + Files sections and
-  // does not itself flip the binding. The name cache is primed by
-  // ProjectsDestination from `items`, so cross-destination project links resolve
-  // to the real name (no host cache-priming call any more).
+
+  // Detail reachability (PRD-10 DoD 9): desktop owns the focus state + mounts the
+  // shared `ProjectDetailView` through `ProjectsDestination`'s `renderDetail`
+  // slot. Before this, `ProjectsBinder` passed `{ mode: "disabled" }`, so
+  // clicking a card did nothing and the whole detail branch was dead code even
+  // though the component + PRD-07's `ProjectDataPort` existed. The name cache is
+  // primed by `ProjectsDestination` from `items`, so cross-destination project
+  // links resolve to the real name.
+  const [focusedProjectId, setFocusedProjectId] = useState<ProjectId | null>(
+    null,
+  );
+  const [createOpen, setCreateOpen] = useState(false);
+  const dataPort = useMemo(
+    () => createDesktopProjectDataPort(transport),
+    [transport],
+  );
+
+  const summaries: ReadonlyArray<ProjectSummary> =
+    result !== null && result.status === "ok" ? (result.data ?? []) : [];
+
+  const createProject = useCallback(
+    async (payload: {
+      readonly name: string;
+      readonly description: string;
+      readonly iconEmoji: ProjectIconEmoji;
+      readonly colorHue: ProjectColorHue;
+    }): Promise<void> => {
+      await transport.request({
+        method: "POST",
+        path: "/v1/projects",
+        body: {
+          name: payload.name,
+          description: payload.description,
+          icon_emoji: payload.iconEmoji,
+          color_hue: payload.colorHue,
+        },
+      });
+      setCreateOpen(false);
+      retry();
+    },
+    [transport, retry],
+  );
+
   return (
-    <ProjectsDestination
-      items={result}
-      detail={DESKTOP_PROJECTS_DETAIL}
-      onRetry={retry}
+    <>
+      <ProjectsDestination
+        items={result}
+        detail={{
+          mode: "enabled",
+          focusedProjectId,
+          onCloseDetail: () => setFocusedProjectId(null),
+          renderDetail: ({ projectId, onClose }) => (
+            <DesktopProjectDetail
+              key={projectId}
+              projectId={projectId}
+              summary={summaries.find((p) => p.id === projectId)}
+              dataPort={dataPort}
+              onBack={onClose}
+              onOpenConversation={onOpenConversation}
+            />
+          ),
+        }}
+        onOpenProject={setFocusedProjectId}
+        onCreateProject={() => setCreateOpen(true)}
+        onRetry={retry}
+      />
+      {createOpen ? (
+        <div
+          data-testid="desktop-project-create-overlay"
+          style={{
+            position: "fixed",
+            inset: 0,
+            zIndex: 40,
+            display: "flex",
+            alignItems: "center",
+            justifyContent: "center",
+            background: "var(--color-scrim, rgba(0,0,0,0.5))",
+            padding: 24,
+            boxSizing: "border-box",
+          }}
+        >
+          <div
+            style={{
+              width: "100%",
+              maxWidth: 560,
+              maxHeight: "90vh",
+              overflow: "auto",
+              background: "var(--color-surface)",
+              border: "1px solid var(--color-border)",
+              borderRadius: 12,
+            }}
+          >
+            <ProjectEditor
+              value={blankProjectEditorValue()}
+              availableConnectors={[]}
+              onCancel={() => setCreateOpen(false)}
+              onSave={async (payload) => {
+                await createProject({
+                  name: payload.name,
+                  description: payload.description,
+                  iconEmoji: payload.iconEmoji,
+                  colorHue: payload.colorHue,
+                });
+              }}
+            />
+          </div>
+        </div>
+      ) : null}
+    </>
+  );
+}
+
+// ---------------------------------------------------------------------------
+// DesktopProjectDetail — the desktop host's binding of the shared
+// `ProjectDetailView` (PRD-10 DoD 9). Builds the `ProjectDetail` header model
+// from the already-loaded list `ProjectSummary` (no second `GET /v1/projects/
+// {id}` round-trip — the design's detail header is the same data as the card),
+// and loads the project-scoped Chats + Files sections through PRD-07's
+// `ProjectDataPort`. Desktop runs the `single_user_desktop` profile, so the view
+// renders the v3 SOLO sections (Chats · N / Files · M), never the team tab bar.
+// ---------------------------------------------------------------------------
+
+function DesktopProjectDetail({
+  projectId,
+  summary,
+  dataPort,
+  onBack,
+  onOpenConversation,
+}: {
+  readonly projectId: ProjectId;
+  readonly summary: ProjectSummary | undefined;
+  readonly dataPort: ProjectDataPort;
+  readonly onBack: () => void;
+  readonly onOpenConversation?: (id: ConversationId) => void;
+}): ReactElement {
+  const [chats, setChats] = useState<SectionResult<
+    ReadonlyArray<ChatArchiveRow>
+  > | null>(null);
+  const [files, setFiles] = useState<SectionResult<
+    ReadonlyArray<ProjectFileRow>
+  > | null>(null);
+  const [reloadToken, setReloadToken] = useState(0);
+
+  useEffect(() => {
+    let cancelled = false;
+    setChats(null);
+    setFiles(null);
+    void dataPort.listProjectChats(projectId).then((r) => {
+      if (!cancelled) setChats(r);
+    });
+    void dataPort.listProjectFiles(projectId).then((r) => {
+      if (!cancelled) setFiles(r);
+    });
+    return () => {
+      cancelled = true;
+    };
+  }, [dataPort, projectId, reloadToken]);
+
+  // No source loaded yet / project not in the list (a focus race): render a
+  // minimal solo header so the back-link is always reachable.
+  const profile: ProjectDetailProfile = "solo";
+  const detail: ProjectDetail = {
+    id: projectId,
+    name: summary?.name ?? "Project",
+    iconEmoji: summary?.icon_emoji,
+    colorHue: summary?.color_hue,
+    description: summary?.description,
+    status: summary?.status ?? "active",
+    ownerUserId: summary?.owner_user_id ?? "",
+    ownerName: summary?.owner_display_name ?? summary?.owner_user_id ?? "",
+    memberCount: summary?.counts.members ?? 1,
+    chatCount: summary?.counts.chats ?? undefined,
+    fileCount: summary?.counts.files,
+  };
+
+  return (
+    <ProjectDetailView
+      project={detail}
+      profile={profile}
+      onBack={onBack}
+      members={null}
+      activity={null}
+      chats={chats}
+      files={files}
+      onRetryChats={() => setReloadToken((t) => t + 1)}
+      onRetryFiles={() => setReloadToken((t) => t + 1)}
+      onOpenChat={(conversationId) => onOpenConversation?.(conversationId)}
+      canManage={false}
+      renderCrossDestinationTab={() => null}
     />
   );
 }

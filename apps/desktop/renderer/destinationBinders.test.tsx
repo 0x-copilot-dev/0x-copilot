@@ -24,6 +24,7 @@ import type {
   Conversation,
   ConversationListResponse,
   ProjectId,
+  ProjectSummary,
   RunHistoryEntry,
   RunHistoryResponse,
 } from "@0x-copilot/api-types";
@@ -43,6 +44,7 @@ import {
   ActivityBinder,
   ChatsBinder,
   ConnectorsBinder,
+  ProjectsBinder,
   RunBinder,
   createDesktopProjectDataPort,
 } from "./destinationBinders";
@@ -372,6 +374,113 @@ describe("createDesktopProjectDataPort — project-scoped chats (PRD-07 DoD 15)"
     expect(rows).toHaveLength(1);
     expect(rows[0]!.model).toBe("claude-sonnet-4.5");
     expect(rows[0]!.status).toBe("running");
+  });
+});
+
+// ===========================================================================
+// ProjectsBinder — desktop project-detail REACHABILITY (PRD-10 DoD 9).
+//
+// This is the regression guard for the desktop-detail bug: before PRD-10 the
+// binder passed `detail={{ mode: "disabled" }}`, so clicking a project card did
+// NOTHING and the whole `ProjectDetailView` (plus PRD-07's ProjectDataPort data)
+// was dead code on desktop. The binder now owns the focus state and mounts the
+// shared detail through `renderDetail`; clicking a card must reveal the detail.
+//
+// NOTE: run from `apps/desktop`, `@0x-copilot/chat-surface` resolves to the ROOT
+// checkout (which lacks PRD-10's `onOpenProject`-on-whole-card + `onBack`), so
+// this test is proven against the worktree package via the aliased run recorded
+// in the PR notes; the orchestrator's post-merge repoint re-verifies it here.
+// ===========================================================================
+
+function projectSummary(over: Partial<ProjectSummary> = {}): ProjectSummary {
+  return {
+    id: "p1" as ProjectId,
+    tenant_id: "t1" as unknown as ProjectSummary["tenant_id"],
+    name: "Renewal Q4",
+    description: "Push the renewal across the line.",
+    icon_emoji: "📁" as unknown as ProjectSummary["icon_emoji"],
+    color_hue: 210 as unknown as ProjectSummary["color_hue"],
+    status: "active",
+    owner_user_id: "u1" as unknown as ProjectSummary["owner_user_id"],
+    viewer_role: null,
+    viewer_starred: false,
+    counts: {
+      chats: 0,
+      files: 0,
+      todos_open: 0,
+      todos_done: 0,
+      inbox_items: 0,
+      library_items: 0,
+      routines_active: 0,
+      members: 1,
+    },
+    last_activity_at: null,
+    updated_at: "2026-07-22T00:00:00Z",
+    ...over,
+  };
+}
+
+function projectsTransport(
+  recorder: Recorder,
+  projects: readonly ProjectSummary[],
+): Transport {
+  return {
+    request: <TRes,>(req: TypedRequest): Promise<TRes> => {
+      recorder.calls.push(req);
+      if (req.path.startsWith("/v1/projects") && req.method === "GET") {
+        return Promise.resolve({ items: projects } as unknown as TRes);
+      }
+      if (req.path.includes("/v1/agent/conversations")) {
+        return Promise.resolve({ conversations: [] } as unknown as TRes);
+      }
+      if (req.path.includes("/v1/library")) {
+        return Promise.resolve({ items: [] } as unknown as TRes);
+      }
+      return Promise.resolve({} as unknown as TRes);
+    },
+    subscribeServerSentEvents: (): SseSubscription => ({
+      close: () => undefined,
+    }),
+    getSession: (): Session => ({ bearer: null }),
+    capabilities: (): TransportCapabilities => ({
+      substrate: "desktop-webview",
+      nativeSecretStorage: true,
+      fileSystemAccess: false,
+      clipboardWrite: false,
+      openExternal: false,
+    }),
+  };
+}
+
+describe("ProjectsBinder — desktop project-detail reachability (PRD-10 DoD 9)", () => {
+  it("clicking a project card reveals the detail view with the project name", async () => {
+    const recorder: Recorder = { calls: [] };
+    const ui: ReactElement = (
+      <TransportProvider
+        transport={projectsTransport(recorder, [projectSummary()])}
+      >
+        <RouterProvider router={fakeRouter()}>
+          <ProjectsBinder />
+        </RouterProvider>
+      </TransportProvider>
+    );
+    const { container } = render(ui);
+
+    const card = await waitFor(() => {
+      const el = container.querySelector("[data-testid='project-card']");
+      expect(el).not.toBeNull();
+      return el as HTMLElement;
+    });
+    // Clicking the card focuses the project → the binder mounts the detail.
+    fireEvent.click(card);
+
+    await waitFor(() => {
+      const name = container.querySelector(
+        "[data-testid='project-detail-name']",
+      );
+      expect(name).not.toBeNull();
+      expect(name?.textContent).toBe("Renewal Q4");
+    });
   });
 });
 

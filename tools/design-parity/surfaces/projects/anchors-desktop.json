@@ -7,13 +7,13 @@
       "label": "default.page.container",
       "group": "Layout",
       "design": ".pg",
-      "live": "[data-testid=\"projects-destination\"]"
+      "live": "[data-testid=\"page\"]"
     },
     {
       "label": "default.page.lead",
       "group": "Layout",
       "design": ".pg-lead",
-      "live": ""
+      "live": "[data-testid=\"page-lead\"]"
     },
     {
       "label": "default.grid",
@@ -31,19 +31,18 @@
       "label": "default.card.icon",
       "group": "Project card",
       "design": ".grid3 .proj-card:nth-child(1) .proj-ic",
-      "live": "[data-testid=\"project-card-icon\"]"
+      "live": "[data-testid=\"project-card-icon\"]",
+      "expectDivergence": {
+        "color": "Per-project hue is intentional (D3): live persists color_hue + ships a hue picker; the mock's !important tile neutralisation is a leftover, not intent. Recorded divergence.",
+        "backgroundColor": "Per-project hue is intentional (D3): live persists color_hue + ships a hue picker; the mock's !important tile neutralisation is a leftover, not intent. Recorded divergence.",
+        "borderColor": "Per-project hue is intentional (D3): live persists color_hue + ships a hue picker; the mock's !important tile neutralisation is a leftover, not intent. Recorded divergence."
+      }
     },
     {
       "label": "default.card.name",
       "group": "Project card",
       "design": ".grid3 .proj-card:nth-child(1) .proj-ic + div",
       "live": "[data-testid=\"project-card-name\"]"
-    },
-    {
-      "label": "default.card.name.link",
-      "group": "Project card",
-      "design": ".grid3 .proj-card:nth-child(1) .proj-ic + div",
-      "live": "[data-testid=\"project-card-name\"] [data-testid=\"item-link\"]"
     },
     {
       "label": "default.card.desc",
@@ -64,16 +63,22 @@
       "live": "[data-testid=\"status-pill\"]"
     },
     {
-      "label": "default.x.pageheader",
-      "group": "Live-only chrome",
-      "design": "",
-      "live": "[data-testid=\"page-header-title\"]"
-    },
-    {
       "label": "default.x.filtertabs",
       "group": "Live-only chrome",
       "design": "",
-      "live": "[data-testid=\"filter-tabs\"]"
+      "live": "[data-testid=\"filter-tabs\"]",
+      "expectDivergence": {
+        "extra": "Filter tabs are deliberate live chrome — the mock has no filter tabs (D4)."
+      }
+    },
+    {
+      "label": "default.x.create",
+      "group": "Live-only chrome",
+      "design": "",
+      "live": "[data-testid=\"projects-create\"]",
+      "expectDivergence": {
+        "extra": "New-project control is deliberate live chrome — the mock ships no create affordance (D4)."
+      }
     }
   ]
 }

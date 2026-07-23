@@ -38,4 +38,30 @@ describe("<CardGrid>", () => {
       screen.getByRole("region", { name: "Pinned chats" }),
     ).toBeInTheDocument();
   });
+
+  it("defaults to the auto-fill responsive grid (DoD 8)", () => {
+    render(
+      <CardGrid>
+        <div>x</div>
+      </CardGrid>,
+    );
+    const grid = screen.getByTestId("card-grid");
+    expect(grid).toHaveAttribute("data-variant", "auto-fill");
+    expect(grid.style.gridTemplateColumns).toBe(
+      "repeat(auto-fill, minmax(260px, 1fr))",
+    );
+  });
+
+  it("emits the .ui-grid3 recipe class and no inline gridTemplateColumns when variant='grid3' (DoD 8)", () => {
+    render(
+      <CardGrid variant="grid3">
+        <div>x</div>
+      </CardGrid>,
+    );
+    const grid = screen.getByTestId("card-grid");
+    expect(grid).toHaveClass("ui-grid3");
+    expect(grid).toHaveAttribute("data-variant", "grid3");
+    // The 3→1 collapse lives in the kit media query, so nothing is inlined.
+    expect(grid.style.gridTemplateColumns).toBe("");
+  });
 });

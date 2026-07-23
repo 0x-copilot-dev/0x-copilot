@@ -29,6 +29,7 @@ import {
 } from "react";
 
 import { StatusPill, type StatusTone } from "../../shell/StatusPill";
+import { projectHueRamp, projectHueSwatchColor } from "../_shared";
 
 import type { ProjectTemplateId } from "./TemplateGallery";
 
@@ -254,12 +255,16 @@ export function ForkFromTemplateDialog(
     gap: 8,
     marginTop: 4,
   };
+  // PRD-10 D3 — the ONE shared hue ramp; keeps the emoji + 48px geometry (no
+  // `hsl(...)` literal in this dir, DoD 2).
+  const previewRamp = projectHueRamp(colorHue);
   const previewStyle: CSSProperties = {
     width: 48,
     height: 48,
     borderRadius: 10,
-    backgroundColor: `hsl(${colorHue}, 55%, 35%)`,
-    color: ACCENT_CONTRAST,
+    backgroundColor: previewRamp.background,
+    border: previewRamp.border,
+    color: previewRamp.color,
     display: "inline-flex",
     alignItems: "center",
     justifyContent: "center",
@@ -412,7 +417,7 @@ export function ForkFromTemplateDialog(
                     width: 26,
                     height: 26,
                     borderRadius: "50%",
-                    backgroundColor: `hsl(${hue}, 55%, 45%)`,
+                    backgroundColor: projectHueSwatchColor(hue),
                     border: `2px solid ${selected ? ACCENT : "transparent"}`,
                     cursor: submitting ? "not-allowed" : "pointer",
                   }}

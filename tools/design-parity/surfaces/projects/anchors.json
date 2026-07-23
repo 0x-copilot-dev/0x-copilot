@@ -1,79 +1,83 @@
 {
   "surface": "projects",
-  "note": "design↔live element map for the Projects destination, WEB host. Design = vendored Claude Design app-v3 ProjectsSurface (copilot-app.jsx:144-190, classes .grid3/.proj-card/.proj-ic/.lrow*/.pg*). Live = apps/frontend/src/features/projects/ProjectsRoute.tsx — which renders its OWN list scaffold (.projects-grid3/.projects-card, CSS string at ProjectsRoute.tsx:961-1050) and mounts packages/chat-surface ProjectsDestination → ProjectDetailView only once a project is focused (ProjectsRoute.tsx:822-829). Labels are state-prefixed; run the SAME file for both states — anchors belonging to the other state fail to match on BOTH sides and are skipped by compare.mjs. Rows whose `live` is an empty string are DESIGN-ONLY on purpose: the live app has no such element, which compare.mjs reports as 🔴 missing-in-live (that is the intended signal, not a mapping bug). Rows whose `design` is empty are LIVE-ONLY chrome the design does not have, reported as ⚪ extra-in-live. The DESKTOP host renders a different list (chat-surface CardGrid) and has no detail view at all — measured separately via anchors-desktop.json.",
+  "note": "design<->live element map for the Projects destination, WEB host. PRD-10 D1: the web host now mounts the SHARED ProjectsDestination for BOTH list and detail (apps/frontend ProjectsRoute), so the live selectors are the shared-component testids (identical to anchors-desktop.json). The `default.card.hitarea` anchor was DELETED (D2 collapses the hit area onto the single card <button>). The `default.card.icon`/`detail.icon` colour rows carry an object-form expectDivergence (per-project hue is intentional, D3). Live-only chrome (filter tabs, New-project) is extra-in-live/INFO by decision (D4).",
   "states": ["default", "detail"],
   "elements": [
     {
       "label": "default.page.container",
       "group": "Layout",
       "design": ".pg",
-      "live": "[data-testid=\"projects-route\"]"
+      "live": "[data-testid=\"page\"]"
     },
     {
       "label": "default.page.lead",
       "group": "Layout",
       "design": ".pg-lead",
-      "live": ""
+      "live": "[data-testid=\"page-lead\"]"
     },
     {
       "label": "default.grid",
       "group": "Layout",
       "design": ".grid3",
-      "live": ".projects-grid3"
+      "live": "[data-testid=\"card-grid\"]"
     },
     {
       "label": "default.card",
       "group": "Project card",
       "design": ".grid3 .proj-card:nth-child(1)",
-      "live": "[data-testid=\"projects-route-row\"]:nth-child(1)"
-    },
-    {
-      "label": "default.card.hitarea",
-      "group": "Project card",
-      "design": ".grid3 .proj-card:nth-child(1)",
-      "live": "[data-testid=\"projects-route-row\"]:nth-child(1) .projects-card__open"
+      "live": "[data-testid=\"project-card\"]"
     },
     {
       "label": "default.card.icon",
       "group": "Project card",
       "design": ".grid3 .proj-card:nth-child(1) .proj-ic",
-      "live": "[data-testid=\"projects-route-row\"]:nth-child(1) .proj-ic"
+      "live": "[data-testid=\"project-card-icon\"]",
+      "expectDivergence": {
+        "color": "Per-project hue is intentional (D3): live persists color_hue + ships a hue picker; the mock's !important tile neutralisation is a leftover, not intent. Recorded divergence.",
+        "backgroundColor": "Per-project hue is intentional (D3): live persists color_hue + ships a hue picker; the mock's !important tile neutralisation is a leftover, not intent. Recorded divergence.",
+        "borderColor": "Per-project hue is intentional (D3): live persists color_hue + ships a hue picker; the mock's !important tile neutralisation is a leftover, not intent. Recorded divergence."
+      }
     },
     {
       "label": "default.card.name",
       "group": "Project card",
       "design": ".grid3 .proj-card:nth-child(1) .proj-ic + div",
-      "live": "[data-testid=\"projects-route-row\"]:nth-child(1) .projects-card__name"
+      "live": "[data-testid=\"project-card-name\"]"
     },
     {
       "label": "default.card.desc",
       "group": "Project card",
       "design": ".grid3 .proj-card:nth-child(1) > .lrow__sub:nth-child(2)",
-      "live": "[data-testid=\"projects-route-row\"]:nth-child(1) .projects-card__desc"
+      "live": "[data-testid=\"project-card-description\"]"
     },
     {
       "label": "default.card.meta",
       "group": "Project card",
       "design": ".grid3 .proj-card:nth-child(1) > .lrow__sub:nth-child(3)",
-      "live": "[data-testid=\"projects-route-row\"]:nth-child(1) .projects-card__meta"
+      "live": "[data-testid=\"project-card-counts\"]"
     },
     {
       "label": "default.x.card.actions",
       "group": "Live-only chrome",
       "design": "",
-      "live": "[data-testid=\"projects-route-row\"]:nth-child(1) .projects-card__actions"
+      "live": "[data-testid=\"project-card-wrapper\"] .ui-proj-card__actions"
     },
     {
       "label": "detail.backlink",
       "group": "Detail header",
       "design": ".pg .backlink",
-      "live": "[data-testid=\"projects-detail-back\"]"
+      "live": "[data-testid=\"back-link\"]"
     },
     {
       "label": "detail.icon",
       "group": "Detail header",
       "design": ".pg > div:nth-child(2) > .proj-ic",
-      "live": "[data-testid=\"project-detail-icon\"]"
+      "live": "[data-testid=\"project-detail-icon\"]",
+      "expectDivergence": {
+        "color": "Per-project hue is intentional (D3): live persists color_hue + ships a hue picker; the mock's !important tile neutralisation is a leftover, not intent. Recorded divergence.",
+        "backgroundColor": "Per-project hue is intentional (D3): live persists color_hue + ships a hue picker; the mock's !important tile neutralisation is a leftover, not intent. Recorded divergence.",
+        "borderColor": "Per-project hue is intentional (D3): live persists color_hue + ships a hue picker; the mock's !important tile neutralisation is a leftover, not intent. Recorded divergence."
+      }
     },
     {
       "label": "detail.title",
@@ -97,49 +101,49 @@
       "label": "detail.rowlist.chats",
       "group": "Sections",
       "design": ".pg > div:nth-child(4)",
-      "live": "[data-testid=\"projects-crosstab-chats\"] ul"
+      "live": "[data-testid=\"project-chats-list\"]"
     },
     {
       "label": "detail.chatrow",
       "group": "Chat row",
       "design": ".pg > div:nth-child(4) .lrow:nth-child(1)",
-      "live": "[data-testid=\"projects-crosstab-chats\"] li:nth-child(1)"
+      "live": "[data-testid=\"chat-archive-row\"]"
     },
     {
       "label": "detail.chatrow.icon",
       "group": "Chat row",
       "design": ".pg > div:nth-child(4) .lrow:nth-child(1) .lrow__ic",
-      "live": ""
+      "live": "[data-testid=\"chat-archive-row\"] [data-testid=\"row-icon\"]"
     },
     {
       "label": "detail.chatrow.name",
       "group": "Chat row",
       "design": ".pg > div:nth-child(4) .lrow:nth-child(1) .lrow__name",
-      "live": "[data-testid=\"projects-crosstab-chats\"] li:nth-child(1) [data-testid=\"projects-detail-chat-row\"]"
+      "live": "[data-testid=\"chat-archive-row\"] [data-testid=\"row-title\"]"
     },
     {
       "label": "detail.chatrow.chip",
       "group": "Chat row",
       "design": ".pg > div:nth-child(4) .lrow:nth-child(1) .chip",
-      "live": ""
+      "live": "[data-testid=\"chat-archive-row\"] [data-testid=\"row-chip\"]"
     },
     {
       "label": "detail.chatrow.sub",
       "group": "Chat row",
       "design": ".pg > div:nth-child(4) .lrow:nth-child(1) .lrow__sub",
-      "live": ""
+      "live": "[data-testid=\"chat-archive-row\"] [data-testid=\"row-sub\"]"
     },
     {
       "label": "detail.chatrow.sub.mono",
       "group": "Chat row",
       "design": ".pg > div:nth-child(4) .lrow:nth-child(1) .lrow__sub .mono",
-      "live": ""
+      "live": "[data-testid=\"chat-archive-row-model\"]"
     },
     {
       "label": "detail.chatrow.time",
       "group": "Chat row",
       "design": ".pg > div:nth-child(4) .lrow:nth-child(1) .lrow__time",
-      "live": ""
+      "live": "[data-testid=\"chat-archive-row\"] [data-testid=\"row-meta\"]"
     },
     {
       "label": "detail.secth.files",
@@ -172,12 +176,6 @@
       "live": ""
     },
     {
-      "label": "detail.x.pageheader",
-      "group": "Live-only chrome",
-      "design": "",
-      "live": "[data-testid=\"page-header-title\"]"
-    },
-    {
       "label": "detail.x.filtertabs",
       "group": "Live-only chrome",
       "design": "",
@@ -194,6 +192,24 @@
       "group": "Live-only chrome",
       "design": "",
       "live": "[data-testid=\"project-detail-owner\"]"
+    },
+    {
+      "label": "default.x.filtertabs",
+      "group": "Live-only chrome",
+      "design": "",
+      "live": "[data-testid=\"filter-tabs\"]",
+      "expectDivergence": {
+        "extra": "Filter tabs are deliberate live chrome — the mock has no filter tabs (D4)."
+      }
+    },
+    {
+      "label": "default.x.create",
+      "group": "Live-only chrome",
+      "design": "",
+      "live": "[data-testid=\"projects-create\"]",
+      "expectDivergence": {
+        "extra": "New-project control is deliberate live chrome — the mock ships no create affordance (D4)."
+      }
     }
   ]
 }
