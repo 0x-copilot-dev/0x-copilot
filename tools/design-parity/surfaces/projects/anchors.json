@@ -1,0 +1,199 @@
+{
+  "surface": "projects",
+  "note": "design↔live element map for the Projects destination, WEB host. Design = vendored Claude Design app-v3 ProjectsSurface (copilot-app.jsx:144-190, classes .grid3/.proj-card/.proj-ic/.lrow*/.pg*). Live = apps/frontend/src/features/projects/ProjectsRoute.tsx — which renders its OWN list scaffold (.projects-grid3/.projects-card, CSS string at ProjectsRoute.tsx:961-1050) and mounts packages/chat-surface ProjectsDestination → ProjectDetailView only once a project is focused (ProjectsRoute.tsx:822-829). Labels are state-prefixed; run the SAME file for both states — anchors belonging to the other state fail to match on BOTH sides and are skipped by compare.mjs. Rows whose `live` is an empty string are DESIGN-ONLY on purpose: the live app has no such element, which compare.mjs reports as 🔴 missing-in-live (that is the intended signal, not a mapping bug). Rows whose `design` is empty are LIVE-ONLY chrome the design does not have, reported as ⚪ extra-in-live. The DESKTOP host renders a different list (chat-surface CardGrid) and has no detail view at all — measured separately via anchors-desktop.json.",
+  "states": ["default", "detail"],
+  "elements": [
+    {
+      "label": "default.page.container",
+      "group": "Layout",
+      "design": ".pg",
+      "live": "[data-testid=\"projects-route\"]"
+    },
+    {
+      "label": "default.page.lead",
+      "group": "Layout",
+      "design": ".pg-lead",
+      "live": ""
+    },
+    {
+      "label": "default.grid",
+      "group": "Layout",
+      "design": ".grid3",
+      "live": ".projects-grid3"
+    },
+    {
+      "label": "default.card",
+      "group": "Project card",
+      "design": ".grid3 .proj-card:nth-child(1)",
+      "live": "[data-testid=\"projects-route-row\"]:nth-child(1)"
+    },
+    {
+      "label": "default.card.hitarea",
+      "group": "Project card",
+      "design": ".grid3 .proj-card:nth-child(1)",
+      "live": "[data-testid=\"projects-route-row\"]:nth-child(1) .projects-card__open"
+    },
+    {
+      "label": "default.card.icon",
+      "group": "Project card",
+      "design": ".grid3 .proj-card:nth-child(1) .proj-ic",
+      "live": "[data-testid=\"projects-route-row\"]:nth-child(1) .proj-ic"
+    },
+    {
+      "label": "default.card.name",
+      "group": "Project card",
+      "design": ".grid3 .proj-card:nth-child(1) .proj-ic + div",
+      "live": "[data-testid=\"projects-route-row\"]:nth-child(1) .projects-card__name"
+    },
+    {
+      "label": "default.card.desc",
+      "group": "Project card",
+      "design": ".grid3 .proj-card:nth-child(1) > .lrow__sub:nth-child(2)",
+      "live": "[data-testid=\"projects-route-row\"]:nth-child(1) .projects-card__desc"
+    },
+    {
+      "label": "default.card.meta",
+      "group": "Project card",
+      "design": ".grid3 .proj-card:nth-child(1) > .lrow__sub:nth-child(3)",
+      "live": "[data-testid=\"projects-route-row\"]:nth-child(1) .projects-card__meta"
+    },
+    {
+      "label": "default.x.card.actions",
+      "group": "Live-only chrome",
+      "design": "",
+      "live": "[data-testid=\"projects-route-row\"]:nth-child(1) .projects-card__actions"
+    },
+    {
+      "label": "detail.backlink",
+      "group": "Detail header",
+      "design": ".pg .backlink",
+      "live": "[data-testid=\"projects-detail-back\"]"
+    },
+    {
+      "label": "detail.icon",
+      "group": "Detail header",
+      "design": ".pg > div:nth-child(2) > .proj-ic",
+      "live": "[data-testid=\"project-detail-icon\"]"
+    },
+    {
+      "label": "detail.title",
+      "group": "Detail header",
+      "design": ".pg h2",
+      "live": "[data-testid=\"project-detail-name\"]"
+    },
+    {
+      "label": "detail.desc",
+      "group": "Detail header",
+      "design": ".pg h2 + .lrow__sub",
+      "live": "[data-testid=\"project-detail-description\"]"
+    },
+    {
+      "label": "detail.secth.chats",
+      "group": "Sections",
+      "design": ".pg > div:nth-child(3)",
+      "live": "[data-testid=\"project-detail-section-chats\"] [data-testid=\"section-header-label\"]"
+    },
+    {
+      "label": "detail.rowlist.chats",
+      "group": "Sections",
+      "design": ".pg > div:nth-child(4)",
+      "live": "[data-testid=\"projects-crosstab-chats\"] ul"
+    },
+    {
+      "label": "detail.chatrow",
+      "group": "Chat row",
+      "design": ".pg > div:nth-child(4) .lrow:nth-child(1)",
+      "live": "[data-testid=\"projects-crosstab-chats\"] li:nth-child(1)"
+    },
+    {
+      "label": "detail.chatrow.icon",
+      "group": "Chat row",
+      "design": ".pg > div:nth-child(4) .lrow:nth-child(1) .lrow__ic",
+      "live": ""
+    },
+    {
+      "label": "detail.chatrow.name",
+      "group": "Chat row",
+      "design": ".pg > div:nth-child(4) .lrow:nth-child(1) .lrow__name",
+      "live": "[data-testid=\"projects-crosstab-chats\"] li:nth-child(1) [data-testid=\"projects-detail-chat-row\"]"
+    },
+    {
+      "label": "detail.chatrow.chip",
+      "group": "Chat row",
+      "design": ".pg > div:nth-child(4) .lrow:nth-child(1) .chip",
+      "live": ""
+    },
+    {
+      "label": "detail.chatrow.sub",
+      "group": "Chat row",
+      "design": ".pg > div:nth-child(4) .lrow:nth-child(1) .lrow__sub",
+      "live": ""
+    },
+    {
+      "label": "detail.chatrow.sub.mono",
+      "group": "Chat row",
+      "design": ".pg > div:nth-child(4) .lrow:nth-child(1) .lrow__sub .mono",
+      "live": ""
+    },
+    {
+      "label": "detail.chatrow.time",
+      "group": "Chat row",
+      "design": ".pg > div:nth-child(4) .lrow:nth-child(1) .lrow__time",
+      "live": ""
+    },
+    {
+      "label": "detail.secth.files",
+      "group": "Sections",
+      "design": ".pg > div:nth-child(5)",
+      "live": "[data-testid=\"project-detail-section-files\"] [data-testid=\"section-header-label\"]"
+    },
+    {
+      "label": "detail.rowlist.files",
+      "group": "Sections",
+      "design": ".pg > div:nth-child(6)",
+      "live": "[data-testid=\"project-files-tab\"]"
+    },
+    {
+      "label": "detail.filerow",
+      "group": "File row",
+      "design": ".pg > div:nth-child(6) .lrow:nth-child(1)",
+      "live": ""
+    },
+    {
+      "label": "detail.filerow.name",
+      "group": "File row",
+      "design": ".pg > div:nth-child(6) .lrow:nth-child(1) .lrow__name",
+      "live": ""
+    },
+    {
+      "label": "detail.filerow.sub",
+      "group": "File row",
+      "design": ".pg > div:nth-child(6) .lrow:nth-child(1) .lrow__sub",
+      "live": ""
+    },
+    {
+      "label": "detail.x.pageheader",
+      "group": "Live-only chrome",
+      "design": "",
+      "live": "[data-testid=\"page-header-title\"]"
+    },
+    {
+      "label": "detail.x.filtertabs",
+      "group": "Live-only chrome",
+      "design": "",
+      "live": "[data-testid=\"filter-tabs\"]"
+    },
+    {
+      "label": "detail.x.status",
+      "group": "Live-only chrome",
+      "design": "",
+      "live": "[data-testid=\"project-detail-status\"]"
+    },
+    {
+      "label": "detail.x.owner",
+      "group": "Live-only chrome",
+      "design": "",
+      "live": "[data-testid=\"project-detail-owner\"]"
+    }
+  ]
+}

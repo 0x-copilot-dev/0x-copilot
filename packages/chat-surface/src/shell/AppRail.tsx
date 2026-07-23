@@ -152,7 +152,9 @@ const badgeStyle: CSSProperties = {
   background: "var(--color-accent)",
   color: "var(--color-accent-contrast)",
   fontFamily: "var(--font-mono)",
-  fontSize: 8.5,
+  // 8.5px is a real rung on the design's mono micro-ladder (copilot.css:353
+  // `.rbadge`), so it is a token now instead of a raw literal.
+  fontSize: "var(--font-size-mono-8-5)",
   fontWeight: 700,
   lineHeight: "13px",
   display: "flex",

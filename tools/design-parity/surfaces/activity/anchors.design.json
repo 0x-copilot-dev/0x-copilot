@@ -1,0 +1,190 @@
+{
+  "surface": "activity",
+  "note": "DESIGN-SIDE ONLY anchor map for the Activity destination (ActivitySurface in design-kit/app-v3/copilot-app.jsx:14-40 over the ACTIVITY fixture in copilot-data.jsx:149-164). All 22 selectors verified to match 1/1 against http://127.0.0.1:8113/design-kit/app-v3/index.html?dest=activity&state=default. The `live` field is intentionally null — a follow-up task binds each label to the live app's selector and renames this file to anchors.json. Inline styles applied by the design (and therefore part of the baseline) are recorded in `inline`.",
+  "states": ["default"],
+  "elements": [
+    {
+      "label": "page.container",
+      "group": "Page",
+      "state": "default",
+      "design": ".pg",
+      "live": null,
+      "what": "scrolling page body — padding 20px 24px 40px, max-width 960px, overflow auto"
+    },
+    {
+      "label": "page.lead",
+      "group": "Page",
+      "state": "default",
+      "design": ".pg-lead",
+      "live": null,
+      "what": "explanatory lead paragraph, 12px/1.6 --mut, margin -2px 0 18px, max-width 72ch"
+    },
+    {
+      "label": "page.lead.link",
+      "group": "Page",
+      "state": "default",
+      "design": ".pg-lead a",
+      "live": null,
+      "what": "inline 'Settings → Privacy' link (accent rgb(95,178,236)) — navigates to settings/privacy for retention, export, delete"
+    },
+    {
+      "label": "topbar.title",
+      "group": "Topbar",
+      "state": "default",
+      "design": ".topbar h1",
+      "live": null,
+      "what": "destination title 'Activity', 13.5px"
+    },
+    {
+      "label": "topbar.sub",
+      "group": "Topbar",
+      "state": "default",
+      "design": ".topbar .tb-title .sub",
+      "live": null,
+      "what": "destination subtitle 'every action the agent has taken', 11.5px --mut2"
+    },
+    {
+      "label": "rail.badge",
+      "group": "Rail",
+      "state": "default",
+      "design": ".rail .rbadge",
+      "live": null,
+      "what": "'1' active-run badge on the Run rail item, 13x13 mono 8.5px — present on every non-Run destination"
+    },
+    {
+      "label": "day.head",
+      "group": "Grouping",
+      "state": "default",
+      "design": ".act-day",
+      "live": null,
+      "what": "day-group heading ('Today'), mono 10px --mut2, margin 18px 0 8px, display:flex gap:10px with a ::after flex:1 1px hairline"
+    },
+    {
+      "label": "rowlist",
+      "group": "List",
+      "state": "default",
+      "design": ".rowlist",
+      "live": null,
+      "what": "bordered card list per day group — 1px --line, radius 8px, background --panel, overflow hidden"
+    },
+    {
+      "label": "row.live",
+      "group": "Row/live",
+      "state": "default",
+      "design": ".rowlist .lrow:nth-child(1)",
+      "live": null,
+      "what": "running run row — <button>, flex, gap 12px, padding 11px 14px, 1px bottom hairline, pointer cursor"
+    },
+    {
+      "label": "row.live.ic",
+      "group": "Row/live",
+      "state": "default",
+      "design": ".rowlist .lrow:nth-child(1) .lrow__ic",
+      "live": null,
+      "what": "28x28 radius-7 icon tile; live rows get inline style color:var(--jade)",
+      "inline": "color: var(--jade)"
+    },
+    {
+      "label": "row.live.ic.svg",
+      "group": "Row/live",
+      "state": "default",
+      "design": ".rowlist .lrow:nth-child(1) .lrow__ic svg",
+      "live": null,
+      "what": "brand Mark glyph for the live row; NB the JSX size={18} is overridden to 15x15 by .lrow__ic svg"
+    },
+    {
+      "label": "row.live.name",
+      "group": "Row/live",
+      "state": "default",
+      "design": ".rowlist .lrow:nth-child(1) .lrow__name",
+      "live": null,
+      "what": "run title, 12.5px/500 --tx, flex row align-center gap 8px (title + chip)"
+    },
+    {
+      "label": "row.live.chip",
+      "group": "Row/live",
+      "state": "default",
+      "design": ".rowlist .lrow:nth-child(1) .lrow__name .chip",
+      "live": null,
+      "what": "'running' status pill — chip--ok jade, mono 10.5px, radius 999px, INLINE padding 1px 8px overriding the base 2px 8px",
+      "inline": "padding: 1px 8px"
+    },
+    {
+      "label": "row.live.dot",
+      "group": "Row/live",
+      "state": "default",
+      "design": ".rowlist .lrow:nth-child(1) .lrow__name .chip .dotk",
+      "live": null,
+      "what": "6x6 currentColor liveness dot, rendered ONLY inside a running chip"
+    },
+    {
+      "label": "row.live.sub",
+      "group": "Row/live",
+      "state": "default",
+      "design": ".rowlist .lrow:nth-child(1) .lrow__sub",
+      "live": null,
+      "what": "run summary line, 11px --mut2; INLINE font-family:var(--body) overrides the .lrow__sub mono default — Activity subs are SANS",
+      "inline": "font-family: var(--body)"
+    },
+    {
+      "label": "row.live.time",
+      "group": "Row/live",
+      "state": "default",
+      "design": ".rowlist .lrow:nth-child(1) .lrow__time",
+      "live": null,
+      "what": "run time '11:44', mono 10.5px --mut2, flex:none"
+    },
+    {
+      "label": "row.live.chevron",
+      "group": "Row/live",
+      "state": "default",
+      "design": ".rowlist .lrow:nth-child(1) > svg",
+      "live": null,
+      "what": "trailing chevron-right, 15x15 --mut2 — rendered ONLY on live rows (the navigable affordance)"
+    },
+    {
+      "label": "row.done.ic.svg",
+      "group": "Row/rest",
+      "state": "default",
+      "design": ".rowlist .lrow:nth-child(2) .lrow__ic svg",
+      "live": null,
+      "what": "clock glyph for non-live rows, 15x15 --mut (no jade override on the tile)"
+    },
+    {
+      "label": "row.done.chip",
+      "group": "Row/rest",
+      "state": "default",
+      "design": ".rowlist .lrow:nth-child(2) .lrow__name .chip",
+      "live": null,
+      "what": "'done' pill — chip--ok jade, no dot",
+      "inline": "padding: 1px 8px"
+    },
+    {
+      "label": "row.done.spacer",
+      "group": "Row/rest",
+      "state": "default",
+      "design": ".rowlist .lrow:nth-child(2) > span:last-child",
+      "live": null,
+      "what": "16x0 spacer <span> that replaces the chevron on non-live rows — keeps the time column aligned across live/non-live rows",
+      "inline": "width: 16px"
+    },
+    {
+      "label": "chip.paused",
+      "group": "Status",
+      "state": "default",
+      "design": ".pg > div:nth-child(3) .lrow:nth-child(1) .lrow__name .chip",
+      "live": null,
+      "what": "'paused' pill — chip--warn amber rgb(232,180,94)",
+      "inline": "padding: 1px 8px"
+    },
+    {
+      "label": "chip.stopped",
+      "group": "Status",
+      "state": "default",
+      "design": ".pg > div:nth-child(4) .lrow:nth-child(1) .lrow__name .chip",
+      "live": null,
+      "what": "'stopped' pill — chip--off muted rgb(100,100,109)",
+      "inline": "padding: 1px 8px"
+    }
+  ]
+}

@@ -1,0 +1,136 @@
+{
+  "surface": "rail-badge",
+  "note": "design↔live element correspondence for the app rail + its Run count badge. DESIGN = the vendored v3 app harness (design-kit/app-v3/index.html, rail transcribed verbatim from copilot-app.jsx:295-306, styled by copilot.css:61-75) at ?dest=chats (badge) and ?dest=workspace (nobadge). LIVE = the REAL ChatShell→AppRail (packages/chat-surface/src/shell/AppRail.tsx) rendered by lib/render-live-rail-badge.test.tsx in the SOLO 6-destination profile with railBadges={{run:1}} and railIdentity={{initial:'S'}}. The live rail is styled almost entirely by INLINE style objects in AppRail.tsx (railStyle/itemsStyle/footStyle/railButtonStyle/badgeStyle/avatarStyle/activeBarStyle) — there is no rail stylesheet — so every root cause below is a literal in that file or a design-system token it references. Live anchors therefore key off the rail's stable data-* attributes, not class names.",
+  "states": ["badge", "nobadge"],
+  "elements": [
+    {
+      "label": "shell.body.grid",
+      "group": "Shell frame",
+      "design": ".mw-body",
+      "live": "[data-component=\"chat-shell\"]",
+      "expectDivergence": "the design's .mw-body is `grid-template-columns:auto 1fr` (copilot.css:61) with the rail sizing itself; the live shell declares the rail column EXPLICITLY as `${APP_RAIL_WIDTH}px …` (ChatShell.tsx:250-252) so the grid and the rail share one exported constant (AppRail.tsx:14 RAIL_WIDTH=48, re-exported line 314). Same resolved 48px column, different authoring strategy — intentional single-source-of-truth, not drift. The live shell also carries the context/right-rail columns the mock's simplified frame has no equivalent for."
+    },
+    {
+      "label": "rail.container",
+      "group": "Rail",
+      "design": "nav.rail",
+      "live": "nav[data-component=\"app-rail\"]"
+    },
+    {
+      "label": "rail.brand",
+      "group": "Rail",
+      "design": ".rail > .rail-brand",
+      "live": "[data-rail-brand]"
+    },
+    {
+      "label": "rail.brand.mark",
+      "group": "Rail",
+      "design": ".rail > .rail-brand svg",
+      "live": "[data-rail-brand] svg"
+    },
+    {
+      "label": "rail.item.run",
+      "group": "Destination items",
+      "design": ".rail > .rail-item:nth-of-type(2)",
+      "live": "nav[data-component=\"app-rail\"] [data-destination=\"run\"]"
+    },
+    {
+      "label": "rail.item.run.icon",
+      "group": "Destination items",
+      "design": ".rail > .rail-item:nth-of-type(2) svg",
+      "live": "nav[data-component=\"app-rail\"] [data-destination=\"run\"] svg"
+    },
+    {
+      "label": "rail.item.run.label",
+      "group": "Destination items",
+      "design": ".rail > .rail-item:nth-of-type(2) .rl",
+      "live": "nav[data-component=\"app-rail\"] [data-destination=\"run\"] .rl",
+      "expectDivergence": "the design ships a `.rl` text span that is `display:none` (copilot.css:69) — zero visual footprint, present only as dead markup from an earlier labelled-rail iteration. The live rail carries the same affordance on the button itself via `title` + `aria-label` (AppRail.tsx:262-263), which is strictly better for assistive tech. Absence is intentional and unmeasurable; INFO, not drift."
+    },
+    {
+      "label": "rail.badge",
+      "group": "Notification badge",
+      "design": ".rail > .rail-item:nth-of-type(2) .rbadge",
+      "live": "nav[data-component=\"app-rail\"] [data-destination=\"run\"] [data-rail-badge]"
+    },
+    {
+      "label": "rail.badge.absence",
+      "group": "Notification badge",
+      "design": ".rail .rbadge",
+      "live": "[data-component=\"app-rail\"] [data-rail-badge]"
+    },
+    {
+      "label": "rail.item.chats",
+      "group": "Destination items",
+      "design": ".rail > .rail-item:nth-of-type(3)",
+      "live": "nav[data-component=\"app-rail\"] [data-destination=\"chats\"]"
+    },
+    {
+      "label": "rail.item.projects",
+      "group": "Destination items",
+      "design": ".rail > .rail-item:nth-of-type(4)",
+      "live": "nav[data-component=\"app-rail\"] [data-destination=\"projects\"]"
+    },
+    {
+      "label": "rail.item.activity",
+      "group": "Destination items",
+      "design": ".rail > .rail-item:nth-of-type(5)",
+      "live": "nav[data-component=\"app-rail\"] [data-destination=\"activity\"]"
+    },
+    {
+      "label": "rail.item.tools",
+      "group": "Destination items",
+      "design": ".rail > .rail-item:nth-of-type(6)",
+      "live": "nav[data-component=\"app-rail\"] [data-destination=\"connectors\"]"
+    },
+    {
+      "label": "rail.item.skills",
+      "group": "Destination items",
+      "design": ".rail > .rail-item:nth-of-type(7)",
+      "live": "nav[data-component=\"app-rail\"] [data-destination=\"tools\"]"
+    },
+    {
+      "label": "rail.item.active",
+      "group": "Active state",
+      "design": ".rail .rail-item[data-active]",
+      "live": "[data-component=\"app-rail\"] [data-state=\"active\"]"
+    },
+    {
+      "label": "rail.item.active.icon",
+      "group": "Active state",
+      "design": ".rail .rail-item[data-active] svg",
+      "live": "[data-component=\"app-rail\"] [data-state=\"active\"] svg"
+    },
+    {
+      "label": "rail.item.active.bar",
+      "group": "Active state",
+      "design": ".rail .rail-item[data-active]::before",
+      "live": "[data-rail-active-bar]",
+      "expectDivergence": "the design draws the 2px accent bar as a CSS ::before pseudo-element (copilot.css:72) which querySelector cannot address; the live rail draws the identical box as a real inset <span data-rail-active-bar> (AppRail.tsx:139-150, 253-259) so it can be measured and tested. The design side is therefore unmatched BY CONSTRUCTION — this anchor exists to prove the live bar's geometry, not to claim the design lacks one."
+    },
+    {
+      "label": "rail.foot",
+      "group": "Rail foot",
+      "design": ".rail-foot",
+      "live": "nav[data-component=\"app-rail\"] > div:last-of-type"
+    },
+    {
+      "label": "rail.foot.settings",
+      "group": "Rail foot",
+      "design": ".rail-foot .rail-item",
+      "live": "[data-rail-action=\"settings\"]"
+    },
+    {
+      "label": "rail.foot.settings.icon",
+      "group": "Rail foot",
+      "design": ".rail-foot .rail-item svg",
+      "live": "[data-rail-action=\"settings\"] svg"
+    },
+    {
+      "label": "rail.me",
+      "group": "Rail foot",
+      "design": ".rail-me",
+      "live": "[data-rail-me]"
+    }
+  ]
+}

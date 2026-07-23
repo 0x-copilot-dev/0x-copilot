@@ -1,11 +1,24 @@
 // <SectionHeader> — the design `.sect-h` mono section header.
 //
 // Source: docs/plan/frontend-parity-v3/PRD-G-destination-parity.md (FR-G.1).
-// Mono, ~9.5px (--font-size-2xs), uppercase, letter-spacing .12em, subtle
-// colour. Renders an <h2> so a section can associate it via `aria-labelledby`
-// (pass `headingId`). An optional `count` chip sits inline after the label; an
-// optional `action` node is pushed to the far right (the Chats "＋ New chat"
-// primary lives here, not a big top-right button).
+//
+// TYPE comes from the design-system recipe `.ui-mono-caps` on the <h2> label:
+// mono, 9.5px (--font-size-mono-9-5), regular weight, uppercase,
+// --tracking-mono-caps. It is applied to the LABEL and never to the wrapper, because the
+// wrapper also carries the count pill and the right-aligned action slot (the
+// Chats "＋ New chat" primary lives there) — a type recipe on the wrapper would
+// mono-uppercase that CTA.
+//
+// (Historical note, because the wrong comment caused the bug: this file used to
+// name the 2xs SANS rung as if it were 9.5px. That rung is 11.2px —
+// so the header shipped 18% too large, at semibold, with a raw 0.12em literal.)
+//
+// BLOCK RHYTHM comes from `.ui-section-head` on the wrapper: the design's
+// `margin: 22px 0 10px` with `:first-child{margin-top:0}` (copilot.css:1569-1573),
+// which cannot be expressed inline at all.
+//
+// Renders an <h2> so a section can associate it via `aria-labelledby` (pass
+// `headingId`).
 //
 // Substrate-agnostic; token-driven only.
 
@@ -27,20 +40,13 @@ export interface SectionHeaderProps extends HTMLAttributes<HTMLDivElement> {
   readonly action?: ReactNode;
 }
 
-const wrapStyle: CSSProperties = {
-  display: "flex",
-  alignItems: "center",
-  gap: "var(--space-sm)",
-};
-
-// `.sect-h` — mono uppercase, tiny, wide tracking, subtle colour.
+// Family / size / tracking / case all come from `.ui-mono-caps`. The only
+// per-role overrides kept inline are the <h2> margin reset and the colour: the
+// design's `.sect-h` is --mut2 (= --color-text-subtle), one rung quieter than
+// the recipe's default --color-text-muted, which its other consumer (the login
+// divider) wants. Overriding the colour here beats changing the shared recipe.
 const headingStyle: CSSProperties = {
   margin: 0,
-  fontFamily: "var(--font-mono)",
-  fontSize: "var(--font-size-2xs)",
-  fontWeight: "var(--font-weight-semibold)",
-  letterSpacing: "0.12em",
-  textTransform: "uppercase",
   color: "var(--color-text-subtle)",
 };
 
@@ -61,13 +67,18 @@ export function SectionHeader({
 }: SectionHeaderProps): ReactElement {
   return (
     <div
-      className={className === undefined ? "sect-h" : `sect-h ${className}`}
-      style={{ ...wrapStyle, ...style }}
+      className={
+        className === undefined
+          ? "sect-h ui-section-head"
+          : `sect-h ui-section-head ${className}`
+      }
+      style={style}
       data-testid="section-header"
       {...rest}
     >
       <h2
         id={headingId}
+        className="ui-mono-caps"
         style={headingStyle}
         data-testid="section-header-label"
       >

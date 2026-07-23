@@ -1,0 +1,237 @@
+{
+  "surface": "tools",
+  "note": "design↔live anchor map for the Tools destination (rail label 'Tools', slug `connectors`). DESIGN = ConnectorsSurface, design-kit/app-v3/copilot-app.jsx:43-71 over the CONNECTORS fixture (copilot-data.jsx:131-138), plus ConnectModal (copilot-flows.jsx:186-268) for state `connect`. LIVE = packages/chat-surface/src/destinations/connectors/{ConnectorsDestination,ConnectorCard,AccessModeSegment,ConnectModal}.tsx as composed by the WEB host, apps/frontend/src/features/connectors/ConnectorsRoute.tsx:544-620. NAMING TRAP: this is NOT destinations/tools/ in the live app — slug `connectors` carries profileLabel 'Tools'; slug `tools` is labelled 'Skills'. LIVE SELECTORS ARE data-testid/attribute-based ON PURPOSE: the whole connectors subtree styles with inline React CSSProperties and emits ZERO css classes (grep 'class=\"' over surfaces/tools/live/default.html returns 0 hits), so there is no class hook to anchor on. Labels are state-prefixed (login-surface convention) because extract/compare do not filter by state: run the extractor once per state and treat the other state's anchors as expected-unmatched (both sides unmatched → compare skips them). `live: null` rows are REAL absences the comparator must report as HIGH; the only expectDivergence row is the app-shell rail, which is genuinely outside this fixture's frame.",
+  "states": ["default", "connect"],
+  "designUrl": "http://127.0.0.1:8114/design-kit/app-v3/index.html?dest=connectors&state=<state>",
+  "liveUrl": "http://127.0.0.1:8114/surfaces/tools/live/<state>.html",
+  "designDelayMs": { "default": 600, "connect": 1500 },
+  "elements": [
+    {
+      "label": "default.page.lead",
+      "group": "Page",
+      "state": "default",
+      "design": ".pg-lead",
+      "live": "[data-testid=\"tools-policy-note\"]",
+      "what": "Design: ONE explanatory lead <p> (12px/--mut/1.6, margin -2px 0 18px, max-width 72ch) carrying both the thesis sentence and the policy hand-off link. Live SPLITS that copy in two — the thesis sentence became PageHeader's subtitle (TOOLS_SUBTITLE, ConnectorsDestination.tsx:47-49; rendered PageHeader.tsx:110-112) and only the policy sentence survives as this <p> (ConnectorsDestination.tsx:365-371, style at :477-484). Anchored on the policy <p> because it is the element that still owns the link."
+    },
+    {
+      "label": "default.page.lead.link",
+      "group": "Page",
+      "state": "default",
+      "design": ".pg-lead a",
+      "live": "[data-testid=\"tools-policy-note-link\"]",
+      "what": "Design: inline <a>, accent, text-decoration none (copilot.css:39). Live: a <button> with textDecoration 'underline' + textUnderlineOffset 2 (ConnectorsDestination.tsx:486-496). Same destination (Settings → Model & behavior), different element type and underline treatment."
+    },
+    {
+      "label": "default.section.head",
+      "group": "Section header",
+      "state": "default",
+      "design": ".sect-h",
+      "live": null,
+      "what": "'Connected · 6' mono eyebrow (9.5px/.12em/uppercase/--mut2, copilot.css:282). The live surface has NO mono eyebrow anywhere — the count moved into a FilterTabs pill ([data-testid=filter-tab-count-connected], ConnectorsDestination.tsx:190-199) and the surface gained a 22.4px PageHeader <h1> instead (PageHeader.tsx:106-108). Deliberately left unmatched so the comparator reports the absence; the live-only anchors below record what replaced it."
+    },
+    {
+      "label": "default.connect.cta",
+      "group": "Section header",
+      "state": "default",
+      "design": ".pg .cbtn--pri",
+      "live": "[data-testid=\"page-header-primary-action\"]",
+      "what": "'Connect a tool'. Design: cbtn cbtn--pri cbtn--sm — 11.5px/600, padding 4px 9px, radius 6px, leading 13px plus icon, computed 122x23. Live: a hand-rolled inline-styled <button> (PageHeader.tsx:71-81 primaryButtonStyle, rendered :121-136), height 32px, padding 0 14px, --font-size-sm (13.6px)/600, no icon — and NOT the design-system `.ui-button` recipe the same modal's Cancel button uses."
+    },
+    {
+      "label": "default.rowlist",
+      "group": "List",
+      "state": "default",
+      "design": ".rowlist",
+      "live": "[data-testid=\"card-grid\"]",
+      "what": "Container of the connector collection. Design: single hairline card list — bg --panel, 1px --line border, radius 8px, overflow hidden, flex COLUMN, computed 912x369 (copilot.css:285). Live: a borderless CSS GRID, repeat(auto-fill, minmax(260px,1fr)), gap 12px (CardGrid.tsx:31-39, mounted ConnectorsDestination.tsx:322-357). Different layout family; anchored here because both are 'the list'."
+    },
+    {
+      "label": "default.row.first",
+      "group": "Row",
+      "state": "default",
+      "design": ".rowlist .lrow:nth-child(1)",
+      "live": "[data-connector-id=\"conn_safe\"]",
+      "what": "First connector (Safe{Wallet}). Design: a 61px-tall <div> row, padding 11px 14px, gap 12px, align-items center, bottom hairline, INLINE cursor:default (copilot-app.jsx:55) — deliberately non-navigable. Live: a 289x159 card <div role=listitem tabindex=0> with padding 14, border 1px, radius var(--radius-md), flex COLUMN, gap 8, minHeight 132, cursor POINTER + onClick (ConnectorCard.tsx:115-125, cardStyle :182-192)."
+    },
+    {
+      "label": "default.row.logo",
+      "group": "Row",
+      "state": "default",
+      "design": ".rowlist .lrow:nth-child(1) .lrow__logo",
+      "live": null,
+      "what": "30x30 radius-7 initial tile ('◇'). copilot.css:288 !important-forces --panel3/--tx2 so the inline brand colour never renders — but the tile itself is a real, always-present element of every design row. Live renders NO tile: ConnectorCard only emits one when the host passes `icon` (ConnectorCard.tsx:128-132) and `renderIcon` (ConnectorsDestination.tsx:134, :333) is passed by NEITHER host — zero hits under apps/. Even if it were passed, `iconStyle` (ConnectorCard.tsx:200-203) is a bare inline-flex wrapper with no 30x30 / radius / background, so the design's neutral tile chrome does not exist in the shell at all. Real absence → HIGH."
+    },
+    {
+      "label": "default.row.name",
+      "group": "Row",
+      "state": "default",
+      "design": ".rowlist .lrow:nth-child(1) .lrow__name",
+      "live": "[data-connector-id=\"conn_safe\"] [data-testid=\"connector-card-name\"]",
+      "what": "Connector name. Design: 12.5px/500/--tx, display:flex gap 8px (copilot.css:291). Live: an <h3> at var(--font-size-md) = 14px/600 (ConnectorCard.tsx:133-135, titleStyle :205-214)."
+    },
+    {
+      "label": "default.row.sub",
+      "group": "Row",
+      "state": "default",
+      "design": ".rowlist .lrow:nth-child(1) .lrow__sub",
+      "live": "[data-connector-id=\"conn_safe\"] [data-testid=\"connector-card-description\"]",
+      "what": "Scope/account metadata ('3-of-5 multisig · Base'). Design: 11px/--mut2 in JetBrains Mono — this surface, unlike ChatRow (copilot-app.jsx:119) and ActivitySurface (:29), does NOT apply the inline fontFamily:var(--body) override (copilot.css:292). Live: a 2-line-clamped <p> at var(--font-size-sm) = 13.6px / --color-text-muted in the SANS body face (ConnectorCard.tsx:139-141, descriptionStyle :216-224)."
+    },
+    {
+      "label": "default.row.act",
+      "group": "Row",
+      "state": "default",
+      "design": ".rowlist .lrow:nth-child(1) .lrow__act",
+      "live": "[data-connector-id=\"conn_safe\"] [data-testid=\"connector-card-access\"]",
+      "what": "The row's trailing action cell holding the permission control. Design: flex:none, display flex, align center, gap 9px, sitting at the RIGHT END of a horizontal row (copilot.css:294). Live: a full-width space-between flex row INSIDE the vertical card, prefixed by an 'Agent access' label span the design has no analog for (ConnectorCard.tsx:143-158, accessRowStyle :225-232, accessLabelStyle :234-238)."
+    },
+    {
+      "label": "default.seg",
+      "group": "Permission control",
+      "state": "default",
+      "design": ".rowlist .lrow:nth-child(1) .seg",
+      "live": "[data-connector-id=\"conn_safe\"] [data-testid=\"access-mode-segment\"]",
+      "what": "3-way segmented-control container. Design: inline-flex, bg --panel #111114, 1px --line border, radius 7px, padding 2px, gap 2px, computed 192x31 (copilot.css:135). Live: same inline-flex / 2px padding / 2px gap shape, but borderRadius var(--radius-md) = 8px and background var(--color-bg) = #09090b, i.e. the group is DARKER than the card it sits on where the design's is lighter than the page (AccessModeSegment.tsx:148-156)."
+    },
+    {
+      "label": "default.seg.selected",
+      "group": "Permission control",
+      "state": "default",
+      "design": ".rowlist .lrow:nth-child(1) .seg button[data-on=\"true\"]",
+      "live": "[data-connector-id=\"conn_safe\"] [data-testid=\"access-mode-option-read_act\"]",
+      "what": "THE load-bearing anchor. Design selected segment ('Read & act'): bg --panel3 #1d1d23, colour --tx, radius 5px, padding 5px 12px, 12px/500, computed 87x25 — NEUTRAL, no accent. Live: bg var(--color-bg-elevated) #0d0d10, fontWeight 600, padding 4px 10px, radius var(--radius-sm) 6px AND boxShadow '0 0 0 1px var(--color-accent)' (AccessModeSegment.tsx:158-176, ring at :172) — an accent ring the design explicitly does not have. NOTE: boxShadow is not in the extractor's property set, so the ring will NOT appear in the computed-style diff; it is confirmed by source read + the raw markup in live/default.html."
+    },
+    {
+      "label": "default.seg.unselected",
+      "group": "Permission control",
+      "state": "default",
+      "design": ".rowlist .lrow:nth-child(1) .seg button:not([data-on])",
+      "live": "[data-connector-id=\"conn_safe\"] [data-testid=\"access-mode-option-read\"]",
+      "what": "Unselected segment ('Read'). Design = transparent bg, --mut, otherwise metrically IDENTICAL to the selected one — only background-color and colour change on selection (copilot.css:136-138). Live keeps transparent / --color-text-muted but ALSO drops fontWeight 600→500 on deselection (AccessModeSegment.tsx:166), so the live control reflows type weight as selection moves."
+    },
+    {
+      "label": "default.seg.read.selected",
+      "group": "Permission control",
+      "state": "default",
+      "design": ".rowlist .lrow:nth-child(6) .seg button:nth-child(1)[data-on=\"true\"]",
+      "live": "[data-connector-id=\"conn_github\"] [data-testid=\"access-mode-option-read\"]",
+      "what": "The 6th connector (GitHub) is selected on 'Read', not 'Read & act' (perm:'read', copilot-data.jsx:137) — proves selection is bound PER connector row, not surface-wide. The live fixture reproduces this (conn_github's segment carries data-value=\"read\"), so this anchor also verifies the live binding is per-card (ConnectorsDestination.tsx:338 accessMode={c.access_mode ?? \"off\"})."
+    },
+    {
+      "label": "default.rail.badge",
+      "group": "Shell",
+      "state": "default",
+      "design": ".rail .rbadge",
+      "live": null,
+      "expectDivergence": "OUT OF FRAME, not missing: the rail is app-shell chrome (ChatShell), not part of ConnectorsDestination. The live fixture renders only the destination content area (1172x756 = the design window minus the 48px rail, 38px title bar and 46px topbar), so there is no rail to anchor. Rail-badge parity belongs to the shell audit, not this surface.",
+      "what": "Rail badge '1' pinned to the Run item on every non-Run destination (copilot-app.jsx:299): min-width 13px accent pill, 8.5px/700 mono, --accent-ink text."
+    },
+
+    {
+      "label": "connect.scrim",
+      "group": "Connect modal",
+      "state": "connect",
+      "design": ".scrim",
+      "live": "[data-testid=\"settings-modal-scrim\"]",
+      "what": "Design: portaled into .mw NOT document.body (copilot-flows.jsx:20) — position ABSOLUTE inset 0 inside the 1220x840 window frame, rgba(4,4,6,.66) + 2px backdrop blur, 22px padding, z-index 60. Live: position FIXED, viewport-sized, padding 16px, zIndex 1100, backgroundColor var(--color-scrim, rgb(0 0 0 / 0.54)) (settings/Modal.tsx:138-151, mounted :288-289)."
+    },
+    {
+      "label": "connect.modal",
+      "group": "Connect modal",
+      "state": "connect",
+      "design": ".modal",
+      "live": "[data-testid=\"settings-modal\"]",
+      "what": "500px fixed-width dialog. Design computed 500x604: bg --panel, 1px --line2, radius 12px, shadow 0 26px 70px -18px rgba(0,0,0,.8). Live computed 500x621: bg var(--color-surface) (== --panel), border var(--color-border-strong) (== --line2), borderRadius var(--radius-lg) (12px), boxShadow var(--shadow-soft) (settings/Modal.tsx:302-312). The 17px height delta is the extra footer StepDots row."
+    },
+    {
+      "label": "connect.modal.logo",
+      "group": "Connect modal",
+      "state": "connect",
+      "design": ".modal__logo",
+      "live": "[data-testid=\"settings-modal\"] header > span:first-child",
+      "what": "Identity tile in the modal header. Design: 34x34, radius 8, holding a 16px plug SVG (copilot.css:399, !important-forced to --panel3/--tx2). Live: 30x30, borderRadius var(--radius-md) = 8px, bg var(--color-surface-muted), holding a '◆' TEXT glyph rather than an icon (settings/Modal.tsx:160-170)."
+    },
+    {
+      "label": "connect.modal.title",
+      "group": "Connect modal",
+      "state": "connect",
+      "design": ".modal__title h3",
+      "live": "[data-testid=\"settings-modal\"] h2",
+      "what": "'Connect a tool' — design 13.5px/600 display font, letter-spacing -0.135px (-.01em), copilot.css:401. Live uses var(--font-display) + var(--font-size-sm) = 13.6px + var(--font-weight-semibold) + -0.01em (settings/Modal.tsx:174-181) — a deliberate token match noted in-comment at :176. Tag differs (h3 → h2)."
+    },
+    {
+      "label": "connect.modal.subtitle",
+      "group": "Connect modal",
+      "state": "connect",
+      "design": ".modal__title p",
+      "live": "[data-testid=\"settings-modal\"] header p",
+      "what": "Design copy: 'the agent acts through your accounts', 10.5px mono / --mut2, margin-top 2px. Live copy: 'Bring a SaaS source in' at var(--font-mono) + var(--font-size-2xs) = 11.2px / --color-text-subtle (copy at ConnectModal.tsx:294-299, styling at settings/Modal.tsx:183-188). The copy divergence is meaningful: the design's subtitle states the TRUST MODEL, the live one states a task."
+    },
+    {
+      "label": "connect.catalog.row",
+      "group": "Catalog",
+      "state": "connect",
+      "design": ".modal__body > .mrow:nth-child(1)",
+      "live": "[data-testid=\"connect-catalog-option\"][data-slug=\"notion\"]",
+      "what": "First catalog row (Notion). Design: <button>, padding 10px, 1px --line2 border, radius 8px, margin-bottom 7px, bg --ink2 #0d0d10, gap 10px, trailing 15px chevron, computed 468x58 (copilot.css:414). Live: <button> inside an <li>, padding var(--space-sm) var(--space-md) = 8px 12px, border var(--color-border) (== --line, THINNER tone than the design's --line2), borderRadius var(--radius-md) = 8px, bg var(--color-surface-muted) #16161a, gap var(--space-md) = 12px; the 7px row rhythm moved to the <ul>'s var(--space-sm) gap (ConnectModal.tsx:388-411, pickRowStyle :740-754, listStyle :731-738)."
+    },
+    {
+      "label": "connect.catalog.row.logo",
+      "group": "Catalog",
+      "state": "connect",
+      "design": ".modal__body > .mrow:nth-child(1) .mrow__logo",
+      "live": "[data-testid=\"connect-catalog-option\"][data-slug=\"notion\"] > span:first-child",
+      "what": "28x28 initial tile. Design radius 7px, 11px/600, forced to --panel3/--tx2 by copilot.css:418. Live 28x28 but borderRadius var(--radius-sm) = 6px and backgroundColor var(--color-surface) #111114 — a step DARKER than the --color-surface-muted row it sits on, INVERTING the design's tile-lighter-than-row relationship — and it renders a generic '◆' for every entry instead of the connector initial (ConnectModal.tsx:400-402, glyphStyle :756-766)."
+    },
+    {
+      "label": "connect.custom.mcp.row",
+      "group": "Catalog",
+      "state": "connect",
+      "design": ".mrow--dash.mrow--pin",
+      "live": "[data-testid=\"connect-catalog-custom\"]",
+      "what": "'Custom MCP server' escape hatch. Design CASCADE TRAP: .mrow--dash/.mrow--pin at copilot.css:101-103 lose to .mrow at :414 (equal specificity, declared earlier), so it computes SOLID border, padding 10px, radius 8px, 468px; only position:sticky, bottom:-15px, margin-top 10px and margin-inline -15px survive. Live: an ORDINARY catalog row — same pickRowStyle as every other entry, no sticky/pinned treatment, no dashed intent (ConnectModal.tsx:347-370). NOTE: this row only exists because the host passes `onAddCustomServer` (ConnectModal.tsx:314) — WEB does (ConnectorsRoute.tsx:613-615), DESKTOP never mounts ConnectModal at all (destinationBinders.tsx:480-490)."
+    },
+
+    {
+      "label": "live.filter.tabs",
+      "group": "Live-only chrome",
+      "state": "default",
+      "design": null,
+      "live": "[data-testid=\"connectors-route-main\"] [data-testid=\"filter-tabs\"]",
+      "what": "LIVE-ONLY: a Connected/Available/Custom tablist the design has no analog for (ConnectorsDestination.tsx:190-199). Recorded so the comparator files it as extra-in-live rather than silently dropping it. On the web host it is rendered TWICE — once here and once inside the ConnectorsPanel aside (ConnectorsRoute.tsx:553-560)."
+    },
+    {
+      "label": "live.page.header.title",
+      "group": "Live-only chrome",
+      "state": "default",
+      "design": null,
+      "live": "[data-testid=\"page-header-title\"]",
+      "what": "LIVE-ONLY: a var(--font-size-2xl) = 22.4px/600 <h1> 'Tools' (PageHeader.tsx:48-57, :106-108). The design surface has NO page title — its only header text is the 9.5px mono 'Connected · 6' eyebrow, because the destination name is already carried by the rail."
+    },
+    {
+      "label": "live.status.pill",
+      "group": "Live-only chrome",
+      "state": "default",
+      "design": null,
+      "live": "[data-connector-id=\"conn_safe\"] [data-testid=\"status-pill\"]",
+      "what": "LIVE-ONLY: an uppercase 'CONNECTED' success pill per card (ConnectorCard.tsx:136 via shell/StatusPill). The design's .lrow__name reserves an 8px flex gap for a status chip but connector rows NEVER populate it — connection state is implied by membership in the 'Connected · 6' list, so the pill is pure added chrome on a list where every row is connected."
+    },
+    {
+      "label": "live.connectors.panel",
+      "group": "Live-only chrome",
+      "state": "default",
+      "design": null,
+      "live": "[data-testid=\"connectors-route-panel\"]",
+      "what": "LIVE-ONLY, WEB HOST ONLY: a 240px context aside carrying a second FilterTabs plus a webhooks section (ConnectorsRoute.tsx:544-581). The design's connectors destination is single-column. The desktop host mounts ConnectorsDestination bare (destinationBinders.tsx:480-490), so web and desktop do not even agree with each other here."
+    },
+    {
+      "label": "live.connect.stepdots",
+      "group": "Live-only chrome",
+      "state": "connect",
+      "design": null,
+      "live": "[data-testid=\"step-dots\"]",
+      "what": "LIVE-ONLY: a 3-dot step indicator in the modal footer (ConnectModal.tsx:218 <StepDots total={3} …>). The design's ConnectModal has no step affordance in the 'pick' phase; this is what makes the live dialog 621px tall against the design's 604px."
+    }
+  ]
+}

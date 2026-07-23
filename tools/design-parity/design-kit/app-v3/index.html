@@ -1,0 +1,217 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>design-parity · 0xCopilot App v3 · DESIGN baseline</title>
+    <link rel="preconnect" href="https://fonts.googleapis.com" />
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+    <link
+      href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;500;700&display=swap"
+      rel="stylesheet"
+    />
+    <!-- copilot-v3.css @imports copilot.css (the FULL 43KB file vendored beside
+         it, not the trimmed design-kit copy) — together they define every class
+         used by the rail, the topbar and all five destination surfaces. -->
+    <link rel="stylesheet" href="copilot-v3.css" />
+  </head>
+  <body>
+    <div id="app-root"></div>
+
+    <script
+      src="https://unpkg.com/react@18.3.1/umd/react.development.js"
+      crossorigin="anonymous"
+    ></script>
+    <script
+      src="https://unpkg.com/react-dom@18.3.1/umd/react-dom.development.js"
+      crossorigin="anonymous"
+    ></script>
+    <script
+      src="https://unpkg.com/@babel/standalone@7.29.0/babel.min.js"
+      crossorigin="anonymous"
+    ></script>
+
+    <script>
+      // copilot-app.jsx self-mounts <App/> unless this is set. We want the
+      // surfaces it EXPORTS, rendered inside our own frame, so suppress it.
+      window.__COPILOT_SKIP_MOUNT = true;
+      // Referenced only inside the App/App3 render bodies, which this harness
+      // never renders — stubbed so the module still evaluates without
+      // tweaks-panel.jsx (a mock-only affordance that must not pollute a
+      // parity render anyway).
+      window.useTweaks = (d) => [d, () => {}];
+      const __noop = () => null;
+      window.TweaksPanel = __noop;
+      window.TweakSection = __noop;
+      window.TweakRadio = __noop;
+      window.TweakToggle = __noop;
+    </script>
+
+    <!-- Real icons + real fixtures (NOT design-kit/stubs.js): a parity baseline
+         should measure the design's actual glyph sizing and row content. -->
+    <script type="text/babel" src="copilot-data.jsx"></script>
+    <!-- ConnectorsSurface renders ConnectModal from here when the connect flow
+         is opened; harmless for the other surfaces. -->
+    <script type="text/babel" src="copilot-flows.jsx"></script>
+    <script type="text/babel" src="copilot-app.jsx"></script>
+
+    <script type="text/babel">
+      /* =====================================================================
+       * Shared DESIGN harness for the five v3 destinations.
+       *
+       * Why a hand-built frame: `copilot-app3.jsx` force-mounts <App3/> at
+       * module scope and holds `dest` in a plain useState with no prop or
+       * tweak escape hatch, so a harness cannot seed a destination through it.
+       * The frame below is transcribed VERBATIM from copilot-app3.jsx:47-78 —
+       * same element order, same class names, same data-* attributes — so the
+       * rail, topbar and surface compute exactly the styles the design does.
+       *
+       *   ?dest=chats|projects|activity|connectors|skills|workspace
+       *   ?state=<sub-state>   (see SUBSTATE below)
+       *
+       * Two sub-states live in component-internal state with no prop, so they
+       * are reached the only way the design allows — by clicking, after mount.
+       * ===================================================================== */
+      const { useState, useEffect } = React;
+
+      const q = new URLSearchParams(location.search);
+      const dest = q.get("dest") || "chats";
+      const state = q.get("state") || "default";
+
+      // sub-state → the element to click once the surface has mounted.
+      const SUBSTATE = {
+        "projects:detail": ".grid3 .proj-card:nth-child(1)",
+        "connectors:connect": ".pg .cbtn--pri",
+      };
+
+      function Frame() {
+        const prefs = window.DEFAULT_PREFS;
+        const [connectors, setConnectors] = useState(window.CONNECTORS);
+        const navigate = () => {};
+        const setPerm = (id, perm) =>
+          setConnectors((cs) =>
+            cs.map((c) => (c.id === id ? { ...c, perm } : c)),
+          );
+        const addConn = (c) => setConnectors((cs) => [...cs, c]);
+
+        // Drive the click-only sub-states. Two frames of delay so the surface
+        // subtree exists; the extractor's --delay covers the resulting render.
+        useEffect(() => {
+          const sel = SUBSTATE[`${dest}:${state}`];
+          if (!sel) return;
+          const t = setTimeout(() => {
+            const el = document.querySelector(sel);
+            if (el) el.click();
+            else console.error(`[harness] sub-state target not found: ${sel}`);
+          }, 60);
+          return () => clearTimeout(t);
+        }, []);
+
+        let surface = null;
+        if (dest === "chats")
+          surface = <ChatsSurface navigate={navigate} />;
+        else if (dest === "projects")
+          surface = <ProjectsSurface navigate={navigate} />;
+        else if (dest === "activity")
+          surface = <ActivitySurface navigate={navigate} />;
+        else if (dest === "connectors")
+          surface = (
+            <ConnectorsSurface
+              connectors={connectors}
+              setPerm={setPerm}
+              addConn={addConn}
+              navigate={navigate}
+            />
+          );
+        else if (dest === "skills")
+          surface = <SkillsSurface navigate={navigate} />;
+
+        const showTopbar = dest !== "workspace" && dest !== "settings";
+        const [tTitle, tSub] = window.TITLES[dest] || ["", ""];
+
+        return (
+          <div className="stage">
+            <div
+              className="mw"
+              data-theme={prefs.theme === "auto" ? "dark" : prefs.theme}
+              data-accent={prefs.accent}
+              data-density={prefs.density}
+              data-reduce-motion={prefs.reduceMotion ? "1" : "0"}
+            >
+              <div className="mw-bar">
+                <div className="mw-dots">
+                  <span className="mw-dot r" />
+                  <span className="mw-dot y" />
+                  <span className="mw-dot g" />
+                </div>
+                <div className="mw-title">
+                  <Mark size={14} />{" "}
+                  <b>
+                    <span className="zx">0x</span>Copilot
+                  </b>{" "}
+                  — local agent workspace · v3
+                </div>
+              </div>
+              <div className="mw-body">
+                <nav className="rail">
+                  <button className="rail-brand" title="0xCopilot">
+                    <Mark size={22} />
+                  </button>
+                  {window.DEST.map((d) => {
+                    const I = Icon[d.icon];
+                    return (
+                      <button
+                        key={d.id}
+                        className="rail-item"
+                        data-active={dest === d.id || undefined}
+                        title={d.label}
+                      >
+                        <I />
+                        <span className="rl">{d.label}</span>
+                        {d.badge &&
+                          dest !== "workspace" &&
+                          d.id === "workspace" && (
+                            <span className="rbadge">{d.badge}</span>
+                          )}
+                      </button>
+                    );
+                  })}
+                  <div className="rail-foot">
+                    <button
+                      className="rail-item"
+                      data-active={dest === "settings" || undefined}
+                      title="Settings"
+                    >
+                      <Icon.gear />
+                      <span className="rl">Settings</span>
+                    </button>
+                    <button className="rail-me" title={prefs.name}>
+                      {prefs.name.slice(0, 1)}
+                    </button>
+                  </div>
+                </nav>
+                <div className="main">
+                  {showTopbar && (
+                    <div className="topbar">
+                      <div className="tb-title">
+                        <h1>{tTitle}</h1>
+                        <span className="sub">{tSub}</span>
+                      </div>
+                      <div className="tb-spacer" />
+                      <button className="tb-search">
+                        <Icon.search /> Search &amp; commands <kbd>⌘K</kbd>
+                      </button>
+                    </div>
+                  )}
+                  {surface}
+                </div>
+              </div>
+            </div>
+          </div>
+        );
+      }
+
+      ReactDOM.createRoot(document.getElementById("app-root")).render(<Frame />);
+    </script>
+  </body>
+</html>

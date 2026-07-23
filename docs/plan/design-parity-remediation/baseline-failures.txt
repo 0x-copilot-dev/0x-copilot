@@ -1,0 +1,57 @@
+# Pre-existing test failures on the merge base
+#
+# WHY THIS FILE EXISTS
+# Six PRDs in this program gate a Definition-of-Done item on the form:
+#     "<command> exits 0, OR the failing test ids are byte-identical to
+#      docs/plan/design-parity-remediation/baseline-failures.txt,
+#      which this PR does not modify."
+# That lets an implementation prove it introduced no new failure, without
+# having to make an unrelated pre-existing failure green first. The "does not
+# modify" clause is load-bearing: a PR that edits this file to absorb its own
+# breakage has defeated the check, and that is a review-blocking offence.
+#
+# CAPTURED
+#   date:   2026-07-23
+#   commit: d0d23123 (branch claude/design-parity-audit-7ec82a)
+#   basis:  `git diff origin/main...HEAD -- packages/ apps/ services/` is EMPTY,
+#           so this branch's source tree is identical to origin/main and the
+#           numbers below are the main baseline, not a branch artefact.
+#
+# REGENERATE
+#   for w in chat-surface api-types frontend desktop; do
+#     npm run test --workspace @0x-copilot/$w
+#   done
+#
+# ---------------------------------------------------------------------------
+# RESULTS
+# ---------------------------------------------------------------------------
+#
+# @0x-copilot/chat-surface   2440 passed (2440)                    exit 0
+# @0x-copilot/frontend       1355 passed (1355)                    exit 0
+# @0x-copilot/desktop        1063 passed | 1 todo (1064)           exit 0
+# @0x-copilot/api-types      44 passed (44), 1 test FILE failed    exit 1
+#
+# Every runtime assertion in the repo passes. There is exactly one failing
+# entry, and it is a file-level collection error rather than a failed test:
+
+packages/api-types/src/brands.test.ts
+
+# Error: No test suite found in file .../packages/api-types/src/brands.test.ts
+#
+# The file contains only compile-time brand assertions (no runtime `it()`), so
+# vitest collects it, finds no suite, and fails the FILE — which makes
+# `npm run test --workspace @0x-copilot/api-types` exit 1 even though all 44
+# runtime tests pass. It is unrelated to this program.
+#
+# Not fixed here on purpose: this program's PRDs must not carry drive-by
+# changes to unrelated packages, and changing it would move the baseline the
+# six DoD items compare against. The correct fix (give it a real suite, or
+# exclude type-only files in the api-types vitest config) belongs in its own
+# change.
+#
+# ---------------------------------------------------------------------------
+# HOW A DoD ITEM USES THIS
+# ---------------------------------------------------------------------------
+# The workspace exits 0        -> item passes outright.
+# The workspace exits non-zero -> the failing ids must match the list above
+#                                 EXACTLY. Any additional id fails the item.

@@ -69,6 +69,12 @@ const BOX = new Set([
   "gap",
   "borderWidth",
   "borderRadius",
+  // Depth/emphasis carriers. A selection RING drawn as a box-shadow and a lost
+  // backdrop blur are visual defects of the same weight as a padding change, so
+  // they classify MEDIUM rather than falling through to the LOW default.
+  "boxShadow",
+  "backdropFilter",
+  "textDecorationLine",
 ]);
 const LAYOUT = new Set([
   "display",
@@ -231,8 +237,20 @@ for (const label of labels) {
   // style diffs (design is source of truth)
   const ds = d.styles || {};
   const ls = l.styles || {};
+  // An element with no border still reports a borderColor — CSS resolves it to
+  // `currentColor`, so it merely restates the `color` row that is already being
+  // reported. Left in, it manufactures a phantom HIGH (colour diffs are HIGH) for
+  // every borderless element: 11 of Projects' 48 HIGH rows and 4 of rail-badge's 7
+  // were this single artifact. Suppress it only when NEITHER side draws a border —
+  // if one side does, `borderWidth`/`borderStyle` report the real difference.
+  const noBorder = (s) =>
+    (s.borderStyle ?? "").split(" ").every((v) => v === "none") ||
+    (s.borderWidth ?? "").split(" ").every((v) => v === "0px");
+  const borderColorIsNoise = noBorder(ds) && noBorder(ls);
+
   for (const prop of Object.keys(ds)) {
     if (!(prop in ls)) continue;
+    if (prop === "borderColor" && borderColorIsNoise) continue;
     const c = classify(prop, ds[prop], ls[prop]);
     if (!c) continue;
     // A declared, property-scoped divergence is intent, not a defect — file it

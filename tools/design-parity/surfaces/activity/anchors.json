@@ -1,0 +1,162 @@
+{
+  "surface": "activity",
+  "note": "design↔live element correspondence for the Activity destination. DESIGN = the vendored Claude Design ActivitySurface (design-kit/app-v3/copilot-app.jsx:14-40 over the ACTIVITY fixture in copilot-data.jsx:149-164), served at ?dest=activity&state=default. LIVE = the REAL shipping @0x-copilot/chat-surface ActivityDestination (packages/chat-surface/src/destinations/activity/ActivityDestination.tsx) + the real Topbar, rendered by lib/render-live-activity.test.tsx over a fixture that mirrors the design's 1:1 (3 day groups of 3/3/2, same titles/meta/status mix, pinned dates so day-key selectors are deterministic). The live surface ships ZERO CSS-file rules — `.pg`/`.pg-lead`/`.rowlist`/`.act-day` are class HOOKS only and every visual property is an inline CSSProperties object in ActivityDestination.tsx:598-701 or destinations/_shared/{Row,RowList,PageLead,SectionHeader}.tsx — so every root cause below is a JS style object, not a stylesheet rule. Structural note for `row.live.name`: the design puts title text AND the status chip in one `.lrow__name` flex row that also carries the title typography; live splits that into an unnamed flex wrapper + a `[data-testid=\"row-title\"]` span that carries the typography (Row.tsx:158-176). The anchor is bound to the span that carries the TYPOGRAPHY, so display/gap diffs on that one label are structural, not defects — the type/colour diffs on it are real.",
+  "states": ["default"],
+  "elements": [
+    {
+      "label": "page.container",
+      "group": "Page",
+      "state": "default",
+      "design": ".pg",
+      "live": "[data-component=\"activity-destination\"] .pg"
+    },
+    {
+      "label": "page.lead",
+      "group": "Page",
+      "state": "default",
+      "design": ".pg-lead",
+      "live": "[data-testid=\"activity-lead\"]"
+    },
+    {
+      "label": "page.lead.link",
+      "group": "Page",
+      "state": "default",
+      "design": ".pg-lead a",
+      "live": "[data-testid=\"activity-retention-link\"]"
+    },
+    {
+      "label": "topbar.title",
+      "group": "Topbar",
+      "state": "default",
+      "design": ".topbar h1",
+      "live": "[data-testid=\"topbar-title\"]"
+    },
+    {
+      "label": "topbar.sub",
+      "group": "Topbar",
+      "state": "default",
+      "design": ".topbar .tb-title .sub",
+      "live": "[data-testid=\"topbar-subtitle\"]"
+    },
+    {
+      "label": "rail.badge",
+      "group": "Rail",
+      "state": "default",
+      "design": ".rail .rbadge",
+      "live": null,
+      "expectDivergence": "OUT OF SCOPE for this surface's harness, not a claim about the app: the badge belongs to AppRail (shell chrome), which the Activity render deliberately does not mount — the sibling `surfaces/rail-badge/` audit owns it. Reported as INFO here so the anchor stays traceable; do NOT read it as 'the live app lacks a run badge'."
+    },
+    {
+      "label": "day.head",
+      "group": "Grouping",
+      "state": "default",
+      "design": ".act-day",
+      "live": "[data-testid=\"activity-day\"]"
+    },
+    {
+      "label": "rowlist",
+      "group": "List",
+      "state": "default",
+      "design": ".rowlist",
+      "live": "[data-testid=\"activity-day-rowlist\"]"
+    },
+    {
+      "label": "row.live",
+      "group": "Row/live",
+      "state": "default",
+      "design": ".rowlist .lrow:nth-child(1)",
+      "live": "[data-testid=\"activity-row\"][data-status=\"running\"]"
+    },
+    {
+      "label": "row.live.ic",
+      "group": "Row/live",
+      "state": "default",
+      "design": ".rowlist .lrow:nth-child(1) .lrow__ic",
+      "live": "[data-status=\"running\"] [data-testid=\"row-icon\"]"
+    },
+    {
+      "label": "row.live.ic.svg",
+      "group": "Row/live",
+      "state": "default",
+      "design": ".rowlist .lrow:nth-child(1) .lrow__ic svg",
+      "live": "[data-status=\"running\"] [data-testid=\"activity-row-icon\"] svg"
+    },
+    {
+      "label": "row.live.name",
+      "group": "Row/live",
+      "state": "default",
+      "design": ".rowlist .lrow:nth-child(1) .lrow__name",
+      "live": "[data-status=\"running\"] [data-testid=\"row-title\"]"
+    },
+    {
+      "label": "row.live.chip",
+      "group": "Row/live",
+      "state": "default",
+      "design": ".rowlist .lrow:nth-child(1) .lrow__name .chip",
+      "live": "[data-status=\"running\"] [data-testid=\"status-pill\"]"
+    },
+    {
+      "label": "row.live.dot",
+      "group": "Row/live",
+      "state": "default",
+      "design": ".rowlist .lrow:nth-child(1) .lrow__name .chip .dotk",
+      "live": "[data-status=\"running\"] [data-testid=\"status-pill\"] > span[aria-hidden=\"true\"]"
+    },
+    {
+      "label": "row.live.sub",
+      "group": "Row/live",
+      "state": "default",
+      "design": ".rowlist .lrow:nth-child(1) .lrow__sub",
+      "live": "[data-status=\"running\"] [data-testid=\"row-sub\"]"
+    },
+    {
+      "label": "row.live.time",
+      "group": "Row/live",
+      "state": "default",
+      "design": ".rowlist .lrow:nth-child(1) .lrow__time",
+      "live": "[data-status=\"running\"] [data-testid=\"row-meta\"]"
+    },
+    {
+      "label": "row.live.chevron",
+      "group": "Row/live",
+      "state": "default",
+      "design": ".rowlist .lrow:nth-child(1) > svg",
+      "live": null
+    },
+    {
+      "label": "row.done.ic.svg",
+      "group": "Row/rest",
+      "state": "default",
+      "design": ".rowlist .lrow:nth-child(2) .lrow__ic svg",
+      "live": "section[data-day-key=\"2026-07-16\"] li:nth-child(2) [data-testid=\"activity-row-icon\"] svg"
+    },
+    {
+      "label": "row.done.chip",
+      "group": "Row/rest",
+      "state": "default",
+      "design": ".rowlist .lrow:nth-child(2) .lrow__name .chip",
+      "live": "section[data-day-key=\"2026-07-16\"] li:nth-child(2) [data-testid=\"status-pill\"]"
+    },
+    {
+      "label": "row.done.spacer",
+      "group": "Row/rest",
+      "state": "default",
+      "design": ".rowlist .lrow:nth-child(2) > span:last-child",
+      "live": null
+    },
+    {
+      "label": "chip.paused",
+      "group": "Status",
+      "state": "default",
+      "design": ".pg > div:nth-child(3) .lrow:nth-child(1) .lrow__name .chip",
+      "live": "section[data-day-key=\"2026-07-15\"] li:nth-child(1) [data-testid=\"status-pill\"]"
+    },
+    {
+      "label": "chip.stopped",
+      "group": "Status",
+      "state": "default",
+      "design": ".pg > div:nth-child(4) .lrow:nth-child(1) .lrow__name .chip",
+      "live": "section[data-day-key=\"2026-07-14\"] li:nth-child(1) [data-testid=\"status-pill\"]"
+    }
+  ]
+}
