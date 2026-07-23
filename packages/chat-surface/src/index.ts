@@ -1208,6 +1208,9 @@ export {
   type PendingCard,
   usePendingWork,
   type UsePendingWorkResult,
+  // orphan-destination-waiver: owner=surfaces-v2 PRD-E2 — exported ahead of its host
+  // mount ("Mounting is the final integration pass", above); a follow-up surfaces-v2
+  // PR wires it into the Approvals queue. Remove this waiver once it is mounted.
   PendingCounterChip,
   type PendingCounterChipProps,
 } from "./destinations/run";
