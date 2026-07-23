@@ -115,10 +115,17 @@ Phase 3 (credential-only add-key removes the model step entirely), not here.
 
 ### Phase 3 — split credentials/selection + nav + auto-pick ⏳
 
-- [ ] One credential-only add-key surface (collapse `KeyForm` + `AddProviderKeyModal`).
+- [x] Composer pill "Add a key" → navigate to Settings (#5): `ModelPill` precedence
+      flipped (nav wins over the inline port); `AssistantComposer` forwards
+      `onAddProviderKey`; web + desktop main `RunComposer` wire it to their
+      Settings→provider-keys nav. Follow-up: the desktop empty-state's
+      `OnboardingComposer` mount doesn't forward it yet (its hero add-key already
+      navigates). chat-surface + frontend + desktop tsc 0; 33 + 23 tests pass.
+- [ ] One credential-only add-key surface (collapse `KeyForm` + `AddProviderKeyModal`,
+      remove the mandatory model step) → kills #1 (forced model pick) + #2 (ada-2).
 - [ ] Auto-pick default on first key (first credentialed provider → workspace default).
-- [ ] Composer pill "Add a key" → navigate to Settings (wire `onAddProviderKey` in both hosts).
-- [ ] Web composer seeds `selectedModel` from `workspace/defaults.default_model`.
+- [ ] Web composer seeds `selectedModel` from `workspace/defaults.default_model` → rest of #3.
+- [ ] Forward `onAddProviderKey` through `OnboardingComposer` (desktop empty-state pill).
 
 ## Live smoke (packaged desktop topology, 2026-07-24)
 
