@@ -20,6 +20,7 @@ from agent_runtime.execution.contracts import RuntimeErrorCode
 from agent_runtime.execution.models import ModelConfigResolver
 from agent_runtime.pricing import ModelPricingCatalog
 from agent_runtime.settings import RuntimeSettings
+from agent_runtime.surfaces_v2.projection import SurfaceStoreProjection
 from runtime_api.http.errors import RuntimeApiError
 from runtime_api.schemas import (
     AgentRunStatus,
@@ -35,6 +36,7 @@ from runtime_api.schemas import (
     RunStatusResponse,
     RuntimeEventReplayResponse,
 )
+from runtime_api.schemas.surfaces_v2 import RunSurfacesResponse
 from starlette import status
 
 
@@ -451,6 +453,35 @@ class ConversationQueryService:
             latest_sequence_no=latest_sequence_no,
             run_status=run.status,
             has_more=False,
+        )
+
+    async def list_run_surfaces(
+        self,
+        *,
+        org_id: str,
+        user_id: str,
+        run_id: str,
+    ) -> RunSurfacesResponse:
+        """Return the SurfaceStore projection for a run (Generative Surfaces v2).
+
+        Replays the run's full ledger (``list_events_after(after_sequence=0)``)
+        and folds it into the surfaces the canvas hydrates from. Not flag-gated:
+        it is additive and, with no v2 events, returns an empty list — harmless
+        and honest. Scope check mirrors ``replay_events`` (404 on wrong-tenant or
+        unknown run).
+        """
+
+        await self._run_for_scope(org_id=org_id, user_id=user_id, run_id=run_id)
+        events = await self._event_store.list_events_after(
+            org_id=org_id,
+            run_id=run_id,
+            after_sequence=0,
+        )
+        state = SurfaceStoreProjection.fold(run_id, events)
+        return RunSurfacesResponse(
+            run_id=state.run_id,
+            surfaces=state.surfaces,
+            latest_sequence_no=state.latest_sequence_no,
         )
 
     # ------------------------------------------------------------------

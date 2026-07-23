@@ -129,6 +129,8 @@ class Keys:
         GET_CONVERSATION = "get_conversation"
         GET_CONVERSATION_CONTEXT = "get_conversation_context"
         GET_EVENTS = "get_events"
+        # Generative Surfaces v2 (PRD-A3) — the folded SurfaceStore for a run.
+        GET_RUN_SURFACES = "get_run_surfaces"
         GET_MESSAGES = "get_messages"
         GET_CONVERSATION_RUNS = "get_conversation_runs"
         # PRD-05 — org-scoped, paginated, newest-first run history (one row per

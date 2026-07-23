@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import time
 from collections.abc import Mapping
 from dataclasses import dataclass
 from typing import Any
@@ -41,6 +42,7 @@ from agent_runtime.capabilities.surfaces.generator import (
 )
 from agent_runtime.capabilities.surfaces.projector import SurfaceProjector
 from agent_runtime.execution.contracts import AgentRuntimeContext
+from agent_runtime.surfaces_v2.emitter import WorkLedgerEmitter
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -91,8 +93,14 @@ class CallMcpTool:
                 correlation_id=self.runtime_context.trace_id,
             ).model_dump(mode="json", exclude_none=True)
 
+        # Wall time of the connector dispatch, for the v2 ``read.executed``
+        # ledger event (PRD-A3 D1). Measured only around the dispatch itself so
+        # citation/ordinal/surface work downstream does not inflate it. Unused
+        # when ``SURFACES_V2`` is off (no emitter bound ⇒ ``_emit_ledger`` no-ops).
+        dispatch_latency_ms: int | None = None
         try:
             client = resolution.provider.create_client(resolution.card)
+            dispatch_started = time.perf_counter()
             output = await asyncio.wait_for(
                 client.call_tool(
                     tool_name=parsed_input.tool_name,
@@ -100,6 +108,7 @@ class CallMcpTool:
                 ),
                 timeout=self.loader.timeout_seconds,
             )
+            dispatch_latency_ms = int((time.perf_counter() - dispatch_started) * 1000)
         except (McpTimeoutError, TimeoutError):
             return McpToolCallResult.fail(
                 McpLoadErrorCode.TIMEOUT,
@@ -228,7 +237,61 @@ class CallMcpTool:
             output=output,
             call_id=parsed_input.tool_call_id,
         )
+
+        # Generative Surfaces v2 (PRD-A3): record the executed read + the
+        # just-attached v1 surface envelope on the Work Ledger. Awaited (not
+        # fire-and-forget) for deterministic event ordering; a no-op unless a
+        # ``WorkLedgerEmitter`` is bound, which happens only when ``SURFACES_V2``
+        # is on — so the flag-off event stream is byte-identical.
+        await CallMcpTool._emit_ledger(
+            result=result,
+            server_name=parsed_input.server_name,
+            tool_name=parsed_input.tool_name,
+            call_id=parsed_input.tool_call_id,
+            output=output,
+            latency_ms=dispatch_latency_ms,
+        )
         return result
+
+    @staticmethod
+    async def _emit_ledger(
+        *,
+        result: dict[str, Any],
+        server_name: str,
+        tool_name: str,
+        call_id: str | None,
+        output: object,
+        latency_ms: int | None,
+    ) -> None:
+        """Emit the v2 ledger read path for this tool call, if an emitter is bound.
+
+        No-ops when no :class:`WorkLedgerEmitter` is active (flag off). Passes the
+        just-attached v1 ``surface`` / ``surface_uri`` mirror so the emitter can
+        record ``surface.created`` / ``view.derived``. The emitter swallows its
+        own exceptions; this wrapper adds a second best-effort guard so a ledger
+        emit can never break a tool result.
+        """
+
+        emitter = WorkLedgerEmitter.active()
+        if emitter is None:
+            return
+        try:
+            await emitter.on_tool_result(
+                server_name=server_name,
+                tool_name=tool_name,
+                call_id=call_id or "",
+                output=output,
+                surface=result.get("surface"),
+                surface_uri=result.get("surface_uri"),
+                latency_ms=latency_ms,
+            )
+        except Exception:  # noqa: BLE001 - best-effort; never break MCP results
+            _LOGGER.warning(
+                "[surfaces_v2] mcp.ledger_raised server=%s tool=%s",
+                server_name,
+                tool_name,
+                exc_info=True,
+            )
 
     @staticmethod
     def _attach_surface(

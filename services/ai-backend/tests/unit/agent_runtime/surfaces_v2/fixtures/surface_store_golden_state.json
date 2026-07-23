@@ -1,0 +1,35 @@
+{
+  "run_id": "a7f3c9d2e5b14f60a7f3c9d2e5b14f60",
+  "surfaces": [
+    {
+      "surface_id": "surface_issue",
+      "kind": "record",
+      "connector": "linear",
+      "op": "get_issue",
+      "title": "ENG-142 Fix streaming reconnect",
+      "payload_ref": "payload/surface_issue",
+      "view": {
+        "tier": "shaped",
+        "basis": "generated",
+        "spec_ref": "spec/issue_record_v1",
+        "generator_model": "gpt-5.4-mini"
+      },
+      "first_sequence_no": 5,
+      "last_sequence_no": 7,
+      "ledger_id": "ra7f·005"
+    },
+    {
+      "surface_id": "surface_receipt",
+      "kind": "receipt",
+      "connector": "linear",
+      "op": "get_issue",
+      "title": "Run receipt",
+      "payload_ref": "payload/surface_receipt",
+      "view": null,
+      "first_sequence_no": 19,
+      "last_sequence_no": 19,
+      "ledger_id": "ra7f·019"
+    }
+  ],
+  "latest_sequence_no": 20
+}

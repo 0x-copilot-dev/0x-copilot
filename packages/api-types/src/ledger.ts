@@ -372,6 +372,45 @@ export interface RunReceipt {
 }
 
 // ---------------------------------------------------------------------------
+// SurfaceStore fold projection (PRD-A3). Served by
+// `GET /v1/agent/runs/{run_id}/surfaces`. Distinct from the `Surface` ledger
+// entity above (2026-07-23 close-out; PRD-A3 Open questions item 1): these carry
+// the fold bookkeeping (`first_sequence_no` / `last_sequence_no`) A1's `Surface`
+// lacks, and `generator_model` (A1's `gen.model`) instead of `preference`. B1's
+// client fold + parity snapshot target THIS shape (snake_case, metadata-only).
+// ---------------------------------------------------------------------------
+
+/** The derived-view state of a surface, folded from `view.derived`. */
+export interface SurfaceViewState {
+  tier: ViewTier;
+  basis: ViewBasis;
+  spec_ref?: string;
+  generator_model?: string;
+}
+
+/** One surface's folded metadata (no hydrated payload content). `view` is
+ * present only once a `view.derived` has landed for the surface. */
+export interface SurfaceSnapshot {
+  surface_id: string;
+  kind: SurfaceKind;
+  connector: string;
+  op: string;
+  title: string;
+  payload_ref: string;
+  view?: SurfaceViewState | null;
+  first_sequence_no: number;
+  last_sequence_no: number;
+  ledger_id: string;
+}
+
+/** `GET /v1/agent/runs/{run_id}/surfaces` response — the run's SurfaceStore. */
+export interface RunSurfacesResponse {
+  run_id: string;
+  surfaces: readonly SurfaceSnapshot[];
+  latest_sequence_no: number;
+}
+
+// ---------------------------------------------------------------------------
 // Runtime members (guards + the ledger-id codec) — the only non-type exports,
 // mirroring the `isSurfaceSpec` precedent.
 // ---------------------------------------------------------------------------

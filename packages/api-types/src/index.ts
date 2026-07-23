@@ -47,6 +47,9 @@ export type {
   UsageRecord,
   RunReceiptRow,
   RunReceipt,
+  SurfaceViewState,
+  SurfaceSnapshot,
+  RunSurfacesResponse,
   ParsedLedgerId,
 } from "./ledger";
 export {
@@ -70,9 +73,15 @@ import type {
   TenantId,
   UserId,
 } from "./brands";
-// Local binding for the shared ledger payload used in RuntimeEventPayloadByType
-// below (the block above re-exports it but does not bind it into local scope).
-import type { UsageRecordedPayload } from "./ledger";
+// Local binding for the shared ledger payloads used in RuntimeEventPayloadByType
+// below (the block above re-exports them but does not bind them into local scope).
+import type {
+  UsageRecordedPayload,
+  ActionClassifiedPayload,
+  ReadExecutedPayload,
+  SurfaceCreatedPayload,
+  ViewDerivedPayload,
+} from "./ledger";
 
 export type McpTransport = "http" | "sse" | "stdio";
 export type McpAuthMode = "none" | "oauth2" | "api_key" | "service_account";
@@ -376,6 +385,10 @@ export type RuntimeApiEventType =
   | "adapter_generated"
   | "surface_spec_generated"
   | "usage.recorded"
+  | "action.classified"
+  | "read.executed"
+  | "surface.created"
+  | "view.derived"
   | "workspace_snapshot_captured";
 
 export const RUNTIME_EVENT_SOURCES = [
@@ -435,6 +448,10 @@ export const RUNTIME_API_EVENT_TYPES = [
   "adapter_generated",
   "surface_spec_generated",
   "usage.recorded",
+  "action.classified",
+  "read.executed",
+  "surface.created",
+  "view.derived",
   "workspace_snapshot_captured",
 ] as const satisfies readonly RuntimeApiEventType[];
 
@@ -2166,6 +2183,15 @@ export interface RuntimeEventPayloadByType {
    * server projector keeps only the SDR §5 fields (no tenant ids on the wire).
    * Payload shape is the shared ledger `UsageRecordedPayload` (`./ledger`). */
   "usage.recorded": UsageRecordedPayload;
+  /** Generative Surfaces v2 (PRD-A3, SDR §5). The four ledger *emission* events
+   * the runtime records behind `SURFACES_V2` for what the v1 pipeline already
+   * does (MCP reads, v1 surface envelopes, async spec upgrades). Server
+   * projectors keep only the SDR §5 fields; the SurfaceStore fold
+   * (`GET /v1/agent/runs/{run_id}/surfaces`) consumes them. */
+  "action.classified": ActionClassifiedPayload;
+  "read.executed": ReadExecutedPayload;
+  "surface.created": SurfaceCreatedPayload;
+  "view.derived": ViewDerivedPayload;
   /** AC5 slice 3b — host write-through pre-image snapshot. Emitted by the
    * workspace backend BEFORE an approved overwrite/edit mutates a granted
    * host file: the prior bytes are stored content-addressed and this event

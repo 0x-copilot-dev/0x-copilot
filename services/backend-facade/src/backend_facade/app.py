@@ -1075,6 +1075,25 @@ def create_app(
             identity=identity,
         )
 
+    @app.get("/v1/agent/runs/{run_id}/surfaces")
+    async def run_surfaces(
+        request: Request,
+        run_id: str,
+    ) -> dict[str, object]:
+        # Generative Surfaces v2 (PRD-A3): passthrough to the ai-backend
+        # SurfaceStore projection. Registered ABOVE ``/v1/agent/runs/{run_id}``
+        # so the literal ``surfaces`` sub-path is not swallowed by the run_id
+        # matcher. Error passthrough rides the standard forward_json path.
+        identity = FacadeAuthenticator.authenticate_request(request)
+        return await forward_json(
+            app,
+            "GET",
+            f"/v1/agent/runs/{run_id}/surfaces",
+            target="ai_backend",
+            params=identity.scoped_params({}),
+            identity=identity,
+        )
+
     @app.get("/v1/agent/runs/{run_id}")
     async def get_run(
         request: Request,

@@ -1,0 +1,80 @@
+"""Payload-key, value, and message constants for v2 ledger emission (PRD-A3 D7).
+
+Per ``services/ai-backend/CLAUDE.md`` no repeated key/value/message string is
+inlined. Event-type *values* are NOT redefined here — they come from the A1
+vocabulary (``LedgerEventType`` in ``ledger_models``); this module owns only the
+payload-field keys, the A3-frozen constant values, and the emit-time summaries.
+"""
+
+from __future__ import annotations
+
+
+class Keys:
+    """Field-name constants for the four A3 ledger payloads (SDR §5, verbatim)."""
+
+    class Field:
+        """Payload keys. Values are the wire keys — do not rename (frozen)."""
+
+        V = "v"
+        CALL_ID = "call_id"
+        CONNECTOR = "connector"
+        OP = "op"
+        CLASS = "class"
+        BASIS = "basis"
+        LATENCY_MS = "latency_ms"
+        PAYLOAD_REF = "payload_ref"
+        SURFACE_ID = "surface_id"
+        KIND = "kind"
+        SOURCE = "source"
+        TITLE = "title"
+        TIER = "tier"
+        SPEC_REF = "spec_ref"
+        GEN = "gen"
+        MODEL = "model"
+
+
+class Values:
+    """Constant payload values A3 freezes (no classifier / no measurement yet)."""
+
+    # ``action.classified`` in A3 always records the honest "we made no policy
+    # decision" pair — a real classifier arrives in PRD-C1.
+    CLASS_UNKNOWN = "unknown"
+    BASIS_DEFAULT = "default"
+
+    # ``view.derived`` tiers/bases mapped from the v1 envelope (D1).
+    TIER_GENERIC = "generic"
+    TIER_SHAPED = "shaped"
+    BASIS_SCHEMA = "schema"
+    BASIS_REGISTRY = "registry"
+    BASIS_GENERATED = "generated"
+
+    # ``payload_ref`` scheme (D1/D7): ``call:<call_id>`` resolves to the
+    # ``tool_result`` event carrying the same ``call_id`` in this run's replay.
+    CALL_REF_PREFIX = "call:"
+
+    # Every A3 payload carries ``v: 1`` (SDR §5 — versioned from day one).
+    PAYLOAD_V = 1
+
+    # Longest a folded/derived surface title may be (D1).
+    TITLE_MAX_LEN = 120
+
+
+class Messages:
+    """Emit-time summaries for the ledger events (D3). ``action.classified``
+    has no summary (``None``) — it is not a user-facing beat in A3."""
+
+    READ_EXECUTED = "auto-ran (read)"
+    SURFACE_CREATED = "Prepared a surface"
+    VIEW_DERIVED = "Derived a view"
+
+    # Log tag when an emitter method swallows its own exception (D3/D8).
+    EMIT_RAISED = "[surfaces_v2] ledger.emit_raised"
+
+
+class Titles:
+    """Fallback surface-title formatting (D1)."""
+
+    SEPARATOR = " · "
+
+
+__all__ = ["Keys", "Messages", "Titles", "Values"]
