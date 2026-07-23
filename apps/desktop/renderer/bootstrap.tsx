@@ -35,6 +35,7 @@ import {
   destinationsForProfile,
   createTier2WorkerFactory,
   registerGenericStructuredDiff,
+  useAppearanceSettings,
   useShellShortcuts,
   type ArtifactRoute,
   type ConversationId,
@@ -46,6 +47,7 @@ import {
 import { IpcTransport, type RendererSession } from "@0x-copilot/chat-transport";
 import { registerAll as registerSurfaceRenderers } from "@0x-copilot/surface-renderers";
 
+import { applyAppearance } from "./appearance";
 import { BootGate } from "./BootProgress";
 import { DestinationOutlet } from "./DestinationOutlet";
 import { registerDesktopItemRoutes } from "./itemRoutes";
@@ -225,6 +227,19 @@ function ChatShellForSession(props: ChatShellForSessionProps): ReactElement {
     [],
   );
 
+  // PRD-12 D9 (README G7) — boot-load + persist appearance at the RENDERER ROOT,
+  // not inside Settings, so `:root[data-theme|accent|density]` is correct on
+  // EVERY screen at launch (desktop mounts no design-system ThemeProvider, so
+  // these attributes are the only theming mechanism). The controller reads
+  // `GET /v1/me/preferences` on mount and paints via `applyAppearance`; Settings
+  // becomes a pass-through over `value`/`change`. This is what makes PRD-01's
+  // nine accents survive a relaunch on the primary substrate.
+  const appearance = useAppearanceSettings({
+    transport,
+    keyValueStore: props.keyValueStore,
+    onApply: applyAppearance,
+  });
+
   // Keep the bound conversation in sync with the Router URL — a `conversation`/
   // `chat` route (deep-link, back/forward, or our own `openConversation`
   // navigate) binds that conversation and lands the shell on Run.
@@ -355,6 +370,10 @@ function ChatShellForSession(props: ChatShellForSessionProps): ReactElement {
             // PR-6.4: controlled section so the palette can deep-link Settings.
             activeSection={settingsSection}
             onSectionChange={setSettingsSection}
+            // PRD-12 D9 — Appearance is a pass-through over the boot controller
+            // mounted at the renderer root; Settings no longer owns the state.
+            appearanceValue={appearance.value}
+            onAppearanceChange={appearance.change}
           />
         ) : (
           <DestinationOutlet

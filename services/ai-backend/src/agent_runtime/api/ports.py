@@ -234,6 +234,18 @@ class PersistencePort(Protocol):
     ) -> RunRecord | None:
         """Return the most recent non-terminal run for one conversation."""
 
+    async def count_active_runs(self, *, org_id: str, user_id: str) -> int:
+        """Count the caller's in-flight runs for the rail Run badge (PRD-12 D1).
+
+        One count over ``agent_runs`` (one row per RUN) whose status is in
+        ``ACTIVE_RUN_STATUSES`` and whose parent conversation is live
+        (``deleted_at IS NULL`` — a soft-deleted / history-purged conversation
+        must not keep the badge lit). Distinct from
+        :meth:`get_active_run_for_conversation`: this is user-scoped across
+        conversations and counts EVERY in-flight run (two runs in one
+        conversation count as 2), never collapsing to one-per-conversation.
+        """
+
     async def get_run(self, *, org_id: str, run_id: str) -> RunRecord | None:
         """Return a run scoped by organization."""
 
@@ -244,7 +256,7 @@ class PersistencePort(Protocol):
 
         PRD-09 D4: implementations MUST also bump the parent conversation's
         ``updated_at`` to the transition instant, in the same transaction. A
-        cancel / failure / timeout / flip to ``waiting_for_approval`` touches
+        cancel / failure / timeout / flip to ``WAITING_FOR_APPROVAL`` touches
         only ``agent_runs`` otherwise, so the Chats live tail — which watches
         ``updated_at`` as the row-version — would miss precisely the chip flip
         the user is watching. This makes ``updated_at`` an honest row-version

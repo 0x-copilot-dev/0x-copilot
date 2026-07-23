@@ -140,6 +140,11 @@ class Keys:
         # RUN, all statuses). The collection GET on ``/runs`` — registered
         # BEFORE ``/runs/{run_id}`` since ``run_id`` is an unconstrained str.
         LIST_RUN_HISTORY = "list_run_history"
+        # PRD-12 — the caller's in-flight run count for the rail Run badge. The
+        # literal ``/runs/active_count`` GET, registered BEFORE ``/runs/{run_id}``
+        # (unconstrained str) so the literal path wins (same hazard as
+        # ``/runs`` vs ``/runs/{run_id}``).
+        ACTIVE_RUN_COUNT = "active_run_count"
         GET_RUN = "get_run"
         LIST_CONVERSATIONS = "list_conversations"
         # PRD-07 — per-project chat counts. The literal ``/conversations/counts``

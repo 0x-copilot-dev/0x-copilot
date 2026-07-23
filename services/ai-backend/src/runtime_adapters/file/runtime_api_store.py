@@ -119,6 +119,7 @@ from runtime_adapters.file.object_store import FileObjectStore
 from runtime_adapters.file.search import ConversationSearchHit
 from runtime_api.http.errors import RuntimeApiError
 from runtime_api.schemas import (
+    ACTIVE_RUN_STATUSES,
     AgentRunStatus,
     ApprovalDecision,
     ApprovalDecisionRecord,
@@ -1667,22 +1668,38 @@ class FileRuntimeApiStore:
     async def get_active_run_for_conversation(
         self, *, org_id: str, conversation_id: str
     ) -> RunRecord | None:
-        non_terminal = {
-            AgentRunStatus.QUEUED,
-            AgentRunStatus.RUNNING,
-            AgentRunStatus.WAITING_FOR_APPROVAL,
-            AgentRunStatus.CANCELLING,
-        }
         candidates = [
             run
             for run in self.runs.values()
             if run.org_id == org_id
             and run.conversation_id == conversation_id
-            and run.status in non_terminal
+            and run.status in ACTIVE_RUN_STATUSES
         ]
         if not candidates:
             return None
         return max(candidates, key=lambda run: run.created_at)
+
+    async def count_active_runs(self, *, org_id: str, user_id: str) -> int:
+        """Count the caller's in-flight runs for the rail Run badge (PRD-12 D1).
+
+        In-process scan over ``self.runs`` filtered on ``(org_id, user_id)`` and
+        ``ACTIVE_RUN_STATUSES``, excluding runs whose conversation is soft-deleted
+        or absent — the same deleted-conversation predicate ``list_runs_for_org``
+        uses so a purged / soft-deleted conversation never keeps the badge lit.
+        Counts EVERY in-flight run (two in one conversation count as 2).
+        """
+
+        count = 0
+        for run in self.runs.values():
+            if run.org_id != org_id or run.user_id != user_id:
+                continue
+            if run.status not in ACTIVE_RUN_STATUSES:
+                continue
+            conversation = self.conversations.get(run.conversation_id)
+            if conversation is None or conversation.deleted_at is not None:
+                continue
+            count += 1
+        return count
 
     async def update_run_status(
         self, *, run_id: str, status: AgentRunStatus

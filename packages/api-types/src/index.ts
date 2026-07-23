@@ -1749,6 +1749,19 @@ export interface RunHistoryResponse {
   has_more: boolean;
 }
 
+/**
+ * PRD-12 — the caller's in-flight run count for the rail Run badge —
+ * `GET /v1/agent/runs/active_count`. A server projection over `agent_runs`
+ * (one row per RUN, joined to a live conversation) whose status is in
+ * {@link ACTIVE_AGENT_RUN_STATUSES}, so two in-flight runs in ONE conversation
+ * count as 2 (unlike the old conversation-counting web hook, which undercounted).
+ * Scoped to the verified caller; a client-supplied `org_id`/`user_id` can never
+ * widen it.
+ */
+export interface ActiveRunCountResponse {
+  active_run_count: number;
+}
+
 export interface CancelRunRequest {
   reason?: string | null;
   requested_by_user_id: string;

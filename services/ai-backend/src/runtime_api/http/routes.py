@@ -27,6 +27,7 @@ from agent_runtime.api.workspace_coordinator import WorkspaceCoordinator
 from runtime_api.auth import RuntimeServiceAuthenticator
 from runtime_api.rbac import RequireAnyScope, RequireScopes
 from runtime_api.schemas import (
+    ActiveRunCountResponse,
     ApprovalDecisionRequest,
     ApprovalDecisionResponse,
     ApprovalStatus,
@@ -271,6 +272,25 @@ class RuntimeApiRoutes:
             user_id=user_id,
             limit=limit,
             cursor=cursor,
+        )
+
+    @classmethod
+    async def get_active_run_count(
+        cls,
+        request: Request,
+        org_id: str | None = Query(None, min_length=1),
+        user_id: str | None = Query(None, min_length=1),
+    ) -> ActiveRunCountResponse:
+        """Return the caller's in-flight run count for the rail Run badge (PRD-12 D1).
+
+        A server projection: the client never derives the number. Scoped to the
+        verified caller (service headers win; query params ignored when present),
+        so a client-supplied ``org_id``/``user_id`` can never widen scope.
+        """
+        org_id, user_id = cls.scoped_identity(request, org_id=org_id, user_id=user_id)
+        return await cls.cqs(request).get_active_run_count(
+            org_id=org_id,
+            user_id=user_id,
         )
 
     @classmethod
@@ -883,6 +903,18 @@ class RuntimeApiRouter:
             methods=["GET"],
             response_model=RunHistoryResponse,
             name=Keys.RouteName.LIST_RUN_HISTORY,
+        )
+        # PRD-12 — the rail Run-badge count. MUST be registered BEFORE
+        # ``/runs/{run_id}`` below for the same shadowing reason: ``run_id`` is an
+        # unconstrained ``str``, so an append would let ``get_run`` capture the
+        # literal ``active_count`` and 404 (or worse, look up a run named
+        # "active_count"). Literal path wins only when registered first.
+        router.add_api_route(
+            "/runs/active_count",
+            RuntimeApiRoutes.get_active_run_count,
+            methods=["GET"],
+            response_model=ActiveRunCountResponse,
+            name=Keys.RouteName.ACTIVE_RUN_COUNT,
         )
         router.add_api_route(
             "/runs/{run_id}",

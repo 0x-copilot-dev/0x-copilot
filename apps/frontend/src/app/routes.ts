@@ -115,3 +115,17 @@ export function foldedRedirectFor(route: AppRoute): AppRoute | null {
   const slug = route.destination as keyof typeof FOLDED_DESTINATION_REDIRECTS;
   return FOLDED_DESTINATION_REDIRECTS[slug] ?? null;
 }
+
+/**
+ * PRD-12 D2/D3 — is the app on a Settings screen? The web app renders Settings
+ * as its OWN route (`settings` — the legacy `/settings#<section>` surface — and
+ * `settings-p12` — the Phase-12 polish pages). One predicate is the single
+ * source for BOTH the rail's `settingsActive` highlight (D2) and ChatShell's
+ * chrome suppression (D3, via `buildWebShellBinding`), so the two can never
+ * disagree. It replaces the old `ROOT_DESTINATION` collapse, whose comment
+ * wrongly claimed the rail was hidden on non-chat screens — it is not; the rail
+ * renders on every screen inside `ChatShell`.
+ */
+export function isSettingsScreen(route: AppRoute): boolean {
+  return route.screen === "settings" || route.screen === "settings-p12";
+}

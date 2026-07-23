@@ -30,7 +30,6 @@ import { useConnectors } from "../features/connectors/useConnectors";
 import { ChatsArchiveRoute } from "../features/chats/ChatsArchiveRoute";
 import { ProjectsRoute } from "../features/projects/ProjectsRoute";
 import { ActivityRoute } from "../features/activity/ActivityRoute";
-import { useActiveRunCount } from "../features/activity/useActiveRunCount";
 import { SkillsGateway } from "../features/skills/SkillsGateway";
 // `ConnectorsGateway` (the "Tools" destination) owns the in-destination
 // routing between the list (/connectors), the detail (/connectors/<id>), and
@@ -170,7 +169,12 @@ import {
 } from "@0x-copilot/chat-surface";
 import { getAppTransport } from "../api/transport";
 import { HashRouter, migrateLegacySettingsPath } from "./HashRouter";
-import { ROOT_DESTINATION, foldedRedirectFor, type AppRoute } from "./routes";
+import {
+  ROOT_DESTINATION,
+  foldedRedirectFor,
+  isSettingsScreen,
+  type AppRoute,
+} from "./routes";
 import { registerWebItemRoutes } from "./itemRoutes";
 import type { SettingsSection } from "../features/settings/settingsSections";
 import { errorMessage } from "../utils/errors";
@@ -430,9 +434,9 @@ export function CopilotApp({
   // (PRD 04: design-system ThemeProvider + document.documentElement
   // attrs + debounced server save).
   const profile = useUserProfile();
-  // PRD-C.2 / PRD-H.5 — the rail Run badge count. Derived (polled, best-effort)
-  // from the conversation list rather than a bespoke endpoint.
-  const activeRunCount = useActiveRunCount(identity);
+  // The rail Run-badge count is no longer derived here (PRD-12 D1): it is a
+  // server projection the shell owns end to end via `useActiveRunCount` inside
+  // `@0x-copilot/chat-surface`, so the web host feeds nothing.
   // Routing goes through the Router port (packages/chat-surface). HashRouter
   // owns every window.history / popstate / hashchange interaction on web;
   // the desktop substrate will swap in its own implementation without any
@@ -641,14 +645,17 @@ export function CopilotApp({
 
   const isAdmin = roles.includes("admin");
 
-  // Compute the active destination ONCE so AppRail / ContextPanel /
-  // Topbar all agree on which destination is "live". Non-chat screens
-  // (settings, share, admin) collapse the rail's active state to the
-  // legacy chats destination — the rail itself is hidden visually for
-  // those screens anyway via ChatShell receiving no leaf, but keeping
-  // the value valid avoids a stale highlight if the user navigates back.
+  // Compute the active destination ONCE so AppRail / ContextPanel / Topbar all
+  // agree on which destination is "live". Non-chat screens (settings, share,
+  // admin) collapse the value to `ROOT_DESTINATION` so it stays a valid slug.
+  // On Settings this value is NOT the rail's highlight — `settingsActive` below
+  // lights the gear and de-activates every destination (PRD-12 D2). The rail is
+  // NOT hidden on non-chat screens; it renders on every screen inside ChatShell.
   const activeDestination: ShellDestinationSlug =
     route.screen === "chat" ? route.destination : ROOT_DESTINATION;
+  // PRD-12 D2/D3 — one predicate drives BOTH the rail's Settings highlight and
+  // ChatShell's Settings chrome suppression (via the binding), so they agree.
+  const settingsActive = isSettingsScreen(route);
 
   // P12-C — round-trip a destination sub-path through the URL when the
   // gateway switches in-destination panes. Post-IA-fold (PR-4.11) only the
@@ -1129,12 +1136,10 @@ export function CopilotApp({
             // reuses. PRD-C.2 / PRD-H.5 — the rail-foot avatar takes the raw
             // display name (the shell derives the glyph); `walletChip` /
             // `topbarLeaf` are unbound on web today → explicit `null`.
-            binding={buildWebShellBinding(profile?.data?.display_name, false)}
-            // Run badge: number of in-flight runs (hidden at 0; the rail also
-            // hides it while Run is the active destination). PRD-C.2 / PRD-H.5.
-            railBadges={
-              activeRunCount > 0 ? { run: activeRunCount } : undefined
-            }
+            binding={buildWebShellBinding(
+              profile?.data?.display_name,
+              settingsActive,
+            )}
           >
             <Suspense fallback={<RouteLoadingFallback />}>{body}</Suspense>
             {/*

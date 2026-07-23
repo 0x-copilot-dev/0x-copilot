@@ -43,6 +43,15 @@ export {
   type AppearancePersistenceSplit,
 } from "./AppearancePage";
 export { ShortcutsPage, SHORTCUTS, type ShortcutRow } from "./ShortcutsPage";
+// PRD-12 D9 — the boot-load + persist controller over Transport + KeyValueStore,
+// composing the existing `appearanceAttributes` + `splitAppearancePersistence`.
+// Both hosts mount it at the renderer root so appearance is correct on every
+// screen at launch (desktop's only theming mechanism is `:root[data-*]`).
+export {
+  useAppearanceSettings,
+  type AppearanceSettingsPorts,
+  type AppearanceSettingsController,
+} from "./useAppearanceSettings";
 // === end Phase 5 (PR-5.3) ===
 export {
   QuietHoursEditor,

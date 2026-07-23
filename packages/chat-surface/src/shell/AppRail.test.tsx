@@ -301,19 +301,64 @@ describe("AppRail", () => {
       ).not.toBeInTheDocument();
     });
 
-    it("renders the user's initial in the avatar when identity is supplied", () => {
+    it("caps the badge glyph at 9+ while the accessible name keeps the exact count (DoD 10)", () => {
+      render(
+        <AppRail
+          activeDestination="chats"
+          destinations={solo}
+          onNavigate={() => {}}
+          badges={{ run: 137 }}
+        />,
+      );
+      // The pill is a 13px circle; nothing above one digit is specified (D4).
+      expect(
+        button("run").querySelector("[data-rail-badge]"),
+      ).toHaveTextContent("9+");
+      // Assistive tech still hears the true number (aria-label on the button).
+      expect(button("run").getAttribute("aria-label")).toContain("137");
+    });
+
+    it("pins the badge pill geometry as jsdom-verbatim inline styles (DoD 12a)", () => {
+      render(
+        <AppRail
+          activeDestination="chats"
+          destinations={solo}
+          onNavigate={() => {}}
+          badges={{ run: 3 }}
+        />,
+      );
+      const badge =
+        button("run").querySelector<HTMLElement>("[data-rail-badge]")!;
+      // copilot.css:343-358 — a 13px accent stadium with 8.5px mono text.
+      expect(badge.style.minWidth).toBe("13px");
+      expect(badge.style.height).toBe("13px");
+      expect(badge.style.borderRadius).toBe("7px");
+      // 8.5px lives on the `--font-size-mono-8-5` token (the merged UI-kit
+      // consolidation); jsdom reads the inline value verbatim, so this pins the
+      // token identity — the harness (DoD 18/20) resolves it to 8.5px.
+      expect(badge.style.fontSize).toBe("var(--font-size-mono-8-5)");
+    });
+
+    it("renders the display-name's first char in the avatar WITHOUT uppercasing (DoD 11)", () => {
       render(
         <AppRail
           activeDestination="run"
           destinations={solo}
           onNavigate={() => {}}
           onOpenSettings={() => {}}
-          identity={{ initial: "sasha" }}
+          identity={{ displayName: "sasha chen" }}
         />,
       );
-      const avatar = screen.getByRole("button", { name: "Account" });
-      expect(avatar).toHaveTextContent("S");
+      // The tooltip / accessible name is the FULL name (copilot-app.jsx:811).
+      const avatar = screen.getByRole("button", { name: "sasha chen" });
+      expect(avatar).toHaveAttribute("title", "sasha chen");
+      // charAt(0), NO .toUpperCase() — re-casing a user's own initial is a data
+      // edit, not a style (copilot-app.jsx:812).
+      expect(avatar).toHaveTextContent("s");
+      expect(avatar).not.toHaveTextContent("S");
       expect(avatar.style.background).toBe("var(--color-surface-elevated)");
+      // The 1px ring is back (copilot.css:376 `--line2` = --color-border-strong).
+      expect(avatar.style.border).toBe("1px solid var(--color-border-strong)");
     });
 
     it("falls back to a neutral user glyph without identity", () => {
@@ -328,6 +373,85 @@ describe("AppRail", () => {
       const avatar = screen.getByRole("button", { name: "Account" });
       expect(avatar.querySelector("svg")).toBeInTheDocument();
       expect(avatar).toHaveTextContent("");
+    });
+  });
+
+  describe("Settings active state (PRD-12 D2)", () => {
+    const solo = destinationsForProfile("single_user_desktop");
+
+    it("lights the Settings gear and de-activates every destination when settingsActive (DoD 9)", () => {
+      render(
+        <AppRail
+          activeDestination="run"
+          destinations={solo}
+          onNavigate={() => {}}
+          onOpenSettings={() => {}}
+          settingsActive
+        />,
+      );
+      const settings = screen.getByRole("button", { name: "Settings" });
+      expect(settings).toHaveAttribute("data-state", "active");
+      expect(settings).toHaveAttribute("aria-current", "page");
+      expect(
+        settings.querySelector("[data-rail-active-bar]"),
+      ).toBeInTheDocument();
+      // The regression guard: Run is the active destination, but Settings is
+      // active, so the Run item must be INACTIVE (no "highlights Run in Settings").
+      const run = destinationButtons().find(
+        (b) => b.getAttribute("data-destination") === "run",
+      )!;
+      expect(run).toHaveAttribute("data-state", "inactive");
+      expect(
+        run.querySelector("[data-rail-active-bar]"),
+      ).not.toBeInTheDocument();
+    });
+
+    it("leaves the Settings gear inactive and the destination active by default", () => {
+      render(
+        <AppRail
+          activeDestination="run"
+          destinations={solo}
+          onNavigate={() => {}}
+          onOpenSettings={() => {}}
+        />,
+      );
+      expect(screen.getByRole("button", { name: "Settings" })).toHaveAttribute(
+        "data-state",
+        "inactive",
+      );
+      const run = destinationButtons().find(
+        (b) => b.getAttribute("data-destination") === "run",
+      )!;
+      expect(run).toHaveAttribute("data-state", "active");
+    });
+  });
+
+  describe("rail chrome literals (PRD-12 D6 / DoD 12a)", () => {
+    const solo = destinationsForProfile("single_user_desktop");
+
+    it("foot has gap:5px and NO border-top / padding-top; items wrapper margin-top:12px gap:2px", () => {
+      render(
+        <AppRail
+          activeDestination="run"
+          destinations={solo}
+          onNavigate={() => {}}
+          onOpenSettings={() => {}}
+        />,
+      );
+      const nav = screen.getByRole("navigation", {
+        name: /copilot destinations/i,
+      });
+      // The foot is the rail's last child div (holds settings + avatar).
+      const foot = nav.querySelector<HTMLElement>(":scope > div:last-of-type")!;
+      expect(foot.style.gap).toBe("5px");
+      expect(foot.style.borderTop).toBe("");
+      expect(foot.style.paddingTop).toBe("");
+      // The items wrapper is the flex:1 middle column.
+      const items = nav.querySelector<HTMLElement>(
+        ":scope > div:not(:last-of-type)",
+      )!;
+      expect(items.style.marginTop).toBe("12px");
+      expect(items.style.gap).toBe("2px");
     });
   });
 });

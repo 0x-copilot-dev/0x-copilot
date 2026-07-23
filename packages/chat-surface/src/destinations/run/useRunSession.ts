@@ -33,6 +33,7 @@ import {
 } from "@0x-copilot/api-types";
 
 import { useTransport } from "../../providers/TransportProvider";
+import { useRunActivityBus } from "../../shell/runActivityBus";
 
 // The backend tags every run event frame with `event: runtime_event`. The web
 // SSE reader defaults an omitted `eventName` to "message", which would silently
@@ -376,6 +377,30 @@ export function useRunSession(options: UseRunSessionOptions): RunSession {
     const listed = runs.find((run) => run.runId === activeRunId);
     return listed?.status ?? null;
   }, [runStatusFromEvents, runs, activeRunId]);
+
+  // Publish to the run-activity bus (PRD-12 D1) on every run-id or run-status
+  // transition, so the rail's `useActiveRunCount` revalidates the instant the
+  // user's own run starts / finishes / cancels (the common case) instead of
+  // waiting up to 30s. Exactly ONE publish per transition: the initial mount
+  // snapshot is skipped (the count hook already fetches on its own mount), and a
+  // no-op re-render (neither id nor status changed) never publishes. Falls back
+  // to an inert no-op bus when no `ChatShell` is mounted (unit tests).
+  const runActivityBus = useRunActivityBus();
+  const lastPublishedRef = useRef<{
+    runId: string | null;
+    status: AgentRunStatus | null;
+  } | null>(null);
+  useEffect(() => {
+    const previous = lastPublishedRef.current;
+    lastPublishedRef.current = { runId: activeRunId, status: runStatus };
+    if (previous === null) {
+      return; // initial snapshot — not a transition
+    }
+    if (previous.runId === activeRunId && previous.status === runStatus) {
+      return; // no run-identity / status change on this render
+    }
+    runActivityBus.publish();
+  }, [runActivityBus, activeRunId, runStatus]);
 
   // Only run-STREAM failures surface as a cockpit error; head-resolution failures
   // are best-effort (see the head effect) and leave the idle composer available.

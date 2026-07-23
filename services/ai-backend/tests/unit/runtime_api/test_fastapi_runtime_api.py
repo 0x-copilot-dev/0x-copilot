@@ -1161,3 +1161,75 @@ class TestRunHistoryRoute(FastApiRuntimeApiTestMixin):
         terminal = {"cancelled", "completed", "failed", "timed_out"}
         assert sum(1 for r in runs if r["status"] in terminal) == 7
         assert sum(1 for r in runs if r["status"] == "running") == 1
+
+
+class TestActiveRunCountRoute(FastApiRuntimeApiTestMixin):
+    """PRD-12 D1 / DoD 1 — GET /v1/agent/runs/active_count.
+
+    Proves the literal path is NOT shadowed by GET /runs/{run_id} (registered
+    after it), returns the count shape (never a RunStatusResponse), and 400s
+    when the caller supplies no identity.
+    """
+
+    def _scope(self) -> dict[str, Any]:
+        return {"org_id": self.Values.ORG_ID, "user_id": self.Values.USER_ID}
+
+    async def _seed_runs(self, client, store, *, count: int) -> str:
+        conversation = await self.create_conversation(client)
+        conversation_id = conversation["conversation_id"]
+        for index in range(count):
+            resp = client.post(
+                "/v1/agent/runs",
+                json={
+                    **self.run_payload(conversation_id),
+                    "idempotency_key": f"active-{index}",
+                },
+            )
+            assert resp.status_code == 200
+            run_id = resp.json()["run_id"]
+            # A freshly-created run is ``queued`` (in ACTIVE_RUN_STATUSES); pin it
+            # to ``running`` so the fixture is two in-flight runs in ONE conversation.
+            store.runs[run_id] = store.runs[run_id].model_copy(
+                update={"status": AgentRunStatus.RUNNING}
+            )
+        return conversation_id
+
+    async def test_active_run_count_returns_count_shape_not_a_run_status(self) -> None:
+        client, store = self.create_client()
+        await self._seed_runs(client, store, count=2)
+
+        resp = client.get("/v1/agent/runs/active_count", params=self._scope())
+        assert resp.status_code == 200
+        body = resp.json()
+        # The count shape — TWO in-flight runs in one conversation (the exact
+        # undercount the deleted conversation-counting web hook produced).
+        assert body == {"active_run_count": 2}
+        # And explicitly NOT a RunStatusResponse: if GET /runs/{run_id} had
+        # shadowed this literal (run_id == "active_count"), the body would carry
+        # a run_id/status, or the lookup would 404. Neither happens.
+        assert "run_id" not in body
+        assert "status" not in body
+
+    async def test_active_run_count_excludes_terminal_runs(self) -> None:
+        client, store = self.create_client()
+        conversation_id = await self._seed_runs(client, store, count=1)
+        # Add a completed run in the same conversation — it must not count.
+        resp = client.post(
+            "/v1/agent/runs",
+            json={
+                **self.run_payload(conversation_id),
+                "idempotency_key": "active-done",
+            },
+        )
+        done_id = resp.json()["run_id"]
+        store.runs[done_id] = store.runs[done_id].model_copy(
+            update={"status": AgentRunStatus.COMPLETED}
+        )
+        body = client.get("/v1/agent/runs/active_count", params=self._scope()).json()
+        assert body == {"active_run_count": 1}
+
+    async def test_active_run_count_requires_identity(self) -> None:
+        client, _store = self.create_client()
+        # No service headers and no org_id/user_id query params → 400.
+        resp = client.get("/v1/agent/runs/active_count")
+        assert resp.status_code == 400

@@ -24,6 +24,11 @@ import type {
 import type { RuntimeEventEnvelope } from "@0x-copilot/api-types";
 
 import { TransportProvider } from "../../providers/TransportProvider";
+import {
+  RunActivityBusProvider,
+  useRunActivityBus,
+  type RunActivityBus,
+} from "../../shell/runActivityBus";
 import { useRunSession, type UseRunSessionOptions } from "./useRunSession";
 
 // --- fake transport --------------------------------------------------------
@@ -475,5 +480,66 @@ describe("useRunSession — enabled gate", () => {
     await waitFor(() => expect(result.current.status).toBe("idle"));
     expect(spy).not.toHaveBeenCalled();
     expect(transport.subs).toHaveLength(0);
+  });
+});
+
+describe("useRunSession — run-activity bus (PRD-12 D1)", () => {
+  it("publishes exactly once per run-id / run-status transition, and never for a non-status event", async () => {
+    const transport = new FakeTransport();
+    transport.requestHandler = async () => ({ latest_run_id: "run-1" });
+
+    let capturedBus: RunActivityBus | null = null;
+    function CaptureBus(): null {
+      capturedBus = useRunActivityBus();
+      return null;
+    }
+
+    const { result } = renderHook(
+      (props: UseRunSessionOptions) => useRunSession(props),
+      {
+        initialProps: { conversationId: "conv-1" } as UseRunSessionOptions,
+        wrapper: ({ children }: { children: ReactNode }) =>
+          createElement(TransportProvider, {
+            transport,
+            children: createElement(RunActivityBusProvider, null, [
+              createElement(CaptureBus, { key: "capture" }),
+              createElement("div", { key: "children" }, children),
+            ]),
+          }),
+      },
+    );
+
+    // Subscribe BEFORE any transition so every publish is counted.
+    let publishes = 0;
+    const unsubscribe = capturedBus!.subscribe(() => {
+      publishes += 1;
+    });
+
+    // Transition 1: null → "run-1" (the head binds a run) → one publish.
+    await waitFor(() => expect(result.current.runId).toBe("run-1"));
+    expect(publishes).toBe(1);
+
+    const sub = transport.activeSub;
+    // Transition 2: run status null → running → one more publish.
+    transport.emit(
+      sub,
+      makeEvent({ sequence_no: 1, event_type: "run_started" }),
+    );
+    await waitFor(() => expect(result.current.runStatus).toBe("running"));
+    expect(publishes).toBe(2);
+
+    // A NON-status event (progress) must NOT publish — no transition.
+    transport.emit(sub, makeEvent({ sequence_no: 2, event_type: "progress" }));
+    expect(publishes).toBe(2);
+
+    // Transition 3: running → completed → one more publish.
+    transport.emit(
+      sub,
+      makeEvent({ sequence_no: 3, event_type: "run_completed" }),
+    );
+    await waitFor(() => expect(result.current.runStatus).toBe("completed"));
+    expect(publishes).toBe(3);
+
+    unsubscribe();
   });
 });

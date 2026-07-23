@@ -32,7 +32,9 @@ import {
   type ShellDestinationSlug,
 } from "./destinations";
 import { RIGHT_RAIL_WIDTH, RightRail } from "./RightRail";
+import { RunActivityBusProvider } from "./runActivityBus";
 import { TOPBAR_HEIGHT, Topbar } from "./Topbar";
+import { useActiveRunCount } from "./useActiveRunCount";
 
 // PRD-09 D5 — the two shell decisions are INDEPENDENT, matching the design:
 // `showTopbar = dest !== "workspace" && dest !== "settings"` (copilot-app.jsx:739),
@@ -99,8 +101,8 @@ export interface ChatShellProps<TRoute> {
    * literal `null` in the diff. This replaces the four discrete optional props
    * that let capabilities ship dark when a host silently declined them.
    *
-   * `railBadges` is deliberately NOT in the binding — PRD-12 owns that prop and
-   * its data source (C1).
+   * The rail Run-badge count is deliberately NOT in the binding — PRD-12 owns
+   * its data source end to end via `useActiveRunCount` (C1), so no host feeds it.
    */
   readonly binding: ShellHostBinding;
 
@@ -122,13 +124,11 @@ export interface ChatShellProps<TRoute> {
    */
   readonly contextPanel?: ReactNode | ContextPanelProps;
 
-  /**
-   * Optional per-destination badge counts (e.g. active runs on `run`). The host
-   * derives them from data it already holds (PRD-H); the shell forwards them to
-   * `AppRail`, which shows a badge only when the count > 0 and the destination
-   * isn't active. Absent = no badges. PRD-12 owns this prop (C1).
-   */
-  readonly railBadges?: Partial<Record<ShellDestinationSlug, number>>;
+  // NOTE: there is deliberately NO host prop for the rail Run-badge count
+  // (PRD-12 D1). It is a server projection the shell owns end to end via
+  // `useActiveRunCount` — a host prop would re-open the drift door where the
+  // desktop rail silently shipped without a count. `AppRail.badges` stays a pure
+  // view prop; the shell is its only feeder.
 
   /** Main column content. */
   readonly children?: ReactNode;
@@ -146,7 +146,6 @@ export function ChatShell<TRoute>({
   binding,
   destinations,
   contextPanel,
-  railBadges,
   children,
 }: ChatShellProps<TRoute>): ReactElement {
   const profile = useOptionalDeploymentProfile();
@@ -164,21 +163,26 @@ export function ChatShell<TRoute>({
       <RouterProvider router={router}>
         <KeyValueStoreProvider store={keyValueStore}>
           <PresenceSignalProvider signal={presenceSignal}>
-            <ShellGrid
-              activeDestination={activeDestination}
-              destinations={railDestinations}
-              onNavigate={onNavigate}
-              onOpenSettings={onOpenSettings}
-              onOpenCommandPalette={onOpenCommandPalette}
-              settingsActive={binding.settingsActive}
-              topbarLeaf={binding.topbarLeaf}
-              contextPanel={contextPanel}
-              railIdentity={binding.railIdentity}
-              railBadges={railBadges}
-              walletChip={binding.walletChip}
-            >
-              {children}
-            </ShellGrid>
+            {/* One run-activity bus for the whole shell subtree (PRD-12 D1),
+                mounted OUTSIDE `ShellGrid` so the rail (subscriber, via
+                `useActiveRunCount`) and the Run cockpit in `children`
+                (publisher, via `useRunSession`) share the same instance. */}
+            <RunActivityBusProvider>
+              <ShellGrid
+                activeDestination={activeDestination}
+                destinations={railDestinations}
+                onNavigate={onNavigate}
+                onOpenSettings={onOpenSettings}
+                onOpenCommandPalette={onOpenCommandPalette}
+                settingsActive={binding.settingsActive}
+                topbarLeaf={binding.topbarLeaf}
+                contextPanel={contextPanel}
+                railIdentity={binding.railIdentity}
+                walletChip={binding.walletChip}
+              >
+                {children}
+              </ShellGrid>
+            </RunActivityBusProvider>
           </PresenceSignalProvider>
         </KeyValueStoreProvider>
       </RouterProvider>
@@ -195,10 +199,9 @@ interface ShellGridProps {
   readonly settingsActive: boolean;
   readonly topbarLeaf?: string | null;
   readonly contextPanel?: ReactNode | ContextPanelProps;
-  // PRD-03: the shell carries the raw display name and shims it to AppRail's
-  // `{ initial }` shape at the call site below. `null` = neutral glyph.
+  // PRD-03 carries the raw display name; PRD-12's AppRail takes `{ displayName }`
+  // and derives the glyph/title itself. `null` = neutral glyph.
   readonly railIdentity: { readonly displayName: string } | null;
-  readonly railBadges?: Partial<Record<ShellDestinationSlug, number>>;
   readonly walletChip: ReactNode | null;
   readonly children?: ReactNode;
 }
@@ -213,10 +216,13 @@ function ShellGrid({
   topbarLeaf,
   contextPanel,
   railIdentity,
-  railBadges,
   walletChip,
   children,
 }: ShellGridProps): ReactElement {
+  // The active-run count is a server projection the shell owns (PRD-12 D1): one
+  // hook, fed to the rail's Run badge. No host passes it — deleting the prop
+  // makes the desktop "badge never wired" gap structurally impossible.
+  const activeRunCount = useActiveRunCount();
   // Default to closed: the right rail has no destination-specific content
   // wired yet (Activity / Approvals tabs are a Wave 5 thread-canvas job)
   // so an open empty rail is visual noise. Users open it via the edge
@@ -275,7 +281,11 @@ function ShellGrid({
   return (
     <div
       data-component="chat-shell"
-      data-destination={activeDestination}
+      // PRD-12 D7 — the shell root emits `data-active-destination`, leaving the
+      // plainer per-element attribute to mean "a button/section FOR a
+      // destination". A shipped web rule (`apps/frontend/src/styles.css`) selects
+      // this root by the new name, updated in the same change.
+      data-active-destination={activeDestination}
       data-right-rail-open={rightOpen ? "open" : "closed"}
       style={outerStyle}
     >
@@ -284,12 +294,11 @@ function ShellGrid({
         destinations={destinations}
         onNavigate={onNavigate}
         onOpenSettings={onOpenSettings}
-        // PRD-12 deletes this shim when AppRail takes `{ displayName }` and
-        // derives the glyph (charAt(0), title, aria-label) itself (its D5).
-        identity={
-          railIdentity ? { initial: railIdentity.displayName } : undefined
-        }
-        badges={railBadges}
+        settingsActive={settingsActive}
+        // AppRail takes the raw display name and derives the glyph/title itself
+        // (PRD-12 D5). `null` → the neutral glyph.
+        identity={railIdentity ?? undefined}
+        badges={activeRunCount > 0 ? { run: activeRunCount } : undefined}
       />
       {fullBleed ? null : (
         <ContextPanelSlot

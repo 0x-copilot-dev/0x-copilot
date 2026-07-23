@@ -1029,6 +1029,25 @@ def create_app(
             identity=identity,
         )
 
+    # PRD-12 — the rail Run-badge count. Registered ABOVE the
+    # ``/v1/agent/runs/{run_id}`` GET (below): Starlette matches in registration
+    # order and ``run_id`` is an unconstrained str, so a later position would let
+    # the detail route swallow the literal ``active_count``. Client-supplied
+    # ``org_id``/``user_id`` are never read — ``scoped_params`` injects the
+    # verified session's identity, the same idiom ``list_run_history`` uses, so
+    # the endpoint can only ever return the caller's own count.
+    @app.get("/v1/agent/runs/active_count")
+    async def active_run_count(request: Request) -> dict[str, object]:
+        identity = FacadeAuthenticator.authenticate_request(request)
+        return await forward_json(
+            app,
+            "GET",
+            "/v1/agent/runs/active_count",
+            target="ai_backend",
+            params=identity.scoped_params(),
+            identity=identity,
+        )
+
     @app.post("/v1/skills")
     async def create_skill(
         request: Request, payload: dict[str, object]

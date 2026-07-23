@@ -45,6 +45,23 @@ class AgentRunStatus(StrEnum):
     TIMED_OUT = "timed_out"
 
 
+# The non-terminal run states — a run in one of these is "in flight" and counts
+# toward the rail's Run badge (PRD-12 D1). Extracted here beside the enum so the
+# active-run COUNT query, the per-conversation active-run lookup, and every store
+# adapter read ONE source instead of re-typing the status tuple inline (which is
+# how the literal drifted into `runtime_adapters/*` — PRD-12 DoD 3). Members are
+# referenced by enum, never by re-typed string literals, so grepping the raw
+# `waiting_for_approval` string still resolves to exactly the two enum homes.
+ACTIVE_RUN_STATUSES: frozenset[AgentRunStatus] = frozenset(
+    {
+        AgentRunStatus.QUEUED,
+        AgentRunStatus.RUNNING,
+        AgentRunStatus.WAITING_FOR_APPROVAL,
+        AgentRunStatus.CANCELLING,
+    }
+)
+
+
 class RuntimeEventVisibility(StrEnum):
     """Client visibility class for timeline and audit events."""
 

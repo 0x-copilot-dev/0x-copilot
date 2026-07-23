@@ -67,6 +67,8 @@ interface MountOptions {
    */
   readonly profile?: DeploymentProfile;
   readonly walletChip?: React.ReactNode;
+  /** Override the transport (e.g. one that answers /active_count). */
+  readonly transport?: Transport;
   readonly children?: React.ReactNode;
 }
 
@@ -78,11 +80,12 @@ function mount({
   topbarLeaf,
   profile,
   walletChip,
+  transport = stubTransport,
   children,
 }: MountOptions = {}) {
   const shell = (
     <ChatShell
-      transport={stubTransport}
+      transport={transport}
       router={staticRouter()}
       keyValueStore={stubKv}
       presenceSignal={stubPresence}
@@ -130,7 +133,7 @@ describe("ChatShell", () => {
   it("renders a four-region grid for non-full-bleed destinations and starts with the right rail closed", () => {
     mount({ activeDestination: "home" });
     const shell = shellRoot();
-    expect(shell).toHaveAttribute("data-destination", "home");
+    expect(shell).toHaveAttribute("data-active-destination", "home");
     // Right rail defaults to closed — Activity / Approvals content is a
     // Wave 5 thread-canvas job; an open empty rail was visual noise.
     expect(shell).toHaveAttribute("data-right-rail-open", "closed");
@@ -144,7 +147,7 @@ describe("ChatShell", () => {
   it("hides the ContextPanel column when the destination is chats (full-bleed)", () => {
     mount({ activeDestination: "chats" });
     const shell = shellRoot();
-    expect(shell).toHaveAttribute("data-destination", "chats");
+    expect(shell).toHaveAttribute("data-active-destination", "chats");
     expect(shell).toHaveStyle({
       gridTemplateColumns: "48px 1fr 0",
     });
@@ -271,7 +274,7 @@ describe("ChatShell", () => {
     // so it gets the same full-bleed treatment as chats.
     mount({ activeDestination: "run", profile: "single_user_desktop" });
     const shell = shellRoot();
-    expect(shell).toHaveAttribute("data-destination", "run");
+    expect(shell).toHaveAttribute("data-active-destination", "run");
     expect(shell).toHaveStyle({ gridTemplateColumns: "48px 1fr 0" });
     expect(screen.queryByRole("complementary", { name: /panel/i })).toBeNull();
     expect(screen.queryByTestId("topbar-title")).toBeNull();
@@ -281,21 +284,27 @@ describe("ChatShell", () => {
   it("renders the Settings surface full-bleed via settingsActive, regardless of the active destination", () => {
     // Settings is full-height (DESIGN-SPEC §1) but is not a rail destination
     // — it arrives via `settingsActive`. Even opened from a non-full-bleed
-    // destination (projects), the shell suppresses the topbar + context
-    // column, while the rail keeps `projects` highlighted.
+    // destination (projects), the shell suppresses the topbar + context column.
+    // PRD-12 D2: while Settings is active, the rail highlights the GEAR, not the
+    // underlying `projects` destination (the old "highlights the wrong thing" bug).
     mount({
       activeDestination: "projects",
       settingsActive: true,
       profile: "single_user_desktop",
+      onOpenSettings: () => {},
     });
     const shell = shellRoot();
     expect(shell).toHaveStyle({ gridTemplateColumns: "48px 1fr 0" });
     expect(screen.queryByRole("complementary", { name: /panel/i })).toBeNull();
     expect(screen.queryByTestId("topbar-title")).toBeNull();
-    expect(screen.getByRole("button", { name: "Projects" })).toHaveAttribute(
-      "aria-current",
-      "page",
+    // The gear is active; Projects is NOT highlighted while in Settings.
+    expect(screen.getByRole("button", { name: "Settings" })).toHaveAttribute(
+      "data-state",
+      "active",
     );
+    expect(
+      screen.getByRole("button", { name: "Projects" }),
+    ).not.toHaveAttribute("aria-current", "page");
   });
 
   it("renders the legacy 12-destination rail when no DeploymentProfile provider is present (web default)", () => {
@@ -365,5 +374,56 @@ describe("ChatShell", () => {
     });
     expect(screen.queryByTestId("topbar-wallet-chip")).toBeNull();
     expect(screen.queryByTestId("wc")).toBeNull();
+  });
+
+  // PRD-12 D7 / DoD 15 — the shell root carries `data-active-destination` (NOT
+  // `data-destination`, which now means "a button/section FOR this destination").
+  it("emits data-active-destination on the shell root, never data-destination", () => {
+    mount({ activeDestination: "home" });
+    const shell = shellRoot();
+    expect(shell).toHaveAttribute("data-active-destination", "home");
+    expect(shell).not.toHaveAttribute("data-destination");
+  });
+
+  // PRD-12 D1 / DoD 6 — the Run badge is a SERVER projection the shell owns:
+  // there is NO host badge prop. A fake Transport answering
+  // /v1/agent/runs/active_count with {active_run_count: 3} lights the badge.
+  it("renders the Run badge from the active_count transport read, with no host badge prop (DoD 6)", async () => {
+    const activeCountTransport: Transport = {
+      ...stubTransport,
+      request: (req) => {
+        if (req.path === "/v1/agent/runs/active_count") {
+          return Promise.resolve({ active_run_count: 3 } as never);
+        }
+        return new Promise(() => {});
+      },
+    };
+    mount({
+      activeDestination: "chats",
+      profile: "single_user_desktop",
+      transport: activeCountTransport,
+    });
+    // The badge lands inside the Run destination button once the fetch resolves.
+    const runButton = await screen.findByRole("button", { name: /Run \(3\)/ });
+    expect(runButton).toHaveAttribute("data-destination", "run");
+    const badge = runButton.querySelector("[data-rail-badge]");
+    expect(badge).not.toBeNull();
+    expect(badge).toHaveTextContent("3");
+  });
+
+  // PRD-12 D2 — ChatShell forwards `settingsActive` to AppRail, so the gear
+  // lights up instead of a stale destination.
+  it("forwards settingsActive to the rail so the gear is the active item", () => {
+    mount({
+      activeDestination: "run",
+      profile: "single_user_desktop",
+      settingsActive: true,
+      onOpenSettings: () => {},
+    });
+    const settings = screen.getByRole("button", { name: "Settings" });
+    expect(settings).toHaveAttribute("data-state", "active");
+    // …and Run (the active destination) is NOT highlighted while in Settings.
+    const run = screen.getByRole("button", { name: "Run" });
+    expect(run).toHaveAttribute("data-state", "inactive");
   });
 });

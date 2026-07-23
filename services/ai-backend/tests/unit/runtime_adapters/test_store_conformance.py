@@ -1282,6 +1282,109 @@ class TestRunHistory(_CrudSeedMixin):
         assert after == ()
 
 
+class TestActiveRunCount(_CrudSeedMixin):
+    """PRD-12 D1 — ``count_active_runs`` counts EVERY in-flight run (one row per
+    RUN), across conversations, for the caller — the run-keyed number the rail
+    Run badge reads.
+
+    The bug it replaces: the deleted web hook counted CONVERSATIONS
+    (``useActiveRunCount.ts:38-46``), so two in-flight runs in ONE conversation
+    read as 1. Runs identically on ``in_memory`` + ``file`` (``postgres`` is
+    present-but-marked)."""
+
+    async def _conv(self, store, *, title="active-count"):
+        return await store.create_conversation(
+            CreateConversationRequest(
+                org_id=self._ORG,
+                user_id=self._USER,
+                assistant_id="assistant",
+                title=title,
+            )
+        )
+
+    async def _seed_run(self, store, *, conversation, idem, status=None):
+        run = await self._run_coordinator(store).create_run(
+            CreateRunRequest(
+                conversation_id=conversation.conversation_id,
+                org_id=self._ORG,
+                user_id=self._USER,
+                user_input="hello",
+                idempotency_key=idem,
+                model={"provider": "openai", "model_name": "gpt-5.4-mini"},
+            )
+        )
+        if status is not None:
+            run = await store.update_run_status(run_id=run.run_id, status=status)
+        return run
+
+    async def test_two_running_runs_in_one_conversation_count_as_two(
+        self, store
+    ) -> None:
+        """The exact undercount today's web hook produces: two ``running`` runs in
+        ONE conversation. The conversation-counting hook returned 1; the
+        run-counting projection returns 2."""
+        conversation = await self._conv(store)
+        await self._seed_run(
+            store,
+            conversation=conversation,
+            idem="active-a",
+            status=AgentRunStatus.RUNNING,
+        )
+        await self._seed_run(
+            store,
+            conversation=conversation,
+            idem="active-b",
+            status=AgentRunStatus.RUNNING,
+        )
+        count = await store.count_active_runs(org_id=self._ORG, user_id=self._USER)
+        assert count == 2
+
+    async def test_soft_deleting_the_conversation_drops_the_count_to_zero(
+        self, store
+    ) -> None:
+        conversation = await self._conv(store)
+        await self._seed_run(
+            store,
+            conversation=conversation,
+            idem="active-del-a",
+            status=AgentRunStatus.RUNNING,
+        )
+        await self._seed_run(
+            store,
+            conversation=conversation,
+            idem="active-del-b",
+            status=AgentRunStatus.RUNNING,
+        )
+        assert await store.count_active_runs(org_id=self._ORG, user_id=self._USER) == 2
+        await store.soft_delete_conversation(
+            org_id=self._ORG,
+            user_id=self._USER,
+            conversation_id=conversation.conversation_id,
+            now=datetime(2026, 6, 1, tzinfo=timezone.utc),
+        )
+        assert await store.count_active_runs(org_id=self._ORG, user_id=self._USER) == 0
+
+    async def test_terminal_runs_and_other_users_are_excluded(self, store) -> None:
+        conversation = await self._conv(store)
+        # A completed run does not count.
+        await self._seed_run(
+            store,
+            conversation=conversation,
+            idem="active-done",
+            status=AgentRunStatus.COMPLETED,
+        )
+        # One live run does.
+        await self._seed_run(
+            store,
+            conversation=conversation,
+            idem="active-live",
+            status=AgentRunStatus.WAITING_FOR_APPROVAL,
+        )
+        assert await store.count_active_runs(org_id=self._ORG, user_id=self._USER) == 1
+        # A different user sees none of the caller's runs.
+        assert await store.count_active_runs(org_id=self._ORG, user_id="intruder") == 0
+
+
 class TestToolInvocationLedgerConformance(_CrudSeedMixin):
     """PRD-08 D1b — record_tool_invocation + the two Activity meta aggregates
     behave identically across in_memory / file / (DB-gated) postgres."""
