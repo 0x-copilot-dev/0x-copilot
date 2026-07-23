@@ -1133,6 +1133,18 @@ export {
   type LedgerViewKeep,
 } from "./thread-canvas";
 // === end PRD-B3 ===
+// === Surfaces v2 — PRD-C2 tool-access gate card + posture chip ===
+export {
+  TcGateCard,
+  type TcGateCardProps,
+  type LedgerGate,
+  type LedgerGateAuthState,
+  type LedgerGateOutcome,
+  type LedgerGateOpClass,
+  type LedgerGateWritePolicy,
+} from "./thread-canvas";
+export { PostureChip, type PostureChipProps } from "./destinations/run";
+// === end PRD-C2 ===
 
 // === Surfaces v2 — PRD-B2 provenance + honest states ===
 // Provenance footer, skeleton/assembling state, lossless raw fallback, and the

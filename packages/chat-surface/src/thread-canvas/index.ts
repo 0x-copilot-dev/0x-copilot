@@ -56,6 +56,12 @@ export {
   type LedgerSurfaceSource,
   type LedgerSurfaceView,
   type LedgerViewTier,
+  // PRD-C2 — gate model folded from `gate.opened` / `gate.resolved`.
+  type LedgerGate,
+  type LedgerGateAuthState,
+  type LedgerGateOutcome,
+  type LedgerGateOpClass,
+  type LedgerGateWritePolicy,
 } from "./ledgerProjection";
 // === end PRD-B1 ===
 
@@ -74,6 +80,9 @@ export {
   type ViewTierToggleProps,
 } from "./ViewTierToggle";
 // === end PRD-B3 ===
+// === Surfaces v2 — PRD-C2 tool-access gate card ===
+export { TcGateCard, type TcGateCardProps } from "./TcGateCard";
+// === end PRD-C2 ===
 
 // === Surfaces v2 — PRD-B2 provenance + honest states ===
 // Pure PEERS of `projectLedger` over the SAME `session.events` array, plus the

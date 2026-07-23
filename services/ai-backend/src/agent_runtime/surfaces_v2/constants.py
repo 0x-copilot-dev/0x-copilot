@@ -37,6 +37,13 @@ class Keys:
         # ``view.preference`` keys (PRD-B3).
         KEEP = "keep"
         ACTOR = "actor"
+        # PRD-C2 gate.opened / gate.resolved payload keys (SDR §5, verbatim).
+        GATE_ID = "gate_id"
+        PURPOSE = "purpose"
+        SCOPES = "scopes"
+        AUTH_STATE = "auth_state"
+        OUTCOME = "outcome"
+        WRITE_POLICY = "write_policy"
 
 
 class Values:

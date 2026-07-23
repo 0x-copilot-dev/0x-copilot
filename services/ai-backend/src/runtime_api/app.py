@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import os
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager, suppress
 
@@ -11,6 +12,9 @@ from fastapi.exceptions import RequestValidationError
 from pydantic import ValidationError
 
 from agent_runtime.api.approval_coordinator import ApprovalCoordinator
+from agent_runtime.api.connector_policy_client import (
+    build_connector_write_policy_client,
+)
 from agent_runtime.api.conversation_coordinator import ConversationCoordinator
 from agent_runtime.api.conversation_query_service import ConversationQueryService
 from agent_runtime.api.events import RuntimeEventProducer
@@ -459,6 +463,11 @@ class RuntimeApiAppFactory:
             event_producer=_event_producer,
             membership_resolver=_membership_resolver,
             notification_dispatcher=_notification_dispatcher,
+            # PRD-C2 — persists the gate-time write-policy override in the core
+            # backend's connectors storage (PRD-C1). ``None`` when no backend URL
+            # is configured; the coordinator then fails the gate-policy write
+            # closed (502) rather than record consent without its policy.
+            connector_policy_client=build_connector_write_policy_client(os.environ),
         )
         _conv = ConversationCoordinator(
             persistence=_ports.persistence,

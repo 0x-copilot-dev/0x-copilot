@@ -288,6 +288,16 @@ class Messages:
         """User-facing error strings for HTTP 4xx responses."""
 
         APPROVAL_NOT_FOUND = "Approval request was not found for this scope."
+        # PRD-C2 — gate write-policy choice guards. Generic, leak-free copy.
+        GATE_WRITE_POLICY_UNSUPPORTED = (
+            "Setting a connector write policy is not supported for this request."
+        )
+        GATE_WRITE_POLICY_KIND = (
+            "A write policy can only be set on a connector authentication gate."
+        )
+        GATE_WRITE_POLICY_PERSIST_FAILED = (
+            "Could not save the connector write policy; please try again."
+        )
         # Forwarding-target validation messages are deliberately generic and do not
         # reveal whether the target user exists in another tenant.
         APPROVAL_FORWARD_INVALID_TARGET = (
