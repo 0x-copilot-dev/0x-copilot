@@ -41,6 +41,7 @@
 // design-system tokens only (sky accent, no lime).
 
 import {
+  useEffect,
   useState,
   type CSSProperties,
   type ReactElement,
@@ -153,6 +154,16 @@ export interface RunWorkspaceRailProps {
   };
 
   /**
+   * Generative Surfaces v2 (PRD-E2 / FR-F3): a monotonically-increasing nonce the
+   * host bumps to command the rail onto the Approvals tab (the `PendingCounterChip`
+   * "N waiting" chip lives in the cockpit header, outside this rail, so it drives
+   * the tab through this one-directional signal). Every increase switches the
+   * active tab to Approvals; the initial value is ignored so a first render never
+   * force-selects it. Absent ⇒ unchanged (byte-identical when the flag is off).
+   */
+  readonly focusApprovalsSignal?: number;
+
+  /**
    * PR-3.10 SEAM (do not build here): inline approve/reject resolution +
    * Focus-mode `.conf-card` confirmation cards. Threaded through so PR-3.10 can
    * wire them without changing this signature; unused in PR-3.6.
@@ -184,11 +195,22 @@ export function RunWorkspaceRail(props: RunWorkspaceRailProps): ReactElement {
     onJumpToApproval,
     scrubbed = false,
     pendingV2,
+    focusApprovalsSignal,
   } = props;
 
   // Internal, survives mode/tab switches (the rail is never remounted across
   // mode changes — the host re-renders it with a new `mode`).
   const [activeTab, setActiveTab] = useState<RunRailTabId>(defaultTab);
+
+  // PRD-E2: the header "N waiting" chip commands the Approvals tab through a
+  // one-directional nonce. The initial value never force-selects (only an
+  // increase does), so mounting with the signal set is inert until it bumps.
+  useEffect(() => {
+    if (focusApprovalsSignal === undefined || focusApprovalsSignal <= 0) {
+      return;
+    }
+    setActiveTab("approvals");
+  }, [focusApprovalsSignal]);
 
   const isStudio = mode === "studio";
   // PR-3.7 (FR-3.15): approvals are hidden while scrubbed off-now. If Approvals

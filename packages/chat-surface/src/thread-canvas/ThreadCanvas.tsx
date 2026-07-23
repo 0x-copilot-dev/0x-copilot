@@ -142,6 +142,19 @@ export interface ThreadCanvasProps {
    */
   readonly resolveSurfaceState?: (uri: string) => SurfacePayload | undefined;
   /**
+   * SURFACES_V2 integration mount pass: a host-composed replacement for the
+   * center surface, keyed on the active surface. Only consulted on the v2 path
+   * (`resolveSurfaceState` wired) and while live (`scrubbedSeq === null`). When
+   * it returns a node, that node renders IN PLACE OF the `TcSurfaceFrame` +
+   * `TcSurfaceMount` + tier-toggle + status-strip block — this is how the
+   * kind-specific v2 surfaces (`TcStagedDraftSurface` / `TcStagedTableSurface` /
+   * `ReceiptSurface`) mount, since they render from ledger folds + host callbacks
+   * rather than through the pure adapter registry. `null` ⇒ the default v2 mount
+   * path (record/message/table/call/raw surfaces via the adapter). Omitted ⇒
+   * byte-identical to the current v2 canvas (host never composed an override).
+   */
+  readonly renderSurfaceOverride?: (uri: string) => ReactNode | null;
+  /**
    * SURFACES_V2 (PRD-B2): host clipboard + file-save callbacks for the raw
    * fallback's Copy / Download. Substrate-owned (the package never touches the
    * clipboard or the filesystem). Only consulted inside the v2 canvas subtree;
@@ -227,6 +240,7 @@ export function ThreadCanvas(props: ThreadCanvasProps): ReactElement {
     onSuggestChanges,
     editSlot,
     resolveSurfaceState,
+    renderSurfaceOverride,
     onCopyText,
     onSaveFile,
     activeViewState,
@@ -343,6 +357,14 @@ export function ThreadCanvas(props: ThreadCanvasProps): ReactElement {
   // the ledger-hydration resolver (B1's signal). All B2 chrome mounts strictly
   // inside this condition, so flag-off is byte-identical.
   const surfacesV2On = resolveSurfaceState !== undefined;
+  // Integration mount pass: the host-composed, kind-specific v2 surface for the
+  // active tab (staged draft/table, receipt). Only consulted on the v2 path and
+  // while live — scrub time-travel for these surfaces is out of scope, and the
+  // scrubbed surface column already shows the diff overlay, not the live mount.
+  const surfaceOverride =
+    surfacesV2On && scrubbedSeq === null && renderSurfaceOverride !== undefined
+      ? (renderSurfaceOverride(activeUri) ?? null)
+      : null;
   // Pure PEERS of `useEventProjector` over the SAME events array (one-projector
   // invariant). Computed unconditionally (Rules of Hooks); only READ when v2 is
   // on, so the flag-off path pays nothing but the memo.
@@ -428,7 +450,14 @@ export function ThreadCanvas(props: ThreadCanvasProps): ReactElement {
           data-visible={showSurfaceColumn ? "true" : "false"}
           style={surfaceSlotStyle(showSurfaceColumn)}
         >
-          {surfacesV2On ? (
+          {surfaceOverride !== null ? (
+            <div
+              data-testid="tc-surface-v2-override"
+              style={surfaceOverrideStyle}
+            >
+              {surfaceOverride}
+            </div>
+          ) : surfacesV2On ? (
             <>
               <TcSurfaceFrame
                 provenance={activeProvenance}
@@ -675,6 +704,15 @@ const surfaceSlotStyle = (visible: boolean): CSSProperties => ({
   overflow: "auto",
   padding: 16,
 });
+
+// The v2 kind-specific surface override fills the surface column and scrolls its
+// own content (staged tables / receipts can be long).
+const surfaceOverrideStyle: CSSProperties = {
+  display: "flex",
+  flexDirection: "column",
+  minWidth: 0,
+  minHeight: 0,
+};
 
 const chatSlotStyle = (_mode: ThreadMode): CSSProperties => ({
   gridArea: "chat",
