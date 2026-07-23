@@ -298,12 +298,33 @@ class ProviderKeysHydrator:
 # ---------------------------------------------------------------------------
 
 
+class TrustedBackendLaneError(RuntimeError):
+    """The trusted-backend lane is half-configured.
+
+    Raised at wiring time (app / worker startup) when exactly one of
+    ``BACKEND_BASE_URL`` / ``ENTERPRISE_SERVICE_TOKEN`` is set. A half-configured
+    lane silently degrades the per-user policy snapshot — and with it every
+    user's decrypted BYOK provider keys — to empty, so every BYOK run fails at
+    create with a misleading "add a key" error. Failing fast turns a silent,
+    per-run black hole into a loud, one-time startup error that names the fix.
+    """
+
+
 class UserPoliciesResolverFactory:
     """Select the appropriate resolver from environment configuration.
 
-    Returns ``NullUserPoliciesResolver`` when ``BACKEND_BASE_URL``,
-    ``ENTERPRISE_SERVICE_TOKEN``, or an ``http_client`` are missing, so callers
-    always get a functioning resolver regardless of the deployment configuration.
+    The trusted-backend lane requires **both** ``BACKEND_BASE_URL`` and
+    ``ENTERPRISE_SERVICE_TOKEN``:
+
+    * **both set** → :class:`HttpUserPoliciesResolver` (BYOK keys reach runs).
+    * **neither set** → :class:`NullUserPoliciesResolver` (an env-key-only /
+      standalone deployment; BYOK is simply unavailable, never silently broken).
+    * **exactly one set** → :class:`TrustedBackendLaneError` (a deployment
+      misconfiguration — fail loud rather than silently drop every user's keys).
+
+    The old behaviour degraded partial configuration to Null with only a log
+    warning, which is exactly how self-host prod (token set, URL unset) shipped a
+    silent BYOK black hole. This factory refuses to paper over that.
     """
 
     @classmethod
@@ -312,29 +333,35 @@ class UserPoliciesResolverFactory:
         *,
         http_client: httpx.AsyncClient | None = None,
     ) -> UserPoliciesResolver:
-        """Return the best available resolver given the current environment."""
+        """Return the resolver for the current environment, or fail loud on misconfig."""
         backend_url = os.environ.get(_Env.BACKEND_BASE_URL, "").strip()
         service_token = os.environ.get(_Env.SERVICE_TOKEN, "").strip()
-        if not backend_url or not service_token or http_client is None:
-            if backend_url or service_token:
-                # Partial configuration is almost always a deployment bug: the
-                # snapshot (and with it BYOK provider keys) silently degrades
-                # to empty and every keyless run fails at create. Say so once,
-                # loudly, at wiring time instead of per-run.
-                _LOGGER.warning(
-                    "user-policies resolver disabled by partial configuration "
-                    "(backend_base_url_set=%s service_token_set=%s "
-                    "http_client_set=%s); BYOK provider keys will NOT reach runs",
-                    bool(backend_url),
-                    bool(service_token),
-                    http_client is not None,
+        url_set = bool(backend_url)
+        token_set = bool(service_token)
+        if url_set and token_set:
+            if http_client is None:
+                # Config is present but no client was supplied — a wiring bug in
+                # the caller, not a deployment misconfig. Fail loud all the same:
+                # returning Null here would re-open the silent-drop hole.
+                raise TrustedBackendLaneError(
+                    "Trusted-backend lane is configured (BACKEND_BASE_URL + "
+                    "ENTERPRISE_SERVICE_TOKEN) but UserPoliciesResolverFactory.default() "
+                    "was called without an http_client. Pass BackendHttpPool.get()."
                 )
-            return NullUserPoliciesResolver()
-        return HttpUserPoliciesResolver(
-            http_client=http_client,
-            backend_url=backend_url,
-            service_token=service_token,
-        )
+            return HttpUserPoliciesResolver(
+                http_client=http_client,
+                backend_url=backend_url,
+                service_token=service_token,
+            )
+        if url_set or token_set:
+            raise TrustedBackendLaneError(
+                "Trusted-backend lane is half-configured "
+                f"(BACKEND_BASE_URL set={url_set}, ENTERPRISE_SERVICE_TOKEN set={token_set}). "
+                "BYOK provider keys would be silently dropped from every run. Set BOTH "
+                "to enable BYOK (see desktop service-env / self-host compose), or NEITHER "
+                "for an env-key-only deployment."
+            )
+        return NullUserPoliciesResolver()
 
 
 __all__ = [
@@ -343,6 +370,7 @@ __all__ = [
     "ProviderEndpointsParser",
     "ProviderKeysHydrator",
     "ProviderKeysParser",
+    "TrustedBackendLaneError",
     "UserPoliciesResolver",
     "UserPoliciesResolverFactory",
 ]

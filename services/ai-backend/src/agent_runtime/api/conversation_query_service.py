@@ -117,11 +117,19 @@ class ConversationQueryService:
         self._model_resolver = model_resolver
         self._pricing_catalog = ModelPricingCatalog.from_litellm()
 
-    async def list_models(self, *, org_id: str | None = None) -> ModelCatalogResponse:
+    async def list_models(
+        self,
+        *,
+        org_id: str | None = None,
+        user_key_providers: frozenset[str] = frozenset(),
+    ) -> ModelCatalogResponse:
         """Return the model catalog with per-provider credential + enablement flags.
 
-        The catalog is assembled in-process from ``RuntimeSettings`` (the
-        ``configured`` flags reflect provider-key presence at startup); each
+        The catalog is assembled in-process from ``RuntimeSettings``. Each item's
+        ``configured`` flag reflects a usable credential from either source the run
+        path accepts — a deployment env key **or** one of ``user_key_providers``
+        (the caller's stored BYOK provider slugs, resolved by the route from the
+        same per-(org, user) policies resolver the run-create gate uses). Each
         item's ``enabled`` flag is then resolved from the org's workspace
         ``enabled_models`` curation (PR-2C) — an explicit selection, or the
         newest-per-provider default when the workspace hasn't curated.
@@ -130,7 +138,9 @@ class ConversationQueryService:
         once, so no further deduplication happens here.
         """
 
-        unique_models = ModelCatalog.build(self._settings)
+        unique_models = ModelCatalog.build(
+            self._settings, user_key_providers=user_key_providers
+        )
         defaults = (
             await self._persistence.get_workspace_defaults(org_id=org_id)
             if org_id is not None
