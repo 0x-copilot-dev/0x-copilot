@@ -93,7 +93,11 @@ Backend-only, self-contained, tested.
 - [x] web Settings model-select: `webModelCatalog.ts` **deleted**; `SettingsBinder`
       reads the one catalog via `listModels()` (`configured` = env ∪ BYOK from M1),
       dropping the separate provider-key probe. Frontend `tsc` 0 errors.
-- [ ] desktop composer: delete `CURATED_CLOUD_MODELS` (`desktopModelCatalog`); read the catalog.
+- [x] desktop: `CURATED_CLOUD_MODELS` **deleted**; all 3 consumers (Run composer
+      `useRunComposerBindings`, Settings model-select `SettingsMount`, onboarding
+      `useOnboardingComposerModels`) read the one catalog via `/v1/agent/models`
+      (`mergeCatalog` folds fetched cloud + local; `configured` = env ∪ BYOK from
+      M1). Desktop `tsc` 0 errors; **1095 desktop tests pass**.
 - [ ] web-cockpit + Settings pickers: add explicit `kind === "chat"` filter (no-op
       today — catalog is chat-only — but the enforceable invariant; needs the
       worktree-package symlink so `.kind` resolves).

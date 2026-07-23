@@ -75,6 +75,7 @@ import type {
   UpdateNotificationDefaultsRequest,
   UpdateWorkspaceDefaultsRequest,
   UserId,
+  ModelCatalogModel,
   UserProfile,
   WorkspaceDefaultsResponse,
 } from "@0x-copilot/api-types";
@@ -88,7 +89,7 @@ import {
 import type { LinkWalletOutcome } from "@0x-copilot/chat-surface";
 
 import { SECURE_STORAGE_CHANNELS } from "../main/services/secure-storage-channels";
-import { buildModelCatalog } from "./composer/desktopModelCatalog";
+import { mergeCatalog } from "./composer/desktopModelCatalog";
 
 interface SecureStorageStatus {
   readonly mode?: string;
@@ -394,35 +395,30 @@ export function SettingsMount({
   // (GET on mount, read-merge-PUT on change — the PUT is a full-document
   // replace). Options come from the same curated catalog as the Run composer,
   // gated by which BYOK providers actually have keys.
-  const [mbConfiguredProviders, setMbConfiguredProviders] = useState<
-    ReadonlySet<string>
-  >(new Set());
-  const [mbProvidersKnown, setMbProvidersKnown] = useState(false);
+  const [mbCatalogModels, setMbCatalogModels] = useState<
+    readonly ModelCatalogModel[]
+  >([]);
   const [workspaceDefaults, setWorkspaceDefaults] =
     useState<WorkspaceDefaultsResponse | null>(null);
 
   useEffect(() => {
     let cancelled = false;
-    void providerKeysPort
-      .list()
-      .then((keys) => {
-        if (cancelled) return;
-        const providers = new Set<string>();
-        for (const key of keys) {
-          providers.add(key.provider);
-          // Key store speaks `google`; catalog + runtime speak `gemini`.
-          if (key.provider === "google") providers.add("gemini");
-        }
-        setMbConfiguredProviders(providers);
-        setMbProvidersKnown(true);
+    void transport
+      .request<{ readonly models?: readonly ModelCatalogModel[] }>({
+        method: "GET",
+        path: "/v1/agent/models",
+      })
+      .then((res) => {
+        if (!cancelled) setMbCatalogModels(res.models ?? []);
       })
       .catch(() => {
-        // Fail open (catalog stays selectable); the PUT is the backstop.
+        // Fail open (empty select); the PUT is the backstop.
+        if (!cancelled) setMbCatalogModels([]);
       });
     return () => {
       cancelled = true;
     };
-  }, [providerKeysPort]);
+  }, [transport]);
 
   useEffect(() => {
     let cancelled = false;
@@ -443,13 +439,8 @@ export function SettingsMount({
   }, [transport]);
 
   const mbCatalog = useMemo(
-    () =>
-      buildModelCatalog({
-        configuredProviders: mbConfiguredProviders,
-        providersKnown: mbProvidersKnown,
-        localModelNames: [],
-      }),
-    [mbConfiguredProviders, mbProvidersKnown],
+    () => mergeCatalog({ cloudModels: mbCatalogModels, localModelNames: [] }),
+    [mbCatalogModels],
   );
   // The select's value: the catalog id when the persisted default matches a
   // curated entry, else the bare model_name (rendered as a synthetic option).
