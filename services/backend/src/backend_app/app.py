@@ -1773,11 +1773,20 @@ def create_app(
     # two. Read-only; no audit row beyond the per-fetch access log.
     # Phase 2 BYOK adds the optional decrypted ``provider_keys`` section
     # to the same snapshot (service-token-only lane).
+    # Resolve the connectors store early: the aggregate runtime-policies route
+    # reads per-connector write-policy overrides from it (PRD-C1), and the
+    # Phase-11 connectors destination (wired further below) reuses this exact
+    # instance so a PATCH-written override is visible on the same run.
+    resolved_connectors_store: ConnectorsStore = (
+        connectors_store or InMemoryConnectorsStore()  # type: ignore[assignment]
+    )
+    app.state.connectors_store = resolved_connectors_store
     register_runtime_policies_routes(
         app,
         tool_use_store=resolved_policy_store,
         privacy_store=resolved_privacy_store,
         provider_keys_service=provider_keys_service,
+        connectors_store=resolved_connectors_store,
     )
     # PR B3 / 8.0.3g — personal API keys (atlas_pk_… bearer for CI /
     # scripts). Plaintext is shown ONCE on creation; the server stores
@@ -1924,10 +1933,9 @@ def create_app(
     # from the package-local ``catalog.yaml``; a soft-fail wraps the
     # load so a missing file degrades to an empty Available tab rather
     # than a boot crash.
-    resolved_connectors_store: ConnectorsStore = (
-        connectors_store or InMemoryConnectorsStore()  # type: ignore[assignment]
-    )
-    app.state.connectors_store = resolved_connectors_store
+    # ``resolved_connectors_store`` is resolved + stashed on ``app.state``
+    # earlier (beside the runtime-policies route registration) so the aggregate
+    # sees the same instance; reuse it here — do NOT re-create it.
     try:
         connector_catalog = load_catalog()
     except Exception:

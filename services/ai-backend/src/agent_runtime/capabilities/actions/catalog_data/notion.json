@@ -1,0 +1,19 @@
+{
+  "catalog_version": 1,
+  "connector": "notion",
+  "operations": {
+    "get_page": "read",
+    "get_database": "read",
+    "query_database": "read",
+    "list_pages": "read",
+    "search": "read",
+    "get_block_children": "read",
+    "create_page": "write",
+    "update_page": "write",
+    "append_block": "write",
+    "update_block": "write",
+    "create_database": "write",
+    "delete_block": "destructive",
+    "archive_page": "destructive"
+  }
+}

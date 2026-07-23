@@ -4504,6 +4504,7 @@ export type {
 export type {
   Connector,
   ConnectorAccessMode,
+  ConnectorWritePolicy,
   ConnectorAuditEntry,
   ConnectorAuditResponse,
   ConnectorAvailability,
@@ -4525,6 +4526,8 @@ export type {
   RefreshConnectorResponse,
   SetConnectorAccessModeRequest,
   SetConnectorAccessModeResponse,
+  SetConnectorWritePolicyRequest,
+  SetConnectorWritePolicyResponse,
   StartConnectorOAuthResponse,
   TestFireWebhookRequest,
   Webhook,
@@ -4540,6 +4543,9 @@ export type {
 // redesign, Phase 4). Value export so the 3-way segment + tests can
 // enumerate the modes without redeclaring them.
 export { CONNECTOR_ACCESS_MODES } from "./connectors";
+// Runtime SSOT tuple for the per-connector write-policy union (PRD-C1). Value
+// export so the posture control + tests can enumerate the values.
+export { CONNECTOR_WRITE_POLICIES } from "./connectors";
 // AC9 — Desktop MCP connector OAuth transport (desktop-only variant types).
 // These do NOT touch the shared web OAuth shapes above; they live in a
 // separate module so the shipped web redirect flow stays byte-identical while

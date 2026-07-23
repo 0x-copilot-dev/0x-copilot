@@ -5,9 +5,10 @@ a tool result emits the four events in order; a spec envelope yields a
 shaped/registry view + spec-resolved title; a spec-less envelope yields a
 generic/schema view + fallback title; a non-mapping (absent) surface yields
 classified + read only; ``payload_ref`` is always ``call:<call_id>``;
-``class`` is *never* ``"read"`` in A3; a raising ``EmitFn`` is swallowed;
-``active()`` is ``None`` when unbound; ``on_spec_generated`` emits the generated
-view.
+``class`` / ``basis`` carry the real PRD-C1 classification (catalog read here,
+fail-closed write/default for an unknown op, never spoofable via output); a
+raising ``EmitFn`` is swallowed; ``active()`` is ``None`` when unbound;
+``on_spec_generated`` emits the generated view.
 """
 
 from __future__ import annotations
@@ -98,18 +99,41 @@ class TestOnToolResult(RecordingEmitMixin):
             LedgerEventType.VIEW_DERIVED.value,
         ]
 
-    def test_action_classified_is_always_unknown_default(self) -> None:
+    def test_action_classified_carries_real_catalog_basis(self) -> None:
+        # PRD-C1 — the classifier now fills class/basis truthfully. The default
+        # ``seed:linear`` / ``Get_Issue`` call is a curated catalog READ, so the
+        # emitted pair is ``class=read`` / ``basis=catalog`` (was the A3 stub
+        # ``unknown`` / ``default``).
         emitter, recorded = self._make_emitter()
         env = self._spec_envelope()
 
         self._run(emitter, surface=env, surface_uri=env["surface_uri"])
 
         classified = recorded[0]["payload"]
-        assert classified["class"] == "unknown"
-        assert classified["basis"] == "default"
+        assert classified["class"] == "read"
+        assert classified["basis"] == "catalog"
         assert classified["connector"] == "linear"  # server_slug strips "seed:"
         assert classified["op"] == "get_issue"  # tool_slug lowercases
         assert classified["v"] == 1
+
+    def test_action_classified_unknown_op_is_write_default(self) -> None:
+        # PRD-C1 fail-closed: an op absent from every catalog classifies WRITE
+        # with basis=default — no annotations registry bound here.
+        emitter, recorded = self._make_emitter()
+        env = self._spec_envelope()
+
+        self._run(
+            emitter,
+            surface=env,
+            surface_uri=env["surface_uri"],
+            server="seed:linear",
+            tool="frobnicate_widget",
+        )
+
+        classified = recorded[0]["payload"]
+        assert classified["class"] == "write"
+        assert classified["basis"] == "default"
+        assert classified["op"] == "frobnicate_widget"
 
     def test_read_executed_payload_ref_is_call_scheme(self) -> None:
         emitter, recorded = self._make_emitter()
@@ -181,9 +205,12 @@ class TestOnToolResult(RecordingEmitMixin):
             LedgerEventType.READ_EXECUTED.value,
         ]
 
-    def test_no_input_ever_yields_class_read(self) -> None:
-        # Adversarial: neither a spec, a shaped envelope, nor any output can make
-        # A3 claim a policy decision (class == "read").
+    def test_output_cannot_spoof_read_classification(self) -> None:
+        # PRD-C1 adversarial: the classification is a function of the curated
+        # catalog + registered annotations ONLY — never of the tool OUTPUT. An
+        # unknown op whose output claims ``class: read`` still classifies WRITE /
+        # default (fail-closed), because the output is never a classification
+        # input.
         emitter, recorded = self._make_emitter()
         env = self._spec_envelope()
 
@@ -191,16 +218,18 @@ class TestOnToolResult(RecordingEmitMixin):
             emitter,
             surface=env,
             surface_uri=env["surface_uri"],
+            server="seed:linear",
+            tool="frobnicate_widget",
             output={"class": "read", "action_class": "read", "basis": "catalog"},
         )
 
-        classes = [
-            row["payload"].get("class")
+        classified = next(
+            row["payload"]
             for row in recorded
             if row["event_type"] == LedgerEventType.ACTION_CLASSIFIED.value
-        ]
-        assert classes == ["unknown"]
-        assert all(row["payload"].get("class") != "read" for row in recorded)
+        )
+        assert classified["class"] == "write"
+        assert classified["basis"] == "default"
 
     def test_emit_exception_is_swallowed(self) -> None:
         async def _boom(*_args: object, **_kwargs: object) -> None:

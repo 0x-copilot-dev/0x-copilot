@@ -67,8 +67,13 @@ class TestAggregateShape:
         assert response.status_code == 200, response.text
         body = response.json()
         # tool_use exposes both scopes as empty dicts; the AI backend's
-        # snapshot factory falls through to deployment defaults.
-        assert body["tool_use"] == {"workspace": {}, "user": {}}
+        # snapshot factory falls through to deployment defaults. PRD-C1 adds the
+        # per-connector override lane — empty when no override is stored.
+        assert body["tool_use"] == {
+            "workspace": {},
+            "user": {},
+            "connector_write_policy": {},
+        }
         # privacy hydrates deployment defaults.
         assert body["privacy"]["training_opt_out"] is True
         assert body["privacy"]["share_metadata"] is True
@@ -147,6 +152,81 @@ class TestAggregateShape:
         assert body["privacy"]["training_opt_out"] is False
         assert body["privacy"]["region"] == "us-east-1"
         assert body["privacy"]["retention_days"] == 180
+
+
+class TestConnectorWritePolicySection:
+    """PRD-C1 — the aggregate carries the per-connector write-policy overrides,
+    keyed by connector slug, only for connectors with a non-NULL override."""
+
+    def _seed(self, store, *, slug: str, write_policy):  # type: ignore[no-untyped-def]
+        from backend_app.connectors.store import (
+            ConnectorScopeEntry,
+            McpUpsertInput,
+        )
+
+        record = store.upsert_from_mcp_registration(
+            McpUpsertInput(
+                tenant_id="org_acme",
+                owner_user_id="usr_sarah",
+                slug=slug,
+                display_name=slug.title(),
+                description=f"{slug} connector",
+                status="connected",
+                status_reason=None,
+                scopes=(ConnectorScopeEntry(scope=f"{slug}.read", granted=True),),
+                last_sync_at=None,
+                last_error_at=None,
+                vault_ref="vault:abc",
+            )
+        )
+        if write_policy is not None:
+            record = record.model_copy(update={"write_policy": write_policy})
+            store.update_connector(record)
+        return record
+
+    def _client_with_connectors(self, store) -> TestClient:  # type: ignore[no-untyped-def]
+        app = create_app(
+            configure_logging_on_create=False,
+            configure_telemetry_on_create=False,
+            identity_store=_seeded_identity(),
+            connectors_store=store,
+        )
+        return TestClient(app)
+
+    def test_empty_map_when_no_overrides(self) -> None:
+        from backend_app.connectors.store import InMemoryConnectorsStore
+
+        store = InMemoryConnectorsStore()
+        self._seed(store, slug="linear", write_policy=None)
+        client = self._client_with_connectors(store)
+        response = client.get("/internal/v1/policies/runtime", params=_params())
+        assert response.status_code == 200, response.text
+        assert response.json()["tool_use"]["connector_write_policy"] == {}
+
+    def test_overridden_connectors_only_appear(self) -> None:
+        from backend_app.connectors.store import (
+            ConnectorWritePolicy,
+            InMemoryConnectorsStore,
+        )
+
+        store = InMemoryConnectorsStore()
+        self._seed(store, slug="linear", write_policy=ConnectorWritePolicy.ALLOW_ALWAYS)
+        self._seed(store, slug="github", write_policy=ConnectorWritePolicy.ASK_FIRST)
+        self._seed(store, slug="notion", write_policy=None)  # no override -> absent
+        client = self._client_with_connectors(store)
+        response = client.get("/internal/v1/policies/runtime", params=_params())
+        assert response.status_code == 200, response.text
+        assert response.json()["tool_use"]["connector_write_policy"] == {
+            "linear": "allow_always",
+            "github": "ask_first",
+        }
+
+    def test_empty_map_when_store_not_wired(self) -> None:
+        # Backward compat: the default in-memory store has no rows -> {}.
+        client = _client()
+        response = client.get("/internal/v1/policies/runtime", params=_params())
+        assert response.status_code == 200
+        assert response.json()["tool_use"]["connector_write_policy"] == {}
 
 
 class TestProviderKeysSection:

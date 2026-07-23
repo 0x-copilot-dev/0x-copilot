@@ -1,0 +1,19 @@
+{
+  "catalog_version": 1,
+  "connector": "linear",
+  "operations": {
+    "get_issue": "read",
+    "list_issues": "read",
+    "list_projects": "read",
+    "get_project": "read",
+    "list_teams": "read",
+    "search_issues": "read",
+    "create_issue": "write",
+    "update_issue": "write",
+    "add_comment": "write",
+    "assign_issue": "write",
+    "archive_issue": "write",
+    "delete_issue": "destructive",
+    "delete_project": "destructive"
+  }
+}

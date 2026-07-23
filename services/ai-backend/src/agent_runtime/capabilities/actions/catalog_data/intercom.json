@@ -1,0 +1,18 @@
+{
+  "catalog_version": 1,
+  "connector": "intercom",
+  "operations": {
+    "list_conversations": "read",
+    "get_conversation": "read",
+    "list_contacts": "read",
+    "get_contact": "read",
+    "search_conversations": "read",
+    "reply_conversation": "write",
+    "create_conversation": "write",
+    "add_note": "write",
+    "assign_conversation": "write",
+    "close_conversation": "write",
+    "delete_conversation": "destructive",
+    "delete_contact": "destructive"
+  }
+}
