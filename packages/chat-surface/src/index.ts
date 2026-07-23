@@ -1191,6 +1191,29 @@ export {
 } from "./thread-canvas";
 // === end PRD-D3 ===
 
+// === Surfaces v2 — PRD-E2 (cross-run Approvals queue + Agents fleet) ===
+// Read-side only: a pure selector over the SAME `session.events` array
+// (`projectPendingCards`, a peer of `projectApprovals`/`projectLedger`), one new
+// fetch through the Transport port (`usePendingWork`, the cross-run merge), and
+// kit-only presentational cards/chip. Flag-off byte-identical — the host never
+// constructs `pendingV2` when the client flag is off, so the rail issues zero
+// new requests and renders today's bytes. Mounting is the final integration pass.
+export {
+  projectPendingCards,
+  type PendingCard,
+  usePendingWork,
+  type UsePendingWorkResult,
+  PendingCounterChip,
+  type PendingCounterChipProps,
+} from "./destinations/run";
+export {
+  PendingCardList,
+  type PendingCardListProps,
+  AgentFleetList,
+  type AgentFleetListProps,
+} from "./workspace";
+// === end PRD-E2 ===
+
 // === Surfaces v2 — PRD-E1 receipt + sources (client) ===
 // The run's accountability artifacts, both pure folds of the Work Ledger:
 // `projectReceipt` (→ the `ReceiptSurface`) and `projectLedgerSources`
