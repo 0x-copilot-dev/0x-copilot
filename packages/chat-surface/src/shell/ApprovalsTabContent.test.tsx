@@ -5,19 +5,13 @@ import type {
   TenantId,
   UserId,
 } from "@0x-copilot/api-types";
-import {
-  fireEvent,
-  render,
-  screen,
-  waitFor,
-  within,
-} from "@testing-library/react";
+import { fireEvent, render, screen, within } from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
 import { RouterProvider } from "../providers/RouterProvider";
 import {
-  __resetItemRefRegistryForTests,
-  registerItemRefResolver,
+  __resetItemRouteRegistryForTests,
+  registerItemRoute,
 } from "../refs/registry";
 import type { ArtifactRoute, Router } from "../routing/router";
 // TODO(merge): rewire to "@0x-copilot/api-types" AssignedApproval
@@ -26,7 +20,7 @@ import type { Approval } from "../thread-canvas/_approvals-stub";
 import { ApprovalsTabContent } from "./ApprovalsTabContent";
 
 afterEach(() => {
-  __resetItemRefRegistryForTests();
+  __resetItemRouteRegistryForTests();
 });
 
 const NOW = Date.parse("2026-05-17T12:00:00.000Z");
@@ -59,11 +53,10 @@ function makeApproval(overrides: Partial<Approval> = {}): Approval {
 }
 
 function renderApprovals(approvals: ReadonlyArray<Approval>): void {
-  registerItemRefResolver("approval", async (id) => ({
-    label: `Approval ${id}`,
-    icon: null,
-    route: { kind: "chat", conversationId: "x" } as ArtifactRoute,
-  }));
+  registerItemRoute(
+    "approval",
+    () => ({ kind: "chat", conversationId: "x" }) as ArtifactRoute,
+  );
   render(
     <RouterProvider router={noopRouter}>
       <ApprovalsTabContent approvals={approvals} now={NOW} />
@@ -150,10 +143,8 @@ describe("<ApprovalsTabContent>", () => {
     ]);
     const row = screen.getByTestId("approvals-tab-row-appr_a");
     expect(row).toHaveAttribute("data-state", "pending");
-    // ItemLink resolves async → wait for it to appear.
-    await waitFor(() =>
-      expect(within(row).getByTestId("item-link")).toBeInTheDocument(),
-    );
+    // ItemLink resolves synchronously now (route registered → anchor).
+    expect(within(row).getByTestId("item-link")).toBeInTheDocument();
     // StatusPill present with the right tone.
     const pill = within(row).getByTestId("status-pill");
     expect(pill).toHaveAttribute("data-status", "warning");
@@ -189,11 +180,10 @@ describe("<ApprovalsTabContent>", () => {
 
   it("calls onFilterChange when controlled by the host", () => {
     const onFilterChange = vi.fn();
-    registerItemRefResolver("approval", async (id) => ({
-      label: `Approval ${id}`,
-      icon: null,
-      route: { kind: "chat", conversationId: "x" } as ArtifactRoute,
-    }));
+    registerItemRoute(
+      "approval",
+      () => ({ kind: "chat", conversationId: "x" }) as ArtifactRoute,
+    );
     render(
       <RouterProvider router={noopRouter}>
         <ApprovalsTabContent

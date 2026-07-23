@@ -10,17 +10,6 @@
 // orchestrator rewires the stub to `@0x-copilot/api-types` at
 // merge time.
 
-import type {
-  LibraryDatasetId,
-  LibraryFileId,
-  LibraryPageId,
-} from "@0x-copilot/api-types";
-
-import {
-  hasItemRefResolver,
-  registerItemRefResolver,
-} from "../../refs/registry";
-
 import {
   LibraryDestination,
   type LibraryDestinationProps,
@@ -78,45 +67,6 @@ export type {
   SaveToLibraryDefaultKind,
   SaveToLibrarySource,
 } from "./_library-stub";
-
-// ===========================================================================
-// ItemRef resolver registration (cross-audit §3.3)
-// ===========================================================================
-//
-// Library owns three kinds. Each registers a stable fallback route here;
-// P7-B2 will introduce dedicated detail routes and replace these
-// resolvers with kind-specific labels + breadcrumbs.
-
-if (!hasItemRefResolver("library_file")) {
-  registerItemRefResolver("library_file", async (id: LibraryFileId) => ({
-    label: "File",
-    icon: null,
-    // No dedicated library detail route shape yet (P7-B2 lands the
-    // `{ kind: "library-item", id }` variant); the workspace route is
-    // the stable fallback so <ItemLink kind="library_file"> renders a
-    // real link rather than the deleted-chip.
-    route: { kind: "workspace", workspaceId: id as unknown as string },
-    breadcrumb: "Library",
-  }));
-}
-
-if (!hasItemRefResolver("library_page")) {
-  registerItemRefResolver("library_page", async (id: LibraryPageId) => ({
-    label: "Page",
-    icon: null,
-    route: { kind: "workspace", workspaceId: id as unknown as string },
-    breadcrumb: "Library",
-  }));
-}
-
-if (!hasItemRefResolver("library_dataset")) {
-  registerItemRefResolver("library_dataset", async (id: LibraryDatasetId) => ({
-    label: "Dataset",
-    icon: null,
-    route: { kind: "workspace", workspaceId: id as unknown as string },
-    breadcrumb: "Library",
-  }));
-}
 
 // === P7-B2 detail + preview + page editor ===
 export {

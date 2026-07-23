@@ -412,3 +412,80 @@ is at `0045` and `services/ai-backend` at `0001`.
   (Chats), **PRD-10** (Projects), and the Library/Todos cross-links being usable at all.
 - Deep-linkable completed runs (`/run/<conversationId>` from Activity), which a
   read-only run-detail surface would build on.
+
+## Implementation record
+
+_Landed on branch `claude/prd-04-run-identity` (worktree `.claude/worktrees/prd-04`).
+This section is the durable record; the workflow return value is not._
+
+### What landed
+
+All three seams shipped in full.
+
+- **Seam A — caller-owned display text.** `ItemRefResolved.label` deleted; `<ItemLink>`
+  gains a **required** `label: ReactNode` prop (no `deletedLabel`). ~35 call sites now pass
+  real names where the surface holds them (`item.subject`/`name`/`project.name`/`entry.title`/
+  `hit.title`), and a new shared `refs/itemKindNoun.ts` display-noun helper for the id-only
+  sites the Non-goals name. This is where the constant `label: "Run"` (and the other 10
+  hardcoded labels) died.
+- **Seam B — route-only, synchronous registry.** `refs/registry.ts` rewritten to
+  `registerItemRoute`/`resolveItemRoute`/`hasItemRoute`/`unregisterItemRoute`/
+  `__resetItemRouteRegistryForTests` + `ItemRoute{Already,Not}Registered`. The 11 in-package
+  `registerItemRefResolver` blocks deleted. Two **host** tables register at boot
+  (`apps/frontend/src/app/itemRoutes.ts` → `AppRoute`, `apps/desktop/renderer/itemRoutes.ts`
+  → `ArtifactRoute`), making `/settings#undefined` unreachable by construction. `ItemLink`
+  loses its effect/skeleton/error and its `color`+`fontSize` (README G11 accent-link policy —
+  no `.ui-link` recipe minted, inheritance is the recipe). An unregistered kind renders inert
+  `<span>` text.
+- **Seam C — real run titles in Activity.** `ActivityRunRow` gains `conversation_id`; the
+  byte-duplicated projection is hoisted to `destinations/activity/activityProjection.ts` (both
+  hosts import it). Activity rows render titles as plain text (no `ItemLink`); `onOpenRun`
+  widens to `(target:{conversationId,runId})` and fires on **every** row; both hosts open the
+  cockpit bound to the conversation. The ACT-06 parity guard is inverted and the
+  `row.done.name` anchor added.
+
+Blast-radius consumer migrated beyond the named scope: `apps/frontend/src/ports/
+NotificationWeb.{ts,test.ts}` moved off the removed `resolveItemRef` to the sync route API.
+
+### DoD status — 18 / 18 MET
+
+Every DoD item verified MET. Items 12, 13, 14, 17 carry a **residual note, not a gap**: the
+literal `npm run typecheck`/`npm run test --workspace @0x-copilot/{frontend,desktop,chat-surface}`
+commands exit non-zero **in the isolated worktree only**, because `node_modules` symlinks
+resolve the shared packages to the `main` checkout, which lacks this branch's new
+`hasItemRoute`/`registerItemRoute`/`projectActivityRows`/… exports and the new
+`ActivityRunRow.conversation_id` field. Every one of those failures resolves to **0 errors /
+full green** when the shared packages resolve to this worktree's `src` (verified package-locally,
+per the worktree gotcha) and will be green post-merge — the environment CI actually evaluates.
+
+### Regression surface (re-run at close-out — all green)
+
+- `@0x-copilot/api-types`: tests **49 passed**; `typecheck` **exit 0**.
+- `@0x-copilot/chat-surface`: tests **2682 passed** (worktree src); `lint` **exit 0**;
+  `tsc` with `api-types` resolved to worktree **exit 0**.
+- `@0x-copilot/frontend`: **1370 passed / 179 files** (worktree-aliased vitest config; the
+  naive command false-fails on the symlink).
+- `@0x-copilot/desktop`: **1089 passed + 1 todo / 93 files** (same).
+- design-parity: `render-live-activity.test.tsx` **2 passed**; DoD-9 jq
+  (`row.done.name` color/fontSize findings) prints **0**.
+
+### Deviations (also reported in the workflow return value)
+
+1. **Web `skill` renders inert.** The web rail's `ShellDestinationSlug` union has no
+   skills destination, so a web `skill`→route would not compile; per the PRD's own
+   "no mounted destination ⇒ inert text" rule the web table returns `null` for `skill`.
+   Desktop **does** route `skill` (`ArtifactRoute` has it).
+2. **`refs/itemKindNoun.ts` helper** instead of literally inlining the noun at each id-only
+   site. Mild reading of the Non-goals' "write the noun locally"; DRY'd ~15 display-only
+   fallbacks into one helper that produces **no route** and cannot shadow a real name — the
+   Seam-A architectural win is intact.
+3. **`NotificationWeb` migration** (not in the named Scope) — required blast-radius of the
+   Seam-B rename, not scope creep.
+
+### Left open
+
+- Nothing blocking. The DoD's `destinationBinders.tsx:367` line reference is **stale** (line
+  367 is now `ConnectorsBinder`; the real `ActivityBinder` seam is `256-278`) — cosmetic.
+- Future additive work this unblocks: denormalizing the id-only `ItemRef` sites to carry real
+  names, cross-destination links on web (PRD-09/10), and a deep-linkable read-only run-detail
+  surface.

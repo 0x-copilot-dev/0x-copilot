@@ -1,18 +1,18 @@
 import type { ConversationId, RunId } from "@0x-copilot/api-types";
-import { render, screen, waitFor } from "@testing-library/react";
+import { render, screen } from "@testing-library/react";
 import { afterEach, describe, expect, it } from "vitest";
 
 import { RouterProvider } from "../providers/RouterProvider";
 import {
-  __resetItemRefRegistryForTests,
-  registerItemRefResolver,
+  __resetItemRouteRegistryForTests,
+  registerItemRoute,
 } from "../refs/registry";
 import type { ArtifactRoute, Router } from "../routing/router";
 
 import { ActivityList, type ActivityRow } from "./ActivityList";
 
 afterEach(() => {
-  __resetItemRefRegistryForTests();
+  __resetItemRouteRegistryForTests();
 });
 
 const noopRouter: Router<ArtifactRoute> = {
@@ -25,16 +25,8 @@ const NOW = Date.parse("2026-05-17T12:00:00.000Z");
 
 describe("<ActivityList>", () => {
   it("renders one row per item with link + timestamp", async () => {
-    registerItemRefResolver("chat", async (id) => ({
-      label: `Chat ${id}`,
-      icon: null,
-      route: { kind: "chat", conversationId: id },
-    }));
-    registerItemRefResolver("run", async (id) => ({
-      label: `Run ${id}`,
-      icon: null,
-      route: { kind: "run", runId: id },
-    }));
+    registerItemRoute("chat", (id) => ({ kind: "chat", conversationId: id }));
+    registerItemRoute("run", (id) => ({ kind: "run", runId: id }));
     const rows: ReadonlyArray<ActivityRow> = [
       {
         key: "1",
@@ -63,9 +55,8 @@ describe("<ActivityList>", () => {
     );
     const timestamps = screen.getAllByTestId("activity-row-timestamp");
     expect(timestamps).toHaveLength(2);
-    await waitFor(() =>
-      expect(screen.getAllByTestId("item-link").length).toBeGreaterThan(0),
-    );
+    // Routes registered → interactive anchors, rendered synchronously.
+    expect(screen.getAllByTestId("item-link")).toHaveLength(2);
   });
 
   it("renders the time element with a dateTime attribute carrying the ISO string", () => {

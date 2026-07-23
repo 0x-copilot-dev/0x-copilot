@@ -18,15 +18,15 @@ import type { PaletteSearchPort } from "../ports/PaletteSearchPort";
 import { DeploymentProfileProvider } from "../providers/DeploymentProfileProvider";
 import { RouterProvider } from "../providers/RouterProvider";
 import {
-  __resetItemRefRegistryForTests,
-  registerItemRefResolver,
+  __resetItemRouteRegistryForTests,
+  registerItemRoute,
 } from "../refs/registry";
 import type { ArtifactRoute, Router } from "../routing/router";
 
 import { CommandPalette } from "./CommandPalette";
 
 afterEach(() => {
-  __resetItemRefRegistryForTests();
+  __resetItemRouteRegistryForTests();
   vi.useRealTimers();
 });
 
@@ -316,11 +316,7 @@ describe("<CommandPalette>", () => {
   });
 
   it("activates an entity hit by clicking its ItemLink (router.navigate via registry)", async () => {
-    registerItemRefResolver("chat", async () => ({
-      label: "Acme renewal",
-      icon: null,
-      route: { kind: "chat", conversationId: "conv_001" },
-    }));
+    registerItemRoute("chat", (id) => ({ kind: "chat", conversationId: id }));
     const hits: ReadonlyArray<PaletteHit> = [
       {
         id: "hit_ent_1",
@@ -427,11 +423,7 @@ describe("<CommandPalette>", () => {
   });
 
   it("still routes an entity hit via its ItemLink when dispatch props are provided", async () => {
-    registerItemRefResolver("chat", async () => ({
-      label: "Acme renewal",
-      icon: null,
-      route: { kind: "chat", conversationId: "conv_001" },
-    }));
+    registerItemRoute("chat", (id) => ({ kind: "chat", conversationId: id }));
     const onNavigate = vi.fn();
     const onRunAction = vi.fn();
     const hits: ReadonlyArray<PaletteHit> = [

@@ -16,6 +16,7 @@ import type { CSSProperties, ReactElement, ReactNode } from "react";
 import type { ItemRefSnapshot } from "@0x-copilot/api-types";
 
 import { ItemLink } from "../refs/ItemLink";
+import { itemKindNoun } from "../refs/itemKindNoun";
 
 interface DocListBaseProps {
   /** Optional accessible label for the list. */
@@ -80,11 +81,7 @@ export function DocList<T>(
           >
             <ItemLink
               ref={snapshot.ref}
-              deletedLabel={
-                snapshot.display_label !== undefined
-                  ? `deleted: ${snapshot.display_label}`
-                  : undefined
-              }
+              label={snapshot.display_label ?? itemKindNoun(snapshot.ref.kind)}
             />
           </li>
         ))}

@@ -48,6 +48,7 @@ import { registerAll as registerSurfaceRenderers } from "@0x-copilot/surface-ren
 
 import { BootGate } from "./BootProgress";
 import { DestinationOutlet } from "./DestinationOutlet";
+import { registerDesktopItemRoutes } from "./itemRoutes";
 import { buildDesktopShellBinding } from "./shellBinding";
 import { FirstRunGate, FirstRunSurfaceMount } from "./FirstRunGate";
 import { PaletteHost } from "./PaletteHost";
@@ -59,6 +60,10 @@ import "../preload/window-bridge-types";
 
 registerGenericStructuredDiff();
 registerSurfaceRenderers();
+// PRD-04 Seam B — register the desktop cross-destination route table into the
+// shared <ItemLink> registry at renderer boot (the only place desktop routes
+// are registered; chat-surface registers none on import).
+registerDesktopItemRoutes();
 
 // Phase 6C tier-2 lifecycle: listen for install/uninstall/mark-broken
 // pushes from main and forward live boundary errors back. The bridge is
@@ -357,11 +362,11 @@ function ChatShellForSession(props: ChatShellForSessionProps): ReactElement {
             // The active conversation the cockpit binds to (durable identity
             // from the Router URL). `null` → a brand-new chat's empty composer.
             conversationId={activeConversationId}
-            // PRD-03 Move 3: Activity's open-run carries the row's run id.
-            // Interim: land on the Run cockpit (PRD-04 owns where a specific run
-            // navigates). The binder now FORWARDS the id; bootstrap ignoring it
-            // here is a deliberate, localized choice, not a silent discard.
-            onOpenRun={() => handleNavigate("run")}
+            // PRD-04 Seam C: Activity's open-run carries the row's
+            // { conversationId, runId }. Bind the cockpit onto the CONVERSATION
+            // (the cockpit binds by conversation id, not run id). Stops the old
+            // silent argument discard (`() => handleNavigate("run")`).
+            onOpenRun={(target) => openConversation(target.conversationId)}
             // Chats' "New chat" + Skills' "Run" — the cockpit front door, no id.
             // Dedicated new-chat intents (⌘N / palette) use openNewRun.
             onNewChat={() => handleNavigate("run")}

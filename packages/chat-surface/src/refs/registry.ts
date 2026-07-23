@@ -1,161 +1,136 @@
-// Cross-destination ItemRef resolver registry.
+// Cross-destination ItemRef ROUTE registry (PRD-04 Seam B).
 //
-// Source: cross-audit.md §3.3 (binding 2026-05-17). One module-singleton
-// indexed by `ItemKind`; each destination's `index.ts` registers its kind
-// on package import. No React context — resolution happens outside the
-// render tree (the `<ItemLink>` component pulls from it via a hook).
+// History: this registry used to conflate two facts it could not know — an
+// entity's DISPLAY NAME (per-entity, data-dependent, always already loaded by
+// the surface rendering the list) and the HOST's ROUTE (expressible only in the
+// host's own route union, which chat-surface deliberately does not depend on).
+// Because it was kind-level, substrate-agnostic, and asynchronous with no data
+// source, every implementation degenerated to a constant noun ("Run", "Chat",
+// …). PRD-04 splits the two:
 //
-// Why not a React context: the registry needs to be set up at module
-// init time, before any destination renders, AND it needs to be the
-// same instance everywhere (a `<CommandPalette>` floats over Chats and
-// must resolve Inbox refs). A module-singleton is the right shape; React
-// context would force every consumer to be inside a provider boundary.
-
-import type { ReactNode } from "react";
+//   * Display text is now the caller's job — the ItemLink component takes it as
+//     a required prop (Seam A).
+//   * This registry narrows to ROUTING ONLY, and becomes SYNCHRONOUS. It maps
+//     an `ItemKind` to a HOST route value. The return type is `unknown` because
+//     the route belongs to the host's union (web `AppRoute`, desktop
+//     `ArtifactRoute`); `<ItemLink>` hands it straight to `router.navigate`.
+//
+// Registration moves OUT of the chat-surface destinations and INTO one table
+// per host (`apps/frontend/src/app/itemRoutes.ts`,
+// `apps/desktop/renderer/itemRoutes.ts`), imported at boot. That is what makes
+// the old web `/settings#undefined` bug structurally impossible: the web table
+// can only emit `AppRoute`s, checked by `tsc`.
+//
+// A kind with NO registered route is not an error and not a "deleted" signal —
+// it renders as inert, non-navigable text (`<ItemLink>` falls back to a plain
+// <span>). "not navigable yet" and "deleted" are different facts; the old code
+// reported both as deletion.
+//
+// Still a module-singleton (not a React context): the registry must be set up
+// at boot, before any destination renders, and must be the same instance
+// everywhere (a floating ⌘K palette over Chats must resolve Inbox routes).
 
 import type { ItemKind, ItemRef } from "@0x-copilot/api-types";
 
-import type { ArtifactRoute } from "../routing/router";
+/**
+ * Per-kind route resolver. Receives the entity id and returns a HOST route
+ * value (`AppRoute` on web, `ArtifactRoute` on desktop) — typed as `unknown`
+ * here because chat-surface does not depend on either host union. `<ItemLink>`
+ * passes it straight to `router.navigate(route)`. Returning `null` means "no
+ * route for this id" → `<ItemLink>` renders inert text.
+ */
+export type ItemRouteResolver = (id: string) => unknown | null;
 
 /**
- * The resolved-display shape returned by a registered resolver.
- * Consumers (chiefly `<ItemLink>`) render an inline link from this.
- *
- * `route === null` is the deleted-item signal: the entity referenced
- * by the `ItemRef` no longer exists (or the caller doesn't have read
- * access). `<ItemLink>` renders a "deleted ${kind}" chip in that case
- * (cross-audit §5.3 cascade-on-delete default).
+ * Thrown by `registerItemRoute` when a route resolver is already registered for
+ * the kind and `replace: true` was not passed. A duplicate registration almost
+ * always means a host table was imported twice (test setup, hot-reload) — throw
+ * at boot rather than let one resolver silently shadow the other.
  */
-export interface ItemRefResolved {
-  readonly label: string;
-  readonly icon: ReactNode;
-  readonly route: ArtifactRoute | null;
-  readonly breadcrumb?: string;
-}
-
-/**
- * Per-kind resolver function. Receives the correctly branded id (the
- * conditional type extracts the matching `ItemRef` branch's id type).
- * Returns the display shape, or `null` when the entity can't be
- * resolved at all (network error, transient unavailability) — distinct
- * from `route === null` which is the "exists-but-deleted" signal.
- */
-export type ItemRefResolver<K extends ItemKind> = (
-  id: ItemRef extends infer R
-    ? R extends { kind: K; id: infer I }
-      ? I
-      : never
-    : never,
-) => Promise<ItemRefResolved | null>;
-
-/**
- * Thrown by `registerItemRefResolver` when a resolver is already
- * registered for the kind and `replace: true` was not passed.
- *
- * Destinations register their resolver at package-import time; a
- * duplicate registration almost always means a destination was loaded
- * twice (test setup, hot-reload, double-provider). Throwing surfaces
- * the bug at boot rather than letting one resolver silently shadow
- * the other at render time.
- */
-export class ItemRefResolverAlreadyRegistered extends Error {
+export class ItemRouteAlreadyRegistered extends Error {
   public readonly kind: ItemKind;
 
   constructor(kind: ItemKind) {
     super(
-      `ItemRefResolverAlreadyRegistered: "${kind}" — pass { replace: true } to override deliberately`,
+      `ItemRouteAlreadyRegistered: "${kind}" — pass { replace: true } to override deliberately`,
     );
-    this.name = "ItemRefResolverAlreadyRegistered";
+    this.name = "ItemRouteAlreadyRegistered";
     this.kind = kind;
   }
 }
 
 /**
- * Thrown by `resolveItemRef` when no resolver has been registered for
- * the ref's kind. Destinations import their `index.ts` to register;
- * if a host renders an `<ItemLink>` whose kind hasn't been wired up,
- * we want the host's developer to see this loudly at first render —
- * not a silent "—" or a swallowed promise rejection.
+ * Thrown by `resolveItemRoute` when no route resolver has been registered for
+ * the ref's kind. Callers that want the inert-text fallback must gate on
+ * `hasItemRoute(kind)` first (as `<ItemLink>` does); this error exists so a
+ * direct `resolveItemRoute` on an unwired kind is loud rather than silent.
  */
-export class ItemRefResolverNotRegistered extends Error {
+export class ItemRouteNotRegistered extends Error {
   public readonly kind: ItemKind;
 
   constructor(kind: ItemKind) {
     super(
-      `ItemRefResolverNotRegistered: "${kind}" — import the owning destination's index.ts to register`,
+      `ItemRouteNotRegistered: "${kind}" — register it in the host's itemRoutes table`,
     );
-    this.name = "ItemRefResolverNotRegistered";
+    this.name = "ItemRouteNotRegistered";
     this.kind = kind;
   }
 }
 
-// Module-singleton resolver table. Keyed by `ItemKind`. The value's
-// generic is erased here (the public API restores it at the boundary)
-// because TypeScript can't express "the resolver matches the key".
-const REGISTRY = new Map<
-  ItemKind,
-  (id: string) => Promise<ItemRefResolved | null>
->();
+// Module-singleton route table. Keyed by `ItemKind`.
+const REGISTRY = new Map<ItemKind, ItemRouteResolver>();
 
 /**
- * Register a resolver for one `ItemKind`. Throws
- * `ItemRefResolverAlreadyRegistered` on duplicate registration unless
- * `replace: true` is passed.
- *
- * Convention: destinations call this at module load (inside their
- * `index.ts`) so the registry is populated before any render.
+ * Register a route resolver for one `ItemKind`. Throws
+ * `ItemRouteAlreadyRegistered` on duplicate registration unless
+ * `replace: true` is passed. Hosts call this once at boot (from their
+ * `itemRoutes` table).
  */
-export function registerItemRefResolver<K extends ItemKind>(
-  kind: K,
-  resolver: ItemRefResolver<K>,
+export function registerItemRoute(
+  kind: ItemKind,
+  resolve: ItemRouteResolver,
   options?: { readonly replace?: boolean },
 ): void {
   if (REGISTRY.has(kind) && options?.replace !== true) {
-    throw new ItemRefResolverAlreadyRegistered(kind);
+    throw new ItemRouteAlreadyRegistered(kind);
   }
-  // Erase the per-kind id type at the storage boundary. The lookup-side
-  // matches by `kind`, so the id we hand back is structurally correct.
-  REGISTRY.set(
-    kind,
-    resolver as (id: string) => Promise<ItemRefResolved | null>,
-  );
+  REGISTRY.set(kind, resolve);
 }
 
 /**
- * Remove a registered resolver. Returns `true` if a resolver was
- * removed, `false` if none was registered. Intended for test cleanup
- * (`afterEach`) and hot-reload edge cases.
+ * Remove a registered route resolver. Returns `true` if one was removed,
+ * `false` if none was registered. Intended for test cleanup and hot-reload.
  */
-export function unregisterItemRefResolver(kind: ItemKind): boolean {
+export function unregisterItemRoute(kind: ItemKind): boolean {
   return REGISTRY.delete(kind);
 }
 
 /**
- * Clear all resolvers. Test-only helper; production code should never
+ * Clear all route resolvers. Test-only helper; production code should never
  * call this.
  */
-export function __resetItemRefRegistryForTests(): void {
+export function __resetItemRouteRegistryForTests(): void {
   REGISTRY.clear();
 }
 
 /**
- * Look up the resolver for `ref.kind` and invoke it. Throws
- * `ItemRefResolverNotRegistered` when no resolver is registered for
- * the kind (so missing wiring is loud, not silent).
+ * Resolve `ref` to a HOST route value, synchronously. Throws
+ * `ItemRouteNotRegistered` when no resolver is registered for the kind — gate
+ * on `hasItemRoute(ref.kind)` first if you want the inert-text fallback instead
+ * (that is exactly what `<ItemLink>` does).
  */
-export function resolveItemRef(ref: ItemRef): Promise<ItemRefResolved | null> {
-  const resolver = REGISTRY.get(ref.kind);
-  if (resolver === undefined) {
-    return Promise.reject(new ItemRefResolverNotRegistered(ref.kind));
+export function resolveItemRoute(ref: ItemRef): unknown | null {
+  const resolve = REGISTRY.get(ref.kind);
+  if (resolve === undefined) {
+    throw new ItemRouteNotRegistered(ref.kind);
   }
-  return resolver(ref.id);
+  return resolve(ref.id);
 }
 
 /**
- * Inspect-only: is a resolver registered for `kind`? Used by tests
- * and by debug surfaces that want to render "unwired" placeholders
- * instead of throwing.
+ * Is a route resolver registered for `kind`? `<ItemLink>` consults this to
+ * decide between an interactive `<a>` and inert `<span>` text.
  */
-export function hasItemRefResolver(kind: ItemKind): boolean {
+export function hasItemRoute(kind: ItemKind): boolean {
   return REGISTRY.has(kind);
 }

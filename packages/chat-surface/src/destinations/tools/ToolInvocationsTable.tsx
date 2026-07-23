@@ -28,6 +28,7 @@ import type {
 } from "@0x-copilot/api-types";
 
 import { ItemLink } from "../../refs/ItemLink";
+import { itemKindNoun } from "../../refs/itemKindNoun";
 import { formatRelativeTime } from "../../util/time";
 
 // ===========================================================================
@@ -199,7 +200,10 @@ export function ToolInvocationsTable(
                 {formatRelativeTime(inv.started_at, now)}
               </time>
               <span style={callerCellStyle}>
-                <ItemLink ref={inv.caller_ref} />
+                <ItemLink
+                  ref={inv.caller_ref}
+                  label={itemKindNoun(inv.caller_ref.kind)}
+                />
               </span>
               <span
                 style={argsStyle}

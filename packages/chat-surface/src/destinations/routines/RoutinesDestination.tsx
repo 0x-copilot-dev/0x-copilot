@@ -42,6 +42,7 @@ import { FilterTabs, type FilterTabOption } from "../../shell/FilterTabs";
 import { PageHeader } from "../../shell/PageHeader";
 import { StatusPill, type StatusTone } from "../../shell/StatusPill";
 import { ItemLink } from "../../refs/ItemLink";
+import { itemKindNoun } from "../../refs/itemKindNoun";
 import { formatRelativeTime } from "../../util/time";
 
 // TODO(merge): rewire to "@0x-copilot/api-types"
@@ -538,7 +539,11 @@ function RoutineRow({
         {/* Cross-destination ItemLink chips — ALWAYS via `<ItemLink>` per
             cross-audit §1.1. No router.navigate from rows. */}
         {routine.links.map((ref, idx) => (
-          <ItemLink key={`${ref.kind}-${idx}`} ref={ref} />
+          <ItemLink
+            key={`${ref.kind}-${idx}`}
+            ref={ref}
+            label={itemKindNoun(ref.kind)}
+          />
         ))}
         {routine.last_fire_at !== null ? (
           <span data-testid="routine-row-last-fire">

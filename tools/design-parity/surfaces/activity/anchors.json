@@ -131,6 +131,13 @@
       "live": "section[data-day-key=\"2026-07-16\"] li:nth-child(2) [data-testid=\"activity-row-icon\"] svg"
     },
     {
+      "label": "row.done.name",
+      "group": "Row/rest",
+      "state": "default",
+      "design": ".rowlist .lrow:nth-child(2) .lrow__name",
+      "live": "section[data-day-key=\"2026-07-16\"] li:nth-child(2) [data-testid=\"row-title\"]"
+    },
+    {
       "label": "row.done.chip",
       "group": "Row/rest",
       "state": "default",

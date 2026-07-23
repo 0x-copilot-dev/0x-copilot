@@ -7,13 +7,13 @@ import type {
   TransportCapabilities,
   TypedRequest,
 } from "@0x-copilot/chat-transport";
-import { fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { fireEvent, render, screen } from "@testing-library/react";
 import { type ReactElement } from "react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
 import {
-  __resetItemRefRegistryForTests,
-  registerItemRefResolver,
+  __resetItemRouteRegistryForTests,
+  registerItemRoute,
 } from "../../refs/registry";
 import { RouterProvider } from "../../providers/RouterProvider";
 import { TransportProvider } from "../../providers/TransportProvider";
@@ -22,7 +22,7 @@ import type { ArtifactRoute, Router } from "../../routing/router";
 import { InboxDetail, type InboxDetailItem } from "./InboxDetail";
 
 afterEach(() => {
-  __resetItemRefRegistryForTests();
+  __resetItemRouteRegistryForTests();
 });
 
 function makeTransport(): Transport {
@@ -99,13 +99,11 @@ describe("<InboxDetail>", () => {
     expect(chips.length).toBeGreaterThanOrEqual(3);
   });
 
-  it("renders cross-destination links through <ItemLink> (cross-audit §3.3)", async () => {
-    registerItemRefResolver("run", async (id) => ({
-      label: `Run ${id}`,
-      icon: null,
-      route: { kind: "run", runId: id } as ArtifactRoute,
-      breadcrumb: "Runs",
-    }));
+  it("renders cross-destination links through <ItemLink> (cross-audit §3.3)", () => {
+    registerItemRoute(
+      "run",
+      (id) => ({ kind: "run", runId: id }) as ArtifactRoute,
+    );
     render(
       harness(
         <InboxDetail
@@ -116,9 +114,7 @@ describe("<InboxDetail>", () => {
         />,
       ),
     );
-    await waitFor(() => {
-      expect(screen.getByTestId("item-link")).toBeInTheDocument();
-    });
+    expect(screen.getByTestId("item-link")).toBeInTheDocument();
     expect(screen.getByTestId("inbox-detail-links")).toBeInTheDocument();
   });
 

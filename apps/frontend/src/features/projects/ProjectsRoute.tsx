@@ -49,16 +49,10 @@ import {
 import {
   ProjectDetailView,
   ProjectsDestination,
-  hasItemRefResolver,
-  registerItemRefResolver,
   type ProjectDetail,
   type ProjectDetailViewProps,
 } from "@0x-copilot/chat-surface";
-import type {
-  ConversationId,
-  LibraryFileId,
-  SectionResult,
-} from "@0x-copilot/api-types";
+import type { ConversationId, SectionResult } from "@0x-copilot/api-types";
 
 import type { RequestIdentity } from "../../api/config";
 import {
@@ -92,22 +86,11 @@ type ProjectActivityRow = NonNullable<
   ProjectDetailViewProps["activity"]
 >[number];
 
-// FR-4.12 — a file row in the project detail opens its artifact via
-// `<ItemLink kind="library_file">`. The Library destination owns that
-// resolver and registers it as a side-effect of the chat-surface barrel
-// import above; this guarded fallback keeps file-row links resolvable even
-// if the Library index is ever tree-shaken out of the host bundle. (This
-// binder OMITS the `files` source — see the Files-tab note in
-// `renderProjectDetail` — so no file row renders yet, but the resolver
-// must be present for when `GET /v1/projects/{id}/files` lands.)
-if (!hasItemRefResolver("library_file")) {
-  registerItemRefResolver("library_file", async (id: LibraryFileId) => ({
-    label: "File",
-    icon: null,
-    route: { kind: "workspace", workspaceId: id as unknown as string },
-    breadcrumb: "Library",
-  }));
-}
+// PRD-04 Seam B — the dead `library_file` resolver registration is removed.
+// It was shadowed at import time by `destinations/library/index.ts` (first
+// writer won), so this block never executed; cross-destination ROUTING now
+// lives in the host route table (`src/app/itemRoutes.ts`), and a file row's
+// display text is the caller's (`<ItemLink label={row.name}>`).
 
 /** Reconnect backoff bounds (mirrors RoutinesRoute / sub-PRD §3.8 conventions). */
 const RECONNECT_BACKOFF_MIN_MS = 1_000;

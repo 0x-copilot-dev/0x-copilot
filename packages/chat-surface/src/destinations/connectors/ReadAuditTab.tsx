@@ -12,6 +12,7 @@ import type { CSSProperties, ReactElement } from "react";
 import type { ConnectorAuditEntry } from "@0x-copilot/api-types";
 
 import { ItemLink } from "../../refs/ItemLink";
+import { itemKindNoun } from "../../refs/itemKindNoun";
 import { formatRelativeTime } from "../../util/time";
 
 const STATUS_LABEL: Readonly<Record<ConnectorAuditEntry["status"], string>> = {
@@ -120,7 +121,10 @@ export function ReadAuditTab(props: ReadAuditTabProps): ReactElement {
                 </time>
               </td>
               <td style={tdStyle}>
-                <ItemLink ref={entry.caller} />
+                <ItemLink
+                  ref={entry.caller}
+                  label={itemKindNoun(entry.caller.kind)}
+                />
               </td>
               <td style={tdEndpointStyle}>
                 <code style={codeStyle}>{entry.endpoint}</code>

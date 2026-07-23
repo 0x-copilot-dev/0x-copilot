@@ -9,13 +9,6 @@
 // Wire-type re-exports come from the canonical `@0x-copilot/api-types`
 // Projects contract.
 
-import type { ProjectId } from "@0x-copilot/api-types";
-
-import {
-  hasItemRefResolver,
-  registerItemRefResolver,
-} from "../../refs/registry";
-
 import {
   ProjectsDestination,
   type ProjectsDestinationProps,
@@ -29,7 +22,6 @@ import {
   type ProjectFilterChipOption,
   type ProjectFilterChipProps,
 } from "./ProjectFilterChip";
-import { getCachedProjectName } from "./projectNameCache";
 
 // ===========================================================================
 // Re-exports (P6-B1 shell + P6-B2 detail + P6-A1 wire types)
@@ -149,25 +141,7 @@ export type {
   ProjectSummary,
 } from "@0x-copilot/api-types";
 
-// ===========================================================================
-// ItemRef resolver registration (cross-audit §3.3)
-// ===========================================================================
-//
-// P6-B2 will introduce a dedicated `{ kind: "project-detail",
-// projectId }` route variant. Until then, the workspace route is the
-// stable fallback so `<ItemLink kind="project">` renders a real link
-// rather than the deleted-chip.
-//
-// FR-G.6 — the label is the real project name when the host has primed
-// the name cache (`cacheProjectNames`); it falls back to the generic
-// "Project" label on a cache miss (id we've never seen, or a link
-// rendered before the list loaded).
-
-if (!hasItemRefResolver("project")) {
-  registerItemRefResolver("project", async (id: ProjectId) => ({
-    label: getCachedProjectName(id as unknown as string) ?? "Project",
-    icon: null,
-    route: { kind: "workspace", workspaceId: id as unknown as string },
-    breadcrumb: "Projects",
-  }));
-}
+// ItemRef ROUTE registration moved to the host tables (PRD-04 Seam B). The
+// project name is now supplied by the caller via `<ItemLink label={…}>`; the
+// `projectNameCache` re-exported above is an ordinary call-site helper for the
+// `project_id`-only sites that hold no name (PRD-04 Non-goals), not a resolver.

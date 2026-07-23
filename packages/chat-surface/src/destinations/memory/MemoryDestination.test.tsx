@@ -236,17 +236,14 @@ describe("MemoryDestination", () => {
       }),
     ];
     renderDest({ items: ok<ReadonlyArray<MemoryItem>>(items), now: NOW });
-    // The ItemLink starts in the loading state and resolves to a link
-    // chip (or falls back to deleted-chip if no project resolver was
-    // registered). Either way the testid `item-link` or
-    // `item-link-deleted`/`item-link-skeleton` is present on the row.
+    // The ItemLink renders synchronously (PRD-04): an anchor when a project
+    // route is registered, else inert `item-link-static` text carrying the
+    // caller's label. No route is registered here → the static span is present.
     const row = screen.getByTestId("memory-row");
-    await waitFor(() => {
-      const linked = row.querySelector(
-        '[data-testid="item-link"], [data-testid="item-link-deleted"], [data-testid="item-link-skeleton"]',
-      );
-      expect(linked).not.toBeNull();
-    });
+    const linked = row.querySelector(
+      '[data-testid="item-link"], [data-testid="item-link-static"]',
+    );
+    expect(linked).not.toBeNull();
   });
 
   it("renders the detail-slot in place of the list when focusedMemoryId is set", () => {

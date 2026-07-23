@@ -30,6 +30,7 @@ import type { ApprovalId } from "@0x-copilot/api-types";
 import type { Approval } from "../thread-canvas/_approvals-stub";
 import type { ActivityEntry } from "../thread-canvas/eventProjector";
 import { ItemLink } from "../refs/ItemLink";
+import { itemKindNoun } from "../refs/itemKindNoun";
 
 export type RightRailTabId = "activity" | "approvals";
 
@@ -217,7 +218,10 @@ function ApprovalsPane(props: ApprovalsPaneProps): ReactElement {
           style={approvalRowStyle}
         >
           <div style={approvalHeaderStyle}>
-            <ItemLink ref={{ kind: "approval", id: approval.id }} />
+            <ItemLink
+              ref={{ kind: "approval", id: approval.id }}
+              label={itemKindNoun("approval")}
+            />
             <span data-testid={`right-rail-approval-kind-${approval.id}`}>
               {approval.kind}
             </span>

@@ -25,6 +25,7 @@ import { useState, type CSSProperties, type ReactElement } from "react";
 import type { ItemRef, MemoryItem } from "@0x-copilot/api-types";
 
 import { ItemLink } from "../../refs/ItemLink";
+import { itemKindNoun } from "../../refs/itemKindNoun";
 import { FilterTabs, type FilterTabOption } from "../../shell/FilterTabs";
 import { StatusPill } from "../../shell/StatusPill";
 import { formatRelativeTime } from "../../util/time";
@@ -279,7 +280,10 @@ function ProvenanceTab({
         <div style={rowStyle}>
           <dt style={labelStyle}>Project</dt>
           <dd style={valueStyle}>
-            <ItemLink ref={{ kind: "project", id: memory.project_id }} />
+            <ItemLink
+              ref={{ kind: "project", id: memory.project_id }}
+              label={itemKindNoun("project")}
+            />
           </dd>
         </div>
       ) : null}
@@ -331,7 +335,7 @@ function UsedByTab({
           style={rowStyle}
           data-testid="memory-detail-used-by-row"
         >
-          <ItemLink ref={u.ref} />
+          <ItemLink ref={u.ref} label={itemKindNoun(u.ref.kind)} />
           <span style={whenStyle}>{formatRelativeTime(u.at, now)}</span>
         </li>
       ))}

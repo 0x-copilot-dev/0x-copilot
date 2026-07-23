@@ -503,6 +503,7 @@ function ProjectCard({
         <span style={nameStyle} data-testid="project-card-name">
           <ItemLink
             ref={{ kind: "project", id: project.id }}
+            label={project.name}
             className="projects-card-name-link"
           />
         </span>

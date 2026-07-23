@@ -10,13 +10,6 @@
 // orchestrator rewires the stub to `@0x-copilot/api-types` at
 // merge time.
 
-import type { RoutineId } from "@0x-copilot/api-types";
-
-import {
-  hasItemRefResolver,
-  registerItemRefResolver,
-} from "../../refs/registry";
-
 import {
   RoutinesDestination,
   nextFireDisplay,
@@ -77,21 +70,3 @@ export type {
   RoutineTriggerKind,
   TriggerId,
 } from "./_routines-stub";
-
-// ===========================================================================
-// ItemRef resolver registration (cross-audit §3.3)
-// ===========================================================================
-//
-// P5-B3 will introduce a dedicated `{ kind: "routine-detail",
-// routineId }` route variant. Until then, the workspace route is the
-// stable fallback so `<ItemLink kind="routine">` renders a real link
-// rather than the deleted-chip.
-
-if (!hasItemRefResolver("routine")) {
-  registerItemRefResolver("routine", async (id: RoutineId) => ({
-    label: "Routine",
-    icon: null,
-    route: { kind: "workspace", workspaceId: id as unknown as string },
-    breadcrumb: "Routines",
-  }));
-}

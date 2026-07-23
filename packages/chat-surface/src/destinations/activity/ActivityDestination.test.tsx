@@ -1,20 +1,21 @@
 // ActivityDestination — presentational run-history feed (PR-4.5).
 //
 // Covers the PRD §8 unit matrix: day grouping via injected `now` (FR-4.14),
-// status→tone map incl. running/stopped/needs_input (FR-4.15), running-row
-// → onOpenRun + non-running-row → ItemLink (FR-4.16), retention link
-// (FR-4.17), the exact lead copy (FR-4.17), and the 4-state machine (FR-4.2).
+// status→tone map incl. running/stopped/needs_input (FR-4.15), every row →
+// onOpenRun with { conversationId, runId } (FR-4.16, PRD-04 Seam C), retention
+// link (FR-4.17), the exact lead copy (FR-4.17), and the 4-state machine
+// (FR-4.2).
 
-import type { ActivityRunRow, RunId } from "@0x-copilot/api-types";
-import { render, screen, waitFor, within } from "@testing-library/react";
+import type {
+  ActivityRunRow,
+  ConversationId,
+  RunId,
+} from "@0x-copilot/api-types";
+import { render, screen, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 
 import { RouterProvider } from "../../providers/RouterProvider";
-import {
-  __resetItemRefRegistryForTests,
-  registerItemRefResolver,
-} from "../../refs/registry";
 import type { ArtifactRoute, Router } from "../../routing/router";
 
 import {
@@ -48,6 +49,7 @@ const OLDER_DATE_LABEL = new Intl.DateTimeFormat(undefined, {
 function row(over: Partial<ActivityRunRow> = {}): ActivityRunRow {
   return {
     run_id: "run_default" as RunId,
+    conversation_id: "conv_default" as ConversationId,
     title: "Untitled run",
     status: "done",
     meta: "gmail · calendar",
@@ -75,17 +77,6 @@ function renderActivity(
 
 beforeEach(() => {
   navigate.mockClear();
-  // Non-running rows navigate through the "run" ItemLink resolver; the host
-  // owns it (Run destination), so tests register a stand-in.
-  registerItemRefResolver("run", async (id) => ({
-    label: `Run ${id}`,
-    icon: null,
-    route: { kind: "run", runId: id },
-  }));
-});
-
-afterEach(() => {
-  __resetItemRefRegistryForTests();
 });
 
 // ===========================================================================
@@ -261,7 +252,7 @@ describe("<ActivityDestination> — 4 states", () => {
 // ===========================================================================
 
 describe("<ActivityDestination> — rows", () => {
-  it("a running row is a button that fires onOpenRun with the run id (FR-4.16)", async () => {
+  it("a running row is a button that fires onOpenRun with { conversationId, runId } (FR-4.16, Seam C)", async () => {
     const onOpenRun = vi.fn();
     renderActivity({
       items: {
@@ -269,6 +260,7 @@ describe("<ActivityDestination> — rows", () => {
         data: [
           row({
             run_id: "run_live" as RunId,
+            conversation_id: "conv_live" as ConversationId,
             status: "running",
             title: "Live sync",
           }),
@@ -281,7 +273,38 @@ describe("<ActivityDestination> — rows", () => {
     expect(rowEl).toHaveAttribute("role", "button");
     expect(rowEl).toHaveAttribute("data-open", "run");
     await userEvent.click(rowEl);
-    expect(onOpenRun).toHaveBeenCalledWith("run_live");
+    expect(onOpenRun).toHaveBeenCalledWith({
+      conversationId: "conv_live",
+      runId: "run_live",
+    });
+  });
+
+  // DoD 5 — a finished (status="done") row also activates, opening the Run
+  // cockpit bound to its CONVERSATION (the row is the click target, PRD-04).
+  it("activating a done row fires onOpenRun once with { conversationId, runId } (DoD 5)", async () => {
+    const onOpenRun = vi.fn();
+    renderActivity({
+      items: {
+        status: "ok",
+        data: [
+          row({
+            run_id: "run_done" as RunId,
+            conversation_id: "conv_done" as ConversationId,
+            status: "done",
+            title: "Weekly treasury reconciliation",
+          }),
+        ],
+      },
+      onOpenRun,
+    });
+    const rowEl = screen.getByTestId("activity-row");
+    expect(rowEl).toHaveAttribute("role", "button");
+    await userEvent.click(rowEl);
+    expect(onOpenRun).toHaveBeenCalledTimes(1);
+    expect(onOpenRun).toHaveBeenCalledWith({
+      conversationId: "conv_done",
+      runId: "run_done",
+    });
   });
 
   it("a live row shows the brand mark (success); others show a clock (FR-G.2)", () => {
@@ -334,18 +357,42 @@ describe("<ActivityDestination> — rows", () => {
     expect(dotIn("done")).toBe(false);
   });
 
-  it("a non-running row navigates through the run ItemLink resolver (FR-4.16)", async () => {
+  // DoD 4 — every row renders its real title as plain text (no cross-destination
+  // link); the titles appear in fixture order and NO `item-link` anchor renders.
+  it("renders every row's real title as plain text, in order, with zero item-links (DoD 4)", () => {
+    const titles = [
+      "Weekly treasury reconciliation",
+      "Draft investor update",
+      "Rebalance LP positions",
+      "Triage new GitHub issues",
+      "Summarize Discord AMA",
+      "Vendor invoice batch",
+      "Competitor launch digest",
+      "Launch Week ops",
+    ];
+    // One day bucket, most-recent first — build started_at descending so the
+    // rendered order matches the fixture array order above.
+    const base = new Date(2026, 6, 18, 11, 0, 0).getTime();
     renderActivity({
       items: {
         status: "ok",
-        data: [row({ run_id: "run_done" as RunId, status: "done" })],
+        data: titles.map((title, i) =>
+          row({
+            run_id: `run_${i}` as RunId,
+            conversation_id: `conv_${i}` as ConversationId,
+            status: i === 7 ? "running" : "done",
+            title,
+            started_at: new Date(base - i * 60_000).toISOString(),
+          }),
+        ),
       },
+      onOpenRun: vi.fn(),
     });
-    const link = await screen.findByTestId("item-link");
-    expect(link).toHaveAttribute("data-item-kind", "run");
-    expect(link).toHaveAttribute("data-item-id", "run_done");
-    await userEvent.click(link);
-    expect(navigate).toHaveBeenCalledWith({ kind: "run", runId: "run_done" });
+    expect(
+      screen.getAllByTestId("activity-row-title").map((e) => e.textContent),
+    ).toEqual(titles);
+    expect(screen.queryAllByTestId("item-link")).toHaveLength(0);
+    expect(screen.queryAllByTestId("item-link-static")).toHaveLength(0);
   });
 
   it("each row shows title, meta, mono time, and a status chip (FR-4.15)", () => {

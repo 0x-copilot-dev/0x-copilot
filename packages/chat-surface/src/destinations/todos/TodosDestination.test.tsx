@@ -478,14 +478,12 @@ describe("TodosDestination", () => {
       now: NOW,
     });
 
-    // Both the project chip and the run chip should mount; ItemLink
-    // renders either a skeleton (resolver registered) or a deleted
-    // chip (resolver missing) — both carry `data-testid` that we can
-    // query through RTL.
+    // Both the project chip and the run chip mount; ItemLink renders an anchor
+    // (route registered) or inert `item-link-static` text (no route) — both
+    // carry the `data-item-kind` attribute (PRD-04).
     const links = [
-      ...screen.queryAllByTestId("item-link-skeleton"),
       ...screen.queryAllByTestId("item-link"),
-      ...screen.queryAllByTestId("item-link-deleted"),
+      ...screen.queryAllByTestId("item-link-static"),
     ];
     const kinds = links.map((l) => l.getAttribute("data-item-kind"));
     expect(kinds).toContain("project");

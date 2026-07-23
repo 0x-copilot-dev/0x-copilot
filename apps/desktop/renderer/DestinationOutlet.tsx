@@ -78,11 +78,15 @@ export interface DestinationOutletProps {
    */
   readonly conversationId?: ConversationId | null;
   /**
-   * Open a SPECIFIC run — carries the run id (PRD-03 Move 3). Activity rows use
-   * it; where it navigates is PRD-04's concern. Split from `onNewChat` so the
-   * run id can no longer be silently discarded by a 0-arity callback.
+   * Open the Run cockpit for an Activity row — carries the row's
+   * { conversationId, runId } (PRD-04 Seam C; the cockpit binds by conversation
+   * id). Split from `onNewChat` so the target can no longer be silently
+   * discarded by a 0-arity callback.
    */
-  readonly onOpenRun?: (runId: RunId) => void;
+  readonly onOpenRun?: (target: {
+    readonly conversationId: ConversationId;
+    readonly runId: RunId;
+  }) => void;
   /**
    * Start a NEW chat on the Run cockpit front door (no id). Chats' "New chat"
    * and Skills' "Run" use it.
@@ -168,7 +172,10 @@ export function DestinationOutlet({
 
 interface SurfaceContext {
   readonly conversationId: ConversationId | null;
-  readonly onOpenRun?: (runId: RunId) => void;
+  readonly onOpenRun?: (target: {
+    readonly conversationId: ConversationId;
+    readonly runId: RunId;
+  }) => void;
   readonly onNewChat?: () => void;
   readonly onOpenConversation?: (id: ConversationId) => void;
   readonly onConversationCreated?: (id: ConversationId) => void;

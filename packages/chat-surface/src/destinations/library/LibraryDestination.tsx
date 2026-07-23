@@ -54,6 +54,7 @@ import { FilterTabs, type FilterTabOption } from "../../shell/FilterTabs";
 import { PageHeader } from "../../shell/PageHeader";
 import { StatusPill, type StatusTone } from "../../shell/StatusPill";
 import { ItemLink } from "../../refs/ItemLink";
+import { itemKindNoun } from "../../refs/itemKindNoun";
 import { formatRelativeTime } from "../../util/time";
 
 // TODO(merge): rewire to "@0x-copilot/api-types"
@@ -695,7 +696,7 @@ function RecentsStrip({ items, now }: RecentsStripProps): ReactElement {
           >
             <div style={{ display: "flex", alignItems: "center", gap: 6 }}>
               <span aria-hidden="true">{kindGlyph(item.kind)}</span>
-              <ItemLink ref={toItemRef(item)} />
+              <ItemLink ref={toItemRef(item)} label={item.name} />
             </div>
             {item.last_accessed_at !== null ? (
               <span
@@ -793,7 +794,7 @@ function LibraryCard({ item, now }: LibraryCardProps): ReactElement {
         <span style={nameStyle} data-testid="library-card-name">
           {/* The item's own name is the canonical ItemLink for the card —
               clicking opens the per-kind detail (P7-B2). */}
-          <ItemLink ref={toItemRef(item)} />
+          <ItemLink ref={toItemRef(item)} label={item.name} />
         </span>
         <StatusPill
           status={indexStatusTone(item.index_status)}
@@ -809,7 +810,10 @@ function LibraryCard({ item, now }: LibraryCardProps): ReactElement {
 
       <div style={metaStyle} data-testid="library-card-meta">
         {item.project_id !== null ? (
-          <ItemLink ref={{ kind: "project", id: item.project_id }} />
+          <ItemLink
+            ref={{ kind: "project", id: item.project_id }}
+            label={item.project_name ?? itemKindNoun("project")}
+          />
         ) : null}
         <span data-testid="library-card-updated">
           {formatRelativeTime(item.updated_at, now)}
@@ -871,7 +875,7 @@ function LibraryRow({
         {kindGlyph(item.kind)}
       </span>
       <span style={nameStyle}>
-        <ItemLink ref={toItemRef(item)} />
+        <ItemLink ref={toItemRef(item)} label={item.name} />
       </span>
       <StatusPill
         status={indexStatusTone(item.index_status)}

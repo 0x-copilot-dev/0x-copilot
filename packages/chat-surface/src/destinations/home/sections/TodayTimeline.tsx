@@ -198,7 +198,7 @@ export function TodayTimeline({
                 {icon.glyph}
               </span>
               <div style={labelBlockStyle}>
-                <ItemLink ref={entry.target} />
+                <ItemLink ref={entry.target} label={entry.title} />
                 {entry.subtitle !== undefined && entry.subtitle.length > 0 ? (
                   <div
                     style={subtitleStyle}

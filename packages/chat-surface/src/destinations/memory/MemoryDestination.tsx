@@ -40,6 +40,7 @@ import type {
 } from "@0x-copilot/api-types";
 
 import { ItemLink } from "../../refs/ItemLink";
+import { itemKindNoun } from "../../refs/itemKindNoun";
 import { DocList } from "../../shell/DocList";
 import { EmptyState } from "../../shell/EmptyState";
 import { FilterTabs, type FilterTabOption } from "../../shell/FilterTabs";
@@ -608,7 +609,10 @@ function MemoryRow({
           <StatusPill status="muted" label="auto-extracted" />
         ) : null}
         {memory.project_id !== undefined && memory.project_id !== null ? (
-          <ItemLink ref={{ kind: "project", id: memory.project_id }} />
+          <ItemLink
+            ref={{ kind: "project", id: memory.project_id }}
+            label={itemKindNoun("project")}
+          />
         ) : null}
         <span data-testid="memory-row-last-used">{lastUsedLabel}</span>
       </div>

@@ -248,6 +248,7 @@ export function RoutinesPanel(props: RoutinesPanelProps = {}): ReactElement {
                     >
                       <ItemLink
                         ref={{ kind: "project", id: p.project_id }}
+                        label={p.name}
                         className="routines-panel-project-link"
                       />
                       <span style={projectCountStyle}>{p.routine_count}</span>
