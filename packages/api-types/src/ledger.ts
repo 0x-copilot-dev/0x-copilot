@@ -192,12 +192,26 @@ export interface WriteStagedPayload {
   agent_holds?: readonly AgentHold[];
 }
 
+/** A half-open `[start, end)` char range of a revision's NEW text and its author
+ *  (PRD-D1). Offsets index code points into the new revision body; the server
+ *  computes these by diffing the user edit against the previous revision. */
+export interface AuthorshipSpan {
+  start: number;
+  end: number;
+  author: RevisionAuthor;
+}
+
 export interface RevisionAddedPayload {
   v: 1;
   stage_id: string;
   rev: number;
   author: RevisionAuthor;
   diff_ref: string;
+  /** Additive (SDR §5 note, PRD-D1): the `draft://…` snapshot of THIS rev. */
+  proposal_ref?: string;
+  /** Additive (PRD-D1): the server-computed "edited by you" spans; `[]`/absent
+   *  for the agent's rev 1. */
+  authorship_spans?: readonly AuthorshipSpan[];
 }
 
 export interface DecisionRecordedPayload {
@@ -325,6 +339,62 @@ export interface StagedWrite {
   revisions: readonly Revision[];
   decisions: readonly Decision[];
   latest_rev: number;
+}
+
+// ---------------------------------------------------------------------------
+// Staged-write HTTP wire types (PRD-D1). Request bodies + the `StagedWriteView`
+// the three `/v1/agent/stages/*` routes return (the wire projection of the
+// server's `StagedWriteState` fold, with ledger ids attached per revision +
+// decision). Additive; the pydantic mirror is `schemas/stages.py`.
+// ---------------------------------------------------------------------------
+
+/** Body for `POST /v1/agent/stages/{stage_id}/revisions` — a user free-form edit.
+ *  `run_id` rides the query string (stage state is a pure fold of that run). */
+export interface StageRevisionRequest {
+  base_rev: number;
+  content_text: string;
+  title?: string | null;
+}
+
+/** Body for `POST /v1/agent/stages/{stage_id}/decisions`. `rev` is required for
+ *  `approve`/`reject` (WYSIWYG) and ignored for `restore` (server re-pins the
+ *  latest rev); `hold` reaches the server and 422s (single-artifact — D3). */
+export interface StageDecisionRequest {
+  decision: DecisionKind;
+  rev?: number;
+}
+
+/** One revision on the stage wire view. */
+export interface StageRevisionView {
+  rev: number;
+  author: RevisionAuthor;
+  proposal_ref: string;
+  diff_ref: string;
+  authorship_spans: readonly AuthorshipSpan[];
+  ledger_id: string;
+}
+
+/** One recorded decision on the stage wire view. */
+export interface StageDecisionView {
+  decision: DecisionKind;
+  scope_rev: number | null;
+  actor: DecisionActor;
+  ledger_id: string;
+}
+
+/** `GET/POST /v1/agent/stages/{stage_id}[...]` response — the folded staged
+ *  write. `status` is `staged|rejected|approved|applied` (`applied` is D2). */
+export interface StagedWriteView {
+  stage_id: string;
+  surface_id: string;
+  run_id: string;
+  draft_id: string;
+  target: LedgerOpRef;
+  latest_rev: number;
+  approved_rev: number | null;
+  status: string;
+  revisions: readonly StageRevisionView[];
+  decisions: readonly StageDecisionView[];
 }
 
 /** FR-E2 wording, wire-safe (NEW, A1-defined). Not a ledger event type — a
