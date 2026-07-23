@@ -1,5 +1,62 @@
 export { ADAPTER_ALLOWLIST, type AdapterAllowlist } from "./adapterAllowlist";
 
+// Work Ledger vocabulary (Generative Surfaces v2, SDR §5 / PRD-A1). `ledger.ts`
+// is the single canonical home for all v2 ledger/domain type additions across
+// every wave; this barrel only ever gains re-export lines, never a type body.
+export type {
+  LedgerEventType,
+  GateAuthState,
+  GateOutcome,
+  WritePolicy,
+  ActionClass,
+  ClassificationBasis,
+  SurfaceKind,
+  ViewTier,
+  ViewBasis,
+  ViewKeep,
+  RevisionAuthor,
+  DecisionKind,
+  DecisionActor,
+  ApplyResult,
+  UsagePurpose,
+  LedgerOpRef,
+  AgentHold,
+  ViewGen,
+  DecisionScope,
+  GateOpenedPayload,
+  GateResolvedPayload,
+  ActionClassifiedPayload,
+  ReadExecutedPayload,
+  SurfaceCreatedPayload,
+  ViewDerivedPayload,
+  ViewPreferencePayload,
+  ShapeRequestedPayload,
+  WriteStagedPayload,
+  RevisionAddedPayload,
+  DecisionRecordedPayload,
+  WriteAppliedPayload,
+  UsageRecordedPayload,
+  ReceiptEmittedPayload,
+  LedgerEventPayloadMap,
+  SurfaceEventV2,
+  Revision,
+  Decision,
+  Surface,
+  StagedWrite,
+  ReceiptAttribution,
+  UsageRecord,
+  RunReceiptRow,
+  RunReceipt,
+  ParsedLedgerId,
+} from "./ledger";
+export {
+  LEDGER_EVENT_TYPES,
+  isLedgerEventType,
+  isSurfaceEventV2,
+  formatLedgerId,
+  parseLedgerId,
+} from "./ledger";
+
 // Branded ID types — used in approval payloads + responses (P1-A re-scoped,
 // cross-audit §2.1). Imported here so they are in scope for the approval
 // types declared in this file; the canonical declaration site is
@@ -2137,6 +2194,11 @@ export interface AdapterGeneratedPayload {
 // mirror in step with both. The schema has zero side-effectful members — no
 // handlers, no free-form URLs (only `url_path` into payload data, host-sanitised
 // at render), no templates — which is the injection blast-radius bound (D9).
+//
+// NOTE: SurfaceSpec (this block) is the v1 render-binding contract and is
+// distinct from the Generative Surfaces v2 Work Ledger vocabulary in `./ledger`
+// (`SurfaceEventV2`, `Surface`, etc., re-exported near the top of this file).
+// The two coexist additively; the v2 `Surface` ledger entity is not this spec.
 // ---------------------------------------------------------------------------
 
 /** The render family a `SurfaceSpec` binds to (v1). A host may implement a
