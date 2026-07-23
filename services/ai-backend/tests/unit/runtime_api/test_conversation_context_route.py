@@ -10,6 +10,7 @@ from agent_runtime.persistence.records import (
     RuntimeModelCallUsageRecord,
     RuntimeRunUsageRecord,
 )
+from agent_runtime.pricing import ModelPricingCatalog
 from agent_runtime.settings import RuntimeSettings
 from runtime_adapters.factory import RuntimeAdapterFactory
 from runtime_adapters.in_memory import InMemoryRuntimeApiStore
@@ -19,10 +20,27 @@ from runtime_api.schemas import (
     CreateConversationRequest,
 )
 
-# gpt-5.4-mini is priced by the bundled litellm catalog (context window =
-# ``max_input_tokens`` 1_050_000). The query service now sources pricing from
-# litellm, so no store-seeded pricing row is needed.
-_GPT_5_4_MINI_CONTEXT_WINDOW = 1_050_000
+
+# gpt-5.4-mini is priced by the bundled litellm catalog, so no store-seeded
+# pricing row is needed. The exact context-window value drifts as the pinned
+# litellm table changes (``max_input_tokens`` / ``max_tokens`` fallback), so
+# tests derive it from the catalog instead of hardcoding a number.
+async def _default_model_context_window(
+    *,
+    provider: str = "openai",
+    model_name: str = "gpt-5.4-mini",
+) -> int:
+    """Resolve a model's context window from the same litellm-backed catalog the
+    query service uses, so expectations track the pinned table automatically."""
+
+    pricing = await ModelPricingCatalog.from_litellm().lookup(
+        provider=provider,
+        model_name=model_name,
+        region="global",
+        at=datetime.now(timezone.utc),
+    )
+    assert pricing is not None and pricing.context_window_tokens is not None
+    return pricing.context_window_tokens
 
 
 async def _bootstrap(
@@ -116,11 +134,15 @@ class TestConversationContextRoute:
         assert body["current"]["last_run_id"] == "r-latest"
         assert body["current"]["input_tokens"] == 1_000
         assert body["current"]["output_tokens"] == 200
-        # context_window (1_050_000) - used (input 1_000 + cached 0) = 1_049_000;
-        # headroom = 1_049_000 * 100 // 1_050_000 = 99.
-        assert body["current"]["headroom_pct"] == 99
-        assert body["current"]["available_tokens"] == 1_049_000
-        assert body["model"]["context_window_tokens"] == _GPT_5_4_MINI_CONTEXT_WINDOW
+        # available_tokens = context_window - used (input 1_000 + cached 0);
+        # headroom_pct = available * 100 // context_window (integer percent).
+        context_window = await _default_model_context_window()
+        used = 1_000
+        expected_available = context_window - used
+        expected_headroom = expected_available * 100 // context_window
+        assert body["current"]["available_tokens"] == expected_available
+        assert body["current"]["headroom_pct"] == expected_headroom
+        assert body["model"]["context_window_tokens"] == context_window
 
     async def test_picks_latest_run_when_multiple_exist(self) -> None:
         client, store, conv_id = await _bootstrap()
