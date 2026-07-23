@@ -11,7 +11,7 @@
 //   - Version history is **read-only**. Per the task brief: clicking a
 //     version shows the snapshot, NOT an editor. There is no PATCH path
 //     and the UI offers none.
-//   - SP-1: StatusPill for the active/selected version surface; no
+//   - SP-1: design-system <Badge> for the active/selected version surface; no
 //     bespoke chip primitive.
 //   - Pure presentation. Host owns GET /v1/agents/<id>/versions, and
 //     navigation between snapshot rows.
@@ -23,7 +23,7 @@ import {
   type ReactElement,
 } from "react";
 
-import { StatusPill } from "@0x-copilot/design-system";
+import { Badge } from "@0x-copilot/design-system";
 
 import type {
   AgentEditorModelDefault,
@@ -133,11 +133,12 @@ export function VersionHistoryTab(props: VersionHistoryTabProps): ReactElement {
                   by {v.created_by} · {v.created_at}
                 </span>
                 {active ? (
-                  <StatusPill
-                    tone="running"
-                    label="Viewing"
+                  <Badge
+                    tone="accent"
                     data-testid={`agent-version-row-${v.id}-pill`}
-                  />
+                  >
+                    Viewing
+                  </Badge>
                 ) : null}
               </button>
             </li>
@@ -184,11 +185,12 @@ function SnapshotView(props: SnapshotViewProps): ReactElement {
             ? ` · ${version.label}`
             : ""}
         </h3>
-        <StatusPill
-          tone="idle"
-          label="Read-only"
+        <Badge
+          tone="neutral"
           data-testid={`agent-version-snapshot-${version.id}-read-only-pill`}
-        />
+        >
+          Read-only
+        </Badge>
       </header>
       <p style={snapshotMetaStyle}>
         Snapshotted by {version.created_by} on {version.created_at}. Per

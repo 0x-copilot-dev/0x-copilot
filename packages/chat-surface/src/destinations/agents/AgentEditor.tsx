@@ -8,7 +8,7 @@
 //     same SP-1 discipline, same composer-as-instructions trick).
 //
 // Invariants (DRY):
-//   - SP-1 primitives only (StatusPill from design-system). Composer is
+//   - SP-1 primitives only (design-system <Badge>). Composer is
 //     reused from `../../composer/Composer` — there is one and only one
 //     composer in chat-surface. We don't fork it.
 //   - The editor handles BOTH create (no `initialValue` ⇒ defaults from
@@ -42,7 +42,7 @@ import {
   type ReactNode,
 } from "react";
 
-import { StatusPill } from "@0x-copilot/design-system";
+import { Badge } from "@0x-copilot/design-system";
 
 import { Composer } from "../../composer/Composer";
 
@@ -352,11 +352,12 @@ export function AgentEditor(props: AgentEditorProps): ReactElement {
       data-active-tab={activeTab}
     >
       <div style={headerStyle}>
-        <StatusPill
-          tone={isDraft ? "idle" : "ready"}
-          label={isDraft ? "Draft" : "Ready"}
+        <Badge
+          tone={isDraft ? "neutral" : "success"}
           data-testid="agent-editor-status-pill"
-        />
+        >
+          {isDraft ? "Draft" : "Ready"}
+        </Badge>
         <input
           type="text"
           value={value.name}

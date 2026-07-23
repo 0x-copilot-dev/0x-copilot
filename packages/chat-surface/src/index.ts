@@ -1150,7 +1150,6 @@ export {
 // The host binder (PR-4.6) composes conversations + audit into the rows.
 export {
   ActivityDestination,
-  activityStatusLabel,
   activityStatusTone,
   groupActivityByDay,
   ACTIVITY_LEAD_COPY,

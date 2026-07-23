@@ -178,18 +178,31 @@ export function Card({
   );
 }
 
+/**
+ * Badge — the design's `.chip`: a mono, outlined, no-fill status/metadata tag.
+ * Tone recolours text + border only. `dot` renders the leading live-status dot
+ * (`.ui-badge__dot`) — off by default, matching the design, which draws it only
+ * for a live/running chip. This is the canonical status chip; the old filled
+ * status pill was deleted in favour of it.
+ */
 export function Badge({
   tone = "neutral",
+  dot = false,
   className,
+  children,
   ...props
 }: HTMLAttributes<HTMLSpanElement> & {
-  tone?: "neutral" | "success" | "warning" | "danger" | "accent";
+  tone?: "neutral" | "success" | "warning" | "danger" | "accent" | "muted";
+  dot?: boolean;
 }): ReactElement {
   return (
     <span
       className={classNames("ui-badge", `ui-badge--${tone}`, className)}
       {...props}
-    />
+    >
+      {dot ? <span className="ui-badge__dot" aria-hidden="true" /> : null}
+      {children}
+    </span>
   );
 }
 
@@ -296,32 +309,6 @@ export function IconButton({
   );
 }
 
-export type StatusTone = "running" | "ready" | "idle";
-
-export function StatusPill({
-  tone,
-  label,
-  className,
-  ...props
-}: HTMLAttributes<HTMLSpanElement> & {
-  tone: StatusTone;
-  label: string;
-}): ReactElement {
-  return (
-    <span
-      className={classNames(
-        "ui-status-pill",
-        `ui-status-pill--${tone}`,
-        className,
-      )}
-      {...props}
-    >
-      <span className="ui-status-pill__dot" aria-hidden="true" />
-      {label}
-    </span>
-  );
-}
-
 /* ---------------------------------------------------------------------------
  * Typographic recipes — the COMPOSED text roles (see styles.css `.ui-*` +
  * SKILL.md). Reach for these instead of hand-composing font-size + weight +
@@ -388,9 +375,10 @@ export function Heading({
 }
 
 /**
- * Pill — canonical rounded status/selection chip. Generalises StatusPill:
- * optional leading dot + an `active` accent-fill state. `tone` is advisory
- * (muted default); pass `active` for the selected/accent state.
+ * Pill — canonical rounded selection chip: optional leading dot + an `active`
+ * accent-fill state. `tone` is advisory (muted default); pass `active` for the
+ * selected/accent state. A FILLED selection chip, distinct from the outlined,
+ * no-fill `<Badge>` status/metadata tag.
  */
 export function Pill({
   active = false,

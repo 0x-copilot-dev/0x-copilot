@@ -2,6 +2,27 @@ import { describe, expect, it } from "vitest";
 
 import { statusTone } from "./statusTone";
 
+// Every status the SSOT knows, plus an unknown one — used by the
+// lowercase-invariant sweep below.
+const ALL_STATUSES: ReadonlyArray<string> = [
+  "running",
+  "queued",
+  "streaming",
+  "cancelling",
+  "done",
+  "completed",
+  "paused",
+  "waiting_for_approval",
+  "needs_input",
+  "stopped",
+  "cancelled",
+  "canceled",
+  "archived",
+  "failed",
+  "error",
+  "some_new_state",
+];
+
 describe("statusTone (run-status SSOT)", () => {
   it("maps live states to success + a dot", () => {
     for (const s of ["running", "queued", "streaming"]) {
@@ -37,17 +58,25 @@ describe("statusTone (run-status SSOT)", () => {
     expect(statusTone("stopped").showDot).toBe(false);
   });
 
-  it("falls back to a muted, title-cased chip for unknown statuses", () => {
+  it("falls back to a muted, lowercased chip for unknown statuses", () => {
     expect(statusTone("some_new_state")).toEqual({
       tone: "muted",
-      label: "Some new state",
+      label: "some new state",
       showDot: false,
     });
   });
 
-  it("provides a human label per known status", () => {
-    expect(statusTone("running").label).toBe("Running");
-    expect(statusTone("done").label).toBe("Done");
-    expect(statusTone("stopped").label).toBe("Stopped");
+  it("provides a lowercase human label per known status (matches the design)", () => {
+    expect(statusTone("running").label).toBe("running");
+    expect(statusTone("done").label).toBe("done");
+    expect(statusTone("stopped").label).toBe("stopped");
+    expect(statusTone("needs_input").label).toBe("needs you");
+  });
+
+  it("every label is lowercase — no CSS text-transform is relied on", () => {
+    for (const s of ALL_STATUSES) {
+      const { label } = statusTone(s);
+      expect(label).toBe(label.toLowerCase());
+    }
   });
 });

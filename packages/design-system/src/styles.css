@@ -270,6 +270,18 @@
   /* Accent-tinted hairline (the design's --accent-line = accent @ 35%). Used for
      selected rows / active chips, matching --color-accent-soft's reflow model. */
   --color-accent-line: color-mix(in srgb, var(--color-accent) 35%, transparent);
+  /* Tone-tinted chip hairlines — the design's `.chip--ok`/`.chip--warn` borders
+     (copilot.css:591-602) at 25% alpha, and `.chip--danger`'s ember at 25%.
+     Sibling of --color-accent-line (which the design writes as `--accent-line`).
+     These are LITERAL rgba, not the `color-mix(in srgb, …)` idiom used above,
+     ON PURPOSE: the parity comparator matches border-color as an exact serialized
+     string, and headless-chromium serializes a computed `color-mix()` as
+     `color(srgb …)` — which never string-equals the design's literal
+     `rgba(87, 199, 133, 0.25)`. The value is fixed by the design either way
+     (dark-theme jade/amber/ember @ 25%); see PRD-02 risk table. */
+  --color-success-line: rgba(87, 199, 133, 0.25);
+  --color-warning-line: rgba(232, 180, 94, 0.25);
+  --color-danger-line: rgba(240, 118, 79, 0.25);
   --color-bg-accent-subtle: color-mix(
     in srgb,
     var(--color-accent) 8%,
@@ -695,29 +707,67 @@ textarea {
      the app shipped 0.7px too big and 100 too heavy. */
   font-size: var(--font-size-mono-10-5);
   font-weight: var(--font-weight-medium);
+  /* 10.5 × 1.5 = 15.75px line box → the design's measured 19.75px chip height
+     with the 1px vertical padding + 1px hairline below. */
+  line-height: 1.5;
+  /* copilot.css:579 `.chip { gap: 5px }` — space between the live `.dotk` and
+     the label. Inert on chips that render text only. */
+  gap: 5px;
   min-height: 0;
-  padding: 2px 8px;
+  /* Every `.chip` in the v3 app renders with the inline `padding:1px 8px`
+     (copilot-app.jsx:64,274) over the base — so 1px 8px IS the shipped spec. */
+  padding: 1px 8px;
   white-space: nowrap;
 }
 
+/* copilot.css:587-590 `.chip svg { width:10px; height:10px }` — an inline glyph
+   inside a chip is sized to the mono cap height, never the icon's native box. */
+.ui-badge svg {
+  width: 10px;
+  height: 10px;
+}
+
+/* copilot.css:606-612 `.dotk` — the live-run status dot. 6px, tone-coloured via
+   currentColor, never flex-shrunk. Rendered only for the live state (the badge's
+   `dot` slot), matching the design which draws it solely when `running`. */
+.ui-badge__dot {
+  background: currentColor;
+  border-radius: 50%;
+  flex: none;
+  height: 6px;
+  width: 6px;
+}
+
+/* Tone variants recolour text + border only — no fill (copilot.css:591-605).
+   The border tints are the 25%-alpha `--color-*-line` hairlines; the base
+   `.ui-badge` border (`--color-border-strong` = the design's `--line2`) shows
+   through on `neutral`/`muted`, exactly as `.chip`/`.chip--off` do. */
 .ui-badge--success {
-  border-color: var(--color-success);
+  border-color: var(--color-success-line);
   color: var(--color-success);
 }
 
 .ui-badge--warning {
-  border-color: var(--color-warning);
+  border-color: var(--color-warning-line);
   color: var(--color-warning);
 }
 
 .ui-badge--danger {
-  border-color: var(--color-danger);
+  border-color: var(--color-danger-line);
   color: var(--color-danger);
 }
 
+/* `.chip--sky` (copilot.css:595-598): accent text, accent-line (@35%) border —
+   NOT --color-accent-strong, which read a full step darker than the design. */
 .ui-badge--accent {
-  border-color: var(--color-accent);
-  color: var(--color-accent-strong);
+  border-color: var(--color-accent-line);
+  color: var(--color-accent);
+}
+
+/* `.chip--off` (copilot.css:603-605): the quietest tone — subtle text (`--mut2`),
+   base hairline border. The design sets colour only; the border stays `--line2`. */
+.ui-badge--muted {
+  color: var(--color-text-subtle);
 }
 
 .ui-input,
@@ -942,51 +992,6 @@ textarea {
 .ui-sidebar {
   background: var(--color-bg);
   border-right: 1px solid var(--color-border);
-}
-
-.ui-status-pill {
-  align-items: center;
-  border: 1px solid transparent;
-  border-radius: var(--radius-full);
-  color: var(--color-text-muted);
-  display: inline-flex;
-  font-size: var(--font-size-xs);
-  gap: 0.4rem;
-  line-height: 1;
-  padding: 0.25rem 0.65rem;
-  white-space: nowrap;
-}
-.ui-status-pill__dot {
-  background: currentColor;
-  border-radius: 50%;
-  height: 0.45rem;
-  width: 0.45rem;
-}
-.ui-status-pill--ready {
-  color: var(--color-success);
-  border-color: color-mix(in srgb, var(--color-success), transparent 65%);
-  background: var(--color-success-bg);
-}
-.ui-status-pill--running {
-  color: var(--color-accent);
-  border-color: color-mix(in srgb, var(--color-accent), transparent 65%);
-  background: color-mix(in srgb, var(--color-accent), transparent 84%);
-}
-.ui-status-pill--running .ui-status-pill__dot {
-  animation: ui-pulse 1.4s ease-in-out infinite;
-}
-.ui-status-pill--idle {
-  color: var(--color-text-subtle);
-}
-
-@keyframes ui-pulse {
-  0%,
-  100% {
-    opacity: 0.45;
-  }
-  50% {
-    opacity: 1;
-  }
 }
 
 .ui-app-icon {
@@ -1330,10 +1335,11 @@ textarea {
   letter-spacing: var(--tracking-snug);
 }
 
-/* Pill — the canonical rounded status/selection chip. Seeds off .ui-status-pill
- * (dot + tone) but generalised: tone variants + an --active accent-fill state.
- * Collapses aui-status-pill / me-radio-pill / settings-pill / ui-connector-chip
- * / aui-attachment-pill into one recipe. */
+/* Pill — the canonical rounded status/selection chip: a leading dot + tone
+ * variants + an --active accent-fill state. A FILLED selection chip, distinct
+ * from `.ui-badge` (the design's outlined, no-fill `.chip`). Collapses the
+ * legacy web selection pills (radio / settings / connector / attachment) into
+ * one recipe. */
 .ui-pill {
   align-items: center;
   border: 1px solid var(--color-border);

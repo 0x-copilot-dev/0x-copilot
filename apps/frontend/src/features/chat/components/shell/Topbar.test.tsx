@@ -63,7 +63,7 @@ describe("Topbar", () => {
     expect(
       screen
         .getAllByRole("status")
-        .find((node) => node.classList.contains("ui-status-pill")),
+        .find((node) => node.classList.contains("ui-badge")),
     ).toHaveTextContent("Ready");
     // No model pill, no depth control in topbar — they live in the composer.
     expect(screen.queryByRole("radiogroup")).toBeNull();

@@ -13,7 +13,7 @@
 //     layout (icon swatch + name + slug + status pill row).
 //
 // Invariants:
-//   - SP-1: StatusPill from design-system; no bespoke chips.
+//   - SP-1: design-system <Badge> for status chips; no bespoke chips.
 //   - SUBSTITUTION: pure data in, callbacks out. The host wires the
 //     transport (PATCH, load-more invocations, etc).
 //   - SINGLE SOURCE OF TRUTH: every wire-side type comes from
@@ -36,7 +36,12 @@ import {
 } from "react";
 
 import type { ItemRef, Tool, ToolInvocation } from "@0x-copilot/api-types";
-import { StatusPill, type StatusTone } from "@0x-copilot/design-system";
+import { Badge } from "@0x-copilot/design-system";
+
+// The design-system Badge tone subset used by tool-status chips. (Only these
+// two are reachable from `statusTone` below; typed narrowly so a stray tone is
+// a compile error.)
+type ToolBadgeTone = "success" | "neutral";
 
 import { ToolInvocationsTable } from "./ToolInvocationsTable";
 import { ToolUsageChart, type ToolDailyCallPoint } from "./ToolUsageChart";
@@ -199,11 +204,12 @@ export function ToolDetailView(props: ToolDetailViewProps): ReactElement {
           ) : null}
           <div style={pillRowStyle} data-testid="tool-detail-pill-row">
             <KindChip kind={tool.kind} />
-            <StatusPill
+            <Badge
               tone={statusTone(tool.status)}
-              label={tool.status}
               data-testid="tool-detail-status-pill"
-            />
+            >
+              {tool.status}
+            </Badge>
             <ScopeChip scope={tool.scope} />
           </div>
         </div>
@@ -438,9 +444,9 @@ function Fact(props: FactProps): ReactElement {
 // Helpers.
 // ===========================================================================
 
-function statusTone(status: Tool["status"]): StatusTone {
-  if (status === "enabled") return "ready";
-  return "idle";
+function statusTone(status: Tool["status"]): ToolBadgeTone {
+  if (status === "enabled") return "success";
+  return "neutral";
 }
 
 // ===========================================================================

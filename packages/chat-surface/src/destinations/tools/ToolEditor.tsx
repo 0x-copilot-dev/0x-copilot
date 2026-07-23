@@ -40,7 +40,7 @@ import type {
   ToolTransportKind,
   UpdateToolRequest,
 } from "@0x-copilot/api-types";
-import { StatusPill } from "@0x-copilot/design-system";
+import { Badge } from "@0x-copilot/design-system";
 
 // ===========================================================================
 // Tab IDs + ARIA wiring.
@@ -295,11 +295,12 @@ export function ToolEditor(props: ToolEditorProps): ReactElement {
       data-save-state={saveState}
     >
       <div style={headerStyle}>
-        <StatusPill
-          tone={tool.status === "enabled" ? "ready" : "idle"}
-          label={tool.status}
+        <Badge
+          tone={tool.status === "enabled" ? "success" : "neutral"}
           data-testid="tool-editor-status-pill"
-        />
+        >
+          {tool.status}
+        </Badge>
         <input
           type="text"
           value={draft.name}

@@ -19,12 +19,13 @@ import {
   IconButton,
   Select,
   StatusLine,
-  StatusPill,
   Switch,
   TextInput,
   Toggle,
   classNames,
 } from "@0x-copilot/design-system";
+
+import { StatusPill, type StatusTone } from "../shell/StatusPill";
 
 // PRD §9.5.2 — the worker is the preemptive boundary. React renders are
 // synchronous, so a host setTimeout cannot interrupt a `while(true){}`
@@ -73,6 +74,51 @@ const DEFAULT_TAGS = new Set<string>([
 ]);
 
 type AnyComponent = (props: Record<string, unknown>) => ReactElement | null;
+
+// The `"StatusPill"` registry key is a PUBLIC contract for model-authored
+// tier-2 surface specs (see tier2Worker allowlist). It historically bound to the
+// design-system `StatusPill` whose prop was `tone="running"|"ready"|"idle"`.
+// That component is gone (PRD-02) — the key now binds to chat-surface's
+// `StatusPill` (prop `status`). This shim lives AT the spec boundary (its job is
+// compat with already-emitted specs), not inside the component: it accepts the
+// legacy `tone` and maps it to a `status`, alongside a modern `status` prop.
+const LEGACY_STATUS_PILL_TONE: Readonly<Record<string, StatusTone>> = {
+  running: "ok",
+  ready: "ok",
+  idle: "muted",
+};
+
+function isStatusTone(value: unknown): value is StatusTone {
+  return (
+    value === "ok" ||
+    value === "error" ||
+    value === "warning" ||
+    value === "info" ||
+    value === "muted"
+  );
+}
+
+const StatusPillAdapter: AnyComponent = (props) => {
+  const { tone, status, label, className } = props as {
+    tone?: unknown;
+    status?: unknown;
+    label?: unknown;
+    className?: unknown;
+  };
+  const resolved: StatusTone = isStatusTone(status)
+    ? status
+    : typeof tone === "string" && tone in LEGACY_STATUS_PILL_TONE
+      ? LEGACY_STATUS_PILL_TONE[tone]!
+      : "muted";
+  return (
+    <StatusPill
+      status={resolved}
+      label={typeof label === "string" ? label : ""}
+      className={typeof className === "string" ? className : undefined}
+    />
+  );
+};
+
 const DS_COMPONENTS: Record<string, AnyComponent> = {
   Button: Button as unknown as AnyComponent,
   Badge: Badge as unknown as AnyComponent,
@@ -83,7 +129,7 @@ const DS_COMPONENTS: Record<string, AnyComponent> = {
   Toggle: Toggle as unknown as AnyComponent,
   Field: Field as unknown as AnyComponent,
   IconButton: IconButton as unknown as AnyComponent,
-  StatusPill: StatusPill as unknown as AnyComponent,
+  StatusPill: StatusPillAdapter,
   AppIcon: AppIcon as unknown as AnyComponent,
   HarnessRow: HarnessRow as unknown as AnyComponent,
   StatusLine: StatusLine as unknown as AnyComponent,

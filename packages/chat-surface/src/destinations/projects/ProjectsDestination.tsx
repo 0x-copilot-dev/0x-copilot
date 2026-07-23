@@ -69,11 +69,13 @@ const FILTER_ORDER: ReadonlyArray<ProjectsFilterSlug> = [
   "starred",
 ];
 
+// Lowercase filter-tab labels — the design's chip/tab vocabulary is lowercase
+// mono; kept consistent with the status chips (PRD-02).
 const FILTER_LABEL: Readonly<Record<ProjectsFilterSlug, string>> = {
-  all: "All",
-  active: "Active",
-  archived: "Archived",
-  starred: "Starred",
+  all: "all",
+  active: "active",
+  archived: "archived",
+  starred: "starred",
 };
 
 /** Per-filter counts driven by the host (same query result feeds list +
@@ -574,9 +576,12 @@ const STATUS_TONE: Readonly<Record<ProjectStatus, StatusTone>> = {
   archived: "muted",
 };
 
+// Lowercase to match the design's chip vocabulary (PRD-02). `active`/`archived`
+// are project statuses, not run statuses, so they keep their own map — but in
+// the same lowercase register as every other chip.
 const STATUS_LABEL: Readonly<Record<ProjectStatus, string>> = {
-  active: "Active",
-  archived: "Archived",
+  active: "active",
+  archived: "archived",
 };
 
 function statusTone(status: ProjectStatus): StatusTone {

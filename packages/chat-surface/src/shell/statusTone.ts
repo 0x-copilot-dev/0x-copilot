@@ -37,38 +37,46 @@ interface Entry {
 //   stopped/cancelled/archived → muted/off (NOT red)
 //   failed/error             → error (a genuine failure, distinct from a
 //                              user-initiated stop)
+// Labels are LOWERCASE literals — the design's chip vocabulary
+// (copilot-app.jsx:15-19,257-260) is `running` / `done` / `paused` / `stopped`
+// / `archived`, rendered as-is with NO text-transform. Casing is fixed here at
+// the source, not by a CSS `text-transform` (which would also miscase every
+// non-status caller). See PRD-02.
 const STATUS_MAP: Readonly<Record<string, Entry>> = {
-  running: { tone: "ok", label: "Running", live: true },
-  queued: { tone: "ok", label: "Queued", live: true },
-  streaming: { tone: "ok", label: "Streaming", live: true },
-  cancelling: { tone: "warning", label: "Stopping" },
-  done: { tone: "ok", label: "Done" },
-  completed: { tone: "ok", label: "Done" },
-  paused: { tone: "warning", label: "Paused" },
-  waiting_for_approval: { tone: "warning", label: "Needs approval" },
-  needs_input: { tone: "info", label: "Needs you" },
-  stopped: { tone: "muted", label: "Stopped" },
-  cancelled: { tone: "muted", label: "Cancelled" },
-  canceled: { tone: "muted", label: "Cancelled" },
-  archived: { tone: "muted", label: "Archived" },
-  failed: { tone: "error", label: "Failed" },
-  error: { tone: "error", label: "Error" },
+  running: { tone: "ok", label: "running", live: true },
+  queued: { tone: "ok", label: "queued", live: true },
+  streaming: { tone: "ok", label: "streaming", live: true },
+  cancelling: { tone: "warning", label: "stopping" },
+  done: { tone: "ok", label: "done" },
+  completed: { tone: "ok", label: "done" },
+  paused: { tone: "warning", label: "paused" },
+  waiting_for_approval: { tone: "warning", label: "needs approval" },
+  needs_input: { tone: "info", label: "needs you" },
+  stopped: { tone: "muted", label: "stopped" },
+  cancelled: { tone: "muted", label: "cancelled" },
+  canceled: { tone: "muted", label: "cancelled" },
+  archived: { tone: "muted", label: "archived" },
+  failed: { tone: "error", label: "failed" },
+  error: { tone: "error", label: "error" },
 };
 
-function titleCase(s: string): string {
-  const cleaned = s.replace(/[_-]+/g, " ").trim();
-  return cleaned ? cleaned[0].toUpperCase() + cleaned.slice(1) : "Unknown";
+// Normalise an unknown status string to the chip's lowercase vocabulary:
+// underscores/hyphens → spaces, trimmed, lowercased. Mirrors the known-label
+// casing so a new backend status renders in the same register.
+function normaliseLabel(s: string): string {
+  const cleaned = s.replace(/[_-]+/g, " ").trim().toLowerCase();
+  return cleaned.length > 0 ? cleaned : "unknown";
 }
 
 /**
  * Map any run/conversation status string to its chip presentation.
- * Unknown statuses fall back to a muted chip with a title-cased label — so a
+ * Unknown statuses fall back to a muted chip with a lowercased label — so a
  * new backend status renders quietly instead of miscolouring.
  */
 export function statusTone(status: string): RunStatusPresentation {
   const entry = STATUS_MAP[status];
   if (entry === undefined) {
-    return { tone: "muted", label: titleCase(status), showDot: false };
+    return { tone: "muted", label: normaliseLabel(status), showDot: false };
   }
   return { tone: entry.tone, label: entry.label, showDot: entry.live ?? false };
 }
