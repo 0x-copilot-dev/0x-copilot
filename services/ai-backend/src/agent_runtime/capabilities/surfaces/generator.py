@@ -964,6 +964,7 @@ class SurfaceGenerationScheduler:
         output: object,
         surface_uri: str,
     ) -> None:
+        started = time.perf_counter()
         try:
             result = await self._generator.generate(
                 server=server,
@@ -973,6 +974,7 @@ class SurfaceGenerationScheduler:
         except Exception:  # noqa: BLE001 - a generation crash records nothing, emits nothing
             _LOGGER.warning("%s generate_raised key=%s", _METER_PREFIX, key.digest())
             return
+        duration_ms = int((time.perf_counter() - started) * 1000)
         if isinstance(result, GenFailure):
             self._store.record_failure(key, result.reason, result.raw_output)
             return
@@ -980,15 +982,22 @@ class SurfaceGenerationScheduler:
             key=key, spec=result, generator_model=self._model_id
         )
         self._store.put(key, stored)
-        await self._emit_generated(surface_uri=surface_uri, spec=result)
+        await self._emit_generated(
+            surface_uri=surface_uri, spec=result, duration_ms=duration_ms
+        )
 
-    async def _emit_generated(self, *, surface_uri: str, spec: SurfaceSpec) -> None:
+    async def _emit_generated(
+        self, *, surface_uri: str, spec: SurfaceSpec, duration_ms: int = 0
+    ) -> None:
         payload: dict[str, object] = {
             "surface_uri": surface_uri,
             "archetype": spec.archetype.value,
             "spec": spec.model_dump(mode="json", exclude_none=True),
             "spec_version": spec.spec_version,
             "generator_model": self._model_id,
+            # PRD-B3 Hook 2 extension: the async upgrade's ``view.derived`` now
+            # carries the generation duration (``gen.ms``) alongside the model.
+            "generator_ms": duration_ms,
             "skill_version": str(self._generator.skill_version),
         }
         try:
@@ -1168,17 +1177,25 @@ def build_surface_generation_scheduler(
     completion: SpecCompletionPort | None = None,
     schedule: ScheduleFn | None = None,
     usage_meter: "MeteredModelInvocation | None" = None,
+    run_provider: str | None = None,
 ) -> SurfaceGenerationScheduler | None:
     """Build a run-scoped scheduler from env, or ``None`` when generation is off.
 
-    Gating (plan D6): an empty ``SURFACE_SPEC_MODEL`` disables generation
-    entirely — no model built, no scheduler, ladder unchanged. Otherwise the
-    model id routes through the existing ``init_chat_model`` factory (BYOK /
-    OpenRouter / Ollama aware for free) behind ``LangChainSpecCompletion``.
-    ``completion`` may be injected for tests to avoid constructing a real model.
+    Gating (plan D6 + PRD-B3): the shaping model id is resolved by
+    :class:`ShapingModelResolver` — an explicit ``SURFACE_SPEC_MODEL`` still wins
+    verbatim (today's behaviour), but with ``SURFACES_V2`` on and a configured
+    ``run_provider`` (a BYOK key) the desktop default is the cheapest model of
+    that provider (shaping-on default). No model resolved ⇒ no scheduler, ladder
+    unchanged (flag-off stays byte-identical). The id routes through the existing
+    ``init_chat_model`` factory (BYOK / OpenRouter / Ollama aware) behind
+    ``LangChainSpecCompletion``. ``completion`` may be injected for tests.
     """
 
-    model_id = environ.get("SURFACE_SPEC_MODEL", "").strip()
+    from agent_runtime.surfaces_v2.shaping_policy import (  # noqa: PLC0415
+        ShapingModelResolver,
+    )
+
+    model_id = ShapingModelResolver.resolve(environ=environ, run_provider=run_provider)
     if not model_id:
         return None
     if completion is None:

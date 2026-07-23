@@ -63,6 +63,16 @@ class ToolUseSection(BaseModel):
 
     workspace: dict[str, str]
     user: dict[str, str]
+    # PRD-C1 — per-connector write-policy override lane. ``{connector_slug:
+    # "ask_first" | "allow_always"}``, carrying ONLY the connectors that have a
+    # non-NULL override stored on their ``connectors`` row. Keyed by the
+    # connector's ``slug`` (the ai-backend re-normalizes both sides through
+    # ``server_slug`` so ``"linear"`` / ``"seed:linear"`` resolve alike).
+    # Empty when no ``connectors_store`` is wired (backward-compatible): older
+    # runtimes ignore this sibling key entirely (they read only ``workspace`` /
+    # ``user``), and ``ConnectorWritePolicyOverrides.from_user_policies`` sees
+    # ``{}`` -> no overrides -> pure global Approval Policy.
+    connector_write_policy: dict[str, str] = {}
 
 
 class PrivacySection(BaseModel):
@@ -113,8 +123,16 @@ def register_runtime_policies_routes(
     tool_use_store: ToolUsePolicyStore,
     privacy_store: PrivacySettingsStore,
     provider_keys_service: ProviderKeysService | None = None,
+    connectors_store: object | None = None,
 ) -> None:
-    """Attach ``/internal/v1/policies/runtime`` to the app."""
+    """Attach ``/internal/v1/policies/runtime`` to the app.
+
+    ``connectors_store`` (repo injection pattern, typed ``object | None`` to
+    avoid importing the connectors module here) supplies the per-connector
+    write-policy overrides. ``None`` -> an empty ``connector_write_policy`` map
+    (backward-compatible; the aggregate stays byte-identical for callers that
+    don't wire it).
+    """
 
     @app.get(
         "/internal/v1/policies/runtime",
@@ -132,6 +150,7 @@ def register_runtime_policies_routes(
         return RuntimePolicyResponse(
             tool_use=_compose_tool_use(
                 store=tool_use_store,
+                connectors_store=connectors_store,
                 org_id=identity.org_id,
                 user_id=identity.user_id,
             ),
@@ -161,6 +180,7 @@ def register_runtime_policies_routes(
 def _compose_tool_use(
     *,
     store: ToolUsePolicyStore,
+    connectors_store: object | None,
     org_id: str,
     user_id: str,
 ) -> ToolUseSection:
@@ -169,7 +189,46 @@ def _compose_tool_use(
     return ToolUseSection(
         workspace=_modes_by_kind(workspace_rows),
         user=_modes_by_kind(user_rows),
+        connector_write_policy=_connector_write_policy(
+            connectors_store=connectors_store, org_id=org_id, user_id=user_id
+        ),
     )
+
+
+def _connector_write_policy(
+    *,
+    connectors_store: object | None,
+    org_id: str,
+    user_id: str,
+) -> dict[str, str]:
+    """``{connector_slug: write_policy}`` for the tenant's overridden connectors.
+
+    Only rows with a non-NULL ``write_policy`` appear (the override lane — the
+    empty map means "no per-connector override, defer to global"). ``None``
+    store -> ``{}`` (backward-compatible). Keyed by the connector ``slug``; the
+    ai-backend re-normalizes through ``server_slug`` so a seed-prefixed vs bare
+    slug still resolves. Pages through the tenant list so a workspace with many
+    connectors is fully covered without a bespoke store method.
+    """
+
+    if connectors_store is None:
+        return {}
+    out: dict[str, str] = {}
+    cursor: str | None = None
+    # Bounded loop guard: even a large workspace terminates well within this;
+    # the cursor advancing to None is the real exit.
+    for _ in range(1000):
+        page, cursor = connectors_store.list_connectors(  # type: ignore[attr-defined]
+            tenant_id=org_id, cursor=cursor
+        )
+        for record in page:
+            policy = getattr(record, "write_policy", None)
+            if policy is None:
+                continue
+            out[record.slug] = policy.value if hasattr(policy, "value") else str(policy)
+        if cursor is None:
+            break
+    return out
 
 
 def _modes_by_kind(rows) -> dict[str, str]:  # type: ignore[no-untyped-def]

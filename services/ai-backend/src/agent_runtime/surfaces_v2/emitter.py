@@ -22,6 +22,8 @@ from collections.abc import Awaitable, Callable, Mapping
 from contextvars import ContextVar
 from dataclasses import dataclass
 
+from agent_runtime.capabilities.actions.classifier import ACTION_CLASSIFIER
+from agent_runtime.capabilities.mcp.annotations import McpToolAnnotationsRegistry
 from agent_runtime.capabilities.surfaces.builtin import server_slug, tool_slug
 from agent_runtime.capabilities.surfaces.generator import DotPathResolver
 from agent_runtime.capabilities.surfaces.spec_models import SurfaceArchetype
@@ -97,8 +99,15 @@ class WorkLedgerEmitter:
             op = tool_slug(tool_name)
             payload_ref = f"{Values.CALL_REF_PREFIX}{call_id}"
 
+            action_class, basis = self._classify(
+                server_name=server_name, tool_name=tool_name
+            )
             await self._emit_action_classified(
-                call_id=call_id, connector=connector, op=op
+                call_id=call_id,
+                connector=connector,
+                op=op,
+                action_class=action_class,
+                basis=basis,
             )
             await self._emit_read_executed(
                 call_id=call_id,
@@ -135,9 +144,19 @@ class WorkLedgerEmitter:
                 Keys.Field.TIER: Values.TIER_SHAPED,
                 Keys.Field.BASIS: Values.BASIS_GENERATED,
             }
+            # PRD-B3: the generated-basis upgrade carries the ``spec_ref`` for the
+            # authored spec (same ``spec:<server>/<tool>`` convention regenerate
+            # uses) and the ``gen`` block ``{model, ms}`` (A3 emitted model only).
+            spec_ref = self._spec_ref_from_spec(payload.get(_EnvelopeKey.SPEC))
+            if spec_ref is not None:
+                derived[Keys.Field.SPEC_REF] = spec_ref
             model = payload.get(_SchedulerPayload.GENERATOR_MODEL)
             if isinstance(model, str) and model:
-                derived[Keys.Field.GEN] = {Keys.Field.MODEL: model}
+                gen: dict[str, object] = {Keys.Field.MODEL: model}
+                ms = payload.get(_SchedulerPayload.GENERATOR_MS)
+                if isinstance(ms, int) and not isinstance(ms, bool) and ms >= 0:
+                    gen[Keys.Field.MS] = ms
+                derived[Keys.Field.GEN] = gen
             await self.emit(
                 LedgerEventType.VIEW_DERIVED.value, derived, Messages.VIEW_DERIVED
             )
@@ -146,16 +165,68 @@ class WorkLedgerEmitter:
 
     # -- payload builders ---------------------------------------------------
 
+    @staticmethod
+    def _spec_ref_from_spec(spec: object) -> str | None:
+        """Build the ``spec:<server>/<tool>`` ref from a generated spec's source.
+
+        The scheduler's ``surface_spec_generated`` payload carries the authored
+        spec; its ``source.server`` / ``source.tool`` key the same normalised ref
+        the regenerate path and the registry ladder use. Returns ``None`` when the
+        spec (or its source) is absent/malformed — the upgrade still emits without
+        a ref rather than fabricating one.
+        """
+
+        if not isinstance(spec, Mapping):
+            return None
+        source = spec.get(_EnvelopeKey.SOURCE)
+        if not isinstance(source, Mapping):
+            return None
+        server = source.get(_EnvelopeKey.SERVER)
+        tool = source.get(_EnvelopeKey.TOOL)
+        if not isinstance(server, str) or not server:
+            return None
+        if not isinstance(tool, str) or not tool:
+            return None
+        return f"{Values.SPEC_REF_PREFIX}{server_slug(server)}/{tool_slug(tool)}"
+
+    @staticmethod
+    def _classify(*, server_name: str, tool_name: str) -> tuple[str, str]:
+        """Classify the call into ``(class, basis)`` wire strings (PRD-C1).
+
+        Consults the module-level classifier singleton with the annotations the
+        per-run registry captured for this ``(server, tool)`` (``None`` when the
+        registry is unbound — replay/eval/tests — which falls through to
+        catalog/default, fail-closed). Best-effort: the classifier is pure and
+        total, but any surprise degrades to the honest ``unknown`` / ``default``
+        pair (A3's behaviour) rather than raising into the tool-call path.
+        """
+
+        try:
+            annotations = McpToolAnnotationsRegistry.get(server_name, tool_name)
+            classified = ACTION_CLASSIFIER.classify(
+                server=server_name, tool=tool_name, annotations=annotations
+            )
+            return classified.action_class.value, classified.basis.value
+        except Exception:  # noqa: BLE001 - classification never fails a tool call
+            _LOGGER.warning(Messages.CLASSIFY_RAISED, exc_info=True)
+            return Values.CLASS_UNKNOWN, Values.BASIS_DEFAULT
+
     async def _emit_action_classified(
-        self, *, call_id: str, connector: str, op: str
+        self,
+        *,
+        call_id: str,
+        connector: str,
+        op: str,
+        action_class: str,
+        basis: str,
     ) -> None:
         payload = {
             Keys.Field.V: Values.PAYLOAD_V,
             Keys.Field.CALL_ID: call_id,
             Keys.Field.CONNECTOR: connector,
             Keys.Field.OP: op,
-            Keys.Field.CLASS: Values.CLASS_UNKNOWN,
-            Keys.Field.BASIS: Values.BASIS_DEFAULT,
+            Keys.Field.CLASS: action_class,
+            Keys.Field.BASIS: basis,
         }
         await self.emit(LedgerEventType.ACTION_CLASSIFIED.value, payload, None)
 
@@ -290,6 +361,11 @@ class _EnvelopeKey:
     SPEC = "spec"
     DATA = "data"
     TITLE_PATH = "title_path"
+    # ``spec.source.{server,tool}`` — the connector/tool a generated spec binds
+    # to, used to build the B3 ``spec_ref``.
+    SOURCE = "source"
+    SERVER = "server"
+    TOOL = "tool"
 
 
 class _SchedulerPayload:
@@ -297,6 +373,7 @@ class _SchedulerPayload:
 
     SURFACE_URI = "surface_uri"
     GENERATOR_MODEL = "generator_model"
+    GENERATOR_MS = "generator_ms"
 
 
 _EMITTER_CTX: ContextVar[WorkLedgerEmitter | None] = ContextVar(

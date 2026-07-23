@@ -99,6 +99,7 @@ describe("projectLedger — fold invariants", () => {
       basis: "generated",
       specRef: "spec/x",
       generatorModel: "gpt-5.4-mini",
+      preference: null,
     });
     expect(s?.lastSeq).toBe(2);
     expect(s?.createdSeq).toBe(1);
@@ -244,5 +245,81 @@ describe("ledgerTabsAsSurfaceTabs", () => {
       title: "Title s1",
       lastSeq: 2,
     });
+  });
+});
+
+// PRD-B3 — view lifecycle: preference, upgrade merge, effective tier, reload.
+function preference(
+  surface_id: string,
+  keep: "generic" | "shaped",
+): RuntimeEventEnvelope {
+  return ev("view.preference", { v: 1, surface_id, keep, actor: "user" });
+}
+
+describe("projectLedger — PRD-B3 view lifecycle", () => {
+  it("generic → shaped upgrade flips effectiveTier and merges in place", () => {
+    const events = [
+      created("s1"),
+      derived("s1", { tier: "generic", basis: "schema" }),
+      derived("s1", { tier: "shaped", basis: "generated" }),
+    ];
+    const p = projectLedger(events);
+    const s = p.surfaces.get("s1");
+    // Same surface (tab identity), no second entry — merged in place.
+    expect(p.surfaces.size).toBe(1);
+    expect(s?.viewState?.effectiveTier).toBe("shaped");
+    expect(s?.viewState?.shapedAvailable).toBe(true);
+  });
+
+  it("keep: generic pins the tier across a later shaped derivation", () => {
+    const events = [
+      created("s1"),
+      derived("s1", { tier: "generic", basis: "schema" }),
+      preference("s1", "generic"),
+      derived("s1", { tier: "shaped", basis: "generated" }),
+    ];
+    const s = projectLedger(events).surfaces.get("s1");
+    // The shaped derivation lands (toggle enabled) but the pin holds the tier.
+    expect(s?.viewState?.effectiveTier).toBe("generic");
+    expect(s?.viewState?.keep).toBe("generic");
+    expect(s?.viewState?.shapedAvailable).toBe(true);
+    expect(s?.view?.preference).toBe("generic");
+  });
+
+  it("re-projecting the same events reproduces the pinned tier (reload DoD)", () => {
+    const events = [
+      created("s1"),
+      derived("s1", { tier: "shaped", basis: "generated" }),
+      preference("s1", "generic"),
+    ];
+    const first = projectLedger(events).surfaces.get("s1");
+    const second = projectLedger(events).surfaces.get("s1");
+    expect(first?.viewState?.effectiveTier).toBe("generic");
+    expect(second?.viewState).toEqual(first?.viewState);
+  });
+
+  it("keep: shaped only folds once a shaped derivation exists", () => {
+    const generic = projectLedger([
+      created("s1"),
+      derived("s1", { tier: "generic", basis: "schema" }),
+      preference("s1", "shaped"),
+    ]).surfaces.get("s1");
+    // No shaped derivation yet ⇒ the pin does not force shaped.
+    expect(generic?.viewState?.effectiveTier).toBe("generic");
+  });
+
+  it("counts regenerations (non-first, non-registry) for the cap mirror", () => {
+    const s = projectLedger([
+      created("s1"),
+      derived("s1", { tier: "generic", basis: "schema" }), // first (seed)
+      derived("s1", { tier: "shaped", basis: "generated" }), // regen 1
+      derived("s1", { tier: "generic", basis: "schema" }), // regen 2
+    ]).surfaces.get("s1");
+    expect(s?.viewState?.regenCount).toBe(2);
+  });
+
+  it("ignores a view.preference for an unseen surface", () => {
+    const p = projectLedger([preference("ghost", "generic")]);
+    expect(p.surfaces.size).toBe(0);
   });
 });

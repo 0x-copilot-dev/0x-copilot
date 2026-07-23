@@ -187,3 +187,67 @@ def test_forward_json_target_routes_to_correct_upstream() -> None:
     # Two distinct base URLs are exercised — the facade routes by target.
     assert len(captured) == 2
     assert captured[0] != captured[1]
+
+
+def test_create_conversation_forwards_project_id(monkeypatch) -> None:
+    """PRD-07 — POST /v1/agent/conversations with a ``project_id`` forwards it.
+
+    Regression for the silent drop: ``FacadeConversationRequest`` did not
+    declare ``project_id``, so Pydantic's ``extra="ignore"`` +
+    ``model_dump(exclude_none=True)`` deleted it before the upstream call. No app
+    could file a chat under a project — even by hand.
+    """
+
+    import base64
+    import hashlib
+    import hmac
+    import json as _json
+
+    from fastapi.testclient import TestClient
+
+    from backend_facade.app import create_app
+    from backend_facade.auth import FacadeAuthenticator
+    from backend_facade.settings import FacadeSettings
+
+    secret = "test-auth-secret"
+    monkeypatch.setenv("ENTERPRISE_AUTH_SECRET", secret)
+    monkeypatch.setenv("ENTERPRISE_SERVICE_TOKEN", "svc-token")
+    FacadeAuthenticator.touch_cache().clear()
+
+    body = _json.dumps(
+        {
+            "org_id": "org_a",
+            "user_id": "usr_a",
+            "roles": ["employee"],
+            "permission_scopes": ["runtime:use"],
+        },
+        separators=(",", ":"),
+        sort_keys=True,
+    ).encode()
+    payload_b64 = base64.urlsafe_b64encode(body).decode("ascii").rstrip("=")
+    sig = hmac.new(
+        secret.encode(), payload_b64.encode("ascii"), hashlib.sha256
+    ).digest()
+    sig_b64 = base64.urlsafe_b64encode(sig).decode("ascii").rstrip("=")
+    token = f"{payload_b64}.{sig_b64}"
+
+    captured: dict[str, object] = {}
+
+    async def _handler(request: httpx.Request) -> httpx.Response:
+        captured["url"] = str(request.url)
+        captured["body"] = _json.loads(request.content) if request.content else None
+        return httpx.Response(200, json={"conversation_id": "c1"})
+
+    app = create_app(FacadeSettings())
+    app.state.http_client = _client(httpx.MockTransport(_handler))
+    client = TestClient(app)
+
+    resp = client.post(
+        "/v1/agent/conversations",
+        json={"project_id": "p1", "title": "filed chat"},
+        headers={"authorization": f"Bearer {token}"},
+    )
+    assert resp.status_code == 200, resp.text
+    assert "/v1/agent/conversations" in str(captured["url"])
+    assert isinstance(captured["body"], dict)
+    assert captured["body"]["project_id"] == "p1"

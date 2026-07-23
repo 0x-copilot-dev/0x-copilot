@@ -65,6 +65,11 @@ class FacadeConversationRequest(BaseModel):
     title: str | None = None
     idempotency_key: str | None = None
     metadata: dict[str, object] = Field(default_factory=dict)
+    # PRD-07 — the project to file the new chat under. Declared explicitly so
+    # Pydantic's default ``extra="ignore"`` doesn't drop it on ``model_dump``
+    # (today a client that sends project_id has it silently deleted here);
+    # forwarded verbatim to ai-backend, which persists it on the column.
+    project_id: str | None = None
 
 
 class FacadeRunRequest(BaseModel):
@@ -413,20 +418,25 @@ def create_app(
         limit: int = Query(30, ge=1, le=200),
         include_archived: bool = False,
         include_deleted: bool = False,
+        # PRD-07 — the project-scoped chat list. Clients send the app-standard
+        # ``filter[project_id]`` axis; ai-backend's route reads a plain
+        # ``project_id`` query param, so translate here.
+        project_id: str | None = Query(None, alias="filter[project_id]"),
     ) -> dict[str, object]:
         identity = FacadeAuthenticator.authenticate_request(request)
+        params: dict[str, object] = {
+            "limit": limit,
+            "include_archived": include_archived,
+            "include_deleted": include_deleted,
+        }
+        if project_id is not None:
+            params["project_id"] = project_id
         return await forward_json(
             app,
             "GET",
             "/v1/agent/conversations",
             target="ai_backend",
-            params=identity.scoped_params(
-                {
-                    "limit": limit,
-                    "include_archived": include_archived,
-                    "include_deleted": include_deleted,
-                }
-            ),
+            params=identity.scoped_params(params),
             identity=identity,
         )
 
@@ -1091,6 +1101,51 @@ def create_app(
             f"/v1/agent/runs/{run_id}/surfaces",
             target="ai_backend",
             params=identity.scoped_params({}),
+            identity=identity,
+        )
+
+    # ``surface_id`` is a v1 surface_uri (``<archetype>://<server>/<tool>/<id>``)
+    # — it carries slashes, so both routes use the ``:path`` converter (Starlette
+    # captures the whole tail before the literal ``/regenerate`` suffix). The
+    # captured value is forwarded verbatim to the ai-backend, which uses the same
+    # ``:path`` converter, so the sub-path is not swallowed.
+    @app.post("/v1/agent/surfaces/{surface_id:path}/regenerate")
+    async def regenerate_surface_view(
+        request: Request,
+        surface_id: str,
+        run_id: str = Query(..., min_length=1),
+    ) -> dict[str, object]:
+        # Generative Surfaces v2 (PRD-B3): re-derive a surface's view from its
+        # stored payload (zero connector traffic). Keyed on ``surface_id`` + the
+        # owning ``run_id`` (SDR §4). Error passthrough rides forward_json.
+        identity = FacadeAuthenticator.authenticate_request(request)
+        return await forward_json(
+            app,
+            "POST",
+            f"/v1/agent/surfaces/{surface_id}/regenerate",
+            target="ai_backend",
+            params=identity.scoped_params({"run_id": run_id}),
+            json={},
+            identity=identity,
+        )
+
+    @app.post("/v1/agent/surfaces/{surface_id:path}/view-preference")
+    async def set_surface_view_preference(
+        request: Request,
+        surface_id: str,
+        payload: dict[str, object],
+        run_id: str = Query(..., min_length=1),
+    ) -> dict[str, object]:
+        # Generative Surfaces v2 (PRD-B3): pin the surface's tier preference
+        # (``generic``/``shaped``) — a durable ``view.preference`` ledger event.
+        identity = FacadeAuthenticator.authenticate_request(request)
+        return await forward_json(
+            app,
+            "POST",
+            f"/v1/agent/surfaces/{surface_id}/view-preference",
+            target="ai_backend",
+            params=identity.scoped_params({"run_id": run_id}),
+            json=payload,
             identity=identity,
         )
 

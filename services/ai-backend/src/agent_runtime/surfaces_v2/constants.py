@@ -31,6 +31,19 @@ class Keys:
         SPEC_REF = "spec_ref"
         GEN = "gen"
         MODEL = "model"
+        # ``gen.ms`` — generation duration, populated by the B3 ViewDeriver
+        # (A3 emitted ``gen.model`` only).
+        MS = "ms"
+        # ``view.preference`` keys (PRD-B3).
+        KEEP = "keep"
+        ACTOR = "actor"
+        # PRD-C2 gate.opened / gate.resolved payload keys (SDR §5, verbatim).
+        GATE_ID = "gate_id"
+        PURPOSE = "purpose"
+        SCOPES = "scopes"
+        AUTH_STATE = "auth_state"
+        OUTCOME = "outcome"
+        WRITE_POLICY = "write_policy"
 
 
 class Values:
@@ -52,6 +65,16 @@ class Values:
     # ``tool_result`` event carrying the same ``call_id`` in this run's replay.
     CALL_REF_PREFIX = "call:"
 
+    # ``spec_ref`` scheme (B3): ``spec:<server-slug>/<tool-slug>`` — the same
+    # ``<scheme>:<...>`` ref convention A3 uses for ``payload_ref``, keyed on the
+    # normalised connector/tool a registry or generated spec binds to.
+    SPEC_REF_PREFIX = "spec:"
+
+    # ``view.preference`` constant values (PRD-B3, SDR §5).
+    KEEP_GENERIC = "generic"
+    KEEP_SHAPED = "shaped"
+    ACTOR_USER = "user"
+
     # Every A3 payload carries ``v: 1`` (SDR §5 — versioned from day one).
     PAYLOAD_V = 1
 
@@ -66,9 +89,16 @@ class Messages:
     READ_EXECUTED = "auto-ran (read)"
     SURFACE_CREATED = "Prepared a surface"
     VIEW_DERIVED = "Derived a view"
+    VIEW_PREFERENCE = "Set a view preference"
 
     # Log tag when an emitter method swallows its own exception (D3/D8).
     EMIT_RAISED = "[surfaces_v2] ledger.emit_raised"
+
+    # Log tag when classification raises at the emission site (PRD-C1). The
+    # classifier is pure + total, so this should never fire — but the emit path
+    # degrades to ``class=unknown`` / ``basis=default`` (honest fallback) rather
+    # than failing the tool call.
+    CLASSIFY_RAISED = "[surfaces] action.classify_raised"
 
 
 class Titles:

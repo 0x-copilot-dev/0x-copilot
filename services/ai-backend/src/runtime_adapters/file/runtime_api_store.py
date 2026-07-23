@@ -1049,6 +1049,7 @@ class FileRuntimeApiStore:
             title=request.title,
             metadata=request.metadata,
             idempotency_key=request.idempotency_key,
+            project_id=request.project_id,
         )
         async with self._conversation_lock(conversation.conversation_id):
             self.conversations[conversation.conversation_id] = conversation
@@ -1085,6 +1086,7 @@ class FileRuntimeApiStore:
         limit: int,
         include_archived: bool = False,
         include_deleted: bool = False,
+        project_id: str | None = None,
     ) -> Sequence[ConversationRecord]:
         docs = self._index.list_conversations(
             org_id=org_id,
@@ -1092,8 +1094,24 @@ class FileRuntimeApiStore:
             limit=limit,
             include_archived=include_archived,
             include_deleted=include_deleted,
+            project_id=project_id,
         )
         return tuple(ConversationRecord.model_validate_json(doc) for doc in docs)
+
+    async def count_conversations_by_project(
+        self,
+        *,
+        org_id: str,
+        user_id: str,
+        project_ids: Sequence[str],
+    ) -> Mapping[str, int]:
+        """Group the caller's non-deleted conversations by project (PRD-07)."""
+
+        return self._index.count_conversations_by_project(
+            org_id=org_id,
+            user_id=user_id,
+            project_ids=project_ids,
+        )
 
     async def search_conversations(
         self,
@@ -1248,6 +1266,8 @@ class FileRuntimeApiStore:
         folder_changed: bool,
         archived: bool | None,
         archived_changed: bool,
+        project_id: str | None,
+        project_id_changed: bool,
         now: datetime,
     ) -> ConversationRecord | None:
         conversation = await self.get_conversation(
@@ -1260,6 +1280,8 @@ class FileRuntimeApiStore:
             update["title"] = title
         if folder_changed:
             update["folder"] = folder
+        if project_id_changed:
+            update["project_id"] = project_id
         if archived_changed:
             if archived:
                 update["status"] = ConversationStatus.ARCHIVED

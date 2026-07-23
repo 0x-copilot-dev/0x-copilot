@@ -1773,11 +1773,20 @@ def create_app(
     # two. Read-only; no audit row beyond the per-fetch access log.
     # Phase 2 BYOK adds the optional decrypted ``provider_keys`` section
     # to the same snapshot (service-token-only lane).
+    # Resolve the connectors store early: the aggregate runtime-policies route
+    # reads per-connector write-policy overrides from it (PRD-C1), and the
+    # Phase-11 connectors destination (wired further below) reuses this exact
+    # instance so a PATCH-written override is visible on the same run.
+    resolved_connectors_store: ConnectorsStore = (
+        connectors_store or InMemoryConnectorsStore()  # type: ignore[assignment]
+    )
+    app.state.connectors_store = resolved_connectors_store
     register_runtime_policies_routes(
         app,
         tool_use_store=resolved_policy_store,
         privacy_store=resolved_privacy_store,
         provider_keys_service=provider_keys_service,
+        connectors_store=resolved_connectors_store,
     )
     # PR B3 / 8.0.3g — personal API keys (atlas_pk_… bearer for CI /
     # scripts). Plaintext is shown ONCE on creation; the server stores
@@ -1924,10 +1933,9 @@ def create_app(
     # from the package-local ``catalog.yaml``; a soft-fail wraps the
     # load so a missing file degrades to an empty Available tab rather
     # than a boot crash.
-    resolved_connectors_store: ConnectorsStore = (
-        connectors_store or InMemoryConnectorsStore()  # type: ignore[assignment]
-    )
-    app.state.connectors_store = resolved_connectors_store
+    # ``resolved_connectors_store`` is resolved + stashed on ``app.state``
+    # earlier (beside the runtime-policies route registration) so the aggregate
+    # sees the same instance; reuse it here — do NOT re-create it.
     try:
         connector_catalog = load_catalog()
     except Exception:
@@ -2183,6 +2191,33 @@ def create_app(
     register_library_search_routes(app, engine=library_search_engine)
 
     register_library_routes(app, service=library_service)
+
+    # PRD-07 — computed-on-read project rollup counts. Registered here, after
+    # every destination's store exists (library is constructed above), so the
+    # projects service composes each card's "N chats · N files" (+ todos / inbox
+    # / routines / members) from a batched, viewer-scoped `count_by_project` per
+    # page — killing the old per-card stored-counts read + limit=501 membership
+    # scan. `chats` stays None here; the facade fills it from ai-backend.
+    from backend_app.projects.rollup_sources import (
+        MembersRollupSource,
+        StoreRollupSource,
+    )
+
+    projects_service.register_rollup_sources(
+        [
+            StoreRollupSource(
+                store=resolved_library_store, fields=("files", "library_items")
+            ),
+            StoreRollupSource(
+                store=resolved_todos_store, fields=("todos_open", "todos_done")
+            ),
+            StoreRollupSource(store=resolved_inbox_store, fields=("inbox_items",)),
+            StoreRollupSource(
+                store=resolved_routines_store, fields=("routines_active",)
+            ),
+            MembersRollupSource(resolved_projects_store),
+        ]
+    )
 
     # =====================================================================
     # Phase 12 P12-A3 — Memory destination (CRUD + proposals + search + SSE).

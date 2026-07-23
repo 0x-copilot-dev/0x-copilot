@@ -81,6 +81,9 @@ import type {
   ReadExecutedPayload,
   SurfaceCreatedPayload,
   ViewDerivedPayload,
+  ViewPreferencePayload,
+  GateOpenedPayload,
+  GateResolvedPayload,
 } from "./ledger";
 
 export type McpTransport = "http" | "sse" | "stdio";
@@ -389,6 +392,9 @@ export type RuntimeApiEventType =
   | "read.executed"
   | "surface.created"
   | "view.derived"
+  | "view.preference"
+  | "gate.opened"
+  | "gate.resolved"
   | "workspace_snapshot_captured";
 
 export const RUNTIME_EVENT_SOURCES = [
@@ -452,6 +458,9 @@ export const RUNTIME_API_EVENT_TYPES = [
   "read.executed",
   "surface.created",
   "view.derived",
+  "view.preference",
+  "gate.opened",
+  "gate.resolved",
   "workspace_snapshot_captured",
 ] as const satisfies readonly RuntimeApiEventType[];
 
@@ -674,6 +683,13 @@ export interface Conversation {
    */
   preview?: string | null;
   model?: string | null;
+  /**
+   * PRD-07 — the project this conversation is filed under (migration 0003).
+   * `null`/absent on every non-project chat and older server payloads. Set on
+   * create or via `PATCH /v1/agent/conversations/{id}` (`null` unfiles); the
+   * project detail's Chats section reads the list filtered on this axis.
+   */
+  project_id?: string | null;
 }
 
 /**
@@ -1785,6 +1801,13 @@ export interface ApprovalDecisionRequest {
   // Shape is validated server-side (unknown edit keys ⇒ 422); the facade
   // passes it through unchanged.
   edits?: SurfaceEdits | null;
+  // PRD-C2 (Wave C) — the gate-time write-policy choice on an mcp_auth gate
+  // resolution. Permitted only when `decision === "approved"` (the request
+  // validator 422s otherwise); the ai-backend coordinator additionally
+  // requires the approval to be an mcp_auth gate and the v2 flag to be on,
+  // then persists it as the per-connector override (PRD-C1) before recording
+  // the decision. The facade passes it through unchanged.
+  write_policy?: "ask_first" | "allow_always" | null;
 }
 
 export interface ApprovalDecisionResponse {
@@ -2220,6 +2243,16 @@ export interface RuntimeEventPayloadByType {
   "read.executed": ReadExecutedPayload;
   "surface.created": SurfaceCreatedPayload;
   "view.derived": ViewDerivedPayload;
+  /** Generative Surfaces v2 (PRD-B3, SDR §5). The durable tier preference — a
+   * user "Keep generic"/"Shaped" pin that survives reload by replay. */
+  "view.preference": ViewPreferencePayload;
+  /** Generative Surfaces v2 (PRD-C2, SDR §5). The ToolAccessGate park/resume
+   * pair, emitted behind `SURFACES_V2`: `gate.opened` beside the mcp_auth
+   * interrupt, `gate.resolved` when the decision endpoint records the
+   * connect/cancel. The client ledger fold renders the canvas gate card + the
+   * posture chip from these (never the legacy `mcp_auth_required` event). */
+  "gate.opened": GateOpenedPayload;
+  "gate.resolved": GateResolvedPayload;
   /** AC5 slice 3b — host write-through pre-image snapshot. Emitted by the
    * workspace backend BEFORE an approved overwrite/edit mutates a granted
    * host file: the prior bytes are stored content-addressed and this event
@@ -4409,6 +4442,7 @@ export type {
   ProjectActivityListResponse,
   ProjectArchiveBlockedResponse,
   ProjectColorHue,
+  ProjectFileRow,
   ProjectIconEmoji,
   ProjectListResponse,
   ProjectMembership,
@@ -4519,6 +4553,7 @@ export type {
 export type {
   Connector,
   ConnectorAccessMode,
+  ConnectorWritePolicy,
   ConnectorAuditEntry,
   ConnectorAuditResponse,
   ConnectorAvailability,
@@ -4540,6 +4575,8 @@ export type {
   RefreshConnectorResponse,
   SetConnectorAccessModeRequest,
   SetConnectorAccessModeResponse,
+  SetConnectorWritePolicyRequest,
+  SetConnectorWritePolicyResponse,
   StartConnectorOAuthResponse,
   TestFireWebhookRequest,
   Webhook,
@@ -4555,6 +4592,9 @@ export type {
 // redesign, Phase 4). Value export so the 3-way segment + tests can
 // enumerate the modes without redeclaring them.
 export { CONNECTOR_ACCESS_MODES } from "./connectors";
+// Runtime SSOT tuple for the per-connector write-policy union (PRD-C1). Value
+// export so the posture control + tests can enumerate the values.
+export { CONNECTOR_WRITE_POLICIES } from "./connectors";
 // AC9 — Desktop MCP connector OAuth transport (desktop-only variant types).
 // These do NOT touch the shared web OAuth shapes above; they live in a
 // separate module so the shipped web redirect flow stays byte-identical while

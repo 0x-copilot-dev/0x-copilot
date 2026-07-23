@@ -176,6 +176,17 @@ class RoutinesStore(Protocol):
 
     def count_active_for_user(self, *, tenant_id: str, owner_user_id: str) -> int: ...
 
+    # -- rollup counts (PRD-07) ----------------------------------------
+
+    def count_by_project(
+        self,
+        *,
+        tenant_id: str,
+        project_ids: tuple[str, ...],
+        caller_user_id: str,
+        caller_roles: tuple[str, ...],
+    ) -> dict[str, dict[str, int]]: ...
+
     # -- fires ---------------------------------------------------------
 
     def insert_fire(self, record: RoutineFireRecord) -> RoutineFireRecord: ...
@@ -322,6 +333,31 @@ class InMemoryRoutinesStore:
             and r.status == "active"
             and r.deleted_at is None
         )
+
+    # -- rollup counts (PRD-07) ----------------------------------------
+
+    def count_by_project(
+        self,
+        *,
+        tenant_id: str,
+        project_ids: tuple[str, ...],
+        caller_user_id: str,
+        caller_roles: tuple[str, ...],
+    ) -> dict[str, dict[str, int]]:
+        """Group live active routines by project into ``routines_active``."""
+
+        wanted = set(project_ids)
+        result: dict[str, dict[str, int]] = {}
+        for record in self.routines.values():
+            if record.tenant_id != tenant_id or record.deleted_at is not None:
+                continue
+            pid = record.project_id
+            if pid is None or pid not in wanted:
+                continue
+            bucket = result.setdefault(pid, {"routines_active": 0})
+            if record.status == "active":
+                bucket["routines_active"] += 1
+        return result
 
     # -- fires ---------------------------------------------------------
 

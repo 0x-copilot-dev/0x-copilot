@@ -12,10 +12,11 @@
         "tier": "shaped",
         "basis": "generated",
         "spec_ref": "spec/issue_record_v1",
-        "generator_model": "gpt-5.4-mini"
+        "generator_model": "gpt-5.4-mini",
+        "preference": "shaped"
       },
       "first_sequence_no": 5,
-      "last_sequence_no": 7,
+      "last_sequence_no": 8,
       "ledger_id": "ra7f·005"
     },
     {

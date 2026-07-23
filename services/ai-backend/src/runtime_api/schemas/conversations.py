@@ -128,6 +128,12 @@ class ConversationRecord(RuntimeContract):
     idempotency_key: str | None = None
     enabled_connectors: ConversationConnectorScopes = Field(default_factory=dict)
     connectors_updated_at: datetime | None = None
+    # PRD-07 — the project this conversation is filed under (migration 0003).
+    # A loose reference (no FK; projects live in another service). Nullable —
+    # a conversation with no project is the common case. Persisted from
+    # ``CreateConversationRequest.project_id`` on create and re-filed via the
+    # ``UpdateConversationRequest`` merge-patch (``null`` unfiles).
+    project_id: str | None = None
     # PR 1.6 — conversation lifecycle (migration 0020).
     # ``deleted_at`` is the soft-delete tombstone consulted by
     # ``list_conversations`` (excluded by default) and reaped by the C8
@@ -226,6 +232,7 @@ class ConversationRecord(RuntimeContract):
             folder=self.folder,
             parent_conversation_id=self.parent_conversation_id,
             pinned=self.pinned,
+            project_id=self.project_id,
             forked_from_share_id=self.forked_from_share_id,
             forked_from_message_id=self.forked_from_message_id,
         )
@@ -251,6 +258,9 @@ class ConversationResponse(RuntimeContract):
     deleted_at: datetime | None = None
     folder: str | None = None
     parent_conversation_id: str | None = None
+    # PRD-07 — the project this conversation is filed under. Nullable;
+    # ``null`` on every non-project chat and older server payloads.
+    project_id: str | None = None
     # PRD-H.4 — first-class pin flag surfaced to the Chats list. Defaults
     # False so old clients + non-pinned rows compile/behave unchanged.
     pinned: bool = False
@@ -349,6 +359,17 @@ class ConversationListResponse(RuntimeContract):
     has_more: bool = False
 
 
+class ConversationCountsResponse(RuntimeContract):
+    """Per-project live-conversation counts (PRD-07).
+
+    Backs ``GET /v1/agent/conversations/counts?project_ids=a,b,c``. ``counts``
+    carries one entry per requested project id — 0 for a project the caller has
+    no chats filed under — so the facade's rollup join is a single batched read.
+    """
+
+    counts: dict[str, int] = Field(default_factory=dict)
+
+
 class ConnectorScopeValidator:
     """Shape-only validation + normalization for connector scope payloads.
 
@@ -435,11 +456,21 @@ class UpdateConversationRequest(RuntimeContract):
     title: str | None = None
     folder: str | None = None
     archived: bool | None = None
+    # PRD-07 — re-file (or unfile) a conversation into a project. RFC 7396
+    # merge-patch semantics: omitted leaves it untouched; ``null`` unfiles;
+    # a string files it. Presence is detected via ``model_fields_set`` exactly
+    # like ``title`` / ``folder``.
+    project_id: str | None = None
     # Pydantic distinguishes "omitted" from "explicit null" via
     # ``model_dump(exclude_unset=True)`` — the service uses that to
     # decide which columns to UPDATE. We carry an internal sentinel set
     # so adapters know the patch's intent without reflecting on the
     # Pydantic model from the persistence layer.
+
+    @field_validator("project_id", mode="before")
+    @classmethod
+    def _normalize_project_id(cls, value: object) -> str | None:
+        return ValueNormalizer.normalize_optional_id(value, "project_id")
 
     @field_validator(_Fields.TITLE, mode="before")
     @classmethod

@@ -449,13 +449,14 @@ class PostgresMergeData:
         # owner row before and after the user-column retenant.
         ("project_memberships", "keyed", "tenant_id", "user_id", ("project_id",)),
         ("project_stars", "keyed", "tenant_id", "user_id", ("project_id",)),
-        # Activity projection + counts follow their PROJECT (tenant-only
-        # retenant): leaving them on the retired org would RLS-hide a live
-        # project's history. No collisions possible — audit_id and
-        # project_id are globally unique. ``actor_user_id`` stays as
-        # provenance on the absorbed author (nullable, loose).
+        # Activity projection follows its PROJECT (tenant-only retenant):
+        # leaving it on the retired org would RLS-hide a live project's
+        # history. No collisions possible — audit_id and project_id are
+        # globally unique. ``actor_user_id`` stays as provenance on the
+        # absorbed author (nullable, loose). (PRD-07 dropped the per-project
+        # rollup counter table; counts are computed on read, so there is no
+        # counter row to retenant.)
         ("project_activity", "retenant", "tenant_id", None, ()),
-        ("project_activity_counts", "retenant", "tenant_id", None, ()),
         # Templates: same load-bearing-owner shape as projects, no unique
         # name constraint — plain retenant.
         ("project_templates", "retenant", "tenant_id", "owner_user_id", ()),

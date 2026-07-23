@@ -380,16 +380,24 @@ export interface RunReceipt {
 // client fold + parity snapshot target THIS shape (snake_case, metadata-only).
 // ---------------------------------------------------------------------------
 
-/** The derived-view state of a surface, folded from `view.derived`. */
+/** The derived-view state of a surface, folded from `view.derived`. PRD-B3 adds
+ * `preference` — the durable tier pin folded from `view.preference` (the
+ * server half of "Keep generic survives reload"), absent until the user pins. */
 export interface SurfaceViewState {
   tier: ViewTier;
   basis: ViewBasis;
   spec_ref?: string;
   generator_model?: string;
+  preference?: ViewKeep;
 }
 
-/** One surface's folded metadata (no hydrated payload content). `view` is
- * present only once a `view.derived` has landed for the surface. */
+/** One surface's folded metadata. `view` is present only once a `view.derived`
+ * has landed for the surface. PRD-B2 content hydration: `state` carries the
+ * surface's materialized `{spec?, data}`, resolved server-side from the run's
+ * events — `null`/absent until a content event has landed (honest "not
+ * hydrated", never fabricated). The metadata fields are pinned by the
+ * cross-language parity snapshot; `state` is additive and NOT part of it (the
+ * pure fold cannot produce content). */
 export interface SurfaceSnapshot {
   surface_id: string;
   kind: SurfaceKind;
@@ -401,6 +409,8 @@ export interface SurfaceSnapshot {
   first_sequence_no: number;
   last_sequence_no: number;
   ledger_id: string;
+  /** PRD-B2 hydrated content (`{spec?, data}`); absent/null when not hydrated. */
+  state?: Record<string, unknown> | null;
 }
 
 /** `GET /v1/agent/runs/{run_id}/surfaces` response — the run's SurfaceStore. */

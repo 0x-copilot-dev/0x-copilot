@@ -42,6 +42,7 @@ import {
   useTransport,
   type ConnectorAccessPort,
   type ConnectorsFilterSlug,
+  type ProjectDataPort,
   type ProjectSummary,
   type RunEmptyComposerCtx,
   type RunStartRequest,
@@ -62,6 +63,10 @@ import type {
   ConversationId,
   ConversationListResponse,
   DesktopConnectorCatalogResponse,
+  LibraryFile,
+  LibraryListResponse,
+  ProjectFileRow,
+  ProjectId,
   RunHistoryResponse,
   RunId,
   SectionResult,
@@ -484,7 +489,10 @@ export function ProjectsBinder(): ReactElement {
   const load = useCallback(() => loadProjects(transport), [transport]);
   const { result, retry } = useSectionLoad(load);
   // Desktop has no project-detail flow yet: the disabled binding is the
-  // EXPLICIT statement of that gap (PRD-03 Move 2). The name cache is primed by
+  // EXPLICIT statement of that gap (PRD-03 Move 2). Making the detail reachable
+  // (`focusedProjectId` + `renderDetail`) is PRD-10 (DoD 9); PRD-07 lands the
+  // `ProjectDataPort` that will feed that detail's Chats + Files sections and
+  // does not itself flip the binding. The name cache is primed by
   // ProjectsDestination from `items`, so cross-destination project links resolve
   // to the real name (no host cache-priming call any more).
   return (
@@ -494,6 +502,98 @@ export function ProjectsBinder(): ReactElement {
       onRetry={retry}
     />
   );
+}
+
+// ===========================================================================
+// Project data — PRD-07 `ProjectDataPort` (the detail view's Chats + Files
+// seam). The desktop-native implementation over the shell `Transport`, the
+// twin of apps/frontend's web implementation, so the shared `ProjectDetailView`
+// renders identical project-scoped chats + files on both hosts. Neither host
+// invents an endpoint (Seam 3):
+//
+//   * chats → `GET /v1/agent/conversations?filter[project_id]=<id>
+//     &include_archived=true`, mapped by PRD-03's shared per-row projector
+//     `toChatArchiveRow` (so PRD-02's status chip + PRD-10's row apply for free
+//     — no third row projection). The query lives in the PATH, not a `query`
+//     object, so the facade's `filter[project_id]` alias survives verbatim
+//     (the facade translates it to ai-backend's plain `project_id`).
+//   * files → `GET /v1/library?filter[project_id]=<id>&filter[kind]=file`,
+//     mapping each `LibraryFile` → `ProjectFileRow`. A project file IS a library
+//     item with `project_id` set — no second `/v1/projects/{id}/files` source.
+//
+// Each method resolves a `SectionResult` (never throws) so the detail view's
+// uniform 4-state machine (error / unavailable / empty / ready) drives itself.
+// ===========================================================================
+
+function projectChatsPath(projectId: ProjectId): string {
+  const id = encodeURIComponent(projectId);
+  return `/v1/agent/conversations?filter[project_id]=${id}&include_archived=true`;
+}
+
+function projectFilesPath(projectId: ProjectId): string {
+  const id = encodeURIComponent(projectId);
+  return `/v1/library?filter[project_id]=${id}&filter[kind]=file&limit=50`;
+}
+
+// Human-readable file size from raw bytes (display-only sub-line). `undefined`
+// for missing / zero so the row omits the segment rather than showing "0 B".
+export function fileSizeLabel(bytes: number): string | undefined {
+  if (!Number.isFinite(bytes) || bytes <= 0) return undefined;
+  const units = ["B", "KB", "MB", "GB", "TB"];
+  let value = bytes;
+  let unit = 0;
+  while (value >= 1024 && unit < units.length - 1) {
+    value /= 1024;
+    unit += 1;
+  }
+  const rounded =
+    unit === 0 || value >= 10 ? Math.round(value) : Math.round(value * 10) / 10;
+  return `${rounded} ${units[unit]}`;
+}
+
+export function toProjectFileRow(file: LibraryFile): ProjectFileRow {
+  return {
+    id: file.id,
+    name: file.name,
+    fileKind: file.file_kind,
+    updatedAt: file.updated_at,
+    sizeLabel: fileSizeLabel(file.size_bytes),
+  };
+}
+
+export function createDesktopProjectDataPort(
+  transport: Transport,
+): ProjectDataPort {
+  return {
+    async listProjectChats(projectId: ProjectId) {
+      try {
+        const response = await transport.request<ConversationListResponse>({
+          method: "GET",
+          path: projectChatsPath(projectId),
+        });
+        const rows = (response?.conversations ?? [])
+          .filter((conversation) => conversation.deleted_at == null)
+          .map(toChatArchiveRow);
+        return { status: "ok", data: rows };
+      } catch (error) {
+        return { status: "error", error: errorText(error) };
+      }
+    },
+    async listProjectFiles(projectId: ProjectId) {
+      try {
+        const response = await transport.request<LibraryListResponse>({
+          method: "GET",
+          path: projectFilesPath(projectId),
+        });
+        const rows = (response?.items ?? [])
+          .filter((item): item is LibraryFile => item.kind === "file")
+          .map(toProjectFileRow);
+        return { status: "ok", data: rows };
+      } catch (error) {
+        return { status: "error", error: errorText(error) };
+      }
+    },
+  };
 }
 
 // A stable idempotency key for a NEW chat's first send. Uniqueness per new-chat
@@ -743,6 +843,38 @@ export function RunBinder({
       // PRD-B1: Generative Surfaces v2 canvas — opt-in client flag (default
       // OFF), paired with the runtime SURFACES_V2 flag.
       surfacesV2={isSurfacesV2Enabled()}
+      // PRD-B2: raw-fallback Copy / Download. Renderer-side (the Electron
+      // renderer has the DOM); the package stays substrate-agnostic.
+      onCopyText={copyTextToClipboard}
+      onSaveFile={saveTextToFile}
     />
   );
+}
+
+// PRD-B2 raw-fallback host callbacks. Renderer-side so no new IPC channel is
+// required; the substrate-agnostic package hands us the full serialized payload.
+async function copyTextToClipboard(text: string): Promise<void> {
+  if (typeof navigator === "undefined" || navigator.clipboard === undefined) {
+    throw new Error("clipboard unavailable");
+  }
+  await navigator.clipboard.writeText(text);
+}
+
+async function saveTextToFile(text: string, filename: string): Promise<void> {
+  if (typeof document === "undefined") {
+    throw new Error("download unavailable: no document");
+  }
+  const blob = new Blob([text], { type: "application/json" });
+  const url = URL.createObjectURL(blob);
+  try {
+    const anchor = document.createElement("a");
+    anchor.href = url;
+    anchor.download = filename;
+    anchor.rel = "noopener";
+    document.body.appendChild(anchor);
+    anchor.click();
+    anchor.remove();
+  } finally {
+    setTimeout(() => URL.revokeObjectURL(url), 0);
+  }
 }

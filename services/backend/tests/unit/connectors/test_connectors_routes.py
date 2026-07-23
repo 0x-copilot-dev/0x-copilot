@@ -300,6 +300,103 @@ class TestAccessModePatchEndpoint:
         assert resp.status_code == 400
 
 
+class TestWritePolicyPatchEndpoint:
+    """PRD-C1 — ``PATCH /v1/connectors/{id}/write-policy`` (set + clear)."""
+
+    def test_unset_write_policy_is_null_on_list(self) -> None:
+        client, store = _client()
+        _seed_record(store)
+        resp = client.get("/v1/connectors", params=_q())
+        assert resp.status_code == 200, resp.text
+        row = resp.json()["connectors"][0]
+        # Additive field; null when no override stored.
+        assert row["write_policy"] is None
+
+    def test_owner_sets_allow_always_returns_200(self) -> None:
+        client, store = _client()
+        record = _seed_record(store)
+        resp = client.patch(
+            f"/v1/connectors/{record.id}/write-policy",
+            params=_q(),
+            json={"write_policy": "allow_always"},
+        )
+        assert resp.status_code == 200, resp.text
+        assert resp.json()["connector"]["write_policy"] == "allow_always"
+        actions = [r.action for r in store.audits if r.target_id == record.id]
+        assert "connector.write_policy_changed" in actions
+
+    def test_set_then_clear_round_trips_on_list(self) -> None:
+        client, store = _client()
+        record = _seed_record(store)
+        client.patch(
+            f"/v1/connectors/{record.id}/write-policy",
+            params=_q(),
+            json={"write_policy": "ask_first"},
+        )
+        # GET reflects the set value.
+        listed = client.get("/v1/connectors", params=_q()).json()["connectors"][0]
+        assert listed["write_policy"] == "ask_first"
+        # Clearing with null removes the override.
+        cleared = client.patch(
+            f"/v1/connectors/{record.id}/write-policy",
+            params=_q(),
+            json={"write_policy": None},
+        )
+        assert cleared.status_code == 200, cleared.text
+        assert cleared.json()["connector"]["write_policy"] is None
+        listed_after = client.get("/v1/connectors", params=_q()).json()["connectors"][0]
+        assert listed_after["write_policy"] is None
+
+    def test_idempotent_set_writes_no_audit(self) -> None:
+        client, store = _client()
+        record = _seed_record(store)
+        client.patch(
+            f"/v1/connectors/{record.id}/write-policy",
+            params=_q(),
+            json={"write_policy": "allow_always"},
+        )
+        before = len([r for r in store.audits if r.target_id == record.id])
+        client.patch(
+            f"/v1/connectors/{record.id}/write-policy",
+            params=_q(),
+            json={"write_policy": "allow_always"},
+        )
+        after = len([r for r in store.audits if r.target_id == record.id])
+        assert after == before
+
+    def test_invalid_value_returns_400(self) -> None:
+        client, store = _client()
+        record = _seed_record(store)
+        resp = client.patch(
+            f"/v1/connectors/{record.id}/write-policy",
+            params=_q(),
+            json={"write_policy": "sometimes"},
+        )
+        assert resp.status_code == 400
+
+    def test_non_owner_non_admin_403(self) -> None:
+        client, store = _client()
+        record = _seed_record(store, owner_user_id="usr_sarah")
+        resp = client.patch(
+            f"/v1/connectors/{record.id}/write-policy",
+            params=_q(user="usr_bob"),
+            json={"write_policy": "allow_always"},
+        )
+        assert resp.status_code == 403
+        assert resp.json()["detail"] == "owner_or_admin_only"
+
+    def test_cross_tenant_returns_404_not_403(self) -> None:
+        client, store = _client()
+        record = _seed_record(store)
+        resp = client.patch(
+            f"/v1/connectors/{record.id}/write-policy",
+            params={"org_id": "org_zeta", "user_id": "usr_sarah"},
+            json={"write_policy": "allow_always"},
+        )
+        assert resp.status_code == 404
+        assert resp.json()["detail"] == "connector_not_found"
+
+
 class TestStartOAuthEndpoint:
     def test_start_oauth_returns_stub_url(self) -> None:
         client, _ = _client()

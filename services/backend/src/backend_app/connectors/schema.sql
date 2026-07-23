@@ -30,6 +30,13 @@ CREATE TABLE IF NOT EXISTS connectors (
     -- 'read' so a migrate never silently disables a working connector. Kept
     -- on one line, byte-for-semantics identical to the 0046 migration.
     access_mode TEXT NOT NULL DEFAULT 'read' CHECK (access_mode IN ('read', 'read_act', 'off')),
+    -- Per-connector agent WRITE POLICY — the approval-posture override.
+    -- See PRD-C1 / migration 0047_connector_write_policy.sql. A DISTINCT
+    -- axis from access_mode: NULL = no override (defer to the global
+    -- Settings Approval Policy); 'ask_first' = hold writes for approval;
+    -- 'allow_always' = run otherwise-allowed writes without asking. Kept on
+    -- one line, byte-for-semantics identical to the 0047 migration.
+    write_policy TEXT NULL CHECK (write_policy IN ('ask_first', 'allow_always')),
     owner_user_id   TEXT         NOT NULL,
     -- JSONB array of ConnectorScopeEntry. Provider-specific scope
     -- strings; description sourced from the catalog at backend bootstrap.

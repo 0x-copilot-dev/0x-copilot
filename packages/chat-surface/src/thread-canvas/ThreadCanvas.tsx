@@ -60,10 +60,20 @@ import type {
 import type { Transport } from "@0x-copilot/chat-transport";
 
 import type { SurfacePayload } from "./eventProjector";
+import { projectProvenance } from "./provenance";
+import { projectStatusLine } from "./statusLine";
+import { surfaceIdForTabUri } from "./ledgerProjection";
 import { SwimlaneScrubProvider } from "./SwimlaneScrubContext";
 import { TcChat } from "./TcChat";
 import { TcMiniTimeline } from "./TcMiniTimeline";
+import { TcStatusStrip } from "./TcStatusStrip";
+import { TcSurfaceFrame } from "./TcSurfaceFrame";
 import { TcSurfaceMount, type PendingDiffHandle } from "./TcSurfaceMount";
+import type {
+  LedgerSurfaceViewState,
+  LedgerViewKeep,
+} from "./ledgerProjection";
+import { ViewTierToggle } from "./ViewTierToggle";
 import { TcSwimlanes } from "./TcSwimlanes";
 import { TcTabs, type TcTab } from "./TcTabs";
 import { useEventProjector } from "./useEventProjector";
@@ -132,6 +142,29 @@ export interface ThreadCanvasProps {
    */
   readonly resolveSurfaceState?: (uri: string) => SurfacePayload | undefined;
   /**
+   * SURFACES_V2 (PRD-B2): host clipboard + file-save callbacks for the raw
+   * fallback's Copy / Download. Substrate-owned (the package never touches the
+   * clipboard or the filesystem). Only consulted inside the v2 canvas subtree;
+   * omitted → the raw fallback's buttons render disabled. Optional + default
+   * absent so the flag-off path is byte-identical.
+   */
+  readonly onCopyText?: (text: string) => Promise<void>;
+  readonly onSaveFile?: (text: string, filename: string) => Promise<void>;
+  /**
+   * SURFACES_V2 (PRD-B3): the active surface's folded view-lifecycle state
+   * (tier ladder + preference + regen) + the two mutation callbacks. When all
+   * three are provided the surface chrome renders the `ViewTierToggle`
+   * (Generic ⇄ Shaped + Regenerate) beside B2's provenance footer. The
+   * callbacks ride the host Transport port (RunDestination POSTs to the
+   * surface-view endpoints); omitted → no toggle (flag-off byte-identical).
+   */
+  readonly activeViewState?: LedgerSurfaceViewState | null;
+  readonly onRegenerateView?: (surfaceId: string) => void;
+  readonly onSetViewPreference?: (
+    surfaceId: string,
+    keep: LedgerViewKeep,
+  ) => void;
+  /**
    * Scrub cursor — null = live; number = a `sequence_no` to time-travel
    * the surface to. The host (ChatScreen) reconciles this with the
    * swimlane and mini-timeline UIs.
@@ -194,6 +227,11 @@ export function ThreadCanvas(props: ThreadCanvasProps): ReactElement {
     onSuggestChanges,
     editSlot,
     resolveSurfaceState,
+    onCopyText,
+    onSaveFile,
+    activeViewState,
+    onRegenerateView,
+    onSetViewPreference,
     scrubbedSeq = null,
     onScrub,
     onSnapToNow,
@@ -301,6 +339,21 @@ export function ThreadCanvas(props: ThreadCanvasProps): ReactElement {
     // overlay rather than the live surface during scrub.
   }, [scrubbedSeq, projection.surface, activeUri, resolveSurfaceState]);
 
+  // SURFACES_V2 (PRD-B2): the v2 canvas is active exactly when the host wired
+  // the ledger-hydration resolver (B1's signal). All B2 chrome mounts strictly
+  // inside this condition, so flag-off is byte-identical.
+  const surfacesV2On = resolveSurfaceState !== undefined;
+  // Pure PEERS of `useEventProjector` over the SAME events array (one-projector
+  // invariant). Computed unconditionally (Rules of Hooks); only READ when v2 is
+  // on, so the flag-off path pays nothing but the memo.
+  const provenanceById = useMemo(() => projectProvenance(events), [events]);
+  const statusLine = useMemo(() => projectStatusLine(events), [events]);
+  const activeProvenance = useMemo(() => {
+    if (!surfacesV2On) return null;
+    const id = surfaceIdForTabUri(activeUri);
+    return id !== null ? (provenanceById.get(id) ?? null) : null;
+  }, [surfacesV2On, activeUri, provenanceById]);
+
   // Forward scrub cursor to TcChat (it shows the "Viewing <time>"
   // ghost banner when off-live).
   const scrubContextValue = useMemo(
@@ -375,16 +428,53 @@ export function ThreadCanvas(props: ThreadCanvasProps): ReactElement {
           data-visible={showSurfaceColumn ? "true" : "false"}
           style={surfaceSlotStyle(showSurfaceColumn)}
         >
-          <TcSurfaceMount
-            uri={activeUri}
-            transport={transport}
-            state={surfaceState}
-            pendingDiff={pendingDiff}
-            onApprove={onApprove}
-            onReject={onReject}
-            onSuggestChanges={onSuggestChanges}
-            editSlot={editSlot}
-          />
+          {surfacesV2On ? (
+            <>
+              <TcSurfaceFrame
+                provenance={activeProvenance}
+                rawPayload={surfaceState}
+                onCopyText={onCopyText}
+                onSaveFile={onSaveFile}
+              >
+                <TcSurfaceMount
+                  uri={activeUri}
+                  transport={transport}
+                  state={surfaceState}
+                  pendingDiff={pendingDiff}
+                  onApprove={onApprove}
+                  onReject={onReject}
+                  onSuggestChanges={onSuggestChanges}
+                  editSlot={editSlot}
+                />
+              </TcSurfaceFrame>
+              {/* PRD-B3: the persistent tier toggle + Regenerate, beside the
+                  provenance footer. Rendered only when the host supplies the
+                  active surface's folded view state + both callbacks. */}
+              {activeViewState != null &&
+              onRegenerateView !== undefined &&
+              onSetViewPreference !== undefined &&
+              surfaceIdForTabUri(activeUri) !== null ? (
+                <ViewTierToggle
+                  surfaceId={surfaceIdForTabUri(activeUri) as string}
+                  viewState={activeViewState}
+                  onRegenerateView={onRegenerateView}
+                  onSetViewPreference={onSetViewPreference}
+                />
+              ) : null}
+              <TcStatusStrip line={statusLine} />
+            </>
+          ) : (
+            <TcSurfaceMount
+              uri={activeUri}
+              transport={transport}
+              state={surfaceState}
+              pendingDiff={pendingDiff}
+              onApprove={onApprove}
+              onReject={onReject}
+              onSuggestChanges={onSuggestChanges}
+              editSlot={editSlot}
+            />
+          )}
         </div>
 
         {/* Draggable divider between the surface and the rail — Studio only.

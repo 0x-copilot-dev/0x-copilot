@@ -109,7 +109,10 @@ class TestSurfaceCreatedProjection:
 
 
 class TestViewDerivedProjection:
-    def test_gen_rebuilt_and_ms_dropped(self) -> None:
+    def test_gen_rebuilt_admits_model_and_ms_drops_extra(self) -> None:
+        # PRD-B3 widened A3's ``gen`` allow-list to admit the generation duration
+        # ``ms`` (int) the ViewDeriver now populates; untrusted extra keys still
+        # never ride through.
         safe = P.payload_for_event(
             event_type=RuntimeApiEventType.VIEW_DERIVED,
             payload={
@@ -121,9 +124,22 @@ class TestViewDerivedProjection:
                 "gen": {"model": "gpt-5.4-mini", "ms": 820, "extra": "x"},
             },
         )
-        assert safe["gen"] == {"model": "gpt-5.4-mini"}
+        assert safe["gen"] == {"model": "gpt-5.4-mini", "ms": 820}
         assert safe["spec_ref"] == "spec/x"
         assert safe["tier"] == "shaped"
+
+    def test_gen_negative_ms_dropped(self) -> None:
+        safe = P.payload_for_event(
+            event_type=RuntimeApiEventType.VIEW_DERIVED,
+            payload={
+                "v": 1,
+                "surface_id": "s1",
+                "tier": "shaped",
+                "basis": "generated",
+                "gen": {"model": "m", "ms": -5},
+            },
+        )
+        assert safe["gen"] == {"model": "m"}
 
     def test_gen_without_model_dropped(self) -> None:
         safe = P.payload_for_event(

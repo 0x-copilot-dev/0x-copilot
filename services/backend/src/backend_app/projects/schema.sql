@@ -217,31 +217,14 @@ CREATE POLICY project_activity_tenant_isolation ON project_activity
 
 
 -- ---------------------------------------------------------------------------
--- Denormalized per-project counts — one row per project.
+-- Per-project counts are COMPUTED ON READ (PRD-07), not stored.
+--
+-- The former per-project rollup counter cache never had a writer, so every row
+-- read as zero. It is dropped (migration 0047). The projects service now asks
+-- each destination's owning service for a grouped `count_by_project`, so the
+-- number can never disagree with the list it summarizes; `chats` is filled by
+-- the facade from ai-backend. There is no counter table here anymore.
 -- ---------------------------------------------------------------------------
-
-CREATE TABLE IF NOT EXISTS project_activity_counts (
-    tenant_id           TEXT         NOT NULL,
-    project_id          TEXT         NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
-    chats               INT          NOT NULL DEFAULT 0,
-    todos_open          INT          NOT NULL DEFAULT 0,
-    todos_done          INT          NOT NULL DEFAULT 0,
-    inbox_items         INT          NOT NULL DEFAULT 0,
-    library_items       INT          NOT NULL DEFAULT 0,
-    routines_active     INT          NOT NULL DEFAULT 0,
-    members             INT          NOT NULL DEFAULT 0,
-    recomputed_at       TIMESTAMPTZ  NOT NULL DEFAULT NOW(),
-    PRIMARY KEY (tenant_id, project_id)
-);
-
-ALTER TABLE project_activity_counts ENABLE ROW LEVEL SECURITY;
-
-CREATE POLICY project_activity_counts_tenant_isolation ON project_activity_counts
-    USING (
-        tenant_id = current_setting('app.current_org_id', true)
-        OR current_setting('app.role', true) = 'admin'
-    )
-    WITH CHECK (tenant_id = current_setting('app.current_org_id', true));
 
 
 -- ---------------------------------------------------------------------------
@@ -353,7 +336,6 @@ BEGIN
         EXECUTE 'GRANT SELECT, INSERT, UPDATE, DELETE ON project_memberships TO enterprise_app';
         EXECUTE 'GRANT SELECT, INSERT, DELETE ON project_stars TO enterprise_app';
         EXECUTE 'GRANT SELECT, INSERT, UPDATE, DELETE ON project_activity TO enterprise_app';
-        EXECUTE 'GRANT SELECT, INSERT, UPDATE, DELETE ON project_activity_counts TO enterprise_app';
         EXECUTE 'GRANT SELECT, INSERT ON project_audit_events TO enterprise_app';
         EXECUTE 'GRANT SELECT, INSERT, UPDATE, DELETE ON project_templates TO enterprise_app';
     END IF;

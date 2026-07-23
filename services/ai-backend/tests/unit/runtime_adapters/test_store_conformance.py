@@ -177,6 +177,151 @@ class TestConversationCrudConformance(_CrudSeedMixin):
         )
 
 
+class TestConversationProjectConformance(_CrudSeedMixin):
+    """PRD-07 — project_id round-trip, filter, and grouped count (all backends)."""
+
+    async def _project_conversation(self, store, *, project_id, title="p"):
+        return await store.create_conversation(
+            CreateConversationRequest(
+                org_id=self._ORG,
+                user_id=self._USER,
+                assistant_id="assistant",
+                title=title,
+                project_id=project_id,
+            )
+        )
+
+    async def test_project_id_round_trips_through_create_and_get(self, store) -> None:
+        created = await self._project_conversation(store, project_id="p1")
+        assert created.project_id == "p1"
+        got = await store.get_conversation(
+            org_id=self._ORG,
+            user_id=self._USER,
+            conversation_id=created.conversation_id,
+        )
+        assert got is not None
+        assert got.project_id == "p1"
+
+    async def test_list_conversations_filters_by_project(self, store) -> None:
+        on_p1 = await self._project_conversation(store, project_id="p1", title="a")
+        on_p2 = await self._project_conversation(store, project_id="p2", title="b")
+        no_project = await self._new_conversation(store, title="c")
+
+        p1_ids = {
+            c.conversation_id
+            for c in await store.list_conversations(
+                org_id=self._ORG, user_id=self._USER, limit=50, project_id="p1"
+            )
+        }
+        assert on_p1.conversation_id in p1_ids
+        assert on_p2.conversation_id not in p1_ids
+        assert no_project.conversation_id not in p1_ids
+
+        # p2 sees only its own; an unknown project sees none.
+        p2_ids = {
+            c.conversation_id
+            for c in await store.list_conversations(
+                org_id=self._ORG, user_id=self._USER, limit=50, project_id="p2"
+            )
+        }
+        assert p2_ids == {on_p2.conversation_id}
+        empty = await store.list_conversations(
+            org_id=self._ORG, user_id=self._USER, limit=50, project_id="p-unknown"
+        )
+        assert list(empty) == []
+
+    async def test_count_conversations_by_project_is_grouped(self, store) -> None:
+        for _ in range(3):
+            await self._project_conversation(store, project_id="p1")
+        await self._project_conversation(store, project_id="p2")
+
+        counts = await store.count_conversations_by_project(
+            org_id=self._ORG,
+            user_id=self._USER,
+            project_ids=("p1", "p2", "p3"),
+        )
+        assert counts.get("p1") == 3
+        assert counts.get("p2") == 1
+        # p3 has no chats → absent from the grouped map (caller renders 0).
+        assert "p3" not in counts
+
+    async def test_count_conversations_by_project_is_identity_scoped(
+        self, store
+    ) -> None:
+        # Two chats on p1 for _USER; one for another user in the same org.
+        await self._project_conversation(store, project_id="p1")
+        await self._project_conversation(store, project_id="p1")
+        await store.create_conversation(
+            CreateConversationRequest(
+                org_id=self._ORG,
+                user_id="other_user",
+                assistant_id="assistant",
+                title="theirs",
+                project_id="p1",
+            )
+        )
+        mine = await store.count_conversations_by_project(
+            org_id=self._ORG, user_id=self._USER, project_ids=("p1",)
+        )
+        assert mine.get("p1") == 2
+        theirs = await store.count_conversations_by_project(
+            org_id=self._ORG, user_id="other_user", project_ids=("p1",)
+        )
+        assert theirs.get("p1") == 1
+
+    async def test_patch_files_and_unfiles_a_conversation(self, store) -> None:
+        created = await self._new_conversation(store, title="loose")
+        now = datetime(2026, 1, 1, tzinfo=timezone.utc)
+        # File it into p1.
+        filed = await store.update_conversation(
+            org_id=self._ORG,
+            user_id=self._USER,
+            conversation_id=created.conversation_id,
+            title=None,
+            title_changed=False,
+            folder=None,
+            folder_changed=False,
+            archived=None,
+            archived_changed=False,
+            project_id="p1",
+            project_id_changed=True,
+            now=now,
+        )
+        assert filed is not None and filed.project_id == "p1"
+        # An omitted project_id (project_id_changed=False) leaves it untouched.
+        untouched = await store.update_conversation(
+            org_id=self._ORG,
+            user_id=self._USER,
+            conversation_id=created.conversation_id,
+            title="renamed",
+            title_changed=True,
+            folder=None,
+            folder_changed=False,
+            archived=None,
+            archived_changed=False,
+            project_id=None,
+            project_id_changed=False,
+            now=now,
+        )
+        assert untouched is not None and untouched.project_id == "p1"
+        # Explicit null unfiles it.
+        unfiled = await store.update_conversation(
+            org_id=self._ORG,
+            user_id=self._USER,
+            conversation_id=created.conversation_id,
+            title=None,
+            title_changed=False,
+            folder=None,
+            folder_changed=False,
+            archived=None,
+            archived_changed=False,
+            project_id=None,
+            project_id_changed=True,
+            now=now,
+        )
+        assert unfiled is not None and unfiled.project_id is None
+
+
 class TestMessageOrderingConformance(_CrudSeedMixin):
     """append_message + list_messages preserve creation order per backend."""
 

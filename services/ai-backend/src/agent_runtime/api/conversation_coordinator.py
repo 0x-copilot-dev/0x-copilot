@@ -64,6 +64,11 @@ def _conversation_lifecycle_audit_metadata(
         after_blob["archived"] = after.status == ConversationStatus.ARCHIVED
         if before_blob["archived"] != after_blob["archived"]:
             diff_keys.append("archived")
+    if "project_id" in fields_set:
+        before_blob["project_id"] = before.project_id
+        after_blob["project_id"] = after.project_id
+        if before.project_id != after.project_id:
+            diff_keys.append("project_id")
     return {
         "before": before_blob,
         "after": after_blob,
@@ -204,6 +209,7 @@ class ConversationCoordinator:
         title_changed = "title" in fields_set
         folder_changed = "folder" in fields_set
         archived_changed = "archived" in fields_set
+        project_id_changed = "project_id" in fields_set
         now = datetime.now(timezone.utc)
         updated = await self._persistence.update_conversation(
             org_id=org_id,
@@ -215,6 +221,8 @@ class ConversationCoordinator:
             folder_changed=folder_changed,
             archived=request.archived,
             archived_changed=archived_changed,
+            project_id=request.project_id,
+            project_id_changed=project_id_changed,
             now=now,
         )
         if updated is None:

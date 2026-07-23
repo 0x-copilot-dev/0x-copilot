@@ -45,6 +45,71 @@ def _service() -> tuple[ProjectsService, InMemoryProjectsStore]:
     return svc, store
 
 
+class TestComputedRollupCounts:
+    """PRD-07 — counts are computed on read from the registered rollup sources."""
+
+    def _wired_service(self):
+        from backend_app.library.store import (
+            InMemoryLibraryStore,
+            LibraryFileRecord,
+            LibraryPageRecord,
+        )
+        from backend_app.projects.rollup_sources import (
+            MembersRollupSource,
+            StoreRollupSource,
+        )
+
+        store = InMemoryProjectsStore()
+        library = InMemoryLibraryStore()
+        svc = ProjectsService(store=store, identity_store=_identity())
+        svc.register_rollup_sources(
+            [
+                StoreRollupSource(store=library, fields=("files", "library_items")),
+                MembersRollupSource(store),
+            ]
+        )
+        return svc, store, library, LibraryFileRecord, LibraryPageRecord
+
+    def test_list_projects_counts_files_and_library_items(self) -> None:
+        svc, _store, library, FileRec, PageRec = self._wired_service()
+        pid = _seed_project(svc)
+        for i in range(2):
+            library.insert_file(
+                FileRec(
+                    tenant_id="org_acme",
+                    owner_user_id="usr_sarah",
+                    project_id=pid,
+                    file_kind="doc",
+                    name=f"file-{i}.doc",
+                    mime="text/plain",
+                    blob_ref=f"blob-{i}",
+                    source={"kind": "upload"},
+                )
+            )
+        library.insert_page(
+            PageRec(
+                tenant_id="org_acme",
+                owner_user_id="usr_sarah",
+                project_id=pid,
+                title="notes",
+                markdown="# notes",
+                source={"kind": "manual"},
+            )
+        )
+
+        page, _ = svc.list_projects(
+            tenant_id="org_acme", caller_user_id="usr_sarah", caller_roles=()
+        )
+        counts = {record.id: c for record, _role, _star, c in page}[pid]
+        # files = kind='file' only (2); library_items = all kinds (2 files + 1 page).
+        assert counts.files == 2
+        assert counts.library_items == 3
+        # members = the owner row; chats is null (backend is not entitled — the
+        # facade fills it from ai-backend).
+        assert counts.members == 1
+        assert counts.chats is None
+
+
 def _seed_project(svc: ProjectsService) -> str:
     record, _, _, _ = svc.create_project(
         tenant_id="org_acme",

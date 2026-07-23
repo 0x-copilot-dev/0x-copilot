@@ -180,6 +180,17 @@ class InboxStore(Protocol):
 
     def get_body(self, *, tenant_id: str, body_ref: str) -> InboxBodyRecord | None: ...
 
+    # -- rollup counts (PRD-07) ----------------------------------------
+
+    def count_by_project(
+        self,
+        *,
+        tenant_id: str,
+        project_ids: tuple[str, ...],
+        caller_user_id: str,
+        caller_roles: tuple[str, ...],
+    ) -> dict[str, dict[str, int]]: ...
+
     # -- audit ---------------------------------------------------------
 
     def append_audit(self, record: InboxAuditRecord) -> InboxAuditRecord: ...
@@ -301,6 +312,36 @@ class InMemoryInboxStore:
             and r.owner_user_id == owner_user_id
             and r.state == "unread"
         )
+
+    # -- rollup counts (PRD-07) ----------------------------------------
+
+    def count_by_project(
+        self,
+        *,
+        tenant_id: str,
+        project_ids: tuple[str, ...],
+        caller_user_id: str,
+        caller_roles: tuple[str, ...],
+    ) -> dict[str, dict[str, int]]:
+        """Group the caller's inbox items by project (recipient-scoped).
+
+        Inbox visibility is per-recipient (cross-audit §1.3 does NOT override
+        Inbox's recipient-only read), so the count is filtered to items whose
+        ``owner_user_id`` (the recipient) is the caller — never every member's.
+        """
+
+        wanted = set(project_ids)
+        result: dict[str, dict[str, int]] = {}
+        for record in self.items.values():
+            if record.tenant_id != tenant_id:
+                continue
+            if record.owner_user_id != caller_user_id:
+                continue
+            pid = record.project_id
+            if pid is None or pid not in wanted:
+                continue
+            result.setdefault(pid, {"inbox_items": 0})["inbox_items"] += 1
+        return result
 
     # -- bodies --------------------------------------------------------
 

@@ -1,0 +1,23 @@
+{
+  "catalog_version": 1,
+  "connector": "github",
+  "operations": {
+    "get_issue": "read",
+    "get_pull_request": "read",
+    "list_issues": "read",
+    "list_pull_requests": "read",
+    "get_repository": "read",
+    "list_commits": "read",
+    "search_code": "read",
+    "create_issue": "write",
+    "update_issue": "write",
+    "create_comment": "write",
+    "add_comment": "write",
+    "create_pull_request": "write",
+    "merge_pull_request": "write",
+    "close_issue": "write",
+    "delete_issue": "destructive",
+    "delete_repository": "destructive",
+    "delete_branch": "destructive"
+  }
+}

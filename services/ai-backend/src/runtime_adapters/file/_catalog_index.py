@@ -36,6 +36,13 @@ _FTS_KIND_MESSAGE = "message"
 # so raw user input can never form a malformed or injected MATCH expression.
 _QUERY_TOKEN = re.compile(r"\w+", re.UNICODE)
 
+# Bump when the disposable index's column set changes. A stored index whose
+# ``PRAGMA user_version`` is lower is DISCARDED and recreated from the canonical
+# JSONL on open (same safe path as a torn file) — the index carries no canonical
+# data, so this never risks history. Raised to 2 for PRD-07's ``project_id``
+# column, which powers the project-scoped list + per-project count.
+_INDEX_SCHEMA_VERSION = 2
+
 _SCHEMA = """
 CREATE TABLE IF NOT EXISTS conversations (
     conversation_id TEXT PRIMARY KEY,
@@ -44,10 +51,13 @@ CREATE TABLE IF NOT EXISTS conversations (
     status          TEXT NOT NULL,
     deleted_at      TEXT,
     updated_at      TEXT NOT NULL,
+    project_id      TEXT,
     doc             TEXT NOT NULL
 );
 CREATE INDEX IF NOT EXISTS ix_conversations_scope
     ON conversations (org_id, user_id, updated_at DESC);
+CREATE INDEX IF NOT EXISTS ix_conversations_project
+    ON conversations (org_id, project_id, updated_at DESC);
 
 CREATE TABLE IF NOT EXISTS messages (
     message_id      TEXT PRIMARY KEY,
@@ -142,13 +152,36 @@ class CatalogIndex:
         return discarded
 
     def _open_schema(self) -> sqlite3.Connection:
-        """Open the db and apply the base schema; may raise on a torn file."""
+        """Open the db and apply the base schema; may raise on a torn file.
+
+        Enforces the disposable-index schema version: a file written by an
+        older binary (fewer columns — e.g. pre-PRD-07, no ``project_id``) is
+        raised as a ``DatabaseError`` so ``connect()`` discards + recreates it.
+        Safe because the index is rebuilt from the canonical JSONL on open.
+        """
 
         conn = sqlite3.connect(str(self._db_path))
         try:
             conn.execute("PRAGMA journal_mode=WAL")
             conn.execute("PRAGMA synchronous=NORMAL")
+            # Stale-schema detection: an index written by an older binary has the
+            # ``conversations`` table WITHOUT the new columns. ``CREATE TABLE IF
+            # NOT EXISTS`` can't add them, so force the discard-and-recreate path
+            # (the index is disposable — a clean rebuild from JSONL is always
+            # correct). A fresh file (no table yet) is NOT stale — it is created
+            # below. Both unversioned-old (user_version 0 + old columns) and any
+            # future bump are covered by the column check.
+            existing_columns = {
+                str(row[1])
+                for row in conn.execute("PRAGMA table_info(conversations)").fetchall()
+            }
+            if existing_columns and "project_id" not in existing_columns:
+                conn.close()
+                raise sqlite3.DatabaseError(
+                    "stale catalog index schema (missing project_id column)"
+                )
             conn.executescript(_SCHEMA)
+            conn.execute(f"PRAGMA user_version={_INDEX_SCHEMA_VERSION}")
             conn.commit()
         except sqlite3.DatabaseError:
             conn.close()
@@ -272,8 +305,9 @@ class CatalogIndex:
     def _insert_conversation(self, doc: dict) -> None:
         self._c.execute(
             "INSERT OR REPLACE INTO conversations"
-            " (conversation_id, org_id, user_id, status, deleted_at, updated_at, doc)"
-            " VALUES (?,?,?,?,?,?,?)",
+            " (conversation_id, org_id, user_id, status, deleted_at, updated_at,"
+            "  project_id, doc)"
+            " VALUES (?,?,?,?,?,?,?,?)",
             (
                 doc["conversation_id"],
                 doc["org_id"],
@@ -281,6 +315,7 @@ class CatalogIndex:
                 doc.get("status", "active"),
                 doc.get("deleted_at"),
                 doc["updated_at"],
+                doc.get("project_id"),
                 JsonlIo.dumps(doc),
             ),
         )
@@ -403,9 +438,13 @@ class CatalogIndex:
         limit: int,
         include_archived: bool,
         include_deleted: bool,
+        project_id: str | None = None,
     ) -> list[str]:
         sql = "SELECT doc FROM conversations WHERE org_id=? AND user_id=?"
         params: list[object] = [org_id, user_id]
+        if project_id is not None:
+            sql += " AND project_id=?"
+            params.append(project_id)
         if not include_archived:
             sql += " AND status != 'archived'"
         if not include_deleted:
@@ -413,6 +452,33 @@ class CatalogIndex:
         sql += " ORDER BY updated_at DESC LIMIT ?"
         params.append(limit)
         return [row[0] for row in self._c.execute(sql, params).fetchall()]
+
+    def count_conversations_by_project(
+        self,
+        *,
+        org_id: str,
+        user_id: str,
+        project_ids: Sequence[str],
+    ) -> dict[str, int]:
+        """Group the caller's non-deleted conversations by project (PRD-07).
+
+        Archived rows are included (an archived chat still belongs to the
+        project); soft-deleted rows are excluded, matching the Postgres GROUP
+        BY. Project ids with no rows are absent from the result.
+        """
+
+        wanted = list(dict.fromkeys(project_ids))
+        if not wanted:
+            return {}
+        placeholders = ",".join("?" for _ in wanted)
+        rows = self._c.execute(
+            f"SELECT project_id, COUNT(*) FROM conversations"
+            f" WHERE org_id=? AND user_id=? AND deleted_at IS NULL"
+            f"   AND project_id IN ({placeholders})"
+            f" GROUP BY project_id",
+            [org_id, user_id, *wanted],
+        ).fetchall()
+        return {str(row[0]): int(row[1]) for row in rows if row[0] is not None}
 
     def list_messages(
         self,

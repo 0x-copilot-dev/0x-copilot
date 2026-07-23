@@ -59,8 +59,9 @@ def _audit_id() -> str:
 # Public default counts shape — used when the projector hasn't run yet
 # (fresh-created project) so list responses don't carry ``null`` and
 # the wire shape stays uniform.
-_EMPTY_COUNTS: dict[str, int] = {
-    "chats": 0,
+_EMPTY_COUNTS: dict[str, int | None] = {
+    "chats": None,
+    "files": 0,
     "todos_open": 0,
     "todos_done": 0,
     "inbox_items": 0,
@@ -173,17 +174,26 @@ class ProjectActivityRecord(BaseModel):
 
 
 class ProjectActivityCounts(BaseModel):
-    """Denormalized per-project counts for list-view perf.
+    """Per-project rollup — the COMPUTED wire shape (PRD-07).
 
-    Updated incrementally by the projector; reconciled nightly from
-    authoritative tables to repair drift (projects-prd §5.4).
+    No longer a stored row: the projects service composes this on read from
+    each destination's grouped ``count_by_project`` (the per-project rollup
+    counter table was dropped in migration 0047). ``chats`` is ``None`` here
+    because its rows live in ``ai-backend``; the facade fills it from a batched
+    counts call
+    (backend counting cross-service rows would invert the dependency direction).
+    ``files`` (kind=file) is the design's "N files" — distinct from
+    ``library_items`` (file + page + dataset).
     """
 
     model_config = ConfigDict(extra="forbid")
 
     tenant_id: str
     project_id: str
-    chats: int = 0
+    # ``None`` = "backend is not entitled to an opinion" (the facade fills it).
+    # Defaults to ``None`` so backend never emits a fabricated 0.
+    chats: int | None = None
+    files: int = 0
     todos_open: int = 0
     todos_done: int = 0
     inbox_items: int = 0
@@ -284,6 +294,10 @@ class ProjectsStore(Protocol):
         self, *, tenant_id: str, user_id: str
     ) -> tuple[ProjectMembershipRecord, ...]: ...
 
+    def count_members_by_project(
+        self, *, tenant_id: str, project_ids: tuple[str, ...]
+    ) -> dict[str, int]: ...
+
     def update_membership_role(
         self,
         *,
@@ -322,10 +336,12 @@ class ProjectsStore(Protocol):
     ) -> tuple[tuple[ProjectActivityRecord, ...], str | None]: ...
 
     # -- counts --------------------------------------------------------
-
-    def get_counts(
-        self, *, tenant_id: str, project_id: str
-    ) -> ProjectActivityCounts | None: ...
+    #
+    # PRD-07 — there is no counts read/write on the store anymore. The
+    # per-project rollup counter table was dropped (migration 0047); per-project
+    # rollups are computed on read by the service from each destination's grouped
+    # ``count_by_project``. The ``ProjectActivityCounts`` model stays as the
+    # computed wire shape only.
 
     # -- audit ---------------------------------------------------------
 
@@ -360,7 +376,6 @@ class InMemoryProjectsStore:
     stars: dict[tuple[str, str, str], ProjectStarRecord] = field(default_factory=dict)
     activity: list[ProjectActivityRecord] = field(default_factory=list)
     _activity_audit_keys: set[tuple[str, str]] = field(default_factory=set)
-    counts: dict[tuple[str, str], ProjectActivityCounts] = field(default_factory=dict)
     audits: list[ProjectAuditRecord] = field(default_factory=list)
 
     @contextmanager
@@ -515,6 +530,18 @@ class InMemoryProjectsStore:
             if m.tenant_id == tenant_id and m.user_id == user_id
         )
 
+    def count_members_by_project(
+        self, *, tenant_id: str, project_ids: tuple[str, ...]
+    ) -> dict[str, int]:
+        """Group membership rows by project (PRD-07) — batched, no N+1."""
+        wanted = set(project_ids)
+        result: dict[str, int] = {}
+        for m in self.memberships.values():
+            if m.tenant_id != tenant_id or m.project_id not in wanted:
+                continue
+            result[m.project_id] = result.get(m.project_id, 0) + 1
+        return result
+
     def update_membership_role(
         self,
         *,
@@ -595,15 +622,7 @@ class InMemoryProjectsStore:
         return tuple(page), next_cursor
 
     # -- counts --------------------------------------------------------
-
-    def get_counts(
-        self, *, tenant_id: str, project_id: str
-    ) -> ProjectActivityCounts | None:
-        return self.counts.get((tenant_id, project_id))
-
-    def upsert_counts(self, record: ProjectActivityCounts) -> ProjectActivityCounts:
-        self.counts[(record.tenant_id, record.project_id)] = record
-        return record
+    # PRD-07 — no stored counts; rollups are computed on read by the service.
 
     # -- audit ---------------------------------------------------------
 
@@ -963,6 +982,25 @@ class PostgresProjectsStore:
             rows = cur.fetchall()
         return tuple(_row_to_membership(r) for r in rows)
 
+    def count_members_by_project(
+        self, *, tenant_id: str, project_ids: tuple[str, ...]
+    ) -> dict[str, int]:
+        """Group membership rows by project (PRD-07) — one batched scan, no N+1."""
+        if not project_ids:
+            return {}
+        with self._cursor(tenant_id=tenant_id) as cur:
+            cur.execute(
+                """
+                SELECT project_id, COUNT(*) AS count
+                  FROM project_memberships
+                 WHERE tenant_id = %s AND project_id = ANY(%s)
+                 GROUP BY project_id
+                """,
+                (tenant_id, list(project_ids)),
+            )
+            rows = cur.fetchall()
+        return {str(r["project_id"]): int(r["count"]) for r in rows}
+
     def update_membership_role(
         self, *, tenant_id: str, project_id: str, user_id: str, role: str
     ) -> ProjectMembershipRecord | None:
@@ -1097,54 +1135,9 @@ class PostgresProjectsStore:
         return page, next_cursor
 
     # -- counts --------------------------------------------------------
-
-    def get_counts(
-        self, *, tenant_id: str, project_id: str
-    ) -> ProjectActivityCounts | None:
-        with self._cursor(tenant_id=tenant_id) as cur:
-            cur.execute(
-                """
-                SELECT * FROM project_activity_counts
-                WHERE tenant_id = %s AND project_id = %s
-                """,
-                (tenant_id, project_id),
-            )
-            row = cur.fetchone()
-        return ProjectActivityCounts.model_validate(row) if row else None
-
-    def upsert_counts(self, record: ProjectActivityCounts) -> ProjectActivityCounts:
-        with self._cursor(tenant_id=record.tenant_id) as cur:
-            cur.execute(
-                """
-                INSERT INTO project_activity_counts (
-                    tenant_id, project_id, chats, todos_open, todos_done,
-                    inbox_items, library_items, routines_active, members,
-                    recomputed_at
-                ) VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s)
-                ON CONFLICT (tenant_id, project_id) DO UPDATE SET
-                    chats = EXCLUDED.chats,
-                    todos_open = EXCLUDED.todos_open,
-                    todos_done = EXCLUDED.todos_done,
-                    inbox_items = EXCLUDED.inbox_items,
-                    library_items = EXCLUDED.library_items,
-                    routines_active = EXCLUDED.routines_active,
-                    members = EXCLUDED.members,
-                    recomputed_at = EXCLUDED.recomputed_at
-                """,
-                (
-                    record.tenant_id,
-                    record.project_id,
-                    record.chats,
-                    record.todos_open,
-                    record.todos_done,
-                    record.inbox_items,
-                    record.library_items,
-                    record.routines_active,
-                    record.members,
-                    record.recomputed_at,
-                ),
-            )
-        return record
+    # PRD-07 — no stored counts (migration 0047 dropped the table); the service
+    # computes per-project rollups on read from each destination's grouped
+    # ``count_by_project``.
 
     # -- audit ---------------------------------------------------------
 

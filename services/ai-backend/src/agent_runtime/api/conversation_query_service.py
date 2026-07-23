@@ -21,11 +21,13 @@ from agent_runtime.execution.contracts import RuntimeErrorCode
 from agent_runtime.execution.models import ModelConfigResolver
 from agent_runtime.pricing import ModelPricingCatalog
 from agent_runtime.settings import RuntimeSettings
+from agent_runtime.surfaces_v2.content import SurfaceContentProjection
 from agent_runtime.surfaces_v2.projection import SurfaceStoreProjection
 from runtime_api.http.errors import RuntimeApiError
 from runtime_api.schemas import (
     AgentRunStatus,
     ConversationContextResponse,
+    ConversationCountsResponse,
     ConversationListResponse,
     ConversationResponse,
     DefaultModelSelection,
@@ -38,7 +40,10 @@ from runtime_api.schemas import (
     RunStatusResponse,
     RuntimeEventReplayResponse,
 )
-from runtime_api.schemas.surfaces_v2 import RunSurfacesResponse
+from runtime_api.schemas.surfaces_v2 import (
+    HydratedSurfaceSnapshot,
+    RunSurfacesResponse,
+)
 from starlette import status
 
 
@@ -198,11 +203,14 @@ class ConversationQueryService:
         limit: int = Values.DEFAULT_CONVERSATION_LIMIT,
         include_archived: bool = False,
         include_deleted: bool = False,
+        project_id: str | None = None,
     ) -> ConversationListResponse:
         """Return scoped conversations newest-first, enriched with each one's active run.
 
         ``has_more`` is derived from whether the store returned a full page, so
         callers must re-request with a cursor (not implemented yet) when it is True.
+        When ``project_id`` is set (PRD-07) the list is narrowed to the chats
+        filed under that project — the project detail's Chats section.
         """
 
         bounded_limit = min(max(1, limit), Values.MAX_MESSAGE_LIMIT)
@@ -212,6 +220,7 @@ class ConversationQueryService:
             limit=bounded_limit,
             include_archived=include_archived,
             include_deleted=include_deleted,
+            project_id=project_id,
         )
         responses: list[ConversationResponse] = []
         for record in records:
@@ -221,6 +230,33 @@ class ConversationQueryService:
         return ConversationListResponse(
             conversations=tuple(responses),
             has_more=len(records) == bounded_limit,
+        )
+
+    async def count_conversations_by_project(
+        self,
+        *,
+        org_id: str,
+        user_id: str,
+        project_ids: Sequence[str],
+    ) -> ConversationCountsResponse:
+        """Return per-project live-conversation counts for the caller (PRD-07).
+
+        Backs ``GET /v1/agent/conversations/counts``. The count is
+        identity-scoped exactly like :meth:`list_conversations` — a caller only
+        ever sees a count over their OWN chats; ``project_ids`` narrows, it does
+        not authorize. Every requested id appears in the response (0 when the
+        caller has no chats filed there) so the facade join never has to
+        distinguish "absent" from "zero".
+        """
+
+        deduped = tuple(dict.fromkeys(project_ids))
+        grouped = await self._persistence.count_conversations_by_project(
+            org_id=org_id,
+            user_id=user_id,
+            project_ids=deduped,
+        )
+        return ConversationCountsResponse(
+            counts={pid: int(grouped.get(pid, 0)) for pid in deduped}
         )
 
     async def list_messages(
@@ -524,6 +560,13 @@ class ConversationQueryService:
         it is additive and, with no v2 events, returns an empty list — harmless
         and honest. Scope check mirrors ``replay_events`` (404 on wrong-tenant or
         unknown run).
+
+        PRD-B2 — content hydration: each metadata snapshot is enriched with its
+        materialized ``state`` (``{spec?, data}``), resolved from the same events
+        by ``SurfaceContentProjection`` (the v1 surface envelope keyed by
+        ``surface_uri == surface_id``). The content fold runs only when the
+        metadata fold produced surfaces — with the flag off there are none, so the
+        response is byte-identical to before (empty ``surfaces``, no wasted scan).
         """
 
         await self._run_for_scope(org_id=org_id, user_id=user_id, run_id=run_id)
@@ -533,9 +576,17 @@ class ConversationQueryService:
             after_sequence=0,
         )
         state = SurfaceStoreProjection.fold(run_id, events)
+        content = SurfaceContentProjection.fold(events) if state.surfaces else {}
+        surfaces = tuple(
+            HydratedSurfaceSnapshot(
+                **snapshot.model_dump(),
+                state=content.get(snapshot.surface_id) or None,
+            )
+            for snapshot in state.surfaces
+        )
         return RunSurfacesResponse(
             run_id=state.run_id,
-            surfaces=state.surfaces,
+            surfaces=surfaces,
             latest_sequence_no=state.latest_sequence_no,
         )
 

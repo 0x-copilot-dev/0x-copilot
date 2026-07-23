@@ -43,13 +43,19 @@ import {
 import { EmptyState } from "../../shell/EmptyState";
 import { ItemLink } from "../../refs/ItemLink";
 import { formatRelativeTime } from "../../util/time";
-import { SectionHeader } from "../_shared";
+import { RowList, Row, SectionHeader } from "../_shared";
 
 import type {
-  LibraryFileId,
+  ChatArchiveRow,
+  ProjectFileRow,
   ProjectId,
   SectionResult,
 } from "@0x-copilot/api-types";
+
+// PRD-07 — `ProjectFileRow` is now the canonical `@0x-copilot/api-types`
+// contract (promoted from the former local type). Re-exported so existing
+// `@0x-copilot/chat-surface` consumers keep resolving it.
+export type { ProjectFileRow } from "@0x-copilot/api-types";
 
 // Tokens (match ProjectsDestination.tsx)
 const APP_BACKGROUND = "var(--color-bg)";
@@ -109,37 +115,17 @@ export type ProjectDetailTabId =
   | "members"
   | "activity";
 
-/**
- * A single file/artifact attached to a project. Minimal presentational
- * row: the detail view renders an `<ItemLink kind="library_file">` from
- * `id`, so opening a file navigates to its artifact route.
- *
- * NON-branded on purpose — there is no `ProjectFileRow` wire contract in
- * `@0x-copilot/api-types` yet (the `/v1/projects/{id}/files` endpoint does
- * not exist — PRD §11). `id` is cast to the existing `LibraryFileId` brand
- * at the `<ItemLink>` boundary, so no `__brand` type is re-declared here.
- *
- * TODO(api-types): promote to a shared `ProjectFileRow` contract in
- * `@0x-copilot/api-types` once the project files endpoint lands.
- */
-export interface ProjectFileRow {
-  /** Opaque file/artifact id (the `<ItemLink kind="library_file">` target). */
-  readonly id: string;
-  /** File name shown in the row. */
-  readonly name: string;
-  /** Optional short kind/descriptor ("PDF", "Doc", "Dataset"). Display-only. */
-  readonly fileKind?: string;
-  /** Optional ISO timestamp; relative-time formatted at render. */
-  readonly updatedAt?: string;
-  /** Optional human-readable size ("1.2 MB"). Display-only. */
-  readonly sizeLabel?: string;
-}
-
 /** Files-tab data. Uniform `SectionResult` wrapper so the tab renders the
  *  same 4-state machine as the other list surfaces (FR-4.2). `null` =
  *  loading; the prop being omitted entirely = no source wired ("coming
  *  soon"). */
 export type ProjectFilesResult = SectionResult<ReadonlyArray<ProjectFileRow>>;
+
+/** Chats-section data (PRD-07). Same uniform `SectionResult` + `null`-loading /
+ *  omitted-"coming soon" contract as `files`, carrying `ChatArchiveRow`s
+ *  (`preview` / `model` / `status` / `updated_at`) mapped by PRD-03's shared
+ *  `toChatArchiveRow`, so the design's row anatomy (PRD-10 D6) applies. */
+export type ProjectChatsResult = SectionResult<ReadonlyArray<ChatArchiveRow>>;
 
 export interface ProjectDetailViewProps {
   readonly project: ProjectDetail;
@@ -171,6 +157,27 @@ export interface ProjectDetailViewProps {
 
   /** Retry callback when `files.status === "error"`. */
   readonly onRetryFiles?: () => void;
+
+  /**
+   * Chats section data (PRD-07). Solo-profile only. Same 4-state contract as
+   * `files`:
+   *   - omitted / `undefined` → no source wired: the solo Chats section falls
+   *     back to the host's `renderCrossDestinationTab("chats", …)` slot (team
+   *     profile always uses that slot).
+   *   - `null` → loading skeleton.
+   *   - `SectionResult` → the 4-state machine; ready rows are `ChatArchiveRow`s
+   *     (PRD-03's `toChatArchiveRow`) rendered through the shared
+   *     `_shared/RowList` / `_shared/Row`. The heading count is the RENDERED
+   *     LIST LENGTH (design `copilot-app.jsx:363` — `Chats · {chats.length}`),
+   *     not the card rollup.
+   */
+  readonly chats?: ProjectChatsResult | null;
+
+  /** Retry callback when `chats.status === "error"`. */
+  readonly onRetryChats?: () => void;
+
+  /** Row click → open the conversation in the Run cockpit (host-owned nav). */
+  readonly onOpenChat?: (conversationId: ChatArchiveRow["id"]) => void;
 
   /** Reference instant — test seam for relative-time formatting on file
    *  rows. Defaults to `Date.now()`. */
@@ -745,16 +752,15 @@ function ProjectFileRowView({
     color: "var(--color-text-subtle)",
   };
 
-  // Cast the plain-string id to the existing `LibraryFileId` brand at the
-  // <ItemLink> boundary — the artifact/file resolver is registered under
-  // kind `"library_file"` (packages/chat-surface/src/destinations/library).
-  // No new brand is declared here. The file name is shown as the primary
-  // text (the row's display hint); the <ItemLink> is the sanctioned
-  // navigational affordance that opens the artifact route (FR-4.12) —
-  // direct `router.navigate` from a row is forbidden (cross-audit §1.1).
+  // `row.id` is already the `LibraryFileId` brand (PRD-07 promoted
+  // `ProjectFileRow` to `@0x-copilot/api-types`), so the former cast at the
+  // <ItemLink> boundary is gone. The artifact/file resolver is registered under
+  // kind `"library_file"`; the <ItemLink> is the sanctioned navigational
+  // affordance that opens the artifact route (FR-4.12) — direct
+  // `router.navigate` from a row is forbidden (cross-audit §1.1).
   const fileRef = {
     kind: "library_file" as const,
-    id: row.id as LibraryFileId,
+    id: row.id,
   };
 
   return (
@@ -802,6 +808,176 @@ function ProjectFileRowView({
   );
 }
 
+// ── Chats section (PRD-07) ───────────────────────────────────────────
+//
+// The solo profile's project-scoped chat list. Same uniform 4-state machine
+// as `ProjectFilesTab` over a `SectionResult<ChatArchiveRow[]>` — the rows are
+// PRD-03's `toChatArchiveRow` projections (the host's `ProjectDataPort` maps
+// `GET /v1/agent/conversations?filter[project_id]=<id>`), rendered through the
+// shared `_shared/RowList` / `_shared/Row` primitives so PRD-10 D6 restyles ONE
+// call site (the status chip + row anatomy are its concern; PRD-07 only supplies
+// the fields). The heading count is the RENDERED LIST LENGTH
+// (design `copilot-app.jsx:363` — `Chats · {chats.length}`), computed by the
+// caller. `null` = loading; the caller never passes `undefined` here (that case
+// falls back to the host slot before this renders).
+
+interface ProjectChatsListProps {
+  readonly chats: ProjectChatsResult | null;
+  readonly onRetry?: () => void;
+  readonly onOpenChat?: (conversationId: ChatArchiveRow["id"]) => void;
+  readonly now?: number;
+}
+
+function ProjectChatsList({
+  chats,
+  onRetry,
+  onOpenChat,
+  now,
+}: ProjectChatsListProps): ReactElement {
+  const wrapper: CSSProperties = {
+    display: "flex",
+    flexDirection: "column",
+    gap: 8,
+  };
+  const list: CSSProperties = {
+    listStyle: "none",
+    padding: 0,
+    margin: 0,
+    display: "flex",
+    flexDirection: "column",
+    gap: 8,
+  };
+  const skeletonRow: CSSProperties = {
+    height: 52,
+    borderRadius: 10,
+    border: `1px solid ${PANEL_BORDER}`,
+    backgroundColor: PANEL_BACKGROUND,
+    opacity: 0.6,
+  };
+
+  // Loading skeleton.
+  if (chats === null) {
+    return (
+      <section
+        data-testid="project-chats-section-body"
+        data-state="loading"
+        style={wrapper}
+      >
+        <ul style={list} aria-busy="true">
+          {Array.from({ length: 3 }).map((_, i) => (
+            <li
+              key={i}
+              style={skeletonRow}
+              data-testid="project-chats-skeleton"
+              aria-hidden="true"
+            />
+          ))}
+        </ul>
+      </section>
+    );
+  }
+
+  // Error → EmptyState + Retry.
+  if (chats.status === "error") {
+    return (
+      <section
+        data-testid="project-chats-section-body"
+        data-state="error"
+        style={wrapper}
+      >
+        <EmptyState
+          title="Could not load chats"
+          body={chats.error ?? "Network error — try again."}
+          action={
+            onRetry !== undefined
+              ? { label: "Retry", onClick: onRetry }
+              : undefined
+          }
+        />
+      </section>
+    );
+  }
+
+  // Unavailable → distinct "not enabled" empty state.
+  if (chats.status === "unavailable") {
+    return (
+      <section
+        data-testid="project-chats-section-body"
+        data-state="unavailable"
+        style={wrapper}
+      >
+        <EmptyState
+          title="Project chats unavailable"
+          body={chats.error ?? "Chat listing is not enabled for this project."}
+        />
+      </section>
+    );
+  }
+
+  const rows = chats.data ?? [];
+
+  // Ready + empty → per-view empty copy.
+  if (rows.length === 0) {
+    return (
+      <section
+        data-testid="project-chats-section-body"
+        data-state="empty"
+        style={wrapper}
+      >
+        <EmptyState
+          title="No chats yet"
+          body="Chats filed under this project will appear here."
+        />
+      </section>
+    );
+  }
+
+  // Ready + rows. Rendered through the shared list primitives (PRD-10 D6 owns
+  // the row anatomy + status chip; PRD-07 only supplies the data).
+  return (
+    <section
+      data-testid="project-chats-section-body"
+      data-state="ready"
+      style={wrapper}
+    >
+      <RowList
+        items={rows}
+        data-testid="project-chats-list"
+        ariaLabel="Project chats"
+        keyFor={(row) => row.id}
+        renderRow={(row) => (
+          <Row
+            data-testid="chat-archive-row"
+            data-chat-id={row.id}
+            data-status={row.status}
+            title={row.title}
+            sub={
+              row.model !== "" ? (
+                <>
+                  {row.preview !== "" ? `${row.preview} · ` : ""}
+                  <span
+                    data-testid="chat-archive-row-model"
+                    style={{ fontFamily: "var(--font-mono)" }}
+                  >
+                    {row.model}
+                  </span>
+                </>
+              ) : (
+                row.preview
+              )
+            }
+            meta={formatRelativeTime(row.updated_at, now)}
+            onActivate={
+              onOpenChat !== undefined ? () => onOpenChat(row.id) : undefined
+            }
+            ariaLabel={`Open chat ${row.title}`}
+          />
+        )}
+      />
+    </section>
+  );
+}
+
 // ── Main view ────────────────────────────────────────────────────────
 
 export function ProjectDetailView(props: ProjectDetailViewProps): ReactElement {
@@ -812,6 +988,9 @@ export function ProjectDetailView(props: ProjectDetailViewProps): ReactElement {
     activity,
     files,
     onRetryFiles,
+    chats,
+    onRetryChats,
+    onOpenChat,
     now,
     canManage,
     initialTab,
@@ -947,6 +1126,20 @@ export function ProjectDetailView(props: ProjectDetailViewProps): ReactElement {
   // cross-destination slot (it owns the `filter[project_id]` list); Files
   // reuses the same `ProjectFilesTab` 4-state machine (which degrades to a
   // "coming soon" empty state when no source is wired).
+  // Heading counts are the RENDERED LIST LENGTH once a source resolves
+  // `ok` (design `copilot-app.jsx:363,369` — `Chats · {chats.length}` /
+  // `Files · {p.files}`, sourced from the SAME response so header and list
+  // cannot disagree). With no source wired (prop omitted) or a non-ready
+  // state, they fall back to the card rollup on `project`.
+  const chatsHeaderCount =
+    chats != null && chats.status === "ok"
+      ? (chats.data ?? []).length
+      : project.chatCount;
+  const filesHeaderCount =
+    files != null && files.status === "ok"
+      ? (files.data ?? []).length
+      : project.fileCount;
+
   const soloSections = (
     <div
       data-testid="project-detail-sections"
@@ -959,11 +1152,23 @@ export function ProjectDetailView(props: ProjectDetailViewProps): ReactElement {
       >
         <SectionHeader
           headingId="project-section-chats"
-          count={project.chatCount}
+          count={chatsHeaderCount}
         >
           Chats
         </SectionHeader>
-        {renderCrossDestinationTab("chats", project.id)}
+        {/* No source wired (`chats === undefined`) → fall back to the host's
+            cross-destination slot (the team profile always uses that slot).
+            Otherwise render the shared 4-state chats machine. */}
+        {chats === undefined ? (
+          renderCrossDestinationTab("chats", project.id)
+        ) : (
+          <ProjectChatsList
+            chats={chats}
+            onRetry={onRetryChats}
+            onOpenChat={onOpenChat}
+            now={now}
+          />
+        )}
       </section>
       <section
         aria-labelledby="project-section-files"
@@ -972,7 +1177,7 @@ export function ProjectDetailView(props: ProjectDetailViewProps): ReactElement {
       >
         <SectionHeader
           headingId="project-section-files"
-          count={project.fileCount}
+          count={filesHeaderCount}
         >
           Files
         </SectionHeader>

@@ -11,14 +11,15 @@
 // advances (a new surface event landed), coalescing concurrent advances into
 // exactly one follow-up, and fails soft — an HTTP error never throws into React.
 //
-// NOTE (integration, 2026-07-23): A3's `/surfaces` response is metadata-only
-// (`SurfaceSnapshot` carries `payload_ref`, `view`, and fold bookkeeping — NOT
-// hydrated `state`/`data`). Until A3 (or a later B-wave PRD) materializes
-// content, `stateFor` returns `undefined` for a metadata-only snapshot, so the
-// surface column falls to TcSurfaceMount's honest tier-3 floor (the PRD's "or
-// honest tier-3 if hydration lags"; B2 polishes the not-yet-hydrated state).
-// The adapter is forward-compatible: the day a snapshot carries `state`/`data`,
-// it flows through with zero client change.
+// NOTE (integration, 2026-07-23 → B2): B1 shipped this hook forward-compatible
+// against a metadata-only `/surfaces` response; PRD-B2 delivered the content —
+// `list_run_surfaces` now enriches each `SurfaceSnapshot` with its materialized
+// `state` (`{spec?, data}`), resolved server-side from the run's v1 surface
+// envelopes (`SurfaceContentProjection`). `snapshotToPayload` reads that `state`
+// (its first structural branch), so hydration flows through exactly as designed
+// — zero client change was needed. A surface with no content event yet carries
+// `state: null`, and `stateFor` returns `undefined`, so the surface degrades to
+// its honest skeleton / tier-3 floor rather than a fabricated body.
 
 import { useEffect, useRef, useState } from "react";
 
