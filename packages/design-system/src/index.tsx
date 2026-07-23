@@ -482,6 +482,7 @@ export function AppIcon({
   color,
   logoUrl,
   size = "sm",
+  tone = "brand",
   className,
   ...props
 }: HTMLAttributes<HTMLSpanElement> & {
@@ -493,7 +494,21 @@ export function AppIcon({
    * letter chain. Existing call-sites (no ``logoUrl``) are byte-identical.
    */
   logoUrl?: string | null;
-  size?: "sm" | "lg";
+  /**
+   * `"sm"` (1.25rem circle, default) / `"lg"` (1.5rem) / `"tile"` (1.875rem =
+   * 30px squircle, `--radius-md`). PRD-11 D3 — the design's `.lrow__logo`
+   * connector identity tile. Existing call-sites (no `size`) are unchanged.
+   */
+  size?: "sm" | "lg" | "tile";
+  /**
+   * `"brand"` (default) paints the brand surface/ink inline; `"neutral"`
+   * suppresses that so the chip resolves the design's neutral tile chrome
+   * (`--color-surface-elevated` / `--color-text-strong`) via
+   * `.ui-app-icon--neutral`. PRD-11 D3: the design's `!important` pair
+   * neutralises the mock's inline brand colour, and a brand-saturated 30px
+   * tile is the loudest object on an otherwise hairline page.
+   */
+  tone?: "brand" | "neutral";
 }): ReactElement {
   // PR 8.0.1 — brand-aware mapping. Consumers still pass `name={connector.id}`
   // (or any short string for non-connector callers, e.g. avatar initials);
@@ -501,21 +516,32 @@ export function AppIcon({
   // so existing call-sites that hard-code a tenant brand colour still work.
   const slug = name.toLowerCase();
   const brand = !color ? BRAND_GLYPHS[slug] : undefined;
+  const neutral = tone === "neutral";
+  const sizeClass =
+    size === "lg"
+      ? "ui-app-icon--lg"
+      : size === "tile"
+        ? "ui-app-icon--tile"
+        : false;
+  const neutralClass = neutral && "ui-app-icon--neutral";
   const [imgFailed, setImgFailed] = useState(false);
 
   if (logoUrl && !imgFailed) {
     // Brand surface uses the brand-color when known so the chip shape stays
-    // consistent with the glyph fallback while the SVG itself loads.
+    // consistent with the glyph fallback while the SVG itself loads — unless
+    // the caller asked for a neutral tone, in which case the CSS neutral rule
+    // owns the surface.
     const surface = brand?.bg ?? color ?? "var(--color-surface-muted)";
     return (
       <span
         className={classNames(
           "ui-app-icon",
           "ui-app-icon--img",
-          size === "lg" && "ui-app-icon--lg",
+          sizeClass,
+          neutralClass,
           className,
         )}
-        style={{ background: surface }}
+        style={neutral ? undefined : { background: surface }}
         aria-label={brand?.label ?? name}
         {...props}
       >
@@ -537,10 +563,11 @@ export function AppIcon({
           "ui-app-icon",
           "ui-app-icon--brand",
           `ui-app-icon--${slug}`,
-          size === "lg" && "ui-app-icon--lg",
+          sizeClass,
+          neutralClass,
           className,
         )}
-        style={{ background: brand.bg, color: brand.fg }}
+        style={neutral ? undefined : { background: brand.bg, color: brand.fg }}
         aria-label={brand.label}
         {...props}
       >
@@ -550,13 +577,9 @@ export function AppIcon({
   }
   return (
     <span
-      className={classNames(
-        "ui-app-icon",
-        size === "lg" && "ui-app-icon--lg",
-        className,
-      )}
+      className={classNames("ui-app-icon", sizeClass, neutralClass, className)}
       style={
-        color
+        color && !neutral
           ? { background: color, color: "var(--color-accent-contrast)" }
           : undefined
       }

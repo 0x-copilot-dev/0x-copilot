@@ -588,6 +588,63 @@ describe("ConnectorsBinder — access mode reflects real authority + persists", 
   });
 });
 
+// ---------------------------------------------------------------------------
+// PRD-11 DoD 8 — desktop mounts the SAME ConnectModal. This is the regression
+// guard that fails on `main`: the old binder mounted no modal (its CTA flipped
+// a filter tab). (a) the CTA opens the modal; (b) the custom-server form reaches
+// the injected port's addCustomServer (observed as a single POST /v1/mcp/servers).
+// ---------------------------------------------------------------------------
+
+describe("ConnectorsBinder — connect flow (PRD-11 D4)", () => {
+  it("opens the ConnectModal from the 'Connect a tool' CTA", async () => {
+    const recorder: Recorder = { calls: [] };
+    const { getByTestId, queryByTestId } = render(
+      <TransportProvider transport={connectorsTransport(recorder)}>
+        <ConnectorsBinder />
+      </TransportProvider>,
+    );
+
+    await waitFor(() => {
+      expect(getByTestId("connectors-connect-cta")).toBeInTheDocument();
+    });
+    // No modal until the CTA is pressed.
+    expect(queryByTestId("settings-modal")).toBeNull();
+
+    fireEvent.click(getByTestId("connectors-connect-cta"));
+
+    const modal = getByTestId("settings-modal");
+    expect(modal).toBeInTheDocument();
+    expect(modal.querySelector("h2")?.textContent).toBe("Connect a tool");
+  });
+
+  it("submitting the custom-server form reaches the port's addCustomServer exactly once", async () => {
+    const recorder: Recorder = { calls: [] };
+    const { getByTestId, getByPlaceholderText } = render(
+      <TransportProvider transport={connectorsTransport(recorder)}>
+        <ConnectorsBinder />
+      </TransportProvider>,
+    );
+
+    await waitFor(() => {
+      expect(getByTestId("connectors-connect-cta")).toBeInTheDocument();
+    });
+    fireEvent.click(getByTestId("connectors-connect-cta"));
+    fireEvent.click(getByTestId("connect-catalog-custom"));
+    fireEvent.change(getByPlaceholderText("https://mcp.example.com"), {
+      target: { value: "https://mcp.example.com" },
+    });
+    fireEvent.click(getByTestId("connect-custom-add"));
+
+    // The port's addCustomServer POSTs to /v1/mcp/servers — exactly once.
+    await waitFor(() => {
+      const creates = recorder.calls.filter(
+        (c) => c.method === "POST" && c.path === "/v1/mcp/servers",
+      );
+      expect(creates).toHaveLength(1);
+    });
+  });
+});
+
 // ===========================================================================
 // ActivityBinder — PRD-08 D1/D1c: reads GET /v1/agent/runs (never /v1/audit),
 // renders the counter meta line, and (PRD-04 Seam C) forwards the row's

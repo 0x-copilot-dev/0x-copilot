@@ -355,16 +355,9 @@
   opacity: 0.7;
 }
 
-/* Squared avatar (catalog-local). The design-system AppIcon is round by
-   default for chat-row chips; flatter rectangles read better on a
-   product card and match the "app icon" affordance from the Mac/iOS
-   home-screen vocabulary. */
-.mcp-card__icon.ui-app-icon {
-  border-radius: var(--radius-sm);
-  height: 2rem;
-  width: 2rem;
-}
-
+/* PRD-11 D3 — the squared avatar override is retired: `AppIcon size="tile"`
+   now owns the 30px squircle via `.ui-app-icon--tile`, so this local copy is
+   deleted rather than duplicating the design-system tile. */
 .mcp-card__main {
   display: grid;
   gap: 2px;

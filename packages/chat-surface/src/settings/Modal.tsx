@@ -144,10 +144,13 @@ const scrimStyle: CSSProperties = {
   backgroundColor: "var(--color-scrim)",
   backdropFilter: "blur(var(--blur-scrim))",
   WebkitBackdropFilter: "blur(var(--blur-scrim))",
-  display: "flex",
-  alignItems: "center",
-  justifyContent: "center",
-  padding: 16,
+  // PRD-11 D8 / README G10 — the design `.scrim` (copilot.css:2223) centres its
+  // dialog with a grid + place-items:center + 22px pad. `position`
+  // stays `fixed` and `zIndex` stays 1100 (the design's absolute/60 are values
+  // of a self-contained mock window; Modal is a real app overlay).
+  display: "grid",
+  placeItems: "center",
+  padding: 22,
   zIndex: 1100,
 };
 
@@ -159,16 +162,20 @@ const headStyle: CSSProperties = {
   borderBottom: "1px solid var(--color-border)",
 };
 
+// PRD-11 D8 / README C10 — the design `.modal__logo` (copilot.css:2260-2271) is
+// a 34×34 neutral tile forced to --panel3 / --tx2, which map exactly to
+// --color-surface-elevated / --color-text-strong. The old 30px /
+// --color-surface-muted (the hover rung) picked the wrong rungs.
 const logoStyle: CSSProperties = {
   flex: "0 0 auto",
   display: "inline-flex",
   alignItems: "center",
   justifyContent: "center",
-  width: 30,
-  height: 30,
+  width: 34,
+  height: 34,
   borderRadius: "var(--radius-md)",
-  backgroundColor: "var(--color-surface-muted)",
-  color: "var(--color-text-muted)",
+  backgroundColor: "var(--color-surface-elevated)",
+  color: "var(--color-text-strong)",
 };
 
 const titleStyle: CSSProperties = {
