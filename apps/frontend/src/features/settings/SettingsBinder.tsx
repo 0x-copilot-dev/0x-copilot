@@ -81,6 +81,7 @@ import type { Transport } from "@0x-copilot/chat-transport";
 import type {
   LocalModelSummary,
   LocalModelsStatus,
+  ModelCatalogModel,
   WorkspaceDefaultsResponse,
 } from "@0x-copilot/api-types";
 import {
@@ -96,6 +97,7 @@ import type { RequestIdentity } from "../../api/config";
 import type { UserProfileState } from "../me/useUserProfile";
 import type { SettingsSection } from "./settingsSections";
 import { errorMessage } from "../../utils/errors";
+import { listModels } from "../../api/agentApi";
 import { Appearance } from "./sections/Appearance";
 import { ApiKeys } from "./sections/ApiKeys";
 import { Notifications } from "./sections/Notifications";
@@ -106,7 +108,6 @@ import { AuditLogSettings } from "./AuditLogSettings";
 import { BillingSettings } from "./BillingSettings";
 import { MembersSettings } from "./MembersSettings";
 import { WorkspaceSettings } from "./WorkspaceSettings";
-import { buildWebModelCatalog } from "./webModelCatalog";
 import { useWorkspaceDefaults } from "./useWorkspaceDefaults";
 
 // Model & behavior neutral defaults (a fresh session before the GET fan-out
@@ -317,42 +318,25 @@ export function SettingsBinder({
   // the B7 budget engine (shared SpendGuardrailPort). Each host binds its own
   // transport-backed adapter — no apps/* → apps/* import.
 
-  // BYOK providers the user actually holds a key for → gate the cloud catalog.
-  const [mbConfiguredProviders, setMbConfiguredProviders] = useState<
-    ReadonlySet<string>
-  >(new Set());
-  const [mbProvidersKnown, setMbProvidersKnown] = useState(false);
+  // Default-model options come from the one backend catalog (/v1/agent/models),
+  // whose `configured` flag reflects env keys ∪ this user's BYOK keys — the same
+  // credential truth the run-create gate uses (M1). Replaces the hand-rolled
+  // curated list gated by a separate provider-key probe: one source, no drift.
+  const [mbCatalog, setMbCatalog] = useState<readonly ModelCatalogModel[]>([]);
   useEffect(() => {
     let cancelled = false;
-    void providerKeysPort
-      .list()
-      .then((keys) => {
-        if (cancelled) return;
-        const providers = new Set<string>();
-        for (const key of keys) {
-          providers.add(key.provider);
-          // Key store speaks `google`; catalog + runtime speak `gemini`.
-          if (key.provider === "google") providers.add("gemini");
-        }
-        setMbConfiguredProviders(providers);
-        setMbProvidersKnown(true);
+    void listModels(identity)
+      .then((res) => {
+        if (!cancelled) setMbCatalog(res.models);
       })
       .catch(() => {
-        // Fail open (catalog stays selectable); the run-start gate is the backstop.
+        // Fail open (empty select); the run-start gate is the backstop.
       });
     return () => {
       cancelled = true;
     };
-  }, [providerKeysPort]);
+  }, [identity]);
 
-  const mbCatalog = useMemo(
-    () =>
-      buildWebModelCatalog({
-        configuredProviders: mbConfiguredProviders,
-        providersKnown: mbProvidersKnown,
-      }),
-    [mbConfiguredProviders, mbProvidersKnown],
-  );
   // The select's value: the catalog id when the persisted default matches a
   // curated entry, else the bare model_name (rendered as a synthetic option).
   const mbDefaultValue = useMemo(() => {
@@ -369,7 +353,9 @@ export function SettingsBinder({
       value: m.id,
       label: m.name,
       sub: m.provider,
-      disabled: m.disabled,
+      // `configured` now reflects env keys ∪ the user's BYOK keys (M1); a model
+      // whose provider the user can't run is shown disabled, not hidden.
+      disabled: m.configured === false,
     }));
     if (
       mbDefaultValue !== null &&

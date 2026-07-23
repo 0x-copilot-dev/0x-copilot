@@ -90,9 +90,19 @@ Backend-only, self-contained, tested.
 - [x] ai-backend: `ModelCatalogItem.kind` (Literal, default `"chat"`) — the curated
       catalog is chat-only, so the default flows through `ModelCatalog.build` unchanged;
       test asserts every item is `kind == "chat"`. 763 passed.
-- [ ] chat-surface: one catalog port/hook every composer consumes (pickers filter `kind == "chat"`).
-- [ ] web: delete `demoModels` (`ChatScreen`) + `webModelCatalog`; read the port.
-- [ ] desktop: delete `CURATED_CLOUD_MODELS` (`desktopModelCatalog`); read the port.
+- [x] web Settings model-select: `webModelCatalog.ts` **deleted**; `SettingsBinder`
+      reads the one catalog via `listModels()` (`configured` = env ∪ BYOK from M1),
+      dropping the separate provider-key probe. Frontend `tsc` 0 errors.
+- [ ] desktop composer: delete `CURATED_CLOUD_MODELS` (`desktopModelCatalog`); read the catalog.
+- [ ] web-cockpit + Settings pickers: add explicit `kind === "chat"` filter (no-op
+      today — catalog is chat-only — but the enforceable invariant; needs the
+      worktree-package symlink so `.kind` resolves).
+- [ ] legacy web `ChatScreen` `demoModels`: intentionally left (retirement path).
+
+TS verification note: worktree apps resolve `@0x-copilot/*` through the main
+checkout's `node_modules` (stale vs this branch). To typecheck worktree app
+changes, symlink the branch's packages in first:
+`ln -sfn "$WT/packages/<pkg>" "$WT/node_modules/@0x-copilot/<pkg>"`.
 
 `recommended` (per-provider default marker) is deferred to Phase 3, where the
 auto-pick rule pins its exact semantics — added with its consumer, not before.
