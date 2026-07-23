@@ -14,6 +14,12 @@
 # file that re-introduces this constant trips `generic-api-key` even though the
 # identical string is already on main; this allowlist makes the intent explicit
 # and durable instead of relying on scan-range luck.
+#
+# `enterprise.flags.*` are client feature-flag localStorage keys (e.g.
+# `enterprise.flags.surfaces-v2`), not secrets. A `SURFACES_V2_FLAG_KEY = "..."`
+# constant trips `generic-api-key` purely on its `*_KEY = "<string>"` shape. We
+# allowlist the flag NAMESPACE (a value pattern), never a file or directory, so
+# a real secret in the same files is still caught.
 
 [extend]
 useDefault = true
@@ -22,4 +28,5 @@ useDefault = true
 description = "Known non-secret test fixtures"
 regexes = [
   '''test-vault-secret-32-chars-min-length-yes''',
+  '''enterprise\.flags\.[a-z0-9._-]+''',
 ]
