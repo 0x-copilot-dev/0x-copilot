@@ -45,6 +45,7 @@ from backend_app.connectors.store import (
     ConnectorAccessMode,
     ConnectorRecord,
     ConnectorScopeEntry,
+    ConnectorWritePolicy,
 )
 from backend_app.identity.rbac import RequireScopes
 
@@ -77,6 +78,11 @@ class ConnectorResponseModel(BaseModel):
     # Always emitted now that the access-mode PATCH exists (PRD-06 D2); the
     # api-types ``Connector.access_mode`` mirror is correspondingly required.
     access_mode: ConnectorAccessMode
+    # Per-connector agent write policy (approval-posture override, PRD-C1).
+    # ``None`` = no override (defer to the global Approval Policy). A DISTINCT
+    # axis from ``access_mode``. The api-types ``Connector.write_policy`` mirror
+    # is optional (absent === null).
+    write_policy: ConnectorWritePolicy | None = None
     owner_user_id: str
     scopes: list[ConnectorScopeEntryModel]
     last_sync_at: str | None = None
@@ -177,6 +183,33 @@ class SetAccessModeResponseModel(BaseModel):
 
     ``200`` (not the scopes route's ``202``): an access-mode change is
     complete when the row is written; it never triggers a re-OAuth round-trip.
+    """
+
+    model_config = ConfigDict(extra="forbid")
+    connector: ConnectorResponseModel
+
+
+class SetWritePolicyRequestModel(BaseModel):
+    """``PATCH /v1/connectors/{id}/write-policy`` body.
+
+    ``write_policy`` is carried as a nullable plain string and validated
+    against the ``ConnectorWritePolicy`` union *in the route* so a value
+    outside the union is a deterministic ``400 invalid_request`` rather than
+    FastAPI's default ``422``. ``null`` is a first-class value — it CLEARS the
+    override (defer to the global Approval Policy). Mirrors
+    ``SetConnectorWritePolicyRequest`` in
+    ``packages/api-types/src/connectors.ts``.
+    """
+
+    model_config = ConfigDict(extra="forbid")
+    write_policy: str | None
+
+
+class SetWritePolicyResponseModel(BaseModel):
+    """``200 OK`` — the reconciled connector row with its new ``write_policy``.
+
+    ``200`` (not ``202``): a write-policy change is complete when the row is
+    written; it never triggers a re-OAuth round-trip.
     """
 
     model_config = ConfigDict(extra="forbid")
@@ -539,6 +572,65 @@ def register_connector_routes(app: FastAPI, *, service: ConnectorsService) -> No
             ) from exc
         return SetAccessModeResponseModel(connector=_to_wire(record))
 
+    @app.patch(
+        "/v1/connectors/{connector_id}/write-policy",
+        response_model=SetWritePolicyResponseModel,
+        dependencies=[Depends(RequireScopes(RUNTIME_USE))],
+    )
+    def set_write_policy(
+        request: Request,
+        connector_id: str,
+        payload: SetWritePolicyRequestModel,
+        org_id: str = Query(..., min_length=1),
+        user_id: str = Query(..., min_length=1),
+    ) -> SetWritePolicyResponseModel:
+        """Set (or clear) the per-connector agent write policy (PRD-C1).
+
+        The approval-posture OVERRIDE lane — a DISTINCT axis from
+        ``access-mode``. ``null`` CLEARS the override (defer to the global
+        Approval Policy). ``200`` — the change is durable the moment the row is
+        written; no re-OAuth round-trip. Same write boundary as access-mode:
+        owner-or-admin only, 404 (not 403) for a cross-tenant id so existence
+        never leaks. Idempotent — a set-to-current-value returns the unchanged
+        row and writes zero audit rows.
+
+        Runtime callers (C2's gate resolution) use the SAME shape the
+        access-mode PATCH uses: ``RUNTIME_USE`` scope + ``org_id`` / ``user_id``
+        query params, with the service-token identity headers winning when
+        present. The facade forwards ``/v1/connectors/*`` transparently, so the
+        Settings lane reaches the same handler.
+        """
+
+        identity = BackendServiceAuthenticator.scoped_identity(
+            request, org_id=org_id, user_id=user_id
+        )
+        policy: ConnectorWritePolicy | None
+        try:
+            policy = (
+                ConnectorWritePolicy(payload.write_policy)
+                if payload.write_policy is not None
+                else None
+            )
+        except ValueError as exc:
+            raise HTTPException(status.HTTP_400_BAD_REQUEST, "invalid_request") from exc
+        try:
+            record = service.set_write_policy(
+                tenant_id=identity.org_id,
+                caller_user_id=identity.user_id,
+                caller_roles=identity.roles,
+                connector_id=connector_id,
+                write_policy=policy,
+            )
+        except ConnectorNotFound as exc:
+            raise HTTPException(
+                status.HTTP_404_NOT_FOUND, "connector_not_found"
+            ) from exc
+        except ConnectorForbidden as exc:
+            raise HTTPException(
+                status.HTTP_403_FORBIDDEN, "owner_or_admin_only"
+            ) from exc
+        return SetWritePolicyResponseModel(connector=_to_wire(record))
+
     @app.get(
         "/v1/connectors/{connector_id}/audit",
         response_model=ConnectorAuditResponseModel,
@@ -610,6 +702,7 @@ def _to_wire(record: ConnectorRecord) -> ConnectorResponseModel:
         status=record.status,
         status_reason=record.status_reason,
         access_mode=record.access_mode,
+        write_policy=record.write_policy,
         owner_user_id=record.owner_user_id,
         scopes=[
             ConnectorScopeEntryModel(

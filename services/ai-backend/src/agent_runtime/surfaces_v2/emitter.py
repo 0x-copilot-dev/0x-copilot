@@ -22,6 +22,8 @@ from collections.abc import Awaitable, Callable, Mapping
 from contextvars import ContextVar
 from dataclasses import dataclass
 
+from agent_runtime.capabilities.actions.classifier import ACTION_CLASSIFIER
+from agent_runtime.capabilities.mcp.annotations import McpToolAnnotationsRegistry
 from agent_runtime.capabilities.surfaces.builtin import server_slug, tool_slug
 from agent_runtime.capabilities.surfaces.generator import DotPathResolver
 from agent_runtime.capabilities.surfaces.spec_models import SurfaceArchetype
@@ -97,8 +99,15 @@ class WorkLedgerEmitter:
             op = tool_slug(tool_name)
             payload_ref = f"{Values.CALL_REF_PREFIX}{call_id}"
 
+            action_class, basis = self._classify(
+                server_name=server_name, tool_name=tool_name
+            )
             await self._emit_action_classified(
-                call_id=call_id, connector=connector, op=op
+                call_id=call_id,
+                connector=connector,
+                op=op,
+                action_class=action_class,
+                basis=basis,
             )
             await self._emit_read_executed(
                 call_id=call_id,
@@ -146,16 +155,44 @@ class WorkLedgerEmitter:
 
     # -- payload builders ---------------------------------------------------
 
+    @staticmethod
+    def _classify(*, server_name: str, tool_name: str) -> tuple[str, str]:
+        """Classify the call into ``(class, basis)`` wire strings (PRD-C1).
+
+        Consults the module-level classifier singleton with the annotations the
+        per-run registry captured for this ``(server, tool)`` (``None`` when the
+        registry is unbound — replay/eval/tests — which falls through to
+        catalog/default, fail-closed). Best-effort: the classifier is pure and
+        total, but any surprise degrades to the honest ``unknown`` / ``default``
+        pair (A3's behaviour) rather than raising into the tool-call path.
+        """
+
+        try:
+            annotations = McpToolAnnotationsRegistry.get(server_name, tool_name)
+            classified = ACTION_CLASSIFIER.classify(
+                server=server_name, tool=tool_name, annotations=annotations
+            )
+            return classified.action_class.value, classified.basis.value
+        except Exception:  # noqa: BLE001 - classification never fails a tool call
+            _LOGGER.warning(Messages.CLASSIFY_RAISED, exc_info=True)
+            return Values.CLASS_UNKNOWN, Values.BASIS_DEFAULT
+
     async def _emit_action_classified(
-        self, *, call_id: str, connector: str, op: str
+        self,
+        *,
+        call_id: str,
+        connector: str,
+        op: str,
+        action_class: str,
+        basis: str,
     ) -> None:
         payload = {
             Keys.Field.V: Values.PAYLOAD_V,
             Keys.Field.CALL_ID: call_id,
             Keys.Field.CONNECTOR: connector,
             Keys.Field.OP: op,
-            Keys.Field.CLASS: Values.CLASS_UNKNOWN,
-            Keys.Field.BASIS: Values.BASIS_DEFAULT,
+            Keys.Field.CLASS: action_class,
+            Keys.Field.BASIS: basis,
         }
         await self.emit(LedgerEventType.ACTION_CLASSIFIED.value, payload, None)
 

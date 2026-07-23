@@ -62,6 +62,7 @@ from backend_app.connectors.store import (
     ConnectorRecord,
     ConnectorScopeEntry,
     ConnectorsStore,
+    ConnectorWritePolicy,
     InMemoryConnectorsStore,
     McpUpsertInput,
 )
@@ -70,6 +71,7 @@ __all__ = [
     "ConnectorAccessMode",
     "ConnectorActivityBus",
     "ConnectorAuditRecord",
+    "ConnectorWritePolicy",
     "ConnectorCatalogEntry",
     "ConnectorEventEnvelope",
     "ConnectorEventType",

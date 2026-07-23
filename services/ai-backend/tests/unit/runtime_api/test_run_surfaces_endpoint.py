@@ -144,6 +144,27 @@ class RunSurfacesEndpointMixin:
             },
         )
 
+    @staticmethod
+    async def _append_surface_content(
+        producer: RuntimeEventProducer, run: RunRecord
+    ) -> None:
+        """Append the v1 ``tool_result`` surface envelope B2 hydrates content from."""
+        await producer.append_api_event(
+            run=run,
+            source=StreamEventSource.SYSTEM,
+            event_type=RuntimeApiEventType.TOOL_RESULT,
+            payload={
+                "surface": {
+                    "surface_uri": "record://linear/get_issue/issue-1",
+                    "archetype": "record",
+                    "state": {
+                        "spec": {"archetype": "record"},
+                        "data": {"id": "ENG-1", "title": "Fix"},
+                    },
+                }
+            },
+        )
+
 
 class TestRunSurfacesEndpoint(RunSurfacesEndpointMixin):
     async def test_scope_mismatch_is_404(
@@ -204,6 +225,39 @@ class TestRunSurfacesEndpoint(RunSurfacesEndpointMixin):
         assert surface.view.tier == "shaped"
         assert surface.view.basis == "registry"
         assert surface.ledger_id.startswith("r")
+
+    async def test_content_hydration_serves_materialized_state(
+        self, runtime_context_admin: AgentRuntimeContext
+    ) -> None:
+        # PRD-B2: the metadata snapshot is enriched with the v1 surface
+        # envelope's {spec, data}, resolved from the same run's events.
+        _store, producer, cqs, run = await self._setup(runtime_context_admin)
+        await self._append_surface_ledger(producer, run)
+        await self._append_surface_content(producer, run)
+
+        response = await cqs.list_run_surfaces(
+            org_id=self.ORG, user_id=self.USER, run_id=run.run_id
+        )
+
+        assert len(response.surfaces) == 1
+        surface = response.surfaces[0]
+        assert surface.state == {
+            "spec": {"archetype": "record"},
+            "data": {"id": "ENG-1", "title": "Fix"},
+        }
+
+    async def test_surface_without_content_event_has_null_state(
+        self, runtime_context_admin: AgentRuntimeContext
+    ) -> None:
+        # No tool_result envelope yet ⇒ state is None (honest "not hydrated").
+        _store, producer, cqs, run = await self._setup(runtime_context_admin)
+        await self._append_surface_ledger(producer, run)
+
+        response = await cqs.list_run_surfaces(
+            org_id=self.ORG, user_id=self.USER, run_id=run.run_id
+        )
+
+        assert response.surfaces[0].state is None
 
     async def test_ref_keyed_payload_is_offloaded(
         self, runtime_context_admin: AgentRuntimeContext

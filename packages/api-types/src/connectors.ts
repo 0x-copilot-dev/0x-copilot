@@ -84,6 +84,29 @@ export const CONNECTOR_ACCESS_MODES = ["read", "read_act", "off"] as const;
  */
 export type ConnectorAccessMode = (typeof CONNECTOR_ACCESS_MODES)[number];
 
+/**
+ * Canonical per-connector WRITE POLICY values — the approval-POSTURE axis,
+ * DISTINCT from `access_mode` (the capability axis). This is an OVERRIDE on top
+ * of the global Settings → Model & behavior Approval Policy (PRD-C1 / migration
+ * 0047):
+ *
+ * * `ask_first`    — a WRITE the agent is otherwise allowed to make holds for
+ *                    approval (the honest default posture).
+ * * `allow_always` — an otherwise-allowed WRITE runs without asking (downgrades
+ *                    only a `write`-axis `ask`; never destructive/require/block).
+ *
+ * Absence of an override is `Connector.write_policy` being `null`/absent, NOT a
+ * third value. `as const` tuple so the union is runtime-enumerable at one site.
+ */
+export const CONNECTOR_WRITE_POLICIES = ["ask_first", "allow_always"] as const;
+
+/**
+ * Per-connector write policy (approval-posture override). The global approval
+ * *policy* lives separately (Settings → Model & behavior); this field is the
+ * per-connector *hold or run* override layered on top of it.
+ */
+export type ConnectorWritePolicy = (typeof CONNECTOR_WRITE_POLICIES)[number];
+
 // ---------------------------------------------------------------------------
 // Scope — the OAuth scopes a user granted, per slug, per connection.
 // ---------------------------------------------------------------------------
@@ -135,6 +158,14 @@ export interface Connector {
    * of the "Off everywhere" symptom).
    */
   readonly access_mode: ConnectorAccessMode;
+  /**
+   * Per-connector write policy — the approval-posture OVERRIDE (PRD-C1). A
+   * DISTINCT axis from `access_mode`. `null`/absent = no override (defer to the
+   * global Settings Approval Policy). The backend emits it on every connector
+   * row (null when unset); the "Bypass on" posture indicator (FR-B5) is any
+   * enabled connector reading `allow_always`.
+   */
+  readonly write_policy?: ConnectorWritePolicy | null;
   readonly owner_user_id: UserId;
   /**
    * Scopes granted by the user, per the most recent OAuth round-trip.
@@ -318,6 +349,26 @@ export interface SetConnectorAccessModeRequest {
  * with its updated `access_mode`.
  */
 export interface SetConnectorAccessModeResponse {
+  readonly connector: Connector;
+}
+
+/**
+ * `PATCH /v1/connectors/{id}/write-policy` request body (PRD-C1). Sets the
+ * per-connector approval-posture OVERRIDE. `null` CLEARS the override (defer to
+ * the global Approval Policy) — a first-class value, not a no-op. DISTINCT from
+ * the access-mode PATCH; like it, does NOT trigger a re-OAuth round-trip.
+ * Mirrors `SetWritePolicyRequestModel` in
+ * `services/backend/src/backend_app/connectors/routes.py`.
+ */
+export interface SetConnectorWritePolicyRequest {
+  readonly write_policy: ConnectorWritePolicy | null;
+}
+
+/**
+ * `PATCH /v1/connectors/{id}/write-policy` response — the connector row with
+ * its updated (or cleared) `write_policy`.
+ */
+export interface SetConnectorWritePolicyResponse {
   readonly connector: Connector;
 }
 

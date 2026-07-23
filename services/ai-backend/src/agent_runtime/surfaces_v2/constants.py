@@ -70,6 +70,12 @@ class Messages:
     # Log tag when an emitter method swallows its own exception (D3/D8).
     EMIT_RAISED = "[surfaces_v2] ledger.emit_raised"
 
+    # Log tag when classification raises at the emission site (PRD-C1). The
+    # classifier is pure + total, so this should never fire — but the emit path
+    # degrades to ``class=unknown`` / ``basis=default`` (honest fallback) rather
+    # than failing the tool call.
+    CLASSIFY_RAISED = "[surfaces] action.classify_raised"
+
 
 class Titles:
     """Fallback surface-title formatting (D1)."""

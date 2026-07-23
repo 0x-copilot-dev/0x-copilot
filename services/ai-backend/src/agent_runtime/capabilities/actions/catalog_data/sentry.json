@@ -1,0 +1,17 @@
+{
+  "catalog_version": 1,
+  "connector": "sentry",
+  "operations": {
+    "list_issues": "read",
+    "get_issue": "read",
+    "list_events": "read",
+    "get_event": "read",
+    "list_projects": "read",
+    "resolve_issue": "write",
+    "assign_issue": "write",
+    "ignore_issue": "write",
+    "update_issue": "write",
+    "add_comment": "write",
+    "delete_issue": "destructive"
+  }
+}

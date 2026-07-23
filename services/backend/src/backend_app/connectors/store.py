@@ -92,6 +92,35 @@ class ConnectorAccessMode(StrEnum):
     OFF = "off"
 
 
+class ConnectorWritePolicy(StrEnum):
+    """Per-connector agent write policy (approval-posture override).
+
+    Single enumeration shared by the ``connectors.write_policy`` CHECK
+    constraint (``0047_connector_write_policy.sql`` / ``schema.sql``) and this
+    Pydantic model, so the DB constraint and the record type can never drift.
+    Byte-identical to ``ConnectorWritePolicy`` in
+    ``packages/api-types/src/connectors.ts``.
+
+    A DISTINCT axis from :class:`ConnectorAccessMode` (which is the
+    *capability* axis — read / read_act / off). This is the *approval-posture*
+    axis, an OVERRIDE on top of the global Settings -> Model & behavior
+    Approval Policy:
+
+    * ``ask_first``    — a WRITE the agent is otherwise allowed to make holds
+                         for approval (the honest default posture).
+    * ``allow_always`` — an otherwise-allowed WRITE runs without asking
+                         (downgrades only a ``write``-axis ``ask``; never
+                         touches destructive / require / block).
+
+    ``None`` on the record (NULL column) means *no override* — defer entirely
+    to the global Approval Policy. There is deliberately no member for that
+    state: absence of an override is the column being NULL, not a third value.
+    """
+
+    ASK_FIRST = "ask_first"
+    ALLOW_ALWAYS = "allow_always"
+
+
 class ConnectorScopeEntry(BaseModel):
     """One OAuth scope on a connector row.
 
@@ -133,6 +162,11 @@ class ConnectorRecord(BaseModel):
     # more than the user ever saw). Preserved verbatim across MCP
     # re-registration (see ``upsert_from_mcp_registration``).
     access_mode: ConnectorAccessMode = ConnectorAccessMode.READ
+    # Per-connector agent write policy (approval-posture override). ``None``
+    # = no override (defer to the global Approval Policy) — the NULL column
+    # default, preserved verbatim across MCP re-registration. A DISTINCT axis
+    # from ``access_mode`` (PRD-C1 / migration 0047).
+    write_policy: ConnectorWritePolicy | None = None
     owner_user_id: str
     scopes: list[ConnectorScopeEntry] = Field(default_factory=list)
     last_sync_at: datetime | None = None
@@ -640,11 +674,12 @@ class PostgresConnectorsStore:
                 """
                 INSERT INTO connectors (
                     id, tenant_id, slug, display_name, description,
-                    status, status_reason, access_mode, owner_user_id, scopes,
+                    status, status_reason, access_mode, write_policy,
+                    owner_user_id, scopes,
                     last_sync_at, last_error_at, created_at, updated_at,
                     vault_ref
                 ) VALUES (
-                    %s,%s,%s,%s,%s,%s,%s,%s,%s,%s::jsonb,%s,%s,%s,%s,%s
+                    %s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s::jsonb,%s,%s,%s,%s,%s
                 )
                 """,
                 (
@@ -656,6 +691,7 @@ class PostgresConnectorsStore:
                     record.status,
                     record.status_reason,
                     record.access_mode.value,
+                    record.write_policy.value if record.write_policy else None,
                     record.owner_user_id,
                     _jsonb([s.model_dump() for s in record.scopes]),
                     record.last_sync_at,
@@ -674,7 +710,7 @@ class PostgresConnectorsStore:
                 UPDATE connectors SET
                     slug = %s, display_name = %s, description = %s,
                     status = %s, status_reason = %s, access_mode = %s,
-                    owner_user_id = %s,
+                    write_policy = %s, owner_user_id = %s,
                     scopes = %s::jsonb, last_sync_at = %s,
                     last_error_at = %s, updated_at = %s, vault_ref = %s
                 WHERE tenant_id = %s AND id = %s
@@ -686,6 +722,7 @@ class PostgresConnectorsStore:
                     record.status,
                     record.status_reason,
                     record.access_mode.value,
+                    record.write_policy.value if record.write_policy else None,
                     record.owner_user_id,
                     _jsonb([s.model_dump() for s in record.scopes]),
                     record.last_sync_at,

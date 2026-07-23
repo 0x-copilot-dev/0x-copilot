@@ -355,6 +355,10 @@ class BackendMcpClient:
         from agent_runtime.capabilities.mcp.descriptor_registry import (  # noqa: PLC0415
             McpDisplayRegistryContext,
         )
+        from agent_runtime.capabilities.mcp.annotations import (  # noqa: PLC0415
+            McpToolAnnotations,
+            McpToolAnnotationsRegistry,
+        )
 
         connector_label = self.card.display_name or self.card.name
         display = DisplayMetadataMiddleware.synthesise_for_mcp(
@@ -367,6 +371,20 @@ class BackendMcpClient:
         # display templates for ``call_mcp_tool`` dispatcher events. ``register``
         # is a no-op when no registry is bound (replay / eval / tests).
         McpDisplayRegistryContext.register(name, display)
+        # PRD-C1 — capture the raw MCP ``annotations`` as untrusted classifier
+        # hints on the per-run annotations registry (composite key: this
+        # server's slug + tool). Registry-only (never a descriptor field) so
+        # every existing payload stays byte-identical. Skipped unless
+        # ``annotations`` is a mapping; garbage is tolerated (no entry). The
+        # server is registered with ``self.card.name`` (the read side passes the
+        # model-supplied ``server_name``); both normalize through ``server_slug``.
+        raw_annotations = tool.get("annotations")
+        if isinstance(raw_annotations, Mapping):
+            McpToolAnnotationsRegistry.register(
+                self.card.name,
+                name,
+                McpToolAnnotations.from_wire(raw_annotations),
+            )
         # PRD-06 D3c — parse the MCP tool ``annotations.readOnlyHint``. Absent
         # ``annotations`` ⇒ ``None`` (fail-closed: treated as acting under
         # ``read`` mode); present ⇒ the boolean hint.

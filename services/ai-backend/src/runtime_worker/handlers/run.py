@@ -58,6 +58,10 @@ from agent_runtime.api.user_policies_resolver import (
     ProviderKeysHydrator,
     UserPoliciesResolver,
 )
+from agent_runtime.capabilities.mcp.annotations import (
+    McpToolAnnotations,
+    McpToolAnnotationsRegistry,
+)
 from agent_runtime.capabilities.mcp.descriptor_registry import (
     McpDisplayRegistryContext,
 )
@@ -375,6 +379,12 @@ class RuntimeRunHandler:
         display_token: object | None = None
         mcp_display_token: object | None = None
         mcp_display_registry: dict[str, ToolDisplayTemplate] = {}
+        # PRD-C1 — per-run MCP tool annotations registry (untrusted classifier
+        # hints). Bound alongside the display registry so ``_tool_descriptor``
+        # (which runs inside this bound context) can capture annotations for the
+        # classifier the ledger emitter consults.
+        mcp_annotations_token: object | None = None
+        mcp_annotations_registry: dict[tuple[str, str], McpToolAnnotations] = {}
         # Per-run ``/workspace/`` backend. Held across the try so the finally can
         # release its pinned broker grant snapshot (``/v1/runs/end``) on every
         # exit path — completion, failure, timeout, or cancel.
@@ -389,6 +399,9 @@ class RuntimeRunHandler:
             )
             mcp_display_token = McpDisplayRegistryContext.bind_for_run(
                 mcp_display_registry
+            )
+            mcp_annotations_token = McpToolAnnotationsRegistry.bind_for_run(
+                mcp_annotations_registry
             )
             display_token = ToolDisplayLookupContext.bind_for_run(
                 self._build_tool_display_lookup(dependencies.tool_registry)
@@ -590,6 +603,8 @@ class RuntimeRunHandler:
                 ToolDisplayLookupContext.unbind(display_token)
             if mcp_display_token is not None:
                 McpDisplayRegistryContext.unbind(mcp_display_token)
+            if mcp_annotations_token is not None:
+                McpToolAnnotationsRegistry.unbind(mcp_annotations_token)
             await WorkspaceBackendWorkerWiring.release_backend(workspace_backend)
 
         completed = await with_optimistic_retry(
