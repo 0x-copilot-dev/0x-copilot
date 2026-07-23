@@ -623,6 +623,11 @@ class RuntimeDependencies(RuntimeContract):
     # to the model-visible tool set and adds its prompt guidance. ``None``
     # everywhere else, so non-desktop / disabled runs are byte-identical.
     sandbox_execute_tool: object | None = None
+    # Optional gated ``stage_rowset_write`` tool (PRD-D3 bulk row-set staging).
+    # Built per run by the worker only when ``SURFACES_V2`` is on; the factory
+    # appends it to the model-visible tool set. ``None`` (and absent from the
+    # model's tool surface) with the flag off, so those runs are byte-identical.
+    stage_rowset_write_tool: object | None = None
     # Optional process-wide TTL cache for MCP discovery (the
     # ``connect + list_tools + list_resources`` round-trips on
     # ``McpLoader.load_server``). When ``None`` the loader behaves

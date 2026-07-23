@@ -58,6 +58,24 @@ class Keys:
         SCOPE = "scope"
         START = "start"
         END = "end"
+        # PRD-D3 bulk row-set payload keys (write.staged rows/agent_holds;
+        # revision.added additive ``rowset``; decision.recorded ``scope.row_keys``
+        # + ``apply``; write.applied ``row_keys`` + additive ``row_results``).
+        # SDR §5 (verbatim + the additive keys noted under §5).
+        ROWS = "rows"
+        AGENT_HOLDS = "agent_holds"
+        ROW_KEY = "row_key"
+        ROW_KEYS = "row_keys"
+        REASON = "reason"
+        ROWSET = "rowset"
+        TARGET_ARGS = "target_args"
+        CHANGES = "changes"
+        FIELD = "field"
+        OLD = "old"
+        NEW = "new"
+        APPLY = "apply"
+        ROW_RESULTS = "row_results"
+        # ``row_results[].outcome`` reuses the existing ``OUTCOME`` key above.
         # PRD-D2 write.applied payload keys (SDR §5, verbatim + additive
         # ``failure`` / ``decided_by`` noted under §5).
         RESULT = "result"
@@ -117,6 +135,14 @@ class Values:
     # additive failure-code enum defined in PRD-D2; ``partial`` is D3).
     RESULT_APPLIED = "applied"
     RESULT_FAILED = "failed"
+    # PRD-D3 partial-apply outcome (ApplyResult.PARTIAL member) + the per-row
+    # ``row_results[].outcome`` value set + the ``actor: policy`` allow-always
+    # auto-apply + the ``kind: table`` a row-set surface is created with.
+    RESULT_PARTIAL = "partial"
+    ROW_OUTCOME_APPLIED = "applied"
+    ROW_OUTCOME_FAILED = "failed"
+    ACTOR_POLICY = "policy"
+    KIND_TABLE = "table"
     FAILURE_PRECONDITION_DRIFT = "precondition_drift"
     FAILURE_CONNECTOR_ERROR = "connector_error"
     FAILURE_ATTEMPT_INDETERMINATE = "attempt_indeterminate"
@@ -140,6 +166,11 @@ class Messages:
     WRITE_STAGED = "Staged a write"
     REVISION_ADDED = "Revised the draft"
     DECISION_RECORDED = "Recorded a decision"
+
+    # PRD-D3 bulk row-set emit-time summaries.
+    ROWSET_STAGED = "Staged a bulk change"
+    ROW_DECISION_RECORDED = "Recorded a row decision"
+    ROWSET_APPLIED = "Applied the approved rows"
 
     # PRD-D2 write.applied emit-time summaries + FR-C3 display microcopy.
     WRITE_APPLIED = "Applied the write"

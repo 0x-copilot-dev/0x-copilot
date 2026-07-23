@@ -163,3 +163,51 @@ def test_facade_proxies_decision_body_including_hold(
         assert captured[0]["json"] == body
         assert captured[0]["params"]["run_id"] == _RUN_ID
         assert captured[0]["params"]["org_id"] == _ORG_ID
+
+
+def test_facade_proxies_row_scoped_decision_verbatim(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    # PRD-D3 — a row-set stance toggle carries ``row_keys`` (not ``rev``); the
+    # facade passes it straight through (the server enforces the matrix).
+    captured = _install_capturing_forwarder(
+        monkeypatch,
+        expected_path=f"/v1/agent/stages/{_STAGE_ID}/decisions",
+        expected_method="POST",
+    )
+    client = TestClient(create_app(FacadeSettings()))
+
+    body = {"decision": "hold", "row_keys": ["row1", "row2"]}
+    response = client.post(
+        f"/v1/agent/stages/{_STAGE_ID}/decisions?run_id={_RUN_ID}",
+        headers=_headers(),
+        json=body,
+    )
+    assert response.status_code == 200, response.text
+    assert captured[0]["json"] == body  # row_keys reaches ai-backend unchanged
+    assert captured[0]["params"]["run_id"] == _RUN_ID
+    assert captured[0]["params"]["org_id"] == _ORG_ID
+
+
+def test_facade_proxies_apply_body_verbatim(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    # PRD-D3 — the NEW ``/apply`` passthrough (pure proxy; the ai-backend
+    # re-checks the approved set + routes through the D2 commit pipeline).
+    captured = _install_capturing_forwarder(
+        monkeypatch,
+        expected_path=f"/v1/agent/stages/{_STAGE_ID}/apply",
+        expected_method="POST",
+    )
+    client = TestClient(create_app(FacadeSettings()))
+
+    body = {"rev": 1, "row_keys": ["row0", "row1", "row2"]}
+    response = client.post(
+        f"/v1/agent/stages/{_STAGE_ID}/apply?run_id={_RUN_ID}",
+        headers=_headers(),
+        json=body,
+    )
+    assert response.status_code == 200, response.text
+    assert captured[0]["json"] == body  # nothing added, nothing dropped
+    assert captured[0]["params"]["run_id"] == _RUN_ID
+    assert captured[0]["params"]["org_id"] == _ORG_ID

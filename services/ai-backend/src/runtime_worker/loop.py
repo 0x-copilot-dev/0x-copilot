@@ -106,6 +106,9 @@ class RuntimeWorker:
             conversation_tool_ordinal_store=self.conversation_tool_ordinal_store,
             mcp_discovery_cache=mcp_discovery_cache,
             user_policies_resolver=user_policies_resolver,  # type: ignore[arg-type]
+            # PRD-D3 — lets the per-run bulk-staging tool enqueue an allow-always
+            # auto-apply through the same durable queue the API uses.
+            queue=self.queue,
         )
         self.cancel_handler = cancel_handler or RuntimeCancelHandler(
             persistence=self.persistence,

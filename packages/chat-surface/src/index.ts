@@ -1174,6 +1174,23 @@ export {
 } from "./thread-canvas";
 // === end PRD-D1 ===
 
+// === Surfaces v2 — PRD-D3 bulk row-set staging (client) ===
+export {
+  TcStagedTableSurface,
+  countsHeader,
+  resultLine,
+  type TcStagedTableSurfaceProps,
+  TcBulkApplyBar,
+  bulkApplyLabel,
+  bulkApplyPledge,
+  type TcBulkApplyBarProps,
+  type LedgerStagedRow,
+  type LedgerRowChange,
+  type LedgerRowCounts,
+  type LedgerRowStance,
+} from "./thread-canvas";
+// === end PRD-D3 ===
+
 // === Surfaces v2 — PRD-B2 provenance + honest states ===
 // Provenance footer, skeleton/assembling state, lossless raw fallback, and the
 // status strip — all pure projections of the Work Ledger, mounted strictly

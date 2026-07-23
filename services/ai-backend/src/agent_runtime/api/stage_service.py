@@ -78,6 +78,50 @@ class StageService:
             rev=rev,
         )
 
+    async def record_row_decision(
+        self,
+        *,
+        org_id: str,
+        user_id: str,
+        run_id: str,
+        stage_id: str,
+        decision: str,
+        row_keys: list[str],
+    ) -> StagedWriteState:
+        """Toggle per-row stance on a bulk row-set (PRD-D3). Never executes."""
+
+        run = await self._resolve_run(org_id=org_id, user_id=user_id, run_id=run_id)
+        return await self.stager.record_row_decision(
+            run=run,
+            org_id=org_id,
+            run_id=run_id,
+            stage_id=stage_id,
+            decision=decision,
+            row_keys=row_keys,
+        )
+
+    async def apply_rows(
+        self,
+        *,
+        org_id: str,
+        user_id: str,
+        run_id: str,
+        stage_id: str,
+        rev: int,
+        row_keys: list[str],
+    ) -> StagedWriteState:
+        """Apply EXACTLY the approved rows through the commit engine (PRD-D3)."""
+
+        run = await self._resolve_run(org_id=org_id, user_id=user_id, run_id=run_id)
+        return await self.stager.apply_rows(
+            run=run,
+            org_id=org_id,
+            run_id=run_id,
+            stage_id=stage_id,
+            rev=rev,
+            row_keys=row_keys,
+        )
+
     async def _resolve_run(self, *, org_id: str, user_id: str, run_id: str) -> object:
         """Fetch the run and assert it belongs to ``user_id`` within ``org_id``.
 

@@ -64,6 +64,41 @@ class TestCapabilityToolsAbsentByDefault:
     ) -> None:
         assert fake_dependencies.code_mode_tool is None
         assert fake_dependencies.sandbox_execute_tool is None
+        # PRD-D3 — the bulk-staging tool defaults off too (flag-off byte-identical).
+        assert fake_dependencies.stage_rowset_write_tool is None
+
+    async def test_stage_rowset_write_absent_by_default(
+        self,
+        runtime_context_admin: AgentRuntimeContext,
+        fake_dependencies: RuntimeDependencies,
+    ) -> None:
+        names, _prompt = await _tool_names_and_prompt(
+            runtime_context_admin, fake_dependencies
+        )
+        assert "stage_rowset_write" not in names
+
+
+class _FakeRowsetTool:
+    """Minimal ``stage_rowset_write`` adapter (name + ainvoke) for the slot test."""
+
+    name = "stage_rowset_write"
+    description = "Stage a bulk row-set write."
+
+    async def ainvoke(self, _kwargs: object) -> dict:
+        return {"ok": True}
+
+
+class TestStageRowsetWriteRegistration:
+    async def test_present_when_slot_populated(
+        self,
+        runtime_context_admin: AgentRuntimeContext,
+        fake_dependencies: RuntimeDependencies,
+    ) -> None:
+        deps = fake_dependencies.model_copy(
+            update={"stage_rowset_write_tool": _FakeRowsetTool()}
+        )
+        names, _prompt = await _tool_names_and_prompt(runtime_context_admin, deps)
+        assert "stage_rowset_write" in names
 
 
 class TestCodeModeToolRegistration:

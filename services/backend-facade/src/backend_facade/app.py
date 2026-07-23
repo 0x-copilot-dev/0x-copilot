@@ -1278,6 +1278,26 @@ def create_app(
             identity=identity,
         )
 
+    @app.post("/v1/agent/stages/{stage_id}/apply")
+    async def apply_stage_rows(
+        request: Request,
+        stage_id: str,
+        payload: dict[str, object],
+        run_id: str = Query(..., min_length=1),
+    ) -> dict[str, object]:
+        # PRD-D3 — bulk row-set apply. Pure proxy (no logic); the ai-backend
+        # re-checks the approved set + routes through the D2 commit pipeline.
+        identity = FacadeAuthenticator.authenticate_request(request)
+        return await forward_json(
+            app,
+            "POST",
+            f"/v1/agent/stages/{stage_id}/apply",
+            target="ai_backend",
+            params=identity.scoped_params({"run_id": run_id}),
+            json=payload,
+            identity=identity,
+        )
+
     @app.get("/v1/agent/runs/{run_id}")
     async def get_run(
         request: Request,

@@ -198,8 +198,16 @@ class TestV2EngineCannotExecute:
 
         h = Harness()
         # Structural: only these dataclass fields — no connector, no MCP client.
+        # ``policy_resolver`` (PRD-D3) is a pure allow-always resolver, NOT a
+        # connector handle, so it does not weaken the "executes nothing" claim.
         fields = set(vars(h.stager).keys())
-        assert fields == {"draft_store", "ledger", "differ", "commit_queue"}
+        assert fields == {
+            "draft_store",
+            "ledger",
+            "differ",
+            "commit_queue",
+            "policy_resolver",
+        }
         # This harness wires no queue ⇒ approve executes nothing.
         assert h.stager.commit_queue is None
         # The transport ledger only knows how to append/read events.

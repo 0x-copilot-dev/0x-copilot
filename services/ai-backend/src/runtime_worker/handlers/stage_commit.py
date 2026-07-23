@@ -52,6 +52,7 @@ from agent_runtime.surfaces_v2.commit_engine import (
 )
 from agent_runtime.surfaces_v2.constants import Keys, Messages, Values
 from agent_runtime.surfaces_v2.ledger_models import LedgerEventType
+from agent_runtime.surfaces_v2.rowset import RowStance
 from agent_runtime.surfaces_v2.staging import (
     DraftRef,
     StagedWriteFold,
@@ -135,6 +136,12 @@ class RuntimeStageCommitHandler:
             )
             return
 
+        # PRD-D3 — a bulk row-set apply routes to the row-scoped pipeline. The
+        # single-artifact (D2) path below is unchanged.
+        if command.row_keys is not None:
+            await self._handle_rowset(run=run, command=command)
+            return
+
         state = await self._fold_stage(command)
         if state is None or not self._approval_gate(state, command):
             # Fail-closed: no matching approve decision ⇒ no event, nothing sends.
@@ -190,6 +197,182 @@ class RuntimeStageCommitHandler:
             failure_code=failure_code,
             audit_action=audit_action,
         )
+
+    # -- PRD-D3 bulk row-set apply ------------------------------------------
+
+    async def _handle_rowset(
+        self, *, run: object, command: RuntimeStageCommitCommand
+    ) -> None:
+        """Dispatch ONLY the approved rows, per-row idempotent; ledger the outcomes.
+
+        Fail-closed gate (fold-based): the stage must be APPLY_PENDING, the apply
+        decision at ``command.decision_seq`` must cover EXACTLY ``command.row_keys``,
+        every key must fold ``will_apply``, and none may already have an outcome.
+        Any mismatch ⇒ warn-log + no-op, NO event. Held rows are never dispatched.
+        """
+
+        state = await self._fold_stage(command)
+        commanded = tuple(command.row_keys or ())
+        if state is None or not self._rowset_gate(state, command, commanded):
+            _LOGGER.warning(
+                "stage_commit.rowset_gate_refused stage_id=%s decision_seq=%s",
+                command.stage_id,
+                command.decision_seq,
+            )
+            return
+
+        engine = self._engine_for(run)
+        row_results: list[dict[str, object]] = []
+        applied = 0
+        failed = 0
+        for row_key in commanded:
+            row = state.staged_row(row_key)
+            if row is None:  # gate proved membership; defensive only
+                continue
+            request = self._build_rowset_request(command=command, state=state, row=row)
+            outcome = await engine.commit(request, captured_precondition=None)
+            row_applied = outcome.status in (
+                StageCommitStatus.COMMITTED,
+                StageCommitStatus.IDEMPOTENT_REPLAY,
+            )
+            if row_applied:
+                applied += 1
+                row_outcome = Values.ROW_OUTCOME_APPLIED
+            else:
+                failed += 1
+                row_outcome = Values.ROW_OUTCOME_FAILED
+            row_results.append(
+                {Keys.Field.ROW_KEY: row_key, Keys.Field.OUTCOME: row_outcome}
+            )
+            await self._write_audit(
+                run=run,
+                command=command,
+                action=_AUDIT_COMMITTED if row_applied else _AUDIT_FAILED,
+                metadata={
+                    Keys.Field.ROW_KEY: row_key,
+                    Keys.Field.OUTCOME: row_outcome,
+                },
+            )
+
+        result = self._aggregate_result(applied=applied, failed=failed)
+        await self._emit_rowset_applied(
+            run=run,
+            command=command,
+            state=state,
+            result=result,
+            row_keys=commanded,
+            row_results=row_results,
+        )
+
+    @staticmethod
+    def _rowset_gate(
+        state: StagedWriteState,
+        command: RuntimeStageCommitCommand,
+        commanded: tuple[str, ...],
+    ) -> bool:
+        """Whether the folded state authorizes EXACTLY this row-set apply command."""
+
+        if state.status is not StagedWriteStatus.APPLY_PENDING:
+            return False
+        if not commanded:
+            return False
+        commanded_set = set(commanded)
+        # The apply decision at this exact seq must cover exactly the commanded set.
+        apply_ok = any(
+            decision.apply
+            and decision.decision == Values.DECISION_APPROVE
+            and decision.sequence_no == command.decision_seq
+            and set(decision.scope_row_keys) == commanded_set
+            for decision in state.decisions
+        )
+        if not apply_ok:
+            return False
+        by_key = {row.row_key: row for row in state.rows or ()}
+        for row_key in commanded:
+            row = by_key.get(row_key)
+            # Every commanded row must fold will_apply and have NO prior outcome.
+            if row is None or row.stance is not RowStance.WILL_APPLY:
+                return False
+            if row.apply_outcome is not None:
+                return False
+        return True
+
+    def _build_rowset_request(
+        self,
+        *,
+        command: RuntimeStageCommitCommand,
+        state: StagedWriteState,
+        row: object,
+    ) -> StageCommitRequest:
+        """Build the connector request for ONE row — ``row_args`` verbatim (FR-C3)."""
+
+        return StageCommitRequest(
+            org_id=command.org_id,
+            user_id=command.user_id,
+            run_id=command.run_id,
+            conversation_id=command.conversation_id,
+            stage_id=command.stage_id,
+            rev=command.rev,
+            decision_seq=command.decision_seq,
+            target_connector=state.target_connector,
+            target_op=state.target_op,
+            body="",
+            row_key=getattr(row, "row_key", None),
+            row_args=dict(getattr(row, "target_args", {}) or {}),
+        )
+
+    @staticmethod
+    def _aggregate_result(*, applied: int, failed: int) -> str:
+        """Aggregate per-row outcomes into the ``write.applied.result`` value."""
+
+        if failed == 0:
+            return Values.RESULT_APPLIED
+        if applied == 0:
+            return Values.RESULT_FAILED
+        return Values.RESULT_PARTIAL
+
+    async def _emit_rowset_applied(
+        self,
+        *,
+        run: object,
+        command: RuntimeStageCommitCommand,
+        state: StagedWriteState,
+        result: str,
+        row_keys: tuple[str, ...],
+        row_results: list[dict[str, object]],
+    ) -> None:
+        """Emit the single terminal ``write.applied`` for a row-set apply."""
+
+        actor = self._apply_actor(state, command)
+        receipt_ref = self._receipt_ref(command)
+        payload: dict[str, object] = {
+            Keys.Field.RESULT: result,
+            Keys.Field.ROW_KEYS: list(row_keys),
+            Keys.Field.ROW_RESULTS: row_results,
+            Keys.Field.DECIDED_BY: {
+                Keys.Field.ACTOR: actor,
+                Keys.Field.DECISION_SEQ: command.decision_seq,
+            },
+        }
+        if result != Values.RESULT_FAILED:
+            payload[Keys.Field.CONNECTOR_RECEIPT_REF] = receipt_ref
+        await self._emit_write_applied(
+            run=run,
+            command=command,
+            payload=payload,
+            summary=Messages.ROWSET_APPLIED,
+        )
+
+    @staticmethod
+    def _apply_actor(
+        state: StagedWriteState, command: RuntimeStageCommitCommand
+    ) -> str:
+        """Return the apply decision's actor (``user`` or ``policy``)."""
+
+        for decision in state.decisions:
+            if decision.apply and decision.sequence_no == command.decision_seq:
+                return decision.actor or Values.DECIDED_BY_ACTOR_USER
+        return Values.DECIDED_BY_ACTOR_USER
 
     # -- fold + gate ---------------------------------------------------------
 
