@@ -52,6 +52,12 @@ class _ContractResource:
     PACKAGE: str = "copilot_service_contracts"
     CONTRACT_FILENAME: str = "work_ledger.json"
     GOLDEN_EVENTS_FILENAME: str = "work_ledger_golden_events.json"
+    # PRD-E1: the expected run receipt for the golden events above. It is
+    # ``ReceiptFold.fold_raw`` applied to those events — regenerated from the
+    # fold, never hand-authored — and lives here (beside the golden events, NOT
+    # in a py-only test dir) so BOTH the ai-backend py fold and the chat-surface
+    # ts fold consume the same referee.
+    EXPECTED_RECEIPT_FILENAME: str = "work_ledger_expected_receipt.json"
 
 
 # Traversable handle to the contract file, resolvable whether the package is
@@ -67,6 +73,13 @@ LEDGER_GOLDEN_EVENTS_PATH: Traversable = files(_ContractResource.PACKAGE).joinpa
     _ContractResource.GOLDEN_EVENTS_FILENAME
 )
 
+# Traversable handle to the expected-receipt fixture (E1). Loadable py-side via
+# ``load_ledger_expected_receipt``; the ts parity test imports it by relative
+# path in its test file only (the ``adapter_allowlist`` precedent).
+LEDGER_EXPECTED_RECEIPT_PATH: Traversable = files(_ContractResource.PACKAGE).joinpath(
+    _ContractResource.EXPECTED_RECEIPT_FILENAME
+)
+
 
 def load_work_ledger_contract() -> dict[str, object]:
     """Return the Work Ledger vocabulary contract as a parsed dict."""
@@ -80,11 +93,19 @@ def load_ledger_golden_events() -> dict[str, object]:
     return json.loads(raw)
 
 
+def load_ledger_expected_receipt() -> dict[str, object]:
+    """Return the expected run-receipt fixture (E1) as a parsed dict."""
+    raw = LEDGER_EXPECTED_RECEIPT_PATH.read_text(encoding="utf-8")
+    return json.loads(raw)
+
+
 __all__ = [
     "LEDGER_PAYLOAD_VERSION",
     "LEDGER_EVENT_TYPES",
     "WORK_LEDGER_CONTRACT_PATH",
     "LEDGER_GOLDEN_EVENTS_PATH",
+    "LEDGER_EXPECTED_RECEIPT_PATH",
     "load_work_ledger_contract",
     "load_ledger_golden_events",
+    "load_ledger_expected_receipt",
 ]

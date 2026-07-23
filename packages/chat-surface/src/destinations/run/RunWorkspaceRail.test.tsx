@@ -181,6 +181,53 @@ describe("RunWorkspaceRail — body reuse + omissions (FR-3.11)", () => {
     expect(screen.getByText("Renewal terms")).toBeInTheDocument();
   });
 
+  it("swaps in the ledger LedgerSourcesTab when ledgerSources is non-null (PRD-E1)", () => {
+    render(
+      <RunWorkspaceRail
+        mode="studio"
+        chatSlot={chatSlot()}
+        sources={sourceMap([source({ title: "Renewal terms" })])}
+        ledgerSources={{
+          total: 1,
+          groups: [
+            {
+              connector: "linear",
+              rows: [
+                {
+                  op: "get_issue",
+                  title: "ENG-142",
+                  at: "2026-01-01T00:00:04Z",
+                  ledgerId: "rrun·004",
+                  latencyMs: 12,
+                  qualifier: "auto-ran (read)",
+                },
+              ],
+            },
+          ],
+        }}
+      />,
+    );
+    fireEvent.click(screen.getByRole("tab", { name: "Sources" }));
+    // The v2 ledger body replaces the legacy citation body entirely.
+    expect(screen.getByTestId("ledger-sources-tab")).toBeInTheDocument();
+    expect(screen.queryByTestId("workspace-sources-tab")).toBeNull();
+    expect(screen.queryByText("Renewal terms")).toBeNull();
+  });
+
+  it("keeps the legacy SourcesTab when ledgerSources is null (byte-identical)", () => {
+    render(
+      <RunWorkspaceRail
+        mode="studio"
+        chatSlot={chatSlot()}
+        sources={sourceMap([source({ title: "Renewal terms" })])}
+        ledgerSources={null}
+      />,
+    );
+    fireEvent.click(screen.getByRole("tab", { name: "Sources" }));
+    expect(screen.getByTestId("workspace-sources-tab")).toBeInTheDocument();
+    expect(screen.queryByTestId("ledger-sources-tab")).toBeNull();
+  });
+
   it("renders the hoisted AgentsTab body when Agents is selected", () => {
     render(
       <RunWorkspaceRail
