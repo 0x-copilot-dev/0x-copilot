@@ -1,5 +1,5 @@
 -- transactional: false
--- Rollback 0003_conversation_project: drop the project index + column.
+-- Rollback 0004_conversation_project: drop the project index + column.
 -- CONCURRENTLY (outside a transaction, per the `transactional: false` directive)
 -- so the drop does not take a lock that blocks concurrent readers/writers.
 -- Dropping the column is safe: it is nullable and nothing else reads it, so an

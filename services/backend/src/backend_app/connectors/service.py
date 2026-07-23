@@ -35,6 +35,7 @@ from backend_app.connectors.store import (
     ConnectorRecord,
     ConnectorScopeEntry,
     ConnectorsStore,
+    ConnectorWritePolicy,
     McpUpsertInput,
 )
 from backend_app.contracts import McpAuthMode, McpAuthState, McpServerRecord
@@ -531,6 +532,68 @@ class ConnectorsService:
                     before_state=before_state,
                     after_state=after_state,
                     correlation_id=f"{previous.value}->{access_mode.value}",
+                )
+            )
+        return stored
+
+    def set_write_policy(
+        self,
+        *,
+        tenant_id: str,
+        caller_user_id: str,
+        caller_roles: Iterable[str],
+        connector_id: str,
+        write_policy: ConnectorWritePolicy | None,
+    ) -> ConnectorRecord:
+        """Set (or clear) the per-connector agent write policy (PRD-C1).
+
+        A DISTINCT axis from ``set_access_mode``: this is the approval-posture
+        OVERRIDE (``ask_first`` / ``allow_always``) layered on the global
+        Approval Policy. ``write_policy=None`` CLEARS the override (defer to
+        the global policy) — set and clear are both first-class here, so the
+        column round-trips NULL truthfully.
+
+        Same permission + audit + idempotency discipline as
+        :meth:`set_access_mode`: owner-or-admin only (404-not-403 for a
+        cross-tenant id); a set-to-current-value returns the unchanged row and
+        writes zero audit rows; a real change writes exactly one
+        ``connector.write_policy_changed`` audit row atomically with the update,
+        carrying ``correlation_id="{previous}->{next}"`` (``none`` stands in for
+        a NULL side) so the tamper-evident chain records the posture change.
+        """
+
+        existing = self._authorize_write(
+            tenant_id=tenant_id,
+            caller_user_id=caller_user_id,
+            caller_roles=caller_roles,
+            connector_id=connector_id,
+        )
+        if existing.write_policy == write_policy:
+            # No-op: don't emit audit noise for a set-to-current-value.
+            return existing
+
+        previous = existing.write_policy
+        new_record = existing.model_copy(
+            update={
+                "write_policy": write_policy,
+                "updated_at": _now(),
+            }
+        )
+        before_state = _safe_dump(existing)
+        after_state = _safe_dump(new_record)
+        previous_label = previous.value if previous is not None else "none"
+        next_label = write_policy.value if write_policy is not None else "none"
+        with self._store.transaction(org_id=tenant_id):
+            stored = self._store.update_connector(new_record)
+            self._store.append_audit(
+                ConnectorAuditRecord(
+                    tenant_id=tenant_id,
+                    actor_user_id=caller_user_id,
+                    action="connector.write_policy_changed",
+                    target_id=stored.id,
+                    before_state=before_state,
+                    after_state=after_state,
+                    correlation_id=f"{previous_label}->{next_label}",
                 )
             )
         return stored

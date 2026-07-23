@@ -1,0 +1,281 @@
+{
+  "run_id": "a7f3c9d2e5b14f60a7f3c9d2e5b14f60",
+  "conversation_id": "c0ffee00c0ffee00c0ffee00c0ffee00",
+  "golden_ids": [
+    {
+      "run_id": "a7f3c9d2e5b14f60a7f3c9d2e5b14f60",
+      "sequence_no": 7,
+      "ledger_id": "ra7f·007"
+    },
+    {
+      "run_id": "a7f3c9d2e5b14f60a7f3c9d2e5b14f60",
+      "sequence_no": 1042,
+      "ledger_id": "ra7f·1042"
+    }
+  ],
+  "events": [
+    {
+      "event_type": "gate.opened",
+      "run_id": "a7f3c9d2e5b14f60a7f3c9d2e5b14f60",
+      "sequence_no": 1,
+      "created_at": "2026-07-23T10:00:01Z",
+      "payload": {
+        "v": 1,
+        "gate_id": "gate_01",
+        "connector": "linear",
+        "purpose": "to read ENG-142",
+        "scopes": ["read:issues"],
+        "auth_state": "missing"
+      }
+    },
+    {
+      "event_type": "gate.resolved",
+      "run_id": "a7f3c9d2e5b14f60a7f3c9d2e5b14f60",
+      "sequence_no": 2,
+      "created_at": "2026-07-23T10:00:02Z",
+      "payload": {
+        "v": 1,
+        "gate_id": "gate_01",
+        "outcome": "connected",
+        "write_policy": "ask_first"
+      }
+    },
+    {
+      "event_type": "action.classified",
+      "run_id": "a7f3c9d2e5b14f60a7f3c9d2e5b14f60",
+      "sequence_no": 3,
+      "created_at": "2026-07-23T10:00:03Z",
+      "payload": {
+        "v": 1,
+        "call_id": "call_01",
+        "connector": "linear",
+        "op": "get_issue",
+        "class": "read",
+        "basis": "catalog"
+      }
+    },
+    {
+      "event_type": "read.executed",
+      "run_id": "a7f3c9d2e5b14f60a7f3c9d2e5b14f60",
+      "sequence_no": 4,
+      "created_at": "2026-07-23T10:00:04Z",
+      "payload": {
+        "v": 1,
+        "call_id": "call_01",
+        "connector": "linear",
+        "op": "get_issue",
+        "latency_ms": 142,
+        "payload_ref": "payload/read_01"
+      }
+    },
+    {
+      "event_type": "surface.created",
+      "run_id": "a7f3c9d2e5b14f60a7f3c9d2e5b14f60",
+      "sequence_no": 5,
+      "created_at": "2026-07-23T10:00:05Z",
+      "payload": {
+        "v": 1,
+        "surface_id": "surface_issue",
+        "kind": "record",
+        "source": { "connector": "linear", "op": "get_issue" },
+        "title": "ENG-142 Fix streaming reconnect",
+        "payload_ref": "payload/surface_issue"
+      }
+    },
+    {
+      "event_type": "view.derived",
+      "run_id": "a7f3c9d2e5b14f60a7f3c9d2e5b14f60",
+      "sequence_no": 6,
+      "created_at": "2026-07-23T10:00:06Z",
+      "payload": {
+        "v": 1,
+        "surface_id": "surface_issue",
+        "tier": "generic",
+        "basis": "registry"
+      }
+    },
+    {
+      "event_type": "view.derived",
+      "run_id": "a7f3c9d2e5b14f60a7f3c9d2e5b14f60",
+      "sequence_no": 7,
+      "created_at": "2026-07-23T10:00:07Z",
+      "payload": {
+        "v": 1,
+        "surface_id": "surface_issue",
+        "tier": "shaped",
+        "basis": "generated",
+        "spec_ref": "spec/issue_record_v1",
+        "gen": { "model": "gpt-5.4-mini", "ms": 820 }
+      }
+    },
+    {
+      "event_type": "view.preference",
+      "run_id": "a7f3c9d2e5b14f60a7f3c9d2e5b14f60",
+      "sequence_no": 8,
+      "created_at": "2026-07-23T10:00:08Z",
+      "payload": {
+        "v": 1,
+        "surface_id": "surface_issue",
+        "keep": "shaped",
+        "actor": "user"
+      }
+    },
+    {
+      "event_type": "shape.requested",
+      "run_id": "a7f3c9d2e5b14f60a7f3c9d2e5b14f60",
+      "sequence_no": 9,
+      "created_at": "2026-07-23T10:00:09Z",
+      "payload": {
+        "v": 1,
+        "surface_id": "surface_issue",
+        "actor": "user"
+      }
+    },
+    {
+      "event_type": "write.staged",
+      "run_id": "a7f3c9d2e5b14f60a7f3c9d2e5b14f60",
+      "sequence_no": 10,
+      "created_at": "2026-07-23T10:00:10Z",
+      "payload": {
+        "v": 1,
+        "stage_id": "stage_01",
+        "surface_id": "surface_issue",
+        "target": { "connector": "linear", "op": "update_issue" },
+        "proposal_ref": "payload/proposal_01",
+        "rows": 3,
+        "agent_holds": [{ "row_key": "row_2", "reason": "ambiguous assignee" }]
+      }
+    },
+    {
+      "event_type": "revision.added",
+      "run_id": "a7f3c9d2e5b14f60a7f3c9d2e5b14f60",
+      "sequence_no": 11,
+      "created_at": "2026-07-23T10:00:11Z",
+      "payload": {
+        "v": 1,
+        "stage_id": "stage_01",
+        "rev": 1,
+        "author": "agent",
+        "diff_ref": "payload/diff_01"
+      }
+    },
+    {
+      "event_type": "revision.added",
+      "run_id": "a7f3c9d2e5b14f60a7f3c9d2e5b14f60",
+      "sequence_no": 12,
+      "created_at": "2026-07-23T10:00:12Z",
+      "payload": {
+        "v": 1,
+        "stage_id": "stage_01",
+        "rev": 2,
+        "author": "user",
+        "diff_ref": "payload/diff_02"
+      }
+    },
+    {
+      "event_type": "decision.recorded",
+      "run_id": "a7f3c9d2e5b14f60a7f3c9d2e5b14f60",
+      "sequence_no": 13,
+      "created_at": "2026-07-23T10:00:13Z",
+      "payload": {
+        "v": 1,
+        "stage_id": "stage_01",
+        "decision": "approve",
+        "scope": { "rev": 2 },
+        "actor": "user"
+      }
+    },
+    {
+      "event_type": "decision.recorded",
+      "run_id": "a7f3c9d2e5b14f60a7f3c9d2e5b14f60",
+      "sequence_no": 14,
+      "created_at": "2026-07-23T10:00:14Z",
+      "payload": {
+        "v": 1,
+        "stage_id": "stage_01",
+        "decision": "hold",
+        "scope": { "row_keys": ["row_2"] },
+        "actor": "policy"
+      }
+    },
+    {
+      "event_type": "write.applied",
+      "run_id": "a7f3c9d2e5b14f60a7f3c9d2e5b14f60",
+      "sequence_no": 15,
+      "created_at": "2026-07-23T10:00:15Z",
+      "payload": {
+        "v": 1,
+        "stage_id": "stage_01",
+        "rev": 2,
+        "result": "applied",
+        "row_keys": ["row_1", "row_3"],
+        "connector_receipt_ref": "payload/ext_receipt_01"
+      }
+    },
+    {
+      "event_type": "write.applied",
+      "run_id": "a7f3c9d2e5b14f60a7f3c9d2e5b14f60",
+      "sequence_no": 16,
+      "created_at": "2026-07-23T10:00:16Z",
+      "payload": {
+        "v": 1,
+        "stage_id": "stage_01",
+        "rev": 2,
+        "result": "partial",
+        "row_keys": ["row_1"]
+      }
+    },
+    {
+      "event_type": "usage.recorded",
+      "run_id": "a7f3c9d2e5b14f60a7f3c9d2e5b14f60",
+      "sequence_no": 17,
+      "created_at": "2026-07-23T10:00:17Z",
+      "payload": {
+        "v": 1,
+        "purpose": "run",
+        "model": "gpt-5.4-mini",
+        "tokens_in": 1200,
+        "tokens_out": 340
+      }
+    },
+    {
+      "event_type": "usage.recorded",
+      "run_id": "a7f3c9d2e5b14f60a7f3c9d2e5b14f60",
+      "sequence_no": 18,
+      "created_at": "2026-07-23T10:00:18Z",
+      "payload": {
+        "v": 1,
+        "purpose": "view_shaping",
+        "model": "gpt-5.4-mini",
+        "tokens_in": 400,
+        "tokens_out": 120,
+        "surface_id": "surface_issue"
+      }
+    },
+    {
+      "event_type": "surface.created",
+      "run_id": "a7f3c9d2e5b14f60a7f3c9d2e5b14f60",
+      "sequence_no": 19,
+      "created_at": "2026-07-23T10:00:19Z",
+      "payload": {
+        "v": 1,
+        "surface_id": "surface_receipt",
+        "kind": "receipt",
+        "source": { "connector": "linear", "op": "get_issue" },
+        "title": "Run receipt",
+        "payload_ref": "payload/surface_receipt"
+      }
+    },
+    {
+      "event_type": "receipt.emitted",
+      "run_id": "a7f3c9d2e5b14f60a7f3c9d2e5b14f60",
+      "sequence_no": 20,
+      "created_at": "2026-07-23T10:00:20Z",
+      "payload": {
+        "v": 1,
+        "surface_id": "surface_receipt",
+        "fold_ref": "payload/fold_01"
+      }
+    }
+  ]
+}

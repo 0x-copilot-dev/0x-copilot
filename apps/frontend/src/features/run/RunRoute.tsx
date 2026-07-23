@@ -44,6 +44,9 @@ import {
 } from "@0x-copilot/chat-surface";
 import type { ConversationId } from "@0x-copilot/api-types";
 
+import { isSurfacesV2CanvasEnabled } from "../../app/featureFlags";
+import { WebClipboardPort } from "../../ports/ClipboardWeb";
+import { downloadTextFile } from "../../ports/download";
 import type { RequestIdentity } from "../../api/config";
 import { installMcpServer, skipMcpAuth, startMcpAuth } from "../../api/mcpApi";
 import type { CompletedMcpAuthAction } from "../chat/mcpAuthAction";
@@ -359,6 +362,17 @@ export function RunRoute({
   const boundConversationId: ConversationId =
     conversationId ?? ("new" as ConversationId);
 
+  // PRD-B2: host clipboard + file-save for the v2 raw fallback's Copy / Download.
+  const clipboard = useMemo(() => new WebClipboardPort(), []);
+  const onCopyText = useCallback(
+    (text: string) => clipboard.copyText(text),
+    [clipboard],
+  );
+  const onSaveFile = useCallback(
+    (text: string, filename: string) => downloadTextFile(text, filename),
+    [],
+  );
+
   // Full-bleed: the `run` slug owns full height in ChatShell (no topbar /
   // context / right rail). RunDestination is itself height:100%.
   return (
@@ -380,6 +394,12 @@ export function RunRoute({
         // CitationsProvider (fed by projectCitations over session.events); these
         // host wrappers resolve `[[N]]` / `[c<id>]` chips against it.
         markdownComponents={runMarkdownComponents}
+        // PRD-B1: Generative Surfaces v2 canvas — opt-in client flag (default
+        // OFF), paired with the runtime SURFACES_V2 flag.
+        surfacesV2={isSurfacesV2CanvasEnabled()}
+        // PRD-B2: raw-fallback Copy / Download, bound to the web substrate.
+        onCopyText={onCopyText}
+        onSaveFile={onSaveFile}
       />
     </section>
   );

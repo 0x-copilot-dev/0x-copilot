@@ -87,6 +87,7 @@ import { CONNECTOR_CHANNELS } from "../main/connectors/channels";
 import { RunComposer } from "./composer/RunComposer";
 import { RunEmptyComposer } from "./composer/RunEmptyComposer";
 import { createComposerConnectorsPort } from "./composer/composerConnectorsPort";
+import { isSurfacesV2Enabled } from "./featureFlags";
 import { DESKTOP_PROJECTS_DETAIL } from "./shellBinding";
 
 // ---------------------------------------------------------------------------
@@ -839,6 +840,41 @@ export function RunBinder({
       onOpenModelSettings={onOpenModelSettings}
       renderComposer={renderComposer}
       renderEmptyComposer={renderEmptyComposer}
+      // PRD-B1: Generative Surfaces v2 canvas — opt-in client flag (default
+      // OFF), paired with the runtime SURFACES_V2 flag.
+      surfacesV2={isSurfacesV2Enabled()}
+      // PRD-B2: raw-fallback Copy / Download. Renderer-side (the Electron
+      // renderer has the DOM); the package stays substrate-agnostic.
+      onCopyText={copyTextToClipboard}
+      onSaveFile={saveTextToFile}
     />
   );
+}
+
+// PRD-B2 raw-fallback host callbacks. Renderer-side so no new IPC channel is
+// required; the substrate-agnostic package hands us the full serialized payload.
+async function copyTextToClipboard(text: string): Promise<void> {
+  if (typeof navigator === "undefined" || navigator.clipboard === undefined) {
+    throw new Error("clipboard unavailable");
+  }
+  await navigator.clipboard.writeText(text);
+}
+
+async function saveTextToFile(text: string, filename: string): Promise<void> {
+  if (typeof document === "undefined") {
+    throw new Error("download unavailable: no document");
+  }
+  const blob = new Blob([text], { type: "application/json" });
+  const url = URL.createObjectURL(blob);
+  try {
+    const anchor = document.createElement("a");
+    anchor.href = url;
+    anchor.download = filename;
+    anchor.rel = "noopener";
+    document.body.appendChild(anchor);
+    anchor.click();
+    anchor.remove();
+  } finally {
+    setTimeout(() => URL.revokeObjectURL(url), 0);
+  }
 }

@@ -1,5 +1,5 @@
 -- transactional: false
--- 0003_conversation_project — file a conversation under a project (PRD-07 Seam 1).
+-- 0004_conversation_project — file a conversation under a project (PRD-07 Seam 1).
 --
 -- A project's chat list IS the conversation list filtered by project. That
 -- filter axis + the GROUP BY that backs `GET /v1/agent/conversations/counts`

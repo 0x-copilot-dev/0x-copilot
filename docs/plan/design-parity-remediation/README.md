@@ -125,9 +125,9 @@ tools/check_migration_manifest.py`; that path does not exist and the item will E
 | Service      | Id     | PRD | File                                    |
 | ------------ | ------ | --- | --------------------------------------- |
 | `backend`    | `0046` | 06  | `0046_connector_access_mode.sql`        |
-| `backend`    | `0047` | 07  | `0047_drop_project_activity_counts.sql` |
+| `backend`    | `0048` | 07  | `0048_drop_project_activity_counts.sql` |
 | `ai-backend` | `0002` | 05  | `0002_run_history_index.sql`            |
-| `ai-backend` | `0003` | 07  | `0003_conversation_project.sql`         |
+| `ai-backend` | `0004` | 07  | `0004_conversation_project.sql`         |
 | `ai-backend` | `0004` | 09  | `0004_conversation_keyset.sql`          |
 
 PRD-03's `0046_connector_access_mode.sql` is **deleted** (C3). PRD-08 and PRD-12 correctly

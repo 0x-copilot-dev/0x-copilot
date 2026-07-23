@@ -33,7 +33,7 @@ import time
 from collections.abc import Awaitable, Callable, Coroutine, Mapping, Sequence
 from contextvars import ContextVar
 from dataclasses import dataclass, field
-from typing import Any, Protocol, runtime_checkable
+from typing import TYPE_CHECKING, Any, Protocol, runtime_checkable
 
 from agent_runtime.capabilities.surfaces.shape_hash import output_shape_hash
 from agent_runtime.capabilities.surfaces.spec_models import (
@@ -50,6 +50,12 @@ from agent_runtime.observability.surface_specgen_metrics import (
     RenderFallbackTier,
     SurfaceSpecgenMetrics,
 )
+
+if TYPE_CHECKING:
+    # PRD-A2 — the run-scoped usage meter, bound + injected by the worker
+    # (run.py:_build_surface_generation_scheduler). Type-only import so the
+    # generation subsystem stays decoupled from the recording seam.
+    from agent_runtime.observability.usage_meter import MeteredModelInvocation
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -626,10 +632,15 @@ class SurfaceSpecGenerator:
         completion: SpecCompletionPort,
         skill: SpecAuthoringSkill | None = None,
         metrics: SurfaceSpecgenMetrics | None = None,
+        usage_meter: "MeteredModelInvocation | None" = None,
     ) -> None:
         self._completion = completion
         self._skill = skill or SpecAuthoringSkill.load()
         self._metrics = metrics or SurfaceSpecgenMetrics()
+        # PRD-A2 D5b — when injected, each attempt records a per-call usage row
+        # (+ usage.recorded when SURFACES_V2 is on) with purpose=view_shaping.
+        # None keeps generation working unmetered (tests, disabled deployments).
+        self._usage_meter = usage_meter
 
     @property
     def skill_version(self) -> int:
@@ -677,6 +688,21 @@ class SurfaceSpecGenerator:
                 result=outcome.result,
                 duration_ms=duration_ms,
             )
+            # PRD-A2 D5b — durable per-attempt usage recording (async; distinct
+            # from the sync ``_meter`` OTel/log line above). Runs on EVERY
+            # attempt (incl. the successful one) because it precedes the early
+            # ``return`` — that is what makes retried shaping count per attempt
+            # (DoD). A model-error attempt has ``result is None`` (no model to
+            # attribute) and is skipped; a result with ``None`` tokens records
+            # zeros. ``surface_id`` is None: generation shapes a tool-output
+            # shape, not a concrete surface (Open Q — deferred plumb).
+            if self._usage_meter is not None and outcome.result is not None:
+                await self._usage_meter.record_attempt(
+                    model_id=outcome.result.model,
+                    input_tokens=outcome.result.input_tokens,
+                    output_tokens=outcome.result.output_tokens,
+                    duration_ms=duration_ms,
+                )
             if outcome.spec is not None:
                 return outcome.spec
             last_reason = outcome.reason
@@ -938,6 +964,7 @@ class SurfaceGenerationScheduler:
         output: object,
         surface_uri: str,
     ) -> None:
+        started = time.perf_counter()
         try:
             result = await self._generator.generate(
                 server=server,
@@ -947,6 +974,7 @@ class SurfaceGenerationScheduler:
         except Exception:  # noqa: BLE001 - a generation crash records nothing, emits nothing
             _LOGGER.warning("%s generate_raised key=%s", _METER_PREFIX, key.digest())
             return
+        duration_ms = int((time.perf_counter() - started) * 1000)
         if isinstance(result, GenFailure):
             self._store.record_failure(key, result.reason, result.raw_output)
             return
@@ -954,15 +982,22 @@ class SurfaceGenerationScheduler:
             key=key, spec=result, generator_model=self._model_id
         )
         self._store.put(key, stored)
-        await self._emit_generated(surface_uri=surface_uri, spec=result)
+        await self._emit_generated(
+            surface_uri=surface_uri, spec=result, duration_ms=duration_ms
+        )
 
-    async def _emit_generated(self, *, surface_uri: str, spec: SurfaceSpec) -> None:
+    async def _emit_generated(
+        self, *, surface_uri: str, spec: SurfaceSpec, duration_ms: int = 0
+    ) -> None:
         payload: dict[str, object] = {
             "surface_uri": surface_uri,
             "archetype": spec.archetype.value,
             "spec": spec.model_dump(mode="json", exclude_none=True),
             "spec_version": spec.spec_version,
             "generator_model": self._model_id,
+            # PRD-B3 Hook 2 extension: the async upgrade's ``view.derived`` now
+            # carries the generation duration (``gen.ms``) alongside the model.
+            "generator_ms": duration_ms,
             "skill_version": str(self._generator.skill_version),
         }
         try:
@@ -1141,17 +1176,26 @@ def build_surface_generation_scheduler(
     environ: Mapping[str, str],
     completion: SpecCompletionPort | None = None,
     schedule: ScheduleFn | None = None,
+    usage_meter: "MeteredModelInvocation | None" = None,
+    run_provider: str | None = None,
 ) -> SurfaceGenerationScheduler | None:
     """Build a run-scoped scheduler from env, or ``None`` when generation is off.
 
-    Gating (plan D6): an empty ``SURFACE_SPEC_MODEL`` disables generation
-    entirely — no model built, no scheduler, ladder unchanged. Otherwise the
-    model id routes through the existing ``init_chat_model`` factory (BYOK /
-    OpenRouter / Ollama aware for free) behind ``LangChainSpecCompletion``.
-    ``completion`` may be injected for tests to avoid constructing a real model.
+    Gating (plan D6 + PRD-B3): the shaping model id is resolved by
+    :class:`ShapingModelResolver` — an explicit ``SURFACE_SPEC_MODEL`` still wins
+    verbatim (today's behaviour), but with ``SURFACES_V2`` on and a configured
+    ``run_provider`` (a BYOK key) the desktop default is the cheapest model of
+    that provider (shaping-on default). No model resolved ⇒ no scheduler, ladder
+    unchanged (flag-off stays byte-identical). The id routes through the existing
+    ``init_chat_model`` factory (BYOK / OpenRouter / Ollama aware) behind
+    ``LangChainSpecCompletion``. ``completion`` may be injected for tests.
     """
 
-    model_id = environ.get("SURFACE_SPEC_MODEL", "").strip()
+    from agent_runtime.surfaces_v2.shaping_policy import (  # noqa: PLC0415
+        ShapingModelResolver,
+    )
+
+    model_id = ShapingModelResolver.resolve(environ=environ, run_provider=run_provider)
     if not model_id:
         return None
     if completion is None:
@@ -1162,7 +1206,9 @@ def build_surface_generation_scheduler(
         model = build_chat_model_from_id(model_id)
         completion = LangChainSpecCompletion(model=model, model_id=model_id)
     metrics = SurfaceSpecgenMetrics()
-    generator = SurfaceSpecGenerator(completion=completion, metrics=metrics)
+    generator = SurfaceSpecGenerator(
+        completion=completion, metrics=metrics, usage_meter=usage_meter
+    )
     return SurfaceGenerationScheduler(
         generator=generator,
         store=store,

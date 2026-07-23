@@ -1,0 +1,17 @@
+{
+  "catalog_version": 1,
+  "connector": "asana",
+  "operations": {
+    "list_tasks": "read",
+    "get_task": "read",
+    "list_projects": "read",
+    "get_project": "read",
+    "search_tasks": "read",
+    "create_task": "write",
+    "update_task": "write",
+    "add_comment": "write",
+    "complete_task": "write",
+    "delete_task": "destructive",
+    "delete_project": "destructive"
+  }
+}

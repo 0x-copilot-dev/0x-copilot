@@ -11,7 +11,7 @@ _MIGRATIONS = Path(__file__).resolve().parents[4] / "migrations"
 
 
 def test_up_migration_adds_column_and_partial_index() -> None:
-    sql = (_MIGRATIONS / "0003_conversation_project.sql").read_text()
+    sql = (_MIGRATIONS / "0004_conversation_project.sql").read_text()
     assert "ADD COLUMN" in sql
     assert "project_id" in sql
     assert "idx_agent_conversations_project" in sql
@@ -21,7 +21,7 @@ def test_up_migration_adds_column_and_partial_index() -> None:
 
 
 def test_rollback_drops_both_index_and_column() -> None:
-    sql = (_MIGRATIONS / "0003_conversation_project.rollback.sql").read_text()
+    sql = (_MIGRATIONS / "0004_conversation_project.rollback.sql").read_text()
     assert "DROP INDEX" in sql
     assert "idx_agent_conversations_project" in sql
     assert "DROP COLUMN" in sql

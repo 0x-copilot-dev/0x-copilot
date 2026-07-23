@@ -78,6 +78,14 @@ class ApprovalDecisionRequest(RuntimeContract):
     # proposal ⊕ edits; the client never sends a merged artifact. Distinct from
     # ``edited_payload`` (SUGGEST_EDIT re-asks; APPROVE_WITH_EDITS commits).
     edits: SurfaceEdits | None = None
+    # PRD-C2 — the gate-time write-policy choice, carried on an mcp_auth gate
+    # resolution ONLY when the user CONNECTS (``decision == APPROVED``). The
+    # coordinator persists it as the per-connector override (PRD-C1 storage)
+    # before recording the decision and reflects it in ``gate.resolved``. Allowed
+    # only with an approve decision (rejected otherwise, 422); the coordinator
+    # additionally rejects it for a non-mcp_auth approval kind and when the v2
+    # flag is off.
+    write_policy: Literal["ask_first", "allow_always"] | None = None
 
     @field_validator(_Fields.DECIDED_BY_USER_ID)
     @classmethod
@@ -137,6 +145,21 @@ class ApprovalDecisionRequest(RuntimeContract):
         if not is_approve_with_edits and self.edits is not None:
             raise ValueError(
                 "edits is only allowed when decision == 'approve_with_edits'."
+            )
+        return self
+
+    @model_validator(mode="after")
+    def _validate_write_policy(self) -> "ApprovalDecisionRequest":
+        # PRD-C2 fail-closed axis: the gate write-policy choice only makes sense
+        # when the user CONNECTS (approve). The coordinator layers the further
+        # checks it alone can see — the approval kind is mcp_auth, and the v2 flag
+        # is on. Sending it with reject/forward/edit is a client error.
+        if (
+            self.write_policy is not None
+            and self.decision is not ApprovalDecision.APPROVED
+        ):
+            raise ValueError(
+                "write_policy is only allowed when decision == 'approved'."
             )
         return self
 

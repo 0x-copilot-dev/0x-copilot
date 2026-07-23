@@ -1,4 +1,4 @@
--- Rollback for 0047_drop_project_activity_counts.sql.
+-- Rollback for 0048_drop_project_activity_counts.sql.
 --
 -- Recreates `project_activity_counts` verbatim from 0043_projects.sql
 -- (table + RLS policy + grant). The table is inert on restore — PRD-07

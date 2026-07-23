@@ -1,0 +1,80 @@
+{
+  "schema_version": 1,
+  "payload_version": 1,
+  "ledger_id": {
+    "prefix": "r",
+    "short_len": 3,
+    "separator": "·",
+    "seq_min_width": 3
+  },
+  "enums": {
+    "auth_state": ["missing", "expired", "insufficient"],
+    "gate_outcome": ["connected", "cancelled"],
+    "write_policy": ["ask_first", "allow_always"],
+    "action_class": ["read", "write", "unknown"],
+    "classification_basis": ["catalog", "annotation", "default"],
+    "surface_kind": [
+      "record",
+      "message",
+      "table",
+      "call",
+      "raw",
+      "receipt",
+      "gate"
+    ],
+    "view_tier": ["raw", "generic", "shaped"],
+    "view_basis": ["schema", "registry", "generated"],
+    "view_keep": ["generic", "shaped"],
+    "revision_author": ["agent", "user"],
+    "decision_kind": ["approve", "reject", "hold", "restore"],
+    "decision_actor": ["user", "policy"],
+    "apply_result": ["applied", "partial", "failed"],
+    "usage_purpose": ["run", "subagent", "view_shaping", "shape_request"]
+  },
+  "events": {
+    "gate.opened": {
+      "required": [
+        "v",
+        "gate_id",
+        "connector",
+        "purpose",
+        "scopes",
+        "auth_state"
+      ]
+    },
+    "gate.resolved": { "required": ["v", "gate_id", "outcome"] },
+    "action.classified": {
+      "required": ["v", "call_id", "connector", "op", "class", "basis"]
+    },
+    "read.executed": {
+      "required": [
+        "v",
+        "call_id",
+        "connector",
+        "op",
+        "latency_ms",
+        "payload_ref"
+      ]
+    },
+    "surface.created": {
+      "required": ["v", "surface_id", "kind", "source", "title", "payload_ref"]
+    },
+    "view.derived": { "required": ["v", "surface_id", "tier", "basis"] },
+    "view.preference": { "required": ["v", "surface_id", "keep", "actor"] },
+    "shape.requested": { "required": ["v", "surface_id", "actor"] },
+    "write.staged": {
+      "required": ["v", "stage_id", "surface_id", "target", "proposal_ref"]
+    },
+    "revision.added": {
+      "required": ["v", "stage_id", "rev", "author", "diff_ref"]
+    },
+    "decision.recorded": {
+      "required": ["v", "stage_id", "decision", "scope", "actor"]
+    },
+    "write.applied": { "required": ["v", "stage_id", "rev", "result"] },
+    "usage.recorded": {
+      "required": ["v", "purpose", "model", "tokens_in", "tokens_out"]
+    },
+    "receipt.emitted": { "required": ["v", "surface_id", "fold_ref"] }
+  }
+}

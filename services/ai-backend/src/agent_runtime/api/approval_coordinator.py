@@ -10,12 +10,14 @@ from __future__ import annotations
 
 import asyncio
 import base64
+import logging
 from collections.abc import Sequence
 from datetime import datetime, timedelta, timezone
 
 from starlette import status
 
 from agent_runtime.api.constants import Keys, Messages, Values
+from agent_runtime.surfaces_v2.config import SurfacesV2Flag
 from agent_runtime.api.events import RuntimeEventProducer
 from agent_runtime.api.membership import (
     InMemoryProjectMembershipResolver,
@@ -28,7 +30,11 @@ from agent_runtime.api.notifications import (
     LoggingNotificationDispatcher,
     NotificationDispatcher,
 )
-from agent_runtime.api.ports import PersistencePort, RuntimeQueuePort
+from agent_runtime.api.ports import (
+    ConnectorWritePolicyClient,
+    PersistencePort,
+    RuntimeQueuePort,
+)
 from agent_runtime.execution.contracts import RuntimeErrorCode, StreamEventSource
 from agent_runtime.observability.approval_metrics import (
     ApprovalMetrics,
@@ -53,6 +59,8 @@ from runtime_api.schemas import (
     SurfaceEdits,
     UNDO_WINDOW_SECONDS,
 )
+
+_LOGGER = logging.getLogger(__name__)
 
 
 class ApprovalCoordinator:
@@ -83,10 +91,16 @@ class ApprovalCoordinator:
         membership_resolver: WorkspaceMembershipResolver | None = None,
         project_membership_resolver: ProjectMembershipResolver | None = None,
         notification_dispatcher: NotificationDispatcher | None = None,
+        connector_policy_client: ConnectorWritePolicyClient | None = None,
     ) -> None:
         self._persistence = persistence
         self._queue = queue
         self._event_producer = event_producer
+        # PRD-C2 — persists the gate-time write-policy override (PRD-C1 storage).
+        # ``None`` in tests / when unwired; the gate policy path then rejects any
+        # write_policy on the decision request with a typed 502 so consent is
+        # never recorded without its policy (fail closed).
+        self._connector_policy_client = connector_policy_client
         self._membership_resolver: WorkspaceMembershipResolver = (
             membership_resolver or InMemoryWorkspaceMembershipResolver()
         )
@@ -314,6 +328,12 @@ class ApprovalCoordinator:
                 http_status=status.HTTP_403_FORBIDDEN,
                 retryable=False,
             )
+        # PRD-C2 — the gate-time write-policy override travels the decision
+        # request. Persist it BEFORE recording the decision so consent and its
+        # policy are one atomic act: a persist failure raises (HTTP 502) and the
+        # decision is never recorded (fail closed, the user retries). Validated +
+        # persisted only for an mcp_auth approve; every other shape is rejected.
+        await self._maybe_persist_gate_write_policy(approval=approval, request=request)
         if request.decision is ApprovalDecision.FORWARDED:
             return await self._decide_forwarded(
                 approval=approval,
@@ -379,6 +399,18 @@ class ApprovalCoordinator:
             event_type=RuntimeApiEventType.APPROVAL_RESOLVED,
             payload=resolved_payload,
         )
+        # PRD-C2 — a resolved mcp_auth gate emits ``gate.resolved`` beside the
+        # APPROVAL_RESOLVED event (v2 flag on): ``connected`` iff approved, else
+        # ``cancelled``; the persisted write policy rides the connect payload so
+        # the client fold flips the posture chip. Best-effort — the decision is
+        # already durable; a ledger emit never rewrites it.
+        await self._maybe_emit_gate_resolved(
+            run=run,
+            approval_kind=approval_kind,
+            gate_id=record.approval_id,
+            connected=record.status is ApprovalStatus.APPROVED,
+            write_policy=request.write_policy,
+        )
         await self._queue.enqueue_approval_resolved(
             RuntimeApprovalResolvedCommand(
                 approval_id=record.approval_id,
@@ -418,6 +450,106 @@ class ApprovalCoordinator:
             decided_at=record.decided_at,
             undo_expires_at=self._undo_expires_at_for(approval=approval, record=record),
         )
+
+    async def _maybe_persist_gate_write_policy(
+        self,
+        *,
+        approval: ApprovalRequestRecord,
+        request: ApprovalDecisionRequest,
+    ) -> None:
+        """Persist the gate-time write-policy override (PRD-C2), fail-closed.
+
+        No-op when the request carries no ``write_policy``. Otherwise (the request
+        validator already guarantees ``decision == APPROVED``) the coordinator
+        layers the checks it alone can see: the v2 flag must be on and the
+        approval must be an mcp_auth gate (else 422), and the override must
+        persist through PRD-C1's connectors storage BEFORE the decision is
+        recorded (else 502, decision untouched). The connector slug is the
+        interrupt payload's ``server_name`` (present on every mcp_auth gate).
+        """
+
+        if request.write_policy is None:
+            return
+        if not SurfacesV2Flag.enabled():
+            raise RuntimeApiError(
+                RuntimeErrorCode.VALIDATION_ERROR,
+                Messages.Error.GATE_WRITE_POLICY_UNSUPPORTED,
+                http_status=status.HTTP_422_UNPROCESSABLE_CONTENT,
+                retryable=False,
+            )
+        approval_kind = approval.metadata.get(Keys.Field.APPROVAL_KIND)
+        if approval_kind != Values.ApprovalKind.MCP_AUTH:
+            raise RuntimeApiError(
+                RuntimeErrorCode.VALIDATION_ERROR,
+                Messages.Error.GATE_WRITE_POLICY_KIND,
+                http_status=status.HTTP_422_UNPROCESSABLE_CONTENT,
+                retryable=False,
+            )
+        if self._connector_policy_client is None:
+            raise RuntimeApiError(
+                RuntimeErrorCode.EXTERNAL_SERVICE_ERROR,
+                Messages.Error.GATE_WRITE_POLICY_PERSIST_FAILED,
+                http_status=status.HTTP_502_BAD_GATEWAY,
+                retryable=True,
+            )
+        connector_slug = approval.metadata.get(Keys.Field.SERVER_NAME)
+        if not isinstance(connector_slug, str) or not connector_slug:
+            raise RuntimeApiError(
+                RuntimeErrorCode.EXTERNAL_SERVICE_ERROR,
+                Messages.Error.GATE_WRITE_POLICY_PERSIST_FAILED,
+                http_status=status.HTTP_502_BAD_GATEWAY,
+                retryable=True,
+            )
+        try:
+            await self._connector_policy_client.put_override(
+                org_id=approval.org_id,
+                user_id=approval.user_id,
+                connector_slug=connector_slug,
+                write_policy=request.write_policy,
+            )
+        except Exception as exc:  # noqa: BLE001 - any persist failure fails closed
+            raise RuntimeApiError(
+                RuntimeErrorCode.EXTERNAL_SERVICE_ERROR,
+                Messages.Error.GATE_WRITE_POLICY_PERSIST_FAILED,
+                http_status=status.HTTP_502_BAD_GATEWAY,
+                retryable=True,
+            ) from exc
+
+    async def _maybe_emit_gate_resolved(
+        self,
+        *,
+        run: RunRecord,
+        approval_kind: object,
+        gate_id: str,
+        connected: bool,
+        write_policy: str | None,
+    ) -> None:
+        """Emit ``gate.resolved`` for a resolved mcp_auth gate (v2 flag on).
+
+        Best-effort: the decision is already durable, so a ledger-emit failure is
+        logged and swallowed — parking / approval correctness never depend on it.
+        """
+
+        if approval_kind != Values.ApprovalKind.MCP_AUTH:
+            return
+        if not SurfacesV2Flag.enabled():
+            return
+        try:
+            from agent_runtime.surfaces_v2.gate import GateLedger
+
+            payload = GateLedger.resolved_payload(
+                gate_id=gate_id,
+                connected=connected,
+                write_policy=write_policy if connected else None,
+            )
+            await self._event_producer.append_api_event(
+                run=run,
+                source=StreamEventSource.SYSTEM,
+                event_type=RuntimeApiEventType.GATE_RESOLVED,
+                payload=payload,
+            )
+        except Exception:  # noqa: BLE001 - a ledger emit never rewrites the decision
+            _LOGGER.warning("[surfaces_v2] gate.resolved emit failed", exc_info=True)
 
     @staticmethod
     def _audit_action_for_decision(record_status: ApprovalStatus) -> str:

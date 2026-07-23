@@ -23,6 +23,8 @@ def test_openapi_includes_core_product_paths() -> None:
         "/v1/agent/history",
         "/v1/settings/provider-keys",
         "/v1/settings/provider-keys/{provider}",
+        # Generative Surfaces v2 (PRD-A3) — the folded SurfaceStore for a run.
+        "/v1/agent/runs/{run_id}/surfaces",
     )
     for route in required:
         assert route in paths, f"missing route {route}"

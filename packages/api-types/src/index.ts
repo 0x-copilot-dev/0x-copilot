@@ -1,5 +1,65 @@
 export { ADAPTER_ALLOWLIST, type AdapterAllowlist } from "./adapterAllowlist";
 
+// Work Ledger vocabulary (Generative Surfaces v2, SDR §5 / PRD-A1). `ledger.ts`
+// is the single canonical home for all v2 ledger/domain type additions across
+// every wave; this barrel only ever gains re-export lines, never a type body.
+export type {
+  LedgerEventType,
+  GateAuthState,
+  GateOutcome,
+  WritePolicy,
+  ActionClass,
+  ClassificationBasis,
+  SurfaceKind,
+  ViewTier,
+  ViewBasis,
+  ViewKeep,
+  RevisionAuthor,
+  DecisionKind,
+  DecisionActor,
+  ApplyResult,
+  UsagePurpose,
+  LedgerOpRef,
+  AgentHold,
+  ViewGen,
+  DecisionScope,
+  GateOpenedPayload,
+  GateResolvedPayload,
+  ActionClassifiedPayload,
+  ReadExecutedPayload,
+  SurfaceCreatedPayload,
+  ViewDerivedPayload,
+  ViewPreferencePayload,
+  ShapeRequestedPayload,
+  WriteStagedPayload,
+  RevisionAddedPayload,
+  DecisionRecordedPayload,
+  WriteAppliedPayload,
+  UsageRecordedPayload,
+  ReceiptEmittedPayload,
+  LedgerEventPayloadMap,
+  SurfaceEventV2,
+  Revision,
+  Decision,
+  Surface,
+  StagedWrite,
+  ReceiptAttribution,
+  UsageRecord,
+  RunReceiptRow,
+  RunReceipt,
+  SurfaceViewState,
+  SurfaceSnapshot,
+  RunSurfacesResponse,
+  ParsedLedgerId,
+} from "./ledger";
+export {
+  LEDGER_EVENT_TYPES,
+  isLedgerEventType,
+  isSurfaceEventV2,
+  formatLedgerId,
+  parseLedgerId,
+} from "./ledger";
+
 // Branded ID types — used in approval payloads + responses (P1-A re-scoped,
 // cross-audit §2.1). Imported here so they are in scope for the approval
 // types declared in this file; the canonical declaration site is
@@ -13,6 +73,18 @@ import type {
   TenantId,
   UserId,
 } from "./brands";
+// Local binding for the shared ledger payloads used in RuntimeEventPayloadByType
+// below (the block above re-exports them but does not bind them into local scope).
+import type {
+  UsageRecordedPayload,
+  ActionClassifiedPayload,
+  ReadExecutedPayload,
+  SurfaceCreatedPayload,
+  ViewDerivedPayload,
+  ViewPreferencePayload,
+  GateOpenedPayload,
+  GateResolvedPayload,
+} from "./ledger";
 
 export type McpTransport = "http" | "sse" | "stdio";
 export type McpAuthMode = "none" | "oauth2" | "api_key" | "service_account";
@@ -315,6 +387,14 @@ export type RuntimeApiEventType =
   | "subagent_resumed"
   | "adapter_generated"
   | "surface_spec_generated"
+  | "usage.recorded"
+  | "action.classified"
+  | "read.executed"
+  | "surface.created"
+  | "view.derived"
+  | "view.preference"
+  | "gate.opened"
+  | "gate.resolved"
   | "workspace_snapshot_captured";
 
 export const RUNTIME_EVENT_SOURCES = [
@@ -373,6 +453,14 @@ export const RUNTIME_API_EVENT_TYPES = [
   "subagent_resumed",
   "adapter_generated",
   "surface_spec_generated",
+  "usage.recorded",
+  "action.classified",
+  "read.executed",
+  "surface.created",
+  "view.derived",
+  "view.preference",
+  "gate.opened",
+  "gate.resolved",
   "workspace_snapshot_captured",
 ] as const satisfies readonly RuntimeApiEventType[];
 
@@ -1698,6 +1786,13 @@ export interface ApprovalDecisionRequest {
   // Shape is validated server-side (unknown edit keys ⇒ 422); the facade
   // passes it through unchanged.
   edits?: SurfaceEdits | null;
+  // PRD-C2 (Wave C) — the gate-time write-policy choice on an mcp_auth gate
+  // resolution. Permitted only when `decision === "approved"` (the request
+  // validator 422s otherwise); the ai-backend coordinator additionally
+  // requires the approval to be an mcp_auth gate and the v2 flag to be on,
+  // then persists it as the per-connector override (PRD-C1) before recording
+  // the decision. The facade passes it through unchanged.
+  write_policy?: "ask_first" | "allow_always" | null;
 }
 
 export interface ApprovalDecisionResponse {
@@ -2119,6 +2214,30 @@ export interface RuntimeEventPayloadByType {
    * merges `spec` into `surfaceState[surface_uri]` so the next render upgrades
    * in place from tier-3 to the archetype view (plan D4). */
   surface_spec_generated: SurfaceSpecGeneratedPayload;
+  /** Generative Surfaces v2 (PRD-A2, SDR §5). One per usage-bearing LLM call
+   * whose store purpose maps to a ledger purpose. Gated on `SURFACES_V2`; the
+   * server projector keeps only the SDR §5 fields (no tenant ids on the wire).
+   * Payload shape is the shared ledger `UsageRecordedPayload` (`./ledger`). */
+  "usage.recorded": UsageRecordedPayload;
+  /** Generative Surfaces v2 (PRD-A3, SDR §5). The four ledger *emission* events
+   * the runtime records behind `SURFACES_V2` for what the v1 pipeline already
+   * does (MCP reads, v1 surface envelopes, async spec upgrades). Server
+   * projectors keep only the SDR §5 fields; the SurfaceStore fold
+   * (`GET /v1/agent/runs/{run_id}/surfaces`) consumes them. */
+  "action.classified": ActionClassifiedPayload;
+  "read.executed": ReadExecutedPayload;
+  "surface.created": SurfaceCreatedPayload;
+  "view.derived": ViewDerivedPayload;
+  /** Generative Surfaces v2 (PRD-B3, SDR §5). The durable tier preference — a
+   * user "Keep generic"/"Shaped" pin that survives reload by replay. */
+  "view.preference": ViewPreferencePayload;
+  /** Generative Surfaces v2 (PRD-C2, SDR §5). The ToolAccessGate park/resume
+   * pair, emitted behind `SURFACES_V2`: `gate.opened` beside the mcp_auth
+   * interrupt, `gate.resolved` when the decision endpoint records the
+   * connect/cancel. The client ledger fold renders the canvas gate card + the
+   * posture chip from these (never the legacy `mcp_auth_required` event). */
+  "gate.opened": GateOpenedPayload;
+  "gate.resolved": GateResolvedPayload;
   /** AC5 slice 3b — host write-through pre-image snapshot. Emitted by the
    * workspace backend BEFORE an approved overwrite/edit mutates a granted
    * host file: the prior bytes are stored content-addressed and this event
@@ -2213,6 +2332,11 @@ export interface AdapterGeneratedPayload {
 // mirror in step with both. The schema has zero side-effectful members — no
 // handlers, no free-form URLs (only `url_path` into payload data, host-sanitised
 // at render), no templates — which is the injection blast-radius bound (D9).
+//
+// NOTE: SurfaceSpec (this block) is the v1 render-binding contract and is
+// distinct from the Generative Surfaces v2 Work Ledger vocabulary in `./ledger`
+// (`SurfaceEventV2`, `Surface`, etc., re-exported near the top of this file).
+// The two coexist additively; the v2 `Surface` ledger entity is not this spec.
 // ---------------------------------------------------------------------------
 
 /** The render family a `SurfaceSpec` binds to (v1). A host may implement a
@@ -4414,6 +4538,7 @@ export type {
 export type {
   Connector,
   ConnectorAccessMode,
+  ConnectorWritePolicy,
   ConnectorAuditEntry,
   ConnectorAuditResponse,
   ConnectorAvailability,
@@ -4435,6 +4560,8 @@ export type {
   RefreshConnectorResponse,
   SetConnectorAccessModeRequest,
   SetConnectorAccessModeResponse,
+  SetConnectorWritePolicyRequest,
+  SetConnectorWritePolicyResponse,
   StartConnectorOAuthResponse,
   TestFireWebhookRequest,
   Webhook,
@@ -4450,6 +4577,9 @@ export type {
 // redesign, Phase 4). Value export so the 3-way segment + tests can
 // enumerate the modes without redeclaring them.
 export { CONNECTOR_ACCESS_MODES } from "./connectors";
+// Runtime SSOT tuple for the per-connector write-policy union (PRD-C1). Value
+// export so the posture control + tests can enumerate the values.
+export { CONNECTOR_WRITE_POLICIES } from "./connectors";
 // AC9 — Desktop MCP connector OAuth transport (desktop-only variant types).
 // These do NOT touch the shared web OAuth shapes above; they live in a
 // separate module so the shipped web redirect flow stays byte-identical while

@@ -40,6 +40,78 @@ export {
 export { projectSurfaceTabs, type SurfaceTab } from "./eventProjector";
 // === end PRD-04 (genui) ===
 
+// === PRD-B1 (Generative Surfaces v2) client ledger fold ===
+// Pure PEER of `projectSurfaceTabs` over the SAME `session.events` array — folds
+// the v2 Work Ledger (`surface.created`/`view.derived`) into named tabs. Its
+// `toParitySnapshot` byte-matches PRD-A3's Python SurfaceStore fold.
+export {
+  projectLedger,
+  tabUriForSurface,
+  surfaceIdForTabUri,
+  ledgerTabsAsSurfaceTabs,
+  toParitySnapshot,
+  type LedgerProjection,
+  type LedgerSurface,
+  type LedgerSurfaceKind,
+  type LedgerSurfaceSource,
+  type LedgerSurfaceView,
+  type LedgerViewTier,
+  // PRD-C2 — gate model folded from `gate.opened` / `gate.resolved`.
+  type LedgerGate,
+  type LedgerGateAuthState,
+  type LedgerGateOutcome,
+  type LedgerGateOpClass,
+  type LedgerGateWritePolicy,
+} from "./ledgerProjection";
+// === end PRD-B1 ===
+
+// === Surfaces v2 — PRD-B3 view lifecycle ===
+export {
+  type LedgerSurfaceViewState,
+  type LedgerViewKeep,
+} from "./ledgerProjection";
+export {
+  ViewUpgradeToast,
+  type ViewUpgradeToastProps,
+} from "./ViewUpgradeToast";
+export {
+  ViewTierToggle,
+  MAX_REGEN_PER_SURFACE,
+  type ViewTierToggleProps,
+} from "./ViewTierToggle";
+// === end PRD-B3 ===
+// === Surfaces v2 — PRD-C2 tool-access gate card ===
+export { TcGateCard, type TcGateCardProps } from "./TcGateCard";
+// === end PRD-C2 ===
+
+// === Surfaces v2 — PRD-B2 provenance + honest states ===
+// Pure PEERS of `projectLedger` over the SAME `session.events` array, plus the
+// footer / skeleton / raw-fallback / status-strip chrome they feed. All mount
+// strictly inside B1's v2 canvas subtree (flag-off byte-identical).
+export {
+  projectProvenance,
+  resolveSurfaceOpenIn,
+  formatLatency,
+  formatAccessClass,
+  type SurfaceProvenance,
+  type SurfaceOpenIn,
+  type SurfaceAccessClass,
+  type SurfaceViewTier,
+} from "./provenance";
+export { projectStatusLine, type StatusStripLine } from "./statusLine";
+export { resolveDotPath, isSafeHttpUrl } from "./dotPath";
+export {
+  TcProvenanceFooter,
+  type TcProvenanceFooterProps,
+} from "./TcProvenanceFooter";
+export {
+  TcSurfaceSkeleton,
+  type TcSurfaceSkeletonProps,
+} from "./TcSurfaceSkeleton";
+export { TcSurfaceFrame, type TcSurfaceFrameProps } from "./TcSurfaceFrame";
+export { TcStatusStrip, type TcStatusStripProps } from "./TcStatusStrip";
+// === end PRD-B2 ===
+
 // === Phase 2-C swimlanes ===
 export {
   TcSwimlanes,

@@ -58,6 +58,9 @@ export {
 // === WC-P5a — MCP-OAuth launcher port TYPE (AD-6) ===
 export type { McpAuthPort } from "./mcpAuthPort";
 
+// === PRD-C2 — global write-posture chip ===
+export { PostureChip, type PostureChipProps } from "./PostureChip";
+
 // === WC-P6a — citation projection (in-chat chip resolution, AD-11) ===
 export { projectCitations, type CitationProjection } from "./projectCitations";
 

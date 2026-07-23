@@ -6,6 +6,7 @@ import logging
 from enum import StrEnum
 
 from agent_runtime.execution.contracts import StreamEventType
+from agent_runtime.surfaces_v2.ledger_models import LedgerEventType
 
 
 class ConversationStatus(StrEnum):
@@ -195,6 +196,39 @@ class RuntimeApiEventType(StrEnum):
     # tier-3 to the archetype view (plan D4). No emitter/renderer yet — PRD-01
     # freezes the contract only.
     SURFACE_SPEC_GENERATED = "surface_spec_generated"
+    # Generative Surfaces v2 (PRD-A2, SDR §5). One per usage-bearing LLM call
+    # whose store purpose maps to a ledger purpose (run / subagent /
+    # view_shaping / shape_request). The wire value is the SDR §5 ledger
+    # constant ``usage.recorded`` (dotted, matching the A1 vocabulary — not the
+    # underscore convention of the transport events above). Emission is gated on
+    # ``SURFACES_V2``; the projector's ``_usage_recorded_payload`` allow-list
+    # keeps only ``v`` / ``purpose`` / ``model`` / ``tokens_in`` / ``tokens_out``
+    # / ``surface_id`` — tenant ids never ride the envelope.
+    USAGE_RECORDED = "usage.recorded"
+    # Generative Surfaces v2 (PRD-A3, SDR §5). The first four ledger *emission*
+    # types the runtime records behind ``SURFACES_V2`` for what the v1 pipeline
+    # already does (MCP reads, v1 surface envelopes, async spec upgrades). Wire
+    # values are sourced from the A1 ``LedgerEventType`` vocabulary (``.value``),
+    # never re-typed literals, so the transport enum cannot drift from the SSOT.
+    # All four project to ``RuntimeActivityKind.EVENT`` (surface-state merges,
+    # not timeline cards); A3's SurfaceStore fold consumes them.
+    ACTION_CLASSIFIED = LedgerEventType.ACTION_CLASSIFIED.value
+    READ_EXECUTED = LedgerEventType.READ_EXECUTED.value
+    SURFACE_CREATED = LedgerEventType.SURFACE_CREATED.value
+    VIEW_DERIVED = LedgerEventType.VIEW_DERIVED.value
+    # Generative Surfaces v2 (PRD-B3). The durable tier preference — a user pin
+    # ("Keep generic") that survives reload by replay. Projects to
+    # ``RuntimeActivityKind.EVENT`` (a SurfaceStore fold input, not a card).
+    VIEW_PREFERENCE = LedgerEventType.VIEW_PREFERENCE.value
+    # Generative Surfaces v2 (PRD-C2, SDR §5). The ToolAccessGate's park/resume
+    # ledger pair, emitted behind ``SURFACES_V2``: ``gate.opened`` beside the
+    # ``mcp_auth_required`` interrupt (SYSTEM source), ``gate.resolved`` when the
+    # decision endpoint records the connect/cancel. Both project to
+    # ``RuntimeActivityKind.EVENT`` (canvas gate-card merges, not timeline cards);
+    # the client ledger fold + posture chip consume them. Wire values come from
+    # the A1 ``LedgerEventType`` vocabulary so the transport enum cannot drift.
+    GATE_OPENED = LedgerEventType.GATE_OPENED.value
+    GATE_RESOLVED = LedgerEventType.GATE_RESOLVED.value
 
     @classmethod
     def from_stream_event_type(

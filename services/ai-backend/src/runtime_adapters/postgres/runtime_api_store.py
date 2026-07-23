@@ -2788,6 +2788,7 @@ class PostgresRuntimeApiStore:
                     trace_id, task_id, subagent_id, model_provider, model_name,
                     connector_slug,
                     purpose, originating_tool_call_id, originating_tool_name,
+                    user_id, surface_id,
                     input_tokens, output_tokens, cached_input_tokens,
                     cache_creation_input_tokens, reasoning_tokens,
                     audio_input_tokens, audio_output_tokens,
@@ -2798,6 +2799,7 @@ class PostgresRuntimeApiStore:
                     %s, %s, %s, %s, %s,
                     %s,
                     %s, %s, %s,
+                    %s, %s,
                     %s, %s, %s,
                     %s, %s,
                     %s, %s,
@@ -2820,6 +2822,8 @@ class PostgresRuntimeApiStore:
                     record.purpose,
                     record.originating_tool_call_id,
                     record.originating_tool_name,
+                    record.user_id,
+                    record.surface_id,
                     record.input_tokens,
                     record.output_tokens,
                     record.cached_input_tokens,
@@ -4965,6 +4969,14 @@ class PostgresRuntimeApiStore:
                 str(row["connector_slug"])
                 if row.get("connector_slug") is not None
                 else None
+            ),
+            # ``purpose`` drives the per-purpose rollup (view_shaping included);
+            # ``user_id`` / ``surface_id`` are the PRD-A2 attribution columns.
+            # All default-safe so pre-migration rows round-trip unchanged.
+            purpose=str(row.get("purpose") or "main"),
+            user_id=(str(row["user_id"]) if row.get("user_id") is not None else None),
+            surface_id=(
+                str(row["surface_id"]) if row.get("surface_id") is not None else None
             ),
             input_tokens=int(row.get("input_tokens") or 0),
             output_tokens=int(row.get("output_tokens") or 0),

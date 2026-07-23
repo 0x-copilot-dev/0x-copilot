@@ -87,6 +87,14 @@ class RuntimeModelCallUsageRecord(RuntimeContract):
     model_provider: str
     model_name: str
     connector_slug: str | None = None
+    # Generative Surfaces v2 (PRD-A2, FR-G) attribution columns. Nullable —
+    # pre-migration rows exist and ``schema_version`` stays 1 (additive). Not
+    # flag-gated: the future usage UI must need no backfill (FR-G4). ``user_id``
+    # attributes the call to a user (per-user rollups, E3); ``surface_id`` ties a
+    # shaping call to a derived surface when known (``view_shaping`` records
+    # ``None``; B4 ``shape_request`` carries a concrete id).
+    user_id: str | None = None
+    surface_id: str | None = None
     # Attribution columns. ``purpose`` defaults to ``'main'`` so
     # pre-migration rows and any code path that doesn't build a
     # ``UsageAttributionContext`` get the safe bucket.

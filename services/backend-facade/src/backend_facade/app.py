@@ -1085,6 +1085,70 @@ def create_app(
             identity=identity,
         )
 
+    @app.get("/v1/agent/runs/{run_id}/surfaces")
+    async def run_surfaces(
+        request: Request,
+        run_id: str,
+    ) -> dict[str, object]:
+        # Generative Surfaces v2 (PRD-A3): passthrough to the ai-backend
+        # SurfaceStore projection. Registered ABOVE ``/v1/agent/runs/{run_id}``
+        # so the literal ``surfaces`` sub-path is not swallowed by the run_id
+        # matcher. Error passthrough rides the standard forward_json path.
+        identity = FacadeAuthenticator.authenticate_request(request)
+        return await forward_json(
+            app,
+            "GET",
+            f"/v1/agent/runs/{run_id}/surfaces",
+            target="ai_backend",
+            params=identity.scoped_params({}),
+            identity=identity,
+        )
+
+    # ``surface_id`` is a v1 surface_uri (``<archetype>://<server>/<tool>/<id>``)
+    # — it carries slashes, so both routes use the ``:path`` converter (Starlette
+    # captures the whole tail before the literal ``/regenerate`` suffix). The
+    # captured value is forwarded verbatim to the ai-backend, which uses the same
+    # ``:path`` converter, so the sub-path is not swallowed.
+    @app.post("/v1/agent/surfaces/{surface_id:path}/regenerate")
+    async def regenerate_surface_view(
+        request: Request,
+        surface_id: str,
+        run_id: str = Query(..., min_length=1),
+    ) -> dict[str, object]:
+        # Generative Surfaces v2 (PRD-B3): re-derive a surface's view from its
+        # stored payload (zero connector traffic). Keyed on ``surface_id`` + the
+        # owning ``run_id`` (SDR §4). Error passthrough rides forward_json.
+        identity = FacadeAuthenticator.authenticate_request(request)
+        return await forward_json(
+            app,
+            "POST",
+            f"/v1/agent/surfaces/{surface_id}/regenerate",
+            target="ai_backend",
+            params=identity.scoped_params({"run_id": run_id}),
+            json={},
+            identity=identity,
+        )
+
+    @app.post("/v1/agent/surfaces/{surface_id:path}/view-preference")
+    async def set_surface_view_preference(
+        request: Request,
+        surface_id: str,
+        payload: dict[str, object],
+        run_id: str = Query(..., min_length=1),
+    ) -> dict[str, object]:
+        # Generative Surfaces v2 (PRD-B3): pin the surface's tier preference
+        # (``generic``/``shaped``) — a durable ``view.preference`` ledger event.
+        identity = FacadeAuthenticator.authenticate_request(request)
+        return await forward_json(
+            app,
+            "POST",
+            f"/v1/agent/surfaces/{surface_id}/view-preference",
+            target="ai_backend",
+            params=identity.scoped_params({"run_id": run_id}),
+            json=payload,
+            identity=identity,
+        )
+
     @app.get("/v1/agent/runs/{run_id}")
     async def get_run(
         request: Request,

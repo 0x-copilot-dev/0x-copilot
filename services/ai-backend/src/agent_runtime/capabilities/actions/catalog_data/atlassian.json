@@ -1,0 +1,17 @@
+{
+  "catalog_version": 1,
+  "connector": "atlassian",
+  "operations": {
+    "get_issue": "read",
+    "search_issues": "read",
+    "list_projects": "read",
+    "get_project": "read",
+    "list_comments": "read",
+    "create_issue": "write",
+    "update_issue": "write",
+    "add_comment": "write",
+    "transition_issue": "write",
+    "assign_issue": "write",
+    "delete_issue": "destructive"
+  }
+}

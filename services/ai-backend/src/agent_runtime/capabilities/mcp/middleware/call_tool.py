@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import time
 from collections.abc import Mapping
 from dataclasses import dataclass
 from typing import Any
@@ -41,6 +42,10 @@ from agent_runtime.capabilities.surfaces.generator import (
 )
 from agent_runtime.capabilities.surfaces.projector import SurfaceProjector
 from agent_runtime.execution.contracts import AgentRuntimeContext
+from agent_runtime.surfaces_v2.config import SurfacesV2Flag
+from agent_runtime.surfaces_v2.emitter import WorkLedgerEmitter
+from agent_runtime.surfaces_v2.gate import ToolAccessGate
+from agent_runtime.surfaces_v2.ledger_models import GateAuthState
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -52,6 +57,12 @@ class CallMcpTool:
     registry: DynamicMcpRegistry
     loader: McpLoader
     runtime_context: AgentRuntimeContext
+    # Generative Surfaces v2 (PRD-C2): the ToolAccessGate parks the run at the
+    # connector-dispatch boundary on missing/expired/insufficient auth. ``None``
+    # ⇒ pre-C2 bytes (the flag-off / unwired path) — every gate branch below is
+    # additionally guarded by ``SurfacesV2Flag.enabled()`` so the field being set
+    # never changes behaviour with the flag off.
+    gate: ToolAccessGate | None = None
     name: str = Values.ToolName.CALL_MCP_TOOL
     description: str = Messages.Middleware.CALL_MCP_TOOL_DESCRIPTION
 
@@ -91,8 +102,41 @@ class CallMcpTool:
                 correlation_id=self.runtime_context.trace_id,
             ).model_dump(mode="json", exclude_none=True)
 
+        # Generative Surfaces v2 (PRD-C2): gate at the connector-dispatch
+        # boundary. When the connector's auth is not usable right now, park the
+        # run on the mcp_auth interrupt seam BEFORE any client is created; a
+        # cancelled gate returns a typed AUTH_FAILURE and the dependent call
+        # never dispatches (fail closed). On resume the tool node re-executes
+        # from the top with a fresh card — a now-valid auth returns ``None`` from
+        # ``gate_state`` and dispatch proceeds (this IS "resume re-enters the
+        # parked call"). Flag off / gate unwired ⇒ this whole block short-circuits
+        # before any behaviour change (byte-identical).
+        if SurfacesV2Flag.enabled() and self.gate is not None:
+            gate_state = self.gate.gate_state(resolution.card)
+            if gate_state is not None:
+                resume = await self.gate.park(
+                    card=resolution.card,
+                    tool_name=parsed_input.tool_name,
+                    arguments=parsed_input.arguments,
+                    state=gate_state,
+                )
+                if not resume.approved:
+                    return McpToolCallResult.fail(
+                        McpLoadErrorCode.AUTH_FAILURE,
+                        Messages.Loader.AUTH_FAILED,
+                        server_name=parsed_input.server_name,
+                        tool_name=parsed_input.tool_name,
+                        correlation_id=self.runtime_context.trace_id,
+                    ).model_dump(mode="json", exclude_none=True)
+
+        # Wall time of the connector dispatch, for the v2 ``read.executed``
+        # ledger event (PRD-A3 D1). Measured only around the dispatch itself so
+        # citation/ordinal/surface work downstream does not inflate it. Unused
+        # when ``SURFACES_V2`` is off (no emitter bound ⇒ ``_emit_ledger`` no-ops).
+        dispatch_latency_ms: int | None = None
         try:
             client = resolution.provider.create_client(resolution.card)
+            dispatch_started = time.perf_counter()
             output = await asyncio.wait_for(
                 client.call_tool(
                     tool_name=parsed_input.tool_name,
@@ -100,6 +144,7 @@ class CallMcpTool:
                 ),
                 timeout=self.loader.timeout_seconds,
             )
+            dispatch_latency_ms = int((time.perf_counter() - dispatch_started) * 1000)
         except (McpTimeoutError, TimeoutError):
             return McpToolCallResult.fail(
                 McpLoadErrorCode.TIMEOUT,
@@ -109,7 +154,30 @@ class CallMcpTool:
                 tool_name=parsed_input.tool_name,
                 correlation_id=self.runtime_context.trace_id,
             ).model_dump(mode="json", exclude_none=True)
-        except (McpAuthError, PermissionError):
+        except McpAuthError:
+            # Mid-run revocation (PRD-C2): the card SAID authenticated but the
+            # vendor rejected the dispatch. Flag on + gate wired ⇒ re-enter the
+            # gate with ``EXPIRED`` instead of returning the terminal failure —
+            # ``park`` raises the interrupt so the run parks in place; on resume
+            # the node re-executes and the pre-dispatch gate handles the retry.
+            # If ``park`` RETURNS (resume re-execution that still failed), fall
+            # through to the fail-closed AUTH_FAILURE (never loop). Flag off /
+            # gate unwired ⇒ byte-identical to the pre-C2 terminal failure.
+            if SurfacesV2Flag.enabled() and self.gate is not None:
+                await self.gate.park(
+                    card=resolution.card,
+                    tool_name=parsed_input.tool_name,
+                    arguments=parsed_input.arguments,
+                    state=GateAuthState.EXPIRED,
+                )
+            return McpToolCallResult.fail(
+                McpLoadErrorCode.AUTH_FAILURE,
+                Messages.Loader.AUTH_FAILED,
+                server_name=parsed_input.server_name,
+                tool_name=parsed_input.tool_name,
+                correlation_id=self.runtime_context.trace_id,
+            ).model_dump(mode="json", exclude_none=True)
+        except PermissionError:
             return McpToolCallResult.fail(
                 McpLoadErrorCode.AUTH_FAILURE,
                 Messages.Loader.AUTH_FAILED,
@@ -228,7 +296,61 @@ class CallMcpTool:
             output=output,
             call_id=parsed_input.tool_call_id,
         )
+
+        # Generative Surfaces v2 (PRD-A3): record the executed read + the
+        # just-attached v1 surface envelope on the Work Ledger. Awaited (not
+        # fire-and-forget) for deterministic event ordering; a no-op unless a
+        # ``WorkLedgerEmitter`` is bound, which happens only when ``SURFACES_V2``
+        # is on — so the flag-off event stream is byte-identical.
+        await CallMcpTool._emit_ledger(
+            result=result,
+            server_name=parsed_input.server_name,
+            tool_name=parsed_input.tool_name,
+            call_id=parsed_input.tool_call_id,
+            output=output,
+            latency_ms=dispatch_latency_ms,
+        )
         return result
+
+    @staticmethod
+    async def _emit_ledger(
+        *,
+        result: dict[str, Any],
+        server_name: str,
+        tool_name: str,
+        call_id: str | None,
+        output: object,
+        latency_ms: int | None,
+    ) -> None:
+        """Emit the v2 ledger read path for this tool call, if an emitter is bound.
+
+        No-ops when no :class:`WorkLedgerEmitter` is active (flag off). Passes the
+        just-attached v1 ``surface`` / ``surface_uri`` mirror so the emitter can
+        record ``surface.created`` / ``view.derived``. The emitter swallows its
+        own exceptions; this wrapper adds a second best-effort guard so a ledger
+        emit can never break a tool result.
+        """
+
+        emitter = WorkLedgerEmitter.active()
+        if emitter is None:
+            return
+        try:
+            await emitter.on_tool_result(
+                server_name=server_name,
+                tool_name=tool_name,
+                call_id=call_id or "",
+                output=output,
+                surface=result.get("surface"),
+                surface_uri=result.get("surface_uri"),
+                latency_ms=latency_ms,
+            )
+        except Exception:  # noqa: BLE001 - best-effort; never break MCP results
+            _LOGGER.warning(
+                "[surfaces_v2] mcp.ledger_raised server=%s tool=%s",
+                server_name,
+                tool_name,
+                exc_info=True,
+            )
 
     @staticmethod
     def _attach_surface(
