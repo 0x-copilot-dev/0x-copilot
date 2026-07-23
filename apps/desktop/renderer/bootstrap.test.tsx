@@ -1,21 +1,6 @@
 // @vitest-environment jsdom
 import { act } from "react";
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-
-// PRD-12 D9 — the desktop workspace resolves `@0x-copilot/chat-surface` to the
-// pre-merge MAIN checkout (a node_modules symlink), which does not yet export
-// `useAppearanceSettings`. Bridge in the REAL worktree controller by relative
-// path so this test exercises the ACTUAL boot-load + host wiring (the fake
-// Transport → controller → `applyAppearance` → `:root[data-*]` chain), not a
-// stand-in. Everything else stays the real (main) chat-surface. This mock clears
-// post-merge (the symlink repoint makes the package export the same controller).
-vi.mock("@0x-copilot/chat-surface", async (importOriginal) => {
-  const actual =
-    await importOriginal<typeof import("@0x-copilot/chat-surface")>();
-  const { useAppearanceSettings } =
-    await import("../../../packages/chat-surface/src/settings/useAppearanceSettings");
-  return { ...actual, useAppearanceSettings };
-});
+import { afterEach, beforeEach, describe, expect, it } from "vitest";
 
 import { mountApp } from "./bootstrap";
 

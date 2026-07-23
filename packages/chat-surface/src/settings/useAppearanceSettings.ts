@@ -120,11 +120,16 @@ export function useAppearanceSettings(
   keyValueStoreRef.current = keyValueStore;
 
   // Boot: load the server snapshot, overlay the off-contract locals, and paint
-  // ONCE — before any user interaction. This is the load-bearing half G7 lacked.
-  const bootedRef = useRef(false);
+  // before any user interaction. This is the load-bearing half G7 lacked.
+  //
+  // StrictMode-safe: the ONLY guard is the per-effect `cancelled` flag (the
+  // React-idiomatic fetch-in-effect pattern). A persistent "already booted" ref
+  // must NOT be used here — under `<StrictMode>` (the desktop renderer mounts
+  // the tree in it) React runs mount → cleanup → mount, so such a ref would let
+  // the first effect start the fetch, the cleanup cancel it, and the second
+  // effect short-circuit — leaving NOTHING painted. With `cancelled` alone the
+  // second effect re-fetches and paints; the first (cancelled) fetch is skipped.
   useEffect(() => {
-    if (bootedRef.current) return;
-    bootedRef.current = true;
     let cancelled = false;
     const overlay = readLocalOverlay(keyValueStoreRef.current);
     void transportRef.current
