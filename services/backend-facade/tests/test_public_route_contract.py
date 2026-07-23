@@ -26,3 +26,13 @@ def test_openapi_includes_core_product_paths() -> None:
     )
     for route in required:
         assert route in paths, f"missing route {route}"
+
+
+def test_agent_runs_exposes_both_get_and_post() -> None:
+    """PRD-05 — ``/v1/agent/runs`` carries BOTH the run-history collection GET and
+    the create-run POST. The GET must be registered above ``/v1/agent/runs/{run_id}``
+    so the unconstrained-``run_id`` detail route does not shadow the literal."""
+
+    app = create_app()
+    methods = set(app.openapi()["paths"]["/v1/agent/runs"])
+    assert methods >= {"get", "post"}, methods

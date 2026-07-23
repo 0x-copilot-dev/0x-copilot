@@ -4,7 +4,30 @@ from pathlib import Path
 import re
 
 from agent_runtime.execution.contracts import StreamEventSource
-from runtime_api.schemas import AgentRunStatus, RuntimeActivityKind, RuntimeApiEventType
+from runtime_api.schemas import (
+    AgentRunStatus,
+    RunHistoryEntry,
+    RuntimeActivityKind,
+    RuntimeApiEventType,
+)
+
+
+def test_run_history_entry_fields_match_api_types() -> None:
+    """PRD-05 — the ai-backend ``RunHistoryEntry`` field set is exactly the
+    ``RunHistoryEntry`` interface mirrored in ``packages/api-types``. Any drift
+    (a field added on one side only) breaks the wire contract silently; this
+    pins both to the same nine fields."""
+    assert set(RunHistoryEntry.model_fields) == {
+        "run_id",
+        "conversation_id",
+        "conversation_title",
+        "status",
+        "model_name",
+        "created_at",
+        "started_at",
+        "completed_at",
+        "cancelled_at",
+    }
 
 
 class TestApiTypeContracts:
