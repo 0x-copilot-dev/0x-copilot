@@ -68,6 +68,11 @@ export type {
   SurfaceSnapshot,
   RunSurfacesResponse,
   ParsedLedgerId,
+  // PRD-E2 — cross-run pending-work queue read model.
+  PendingItemKind,
+  PendingWorkItem,
+  PendingAgentRow,
+  PendingWorkResponse,
 } from "./ledger";
 export {
   LEDGER_EVENT_TYPES,
@@ -75,6 +80,8 @@ export {
   isSurfaceEventV2,
   formatLedgerId,
   parseLedgerId,
+  // PRD-E2 — pending-work envelope guard.
+  isPendingWorkResponse,
 } from "./ledger";
 
 // Branded ID types — used in approval payloads + responses (P1-A re-scoped,

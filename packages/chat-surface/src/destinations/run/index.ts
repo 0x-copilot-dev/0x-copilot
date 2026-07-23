@@ -61,6 +61,17 @@ export type { McpAuthPort } from "./mcpAuthPort";
 // === PRD-C2 — global write-posture chip ===
 export { PostureChip, type PostureChipProps } from "./PostureChip";
 
+// === PRD-E2 — cross-run pending-work queue (selector + hook + counter chip) ===
+export {
+  projectPendingCards,
+  type PendingCard,
+} from "./pendingCardsProjection";
+export { usePendingWork, type UsePendingWorkResult } from "./usePendingWork";
+export {
+  PendingCounterChip,
+  type PendingCounterChipProps,
+} from "./PendingCounterChip";
+
 // === WC-P6a — citation projection (in-chat chip resolution, AD-11) ===
 export { projectCitations, type CitationProjection } from "./projectCitations";
 

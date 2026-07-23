@@ -220,6 +220,10 @@ class RuntimeApiAppFactory:
         # not mounted, so nothing reaches it); the same ``WriteStager`` is shared
         # with the DraftService propose seam.
         app.state.stage_service = cls.default_stage_service(app)
+        # PRD-E2 — the cross-run pending-work read service. Registered on app
+        # state always (harmless when the flag is off — the route is not mounted,
+        # so nothing reaches it); folds the caller's runs on read (no new table).
+        app.state.pending_work_service = cls.default_pending_work_service(app)
         app.state.workspace_feed_service = cls.default_workspace_feed_service(app)
         # PR 6.1 — share_service composes ShareStore + persistence + event
         # store + workspace_feed (sources tab) + draft_service (drafts).
@@ -646,6 +650,24 @@ class RuntimeApiAppFactory:
         if ports is None or stager is None:
             return None
         return StageService(stager=stager, persistence=ports.persistence)
+
+    @classmethod
+    def default_pending_work_service(cls, app):  # type: ignore[no-untyped-def]
+        """Wire the PRD-E2 ``PendingWorkService`` (cross-run queue read model).
+
+        Composes the run persistence (candidate-run scan) with the event store
+        (per-run ledger fold). Returns ``None`` when ports are unavailable — the
+        route then 503s (it only exists with the flag on anyway).
+        """
+
+        from agent_runtime.surfaces_v2.pending_work import PendingWorkService
+
+        ports = getattr(app.state, "runtime_ports", None)
+        if ports is None:
+            return None
+        return PendingWorkService(
+            persistence=ports.persistence, event_store=ports.event_store
+        )
 
     @classmethod
     def _draft_auth_gate(cls, app):  # type: ignore[no-untyped-def]

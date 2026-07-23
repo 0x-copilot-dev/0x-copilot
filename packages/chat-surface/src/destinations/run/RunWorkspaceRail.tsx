@@ -47,12 +47,18 @@ import {
   type ReactNode,
 } from "react";
 
-import type { SourceEntry, SubagentEntry } from "@0x-copilot/api-types";
+import type {
+  PendingAgentRow,
+  SourceEntry,
+  SubagentEntry,
+} from "@0x-copilot/api-types";
 
 import {
+  AgentFleetList,
   AgentsTab,
   ApprovalsTab,
   LedgerSourcesTab,
+  PendingCardList,
   SourcesTab,
   WorkspaceTabs,
   type ApprovalsQueueProjection,
@@ -64,6 +70,7 @@ import {
   type WorkspaceTabsItem,
 } from "../../workspace";
 import { isRunningStatus } from "../../workspace/workspaceHelpers";
+import type { PendingCard } from "./pendingCardsProjection";
 import type { LedgerSourcesProjection } from "./projectLedgerSources";
 import type { RunMode } from "./useRunMode";
 
@@ -129,6 +136,23 @@ export interface RunWorkspaceRailProps {
   readonly onJumpToApproval?: (approvalId: string, messageId: string) => void;
 
   /**
+   * Generative Surfaces v2 (PRD-E2). When present, the Approvals panel renders
+   * the cross-run `<PendingCardList>` ABOVE the existing v1 `ApprovalsTab`, the
+   * approvals badge count ADDS `cards.length`, and the Agents panel renders the
+   * `<AgentFleetList>` ABOVE the existing subagent `AgentsTab` (subagents stay —
+   * they are this run's fleet detail). Absent ⇒ the rail is byte-identical to
+   * today (flag off ⇒ this prop is never constructed by the host).
+   */
+  readonly pendingV2?: {
+    readonly cards: readonly PendingCard[];
+    readonly agents: readonly PendingAgentRow[];
+    readonly onReview: (card: PendingCard) => void;
+    readonly onOpenRun: (agent: PendingAgentRow) => void;
+    /** The run currently open in the cockpit — marked "This run" in the fleet. */
+    readonly currentRunId: string | null;
+  };
+
+  /**
    * PR-3.10 SEAM (do not build here): inline approve/reject resolution +
    * Focus-mode `.conf-card` confirmation cards. Threaded through so PR-3.10 can
    * wire them without changing this signature; unused in PR-3.6.
@@ -159,6 +183,7 @@ export function RunWorkspaceRail(props: RunWorkspaceRailProps): ReactElement {
     approvalsQueue = EMPTY_APPROVALS,
     onJumpToApproval,
     scrubbed = false,
+    pendingV2,
   } = props;
 
   // Internal, survives mode/tab switches (the rail is never remounted across
@@ -180,7 +205,10 @@ export function RunWorkspaceRail(props: RunWorkspaceRailProps): ReactElement {
   // WorkspacePane so the two rails never disagree.
   const runningAgents = countRunning(subagents);
   const agentsCount = subagents.size;
-  const pendingApprovals = approvalsQueue.pending.length;
+  // PRD-E2: the cross-run pending cards ADD to the v1 approvals count so the
+  // badge reflects everything in the one queue (absent ⇒ +0, byte-identical).
+  const pendingV2Count = pendingV2?.cards.length ?? 0;
+  const pendingApprovals = approvalsQueue.pending.length + pendingV2Count;
 
   // v3 order (copilot-v3.css): Chat · Agents · Approvals · Sources.
   const tabItems: WorkspaceTabsItem<RunRailTabId>[] = [
@@ -269,6 +297,14 @@ export function RunWorkspaceRail(props: RunWorkspaceRailProps): ReactElement {
           aria-label="Agents"
           style={panelStyle(true)}
         >
+          {/* PRD-E2 — the fleet view leads; the subagent detail stays below. */}
+          {pendingV2 !== undefined ? (
+            <AgentFleetList
+              agents={pendingV2.agents}
+              currentRunId={pendingV2.currentRunId}
+              onOpenRun={pendingV2.onOpenRun}
+            />
+          ) : null}
           <AgentsTab
             subagents={subagents}
             loading={subagentsLoading}
@@ -287,6 +323,14 @@ export function RunWorkspaceRail(props: RunWorkspaceRailProps): ReactElement {
           aria-label="Approvals"
           style={panelStyle(true)}
         >
+          {/* PRD-E2 — the cross-run queue leads; the v1 in-chat approvals
+              (this conversation's) stay below. */}
+          {pendingV2 !== undefined ? (
+            <PendingCardList
+              cards={pendingV2.cards}
+              onReview={pendingV2.onReview}
+            />
+          ) : null}
           <ApprovalsTab
             queue={approvalsQueue}
             onJumpToApproval={onJumpToApproval}
