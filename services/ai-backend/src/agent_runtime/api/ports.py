@@ -58,6 +58,7 @@ from runtime_api.schemas import (
     RuntimeEventDraft,
     RuntimeEventEnvelope,
     RuntimeRunCommand,
+    RuntimeStageCommitCommand,
     RunHistoryEntry,
     RunRecord,
     WorkspaceDefaultsRecord,
@@ -1191,6 +1192,14 @@ class RuntimeQueuePort(Protocol):
         self, command: RuntimeApprovalResolvedCommand
     ) -> None:
         """Enqueue an approval resolution command for workers."""
+
+    async def enqueue_stage_commit(self, command: RuntimeStageCommitCommand) -> None:
+        """Enqueue a staged-write commit command for workers (PRD-D2).
+
+        Produced only when a new ``decision.recorded{approve}`` was recorded; the
+        worker-side CommitEngine handler is its sole consumer. The command is a
+        durable record — the commit never runs inline in the API request path.
+        """
 
     async def claim_next(
         self,

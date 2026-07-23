@@ -157,7 +157,14 @@ export type LedgerStagedWriteStatus =
   | "staged"
   | "rejected"
   | "approved"
-  | "applied";
+  | "applied"
+  // PRD-D2 defensive: a `write.applied` folded onto a non-approved / rev-mismatched
+  // stage (unreachable absent a bug — the server's approval gate + D1 freeze
+  // prevent it). The TS twin of the Python fold's CORRUPT so parity holds.
+  | "corrupt";
+
+/** The outcome of the last `write.applied` folded onto a stage (PRD-D2). */
+export type LedgerApplyResult = "applied" | "failed";
 
 /** A half-open `[start, end)` char range of a revision's NEW text and its
  *  author — the "edited by you" highlight ranges (PRD-D1). */
@@ -206,6 +213,11 @@ export interface LedgerStagedWrite {
   readonly ledgerId: string;
   /** The highest-`rev` revision, or null when empty — the bar pins this. */
   readonly latestRevision: LedgerStageRevision | null;
+  /** The last `write.applied` outcome (PRD-D2), or null until one folds. `applied`
+   *  ⇒ status `applied` (confirmation row); `failed` ⇒ status back to `staged`
+   *  (held), with `applyFailureCode` naming the refusal. */
+  readonly applyResult: LedgerApplyResult | null;
+  readonly applyFailureCode: string | null;
 }
 
 export interface LedgerProjection {
@@ -336,6 +348,8 @@ interface StageAccumulator {
   createdSeq: number;
   lastSeq: number;
   ledgerId: string;
+  applyResult: LedgerApplyResult | null;
+  applyFailureCode: string | null;
 }
 
 function strOr(value: unknown, fallback: string): string {
@@ -460,7 +474,8 @@ export function projectLedger(
       eventType !== "gate.resolved" &&
       eventType !== "write.staged" &&
       eventType !== "revision.added" &&
-      eventType !== "decision.recorded"
+      eventType !== "decision.recorded" &&
+      eventType !== "write.applied"
     ) {
       continue; // tolerate + ignore every other (present + future) event type
     }
@@ -490,8 +505,10 @@ export function projectLedger(
       applyWriteStaged(stages, event.run_id, seq, payload);
     } else if (eventType === "revision.added") {
       applyRevisionAdded(stages, event.run_id, seq, payload);
-    } else {
+    } else if (eventType === "decision.recorded") {
       applyDecisionRecorded(stages, event.run_id, seq, payload);
+    } else {
+      applyWriteApplied(stages, seq, payload);
     }
   }
 
@@ -624,6 +641,8 @@ function applyWriteStaged(
     createdSeq: seq,
     lastSeq: seq,
     ledgerId: safeLedgerId(runId, seq),
+    applyResult: null,
+    applyFailureCode: null,
   });
 }
 
@@ -705,6 +724,59 @@ function applyDecisionRecorded(
   if (seq > acc.lastSeq) acc.lastSeq = seq;
 }
 
+/** Fold `write.applied` (PRD-D2) — the TS twin of the Python fold's state machine.
+ *  `APPROVED (rev N)` + `applied {rev N}` ⇒ `applied` (terminal); `APPROVED` +
+ *  `failed {rev N}` ⇒ `staged` with `approvedRev` cleared (held, approval
+ *  consumed) + the failure code; any other current state ⇒ `corrupt` (defensive,
+ *  fail-closed — a forged applied cannot masquerade as a real send). */
+function applyWriteApplied(
+  stages: Map<string, StageAccumulator>,
+  seq: number,
+  payload: Record<string, unknown>,
+): void {
+  const stageId = payload.stage_id;
+  if (typeof stageId !== "string") return;
+  const acc = stages.get(stageId);
+  if (acc === undefined) return; // applied for an unseen stage is ignored
+  if (seq > acc.lastSeq) acc.lastSeq = seq;
+  const result = payload.result;
+  const revRaw = payload.rev;
+  const rev =
+    typeof revRaw === "number" && Number.isInteger(revRaw) ? revRaw : null;
+  const matchesApproved =
+    acc.status === "approved" &&
+    acc.approvedRev !== null &&
+    rev === acc.approvedRev;
+  if (!matchesApproved) {
+    acc.status = "corrupt";
+    acc.applyResult =
+      typeof result === "string" ? (result as LedgerApplyResult) : null;
+    return;
+  }
+  if (result === "applied") {
+    acc.status = "applied";
+    acc.applyResult = "applied";
+    acc.applyFailureCode = null;
+  } else if (result === "failed") {
+    // Approval consumed: back to held; a fresh approve retries.
+    acc.status = "staged";
+    acc.approvedRev = null;
+    acc.applyResult = "failed";
+    acc.applyFailureCode = failureCodeOf(payload.failure);
+  } else {
+    acc.status = "corrupt";
+    acc.applyResult =
+      typeof result === "string" ? (result as LedgerApplyResult) : null;
+  }
+}
+
+/** Pull `failure.code` (a string) from a `write.applied{failed}` payload. */
+function failureCodeOf(value: unknown): string | null {
+  if (value === null || typeof value !== "object") return null;
+  const code = (value as Record<string, unknown>).code;
+  return typeof code === "string" && code.length > 0 ? code : null;
+}
+
 function freezeStage(acc: StageAccumulator): LedgerStagedWrite {
   const latestRevision =
     acc.revisions.length === 0
@@ -724,6 +796,8 @@ function freezeStage(acc: StageAccumulator): LedgerStagedWrite {
     lastSeq: acc.lastSeq,
     ledgerId: acc.ledgerId,
     latestRevision,
+    applyResult: acc.applyResult,
+    applyFailureCode: acc.applyFailureCode,
   };
 }
 

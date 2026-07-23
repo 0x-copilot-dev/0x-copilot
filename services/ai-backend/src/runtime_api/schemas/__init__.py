@@ -19,6 +19,7 @@ from runtime_api.schemas.commands import (
     RuntimeApprovalResolvedCommand,
     RuntimeCancelCommand,
     RuntimeRunCommand,
+    RuntimeStageCommitCommand,
 )
 from runtime_api.schemas.common import (
     AgentRunStatus,
@@ -245,6 +246,7 @@ __all__ = [
     "RuntimeRunCommand",
     "RuntimeCancelCommand",
     "RuntimeApprovalResolvedCommand",
+    "RuntimeStageCommitCommand",
     "Draft",
     "DraftDiscardRequest",
     "DraftListResponse",

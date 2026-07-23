@@ -313,12 +313,41 @@ class DecisionRecordedPayload(LedgerPayload):
     actor: DecisionActor
 
 
+class WriteFailureCode(StrEnum):
+    """Why an apply refused / failed (PRD-D2, additive to SDR §5)."""
+
+    PRECONDITION_DRIFT = "precondition_drift"
+    CONNECTOR_ERROR = "connector_error"
+    ATTEMPT_INDETERMINATE = "attempt_indeterminate"
+
+
+class WriteAppliedFailure(RuntimeContract):
+    """The ``write.applied.failure`` object — present only on a ``failed`` result."""
+
+    code: WriteFailureCode
+    detail: str | None = None
+
+
+class WriteAppliedDecidedBy(RuntimeContract):
+    """The ``write.applied.decided_by`` object — the receipt-row attribution."""
+
+    # SDR §5 pins ``actor`` to the constant ``"user"`` here (a user approve is
+    # the only thing that authorizes a commit in D2).
+    actor: Literal["user"]
+    decision_seq: NonNegativeInt
+
+
 class WriteAppliedPayload(LedgerPayload):
     stage_id: str
     rev: PositiveInt
     result: ApplyResult
     row_keys: tuple[str, ...] | None = None
     connector_receipt_ref: str | None = None
+    # Additive (SDR §5 note, PRD-D2). Optional so the required-list parity with
+    # the SSOT JSON is unchanged; ``failure`` rides only on ``failed`` results,
+    # ``decided_by`` names the approving decision for the receipt fold (E1).
+    failure: WriteAppliedFailure | None = None
+    decided_by: WriteAppliedDecidedBy | None = None
 
 
 class UsageRecordedPayload(LedgerPayload):
@@ -454,7 +483,10 @@ __all__ = [
     "ViewPreferencePayload",
     "ViewTier",
     "WorkLedgerVocabulary",
+    "WriteAppliedDecidedBy",
+    "WriteAppliedFailure",
     "WriteAppliedPayload",
+    "WriteFailureCode",
     "WritePolicy",
     "WriteStagedPayload",
 ]

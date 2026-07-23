@@ -201,3 +201,106 @@ describe("projectLedger — staged writes (PRD-D1)", () => {
     expect(stage.approvedRev).toBe(1);
   });
 });
+
+function approvedEvents(): RuntimeEventEnvelope[] {
+  return [
+    ...stageEvents("stage_1", "draft_1"),
+    ev("decision.recorded", {
+      v: 1,
+      stage_id: "stage_1",
+      decision: "approve",
+      scope: { rev: 1 },
+      actor: "user",
+    }),
+  ];
+}
+
+describe("projectLedger — write.applied state machine (PRD-D2)", () => {
+  it("applied on the approved rev ⇒ APPLIED terminal + applyResult", () => {
+    seq = 0;
+    const events = [
+      ...approvedEvents(),
+      ev("write.applied", {
+        v: 1,
+        stage_id: "stage_1",
+        rev: 1,
+        result: "applied",
+        connector_receipt_ref: "commit://stage_1/4",
+        decided_by: { actor: "user", decision_seq: 4 },
+      }),
+    ];
+    const stage = projectLedger(events).stages.get("stage_1")!;
+    expect(stage.status).toBe("applied");
+    expect(stage.applyResult).toBe("applied");
+    expect(stage.applyFailureCode).toBeNull();
+    expect(stage.approvedRev).toBe(1);
+  });
+
+  it("failed on the approved rev ⇒ back to STAGED (held), approval consumed", () => {
+    seq = 0;
+    const events = [
+      ...approvedEvents(),
+      ev("write.applied", {
+        v: 1,
+        stage_id: "stage_1",
+        rev: 1,
+        result: "failed",
+        failure: { code: "precondition_drift" },
+      }),
+    ];
+    const stage = projectLedger(events).stages.get("stage_1")!;
+    // Held: back to staged, approval consumed, failure code surfaced for the UI.
+    expect(stage.status).toBe("staged");
+    expect(stage.approvedRev).toBeNull();
+    expect(stage.applyResult).toBe("failed");
+    expect(stage.applyFailureCode).toBe("precondition_drift");
+  });
+
+  it("applied on a NON-approved stage ⇒ CORRUPT (fail-closed, not sent)", () => {
+    seq = 0;
+    const events = [
+      ...stageEvents("stage_1", "draft_1"), // never approved
+      ev("write.applied", {
+        v: 1,
+        stage_id: "stage_1",
+        rev: 1,
+        result: "applied",
+      }),
+    ];
+    const stage = projectLedger(events).stages.get("stage_1")!;
+    expect(stage.status).toBe("corrupt");
+  });
+
+  it("applied on a mismatched rev ⇒ CORRUPT", () => {
+    seq = 0;
+    const events = [
+      ...approvedEvents(), // approved rev 1
+      ev("write.applied", {
+        v: 1,
+        stage_id: "stage_1",
+        rev: 2, // mismatch
+        result: "applied",
+      }),
+    ];
+    expect(projectLedger(events).stages.get("stage_1")!.status).toBe("corrupt");
+  });
+
+  it("re-fold with applied is deterministic", () => {
+    seq = 0;
+    const events = [
+      ...approvedEvents(),
+      ev("write.applied", {
+        v: 1,
+        stage_id: "stage_1",
+        rev: 1,
+        result: "applied",
+      }),
+    ];
+    const a = projectLedger(events);
+    const b = projectLedger(events);
+    expect(JSON.stringify([...a.stages.values()])).toBe(
+      JSON.stringify([...b.stages.values()]),
+    );
+    expect(a.stages.get("stage_1")!.status).toBe("applied");
+  });
+});

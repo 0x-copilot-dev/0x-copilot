@@ -72,6 +72,7 @@ from runtime_api.schemas import (
     RuntimeEventEnvelope,
     RuntimeEventPresentationProjector,
     RuntimeRunCommand,
+    RuntimeStageCommitCommand,
     RunHistoryEntry,
     RunRecord,
     WorkspaceDefaultsRecord,
@@ -108,6 +109,7 @@ class InMemoryRuntimeApiStore:
         self.run_commands: list[RuntimeRunCommand] = []
         self.cancel_commands: list[RuntimeCancelCommand] = []
         self.approval_commands: list[RuntimeApprovalResolvedCommand] = []
+        self.stage_commit_commands: list[RuntimeStageCommitCommand] = []
         self._queue_order: list[str] = []
         self._queue_payloads: dict[str, dict[str, object]] = {}
         self._queue_statuses: dict[str, OutboxStatus] = {}
@@ -2442,6 +2444,19 @@ class InMemoryRuntimeApiStore:
             org_id=command.org_id,
             run_id=command.run_id,
             approval_id=command.approval_id,
+            payload=command.model_dump(mode="json"),
+        )
+
+    async def enqueue_stage_commit(self, command: RuntimeStageCommitCommand) -> None:
+        """Enqueue a staged-write commit command for deterministic worker tests (PRD-D2)."""
+
+        self.stage_commit_commands.append(command)
+        self._register_command(
+            command_id=command.command_id,
+            command_type=PersistenceValues.EventType.STAGE_COMMIT_REQUESTED,
+            org_id=command.org_id,
+            run_id=command.run_id,
+            approval_id=None,
             payload=command.model_dump(mode="json"),
         )
 

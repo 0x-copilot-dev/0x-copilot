@@ -5,7 +5,7 @@ from __future__ import annotations
 from datetime import datetime, timezone
 from uuid import uuid4
 
-from pydantic import Field
+from pydantic import Field, PositiveInt
 
 from agent_runtime.capabilities.surfaces.commit import SurfaceEdits
 from agent_runtime.execution.contracts import AgentRuntimeContext, RuntimeContract
@@ -41,6 +41,33 @@ class RuntimeCancelCommand(RuntimeContract):
     org_id: str
     requested_by_user_id: str
     reason: str | None = None
+    trace_propagation: dict[str, str] = Field(default_factory=dict)
+    created_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
+
+
+class RuntimeStageCommitCommand(RuntimeContract):
+    """Durable command a staged-write approve enqueues (PRD-D2).
+
+    The worker-side ``RuntimeStageCommitHandler`` is its ONLY consumer: it
+    re-validates the approval against the folded ledger, claims an idempotency
+    row BEFORE any side effect, re-checks preconditions, dispatches EXACTLY the
+    approved revision through the real MCP client, and emits ``write.applied``.
+    The command is emitted only when a NEW ``decision.recorded{approve}`` event
+    was actually recorded — idempotent re-approves and reject/restore never
+    enqueue, so at most one commit attempt exists per approve.
+    """
+
+    command_id: str = Field(default_factory=lambda: uuid4().hex)
+    stage_id: str
+    run_id: str
+    org_id: str
+    user_id: str
+    conversation_id: str
+    # The rev pinned by the approving decision; the commit dispatches exactly it.
+    rev: PositiveInt
+    # ``sequence_no`` of the ``decision.recorded{approve}`` event — the handler's
+    # approval gate refuses unless the folded approving decision matches this.
+    decision_seq: int
     trace_propagation: dict[str, str] = Field(default_factory=dict)
     created_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
 

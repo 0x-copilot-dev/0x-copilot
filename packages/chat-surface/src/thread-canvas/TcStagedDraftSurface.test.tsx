@@ -43,9 +43,13 @@ function stage(overrides: Partial<LedgerStagedWrite> = {}): LedgerStagedWrite {
     lastSeq: 3,
     ledgerId: "rrun1·002",
     latestRevision: revisions[revisions.length - 1],
+    applyResult: null,
+    applyFailureCode: null,
     ...overrides,
   };
 }
+
+const noop = () => {};
 
 describe("renderAuthorshipSpans", () => {
   it("wraps only user spans, leaving agent regions plain", () => {
@@ -158,5 +162,58 @@ describe("TcStagedDraftSurface", () => {
     expect(screen.getByTestId("tc-staged-draft-decided")).toHaveTextContent(
       "held for send",
     );
+  });
+
+  it("applied surface shows the sent confirmation and drops the approve bar", () => {
+    render(
+      <TcStagedDraftSurface
+        stage={stage({
+          status: "applied",
+          approvedRev: 1,
+          applyResult: "applied",
+        })}
+        bodyText={body}
+        onSubmitEdit={noop}
+        onApprove={noop}
+        onReject={noop}
+        onRestore={noop}
+      />,
+    );
+    // FR-C3 microcopy confirmation.
+    expect(screen.getByTestId("tc-staged-draft-applied")).toHaveTextContent(
+      "Sent — exactly the revision you approved.",
+    );
+    expect(screen.getByTestId("tc-staged-draft-access")).toHaveTextContent(
+      "write · sent",
+    );
+    // Terminal — nothing left to decide; the approve bar is gone.
+    expect(screen.queryByTestId("tc-approve-bar")).toBeNull();
+  });
+
+  it("failed apply folds back to held with a warning line and a live approve bar", () => {
+    render(
+      <TcStagedDraftSurface
+        // A failed apply folds status back to `staged` with applyResult=failed.
+        stage={stage({
+          status: "staged",
+          approvedRev: null,
+          applyResult: "failed",
+          applyFailureCode: "precondition_drift",
+        })}
+        bodyText={body}
+        onSubmitEdit={noop}
+        onApprove={noop}
+        onReject={noop}
+        onRestore={noop}
+      />,
+    );
+    expect(screen.getByTestId("tc-staged-draft-failed")).toHaveTextContent(
+      "Apply refused — nothing was sent (precondition_drift).",
+    );
+    // Held again; still write · held, and the approve bar returns for a retry.
+    expect(screen.getByTestId("tc-staged-draft-access")).toHaveTextContent(
+      "write · held",
+    );
+    expect(screen.queryByTestId("tc-staged-draft-applied")).toBeNull();
   });
 });
