@@ -1193,6 +1193,26 @@ def create_app(
             identity=identity,
         )
 
+    @app.get("/v1/agent/runs/{run_id}/receipt/export")
+    async def run_receipt_export(
+        request: Request,
+        run_id: str,
+    ) -> dict[str, object]:
+        # Generative Surfaces v2 (PRD-E3): passthrough to the ai-backend
+        # tamper-evident receipt export. A sub-path of ``/v1/agent/runs/{run_id}``
+        # (registered above the run_id matcher, like ``events``/``surfaces``), so
+        # the literal ``receipt/export`` tail is not swallowed. Upstream 404/409/
+        # 503 ride the standard forward_json error passthrough.
+        identity = FacadeAuthenticator.authenticate_request(request)
+        return await forward_json(
+            app,
+            "GET",
+            f"/v1/agent/runs/{run_id}/receipt/export",
+            target="ai_backend",
+            params=identity.scoped_params(),
+            identity=identity,
+        )
+
     # ``surface_id`` is a v1 surface_uri (``<archetype>://<server>/<tool>/<id>``)
     # — it carries slashes, so both routes use the ``:path`` converter (Starlette
     # captures the whole tail before the literal ``/regenerate`` suffix). The

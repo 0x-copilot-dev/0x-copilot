@@ -134,6 +134,8 @@ class Keys:
         # Generative Surfaces v2 (PRD-B3) — per-surface view-lifecycle mutations.
         REGENERATE_SURFACE_VIEW = "regenerate_surface_view"
         SET_SURFACE_VIEW_PREFERENCE = "set_surface_view_preference"
+        # Generative Surfaces v2 (PRD-E3) — the tamper-evident receipt export.
+        EXPORT_RUN_RECEIPT = "export_run_receipt"
         GET_MESSAGES = "get_messages"
         GET_CONVERSATION_RUNS = "get_conversation_runs"
         # PRD-05 — org-scoped, paginated, newest-first run history (one row per
@@ -217,6 +219,10 @@ class Values:
 
     EVENT_PROTOCOL_VERSION = 1
     SCHEMA_VERSION = 1
+    # PRD-E3 — the env var naming the runtime environment, passed to
+    # ``AuditChainSigner.from_env`` (production fails closed when
+    # ``AUDIT_HMAC_KEY`` is unset). Same var the three runtime adapters read.
+    RUNTIME_ENVIRONMENT_ENV_VAR = "RUNTIME_ENVIRONMENT"
     DEFAULT_ASSISTANT_ID = "default"
     DEFAULT_CONTENT_FORMAT = "text"
     DEFAULT_CONVERSATION_LIMIT = 30
@@ -331,6 +337,12 @@ class Messages:
         INVALID_CONNECTOR_SCOPES = "Connector scope payload is invalid."
         INVALID_REQUEST = "Request payload is invalid."
         RUN_NOT_FOUND = "Run was not found for this scope."
+        # PRD-E3 — the receipt export re-folds a terminal run's ledger; a run
+        # still in flight has no sealed receipt yet (mirrors E1's emit-at-every-
+        # terminal rule). Safe, leak-free copy.
+        RECEIPT_RUN_NOT_TERMINAL = (
+            "A receipt export is only available after the run has finished."
+        )
         SAFE_FALLBACK = "The runtime API could not complete the request safely."
         # Workspace defaults model validation. Messages stay generic (no leaking
         # catalog membership rules) and pair with 422 for field-level FE rendering.

@@ -60,6 +60,10 @@ from runtime_api.schemas.surfaces_v2 import (
     SurfaceViewPreferenceRequest,
     SurfaceViewPreferenceResponse,
 )
+from agent_runtime.surfaces_v2.receipt_export import (
+    ReceiptExportBundle,
+    ReceiptExportUnavailable,
+)
 from runtime_api.schemas.budgets import (
     BudgetCreateRequest,
     BudgetListResponse,
@@ -492,6 +496,32 @@ class RuntimeApiRoutes:
             user_id=user_id,
             run_id=run_id,
         )
+
+    @classmethod
+    async def export_run_receipt(
+        cls,
+        request: Request,
+        run_id: str,
+        org_id: str | None = Query(None, min_length=1),
+        user_id: str | None = Query(None, min_length=1),
+    ) -> ReceiptExportBundle:
+        """Return the run's tamper-evident receipt export (PRD-E3 D2).
+
+        The receipt's first and only wire surface — re-folded from the ledger and
+        HMAC-chained. Scope mismatch/unknown run 404s in the service; a run still
+        in flight 409s; unavailable signing material (production without
+        ``AUDIT_HMAC_KEY``) maps :class:`ReceiptExportUnavailable` to HTTP 503
+        with a safe message.
+        """
+        org_id, user_id = cls.scoped_identity(request, org_id=org_id, user_id=user_id)
+        try:
+            return await cls.cqs(request).export_run_receipt(
+                org_id=org_id,
+                user_id=user_id,
+                run_id=run_id,
+            )
+        except ReceiptExportUnavailable as exc:
+            raise HTTPException(status.HTTP_503_SERVICE_UNAVAILABLE, str(exc)) from exc
 
     @classmethod
     async def regenerate_surface_view(
@@ -937,6 +967,17 @@ class RuntimeApiRouter:
             response_model=RunSurfacesResponse,
             name=Keys.RouteName.GET_RUN_SURFACES,
         )
+        # PRD-E3 — the run's tamper-evident receipt export. A sub-path of
+        # ``/runs/{run_id}`` (two segments after ``runs``) so it is not shadowed
+        # by the bare run-detail route. Additive + always mounted (not flag-gated):
+        # a terminal run always has a foldable receipt; a non-terminal run 409s.
+        router.add_api_route(
+            "/runs/{run_id}/receipt/export",
+            RuntimeApiRoutes.export_run_receipt,
+            methods=["GET"],
+            response_model=ReceiptExportBundle,
+            name=Keys.RouteName.EXPORT_RUN_RECEIPT,
+        )
         # ``surface_id`` (a v1 surface_uri) carries slashes → the ``:path``
         # converter captures the whole tail before the literal action suffix.
         router.add_api_route(
@@ -1207,6 +1248,9 @@ class UsageApiRoutes:
                     subagent_id=row.subagent_id,
                     model_provider=row.model_provider,
                     model_name=row.model_name,
+                    # PRD-E3 (FR-G) — carry the attribution axes verbatim.
+                    purpose=row.purpose,
+                    surface_id=row.surface_id,
                     input=row.input_tokens,
                     output=row.output_tokens,
                     cached_input=row.cached_input_tokens,

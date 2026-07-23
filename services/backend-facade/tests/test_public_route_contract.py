@@ -28,6 +28,13 @@ def test_openapi_includes_core_product_paths() -> None:
         "/v1/settings/provider-keys/{provider}",
         # Generative Surfaces v2 (PRD-A3) — the folded SurfaceStore for a run.
         "/v1/agent/runs/{run_id}/surfaces",
+        # Generative Surfaces v2 (PRD-E3) — the tamper-evident receipt export.
+        "/v1/agent/runs/{run_id}/receipt/export",
+        # Usage family (B4 + E3) — the UI-less rollup endpoints stay registered.
+        "/v1/usage/me",
+        "/v1/usage/runs/{run_id}",
+        "/v1/usage/conversations/{conversation_id}",
+        "/v1/usage/org/purpose",
     )
     for route in required:
         assert route in paths, f"missing route {route}"

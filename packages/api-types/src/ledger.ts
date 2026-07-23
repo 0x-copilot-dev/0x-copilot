@@ -559,6 +559,49 @@ export interface RunReceipt {
 }
 
 // ---------------------------------------------------------------------------
+// Receipt export (PRD-E3). Served by `GET /v1/agent/runs/{run_id}/receipt/export`
+// — the receipt's first + only wire surface, re-folded from the ledger and
+// HMAC-chained with the shared `packages/audit-chain` signer so flipping one
+// byte anywhere (a row payload, the receipt fold, a signature, the order) fails
+// verification. Type-only mirror; no fetch wrapper. The synthetic final row's
+// `event_type` is `"receipt.export"` — an export-format construct, NOT a ledger
+// event type (never in `LEDGER_EVENT_TYPES`).
+// ---------------------------------------------------------------------------
+
+/** One signed row of the export chain. */
+export interface ReceiptExportRow {
+  /** 1-based position in the export chain. */
+  seq: number;
+  /** `LedgerIdCodec.format(run_id, sequence_no)` — `r<short>·<seq>`. */
+  ledger_id: string;
+  /** SDR §5 wire value, or the synthetic `"receipt.export"` for the final row. */
+  event_type: LedgerEventType | "receipt.export";
+  /** The run-stream sequence (synthetic row: highest folded seq + 1, or 1). */
+  sequence_no: number;
+  /** ISO-8601. */
+  created_at: string;
+  /** The envelope payload (synthetic row: the receipt fold). */
+  payload: Record<string, unknown>;
+  /** Hex of the prior row's signature; `null` on the first row. */
+  prev_hash: string | null;
+  /** Hex HMAC-SHA256. */
+  signature: string;
+  key_version: number;
+}
+
+/** `GET /v1/agent/runs/{run_id}/receipt/export` — the durable, tamper-evident
+ * receipt export. `receipt` is E1's fold output, re-derived at export time. */
+export interface ReceiptExportBundle {
+  export_version: 1;
+  run_id: string;
+  generated_at: string;
+  receipt: RunReceipt;
+  rows: readonly ReceiptExportRow[];
+  /** Hex of the last (synthetic) row's signature. */
+  head_hash: string;
+}
+
+// ---------------------------------------------------------------------------
 // SurfaceStore fold projection (PRD-A3). Served by
 // `GET /v1/agent/runs/{run_id}/surfaces`. Distinct from the `Surface` ledger
 // entity above (2026-07-23 close-out; PRD-A3 Open questions item 1): these carry

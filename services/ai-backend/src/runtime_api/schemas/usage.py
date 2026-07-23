@@ -259,7 +259,17 @@ class RunUsageBreakdown(RuntimeContract):
 
 
 class RunUsageCallRow(RuntimeContract):
-    """One LLM call inside ``RunUsageBreakdown.by_call``."""
+    """One LLM call inside ``RunUsageBreakdown.by_call``.
+
+    PRD-E3 (FR-G) adds the ``purpose`` + ``surface_id`` attribution axes so the
+    future Settings → Usage screen reads them with zero backfill. ``purpose`` is
+    A2's ``Purpose`` StrEnum value (``main`` / ``subagent_work`` /
+    ``view_shaping`` / ``shape_request`` / …) — the usage-row query dimension,
+    deliberately distinct from the closed 4-value ``LedgerPurpose`` on the
+    ``usage.recorded`` event; it is NOT normalized ``main``→``run`` here.
+    ``surface_id`` ties a shaping call to a derived surface when known
+    (``view_shaping`` records ``None``; B4 ``shape_request`` carries a concrete id).
+    """
 
     id: str
     parent_event_id: str | None = None
@@ -267,6 +277,8 @@ class RunUsageCallRow(RuntimeContract):
     subagent_id: str | None = None
     model_provider: str
     model_name: str
+    purpose: str = "main"
+    surface_id: str | None = None
     input: NonNegativeInt = 0
     output: NonNegativeInt = 0
     cached_input: NonNegativeInt = 0
