@@ -1149,6 +1149,63 @@ def create_app(
             identity=identity,
         )
 
+    # Generative Surfaces v2 (PRD-D1): single-artifact staged-write passthroughs.
+    # Pure proxies (no logic) to the ai-backend stage engine, keyed on
+    # ``stage_id`` + the owning ``run_id`` (stage state is a pure fold of that
+    # run's ledger — SDR §6). When SURFACES_V2 is off the ai-backend does not
+    # mount these routes, so the proxy returns the upstream 404 verbatim.
+    @app.get("/v1/agent/stages/{stage_id}")
+    async def get_stage(
+        request: Request,
+        stage_id: str,
+        run_id: str = Query(..., min_length=1),
+    ) -> dict[str, object]:
+        identity = FacadeAuthenticator.authenticate_request(request)
+        return await forward_json(
+            app,
+            "GET",
+            f"/v1/agent/stages/{stage_id}",
+            target="ai_backend",
+            params=identity.scoped_params({"run_id": run_id}),
+            identity=identity,
+        )
+
+    @app.post("/v1/agent/stages/{stage_id}/revisions")
+    async def add_stage_revision(
+        request: Request,
+        stage_id: str,
+        payload: dict[str, object],
+        run_id: str = Query(..., min_length=1),
+    ) -> dict[str, object]:
+        identity = FacadeAuthenticator.authenticate_request(request)
+        return await forward_json(
+            app,
+            "POST",
+            f"/v1/agent/stages/{stage_id}/revisions",
+            target="ai_backend",
+            params=identity.scoped_params({"run_id": run_id}),
+            json=payload,
+            identity=identity,
+        )
+
+    @app.post("/v1/agent/stages/{stage_id}/decisions")
+    async def record_stage_decision(
+        request: Request,
+        stage_id: str,
+        payload: dict[str, object],
+        run_id: str = Query(..., min_length=1),
+    ) -> dict[str, object]:
+        identity = FacadeAuthenticator.authenticate_request(request)
+        return await forward_json(
+            app,
+            "POST",
+            f"/v1/agent/stages/{stage_id}/decisions",
+            target="ai_backend",
+            params=identity.scoped_params({"run_id": run_id}),
+            json=payload,
+            identity=identity,
+        )
+
     @app.get("/v1/agent/runs/{run_id}")
     async def get_run(
         request: Request,

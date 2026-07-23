@@ -215,6 +215,11 @@ class RuntimeApiAppFactory:
         app.state.workspace_coordinator = _ws
         app.state.deployment = resolved_deployment
         app.state.draft_service = cls.default_draft_service(app)
+        # PRD-D1 — the single-artifact staged-write service (v2). Registered on
+        # app state always (harmless when the flag is off — the stage routes are
+        # not mounted, so nothing reaches it); the same ``WriteStager`` is shared
+        # with the DraftService propose seam.
+        app.state.stage_service = cls.default_stage_service(app)
         app.state.workspace_feed_service = cls.default_workspace_feed_service(app)
         # PR 6.1 — share_service composes ShareStore + persistence + event
         # store + workspace_feed (sources tab) + draft_service (drafts).
@@ -582,7 +587,49 @@ class RuntimeApiAppFactory:
             persistence=ports.persistence,
             auth_gate=cls._draft_auth_gate(app),
             event_producer=event_producer,
+            write_stager=cls._default_write_stager(app),
         )
+
+    @classmethod
+    def _default_write_stager(cls, app):  # type: ignore[no-untyped-def]
+        """Build the PRD-D1 ``WriteStager`` over the run's draft store + ledger.
+
+        Returns ``None`` when ports are absent (minimal test apps) — the
+        DraftService then keeps the v1 path regardless of the flag.
+        """
+
+        from agent_runtime.api.events import RuntimeEventProducer
+        from agent_runtime.api.stage_ledger import RuntimeStageLedger
+        from agent_runtime.surfaces_v2.staging import WriteStager
+
+        ports = getattr(app.state, "runtime_ports", None)
+        if ports is None or getattr(ports, "draft_store", None) is None:
+            return None
+        ledger = RuntimeStageLedger(
+            event_producer=RuntimeEventProducer(
+                persistence=ports.persistence,
+                event_store=ports.event_store,
+            )
+        )
+        return WriteStager(draft_store=ports.draft_store, ledger=ledger)
+
+    @classmethod
+    def default_stage_service(cls, app):  # type: ignore[no-untyped-def]
+        """Wire the PRD-D1 ``StageService`` (revision/decision/read routes).
+
+        Shares a freshly-built ``WriteStager`` (same wiring as the DraftService
+        seam) with the run persistence for scope checks. Returns ``None`` when
+        ports/stager are unavailable — the stage routes then 503 (they only exist
+        with the flag on anyway).
+        """
+
+        from agent_runtime.api.stage_service import StageService
+
+        ports = getattr(app.state, "runtime_ports", None)
+        stager = cls._default_write_stager(app)
+        if ports is None or stager is None:
+            return None
+        return StageService(stager=stager, persistence=ports.persistence)
 
     @classmethod
     def _draft_auth_gate(cls, app):  # type: ignore[no-untyped-def]

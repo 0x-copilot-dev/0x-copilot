@@ -93,6 +93,10 @@ class DraftSendResponse(BaseModel):
     # surface its id so the FE can scroll to the inline ApprovalTool card.
     approval_id: str | None = None
     run_id: str | None = None
+    # PRD-D1 (Generative Surfaces v2): when the flag is on, a send stages a write
+    # instead of an approval row; ``stage_id`` binds the FE to the staged-draft
+    # surface. ``None`` on the v1 path (byte-identical when the flag is off).
+    stage_id: str | None = None
 
 
 class DraftDiscardRequest(BaseModel):

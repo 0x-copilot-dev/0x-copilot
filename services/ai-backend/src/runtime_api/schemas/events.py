@@ -176,6 +176,12 @@ class RuntimeEventPresentationProjector:
             return cls._gate_opened_payload(payload)
         if event_type is RuntimeApiEventType.GATE_RESOLVED:
             return cls._gate_resolved_payload(payload)
+        if event_type is RuntimeApiEventType.WRITE_STAGED:
+            return cls._write_staged_payload(payload)
+        if event_type is RuntimeApiEventType.REVISION_ADDED:
+            return cls._revision_added_payload(payload)
+        if event_type is RuntimeApiEventType.DECISION_RECORDED:
+            return cls._decision_recorded_payload(payload)
         return payload
 
     @classmethod
@@ -290,8 +296,11 @@ class RuntimeEventPresentationProjector:
             RuntimeApiEventType.VIEW_PREFERENCE,
             RuntimeApiEventType.GATE_OPENED,
             RuntimeApiEventType.GATE_RESOLVED,
+            RuntimeApiEventType.WRITE_STAGED,
+            RuntimeApiEventType.REVISION_ADDED,
+            RuntimeApiEventType.DECISION_RECORDED,
         }:
-            # Generative Surfaces v2 (PRD-A3/B3/C2) — ledger events the SurfaceStore
+            # Generative Surfaces v2 (PRD-A3/B3/C2/D1) — ledger events the SurfaceStore
             # + client ledger fold consume as surface/gate-state merges, never
             # timeline cards. Explicit so a TOOL/SYSTEM-sourced emit can't reroute
             # into the tool bucket. The gate pair rides beside the
@@ -950,6 +959,114 @@ class RuntimeEventPresentationProjector:
             value = cls._text(payload.get(text_key))
             if value is not None:
                 safe_payload[text_key] = value
+        return safe_payload
+
+    @classmethod
+    def _write_staged_payload(cls, payload: JsonObject) -> JsonObject:
+        """Project ``write.staged`` through a strict allow-list (PRD-D1, SDR §5).
+
+        Keeps ``v`` / ``stage_id`` / ``surface_id`` / ``target{connector,op}`` /
+        ``proposal_ref`` — the single-artifact shape (``rows`` / ``agent_holds``
+        are D3). ``target`` is rebuilt from its own allow-list so no extra keys
+        ride through.
+        """
+
+        safe_payload: JsonObject = {}
+        cls._copy_payload_version(payload, safe_payload)
+        for text_key in (
+            _LedgerKeys.Field.STAGE_ID,
+            _LedgerKeys.Field.SURFACE_ID,
+            _LedgerKeys.Field.PROPOSAL_REF,
+        ):
+            value = cls._text(payload.get(text_key))
+            if value is not None:
+                safe_payload[text_key] = value
+        target = cls._op_ref(payload.get(_LedgerKeys.Field.TARGET))
+        if target is not None:
+            safe_payload[_LedgerKeys.Field.TARGET] = target
+        return safe_payload
+
+    @classmethod
+    def _revision_added_payload(cls, payload: JsonObject) -> JsonObject:
+        """Project ``revision.added`` through a strict allow-list (PRD-D1, SDR §5).
+
+        Keeps ``v`` / ``stage_id`` / ``rev`` / ``author`` / ``diff_ref`` plus the
+        additive ``proposal_ref`` (this rev's snapshot) and ``authorship_spans``
+        (the server-computed "edited by you" ranges). Each span is rebuilt from
+        its own allow-list — only int ``start``/``end`` and a known ``author``
+        survive, so nothing extra rides the ledger row.
+        """
+
+        safe_payload: JsonObject = {}
+        cls._copy_payload_version(payload, safe_payload)
+        for text_key in (
+            _LedgerKeys.Field.STAGE_ID,
+            _LedgerKeys.Field.AUTHOR,
+            _LedgerKeys.Field.DIFF_REF,
+            _LedgerKeys.Field.PROPOSAL_REF,
+        ):
+            value = cls._text(payload.get(text_key))
+            if value is not None:
+                safe_payload[text_key] = value
+        rev = payload.get(_LedgerKeys.Field.REV)
+        if isinstance(rev, int) and not isinstance(rev, bool):
+            safe_payload[_LedgerKeys.Field.REV] = rev
+        spans = payload.get(_LedgerKeys.Field.AUTHORSHIP_SPANS)
+        if isinstance(spans, (list, tuple)):
+            safe_payload[_LedgerKeys.Field.AUTHORSHIP_SPANS] = [
+                span
+                for span in (cls._authorship_span(raw) for raw in spans)
+                if span is not None
+            ]
+        return safe_payload
+
+    @classmethod
+    def _authorship_span(cls, value: object) -> JsonObject | None:
+        """Rebuild one ``{start, end, author}`` span from its own allow-list."""
+
+        if not isinstance(value, dict):
+            return None
+        start = value.get(_LedgerKeys.Field.START)
+        end = value.get(_LedgerKeys.Field.END)
+        author = cls._text(value.get(_LedgerKeys.Field.AUTHOR))
+        if (
+            isinstance(start, int)
+            and not isinstance(start, bool)
+            and isinstance(end, int)
+            and not isinstance(end, bool)
+            and author in ("agent", "user")
+        ):
+            return {
+                _LedgerKeys.Field.START: start,
+                _LedgerKeys.Field.END: end,
+                _LedgerKeys.Field.AUTHOR: author,
+            }
+        return None
+
+    @classmethod
+    def _decision_recorded_payload(cls, payload: JsonObject) -> JsonObject:
+        """Project ``decision.recorded`` through a strict allow-list (PRD-D1).
+
+        Keeps ``v`` / ``stage_id`` / ``decision`` / ``actor`` and the
+        ``scope{rev}`` (single artifact — ``row_keys`` is D3). Nothing else
+        survives; the ``scope`` object is rebuilt from its own ``rev`` key.
+        """
+
+        safe_payload: JsonObject = {}
+        cls._copy_payload_version(payload, safe_payload)
+        for text_key in (
+            _LedgerKeys.Field.STAGE_ID,
+            _LedgerKeys.Field.DECISION,
+            _LedgerKeys.Field.ACTOR,
+        ):
+            value = cls._text(payload.get(text_key))
+            if value is not None:
+                safe_payload[text_key] = value
+        scope = payload.get(_LedgerKeys.Field.SCOPE)
+        if isinstance(scope, dict):
+            rev = scope.get(_LedgerKeys.Field.REV)
+            if isinstance(rev, int) and not isinstance(rev, bool):
+                safe_payload[_LedgerKeys.Field.SCOPE] = {_LedgerKeys.Field.REV: rev}
         return safe_payload
 
     @classmethod
