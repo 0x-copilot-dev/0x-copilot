@@ -3,14 +3,18 @@
 from __future__ import annotations
 
 import json
+import logging
 from collections.abc import Mapping
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 
 from agent_runtime.api.constants import Keys, Values
 from agent_runtime.api.events import RuntimeEventProducer
+from agent_runtime.capabilities.mcp.dispatcher import McpDispatcherUnwrap
 from agent_runtime.execution.contracts import JsonObject, StreamEventSource
 from agent_runtime.observability.tracing import TraceContext
+from agent_runtime.persistence.records import ToolInvocationRecord
+from agent_runtime.persistence.records.common import ToolInvocationStatus
 from runtime_api.schemas import (
     RunRecord,
     RuntimeApiEventType,
@@ -21,6 +25,8 @@ from runtime_worker.stream_parts import StreamNamespace
 from runtime_worker.stream_subagents import StreamUpdateProcessor
 from runtime_worker.tool_call_ledger import ToolCallLedger
 from runtime_worker.tool_result_offload import ToolResultOffloader
+
+logger = logging.getLogger(__name__)
 
 
 @dataclass
@@ -324,13 +330,62 @@ class StreamMessageProcessor:
         if event_type is RuntimeApiEventType.TOOL_CALL_STARTED:
             state.started_at = datetime.now(timezone.utc)
             if state.call_id is not None and state.tool_name is not None:
+                # The dispatcher's MCP server name for a `call_mcp_tool`
+                # invocation, else None (a native tool — a step, not an app).
+                connector_slug = McpDispatcherUnwrap.effective_server_name(payload)
                 self.ledger_for_run(run.run_id).started(
                     call_id=state.call_id,
                     tool_name=state.tool_name,
                     parent_task_id=parent_task_id,
                     subagent_id=subagent_id,
+                    connector_slug=connector_slug,
+                )
+                # PRD-08 D1b — persist one runtime_tool_invocations row for this
+                # tool call (backs Activity's step/app counters). Fire-and-forget:
+                # a ledger write must never fail the run.
+                await self._record_tool_invocation(
+                    run=run,
+                    state=state,
+                    connector_slug=connector_slug,
+                    subagent_id=subagent_id,
                 )
         state.started_emitted = True
+
+    async def _record_tool_invocation(
+        self,
+        *,
+        run: RunRecord,
+        state: ToolCallStreamState,
+        connector_slug: str | None,
+        subagent_id: str | None,
+    ) -> None:
+        """Write one tool-invocation row at the TOOL_CALL_STARTED seam (PRD-08 D1b).
+
+        Best-effort: any persistence error is swallowed with a warning so tool
+        execution and the run are never blocked.
+        """
+
+        if state.call_id is None or state.tool_name is None:
+            return
+        try:
+            await self.event_producer.persistence.record_tool_invocation(
+                ToolInvocationRecord(
+                    run_id=run.run_id,
+                    org_id=run.org_id,
+                    task_id=subagent_id,
+                    tool_name=state.tool_name,
+                    connector_slug=connector_slug,
+                    call_id=state.call_id,
+                    status=ToolInvocationStatus.RUNNING,
+                    started_at=state.started_at,
+                )
+            )
+        except Exception:  # noqa: BLE001 — ledger write is best-effort.
+            logger.warning(
+                "tool_invocation_record_failed",
+                extra={"run_id": run.run_id, "call_id": state.call_id},
+                exc_info=True,
+            )
 
     async def _append_task_tool_call_event(
         self,

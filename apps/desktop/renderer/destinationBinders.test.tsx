@@ -23,6 +23,8 @@ import {
 import type {
   Conversation,
   ConversationListResponse,
+  RunHistoryEntry,
+  RunHistoryResponse,
 } from "@0x-copilot/api-types";
 import type {
   Session,
@@ -517,28 +519,47 @@ describe("ConnectorsBinder — access mode reflects real authority + persists", 
 });
 
 // ===========================================================================
-// ActivityBinder — PRD-04 Seam C: activating a row forwards the row's
-// { conversationId, runId } to `onOpenRun` (no longer discards the argument).
+// ActivityBinder — PRD-08 D1/D1c: reads GET /v1/agent/runs (never /v1/audit),
+// renders the counter meta line, and (PRD-04 Seam C) forwards the row's
+// { conversationId, runId } to `onOpenRun`.
 // ===========================================================================
 
-function activityTransport(conversations: readonly Conversation[]): Transport {
+function runEntry(over: Partial<RunHistoryEntry> = {}): RunHistoryEntry {
+  return {
+    run_id: "run_row",
+    conversation_id: "conv_row",
+    conversation_title: "Weekly treasury reconciliation",
+    status: "running",
+    model_name: "gpt-4o",
+    created_at: "2026-07-18T08:00:00Z",
+    started_at: "2026-07-18T09:00:00Z",
+    completed_at: null,
+    cancelled_at: null,
+    connector_count: null,
+    step_count: null,
+    pending_approval_count: 0,
+    ...over,
+  };
+}
+
+// Records every request path so the test can assert the audit stream is never
+// touched (DoD 12 — the swallowed-403 regression guard).
+function activityTransport(
+  entries: readonly RunHistoryEntry[],
+  seenPaths: string[],
+): Transport {
   return {
     request: <TRes,>(req: TypedRequest): Promise<TRes> => {
-      if (req.path.includes("/v1/agent/conversations")) {
-        const body: ConversationListResponse = {
-          conversations: [...conversations],
+      seenPaths.push(req.path);
+      if (req.path.includes("/v1/agent/runs")) {
+        const body: RunHistoryResponse = {
+          runs: [...entries],
           next_cursor: null,
           has_more: false,
         };
         return Promise.resolve(body as unknown as TRes);
       }
-      // /v1/audit — enrichment only; empty is fine.
-      return Promise.resolve({
-        rows: [],
-        next_cursor: null,
-        has_more: false,
-        degraded_streams: [],
-      } as unknown as TRes);
+      return Promise.resolve({} as unknown as TRes);
     },
     subscribeServerSentEvents: (
       _opts: SseSubscribeOptions,
@@ -554,37 +575,18 @@ function activityTransport(conversations: readonly Conversation[]): Transport {
   };
 }
 
-function activityConv(over: Partial<Conversation> = {}): Conversation {
-  return {
-    conversation_id: "conv_row",
-    org_id: "org_1",
-    user_id: "user_1",
-    assistant_id: "asst_1",
-    title: "Weekly treasury reconciliation",
-    status: "active",
-    created_at: "2026-07-18T08:00:00Z",
-    updated_at: "2026-07-18T09:00:00Z",
-    archived_at: null,
-    metadata: {},
-    schema_version: 1,
-    latest_run_id: "run_row",
-    latest_run_status: "running",
-    ...over,
-  };
-}
-
-describe("ActivityBinder — row activation forwards { conversationId, runId }", () => {
-  it("calls onOpenRun with the row's conversation_id (not discarded — guards destinationBinders onOpenRun)", async () => {
+describe("ActivityBinder — reads the run-history spine (PRD-08 D1/D1c)", () => {
+  it("activating a row forwards { conversationId, runId } and NEVER calls /v1/audit (DoD 12)", async () => {
     const onOpenRun = vi.fn();
+    const seenPaths: string[] = [];
     const { container } = render(
-      <TransportProvider transport={activityTransport([activityConv()])}>
+      <TransportProvider transport={activityTransport([runEntry()], seenPaths)}>
         <RouterProvider router={fakeRouter()}>
           <ActivityBinder onOpenRun={onOpenRun} />
         </RouterProvider>
       </TransportProvider>,
     );
 
-    // Wait for the projected row to render.
     let row: HTMLElement | null = null;
     await waitFor(() => {
       row = container.querySelector<HTMLElement>(
@@ -594,11 +596,52 @@ describe("ActivityBinder — row activation forwards { conversationId, runId }",
     });
 
     fireEvent.click(row as unknown as HTMLElement);
-
     expect(onOpenRun).toHaveBeenCalledTimes(1);
     expect(onOpenRun).toHaveBeenCalledWith({
       conversationId: "conv_row",
       runId: "run_row",
     });
+
+    // One request, to the run-history spine; the audit stream is never read.
+    expect(seenPaths.some((p) => p.includes("/v1/agent/runs"))).toBe(true);
+    expect(seenPaths.some((p) => p.includes("/v1/audit"))).toBe(false);
+  });
+
+  // DoD 13 — one composer, two hosts: identical fixture → identical meta line.
+  it("renders the meta sub-line '4 apps · 7 steps · awaiting 1 approval' from the counters (DoD 13)", async () => {
+    const seenPaths: string[] = [];
+    const { container } = render(
+      <TransportProvider
+        transport={activityTransport(
+          [
+            runEntry({
+              run_id: "run_meta",
+              conversation_id: "conv_meta",
+              conversation_title: "Launch Week ops",
+              status: "running",
+              connector_count: 4,
+              step_count: 7,
+              pending_approval_count: 1,
+            }),
+          ],
+          seenPaths,
+        )}
+      >
+        <RouterProvider router={fakeRouter()}>
+          <ActivityBinder onOpenRun={vi.fn()} />
+        </RouterProvider>
+      </TransportProvider>,
+    );
+
+    let metaEl: HTMLElement | null = null;
+    await waitFor(() => {
+      metaEl = container.querySelector<HTMLElement>(
+        "[data-testid='activity-row-meta']",
+      );
+      expect(metaEl).not.toBeNull();
+    });
+    expect((metaEl as unknown as HTMLElement).textContent).toBe(
+      "4 apps · 7 steps · awaiting 1 approval",
+    );
   });
 });

@@ -1,153 +1,126 @@
 // @vitest-environment node
-import type { AuditEvent, Conversation } from "@0x-copilot/api-types";
+import type { RunHistoryEntry } from "@0x-copilot/api-types";
 import { describe, expect, it } from "vitest";
 
-import { projectActivityRows } from "./activityProjection";
+import { mapRunStatus, projectActivityRows } from "./activityProjection";
 
-// Minimal Conversation fixture — fills the non-load-bearing required fields so
-// the tests state only the fields the projection reads (PRD-04 Seam C).
-function conv(over: Partial<Conversation> = {}): Conversation {
+// Minimal RunHistoryEntry fixture — fills the non-load-bearing required fields
+// so the tests state only the fields the projection reads (PRD-08 D1).
+function entry(over: Partial<RunHistoryEntry> = {}): RunHistoryEntry {
   return {
+    run_id: "run_1",
     conversation_id: "conv_1",
-    org_id: "org_1",
-    user_id: "user_1",
-    assistant_id: "asst_1",
-    title: "Weekly treasury reconciliation",
-    status: "active",
+    conversation_title: "Weekly treasury reconciliation",
+    status: "running",
+    model_name: "gpt-4o",
     created_at: "2026-07-18T08:00:00Z",
-    updated_at: "2026-07-18T09:15:00Z",
-    archived_at: null,
-    metadata: {},
-    schema_version: 1,
-    latest_run_id: "run_1",
-    latest_run_status: "running",
+    started_at: "2026-07-18T09:15:00Z",
+    completed_at: null,
+    cancelled_at: null,
+    connector_count: null,
+    step_count: null,
+    pending_approval_count: 0,
     ...over,
   };
 }
 
-function audit(over: Partial<AuditEvent> = {}): AuditEvent {
-  return {
-    stream: "mcp_audit_events",
-    seq: 1,
-    audit_id: "aud_1",
-    org_id: "org_1",
-    actor_user_id: "user_1",
-    actor_kind: "user",
-    subject_user_id: null,
-    action: "tool.invoke",
-    resource_type: "run",
-    resource_id: "run_1",
-    outcome: "success",
-    metadata: { connector_id: "Sheets" },
-    chain: {} as AuditEvent["chain"],
-    created_at: "2026-07-18T09:10:00Z",
-    ...over,
-  };
-}
-
-describe("projectActivityRows — conversation + audit → ActivityRunRow[]", () => {
-  // DoD 6 — conversation_id and run_id are DISTINCT fields, both stamped.
-  it("stamps conversation_id from conversation.conversation_id and run_id from latest_run_id", () => {
-    const rows = projectActivityRows(
-      [
-        conv({
-          conversation_id: "conv_abc",
-          latest_run_id: "run_xyz",
-        }),
-      ],
-      [],
-    );
+describe("projectActivityRows — RunHistoryEntry[] → ActivityRunRow[] (PRD-08 D1)", () => {
+  // conversation_id and run_id are DISTINCT fields, both stamped.
+  it("stamps conversation_id and run_id as distinct fields", () => {
+    const rows = projectActivityRows([
+      entry({ conversation_id: "conv_abc", run_id: "run_xyz" }),
+    ]);
     expect(rows).toHaveLength(1);
     expect(rows[0]!.conversation_id).toBe("conv_abc");
     expect(rows[0]!.run_id).toBe("run_xyz");
-    // The two are different fields, not aliases.
     expect(rows[0]!.conversation_id).not.toBe(rows[0]!.run_id);
   });
 
-  // DoD 6 — the blank-title fallback.
-  it("falls back to 'Untitled run' when the conversation title is blank/whitespace", () => {
-    const rows = projectActivityRows([conv({ title: "   " })], []);
-    expect(rows[0]!.title).toBe("Untitled run");
+  it("falls back to 'Untitled run' when the conversation title is blank/whitespace/null", () => {
+    expect(
+      projectActivityRows([entry({ conversation_title: "   " })])[0]!.title,
+    ).toBe("Untitled run");
+    expect(
+      projectActivityRows([entry({ conversation_title: null })])[0]!.title,
+    ).toBe("Untitled run");
   });
 
   it("uses the trimmed conversation title when present", () => {
-    const rows = projectActivityRows(
-      [conv({ title: "  Draft investor update  " })],
-      [],
-    );
+    const rows = projectActivityRows([
+      entry({ conversation_title: "  Draft investor update  " }),
+    ]);
     expect(rows[0]!.title).toBe("Draft investor update");
   });
 
-  it("skips never-ran conversations (no latest_run_id / status)", () => {
-    const rows = projectActivityRows(
-      [
-        conv({ conversation_id: "c_ran", latest_run_id: "run_1" }),
-        conv({
-          conversation_id: "c_never",
-          latest_run_id: null,
-          latest_run_status: null,
-        }),
-        conv({
-          conversation_id: "c_empty",
-          latest_run_id: "",
-          latest_run_status: "running",
-        }),
-      ],
-      [],
-    );
-    expect(rows.map((r) => r.conversation_id)).toEqual(["c_ran"]);
-  });
-
   it("maps the runtime run status onto the Activity taxonomy", () => {
-    const rows = projectActivityRows(
-      [
-        conv({
-          conversation_id: "c1",
-          latest_run_status: "waiting_for_approval",
-        }),
-      ],
-      [],
-    );
-    expect(rows[0]!.status).toBe("needs_input");
+    expect(
+      projectActivityRows([entry({ status: "waiting_for_approval" })])[0]!
+        .status,
+    ).toBe("needs_input");
+    expect(
+      projectActivityRows([entry({ status: "completed" })])[0]!.status,
+    ).toBe("done");
+    expect(
+      projectActivityRows([entry({ status: "timed_out" })])[0]!.status,
+    ).toBe("stopped");
   });
 
-  it("enriches meta from audit rows keyed by BOTH run id and conversation id, sorted + joined", () => {
-    const rows = projectActivityRows(
-      [conv({ conversation_id: "conv_1", latest_run_id: "run_1" })],
-      [
-        audit({ resource_id: "run_1", metadata: { connector_id: "Sheets" } }),
-        audit({ resource_id: "conv_1", metadata: { server_id: "Dune" } }),
-        audit({ resource_id: "run_1", metadata: { tool_name: "Safe" } }),
-      ],
-    );
-    expect(rows[0]!.meta).toBe("Dune · Safe · Sheets");
-  });
-
-  it("sorts rows newest-first, with unparseable timestamps last (canonical NaN guard)", () => {
-    const rows = projectActivityRows(
-      [
-        conv({
-          conversation_id: "c_old",
-          latest_run_id: "r_old",
-          updated_at: "2026-07-10T00:00:00Z",
-        }),
-        conv({
-          conversation_id: "c_bad",
-          latest_run_id: "r_bad",
-          updated_at: "not-a-date",
-        }),
-        conv({
-          conversation_id: "c_new",
-          latest_run_id: "r_new",
-          updated_at: "2026-07-18T00:00:00Z",
-        }),
-      ],
-      [],
-    );
-    expect(rows.map((r) => r.conversation_id)).toEqual([
-      "c_new",
-      "c_old",
-      "c_bad",
+  it("composes the meta line from the server counters (one composer)", () => {
+    const rows = projectActivityRows([
+      entry({
+        connector_count: 4,
+        step_count: 7,
+        pending_approval_count: 1,
+      }),
     ]);
+    expect(rows[0]!.meta).toBe("4 apps · 7 steps · awaiting 1 approval");
+  });
+
+  it("renders an empty meta line when the counters are unknown/zero", () => {
+    const rows = projectActivityRows([
+      entry({
+        connector_count: null,
+        step_count: null,
+        pending_approval_count: 0,
+      }),
+    ]);
+    expect(rows[0]!.meta).toBe("");
+  });
+
+  it("uses started_at for row time, falling back to created_at when a run is unstarted", () => {
+    expect(
+      projectActivityRows([
+        entry({
+          started_at: "2026-07-18T09:15:00Z",
+          created_at: "2026-07-18T08:00:00Z",
+        }),
+      ])[0]!.started_at,
+    ).toBe("2026-07-18T09:15:00Z");
+    expect(
+      projectActivityRows([
+        entry({ started_at: null, created_at: "2026-07-18T08:00:00Z" }),
+      ])[0]!.started_at,
+    ).toBe("2026-07-18T08:00:00Z");
+  });
+
+  it("preserves the server's newest-first order (endpoint is ordered; shell re-buckets)", () => {
+    const rows = projectActivityRows([
+      entry({ run_id: "r_new", conversation_id: "c_new" }),
+      entry({ run_id: "r_old", conversation_id: "c_old" }),
+    ]);
+    expect(rows.map((r) => r.conversation_id)).toEqual(["c_new", "c_old"]);
+  });
+});
+
+describe("mapRunStatus — total 8→4 fold (PRD-08 D2)", () => {
+  it("folds every AgentRunStatus into the four-value taxonomy", () => {
+    expect(mapRunStatus("running")).toBe("running");
+    expect(mapRunStatus("queued")).toBe("running");
+    expect(mapRunStatus("cancelling")).toBe("running");
+    expect(mapRunStatus("completed")).toBe("done");
+    expect(mapRunStatus("waiting_for_approval")).toBe("needs_input");
+    expect(mapRunStatus("cancelled")).toBe("stopped");
+    expect(mapRunStatus("failed")).toBe("stopped");
+    expect(mapRunStatus("timed_out")).toBe("stopped");
   });
 });

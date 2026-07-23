@@ -39,8 +39,9 @@ class ToolCallEntry:
     # ``charged_calls(tool_name)`` only counts entries with
     # ``budget_charged=True`` so REJECTED calls don't burn through the cap.
     budget_charged: bool = True
-    # Connector that owned this tool; currently always ``None`` until a
-    # tool-name → connector lookup is plumbed in.
+    # Connector that owned this tool — the dispatcher's MCP server name for a
+    # ``call_mcp_tool`` invocation, ``None`` for a native tool. Set at
+    # :meth:`ToolCallLedger.started` from ``McpDispatcherUnwrap`` (PRD-08 D1b).
     connector_slug: str | None = None
     # ``True`` once this entry has been popped as the "originating tool"
     # for an LLM call's attribution. Prevents double-attribution when
@@ -71,6 +72,7 @@ class ToolCallLedger:
         tool_name: str,
         parent_task_id: str | None = None,
         subagent_id: str | None = None,
+        connector_slug: str | None = None,
     ) -> None:
         """Record that a tool call has begun. Idempotent on repeat call_ids."""
 
@@ -81,6 +83,7 @@ class ToolCallLedger:
             tool_name=tool_name,
             parent_task_id=parent_task_id,
             subagent_id=subagent_id,
+            connector_slug=connector_slug,
         )
 
     def observed_settled(self, call_id: str) -> None:

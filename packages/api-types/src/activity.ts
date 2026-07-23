@@ -36,20 +36,32 @@ import type { ConversationId, RunId } from "./brands";
  * the union is also runtime-enumerable (status→tone mapping, tests) with
  * a single declaration site — no value/type drift.
  *
+ * Exactly FOUR values, and every one has a producer — the total fold from
+ * the eight-value {@link AgentRunStatus} (PRD-08 D2):
+ *
+ * | `AgentRunStatus`                   | `ActivityRunStatus` | design chip   |
+ * | ---------------------------------- | ------------------- | ------------- |
+ * | `queued`, `running`, `cancelling`  | `running`           | `chip--ok`+dot|
+ * | `completed`                        | `done`              | `chip--ok`    |
+ * | `waiting_for_approval`             | `needs_input`       | `chip--warn`  |
+ * | `cancelled`, `failed`, `timed_out` | `stopped`           | `chip--off`   |
+ *
  * * `running`     — the run is in flight (live/jade chip); row → Run.
- * * `done`        — the run completed (muted chip).
- * * `paused`      — the run is paused (amber chip).
- * * `stopped`     — the run was cancelled/stopped by the user or system.
+ * * `done`        — the run completed (muted/jade chip).
+ * * `stopped`     — the run was cancelled/stopped/failed/timed-out.
  * * `needs_input` — the run is blocked on an approval / clarifying answer;
- *                   this is how the former Inbox items surface in Activity
- *                   (PRD FR-4.18).
+ *                   this is how the former Inbox items surface in Activity,
+ *                   and it is the design's `paused` slot (`chip--warn`). The
+ *                   runtime has no distinct `paused` state — the design's own
+ *                   copy ("paused — needed your approval on a swap") names
+ *                   `waiting_for_approval` — so there is no `paused` member
+ *                   (PRD-08 D2). `AgentRunStatus` is deliberately untouched.
  */
 export const ACTIVITY_RUN_STATUSES = [
   "running",
   "done",
-  "paused",
-  "stopped",
   "needs_input",
+  "stopped",
 ] as const;
 
 /** Activity run row status. Drift from the server projection is a bug. */

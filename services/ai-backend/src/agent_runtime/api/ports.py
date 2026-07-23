@@ -9,7 +9,7 @@ in-memory store is itself async.
 
 from __future__ import annotations
 
-from collections.abc import Sequence
+from collections.abc import Mapping, Sequence
 from datetime import datetime
 from typing import Protocol, runtime_checkable
 
@@ -34,6 +34,7 @@ from agent_runtime.persistence.records import (
     RuntimeWorkerClaim,
     RuntimeWorkerResult,
     ToolBudgetRecord,
+    ToolInvocationRecord,
     UsageConversationAggregateRecord,
     UsageDailyConnectorRow,
     UsageDailyOrgRow,
@@ -550,6 +551,48 @@ class PersistencePort(Protocol):
         up to ``limit`` rows — the service requests ``limit + 1`` to derive
         ``has_more`` unambiguously. All eight run statuses are reachable; there
         is no status filter (contrast :meth:`get_active_run_for_conversation`).
+        """
+
+    # ------------------------------------------------------------------
+    # Tool-invocation ledger (PRD-08 D1b) — the per-run tool-call record that
+    # backs Activity's meta counters. The table + index exist since migration
+    # ``0001``; this is the write path (dormant until now) and its two aggregate
+    # reads. Writes are best-effort / fire-and-forget at the worker's tool-call
+    # lifecycle seam and must never fail the run.
+    # ------------------------------------------------------------------
+
+    async def record_tool_invocation(self, record: ToolInvocationRecord) -> None:
+        """Upsert one ``runtime_tool_invocations`` row, keyed by ``invocation_id``.
+
+        Idempotent on ``invocation_id`` so a start→settle pair for the same tool
+        call collapses to a single row (started inserts; settled updates status /
+        ``completed_at``). ``connector_slug`` is the resolved MCP server slug for
+        an MCP tool call, ``None`` for a native (connector-less) tool.
+        """
+
+    async def count_tool_invocations_for_runs(
+        self, *, org_id: str, run_ids: Sequence[str]
+    ) -> Mapping[str, tuple[int, int]]:
+        """Return ``run_id → (step_count, connector_count)`` for the given runs.
+
+        ``step_count`` is ``COUNT(*)`` over ``runtime_tool_invocations`` (one row
+        per tool call, retries + sub-agent calls included); ``connector_count``
+        is ``COUNT(DISTINCT connector_slug)`` where non-null (the design's
+        apps-vs-steps distinction — native tools are steps, not apps). Runs with
+        NO invocation rows are ABSENT from the map (the caller renders them as
+        ``None``/unknown, never ``0``). Backed by
+        ``idx_runtime_tool_invocations_org_run_started``; scoped by ``org_id``.
+        """
+
+    async def count_pending_approvals_for_runs(
+        self, *, org_id: str, run_ids: Sequence[str]
+    ) -> Mapping[str, int]:
+        """Return ``run_id → pending-approval count`` for the given runs.
+
+        ``COUNT(*) … WHERE status = 'pending'`` over ``runtime_approval_requests``.
+        Runs with no pending approvals are ABSENT from the map (the caller reads a
+        missing key as ``0`` — approvals persist since ``0001``, so zero is a
+        fact). Backed by ``idx_runtime_approval_requests_org_run_status``.
         """
 
     # ------------------------------------------------------------------

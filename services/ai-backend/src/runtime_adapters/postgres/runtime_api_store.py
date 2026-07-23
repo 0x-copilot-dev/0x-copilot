@@ -64,6 +64,7 @@ from agent_runtime.persistence.records import (
     RuntimeWorkerResult,
     ToolBudgetEnforcement,
     ToolBudgetRecord,
+    ToolInvocationRecord,
     UsageConversationAggregateRecord,
     UsageDailyConnectorRow,
     UsageDailyOrgRow,
@@ -1485,6 +1486,124 @@ class PostgresRuntimeApiStore:
             completed_at=row[_Columns.COMPLETED_AT],
             cancelled_at=row[_Columns.CANCELLED_AT],
         )
+
+    # ------------------------------------------------------------------
+    # Tool-invocation ledger (PRD-08 D1b) + Activity meta aggregates.
+    # ------------------------------------------------------------------
+
+    async def record_tool_invocation(self, record: ToolInvocationRecord) -> None:
+        """Upsert one ``runtime_tool_invocations`` row, keyed by ``id`` (idempotent).
+
+        Written fire-and-forget at the worker's tool-call lifecycle seam. Runs
+        under the tenant RLS connection so ``tenant_isolation`` binds beneath the
+        explicit ``org_id`` predicate.
+        """
+
+        async with self._tenant_connection(org_id=record.org_id) as conn:
+            await conn.execute(
+                """
+                INSERT INTO runtime_tool_invocations (
+                    id, run_id, task_id, org_id, tool_name, connector_slug,
+                    side_effect_class, call_id, status,
+                    args_json_redacted, result_summary_json_redacted,
+                    approval_id, external_ref, started_at, completed_at,
+                    safe_error_code, safe_error_message
+                ) VALUES (
+                    %(id)s, %(run_id)s, %(task_id)s, %(org_id)s, %(tool_name)s,
+                    %(connector_slug)s, %(side_effect_class)s, %(call_id)s,
+                    %(status)s, %(args)s, %(result_summary)s, %(approval_id)s,
+                    %(external_ref)s, %(started_at)s, %(completed_at)s,
+                    %(safe_error_code)s, %(safe_error_message)s
+                )
+                ON CONFLICT (id) DO UPDATE SET
+                    status = EXCLUDED.status,
+                    connector_slug = EXCLUDED.connector_slug,
+                    result_summary_json_redacted =
+                        EXCLUDED.result_summary_json_redacted,
+                    completed_at = EXCLUDED.completed_at,
+                    safe_error_code = EXCLUDED.safe_error_code,
+                    safe_error_message = EXCLUDED.safe_error_message
+                """,
+                {
+                    "id": record.invocation_id,
+                    "run_id": record.run_id,
+                    "task_id": record.task_id,
+                    "org_id": record.org_id,
+                    "tool_name": record.tool_name,
+                    "connector_slug": record.connector_slug,
+                    "side_effect_class": record.side_effect_class.value,
+                    "call_id": record.call_id,
+                    "status": record.status.value,
+                    "args": Jsonb(record.args),
+                    "result_summary": Jsonb(record.result_summary),
+                    "approval_id": record.approval_id,
+                    "external_ref": record.external_ref,
+                    "started_at": record.started_at,
+                    "completed_at": record.completed_at,
+                    "safe_error_code": record.safe_error_code,
+                    "safe_error_message": record.safe_error_message,
+                },
+            )
+
+    async def count_tool_invocations_for_runs(
+        self, *, org_id: str, run_ids: Sequence[str]
+    ) -> Mapping[str, tuple[int, int]]:
+        """Return ``run_id → (step_count, connector_count)`` for the page's runs.
+
+        One grouped aggregate over ``idx_runtime_tool_invocations_org_run_started``
+        (org_id, run_id). Runs with no rows are ABSENT (the service renders them
+        as ``None``, never ``0``).
+        """
+
+        if not run_ids:
+            return {}
+        async with self._tenant_connection(org_id=org_id) as conn:
+            cur = await conn.execute(
+                """
+                SELECT run_id,
+                       COUNT(*) AS step_count,
+                       COUNT(DISTINCT connector_slug)
+                           FILTER (WHERE connector_slug IS NOT NULL)
+                           AS connector_count
+                  FROM runtime_tool_invocations
+                 WHERE org_id = %(org_id)s
+                   AND run_id = ANY(%(run_ids)s)
+                 GROUP BY run_id
+                """,
+                {"org_id": org_id, "run_ids": list(run_ids)},
+            )
+            rows = await cur.fetchall()
+        return {
+            str(row["run_id"]): (int(row["step_count"]), int(row["connector_count"]))
+            for row in rows
+        }
+
+    async def count_pending_approvals_for_runs(
+        self, *, org_id: str, run_ids: Sequence[str]
+    ) -> Mapping[str, int]:
+        """Return ``run_id → pending-approval count`` for the page's runs.
+
+        One grouped aggregate over ``idx_runtime_approval_requests_org_run_status``.
+        Runs with no pending approvals are ABSENT (the service reads a missing key
+        as ``0``).
+        """
+
+        if not run_ids:
+            return {}
+        async with self._tenant_connection(org_id=org_id) as conn:
+            cur = await conn.execute(
+                """
+                SELECT run_id, COUNT(*) AS pending
+                  FROM runtime_approval_requests
+                 WHERE org_id = %(org_id)s
+                   AND run_id = ANY(%(run_ids)s)
+                   AND status = 'pending'
+                 GROUP BY run_id
+                """,
+                {"org_id": org_id, "run_ids": list(run_ids)},
+            )
+            rows = await cur.fetchall()
+        return {str(row["run_id"]): int(row["pending"]) for row in rows}
 
     async def get_latest_message_for_conversation(
         self,

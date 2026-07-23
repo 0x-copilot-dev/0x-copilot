@@ -34,6 +34,7 @@ import type {
   ReasoningDepth,
   RecipientPreview,
   RetentionEffectiveResponse,
+  RunHistoryResponse,
   RuntimeEventEnvelope,
   RuntimeEventReplayResponse,
   SharedConversationView,
@@ -156,6 +157,22 @@ export function listConversations(
       include_archived: options.includeArchived ? "true" : undefined,
     },
   );
+}
+
+/**
+ * PRD-05 — the org-scoped, all-status, one-row-per-RUN history that backs
+ * Activity's finished-run feed (`GET /v1/agent/runs`). Newest-first, keyset
+ * paginated; each `RunHistoryEntry` carries the PRD-08 meta counters
+ * (`connector_count` / `step_count` / `pending_approval_count`).
+ */
+export function listRunHistory(
+  identity: RequestIdentity,
+  options: { limit?: number; cursor?: string } = {},
+): Promise<RunHistoryResponse> {
+  return httpGet<RunHistoryResponse>("/v1/agent/runs", identity, {
+    limit: String(options.limit ?? 50),
+    cursor: options.cursor,
+  });
 }
 
 export function listMessages(

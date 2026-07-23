@@ -51,7 +51,10 @@ const STATUS_MAP: Readonly<Record<string, Entry>> = {
   completed: { tone: "ok", label: "done" },
   paused: { tone: "warning", label: "paused" },
   waiting_for_approval: { tone: "warning", label: "needs approval" },
-  needs_input: { tone: "info", label: "needs you" },
+  // PRD-08 D2 — `needs_input` is Activity's fold of `waiting_for_approval`, and
+  // the design draws that row as `chip--warn` (amber), not accent. Moved from
+  // `info` to `warning` so the chip colour matches the design's fourth state.
+  needs_input: { tone: "warning", label: "needs you" },
   stopped: { tone: "muted", label: "stopped" },
   cancelled: { tone: "muted", label: "cancelled" },
   canceled: { tone: "muted", label: "cancelled" },

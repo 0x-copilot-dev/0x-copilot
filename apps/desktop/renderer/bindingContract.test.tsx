@@ -94,31 +94,31 @@ const stubPresence: PresenceSignal = {
 function activityTransport(): Transport {
   return {
     request: <TRes,>(req: TypedRequest): Promise<TRes> => {
-      if (req.method === "GET" && req.path === "/v1/agent/conversations") {
+      // PRD-08 D1/D1c cut the Activity binder over to the run-history spine.
+      // The feed is now one row per RUN from GET /v1/agent/runs (RunHistoryEntry),
+      // not the old conversations + audit compose — so this fixture feeds the
+      // new endpoint. The row's conversation_id/run_id are what Seam C forwards.
+      if (req.method === "GET" && req.path === "/v1/agent/runs") {
         return Promise.resolve({
-          conversations: [
+          runs: [
             {
+              run_id: "run_abc",
               conversation_id: "conv-abc",
-              org_id: "org-1",
-              user_id: "user-1",
-              assistant_id: "asst-1",
-              title: "Live sync",
-              status: "active",
+              conversation_title: "Live sync",
+              status: "running",
+              model_name: "claude-sonnet-4.5",
               created_at: "2026-07-22T00:00:00Z",
-              updated_at: "2026-07-22T00:00:00Z",
-              archived_at: null,
-              metadata: {},
-              schema_version: 1,
-              latest_run_id: "run_abc",
-              latest_run_status: "running",
+              started_at: "2026-07-22T00:00:00Z",
+              completed_at: null,
+              cancelled_at: null,
+              connector_count: null,
+              step_count: null,
+              pending_approval_count: 0,
             },
           ],
           next_cursor: null,
           has_more: false,
         } as unknown as TRes);
-      }
-      if (req.path.includes("/v1/audit")) {
-        return Promise.resolve({ rows: [] } as unknown as TRes);
       }
       return Promise.resolve({} as TRes);
     },
