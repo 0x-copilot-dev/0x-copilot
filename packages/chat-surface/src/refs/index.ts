@@ -1,15 +1,16 @@
-// Public surface for the ItemRef registry + <ItemLink> renderer.
-// Phase 0.5 shared primitives — see cross-audit.md §3.3.
+// Public surface for the ItemRef route registry + <ItemLink> renderer.
+// Phase 0.5 shared primitives — see cross-audit.md §3.3; reshaped by PRD-04
+// (route-only registry + required-label ItemLink).
 
 export { ItemLink, type ItemLinkProps } from "./ItemLink";
+export { itemKindNoun } from "./itemKindNoun";
 export {
-  ItemRefResolverAlreadyRegistered,
-  ItemRefResolverNotRegistered,
-  __resetItemRefRegistryForTests,
-  hasItemRefResolver,
-  registerItemRefResolver,
-  resolveItemRef,
-  unregisterItemRefResolver,
-  type ItemRefResolved,
-  type ItemRefResolver,
+  ItemRouteAlreadyRegistered,
+  ItemRouteNotRegistered,
+  __resetItemRouteRegistryForTests,
+  hasItemRoute,
+  registerItemRoute,
+  resolveItemRoute,
+  unregisterItemRoute,
+  type ItemRouteResolver,
 } from "./registry";

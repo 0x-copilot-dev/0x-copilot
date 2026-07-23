@@ -44,6 +44,7 @@ import { EmptyState } from "../../shell/EmptyState";
 import { PageHeader } from "../../shell/PageHeader";
 import { StatusPill, type StatusTone } from "../../shell/StatusPill";
 import { ItemLink } from "../../refs/ItemLink";
+import { itemKindNoun } from "../../refs/itemKindNoun";
 import { formatRelativeTime } from "../../util/time";
 import {
   INBOX_BREAKPOINT_PX,
@@ -771,7 +772,7 @@ function InboxRow({
         <span style={{ flex: 1, minWidth: 0 }}>
           <ItemLink
             ref={primaryRef}
-            deletedLabel={`(deleted) ${item.subject}`}
+            label={item.subject}
             className="inbox-row-primary-link"
           />
         </span>
@@ -837,7 +838,11 @@ function InboxRow({
         {/* Additional cross-destination chips — any `links` past the
             first slot. Filtered to skip a duplicate primary ref. */}
         {item.links.slice(1).map((ref, idx) => (
-          <ItemLink key={`${ref.kind}-${idx}`} ref={ref} />
+          <ItemLink
+            key={`${ref.kind}-${idx}`}
+            ref={ref}
+            label={itemKindNoun(ref.kind)}
+          />
         ))}
         {item.status === "snoozed" && item.snoozed_until !== undefined ? (
           <span data-testid="inbox-row-snoozed-until">

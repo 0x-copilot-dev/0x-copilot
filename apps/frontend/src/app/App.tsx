@@ -162,8 +162,6 @@ import {
   ToastStack,
   TransportProvider,
   WebSecretStorage,
-  registerItemRefResolver,
-  hasItemRefResolver,
   useKeyValueStore,
   type ArtifactRoute,
   type DeploymentProfile,
@@ -173,6 +171,7 @@ import {
 import { getAppTransport } from "../api/transport";
 import { HashRouter, migrateLegacySettingsPath } from "./HashRouter";
 import { ROOT_DESTINATION, foldedRedirectFor, type AppRoute } from "./routes";
+import { registerWebItemRoutes } from "./itemRoutes";
 import type { SettingsSection } from "../features/settings/settingsSections";
 import { errorMessage } from "../utils/errors";
 import {
@@ -214,100 +213,15 @@ const PLACEHOLDER_DESTINATIONS: Partial<
   billing: DesktopOnlyDestination,
 };
 
-// ItemRef resolver registration (cross-audit §3.3) for the `"todo"`
-// kind. The Todos destination owns this kind — when a chat / agent
-// activity entry surfaces an `<ItemLink kind="todo" id={...} />`, the
-// link resolves to the Todos destination's detail surface. Today the
-// destination has no per-todo detail route, so we return `route: null`
-// — `<ItemLink>` falls back to the breadcrumb. Phase 3 Impl-B replaces
-// this with a richer resolver via `{ replace: true }` once the
-// detail surface lands.
-//
-// Guarded with `hasItemRefResolver` so test environments that import
-// the module across multiple vitest realms don't throw
-// `ItemRefResolverAlreadyRegistered`.
-if (!hasItemRefResolver("todo")) {
-  registerItemRefResolver("todo", async (_id) => ({
-    label: "Todo",
-    icon: null,
-    route: null,
-    breadcrumb: "Todos",
-  }));
-}
-
-// ItemRef resolver registration (cross-audit §3.3) for the
-// `"inbox_item"` kind. The Inbox destination owns this kind — when a
-// chat / agent activity / notification surfaces an `<ItemLink
-// kind="inbox_item" id={...} />`, the link resolves to the Inbox
-// destination. Today the destination has no per-item detail route
-// (`/inbox/<id>` lands in Phase 4 Impl-B), so we return `route: null` —
-// `<ItemLink>` falls back to the breadcrumb. Same `hasItemRefResolver`
-// guard pattern as the `"todo"` registration above so cross-realm
-// vitest imports don't throw `ItemRefResolverAlreadyRegistered`.
-if (!hasItemRefResolver("inbox_item")) {
-  registerItemRefResolver("inbox_item", async (_id) => ({
-    label: "Inbox item",
-    icon: null,
-    route: null,
-    breadcrumb: "Inbox",
-  }));
-}
-
-// ItemRef resolver registration (cross-audit §3.3) for the `"project"`
-// kind. P6-C — the Projects destination owns this kind; when a
-// cross-destination activity surface (chat / inbox / todos / routines
-// activity) surfaces an `<ItemLink kind="project" id={...} />`, the
-// link resolves to the Projects workspace. The route here uses the
-// chat-surface `ArtifactRoute` `workspace` shape so navigating an
-// ItemLink lands inside the project's workspace pane (sub-PRD §3.4 —
-// the `/projects/<id>` detail surface). Same `hasItemRefResolver`
-// guard pattern as the `"todo"` / `"inbox_item"` registrations above
-// so cross-realm vitest imports don't throw
-// `ItemRefResolverAlreadyRegistered`.
-if (!hasItemRefResolver("project")) {
-  registerItemRefResolver("project", async (id) => ({
-    label: "Project",
-    icon: null,
-    route: { kind: "workspace", workspaceId: id as unknown as string },
-    breadcrumb: "Projects",
-  }));
-}
-
-// ItemRef resolver registration (cross-audit §3.3) for Library + Agents
-// kinds. Each destination's route lands in a follow-up wave; today the
-// resolvers return route:null so `<ItemLink>` falls back to breadcrumb.
-if (!hasItemRefResolver("library_file")) {
-  registerItemRefResolver("library_file", async (_id) => ({
-    label: "File",
-    icon: null,
-    route: null,
-    breadcrumb: "Library",
-  }));
-}
-if (!hasItemRefResolver("library_page")) {
-  registerItemRefResolver("library_page", async (_id) => ({
-    label: "Page",
-    icon: null,
-    route: null,
-    breadcrumb: "Library",
-  }));
-}
-if (!hasItemRefResolver("library_dataset")) {
-  registerItemRefResolver("library_dataset", async (_id) => ({
-    label: "Dataset",
-    icon: null,
-    route: null,
-    breadcrumb: "Library",
-  }));
-}
-if (!hasItemRefResolver("agent")) {
-  registerItemRefResolver("agent", async (_id) => ({
-    label: "Agent",
-    icon: null,
-    route: null,
-    breadcrumb: "Agents",
-  }));
-}
+// PRD-04 Seam B — cross-destination ItemRef ROUTING is registered from the
+// single web route table (`src/app/itemRoutes.ts`), imported at boot. This
+// replaces the seven ad-hoc per-kind resolver blocks that returned a hardcoded
+// label + a route the web router had no screen for (most were `route: null`;
+// the `project` one emitted an `ArtifactRoute` `workspace` shape the web
+// `HashRouter` could not path — landing every click on `/settings#undefined`).
+// The web table can only emit `AppRoute`s (`tsc` checked), and display text is
+// now the caller's.
+registerWebItemRoutes();
 
 /**
  * The org slug LoginScreen falls back to when the URL doesn't carry one.
@@ -557,16 +471,12 @@ export function CopilotApp({
   const [ports] = useState<PortBundle>(() => ({
     badge: new WebBadgePort(),
     notification: new WebNotificationPort({
-      navigate: (artifactRoute: ArtifactRoute) => {
-        // Lift the substrate-portable ArtifactRoute into the host's
-        // wider AppRoute union. Today only `chat` and `conversation`
-        // map cleanly — the rest are no-ops until the destinations
-        // they reference register their own resolvers + routes.
-        if (
-          artifactRoute.kind === "chat" ||
-          artifactRoute.kind === "conversation"
-        ) {
-          router.navigate({ screen: "chat", destination: ROOT_DESTINATION });
+      // PRD-04 Seam B — the web ItemRoute registry emits `AppRoute` values, so a
+      // notification-click's resolved route is already a host route; hand it
+      // straight to the router.
+      navigate: (route: unknown) => {
+        if (route !== null && route !== undefined) {
+          router.navigate(route as AppRoute);
         }
       },
     }),
@@ -1083,7 +993,9 @@ export function CopilotApp({
       >
         <ActivityRoute
           identity={identity}
-          onOpenRun={openRun}
+          // PRD-04 Seam C — every Activity row opens the Run cockpit bound to
+          // its CONVERSATION (the cockpit binds by conversation id, not run id).
+          onOpenRun={(target) => openRun(target.conversationId)}
           onOpenRetentionSettings={openRetentionSettings}
         />
       </section>

@@ -11,13 +11,6 @@
 // `MemoryItem` / `MemoryProposal` / etc. from a single chat-surface
 // surface alongside the components.
 
-import type { MemoryItemId } from "@0x-copilot/api-types";
-
-import {
-  hasItemRefResolver,
-  registerItemRefResolver,
-} from "../../refs/registry";
-
 import {
   MemoryDestination,
   type MemoryDestinationProps,
@@ -109,21 +102,3 @@ export type {
   MemoryStreamEventType,
   UpdateMemoryRequest,
 } from "@0x-copilot/api-types";
-
-// ===========================================================================
-// ItemRef resolver registration (cross-audit §3.3)
-// ===========================================================================
-//
-// Until the host defines a dedicated `{ kind: "memory-detail",
-// memoryId }` route variant, the workspace route is the stable fallback
-// so `<ItemLink kind="memory">` renders a real link rather than the
-// deleted-chip. Mirrors the routines/inbox bootstrap.
-
-if (!hasItemRefResolver("memory")) {
-  registerItemRefResolver("memory", async (id: MemoryItemId) => ({
-    label: "Memory",
-    icon: null,
-    route: { kind: "workspace", workspaceId: id as unknown as string },
-    breadcrumb: "Memory",
-  }));
-}

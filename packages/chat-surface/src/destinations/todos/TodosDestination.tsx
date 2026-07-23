@@ -46,6 +46,7 @@ import { EmptyState } from "../../shell/EmptyState";
 import { PageHeader } from "../../shell/PageHeader";
 import { StatusPill, type StatusTone } from "../../shell/StatusPill";
 import { ItemLink } from "../../refs/ItemLink";
+import { itemKindNoun } from "../../refs/itemKindNoun";
 import { formatRelativeTime } from "../../util/time";
 
 // TODO(merge): rewire to "@0x-copilot/api-types"
@@ -855,7 +856,10 @@ function TodoRow({
           </span>
         ) : null}
         {todo.project_id !== undefined ? (
-          <ItemLink ref={{ kind: "project", id: todo.project_id }} />
+          <ItemLink
+            ref={{ kind: "project", id: todo.project_id }}
+            label={itemKindNoun("project")}
+          />
         ) : null}
         {renderSourceChip(todo.source)}
       </div>
@@ -1219,6 +1223,7 @@ function renderSourceChip(source: TodoSource): ReactNode {
           kind: "chat",
           id: source.thread_id as unknown as ConversationId,
         }}
+        label={itemKindNoun("chat")}
       />
     );
   }
@@ -1230,6 +1235,7 @@ function renderSourceChip(source: TodoSource): ReactNode {
             kind: "run",
             id: source.run_id,
           }}
+          label={itemKindNoun("run")}
         />
       );
     }
@@ -1239,6 +1245,7 @@ function renderSourceChip(source: TodoSource): ReactNode {
           kind: "agent",
           id: source.agent_id,
         }}
+        label={itemKindNoun("agent")}
       />
     );
   }

@@ -25,6 +25,7 @@ import {
 // TODO(merge): rewire to "@0x-copilot/api-types" AssignedApproval
 import type { Approval, ApprovalState } from "../thread-canvas/_approvals-stub";
 import { ItemLink } from "../refs/ItemLink";
+import { itemKindNoun } from "../refs/itemKindNoun";
 import { formatRelativeTime } from "../util/time";
 
 import { EmptyState } from "./EmptyState";
@@ -219,7 +220,10 @@ export function ApprovalsTabContent({
                 style={rowStyle}
               >
                 <div style={rowHeaderStyle}>
-                  <ItemLink ref={{ kind: "approval", id: approval.id }} />
+                  <ItemLink
+                    ref={{ kind: "approval", id: approval.id }}
+                    label={itemKindNoun("approval")}
+                  />
                   <StatusPill
                     status={stateToTone(approval.state)}
                     label={stateLabel(approval.state)}

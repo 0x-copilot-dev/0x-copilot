@@ -5,7 +5,7 @@ Design baseline (source of truth) vs live app, by computed style.
 - Design: `surfaces/activity/out/design-default.json`
 - Live: `surfaces/activity/out/live-default.json`
 
-**Summary:** 🔴 HIGH 6 · 🟠 MEDIUM 30 · 🟡 LOW 47 · ⚪ INFO 7
+**Summary:** 🔴 HIGH 6 · 🟠 MEDIUM 34 · 🟡 LOW 51 · ⚪ INFO 7
 
 ## 🔴 HIGH (6)
 
@@ -18,7 +18,7 @@ Design baseline (source of truth) vs live app, by computed style.
 | `row.live.chevron` | Row/live | missing-in-live | present in design, ABSENT in live                                                                              |
 | `row.done.spacer`  | Row/rest | missing-in-live | present in design, ABSENT in live                                                                              |
 
-## 🟠 MEDIUM (30)
+## 🟠 MEDIUM (34)
 
 | Element           | Group    | Property           | Design → Live                                              |
 | ----------------- | -------- | ------------------ | ---------------------------------------------------------- |
@@ -52,8 +52,12 @@ Design baseline (source of truth) vs live app, by computed style.
 | `row.live.sub`    | Row/live | margin             | 1px 0px 0px 0px → 0px                                      |
 | `row.live.time`   | Row/live | fontSize           | 10.5px → 11.2px (+0.7px)                                   |
 | `row.done.ic.svg` | Row/rest | display            | block → inline                                             |
+| `row.done.name`   | Row/rest | fontWeight         | 500 → 600                                                  |
+| `row.done.name`   | Row/rest | display            | flex → block                                               |
+| `row.done.name`   | Row/rest | alignItems         | center → normal                                            |
+| `row.done.name`   | Row/rest | gap                | 8px → normal                                               |
 
-## 🟡 LOW (47)
+## 🟡 LOW (51)
 
 | Element           | Group    | Property      | Design → Live                                                                                                                                                                            |
 | ----------------- | -------- | ------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
@@ -93,17 +97,21 @@ Design baseline (source of truth) vs live app, by computed style.
 | `row.live.ic.svg` | Row/live | width         | 15px → 18px                                                                                                                                                                              |
 | `row.live.ic.svg` | Row/live | height        | 15px → 18px                                                                                                                                                                              |
 | `row.live.name`   | Row/live | lineHeight    | 18.75px → normal                                                                                                                                                                         |
-| `row.live.name`   | Row/live | width         | 771.5px → 107.016px                                                                                                                                                                      |
+| `row.live.name`   | Row/live | width         | 771.484px → 107.016px                                                                                                                                                                    |
 | `row.live.name`   | Row/live | height        | 19.75px → 15px                                                                                                                                                                           |
 | `row.live.sub`    | Row/live | lineHeight    | 16.5px → normal                                                                                                                                                                          |
 | `row.live.sub`    | Row/live | width         | auto → 794.953px                                                                                                                                                                         |
 | `row.live.sub`    | Row/live | height        | auto → 13px                                                                                                                                                                              |
 | `row.live.time`   | Row/live | lineHeight    | 15.75px → normal                                                                                                                                                                         |
-| `row.live.time`   | Row/live | width         | 31.5px → 47.0469px                                                                                                                                                                       |
+| `row.live.time`   | Row/live | width         | 31.5156px → 47.0469px                                                                                                                                                                    |
 | `row.live.time`   | Row/live | height        | 15.75px → 14px                                                                                                                                                                           |
 | `row.done.ic.svg` | Row/rest | lineHeight    | 19.5px → normal                                                                                                                                                                          |
 | `row.done.ic.svg` | Row/rest | width         | 15px → 18px                                                                                                                                                                              |
 | `row.done.ic.svg` | Row/rest | height        | 15px → 18px                                                                                                                                                                              |
+| `row.done.name`   | Row/rest | lineHeight    | 18.75px → normal                                                                                                                                                                         |
+| `row.done.name`   | Row/rest | width         | 770.484px → 184.953px                                                                                                                                                                    |
+| `row.done.name`   | Row/rest | height        | 19.75px → 15px                                                                                                                                                                           |
+| `row.done.chip`   | Row/rest | width         | 43.2188px → 43.2031px                                                                                                                                                                    |
 
 ## ⚪ INFO (7)
 

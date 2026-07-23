@@ -412,11 +412,12 @@ describe("InboxDestination", () => {
     fireEvent.click(screen.getByTestId("inbox-row-dismiss"));
     expect(onDismiss).toHaveBeenCalledWith(asInboxId("inbox_unread"));
 
-    // The row's primary navigation flows through ItemLink (skeleton
-    // first; resolves async via the registry).
-    const skeleton = screen.getAllByTestId("item-link-skeleton")[0];
-    expect(skeleton).toBeDefined();
-    expect(skeleton!.getAttribute("data-item-kind")).toBe("inbox_item");
+    // The row's primary navigation flows through ItemLink. No `inbox_item`
+    // route is registered in this package-level test, so it renders as inert
+    // text (`item-link-static`) carrying the caller's label (the subject).
+    const staticLink = screen.getAllByTestId("item-link-static")[0];
+    expect(staticLink).toBeDefined();
+    expect(staticLink!.getAttribute("data-item-kind")).toBe("inbox_item");
   });
 
   it("renders the unread badge from `unreadCount`", () => {
@@ -488,11 +489,11 @@ describe("InboxDestination", () => {
       items: ok<ReadonlyArray<InboxItem>>([itemWithExtraLinks]),
       now: NOW,
     });
-    // At least 3 ItemLink instances rendered in skeleton state — one
-    // primary + the two secondary chips. The registry resolves them
-    // async; we assert the skeleton presence (kind attribute on each).
-    const skeletons = screen.getAllByTestId("item-link-skeleton");
-    const kinds = skeletons.map((el) => el.getAttribute("data-item-kind"));
+    // At least 3 ItemLink instances rendered — one primary + the two
+    // secondary chips. No routes are registered in this package test, so each
+    // is inert text (`item-link-static`) carrying its kind attribute.
+    const staticLinks = screen.getAllByTestId("item-link-static");
+    const kinds = staticLinks.map((el) => el.getAttribute("data-item-kind"));
     expect(kinds).toContain("inbox_item");
     expect(kinds).toContain("approval");
     expect(kinds).toContain("chat");

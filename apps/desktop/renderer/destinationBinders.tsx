@@ -36,6 +36,7 @@ import {
   buildRunCreateBody,
   createProviderKeysPort,
   messageFromError,
+  projectActivityRows,
   toChatArchiveRow,
   useNotify,
   useTransport,
@@ -48,7 +49,6 @@ import {
 import type { Transport } from "@0x-copilot/chat-transport";
 import type {
   ActivityRunRow,
-  AgentRunStatus,
   AuditEvent,
   ChatArchiveRow,
   ChatsArchive as ChatsArchiveData,
@@ -130,12 +130,15 @@ function errorText(error: unknown): string {
 // picks the subset it needs.
 export interface DestinationBinderCallbacks {
   /**
-   * Open a SPECIFIC run — carries the run id (PRD-03 Move 3). Activity rows
-   * call it with the row's `run_id`; a 0-arity callback that discarded the id
-   * (the old bug) no longer type-satisfies this. Where `onOpenRun(runId)`
-   * navigates is PRD-04's concern.
+   * Open the Run cockpit for an Activity row (PRD-04 Seam C). Carries the row's
+   * CONVERSATION id (the cockpit's bind target) and its run id. Fired for every
+   * row. A 0-arity callback that discarded the argument (the old bug) no longer
+   * type-satisfies this; bootstrap calls `openConversation(target.conversationId)`.
    */
-  readonly onOpenRun?: (runId: RunId) => void;
+  readonly onOpenRun?: (target: {
+    readonly conversationId: ConversationId;
+    readonly runId: RunId;
+  }) => void;
   /**
    * Start / navigate to a NEW chat on the Run cockpit front door (no id).
    * Chats' "New chat" and Skills' "Run" use it. Split out from `onOpenRun`
@@ -218,94 +221,12 @@ export function ChatsBinder({
 
 // ===========================================================================
 // Activity — compose /v1/agent/conversations + /v1/audit → run-history feed.
-// Mirrors apps/frontend activityApi (FR-4.15/4.19). Audit is meta-only and
-// degrades to conversations-without-meta on failure.
+// PRD-04 Seam C: the projection (`projectActivityRows`) is the SHARED one from
+// @0x-copilot/chat-surface — the byte-for-byte desktop copy this file used to
+// carry is deleted so `conversation_id` is stamped identically on both hosts
+// (and the desktop gains the web copy's canonical NaN-guarded sort). Audit is
+// meta-only and degrades to conversations-without-meta on failure.
 // ===========================================================================
-
-function mapRunStatus(
-  status: AgentRunStatus,
-): "running" | "done" | "paused" | "stopped" | "needs_input" {
-  switch (status) {
-    case "running":
-    case "queued":
-    case "cancelling":
-      return "running";
-    case "waiting_for_approval":
-      return "needs_input";
-    case "completed":
-      return "done";
-    default:
-      // cancelled / failed / timed_out → terminal without clean completion.
-      return "stopped";
-  }
-}
-
-function auditLabel(row: AuditEvent): string | null {
-  const meta: Record<string, unknown> = row.metadata;
-  const candidates = [
-    meta.connector_id,
-    meta.server_id,
-    meta.display_name,
-    meta.tool_name,
-  ];
-  for (const candidate of candidates) {
-    if (typeof candidate === "string" && candidate.trim().length > 0) {
-      return candidate.trim();
-    }
-  }
-  return null;
-}
-
-function buildMetaIndex(
-  auditRows: readonly AuditEvent[],
-): Map<string, Set<string>> {
-  const index = new Map<string, Set<string>>();
-  for (const row of auditRows) {
-    const label = auditLabel(row);
-    if (label === null) continue;
-    const key = row.resource_id;
-    if (typeof key !== "string" || key.length === 0) continue;
-    const set = index.get(key) ?? new Set<string>();
-    set.add(label);
-    index.set(key, set);
-  }
-  return index;
-}
-
-function projectActivityRows(
-  conversations: readonly Conversation[],
-  auditRows: readonly AuditEvent[],
-): ReadonlyArray<ActivityRunRow> {
-  const metaIndex = buildMetaIndex(auditRows);
-  const rows: ActivityRunRow[] = [];
-  for (const conversation of conversations) {
-    const runId = conversation.latest_run_id;
-    const status = conversation.latest_run_status;
-    if (
-      runId === null ||
-      runId === undefined ||
-      runId === "" ||
-      status === null ||
-      status === undefined
-    ) {
-      continue; // never-ran conversation is a chat, not a run
-    }
-    const labels = new Set<string>();
-    for (const label of metaIndex.get(runId) ?? []) labels.add(label);
-    for (const label of metaIndex.get(conversation.conversation_id) ?? [])
-      labels.add(label);
-    const title = conversation.title?.trim();
-    rows.push({
-      run_id: runId as RunId,
-      title: title !== undefined && title.length > 0 ? title : "Untitled run",
-      status: mapRunStatus(status),
-      meta: [...labels].sort((a, b) => a.localeCompare(b)).join(" · "),
-      started_at: conversation.updated_at,
-    });
-  }
-  rows.sort((a, b) => Date.parse(b.started_at) - Date.parse(a.started_at));
-  return rows;
-}
 
 async function loadActivity(
   transport: Transport,
@@ -347,9 +268,10 @@ export function ActivityBinder({
     <ActivityDestination
       items={result}
       now={now}
-      // Forward the row's run id (PRD-03 Move 3). The old `() => onOpenRun?.()`
-      // discarded it — a 0-arity fn is assignable to `(runId) => void`, so types
-      // could not catch the drop; the conformance test's arity assertion does.
+      // PRD-04 Seam C — forward the row's { conversationId, runId } to the host.
+      // The old `() => onOpenRun?.()` discarded the argument; the widened object
+      // signature makes a 0-arity drop a type error, and the binder test asserts
+      // the conversation id reaches openConversation.
       onOpenRun={onOpenRun}
       onOpenRetentionSettings={onOpenRetentionSettings}
       onRetry={retry}

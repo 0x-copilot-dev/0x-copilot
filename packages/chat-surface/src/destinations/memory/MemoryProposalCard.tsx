@@ -18,6 +18,7 @@ import { type CSSProperties, type ReactElement } from "react";
 import type { MemoryProposal } from "@0x-copilot/api-types";
 
 import { ItemLink } from "../../refs/ItemLink";
+import { itemKindNoun } from "../../refs/itemKindNoun";
 import { StatusPill, type StatusTone } from "../../shell/StatusPill";
 import { formatRelativeTime } from "../../util/time";
 
@@ -127,7 +128,10 @@ export function MemoryProposalCard({
         </div>
         <div style={sourceCellStyle} data-testid="memory-proposal-card-source">
           <span style={sourceLabelStyle}>From</span>
-          <ItemLink ref={proposal.source} />
+          <ItemLink
+            ref={proposal.source}
+            label={itemKindNoun(proposal.source.kind)}
+          />
         </div>
       </header>
 

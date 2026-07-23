@@ -19,5 +19,12 @@ export {
   type ActivityDestinationProps,
 } from "./ActivityDestination";
 
+// The shared wire→view-model projection both hosts compose (PRD-04 Seam C).
+export {
+  projectActivityRows,
+  buildMetaIndex,
+  mapRunStatus,
+} from "./activityProjection";
+
 export type { ActivityRunRow, ActivityRunStatus } from "@0x-copilot/api-types";
 export { ACTIVITY_RUN_STATUSES } from "@0x-copilot/api-types";

@@ -192,8 +192,8 @@ describe("desktop rail identity — regression guard (DoD 7 + 10)", () => {
   });
 });
 
-describe("desktop Activity — run-id forwarding (arity guard, DoD 9)", () => {
-  it("invokes onOpenRun WITH the row's run_id, not undefined", async () => {
+describe("desktop Activity — run forwarding (arity guard, PRD-04 Seam C)", () => {
+  it("invokes onOpenRun WITH the row's { conversationId, runId }, not undefined", async () => {
     const onOpenRun = vi.fn();
     const { container } = render(
       <TransportProvider transport={activityTransport()}>
@@ -207,6 +207,10 @@ describe("desktop Activity — run-id forwarding (arity guard, DoD 9)", () => {
     });
     fireEvent.click(row);
     // On `main` the binder passed `() => onOpenRun?.()`, dropping the id.
-    expect(onOpenRun).toHaveBeenCalledWith("run_abc");
+    // PRD-04 widens the argument to the row's conversation + run identity.
+    expect(onOpenRun).toHaveBeenCalledWith({
+      conversationId: "conv-abc",
+      runId: "run_abc",
+    });
   });
 });

@@ -32,6 +32,7 @@ import {
 import type { InboxItemId, ItemRef } from "@0x-copilot/api-types";
 
 import { ItemLink } from "../../refs/ItemLink";
+import { itemKindNoun } from "../../refs/itemKindNoun";
 import { StatusPill, type StatusTone } from "../../shell/StatusPill";
 
 import { InboxReply, type InboxReplyPayload } from "./inbox-reply";
@@ -266,7 +267,11 @@ export function InboxDetail({
             aria-label="Related items"
           >
             {item.links.map((linkRef) => (
-              <ItemLink key={`${linkRef.kind}:${linkRef.id}`} ref={linkRef} />
+              <ItemLink
+                key={`${linkRef.kind}:${linkRef.id}`}
+                ref={linkRef}
+                label={itemKindNoun(linkRef.kind)}
+              />
             ))}
           </div>
         ) : null}

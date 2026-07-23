@@ -1,67 +1,41 @@
 /* design-parity · live ACTIVITY destination render (vitest + jsdom)
  * =========================================================================
  * Renders the REAL @0x-copilot/chat-surface `ActivityDestination` — the exact
- * component both hosts mount for the `activity` slug (web:
- * apps/frontend/src/features/activity/ActivityRoute.tsx; desktop:
- * apps/desktop/renderer/destinationBinders.tsx → ActivityBinder) — to static
- * HTML, wrapped with the REAL design-system styles.css, so the browser
- * extractor reads the shipping computed styles. This is the "live" side of the
- * activity parity diff; the "design" side is the vendored Claude Design
- * ActivitySurface (design-kit/app-v3/index.html?dest=activity&state=default).
+ * component both hosts mount for the `activity` slug — to static HTML, wrapped
+ * with the REAL design-system styles.css, so the browser extractor reads the
+ * shipping computed styles. This is the "live" side of the activity parity diff;
+ * the "design" side is the vendored Claude Design ActivitySurface
+ * (design-kit/app-v3/index.html?dest=activity&state=default).
  *
  * Run:
  *   node_modules/.bin/vitest run --config tools/design-parity/vitest.config.mjs \
  *     lib/render-live-activity.test.tsx
  * Output: surfaces/activity/live/default.html  (+ copied ds.css)
  *
- * WHY A CLIENT RENDER, NOT renderToStaticMarkup
- * ---------------------------------------------
- * Non-running Activity rows render their title through `<ItemLink kind="run">`,
- * which resolves its label in a `useEffect` (refs/ItemLink.tsx:97-121).
- * `renderToStaticMarkup` never runs effects, so every done/paused/stopped row
- * would serialize as the `item-link-skeleton` "loading…" chip — measuring the
- * skeleton instead of the real row title. So we render through
- * @testing-library into jsdom (effects DO run), await the resolved links, and
- * then serialize `outerHTML`. The markup written to disk is therefore the real
- * post-effect DOM of the shipping component, not a re-authored copy.
- *
- * STYLESHEETS
- * -----------
- * The Activity surface ships ZERO CSS-file rules: `.pg` / `.pg-lead` /
- * `.rowlist` / `.act-day` / `.sect-h` are class HOOKS only — every visual
- * property comes from inline `CSSProperties` in ActivityDestination.tsx and its
- * `destinations/_shared/{Row,RowList,PageLead}.tsx` primitives (verified: no
- * .css file under packages/ or apps/ defines any of those selectors). The only
- * stylesheet that matters is the design-system token sheet those inline styles
- * read (`var(--color-*)`, `var(--font-size-*)`, …), so that is the only sheet
- * linked here.
+ * PRD-04 — every row's title is now PLAIN TEXT (`data-testid="activity-row-title"`,
+ * inside `<Row>`'s `[data-testid="row-title"]` slot). The old `<ItemLink kind="run">`
+ * that resolved a run's title in a `useEffect` (and, under the production
+ * registry, rendered the constant "Run") is gone: the row IS the click target.
+ * So there is no async resolution to await — a plain client render into jsdom
+ * serializes the real post-render DOM directly.
  * ========================================================================= */
 import { createElement as h } from "react";
 import { copyFileSync, mkdirSync, writeFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
-import { cleanup, render, screen, waitFor } from "@testing-library/react";
-import { afterEach, beforeAll, beforeEach, describe, expect, it } from "vitest";
+import { cleanup, render, screen } from "@testing-library/react";
+import { afterEach, beforeAll, describe, expect, it } from "vitest";
 
-import type { ActivityRunRow, RunId } from "@0x-copilot/api-types";
+import type {
+  ActivityRunRow,
+  ConversationId,
+  RunId,
+} from "@0x-copilot/api-types";
 import {
   ActivityDestination,
   RouterProvider,
   Topbar,
-  registerItemRefResolver,
-  resolveItemRef,
-  __resetItemRefRegistryForTests,
+  __resetItemRouteRegistryForTests,
 } from "@0x-copilot/chat-surface";
-
-// ---------------------------------------------------------------------------
-// ACT-06 probe seam — capture the registry state the PRODUCTION barrel leaves
-// behind, at import time, BEFORE any test's beforeEach/afterEach touches it.
-// Whatever this resolves to is exactly what both hosts get, because neither
-// apps/frontend nor apps/desktop ever calls registerItemRefResolver("run", …).
-// ---------------------------------------------------------------------------
-const PRODUCTION_RUN_REF = resolveItemRef({
-  kind: "run",
-  id: "run_treasury_recon",
-} as never);
 
 const HERE = (p: string) => fileURLToPath(new URL(p, import.meta.url));
 const REPO = (p: string) => HERE("../../../" + p); // tools/design-parity/lib -> repo root
@@ -70,13 +44,7 @@ const LIVE = (p: string) => HERE("../surfaces/activity/live/" + p);
 // ---------------------------------------------------------------------------
 // Fixture — mirrors the design's ACTIVITY fixture 1:1 in shape
 // (design-kit/app-v3/copilot-data.jsx:149-164): THREE day groups of 3 / 3 / 2
-// runs, same titles, same meta strings, same status mix
-// (running, done, done | paused, done, done | stopped, done).
-//
-// The design fixture carries wall-clock strings ("11:44"); the live wire type
-// carries an ISO `started_at` and the component derives BOTH the day grouping
-// and the relative time from it, so the times below are the design's clock
-// times rebuilt as local Date instances against a pinned `NOW`.
+// runs, same titles, same meta strings, same status mix.
 // ---------------------------------------------------------------------------
 
 // Local 12:30 on Thu 16 Jul 2026 — after the latest "Today" run (11:44) so the
@@ -90,6 +58,7 @@ const ACTIVITY_ROWS: ReadonlyArray<ActivityRunRow> = [
   // --- Today (Jul 16) ---
   {
     run_id: "run_launch_week_ops" as RunId,
+    conversation_id: "conv_launch_week_ops" as ConversationId,
     title: "Launch Week ops",
     status: "running",
     meta: "4 apps · 7 steps · awaiting 1 approval",
@@ -97,6 +66,7 @@ const ACTIVITY_ROWS: ReadonlyArray<ActivityRunRow> = [
   },
   {
     run_id: "run_treasury_recon" as RunId,
+    conversation_id: "conv_treasury_recon" as ConversationId,
     title: "Weekly treasury reconciliation",
     status: "done",
     meta: "Sheets, Safe, Dune · 12 steps · balanced",
@@ -104,6 +74,7 @@ const ACTIVITY_ROWS: ReadonlyArray<ActivityRunRow> = [
   },
   {
     run_id: "run_investor_update" as RunId,
+    conversation_id: "conv_investor_update" as ConversationId,
     title: "Draft investor update",
     status: "done",
     meta: "Docs · 5 steps · saved to Local files",
@@ -112,6 +83,7 @@ const ACTIVITY_ROWS: ReadonlyArray<ActivityRunRow> = [
   // --- Yesterday (Jul 15) ---
   {
     run_id: "run_rebalance_lp" as RunId,
+    conversation_id: "conv_rebalance_lp" as ConversationId,
     title: "Rebalance LP positions",
     status: "paused",
     meta: "paused — needed your approval on a swap",
@@ -119,6 +91,7 @@ const ACTIVITY_ROWS: ReadonlyArray<ActivityRunRow> = [
   },
   {
     run_id: "run_triage_github" as RunId,
+    conversation_id: "conv_triage_github" as ConversationId,
     title: "Triage new GitHub issues",
     status: "done",
     meta: "GitHub · 9 steps · 3 labeled, 1 escalated",
@@ -126,6 +99,7 @@ const ACTIVITY_ROWS: ReadonlyArray<ActivityRunRow> = [
   },
   {
     run_id: "run_discord_ama" as RunId,
+    conversation_id: "conv_discord_ama" as ConversationId,
     title: "Summarize Discord AMA",
     status: "done",
     meta: "Discord · 4 steps · posted recap",
@@ -134,6 +108,7 @@ const ACTIVITY_ROWS: ReadonlyArray<ActivityRunRow> = [
   // --- Mon, Jul 14 (the design's explicit-date divider) ---
   {
     run_id: "run_vendor_invoices" as RunId,
+    conversation_id: "conv_vendor_invoices" as ConversationId,
     title: "Vendor invoice batch",
     status: "stopped",
     meta: "stopped — you rejected 2 of 6 payouts",
@@ -141,6 +116,7 @@ const ACTIVITY_ROWS: ReadonlyArray<ActivityRunRow> = [
   },
   {
     run_id: "run_competitor_digest" as RunId,
+    conversation_id: "conv_competitor_digest" as ConversationId,
     title: "Competitor launch digest",
     status: "done",
     meta: "Web · 6 steps · saved 1 page",
@@ -148,22 +124,27 @@ const ACTIVITY_ROWS: ReadonlyArray<ActivityRunRow> = [
   },
 ];
 
-// ---------------------------------------------------------------------------
-// Ports / context the surface needs
-// ---------------------------------------------------------------------------
+// The 7 titles the OLD code hid behind the constant "Run" (every non-running
+// row). PRD-04's regression guard asserts they now render.
+const PREVIOUSLY_HIDDEN_TITLES = [
+  "Weekly treasury reconciliation",
+  "Draft investor update",
+  "Rebalance LP positions",
+  "Triage new GitHub issues",
+  "Summarize Discord AMA",
+  "Vendor invoice batch",
+  "Competitor launch digest",
+] as const;
 
-// ItemLink (non-running row titles) navigates through the Router port. The
-// parity render never clicks, so navigate is inert.
+// ---------------------------------------------------------------------------
+// Ports / context the surface needs. The parity render never activates a row.
+// ---------------------------------------------------------------------------
 const fakeRouter = {
   current: () => ({ kind: "run", runId: "run_launch_week_ops" }) as never,
   navigate: () => undefined,
   subscribe: () => () => undefined,
 };
 
-/** Wrap the captured markup with the REAL design-system token sheet and a
- *  fixed dark frame approximating the destination viewport the shell gives
- *  Activity. Typography/color/border/padding are frame-independent; width and
- *  height are comparator noise. */
 function shell(inner: string): string {
   return `<!doctype html>
 <html lang="en" data-theme="dark">
@@ -191,9 +172,6 @@ describe("live activity — ActivityDestination → static HTML", () => {
   beforeAll(() => {
     mkdirSync(LIVE(""), { recursive: true });
     copyFileSync(REPO("packages/design-system/src/styles.css"), LIVE("ds.css"));
-    // ds.css @font-face's the vendored JetBrains Mono at a path relative to
-    // itself — copy the woff2s alongside so the mono day-dividers / times
-    // measure with the REAL face instead of a fallback metric.
     mkdirSync(LIVE("fonts"), { recursive: true });
     for (const f of [
       "jetbrains-mono-latin.woff2",
@@ -206,27 +184,12 @@ describe("live activity — ActivityDestination → static HTML", () => {
     }
   });
 
-  beforeEach(() => {
-    // The "run" resolver is HOST-owned (the Run destination registers it); the
-    // parity harness stands in for the host with the same contract the real
-    // resolver honours: label = the run's display title.
-    registerItemRefResolver(
-      "run",
-      async (id) => ({
-        label: ACTIVITY_ROWS.find((r) => r.run_id === id)?.title ?? `Run ${id}`,
-        icon: null,
-        route: { kind: "run", runId: id },
-      }),
-      { replace: true },
-    );
-  });
-
   afterEach(() => {
-    __resetItemRefRegistryForTests();
+    __resetItemRouteRegistryForTests();
     cleanup();
   });
 
-  it("default — the day-grouped run feed", async () => {
+  it("default — the day-grouped run feed (titles are plain text)", () => {
     render(
       h(
         RouterProvider,
@@ -234,9 +197,6 @@ describe("live activity — ActivityDestination → static HTML", () => {
         h(
           "div",
           { style: { display: "flex", flexDirection: "column", flex: 1 } },
-          // Shell chrome the design's activity page also shows (topbar title +
-          // subtitle). Rendered exactly as ChatShell mounts it for this slug:
-          // NEITHER host passes `topbarLeaf`, so `leaf` is null here on purpose.
           h(Topbar, { activeDestination: "activity", leaf: null }),
           h(ActivityDestination, {
             items: { status: "ok", data: ACTIVITY_ROWS },
@@ -248,16 +208,11 @@ describe("live activity — ActivityDestination → static HTML", () => {
       ),
     );
 
-    // Wait for every ItemLink to resolve — otherwise the done/paused/stopped
-    // rows serialize as the "loading…" skeleton and the diff measures nothing.
-    await waitFor(() => {
-      expect(screen.queryAllByTestId("item-link-skeleton")).toHaveLength(0);
-      expect(screen.getAllByTestId("item-link")).toHaveLength(7);
-    });
-
-    // Sanity: the real surface actually rendered its rows + groups.
+    // PRD-04 — no ItemLink anywhere; every row's title is plain text.
+    expect(screen.queryAllByTestId("item-link")).toHaveLength(0);
     expect(screen.getAllByTestId("activity-day-group")).toHaveLength(3);
     expect(screen.getAllByTestId("activity-row")).toHaveLength(8);
+    expect(screen.getAllByTestId("activity-row-title")).toHaveLength(8);
 
     const topbar = document.querySelector('[data-component="topbar"]');
     const surface = document.querySelector(
@@ -273,48 +228,23 @@ describe("live activity — ActivityDestination → static HTML", () => {
 });
 
 // ===========================================================================
-// ACT-06 — per-run title, rendered with the PRODUCTION ItemRef registry
+// ACT-06 — per-run title (INVERTED, PRD-04 DoD 8)
 // ===========================================================================
 //
-// The parity render above stands in for the host with a resolver that returns
-// the run's real title. This block asks the opposite question: what does the
-// shipping app render, given the registry as the barrel actually leaves it?
-//
-// Grep-established facts this block turns into an executable assertion:
-//   * the ONLY non-test registerItemRefResolver("run", …) in the repo is the
-//     placeholder at packages/chat-surface/src/destinations/home/index.ts:54,
-//     which returns the constant label "Run";
-//   * apps/frontend/src/app/App.tsx registers todo / inbox_item / project /
-//     library_* / agent (:229…:303) — never "run";
-//   * apps/desktop contains no registerItemRefResolver call at all;
-//   * packages/chat-surface/src/destinations/run/index.ts (the destination the
-//     in-repo test comments credit with owning it) exports no resolver.
-describe("ACT-06 · per-run title under the production registry", () => {
+// The old ACT-06 pinned the BUG: it re-seeded the placeholder "run" resolver
+// (destinations/home/index.ts:54, `label: "Run"`) and asserted all 7
+// non-running rows read "Run" while each real title `queryByText` → null. PRD-04
+// deletes that resolver AND the ItemLink call site, so this block now asserts
+// the opposite: with NO "run" route registered (the barrel registers none),
+// the surface renders ZERO `item-link`s and EACH previously-hidden title is
+// present.
+describe("ACT-06 · per-run title renders (no ItemLink, no constant label)", () => {
   afterEach(() => {
+    __resetItemRouteRegistryForTests();
     cleanup();
   });
 
-  it('the barrel\'s own "run" resolver returns the constant label "Run"', async () => {
-    const resolved = await PRODUCTION_RUN_REF;
-    expect(resolved).not.toBeNull();
-    expect(resolved!.label).toBe("Run");
-  });
-
-  it('every non-running row therefore renders "Run" instead of its title', async () => {
-    // Re-seed the registry with the EXACT placeholder body from
-    // destinations/home/index.ts:54-61 (the earlier describe's afterEach
-    // cleared the module-singleton map).
-    registerItemRefResolver(
-      "run",
-      async (id) => ({
-        label: "Run",
-        icon: null,
-        route: { kind: "run", runId: id as unknown as string },
-        breadcrumb: "Runs",
-      }),
-      { replace: true },
-    );
-
+  it("renders every real title as plain text and NO item-link, with no run route registered", () => {
     render(
       h(
         RouterProvider,
@@ -328,33 +258,22 @@ describe("ACT-06 · per-run title under the production registry", () => {
       ),
     );
 
-    await waitFor(() => {
-      expect(screen.queryAllByTestId("item-link-skeleton")).toHaveLength(0);
-      expect(screen.getAllByTestId("item-link")).toHaveLength(7);
-    });
-
-    // The 7 non-running rows all read "Run"; their projected titles are gone.
+    // No cross-destination link is rendered — the title is plain row text.
     const linkLabels = screen
-      .getAllByTestId("item-link")
+      .queryAllByTestId("item-link")
       .map((el) => el.textContent);
-    expect(linkLabels).toEqual(Array.from({ length: 7 }, () => "Run"));
+    expect(linkLabels).toEqual([]);
 
-    for (const title of [
-      "Weekly treasury reconciliation",
-      "Draft investor update",
-      "Rebalance LP positions",
-      "Triage new GitHub issues",
-      "Summarize Discord AMA",
-      "Vendor invoice batch",
-      "Competitor launch digest",
-    ]) {
-      expect(screen.queryByText(title)).toBeNull();
+    // Each of the 7 titles the old constant-"Run" resolver hid is now present.
+    // (`getByText` throws if absent, so a truthy result IS the presence proof;
+    // the design-parity harness loads no jest-dom `toBeInTheDocument` matcher.)
+    for (const title of PREVIOUSLY_HIDDEN_TITLES) {
+      expect(screen.getByText(title)).toBeTruthy();
     }
 
-    // Only the single running row keeps its title (rendered directly, not
-    // through ItemLink — ActivityDestination.tsx:511-515).
-    expect(screen.getByTestId("activity-row-title").textContent).toBe(
-      "Launch Week ops",
-    );
+    // The running row keeps its title too (all 8 render as plain text now).
+    expect(
+      screen.getAllByTestId("activity-row-title").map((e) => e.textContent),
+    ).toContain("Launch Week ops");
   });
 });

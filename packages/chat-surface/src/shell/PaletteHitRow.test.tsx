@@ -2,20 +2,20 @@
 // fire onActivate.
 
 import type { ConversationId, PaletteHit } from "@0x-copilot/api-types";
-import { fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { fireEvent, render, screen } from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
 import { RouterProvider } from "../providers/RouterProvider";
 import {
-  __resetItemRefRegistryForTests,
-  registerItemRefResolver,
+  __resetItemRouteRegistryForTests,
+  registerItemRoute,
 } from "../refs/registry";
 import type { ArtifactRoute, Router } from "../routing/router";
 
 import { PaletteHitRow } from "./PaletteHitRow";
 
 afterEach(() => {
-  __resetItemRefRegistryForTests();
+  __resetItemRouteRegistryForTests();
 });
 
 function makeRouter(): {
@@ -114,12 +114,8 @@ describe("<PaletteHitRow>", () => {
     expect(onHover).toHaveBeenCalledTimes(1);
   });
 
-  it("renders an entity hit through <ItemLink> and routes via the registry", async () => {
-    registerItemRefResolver("chat", async () => ({
-      label: "Acme renewal",
-      icon: null,
-      route: { kind: "chat", conversationId: "conv_001" },
-    }));
+  it("renders an entity hit through <ItemLink> (label = hit.title) and routes via the registry", () => {
+    registerItemRoute("chat", (id) => ({ kind: "chat", conversationId: id }));
     const hit: PaletteHit = {
       id: "hit_ent_1",
       kind: "entity",
@@ -128,9 +124,8 @@ describe("<PaletteHitRow>", () => {
       score: 0.95,
     };
     renderRow(hit);
-    await waitFor(() =>
-      expect(screen.getByTestId("item-link")).toBeInTheDocument(),
-    );
+    const link = screen.getByTestId("item-link");
+    expect(link).toHaveTextContent("Acme renewal");
     expect(screen.queryByTestId("palette-hit-button")).toBeNull();
   });
 

@@ -24,7 +24,7 @@
 // * `RunId` — branded ID in ./brands.ts (`ItemRef` kind="run" resolves to
 //   `RunId` in ./refs.ts; the running-row open target).
 
-import type { RunId } from "./brands";
+import type { ConversationId, RunId } from "./brands";
 
 // ---------------------------------------------------------------------------
 // Status taxonomy (DESIGN-SPEC §3 — Activity row status chip)
@@ -69,6 +69,14 @@ export type ActivityRunStatus = (typeof ACTIVITY_RUN_STATUSES)[number];
  */
 export interface ActivityRunRow {
   readonly run_id: RunId;
+  /**
+   * The conversation the run belongs to — the navigable identity. Both host
+   * projections already hold this value (the conversation-list spine is keyed
+   * by it); it is now carried on the row so activating a row can open the Run
+   * cockpit bound to the conversation (the cockpit binds by conversation id,
+   * never by run id). Distinct from `run_id` (PRD-04 Seam C).
+   */
+  readonly conversation_id: ConversationId;
   readonly title: string;
   readonly status: ActivityRunStatus;
   /** One-line summary of the tools / connectors the run touched. */

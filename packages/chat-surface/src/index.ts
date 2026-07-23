@@ -454,19 +454,19 @@ export type {
   UserId,
 } from "@0x-copilot/api-types";
 
-// ItemLink registry + renderer (cross-audit §3.3).
+// ItemLink route registry + renderer (cross-audit §3.3; PRD-04 route-only).
 export {
   ItemLink,
-  ItemRefResolverAlreadyRegistered,
-  ItemRefResolverNotRegistered,
-  __resetItemRefRegistryForTests,
-  hasItemRefResolver,
-  registerItemRefResolver,
-  resolveItemRef,
-  unregisterItemRefResolver,
+  itemKindNoun,
+  ItemRouteAlreadyRegistered,
+  ItemRouteNotRegistered,
+  __resetItemRouteRegistryForTests,
+  hasItemRoute,
+  registerItemRoute,
+  resolveItemRoute,
+  unregisterItemRoute,
   type ItemLinkProps,
-  type ItemRefResolved,
-  type ItemRefResolver,
+  type ItemRouteResolver,
 } from "./refs";
 
 // Time formatting (cross-audit §3.4).
@@ -1171,6 +1171,9 @@ export {
   ActivityDestination,
   activityStatusTone,
   groupActivityByDay,
+  projectActivityRows,
+  buildMetaIndex,
+  mapRunStatus,
   ACTIVITY_LEAD_COPY,
   ACTIVITY_RETENTION_LINK_COPY,
   ACTIVITY_RUN_STATUSES,

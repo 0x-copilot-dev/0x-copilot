@@ -26,8 +26,8 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { RouterProvider } from "../../providers/RouterProvider";
 import { TransportProvider } from "../../providers/TransportProvider";
 import {
-  __resetItemRefRegistryForTests,
-  registerItemRefResolver,
+  __resetItemRouteRegistryForTests,
+  registerItemRoute,
 } from "../../refs/registry";
 import type { ArtifactRoute, Router } from "../../routing/router";
 
@@ -40,7 +40,7 @@ import {
 } from "./LibraryDetailView";
 
 afterEach(() => {
-  __resetItemRefRegistryForTests();
+  __resetItemRouteRegistryForTests();
 });
 
 function makeTransport(): Transport {
@@ -307,11 +307,10 @@ describe("<LibraryDetailView>", () => {
       kind: "chat",
       id: "conv_42" as ConversationId,
     };
-    registerItemRefResolver("chat", async (id) => ({
-      label: `Chat ${id}`,
-      icon: null,
-      route: { kind: "chat", conversationId: id } as ArtifactRoute,
-    }));
+    registerItemRoute(
+      "chat",
+      (id) => ({ kind: "chat", conversationId: id }) as ArtifactRoute,
+    );
 
     render(
       harness(
@@ -331,9 +330,7 @@ describe("<LibraryDetailView>", () => {
         />,
       ),
     );
-    await waitFor(() => {
-      expect(screen.getByTestId("item-link")).toBeTruthy();
-    });
+    expect(screen.getByTestId("item-link")).toBeTruthy();
     expect(screen.getByTestId("item-link").getAttribute("data-item-id")).toBe(
       "conv_42",
     );
@@ -344,11 +341,10 @@ describe("<LibraryDetailView>", () => {
       kind: "chat",
       id: "conv_7" as ConversationId,
     };
-    registerItemRefResolver("chat", async (id) => ({
-      label: `Chat ${id}`,
-      icon: null,
-      route: { kind: "chat", conversationId: id } as ArtifactRoute,
-    }));
+    registerItemRoute(
+      "chat",
+      (id) => ({ kind: "chat", conversationId: id }) as ArtifactRoute,
+    );
 
     render(
       harness(
@@ -364,9 +360,7 @@ describe("<LibraryDetailView>", () => {
     expect(
       screen.getByTestId("library-detail-cross-refs").textContent,
     ).toContain("Cited in 1 chat");
-    await waitFor(() => {
-      expect(screen.getByTestId("item-link")).toBeTruthy();
-    });
+    expect(screen.getByTestId("item-link")).toBeTruthy();
   });
 
   it("calls onBack when provided", () => {

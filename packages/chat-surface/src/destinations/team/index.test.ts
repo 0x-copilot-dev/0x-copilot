@@ -1,30 +1,24 @@
-// Team destination — ItemRef resolver registration.
-
-import type { UserId } from "@0x-copilot/api-types";
 import { describe, expect, it } from "vitest";
 
-import { hasItemRefResolver, resolveItemRef } from "../../refs/registry";
+import {
+  __resetItemRouteRegistryForTests,
+  hasItemRoute,
+} from "../../refs/registry";
 
-// Importing the destination's index runs its `registerIfAbsent(...)`
-// calls as a side-effect; the test asserts on the post-import state.
+// PRD-04 Seam B — cross-destination ROUTE registration moved OUT of the
+// destinations and INTO the host tables (apps/frontend/src/app/itemRoutes.ts,
+// apps/desktop/renderer/itemRoutes.ts). Importing this destination must have NO
+// route-registry side effect: it registers nothing. (The display label is now
+// the caller's, via `<ItemLink label={…}>`.)
 import "./index";
 
-describe("team/index.ts — ItemRef resolver registration", () => {
-  it("registers a resolver for kind `person`", () => {
-    expect(hasItemRefResolver("person")).toBe(true);
-  });
-
-  it("resolves a person ref to a non-null route + 'Person' label", async () => {
-    const resolved = await resolveItemRef({
-      kind: "person",
-      id: "u_abc" as UserId,
-    });
-    expect(resolved).not.toBeNull();
-    expect(resolved!.label).toBe("Person");
-    expect(resolved!.route).toMatchObject({
-      kind: "workspace",
-      workspaceId: "u_abc",
-    });
-    expect(resolved!.breadcrumb).toBe("Team");
+describe("team/index.ts — registers no ItemRoute on import (Seam B)", () => {
+  it("leaves the route registry untouched for the kinds it used to own", () => {
+    __resetItemRouteRegistryForTests();
+    // Importing "./index" above ran any module-load side effects already; a
+    // fresh reset then re-check proves the import path itself registers nothing.
+    for (const kind of ["person"] as const) {
+      expect(hasItemRoute(kind)).toBe(false);
+    }
   });
 });

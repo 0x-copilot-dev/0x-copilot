@@ -167,12 +167,11 @@ describe("MemoryDetailView", () => {
     });
     fireEvent.click(screen.getByTestId("filter-tab-provenance"));
     const panel = screen.getByTestId("memory-detail-provenance");
-    // ItemLink starts in loading state and resolves to a link chip or
-    // a deleted-chip if the project resolver isn't registered in this
-    // test. Either way the testid surface is present.
+    // ItemLink renders synchronously (PRD-04): an anchor when a project route
+    // is registered, else inert `item-link-static` text. No route here → span.
     expect(
       panel.querySelector(
-        '[data-testid="item-link"], [data-testid="item-link-deleted"], [data-testid="item-link-skeleton"]',
+        '[data-testid="item-link"], [data-testid="item-link-static"]',
       ),
     ).not.toBeNull();
   });

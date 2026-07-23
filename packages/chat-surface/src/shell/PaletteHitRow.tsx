@@ -145,7 +145,7 @@ export function PaletteHitRow({
           {iconGlyph(hit.icon_hint)}
         </span>
         <span style={itemLinkSlotStyle}>
-          <ItemLink ref={hit.target} />
+          <ItemLink ref={hit.target} label={hit.title} />
           {hit.subtitle !== undefined && hit.subtitle.length > 0 ? (
             <span style={subtitleStyle} data-testid="palette-hit-subtitle">
               {hit.subtitle}

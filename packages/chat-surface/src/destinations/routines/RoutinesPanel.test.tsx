@@ -15,13 +15,11 @@ import type { ArtifactRoute, Router } from "../../routing/router";
 // `<ItemLink kind="project">`. Project resolver lives in apps/frontend's
 // host wiring; for this isolated test we register a minimal project
 // resolver too so the link renders without throwing.
-import "./index";
 import {
-  __resetItemRefRegistryForTests,
-  hasItemRefResolver,
-  registerItemRefResolver,
+  __resetItemRouteRegistryForTests,
+  hasItemRoute,
+  registerItemRoute,
 } from "../../refs/registry";
-import "./index"; // re-import is idempotent — the guard inside the resolver block keeps it safe.
 
 import {
   RoutinesPanel,
@@ -51,13 +49,11 @@ function makeRouter(): Router<ArtifactRoute> {
 }
 
 function renderPanel(props: RoutinesPanelProps = {}): void {
-  // Register a minimal project resolver if absent so ItemLink doesn't
-  // throw inside the project list.
-  if (!hasItemRefResolver("project")) {
-    registerItemRefResolver("project", async (id) => ({
-      label: `Project ${id as unknown as string}`,
-      icon: null,
-      route: { kind: "workspace", workspaceId: id as unknown as string },
+  // Register a minimal project route if absent so ItemLink renders an anchor.
+  if (!hasItemRoute("project")) {
+    registerItemRoute("project", (id) => ({
+      kind: "workspace",
+      workspaceId: id,
     }));
   }
   render(
@@ -224,6 +220,6 @@ describe("RoutinesPanel", () => {
 });
 
 // Keep the unused-import warning quiet — the test imports
-// `__resetItemRefRegistryForTests` for future failure-resetting; if it
+// `__resetItemRouteRegistryForTests` for future failure-resetting; if it
 // drifts, this line forces a touch.
-void __resetItemRefRegistryForTests;
+void __resetItemRouteRegistryForTests;

@@ -18,13 +18,15 @@
 // wrapped in a `SectionResult`. The component groups by day in-shell using
 // the injected `now` (FR-4.14) — day grouping never rides the wire.
 //
-// Navigation (FR-4.16):
-//   * running rows → `onOpenRun(run_id)` — a host callback that jumps into
-//     the live Run cockpit.
-//   * non-running rows → `<ItemLink kind="run">` — registry navigation to a
-//     read-only run detail (the codebase's cross-destination link pattern,
-//     cross-audit §3.3). The host registers the `"run"` resolver; its
-//     resolved label is the run's display title.
+// Navigation (FR-4.16; reshaped by PRD-04 Seam C):
+//   * EVERY row is the click target (the design's row-as-button affordance).
+//     Activating a row calls `onOpenRun({ conversationId, runId })` — a host
+//     callback that opens the Run cockpit bound to the run's CONVERSATION (the
+//     cockpit binds by conversation id, never by run id). This replaces the old
+//     split where running rows called `onOpenRun(run_id)` and non-running rows
+//     navigated through a cross-destination run link whose resolver returned the
+//     constant noun "Run" and (on web) a route that landed on
+//     `/settings#undefined`. The title is now plain text for every status.
 //
 // Wire types (`ActivityRunRow`, `ActivityRunStatus`, `ACTIVITY_RUN_STATUSES`)
 // come from `@0x-copilot/api-types` (PR-4.1, already merged) — never
@@ -35,12 +37,12 @@ import { useMemo, type CSSProperties, type ReactElement } from "react";
 import type {
   ActivityRunRow,
   ActivityRunStatus,
+  ConversationId,
   RunId,
   SectionResult,
 } from "@0x-copilot/api-types";
 
 import { Icon } from "../../icons/Icon";
-import { ItemLink } from "../../refs/ItemLink";
 import { BrandMark } from "../../shell/BrandMark";
 import { EmptyState } from "../../shell/EmptyState";
 import { StatusPill, type StatusTone } from "../../shell/StatusPill";
@@ -214,11 +216,16 @@ export interface ActivityDestinationProps {
   readonly items?: SectionResult<ReadonlyArray<ActivityRunRow>> | null;
 
   /**
-   * Running-row activation — host jumps into the live Run cockpit
-   * (FR-4.16). Non-running rows navigate via the `"run"` ItemLink resolver
-   * instead, so they intentionally do NOT call this.
+   * Row activation — the host opens the Run cockpit bound to the row's
+   * CONVERSATION (FR-4.16; PRD-04 Seam C). Fired for EVERY row (running and
+   * finished alike — the design's row-as-button affordance), carrying both the
+   * conversation id (the cockpit's bind target) and the run id (which specific
+   * run within the conversation the row names).
    */
-  readonly onOpenRun?: (runId: RunId) => void;
+  readonly onOpenRun?: (target: {
+    readonly conversationId: ConversationId;
+    readonly runId: RunId;
+  }) => void;
 
   /**
    * Retention/export/delete link — host opens Settings → Privacy
@@ -493,14 +500,11 @@ function ActivityRow({
     </span>
   );
 
-  // Non-running rows navigate through the `"run"` ItemLink resolver (FR-4.16).
-  // The resolved label is the run's display title; while it resolves (or if the
-  // run was deleted) the projected `title` stands in via `deletedLabel`.
-  const title = isRunning ? (
-    <span data-testid="activity-row-title">{row.title}</span>
-  ) : (
-    <ItemLink ref={{ kind: "run", id: row.run_id }} deletedLabel={row.title} />
-  );
+  // The title is PLAIN TEXT for every status (PRD-04 Seam C). The row itself is
+  // the click target, so the title is not a link — no accent, no anchor. The
+  // real `row.title` renders directly; the old cross-destination run link that
+  // discarded it in favour of the constant "Run" is gone.
+  const title = <span data-testid="activity-row-title">{row.title}</span>;
 
   // The tools/connectors line is BODY font (the row `sub`), not mono — the mono
   // is reserved for the relative time in the right meta column.
@@ -527,15 +531,23 @@ function ActivityRow({
     </time>
   );
 
+  // Every row activates (PRD-04 Seam C — the design's row-as-button). The host
+  // opens the Run cockpit bound to the row's CONVERSATION; the run id names the
+  // specific run within it.
   const activate =
-    isRunning && onOpenRun !== undefined
-      ? () => onOpenRun(row.run_id)
+    onOpenRun !== undefined
+      ? () =>
+          onOpenRun({
+            conversationId: row.conversation_id,
+            runId: row.run_id,
+          })
       : undefined;
 
   return (
     <Row
       data-testid="activity-row"
       data-run-id={row.run_id}
+      data-conversation-id={row.conversation_id}
       data-status={row.status}
       data-row-title={row.title}
       data-open={isRunning ? "run" : "detail"}
@@ -545,9 +557,7 @@ function ActivityRow({
       sub={sub}
       meta={meta}
       onActivate={activate}
-      ariaLabel={
-        activate !== undefined ? `Open running run: ${row.title}` : undefined
-      }
+      ariaLabel={activate !== undefined ? `Open run: ${row.title}` : undefined}
     />
   );
 }

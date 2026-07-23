@@ -795,7 +795,7 @@ function ProjectFileRowView({
           </time>
         ) : null}
         <span data-testid="project-file-row-open">
-          <ItemLink ref={fileRef} deletedLabel={row.name} />
+          <ItemLink ref={fileRef} label={row.name} />
         </span>
       </div>
     </li>
