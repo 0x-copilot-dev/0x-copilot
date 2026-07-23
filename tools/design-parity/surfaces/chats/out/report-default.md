@@ -1,11 +1,11 @@
-# Design-parity report — chats · `default`
+# Design-parity report — `default`
 
 Design baseline (source of truth) vs live app, by computed style.
 
 - Design: `surfaces/chats/out/design-default.json`
 - Live: `surfaces/chats/out/live-default.json`
 
-**Summary:** 🔴 HIGH 1 · 🟠 MEDIUM 23 · 🟡 LOW 48 · ⚪ INFO 8
+**Summary:** 🔴 HIGH 1 · 🟠 MEDIUM 23 · 🟡 LOW 47 · ⚪ INFO 8
 
 ## 🔴 HIGH (1)
 
@@ -41,7 +41,7 @@ Design baseline (source of truth) vs live app, by computed style.
 | `sect.recent`      | Sections      | margin         | 22px 0px 10px 0px → 0px                                    |
 | `sect.archived`    | Sections      | margin         | 22px 0px 10px 0px → 0px                                    |
 
-## 🟡 LOW (48)
+## 🟡 LOW (47)
 
 | Element                | Group         | Property   | Design → Live                                                                                                                                                                                                             |
 | ---------------------- | ------------- | ---------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
@@ -92,7 +92,6 @@ Design baseline (source of truth) vs live app, by computed style.
 | `sect.archived`        | Sections      | width      | 912px → 123.125px                                                                                                                                                                                                         |
 | `sect.archived`        | Sections      | height     | 14.25px → 13px                                                                                                                                                                                                            |
 | `sect.archived`        | Sections      | tag        | <div> → <h2> (semantic/default-style change)                                                                                                                                                                              |
-| `chip.archived`        | Status pills  | width      | 68.4219px → 68.4062px                                                                                                                                                                                                     |
 
 ## ⚪ INFO (8)
 
