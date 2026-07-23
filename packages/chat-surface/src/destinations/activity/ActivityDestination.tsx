@@ -483,7 +483,6 @@ function DayGroup({
     >
       <h2
         id={headingId}
-        className="act-day"
         data-testid="activity-day"
         data-day-key={group.key}
         style={dayDividerStyle}

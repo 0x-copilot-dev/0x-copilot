@@ -245,7 +245,6 @@ describe("<ActivityDestination> — 4 states", () => {
     );
     const dividers = screen.getAllByTestId("activity-day");
     expect(dividers.map((d) => d.textContent)).toEqual(["Today", "Yesterday"]);
-    expect(dividers[0]).toHaveClass("act-day");
   });
 
   // DoD 19 — Retry lives in the page header, so it renders in error, empty AND
@@ -309,7 +308,7 @@ describe("<ActivityDestination> — 4 states", () => {
 // ===========================================================================
 
 describe("<ActivityDestination> — day divider (D7)", () => {
-  it("renders an explicit date as 'Mon, Jul 14', class act-day (no sect-h), quiet type (DoD 8)", () => {
+  it("renders an explicit date as 'Mon, Jul 14', no vestigial class, quiet type (DoD 8)", () => {
     // en-US so the design's US-ordered "Mon, Jul 14" is produced (en-GB yields
     // day-first "Mon 14 Jul"); Jul 14 2025 is a Monday and same-year as `now`,
     // so no year is appended.
@@ -328,9 +327,11 @@ describe("<ActivityDestination> — day divider (D7)", () => {
     );
     const divider = screen.getByTestId("activity-day");
     expect(divider.textContent).toBe("Mon, Jul 14");
-    // Stopped claiming to be a section header.
-    expect(divider.className).toBe("act-day");
-    expect(divider.className).not.toContain("sect-h");
+    // The divider carries no decorative class at all — the mock's `.act-day`
+    // (and the section-header `.sect-h` it once wore) carried no CSS in the
+    // shipped app; the quiet type below is drawn entirely by inline tokens.
+    // PRD-13 deleted the vestigial `act-day` stamp.
+    expect(divider.className).toBe("");
     // Quiet: no uppercase, no tracking (the design sets neither).
     expect(getComputedStyle(divider).textTransform).toBe("none");
     expect(getComputedStyle(divider).letterSpacing).toBe("normal");

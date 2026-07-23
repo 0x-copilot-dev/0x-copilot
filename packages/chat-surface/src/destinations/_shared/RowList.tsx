@@ -53,7 +53,10 @@ export function RowList<T>({
 }: RowListProps<T>): ReactElement {
   return (
     <ul
-      className={className === undefined ? "rowlist" : `rowlist ${className}`}
+      // No decorative class: the design's `.rowlist` carried no CSS in the
+      // shipped app (the card geometry above is the real contract). A
+      // caller-supplied `className` is forwarded unchanged. Deleted in PRD-13.
+      className={className}
       aria-label={ariaLabel}
       data-testid={dataTestId}
       style={{ ...cardStyle, ...style }}
