@@ -21,6 +21,7 @@ from agent_runtime.execution.contracts import RuntimeErrorCode
 from agent_runtime.execution.models import ModelConfigResolver
 from agent_runtime.pricing import ModelPricingCatalog
 from agent_runtime.settings import RuntimeSettings
+from agent_runtime.surfaces_v2.content import SurfaceContentProjection
 from agent_runtime.surfaces_v2.projection import SurfaceStoreProjection
 from runtime_api.http.errors import RuntimeApiError
 from runtime_api.schemas import (
@@ -38,7 +39,10 @@ from runtime_api.schemas import (
     RunStatusResponse,
     RuntimeEventReplayResponse,
 )
-from runtime_api.schemas.surfaces_v2 import RunSurfacesResponse
+from runtime_api.schemas.surfaces_v2 import (
+    HydratedSurfaceSnapshot,
+    RunSurfacesResponse,
+)
 from starlette import status
 
 
@@ -514,6 +518,13 @@ class ConversationQueryService:
         it is additive and, with no v2 events, returns an empty list — harmless
         and honest. Scope check mirrors ``replay_events`` (404 on wrong-tenant or
         unknown run).
+
+        PRD-B2 — content hydration: each metadata snapshot is enriched with its
+        materialized ``state`` (``{spec?, data}``), resolved from the same events
+        by ``SurfaceContentProjection`` (the v1 surface envelope keyed by
+        ``surface_uri == surface_id``). The content fold runs only when the
+        metadata fold produced surfaces — with the flag off there are none, so the
+        response is byte-identical to before (empty ``surfaces``, no wasted scan).
         """
 
         await self._run_for_scope(org_id=org_id, user_id=user_id, run_id=run_id)
@@ -523,9 +534,17 @@ class ConversationQueryService:
             after_sequence=0,
         )
         state = SurfaceStoreProjection.fold(run_id, events)
+        content = SurfaceContentProjection.fold(events) if state.surfaces else {}
+        surfaces = tuple(
+            HydratedSurfaceSnapshot(
+                **snapshot.model_dump(),
+                state=content.get(snapshot.surface_id) or None,
+            )
+            for snapshot in state.surfaces
+        )
         return RunSurfacesResponse(
             run_id=state.run_id,
-            surfaces=state.surfaces,
+            surfaces=surfaces,
             latest_sequence_no=state.latest_sequence_no,
         )
 

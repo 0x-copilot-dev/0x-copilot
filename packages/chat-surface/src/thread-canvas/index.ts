@@ -59,6 +59,34 @@ export {
 } from "./ledgerProjection";
 // === end PRD-B1 ===
 
+// === Surfaces v2 — PRD-B2 provenance + honest states ===
+// Pure PEERS of `projectLedger` over the SAME `session.events` array, plus the
+// footer / skeleton / raw-fallback / status-strip chrome they feed. All mount
+// strictly inside B1's v2 canvas subtree (flag-off byte-identical).
+export {
+  projectProvenance,
+  resolveSurfaceOpenIn,
+  formatLatency,
+  formatAccessClass,
+  type SurfaceProvenance,
+  type SurfaceOpenIn,
+  type SurfaceAccessClass,
+  type SurfaceViewTier,
+} from "./provenance";
+export { projectStatusLine, type StatusStripLine } from "./statusLine";
+export { resolveDotPath, isSafeHttpUrl } from "./dotPath";
+export {
+  TcProvenanceFooter,
+  type TcProvenanceFooterProps,
+} from "./TcProvenanceFooter";
+export {
+  TcSurfaceSkeleton,
+  type TcSurfaceSkeletonProps,
+} from "./TcSurfaceSkeleton";
+export { TcSurfaceFrame, type TcSurfaceFrameProps } from "./TcSurfaceFrame";
+export { TcStatusStrip, type TcStatusStripProps } from "./TcStatusStrip";
+// === end PRD-B2 ===
+
 // === Phase 2-C swimlanes ===
 export {
   TcSwimlanes,
