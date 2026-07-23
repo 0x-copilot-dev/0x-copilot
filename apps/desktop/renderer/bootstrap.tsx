@@ -48,6 +48,7 @@ import { registerAll as registerSurfaceRenderers } from "@0x-copilot/surface-ren
 
 import { BootGate } from "./BootProgress";
 import { DestinationOutlet } from "./DestinationOutlet";
+import { buildDesktopShellBinding } from "./shellBinding";
 import { FirstRunGate, FirstRunSurfaceMount } from "./FirstRunGate";
 import { PaletteHost } from "./PaletteHost";
 import { SettingsMount } from "./SettingsMount";
@@ -313,6 +314,12 @@ function ChatShellForSession(props: ChatShellForSessionProps): ReactElement {
   );
   useShellShortcuts(shortcutCallbacks);
 
+  // PRD-03: the shell's four host-owned capabilities as ONE total binding,
+  // built in a single place (`buildDesktopShellBinding`) the conformance test
+  // reuses. `railIdentity` carries the signed-in display name (previously
+  // unbound — the rail always fell through to the generic person glyph).
+  const shellBinding = buildDesktopShellBinding(props.session, settingsActive);
+
   return (
     <>
       <ChatShell
@@ -327,7 +334,7 @@ function ChatShellForSession(props: ChatShellForSessionProps): ReactElement {
         onOpenSettings={() => handleOpenSettings()}
         // The shell topbar's single ⌘K trigger opens the (controlled) palette.
         onOpenCommandPalette={() => setPaletteOpen(true)}
-        settingsActive={settingsActive}
+        binding={shellBinding}
       >
         {settingsActive ? (
           // Phase 5 (PR-5.9): the real Settings surface — the profile-gated nav
@@ -350,10 +357,14 @@ function ChatShellForSession(props: ChatShellForSessionProps): ReactElement {
             // The active conversation the cockpit binds to (durable identity
             // from the Router URL). `null` → a brand-new chat's empty composer.
             conversationId={activeConversationId}
-            // Plain "show the Run cockpit" navigation (keeps the current
-            // conversation) — Activity's open-run, Skills' run-skill, Chats'
-            // New chat. Dedicated new-chat intents (⌘N / palette) use openNewRun.
+            // PRD-03 Move 3: Activity's open-run carries the row's run id.
+            // Interim: land on the Run cockpit (PRD-04 owns where a specific run
+            // navigates). The binder now FORWARDS the id; bootstrap ignoring it
+            // here is a deliberate, localized choice, not a silent discard.
             onOpenRun={() => handleNavigate("run")}
+            // Chats' "New chat" + Skills' "Run" — the cockpit front door, no id.
+            // Dedicated new-chat intents (⌘N / palette) use openNewRun.
+            onNewChat={() => handleNavigate("run")}
             // Chats → reopen threads the REAL conversation id (navigate to its
             // Run route); a new chat's first send that resolved to a real id
             // navigates the same way. Both bind the cockpit onto that id.

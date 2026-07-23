@@ -332,3 +332,58 @@ row → **PRD-11**.
 - **PRD-12 (rail & settings)** — owns `railBadges`' deletion, `useActiveRunCount`, `active_count`, the `AppRail` identity shape and all rail chrome (C1, C2). This PRD binds `railIdentity: { displayName }` on day one so the prop changes once; PRD-12 then deletes the `ChatShell` shim. **PRD-12's own Risks row still says "PRD-03 lands first with `{initial}`" — that row is stale; C2 governs.**
 
 **Unblocks:** every "desktop is missing X" item in the audits becomes either impossible (Move 1) or a compile error (Move 2), and every surface PRD downstream gets a total binding to declare its capability in instead of an optional prop to forget.
+
+---
+
+## Implementation record
+
+_Landed on `claude/prd-03-host-binder-contract`. Author: PRD-03 implementation + close-out verification agent._
+
+### What landed
+
+The props boundary between `packages/chat-surface` and its two hosts is now **total** — an unbound host-owned capability fails to compile rather than shipping dark.
+
+- **Move 1 (delete host duties):** a shared `toChatArchiveRow` projection (`packages/chat-surface/src/projections/chats.ts`) replaces the two duplicated per-row copies in `apps/desktop/renderer/destinationBinders.tsx` and `apps/frontend/src/features/chats/api/chatsApi.ts`, reading first-class `pinned`/`preview`/`model` (fixing desktop's dead `metadata.*` read). `ProjectsDestination` now primes the project-name cache from `items` via a `useEffect([items])` (fixing every desktop project link that read the literal "Project"); `cacheProjectNames` is off the public barrel.
+- **Move 2 (total seam):** `ChatShell`'s four discrete optional props (`railIdentity`/`walletChip`/`topbarLeaf`/`settingsActive`) collapsed into one **required** `binding: ShellHostBinding`; `ProjectsDestination`'s three optional detail props collapsed into a required `detail: ProjectsDetailBinding` discriminated union (desktop must now write `{ mode: "disabled" }` explicitly). `railBadges` left untouched (PRD-12 owns it).
+- **Move 3 (enforcement):** type-derived field manifests `SHELL_BINDING_FIELDS` / `PROJECTS_BINDING_FIELDS` with a compile-time exhaustiveness guard (`ExhaustiveBindingManifest`), per-host conformance tests (runtime + `.test-d.ts` type-level), and the overloaded `onOpenRun()` split into `onOpenRun(runId)` / `onNewChat()` so Activity's run id can no longer be silently discarded. Both hosts construct their binding from one place: `buildDesktopShellBinding` / `buildWebShellBinding`.
+
+### DoD status (15/15 met)
+
+| #   | Item                                                                                                           | Verdict |
+| --- | -------------------------------------------------------------------------------------------------------------- | ------- |
+| 1   | No `metadata.*` dot-reads / `metaString` in desktop renderer                                                   | MET     |
+| 2   | `cacheProjectNames` primed inside `ProjectsDestination` `useEffect([items])`; gone from both hosts             | MET     |
+| 3   | Exactly two `toChatArchiveRow` callers; no host-local `toArchiveRow`; no bucketing in the projection           | MET     |
+| 4   | chat-surface `.test-d.ts` manifest-omission fails under `@ts-expect-error` (non-tautological, mutation-proven) | MET     |
+| 5   | Desktop `.test-d.ts` omitting `railIdentity` type-errors (aliased tsc; literal is symlink false-negative)      | MET     |
+| 6   | Desktop manifest conformance test iterates `SHELL_BINDING_FIELDS`, asserts non-undefined + literal opt-outs    | MET     |
+| 7   | Desktop rail-initial regression guard (fails against main's chat-surface, passes against this tree's)          | MET     |
+| 8   | `toChatArchiveRow` first-class-fields-win regression test                                                      | MET     |
+| 9   | Activity run-id forwarding test (`onOpenRun("run_abc")`)                                                       | MET     |
+| 10  | Rail-initial `.textContent.length === 1` assertion, not vacuous                                                | MET     |
+| 11  | Typecheck clean for all three TS packages (hosts via aliased tsc; literal is symlink false-negative)           | MET     |
+| 12  | Unit suites green: chat-surface 2689, frontend 1365, desktop 1084+1 todo (hosts via alias)                     | MET     |
+| 13  | chat-surface `eslint src` exit 0; substrate-primitive ban still enforced in `src/contract`+`src/projections`   | MET     |
+| 14  | CLAUDE.md line amended: "intentionally duplicate" removed, `src/projections/` recorded                         | MET     |
+| 15  | Design-parity: live HTML byte-identical, no new HIGH lines in reports                                          | MET     |
+
+### Deviations from the PRD
+
+1. **DestinationOutlet line numbers were stale** — the PRD cited `:128`/`:230`/`:367`/`:535`; the current `DestinationOutlet.tsx` is 224 lines and those sites were conflated with `destinationBinders.tsx`. Implemented the intent faithfully: split `onOpenRun` across `DestinationOutlet.tsx` (props + `SurfaceContext` + `renderSurface`), `destinationBinders.tsx` (callbacks + Chats/Activity/Skills), and `bootstrap.tsx` (the mount).
+2. **Web binding extracted to a helper** (`apps/frontend/src/app/shellBinding.ts::buildWebShellBinding`) rather than an inline object in `App.tsx` — mirrors `buildDesktopShellBinding`, gives the web conformance test a real target, and realizes the PRD's own "both hosts construct from one place" mechanism. Additive, behavior-identical.
+3. **`ChatShell` discrete props deleted, not kept alongside `binding`** — keeping them optional would re-introduce the disease; the required binding is the total seam Move 2 calls for. `railBadges` untouched (C1 → PRD-12).
+4. **eslint config change (not in the original scope list):** `packages/chat-surface/eslint.config.js` gained a test-file-only exception to the `no-restricted-globals` ban (production files, including `src/contract`/`src/projections`, stay fully guarded; ban re-proven to enforce there). Supports DoD 13.
+
+### Regression surface (re-run at close-out)
+
+- `vitest run --root packages/chat-surface` → **237 files / 2689 passed**.
+- `npm run typecheck --workspace @0x-copilot/chat-surface` → **exit 0**. `npm run lint --workspace @0x-copilot/chat-surface` → **exit 0**.
+- Desktop suite aliased to this tree's chat-surface → **92 files / 1084 passed + 1 todo**. Frontend suite aliased → **178 files / 1365 passed**.
+- Frontend aliased tsc → **0 errors**. Desktop aliased tsc (rootDir widened) → **0 errors** (both `error TS` counts literally 0).
+- Design-parity `render-live-{rail-badge,projects,chats}` → **7 passed**, regenerated live HTML produced **no git diff** (byte-identical), no report drift.
+- No Python service touched.
+
+### Left open / residual
+
+- **Literal host `npm run typecheck` / `npm run test` exit non-zero in this isolated worktree** — `node_modules/@0x-copilot/chat-surface` symlinks to the MAIN checkout, which lacks PRD-03's not-yet-merged exports (`ShellHostBinding`, `SHELL_BINDING_FIELDS`, `ProjectsDetailBinding`, `toChatArchiveRow`). Every literal error traces to exactly those four missing exports — the documented symlink false-negative, not a code defect. **The orchestrator must re-run the literal host typecheck + suites post-merge to confirm the green.** Every one was verified equivalent-green against this tree's actual source via alias/paths override.
+- **`railIdentity → { initial }` shim** in `ChatShell.tsx` is carried with a "PRD-12 deletes this" comment; PRD-12's stale Risks row (`"PRD-03 lands first with {initial}"`) should be reconciled to C2 when PRD-12 lands.

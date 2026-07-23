@@ -60,6 +60,20 @@ export {
 } from "./providers/DeploymentProfileProvider";
 // === end Phase 0 (PR-0.4) ===
 export { ChatShell } from "./shell/ChatShell";
+// === PRD-03 — host binding contract + shared projections ===
+// The TOTAL props boundary between chat-surface and its two hosts. Binding
+// types (required, `undefined`-free) + the type-derived field manifests both
+// host conformance tests iterate. `toChatArchiveRow` is the single per-row
+// chats projection both hosts now call (was duplicated per binder).
+export type {
+  ProjectsDetailBinding,
+  ProjectsHostBinding,
+  ShellHostBinding,
+  ExhaustiveBindingManifest,
+} from "./contract";
+export { PROJECTS_BINDING_FIELDS, SHELL_BINDING_FIELDS } from "./contract";
+export { toChatArchiveRow } from "./projections/chats";
+// === end PRD-03 ===
 export { CopyIcon } from "./icons/CopyIcon";
 export { RetryIcon } from "./icons/RetryIcon";
 export { ThinkingIcon } from "./icons/ThinkingIcon";
@@ -531,8 +545,12 @@ export {
   ProjectFilterChip,
   ProjectsDestination,
   ProjectsPanel,
+  // PRD-03 Move 1: `cacheProjectNames` is no longer a host duty — the
+  // `ProjectsDestination` primes the cache from `items` itself, so it is
+  // dropped from the public barrel (kept exported from `projectNameCache.ts`
+  // for tests). `cacheProjectName` / `getCachedProjectName` stay for the
+  // resolver's own use.
   cacheProjectName,
-  cacheProjectNames,
   getCachedProjectName,
   type ProjectActivityCounts,
   type ProjectColorHue,

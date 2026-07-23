@@ -34,6 +34,7 @@
 // contract.
 
 import {
+  useEffect,
   useMemo,
   type CSSProperties,
   type ReactElement,
@@ -42,6 +43,8 @@ import {
 
 import type { ProjectId, SectionResult } from "@0x-copilot/api-types";
 
+import type { ProjectsDetailBinding } from "../../contract/shellBinding";
+import { cacheProjectNames } from "./projectNameCache";
 import { CardGrid } from "../../shell/CardGrid";
 import { EmptyState } from "../../shell/EmptyState";
 import { FilterTabs, type FilterTabOption } from "../../shell/FilterTabs";
@@ -126,11 +129,15 @@ export interface ProjectsDestinationProps {
   /** Retry callback when `items.status === "error"`. */
   readonly onRetry?: () => void;
 
-  /** P6-B2 detail slot. When supplied AND `focusedProjectId` is set,
-   *  the slot replaces the grid body. */
-  readonly renderDetail?: RenderProjectDetailSlot;
-  readonly focusedProjectId?: ProjectId | null;
-  readonly onCloseDetail?: () => void;
+  /**
+   * Total detail binding (PRD-03 Move 2). `{ mode: "disabled" }` is an
+   * explicit, reviewable statement that the host has no project-detail flow
+   * yet — it replaces silently omitting `renderDetail`/`focusedProjectId`,
+   * which left the detail branch dead code. `{ mode: "enabled", … }` carries
+   * the focused id + slot + close callback together, so a half-wired detail
+   * cannot typecheck.
+   */
+  readonly detail: ProjectsDetailBinding;
 
   /** Reference instant — test seam for relative-time formatting. */
   readonly now?: number;
@@ -141,7 +148,7 @@ export interface ProjectsDestinationProps {
 // ===========================================================================
 
 export function ProjectsDestination(
-  props: ProjectsDestinationProps = {},
+  props: ProjectsDestinationProps,
 ): ReactElement {
   const {
     items = null,
@@ -154,11 +161,30 @@ export function ProjectsDestination(
     onStarProject,
     onUnstarProject,
     onRetry,
-    renderDetail,
-    focusedProjectId = null,
-    onCloseDetail,
+    detail,
     now,
   } = props;
+
+  // Collapse the total `detail` binding back to the local render inputs. A
+  // `disabled` host has no detail slot; an `enabled` host carries all three.
+  const renderDetail =
+    detail.mode === "enabled" ? detail.renderDetail : undefined;
+  const focusedProjectId =
+    detail.mode === "enabled" ? detail.focusedProjectId : null;
+  const onCloseDetail =
+    detail.mode === "enabled" ? detail.onCloseDetail : undefined;
+
+  // Prime the cross-destination project-name cache from the loaded list so
+  // `<ItemLink kind="project">` on other surfaces renders the real name instead
+  // of the generic "Project" fallback (PRD-03 Move 1). This was a host duty with
+  // no decision in it — the destination already holds the `{ id, name }` list —
+  // so priming moved into the package and desktop's "Project" fallback is fixed
+  // without the host having to remember a `cacheProjectNames` call.
+  useEffect(() => {
+    if (items !== null && items.status === "ok" && items.data !== undefined) {
+      cacheProjectNames(items.data);
+    }
+  }, [items]);
 
   // === Filter chip options (single source of truth) =====================
   const filterOptions = useMemo<
