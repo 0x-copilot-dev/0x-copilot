@@ -112,6 +112,10 @@ export function ConnectorsRoute({
   const [connectOpen, setConnectOpen] = useState(false);
   const [connectPending, setConnectPending] = useState(false);
   const [connectError, setConnectError] = useState<string | null>(null);
+  // Route-level banner for an access-mode PATCH failure. The shared
+  // ConnectorsDestination already reverts the segment inline; this is the
+  // web route's own surface so the failure is visible above the fold.
+  const [accessModeError, setAccessModeError] = useState<string | null>(null);
   // Slug the OAuth round-trip is currently authorizing. The SSE channel
   // reports completion (`connector.created` / `status_changed` → connected)
   // for this slug, which clears `connectPending` and advances the modal to
@@ -306,9 +310,20 @@ export function ConnectorsRoute({
   const accessPort = useMemo<ConnectorAccessPort>(
     () => ({
       setAccessMode: async (id: ConnectorId, mode: ConnectorAccessMode) => {
-        const res = await setConnectorAccessMode(identity, id, {
-          access_mode: mode,
-        });
+        setAccessModeError(null);
+        let res;
+        try {
+          res = await setConnectorAccessMode(identity, id, {
+            access_mode: mode,
+          });
+        } catch (error: unknown) {
+          // Surface the failure at the route level, then re-throw so the
+          // shared segment performs its optimistic revert (DoD 12).
+          setAccessModeError(
+            errorMessage(error, "Could not change the access mode."),
+          );
+          throw error;
+        }
         setState((prev) => {
           if (prev.kind !== "ready") return prev;
           const connectors = prev.response.connectors.map((c) =>
@@ -540,6 +555,15 @@ export function ConnectorsRoute({
             style={inlineErrorStyle}
           >
             {pendingError}
+          </div>
+        )}
+        {accessModeError !== null && (
+          <div
+            role="alert"
+            data-testid="connectors-route-access-mode-error"
+            style={inlineErrorStyle}
+          >
+            {accessModeError}
           </div>
         )}
         <ConnectorsDestination

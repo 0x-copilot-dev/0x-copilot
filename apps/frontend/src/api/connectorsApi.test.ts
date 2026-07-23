@@ -42,6 +42,7 @@ function connectorFixture(overrides: Partial<Connector> = {}): Connector {
     description: "Read mail + send drafts.",
     status: "connected",
     owner_user_id: "user_test" as UserId,
+    access_mode: "read_act",
     scopes: [
       {
         scope: "gmail.readonly",
