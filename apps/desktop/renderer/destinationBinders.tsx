@@ -904,7 +904,18 @@ export function RunBinder({
       renderComposer={renderComposer}
       renderEmptyComposer={renderEmptyComposer}
       // PRD-B1: Generative Surfaces v2 canvas — opt-in client flag (default
-      // OFF), paired with the runtime SURFACES_V2 flag.
+      // OFF), paired with the runtime SURFACES_V2 flag. The integration mount
+      // pass lights up the full canvas (gate cards, staged draft/table with
+      // approve/apply, receipt) + the Approvals/Agents rail cards + "N waiting"
+      // chip; every canvas mutation rides the cockpit's own Transport port
+      // inside RunDestination (the resolveApproval / handleRegenerateView
+      // pattern), so no per-binder callback duplication.
+      //
+      // GAP (not this pass): the canvas gate card's Connect needs a desktop
+      // `mcpAuthPort` — the renderer cannot open the vendor consent screen and
+      // the run→conversation resume is unbuilt (the in-chat `mcp_auth` card has
+      // the same desktop gap). Absent → the gate card renders + the write-policy
+      // radio PATCHes, but Connect/Skip degrade to inert (never a crash).
       surfacesV2={isSurfacesV2Enabled()}
       // PRD-B2: raw-fallback Copy / Download. Renderer-side (the Electron
       // renderer has the DOM); the package stays substrate-agnostic.

@@ -90,13 +90,39 @@ import { projectSubagents } from "../../subagents";
 import {
   ThreadCanvas,
   TcChat,
+  TcGateCard,
+  TcStagedDraftSurface,
+  TcStagedTableSurface,
+  ViewUpgradeToast,
   projectSurfaceTabs,
   projectLedger,
   ledgerTabsAsSurfaceTabs,
   surfaceIdForTabUri,
+  tabUriForSurface,
   type TcTab,
   type PendingDiffHandle,
+  type LedgerGateWritePolicy,
+  type LedgerStagedWrite,
+  type LedgerViewTier,
 } from "../../thread-canvas";
+// PRD-C2/D1/D3/E1/E2 — the Generative Surfaces v2 canvas mount pieces. All are
+// pure presentational components + pure ledger folds + one Transport-fed fetch;
+// the cockpit composes them behind the `surfacesV2` flag (flag off ⇒ never
+// constructed, so the cockpit is byte-identical to today).
+import { ReceiptSurface } from "../../surfaces/receipt";
+import { PostureChip } from "./PostureChip";
+import { PendingCounterChip } from "./PendingCounterChip";
+import { usePendingWork } from "./usePendingWork";
+import {
+  projectPendingCards,
+  type PendingCard,
+} from "./pendingCardsProjection";
+import { projectReceipt, type ReceiptProjection } from "./projectReceipt";
+import {
+  projectLedgerSources,
+  type LedgerSourcesProjection,
+} from "./projectLedgerSources";
+import type { PendingAgentRow } from "@0x-copilot/api-types";
 // PRD-B1: Generative Surfaces v2 content hydration (SurfaceStore endpoint via
 // the Transport port). Called unconditionally (Rules of Hooks) but inert when
 // `surfacesV2` is false (`enabled: false` ⇒ no request).
@@ -138,6 +164,36 @@ import { useRunSession } from "./useRunSession";
 
 const EMPTY_DECISIONS: ReadonlyMap<string, RunApprovalDecision> = new Map();
 const EMPTY_CLOSED_URIS: ReadonlySet<string> = new Set();
+// Generative Surfaces v2 mount-pass empties (flag-off = referentially stable so
+// the memos/props never churn when the cockpit is byte-identical to today).
+const EMPTY_CARDS: readonly PendingCard[] = [];
+const EMPTY_RECEIPT: ReceiptProjection = { receipt: null, emittedSeq: null };
+const EMPTY_GATE_POLICIES: ReadonlyMap<string, LedgerGateWritePolicy> =
+  new Map();
+
+/**
+ * Best-effort extraction of a staged draft's body text from the hydrated
+ * SurfaceStore payload (`useSurfacesV2.stateFor`). A message-archetype draft
+ * carries its body under `data.body` / `.text` / `.content`; a bare string
+ * payload IS the body. Returns `""` when nothing is hydrated yet — the staged
+ * surface then renders an empty body while its approve bar still works.
+ */
+function draftBodyText(payload: unknown): string {
+  if (payload === null || payload === undefined) return "";
+  if (typeof payload === "string") return payload;
+  if (typeof payload !== "object") return "";
+  const record = payload as Record<string, unknown>;
+  const data = record.data ?? record;
+  if (typeof data === "string") return data;
+  if (data !== null && typeof data === "object") {
+    const d = data as Record<string, unknown>;
+    for (const key of ["body", "text", "content", "message", "body_text"]) {
+      const value = d[key];
+      if (typeof value === "string") return value;
+    }
+  }
+  return "";
+}
 
 // WC-P3 (AD-4): a run is still cancellable in these non-terminal states — the
 // in-chat composer shows Stop instead of send. `cancelling` is already
@@ -448,6 +504,10 @@ export function RunDestination(props: RunDestinationProps): ReactElement {
     setClosedUris(EMPTY_CLOSED_URIS);
     // PRD-09c: never carry an open edit overlay across conversations.
     setEditingDiffId(null);
+    // Surfaces v2: a new conversation starts from a clean gate/toast state.
+    setGatePolicies(EMPTY_GATE_POLICIES);
+    setUpgradedSurface(null);
+    prevTierRef.current = new Map();
   }, [conversationId]);
 
   const session = useRunSession({
@@ -484,6 +544,27 @@ export function RunDestination(props: RunDestinationProps): ReactElement {
   // renders only while this matches the active pending diff, so a resolved diff
   // (optimistic or server) closes it automatically.
   const [editingDiffId, setEditingDiffId] = useState<string | null>(null);
+
+  // Generative Surfaces v2 mount pass. All strictly gated on `surfacesV2` (flag
+  // off ⇒ inert + never rendered, so the cockpit is byte-identical to today).
+  //
+  // C2: the reviewer's per-gate write-policy choice (defaults `ask_first`), held
+  // locally so the gate card's radio is controlled; the choice is best-effort
+  // PATCHed to the connector and rides the OAuth resolve server-side.
+  const [gatePolicies, setGatePolicies] =
+    useState<ReadonlyMap<string, LedgerGateWritePolicy>>(EMPTY_GATE_POLICIES);
+  // E2/F3: a monotonic nonce the "N waiting" counter chip bumps to command the
+  // rail onto the Approvals tab (one-directional; the rail reacts to increases).
+  const [approvalsFocusSignal, setApprovalsFocusSignal] = useState(0);
+  // B3: the surface whose effective tier just upgraded generic → shaped (drives
+  // the non-modal ViewUpgradeToast). `null` = no pending upgrade toast.
+  const [upgradedSurface, setUpgradedSurface] = useState<{
+    readonly surfaceId: string;
+    readonly ledgerId: string;
+  } | null>(null);
+  // B3: the last effective tier seen per surface — the generic→shaped edge
+  // detector for the toast. A ref (not state) so it never triggers a re-render.
+  const prevTierRef = useRef<Map<string, LedgerViewTier>>(new Map());
 
   const handleActivateTab = useCallback((uri: string): void => {
     // A manual tab click pins — the strip stops auto-following newer surfaces
@@ -695,6 +776,10 @@ export function RunDestination(props: RunDestinationProps): ReactElement {
       setClosedUris(EMPTY_CLOSED_URIS);
       // PRD-09c: rebinding the cockpit to another run closes any open overlay.
       setEditingDiffId(null);
+      // Surfaces v2: a run switch resets the gate/toast state too.
+      setGatePolicies(EMPTY_GATE_POLICIES);
+      setUpgradedSurface(null);
+      prevTierRef.current = new Map();
       selectRun(nextRunId);
     },
     [selectRun],
@@ -1072,6 +1157,305 @@ export function RunDestination(props: RunDestinationProps): ReactElement {
     return ledger.surfaces.get(id)?.viewState ?? null;
   }, [surfacesV2, activeUri, ledger]);
 
+  // ============================================================
+  // Generative Surfaces v2 — integration mount pass
+  // ============================================================
+  // Every projection/hook below is a pure PEER of the ledger fold over the SAME
+  // `session.events` (the one-projector invariant, FR-3.3) or one Transport-fed
+  // fetch. All are gated on `surfacesV2` — flag off ⇒ empties/inert, so the
+  // cockpit is byte-identical to today (memos hold a stable empty reference; the
+  // pending-work hook is `enabled: false`, issuing no request).
+
+  // E1: the run receipt (null until `receipt.emitted`) + the read-fold sources.
+  const receiptProjection = useMemo(
+    () => (surfacesV2 ? projectReceipt(session.events) : EMPTY_RECEIPT),
+    [surfacesV2, session.events],
+  );
+  const ledgerSourcesProjection = useMemo<LedgerSourcesProjection | null>(
+    () => (surfacesV2 ? projectLedgerSources(session.events) : null),
+    [surfacesV2, session.events],
+  );
+
+  // E2: this run's live pending cards (open gates + held stages), a peer of
+  // `projectApprovals`/`projectLedger`. `usePendingWork` merges these with the
+  // cross-run `GET /v1/agent/pending-work` fetch (the open run's live cards win).
+  const liveCards = useMemo(
+    () =>
+      surfacesV2
+        ? projectPendingCards(session.events, session.runId)
+        : EMPTY_CARDS,
+    [surfacesV2, session.events, session.runId],
+  );
+  const pendingWork = usePendingWork(
+    transport,
+    surfacesV2 && enabled,
+    session.runId,
+    liveCards,
+    ledger.lastLedgerSeq,
+  );
+
+  // D1/D3: index the folded stages by the surface they target so the canvas can
+  // mount the staged-draft / staged-table surface for the active tab.
+  const stageBySurfaceId = useMemo(() => {
+    const map = new Map<string, LedgerStagedWrite>();
+    if (!surfacesV2) return map;
+    for (const stage of ledger.stages.values()) {
+      if (stage.surfaceId !== "") map.set(stage.surfaceId, stage);
+    }
+    return map;
+  }, [surfacesV2, ledger]);
+
+  // D1/D3 stage decision helper — every stage mutation rides the Transport port
+  // (no bare fetch/window) keyed on `stage_id` + the owning `run_id` (SDR §6).
+  // The resulting ledger events arrive on the ONE run stream and fold in — no
+  // second subscription. Best-effort: a failure leaves the optimistic ledger
+  // (the trailing event reconciles), mirroring `resolveApproval`.
+  const stageRunId = session.runId as string | null;
+  const postStageDecision = useCallback(
+    (stageId: string, body: Record<string, unknown>): void => {
+      if (stageRunId === null || stageRunId === "") return;
+      void transport
+        .request({
+          method: "POST",
+          path: `/v1/agent/stages/${encodeURIComponent(
+            stageId,
+          )}/decisions?run_id=${encodeURIComponent(stageRunId)}`,
+          body,
+        })
+        .catch(() => {
+          /* optimistic: the trailing decision.recorded frame is the authority */
+        });
+    },
+    [transport, stageRunId],
+  );
+  const handleStageApprove = useCallback(
+    (stageId: string, rev: number): void =>
+      postStageDecision(stageId, { decision: "approve", rev }),
+    [postStageDecision],
+  );
+  const handleStageReject = useCallback(
+    (stageId: string, rev: number): void =>
+      postStageDecision(stageId, { decision: "reject", rev }),
+    [postStageDecision],
+  );
+  const handleStageRestore = useCallback(
+    (stageId: string): void =>
+      postStageDecision(stageId, { decision: "restore" }),
+    [postStageDecision],
+  );
+  const handleRowDecision = useCallback(
+    (stageId: string, decision: "approve" | "hold", rowKey: string): void =>
+      postStageDecision(stageId, { decision, row_keys: [rowKey] }),
+    [postStageDecision],
+  );
+  const handleStageEdit = useCallback(
+    (stageId: string, baseRev: number, contentText: string): void => {
+      if (stageRunId === null || stageRunId === "") return;
+      void transport
+        .request({
+          method: "POST",
+          path: `/v1/agent/stages/${encodeURIComponent(
+            stageId,
+          )}/revisions?run_id=${encodeURIComponent(stageRunId)}`,
+          body: { base_rev: baseRev, content_text: contentText },
+        })
+        .catch(() => {
+          /* optimistic: the trailing revision.added frame is the authority */
+        });
+    },
+    [transport, stageRunId],
+  );
+  const handleStageApply = useCallback(
+    (stageId: string, rev: number, rowKeys: readonly string[]): void => {
+      if (stageRunId === null || stageRunId === "") return;
+      void transport
+        .request({
+          method: "POST",
+          path: `/v1/agent/stages/${encodeURIComponent(
+            stageId,
+          )}/apply?run_id=${encodeURIComponent(stageRunId)}`,
+          body: { rev, row_keys: rowKeys },
+        })
+        .catch(() => {
+          /* optimistic: the trailing write.applied frame is the authority */
+        });
+    },
+    [transport, stageRunId],
+  );
+
+  // C2 gate callbacks. Connect / Skip fire the host `McpAuthPort` (the SAME
+  // mid-run OAuth launcher the in-chat `mcp_auth` card uses); absent → inert but
+  // visible (desktop has no mid-run launcher wired yet). The write-policy choice
+  // is held locally (controlled radio) AND best-effort PATCHed to the connector.
+  const handleGateConnect = useCallback(
+    (serverId: string): void => {
+      mcpAuthPort?.beginAuth(serverId);
+    },
+    [mcpAuthPort],
+  );
+  const handleGateSkip = useCallback(
+    (serverId: string): void => {
+      mcpAuthPort?.skipAuth(serverId);
+    },
+    [mcpAuthPort],
+  );
+  const handleGatePolicyChange = useCallback(
+    (gateId: string, serverId: string, policy: LedgerGateWritePolicy): void => {
+      setGatePolicies((prev) => {
+        if (prev.get(gateId) === policy) return prev;
+        const next = new Map(prev);
+        next.set(gateId, policy);
+        return next;
+      });
+      if (serverId === "") return;
+      void transport
+        .request({
+          method: "PATCH",
+          path: `/v1/connectors/${encodeURIComponent(serverId)}/write-policy`,
+          body: { write_policy: policy },
+        })
+        .catch(() => {
+          /* best-effort: the authoritative posture is the gate.resolved frame */
+        });
+    },
+    [transport],
+  );
+
+  // E2 rail routers. Review pins the card's target surface (a stage card carries
+  // `surfaceId`; a gate card has none → no-op, its card is already in the canvas).
+  // Open-run rebinds the cockpit to the picked run when it lives in this
+  // conversation (cross-conversation nav is a host concern, out of this pass).
+  const handleReviewCard = useCallback(
+    (card: PendingCard): void => {
+      if (card.surfaceId === null) return;
+      const surface = ledger.surfaces.get(card.surfaceId);
+      if (surface !== undefined) setPinnedUri(tabUriForSurface(surface));
+    },
+    [ledger],
+  );
+  const handleOpenRun = useCallback(
+    (agent: PendingAgentRow): void => {
+      if (agent.run_id !== stageRunId) selectRun(agent.run_id);
+    },
+    [selectRun, stageRunId],
+  );
+  const handleOpenApprovals = useCallback(
+    (): void => setApprovalsFocusSignal((n) => n + 1),
+    [],
+  );
+
+  // E1: the receipt's "Copy receipt" reuses the host clipboard port (B2's
+  // `onCopyText`); the package never touches the clipboard itself.
+  const copyReceiptText = useCallback(
+    (text: string): void => {
+      void onCopyText?.(text);
+    },
+    [onCopyText],
+  );
+
+  // The kind-specific v2 surface for the active tab, injected into ThreadCanvas
+  // (`renderSurfaceOverride`). Staged writes render their draft/table surface
+  // (approve/apply bars composed inside); a receipt surface renders the fold.
+  // `null` ⇒ ThreadCanvas takes its default v2 mount (record/message/table via
+  // the pure adapter registry). Only meaningful on the v2 path.
+  const renderV2Surface = useCallback(
+    (uri: string): ReactNode => {
+      const id = surfaceIdForTabUri(uri);
+      if (id === null) return null;
+      const stage = stageBySurfaceId.get(id);
+      if (stage !== undefined) {
+        if (stage.rows !== null) {
+          return (
+            <TcStagedTableSurface
+              stage={stage}
+              onRowDecision={handleRowDecision}
+              onApply={handleStageApply}
+            />
+          );
+        }
+        return (
+          <TcStagedDraftSurface
+            stage={stage}
+            bodyText={draftBodyText(hydration.stateFor(id))}
+            onSubmitEdit={handleStageEdit}
+            onApprove={handleStageApprove}
+            onReject={handleStageReject}
+            onRestore={handleStageRestore}
+          />
+        );
+      }
+      const surface = ledger.surfaces.get(id);
+      if (surface?.kind === "receipt" && receiptProjection.receipt !== null) {
+        return (
+          <ReceiptSurface
+            receipt={receiptProjection.receipt}
+            emittedSeq={receiptProjection.emittedSeq}
+            onCopyText={copyReceiptText}
+          />
+        );
+      }
+      return null;
+    },
+    [
+      stageBySurfaceId,
+      ledger,
+      hydration,
+      receiptProjection,
+      handleRowDecision,
+      handleStageApply,
+      handleStageEdit,
+      handleStageApprove,
+      handleStageReject,
+      handleStageRestore,
+      copyReceiptText,
+    ],
+  );
+
+  // B3: detect a generic → shaped effective-tier upgrade for any surface and
+  // raise the non-modal ViewUpgradeToast. Pure edge detection over the ledger
+  // fold (a ref of the last-seen tier), so it never opens a second projector.
+  useEffect(() => {
+    if (!surfacesV2) return;
+    const prev = prevTierRef.current;
+    const next = new Map<string, LedgerViewTier>();
+    let upgraded: { surfaceId: string; ledgerId: string } | null = null;
+    for (const [id, surface] of ledger.surfaces) {
+      const tier = surface.viewState?.effectiveTier ?? null;
+      if (tier === null) continue;
+      next.set(id, tier);
+      const before = prev.get(id);
+      if (before !== undefined && before !== "shaped" && tier === "shaped") {
+        upgraded = { surfaceId: id, ledgerId: surface.ledgerId };
+      }
+    }
+    prevTierRef.current = next;
+    if (upgraded !== null) setUpgradedSurface(upgraded);
+  }, [surfacesV2, ledger]);
+
+  const dismissUpgradeToast = useCallback(
+    (): void => setUpgradedSurface(null),
+    [],
+  );
+  const keepGenericFromToast = useCallback(
+    (surfaceId: string): void => {
+      handleSetViewPreference(surfaceId, "generic");
+      setUpgradedSurface(null);
+    },
+    [handleSetViewPreference],
+  );
+
+  // E2: the rail's cross-run pending queue + fleet inputs (undefined when off ⇒
+  // the rail is byte-identical). Open-run marks "This run" against the bound run.
+  const railPendingV2 = surfacesV2
+    ? {
+        cards: pendingWork.cards,
+        agents: pendingWork.agents,
+        onReview: handleReviewCard,
+        onOpenRun: handleOpenRun,
+        currentRunId: stageRunId,
+      }
+    : undefined;
+
   // The pending diff handed to the center pane — ONLY for the active surface,
   // and never while scrubbed off-now (FR-3.15). It clears prop-driven: once the
   // diff resolves (optimistic or server), it drops out of `openSurfaceDiffs`, so
@@ -1214,7 +1598,114 @@ export function RunDestination(props: RunDestinationProps): ReactElement {
       onApprove={handleApprove}
       onReject={handleReject}
       scrubbed={isScrubbed}
+      // Surfaces v2 (E1/E2): the read-fold Sources tab, the cross-run pending
+      // queue + fleet, and the header chip's "jump to Approvals" signal. All
+      // null/undefined when the flag is off ⇒ the rail is byte-identical.
+      ledgerSources={ledgerSourcesProjection}
+      pendingV2={railPendingV2}
+      focusApprovalsSignal={surfacesV2 ? approvalsFocusSignal : undefined}
     />
+  );
+
+  // Extracted so the v2 canvas can WRAP it (gate-card region + upgrade toast)
+  // without duplicating the prop list, while the flag-off path renders it bare —
+  // byte-identical to today (the wrapper divs exist only on the v2 branch).
+  const canvasEl = (
+    <ThreadCanvas
+      mode={mode}
+      conversationId={conversationId}
+      runId={(session.runId as RunId | null) ?? null}
+      events={session.events}
+      onModeChange={setMode}
+      tabs={surfaceTabs}
+      activeUri={activeUri}
+      onActivateTab={handleActivateTab}
+      onCloseTab={handleCloseTab}
+      transport={transport}
+      // PRD-B1: only defined when `surfacesV2` — flag off ⇒ `undefined`,
+      // so ThreadCanvas takes its unchanged v1 projection path (byte-
+      // identical). Flag on ⇒ the surface column hydrates from the
+      // SurfaceStore endpoint via this resolver.
+      resolveSurfaceState={resolveSurfaceState}
+      // Integration mount pass: the kind-specific v2 surface for the
+      // active tab (staged draft/table, receipt). Undefined when the flag
+      // is off; returns null for record/message/etc. so ThreadCanvas keeps
+      // its default adapter-registry mount for those.
+      renderSurfaceOverride={surfacesV2 ? renderV2Surface : undefined}
+      // PRD-B2: host clipboard + file-save for the raw fallback's
+      // Copy / Download. Only consulted inside the v2 canvas subtree.
+      onCopyText={onCopyText}
+      onSaveFile={onSaveFile}
+      // PRD-B3: the active surface's folded view-lifecycle state + the two
+      // Transport-backed mutations. Only meaningful on the v2 path; the
+      // toggle renders only when a `view.derived` has landed (viewState set).
+      activeViewState={activeViewState}
+      onRegenerateView={handleRegenerateView}
+      onSetViewPreference={handleSetViewPreference}
+      // PRD-04: the proposed surface diff for the active surface + the
+      // decision callbacks. ThreadCanvas forwards these to TcSurfaceMount,
+      // which renders the Approve/Reject/Suggest controls around the diff.
+      // onApprove/onReject reuse the SAME resolveApproval machinery the
+      // in-chat ApprovalCard uses (diffId === approvalId); onSuggestChanges
+      // is a no-op passthrough until PRD-09.
+      pendingDiff={pendingDiff}
+      onApprove={handleApprove}
+      onReject={handleReject}
+      onSuggestChanges={handleSuggestChanges}
+      // PRD-09c: the host-owned edit overlay for the active surface diff.
+      // Null unless the reviewer opened "Suggest changes"; when set it
+      // mounts OVER the pure adapter and submits `approve_with_edits`.
+      editSlot={editSlot}
+      // PR-3.7: own the scrub cursor here; ThreadCanvas forwards it to the
+      // mini-timeline (highlight + step/snap dispatch) and to the
+      // SwimlaneScrubProvider (in-chat ghost banner + composer disable).
+      scrubbedSeq={scrubbedSeq}
+      onScrub={handleScrub}
+      onSnapToNow={handleSnapToNow}
+      // PR-3.6: mount the recomposed rail in the chat column, and collapse
+      // the canvas's own mode switcher so RunHeader is the single mode
+      // control (per the PR-3.5 seam note).
+      rightRail={rightRail}
+      showModeSwitcher={false}
+      // Draggable, persisted Studio rail width (useRailWidth → KV).
+      railWidth={railWidth}
+      onRailWidthChange={setRailWidth}
+    />
+  );
+
+  // Surfaces v2 (C2): the parked-gate card region + (B3) the upgrade toast,
+  // wrapping the extracted canvas. Only built on the v2 path — flag off renders
+  // `canvasEl` bare below.
+  const v2CanvasBody = (
+    <div data-testid="run-v2-canvas-body" style={v2CanvasBodyStyle}>
+      {ledger.openGates.length > 0 ? (
+        <div data-testid="run-v2-gate-region" style={gateRegionStyle}>
+          {ledger.openGates.map((gate) => (
+            <TcGateCard
+              key={gate.gateId}
+              gate={gate}
+              writePolicy={gatePolicies.get(gate.gateId) ?? "ask_first"}
+              onConnect={handleGateConnect}
+              onSkip={handleGateSkip}
+              onPolicyChange={(policy) =>
+                handleGatePolicyChange(gate.gateId, gate.serverId, policy)
+              }
+            />
+          ))}
+        </div>
+      ) : null}
+      <div style={v2CanvasThreadStyle}>{canvasEl}</div>
+      {upgradedSurface !== null ? (
+        <div style={toastLayerStyle}>
+          <ViewUpgradeToast
+            surfaceId={upgradedSurface.surfaceId}
+            ledgerId={upgradedSurface.ledgerId}
+            onKeepGeneric={keepGenericFromToast}
+            onDismiss={dismissUpgradeToast}
+          />
+        </div>
+      ) : null}
+    </div>
   );
 
   return (
@@ -1234,6 +1725,20 @@ export function RunDestination(props: RunDestinationProps): ReactElement {
         // pulses; terminal / null → absent.
         runStatus={session.runStatus}
       />
+
+      {/* Surfaces v2 (C2/E2): the always-on write-posture chip + the "N waiting"
+          cross-run counter (hidden at 0). Both gated on the flag — off ⇒ no DOM,
+          byte-identical. The counter commands the rail's Approvals tab via the
+          one-directional `approvalsFocusSignal`. */}
+      {surfacesV2 ? (
+        <div data-testid="run-v2-chip-bar" style={v2ChipBarStyle}>
+          <PostureChip bypassOn={ledger.bypassFromLedger} />
+          <PendingCounterChip
+            count={pendingWork.cards.length}
+            onClick={handleOpenApprovals}
+          />
+        </div>
+      ) : null}
 
       {/* PR-3.11 (FR-3.26): the multi-run selector. It renders NOTHING for a
           conversation with ≤1 run (single/zero-run cockpit stays chrome-free);
@@ -1322,62 +1827,12 @@ export function RunDestination(props: RunDestinationProps): ReactElement {
               onOpenModelSettings={onOpenModelSettings}
             />
           )
+        ) : surfacesV2 ? (
+          // v2 canvas: the extracted ThreadCanvas wrapped with the parked-gate
+          // region + upgrade toast. Flag off falls to the bare `canvasEl` below.
+          v2CanvasBody
         ) : (
-          <ThreadCanvas
-            mode={mode}
-            conversationId={conversationId}
-            runId={(session.runId as RunId | null) ?? null}
-            events={session.events}
-            onModeChange={setMode}
-            tabs={surfaceTabs}
-            activeUri={activeUri}
-            onActivateTab={handleActivateTab}
-            onCloseTab={handleCloseTab}
-            transport={transport}
-            // PRD-B1: only defined when `surfacesV2` — flag off ⇒ `undefined`,
-            // so ThreadCanvas takes its unchanged v1 projection path (byte-
-            // identical). Flag on ⇒ the surface column hydrates from the
-            // SurfaceStore endpoint via this resolver.
-            resolveSurfaceState={resolveSurfaceState}
-            // PRD-B2: host clipboard + file-save for the raw fallback's
-            // Copy / Download. Only consulted inside the v2 canvas subtree.
-            onCopyText={onCopyText}
-            onSaveFile={onSaveFile}
-            // PRD-B3: the active surface's folded view-lifecycle state + the two
-            // Transport-backed mutations. Only meaningful on the v2 path; the
-            // toggle renders only when a `view.derived` has landed (viewState set).
-            activeViewState={activeViewState}
-            onRegenerateView={handleRegenerateView}
-            onSetViewPreference={handleSetViewPreference}
-            // PRD-04: the proposed surface diff for the active surface + the
-            // decision callbacks. ThreadCanvas forwards these to TcSurfaceMount,
-            // which renders the Approve/Reject/Suggest controls around the diff.
-            // onApprove/onReject reuse the SAME resolveApproval machinery the
-            // in-chat ApprovalCard uses (diffId === approvalId); onSuggestChanges
-            // is a no-op passthrough until PRD-09.
-            pendingDiff={pendingDiff}
-            onApprove={handleApprove}
-            onReject={handleReject}
-            onSuggestChanges={handleSuggestChanges}
-            // PRD-09c: the host-owned edit overlay for the active surface diff.
-            // Null unless the reviewer opened "Suggest changes"; when set it
-            // mounts OVER the pure adapter and submits `approve_with_edits`.
-            editSlot={editSlot}
-            // PR-3.7: own the scrub cursor here; ThreadCanvas forwards it to the
-            // mini-timeline (highlight + step/snap dispatch) and to the
-            // SwimlaneScrubProvider (in-chat ghost banner + composer disable).
-            scrubbedSeq={scrubbedSeq}
-            onScrub={handleScrub}
-            onSnapToNow={handleSnapToNow}
-            // PR-3.6: mount the recomposed rail in the chat column, and collapse
-            // the canvas's own mode switcher so RunHeader is the single mode
-            // control (per the PR-3.5 seam note).
-            rightRail={rightRail}
-            showModeSwitcher={false}
-            // Draggable, persisted Studio rail width (useRailWidth → KV).
-            railWidth={railWidth}
-            onRailWidthChange={setRailWidth}
-          />
+          canvasEl
         )}
       </div>
     </div>
@@ -1643,6 +2098,53 @@ const canvasSlotStyle: CSSProperties = {
   flex: 1,
   minHeight: 0,
   position: "relative",
+};
+
+// Surfaces v2 — the header chip row (posture chip + "N waiting" counter).
+const v2ChipBarStyle: CSSProperties = {
+  flexShrink: 0,
+  display: "flex",
+  alignItems: "center",
+  gap: 8,
+  padding: "6px 16px",
+  borderBottom: "1px solid var(--color-border, #22252e)",
+  background: "var(--color-bg-elevated, #16181f)",
+};
+
+// Surfaces v2 — the v2 canvas body: an (optional) parked-gate region stacked
+// above the canvas, which fills the remaining height. `position: relative`
+// anchors the absolutely-positioned upgrade toast.
+const v2CanvasBodyStyle: CSSProperties = {
+  display: "flex",
+  flexDirection: "column",
+  height: "100%",
+  minHeight: 0,
+  position: "relative",
+};
+
+const v2CanvasThreadStyle: CSSProperties = {
+  flex: 1,
+  minHeight: 0,
+  position: "relative",
+};
+
+const gateRegionStyle: CSSProperties = {
+  flexShrink: 0,
+  display: "flex",
+  flexDirection: "column",
+  gap: 8,
+  padding: 16,
+  maxHeight: "50%",
+  overflow: "auto",
+  borderBottom: "1px solid var(--color-border, #22252e)",
+};
+
+// The upgrade toast floats over the bottom-right of the canvas (non-modal).
+const toastLayerStyle: CSSProperties = {
+  position: "absolute",
+  right: 16,
+  bottom: 16,
+  zIndex: 3,
 };
 
 const errorBannerStyle: CSSProperties = {

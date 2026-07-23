@@ -389,6 +389,13 @@ export function RunRoute({
         onOpenModelSettings={onOpenModelSettings}
         renderComposer={renderComposer}
         renderEmptyComposer={renderEmptyComposer}
+        // Surfaces v2 integration mount pass: the same web `mcpAuthPort` now also
+        // drives the CANVAS gate card's Connect/Skip (C2), alongside the in-chat
+        // `mcp_auth` card. Every other v2 canvas mutation (stage decisions /
+        // revisions / apply, the write-policy PATCH, the pending-work fetch,
+        // Review→focus) rides the cockpit's own Transport port inside
+        // `RunDestination` — the same pattern as `resolveApproval` /
+        // `handleRegenerateView` — so no per-binder callback duplication.
         mcpAuthPort={mcpAuthPort}
         // WC-P6a (AD-11): in-chat citation chips. The cockpit mounts the
         // CitationsProvider (fed by projectCitations over session.events); these

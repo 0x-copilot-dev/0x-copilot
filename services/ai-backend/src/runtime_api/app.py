@@ -447,11 +447,24 @@ class RuntimeApiAppFactory:
         from agent_runtime.api.surface_view_coordinator import (  # noqa: PLC0415
             SurfaceViewCoordinator,
         )
+        from agent_runtime.observability.usage_recorder import (  # noqa: PLC0415
+            PostgresUsageRecorder,
+        )
+        from agent_runtime.pricing import ModelPricingCatalog  # noqa: PLC0415
 
         app.state.surface_view_coordinator = SurfaceViewCoordinator(
             persistence=_ports.persistence,
             event_store=_ports.event_store,
             event_producer=_event_producer,
+            # Durable per-call usage table (A2) — the same production recorder the
+            # run handler defaults to. Replaces the NullUsageRecorder so a shaping
+            # (regenerate) attempt writes a ``view_shaping`` usage row, not only the
+            # ledger ``usage.recorded`` emit. Fail-soft: writes go through
+            # PersistencePort, and a missing table degrades with a warning.
+            usage_recorder=PostgresUsageRecorder(
+                persistence=_ports.persistence,
+                pricing_catalog=ModelPricingCatalog.from_litellm(),
+            ),
         )
         _model_resolver = ModelConfigResolver(_settings)
 
