@@ -30,6 +30,7 @@ from typing import Any, Iterable
 import yaml
 
 from backend_app.connectors.store import (
+    ConnectorAccessMode,
     ConnectorAuditRecord,
     ConnectorRecord,
     ConnectorScopeEntry,
@@ -470,6 +471,68 @@ class ConnectorsService:
                         correlation_id=",".join(sorted(removed)),
                     )
                 )
+        return stored
+
+    def set_access_mode(
+        self,
+        *,
+        tenant_id: str,
+        caller_user_id: str,
+        caller_roles: Iterable[str],
+        connector_id: str,
+        access_mode: ConnectorAccessMode,
+    ) -> ConnectorRecord:
+        """Set the per-connector agent access mode (PRD-06 D2).
+
+        Permission boundary (stated once): the connector's ``owner_user_id``,
+        or any caller holding ``admin``/``owner`` in the tenant, may change
+        the mode. Nobody else — including other tenant members who can *read*
+        the row. ``_authorize_write`` enforces this and 404s (not 403) a
+        cross-tenant id so existence never leaks.
+
+        Idempotent: a PATCH whose value equals the stored value returns the
+        unchanged row and writes **zero** audit rows. A real change writes
+        exactly one ``connector.access_mode_changed`` audit row atomically
+        with the row update, carrying ``correlation_id="{previous}->{next}"``
+        so the tamper-evident chain records who changed a connector's
+        authority, when, and from what to what.
+        """
+
+        # Coerce so callers may pass the enum or its string value; an invalid
+        # value raises ``ValueError`` (the route maps it to 400 before this).
+        access_mode = ConnectorAccessMode(access_mode)
+        existing = self._authorize_write(
+            tenant_id=tenant_id,
+            caller_user_id=caller_user_id,
+            caller_roles=caller_roles,
+            connector_id=connector_id,
+        )
+        if existing.access_mode == access_mode:
+            # No-op: don't emit audit noise for a set-to-current-value.
+            return existing
+
+        previous = existing.access_mode
+        new_record = existing.model_copy(
+            update={
+                "access_mode": access_mode,
+                "updated_at": _now(),
+            }
+        )
+        before_state = _safe_dump(existing)
+        after_state = _safe_dump(new_record)
+        with self._store.transaction(org_id=tenant_id):
+            stored = self._store.update_connector(new_record)
+            self._store.append_audit(
+                ConnectorAuditRecord(
+                    tenant_id=tenant_id,
+                    actor_user_id=caller_user_id,
+                    action="connector.access_mode_changed",
+                    target_id=stored.id,
+                    before_state=before_state,
+                    after_state=after_state,
+                    correlation_id=f"{previous.value}->{access_mode.value}",
+                )
+            )
         return stored
 
     def mark_error(

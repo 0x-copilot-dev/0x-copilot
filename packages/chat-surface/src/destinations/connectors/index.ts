@@ -20,6 +20,7 @@ export { ConnectorCard } from "./ConnectorCard";
 export type { ConnectorCardProps } from "./ConnectorCard";
 export { AccessModeSegment } from "./AccessModeSegment";
 export type { AccessModeSegmentProps } from "./AccessModeSegment";
+export type { ConnectorAccessPort } from "./ports/ConnectorAccessPort";
 export { ConnectorsPanel } from "./ConnectorsPanel";
 export type { ConnectorsPanelProps } from "./ConnectorsPanel";
 export { RevealOnce } from "./RevealOnce";

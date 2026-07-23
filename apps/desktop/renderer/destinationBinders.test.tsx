@@ -36,7 +36,7 @@ import { cleanup, fireEvent, render, waitFor } from "@testing-library/react";
 import { type ReactElement } from "react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
-import { ChatsBinder, RunBinder } from "./destinationBinders";
+import { ChatsBinder, ConnectorsBinder, RunBinder } from "./destinationBinders";
 
 // globals: false in the desktop vitest config → register cleanup explicitly.
 afterEach(() => {
@@ -302,14 +302,23 @@ describe("ChatsBinder — reopen threads the real conversation id", () => {
   it("invokes onOpenConversation with the row's conversation id on reopen", async () => {
     const recorder: Recorder = { calls: [] };
     const onOpenConversation = vi.fn();
-    const conversation = {
+    // A fully-typed Conversation (no `as unknown as` escape hatch — that double
+    // assertion silently defeated the PRD-05 `latest_run_status` narrowing).
+    // `latest_run_status` carries an emittable non-terminal status.
+    const conversation: Conversation = {
       conversation_id: "conv-42",
+      org_id: "org-1",
+      user_id: "user-1",
+      assistant_id: "asst-1",
       title: "Watchlist digest",
       status: "active",
+      created_at: "2026-07-22T00:00:00Z",
       updated_at: "2026-07-22T00:00:00Z",
+      archived_at: null,
       metadata: {},
-      latest_run_status: "completed",
-    } as unknown as Conversation;
+      schema_version: 1,
+      latest_run_status: "running",
+    };
 
     const ui: ReactElement = (
       <TransportProvider transport={chatsTransport(recorder, [conversation])}>
@@ -329,5 +338,175 @@ describe("ChatsBinder — reopen threads the real conversation id", () => {
 
     expect(onOpenConversation).toHaveBeenCalledTimes(1);
     expect(onOpenConversation).toHaveBeenCalledWith("conv-42");
+  });
+});
+
+describe("ChatsBinder — reads first-class preview/model/pinned (PRD-03 Move 1)", () => {
+  it("renders the first-class fields (not metadata) and buckets a pinned row", async () => {
+    const recorder: Recorder = { calls: [] };
+    // First-class fields carry the real values; a stale `metadata` blob carries
+    // contradictory ones. Nothing writes `metadata.*`, so the first-class
+    // fields must win — the exact drift the old local `toArchiveRow` shipped.
+    const conversation: Conversation = {
+      conversation_id: "conv-pin",
+      org_id: "org-1",
+      user_id: "user-1",
+      assistant_id: "asst-1",
+      title: "Pinned digest",
+      status: "active",
+      created_at: "2026-07-22T00:00:00Z",
+      updated_at: "2026-07-22T00:00:00Z",
+      archived_at: null,
+      metadata: { preview: "WRONG", model: "WRONG", pinned: false },
+      schema_version: 1,
+      pinned: true,
+      preview: "hello",
+      model: "claude-sonnet-4.5",
+    };
+
+    const ui: ReactElement = (
+      <TransportProvider transport={chatsTransport(recorder, [conversation])}>
+        <RouterProvider router={fakeRouter()}>
+          <ChatsBinder />
+        </RouterProvider>
+      </TransportProvider>
+    );
+    const { container } = render(ui);
+
+    const preview = await waitFor(() => {
+      const el = container.querySelector(
+        "[data-testid='chat-archive-row-preview']",
+      );
+      expect(el).not.toBeNull();
+      return el as HTMLElement;
+    });
+    expect(preview.textContent).toBe("hello");
+    expect(
+      container.querySelector("[data-testid='chat-archive-row-model']")
+        ?.textContent,
+    ).toBe("claude-sonnet-4.5");
+    // The contradictory metadata values never surface.
+    expect(container.textContent ?? "").not.toContain("WRONG");
+    // `pinned: true` (first-class) buckets the row into the Pinned section —
+    // on `main` desktop read `metadata.pinned`, so Pinned was always empty.
+    const pinnedList = container.querySelector(
+      "[data-testid='chats-section-pinned-list']",
+    );
+    expect(
+      pinnedList?.querySelector("[data-testid='chat-archive-row']"),
+    ).not.toBeNull();
+  });
+});
+
+// ---------------------------------------------------------------------------
+// PRD-06 DoD 15 — regression guard for the "Off everywhere" bug on desktop.
+// The binder must (a) render each connector's REAL access mode (not a blanket
+// "off"), and (b) persist a change via PATCH /v1/connectors/{id}/access-mode
+// through the shared `ConnectorAccessPort` seam.
+// ---------------------------------------------------------------------------
+
+function connectorsTransport(recorder: Recorder): Transport {
+  const connectors = [
+    {
+      id: "conn_gmail",
+      tenant_id: "tnt_1",
+      slug: "gmail",
+      display_name: "Gmail",
+      description: "",
+      status: "connected",
+      access_mode: "read",
+      owner_user_id: "user_1",
+      scopes: [],
+      last_sync_at: null,
+      created_at: "2026-07-22T00:00:00Z",
+      updated_at: "2026-07-22T00:00:00Z",
+    },
+    {
+      id: "conn_slack",
+      tenant_id: "tnt_1",
+      slug: "slack",
+      display_name: "Slack",
+      description: "",
+      status: "connected",
+      access_mode: "read_act",
+      owner_user_id: "user_1",
+      scopes: [],
+      last_sync_at: null,
+      created_at: "2026-07-22T00:00:00Z",
+      updated_at: "2026-07-22T00:00:00Z",
+    },
+  ];
+  return {
+    request: <TRes,>(req: TypedRequest): Promise<TRes> => {
+      recorder.calls.push(req);
+      if (req.method === "GET" && req.path === "/v1/connectors") {
+        return Promise.resolve({
+          connectors,
+          available: [],
+        } as unknown as TRes);
+      }
+      if (
+        req.method === "PATCH" &&
+        req.path.startsWith("/v1/connectors/") &&
+        req.path.endsWith("/access-mode")
+      ) {
+        const body = req.body as { access_mode: string };
+        return Promise.resolve({
+          connector: { ...connectors[0], access_mode: body.access_mode },
+        } as unknown as TRes);
+      }
+      return Promise.resolve({} as TRes);
+    },
+    subscribeServerSentEvents: (
+      _opts: SseSubscribeOptions,
+    ): SseSubscription => ({ close: () => undefined }),
+    getSession: (): Session => ({ bearer: null }),
+    capabilities: (): TransportCapabilities => ({
+      substrate: "desktop-webview",
+      nativeSecretStorage: true,
+      fileSystemAccess: false,
+      clipboardWrite: false,
+      openExternal: false,
+    }),
+  };
+}
+
+describe("ConnectorsBinder — access mode reflects real authority + persists", () => {
+  it("renders each connector's real mode (not all off) and PATCHes on change", async () => {
+    const recorder: Recorder = { calls: [] };
+    const { container, getAllByTestId, getByRole } = render(
+      <TransportProvider transport={connectorsTransport(recorder)}>
+        <ConnectorsBinder />
+      </TransportProvider>,
+    );
+
+    // Both segments render their REAL mode — the bug painted every row "off".
+    const segments = await waitFor(() => {
+      const found = getAllByTestId("access-mode-segment");
+      expect(found).toHaveLength(2);
+      return found;
+    });
+    const values = segments.map((s) => s.getAttribute("data-value")).sort();
+    expect(values).toEqual(["read", "read_act"]);
+    expect(values).not.toEqual(["off", "off"]);
+
+    // Click a third option on the Gmail (read) segment → issues the PATCH.
+    const gmail = getByRole("radiogroup", { name: "Access mode for Gmail" });
+    fireEvent.click(
+      gmail.querySelector(
+        "[data-testid='access-mode-option-read_act']",
+      ) as HTMLElement,
+    );
+
+    await waitFor(() => {
+      const patch = recorder.calls.find(
+        (c) =>
+          c.method === "PATCH" &&
+          c.path === "/v1/connectors/conn_gmail/access-mode",
+      );
+      expect(patch).toBeDefined();
+      expect(patch?.body).toEqual({ access_mode: "read_act" });
+    });
+    expect(container).toBeTruthy();
   });
 });

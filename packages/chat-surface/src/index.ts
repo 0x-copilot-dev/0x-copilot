@@ -60,6 +60,20 @@ export {
 } from "./providers/DeploymentProfileProvider";
 // === end Phase 0 (PR-0.4) ===
 export { ChatShell } from "./shell/ChatShell";
+// === PRD-03 — host binding contract + shared projections ===
+// The TOTAL props boundary between chat-surface and its two hosts. Binding
+// types (required, `undefined`-free) + the type-derived field manifests both
+// host conformance tests iterate. `toChatArchiveRow` is the single per-row
+// chats projection both hosts now call (was duplicated per binder).
+export type {
+  ProjectsDetailBinding,
+  ProjectsHostBinding,
+  ShellHostBinding,
+  ExhaustiveBindingManifest,
+} from "./contract";
+export { PROJECTS_BINDING_FIELDS, SHELL_BINDING_FIELDS } from "./contract";
+export { toChatArchiveRow } from "./projections/chats";
+// === end PRD-03 ===
 export { CopyIcon } from "./icons/CopyIcon";
 export { RetryIcon } from "./icons/RetryIcon";
 export { ThinkingIcon } from "./icons/ThinkingIcon";
@@ -531,8 +545,12 @@ export {
   ProjectFilterChip,
   ProjectsDestination,
   ProjectsPanel,
+  // PRD-03 Move 1: `cacheProjectNames` is no longer a host duty — the
+  // `ProjectsDestination` primes the cache from `items` itself, so it is
+  // dropped from the public barrel (kept exported from `projectNameCache.ts`
+  // for tests). `cacheProjectName` / `getCachedProjectName` stay for the
+  // resolver's own use.
   cacheProjectName,
-  cacheProjectNames,
   getCachedProjectName,
   type ProjectActivityCounts,
   type ProjectColorHue,
@@ -642,6 +660,7 @@ export type {
   ConnectorsFilterCounts,
   ConnectorsFilterSlug,
   ConnectorCardProps,
+  ConnectorAccessPort,
   ConnectorsPanelProps,
   RevealOnceProps,
   ConnectorDetailViewProps,
@@ -1150,7 +1169,6 @@ export {
 // The host binder (PR-4.6) composes conversations + audit into the rows.
 export {
   ActivityDestination,
-  activityStatusLabel,
   activityStatusTone,
   groupActivityByDay,
   ACTIVITY_LEAD_COPY,
@@ -1182,7 +1200,8 @@ export {
 // === Phase 4 (PR-4.7) — Tools access-mode segment ===
 // The Connectors destination, relabeled "Tools" (FR-4.20): each connected
 // tool row renders <AccessModeSegment> (Read / Read & act / Off — FR-4.21),
-// changes routed via the destination's `onSetAccessMode(id, mode)` (FR-4.22),
+// changes persisted through the host-injected `ConnectorAccessPort` (PRD-06
+// D4 — the destination owns the optimistic apply / revert / error banner),
 // plus the approval-policy note pointing at Settings → Model & behavior
 // (FR-4.25). `ConnectorsDestination` / `ConnectorCard` themselves are already
 // surfaced above (Phase 2-A / 3 block); this block adds only the new symbols.
@@ -1192,7 +1211,7 @@ export {
   TOOLS_POLICY_NOTE_COPY,
 } from "./destinations/connectors";
 export type { AccessModeSegmentProps } from "./destinations/connectors";
-// Re-export the wire union so hosts can type `onSetAccessMode` / segment
+// Re-export the wire union so hosts can type the access-mode port / segment
 // values without a second `@0x-copilot/api-types` import.
 export type { ConnectorAccessMode } from "@0x-copilot/api-types";
 // === end Phase 4 (PR-4.7) ===

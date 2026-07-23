@@ -1,7 +1,14 @@
 // ConnectorsDestination — "Tools" relabel, access-mode segment wiring,
 // approval-policy note, and reconnect (FR-4.20/4.22/4.24/4.25).
 
-import { fireEvent, render, screen, within } from "@testing-library/react";
+import {
+  act,
+  fireEvent,
+  render,
+  screen,
+  waitFor,
+  within,
+} from "@testing-library/react";
 import { describe, expect, it, vi } from "vitest";
 
 import type {
@@ -19,6 +26,7 @@ import {
   TOOLS_POLICY_NOTE_COPY,
   TOOLS_SUBTITLE,
 } from "./ConnectorsDestination";
+import type { ConnectorAccessPort } from "./ports/ConnectorAccessPort";
 
 type Items = SectionResult<{
   readonly connectors: ReadonlyArray<Connector>;
@@ -34,6 +42,7 @@ function makeConnector(
     display_name: "Gmail",
     description: "Read Gmail threads and labels.",
     status: "connected",
+    access_mode: "read",
     owner_user_id: "user_1" as UserId,
     scopes: [],
     last_sync_at: null,
@@ -59,7 +68,7 @@ function makeItems(): Items {
           id: "conn_slack" as ConnectorId,
           display_name: "Slack",
           slug: "slack" as ConnectorSlug,
-          // No access_mode — should default to least privilege ("off").
+          access_mode: "off",
           status: "connected",
         }),
         makeConnector({
@@ -122,7 +131,7 @@ describe("ConnectorsDestination — Tools relabel", () => {
   });
 });
 
-describe("ConnectorsDestination — access-mode segment (FR-4.21/4.22)", () => {
+describe("ConnectorsDestination — access-mode segment (FR-4.21/4.22, PRD-06)", () => {
   it("each connected row renders an AccessModeSegment reflecting its mode", () => {
     render(<ConnectorsDestination items={makeItems()} />);
     const gmail = screen.getByRole("radiogroup", {
@@ -132,32 +141,65 @@ describe("ConnectorsDestination — access-mode segment (FR-4.21/4.22)", () => {
       "aria-checked",
       "true",
     );
-  });
-
-  it("defaults an omitted access_mode to least privilege (off)", () => {
-    render(<ConnectorsDestination items={makeItems()} />);
-    const slack = screen.getByRole("radiogroup", {
-      name: "Access mode for Slack",
+    // A read_act connector renders its segment with data-value="read_act".
+    const notion = screen.getByRole("radiogroup", {
+      name: "Access mode for Notion",
     });
-    expect(within(slack).getByRole("radio", { name: "Off" })).toHaveAttribute(
-      "aria-checked",
-      "true",
-    );
+    expect(notion).toHaveAttribute("data-testid", "access-mode-segment");
+    expect(notion).toHaveAttribute("data-value", "read_act");
   });
 
-  it("changing a segment fires onSetAccessMode(id, mode)", () => {
-    const onSetAccessMode = vi.fn();
+  it("clicking an option calls accessPort.setAccessMode once + optimistically flips", () => {
+    let resolve!: (c: Connector) => void;
+    const setAccessMode = vi.fn(
+      () =>
+        new Promise<Connector>((r) => {
+          resolve = r;
+        }),
+    );
+    const accessPort: ConnectorAccessPort = { setAccessMode };
     render(
-      <ConnectorsDestination
-        items={makeItems()}
-        onSetAccessMode={onSetAccessMode}
-      />,
+      <ConnectorsDestination items={makeItems()} accessPort={accessPort} />,
     );
-    const gmail = screen.getByRole("radiogroup", {
-      name: "Access mode for Gmail",
+    const notion = screen.getByRole("radiogroup", {
+      name: "Access mode for Notion",
     });
-    fireEvent.click(within(gmail).getByRole("radio", { name: "Read & act" }));
-    expect(onSetAccessMode).toHaveBeenCalledWith("conn_gmail", "read_act");
+    // Starts at read_act.
+    expect(notion).toHaveAttribute("data-value", "read_act");
+    fireEvent.click(within(notion).getByTestId("access-mode-option-off"));
+    expect(setAccessMode).toHaveBeenCalledTimes(1);
+    expect(setAccessMode).toHaveBeenCalledWith("conn_notion", "off");
+    // Optimistically flips to off before the promise settles.
+    expect(notion).toHaveAttribute("data-value", "off");
+    // Settle to avoid an unhandled promise.
+    act(() => {
+      resolve(
+        makeConnector({ id: "conn_notion" as ConnectorId, access_mode: "off" }),
+      );
+    });
+  });
+
+  it("reverts to the server mode + renders the error banner on a rejected PATCH", async () => {
+    const setAccessMode = vi.fn(() => Promise.reject(new Error("boom")));
+    const accessPort: ConnectorAccessPort = { setAccessMode };
+    render(
+      <ConnectorsDestination items={makeItems()} accessPort={accessPort} />,
+    );
+    const notion = screen.getByRole("radiogroup", {
+      name: "Access mode for Notion",
+    });
+    fireEvent.click(within(notion).getByTestId("access-mode-option-off"));
+    // Optimistic flip happens first.
+    expect(notion).toHaveAttribute("data-value", "off");
+    // After rejection it reverts to the server value and the banner renders.
+    await waitFor(() => {
+      expect(
+        screen.getByRole("radiogroup", { name: "Access mode for Notion" }),
+      ).toHaveAttribute("data-value", "read_act");
+    });
+    expect(
+      screen.getByTestId("connectors-access-mode-error"),
+    ).toBeInTheDocument();
   });
 });
 

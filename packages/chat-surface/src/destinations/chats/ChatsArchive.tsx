@@ -76,18 +76,10 @@ function statusTone(status: ChatArchiveStatus): StatusTone {
   return runStatusTone(status).tone;
 }
 
-function statusLabel(status: ChatArchiveStatus): string {
-  switch (status) {
-    case "running":
-      return "Running";
-    case "paused":
-      return "Paused";
-    case "done":
-      return "Done";
-    case "archived":
-      return "Archived";
-  }
-}
+// NOTE (PRD-02): the former local `statusLabel` is deleted. The chip label comes
+// from the shell SSOT `runStatusTone(status).label` (already computed as
+// `presentation` in the row view) — one lowercase vocabulary shared with
+// Activity, matching the design's `.chip` text.
 
 // ===========================================================================
 // Public props
@@ -476,7 +468,7 @@ function ChatArchiveRowView({
   const chip = (
     <StatusPill
       status={statusTone(row.status)}
-      label={statusLabel(row.status)}
+      label={presentation.label}
       showDot={presentation.showDot}
     />
   );

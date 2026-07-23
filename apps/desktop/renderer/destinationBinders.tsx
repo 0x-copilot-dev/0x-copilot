@@ -36,8 +36,10 @@ import {
   buildRunCreateBody,
   createProviderKeysPort,
   messageFromError,
+  toChatArchiveRow,
   useNotify,
   useTransport,
+  type ConnectorAccessPort,
   type ConnectorsFilterSlug,
   type ProjectSummary,
   type RunEmptyComposerCtx,
@@ -49,12 +51,14 @@ import type {
   AgentRunStatus,
   AuditEvent,
   ChatArchiveRow,
-  ChatArchiveStatus,
   ChatsArchive as ChatsArchiveData,
   Connector,
+  ConnectorAccessMode,
   ConnectorCatalogEntry,
+  ConnectorId,
   ConnectorListResponse,
   ConnectorSlug,
+  SetConnectorAccessModeResponse,
   Conversation,
   ConversationId,
   ConversationListResponse,
@@ -79,6 +83,7 @@ import { CONNECTOR_CHANNELS } from "../main/connectors/channels";
 import { RunComposer } from "./composer/RunComposer";
 import { RunEmptyComposer } from "./composer/RunEmptyComposer";
 import { createComposerConnectorsPort } from "./composer/composerConnectorsPort";
+import { DESKTOP_PROJECTS_DETAIL } from "./shellBinding";
 
 // ---------------------------------------------------------------------------
 // Shared load hook — drives the 4-state machine (loading / ok / empty / error)
@@ -124,12 +129,23 @@ function errorText(error: unknown): string {
 // Shared nav callbacks the shell threads down from bootstrap. Each surface
 // picks the subset it needs.
 export interface DestinationBinderCallbacks {
-  /** Switch the active destination to Run (open-run / run-skill / new chat). */
-  readonly onOpenRun?: () => void;
+  /**
+   * Open a SPECIFIC run — carries the run id (PRD-03 Move 3). Activity rows
+   * call it with the row's `run_id`; a 0-arity callback that discarded the id
+   * (the old bug) no longer type-satisfies this. Where `onOpenRun(runId)`
+   * navigates is PRD-04's concern.
+   */
+  readonly onOpenRun?: (runId: RunId) => void;
+  /**
+   * Start / navigate to a NEW chat on the Run cockpit front door (no id).
+   * Chats' "New chat" and Skills' "Run" use it. Split out from `onOpenRun`
+   * (which now carries a run id) so the two intents can't be conflated.
+   */
+  readonly onNewChat?: () => void;
   /**
    * Reopen a specific conversation from Chats — navigate to its Run route with
    * the real conversation id (so the cockpit resolves that conversation's
-   * transcript + latest run, not a placeholder). Distinct from `onOpenRun`,
+   * transcript + latest run, not a placeholder). Distinct from `onNewChat`,
    * which only lands on the cockpit front door without an id.
    */
   readonly onOpenConversation?: (id: ConversationId) => void;
@@ -144,44 +160,11 @@ export interface DestinationBinderCallbacks {
 // Mirrors apps/frontend chatsApi.bucketConversations (FR-4.5/4.9).
 // ===========================================================================
 
-function chatStatus(conversation: Conversation): ChatArchiveStatus {
-  if (conversation.status === "archived" || conversation.archived_at != null) {
-    return "archived";
-  }
-  switch (conversation.latest_run_status) {
-    case "running":
-    case "queued":
-    case "cancelling":
-      return "running";
-    case "waiting_for_approval":
-      return "paused";
-    default:
-      return "done";
-  }
-}
-
-function metaString(conversation: Conversation, key: string): string {
-  const metadata = conversation.metadata as Record<string, unknown> | undefined;
-  const value = metadata?.[key];
-  return typeof value === "string" ? value : "";
-}
-
-function toArchiveRow(conversation: Conversation): ChatArchiveRow {
-  const title = conversation.title?.trim();
-  const metadata = conversation.metadata as
-    | { readonly pinned?: unknown }
-    | undefined;
-  return {
-    id: conversation.conversation_id as ConversationId,
-    title: title !== undefined && title.length > 0 ? title : "New chat",
-    status: chatStatus(conversation),
-    preview: metaString(conversation, "preview"),
-    model: metaString(conversation, "model"),
-    updated_at: conversation.updated_at,
-    pinned: metadata?.pinned === true,
-  };
-}
-
+// Per-row projection is the shared `toChatArchiveRow` (PRD-03 Move 1) — it
+// reads the FIRST-CLASS `pinned` / `preview` / `model` fields. The local copy
+// this file used to carry read `metadata.*` keys that nothing writes, so
+// desktop's Pinned was always empty and preview/model never rendered.
+// Bucketing stays host-side per-row here (PRD-09 D1 moves it into the query).
 export function bucketConversations(
   conversations: ReadonlyArray<Conversation>,
 ): ChatsArchiveData {
@@ -190,7 +173,7 @@ export function bucketConversations(
   const archived: ChatArchiveRow[] = [];
   for (const conversation of conversations) {
     if (conversation.deleted_at != null) continue; // tombstone — never shown
-    const row = toArchiveRow(conversation);
+    const row = toChatArchiveRow(conversation);
     if (row.status === "archived") archived.push(row);
     else if (row.pinned) pinned.push(row);
     else recent.push(row);
@@ -213,7 +196,7 @@ async function loadChats(
 }
 
 export function ChatsBinder({
-  onOpenRun,
+  onNewChat,
   onOpenConversation,
 }: DestinationBinderCallbacks): ReactElement {
   const transport = useTransport();
@@ -227,7 +210,7 @@ export function ChatsBinder({
       // conversation's transcript + latest run instead of dropping to the
       // empty "NO ACTIVE RUN" state. New chat lands on the cockpit front door.
       onReopen={(id) => onOpenConversation?.(id)}
-      onNewChat={() => onOpenRun?.()}
+      onNewChat={() => onNewChat?.()}
       onRetry={retry}
     />
   );
@@ -364,7 +347,10 @@ export function ActivityBinder({
     <ActivityDestination
       items={result}
       now={now}
-      onOpenRun={() => onOpenRun?.()}
+      // Forward the row's run id (PRD-03 Move 3). The old `() => onOpenRun?.()`
+      // discarded it — a 0-arity fn is assignable to `(runId) => void`, so types
+      // could not catch the drop; the conformance test's arity assertion does.
+      onOpenRun={onOpenRun}
       onOpenRetentionSettings={onOpenRetentionSettings}
       onRetry={retry}
     />
@@ -451,6 +437,26 @@ export function ConnectorsBinder({
   const { result, retry } = useSectionLoad(load);
   const [filter, setFilter] = useState<ConnectorsFilterSlug>("connected");
 
+  // PRD-06 D4 — the access-mode writer, over the shell Transport (IPC → facade
+  // PATCH). The destination owns the optimistic apply / revert / error banner;
+  // the binder supplies only this one method. No token crosses the bridge.
+  const accessPort = useMemo<ConnectorAccessPort>(
+    () => ({
+      setAccessMode: async (
+        id: ConnectorId,
+        mode: ConnectorAccessMode,
+      ): Promise<Connector> => {
+        const res = await transport.request<SetConnectorAccessModeResponse>({
+          method: "PATCH",
+          path: `/v1/connectors/${encodeURIComponent(id)}/access-mode`,
+          body: { access_mode: mode },
+        });
+        return res.connector;
+      },
+    }),
+    [transport],
+  );
+
   // The connect flow is owned by Electron MAIN: the renderer hands main a
   // stable slug and main binds the loopback + opens the system browser. On
   // success we refetch so the newly-connected row appears. No token ever
@@ -484,6 +490,7 @@ export function ConnectorsBinder({
       onFilterChange={setFilter}
       onConnect={() => setFilter("available")}
       onOpenCatalogEntry={connect}
+      accessPort={accessPort}
       onOpenApprovalSettings={onOpenApprovalSettings}
       onRetry={retry}
     />
@@ -521,7 +528,7 @@ async function loadSkills(
 }
 
 export function SkillsBinder({
-  onOpenRun,
+  onNewChat,
 }: DestinationBinderCallbacks): ReactElement {
   const transport = useTransport();
   const load = useCallback(() => loadSkills(transport), [transport]);
@@ -532,7 +539,7 @@ export function SkillsBinder({
   return (
     <SkillsDestination
       items={result}
-      onRunSkill={() => onOpenRun?.()}
+      onRunSkill={() => onNewChat?.()}
       onRetry={retry}
     />
   );
@@ -564,7 +571,17 @@ export function ProjectsBinder(): ReactElement {
   const transport = useTransport();
   const load = useCallback(() => loadProjects(transport), [transport]);
   const { result, retry } = useSectionLoad(load);
-  return <ProjectsDestination items={result} onRetry={retry} />;
+  // Desktop has no project-detail flow yet: the disabled binding is the
+  // EXPLICIT statement of that gap (PRD-03 Move 2). The name cache is primed by
+  // ProjectsDestination from `items`, so cross-destination project links resolve
+  // to the real name (no host cache-priming call any more).
+  return (
+    <ProjectsDestination
+      items={result}
+      detail={DESKTOP_PROJECTS_DETAIL}
+      onRetry={retry}
+    />
+  );
 }
 
 // A stable idempotency key for a NEW chat's first send. Uniqueness per new-chat

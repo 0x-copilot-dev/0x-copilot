@@ -37,6 +37,7 @@ import {
   ConnectModal,
   ConnectorsDestination,
   ConnectorsPanel,
+  type ConnectorAccessPort,
   type ConnectorsFilterCounts,
   type ConnectorsFilterSlug,
   type CustomServerInput,
@@ -106,12 +107,15 @@ export function ConnectorsRoute({
   const [reloadToken, setReloadToken] = useState(0);
   const [filter, setFilter] = useState<ConnectorsFilterSlug>("connected");
   const [pendingError, setPendingError] = useState<string | null>(null);
-  const [accessModeError, setAccessModeError] = useState<string | null>(null);
 
   // ---- Connect flow (FR-4.23) — ConnectModal is host-driven -----------
   const [connectOpen, setConnectOpen] = useState(false);
   const [connectPending, setConnectPending] = useState(false);
   const [connectError, setConnectError] = useState<string | null>(null);
+  // Route-level banner for an access-mode PATCH failure. The shared
+  // ConnectorsDestination already reverts the segment inline; this is the
+  // web route's own surface so the failure is visible above the fold.
+  const [accessModeError, setAccessModeError] = useState<string | null>(null);
   // Slug the OAuth round-trip is currently authorizing. The SSE channel
   // reports completion (`connector.created` / `status_changed` → connected)
   // for this slug, which clears `connectPending` and advances the modal to
@@ -299,27 +303,27 @@ export function ConnectorsRoute({
     setConnectError(null);
   }, []);
 
-  // Access-mode PATCH (FR-4.22) — apply optimistically, reconcile against
-  // server truth on success, revert + surface an inline error on failure.
-  const handleSetAccessMode = useCallback(
-    async (id: ConnectorId, mode: ConnectorAccessMode): Promise<void> => {
-      const previous = connectorsRef.current.find(
-        (c) => c.id === id,
-      )?.access_mode;
-      setAccessModeError(null);
-      // Optimistic apply.
-      setState((prev) => {
-        if (prev.kind !== "ready") return prev;
-        const connectors = prev.response.connectors.map((c) =>
-          c.id === id ? { ...c, access_mode: mode } : c,
-        );
-        return { ...prev, response: { ...prev.response, connectors } };
-      });
-      try {
-        const res = await setConnectorAccessMode(identity, id, {
-          access_mode: mode,
-        });
-        // Reconcile with the authoritative row the server returned.
+  // Access-mode PATCH (FR-4.22, PRD-06 D4) — the optimistic-apply / revert /
+  // error-banner state machine now lives ONCE inside `ConnectorsDestination`.
+  // The host supplies only this single-method port; on success it also merges
+  // the reconciled row into the local list so the SSE-fed state stays truthful.
+  const accessPort = useMemo<ConnectorAccessPort>(
+    () => ({
+      setAccessMode: async (id: ConnectorId, mode: ConnectorAccessMode) => {
+        setAccessModeError(null);
+        let res;
+        try {
+          res = await setConnectorAccessMode(identity, id, {
+            access_mode: mode,
+          });
+        } catch (error: unknown) {
+          // Surface the failure at the route level, then re-throw so the
+          // shared segment performs its optimistic revert (DoD 12).
+          setAccessModeError(
+            errorMessage(error, "Could not change the access mode."),
+          );
+          throw error;
+        }
         setState((prev) => {
           if (prev.kind !== "ready") return prev;
           const connectors = prev.response.connectors.map((c) =>
@@ -327,20 +331,9 @@ export function ConnectorsRoute({
           );
           return { ...prev, response: { ...prev.response, connectors } };
         });
-      } catch (error: unknown) {
-        // Revert to the pre-optimistic mode.
-        setState((prev) => {
-          if (prev.kind !== "ready") return prev;
-          const connectors = prev.response.connectors.map((c) =>
-            c.id === id ? { ...c, access_mode: previous } : c,
-          );
-          return { ...prev, response: { ...prev.response, connectors } };
-        });
-        setAccessModeError(
-          errorMessage(error, "Could not update the tool's access mode."),
-        );
-      }
-    },
+        return res.connector;
+      },
+    }),
     [identity],
   );
 
@@ -435,16 +428,9 @@ export function ConnectorsRoute({
       setConnectPending(true);
       setConnectError(null);
       try {
-        const res = await setConnectorAccessMode(identity, connector.id, {
-          access_mode: permission,
-        });
-        setState((prev) => {
-          if (prev.kind !== "ready") return prev;
-          const connectors = prev.response.connectors.map((c) =>
-            c.id === connector.id ? res.connector : c,
-          );
-          return { ...prev, response: { ...prev.response, connectors } };
-        });
+        // Terminal Connect persists the chosen mode through the SAME port the
+        // segment uses (PRD-06 D4) — one write path, reconciled into state.
+        await accessPort.setAccessMode(connector.id, permission);
         handleCloseConnect();
       } catch (error: unknown) {
         setConnectPending(false);
@@ -593,9 +579,7 @@ export function ConnectorsRoute({
           onReconnect={(id) => {
             void handleReconnect(id);
           }}
-          onSetAccessMode={(id, mode) => {
-            void handleSetAccessMode(id, mode);
-          }}
+          accessPort={accessPort}
           onOpenApprovalSettings={onOpenApprovalSettings}
           onRetry={() => setReloadToken((t) => t + 1)}
         />

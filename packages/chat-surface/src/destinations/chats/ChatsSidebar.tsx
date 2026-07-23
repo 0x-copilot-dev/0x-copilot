@@ -20,8 +20,8 @@ const TEXT_PRIMARY = "var(--color-text)";
 const TEXT_SECONDARY = "var(--color-text-muted)";
 const TEXT_TERTIARY = "var(--color-text-subtle)";
 const ACCENT = "var(--color-accent)";
-// Subtle accent tint for fullscreen/active rows — mirrors the design-system
-// .ui-status-pill pattern (color-mix against transparent).
+// Subtle accent tint for fullscreen/active rows — the design-system
+// active-chip pattern (color-mix against transparent).
 const ACTIVE_TINT = "color-mix(in srgb, var(--color-accent) 8%, transparent)";
 const SEARCH_BACKGROUND = "var(--color-bg-elevated)";
 const ERROR_TEXT = "var(--color-danger)";

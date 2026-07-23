@@ -58,11 +58,13 @@ function makeRouter(): Router<ArtifactRoute> & {
   };
 }
 
-function renderDest(props: ProjectsDestinationProps = {}): void {
+function renderDest(props: Partial<ProjectsDestinationProps> = {}): void {
   const router = makeRouter();
   render(
     <RouterProvider router={router}>
-      <ProjectsDestination {...props} />
+      {/* PRD-03: `detail` is required; default to the disabled binding so the
+          existing list-only cases don't each have to spell it out. */}
+      <ProjectsDestination detail={{ mode: "disabled" }} {...props} />
     </RouterProvider>,
   );
 }
@@ -247,14 +249,18 @@ describe("ProjectsDestination", () => {
     expect(onUnstarProject).toHaveBeenCalledWith(ACME.id);
   });
 
-  it("renders the detail slot when renderDetail + focusedProjectId are supplied", () => {
+  it("renders the detail slot when the enabled binding carries renderDetail + focusedProjectId", () => {
     const renderDetail = vi.fn(({ projectId }) => (
       <div data-testid="my-detail">{projectId}</div>
     ));
     renderDest({
       items: ok([ACME, ONBOARDING]),
-      renderDetail,
-      focusedProjectId: ACME.id,
+      detail: {
+        mode: "enabled",
+        renderDetail,
+        focusedProjectId: ACME.id,
+        onCloseDetail: () => {},
+      },
     });
     expect(screen.getByTestId("projects-detail-slot")).toBeInTheDocument();
     expect(screen.getByTestId("my-detail")).toHaveTextContent("proj_acme");
@@ -266,13 +272,16 @@ describe("ProjectsDestination", () => {
     const onCloseDetail = vi.fn();
     renderDest({
       items: ok([ACME]),
-      renderDetail: ({ onClose }) => (
-        <button type="button" data-testid="close-detail" onClick={onClose}>
-          close
-        </button>
-      ),
-      focusedProjectId: ACME.id,
-      onCloseDetail,
+      detail: {
+        mode: "enabled",
+        renderDetail: ({ onClose }) => (
+          <button type="button" data-testid="close-detail" onClick={onClose}>
+            close
+          </button>
+        ),
+        focusedProjectId: ACME.id,
+        onCloseDetail,
+      },
     });
     fireEvent.click(screen.getByTestId("close-detail"));
     expect(onCloseDetail).toHaveBeenCalledTimes(1);

@@ -25,12 +25,12 @@
 
 import type {
   ChatArchiveRow,
-  ChatArchiveStatus,
   ChatsArchive,
   Conversation,
   ConversationId,
   SectionResult,
 } from "@0x-copilot/api-types";
+import { toChatArchiveRow } from "@0x-copilot/chat-surface";
 
 import { listConversations, pinConversation } from "../../../api/agentApi";
 import type { RequestIdentity } from "../../../api/config";
@@ -87,7 +87,7 @@ export function bucketConversations(
     if (conversation.deleted_at != null) {
       continue;
     }
-    const row = toArchiveRow(conversation);
+    const row = toChatArchiveRow(conversation);
     if (row.status === "archived") {
       archived.push(row);
     } else if (row.pinned) {
@@ -100,80 +100,11 @@ export function bucketConversations(
   return { pinned, recent, archived };
 }
 
-/** Project one `Conversation` into a `ChatArchiveRow` (FR-4.6). */
-export function toArchiveRow(conversation: Conversation): ChatArchiveRow {
-  return {
-    id: conversation.conversation_id as ConversationId,
-    title: titleOf(conversation),
-    status: statusOf(conversation),
-    preview: previewOf(conversation),
-    model: modelOf(conversation),
-    updated_at: conversation.updated_at,
-    pinned: isPinned(conversation),
-  };
-}
-
-// ---------------------------------------------------------------------------
-// Field projections
-// ---------------------------------------------------------------------------
-
-function titleOf(conversation: Conversation): string {
-  const title = conversation.title?.trim();
-  return title !== undefined && title.length > 0 ? title : "New chat";
-}
-
-/**
- * Collapse the conversation lifecycle + latest-run status into the
- * four-value archive chip taxonomy (running / done / paused / archived).
- *
- * Archived wins over run status (an archived thread's last run is history).
- * Otherwise the latest run projects the chip: in-flight → running,
- * awaiting a decision → paused, everything terminal (or never-run) → done.
- */
-function statusOf(conversation: Conversation): ChatArchiveStatus {
-  if (conversation.status === "archived" || conversation.archived_at != null) {
-    return "archived";
-  }
-  switch (conversation.latest_run_status) {
-    case "running":
-    case "queued":
-    case "cancelling":
-      return "running";
-    case "waiting_for_approval":
-      return "paused";
-    default:
-      // completed / failed / cancelled / timed_out / null → no live work.
-      return "done";
-  }
-}
-
-/**
- * PRD-H.4 — `pinned` is now a first-class projected conversation field
- * (backed by a real column). Absent/falsey → not pinned; the row falls to
- * the Recent bucket. (Old `metadata.pinned` reads are gone — nothing wrote
- * them, so Pinned was always empty.)
- */
-function isPinned(conversation: Conversation): boolean {
-  return conversation.pinned === true;
-}
-
-/**
- * One-line preview snippet, projected server-side from the last user/
- * assistant message (PRD-H.4). `null`/absent → empty preview and the
- * destination simply shows title + chip + time.
- */
-function previewOf(conversation: Conversation): string {
-  return conversation.preview ?? "";
-}
-
-/**
- * Mono model tag, projected server-side from the latest run's model
- * (PRD-H.4). `null`/absent → empty string, which tells the row to hide the
- * model tag.
- */
-function modelOf(conversation: Conversation): string {
-  return conversation.model ?? "";
-}
+// PRD-03 Move 1 — the per-row projection (`Conversation → ChatArchiveRow`) is
+// now the SHARED `toChatArchiveRow` in `@0x-copilot/chat-surface`, so web and
+// desktop can no longer drift (desktop kept reading `metadata.*` while web
+// migrated to the first-class fields). This binder keeps only the fetch + bucket
+// layer; bucketing moves into the SQL query in PRD-09.
 
 /**
  * PRD-H.4 — pin / unpin binder for the Chats archive. Delegates the HTTP
@@ -189,7 +120,7 @@ export async function setChatPinned(
 ): Promise<SectionResult<ChatArchiveRow>> {
   try {
     const updated = await pinConversation(conversationId, pinned, identity);
-    return { status: "ok", data: toArchiveRow(updated) };
+    return { status: "ok", data: toChatArchiveRow(updated) };
   } catch (error: unknown) {
     return {
       status: "error",

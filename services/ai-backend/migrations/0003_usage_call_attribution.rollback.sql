@@ -1,4 +1,4 @@
--- Rollback 0002_usage_call_attribution: drop the covering index and both
+-- Rollback 0003_usage_call_attribution: drop the covering index and both
 -- per-call attribution columns. Reverses the additive ALTER exactly.
 
 DROP INDEX IF EXISTS idx_runtime_model_call_usage_org_user_created;

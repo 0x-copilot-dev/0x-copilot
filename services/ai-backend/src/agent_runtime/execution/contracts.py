@@ -304,6 +304,22 @@ class CatalogSuggestionCard(RuntimeContract):
         return _normalize_nonempty_string(value, "display_name")
 
 
+class ConnectorAccessMode(StrEnum):
+    """Per-connector agent access mode (PRD-06).
+
+    Byte-identical value set to the backend's ``ConnectorAccessMode`` and the
+    api-types union — the ai-backend can't import the backend's enum across
+    the deployable boundary, so it mirrors the three values. ``off`` is the
+    only value the runtime re-check denies; ``read`` / ``read_act`` are both
+    authorized at the card-visibility gate (the ``read`` write restriction is
+    enforced authoritatively backend-side at ``proxy_internal_rpc``).
+    """
+
+    READ = "read"
+    READ_ACT = "read_act"
+    OFF = "off"
+
+
 class AgentRuntimeContext(RuntimeContract):
     """Immutable, fully-validated identity, authorization, model, and trace context for one request."""
 
@@ -317,6 +333,15 @@ class AgentRuntimeContext(RuntimeContract):
     # "no override" and "everything paused". A paused server is invisible,
     # unloadable, and uncallable for the duration of this run.
     paused_connectors: frozenset[str] = Field(default_factory=frozenset)
+    # Per-connector durable access mode, keyed by the MCP ``server_id`` (PRD-06
+    # D3b). Populated server-side at run-create from the ``/internal/v1/mcp/
+    # cards`` response (each card now carries ``access_mode``). An entry equal
+    # to ``off`` makes the server unauthorized for the whole run — the
+    # defense-in-depth mirror of ``paused_connectors``, catching a stale tool
+    # reference from an earlier turn. A missing key means "no per-connector
+    # gate" (authorized). The authoritative, immediately-effective boundary is
+    # the backend ``proxy_internal_rpc`` gate; this is the frozen snapshot.
+    connector_access_modes: dict[str, ConnectorAccessMode] = Field(default_factory=dict)
     # Uninstalled catalog connectors the agent may suggest this run. Filtered
     # server-side to exclude paused, user-muted, and non-discoverable entries.
     # An empty tuple means the system prompt omits the suggestions section.
@@ -463,6 +488,28 @@ class AgentRuntimeContext(RuntimeContract):
                 raise ValueError(msg)
             normalized.append(item.strip())
         return frozenset(normalized)
+
+    @field_validator("connector_access_modes", mode="before")
+    @classmethod
+    def _normalize_connector_access_modes(
+        cls, value: object
+    ) -> dict[str, ConnectorAccessMode]:
+        # Accept a mapping of connector/server id -> access-mode string (the
+        # ``/internal/v1/mcp/cards`` shape). Keys mirror ``paused_connectors``
+        # (non-empty trimmed strings); values coerce into the enum so an
+        # unknown mode fails loudly rather than silently un-gating.
+        if value is None:
+            return {}
+        if not isinstance(value, Mapping):
+            msg = "connector_access_modes must be a mapping of connector id to mode"
+            raise ValueError(msg)
+        normalized: dict[str, ConnectorAccessMode] = {}
+        for connector_id, mode in value.items():
+            if not isinstance(connector_id, str) or not connector_id.strip():
+                msg = "connector_access_modes keys must be non-empty strings"
+                raise ValueError(msg)
+            normalized[connector_id.strip()] = ConnectorAccessMode(mode)
+        return normalized
 
     @field_validator("provider_keys", mode="before")
     @classmethod

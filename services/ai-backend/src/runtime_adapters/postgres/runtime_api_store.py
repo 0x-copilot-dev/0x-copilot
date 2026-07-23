@@ -102,6 +102,7 @@ from runtime_api.schemas import (
     RuntimeEventEnvelope,
     RuntimeEventPresentationProjector,
     RuntimeRunCommand,
+    RunHistoryEntry,
     RunRecord,
     WorkspaceDefaultsRecord,
 )
@@ -147,6 +148,9 @@ class _Columns:
     CONTENT_TEXT = "content_text"
     CONNECTORS_UPDATED_AT = "connectors_updated_at"
     CONVERSATION_ID = "conversation_id"
+    # PRD-05 — alias for the joined ``agent_conversations.title`` on the
+    # org-scoped run-history query.
+    CONVERSATION_TITLE = "conversation_title"
     COUNT = "count"
     CREATED_AT = "created_at"
     # Two-stage approval forwarding bookkeeping columns on runtime_approval_requests.
@@ -1419,6 +1423,69 @@ class PostgresRuntimeApiStore:
             rows = await cur.fetchall()
         return tuple(self._run_record(row) for row in rows)
 
+    async def list_runs_for_org(
+        self,
+        *,
+        org_id: str,
+        user_id: str,
+        limit: int,
+        before_created_at: datetime | None = None,
+        before_run_id: str | None = None,
+    ) -> tuple[RunHistoryEntry, ...]:
+        """Return the caller's runs newest-first across conversations (PRD-05).
+
+        Keyed on ``agent_runs`` (one row per RUN), joined to
+        ``agent_conversations`` for the title, keyset-paginated on
+        ``(created_at DESC, id DESC)``. The ``c.deleted_at IS NULL`` predicate is
+        load-bearing: soft-deleted conversations (and post-``delete_user_history``
+        history) must not resurface here. Runs under the tenant RLS connection so
+        ``tenant_isolation`` binds as defence-in-depth beneath the ``org_id`` /
+        ``user_id`` predicates.
+        """
+
+        async with self._tenant_connection(org_id=org_id) as conn:
+            cur = await conn.execute(
+                """
+                SELECT r.*, c.title AS conversation_title
+                  FROM agent_runs r
+                  JOIN agent_conversations c
+                    ON c.id = r.conversation_id AND c.org_id = r.org_id
+                 WHERE r.org_id  = %(org_id)s
+                   AND r.user_id = %(user_id)s
+                   AND c.deleted_at IS NULL
+                   AND (%(before_created_at)s IS NULL
+                        OR (r.created_at, r.id)
+                           < (%(before_created_at)s, %(before_run_id)s))
+                 ORDER BY r.created_at DESC, r.id DESC
+                 LIMIT %(limit)s
+                """,
+                {
+                    "org_id": org_id,
+                    "user_id": user_id,
+                    "before_created_at": before_created_at,
+                    "before_run_id": before_run_id,
+                    "limit": max(0, limit),
+                },
+            )
+            rows = await cur.fetchall()
+        return tuple(self._run_history_entry(row) for row in rows)
+
+    @classmethod
+    def _run_history_entry(cls, row: dict[str, object]) -> RunHistoryEntry:
+        """Project a joined ``agent_runs`` + ``conversation_title`` row (PRD-05)."""
+
+        return RunHistoryEntry(
+            run_id=row[_Columns.ID],
+            conversation_id=row[_Columns.CONVERSATION_ID],
+            conversation_title=row[_Columns.CONVERSATION_TITLE],
+            status=row[_Columns.STATUS],
+            model_name=row[_Columns.MODEL_NAME],
+            created_at=row[_Columns.CREATED_AT],
+            started_at=row[_Columns.STARTED_AT],
+            completed_at=row[_Columns.COMPLETED_AT],
+            cancelled_at=row[_Columns.CANCELLED_AT],
+        )
+
     async def get_latest_message_for_conversation(
         self,
         *,
@@ -2308,10 +2375,19 @@ class PostgresRuntimeApiStore:
                 cur = await conn.execute(
                     """
                     UPDATE agent_conversations
-                    SET status = 'archived', archived_at = COALESCE(archived_at, %s), updated_at = %s
-                    WHERE org_id = %s AND user_id = %s AND status <> 'archived'
+                    SET status = 'archived',
+                        archived_at = COALESCE(archived_at, %s),
+                        -- PRD-05 — stamp deleted_at so the run-history feed
+                        -- (list_runs_for_org, which joins on c.deleted_at IS NULL)
+                        -- is actually cleared and the C8 tombstone sweeper can
+                        -- reap the rows. Broadened WHERE covers already-archived
+                        -- rows that still need the deletion tombstone.
+                        deleted_at = COALESCE(deleted_at, %s),
+                        updated_at = %s
+                    WHERE org_id = %s AND user_id = %s
+                      AND (status <> 'archived' OR deleted_at IS NULL)
                     """,
-                    (now, now, org_id, user_id),
+                    (now, now, now, org_id, user_id),
                 )
                 conversations_archived = cur.rowcount
                 cur = await conn.execute(

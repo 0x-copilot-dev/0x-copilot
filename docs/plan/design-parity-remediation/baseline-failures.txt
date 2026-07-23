@@ -29,21 +29,37 @@
 # @0x-copilot/chat-surface   2440 passed (2440)                    exit 0
 # @0x-copilot/frontend       1355 passed (1355)                    exit 0
 # @0x-copilot/desktop        1063 passed | 1 todo (1064)           exit 0
-# @0x-copilot/api-types      44 passed (44), 1 test FILE failed    exit 1
+# @0x-copilot/api-types      47 passed (47)                        exit 0   ← RESOLVED by PRD-05
 #
-# Every runtime assertion in the repo passes. There is exactly one failing
-# entry, and it is a file-level collection error rather than a failed test:
-
-packages/api-types/src/brands.test.ts
-
-# Error: No test suite found in file .../packages/api-types/src/brands.test.ts
+# ===========================================================================
+# BASELINE NOW EMPTY — the one recorded failure was fixed by PRD-05.
+# ===========================================================================
+# The single pre-existing failure below was `packages/api-types/src/brands.test.ts`:
+# a type-only file with no runtime `it()`, so vitest failed the FILE and the
+# api-types workspace exited 1 despite all runtime tests passing.
 #
+# PRD-05 touched api-types (the run-history contract) and its own DoD required
+# `npm test --workspace @0x-copilot/api-types` to exit 0, so it gave brands.test.ts
+# a minimal real runtime suite (asserting brands erase to strings) WHILE keeping
+# every compile-time `@ts-expect-error` guard intact — the exact fix this file's
+# own note recommended below ("give it a real suite"). api-types now exits 0.
+#
+# Effect on the six DoD-Q2 items that reference this file: their `<command> exits 0
+# OR failing ids match this list` disjunction now resolves on the first branch —
+# the workspaces all exit 0, and this list is empty. Nothing downstream weakens;
+# the guarantee got STRONGER (a real failure went away, verified not masked).
+#
+# Retained below for the historical record only — NOT an active baseline entry:
+
+# packages/api-types/src/brands.test.ts   [RESOLVED by PRD-05 — no longer failing]
+
+# Original note (pre-PRD-05):
 # The file contains only compile-time brand assertions (no runtime `it()`), so
 # vitest collects it, finds no suite, and fails the FILE — which makes
 # `npm run test --workspace @0x-copilot/api-types` exit 1 even though all 44
-# runtime tests pass. It is unrelated to this program.
+# runtime tests pass.
 #
-# Not fixed here on purpose: this program's PRDs must not carry drive-by
+# Was originally not fixed on purpose: this program's PRDs must not carry drive-by
 # changes to unrelated packages, and changing it would move the baseline the
 # six DoD items compare against. The correct fix (give it a real suite, or
 # exclude type-only files in the api-types vitest config) belongs in its own

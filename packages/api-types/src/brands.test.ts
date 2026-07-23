@@ -1,13 +1,22 @@
-// Brands are compile-time-only — there is no runtime to assert. These tests
-// exist so the file participates in `npm test` (when api-types ever runs
-// vitest) AND so the type assertions below break the build if a brand
-// regresses to plain `string` or accidentally collapses with another brand.
+// Brands are compile-time-only — there is no runtime to assert. The type
+// assertions below break the build if a brand regresses to plain `string` or
+// accidentally collapses with another brand.
 //
-// Currently api-types has no `test` script (typecheck-only), so this file
-// is checked by tsc through the chat-surface workspace import graph; it is
-// also runnable by any future api-types vitest setup.
+// The package now has a `test` script (`vitest run`), so this file needs a
+// real runtime suite or vitest errors "No test suite found" — the runtime
+// `describe` below provides one (brands erase to strings at runtime) while the
+// module-scope block keeps carrying the compile-time guards for tsc.
+
+import { describe, expect, it } from "vitest";
 
 import type { ApprovalId, ConversationId, RunId, TodoId } from "./brands";
+
+describe("branded ids", () => {
+  it("erase to plain strings at runtime", () => {
+    const id = "run_001" as unknown as RunId;
+    expect(typeof id).toBe("string");
+  });
+});
 
 // Smoke: any plain `string` is NOT assignable to a brand. The expectation
 // here is encoded as a `@ts-expect-error` so that REMOVING the brand

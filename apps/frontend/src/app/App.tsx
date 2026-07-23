@@ -187,6 +187,7 @@ import {
 // tier-1 SaaS + PRD-03 archetypes) once at module init, mirroring the desktop
 // bootstrap. Idempotent (registry replace semantics); no Tier2Bridge on web.
 import { registerSurfaces } from "./registerSurfaces";
+import { buildWebShellBinding } from "./shellBinding";
 // PRD-05 — the `runCockpitWeb` flag (default OFF) gates the real RunDestination
 // cockpit vs the legacy ChatScreen under the `run` slug.
 import { isRunCockpitWebEnabled } from "./featureFlags";
@@ -1211,14 +1212,12 @@ export function CopilotApp({
               })
             }
             onOpenCommandPalette={() => setPaletteOpen(true)}
-            // PRD-C.2 / PRD-H.5 — feed the rail foot avatar the user's initial from
-            // the profile the shell already loads. The Run badge (activeRunCount)
-            // still needs a run-list source and is a documented follow-up.
-            railIdentity={
-              profile?.data?.display_name?.trim()
-                ? { initial: profile.data.display_name.trim().charAt(0) }
-                : undefined
-            }
+            // PRD-03: the four discrete host-owned props are one TOTAL binding,
+            // built in one place (`buildWebShellBinding`) the conformance test
+            // reuses. PRD-C.2 / PRD-H.5 — the rail-foot avatar takes the raw
+            // display name (the shell derives the glyph); `walletChip` /
+            // `topbarLeaf` are unbound on web today → explicit `null`.
+            binding={buildWebShellBinding(profile?.data?.display_name, false)}
             // Run badge: number of in-flight runs (hidden at 0; the rail also
             // hides it while Run is the active destination). PRD-C.2 / PRD-H.5.
             railBadges={

@@ -59,10 +59,15 @@ callbacks to their own navigation:
   `Transport` port (IPC → facade).
 
 Because `apps/* → apps/*` imports are a hard boundary, the two binders **cannot
-share code** — they intentionally duplicate the same pure projection logic (over
-`@0x-copilot/api-types` shapes). The shared home is this package's component
-contract, not a shared binder. When you change a destination's props, update BOTH
-binders.
+share their impure half** (fetch over the host `Transport`, host navigation).
+But the PURE half — projections over `@0x-copilot/api-types` shapes, with no
+`window` / `fetch` / navigation — belongs in **this package**, not duplicated per
+host. A duplicated projection is exactly how desktop kept reading stale
+`metadata.*` keys for chat preview/model/pinned while web migrated to the
+first-class fields. Pure api-types projections therefore live here: chats in
+`src/projections/` (`toChatArchiveRow`), activity in
+`src/destinations/activity/activityProjection.ts` (PRD-04). When you change a
+destination's props, update BOTH binders.
 
 ## Module map
 

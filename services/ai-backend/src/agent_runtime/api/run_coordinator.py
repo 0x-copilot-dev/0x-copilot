@@ -15,6 +15,10 @@ from starlette import status
 from agent_runtime.api.constants import Keys, Messages
 from agent_runtime.api.events import RuntimeEventProducer
 from agent_runtime.api.ports import PersistencePort, RuntimeQueuePort
+from agent_runtime.api.connector_access_modes_resolver import (
+    ConnectorAccessModesResolver,
+    NullConnectorAccessModesResolver,
+)
 from agent_runtime.api.suggestible_connectors_resolver import (
     NullSuggestibleConnectorsResolver,
     SuggestibleConnectorsResolver,
@@ -78,6 +82,7 @@ class RunCoordinator:
         model_resolver: ModelConfigResolver,
         user_policies_resolver: UserPoliciesResolver | None = None,
         suggestible_connectors_resolver: SuggestibleConnectorsResolver | None = None,
+        connector_access_modes_resolver: (ConnectorAccessModesResolver | None) = None,
     ) -> None:
         self._persistence = persistence
         self._queue = queue
@@ -89,6 +94,9 @@ class RunCoordinator:
         )
         self._suggestible_connectors_resolver: SuggestibleConnectorsResolver = (
             suggestible_connectors_resolver or NullSuggestibleConnectorsResolver()
+        )
+        self._connector_access_modes_resolver: ConnectorAccessModesResolver = (
+            connector_access_modes_resolver or NullConnectorAccessModesResolver()
         )
 
     async def create_run(self, request: CreateRunRequest) -> CreateRunResponse:
@@ -122,6 +130,7 @@ class RunCoordinator:
             workspace_overrides,
             user_policies_snapshot,
             suggested_connectors,
+            connector_access_modes,
         ) = await asyncio.gather(
             self._resolve_workspace_behavior_overrides(org_id=request.org_id),
             self._resolve_user_policies(org_id=request.org_id, user_id=request.user_id),
@@ -129,6 +138,9 @@ class RunCoordinator:
                 org_id=request.org_id,
                 user_id=request.user_id,
                 paused_connectors=request.request_context.paused_connectors,
+            ),
+            self._resolve_connector_access_modes(
+                org_id=request.org_id, user_id=request.user_id
             ),
         )
         # BYOK keys must never reach a persisted surface: split them out of
@@ -149,6 +161,7 @@ class RunCoordinator:
             provider_keys=provider_keys,
             provider_endpoints=provider_endpoints,
             suggested_connectors=suggested_connectors,
+            connector_access_modes=connector_access_modes,
         )
 
     async def _persist_and_enqueue(
@@ -161,6 +174,7 @@ class RunCoordinator:
         suggested_connectors: tuple[CatalogSuggestionCard, ...],
         provider_keys: dict[str, str] | None = None,
         provider_endpoints: dict[str, str] | None = None,
+        connector_access_modes: dict[str, str] | None = None,
     ) -> CreateRunResponse:
         """Seal the runtime context, persist the run, and enqueue the worker command.
 
@@ -176,6 +190,7 @@ class RunCoordinator:
             provider_keys=provider_keys,
             provider_endpoints=provider_endpoints,
             suggested_connectors=suggested_connectors,
+            connector_access_modes=connector_access_modes,
         )
         context = request.runtime_context
         if context is None:
@@ -527,6 +542,14 @@ class RunCoordinator:
             exclude_paused=paused_connectors,
         )
 
+    async def _resolve_connector_access_modes(
+        self, *, org_id: str, user_id: str
+    ) -> dict[str, str]:
+        """Fetch the per-connector access-mode snapshot for the run (PRD-06 D3b)."""
+        return await self._connector_access_modes_resolver.resolve(
+            org_id=org_id, user_id=user_id
+        )
+
     async def _resolve_workspace_behavior_overrides(
         self, *, org_id: str
     ) -> dict[str, object]:
@@ -554,6 +577,7 @@ class RunCoordinator:
         provider_keys: dict[str, str] | None = None,
         provider_endpoints: dict[str, str] | None = None,
         suggested_connectors: tuple[CatalogSuggestionCard, ...] = (),
+        connector_access_modes: dict[str, str] | None = None,
     ) -> CreateRunRequest:
         """Build a sealed ``AgentRuntimeContext`` and attach it to the request.
 
@@ -646,6 +670,7 @@ class RunCoordinator:
             permission_scopes=context.permission_scopes,
             connector_scopes=context.connector_scopes,
             paused_connectors=context.paused_connectors,
+            connector_access_modes=connector_access_modes or {},
             suggested_connectors=suggested_connectors,
             model_profile=model_config,
             max_parallel_tasks=self._settings.execution.max_parallel_tasks,

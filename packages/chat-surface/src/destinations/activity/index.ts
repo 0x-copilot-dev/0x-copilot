@@ -11,7 +11,6 @@
 
 export {
   ActivityDestination,
-  activityStatusLabel,
   activityStatusTone,
   groupActivityByDay,
   ACTIVITY_LEAD_COPY,

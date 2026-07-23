@@ -7,12 +7,14 @@
 //
 // Activity is the single run-history feed that ABSORBS the former Agents,
 // Inbox, and audit-log surfaces (PRD §3 US-4.5): every run the agent has
-// done, grouped by day. There is no dedicated run-list endpoint yet
-// (PRD §11 — High risk): the host binder composes `/v1/agent/conversations`
-// + `/v1/audit` into projected `ActivityRunRow`s so a future paginated
-// `GET /v1/activity` drops in without a UI change. Day grouping
-// (Today / Yesterday / explicit date) is derived in the shell, not on the
-// wire — no `DayGroup` type lives here.
+// done, grouped by day. The run-history data spine is `GET /v1/agent/runs`
+// (PRD-05) — a paginated, newest-first, one-row-per-RUN list carrying all
+// eight statuses (`RunHistoryEntry` / `RunHistoryResponse` in ./index.ts).
+// PRD-04 owns the host-binder cutover from the legacy conversation-spine
+// projection to that endpoint and the shared `mapRunStatus` fold that turns
+// an `AgentRunStatus` into an `ActivityRunStatus`; this file stays wire-only.
+// Day grouping (Today / Yesterday / explicit date) is derived in the shell,
+// not on the wire — no `DayGroup` type lives here.
 //
 // Wire-only file: no business logic, no HTTP client, no view models. The
 // server is the source of truth; this package mirrors the public payloads

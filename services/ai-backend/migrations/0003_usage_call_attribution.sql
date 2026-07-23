@@ -1,4 +1,4 @@
--- 0002_usage_call_attribution — Generative Surfaces v2 per-call usage
+-- 0003_usage_call_attribution — Generative Surfaces v2 per-call usage
 -- attribution (PRD-A2, FR-G; ../../docs/plan/generative-surfaces-v2/02-sdr.md §8).
 --
 -- Adds nullable per-LLM-call user + surface attribution columns to
