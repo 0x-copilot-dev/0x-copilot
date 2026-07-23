@@ -676,9 +676,11 @@ export interface Conversation {
   pinned?: boolean;
   /**
    * PRD-H.4 — Chats-list read-time projections (not persisted on the
-   * row). ``preview`` is the last user/assistant message snippet;
-   * ``model`` is the latest run's model name. Both nullable so
-   * never-run / empty conversations and older server builds are
+   * row). ``preview`` is the latest visible message snippet, **assistant-turn
+   * preferred** (PRD-09 D6): the newest assistant message wins, falling back to
+   * the newest of any role, so a row reads back an OUTCOME mid-run instead of
+   * echoing the user's own prompt. ``model`` is the latest run's model name.
+   * Both nullable so never-run / empty conversations and older server builds are
    * unaffected.
    */
   preview?: string | null;
@@ -1075,10 +1077,53 @@ export interface BillingDigest {
   invoices: BillingInvoiceStub[];
 }
 
+/**
+ * PRD-09 D3 — the Chats surface's server-scoped section. When passed as
+ * `?bucket=…` the server scopes the page to one section so a pinned/archived row
+ * older than page 1 stays reachable (the old client-side bucket-over-one-page
+ * predicate was silently incomplete). Absent → the legacy unfiltered path.
+ *   - `pinned`   → `pinned AND NOT archived`
+ *   - `archived` → archived rows
+ *   - `recent`   → the complement
+ */
+export type ConversationBucket = "pinned" | "recent" | "archived";
+
+/**
+ * PRD-09 D3 — query params for `GET /v1/agent/conversations`. `bucket`/`cursor`
+ * are both absent-by-default; when absent the response is byte-compatible with
+ * the legacy caller (and omits `next_cursor`). A malformed/empty `cursor` is
+ * tolerated as "no cursor".
+ */
+export interface ListConversationsQuery {
+  bucket?: ConversationBucket;
+  cursor?: string;
+  limit?: number;
+  include_archived?: boolean;
+  include_deleted?: boolean;
+}
+
 export interface ConversationListResponse {
   conversations: Conversation[];
+  /**
+   * PRD-09 D3 — the keyset watermark of the last returned row when older rows
+   * remain (`has_more`). Feed it back as `?cursor=` to fetch strictly-older
+   * rows. `null`/absent on the last page and on the legacy unfiltered path.
+   */
   next_cursor: string | null;
   has_more: boolean;
+}
+
+/**
+ * PRD-09 D4 — one frame of the Chats live-refresh stream
+ * (`GET /v1/agent/conversations/stream`). Carries the SAME projected
+ * `Conversation` the list route returns, so the client merges live rows through
+ * one projector. `cursor` is the keyset watermark a reconnecting client resumes
+ * from (the same D3 codec that powers pagination).
+ */
+export interface ConversationStreamEnvelope {
+  event_type: "conversation_changed";
+  conversation: Conversation;
+  cursor: string;
 }
 
 export interface Message {

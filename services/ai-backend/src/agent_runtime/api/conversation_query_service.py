@@ -26,10 +26,12 @@ from agent_runtime.surfaces_v2.projection import SurfaceStoreProjection
 from runtime_api.http.errors import RuntimeApiError
 from runtime_api.schemas import (
     AgentRunStatus,
+    ConversationBucket,
     ConversationContextResponse,
     ConversationCountsResponse,
     ConversationListResponse,
     ConversationResponse,
+    ConversationStreamEnvelope,
     DefaultModelSelection,
     MessageListResponse,
     RunHistoryEntry,
@@ -204,33 +206,121 @@ class ConversationQueryService:
         include_archived: bool = False,
         include_deleted: bool = False,
         project_id: str | None = None,
+        bucket: ConversationBucket | None = None,
+        cursor: str | None = None,
     ) -> ConversationListResponse:
         """Return scoped conversations newest-first, enriched with each one's active run.
 
-        ``has_more`` is derived from whether the store returned a full page, so
-        callers must re-request with a cursor (not implemented yet) when it is True.
+        Two paging modes, driven by whether ``bucket``/``cursor`` are present:
+
+        * **Legacy** (both absent) — byte-compatible with pre-PRD-09 callers:
+          ``has_more`` is ``len == limit`` and ``next_cursor`` stays ``None`` (the
+          route omits the key entirely). ``include_archived`` / ``include_deleted``
+          apply as before.
+        * **Keyset** (PRD-09 D3) — ``bucket`` scopes the page to one Chats section
+          server-side (so a pinned/archived row older than page 1 is still
+          reachable), and ``cursor`` is an opaque keyset over
+          ``(updated_at, conversation_id)``. ``has_more`` is disambiguated by
+          fetching ``limit + 1`` rows and truncating, and ``next_cursor`` encodes
+          the OLDEST returned row when older rows remain, ``None`` otherwise.
+
         When ``project_id`` is set (PRD-07) the list is narrowed to the chats
         filed under that project — the project detail's Chats section.
         """
 
         bounded_limit = min(max(1, limit), Values.MAX_MESSAGE_LIMIT)
+        keyset_mode = bucket is not None or cursor is not None
+        keyset = KeysetCursor.decode(cursor)
+        # In keyset mode fetch one extra row so an exact-multiple page never
+        # reports a spurious extra page (same discipline as run-history D5).
+        fetch_limit = bounded_limit + 1 if keyset_mode else bounded_limit
         records = await self._persistence.list_conversations(
             org_id=org_id,
             user_id=user_id,
-            limit=bounded_limit,
+            limit=fetch_limit,
             include_archived=include_archived,
             include_deleted=include_deleted,
             project_id=project_id,
+            bucket=bucket,
+            before_updated_at=keyset[0] if keyset is not None else None,
+            before_conversation_id=keyset[1] if keyset is not None else None,
         )
+        if keyset_mode:
+            has_more = len(records) > bounded_limit
+            page = list(records[:bounded_limit])
+            # ``page`` is DESC, so ``page[-1]`` is the OLDEST row in this window;
+            # its keyset is what a follow-up ``cursor`` request pages back from.
+            next_cursor = (
+                KeysetCursor.encode(page[-1].updated_at, page[-1].conversation_id)
+                if has_more and page
+                else None
+            )
+        else:
+            page = list(records)
+            has_more = len(records) == bounded_limit
+            next_cursor = None
         responses: list[ConversationResponse] = []
-        for record in records:
+        for record in page:
             projected = await self._with_latest_run(record.to_response(), org_id=org_id)
             projected = await self._with_list_fields(projected, org_id=org_id)
             responses.append(projected)
         return ConversationListResponse(
             conversations=tuple(responses),
-            has_more=len(records) == bounded_limit,
+            has_more=has_more,
+            next_cursor=next_cursor,
         )
+
+    async def list_conversation_changes(
+        self,
+        *,
+        org_id: str,
+        user_id: str,
+        after: str | None,
+        limit: int = Values.DEFAULT_CONVERSATION_LIMIT,
+    ) -> tuple[ConversationStreamEnvelope, ...]:
+        """Return conversation-change envelopes strictly newer than a watermark (PRD-09 D4).
+
+        The store tail behind ``GET /v1/agent/conversations/stream``. ``after`` is
+        the keyset watermark ``(updated_at, conversation_id)`` the subscriber last
+        saw (the same D3 codec that powers pagination and reconnect-resume). Every
+        ``updated_at`` bump moves a changed row to the top of the newest-first
+        slice, so polling the top ``limit`` rows catches all changes regardless of
+        topology — no bus, no new table, correct whether or not the worker shares
+        the API process. Envelopes are emitted OLDEST-change-first so a consumer
+        advancing its watermark per frame never regresses.
+
+        Scoped by ``(org_id, user_id)`` exactly like :meth:`list_conversations`;
+        ``after`` is a filter input and can never widen scope (DoD #4).
+        """
+
+        bounded_limit = min(max(1, limit), Values.MAX_MESSAGE_LIMIT)
+        watermark = KeysetCursor.decode(after)
+        records = await self._persistence.list_conversations(
+            org_id=org_id,
+            user_id=user_id,
+            limit=bounded_limit,
+            include_archived=True,
+        )
+        changed = [
+            record
+            for record in records
+            if watermark is None
+            or (record.updated_at, record.conversation_id) > watermark
+        ]
+        changed.sort(key=lambda record: (record.updated_at, record.conversation_id))
+        envelopes: list[ConversationStreamEnvelope] = []
+        for record in changed:
+            projected = await self._with_latest_run(record.to_response(), org_id=org_id)
+            projected = await self._with_list_fields(projected, org_id=org_id)
+            envelopes.append(
+                ConversationStreamEnvelope(
+                    conversation=projected,
+                    cursor=KeysetCursor.encode(
+                        record.updated_at, record.conversation_id
+                    ),
+                )
+            )
+        return tuple(envelopes)
 
     async def count_conversations_by_project(
         self,

@@ -364,3 +364,56 @@ The README's rulings that touch PRD-09: **C8** (PRD-03 ships the per-row project
 - A future ⌘K chat-index PRD (none exists yet) — `GET /v1/agent/conversations?bucket=…&cursor=…` is the backfill read the palette writer needs.
 - **PRD-12**, which per README C1 owns `useActiveRunCount` and sources it from `GET /v1/agent/runs/active_count`. This PRD's bucket-scoped list is the fallback read if that endpoint is ever descoped; it does **not** create or move the hook.
 - Any future destination needing live refresh: `conversation_adapter.py` is the first store-tailed SSE and the template for converting the four bus-backed streams off in-memory pub/sub.
+
+---
+
+## Implementation record
+
+_Landed on `claude/prd-09-chats-surface` (merge-base `0d7cb2131`). Recorded 2026-07-23._
+
+### What landed
+
+- **Backend (ai-backend):** `ConversationBucket` enum + `matches_conversation_bucket()` shared predicate; `list_conversations` gains `bucket`/`before_updated_at`/`before_conversation_id` keyset (legacy call byte-compatible, drops null `next_cursor`); assistant-preferred preview via `prefer_roles`; `update_run_status` bumps the parent conversation's `updated_at` in the same tx across **all three** adapters (in_memory/file/postgres); new store-tailed conversations SSE (`conversation_adapter.py`, 25s heartbeat, keyset `?after`) — a store tail, not a bus, so it survives the API/worker process split. Migration `0005_conversation_keyset` (CONCURRENTLY index), MANIFEST regenerated.
+- **Facade:** verbatim `bucket`/`cursor` forward on the list route; inlined SSE proxy `stream_conversations` targeting `ai_backend`, registered before `/{conversation_id}`.
+- **api-types:** `ConversationBucket`, `ListConversationsQuery`, `ConversationStreamEnvelope`; buckets documented server-scoped; preview = assistant-preferred.
+- **chat-surface (SSOT seam):** new `useChatsArchive` controller (3 bucket fetches + SSE tail merge + optimistic pin/archive with rollback + `loadMore`/retry); `ChatsArchive` overflow menu + ghost Load-more + D7 mono-tone color deletion; `Row` persistent overflow slot; D5 ChatShell split (`SUPPRESS_TOPBAR` = run∪settings vs full-bleed side columns) so chats gets a topbar with no side columns; Topbar registry-sourced subtitle + pinned geometry.
+- **Both hosts:** desktop `ChatsBinder` and web `ChatsArchiveRoute` collapsed onto `useChatsArchive`; localStorage pin concept retired (`usePinnedConversations` deleted, first-class `conversation.pinned`); one-shot bounded `migrateLegacyPins`.
+
+### DoD status (per item)
+
+| #   | Item                                        | Verdict                                                                                                                                                                                                                                                                                |
+| --- | ------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| 1   | Assistant-preferred preview, all adapters   | MET                                                                                                                                                                                                                                                                                    |
+| 2   | Pinned-bucket keyset completeness           | MET                                                                                                                                                                                                                                                                                    |
+| 3   | Legacy list omits next_cursor, ordered      | MET                                                                                                                                                                                                                                                                                    |
+| 4   | Conversation-stream org isolation + framing | MET                                                                                                                                                                                                                                                                                    |
+| 5   | update_run_status bumps conversation        | MET (forward-tail asserted via keyset invariant; postgres in DB-gated sibling)                                                                                                                                                                                                         |
+| 6   | Migration + MANIFEST                        | MET (id 0005 not 0004 — 0004 taken by PRD-07)                                                                                                                                                                                                                                          |
+| 7   | Facade bucket/cursor forward + SSE proxy    | MET                                                                                                                                                                                                                                                                                    |
+| 8   | useChatsArchive controller (a–e)            | MET                                                                                                                                                                                                                                                                                    |
+| 9   | Row overflow persistence                    | MET                                                                                                                                                                                                                                                                                    |
+| 10  | ChatShell D5 topbar/side-column split       | MET                                                                                                                                                                                                                                                                                    |
+| 11  | Topbar subtitle from registry               | MET                                                                                                                                                                                                                                                                                    |
+| 12  | Topbar geometry pins                        | MET                                                                                                                                                                                                                                                                                    |
+| 13  | localStorage pin concept retired (grep)     | MET                                                                                                                                                                                                                                                                                    |
+| 14  | Mono model tone color deleted (D7)          | MET                                                                                                                                                                                                                                                                                    |
+| 15  | Typecheck/build both hosts                  | **PARTIAL** — api-types + chat-surface exit 0; frontend typecheck/build exit 2 on exactly 2 errors, both a confirmed cross-package symlink false-negative (apps resolve chat-surface to MAIN, which lacks `useChatsArchive`/`onTogglePin`). Clears under post-merge host verification. |
+| 16  | No new HIGH parity row for topbar/mono      | MET (HIGH 5→1)                                                                                                                                                                                                                                                                         |
+| 17  | MEDIUM/LOW/INFO totals do not increase      | **NOT MET** — LOW 46→48 (+2), INFO 7→8 (+1); HIGH 5→1 and MEDIUM 31→23 both improved. New topbar anchors add measured elements, raising absolute LOW/INFO counts against the do-not-increase clause.                                                                                   |
+
+**Score: 15 MET / 17, 1 PARTIAL (symlink false-negative), 1 NOT MET (parity LOW/INFO absolute totals rose).**
+
+### Deviations from PRD
+
+- Migration id **0005** not 0004 (0004 = PRD-07 `conversation_project` on disk; the PRD's "0004 free" assumption was stale).
+- Reused the generalized `KeysetCursor` codec (already shared by messages + PRD-05 run-history) for the `(updated_at, conversation_id)` cursor instead of minting a new `ConversationCursor`.
+- Facade SSE proxy **inlined** in `app.py` next to the list route (matches the existing run-stream proxy that also targets `ai_backend`) rather than a new file copied from `inbox_stream_routes.py` (which targets `backend`, the wrong service).
+- `useChatsArchive` parses the SSE frame with a locally-declared envelope shape (the freshly-added api-types type isn't visible through the worktree symlink at chat-surface typecheck time); api-types remains the external contract.
+- DoD #5's literal "cursor=pre-cancel watermark returns that conversation" is forward-tail wording; the store pages backward, so the conformance test asserts the equivalent invariant (updated_at strictly raised → row is newest, pre-cancel keyset no longer contains it) and the forward tail is covered by `list_conversation_changes` + the stream tests.
+- Two pre-existing ChatShell tests and one Topbar test asserted the OLD (chats-suppresses-topbar / no-subtitle) behavior; updated to the correct D5 behavior.
+
+### Left open
+
+- **DoD #17 (parity absolute totals):** LOW +2 / INFO +1 vs merge base. HIGH and MEDIUM improved; the rise is from the new topbar anchors adding measured elements, not new drift. A reviewer should decide whether the do-not-increase clause should be re-scoped to "no new HIGH/MEDIUM drift on the changed surface" (which is met) given more elements are now measured.
+- **DoD #15 (frontend host typecheck/build):** must be re-run post-merge with correct package resolution to clear the 2 symlink false-negatives.
+- Postgres store-conformance is skipped in-env (no live DB); the DB-gated sibling `test_postgres_runtime_api_store.py` holds the real postgres assertions. Needs a live-PG pass before release.

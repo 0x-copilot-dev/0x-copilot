@@ -5,19 +5,15 @@ Design baseline (source of truth) vs live app, by computed style.
 - Design: `surfaces/chats/out/design-default.json`
 - Live: `surfaces/chats/out/live-default.json`
 
-**Summary:** 🔴 HIGH 5 · 🟠 MEDIUM 31 · 🟡 LOW 46 · ⚪ INFO 7
+**Summary:** 🔴 HIGH 1 · 🟠 MEDIUM 23 · 🟡 LOW 47 · ⚪ INFO 8
 
-## 🔴 HIGH (5)
+## 🔴 HIGH (1)
 
-| Element                | Group         | Property        | Design → Live                                               |
-| ---------------------- | ------------- | --------------- | ----------------------------------------------------------- |
-| `topbar.title`         | Shell         | missing-in-live | present in design, ABSENT in live                           |
-| `row.running.ic`       | Row (running) | color           | rgb(87, 199, 133) (--jade) → rgb(152, 152, 159) (--mut)     |
-| `row.running.ic`       | Row (running) | backgroundColor | rgb(29, 29, 35) (--panel3) → rgba(0, 0, 0, 0) (transparent) |
-| `row.running.sub.mono` | Row (running) | color           | rgb(100, 100, 109) (--mut2) → rgb(152, 152, 159) (--mut)    |
-| `row.done.ic`          | Row (done)    | backgroundColor | rgb(29, 29, 35) (--panel3) → rgba(0, 0, 0, 0) (transparent) |
+| Element          | Group         | Property | Design → Live                                           |
+| ---------------- | ------------- | -------- | ------------------------------------------------------- |
+| `row.running.ic` | Row (running) | color    | rgb(87, 199, 133) (--jade) → rgb(152, 152, 159) (--mut) |
 
-## 🟠 MEDIUM (31)
+## 🟠 MEDIUM (23)
 
 | Element            | Group         | Property       | Design → Live                                              |
 | ------------------ | ------------- | -------------- | ---------------------------------------------------------- |
@@ -36,11 +32,6 @@ Design baseline (source of truth) vs live app, by computed style.
 | `btn.newChat`      | Header        | margin         | 0px 0px 0px 778.766px → 0px                                |
 | `list.pinned`      | Lists         | display        | flex → block                                               |
 | `list.pinned`      | Lists         | flexDirection  | column → row                                               |
-| `row.running`      | Row (running) | padding        | 11px 14px → 10px 12px                                      |
-| `row.running.ic`   | Row (running) | display        | grid → flex                                                |
-| `row.running.ic`   | Row (running) | justifyContent | normal → center                                            |
-| `row.running.ic`   | Row (running) | borderRadius   | 7px → 8px                                                  |
-| `row.running.name` | Row (running) | fontWeight     | 500 → 600                                                  |
 | `row.running.name` | Row (running) | display        | flex → block                                               |
 | `row.running.name` | Row (running) | alignItems     | center → normal                                            |
 | `row.running.name` | Row (running) | gap            | 8px → normal                                               |
@@ -48,17 +39,17 @@ Design baseline (source of truth) vs live app, by computed style.
 | `row.running.sub`  | Row (running) | margin         | 1px 0px 0px 0px → 0px                                      |
 | `row.running.time` | Row (running) | fontSize       | 10.5px → 11.2px (+0.7px)                                   |
 | `sect.recent`      | Sections      | margin         | 22px 0px 10px 0px → 0px                                    |
-| `row.done.ic`      | Row (done)    | display        | grid → flex                                                |
-| `row.done.ic`      | Row (done)    | justifyContent | normal → center                                            |
-| `row.done.ic`      | Row (done)    | borderRadius   | 7px → 8px                                                  |
 | `sect.archived`    | Sections      | margin         | 22px 0px 10px 0px → 0px                                    |
 
-## 🟡 LOW (46)
+## 🟡 LOW (47)
 
 | Element                | Group         | Property   | Design → Live                                                                                                                                                                                                             |
 | ---------------------- | ------------- | ---------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `topbar.title`         | Shell         | lineHeight | 16.2px → 15.6px                                                                                                                                                                                                           |
+| `topbar.title`         | Shell         | width      | 37.5156px → 36.2812px                                                                                                                                                                                                     |
+| `topbar.title`         | Shell         | height     | 16.1875px → 15.5938px                                                                                                                                                                                                     |
 | `page.container`       | Page          | lineHeight | 19.5px → normal                                                                                                                                                                                                           |
-| `page.container`       | Page          | height     | 754px → 789.719px                                                                                                                                                                                                         |
+| `page.container`       | Page          | height     | 754px → 805.719px                                                                                                                                                                                                         |
 | `page.lead`            | Page          | lineHeight | 19.2px → 21.216px                                                                                                                                                                                                         |
 | `page.lead`            | Page          | width      | 544.219px → 565.984px                                                                                                                                                                                                     |
 | `page.lead`            | Page          | height     | 19.1875px → 21.2188px                                                                                                                                                                                                     |
@@ -74,21 +65,19 @@ Design baseline (source of truth) vs live app, by computed style.
 | `btn.newChat`          | Header        | height     | 23px → 24px                                                                                                                                                                                                               |
 | `list.pinned`          | Lists         | lineHeight | 19.5px → normal                                                                                                                                                                                                           |
 | `list.pinned`          | Lists         | width      | 912px → 904px                                                                                                                                                                                                             |
-| `list.pinned`          | Lists         | height     | 63.25px → 57.75px                                                                                                                                                                                                         |
+| `list.pinned`          | Lists         | height     | 63.25px → 59.75px                                                                                                                                                                                                         |
 | `list.pinned`          | Lists         | tag        | <div> → <ul> (semantic/default-style change)                                                                                                                                                                              |
 | `row.running`          | Row (running) | lineHeight | 19.5px → normal                                                                                                                                                                                                           |
 | `row.running`          | Row (running) | width      | 910px → 902px                                                                                                                                                                                                             |
-| `row.running`          | Row (running) | height     | 61.25px → 55.75px                                                                                                                                                                                                         |
+| `row.running`          | Row (running) | height     | 61.25px → 57.75px                                                                                                                                                                                                         |
 | `row.running`          | Row (running) | tag        | <button> → <div> (semantic/default-style change)                                                                                                                                                                          |
 | `row.running.ic`       | Row (running) | lineHeight | 19.5px → normal                                                                                                                                                                                                           |
 | `row.running.ic.svg`   | Row (running) | lineHeight | 19.5px → normal                                                                                                                                                                                                           |
-| `row.running.ic.svg`   | Row (running) | width      | 15px → 18px                                                                                                                                                                                                               |
-| `row.running.ic.svg`   | Row (running) | height     | 15px → 18px                                                                                                                                                                                                               |
 | `row.running.name`     | Row (running) | lineHeight | 18.75px → normal                                                                                                                                                                                                          |
-| `row.running.name`     | Row (running) | width      | 811.094px → 107.016px                                                                                                                                                                                                     |
+| `row.running.name`     | Row (running) | width      | 811.094px → 105.203px                                                                                                                                                                                                     |
 | `row.running.name`     | Row (running) | height     | 19.75px → 15px                                                                                                                                                                                                            |
 | `row.running.sub`      | Row (running) | lineHeight | 16.5px → normal                                                                                                                                                                                                           |
-| `row.running.sub`      | Row (running) | width      | auto → 772.234px                                                                                                                                                                                                          |
+| `row.running.sub`      | Row (running) | width      | auto → 740.234px                                                                                                                                                                                                          |
 | `row.running.sub`      | Row (running) | height     | auto → 14px                                                                                                                                                                                                               |
 | `row.running.sub.mono` | Row (running) | lineHeight | 16.5px → normal                                                                                                                                                                                                           |
 | `row.running.time`     | Row (running) | lineHeight | 15.75px → normal                                                                                                                                                                                                          |
@@ -104,14 +93,15 @@ Design baseline (source of truth) vs live app, by computed style.
 | `sect.archived`        | Sections      | height     | 14.25px → 13px                                                                                                                                                                                                            |
 | `sect.archived`        | Sections      | tag        | <div> → <h2> (semantic/default-style change)                                                                                                                                                                              |
 
-## ⚪ INFO (7)
+## ⚪ INFO (8)
 
-| Element            | Group         | Property        | Design → Live                                                                                                                                                                                                                                                                                 |
-| ------------------ | ------------- | --------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `header.row`       | Header        | text            | “Pinned New chat” → “Pinned1New chat”                                                                                                                                                                                                                                                         |
-| `list.pinned`      | Lists         | text            | “Launch Week ops runningStreaming the launch thread · Claude …” → “Launch Week opsrunningStreaming the launch thread · Claude S…”                                                                                                                                                             |
-| `row.running`      | Row (running) | text            | “Launch Week ops runningStreaming the launch thread · Claude …” → “Launch Week opsrunningStreaming the launch thread · Claude S…”                                                                                                                                                             |
-| `row.running.sub`  | Row (running) | text            | “Streaming the launch thread ·” → “·”                                                                                                                                                                                                                                                         |
-| `row.running.time` | Row (running) | text            | “now” → “just now”                                                                                                                                                                                                                                                                            |
-| `sect.count.pill`  | Sections      | extra-in-live   | present in live, not in design map                                                                                                                                                                                                                                                            |
-| `rail.badge`       | Shell         | missing-in-live | expected: OUT OF HARNESS SCOPE, not drift: the rail is ChatShell chrome, not part of the Chats destination component this harness renders (render-live-chats.test.tsx mounts ChatsArchive alone). The live rail badge is measured by the sibling harness lib/render-live-rail-badge.test.tsx. |
+| Element            | Group         | Property        | Design → Live                                                                                                                                                                                                                                                                                                         |
+| ------------------ | ------------- | --------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `topbar.title`     | Shell         | fontSize        | expected: D5: the sans ladder has no 13.5px rung and rule 1 forbids minting one, so the topbar title keeps --font-size-sm (13px); the 0.5px residual is intentional (Topbar.tsx:123-128, DoD #12) — 13.5px → 13px (-0.5px)                                                                                            |
+| `header.row`       | Header        | text            | “Pinned New chat” → “Pinned1New chat”                                                                                                                                                                                                                                                                                 |
+| `list.pinned`      | Lists         | text            | “Launch Week ops runningStreaming the launch thread · Claude …” → “Launch Week opsrunningStreaming the launch thread · Claude S…”                                                                                                                                                                                     |
+| `row.running`      | Row (running) | text            | “Launch Week ops runningStreaming the launch thread · Claude …” → “Launch Week opsrunningStreaming the launch thread · Claude S…”                                                                                                                                                                                     |
+| `row.running.sub`  | Row (running) | text            | “Streaming the launch thread ·” → “·”                                                                                                                                                                                                                                                                                 |
+| `row.running.time` | Row (running) | text            | “now” → “just now”                                                                                                                                                                                                                                                                                                    |
+| `sect.count.pill`  | Sections      | extra-in-live   | present in live, not in design map                                                                                                                                                                                                                                                                                    |
+| `rail.badge`       | Shell         | missing-in-live | expected: OUT OF HARNESS SCOPE, not drift: the rail is ChatShell chrome, not part of the Chats destination component this harness renders (render-live-chats-topbar.test.tsx mounts Topbar + ChatsArchive, not the rail). The live rail badge is measured by the sibling harness lib/render-live-rail-badge.test.tsx. |

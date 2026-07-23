@@ -88,6 +88,7 @@ from runtime_api.schemas import (
     ApprovalDecision,
     ApprovalDecisionRecord,
     ApprovalRequestRecord,
+    ConversationBucket,
     ConversationRecord,
     CreateConversationRequest,
     CreateRunRequest,
@@ -700,8 +701,11 @@ class PostgresRuntimeApiStore:
         include_archived: bool = False,
         include_deleted: bool = False,
         project_id: str | None = None,
+        bucket: ConversationBucket | None = None,
+        before_updated_at: datetime | None = None,
+        before_conversation_id: str | None = None,
     ) -> Sequence[ConversationRecord]:
-        """Return scoped conversations ordered by latest update.
+        """Return scoped conversations ordered ``(updated_at DESC, id DESC)``.
 
         Soft-deleted rows (``deleted_at IS NOT NULL``) are excluded by default —
         the sidebar query path. A partial index covering active conversations
@@ -709,23 +713,54 @@ class PostgresRuntimeApiStore:
         When ``project_id`` is set (PRD-07) the query narrows to that project and
         rides ``idx_agent_conversations_project (org_id, project_id, updated_at DESC)``.
 
+        PRD-09 D3 — ``bucket`` scopes the page to one Chats section server-side
+        (``include_archived`` ignored, soft-deleted always excluded); the
+        ``(before_updated_at, before_conversation_id)`` keyset returns only rows
+        strictly older than it under the ``(updated_at DESC, id DESC)`` order,
+        riding ``idx_agent_conversations_org_user_updated_id`` (migration 0005).
         """
 
-        archived_filter = "" if include_archived else "AND status <> 'archived'"
-        deleted_filter = "" if include_deleted else "AND deleted_at IS NULL"
-        project_filter = ""
         params: list[object] = [org_id, user_id]
+        if bucket is None:
+            scope_filter = ""
+            if not include_archived:
+                scope_filter += " AND status <> 'archived'"
+            if not include_deleted:
+                scope_filter += " AND deleted_at IS NULL"
+        else:
+            # Bucket scoping — soft-deleted always excluded; "archived" is
+            # status='archived' OR archived_at set (matches the shared Python
+            # predicate ``matches_conversation_bucket``).
+            scope_filter = " AND deleted_at IS NULL"
+            if bucket == ConversationBucket.ARCHIVED:
+                scope_filter += " AND (status = 'archived' OR archived_at IS NOT NULL)"
+            elif bucket == ConversationBucket.PINNED:
+                scope_filter += (
+                    " AND pinned AND status <> 'archived' AND archived_at IS NULL"
+                )
+            else:  # RECENT — the complement
+                scope_filter += (
+                    " AND NOT pinned AND status <> 'archived' AND archived_at IS NULL"
+                )
+        project_filter = ""
         if project_id is not None:
             project_filter = "AND project_id = %s"
             params.append(project_id)
+        keyset_filter = ""
+        if before_updated_at is not None and before_conversation_id is not None:
+            # The primary-key column is ``id`` (mapped to the record's
+            # ``conversation_id``); the keyset tiebreaker rides that column.
+            keyset_filter = "AND (updated_at, id) < (%s, %s)"
+            params.append(before_updated_at)
+            params.append(before_conversation_id)
         params.append(limit)
         async with self._tenant_connection(org_id=org_id) as conn:
             cur = await conn.execute(
                 f"""
                 SELECT * FROM agent_conversations
                 WHERE org_id = %s AND user_id = %s {project_filter}
-                  {archived_filter} {deleted_filter}
-                ORDER BY updated_at DESC
+                  {scope_filter} {keyset_filter}
+                ORDER BY updated_at DESC, id DESC
                 LIMIT %s
                 """,
                 tuple(params),
@@ -1664,8 +1699,16 @@ class PostgresRuntimeApiStore:
         *,
         org_id: str,
         conversation_id: str,
+        prefer_roles: tuple[str, ...] = ("assistant",),
     ) -> MessageRecord | None:
-        """Return the newest non-deleted message for the Chats-list preview (PRD-H.4)."""
+        """Return the newest non-deleted message for the Chats-list preview (PRD-H.4).
+
+        Prefers the newest message whose role is in ``prefer_roles`` (PRD-09 D6),
+        falling back to the newest of any role when none matches. A single ordered
+        scan does both: rows whose role is preferred sort first, then by recency,
+        so ``LIMIT 1`` returns the newest preferred message when one exists and the
+        newest of any role otherwise.
+        """
 
         async with self._tenant_connection(org_id=org_id) as conn:
             cur = await conn.execute(
@@ -1674,10 +1717,10 @@ class PostgresRuntimeApiStore:
                  WHERE org_id          = %s
                    AND conversation_id = %s
                    AND deleted_at IS NULL
-                 ORDER BY created_at DESC
+                 ORDER BY (role = ANY(%s)) DESC, created_at DESC
                  LIMIT 1
                 """,
-                (org_id, conversation_id),
+                (org_id, conversation_id, list(prefer_roles)),
             )
             row = await cur.fetchone()
         return self._message_record(row) if row is not None else None
@@ -1723,6 +1766,14 @@ class PostgresRuntimeApiStore:
                     raise ConcurrentRunUpdateError(
                         run_id=run_id, expected_version=expected_version
                     )
+                # PRD-09 D4 — bump the parent conversation's ``updated_at`` in the
+                # SAME transaction so a status-only transition moves the row the
+                # Chats live tail watches (otherwise a cancel/fail/timeout/flip to
+                # waiting_for_approval touches only ``agent_runs``).
+                await conn.execute(
+                    "UPDATE agent_conversations SET updated_at = now() WHERE id = %s",
+                    (row[_Columns.CONVERSATION_ID],),
+                )
         return self._run_record(row)
 
     async def set_run_latest_sequence(

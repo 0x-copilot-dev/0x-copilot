@@ -24,12 +24,10 @@ export interface ConversationGroup {
 }
 
 const DAY_MS = 86_400_000;
-const EMPTY_PINNED: ReadonlySet<string> = new Set();
 
 export function groupConversations(
   conversations: readonly Conversation[],
   now: Date,
-  pinnedIds: ReadonlySet<string> = EMPTY_PINNED,
 ): ConversationGroup[] {
   const fmtDate = new Intl.DateTimeFormat(undefined, { dateStyle: "short" });
   const todayKey = fmtDate.format(now);
@@ -50,7 +48,7 @@ export function groupConversations(
     );
 
   for (const conversation of sorted) {
-    if (pinnedIds.has(conversation.conversation_id) || isPinned(conversation)) {
+    if (isPinned(conversation)) {
       pinned.push(conversation);
       continue;
     }
@@ -110,14 +108,12 @@ export function groupConversations(
 }
 
 /**
- * PR F3 — pin / unpin uses `metadata.pinned: true` on the conversation
- * row. JSONB metadata doesn't require a server-side schema migration;
- * the boolean is opaque to the backend until a future PR adds an
- * indexed column. The UI is the source of truth for the rendering
- * order; pinned threads collapse into a single Pinned group at the top.
+ * PRD-09 D2 — pin state is the first-class `conversation.pinned` column
+ * (migration 0034), set through `POST /v1/agent/conversations/{id}/pin`. The
+ * legacy metadata-blob read (nothing ever wrote that key) and the localStorage
+ * pin set are both retired: one pin concept remains. Pinned threads collapse
+ * into a single Pinned group at the top of the sidebar.
  */
 export function isPinned(conversation: Conversation): boolean {
-  const flag = (conversation.metadata as { pinned?: unknown } | undefined)
-    ?.pinned;
-  return flag === true;
+  return conversation.pinned === true;
 }

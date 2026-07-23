@@ -34,13 +34,21 @@ import {
 import { RIGHT_RAIL_WIDTH, RightRail } from "./RightRail";
 import { TOPBAR_HEIGHT, Topbar } from "./Topbar";
 
-// Destinations that intentionally skip the 224px context column AND suppress
-// the shell topbar — the surface owns full height (DESIGN-SPEC §1). `chats`
-// (its ChatScreen brings its own thread sidebar + header) and `run` (the
-// flagship cockpit) both render full-bleed. Settings is likewise full-height
-// but is NOT a rail destination (it opens from the rail foot via
-// `onOpenSettings`), so it arrives through the `settingsActive` flag rather
-// than this slug set.
+// PRD-09 D5 — the two shell decisions are INDEPENDENT, matching the design:
+// `showTopbar = dest !== "workspace" && dest !== "settings"` (copilot-app.jsx:739),
+// while NO destination in the mock has a context column or right rail. The old
+// single `fullBleed` conflated "no topbar" with "no side columns".
+//
+// `SUPPRESS_TOPBAR` — destinations that hide the shell topbar: only `run` (the
+// flagship cockpit owns its own header) plus Settings via the `settingsActive`
+// flag (Settings is not a rail destination — it opens from the rail foot). Chats
+// is NOT here: it gains a topbar (title "Chats" + subtitle + ⌘K), matching the
+// design. PRD-12 consumes this set and only adds "web passes settingsActive".
+const SUPPRESS_TOPBAR: ReadonlySet<ShellDestinationSlug> = new Set(["run"]);
+
+// `FULL_BLEED_DESTINATIONS` now governs ONLY the side columns (224px context
+// column + right rail): `chats` and `run` render without them, which is what the
+// mock shows. Chats gains a topbar AND no side columns — the design's exact split.
 const FULL_BLEED_DESTINATIONS: ReadonlySet<ShellDestinationSlug> = new Set([
   "chats",
   "run",
@@ -214,9 +222,13 @@ function ShellGrid({
   // so an open empty rail is visual noise. Users open it via the edge
   // toggle when there's something to show.
   const [rightOpen, setRightOpen] = useState(false);
-  // Full-bleed = the surface owns full height: chats/run by slug, plus the
-  // Settings surface via the flag. Topbar + context column + right rail are
-  // all suppressed in that state.
+  // PRD-09 D5 — two independent decisions:
+  //  * `suppressTopbar` — hide the shell topbar (run cockpit + Settings only).
+  //  * `fullBleed` — drop the side columns (chats + run + Settings).
+  // Chats suppresses NEITHER the topbar (it gets one) but IS full-bleed (no side
+  // columns), exactly as the design shows.
+  const suppressTopbar =
+    settingsActive || SUPPRESS_TOPBAR.has(activeDestination);
   const fullBleed =
     settingsActive || FULL_BLEED_DESTINATIONS.has(activeDestination);
 
@@ -248,11 +260,9 @@ function ShellGrid({
   };
   const mainColumnStyle: CSSProperties = {
     display: "grid",
-    // Full-bleed surfaces bring their own top bar via the main content
-    // (ChatScreen's own header; the Run cockpit / Settings own full height),
-    // so the shell Topbar is suppressed there to avoid a duplicated bar + the
-    // "<destination> / —" placeholder row.
-    gridTemplateRows: fullBleed ? "100%" : `${TOPBAR_HEIGHT}px 1fr`,
+    // The topbar row is reserved unless the destination suppresses it (run
+    // cockpit + Settings own their own header). Chats keeps the row (PRD-09 D5).
+    gridTemplateRows: suppressTopbar ? "100%" : `${TOPBAR_HEIGHT}px 1fr`,
     minHeight: 0,
     backgroundColor: "var(--color-bg)",
   };
@@ -289,7 +299,7 @@ function ShellGrid({
         />
       )}
       <div style={mainColumnStyle}>
-        {fullBleed ? null : (
+        {suppressTopbar ? null : (
           <Topbar
             activeDestination={activeDestination}
             title={activeLabel}

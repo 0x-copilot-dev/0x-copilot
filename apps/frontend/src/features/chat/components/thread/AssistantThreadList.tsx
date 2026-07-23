@@ -27,7 +27,6 @@ export function AssistantThreadList({
   onSwitchWorkspace,
   onTogglePin,
   onArchive,
-  pinnedIds,
 }: {
   collapsed: boolean;
   conversations: Conversation[];
@@ -48,12 +47,10 @@ export function AssistantThreadList({
   onToggleSidebar?: () => void;
   /** PR 2.2 — switch workspace from the UserCard popover. */
   onSwitchWorkspace?: (orgId: string) => void;
-  /** PR F3 — pin / unpin from row overflow menu. */
+  /** PRD-09 D2 — pin / unpin from row overflow menu (first-class `pinned`). */
   onTogglePin?: (conversationId: string, nextPinned: boolean) => void;
   /** PR F3 — archive from row overflow menu. */
   onArchive?: (conversationId: string) => void;
-  /** PR F3 — pinned conversation_id set (localStorage source of truth). */
-  pinnedIds?: ReadonlySet<string>;
 }): ReactElement {
   return (
     <Sidebar
@@ -70,7 +67,6 @@ export function AssistantThreadList({
       onSwitchWorkspace={onSwitchWorkspace}
       onTogglePin={onTogglePin}
       onArchive={onArchive}
-      pinnedIds={pinnedIds}
     />
   );
 }

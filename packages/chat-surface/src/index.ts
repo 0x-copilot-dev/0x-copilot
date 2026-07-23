@@ -1241,6 +1241,8 @@ export {
   CHATS_LEAD_COPY,
   type ChatsSectionKey,
   type ChatsDestinationProps,
+  useChatsArchive,
+  type ChatsArchiveController,
 } from "./destinations/chats";
 // === end Phase 4 (PR-4.2) ===
 // === Phase 4 (PR-4.5) — Activity destination (run-history recast) ===

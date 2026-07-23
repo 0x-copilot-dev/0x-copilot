@@ -422,6 +422,10 @@ def create_app(
         # ``filter[project_id]`` axis; ai-backend's route reads a plain
         # ``project_id`` query param, so translate here.
         project_id: str | None = Query(None, alias="filter[project_id]"),
+        # PRD-09 D3 — bucket-scoped keyset pagination. Forwarded verbatim to
+        # ai-backend; both absent → the legacy unfiltered path.
+        bucket: str | None = Query(None),
+        cursor: str | None = Query(None),
     ) -> dict[str, object]:
         identity = FacadeAuthenticator.authenticate_request(request)
         params: dict[str, object] = {
@@ -431,6 +435,10 @@ def create_app(
         }
         if project_id is not None:
             params["project_id"] = project_id
+        if bucket is not None:
+            params["bucket"] = bucket
+        if cursor is not None:
+            params["cursor"] = cursor
         return await forward_json(
             app,
             "GET",
@@ -439,6 +447,51 @@ def create_app(
             params=identity.scoped_params(params),
             identity=identity,
         )
+
+    @app.get("/v1/agent/conversations/stream")
+    async def stream_conversations(
+        request: Request,
+        after: str | None = Query(None),
+    ) -> StreamingResponse:
+        """PRD-09 D4 — Chats live-refresh SSE proxy onto ai-backend.
+
+        Pass-through: yields upstream chunks unmodified so the SSE framing
+        (``event:``/``id:``/``data:``) lands on the wire byte-for-byte, matching
+        the ``/v1/agent/runs/{run_id}/stream`` proxy shape. Registered BEFORE
+        ``/v1/agent/conversations/{conversation_id}`` so the literal path wins
+        (FastAPI matches in registration order; ``conversation_id`` is an
+        unconstrained ``str``).
+        """
+        identity = FacadeAuthenticator.authenticate_request(request)
+        client = http_client(app)
+        upstream = await client.send(
+            client.build_request(
+                "GET",
+                f"{settings_for(app).ai_backend_url}/v1/agent/conversations/stream",
+                params=identity.scoped_params({"after": after}),
+                headers=_outbound_headers(identity),
+                timeout=None,
+            ),
+            stream=True,
+        )
+        if upstream.status_code >= 400:
+            await upstream.aread()
+            await upstream.aclose()
+            raise HTTPException(
+                upstream.status_code,
+                _upstream_error_detail(upstream),
+            )
+
+        async def event_stream() -> AsyncIterator[bytes]:
+            try:
+                async for chunk in upstream.aiter_bytes():
+                    if await request.is_disconnected():
+                        break
+                    yield chunk
+            finally:
+                await upstream.aclose()
+
+        return StreamingResponse(event_stream(), media_type="text/event-stream")
 
     @app.get("/v1/agent/conversations/{conversation_id}")
     async def get_conversation(

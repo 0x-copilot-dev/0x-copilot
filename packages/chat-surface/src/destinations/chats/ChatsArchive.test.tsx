@@ -379,3 +379,93 @@ describe("ChatsArchive — callbacks", () => {
     expect(row).toHaveAttribute("aria-label", "Reopen Budget review");
   });
 });
+
+// ---------------------------------------------------------------------------
+// PRD-09 D7 / DoD #14 — the mono model tag inherits the sub-line tone
+// ---------------------------------------------------------------------------
+
+describe("ChatsArchive — mono model tone (D7)", () => {
+  it("sets NO `color` on the model tag, so it inherits Row's subStyle tone", () => {
+    renderArchive({
+      archive: okArchive({ recent: [makeRow({ model: "gpt-4o" })] }),
+    });
+    const tag = screen.getByTestId("chat-archive-row-model");
+    // The former `color: var(--color-text-muted)` re-coloured it a tone
+    // brighter; dropping the key lets it inherit `--color-text-subtle`.
+    expect(tag.style.color).toBe("");
+    // It keeps the mono family (a family switch only, per the design).
+    expect(tag.style.fontFamily).toBe("var(--font-mono)");
+  });
+});
+
+// ---------------------------------------------------------------------------
+// PRD-09 D2 / D3 — overflow menu + Load more foot
+// ---------------------------------------------------------------------------
+
+describe("ChatsArchive — overflow + pagination", () => {
+  function renderWithActions(props: Partial<ChatsArchiveProps> = {}): {
+    onTogglePin: ReturnType<typeof vi.fn>;
+    onToggleArchive: ReturnType<typeof vi.fn>;
+    onLoadMore: ReturnType<typeof vi.fn>;
+  } {
+    const onTogglePin = vi.fn();
+    const onToggleArchive = vi.fn();
+    const onLoadMore = vi.fn();
+    render(
+      <ChatsArchive
+        archive={props.archive}
+        onReopen={vi.fn()}
+        onNewChat={vi.fn()}
+        onTogglePin={props.onTogglePin ?? onTogglePin}
+        onToggleArchive={props.onToggleArchive ?? onToggleArchive}
+        onLoadMore={props.onLoadMore ?? onLoadMore}
+        hasMore={props.hasMore}
+        now={NOW}
+      />,
+    );
+    return { onTogglePin, onToggleArchive, onLoadMore };
+  }
+
+  it("opens the ⋯ menu and pins via onTogglePin without reopening the row", () => {
+    const onReopen = vi.fn();
+    const onTogglePin = vi.fn();
+    render(
+      <ChatsArchive
+        archive={okArchive({ recent: [makeRow({ id: "c1", pinned: false })] })}
+        onReopen={onReopen}
+        onNewChat={vi.fn()}
+        onTogglePin={onTogglePin}
+        now={NOW}
+      />,
+    );
+    fireEvent.click(screen.getByTestId("chat-archive-row-overflow-trigger"));
+    fireEvent.click(screen.getByTestId("chat-archive-row-pin"));
+    expect(onTogglePin).toHaveBeenCalledWith("c1", true);
+    // The menu interaction never reopened the conversation.
+    expect(onReopen).not.toHaveBeenCalled();
+  });
+
+  it("archives via the ⋯ menu", () => {
+    const { onToggleArchive } = renderWithActions({
+      archive: okArchive({ recent: [makeRow({ id: "c2" })] }),
+    });
+    fireEvent.click(screen.getByTestId("chat-archive-row-overflow-trigger"));
+    fireEvent.click(screen.getByTestId("chat-archive-row-archive"));
+    expect(onToggleArchive).toHaveBeenCalledWith("c2", true);
+  });
+
+  it("renders a ghost 'Load more' foot under Archived when hasMore.archived is true", () => {
+    const { onLoadMore } = renderWithActions({
+      archive: okArchive({
+        recent: [makeRow({ id: "r1" })],
+        archived: [makeRow({ id: "a1", status: "archived" })],
+      }),
+      hasMore: { archived: true },
+    });
+    const foot = screen.getByTestId("chats-section-archived-load-more");
+    fireEvent.click(foot);
+    expect(onLoadMore).toHaveBeenCalledWith("archived");
+    // Pinned never shows a Load more foot.
+    expect(screen.queryByTestId("chats-section-pinned-load-more")).toBeNull();
+  });
+});

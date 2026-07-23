@@ -52,8 +52,8 @@ function chatArchiveStatus(conversation: Conversation): ChatArchiveStatus {
  *
  * `pinned` / `preview` / `model` are read from the FIRST-CLASS conversation
  * fields (PRD-H.4) — a real `pinned` column plus read-time preview/model
- * projections. The earlier `metadata.pinned` / `metadata.preview` /
- * `metadata.model` reads are gone: nothing ever wrote those keys.
+ * projections. The earlier metadata-blob reads (the `pinned`/`preview`/`model`
+ * keys) are gone: nothing ever wrote those keys.
  */
 export function toChatArchiveRow(conversation: Conversation): ChatArchiveRow {
   const title = conversation.title?.trim();

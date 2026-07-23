@@ -20,6 +20,7 @@
 // The archive is pre-bucketed by the host binder from
 // `/v1/agent/conversations` (incl. archived) — see api-types `chats.ts`.
 
+import { useState } from "react";
 import type { CSSProperties, ReactElement, ReactNode } from "react";
 
 import type {
@@ -113,6 +114,28 @@ export interface ChatsArchiveProps {
   readonly onRetry?: () => void;
 
   /**
+   * Pin / unpin a conversation from its row's ⋯ overflow (PRD-09 D2). When
+   * omitted the pin control is not rendered (e.g. a read-only host).
+   */
+  readonly onTogglePin?: (id: ConversationId, pinned: boolean) => void;
+
+  /**
+   * Archive / unarchive a conversation from its row's ⋯ overflow (PRD-09 D2).
+   * When omitted the archive control is not rendered.
+   */
+  readonly onToggleArchive?: (id: ConversationId, archived: boolean) => void;
+
+  /**
+   * Fetch the next keyset page for a bucket (PRD-09 D3). When provided together
+   * with `hasMore[bucket]`, a ghost "Load more" foot renders under Recent and
+   * Archived.
+   */
+  readonly onLoadMore?: (bucket: ChatsSectionKey) => void;
+
+  /** Per-bucket "older rows remain" flags driving the "Load more" foot (D3). */
+  readonly hasMore?: Partial<Record<ChatsSectionKey, boolean>>;
+
+  /**
    * Reference instant for relative-time rendering (FR-4.4 test seam).
    * Defaults to `Date.now()` at render.
    */
@@ -158,7 +181,17 @@ const sectionsStyle: CSSProperties = {
 // ===========================================================================
 
 export function ChatsArchive(props: ChatsArchiveProps): ReactElement {
-  const { archive = null, onReopen, onNewChat, onRetry, now } = props;
+  const {
+    archive = null,
+    onReopen,
+    onNewChat,
+    onRetry,
+    onTogglePin,
+    onToggleArchive,
+    onLoadMore,
+    hasMore,
+    now,
+  } = props;
   const nowMs = now ?? Date.now();
 
   const newChatAction = { label: "New chat", onClick: onNewChat };
@@ -259,6 +292,15 @@ export function ChatsArchive(props: ChatsArchiveProps): ReactElement {
               rows={rows}
               onReopen={onReopen}
               onNewChat={key === "pinned" ? onNewChat : undefined}
+              onTogglePin={onTogglePin}
+              onToggleArchive={onToggleArchive}
+              // "Load more" only makes sense under Recent + Archived (Pinned is
+              // curated, small, and hosts the New-chat CTA).
+              onLoadMore={
+                key !== "pinned" && hasMore?.[key] === true
+                  ? () => onLoadMore?.(key)
+                  : undefined
+              }
               now={nowMs}
             />
           );
@@ -331,6 +373,10 @@ interface ChatsSectionProps {
   readonly onReopen: (id: ConversationId) => void;
   /** When set (Pinned only), renders the small primary "＋ New chat". */
   readonly onNewChat?: () => void;
+  readonly onTogglePin?: (id: ConversationId, pinned: boolean) => void;
+  readonly onToggleArchive?: (id: ConversationId, archived: boolean) => void;
+  /** When set, renders a ghost "Load more" foot fetching the next keyset page. */
+  readonly onLoadMore?: () => void;
   readonly now: number;
 }
 
@@ -345,6 +391,9 @@ function ChatsSection({
   rows,
   onReopen,
   onNewChat,
+  onTogglePin,
+  onToggleArchive,
+  onLoadMore,
   now,
 }: ChatsSectionProps): ReactElement {
   const headingId = `chats-section-${sectionKey}-heading`;
@@ -382,13 +431,40 @@ function ChatsSection({
           ariaLabel={SECTION_HEADINGS[sectionKey]}
           data-testid={`chats-section-${sectionKey}-list`}
           renderRow={(row) => (
-            <ChatArchiveRowView row={row} onReopen={onReopen} now={now} />
+            <ChatArchiveRowView
+              row={row}
+              onReopen={onReopen}
+              onTogglePin={onTogglePin}
+              onToggleArchive={onToggleArchive}
+              now={now}
+            />
           )}
         />
+      ) : null}
+      {onLoadMore !== undefined ? (
+        <div style={loadMoreFootStyle}>
+          <Button
+            type="button"
+            variant="ghost"
+            size="sm"
+            onClick={onLoadMore}
+            data-testid={`chats-section-${sectionKey}-load-more`}
+          >
+            Load more
+          </Button>
+        </div>
       ) : null}
     </section>
   );
 }
+
+// The ghost "Load more" foot — the house pattern (ToolInvocationsTable /
+// ReadAuditTab), NOT infinite scroll and not a fourth pattern (PRD-09 D3).
+const loadMoreFootStyle: CSSProperties = {
+  display: "flex",
+  justifyContent: "center",
+  paddingTop: 4,
+};
 
 // ===========================================================================
 // ChatArchiveRowView — one conversation row (FR-4.6 · FR-G.3)
@@ -403,6 +479,8 @@ function ChatsSection({
 interface ChatArchiveRowViewProps {
   readonly row: ChatArchiveRow;
   readonly onReopen: (id: ConversationId) => void;
+  readonly onTogglePin?: (id: ConversationId, pinned: boolean) => void;
+  readonly onToggleArchive?: (id: ConversationId, archived: boolean) => void;
   readonly now: number;
 }
 
@@ -414,10 +492,16 @@ const liveIconStyle: CSSProperties = {
   color: "var(--color-success)",
 };
 
-// Inline mono model marker within the body-font sub-line.
+// Inline mono model marker within the body-font sub-line. PRD-09 D7 / README G1:
+// the design's `.mono` is a FAMILY switch only (copilot.css:138-140), so the tag
+// inherits its container's `.lrow__sub` tone (`--mut2` #64646d). The former
+// `color: var(--color-text-muted)` #98989f re-coloured it one tone brighter than
+// the line it sits in — a HIGH on every row. The fix is a DELETION, not a
+// re-point: dropping `color` lets the span inherit `Row`'s `subStyle`
+// (`--color-text-subtle` = #64646d), so a later change to the sub-line tone
+// carries through instead of re-breaking.
 const modelMonoStyle: CSSProperties = {
   fontFamily: "var(--font-mono)",
-  color: "var(--color-text-muted)",
   whiteSpace: "nowrap",
 };
 
@@ -446,6 +530,8 @@ function buildSubLine(preview: string, model: string): ReactNode {
 function ChatArchiveRowView({
   row,
   onReopen,
+  onTogglePin,
+  onToggleArchive,
   now,
 }: ChatArchiveRowViewProps): ReactElement {
   const isLive = row.status === "running";
@@ -479,6 +565,17 @@ function ChatArchiveRowView({
     </span>
   );
 
+  const isArchived = row.status === "archived";
+  const overflow =
+    onTogglePin !== undefined || onToggleArchive !== undefined ? (
+      <RowOverflowMenu
+        row={row}
+        isArchived={isArchived}
+        onTogglePin={onTogglePin}
+        onToggleArchive={onToggleArchive}
+      />
+    ) : undefined;
+
   return (
     <Row
       data-testid="chat-archive-row"
@@ -490,9 +587,132 @@ function ChatArchiveRowView({
       chip={chip}
       sub={buildSubLine(row.preview, row.model)}
       meta={meta}
+      overflow={overflow}
       onActivate={() => onReopen(row.id)}
       ariaLabel={`Reopen ${row.title}`}
     />
+  );
+}
+
+// ===========================================================================
+// RowOverflowMenu — the ⋯ → Pin / Unpin / Archive / Unarchive control (D2)
+// ===========================================================================
+//
+// A deliberate live-only addition (the design ships no ⋯): the row is the right
+// home for pin/archive because curation is a LIST operation (you pin THIS one out
+// of the twenty you're looking at) and Chats is the only surface with an Archived
+// section, so unarchive must live where its result is visible. Always mounted,
+// keyboard reachable; `Row`'s overflow slot isolates it from row activation.
+
+const overflowTriggerStyle: CSSProperties = {
+  display: "inline-flex",
+  alignItems: "center",
+  justifyContent: "center",
+  width: 22,
+  height: 22,
+  padding: 0,
+  border: "none",
+  background: "transparent",
+  color: "var(--color-text-subtle)",
+  cursor: "pointer",
+  borderRadius: "var(--radius-sm, 6px)",
+  lineHeight: 1,
+};
+
+const overflowMenuStyle: CSSProperties = {
+  position: "absolute",
+  top: "100%",
+  right: 0,
+  zIndex: 20,
+  minWidth: 140,
+  display: "flex",
+  flexDirection: "column",
+  padding: 4,
+  gap: 2,
+  background: "var(--color-surface-elevated)",
+  border: "1px solid var(--color-border)",
+  borderRadius: "var(--radius-md, 8px)",
+  boxShadow: "0 8px 24px rgba(0,0,0,0.32)",
+};
+
+const overflowItemStyle: CSSProperties = {
+  display: "flex",
+  alignItems: "center",
+  width: "100%",
+  padding: "6px 8px",
+  border: "none",
+  background: "transparent",
+  color: "var(--color-text)",
+  fontSize: "var(--font-size-2xs)",
+  textAlign: "left",
+  cursor: "pointer",
+  borderRadius: "var(--radius-sm, 6px)",
+};
+
+function RowOverflowMenu({
+  row,
+  isArchived,
+  onTogglePin,
+  onToggleArchive,
+}: {
+  readonly row: ChatArchiveRow;
+  readonly isArchived: boolean;
+  readonly onTogglePin?: (id: ConversationId, pinned: boolean) => void;
+  readonly onToggleArchive?: (id: ConversationId, archived: boolean) => void;
+}): ReactElement {
+  const [open, setOpen] = useState(false);
+  const close = () => setOpen(false);
+  return (
+    <span style={{ position: "relative", display: "inline-flex" }}>
+      <button
+        type="button"
+        aria-haspopup="menu"
+        aria-expanded={open}
+        aria-label="Chat actions"
+        data-testid="chat-archive-row-overflow-trigger"
+        style={overflowTriggerStyle}
+        onClick={() => setOpen((v) => !v)}
+      >
+        ⋯
+      </button>
+      {open ? (
+        <div
+          role="menu"
+          aria-label={`Actions for ${row.title}`}
+          data-testid="chat-archive-row-overflow-menu"
+          style={overflowMenuStyle}
+        >
+          {onTogglePin !== undefined && !isArchived ? (
+            <button
+              type="button"
+              role="menuitem"
+              style={overflowItemStyle}
+              data-testid="chat-archive-row-pin"
+              onClick={() => {
+                onTogglePin(row.id, !row.pinned);
+                close();
+              }}
+            >
+              {row.pinned ? "Unpin" : "Pin to top"}
+            </button>
+          ) : null}
+          {onToggleArchive !== undefined ? (
+            <button
+              type="button"
+              role="menuitem"
+              style={overflowItemStyle}
+              data-testid="chat-archive-row-archive"
+              onClick={() => {
+                onToggleArchive(row.id, !isArchived);
+                close();
+              }}
+            >
+              {isArchived ? "Unarchive" : "Archive"}
+            </button>
+          ) : null}
+        </div>
+      ) : null}
+    </span>
   );
 }
 

@@ -51,19 +51,66 @@ describe("Topbar", () => {
     expect(screen.getByTestId("topbar-subtitle")).toHaveTextContent("c-77");
   });
 
-  it("renders no subtitle when the leaf is undefined", () => {
+  // PRD-09 D5 — a slug WITHOUT a registry sublabel (e.g. `home`) renders no
+  // subtitle when there's no leaf; a slug WITH one (e.g. `chats`) falls back to
+  // the registry sublabel.
+  it("renders no subtitle when the leaf is undefined and the slug has no sublabel", () => {
+    render(<Topbar activeDestination="home" />);
+    expect(screen.queryByTestId("topbar-subtitle")).toBeNull();
+  });
+
+  it("falls back to the registry sublabel for a no-leaf slug that has one (D5)", () => {
     render(<Topbar activeDestination="chats" />);
-    expect(screen.queryByTestId("topbar-subtitle")).toBeNull();
+    expect(screen.getByTestId("topbar-subtitle")).toHaveTextContent(
+      "every conversation with the agent",
+    );
   });
 
-  it("renders no subtitle for an empty-string leaf", () => {
+  it("falls back to the registry sublabel for an empty-string leaf", () => {
     render(<Topbar activeDestination="chats" leaf="" />);
-    expect(screen.queryByTestId("topbar-subtitle")).toBeNull();
+    expect(screen.getByTestId("topbar-subtitle")).toHaveTextContent(
+      "every conversation with the agent",
+    );
   });
 
-  it("renders no subtitle for an em-dash leaf", () => {
+  it("falls back to the registry sublabel for an em-dash leaf", () => {
     render(<Topbar activeDestination="chats" leaf="—" />);
-    expect(screen.queryByTestId("topbar-subtitle")).toBeNull();
+    expect(screen.getByTestId("topbar-subtitle")).toHaveTextContent(
+      "every conversation with the agent",
+    );
+  });
+
+  // PRD-09 DoD #11 — the Chats subtitle is sourced from destinations.ts.
+  it("reads exactly 'every conversation with the agent' for chats, from the registry (DoD #11)", () => {
+    render(<Topbar activeDestination="chats" />);
+    expect(screen.getByTestId("topbar-subtitle").textContent).toBe(
+      "every conversation with the agent",
+    );
+  });
+
+  // PRD-09 DoD #12 — design values pinned numerically against the inline styles.
+  it("pins the design box + type values (baseline row, gaps, padding, subtitle tone) (DoD #12)", () => {
+    render(<Topbar activeDestination="chats" />);
+    const group = screen.getByTestId("topbar-title-group");
+    expect(group.style.alignItems).toBe("baseline");
+    expect(group.style.gap).toBe("9px");
+
+    const header = screen.getByRole("banner");
+    expect(header).toHaveAttribute("data-component", "topbar");
+    expect(header.style.gap).toBe("12px");
+    expect(header.style.padding).toBe("0px 18px");
+
+    expect(screen.getByTestId("topbar-subtitle").style.color).toBe(
+      "var(--color-text-subtle)",
+    );
+    // The title keeps the existing sm token + semibold weight (no new token).
+    expect(screen.getByTestId("topbar-title").style.fontSize).toBe(
+      "var(--font-size-sm)",
+    );
+    expect(screen.getByTestId("topbar-title").style.fontWeight).toBe(
+      "var(--font-weight-semibold)",
+    );
+    expect(TOPBAR_HEIGHT).toBe(46);
   });
 
   it("mounts the shared command palette trigger with the ⌘K hint", () => {

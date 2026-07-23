@@ -81,11 +81,11 @@ export interface ChatArchiveRow {
  * DESIGN-SPEC §3 renders in order (Pinned / Recent / Archived). Empty
  * buckets are simply empty arrays; the destination hides empty sections.
  *
- * The host binder derives this from `/v1/agent/conversations` (incl.
- * archived): `pinned` rows → `pinned`, `status === "archived"` →
- * `archived`, the remainder → `recent` (PRD §11 — until a dedicated
- * bucketed endpoint lands, the composition lives in the binder and this
- * shape stays endpoint-agnostic).
+ * PRD-09 D3 — the three sections are now SERVER-SCOPED: the `useChatsArchive`
+ * controller fetches each bucket with `?bucket=pinned|recent|archived` (keyset
+ * paginated), so `pinned`/`status` are decided by the server query, not by
+ * bucketing one flat client page (which silently dropped rows older than page
+ * 1). Empty buckets are empty arrays; the destination hides empty sections.
  */
 export interface ChatsArchive {
   readonly pinned: ReadonlyArray<ChatArchiveRow>;

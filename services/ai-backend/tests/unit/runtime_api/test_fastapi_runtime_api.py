@@ -285,6 +285,101 @@ class TestFastApiRuntimeApi(FastApiRuntimeApiTestMixin):
             item["metadata"]["token"] == self.Values.SECRET for item in conversations
         )
 
+    async def test_pinned_bucket_is_complete_across_cursor_pages(self) -> None:
+        """PRD-09 D3 / DoD #2 — the pinned bucket is server-scoped and cursored, so
+        a pinned row buried under 150 unpinned rows is still reachable. The
+        regression guard for the silently-incomplete Pinned bucket."""
+        from datetime import datetime, timezone
+
+        from runtime_api.schemas import CreateConversationRequest
+
+        client, store = self.create_client()
+        base = datetime(2026, 5, 1, tzinfo=timezone.utc)
+
+        pinned_ids: set[str] = set()
+        for i in range(3):
+            conv = await store.create_conversation(
+                CreateConversationRequest(
+                    org_id=self.Values.ORG_ID,
+                    user_id=self.Values.USER_ID,
+                    assistant_id=self.Values.ASSISTANT_ID,
+                    title=f"pin-{i}",
+                )
+            )
+            await store.set_conversation_pinned(
+                org_id=self.Values.ORG_ID,
+                user_id=self.Values.USER_ID,
+                conversation_id=conv.conversation_id,
+                pinned=True,
+                now=base + timedelta(minutes=i),
+            )
+            pinned_ids.add(conv.conversation_id)
+        # 150 unpinned rows, all NEWER than the pinned ones (so a flat page-1
+        # fetch would never surface the pinned rows).
+        for i in range(150):
+            conv = await store.create_conversation(
+                CreateConversationRequest(
+                    org_id=self.Values.ORG_ID,
+                    user_id=self.Values.USER_ID,
+                    assistant_id=self.Values.ASSISTANT_ID,
+                    title=f"noise-{i}",
+                )
+            )
+            await store.set_conversation_pinned(
+                org_id=self.Values.ORG_ID,
+                user_id=self.Values.USER_ID,
+                conversation_id=conv.conversation_id,
+                pinned=False,
+                now=base + timedelta(hours=1, minutes=i),
+            )
+
+        scope = {"org_id": self.Values.ORG_ID, "user_id": self.Values.USER_ID}
+        seen: set[str] = set()
+        cursor: str | None = None
+        for _ in range(3):
+            params = {**scope, "bucket": "pinned", "limit": 1}
+            if cursor is not None:
+                params["cursor"] = cursor
+            body = client.get("/v1/agent/conversations", params=params).json()
+            rows = body["conversations"]
+            assert len(rows) == 1
+            assert rows[0]["pinned"] is True
+            seen.add(rows[0]["conversation_id"])
+            cursor = body.get("next_cursor")
+            if len(seen) == 1:
+                # First page must advertise a next_cursor for the remaining two.
+                assert cursor is not None
+        # Following the cursor twice yielded the other two pinned rows.
+        assert seen == pinned_ids
+
+    async def test_legacy_list_omits_next_cursor_and_is_ordered(self) -> None:
+        """PRD-09 D3 / DoD #3 — the legacy caller (no bucket/cursor) sees a payload
+        whose top-level keys are exactly {conversations, has_more} and whose ids
+        are in ``(updated_at DESC, id DESC)`` order — i.e. no change."""
+
+        from runtime_api.schemas import CreateConversationRequest
+
+        client, store = self.create_client()
+        for i in range(4):
+            await store.create_conversation(
+                CreateConversationRequest(
+                    org_id=self.Values.ORG_ID,
+                    user_id=self.Values.USER_ID,
+                    assistant_id=self.Values.ASSISTANT_ID,
+                    title=f"c-{i}",
+                    # explicit updated_at handled by store default; created in order
+                )
+            )
+        scope = {"org_id": self.Values.ORG_ID, "user_id": self.Values.USER_ID}
+        body = client.get("/v1/agent/conversations", params=scope).json()
+        assert set(body.keys()) == {"conversations", "has_more"}
+        ids = [c["conversation_id"] for c in body["conversations"]]
+        records = await store.list_conversations(
+            org_id=self.Values.ORG_ID, user_id=self.Values.USER_ID, limit=200
+        )
+        expected = [r.conversation_id for r in records]
+        assert ids == expected
+
     async def test_list_projects_pinned_preview_and_model(self) -> None:
         """PRD-H.4 — the list contract carries pinned/preview/model."""
         client, _store = self.create_client()

@@ -27,6 +27,7 @@ from runtime_adapters.file.runtime_api_store import FileRuntimeApiStore
 from runtime_adapters.in_memory import InMemoryRuntimeApiStore
 from runtime_api.schemas import (
     AgentRunStatus,
+    ConversationBucket,
     CreateConversationRequest,
     CreateRunRequest,
     MessageRecord,
@@ -837,6 +838,240 @@ class TestConversationPinConformance(_CrudSeedMixin):
             )
             is None
         )
+
+
+class TestPreviewRolePreferenceConformance(_CrudSeedMixin):
+    """PRD-09 D6 — the Chats preview prefers the assistant turn (all backends).
+
+    DoD #1: ``get_latest_message_for_conversation`` returns the newest ASSISTANT
+    message even when a later USER message exists, so the row reads back an
+    outcome mid-run instead of echoing the user's own prompt.
+    """
+
+    async def test_prefers_newest_assistant_over_later_user(self, store) -> None:
+        conversation = await self._new_conversation(store)
+        base = datetime(2026, 3, 1, tzinfo=timezone.utc)
+        await store.append_message(
+            MessageRecord(
+                conversation_id=conversation.conversation_id,
+                org_id=self._ORG,
+                role=MessageRole.ASSISTANT,
+                content_text="outcome line",
+                created_at=base,
+            )
+        )
+        # A LATER user message (the mid-run prompt) must NOT win the preview.
+        await store.append_message(
+            MessageRecord(
+                conversation_id=conversation.conversation_id,
+                org_id=self._ORG,
+                role=MessageRole.USER,
+                content_text="my prompt",
+                created_at=base + timedelta(seconds=5),
+            )
+        )
+        latest = await store.get_latest_message_for_conversation(
+            org_id=self._ORG,
+            conversation_id=conversation.conversation_id,
+        )
+        assert latest is not None
+        assert latest.content_text == "outcome line"
+
+    async def test_falls_back_to_user_when_no_assistant(self, store) -> None:
+        # A brand-new chat with only the user's prompt still shows it.
+        conversation = await self._new_conversation(store)
+        await store.append_message(
+            MessageRecord(
+                conversation_id=conversation.conversation_id,
+                org_id=self._ORG,
+                role=MessageRole.USER,
+                content_text="first prompt",
+                created_at=datetime(2026, 3, 2, tzinfo=timezone.utc),
+            )
+        )
+        latest = await store.get_latest_message_for_conversation(
+            org_id=self._ORG,
+            conversation_id=conversation.conversation_id,
+        )
+        assert latest is not None
+        assert latest.content_text == "first prompt"
+
+
+class TestConversationBucketKeysetConformance(_CrudSeedMixin):
+    """PRD-09 D3 — bucket scoping + keyset paging happen at the store, so a
+    pinned/archived row older than page 1 stays reachable (all backends)."""
+
+    async def _pinned_conversation(self, store, *, title, when):
+        conversation = await store.create_conversation(
+            CreateConversationRequest(
+                org_id=self._ORG,
+                user_id=self._USER,
+                assistant_id="assistant",
+                title=title,
+            )
+        )
+        await store.set_conversation_pinned(
+            org_id=self._ORG,
+            user_id=self._USER,
+            conversation_id=conversation.conversation_id,
+            pinned=True,
+            now=when,
+        )
+        return conversation.conversation_id
+
+    async def test_pinned_bucket_is_complete_across_keyset_pages(self, store) -> None:
+        base = datetime(2026, 4, 1, tzinfo=timezone.utc)
+        # Three pinned rows...
+        pinned_ids = set()
+        for i in range(3):
+            pinned_ids.add(
+                await self._pinned_conversation(
+                    store, title=f"pin-{i}", when=base + timedelta(minutes=i)
+                )
+            )
+        # ...buried under many unpinned rows newer than them.
+        for i in range(20):
+            conv = await self._new_conversation(store, title=f"noise-{i}")
+            await store.set_conversation_pinned(
+                org_id=self._ORG,
+                user_id=self._USER,
+                conversation_id=conv.conversation_id,
+                pinned=False,
+                now=base + timedelta(hours=1, minutes=i),
+            )
+
+        seen: set[str] = set()
+        cursor_updated = None
+        cursor_id = None
+        for _ in range(5):  # generous page budget
+            page = await store.list_conversations(
+                org_id=self._ORG,
+                user_id=self._USER,
+                limit=1,
+                bucket=ConversationBucket.PINNED,
+                before_updated_at=cursor_updated,
+                before_conversation_id=cursor_id,
+            )
+            if not page:
+                break
+            for row in page:
+                assert row.pinned is True
+                seen.add(row.conversation_id)
+            cursor_updated = page[-1].updated_at
+            cursor_id = page[-1].conversation_id
+        # Every pinned row is reachable — the silently-incomplete bucket is fixed.
+        assert seen == pinned_ids
+
+    async def test_archived_bucket_scopes_to_archived_rows(self, store) -> None:
+        active = await self._new_conversation(store, title="active")
+        archived = await self._new_conversation(store, title="to-archive")
+        await store.update_conversation(
+            org_id=self._ORG,
+            user_id=self._USER,
+            conversation_id=archived.conversation_id,
+            title=None,
+            title_changed=False,
+            folder=None,
+            folder_changed=False,
+            archived=True,
+            archived_changed=True,
+            project_id=None,
+            project_id_changed=False,
+            now=datetime(2026, 4, 2, tzinfo=timezone.utc),
+        )
+        archived_ids = {
+            c.conversation_id
+            for c in await store.list_conversations(
+                org_id=self._ORG,
+                user_id=self._USER,
+                limit=50,
+                bucket=ConversationBucket.ARCHIVED,
+            )
+        }
+        recent_ids = {
+            c.conversation_id
+            for c in await store.list_conversations(
+                org_id=self._ORG,
+                user_id=self._USER,
+                limit=50,
+                bucket=ConversationBucket.RECENT,
+            )
+        }
+        assert archived.conversation_id in archived_ids
+        assert archived.conversation_id not in recent_ids
+        assert active.conversation_id in recent_ids
+        assert active.conversation_id not in archived_ids
+
+
+class TestRunStatusBumpsConversationConformance(_CrudSeedMixin):
+    """PRD-09 D4 / DoD #5 — a status-only run transition bumps the parent
+    conversation's ``updated_at`` so the Chats live tail sees the chip flip."""
+
+    async def test_cancel_raises_conversation_updated_at_and_is_reachable(
+        self, store
+    ) -> None:
+        conversation, run = await self._new_run(store)
+        pre = await store.get_conversation(
+            org_id=self._ORG,
+            user_id=self._USER,
+            conversation_id=conversation.conversation_id,
+        )
+        assert pre is not None
+        # A status-only transition (no message appended).
+        await store.update_run_status(
+            run_id=run.run_id, status=AgentRunStatus.CANCELLED
+        )
+        post = await store.get_conversation(
+            org_id=self._ORG,
+            user_id=self._USER,
+            conversation_id=conversation.conversation_id,
+        )
+        assert post is not None
+        # updated_at strictly raised past the pre-cancel watermark...
+        assert post.updated_at > pre.updated_at
+        # ...so a subsequent list, filtered on the pre-cancel watermark, RETURNS
+        # the row. The Chats live tail (ConversationQueryService.list_conversation_changes,
+        # conversation_query_service.py:263-313) fetches the newest ``limit`` slice from
+        # this store and keeps the rows whose keyset is strictly newer than the
+        # subscriber's watermark ``(updated_at, id) > watermark``. We reproduce that
+        # exact forward-filter here against the store's own newest slice so the
+        # conformance suite pins the store-level guarantee the tail depends on:
+        # after a status-only cancel, the bumped conversation is in the newest
+        # window AND clears the pre-cancel watermark, i.e. the tail returns it.
+        pre_watermark = (pre.updated_at, pre.conversation_id)
+        newest_slice = await store.list_conversations(
+            org_id=self._ORG,
+            user_id=self._USER,
+            limit=50,
+            bucket=ConversationBucket.RECENT,
+        )
+        forward_returned = {
+            c.conversation_id
+            for c in newest_slice
+            if (c.updated_at, c.conversation_id) > pre_watermark
+        }
+        assert conversation.conversation_id in forward_returned
+        # It is also the newest row in the caller's list...
+        newest = await store.list_conversations(
+            org_id=self._ORG,
+            user_id=self._USER,
+            limit=1,
+            bucket=ConversationBucket.RECENT,
+        )
+        assert newest and newest[0].conversation_id == conversation.conversation_id
+        # ...and the pre-cancel keyset (older-than) no longer contains it, so a
+        # subscriber advancing its watermark per frame never regresses.
+        older_than_pre = await store.list_conversations(
+            org_id=self._ORG,
+            user_id=self._USER,
+            limit=50,
+            bucket=ConversationBucket.RECENT,
+            before_updated_at=pre.updated_at,
+            before_conversation_id=pre.conversation_id,
+        )
+        assert conversation.conversation_id not in {
+            c.conversation_id for c in older_than_pre
+        }
 
 
 class TestRunHistory(_CrudSeedMixin):

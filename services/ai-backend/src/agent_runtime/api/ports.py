@@ -47,6 +47,7 @@ from runtime_api.schemas import (
     ApprovalDecision,
     ApprovalDecisionRecord,
     ApprovalRequestRecord,
+    ConversationBucket,
     ConversationRecord,
     CreateConversationRequest,
     CreateRunRequest,
@@ -123,14 +124,34 @@ class PersistencePort(Protocol):
         include_archived: bool = False,
         include_deleted: bool = False,
         project_id: str | None = None,
+        bucket: ConversationBucket | None = None,
+        before_updated_at: datetime | None = None,
+        before_conversation_id: str | None = None,
     ) -> Sequence[ConversationRecord]:
         """Return conversations for the tenant/user scope, newest first.
+
+        Ordered ``(updated_at DESC, id DESC)`` — the ``id`` tiebreaker is
+        load-bearing for keyset pagination (PRD-09 D3): two conversations
+        sharing an ``updated_at`` would otherwise skip or repeat across a page
+        boundary.
 
         ``include_deleted`` excludes soft-deleted rows by default;
         setting it True returns them too. When ``project_id`` is set, only
         conversations filed under that project are returned (PRD-07) — the
         filter narrows within the caller's already-scoped rows and is never
         an authorization input.
+
+        ``bucket`` (PRD-09 D3) scopes the page to one Chats section
+        server-side; when set, ``include_archived`` is ignored and soft-deleted
+        rows are always excluded. ``pinned`` → ``pinned AND NOT archived``;
+        ``archived`` → archived rows; ``recent`` → the complement.
+
+        ``before_updated_at`` / ``before_conversation_id`` is the decoded keyset
+        cursor: when given, only rows strictly older than
+        ``(before_updated_at, before_conversation_id)`` under the
+        ``(updated_at DESC, id DESC)`` order are returned. When both are ``None``
+        the most-recent ``limit`` window is returned. Both are filter inputs and
+        never widen scope.
         """
 
     async def count_conversations_by_project(
@@ -219,7 +240,16 @@ class PersistencePort(Protocol):
     async def update_run_status(
         self, *, run_id: str, status: AgentRunStatus
     ) -> RunRecord:
-        """Update mutable run status and return the new record."""
+        """Update mutable run status and return the new record.
+
+        PRD-09 D4: implementations MUST also bump the parent conversation's
+        ``updated_at`` to the transition instant, in the same transaction. A
+        cancel / failure / timeout / flip to ``waiting_for_approval`` touches
+        only ``agent_runs`` otherwise, so the Chats live tail — which watches
+        ``updated_at`` as the row-version — would miss precisely the chip flip
+        the user is watching. This makes ``updated_at`` an honest row-version
+        for the archive read model (D3 + D4 both assume it).
+        """
 
     async def set_run_latest_sequence(
         self, *, run_id: str, latest_sequence_no: int
@@ -507,12 +537,20 @@ class PersistencePort(Protocol):
         *,
         org_id: str,
         conversation_id: str,
+        prefer_roles: tuple[str, ...] = ("assistant",),
     ) -> MessageRecord | None:
         """Return the most recent non-deleted message for a conversation (PRD-H.4).
 
-        Powers the Chats-list ``preview`` snippet. Ordered by
-        ``created_at`` descending; excludes soft-deleted rows. Returns
-        ``None`` for a conversation with no visible messages yet.
+        Powers the Chats-list ``preview`` snippet. Ordered by ``created_at``
+        descending; excludes soft-deleted rows. Returns ``None`` for a
+        conversation with no visible messages yet.
+
+        ``prefer_roles`` (PRD-09 D6): return the newest non-deleted message whose
+        role is in ``prefer_roles``, falling back to the newest of ANY role when
+        none matches (so a brand-new chat with only the user's prompt still shows
+        it rather than nothing). The default ``("assistant",)`` makes the Chats
+        preview an OUTCOME line mid-run instead of echoing the user's own prompt,
+        matching the design.
         """
 
     async def get_latest_run_for_conversation(

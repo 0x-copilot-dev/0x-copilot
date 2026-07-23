@@ -25,7 +25,6 @@ export function ConversationListGroups({
   onSelect,
   onTogglePin,
   onArchive,
-  pinnedIds,
 }: {
   conversations: readonly Conversation[];
   now: Date;
@@ -34,9 +33,10 @@ export function ConversationListGroups({
   onSelect: (conversationId: string) => void;
   onTogglePin?: (conversationId: string, nextPinned: boolean) => void;
   onArchive?: (conversationId: string) => void;
-  pinnedIds?: ReadonlySet<string>;
 }): ReactElement {
-  const groups = groupConversations(conversations, now, pinnedIds);
+  // PRD-09 D2 — pin state is read from the first-class `conversation.pinned`
+  // field inside `groupConversations`; no client-side pinned-id set.
+  const groups = groupConversations(conversations, now);
   if (groups.length === 0) {
     return (
       <p className="aui-sidebar__note" role="status">

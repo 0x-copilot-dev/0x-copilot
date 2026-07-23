@@ -28,17 +28,13 @@
 
 import { useCallback, useEffect, useState, type ReactElement } from "react";
 
-import type {
-  ChatsArchive as ChatsArchiveData,
-  ConversationId,
-  SectionResult,
-} from "@0x-copilot/api-types";
-import { ChatsArchive } from "@0x-copilot/chat-surface";
+import type { ConversationId } from "@0x-copilot/api-types";
+import { ChatsArchive, useChatsArchive } from "@0x-copilot/chat-surface";
 
 import { createConversation } from "../../api/agentApi";
 import type { RequestIdentity } from "../../api/config";
 import { errorMessage } from "../../utils/errors";
-import { fetchChatsArchive } from "./api/chatsApi";
+import { migrateLegacyPins } from "./migrateLegacyPins";
 
 export interface ChatsArchiveRouteProps {
   readonly identity: RequestIdentity;
@@ -78,42 +74,21 @@ export function ChatsArchiveRoute({
   identity,
   onOpenRun,
 }: ChatsArchiveRouteProps): ReactElement {
-  // `null` = loading (feeds the destination's `data-state="loading"`);
-  // a resolved `SectionResult` drives the ok / error / empty branches.
-  const [archive, setArchive] =
-    useState<SectionResult<ChatsArchiveData> | null>(null);
-  const [reloadToken, setReloadToken] = useState(0);
+  // PRD-09 D1 — the shared controller owns the whole read/write model (three
+  // bucket-scoped cursored fetches, the SSE live tail, pin/archive, load-more).
+  // The route keeps ONLY navigation + the New-chat error banner.
+  const { archive, hasMore, onLoadMore, onTogglePin, onToggleArchive, retry } =
+    useChatsArchive();
   // Non-fatal New-chat failure surfaces as a banner without wiping the
   // archive (the list keeps rendering, mirroring ProjectsRoute's
   // pendingError pattern).
   const [newChatError, setNewChatError] = useState<string | null>(null);
 
+  // PRD-09 D2 — one-shot, bounded replay of the retired localStorage pins onto
+  // the real endpoint, so nobody loses their pins. Idempotent + fire-and-forget.
   useEffect(() => {
-    let cancelled = false;
-    setArchive(null);
-    fetchChatsArchive(identity)
-      .then((result) => {
-        if (!cancelled) setArchive(result);
-      })
-      .catch((error: unknown) => {
-        // `fetchChatsArchive` already maps failures to a `SectionResult`,
-        // but a defensive branch keeps an unexpected throw from leaving the
-        // route stuck on the loading skeleton.
-        if (!cancelled) {
-          setArchive({
-            status: "error",
-            error: errorMessage(error, "Could not load chats."),
-          });
-        }
-      });
-    return () => {
-      cancelled = true;
-    };
-  }, [identity, reloadToken]);
-
-  const handleRetry = useCallback(() => {
-    setReloadToken((token) => token + 1);
-  }, []);
+    void migrateLegacyPins(identity.userId ?? null, identity);
+  }, [identity]);
 
   const handleNewChat = useCallback(async () => {
     setNewChatError(null);
@@ -145,7 +120,11 @@ export function ChatsArchiveRoute({
           onNewChat={() => {
             void handleNewChat();
           }}
-          onRetry={handleRetry}
+          onRetry={retry}
+          onTogglePin={onTogglePin}
+          onToggleArchive={onToggleArchive}
+          onLoadMore={onLoadMore}
+          hasMore={hasMore}
         />
       </div>
     </div>
