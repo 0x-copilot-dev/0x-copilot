@@ -1,0 +1,134 @@
+{
+  "state": "installed",
+  "counts": {
+    "low": 11,
+    "info": 5
+  },
+  "findings": [
+    {
+      "label": "installed.card.meta",
+      "group": "② installed",
+      "severity": "low",
+      "kind": "style",
+      "prop": "lineHeight",
+      "detail": "14.25px → normal"
+    },
+    {
+      "label": "installed.card.meta",
+      "group": "② installed",
+      "severity": "low",
+      "kind": "style",
+      "prop": "width",
+      "detail": "270px → 281px"
+    },
+    {
+      "label": "installed.card.meta",
+      "group": "② installed",
+      "severity": "low",
+      "kind": "style",
+      "prop": "height",
+      "detail": "14.25px → 13px"
+    },
+    {
+      "label": "installed.card.meta",
+      "group": "② installed",
+      "severity": "low",
+      "kind": "tag",
+      "detail": "<span> → <p> (semantic/default-style change)"
+    },
+    {
+      "label": "installed.action",
+      "group": "② installed",
+      "severity": "low",
+      "kind": "style",
+      "prop": "width",
+      "detail": "132.188px → 133.688px"
+    },
+    {
+      "label": "installed.action.icon",
+      "group": "② installed",
+      "severity": "low",
+      "kind": "style",
+      "prop": "width",
+      "detail": "11.5px → 13px"
+    },
+    {
+      "label": "installed.action.icon",
+      "group": "② installed",
+      "severity": "low",
+      "kind": "style",
+      "prop": "height",
+      "detail": "11.5px → 13px"
+    },
+    {
+      "label": "installed.note",
+      "group": "② installed",
+      "severity": "low",
+      "kind": "style",
+      "prop": "lineHeight",
+      "detail": "13.5px → normal"
+    },
+    {
+      "label": "installed.note",
+      "group": "② installed",
+      "severity": "low",
+      "kind": "style",
+      "prop": "width",
+      "detail": "270px → 221.406px"
+    },
+    {
+      "label": "installed.note",
+      "group": "② installed",
+      "severity": "low",
+      "kind": "style",
+      "prop": "height",
+      "detail": "13.5px → 12px"
+    },
+    {
+      "label": "installed.note",
+      "group": "② installed",
+      "severity": "low",
+      "kind": "tag",
+      "detail": "<span> → <p> (semantic/default-style change)"
+    },
+    {
+      "label": "installed.card.meta",
+      "group": "② installed",
+      "severity": "info",
+      "kind": "copy",
+      "prop": "text",
+      "detail": "expected: PRD-P8 D5 — see not-installed.card.meta. — “Qwen 3 4B · 5.6 GB · free forever” → “Qwen 3 4B · 4.3 GB · free forever”"
+    },
+    {
+      "label": "installed.foot",
+      "group": "② installed",
+      "severity": "info",
+      "kind": "extra-in-live",
+      "detail": "expected: live-only wrapper — see not-installed.foot."
+    },
+    {
+      "label": "installed.action",
+      "group": "② installed",
+      "severity": "info",
+      "kind": "style",
+      "prop": "color",
+      "detail": "expected: PRE-EXISTING, verified at 5c890515 (before this branch): `.gbtn--pri` uses --color-accent-contrast, commented in onboarding.css as \"design literal #0b0a0e\". The mock hard-codes the literal; the FTUE tokenized it repo-wide for every primary gate button, not just these states. rgb(11,10,14) vs rgb(8,19,29) — both near-black on the accent fill. Not PRD-P8 drift; changing it would be a separate, surface-wide decision. — rgb(11, 10, 14) (#0b0a0e (literal near-black)) → rgb(8, 19, 29) (--accent-ink)"
+    },
+    {
+      "label": "installed.action.icon",
+      "group": "② installed",
+      "severity": "info",
+      "kind": "style",
+      "prop": "color",
+      "detail": "expected: PRE-EXISTING, verified at 5c890515 (before this branch): `.gbtn--pri` uses --color-accent-contrast, commented in onboarding.css as \"design literal #0b0a0e\". The mock hard-codes the literal; the FTUE tokenized it repo-wide for every primary gate button, not just these states. rgb(11,10,14) vs rgb(8,19,29) — both near-black on the accent fill. Not PRD-P8 drift; changing it would be a separate, surface-wide decision. — rgb(11, 10, 14) (#0b0a0e (literal near-black)) → rgb(8, 19, 29) (--accent-ink)"
+    },
+    {
+      "label": "installed.action.icon",
+      "group": "② installed",
+      "severity": "info",
+      "kind": "style",
+      "prop": "borderColor",
+      "detail": "expected: PRE-EXISTING, verified at 5c890515 (before this branch): `.gbtn--pri` uses --color-accent-contrast, commented in onboarding.css as \"design literal #0b0a0e\". The mock hard-codes the literal; the FTUE tokenized it repo-wide for every primary gate button, not just these states. rgb(11,10,14) vs rgb(8,19,29) — both near-black on the accent fill. Not PRD-P8 drift; changing it would be a separate, surface-wide decision. — rgb(11, 10, 14) (#0b0a0e (literal near-black)) → rgb(8, 19, 29) (--accent-ink)"
+    }
+  ]
+}

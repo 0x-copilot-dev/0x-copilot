@@ -1,0 +1,219 @@
+{
+  "state": "downloading",
+  "counts": {
+    "low": 17,
+    "info": 10
+  },
+  "findings": [
+    {
+      "label": "downloading.card.meta",
+      "group": "③ downloading",
+      "severity": "low",
+      "kind": "style",
+      "prop": "lineHeight",
+      "detail": "14.25px → normal"
+    },
+    {
+      "label": "downloading.card.meta",
+      "group": "③ downloading",
+      "severity": "low",
+      "kind": "style",
+      "prop": "width",
+      "detail": "270px → 281px"
+    },
+    {
+      "label": "downloading.card.meta",
+      "group": "③ downloading",
+      "severity": "low",
+      "kind": "style",
+      "prop": "height",
+      "detail": "14.25px → 13px"
+    },
+    {
+      "label": "downloading.card.meta",
+      "group": "③ downloading",
+      "severity": "low",
+      "kind": "tag",
+      "detail": "<span> → <p> (semantic/default-style change)"
+    },
+    {
+      "label": "downloading.dep",
+      "group": "③ downloading",
+      "severity": "low",
+      "kind": "style",
+      "prop": "lineHeight",
+      "detail": "19.5px → normal"
+    },
+    {
+      "label": "downloading.dep",
+      "group": "③ downloading",
+      "severity": "low",
+      "kind": "style",
+      "prop": "width",
+      "detail": "270px → 281px"
+    },
+    {
+      "label": "downloading.dep",
+      "group": "③ downloading",
+      "severity": "low",
+      "kind": "style",
+      "prop": "height",
+      "detail": "75.0938px → 109.094px"
+    },
+    {
+      "label": "downloading.dling",
+      "group": "③ downloading",
+      "severity": "low",
+      "kind": "style",
+      "prop": "width",
+      "detail": "270px → 281px"
+    },
+    {
+      "label": "downloading.dling",
+      "group": "③ downloading",
+      "severity": "low",
+      "kind": "tag",
+      "detail": "<span> → <p> (semantic/default-style change)"
+    },
+    {
+      "label": "downloading.prog",
+      "group": "③ downloading",
+      "severity": "low",
+      "kind": "style",
+      "prop": "lineHeight",
+      "detail": "19.5px → normal"
+    },
+    {
+      "label": "downloading.prog",
+      "group": "③ downloading",
+      "severity": "low",
+      "kind": "style",
+      "prop": "width",
+      "detail": "270px → 281px"
+    },
+    {
+      "label": "downloading.prog.fill",
+      "group": "③ downloading",
+      "severity": "low",
+      "kind": "style",
+      "prop": "lineHeight",
+      "detail": "19.5px → normal"
+    },
+    {
+      "label": "downloading.prog.fill",
+      "group": "③ downloading",
+      "severity": "low",
+      "kind": "tag",
+      "detail": "<span> → <div> (semantic/default-style change)"
+    },
+    {
+      "label": "downloading.note",
+      "group": "③ downloading",
+      "severity": "low",
+      "kind": "style",
+      "prop": "lineHeight",
+      "detail": "13.5px → normal"
+    },
+    {
+      "label": "downloading.note",
+      "group": "③ downloading",
+      "severity": "low",
+      "kind": "style",
+      "prop": "width",
+      "detail": "270px → 281px"
+    },
+    {
+      "label": "downloading.note",
+      "group": "③ downloading",
+      "severity": "low",
+      "kind": "style",
+      "prop": "height",
+      "detail": "27px → 24px"
+    },
+    {
+      "label": "downloading.note",
+      "group": "③ downloading",
+      "severity": "low",
+      "kind": "tag",
+      "detail": "<span> → <p> (semantic/default-style change)"
+    },
+    {
+      "label": "downloading.card.meta",
+      "group": "③ downloading",
+      "severity": "info",
+      "kind": "copy",
+      "prop": "text",
+      "detail": "expected: PRD-P8 D5 — see not-installed.card.meta. — “Qwen 3 4B · 5.6 GB · free forever” → “Qwen 3 4B · 4.3 GB · free forever”"
+    },
+    {
+      "label": "downloading.dep",
+      "group": "③ downloading",
+      "severity": "info",
+      "kind": "copy",
+      "prop": "text",
+      "detail": "“Ollama detected — downloading nowQwen 3 4B · 2.4 / 5.6 GB · …” → “Ollama detected — downloading nowQwen 3 4B · 2.4 / 4.3 GB · …”"
+    },
+    {
+      "label": "downloading.dep",
+      "group": "③ downloading",
+      "severity": "info",
+      "kind": "style",
+      "prop": "fontSize",
+      "detail": "expected: HARNESS ARTIFACT, no visual effect: the mock's base font-size is 13px and the live fixture inherits 13.6px (0.85rem). Every text node in this card sets its own size (title 13, meta 9.5, body 11.5, note 9, dling/ok 11.5, watch 10.5), so this is the inherited base only and renders nothing. — 13px → 13.6px (+0.6px)"
+    },
+    {
+      "label": "downloading.spin",
+      "group": "③ downloading",
+      "severity": "info",
+      "kind": "style",
+      "prop": "borderRadius",
+      "detail": "expected: visually identical: 50% and 999px both render a circle on a square element. — 50% → 999px"
+    },
+    {
+      "label": "downloading.prog",
+      "group": "③ downloading",
+      "severity": "info",
+      "kind": "style",
+      "prop": "fontSize",
+      "detail": "expected: HARNESS ARTIFACT, no visual effect: the mock's base font-size is 13px and the live fixture inherits 13.6px (0.85rem). Every text node in this card sets its own size (title 13, meta 9.5, body 11.5, note 9, dling/ok 11.5, watch 10.5), so this is the inherited base only and renders nothing. — 13px → 13.6px (+0.6px)"
+    },
+    {
+      "label": "downloading.prog.fill",
+      "group": "③ downloading",
+      "severity": "info",
+      "kind": "style",
+      "prop": "fontSize",
+      "detail": "expected: HARNESS ARTIFACT, no visual effect: the mock's base font-size is 13px and the live fixture inherits 13.6px (0.85rem). Every text node in this card sets its own size (title 13, meta 9.5, body 11.5, note 9, dling/ok 11.5, watch 10.5), so this is the inherited base only and renders nothing. — 13px → 13.6px (+0.6px)"
+    },
+    {
+      "label": "downloading.prog.fill",
+      "group": "③ downloading",
+      "severity": "info",
+      "kind": "style",
+      "prop": "width",
+      "detail": "expected: fixture arithmetic, not a style delta. The mock hard-codes width:42% (42% of a 5.6 GB total that does not exist); the live fixture sets the honest completed/total = 2.4 / 4.3 GB = 56%. The fill's SKIN (height, radius, background, transition) is scored normally. — 113.391px → 157.359px"
+    },
+    {
+      "label": "downloading.note",
+      "group": "③ downloading",
+      "severity": "info",
+      "kind": "copy",
+      "prop": "text",
+      "detail": "expected: TWO declared deltas in one line. (a) PRD-P8 D5 — \"2.4 / 5.6 GB\" → \"2.4 / 4.3 GB\", the verified Q8_0 total. (b) PRD-P8 D4a-2 — the tail reads \"downloading in the background\", not the mock's \"type your first prompt while it lands\": D4 keeps the user ON the gate while an auto-started pull runs, and there is no composer there, so the mock's line would be a lie. The mock's wording IS used verbatim once the user has advanced (composer/ack). — “Qwen 3 4B · 2.4 / 5.6 GB · type your first prompt while it l…” → “Qwen 3 4B · 2.4 / 4.3 GB · downloading in the background”"
+    },
+    {
+      "label": "downloading.acts",
+      "group": "③ downloading",
+      "severity": "info",
+      "kind": "extra-in-live",
+      "detail": "expected: PRD-P8 D4a-1 — the mock's ③ foot has no action row because the mock has already auto-advanced the user to the composer (~1.4s after detection). D4 deliberately does not steal the stage, so the card stays mounted and the user needs a way forward."
+    },
+    {
+      "label": "downloading.action",
+      "group": "③ downloading",
+      "severity": "info",
+      "kind": "extra-in-live",
+      "detail": "expected: PRD-P8 D4a-1 — the \"Continue →\" button. It is the MINIMUM affordance that makes D4 navigable (advance without restarting the in-flight pull); the mock has no analog. Hosts wire it through the Gate slot's `ctx.onContinue`, and the card renders no button when it is omitted. NOTE: the live fixture passes `onContinue` itself, so this report measures the CORRECTLY-WIRED card — an unwired host is a host-test concern (FirstRunGate / FirstRunSurfaceMount), never something a parity report can catch."
+    }
+  ]
+}

@@ -22,6 +22,24 @@
 // queued/created (NOT on a create error — that stays on the composer with the
 // actionable notice); `useFirstRunLaunch` fires the bound handoff
 // (`ctx.onComplete`) exactly once after the ~1.5s hold.
+//
+// PRD-P8 §8 (web host) wires the two card seams the package deliberately leaves
+// optional — omitted means NO button, because the card never renders a control
+// that cannot work:
+//   • `onGetOllama` — state ① `Get Ollama ↗`. Web has no main process to broker
+//     through, so it is an ordinary external open of a MODULE CONSTANT url.
+//   • `onContinue` — D4a's "Continue →" on state ③. Advances to the composer
+//     WITHOUT restarting the pull the hook auto-started on runtime detection.
+// It also threads §7's `modelBlocked` (the hook's `blocked` / stopped runtime)
+// into `useFirstRunLaunch` + the surface, which is what lets the queued launch
+// phase exit instead of hanging on "Queued — starts when the model lands".
+//
+// What web deliberately does NOT get: a Restart-Ollama path. `runtime_managed`
+// is false on every web deployment (`RUNTIME_LOCAL_MODELS_MANAGE_RUNTIME`
+// defaults false and both web compose files pin it "false"; only
+// `tools/desktop-runtime` + `apps/desktop` set it true), so the card degrades ④
+// to its instructional foot and `POST /v1/local-models/runtime/start` stays a
+// 404 no host should be calling. PRD-P8 D2 keeps process control off web.
 
 import {
   useCallback,
@@ -39,7 +57,10 @@ import {
   FirstRunSurface,
   OnboardingComposer,
   QWEN3_4B_PRESET,
+  firstRunAckAction,
   firstRunAckLines,
+  firstRunAckNote,
+  firstRunAckStateForPhase,
   useFirstRunLaunch,
   useFirstRunLocalModel,
   type AcknowledgmentVariant,
@@ -86,6 +107,24 @@ function noop(): void {
   /* intentional no-op — P4 wires connectors/skills navigation */
 }
 
+/**
+ * PRD-P8 §8 — the `Get Ollama ↗` destination. A module CONSTANT, never a value
+ * that arrives from the card, the server, or a prop: the card hands the host a
+ * bare `() => void` precisely so no layer below can choose the origin (the
+ * desktop expresses the same invariant as an IPC channel that takes no URL).
+ */
+export const OLLAMA_DOWNLOAD_URL = "https://ollama.com/download";
+
+/**
+ * Web's external open. `noopener,noreferrer` so the new tab gets no
+ * `window.opener` handle back into the signed-in app and sends no referrer.
+ * Module-scoped (not a `useCallback`) — it closes over nothing, so it is
+ * referentially stable for free.
+ */
+function openOllamaDownload(): void {
+  window.open(OLLAMA_DOWNLOAD_URL, "_blank", "noopener,noreferrer");
+}
+
 export interface FirstRunSurfaceMountProps {
   /**
    * Called at the handoff (after the two-step run-create + ~1.5s ack hold) or
@@ -123,10 +162,22 @@ export function FirstRunSurfaceMount({
   // Binder-authoritative model-ready + resolved run model (no parent/child lag):
   //   • a local download in flight ⇒ ready only at pct===100 (`localModelPct` is
   //     binder-owned, so the queued→fire flip has no render lag);
-  //   • no local download started (`localModelPct === null`) ⇒ a BYOK engine,
-  //     ready immediately.
+  //   • no local download started (`localModelPct === null`) ⇒ a BYOK engine, or
+  //     P8 §6's already-installed short-circuit (which issues no pull, so the
+  //     pct legitimately stays null) — ready immediately either way.
   const modelReady =
     local.localModelPct === null || local.localModelPct === 100;
+
+  // PRD-P8 §7 — the awaited local model demonstrably is NOT coming: a terminal
+  // pull failure (`blocked`), or a daemon that stopped answering
+  // (`runtime === "stopped"`). `modelReady` alone cannot express this — a dead
+  // download simply stops moving, and a frozen pct is indistinguishable from a
+  // slow one. Threading this is what lets the queued launch phase EXIT; without
+  // it a runtime that dies after the user sent their first prompt parks them on
+  // "Queued — starts when the model lands" permanently. Both hosts derive it
+  // identically (desktop `FirstRunGate`).
+  const modelBlocked = local.blocked !== null || local.runtime === "stopped";
+
   const model = useMemo(
     () => modelSelectionForId(composerModels, selectedModel),
     [composerModels, selectedModel],
@@ -142,6 +193,7 @@ export function FirstRunSurfaceMount({
   const launch = useFirstRunLaunch({
     runs,
     modelReady,
+    modelBlocked,
     model,
     onComplete: () => {
       (ackHandoffRef.current ?? onComplete)();
@@ -243,17 +295,42 @@ export function FirstRunSurfaceMount({
         ? {
             kind: "local",
             name: QWEN3_4B_PRESET.name,
-            pct: local.localModelPct ?? undefined,
+            // Rounded HERE because `firstRunAckLines` interpolates the raw
+            // number (unlike `firstRunModelPillLabel`, which rounds): a real
+            // byte-progress pct is fractional, so passing it straight through
+            // prints "· downloading 46.72897196261682%".
+            //
+            // FLOOR, not round, and that is load-bearing: `modelSuffix` treats
+            // `pct >= 100` as "· on-device", while `modelReady` above only
+            // flips at an EXACT 100. `Math.round(99.6)` would make the ack
+            // announce the model as on-device while the launch is still queued
+            // waiting for it — and Ollama holds the last byte-carrying pct
+            // across its "verifying sha256" / "writing manifest" frames, so
+            // that window is seconds long on a 4.3 GB pull, not one frame.
+            // Flooring can only ever under-claim, which is the safe direction.
+            pct:
+              local.localModelPct === null
+                ? undefined
+                : Math.floor(local.localModelPct),
+            // P8 §7 — a stalled pull must not keep echoing "· downloading 40%".
+            // `firstRunAckLines` swaps it for "· download paused at 40%".
+            blocked: ctx.modelBlocked,
           }
         : { kind: "key", name: selectedModelName };
       const lines = firstRunAckLines(ackEngine, {
         webOn: true,
         connectors: [],
       });
-      // Variant maps off the launch phase: queued → "queued",
-      // starting|handoff → "starting".
+      // Variant maps off the launch phase through the package's single
+      // derivation (`firstRunAckStateForPhase`): queued → "queued",
+      // starting|handoff → "starting", P8's `blocked` → "stalled". The stalled
+      // title is the point — "Queued — starts when the model lands" is a
+      // promise the model line directly contradicts once it reads "· download
+      // paused at 40%", and an ack with a lie and no control is where the FTUE
+      // used to end. `note` says what to do; `onBack` (ctx) un-sends the
+      // surface so the composer returns and `launch()` accepts the re-submit.
       const variant: AcknowledgmentVariant =
-        launchPhase === "queued" ? "queued" : "starting";
+        firstRunAckStateForPhase(launchPhase);
       return (
         <Acknowledgment
           variant={variant}
@@ -261,6 +338,9 @@ export function FirstRunSurfaceMount({
           toolsLine={lines.toolsLine}
           privacyLine={lines.privacyLine}
           error={launch.error?.message ?? null}
+          note={firstRunAckNote(variant)}
+          actionLabel={firstRunAckAction(variant)}
+          onAction={ctx.onBack}
         />
       );
     },
@@ -275,12 +355,25 @@ export function FirstRunSurfaceMount({
       initialStage={initialStage}
       onStartLocalDownload={local.start}
       localModelPct={local.localModelPct}
+      // P8 §6 — the preset was already on disk, so no pull ever runs and
+      // `localModelPct` stays null. Without this the surface would call a local
+      // engine "not ready" forever and queue the send behind a download that is
+      // never going to happen.
+      localModelInstalled={local.modelInstalled}
+      // P8 §7 — same signal the launch hook gets, so the composer/ack ctx stops
+      // claiming a download is in flight.
+      localModelBlocked={modelBlocked}
       localDownloadDisabled={local.disabled}
       renderLocalCard={(ctx) => (
         <FirstRunLocalCard
           state={local}
           preset={QWEN3_4B_PRESET}
           onStartDownload={ctx.onStartDownload}
+          // D4a-1 — advance WITHOUT restarting the auto-started pull. Distinct
+          // from `onStartDownload`, which also fires `local.start`.
+          onContinue={ctx.onContinue}
+          // §8 web: no broker, so an ordinary external open of the constant.
+          onGetOllama={openOllamaDownload}
         />
       )}
       renderComposer={renderComposer}

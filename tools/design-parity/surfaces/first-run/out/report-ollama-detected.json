@@ -1,0 +1,112 @@
+{
+  "state": "detected",
+  "counts": {
+    "low": 8,
+    "info": 5
+  },
+  "findings": [
+    {
+      "label": "detected.dep",
+      "group": "① → detected",
+      "severity": "low",
+      "kind": "style",
+      "prop": "lineHeight",
+      "detail": "19.5px → normal"
+    },
+    {
+      "label": "detected.dep",
+      "group": "① → detected",
+      "severity": "low",
+      "kind": "style",
+      "prop": "width",
+      "detail": "270px → 281px"
+    },
+    {
+      "label": "detected.dep",
+      "group": "① → detected",
+      "severity": "low",
+      "kind": "style",
+      "prop": "height",
+      "detail": "28.25px → 24px"
+    },
+    {
+      "label": "detected.ok",
+      "group": "① → detected",
+      "severity": "low",
+      "kind": "style",
+      "prop": "lineHeight",
+      "detail": "17.25px → normal"
+    },
+    {
+      "label": "detected.ok",
+      "group": "① → detected",
+      "severity": "low",
+      "kind": "style",
+      "prop": "width",
+      "detail": "270px → 281px"
+    },
+    {
+      "label": "detected.ok",
+      "group": "① → detected",
+      "severity": "low",
+      "kind": "style",
+      "prop": "height",
+      "detail": "17.25px → 13px"
+    },
+    {
+      "label": "detected.ok",
+      "group": "① → detected",
+      "severity": "low",
+      "kind": "tag",
+      "detail": "<span> → <p> (semantic/default-style change)"
+    },
+    {
+      "label": "detected.ok.icon",
+      "group": "① → detected",
+      "severity": "low",
+      "kind": "style",
+      "prop": "lineHeight",
+      "detail": "17.25px → normal"
+    },
+    {
+      "label": "detected.dep",
+      "group": "① → detected",
+      "severity": "info",
+      "kind": "style",
+      "prop": "fontSize",
+      "detail": "expected: HARNESS ARTIFACT, no visual effect: the mock's base font-size is 13px and the live fixture inherits 13.6px (0.85rem). Every text node in this card sets its own size (title 13, meta 9.5, body 11.5, note 9, dling/ok 11.5, watch 10.5), so this is the inherited base only and renders nothing. — 13px → 13.6px (+0.6px)"
+    },
+    {
+      "label": "detected.ok",
+      "group": "① → detected",
+      "severity": "info",
+      "kind": "style",
+      "prop": "color",
+      "detail": "expected: the mock hard-codes the literal #6aa88f (jade); no design-system token equals it exactly, so the live rule uses --color-success — the same substitution `.ln__check` already makes. Recorded in onboarding.css's PRD-P8 header block. Every OTHER property on this line (size, weight, gap) is scored normally and is NOT covered by this declaration. — rgb(106, 168, 143) → rgb(87, 199, 133) (--jade)"
+    },
+    {
+      "label": "detected.ok",
+      "group": "① → detected",
+      "severity": "info",
+      "kind": "style",
+      "prop": "borderColor",
+      "detail": "expected: Same single decision as this element's `color` — the icon and border inherit `currentColor`. The mock hard-codes #6aa88f (a muted jade) and no design-system token equals it; the live rule uses --color-success, the substitution `.ln__check` already makes. — rgb(106, 168, 143) → rgb(87, 199, 133) (--jade)"
+    },
+    {
+      "label": "detected.ok.icon",
+      "group": "① → detected",
+      "severity": "info",
+      "kind": "style",
+      "prop": "color",
+      "detail": "expected: Same single decision as this element's `color` — the icon and border inherit `currentColor`. The mock hard-codes #6aa88f (a muted jade) and no design-system token equals it; the live rule uses --color-success, the substitution `.ln__check` already makes. — rgb(106, 168, 143) → rgb(87, 199, 133) (--jade)"
+    },
+    {
+      "label": "detected.ok.icon",
+      "group": "① → detected",
+      "severity": "info",
+      "kind": "style",
+      "prop": "borderColor",
+      "detail": "expected: Same single decision as this element's `color` — the icon and border inherit `currentColor`. The mock hard-codes #6aa88f (a muted jade) and no design-system token equals it; the live rule uses --color-success, the substitution `.ln__check` already makes. — rgb(106, 168, 143) → rgb(87, 199, 133) (--jade)"
+    }
+  ]
+}

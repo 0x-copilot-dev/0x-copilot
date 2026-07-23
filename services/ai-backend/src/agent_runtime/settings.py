@@ -53,6 +53,11 @@ class _EnvFields:
     # the worker's append wakes SSE adapters in a separate API process.
     EVENT_BUS_BACKEND = "RUNTIME_EVENT_BUS_BACKEND"
     ENABLE_LOCAL_MODELS = "RUNTIME_ENABLE_LOCAL_MODELS"
+    # PRD-P8 D2 — allow this server to detect and spawn the host's Ollama
+    # binary. Only ``tools/desktop-runtime`` + ``apps/desktop`` set it true;
+    # a containerised self-host leaves it false and reports ``unknown``
+    # rather than lying about a host filesystem it cannot see.
+    LOCAL_MODELS_MANAGE_RUNTIME = "RUNTIME_LOCAL_MODELS_MANAGE_RUNTIME"
     STORE_BACKEND = "RUNTIME_STORE_BACKEND"
     DATABASE_URL = "DATABASE_URL"
     # Root directory for the ``file`` runtime store backend (JSONL folders +
@@ -135,6 +140,10 @@ class RuntimeExecutionSettings(RuntimeContract):
     # desktop-runtime and self-host set it true. Every /v1/local-models route
     # 404s when this is false — server-authoritative, never client-trust.
     enable_local_models: bool = False
+    # PRD-P8 D2 — gates binary detection AND process spawn for the local
+    # runtime. Off by default; ``POST /v1/local-models/runtime/start`` 404s
+    # and ``runtime_state`` stays ``unknown`` while it is false.
+    local_models_manage_runtime: bool = False
 
 
 class RuntimeStoreSettings(RuntimeContract):
@@ -369,6 +378,10 @@ class RuntimeSettings(BaseSettings):
                 delta_coalesce_max_chunks=int(_s(v, E.DELTA_COALESCE_MAX_CHUNKS, "64")),
                 event_bus_backend=_s(v, E.EVENT_BUS_BACKEND, "auto").lower(),
                 enable_local_models=_s(v, E.ENABLE_LOCAL_MODELS, "false").lower()
+                in _truthy,
+                local_models_manage_runtime=_s(
+                    v, E.LOCAL_MODELS_MANAGE_RUNTIME, "false"
+                ).lower()
                 in _truthy,
             ),
             store=RuntimeStoreSettings(

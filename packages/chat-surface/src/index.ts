@@ -961,6 +961,7 @@ export {
   DEFAULT_LOCAL_MODEL_QUANT,
   localModelInstalledTag,
   formatBytes,
+  formatBytesPair,
   formatEta,
   humanStatus,
   placementLabel,
@@ -1526,7 +1527,14 @@ export {
   FIRST_RUN_SUGGESTIONS,
   Acknowledgment,
   FIRST_RUN_ACK_TITLES,
+  FIRST_RUN_ACK_STALLED,
   firstRunAckLines,
+  // P8 §7 — ack-state derivation for hosts that render `Acknowledgment`
+  // themselves (both of them): phase → state, and the state's title/note/action.
+  firstRunAckStateForPhase,
+  firstRunAckTitle,
+  firstRunAckNote,
+  firstRunAckAction,
   useFirstRunLaunch,
   type OnboardingComposerProps,
   type FirstRunSuggestion,
@@ -1536,6 +1544,7 @@ export {
   type FirstRunAckEngine,
   type FirstRunToolsState,
   type FirstRunAckLines,
+  type FirstRunAckState,
   type FirstRunLaunchPhase,
   type FirstRunLaunchPayload,
   type UseFirstRunLaunch,
@@ -1596,3 +1605,25 @@ export {
   type FirstRunProfileState,
 } from "./onboarding";
 // === end First-Run onboarding (P4 — wallet chip) ===
+
+// === Composer parity — provider brand marks ===
+// The bundled identity of a model provider: `PROVIDER_BRAND_COLOR` /
+// `providerBrandColor` give the composer pill's 6px dot its hue, and
+// <ProviderMark> gives a popover row's 24px badge its glyph. Marks are inline
+// SVG authored in this package — never an <img> or a favicon lookup, which
+// would break offline AND leak the user's configured providers. Providers with
+// no bundled mark (openrouter today) render `providerInitials` instead of a
+// guessed logo. Hosts pass a display label for unknown providers so the
+// initials read as a monogram ("Together AI" → "To").
+export {
+  PROVIDER_BRAND_COLOR,
+  PROVIDER_BRAND_COLOR_FALLBACK,
+  PROVIDER_MARK_IDS,
+  ProviderMark,
+  hasProviderMark,
+  providerBrandColor,
+  providerInitials,
+  type ProviderMarkProps,
+  type ProviderMarkTone,
+} from "./icons/providerMarks";
+// === end Composer parity — provider brand marks ===

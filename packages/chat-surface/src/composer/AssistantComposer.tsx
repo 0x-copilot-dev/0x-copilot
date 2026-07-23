@@ -19,6 +19,7 @@ import {
   type AttachmentAdapter,
   type ComposerHandle,
 } from "./Composer";
+import { Icon } from "../icons/Icon";
 import type { FilePickerPort } from "../ports/FilePickerPort";
 import type { ThinkingDepth } from "./depth";
 import { ModelPill } from "./ModelPill";
@@ -124,6 +125,19 @@ export interface AssistantComposerProps {
   providerKeysPort?: ProviderKeysPort;
   /** Refresh seam fired after a successful inline add-key connect (see ModelPill). */
   onProviderKeyAdded?: (result: KeyFormConnected) => void;
+  /**
+   * Model-popover footer deep-link → Settings → Local models. Host-owned
+   * navigation (the package never navigates). Forwarded verbatim to
+   * {@link ModelPill}; when unset the footer link is not rendered.
+   */
+  onGetLocalModels?: () => void;
+  /**
+   * On-disk byte sizes of installed LOCAL models, keyed by name/id — the host
+   * binder's join of `GET /v1/local-models` onto the model catalog. Forwarded
+   * verbatim to {@link ModelPill}, where it turns a local row's sub-line into
+   * the design's "42 GB · never leaves this machine".
+   */
+  localModelSizes?: Readonly<Record<string, number>>;
   depth?: ThinkingDepth;
   onDepthChange?: (depth: ThinkingDepth) => void;
   depthVisible?: boolean;
@@ -224,6 +238,8 @@ export const AssistantComposer = forwardRef<
     onAddCustomModel,
     providerKeysPort,
     onProviderKeyAdded,
+    onGetLocalModels,
+    localModelSizes,
     depth,
     onDepthChange,
     depthVisible,
@@ -339,11 +355,13 @@ export const AssistantComposer = forwardRef<
       // Phase 9 composer redesign: empty composer was a single-row sliver
       // — felt skeletal next to the welcome cards. 3 rows is the size the
       // user identified as "what it should look like" (matches the focused
-      // / multi-line state from earlier screenshots). maxRows lifted to 8
-      // so multi-line drafts have headroom before internal scroll kicks in.
+      // / multi-line state from earlier screenshots).
       // Hosts may override the starting rows (desktop rail passes 2).
       minRows={minRows}
-      maxRows={8}
+      // v3 parity: the design's `.cmp textarea{max-height:130px}`. At the v3
+      // metrics (12.5px × 1.55 line-height + 14px of vertical padding) 6 rows
+      // lands on 130.25px; the previous 8 rows overshot to 176px.
+      maxRows={6}
       onSubmit={(payload) => {
         const skillInstructions = selectedSkills.map((skill) =>
           skillInstructionPrompt(skill.display_name),
@@ -380,7 +398,7 @@ export const AssistantComposer = forwardRef<
       // for the `data-has-topbar` flag, which the AUI CSS reads to
       // lift `--composer-shell-height` from 11rem → 13rem. `null` would
       // (incorrectly) trip that check and add ~32px of dead space below
-      // the hint row in the empty state.
+      // the action row in the empty state.
       topBarSlot={
         selectedSkills.length > 0 ? (
           <div className="aui-composer-attachments">
@@ -407,8 +425,13 @@ export const AssistantComposer = forwardRef<
         <div className="aui-composer-action-wrapper">
           <div className="aui-composer-tools">
             <div className="aui-plus-menu-root" ref={menuRef}>
+              {/* Owner ruling: the affordance stays a PLUS (not the design's
+               * paperclip) — but drawn, at the design's `.cmp-ic` metrics
+               * (`.ui-cicon`: 26px square, 7px radius, 14px glyph). The old
+               * literal "+" text node inherited the button font and never
+               * matched the 14px icon tier next to it. */}
               <button
-                className="aui-icon-button aui-composer-add-attachment"
+                className="aui-icon-button ui-cicon aui-composer-add-attachment"
                 type="button"
                 aria-expanded={menuOpen}
                 aria-haspopup="menu"
@@ -419,7 +442,7 @@ export const AssistantComposer = forwardRef<
                   setMenuView("root");
                 }}
               >
-                +
+                <Icon name="plus" size={14} />
               </button>
               {renderPlusMenu({
                 open: menuOpen,
@@ -455,17 +478,47 @@ export const AssistantComposer = forwardRef<
             </div>
             {connectorsTrigger ?? null}
             {toolsTrigger ?? null}
+            {/* v3 bottom-row order (owner ruling): [+] → tools → model → depth
+             * on the left; mic + send flush right. The old `+ · tools · mic ·
+             * divider · model` grouping and the divider itself have no
+             * counterpart in the design's single-rhythm `.cmp-row`. */}
+            {models && selectedModel !== undefined && onModelChange ? (
+              <ModelPill
+                models={models}
+                value={selectedModel}
+                onChange={onModelChange}
+                disabled={controlsDisabled}
+                onAddCustom={onAddCustomModel}
+                providerKeysPort={providerKeysPort}
+                onProviderKeyAdded={onProviderKeyAdded}
+                onGetLocalModels={onGetLocalModels}
+                localModelSizes={localModelSizes}
+              />
+            ) : null}
+            {depth !== undefined && onDepthChange ? (
+              <ThinkingDepthControl
+                value={depth}
+                onChange={onDepthChange}
+                visible={depthVisible ?? true}
+                disabled={controlsDisabled}
+              />
+            ) : null}
+          </div>
+          {/* Right cluster. `margin-left: auto` (composer.css) is what pushes
+           * it flush right now that the static hint row — whose
+           * `margin-left: auto` used to do the pushing — is gone. */}
+          <div className="aui-composer-action-wrapper__right">
             <button
               type="button"
-              className="aui-icon-button atlas-composer-mic"
+              className="aui-icon-button ui-cicon atlas-composer-mic"
               aria-label="Voice input (coming soon)"
               data-tooltip="Voice input"
               disabled
             >
               <svg
                 viewBox="0 0 24 24"
-                width="16"
-                height="16"
+                width="14"
+                height="14"
                 fill="none"
                 stroke="currentColor"
                 strokeWidth="1.75"
@@ -478,36 +531,6 @@ export const AssistantComposer = forwardRef<
                 <path d="M12 18v3" />
               </svg>
             </button>
-            {/* Visual divider between the accent-icon cluster (+ / connectors
-             * / mic) and the setting-pill cluster (Model · Depth). Gives the
-             * toolbar visual rhythm so the eye groups controls by intent
-             * instead of scanning a uniform-gap strip. */}
-            <span className="aui-composer-tools-spacer" aria-hidden="true" />
-            {models && selectedModel !== undefined && onModelChange ? (
-              <ModelPill
-                models={models}
-                value={selectedModel}
-                onChange={onModelChange}
-                disabled={controlsDisabled}
-                onAddCustom={onAddCustomModel}
-                providerKeysPort={providerKeysPort}
-                onProviderKeyAdded={onProviderKeyAdded}
-              />
-            ) : null}
-            {depth !== undefined && onDepthChange ? (
-              <ThinkingDepthControl
-                value={depth}
-                onChange={onDepthChange}
-                visible={depthVisible ?? true}
-                disabled={controlsDisabled}
-              />
-            ) : null}
-          </div>
-          <div className="aui-composer-action-wrapper__right">
-            {/* Phase 9 composer cleanup: dropped the focus-meta line — the
-             * model name was already shown in <ModelPill> above, and the
-             * "Sources cited inline" mode flag lives in the hint row.
-             * Keeping it here was duplicate signal for the same surface. */}
             <AssistantComposerSendButton
               text={text}
               attachmentsCount={attachmentsCount}
@@ -531,26 +554,19 @@ export const AssistantComposer = forwardRef<
           ) : null}
         </div>
       )}
-      hintRender={() => (
-        // Hint row is stateless info — render it unconditionally. Do
-        // NOT gate on `running` (or any other run-state flag); hiding
-        // shortcuts mid-flight makes the composer look broken. See
-        // apps/frontend/CLAUDE.md → "Composer hint row".
-        //
-        // The `↵ send` / `⇧+↵ new line` keyboard hints are dropped to match the
-        // design mock (its composer shows no send/newline hint). The `/ skills`
-        // cue and the "Sources cited inline" mode flag stay.
-        <div className="aui-composer__hint" aria-hidden="false">
-          <span>
-            <kbd>/</kbd> skills
-          </span>
-          <span className="aui-composer__hint-grow" />
-          {/* Trailing meta: just the mode flag. Model name lives in the
-           * ModelPill above (one source of truth); duplicating it here was
-           * visual noise and made the hint row look busy. */}
-          <span className="aui-composer__hint-meta">Sources cited inline</span>
-        </div>
-      )}
+      // No static hint row (owner ruling). The design's `.cmp-hint` carries
+      // "⏎ send · ⇧⏎ line"; the owner does not want that, nor the previous
+      // "/ skills" cue or the "Sources cited inline" flag, so the row is gone
+      // rather than restyled. (The earlier comment here claimed the mock shows
+      // no send/newline hint — it does, at copilot-composer2.jsx:390; the row
+      // is dropped by product choice, not by parity.)
+      //
+      // `hintRender` MUST still be passed: omitting it falls back to
+      // Composer's OWN built-in `↵ send · ⇧+↵ new line · / skills` row.
+      // Returning null renders nothing at all (Composer skips the slot
+      // wrapper). The transient `.aui-composer-slash-cue` toast that appears
+      // while typing "/" is unaffected — it lives in the action row.
+      hintRender={() => null}
     />
   );
 });
@@ -595,13 +611,16 @@ function AssistantComposerSendButton({
   return (
     <button
       type="button"
-      className="aui-send-button aui-composer-send"
+      className="aui-send-button ui-csend aui-composer-send"
       aria-label="Send message"
       data-tooltip="Send message"
       disabled={sendDisabled}
       onClick={onSend}
     >
-      ↑
+      {/* Design `.cmp-send svg{width:14px;height:14px}` — a drawn paper-plane
+       * from the icon SSOT, not the literal "↑" text node (whose size and
+       * weight tracked the button font instead of the icon tier). */}
+      <Icon name="send" size={14} />
     </button>
   );
 }

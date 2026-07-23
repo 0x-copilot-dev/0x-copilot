@@ -269,6 +269,18 @@ export function buildServiceEnv(
       // reports enabled:false and the FTUE gate's "Download the local model"
       // card is dead. Kept a string ("true") like every other child env value.
       env.RUNTIME_ENABLE_LOCAL_MODELS = "true";
+      // PRD-P8 D2 — authorise ai-backend to DETECT the Ollama binary on this
+      // machine and START it (POST /v1/local-models/runtime/start). Desktop is
+      // the only deployment that may: the service runs as a child of the user's
+      // own app, on the user's own filesystem, against a loopback Ollama.
+      // Containerised self-host leaves it false (its OLLAMA_BASE_URL points at
+      // host.docker.internal — it cannot see, let alone spawn, a host binary),
+      // and therefore honestly reports runtime_state:"unknown" rather than
+      // guessing. Without this the first-run card can never tell "Ollama not
+      // installed" from "Ollama stopped", and "Restart Ollama" has nothing to
+      // call. The ai-backend Pydantic default stays false (fail-safe); this is
+      // a supervisor-scoped opt-in, mirrored in tools/desktop-runtime/run-local.mjs.
+      env.RUNTIME_LOCAL_MODELS_MANAGE_RUNTIME = "true";
       env.RUNTIME_EVENT_BUS_BACKEND = "in_memory";
       env.MCP_BACKEND_REGISTRY_URL = backendUrl;
       env.SKILLS_BACKEND_REGISTRY_URL = backendUrl;

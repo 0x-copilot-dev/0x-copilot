@@ -16,10 +16,14 @@ import {
   waitFor,
   within,
 } from "@testing-library/react";
-import { type ReactElement } from "react";
+import { type ReactElement, type ReactNode } from "react";
 import { describe, expect, it, vi } from "vitest";
 
-import type { ConversationId, RunId } from "@0x-copilot/api-types";
+import type {
+  ConversationId,
+  ModelCatalogModel,
+  RunId,
+} from "@0x-copilot/api-types";
 import type {
   Session,
   SseSubscribeOptions,
@@ -29,6 +33,11 @@ import type {
   TypedRequest,
 } from "@0x-copilot/chat-transport";
 
+import {
+  OnboardingComposer,
+  type OnboardingComposerProps,
+} from "../../onboarding/OnboardingComposer";
+import type { FilePickerPort } from "../../ports/FilePickerPort";
 import { KeyValueStoreProvider } from "../../providers/KeyValueStoreProvider";
 import { TransportProvider } from "../../providers/TransportProvider";
 import type { KeyValueStore } from "../../storage/key-value-store";
@@ -142,6 +151,41 @@ function makeStore(): KeyValueStore {
       [...map.keys()].filter(
         (key) => prefix === undefined || key.startsWith(prefix),
       ),
+  };
+}
+
+/**
+ * The host-substrate wiring the real `OnboardingComposer` needs, so a test can
+ * mount the ACTUAL rich empty composer in the `renderEmptyComposer` slot (not a
+ * stub) and assert the cockpit's readiness answer lands in the composer's own
+ * inline `.fr-cerr` strip. Mirrors `OnboardingComposer.test.tsx`'s fixture.
+ */
+function onboardingComposerProps(): OnboardingComposerProps {
+  const model: ModelCatalogModel = {
+    id: "m1",
+    provider: "anthropic",
+    model_name: "claude-sonnet-4-5",
+    name: "Claude Sonnet 4.5",
+    configured: true,
+    supports_streaming: true,
+  };
+  const filePicker: FilePickerPort = { pick: async () => [] };
+  return {
+    connectors: { servers: [], loading: false },
+    skills: { skills: [], loading: false },
+    filePicker,
+    renderPlusMenu: ({ open, children }): ReactNode =>
+      open ? <div>{children}</div> : null,
+    skillInstructionPrompt: (name) => `Use the ${name} skill for this request.`,
+    mcpServerInstructionPrompt: (name) =>
+      `Use the ${name} MCP server for this request.`,
+    onShowConnectors: () => {},
+    onOpenSkillsSettings: () => {},
+    onOpenMcpSettings: () => {},
+    models: [model],
+    selectedModel: "m1",
+    onModelChange: () => {},
+    onSubmit: () => {},
   };
 }
 
@@ -1040,11 +1084,10 @@ describe("RunDestination — empty/idle + multi-run (PR-3.11 / FR-3.25/3.26)", (
     );
   });
 
-  it("shows the readiness setup notice (with CTA) alongside the rich composer when no model is configured", async () => {
+  it("never renders a standing setup notice beside the rich composer — but still hands `modelReady` down", async () => {
     const transport = new FakeTransport();
     transport.requestHandler = async (req) =>
       req.path.includes("/messages") ? { messages: [] } : { runs: [] };
-    const onOpenModelSettings = vi.fn();
 
     render(
       <TransportProvider transport={transport}>
@@ -1052,7 +1095,7 @@ describe("RunDestination — empty/idle + multi-run (PR-3.11 / FR-3.25/3.26)", (
           <RunDestination
             conversationId={CONV}
             modelReady={false}
-            onOpenModelSettings={onOpenModelSettings}
+            onOpenModelSettings={vi.fn()}
             renderEmptyComposer={(ctx) => (
               <div data-testid="rich-empty-composer">
                 {String(ctx.modelReady)}
@@ -1063,16 +1106,74 @@ describe("RunDestination — empty/idle + multi-run (PR-3.11 / FR-3.25/3.26)", (
       </TransportProvider>,
     );
 
-    // The composer still renders (design frame), but a "Set up your model"
-    // notice explains why it's inert and routes to Provider keys.
+    // The rich composer owns the whole surface: no "Before the agent can run…"
+    // notice is stacked under it, in either readiness state. `modelReady` still
+    // flows through the ctx contract (the cockpit gates the start on it).
     await screen.findByTestId("rich-empty-composer");
     expect(screen.getByTestId("rich-empty-composer").textContent).toBe("false");
-    await screen.findByTestId("run-empty-setup");
-    fireEvent.click(screen.getByTestId("run-empty-setup-cta"));
-    expect(onOpenModelSettings).toHaveBeenCalledTimes(1);
+    expect(screen.queryByTestId("run-empty-setup")).toBeNull();
+    expect(screen.queryByTestId("run-empty-setup-cta")).toBeNull();
   });
 
-  it("hides the setup notice once a model is ready", async () => {
+  it("a send with no model configured surfaces the composer's inline error strip + 'Add a key' CTA, and fires NO run POST", async () => {
+    const transport = new FakeTransport();
+    transport.requestHandler = async (req) =>
+      req.path.includes("/messages") ? { messages: [] } : { runs: [] };
+    const onOpenModelSettings = vi.fn();
+    const onStartRun = vi.fn(async () => "should-never-start");
+
+    render(
+      <TransportProvider transport={transport}>
+        <KeyValueStoreProvider store={makeStore()}>
+          <RunDestination
+            conversationId={CONV}
+            modelReady={false}
+            onStartRun={onStartRun}
+            onOpenModelSettings={onOpenModelSettings}
+            renderEmptyComposer={(ctx) => (
+              <OnboardingComposer
+                {...onboardingComposerProps()}
+                onSubmit={({ text }) => ctx.onStartRun({ goal: text })}
+                startError={ctx.startError}
+                onDismissError={ctx.dismissError}
+                onAddKey={ctx.onOpenModelSettings}
+                disabled={ctx.submitting}
+              />
+            )}
+          />
+        </KeyValueStoreProvider>
+      </TransportProvider>,
+    );
+
+    // The composer is LIVE, not greyed out — the user can type and press send.
+    const ta =
+      await screen.findByTestId<HTMLTextAreaElement>("composer-textarea");
+    expect(ta.disabled).toBe(false);
+    fireEvent.change(ta, { target: { value: "Watch my wallet" } });
+    fireEvent.click(screen.getByRole("button", { name: /Send message/i }));
+
+    // The answer is the design's inline `.fr-cerr` strip on the composer
+    // itself, carrying the `configuration_error` "Add a key" CTA.
+    const strip = await screen.findByTestId("first-run-composer-error");
+    expect(strip.className).toContain("fr-cerr");
+    expect(
+      screen.getByTestId("first-run-composer-error-message").textContent,
+    ).toBe("No model configured — connect one to run.");
+    fireEvent.click(screen.getByTestId("first-run-composer-error-cta"));
+    expect(onOpenModelSettings).toHaveBeenCalledTimes(1);
+
+    // …and the doomed call never left the client: no host start, no run POST.
+    expect(onStartRun).not.toHaveBeenCalled();
+    expect(
+      transport.requests.filter(
+        (req) => req.method === "POST" && req.path === "/v1/agent/runs",
+      ),
+    ).toHaveLength(0);
+    // Still the empty surface — nothing bound live.
+    expect(screen.queryByTestId("thread-canvas")).toBeNull();
+  });
+
+  it("dismissing the no-model error clears the strip and lets the user try again", async () => {
     const transport = new FakeTransport();
     transport.requestHandler = async (req) =>
       req.path.includes("/messages") ? { messages: [] } : { runs: [] };
@@ -1082,17 +1183,32 @@ describe("RunDestination — empty/idle + multi-run (PR-3.11 / FR-3.25/3.26)", (
         <KeyValueStoreProvider store={makeStore()}>
           <RunDestination
             conversationId={CONV}
-            modelReady
-            renderEmptyComposer={() => (
-              <div data-testid="rich-empty-composer">ready</div>
+            modelReady={false}
+            renderEmptyComposer={(ctx) => (
+              <OnboardingComposer
+                {...onboardingComposerProps()}
+                onSubmit={({ text }) => ctx.onStartRun({ goal: text })}
+                startError={ctx.startError}
+                onDismissError={ctx.dismissError}
+                onAddKey={ctx.onOpenModelSettings}
+                disabled={ctx.submitting}
+              />
             )}
           />
         </KeyValueStoreProvider>
       </TransportProvider>,
     );
 
-    await screen.findByTestId("rich-empty-composer");
-    expect(screen.queryByTestId("run-empty-setup")).toBeNull();
+    const ta =
+      await screen.findByTestId<HTMLTextAreaElement>("composer-textarea");
+    fireEvent.change(ta, { target: { value: "Watch my wallet" } });
+    fireEvent.click(screen.getByRole("button", { name: /Send message/i }));
+    await screen.findByTestId("first-run-composer-error");
+
+    fireEvent.click(screen.getByTestId("first-run-composer-error-dismiss"));
+    await waitFor(() =>
+      expect(screen.queryByTestId("first-run-composer-error")).toBeNull(),
+    );
   });
 
   it("claims an attachment-only start with an honest 'Untitled run' header, never idle STANDBY", async () => {

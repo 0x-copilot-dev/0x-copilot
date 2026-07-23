@@ -366,6 +366,9 @@ function ChatShellForSession(props: ChatShellForSessionProps): ReactElement {
             // Run cockpit readiness / config-error CTAs → Settings → Provider
             // keys (Issues 1 + 2). handleOpenSettings + the slug already exist.
             onOpenModelSettings={() => handleOpenSettings("provider-keys")}
+            // Model popover footer "Get local models →" → Settings → Local
+            // models. Same deep-link the ⌘K `download-local-model` action uses.
+            onOpenLocalModelSettings={() => handleOpenSettings("local-models")}
             // Run composer connections view → the Tools surface (MCP + non-MCP);
             // skills link → the Skills surface (slug `tools`).
             onOpenConnectors={() => handleNavigate("connectors")}

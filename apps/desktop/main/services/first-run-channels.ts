@@ -15,6 +15,17 @@ export const FIRST_RUN_CHANNELS = {
    * the onboarding gate, sends their first run, or skips to the workspace.
    */
   set: "first-run.set",
+  /**
+   * Renderer → main: open the Ollama download page in the system browser
+   * (PRD-P8 §8, the local-model card's state ① "Get Ollama ↗").
+   *
+   * Takes **NO ARGUMENT**. The destination is a constant owned by main
+   * (`OLLAMA_DOWNLOAD_URL` in `ollama-download.ts`) precisely so the renderer
+   * can never ask main to open an arbitrary origin — the renderer cannot call
+   * `window.open` (denied in `main/index.ts`'s `setWindowOpenHandler`), and
+   * this channel must not become the generic escape hatch that undoes it.
+   */
+  openOllamaDownload: "first-run.open-ollama-download",
 } as const;
 
 export type FirstRunChannelName =

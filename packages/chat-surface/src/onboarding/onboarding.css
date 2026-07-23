@@ -543,6 +543,15 @@
   height: 11px;
 }
 
+/* P8 §7 — the stalled ack's sub-line. Muted, not danger: the model not landing
+   is a held state with a way out, never an error (PRD-P8 D1 — no red terminal
+   state anywhere in this flow). */
+.fr-ack__note {
+  margin: 0;
+  font-size: var(--font-size-xs);
+  color: var(--color-text-muted);
+}
+
 .fr-ack__error {
   margin: 0;
   font-size: var(--font-size-xs);
@@ -590,4 +599,160 @@
 .fr-wchip__addr {
   color: var(--color-text);
   letter-spacing: var(--tracking-caption);
+}
+
+/* ===========================================================================
+ * PRD-P8 — the local card's runtime-state foot (design states ①–④).
+ *
+ * Naming follows the convention this file already uses for design classes: a
+ * class the design names verbatim is copied verbatim (`.gbtn`, `.ln`, and now
+ * `.fr-dep` / `.dling` / `.ol-prog`), and the design's GENERIC short names are
+ * scoped under their design-named parent (`.fr-dep .acts`, `.fr-dep .watch`,
+ * `.fr-dep .ok`, `.dling .spin`) so a bare `.ok`/`.acts` can never leak into
+ * the rest of the shell. Sub-parts this package owns keep the file's BEM
+ * (`.ol-prog__fill`, cf. `.ln__check` / `.fr-wchip__dot`).
+ *
+ * Token map (design → design-system), per the header contract:
+ *   --line → --color-border            --line3  → --color-border-stronger
+ *   --tx   → --color-text              --mut    → --color-text-muted
+ *   --mut2 → --color-text-subtle       --panel3 → --color-surface-elevated
+ *   --accent → --color-accent          --amber  → --color-warning
+ * ONE documented delta: the design's `.ok` is the literal #6aa88f (jade) and
+ * no token equals it exactly; `--color-success` is the intended semantic and
+ * is the same substitution `.ln__check` already makes. Recorded here so the
+ * design-parity report reads the diff as intent, not drift.
+ * =========================================================================== */
+
+/* Dashed-rule "dependency" block — the foot's state region. */
+.fr-dep {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-sm); /* 8px */
+  width: 100%;
+  padding-top: 10px; /* design-exact; off the space ladder */
+  border-top: 1px dashed var(--color-border); /* --line */
+}
+
+.fr-dep .acts {
+  display: flex;
+  flex-wrap: wrap; /* live-only: the card is narrower than the mock's column */
+  align-items: center;
+  gap: 10px; /* design-exact; off the space ladder (sm is 8px) */
+}
+
+/* "we're watching for it" micro-line: leading 6px dot + muted 10.5px text. The
+ * dot is decorative, so it is a pseudo-element rather than DOM noise. */
+.fr-dep .watch {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px; /* design-exact */
+  margin: 0;
+  font-size: 10.5px; /* design-exact; off the type ladder */
+  color: var(--color-text-muted); /* --mut */
+}
+
+.fr-dep .watch::before {
+  content: "";
+  flex: 0 0 auto;
+  width: 6px;
+  height: 6px;
+  border-radius: var(--radius-full);
+  background: var(--color-text-subtle); /* --mut2 */
+}
+
+/* Settled-good line (detected / on-device · ready). See the `.ok` delta note. */
+.fr-dep .ok {
+  display: inline-flex;
+  align-items: center;
+  gap: 7px; /* design-exact */
+  margin: 0;
+  font-size: 11.5px; /* design-exact; off the type ladder */
+  font-weight: var(--font-weight-semibold); /* design 600 */
+  /* The mock hard-codes #6aa88f (a muted jade); no token equals it exactly, so
+   * this makes the same substitution `.ln__check` already does. Declared in
+   * anchors-ollama.json so the parity report files it as INFO, not drift. */
+  color: var(--color-success);
+}
+
+.fr-dep .ok svg {
+  flex: 0 0 auto;
+  width: 12px; /* design-exact */
+  height: 12px;
+}
+
+/* Downloading headline; `.warn` is the same row in the ④ amber tone. */
+.dling {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px; /* design-exact */
+  margin: 0;
+  font-size: 11.5px; /* design-exact; off the type ladder */
+  font-weight: var(--font-weight-semibold); /* design 600 */
+  line-height: 1.4; /* design-exact */
+  color: var(--color-text); /* --tx */
+}
+
+.dling.warn {
+  color: var(--color-warning); /* --amber */
+}
+
+.dling svg {
+  flex: 0 0 auto;
+  width: 13px; /* design-exact */
+  height: 13px;
+}
+
+/* Indeterminate ring — the pull is alive even when the bar has not moved. */
+.dling .spin {
+  flex: 0 0 auto;
+  width: 12px; /* design-exact */
+  height: 12px;
+  border: 2px solid var(--color-border-strong); /* --line2 */
+  border-top-color: var(--color-accent);
+  border-radius: var(--radius-full);
+  animation: fr-dep-spin 700ms linear infinite;
+}
+
+@keyframes fr-dep-spin {
+  to {
+    transform: rotate(360deg);
+  }
+}
+
+/* Progress track — 5px, pill radius, over --panel3. */
+.ol-prog {
+  width: 100%;
+  height: 5px;
+  border-radius: 99px; /* design-exact (--radius-full is 999px) */
+  background: var(--color-surface-elevated); /* --panel3 */
+  overflow: hidden;
+}
+
+.ol-prog__fill {
+  height: 100%;
+  border-radius: inherit;
+  background: var(--color-accent);
+  transition: width var(--duration-normal) var(--ease-standard);
+}
+
+/* Reduced motion (R8): an infinite rotation is the one thing here that MUST be
+ * gated — same two-pronged pattern the rest of this file uses. */
+[data-reduce-motion="1"] .dling .spin,
+[data-reduce-motion="always"] .dling .spin {
+  animation: none;
+}
+
+[data-reduce-motion="1"] .ol-prog__fill,
+[data-reduce-motion="always"] .ol-prog__fill {
+  transition: none;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .dling .spin {
+    animation: none;
+  }
+
+  .ol-prog__fill {
+    transition: none;
+  }
 }

@@ -61,6 +61,7 @@ docker compose -f docker-compose.prod.yml up -d
 | `OPENROUTER_API_KEY`                                      | no       | BYOK OpenRouter — users add keys in Settings; set here only for a shared fallback.                                   |
 | `LOCAL_MODELS_ENABLED`                                    | no       | `true` to show **Settings → Local models** (download an HF GGUF + run via Ollama). Requires Ollama (see below).      |
 | `OLLAMA_BASE_URL`                                         | no       | OpenAI-compatible Ollama endpoint. Default `http://host.docker.internal:11434/v1` (a host-installed Ollama).         |
+| `RUNTIME_LOCAL_MODELS_MANAGE_RUNTIME`                     | n/a      | Pinned `false` in the compose file and not settable from `.env` — see "Why this stack never starts Ollama" below.    |
 | `GATEWAY_PORT`                                            | no       | Host port for the gateway. Default `8080`.                                                                           |
 | `IMAGE_TAG`                                               | no       | Image tag to run. Default `latest`; pin to a commit sha for reproducibility.                                         |
 | `AI_BACKEND_WORKERS`                                      | no       | gunicorn workers for the ai-backend API. Default `2`.                                                                |
@@ -79,6 +80,23 @@ To let users download a Hugging Face GGUF and run it locally, install
 `extra_hosts: ["host.docker.internal:host-gateway"]` to the `ai-backend` service
 (or point `OLLAMA_BASE_URL` at wherever Ollama runs). Downloaded models appear in
 the chat model picker. Left off, **Settings → Local models** is hidden.
+
+#### Why this stack never starts Ollama
+
+`RUNTIME_LOCAL_MODELS_MANAGE_RUNTIME` is pinned to `false` in
+`docker-compose.prod.yml` and is deliberately not wired to `.env`. That flag
+authorises `ai-backend` to look for the Ollama **binary on its own filesystem**
+and spawn it. Here `ai-backend` is a container and `OLLAMA_BASE_URL` points at
+the **host** — so the container cannot see the host's binary, and a spawn would
+only start a second Ollama inside the container that nothing ever talks to.
+
+With the flag off, `GET /v1/local-models/status` reports
+`runtime_state: "unknown"` rather than claiming a host filesystem it cannot
+inspect, and the UI shows install/start instructions instead of a "Restart
+Ollama" button that could not work. Start and stop Ollama on the host yourself
+(`ollama serve`, or your service manager). Only the desktop app sets this flag
+true — there `ai-backend` is a child process on the user's own machine talking
+to a loopback Ollama.
 
 ### Going public (TLS + a domain)
 

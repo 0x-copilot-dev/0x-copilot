@@ -9,9 +9,19 @@
 // injected SLOTS. P1 ships internal placeholders so the machine + tests are
 // complete without P2/P3.
 //
+// PRD-P8 D4 refines the machine: only an EXPLICIT gesture advances the stage.
+// `ctx.onStartDownload` (a "Start download" click) starts the pull and advances,
+// as before; `ctx.onContinue` (D4a's "Continue →") advances without restarting
+// a pull; a download the local-model hook auto-started on runtime detection
+// calls NEITHER, so `stage` stays "choice", the card stays mounted, and the
+// runtime states ③ downloading / ④ stopped are reachable instead of flashing for
+// one frame. §7's `localModelBlocked` keeps the composer/ack honest when the
+// awaited model is not landing.
+//
 // SLOT CONTRACT (consumed by P2/P3 — keep stable):
 //   • renderLocalCard(ctx: FirstRunLocalCardCtx)  — P2 replaces the Gate's
-//        local `.fr-gcard` (curated preset + in-gate SSE progress).
+//        local `.fr-gcard` (curated preset + in-gate SSE progress). P8 adds
+//        `ctx.onContinue`.
 //   • renderComposer(ctx: FirstRunComposerCtx)    — P3 mounts AssistantComposer
 //        for the `dl`/`ready` body. `ctx.modelReady` is the shared model-ready
 //        signal (key → always true; local → localModelPct === 100). `onSent`
@@ -40,6 +50,12 @@ import type { ProviderKeysPort } from "../settings/data/providerKeys";
 import type { ModelsPort } from "../settings/data/models";
 import { Gate, type FirstRunLocalCardCtx } from "./Gate";
 import type { KeyFormConnected } from "./KeyForm";
+import {
+  firstRunAckAction,
+  firstRunAckNote,
+  firstRunAckTitle,
+  type FirstRunAckState,
+} from "./firstRunAckLines";
 import {
   FIRST_RUN_COPY,
   type FirstRunEngine,
@@ -71,6 +87,13 @@ export interface FirstRunComposerCtx {
   readonly localModelPct: number | null;
   /** Shared model-ready signal: key → true; local → localModelPct === 100. */
   readonly modelReady: boolean;
+  /**
+   * P8 §7 — the awaited local model demonstrably is NOT landing (the hook's
+   * `blocked !== null` / `runtime === "stopped"`, threaded in via
+   * `localModelBlocked`). Hosts pass it straight to `useFirstRunLaunch`'s
+   * `modelBlocked` so a send can't hang on "Queued" forever.
+   */
+  readonly modelBlocked: boolean;
   /** The composer calls this after run-create → surface renders the ack. */
   readonly onSent: () => void;
   // --- P4 tools wiring (present only when a `connectorsPort` is injected) ---
@@ -96,8 +119,16 @@ export interface FirstRunComposerCtx {
 export interface FirstRunAckCtx {
   readonly engine: FirstRunEngine;
   readonly modelReady: boolean;
+  /** P8 §7 — the awaited model is not landing; the ack must not claim it is. */
+  readonly modelBlocked: boolean;
   /** Bound handoff — host markComplete + navigate. The slot owns the timing. */
   readonly onComplete: () => void;
+  /**
+   * P8 §7 — return to the composer (un-`sent`). The escape hatch that makes the
+   * blocked launch phase actionable: the user gets their composer back and
+   * `useFirstRunLaunch.launch()` now accepts the re-submit.
+   */
+  readonly onBack: () => void;
 }
 
 export interface FirstRunSurfaceProps {
@@ -153,10 +184,26 @@ export interface FirstRunSurfaceProps {
   readonly appVersion?: string;
   readonly keyProviders?: readonly FirstRunKeyProvider[];
   // --- Deferred-phase seams (optional; P1 ships internal placeholders) ---
-  /** P2: fired when the user starts the local download (→ stage=dl). */
+  /**
+   * P2: fired when the user EXPLICITLY starts the local download (→ stage=dl).
+   * P8 D4: NOT fired by `ctx.onContinue`, and never by an auto-started pull.
+   */
   readonly onStartLocalDownload?: () => void;
   /** P2: local download progress 0–100 (null before/without P2). */
   readonly localModelPct?: number | null;
+  /**
+   * P8 §6: the preset was already installed before any pull (the hook's
+   * `modelInstalled`). A local engine is then ready with no pct at all — without
+   * this the surface would report `modelReady: false` forever and a send would
+   * queue behind a download that will never run.
+   */
+  readonly localModelInstalled?: boolean;
+  /**
+   * P8 §7: the awaited local model demonstrably is NOT landing — the hook's
+   * `blocked !== null` or `runtime === "stopped"`. Surfaced on the composer/ack
+   * ctx so neither keeps claiming a download is in flight.
+   */
+  readonly localModelBlocked?: boolean;
   /** P2: replaces the Gate's local card. */
   readonly renderLocalCard?: (ctx: FirstRunLocalCardCtx) => ReactNode;
   /** P3: the `dl`/`ready` composer body. */
@@ -203,18 +250,53 @@ function AckPlaceholder({
 }: {
   readonly ctx: FirstRunAckCtx;
 }): ReactElement {
+  // P8 §7 — "Queued — starts when the model lands" is only true while the model
+  // still can land; a blocked download gets the honest stalled title instead.
+  const ackState: FirstRunAckState = ctx.modelReady
+    ? "starting"
+    : ctx.modelBlocked
+      ? "stalled"
+      : "queued";
+  const stalled = ackState === "stalled";
+  const note = firstRunAckNote(ackState);
+  const action = firstRunAckAction(ackState);
+
   // P1 hands off immediately (one-shot); P3 owns the real ack + ~1.5s timing.
-  const { onComplete } = ctx;
+  //
+  // P8 §7 adds the one exception: a STALLED ack must not hand off. Completing
+  // here would drop the user into the workspace on the strength of a run that
+  // never started — the same lie as the old "Queued" title, just told by the
+  // navigation instead of the copy. The effect re-runs if the model lands after
+  // all (`stalled` flips false), so a recovery still completes with no gesture.
+  const { onComplete, onBack } = ctx;
   useEffect(() => {
+    if (stalled) return;
     onComplete();
-  }, [onComplete]);
+  }, [stalled, onComplete]);
+
   return (
     <div className="fr-slot" data-testid="first-run-ack-placeholder">
-      <p className="fr-slot__note">
-        {ctx.modelReady
-          ? "Starting your first run"
-          : "Queued — starts when the model lands"}
+      <p className="fr-slot__note" data-ack-state={ackState}>
+        {firstRunAckTitle(ackState)}
       </p>
+      {note !== null ? (
+        <p className="fr-slot__note" data-testid="first-run-ack-note">
+          {note}
+        </p>
+      ) : null}
+      {/* Omitted-means-no-button, exactly as `FirstRunLocalCard` does it: only
+       * the stalled state has an action, so only it renders a control. */}
+      {action !== null ? (
+        <Button
+          type="button"
+          variant="primary"
+          size="sm"
+          onClick={onBack}
+          data-testid="first-run-ack-back"
+        >
+          {action}
+        </Button>
+      ) : null}
     </div>
   );
 }
@@ -238,6 +320,8 @@ export function FirstRunSurface({
   keyProviders,
   onStartLocalDownload,
   localModelPct = null,
+  localModelInstalled = false,
+  localModelBlocked = false,
   renderLocalCard,
   renderComposer,
   renderAcknowledgment,
@@ -349,11 +433,24 @@ export function FirstRunSurface({
     toolsPortalTarget,
   ]);
 
-  const handleStartDownload = useCallback(() => {
+  // A local engine is usable once the pull reaches 100% — or immediately when
+  // the preset was already installed (P8 §6's short-circuit issues no pull, so
+  // `localModelPct` legitimately stays null).
+  const localModelLanded = localModelPct === 100 || localModelInstalled;
+
+  // The single "the user chose local, move them on" transition. `dl` vs `ready`
+  // is derived, not assumed: continuing onto an already-landed model must not
+  // park the composer in a downloading body it will never leave.
+  const advanceToLocalComposer = useCallback((): void => {
     setEngine({ kind: "local", modelId: null });
-    setStage("dl");
+    setStage(localModelLanded ? "ready" : "dl");
+  }, [localModelLanded]);
+
+  // Explicit "Start download" click — starts the pull AND advances (P8 D4).
+  const handleStartDownload = useCallback(() => {
+    advanceToLocalComposer();
     onStartLocalDownload?.();
-  }, [onStartLocalDownload]);
+  }, [advanceToLocalComposer, onStartLocalDownload]);
 
   const handleKeyConnected = useCallback((r: KeyFormConnected) => {
     setEngine({
@@ -367,13 +464,14 @@ export function FirstRunSurface({
   }, []);
 
   // Shared model-ready signal (completeness-critic cross-cutting seam): a BYOK
-  // engine is ready the moment it connects; a local engine is ready only once
-  // the download reaches 100% (P2 feeds `localModelPct`).
+  // engine is ready the moment it connects; a local engine once the download
+  // reaches 100% (P2 feeds `localModelPct`) or the preset was already installed
+  // (P8 `localModelInstalled`).
   const modelReady = useMemo(() => {
     if (engine?.kind === "key") return true;
-    if (engine?.kind === "local") return localModelPct === 100;
+    if (engine?.kind === "local") return localModelLanded;
     return false;
-  }, [engine, localModelPct]);
+  }, [engine, localModelLanded]);
 
   const composerCtx = useMemo<FirstRunComposerCtx>(
     () => ({
@@ -382,6 +480,7 @@ export function FirstRunSurface({
       models,
       localModelPct,
       modelReady,
+      modelBlocked: localModelBlocked,
       onSent: () => setSent(true),
       toolsTrigger,
       webSearchEnabled: webOn,
@@ -393,6 +492,7 @@ export function FirstRunSurface({
       models,
       localModelPct,
       modelReady,
+      localModelBlocked,
       toolsTrigger,
       webOn,
       connectorScopes,
@@ -403,9 +503,11 @@ export function FirstRunSurface({
     () => ({
       engine,
       modelReady,
+      modelBlocked: localModelBlocked,
       onComplete: () => onComplete(engine),
+      onBack: () => setSent(false),
     }),
-    [engine, modelReady, onComplete],
+    [engine, modelReady, localModelBlocked, onComplete],
   );
 
   let body: ReactNode;
@@ -426,6 +528,7 @@ export function FirstRunSurface({
           keyPort={providerKeys}
           keyProviders={keyProviders}
           onStartDownload={handleStartDownload}
+          onContinue={advanceToLocalComposer}
           onKeyConnected={handleKeyConnected}
           localDownloadDisabled={localDownloadDisabled}
           localModelPct={localModelPct}

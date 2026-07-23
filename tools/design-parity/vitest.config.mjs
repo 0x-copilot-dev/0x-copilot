@@ -25,7 +25,8 @@ export default defineConfig({
     // Glob, not an enumerated list: every surface's live-render harness is
     // `lib/render-live[-<surface>].test.tsx`, so adding a surface never edits
     // this file (which would otherwise be a merge point between parallel
-    // per-surface parity runs).
+    // per-surface parity runs — exactly the conflict this line just resolved,
+    // where main's enumerated list and this branch's five new surfaces collided).
     include: ["lib/render-live*.test.tsx"],
     // Long-ish: pulls the chat-surface barrel through esbuild once.
     testTimeout: 60000,

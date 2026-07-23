@@ -3,11 +3,11 @@ surfaces/*/live/
 
 # Regenerable measurement artifacts.
 #
-# These are OUTPUTS of the pipeline, not inputs: `extract-playwright.mjs` writes
-# the design-/live- computed-style profiles from anchors.json, and compare.mjs
-# writes report-*.json alongside its markdown twin. Re-running the harness
-# reproduces them byte-for-byte, so versioning them adds hundreds of noisy files
-# that no one reads and that conflict on every re-measure.
+# These are OUTPUTS of the pipeline, not inputs: `extract-playwright.mjs` /
+# `extract-computed.js` write the design-/live- computed-style profiles from
+# anchors.json, and compare.mjs writes report-*.json alongside its markdown twin.
+# Re-running the harness reproduces them byte-for-byte, so versioning them adds
+# hundreds of noisy files that no one reads and that conflict on every re-measure.
 #
 # What IS tracked, deliberately:
 #   anchors.json          hand-authored design<->live map — the real input

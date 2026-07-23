@@ -53,6 +53,39 @@ Pick by the ROLE the text plays, not by how big it looks.
 | An **accent-tinted chip** (skills, citations)                    | `.ui-chip--accent` (+ `.ui-chip--inline` for prose flow) | —                           | accent 12% fill / 40% border · rounded-full                                  |
 | A **bordered mono metadata chip** (design `.chip`)               | `.ui-badge` (+ `--success/--warning/--danger/--accent`)  | —                           | `--font-size-mono-10-5` · mono · medium · hairline border, NO fill           |
 
+## Composer chrome + popovers (v3 parity family)
+
+The composer's control row and every popover it opens (attach · model · tools) are
+one pixel-authored family, ported from the design's `.cmp-*` / `.pop*` blocks. They
+live in `styles.css` — **not** in `chat-surface/src/composer/composer.css` — because
+`apps/frontend` loads `design-system/styles.css` but never `composer.css`; anything
+authored there styles desktop only, which is how the two composers drifted apart.
+
+| You are building…                        | Use (CSS class)                                                     | Notes                                                                                         |
+| ---------------------------------------- | ------------------------------------------------------------------- | --------------------------------------------------------------------------------------------- |
+| The popover **click-out layer**          | `.ui-pop-scrim`                                                     | fixed · inset 0 · z-index **70** · fully transparent. Sibling BEFORE the panel.               |
+| The popover **panel**                    | `.ui-pop`                                                           | z-index **71** · 13px/1.5 base · `ui-pop-in` 0.14s. Consumer owns anchoring + width only.     |
+| Its **header** / header meta             | `.ui-pop__h` · `.ui-pop__h-meta`                                    | 12px semibold display · right-aligned 9px mono meta                                           |
+| A **group heading** inside the list      | `.ui-pop__grp`                                                      | 8.5px mono caps — deliberately NOT `.ui-section-label` (that one is sans/11.2px/600)          |
+| The **scrolling list** region            | `.ui-pop__list`                                                     | max-height 264px                                                                              |
+| A **row** (+ its parts)                  | `.ui-pop-row` · `__lg` `__m` `__nm` `__txt` `__sb` `__rad`          | `[data-off]` dims · `[data-on]` fills the radio · `.ui-pop-row--pin` for a pinned foot action |
+| A **divider** / **footer** / footer link | `.ui-pop__div` · `.ui-pop__f` · `.ui-pop__f-link` · `.ui-pop__f-sp` | footer sits on `--color-bg-elevated`                                                          |
+| A composer **icon button** (attach, mic) | `.ui-cicon`                                                         | 26x26 · quiet panel fill on hover / `[data-open]` / `[aria-expanded="true"]`                  |
+| A composer **pill** (model, tools)       | `.ui-cpill` · `__dot` `__lb` `__n`                                  | 26px · mono 10px · transparent border until hover/open — **never** an accent ring             |
+| The composer **hint** (⌘↵ etc.)          | `.ui-chint`                                                         | owns the `margin-left: auto` that right-aligns the row tail                                   |
+| The composer **send** button             | `.ui-csend`                                                         | 28x28 · the ONE accent-filled control in the composer                                         |
+
+Two rulings that are easy to get wrong:
+
+- `.ui-cpill__n` is the ACTIVE count only ("1"), as plain dimmed mono text. Not
+  "on/total", not a filled badge.
+- The scrim/panel z-index pair (70/71) and the open animation belong to the recipe.
+  Do not re-declare either in a consumer stylesheet, and do not add a second
+  click-out listener next to the scrim.
+- Scrim **or** the `<Menu>` primitive, never both: `Menu` already dismisses on
+  outside-pointerdown and writes `position: fixed; z-index: 50` inline, which a class
+  cannot beat — a `.ui-pop` inside a `Menu` would sit under the scrim.
+
 ## Tokens (when no recipe fits)
 
 Reach for a raw token only when you're building a genuinely new composition.
@@ -66,6 +99,9 @@ Reach for a raw token only when you're building a genuinely new composition.
   (status chips, row timestamps). **Do not reach into `--font-size-3xs` / `-2xs` for mono
   metadata** — they are sans rungs that merely sit nearby, and doing so is exactly how the
   section head shipped 18% too large.
+- **Sizes (composer/popover)** — two whole-pixel steps `--font-size-13` / `--font-size-12`
+  that sit between the rem-ladder rungs. Use them ONLY inside the composer + popover
+  recipes — they exist because the design authors that family off-ladder.
 - **Weights** — `--font-weight-regular/medium/semibold/bold` (400/500/600/700). Never a
   numeric literal (a `<strong>` 700 next to the app's 600 reads as a different family
   on macOS — the original "+ menu vs pill" bug).

@@ -21,6 +21,9 @@ that implements the route:
 - `services/backend/src/backend_app/contracts.py` for MCP and skills routes.
 - `services/ai-backend/src/runtime_api/schemas/` and runtime contracts for
   agent routes, events, approvals, and streaming payloads.
+- `services/ai-backend/src/runtime_api/schemas/local_models.py` for the
+  local-model status, catalog, runtime-control, and pull-stream payloads
+  (`src/localModels.ts` mirrors it; see `SPEC.md` for the gating rules).
 - `services/backend-facade` owns the product route surface and may later own
   explicit facade response models if it starts shaping responses.
 

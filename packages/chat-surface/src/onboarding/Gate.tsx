@@ -8,7 +8,9 @@
 //   • Bring your own key — always P1's: header copy + inline `KeyForm` reveal.
 //
 // Presentational: all I/O via the injected `ProviderKeysPort` (KeyForm). The
-// local card's `onStartDownload` is a host/surface callback — no I/O here.
+// local card's `onStartDownload` / `onContinue` are host/surface callbacks — no
+// I/O here. PRD-P8 D4: those two are SEPARATE seams so an auto-started pull can
+// keep the gate mounted (see `FirstRunLocalCardCtx`).
 
 import { useState, type ReactElement, type ReactNode } from "react";
 
@@ -18,12 +20,32 @@ import { KeyForm, type KeyFormConnected } from "./KeyForm";
 import { FIRST_RUN_COPY, type FirstRunKeyProvider } from "./firstRun";
 
 /**
- * Slot context handed to a `renderLocalCard` override (P2). Carries the
- * start-download callback (→ surface stage=dl), the P2 progress feed, and the
- * disabled flag — everything P2's SSE-aware card needs, nothing more.
+ * Slot context handed to a `renderLocalCard` override (P2/P8). Carries the two
+ * advance callbacks, the progress feed, and the disabled flag — everything the
+ * SSE-aware card needs, nothing more.
+ *
+ * PRD-P8 D4 splits the single P2 callback in two, because "start the pull" and
+ * "move the user off the gate" are different events:
+ *   • `onStartDownload` — an EXPLICIT "Start download" click. Starts the pull
+ *     AND advances (today's behaviour, unchanged).
+ *   • `onContinue` — D4a's "Continue →". Advances only. A pull the hook
+ *     auto-started on runtime detection must call NEITHER, so `stage` stays
+ *     `"choice"`, the card stays mounted, and states ③/④ are reachable.
+ *
+ * `onContinue` is OPTIONAL here for the same reason it is optional on
+ * `FirstRunLocalCardProps`: the card renders "Continue →" only when it is
+ * defined ("never a dead button"). Substituting a stable inert fallback would
+ * defeat that check — a slot forwarding `ctx.onContinue` would always receive a
+ * defined callback and render a control that silently does nothing.
  */
 export interface FirstRunLocalCardCtx {
   readonly onStartDownload: () => void;
+  /**
+   * D4a — advance to the composer without (re)starting an in-flight pull.
+   * `undefined` when the host wired no `onContinue`; pass it straight through
+   * to the card, which then renders no button.
+   */
+  readonly onContinue?: () => void;
   readonly localModelPct: number | null;
   readonly disabled: boolean;
 }
@@ -34,6 +56,13 @@ export interface GateProps {
   readonly keyProviders?: readonly FirstRunKeyProvider[];
   /** → surface: engine=local, stage=dl (P2 wires SSE). */
   readonly onStartDownload: () => void;
+  /**
+   * P8 D4a → surface: engine=local + advance, WITHOUT firing the host's
+   * `onStartLocalDownload`. Optional (the P1 default card has no such
+   * affordance); omitted ⇒ `ctx.onContinue` is `undefined` too, so a slot card
+   * renders no "Continue →". `FirstRunSurface` always supplies one.
+   */
+  readonly onContinue?: () => void;
   /** → surface: engine=key, stage=ready. */
   readonly onKeyConnected: (r: KeyFormConnected) => void;
   /** P1 may disable the local download until P2's pipeline default lands. */
@@ -84,6 +113,7 @@ export function Gate({
   keyPort,
   keyProviders,
   onStartDownload,
+  onContinue,
   onKeyConnected,
   localDownloadDisabled = false,
   localModelPct = null,
@@ -95,6 +125,10 @@ export function Gate({
     renderLocalCard !== undefined ? (
       renderLocalCard({
         onStartDownload,
+        // Passed through UNSUBSTITUTED: a slot card decides whether to render
+        // "Continue →" by asking whether this is defined, so an inert stand-in
+        // would hand every host a button that goes nowhere.
+        onContinue,
         localModelPct,
         disabled: localDownloadDisabled,
       })

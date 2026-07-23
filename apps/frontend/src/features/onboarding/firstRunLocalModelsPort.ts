@@ -26,6 +26,7 @@ import type {
 import {
   getLocalModelsStatus,
   listLocalModels,
+  startLocalModelRuntime,
   streamLocalModelPull,
 } from "../../api/localModelsApi";
 
@@ -42,6 +43,13 @@ export function createFirstRunLocalModelsPort(): FirstRunLocalModelsPort {
     async list(): Promise<readonly LocalModelSummary[]> {
       const res = await listLocalModels();
       return res.models;
+    },
+    // PRD-P8 §4.3. On the web deployment this route 404s (the server may not
+    // manage a host process), and `runtime_managed: false` means the card never
+    // renders the button that would call it — but the port shape is shared with
+    // desktop, so it is implemented rather than stubbed.
+    startRuntime(): Promise<LocalModelsStatus> {
+      return startLocalModelRuntime();
     },
     async *pull(
       preset: AvailableLocalModel,
@@ -85,7 +93,16 @@ export function createFirstRunLocalModelsPort(): FirstRunLocalModelsPort {
           while (queue.length > 0) {
             const frame = queue.shift() as LocalModelPullEvent;
             yield frame;
-            if (frame.done || frame.error !== null) return;
+            // Nullish, not just `null` — mirrors the shared Transport adapter.
+            // `isLocalModelPullEvent` only requires sequence_no/status/done, so
+            // a truncated frame can arrive with no `error` key; reading that as
+            // a terminal error would close a healthy stream, which the hook
+            // then classifies as a break and retries, forever.
+            if (
+              frame.done ||
+              (frame.error !== null && frame.error !== undefined)
+            )
+              return;
           }
           if (closed) {
             if (streamError) throw streamError;

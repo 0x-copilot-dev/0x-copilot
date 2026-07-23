@@ -77,11 +77,23 @@
    * for mono metadata — those are sans rungs that happen to be nearby, and
    * reaching for them is exactly how `.sect-h` shipped at 11.2px.
    * (--font-size-3xs 9px covers the ladder's 9px rung; --font-size-2xs 11.2px
-   * covers its 11px rung within 0.2px.) */
-  --font-size-mono-8-5: 0.53125rem; /* 8.5px — rail count badge (copilot.css:353 .rbadge) */
-  --font-size-mono-9-5: 0.59375rem; /* 9.5px — section head (copilot.css:1565 .sect-h), .cmdk__row, .sheet-h */
+   * covers its 11px rung within 0.2px.)
+   *
+   * Merge note: PRD-01 (this branch) and the composer/popover work (main) both
+   * grew this ladder independently and agreed on 8.5 / 9.5 / 10 to the digit —
+   * unioned here. PRD-01 adds 10-5 (status chip, row time); the composer work
+   * adds the two whole-pixel popover-frame steps 13 / 12 below. */
+  --font-size-mono-8-5: 0.53125rem; /* 8.5px — rail count badge (copilot.css:353 .rbadge); popover mono group heading */
+  --font-size-mono-9-5: 0.59375rem; /* 9.5px — section head (copilot.css:1565 .sect-h), .cmdk__row, .sheet-h; popover row sub-line + footer link */
   --font-size-mono-10: 0.625rem; /* 10px — canonical small-mono pill metadata (atlas-model-pill, fr-wchip, .side-h, .act-day) */
   --font-size-mono-10-5: 0.65625rem; /* 10.5px — status chip (copilot.css:580 .chip), row time (copilot.css:1657 .lrow__time) */
+  /* Composer + popover whole-pixel steps (v3 design parity). The design authors
+   * the .cmp-* / .pop* family in whole/half pixels between the rem ladder steps
+   * (13 / 12 vs the ladder's 11.2 / 12.5 / 13.6); named after their px value,
+   * following --font-size-mono-10's precedent. Use only inside the composer +
+   * popover recipes below. */
+  --font-size-13: 0.8125rem; /* 13px — popover frame base (the design's body size) */
+  --font-size-12: 0.75rem; /* 12px — popover header + row name line */
 
   --font-weight-regular: 400;
   --font-weight-medium: 500;
@@ -126,6 +138,13 @@
 
   --shadow-soft: 0 18px 60px rgb(0 0 0 / 0.28);
   --shadow-subtle: 0 8px 32px rgb(0 0 0 / 0.18);
+  /* Popover / menu lift — the design's `.pop` box-shadow. It was already
+   * REFERENCED with a literal fallback by chat-surface's composer.css and
+   * apps/frontend's styles.css while being defined nowhere, so every menu
+   * silently rendered the fallback. Softened for the light ground in the
+   * [data-theme="light"] block (mirrors the design's
+   * `[data-theme="light"] .pop` rule). */
+  --shadow-md: 0 18px 50px -12px rgb(0 0 0 / 0.75);
 
   --duration-fast: 120ms;
   --duration-normal: 180ms;
@@ -239,6 +258,15 @@
  * downstream automatically. */
 :root {
   --color-accent-soft: color-mix(in srgb, var(--color-accent) 18%, transparent);
+  /* Ink placed ON an accent fill (send-button glyph, checked radio tick) — the
+   * design's --accent-ink. It resolves to the canonical --color-accent-contrast,
+   * which ALREADY carries the design's value byte-for-byte in every theme and
+   * every accent swatch (dark #08131d = rgb(8,19,29); light #f4faff — the light
+   * accent is a dark blue, so its readable ink is near-white, exactly as the
+   * design's `[data-theme="light"]{--accent-ink:#f4faff}` says). Defining it is
+   * a bug fix: chat-surface's composer.css referenced --color-accent-ink with a
+   * `#fff` fallback, so the checked radio rendered white ink in dark mode. */
+  --color-accent-ink: var(--color-accent-contrast);
   /* Accent-tinted hairline (the design's --accent-line = accent @ 35%). Used for
      selected rows / active chips, matching --color-accent-soft's reflow model. */
   --color-accent-line: color-mix(in srgb, var(--color-accent) 35%, transparent);
@@ -390,6 +418,9 @@
   --color-surface-elevated: #ebebee;
   --color-border-stronger: rgba(10, 10, 14, 0.22);
   --color-text-strong: #2a2a31;
+  /* Popover lift, softened for the light ground (the design's
+     `[data-theme="light"] .pop` override). */
+  --shadow-md: 0 18px 50px -12px rgb(20 20 30 / 0.28);
 }
 
 :root[data-theme="slate"] {
@@ -1349,4 +1380,431 @@ textarea {
   padding: 0.1em 0.4em;
   font-size: 0.85em;
   border-radius: 0.5em;
+}
+
+/* ===========================================================================
+ * Composer + popover RECIPES (design-system SSOT)
+ *
+ * Encodes the v3 design's `.pop*` (popover) and `.cmp-*` (composer control)
+ * families. They live HERE, not in chat-surface's composer.css, because
+ * apps/frontend imports design-system/styles.css but does NOT import
+ * composer.css — anything authored there styles the desktop host only, which
+ * is how the web + desktop composers drifted apart in the first place.
+ *
+ * Scope split: the recipe owns the SURFACE (fill, stroke, radius, type,
+ * spacing, states), the click-out SCRIM, the open ANIMATION, and the
+ * scrim/panel STACKING pair (z-index 70 / 71 — the design's own values). The
+ * consumer owns ANCHORING (which edge the panel opens from, its width, the
+ * `position` that activates the z-index) and any per-item colour it must set
+ * inline (e.g. the provider dot's hue). Do NOT re-declare the animation or a
+ * second scrim in a consumer stylesheet — that is the drift this layer exists
+ * to prevent.
+ *
+ * Colour mapping design → token: panel→surface, panel2→surface-muted,
+ * panel3→surface-elevated, ink2→bg-elevated, line→border, line2→border-strong,
+ * line3→border-stronger, tx→text, tx2→text-strong, mut→text-muted,
+ * mut2→text-subtle, accent→accent, accent-hi→accent-strong,
+ * accent-ink→accent-ink.
+ *
+ * Geometry stays in the design's literal px (26/28px controls, 7/10px radii,
+ * 118px label clamp) — this family is pixel-authored chrome, not a density-
+ * responsive layout — EXCEPT where a --space or --radius token is an exact
+ * match (8px gap = --space-sm, 6px radius = --radius-sm, 8px = --radius-md),
+ * where the token wins.
+ * ======================================================================== */
+
+/* ── popover family ──────────────────────────────────────────────────────── */
+
+/* Click-out scrim — the design's `.pop-scrim`. A FULLY TRANSPARENT viewport
+ * layer that sits one step below the panel (70 vs 71), so a pointerdown
+ * anywhere outside the popover lands on the scrim and closes it. It is a real
+ * element on purpose: a `window`/`document` pointerdown listener (what the live
+ * Menu primitive does today) can't be used inside chat-surface — the package is
+ * substrate-agnostic and bans bare globals — and it also fights nested menus.
+ * Mount it as the popover's SIBLING, immediately before the panel:
+ *   <div className="ui-pop-scrim" onMouseDown={close} />
+ *   <div className="ui-pop" style={{ width: 300 }}>…</div>
+ * Never paint it: a visible dim is not in the design.
+ *
+ * SCRIM **OR** <Menu>, never both. The design-system `Menu` primitive already
+ * dismisses on outside-pointerdown AND writes `position: fixed; z-index: 50`
+ * INLINE — an inline value a class can't beat, so a `.ui-pop` inside a `Menu`
+ * would sit BELOW this scrim and swallow its own clicks. Use the scrim for the
+ * design's self-anchored popover idiom; keep `Menu`'s listener when you use
+ * `Menu`. */
+.ui-pop-scrim {
+  position: fixed;
+  inset: 0;
+  z-index: 70;
+  background: transparent;
+}
+
+/* Popover frame — the design's `.pop`. Sets the font base (13px/1.5) so every
+ * row inside inherits the design's scale instead of the host's 14px UI size.
+ * `z-index: 71` is the scrim's pair — it only takes effect once the consumer
+ * gives the panel a `position` (the design uses `position: absolute; bottom:
+ * calc(100% + 8px)` to open upward from the composer). `gap: 0` is defensive:
+ * when a host stacks .ui-pop on top of .ui-dropdown__menu, that primitive's
+ * `display: grid; gap: 4px` otherwise leaks through. */
+.ui-pop {
+  display: block;
+  gap: 0;
+  overflow: hidden;
+  z-index: 71;
+  background: var(--color-surface);
+  border: 1px solid var(--color-border-strong);
+  border-radius: 10px;
+  box-shadow: var(--shadow-md);
+  color: var(--color-text);
+  font-size: var(--font-size-13);
+  line-height: var(--line-height-base);
+  /* 0.14s is the design's literal — it sits between --duration-fast (120ms)
+   * and --duration-normal (180ms); kept literal rather than referencing an
+   * undefined token with a fallback (the bug this layer just fixed twice). */
+  animation: ui-pop-in 0.14s ease;
+}
+
+/* The design's `popin` — a 5px rise + fade on open. The global
+ * `[data-reduce-motion]` block above neutralises it (it targets every
+ * descendant with `!important`), so no per-recipe motion guard is needed. */
+@keyframes ui-pop-in {
+  from {
+    opacity: 0;
+    transform: translateY(5px);
+  }
+}
+
+/* Popover header row — the design's `.pop__h`. */
+.ui-pop__h {
+  display: flex;
+  align-items: center;
+  gap: var(--space-sm);
+  padding: 11px 12px 7px;
+  font-family: var(--font-display);
+  font-size: var(--font-size-12);
+  font-weight: var(--font-weight-semibold);
+  color: var(--color-text);
+}
+
+/* Right-aligned header meta — the design's `.pop__h .meta`. */
+.ui-pop__h-meta {
+  margin-left: auto;
+  font-family: var(--font-mono);
+  font-size: var(--font-size-3xs);
+  font-weight: var(--font-weight-regular);
+  color: var(--color-text-subtle);
+}
+
+/* Scrolling row region — the design's `.pop__list`. */
+.ui-pop__list {
+  max-height: 264px;
+  overflow: auto;
+  padding: 0 5px 5px;
+}
+
+/* Group heading inside the list — the design's `.pop__grp`. Deliberately NOT
+ * .ui-section-label: this one is mono, 8.5px and weight 400, where the section
+ * label recipe is sans, 11.2px and semibold. */
+.ui-pop__grp {
+  padding: 8px 9px 4px;
+  font-family: var(--font-mono);
+  font-size: var(--font-size-mono-8-5);
+  font-weight: var(--font-weight-regular);
+  letter-spacing: var(--tracking-mono-caps);
+  text-transform: uppercase;
+  color: var(--color-text-subtle);
+}
+
+/* Popover row — the design's `.pop-row`. `font: inherit` deliberately resets a
+ * <button> back to the frame's 13px so rows match non-button rows exactly. */
+.ui-pop-row {
+  display: flex;
+  align-items: center;
+  gap: 9px;
+  width: 100%;
+  padding: 6px;
+  border: 0;
+  background: transparent;
+  border-radius: 7px;
+  text-align: left;
+  color: inherit;
+  font: inherit;
+}
+button.ui-pop-row {
+  cursor: pointer;
+}
+.ui-pop-row:hover {
+  background: var(--color-surface-muted);
+}
+.ui-pop-row:focus-visible {
+  outline: 2px solid var(--color-focus-ring);
+  outline-offset: -2px;
+}
+/* Unavailable row (no key, offline model): dim the content, keep the control
+ * itself legible — the design's `.pop-row[data-off]`. */
+.ui-pop-row[data-off] .ui-pop-row__lg,
+.ui-pop-row[data-off] .ui-pop-row__m {
+  opacity: 0.45;
+}
+
+/* Leading 24px badge — the design's `.pop-row .lg`. 10px on the SANS face
+ * here (the design's `font-family: var(--body)`); --font-size-mono-10 is
+ * reused purely as the 10px step, not as a mono signal. */
+.ui-pop-row__lg {
+  display: grid;
+  place-items: center;
+  flex: none;
+  width: 24px;
+  height: 24px;
+  border-radius: var(--radius-sm);
+  background: var(--color-surface-elevated);
+  color: var(--color-text-strong);
+  font-family: var(--font-sans);
+  font-size: var(--font-size-mono-10);
+  font-weight: var(--font-weight-semibold);
+}
+.ui-pop-row__lg svg {
+  width: 13px;
+  height: 13px;
+}
+
+/* Row text column — the design's `.pop-row .m`. */
+.ui-pop-row__m {
+  flex: 1;
+  min-width: 0;
+}
+
+/* Row name line — the design's `.pop-row .nm`. */
+.ui-pop-row__nm {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  min-width: 0;
+  font-size: var(--font-size-12);
+  font-weight: var(--font-weight-medium);
+  color: var(--color-text);
+}
+
+/* Truncating span inside a name line — the design's `.pop-row .nm .txt`. */
+.ui-pop-row__txt {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* Row sub-line — the design's `.pop-row .sb`. */
+.ui-pop-row__sb {
+  margin-top: 1px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-family: var(--font-mono);
+  font-size: var(--font-size-mono-9-5);
+  color: var(--color-text-subtle);
+}
+
+/* Selection radio — the design's `.pop-row .rad`. `data-on` is honoured on the
+ * radio itself OR on the row, so a consumer can mark either. */
+.ui-pop-row__rad {
+  display: grid;
+  place-items: center;
+  flex: none;
+  width: 15px;
+  height: 15px;
+  border-radius: 50%;
+  border: 1.5px solid var(--color-border-stronger);
+  color: var(--color-accent-ink);
+}
+.ui-pop-row__rad[data-on],
+.ui-pop-row[data-on] .ui-pop-row__rad {
+  border-color: var(--color-accent);
+  background: var(--color-accent);
+}
+.ui-pop-row__rad svg {
+  width: 9px;
+  height: 9px;
+}
+
+/* Divider between row groups — the design's `.pop-div`. */
+.ui-pop__div {
+  height: 1px;
+  margin: 5px 7px;
+  background: var(--color-border);
+}
+
+/* Pinned last row — the design's `.pop-row--pin` (the tools popover's
+ * "Manage connectors →" foot row). Squares off and rules-off the row so it
+ * reads as a pinned action, not another list item. Compose with .ui-pop-row. */
+.ui-pop-row--pin {
+  flex: none;
+  padding: 8px 11px;
+  border-top: 1px solid var(--color-border);
+  border-radius: 0;
+}
+
+/* Footer bar — the design's `.pop__f`. */
+.ui-pop__f {
+  display: flex;
+  align-items: center;
+  gap: var(--space-sm);
+  padding: 9px 12px;
+  border-top: 1px solid var(--color-border);
+  background: var(--color-bg-elevated);
+}
+.ui-pop__f-link {
+  font-family: var(--font-mono);
+  font-size: var(--font-size-mono-9-5);
+  color: var(--color-text-muted);
+  cursor: pointer;
+}
+.ui-pop__f-link:hover {
+  color: var(--color-accent);
+}
+.ui-pop__f-sp {
+  flex: 1;
+}
+
+/* ── composer control family ─────────────────────────────────────────────── */
+
+/* Composer icon button — the design's `.cmp-ic` (attach, mic). Open state is a
+ * quiet panel fill, keyed off `data-open` OR `aria-expanded` so a popover
+ * trigger lights up without extra bookkeeping. */
+.ui-cicon {
+  display: grid;
+  place-items: center;
+  flex: none;
+  width: 26px;
+  height: 26px;
+  padding: 0;
+  border: 1px solid transparent;
+  border-radius: 7px;
+  background: transparent;
+  color: var(--color-text-muted);
+  cursor: pointer;
+}
+.ui-cicon:hover,
+.ui-cicon[data-open],
+.ui-cicon[aria-expanded="true"] {
+  color: var(--color-text);
+  background: var(--color-surface-muted);
+  border-color: var(--color-border);
+}
+.ui-cicon:focus-visible {
+  outline: 2px solid var(--color-focus-ring);
+  outline-offset: 1px;
+}
+.ui-cicon svg {
+  width: 14px;
+  height: 14px;
+}
+
+/* Composer pill — the design's `.cmp-pill` (model / tools triggers). NOTE the
+ * open state is the same quiet panel fill as .ui-cicon, NOT an accent ring:
+ * the accent box-shadow the live pill grew is the drift this recipe removes.
+ * A :focus-visible outline is kept for keyboard users. */
+.ui-cpill {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  height: 26px;
+  min-width: 0;
+  padding: 0 8px;
+  border: 1px solid transparent;
+  border-radius: 7px;
+  background: transparent;
+  color: var(--color-text-muted);
+  font-family: var(--font-mono);
+  font-size: var(--font-size-mono-10);
+  font-weight: var(--font-weight-regular);
+  letter-spacing: var(--tracking-normal);
+  white-space: nowrap;
+  cursor: pointer;
+}
+.ui-cpill:hover,
+.ui-cpill[data-open],
+.ui-cpill[aria-expanded="true"] {
+  background: var(--color-surface-muted);
+  color: var(--color-text);
+  border-color: var(--color-border);
+}
+.ui-cpill:focus-visible {
+  outline: 2px solid var(--color-focus-ring);
+  outline-offset: 1px;
+}
+/* Provider status dot — hue is per-provider, so the consumer sets `background`
+ * inline; the recipe owns only the shape. */
+.ui-cpill__dot {
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  flex: none;
+}
+.ui-cpill__lb {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  max-width: 118px;
+}
+/* Trailing count — plain faint inline MONO text, deliberately NOT a badge.
+ * Owner ruling: render the ACTIVE count only ("1"), not the design's "on/total"
+ * ("7/7") — the denominator is noise once the popover lists every tool. The
+ * neutralising declarations are load-bearing: the live pill rendered this as a
+ * 16x16 accent-filled 999px badge at 11.2px/600 sans, so a consumer migrating
+ * that markup must land on flat text even if its own class survives. Size /
+ * family / weight are inherited from .ui-cpill (mono 10px/400) on purpose —
+ * the count is part of the pill's type, not its own role. */
+.ui-cpill__n {
+  display: inline;
+  min-width: 0;
+  padding: 0;
+  border: 0;
+  border-radius: 0;
+  background: none;
+  color: var(--color-text-subtle);
+}
+.ui-cpill svg {
+  width: 11px;
+  height: 11px;
+  flex: none;
+}
+
+/* Composer hint — the design's `.cmp-hint`. Owns the `margin-left: auto` that
+ * pushes it and everything after it to the right of the row. */
+.ui-chint {
+  margin-left: auto;
+  padding-right: 3px;
+  font-family: var(--font-mono);
+  font-size: var(--font-size-3xs);
+  color: var(--color-text-subtle);
+  white-space: nowrap;
+}
+
+/* Composer send button — the design's `.cmp-send`. The only accent-filled
+ * control in the composer. */
+.ui-csend {
+  display: grid;
+  place-items: center;
+  flex: none;
+  width: 28px;
+  height: 28px;
+  padding: 0;
+  border: 0;
+  border-radius: var(--radius-md);
+  background: var(--color-accent);
+  color: var(--color-accent-ink);
+  cursor: pointer;
+}
+.ui-csend:hover:not(:disabled) {
+  background: var(--color-accent-strong);
+}
+.ui-csend:focus-visible {
+  outline: 2px solid var(--color-focus-ring);
+  outline-offset: 2px;
+}
+.ui-csend:disabled {
+  opacity: 0.35;
+  cursor: default;
+}
+.ui-csend svg {
+  width: 14px;
+  height: 14px;
 }

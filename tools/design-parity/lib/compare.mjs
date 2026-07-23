@@ -6,6 +6,19 @@
  * honors "expected divergences" declared in anchors.json (e.g. a deliberately
  * shelved element). Emits a Markdown report + a JSON summary.
  *
+ * `expectDivergence` (per anchor) takes two forms:
+ *   "reason"                       — a PRESENCE divergence in either direction
+ *                                    (element missing in live, or live-only).
+ *   { absent, extra, text, <prop> } — scoped. `absent`/`extra` are the two
+ *                                    presence directions; `text` is a copy
+ *                                    difference; ANY OTHER key is a computed
+ *                                    style property (`color`, `width`, …) whose
+ *                                    diff is expected. Only the declared keys
+ *                                    are downgraded to INFO — every other
+ *                                    property on that element still scores
+ *                                    normally, so "one intended delta" can
+ *                                    never launder a whole element's drift.
+ *
  * Usage:
  *   node lib/compare.mjs \
  *     surfaces/first-run/out/design-<state>.json \
@@ -159,9 +172,23 @@ const labels = [
 const findings = [];
 const RANK = { high: 0, medium: 1, low: 2, info: 3 };
 
+/**
+ * Normalize an anchor's `expectDivergence` into a `{scope -> reason}` map. A
+ * bare string is the historical form and declares a PRESENCE divergence in
+ * either direction, so the surfaces already using it keep scoring identically.
+ */
+function expectations(anchor) {
+  const declared = anchor?.expectDivergence;
+  if (!declared) return {};
+  if (typeof declared === "string")
+    return { absent: declared, extra: declared };
+  return declared;
+}
+
 for (const label of labels) {
   const a = anchorByLabel.get(label);
   const group = a?.group || "—";
+  const expect = expectations(a);
   const d = design[label];
   const l = live[label];
 
@@ -169,7 +196,7 @@ for (const label of labels) {
   const dMatched = d && d.matched !== false;
   const lMatched = l && l.matched !== false;
   if (dMatched && !lMatched) {
-    const expected = a?.expectDivergence || l?.note;
+    const expected = expect.absent || l?.note;
     findings.push({
       label,
       group,
@@ -187,7 +214,9 @@ for (const label of labels) {
       group,
       severity: "info",
       kind: "extra-in-live",
-      detail: "present in live, not in design map",
+      detail: expect.extra
+        ? `expected: ${expect.extra}`
+        : "present in live, not in design map",
     });
     continue;
   }
@@ -201,7 +230,7 @@ for (const label of labels) {
       severity: "info",
       kind: "copy",
       prop: "text",
-      detail: `“${d.text}” → “${l.text}”`,
+      detail: `${expect.text ? `expected: ${expect.text} — ` : ""}“${d.text}” → “${l.text}”`,
     });
   }
 
@@ -223,15 +252,18 @@ for (const label of labels) {
     if (!(prop in ls)) continue;
     if (prop === "borderColor" && borderColorIsNoise) continue;
     const c = classify(prop, ds[prop], ls[prop]);
-    if (c)
-      findings.push({
-        label,
-        group,
-        severity: c.severity,
-        kind: "style",
-        prop,
-        detail: c.note,
-      });
+    if (!c) continue;
+    // A declared, property-scoped divergence is intent, not a defect — file it
+    // as INFO but keep the measured delta in the detail so it stays auditable.
+    const reason = expect[prop];
+    findings.push({
+      label,
+      group,
+      severity: reason ? "info" : c.severity,
+      kind: "style",
+      prop,
+      detail: reason ? `expected: ${reason} — ${c.note}` : c.note,
+    });
   }
   // tag change (b -> h2 etc.)
   if (d.tag && l.tag && d.tag !== l.tag) {

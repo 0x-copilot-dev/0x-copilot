@@ -1,14 +1,27 @@
 // FirstRunSurface — shell + state machine (PRD-P1 §6.3). Top bar (brand + 0x
 // accent span + wallet slot + skip), state transitions (choice → dl / ready →
 // sent), footer, and the P2/P3 slot injection points.
+//
+// PRD-P8 D4 narrows what may move the user: only an EXPLICIT gesture advances
+// the stage. Download progress arriving on its own must leave the gate mounted
+// (otherwise runtime states ③/④ flash for one frame and can never be seen), and
+// §7 makes the composer/ack stop claiming a model is landing when it is not.
 
-import { fireEvent, render, screen, waitFor } from "@testing-library/react";
+import {
+  fireEvent,
+  render,
+  screen,
+  waitFor,
+  type RenderResult,
+} from "@testing-library/react";
 import { describe, expect, it, vi } from "vitest";
 
 import type { McpServer, ProviderKeySummary } from "@0x-copilot/api-types";
 
-import { FirstRunSurface } from "./FirstRunSurface";
+import { FIRST_RUN_ACK_TITLES } from "./Acknowledgment";
+import { FirstRunSurface, type FirstRunSurfaceProps } from "./FirstRunSurface";
 import { FIRST_RUN_COPY } from "./firstRun";
+import { FIRST_RUN_ACK_STALLED } from "./firstRunAckLines";
 import type { FirstRunConnectorsPort } from "./ports/FirstRunConnectorsPort";
 import type {
   FirstRunProfilePort,
@@ -370,5 +383,278 @@ describe("<FirstRunSurface>", () => {
     // BrandMark's fixed sky gradient stops (#9bd4ff/#4593d8) live in an <svg>,
     // not inline style attributes — so the assertion above stays swatch-only.
     expect(swatches.size).toBeGreaterThan(0);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// PRD-P8 — D4 (only an explicit gesture advances) + §7 (no permanent "Queued")
+// ---------------------------------------------------------------------------
+
+describe("<FirstRunSurface> — PRD-P8 stage + honesty rules", () => {
+  type Props = Partial<FirstRunSurfaceProps>;
+
+  function renderP8(props: Props = {}): RenderResult & {
+    readonly update: (next: Props) => void;
+  } {
+    const base: FirstRunSurfaceProps = {
+      providerKeys: fakePort(),
+      onSkip: () => undefined,
+      onComplete: () => undefined,
+    };
+    const view = render(<FirstRunSurface {...base} {...props} />);
+    return {
+      ...view,
+      update: (next) =>
+        view.rerender(<FirstRunSurface {...base} {...props} {...next} />),
+    };
+  }
+
+  /** A slot card that exposes D4a's "Continue →" as a clickable affordance. */
+  const continueCard = (ctx: { readonly onContinue?: () => void }) => (
+    <button type="button" data-testid="p8-continue" onClick={ctx.onContinue}>
+      Continue
+    </button>
+  );
+
+  it("an auto-started download never advances the stage — the gate stays mounted (D4)", () => {
+    const onStartLocalDownload = vi.fn();
+    const { update } = renderP8({
+      onStartLocalDownload,
+      localModelPct: null,
+      renderLocalCard: continueCard,
+    });
+    expect(screen.getByTestId("first-run-gate")).not.toBeNull();
+
+    // The hook detected Ollama and started pulling on its own. Progress alone
+    // is not a gesture: moving the user here is what made ③/④ unreachable.
+    update({ localModelPct: 12 });
+    expect(screen.getByTestId("first-run-gate")).not.toBeNull();
+    update({ localModelPct: 87 });
+    expect(screen.getByTestId("first-run-gate")).not.toBeNull();
+    update({ localModelPct: 100 });
+    expect(screen.getByTestId("first-run-gate")).not.toBeNull();
+    expect(screen.queryByTestId("first-run-composer-placeholder")).toBeNull();
+    expect(onStartLocalDownload).not.toHaveBeenCalled();
+  });
+
+  it("Continue → advances to the composer WITHOUT restarting the pull (D4a)", () => {
+    const onStartLocalDownload = vi.fn();
+    let stage: string | undefined;
+    renderP8({
+      onStartLocalDownload,
+      localModelPct: 40,
+      renderLocalCard: continueCard,
+      renderComposer: (ctx) => {
+        stage = ctx.stage;
+        return <div data-testid="p8-composer">composer</div>;
+      },
+    });
+
+    fireEvent.click(screen.getByTestId("p8-continue"));
+    expect(screen.queryByTestId("first-run-gate")).toBeNull();
+    expect(screen.getByTestId("p8-composer")).not.toBeNull();
+    expect(stage).toBe("dl");
+    // The whole point of the second seam: the host's download starter is NOT
+    // re-fired, so an in-flight pull is not torn down and restarted.
+    expect(onStartLocalDownload).not.toHaveBeenCalled();
+  });
+
+  it("an explicit Start download still both starts the pull and advances", () => {
+    const onStartLocalDownload = vi.fn();
+    let stage: string | undefined;
+    renderP8({
+      onStartLocalDownload,
+      renderComposer: (ctx) => {
+        stage = ctx.stage;
+        return <div data-testid="p8-composer">composer</div>;
+      },
+    });
+
+    fireEvent.click(screen.getByTestId("first-run-start-download"));
+    expect(onStartLocalDownload).toHaveBeenCalledTimes(1);
+    expect(screen.getByTestId("p8-composer")).not.toBeNull();
+    expect(stage).toBe("dl");
+  });
+
+  it("continuing onto an already-landed model lands on `ready`, not a download body", () => {
+    let stage: string | undefined;
+    renderP8({
+      localModelPct: 100,
+      renderLocalCard: continueCard,
+      renderComposer: (ctx) => {
+        stage = ctx.stage;
+        return <div data-testid="p8-composer">composer</div>;
+      },
+    });
+
+    fireEvent.click(screen.getByTestId("p8-continue"));
+    expect(stage).toBe("ready");
+  });
+
+  it("localModelInstalled makes a local engine model-ready with no pct at all (§6)", () => {
+    // The already-installed short-circuit issues no pull, so `localModelPct`
+    // legitimately stays null — without this the send would queue forever
+    // behind a download that will never run.
+    let stage: string | undefined;
+    let modelReady: boolean | undefined;
+    renderP8({
+      localModelInstalled: true,
+      localModelPct: null,
+      renderLocalCard: continueCard,
+      renderComposer: (ctx) => {
+        stage = ctx.stage;
+        modelReady = ctx.modelReady;
+        return <div data-testid="p8-composer">composer</div>;
+      },
+    });
+
+    fireEvent.click(screen.getByTestId("p8-continue"));
+    expect(stage).toBe("ready");
+    expect(modelReady).toBe(true);
+  });
+
+  it("a local engine mid-download is NOT model-ready", () => {
+    let modelReady: boolean | undefined;
+    renderP8({
+      localModelPct: 40,
+      renderLocalCard: continueCard,
+      renderComposer: (ctx) => {
+        modelReady = ctx.modelReady;
+        return <div data-testid="p8-composer">composer</div>;
+      },
+    });
+    fireEvent.click(screen.getByTestId("p8-continue"));
+    expect(modelReady).toBe(false);
+  });
+
+  it("threads localModelBlocked onto the composer and ack ctx (§7)", () => {
+    let composerBlocked: boolean | undefined;
+    let ackBlocked: boolean | undefined;
+    renderP8({
+      initialStage: "dl",
+      localModelBlocked: true,
+      renderComposer: (ctx) => {
+        composerBlocked = ctx.modelBlocked;
+        return (
+          <button type="button" data-testid="p8-send" onClick={ctx.onSent}>
+            send
+          </button>
+        );
+      },
+      renderAcknowledgment: (ctx) => {
+        ackBlocked = ctx.modelBlocked;
+        return <div data-testid="p8-ack">ack</div>;
+      },
+    });
+
+    expect(composerBlocked).toBe(true);
+    fireEvent.click(screen.getByTestId("p8-send"));
+    expect(ackBlocked).toBe(true);
+  });
+
+  it("the ack stops claiming the model is landing once the download is blocked (§7)", () => {
+    renderP8({ initialStage: "dl", localModelBlocked: true });
+    fireEvent.click(screen.getByTestId("first-run-placeholder-send"));
+
+    const ack = screen.getByTestId("first-run-ack-placeholder");
+    expect(ack.textContent).toContain(FIRST_RUN_ACK_STALLED.title);
+    expect(ack.textContent).not.toContain(FIRST_RUN_ACK_TITLES.queued);
+  });
+
+  it("the stalled ack carries a note AND an action, so it is not a nicer-worded dead end (§7)", () => {
+    renderP8({ initialStage: "dl", localModelBlocked: true });
+    fireEvent.click(screen.getByTestId("first-run-placeholder-send"));
+
+    expect(screen.getByTestId("first-run-ack-note").textContent).toBe(
+      FIRST_RUN_ACK_STALLED.note,
+    );
+    const action = screen.getByTestId("first-run-ack-back");
+    expect(action.textContent).toBe(FIRST_RUN_ACK_STALLED.action);
+
+    // And the action really returns the user to the composer, where
+    // `useFirstRunLaunch.launch()` accepts a re-submit from `blocked`.
+    fireEvent.click(action);
+    expect(screen.getByTestId("first-run-composer-placeholder")).not.toBeNull();
+  });
+
+  it("a queued ack renders NO action — only the stalled state has one", () => {
+    renderP8({ initialStage: "dl" });
+    fireEvent.click(screen.getByTestId("first-run-placeholder-send"));
+    expect(screen.queryByTestId("first-run-ack-note")).toBeNull();
+    expect(screen.queryByTestId("first-run-ack-back")).toBeNull();
+  });
+
+  it("a stalled ack does NOT hand off, and resumes the handoff once the block clears (§7)", () => {
+    // Completing here would drop the user into the workspace on the strength
+    // of a run that never started — the same lie as the old queued title, told
+    // by the navigation instead of the copy.
+    const onComplete = vi.fn();
+    const { update } = renderP8({
+      initialStage: "dl",
+      localModelBlocked: true,
+      onComplete,
+    });
+    fireEvent.click(screen.getByTestId("first-run-placeholder-send"));
+    expect(screen.getByTestId("first-run-ack-placeholder")).not.toBeNull();
+    expect(onComplete).not.toHaveBeenCalled();
+
+    // The runtime came back and the pull resumed: the ack is a normal wait
+    // again and the held send proceeds with no further gesture.
+    update({ localModelBlocked: false });
+    expect(onComplete).toHaveBeenCalledTimes(1);
+  });
+
+  it("an unblocked queued send still reads as queued (§7 regression guard)", () => {
+    renderP8({ initialStage: "dl" });
+    fireEvent.click(screen.getByTestId("first-run-placeholder-send"));
+    expect(screen.getByTestId("first-run-ack-placeholder").textContent).toBe(
+      FIRST_RUN_ACK_TITLES.queued,
+    );
+  });
+
+  it("a connected BYOK engine still reads as starting even while a local block is set", async () => {
+    // The block describes the LOCAL download; a user who fell back to a key is
+    // ready and must not be told their model is held.
+    renderP8({ localModelBlocked: true });
+    fireEvent.click(screen.getByTestId("first-run-add-key"));
+    fireEvent.change(screen.getByTestId("first-run-key-input"), {
+      target: { value: "sk-ant-unit-test-placeholder-not-real" },
+    });
+    fireEvent.click(screen.getByTestId("first-run-key-connect"));
+    await waitFor(() =>
+      expect(
+        screen.getByTestId("first-run-composer-placeholder"),
+      ).not.toBeNull(),
+    );
+
+    fireEvent.click(screen.getByTestId("first-run-placeholder-send"));
+    expect(screen.getByTestId("first-run-ack-placeholder").textContent).toBe(
+      FIRST_RUN_ACK_TITLES.starting,
+    );
+  });
+
+  it("ack onBack returns the user to the composer so a stalled send can be re-tried (§7)", () => {
+    renderP8({
+      initialStage: "dl",
+      localModelBlocked: true,
+      renderComposer: (ctx) => (
+        <button type="button" data-testid="p8-send" onClick={ctx.onSent}>
+          send
+        </button>
+      ),
+      renderAcknowledgment: (ctx) => (
+        <button type="button" data-testid="p8-back" onClick={ctx.onBack}>
+          back
+        </button>
+      ),
+    });
+
+    fireEvent.click(screen.getByTestId("p8-send"));
+    expect(screen.getByTestId("p8-back")).not.toBeNull();
+    expect(screen.queryByTestId("p8-send")).toBeNull();
+
+    fireEvent.click(screen.getByTestId("p8-back"));
+    expect(screen.getByTestId("p8-send")).not.toBeNull();
+    expect(screen.queryByTestId("p8-back")).toBeNull();
   });
 });
