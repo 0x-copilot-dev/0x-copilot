@@ -7,13 +7,11 @@
  *
  * States (keys match the design harness surfaces/tools/anchors.json):
  *
- *   default → what the WEB host mounts for the Tools destination:
- *             apps/frontend/src/features/connectors/ConnectorsRoute.tsx:531-601
- *             = <ConnectorsPanel> in a 240px <aside> + <ConnectorsDestination>.
- *             (The desktop host mounts ConnectorsDestination ALONE — no aside,
- *             no ConnectModal — apps/desktop/renderer/destinationBinders.tsx:
- *             479-492. The web composition is rendered here because it is the
- *             superset; the desktop delta is reported, not faked.)
+ *   default → what BOTH hosts now mount for the Tools destination (PRD-11):
+ *             a single <ConnectorsDestination> row list — no 240px aside, no
+ *             filter tabs. apps/frontend/src/features/connectors/
+ *             ConnectorsRoute.tsx and apps/desktop/renderer/destinationBinders
+ *             .tsx both bind the same component + <ConnectModal>.
  *
  *   connect → the same page with <ConnectModal open> on its first phase
  *             ("catalog"), the live analog of the design's ConnectModal phase
@@ -54,8 +52,7 @@ import type {
 import {
   ConnectModal,
   ConnectorsDestination,
-  ConnectorsPanel,
-  type ConnectorsFilterCounts,
+  type ConnectorAccessPort,
 } from "@0x-copilot/chat-surface";
 
 const HERE = (p: string): string => fileURLToPath(new URL(p, import.meta.url));
@@ -177,17 +174,17 @@ const ITEMS: ToolsItems = {
   data: { connectors: CONNECTORS, available: CATALOG },
 };
 
-const COUNTS: ConnectorsFilterCounts = {
-  connected: CONNECTORS.length,
-  available: CATALOG.length,
-  custom: 0,
-};
-
 const noop = (): void => undefined;
 
+// A no-op access port so the segments render interactively (PRD-06 seam).
+const ACCESS_PORT: ConnectorAccessPort = {
+  setAccessMode: async () => CONNECTORS[0],
+};
+
 /**
- * The web route frame (ConnectorsRoute.tsx:531-583): a full-height flex
- * `<section>` with a 240px filter aside and a scrolling main column.
+ * The route frame (PRD-11): a single scrolling column mounting the row-list
+ * <ConnectorsDestination> — no 240px aside, no filter tabs. Both hosts mount
+ * exactly this.
  */
 function RouteFrame(): React.ReactElement {
   return (
@@ -200,40 +197,21 @@ function RouteFrame(): React.ReactElement {
         height: "100%",
         width: "100%",
         display: "flex",
-        gap: 0,
+        flexDirection: "column",
         boxSizing: "border-box",
       }}
     >
-      <aside
-        data-testid="connectors-route-panel"
-        style={{
-          flex: "0 0 240px",
-          borderRight: "1px solid var(--color-border)",
-          overflow: "auto",
-        }}
-      >
-        <ConnectorsPanel
-          filter="connected"
-          onFilterChange={noop}
-          counts={COUNTS}
-          onConnect={noop}
-          onOpenWebhooks={noop}
-        />
-      </aside>
       <div
         data-testid="connectors-route-main"
         style={{ flex: "1 1 auto", overflow: "auto" }}
       >
         <ConnectorsDestination
           items={ITEMS}
-          filter="connected"
-          onFilterChange={noop}
-          counts={COUNTS}
           onConnect={noop}
           onOpenConnector={noop}
-          onOpenCatalogEntry={noop}
+          onOpenWebhooks={noop}
           onReconnect={noop}
-          onSetAccessMode={noop}
+          accessPort={ACCESS_PORT}
           onOpenApprovalSettings={noop}
           onRetry={noop}
           now={NOW}

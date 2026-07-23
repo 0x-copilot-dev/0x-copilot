@@ -195,6 +195,34 @@ describe("<Row>", () => {
     expect(onActivate).toHaveBeenCalledTimes(1);
   });
 
+  // ── PRD-11 D1 — subFont + iconSize ───────────────────────────────────────
+  it("subFont='mono' puts the sub-line in the mono face (connectors keep .lrow__sub mono)", () => {
+    render(
+      <Row title="Safe{Wallet}" sub="3-of-5 multisig · Base" subFont="mono" />,
+    );
+    expect(screen.getByTestId("row-sub").style.fontFamily).toBe(
+      "var(--font-mono)",
+    );
+  });
+
+  it("subFont defaults to body (no mono family) — Activity/Chats behaviour", () => {
+    render(<Row title="T" sub="s" />);
+    expect(screen.getByTestId("row-sub").style.fontFamily).toBe("");
+  });
+
+  it("iconSize=30 sizes the tile slot at 30px (the .lrow__logo connector tile)", () => {
+    render(<Row title="T" icon={<Icon name="clock" />} iconSize={30} />);
+    const slot = screen.getByTestId("row-icon");
+    expect(getComputedStyle(slot).width).toBe("30px");
+    expect(getComputedStyle(slot).height).toBe("30px");
+  });
+
+  it("iconSize defaults to 28px (.lrow__ic)", () => {
+    render(<Row title="T" icon={<Icon name="clock" />} />);
+    const slot = screen.getByTestId("row-icon");
+    expect(getComputedStyle(slot).width).toBe("28px");
+  });
+
   // ── PRD-08 D9 — title weight + row padding ───────────────────────────────
   it("uses the medium (500) title weight and 11px/14px row padding (DoD 23)", () => {
     render(<Row title="T" />);

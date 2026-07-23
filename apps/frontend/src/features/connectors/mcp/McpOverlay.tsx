@@ -385,7 +385,7 @@ function CatalogCard({
         <AppIcon
           name={entry.slug}
           logoUrl={entry.logo_url ?? null}
-          size="lg"
+          size="tile"
           className="mcp-card__icon"
         />
         <div className="mcp-card__main">
@@ -676,7 +676,7 @@ function CustomUrlCard({
   return (
     <>
       <article className="mcp-card mcp-card--custom">
-        <AppIcon name="custom" size="lg" className="mcp-card__icon" />
+        <AppIcon name="custom" size="tile" className="mcp-card__icon" />
         <div className="mcp-card__main">
           <div className="mcp-card__title-row">
             <h4 className="mcp-card__title">Add custom URL</h4>

@@ -641,9 +641,8 @@ export {
   type ToolsSortSlug,
 } from "./destinations/tools";
 export {
-  ConnectorCard,
   ConnectorsDestination,
-  ConnectorsPanel,
+  useConnectFlow,
   RevealOnce,
   ConnectorDetailView,
   ScopeReviewTab,
@@ -657,11 +656,11 @@ export {
 } from "./destinations/connectors";
 export type {
   ConnectorsDestinationProps,
-  ConnectorsFilterCounts,
-  ConnectorsFilterSlug,
-  ConnectorCardProps,
   ConnectorAccessPort,
-  ConnectorsPanelProps,
+  ConnectFlow,
+  ConnectAuthorizeRequest,
+  CustomServerResult,
+  UseConnectFlowOptions,
   RevealOnceProps,
   ConnectorDetailViewProps,
   ConnectorDetailTabId,

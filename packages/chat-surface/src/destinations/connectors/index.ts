@@ -9,20 +9,20 @@ export type {
 export {
   ConnectorsDestination,
   TOOLS_SUBTITLE,
+  TOOLS_LEAD_COPY,
   TOOLS_POLICY_NOTE_COPY,
 } from "./ConnectorsDestination";
-export type {
-  ConnectorsDestinationProps,
-  ConnectorsFilterCounts,
-  ConnectorsFilterSlug,
-} from "./ConnectorsDestination";
-export { ConnectorCard } from "./ConnectorCard";
-export type { ConnectorCardProps } from "./ConnectorCard";
+export type { ConnectorsDestinationProps } from "./ConnectorsDestination";
 export { AccessModeSegment } from "./AccessModeSegment";
 export type { AccessModeSegmentProps } from "./AccessModeSegment";
 export type { ConnectorAccessPort } from "./ports/ConnectorAccessPort";
-export { ConnectorsPanel } from "./ConnectorsPanel";
-export type { ConnectorsPanelProps } from "./ConnectorsPanel";
+export { useConnectFlow } from "./useConnectFlow";
+export type {
+  ConnectFlow,
+  ConnectAuthorizeRequest,
+  CustomServerResult,
+  UseConnectFlowOptions,
+} from "./useConnectFlow";
 export { RevealOnce } from "./RevealOnce";
 export type { RevealOnceProps } from "./RevealOnce";
 

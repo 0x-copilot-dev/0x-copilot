@@ -1015,6 +1015,26 @@ textarea {
   font-size: var(--font-size-xs);
 }
 
+/* PRD-11 D3 — the design's `.lrow__logo` connector identity tile: a 30px
+ * (1.875rem × 16) squircle at --radius-md holding a 12px-ish glyph. Consumes
+ * existing tokens only (--radius-md :109, --font-size-xs :64); no new rung. */
+.ui-app-icon--tile {
+  height: 1.875rem;
+  width: 1.875rem;
+  border-radius: var(--radius-md);
+  font-size: var(--font-size-xs);
+}
+
+/* PRD-11 D3 — `tone="neutral"`: the design (`copilot.css:1613-1614`)
+ * !important-forces the tile to the neutral --panel3 / --tx2 rungs so the
+ * mock's inline brand colour never renders. This class does the same without
+ * !important: the call site drops its inline brand style, so this later
+ * single-class rule wins over `.ui-app-icon`'s --color-surface-muted base. */
+.ui-app-icon--neutral {
+  background: var(--color-surface-elevated);
+  color: var(--color-text-strong);
+}
+
 /* PR 8.0.1 — brand-aware variants override the fallback surface colour
  * via inline style; keep the shared shape rules here so a brand glyph
  * matches the letter-circle's footprint. */

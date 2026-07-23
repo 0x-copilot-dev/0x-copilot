@@ -72,6 +72,21 @@ export interface RowProps extends Omit<
    */
   readonly iconTone?: "default" | "success";
   /**
+   * Face of the sub-line (PRD-11 D1). Default `"body"` — Activity/Chats
+   * override the design's `.lrow__sub` to the body face. Connectors keep the
+   * design's mono `.lrow__sub` (copilot.css:1643-1648), so they pass `"mono"`.
+   * Encoded as a prop so the divergence lives in the primitive, not a Tools
+   * escape.
+   */
+  readonly subFont?: "body" | "mono";
+  /**
+   * Leading icon-tile edge (PRD-11 D1): `28` (`.lrow__ic`, default) or `30`
+   * (`.lrow__logo`, the connector identity tile). At `30` a same-sized
+   * `AppIcon size="tile"` covers the slot exactly, so the reserved slot
+   * background is never visible on a connector row.
+   */
+  readonly iconSize?: 28 | 30;
+  /**
    * When provided, the row is an activatable control (click + Enter/Space).
    * When omitted, the row is inert chrome.
    */
@@ -185,6 +200,8 @@ export function Row({
   trailing,
   overflow,
   iconTone = "default",
+  subFont = "body",
+  iconSize = 28,
   onActivate,
   ariaLabel,
   style,
@@ -232,6 +249,8 @@ export function Row({
         <span
           style={{
             ...iconSlotStyle,
+            width: iconSize,
+            height: iconSize,
             color:
               iconTone === "success"
                 ? "var(--color-success)"
@@ -258,7 +277,15 @@ export function Row({
           ) : null}
         </span>
         {sub !== undefined && sub !== null && sub !== "" ? (
-          <span style={subStyle} data-testid="row-sub">
+          <span
+            style={{
+              ...subStyle,
+              ...(subFont === "mono"
+                ? { fontFamily: "var(--font-mono)" }
+                : null),
+            }}
+            data-testid="row-sub"
+          >
             {sub}
           </span>
         ) : null}

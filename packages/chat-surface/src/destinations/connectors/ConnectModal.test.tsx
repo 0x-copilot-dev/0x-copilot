@@ -162,6 +162,35 @@ describe("<ConnectModal>", () => {
     expect(onClose).toHaveBeenCalled();
   });
 
+  // ── PRD-11 D7 — identity tiles + pinned custom row + trust-model copy ─────
+  describe("identity tiles + escape hatch", () => {
+    it("the header subtitle states the trust model, not a task", () => {
+      renderModal();
+      expect(
+        screen.getByText("the agent acts through your accounts"),
+      ).toBeInTheDocument();
+    });
+
+    it("each catalog row renders a real per-slug AppIcon tile (not a ◆ glyph)", () => {
+      renderModal();
+      const option = screen.getAllByTestId("connect-catalog-option")[0];
+      // AppIcon always emits the `.ui-app-icon` base class; the neutral tile
+      // chrome (`--tile`/`--neutral`) is added by design-system (verified
+      // package-locally — the consumer resolves the pre-merge copy here).
+      expect(option.querySelector(".ui-app-icon")).not.toBeNull();
+      expect(option.textContent).not.toContain("◆");
+    });
+
+    it("the escape hatch is the design's 'Custom MCP server' copy, not '◆'/'＋'", () => {
+      renderModal({ onAddCustomServer: vi.fn() });
+      const custom = screen.getByTestId("connect-catalog-custom");
+      expect(custom).toHaveTextContent("Custom MCP server");
+      expect(custom).toHaveTextContent(/paste a JSON config/i);
+      // Pinned, not dashed (PRD-11 D7).
+      expect(custom.style.position).toBe("sticky");
+    });
+  });
+
   describe("custom-server add", () => {
     it("hides the custom affordance unless onAddCustomServer is supplied", () => {
       renderModal();
