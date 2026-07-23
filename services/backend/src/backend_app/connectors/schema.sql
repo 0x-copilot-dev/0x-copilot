@@ -25,6 +25,11 @@ CREATE TABLE IF NOT EXISTS connectors (
         status IN ('connected', 'disconnected', 'error', 'expired')
     ),
     status_reason   TEXT,
+    -- Per-connector agent access mode (Tools destination 3-way segment).
+    -- See PRD-06 / migration 0046_connector_access_mode.sql. Defaults to
+    -- 'read' so a migrate never silently disables a working connector. Kept
+    -- on one line, byte-for-semantics identical to the 0046 migration.
+    access_mode TEXT NOT NULL DEFAULT 'read' CHECK (access_mode IN ('read', 'read_act', 'off')),
     owner_user_id   TEXT         NOT NULL,
     -- JSONB array of ConnectorScopeEntry. Provider-specific scope
     -- strings; description sourced from the catalog at backend bootstrap.
@@ -47,6 +52,12 @@ CREATE INDEX IF NOT EXISTS connectors_tenant_status_slug_idx
 -- "What does USER X own?" — owner-scoped writes path.
 CREATE INDEX IF NOT EXISTS connectors_tenant_owner_idx
     ON connectors (tenant_id, owner_user_id);
+
+-- Enforcement lookup: which of a tenant's connectors are still usable
+-- (access_mode <> 'off'). Partial so the common case isn't indexed twice.
+CREATE INDEX IF NOT EXISTS connectors_tenant_access_mode_idx
+    ON connectors (tenant_id, access_mode)
+    WHERE access_mode <> 'off';
 
 -- Available-catalog lookup (per slug, across tenants — admin marketplace
 -- queries; the dest endpoint scopes by tenant_id additionally).

@@ -127,13 +127,14 @@ export interface Connector {
   readonly status: ConnectorStatus;
   readonly status_reason?: string;
   /**
-   * Per-connector access mode (Tools destination 3-way segment). OPTIONAL
-   * and backward-compatible: the facade does not serve it until the
-   * access-mode PATCH lands (PRD §11), so older payloads omit it. When
-   * absent, consumers SHOULD default to least privilege (`off`) rather
-   * than assume a granted mode.
+   * Per-connector access mode (Tools destination 3-way segment). REQUIRED —
+   * the backend always emits it now that `PATCH /v1/connectors/{id}/access-mode`
+   * and the durable `connectors.access_mode` column exist (PRD-06). Consumers
+   * read it directly; there is no `?? "off"` fallback (that fallback existed
+   * only to paper over a field the server never sent, and was the direct cause
+   * of the "Off everywhere" symptom).
    */
-  readonly access_mode?: ConnectorAccessMode;
+  readonly access_mode: ConnectorAccessMode;
   readonly owner_user_id: UserId;
   /**
    * Scopes granted by the user, per the most recent OAuth round-trip.

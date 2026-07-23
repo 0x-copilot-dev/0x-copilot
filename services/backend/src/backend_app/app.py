@@ -154,6 +154,7 @@ from backend_app.routines import (
     register_routines_routes,
 )
 from backend_app.connectors import (
+    ConnectorAccessMode,
     ConnectorsService,
     ConnectorsStore,
     InMemoryConnectorsStore,
@@ -300,6 +301,7 @@ from backend_app.team import (
 )
 from backend_app.token_vault import TokenVault, TokenVaultFactory
 from backend_app.service import (
+    ConnectorAccessDenied,
     DeployAuditService,
     McpRegistryService,
     SkillRegistryService,
@@ -1344,6 +1346,12 @@ def create_app(
                 server_id=server_id,
                 request=payload,
             )
+        except ConnectorAccessDenied as exc:
+            # PRD-06 D3(c) — the access-mode gate denied this call. 403 with
+            # the stable reason code (``connector_access_off`` /
+            # ``connector_access_read_only``); the ai-backend surfaces it as a
+            # recoverable ``PERMISSION_DENIED`` tool failure, not a run kill.
+            raise HTTPException(status.HTTP_403_FORBIDDEN, exc.reason) from exc
         except ValueError as exc:
             detail = str(exc)
             status_code = (
@@ -1944,6 +1952,25 @@ def create_app(
     _AppServices.mcp(app).auth_completed_listener = lambda record: (
         _connector_write_through(app, record, action="connector.connected")
     )
+
+    # PRD-06 D3 — access-mode enforcement resolver. Joins each MCP server
+    # record to its denormalized connector row (natural key
+    # ``(org, owner, slug)`` via ``mcp_connector_slug``) and returns the
+    # durable access mode. Feeds BOTH the card-visibility gate (``off`` cards
+    # omitted from ``/internal/v1/mcp/cards``) and the authoritative
+    # ``proxy_internal_rpc`` gate. Returns ``None`` when no connector row joins
+    # the server so an unprojected server is never a false ``off``.
+    def _resolve_connector_access_mode(
+        record: McpServerRecord,
+    ) -> ConnectorAccessMode | None:
+        row = resolved_connectors_store.get_by_owner_and_slug(
+            tenant_id=record.org_id,
+            owner_user_id=record.user_id,
+            slug=mcp_connector_slug(record),
+        )
+        return row.access_mode if row is not None else None
+
+    _AppServices.mcp(app).connector_access_resolver = _resolve_connector_access_mode
 
     # Phase 11 P11-A3 — Connectors destination webhook manager.
     # Webhooks are tenant-admin OR routine-owner per connectors-prd

@@ -24,6 +24,11 @@ from agent_runtime.api.notifications import (
     LoggingNotificationDispatcher,
     NotificationDispatcher,
 )
+from agent_runtime.api.connector_access_modes_resolver import (
+    ConnectorAccessModesResolver,
+    ConnectorAccessModesResolverFactory,
+    NullConnectorAccessModesResolver,
+)
 from agent_runtime.api.run_coordinator import RunCoordinator
 from agent_runtime.api.suggestible_connectors_resolver import (
     NullSuggestibleConnectorsResolver,
@@ -357,6 +362,15 @@ class RuntimeApiAppFactory:
                 if suggestible_connectors_resolver is not None
                 else SuggestibleConnectorsResolverFactory.default()
             )
+            # PRD-06 D3b — per-connector access-mode snapshot resolver. Wired
+            # to the HTTP impl when the trusted backend lane is configured;
+            # Null otherwise (an empty snapshot leaves the authoritative
+            # backend gate as the sole enforcer, which is safe).
+            from agent_runtime.capabilities.http_pool import BackendHttpPool as _Pool
+
+            _connector_access_modes_resolver: ConnectorAccessModesResolver = (
+                ConnectorAccessModesResolverFactory.default(http_client=_Pool.get())
+            )
             # Wire the HTTP user-policies resolver when the trusted backend
             # lane is configured (BACKEND_BASE_URL + ENTERPRISE_SERVICE_TOKEN)
             # so run-create sees policy snapshots — including BYOK provider
@@ -386,6 +400,7 @@ class RuntimeApiAppFactory:
             _suggestible_connectors_resolver = (
                 suggestible_connectors_resolver or NullSuggestibleConnectorsResolver()
             )
+            _connector_access_modes_resolver = NullConnectorAccessModesResolver()
             app.state.runtime_ports = _ports
             _on_event_appended = on_event_appended
 
@@ -423,6 +438,7 @@ class RuntimeApiAppFactory:
             model_resolver=_model_resolver,
             user_policies_resolver=_user_policies_resolver,
             suggestible_connectors_resolver=_suggestible_connectors_resolver,
+            connector_access_modes_resolver=_connector_access_modes_resolver,
         )
         _approval = ApprovalCoordinator(
             persistence=_ports.persistence,

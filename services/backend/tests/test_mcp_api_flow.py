@@ -254,6 +254,15 @@ def test_internal_mcp_rpc_proxies_tools_call(monkeypatch) -> None:
         params={"state": state, "code": "oauth_code"},
     )
 
+    # PRD-06 D3(c): a ``tools/call`` is gated under the connector's default
+    # ``read`` mode (a non-read-only tool would be denied). This test covers
+    # the proxy PLUMBING, not the gate, so flip the auto-created connector row
+    # to ``read_act`` — which allows the call and skips the classification
+    # round-trip, keeping ``captured`` to the single tools/call payload.
+    _conn_store = app.state.connectors_store
+    _row = next(iter(_conn_store.connectors.values()))
+    _conn_store.update_connector(_row.model_copy(update={"access_mode": "read_act"}))
+
     proxied = client.post(
         f"/internal/v1/mcp/servers/{server_id}/rpc",
         json={

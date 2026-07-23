@@ -61,6 +61,7 @@ from backend_app.contracts import (
     Validators,
     _Fields,
 )
+from backend_app.connectors.store import ConnectorAccessMode
 from backend_app.mcp_catalog import DEFAULT_CATALOG, CatalogEntry, catalog_by_slug
 from backend_app.mcp_oauth import RemoteMcpOAuthClient
 from backend_app.prompts.preloaded_skills import PRELOADED_SKILL_MARKDOWNS
@@ -206,6 +207,36 @@ class HttpOAuthTokenExchanger(RemoteMcpOAuthClient):
         )
 
 
+# Resolver port: given a registered MCP server record, return the joined
+# connector row's durable access mode, or ``None`` when no connector row
+# joins the server (an unprojected server is not a user-set ``off`` — the
+# gate must SKIP, not deny). Wired at app composition to the connectors
+# store's ``get_by_owner_and_slug`` (see ``app.py``); ``None`` (default)
+# leaves every server ungated, which is the correct behaviour for the
+# tests/dev wiring that has no connectors store.
+ConnectorAccessResolver = Callable[[McpServerRecord], ConnectorAccessMode | None]
+
+
+class ConnectorAccessDenied(Exception):
+    """Raised by the ``proxy_internal_rpc`` access-mode gate (PRD-06 D3c).
+
+    ``reason`` is the stable wire code the route layer maps to a ``403``:
+
+    * ``connector_access_off``       — the connector is ``off``; no reads, no
+      acts. Raised BEFORE the vault token is decrypted.
+    * ``connector_access_read_only`` — the connector is ``read`` and the
+      target tool is not read-only (its ``annotations.readOnlyHint`` is
+      absent or false — fail-closed).
+    """
+
+    OFF = "connector_access_off"
+    READ_ONLY = "connector_access_read_only"
+
+    def __init__(self, reason: str) -> None:
+        super().__init__(reason)
+        self.reason = reason
+
+
 class McpRegistryService:
     """Owns MCP registration, auth state, and backend-only credentials."""
 
@@ -232,6 +263,12 @@ class McpRegistryService:
         # log-and-continue: implementations MUST NOT raise (the MCP row
         # + token already committed; see ``app.py`` for the rationale).
         self.auth_completed_listener: Callable[[McpServerRecord], None] | None = None
+        # PRD-06 D3 — resolves the joined connector row's durable access mode
+        # for card visibility (b) and the ``proxy_internal_rpc`` gate (c).
+        # Wired at composition (``app.py``) to the connectors store; ``None``
+        # leaves every server ungated (the correct default when no connectors
+        # store is present, e.g. isolated MCP-registry tests).
+        self.connector_access_resolver: ConnectorAccessResolver | None = None
 
     def create_server(self, request: CreateMcpServerRequest) -> McpServerResponse:
         display_name = request.display_name or self._display_name_from_url(request.url)
@@ -597,6 +634,14 @@ class McpRegistryService:
         for record in self.store.list_servers(org_id=org_id, user_id=user_id):
             if not record.enabled:
                 continue
+            # PRD-06 D3(a) — visibility gate. An ``off`` connector is never
+            # offered to the model: the card is omitted, so there is no tool
+            # to deny. When no connector row joins the server the resolver
+            # returns ``None`` and the card is shown with the default ``read``
+            # mode (an unprojected server is not a user-set ``off``).
+            access_mode = self._resolve_access_mode(record)
+            if access_mode == ConnectorAccessMode.OFF:
+                continue
             auth_state = self._effective_auth_state(record)
             cards.append(
                 InternalMcpServerCard(
@@ -613,9 +658,29 @@ class McpRegistryService:
                     required_scopes=record.required_scopes,
                     health=record.health,
                     enabled=record.enabled,
+                    access_mode=(access_mode or ConnectorAccessMode.READ).value,
                 )
             )
         return InternalMcpServerListResponse(servers=tuple(cards))
+
+    def _resolve_access_mode(
+        self, record: McpServerRecord
+    ) -> ConnectorAccessMode | None:
+        """Resolve the joined connector row's access mode, or ``None``.
+
+        ``None`` means no connector row joins this MCP server (the gate
+        SKIPS — an unprojected server is not a user-set ``off``). A resolver
+        exception is swallowed to ``None`` so a connectors-store hiccup can
+        never harden into a false ``off`` that blocks all traffic; the
+        authoritative deny path is the explicit ``off`` value.
+        """
+
+        if self.connector_access_resolver is None:
+            return None
+        try:
+            return self.connector_access_resolver(record)
+        except Exception:  # pragma: no cover - defensive; never fail closed here
+            return None
 
     def create_internal_client_session(
         self,
@@ -648,10 +713,74 @@ class McpRegistryService:
         record = self._require_server_for_user(
             org_id=org_id, user_id=user_id, server_id=server_id
         )
+        # PRD-06 D3(c) — the real permission boundary, on the authoritative
+        # side of the trust line. Resolve BEFORE ``_require_valid_token`` so an
+        # ``off`` connector never even decrypts a vault token.
+        access_mode = self._resolve_access_mode(record)
+        method = request.payload.get("method")
+        if access_mode == ConnectorAccessMode.OFF:
+            raise ConnectorAccessDenied(ConnectorAccessDenied.OFF)
         token = self._require_valid_token(record)
         access_token = self.token_vault.decrypt(token.encrypted_access_token)
+        # ``read`` gates side-effecting calls: a ``tools/call`` on a tool that
+        # is not read-only is denied. ``tools/list`` (and every other method)
+        # is always allowed under ``read``; ``read_act`` and the unjoined
+        # (``None``) case allow everything.
+        if access_mode == ConnectorAccessMode.READ and method == "tools/call":
+            tool_name = self._rpc_tool_name(request.payload)
+            if not self._tool_is_read_only(record, access_token, tool_name):
+                raise ConnectorAccessDenied(ConnectorAccessDenied.READ_ONLY)
         payload = self._post_remote_mcp_rpc(record.url, request.payload, access_token)
         return InternalMcpRpcResponse(payload=payload)
+
+    @staticmethod
+    def _rpc_tool_name(payload: dict[str, object]) -> str | None:
+        """Extract the target tool name from a ``tools/call`` JSON-RPC payload."""
+
+        params = payload.get("params")
+        if isinstance(params, dict):
+            name = params.get("name")
+            if isinstance(name, str):
+                return name
+        return None
+
+    def _tool_is_read_only(
+        self,
+        record: McpServerRecord,
+        access_token: str,
+        tool_name: str | None,
+    ) -> bool:
+        """Whether ``tool_name`` advertises ``annotations.readOnlyHint: true``.
+
+        The backend does not persist tool annotations, so it asks the server
+        for its advertised tool list (``tools/list``) and inspects the target
+        tool. FAIL-CLOSED: an unknown tool, an absent ``annotations`` block,
+        or a missing/false ``readOnlyHint`` all classify as "not read-only"
+        (⇒ denied under ``read``). A server that publishes no annotations is
+        therefore list-only in ``read`` and fully usable in ``read_act``.
+        """
+
+        if tool_name is None:
+            return False
+        list_payload: dict[str, object] = {
+            "jsonrpc": "2.0",
+            "id": "access-mode-classify",
+            "method": "tools/list",
+            "params": {},
+        }
+        listing = self._post_remote_mcp_rpc(record.url, list_payload, access_token)
+        result = listing.get("result") if isinstance(listing, dict) else None
+        tools = result.get("tools") if isinstance(result, dict) else None
+        if not isinstance(tools, list):
+            return False
+        for tool in tools:
+            if not isinstance(tool, dict) or tool.get("name") != tool_name:
+                continue
+            annotations = tool.get("annotations")
+            if not isinstance(annotations, dict):
+                return False
+            return annotations.get("readOnlyHint") is True
+        return False
 
     def upsert_token_for_test(
         self,

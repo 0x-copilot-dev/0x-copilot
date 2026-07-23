@@ -41,7 +41,11 @@ from backend_app.connectors.service import (
     ConnectorNotFound,
     ConnectorsService,
 )
-from backend_app.connectors.store import ConnectorRecord, ConnectorScopeEntry
+from backend_app.connectors.store import (
+    ConnectorAccessMode,
+    ConnectorRecord,
+    ConnectorScopeEntry,
+)
 from backend_app.identity.rbac import RequireScopes
 
 
@@ -69,6 +73,10 @@ class ConnectorResponseModel(BaseModel):
     description: str
     status: str
     status_reason: str | None = None
+    # Per-connector agent access mode (Tools destination 3-way segment).
+    # Always emitted now that the access-mode PATCH exists (PRD-06 D2); the
+    # api-types ``Connector.access_mode`` mirror is correspondingly required.
+    access_mode: ConnectorAccessMode
     owner_user_id: str
     scopes: list[ConnectorScopeEntryModel]
     last_sync_at: str | None = None
@@ -147,6 +155,32 @@ class PatchScopesResponseModel(BaseModel):
     model_config = ConfigDict(extra="forbid")
     reauth_url: str
     state: str
+
+
+class SetAccessModeRequestModel(BaseModel):
+    """``PATCH /v1/connectors/{id}/access-mode`` body.
+
+    ``access_mode`` is carried as a plain string and validated against the
+    ``ConnectorAccessMode`` union *in the route* so a value outside the union
+    is a deterministic ``400 invalid_request`` (PRD-06 DoD 2) rather than
+    FastAPI's default ``422`` body-validation shape. Mirrors
+    ``SetConnectorAccessModeRequest`` in
+    ``packages/api-types/src/connectors.ts``.
+    """
+
+    model_config = ConfigDict(extra="forbid")
+    access_mode: str
+
+
+class SetAccessModeResponseModel(BaseModel):
+    """``200 OK`` — the reconciled connector row with its new ``access_mode``.
+
+    ``200`` (not the scopes route's ``202``): an access-mode change is
+    complete when the row is written; it never triggers a re-OAuth round-trip.
+    """
+
+    model_config = ConfigDict(extra="forbid")
+    connector: ConnectorResponseModel
 
 
 class RefreshConnectorResponseModel(BaseModel):
@@ -459,6 +493,52 @@ def register_connector_routes(app: FastAPI, *, service: ConnectorsService) -> No
             reauth_url=result["authorization_url"], state=result["state"]
         )
 
+    @app.patch(
+        "/v1/connectors/{connector_id}/access-mode",
+        response_model=SetAccessModeResponseModel,
+        dependencies=[Depends(RequireScopes(RUNTIME_USE))],
+    )
+    def set_access_mode(
+        request: Request,
+        connector_id: str,
+        payload: SetAccessModeRequestModel,
+        org_id: str = Query(..., min_length=1),
+        user_id: str = Query(..., min_length=1),
+    ) -> SetAccessModeResponseModel:
+        """Set the per-connector agent access mode (PRD-06 D2).
+
+        200 (not 202) — the change is durable the moment the row is written;
+        no re-OAuth round-trip is involved. Authorization is the connectors
+        write boundary: owner-or-admin only, 404 (not 403) for a cross-tenant
+        id so existence never leaks. Idempotent — a set-to-current-value
+        returns the unchanged row and writes zero audit rows.
+        """
+
+        identity = BackendServiceAuthenticator.scoped_identity(
+            request, org_id=org_id, user_id=user_id
+        )
+        try:
+            mode = ConnectorAccessMode(payload.access_mode)
+        except ValueError as exc:
+            raise HTTPException(status.HTTP_400_BAD_REQUEST, "invalid_request") from exc
+        try:
+            record = service.set_access_mode(
+                tenant_id=identity.org_id,
+                caller_user_id=identity.user_id,
+                caller_roles=identity.roles,
+                connector_id=connector_id,
+                access_mode=mode,
+            )
+        except ConnectorNotFound as exc:
+            raise HTTPException(
+                status.HTTP_404_NOT_FOUND, "connector_not_found"
+            ) from exc
+        except ConnectorForbidden as exc:
+            raise HTTPException(
+                status.HTTP_403_FORBIDDEN, "owner_or_admin_only"
+            ) from exc
+        return SetAccessModeResponseModel(connector=_to_wire(record))
+
     @app.get(
         "/v1/connectors/{connector_id}/audit",
         response_model=ConnectorAuditResponseModel,
@@ -529,6 +609,7 @@ def _to_wire(record: ConnectorRecord) -> ConnectorResponseModel:
         description=record.description,
         status=record.status,
         status_reason=record.status_reason,
+        access_mode=record.access_mode,
         owner_user_id=record.owner_user_id,
         scopes=[
             ConnectorScopeEntryModel(
@@ -581,6 +662,8 @@ __all__ = [
     "PatchScopesRequestModel",
     "PatchScopesResponseModel",
     "RefreshConnectorResponseModel",
+    "SetAccessModeRequestModel",
+    "SetAccessModeResponseModel",
     "StartOAuthResponseModel",
     "register_connector_routes",
 ]

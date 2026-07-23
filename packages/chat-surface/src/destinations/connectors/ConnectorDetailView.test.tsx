@@ -43,6 +43,7 @@ function makeConnector(): Connector {
     description: "Read Gmail threads and labels.",
     status: "connected",
     owner_user_id: "user_1" as UserId,
+    access_mode: "read_act",
     scopes: [
       { scope: "gmail.readonly", granted: true, description: "Read mail" },
       { scope: "gmail.modify", granted: false, description: "Modify mail" },

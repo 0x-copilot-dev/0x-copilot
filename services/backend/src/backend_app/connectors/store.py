@@ -35,6 +35,7 @@ from collections.abc import Iterable
 from contextlib import contextmanager
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
+from enum import StrEnum
 from typing import Any, Iterator, Protocol
 from uuid import uuid4
 
@@ -66,6 +67,29 @@ def _audit_id() -> str:
 # ---------------------------------------------------------------------------
 # Records
 # ---------------------------------------------------------------------------
+
+
+class ConnectorAccessMode(StrEnum):
+    """Per-connector agent access mode (Tools destination 3-way segment).
+
+    Single enumeration shared by the ``connectors.access_mode`` CHECK
+    constraint (``0046_connector_access_mode.sql`` / ``schema.sql``) and this
+    Pydantic model, so the DB constraint and the record type can never drift.
+    Byte-identical to ``ConnectorAccessMode`` in
+    ``packages/api-types/src/connectors.ts``.
+
+    * ``read``     — the agent may READ from the connector (least privilege
+                     that still lets it see data).
+    * ``read_act`` — the agent may read AND ACT through the connector
+                     (write / side-effecting calls, still subject to the
+                     global approval policy in Settings -> Model & behavior).
+    * ``off``      — the connector is disabled for the agent; no reads, no
+                     acts. Enforced at the ``proxy_internal_rpc`` chokepoint.
+    """
+
+    READ = "read"
+    READ_ACT = "read_act"
+    OFF = "off"
 
 
 class ConnectorScopeEntry(BaseModel):
@@ -103,6 +127,12 @@ class ConnectorRecord(BaseModel):
     description: str = ""
     status: str = "connected"
     status_reason: str | None = None
+    # Per-connector agent access mode. Defaults to ``read`` on first insert
+    # (D1: existing rows were installed under a fully-usable regime — ``off``
+    # would silently break every deployed workspace, ``read_act`` would grant
+    # more than the user ever saw). Preserved verbatim across MCP
+    # re-registration (see ``upsert_from_mcp_registration``).
+    access_mode: ConnectorAccessMode = ConnectorAccessMode.READ
     owner_user_id: str
     scopes: list[ConnectorScopeEntry] = Field(default_factory=list)
     last_sync_at: datetime | None = None
@@ -610,11 +640,11 @@ class PostgresConnectorsStore:
                 """
                 INSERT INTO connectors (
                     id, tenant_id, slug, display_name, description,
-                    status, status_reason, owner_user_id, scopes,
+                    status, status_reason, access_mode, owner_user_id, scopes,
                     last_sync_at, last_error_at, created_at, updated_at,
                     vault_ref
                 ) VALUES (
-                    %s,%s,%s,%s,%s,%s,%s,%s,%s::jsonb,%s,%s,%s,%s,%s
+                    %s,%s,%s,%s,%s,%s,%s,%s,%s,%s::jsonb,%s,%s,%s,%s,%s
                 )
                 """,
                 (
@@ -625,6 +655,7 @@ class PostgresConnectorsStore:
                     record.description,
                     record.status,
                     record.status_reason,
+                    record.access_mode.value,
                     record.owner_user_id,
                     _jsonb([s.model_dump() for s in record.scopes]),
                     record.last_sync_at,
@@ -642,7 +673,8 @@ class PostgresConnectorsStore:
                 """
                 UPDATE connectors SET
                     slug = %s, display_name = %s, description = %s,
-                    status = %s, status_reason = %s, owner_user_id = %s,
+                    status = %s, status_reason = %s, access_mode = %s,
+                    owner_user_id = %s,
                     scopes = %s::jsonb, last_sync_at = %s,
                     last_error_at = %s, updated_at = %s, vault_ref = %s
                 WHERE tenant_id = %s AND id = %s
@@ -653,6 +685,7 @@ class PostgresConnectorsStore:
                     record.description,
                     record.status,
                     record.status_reason,
+                    record.access_mode.value,
                     record.owner_user_id,
                     _jsonb([s.model_dump() for s in record.scopes]),
                     record.last_sync_at,
@@ -920,6 +953,7 @@ def iter_audit_rows(
 
 
 __all__ = [
+    "ConnectorAccessMode",
     "ConnectorAuditRecord",
     "ConnectorRecord",
     "ConnectorScopeEntry",

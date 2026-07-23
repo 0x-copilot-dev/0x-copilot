@@ -86,6 +86,7 @@ function connector(overrides: Partial<Connector> = {}): Connector {
     description: "Email",
     status: "connected",
     owner_user_id: "user_test" as UserId,
+    access_mode: "read_act",
     scopes: [],
     last_sync_at: null,
     created_at: "2026-05-01T00:00:00Z",

@@ -20,7 +20,11 @@ from pydantic import (
 )
 
 from agent_runtime.capabilities.tools.cards import ToolDisplayTemplate
-from agent_runtime.execution.contracts import AgentRuntimeContext, RuntimeContract
+from agent_runtime.execution.contracts import (
+    AgentRuntimeContext,
+    ConnectorAccessMode,
+    RuntimeContract,
+)
 from agent_runtime.capabilities.mcp.constants import (
     Keys,
     Limits,
@@ -136,6 +140,11 @@ class McpServerCard(RuntimeContract):
     allowed_org_ids: frozenset[str] = Field(default_factory=frozenset)
     allowed_user_ids: frozenset[str] = Field(default_factory=frozenset)
     display: ToolDisplayTemplate | None = None
+    # PRD-06 D3b — the joined connector row's durable access mode, stamped by
+    # the backend's ``list_internal_cards``. ``off`` cards are omitted upstream,
+    # so this is ``read`` / ``read_act`` in practice; the default keeps
+    # deployment-level cards (no connector row) valid.
+    access_mode: ConnectorAccessMode = ConnectorAccessMode.READ
 
     @field_validator(Keys.Field.NAME)
     @classmethod
@@ -354,6 +363,11 @@ class McpToolDescriptor(RuntimeContract):
     output_shape: JsonSchema
     risk_level: McpRiskLevel = McpRiskLevel.LOW
     display: ToolDisplayTemplate | None = None
+    # PRD-06 D3c — MCP ``annotations.readOnlyHint`` parsed at descriptor build.
+    # ``True`` = the tool advertises itself as non-side-effecting; ``None`` =
+    # the server published no ``annotations`` block (fail-closed: treated as
+    # acting under ``read`` mode). ``False`` = explicitly side-effecting.
+    read_only: bool | None = None
 
     @field_validator(Keys.Field.NAME)
     @classmethod

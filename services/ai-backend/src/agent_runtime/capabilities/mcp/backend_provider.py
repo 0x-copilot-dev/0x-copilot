@@ -367,6 +367,13 @@ class BackendMcpClient:
         # display templates for ``call_mcp_tool`` dispatcher events. ``register``
         # is a no-op when no registry is bound (replay / eval / tests).
         McpDisplayRegistryContext.register(name, display)
+        # PRD-06 D3c — parse the MCP tool ``annotations.readOnlyHint``. Absent
+        # ``annotations`` ⇒ ``None`` (fail-closed: treated as acting under
+        # ``read`` mode); present ⇒ the boolean hint.
+        annotations = tool.get("annotations")
+        read_only: bool | None = None
+        if isinstance(annotations, dict) and "readOnlyHint" in annotations:
+            read_only = bool(annotations["readOnlyHint"])
         return McpToolDescriptor(
             name=name,
             description=self._optional_string(tool.get("description"))
@@ -375,6 +382,7 @@ class BackendMcpClient:
             output_shape=output_shape,
             risk_level=McpRiskLevel.MEDIUM,
             display=display,
+            read_only=read_only,
         )
 
     def _resource_descriptor(self, resource: dict[str, Any]) -> McpResourceDescriptor:
