@@ -23,6 +23,13 @@ from agent_runtime.pricing import ModelPricingCatalog
 from agent_runtime.settings import RuntimeSettings
 from agent_runtime.surfaces_v2.content import SurfaceContentProjection
 from agent_runtime.surfaces_v2.projection import SurfaceStoreProjection
+from agent_runtime.surfaces_v2.receipt import ReceiptFold
+from agent_runtime.surfaces_v2.receipt_export import (
+    ReceiptExportBuilder,
+    ReceiptExportBundle,
+    ReceiptExportUnavailable,
+)
+from copilot_audit_chain import AuditChainSigner
 from runtime_api.http.errors import RuntimeApiError
 from runtime_api.schemas import (
     ActiveRunCountResponse,
@@ -699,6 +706,54 @@ class ConversationQueryService:
             run_id=state.run_id,
             surfaces=surfaces,
             latest_sequence_no=state.latest_sequence_no,
+        )
+
+    async def export_run_receipt(
+        self,
+        *,
+        org_id: str,
+        user_id: str,
+        run_id: str,
+    ) -> ReceiptExportBundle:
+        """Build the tamper-evident receipt export for a terminal run (PRD-E3 D2).
+
+        Re-folds the run's ledger into E1's :class:`RunReceipt` (never a stored
+        blob — the "no hand-assembled state" invariant) and HMAC-chains it into a
+        :class:`ReceiptExportBundle`. Scope check mirrors :meth:`replay_events`
+        (404 on wrong-tenant or unknown run). A run **not in a terminal status**
+        409s: E1 emits ``receipt.emitted`` on every terminal path, so a terminal
+        run always has a foldable receipt while a running/queued one does not.
+
+        Signing material comes from ``AuditChainSigner.from_env`` — the same call
+        the three runtime adapters make. When the environment is ``production``
+        and ``AUDIT_HMAC_KEY`` is unset it raises; that is caught and re-raised as
+        :class:`ReceiptExportUnavailable` (safe message, no key/env detail), which
+        the route maps to HTTP 503. The dev sentinel works out of the box.
+        """
+
+        run = await self._run_for_scope(org_id=org_id, user_id=user_id, run_id=run_id)
+        if run.status not in self.TERMINAL_RUN_STATUSES:
+            raise RuntimeApiError(
+                RuntimeErrorCode.VALIDATION_ERROR,
+                Messages.Error.RECEIPT_RUN_NOT_TERMINAL,
+                http_status=status.HTTP_409_CONFLICT,
+                retryable=False,
+            )
+        events = await self._event_store.list_events_after(
+            org_id=org_id,
+            run_id=run_id,
+            after_sequence=0,
+        )
+        receipt = ReceiptFold.fold(run_id=run_id, events=events)
+        try:
+            signer = AuditChainSigner.from_env(
+                environment_env_var=Values.RUNTIME_ENVIRONMENT_ENV_VAR
+            )
+        except RuntimeError as exc:
+            # Never leak AUDIT_HMAC_KEY state / paths — a safe domain error only.
+            raise ReceiptExportUnavailable() from exc
+        return ReceiptExportBuilder(signer=signer).build(
+            run_id=run_id, events=events, receipt=receipt
         )
 
     # ------------------------------------------------------------------
