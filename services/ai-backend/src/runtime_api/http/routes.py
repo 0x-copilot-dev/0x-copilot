@@ -42,6 +42,7 @@ from runtime_api.schemas import (
     CreateRunResponse,
     HistoryDeletionResponse,
     MessageListResponse,
+    RunHistoryResponse,
     RunListResponse,
     ModelCatalogResponse,
     RuntimeRequestContext,
@@ -187,6 +188,33 @@ class RuntimeApiRoutes:
             user_id=user_id,
             conversation_id=conversation_id,
             limit=limit,
+        )
+
+    @classmethod
+    async def list_run_history(
+        cls,
+        request: Request,
+        org_id: str | None = Query(None, min_length=1),
+        user_id: str | None = Query(None, min_length=1),
+        # No upper bound at the route: the service is the single clamp authority
+        # (min(limit, MAX_MESSAGE_LIMIT=200)). An over-cap ``limit`` is CLAMPED,
+        # not rejected — see PRD-05 DoD 8 (deviation from the contract's route-level
+        # ``le=200``, which would 422 instead of clamp).
+        limit: int = Query(50, ge=1),
+        cursor: str | None = Query(None),
+    ) -> RunHistoryResponse:
+        """Return the caller's org-scoped run history, newest-first, paginated (PRD-05).
+
+        Backs Activity's finished-run feed. ``cursor`` is an opaque token from a
+        prior response's ``next_cursor`` that pages backwards to strictly-older
+        runs; a malformed value degrades to the newest window rather than 4xx.
+        """
+        org_id, user_id = cls.scoped_identity(request, org_id=org_id, user_id=user_id)
+        return await cls.cqs(request).list_run_history(
+            org_id=org_id,
+            user_id=user_id,
+            limit=limit,
+            cursor=cursor,
         )
 
     @classmethod
@@ -636,6 +664,18 @@ class RuntimeApiRouter:
             methods=["POST"],
             response_model=CreateRunResponse,
             name=Keys.RouteName.CREATE_RUN,
+        )
+        # PRD-05 — the collection GET on ``/runs``. MUST be registered BEFORE
+        # ``/runs/{run_id}`` below: FastAPI matches in registration order and
+        # ``run_id`` is an unconstrained ``str``, so an append would let the
+        # detail route shadow this literal and turn it into a 404. (PRD-12's
+        # ``/runs/active_count`` inserts under the same rule.)
+        router.add_api_route(
+            "/runs",
+            RuntimeApiRoutes.list_run_history,
+            methods=["GET"],
+            response_model=RunHistoryResponse,
+            name=Keys.RouteName.LIST_RUN_HISTORY,
         )
         router.add_api_route(
             "/runs/{run_id}",

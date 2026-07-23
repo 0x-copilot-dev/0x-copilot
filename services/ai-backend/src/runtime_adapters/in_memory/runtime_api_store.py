@@ -69,6 +69,7 @@ from runtime_api.schemas import (
     RuntimeEventEnvelope,
     RuntimeEventPresentationProjector,
     RuntimeRunCommand,
+    RunHistoryEntry,
     RunRecord,
     WorkspaceDefaultsRecord,
 )
@@ -549,6 +550,52 @@ class InMemoryRuntimeApiStore:
         ]
         candidates.sort(key=lambda run: run.created_at, reverse=True)
         return tuple(candidates[: max(0, limit)])
+
+    async def list_runs_for_org(
+        self,
+        *,
+        org_id: str,
+        user_id: str,
+        limit: int,
+        before_created_at: datetime | None = None,
+        before_run_id: str | None = None,
+    ) -> tuple[RunHistoryEntry, ...]:
+        """Return the caller's runs newest-first across conversations (PRD-05).
+
+        Scans ``self.runs`` filtered on ``(org_id, user_id)``, joins
+        ``self.conversations`` for the title, excludes runs whose conversation
+        is soft-deleted or absent, orders by ``(created_at, run_id)`` DESC,
+        applies the keyset, and slices ``limit``.
+        """
+
+        entries: list[RunHistoryEntry] = []
+        for run in self.runs.values():
+            if run.org_id != org_id or run.user_id != user_id:
+                continue
+            conversation = self.conversations.get(run.conversation_id)
+            # A run without a live, non-deleted conversation is hidden — the
+            # deleted-conversation predicate is load-bearing (soft-delete /
+            # delete-my-history), not defensive.
+            if conversation is None or conversation.deleted_at is not None:
+                continue
+            entries.append(
+                RunHistoryEntry(
+                    run_id=run.run_id,
+                    conversation_id=run.conversation_id,
+                    conversation_title=conversation.title,
+                    status=run.status,
+                    model_name=run.model_name,
+                    created_at=run.created_at,
+                    started_at=run.started_at,
+                    completed_at=run.completed_at,
+                    cancelled_at=run.cancelled_at,
+                )
+            )
+        entries.sort(key=lambda e: (e.created_at, e.run_id), reverse=True)
+        if before_created_at is not None and before_run_id is not None:
+            keyset = (before_created_at, before_run_id)
+            entries = [e for e in entries if (e.created_at, e.run_id) < keyset]
+        return tuple(entries[: max(0, limit)])
 
     async def create_run_with_user_message(
         self,
@@ -1260,6 +1307,12 @@ class InMemoryRuntimeApiStore:
                 update={
                     "status": ConversationStatus.ARCHIVED,
                     "archived_at": now,
+                    # PRD-05 — stamp ``deleted_at`` too so the run-history feed
+                    # (``list_runs_for_org``, which filters on the joined
+                    # conversation's ``deleted_at``) is actually cleared, and the
+                    # C8 tombstone sweeper can reap the rows. COALESCE-style: keep
+                    # an earlier deletion instant if one already exists.
+                    "deleted_at": conversation.deleted_at or now,
                     "updated_at": now,
                 }
             )

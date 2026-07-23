@@ -227,6 +227,26 @@ export const AGENT_RUN_STATUSES = [
   "timed_out",
 ] as const satisfies readonly AgentRunStatus[];
 
+/**
+ * The only statuses `Conversation.latest_run_status` can carry. The field is
+ * projected from `get_active_run_for_conversation`, which filters to
+ * non-terminal runs in all three store adapters (postgres / file / in_memory)
+ * — a terminal value like `"completed"` there is a fiction no adapter can emit.
+ * Finished runs come from `GET /v1/agent/runs` instead (`RunHistoryEntry.status`,
+ * which keeps the full {@link AgentRunStatus} union).
+ *
+ * Kept as an `as const` tuple so it is runtime-enumerable (tests) with a single
+ * declaration site. Narrowing `latest_run_status` to this subset makes the old
+ * false-contract fixture (`latest_run_status: "completed"`) fail to compile.
+ */
+export const ACTIVE_AGENT_RUN_STATUSES = [
+  "queued",
+  "running",
+  "waiting_for_approval",
+  "cancelling",
+] as const satisfies readonly AgentRunStatus[];
+export type ActiveAgentRunStatus = (typeof ACTIVE_AGENT_RUN_STATUSES)[number];
+
 export type RuntimeEventVisibility = "user" | "internal" | "audit";
 export type RuntimeEventRedactionState = "redacted" | "truncated" | "offloaded";
 export type RuntimeActivityKind =
@@ -523,7 +543,7 @@ export interface Conversation {
    * which chats are running). Optional for backwards compat with older
    * server builds; `null` for conversations that never ran.
    */
-  latest_run_status?: AgentRunStatus | null;
+  latest_run_status?: ActiveAgentRunStatus | null;
   latest_run_id?: string | null;
   /**
    * desktop-run-identity §D2 — id of the most-recent run of ANY status.
@@ -1523,6 +1543,42 @@ export interface RunSummary {
 export interface RunListResponse {
   runs: RunSummary[];
   has_more?: boolean;
+}
+
+/**
+ * PRD-05 — one entry in the org-scoped run history served by
+ * `GET /v1/agent/runs`. Keyed on a RUN (not a conversation), so a conversation
+ * with N runs yields N entries. Carries the full {@link AgentRunStatus} union
+ * (all eight statuses, terminal included) — unlike `Conversation.latest_run_status`
+ * which is narrowed to {@link ActiveAgentRunStatus}. `conversation_title` is
+ * joined from the run's conversation and is `null` when that conversation has
+ * no title. Clients render row time as `started_at ?? created_at` (a queued run
+ * has no `started_at`, so `created_at` is the keyset key, never `started_at`).
+ */
+export interface RunHistoryEntry {
+  run_id: string;
+  conversation_id: string;
+  conversation_title: string | null;
+  status: AgentRunStatus;
+  model_name: string;
+  created_at: string;
+  started_at: string | null;
+  completed_at: string | null;
+  cancelled_at: string | null;
+}
+
+/**
+ * PRD-05 — the paginated, newest-first run history — `GET /v1/agent/runs`.
+ * Ordered by `(created_at DESC, run_id DESC)`, keyset-paginated: pass
+ * `next_cursor` back as `?cursor=` to fetch strictly-older rows. `next_cursor`
+ * is `null` exactly when `has_more` is `false`. This is the data spine Activity
+ * reads to show finished runs; the 8→5 status fold to `ActivityRunStatus` and
+ * the per-day grouping stay client-side.
+ */
+export interface RunHistoryResponse {
+  runs: RunHistoryEntry[];
+  next_cursor: string | null;
+  has_more: boolean;
 }
 
 export interface CancelRunRequest {

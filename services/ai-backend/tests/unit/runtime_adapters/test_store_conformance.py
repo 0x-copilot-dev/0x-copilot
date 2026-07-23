@@ -26,6 +26,7 @@ from agent_runtime.settings import RuntimeSettings
 from runtime_adapters.file.runtime_api_store import FileRuntimeApiStore
 from runtime_adapters.in_memory import InMemoryRuntimeApiStore
 from runtime_api.schemas import (
+    AgentRunStatus,
     CreateConversationRequest,
     CreateRunRequest,
     MessageRecord,
@@ -689,3 +690,211 @@ class TestConversationPinConformance(_CrudSeedMixin):
             )
             is None
         )
+
+
+class TestRunHistory(_CrudSeedMixin):
+    """PRD-05 — ``list_runs_for_org`` is the org-scoped, all-status, newest-first,
+    keyset-paginated run history behind ``GET /v1/agent/runs``.
+
+    Runs identically against ``in_memory`` + ``file`` (the ``postgres`` param is
+    present-but-marked so the contract names it). This is the capability that
+    makes FINISHED runs reachable — the defect this PRD exists to fix.
+    """
+
+    async def _conv(self, store, *, org_id=None, user_id=None, title="run-history"):
+        return await store.create_conversation(
+            CreateConversationRequest(
+                org_id=org_id or self._ORG,
+                user_id=user_id or self._USER,
+                assistant_id="assistant",
+                title=title,
+            )
+        )
+
+    async def _seed_run(
+        self,
+        store,
+        *,
+        conversation,
+        idem,
+        org_id=None,
+        user_id=None,
+        status=None,
+    ):
+        run_coordinator = self._run_coordinator(store)
+        run = await run_coordinator.create_run(
+            CreateRunRequest(
+                conversation_id=conversation.conversation_id,
+                org_id=org_id or self._ORG,
+                user_id=user_id or self._USER,
+                user_input="hello",
+                idempotency_key=idem,
+                model={"provider": "openai", "model_name": "gpt-5.4-mini"},
+            )
+        )
+        if status is not None:
+            run = await store.update_run_status(run_id=run.run_id, status=status)
+        return run
+
+    async def test_completed_run_is_returned(self, store) -> None:
+        """Regression guard for this PRD's bug: a COMPLETED run is reachable by a
+        list caller — impossible on ``main`` (every adapter's active-run query
+        filters terminal statuses out)."""
+        conversation = await self._conv(store)
+        run = await self._seed_run(
+            store,
+            conversation=conversation,
+            idem="run-done",
+            status=AgentRunStatus.COMPLETED,
+        )
+        history = await store.list_runs_for_org(
+            org_id=self._ORG, user_id=self._USER, limit=50
+        )
+        assert len(history) == 1
+        assert history[0].run_id == run.run_id
+        assert history[0].status is AgentRunStatus.COMPLETED
+        assert history[0].conversation_id == conversation.conversation_id
+        assert history[0].conversation_title == "run-history"
+
+    async def test_all_eight_statuses_are_reachable(self, store) -> None:
+        conversation = await self._conv(store)
+        statuses = list(AgentRunStatus)
+        assert len(statuses) == 8
+        for index, status in enumerate(statuses):
+            await self._seed_run(
+                store,
+                conversation=conversation,
+                idem=f"run-status-{index}",
+                status=status,
+            )
+        history = await store.list_runs_for_org(
+            org_id=self._ORG, user_id=self._USER, limit=50
+        )
+        assert {entry.status for entry in history} == set(statuses)
+
+    async def test_ordering_and_keyset(self, store) -> None:
+        conversation = await self._conv(store)
+        for index in range(10):
+            await self._seed_run(
+                store, conversation=conversation, idem=f"run-order-{index}"
+            )
+
+        full = await store.list_runs_for_org(
+            org_id=self._ORG, user_id=self._USER, limit=50
+        )
+        assert len(full) == 10
+        keys = [(entry.created_at, entry.run_id) for entry in full]
+        # Strictly descending on the (created_at, run_id) composite.
+        assert all(keys[i] > keys[i + 1] for i in range(len(keys) - 1))
+
+        # Page 1, then page 2 via the oldest row's keyset — disjoint, ordered.
+        page1 = await store.list_runs_for_org(
+            org_id=self._ORG, user_id=self._USER, limit=3
+        )
+        oldest = page1[-1]
+        page2 = await store.list_runs_for_org(
+            org_id=self._ORG,
+            user_id=self._USER,
+            limit=3,
+            before_created_at=oldest.created_at,
+            before_run_id=oldest.run_id,
+        )
+        ids1 = {entry.run_id for entry in page1}
+        ids2 = {entry.run_id for entry in page2}
+        assert ids1.isdisjoint(ids2)
+
+        # Concatenating pages of size 3 reproduces the single-page ordering.
+        walked: list = []
+        before_created_at = None
+        before_run_id = None
+        while True:
+            page = await store.list_runs_for_org(
+                org_id=self._ORG,
+                user_id=self._USER,
+                limit=3,
+                before_created_at=before_created_at,
+                before_run_id=before_run_id,
+            )
+            if not page:
+                break
+            walked.extend(page)
+            before_created_at = page[-1].created_at
+            before_run_id = page[-1].run_id
+        assert [entry.run_id for entry in walked] == [entry.run_id for entry in full]
+
+    async def test_is_scoped_by_org_and_user(self, store) -> None:
+        conv_a = await self._conv(store, org_id="org_a", user_id="user_a")
+        conv_b_org = await self._conv(store, org_id="org_b", user_id="user_a")
+        conv_a_other = await self._conv(store, org_id="org_a", user_id="user_b")
+        mine = await self._seed_run(
+            store,
+            conversation=conv_a,
+            idem="mine",
+            org_id="org_a",
+            user_id="user_a",
+        )
+        await self._seed_run(
+            store,
+            conversation=conv_b_org,
+            idem="other-org",
+            org_id="org_b",
+            user_id="user_a",
+        )
+        await self._seed_run(
+            store,
+            conversation=conv_a_other,
+            idem="other-user",
+            org_id="org_a",
+            user_id="user_b",
+        )
+        history = await store.list_runs_for_org(
+            org_id="org_a", user_id="user_a", limit=50
+        )
+        assert [entry.run_id for entry in history] == [mine.run_id]
+
+    async def test_soft_deleted_conversation_runs_are_hidden(self, store) -> None:
+        conversation = await self._conv(store)
+        await self._seed_run(
+            store,
+            conversation=conversation,
+            idem="run-softdel",
+            status=AgentRunStatus.COMPLETED,
+        )
+        before = await store.list_runs_for_org(
+            org_id=self._ORG, user_id=self._USER, limit=50
+        )
+        assert len(before) == 1
+
+        await store.soft_delete_conversation(
+            org_id=self._ORG,
+            user_id=self._USER,
+            conversation_id=conversation.conversation_id,
+            now=datetime(2026, 6, 1, tzinfo=timezone.utc),
+        )
+        after = await store.list_runs_for_org(
+            org_id=self._ORG, user_id=self._USER, limit=50
+        )
+        assert after == ()
+
+    async def test_history_deletion_clears_run_history(self, store) -> None:
+        conversation = await self._conv(store)
+        await self._seed_run(
+            store,
+            conversation=conversation,
+            idem="run-hist-del",
+            status=AgentRunStatus.COMPLETED,
+        )
+        assert (
+            len(
+                await store.list_runs_for_org(
+                    org_id=self._ORG, user_id=self._USER, limit=50
+                )
+            )
+            == 1
+        )
+
+        await store.delete_user_history(org_id=self._ORG, user_id=self._USER)
+        after = await store.list_runs_for_org(
+            org_id=self._ORG, user_id=self._USER, limit=50
+        )
+        assert after == ()

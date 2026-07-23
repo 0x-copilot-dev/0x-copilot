@@ -2,6 +2,7 @@
 import { describe, expect, it } from "vitest";
 
 import { ACTIVITY_RUN_STATUSES, type ActivityRunRow } from "./activity";
+import { ACTIVE_AGENT_RUN_STATUSES, AGENT_RUN_STATUSES } from "./index";
 import type { RunId } from "./brands";
 
 // Runtime assertions over the Activity run-history contract (desktop
@@ -29,6 +30,24 @@ describe("ActivityRunStatus — run row status union", () => {
     expect(new Set(ACTIVITY_RUN_STATUSES).size).toBe(
       ACTIVITY_RUN_STATUSES.length,
     );
+  });
+});
+
+describe("ACTIVE_AGENT_RUN_STATUSES — the emittable latest_run_status subset (PRD-05)", () => {
+  it("is exactly the four non-terminal statuses, in order", () => {
+    expect(ACTIVE_AGENT_RUN_STATUSES).toHaveLength(4);
+    expect([...ACTIVE_AGENT_RUN_STATUSES]).toEqual([
+      "queued",
+      "running",
+      "waiting_for_approval",
+      "cancelling",
+    ]);
+  });
+
+  it("is a subset of the full AGENT_RUN_STATUSES union", () => {
+    for (const status of ACTIVE_AGENT_RUN_STATUSES) {
+      expect(AGENT_RUN_STATUSES).toContain(status);
+    }
   });
 });
 

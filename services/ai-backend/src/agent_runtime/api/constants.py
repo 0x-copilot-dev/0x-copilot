@@ -131,6 +131,10 @@ class Keys:
         GET_EVENTS = "get_events"
         GET_MESSAGES = "get_messages"
         GET_CONVERSATION_RUNS = "get_conversation_runs"
+        # PRD-05 — org-scoped, paginated, newest-first run history (one row per
+        # RUN, all statuses). The collection GET on ``/runs`` — registered
+        # BEFORE ``/runs/{run_id}`` since ``run_id`` is an unconstrained str.
+        LIST_RUN_HISTORY = "list_run_history"
         GET_RUN = "get_run"
         LIST_CONVERSATIONS = "list_conversations"
         LIST_MODELS = "list_models"
@@ -198,6 +202,9 @@ class Values:
     DEFAULT_CONVERSATION_LIMIT = 30
     DEFAULT_MESSAGE_LIMIT = 50
     MAX_MESSAGE_LIMIT = 200
+    # PRD-05 — run-history page size. Default 50, clamped to MAX_MESSAGE_LIMIT
+    # (200) in the service the same way the message/conversation lists are.
+    DEFAULT_RUN_HISTORY_LIMIT = 50
     # PRD-H.4 — Chats-list ``preview`` snippet cap. Matches the sidebar's
     # single-line truncation budget so the server never ships more text
     # than the row can show.

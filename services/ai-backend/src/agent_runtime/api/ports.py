@@ -56,6 +56,7 @@ from runtime_api.schemas import (
     RuntimeEventDraft,
     RuntimeEventEnvelope,
     RuntimeRunCommand,
+    RunHistoryEntry,
     RunRecord,
     WorkspaceDefaultsRecord,
 )
@@ -520,6 +521,35 @@ class PersistencePort(Protocol):
         Phase 6). Rides the same ``(org_id, conversation_id, created_at DESC)``
         index the single-run head queries use. Empty when the conversation has
         never run.
+        """
+
+    async def list_runs_for_org(
+        self,
+        *,
+        org_id: str,
+        user_id: str,
+        limit: int,
+        before_created_at: datetime | None = None,
+        before_run_id: str | None = None,
+    ) -> tuple[RunHistoryEntry, ...]:
+        """Return the caller's runs newest-first across ALL conversations (PRD-05).
+
+        The org-scoped run-history read that backs ``GET /v1/agent/runs`` and
+        Activity's finished-run feed. Keyed on ``agent_runs`` (one row per RUN,
+        not per conversation) and joined to ``agent_conversations`` for
+        ``conversation_title``. Ordered by ``(created_at DESC, run_id DESC)``.
+
+        Authorization predicate is ``(org_id, user_id)`` — the caller's own runs
+        only, matching ``list_conversations``. Runs whose conversation is
+        soft-deleted (``deleted_at IS NOT NULL``) are excluded so "delete my
+        history" actually clears the feed.
+
+        Keyset: when ``(before_created_at, before_run_id)`` is given, only rows
+        with ``(created_at, run_id) < (before_created_at, before_run_id)`` are
+        returned; when ``None``, the most-recent window. Implementations return
+        up to ``limit`` rows — the service requests ``limit + 1`` to derive
+        ``has_more`` unambiguously. All eight run statuses are reachable; there
+        is no status filter (contrast :meth:`get_active_run_for_conversation`).
         """
 
     # ------------------------------------------------------------------
