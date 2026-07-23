@@ -683,6 +683,13 @@ export interface Conversation {
    */
   preview?: string | null;
   model?: string | null;
+  /**
+   * PRD-07 — the project this conversation is filed under (migration 0003).
+   * `null`/absent on every non-project chat and older server payloads. Set on
+   * create or via `PATCH /v1/agent/conversations/{id}` (`null` unfiles); the
+   * project detail's Chats section reads the list filtered on this axis.
+   */
+  project_id?: string | null;
 }
 
 /**
@@ -4420,6 +4427,7 @@ export type {
   ProjectActivityListResponse,
   ProjectArchiveBlockedResponse,
   ProjectColorHue,
+  ProjectFileRow,
   ProjectIconEmoji,
   ProjectListResponse,
   ProjectMembership,

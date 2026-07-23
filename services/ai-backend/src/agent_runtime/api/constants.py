@@ -142,6 +142,11 @@ class Keys:
         LIST_RUN_HISTORY = "list_run_history"
         GET_RUN = "get_run"
         LIST_CONVERSATIONS = "list_conversations"
+        # PRD-07 — per-project chat counts. The literal ``/conversations/counts``
+        # collection GET, registered BEFORE ``/conversations/{conversation_id}``
+        # since ``conversation_id`` is an unconstrained str (same hazard as
+        # ``/runs`` vs ``/runs/{run_id}``).
+        CONVERSATION_COUNTS = "conversation_counts"
         LIST_MODELS = "list_models"
         STREAM_RUN = "stream_run"
         # Recipient inbox endpoint + per-user SSE channel.

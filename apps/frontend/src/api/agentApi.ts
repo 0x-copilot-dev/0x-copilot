@@ -147,7 +147,14 @@ export function getConversation(
 
 export function listConversations(
   identity: RequestIdentity,
-  options: { limit?: number; includeArchived?: boolean } = {},
+  options: {
+    limit?: number;
+    includeArchived?: boolean;
+    // PRD-07 — narrow to a project's chat list (the app-standard
+    // `filter[project_id]` axis; the facade translates it to ai-backend's
+    // `project_id` query param).
+    projectId?: string;
+  } = {},
 ): Promise<ConversationListResponse> {
   return httpGet<ConversationListResponse>(
     "/v1/agent/conversations",
@@ -155,6 +162,7 @@ export function listConversations(
     {
       limit: String(options.limit ?? 30),
       include_archived: options.includeArchived ? "true" : undefined,
+      "filter[project_id]": options.projectId,
     },
   );
 }

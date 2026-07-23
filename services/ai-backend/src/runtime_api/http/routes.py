@@ -35,6 +35,7 @@ from runtime_api.schemas import (
     CancelRunResponse,
     ConversationConnectorScopesResponse,
     ConversationContextResponse,
+    ConversationCountsResponse,
     ConversationListResponse,
     ConversationResponse,
     CreateConversationRequest,
@@ -125,6 +126,9 @@ class RuntimeApiRoutes:
         limit: int = Query(30, ge=1, le=200),
         include_archived: bool = False,
         include_deleted: bool = False,
+        # PRD-07 — narrow to a project's chat list. A filter axis on the
+        # caller's already-scoped rows; never an authorization input.
+        project_id: str | None = Query(None, min_length=1),
     ) -> ConversationListResponse:
         """Return paginated conversations owned by the caller."""
         org_id, user_id = cls.scoped_identity(request, org_id=org_id, user_id=user_id)
@@ -134,6 +138,34 @@ class RuntimeApiRoutes:
             limit=limit,
             include_archived=include_archived,
             include_deleted=include_deleted,
+            project_id=project_id,
+        )
+
+    @classmethod
+    async def conversation_counts(
+        cls,
+        request: Request,
+        project_ids: str = Query(..., min_length=1),
+        org_id: str | None = Query(None, min_length=1),
+        user_id: str | None = Query(None, min_length=1),
+    ) -> ConversationCountsResponse:
+        """Return per-project live-conversation counts for the caller (PRD-07).
+
+        ``project_ids`` is a comma-separated list (≤100). The count is
+        identity-scoped exactly like ``list_conversations`` — ``project_ids``
+        filters, it never authorizes. Unknown ids come back with 0.
+        """
+        org_id, user_id = cls.scoped_identity(request, org_id=org_id, user_id=user_id)
+        ids = tuple(token.strip() for token in project_ids.split(",") if token.strip())
+        if len(ids) > 100:
+            raise HTTPException(
+                status.HTTP_422_UNPROCESSABLE_ENTITY,
+                "project_ids accepts at most 100 ids",
+            )
+        return await cls.cqs(request).count_conversations_by_project(
+            org_id=org_id,
+            user_id=user_id,
+            project_ids=ids,
         )
 
     @classmethod
@@ -689,6 +721,18 @@ class RuntimeApiRouter:
             methods=["GET"],
             response_model=ConversationListResponse,
             name=Keys.RouteName.LIST_CONVERSATIONS,
+        )
+        # PRD-07 — per-project chat counts. MUST be registered BEFORE
+        # ``/conversations/{conversation_id}`` below: FastAPI matches in
+        # registration order and ``conversation_id`` is an unconstrained
+        # ``str``, so an append would let the detail route shadow this literal
+        # and turn it into a 404 (same rule as ``/runs`` vs ``/runs/{run_id}``).
+        router.add_api_route(
+            "/conversations/counts",
+            RuntimeApiRoutes.conversation_counts,
+            methods=["GET"],
+            response_model=ConversationCountsResponse,
+            name=Keys.RouteName.CONVERSATION_COUNTS,
         )
         router.add_api_route(
             "/conversations/{conversation_id}",

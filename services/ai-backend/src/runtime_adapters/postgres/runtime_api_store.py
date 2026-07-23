@@ -173,6 +173,8 @@ class _Columns:
     FOLDER = "folder"
     # PRD-H.4 — first-class conversation pin flag (migration 0034).
     PINNED = "pinned"
+    # PRD-07 — the project a conversation is filed under (migration 0003).
+    PROJECT_ID = "project_id"
     PARENT_CONVERSATION_ID = "parent_conversation_id"
     # Conversation fork lineage column.
     FORKED_FROM_SHARE_ID = "forked_from_share_id"
@@ -616,14 +618,16 @@ class PostgresRuntimeApiStore:
                     title=request.title,
                     metadata=request.metadata,
                     idempotency_key=request.idempotency_key,
+                    project_id=request.project_id,
                 )
                 await conn.execute(
                     """
                     INSERT INTO agent_conversations (
                         id, org_id, user_id, assistant_id, title, status, created_at,
-                        updated_at, archived_at, metadata_json, schema_version, idempotency_key
+                        updated_at, archived_at, metadata_json, schema_version,
+                        idempotency_key, project_id
                     )
-                    VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+                    VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
                     """,
                     (
                         record.conversation_id,
@@ -638,6 +642,7 @@ class PostgresRuntimeApiStore:
                         Jsonb(record.metadata),
                         record.schema_version,
                         record.idempotency_key,
+                        record.project_id,
                     ),
                 )
                 return record
@@ -694,29 +699,72 @@ class PostgresRuntimeApiStore:
         limit: int,
         include_archived: bool = False,
         include_deleted: bool = False,
+        project_id: str | None = None,
     ) -> Sequence[ConversationRecord]:
         """Return scoped conversations ordered by latest update.
 
         Soft-deleted rows (``deleted_at IS NOT NULL``) are excluded by default —
         the sidebar query path. A partial index covering active conversations
         serves this hot path; the include-deleted path falls back to the full index.
+        When ``project_id`` is set (PRD-07) the query narrows to that project and
+        rides ``idx_agent_conversations_project (org_id, project_id, updated_at DESC)``.
 
         """
 
         archived_filter = "" if include_archived else "AND status <> 'archived'"
         deleted_filter = "" if include_deleted else "AND deleted_at IS NULL"
+        project_filter = ""
+        params: list[object] = [org_id, user_id]
+        if project_id is not None:
+            project_filter = "AND project_id = %s"
+            params.append(project_id)
+        params.append(limit)
         async with self._tenant_connection(org_id=org_id) as conn:
             cur = await conn.execute(
                 f"""
                 SELECT * FROM agent_conversations
-                WHERE org_id = %s AND user_id = %s {archived_filter} {deleted_filter}
+                WHERE org_id = %s AND user_id = %s {project_filter}
+                  {archived_filter} {deleted_filter}
                 ORDER BY updated_at DESC
                 LIMIT %s
                 """,
-                (org_id, user_id, limit),
+                tuple(params),
             )
             rows = await cur.fetchall()
         return tuple(self._conversation_record(row) for row in rows)
+
+    async def count_conversations_by_project(
+        self,
+        *,
+        org_id: str,
+        user_id: str,
+        project_ids: Sequence[str],
+    ) -> Mapping[str, int]:
+        """Group the caller's non-deleted conversations by project (PRD-07).
+
+        One grouped scan over ``idx_agent_conversations_project`` — archived
+        rows included, soft-deleted excluded, matching the partial index
+        predicate. Project ids with no rows are absent from the result.
+        """
+
+        wanted = tuple(dict.fromkeys(project_ids))
+        if not wanted:
+            return {}
+        async with self._tenant_connection(org_id=org_id) as conn:
+            cur = await conn.execute(
+                """
+                SELECT project_id, COUNT(*) AS count
+                  FROM agent_conversations
+                 WHERE org_id = %s
+                   AND user_id = %s
+                   AND project_id = ANY(%s)
+                   AND deleted_at IS NULL
+                 GROUP BY project_id
+                """,
+                (org_id, user_id, list(wanted)),
+            )
+            rows = await cur.fetchall()
+        return {str(row[_Columns.PROJECT_ID]): int(row[_Columns.COUNT]) for row in rows}
 
     async def list_conversation_scopes(self) -> tuple[tuple[str, str], ...]:
         """Return every distinct ``(org_id, user_id)`` that owns a conversation.
@@ -956,9 +1004,11 @@ class PostgresRuntimeApiStore:
         folder_changed: bool,
         archived: bool | None,
         archived_changed: bool,
+        project_id: str | None,
+        project_id_changed: bool,
         now: datetime,
     ) -> ConversationRecord | None:
-        """Apply a lifecycle PATCH (title / folder / archived) atomically.
+        """Apply a lifecycle PATCH (title / folder / archived / project) atomically.
 
         Builds a SET clause from the ``*_changed`` flags so the column
         list mirrors the caller's intent exactly. ``updated_at`` is
@@ -974,6 +1024,9 @@ class PostgresRuntimeApiStore:
         if folder_changed:
             sets.append("folder = %s")
             params.append(folder)
+        if project_id_changed:
+            sets.append("project_id = %s")
+            params.append(project_id)
         if archived_changed:
             if archived:
                 sets.append("status = 'archived'")
@@ -1161,11 +1214,11 @@ class PostgresRuntimeApiStore:
                     updated_at, archived_at, metadata_json, schema_version,
                     idempotency_key, enabled_connectors, connectors_updated_at,
                     deleted_at, folder, parent_conversation_id,
-                    forked_from_share_id
+                    forked_from_share_id, project_id
                 )
                 VALUES (
                     %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s,
-                    %s, %s, %s, %s
+                    %s, %s, %s, %s, %s
                 )
                 """,
                 (
@@ -1187,6 +1240,7 @@ class PostgresRuntimeApiStore:
                     conversation.folder,
                     conversation.parent_conversation_id,
                     conversation.forked_from_share_id,
+                    conversation.project_id,
                 ),
             )
         return conversation
@@ -5783,6 +5837,9 @@ class PostgresRuntimeApiStore:
             # ``row.get`` keeps the hydrator forward-compatible with rows
             # from databases pre-migration 0034 (returns False when absent).
             pinned=bool(row.get(_Columns.PINNED, False)),
+            # ``row.get`` keeps the hydrator forward-compatible with rows from
+            # databases pre-migration 0003 (returns None when the column is absent).
+            project_id=row.get(_Columns.PROJECT_ID),
             forked_from_share_id=row.get(_Columns.FORKED_FROM_SHARE_ID),
         )
 

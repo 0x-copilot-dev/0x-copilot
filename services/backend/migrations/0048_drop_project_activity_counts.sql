@@ -1,0 +1,22 @@
+-- PRD-07 — drop the project rollup counter table.
+--
+-- `project_activity_counts` was a denormalized cache that NEVER had a writer
+-- (`upsert_counts` had zero call sites in any deployment that has ever
+-- existed), so every row read `chats/files/todos/... = 0`. PRD-07 replaces it
+-- with computed-on-read counts: the service that OWNS each destination's rows
+-- answers a grouped `count_by_project`, so the number can never disagree with
+-- the list it summarizes, and no durable counter can outlive an in-memory
+-- store restart. `chats` is filled by the facade from ai-backend (the rows
+-- live in another service's database; `backend` counting them would invert the
+-- dependency direction into a cycle).
+--
+-- The drop is provably lossless: no writer ever populated the table, so there
+-- is nothing to preserve. The `.rollback.sql` recreates the table verbatim
+-- from 0043_projects.sql for a clean revert.
+--
+-- The module mirror (src/backend_app/projects/schema.sql) drops the same table
+-- + policy + grant in the same change so fresh installs and migrated installs
+-- converge (the 0043_projects incident: a migration/mirror divergence shipped
+-- a 500 on fresh installs).
+
+DROP TABLE IF EXISTS project_activity_counts;

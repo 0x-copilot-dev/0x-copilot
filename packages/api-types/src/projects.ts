@@ -21,7 +21,13 @@
 // itself never crosses the wire.
 
 import type { ItemKind, ItemRef } from "./refs";
-import type { AgentId, ProjectId, TenantId, UserId } from "./brands";
+import type {
+  AgentId,
+  LibraryFileId,
+  ProjectId,
+  TenantId,
+  UserId,
+} from "./brands";
 
 // ---------------------------------------------------------------------------
 // Phase 6.5 §5 — Connector inheritance.
@@ -92,13 +98,47 @@ export type ProjectIconEmoji = string;
  * override Inbox's recipient-only read).
  */
 export interface ProjectActivityCounts {
-  readonly chats: number;
+  /**
+   * PRD-07 — `null` when the chat count is unavailable. The chat rows live in
+   * `ai-backend`; `backend` returns `null` (it is not entitled to an opinion,
+   * and counting them would invert the service dependency into a cycle) and the
+   * facade fills it from a batched call. A card renders "N files" without a
+   * fabricated "0 chats" whenever this is `null`.
+   */
+  readonly chats: number | null;
+  /**
+   * PRD-07 — the design's "N files": library rows of `kind='file'` only.
+   * Distinct from `library_items`, which counts file + page + dataset.
+   */
+  readonly files: number;
   readonly todos_open: number;
   readonly todos_done: number;
   readonly inbox_items: number;
   readonly library_items: number;
   readonly routines_active: number;
   readonly members: number;
+}
+
+/**
+ * PRD-07 — one file attached to a project, for the detail view's Files section.
+ *
+ * A project file IS a library item with `project_id` set (there is no separate
+ * `/v1/projects/{id}/files` endpoint — the model, index, ACL and count already
+ * exist on `library_files`). The host's `ProjectDataPort.listProjectFiles` maps
+ * `GET /v1/library?filter[project_id]=<id>&filter[kind]=file` rows into this
+ * shape; `id` is a branded `LibraryFileId` so `<ItemLink kind="library_file">`
+ * needs no cast.
+ */
+export interface ProjectFileRow {
+  readonly id: LibraryFileId;
+  /** File name shown in the row. */
+  readonly name: string;
+  /** Short kind label ("PDF", "Doc", "Sheet"), from `file_kind`. Display-only. */
+  readonly fileKind?: string;
+  /** ISO-8601 UTC; client renders relative time. From `updated_at`. */
+  readonly updatedAt?: string;
+  /** Human-readable size ("1.2 MB"), derived from `size_bytes`. Display-only. */
+  readonly sizeLabel?: string;
 }
 
 // ---------------------------------------------------------------------------

@@ -513,3 +513,70 @@ class TestProjectsProxy:
             "/v1/projects/prj_unknown", headers=_bearer_headers(monkeypatch)
         )
         assert resp.status_code == 404
+
+
+class TestChatCountFanoutJoin:
+    """PRD-07 — the facade fills counts.chats from a batched ai-backend call.
+
+    backend returns counts.chats=null (its rows live in ai-backend); the facade
+    joins the per-project conversation count. Upstream failure/timeout degrades
+    to leaving chats null with a 200 — never a 5xx.
+    """
+
+    @staticmethod
+    def _project_with_null_chats() -> dict:
+        body = json.loads(json.dumps(_PROJECT_BODY))
+        body["counts"]["chats"] = None
+        body["counts"]["files"] = 2
+        return body
+
+    def _run(self, monkeypatch, *, counts_behavior) -> httpx.Response | None:
+        list_body = {
+            "items": [self._project_with_null_chats()],
+            "next_cursor": None,
+        }
+
+        class _FakeAsyncClient:
+            def __init__(self, *args, **kwargs) -> None:
+                pass
+
+            async def __aenter__(self):
+                return self
+
+            async def __aexit__(self, *args, **kwargs):
+                return None
+
+            async def post(self, url, *, json=None, headers=None, timeout=None):
+                return _touch_response()
+
+            async def get(self, url, *, params=None, headers=None, timeout=None):
+                if "conversations/counts" in url:
+                    return counts_behavior()
+                return httpx.Response(200, json=list_body)
+
+        monkeypatch.setattr(
+            "backend_facade.http_client.httpx.AsyncClient", _FakeAsyncClient
+        )
+        client = TestClient(
+            create_app(FacadeSettings(backend_url="http://backend.local"))
+        )
+        return client.get("/v1/projects", headers=_bearer_headers(monkeypatch))
+
+    def test_chats_populated_from_ai_backend(self, monkeypatch) -> None:
+        resp = self._run(
+            monkeypatch,
+            counts_behavior=lambda: httpx.Response(200, json={"counts": {"prj_1": 7}}),
+        )
+        assert resp.status_code == 200
+        item = resp.json()["items"][0]
+        assert item["counts"]["chats"] == 7
+        # files is untouched by the facade (backend's number survives).
+        assert item["counts"]["files"] == 2
+
+    def test_chats_stays_null_and_200_when_ai_backend_raises(self, monkeypatch) -> None:
+        def _raise() -> httpx.Response:
+            raise httpx.ConnectTimeout("ai-backend down")
+
+        resp = self._run(monkeypatch, counts_behavior=_raise)
+        assert resp.status_code == 200  # NOT a 5xx
+        assert resp.json()["items"][0]["counts"]["chats"] is None

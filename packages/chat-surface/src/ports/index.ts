@@ -29,3 +29,7 @@ export type { ClipboardPort } from "./ClipboardPort";
 // === Phase 12 — palette search port ===
 export type { PaletteSearchPort } from "./PaletteSearchPort";
 // === end Phase 12 ===
+
+// === PRD-07 — project detail Chats + Files data seam ===
+export type { ProjectDataPort } from "./ProjectDataPort";
+// === end PRD-07 ===

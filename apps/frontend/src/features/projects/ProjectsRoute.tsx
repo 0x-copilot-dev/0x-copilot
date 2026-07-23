@@ -52,7 +52,12 @@ import {
   type ProjectDetail,
   type ProjectDetailViewProps,
 } from "@0x-copilot/chat-surface";
-import type { ConversationId, SectionResult } from "@0x-copilot/api-types";
+import type {
+  ChatArchiveRow,
+  ConversationId,
+  ProjectFileRow,
+  SectionResult,
+} from "@0x-copilot/api-types";
 
 import type { RequestIdentity } from "../../api/config";
 import {
@@ -60,13 +65,16 @@ import {
   archiveProject,
   deleteProject,
   fetchProject,
-  fetchProjectActivity,
   fetchProjectMembers,
   fetchProjects,
   starProject,
   streamProjectEvents,
   unstarProject,
 } from "../../api/projectsApi";
+// PRD-07 — the web binding of chat-surface's `ProjectDataPort`. Feeds the
+// detail view's project-scoped Chats + Files sections; replaces the old
+// project-activity read (which called a route that never existed).
+import { createWebProjectDataPort } from "./ProjectDataPort";
 import type {
   Project,
   ProjectActivity as ProjectActivityRecord,
@@ -133,6 +141,11 @@ type DetailState =
       readonly project: Project;
       readonly members: ReadonlyArray<ProjectMembership>;
       readonly activity: ReadonlyArray<ProjectActivityRecord>;
+      // PRD-07 — the project-scoped Chats + Files sections, fed by the web
+      // `ProjectDataPort`. Each is a `SectionResult` so the detail view's
+      // 4-state machine drives itself; the port never throws.
+      readonly chats: SectionResult<ReadonlyArray<ChatArchiveRow>>;
+      readonly files: SectionResult<ReadonlyArray<ProjectFileRow>>;
     };
 
 /**
@@ -416,12 +429,16 @@ export function ProjectsRoute({
     // stream.
   }, [identity, state.kind]);
 
-  // ---- Detail fetch (project + members + activity) -----------------
+  // ---- Detail fetch (project + members + chats + files) ------------
   //
   // Runs whenever a project is focused. `fetchProject` is the fatal read;
-  // members / activity are members-only and degrade to empty on failure
-  // (403 for a non-member viewer) so the pane still renders the header
-  // and the files "coming soon" state.
+  // members are members-only and degrade to empty on failure (403 for a
+  // non-member viewer). The project-scoped Chats + Files sections come from
+  // the web `ProjectDataPort` (PRD-07): each resolves a `SectionResult`
+  // (never throws), so an upstream error degrades that section to its own
+  // error/empty state without failing the pane. The team-profile Activity tab
+  // receives `[]` — `GET /v1/projects/{id}/activity` never existed (PRD §11
+  // non-goals), so this PRD stops calling it rather than building it.
   useEffect(() => {
     if (focusedProjectId === null) {
       setDetail(null);
@@ -430,24 +447,26 @@ export function ProjectsRoute({
     let cancelled = false;
     setDetail({ kind: "loading" });
 
+    const port = createWebProjectDataPort(identity);
+
     Promise.all([
       fetchProject(identity, focusedProjectId),
       fetchProjectMembers(identity, focusedProjectId).catch(() => ({
         items: [] as ReadonlyArray<ProjectMembership>,
         next_cursor: null,
       })),
-      fetchProjectActivity(identity, focusedProjectId).catch(() => ({
-        items: [] as ReadonlyArray<ProjectActivityRecord>,
-        next_cursor: null,
-      })),
+      port.listProjectChats(focusedProjectId),
+      port.listProjectFiles(focusedProjectId),
     ])
-      .then(([project, membersResp, activityResp]) => {
+      .then(([project, membersResp, chats, files]) => {
         if (cancelled) return;
         setDetail({
           kind: "ready",
           project,
           members: membersResp.items,
-          activity: activityResp.items,
+          activity: [],
+          chats,
+          files,
         });
       })
       .catch((error: unknown) => {
@@ -592,65 +611,23 @@ export function ProjectsRoute({
 
   const items = state.kind === "ready" ? state.items : [];
 
-  // Cross-destination tab slot (FR-4.12). The host owns the per-tab list.
-  // For "chats" we surface the project's chat activity, each row opening
-  // its conversation in the Run cockpit via the injected `onOpenRun`
-  // callback (not an in-component navigation). The other four tabs
-  // (todos / inbox / library / routines) get a placeholder until the
-  // filtered destination views are wired app-side in PR-4.11.
+  // Cross-destination tab slot (FR-4.12), used only by the team profile's
+  // Todos / Inbox / Library / Routines tabs. PRD-07 deleted the hand-rolled
+  // "chats" branch: the solo profile's project chats now flow through the
+  // `chats` prop (fed by the web `ProjectDataPort`), not this slot, and the
+  // old branch filtered project-activity rows from a route that never existed.
+  // The remaining tabs get a placeholder until their filtered destination
+  // views are wired app-side.
   const renderCrossDestinationTab = (
     tab: "chats" | "todos" | "inbox" | "library" | "routines",
-    _projectId: ProjectId,
-    activity: ReadonlyArray<ProjectActivityRecord>,
-  ): ReactNode => {
-    if (tab !== "chats") {
-      return (
-        <div
-          data-testid={`projects-crosstab-${tab}`}
-          style={{ fontSize: 13, color: "var(--color-text-muted)" }}
-        >
-          Opens in the {tab} destination filtered to this project.
-        </div>
-      );
-    }
-    const chatRows = activity.filter((a) => a.ref.kind === "chat");
-    return (
-      <div data-testid="projects-crosstab-chats">
-        {chatRows.length === 0 ? (
-          <div
-            data-testid="projects-crosstab-chats-empty"
-            style={{ fontSize: 13, color: "var(--color-text-muted)" }}
-          >
-            No chats in this project yet.
-          </div>
-        ) : (
-          <ul style={{ listStyle: "none", margin: 0, padding: 0 }}>
-            {chatRows.map((a) => (
-              <li key={a.id} style={{ padding: "8px 0" }}>
-                <button
-                  type="button"
-                  data-testid="projects-detail-chat-row"
-                  data-conversation-id={a.ref.id}
-                  onClick={() => onOpenRun?.(a.ref.id as ConversationId)}
-                  style={{
-                    background: "transparent",
-                    border: "none",
-                    color: "var(--color-accent)",
-                    cursor: "pointer",
-                    padding: 0,
-                    fontSize: 13,
-                    textAlign: "left",
-                  }}
-                >
-                  {a.preview.length > 0 ? a.preview : a.action}
-                </button>
-              </li>
-            ))}
-          </ul>
-        )}
-      </div>
-    );
-  };
+  ): ReactNode => (
+    <div
+      data-testid={`projects-crosstab-${tab}`}
+      style={{ fontSize: 13, color: "var(--color-text-muted)" }}
+    >
+      Opens in the {tab} destination filtered to this project.
+    </div>
+  );
 
   // Renders the focused project's detail into `<ProjectsDestination>`'s
   // `renderDetail` slot. `files` is intentionally OMITTED so the Files tab
@@ -721,7 +698,7 @@ export function ProjectsRoute({
       );
     }
 
-    const { project, members, activity } = detail;
+    const { project, members, activity, chats, files } = detail;
     const projectDetail: ProjectDetail = {
       id: project.id,
       name: project.name,
@@ -732,8 +709,13 @@ export function ProjectsRoute({
       ownerUserId: project.owner_user_id,
       ownerName: ownerNameFor(project, members),
       memberCount: project.counts.members,
-      chatCount: project.counts.chats,
-      fileCount: project.counts.library_items,
+      // `counts.chats` is `null` when the facade could not fill it from
+      // ai-backend; the solo Chats header prefers the rendered list length, so
+      // `null` only surfaces during load. `fileCount` binds to `counts.files`
+      // (library `kind='file'` only) — NOT `library_items`, which counts
+      // file + page + dataset (PRD-07 fixes the wrong-field bind).
+      chatCount: project.counts.chats ?? undefined,
+      fileCount: project.counts.files,
     };
     // Only the owner can mutate membership / transfer ownership. Under the
     // solo profile `viewer_role` is null → no management affordances.
@@ -746,10 +728,15 @@ export function ProjectsRoute({
           project={projectDetail}
           members={members.map(toDetailMember)}
           activity={activity.map(toDetailActivity)}
-          canManage={canManage}
-          renderCrossDestinationTab={(tab, projectId) =>
-            renderCrossDestinationTab(tab, projectId, activity)
+          chats={chats}
+          files={files}
+          onRetryChats={() => setDetailReloadToken((t) => t + 1)}
+          onRetryFiles={() => setDetailReloadToken((t) => t + 1)}
+          onOpenChat={(conversationId: ConversationId) =>
+            onOpenRun?.(conversationId)
           }
+          canManage={canManage}
+          renderCrossDestinationTab={(tab) => renderCrossDestinationTab(tab)}
         />
       </div>
     );
@@ -825,7 +812,11 @@ export function ProjectsRoute({
           <div data-testid="projects-route-list" className="projects-grid3">
             {items.map((project) => {
               const initial = (project.name.trim()[0] ?? "?").toUpperCase();
-              const filesCount = project.counts.library_items;
+              // PRD-07 — the design's "N files" is library `kind='file'` only
+              // (`counts.files`), NOT `library_items` (file + page + dataset).
+              // `counts.chats` is `null` when the facade could not fill it; the
+              // chats segment is hidden then (never a fabricated "0 chats").
+              const filesCount = project.counts.files;
               const chatsCount = project.counts.chats;
               return (
                 <div
@@ -865,8 +856,9 @@ export function ProjectsRoute({
                       </span>
                     ) : null}
                     <span className="projects-card__meta">
-                      {chatsCount} chat{chatsCount === 1 ? "" : "s"} ·{" "}
-                      {filesCount} file{filesCount === 1 ? "" : "s"}
+                      {chatsCount !== null
+                        ? `${chatsCount} chat${chatsCount === 1 ? "" : "s"} · ${filesCount} file${filesCount === 1 ? "" : "s"}`
+                        : `${filesCount} file${filesCount === 1 ? "" : "s"}`}
                     </span>
                   </button>
                   {/* Member/role chip — FR-4.13: rendered ONLY when the

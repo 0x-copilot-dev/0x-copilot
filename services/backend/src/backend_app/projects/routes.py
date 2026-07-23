@@ -114,7 +114,11 @@ class ForceTransferOwnershipRequestModel(BaseModel):
 
 class ProjectCountsModel(BaseModel):
     model_config = ConfigDict(extra="forbid")
-    chats: int = 0
+    # PRD-07 — ``chats`` is null from backend (its rows live in ai-backend; the
+    # facade fills the number). ``files`` (kind=file) is the design's "N files",
+    # distinct from ``library_items`` (file + page + dataset).
+    chats: int | None = None
+    files: int = 0
     todos_open: int = 0
     todos_done: int = 0
     inbox_items: int = 0
@@ -868,6 +872,7 @@ def _to_wire(
         ),
         counts=ProjectCountsModel(
             chats=counts.chats,
+            files=counts.files,
             todos_open=counts.todos_open,
             todos_done=counts.todos_done,
             inbox_items=counts.inbox_items,

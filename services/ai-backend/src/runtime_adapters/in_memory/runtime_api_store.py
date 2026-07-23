@@ -197,6 +197,7 @@ class InMemoryRuntimeApiStore:
             title=request.title,
             metadata=request.metadata,
             idempotency_key=request.idempotency_key,
+            project_id=request.project_id,
         )
         self.conversations[conversation.conversation_id] = conversation
         if request.idempotency_key is not None:
@@ -242,11 +243,13 @@ class InMemoryRuntimeApiStore:
         limit: int,
         include_archived: bool = False,
         include_deleted: bool = False,
+        project_id: str | None = None,
     ) -> Sequence[ConversationRecord]:
         """Return scoped conversations ordered by latest update.
 
         Soft-deleted rows (``deleted_at IS NOT NULL``) are excluded by default;
-        pass ``include_deleted=True`` to include them.
+        pass ``include_deleted=True`` to include them. When ``project_id`` is
+        set, only conversations filed under that project are returned (PRD-07).
         """
 
         records = [
@@ -254,6 +257,12 @@ class InMemoryRuntimeApiStore:
             for conversation in self.conversations.values()
             if conversation.org_id == org_id and conversation.user_id == user_id
         ]
+        if project_id is not None:
+            records = [
+                conversation
+                for conversation in records
+                if conversation.project_id == project_id
+            ]
         if not include_archived:
             records = [
                 conversation
@@ -271,6 +280,28 @@ class InMemoryRuntimeApiStore:
                 records, key=lambda conversation: conversation.updated_at, reverse=True
             )[:limit]
         )
+
+    async def count_conversations_by_project(
+        self,
+        *,
+        org_id: str,
+        user_id: str,
+        project_ids: Sequence[str],
+    ) -> Mapping[str, int]:
+        """Group the caller's non-deleted conversations by project (PRD-07)."""
+
+        wanted = set(project_ids)
+        counts: dict[str, int] = {}
+        for conversation in self.conversations.values():
+            if conversation.org_id != org_id or conversation.user_id != user_id:
+                continue
+            if conversation.deleted_at is not None:
+                continue
+            pid = conversation.project_id
+            if pid is None or pid not in wanted:
+                continue
+            counts[pid] = counts.get(pid, 0) + 1
+        return counts
 
     async def list_messages(
         self,
@@ -395,12 +426,14 @@ class InMemoryRuntimeApiStore:
         folder_changed: bool,
         archived: bool | None,
         archived_changed: bool,
+        project_id: str | None,
+        project_id_changed: bool,
         now: datetime,
     ) -> ConversationRecord | None:
         """Apply a lifecycle PATCH idempotently.
 
         ``*_changed`` distinguishes "field omitted" (leave alone) from
-        "field set to null" (clear/un-archive). When no flag is True we
+        "field set to null" (clear/un-archive/unfile). When no flag is True we
         still bump ``updated_at`` and return the row so callers can
         round-trip an idempotent no-op.
         """
@@ -415,6 +448,8 @@ class InMemoryRuntimeApiStore:
             update["title"] = title
         if folder_changed:
             update["folder"] = folder
+        if project_id_changed:
+            update["project_id"] = project_id
         if archived_changed:
             if archived:
                 update["status"] = ConversationStatus.ARCHIVED

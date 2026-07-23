@@ -103,7 +103,7 @@ Three seams change. None of them is "write to the counts table".
 ### Seam 1 — `agent_conversations.project_id` (the missing link)
 
 Everything else is impossible without it. `ai-backend` migration
-**`0003_conversation_project.sql`** (README migration table / C18 — `0002` is PRD-05's
+**`0004_conversation_project.sql`** (README migration table / C18 — `0002` is PRD-05's
 `0002_run_history_index.sql`, `0004` is PRD-09's). Verified high-water mark on disk in
 this tree: `ls services/ai-backend/migrations` → `0001_runtime_baseline.sql` (+ rollback)
 and `MANIFEST.lock` only. Re-run `tools/check_migration_manifest.py --write` in the same
@@ -145,7 +145,7 @@ a column with an index.
 
 ### Seam 2 — counts are computed on read, by the service that owns the rows; the counter table is deleted
 
-Delete `project_activity_counts` (migration **`0047_drop_project_activity_counts.sql`**
+Delete `project_activity_counts` (migration **`0048_drop_project_activity_counts.sql`**
 — README migration table / C18; `0046` is PRD-06's `0046_connector_access_mode.sql`.
 Verified high-water mark on disk: `ls services/backend/migrations` tops out at
 `0045_provider_api_keys_custom_endpoint.sql`. Re-run
@@ -288,7 +288,7 @@ visibility, and library's project-membership predicate is the canonical one.
 
 **`services/ai-backend`**
 
-- `migrations/0003_conversation_project.sql` (+ `.rollback.sql`) — column + partial index
+- `migrations/0004_conversation_project.sql` (+ `.rollback.sql`) — column + partial index
   (C18), plus the `MANIFEST.lock` rewrite in the same commit.
 - `src/runtime_api/schemas/conversations.py` — `project_id` on `ConversationRecord`
   and `UpdateConversationRequest` (it already exists on `CreateConversationRequest:65`).
@@ -303,7 +303,7 @@ visibility, and library's project-membership predicate is the canonical one.
 
 **`services/backend`**
 
-- `migrations/0047_drop_project_activity_counts.sql` (+ rollback, + `MANIFEST.lock`) and
+- `migrations/0048_drop_project_activity_counts.sql` (+ rollback, + `MANIFEST.lock`) and
   the matching edit to `src/backend_app/projects/schema.sql:223-244, 356`.
 - `src/backend_app/projects/store.py` — delete `get_counts`/`upsert_counts` from the
   protocol and both adapters and the in-memory `counts` dict; keep the
@@ -373,7 +373,7 @@ visibility, and library's project-membership predicate is the canonical one.
   not Projects'. This PRD's read binding is correct either way, and the Files section
   degrades to its existing "No files yet" empty state — never a lie. Tracked separately
   as _PRD-Library-Persistence_ (adapter + a library migration on the next free
-  `services/backend` id — `0046` is PRD-06's and `0047` is this PRD's, so `0048`
+  `services/backend` id — `0046` is PRD-06's and `0048` is this PRD's, so `0048`
   or later — plus the upload-grant/finalize
   facade proxy). Do not ship a fake writer to make this PRD look finished.
 - **No file upload UI.** No writer path exists through the facade
@@ -404,9 +404,9 @@ visibility, and library's project-membership predicate is the canonical one.
 | Deleting `renderCrossDestinationTab("chats")` regresses the team profile | The slot stays for `todos/inbox/library/routines`; only the `chats` branch is removed, and only the solo profile stops calling it. `ProjectDetailView.test.tsx` covers both profiles.                                                                           |
 | Racing PRD-10 in `ProjectDetailView.tsx` / `ProjectsDestination.tsx`     | Wave order is fixed (C16, README hot-file table): PRD-07 lands the props/data in wave 2, PRD-10 owns the markup in wave 4. PRD-07 extracts no `ChatsSection.tsx` and touches no `destinations/chats/*` file, so there is nothing for PRD-10 or PRD-09 to undo.  |
 
-**Rollback:** three independent reverts. (1) `0047` rollback restores the counts table;
+**Rollback:** three independent reverts. (1) `0048` rollback restores the counts table;
 the code path that read it is gone, so restoring the table alone is inert — revert the
-`service.py` commit with it. (2) `0003` rollback drops `project_id`; conversations are
+`service.py` commit with it. (2) `0004` rollback drops `project_id`; conversations are
 unaffected because the column is nullable and nothing else reads it. (3) The client
 seams revert to the previous commit; `ProjectDetailView` degrades to its existing
 "coming soon" states when the port is absent (`files === undefined` at
@@ -417,11 +417,11 @@ seams revert to the previous commit; `ProjectDetailView` degrades to its existin
 1. `cd services/ai-backend && .venv/bin/python -m pytest tests/unit/runtime_api/test_conversation_project_filter.py` passes, asserting: a conversation created with `project_id="p1"` is returned by `GET /v1/agent/conversations?project_id=p1`, is **not** returned for `project_id=p2`, and round-trips `project_id` through `GET /v1/agent/conversations/{id}`.
 2. The same test asserts `GET /v1/agent/conversations/counts?project_ids=p1,p2` returns `{"counts": {"p1": 3, "p2": 0}}` for a fixture of 3 conversations on `p1`, and that a caller from a different `user_id` gets `{"p1": 0}` — proving the count is identity-scoped, not `project_ids`-scoped.
 3. The identical assertions run against all three adapters: `cd services/ai-backend && .venv/bin/python -m pytest tests/unit/runtime_adapters -k project_id` passes for `in_memory`, `file` and `postgres`.
-4. `services/ai-backend/migrations/0003_conversation_project.sql` creates `idx_agent_conversations_project` and its `.rollback.sql` drops both column and index; `cd services/ai-backend && .venv/bin/python -m pytest tests/ -k migration` passes, and `python tools/check_migration_manifest.py` exits 0 (the `MANIFEST.lock` rewrite is in the same commit).
+4. `services/ai-backend/migrations/0004_conversation_project.sql` creates `idx_agent_conversations_project` and its `.rollback.sql` drops both column and index; `cd services/ai-backend && .venv/bin/python -m pytest tests/ -k migration` passes, and `python tools/check_migration_manifest.py` exits 0 (the `MANIFEST.lock` rewrite is in the same commit).
 5. `cd services/backend-facade && .venv/bin/python -m pytest tests/test_forwarder.py -k project_id` passes, asserting `POST /v1/agent/conversations` with `{"project_id": "p1"}` forwards `project_id` upstream (today it is silently dropped by `FacadeConversationRequest`).
 6. `cd services/backend-facade && .venv/bin/python -m pytest tests/test_projects_proxy.py` passes with two new cases: `counts.chats` is populated from the batched ai-backend call, and `counts.chats === null` (HTTP 200, not 5xx) when that call raises.
 7. `cd services/backend && .venv/bin/python -m pytest tests/test_projects_service.py` passes, asserting `list_projects` returns `counts.files == 2` for a project holding 2 library files + 1 library page, and `counts.library_items == 3`.
-8. `grep -rn "upsert_counts\|get_counts\|project_activity_counts" services/backend/src` returns **zero** hits, and the only file matching `grep -rln project_activity_counts services/backend` is `services/backend/migrations/0047_drop_project_activity_counts.rollback.sql`.
+8. `grep -rn "upsert_counts\|get_counts\|project_activity_counts" services/backend/src` returns **zero** hits, and the only file matching `grep -rln project_activity_counts services/backend` is `services/backend/migrations/0048_drop_project_activity_counts.rollback.sql`.
 9. Three greps, each with a stated expected output: (a) `grep -rn "fetchProjectActivity" apps/frontend/src tools/design-parity` returns zero lines; (b) `grep -rln "toChatArchiveRow" apps/frontend/src/features/projects apps/desktop/renderer` lists both host `ProjectDataPort` implementations, proving each consumes PRD-03's shared projector; (c) `grep -rn "function toArchiveRow\|const toArchiveRow\|function toChatArchiveRow" apps packages` returns at most the three pre-existing definitions — `apps/frontend/src/features/chats/api/chatsApi.ts:104`, `apps/desktop/renderer/destinationBinders.tsx:169` (both deleted later by PRD-09) and `packages/chat-surface/src/projections/chats.ts` (PRD-03's) — i.e. this PRD adds **no** new row projection.
 10. `packages/chat-surface/src/destinations/projects/ProjectDetailView.test.tsx` asserts that with `chats={{status:"ok", data:[row]}}` on the solo profile, `[data-testid="project-detail-section-chats"]` contains exactly one `[data-testid="chat-archive-row"]`, and that row's rendered text contains `row.title`, `row.model` and the formatted `row.updatedAt` — the three fields the activity-fed list could not carry (`ProjectActivityRecord`, `store.py:149-173`, has none of them). The row's _anatomy_ (icon slot, chip placement, `.lrow` padding) is asserted by PRD-10 DoD 17/18, not here.
 11. The same test asserts (a) the Chats `SectionHeader` count equals the number of rendered `[data-testid="chat-archive-row"]` elements for a 3-row fixture (design `copilot-app.jsx:363` — `Chats · {chats.length}`), and (b) with `files={{status:"ok", data:[…12 rows]}}` the Files `SectionHeader` renders `12`, sourced from the same response's `counts_by_kind.file` so header and list cannot disagree.

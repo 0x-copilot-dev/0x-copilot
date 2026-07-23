@@ -55,9 +55,10 @@ import {
 import { afterEach, beforeAll, beforeEach, expect, it, vi } from "vitest";
 
 import type {
+  ChatArchiveRow,
   ConversationId,
   Project,
-  ProjectActivity,
+  ProjectFileRow,
   ProjectId,
   ProjectListResponse,
   ProjectMembership,
@@ -76,7 +77,6 @@ const projectsApiMocks = vi.hoisted(() => ({
   fetchProjects: vi.fn(),
   fetchProject: vi.fn(),
   fetchProjectMembers: vi.fn(),
-  fetchProjectActivity: vi.fn(),
   activateProject: vi.fn(),
   archiveProject: vi.fn(),
   deleteProject: vi.fn(),
@@ -91,10 +91,28 @@ vi.mock("../../../apps/frontend/src/api/projectsApi", async () => {
   return { ...actual, ...projectsApiMocks };
 });
 
+// PRD-07 — the detail's Chats + Files sections now flow through the web
+// `ProjectDataPort` (the project-activity route never existed). Feed the detail
+// state through port fixtures so the harness measures the REAL path.
+const projectDataPortMocks = vi.hoisted(() => ({
+  listProjectChats: vi.fn(),
+  listProjectFiles: vi.fn(),
+}));
+vi.mock("../../../apps/frontend/src/features/projects/ProjectDataPort", () => ({
+  createWebProjectDataPort: () => ({
+    listProjectChats: projectDataPortMocks.listProjectChats,
+    listProjectFiles: projectDataPortMocks.listProjectFiles,
+  }),
+}));
+
 // Imports below this line resolve through the mock above.
 import { ProjectsRoute } from "../../../apps/frontend/src/features/projects/ProjectsRoute";
 import { ProjectsDestination } from "@0x-copilot/chat-surface";
 import { RouterProvider } from "../../../packages/chat-surface/src/providers/RouterProvider";
+// PRD-07 — the detail's Files rows are `<ItemLink kind="library_file">`s; register
+// a stand-in resolver so they resolve to a real route under RouterProvider
+// (mirrors ProjectDetailView.test.tsx's beforeAll).
+import { registerItemRoute } from "../../../packages/chat-surface/src/refs/registry";
 // PRJ-09 probe: the real shell chrome, mounted the way each host mounts it.
 import { ChatShell } from "../../../packages/chat-surface/src/shell/ChatShell";
 import { DeploymentProfileProvider } from "../../../packages/chat-surface/src/providers/DeploymentProfileProvider";
@@ -171,6 +189,7 @@ function summaryOf(seed: Seed): ProjectSummary {
     viewer_starred: false,
     counts: {
       chats: seed.chats,
+      files: seed.files,
       todos_open: 0,
       todos_done: 0,
       inbox_items: 0,
@@ -199,6 +218,7 @@ function fullProjectOf(seed: Seed): Project {
     last_activity_at: "2026-07-21T09:00:00Z",
     counts: {
       chats: seed.chats,
+      files: seed.files,
       todos_open: 0,
       todos_done: 0,
       inbox_items: 0,
@@ -253,19 +273,41 @@ const LAUNCH_CHATS: ReadonlyArray<{
   },
 ];
 
-function activityRows(): ReadonlyArray<ProjectActivity> {
-  return LAUNCH_CHATS.map((c) => ({
-    id: c.id,
-    tenant_id: asTenantId("tenant_dev"),
-    project_id: asProjectId("launch"),
-    actor_user_id: asUserId("user_dev"),
-    actor_display_name: "Sarah Chen",
-    action: c.action,
-    kind: "chat",
-    ref: { kind: "chat", id: c.conv as unknown as ConversationId },
-    preview: c.preview,
-    occurred_at: c.at,
-  })) as unknown as ReadonlyArray<ProjectActivity>;
+// PRD-07 — the project's chats are `ChatArchiveRow`s (the shape
+// `ProjectDataPort.listProjectChats` resolves), NOT activity records. Title is
+// the leading clause; the trailing clause is the one-line preview.
+function launchChatRows(): ReadonlyArray<ChatArchiveRow> {
+  return LAUNCH_CHATS.map((c) => {
+    const [title, ...rest] = c.preview.split(" — ");
+    return {
+      id: c.conv as unknown as ConversationId,
+      title: title ?? c.preview,
+      status: "done" as const,
+      preview: rest.join(" — "),
+      model: "gpt-4o",
+      updated_at: c.at,
+      pinned: false,
+    };
+  });
+}
+
+// PRD-07 — the project's files are `ProjectFileRow`s (the shape
+// `ProjectDataPort.listProjectFiles` resolves).
+function launchFileRows(): ReadonlyArray<ProjectFileRow> {
+  return [
+    {
+      id: "file_deck" as ProjectFileRow["id"],
+      name: "Launch deck.pdf",
+      fileKind: "PDF",
+      updatedAt: "2026-07-21T10:00:00Z",
+    },
+    {
+      id: "file_plan" as ProjectFileRow["id"],
+      name: "GTM plan.md",
+      fileKind: "Doc",
+      updatedAt: "2026-07-20T10:00:00Z",
+    },
+  ];
 }
 
 function listResponse(): ProjectListResponse {
@@ -318,6 +360,13 @@ beforeAll(() => {
   mkdirSync(LIVE(""), { recursive: true });
   copyFileSync(REPO("packages/design-system/src/styles.css"), LIVE("ds.css"));
   copyFileSync(REPO("apps/frontend/src/styles.css"), LIVE("styles.css"));
+  // The library owns the `library_file` resolver; register a stand-in so the
+  // detail's file-row `<ItemLink>`s resolve without importing that destination.
+  registerItemRoute(
+    "library_file",
+    (id) => ({ kind: "workspace", workspaceId: id }),
+    { replace: true },
+  );
 });
 
 beforeEach(() => {
@@ -328,9 +377,15 @@ beforeEach(() => {
     items: [membershipOf()],
     next_cursor: null,
   });
-  projectsApiMocks.fetchProjectActivity.mockResolvedValue({
-    items: activityRows(),
-    next_cursor: null,
+  projectDataPortMocks.listProjectChats.mockReset();
+  projectDataPortMocks.listProjectFiles.mockReset();
+  projectDataPortMocks.listProjectChats.mockResolvedValue({
+    status: "ok",
+    data: launchChatRows(),
+  });
+  projectDataPortMocks.listProjectFiles.mockResolvedValue({
+    status: "ok",
+    data: launchFileRows(),
   });
   projectsApiMocks.streamProjectEvents.mockImplementation(() => ({
     close: vi.fn(),
@@ -359,7 +414,22 @@ it("renders the live Projects list (web host scaffold) → default.html", async 
 // detail — the WEB host's focused project (chat-surface ProjectDetailView)
 // ===========================================================================
 it("renders the live Project detail (ProjectDetailView, solo profile) → detail.html", async () => {
-  render(h(ProjectsRoute, { identity: IDENTITY }));
+  // The detail's chat rows (`_shared/Row`) and file rows (`<ItemLink>`) both need
+  // a router in the tree; wrap ProjectsRoute in a stub RouterProvider.
+  const router = {
+    current: () => ({ kind: "workspace", workspaceId: "launch" }),
+    navigate: () => undefined,
+    subscribe: () => () => undefined,
+  };
+  render(
+    h(
+      RouterProvider as never,
+      { router } as never,
+      h(ProjectsRoute, {
+        identity: IDENTITY,
+      }),
+    ),
+  );
 
   await waitFor(() => {
     expect(screen.getAllByTestId("projects-route-open").length).toBe(3);
@@ -369,9 +439,10 @@ it("renders the live Project detail (ProjectDetailView, solo profile) → detail
   await waitFor(() => {
     expect(screen.queryByTestId("project-detail-view")).not.toBeNull();
   });
-  // Chats section is filled from the host's cross-destination slot.
+  // Chats section is filled from the web `ProjectDataPort` (PRD-07): the rows
+  // are `chat-archive-row`s carrying title / model / time, not activity rows.
   await waitFor(() => {
-    expect(screen.getAllByTestId("projects-detail-chat-row").length).toBe(3);
+    expect(screen.getAllByTestId("chat-archive-row").length).toBe(3);
   });
 
   writeState("detail", captureRoute());

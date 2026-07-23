@@ -136,7 +136,11 @@ def register_projects_routes(app: FastAPI) -> None:
             headers=FacadeAuthenticator.service_headers(identity),
             timeout=15,
         )
-        return _coerce_object_or_raise(response)
+        payload = _coerce_object_or_raise(response)
+        # PRD-07 — batched chat-count fan-out join (one call for the whole page).
+        return await _merge_chat_counts(
+            app, identity=identity, client=client, payload=payload
+        )
 
     @app.get("/v1/projects/{project_id}")
     async def get_project(request: Request, project_id: str) -> dict[str, object]:
@@ -151,7 +155,11 @@ def register_projects_routes(app: FastAPI) -> None:
             headers=FacadeAuthenticator.service_headers(identity),
             timeout=15,
         )
-        return _coerce_object_or_raise(response)
+        payload = _coerce_object_or_raise(response)
+        # PRD-07 — fill counts.chats from ai-backend for this single project.
+        return await _merge_chat_counts(
+            app, identity=identity, client=client, payload=payload
+        )
 
     @app.post("/v1/projects", status_code=status.HTTP_201_CREATED)
     async def create_project(request: Request) -> dict[str, object]:
@@ -602,6 +610,81 @@ def _upstream_error_detail(response: httpx.Response) -> object:
 
 def _settings_for(app: FastAPI) -> FacadeSettings:
     return app.state.settings
+
+
+# ---------------------------------------------------------------------------
+# PRD-07 — chat-count fan-out join.
+#
+# A project's `chats` count lives in ai-backend (the conversation rows are in
+# its database); `backend` returns `counts.chats = null` because counting them
+# would invert the `ai-backend → backend` dependency into a cycle. The facade
+# is the only component permitted to talk to BOTH services, so it fills the
+# number with ONE batched call per page. Upstream failure/timeout degrades to
+# leaving `chats` null — the projects payload still returns 200, and the card
+# renders "N files" without a fabricated "0 chats".
+# ---------------------------------------------------------------------------
+
+
+async def _fetch_chat_counts(
+    app: FastAPI,
+    *,
+    identity: object,
+    client: httpx.AsyncClient,
+    project_ids: list[str],
+) -> dict[str, object]:
+    """Return ``project_id -> chat count`` from ai-backend, or {} on any failure."""
+
+    if not project_ids:
+        return {}
+    ai_backend_url = _settings_for(app).ai_backend_url
+    try:
+        response = await client.get(
+            f"{ai_backend_url}/v1/agent/conversations/counts",
+            params={"project_ids": ",".join(project_ids)},
+            headers=FacadeAuthenticator.service_headers(identity),  # type: ignore[arg-type]
+            timeout=5,
+        )
+    except httpx.HTTPError:
+        return {}
+    if response.status_code >= 400:
+        return {}
+    try:
+        data = response.json()
+    except ValueError:
+        return {}
+    counts = data.get("counts") if isinstance(data, dict) else None
+    return counts if isinstance(counts, dict) else {}
+
+
+async def _merge_chat_counts(
+    app: FastAPI,
+    *,
+    identity: object,
+    client: httpx.AsyncClient,
+    payload: dict[str, object],
+) -> dict[str, object]:
+    """Fill ``counts.chats`` on a project list/detail payload in place (PRD-07)."""
+
+    items = payload.get("items")
+    projects: list[object] = items if isinstance(items, list) else [payload]
+    ids = [
+        p["id"]
+        for p in projects
+        if isinstance(p, dict) and isinstance(p.get("id"), str)
+    ]
+    chat_counts = await _fetch_chat_counts(
+        app, identity=identity, client=client, project_ids=ids
+    )
+    if not chat_counts:
+        return payload
+    for project in projects:
+        if not isinstance(project, dict):
+            continue
+        pid = project.get("id")
+        counts = project.get("counts")
+        if isinstance(pid, str) and isinstance(counts, dict) and pid in chat_counts:
+            counts["chats"] = chat_counts[pid]
+    return payload
 
 
 __all__ = ["register_projects_routes"]
