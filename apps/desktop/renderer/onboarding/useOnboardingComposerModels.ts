@@ -17,10 +17,11 @@ import { useCallback, useEffect, useMemo, useState } from "react";
 
 import { QWEN3_4B_PRESET } from "@0x-copilot/chat-surface";
 import type { Transport } from "@0x-copilot/chat-transport";
+import type { ModelCatalogModel } from "@0x-copilot/api-types";
 
 import {
-  buildModelCatalog,
   defaultSelectedModelId,
+  mergeCatalog,
   type CatalogModel,
 } from "../composer/desktopModelCatalog";
 
@@ -28,8 +29,8 @@ import {
  *  churning as the resolved Ollama tag lands mid-download. */
 export const LOCAL_ENGINE_MODEL_ID = "first-run-local";
 
-interface ProviderKeysResponseLite {
-  readonly keys?: readonly { readonly provider?: string }[];
+interface ModelCatalogResponseLite {
+  readonly models?: readonly ModelCatalogModel[];
 }
 interface LocalModelsResponseLite {
   readonly models?: readonly { readonly name?: string }[];
@@ -52,33 +53,26 @@ export function useOnboardingComposerModels(
   transport: Transport,
   local: OnboardingLocalEngine,
 ): OnboardingComposerModels {
-  const [configuredProviders, setConfiguredProviders] = useState<
-    ReadonlySet<string>
-  >(new Set());
-  const [providersKnown, setProvidersKnown] = useState(false);
+  const [cloudModels, setCloudModels] = useState<readonly ModelCatalogModel[]>(
+    [],
+  );
   const [localModelNames, setLocalModelNames] = useState<readonly string[]>([]);
   const [selectedModel, setSelectedModel] = useState<string>("");
 
   useEffect(() => {
     let cancelled = false;
     void transport
-      .request<ProviderKeysResponseLite>({
+      .request<ModelCatalogResponseLite>({
         method: "GET",
-        path: "/v1/settings/provider-keys",
+        path: "/v1/agent/models",
       })
       .then((res) => {
-        if (cancelled) return;
-        const providers = new Set<string>();
-        for (const key of res.keys ?? []) {
-          if (key.provider) providers.add(key.provider);
-          // The key store speaks `google`; the curated catalog speaks `gemini`.
-          if (key.provider === "google") providers.add("gemini");
-        }
-        setConfiguredProviders(providers);
-        setProvidersKnown(true);
+        if (!cancelled) setCloudModels(res.models ?? []);
       })
       .catch(() => {
-        // Probe failed → leave `providersKnown` false so the catalog fails open.
+        // Catalog probe failed → empty cloud list; the run-start gate is the
+        // backstop if the user sends without a usable model.
+        if (!cancelled) setCloudModels([]);
       });
     return () => {
       cancelled = true;
@@ -111,11 +105,7 @@ export function useOnboardingComposerModels(
   const isLocalEngine = local.localModelPct !== null;
 
   const models = useMemo<CatalogModel[]>(() => {
-    const base = buildModelCatalog({
-      configuredProviders,
-      providersKnown,
-      localModelNames,
-    });
+    const base = mergeCatalog({ cloudModels, localModelNames });
     if (!isLocalEngine) {
       return base;
     }
@@ -131,13 +121,7 @@ export function useOnboardingComposerModels(
       supports_streaming: true,
     };
     return [localEntry, ...base.filter((m) => m.id !== LOCAL_ENGINE_MODEL_ID)];
-  }, [
-    configuredProviders,
-    providersKnown,
-    localModelNames,
-    isLocalEngine,
-    local.modelName,
-  ]);
+  }, [cloudModels, localModelNames, isLocalEngine, local.modelName]);
 
   // Keep a valid selection: preserve the user's pick when still present, else
   // fall back to the first usable model (the on-device entry leads on the local

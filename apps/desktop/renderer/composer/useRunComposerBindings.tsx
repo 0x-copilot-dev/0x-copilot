@@ -28,11 +28,15 @@ import {
   useTransport,
   type AssistantComposerPlusMenuSlotArgs,
 } from "@0x-copilot/chat-surface";
-import type { McpServer, Skill } from "@0x-copilot/api-types";
+import type {
+  McpServer,
+  ModelCatalogModel,
+  Skill,
+} from "@0x-copilot/api-types";
 
 import {
-  buildModelCatalog,
   defaultSelectedModelId,
+  mergeCatalog,
   type CatalogModel,
 } from "./desktopModelCatalog";
 import { DesktopAnchoredPlusMenu } from "./DesktopAnchoredPlusMenu";
@@ -43,8 +47,8 @@ interface SkillsResponse {
 interface McpServersResponse {
   readonly servers?: readonly McpServer[];
 }
-interface ProviderKeysResponse {
-  readonly keys?: readonly { readonly provider?: string }[];
+interface ModelCatalogResponseLite {
+  readonly models?: readonly ModelCatalogModel[];
 }
 interface WorkspaceDefaultsResponseLite {
   readonly default_model?: {
@@ -114,10 +118,9 @@ export function useRunComposerBindings(): RunComposerBindings {
   const [serversLoading, setServersLoading] = useState(true);
 
   // --- Model catalog inputs ---
-  const [configuredProviders, setConfiguredProviders] = useState<
-    ReadonlySet<string>
-  >(new Set());
-  const [providersKnown, setProvidersKnown] = useState(false);
+  const [cloudModels, setCloudModels] = useState<readonly ModelCatalogModel[]>(
+    [],
+  );
   const [localModelNames, setLocalModelNames] = useState<readonly string[]>([]);
   const [localModelSizes, setLocalModelSizes] = useState<
     Readonly<Record<string, number>>
@@ -172,26 +175,17 @@ export function useRunComposerBindings(): RunComposerBindings {
   useEffect(() => {
     let cancelled = false;
     void transport
-      .request<ProviderKeysResponse>({
+      .request<ModelCatalogResponseLite>({
         method: "GET",
-        path: "/v1/settings/provider-keys",
+        path: "/v1/agent/models",
       })
       .then((res) => {
-        if (cancelled) return;
-        const providers = new Set<string>();
-        for (const key of res.keys ?? []) {
-          if (key.provider) providers.add(key.provider);
-          // The key store speaks `google`; the curated catalog (and the
-          // runtime's model resolver) speak `gemini`. Alias so a Google key
-          // actually lights up the Gemini rows.
-          if (key.provider === "google") providers.add("gemini");
-        }
-        setConfiguredProviders(providers);
-        setProvidersKnown(true);
+        if (!cancelled) setCloudModels(res.models ?? []);
       })
       .catch(() => {
-        // Probe failed → leave `providersKnown` false so the catalog fails open
-        // (a configured user is never blocked; run-start error is the backstop).
+        // Catalog probe failed → empty cloud list (a configured user's run-start
+        // error is the backstop if the catalog was momentarily unreachable).
+        if (!cancelled) setCloudModels([]);
       });
     return () => {
       cancelled = true;
@@ -265,15 +259,12 @@ export function useRunComposerBindings(): RunComposerBindings {
   }, [transport]);
 
   const models = useMemo<CatalogModel[]>(() => {
-    const base = buildModelCatalog({
-      configuredProviders,
-      providersKnown,
-      localModelNames,
-    });
+    const base = mergeCatalog({ cloudModels, localModelNames });
     const merged = [...base, ...customModels];
-    // The persisted workspace default may live outside the curated set (e.g.
-    // the Add-key wizard's gpt-4o). Surface it as a synthetic entry so it is
-    // visible and selectable, with the same configured-gating as curated rows.
+    // The persisted workspace default may live outside the catalog (e.g. the
+    // Add-key wizard's gpt-4o). Surface it as a synthetic entry so it is visible
+    // and selectable; it's configured when the catalog reports its provider as
+    // usable (any configured cloud model of that provider).
     if (workspaceDefault !== null) {
       const listed = merged.some(
         (m) =>
@@ -281,8 +272,9 @@ export function useRunComposerBindings(): RunComposerBindings {
           m.model_name === workspaceDefault.model_name,
       );
       if (!listed) {
-        const configured =
-          !providersKnown || configuredProviders.has(workspaceDefault.provider);
+        const configured = base.some(
+          (m) => m.provider === workspaceDefault.provider && m.configured,
+        );
         merged.push({
           id: workspaceDefault.model_name,
           provider: workspaceDefault.provider,
@@ -296,13 +288,7 @@ export function useRunComposerBindings(): RunComposerBindings {
       }
     }
     return merged;
-  }, [
-    configuredProviders,
-    providersKnown,
-    localModelNames,
-    customModels,
-    workspaceDefault,
-  ]);
+  }, [cloudModels, localModelNames, customModels, workspaceDefault]);
 
   // Selection resolution — ONE writer so the workspace-default seed and the
   // keep-valid fallback cannot race each other's stale closures:

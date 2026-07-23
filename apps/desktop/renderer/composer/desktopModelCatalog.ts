@@ -1,64 +1,17 @@
-// Model catalog for the desktop Run composer's model picker.
+// Model catalog helpers for the desktop composers + Settings model-select.
 //
-// Mirrors the web ChatScreen's model-list assembly: a curated cloud set +
-// locally-installed Ollama models, with each cloud model marked `configured`
-// (selectable) only when the user actually has that provider's BYOK key. Models
-// the user can't run are shown disabled rather than hidden, so the picker is an
-// honest map of what's available — the same shape the reference (Cursor/Claude)
-// picker uses. The Fast/Balanced/Deep depth grid is intentionally not part of
-// this (the composer mounts with `depthVisible={false}`).
-//
-// OQ4 (PRD): the curated cloud list is a static default here, as on web. If a
-// real `/v1/...` model catalog lands, swap `CURATED_CLOUD_MODELS` for a fetch.
+// The cloud model list is NOT hardcoded here: every consumer fetches the one
+// backend catalog (GET /v1/agent/models), whose per-item `configured` flag
+// already reflects env keys ∪ the user's BYOK keys (the same credential truth
+// the run-create gate uses). `mergeCatalog` folds that fetched cloud list
+// together with locally-installed Ollama models into the picker shape. This
+// replaced the old per-host `CURATED_CLOUD_MODELS` + separate provider-key
+// probe, so desktop and web now read the identical source with no drift.
 
 import type { ModelCatalogModel } from "@0x-copilot/api-types";
 
+/** A catalog entry with a UI `disabled` flag (keyless cloud model). */
 export type CatalogModel = ModelCatalogModel & { disabled?: boolean };
-
-/** Provider ids that back a curated model (match `ProviderKeySummary.provider`). */
-type CuratedProvider = "openai" | "anthropic" | "gemini";
-
-interface CuratedEntry {
-  readonly id: string;
-  readonly provider: CuratedProvider;
-  readonly model_name: string;
-  readonly name: string;
-  readonly description: string;
-  readonly reasoning?: ModelCatalogModel["reasoning"];
-}
-
-const CURATED_CLOUD_MODELS: readonly CuratedEntry[] = [
-  {
-    id: "gpt-5.4-mini",
-    provider: "openai",
-    model_name: "gpt-5.4-mini",
-    name: "GPT-5.4 Mini",
-    description: "Fast OpenAI model",
-    reasoning: { enabled: true, effort: "medium", summary: "auto" },
-  },
-  {
-    id: "anthropic/claude-sonnet-4-6",
-    provider: "anthropic",
-    model_name: "claude-sonnet-4-6",
-    name: "Claude Sonnet 4.6",
-    description: "Balanced Anthropic model",
-    reasoning: { enabled: true, effort: "medium", summary: "auto" },
-  },
-  {
-    id: "anthropic/claude-haiku-4-5",
-    provider: "anthropic",
-    model_name: "claude-haiku-4-5",
-    name: "Claude Haiku 4.5",
-    description: "Fast Anthropic model",
-  },
-  {
-    id: "google-ai-studio/gemini-3-flash",
-    provider: "gemini",
-    model_name: "gemini-3-flash",
-    name: "Gemini 3 Flash",
-    description: "Google long-context model",
-  },
-];
 
 /** A locally-installed Ollama model, mapped to a catalog entry. */
 function localModel(name: string): CatalogModel {
@@ -74,35 +27,21 @@ function localModel(name: string): CatalogModel {
 }
 
 /**
- * Assemble the picker list. `configuredProviders` is the set of BYOK providers
- * the user has a key for; a curated cloud model is `configured`/enabled only
- * when its provider is in that set. `localModelNames` are always configured.
- * When the provider-key probe couldn't run (`providersKnown === false`), the
- * curated set fails open (all selectable) so a configured user is never blocked
- * — the run-start error path is the backstop if a key is truly missing.
+ * Assemble the picker list from the fetched backend catalog + local models.
+ * `cloudModels` are `/v1/agent/models` items whose `configured` flag is
+ * authoritative (env ∪ BYOK); a cloud model whose provider the user can't run
+ * is shown disabled rather than hidden, so the picker is an honest map of what's
+ * available. `localModelNames` are always configured.
  */
-export function buildModelCatalog(args: {
-  readonly configuredProviders: ReadonlySet<string>;
-  readonly providersKnown: boolean;
+export function mergeCatalog(args: {
+  readonly cloudModels: readonly ModelCatalogModel[];
   readonly localModelNames: readonly string[];
 }): CatalogModel[] {
-  const { configuredProviders, providersKnown, localModelNames } = args;
-  const cloud: CatalogModel[] = CURATED_CLOUD_MODELS.map((entry) => {
-    const configured =
-      !providersKnown || configuredProviders.has(entry.provider);
-    return {
-      id: entry.id,
-      provider: entry.provider,
-      model_name: entry.model_name,
-      name: entry.name,
-      description: entry.description,
-      configured,
-      supports_streaming: true,
-      ...(entry.reasoning ? { reasoning: entry.reasoning } : {}),
-      disabled: !configured,
-    };
-  });
-  const local = localModelNames.map(localModel);
+  const cloud: CatalogModel[] = args.cloudModels.map((m) => ({
+    ...m,
+    disabled: m.configured === false,
+  }));
+  const local = args.localModelNames.map(localModel);
   return [...cloud, ...local];
 }
 

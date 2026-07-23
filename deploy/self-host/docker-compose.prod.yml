@@ -166,6 +166,13 @@ services:
       RUNTIME_MIGRATIONS_AUTO_APPLY: "false"
       ENTERPRISE_AUTH_SECRET: ${ENTERPRISE_AUTH_SECRET}
       ENTERPRISE_SERVICE_TOKEN: ${ENTERPRISE_SERVICE_TOKEN}
+      # Trusted-backend lane: BOTH this and ENTERPRISE_SERVICE_TOKEN are required
+      # for per-user BYOK provider keys to reach runs (the ai-backend GETs
+      # /internal/v1/policies/runtime from the backend at run-create). Without it
+      # the lane is half-configured — every BYOK run failed at create with a
+      # misleading "add a key", and UserPoliciesResolverFactory now refuses to
+      # boot on that partial config rather than silently drop keys.
+      BACKEND_BASE_URL: http://backend:8100
       MCP_BACKEND_REGISTRY_URL: http://backend:8100
       SKILLS_BACKEND_REGISTRY_URL: http://backend:8100
       WEB_CONCURRENCY: ${AI_BACKEND_WORKERS:-2}
