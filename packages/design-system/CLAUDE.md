@@ -51,10 +51,17 @@ rung: reaching for `--font-size-2xs` (11.2px) where 9.5px mono was meant is how 
 section header shipped 18% too large.
 
 **Prefer a recipe over raw tokens.** For a role that already has one — eyebrow, section
-label, heading, item title, caption, pill, accent chip — use the composed recipe
-(`.ui-*` class or its `index.tsx` wrapper) instead of re-assembling size + weight +
-tracking + transform. `SKILL.md` is the intent → recipe map; hand-composing a role that
-a recipe covers is how the same label drifted to three tracking values app-wide.
+label, heading, item title, caption, pill, accent chip, status/metadata chip — use the
+composed recipe (`.ui-*` class or its `index.tsx` wrapper) instead of re-assembling size
+
+- weight + tracking + transform. `SKILL.md` is the intent → recipe map; hand-composing a
+  role that a recipe covers is how the same label drifted to three tracking values app-wide.
+
+**The status/metadata chip is `.ui-badge` / `<Badge>` — the design's `.chip`** (mono,
+outlined, NO fill; tones recolour text + border only; `dot` only for a live chip). The
+older filled `<StatusPill>` / `.ui-status-pill` recipe was **deleted** (PRD-02); do not
+reintroduce a filled status pill. Status labels are LOWERCASE at the source, never an
+uppercase `text-transform`.
 `letter-spacing` never takes a raw `em` — only a `--tracking-*` token. (That rule is
 enforced by **review** plus the token-contract and parity gates in `SKILL.md`, not by
 stylelint: this repo has no stylelint configuration, despite what older comments claimed.)

@@ -516,3 +516,84 @@ nothing": C11 gives PRD-01 the `--font-size-mono-10-5` token and C12 fixes the s
 **Coordinate with (no ordering constraint):** the generative-UI surface-spec work, which
 owns `Tier2Loader`'s component registry; the `"StatusPill"` key rebinding in scope item
 `src/surfaces/Tier2Loader.tsx` touches that contract.
+
+## Implementation record
+
+_Landed on branch `claude/prd-02-chip-recipe`. Regression surface run from the worktree
+root on 2026-07-23._
+
+### What landed
+
+- **design-system.** `styles.css`: three tone-line tokens minted beside
+  `--color-accent-line` (`--color-success-line` / `--color-warning-line` /
+  `--color-danger-line`, literal `rgba(…, 0.25)` — see Deviations); `.ui-badge` made
+  chip-exact (`gap: 5px`, `line-height: 1.5`, `padding: 1px 8px`, `.ui-badge svg 10×10`,
+  `.ui-badge__dot`, `.ui-badge--muted`, tone borders on the `-line` tokens,
+  `--accent` swapped off `--color-accent-strong`); `.ui-status-pill*` block and the
+  orphaned `@keyframes ui-pulse` deleted; `.ui-pill` docblock cleaned. `index.tsx`:
+  `Badge` gained `dot?: boolean` + `muted` tone; design-system `StatusPill` +
+  `StatusTone` deleted; `Pill` docblock retargeted. `SKILL.md` / `CLAUDE.md` updated.
+- **chat-surface.** `StatusPill.tsx` rewritten as a zero-style tone→`.ui-badge` class
+  adapter (`showDot` default flipped to `false`); `statusTone.ts` labels lowercased and
+  `titleCase`→`normaliseLabel`; `activityStatusLabel` / `ChatsArchive.statusLabel` /
+  `ProjectsDestination.STATUS_LABEL` de-duplicated onto the SSOT; six agents/tools call
+  sites migrated design-system `StatusPill` → `<Badge>`; `Tier2Loader` `"StatusPill"` key
+  rebound to chat-surface's component with a legacy-`tone` shim; tests updated.
+- **apps/frontend (web).** `Topbar.tsx` migrated to `<Badge>`; `Topbar.test.tsx` pins
+  `ui-badge`; `adapters.ts` docblock retargeted.
+- **tools/design-parity.** `chats` + `activity` `report-default.{md,json}` regenerated.
+
+### DoD status (16/17 fully MET; 1 web-only residual)
+
+| #   | Item                                               | Verdict                | Evidence                                                                                                                                                                                                                                                                                                                                                                                                             |
+| --- | -------------------------------------------------- | ---------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| 1   | Tokens                                             | MET                    | greps → `3 / 5 / 0 / 1` exactly                                                                                                                                                                                                                                                                                                                                                                                      |
+| 2   | `.ui-badge` geometry pin                           | MET                    | design-vs-live diff over 11 shape props → `[]`                                                                                                                                                                                                                                                                                                                                                                       |
+| 3   | Tone pin                                           | MET                    | color/borderColor diff over 3 anchors → `[]`; `.ui-badge--muted` grep → `1`                                                                                                                                                                                                                                                                                                                                          |
+| 4   | design-system clean of dead symbols                | MET                    | grep → no hits                                                                                                                                                                                                                                                                                                                                                                                                       |
+| 5   | `ui-status-pill` gone product-wide                 | MET                    | grep (excl. `.aui-status-pill`) → no hits                                                                                                                                                                                                                                                                                                                                                                            |
+| 6   | No `CSSProperties`; className asserted             | MET                    | grep → `0`; `StatusPill.test.tsx:35` pins `ui-badge ui-badge--success`                                                                                                                                                                                                                                                                                                                                               |
+| 7   | Dot off by default                                 | MET                    | `StatusPill.test.tsx:59,67` → 0 then 1                                                                                                                                                                                                                                                                                                                                                                               |
+| 8   | Lowercase label invariant                          | MET                    | `statusTone.test.ts:70-79`                                                                                                                                                                                                                                                                                                                                                                                           |
+| 9   | No Title-Case labels / no `activityStatusLabel`    | MET                    | grep → no hits                                                                                                                                                                                                                                                                                                                                                                                                       |
+| 10  | `vitest run --root packages/chat-surface`          | MET                    | 236 files / 2684 tests pass                                                                                                                                                                                                                                                                                                                                                                                          |
+| 11  | design-system typecheck                            | MET                    | exit 0                                                                                                                                                                                                                                                                                                                                                                                                               |
+| 12  | chat-surface + frontend typecheck + frontend build | **PARTIAL / residual** | chat-surface typecheck exit 0; **frontend typecheck+build fail on 5 pre-existing `ActivityRoute.test.tsx` `"completed"` run-status enum errors** — file NOT in this PRD's diff, byte-identical to merge-base `1dbb33ba`, zero Badge/StatusPill/Topbar errors. The load-bearing purpose (deleted design-system exports have no remaining consumer) IS proven: tsc emits no dangling-import error at `Topbar.tsx:171`. |
+| 13  | Chats parity (anchor-scoped)                       | MET                    | high+medium on chip anchors → `0`                                                                                                                                                                                                                                                                                                                                                                                    |
+| 14  | Activity parity (anchor-scoped)                    | MET                    | high+medium on chip anchors → `0`                                                                                                                                                                                                                                                                                                                                                                                    |
+| 15  | No casing/tracking divergence                      | MET                    | text/textTransform/letterSpacing on chip anchors → `0`                                                                                                                                                                                                                                                                                                                                                               |
+| 16  | FTUE gate unmoved                                  | MET                    | `git diff --exit-code first-run/out/report.md` → clean (exit 0)                                                                                                                                                                                                                                                                                                                                                      |
+| 17  | Topbar test                                        | MET                    | `Topbar.test.tsx` 6 tests pass; `:66` asserts `ui-badge` + `"Ready"`                                                                                                                                                                                                                                                                                                                                                 |
+
+### Deviations from the PRD
+
+1. **`StatusPill.tsx` emits `.ui-badge` classes directly instead of rendering `<Badge>`**
+   (Architectural decision step 3 said "render a `<Badge>` wrapper"). See
+   `StatusPill.tsx:12-15`: keeping the chip host-local avoids a runtime import coupling
+   from chat-surface onto design-system's _component_ surface for what is a pure
+   class-name mapping — the `.ui-badge` CSS recipe remains the single source of truth for
+   the chip's _shape_, which is what the PRD actually cared about. DoD 6's assertion is
+   unaffected (`<Badge tone="success">` and this adapter both emit
+   `class="ui-badge ui-badge--success"`). Trade-off: the tone→class map now exists in two
+   places (`Badge` in design-system, `TONE_CLASS` in StatusPill), both referencing the
+   same CSS classes; a future rename of a `.ui-badge--*` class must touch both. Judged the
+   lesser evil versus a cross-package component dependency.
+2. **The three tone-line tokens are literal `rgba(…, 0.25)`, not `color-mix(...)`**
+   (PRD prose §Design-intent implied the `color-mix` idiom). This is explicitly sanctioned
+   by the Risks table (line 351): `color-mix` serializes as `color(srgb …)` and would fail
+   the comparator's exact-string colour check. Values are byte-identical to the design
+   targets. DoD 1's four runnable checks (the operative gate) all pass.
+
+### Left open / residual
+
+- DoD 12's frontend typecheck+build red is a **pre-existing, web-only, PRD-unrelated**
+  failure (`ActivityRoute.test.tsx` `latest_run_status: "completed"` not in the api-types
+  union). Per the desktop-first ruling it is a documented residual, not a blocker: every
+  shared-package and desktop-reachable item passes. A reviewer should confirm this file is
+  untouched by this PRD (it is: not in `git diff --stat`).
+- Cross-package type edge (symlink caveat): chat-surface's typecheck resolves
+  design-system to the `/enterprise-search` root copy, so it cannot authoritatively
+  typecheck the new `Badge` `dot`/`muted` props added _here_. This is moot for the runtime
+  path because `StatusPill.tsx` does **not** import `<Badge>` (deviation 1); the new Badge
+  API is exercised only by the migrated agents/tools call sites, whose behaviour is
+  covered by chat-surface's own vitest (item 10, which DOES see worktree edits).

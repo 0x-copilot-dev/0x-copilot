@@ -7,16 +7,16 @@
 //     §4.10 (POST /v1/agents/<id>/duplicate), §3.2 (immutability rule).
 //
 // Invariants:
-//   - SP-1: StatusPill is the warning surface (tone="running" carries the
-//     "this will create a copy" visual weight — same primitive as the rest
-//     of the design system, no bespoke warning component).
+//   - SP-1: the design-system <Badge> is the heads-up surface (accent tone
+//     carries the "this will create a copy" visual weight — same primitive as
+//     the rest of the design system, no bespoke warning component).
 //   - Single forward button per the task brief — "Create your copy".
 //   - Pure presentation. Host owns the POST /v1/agents/<id>/duplicate
 //     call and the resulting route navigation.
 
 import type { CSSProperties, ReactElement } from "react";
 
-import { StatusPill } from "@0x-copilot/design-system";
+import { Badge } from "@0x-copilot/design-system";
 
 export interface ForkDialogProps {
   /** Display name of the agent being forked. */
@@ -55,11 +55,9 @@ export function ForkDialog(props: ForkDialogProps): ReactElement {
         data-testid="agent-fork-dialog-panel"
       >
         <div style={headerStyle}>
-          <StatusPill
-            tone="running"
-            label="Heads up"
-            data-testid="agent-fork-dialog-warning-pill"
-          />
+          <Badge tone="accent" data-testid="agent-fork-dialog-warning-pill">
+            Heads up
+          </Badge>
           <h2 id="agent-fork-dialog-title" style={titleStyle}>
             Edit a {origin} agent?
           </h2>
