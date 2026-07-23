@@ -25,6 +25,7 @@ from agent_runtime.surfaces_v2.content import SurfaceContentProjection
 from agent_runtime.surfaces_v2.projection import SurfaceStoreProjection
 from runtime_api.http.errors import RuntimeApiError
 from runtime_api.schemas import (
+    ActiveRunCountResponse,
     AgentRunStatus,
     ConversationBucket,
     ConversationContextResponse,
@@ -488,6 +489,26 @@ class ConversationQueryService:
             next_cursor=next_cursor,
             has_more=has_more,
         )
+
+    async def get_active_run_count(
+        self,
+        *,
+        org_id: str,
+        user_id: str,
+    ) -> ActiveRunCountResponse:
+        """Return the caller's in-flight run count for the rail Run badge (PRD-12 D1).
+
+        A single indexed COUNT over ``agent_runs`` (one row per RUN) whose status
+        is in ``ACTIVE_RUN_STATUSES`` and whose conversation is live — strictly
+        less work than the deleted web hook, which paged 100 conversations and
+        did a per-row latest-run lookup, and correct where that hook undercounted
+        (two in-flight runs in one conversation now count as 2).
+        """
+
+        count = await self._persistence.count_active_runs(
+            org_id=org_id, user_id=user_id
+        )
+        return ActiveRunCountResponse(active_run_count=count)
 
     async def _attach_meta_counters(
         self,

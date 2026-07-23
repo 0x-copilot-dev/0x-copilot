@@ -6,7 +6,11 @@
 import { fireEvent, render, screen } from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
-import { DeploymentProfileProvider } from "@0x-copilot/chat-surface";
+import {
+  DeploymentProfileProvider,
+  type AppearancePatch,
+  type AppearanceValue,
+} from "@0x-copilot/chat-surface";
 import type {
   RendererSession,
   Transport,
@@ -14,6 +18,13 @@ import type {
 } from "@0x-copilot/chat-transport";
 
 import { SettingsMount } from "./SettingsMount";
+
+const APPEARANCE: AppearanceValue = {
+  theme: "system",
+  accent: "sky",
+  density: "comfortable",
+  reduceMotion: false,
+};
 
 const SESSION: RendererSession = {
   workspaceId: "org_local",
@@ -59,13 +70,20 @@ function fakeTransport(): Transport {
   };
 }
 
-function mount(onSignOut: () => void = () => undefined): void {
+function mount(
+  onSignOut: () => void = () => undefined,
+  onAppearanceChange: (patch: AppearancePatch) => void = () => undefined,
+): void {
   render(
     <DeploymentProfileProvider profile="single_user_desktop">
       <SettingsMount
         transport={fakeTransport()}
         session={SESSION}
         onSignOut={onSignOut}
+        // PRD-12 D9 — appearance is owned by the renderer-root boot controller;
+        // SettingsMount is a pass-through over these props.
+        appearanceValue={APPEARANCE}
+        onAppearanceChange={onAppearanceChange}
       />
     </DeploymentProfileProvider>,
   );
@@ -112,6 +130,18 @@ describe("<SettingsMount>", () => {
 
     clickSlug("model-behavior");
     expect(screen.getByTestId("model-behavior-page")).toBeTruthy();
+  });
+
+  it("passes Appearance edits through to the host controller (PRD-12 D9)", () => {
+    const onAppearanceChange = vi.fn();
+    mount(() => undefined, onAppearanceChange);
+    clickSlug("appearance");
+    // Picking a different accent swatch reports the patch to the renderer-root
+    // controller (which persists + paints) — SettingsMount holds no state.
+    const violet = document.querySelector('[data-value="violet"]');
+    expect(violet).not.toBeNull();
+    fireEvent.click(violet as Element);
+    expect(onAppearanceChange).toHaveBeenCalledWith({ accent: "violet" });
   });
 
   it("delegates the Profile Sign out button to the host onSignOut handler", () => {

@@ -84,6 +84,7 @@ from runtime_adapters.base import (
 )
 from runtime_api.http.errors import RuntimeApiError
 from runtime_api.schemas import (
+    ACTIVE_RUN_STATUSES,
     AgentRunStatus,
     ApprovalDecision,
     ApprovalDecisionRecord,
@@ -109,6 +110,16 @@ from runtime_api.schemas import (
     RunRecord,
     WorkspaceDefaultsRecord,
 )
+
+
+def _active_run_status_values() -> list[str]:
+    """The in-flight run-status wire values for ``= ANY(...)`` params (PRD-12).
+
+    Sorted for a stable query plan / test snapshot; sourced from the single
+    ``ACTIVE_RUN_STATUSES`` set so the status tuple is never re-typed inline.
+    """
+
+    return sorted(status.value for status in ACTIVE_RUN_STATUSES)
 
 
 class _Tables:
@@ -1451,18 +1462,57 @@ class PostgresRuntimeApiStore:
             cur = await conn.execute(
                 """
                 SELECT * FROM agent_runs
-                 WHERE org_id          = %s
-                   AND conversation_id = %s
-                   AND status IN (
-                       'queued', 'running', 'waiting_for_approval', 'cancelling'
-                   )
+                 WHERE org_id          = %(org_id)s
+                   AND conversation_id = %(conversation_id)s
+                   AND status = ANY(%(statuses)s)
                  ORDER BY created_at DESC
                  LIMIT 1
                 """,
-                (org_id, conversation_id),
+                {
+                    "org_id": org_id,
+                    "conversation_id": conversation_id,
+                    # The status tuple is not a fourth inline literal — it reads
+                    # the single ``ACTIVE_RUN_STATUSES`` source (PRD-12 DoD 3).
+                    "statuses": _active_run_status_values(),
+                },
             )
             row = await cur.fetchone()
         return self._run_record(row) if row is not None else None
+
+    async def count_active_runs(self, *, org_id: str, user_id: str) -> int:
+        """Count the caller's in-flight runs for the rail Run badge (PRD-12 D1).
+
+        An indexed COUNT on ``(org_id, user_id)`` (PRD-05's
+        ``idx_agent_runs_org_user_created`` leads with those columns) with a
+        status filter, joined to a live conversation so a soft-deleted /
+        history-purged conversation drops out of the badge. Runs under the tenant
+        RLS connection so ``tenant_isolation`` binds beneath the explicit
+        predicates.
+        """
+
+        async with self._tenant_connection(org_id=org_id) as conn:
+            cur = await conn.execute(
+                """
+                SELECT count(*)
+                  FROM agent_runs r
+                  JOIN agent_conversations c
+                    ON c.id = r.conversation_id AND c.org_id = r.org_id
+                 WHERE r.org_id  = %(org_id)s
+                   AND r.user_id = %(user_id)s
+                   AND c.deleted_at IS NULL
+                   AND r.status = ANY(%(statuses)s)
+                """,
+                {
+                    "org_id": org_id,
+                    "user_id": user_id,
+                    "statuses": _active_run_status_values(),
+                },
+            )
+            row = await cur.fetchone()
+        if row is None:
+            return 0
+        value = row[0] if isinstance(row, (tuple, list)) else row["count"]
+        return int(value or 0)
 
     async def get_latest_run_for_conversation(
         self,
@@ -1770,7 +1820,7 @@ class PostgresRuntimeApiStore:
                 # PRD-09 D4 — bump the parent conversation's ``updated_at`` in the
                 # SAME transaction so a status-only transition moves the row the
                 # Chats live tail watches (otherwise a cancel/fail/timeout/flip to
-                # waiting_for_approval touches only ``agent_runs``).
+                # WAITING_FOR_APPROVAL touches only ``agent_runs``).
                 await conn.execute(
                     "UPDATE agent_conversations SET updated_at = now() WHERE id = %s",
                     (row[_Columns.CONVERSATION_ID],),

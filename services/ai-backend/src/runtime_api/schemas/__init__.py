@@ -22,6 +22,7 @@ from runtime_api.schemas.commands import (
     RuntimeStageCommitCommand,
 )
 from runtime_api.schemas.common import (
+    ACTIVE_RUN_STATUSES,
     AgentRunStatus,
     ApprovalDecision,
     ApprovalStatus,
@@ -119,6 +120,7 @@ from runtime_api.schemas.events import (
     RuntimeEventReplayResponse,
 )
 from runtime_api.schemas.runs import (
+    ActiveRunCountResponse,
     CancelRunRequest,
     CancelRunResponse,
     CreateRunRequest,
@@ -159,6 +161,7 @@ __all__ = [
     "MessageRole",
     "MessageStatus",
     "AgentRunStatus",
+    "ACTIVE_RUN_STATUSES",
     "RuntimeEventVisibility",
     "RuntimeEventRedactionState",
     "RuntimeActivityKind",
@@ -218,6 +221,7 @@ __all__ = [
     "RunListResponse",
     "RunStatusResponse",
     "RunSummaryResponse",
+    "ActiveRunCountResponse",
     "CancelRunRequest",
     "CancelRunResponse",
     "RuntimeEventPresentationProjector",

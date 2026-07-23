@@ -1,5 +1,19 @@
 <!doctype html>
-<html lang="en">
+<!--
+  PRD-12 D9 — static appearance defaults so the pre-hydration frame paints TOKEN
+  values (not an unattributed :root + a hard-coded bg). Desktop mounts no
+  design-system ThemeProvider, so :root[data-*] IS the theming mechanism. These
+  are STATIC defaults only: the renderer-root boot controller (useAppearanceSettings)
+  overwrites them from GET /v1/me/preferences on mount. No inline script reads
+  storage here — that would be a second, desktop-only persistence path.
+-->
+<html
+  lang="en"
+  data-theme="dark"
+  data-accent="sky"
+  data-density="comfortable"
+  data-reduce-motion="auto"
+>
   <head>
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />

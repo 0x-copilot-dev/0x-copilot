@@ -44,7 +44,6 @@ import {
   SettingsSurface,
   ShortcutsPage,
   LOCAL_MODEL_CATALOG,
-  appearanceAttributes,
   createDeveloperTokensPort,
   createLocalModelsPort,
   createModelsPort,
@@ -56,6 +55,7 @@ import {
   type ApprovalPolicyPort,
   type ApprovalPolicyValue,
   type AppLockValue,
+  type AppearancePatch,
   type AppearanceValue,
   type KeychainProtectionValue,
   type ModelBehaviorModelOption,
@@ -125,19 +125,20 @@ export interface SettingsMountProps {
   readonly activeSection?: SettingsSectionSlug | null;
   /** PR-6.4: reflect the user's in-surface section clicks back to the host. */
   readonly onSectionChange?: (slug: SettingsSectionSlug) => void;
+  /**
+   * PRD-12 D9 — the current appearance, owned by the renderer-root boot
+   * controller (`useAppearanceSettings`) so it loads at launch and persists. The
+   * Appearance section is a pure pass-through over `value` + `onChange`; Settings
+   * no longer holds a local `useState(DEFAULT_APPEARANCE)` that reset every launch.
+   */
+  readonly appearanceValue: AppearanceValue;
+  readonly onAppearanceChange: (patch: AppearancePatch) => void;
 }
 
 // ---------------------------------------------------------------------------
 // Defaults for the controlled sections (a fresh solo desktop with no server
 // round-trip yet). Honest neutral starting points, not fabricated data.
 // ---------------------------------------------------------------------------
-
-const DEFAULT_APPEARANCE: AppearanceValue = {
-  theme: "system",
-  accent: "sky",
-  density: "comfortable",
-  reduceMotion: false,
-};
 
 const DEFAULT_MODEL_BEHAVIOR: ModelBehaviorValue = {
   defaultModel: null,
@@ -249,17 +250,6 @@ function personFromProfile(profile: UserProfile): ProfilePagePerson {
   };
 }
 
-/** Apply the live appearance attributes to the document root (host concern). */
-function applyAppearance(value: AppearanceValue): void {
-  if (typeof document === "undefined") return;
-  const attrs = appearanceAttributes(value);
-  const root = document.documentElement;
-  root.setAttribute("data-theme", attrs["data-theme"]);
-  root.setAttribute("data-accent", attrs["data-accent"]);
-  root.setAttribute("data-density", attrs["data-density"]);
-  root.setAttribute("data-reduce-motion", attrs["data-reduce-motion"]);
-}
-
 /** Best-effort error → message for the local-models card (no util on desktop). */
 function localModelsErrorMessage(err: unknown, fallback: string): string {
   return err instanceof Error && err.message ? err.message : fallback;
@@ -275,6 +265,8 @@ export function SettingsMount({
   onSignOut,
   activeSection,
   onSectionChange,
+  appearanceValue,
+  onAppearanceChange,
 }: SettingsMountProps): ReactElement {
   const providerKeysPort = useMemo(
     () => createProviderKeysPort(transport),
@@ -384,8 +376,8 @@ export function SettingsMount({
     },
     [session.workspaceId, refreshProfile],
   );
-  const [appearance, setAppearance] =
-    useState<AppearanceValue>(DEFAULT_APPEARANCE);
+  // PRD-12 D9 — appearance state lives in the renderer-root boot controller now
+  // (loads at launch + persists); this section is a pass-through over the props.
   const [modelBehavior, setModelBehavior] = useState<ModelBehaviorValue>(
     DEFAULT_MODEL_BEHAVIOR,
   );
@@ -929,16 +921,12 @@ export function SettingsMount({
           />
         );
       case "appearance":
+        // PRD-12 D9 — pure pass-through. The renderer-root controller applies
+        // the live attributes (`onApply`) and persists (Transport + KeyValueStore).
         return (
           <AppearancePage
-            value={appearance}
-            onChange={(patch) => {
-              setAppearance((prev) => {
-                const next = { ...prev, ...patch };
-                applyAppearance(next);
-                return next;
-              });
-            }}
+            value={appearanceValue}
+            onChange={onAppearanceChange}
           />
         );
       case "shortcuts":

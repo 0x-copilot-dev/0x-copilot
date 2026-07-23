@@ -129,8 +129,10 @@ describe("renderer bootstrap", () => {
 
   // Drive the renderer past boot + sign-in into the mounted shell. Returns
   // once the profile-gated shell is on screen (default destination = Run).
-  async function mountSignedInShell(): Promise<HTMLElement> {
-    const controls = installFakeBridge((channel: string) => {
+  async function mountSignedInShell(
+    onHttp: (path: string) => unknown | undefined = () => undefined,
+  ): Promise<HTMLElement> {
+    const controls = installFakeBridge((channel: string, payload?: unknown) => {
       if (channel === "auth.get-session") {
         return Promise.resolve({
           workspaceId: "org_acme",
@@ -144,6 +146,13 @@ describe("renderer bootstrap", () => {
       // first-time user's onboarding surface is covered by FirstRunGate.test.tsx.
       if (channel === "first-run.get") {
         return Promise.resolve({ completed: true });
+      }
+      // IpcTransport HTTP calls ride the `transport.request` channel; a test can
+      // answer specific paths (e.g. the D9 boot-load of /v1/me/preferences).
+      if (channel === "transport.request") {
+        const path = (payload as { path?: string } | undefined)?.path ?? "";
+        const answer = onHttp(path);
+        if (answer !== undefined) return Promise.resolve(answer);
       }
       return Promise.resolve(null);
     });
@@ -220,7 +229,12 @@ describe("renderer bootstrap", () => {
       "[data-rail-action='settings']",
     ) as HTMLButtonElement | null;
     expect(settingsButton).not.toBeNull();
-    expect(root.querySelector("[data-rail-me]")).not.toBeNull();
+    const avatar = root.querySelector("[data-rail-me]");
+    expect(avatar).not.toBeNull();
+    // PRD-12 DoD 17 — the avatar renders the SESSION's initial (displayName
+    // "Sarah" → "S"), not just an element. The rail derives the glyph from the
+    // display name the desktop binding threads (railIdentity).
+    expect(avatar?.textContent).toBe("S");
     // Settings surface is not mounted until the gear is clicked.
     expect(root.querySelector("[data-testid='settings-surface']")).toBeNull();
 
@@ -233,6 +247,35 @@ describe("renderer bootstrap", () => {
       root.querySelector("[data-testid='settings-surface']"),
     ).not.toBeNull();
     expect(root.querySelector("[data-testid='destination-outlet']")).toBeNull();
+  });
+
+  it("stamps :root[data-accent] from the boot-load preferences, before Settings opens (PRD-12 D9 / DoD 24d)", async () => {
+    // The renderer-root controller reads GET /v1/me/preferences on mount; the
+    // fake Transport returns a `violet` accent.
+    await mountSignedInShell((path) =>
+      path === "/v1/me/preferences"
+        ? {
+            appearance: {
+              theme: "dark",
+              accent: "violet",
+              density: "compact",
+              reduce_motion: "auto",
+            },
+          }
+        : undefined,
+    );
+    // Flush the boot-load fetch + the onApply DOM write.
+    await act(async () => {
+      await Promise.resolve();
+      await Promise.resolve();
+    });
+    // WITHOUT opening Settings, the document root carries the loaded accent —
+    // the desktop `:root[data-accent]` mechanism PRD-01's nine accents ride on.
+    expect(document.documentElement.getAttribute("data-accent")).toBe("violet");
+    expect(document.documentElement.getAttribute("data-theme")).toBe("dark");
+    expect(document.documentElement.getAttribute("data-density")).toBe(
+      "compact",
+    );
   });
 
   it("signs out from the Profile section: fires authSignOut and returns to the sign-in gate", async () => {

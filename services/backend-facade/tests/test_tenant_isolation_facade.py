@@ -126,6 +126,51 @@ def test_run_history_overrides_client_supplied_tenant(monkeypatch) -> None:
     assert call["identity"].org_id == "org_acme"
 
 
+def test_active_run_count_overrides_client_supplied_tenant(monkeypatch) -> None:
+    """PRD-12 — GET /v1/agent/runs/active_count forwards the SESSION's org/user,
+    never the client-supplied ``?org_id=&user_id=`` query params. Guards against
+    a caller reading another tenant's in-flight run count, and proves the literal
+    path is not shadowed by ``/v1/agent/runs/{run_id}``."""
+    monkeypatch.setenv("ENTERPRISE_AUTH_SECRET", "test-auth-secret")
+    monkeypatch.setenv("ENTERPRISE_SERVICE_TOKEN", "test-service-token")
+
+    calls: list[dict[str, object]] = []
+
+    async def capture(app, method, path, *, target, identity, **kwargs):
+        calls.append(
+            {
+                "method": method,
+                "path": path,
+                "target": target,
+                "params": kwargs.get("params"),
+                "identity": identity,
+            }
+        )
+        return {"active_run_count": 0}
+
+    monkeypatch.setattr(facade_app, "forward_json", capture)
+    client = TestClient(create_app(FacadeSettings()))
+
+    response = client.get(
+        "/v1/agent/runs/active_count",
+        params={"org_id": "other_org", "user_id": "other_user"},
+        headers={"authorization": _bearer("org_acme", "user_alice")},
+    )
+
+    assert response.status_code == 200
+    assert response.json() == {"active_run_count": 0}
+    assert len(calls) == 1
+    call = calls[0]
+    # The literal path reached the active-count handler, NOT get_run("active_count").
+    assert call["method"] == "GET"
+    assert call["path"] == "/v1/agent/runs/active_count"
+    assert call["target"] == "ai_backend"
+    # The forwarded params carry the verified session's tenant, not the client's.
+    assert call["params"]["org_id"] == "org_acme"
+    assert call["params"]["user_id"] == "user_alice"
+    assert call["identity"].org_id == "org_acme"
+
+
 def test_pin_route_forwards_post_to_ai_backend(monkeypatch) -> None:
     """PRD-H.4 — POST /conversations/{id}/pin proxies to ai-backend as POST."""
     monkeypatch.setenv("ENTERPRISE_AUTH_SECRET", "test-auth-secret")

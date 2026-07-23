@@ -60,6 +60,14 @@ export {
 } from "./providers/DeploymentProfileProvider";
 // === end Phase 0 (PR-0.4) ===
 export { ChatShell } from "./shell/ChatShell";
+// PRD-12 D1 — the run-activity bus provider. `ChatShell` mounts it internally;
+// exported so a host that renders a Run cockpit OUTSIDE `ChatShell` (or a test)
+// can share the same publish/subscribe instance.
+export {
+  RunActivityBusProvider,
+  useRunActivityBus,
+  type RunActivityBus,
+} from "./shell/runActivityBus";
 // === PRD-03 — host binding contract + shared projections ===
 // The TOTAL props boundary between chat-surface and its two hosts. Binding
 // types (required, `undefined`-free) + the type-derived field manifests both
@@ -926,6 +934,9 @@ export {
   AppearancePage,
   appearanceAttributes,
   splitAppearancePersistence,
+  // PRD-12 D9 — boot-load + persist controller (hosts mount it at the renderer
+  // root; composes appearanceAttributes + splitAppearancePersistence).
+  useAppearanceSettings,
   APPEARANCE_THEMES,
   APPEARANCE_ACCENTS,
   APPEARANCE_DENSITIES,
@@ -939,6 +950,8 @@ export {
   type AppearanceDensity,
   type AppearanceAttributes,
   type AppearancePersistenceSplit,
+  type AppearanceSettingsPorts,
+  type AppearanceSettingsController,
   type ShortcutRow,
   // Models & keys (PR-5.4 / PR-5.5 / PR-5.6)
   ProviderKeysPage,

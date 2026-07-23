@@ -155,8 +155,10 @@ describe("DestinationOutlet", () => {
       ["chats", "chats-empty"],
       ["projects", "projects-destination"],
       ["activity", "activity-destination"],
-      // Tools (relabelled) keeps the underlying `connectors` slug.
-      ["connectors", "connectors-body"],
+      // Tools (relabelled) keeps the underlying `connectors` slug. PRD-11
+      // rebuilt the surface as a row list; its always-present header marker is
+      // the "Connect a tool" CTA (the old `connectors-body` root id is gone).
+      ["connectors", "connectors-connect-cta"],
       // Skills (relabelled) keeps the underlying `tools` slug.
       ["tools", "skills-destination"],
     ];

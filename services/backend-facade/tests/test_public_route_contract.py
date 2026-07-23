@@ -18,6 +18,9 @@ def test_openapi_includes_core_product_paths() -> None:
         # PRD-H.4 — pin / unpin route proxied to ai-backend.
         "/v1/agent/conversations/{conversation_id}/pin",
         "/v1/agent/runs",
+        # PRD-12 — the rail Run-badge count; must be registered above
+        # ``/v1/agent/runs/{run_id}`` so the literal is not shadowed.
+        "/v1/agent/runs/active_count",
         "/v1/agent/models",
         "/v1/skills",
         "/v1/agent/history",

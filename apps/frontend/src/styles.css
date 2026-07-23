@@ -8745,8 +8745,10 @@ body.login-body {
  *   .chats-host .sidebar__head { display: none !important; }
  *   .chats-host .sidebar__user { display: none !important; }
  * ============================================================ */
-[data-component="chat-shell"][data-destination="chats"] .aui-sidebar__header,
-[data-component="chat-shell"][data-destination="chats"] .aui-sidebar__footer {
+[data-component="chat-shell"][data-active-destination="chats"]
+  .aui-sidebar__header,
+[data-component="chat-shell"][data-active-destination="chats"]
+  .aui-sidebar__footer {
   display: none;
 }
 

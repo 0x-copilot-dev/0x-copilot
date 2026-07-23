@@ -514,6 +514,18 @@ class RunHistoryResponse(RuntimeContract):
     has_more: bool = False
 
 
+class ActiveRunCountResponse(RuntimeContract):
+    """The caller's in-flight run count for the rail's Run badge (PRD-12 D1).
+
+    A COUNT over ``agent_runs`` (one row per RUN, joined to a live conversation)
+    whose status is in ``ACTIVE_RUN_STATUSES`` — so two in-flight runs in ONE
+    conversation count as 2, unlike the deleted web hook that counted
+    conversations. Server-projected: the client never derives it.
+    """
+
+    active_run_count: NonNegativeInt
+
+
 class CancelRunRequest(RuntimeContract):
     """Request to cancel long-running work."""
 
