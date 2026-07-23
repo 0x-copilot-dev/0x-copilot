@@ -359,4 +359,9 @@ def test_waiver_count_does_not_grow() -> None:
     orphan that must be waived) fails HERE and has to justify the bump."""
 
     _, waivers = find_orphans(default_paths())
-    assert len(waivers) == 12
+    # Bumped 12 -> 13 for the Generative Surfaces v2 cockpit chips
+    # (PostureChip / PendingCounterChip): exported from the barrel and consumed
+    # in-package by RunDestination (the cockpit both hosts mount), but not
+    # host-name-referenced, so the shallow guard waives them. Legit in-package
+    # consumers, owner-tagged at the export site.
+    assert len(waivers) == 13
