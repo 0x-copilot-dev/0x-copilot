@@ -543,8 +543,44 @@ class StreamOrchestrator:
                 payload=payload,
                 metadata=namespace.metadata(_Fields.VALUES),
             )
+            # Generative Surfaces v2 (PRD-C2): a ToolAccessGate park rides the
+            # mcp_auth interrupt. When the interrupt payload carries the additive
+            # ``gate`` block (present ONLY when ``SURFACES_V2`` is on — the gate
+            # never adds it flag-off), emit ``gate.opened`` beside the
+            # MCP_AUTH_REQUIRED event via the same producer, source=SYSTEM.
+            # Best-effort: a ledger emit never breaks parking or approval
+            # correctness. Flag off ⇒ no block ⇒ this is a no-op (byte-identical).
+            await self._maybe_emit_gate_opened(
+                run=run, event_type=event_type, payload=payload
+            )
             did_append = True
         return did_append
+
+    async def _maybe_emit_gate_opened(
+        self,
+        *,
+        run: RunRecord,
+        event_type: RuntimeApiEventType,
+        payload: Mapping[str, object],
+    ) -> None:
+        """Emit ``gate.opened`` for an mcp_auth interrupt carrying a v2 gate block."""
+
+        if event_type is not RuntimeApiEventType.MCP_AUTH_REQUIRED:
+            return
+        try:
+            from agent_runtime.surfaces_v2.gate import GateLedger
+
+            gate_payload = GateLedger.opened_payload(interrupt_payload=payload)
+            if gate_payload is None:
+                return
+            await self.event_producer.append_api_event(
+                run=run,
+                source=StreamEventSource.SYSTEM,
+                event_type=RuntimeApiEventType.GATE_OPENED,
+                payload=gate_payload,
+            )
+        except Exception:  # noqa: BLE001 - ledger emit never breaks parking
+            _logger.warning("[surfaces_v2] gate.opened emit failed", exc_info=True)
 
     @classmethod
     def payload_with_action_id(

@@ -1149,3 +1149,27 @@ class RuntimeQueuePort(Protocol):
 
     async def mark_dead_letter(self, *, result: RuntimeWorkerResult) -> None:
         """Mark a command permanently failed after retries are exhausted."""
+
+
+@runtime_checkable
+class ConnectorWritePolicyClient(Protocol):
+    """Persist a per-connector write-policy override in the core backend (PRD-C2).
+
+    The gate-time policy choice (``ask_first`` / ``allow_always``) is the
+    per-connector override of the global Approval Policy — stored by PRD-C1 on the
+    ``connectors`` table. The :class:`ApprovalCoordinator` calls this from the
+    decision endpoint BEFORE recording an mcp_auth approval so consent and its
+    policy land as one atomic act (a persist failure fails the decision closed).
+    Keyed by the connector ``slug`` (``card.name`` / the interrupt payload's
+    ``server_name``); the httpx impl resolves the backend row id and PATCHes it.
+    """
+
+    async def put_override(
+        self,
+        *,
+        org_id: str,
+        user_id: str,
+        connector_slug: str,
+        write_policy: str,
+    ) -> None:
+        """Set the connector's write-policy override; raise on any failure."""

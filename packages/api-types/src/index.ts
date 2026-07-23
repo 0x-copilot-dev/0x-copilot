@@ -81,6 +81,8 @@ import type {
   ReadExecutedPayload,
   SurfaceCreatedPayload,
   ViewDerivedPayload,
+  GateOpenedPayload,
+  GateResolvedPayload,
 } from "./ledger";
 
 export type McpTransport = "http" | "sse" | "stdio";
@@ -389,6 +391,8 @@ export type RuntimeApiEventType =
   | "read.executed"
   | "surface.created"
   | "view.derived"
+  | "gate.opened"
+  | "gate.resolved"
   | "workspace_snapshot_captured";
 
 export const RUNTIME_EVENT_SOURCES = [
@@ -452,6 +456,8 @@ export const RUNTIME_API_EVENT_TYPES = [
   "read.executed",
   "surface.created",
   "view.derived",
+  "gate.opened",
+  "gate.resolved",
   "workspace_snapshot_captured",
 ] as const satisfies readonly RuntimeApiEventType[];
 
@@ -1770,6 +1776,13 @@ export interface ApprovalDecisionRequest {
   // Shape is validated server-side (unknown edit keys ⇒ 422); the facade
   // passes it through unchanged.
   edits?: SurfaceEdits | null;
+  // PRD-C2 (Wave C) — the gate-time write-policy choice on an mcp_auth gate
+  // resolution. Permitted only when `decision === "approved"` (the request
+  // validator 422s otherwise); the ai-backend coordinator additionally
+  // requires the approval to be an mcp_auth gate and the v2 flag to be on,
+  // then persists it as the per-connector override (PRD-C1) before recording
+  // the decision. The facade passes it through unchanged.
+  write_policy?: "ask_first" | "allow_always" | null;
 }
 
 export interface ApprovalDecisionResponse {
@@ -2205,6 +2218,13 @@ export interface RuntimeEventPayloadByType {
   "read.executed": ReadExecutedPayload;
   "surface.created": SurfaceCreatedPayload;
   "view.derived": ViewDerivedPayload;
+  /** Generative Surfaces v2 (PRD-C2, SDR §5). The ToolAccessGate park/resume
+   * pair, emitted behind `SURFACES_V2`: `gate.opened` beside the mcp_auth
+   * interrupt, `gate.resolved` when the decision endpoint records the
+   * connect/cancel. The client ledger fold renders the canvas gate card + the
+   * posture chip from these (never the legacy `mcp_auth_required` event). */
+  "gate.opened": GateOpenedPayload;
+  "gate.resolved": GateResolvedPayload;
   /** AC5 slice 3b — host write-through pre-image snapshot. Emitted by the
    * workspace backend BEFORE an approved overwrite/edit mutates a granted
    * host file: the prior bytes are stored content-addressed and this event

@@ -170,6 +170,10 @@ class RuntimeEventPresentationProjector:
             return cls._surface_created_payload(payload)
         if event_type is RuntimeApiEventType.VIEW_DERIVED:
             return cls._view_derived_payload(payload)
+        if event_type is RuntimeApiEventType.GATE_OPENED:
+            return cls._gate_opened_payload(payload)
+        if event_type is RuntimeApiEventType.GATE_RESOLVED:
+            return cls._gate_resolved_payload(payload)
         return payload
 
     @classmethod
@@ -281,12 +285,16 @@ class RuntimeEventPresentationProjector:
             RuntimeApiEventType.READ_EXECUTED,
             RuntimeApiEventType.SURFACE_CREATED,
             RuntimeApiEventType.VIEW_DERIVED,
+            RuntimeApiEventType.GATE_OPENED,
+            RuntimeApiEventType.GATE_RESOLVED,
         }:
-            # Generative Surfaces v2 (PRD-A3) — ledger events the SurfaceStore
-            # fold consumes as surface-state merges, never timeline cards.
-            # Explicit so a TOOL/SYSTEM-sourced emit can't reroute into the tool
-            # bucket (the read events are emitted while a tool result is in
-            # flight).
+            # Generative Surfaces v2 (PRD-A3/C2) — ledger events the SurfaceStore
+            # + client ledger fold consume as surface/gate-state merges, never
+            # timeline cards. Explicit so a TOOL/SYSTEM-sourced emit can't reroute
+            # into the tool bucket. The gate pair rides beside the
+            # ``mcp_auth_required`` approval (which keeps its own MCP_AUTH kind);
+            # the canvas gate card + posture chip read these, not the legacy
+            # approval event, when the v2 flag is on.
             return RuntimeActivityKind.EVENT
         if event_type is RuntimeApiEventType.COMPRESSION_NOTE:
             # PR A1 — context-compression note. Renders as an inline
@@ -860,6 +868,55 @@ class RuntimeEventPresentationProjector:
             model = cls._text(gen.get(_LedgerKeys.Field.MODEL))
             if model is not None:
                 safe_payload[_LedgerKeys.Field.GEN] = {_LedgerKeys.Field.MODEL: model}
+        return safe_payload
+
+    @classmethod
+    def _gate_opened_payload(cls, payload: JsonObject) -> JsonObject:
+        """Project ``gate.opened`` through a strict allow-list (PRD-C2, SDR §5).
+
+        Keeps exactly ``v`` / ``gate_id`` / ``connector`` / ``purpose`` /
+        ``scopes[]`` / ``auth_state`` — so a gate emit can never over-share (the
+        interrupt payload carries the connect URL + display copy; none of it
+        rides the ledger row). ``scopes`` is re-built from its own list so a
+        non-string element can't slip through.
+        """
+
+        safe_payload: JsonObject = {}
+        cls._copy_payload_version(payload, safe_payload)
+        for text_key in (
+            _LedgerKeys.Field.GATE_ID,
+            _LedgerKeys.Field.CONNECTOR,
+            _LedgerKeys.Field.PURPOSE,
+            _LedgerKeys.Field.AUTH_STATE,
+        ):
+            value = cls._text(payload.get(text_key))
+            if value is not None:
+                safe_payload[text_key] = value
+        scopes = payload.get(_LedgerKeys.Field.SCOPES)
+        if isinstance(scopes, (list, tuple)):
+            safe_payload[_LedgerKeys.Field.SCOPES] = [
+                s for s in scopes if isinstance(s, str)
+            ]
+        return safe_payload
+
+    @classmethod
+    def _gate_resolved_payload(cls, payload: JsonObject) -> JsonObject:
+        """Project ``gate.resolved`` through a strict allow-list (PRD-C2, SDR §5).
+
+        Keeps ``v`` / ``gate_id`` / ``outcome`` and the optional ``write_policy``
+        (``ask_first`` / ``allow_always``). Nothing else survives.
+        """
+
+        safe_payload: JsonObject = {}
+        cls._copy_payload_version(payload, safe_payload)
+        for text_key in (
+            _LedgerKeys.Field.GATE_ID,
+            _LedgerKeys.Field.OUTCOME,
+            _LedgerKeys.Field.WRITE_POLICY,
+        ):
+            value = cls._text(payload.get(text_key))
+            if value is not None:
+                safe_payload[text_key] = value
         return safe_payload
 
     @classmethod
