@@ -15,12 +15,12 @@ import { formatRelativeTime } from "../../util/time";
 import {
   ProjectDetailView,
   type ProjectDetail,
-  type LibraryFileId,
   type ProjectFileRow,
 } from "./ProjectDetailView";
 import type {
   ChatArchiveRow,
   ConversationId,
+  LibraryFileId,
   ProjectId,
 } from "@0x-copilot/api-types";
 
