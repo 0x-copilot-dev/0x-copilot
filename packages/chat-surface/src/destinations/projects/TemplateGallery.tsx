@@ -28,6 +28,7 @@ import { CardGrid } from "../../shell/CardGrid";
 import { EmptyState } from "../../shell/EmptyState";
 import { FilterTabs, type FilterTabOption } from "../../shell/FilterTabs";
 import { StatusPill } from "../../shell/StatusPill";
+import { projectHueRamp } from "../_shared";
 
 // ── Tokens ───────────────────────────────────────────────────────────
 
@@ -147,12 +148,17 @@ function TemplateCard({
     alignItems: "center",
     gap: 10,
   };
+  // PRD-10 D3 — one shared hue ramp; the template tile keeps its emoji + 36px
+  // geometry (templates convergence is a later PRD, D9). No `hsl(...)` literal in
+  // this directory (DoD 2).
+  const iconRamp = projectHueRamp(template.colorHue ?? 200);
   const iconStyle: CSSProperties = {
     width: 36,
     height: 36,
     borderRadius: 8,
-    backgroundColor: `hsl(${template.colorHue ?? 200}, 55%, 35%)`,
-    color: ACCENT_CONTRAST,
+    backgroundColor: iconRamp.background,
+    border: iconRamp.border,
+    color: iconRamp.color,
     display: "inline-flex",
     alignItems: "center",
     justifyContent: "center",

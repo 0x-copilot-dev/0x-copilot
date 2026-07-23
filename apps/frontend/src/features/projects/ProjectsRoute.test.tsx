@@ -404,7 +404,7 @@ describe("ProjectsRoute render", () => {
     );
   });
 
-  it("renders each project as a .grid3 card — colour tile + first letter + 'N chats · M files' (FR-G.4)", async () => {
+  it("renders each project through the shared .ui-grid3 card — colour tile + first letter + 'N chats · M files' (PRD-10 D1)", async () => {
     projectsApiMocks.fetchProjects.mockResolvedValueOnce(
       listResponse([
         summary({
@@ -428,16 +428,17 @@ describe("ProjectsRoute render", () => {
     render(<ProjectsRoute identity={IDENTITY} />);
 
     await waitFor(() => {
-      expect(screen.getByTestId("projects-route-list")).toHaveClass(
-        "projects-grid3",
-      );
+      // The list is the SHARED CardGrid in its grid3 variant, not the old
+      // host-side `projects-grid3` scaffold.
+      expect(screen.getByTestId("card-grid")).toHaveClass("ui-grid3");
     });
 
-    const row = screen.getByTestId("projects-route-row");
-    expect(row).toHaveClass("projects-card");
-    // The colour tile shows the uppercased first letter of the name.
-    const tile = row.querySelector(".proj-ic");
-    expect(tile?.textContent).toBe("Q");
+    // Exactly one shared card (a single <button> hit area).
+    expect(screen.getByTestId("project-card")).toBeInTheDocument();
+    // The identity tile is the shared ProjectIconTile: the name's first letter
+    // on the per-project hue (NEVER icon_emoji).
+    const tile = screen.getByTestId("project-card-icon");
+    expect(tile.textContent).toBe("Q");
     expect(tile).toHaveAttribute("data-color-hue", "180");
     // The description + counts line render.
     expect(screen.getByText("Ship the widget")).toBeInTheDocument();
@@ -448,7 +449,8 @@ describe("ProjectsRoute render", () => {
     projectsApiMocks.fetchProjects.mockResolvedValueOnce(listResponse([]));
     render(<ProjectsRoute identity={IDENTITY} />);
     await waitFor(() => {
-      expect(screen.getByTestId("projects-route-empty")).toBeInTheDocument();
+      // The shared destination's "No projects yet" empty state.
+      expect(screen.getByText("No projects yet")).toBeInTheDocument();
     });
   });
 
@@ -461,13 +463,18 @@ describe("ProjectsRoute render", () => {
     render(<ProjectsRoute identity={IDENTITY} />);
 
     await waitFor(() => {
-      expect(screen.getByTestId("projects-route-error")).toBeInTheDocument();
+      // The shared destination's error empty-state (data-state on the wrapper is
+      // still driven by the host state machine).
+      expect(screen.getByTestId("projects-route")).toHaveAttribute(
+        "data-state",
+        "error",
+      );
     });
-    expect(
-      screen.getByTestId("projects-route-error-message").textContent,
-    ).toContain("boom");
+    expect(screen.getByText("Could not load projects")).toBeInTheDocument();
+    expect(screen.getByText("boom")).toBeInTheDocument();
 
-    fireEvent.click(screen.getByTestId("projects-route-retry"));
+    // Retry is the shared EmptyState action.
+    fireEvent.click(screen.getByTestId("empty-state-action"));
 
     await waitFor(() => {
       expect(screen.getByTestId("projects-route")).toHaveAttribute(
@@ -521,7 +528,7 @@ describe("ProjectsRoute SSE", () => {
     await waitFor(() => {
       expect(screen.getByText("Bravo")).toBeInTheDocument();
     });
-    expect(screen.getAllByTestId("projects-route-row")).toHaveLength(2);
+    expect(screen.getAllByTestId("project-card")).toHaveLength(2);
   });
 
   it("drops a row on project_deleted", async () => {
@@ -676,10 +683,10 @@ describe("ProjectsRoute mutations", () => {
     render(<ProjectsRoute identity={IDENTITY} />);
 
     await waitFor(() => {
-      expect(screen.getByTestId("projects-route-archive")).toBeInTheDocument();
+      expect(screen.getByTestId("project-card-archive")).toBeInTheDocument();
     });
 
-    fireEvent.click(screen.getByTestId("projects-route-archive"));
+    fireEvent.click(screen.getByTestId("project-card-archive"));
 
     await waitFor(() => {
       expect(projectsApiMocks.archiveProject).toHaveBeenCalledWith(
@@ -688,8 +695,8 @@ describe("ProjectsRoute mutations", () => {
       );
     });
     await waitFor(() => {
-      expect(screen.getByTestId("projects-route-row")).toHaveAttribute(
-        "data-project-status",
+      expect(screen.getByTestId("project-card-wrapper")).toHaveAttribute(
+        "data-status",
         "archived",
       );
     });
@@ -705,9 +712,9 @@ describe("ProjectsRoute mutations", () => {
     render(<ProjectsRoute identity={IDENTITY} />);
 
     await waitFor(() => {
-      expect(screen.getByTestId("projects-route-activate")).toBeInTheDocument();
+      expect(screen.getByTestId("project-card-activate")).toBeInTheDocument();
     });
-    fireEvent.click(screen.getByTestId("projects-route-activate"));
+    fireEvent.click(screen.getByTestId("project-card-activate"));
 
     await waitFor(() => {
       expect(projectsApiMocks.activateProject).toHaveBeenCalledWith(
@@ -716,8 +723,8 @@ describe("ProjectsRoute mutations", () => {
       );
     });
     await waitFor(() => {
-      expect(screen.getByTestId("projects-route-row")).toHaveAttribute(
-        "data-project-status",
+      expect(screen.getByTestId("project-card-wrapper")).toHaveAttribute(
+        "data-status",
         "active",
       );
     });
@@ -733,9 +740,9 @@ describe("ProjectsRoute mutations", () => {
     render(<ProjectsRoute identity={IDENTITY} />);
 
     await waitFor(() => {
-      expect(screen.getByTestId("projects-route-star")).toBeInTheDocument();
+      expect(screen.getByTestId("project-card-star")).toBeInTheDocument();
     });
-    fireEvent.click(screen.getByTestId("projects-route-star"));
+    fireEvent.click(screen.getByTestId("project-card-star"));
 
     await waitFor(() => {
       expect(projectsApiMocks.starProject).toHaveBeenCalledWith(IDENTITY, "a");
@@ -752,9 +759,10 @@ describe("ProjectsRoute mutations", () => {
     render(<ProjectsRoute identity={IDENTITY} />);
 
     await waitFor(() => {
-      expect(screen.getByTestId("projects-route-star")).toBeInTheDocument();
+      // A starred card renders the FILLED unstar control (shared card D2).
+      expect(screen.getByTestId("project-card-unstar")).toBeInTheDocument();
     });
-    fireEvent.click(screen.getByTestId("projects-route-star"));
+    fireEvent.click(screen.getByTestId("project-card-unstar"));
 
     await waitFor(() => {
       expect(projectsApiMocks.unstarProject).toHaveBeenCalledWith(
@@ -772,9 +780,9 @@ describe("ProjectsRoute mutations", () => {
     render(<ProjectsRoute identity={IDENTITY} />);
 
     await waitFor(() => {
-      expect(screen.getByTestId("projects-route-delete")).toBeInTheDocument();
+      expect(screen.getByTestId("project-card-delete")).toBeInTheDocument();
     });
-    fireEvent.click(screen.getByTestId("projects-route-delete"));
+    fireEvent.click(screen.getByTestId("project-card-delete"));
 
     await waitFor(() => {
       expect(projectsApiMocks.deleteProject).toHaveBeenCalledWith(
@@ -783,7 +791,7 @@ describe("ProjectsRoute mutations", () => {
       );
     });
     await waitFor(() => {
-      expect(screen.getByTestId("projects-route-empty")).toBeInTheDocument();
+      expect(screen.getByText("No projects yet")).toBeInTheDocument();
     });
   });
 
@@ -797,9 +805,9 @@ describe("ProjectsRoute mutations", () => {
     render(<ProjectsRoute identity={IDENTITY} />);
 
     await waitFor(() => {
-      expect(screen.getByTestId("projects-route-archive")).toBeInTheDocument();
+      expect(screen.getByTestId("project-card-archive")).toBeInTheDocument();
     });
-    fireEvent.click(screen.getByTestId("projects-route-archive"));
+    fireEvent.click(screen.getByTestId("project-card-archive"));
 
     await waitFor(() => {
       expect(
@@ -810,7 +818,7 @@ describe("ProjectsRoute mutations", () => {
       screen.getByTestId("projects-route-pending-error").textContent,
     ).toContain("archive_forbidden");
     // The list itself is still rendered — the user can retry.
-    expect(screen.getByTestId("projects-route-row")).toBeInTheDocument();
+    expect(screen.getByTestId("project-card")).toBeInTheDocument();
   });
 });
 
@@ -848,15 +856,16 @@ describe("ProjectsRoute detail pane", () => {
     vi.clearAllMocks();
   });
 
-  /** Render the list and click a row's Open button to focus the detail. */
+  /** Render the list and click a card (the whole card is the hit area, D2) to
+   *  focus the detail. */
   async function renderAndOpen(
     props: { onOpenRun?: (id: ConversationId) => void } = {},
   ): Promise<void> {
     render(<ProjectsRoute identity={IDENTITY} {...props} />);
     await waitFor(() => {
-      expect(screen.getByTestId("projects-route-open")).toBeInTheDocument();
+      expect(screen.getByTestId("project-card")).toBeInTheDocument();
     });
-    fireEvent.click(screen.getByTestId("projects-route-open"));
+    fireEvent.click(screen.getByTestId("project-card"));
   }
 
   it("opens the detail pane via a row's Open button and mounts ProjectDetailView (FR-4.11)", async () => {
@@ -886,10 +895,11 @@ describe("ProjectsRoute detail pane", () => {
       "project_1",
     );
 
-    // Back returns to the list.
-    fireEvent.click(screen.getByTestId("projects-detail-back"));
+    // Back returns to the list — the back control is now the shared <BackLink>
+    // owned by ProjectDetailView (PRD-10 D5), not a host-owned button.
+    fireEvent.click(screen.getByTestId("back-link"));
     await waitFor(() => {
-      expect(screen.getByTestId("projects-route-list")).toBeInTheDocument();
+      expect(screen.getByTestId("card-grid")).toBeInTheDocument();
     });
   });
 
@@ -948,11 +958,9 @@ describe("ProjectsRoute detail pane", () => {
     render(<ProjectsRoute identity={IDENTITY} />);
 
     await waitFor(() => {
-      expect(
-        screen.getByTestId("projects-route-role-chip"),
-      ).toBeInTheDocument();
+      expect(screen.getByTestId("project-card-role")).toBeInTheDocument();
     });
-    expect(screen.getByTestId("projects-route-role-chip")).toHaveAttribute(
+    expect(screen.getByTestId("project-card-role")).toHaveAttribute(
       "data-role",
       "owner",
     );
@@ -965,10 +973,8 @@ describe("ProjectsRoute detail pane", () => {
     render(<ProjectsRoute identity={IDENTITY} />);
 
     await waitFor(() => {
-      expect(screen.getByTestId("projects-route-row")).toBeInTheDocument();
+      expect(screen.getByTestId("project-card")).toBeInTheDocument();
     });
-    expect(
-      screen.queryByTestId("projects-route-role-chip"),
-    ).not.toBeInTheDocument();
+    expect(screen.queryByTestId("project-card-role")).not.toBeInTheDocument();
   });
 });

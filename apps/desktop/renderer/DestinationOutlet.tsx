@@ -219,7 +219,7 @@ function renderSurface(
         />
       );
     case "projects":
-      return <ProjectsBinder />;
+      return <ProjectsBinder onOpenConversation={ctx.onOpenConversation} />;
     case "activity":
       return (
         <ActivityBinder

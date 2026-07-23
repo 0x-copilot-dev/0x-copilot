@@ -157,6 +157,9 @@
      the tokens incrementally. */
   --space-row-gap: var(--space-sm);
   --space-card-pad: var(--space-md);
+  /* PRD-10 D7 — the design's `.grid3` gap (`copilot.css:1673`, 10px). Density
+     alias alongside --space-row-gap / --space-card-pad; consumed by .ui-grid3. */
+  --space-grid-gap: 0.625rem;
   --space-section: var(--space-xl);
   --line-height-body: 1.55;
 }
@@ -165,6 +168,7 @@
 :root[data-density="compact"] {
   --space-row-gap: 0.375rem;
   --space-card-pad: 0.625rem;
+  --space-grid-gap: 0.5rem;
   --space-section: 1rem;
   --line-height-body: 1.45;
 }
@@ -1864,4 +1868,49 @@ button.ui-pop-row {
  * empty (non-navigable) spacer inherits the row colour like the design's. */
 .ui-list-row [data-testid="row-trailing"] svg {
   color: var(--color-text-subtle);
+}
+
+/* ---------------------------------------------------------------------------
+ * .ui-grid3 — the design's fixed 3-column project grid (PRD-10 D7).
+ *
+ * Transcribes `copilot.css:1672-1682`: a `repeat(3, 1fr)` grid at the
+ * `--space-grid-gap` density gap that collapses to a single column below 900px.
+ * A `minmax(auto-fill)` grid cannot express a 3→1 collapse with no 2-up stop,
+ * and a media query cannot be written in an inline style object, so the rule
+ * lives here and `CardGrid variant="grid3"` opts into it.
+ * ------------------------------------------------------------------------- */
+.ui-grid3 {
+  display: grid;
+  grid-template-columns: repeat(3, 1fr);
+  gap: var(--space-grid-gap);
+}
+@media (max-width: 900px) {
+  .ui-grid3 {
+    grid-template-columns: 1fr;
+  }
+}
+
+/* .ui-backlink — hover for the shared <BackLink> (PRD-10 D5). The `.backlink`
+ * resting colour is inline (muted); hover lifts to full text colour, which an
+ * inline style object cannot express. */
+.ui-backlink:hover {
+  color: var(--color-text);
+}
+
+/* ---------------------------------------------------------------------------
+ * .ui-proj-card — the project-card hover/focus action overlay (PRD-10 D2).
+ *
+ * The lifecycle actions (star / archive / delete) sit OUTSIDE the card button
+ * in DOM order so they stay keyboard reachable, positioned absolute in the
+ * card's top-right. They are revealed on hover OR focus-within (not hover
+ * alone) so a keyboard user tabbing into them sees them; `opacity` keeps them
+ * in tab order (unlike `display:none`).
+ * ------------------------------------------------------------------------- */
+.ui-proj-card__actions {
+  opacity: 0;
+  transition: opacity var(--duration-fast, 120ms) var(--ease-standard);
+}
+.ui-proj-card:hover .ui-proj-card__actions,
+.ui-proj-card:focus-within .ui-proj-card__actions {
+  opacity: 1;
 }

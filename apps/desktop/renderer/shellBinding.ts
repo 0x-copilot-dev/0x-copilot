@@ -6,10 +6,7 @@
 // build the exact same object. Every field is required by the contract — a
 // forgotten field is a compile error, not a silently-dark capability.
 
-import type {
-  ShellHostBinding,
-  ProjectsDetailBinding,
-} from "@0x-copilot/chat-surface";
+import type { ShellHostBinding } from "@0x-copilot/chat-surface";
 import type { RendererSession } from "@0x-copilot/chat-transport";
 
 /**
@@ -36,12 +33,9 @@ export function buildDesktopShellBinding(
   };
 }
 
-/**
- * The desktop's Projects detail binding. Desktop has no project-detail flow yet,
- * so it declares `{ mode: "disabled" }` — an explicit, reviewable statement that
- * the gap is open, instead of silently omitting `renderDetail`/`focusedProjectId`
- * and leaving `ProjectsDestination`'s detail branch dead code.
- */
-export const DESKTOP_PROJECTS_DETAIL: ProjectsDetailBinding = {
-  mode: "disabled",
-};
+// PRD-10 DoD 9 closed the desktop project-detail gap: `ProjectsBinder`
+// (destinationBinders.tsx) now owns the focus state and builds the `enabled`
+// `ProjectsDetailBinding` inline (mounting the shared `ProjectDetailView`
+// through the `renderDetail` slot), so the former placeholder
+// `DESKTOP_PROJECTS_DETAIL = { mode: "disabled" }` const is gone — desktop is no
+// longer a host without a detail flow.

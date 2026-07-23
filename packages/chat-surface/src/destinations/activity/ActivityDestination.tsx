@@ -49,6 +49,7 @@ import { StatusPill, type StatusTone } from "../../shell/StatusPill";
 import { statusTone as runStatusTone } from "../../shell/statusTone";
 import { formatClockTime } from "../../util/time";
 import { PageLead } from "../_shared/PageLead";
+import { Page } from "../_shared/Page";
 import { Row } from "../_shared/Row";
 import { RowList } from "../_shared/RowList";
 
@@ -307,7 +308,7 @@ export function ActivityDestination(
       data-state={dataState}
       style={rootStyle}
     >
-      <div style={innerStyle} className="pg">
+      <Page style={innerStyle}>
         <ActivityLead onOpenRetentionSettings={onOpenRetentionSettings} />
         {/* Retry lives in the page header, not on the error branch (D8): a
             successfully-loaded but stale list also needs a refresh control, so
@@ -327,7 +328,7 @@ export function ActivityDestination(
         <div style={bodyStyle} data-testid="activity-body">
           {renderBody({ items, groups, onOpenRun, locale, timeZone })}
         </div>
-      </div>
+      </Page>
     </section>
   );
 }
@@ -656,16 +657,12 @@ const rootStyle: CSSProperties = {
   overflow: "auto",
 };
 
-// `.pg` — shared list surface, content column max 960 (FR-4.1). Padding is set
-// to the design's `.pg { padding: 20px 24px 40px }` literal (copilot.css:1553,
-// D9); `maxWidth: 960` already matched. PRD-10 later swaps this for its
-// `_shared/Page` primitive with these same literals — a computed-style no-op.
+// The `.pg` content-column shell is now the shared `_shared/Page` primitive
+// (PRD-10 D4 / addendum): 960px column + `20px 24px 40px` padding, LEFT-aligned
+// (no `margin: 0 auto`). `innerStyle` keeps ONLY the feed's own column layout;
+// the shell geometry moved to `<Page>`, so the column-width cap no longer lives
+// here.
 const innerStyle: CSSProperties = {
-  width: "100%",
-  maxWidth: 960,
-  margin: "0 auto",
-  padding: "20px 24px 40px",
-  boxSizing: "border-box",
   display: "flex",
   flexDirection: "column",
   gap: 12,

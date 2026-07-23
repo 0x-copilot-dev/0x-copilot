@@ -40,6 +40,7 @@ import type { ConnectorSlug, ProjectId } from "@0x-copilot/api-types";
 import { EmptyState } from "../../shell/EmptyState";
 import { FilterTabs, type FilterTabOption } from "../../shell/FilterTabs";
 import { StatusPill, type StatusTone } from "../../shell/StatusPill";
+import { projectHueRamp, projectHueSwatchColor } from "../_shared";
 
 import type { ProjectColorHue, ProjectIconEmoji } from "@0x-copilot/api-types";
 
@@ -275,12 +276,17 @@ function AppearanceTab({
     color: TEXT_SECONDARY,
     fontWeight: 500,
   };
+  // PRD-10 D3 — the per-project hue comes from the ONE shared ramp; the preview
+  // keeps its emoji glyph + 56px geometry (templates/editor convergence is a
+  // later PRD, D9). No `hsl(...)` literal survives in this directory (DoD 2).
+  const previewRamp = projectHueRamp(colorHue);
   const previewStyle: CSSProperties = {
     width: 56,
     height: 56,
     borderRadius: 12,
-    backgroundColor: `hsl(${colorHue}, 55%, 35%)`,
-    color: ACCENT_CONTRAST,
+    backgroundColor: previewRamp.background,
+    border: previewRamp.border,
+    color: previewRamp.color,
     display: "flex",
     alignItems: "center",
     justifyContent: "center",
@@ -376,7 +382,7 @@ function AppearanceTab({
                   width: 28,
                   height: 28,
                   borderRadius: "50%",
-                  backgroundColor: `hsl(${hue}, 55%, 45%)`,
+                  backgroundColor: projectHueSwatchColor(hue),
                   border: `2px solid ${selected ? ACCENT : "transparent"}`,
                   cursor: readOnly ? "not-allowed" : "pointer",
                 }}

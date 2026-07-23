@@ -217,6 +217,18 @@ describe("<ActivityDestination> — 4 states", () => {
     expect(screen.queryByText(/hasn't run anything/i)).toBeNull();
   });
 
+  // PRD-10 addendum (README O2): Activity is the shared `_shared/Page`
+  // primitive's named second consumer. The page shell must be the primitive, so
+  // a future hand-rolled `.pg` div (no `data-page`) fails this test.
+  it("renders its content column through the shared <Page> primitive (PRD-10 addendum)", () => {
+    renderActivity({ items: { status: "ok", data: [row()] } });
+    const page = screen
+      .getByTestId("activity-destination")
+      .querySelector("[data-page]");
+    expect(page).not.toBeNull();
+    expect(page).toHaveAttribute("data-testid", "page");
+  });
+
   it("ready: ok with rows renders day-grouped dividers (FR-4.14)", () => {
     renderActivity({
       items: {

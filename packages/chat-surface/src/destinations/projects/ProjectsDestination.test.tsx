@@ -10,7 +10,8 @@ import type {
   TenantId,
   UserId,
 } from "@0x-copilot/api-types";
-import { fireEvent, render, screen } from "@testing-library/react";
+import { cleanup, fireEvent, render, screen } from "@testing-library/react";
+import userEvent from "@testing-library/user-event";
 import { describe, expect, it, vi } from "vitest";
 
 import { RouterProvider } from "../../providers/RouterProvider";
@@ -216,11 +217,85 @@ describe("ProjectsDestination", () => {
     expect(onFilterChange).toHaveBeenCalledWith("starred");
   });
 
-  it("shows the New project primary action when onCreateProject is supplied", () => {
+  it("shows the New project control on the filter row when onCreateProject is supplied (D4)", () => {
     const onCreateProject = vi.fn();
     renderDest({ items: ok([ACME]), onCreateProject });
-    fireEvent.click(screen.getByTestId("page-header-primary-action"));
+    fireEvent.click(screen.getByTestId("projects-create"));
     expect(onCreateProject).toHaveBeenCalledTimes(1);
+  });
+
+  // === PRD-10 DoD 6 — page chrome + card anatomy + role chip ==============
+
+  it("never renders a 22px PageHeader in any of the four branches (DoD 6a)", () => {
+    for (const items of [
+      null,
+      { status: "error" as const, error: "x" },
+      { status: "unavailable" as const, error: "x" },
+      ok([ACME]),
+    ]) {
+      renderDest({ items });
+      expect(screen.queryByTestId("page-header")).not.toBeInTheDocument();
+      cleanup();
+    }
+  });
+
+  it("renders the PageLead with the design copy (DoD 6b)", () => {
+    renderDest({ items: ok([ACME]) });
+    const lead = screen.getByTestId("page-lead");
+    expect(lead).toHaveTextContent(
+      "Group related chats, files, and context. Open a project to see its conversations and working files.",
+    );
+  });
+
+  it("makes each card a single <button> hit area carrying the design radius + padding (DoD 6c)", () => {
+    renderDest({ items: ok([ACME, ONBOARDING]) });
+    const cards = screen.getAllByTestId("project-card");
+    expect(cards).toHaveLength(2);
+    for (const card of cards) {
+      expect(card.tagName).toBe("BUTTON");
+      expect(card.style.borderRadius).toBe("var(--radius-md)");
+      expect(card.style.padding).toBe("var(--space-card-pad)");
+    }
+  });
+
+  it("renders the role chip for viewer_role:'owner' and omits it for viewer_role:null (DoD 6d)", () => {
+    renderDest({ items: ok([makeProject({ viewer_role: "owner" })]) });
+    expect(screen.getByTestId("project-card-role")).toHaveAttribute(
+      "data-role",
+      "owner",
+    );
+    cleanup();
+    renderDest({ items: ok([makeProject({ viewer_role: null })]) });
+    expect(screen.queryByTestId("project-card-role")).not.toBeInTheDocument();
+  });
+
+  // === PRD-10 DoD 7 — lifecycle actions stay keyboard reachable ==========
+
+  it("keeps the Star control keyboard-reachable: tab from the card lands on it (DoD 7)", async () => {
+    const user = userEvent.setup();
+    renderDest({ items: ok([ONBOARDING]), onStarProject: vi.fn() });
+    const card = screen.getByTestId("project-card");
+    card.focus();
+    expect(card).toHaveFocus();
+    await user.tab();
+    expect(screen.getByTestId("project-card-star")).toHaveFocus();
+  });
+
+  // === PRD-10 DoD 10 — emoji-wall regression guard =======================
+
+  it("renders the monogram, not icon_emoji, so three 📁 projects show distinct initials (DoD 10)", () => {
+    const projects = [
+      makeProject({ id: asProjectId("p_l"), name: "Launch", icon_emoji: "📁" }),
+      makeProject({
+        id: asProjectId("p_t"),
+        name: "Taxonomy",
+        icon_emoji: "📁",
+      }),
+      makeProject({ id: asProjectId("p_g"), name: "Growth", icon_emoji: "📁" }),
+    ];
+    renderDest({ items: ok(projects) });
+    const tiles = screen.getAllByTestId("project-card-icon");
+    expect(tiles.map((t) => t.textContent)).toEqual(["L", "T", "G"]);
   });
 
   it("calls onArchiveProject when the Archive action is clicked on an active card", () => {
