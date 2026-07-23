@@ -67,10 +67,14 @@ export function SectionHeader({
 }: SectionHeaderProps): ReactElement {
   return (
     <div
+      // Block rhythm + flex row come from `.ui-section-head`. The mock's
+      // vestigial `.sect-h` on the wrapper carried no CSS (and would have
+      // mono-uppercased the count pill + action CTA); the type recipe lives on
+      // the <h2> label below (`.ui-mono-caps`, C13). Deleted in PRD-13.
       className={
         className === undefined
-          ? "sect-h ui-section-head"
-          : `sect-h ui-section-head ${className}`
+          ? "ui-section-head"
+          : `ui-section-head ${className}`
       }
       style={style}
       data-testid="section-header"

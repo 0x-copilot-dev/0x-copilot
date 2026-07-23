@@ -28,17 +28,14 @@ const pageLeadStyle: CSSProperties = {
 
 export function PageLead({
   children,
-  className,
   style,
   ...rest
 }: PageLeadProps): ReactElement {
+  // No decorative class: the design's `.pg-lead` carried no CSS in the shipped
+  // app (the geometry below is the real contract). A caller-supplied `className`
+  // rides through `{...rest}`.
   return (
-    <p
-      className={className === undefined ? "pg-lead" : `pg-lead ${className}`}
-      style={{ ...pageLeadStyle, ...style }}
-      data-testid="page-lead"
-      {...rest}
-    >
+    <p style={{ ...pageLeadStyle, ...style }} data-testid="page-lead" {...rest}>
       {children}
     </p>
   );

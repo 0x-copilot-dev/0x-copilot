@@ -18,11 +18,24 @@ describe("<RowList>", () => {
     );
     const card = screen.getByTestId("row-list");
     expect(card.tagName).toBe("UL");
-    expect(card).toHaveClass("rowlist");
+    // The mock's `.rowlist` class carried no CSS — PRD-13 deleted the hook; the
+    // inline card geometry below is the real contract.
     expect(card).toHaveAttribute("aria-label", "Runs");
     expect(card.style.border).toBe("1px solid var(--color-border)");
     expect(card.style.borderRadius).toBe("var(--radius-md)");
     expect(card.style.backgroundColor).toBe("var(--color-surface)");
+  });
+
+  it("forwards className from the caller", () => {
+    render(
+      <RowList
+        className="x"
+        items={["a"]}
+        keyFor={(v) => v}
+        renderRow={(v) => <Row title={v} />}
+      />,
+    );
+    expect(screen.getByTestId("row-list")).toHaveClass("x");
   });
 
   it("separates rows with internal hairlines — last row has none", () => {

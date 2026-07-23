@@ -505,11 +505,6 @@ export {
 
 // === Phase 2-A / 3 destinations ===
 export {
-  ChatsDestination,
-  ChatsSidebar,
-  type ChatsSidebarProps,
-} from "./destinations/chats";
-export {
   HomeDestination,
   HomePanel,
   type HomeDestinationProps,
@@ -563,7 +558,7 @@ export {
   // clean count of wired surfaces.
   ProjectEditor,
   TransferOwnershipDialog,
-  ArchiveBlockedDialog,
+  ArchiveBlockedDialog, // orphan-destination-waiver: owner=PRD-10 — exported for the archive-blocked flow but no host mounts it yet; PRD-10 owns wiring it (it wired ProjectEditor/TransferOwnershipDialog, left this one).
   // PRD-03 Move 1: `cacheProjectNames` is no longer a host duty — the
   // `ProjectsDestination` primes the cache from `items` itself, so it is
   // dropped from the public barrel (kept exported from `projectNameCache.ts`
@@ -591,7 +586,7 @@ export {
   type LibraryPanelProps,
   type LibrarySourceFilterCounts,
   type LibrarySourceFilterSlug,
-  SaveToLibraryPopover,
+  SaveToLibraryPopover, // orphan-destination-waiver: owner=DEAD-1 — folded IA (the Library save-to popover is unmounted pending the DEAD-1 IA-fold disposition).
   type SaveToLibraryPopoverProps,
   type SaveToLibrarySubmit,
   type LibraryDatasetSummary,
@@ -613,7 +608,7 @@ export {
 export {
   AgentCard,
   AgentsDestination,
-  AgentsPanel,
+  AgentsPanel, // orphan-destination-waiver: owner=DEAD-1 — folded IA (`agents` is not in `destinationsForProfile`; disposition owned by the DEAD-1 IA-fold audit).
   AGENTS_PANEL_WIDTH,
   AGENT_COST_LABELS,
   AGENT_FILTER_LABELS,
@@ -666,9 +661,9 @@ export {
   ScopeReviewTab,
   ConsumersTab,
   ReadAuditTab,
-  WebhooksDestination,
+  WebhooksDestination, // orphan-destination-waiver: owner=DEAD-1 — folded IA (`webhooks` is not in `destinationsForProfile`; disposition owned by the DEAD-1 IA-fold audit).
   WebhookCard,
-  WebhookDetailView,
+  WebhookDetailView, // orphan-destination-waiver: owner=DEAD-1 — folded IA (webhook detail is unmounted while `webhooks` is folded; disposition owned by the DEAD-1 IA-fold audit).
   WebhookCreateWizard,
   WEBHOOK_VERIFICATION_SNIPPET,
 } from "./destinations/connectors";
@@ -697,10 +692,10 @@ export {
   applySort,
   OffboardingWizard,
   PersonCard,
-  PersonDetailView,
+  PersonDetailView, // orphan-destination-waiver: owner=DEAD-1 — folded IA (the team person-detail view is unmounted while `team` is folded; disposition owned by the DEAD-1 IA-fold audit).
   TeamDestination,
-  TeamInviteWizard,
-  TeamPanel,
+  TeamInviteWizard, // orphan-destination-waiver: owner=DEAD-1 — folded IA (the team invite wizard is unmounted while `team` is folded; disposition owned by the DEAD-1 IA-fold audit).
+  TeamPanel, // orphan-destination-waiver: owner=DEAD-1 — folded IA (the team panel is unmounted while `team` is folded; disposition owned by the DEAD-1 IA-fold audit).
   type OffboardingAsset,
   type OffboardingWizardProps,
   type PersonCardProps,
@@ -722,12 +717,12 @@ export {
 // `items` prop and the destination renders an unwired-state explanation.
 export {
   MemoryDestination,
-  MemoryPanel,
+  MemoryPanel, // orphan-destination-waiver: owner=DEAD-1 — folded IA (`memory` is not in `destinationsForProfile`; disposition owned by the DEAD-1 IA-fold audit).
   MemoryDetailView,
   MemoryEditor,
   MemoryProposalToast,
-  MemoryProposalToastStack,
-  MemoryProposalCard,
+  MemoryProposalToastStack, // orphan-destination-waiver: owner=DEAD-1 — folded IA (the memory-proposal toast stack is unmounted while `memory` is folded; disposition owned by the DEAD-1 IA-fold audit).
+  MemoryProposalCard, // orphan-destination-waiver: owner=DEAD-1 — folded IA (the memory-proposal card is unmounted while `memory` is folded; disposition owned by the DEAD-1 IA-fold audit).
   type MemoryDestinationProps,
   type MemoryDetailTabSlug,
   type MemoryDetailViewProps,
@@ -1165,7 +1160,7 @@ export {
   type LedgerGateOpClass,
   type LedgerGateWritePolicy,
 } from "./thread-canvas";
-export { PostureChip, type PostureChipProps } from "./destinations/run";
+export { PostureChip, type PostureChipProps } from "./destinations/run"; // orphan-destination-waiver: owner=PRD-C2 — Generative Surfaces v2 write-posture chip; the host binder that derives `bypassOn` and mounts it (FR-B5) was not wired.
 // === end PRD-C2 ===
 
 // === Surfaces v2 — PRD-D1 staged-write engine (client) ===
@@ -1337,15 +1332,16 @@ export {
 // renders the shared `.pg` list surface with the 4-state machine
 // (loading / error+Retry / empty / ready). Reopen → Run, "New chat" →
 // Run are host concerns (the callbacks); the host binder (PR-4.3) wires
-// them. `ChatsDestination` (Phase 2-A/3 block above) now forwards to this
-// component; its props type is re-exported here.
+// them. Both hosts mount `ChatsArchive` directly — web via
+// `ChatsArchiveRoute`, desktop via its destination binder. (The former
+// top-level forwarder and the legacy projects-tree sidebar were deleted in
+// PRD-13; `ChatsArchiveProps` is the destination's prop contract.)
 export {
   ChatsArchive,
   type ChatsArchiveProps,
   CHATS_SECTION_ORDER,
   CHATS_LEAD_COPY,
   type ChatsSectionKey,
-  type ChatsDestinationProps,
   useChatsArchive,
   type ChatsArchiveController,
 } from "./destinations/chats";
@@ -1607,10 +1603,12 @@ export {
 // === end Frontend parity v3 (PRD-B) ===
 
 // === Frontend parity v3 (PRD-G) — list-surface primitives ===
-// The design row anatomy defined once — a `.pg-lead` intro, a `.sect-h` mono
-// section header, one bordered `.rowlist` card per group, and the `.lrow` row
-// (leading icon + title/chip/sub + mono meta) — so Activity / Chats / Projects
-// compose the same primitives and can't drift. See PRD-G-destination-parity.md.
+// The design row anatomy defined once — a lead intro paragraph, a mono section
+// header, one bordered card per group, and the leading-icon row (title/chip/sub
+// + mono meta) — so Activity / Chats / Projects compose the same primitives and
+// can't drift. Styling is tokens + `.ui-*` recipes (the design-system SoT), not
+// the mock's un-namespaced class names (those were deleted in PRD-13). See
+// PRD-G-destination-parity.md.
 export {
   PageLead,
   SectionHeader,

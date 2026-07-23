@@ -1,6 +1,9 @@
 // Shared list-surface primitives (Frontend parity v3 · PRD-G FR-G.1).
-// The design row anatomy (`.pg-lead` / `.sect-h` / `.rowlist` / `.lrow`) defined
-// once, so Activity / Chats / Projects can't drift.
+// The design row anatomy — a lead paragraph, a mono section header, one bordered
+// card per group, and the leading-icon row — defined once, so Activity / Chats /
+// Projects can't drift. Styling is tokens + `.ui-*` recipes (the design-system
+// SoT); the mock's un-namespaced class names carried no CSS and were deleted in
+// PRD-13.
 
 export { Page, type PageProps } from "./Page";
 export { PageLead, type PageLeadProps } from "./PageLead";
