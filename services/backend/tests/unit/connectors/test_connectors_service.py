@@ -289,6 +289,59 @@ class TestAuditListing:
         assert "connector.disconnected" in actions
 
 
+class TestSetAccessMode:
+    """PRD-06 D2 — audit exactly one row per real change; zero on a no-op."""
+
+    def test_change_writes_one_audit_row_with_correlation(self) -> None:
+        service, store = _service()
+        record = _seed(service, store, owner_user_id="user_1")
+        # Seeded rows default to access_mode="read".
+        assert record.access_mode == "read"
+        out = service.set_access_mode(
+            tenant_id="tenant_a",
+            caller_user_id="user_1",
+            caller_roles=(),
+            connector_id=record.id,
+            access_mode="off",
+        )
+        assert out.access_mode == "off"
+        changed = [
+            r
+            for r in store.audits
+            if r.target_id == record.id and r.action == "connector.access_mode_changed"
+        ]
+        assert len(changed) == 1
+        assert changed[0].correlation_id == "read->off"
+
+    def test_set_to_current_value_writes_zero_audit_rows(self) -> None:
+        service, store = _service()
+        record = _seed(service, store, owner_user_id="user_1")
+        out = service.set_access_mode(
+            tenant_id="tenant_a",
+            caller_user_id="user_1",
+            caller_roles=(),
+            connector_id=record.id,
+            access_mode="read",  # equal to the stored value
+        )
+        assert out.access_mode == "read"
+        changed = [
+            r for r in store.audits if r.action == "connector.access_mode_changed"
+        ]
+        assert changed == []
+
+    def test_non_owner_non_admin_cannot_set(self) -> None:
+        service, store = _service()
+        record = _seed(service, store, owner_user_id="user_1")
+        with pytest.raises(ConnectorForbidden):
+            service.set_access_mode(
+                tenant_id="tenant_a",
+                caller_user_id="user_2",
+                caller_roles=(),
+                connector_id=record.id,
+                access_mode="off",
+            )
+
+
 class TestCatalogEntryConstructor:
     def test_constructor_defaults(self) -> None:
         entry = ConnectorCatalogEntry(slug="gmail", display_name="Gmail")

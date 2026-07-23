@@ -64,8 +64,9 @@ export interface ConnectorCardProps {
   readonly accessMode?: ConnectorAccessMode;
   /**
    * Fired when the user picks a new access mode. The card owns nothing but
-   * the click → callback wiring; the destination maps this to
-   * `onSetAccessMode(id, mode)` and the host persists it (FR-4.22).
+   * the click → callback wiring; the destination maps this to the
+   * host-injected `ConnectorAccessPort` and owns the optimistic apply /
+   * revert / error banner (PRD-06 D4).
    */
   readonly onAccessModeChange?: (mode: ConnectorAccessMode) => void;
 }

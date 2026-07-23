@@ -19,7 +19,11 @@ from fastapi.testclient import TestClient
 
 from backend_app.app import create_app
 from backend_app.connectors.sse import InMemoryConnectorActivityBus
-from backend_app.connectors.store import InMemoryConnectorsStore
+from backend_app.connectors.store import (
+    ConnectorAccessMode,
+    InMemoryConnectorsStore,
+    McpUpsertInput,
+)
 from backend_app.contracts import OAuthTokenRequest, OrganizationRecord, UserRecord
 from backend_app.identity.store import InMemoryIdentityStore
 from backend_app.mcp_oauth import McpAuthorization
@@ -470,3 +474,37 @@ class TestFailureDiscipline:
         # Read model lagged (empty audit trail, no row) but the MCP row
         # is durable and a later mutation reconverges the projection.
         assert app.state.connectors_store.audits == []
+
+
+class TestAccessModePreservedOnReUpsert:
+    """PRD-06 D1 — a token refresh / re-registration must NOT clobber the
+    user's chosen access mode. Only a first insert sets the default."""
+
+    def _input(self, *, status: str = "connected") -> McpUpsertInput:
+        return McpUpsertInput(
+            tenant_id=ORG,
+            owner_user_id=USER,
+            slug="gmail",
+            display_name="Gmail",
+            description="Mail.",
+            status=status,
+            status_reason=None,
+            scopes=(),
+            last_sync_at=None,
+            last_error_at=None,
+            vault_ref="vault:abc",
+        )
+
+    def test_reupsert_over_off_row_stays_off(self) -> None:
+        store = InMemoryConnectorsStore()
+        first = store.upsert_from_mcp_registration(self._input())
+        # Default on first insert is "read".
+        assert first.access_mode == ConnectorAccessMode.READ
+        # User switches it off.
+        store.update_connector(
+            first.model_copy(update={"access_mode": ConnectorAccessMode.OFF})
+        )
+        # A later MCP re-registration (token refresh) writes through again.
+        again = store.upsert_from_mcp_registration(self._input(status="connected"))
+        assert again.id == first.id
+        assert again.access_mode == ConnectorAccessMode.OFF

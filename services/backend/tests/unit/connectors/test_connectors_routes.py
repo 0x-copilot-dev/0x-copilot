@@ -250,6 +250,56 @@ class TestScopePatchEndpoint:
         assert "connector.scope_removed" in actions
 
 
+class TestAccessModePatchEndpoint:
+    """PRD-06 D2 — ``PATCH /v1/connectors/{id}/access-mode`` (200, not 202)."""
+
+    def test_owner_sets_read_act_returns_200(self) -> None:
+        client, store = _client()
+        record = _seed_record(store)  # defaults to access_mode="read"
+        resp = client.patch(
+            f"/v1/connectors/{record.id}/access-mode",
+            params=_q(),
+            json={"access_mode": "read_act"},
+        )
+        assert resp.status_code == 200, resp.text
+        body = resp.json()
+        assert body["connector"]["access_mode"] == "read_act"
+        actions = [r.action for r in store.audits if r.target_id == record.id]
+        assert "connector.access_mode_changed" in actions
+
+    def test_non_owner_non_admin_403_owner_or_admin_only(self) -> None:
+        client, store = _client()
+        record = _seed_record(store, owner_user_id="usr_sarah")
+        resp = client.patch(
+            f"/v1/connectors/{record.id}/access-mode",
+            params=_q(user="usr_bob"),
+            json={"access_mode": "off"},
+        )
+        assert resp.status_code == 403
+        assert resp.json()["detail"] == "owner_or_admin_only"
+
+    def test_cross_tenant_returns_404_not_403(self) -> None:
+        client, store = _client()
+        record = _seed_record(store)
+        resp = client.patch(
+            f"/v1/connectors/{record.id}/access-mode",
+            params={"org_id": "org_zeta", "user_id": "usr_sarah"},
+            json={"access_mode": "off"},
+        )
+        assert resp.status_code == 404
+        assert resp.json()["detail"] == "connector_not_found"
+
+    def test_invalid_mode_returns_400(self) -> None:
+        client, store = _client()
+        record = _seed_record(store)
+        resp = client.patch(
+            f"/v1/connectors/{record.id}/access-mode",
+            params=_q(),
+            json={"access_mode": "maybe"},
+        )
+        assert resp.status_code == 400
+
+
 class TestStartOAuthEndpoint:
     def test_start_oauth_returns_stub_url(self) -> None:
         client, _ = _client()

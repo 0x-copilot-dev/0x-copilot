@@ -37,6 +37,7 @@ import {
   ConnectModal,
   ConnectorsDestination,
   ConnectorsPanel,
+  type ConnectorAccessPort,
   type ConnectorsFilterCounts,
   type ConnectorsFilterSlug,
   type CustomServerInput,
@@ -106,7 +107,6 @@ export function ConnectorsRoute({
   const [reloadToken, setReloadToken] = useState(0);
   const [filter, setFilter] = useState<ConnectorsFilterSlug>("connected");
   const [pendingError, setPendingError] = useState<string | null>(null);
-  const [accessModeError, setAccessModeError] = useState<string | null>(null);
 
   // ---- Connect flow (FR-4.23) — ConnectModal is host-driven -----------
   const [connectOpen, setConnectOpen] = useState(false);
@@ -299,27 +299,16 @@ export function ConnectorsRoute({
     setConnectError(null);
   }, []);
 
-  // Access-mode PATCH (FR-4.22) — apply optimistically, reconcile against
-  // server truth on success, revert + surface an inline error on failure.
-  const handleSetAccessMode = useCallback(
-    async (id: ConnectorId, mode: ConnectorAccessMode): Promise<void> => {
-      const previous = connectorsRef.current.find(
-        (c) => c.id === id,
-      )?.access_mode;
-      setAccessModeError(null);
-      // Optimistic apply.
-      setState((prev) => {
-        if (prev.kind !== "ready") return prev;
-        const connectors = prev.response.connectors.map((c) =>
-          c.id === id ? { ...c, access_mode: mode } : c,
-        );
-        return { ...prev, response: { ...prev.response, connectors } };
-      });
-      try {
+  // Access-mode PATCH (FR-4.22, PRD-06 D4) — the optimistic-apply / revert /
+  // error-banner state machine now lives ONCE inside `ConnectorsDestination`.
+  // The host supplies only this single-method port; on success it also merges
+  // the reconciled row into the local list so the SSE-fed state stays truthful.
+  const accessPort = useMemo<ConnectorAccessPort>(
+    () => ({
+      setAccessMode: async (id: ConnectorId, mode: ConnectorAccessMode) => {
         const res = await setConnectorAccessMode(identity, id, {
           access_mode: mode,
         });
-        // Reconcile with the authoritative row the server returned.
         setState((prev) => {
           if (prev.kind !== "ready") return prev;
           const connectors = prev.response.connectors.map((c) =>
@@ -327,20 +316,9 @@ export function ConnectorsRoute({
           );
           return { ...prev, response: { ...prev.response, connectors } };
         });
-      } catch (error: unknown) {
-        // Revert to the pre-optimistic mode.
-        setState((prev) => {
-          if (prev.kind !== "ready") return prev;
-          const connectors = prev.response.connectors.map((c) =>
-            c.id === id ? { ...c, access_mode: previous } : c,
-          );
-          return { ...prev, response: { ...prev.response, connectors } };
-        });
-        setAccessModeError(
-          errorMessage(error, "Could not update the tool's access mode."),
-        );
-      }
-    },
+        return res.connector;
+      },
+    }),
     [identity],
   );
 
@@ -435,16 +413,9 @@ export function ConnectorsRoute({
       setConnectPending(true);
       setConnectError(null);
       try {
-        const res = await setConnectorAccessMode(identity, connector.id, {
-          access_mode: permission,
-        });
-        setState((prev) => {
-          if (prev.kind !== "ready") return prev;
-          const connectors = prev.response.connectors.map((c) =>
-            c.id === connector.id ? res.connector : c,
-          );
-          return { ...prev, response: { ...prev.response, connectors } };
-        });
+        // Terminal Connect persists the chosen mode through the SAME port the
+        // segment uses (PRD-06 D4) — one write path, reconciled into state.
+        await accessPort.setAccessMode(connector.id, permission);
         handleCloseConnect();
       } catch (error: unknown) {
         setConnectPending(false);
@@ -571,15 +542,6 @@ export function ConnectorsRoute({
             {pendingError}
           </div>
         )}
-        {accessModeError !== null && (
-          <div
-            role="alert"
-            data-testid="connectors-route-access-mode-error"
-            style={inlineErrorStyle}
-          >
-            {accessModeError}
-          </div>
-        )}
         <ConnectorsDestination
           items={items}
           filter={filter}
@@ -593,9 +555,7 @@ export function ConnectorsRoute({
           onReconnect={(id) => {
             void handleReconnect(id);
           }}
-          onSetAccessMode={(id, mode) => {
-            void handleSetAccessMode(id, mode);
-          }}
+          accessPort={accessPort}
           onOpenApprovalSettings={onOpenApprovalSettings}
           onRetry={() => setReloadToken((t) => t + 1)}
         />

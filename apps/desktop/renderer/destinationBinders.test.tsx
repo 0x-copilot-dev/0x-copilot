@@ -36,7 +36,7 @@ import { cleanup, fireEvent, render, waitFor } from "@testing-library/react";
 import { type ReactElement } from "react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
-import { ChatsBinder, RunBinder } from "./destinationBinders";
+import { ChatsBinder, ConnectorsBinder, RunBinder } from "./destinationBinders";
 
 // globals: false in the desktop vitest config → register cleanup explicitly.
 afterEach(() => {
@@ -338,5 +338,118 @@ describe("ChatsBinder — reopen threads the real conversation id", () => {
 
     expect(onOpenConversation).toHaveBeenCalledTimes(1);
     expect(onOpenConversation).toHaveBeenCalledWith("conv-42");
+  });
+});
+
+// ---------------------------------------------------------------------------
+// PRD-06 DoD 15 — regression guard for the "Off everywhere" bug on desktop.
+// The binder must (a) render each connector's REAL access mode (not a blanket
+// "off"), and (b) persist a change via PATCH /v1/connectors/{id}/access-mode
+// through the shared `ConnectorAccessPort` seam.
+// ---------------------------------------------------------------------------
+
+function connectorsTransport(recorder: Recorder): Transport {
+  const connectors = [
+    {
+      id: "conn_gmail",
+      tenant_id: "tnt_1",
+      slug: "gmail",
+      display_name: "Gmail",
+      description: "",
+      status: "connected",
+      access_mode: "read",
+      owner_user_id: "user_1",
+      scopes: [],
+      last_sync_at: null,
+      created_at: "2026-07-22T00:00:00Z",
+      updated_at: "2026-07-22T00:00:00Z",
+    },
+    {
+      id: "conn_slack",
+      tenant_id: "tnt_1",
+      slug: "slack",
+      display_name: "Slack",
+      description: "",
+      status: "connected",
+      access_mode: "read_act",
+      owner_user_id: "user_1",
+      scopes: [],
+      last_sync_at: null,
+      created_at: "2026-07-22T00:00:00Z",
+      updated_at: "2026-07-22T00:00:00Z",
+    },
+  ];
+  return {
+    request: <TRes,>(req: TypedRequest): Promise<TRes> => {
+      recorder.calls.push(req);
+      if (req.method === "GET" && req.path === "/v1/connectors") {
+        return Promise.resolve({
+          connectors,
+          available: [],
+        } as unknown as TRes);
+      }
+      if (
+        req.method === "PATCH" &&
+        req.path.startsWith("/v1/connectors/") &&
+        req.path.endsWith("/access-mode")
+      ) {
+        const body = req.body as { access_mode: string };
+        return Promise.resolve({
+          connector: { ...connectors[0], access_mode: body.access_mode },
+        } as unknown as TRes);
+      }
+      return Promise.resolve({} as TRes);
+    },
+    subscribeServerSentEvents: (
+      _opts: SseSubscribeOptions,
+    ): SseSubscription => ({ close: () => undefined }),
+    getSession: (): Session => ({ bearer: null }),
+    capabilities: (): TransportCapabilities => ({
+      substrate: "desktop-webview",
+      nativeSecretStorage: true,
+      fileSystemAccess: false,
+      clipboardWrite: false,
+      openExternal: false,
+    }),
+  };
+}
+
+describe("ConnectorsBinder — access mode reflects real authority + persists", () => {
+  it("renders each connector's real mode (not all off) and PATCHes on change", async () => {
+    const recorder: Recorder = { calls: [] };
+    const { container, getAllByTestId, getByRole } = render(
+      <TransportProvider transport={connectorsTransport(recorder)}>
+        <ConnectorsBinder />
+      </TransportProvider>,
+    );
+
+    // Both segments render their REAL mode — the bug painted every row "off".
+    const segments = await waitFor(() => {
+      const found = getAllByTestId("access-mode-segment");
+      expect(found).toHaveLength(2);
+      return found;
+    });
+    const values = segments.map((s) => s.getAttribute("data-value")).sort();
+    expect(values).toEqual(["read", "read_act"]);
+    expect(values).not.toEqual(["off", "off"]);
+
+    // Click a third option on the Gmail (read) segment → issues the PATCH.
+    const gmail = getByRole("radiogroup", { name: "Access mode for Gmail" });
+    fireEvent.click(
+      gmail.querySelector(
+        "[data-testid='access-mode-option-read_act']",
+      ) as HTMLElement,
+    );
+
+    await waitFor(() => {
+      const patch = recorder.calls.find(
+        (c) =>
+          c.method === "PATCH" &&
+          c.path === "/v1/connectors/conn_gmail/access-mode",
+      );
+      expect(patch).toBeDefined();
+      expect(patch?.body).toEqual({ access_mode: "read_act" });
+    });
+    expect(container).toBeTruthy();
   });
 });

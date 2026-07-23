@@ -15,7 +15,9 @@
 // frontend P11-C) wires those.
 
 import {
+  useCallback,
   useMemo,
+  useState,
   type CSSProperties,
   type KeyboardEvent as ReactKeyboardEvent,
   type ReactElement,
@@ -37,6 +39,7 @@ import { FilterTabs, type FilterTabOption } from "../../shell/FilterTabs";
 import { PageHeader } from "../../shell/PageHeader";
 
 import { ConnectorCard } from "./ConnectorCard";
+import type { ConnectorAccessPort } from "./ports/ConnectorAccessPort";
 
 // ===========================================================================
 // Copy (DESIGN-SPEC §3 — "Tools = connectors") — exported so the host + tests
@@ -107,14 +110,14 @@ export interface ConnectorsDestinationProps {
   readonly onReconnect?: (id: ConnectorId) => void;
 
   /**
-   * A connected tool's access mode changed (FR-4.22). Host persists via the
-   * access-mode PATCH; the optimistic-update + revert-on-failure lives in the
-   * binder, not here.
+   * Host-injected per-connector access-mode writer (PRD-06 D4). When wired,
+   * the destination OWNS the optimistic apply, the revert-on-rejection, and
+   * the inline error banner — the host supplies only the PATCH I/O. When
+   * omitted the segments render read-only (no `onChange` fires). This
+   * replaces the old per-connector change callback, whose shape forced each
+   * host to re-implement the same state machine.
    */
-  readonly onSetAccessMode?: (
-    id: ConnectorId,
-    mode: ConnectorAccessMode,
-  ) => void;
+  readonly accessPort?: ConnectorAccessPort;
 
   /**
    * Opens Settings → Model & behavior from the approval-policy note
@@ -146,12 +149,49 @@ export function ConnectorsDestination(
     onOpenConnector,
     onOpenCatalogEntry,
     onReconnect,
-    onSetAccessMode,
+    accessPort,
     onOpenApprovalSettings,
     onRetry,
     now,
     renderIcon,
   } = props;
+
+  // PRD-06 D4 — the optimistic-apply / revert / error-banner state machine
+  // lives ONCE here (was duplicated per host). `overrides` holds the
+  // in-flight optimistic mode per connector; `accessError` flags a failed
+  // PATCH so the inline banner renders.
+  const [overrides, setOverrides] = useState<
+    Readonly<Record<string, ConnectorAccessMode>>
+  >({});
+  const [accessError, setAccessError] = useState<boolean>(false);
+
+  const handleAccessModeChange = useCallback(
+    (id: ConnectorId, mode: ConnectorAccessMode): void => {
+      if (accessPort === undefined) return;
+      // Optimistic apply.
+      setOverrides((prev) => ({ ...prev, [id]: mode }));
+      setAccessError(false);
+      accessPort.setAccessMode(id, mode).then(
+        (connector) => {
+          // Reconcile against the authoritative server row.
+          setOverrides((prev) => ({
+            ...prev,
+            [id]: connector.access_mode,
+          }));
+        },
+        () => {
+          // Revert to the pre-optimistic (server) mode + surface the error.
+          setOverrides((prev) => {
+            const next = { ...prev };
+            delete next[id];
+            return next;
+          });
+          setAccessError(true);
+        },
+      );
+    },
+    [accessPort],
+  );
 
   const filterOptions = useMemo<
     ReadonlyArray<FilterTabOption<ConnectorsFilterSlug>>
@@ -201,6 +241,16 @@ export function ConnectorsDestination(
           style={bodyStyle}
           data-testid="connectors-body"
         >
+          {accessError ? (
+            <div
+              role="alert"
+              data-testid="connectors-access-mode-error"
+              style={accessErrorStyle}
+            >
+              Couldn&apos;t update the tool&apos;s access mode. Please try
+              again.
+            </div>
+          ) : null}
           {renderBody({
             items,
             filter,
@@ -209,7 +259,9 @@ export function ConnectorsDestination(
             onOpenConnector,
             onOpenCatalogEntry,
             onReconnect,
-            onSetAccessMode,
+            accessPort,
+            overrides,
+            onAccessModeChange: handleAccessModeChange,
             now,
             renderIcon,
           })}
@@ -227,7 +279,12 @@ interface BodyArgs {
   readonly onOpenConnector: ConnectorsDestinationProps["onOpenConnector"];
   readonly onOpenCatalogEntry: ConnectorsDestinationProps["onOpenCatalogEntry"];
   readonly onReconnect: ConnectorsDestinationProps["onReconnect"];
-  readonly onSetAccessMode: ConnectorsDestinationProps["onSetAccessMode"];
+  readonly accessPort: ConnectorsDestinationProps["accessPort"];
+  readonly overrides: Readonly<Record<string, ConnectorAccessMode>>;
+  readonly onAccessModeChange: (
+    id: ConnectorId,
+    mode: ConnectorAccessMode,
+  ) => void;
   readonly now: ConnectorsDestinationProps["now"];
   readonly renderIcon: ConnectorsDestinationProps["renderIcon"];
 }
@@ -241,7 +298,9 @@ function renderBody(args: BodyArgs): ReactElement {
     onOpenConnector,
     onOpenCatalogEntry,
     onReconnect,
-    onSetAccessMode,
+    accessPort,
+    overrides,
+    onAccessModeChange,
     now,
     renderIcon,
   } = args;
@@ -332,13 +391,13 @@ function renderBody(args: BodyArgs): ReactElement {
             lastSyncIso={c.last_sync_at}
             icon={renderIcon !== undefined ? renderIcon(c.slug) : undefined}
             now={now}
-            // Optional wire field; default an omitted mode to least
-            // privilege (`off`) so the segment always reflects a real state
-            // (api-types Connector.access_mode contract).
-            accessMode={c.access_mode ?? "off"}
+            // Required wire field (PRD-06): the server always emits it. The
+            // in-flight optimistic override wins over the server row until the
+            // PATCH settles/reverts.
+            accessMode={overrides[c.id] ?? c.access_mode}
             onAccessModeChange={
-              onSetAccessMode !== undefined
-                ? (mode) => onSetAccessMode(c.id, mode)
+              accessPort !== undefined
+                ? (mode) => onAccessModeChange(c.id, mode)
                 : undefined
             }
             onClick={
@@ -473,6 +532,16 @@ const bodyStyle: CSSProperties = {
   flex: 1,
   minHeight: 0,
   padding: "8px 0",
+};
+
+const accessErrorStyle: CSSProperties = {
+  margin: "0 0 8px",
+  padding: "8px 12px",
+  borderRadius: "var(--radius-sm, 6px)",
+  border: "1px solid var(--color-border-strong, #3a3a3d)",
+  background: "var(--color-bg-elevated, #18181b)",
+  color: "var(--color-text, #ededee)",
+  fontSize: "var(--font-size-sm, 13px)",
 };
 
 const policyNoteStyle: CSSProperties = {

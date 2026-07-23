@@ -57,6 +57,7 @@ from backend_app.connectors.sse import (
     register_connector_sse_routes,
 )
 from backend_app.connectors.store import (
+    ConnectorAccessMode,
     ConnectorAuditRecord,
     ConnectorRecord,
     ConnectorScopeEntry,
@@ -66,6 +67,7 @@ from backend_app.connectors.store import (
 )
 
 __all__ = [
+    "ConnectorAccessMode",
     "ConnectorActivityBus",
     "ConnectorAuditRecord",
     "ConnectorCatalogEntry",

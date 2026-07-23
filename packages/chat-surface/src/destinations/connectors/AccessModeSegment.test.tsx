@@ -26,6 +26,26 @@ function Harness({
 }
 
 describe("AccessModeSegment", () => {
+  it("renders exactly 3 radios named Read / Read & act / Off in order, exactly one checked (PRD-06 DoD 16)", () => {
+    // Matches tools/design-parity/design-kit/app-v3/copilot-app.jsx:139-141
+    // [["read","Read"],["act","Read & act"],["off","Off"]].
+    render(
+      <AccessModeSegment value="read_act" onChange={vi.fn()} ariaLabel="x" />,
+    );
+    const radios = screen.getAllByRole("radio");
+    expect(radios).toHaveLength(3);
+    expect(radios.map((r) => r.getAttribute("aria-label"))).toEqual([
+      "Read",
+      "Read & act",
+      "Off",
+    ]);
+    const checked = radios.filter(
+      (r) => r.getAttribute("aria-checked") === "true",
+    );
+    expect(checked).toHaveLength(1);
+    expect(checked[0]).toHaveAttribute("aria-label", "Read & act");
+  });
+
   it("renders a radiogroup with the three modes and checks the current one", () => {
     render(
       <AccessModeSegment

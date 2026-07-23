@@ -37,6 +37,7 @@ function baseConnector(): Connector {
     display_name: "Notion",
     description: "Docs and databases.",
     status: "connected",
+    access_mode: "read",
     owner_user_id: "user_001" as UserId,
     scopes: [],
     last_sync_at: null,
@@ -45,18 +46,31 @@ function baseConnector(): Connector {
   };
 }
 
-describe("Connector.access_mode — optional, backward-compatible", () => {
-  it("is absent on a payload that omits it (old servers)", () => {
-    const connector = baseConnector();
-    expect(connector.access_mode).toBeUndefined();
-  });
-
-  it("carries a mode drawn from the access-mode tuple when present", () => {
+describe("Connector.access_mode — required (PRD-06)", () => {
+  it("carries a mode drawn from the access-mode tuple", () => {
     const connector: Connector = {
       ...baseConnector(),
       access_mode: "read_act",
     };
     expect(CONNECTOR_ACCESS_MODES).toContain(connector.access_mode);
+  });
+
+  it("is a type error to omit access_mode from a Connector literal", () => {
+    // @ts-expect-error — access_mode is REQUIRED; omitting it must not typecheck.
+    const connector: Connector = {
+      id: "conn_002" as ConnectorId,
+      tenant_id: "tenant_001" as TenantId,
+      slug: "gmail" as ConnectorSlug,
+      display_name: "Gmail",
+      description: "",
+      status: "connected",
+      owner_user_id: "user_001" as UserId,
+      scopes: [],
+      last_sync_at: null,
+      created_at: "2026-07-18T00:00:00Z",
+      updated_at: "2026-07-18T00:00:00Z",
+    };
+    expect(connector.id).toBe("conn_002");
   });
 });
 

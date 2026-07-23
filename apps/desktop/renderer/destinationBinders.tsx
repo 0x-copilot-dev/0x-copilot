@@ -38,6 +38,7 @@ import {
   messageFromError,
   useNotify,
   useTransport,
+  type ConnectorAccessPort,
   type ConnectorsFilterSlug,
   type ProjectSummary,
   type RunEmptyComposerCtx,
@@ -52,9 +53,12 @@ import type {
   ChatArchiveStatus,
   ChatsArchive as ChatsArchiveData,
   Connector,
+  ConnectorAccessMode,
   ConnectorCatalogEntry,
+  ConnectorId,
   ConnectorListResponse,
   ConnectorSlug,
+  SetConnectorAccessModeResponse,
   Conversation,
   ConversationId,
   ConversationListResponse,
@@ -451,6 +455,26 @@ export function ConnectorsBinder({
   const { result, retry } = useSectionLoad(load);
   const [filter, setFilter] = useState<ConnectorsFilterSlug>("connected");
 
+  // PRD-06 D4 — the access-mode writer, over the shell Transport (IPC → facade
+  // PATCH). The destination owns the optimistic apply / revert / error banner;
+  // the binder supplies only this one method. No token crosses the bridge.
+  const accessPort = useMemo<ConnectorAccessPort>(
+    () => ({
+      setAccessMode: async (
+        id: ConnectorId,
+        mode: ConnectorAccessMode,
+      ): Promise<Connector> => {
+        const res = await transport.request<SetConnectorAccessModeResponse>({
+          method: "PATCH",
+          path: `/v1/connectors/${encodeURIComponent(id)}/access-mode`,
+          body: { access_mode: mode },
+        });
+        return res.connector;
+      },
+    }),
+    [transport],
+  );
+
   // The connect flow is owned by Electron MAIN: the renderer hands main a
   // stable slug and main binds the loopback + opens the system browser. On
   // success we refetch so the newly-connected row appears. No token ever
@@ -484,6 +508,7 @@ export function ConnectorsBinder({
       onFilterChange={setFilter}
       onConnect={() => setFilter("available")}
       onOpenCatalogEntry={connect}
+      accessPort={accessPort}
       onOpenApprovalSettings={onOpenApprovalSettings}
       onRetry={retry}
     />

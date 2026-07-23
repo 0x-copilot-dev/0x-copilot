@@ -722,6 +722,11 @@ class InternalMcpServerCard(BackendContract):
     health: McpServerHealth
     load_cost: int = Field(default=1, ge=1, le=100_000)
     enabled: bool = True
+    # PRD-06 D3(b) — the joined connector row's durable access mode, stamped
+    # server-side in ``list_internal_cards``. ``off`` connectors are omitted
+    # from the listing entirely (visibility gate), so a card only ever carries
+    # ``read`` / ``read_act``; the default keeps older callers/tests valid.
+    access_mode: str = "read"
 
 
 class InternalMcpServerListResponse(BackendContract):

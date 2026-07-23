@@ -355,10 +355,12 @@ class TestPostgresAdapterPythonPaths:
         sql, params = next(
             (s, p) for s, p in cur.executed if "INSERT INTO connectors" in s
         )
-        # 14 columns bound in order; the JSONB scopes are json-encoded.
-        assert len(params) == 14
+        # 15 columns bound in order (PRD-06 added ``access_mode`` after
+        # ``status_reason``); the JSONB scopes are json-encoded.
+        assert len(params) == 15
         assert params[0] == record.id
-        assert '"gmail.readonly"' in params[8]
+        assert params[7] == record.access_mode.value
+        assert '"gmail.readonly"' in params[9]
         assert params[-1] == "vault_1"
 
     def test_get_connector_maps_row(self) -> None:
