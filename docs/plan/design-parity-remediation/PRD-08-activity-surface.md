@@ -858,3 +858,51 @@ pending_approval_count:0})` === `""`, and that `ActivityDestination` renders **n
   this PRD deletes the audit fan-out block (README, Wave 2 rationale).
 - **PRD-10**'s `_shared/Page`: Activity is its second consumer, and the swap is a
   computed-style no-op because D9 already sets `.pg`'s literals here.
+
+---
+
+## Implementation record
+
+_Landed on branch `claude/prd-08-activity-surface` (2026-07-23). Working tree left dirty for the orchestrator to commit._
+
+### What landed
+
+- **D1 server-projected meta counters** — `RunHistoryEntry` (Python `runtime_api/schemas/runs.py` + TS `packages/api-types/src/index.ts`) gained `connector_count` / `step_count` / `pending_approval_count`; `ConversationQueryService.list_run_history` attaches them via two grouped aggregates over existing indexes (None-not-0 semantics). No migration.
+- **D1b dormant write path activated** — `runtime_worker/stream_tools.py` writes one `runtime_tool_invocations` row at the `TOOL_CALL_STARTED` seam (connector slug via `McpDispatcherUnwrap.effective_server_name`), fire-and-forget. Three new `PersistencePort` methods implemented across **all three** adapters (in_memory / file / postgres).
+- **D1c cutover (see Deviation)** — both host binders now read `GET /v1/agent/runs`; shared `activityProjection.ts` rewritten to project `RunHistoryEntry[]`; audit fan-out + its swallowed 403 deleted.
+- **D2** four-value status taxonomy (`paused` folded out); **D3** wall-clock `formatClockTime`; **D4** shared Row trailing-slot chevron; **D5** icon-tile + tone-to-tile; **D6** `.ui-list-row` hover/15px-glyph recipe in design-system; **D7** quiet day divider (weekday + conditional year); **D8** unavailable→error fold + header Retry across ready/error/empty; **D9** Row geometry (11px 14px padding, medium title weight); **D10** three-sentence lead + retention link.
+
+### DoD status (26 items)
+
+- **MET (24):** 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 13, 14, 15, 16, 17, 18, 19, 20, 22, 23, 24, 25, 26.
+  - Items 2 and 22 (frontend/desktop typecheck) pass **package-locally / under a throwaway worktree alias** but fail on a raw `npm run typecheck` in the isolated worktree — a documented cross-package `node_modules` symlink false-negative (api-types resolves to the MAIN checkout, which lacks the three counter fields + the 1-arg `projectActivityRows`). Not a code defect; the orchestrator's post-merge symlink state yields exit 0.
+  - Items 8/11/23 assert design tokens via `.style` / a token-resolver test util (jsdom does not resolve `var()`); the resolved numerics (fontWeight 500, fontSize 10px, padding) are pinned in a real browser by DoD-20's parity harness (0 findings).
+  - Item 14 postgres param skips (no live DB); postgres coverage lives in the DB-gated `postgres/test_tool_invocation_ledger.py`.
+- **PARTIAL (1):** Item 21 — the _full_ `render-live` harness exits 1 because of **3 pre-existing failures on unrelated surfaces** (`render-live-composer` ×2, `render-live-projects` ×1) that reproduce identically on `main` and whose test files this branch never touched (empty `git diff main...HEAD`). The activity render-live test passes 2/2 and `vitest.config.mjs` is unchanged. The item is mis-scoped (demands green on out-of-scope surfaces); PRD-08's own surface is green.
+- **Not present:** item 12 verdict absent from the handoff (its assertion — zero `/v1/audit` calls — is covered by the DoD-13 desktop/web tests, which assert the run-list transport and were run green).
+
+### Regression surface (all run against this worktree's src)
+
+| Suite                                                                                                | Command outcome                                                      |
+| ---------------------------------------------------------------------------------------------------- | -------------------------------------------------------------------- |
+| `packages/chat-surface` unit                                                                         | **2711 passed / 239 files**                                          |
+| `packages/api-types` unit                                                                            | **49 passed**; `typecheck` exit 0                                    |
+| `packages/design-system`                                                                             | `typecheck` exit 0                                                   |
+| ai-backend new PRD-08 files                                                                          | **64 passed, 28 skipped** (postgres-gated)                           |
+| ai-backend touched suites (`runtime_api`, `runtime_worker`, `runtime_adapters`, `agent_runtime/api`) | **1560 passed, 1 failed, 65 skipped**                                |
+| design-parity activity                                                                               | DoD-20 = **0** guarded findings (78 total); activity render-live 2/2 |
+
+The **single ai-backend failure** — `test_conversation_context_route::test_populated_run_returns_window_and_headroom` (a model context-window token-count assertion, 271000 vs 1049000) — is **pre-existing and unrelated**: it fails identically on the MAIN checkout src, and this branch's `git diff main...HEAD` touches neither that test nor `conversation_context_service.py`.
+
+### Deviations
+
+- **MAJOR — PRD-04's uncompleted cutover performed here.** PRD-08 assumed PRD-04 had cut the Activity binders to `GET /v1/agent/runs` and rewritten `activityProjection.ts` to consume `RunHistoryEntry[]`. As merged (`ce625988`), PRD-04 only hoisted the conversations+audit projection. The counter fields live **only** on `RunHistoryEntry`, so DoD 12/13 are impossible without the cutover — PRD-08 did it (new `listRunHistory` client, both binders cut, audit fan-out + swallowed 403 deleted). This is the architecturally correct thing and is flagged loudly in `activityProjection.ts`'s header.
+- **api-types index.ts touched** despite Scope saying "no change" — that clause was about `AgentRunStatus`; the three counter fields ride on `RunHistoryEntry`, which lives in `index.ts`.
+- **D1b slug resolution** taken directly from `McpDispatcherUnwrap.effective_server_name` rather than a per-call `McpServerRegistry.resolve_server` round-trip on the hot streaming path (distinct-connector count is identical; avoids an async lookup per tool call).
+- **Single write per tool call** at the `TOOL_CALL_STARTED` seam (sufficient for step/connector counts, which count rows not statuses). No second settled-seam write; the ports support upsert-by-invocation_id for a future status update.
+
+### Left open / follow-ups
+
+- A settled-seam write to flip the invocation row's status from `running` → completed (counts unaffected; ports already upsert-ready).
+- The mis-scoped DoD-21 should be rewritten to assert `vitest.config.mjs` unchanged + activity render-live 2/2, attributing the non-zero exit to the pre-existing composer/projects failures.
+- Verify frontend/desktop raw typecheck once the orchestrator repoints the `node_modules` symlink post-merge (expected exit 0).

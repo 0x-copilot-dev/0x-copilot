@@ -79,7 +79,7 @@
       "group": "Row/live",
       "state": "default",
       "design": ".rowlist .lrow:nth-child(1) .lrow__ic svg",
-      "live": "[data-status=\"running\"] [data-testid=\"activity-row-icon\"] svg"
+      "live": "[data-status=\"running\"] [data-testid=\"row-icon\"] svg"
     },
     {
       "label": "row.live.name",
@@ -121,14 +121,14 @@
       "group": "Row/live",
       "state": "default",
       "design": ".rowlist .lrow:nth-child(1) > svg",
-      "live": null
+      "live": "[data-status=\"running\"] [data-testid=\"row-trailing\"] svg"
     },
     {
       "label": "row.done.ic.svg",
       "group": "Row/rest",
       "state": "default",
       "design": ".rowlist .lrow:nth-child(2) .lrow__ic svg",
-      "live": "section[data-day-key=\"2026-07-16\"] li:nth-child(2) [data-testid=\"activity-row-icon\"] svg"
+      "live": "section[data-day-key=\"2026-07-16\"] li:nth-child(2) [data-testid=\"row-icon\"] svg"
     },
     {
       "label": "row.done.name",
@@ -149,7 +149,7 @@
       "group": "Row/rest",
       "state": "default",
       "design": ".rowlist .lrow:nth-child(2) > span:last-child",
-      "live": null
+      "live": "section[data-day-key=\"2026-07-16\"] li:nth-child(2) [data-testid=\"row-trailing\"]"
     },
     {
       "label": "chip.paused",

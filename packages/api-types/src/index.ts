@@ -1565,6 +1565,19 @@ export interface RunHistoryEntry {
   started_at: string | null;
   completed_at: string | null;
   cancelled_at: string | null;
+  /**
+   * PRD-08 D1 — the three counters the Activity meta line ("4 apps · 7 steps ·
+   * awaiting 1 approval") is composed from, server-projected as integers
+   * (never a pre-formatted string). Distinct connectors the run called and the
+   * tool-invocation count are `null` — NOT `0` — for a run recorded before the
+   * tool-invocation writer existed (D1b), so the client omits that clause
+   * rather than asserting "0 steps" about a run that did seven. Pending
+   * approvals have been persisted since migration `0001`, so `0` there is a
+   * fact, and the field is a plain number.
+   */
+  connector_count: number | null;
+  step_count: number | null;
+  pending_approval_count: number;
 }
 
 /**

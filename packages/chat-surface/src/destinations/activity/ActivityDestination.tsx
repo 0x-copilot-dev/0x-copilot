@@ -47,7 +47,7 @@ import { BrandMark } from "../../shell/BrandMark";
 import { EmptyState } from "../../shell/EmptyState";
 import { StatusPill, type StatusTone } from "../../shell/StatusPill";
 import { statusTone as runStatusTone } from "../../shell/statusTone";
-import { formatRelativeTime } from "../../util/time";
+import { formatClockTime } from "../../util/time";
 import { PageLead } from "../_shared/PageLead";
 import { Row } from "../_shared/Row";
 import { RowList } from "../_shared/RowList";
@@ -57,15 +57,28 @@ import { RowList } from "../_shared/RowList";
 // exact strings rather than re-typing them.
 // ===========================================================================
 
-/** Lead paragraph opener. Rendered in the `.pg-lead` intro. */
-export const ACTIVITY_LEAD_COPY = "Everything the agent has done.";
+/**
+ * Lead paragraph — the design's first two sentences verbatim
+ * (`copilot-app.jsx:27-30`), restoring the "most recent first" ordering promise
+ * PRD-05 makes true (PRD-08 D10). The third sentence is split so the anchor
+ * wraps ONLY the phrase (below), not the whole sentence.
+ */
+export const ACTIVITY_LEAD_COPY =
+  'Everything the agent has done, most recent first. This is the record the old build buried in an "audit log" — here it\'s a place you visit.';
 
 /**
- * The retention/export/delete pointer. Rendered as an inline link that
+ * Prefix of the retention sentence; the link phrase follows and a "." closes it
+ * (PRD-08 D10). The design links only `ACTIVITY_RETENTION_LINK_COPY`, not the
+ * whole sentence (`copilot-app.jsx:31-37`).
+ */
+export const ACTIVITY_RETENTION_PREFIX_COPY =
+  "Retention, export, and delete live in ";
+
+/**
+ * The retention/export/delete link PHRASE only. Rendered as an inline link that
  * invokes `onOpenRetentionSettings` (host → Settings → Privacy). FR-4.17.
  */
-export const ACTIVITY_RETENTION_LINK_COPY =
-  "Retention, export, and delete live in Settings → Privacy.";
+export const ACTIVITY_RETENTION_LINK_COPY = "Settings → Privacy";
 
 // ===========================================================================
 // Status → tone / label (single source; StatusPill renders the tone token)
@@ -126,10 +139,18 @@ function dayLabel(rowMs: number, nowMs: number, locale?: string): string {
   // doesn't misclassify the boundary.
   const diffDays = Math.round((nowMidnight - rowMidnight) / 86_400_000);
   if (diffDays === 1) return "Yesterday";
+  // The design's `.act-day` label is `"Mon, Jul 14"` — weekday + month + day,
+  // NO year (`copilot-data.jsx:648`). The year is appended ONLY when the row is
+  // in a previous calendar year, so a January user reading December still gets
+  // an unambiguous date without every divider carrying a redundant "2026"
+  // (PRD-08 D7).
+  const sameYear =
+    new Date(rowMs).getFullYear() === new Date(nowMs).getFullYear();
   return new Intl.DateTimeFormat(locale ?? undefined, {
-    year: "numeric",
+    weekday: "short",
     month: "short",
     day: "numeric",
+    ...(sameYear ? {} : { year: "numeric" }),
   }).format(new Date(rowMs));
 }
 
@@ -236,11 +257,18 @@ export interface ActivityDestinationProps {
   /** Retry callback for the `status:"error"` branch. */
   readonly onRetry?: () => void;
 
-  /** Reference instant — test seam for day grouping + relative time. */
+  /** Reference instant — test seam for day grouping + wall-clock time. */
   readonly now?: number;
 
-  /** BCP-47 locale for the explicit-date dividers; defaults to runtime. */
+  /** BCP-47 locale for the explicit-date dividers + wall-clock time; defaults to runtime. */
   readonly locale?: string;
+
+  /**
+   * IANA time zone for the row's wall-clock time — an explicit test seam
+   * (mirrors `now`) so a numeric time assertion is machine-independent (D3).
+   * Defaults to the runtime's zone.
+   */
+  readonly timeZone?: string;
 }
 
 // ===========================================================================
@@ -257,6 +285,7 @@ export function ActivityDestination(
     onRetry,
     now,
     locale,
+    timeZone,
   } = props;
 
   const nowMs = now ?? Date.now();
@@ -280,8 +309,23 @@ export function ActivityDestination(
     >
       <div style={innerStyle} className="pg">
         <ActivityLead onOpenRetentionSettings={onOpenRetentionSettings} />
+        {/* Retry lives in the page header, not on the error branch (D8): a
+            successfully-loaded but stale list also needs a refresh control, so
+            it renders in every non-loading state (error, empty, ready). */}
+        {onRetry !== undefined && dataState !== "loading" ? (
+          <div style={retryRowStyle}>
+            <button
+              type="button"
+              onClick={onRetry}
+              style={retryButtonStyle}
+              data-testid="activity-retry"
+            >
+              Refresh
+            </button>
+          </div>
+        ) : null}
         <div style={bodyStyle} data-testid="activity-body">
-          {renderBody({ items, groups, onOpenRun, onRetry, now: nowMs })}
+          {renderBody({ items, groups, onOpenRun, locale, timeZone })}
         </div>
       </div>
     </section>
@@ -291,10 +335,13 @@ export function ActivityDestination(
 function resolveDataState(
   items: ActivityDestinationProps["items"],
   groupCount: number,
-): "loading" | "error" | "unavailable" | "empty" | "ready" {
+): "loading" | "error" | "empty" | "ready" {
   if (items === null || items === undefined) return "loading";
-  if (items.status === "error") return "error";
-  if (items.status === "unavailable") return "unavailable";
+  // `unavailable` folds into `error` (D8): no binder constructs it, and an
+  // Activity that can't load IS a failure to load — not a distinct "not
+  // licensed" state. `SectionResult.status` keeps the member for other surfaces.
+  if (items.status === "error" || items.status === "unavailable")
+    return "error";
   return groupCount === 0 ? "empty" : "ready";
 }
 
@@ -310,6 +357,7 @@ function ActivityLead({
   return (
     <PageLead data-testid="activity-lead">
       <span>{ACTIVITY_LEAD_COPY} </span>
+      <span>{ACTIVITY_RETENTION_PREFIX_COPY}</span>
       {onOpenRetentionSettings !== undefined ? (
         <button
           type="button"
@@ -324,6 +372,7 @@ function ActivityLead({
           {ACTIVITY_RETENTION_LINK_COPY}
         </span>
       )}
+      <span>.</span>
     </PageLead>
   );
 }
@@ -336,12 +385,12 @@ interface BodyArgs {
   readonly items: ActivityDestinationProps["items"];
   readonly groups: ReadonlyArray<ActivityDayGroup>;
   readonly onOpenRun: ActivityDestinationProps["onOpenRun"];
-  readonly onRetry: ActivityDestinationProps["onRetry"];
-  readonly now: number;
+  readonly locale?: string;
+  readonly timeZone?: string;
 }
 
 function renderBody(args: BodyArgs): ReactElement {
-  const { items, groups, onOpenRun, onRetry, now } = args;
+  const { items, groups, onOpenRun, locale, timeZone } = args;
 
   // Loading — skeleton day-groups (FR-4.2). role="status" announces the
   // busy state; the skeleton chrome itself is aria-hidden.
@@ -362,44 +411,30 @@ function renderBody(args: BodyArgs): ReactElement {
     );
   }
 
-  // Error — role="alert" on the error node (DESIGN-SPEC §9) + Retry.
-  if (items.status === "error") {
+  // Error — role="alert" on the error node (DESIGN-SPEC §9). Retry lives in the
+  // page header (D8), so this branch carries no action of its own. `unavailable`
+  // folds in here (D8): it is unreachable and, if it ever arrived, an Activity
+  // that can't load IS a load failure.
+  if (items.status === "error" || items.status === "unavailable") {
     return (
       <div role="alert" data-testid="activity-error">
         <EmptyState
           title="Couldn't load activity"
           body={items.error ?? "Network error — try again."}
-          action={
-            onRetry !== undefined
-              ? { label: "Retry", onClick: onRetry }
-              : undefined
-          }
         />
       </div>
     );
   }
 
-  // Unavailable — distinct "not enabled for your workspace" empty-state.
-  if (items.status === "unavailable") {
-    return (
-      <div data-testid="activity-unavailable">
-        <EmptyState
-          title="Activity unavailable"
-          body={
-            items.error ?? "This destination is not enabled for your workspace."
-          }
-        />
-      </div>
-    );
-  }
-
-  // Ready-but-empty — per-view empty copy (FR-4.2 / §9).
+  // Ready-but-empty — per-view empty copy (FR-4.2 / §9). The copy no longer
+  // asserts "the agent hasn't run anything" (which the client cannot know); it
+  // states only what the surface will do once a run exists (D8).
   if (groups.length === 0) {
     return (
       <div data-testid="activity-empty">
         <EmptyState
-          title="No activity yet"
-          body="The agent hasn't run anything yet. Start a run and it'll show up here, grouped by day."
+          title="Nothing here yet"
+          body="Start a run and it'll show up here, grouped by day."
         />
       </div>
     );
@@ -413,7 +448,8 @@ function renderBody(args: BodyArgs): ReactElement {
           key={group.key}
           group={group}
           onOpenRun={onOpenRun}
-          now={now}
+          locale={locale}
+          timeZone={timeZone}
         />
       ))}
     </div>
@@ -427,11 +463,13 @@ function renderBody(args: BodyArgs): ReactElement {
 function DayGroup({
   group,
   onOpenRun,
-  now,
+  locale,
+  timeZone,
 }: {
   readonly group: ActivityDayGroup;
   readonly onOpenRun: ActivityDestinationProps["onOpenRun"];
-  readonly now: number;
+  readonly locale?: string;
+  readonly timeZone?: string;
 }): ReactElement {
   const headingId = `activity-day-${group.key}`;
   return (
@@ -444,7 +482,7 @@ function DayGroup({
     >
       <h2
         id={headingId}
-        className="act-day sect-h"
+        className="act-day"
         data-testid="activity-day"
         data-day-key={group.key}
         style={dayDividerStyle}
@@ -459,7 +497,12 @@ function DayGroup({
         keyFor={(row) => row.run_id}
         data-testid="activity-day-rowlist"
         renderRow={(row) => (
-          <ActivityRow row={row} onOpenRun={onOpenRun} now={now} />
+          <ActivityRow
+            row={row}
+            onOpenRun={onOpenRun}
+            locale={locale}
+            timeZone={timeZone}
+          />
         )}
       />
     </section>
@@ -473,31 +516,29 @@ function DayGroup({
 function ActivityRow({
   row,
   onOpenRun,
-  now,
+  locale,
+  timeZone,
 }: {
   readonly row: ActivityRunRow;
   readonly onOpenRun: ActivityDestinationProps["onOpenRun"];
-  readonly now: number;
+  readonly locale?: string;
+  readonly timeZone?: string;
 }): ReactElement {
   const isRunning = row.status === "running";
   const tone = activityStatusTone(row.status);
   const presentation = runStatusTone(row.status);
 
-  // Leading icon (`.lrow__ic`): a live run shows the brand turbine tinted with
-  // success; every other run shows a clock. Both live in the shared icon
-  // system — no surface re-inlines an <svg>.
+  // Leading icon (`.lrow__ic`): a live run shows the brand turbine, every other
+  // run a clock — a DIRECT child of `<Row>`'s 28x28 tile. The "this is live"
+  // jade tint rides `iconTone="success"` on the tile itself (below), NOT on a
+  // wrapper span around the glyph (which never reached the tile — the bug D5
+  // deletes). The glyph is sized 18 as authored and the `.ui-list-row` recipe
+  // forces it to 15px inside the tile, exactly as the design overrides its own
+  // `<Mark size={18}>`.
   const icon = isRunning ? (
-    <span
-      style={liveIconStyle}
-      data-testid="activity-row-icon"
-      data-live="true"
-    >
-      <BrandMark size={18} />
-    </span>
+    <BrandMark size={18} />
   ) : (
-    <span data-testid="activity-row-icon" data-live="false">
-      <Icon name="clock" size={18} />
-    </span>
+    <Icon name="clock" size={18} />
   );
 
   // The title is PLAIN TEXT for every status (PRD-04 Seam C). The row itself is
@@ -521,13 +562,17 @@ function ActivityRow({
     />
   );
 
+  // Wall-clock time (D3): Activity is day-grouped, so the container already
+  // establishes the date — a relative "1d ago" under a "Yesterday" heading is
+  // redundant and erases within-day ordering. The `<time dateTime>` wrapper
+  // keeps machine-readable exactness regardless of display format.
   const meta = (
     <time
       dateTime={row.started_at}
       data-testid="activity-row-time"
       style={{ font: "inherit", color: "inherit" }}
     >
-      {formatRelativeTime(row.started_at, now)}
+      {formatClockTime(row.started_at, locale, timeZone)}
     </time>
   );
 
@@ -552,10 +597,16 @@ function ActivityRow({
       data-row-title={row.title}
       data-open={isRunning ? "run" : "detail"}
       icon={icon}
+      iconTone={isRunning ? "success" : "default"}
       title={title}
       chip={chip}
       sub={sub}
       meta={meta}
+      // Navigation affordance (D4): the design marks the navigable (live) row
+      // with a trailing chevron and reserves a 16px spacer on every other row.
+      // First call site of the chevron glyph that has sat unused in the icon
+      // SSOT, byte-identical to the design's `Icon.chevR`.
+      trailing={isRunning ? <Icon name="chevronRight" size={15} /> : undefined}
       onActivate={activate}
       ariaLabel={activate !== undefined ? `Open run: ${row.title}` : undefined}
     />
@@ -605,16 +656,37 @@ const rootStyle: CSSProperties = {
   overflow: "auto",
 };
 
-// `.pg` — shared list surface, content column max 960 (FR-4.1).
+// `.pg` — shared list surface, content column max 960 (FR-4.1). Padding is set
+// to the design's `.pg { padding: 20px 24px 40px }` literal (copilot.css:1553,
+// D9); `maxWidth: 960` already matched. PRD-10 later swaps this for its
+// `_shared/Page` primitive with these same literals — a computed-style no-op.
 const innerStyle: CSSProperties = {
   width: "100%",
   maxWidth: 960,
   margin: "0 auto",
-  padding: "16px 20px 32px",
+  padding: "20px 24px 40px",
   boxSizing: "border-box",
   display: "flex",
   flexDirection: "column",
   gap: 12,
+};
+
+// Header Retry row — right-aligned above the feed. Renders in every non-loading
+// state (D8), so a stale-but-loaded list has a refresh control too.
+const retryRowStyle: CSSProperties = {
+  display: "flex",
+  justifyContent: "flex-end",
+};
+
+const retryButtonStyle: CSSProperties = {
+  background: "transparent",
+  border: "1px solid var(--color-border)",
+  borderRadius: "var(--radius-sm, 6px)",
+  padding: "4px 10px",
+  font: "inherit",
+  fontSize: "var(--font-size-2xs)",
+  color: "var(--color-text-muted)",
+  cursor: "pointer",
 };
 
 const leadLinkStyle: CSSProperties = {
@@ -647,18 +719,22 @@ const dayGroupStyle: CSSProperties = {
   gap: 8,
 };
 
-// `.act-day` — mono uppercase day divider (~10px) with a trailing hairline
-// (the design `.act-day::after`) running from the label to the row edge.
+// `.act-day` — a QUIET mono day divider (the design's `.act-day`,
+// copilot.css:1683-1697): 10px mono, regular weight, NO tracking, NO transform,
+// with a trailing hairline (`.act-day::after`) running to the row edge. It is
+// NOT the section header (`.sect-h` — 9.5px, tracked, uppercase); the live
+// divider used to wear both classes and be styled as the wrong one (PRD-08 D7).
 const dayDividerStyle: CSSProperties = {
   margin: 0,
   display: "flex",
   alignItems: "center",
   gap: 10,
   fontFamily: "var(--font-mono, ui-monospace, SFMono-Regular, monospace)",
-  fontSize: "var(--font-size-2xs, 10px)",
-  fontWeight: 600,
-  letterSpacing: 0.4,
-  textTransform: "uppercase",
+  fontSize: "var(--font-size-mono-10, 10px)",
+  fontWeight: "var(--font-weight-regular)",
+  // No `letter-spacing` and no `text-transform` — the design's `.act-day` sets
+  // neither (initial `normal` / `none`). The old divider set both (the `.sect-h`
+  // clothes); dropping them is the fix (D7).
   color: "var(--color-text-subtle, #7e7e84)",
 };
 
@@ -667,14 +743,6 @@ const dayHairlineStyle: CSSProperties = {
   flex: 1,
   height: 1,
   background: "var(--color-border, #232325)",
-};
-
-// Live-run icon slot tint — the brand turbine reads as "live" in success.
-const liveIconStyle: CSSProperties = {
-  display: "inline-flex",
-  alignItems: "center",
-  justifyContent: "center",
-  color: "var(--color-success)",
 };
 
 const skeletonRowStyle: CSSProperties = {

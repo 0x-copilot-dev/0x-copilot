@@ -52,3 +52,40 @@ export function formatRelativeTime(
   const years = Math.floor(months / 12);
   return rtf.format(-years, "year");
 }
+
+/**
+ * Format an ISO-8601 timestamp as a wall-clock time (e.g. `"11:44"`, or
+ * `"11:44 AM"` in an h12 locale). The counterpart to {@link formatRelativeTime}:
+ * a row shows a wall clock when its CONTAINER already establishes the date
+ * (Activity is day-grouped, so "1d ago" under a "Yesterday" heading is
+ * redundant and loses within-day ordering); it shows relative time when nothing
+ * else does (Chats). This is the seam-level rule — any future day-grouped list
+ * inherits it (PRD-08 D3).
+ *
+ * Locale is honoured rather than forced to a 24-hour clock: the design's
+ * `"11:44"` is what an h23 locale produces, and hard-coding 24-hour for a US
+ * user to match a mock would be worse than the drift it fixes. `timeZone` is an
+ * explicit test seam (exactly as `now` is for `formatRelativeTime`) — without it
+ * a numeric assertion is machine-dependent.
+ *
+ * Returns `"—"` (em dash) on unparseable input — the same bad-data contract as
+ * `formatRelativeTime`, so the UI never collapses on a malformed timestamp.
+ *
+ * @param iso  ISO-8601 timestamp; e.g. `"2026-07-22T11:44:00Z"`.
+ * @param locale  BCP-47 locale tag; defaults to the runtime's locale.
+ * @param timeZone  IANA time zone; defaults to the runtime's zone.
+ */
+export function formatClockTime(
+  iso: string,
+  locale?: string,
+  timeZone?: string,
+): string {
+  const parsed = Date.parse(iso);
+  if (Number.isNaN(parsed)) return "—";
+
+  return new Intl.DateTimeFormat(locale ?? undefined, {
+    hour: "2-digit",
+    minute: "2-digit",
+    timeZone,
+  }).format(new Date(parsed));
+}

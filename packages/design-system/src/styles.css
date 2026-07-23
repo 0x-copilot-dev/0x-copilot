@@ -1814,3 +1814,34 @@ button.ui-pop-row {
   width: 14px;
   height: 14px;
 }
+
+/* List row — the design's `.lrow` (copilot.css:1582-1666). Owns the two visual
+ * concerns an inline `CSSProperties` object on `<Row>` structurally cannot
+ * express: the `:hover`/`:focus-visible` background, and forcing the glyph
+ * inside the 28x28 icon tile to 15px regardless of the caller's `size=` prop
+ * (the design's `.lrow__ic svg { width:15px }` overriding `<Mark size={18}>`).
+ * Lives here — imported once per host at the entry point, beside `.ui-pill` /
+ * `.ui-chip` / `.ui-badge` — so no host can forget a per-file stylesheet import
+ * (PRD-08 D6). `<Row>` emits `className="ui-list-row"`; hover applies only to an
+ * activatable row (`role="button"`), never to inert chrome. */
+.ui-list-row {
+  cursor: default;
+}
+.ui-list-row[role="button"] {
+  cursor: pointer;
+}
+.ui-list-row[role="button"]:hover,
+.ui-list-row[role="button"]:focus-visible {
+  background: var(--color-surface-muted);
+}
+/* `.lrow__ic svg` (copilot.css:1627-1630) — the tile forces its glyph to 15px. */
+.ui-list-row [data-testid="row-icon"] svg {
+  width: 15px;
+  height: 15px;
+}
+/* `.lrow > svg` (copilot.css:1661-1666) — the trailing chevron reads mut2. The
+ * colour lives on the glyph, not the always-reserved 16px spacer wrapper, so an
+ * empty (non-navigable) spacer inherits the row colour like the design's. */
+.ui-list-row [data-testid="row-trailing"] svg {
+  color: var(--color-text-subtle);
+}

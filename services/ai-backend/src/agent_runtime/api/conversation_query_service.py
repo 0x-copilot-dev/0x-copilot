@@ -9,6 +9,7 @@ state; returns typed Pydantic responses for HTTP routes and the SSE adapter.
 from __future__ import annotations
 
 import base64
+from collections.abc import Sequence
 from datetime import datetime
 
 from agent_runtime.api.constants import Messages, Values
@@ -28,6 +29,7 @@ from runtime_api.schemas import (
     ConversationResponse,
     DefaultModelSelection,
     MessageListResponse,
+    RunHistoryEntry,
     RunHistoryResponse,
     RunListResponse,
     RunSummaryResponse,
@@ -344,10 +346,53 @@ class ConversationQueryService:
             else None
         )
         return RunHistoryResponse(
-            runs=tuple(page),
+            runs=await self._attach_meta_counters(org_id=org_id, page=page),
             next_cursor=next_cursor,
             has_more=has_more,
         )
+
+    async def _attach_meta_counters(
+        self,
+        *,
+        org_id: str,
+        page: Sequence[RunHistoryEntry],
+    ) -> tuple[RunHistoryEntry, ...]:
+        """Stamp the Activity meta counters onto a run-history page (PRD-08 D1).
+
+        Two grouped aggregates over indexes that already exist — one query for
+        the tool-invocation counts, one for pending approvals — keyed by the
+        page's run ids (bounded by ``limit``, never N+1). A run ABSENT from the
+        tool-invocation map reports ``connector_count``/``step_count`` as ``None``
+        (unknown — recorded before the writer existed, D1b), NOT ``0``; a run
+        absent from the approval map reports ``0`` (approvals persist since
+        ``0001``). The wire model defaults already carry these, so the stamp only
+        overrides when a real count exists.
+        """
+
+        if not page:
+            return ()
+        run_ids = [entry.run_id for entry in page]
+        tool_counts = await self._persistence.count_tool_invocations_for_runs(
+            org_id=org_id, run_ids=run_ids
+        )
+        pending = await self._persistence.count_pending_approvals_for_runs(
+            org_id=org_id, run_ids=run_ids
+        )
+        stamped: list[RunHistoryEntry] = []
+        for entry in page:
+            counts = tool_counts.get(entry.run_id)
+            step_count = counts[0] if counts is not None else None
+            connector_count = counts[1] if counts is not None else None
+            stamped.append(
+                entry.model_copy(
+                    update={
+                        "step_count": step_count,
+                        "connector_count": connector_count,
+                        "pending_approval_count": pending.get(entry.run_id, 0),
+                    }
+                )
+            )
+        return tuple(stamped)
 
     async def get_conversation_context(
         self,

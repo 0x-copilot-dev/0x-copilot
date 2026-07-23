@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 
-import { formatRelativeTime } from "./time";
+import { formatClockTime, formatRelativeTime } from "./time";
 
 describe("formatRelativeTime", () => {
   // Frozen `now` for every test — none of these rely on wall clock.
@@ -61,6 +61,33 @@ describe("formatRelativeTime", () => {
     const fr = formatRelativeTime(iso, NOW, "fr-FR");
     expect(typeof fr).toBe("string");
     expect(fr.length).toBeGreaterThan(0);
+  });
+});
+
+describe("formatClockTime (PRD-08 D3)", () => {
+  it("renders the design's zero-padded 24-hour wall clock under an h23 locale + pinned zone", () => {
+    // The design's literal (copilot-data.jsx:607). `en-GB` is h23; UTC pins the
+    // value so the assertion is machine-independent (DoD 5).
+    expect(formatClockTime("2026-07-22T11:44:00Z", "en-GB", "UTC")).toBe(
+      "11:44",
+    );
+  });
+
+  it("honours the time zone rather than the runtime's zone", () => {
+    // 11:44 UTC is 07:44 in New York (EDT, -04:00) — the zone is applied, not
+    // ignored.
+    expect(
+      formatClockTime("2026-07-22T11:44:00Z", "en-GB", "America/New_York"),
+    ).toBe("07:44");
+  });
+
+  it("produces an AM/PM suffix in an h12 locale (locale honoured, not forced h23)", () => {
+    const us = formatClockTime("2026-07-22T11:44:00Z", "en-US", "UTC");
+    expect(us).toMatch(/11:44\s?AM/i);
+  });
+
+  it("returns em-dash for unparseable input (matches formatRelativeTime)", () => {
+    expect(formatClockTime("not-an-iso")).toBe("—");
   });
 });
 

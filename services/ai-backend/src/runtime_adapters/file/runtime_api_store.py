@@ -43,7 +43,7 @@ all gated to the ``file`` backend, no effect on postgres/in-memory/web):
 from __future__ import annotations
 
 import asyncio
-from collections.abc import Sequence
+from collections.abc import Mapping, Sequence
 from datetime import datetime, timedelta, timezone
 import hashlib
 from pathlib import Path
@@ -79,6 +79,7 @@ from agent_runtime.persistence.records import (
     RuntimeWorkerResult,
     ToolBudgetEnforcement,
     ToolBudgetRecord,
+    ToolInvocationRecord,
     UsageConversationAggregateRecord,
     UsageDailyConnectorRow,
     UsageDailyOrgRow,
@@ -145,6 +146,7 @@ class _Tables:
     """State-ledger file basenames (one JSONL per back-office table)."""
 
     APPROVALS = "approvals"
+    TOOL_INVOCATIONS = "tool_invocations"
     APPROVAL_DECISIONS = "approval_decisions"
     APPROVAL_BATCHES = "approval_batches"
     APPROVAL_BATCH_ITEMS = "approval_batch_items"
@@ -250,6 +252,10 @@ class FileRuntimeApiStore:
         self.approval_decisions: dict[str, ApprovalDecisionRecord] = {}
         self.approval_batches: dict[str, ApprovalBatchRecord] = {}
         self.approval_batch_items: dict[str, ApprovalBatchItemRecord] = {}
+        # PRD-08 D1b — per-run tool-invocation ledger (Activity meta counters),
+        # keyed by ``invocation_id``; persisted so a run's counts survive a
+        # desktop restart (the file store is the desktop substrate).
+        self.tool_invocations: dict[str, ToolInvocationRecord] = {}
         self.run_usage: dict[str, RuntimeRunUsageRecord] = {}
         self.model_call_usage: list[RuntimeModelCallUsageRecord] = []
         self.pricing_rows: list[ModelPricingRecord] = []
@@ -676,6 +682,10 @@ class FileRuntimeApiStore:
                 self.approval_requests[r.approval_id] = r
             else:
                 self.approval_requests.pop(rec, None)
+        for op, rec in self._ledger(_Tables.TOOL_INVOCATIONS).load_ops():
+            if op == "put":
+                ti = ToolInvocationRecord.model_validate(rec)
+                self.tool_invocations[ti.invocation_id] = ti
         for op, rec in self._ledger(_Tables.APPROVAL_DECISIONS).load_ops():
             if op == "put":
                 r = ApprovalDecisionRecord.model_validate(rec)
@@ -826,6 +836,7 @@ class FileRuntimeApiStore:
 
         return [
             (_Tables.APPROVALS, list(self.approval_requests.values())),
+            (_Tables.TOOL_INVOCATIONS, list(self.tool_invocations.values())),
             (_Tables.APPROVAL_DECISIONS, list(self.approval_decisions.values())),
             (_Tables.APPROVAL_BATCHES, list(self.approval_batches.values())),
             (_Tables.APPROVAL_BATCH_ITEMS, list(self.approval_batch_items.values())),
@@ -1423,6 +1434,57 @@ class FileRuntimeApiStore:
             keyset = (before_created_at, before_run_id)
             entries = [e for e in entries if (e.created_at, e.run_id) < keyset]
         return tuple(entries[: max(0, limit)])
+
+    # ==================================================================
+    # PersistencePort — tool-invocation ledger (PRD-08 D1b)
+    # ==================================================================
+
+    async def record_tool_invocation(self, record: ToolInvocationRecord) -> None:
+        """Upsert a tool-invocation row keyed by ``invocation_id`` (persisted)."""
+
+        async with self._state_lock:
+            self.tool_invocations[record.invocation_id] = record
+            self._ledger(_Tables.TOOL_INVOCATIONS).append_put(
+                record.model_dump(mode="json")
+            )
+
+    async def count_tool_invocations_for_runs(
+        self, *, org_id: str, run_ids: Sequence[str]
+    ) -> Mapping[str, tuple[int, int]]:
+        """Return ``run_id → (step_count, connector_count)`` (runs with rows only)."""
+
+        wanted = set(run_ids)
+        steps: dict[str, int] = {}
+        connectors: dict[str, set[str]] = {}
+        for record in self.tool_invocations.values():
+            if record.org_id != org_id or record.run_id not in wanted:
+                continue
+            steps[record.run_id] = steps.get(record.run_id, 0) + 1
+            if record.connector_slug is not None:
+                connectors.setdefault(record.run_id, set()).add(record.connector_slug)
+        return {
+            run_id: (count, len(connectors.get(run_id, set())))
+            for run_id, count in steps.items()
+        }
+
+    async def count_pending_approvals_for_runs(
+        self, *, org_id: str, run_ids: Sequence[str]
+    ) -> Mapping[str, int]:
+        """Return ``run_id → pending-approval count`` (runs with pending only)."""
+
+        from runtime_api.schemas.common import ApprovalStatus  # local: avoid cycle
+
+        wanted = set(run_ids)
+        pending: dict[str, int] = {}
+        for request in self.approval_requests.values():
+            if (
+                request.org_id != org_id
+                or request.run_id not in wanted
+                or request.status is not ApprovalStatus.PENDING
+            ):
+                continue
+            pending[request.run_id] = pending.get(request.run_id, 0) + 1
+        return pending
 
     # ==================================================================
     # PersistencePort — runs

@@ -13,10 +13,11 @@ from runtime_api.schemas import (
 
 
 def test_run_history_entry_fields_match_api_types() -> None:
-    """PRD-05 — the ai-backend ``RunHistoryEntry`` field set is exactly the
-    ``RunHistoryEntry`` interface mirrored in ``packages/api-types``. Any drift
-    (a field added on one side only) breaks the wire contract silently; this
-    pins both to the same nine fields."""
+    """PRD-05 + PRD-08 — the ai-backend ``RunHistoryEntry`` field set is exactly
+    the ``RunHistoryEntry`` interface mirrored in ``packages/api-types``. Any
+    drift (a field added on one side only) breaks the wire contract silently;
+    this pins both to the same twelve fields — the nine PRD-05 fields plus the
+    three PRD-08 Activity meta counters."""
     assert set(RunHistoryEntry.model_fields) == {
         "run_id",
         "conversation_id",
@@ -27,6 +28,10 @@ def test_run_history_entry_fields_match_api_types() -> None:
         "started_at",
         "completed_at",
         "cancelled_at",
+        # PRD-08 D1 — Activity meta counters.
+        "connector_count",
+        "step_count",
+        "pending_approval_count",
     }
 
 

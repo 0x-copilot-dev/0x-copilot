@@ -14,17 +14,19 @@ export {
   activityStatusTone,
   groupActivityByDay,
   ACTIVITY_LEAD_COPY,
+  ACTIVITY_RETENTION_PREFIX_COPY,
   ACTIVITY_RETENTION_LINK_COPY,
   type ActivityDayGroup,
   type ActivityDestinationProps,
 } from "./ActivityDestination";
 
-// The shared wire→view-model projection both hosts compose (PRD-04 Seam C).
-export {
-  projectActivityRows,
-  buildMetaIndex,
-  mapRunStatus,
-} from "./activityProjection";
+// The shared wire→view-model projection both hosts run on the run-list
+// response (PRD-04 Seam C / PRD-08 D1).
+export { projectActivityRows, mapRunStatus } from "./activityProjection";
+
+// The single meta-line composer both hosts produce byte-identical strings from
+// (PRD-08 D1).
+export { formatActivityMeta, type ActivityMetaCounts } from "./meta";
 
 export type { ActivityRunRow, ActivityRunStatus } from "@0x-copilot/api-types";
 export { ACTIVITY_RUN_STATUSES } from "@0x-copilot/api-types";

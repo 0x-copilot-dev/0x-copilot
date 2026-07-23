@@ -44,6 +44,23 @@ export interface RowProps extends Omit<
   /** Optional right-aligned meta column (mono time). */
   readonly meta?: ReactNode;
   /**
+   * Optional trailing-slot content, rendered after `meta` in a wrapper that
+   * ALWAYS reserves 16px (the design's `<span style={{width:16}}/>` on
+   * non-navigable rows). A navigable row fills it with a chevron; an inert one
+   * leaves it empty. Reserving it unconditionally keeps the `meta` column from
+   * ragging on the rows that have no trailing glyph (PRD-08 D4). It goes on the
+   * shared primitive because Chats, Tools and Skills share the same "which of
+   * these can I click" problem.
+   */
+  readonly trailing?: ReactNode;
+  /**
+   * Tone of the 28x28 icon TILE (applied to the slot's `color`, so it reaches
+   * the tile and the glyph inside it). `"success"` tints a live row jade;
+   * default is muted. Distinct from wrapping the glyph in a coloured span — the
+   * wrapper never reaches the tile (PRD-08 D5).
+   */
+  readonly iconTone?: "default" | "success";
+  /**
    * When provided, the row is an activatable control (click + Enter/Space).
    * When omitted, the row is inert chrome.
    */
@@ -59,22 +76,30 @@ const rowStyle: CSSProperties = {
   width: "100%",
   minWidth: 0,
   boxSizing: "border-box",
-  padding: "10px 12px",
+  // `.lrow { padding: 11px 14px }` (copilot.css:1586). PRD-08 D9 — one recipe
+  // for every list destination; `gap` already matches at 12px.
+  padding: "11px 14px",
   textAlign: "left",
   background: "transparent",
   color: "var(--color-text)",
 };
 
-// `.lrow__ic` — 28×28 leading icon box. Colour defaults to muted; a caller can
-// override (e.g. a success-tinted wrapper for a live brand mark).
+// `.lrow__ic` — 28×28 leading icon TILE (copilot.css:1617-1626): a `--panel3`
+// surface (== `--color-surface-elevated`; NOT `--color-surface-muted`, which is
+// the hover colour from D6 and would make the tile vanish on hover), 7px radius
+// (a one-off literal — the design is 7px and `--radius-md` is 8px; a
+// `--radius-tile` token belongs to PRD-01 if it wants one), grid-centred. The
+// slot's `color` carries the tone (default muted, or jade for a live row via
+// `iconTone`), so it reaches BOTH the tile and the glyph — the old inner
+// coloured `<span>` never reached the tile (PRD-08 D5).
 const iconSlotStyle: CSSProperties = {
   flex: "0 0 auto",
-  display: "inline-flex",
-  alignItems: "center",
-  justifyContent: "center",
+  display: "grid",
+  placeItems: "center",
   width: 28,
   height: 28,
-  borderRadius: "var(--radius-md)",
+  borderRadius: 7,
+  background: "var(--color-surface-elevated)",
   color: "var(--color-text-muted)",
 };
 
@@ -95,7 +120,9 @@ const titleRowStyle: CSSProperties = {
 
 const titleStyle: CSSProperties = {
   fontSize: "var(--font-size-xs)",
-  fontWeight: "var(--font-weight-semibold)",
+  // `.lrow__name { font-weight: 500 }` (copilot.css:1637) — one recipe for
+  // Activity, Chats, Projects, Library, Tools (PRD-08 D9, absorbed from PRD-04).
+  fontWeight: "var(--font-weight-medium)",
   color: "var(--color-text)",
   overflow: "hidden",
   textOverflow: "ellipsis",
@@ -119,18 +146,43 @@ const metaStyle: CSSProperties = {
   whiteSpace: "nowrap",
 };
 
+// The trailing slot — always 16px wide, reserved even when empty (the design's
+// `<span style={{width:16}}/>`). No `color` on the wrapper: the empty spacer
+// inherits the row's colour exactly as the design's empty span does; the chevron
+// glyph is tinted `--color-text-subtle` by the `.ui-list-row` recipe (the design
+// puts the mut2 colour on `.lrow > svg`, not on the spacer), PRD-08 D4.
+const trailingSlotStyle: CSSProperties = {
+  flex: "0 0 auto",
+  width: 16,
+  display: "inline-flex",
+  alignItems: "center",
+  justifyContent: "flex-end",
+};
+
 export function Row({
   icon,
   title,
   chip,
   sub,
   meta,
+  trailing,
+  iconTone = "default",
   onActivate,
   ariaLabel,
   style,
+  className,
   ...rest
 }: RowProps): ReactElement {
   const interactive = onActivate !== undefined;
+
+  // `.ui-list-row` (design-system) owns the `:hover`/`:focus-visible` background
+  // and forces the tile glyph to 15px — both things an inline style object
+  // cannot express (PRD-08 D6). Merge with any caller className; cursor lives in
+  // the recipe (`.ui-list-row[role="button"]{cursor:pointer}`), not inline.
+  const rowClassName =
+    className !== undefined && className !== ""
+      ? `ui-list-row ${className}`
+      : "ui-list-row";
 
   const onKeyDown = (event: ReactKeyboardEvent<HTMLDivElement>): void => {
     if (
@@ -146,6 +198,7 @@ export function Row({
   return (
     <div
       data-testid="row"
+      className={rowClassName}
       role={interactive ? "button" : undefined}
       tabIndex={interactive ? 0 : undefined}
       aria-label={interactive ? ariaLabel : undefined}
@@ -153,13 +206,22 @@ export function Row({
       onKeyDown={interactive ? onKeyDown : undefined}
       style={{
         ...rowStyle,
-        cursor: interactive ? "pointer" : undefined,
         ...style,
       }}
       {...rest}
     >
       {icon !== undefined ? (
-        <span style={iconSlotStyle} aria-hidden="true" data-testid="row-icon">
+        <span
+          style={{
+            ...iconSlotStyle,
+            color:
+              iconTone === "success"
+                ? "var(--color-success)"
+                : iconSlotStyle.color,
+          }}
+          aria-hidden="true"
+          data-testid="row-icon"
+        >
           {icon}
         </span>
       ) : null}
@@ -188,6 +250,9 @@ export function Row({
           {meta}
         </span>
       ) : null}
+      <span style={trailingSlotStyle} data-testid="row-trailing">
+        {trailing}
+      </span>
     </div>
   );
 }

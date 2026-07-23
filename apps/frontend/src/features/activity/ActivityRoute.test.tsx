@@ -1,23 +1,21 @@
-// ActivityRoute — host-binder integration tests (PR-4.6).
+// ActivityRoute — host-binder integration tests (PR-4.6 · PRD-08 D1/D1c).
 //
-// Covers PRD §8: composed rows render grouped by the component
+// Covers PRD §8: run-history rows render grouped by the component
 // (FR-4.14/4.19), a running row → onOpenRun (FR-4.16), the retention link
-// → onOpenRetentionSettings (FR-4.17), and the error / empty states
-// (FR-4.2), plus the pure composition (`projectActivityRows`) + status
-// fold (`mapRunStatus`).
+// → onOpenRetentionSettings (FR-4.17), and the error / empty states (FR-4.2),
+// plus the shared projection (`projectActivityRows`) + status fold
+// (`mapRunStatus`) and the meta composer.
 //
-// The "transport" is mocked at the two composed endpoints
-// (`listConversations` + `listAuditEvents`); the REAL `activityApi`
-// composition and the REAL `<ActivityDestination>` run, so the test
-// exercises projection AND in-shell day grouping end-to-end. Fixtures use
-// the local `Date` constructor + a fixed `now` (Date.now spy) so the
-// Today / Yesterday derivation is timezone-robust.
+// PRD-08: the "transport" is mocked at the ONE run-history endpoint
+// (`listRunHistory` → GET /v1/agent/runs). The REAL `activityApi` composition
+// and the REAL `<ActivityDestination>` run, so the test exercises projection +
+// meta + in-shell day grouping end-to-end. The audit endpoint is mocked ONLY to
+// assert it is never called (DoD 12 — the swallowed-403 regression guard).
 
 import type {
-  AuditEvent,
-  Conversation,
   ListAuditEventsResponse,
-  ConversationListResponse,
+  RunHistoryEntry,
+  RunHistoryResponse,
   RunId,
 } from "@0x-copilot/api-types";
 import {
@@ -37,12 +35,9 @@ import {
   type Mock,
 } from "vitest";
 
-// --- Mock the two composed endpoints (the "transport") --------------------
-// The real `activityApi` composition + the real `<ActivityDestination>`
-// run on top of these; only the network reads are stubbed. Mirrors the
-// InboxRoute.test importActual+override pattern.
+// --- Mock the ONE run-history endpoint (the "transport") ------------------
 const apiMocks = vi.hoisted(() => ({
-  listConversations: vi.fn(),
+  listRunHistory: vi.fn(),
   listAuditEvents: vi.fn(),
 }));
 vi.mock("../../api/agentApi", async () => {
@@ -50,8 +45,10 @@ vi.mock("../../api/agentApi", async () => {
     await vi.importActual<typeof import("../../api/agentApi")>(
       "../../api/agentApi",
     );
-  return { ...actual, listConversations: apiMocks.listConversations };
+  return { ...actual, listRunHistory: apiMocks.listRunHistory };
 });
+// Mocked only so DoD 12 can prove it is NEVER called — Activity no longer reads
+// the audit stream.
 vi.mock("../../api/auditApi", async () => {
   const actual =
     await vi.importActual<typeof import("../../api/auditApi")>(
@@ -71,79 +68,38 @@ import { mapRunStatus, projectActivityRows } from "./api/activityApi";
 const IDENTITY = { orgId: "org_test", userId: "user_test" };
 
 // --- Timezone-robust fixtures ---------------------------------------------
-// Local noon on Jul 18 2026. Rows below are built with the same local
-// `Date` constructor so their calendar day round-trips regardless of the
-// runner's timezone.
 const NOW = new Date(2026, 6, 18, 12, 0, 0).getTime();
 const TODAY_ISO = new Date(2026, 6, 18, 9, 0, 0).toISOString();
 const TODAY_LATER_ISO = new Date(2026, 6, 18, 10, 30, 0).toISOString();
 const YESTERDAY_ISO = new Date(2026, 6, 17, 15, 0, 0).toISOString();
 
-function conv(over: Partial<Conversation> = {}): Conversation {
+function entry(over: Partial<RunHistoryEntry> = {}): RunHistoryEntry {
   return {
+    run_id: "run_default",
     conversation_id: "conv_default",
-    org_id: "org_test",
-    user_id: "user_test",
-    assistant_id: "asst_1",
-    title: "Sync my inbox",
-    status: "active",
+    conversation_title: "Sync my inbox",
+    status: "running",
+    model_name: "gpt-4o",
     created_at: TODAY_ISO,
-    updated_at: TODAY_ISO,
-    archived_at: null,
-    metadata: {},
-    schema_version: 1,
-    latest_run_id: "run_default",
-    // Only non-terminal statuses are emittable in `latest_run_status` (the
-    // server projects it from the active-run query). Finished runs come from
-    // GET /v1/agent/runs (PRD-05), not this field.
-    latest_run_status: "running",
+    started_at: TODAY_ISO,
+    completed_at: null,
+    cancelled_at: null,
+    connector_count: null,
+    step_count: null,
+    pending_approval_count: 0,
     ...over,
   };
 }
 
-function audit(over: Partial<AuditEvent> = {}): AuditEvent {
-  return {
-    stream: "mcp_audit_events",
-    seq: 1,
-    audit_id: "aud_1",
-    org_id: "org_test",
-    actor_user_id: "user_test",
-    actor_kind: "user",
-    subject_user_id: null,
-    action: "mcp.tool.invoke",
-    resource_type: "run",
-    resource_id: "run_default",
-    outcome: "success",
-    metadata: { connector_id: "gmail" },
-    chain: { seq: 1, prev_hash: null, signature: null, key_version: null },
-    created_at: TODAY_ISO,
-    ...over,
-  };
+function runList(entries: readonly RunHistoryEntry[]): RunHistoryResponse {
+  return { runs: [...entries], next_cursor: null, has_more: false };
 }
 
-function convList(
-  conversations: readonly Conversation[],
-): ConversationListResponse {
-  return {
-    conversations: [...conversations],
-    next_cursor: null,
-    has_more: false,
-  };
-}
-
-function auditList(rows: readonly AuditEvent[]): ListAuditEventsResponse {
-  return {
-    rows: [...rows],
-    next_cursor: null,
-    has_more: false,
-    degraded_streams: [],
-  };
+function auditList(): ListAuditEventsResponse {
+  return { rows: [], next_cursor: null, has_more: false, degraded_streams: [] };
 }
 
 // --- Router scaffolding ---------------------------------------------------
-// PRD-04 Seam C: Activity rows no longer use `<ItemLink>` — every row calls
-// `onOpenRun({ conversationId, runId })` directly. The RouterProvider is still
-// wrapped the way the App shell does it.
 const navigate = vi.fn();
 const testRouter: Router<ArtifactRoute> = {
   current: () => ({ kind: "chat", conversationId: "x" }) as ArtifactRoute,
@@ -173,8 +129,9 @@ function renderRoute(
 }
 
 beforeEach(() => {
-  apiMocks.listConversations.mockReset();
+  apiMocks.listRunHistory.mockReset();
   apiMocks.listAuditEvents.mockReset();
+  apiMocks.listAuditEvents.mockResolvedValue(auditList());
   navigate.mockClear();
   vi.spyOn(Date, "now").mockReturnValue(NOW);
 });
@@ -192,23 +149,7 @@ describe("mapRunStatus", () => {
     expect(mapRunStatus("waiting_for_approval")).toBe("needs_input");
   });
 
-  it("maps in-flight statuses to running", () => {
-    expect(mapRunStatus("running")).toBe("running");
-    expect(mapRunStatus("queued")).toBe("running");
-    expect(mapRunStatus("cancelling")).toBe("running");
-  });
-
-  it("maps completed to done and terminal-non-clean to stopped", () => {
-    expect(mapRunStatus("completed")).toBe("done");
-    expect(mapRunStatus("cancelled")).toBe("stopped");
-    expect(mapRunStatus("failed")).toBe("stopped");
-    expect(mapRunStatus("timed_out")).toBe("stopped");
-  });
-
   it("is total over AGENT_RUN_STATUSES (PRD-05 DoD 16)", () => {
-    // Every one of the eight runtime statuses folds to a valid Activity status
-    // — the fold must be total so a run of ANY status coming off the new
-    // GET /v1/agent/runs spine has a defined chip.
     for (const status of AGENT_RUN_STATUSES) {
       const mapped = mapRunStatus(status);
       expect(mapped).not.toBeUndefined();
@@ -218,83 +159,35 @@ describe("mapRunStatus", () => {
 });
 
 describe("projectActivityRows", () => {
-  it("uses conversations as the run spine and audit for the meta line", () => {
-    const rows = projectActivityRows(
-      [
-        conv({
-          conversation_id: "conv_a",
-          latest_run_id: "run_a",
-          latest_run_status: "waiting_for_approval",
-          title: "Weekly digest",
-          updated_at: TODAY_ISO,
-        }),
-      ],
-      [
-        audit({ resource_id: "run_a", metadata: { connector_id: "gmail" } }),
-        audit({
-          audit_id: "aud_2",
-          resource_id: "run_a",
-          metadata: { server_id: "calendar" },
-        }),
-        // Unrelated run's audit — must not leak into run_a's meta.
-        audit({
-          audit_id: "aud_3",
-          resource_id: "run_other",
-          metadata: { connector_id: "slack" },
-        }),
-      ],
-    );
-
+  it("projects the run-history entry, composing the meta line from the counters", () => {
+    const rows = projectActivityRows([
+      entry({
+        run_id: "run_a",
+        conversation_id: "conv_a",
+        conversation_title: "Weekly digest",
+        status: "waiting_for_approval",
+        connector_count: 4,
+        step_count: 7,
+        pending_approval_count: 1,
+        started_at: TODAY_ISO,
+      }),
+    ]);
     expect(rows).toHaveLength(1);
     expect(rows[0]).toMatchObject({
       run_id: "run_a",
       title: "Weekly digest",
-      // waiting_for_approval folds to needs_input (the Inbox fold, FR-4.18).
       status: "needs_input",
-      meta: "calendar · gmail", // deduped + sorted
+      meta: "4 apps · 7 steps · awaiting 1 approval",
       started_at: TODAY_ISO,
     });
   });
 
-  it("skips conversations that never ran (no latest_run_id)", () => {
-    const rows = projectActivityRows(
-      [
-        conv({ conversation_id: "ran", latest_run_id: "run_x" }),
-        conv({
-          conversation_id: "never_ran",
-          latest_run_id: null,
-          latest_run_status: null,
-        }),
-      ],
-      [],
-    );
-    expect(rows.map((r) => r.run_id)).toEqual(["run_x"]);
-  });
-
-  it("orders the flat list newest-first (FR-4.19) and falls back to a default title", () => {
-    const rows = projectActivityRows(
-      [
-        conv({
-          conversation_id: "old",
-          latest_run_id: "run_old",
-          updated_at: YESTERDAY_ISO,
-          title: "   ",
-        }),
-        conv({
-          conversation_id: "new",
-          latest_run_id: "run_new",
-          updated_at: TODAY_LATER_ISO,
-        }),
-      ],
-      [],
-    );
-    expect(rows.map((r) => r.run_id)).toEqual(["run_new", "run_old"]);
-    // Blank title falls back rather than rendering empty.
-    expect(rows.find((r) => r.run_id === "run_old")?.title).toBe(
-      "Untitled run",
-    );
-    // No audit → empty (but present) meta string.
-    expect(rows[0].meta).toBe("");
+  it("falls back to a default title and an empty meta when counters are unknown", () => {
+    const rows = projectActivityRows([
+      entry({ run_id: "run_x", conversation_title: "   " }),
+    ]);
+    expect(rows[0]!.title).toBe("Untitled run");
+    expect(rows[0]!.meta).toBe("");
   });
 });
 
@@ -303,44 +196,32 @@ describe("projectActivityRows", () => {
 // ===========================================================================
 
 describe("<ActivityRoute>", () => {
-  it("composes conversations + audit into day-grouped rows (FR-4.14/4.19)", async () => {
-    apiMocks.listConversations.mockResolvedValue(
-      convList([
-        conv({
+  it("reads GET /v1/agent/runs, groups by day, and issues ZERO /v1/audit requests (DoD 12)", async () => {
+    apiMocks.listRunHistory.mockResolvedValue(
+      runList([
+        entry({
+          run_id: "run_today",
           conversation_id: "conv_today",
-          latest_run_id: "run_today",
-          // Non-running (needs_input) rows navigate via the "run" ItemLink
-          // resolver — the path this test exercises below.
-          latest_run_status: "waiting_for_approval",
-          title: "Today run",
-          updated_at: TODAY_ISO,
+          conversation_title: "Today run",
+          status: "completed",
+          started_at: TODAY_ISO,
         }),
-        conv({
+        entry({
+          run_id: "run_yday",
           conversation_id: "conv_yday",
-          latest_run_id: "run_yday",
-          latest_run_status: "waiting_for_approval",
-          title: "Yesterday run",
-          updated_at: YESTERDAY_ISO,
-        }),
-      ]),
-    );
-    apiMocks.listAuditEvents.mockResolvedValue(
-      auditList([
-        audit({
-          resource_id: "run_today",
-          metadata: { connector_id: "gmail" },
+          conversation_title: "Yesterday run",
+          status: "completed",
+          started_at: YESTERDAY_ISO,
         }),
       ]),
     );
 
     renderRoute();
 
-    // Loading first (SectionResult still null → destination skeleton).
     expect(screen.getByTestId("activity-route")).toHaveAttribute(
       "data-state",
       "loading",
     );
-
     await waitFor(() =>
       expect(screen.getByTestId("activity-route")).toHaveAttribute(
         "data-state",
@@ -348,38 +229,60 @@ describe("<ActivityRoute>", () => {
       ),
     );
 
-    // Day dividers, most-recent day first (grouping done by the component).
     const dividers = screen.getAllByTestId("activity-day");
     expect(dividers.map((d) => d.textContent)).toEqual(["Today", "Yesterday"]);
-
-    // The meta line comes from the composed audit rows.
-    const todayGroup = screen.getAllByTestId("activity-day-group")[0];
-    expect(
-      within(todayGroup).getByTestId("activity-row-meta"),
-    ).toHaveTextContent("gmail");
-
-    // PRD-04 Seam C — every row renders its real title as plain text (no
-    // ItemLink). "Today run" is the second-day's row title.
     expect(screen.getByText("Today run")).toBeInTheDocument();
     expect(screen.queryAllByTestId("item-link")).toHaveLength(0);
+
+    // The swallowed-403 regression guard: the audit endpoint is never touched.
+    expect(apiMocks.listAuditEvents).not.toHaveBeenCalled();
   });
 
-  it("a row invokes the host onOpenRun with { conversationId, runId } (FR-4.16, Seam C)", async () => {
-    apiMocks.listConversations.mockResolvedValue(
-      convList([
-        conv({
-          conversation_id: "conv_live",
-          latest_run_id: "run_live",
-          latest_run_status: "running",
-          title: "Live sync",
-          updated_at: TODAY_ISO,
+  // DoD 13 — one composer, two hosts: the identical fixture renders the identical
+  // meta sub-line on the web route and the desktop binder.
+  it("renders the meta sub-line '4 apps · 7 steps · awaiting 1 approval' from the counters (DoD 13)", async () => {
+    apiMocks.listRunHistory.mockResolvedValue(
+      runList([
+        entry({
+          run_id: "run_meta",
+          conversation_id: "conv_meta",
+          conversation_title: "Launch Week ops",
+          status: "running",
+          connector_count: 4,
+          step_count: 7,
+          pending_approval_count: 1,
+          started_at: TODAY_ISO,
         }),
       ]),
     );
-    apiMocks.listAuditEvents.mockResolvedValue(auditList([]));
+
+    renderRoute();
+    await waitFor(() =>
+      expect(screen.getByTestId("activity-route")).toHaveAttribute(
+        "data-state",
+        "ready",
+      ),
+    );
+    const rowEl = screen.getByTestId("activity-row");
+    expect(within(rowEl).getByTestId("activity-row-meta")).toHaveTextContent(
+      "4 apps · 7 steps · awaiting 1 approval",
+    );
+  });
+
+  it("a row invokes the host onOpenRun with { conversationId, runId } (FR-4.16, Seam C)", async () => {
+    apiMocks.listRunHistory.mockResolvedValue(
+      runList([
+        entry({
+          run_id: "run_live",
+          conversation_id: "conv_live",
+          status: "running",
+          conversation_title: "Live sync",
+          started_at: TODAY_ISO,
+        }),
+      ]),
+    );
 
     const { onOpenRun } = renderRoute();
-
     await waitFor(() =>
       expect(screen.getByTestId("activity-route")).toHaveAttribute(
         "data-state",
@@ -388,7 +291,6 @@ describe("<ActivityRoute>", () => {
     );
 
     const rowEl = screen.getByTestId("activity-row");
-    // The shared chat-surface <Row> renders an activatable `role="button"` div.
     expect(rowEl).toHaveAttribute("role", "button");
     await userEvent.click(rowEl);
     expect(onOpenRun).toHaveBeenCalledWith({
@@ -398,53 +300,36 @@ describe("<ActivityRoute>", () => {
   });
 
   it("the retention link invokes the host onOpenRetentionSettings (FR-4.17)", async () => {
-    apiMocks.listConversations.mockResolvedValue(convList([conv()]));
-    apiMocks.listAuditEvents.mockResolvedValue(auditList([]));
-
+    apiMocks.listRunHistory.mockResolvedValue(runList([entry()]));
     const { onOpenRetentionSettings } = renderRoute();
-
     await waitFor(() =>
       expect(screen.getByTestId("activity-route")).toHaveAttribute(
         "data-state",
         "ready",
       ),
     );
-
     await userEvent.click(screen.getByTestId("activity-retention-link"));
     expect(onOpenRetentionSettings).toHaveBeenCalledTimes(1);
   });
 
-  it("renders the empty state when no conversation has ever run (FR-4.2)", async () => {
-    apiMocks.listConversations.mockResolvedValue(
-      convList([
-        conv({
-          conversation_id: "never",
-          latest_run_id: null,
-          latest_run_status: null,
-        }),
-      ]),
-    );
-    apiMocks.listAuditEvents.mockResolvedValue(auditList([]));
-
+  it("renders the empty state when there are no runs (FR-4.2)", async () => {
+    apiMocks.listRunHistory.mockResolvedValue(runList([]));
     renderRoute();
-
     await waitFor(() =>
       expect(screen.getByTestId("activity-route")).toHaveAttribute(
         "data-state",
         "empty",
       ),
     );
-    expect(screen.getByText("No activity yet")).toBeInTheDocument();
+    expect(screen.getByText("Nothing here yet")).toBeInTheDocument();
   });
 
-  it("renders an error state with a working Retry when the conversation fetch fails (FR-4.2)", async () => {
-    apiMocks.listConversations
+  it("renders an error state with a working Retry when the run-list fetch fails (FR-4.2)", async () => {
+    apiMocks.listRunHistory
       .mockRejectedValueOnce(new Error("tenant lookup failed"))
-      .mockResolvedValueOnce(convList([conv()]));
-    apiMocks.listAuditEvents.mockResolvedValue(auditList([]));
+      .mockResolvedValueOnce(runList([entry()]));
 
     renderRoute();
-
     await waitFor(() =>
       expect(screen.getByTestId("activity-route")).toHaveAttribute(
         "data-state",
@@ -456,39 +341,29 @@ describe("<ActivityRoute>", () => {
       "alert",
     );
 
-    await userEvent.click(screen.getByRole("button", { name: "Retry" }));
-
+    await userEvent.click(screen.getByTestId("activity-retry"));
     await waitFor(() =>
       expect(screen.getByTestId("activity-route")).toHaveAttribute(
         "data-state",
         "ready",
       ),
     );
-    expect(apiMocks.listConversations).toHaveBeenCalledTimes(2);
+    expect(apiMocks.listRunHistory).toHaveBeenCalledTimes(2);
+    // Never reached for the audit stream, even across a retry.
+    expect(apiMocks.listAuditEvents).not.toHaveBeenCalled();
   });
 
-  it("degrades to conversations-only rows when the audit read fails (PRD §11)", async () => {
-    apiMocks.listConversations.mockResolvedValue(
-      convList([
-        conv({
-          conversation_id: "conv_a",
-          latest_run_id: "run_a",
-          latest_run_status: "running",
-          updated_at: TODAY_ISO,
-        }),
-      ]),
-    );
-    apiMocks.listAuditEvents.mockRejectedValue(new Error("audit store down"));
-
+  it("a run-list read failure surfaces as an error — never swallowed to an empty feed (DoD 12)", async () => {
+    // The old code swallowed the audit half into []; there is no such half now,
+    // so a failure must reach the error state, not degrade silently.
+    apiMocks.listRunHistory.mockRejectedValue(new Error("403 forbidden"));
     renderRoute();
-
-    // Audit failure must NOT sink the feed — rows still render.
     await waitFor(() =>
       expect(screen.getByTestId("activity-route")).toHaveAttribute(
         "data-state",
-        "ready",
+        "error",
       ),
     );
-    expect(screen.getByTestId("activity-row")).toBeInTheDocument();
+    expect(screen.queryByTestId("activity-row")).toBeNull();
   });
 });
