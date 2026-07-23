@@ -91,9 +91,16 @@ import {
   ThreadCanvas,
   TcChat,
   projectSurfaceTabs,
+  projectLedger,
+  ledgerTabsAsSurfaceTabs,
+  surfaceIdForTabUri,
   type TcTab,
   type PendingDiffHandle,
 } from "../../thread-canvas";
+// PRD-B1: Generative Surfaces v2 content hydration (SurfaceStore endpoint via
+// the Transport port). Called unconditionally (Rules of Hooks) but inert when
+// `surfacesV2` is false (`enabled: false` ⇒ no request).
+import { useSurfacesV2 } from "./useSurfacesV2";
 
 // PR-3.10: pure selector projecting approval state off the SAME single canonical
 // event stream (FR-3.3). Feeds the in-chat ApprovalCard/conf-card (TcChat) and
@@ -332,6 +339,17 @@ export interface RunDestinationProps {
   readonly onSelectSource?: (source: SourceEntry) => void;
   readonly onJumpToChatSource?: (source: SourceEntry) => void;
   readonly SourceRowComponent?: SourceRowSlot;
+  /**
+   * Generative Surfaces v2 canvas (PRD-B1). When `true`, the surface-tab strip
+   * is derived from the v2 Work Ledger fold (`projectLedger` over the SAME
+   * `session.events`) instead of the v1 `projectSurfaceTabs`, and the canvas
+   * hydrates content from the SurfaceStore endpoint. Default `false` ⇒ the
+   * cockpit is byte-identical to today (SDR §11 strictness — v2 tabs come ONLY
+   * from ledger events, never mixed with v1 envelope surfaces). The host reads
+   * the client flag (`isSurfacesV2CanvasEnabled` web / `isSurfacesV2Enabled`
+   * desktop), enabled together with the runtime `SURFACES_V2` flag.
+   */
+  readonly surfacesV2?: boolean;
 }
 
 export function RunDestination(props: RunDestinationProps): ReactElement {
@@ -352,6 +370,7 @@ export function RunDestination(props: RunDestinationProps): ReactElement {
     onSelectSource,
     onJumpToChatSource,
     SourceRowComponent,
+    surfacesV2 = false,
   } = props;
 
   const transport = useTransport();
@@ -918,9 +937,40 @@ export function RunDestination(props: RunDestinationProps): ReactElement {
   // (`projectSurfaceTabs` — pure selector over the SAME array). Cap at
   // MAX_SURFACE_TABS ("+N more" overflow lands later); drop dismissed tabs;
   // newest mutation is first.
+  // PRD-B1: the v2 Work Ledger fold — a pure PEER of `projectSurfaceTabs` over
+  // the SAME `session.events` array (one-projector invariant, FR-3.3). Computed
+  // unconditionally so the hydration hook can read `ledger.lastLedgerSeq`; the
+  // strip only USES it when `surfacesV2` is on.
+  const ledger = useMemo(() => projectLedger(session.events), [session.events]);
+  // SDR §11 strictness: flag on ⇒ tabs come ONLY from ledger events; flag off ⇒
+  // the v1 selector, byte-identical to today. Never mix the two strips.
   const surfaceTabList = useMemo(
-    () => projectSurfaceTabs(session.events),
-    [session.events],
+    () =>
+      surfacesV2
+        ? ledgerTabsAsSurfaceTabs(ledger)
+        : projectSurfaceTabs(session.events),
+    [surfacesV2, ledger, session.events],
+  );
+  // Content hydration for the v2 canvas (SurfaceStore endpoint via Transport).
+  // Called unconditionally (Rules of Hooks); inert when `surfacesV2` is false
+  // (`enabled: false` ⇒ no request, no state churn).
+  const hydration = useSurfacesV2(
+    transport,
+    session.runId,
+    ledger.lastLedgerSeq,
+    surfacesV2 === true,
+  );
+  // The v2 surface-state resolver handed to ThreadCanvas ONLY when `surfacesV2`.
+  // Uses the exported inverse to recover the surface_id — never hand-parses.
+  const resolveSurfaceState = useMemo(
+    () =>
+      surfacesV2
+        ? (uri: string) => {
+            const id = surfaceIdForTabUri(uri);
+            return id !== null ? hydration.stateFor(id) : undefined;
+          }
+        : undefined,
+    [surfacesV2, hydration],
   );
   const visibleSurfaceTabs = useMemo(
     () =>
@@ -1223,6 +1273,11 @@ export function RunDestination(props: RunDestinationProps): ReactElement {
             onActivateTab={handleActivateTab}
             onCloseTab={handleCloseTab}
             transport={transport}
+            // PRD-B1: only defined when `surfacesV2` — flag off ⇒ `undefined`,
+            // so ThreadCanvas takes its unchanged v1 projection path (byte-
+            // identical). Flag on ⇒ the surface column hydrates from the
+            // SurfaceStore endpoint via this resolver.
+            resolveSurfaceState={resolveSurfaceState}
             // PRD-04: the proposed surface diff for the active surface + the
             // decision callbacks. ThreadCanvas forwards these to TcSurfaceMount,
             // which renders the Approve/Reject/Suggest controls around the diff.

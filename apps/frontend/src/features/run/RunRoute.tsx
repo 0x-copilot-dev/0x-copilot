@@ -44,6 +44,7 @@ import {
 } from "@0x-copilot/chat-surface";
 import type { ConversationId } from "@0x-copilot/api-types";
 
+import { isSurfacesV2CanvasEnabled } from "../../app/featureFlags";
 import type { RequestIdentity } from "../../api/config";
 import { installMcpServer, skipMcpAuth, startMcpAuth } from "../../api/mcpApi";
 import type { CompletedMcpAuthAction } from "../chat/mcpAuthAction";
@@ -380,6 +381,9 @@ export function RunRoute({
         // CitationsProvider (fed by projectCitations over session.events); these
         // host wrappers resolve `[[N]]` / `[c<id>]` chips against it.
         markdownComponents={runMarkdownComponents}
+        // PRD-B1: Generative Surfaces v2 canvas — opt-in client flag (default
+        // OFF), paired with the runtime SURFACES_V2 flag.
+        surfacesV2={isSurfacesV2CanvasEnabled()}
       />
     </section>
   );

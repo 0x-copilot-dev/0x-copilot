@@ -83,6 +83,7 @@ import { CONNECTOR_CHANNELS } from "../main/connectors/channels";
 import { RunComposer } from "./composer/RunComposer";
 import { RunEmptyComposer } from "./composer/RunEmptyComposer";
 import { createComposerConnectorsPort } from "./composer/composerConnectorsPort";
+import { isSurfacesV2Enabled } from "./featureFlags";
 import { DESKTOP_PROJECTS_DETAIL } from "./shellBinding";
 
 // ---------------------------------------------------------------------------
@@ -750,6 +751,9 @@ export function RunBinder({
       onOpenModelSettings={onOpenModelSettings}
       renderComposer={renderComposer}
       renderEmptyComposer={renderEmptyComposer}
+      // PRD-B1: Generative Surfaces v2 canvas — opt-in client flag (default
+      // OFF), paired with the runtime SURFACES_V2 flag.
+      surfacesV2={isSurfacesV2Enabled()}
     />
   );
 }
