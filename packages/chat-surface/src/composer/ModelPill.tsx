@@ -277,18 +277,24 @@ export function ModelPill({
   };
 
   // The add-key affordance shows for either the deep-link callback OR an inline
-  // port; the inline port takes precedence when both are supplied.
+  // port; the deep-link (navigate to Settings) takes precedence when both are set.
   const hasAddKey =
     providerKeysPort !== undefined || onAddProviderKey !== undefined;
   const hasFooter = hasAddKey || onGetLocalModels !== undefined;
 
   const handleAddKeyClick = (): void => {
-    if (providerKeysPort !== undefined) {
-      setAddKeyOpen(true);
+    // Navigation wins: the "Add a provider key" footer routes to the one
+    // Settings → Provider keys surface whenever the host supplies the deep-link,
+    // rather than opening an inline form in the popover. The inline port stays a
+    // fallback for hosts that don't wire navigation.
+    if (onAddProviderKey !== undefined) {
+      closeMenu();
+      onAddProviderKey();
       return;
     }
-    closeMenu();
-    onAddProviderKey?.();
+    if (providerKeysPort !== undefined) {
+      setAddKeyOpen(true);
+    }
   };
 
   const renderMenuBody = (): ReactElement => (
