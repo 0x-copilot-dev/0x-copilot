@@ -30,6 +30,9 @@ export { AgentsTab, type AgentsTabProps } from "./AgentsTab";
 export { DraftTab, type DraftTabProps } from "./DraftTab";
 export { ApprovalsTab, type ApprovalsTabProps } from "./ApprovalsTab";
 export { SkillsTab, type SkillsTabProps } from "./SkillsTab";
+// Surfaces v2 (PRD-E2) — cross-run pending queue + fleet list.
+export { PendingCardList, type PendingCardListProps } from "./PendingCardList";
+export { AgentFleetList, type AgentFleetListProps } from "./AgentFleetList";
 export { pluralize, tabLabel, TAB_LABELS, type LabelForms } from "./pluralize";
 
 // Boundary types the host / shims reference (FR-1.27).

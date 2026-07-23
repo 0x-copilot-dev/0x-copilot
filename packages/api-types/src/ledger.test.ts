@@ -7,6 +7,7 @@ import {
   LEDGER_EVENT_TYPES,
   formatLedgerId,
   isLedgerEventType,
+  isPendingWorkResponse,
   isSurfaceEventV2,
   parseLedgerId,
   type ActionClass,
@@ -255,5 +256,56 @@ describe("ledger-id codec", () => {
     for (const text of malformed) {
       expect(parseLedgerId(text)).toBeNull();
     }
+  });
+});
+
+describe("isPendingWorkResponse (PRD-E2)", () => {
+  it("accepts a well-formed empty response", () => {
+    expect(isPendingWorkResponse({ v: 1, items: [], agents: [] })).toBe(true);
+  });
+
+  it("accepts a populated response", () => {
+    const resp = {
+      v: 1,
+      items: [
+        {
+          v: 1,
+          item_kind: "gate",
+          run_id: "run_1",
+          conversation_id: "conv_1",
+          conversation_title: "Read issue",
+          gate_id: "g1",
+          stage_id: null,
+          surface_id: null,
+          title: "to read ENG-1",
+          connector: "linear",
+          op: null,
+          ledger_id: "ra7f·001",
+          opened_sequence_no: 1,
+          opened_at: "2026-07-24T00:00:00+00:00",
+          rows_pending: null,
+          rows_total: null,
+        },
+      ],
+      agents: [
+        {
+          v: 1,
+          run_id: "run_1",
+          conversation_id: "conv_1",
+          conversation_title: "Read issue",
+          run_status: "waiting_for_approval",
+          pending_count: 1,
+        },
+      ],
+    };
+    expect(isPendingWorkResponse(resp)).toBe(true);
+  });
+
+  it("rejects a wrong version or missing collections", () => {
+    expect(isPendingWorkResponse({ v: 2, items: [], agents: [] })).toBe(false);
+    expect(isPendingWorkResponse({ v: 1, items: [] })).toBe(false);
+    expect(isPendingWorkResponse({ v: 1, agents: [] })).toBe(false);
+    expect(isPendingWorkResponse(null)).toBe(false);
+    expect(isPendingWorkResponse("nope")).toBe(false);
   });
 });

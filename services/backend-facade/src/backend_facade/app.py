@@ -1048,6 +1048,23 @@ def create_app(
             identity=identity,
         )
 
+    # PRD-E2 (Generative Surfaces v2) — the cross-run pending-work queue. Pure
+    # proxy: ``scoped_params`` injects the verified session's identity, so the
+    # endpoint can only ever return the caller's own pending work (a
+    # client-supplied org/user is never read). Absent behind the AI-backend's
+    # SURFACES_V2 flag (the route 404s there when off); the facade stays thin.
+    @app.get("/v1/agent/pending-work")
+    async def pending_work(request: Request) -> dict[str, object]:
+        identity = FacadeAuthenticator.authenticate_request(request)
+        return await forward_json(
+            app,
+            "GET",
+            "/v1/agent/pending-work",
+            target="ai_backend",
+            params=identity.scoped_params(),
+            identity=identity,
+        )
+
     @app.post("/v1/skills")
     async def create_skill(
         request: Request, payload: dict[str, object]

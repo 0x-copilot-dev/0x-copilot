@@ -697,3 +697,66 @@ export function parseLedgerId(text: string): ParsedLedgerId | null {
   if (match === null) return null;
   return { run_short: match[1], sequence_no: Number(match[2]) };
 }
+
+// ---------------------------------------------------------------------------
+// Pending work (Generative Surfaces v2, PRD-E2) — the cross-run queue read
+// model. `GET /v1/agent/pending-work` aggregates everything still waiting on the
+// user (parked gates, held drafts, undecided row-sets) plus the fleet of runs
+// with in-flight / held work. A read-side response only: no new event types.
+// ---------------------------------------------------------------------------
+
+/** What a pending queue card decides on. */
+export type PendingItemKind = "gate" | "staged_write";
+
+/** One thing waiting on the user, with enough to render a card + jump to its
+ * surface. `gate_id` / `title=purpose` for a gate; `stage_id` / `surface_id` /
+ * `title="{connector} · {op}"` for a staged write. `rows_pending` / `rows_total`
+ * are present only for row-sets. */
+export interface PendingWorkItem {
+  v: 1;
+  item_kind: PendingItemKind;
+  run_id: string;
+  conversation_id: string;
+  conversation_title: string | null;
+  gate_id: string | null;
+  stage_id: string | null;
+  surface_id: string | null;
+  title: string;
+  connector: string;
+  op: string | null;
+  /** `r<short>·<seq>` of the opening event (A1 formatter). */
+  ledger_id: string;
+  opened_sequence_no: number;
+  /** ISO-8601 timestamp of the opening event. */
+  opened_at: string;
+  rows_pending: number | null;
+  rows_total: number | null;
+}
+
+/** One run in the fleet view — this run plus other runs with in-flight or held
+ * work. `pending_count` is this run's items in the merged queue. */
+export interface PendingAgentRow {
+  v: 1;
+  run_id: string;
+  conversation_id: string;
+  conversation_title: string | null;
+  /** `AgentRunStatus` value, presentation-ready. */
+  run_status: string;
+  pending_count: number;
+}
+
+/** `GET /v1/agent/pending-work` response — the cross-run aggregate. */
+export interface PendingWorkResponse {
+  v: 1;
+  items: readonly PendingWorkItem[];
+  agents: readonly PendingAgentRow[];
+}
+
+/** Structural guard for a `PendingWorkResponse`: `v === 1` and both collections
+ * are arrays. Defensive at the client boundary — the fold treats each item as
+ * data (hostile strings render as text only), so this only pins the envelope. */
+export function isPendingWorkResponse(x: unknown): x is PendingWorkResponse {
+  if (typeof x !== "object" || x === null) return false;
+  const r = x as Record<string, unknown>;
+  return r.v === 1 && Array.isArray(r.items) && Array.isArray(r.agents);
+}

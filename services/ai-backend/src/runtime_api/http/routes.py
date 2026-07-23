@@ -1015,6 +1015,12 @@ class RuntimeApiRouter:
             from runtime_api.http.stages import register_stage_routes
 
             register_stage_routes(router)
+            # PRD-E2 (Generative Surfaces v2) — the cross-run pending-work queue.
+            # Same flag gate: off ⇒ ``GET /v1/agent/pending-work`` does not exist
+            # (404) ⇒ byte-identical. Read-side only (no new events, no writes).
+            from runtime_api.http.pending_work import register_pending_work_routes
+
+            register_pending_work_routes(router)
         # PR 1.5 — Workspace-pane data feeds (subagents + sources).
         register_workspace_feed_routes(router)
         # PR 1.6 — Workspace defaults + conversation lifecycle
