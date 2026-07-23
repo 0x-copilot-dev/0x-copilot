@@ -131,6 +131,9 @@ class Keys:
         GET_EVENTS = "get_events"
         # Generative Surfaces v2 (PRD-A3) — the folded SurfaceStore for a run.
         GET_RUN_SURFACES = "get_run_surfaces"
+        # Generative Surfaces v2 (PRD-B3) — per-surface view-lifecycle mutations.
+        REGENERATE_SURFACE_VIEW = "regenerate_surface_view"
+        SET_SURFACE_VIEW_PREFERENCE = "set_surface_view_preference"
         GET_MESSAGES = "get_messages"
         GET_CONVERSATION_RUNS = "get_conversation_runs"
         # PRD-05 — org-scoped, paginated, newest-first run history (one row per
@@ -285,6 +288,16 @@ class Messages:
         """User-facing error strings for HTTP 4xx responses."""
 
         APPROVAL_NOT_FOUND = "Approval request was not found for this scope."
+        # PRD-C2 — gate write-policy choice guards. Generic, leak-free copy.
+        GATE_WRITE_POLICY_UNSUPPORTED = (
+            "Setting a connector write policy is not supported for this request."
+        )
+        GATE_WRITE_POLICY_KIND = (
+            "A write policy can only be set on a connector authentication gate."
+        )
+        GATE_WRITE_POLICY_PERSIST_FAILED = (
+            "Could not save the connector write policy; please try again."
+        )
         # Forwarding-target validation messages are deliberately generic and do not
         # reveal whether the target user exists in another tenant.
         APPROVAL_FORWARD_INVALID_TARGET = (

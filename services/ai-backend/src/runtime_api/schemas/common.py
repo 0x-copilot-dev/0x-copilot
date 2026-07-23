@@ -216,6 +216,19 @@ class RuntimeApiEventType(StrEnum):
     READ_EXECUTED = LedgerEventType.READ_EXECUTED.value
     SURFACE_CREATED = LedgerEventType.SURFACE_CREATED.value
     VIEW_DERIVED = LedgerEventType.VIEW_DERIVED.value
+    # Generative Surfaces v2 (PRD-B3). The durable tier preference — a user pin
+    # ("Keep generic") that survives reload by replay. Projects to
+    # ``RuntimeActivityKind.EVENT`` (a SurfaceStore fold input, not a card).
+    VIEW_PREFERENCE = LedgerEventType.VIEW_PREFERENCE.value
+    # Generative Surfaces v2 (PRD-C2, SDR §5). The ToolAccessGate's park/resume
+    # ledger pair, emitted behind ``SURFACES_V2``: ``gate.opened`` beside the
+    # ``mcp_auth_required`` interrupt (SYSTEM source), ``gate.resolved`` when the
+    # decision endpoint records the connect/cancel. Both project to
+    # ``RuntimeActivityKind.EVENT`` (canvas gate-card merges, not timeline cards);
+    # the client ledger fold + posture chip consume them. Wire values come from
+    # the A1 ``LedgerEventType`` vocabulary so the transport enum cannot drift.
+    GATE_OPENED = LedgerEventType.GATE_OPENED.value
+    GATE_RESOLVED = LedgerEventType.GATE_RESOLVED.value
 
     @classmethod
     def from_stream_event_type(

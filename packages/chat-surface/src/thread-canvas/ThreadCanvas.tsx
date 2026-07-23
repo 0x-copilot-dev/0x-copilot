@@ -69,6 +69,11 @@ import { TcMiniTimeline } from "./TcMiniTimeline";
 import { TcStatusStrip } from "./TcStatusStrip";
 import { TcSurfaceFrame } from "./TcSurfaceFrame";
 import { TcSurfaceMount, type PendingDiffHandle } from "./TcSurfaceMount";
+import type {
+  LedgerSurfaceViewState,
+  LedgerViewKeep,
+} from "./ledgerProjection";
+import { ViewTierToggle } from "./ViewTierToggle";
 import { TcSwimlanes } from "./TcSwimlanes";
 import { TcTabs, type TcTab } from "./TcTabs";
 import { useEventProjector } from "./useEventProjector";
@@ -146,6 +151,20 @@ export interface ThreadCanvasProps {
   readonly onCopyText?: (text: string) => Promise<void>;
   readonly onSaveFile?: (text: string, filename: string) => Promise<void>;
   /**
+   * SURFACES_V2 (PRD-B3): the active surface's folded view-lifecycle state
+   * (tier ladder + preference + regen) + the two mutation callbacks. When all
+   * three are provided the surface chrome renders the `ViewTierToggle`
+   * (Generic ⇄ Shaped + Regenerate) beside B2's provenance footer. The
+   * callbacks ride the host Transport port (RunDestination POSTs to the
+   * surface-view endpoints); omitted → no toggle (flag-off byte-identical).
+   */
+  readonly activeViewState?: LedgerSurfaceViewState | null;
+  readonly onRegenerateView?: (surfaceId: string) => void;
+  readonly onSetViewPreference?: (
+    surfaceId: string,
+    keep: LedgerViewKeep,
+  ) => void;
+  /**
    * Scrub cursor — null = live; number = a `sequence_no` to time-travel
    * the surface to. The host (ChatScreen) reconciles this with the
    * swimlane and mini-timeline UIs.
@@ -210,6 +229,9 @@ export function ThreadCanvas(props: ThreadCanvasProps): ReactElement {
     resolveSurfaceState,
     onCopyText,
     onSaveFile,
+    activeViewState,
+    onRegenerateView,
+    onSetViewPreference,
     scrubbedSeq = null,
     onScrub,
     onSnapToNow,
@@ -425,6 +447,20 @@ export function ThreadCanvas(props: ThreadCanvasProps): ReactElement {
                   editSlot={editSlot}
                 />
               </TcSurfaceFrame>
+              {/* PRD-B3: the persistent tier toggle + Regenerate, beside the
+                  provenance footer. Rendered only when the host supplies the
+                  active surface's folded view state + both callbacks. */}
+              {activeViewState != null &&
+              onRegenerateView !== undefined &&
+              onSetViewPreference !== undefined &&
+              surfaceIdForTabUri(activeUri) !== null ? (
+                <ViewTierToggle
+                  surfaceId={surfaceIdForTabUri(activeUri) as string}
+                  viewState={activeViewState}
+                  onRegenerateView={onRegenerateView}
+                  onSetViewPreference={onSetViewPreference}
+                />
+              ) : null}
               <TcStatusStrip line={statusLine} />
             </>
           ) : (

@@ -872,6 +872,47 @@ export function RunDestination(props: RunDestinationProps): ReactElement {
     [resolveApproval],
   );
 
+  // PRD-B3: the two view-lifecycle mutations. Both ride the Transport port (no
+  // bare fetch/window) and are keyed on `surface_id` + the owning `run_id`
+  // (SDR §4 query param). The resulting `view.derived` / `view.preference`
+  // events arrive on the ONE run stream and fold in — no second subscription.
+  const handleRegenerateView = useCallback(
+    (surfaceId: string): void => {
+      const runId = session.runId;
+      if (runId === null || runId === "") return;
+      void transport
+        .request({
+          method: "POST",
+          path: `/v1/agent/surfaces/${encodeURIComponent(
+            surfaceId,
+          )}/regenerate?run_id=${encodeURIComponent(runId)}`,
+          body: {},
+        })
+        .catch(() => {
+          /* the resulting view.derived SSE frame is the authority */
+        });
+    },
+    [transport, session.runId],
+  );
+  const handleSetViewPreference = useCallback(
+    (surfaceId: string, keep: "generic" | "shaped"): void => {
+      const runId = session.runId;
+      if (runId === null || runId === "") return;
+      void transport
+        .request({
+          method: "POST",
+          path: `/v1/agent/surfaces/${encodeURIComponent(
+            surfaceId,
+          )}/view-preference?run_id=${encodeURIComponent(runId)}`,
+          body: { keep },
+        })
+        .catch(() => {
+          /* the resulting view.preference SSE frame is the authority */
+        });
+    },
+    [transport, session.runId],
+  );
+
   // WC-P3 (AD-4): the in-chat composer shows Stop while the bound run is
   // cancellable and no cancel is in flight (server `cancelling` state OR our
   // optimistic overlay for THIS run). `cancellingRunId` is compared to the bound
@@ -1020,6 +1061,16 @@ export function RunDestination(props: RunDestinationProps): ReactElement {
       })),
     [visibleSurfaceTabs, effectivePin],
   );
+
+  // PRD-B3: the active surface's folded view-lifecycle state (tier ladder +
+  // preference + regen), read off the SAME ledger fold — no second projector.
+  // Null off the v2 path or before a `view.derived` lands.
+  const activeViewState = useMemo(() => {
+    if (!surfacesV2) return null;
+    const id = surfaceIdForTabUri(activeUri);
+    if (id === null) return null;
+    return ledger.surfaces.get(id)?.viewState ?? null;
+  }, [surfacesV2, activeUri, ledger]);
 
   // The pending diff handed to the center pane — ONLY for the active surface,
   // and never while scrubbed off-now (FR-3.15). It clears prop-driven: once the
@@ -1292,6 +1343,12 @@ export function RunDestination(props: RunDestinationProps): ReactElement {
             // Copy / Download. Only consulted inside the v2 canvas subtree.
             onCopyText={onCopyText}
             onSaveFile={onSaveFile}
+            // PRD-B3: the active surface's folded view-lifecycle state + the two
+            // Transport-backed mutations. Only meaningful on the v2 path; the
+            // toggle renders only when a `view.derived` has landed (viewState set).
+            activeViewState={activeViewState}
+            onRegenerateView={handleRegenerateView}
+            onSetViewPreference={handleSetViewPreference}
             // PRD-04: the proposed surface diff for the active surface + the
             // decision callbacks. ThreadCanvas forwards these to TcSurfaceMount,
             // which renders the Approve/Reject/Suggest controls around the diff.

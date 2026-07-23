@@ -22,7 +22,7 @@ from typing import Protocol, runtime_checkable
 from agent_runtime.execution.contracts import RuntimeContract
 from agent_runtime.surfaces_v2.constants import Keys
 from agent_runtime.surfaces_v2.ledger_ids import LedgerIdCodec
-from agent_runtime.surfaces_v2.ledger_models import LedgerEventType
+from agent_runtime.surfaces_v2.ledger_models import LedgerEventType, ViewKeep
 
 
 @runtime_checkable
@@ -42,15 +42,18 @@ class _LedgerEventLike(Protocol):
 class SurfaceViewState(RuntimeContract):
     """The derived-view state of a surface, folded from ``view.derived``.
 
-    Carries ``generator_model`` (the A1 ``gen.model``) rather than a
-    ``preference`` — this is the fold-projection twin of A1's ``SurfaceView``
-    (2026-07-23 close-out; PRD-A3 Open questions item 1).
+    Carries ``generator_model`` (the A1 ``gen.model``) and, since PRD-B3, the
+    durable ``preference`` (``"generic"`` | ``"shaped"``) folded from
+    ``view.preference`` — the server half of the "Keep generic survives reload"
+    DoD: a rebuilt store replays the preference event and reproduces this field.
+    ``None`` until the user pins a tier.
     """
 
     tier: str
     basis: str
     spec_ref: str | None = None
     generator_model: str | None = None
+    preference: str | None = None
 
 
 class SurfaceSnapshot(RuntimeContract):
@@ -100,8 +103,14 @@ class _SurfaceAccumulator:
     last_sequence_no: int
     ledger_id: str
     view: SurfaceViewState | None = None
+    # Durable tier preference (``view.preference``), held separately so a later
+    # ``view.derived`` upgrade never clobbers a "Keep generic" pin (PRD-B3).
+    preference: str | None = None
 
     def to_snapshot(self) -> SurfaceSnapshot:
+        view = self.view
+        if view is not None and self.preference is not None:
+            view = view.model_copy(update={"preference": self.preference})
         return SurfaceSnapshot(
             surface_id=self.surface_id,
             kind=self.kind,
@@ -109,7 +118,7 @@ class _SurfaceAccumulator:
             op=self.op,
             title=self.title,
             payload_ref=self.payload_ref,
-            view=self.view,
+            view=view,
             first_sequence_no=self.first_sequence_no,
             last_sequence_no=self.last_sequence_no,
             ledger_id=self.ledger_id,
@@ -175,6 +184,10 @@ class SurfaceStoreProjection:
                 )
             elif event_type == LedgerEventType.VIEW_DERIVED.value:
                 SurfaceStoreProjection._apply_view_derived(
+                    carry, seq=seq, payload=payload
+                )
+            elif event_type == LedgerEventType.VIEW_PREFERENCE.value:
+                SurfaceStoreProjection._apply_view_preference(
                     carry, seq=seq, payload=payload
                 )
             # All other event types (present + future) are intentionally skipped.
@@ -253,6 +266,32 @@ class SurfaceStoreProjection:
             spec_ref=spec_ref if isinstance(spec_ref, str) and spec_ref else None,
             generator_model=generator_model,
         )
+        accumulator.last_sequence_no = max(accumulator.last_sequence_no, seq)
+
+    @staticmethod
+    def _apply_view_preference(
+        carry: _FoldCarry,
+        *,
+        seq: int,
+        payload: Mapping[str, object],
+    ) -> None:
+        """Fold ``view.preference`` — the durable tier pin (server-half reload DoD).
+
+        Sets the surface's ``preference`` (``"generic"`` | ``"shaped"``) so a
+        rebuilt store reproduces the pin. A preference for an unseen surface is
+        ignored (defensive + pure), as is a malformed ``keep``.
+        """
+
+        surface_id = payload.get(Keys.Field.SURFACE_ID)
+        if not isinstance(surface_id, str):
+            return
+        accumulator = carry.surfaces.get(surface_id)
+        if accumulator is None:
+            return
+        keep = payload.get(Keys.Field.KEEP)
+        if keep not in (ViewKeep.GENERIC.value, ViewKeep.SHAPED.value):
+            return
+        accumulator.preference = keep
         accumulator.last_sequence_no = max(accumulator.last_sequence_no, seq)
 
     # -- helpers ------------------------------------------------------------

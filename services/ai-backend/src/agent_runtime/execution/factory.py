@@ -375,6 +375,10 @@ def _model_visible_tools(
                     registry=mcp_registry,  # type: ignore[arg-type]
                     loader=loader,
                     runtime_context=runtime_context,
+                    gate=_tool_access_gate(
+                        auth_session_creator=auth_session_creator,
+                        runtime_context=runtime_context,
+                    ),
                 ),
                 McpToolCallRequest,
             )
@@ -512,6 +516,37 @@ def _auth_session_creator(mcp_registry: object) -> object | None:
         if callable(getattr(provider, "create_auth_session", None)):
             return provider
     return None
+
+
+def _tool_access_gate(
+    *,
+    auth_session_creator: object | None,
+    runtime_context: AgentRuntimeContext,
+) -> object | None:
+    """Build the PRD-C2 ToolAccessGate, or ``None`` when no OAuth provider exists.
+
+    Reuses the SAME OAuth-capable provider ``AuthMcpTool`` gets (the
+    ``create_auth_session`` duck-probe) so a gate can only park a run when the
+    runtime can actually start the connect flow. Wired with C1's
+    ``ActionClassifier`` (over the module-level catalog) so the gate card's
+    read-only pledge / write-policy choice is honest — an absent classifier fails
+    closed to ``write`` inside the gate. Returned as ``object | None`` so the
+    ``CallMcpTool`` construction site stays type-agnostic; the whole gate path is
+    additionally guarded by ``SurfacesV2Flag`` at call time (flag off ⇒ inert).
+    """
+
+    if auth_session_creator is None:
+        return None
+    from agent_runtime.capabilities.actions.classifier import (  # noqa: PLC0415
+        ACTION_CLASSIFIER,
+    )
+    from agent_runtime.surfaces_v2.gate import ToolAccessGate  # noqa: PLC0415
+
+    return ToolAccessGate(
+        auth_session_creator=auth_session_creator,  # type: ignore[arg-type]
+        runtime_context=runtime_context,
+        classifier=ACTION_CLASSIFIER,
+    )
 
 
 def _instructions_with_mcp_cards(

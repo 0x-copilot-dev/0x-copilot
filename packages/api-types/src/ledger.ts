@@ -380,12 +380,15 @@ export interface RunReceipt {
 // client fold + parity snapshot target THIS shape (snake_case, metadata-only).
 // ---------------------------------------------------------------------------
 
-/** The derived-view state of a surface, folded from `view.derived`. */
+/** The derived-view state of a surface, folded from `view.derived`. PRD-B3 adds
+ * `preference` — the durable tier pin folded from `view.preference` (the
+ * server half of "Keep generic survives reload"), absent until the user pins. */
 export interface SurfaceViewState {
   tier: ViewTier;
   basis: ViewBasis;
   spec_ref?: string;
   generator_model?: string;
+  preference?: ViewKeep;
 }
 
 /** One surface's folded metadata. `view` is present only once a `view.derived`

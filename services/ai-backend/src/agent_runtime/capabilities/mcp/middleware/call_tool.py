@@ -42,7 +42,10 @@ from agent_runtime.capabilities.surfaces.generator import (
 )
 from agent_runtime.capabilities.surfaces.projector import SurfaceProjector
 from agent_runtime.execution.contracts import AgentRuntimeContext
+from agent_runtime.surfaces_v2.config import SurfacesV2Flag
 from agent_runtime.surfaces_v2.emitter import WorkLedgerEmitter
+from agent_runtime.surfaces_v2.gate import ToolAccessGate
+from agent_runtime.surfaces_v2.ledger_models import GateAuthState
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -54,6 +57,12 @@ class CallMcpTool:
     registry: DynamicMcpRegistry
     loader: McpLoader
     runtime_context: AgentRuntimeContext
+    # Generative Surfaces v2 (PRD-C2): the ToolAccessGate parks the run at the
+    # connector-dispatch boundary on missing/expired/insufficient auth. ``None``
+    # ⇒ pre-C2 bytes (the flag-off / unwired path) — every gate branch below is
+    # additionally guarded by ``SurfacesV2Flag.enabled()`` so the field being set
+    # never changes behaviour with the flag off.
+    gate: ToolAccessGate | None = None
     name: str = Values.ToolName.CALL_MCP_TOOL
     description: str = Messages.Middleware.CALL_MCP_TOOL_DESCRIPTION
 
@@ -93,6 +102,33 @@ class CallMcpTool:
                 correlation_id=self.runtime_context.trace_id,
             ).model_dump(mode="json", exclude_none=True)
 
+        # Generative Surfaces v2 (PRD-C2): gate at the connector-dispatch
+        # boundary. When the connector's auth is not usable right now, park the
+        # run on the mcp_auth interrupt seam BEFORE any client is created; a
+        # cancelled gate returns a typed AUTH_FAILURE and the dependent call
+        # never dispatches (fail closed). On resume the tool node re-executes
+        # from the top with a fresh card — a now-valid auth returns ``None`` from
+        # ``gate_state`` and dispatch proceeds (this IS "resume re-enters the
+        # parked call"). Flag off / gate unwired ⇒ this whole block short-circuits
+        # before any behaviour change (byte-identical).
+        if SurfacesV2Flag.enabled() and self.gate is not None:
+            gate_state = self.gate.gate_state(resolution.card)
+            if gate_state is not None:
+                resume = await self.gate.park(
+                    card=resolution.card,
+                    tool_name=parsed_input.tool_name,
+                    arguments=parsed_input.arguments,
+                    state=gate_state,
+                )
+                if not resume.approved:
+                    return McpToolCallResult.fail(
+                        McpLoadErrorCode.AUTH_FAILURE,
+                        Messages.Loader.AUTH_FAILED,
+                        server_name=parsed_input.server_name,
+                        tool_name=parsed_input.tool_name,
+                        correlation_id=self.runtime_context.trace_id,
+                    ).model_dump(mode="json", exclude_none=True)
+
         # Wall time of the connector dispatch, for the v2 ``read.executed``
         # ledger event (PRD-A3 D1). Measured only around the dispatch itself so
         # citation/ordinal/surface work downstream does not inflate it. Unused
@@ -118,7 +154,30 @@ class CallMcpTool:
                 tool_name=parsed_input.tool_name,
                 correlation_id=self.runtime_context.trace_id,
             ).model_dump(mode="json", exclude_none=True)
-        except (McpAuthError, PermissionError):
+        except McpAuthError:
+            # Mid-run revocation (PRD-C2): the card SAID authenticated but the
+            # vendor rejected the dispatch. Flag on + gate wired ⇒ re-enter the
+            # gate with ``EXPIRED`` instead of returning the terminal failure —
+            # ``park`` raises the interrupt so the run parks in place; on resume
+            # the node re-executes and the pre-dispatch gate handles the retry.
+            # If ``park`` RETURNS (resume re-execution that still failed), fall
+            # through to the fail-closed AUTH_FAILURE (never loop). Flag off /
+            # gate unwired ⇒ byte-identical to the pre-C2 terminal failure.
+            if SurfacesV2Flag.enabled() and self.gate is not None:
+                await self.gate.park(
+                    card=resolution.card,
+                    tool_name=parsed_input.tool_name,
+                    arguments=parsed_input.arguments,
+                    state=GateAuthState.EXPIRED,
+                )
+            return McpToolCallResult.fail(
+                McpLoadErrorCode.AUTH_FAILURE,
+                Messages.Loader.AUTH_FAILED,
+                server_name=parsed_input.server_name,
+                tool_name=parsed_input.tool_name,
+                correlation_id=self.runtime_context.trace_id,
+            ).model_dump(mode="json", exclude_none=True)
+        except PermissionError:
             return McpToolCallResult.fail(
                 McpLoadErrorCode.AUTH_FAILURE,
                 Messages.Loader.AUTH_FAILED,
