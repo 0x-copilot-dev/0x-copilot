@@ -350,6 +350,10 @@ class AssistantRunMetrics:
                     subagent_id=slot.subagent_id,
                     model_provider=run.model_provider,
                     model_name=run.model_name,
+                    # PRD-A2 FR-G — stamp the user on every per-call row so E3's
+                    # per-user rollups read it directly. ``surface_id`` stays
+                    # None for streamed run/subagent calls (surface-less).
+                    user_id=run.user_id,
                     connector_slug=slot.connector_slug,
                     purpose=slot.purpose,
                     originating_tool_call_id=slot.originating_tool_call_id,

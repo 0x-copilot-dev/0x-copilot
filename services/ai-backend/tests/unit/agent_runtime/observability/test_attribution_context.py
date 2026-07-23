@@ -112,7 +112,10 @@ class TestPurposeEnum:
         # MEMORY_INDEXING, MEMORY_EXTRACTION for the ⌘K palette + Memory
         # destination + post-run proposal extractor (team-memory-cmdk-prd
         # §3.3 / §4.2 / §4.3 / §9).
-        assert len(Purpose) == 12
+        # PRD-A2 (Generative Surfaces v2) added VIEW_SHAPING + SHAPE_REQUEST
+        # for the surface-spec generation + user-invited shaping paths, mapped
+        # onto the closed ledger vocabulary by UsageMeter.ledger_purpose_for.
+        assert len(Purpose) == 14
 
     def test_todo_extraction_purpose_present(self) -> None:
         # P3-A2 — the extractor worker job persists usage rows with this

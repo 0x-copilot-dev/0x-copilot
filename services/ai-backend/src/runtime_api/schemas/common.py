@@ -195,6 +195,15 @@ class RuntimeApiEventType(StrEnum):
     # tier-3 to the archetype view (plan D4). No emitter/renderer yet — PRD-01
     # freezes the contract only.
     SURFACE_SPEC_GENERATED = "surface_spec_generated"
+    # Generative Surfaces v2 (PRD-A2, SDR §5). One per usage-bearing LLM call
+    # whose store purpose maps to a ledger purpose (run / subagent /
+    # view_shaping / shape_request). The wire value is the SDR §5 ledger
+    # constant ``usage.recorded`` (dotted, matching the A1 vocabulary — not the
+    # underscore convention of the transport events above). Emission is gated on
+    # ``SURFACES_V2``; the projector's ``_usage_recorded_payload`` allow-list
+    # keeps only ``v`` / ``purpose`` / ``model`` / ``tokens_in`` / ``tokens_out``
+    # / ``surface_id`` — tenant ids never ride the envelope.
+    USAGE_RECORDED = "usage.recorded"
 
     @classmethod
     def from_stream_event_type(

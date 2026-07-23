@@ -2,3 +2,4 @@
 # Do not hand-edit; CI will refuse if checksums drift from the
 # migrations/ directory.
 0001_runtime_baseline sha256=4a147c33ed01741e4882b3a446b143456d178fb76341bb3acbe0169b784e2014
+0002_usage_call_attribution sha256=7feded71548f17b7c339223a9a066d2877d0b7d7da8450ede5f2409790a83aaa

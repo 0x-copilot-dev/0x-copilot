@@ -250,6 +250,23 @@ class TestAssistantRunMetricsPerCall:
         assert record.run_id == "run-1"
         assert record.trace_id == "trace-1"
 
+    def test_per_call_row_carries_user_id_from_run(self) -> None:
+        # PRD-A2 FR-G — every per-call row is attributed to the run's user so
+        # E3's per-user rollups read it directly (surface_id stays None here).
+        metrics = AssistantRunMetrics(
+            started_at=datetime(2026, 5, 4, 10, 0, tzinfo=timezone.utc)
+        )
+        metrics.record_usage_from(
+            {"usage_metadata": {"input_tokens": 4, "output_tokens": 8}},
+            message_id="msg-a",
+        )
+        metrics.per_call.mark_completed(
+            "msg-a", completed_at=datetime(2026, 5, 4, 10, 5, tzinfo=timezone.utc)
+        )
+        records = metrics.model_call_usage_records(_run_record(), trace_id="trace-1")
+        assert records[0].user_id == "user_1"
+        assert records[0].surface_id is None
+
 
 class TestMessageIdExtractor:
     def test_extracts_from_object_id(self) -> None:

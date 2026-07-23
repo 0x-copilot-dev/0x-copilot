@@ -70,6 +70,9 @@ import type {
   TenantId,
   UserId,
 } from "./brands";
+// Local binding for the shared ledger payload used in RuntimeEventPayloadByType
+// below (the block above re-exports it but does not bind it into local scope).
+import type { UsageRecordedPayload } from "./ledger";
 
 export type McpTransport = "http" | "sse" | "stdio";
 export type McpAuthMode = "none" | "oauth2" | "api_key" | "service_account";
@@ -352,6 +355,7 @@ export type RuntimeApiEventType =
   | "subagent_resumed"
   | "adapter_generated"
   | "surface_spec_generated"
+  | "usage.recorded"
   | "workspace_snapshot_captured";
 
 export const RUNTIME_EVENT_SOURCES = [
@@ -410,6 +414,7 @@ export const RUNTIME_API_EVENT_TYPES = [
   "subagent_resumed",
   "adapter_generated",
   "surface_spec_generated",
+  "usage.recorded",
   "workspace_snapshot_captured",
 ] as const satisfies readonly RuntimeApiEventType[];
 
@@ -2100,6 +2105,11 @@ export interface RuntimeEventPayloadByType {
    * merges `spec` into `surfaceState[surface_uri]` so the next render upgrades
    * in place from tier-3 to the archetype view (plan D4). */
   surface_spec_generated: SurfaceSpecGeneratedPayload;
+  /** Generative Surfaces v2 (PRD-A2, SDR §5). One per usage-bearing LLM call
+   * whose store purpose maps to a ledger purpose. Gated on `SURFACES_V2`; the
+   * server projector keeps only the SDR §5 fields (no tenant ids on the wire).
+   * Payload shape is the shared ledger `UsageRecordedPayload` (`./ledger`). */
+  "usage.recorded": UsageRecordedPayload;
   /** AC5 slice 3b — host write-through pre-image snapshot. Emitted by the
    * workspace backend BEFORE an approved overwrite/edit mutates a granted
    * host file: the prior bytes are stored content-addressed and this event

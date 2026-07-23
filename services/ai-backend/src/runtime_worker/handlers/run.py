@@ -81,6 +81,11 @@ from agent_runtime.execution.providers.citation_pipeline import CitationStreamPi
 from agent_runtime.execution.runtime import ainvoke_runtime, astream_runtime
 from agent_runtime.persistence import with_optimistic_retry
 from agent_runtime.persistence.records import BudgetReservationRecord
+from agent_runtime.observability.attribution import Purpose
+from agent_runtime.observability.usage_meter import (
+    MeteredModelInvocation,
+    UsageMeter,
+)
 from agent_runtime.observability.usage_recorder import (
     PostgresUsageRecorder,
     UsageRecorder,
@@ -1437,6 +1442,9 @@ class RuntimeRunHandler:
                 # 0 (disabled).
                 delta_coalesce_window_ms=self.settings.execution.delta_coalesce_window_ms,
                 delta_coalesce_max_chunks=self.settings.execution.delta_coalesce_max_chunks,
+                # PRD-A2 D5a — gate mid-run ``usage.recorded`` emission on the
+                # v2 flag; off ⇒ byte-identical stream.
+                surfaces_v2_enabled=self.settings.execution.surfaces_v2,
             )
         return StreamingExecutor.compose_final(result)
 
@@ -1600,10 +1608,31 @@ class RuntimeRunHandler:
                 payload=dict(payload),
             )
 
+        # PRD-A2 D5b — the spec-generation path is otherwise unmetered. Bind a
+        # per-run VIEW_SHAPING meter: it writes a usage row per attempt (real
+        # per-attempt spend) and, when SURFACES_V2 is on, emits usage.recorded.
+        async def _emit_usage(payload: Mapping[str, object]) -> None:
+            await self.event_producer.append_api_event(
+                run=run,
+                source=StreamEventSource.MODEL,
+                event_type=RuntimeApiEventType.USAGE_RECORDED,
+                payload=dict(payload),
+            )
+
+        meter = UsageMeter(
+            recorder=self.usage_recorder,
+            emit_event=_emit_usage,
+            surfaces_v2=self.settings.execution.surfaces_v2,
+        )
+        invocation = MeteredModelInvocation(
+            meter=meter, run=run, purpose=Purpose.VIEW_SHAPING
+        )
+
         return build_surface_generation_scheduler(
             store=_surface_store(),
             emit=_emit,
             environ=os.environ,
+            usage_meter=invocation,
         )
 
     async def _bind_conversation_ordinal_allocator(

@@ -16,6 +16,7 @@ from agent_runtime.observability.attribution import (
     Purpose,
     UsageAttributionContext,
 )
+from agent_runtime.observability.usage_meter import UsageMeter
 from runtime_api.schemas import (
     RunRecord,
     RuntimeApiEventType,
@@ -231,6 +232,7 @@ class StreamingExecutor:
         citation_resolver: CitationResolver | None = None,
         delta_coalesce_window_ms: int = 0,
         delta_coalesce_max_chunks: int = 64,
+        surfaces_v2_enabled: bool = False,
     ) -> StreamingResult:
         """Drive the streaming loop: record usage, emit events, coalesce deltas, and return accumulated results."""
         # Fall back to the active ContextVar-bound resolver when the caller
@@ -291,6 +293,7 @@ class StreamingExecutor:
                     event_producer=event_producer,
                     message_id=chunk_message_id,
                     source=chunk,
+                    surfaces_v2_enabled=surfaces_v2_enabled,
                 )
                 latest_before = await event_store.get_latest_sequence(run_id=run.run_id)
                 candidate = stream_event_mapper.stream_result_candidate(chunk)
@@ -311,6 +314,7 @@ class StreamingExecutor:
                         event_producer=event_producer,
                         message_id=candidate_id,
                         source=candidate,
+                        surfaces_v2_enabled=surfaces_v2_enabled,
                     )
                 delta = stream_event_mapper.stream_delta(chunk)
                 if citation_pipeline is not None:
@@ -434,6 +438,7 @@ class StreamingExecutor:
         event_producer: RuntimeEventProducer,
         message_id: str | None,
         source: object,
+        surfaces_v2_enabled: bool = False,
     ) -> None:
         """Emit a deduplicated MODEL_CALL_COMPLETED event with token-usage payload when the chunk carries usage."""
 
@@ -474,6 +479,54 @@ class StreamingExecutor:
                 _Fields.MESSAGE_ID: message_id,
                 _Fields.PERFORMANCE_METRICS: performance_metrics,
             },
+        )
+        await cls._maybe_emit_usage_recorded(
+            run=run,
+            purpose=slot.purpose,
+            tokens_in=slot.usage.input_tokens,
+            tokens_out=slot.usage.output_tokens,
+            event_producer=event_producer,
+            surfaces_v2_enabled=surfaces_v2_enabled,
+        )
+
+    @classmethod
+    async def _maybe_emit_usage_recorded(
+        cls,
+        *,
+        run: RunRecord,
+        purpose: str,
+        tokens_in: int,
+        tokens_out: int,
+        event_producer: RuntimeEventProducer,
+        surfaces_v2_enabled: bool,
+    ) -> None:
+        """Emit ``usage.recorded`` for a just-closed streamed call (PRD-A2 D5a).
+
+        Piggybacks the once-per-``message.id`` ``mark_completed`` dedupe, so a
+        duplicate usage chunk emits neither event. Flag-off ⇒ no-op (byte-
+        identical stream). Runs mid-loop, always before the terminal event —
+        never from ``_record_run_usage`` (which runs after ``terminate``, so SSE
+        would miss it). Streamed run/subagent calls are surface-less
+        (``surface_id`` omitted); the row is written separately via
+        ``_record_run_usage``.
+        """
+
+        if not surfaces_v2_enabled:
+            return
+        ledger_purpose = UsageMeter.ledger_purpose_for(purpose)
+        if ledger_purpose is None:
+            return
+        payload = UsageMeter.build_ledger_payload(
+            ledger_purpose=ledger_purpose,
+            model=f"{run.model_provider}:{run.model_name}",
+            tokens_in=tokens_in,
+            tokens_out=tokens_out,
+        )
+        await event_producer.append_api_event(
+            run=run,
+            source=StreamEventSource.MODEL,
+            event_type=RuntimeApiEventType.USAGE_RECORDED,
+            payload=payload,
         )
 
     @classmethod
