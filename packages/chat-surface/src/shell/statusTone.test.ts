@@ -41,10 +41,12 @@ describe("statusTone (run-status SSOT)", () => {
     expect(statusTone("archived").tone).toBe("muted");
   });
 
-  it("maps paused/approval to warning and the folded-inbox state to accent", () => {
+  it("maps paused/approval AND the folded-inbox needs_input state to warning (PRD-08 D2)", () => {
     expect(statusTone("paused").tone).toBe("warning");
     expect(statusTone("waiting_for_approval").tone).toBe("warning");
-    expect(statusTone("needs_input").tone).toBe("info");
+    // needs_input is Activity's fold of waiting_for_approval and the design's
+    // fourth "paused" slot — amber/warning, not accent (D2).
+    expect(statusTone("needs_input").tone).toBe("warning");
   });
 
   it("keeps genuine failures as error (distinct from a user stop)", () => {

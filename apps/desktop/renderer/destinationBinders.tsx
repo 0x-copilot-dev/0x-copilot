@@ -49,7 +49,6 @@ import {
 import type { Transport } from "@0x-copilot/chat-transport";
 import type {
   ActivityRunRow,
-  AuditEvent,
   ChatArchiveRow,
   ChatsArchive as ChatsArchiveData,
   Connector,
@@ -63,7 +62,7 @@ import type {
   ConversationId,
   ConversationListResponse,
   DesktopConnectorCatalogResponse,
-  ListAuditEventsResponse,
+  RunHistoryResponse,
   RunId,
   SectionResult,
   Skill,
@@ -220,36 +219,26 @@ export function ChatsBinder({
 }
 
 // ===========================================================================
-// Activity — compose /v1/agent/conversations + /v1/audit → run-history feed.
-// PRD-04 Seam C: the projection (`projectActivityRows`) is the SHARED one from
-// @0x-copilot/chat-surface — the byte-for-byte desktop copy this file used to
-// carry is deleted so `conversation_id` is stamped identically on both hosts
-// (and the desktop gains the web copy's canonical NaN-guarded sort). Audit is
-// meta-only and degrades to conversations-without-meta on failure.
+// Activity — GET /v1/agent/runs (PRD-05 run-history spine) → run-history feed.
+// PRD-08 D1/D1c: reads the one-row-per-RUN, all-status history whose entries
+// carry the meta counters, and projects it through the SHARED
+// `projectActivityRows` from @0x-copilot/chat-surface (byte-identical rows +
+// meta on both hosts). The legacy `/v1/agent/conversations` + `/v1/audit`
+// compose — and its swallowed 401/403 (`.catch(() => [])`) — is deleted: one
+// request now, and a failure surfaces as `status:"error"` + Retry.
 // ===========================================================================
 
 async function loadActivity(
   transport: Transport,
 ): Promise<SectionResult<ReadonlyArray<ActivityRunRow>>> {
-  const [conversationList, auditRows] = await Promise.all([
-    transport.request<ConversationListResponse>({
-      method: "GET",
-      path: "/v1/agent/conversations",
-      query: { limit: 50, include_archived: true },
-    }),
-    // Audit is enrichment-only; a failed read degrades to conversations-only.
-    transport
-      .request<ListAuditEventsResponse>({
-        method: "GET",
-        path: "/v1/audit",
-        query: { limit: 200 },
-      })
-      .then((response) => response?.rows ?? [])
-      .catch(() => [] as AuditEvent[]),
-  ]);
+  const history = await transport.request<RunHistoryResponse>({
+    method: "GET",
+    path: "/v1/agent/runs",
+    query: { limit: 50 },
+  });
   return {
     status: "ok",
-    data: projectActivityRows(conversationList?.conversations ?? [], auditRows),
+    data: projectActivityRows(history?.runs ?? []),
   };
 }
 

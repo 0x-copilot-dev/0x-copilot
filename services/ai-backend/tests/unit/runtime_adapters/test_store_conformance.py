@@ -50,8 +50,10 @@ async def store(request, tmp_path):
     ``in_memory`` and ``file`` are the CI backends (no external service). The
     ``postgres`` param is present so the shared contract *names* every backend,
     but it skips unless a live database is wired up — the real Postgres
-    behaviours are exercised by the DB-gated suite under ``postgres/``. It never
-    requires a database in CI.
+    behaviours are exercised by the DB-gated suite under ``postgres/`` (the
+    PRD-08 tool-invocation ledger specifically by
+    ``postgres/test_tool_invocation_ledger.py``). It never requires a database
+    in CI.
     """
 
     if request.param == "in_memory":
@@ -898,3 +900,130 @@ class TestRunHistory(_CrudSeedMixin):
             org_id=self._ORG, user_id=self._USER, limit=50
         )
         assert after == ()
+
+
+class TestToolInvocationLedgerConformance(_CrudSeedMixin):
+    """PRD-08 D1b — record_tool_invocation + the two Activity meta aggregates
+    behave identically across in_memory / file / (DB-gated) postgres."""
+
+    async def _conv(self, store):
+        return await store.create_conversation(
+            CreateConversationRequest(
+                org_id=self._ORG, user_id=self._USER, assistant_id="assistant"
+            )
+        )
+
+    async def _seed_run(self, store, conversation, idem):
+        return await self._run_coordinator(store).create_run(
+            CreateRunRequest(
+                conversation_id=conversation.conversation_id,
+                org_id=self._ORG,
+                user_id=self._USER,
+                user_input="hello",
+                idempotency_key=idem,
+                model={"provider": "openai", "model_name": "gpt-5.4-mini"},
+            )
+        )
+
+    async def test_counts_steps_and_distinct_connectors_for_a_run(self, store):
+        from agent_runtime.persistence.records import ToolInvocationRecord
+
+        conversation = await self._conv(store)
+        run = await self._seed_run(store, conversation, idem="ti-count")
+
+        # 7 tool invocations across 4 distinct connectors (2 native → None).
+        connectors = ["sheets", "safe", "dune", "sheets", "docs", None, None]
+        for i, slug in enumerate(connectors):
+            await store.record_tool_invocation(
+                ToolInvocationRecord(
+                    run_id=run.run_id,
+                    org_id=self._ORG,
+                    tool_name=f"tool_{i}",
+                    connector_slug=slug,
+                    call_id=f"call_{i}",
+                )
+            )
+
+        counts = await store.count_tool_invocations_for_runs(
+            org_id=self._ORG, run_ids=[run.run_id]
+        )
+        # (step_count, connector_count)
+        assert counts[run.run_id] == (7, 4)
+
+    async def test_run_without_invocations_is_absent_from_the_map(self, store):
+        conversation = await self._conv(store)
+        run = await self._seed_run(store, conversation, idem="ti-empty")
+        counts = await store.count_tool_invocations_for_runs(
+            org_id=self._ORG, run_ids=[run.run_id]
+        )
+        # Absent — the service renders None/unknown, never (0, 0).
+        assert run.run_id not in counts
+
+    async def test_upsert_is_idempotent_on_invocation_id(self, store):
+        from agent_runtime.persistence.records import (
+            ToolInvocationRecord,
+            ToolInvocationStatus,
+        )
+
+        conversation = await self._conv(store)
+        run = await self._seed_run(store, conversation, idem="ti-upsert")
+        rec = ToolInvocationRecord(
+            run_id=run.run_id,
+            org_id=self._ORG,
+            tool_name="tool_x",
+            connector_slug="github",
+            call_id="call_x",
+        )
+        await store.record_tool_invocation(rec)
+        # Same invocation_id, settled — must NOT create a second row.
+        await store.record_tool_invocation(
+            rec.model_copy(update={"status": ToolInvocationStatus.COMPLETED})
+        )
+        counts = await store.count_tool_invocations_for_runs(
+            org_id=self._ORG, run_ids=[run.run_id]
+        )
+        assert counts[run.run_id] == (1, 1)
+
+    async def test_counts_pending_approvals_for_a_run(self, store):
+        from runtime_api.schemas import ApprovalRequestRecord
+
+        conversation = await self._conv(store)
+        run = await self._seed_run(store, conversation, idem="ti-appr")
+
+        # Two pending approvals on this run.
+        for i in range(2):
+            await store.create_approval_request(
+                record=ApprovalRequestRecord(
+                    approval_id=f"appr_{i}",
+                    run_id=run.run_id,
+                    conversation_id=conversation.conversation_id,
+                    org_id=self._ORG,
+                    user_id=self._USER,
+                    metadata={"message": "approve a swap", "risk_level": "low"},
+                )
+            )
+
+        pending = await store.count_pending_approvals_for_runs(
+            org_id=self._ORG, run_ids=[run.run_id]
+        )
+        assert pending[run.run_id] == 2
+
+    async def test_tenant_isolation_on_the_aggregates(self, store):
+        from agent_runtime.persistence.records import ToolInvocationRecord
+
+        conversation = await self._conv(store)
+        run = await self._seed_run(store, conversation, idem="ti-tenant")
+        await store.record_tool_invocation(
+            ToolInvocationRecord(
+                run_id=run.run_id,
+                org_id=self._ORG,
+                tool_name="tool_a",
+                connector_slug="sheets",
+                call_id="call_a",
+            )
+        )
+        # A different org must not see this run's counts.
+        counts = await store.count_tool_invocations_for_runs(
+            org_id="org_other", run_ids=[run.run_id]
+        )
+        assert run.run_id not in counts

@@ -12,18 +12,21 @@ import type { ConversationId, RunId } from "./brands";
 // former Inbox items surface as Activity rows, FR-4.15/4.18/4.33).
 
 describe("ActivityRunStatus — run row status union", () => {
-  it("is exactly running / done / paused / stopped / needs_input, in order", () => {
+  it("is exactly running / done / needs_input / stopped, in order (PRD-08 D2)", () => {
+    // Four values, one per producer in the total 8→4 fold from AgentRunStatus.
+    // `paused` was removed (D2): the runtime has no such state — the design's
+    // "paused" row IS waiting_for_approval, which folds to `needs_input`.
     expect([...ACTIVITY_RUN_STATUSES]).toEqual([
       "running",
       "done",
-      "paused",
-      "stopped",
       "needs_input",
+      "stopped",
     ]);
   });
 
-  it("includes needs_input (folded-in Inbox items)", () => {
+  it("includes needs_input (folded-in Inbox items) and NOT paused (D2)", () => {
     expect(ACTIVITY_RUN_STATUSES).toContain("needs_input");
+    expect(ACTIVITY_RUN_STATUSES as readonly string[]).not.toContain("paused");
   });
 
   it("has no duplicate members", () => {

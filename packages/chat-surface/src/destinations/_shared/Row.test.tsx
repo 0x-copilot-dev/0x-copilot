@@ -5,6 +5,7 @@ import { describe, expect, it, vi } from "vitest";
 
 import { Icon } from "../../icons/Icon";
 
+import { resolveDesignToken } from "./resolveDesignToken.testutil";
 import { Row } from "./Row";
 
 describe("<Row>", () => {
@@ -85,5 +86,88 @@ describe("<Row>", () => {
     const row = screen.getByTestId("row");
     expect(row).not.toHaveAttribute("role");
     expect(row).not.toHaveAttribute("tabindex");
+  });
+
+  // ── PRD-08 D4 — trailing slot ────────────────────────────────────────────
+  it("renders `trailing` content, and reserves an always-16px slot even when empty", () => {
+    const { rerender } = render(
+      <Row title="Navigable" trailing={<Icon name="chevronRight" />} />,
+    );
+    const filled = screen.getByTestId("row-trailing");
+    expect(filled.querySelector("svg")).not.toBeNull();
+    // The slot is present + 16px wide.
+    expect(getComputedStyle(filled).width).toBe("16px");
+
+    // No `trailing` → slot still rendered (reserved), but empty. This is the
+    // design's `<span style={{width:16}}/>` on non-navigable rows; without the
+    // reservation the meta column would rag on the rows that have no chevron.
+    rerender(<Row title="Inert" />);
+    const empty = screen.getByTestId("row-trailing");
+    expect(empty).toBeInTheDocument();
+    expect(empty).toBeEmptyDOMElement();
+    expect(getComputedStyle(empty).width).toBe("16px");
+  });
+
+  // ── PRD-08 D6 — `.ui-list-row` recipe ────────────────────────────────────
+  it("carries the `ui-list-row` className (hover/focus + 15px-glyph recipe hook)", () => {
+    render(<Row title="T" />);
+    expect(screen.getByTestId("row").className).toContain("ui-list-row");
+  });
+
+  it("merges a caller className with `ui-list-row`", () => {
+    render(<Row title="T" className="mine" />);
+    const cls = screen.getByTestId("row").className;
+    expect(cls).toContain("ui-list-row");
+    expect(cls).toContain("mine");
+  });
+
+  it("moves cursor out of the inline style object (recipe owns it)", () => {
+    render(<Row title="T" onActivate={() => undefined} ariaLabel="x" />);
+    // `cursor: pointer` now comes from `.ui-list-row[role="button"]`, not the
+    // inline style — the inline style no longer sets cursor.
+    expect(screen.getByTestId("row").style.cursor).toBe("");
+  });
+
+  // ── PRD-08 D5 — icon tile surface + tone reaches the tile ─────────────────
+  it("gives the icon tile a `--color-surface-elevated` surface with a 7px radius", () => {
+    render(<Row title="T" icon={<Icon name="clock" />} />);
+    const slot = screen.getByTestId("row-icon");
+    expect(slot.style.background).toBe("var(--color-surface-elevated)");
+    expect(slot.style.borderRadius).toBe("7px");
+  });
+
+  it("iconTone='success' tints the TILE itself (not a descendant)", () => {
+    render(<Row title="T" icon={<Icon name="clock" />} iconTone="success" />);
+    const slot = screen.getByTestId("row-icon");
+    // The tone lands on the slot's own color, so it reaches the tile AND the
+    // glyph — the old inner coloured <span> never reached the tile.
+    expect(slot.style.color).toBe("var(--color-success)");
+  });
+
+  it("iconTone defaults to muted on the tile", () => {
+    render(<Row title="T" icon={<Icon name="clock" />} />);
+    expect(screen.getByTestId("row-icon").style.color).toBe(
+      "var(--color-text-muted)",
+    );
+  });
+
+  // ── PRD-08 D9 — title weight + row padding ───────────────────────────────
+  it("uses the medium (500) title weight and 11px/14px row padding (DoD 23)", () => {
+    render(<Row title="T" />);
+    const title = screen.getByTestId("row-title");
+    // (1) The primitive applies the MEDIUM token, not the old semibold.
+    expect(title.style.fontWeight).toBe("var(--font-weight-medium)");
+    // (2) The title's COMPUTED font-weight is "500". jsdom's getComputedStyle
+    // does not substitute var(), so we resolve the token through the same
+    // design-system SoT the browser reads (`--font-weight-medium: 500`,
+    // styles.css:99). This pins the resolved number the DoD names — and fails
+    // if the token is ever redefined off 500 — matching `.lrow__name
+    // { font-weight: 500 }` (copilot.css:1637). Real-Chromium confirmation of
+    // the same 500 is DoD 20 (`row.live.name`).
+    expect(resolveDesignToken(title.style.fontWeight)).toBe("500");
+    // Row padding is a literal inline value, so getComputedStyle resolves it.
+    expect(getComputedStyle(screen.getByTestId("row")).padding).toBe(
+      "11px 14px",
+    );
   });
 });

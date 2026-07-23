@@ -85,7 +85,10 @@ const ACTIVITY_ROWS: ReadonlyArray<ActivityRunRow> = [
     run_id: "run_rebalance_lp" as RunId,
     conversation_id: "conv_rebalance_lp" as ConversationId,
     title: "Rebalance LP positions",
-    status: "paused",
+    // PRD-08 D2 — the design's "paused" row IS waiting_for_approval, which folds
+    // to `needs_input` (the amber `chip--warn` slot). `paused` is no longer a
+    // member of `ActivityRunStatus`, so the fixture uses the real value.
+    status: "needs_input",
     meta: "paused — needed your approval on a swap",
     started_at: at(15, 18, 30),
   },

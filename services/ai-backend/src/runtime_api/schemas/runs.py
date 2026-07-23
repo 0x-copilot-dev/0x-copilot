@@ -476,6 +476,20 @@ class RunHistoryEntry(RuntimeContract):
     started_at: datetime | None = None
     completed_at: datetime | None = None
     cancelled_at: datetime | None = None
+    # PRD-08 D1 — the three counters the Activity meta line ("4 apps · 7 steps ·
+    # awaiting 1 approval") is composed from, server-projected as integers. The
+    # adapter returns these as ``None``/``0``; the service (``list_run_history``)
+    # stamps the real aggregates via two grouped queries over
+    # ``runtime_tool_invocations`` / ``runtime_approval_requests``.
+    #
+    # ``connector_count`` / ``step_count`` are nullable so a run recorded before
+    # the tool-invocation writer existed (D1b) reports UNKNOWN — the client omits
+    # the clause rather than asserting "0 steps" about a run that did seven.
+    # ``pending_approval_count`` is a plain int: approvals have been persisted
+    # since ``0001``, so zero there is a fact.
+    connector_count: int | None = None
+    step_count: int | None = None
+    pending_approval_count: int = 0
 
 
 class RunHistoryResponse(RuntimeContract):

@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import asyncio
-from collections.abc import Sequence
+from collections.abc import Mapping, Sequence
 from datetime import datetime, timezone
 from typing import Any
 
@@ -37,6 +37,7 @@ from agent_runtime.persistence.records import (
     RuntimeWorkerResult,
     ToolBudgetEnforcement,
     ToolBudgetRecord,
+    ToolInvocationRecord,
     UsageConversationAggregateRecord,
     UsageDailyConnectorRow,
     UsageDailyOrgRow,
@@ -147,6 +148,9 @@ class InMemoryRuntimeApiStore:
         # tests append tuples directly so the lookup can find them.
         # Each entry: (org_id, run_id, connector_slug, completed_at).
         self.tool_invocation_completions: list[tuple[str, str, str, datetime]] = []
+        # PRD-08 D1b — the per-run tool-invocation ledger (Activity meta counters),
+        # keyed by ``invocation_id`` so start→settle upserts collapse to one row.
+        self.tool_invocations: dict[str, ToolInvocationRecord] = {}
         # Compression events (read-only; no writer wired in-memory yet).
         self.compression_events: list[CompressionEventRecord] = []
         self.budgets: dict[str, BudgetRecord] = {}
@@ -596,6 +600,53 @@ class InMemoryRuntimeApiStore:
             keyset = (before_created_at, before_run_id)
             entries = [e for e in entries if (e.created_at, e.run_id) < keyset]
         return tuple(entries[: max(0, limit)])
+
+    # ------------------------------------------------------------------
+    # Tool-invocation ledger (PRD-08 D1b) + Activity meta aggregates.
+    # ------------------------------------------------------------------
+
+    async def record_tool_invocation(self, record: ToolInvocationRecord) -> None:
+        """Upsert a tool-invocation row keyed by ``invocation_id`` (idempotent)."""
+
+        self.tool_invocations[record.invocation_id] = record
+
+    async def count_tool_invocations_for_runs(
+        self, *, org_id: str, run_ids: Sequence[str]
+    ) -> Mapping[str, tuple[int, int]]:
+        """Return ``run_id → (step_count, connector_count)`` (runs with rows only)."""
+
+        wanted = set(run_ids)
+        steps: dict[str, int] = {}
+        connectors: dict[str, set[str]] = {}
+        for record in self.tool_invocations.values():
+            if record.org_id != org_id or record.run_id not in wanted:
+                continue
+            steps[record.run_id] = steps.get(record.run_id, 0) + 1
+            if record.connector_slug is not None:
+                connectors.setdefault(record.run_id, set()).add(record.connector_slug)
+        return {
+            run_id: (count, len(connectors.get(run_id, set())))
+            for run_id, count in steps.items()
+        }
+
+    async def count_pending_approvals_for_runs(
+        self, *, org_id: str, run_ids: Sequence[str]
+    ) -> Mapping[str, int]:
+        """Return ``run_id → pending-approval count`` (runs with pending only)."""
+
+        from runtime_api.schemas.common import ApprovalStatus  # local: avoid cycle
+
+        wanted = set(run_ids)
+        pending: dict[str, int] = {}
+        for request in self.approval_requests.values():
+            if (
+                request.org_id != org_id
+                or request.run_id not in wanted
+                or request.status is not ApprovalStatus.PENDING
+            ):
+                continue
+            pending[request.run_id] = pending.get(request.run_id, 0) + 1
+        return pending
 
     async def create_run_with_user_message(
         self,
