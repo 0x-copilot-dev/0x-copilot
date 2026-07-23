@@ -693,6 +693,12 @@ conn.close()
       RUNTIME_ENVIRONMENT: "production",
       RUNTIME_STORE_BACKEND: "postgres",
       RUNTIME_START_IN_PROCESS_WORKER: "true",
+      // BYOK trusted-backend lane — mirror service-env.ts so the supervised
+      // topology matches the real desktop app: BACKEND_BASE_URL + the shared
+      // service token (profileEnv) enable the per-user policy + BYOK-key fetch at
+      // run-create. Without it the lane is off (Null resolver) and BYOK runs
+      // silently drop keys.
+      BACKEND_BASE_URL: `http://127.0.0.1:${backendPort}`,
       // Hermetic run smoke (step 5 below): the deterministic fake model
       // (#140) makes runs execute with NO API key and NO network — it
       // streams model_delta + reasoning + final_response and completes,

@@ -120,6 +120,25 @@ Phase 3 (credential-only add-key removes the model step entirely), not here.
 - [ ] Composer pill "Add a key" → navigate to Settings (wire `onAddProviderKey` in both hosts).
 - [ ] Web composer seeds `selectedModel` from `workspace/defaults.default_model`.
 
+## Live smoke (packaged desktop topology, 2026-07-24)
+
+Staged the runtime from this branch (Python 3.13 + embedded Postgres 17 + the 3
+services built from source) and ran `tools/desktop-runtime/run-local.mjs` — the
+supervised topology (production posture, BYOK lane wired, SIWE sign-in). **11/11
+PASS**: all 3 services boot healthy, SIWE login, hermetic run streams 21 events to
+`run_completed`.
+
+The smoke CAUGHT a real over-aggression in the M4b guard: `ENTERPRISE_SERVICE_TOKEN`
+also authenticates MCP/skills internal calls (over their own `*_REGISTRY_URL`s), so
+"token set, `BACKEND_BASE_URL` unset" is a legitimate BYOK-off config — but the first
+guard crashed it (and would crash any MCP-but-no-BYOK deployment). Fixed to
+**asymmetric**: fail loud only on `URL`-without-token (unambiguously broken lane); on
+token-without-`URL`, warn loudly + disable the lane (never crash). Also wired
+`BACKEND_BASE_URL` into `run-local.mjs` so the harness faithfully mirrors
+`service-env.ts`. Not smoked: a real-model run asserting the BYOK key reaches the
+gate (needs a live key; the fake-model run bypasses the gate). Unit tests
+(`test_run_coordinator_byok`, factory, catalog) cover the resolver path.
+
 ## Follow-ups / tech debt
 
 - Per-request cache for the models route's BYOK resolve (M1 adds one internal

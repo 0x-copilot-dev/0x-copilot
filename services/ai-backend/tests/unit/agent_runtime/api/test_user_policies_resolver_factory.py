@@ -56,15 +56,29 @@ class TestUserPoliciesResolverFactory:
         assert isinstance(resolver, HttpUserPoliciesResolver)
 
     def test_only_url_set_fails_loud(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        # URL without a service token is an unambiguously broken lane (the fetch
+        # would 401) — fail loud.
         monkeypatch.setenv(_URL, "http://backend:8100")
         with pytest.raises(TrustedBackendLaneError):
             UserPoliciesResolverFactory.default(http_client=_client())
 
-    def test_only_token_set_fails_loud(self, monkeypatch: pytest.MonkeyPatch) -> None:
-        # The exact self-host prod regression: token present, URL missing.
+    def test_only_token_set_disables_lane_without_crashing(
+        self,
+        monkeypatch: pytest.MonkeyPatch,
+        caplog: pytest.LogCaptureFixture,
+    ) -> None:
+        # The token also authenticates MCP/skills internal calls, so "token, no
+        # URL" is a legitimate BYOK-off deployment (e.g. the fake-model harness):
+        # the lane is disabled with a LOUD warning, never a crash. Crashing it was
+        # the over-aggressive first cut, caught by the live desktop smoke.
         monkeypatch.setenv(_TOKEN, "svc-token")
-        with pytest.raises(TrustedBackendLaneError):
-            UserPoliciesResolverFactory.default(http_client=_client())
+        with caplog.at_level("WARNING"):
+            resolver = UserPoliciesResolverFactory.default(http_client=_client())
+        assert isinstance(resolver, NullUserPoliciesResolver)
+        assert any(
+            "BYOK provider keys will NOT reach runs" in record.message
+            for record in caplog.records
+        )
 
     def test_configured_without_client_fails_loud(
         self, monkeypatch: pytest.MonkeyPatch
