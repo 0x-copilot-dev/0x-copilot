@@ -45,6 +45,10 @@ class Constants:
         DISCONNECT = "/v1/connectors/{connector_id}/disconnect"
         SCOPES = "/v1/connectors/{connector_id}/scopes"
         ACCESS_MODE = "/v1/connectors/{connector_id}/access-mode"
+        # Generative Surfaces v2 (PRD-C2) — the per-connector write-policy override
+        # (``ask_first`` / ``allow_always``) the canvas gate card sets at connect
+        # time. Distinct from ACCESS_MODE (the read/act axis); backend has both.
+        WRITE_POLICY = "/v1/connectors/{connector_id}/write-policy"
         AUDIT = "/v1/connectors/{connector_id}/audit"
         STREAM = "/v1/connectors/stream"
         # AC9 — desktop-only OAuth transport variant. Distinct paths from the
@@ -342,6 +346,34 @@ def register_connector_routes(app: FastAPI) -> None:
         body = await _safe_json(request)
         response = await client.patch(
             f"{backend_url}/v1/connectors/{connector_id}/access-mode",
+            params={"org_id": identity.org_id, "user_id": identity.user_id},
+            json=body,
+            headers=FacadeAuthenticator.service_headers(identity),
+            timeout=15,
+        )
+        return _coerce_object_or_raise(response)
+
+    # ----- Write-policy patch (Generative Surfaces v2 / PRD-C2) -----------
+
+    @app.patch(Constants.Paths.WRITE_POLICY)
+    async def set_write_policy(
+        request: Request, connector_id: str
+    ) -> dict[str, object]:
+        """Proxy the per-connector write-policy PATCH — byte-for-byte clone of
+        ``set_access_mode``. The canvas gate card sets ``ask_first`` /
+        ``allow_always`` here; identity is verified by the facade and forwarded
+        as ``org_id``/``user_id`` query params + service headers, the
+        client-supplied body forwarded unmodified (the backend's strict enum
+        validates it)."""
+
+        backend_url = _settings_for(app).backend_url
+        client = http_client(app)
+        identity = await FacadeAuthenticator.verify_with_touch(
+            request, backend_url=backend_url, http_client=client
+        )
+        body = await _safe_json(request)
+        response = await client.patch(
+            f"{backend_url}/v1/connectors/{connector_id}/write-policy",
             params={"org_id": identity.org_id, "user_id": identity.user_id},
             json=body,
             headers=FacadeAuthenticator.service_headers(identity),
