@@ -1,0 +1,545 @@
+{
+  "surface": "composer",
+  "note": "design↔live element correspondence for the SHARED composer chrome — the bottom control row (attach · model pill · tools pill · hint · send) and the model-picker popover. Design side = copilot-composer2.jsx `.cmp*` / `.pop*` (design-kit/copilot-v3.css). Live side = the shipping @0x-copilot/chat-surface OnboardingComposer → Composer → AssistantComposer → ModelPill, rendered by lib/render-live-composer.test.tsx with the four real stylesheets inlined (design-system, apps/frontend/src/styles.css, onboarding.css, composer.css — composer.css LAST, so the DESKTOP copy of every forked rule wins in this snapshot). NOTHING is marked expectDivergence: the product owner has ruled the shared composer chrome IN SCOPE and required to match the design, so every delta below is a real finding. Labels are the DESIGN labels; the live profiles are re-keyed onto them by lib/align-live.mjs (raw extractor output preserved as out/live-*.raw.json). Live-only elements keep their own live label and surface as `extra-in-live`.",
+  "states": ["closed", "model"],
+  "elements": [
+    {
+      "label": "cmp.frame",
+      "group": "A · Composer frame",
+      "design": ".cmp",
+      "live": ".aui-composer",
+      "liveLabel": "composer-shell",
+      "liveAuthoredAt": "packages/chat-surface/src/composer/Composer.tsx:1458 (inline containerStyle, beats every class)"
+    },
+    {
+      "label": "cmp.textarea",
+      "group": "A · Composer frame",
+      "design": ".cmp > textarea",
+      "live": "[data-testid=\"composer-textarea\"]",
+      "liveLabel": "composer-textarea",
+      "liveAuthoredAt": "packages/chat-surface/src/composer/Composer.tsx:1471 (inline textareaStyle)"
+    },
+    {
+      "label": "cmp.row",
+      "group": "A · Composer bottom row",
+      "design": ".cmp-row",
+      "live": ".aui-composer-action-wrapper",
+      "liveLabel": "bottom-row",
+      "liveAuthoredAt": "packages/chat-surface/src/composer/composer.css:256"
+    },
+    {
+      "label": "cmp.attach.btn",
+      "group": "A · Composer bottom row",
+      "design": ".cmp-row > button.cmp-ic",
+      "live": ".aui-composer-add-attachment",
+      "liveLabel": "plus-button",
+      "liveAuthoredAt": "packages/chat-surface/src/composer/composer.css:340 (+ base .aui-icon-button:128)"
+    },
+    {
+      "label": "cmp.attach.icon",
+      "group": "A · Composer bottom row",
+      "design": ".cmp-row > button.cmp-ic > svg",
+      "live": null,
+      "liveLabel": null,
+      "liveAuthoredAt": "packages/chat-surface/src/composer/AssistantComposer.tsx:422 — live renders the literal text glyph \"+\", there is no icon element"
+    },
+    {
+      "label": "cmp.model.pill",
+      "group": "A · Model pill (trigger)",
+      "design": ".cmp-row > .cmp-pill:nth-of-type(2)",
+      "live": ".atlas-model-pill",
+      "liveLabel": "model-pill",
+      "liveAuthoredAt": "packages/chat-surface/src/composer/composer.css:379"
+    },
+    {
+      "label": "cmp.model.dot",
+      "group": "A · Model pill (trigger)",
+      "design": ".cmp-row > .cmp-pill:nth-of-type(2) > .pd",
+      "live": ".atlas-model-pill__dot",
+      "liveLabel": "model-pill-dot",
+      "liveAuthoredAt": "packages/chat-surface/src/composer/composer.css:422"
+    },
+    {
+      "label": "cmp.model.label",
+      "group": "A · Model pill (trigger)",
+      "design": ".cmp-row > .cmp-pill:nth-of-type(2) > .lb",
+      "live": ".atlas-model-pill__name",
+      "liveLabel": "model-pill-name",
+      "liveAuthoredAt": "packages/chat-surface/src/composer/composer.css:432"
+    },
+    {
+      "label": "cmp.model.caret",
+      "group": "A · Model pill (trigger)",
+      "design": ".cmp-row > .cmp-pill:nth-of-type(2) > svg",
+      "live": ".atlas-model-pill__caret",
+      "liveLabel": "model-pill-caret",
+      "liveAuthoredAt": "packages/chat-surface/src/composer/ModelPill.tsx:352 (width/height=12) + composer.css:441"
+    },
+    {
+      "label": "cmp.model.pill.open",
+      "group": "A · Model pill (trigger)",
+      "design": ".cmp-row > .cmp-pill[data-open=\"true\"]",
+      "live": ".atlas-model-pill[aria-expanded=\"true\"]",
+      "liveLabel": "model-pill-open",
+      "liveAuthoredAt": "packages/chat-surface/src/composer/composer.css:410"
+    },
+    {
+      "label": "cmp.tools.pill",
+      "group": "A · Tools pill",
+      "design": ".cmp-row > .cmp-pill:nth-of-type(3)",
+      "live": "[data-testid=\"first-run-tools-button\"]",
+      "liveLabel": "tools-trigger",
+      "liveAuthoredAt": "packages/chat-surface/src/onboarding/ComposerToolsButton.tsx:58 (INLINE CSSProperties — no class, unstylable from CSS)"
+    },
+    {
+      "label": "cmp.tools.icon",
+      "group": "A · Tools pill",
+      "design": ".cmp-row > .cmp-pill:nth-of-type(3) > svg",
+      "live": "[data-testid=\"first-run-tools-button\"] > span:nth-child(1)",
+      "liveLabel": "tools-trigger-glyph",
+      "liveAuthoredAt": "packages/chat-surface/src/onboarding/ComposerToolsButton.tsx:44 (literal \"⚙\" text) + :76 glyphStyle"
+    },
+    {
+      "label": "cmp.tools.label",
+      "group": "A · Tools pill",
+      "design": ".cmp-row > .cmp-pill:nth-of-type(3) > .lb",
+      "live": "[data-testid=\"first-run-tools-button\"] > span:nth-child(2)",
+      "liveLabel": "tools-trigger-label",
+      "liveAuthoredAt": "packages/chat-surface/src/onboarding/ComposerToolsButton.tsx:45 (inherits triggerStyle:58)"
+    },
+    {
+      "label": "cmp.tools.count",
+      "group": "A · Tools pill",
+      "design": ".cmp-row > .cmp-pill:nth-of-type(3) > .n",
+      "live": "[data-testid=\"first-run-tools-button-badge\"]",
+      "liveLabel": "tools-trigger-badge",
+      "liveAuthoredAt": "packages/chat-surface/src/onboarding/ComposerToolsButton.tsx:81 (INLINE badgeStyle)"
+    },
+    {
+      "label": "cmp.hint",
+      "group": "A · Hint",
+      "design": ".cmp-row > .cmp-hint",
+      "live": ".aui-composer__hint",
+      "liveLabel": "hint-row",
+      "liveAuthoredAt": "packages/chat-surface/src/composer/composer.css:776 (+ DOM at AssistantComposer.tsx:543, outside the bottom row)"
+    },
+    {
+      "label": "cmp.send.btn",
+      "group": "A · Send",
+      "design": ".cmp-row > button.cmp-send",
+      "live": ".aui-send-button",
+      "liveLabel": "send-button",
+      "liveAuthoredAt": "packages/chat-surface/src/composer/composer.css:857 (+ .aui-composer-send:340)"
+    },
+    {
+      "label": "cmp.send.icon",
+      "group": "A · Send",
+      "design": ".cmp-row > button.cmp-send > svg",
+      "live": null,
+      "liveLabel": null,
+      "liveAuthoredAt": "packages/chat-surface/src/composer/AssistantComposer.tsx:602 — live renders the literal text glyph \"↑\", there is no icon element"
+    },
+
+    {
+      "label": "pop.scrim",
+      "group": "B · Popover frame",
+      "design": ".pop-scrim",
+      "live": null,
+      "liveLabel": null,
+      "liveAuthoredAt": "packages/design-system/src/index.tsx:706 — <Menu> dismisses via a window pointerdown listener and renders NO scrim element"
+    },
+    {
+      "label": "pop.frame",
+      "group": "B · Popover frame",
+      "design": ".pop",
+      "live": ".atlas-model-pill__menu",
+      "liveLabel": "model-menu",
+      "liveAuthoredAt": "packages/chat-surface/src/composer/composer.css:450 over packages/design-system/src/styles.css:765 (+ inline position/zIndex/minWidth/maxWidth from index.tsx:774)"
+    },
+    {
+      "label": "pop.header",
+      "group": "B · Popover header",
+      "design": ".pop__h",
+      "live": null,
+      "liveLabel": null,
+      "liveAuthoredAt": "packages/chat-surface/src/composer/ModelPill.tsx:227 — renderMenuBody() emits no header row; the orphan .atlas-model-pill__head rule (composer.css:459) is never used"
+    },
+    {
+      "label": "pop.header.meta",
+      "group": "B · Popover header",
+      "design": ".pop__h > .meta",
+      "live": null,
+      "liveLabel": null,
+      "liveAuthoredAt": "packages/chat-surface/src/composer/ModelPill.tsx:227 — no header, therefore no \"this chat\" scope meta"
+    },
+    {
+      "label": "pop.list",
+      "group": "B · Popover frame",
+      "design": ".pop__list",
+      "live": ".atlas-model-pill__menu",
+      "liveLabel": "model-menu",
+      "liveAuthoredAt": "packages/chat-surface/src/composer/composer.css:450 — live collapses the design's frame(.pop)+scroll-region(.pop__list) into ONE node, so there is no max-height/overflow scroller"
+    },
+    {
+      "label": "pop.group.keys",
+      "group": "B · Group headings",
+      "design": ".pop__list > .pop__grp:nth-of-type(1)",
+      "live": ".atlas-model-pill__group:nth-of-type(1) > .atlas-model-pill__group-head",
+      "liveLabel": "group-head-cloud",
+      "liveAuthoredAt": "packages/chat-surface/src/composer/composer.css:480 (padding) + packages/design-system/src/styles.css:1089 .ui-section-label (all type)"
+    },
+    {
+      "label": "pop.group.local",
+      "group": "B · Group headings",
+      "design": ".pop__list > .pop__grp:nth-of-type(2)",
+      "live": ".atlas-model-pill__group:nth-of-type(2) > .atlas-model-pill__group-head",
+      "liveLabel": "group-head-local",
+      "liveAuthoredAt": "packages/chat-surface/src/composer/composer.css:480 + packages/design-system/src/styles.css:1089"
+    },
+    {
+      "label": "pop.row",
+      "group": "B · Rows",
+      "design": ".pop__list > .pop-row:nth-of-type(1)",
+      "live": ".atlas-model-pill__item[data-active]",
+      "liveLabel": "row-active",
+      "liveAuthoredAt": "packages/chat-surface/src/composer/composer.css:572 (+ [data-active]:592)"
+    },
+    {
+      "label": "pop.row.badge",
+      "group": "B · Rows",
+      "design": ".pop__list > .pop-row:nth-of-type(1) > .lg",
+      "live": ".atlas-model-pill__item[data-active] .atlas-model-pill__badge-lg",
+      "liveLabel": "row-badge-cloud",
+      "liveAuthoredAt": "packages/chat-surface/src/composer/composer.css:490"
+    },
+    {
+      "label": "pop.row.meta",
+      "group": "B · Rows",
+      "design": ".pop__list > .pop-row:nth-of-type(1) > .m",
+      "live": ".atlas-model-pill__col",
+      "liveLabel": "row-col",
+      "liveAuthoredAt": "packages/chat-surface/src/composer/composer.css:648"
+    },
+    {
+      "label": "pop.row.name",
+      "group": "B · Rows",
+      "design": ".pop__list > .pop-row:nth-of-type(1) > .m > .nm",
+      "live": ".atlas-model-pill__row",
+      "liveLabel": "row-line",
+      "liveAuthoredAt": "packages/chat-surface/src/composer/composer.css:655"
+    },
+    {
+      "label": "pop.row.nameText",
+      "group": "B · Rows",
+      "design": ".pop__list > .pop-row:nth-of-type(1) > .m > .nm > .txt",
+      "live": ".atlas-model-pill__nm",
+      "liveLabel": "row-name",
+      "liveAuthoredAt": "packages/chat-surface/src/composer/composer.css:503"
+    },
+    {
+      "label": "pop.row.sub",
+      "group": "B · Rows",
+      "design": ".pop__list > .pop-row:nth-of-type(1) > .m > .sb",
+      "live": ".atlas-model-pill__sub",
+      "liveLabel": "row-sub",
+      "liveAuthoredAt": "packages/chat-surface/src/composer/composer.css:511 AND :668 (same file, same specificity — :668 wins for font-size/color)"
+    },
+    {
+      "label": "pop.row.radio",
+      "group": "B · Rows",
+      "design": ".pop__list > .pop-row:nth-of-type(1) > .rad",
+      "live": ".atlas-model-pill__item[data-active] .atlas-model-pill__rad",
+      "liveLabel": "radio-active",
+      "liveAuthoredAt": "packages/chat-surface/src/composer/composer.css:521 (+ [data-active]:532)"
+    },
+    {
+      "label": "pop.row.radioCheck",
+      "group": "B · Rows",
+      "design": ".pop__list > .pop-row:nth-of-type(1) > .rad > svg",
+      "live": ".atlas-model-pill__item[data-active] .atlas-model-pill__rad svg",
+      "liveLabel": "radio-check",
+      "liveAuthoredAt": "packages/chat-surface/src/composer/ModelPill.tsx:197 (width/height=10)"
+    },
+    {
+      "label": "pop.rowSelected",
+      "group": "B · Rows",
+      "design": ".pop__list > .pop-row[data-on]",
+      "live": ".atlas-model-pill__item[data-active]",
+      "liveLabel": "row-active",
+      "liveAuthoredAt": "packages/chat-surface/src/composer/composer.css:592"
+    },
+    {
+      "label": "pop.rowUnselected",
+      "group": "B · Rows",
+      "design": ".pop__list > .pop-row:nth-of-type(2)",
+      "live": ".atlas-model-pill__group:nth-of-type(1) > button:nth-of-type(2)",
+      "liveLabel": "row-cloud-2",
+      "liveAuthoredAt": "packages/chat-surface/src/composer/composer.css:572"
+    },
+    {
+      "label": "pop.rowUnselected.radio",
+      "group": "B · Rows",
+      "design": ".pop__list > .pop-row:nth-of-type(2) > .rad",
+      "live": ".atlas-model-pill__item:not([data-active]) .atlas-model-pill__rad",
+      "liveLabel": "radio-idle",
+      "liveAuthoredAt": "packages/chat-surface/src/composer/composer.css:521"
+    },
+    {
+      "label": "pop.rowLocal",
+      "group": "B · Rows (local)",
+      "design": ".pop__list > .pop-row:nth-of-type(4)",
+      "live": ".atlas-model-pill__group:nth-of-type(2) > button:nth-of-type(1)",
+      "liveLabel": "row-local",
+      "liveAuthoredAt": "packages/chat-surface/src/composer/composer.css:572"
+    },
+    {
+      "label": "pop.rowLocal.badge",
+      "group": "B · Rows (local)",
+      "design": ".pop__list > .pop-row:nth-of-type(4) > .lg",
+      "live": ".atlas-model-pill__badge-lg[data-local]",
+      "liveLabel": "row-badge-local",
+      "liveAuthoredAt": "packages/chat-surface/src/composer/composer.css:490 (no [data-local] variant rule exists)"
+    },
+    {
+      "label": "pop.rowLocal.badgeIcon",
+      "group": "B · Rows (local)",
+      "design": ".pop__list > .pop-row:nth-of-type(4) > .lg > svg",
+      "live": null,
+      "liveLabel": null,
+      "liveAuthoredAt": "packages/chat-surface/src/composer/ModelPill.tsx:182 — live prints the literal text character \"◇\" instead of an <Icon> chip SVG"
+    },
+    {
+      "label": "pop.rowLocal.sub",
+      "group": "B · Rows (local)",
+      "design": ".pop__list > .pop-row:nth-of-type(4) > .m > .sb",
+      "live": ".atlas-model-pill__group:nth-of-type(2) > button:nth-of-type(1) .atlas-model-pill__sub",
+      "liveLabel": "row-local-sub",
+      "liveAuthoredAt": "packages/chat-surface/src/composer/ModelPill.tsx:106 (copy) + composer.css:511/:668 (type)"
+    },
+    {
+      "label": "pop.footer",
+      "group": "B · Footer",
+      "design": ".pop__f",
+      "live": ".atlas-model-pill__footer",
+      "liveLabel": "menu-footer",
+      "liveAuthoredAt": "packages/chat-surface/src/composer/composer.css:542"
+    },
+    {
+      "label": "pop.footer.linkAdd",
+      "group": "B · Footer",
+      "design": ".pop__f > a:nth-of-type(1)",
+      "live": ".atlas-model-pill__footer-link",
+      "liveLabel": "menu-footer-link",
+      "liveAuthoredAt": "packages/chat-surface/src/composer/composer.css:551"
+    },
+    {
+      "label": "pop.footer.spacer",
+      "group": "B · Footer",
+      "design": ".pop__f > .sp",
+      "live": null,
+      "liveLabel": null,
+      "liveAuthoredAt": "packages/chat-surface/src/composer/ModelPill.tsx:269 — gated on `hasAddKey && onGetLocalModels`; no host ever passes onGetLocalModels (AssistantComposer.tsx:487 omits it), so .atlas-model-pill__footer-sp (composer.css:568) never renders"
+    },
+    {
+      "label": "pop.footer.linkLocal",
+      "group": "B · Footer",
+      "design": ".pop__f > a:nth-of-type(2)",
+      "live": null,
+      "liveLabel": null,
+      "liveAuthoredAt": "packages/chat-surface/src/composer/ModelPill.tsx:272 — gated on `onGetLocalModels`, which AssistantComposer.tsx:487-495 never passes and no host supplies"
+    },
+
+    {
+      "label": "mic-button",
+      "group": "C · Live-only",
+      "design": null,
+      "live": ".atlas-composer-mic",
+      "liveLabel": "mic-button",
+      "liveAuthoredAt": "packages/chat-surface/src/composer/AssistantComposer.tsx:458 + composer.css:356 — no counterpart in copilot-composer2.jsx's .cmp-row"
+    },
+    {
+      "label": "mic-icon",
+      "group": "C · Live-only",
+      "design": null,
+      "live": ".atlas-composer-mic svg",
+      "liveLabel": "mic-icon",
+      "liveAuthoredAt": "packages/chat-surface/src/composer/AssistantComposer.tsx:465"
+    },
+    {
+      "label": "tools-spacer",
+      "group": "C · Live-only",
+      "design": null,
+      "live": ".aui-composer-tools-spacer",
+      "liveLabel": "tools-spacer",
+      "liveAuthoredAt": "packages/chat-surface/src/composer/AssistantComposer.tsx:485 + composer.css:324 — the design row has no divider"
+    },
+    {
+      "label": "row-reasoning-badge",
+      "group": "C · Live-only",
+      "design": null,
+      "live": ".atlas-model-pill__badge[data-kind=\"reasoning\"]",
+      "liveLabel": "row-reasoning-badge",
+      "liveAuthoredAt": "packages/chat-surface/src/composer/ModelPill.tsx:188 + composer.css:673 — the design row shows badge · name · sub · radio only"
+    },
+    {
+      "label": "model-menu-group-cloud",
+      "group": "C · Live-only",
+      "design": null,
+      "live": ".atlas-model-pill__group:nth-of-type(1)",
+      "liveLabel": "model-menu-group-cloud",
+      "liveAuthoredAt": "packages/chat-surface/src/composer/ModelPill.tsx:234 — live wraps each group in a div; the design's .pop__grp headings are bare siblings inside .pop__list"
+    },
+    {
+      "label": "model-menu-group-local",
+      "group": "C · Live-only",
+      "design": null,
+      "live": ".atlas-model-pill__group:nth-of-type(2)",
+      "liveLabel": "model-menu-group-local",
+      "liveAuthoredAt": "packages/chat-surface/src/composer/ModelPill.tsx:245 + composer.css:471 (adjacent-sibling margin-top:2px, desktop-only)"
+    },
+    {
+      "label": "plus-root",
+      "group": "C · Live-only wrappers",
+      "design": null,
+      "live": ".aui-plus-menu-root",
+      "liveLabel": "plus-root",
+      "liveAuthoredAt": "packages/chat-surface/src/composer/AssistantComposer.tsx:409 + composer.css:333"
+    },
+    {
+      "label": "tools-cluster",
+      "group": "C · Live-only wrappers",
+      "design": null,
+      "live": ".aui-composer-tools",
+      "liveLabel": "tools-cluster",
+      "liveAuthoredAt": "packages/chat-surface/src/composer/AssistantComposer.tsx:408 + composer.css:314"
+    },
+    {
+      "label": "tools-trigger-wrap",
+      "group": "C · Live-only wrappers",
+      "design": null,
+      "live": ".aui-composer-tools > span:has([data-testid=\"first-run-tools-button\"])",
+      "liveLabel": "tools-trigger-wrap",
+      "liveAuthoredAt": "apps/frontend ChatToolsTrigger / lib/render-live-composer.test.tsx:200 host wrapper"
+    },
+    {
+      "label": "model-pill-root",
+      "group": "C · Live-only wrappers",
+      "design": null,
+      "live": ".atlas-model-pill__root",
+      "liveLabel": "model-pill-root",
+      "liveAuthoredAt": "packages/chat-surface/src/composer/ModelPill.tsx:330 + composer.css:373"
+    },
+    {
+      "label": "send-wrap",
+      "group": "C · Live-only wrappers",
+      "design": null,
+      "live": ".aui-composer-action-wrapper__right",
+      "liveLabel": "send-wrap",
+      "liveAuthoredAt": "packages/chat-surface/src/composer/AssistantComposer.tsx:506 + composer.css:277"
+    },
+    {
+      "label": "bottombar-slot",
+      "group": "C · Live-only wrappers",
+      "design": null,
+      "live": "[data-testid=\"composer-bottombar-slot\"]",
+      "liveLabel": "bottombar-slot",
+      "liveAuthoredAt": "packages/chat-surface/src/composer/Composer.tsx (bottomBarRender slot)"
+    },
+    {
+      "label": "hint-slot",
+      "group": "C · Live-only wrappers",
+      "design": null,
+      "live": "[data-testid=\"composer-hint-slot\"]",
+      "liveLabel": "hint-slot",
+      "liveAuthoredAt": "packages/chat-surface/src/composer/Composer.tsx (hintRender slot)"
+    },
+    {
+      "label": "hint-skills",
+      "group": "C · Hint internals (live-only)",
+      "design": null,
+      "live": ".aui-composer__hint > span:first-child",
+      "liveLabel": "hint-skills",
+      "liveAuthoredAt": "packages/chat-surface/src/composer/AssistantComposer.tsx:544"
+    },
+    {
+      "label": "hint-kbd",
+      "group": "C · Hint internals (live-only)",
+      "design": null,
+      "live": ".aui-composer__hint kbd",
+      "liveLabel": "hint-kbd",
+      "liveAuthoredAt": "packages/chat-surface/src/composer/composer.css:813"
+    },
+    {
+      "label": "hint-grow",
+      "group": "C · Hint internals (live-only)",
+      "design": null,
+      "live": ".aui-composer__hint-grow",
+      "liveLabel": "hint-grow",
+      "liveAuthoredAt": "packages/chat-surface/src/composer/composer.css:832"
+    },
+    {
+      "label": "hint-meta",
+      "group": "C · Hint internals (live-only)",
+      "design": null,
+      "live": ".aui-composer__hint-meta",
+      "liveLabel": "hint-meta",
+      "liveAuthoredAt": "packages/chat-surface/src/composer/AssistantComposer.tsx:551 + composer.css:842"
+    },
+    {
+      "label": "hero-title",
+      "group": "C · FTUE frame (covered by surfaces/run-empty)",
+      "design": null,
+      "live": ".fr-hero__title",
+      "liveLabel": "hero-title",
+      "liveAuthoredAt": "packages/chat-surface/src/onboarding/onboarding.css — out of scope for this surface"
+    },
+    {
+      "label": "chips-row",
+      "group": "C · FTUE frame (covered by surfaces/run-empty)",
+      "design": null,
+      "live": ".fr-chips",
+      "liveLabel": "chips-row",
+      "liveAuthoredAt": "packages/chat-surface/src/onboarding/onboarding.css — out of scope for this surface"
+    },
+    {
+      "label": "chip-wallet",
+      "group": "C · FTUE frame (covered by surfaces/run-empty)",
+      "design": null,
+      "live": "[data-testid=\"first-run-chip-watch-wallet\"]",
+      "liveLabel": "chip-wallet",
+      "liveAuthoredAt": "packages/chat-surface/src/onboarding/onboarding.css — out of scope for this surface"
+    },
+    {
+      "label": "chip-thread",
+      "group": "C · FTUE frame (covered by surfaces/run-empty)",
+      "design": null,
+      "live": "[data-testid=\"first-run-chip-draft-thread\"]",
+      "liveLabel": "chip-thread",
+      "liveAuthoredAt": "packages/chat-surface/src/onboarding/onboarding.css — out of scope for this surface"
+    },
+    {
+      "label": "chip-csv",
+      "group": "C · FTUE frame (covered by surfaces/run-empty)",
+      "design": null,
+      "live": "[data-testid=\"first-run-chip-explain-csv\"]",
+      "liveLabel": "chip-csv",
+      "liveAuthoredAt": "packages/chat-surface/src/onboarding/onboarding.css — out of scope for this surface"
+    },
+    {
+      "label": "chip-icon",
+      "group": "C · FTUE frame (covered by surfaces/run-empty)",
+      "design": null,
+      "live": ".fr-chip__ic",
+      "liveLabel": "chip-icon",
+      "liveAuthoredAt": "packages/chat-surface/src/onboarding/onboarding.css — out of scope for this surface"
+    },
+    {
+      "label": "chip-label",
+      "group": "C · FTUE frame (covered by surfaces/run-empty)",
+      "design": null,
+      "live": ".fr-chip__label",
+      "liveLabel": "chip-label",
+      "liveAuthoredAt": "packages/chat-surface/src/onboarding/onboarding.css — out of scope for this surface"
+    }
+  ]
+}

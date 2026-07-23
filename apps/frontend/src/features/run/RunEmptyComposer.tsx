@@ -111,9 +111,12 @@ export function RunEmptyComposer({
       onDismissError={ctx.dismissError}
       // A configuration_error's "Add a key" CTA deep-links to Provider keys.
       onAddKey={ctx.onOpenModelSettings}
-      // Inert while a run is starting OR no model is configured yet — the
-      // cockpit's "Set up your model" notice below carries the setup CTA.
-      disabled={ctx.submitting || !ctx.modelReady}
+      // Inert ONLY while a run is starting. With no model configured the
+      // composer stays LIVE — the user can type and send, and the cockpit
+      // answers in this composer's own inline error strip (a
+      // `configuration_error` start error → "Add a key"), rather than greying
+      // the surface out behind a standing notice.
+      disabled={ctx.submitting}
     />
   );
 }

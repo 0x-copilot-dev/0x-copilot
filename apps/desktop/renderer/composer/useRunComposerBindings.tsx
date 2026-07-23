@@ -52,8 +52,14 @@ interface WorkspaceDefaultsResponseLite {
     readonly model_name?: string;
   } | null;
 }
+// `GET /v1/local-models` → `LocalModelSummary[]`. `size_bytes` is the on-disk
+// weight size; the composer's model popover joins it onto the catalog by name
+// so a local row reads "42 GB · never leaves this machine".
 interface LocalModelsResponse {
-  readonly models?: readonly { readonly name?: string }[];
+  readonly models?: readonly {
+    readonly name?: string;
+    readonly size_bytes?: number;
+  }[];
 }
 
 export interface RunComposerBindings {
@@ -76,6 +82,12 @@ export interface RunComposerBindings {
   readonly selectedModel: string;
   readonly onModelChange: (id: string) => void;
   readonly onAddCustomModel: (slug: string) => void;
+  /**
+   * On-disk size in bytes of each installed LOCAL model, keyed by its Ollama
+   * tag — the `GET /v1/local-models` half of the join the model popover needs
+   * for "42 GB · never leaves this machine". Empty when local models are off.
+   */
+  readonly localModelSizes: Readonly<Record<string, number>>;
 
   // --- Shared `+`-menu renderer (anchored popover) ---
   readonly renderPlusMenu: (
@@ -107,6 +119,9 @@ export function useRunComposerBindings(): RunComposerBindings {
   >(new Set());
   const [providersKnown, setProvidersKnown] = useState(false);
   const [localModelNames, setLocalModelNames] = useState<readonly string[]>([]);
+  const [localModelSizes, setLocalModelSizes] = useState<
+    Readonly<Record<string, number>>
+  >({});
   const [customModels, setCustomModels] = useState<readonly CatalogModel[]>([]);
   const [selectedModel, setSelectedModel] = useState<string>("");
   const [workspaceDefault, setWorkspaceDefault] = useState<{
@@ -189,14 +204,29 @@ export function useRunComposerBindings(): RunComposerBindings {
       .request<LocalModelsResponse>({ method: "GET", path: "/v1/local-models" })
       .then((res) => {
         if (cancelled) return;
-        const names = (res.models ?? [])
-          .map((m) => m.name)
-          .filter((n): n is string => typeof n === "string" && n.length > 0);
-        setLocalModelNames(names);
+        const rows = (res.models ?? []).filter(
+          (m): m is { name: string; size_bytes?: number } =>
+            typeof m.name === "string" && m.name.length > 0,
+        );
+        setLocalModelNames(rows.map((m) => m.name));
+        // Same response, second projection: the name → bytes join the model
+        // popover needs. Kept off `CatalogModel` on purpose — sizes come from a
+        // different endpoint than the catalog, and `ModelCatalogModel` is a wire
+        // contract.
+        setLocalModelSizes(
+          Object.fromEntries(
+            rows
+              .filter((m) => typeof m.size_bytes === "number")
+              .map((m) => [m.name, m.size_bytes as number]),
+          ),
+        );
       })
       .catch(() => {
         // Local models are optional/server-gated (404 when off) → empty list.
-        if (!cancelled) setLocalModelNames([]);
+        if (!cancelled) {
+          setLocalModelNames([]);
+          setLocalModelSizes({});
+        }
       });
     return () => {
       cancelled = true;
@@ -384,6 +414,7 @@ export function useRunComposerBindings(): RunComposerBindings {
     selectedModel,
     onModelChange,
     onAddCustomModel,
+    localModelSizes,
     renderPlusMenu,
   };
 }

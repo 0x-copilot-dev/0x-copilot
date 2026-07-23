@@ -84,6 +84,17 @@ export interface OnboardingComposerProps {
   readonly providerKeysPort?: ProviderKeysPort;
   /** Refresh seam fired after a successful inline add-key connect. */
   readonly onProviderKeyAdded?: (result: KeyFormConnected) => void;
+  /**
+   * Model-popover footer deep-link → Settings → Local models. Pass-through to
+   * {@link AssistantComposer} → `ModelPill`; the package never navigates.
+   */
+  readonly onGetLocalModels?: () => void;
+  /**
+   * Host-joined on-disk byte sizes of installed local models (from
+   * `GET /v1/local-models`). Pass-through to {@link AssistantComposer} →
+   * `ModelPill`, where a local row reads "42 GB · never leaves this machine".
+   */
+  readonly localModelSizes?: Readonly<Record<string, number>>;
 
   // --- first-run specifics ---
   readonly suggestions?: readonly FirstRunSuggestion[];
@@ -132,6 +143,8 @@ function OnboardingComposerInner(
     onAddCustomModel,
     providerKeysPort,
     onProviderKeyAdded,
+    onGetLocalModels,
+    localModelSizes,
     suggestions = FIRST_RUN_SUGGESTIONS,
     resolveAttachment,
     onSubmit,
@@ -250,6 +263,8 @@ function OnboardingComposerInner(
         onAddCustomModel={onAddCustomModel}
         providerKeysPort={providerKeysPort}
         onProviderKeyAdded={onProviderKeyAdded}
+        onGetLocalModels={onGetLocalModels}
+        localModelSizes={localModelSizes}
         depthVisible={false}
         // Hero surface — web's roomy 3 rows (not the narrow Run rail's 2).
         minRows={3}

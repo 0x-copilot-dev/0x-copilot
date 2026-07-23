@@ -160,9 +160,57 @@ describe("RunEmptyComposer (web)", () => {
     expect(arg.model).toBeTruthy();
   });
 
-  it("disables the composer when no model is configured (readiness gate)", async () => {
-    const { container } = renderEmpty(makeCtx({ modelReady: false }));
+  it("stays LIVE with no model configured — the send still reaches the cockpit seam", async () => {
+    const ctx = makeCtx({ modelReady: false });
+    const { container } = renderEmpty(ctx);
+    await waitFor(() => expect(textarea(container)).not.toBeNull());
+    // Not greyed out: the composer is never disabled on readiness alone. The
+    // cockpit answers an unconfigured model with the inline error strip below.
+    expect(textarea(container)?.disabled).toBe(false);
+
+    fireEvent.change(textarea(container) as HTMLTextAreaElement, {
+      target: { value: "Watch my wallet" },
+    });
+    fireEvent.click(
+      container.querySelector(
+        "button[aria-label='Send message']",
+      ) as HTMLButtonElement,
+    );
+    await waitFor(() => expect(ctx.onStartRun).toHaveBeenCalledTimes(1));
+  });
+
+  it("disables the composer only while a start is in flight", async () => {
+    const { container } = renderEmpty(makeCtx({ submitting: true }));
     await waitFor(() => expect(textarea(container)).not.toBeNull());
     expect(textarea(container)?.disabled).toBe(true);
+  });
+
+  it("renders the cockpit's no-model error as the inline strip + 'Add a key' CTA", async () => {
+    const ctx = makeCtx({
+      modelReady: false,
+      startError: {
+        message: "No model configured — connect one to run.",
+        code: "configuration_error",
+      },
+    });
+    const { container } = renderEmpty(ctx);
+    const cta = await waitFor(() => {
+      const el = container.querySelector<HTMLButtonElement>(
+        "[data-testid='first-run-composer-error-cta']",
+      );
+      expect(el).not.toBeNull();
+      return el as HTMLButtonElement;
+    });
+    expect(
+      container.querySelector("[data-testid='first-run-composer-error']")
+        ?.className,
+    ).toContain("fr-cerr");
+    expect(
+      container.querySelector(
+        "[data-testid='first-run-composer-error-message']",
+      )?.textContent,
+    ).toBe("No model configured — connect one to run.");
+    fireEvent.click(cta);
+    expect(ctx.onOpenModelSettings).toHaveBeenCalledTimes(1);
   });
 });

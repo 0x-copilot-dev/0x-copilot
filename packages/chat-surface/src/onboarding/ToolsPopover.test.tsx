@@ -258,3 +258,64 @@ describe("<ToolsPopover> — callbacks", () => {
     expect(props.onClose).toHaveBeenCalledTimes(1);
   });
 });
+
+// Punch-list row 46 — the design's dismissal semantics: a transparent
+// click-out scrim behind the panel (mousedown closes) plus Escape. Both are
+// RENDERED/React-local, never a `window`/`document` listener (banned here).
+describe("<ToolsPopover> — click-out scrim + Escape (row 46)", () => {
+  function renderWithContainer(over: Partial<ToolsPopoverProps> = {}): {
+    props: ToolsPopoverProps;
+    container: HTMLElement;
+  } {
+    const props: ToolsPopoverProps = {
+      open: true,
+      onClose: vi.fn(),
+      port: makePort({
+        listServers: vi.fn(() => new Promise<never>(() => {})),
+      }),
+      webSearchEnabled: true,
+      onToggleWebSearch: vi.fn(),
+      activeConnectorIds: [],
+      onToggleConnector: vi.fn(),
+      onConnectCatalog: vi.fn(),
+      onAddCustom: vi.fn(),
+      ...over,
+    };
+    const { container } = render(<ToolsPopover {...props} />);
+    return { props, container };
+  }
+
+  it("renders the shared `.ui-pop` panel with a `.ui-pop-scrim` sibling", () => {
+    const { container } = renderWithContainer();
+    expect(container.querySelector(".ui-pop-scrim")).not.toBeNull();
+    expect(
+      screen
+        .getByTestId("first-run-tools-popover")
+        .classList.contains("ui-pop"),
+    ).toBe(true);
+  });
+
+  it("closes on mousedown on the scrim", () => {
+    const { props, container } = renderWithContainer();
+    const scrim = container.querySelector(".ui-pop-scrim");
+    expect(scrim).not.toBeNull();
+    fireEvent.mouseDown(scrim as Element);
+    expect(props.onClose).toHaveBeenCalledTimes(1);
+  });
+
+  it("closes on Escape inside the panel", () => {
+    const { props } = renderWithContainer();
+    fireEvent.keyDown(screen.getByTestId("first-run-tools-popover"), {
+      key: "Escape",
+    });
+    expect(props.onClose).toHaveBeenCalledTimes(1);
+  });
+
+  it("ignores other keys", () => {
+    const { props } = renderWithContainer();
+    fireEvent.keyDown(screen.getByTestId("first-run-tools-popover"), {
+      key: "a",
+    });
+    expect(props.onClose).not.toHaveBeenCalled();
+  });
+});

@@ -347,9 +347,12 @@ export interface ComposerProps {
   readonly bottomBarRender?: (ctx: ComposerSlotCtx) => ReactNode;
   /**
    * Custom hint-row renderer. When provided, REPLACES the built-in
-   * `↵ send · ⇧+↵ new line · / skills · ...` row. The hint row remains
-   * stateless info — never gate the caller-supplied element on
-   * `running` (see apps/frontend/CLAUDE.md → "Composer hint row").
+   * `↵ send · ⇧+↵ new line · / skills · ...` row. Returning `null` opts out
+   * of the hint entirely — no row, and no empty slot wrapper (this is how
+   * `AssistantComposer` renders the v3 composer, which has no hint strip).
+   * When the row IS rendered it remains stateless info — never gate the
+   * caller-supplied element on `running` (see apps/frontend/CLAUDE.md →
+   * "Composer hint row").
    */
   readonly hintRender?: (ctx: ComposerSlotCtx) => ReactNode;
   /**
@@ -473,10 +476,12 @@ function ComposerInner(
   const submittingRef = useRef(false);
 
   /* Clamp + derive the textarea min/max heights from rows so callers can
-   * push the textarea taller or shorter without touching the file. The
-   * previous hard-coded 56px/220px values fall out of `minRows=2, maxRows=8`
-   * at 14px font · 1.5 line-height + the 16px padding, preserving today's
-   * visual default for call sites that don't pass rows props. */
+   * push the textarea taller or shorter without touching the file. At the v3
+   * metrics (12.5px · 1.55 line-height = 19.375px per row, + 14px of vertical
+   * padding) the design's `.cmp textarea{max-height:130px}` is `maxRows: 6`,
+   * which is what AssistantComposer passes; the rail's `minRows: 2` floor is
+   * ~53px. Auto-grow (below) clamps scrollHeight into that band, so both the
+   * empty and the multi-line states track whatever rows a caller asks for. */
   const clampedMinRows = Math.max(1, minRows);
   const clampedMaxRows = Math.max(clampedMinRows, maxRows);
   const textareaMinPx =
@@ -952,6 +957,11 @@ function ComposerInner(
   const hasTopBar =
     topBarSlot !== undefined || attachments.length > 0 || hasTopBarContent;
 
+  /* Evaluated once so the null-opt-out check below and the render read the
+   * same node (calling `hintRender` twice would double any host-side work). */
+  const hintSlotContent =
+    hintRender !== undefined ? hintRender(slotCtx) : undefined;
+
   return (
     <div
       data-testid="composer"
@@ -1193,9 +1203,13 @@ function ComposerInner(
       {/* Hint row is stateless info — MUST render whether or not a run
        * is active. See ComposerProps doc comment. When `hintRender` is
        * provided, the host's element REPLACES the built-in row (still
-       * unconditionally rendered, just by the caller). */}
+       * unconditionally rendered, just by the caller). A host that returns
+       * `null` opts OUT of the hint entirely: the slot wrapper is skipped so
+       * the shell isn't left with an empty div eating a flex gap. */}
       {hintRender !== undefined ? (
-        <div data-testid="composer-hint-slot">{hintRender(slotCtx)}</div>
+        hintSlotContent === null || hintSlotContent === undefined ? null : (
+          <div data-testid="composer-hint-slot">{hintSlotContent}</div>
+        )
       ) : (
         <div style={hintRowStyle} data-testid="composer-hint">
           <span style={hintItemStyle}>
@@ -1442,40 +1456,56 @@ function formatBytes(bytes: number): string {
 }
 
 /* Textarea sizing — pixels per row are derived from font-size * line-height
- * plus the static vertical padding on `textareaStyle`. The legacy 56px /
- * 220px values fall out of the default 2 rows / 8 rows at 14px font · 1.5
- * line-height + 20px padding, so call sites that didn't pass rows props see
- * the exact same visual size. */
-// v3 "quiet" system sizes the composer text at 12.5–13px (copilot-v3.css
-// `.cmp textarea{font:12.5px/1.55}`); 13px keeps it a hair above the 12.5
-// baseline while matching the 13px chat-body anchor.
-const TEXTAREA_FONT_SIZE_PX = 13;
-const TEXTAREA_LINE_HEIGHT_PX = TEXTAREA_FONT_SIZE_PX * 1.5; // 19.5
-const TEXTAREA_PADDING_PX = 20; // 10 top + 10 bottom
+ * plus the static vertical padding on `textareaStyle`, so changing either of
+ * those below re-derives every caller's min/max height. */
+// v3 "quiet" system: copilot-v3.css `.cmp textarea{font:12.5px/1.55;
+// padding:10px 12px 4px}`. The 13px/1.5 the composer had drifted to made the
+// draft text a step heavier than the design and, with the extra bottom pad,
+// mis-derived every row height.
+const TEXTAREA_FONT_SIZE_PX = 12.5;
+const TEXTAREA_LINE_HEIGHT_RATIO = 1.55;
+const TEXTAREA_LINE_HEIGHT_PX =
+  TEXTAREA_FONT_SIZE_PX * TEXTAREA_LINE_HEIGHT_RATIO; // 19.375
+const TEXTAREA_PADDING_PX = 14; // 10 top + 4 bottom
 const DEFAULT_MIN_ROWS = 2;
 const DEFAULT_MAX_ROWS = 8;
 
+/* Design `.cmp`: ONE box. 11px radius, the `--line2` hairline, and NO padding
+ * of its own — every child owns its inset (`.cmp textarea{padding:10px 12px
+ * 4px}`, `.cmp-row{padding:6px 8px 8px}`, `.cmp-att{padding:9px 10px 0}`), so
+ * the textarea and the action row sit flush against the shell edge instead of
+ * inside a second inset frame.
+ *
+ * `--composer-shell-border` is a seam, not a token: the border has to be
+ * authored inline (this component is mounted by hosts that don't ship a class
+ * for it), and an inline shorthand can't be overridden by a CSS `:focus-within`
+ * rule. Reading a custom property lets composer.css darken the border on focus
+ * (design `.cmp:focus-within{border-color:var(--line3)}`) with no `!important`
+ * and no accent ring. */
 const containerStyle: CSSProperties = {
   background: "var(--color-surface)",
-  border: "1px solid var(--color-border)",
-  borderRadius: 12,
-  padding: 10,
+  border: "1px solid var(--composer-shell-border, var(--color-border-strong))",
+  borderRadius: 11,
+  padding: 0,
   display: "flex",
   flexDirection: "column",
-  gap: 6,
+  gap: 0,
   fontFamily: "var(--font-sans)",
   color: "var(--color-text)",
   position: "relative",
 };
 
 const textareaStyle: CSSProperties = {
-  background: "var(--color-bg-elevated)",
+  /* Flush inside the shell — no fill, no border, no radius. The previous
+   * elevated-bg + hairline + 8px radius drew a second box inside the already
+   * bordered shell (the visible "double box"). */
+  background: "transparent",
   color: "var(--color-text)",
-  border: "1px solid var(--color-border)",
-  borderRadius: 8,
-  padding: "10px 12px",
+  border: 0,
+  borderRadius: 0,
+  padding: "10px 12px 4px",
   fontSize: TEXTAREA_FONT_SIZE_PX,
-  lineHeight: 1.5,
+  lineHeight: TEXTAREA_LINE_HEIGHT_RATIO,
   resize: "none",
   outline: "none",
   width: "100%",
@@ -1485,11 +1515,14 @@ const textareaStyle: CSSProperties = {
   overflowY: "auto",
 };
 
+/* Design `.cmp-row{gap:5px;padding:6px 8px 8px}`. The inset lives here (and on
+ * the other direct children) now that the shell itself is padding-free. */
 const toolbarStyle: CSSProperties = {
   display: "flex",
   alignItems: "center",
   justifyContent: "space-between",
-  gap: 8,
+  gap: 5,
+  padding: "6px 8px 8px",
   /* Thin action row — single row, low visual weight. */
   minHeight: 32,
 };
@@ -1601,11 +1634,14 @@ const saveButtonStyle = (enabled: boolean): CSSProperties => ({
   cursor: enabled ? "pointer" : "not-allowed",
 });
 
+/* Design `.cmp-att{padding:9px 10px 0}` — shell-flush children own their
+ * inset. */
 const topBarSlotStyle: CSSProperties = {
   display: "flex",
   flexWrap: "wrap",
   gap: 6,
   minHeight: 0,
+  padding: "9px 10px 0",
 };
 
 const inlineActionsStyle: CSSProperties = {
@@ -1618,7 +1654,9 @@ const hintRowStyle: CSSProperties = {
   display: "flex",
   alignItems: "center",
   gap: 10,
-  padding: "2px 4px 0",
+  /* Own inset (the shell is padding-free); the row sits under the action row
+   * so it only needs side + bottom padding. */
+  padding: "0 10px 8px",
   fontSize: "var(--font-size-2xs)",
   color: "var(--color-text-subtle)",
   minHeight: 18,
@@ -1666,7 +1704,9 @@ const attachmentStripStyle: CSSProperties = {
   display: "flex",
   flexWrap: "wrap",
   gap: 6,
-  paddingBottom: 2,
+  /* Design `.cmp-att{padding:9px 10px 0}` + the 2px the strip already
+   * reserved below itself. */
+  padding: "9px 10px 2px",
 };
 
 const attachmentPillStyle: CSSProperties = {
