@@ -330,6 +330,189 @@ class TestNoBypass:
         assert h.mcp.calls == []
 
 
+class _RowsetHarness:
+    """Real WriteStager over an in-memory store + SPY queue (PRD-D3, no-bypass)."""
+
+    def __init__(self) -> None:
+        from agent_runtime.surfaces_v2.rowset import (  # noqa: PLC0415
+            AgentHold,
+            RowFieldChange,
+            StagedRow,
+        )
+
+        self._AgentHold = AgentHold
+        self._StagedRow = StagedRow
+        self._RowFieldChange = RowFieldChange
+        self.store = InMemoryRuntimeApiStore()
+        self.queue_calls: list[dict] = []
+
+        class _SpyQueue:
+            async def enqueue_stage_commit(inner, **kwargs):  # noqa: ANN001, N805
+                self.queue_calls.append(kwargs)
+
+        producer = RuntimeEventProducer(persistence=self.store, event_store=self.store)
+        self.stager = WriteStager(
+            draft_store=None,  # type: ignore[arg-type] — rowsets never touch drafts
+            ledger=RuntimeStageLedger(event_producer=producer),
+            commit_queue=_SpyQueue(),
+        )
+        self.run = RunRecord(
+            run_id=_RUN,
+            conversation_id=_CONV,
+            org_id=_ORG,
+            user_id=_USER,
+            user_message_id="msg_1",
+            trace_id="trace_1",
+            model_provider="openai",
+            model_name="gpt-5.4-mini",
+            status=AgentRunStatus.RUNNING,
+            runtime_context=AgentRuntimeContext(
+                user_id=_USER,
+                org_id=_ORG,
+                roles=["employee"],
+                run_id=_RUN,
+                trace_id="trace_1",
+                model_profile={
+                    "provider": "openai",
+                    "model_name": "gpt-5.4-mini",
+                    "max_input_tokens": 128000,
+                    "timeout_seconds": 30,
+                    "temperature": 0,
+                    "supports_streaming": True,
+                },
+            ),
+        )
+        self.store.runs[_RUN] = self.run
+        self.store.events_by_run.setdefault(_RUN, [])
+
+    async def stage(self, *, n: int, held: set[str]):
+        rows = tuple(
+            self._StagedRow(
+                row_key=f"row{i}",
+                title=f"Issue {i}",
+                target_args={"id": f"row{i}"},
+                changes=(self._RowFieldChange(field="p", old=1, new=2),),
+            )
+            for i in range(n)
+        )
+        holds = tuple(self._AgentHold(row_key=k, reason="held") for k in held)
+        return await self.stager.stage_rowset(
+            run=self.run,
+            org_id=_ORG,
+            run_id=_RUN,
+            target_connector="linear",
+            target_op="update_issue",
+            rows=rows,
+            agent_holds=holds,
+            title="bulk",
+        )
+
+    def applied_events(self) -> list[object]:
+        return [
+            e
+            for e in self.store.events_by_run.get(_RUN, [])
+            if getattr(getattr(e, "event_type", None), "value", None) == "write.applied"
+        ]
+
+    def apply_decision_keys(self) -> list[frozenset[str]]:
+        out: list[frozenset[str]] = []
+        for e in self.store.events_by_run.get(_RUN, []):
+            if getattr(getattr(e, "event_type", None), "value", None) != (
+                "decision.recorded"
+            ):
+                continue
+            if e.payload.get("apply") is True:
+                keys = e.payload.get("scope", {}).get("row_keys", [])
+                out.append(frozenset(keys))
+        return out
+
+
+class TestRowsetNoBypass:
+    """PRD-D3 (DoD): no row is ever enqueued / applied without a matching apply-
+    scoped approve covering that exact row_key; held rows never dispatch."""
+
+    async def test_random_row_sequences_never_apply_a_held_row(self) -> None:
+        rng = random.Random(20260724)
+        for _ in range(60):
+            h = _RowsetHarness()
+            n = rng.randint(2, 6)
+            held = {f"row{i}" for i in range(n) if rng.random() < 0.4}
+            state = await h.stage(n=n, held=held)
+            stage_id = state.stage_id
+            for _step in range(rng.randint(1, 6)):
+                op = rng.choice(["hold", "approve", "apply", "get"])
+                key = f"row{rng.randint(0, n - 1)}"
+                try:
+                    if op in ("hold", "approve"):
+                        await h.stager.record_row_decision(
+                            run=h.run,
+                            org_id=_ORG,
+                            run_id=_RUN,
+                            stage_id=stage_id,
+                            decision=op,
+                            row_keys=[key],
+                        )
+                    elif op == "apply":
+                        # Apply a RANDOM (often wrong) set — mismatches must 409.
+                        subset = [
+                            f"row{i}" for i in range(n) if rng.random() < 0.6
+                        ] or ["row0"]
+                        await h.stager.apply_rows(
+                            run=h.run,
+                            org_id=_ORG,
+                            run_id=_RUN,
+                            stage_id=stage_id,
+                            rev=1,
+                            row_keys=subset,
+                        )
+                    else:
+                        await h.stager.get_state(
+                            org_id=_ORG, run_id=_RUN, stage_id=stage_id
+                        )
+                except StagedWriteError:
+                    pass  # typed domain rejection — expected on many sequences
+
+            # Every enqueued apply set is exactly a subset of the CURRENT will-apply
+            # set of the folded stage (never contains a held-but-not-overridden row).
+            final = await h.stager.get_state(
+                org_id=_ORG, run_id=_RUN, stage_id=stage_id
+            )
+            will_apply = frozenset(final.will_apply_keys())
+            for enqueued in h.queue_calls:
+                assert frozenset(enqueued["row_keys"]) <= will_apply
+            # The stager alone never emits write.applied (sole producer = worker).
+            assert h.applied_events() == []
+
+    async def test_apply_scope_always_matches_enqueued_set(self) -> None:
+        h = _RowsetHarness()
+        state = await h.stage(n=5, held={"row2"})
+        # Override row2 to approved, then apply the full will-apply set.
+        await h.stager.record_row_decision(
+            run=h.run,
+            org_id=_ORG,
+            run_id=_RUN,
+            stage_id=state.stage_id,
+            decision="approve",
+            row_keys=["row2"],
+        )
+        state = await h.stager.get_state(
+            org_id=_ORG, run_id=_RUN, stage_id=state.stage_id
+        )
+        keys = list(state.will_apply_keys())
+        await h.stager.apply_rows(
+            run=h.run,
+            org_id=_ORG,
+            run_id=_RUN,
+            stage_id=state.stage_id,
+            rev=1,
+            row_keys=keys,
+        )
+        # The apply-scoped approve decision and the enqueued command name the SAME
+        # exact set — the worker gate re-checks equality, so nothing else can run.
+        assert h.apply_decision_keys() == [frozenset(keys)]
+        assert frozenset(h.queue_calls[-1]["row_keys"]) == frozenset(keys)
+
+
 class TestSingleProducer:
     """DoD (PRD-D2): ``write.applied`` has EXACTLY ONE producer — the worker-side
     CommitEngine handler. Definitions (the transport enum / projector allow-list /

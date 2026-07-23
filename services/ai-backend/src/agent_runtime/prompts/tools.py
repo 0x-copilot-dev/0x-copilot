@@ -27,6 +27,30 @@ ASK_A_QUESTION_TOOL_DESCRIPTION = (
 )
 
 
+STAGE_ROWSET_WRITE_TOOL_DESCRIPTION = (
+    "Stage a BULK write as a reviewable table: N per-row changes the user "
+    "decides on individually, then applies with one action. Use for "
+    "multi-record updates (e.g. re-prioritize 8 issues, update 12 contacts). "
+    "Nothing is written until the user approves — staging never executes.\n\n"
+    "Fields:\n"
+    "- `target_connector` (required): the connector server slug (e.g. `linear`).\n"
+    "- `target_op` (required): the write operation each row calls (e.g. "
+    "`update_issue`).\n"
+    "- `title` (required): a short label for the whole change.\n"
+    "- `rows` (required, up to 200): each row is `{row_key, title, target_args, "
+    "changes}`. `row_key` is a stable unique id (the target record id); "
+    "`target_args` is the EXACT arguments object `target_op` will be called with "
+    "for that row; `changes` is a list of `{field, old, new}` diffs shown to the "
+    "user (display only). Keep `target_args` byte-accurate — it is what sends.\n"
+    "- `agent_holds` (optional): rows you are deliberately withholding, each "
+    "`{row_key, reason}` (≤200 chars). Pre-hold anything risky (a recent reply, a "
+    "record you are unsure about); the reason stays visible and a held row is "
+    "NEVER applied unless the user explicitly overrides it.\n\n"
+    "Returns `{stage_id, surface_id, rows_staged, rows_pre_held, status}`. The "
+    "run continues — the user decides on the surface; do not wait or re-ask."
+)
+
+
 AUTH_MCP_TOOL_DESCRIPTION = (
     "Request an authorization URL for an MCP server when the user has not "
     "authenticated it yet. Use this only when the server is needed."

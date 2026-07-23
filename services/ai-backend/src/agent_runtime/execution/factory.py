@@ -47,6 +47,9 @@ from agent_runtime.capabilities.tools.builtin.ask_a_question import (
     AskAQuestionInput,
     AskAQuestionTool,
 )
+from agent_runtime.capabilities.tools.builtin.stage_rowset_write import (
+    StageRowsetWriteInput,
+)
 from agent_runtime.capabilities.tools.builtin.suggest_mcp_connector import (
     SuggestMcpConnectorInput,
     SuggestMcpConnectorTool,
@@ -217,6 +220,7 @@ async def _assemble_harness(
             mcp_discovery_cache=runtime_dependencies.mcp_discovery_cache,
             code_mode_tool=runtime_dependencies.code_mode_tool,
             sandbox_execute_tool=runtime_dependencies.sandbox_execute_tool,
+            stage_rowset_write_tool=runtime_dependencies.stage_rowset_write_tool,
             runtime_context=runtime_context,
         )
         # Enforce the per-(org, user) tool-use policy on the model tool surface.
@@ -333,6 +337,7 @@ def _model_visible_tools(
     mcp_discovery_cache: object | None,
     code_mode_tool: object | None = None,
     sandbox_execute_tool: object | None = None,
+    stage_rowset_write_tool: object | None = None,
     runtime_context: AgentRuntimeContext,
 ) -> tuple[object, ...]:
     model_tools = list(tools)
@@ -430,6 +435,13 @@ def _model_visible_tools(
         model_tools.append(code_mode_tool)
     if sandbox_execute_tool is not None:
         model_tools.append(sandbox_execute_tool)
+    # PRD-D3 — the gated bulk row-set staging tool. Injected as a domain adapter
+    # (the worker builds it per run when SURFACES_V2 is on) and wrapped here with
+    # its typed schema, like the other builtin tools. Flag off ⇒ `None` ⇒ absent.
+    if stage_rowset_write_tool is not None:
+        model_tools.append(
+            _structured_tool(stage_rowset_write_tool, StageRowsetWriteInput)
+        )
     return tuple(model_tools)
 
 

@@ -107,25 +107,34 @@ class StageCommitRequest(RuntimeContract):
     body: str
     title: str = ""
     target_metadata: JsonObject = Field(default_factory=dict)
+    # PRD-D3 (additive) — a single row of a bulk row-set apply. ``row_key`` is
+    # ``None`` for a single-artifact (D1) commit; when set, ``row_args`` is the
+    # row's ``StagedRow.target_args`` verbatim (the WYSIWYG unit that sends).
+    row_key: str | None = None
+    row_args: JsonObject | None = None
 
     def commit_key(self) -> str:
         """Idempotency identity: exactly one attempt per approve decision.
 
-        ``stage_id:rev:decision_seq`` — a re-approve of the same rev emits no
-        second decision event (D1 idempotency), so it never produces a second
-        ``decision_seq`` and never a second ``commit_key``.
+        ``stage_id:rev:decision_seq`` (single artifact); a bulk row appends
+        ``:{row_key}`` so each row of one apply claims its OWN idempotency row —
+        one approve authorizes exactly one commit attempt per row.
         """
 
-        return f"{self.stage_id}:{self.rev}:{self.decision_seq}"
+        base = f"{self.stage_id}:{self.rev}:{self.decision_seq}"
+        return f"{base}:{self.row_key}" if self.row_key is not None else base
 
     def tool_arguments(self) -> JsonObject:
         """Return the concrete argument bag for the underlying tool call.
 
-        Mirror of ``CommitRequest.tool_arguments`` (v1 island): ``body`` always,
-        ``title`` / ``target_metadata`` only when present. Copies are made so the
-        connector cannot mutate the request's held metadata.
+        For a bulk row (``row_args`` set) the row's args send verbatim (FR-C3).
+        Otherwise mirror of ``CommitRequest.tool_arguments`` (v1 island): ``body``
+        always, ``title`` / ``target_metadata`` only when present. Copies are made
+        so the connector cannot mutate the request's held metadata.
         """
 
+        if self.row_args is not None:
+            return dict(self.row_args)
         args: JsonObject = {"body": self.body}
         if self.title:
             args["title"] = self.title

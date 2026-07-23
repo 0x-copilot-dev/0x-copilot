@@ -262,6 +262,8 @@ class Values:
         # ``discovery_reason`` so the frontend renders a Connect/Skip card without
         # pausing the run.
         SUGGEST_MCP_CONNECTOR = "suggest_mcp_connector"
+        # PRD-D3 — the bulk row-set staging propose seam (flag-gated, worker-built).
+        STAGE_ROWSET_WRITE = "stage_rowset_write"
         TASK = "task"
         UNKNOWN_TOOL = "unknown_tool"
         WRITE_TODOS = "write_todos"

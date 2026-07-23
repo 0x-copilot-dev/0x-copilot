@@ -103,6 +103,27 @@ export {
 } from "./TcStagedDraftSurface";
 // === end PRD-D1 ===
 
+// === Surfaces v2 — PRD-D3 bulk row-set staging (client) ===
+export {
+  type LedgerStagedRow,
+  type LedgerRowChange,
+  type LedgerRowCounts,
+  type LedgerRowStance,
+} from "./ledgerProjection";
+export {
+  TcStagedTableSurface,
+  countsHeader,
+  resultLine,
+  type TcStagedTableSurfaceProps,
+} from "./TcStagedTableSurface";
+export {
+  TcBulkApplyBar,
+  bulkApplyLabel,
+  bulkApplyPledge,
+  type TcBulkApplyBarProps,
+} from "./TcBulkApplyBar";
+// === end PRD-D3 ===
+
 // === Surfaces v2 — PRD-B2 provenance + honest states ===
 // Pure PEERS of `projectLedger` over the SAME `session.events` array, plus the
 // footer / skeleton / raw-fallback / status-strip chrome they feed. All mount

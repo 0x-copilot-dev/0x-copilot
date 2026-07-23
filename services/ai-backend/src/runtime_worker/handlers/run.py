@@ -189,9 +189,15 @@ class RuntimeRunHandler:
         mcp_discovery_cache: object | None = None,
         user_policies_resolver: UserPoliciesResolver | None = None,
         token_counter: TokenCounterPort | None = None,
+        queue: object | None = None,
     ) -> None:
         self.persistence: PersistencePort = persistence
         self.event_store: EventStorePort = event_store
+        # PRD-D3 — the durable command queue, threaded from the worker loop so the
+        # per-run ``stage_rowset_write`` tool can enqueue an allow-always auto-apply
+        # (FR-C8). ``None`` (unwired / minimal test handler) ⇒ the stager's
+        # ``commit_queue`` is ``None`` and nothing auto-applies.
+        self._queue = queue
         self.settings = settings or RuntimeSettings.load()
         # BYOK re-hydration: queue commands round-trip through JSON, which
         # drops the serialization-excluded ``AgentRuntimeContext.provider_keys``
@@ -396,6 +402,7 @@ class RuntimeRunHandler:
                 command,
                 tool_observation_index,
                 workspace_backend=workspace_backend,
+                run=run,
             )
             mcp_display_token = McpDisplayRegistryContext.bind_for_run(
                 mcp_display_registry
@@ -1046,6 +1053,7 @@ class RuntimeRunHandler:
         tool_observation_index: ToolObservationIndex,
         *,
         workspace_backend: object | None = None,
+        run: object | None = None,
     ) -> RuntimeDependencies:
         """Build ``RuntimeDependencies`` augmented with per-run backends (drafts, subagent artifacts, workspace)."""
         dependencies = self.dependencies_factory(command.runtime_context)
@@ -1103,7 +1111,69 @@ class RuntimeRunHandler:
         sandbox_execute_tool = capability_tools.sandbox_execute_tool()
         if sandbox_execute_tool is not None:
             update["sandbox_execute_tool"] = sandbox_execute_tool
+        # PRD-D3 — the gated bulk row-set staging tool. Built only when SURFACES_V2
+        # is on (mirroring the A3 emitter gate); `None` otherwise, so the model's
+        # tool surface is byte-identical with the flag off.
+        stage_rowset_tool = self._stage_rowset_write_tool(command, run)
+        if stage_rowset_tool is not None:
+            update["stage_rowset_write_tool"] = stage_rowset_tool
         return dependencies.model_copy(update=update)
+
+    def _stage_rowset_write_tool(
+        self, command: RuntimeRunCommand, run: object | None
+    ) -> object | None:
+        """Build the per-run ``stage_rowset_write`` tool, or ``None`` (flag off).
+
+        Wired to the same event producer every emission uses (via
+        ``RuntimeStageLedger``), the durable queue (for an allow-always
+        auto-apply), and the C1 policy resolver. The stager never touches an MCP
+        client — only the CommitEngine path dispatches.
+        """
+
+        if not self.settings.execution.surfaces_v2 or run is None:
+            return None
+        from agent_runtime.api.stage_commit_queue import (  # noqa: PLC0415
+            RuntimeStageCommitQueue,
+        )
+        from agent_runtime.api.stage_ledger import RuntimeStageLedger  # noqa: PLC0415
+        from agent_runtime.capabilities.actions.policy import (  # noqa: PLC0415
+            ConnectorWritePolicyOverrides,
+            EffectiveActionPolicyResolver,
+        )
+        from agent_runtime.capabilities.tools.tool_use_enforcement import (  # noqa: PLC0415
+            ToolUsePolicyResolver,
+        )
+        from agent_runtime.capabilities.tools.builtin.stage_rowset_write import (  # noqa: PLC0415
+            StageRowsetWriteTool,
+        )
+        from agent_runtime.surfaces_v2.rowset_policy import (  # noqa: PLC0415
+            RowsetPolicyResolver,
+        )
+        from agent_runtime.surfaces_v2.staging import WriteStager  # noqa: PLC0415
+
+        rc = command.runtime_context
+        resolver = EffectiveActionPolicyResolver(
+            snapshot=ToolUsePolicyResolver.resolve(rc),
+            overrides=ConnectorWritePolicyOverrides.from_user_policies(
+                rc.user_policies_json
+            ),
+        )
+        stager = WriteStager(
+            draft_store=self.draft_store,  # type: ignore[arg-type] — rowsets never touch drafts
+            ledger=RuntimeStageLedger(event_producer=self.event_producer),
+            commit_queue=(
+                RuntimeStageCommitQueue(queue=self._queue)  # type: ignore[arg-type]
+                if self._queue is not None
+                else None
+            ),
+            policy_resolver=RowsetPolicyResolver(resolver=resolver),
+        )
+        return StageRowsetWriteTool(
+            stager=stager,
+            run=run,
+            org_id=command.org_id,
+            run_id=command.run_id,
+        )
 
     def _draft_event_emitter(
         self, command: RuntimeRunCommand
