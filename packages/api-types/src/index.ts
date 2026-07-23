@@ -105,6 +105,7 @@ import type {
   RevisionAddedPayload,
   DecisionRecordedPayload,
   WriteAppliedPayload,
+  ReceiptEmittedPayload,
 } from "./ledger";
 
 export type McpTransport = "http" | "sse" | "stdio";
@@ -420,6 +421,7 @@ export type RuntimeApiEventType =
   | "revision.added"
   | "decision.recorded"
   | "write.applied"
+  | "receipt.emitted"
   | "workspace_snapshot_captured";
 
 export const RUNTIME_EVENT_SOURCES = [
@@ -490,6 +492,7 @@ export const RUNTIME_API_EVENT_TYPES = [
   "revision.added",
   "decision.recorded",
   "write.applied",
+  "receipt.emitted",
   "workspace_snapshot_captured",
 ] as const satisfies readonly RuntimeApiEventType[];
 
@@ -2355,6 +2358,11 @@ export interface RuntimeEventPayloadByType {
    * worker-side CommitEngine handler emits it after dispatching EXACTLY the
    * approved revision (`result: applied|failed`). No API path ever emits it. */
   "write.applied": WriteAppliedPayload;
+  /** Generative Surfaces v2 (PRD-E1, SDR §5). The run receipt's seal — the
+   * worker-side ReceiptEmitter appends it (with a matching `surface.created
+   * {kind: receipt}`) at run termination. Carries only `surface_id` + `fold_ref`
+   * (the receipt is re-derivable by folding the ledger, never a stored blob). */
+  "receipt.emitted": ReceiptEmittedPayload;
   /** AC5 slice 3b — host write-through pre-image snapshot. Emitted by the
    * workspace backend BEFORE an approved overwrite/edit mutates a granted
    * host file: the prior bytes are stored content-addressed and this event

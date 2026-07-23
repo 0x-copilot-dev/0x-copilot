@@ -22,6 +22,10 @@ export {
   type SourcesTabProps,
   type SourceRowSlot,
 } from "./SourcesTab";
+export {
+  LedgerSourcesTab,
+  type LedgerSourcesTabProps,
+} from "./LedgerSourcesTab";
 export { AgentsTab, type AgentsTabProps } from "./AgentsTab";
 export { DraftTab, type DraftTabProps } from "./DraftTab";
 export { ApprovalsTab, type ApprovalsTabProps } from "./ApprovalsTab";

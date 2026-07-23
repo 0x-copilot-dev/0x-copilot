@@ -37,6 +37,7 @@ from agent_runtime.capabilities.surfaces import (
 from agent_runtime.capabilities.tool_budget_guard import ToolBudgetGuard
 from agent_runtime.capabilities.tool_budget_middleware import ToolBudgetMiddleware
 from agent_runtime.surfaces_v2.emitter import WorkLedgerEmitter
+from runtime_worker.handlers.receipt_hook import emit_receipt_if_enabled
 from agent_runtime.execution.contracts import (
     AgentRuntimeContext,
     RuntimeDependencies,
@@ -530,7 +531,7 @@ class RuntimeRunHandler:
                     run_id=command.run_id, status=AgentRunStatus.TIMED_OUT
                 )
             )
-            await self.run_termination.terminate(
+            await self._emit_receipt_then_terminate(
                 run=failed,
                 terminal_status=AgentRunStatus.TIMED_OUT,
                 reason=TerminationReason.RUN_TIMEOUT,
@@ -567,7 +568,7 @@ class RuntimeRunHandler:
             # Map typed fatal errors to semantic termination reasons so the FE and
             # audit log can distinguish budget / auth failures from generic errors.
             termination_reason = _termination_reason_for(exc)
-            await self.run_termination.terminate(
+            await self._emit_receipt_then_terminate(
                 run=failed,
                 terminal_status=AgentRunStatus.FAILED,
                 reason=termination_reason,
@@ -623,7 +624,7 @@ class RuntimeRunHandler:
         self.stream_event_mapper.update_processor.discard_metrics(run.run_id)
         completed_at = completed.completed_at or datetime.now(timezone.utc)
         metrics_payload = metrics.to_payload(completed_at=completed_at)
-        await self.run_termination.terminate(
+        await self._emit_receipt_then_terminate(
             run=completed,
             terminal_status=AgentRunStatus.COMPLETED,
             reason=TerminationReason.NORMAL_COMPLETION,
@@ -642,6 +643,29 @@ class RuntimeRunHandler:
             status=AgentRunStatus.COMPLETED.value,
             budget_reservations=budget_reservations,
         )
+
+    async def _emit_receipt_then_terminate(
+        self, *, run: RunRecord, **terminate_kwargs: object
+    ) -> None:
+        """Append the run receipt (Generative Surfaces v2, PRD-E1) then terminate.
+
+        The single chokepoint every terminal path in this handler
+        (completed / failed / timed-out) routes through: it folds the run's
+        ledger into ``surface.created {kind: receipt}`` + ``receipt.emitted`` and
+        appends both BEFORE the terminal lifecycle event (the SSE stream stops on
+        terminal run status, so late-appended events would never reach live
+        clients). Gated on the same ``SURFACES_V2`` value the WorkLedgerEmitter
+        binds on, so flag-off is byte-identical. Best-effort: emission never
+        blocks termination.
+        """
+
+        await emit_receipt_if_enabled(
+            enabled=self.settings.execution.surfaces_v2,
+            event_producer=self.event_producer,
+            event_store=self.event_store,
+            run=run,
+        )
+        await self.run_termination.terminate(run=run, **terminate_kwargs)
 
     async def _preflight_budgets(
         self,

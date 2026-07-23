@@ -9,10 +9,12 @@ from agent_runtime.api.run_termination import (
     TerminationReason,
 )
 from agent_runtime.persistence import with_optimistic_retry
+from agent_runtime.surfaces_v2.config import SurfacesV2Flag
 from runtime_api.schemas import (
     AgentRunStatus,
     RuntimeCancelCommand,
 )
+from runtime_worker.handlers.receipt_hook import emit_receipt_if_enabled
 
 
 class RuntimeCancelHandler:
@@ -48,6 +50,15 @@ class RuntimeCancelHandler:
                 run_id=command.run_id,
                 status=AgentRunStatus.CANCELLED,
             )
+        )
+        # Generative Surfaces v2 (PRD-E1): a cancelled run's receipt matters
+        # most. Fold + append the receipt before the terminal event, gated on
+        # SURFACES_V2 (flag-off ⇒ no-op, byte-identical to today).
+        await emit_receipt_if_enabled(
+            enabled=SurfacesV2Flag.enabled(),
+            event_producer=self.event_producer,
+            event_store=self.event_store,
+            run=run,
         )
         await self.run_termination.terminate(
             run=run,
