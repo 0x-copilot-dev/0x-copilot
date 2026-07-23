@@ -183,17 +183,25 @@ class Harness:
 
 
 class TestV2EngineCannotExecute:
-    async def test_writestager_has_no_connector_or_queue_handle(
+    async def test_writestager_never_executes_inline_and_never_uses_v1_queue(
         self, monkeypatch
     ) -> None:
-        """Structural + behavioural: the stager exposes only draft_store + ledger
-        + differ, and a full stage→approve NEVER calls the queue's
-        ``enqueue_approval_resolved`` (the only worker-execution trigger).
+        """The stager holds NO connector handle and executes NOTHING inline.
+
+        D2 gives the stager an optional ``commit_queue`` seam: a NEW approve
+        enqueues ONE durable ``stage_commit_requested`` command (the worker
+        CommitEngine handler is the only executor). It still never calls the v1
+        ``enqueue_approval_resolved`` path, never touches an MCP client, and — with
+        ``commit_queue=None`` (this harness) — records the decision and enqueues
+        NOTHING (fail-open to no-commit, never to execution).
         """
 
         h = Harness()
+        # Structural: only these dataclass fields — no connector, no MCP client.
         fields = set(vars(h.stager).keys())
-        assert fields == {"draft_store", "ledger", "differ"}
+        assert fields == {"draft_store", "ledger", "differ", "commit_queue"}
+        # This harness wires no queue ⇒ approve executes nothing.
+        assert h.stager.commit_queue is None
         # The transport ledger only knows how to append/read events.
         ledger = h.stager.ledger
         assert not hasattr(ledger, "enqueue")
@@ -202,19 +210,24 @@ class TestV2EngineCannotExecute:
         # persistence handle (get_run). No queue attribute of its own.
         assert set(vars(h.stage_service).keys()) == {"stager", "persistence"}
 
-        # Behavioural: spy the mega-store's enqueue and prove the whole v2
-        # propose→approve flow never dispatches a worker command. (The in-memory
-        # store is a superset double that happens to implement the queue port;
-        # what matters is that the v2 code path never *calls* it.)
+        # Behavioural: the v2 propose→approve flow never dispatches the v1 worker
+        # command, and (commit_queue=None) never enqueues a stage-commit either.
         monkeypatch.setenv("SURFACES_V2", "true")
-        calls: list[object] = []
-        original = h.store.enqueue_approval_resolved
+        v1_calls: list[object] = []
+        commit_calls: list[object] = []
+        original_v1 = h.store.enqueue_approval_resolved
+        original_commit = h.store.enqueue_stage_commit
 
-        async def _spy(command):  # noqa: ANN001, ANN202
-            calls.append(command)
-            return await original(command)
+        async def _spy_v1(command):  # noqa: ANN001, ANN202
+            v1_calls.append(command)
+            return await original_v1(command)
 
-        monkeypatch.setattr(h.store, "enqueue_approval_resolved", _spy)
+        async def _spy_commit(command):  # noqa: ANN001, ANN202
+            commit_calls.append(command)
+            return await original_commit(command)
+
+        monkeypatch.setattr(h.store, "enqueue_approval_resolved", _spy_v1)
+        monkeypatch.setattr(h.store, "enqueue_stage_commit", _spy_commit)
         await h.seed_draft()
         result = await h.send(expected_version=1)
         await h.stage_service.record_decision(
@@ -225,7 +238,8 @@ class TestV2EngineCannotExecute:
             decision="approve",
             rev=1,
         )
-        assert calls == []  # nothing enqueued — nothing can execute
+        assert v1_calls == []  # never the v1 worker trigger
+        assert commit_calls == []  # commit_queue is None ⇒ nothing enqueued
         assert not await h.any_draft_sent()
 
     async def test_v2_approve_emits_only_decision_recorded_and_enqueues_nothing(
@@ -260,33 +274,43 @@ class TestV2EngineCannotExecute:
         latest = await h.drafts.latest(org_id=_ORG, draft_id=h.draft_id)
         assert latest.status is DraftStatus.SEND_PENDING_APPROVAL
 
-    async def test_write_applied_is_not_an_emittable_transport_event(self) -> None:
-        """Defense-in-depth: ``write.applied`` is INTENTIONALLY ABSENT from the
-        transport ``RuntimeApiEventType`` enum. The ``RuntimeStageLedger.emit``
-        adapter constructs ``RuntimeApiEventType(value)`` for every append, so
-        even a code path that *tried* to emit write.applied would raise here —
-        there is no wire path to append the terminal event in D1 at all.
+    async def test_write_applied_is_emittable_only_from_the_worker_handler(
+        self,
+    ) -> None:
+        """D2 adds ``write.applied`` to the transport enum — but the SOLE producer
+        is the worker-side CommitEngine handler. The ``RuntimeStageLedger`` the
+        API layer wires never emits it (it only appends the D1 triad + surface),
+        and the ``StageService`` decision route (this suite's API surface) has no
+        connector and no ``write.applied`` code path. The no-bypass suite
+        (``test_stage_no_bypass``) proves the API process yields zero of them.
         """
 
-        with pytest.raises(ValueError):
-            RuntimeApiEventType("write.applied")
-        # The three D1 events, by contrast, ARE emittable.
+        # The terminal event is now a real transport type (D2).
+        assert RuntimeApiEventType("write.applied")
+        # The D1 triad remains emittable.
         assert RuntimeApiEventType("write.staged")
         assert RuntimeApiEventType("revision.added")
         assert RuntimeApiEventType("decision.recorded")
+        # The API-layer ledger adapter carries no write.applied producer — it only
+        # maps a value to the enum + appends. The producer lives in the worker.
+        from agent_runtime.api import stage_ledger as _api_ledger
+        import inspect
 
-    async def test_forged_applied_status_in_fold_still_executes_nothing(
+        assert "write.applied" not in inspect.getsource(_api_ledger)
+
+    async def test_forged_applied_on_unapproved_stage_folds_corrupt_and_sends_nothing(
         self, monkeypatch
     ) -> None:
-        """Even if a ``write.applied`` envelope reached the fold (D2 forward-compat),
-        the fold is a pure read: folding it to APPLIED cannot cause a connector
-        call or flip a draft to SENT. Proven by folding raw dicts directly.
+        """A forged ``write.applied`` on a stage that was never approved cannot
+        smuggle an APPLIED terminal: the D2 fold's fail-closed state machine maps
+        it to CORRUPT (defensive) rather than accepting an unauthorized send. The
+        fold is a pure read either way — no connector call, no draft flip.
         """
 
         monkeypatch.setenv("SURFACES_V2", "true")
         h = Harness()
         await h.seed_draft()
-        result = await h.send(expected_version=1)
+        result = await h.send(expected_version=1)  # STAGED, never approved
 
         from agent_runtime.surfaces_v2.staging import StagedWriteFold
 
@@ -305,11 +329,18 @@ class TestV2EngineCannotExecute:
             {
                 "event_type": "write.applied",
                 "sequence_no": 999,
-                "payload": {"v": 1, "stage_id": result.stage_id},
+                "payload": {
+                    "v": 1,
+                    "stage_id": result.stage_id,
+                    "rev": 1,
+                    "result": "applied",
+                },
             }
         )
         folded = StagedWriteFold.fold_raw(raw)
-        assert folded[result.stage_id].status is StagedWriteStatus.APPLIED
+        # Fail-closed: a write.applied onto a non-APPROVED stage ⇒ CORRUPT, never
+        # APPLIED — the forged event cannot masquerade as a real send.
+        assert folded[result.stage_id].status is StagedWriteStatus.CORRUPT
         # The fold touched nothing external: draft still pending, nothing sent.
         assert not await h.any_draft_sent()
         latest = await h.drafts.latest(org_id=_ORG, draft_id=h.draft_id)
@@ -355,12 +386,13 @@ class TestMixedModeAndForgery:
     async def test_flag_flip_after_v1_approval_shared_draft_id(
         self, monkeypatch
     ) -> None:
-        """STRONGEST attack: a v1 approval created flag-OFF, then flag flipped ON
-        and the same draft re-sent (v2-staged, bumping the draft version). Does
-        resolving the stale v1 approval smuggle the v2-staged version to SENT?
-
-        This documents the ACTUAL observed behaviour of the shared draft_id +
-        'send the latest version' worker path across a flag flip.
+        """REGRESSION (PRD-D2 flag-flip WYSIWYG fix): a v1 approval created flag-OFF,
+        then flag flipped ON and the SAME draft re-sent (v2-staged, bumping the
+        draft version). The D1 skeptic found the stale v1 worker sent
+        ``draft_store.latest(draft_id)`` — the NEWER v2-staged content the user
+        never approved at v1 time. D2 closes that gap: the v1 draft-send worker
+        REFUSES to resolve an approval whose draft now has a ``write.staged`` ledger
+        event (superseded by a v2 stage). Nothing sends.
         """
 
         # 1. Flag OFF — first send creates a real v1 approval row A1.
@@ -375,13 +407,16 @@ class TestMixedModeAndForgery:
         pending_after_v1 = await h.drafts.latest(org_id=_ORG, draft_id=h.draft_id)
         v1_pending_version = pending_after_v1.version
 
-        # 2. Flag flips ON — same draft re-sent → v2 stage, version bumped.
+        # 2. Flag flips ON — same draft re-sent → v2 stage, version bumped. This
+        #    emits a ``write.staged`` on the run's ledger for this draft_id.
         monkeypatch.setenv("SURFACES_V2", "true")
         v2_result = await h.send(expected_version=v1_pending_version)
         assert v2_result.stage_id is not None
         assert v2_result.approval_id is None
         staged = await h.drafts.latest(org_id=_ORG, draft_id=h.draft_id)
         assert staged.status is DraftStatus.SEND_PENDING_APPROVAL
+        newer_version_the_user_never_approved_at_v1 = staged.version
+        assert newer_version_the_user_never_approved_at_v1 > v1_pending_version
 
         # 3. Resolve the STALE v1 approval A1 through the real v1 worker.
         worker = self._worker(h)
@@ -399,14 +434,14 @@ class TestMixedModeAndForgery:
         latest = await h.drafts.latest(org_id=_ORG, draft_id=h.draft_id)
         # Record the observed outcome explicitly so the report is evidence-backed.
         print(
-            f"[PROBE] flag-flip shared-draft: any_draft_sent={sent} "
+            f"[PROBE] flag-flip shared-draft (D2 fix): any_draft_sent={sent} "
             f"latest_version={latest.version} latest_status={latest.status.value}"
         )
-        # The v2 STAGE ITSELF never executed (no v2 event drove this) — this is
-        # the pre-existing v1 approval + 'latest version' worker behaviour.
-        # We assert the OBSERVED reality; if this ever becomes False the D1
-        # boundary would need re-examination.
-        assert sent is True
+        # D2 FIX: the stale v1 approval is REFUSED (superseded by the v2 stage) —
+        # the newer content the user never approved at v1 time never sends, and
+        # the draft stays pending for the v2 flow to own.
+        assert sent is False
+        assert latest.status is DraftStatus.SEND_PENDING_APPROVAL
 
     async def test_v2_stage_without_any_approval_never_auto_sends(
         self, monkeypatch

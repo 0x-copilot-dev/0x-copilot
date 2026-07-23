@@ -93,6 +93,7 @@ import type {
   WriteStagedPayload,
   RevisionAddedPayload,
   DecisionRecordedPayload,
+  WriteAppliedPayload,
 } from "./ledger";
 
 export type McpTransport = "http" | "sse" | "stdio";
@@ -407,6 +408,7 @@ export type RuntimeApiEventType =
   | "write.staged"
   | "revision.added"
   | "decision.recorded"
+  | "write.applied"
   | "workspace_snapshot_captured";
 
 export const RUNTIME_EVENT_SOURCES = [
@@ -476,6 +478,7 @@ export const RUNTIME_API_EVENT_TYPES = [
   "write.staged",
   "revision.added",
   "decision.recorded",
+  "write.applied",
   "workspace_snapshot_captured",
 ] as const satisfies readonly RuntimeApiEventType[];
 
@@ -2324,6 +2327,10 @@ export interface RuntimeEventPayloadByType {
   "write.staged": WriteStagedPayload;
   "revision.added": RevisionAddedPayload;
   "decision.recorded": DecisionRecordedPayload;
+  /** Generative Surfaces v2 (PRD-D2, SDR §5). The single execution beat — the
+   * worker-side CommitEngine handler emits it after dispatching EXACTLY the
+   * approved revision (`result: applied|failed`). No API path ever emits it. */
+  "write.applied": WriteAppliedPayload;
   /** AC5 slice 3b — host write-through pre-image snapshot. Emitted by the
    * workspace backend BEFORE an approved overwrite/edit mutates a granted
    * host file: the prior bytes are stored content-addressed and this event

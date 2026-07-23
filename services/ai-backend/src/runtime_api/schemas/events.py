@@ -32,6 +32,7 @@ from agent_runtime.api.constants import Keys, Messages, Values
 # fully initialised.
 from agent_runtime.observability.redactor import JsonObjectCoercer
 from agent_runtime.surfaces_v2.constants import Keys as _LedgerKeys
+from agent_runtime.surfaces_v2.constants import Values as _LedgerValues
 from agent_runtime.validation import ValueNormalizer
 from runtime_api.schemas.common import (
     AgentRunStatus,
@@ -73,6 +74,12 @@ class _Fields:
     GENERATOR_MODEL = "generator_model"
     SKILL_VERSION = "skill_version"
     SURFACE_PREPARED_TITLE = "Prepared a view"
+    # Generative Surfaces v2 (PRD-D2, FR-C3) — write.applied display microcopy.
+    # ``applied`` is the FR-C3 requirement string (verbatim); Phase-2 polishes
+    # the ``failed`` wording. Single-use titles inlined here (matches
+    # ``SURFACE_PREPARED_TITLE``).
+    WRITE_APPLIED_TITLE = "Sent — exactly the revision you approved."
+    WRITE_FAILED_TITLE = "Apply refused — nothing was sent."
     # Generative Surfaces v2 (PRD-A2, SDR §5) — usage.recorded payload keys.
     USAGE_V = "v"
     USAGE_PURPOSE = "purpose"
@@ -182,6 +189,8 @@ class RuntimeEventPresentationProjector:
             return cls._revision_added_payload(payload)
         if event_type is RuntimeApiEventType.DECISION_RECORDED:
             return cls._decision_recorded_payload(payload)
+        if event_type is RuntimeApiEventType.WRITE_APPLIED:
+            return cls._write_applied_payload(payload)
         return payload
 
     @classmethod
@@ -299,8 +308,9 @@ class RuntimeEventPresentationProjector:
             RuntimeApiEventType.WRITE_STAGED,
             RuntimeApiEventType.REVISION_ADDED,
             RuntimeApiEventType.DECISION_RECORDED,
+            RuntimeApiEventType.WRITE_APPLIED,
         }:
-            # Generative Surfaces v2 (PRD-A3/B3/C2/D1) — ledger events the SurfaceStore
+            # Generative Surfaces v2 (PRD-A3/B3/C2/D1/D2) — ledger events the SurfaceStore
             # + client ledger fold consume as surface/gate-state merges, never
             # timeline cards. Explicit so a TOOL/SYSTEM-sourced emit can't reroute
             # into the tool bucket. The gate pair rides beside the
@@ -509,6 +519,13 @@ class RuntimeEventPresentationProjector:
             # ``agent_runtime.api.constants`` (out of this PR's scope); the
             # single-use title is inlined here until PRD-02 wires the emitter.
             return _Fields.SURFACE_PREPARED_TITLE
+        if event_type is RuntimeApiEventType.WRITE_APPLIED:
+            # Generative Surfaces v2 (PRD-D2, FR-C3). ``applied`` shows the
+            # requirement microcopy verbatim; ``failed`` shows the refusal line.
+            result = cls._text(payload.get(_LedgerKeys.Field.RESULT))
+            if result == _LedgerValues.RESULT_FAILED:
+                return _Fields.WRITE_FAILED_TITLE
+            return _Fields.WRITE_APPLIED_TITLE
         return None
 
     @classmethod
@@ -1068,6 +1085,74 @@ class RuntimeEventPresentationProjector:
             if isinstance(rev, int) and not isinstance(rev, bool):
                 safe_payload[_LedgerKeys.Field.SCOPE] = {_LedgerKeys.Field.REV: rev}
         return safe_payload
+
+    @classmethod
+    def _write_applied_payload(cls, payload: JsonObject) -> JsonObject:
+        """Project ``write.applied`` through a strict allow-list (PRD-D2, SDR §5).
+
+        Keeps ``v`` / ``stage_id`` / ``rev`` / ``result`` plus the additive
+        ``connector_receipt_ref`` (an opaque ``commit://`` ref), ``failure``
+        (rebuilt from its own ``{code, detail}`` allow-list — ``failed`` only)
+        and ``decided_by`` (``{actor, decision_seq}`` — the receipt row). The
+        single-artifact shape only (``row_keys`` / ``partial`` are D3; they never
+        emit here). Nothing else survives — the connector result is NEVER echoed
+        raw into the event; only the ref rides.
+        """
+
+        safe_payload: JsonObject = {}
+        cls._copy_payload_version(payload, safe_payload)
+        for text_key in (
+            _LedgerKeys.Field.STAGE_ID,
+            _LedgerKeys.Field.RESULT,
+            _LedgerKeys.Field.CONNECTOR_RECEIPT_REF,
+        ):
+            value = cls._text(payload.get(text_key))
+            if value is not None:
+                safe_payload[text_key] = value
+        rev = payload.get(_LedgerKeys.Field.REV)
+        if isinstance(rev, int) and not isinstance(rev, bool):
+            safe_payload[_LedgerKeys.Field.REV] = rev
+        failure = cls._write_applied_failure(payload.get(_LedgerKeys.Field.FAILURE))
+        if failure is not None:
+            safe_payload[_LedgerKeys.Field.FAILURE] = failure
+        decided_by = cls._write_applied_decided_by(
+            payload.get(_LedgerKeys.Field.DECIDED_BY)
+        )
+        if decided_by is not None:
+            safe_payload[_LedgerKeys.Field.DECIDED_BY] = decided_by
+        return safe_payload
+
+    @classmethod
+    def _write_applied_failure(cls, value: object) -> JsonObject | None:
+        """Rebuild ``{code, detail?}`` from its own allow-list, or None."""
+
+        if not isinstance(value, dict):
+            return None
+        code = cls._text(value.get(_LedgerKeys.Field.CODE))
+        if code is None:
+            return None
+        failure: JsonObject = {_LedgerKeys.Field.CODE: code}
+        detail = cls._text(value.get(_LedgerKeys.Field.DETAIL))
+        if detail is not None:
+            failure[_LedgerKeys.Field.DETAIL] = detail
+        return failure
+
+    @classmethod
+    def _write_applied_decided_by(cls, value: object) -> JsonObject | None:
+        """Rebuild ``{actor, decision_seq}`` from its own allow-list, or None."""
+
+        if not isinstance(value, dict):
+            return None
+        actor = cls._text(value.get(_LedgerKeys.Field.ACTOR))
+        decision_seq = value.get(_LedgerKeys.Field.DECISION_SEQ)
+        if actor is None or not (
+            isinstance(decision_seq, int) and not isinstance(decision_seq, bool)
+        ):
+            return None
+        return {
+            _LedgerKeys.Field.ACTOR: actor,
+            _LedgerKeys.Field.DECISION_SEQ: decision_seq,
+        }
 
     @classmethod
     def _copy_payload_version(

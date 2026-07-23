@@ -25,9 +25,11 @@ from runtime_api.schemas import (
     RuntimeApprovalResolvedCommand,
     RuntimeCancelCommand,
     RuntimeRunCommand,
+    RuntimeStageCommitCommand,
 )
 from runtime_worker.handlers.approval import RuntimeApprovalHandler
 from runtime_worker.handlers.cancel import RuntimeCancelHandler
+from runtime_worker.handlers.stage_commit import RuntimeStageCommitHandler
 from agent_runtime.persistence.ports import (
     CitationStorePort,
     ConversationToolOrdinalStorePort,
@@ -56,6 +58,7 @@ class RuntimeWorker:
         run_handler: RuntimeRunHandler | None = None,
         cancel_handler: RuntimeCancelHandler | None = None,
         approval_handler: RuntimeApprovalHandler | None = None,
+        stage_commit_handler: RuntimeStageCommitHandler | None = None,
         on_event_appended: Callable[[str], None] | None = None,
         draft_store: "DraftStorePort | None" = None,
         conversation_tool_ordinal_store: (
@@ -117,6 +120,18 @@ class RuntimeWorker:
             conversation_tool_ordinal_store=self.conversation_tool_ordinal_store,
             mcp_discovery_cache=mcp_discovery_cache,
             user_policies_resolver=user_policies_resolver,  # type: ignore[arg-type]
+        )
+        # PRD-D2 — the SOLE producer of ``write.applied``. Default construction
+        # mirrors ``approval_handler``: it builds its own durable claim ledger
+        # (off the store backend) + per-run MCP connector. Tests inject a handler
+        # with a fake engine for determinism.
+        self.stage_commit_handler = stage_commit_handler or RuntimeStageCommitHandler(
+            persistence=self.persistence,
+            event_store=self.event_store,
+            draft_store=draft_store,
+            settings=self.settings,
+            on_event_appended=on_event_appended,
+            mcp_discovery_cache=mcp_discovery_cache,
         )
         self._semaphore = asyncio.Semaphore(self.settings.execution.max_parallel_runs)
         self.logger = logging.getLogger("runtime_worker")
@@ -213,6 +228,7 @@ class RuntimeWorker:
         PersistenceValues.EventType.RUN_REQUESTED: "runtime_worker.run",
         PersistenceValues.EventType.RUN_CANCEL_REQUESTED: "runtime_worker.cancel",
         PersistenceValues.EventType.APPROVAL_RESOLVED: "runtime_worker.approval_resolved",
+        PersistenceValues.EventType.STAGE_COMMIT_REQUESTED: "runtime_worker.stage_commit",
     }
 
     async def _dispatch(self, claim: RuntimeWorkerClaim) -> None:
@@ -236,6 +252,10 @@ class RuntimeWorker:
             if command_type == PersistenceValues.EventType.APPROVAL_RESOLVED:
                 command = self._runtime_approval_command(claim)
                 await self.approval_handler.handle(command)
+                return
+            if command_type == PersistenceValues.EventType.STAGE_COMMIT_REQUESTED:
+                command = self._runtime_stage_commit_command(claim)
+                await self.stage_commit_handler.handle(command)
                 return
             raise AgentRuntimeError(
                 RuntimeErrorCode.VALIDATION_ERROR,
@@ -294,6 +314,20 @@ class RuntimeWorker:
         raise AgentRuntimeError(
             RuntimeErrorCode.VALIDATION_ERROR,
             "Approval command payload is unavailable.",
+            retryable=False,
+        )
+
+    def _runtime_stage_commit_command(
+        self,
+        claim: RuntimeWorkerClaim,
+    ) -> RuntimeStageCommitCommand:
+        """Deserialise the claim payload into a ``RuntimeStageCommitCommand`` (PRD-D2)."""
+        payload = self._command_payload(claim)
+        if payload:
+            return RuntimeStageCommitCommand.model_validate(payload)
+        raise AgentRuntimeError(
+            RuntimeErrorCode.VALIDATION_ERROR,
+            "Stage-commit command payload is unavailable.",
             retryable=False,
         )
 

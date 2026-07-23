@@ -222,6 +222,24 @@ export interface DecisionRecordedPayload {
   actor: DecisionActor;
 }
 
+/** Why an apply refused / failed (PRD-D2, additive to SDR §5). */
+export type WriteFailureCode =
+  | "precondition_drift"
+  | "connector_error"
+  | "attempt_indeterminate";
+
+/** The `write.applied.failure` object — present only on a `failed` result. */
+export interface WriteAppliedFailure {
+  code: WriteFailureCode;
+  detail?: string;
+}
+
+/** The `write.applied.decided_by` object — the receipt-row attribution (PRD-D2). */
+export interface WriteAppliedDecidedBy {
+  actor: "user";
+  decision_seq: number;
+}
+
 export interface WriteAppliedPayload {
   v: 1;
   stage_id: string;
@@ -229,6 +247,10 @@ export interface WriteAppliedPayload {
   result: ApplyResult;
   row_keys?: readonly string[];
   connector_receipt_ref?: string;
+  /** Additive (SDR §5 note, PRD-D2): present only on a `failed` result. */
+  failure?: WriteAppliedFailure;
+  /** Additive (PRD-D2): the approving decision, for the receipt fold (E1). */
+  decided_by?: WriteAppliedDecidedBy;
 }
 
 export interface UsageRecordedPayload {

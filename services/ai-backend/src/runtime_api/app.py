@@ -599,6 +599,7 @@ class RuntimeApiAppFactory:
         """
 
         from agent_runtime.api.events import RuntimeEventProducer
+        from agent_runtime.api.stage_commit_queue import RuntimeStageCommitQueue
         from agent_runtime.api.stage_ledger import RuntimeStageLedger
         from agent_runtime.surfaces_v2.staging import WriteStager
 
@@ -611,7 +612,22 @@ class RuntimeApiAppFactory:
                 event_store=ports.event_store,
             )
         )
-        return WriteStager(draft_store=ports.draft_store, ledger=ledger)
+        # PRD-D2 — the approve seam. On a NEW approve, the stager enqueues one
+        # durable commit command (never executes inline); the worker CommitEngine
+        # handler consumes it. Wired unconditionally; the enqueue only fires on a
+        # real approve, and with the flag off the stage routes are not mounted so
+        # ``record_decision`` is unreachable. ``None`` queue ⇒ decisions record,
+        # nothing executes (fail-open to no-commit).
+        commit_queue = (
+            RuntimeStageCommitQueue(queue=ports.queue)
+            if getattr(ports, "queue", None) is not None
+            else None
+        )
+        return WriteStager(
+            draft_store=ports.draft_store,
+            ledger=ledger,
+            commit_queue=commit_queue,
+        )
 
     @classmethod
     def default_stage_service(cls, app):  # type: ignore[no-untyped-def]

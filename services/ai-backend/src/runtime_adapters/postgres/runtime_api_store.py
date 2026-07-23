@@ -104,6 +104,7 @@ from runtime_api.schemas import (
     RuntimeEventEnvelope,
     RuntimeEventPresentationProjector,
     RuntimeRunCommand,
+    RuntimeStageCommitCommand,
     RunHistoryEntry,
     RunRecord,
     WorkspaceDefaultsRecord,
@@ -5736,6 +5737,17 @@ class PostgresRuntimeApiStore:
         await self._enqueue_command(
             command_id=command.command_id,
             command_type=PersistenceValues.EventType.APPROVAL_RESOLVED,
+            org_id=command.org_id,
+            aggregate_id=command.run_id,
+            payload=command.model_dump(mode="json"),
+        )
+
+    async def enqueue_stage_commit(self, command: RuntimeStageCommitCommand) -> None:
+        """Enqueue a staged-write commit command for workers (PRD-D2)."""
+
+        await self._enqueue_command(
+            command_id=command.command_id,
+            command_type=PersistenceValues.EventType.STAGE_COMMIT_REQUESTED,
             org_id=command.org_id,
             aggregate_id=command.run_id,
             payload=command.model_dump(mode="json"),

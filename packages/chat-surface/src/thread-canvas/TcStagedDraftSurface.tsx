@@ -88,6 +88,12 @@ const spanMarkStyle: CSSProperties = {
   borderRadius: 2,
 };
 
+const failedWarningStyle: CSSProperties = {
+  padding: "0 var(--space-md)",
+  margin: 0,
+  color: "var(--color-text-warning, var(--color-text-secondary))",
+};
+
 /** Split `text` into segments, wrapping only the user-authored spans in a
  *  highlighted mark ("edited by you"). Agent regions stay plain. Spans are
  *  clamped to the text length and processed in order; overlaps/out-of-range
@@ -151,10 +157,15 @@ export function TcStagedDraftSurface({
   }, [bodyText, stage.latestRev]);
 
   const isRejected = stage.status === "rejected";
-  const isDecided = stage.status === "approved" || stage.status === "applied";
+  // PRD-D2: `applied` is terminal (the CommitEngine sent exactly the approved
+  // rev); `failed` folds status back to `staged` with `applyResult === "failed"`,
+  // so the bar returns for a fresh approve while the warning line stays visible.
+  const isApplied = stage.status === "applied";
+  const isApproved = stage.status === "approved";
+  const applyFailed = stage.applyResult === "failed";
   const latest = stage.latestRevision;
   const spans = latest?.authorshipSpans ?? [];
-  const editable = stage.status === "staged" && !busy;
+  const editable = stage.status === "staged" && !applyFailed && !busy;
 
   return (
     <div className="ui-card" style={rootStyle} data-testid="tc-staged-draft">
@@ -224,22 +235,44 @@ export function TcStagedDraftSurface({
         </p>
       )}
 
+      {applyFailed ? (
+        <p
+          className="ui-caption"
+          style={failedWarningStyle}
+          data-testid="tc-staged-draft-failed"
+          role="status"
+        >
+          {`Apply refused — nothing was sent${
+            stage.applyFailureCode ? ` (${stage.applyFailureCode})` : ""
+          }.`}
+        </p>
+      ) : null}
+
       <div style={footerStyle}>
-        <Badge tone="warning" data-testid="tc-staged-draft-access">
-          write · held
+        <Badge
+          tone={isApplied ? "success" : "warning"}
+          data-testid="tc-staged-draft-access"
+        >
+          {isApplied ? "write · sent" : "write · held"}
         </Badge>
         <span className="ui-mono-caps" data-testid="tc-staged-draft-ledger-id">
           {stage.ledgerId}
         </span>
         <span style={spacerStyle} aria-hidden="true" />
-        {isDecided ? (
+        {isApplied ? (
+          <span className="ui-caption" data-testid="tc-staged-draft-applied">
+            Sent — exactly the revision you approved.
+          </span>
+        ) : isApproved ? (
           <span className="ui-caption" data-testid="tc-staged-draft-decided">
             Approved — held for send.
           </span>
         ) : null}
       </div>
 
-      {!editing ? (
+      {/* Terminal `applied` drops the approve bar (nothing left to decide); a
+          failed apply keeps it so a fresh approve can retry. */}
+      {!editing && !isApplied ? (
         <TcApproveBar
           stage={stage}
           onApprove={onApprove}

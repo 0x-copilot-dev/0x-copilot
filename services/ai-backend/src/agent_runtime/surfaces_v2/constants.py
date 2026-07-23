@@ -58,6 +58,15 @@ class Keys:
         SCOPE = "scope"
         START = "start"
         END = "end"
+        # PRD-D2 write.applied payload keys (SDR §5, verbatim + additive
+        # ``failure`` / ``decided_by`` noted under §5).
+        RESULT = "result"
+        CONNECTOR_RECEIPT_REF = "connector_receipt_ref"
+        FAILURE = "failure"
+        CODE = "code"
+        DETAIL = "detail"
+        DECIDED_BY = "decided_by"
+        DECISION_SEQ = "decision_seq"
 
 
 class Values:
@@ -104,6 +113,19 @@ class Values:
     DECISION_HOLD = "hold"
     DECISION_RESTORE = "restore"
 
+    # PRD-D2 write.applied constant values (SDR §5 ApplyResult members + the
+    # additive failure-code enum defined in PRD-D2; ``partial`` is D3).
+    RESULT_APPLIED = "applied"
+    RESULT_FAILED = "failed"
+    FAILURE_PRECONDITION_DRIFT = "precondition_drift"
+    FAILURE_CONNECTOR_ERROR = "connector_error"
+    FAILURE_ATTEMPT_INDETERMINATE = "attempt_indeterminate"
+    # ``decided_by.actor`` is pinned to the constant ``"user"`` here (SDR §5).
+    DECIDED_BY_ACTOR_USER = "user"
+    # ``connector_receipt_ref`` scheme (PRD-D2, NEW): resolves to the persisted
+    # raw ``ConnectorCommitResult`` for this commit attempt.
+    COMMIT_REF_PREFIX = "commit://"
+
 
 class Messages:
     """Emit-time summaries for the ledger events (D3). ``action.classified``
@@ -118,6 +140,13 @@ class Messages:
     WRITE_STAGED = "Staged a write"
     REVISION_ADDED = "Revised the draft"
     DECISION_RECORDED = "Recorded a decision"
+
+    # PRD-D2 write.applied emit-time summaries + FR-C3 display microcopy.
+    WRITE_APPLIED = "Applied the write"
+    # FR-C3 requirement microcopy — the applied confirmation the canvas shows
+    # (verbatim; Phase-2 may polish wording).
+    APPLIED_TITLE = "Sent — exactly the revision you approved."
+    FAILED_TITLE = "Apply refused — nothing was sent."
 
     # Log tag when an emitter method swallows its own exception (D3/D8).
     EMIT_RAISED = "[surfaces_v2] ledger.emit_raised"

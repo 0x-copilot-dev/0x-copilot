@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import inspect
+import logging
 from collections.abc import AsyncIterator, Awaitable, Callable, Mapping
 from datetime import datetime, timezone
 
@@ -80,6 +81,8 @@ _APPROVAL_KIND_DRAFT_SEND = "draft_send"
 
 _AUDIT_DRAFT_SEND_COMPLETED = "draft.send.completed"
 _AUDIT_DRAFT_SEND_REJECTED = "draft.send.rejected"
+
+_LOGGER = logging.getLogger("runtime_worker.approval")
 
 
 class RuntimeApprovalHandler:
@@ -741,6 +744,22 @@ class RuntimeApprovalHandler:
             # discard, or an already-applied send). Idempotent no-op.
             return
 
+        # PRD-D2 flag-flip hardening (WYSIWYG). A v1 draft-send approval created
+        # while ``SURFACES_V2`` was OFF sends ``draft_store.latest(draft_id)``. If
+        # the flag then flipped ON and the SAME draft was re-sent v2-staged, that
+        # "latest" is now NEWER content the user never approved at v1 time. Refuse
+        # to resolve an approval whose draft has since been staged on the v2
+        # ledger — the v2 stage supersedes it. Fail-closed: refuse (no send)
+        # rather than send un-approved content.
+        if await self._draft_superseded_by_v2_stage(run=run, draft_id=draft_id):
+            _LOGGER.warning(
+                "draft_send.superseded_by_v2_stage draft_id=%s run_id=%s — refusing "
+                "stale v1 send",
+                draft_id,
+                run.run_id,
+            )
+            return
+
         if decision in (
             ApprovalDecision.APPROVED,
             ApprovalDecision.APPROVE_WITH_EDITS,
@@ -789,6 +808,43 @@ class RuntimeApprovalHandler:
             reason=TerminationReason.NORMAL_COMPLETION,
             summary="Run completed",
         )
+
+    async def _draft_superseded_by_v2_stage(
+        self, *, run: RunRecord, draft_id: str
+    ) -> bool:
+        """Return whether this draft has a ``write.staged`` event on the run's ledger.
+
+        A ``write.staged`` for this draft means the write was re-homed onto the v2
+        staged-write engine (the WYSIWYG-guarded path); a stale v1 approval must
+        NOT independently send. Scans the run's persisted events for a
+        ``write.staged`` whose ``proposal_ref`` names ``draft_id``. Best-effort: any
+        read failure returns ``False`` (the v1 send proceeds unchanged — the guard
+        never breaks the existing flow, it only refuses a proven-superseded send).
+        """
+
+        from agent_runtime.surfaces_v2.ledger_models import (  # noqa: PLC0415
+            LedgerEventType,
+        )
+        from agent_runtime.surfaces_v2.staging import DraftRef  # noqa: PLC0415
+
+        try:
+            events = await self.event_store.list_events_after(
+                org_id=run.org_id, run_id=run.run_id, after_sequence=0
+            )
+        except Exception:  # noqa: BLE001 — never break the v1 flow on a read error.
+            return False
+        staged_value = LedgerEventType.WRITE_STAGED.value
+        for event in events:
+            event_type = getattr(getattr(event, "event_type", None), "value", None)
+            if event_type != staged_value:
+                continue
+            payload = getattr(event, "payload", None)
+            if not isinstance(payload, Mapping):
+                continue
+            parsed = DraftRef.parse_proposal(payload.get("proposal_ref"))
+            if parsed is not None and parsed[0] == draft_id:
+                return True
+        return False
 
     @staticmethod
     def _apply_edits_to_draft(

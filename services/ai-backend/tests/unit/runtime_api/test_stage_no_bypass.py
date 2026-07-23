@@ -328,3 +328,52 @@ class TestNoBypass:
             )
         assert len(h.event_types()) == before
         assert h.mcp.calls == []
+
+
+class TestSingleProducer:
+    """DoD (PRD-D2): ``write.applied`` has EXACTLY ONE producer — the worker-side
+    CommitEngine handler. Definitions (the transport enum / projector allow-list /
+    ledger contract) and the consumer (the fold) reference the type but never
+    EMIT it. An emitter is a module that appends the event to a run's stream."""
+
+    _HANDLER = "runtime_worker/handlers/stage_commit.py"
+
+    def test_only_the_handler_emits_write_applied(self) -> None:
+        # Precise: the only module that both appends events (``append_api_event``)
+        # AND references the terminal type is the handler. A second producer would
+        # necessarily do both and be caught here.
+        import pathlib
+
+        src = pathlib.Path(__file__).resolve().parents[3] / "src"
+        assert src.is_dir(), src
+        emitters: set[str] = set()
+        for path in src.rglob("*.py"):
+            text = path.read_text(encoding="utf-8")
+            if "append_api_event" in text and (
+                "WRITE_APPLIED" in text or "write.applied" in text
+            ):
+                emitters.add(str(path.relative_to(src)))
+        assert emitters == {self._HANDLER}, sorted(emitters)
+
+    def test_the_transport_enum_emission_construct_is_unique(self) -> None:
+        # The exact construction the handler uses to emit the terminal event.
+        import pathlib
+
+        src = pathlib.Path(__file__).resolve().parents[3] / "src"
+        marker = "RuntimeApiEventType(LedgerEventType.WRITE_APPLIED.value)"
+        users = {
+            str(p.relative_to(src))
+            for p in src.rglob("*.py")
+            if marker in p.read_text(encoding="utf-8")
+        }
+        assert users == {self._HANDLER}, sorted(users)
+
+    def test_write_applied_not_emitted_by_the_api_layer_ledger(self) -> None:
+        # The API-side ledger adapter (what the StageService wires) never names the
+        # terminal event — it only appends the D1 triad + surface. The producer is
+        # exclusively the worker handler.
+        import inspect
+
+        from agent_runtime.api import stage_ledger
+
+        assert "write.applied" not in inspect.getsource(stage_ledger)

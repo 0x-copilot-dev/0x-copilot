@@ -36,6 +36,8 @@ function stage(overrides: Partial<LedgerStagedWrite> = {}): LedgerStagedWrite {
     lastSeq: 3,
     ledgerId: "rrun1·002",
     latestRevision: revisions[revisions.length - 1],
+    applyResult: null,
+    applyFailureCode: null,
     ...overrides,
   };
 }

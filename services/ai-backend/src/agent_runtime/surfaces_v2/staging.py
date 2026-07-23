@@ -82,6 +82,31 @@ class StageLedgerPort(Protocol):
         """Return every persisted event for a run, ascending by ``sequence_no``."""
 
 
+@runtime_checkable
+class StageCommitQueuePort(Protocol):
+    """Enqueue a durable stage-commit command (PRD-D2), without a transport import.
+
+    The concrete adapter (``agent_runtime.api.stage_commit_queue``) builds the
+    ``RuntimeStageCommitCommand`` + trace-propagation carrier and appends it via
+    ``RuntimeQueuePort.enqueue_stage_commit``. The stager calls this with
+    primitives only, so ``surfaces_v2.staging`` stays free of ``runtime_api``.
+    An approve fires exactly one enqueue; nothing else ever enqueues.
+    """
+
+    async def enqueue_stage_commit(
+        self,
+        *,
+        stage_id: str,
+        run_id: str,
+        org_id: str,
+        user_id: str,
+        conversation_id: str,
+        rev: int,
+        decision_seq: int,
+    ) -> None:
+        """Enqueue the commit command for one approved ``(stage_id, rev)``."""
+
+
 # ---------------------------------------------------------------------------
 # Typed domain errors (fail-closed; routes map ``.code`` → HTTP status)
 # ---------------------------------------------------------------------------
@@ -143,9 +168,13 @@ class StagedWriteStatus(StrEnum):
     STAGED = "staged"
     REJECTED = "rejected"
     APPROVED = "approved"
-    # Unreachable in D1 (no CommitEngine); the fold recognises it so a D2
-    # ``write.applied`` folds forward without a projector rewrite.
+    # PRD-D2: terminal — the CommitEngine sent exactly the approved rev.
     APPLIED = "applied"
+    # PRD-D2 defensive: a ``write.applied`` folded onto a stage that was not in a
+    # matching APPROVED state (unreachable absent a bug — D1 freezes approved
+    # stages and the handler's approval gate refuses stale commands). Tests
+    # assert this is unreachable on every legitimate sequence.
+    CORRUPT = "corrupt"
 
 
 class RevisionSummary(RuntimeContract):
@@ -183,6 +212,12 @@ class StagedWriteState(RuntimeContract):
     decisions: tuple[DecisionSummary, ...]
     first_sequence_no: int
     last_sequence_no: int
+    # PRD-D2 — the last ``write.applied`` outcome folded onto this stage, or
+    # ``None`` until the CommitEngine reports one. ``apply_result`` is
+    # ``"applied"`` (⇒ APPLIED terminal) or ``"failed"`` (⇒ held, approval
+    # consumed); ``apply_failure_code`` names the refusal on a failed apply.
+    apply_result: str | None = None
+    apply_failure_code: str | None = None
 
     def latest_revision(self) -> RevisionSummary | None:
         """Return the highest-``rev`` revision summary, or ``None`` when empty."""
@@ -246,6 +281,8 @@ class _StageAccumulator:
     status: StagedWriteStatus = StagedWriteStatus.STAGED
     revisions: list[RevisionSummary] = field(default_factory=list)
     decisions: list[DecisionSummary] = field(default_factory=list)
+    apply_result: str | None = None
+    apply_failure_code: str | None = None
 
     def to_state(self) -> StagedWriteState:
         return StagedWriteState(
@@ -261,6 +298,8 @@ class _StageAccumulator:
             decisions=tuple(self.decisions),
             first_sequence_no=self.first_sequence_no,
             last_sequence_no=self.last_sequence_no,
+            apply_result=self.apply_result,
+            apply_failure_code=self.apply_failure_code,
         )
 
 
@@ -419,13 +458,53 @@ class StagedWriteFold:
         seq: int,
         payload: Mapping[str, object],
     ) -> None:
-        # Forward-compat only (D2 owns this event). Never produced in D1.
+        """Fold the single legitimate execution beat (PRD-D2 state machine).
+
+        ``APPROVED (rev N)`` + ``applied {rev N}`` ⇒ ``APPLIED`` (terminal;
+        further decisions/revisions are frozen by the existing matrix). ``APPROVED
+        (rev N)`` + ``failed {rev N}`` ⇒ ``STAGED`` with ``approved_rev`` cleared —
+        the approval is consumed; the surface shows held state and a fresh approve
+        is required to retry. Any other current state ⇒ ``CORRUPT`` (defensive;
+        unreachable absent a bug — asserted in tests). The result/failure ride the
+        state so E1's receipt fold + the client render from exactly this.
+        """
+
         stage_id = cls._str_or(payload.get(Keys.Field.STAGE_ID), "")
         accumulator = stages.get(stage_id)
         if accumulator is None:
             return
-        accumulator.status = StagedWriteStatus.APPLIED
         accumulator.last_sequence_no = max(accumulator.last_sequence_no, seq)
+        result = cls._str_or(payload.get(Keys.Field.RESULT), "")
+        rev = payload.get(Keys.Field.REV)
+        rev = rev if isinstance(rev, int) and not isinstance(rev, bool) else None
+
+        matches_approved = (
+            accumulator.status is StagedWriteStatus.APPROVED
+            and accumulator.approved_rev is not None
+            and rev == accumulator.approved_rev
+        )
+        if not matches_approved:
+            # A ``write.applied`` for a non-approved / rev-mismatched stage is a
+            # bug (the handler's approval gate + D1's freeze make it unreachable);
+            # fold to CORRUPT rather than silently accept an unauthorized send.
+            accumulator.status = StagedWriteStatus.CORRUPT
+            accumulator.apply_result = result or None
+            return
+        if result == Values.RESULT_APPLIED:
+            accumulator.status = StagedWriteStatus.APPLIED
+            accumulator.apply_result = Values.RESULT_APPLIED
+            accumulator.apply_failure_code = None
+        elif result == Values.RESULT_FAILED:
+            # Approval consumed: back to STAGED (held), a fresh approve retries.
+            accumulator.status = StagedWriteStatus.STAGED
+            accumulator.approved_rev = None
+            accumulator.apply_result = Values.RESULT_FAILED
+            accumulator.apply_failure_code = cls._failure_code_of(
+                payload.get(Keys.Field.FAILURE)
+            )
+        else:
+            accumulator.status = StagedWriteStatus.CORRUPT
+            accumulator.apply_result = result or None
 
     # -- helpers ------------------------------------------------------------
 
@@ -451,6 +530,15 @@ class StagedWriteFold:
             ):
                 spans.append(AuthorshipSpan(start=start, end=end, author=author))
         return tuple(spans)
+
+    @staticmethod
+    def _failure_code_of(value: object) -> str | None:
+        """Pull ``failure.code`` (a string) from a ``write.applied{failed}`` payload."""
+
+        if not isinstance(value, Mapping):
+            return None
+        code = value.get(Keys.Field.CODE)
+        return code if isinstance(code, str) and code else None
 
     @staticmethod
     def _seq_of(event: Mapping[str, object]) -> int:
@@ -500,6 +588,13 @@ class WriteStager:
     draft_store: DraftStorePort
     ledger: StageLedgerPort
     differ: type[RevisionDiffer] = RevisionDiffer
+    # PRD-D2: optional, duck-typed on ``enqueue_stage_commit`` (same
+    # optional-injection style as ``DraftService.event_producer``). When wired, a
+    # NEW ``decision.recorded{approve}`` enqueues exactly one durable commit
+    # command; ``None`` ⇒ the decision records and NOTHING executes (fail-open to
+    # no-commit, never to execution). Idempotent re-approves + reject/restore
+    # never enqueue.
+    commit_queue: StageCommitQueuePort | None = None
 
     # -- propose ------------------------------------------------------------
 
@@ -723,6 +818,20 @@ class WriteStager:
             },
             summary=Messages.DECISION_RECORDED,
         )
+        # PRD-D2 — a NEW approve (this branch is unreachable for the idempotent
+        # re-approve, which returned above) enqueues EXACTLY ONE durable commit
+        # command. Reject / restore never enqueue. ``commit_queue is None`` ⇒ the
+        # decision records and nothing executes (fail-open to no-commit).
+        if decision == Values.DECISION_APPROVE and self.commit_queue is not None:
+            await self.commit_queue.enqueue_stage_commit(
+                stage_id=stage_id,
+                run_id=run_id,
+                org_id=org_id,
+                user_id=self._run_attr(run, "user_id"),
+                conversation_id=self._run_attr(run, "conversation_id"),
+                rev=scope_rev,
+                decision_seq=emitted.sequence_no,
+            )
         return self._require_state(self._fold([*prior, emitted]), stage_id=stage_id)
 
     # -- read ---------------------------------------------------------------
@@ -769,6 +878,13 @@ class WriteStager:
         return state.latest_rev
 
     # -- helpers ------------------------------------------------------------
+
+    @staticmethod
+    def _run_attr(run: object, name: str) -> str:
+        """Read a string attribute off the opaque run record (``""`` when absent)."""
+
+        value = getattr(run, name, "")
+        return value if isinstance(value, str) else ""
 
     @staticmethod
     def _fold(events: Sequence[_LedgerEventLike]) -> dict[str, StagedWriteState]:
@@ -847,6 +963,7 @@ __all__ = [
     "EditConflict",
     "MalformedDecision",
     "RevisionSummary",
+    "StageCommitQueuePort",
     "StageForbidden",
     "StageFrozen",
     "StageLedgerPort",

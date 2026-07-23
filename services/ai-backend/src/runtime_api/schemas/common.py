@@ -241,6 +241,15 @@ class RuntimeApiEventType(StrEnum):
     WRITE_STAGED = LedgerEventType.WRITE_STAGED.value
     REVISION_ADDED = LedgerEventType.REVISION_ADDED.value
     DECISION_RECORDED = LedgerEventType.DECISION_RECORDED.value
+    # Generative Surfaces v2 (PRD-D2, SDR §5). The single legitimate execution
+    # beat: the worker-side CommitEngine handler emits ``write.applied``
+    # (``result: applied|failed``) after dispatching EXACTLY the approved
+    # revision through the real MCP client. Its SOLE producer is that handler —
+    # no API path, no other handler, ever emits it (adversarial no-bypass DoD).
+    # Projects to ``RuntimeActivityKind.EVENT`` (StagedWrite fold + client ledger
+    # fold input, not a timeline card). Wire value comes from the A1
+    # ``LedgerEventType`` vocabulary so the transport enum cannot drift.
+    WRITE_APPLIED = LedgerEventType.WRITE_APPLIED.value
 
     @classmethod
     def from_stream_event_type(
