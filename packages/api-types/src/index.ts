@@ -64,6 +64,9 @@ export type {
   UsageRecord,
   RunReceiptRow,
   RunReceipt,
+  // PRD-E3 — tamper-evident receipt export bundle.
+  ReceiptExportRow,
+  ReceiptExportBundle,
   SurfaceViewState,
   SurfaceSnapshot,
   RunSurfacesResponse,
@@ -1388,6 +1391,13 @@ export interface RunUsageCallRow {
   subagent_id: string | null;
   model_provider: string;
   model_name: string;
+  /** PRD-E3 (FR-G) — the `Purpose` StrEnum value (`main` / `subagent_work` /
+   * `view_shaping` / `shape_request` / …), the usage-row query dimension. NOT
+   * normalized `main`→`run`. Defaults to `main` on pre-migration rows. */
+  purpose: string;
+  /** PRD-E3 (FR-G) — ties a shaping call to a derived surface when known
+   * (`view_shaping` records `null`; `shape_request` carries a concrete id). */
+  surface_id: string | null;
   input: number;
   output: number;
   cached_input: number;
