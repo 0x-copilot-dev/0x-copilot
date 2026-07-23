@@ -149,6 +149,56 @@ class TestViewDerivedProjection:
         assert "gen" not in safe
 
 
+class TestReceiptEmittedProjection:
+    """PRD-E1 — ``receipt.emitted`` allow-list, activity kind, redaction."""
+
+    def test_keeps_only_v_surface_id_fold_ref(self) -> None:
+        safe = P.payload_for_event(
+            event_type=RuntimeApiEventType.RECEIPT_EMITTED,
+            payload={
+                "v": 1,
+                "surface_id": "receipt://run_1",
+                "fold_ref": "ledger://run_1@42",
+                "org_id": "org_x",
+                "secret": "leak",
+            },
+        )
+        assert safe == {
+            "v": 1,
+            "surface_id": "receipt://run_1",
+            "fold_ref": "ledger://run_1@42",
+        }
+
+    def test_projects_to_event_activity(self) -> None:
+        # Even a TOOL-sourced emit must not reroute into the tool bucket.
+        assert (
+            P.activity_kind_for(
+                event_type=RuntimeApiEventType.RECEIPT_EMITTED,
+                source=StreamEventSource.TOOL,
+            )
+            is RuntimeActivityKind.EVENT
+        )
+
+    def test_fold_ref_marks_offloaded(self) -> None:
+        # ``fold_ref`` contains "ref" ⇒ the receipt is a reference, not a blob.
+        state = P._redaction_state_for(
+            payload={
+                "v": 1,
+                "surface_id": "receipt://run_1",
+                "fold_ref": "ledger://run_1@42",
+            },
+            metadata={},
+        )
+        assert state is RuntimeEventRedactionState.OFFLOADED
+
+    def test_display_title_is_run_receipt(self) -> None:
+        title = P._display_title_for(
+            event_type=RuntimeApiEventType.RECEIPT_EMITTED,
+            payload={"v": 1, "surface_id": "receipt://run_1", "fold_ref": "x"},
+        )
+        assert title == "Run receipt"
+
+
 class TestActivityKindAndRedaction:
     def test_all_four_project_to_event_activity(self) -> None:
         for event_type in (

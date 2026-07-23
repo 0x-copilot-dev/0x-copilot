@@ -85,6 +85,10 @@ class Keys:
         DETAIL = "detail"
         DECIDED_BY = "decided_by"
         DECISION_SEQ = "decision_seq"
+        # PRD-E1 receipt.emitted payload key (SDR §5, verbatim). ``surface_id`` /
+        # ``v`` reuse the existing keys above; ``fold_ref`` is the receipt's
+        # re-derivation pointer.
+        FOLD_REF = "fold_ref"
 
 
 class Values:
@@ -152,6 +156,19 @@ class Values:
     # raw ``ConnectorCommitResult`` for this commit attempt.
     COMMIT_REF_PREFIX = "commit://"
 
+    # PRD-E1 receipt constant values (SDR §5, NEW — E1 owns them). One receipt
+    # surface per run at the stable ``receipt://<run_id>`` id; the receipt has no
+    # SaaS connector, so its ``source`` is the constant ``runtime`` / ``receipt``
+    # pair. ``fold_ref = ledger://<run_id>@<through_seq>`` re-derives the receipt
+    # by folding events with ``sequence_no <= through_seq`` (NFR-5/6).
+    RECEIPT_SURFACE_PREFIX = "receipt://"
+    RECEIPT_CONNECTOR = "runtime"
+    RECEIPT_OP = "receipt"
+    RECEIPT_KIND = "receipt"
+    RECEIPT_TITLE = "Run receipt"
+    FOLD_REF_PREFIX = "ledger://"
+    FOLD_REF_SEPARATOR = "@"
+
 
 class Messages:
     """Emit-time summaries for the ledger events (D3). ``action.classified``
@@ -171,6 +188,14 @@ class Messages:
     ROWSET_STAGED = "Staged a bulk change"
     ROW_DECISION_RECORDED = "Recorded a row decision"
     ROWSET_APPLIED = "Applied the approved rows"
+
+    # PRD-E1 receipt emit-time summaries (the two events the ReceiptEmitter
+    # appends at run termination) + the best-effort log tag.
+    RECEIPT_SURFACE_CREATED = "Prepared the run receipt"
+    RECEIPT_EMITTED = "Sealed the run receipt"
+    # Log tag when the ReceiptEmitter swallows its own exception (E1 §6). A fold
+    # or append failure must never block termination.
+    RECEIPT_EMIT_RAISED = "[surfaces_v2] receipt.emit_raised"
 
     # PRD-D2 write.applied emit-time summaries + FR-C3 display microcopy.
     WRITE_APPLIED = "Applied the write"

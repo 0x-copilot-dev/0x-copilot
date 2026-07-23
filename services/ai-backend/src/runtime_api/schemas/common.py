@@ -250,6 +250,13 @@ class RuntimeApiEventType(StrEnum):
     # fold input, not a timeline card). Wire value comes from the A1
     # ``LedgerEventType`` vocabulary so the transport enum cannot drift.
     WRITE_APPLIED = LedgerEventType.WRITE_APPLIED.value
+    # Generative Surfaces v2 (PRD-E1, SDR §5). The run receipt's seal event: the
+    # worker-side ReceiptEmitter appends it (with a matching ``surface.created
+    # {kind: receipt}``) at EVERY terminal path, once, before termination. Its
+    # SOLE producer is that emitter. Projects to ``RuntimeActivityKind.EVENT``
+    # (the receipt is a fold of the ledger, not a timeline card). Wire value comes
+    # from the A1 ``LedgerEventType`` vocabulary so the transport enum cannot drift.
+    RECEIPT_EMITTED = LedgerEventType.RECEIPT_EMITTED.value
 
     @classmethod
     def from_stream_event_type(

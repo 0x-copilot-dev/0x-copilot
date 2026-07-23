@@ -85,6 +85,8 @@ class _Fields:
     # ``SURFACE_PREPARED_TITLE``).
     WRITE_APPLIED_TITLE = "Sent — exactly the revision you approved."
     WRITE_FAILED_TITLE = "Apply refused — nothing was sent."
+    # Generative Surfaces v2 (PRD-E1, FR-E2) — the receipt seal's timeline title.
+    RECEIPT_EMITTED_TITLE = "Run receipt"
     # Generative Surfaces v2 (PRD-A2, SDR §5) — usage.recorded payload keys.
     USAGE_V = "v"
     USAGE_PURPOSE = "purpose"
@@ -196,6 +198,8 @@ class RuntimeEventPresentationProjector:
             return cls._decision_recorded_payload(payload)
         if event_type is RuntimeApiEventType.WRITE_APPLIED:
             return cls._write_applied_payload(payload)
+        if event_type is RuntimeApiEventType.RECEIPT_EMITTED:
+            return cls._receipt_emitted_payload(payload)
         return payload
 
     @classmethod
@@ -314,8 +318,9 @@ class RuntimeEventPresentationProjector:
             RuntimeApiEventType.REVISION_ADDED,
             RuntimeApiEventType.DECISION_RECORDED,
             RuntimeApiEventType.WRITE_APPLIED,
+            RuntimeApiEventType.RECEIPT_EMITTED,
         }:
-            # Generative Surfaces v2 (PRD-A3/B3/C2/D1/D2) — ledger events the SurfaceStore
+            # Generative Surfaces v2 (PRD-A3/B3/C2/D1/D2/E1) — ledger events the SurfaceStore
             # + client ledger fold consume as surface/gate-state merges, never
             # timeline cards. Explicit so a TOOL/SYSTEM-sourced emit can't reroute
             # into the tool bucket. The gate pair rides beside the
@@ -531,6 +536,9 @@ class RuntimeEventPresentationProjector:
             if result == _LedgerValues.RESULT_FAILED:
                 return _Fields.WRITE_FAILED_TITLE
             return _Fields.WRITE_APPLIED_TITLE
+        if event_type is RuntimeApiEventType.RECEIPT_EMITTED:
+            # Generative Surfaces v2 (PRD-E1, FR-E2) — the accountability seal.
+            return _Fields.RECEIPT_EMITTED_TITLE
         return None
 
     @classmethod
@@ -1301,6 +1309,27 @@ class RuntimeEventPresentationProjector:
             _LedgerKeys.Field.ACTOR: actor,
             _LedgerKeys.Field.DECISION_SEQ: decision_seq,
         }
+
+    @classmethod
+    def _receipt_emitted_payload(cls, payload: JsonObject) -> JsonObject:
+        """Project ``receipt.emitted`` through a strict allow-list (PRD-E1, SDR §5).
+
+        Keeps only ``v`` / ``surface_id`` / ``fold_ref`` — nothing else rides.
+        ``fold_ref`` contains ``"ref"`` so ``_redaction_state_for`` marks the row
+        ``OFFLOADED`` (it IS a reference — the receipt is re-derivable by folding
+        the run's events, never a stored blob).
+        """
+
+        safe_payload: JsonObject = {}
+        cls._copy_payload_version(payload, safe_payload)
+        for text_key in (
+            _LedgerKeys.Field.SURFACE_ID,
+            _LedgerKeys.Field.FOLD_REF,
+        ):
+            value = cls._text(payload.get(text_key))
+            if value is not None:
+                safe_payload[text_key] = value
+        return safe_payload
 
     @classmethod
     def _copy_payload_version(

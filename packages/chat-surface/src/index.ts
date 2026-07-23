@@ -1178,6 +1178,33 @@ export {
 } from "./thread-canvas";
 // === end PRD-D3 ===
 
+// === Surfaces v2 — PRD-E1 receipt + sources (client) ===
+// The run's accountability artifacts, both pure folds of the Work Ledger:
+// `projectReceipt` (→ the `ReceiptSurface`) and `projectLedgerSources`
+// (→ the `LedgerSourcesTab` in the rail). Flag-off byte-identical (the fold
+// runs only inside the v2 canvas subtree; the rail swap is opt-in via
+// `ledgerSources`).
+export {
+  projectReceipt,
+  foldReceipt,
+  type ReceiptProjection,
+} from "./destinations/run/projectReceipt";
+export {
+  projectLedgerSources,
+  type LedgerSourcesProjection,
+  type LedgerSourceGroup,
+  type LedgerSourceRow,
+} from "./destinations/run/projectLedgerSources";
+export {
+  ReceiptSurface,
+  serializeReceipt,
+  RECEIPT_DECIDED_ON_SURFACE_LINE,
+  RECEIPT_ASSEMBLED_LINE,
+  type ReceiptSurfaceProps,
+} from "./surfaces/receipt";
+export { LedgerSourcesTab, type LedgerSourcesTabProps } from "./workspace";
+// === end PRD-E1 ===
+
 // === Surfaces v2 — PRD-B2 provenance + honest states ===
 // Provenance footer, skeleton/assembling state, lossless raw fallback, and the
 // status strip — all pure projections of the Work Ledger, mounted strictly
