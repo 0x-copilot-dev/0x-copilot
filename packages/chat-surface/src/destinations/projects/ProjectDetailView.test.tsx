@@ -1,16 +1,28 @@
-import { fireEvent, render, screen, waitFor } from "@testing-library/react";
+import {
+  fireEvent,
+  render,
+  screen,
+  waitFor,
+  within,
+} from "@testing-library/react";
 import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
 
 import { RouterProvider } from "../../providers/RouterProvider";
 import type { ArtifactRoute, Router } from "../../routing/router";
 import { registerItemRoute, unregisterItemRoute } from "../../refs/registry";
+import { formatRelativeTime } from "../../util/time";
 
 import {
   ProjectDetailView,
   type ProjectDetail,
+  type LibraryFileId,
   type ProjectFileRow,
 } from "./ProjectDetailView";
-import type { ProjectId } from "@0x-copilot/api-types";
+import type {
+  ChatArchiveRow,
+  ConversationId,
+  ProjectId,
+} from "@0x-copilot/api-types";
 
 const PROJECT: ProjectDetail = {
   id: "proj-1" as ProjectId,
@@ -290,13 +302,17 @@ describe("ProjectDetailView", () => {
 
 const FILES: ReadonlyArray<ProjectFileRow> = [
   {
-    id: "file-abc",
+    id: "file-abc" as LibraryFileId,
     name: "Renewal deck.pdf",
     fileKind: "PDF",
     sizeLabel: "1.2 MB",
     updatedAt: new Date(Date.now() - 5 * 60_000).toISOString(),
   },
-  { id: "file-def", name: "Pricing model.xlsx", fileKind: "Dataset" },
+  {
+    id: "file-def" as LibraryFileId,
+    name: "Pricing model.xlsx",
+    fileKind: "Dataset",
+  },
 ];
 
 describe("ProjectDetailView — files tab", () => {
@@ -406,5 +422,115 @@ describe("ProjectDetailView — files tab", () => {
     );
     const section = screen.getByTestId("project-detail-section-files");
     expect(section.querySelector('[data-testid="status-pill"]')).toBeNull();
+  });
+});
+
+// ===========================================================================
+// Chats section (PRD-07 Seam 3 / DoD 10/11).
+//
+// The solo profile's Chats section is the conversation list filtered by
+// project — `ChatArchiveRow`s (PRD-03's `toChatArchiveRow`) carrying the
+// `title` / `model` / `updated_at` the old activity-fed list could not
+// (`ProjectActivityRecord`, store.py:149-173, has none of them), rendered
+// through the shared `_shared/RowList` / `_shared/Row`. Heading count = the
+// rendered list length (design copilot-app.jsx:363 — `Chats · {chats.length}`).
+// ===========================================================================
+
+const NOW = Date.parse("2026-05-17T12:00:00.000Z");
+
+function chatRow(over: Partial<ChatArchiveRow> = {}): ChatArchiveRow {
+  return {
+    id: "conv-1" as ConversationId,
+    title: "Renewal strategy",
+    status: "done",
+    preview: "Let's map the Q4 accounts",
+    model: "gpt-4o",
+    updated_at: "2026-05-17T11:55:00.000Z",
+    pinned: false,
+    ...over,
+  };
+}
+
+describe("ProjectDetailView — chats section (PRD-07)", () => {
+  it("renders one chat-archive-row per chat carrying title / model / updatedAt (DoD 10)", () => {
+    const row = chatRow();
+    renderView({ chats: { status: "ok", data: [row] }, now: NOW });
+    const section = screen.getByTestId("project-detail-section-chats");
+    const rows = within(section).getAllByTestId("chat-archive-row");
+    expect(rows).toHaveLength(1);
+    const text = rows[0]!.textContent ?? "";
+    // The three fields the activity-fed list could not carry.
+    expect(text).toContain(row.title);
+    expect(text).toContain(row.model);
+    expect(text).toContain(formatRelativeTime(row.updated_at, NOW));
+  });
+
+  it("the Chats SectionHeader count equals the number of rendered rows (DoD 11a)", () => {
+    const rows = [
+      chatRow({ id: "conv-a" as ConversationId, title: "Alpha" }),
+      chatRow({ id: "conv-b" as ConversationId, title: "Beta" }),
+      chatRow({ id: "conv-c" as ConversationId, title: "Gamma" }),
+    ];
+    renderView({ chats: { status: "ok", data: rows }, now: NOW });
+    const section = screen.getByTestId("project-detail-section-chats");
+    expect(within(section).getAllByTestId("chat-archive-row")).toHaveLength(3);
+    expect(
+      within(section).getByTestId("section-header-count").textContent,
+    ).toBe("3");
+  });
+
+  it("the Files SectionHeader renders the file count sourced from the ready list (DoD 11b)", () => {
+    const twelveFiles: ReadonlyArray<ProjectFileRow> = Array.from(
+      { length: 12 },
+      (_, i) => ({ id: `file-${i}` as LibraryFileId, name: `doc-${i}.pdf` }),
+    );
+    renderView({ files: { status: "ok", data: twelveFiles }, now: NOW });
+    const section = screen.getByTestId("project-detail-section-files");
+    expect(
+      within(section).getByTestId("section-header-count").textContent,
+    ).toBe("12");
+  });
+
+  it("opens a chat via onOpenChat when its row is activated", () => {
+    const onOpenChat = vi.fn();
+    const row = chatRow({ id: "conv-open" as ConversationId });
+    renderView({ chats: { status: "ok", data: [row] }, onOpenChat, now: NOW });
+    const section = screen.getByTestId("project-detail-section-chats");
+    fireEvent.click(within(section).getByTestId("chat-archive-row"));
+    expect(onOpenChat).toHaveBeenCalledWith("conv-open");
+  });
+
+  it("renders the chats error state with a working Retry", () => {
+    const onRetryChats = vi.fn();
+    renderView({
+      chats: { status: "error", error: "kaboom" },
+      onRetryChats,
+    });
+    const body = screen.getByTestId("project-chats-section-body");
+    expect(body).toHaveAttribute("data-state", "error");
+    expect(screen.getByText("kaboom")).toBeInTheDocument();
+    fireEvent.click(screen.getByTestId("empty-state-action"));
+    expect(onRetryChats).toHaveBeenCalledTimes(1);
+  });
+
+  it("renders the no-chats empty state when ready with zero chats", () => {
+    renderView({ chats: { status: "ok", data: [] } });
+    expect(screen.getByTestId("project-chats-section-body")).toHaveAttribute(
+      "data-state",
+      "empty",
+    );
+    expect(screen.getByText("No chats yet")).toBeInTheDocument();
+  });
+
+  it("falls back to the host cross-destination slot when no chats source is wired", () => {
+    // `chats` omitted → the solo Chats section defers to the host slot (the
+    // team profile always uses that slot), and the heading count comes from the
+    // card rollup on `project`.
+    renderView({ project: { ...PROJECT, chatCount: 9 } });
+    const section = screen.getByTestId("project-detail-section-chats");
+    expect(within(section).getByTestId("stub-chats")).toBeInTheDocument();
+    expect(
+      within(section).getByTestId("section-header-count").textContent,
+    ).toBe("9");
   });
 });

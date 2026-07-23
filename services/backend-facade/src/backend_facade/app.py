@@ -65,6 +65,11 @@ class FacadeConversationRequest(BaseModel):
     title: str | None = None
     idempotency_key: str | None = None
     metadata: dict[str, object] = Field(default_factory=dict)
+    # PRD-07 — the project to file the new chat under. Declared explicitly so
+    # Pydantic's default ``extra="ignore"`` doesn't drop it on ``model_dump``
+    # (today a client that sends project_id has it silently deleted here);
+    # forwarded verbatim to ai-backend, which persists it on the column.
+    project_id: str | None = None
 
 
 class FacadeRunRequest(BaseModel):
@@ -413,20 +418,25 @@ def create_app(
         limit: int = Query(30, ge=1, le=200),
         include_archived: bool = False,
         include_deleted: bool = False,
+        # PRD-07 — the project-scoped chat list. Clients send the app-standard
+        # ``filter[project_id]`` axis; ai-backend's route reads a plain
+        # ``project_id`` query param, so translate here.
+        project_id: str | None = Query(None, alias="filter[project_id]"),
     ) -> dict[str, object]:
         identity = FacadeAuthenticator.authenticate_request(request)
+        params: dict[str, object] = {
+            "limit": limit,
+            "include_archived": include_archived,
+            "include_deleted": include_deleted,
+        }
+        if project_id is not None:
+            params["project_id"] = project_id
         return await forward_json(
             app,
             "GET",
             "/v1/agent/conversations",
             target="ai_backend",
-            params=identity.scoped_params(
-                {
-                    "limit": limit,
-                    "include_archived": include_archived,
-                    "include_deleted": include_deleted,
-                }
-            ),
+            params=identity.scoped_params(params),
             identity=identity,
         )
 

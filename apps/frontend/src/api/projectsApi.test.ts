@@ -8,7 +8,6 @@ import {
   createProject,
   deleteProject,
   fetchProject,
-  fetchProjectActivity,
   fetchProjectMembers,
   fetchProjects,
   patchProject,
@@ -21,7 +20,6 @@ import {
 import type {
   CreateProjectRequest,
   Project,
-  ProjectActivityListResponse,
   ProjectId,
   ProjectListResponse,
   ProjectMembership,
@@ -49,6 +47,7 @@ function summaryFixture(
     viewer_starred: false,
     counts: {
       chats: 0,
+      files: 0,
       todos_open: 0,
       todos_done: 0,
       inbox_items: 0,
@@ -78,6 +77,7 @@ function projectFixture(overrides: Partial<Project> = {}): Project {
     last_activity_at: null,
     counts: {
       chats: 0,
+      files: 0,
       todos_open: 0,
       todos_done: 0,
       inbox_items: 0,
@@ -577,48 +577,8 @@ describe("project member endpoints", () => {
 // ===========================================================================
 // ACTIVITY
 // ===========================================================================
-
-describe("fetchProjectActivity", () => {
-  beforeEach(() => {
-    configureAuthBearerProvider(() => "test-bearer");
-  });
-  afterEach(() => {
-    configureAuthBearerProvider(() => null);
-    vi.unstubAllGlobals();
-  });
-
-  it("GETs /v1/projects/{id}/activity with no filters by default", async () => {
-    const response: ProjectActivityListResponse = {
-      items: [],
-      next_cursor: null,
-    };
-    const fetchMock = fetchMockReturning(() => jsonResponse(response));
-    vi.stubGlobal("fetch", fetchMock);
-
-    await fetchProjectActivity(IDENTITY, "project_1" as ProjectId);
-
-    const url = String(fetchMock.mock.calls[0][0]);
-    expect(url).toContain("/v1/projects/project_1/activity");
-    expect(url).not.toContain("filter%5Bkind%5D");
-  });
-
-  it("encodes kind filter + cursor + limit", async () => {
-    const response: ProjectActivityListResponse = {
-      items: [],
-      next_cursor: null,
-    };
-    const fetchMock = fetchMockReturning(() => jsonResponse(response));
-    vi.stubGlobal("fetch", fetchMock);
-
-    await fetchProjectActivity(IDENTITY, "project_1" as ProjectId, {
-      kind: "todo",
-      after: "cursor_xyz",
-      limit: 25,
-    });
-
-    const url = String(fetchMock.mock.calls[0][0]);
-    expect(url).toContain(encodeURIComponent("filter[kind]") + "=todo");
-    expect(url).toContain("after=cursor_xyz");
-    expect(url).toContain("limit=25");
-  });
-});
+//
+// PRD-07 deleted the project-activity fetch — `GET /v1/projects/{id}/activity`
+// was never implemented on any service. The project-scoped chat list is now the
+// conversation list filtered by project (`ProjectDataPort.listProjectChats`,
+// covered by apps/frontend/src/features/projects + the desktop binder tests).

@@ -10,8 +10,7 @@
 //   6. `transferProjectOwnership`                   — owner reassignment.
 //   7. `fetchProjectMembers / addProjectMember / patchProjectMember /
 //       removeProjectMember`                         — membership CRUD.
-//   8. `fetchProjectActivity`                       — cross-destination event stream.
-//   9. `streamProjectEvents({...})`                 — SSE durable channel.
+//   8. `streamProjectEvents({...})`                 — SSE durable channel.
 //
 // Network rule (CLAUDE.md / `apps/frontend/CLAUDE.md`): apps call the
 // **facade** only (`/v1/*`). Never `backend:8100` or `ai-backend:8000`
@@ -30,7 +29,6 @@ import type {
   CreateProjectRequest,
   ListProjectsFilters,
   Project,
-  ProjectActivityListResponse,
   ProjectId,
   ProjectListResponse,
   ProjectMembership,
@@ -242,36 +240,13 @@ export function removeProjectMember(
 // ===========================================================================
 // ACTIVITY (sub-PRD §3.6)
 // ===========================================================================
-
-export interface FetchProjectActivityOptions {
-  /** ItemKind filter (OR per cross-audit §1.5). */
-  readonly kind?: string;
-  readonly after?: string;
-  readonly limit?: number;
-}
-
-/** GET /v1/projects/{id}/activity — members + compliance admin. */
-export function fetchProjectActivity(
-  identity: RequestIdentity,
-  id: ProjectId,
-  options: FetchProjectActivityOptions = {},
-): Promise<ProjectActivityListResponse> {
-  const params: Record<string, string | undefined> = {};
-  if (options.kind !== undefined) {
-    params["filter[kind]"] = options.kind;
-  }
-  if (options.after !== undefined) {
-    params.after = options.after;
-  }
-  if (options.limit !== undefined) {
-    params.limit = String(options.limit);
-  }
-  return httpGet<ProjectActivityListResponse>(
-    `/v1/projects/${encodeURIComponent(id)}/activity`,
-    identity,
-    params,
-  );
-}
+//
+// PRD-07 removed the project-activity fetch: `GET /v1/projects/{id}/activity`
+// was never implemented on any service — the client call 404'd on every load
+// and `.catch(() => ({items: []}))` swallowed it, so the detail chat list was
+// unconditionally empty. The project-scoped chat list is now the conversation
+// list filtered by project (`ProjectDataPort.listProjectChats`); the activity
+// projector + route stay unbuilt (PRD §11 non-goals).
 
 // ===========================================================================
 // SSE (durable project channel — sub-PRD §4.2)

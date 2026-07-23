@@ -17,9 +17,9 @@ import {
 } from "vitest";
 
 import type {
+  ChatArchiveRow,
   ConversationId,
   Project,
-  ProjectActivity,
   ProjectId,
   ProjectListResponse,
   ProjectMembership,
@@ -35,7 +35,6 @@ const projectsApiMocks = vi.hoisted(() => ({
   fetchProjects: vi.fn(),
   fetchProject: vi.fn(),
   fetchProjectMembers: vi.fn(),
-  fetchProjectActivity: vi.fn(),
   activateProject: vi.fn(),
   archiveProject: vi.fn(),
   deleteProject: vi.fn(),
@@ -52,7 +51,6 @@ vi.mock("../../api/projectsApi", async () => {
     fetchProjects: projectsApiMocks.fetchProjects,
     fetchProject: projectsApiMocks.fetchProject,
     fetchProjectMembers: projectsApiMocks.fetchProjectMembers,
-    fetchProjectActivity: projectsApiMocks.fetchProjectActivity,
     activateProject: projectsApiMocks.activateProject,
     archiveProject: projectsApiMocks.archiveProject,
     deleteProject: projectsApiMocks.deleteProject,
@@ -61,6 +59,21 @@ vi.mock("../../api/projectsApi", async () => {
     streamProjectEvents: projectsApiMocks.streamProjectEvents,
   };
 });
+
+// PRD-07 — the detail pane's Chats + Files sections are fed by the web
+// `ProjectDataPort` (over the HTTP client), NOT the old project-activity read
+// (which hit a route that never existed). Mock the port module so tests drive
+// those sections without the real fetch, mirroring the projectsApi seam.
+const projectDataPortMocks = vi.hoisted(() => ({
+  listProjectChats: vi.fn(),
+  listProjectFiles: vi.fn(),
+}));
+vi.mock("./ProjectDataPort", () => ({
+  createWebProjectDataPort: () => ({
+    listProjectChats: projectDataPortMocks.listProjectChats,
+    listProjectFiles: projectDataPortMocks.listProjectFiles,
+  }),
+}));
 
 // Imports below this line resolve through the mocks above.
 import { ProjectsRoute, applyProjectEnvelope } from "./ProjectsRoute";
@@ -81,6 +94,7 @@ function summary(overrides: Partial<ProjectSummary> = {}): ProjectSummary {
     viewer_starred: false,
     counts: {
       chats: 0,
+      files: 0,
       todos_open: 0,
       todos_done: 0,
       inbox_items: 0,
@@ -110,6 +124,7 @@ function fullProject(overrides: Partial<Project> = {}): Project {
     last_activity_at: null,
     counts: {
       chats: 0,
+      files: 0,
       todos_open: 0,
       todos_done: 0,
       inbox_items: 0,
@@ -142,30 +157,25 @@ function membership(
   };
 }
 
-function activityRow(
-  overrides: Partial<ProjectActivity> = {},
-): ProjectActivity {
-  return {
-    id: "act_1",
-    tenant_id: "tenant_1" as TenantId,
-    project_id: "project_1" as ProjectId,
-    actor_user_id: "user_test" as UserId,
-    actor_display_name: "Sarah",
-    action: "created a chat",
-    kind: "chat",
-    ref: { kind: "chat", id: "conv_1" as ConversationId },
-    preview: "Q3 kickoff",
-    occurred_at: "2026-05-18T09:00:00Z",
-    ...overrides,
-  };
-}
-
 function membersResponse(items: ReadonlyArray<ProjectMembership>) {
   return { items, next_cursor: null };
 }
 
-function activityResponse(items: ReadonlyArray<ProjectActivity>) {
-  return { items, next_cursor: null };
+// PRD-07 — one project-scoped chat row, the shape `ProjectDataPort.
+// listProjectChats` resolves (a `toChatArchiveRow` projection).
+function chatArchiveRow(
+  overrides: Partial<ChatArchiveRow> = {},
+): ChatArchiveRow {
+  return {
+    id: "conv_1" as ConversationId,
+    title: "Q3 kickoff",
+    status: "done",
+    preview: "Q3 kickoff notes",
+    model: "gpt-4o",
+    updated_at: "2026-05-18T09:00:00Z",
+    pinned: false,
+    ...overrides,
+  };
 }
 
 function envelope(
@@ -403,6 +413,7 @@ describe("ProjectsRoute render", () => {
           color_hue: 180,
           counts: {
             chats: 3,
+            files: 2,
             todos_open: 0,
             todos_done: 0,
             inbox_items: 0,
@@ -813,7 +824,8 @@ describe("ProjectsRoute detail pane", () => {
     projectsApiMocks.fetchProjects.mockReset();
     projectsApiMocks.fetchProject.mockReset();
     projectsApiMocks.fetchProjectMembers.mockReset();
-    projectsApiMocks.fetchProjectActivity.mockReset();
+    projectDataPortMocks.listProjectChats.mockReset();
+    projectDataPortMocks.listProjectFiles.mockReset();
     projectsApiMocks.streamProjectEvents.mockReset();
     projectsApiMocks.streamProjectEvents.mockReturnValue({ close: vi.fn() });
     // Sensible detail defaults; individual tests override as needed.
@@ -821,9 +833,16 @@ describe("ProjectsRoute detail pane", () => {
     projectsApiMocks.fetchProjectMembers.mockResolvedValue(
       membersResponse([membership()]),
     );
-    projectsApiMocks.fetchProjectActivity.mockResolvedValue(
-      activityResponse([]),
-    );
+    // PRD-07 — the port resolves a `SectionResult`, never throws. Default to
+    // empty chats + files; individual tests override.
+    projectDataPortMocks.listProjectChats.mockResolvedValue({
+      status: "ok",
+      data: [],
+    });
+    projectDataPortMocks.listProjectFiles.mockResolvedValue({
+      status: "ok",
+      data: [],
+    });
   });
   afterEach(() => {
     vi.clearAllMocks();
@@ -874,42 +893,50 @@ describe("ProjectsRoute detail pane", () => {
     });
   });
 
-  it("degrades the Files tab to the coming-soon empty state — files omitted (FR-4.11)", async () => {
+  it("renders the Files section empty state when the project has no files (PRD-07 FR-4.11)", async () => {
     projectsApiMocks.fetchProjects.mockResolvedValueOnce(
       listResponse([summary()]),
     );
-
+    // Port default (from beforeEach): empty files → the Files section is WIRED
+    // now (PRD-07), so it renders "No files yet", not the old "coming soon".
     await renderAndOpen();
     await screen.findByTestId("project-detail-view");
 
-    // Solo profile renders the Files section inline (no tab bar), so the
-    // coming-soon state is visible without a tab click.
     const filesTab = await screen.findByTestId("project-files-tab");
-    expect(filesTab).toHaveAttribute("data-state", "unavailable");
-    expect(screen.getByText("Project files coming soon")).toBeInTheDocument();
+    await waitFor(() =>
+      expect(filesTab).toHaveAttribute("data-state", "empty"),
+    );
+    expect(screen.getByText("No files yet")).toBeInTheDocument();
   });
 
-  it("opens Run from a chat row through the injected onOpenRun callback (FR-4.12)", async () => {
+  it("opens Run from a project chat row through the injected onOpenRun callback (PRD-07 FR-4.12)", async () => {
     projectsApiMocks.fetchProjects.mockResolvedValueOnce(
       listResponse([summary()]),
     );
-    projectsApiMocks.fetchProjectActivity.mockResolvedValue(
-      activityResponse([
-        activityRow({
-          id: "act_chat",
-          ref: { kind: "chat", id: "conv_42" as ConversationId },
-          preview: "Renewal thread",
+    // The project's chats come from `ProjectDataPort.listProjectChats` — a
+    // `toChatArchiveRow` projection carrying model + status (the fields the old
+    // activity-fed list could not).
+    projectDataPortMocks.listProjectChats.mockResolvedValue({
+      status: "ok",
+      data: [
+        chatArchiveRow({
+          id: "conv_42" as ConversationId,
+          title: "Renewal thread",
+          model: "gpt-4o",
         }),
-      ]),
-    );
+      ],
+    });
     const onOpenRun = vi.fn();
 
     await renderAndOpen({ onOpenRun });
     await screen.findByTestId("project-detail-view");
 
-    // Chats is the default tab, so the chat row renders immediately.
-    const chatRow = await screen.findByTestId("projects-detail-chat-row");
-    expect(chatRow).toHaveAttribute("data-conversation-id", "conv_42");
+    // Solo profile renders the Chats section inline; the row is a
+    // `chat-archive-row` (shared `_shared/Row`), activated → onOpenChat →
+    // onOpenRun with the conversation id.
+    const chatRow = await screen.findByTestId("chat-archive-row");
+    expect(chatRow).toHaveTextContent("Renewal thread");
+    expect(chatRow).toHaveTextContent("gpt-4o");
     fireEvent.click(chatRow);
     expect(onOpenRun).toHaveBeenCalledWith("conv_42");
   });

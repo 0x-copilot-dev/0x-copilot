@@ -23,6 +23,7 @@ import {
 import type {
   Conversation,
   ConversationListResponse,
+  ProjectId,
   RunHistoryEntry,
   RunHistoryResponse,
 } from "@0x-copilot/api-types";
@@ -43,6 +44,7 @@ import {
   ChatsBinder,
   ConnectorsBinder,
   RunBinder,
+  createDesktopProjectDataPort,
 } from "./destinationBinders";
 
 // globals: false in the desktop vitest config → register cleanup explicitly.
@@ -302,6 +304,61 @@ describe("RunBinder — existing conversation", () => {
     expect(body).not.toHaveProperty("conversation_idempotency_key");
     // An existing conversation is never re-created.
     expect(onConversationCreated).not.toHaveBeenCalled();
+  });
+});
+
+// ===========================================================================
+// createDesktopProjectDataPort — PRD-07 DoD 15.
+//
+// The desktop `ProjectDataPort.listProjectChats("p1")` must issue exactly ONE
+// Transport request whose PATH carries `filter[project_id]=p1` (so the facade's
+// alias survives → ai-backend's `project_id`), and the returned row must carry
+// `model` and `status` — proving it is mapped by the SHARED `toChatArchiveRow`
+// (PRD-03), not a local projection that a `ProjectActivityRecord` could never
+// feed. Desktop REACHABILITY of the detail view (focusedProjectId + renderDetail)
+// is PRD-10 DoD 9, not this PRD — this test exercises the port directly.
+// ===========================================================================
+
+describe("createDesktopProjectDataPort — project-scoped chats (PRD-07 DoD 15)", () => {
+  it("listProjectChats issues one filter[project_id]=<id> request and maps rows via toChatArchiveRow", async () => {
+    const recorder: Recorder = { calls: [] };
+    const conversation: Conversation = {
+      conversation_id: "conv-p1",
+      org_id: "org-1",
+      user_id: "user-1",
+      assistant_id: "asst-1",
+      title: "Filed chat",
+      status: "active",
+      created_at: "2026-07-22T00:00:00Z",
+      updated_at: "2026-07-22T00:00:00Z",
+      archived_at: null,
+      metadata: {},
+      schema_version: 1,
+      latest_run_status: "running",
+      model: "claude-sonnet-4.5",
+      project_id: "p1",
+    };
+    const port = createDesktopProjectDataPort(
+      chatsTransport(recorder, [conversation]),
+    );
+
+    const result = await port.listProjectChats("p1" as ProjectId);
+
+    // Exactly one Transport request, whose PATH carries the project filter axis
+    // (the facade reads `filter[project_id]` and translates to `project_id`).
+    expect(recorder.calls).toHaveLength(1);
+    expect(recorder.calls[0]!.method).toBe("GET");
+    expect(recorder.calls[0]!.path).toContain("filter[project_id]=p1");
+    expect(recorder.calls[0]!.path).toContain("include_archived=true");
+
+    // The row is mapped by the SHARED `toChatArchiveRow`: it carries `model`
+    // (mono tag) and `status` (the archive chip taxonomy) — the two fields a
+    // local activity-record projection could not supply.
+    expect(result.status).toBe("ok");
+    const rows = result.data ?? [];
+    expect(rows).toHaveLength(1);
+    expect(rows[0]!.model).toBe("claude-sonnet-4.5");
+    expect(rows[0]!.status).toBe("running");
   });
 });
 

@@ -67,6 +67,13 @@ def _schema() -> dict[str, set[str]]:
                 r"DROP COLUMN (?:IF EXISTS )?(\w+)", body, re.IGNORECASE
             ):
                 tables.get(name, set()).discard(drop.group(1).lower())
+        # A later migration that DROPs a table removes it from the derived
+        # schema entirely (PRD-07 drops project_activity_counts in 0047), so a
+        # dropped table is not flagged as an unclassified org-scoped table.
+        for match in re.finditer(
+            r"DROP TABLE (?:IF EXISTS )?(\w+)", text, re.IGNORECASE
+        ):
+            tables.pop(match.group(1).lower(), None)
     return tables
 
 

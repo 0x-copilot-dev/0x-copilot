@@ -94,6 +94,7 @@ function makeProject(over: Partial<ProjectSummary>): ProjectSummary {
     viewer_starred: false,
     counts: {
       chats: 0,
+      files: 0,
       todos_open: 0,
       todos_done: 0,
       inbox_items: 0,
@@ -115,6 +116,7 @@ const ACME = makeProject({
   viewer_starred: true,
   counts: {
     chats: 12,
+    files: 7,
     todos_open: 4,
     todos_done: 2,
     inbox_items: 1,
@@ -285,5 +287,67 @@ describe("ProjectsDestination", () => {
     });
     fireEvent.click(screen.getByTestId("close-detail"));
     expect(onCloseDetail).toHaveBeenCalledTimes(1);
+  });
+
+  // =========================================================================
+  // Card meta counts line (PRD-07 Seam 2 / DoD 12/13).
+  //
+  // The design's last card line is the mono `.lrow__sub`
+  // `{p.chats} chats · {p.files} files` (copilot-app.jsx:422-424). `counts.files`
+  // is library `kind='file'` only — distinct from `library_items`. When the
+  // facade cannot fill `counts.chats` from ai-backend it is `null`, and the
+  // chats segment must vanish rather than fabricate "0 chats" (the exact bug
+  // this PRD fixes; fails on `main`).
+  // =========================================================================
+
+  it("renders the mono `N chats · M files` meta with the pinned type tokens (DoD 12)", () => {
+    const project = makeProject({
+      id: asProjectId("proj_meta"),
+      name: "Launch week",
+      counts: {
+        chats: 3,
+        files: 12,
+        todos_open: 0,
+        todos_done: 0,
+        inbox_items: 0,
+        library_items: 20,
+        routines_active: 0,
+        members: 1,
+      },
+    });
+    renderDest({ items: ok([project]) });
+    const meta = screen.getByTestId("project-card-counts");
+    // U+00B7 middot separator, exactly the design's string.
+    expect(meta.textContent).toBe("3 chats · 12 files");
+    // The two type tokens pinned by DoD 12 (byte-identical to the design's
+    // `.lrow__sub`): mono family, subtle colour, 2xs size.
+    expect(meta.style.fontFamily).toBe("var(--font-mono)");
+    expect(meta.style.color).toBe("var(--color-text-subtle)");
+    expect(meta.style.fontSize).toBe("var(--font-size-2xs)");
+  });
+
+  it("hides the chats segment (renders `M files`, never `0 chats`) when counts.chats is null (DoD 13)", () => {
+    const project = makeProject({
+      id: asProjectId("proj_nullchats"),
+      name: "Unfiled counts",
+      counts: {
+        chats: null,
+        files: 4,
+        todos_open: 0,
+        todos_done: 0,
+        inbox_items: 0,
+        library_items: 4,
+        routines_active: 0,
+        members: 1,
+      },
+    });
+    renderDest({ items: ok([project]) });
+    const meta = screen.getByTestId("project-card-counts");
+    const card = screen.getByTestId("project-card");
+    expect(meta.textContent).toBe("4 files");
+    expect(card.textContent ?? "").toContain("4 files");
+    // The regression this PRD guards: a fabricated zero must never reach the card.
+    expect(card.textContent ?? "").not.toContain("0 chats");
+    expect(card.textContent ?? "").not.toContain("chats");
   });
 });

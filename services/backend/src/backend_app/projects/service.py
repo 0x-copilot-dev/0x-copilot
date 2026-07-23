@@ -51,7 +51,7 @@ Admin force-transfer (projects-prd §12 Q1, orchestrator-approved):
 from __future__ import annotations
 
 from datetime import datetime, timezone
-from typing import Any, Iterable
+from typing import Any, Iterable, Protocol, Sequence
 
 from backend_app.identity.store import IdentityStore
 from backend_app.projects.acl import (
@@ -127,6 +127,39 @@ class ProjectConflict(Exception):
         self.code = code
 
 
+class ProjectRollupSource(Protocol):
+    """One destination's contribution to the per-project rollup (PRD-07).
+
+    Registered on the projects service in ``backend_app/app.py`` next to each
+    destination's own service, so ``projects/service.py`` never imports the
+    ``library`` / ``todos`` / ``inbox`` / ``routines`` stores directly. Each
+    source answers a GROUPED, VIEWER-SCOPED count for a whole page of project
+    ids in one call (no N+1). The count is computed on read against live rows,
+    so it can never disagree with the list it summarizes.
+    """
+
+    #: The ``ProjectActivityCounts`` fields this source fills (e.g. ``("files",
+    #: "library_items")``). Documentation-only; the composer trusts the returned
+    #: dict's keys.
+    fields: tuple[str, ...]
+
+    def count_by_project(
+        self,
+        *,
+        tenant_id: str,
+        project_ids: tuple[str, ...],
+        caller_user_id: str,
+        caller_roles: tuple[str, ...],
+    ) -> dict[str, dict[str, int]]:
+        """Return ``project_id -> {field: count}`` for the requested projects.
+
+        Viewer-scoped exactly as the destination's own list is: the caller only
+        ever counts rows they could read. Projects with no rows may be absent
+        (the composer treats a missing field as 0).
+        """
+        ...
+
+
 class ProjectsService:
     """Composition of the projects store + identity store with ACL + audit."""
 
@@ -136,9 +169,17 @@ class ProjectsService:
         store: ProjectsStore,
         identity_store: IdentityStore,
         membership_port: ProjectMembershipPort | None = None,
+        rollup_sources: Sequence[ProjectRollupSource] | None = None,
     ) -> None:
         self._store = store
         self._identity = identity_store
+        # PRD-07 — computed-on-read rollup sources (library / todos / inbox /
+        # routines / members). Registered post-construction in app.py once every
+        # destination's store exists; empty by default so tests/dev that don't
+        # wire them still get correct (all-zero, chats=None) counts.
+        self._rollup_sources: tuple[ProjectRollupSource, ...] = tuple(
+            rollup_sources or ()
+        )
         # The canonical ACL port. When the in-memory store is the
         # backing adapter, the membership-port adapter operates on a
         # shared in-memory dict so the two views stay in sync.
@@ -147,6 +188,15 @@ class ProjectsService:
         # inject a :class:`PostgresProjectMembershipAdapter` reading
         # from the same ``project_memberships`` table the store writes.
         self._membership_port = membership_port or _membership_adapter_for(store)
+
+    def register_rollup_sources(self, sources: Sequence[ProjectRollupSource]) -> None:
+        """Install the computed-on-read rollup sources (PRD-07).
+
+        Called from ``app.py`` after every destination's store exists (library
+        is constructed after the projects service), so the sources can't all be
+        passed at construction time.
+        """
+        self._rollup_sources = tuple(sources)
 
     # =================================================================
     # Reads
@@ -181,7 +231,9 @@ class ProjectsService:
         starred = self._store.is_starred(
             tenant_id=tenant_id, project_id=project_id, user_id=caller_user_id
         )
-        counts = self._counts_for(record)
+        counts = self._counts_for_page(
+            [record], caller_user_id=caller_user_id, caller_roles=caller_roles
+        )[record.id]
         return record, viewer_role, starred, counts
 
     def list_projects(
@@ -299,6 +351,11 @@ class ProjectsService:
                 )
             )
 
+        # PRD-07 — one batched rollup pass for the whole page (was 2N queries:
+        # a per-card stored-counts read + a per-card limit=501 membership scan).
+        counts_by_project = self._counts_for_page(
+            page, caller_user_id=caller_user_id, caller_roles=caller_roles
+        )
         enriched = tuple(
             (
                 record,
@@ -308,7 +365,7 @@ class ProjectsService:
                     project_id=record.id,
                     user_id=caller_user_id,
                 ),
-                self._counts_for(record),
+                counts_by_project[record.id],
             )
             for record in page
         )
@@ -1066,24 +1123,54 @@ class ProjectsService:
             raise ProjectNotFound(project_id)
         return record
 
-    def _counts_for(self, record: ProjectRecord) -> ProjectActivityCounts:
-        stored = self._store.get_counts(
-            tenant_id=record.tenant_id, project_id=record.id
-        )
-        if stored is not None:
-            return stored
-        # Project that hasn't been touched by the projector yet —
-        # synthesize the all-zeros shape (plus 1 member for the owner,
-        # because the owner row exists by construction).
-        rows, _ = self._store.list_memberships_for_project(
-            tenant_id=record.tenant_id, project_id=record.id, limit=501
-        )
-        members = len(rows)
-        return ProjectActivityCounts(
-            tenant_id=record.tenant_id,
-            project_id=record.id,
-            members=members,
-        )
+    def _counts_for_page(
+        self,
+        records: Sequence[ProjectRecord],
+        *,
+        caller_user_id: str,
+        caller_roles: Iterable[str],
+    ) -> dict[str, ProjectActivityCounts]:
+        """Compute per-project rollups for a whole page in one batched pass (PRD-07).
+
+        Replaces the per-card stored-counts read + per-card ``limit=501``
+        membership scan (2N queries). Each registered rollup source answers a
+        grouped, viewer-scoped ``count_by_project`` for every project id at once.
+        ``chats`` is always ``None`` here — its rows live in ``ai-backend`` and
+        the facade fills the number; ``backend`` counting them would invert the
+        service dependency direction into a cycle.
+        """
+
+        if not records:
+            return {}
+        tenant_id = records[0].tenant_id
+        project_ids = tuple(record.id for record in records)
+        roles = tuple(caller_roles)
+        composed: dict[str, dict[str, int]] = {pid: {} for pid in project_ids}
+        for source in self._rollup_sources:
+            grouped = source.count_by_project(
+                tenant_id=tenant_id,
+                project_ids=project_ids,
+                caller_user_id=caller_user_id,
+                caller_roles=roles,
+            )
+            for pid, field_counts in grouped.items():
+                if pid in composed:
+                    composed[pid].update(field_counts)
+        return {
+            record.id: ProjectActivityCounts(
+                tenant_id=record.tenant_id,
+                project_id=record.id,
+                chats=None,
+                files=composed[record.id].get("files", 0),
+                library_items=composed[record.id].get("library_items", 0),
+                todos_open=composed[record.id].get("todos_open", 0),
+                todos_done=composed[record.id].get("todos_done", 0),
+                inbox_items=composed[record.id].get("inbox_items", 0),
+                routines_active=composed[record.id].get("routines_active", 0),
+                members=composed[record.id].get("members", 0),
+            )
+            for record in records
+        }
 
     # ----- validation ----------------------------------------------------
 

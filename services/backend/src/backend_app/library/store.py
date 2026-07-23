@@ -255,6 +255,17 @@ class LibraryStore(Protocol):
         include_deleted: bool = False,
     ) -> tuple[tuple[LibraryItemRecord, ...], str | None, dict[str, int]]: ...
 
+    # -- rollup counts (PRD-07) ----------------------------------------
+
+    def count_by_project(
+        self,
+        *,
+        tenant_id: str,
+        project_ids: tuple[str, ...],
+        caller_user_id: str,
+        caller_roles: tuple[str, ...],
+    ) -> dict[str, dict[str, int]]: ...
+
     # -- audit ---------------------------------------------------------
 
     def append_audit(self, record: LibraryAuditRecord) -> LibraryAuditRecord: ...
@@ -497,6 +508,45 @@ class InMemoryLibraryStore:
         page = candidates[start : start + limit]
         next_cursor = str(start + limit) if start + limit < len(candidates) else None
         return tuple(page), next_cursor, counts
+
+    # -- rollup counts (PRD-07) ----------------------------------------
+
+    def count_by_project(
+        self,
+        *,
+        tenant_id: str,
+        project_ids: tuple[str, ...],
+        caller_user_id: str,
+        caller_roles: tuple[str, ...],
+    ) -> dict[str, dict[str, int]]:
+        """Group live library rows by project into ``files`` + ``library_items``.
+
+        ``files`` counts only ``kind='file'`` rows (the design's "N files");
+        ``library_items`` counts every kind (file + page + dataset). The
+        ``project_ids`` are already the caller's readable projects, so every
+        project-scoped row in them is visible to the caller (own row OR
+        ``project_id ∈ readable_project_ids`` — the same predicate ``list_items``
+        applies), which is why no extra per-row visibility gate is needed here.
+        Soft-deleted rows are excluded.
+        """
+
+        wanted = set(project_ids)
+        result: dict[str, dict[str, int]] = {}
+        for record in (
+            *self.files.values(),
+            *self.pages.values(),
+            *self.datasets.values(),
+        ):
+            if record.tenant_id != tenant_id or record.deleted_at is not None:
+                continue
+            pid = record.project_id
+            if pid is None or pid not in wanted:
+                continue
+            bucket = result.setdefault(pid, {"files": 0, "library_items": 0})
+            bucket["library_items"] += 1
+            if record.kind == "file":
+                bucket["files"] += 1
+        return result
 
     # -- audit ---------------------------------------------------------
 

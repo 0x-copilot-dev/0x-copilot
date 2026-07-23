@@ -122,23 +122,37 @@ class PersistencePort(Protocol):
         limit: int,
         include_archived: bool = False,
         include_deleted: bool = False,
+        project_id: str | None = None,
     ) -> Sequence[ConversationRecord]:
         """Return conversations for the tenant/user scope, newest first.
 
         ``include_deleted`` excludes soft-deleted rows by default;
-        setting it True returns them too.
+        setting it True returns them too. When ``project_id`` is set, only
+        conversations filed under that project are returned (PRD-07) — the
+        filter narrows within the caller's already-scoped rows and is never
+        an authorization input.
         """
 
-    async def list_messages(
+    async def count_conversations_by_project(
         self,
         *,
         org_id: str,
-        conversation_id: str,
-        limit: int,
-        before_created_at: datetime | None = None,
-        before_message_id: str | None = None,
-        include_deleted: bool = False,
-    ) -> Sequence[MessageRecord]:
+        user_id: str,
+        project_ids: Sequence[str],
+    ) -> Mapping[str, int]:
+        """Return ``project_id → live-conversation count`` for the caller (PRD-07).
+
+        Backs ``GET /v1/agent/conversations/counts``. Scoped by
+        ``(org_id, user_id)`` — the caller's OWN conversations only, identical
+        to :meth:`list_conversations`; ``project_ids`` is a filter, never an
+        authorization input. Counts every conversation filed under the project
+        that is not soft-deleted (archived rows included — an archived chat
+        still belongs to the project), matching the partial index
+        ``idx_agent_conversations_project`` (``deleted_at IS NULL``, no status
+        predicate). Project ids with no matching conversation are ABSENT from
+        the map (the caller renders them as ``0``). An empty ``project_ids``
+        returns an empty map.
+        """
         """Return up to ``limit`` messages OLDER than the keyset, in ASC order.
 
         The keyset is the composite ``(before_created_at, before_message_id)``.
@@ -439,9 +453,16 @@ class PersistencePort(Protocol):
         folder_changed: bool,
         archived: bool | None,
         archived_changed: bool,
+        project_id: str | None,
+        project_id_changed: bool,
         now: datetime,
     ) -> ConversationRecord | None:
-        """Apply a lifecycle PATCH to one conversation row."""
+        """Apply a lifecycle PATCH to one conversation row.
+
+        ``project_id_changed`` (PRD-07) distinguishes "field omitted" from
+        "field set to null" (unfile): only when it is True does the adapter
+        write ``project_id`` (RFC 7396 merge-patch).
+        """
 
     async def soft_delete_conversation(
         self,

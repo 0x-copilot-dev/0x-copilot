@@ -187,6 +187,17 @@ class TodosStore(Protocol):
         self, *, tenant_id: str, parent_id: str
     ) -> tuple[TodoRecord, ...]: ...
 
+    # -- rollup counts (PRD-07) ----------------------------------------
+
+    def count_by_project(
+        self,
+        *,
+        tenant_id: str,
+        project_ids: tuple[str, ...],
+        caller_user_id: str,
+        caller_roles: tuple[str, ...],
+    ) -> dict[str, dict[str, int]]: ...
+
     # -- audit ---------------------------------------------------------
 
     def append_audit(self, record: TodoAuditRecord) -> TodoAuditRecord: ...
@@ -382,6 +393,33 @@ class InMemoryTodosStore:
             and record.parent_id == parent_id
             and record.deleted_at is None
         )
+
+    # -- rollup counts (PRD-07) ----------------------------------------
+
+    def count_by_project(
+        self,
+        *,
+        tenant_id: str,
+        project_ids: tuple[str, ...],
+        caller_user_id: str,
+        caller_roles: tuple[str, ...],
+    ) -> dict[str, dict[str, int]]:
+        """Group live todos by project into ``todos_open`` + ``todos_done``."""
+
+        wanted = set(project_ids)
+        result: dict[str, dict[str, int]] = {}
+        for record in self.todos.values():
+            if record.tenant_id != tenant_id or record.deleted_at is not None:
+                continue
+            pid = record.project_id
+            if pid is None or pid not in wanted:
+                continue
+            bucket = result.setdefault(pid, {"todos_open": 0, "todos_done": 0})
+            if record.status == "open":
+                bucket["todos_open"] += 1
+            elif record.status == "done":
+                bucket["todos_done"] += 1
+        return result
 
     # -- audit ---------------------------------------------------------
 

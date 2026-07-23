@@ -584,10 +584,26 @@ function ProjectCard({
             {formatRelativeTime(lastActivity, now)}
           </span>
         ) : null}
-        <span data-testid="project-card-counts">
-          {project.counts.chats} chats · {project.counts.todos_open} todos ·{" "}
-          {project.counts.routines_active} routines · {project.counts.members}{" "}
-          members
+        {/* Counts line — the design's mono `.lrow__sub`
+            (copilot-app.jsx:422-424): `{chats} chats · {files} files`.
+            `counts.files` is library `kind='file'` only (distinct from
+            `library_items`, which counts file + page + dataset). The chats
+            segment is HIDDEN when `counts.chats === null` (the facade could not
+            fill it from ai-backend) so a fabricated "0 chats" never reaches the
+            card (PRD-07 DoD 13). Only the meta line's content + its two type
+            tokens (mono family, subtle colour, 2xs size) are PRD-07's; the
+            card's outer anatomy is PRD-10's. */}
+        <span
+          data-testid="project-card-counts"
+          style={{
+            fontFamily: "var(--font-mono)",
+            color: "var(--color-text-subtle)",
+            fontSize: "var(--font-size-2xs)",
+          }}
+        >
+          {project.counts.chats !== null
+            ? `${project.counts.chats} chats · ${project.counts.files} files`
+            : `${project.counts.files} files`}
         </span>
       </div>
     </article>

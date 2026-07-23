@@ -2184,6 +2184,33 @@ def create_app(
 
     register_library_routes(app, service=library_service)
 
+    # PRD-07 — computed-on-read project rollup counts. Registered here, after
+    # every destination's store exists (library is constructed above), so the
+    # projects service composes each card's "N chats · N files" (+ todos / inbox
+    # / routines / members) from a batched, viewer-scoped `count_by_project` per
+    # page — killing the old per-card stored-counts read + limit=501 membership
+    # scan. `chats` stays None here; the facade fills it from ai-backend.
+    from backend_app.projects.rollup_sources import (
+        MembersRollupSource,
+        StoreRollupSource,
+    )
+
+    projects_service.register_rollup_sources(
+        [
+            StoreRollupSource(
+                store=resolved_library_store, fields=("files", "library_items")
+            ),
+            StoreRollupSource(
+                store=resolved_todos_store, fields=("todos_open", "todos_done")
+            ),
+            StoreRollupSource(store=resolved_inbox_store, fields=("inbox_items",)),
+            StoreRollupSource(
+                store=resolved_routines_store, fields=("routines_active",)
+            ),
+            MembersRollupSource(resolved_projects_store),
+        ]
+    )
+
     # =====================================================================
     # Phase 12 P12-A3 — Memory destination (CRUD + proposals + search + SSE).
     #
