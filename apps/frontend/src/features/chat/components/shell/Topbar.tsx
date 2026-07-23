@@ -1,8 +1,4 @@
-import {
-  IconButton,
-  StatusPill,
-  type StatusTone,
-} from "@0x-copilot/design-system";
+import { Badge, IconButton } from "@0x-copilot/design-system";
 import type { ModelCatalogModel } from "@0x-copilot/api-types";
 import {
   useEffect,
@@ -65,15 +61,18 @@ export interface TopbarProps {
   chromeDisabled?: boolean;
 }
 
-const TONE_BY_PHASE: Record<RunUiPhase, StatusTone> = {
-  idle: "idle",
-  starting: "running",
-  working: "running",
-  acting: "running",
-  writing: "running",
-  reasoning: "running",
-  waiting_for_permission: "ready",
-  terminal: "ready",
+// Maps the run UI phase to a design-system <Badge> tone. A live/working run and
+// a ready/waiting run both read as `success` (jade) — the design's chip
+// vocabulary (running/done are jade); idle reads as the quiet neutral tone.
+const TONE_BY_PHASE: Record<RunUiPhase, "neutral" | "success"> = {
+  idle: "neutral",
+  starting: "success",
+  working: "success",
+  acting: "success",
+  writing: "success",
+  reasoning: "success",
+  waiting_for_permission: "success",
+  terminal: "success",
 };
 
 /**
@@ -168,13 +167,14 @@ export function Topbar(props: TopbarProps): ReactElement {
           </div>
         </div>
         <div className="atlas-topbar__right">
-          <StatusPill
+          <Badge
             tone={tone}
-            label={runUiState.headerStatus}
             role="status"
             aria-live="polite"
             className="atlas-topbar__status"
-          />
+          >
+            {runUiState.headerStatus}
+          </Badge>
           <UsageMeter pct={usagePct} onOpen={onOpenUsage} />
           {shareSlot ?? (
             <IconButton

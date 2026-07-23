@@ -19,12 +19,12 @@ import type { ArtifactRoute, Router } from "../../routing/router";
 
 import {
   ActivityDestination,
-  activityStatusLabel,
   activityStatusTone,
   groupActivityByDay,
   ACTIVITY_LEAD_COPY,
   ACTIVITY_RETENTION_LINK_COPY,
 } from "./ActivityDestination";
+import { statusTone as runStatusTone } from "../../shell/statusTone";
 
 // --- Test seams -----------------------------------------------------------
 
@@ -148,10 +148,13 @@ describe("activity status → tone / label", () => {
     expect(activityStatusTone("needs_input")).toBe("info");
   });
 
-  it("labels needs_input with a space", () => {
-    expect(activityStatusLabel("needs_input")).toBe("Needs input");
-    expect(activityStatusLabel("running")).toBe("Running");
-    expect(activityStatusLabel("stopped")).toBe("Stopped");
+  it("labels come from the shell SSOT and are lowercase (PRD-02 — one vocabulary)", () => {
+    // The former per-destination label switch is gone; Activity reads
+    // `runStatusTone(status).label`. needs_input resolves to the SSOT's
+    // "needs you" (not the old divergent "Needs input").
+    expect(runStatusTone("needs_input").label).toBe("needs you");
+    expect(runStatusTone("running").label).toBe("running");
+    expect(runStatusTone("stopped").label).toBe("stopped");
   });
 });
 

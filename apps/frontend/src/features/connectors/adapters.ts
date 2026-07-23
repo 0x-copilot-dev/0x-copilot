@@ -27,7 +27,7 @@ export type StatusTone = "success" | "warning" | "danger" | "neutral";
 
 /**
  * Map a `ConnectorStatus` to a tone token. The four tone values mirror
- * the design-system `<StatusPill>` API used by Routines / Inbox / Tools.
+ * the design-system `<Badge>` tone API used by Routines / Inbox / Tools.
  *
  * * `connected`    → success
  * * `expired`      → warning (refresh-token expired; needs full re-auth)

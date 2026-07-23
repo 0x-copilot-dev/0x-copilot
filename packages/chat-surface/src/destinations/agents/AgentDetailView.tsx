@@ -12,13 +12,16 @@
 //       - origin="custom" + viewer-is-owner ⇒ direct edit (onEdit fires).
 //       - origin="system" or "community"   ⇒ fork dialog (onForkRequest
 //         fires; host renders <ForkDialog />).
-//   - SP-1: StatusPill for origin + status surfaces. No bespoke chip
-//     primitive here — design-system StatusPill carries the visual.
+//   - SP-1: design-system <Badge> for origin + status surfaces. No bespoke
+//     chip primitive here — the <Badge> recipe carries the visual.
 //   - Pure presentation. Host owns transport + navigation.
 
 import type { CSSProperties, ReactElement, ReactNode } from "react";
 
-import { StatusPill, type StatusTone } from "@0x-copilot/design-system";
+import { Badge } from "@0x-copilot/design-system";
+
+// The design-system Badge tone subset used by agent-status chips.
+type AgentBadgeTone = "success" | "neutral";
 
 import type {
   AgentOrigin,
@@ -133,16 +136,15 @@ export function AgentDetailView(props: AgentDetailViewProps): ReactElement {
             {agent.slug}
           </p>
           <div style={pillRowStyle}>
-            <StatusPill
-              tone="idle"
-              label={agent.origin}
-              data-testid="agent-detail-origin-pill"
-            />
-            <StatusPill
+            <Badge tone="neutral" data-testid="agent-detail-origin-pill">
+              {agent.origin}
+            </Badge>
+            <Badge
               tone={statusTone(agent.status)}
-              label={agent.status}
               data-testid="agent-detail-status-pill"
-            />
+            >
+              {agent.status}
+            </Badge>
             <span style={metaStyle} data-testid="agent-detail-version">
               v{agent.version}
             </span>
@@ -268,10 +270,10 @@ export function AgentDetailView(props: AgentDetailViewProps): ReactElement {
 // Helpers.
 // ===========================================================================
 
-function statusTone(status: AgentStatus): StatusTone {
-  if (status === "installed") return "ready";
-  if (status === "available" || status === "draft") return "idle";
-  return "idle"; // disabled
+function statusTone(status: AgentStatus): AgentBadgeTone {
+  if (status === "installed") return "success";
+  if (status === "available" || status === "draft") return "neutral";
+  return "neutral"; // disabled
 }
 
 interface FactProps {

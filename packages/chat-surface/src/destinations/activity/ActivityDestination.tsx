@@ -82,21 +82,10 @@ export function activityStatusTone(status: ActivityRunStatus): StatusTone {
   return runStatusTone(status).tone;
 }
 
-/** Human label for a run status — single source for chip + a11y. */
-export function activityStatusLabel(status: ActivityRunStatus): string {
-  switch (status) {
-    case "running":
-      return "Running";
-    case "done":
-      return "Done";
-    case "paused":
-      return "Paused";
-    case "stopped":
-      return "Stopped";
-    case "needs_input":
-      return "Needs input";
-  }
-}
+// NOTE (PRD-02): the former per-destination label switch is deleted. Labels come
+// from the shell SSOT `runStatusTone(status).label` — one lowercase vocabulary
+// for run status across Activity and Chats, resolving the old `needs_input`
+// disagreement ("Needs input" here vs "Needs you" in the SSOT) to `needs you`.
 
 // ===========================================================================
 // Day grouping (in-shell; FR-4.14) — pure + exported for tests
@@ -485,7 +474,6 @@ function ActivityRow({
 }): ReactElement {
   const isRunning = row.status === "running";
   const tone = activityStatusTone(row.status);
-  const statusLabel = activityStatusLabel(row.status);
   const presentation = runStatusTone(row.status);
 
   // Leading icon (`.lrow__ic`): a live run shows the brand turbine tinted with
@@ -524,7 +512,7 @@ function ActivityRow({
   const chip = (
     <StatusPill
       status={tone}
-      label={statusLabel}
+      label={presentation.label}
       showDot={presentation.showDot}
     />
   );
