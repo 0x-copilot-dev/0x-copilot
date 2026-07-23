@@ -350,6 +350,14 @@ export interface RunDestinationProps {
    * desktop), enabled together with the runtime `SURFACES_V2` flag.
    */
   readonly surfacesV2?: boolean;
+  /**
+   * Generative Surfaces v2 (PRD-B2) — host clipboard + file-save for the raw
+   * fallback's Copy / Download, forwarded verbatim to `ThreadCanvas`. Substrate-
+   * owned (the package never touches the clipboard/filesystem). Optional; omitted
+   * → the raw fallback's buttons render disabled. Only consulted when `surfacesV2`.
+   */
+  readonly onCopyText?: (text: string) => Promise<void>;
+  readonly onSaveFile?: (text: string, filename: string) => Promise<void>;
 }
 
 export function RunDestination(props: RunDestinationProps): ReactElement {
@@ -371,6 +379,8 @@ export function RunDestination(props: RunDestinationProps): ReactElement {
     onJumpToChatSource,
     SourceRowComponent,
     surfacesV2 = false,
+    onCopyText,
+    onSaveFile,
   } = props;
 
   const transport = useTransport();
@@ -1278,6 +1288,10 @@ export function RunDestination(props: RunDestinationProps): ReactElement {
             // identical). Flag on ⇒ the surface column hydrates from the
             // SurfaceStore endpoint via this resolver.
             resolveSurfaceState={resolveSurfaceState}
+            // PRD-B2: host clipboard + file-save for the raw fallback's
+            // Copy / Download. Only consulted inside the v2 canvas subtree.
+            onCopyText={onCopyText}
+            onSaveFile={onSaveFile}
             // PRD-04: the proposed surface diff for the active surface + the
             // decision callbacks. ThreadCanvas forwards these to TcSurfaceMount,
             // which renders the Approve/Reject/Suggest controls around the diff.
