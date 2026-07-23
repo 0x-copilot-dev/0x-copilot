@@ -45,17 +45,19 @@ describe("<SectionHeader>", () => {
     expect(wrap).toHaveClass("ui-section-head");
     expect(wrap.style.display).toBe("");
     expect(wrap.style.gap).toBe("");
-    // `sect-h` survives this change on purpose — PRD-13 deletes the vestigial
-    // class, not this one.
-    expect(wrap).toHaveClass("sect-h");
+    // The mock's vestigial section-header class carried no CSS and would have
+    // mono-uppercased the count pill + action CTA on the wrapper — PRD-13
+    // deleted it. The wrapper now carries ONLY the block-rhythm recipe; the type
+    // recipe lives on the label (`.ui-mono-caps`), never the wrapper.
+    expect(wrap.className).toBe("ui-section-head");
   });
 
-  it("keeps caller classNames alongside both recipe classes", () => {
-    render(<SectionHeader className="chats-head">Pinned</SectionHeader>);
+  it("forwards className from the caller", () => {
+    render(<SectionHeader className="x">Pinned</SectionHeader>);
     const wrap = screen.getByTestId("section-header");
-    expect(wrap).toHaveClass("sect-h");
+    expect(wrap).toHaveClass("x");
+    // …alongside the one surviving recipe class on the wrapper.
     expect(wrap).toHaveClass("ui-section-head");
-    expect(wrap).toHaveClass("chats-head");
   });
 
   it("associates the heading id so a section can aria-labelledby it", () => {
