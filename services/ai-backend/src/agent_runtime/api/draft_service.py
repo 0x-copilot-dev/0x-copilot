@@ -16,6 +16,7 @@ from agent_runtime.capabilities.auth_gate import (
 from agent_runtime.execution.contracts import RuntimeErrorCode, StreamEventSource
 from agent_runtime.persistence.ports import DraftStorePort, OptimisticConflict
 from agent_runtime.persistence.records import DraftRecord, DraftStatus
+from agent_runtime.surfaces_v2.config import SurfacesV2Flag
 from runtime_api.http.errors import RuntimeApiError
 from runtime_api.schemas import (
     ApprovalRequestRecord,
@@ -66,11 +67,17 @@ class DraftService:
         persistence: object | None = None,
         auth_gate: CapabilityAuthGate | None = None,
         event_producer: object | None = None,
+        write_stager: object | None = None,
     ) -> None:
         self._store = store
         self._persistence = persistence
         self._auth_gate = auth_gate
         self._event_producer = event_producer
+        # PRD-D1: optional, duck-typed like ``event_producer``. When wired AND
+        # ``SURFACES_V2`` is on, ``send()`` stages the write through the ledger
+        # instead of the v1 approval row. ``None`` ⇒ the v1 path regardless of
+        # the flag (mirrors the ``event_producer is None`` degrade-open pattern).
+        self._write_stager = write_stager
 
     # -- read paths ----------------------------------------------------------
 
@@ -171,6 +178,20 @@ class DraftService:
         )
         persisted = await self._store.insert_version(next_record)
 
+        # 3b. PRD-D1 branch — when v2 staging is wired AND the flag is on, the
+        # write stages on the ledger (write.staged + revision.added rev 1); no
+        # v1 approval row, no APPROVAL_REQUESTED event. Nothing executes here.
+        # The v1 path (steps 4-6) is byte-identical when the flag is off or the
+        # stager is unwired.
+        if self._write_stager is not None and SurfacesV2Flag.enabled():
+            return await self._stage_send_v2(
+                org_id=org_id,
+                user_id=user_id,
+                host_run_id=host_run_id,
+                draft=persisted,
+                request=request,
+            )
+
         # 4. Persist the approval row keyed to the host run.
         approval = await self._create_approval(
             org_id=org_id,
@@ -239,6 +260,87 @@ class DraftService:
             record=persisted,
         )
         return _to_draft(persisted)
+
+    # -- PRD-D1 staged-write branch ------------------------------------------
+
+    # Wire op for a draft-send target when the caller supplies none. The op is
+    # presentation-only here (D1 never executes); D2's CommitEngine resolves the
+    # real connector operation.
+    _DEFAULT_SEND_OP = "send"
+
+    async def _stage_send_v2(
+        self,
+        *,
+        org_id: str,
+        user_id: str,
+        host_run_id: str,
+        draft: DraftRecord,
+        request: DraftSendRequest,
+    ) -> DraftSendResponse:
+        """Stage a v2 write instead of the v1 approval row (flag on + stager wired).
+
+        Resolves the host run, delegates to ``WriteStager.stage`` (emits
+        write.staged + revision.added rev 1), keeps the existing
+        ``draft.send.proposed`` audit, and returns the ``stage_id`` so the FE can
+        bind the staged-draft surface. NOTHING executes: no approval row, no
+        APPROVAL_REQUESTED event, no connector call.
+        """
+
+        run = await self._get_run(org_id=org_id, run_id=host_run_id)
+        if run is None:
+            raise RuntimeApiError(
+                code=RuntimeErrorCode.CAPABILITY_NOT_FOUND,
+                safe_message=_NO_HOST_RUN,
+                http_status=status.HTTP_409_CONFLICT,
+                details={"error_code": "no_host_run"},
+            )
+        target_op = self._target_op_for(request)
+        state = await self._write_stager.stage(  # type: ignore[union-attr]
+            run=run,
+            org_id=org_id,
+            run_id=host_run_id,
+            draft=draft,
+            target_connector=request.target_connector,
+            target_op=target_op,
+        )
+        await self._audit(
+            org_id=org_id,
+            user_id=user_id,
+            event_type=_AUDIT_DRAFT_SEND_PROPOSED,
+            record=draft,
+            extra_metadata={
+                "stage_id": state.stage_id,
+                "surface_id": state.surface_id,
+                "host_run_id": host_run_id,
+                "target_connector": request.target_connector,
+                "surfaces_v2": True,
+            },
+        )
+        return DraftSendResponse(
+            draft=_to_draft(draft),
+            approval_id=None,
+            run_id=host_run_id,
+            stage_id=state.stage_id,
+        )
+
+    @classmethod
+    def _target_op_for(cls, request: DraftSendRequest) -> str:
+        """Resolve the target op from the request metadata, else the send default."""
+
+        raw = (request.target_metadata or {}).get("op")
+        if isinstance(raw, str) and raw.strip():
+            return raw.strip()
+        return cls._DEFAULT_SEND_OP
+
+    async def _get_run(self, *, org_id: str, run_id: str) -> object | None:
+        """Fetch the run record via persistence (None when unavailable)."""
+
+        if self._persistence is None:
+            return None
+        get_run = getattr(self._persistence, "get_run", None)
+        if get_run is None:
+            return None
+        return await get_run(org_id=org_id, run_id=run_id)
 
     # -- internal helpers ----------------------------------------------------
 

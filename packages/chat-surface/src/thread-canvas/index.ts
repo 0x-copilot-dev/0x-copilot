@@ -83,6 +83,25 @@ export {
 // === Surfaces v2 — PRD-C2 tool-access gate card ===
 export { TcGateCard, type TcGateCardProps } from "./TcGateCard";
 // === end PRD-C2 ===
+// === Surfaces v2 — PRD-D1 staged-write engine (client) ===
+export {
+  type LedgerStagedWrite,
+  type LedgerStagedWriteStatus,
+  type LedgerStageRevision,
+  type LedgerStageDecision,
+  type LedgerAuthorshipSpan,
+} from "./ledgerProjection";
+export {
+  TcApproveBar,
+  approveBarMicrocopy,
+  type TcApproveBarProps,
+} from "./TcApproveBar";
+export {
+  TcStagedDraftSurface,
+  renderAuthorshipSpans,
+  type TcStagedDraftSurfaceProps,
+} from "./TcStagedDraftSurface";
+// === end PRD-D1 ===
 
 // === Surfaces v2 — PRD-B2 provenance + honest states ===
 // Pure PEERS of `projectLedger` over the SAME `session.events` array, plus the

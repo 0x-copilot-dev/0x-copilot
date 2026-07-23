@@ -16,11 +16,16 @@
 import type { RuntimeEventEnvelope } from "@0x-copilot/api-types";
 import {
   formatLedgerId,
+  type DecisionKind,
+  type DecisionRecordedPayload,
   type GateOpenedPayload,
   type GateResolvedPayload,
+  type RevisionAddedPayload,
+  type RevisionAuthor,
   type SurfaceCreatedPayload,
   type ViewDerivedPayload,
   type ViewPreferencePayload,
+  type WriteStagedPayload,
 } from "@0x-copilot/api-types";
 
 import type { SurfaceTab } from "./eventProjector";
@@ -141,6 +146,68 @@ export interface LedgerGate {
   readonly writePolicy: LedgerGateWritePolicy | null;
 }
 
+// ---------------------------------------------------------------------------
+// Staged-write model (PRD-D1) — folded from `write.staged` / `revision.added` /
+// `decision.recorded`. The TypeScript twin of the Python `StagedWriteFold`
+// (`agent_runtime/surfaces_v2/staging.py`). NOT part of `toParitySnapshot`
+// (that mirrors the SurfaceStore fold only) — a peer fold over the same events.
+// ---------------------------------------------------------------------------
+
+export type LedgerStagedWriteStatus =
+  | "staged"
+  | "rejected"
+  | "approved"
+  | "applied";
+
+/** A half-open `[start, end)` char range of a revision's NEW text and its
+ *  author — the "edited by you" highlight ranges (PRD-D1). */
+export interface LedgerAuthorshipSpan {
+  readonly start: number;
+  readonly end: number;
+  readonly author: RevisionAuthor;
+}
+
+/** One folded revision: its number, author, snapshot ref, spans, ledger id. */
+export interface LedgerStageRevision {
+  readonly rev: number;
+  readonly author: RevisionAuthor;
+  readonly proposalRef: string;
+  readonly diffRef: string;
+  readonly authorshipSpans: readonly LedgerAuthorshipSpan[];
+  readonly seq: number;
+  readonly ledgerId: string;
+}
+
+/** One folded decision (approve/reject/restore). */
+export interface LedgerStageDecision {
+  readonly decision: DecisionKind;
+  readonly scopeRev: number | null;
+  readonly actor: string;
+  readonly seq: number;
+  readonly ledgerId: string;
+}
+
+/** A staged single-artifact write — the staged-draft surface + rev-pinned
+ *  approve bar render directly from this. `latestRev` is what the bar pins;
+ *  `status` drives approve/reject/restore affordances. Rebuilt from the ledger
+ *  so it survives reload. */
+export interface LedgerStagedWrite {
+  readonly stageId: string;
+  readonly surfaceId: string;
+  readonly draftId: string;
+  readonly target: LedgerSurfaceSource;
+  readonly latestRev: number;
+  readonly approvedRev: number | null;
+  readonly status: LedgerStagedWriteStatus;
+  readonly revisions: readonly LedgerStageRevision[];
+  readonly decisions: readonly LedgerStageDecision[];
+  readonly createdSeq: number;
+  readonly lastSeq: number;
+  readonly ledgerId: string;
+  /** The highest-`rev` revision, or null when empty — the bar pins this. */
+  readonly latestRevision: LedgerStageRevision | null;
+}
+
 export interface LedgerProjection {
   /** The folded run's id (from the events; `""` when no v2 events were seen).
    *  Threaded onto the parity snapshot's `run_id`, matching the Python fold. */
@@ -149,6 +216,8 @@ export interface LedgerProjection {
   readonly surfaces: ReadonlyMap<string, LedgerSurface>;
   /** Keyed by `gateId`, in first-seen order (PRD-C2). */
   readonly gates: ReadonlyMap<string, LedgerGate>;
+  /** Keyed by `stageId`, in first-seen order (PRD-D1). */
+  readonly stages: ReadonlyMap<string, LedgerStagedWrite>;
   /** Gate cards still awaiting the user (unresolved), newest first — the canvas
    *  renders these as pending gate cards. */
   readonly openGates: readonly LedgerGate[];
@@ -253,8 +322,75 @@ interface GateAccumulator {
   writePolicy: LedgerGateWritePolicy | null;
 }
 
+/** Mutable per-stage accumulator, frozen into a `LedgerStagedWrite` at the end. */
+interface StageAccumulator {
+  stageId: string;
+  surfaceId: string;
+  draftId: string;
+  target: LedgerSurfaceSource;
+  latestRev: number;
+  approvedRev: number | null;
+  status: LedgerStagedWriteStatus;
+  revisions: LedgerStageRevision[];
+  decisions: LedgerStageDecision[];
+  createdSeq: number;
+  lastSeq: number;
+  ledgerId: string;
+}
+
 function strOr(value: unknown, fallback: string): string {
   return typeof value === "string" ? value : fallback;
+}
+
+/** Recover the draft id from a `draft://<draft_id>/v<version>` proposal ref. */
+function draftIdFromProposalRef(ref: unknown): string {
+  if (typeof ref !== "string") return "";
+  const scheme = "draft://";
+  if (!ref.startsWith(scheme)) return "";
+  const body = ref.slice(scheme.length);
+  const idx = body.lastIndexOf("/v");
+  return idx > 0 ? body.slice(0, idx) : "";
+}
+
+const KNOWN_REVISION_AUTHORS: ReadonlySet<string> = new Set<RevisionAuthor>([
+  "agent",
+  "user",
+]);
+
+function normalizeRevisionAuthor(value: unknown): RevisionAuthor {
+  return value === "user" ? "user" : "agent";
+}
+
+const KNOWN_DECISION_KINDS: ReadonlySet<string> = new Set<DecisionKind>([
+  "approve",
+  "reject",
+  "hold",
+  "restore",
+]);
+
+function readAuthorshipSpans(value: unknown): readonly LedgerAuthorshipSpan[] {
+  if (!Array.isArray(value)) return [];
+  const out: LedgerAuthorshipSpan[] = [];
+  for (const item of value) {
+    if (item === null || typeof item !== "object") continue;
+    const rec = item as Record<string, unknown>;
+    const start = rec.start;
+    const end = rec.end;
+    const author = rec.author;
+    if (
+      typeof start === "number" &&
+      Number.isInteger(start) &&
+      start >= 0 &&
+      typeof end === "number" &&
+      Number.isInteger(end) &&
+      end >= start &&
+      typeof author === "string" &&
+      KNOWN_REVISION_AUTHORS.has(author)
+    ) {
+      out.push({ start, end, author: author as RevisionAuthor });
+    }
+  }
+  return out;
 }
 
 const KNOWN_AUTH_STATES: ReadonlySet<string> = new Set<LedgerGateAuthState>([
@@ -302,6 +438,7 @@ export function projectLedger(
 
   const surfaces = new Map<string, SurfaceAccumulator>();
   const gates = new Map<string, GateAccumulator>();
+  const stages = new Map<string, StageAccumulator>();
   const seenEventIds = new Set<string>();
   let lastLedgerSeq = 0;
   let latestSequenceNo = 0;
@@ -320,7 +457,10 @@ export function projectLedger(
       eventType !== "view.derived" &&
       eventType !== "view.preference" &&
       eventType !== "gate.opened" &&
-      eventType !== "gate.resolved"
+      eventType !== "gate.resolved" &&
+      eventType !== "write.staged" &&
+      eventType !== "revision.added" &&
+      eventType !== "decision.recorded"
     ) {
       continue; // tolerate + ignore every other (present + future) event type
     }
@@ -344,8 +484,14 @@ export function projectLedger(
       if (seq > lastLedgerSeq) lastLedgerSeq = seq;
     } else if (eventType === "gate.opened") {
       applyGateOpened(gates, event.run_id, seq, payload);
-    } else {
+    } else if (eventType === "gate.resolved") {
       applyGateResolved(gates, seq, payload);
+    } else if (eventType === "write.staged") {
+      applyWriteStaged(stages, event.run_id, seq, payload);
+    } else if (eventType === "revision.added") {
+      applyRevisionAdded(stages, event.run_id, seq, payload);
+    } else {
+      applyDecisionRecorded(stages, event.run_id, seq, payload);
     }
   }
 
@@ -371,10 +517,16 @@ export function projectLedger(
     (g) => g.resolved && g.writePolicy === "allow_always",
   );
 
+  const frozenStages = new Map<string, LedgerStagedWrite>();
+  for (const [id, acc] of stages) {
+    frozenStages.set(id, freezeStage(acc));
+  }
+
   return {
     runId,
     surfaces: frozen,
     gates: frozenGates,
+    stages: frozenStages,
     openGates,
     bypassFromLedger,
     tabs,
@@ -440,6 +592,139 @@ function applyGateResolved(
   const wp = payload.write_policy;
   acc.writePolicy = wp === "ask_first" || wp === "allow_always" ? wp : null;
   if (seq > acc.lastSeq) acc.lastSeq = seq;
+}
+
+function applyWriteStaged(
+  stages: Map<string, StageAccumulator>,
+  runId: string,
+  seq: number,
+  payload: Record<string, unknown>,
+): void {
+  const p = payload as unknown as Partial<WriteStagedPayload>;
+  const stageId = p.stage_id;
+  if (typeof stageId !== "string" || stageId.length === 0) return;
+  if (stages.has(stageId)) return; // first write.staged wins (append-only)
+  const target =
+    payload.target !== null && typeof payload.target === "object"
+      ? (payload.target as Record<string, unknown>)
+      : {};
+  stages.set(stageId, {
+    stageId,
+    surfaceId: strOr(payload.surface_id, ""),
+    draftId: draftIdFromProposalRef(payload.proposal_ref),
+    target: {
+      connector: strOr(target.connector, ""),
+      op: strOr(target.op, ""),
+    },
+    latestRev: 0,
+    approvedRev: null,
+    status: "staged",
+    revisions: [],
+    decisions: [],
+    createdSeq: seq,
+    lastSeq: seq,
+    ledgerId: safeLedgerId(runId, seq),
+  });
+}
+
+function applyRevisionAdded(
+  stages: Map<string, StageAccumulator>,
+  runId: string,
+  seq: number,
+  payload: Record<string, unknown>,
+): void {
+  const p = payload as unknown as Partial<RevisionAddedPayload>;
+  const stageId = p.stage_id;
+  if (typeof stageId !== "string") return;
+  const acc = stages.get(stageId);
+  if (acc === undefined) return; // revision for an unseen stage is ignored
+  const rev = payload.rev;
+  if (typeof rev !== "number" || !Number.isInteger(rev) || rev < 1) return;
+  acc.revisions.push({
+    rev,
+    author: normalizeRevisionAuthor(payload.author),
+    proposalRef: strOr(payload.proposal_ref, ""),
+    diffRef: strOr(payload.diff_ref, ""),
+    authorshipSpans: readAuthorshipSpans(payload.authorship_spans),
+    seq,
+    ledgerId: safeLedgerId(runId, seq),
+  });
+  if (rev > acc.latestRev) acc.latestRev = rev;
+  if (seq > acc.lastSeq) acc.lastSeq = seq;
+}
+
+function applyDecisionRecorded(
+  stages: Map<string, StageAccumulator>,
+  runId: string,
+  seq: number,
+  payload: Record<string, unknown>,
+): void {
+  const p = payload as unknown as Partial<DecisionRecordedPayload>;
+  const stageId = p.stage_id;
+  if (typeof stageId !== "string") return;
+  const acc = stages.get(stageId);
+  if (acc === undefined) return;
+  const decisionRaw = payload.decision;
+  if (
+    typeof decisionRaw !== "string" ||
+    !KNOWN_DECISION_KINDS.has(decisionRaw)
+  ) {
+    return;
+  }
+  const decision = decisionRaw as DecisionKind;
+  const scope =
+    payload.scope !== null && typeof payload.scope === "object"
+      ? (payload.scope as Record<string, unknown>)
+      : {};
+  const scopeRevRaw = scope.rev;
+  const scopeRev =
+    typeof scopeRevRaw === "number" &&
+    Number.isInteger(scopeRevRaw) &&
+    scopeRevRaw >= 1
+      ? scopeRevRaw
+      : null;
+  acc.decisions.push({
+    decision,
+    scopeRev,
+    actor: strOr(payload.actor, ""),
+    seq,
+    ledgerId: safeLedgerId(runId, seq),
+  });
+  if (decision === "approve") {
+    acc.status = "approved";
+    acc.approvedRev = scopeRev;
+  } else if (decision === "reject") {
+    acc.status = "rejected";
+    acc.approvedRev = null;
+  } else if (decision === "restore") {
+    acc.status = "staged";
+    acc.approvedRev = null;
+  }
+  // `hold` never reaches the ledger in D1 (server 422s it), but if a future
+  // wave emits it the fold ignores its status effect here (D3 owns holds).
+  if (seq > acc.lastSeq) acc.lastSeq = seq;
+}
+
+function freezeStage(acc: StageAccumulator): LedgerStagedWrite {
+  const latestRevision =
+    acc.revisions.length === 0
+      ? null
+      : acc.revisions.reduce((best, r) => (r.rev > best.rev ? r : best));
+  return {
+    stageId: acc.stageId,
+    surfaceId: acc.surfaceId,
+    draftId: acc.draftId,
+    target: acc.target,
+    latestRev: acc.latestRev,
+    approvedRev: acc.approvedRev,
+    status: acc.status,
+    revisions: acc.revisions.slice(),
+    decisions: acc.decisions.slice(),
+    createdSeq: acc.createdSeq,
+    lastSeq: acc.lastSeq,
+    ledgerId: acc.ledgerId,
+    latestRevision,
+  };
 }
 
 /** Recover the connector `server_id` from a `mcp_auth:<run_id>:<server_id>` gate

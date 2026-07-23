@@ -181,6 +181,10 @@ export function RunEmptyComposer(props: RunEmptyComposerProps): ReactElement {
       toolsTrigger={connectorsTrigger}
       // Inline "Add a provider key" form inside the model popover (host-owned
       // provider-keys surface); unset ⇒ the pill keeps its `onAddKey` deep-link.
+      // NOTE: this mount is OnboardingComposer, which does not yet forward
+      // `onAddProviderKey` to its inner AssistantComposer — the empty-state's
+      // hero add-key already navigates (onAddKey below), so the pill footer keeps
+      // the inline form here until OnboardingComposer threads the deep-link.
       providerKeysPort={providerKeysPort}
       // Model popover footer → Settings → Local models. Same deep-link idiom as
       // the provider-keys CTA, just the other half of the picker.

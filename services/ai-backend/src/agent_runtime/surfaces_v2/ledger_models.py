@@ -282,11 +282,28 @@ class WriteStagedPayload(LedgerPayload):
     agent_holds: tuple[AgentHold, ...] | None = None
 
 
+class RevisionAuthorshipSpan(RuntimeContract):
+    """A half-open ``[start, end)`` char range of the NEW text and its author.
+
+    The pydantic mirror of ``revision_diff.AuthorshipSpan`` for the additive
+    ``revision.added.authorship_spans`` payload key (PRD-D1). Offsets index code
+    points into the new revision's text.
+    """
+
+    start: NonNegativeInt
+    end: NonNegativeInt
+    author: RevisionAuthor
+
+
 class RevisionAddedPayload(LedgerPayload):
     stage_id: str
     rev: PositiveInt
     author: RevisionAuthor
     diff_ref: str
+    # Additive (SDR §5 note, PRD-D1). Optional so the required-list parity with
+    # the SSOT JSON is unchanged; the fold + client read them when present.
+    proposal_ref: str | None = None
+    authorship_spans: tuple[RevisionAuthorshipSpan, ...] | None = None
 
 
 class DecisionRecordedPayload(LedgerPayload):
@@ -424,6 +441,7 @@ __all__ = [
     "ReceiptEmittedPayload",
     "RevisionAddedPayload",
     "RevisionAuthor",
+    "RevisionAuthorshipSpan",
     "ShapeRequestedPayload",
     "SurfaceCreatedPayload",
     "SurfaceKind",

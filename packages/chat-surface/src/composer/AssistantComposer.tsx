@@ -118,6 +118,13 @@ export interface AssistantComposerProps {
   /** Register + select an arbitrary OpenRouter `vendor/model` slug. */
   onAddCustomModel?: (slug: string) => void;
   /**
+   * Model-popover footer "Add a provider key" → Settings → Provider keys.
+   * Host-owned navigation (the package never navigates). Preferred over
+   * `providerKeysPort` when both are set, so the footer navigates to the one
+   * Settings surface instead of opening an inline form. Forwarded to {@link ModelPill}.
+   */
+  onAddProviderKey?: () => void;
+  /**
    * When set, the ModelPill's "Add a provider key" footer opens an inline
    * `<KeyForm>` sub-view inside the model popover (saved through this port),
    * instead of the deep-link. Forwarded verbatim to {@link ModelPill}.
@@ -236,6 +243,7 @@ export const AssistantComposer = forwardRef<
     selectedModel,
     onModelChange,
     onAddCustomModel,
+    onAddProviderKey,
     providerKeysPort,
     onProviderKeyAdded,
     onGetLocalModels,
@@ -489,6 +497,7 @@ export const AssistantComposer = forwardRef<
                 onChange={onModelChange}
                 disabled={controlsDisabled}
                 onAddCustom={onAddCustomModel}
+                onAddProviderKey={onAddProviderKey}
                 providerKeysPort={providerKeysPort}
                 onProviderKeyAdded={onProviderKeyAdded}
                 onGetLocalModels={onGetLocalModels}

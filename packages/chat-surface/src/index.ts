@@ -1145,6 +1145,22 @@ export {
 export { PostureChip, type PostureChipProps } from "./destinations/run";
 // === end PRD-C2 ===
 
+// === Surfaces v2 — PRD-D1 staged-write engine (client) ===
+export {
+  TcApproveBar,
+  approveBarMicrocopy,
+  type TcApproveBarProps,
+  TcStagedDraftSurface,
+  renderAuthorshipSpans,
+  type TcStagedDraftSurfaceProps,
+  type LedgerStagedWrite,
+  type LedgerStagedWriteStatus,
+  type LedgerStageRevision,
+  type LedgerStageDecision,
+  type LedgerAuthorshipSpan,
+} from "./thread-canvas";
+// === end PRD-D1 ===
+
 // === Surfaces v2 — PRD-B2 provenance + honest states ===
 // Provenance footer, skeleton/assembling state, lossless raw fallback, and the
 // status strip — all pure projections of the Work Ledger, mounted strictly

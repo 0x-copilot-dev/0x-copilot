@@ -973,6 +973,16 @@ class RuntimeApiRouter:
         from runtime_api.http.drafts import register_draft_routes
 
         register_draft_routes(router)
+        # PRD-D1 (Generative Surfaces v2) — single-artifact staged-write routes.
+        # Registered ONLY when SURFACES_V2 is on; flag off ⇒ the three
+        # ``/v1/agent/stages/*`` routes do not exist (404), the cleanest
+        # byte-identical guarantee (the v1 draft-approval path stays live).
+        from agent_runtime.surfaces_v2.config import SurfacesV2Flag
+
+        if SurfacesV2Flag.enabled():
+            from runtime_api.http.stages import register_stage_routes
+
+            register_stage_routes(router)
         # PR 1.5 — Workspace-pane data feeds (subagents + sources).
         register_workspace_feed_routes(router)
         # PR 1.6 — Workspace defaults + conversation lifecycle
